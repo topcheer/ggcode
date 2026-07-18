@@ -1,8 +1,6 @@
 package agent
 
 import (
-	"strings"
-
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
 )
@@ -104,13 +102,6 @@ func (a *Agent) ensureMessagesSendable(msgs []provider.Message) []provider.Messa
 		repaired = true
 	}
 
-	// Merge consecutive system messages into one. Some providers (OpenAI and
-	// many OpenAI-compatible endpoints) reject or mishandle multiple system
-	// messages in the array. After compaction, the message list may contain
-	// [system (prompt), system (summary), system (state), user, ...] which
-	// causes deterministic 400 errors on these providers.
-	result = mergeConsecutiveSystemMessages(result)
-
 	if repaired {
 		debug.Log("agent", "ensureMessagesSendable: repaired message list for provider compatibility")
 	}
@@ -149,57 +140,4 @@ func appendSyntheticToolResults(msgs []provider.Message, open []openCall) []prov
 		})
 	}
 	return msgs
-}
-
-// mergeConsecutiveSystemMessages combines adjacent system messages into a
-// single message by concatenating their text content blocks. This is necessary
-// because many OpenAI-compatible APIs reject multiple system messages in the
-// messages array, causing "Request failed" errors after context compaction
-// (which inserts summary and state as separate system messages).
-//
-// Only leading consecutive system messages are merged. If a system message
-// appears after a user/assistant message (rare), it is left as-is.
-func mergeConsecutiveSystemMessages(msgs []provider.Message) []provider.Message {
-	if len(msgs) <= 1 {
-		return msgs
-	}
-
-	// Find the range of leading system messages.
-	lastSys := -1
-	for i, msg := range msgs {
-		if msg.Role != "system" {
-			break
-		}
-		lastSys = i
-	}
-	if lastSys <= 0 {
-		return msgs // 0 or 1 system messages — nothing to merge
-	}
-
-	// Collect all text from the system messages.
-	var parts []string
-	var nonText []provider.ContentBlock
-	for _, msg := range msgs[:lastSys+1] {
-		for _, b := range msg.Content {
-			if b.Type == "text" {
-				parts = append(parts, b.Text)
-			} else {
-				nonText = append(nonText, b)
-			}
-		}
-	}
-
-	merged := provider.Message{
-		Role: "system",
-		Content: append(
-			[]provider.ContentBlock{{Type: "text", Text: strings.Join(parts, "\n\n")}},
-			nonText...,
-		),
-	}
-
-	result := make([]provider.Message, 0, len(msgs)-lastSys)
-	result = append(result, merged)
-	result = append(result, msgs[lastSys+1:]...)
-	debug.Log("agent", "mergeConsecutiveSystemMessages: merged %d system messages into 1 (%d text blocks)", lastSys+1, len(parts))
-	return result
 }
