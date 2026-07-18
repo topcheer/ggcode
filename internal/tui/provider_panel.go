@@ -3,6 +3,9 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
+
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/util"
 	"strings"
 	"time"
@@ -270,10 +273,66 @@ func indexOf(values []string, target string) int {
 	}
 	return -1
 }
+
+// reloadProviderConfigFromDisk merges vendor/endpoint definitions and API keys
+// from disk into the live config so changes made by other ggcode instances
+// (a new endpoint added elsewhere, an API key set elsewhere) become visible
+// when this instance opens the provider panel.
+//
+// It performs a shallow merge: entries that already exist in memory are kept
+// untouched (runtime may have updated models/selection), while vendor/endpoint
+// definitions that exist on disk but not in memory are added. The current
+// runtime selection (Vendor/Endpoint/Model) driven by the session is NEVER
+// overwritten — we only reconcile the structural diff.
+func (m *Model) reloadProviderConfigFromDisk() {
+	if m.config == nil || m.config.FilePath == "" {
+		return
+	}
+	// Only reload if a config file actually exists on disk. If the path is a
+	// synthetic/in-memory path (e.g. tests or unsaved config), there is nothing
+	// to reconcile against and we must keep the live config untouched.
+	if _, err := os.Stat(m.config.FilePath); err != nil {
+		return
+	}
+	workspace := m.currentWorkspacePath()
+	fresh, err := config.LoadWithInstance(m.config.FilePath, workspace)
+	if err != nil {
+		debug.Log("config", "reloadProviderConfigFromDisk: load failed: %v", err)
+		return
+	}
+	// API keys from keys.env were loaded into os.Setenv by LoadWithInstance
+	// (via loadRuntimeEnv), so ${VAR} references now resolve for this process.
+
+	// Shallow-merge vendor/endpoint definitions into the live config.
+	for vendor, fvc := range fresh.Vendors {
+		vc, exists := m.config.Vendors[vendor]
+		if !exists {
+			m.config.Vendors[vendor] = fvc
+			continue
+		}
+		if vc.Endpoints == nil {
+			vc.Endpoints = make(map[string]config.EndpointConfig)
+		}
+		for epName, fep := range fvc.Endpoints {
+			if _, epExists := vc.Endpoints[epName]; !epExists {
+				vc.Endpoints[epName] = fep
+			}
+		}
+		// Pick up a vendor-level API key from disk if memory has none.
+		if vc.APIKey == "" && fvc.APIKey != "" {
+			vc.APIKey = fvc.APIKey
+		}
+		m.config.Vendors[vendor] = vc
+	}
+	debug.Log("config", "reloadProviderConfigFromDisk: merged vendor/endpoint defs from disk")
+}
+
 func (m *Model) openProviderPanel() {
 	if m.config == nil {
 		return
 	}
+	// Pull in vendor/endpoint defs and API keys authored by other instances.
+	m.reloadProviderConfigFromDisk()
 	m.modelPanel = nil
 	m.providerPanel = newProviderPanelFromConfig(m.configView())
 	m.providerPanel.modelFilter = newModelFilterInput(m.currentLanguage())
