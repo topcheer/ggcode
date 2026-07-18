@@ -1019,25 +1019,25 @@ func (s *JSONLStore) repairIndex(idx []indexEntry) (bool, error) {
 		newIdx = append(newIdx, e)
 	}
 
-	// Add entries for files missing from index
+	// Build set of indexed IDs for O(1) lookup — avoids nested O(n*m) scan
+	indexedIDs := make(map[string]bool, len(newIdx))
+	for _, e := range newIdx {
+		indexedIDs[e.ID] = true
+	}
+
+	// Add entries for files missing from index — only these get loaded
 	for id := range diskIDs {
-		found := false
-		for _, e := range newIdx {
-			if e.ID == id {
-				found = true
-				break
-			}
+		if indexedIDs[id] {
+			continue
 		}
-		if !found {
-			ses, loadErr := s.loadSession(id)
-			if loadErr == nil {
-				if ses.HasUserInteraction() {
-					newIdx = append(newIdx, sessionToIndexEntry(ses))
-				} else {
-					_ = os.Remove(s.sessionPath(id))
-				}
-				changed = true
+		ses, loadErr := s.loadSession(id)
+		if loadErr == nil {
+			if ses.HasUserInteraction() {
+				newIdx = append(newIdx, sessionToIndexEntry(ses))
+			} else {
+				_ = os.Remove(s.sessionPath(id))
 			}
+			changed = true
 		}
 	}
 
@@ -1095,27 +1095,10 @@ func (s *JSONLStore) LatestForWorkspace(workspace string) (*Session, error) {
 	// inconsistencies don't prevent finding sessions.
 	normalizedWorkspace := NormalizeWorkspacePath(workspace)
 
-	// Check if the index has any entries for this workspace. If not,
-	// the index may be stale — rebuild from disk before giving up.
-	hasWorkspace := false
-	for _, e := range idx {
-		if NormalizeWorkspacePath(e.Workspace) == normalizedWorkspace {
-			hasWorkspace = true
-			break
-		}
-	}
-	if !hasWorkspace {
-		changed, repairErr := s.repairIndex(idx)
-		if repairErr != nil {
-			debug.Log("session", "LatestForWorkspace: repairIndex error: %v", repairErr)
-		}
-		if changed {
-			idx, err = s.loadIndex()
-			if err != nil {
-				return nil, err
-			}
-		}
-	}
+	// Note: synchronous repairIndex was removed from here. The async
+	// RepairIndex launched at TUI startup handles stale indexes. Running
+	// it synchronously blocked startup while loading all orphaned JSONL
+	// files — extremely slow with many sessions.
 
 	// Sort by UpdatedAt descending.
 	sort.Slice(idx, func(i, j int) bool {
@@ -1151,29 +1134,9 @@ func (s *JSONLStore) ListForWorkspace(workspace string) ([]*Session, error) {
 		return nil, err
 	}
 
-	// If the index is empty or doesn't contain the requested workspace,
-	// repair it by scanning disk. This handles stale indexes where session
-	// files exist on disk but aren't in the index (e.g. after index corruption).
+	// Note: synchronous repairIndex was removed. The async RepairIndex
+	// launched at TUI startup handles stale indexes.
 	normalizedWorkspace := NormalizeWorkspacePath(workspace)
-	hasWorkspace := false
-	for _, e := range idx {
-		if NormalizeWorkspacePath(e.Workspace) == normalizedWorkspace {
-			hasWorkspace = true
-			break
-		}
-	}
-	if !hasWorkspace {
-		changed, repairErr := s.repairIndex(idx)
-		if repairErr != nil {
-			debug.Log("session", "ListForWorkspace: repairIndex error: %v", repairErr)
-		}
-		if changed {
-			idx, err = s.loadIndex()
-			if err != nil {
-				return nil, err
-			}
-		}
-	}
 
 	// Sort by UpdatedAt descending.
 	sort.Slice(idx, func(i, j int) bool {
