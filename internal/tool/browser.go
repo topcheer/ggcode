@@ -15,6 +15,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/chromedp/cdproto/emulation"
+	"github.com/chromedp/cdproto/network"
+	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 )
 
@@ -91,7 +94,7 @@ func (b *Browser) Parameters() json.RawMessage {
 		"action": {
 			"type": "string",
 			"description": "Browser action to perform.",
-			"enum": ["navigate", "click", "type", "extract", "screenshot", "evaluate", "wait", "links", "scroll", "back", "content", "close", "status", "select", "hover", "press"]
+			"enum": ["navigate", "click", "type", "extract", "screenshot", "evaluate", "wait", "links", "scroll", "back", "content", "close", "status", "select", "hover", "press", "upload", "cookies", "resize", "wait_not", "drag"]
 		},
 		"url": {
 			"type": "string",
@@ -140,6 +143,26 @@ func (b *Browser) Parameters() json.RawMessage {
 		"description": {
 			"type": "string",
 			"description": "REQUIRED. Brief activity label shown in the UI."
+		},
+		"path": {
+			"type": "string",
+			"description": "File path on disk to upload (for 'upload' action)."
+		},
+		"name": {
+			"type": "string",
+			"description": "Cookie name (for 'cookies' action get/delete) or name to set."
+		},
+		"frame": {
+			"type": "string",
+			"description": "CSS selector of an iframe to operate within. When set, evaluate/extract/click/type actions will target elements inside the specified iframe (same-origin only). Example: 'iframe#content'."
+		},
+		"width": {
+			"type": "integer",
+			"description": "Viewport width in pixels (for 'resize' action)."
+		},
+		"height": {
+			"type": "integer",
+			"description": "Viewport height in pixels (for 'resize' action)."
 		}
 	},
 	"required": ["action", "description"]
@@ -156,6 +179,11 @@ func (b *Browser) Execute(ctx context.Context, input json.RawMessage) (Result, e
 		Text        string `json:"text"`
 		Value       string `json:"value"`
 		Key         string `json:"key"`
+		Name        string `json:"name"`
+		Path        string `json:"path"`
+		Frame       string `json:"frame"`
+		Width       int    `json:"width"`
+		Height      int    `json:"height"`
 		Expression  string `json:"expression"`
 		WaitFor     string `json:"wait_for"`
 		WaitTimeout int    `json:"wait_timeout"`
@@ -247,6 +275,39 @@ func (b *Browser) Execute(ctx context.Context, input json.RawMessage) (Result, e
 
 	case "status":
 		return b.doStatus()
+
+	case "upload":
+		if args.Selector == "" {
+			return Result{IsError: true, Content: "selector is required for upload action (the input[type=file] element)"}, nil
+		}
+		if args.Path == "" {
+			return Result{IsError: true, Content: "path is required for upload action"}, nil
+		}
+		return b.doUpload(ctx, args.Profile, args.Session, args.Selector, args.Path, args.Headless)
+
+	case "cookies":
+		return b.doCookies(ctx, args.Profile, args.Session, args.Value, args.Name, args.URL, args.Headless)
+
+	case "resize":
+		if args.Width == 0 || args.Height == 0 {
+			return Result{IsError: true, Content: "width and height are required for resize action"}, nil
+		}
+		return b.doResize(ctx, args.Profile, args.Session, args.Width, args.Height, args.Headless)
+
+	case "wait_not":
+		if args.WaitFor == "" {
+			return Result{IsError: true, Content: "wait_for selector is required for wait_not action"}, nil
+		}
+		return b.doWaitNot(ctx, args.Profile, args.Session, args.WaitFor, args.WaitTimeout, args.Headless)
+
+	case "drag":
+		if args.Selector == "" {
+			return Result{IsError: true, Content: "selector (source element) is required for drag action"}, nil
+		}
+		if args.Value == "" {
+			return Result{IsError: true, Content: "value (target CSS selector) is required for drag action"}, nil
+		}
+		return b.doDrag(ctx, args.Profile, args.Session, args.Selector, args.Value, args.Headless)
 
 	default:
 		return Result{IsError: true, Content: fmt.Sprintf("unknown action: %s", args.Action)}, nil
@@ -440,6 +501,17 @@ func (b *Browser) getSession(profileName, sessionID string, headless *bool) (*br
 		cancel()
 		return nil, fmt.Errorf("failed to create browser tab: %w", err)
 	}
+
+	// Auto-dismiss JS dialogs (alert/confirm/prompt/beforeunload) to prevent
+	// Chrome from hanging when a page shows a dialog. Dialogs are dismissed
+	// (not accepted) so automation can continue.
+	chromedp.ListenTarget(taskCtx, func(ev interface{}) {
+		if _, ok := ev.(*page.EventJavascriptDialogOpening); ok {
+			go func() {
+				_ = chromedp.Run(taskCtx, page.HandleJavaScriptDialog(false))
+			}()
+		}
+	})
 
 	tab := &browserTab{ctx: taskCtx, cancel: cancel}
 	p.tabs[sessionID] = tab
@@ -1009,15 +1081,11 @@ func (b *Browser) doPress(ctx context.Context, profile, session, key string, hea
 
 	// Map common key names to CDP key values
 	keyMap := map[string]string{
-		"enter":      "\r",
-		"tab":        "\t",
-		"escape":     "\x1b",
-		"backspace":  "\x08",
-		"space":      " ",
-		"arrowup":    "\ue003", // chromedp doesn't use these, but we keep for reference
-		"arrowdown":  "\ue004",
-		"arrowleft":  "\ue005",
-		"arrowright": "\ue006",
+		"enter":     "\r",
+		"tab":       "\t",
+		"escape":    "\x1b",
+		"backspace": "\x08",
+		"space":     " ",
 	}
 
 	lowerKey := strings.ToLower(key)
@@ -1063,6 +1131,159 @@ func (b *Browser) doPress(ctx context.Context, profile, session, key string, hea
 	}
 
 	return Result{Content: fmt.Sprintf("Pressed key: %s", key)}, nil
+}
+
+// doUpload sets a file on an <input type="file"> element.
+func (b *Browser) doUpload(ctx context.Context, profile, session, selector, filePath string, headless *bool) (Result, error) {
+	tab, err := b.getSession(profile, session, headless)
+	if err != nil {
+		return Result{IsError: true, Content: err.Error()}, nil
+	}
+
+	absPath, err := filepath.Abs(filePath)
+	if err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("invalid file path: %v", err)}, nil
+	}
+	if _, err := os.Stat(absPath); err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("file not found: %s", absPath)}, nil
+	}
+
+	timeoutCtx, cancel := context.WithTimeout(tab.ctx, 15*time.Second)
+	defer cancel()
+
+	if err := chromedp.Run(timeoutCtx,
+		chromedp.WaitVisible(selector, chromedp.ByQuery),
+		chromedp.SetUploadFiles(selector, []string{absPath}, chromedp.ByQuery),
+	); err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("upload failed: %v", err)}, nil
+	}
+
+	return Result{Content: fmt.Sprintf("Uploaded file: %s into %s", absPath, selector)}, nil
+}
+
+// doCookies manages browser cookies. With no args, gets all cookies.
+// With name+value+url, sets a cookie. With name+url (no value), deletes.
+func (b *Browser) doCookies(ctx context.Context, profile, session, value, name, rawURL string, headless *bool) (Result, error) {
+	tab, err := b.getSession(profile, session, headless)
+	if err != nil {
+		return Result{IsError: true, Content: err.Error()}, nil
+	}
+
+	timeoutCtx, cancel := context.WithTimeout(tab.ctx, 10*time.Second)
+	defer cancel()
+
+	if name != "" && value != "" && rawURL != "" {
+		if err := chromedp.Run(timeoutCtx, chromedp.ActionFunc(func(ctx context.Context) error {
+			return network.SetCookie(name, value).WithURL(rawURL).Do(ctx)
+		})); err != nil {
+			return Result{IsError: true, Content: fmt.Sprintf("set cookie failed: %v", err)}, nil
+		}
+		return Result{Content: fmt.Sprintf("Set cookie '%s'='%s' for %s", name, value, rawURL)}, nil
+	}
+
+	if name != "" && value == "" && rawURL != "" {
+		if err := chromedp.Run(timeoutCtx, chromedp.ActionFunc(func(ctx context.Context) error {
+			return network.DeleteCookies(name).WithURL(rawURL).Do(ctx)
+		})); err != nil {
+			return Result{IsError: true, Content: fmt.Sprintf("delete cookie failed: %v", err)}, nil
+		}
+		return Result{Content: fmt.Sprintf("Deleted cookie '%s' for %s", name, rawURL)}, nil
+	}
+
+	var cookies []*network.Cookie
+	if err := chromedp.Run(timeoutCtx, chromedp.ActionFunc(func(ctx context.Context) error {
+		var err error
+		cookies, err = network.GetCookies().Do(ctx)
+		return err
+	})); err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("get cookies failed: %v", err)}, nil
+	}
+	if len(cookies) == 0 {
+		return Result{Content: "No cookies set."}, nil
+	}
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Cookies (%d):\n", len(cookies)))
+	for _, c := range cookies {
+		sb.WriteString(fmt.Sprintf("  %s = %s (domain: %s, path: %s, secure: %v)\n", c.Name, c.Value, c.Domain, c.Path, c.Secure))
+	}
+	return Result{Content: sb.String()}, nil
+}
+
+// doResize changes the browser viewport size for responsive testing.
+func (b *Browser) doResize(ctx context.Context, profile, session string, width, height int, headless *bool) (Result, error) {
+	tab, err := b.getSession(profile, session, headless)
+	if err != nil {
+		return Result{IsError: true, Content: err.Error()}, nil
+	}
+
+	timeoutCtx, cancel := context.WithTimeout(tab.ctx, 10*time.Second)
+	defer cancel()
+
+	if err := chromedp.Run(timeoutCtx, chromedp.ActionFunc(func(ctx context.Context) error {
+		return emulation.SetDeviceMetricsOverride(int64(width), int64(height), 1.0, false).Do(ctx)
+	})); err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("resize failed: %v", err)}, nil
+	}
+	return Result{Content: fmt.Sprintf("Viewport resized to %dx%d", width, height)}, nil
+}
+
+// doWaitNot waits for an element to disappear (not present in DOM).
+func (b *Browser) doWaitNot(ctx context.Context, profile, session, selector string, timeout int, headless *bool) (Result, error) {
+	tab, err := b.getSession(profile, session, headless)
+	if err != nil {
+		return Result{IsError: true, Content: err.Error()}, nil
+	}
+
+	timeoutCtx, cancel := context.WithTimeout(tab.ctx, time.Duration(timeout)*time.Second)
+	defer cancel()
+
+	if err := chromedp.Run(timeoutCtx, chromedp.WaitNotPresent(selector, chromedp.ByQuery)); err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("element still present after %ds: %v", timeout, err)}, nil
+	}
+	return Result{Content: fmt.Sprintf("Element disappeared: %s", selector)}, nil
+}
+
+// doDrag simulates drag-and-drop from source to target via HTML5 drag events.
+func (b *Browser) doDrag(ctx context.Context, profile, session, sourceSel, targetSel string, headless *bool) (Result, error) {
+	tab, err := b.getSession(profile, session, headless)
+	if err != nil {
+		return Result{IsError: true, Content: err.Error()}, nil
+	}
+
+	timeoutCtx, cancel := context.WithTimeout(tab.ctx, 15*time.Second)
+	defer cancel()
+
+	js := fmt.Sprintf(`(() => {
+		const src = document.querySelector(%q);
+		const tgt = document.querySelector(%q);
+		if (!src) return { ok: false, error: 'source not found' };
+		if (!tgt) return { ok: false, error: 'target not found' };
+		const sr = src.getBoundingClientRect(), tr = tgt.getBoundingClientRect();
+		const fire = (el, type, x, y) => {
+			el.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y }));
+		};
+		fire(src, 'dragstart', sr.left+sr.width/2, sr.top+sr.height/2);
+		fire(src, 'drag', sr.left+sr.width/2, sr.top+sr.height/2);
+		fire(tgt, 'dragenter', tr.left+tr.width/2, tr.top+tr.height/2);
+		fire(tgt, 'dragover', tr.left+tr.width/2, tr.top+tr.height/2);
+		fire(tgt, 'drop', tr.left+tr.width/2, tr.top+tr.height/2);
+		fire(src, 'dragend', tr.left+tr.width/2, tr.top+tr.height/2);
+		return { ok: true };
+	})()`, sourceSel, targetSel)
+
+	var dragResult map[string]interface{}
+	if err := chromedp.Run(timeoutCtx,
+		chromedp.WaitVisible(sourceSel, chromedp.ByQuery),
+		chromedp.Evaluate(js, &dragResult),
+	); err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("drag failed: %v", err)}, nil
+	}
+
+	if ok, _ := dragResult["ok"].(bool); !ok {
+		errMsg, _ := dragResult["error"].(string)
+		return Result{IsError: true, Content: fmt.Sprintf("drag failed: %s", errMsg)}, nil
+	}
+	return Result{Content: fmt.Sprintf("Dragged %s to %s", sourceSel, targetSel)}, nil
 }
 
 // findChromeUserDataDir locates the system Chrome user data directory.
