@@ -979,6 +979,13 @@ func (s *JSONLStore) pruneInvalidIndexEntries(idx []indexEntry) ([]indexEntry, b
 	return validIdx, cleaned
 }
 
+// RepairIndex scans the sessions directory and reconciles with the index.
+// It is safe to call from a goroutine (fire-and-forget). The caller must
+// NOT hold the index flock — this function acquires it.
+func (s *JSONLStore) RepairIndex() (bool, error) {
+	return s.repairIndex(nil)
+}
+
 // repairIndex scans the sessions directory and reconciles with the index.
 // Returns true if the index was modified (written back).
 // The caller must NOT hold the index flock — this function acquires it.

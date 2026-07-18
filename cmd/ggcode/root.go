@@ -626,6 +626,18 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	}
 	trace.Mark("create session store")
 
+	// Fire-and-forget: repair session index in the background. Discovers
+	// orphaned JSONL files not in the index so the next startup is correct.
+	// Non-blocking — current startup uses whatever index state exists.
+	safego.Go("startup.repairIndex", func() {
+		changed, err := store.RepairIndex()
+		if err != nil {
+			debug.Log("root", "async RepairIndex error: %v", err)
+		} else if changed {
+			debug.Log("root", "async RepairIndex completed: index updated")
+		}
+	})
+
 	// Clean up stale lock files from crashed/killed processes.
 	storeDir, _ := session.DefaultDir()
 	session.CleanupStaleLocks(storeDir)
