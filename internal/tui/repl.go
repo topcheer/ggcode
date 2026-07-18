@@ -1033,6 +1033,23 @@ func (r *REPL) Run() error {
 	}
 	// Initialize session
 	if r.store != nil {
+		// Asynchronously repair the session index so that any orphaned
+		// JSONL files (not in the index) are discovered and added. This
+		// runs unconditionally on every startup, ensuring the next
+		// instance has a complete index even if the current one is stale
+		// or partially corrupted. Non-blocking — the current startup
+		// proceeds with whatever index state exists.
+		if jsonlStore, ok := r.store.(*session.JSONLStore); ok {
+			safego.Go("repl.startup.repairIndex", func() {
+				changed, err := jsonlStore.RepairIndex()
+				if err != nil {
+					debug.Log("repl", "async RepairIndex error: %v", err)
+				} else if changed {
+					debug.Log("repl", "async RepairIndex completed: index updated")
+				}
+			})
+		}
+
 		if r.resumeID != "" {
 			// Explicit --resume <id>
 			r.loadSession(r.resumeID)
@@ -1543,21 +1560,6 @@ func (r *REPL) loadSession(id string) {
 	}
 	r.model.chatWriteSystem(nextSystemID(), r.model.t("session.resume", ses.ID, title, len(ses.Messages)))
 	debug.Log("repl", "startup timing repl.loadSession total=%s", time.Since(start).Round(time.Millisecond))
-
-	// Asynchronously repair the session index so that any orphaned JSONL
-	// files (not in the index) are discovered and added. This ensures the
-	// next instance startup has a complete index even if the current index
-	// was stale or partially corrupted.
-	if jsonlStore, ok := r.store.(*session.JSONLStore); ok {
-		safego.Go("repl.loadSession.repairIndex", func() {
-			changed, err := jsonlStore.RepairIndex()
-			if err != nil {
-				debug.Log("repl", "async RepairIndex error: %v", err)
-			} else if changed {
-				debug.Log("repl", "async RepairIndex completed: index updated")
-			}
-		})
-	}
 }
 
 func messageCount(ses *session.Session) int {
