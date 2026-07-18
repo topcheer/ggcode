@@ -1126,3 +1126,54 @@ func (t *fileEditTool) Execute(ctx context.Context, input json.RawMessage) (tool
 	}
 	return tool.Result{Content: fmt.Sprintf("Edited %s", args.FilePath)}, nil
 }
+
+func TestMergeConsecutiveSystemMessages(t *testing.T) {
+	// No messages
+	got := mergeConsecutiveSystemMessages(nil)
+	if len(got) != 0 {
+		t.Fatalf("nil input: got %d messages", len(got))
+	}
+
+	// Single system message — no merge needed
+	single := []provider.Message{{Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "prompt"}}}}
+	got = mergeConsecutiveSystemMessages(single)
+	if len(got) != 1 || got[0].Role != "system" {
+		t.Fatalf("single: got %d messages, role=%s", len(got), got[0].Role)
+	}
+
+	// Three consecutive system messages — merge into one
+	triple := []provider.Message{
+		{Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "system prompt"}}},
+		{Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "[Previous conversation summary]\nstuff"}}},
+		{Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "[Post-compaction state]\nfiles: x"}}},
+		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "hello"}}},
+		{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "hi"}}},
+	}
+	got = mergeConsecutiveSystemMessages(triple)
+	if len(got) != 3 {
+		t.Fatalf("triple: got %d messages, want 3", len(got))
+	}
+	if got[0].Role != "system" {
+		t.Fatalf("triple: first role = %s, want system", got[0].Role)
+	}
+	// Verify all three text blocks were concatenated
+	text := got[0].Content[0].Text
+	if !strings.Contains(text, "system prompt") || !strings.Contains(text, "[Previous conversation summary]") || !strings.Contains(text, "[Post-compaction state]") {
+		t.Fatalf("triple: merged text missing content: %s", text)
+	}
+	// User and assistant preserved
+	if got[1].Role != "user" || got[2].Role != "assistant" {
+		t.Fatalf("triple: expected user+assistant, got %s+%s", got[1].Role, got[2].Role)
+	}
+
+	// System message after user — should not be merged
+	mixed := []provider.Message{
+		{Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "prompt"}}},
+		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "hi"}}},
+		{Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "late system"}}},
+	}
+	got = mergeConsecutiveSystemMessages(mixed)
+	if len(got) != 3 {
+		t.Fatalf("mixed: got %d messages, want 3", len(got))
+	}
+}
