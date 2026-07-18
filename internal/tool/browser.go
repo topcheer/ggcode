@@ -232,7 +232,7 @@ func (b *Browser) Execute(ctx context.Context, input json.RawMessage) (Result, e
 		if args.Expression == "" {
 			return Result{IsError: true, Content: "expression is required for evaluate action"}, nil
 		}
-		return b.doEvaluate(ctx, args.Profile, args.Session, args.Expression, args.Headless)
+		return b.doEvaluate(ctx, args.Profile, args.Session, args.Expression, args.Frame, args.Headless)
 
 	case "wait":
 		if args.WaitFor == "" {
@@ -713,17 +713,28 @@ func (b *Browser) doScreenshot(ctx context.Context, profile, session, selector s
 }
 
 // doEvaluate runs arbitrary JavaScript in the page context.
-func (b *Browser) doEvaluate(ctx context.Context, profile, session, expression string, headless *bool) (Result, error) {
+func (b *Browser) doEvaluate(ctx context.Context, profile, session, expression, frame string, headless *bool) (Result, error) {
 	tab, err := b.getSession(profile, session, headless)
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
 
+	// When frame is set, wrap the expression to execute inside the iframe's
+	// contentDocument (same-origin only). This allows evaluating JS and
+	// extracting/clicking elements within iframes.
+	actualExpr := expression
+	if frame != "" {
+		actualExpr = fmt.Sprintf(`(() => {
+			const f = document.querySelector(%q);
+			if (!f) throw new Error("iframe not found: %s");
+			if (!f.contentDocument) throw new Error("cannot access iframe contentDocument (cross-origin?): %s");
+			const fn = new Function(%q);
+			return fn.call(f.contentDocument.defaultView, f.contentDocument);
+		})()`, frame, frame, frame, expression)
+	}
+
 	var result interface{}
-	// chromedp.Evaluate already wraps in an async function and awaits.
-	// Do NOT add our own async wrapper — it causes results to come back
-	// as empty objects instead of the actual values.
-	if err := chromedp.Run(tab.ctx, chromedp.Evaluate(expression, &result)); err != nil {
+	if err := chromedp.Run(tab.ctx, chromedp.Evaluate(actualExpr, &result)); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("JavaScript evaluation failed: %v", err)}, nil
 	}
 
