@@ -1089,44 +1089,41 @@ func (b *Browser) doPress(ctx context.Context, profile, session, key string, hea
 	}
 
 	lowerKey := strings.ToLower(key)
-	var cdpKey string
+
+	// Map all supported keys to their CDP key names for KeyEvent dispatch.
+	// KeyEvent sends directly to the Input domain — it targets the focused
+	// element without needing a CSS selector.
+	var cdpKeyName string
 	if mapped, ok := keyMap[lowerKey]; ok {
-		cdpKey = mapped
+		cdpKeyName = mapped
 	} else if len(key) == 1 {
-		cdpKey = key
+		cdpKeyName = key
 	} else {
-		// For named special keys not in the simple map, use chromedp.KeyEvent
-		// which dispatches via Input.dispatchKeyEvent for proper key codes.
-		var keyEvent chromedp.Action
 		switch lowerKey {
 		case "arrowup":
-			keyEvent = chromedp.KeyEvent("ArrowUp")
+			cdpKeyName = "ArrowUp"
 		case "arrowdown":
-			keyEvent = chromedp.KeyEvent("ArrowDown")
+			cdpKeyName = "ArrowDown"
 		case "arrowleft":
-			keyEvent = chromedp.KeyEvent("ArrowLeft")
+			cdpKeyName = "ArrowLeft"
 		case "arrowright":
-			keyEvent = chromedp.KeyEvent("ArrowRight")
+			cdpKeyName = "ArrowRight"
 		case "delete":
-			keyEvent = chromedp.KeyEvent("Delete")
+			cdpKeyName = "Delete"
 		case "home":
-			keyEvent = chromedp.KeyEvent("Home")
+			cdpKeyName = "Home"
 		case "end":
-			keyEvent = chromedp.KeyEvent("End")
+			cdpKeyName = "End"
 		case "pageup":
-			keyEvent = chromedp.KeyEvent("PageUp")
+			cdpKeyName = "PageUp"
 		case "pagedown":
-			keyEvent = chromedp.KeyEvent("PageDown")
+			cdpKeyName = "PageDown"
 		default:
 			return Result{IsError: true, Content: fmt.Sprintf("unsupported key: %s (supported: Enter, Tab, Escape, Backspace, Delete, Space, ArrowUp/Down/Left/Right, Home, End, PageUp, PageDown, or single characters)", key)}, nil
 		}
-		if err := chromedp.Run(timeoutCtx, keyEvent); err != nil {
-			return Result{IsError: true, Content: fmt.Sprintf("key press failed: %v", err)}, nil
-		}
-		return Result{Content: fmt.Sprintf("Pressed key: %s", key)}, nil
 	}
 
-	if err := chromedp.Run(timeoutCtx, chromedp.SendKeys("", cdpKey)); err != nil {
+	if err := chromedp.Run(timeoutCtx, chromedp.KeyEvent(cdpKeyName)); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("key press failed: %v", err)}, nil
 	}
 
