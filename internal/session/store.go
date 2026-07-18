@@ -1050,6 +1050,15 @@ func (s *JSONLStore) repairIndex(idx []indexEntry) (bool, error) {
 	return changed, nil
 }
 
+// RepairIndex scans the sessions directory and reconciles with the in-memory
+// index. It adds any sessions that exist on disk but are missing from the
+// index, and removes index entries whose JSONL files no longer exist.
+// Empty sessions (no user interaction) are deleted from disk.
+// Returns whether any changes were made.
+func (s *JSONLStore) RepairIndex() (bool, error) {
+	return s.repairIndex(nil)
+}
+
 // Delete removes a session file and its index entry.
 func (s *JSONLStore) Delete(id string) error {
 	s.mu.Lock()
