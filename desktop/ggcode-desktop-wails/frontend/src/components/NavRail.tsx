@@ -1,5 +1,5 @@
 import React from 'react'
-import { MessageSquare, FolderOpen, Settings, Radio, Server, Terminal, PanelLeft, Users } from 'lucide-react'
+import { MessageSquare, FolderOpen, Settings, Radio, Server, Terminal, PanelLeft, Users, Clock } from 'lucide-react'
 import { ViewMode } from '../types'
 import { useTranslation } from '../i18n'
 
@@ -14,7 +14,7 @@ interface Props {
 
 function NavItems() {
   const { t } = useTranslation()
-  const shortcuts = ['⌘1', '⌘2', '⌘3', '⌘4', '⌘5', '⌘6']
+  const shortcuts = ['⌘1', '⌘2', '⌘3', '⌘4', '⌘5', '⌘6', '⌘7', '⌘8']
   const items = [
     { id: 'chat' as ViewMode, icon: <MessageSquare size={18} />, tooltip: t('nav.chat') },
     { id: 'files' as ViewMode, icon: <FolderOpen size={18} />, tooltip: t('nav.files') },
@@ -22,6 +22,7 @@ function NavItems() {
     { id: 'mcp' as ViewMode, icon: <Server size={18} />, tooltip: t('nav.mcp') },
     { id: 'settings' as ViewMode, icon: <Settings size={18} />, tooltip: t('nav.settings') },
     { id: 'debug' as ViewMode, icon: <Terminal size={18} />, tooltip: t('nav.debug') },
+    { id: 'cron' as ViewMode, icon: <Clock size={18} />, tooltip: t('nav.cron') },
   ]
   return items.map((item, i) => ({
     ...item,

@@ -1024,5 +1024,32 @@ export namespace wailskit {
 		}
 	}
 
+
+	export class CronJobInfo {
+	    id: string;
+	    cronExpr: string;
+	    prompt: string;
+	    recurring: boolean;
+	    queueIfBusy: boolean;
+	    paused: boolean;
+	    createdAt: string;
+	    nextFire: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new CronJobInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.cronExpr = source["cronExpr"];
+	        this.prompt = source["prompt"];
+	        this.recurring = source["recurring"];
+	        this.queueIfBusy = source["queueIfBusy"];
+	        this.paused = source["paused"];
+	        this.createdAt = source["createdAt"];
+	        this.nextFire = source["nextFire"];
+	    }
+	}
 }
 

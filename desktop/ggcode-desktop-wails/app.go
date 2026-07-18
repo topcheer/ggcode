@@ -1065,6 +1065,72 @@ func (a *App) RemoveMCPServer(name string) error {
 	return wailskit.RemoveMCPServer(name)
 }
 
+// ─── Cron Jobs ───────────────────────────────────────────
+
+// ListCronJobs returns all cron jobs for the current session.
+func (a *App) ListCronJobs() []wailskit.CronJobInfo {
+	if bridge := wailskit.GetChatBridge(); bridge != nil {
+		return bridge.ListCronJobs()
+	}
+	return nil
+}
+
+// GetCronJob returns a single cron job by ID.
+func (a *App) GetCronJob(id string) (wailskit.CronJobInfo, error) {
+	if bridge := wailskit.GetChatBridge(); bridge != nil {
+		return bridge.GetCronJob(id)
+	}
+	return wailskit.CronJobInfo{}, fmt.Errorf("chat bridge not available")
+}
+
+// CreateCronJob creates a new cron job.
+func (a *App) CreateCronJob(cronExpr, prompt string, recurring, queueIfBusy bool) (wailskit.CronJobInfo, error) {
+	if bridge := wailskit.GetChatBridge(); bridge != nil {
+		return bridge.CreateCronJob(cronExpr, prompt, recurring, queueIfBusy)
+	}
+	return wailskit.CronJobInfo{}, fmt.Errorf("chat bridge not available")
+}
+
+// UpdateCronJob updates an existing cron job.
+func (a *App) UpdateCronJob(id, cronExpr, prompt string, queueIfBusy bool) (wailskit.CronJobInfo, error) {
+	if bridge := wailskit.GetChatBridge(); bridge != nil {
+		return bridge.UpdateCronJob(id, cronExpr, prompt, queueIfBusy)
+	}
+	return wailskit.CronJobInfo{}, fmt.Errorf("chat bridge not available")
+}
+
+// DeleteCronJob removes a cron job by ID.
+func (a *App) DeleteCronJob(id string) error {
+	if bridge := wailskit.GetChatBridge(); bridge != nil {
+		return bridge.DeleteCronJob(id)
+	}
+	return fmt.Errorf("chat bridge not available")
+}
+
+// PauseCronJob suspends a cron job.
+func (a *App) PauseCronJob(id string) error {
+	if bridge := wailskit.GetChatBridge(); bridge != nil {
+		return bridge.PauseCronJob(id)
+	}
+	return fmt.Errorf("chat bridge not available")
+}
+
+// ResumeCronJob reactivates a paused cron job.
+func (a *App) ResumeCronJob(id string) error {
+	if bridge := wailskit.GetChatBridge(); bridge != nil {
+		return bridge.ResumeCronJob(id)
+	}
+	return fmt.Errorf("chat bridge not available")
+}
+
+// GenerateCronPrompt uses the current LLM provider to generate a cron prompt from a description.
+func (a *App) GenerateCronPrompt(description string) (string, error) {
+	if bridge := wailskit.GetChatBridge(); bridge != nil {
+		return bridge.GenerateCronPrompt(description)
+	}
+	return "", fmt.Errorf("chat bridge not available")
+}
+
 // ─── System ───────────────────────────────────────────────
 
 // GetVersion returns the application version.

@@ -389,3 +389,36 @@ export function UnbindIMAdapter(arg1) {
 export function UpdateConfig(arg1) {
   return window['go']['main']['App']['UpdateConfig'](arg1);
 }
+
+export function CreateCronJob(arg1,arg2,arg3,arg4) {
+  return window['go']['main']['App']['CreateCronJob'](arg1,arg2,arg3,arg4);
+}
+
+export function DeleteCronJob(arg1) {
+  return window['go']['main']['App']['DeleteCronJob'](arg1);
+}
+
+export function GenerateCronPrompt(arg1) {
+  return window['go']['main']['App']['GenerateCronPrompt'](arg1);
+}
+
+export function GetCronJob(arg1) {
+  return window['go']['main']['App']['GetCronJob'](arg1);
+}
+
+export function ListCronJobs() {
+  return window['go']['main']['App']['ListCronJobs']();
+}
+
+export function PauseCronJob(arg1) {
+  return window['go']['main']['App']['PauseCronJob'](arg1);
+}
+
+export function ResumeCronJob(arg1) {
+  return window['go']['main']['App']['ResumeCronJob'](arg1);
+}
+
+export function UpdateCronJob(arg1,arg2,arg3,arg4) {
+  return window['go']['main']['App']['UpdateCronJob'](arg1,arg2,arg3,arg4);
+}
+

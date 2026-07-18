@@ -11,6 +11,7 @@ import { IMManagement } from './IMManagement'
 import { FileBrowser } from './FileBrowser'
 import { MCPServers } from './MCPServers'
 import { LanChatView } from './LanChatView'
+import { CronManagement } from './CronManagement'
 import { ContextPanel } from './ContextPanel'
 import { CommandPalette, type CommandAction } from './CommandPalette'
 import { KeyboardShortcuts } from './KeyboardShortcuts'
@@ -352,7 +353,7 @@ function LayoutInner() {
         const num = parseInt(e.key)
         if (num >= 1 && num <= 7) {
           e.preventDefault()
-          const views: ViewMode[] = ['chat', 'files', 'im', 'mcp', 'settings', 'debug', 'lanchat']
+          const views: ViewMode[] = ['chat', 'files', 'im', 'mcp', 'settings', 'debug', 'lanchat', 'cron']
           const target = views[num - 1]
           if (target) setView(target)
         }
@@ -455,6 +456,7 @@ function LayoutInner() {
               {view === 'files' && <FileBrowser onBack={backToChat} />}
               {view === 'mcp' && <MCPServers onBack={backToChat} />}
               {view === 'lanchat' && <LanChatView onUnreadChange={setLanChatUnread} />}
+              {view === 'cron' && <CronManagement onBack={backToChat} />}
             </div>
 
             {contextPanelOpen && view === 'chat' && (

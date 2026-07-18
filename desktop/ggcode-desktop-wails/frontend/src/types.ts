@@ -43,7 +43,7 @@ export interface EndpointInfo {
   displayName: string
 }
 
-export type ViewMode = "chat" | "settings" | "im" | "files" | "mcp" | "debug" | "lanchat"
+export type ViewMode = "chat" | "settings" | "im" | "files" | "mcp" | "debug" | "lanchat" | "cron"
 
 export interface LanChatParticipant {
   node_id: string

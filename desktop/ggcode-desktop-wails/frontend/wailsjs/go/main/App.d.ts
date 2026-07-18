@@ -16,6 +16,23 @@ export function BindIMAdapter(arg1:string):Promise<void>;
 
 export function CancelMessage():Promise<void>;
 
+
+export function CreateCronJob(arg1:string,arg2:string,arg3:boolean,arg4:boolean):Promise<wailskit.CronJobInfo>;
+
+export function DeleteCronJob(arg1:string):Promise<void>;
+
+export function GenerateCronPrompt(arg1:string):Promise<string>;
+
+export function GetCronJob(arg1:string):Promise<wailskit.CronJobInfo>;
+
+export function ListCronJobs():Promise<wailskit.CronJobInfo[]>;
+
+export function PauseCronJob(arg1:string):Promise<void>;
+
+export function ResumeCronJob(arg1:string):Promise<void>;
+
+export function UpdateCronJob(arg1:string,arg2:string,arg3:string,arg4:boolean):Promise<wailskit.CronJobInfo>;
+
 export function CheckForUpdates():Promise<Record<string, any>>;
 
 export function CompleteAnthropicOAuth():Promise<void>;
