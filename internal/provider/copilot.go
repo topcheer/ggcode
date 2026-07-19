@@ -125,7 +125,9 @@ func (p *CopilotProvider) SetImpersonatedUA(ua string) {
 	}
 	// The transport chain is: headerInjectingTransport -> copilotHeaderRoundTripper -> DefaultTransport
 	if copilotRT, ok := p.OpenAIProvider.transport.base.(*copilotHeaderRoundTripper); ok {
+		copilotRT.uaMu.Lock()
 		copilotRT.impersonatedUA = ua
+		copilotRT.uaMu.Unlock()
 	}
 }
 

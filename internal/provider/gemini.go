@@ -142,8 +142,8 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 	safego.Go("provider.gemini.streamRead", func() {
 		defer close(ch)
 
-		var usage TokenUsage
 		for attempt := 0; attempt < providerRetryAttempts; attempt++ {
+			var usage TokenUsage // reset per attempt to avoid leaking failed-attempt usage
 			iter := p.client.Models.GenerateContentStream(ctx, p.model, contents, config)
 			emitted := false
 			retry := false
