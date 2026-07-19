@@ -733,7 +733,7 @@ Examples:
 				return fmt.Errorf("loading config: %w", err)
 			}
 			cfg := ctx.cfg
-			effectiveScope, err := prepareIMConfigWrite(ctx, scope, name, false)
+			_, err = prepareIMConfigWrite(ctx, scope, name, false)
 			if err != nil {
 				return err
 			}
@@ -747,21 +747,24 @@ Examples:
 
 			switch key {
 			case "enabled":
-				adapter.Enabled = (value == "true" || value == "1")
-				cfg.IM.Adapters[name] = adapter
-				if err := cfg.SaveScoped(effectiveScope); err != nil {
-					return fmt.Errorf("saving config: %w", err)
+				enabled := value == "true" || value == "1"
+				if err := cfg.SetIMAdapterEnabled(name, enabled); err != nil {
+					return err
 				}
 			case "platform":
 				adapter.Platform = value
 				cfg.IM.Adapters[name] = adapter
-				if err := cfg.SaveScoped(effectiveScope); err != nil {
+				if err := cfg.PatchIMAdapter(name, func(a map[string]interface{}) {
+					a["platform"] = value
+				}); err != nil {
 					return fmt.Errorf("saving config: %w", err)
 				}
 			case "transport":
 				adapter.Transport = value
 				cfg.IM.Adapters[name] = adapter
-				if err := cfg.SaveScoped(effectiveScope); err != nil {
+				if err := cfg.PatchIMAdapter(name, func(a map[string]interface{}) {
+					a["transport"] = value
+				}); err != nil {
 					return fmt.Errorf("saving config: %w", err)
 				}
 			default:

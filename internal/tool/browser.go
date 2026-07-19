@@ -1011,6 +1011,7 @@ func (b *Browser) doSelect(ctx context.Context, profile, session, selector, valu
 	js := fmt.Sprintf(`(() => {
 		const sel = document.querySelector(%q);
 		if (!sel) return { ok: false, error: 'element not found' };
+			if (!sel.options) return { ok: false, error: 'element is not a <select> — cannot set value' };
 		for (const opt of sel.options) {
 			if (opt.value === %q || opt.text.trim() === %q) {
 				sel.value = opt.value;
@@ -1160,7 +1161,10 @@ func (b *Browser) doUpload(ctx context.Context, profile, session, selector, file
 	defer cancel()
 
 	if err := chromedp.Run(timeoutCtx,
-		chromedp.WaitVisible(selector, chromedp.ByQuery),
+		// WaitReady, NOT WaitVisible — many sites hide the real <input type="file">
+		// with display:none and use a styled button. SetUploadFiles only needs the
+		// DOM node to exist, not be visible.
+		chromedp.WaitReady(selector, chromedp.ByQuery),
 		chromedp.SetUploadFiles(selector, []string{absPath}, chromedp.ByQuery),
 	); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("upload failed: %v", err)}, nil
@@ -1267,9 +1271,10 @@ func (b *Browser) doDrag(ctx context.Context, profile, session, sourceSel, targe
 		if (!src) return { ok: false, error: 'source not found' };
 		if (!tgt) return { ok: false, error: 'target not found' };
 		const sr = src.getBoundingClientRect(), tr = tgt.getBoundingClientRect();
-		const fire = (el, type, x, y) => {
-			el.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y }));
-		};
+			const dt = new DataTransfer();
+			const fire = (el, type, x, y) => {
+				el.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, dataTransfer: dt }));
+			};
 		fire(src, 'dragstart', sr.left+sr.width/2, sr.top+sr.height/2);
 		fire(src, 'drag', sr.left+sr.width/2, sr.top+sr.height/2);
 		fire(tgt, 'dragenter', tr.left+tr.width/2, tr.top+tr.height/2);
