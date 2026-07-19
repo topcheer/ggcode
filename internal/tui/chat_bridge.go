@@ -527,13 +527,25 @@ func (m *Model) chatEnsureAssistant() {
 func stripAnsiForChat(s string) string {
 	var result strings.Builder
 	inEscape := false
+	sawBracket := false
 	for _, c := range s {
-		if c == '\x1b' {
+		if !inEscape && c == '\x1b' {
 			inEscape = true
+			sawBracket = false
 			continue
 		}
 		if inEscape {
-			if c == 'm' {
+			if !sawBracket {
+				if c == '[' {
+					sawBracket = true
+					continue
+				}
+				// Non-CSI escape (e.g. \x1bO): consume one more char then end
+				inEscape = false
+				continue
+			}
+			// Inside CSI sequence: skip until a terminator byte 0x40–0x7E
+			if c >= 0x40 && c <= 0x7e {
 				inEscape = false
 			}
 			continue

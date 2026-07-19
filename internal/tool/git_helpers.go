@@ -6,7 +6,21 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"unicode/utf8"
 )
+
+// truncateUTF8Safe truncates s to at most maxBytes bytes, backing off to the
+// nearest UTF-8 rune boundary to avoid producing invalid UTF-8.
+func truncateUTF8Safe(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
+		return s
+	}
+	// Back up to the nearest valid rune start.
+	for maxBytes > 0 && !utf8.RuneStart(s[maxBytes]) {
+		maxBytes--
+	}
+	return s[:maxBytes]
+}
 
 const coAuthorTrailer = "Co-Authored-By: ggcode <noreply@ggcode.dev>"
 

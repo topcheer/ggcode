@@ -93,7 +93,7 @@ func (t GitDiff) Execute(ctx context.Context, input json.RawMessage) (Result, er
 
 	// Truncate if very large
 	if len(trimmed) > maxOutputSize {
-		trimmed = trimmed[:maxOutputSize] + "\n... [diff truncated]"
+		trimmed = truncateUTF8Safe(trimmed, maxOutputSize) + "\n... [diff truncated]"
 	}
 
 	return Result{Content: trimmed}, nil

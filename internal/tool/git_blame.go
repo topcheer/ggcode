@@ -77,7 +77,7 @@ func (t GitBlame) Execute(ctx context.Context, input json.RawMessage) (Result, e
 	}
 
 	if len(trimmed) > maxOutputSize {
-		trimmed = trimmed[:maxOutputSize] + "\n... [output truncated]"
+		trimmed = truncateUTF8Safe(trimmed, maxOutputSize) + "\n... [output truncated]"
 	}
 
 	return Result{Content: trimmed}, nil
