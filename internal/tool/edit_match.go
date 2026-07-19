@@ -181,11 +181,11 @@ func parseReadFileLine(line string) (lineNumber int, text string, ok bool) {
 	return 0, "", false
 }
 
-func resolveAnchoredCandidate(candidate, oldText string) matchResult {
+func resolveAnchoredCandidate(content, candidate, oldText string) matchResult {
 	if candidate == oldText {
 		return matchResult{canonical: candidate}
 	}
-	if normalized := normalizeIndentation(candidate, oldText); normalized == candidate {
+	if normalized := normalizeIndentation(content, oldText); normalized == candidate {
 		return matchResult{canonical: candidate, transform: "indent-normalized"}
 	}
 	if strings.Contains(candidate, "\r\n") && !strings.Contains(oldText, "\r\n") {
@@ -227,7 +227,7 @@ func tryReadFileLineAnchor(content, oldText string) matchResult {
 	startIdx := block.startLine - 1
 	endIdx := startIdx + len(block.lines) - 1
 	candidate := content[lines[startIdx].start:lines[endIdx].end]
-	mr := resolveAnchoredCandidate(candidate, strings.Join(block.lines, "\n"))
+	mr := resolveAnchoredCandidate(content, candidate, strings.Join(block.lines, "\n"))
 	if mr.canonical == "" {
 		return matchResult{}
 	}
