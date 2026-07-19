@@ -359,6 +359,12 @@ func (s *JSONLStore) updateIndex(ses *Session) error {
 		s.indexDirty = true
 		return err
 	}
+	if idx == nil && s.indexDirty {
+		// Index is corrupt (not just empty — loadIndexNoRepair set the
+		// dirty flag). Don't write a single-entry index that overwrites
+		// real entries. Keep dirty flag for runMaintenance to rebuild.
+		return nil
+	}
 	found := false
 	for i, e := range idx {
 		if e.ID == ses.ID {
