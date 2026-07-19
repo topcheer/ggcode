@@ -263,16 +263,19 @@ func (h *TaskHandler) execute(ctx context.Context, t *Task, perm *SkillPermissio
 	case SkillFileSearch, SkillGitOps, SkillCommandExec:
 		// If agent is available, use agent for all skills (smarter routing).
 		// Fall back to direct tool execution only if no agent.
+		// Use the latest user message (not History[0]) so that follow-up
+		// messages in input-required flows are actually delivered.
+		lastIdx := len(t.History) - 1
 		if h.agent != nil && len(t.History) > 0 {
-			result, err = h.executeAgent(ctx, perm, t.Skill, t.History[0])
+			result, err = h.executeAgent(ctx, perm, t.Skill, t.History[lastIdx])
 		} else if len(t.History) > 0 {
-			result, err = h.executeDirectTool(ctx, perm, t.Skill, t.History[0])
+			result, err = h.executeDirectTool(ctx, perm, t.Skill, t.History[lastIdx])
 		} else {
 			err = fmt.Errorf("no message history for skill %s", t.Skill)
 		}
 	case SkillCodeEdit, SkillCodeReview, SkillFullTask:
 		if len(t.History) > 0 {
-			result, err = h.executeAgent(ctx, perm, t.Skill, t.History[0])
+			result, err = h.executeAgent(ctx, perm, t.Skill, t.History[len(t.History)-1])
 		} else {
 			err = fmt.Errorf("no message history for skill %s", t.Skill)
 		}
@@ -307,6 +310,7 @@ func (h *TaskHandler) execute(ctx context.Context, t *Task, perm *SkillPermissio
 		return
 	}
 
+	h.mu.Lock()
 	t.Artifacts = []Artifact{{
 		ArtifactID: generateID(),
 		Parts: []Part{{
@@ -314,6 +318,7 @@ func (h *TaskHandler) execute(ctx context.Context, t *Task, perm *SkillPermissio
 			Text: result,
 		}},
 	}}
+	h.mu.Unlock()
 	h.updateStatus(t, TaskStateCompleted, "")
 }
 

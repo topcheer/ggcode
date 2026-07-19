@@ -11,6 +11,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/util"
+	runtimedebug "runtime/debug"
 )
 
 // Job represents a scheduled prompt job.
@@ -480,6 +481,12 @@ func (s *Scheduler) scheduleJobLocked(job *Job) {
 		delay = 0
 	}
 	s.timers[job.ID] = time.AfterFunc(delay, func() {
+		defer func() {
+			if r := recover(); r != nil {
+				debug.Log("cron", "panic in timer callback for job %s: %v\n%s", job.ID, r, runtimedebug.Stack())
+			}
+		}()
+
 		// Read mutable fields under lock to avoid data race with Update().
 		s.mu.Lock()
 		prompt := job.Prompt
@@ -489,6 +496,13 @@ func (s *Scheduler) scheduleJobLocked(job *Job) {
 		s.enqueue(prompt, queueIfBusy)
 
 		s.mu.Lock()
+		defer s.mu.Unlock()
+		// Check if job was deleted while we were enqueueing (TOCTOU fix).
+		// Without this check, a deleted recurring job would be re-scheduled
+		// here, creating an infinite loop of phantom firings.
+		if _, exists := s.jobs[job.ID]; !exists {
+			return
+		}
 		if job.Recurring {
 			next, err := NextTime(job.CronExpr, time.Now())
 			if err != nil {
