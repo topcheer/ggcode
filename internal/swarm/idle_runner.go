@@ -145,11 +145,11 @@ func handleMessage(
 		})
 	}
 
-	result := executeTask(ctx, agent, msg, tm, onEvent, team, taskTimeout)
+	result, taskErr := executeTask(ctx, agent, msg, tm, onEvent, team, taskTimeout)
 
 	// Send result back to caller if they requested it.
 	if msg.ReplyTo != nil {
-		msg.ReplyTo <- TaskResult{Output: result}
+		msg.ReplyTo <- TaskResult{Output: result, Error: taskErr}
 	}
 
 	tm.setLastResult(result)
@@ -246,7 +246,7 @@ func tryClaimPendingTask(
 
 		// Execute the task via agent.
 		msg := MailMessage{Content: prompt, Type: "task"}
-		result := executeTask(ctx, agent, msg, tm, onEvent, team, taskTimeout)
+		result, _ := executeTask(ctx, agent, msg, tm, onEvent, team, taskTimeout)
 
 		tm.setLastResult(result)
 
@@ -314,7 +314,7 @@ func executeTask(
 	onEvent func(Event),
 	team *Team,
 	timeout time.Duration,
-) string {
+) (string, error) {
 	// When timeout > 0, create a sub-context with deadline. When timeout == 0, no deadline.
 	var subCtx context.Context
 	var cancel context.CancelFunc
@@ -439,5 +439,5 @@ func executeTask(
 	}
 
 	debug.Log("swarm", "teammate %s task complete output_len=%d", tm.ID, output.Len())
-	return output.String()
+	return output.String(), err
 }
