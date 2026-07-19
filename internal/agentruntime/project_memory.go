@@ -19,11 +19,8 @@ func ApplyProjectMemoryToAgent(agentInst *agent.Agent, workingDir string) ([]str
 	if err != nil || len(files) == 0 {
 		return nil, err
 	}
-	// Do NOT call SetProjectMemoryFiles here — that marks files as "already
-	// loaded", which prevents the path-triggered dynamic loader
-	// (pendingProjectMemoryForTool) from injecting full content when the
-	// agent actually touches those files. We only inject the index hint;
-	// the loader handles on-demand content injection.
+	agentInst.SetProjectMemoryFiles(files)
+
 	hint := memory.BuildProjectMemoryHint(files)
 	if hint != "" {
 		agentInst.AddMessage(provider.Message{

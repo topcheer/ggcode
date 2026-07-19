@@ -334,10 +334,7 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		}
 		m.projMemFiles = append([]string(nil), msg.Files...)
 		if m.agent != nil && strings.TrimSpace(msg.Content) != "" {
-			// Only inject the hint; do NOT call SetProjectMemoryFiles —
-			// that marks files as "content already loaded" and prevents
-			// the path-triggered dynamic loader from injecting full
-			// content when the agent touches those files.
+			m.agent.SetProjectMemoryFiles(msg.Files)
 			m.agent.AddMessage(provider.Message{
 				Role:    "system",
 				Content: []provider.ContentBlock{{Type: "text", Text: msg.Content}},
