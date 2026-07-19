@@ -537,7 +537,7 @@ func writeKeysEnvTo(newEntries map[string]string, path string) error {
 		fmt.Fprintf(&b, "export %s='%s'\n", k, existing[k])
 	}
 
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), secureConfigDirMode); err != nil {
 		return fmt.Errorf("creating config directory: %w", err)
 	}
 	// 0600: only owner can read/write — these are secrets.
