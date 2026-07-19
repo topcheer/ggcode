@@ -286,7 +286,7 @@ function CronJobEditor({ job, onBack, onSave }: {
             value={cronExpr}
             onChange={e => setCronExpr(e.target.value)}
             placeholder="*/5 * * * *"
-            style={{ width: '100%', padding: '8px 12px', borderRadius: 6, border: '1px solid var(--color-border, #30363d)', background: 'var(--color-bg-input, #0d1117)', color: 'var(--text-primary)', fontSize: 14, fontFamily: 'monospace', boxSizing: 'border-box' }}
+            style={{ width: '100%', padding: '8px 12px', borderRadius: 6, border: '1px solid var(--color-border, #30363d)', background: 'var(--color-surface)', color: 'var(--text-primary)', fontSize: 14, fontFamily: 'monospace', boxSizing: 'border-box' }}
           />
           <p style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4 }}>
             {t('cron.cronHint')}
@@ -316,7 +316,7 @@ function CronJobEditor({ job, onBack, onSave }: {
                 value={aiDescription}
                 onChange={e => setAiDescription(e.target.value)}
                 placeholder={t('cron.aiPlaceholder')}
-                style={{ width: '100%', padding: '8px 12px', borderRadius: 6, border: '1px solid var(--color-border, #30363d)', background: 'var(--color-bg-input, #0d1117)', color: 'var(--text-primary)', fontSize: 13, boxSizing: 'border-box' }}
+                style={{ width: '100%', padding: '8px 12px', borderRadius: 6, border: '1px solid var(--color-border, #30363d)', background: 'var(--color-surface)', color: 'var(--text-primary)', fontSize: 13, boxSizing: 'border-box' }}
                 onKeyDown={e => { if (e.key === 'Enter') handleGenerate() }}
               />
               <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
@@ -339,7 +339,7 @@ function CronJobEditor({ job, onBack, onSave }: {
             onChange={e => setPrompt(e.target.value)}
             placeholder={t('cron.promptPlaceholder')}
             rows={8}
-            style={{ width: '100%', padding: '8px 12px', borderRadius: 6, border: '1px solid var(--color-border, #30363d)', background: 'var(--color-bg-input, #0d1117)', color: 'var(--text-primary)', fontSize: 13, fontFamily: 'monospace', resize: 'vertical', minHeight: 120, boxSizing: 'border-box' }}
+            style={{ width: '100%', padding: '8px 12px', borderRadius: 6, border: '1px solid var(--color-border, #30363d)', background: 'var(--color-surface)', color: 'var(--text-primary)', fontSize: 13, fontFamily: 'monospace', resize: 'vertical', minHeight: 120, boxSizing: 'border-box' }}
           />
         </div>
 
