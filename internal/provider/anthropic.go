@@ -182,6 +182,7 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 
 		var usage *TokenUsage
 		var outputChars int
+		streamError := false // set when a non-retryable error was sent to ch
 
 		for attempt := 0; attempt < providerRetryAttempts; attempt++ {
 			if attempt > 0 {
@@ -196,9 +197,7 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 			func() {
 				stream := p.client.Messages.NewStreaming(ctx, params)
 				defer func() {
-					// The Anthropic SDK stream doesn't expose a Close method;
-					// it drains automatically when the loop exits.
-					_ = stream
+					_ = stream.Close()
 				}()
 
 				for stream.Next() {
@@ -290,6 +289,7 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 									p.cap.OnTruncated()
 								}
 								ch <- StreamEvent{Type: StreamEventError, Error: stopErr}
+								streamError = true
 								return
 							}
 						}
@@ -322,6 +322,7 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 						return
 					}
 					ch <- StreamEvent{Type: StreamEventError, Error: err}
+					streamError = true
 					return
 				}
 			}()
@@ -364,7 +365,9 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 				PromptTokensTotal: inputTokens,
 			}
 		}
-		ch <- StreamEvent{Type: StreamEventDone, Usage: usage}
+		if !streamError {
+			ch <- StreamEvent{Type: StreamEventDone, Usage: usage}
+		}
 	})
 
 	return ch, nil

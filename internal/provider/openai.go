@@ -304,6 +304,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 		var usage *TokenUsage
 		var outputChars int
 		var err error
+		streamError := false // set when a non-retryable error was sent to ch
 
 		for attempt := 0; attempt < providerRetryAttempts; attempt++ {
 			if attempt > 0 {
@@ -400,6 +401,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 							return
 						}
 						ch <- StreamEvent{Type: StreamEventError, Error: recvErr}
+						streamError = true
 						return
 					}
 
@@ -467,6 +469,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 								p.cap.OnTruncated()
 							}
 							ch <- StreamEvent{Type: StreamEventError, Error: finishErr}
+							streamError = true
 							return
 						}
 					}
@@ -477,18 +480,20 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 				continue
 			}
 
-			if usage == nil {
-				inputTokens, err := p.CountTokens(ctx, messages)
-				if err != nil {
-					inputTokens = 0
+			if !streamError {
+				if usage == nil {
+					inputTokens, err := p.CountTokens(ctx, messages)
+					if err != nil {
+						inputTokens = 0
+					}
+					usage = &TokenUsage{
+						InputTokens:       inputTokens,
+						OutputTokens:      estimateTokensFromChars(outputChars),
+						PromptTokensTotal: inputTokens,
+					}
 				}
-				usage = &TokenUsage{
-					InputTokens:       inputTokens,
-					OutputTokens:      estimateTokensFromChars(outputChars),
-					PromptTokensTotal: inputTokens,
-				}
+				ch <- StreamEvent{Type: StreamEventDone, Usage: usage}
 			}
-			ch <- StreamEvent{Type: StreamEventDone, Usage: usage}
 			return
 		}
 		// All retry attempts exhausted without success.
