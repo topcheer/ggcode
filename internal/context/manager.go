@@ -830,8 +830,9 @@ func (m *Manager) RecordUsage(usage provider.TokenUsage) {
 	// prompt). This avoids double-counting for OpenAI/Gemini.
 	totalInput := usage.InputTokens
 	if usage.CacheRead > 0 && usage.PromptTokensTotal > usage.InputTokens {
-		// Anthropic semantics: CacheRead is additive
-		totalInput = usage.InputTokens + usage.CacheRead
+		// Anthropic semantics: PromptTokensTotal includes InputTokens +
+		// CacheRead + CacheWrite. Use it directly for accurate baseline.
+		totalInput = usage.PromptTokensTotal
 	}
 	m.baselineTokens = totalInput + usage.OutputTokens
 	m.baselineDelta = 0
@@ -928,7 +929,15 @@ func (m *Manager) Summarize(ctx context.Context, prov provider.Provider) error {
 
 	newMsgs := make([]provider.Message, 0, len(extraMsgs)+2)
 	if plan.hasSystem {
-		newMsgs = append(newMsgs, plan.systemMsg)
+		// Use the live system message instead of the stale snapshot taken
+		// before the LLM call. This prevents TOCTOU: system prompt may have
+		// been updated (ratchet rules, autopilot state, peer changes) during
+		// the summarization LLM call. Same fix as ApplyCompactResult (line 696).
+		if len(m.messages) > 0 && m.messages[0].Role == "system" {
+			newMsgs = append(newMsgs, m.messages[0])
+		} else {
+			newMsgs = append(newMsgs, plan.systemMsg)
+		}
 	}
 	// Summary message gets a unique ID so checkpoint can reference it.
 	// It will be persisted to JSONL by the caller via AppendMessageToDisk.
