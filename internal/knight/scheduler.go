@@ -55,6 +55,7 @@ type Knight struct {
 	running  bool
 	cancel   context.CancelFunc
 	lastIdle time.Time
+	wg       sync.WaitGroup // tracks runLoop goroutine for graceful shutdown
 
 	// Throttle timestamps — prevent running the same task every tick
 	lastAnalysis           time.Time
@@ -175,7 +176,11 @@ func (k *Knight) Start(ctx context.Context) error {
 	k.lastIdle = time.Now()
 	k.mu.Unlock()
 
-	safego.Go("knight.runLoop", func() { k.runLoop(ctx) })
+	k.wg.Add(1)
+	safego.Go("knight.runLoop", func() {
+		defer k.wg.Done()
+		k.runLoop(ctx)
+	})
 	debug.Log("knight", "started (budget=%dM, trust=%s)", k.cfg.DailyTokenBudget/1_000_000, k.cfg.TrustLevel)
 	return nil
 }
@@ -183,7 +188,6 @@ func (k *Knight) Start(ctx context.Context) error {
 // Stop gracefully shuts down Knight.
 func (k *Knight) Stop() {
 	k.mu.Lock()
-	defer k.mu.Unlock()
 	if k.cancel != nil {
 		k.cancel()
 		k.cancel = nil
@@ -193,6 +197,12 @@ func (k *Knight) Stop() {
 		k.lock.release()
 		k.lock = nil
 	}
+	k.mu.Unlock()
+
+	// Wait for runLoop to fully exit before returning. Without this,
+	// a quick Start→Stop→Start sequence can have two runLoop goroutines
+	// concurrently accessing stagingFailCount (no mutex on that map).
+	k.wg.Wait()
 	debug.Log("knight", "stopped")
 }
 
