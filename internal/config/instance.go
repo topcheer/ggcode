@@ -348,13 +348,14 @@ func mergeHookConfig(global, instance *hooks.HookConfig) {
 // SaveInstance saves only the fields that differ from the global config
 // into the instance-level override file at ~/.ggcode/instances/{sha256}/ggcode.yaml.
 //
-// Strategy: read the existing instance file (if any), compute the diff between
-// the current Config and the globalSnap (the original global values), and write
-// only the changed fields. If no fields differ, the instance file is deleted.
+// Merge semantics: the computed delta is deep-merged onto the existing
+// instance file content (if the file exists). This prevents concurrent
+// saves from different features within the same workspace from clobbering
+// each other's overrides. Only when the instance file does NOT exist is
+// the delta written as a full new file.
 //
-// This ensures the instance file remains minimal — only the override values,
-// never a full copy of the config (which would bloat disk usage and leak
-// system_prompt / vendor definitions / secrets into per-workspace files).
+// If no fields differ from global, the instance file is deleted to keep
+// things clean.
 func (c *Config) SaveInstance(workspace string) error {
 	dir := InstanceDir(workspace)
 	if dir == "" {
@@ -378,10 +379,35 @@ func (c *Config) SaveInstance(workspace string) error {
 		return nil
 	}
 
-	data, err := yaml.Marshal(delta)
-	if err != nil {
-		return fmt.Errorf("marshaling instance config: %w", err)
+	// Merge delta onto existing instance file, or write delta as new file.
+	var data []byte
+	existingData, readErr := os.ReadFile(path)
+	if readErr == nil && len(existingData) > 0 {
+		existingRaw := map[string]interface{}{}
+		if yamlErr := yaml.Unmarshal(existingData, &existingRaw); yamlErr == nil {
+			deepMergeYAMLMaps(existingRaw, delta)
+			var marshalErr error
+			data, marshalErr = yaml.Marshal(existingRaw)
+			if marshalErr != nil {
+				return fmt.Errorf("marshaling merged instance config: %w", marshalErr)
+			}
+		} else {
+			// Existing file unparseable — overwrite with delta.
+			var marshalErr error
+			data, marshalErr = yaml.Marshal(delta)
+			if marshalErr != nil {
+				return fmt.Errorf("marshaling instance config: %w", marshalErr)
+			}
+		}
+	} else {
+		// File doesn't exist — write delta directly.
+		var marshalErr error
+		data, marshalErr = yaml.Marshal(delta)
+		if marshalErr != nil {
+			return fmt.Errorf("marshaling instance config: %w", marshalErr)
+		}
 	}
+
 	if err := writeFileAtomic(path, data, secureConfigFileMode); err != nil {
 		return err
 	}

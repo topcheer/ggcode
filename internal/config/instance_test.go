@@ -934,9 +934,9 @@ func TestMergeInstance_NilInstance(t *testing.T) {
 	}
 }
 
-// --- Coverage: marshalGlobalOnly edge cases ---
+// --- Coverage: Save merge semantics (replaces former marshalGlobalOnly tests) ---
 
-func TestMarshalGlobalOnly_NoInstanceFields(t *testing.T) {
+func TestSave_NoInstanceFields_PreservesExistingFile(t *testing.T) {
 	withTestHome(t)
 	tmpDir := t.TempDir()
 	globalPath := filepath.Join(tmpDir, "ggcode.yaml")
@@ -944,18 +944,22 @@ func TestMarshalGlobalOnly_NoInstanceFields(t *testing.T) {
 
 	cfg, _ := Load(globalPath)
 	cfg.globalSnap = deepCopyConfig(cfg)
-	// No instanceFields → should just serialize normally
+	// No instanceFields → should just merge normally
 
-	data, err := cfg.marshalGlobalOnly()
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("Save error: %v", err)
+	}
+	// File should still exist with content
+	data, err := os.ReadFile(globalPath)
 	if err != nil {
-		t.Fatalf("marshalGlobalOnly error: %v", err)
+		t.Fatalf("reading saved file: %v", err)
 	}
 	if len(data) == 0 {
-		t.Error("marshalGlobalOnly should produce output")
+		t.Error("Save should produce output")
 	}
 }
 
-func TestMarshalGlobalOnly_WithInstanceFields(t *testing.T) {
+func TestSave_WithInstanceFields_ExcludesFromGlobal(t *testing.T) {
 	withTestHome(t)
 	tmpDir := t.TempDir()
 	globalPath := filepath.Join(tmpDir, "ggcode.yaml")
@@ -966,13 +970,16 @@ func TestMarshalGlobalOnly_WithInstanceFields(t *testing.T) {
 	cfg.instanceFields = map[string]bool{"default_mode": true}
 	cfg.DefaultMode = "auto"
 
-	data, err := cfg.marshalGlobalOnly()
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("Save error: %v", err)
+	}
+	data, err := os.ReadFile(globalPath)
 	if err != nil {
-		t.Fatalf("marshalGlobalOnly error: %v", err)
+		t.Fatalf("reading saved file: %v", err)
 	}
 	s := string(data)
 	if containsYAMLKey(s, "default_mode") {
-		t.Errorf("marshalGlobalOnly should exclude instance fields:\n%s", s)
+		t.Errorf("Save should exclude instance fields from global file:\n%s", s)
 	}
 }
 
@@ -2401,5 +2408,80 @@ func TestSetIMAdapterEnabled_FullCycle(t *testing.T) {
 	}
 	if cfg4.IM.Adapters["tg1"].Enabled != false {
 		t.Error("tg1 should remain disabled")
+	}
+}
+
+// TestSave_MergePreservesExistingVendorFromOtherProcess verifies that when
+// two processes load the same global config, modify different fields, and
+// save sequentially, neither save clobbers the other's changes.
+func TestSave_MergePreservesExistingVendorFromOtherProcess(t *testing.T) {
+	withTestHome(t)
+	tmpDir := t.TempDir()
+	globalPath := filepath.Join(tmpDir, "ggcode.yaml")
+	os.WriteFile(globalPath, []byte("language: en\n"), 0644)
+
+	// Process A loads and adds a custom vendor
+	cfgA, _ := Load(globalPath)
+	if cfgA.Vendors == nil {
+		cfgA.Vendors = make(map[string]VendorConfig)
+	}
+	cfgA.Vendors["myvendor"] = VendorConfig{
+		DisplayName: "My Vendor",
+		APIKey:      "${MYVENDOR_API_KEY}",
+		Endpoints: map[string]EndpointConfig{
+			"prod": {Protocol: "openai", BaseURL: "https://my.api.com/v1"},
+		},
+	}
+	if err := cfgA.Save(); err != nil {
+		t.Fatalf("Process A save: %v", err)
+	}
+
+	// Verify vendor was written
+	dataA, _ := os.ReadFile(globalPath)
+	if !strings.Contains(string(dataA), "myvendor") {
+		t.Fatalf("vendor myvendor should be in file after Process A save:\n%s", string(dataA))
+	}
+
+	// Process B loads the same file (simulating a separate instance)
+	cfgB, _ := Load(globalPath)
+	// Process B changes language — its in-memory config may not have myvendor
+	// if it was stripped by defaults or lost during load.
+	cfgB.Language = "zh-CN"
+	if err := cfgB.Save(); err != nil {
+		t.Fatalf("Process B save: %v", err)
+	}
+
+	// Verify: myvendor must STILL be in the file (merge preserved it)
+	dataB, _ := os.ReadFile(globalPath)
+	if !strings.Contains(string(dataB), "myvendor") {
+		t.Errorf("DISASTER: Process B's save clobbered Process A's vendor!\n%s", string(dataB))
+	}
+	if !strings.Contains(string(dataB), "zh-CN") {
+		t.Errorf("Process B's language change should be in file:\n%s", string(dataB))
+	}
+}
+
+// TestSave_MergePreservesUnknownYAMLFields verifies that the merge
+// preserves YAML fields that exist in the file but are not in the
+// Config struct (e.g. future fields added by a newer version).
+func TestSave_MergePreservesUnknownYAMLFields(t *testing.T) {
+	withTestHome(t)
+	tmpDir := t.TempDir()
+	globalPath := filepath.Join(tmpDir, "ggcode.yaml")
+	// Write a config with a future/unknown field
+	os.WriteFile(globalPath, []byte("language: en\nfuture_field: {nested: value}\n"), 0644)
+
+	cfg, _ := Load(globalPath)
+	cfg.Language = "ja"
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	data, _ := os.ReadFile(globalPath)
+	if !strings.Contains(string(data), "future_field") {
+		t.Errorf("unknown field should be preserved by merge:\n%s", string(data))
+	}
+	if !strings.Contains(string(data), "ja") {
+		t.Errorf("language change should be in file:\n%s", string(data))
 	}
 }

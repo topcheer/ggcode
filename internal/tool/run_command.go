@@ -143,7 +143,7 @@ func firstShellWord(cmd string) string {
 func (t RunCommand) Name() string { return "run_command" }
 
 func (t RunCommand) Description() string {
-	return "Execute a shell command for quick one-shot execution: builds, tests, git commands, focused repro steps. For long-running, streaming, or interactive commands, prefer start_command. 30-minute timeout by default."
+	return "Execute a shell command for quick one-shot execution: builds, tests, git commands, focused repro steps. For long-running, streaming, or interactive commands, prefer start_command. 30-minute timeout by default. Use read_command_output or wait_command to monitor a background job started by start_command."
 }
 
 func (t RunCommand) Parameters() json.RawMessage {

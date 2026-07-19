@@ -662,6 +662,13 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 		}
 		text := strings.TrimSpace(m.input.Value())
 		m.input.Reset()
+		// Clear all autocomplete/hint state so they don't linger after submit.
+		// This fixes the bug where subcommand hints (e.g. "<subcommand>") stay
+		// visible below the input after submitting a command like /harness.
+		m.autoCompleteActive = false
+		m.autoCompleteItems = nil
+		m.autoCompleteIndex = 0
+		m.inputHint = ""
 		if text == "" && len(m.pendingImages) == 0 {
 			m.chatListScrollToBottom()
 			return m, nil

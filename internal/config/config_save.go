@@ -21,9 +21,14 @@ func (c *Config) effectiveFilePath(saveScope string) string {
 }
 
 // Save persists the config to its configured file path (global config).
-// If an instance config was merged at load time (globalSnap is set), only
-// fields that existed in the global config are written back. Instance-only
-// fields are never leaked into the global file.
+//
+// Merge semantics: if the target file already exists, the current config is
+// overlaid onto the existing file content via deep-merge. This prevents one
+// process from clobbering fields that another process added concurrently.
+// Only when the file does NOT exist (first write) is a full overwrite used.
+//
+// If an instance config was merged at load time (globalSnap is set), instance-
+// only fields are excluded so they never leak into the global file.
 func (c *Config) Save() error {
 	if c == nil {
 		return fmt.Errorf("config is nil")
@@ -37,24 +42,51 @@ func (c *Config) Save() error {
 		return err
 	}
 
-	var data []byte
-	var err error
+	// 1. Marshal current config into a raw map.
+	currentData, err := yaml.Marshal(c)
+	if err != nil {
+		return fmt.Errorf("marshaling config: %w", err)
+	}
+	currentRaw := map[string]interface{}{}
+	if err := yaml.Unmarshal(currentData, &currentRaw); err != nil {
+		return fmt.Errorf("parsing current config: %w", err)
+	}
+
+	// 2. Exclude fields that came from instance config merge so they don't
+	//    leak into the global file.
 	if c.globalSnap != nil && len(c.instanceFields) > 0 {
-		// Instance config was merged. Write back only global fields.
-		// Strategy: serialize globalSnap as the base, then overlay with
-		// current Config values for fields that globalSnap already had set.
-		data, err = c.marshalGlobalOnly()
-		if err != nil {
-			return fmt.Errorf("marshaling global-only config: %w", err)
-		}
-	} else {
-		data, err = yaml.Marshal(c)
-		if err != nil {
-			return fmt.Errorf("marshaling config: %w", err)
+		for key := range c.instanceFields {
+			delete(currentRaw, key)
 		}
 	}
-	// Strip fields identical to DefaultConfig() to keep the file minimal.
-	data = stripDefaultsFromYAML(data)
+
+	// 3. Remove zero-value entries from the current map. This ensures that
+	//    un-set fields don't overwrite real values that exist in the file.
+	//    Only non-zero values participate in the merge overlay.
+	cleanZeroYAMLValues(currentRaw)
+
+	// 4. Build the data to write: merge onto existing file, or full write.
+	var data []byte
+	existingData, readErr := os.ReadFile(c.FilePath)
+	if readErr == nil && len(existingData) > 0 {
+		// File exists — deep-merge current onto existing.
+		existingRaw := map[string]interface{}{}
+		if yamlErr := yaml.Unmarshal(existingData, &existingRaw); yamlErr == nil {
+			deepMergeYAMLMaps(existingRaw, currentRaw)
+			merged, marshalErr := yaml.Marshal(existingRaw)
+			if marshalErr != nil {
+				return fmt.Errorf("marshaling merged config: %w", marshalErr)
+			}
+			data = stripDefaultsFromYAML(merged)
+		} else {
+			// Existing file is unparseable — fall back to full write.
+			data = stripDefaultsFromYAML(currentData)
+		}
+	} else {
+		// File doesn't exist or is empty — full write.
+		data = stripDefaultsFromYAML(currentData)
+	}
+
 	if err := writeSecureConfigFile(c.FilePath, data); err != nil {
 		return err
 	}
@@ -69,34 +101,71 @@ func (c *Config) Save() error {
 	return nil
 }
 
-// marshalGlobalOnly serializes the config for writing to the global file,
-// excluding fields that were filled in by instance config merge.
+// deepMergeYAMLMaps merges src onto dst in-place. For each key:
+//   - If both dst and src have the key with map values, merge recursively.
+//   - Otherwise (scalars, slices, type mismatches), src overwrites dst.
 //
-// Strategy:
-//  1. Serialize current Config as raw map
-//  2. Remove any top-level keys that are in instanceFields
-//  3. Return the cleaned YAML
-func (c *Config) marshalGlobalOnly() ([]byte, error) {
-	currentData, err := yaml.Marshal(c)
-	if err != nil {
-		return nil, err
+// This ensures that nested maps (like vendors, im.adapters, knight) are
+// merged field-by-field, while slices (like mcp_servers) are replaced
+// wholesale (honoring additions and removals from the current process).
+func deepMergeYAMLMaps(dst, src map[string]interface{}) {
+	for key, srcVal := range src {
+		if dstVal, exists := dst[key]; exists {
+			srcMap, srcIsMap := srcVal.(map[string]interface{})
+			dstMap, dstIsMap := dstVal.(map[string]interface{})
+			if srcIsMap && dstIsMap {
+				deepMergeYAMLMaps(dstMap, srcMap)
+				continue
+			}
+		}
+		dst[key] = srcVal
 	}
+}
 
-	if len(c.instanceFields) == 0 {
-		return currentData, nil
+// cleanZeroYAMLValues recursively removes zero-value entries from a YAML map
+// so they don't overwrite real values during merge. Removed zero values:
+//   - nil
+//   - "" (empty string)
+//   - empty []interface{}
+//   - empty map[string]interface{} (after recursive cleaning)
+//
+// Integers (0) and booleans (false) are NOT cleaned because they can be
+// All int fields in Config use 0 as the "not set / default" sentinel
+// (max_iterations=0 means unlimited, max_tokens=0 means unlimited, etc.),
+// so cleaning 0 is semantically correct: it means "preserve the existing
+// file value rather than overwriting it with the default".
+func cleanZeroYAMLValues(m map[string]interface{}) {
+	for k, v := range m {
+		switch val := v.(type) {
+		case nil:
+			delete(m, k)
+		case string:
+			if val == "" {
+				delete(m, k)
+			}
+		case int:
+			if val == 0 {
+				delete(m, k)
+			}
+		case int64:
+			if val == 0 {
+				delete(m, k)
+			}
+		case float64:
+			if val == 0 {
+				delete(m, k)
+			}
+		case []interface{}:
+			if len(val) == 0 {
+				delete(m, k)
+			}
+		case map[string]interface{}:
+			cleanZeroYAMLValues(val)
+			if len(val) == 0 {
+				delete(m, k)
+			}
+		}
 	}
-
-	currentRaw := map[string]interface{}{}
-	if err := yaml.Unmarshal(currentData, &currentRaw); err != nil {
-		return nil, err
-	}
-
-	// Remove fields that came from instance config.
-	for key := range c.instanceFields {
-		delete(currentRaw, key)
-	}
-
-	return yaml.Marshal(currentRaw)
 }
 
 // patchConfigFile reads the effective config file (global or instance depending
@@ -298,7 +367,29 @@ func (c *Config) AddIMTarget(adapterName string, target IMTargetConfig) error {
 		adapter.Targets = append(adapter.Targets, target)
 	}
 	c.IM.Adapters[adapterName] = adapter
-	return c.SaveScoped(c.saveScope)
+	// Use patchConfigFile so the target list is explicitly written,
+	// avoiding omitempty issues with Save()-based merge.
+	targetData, _ := yaml.Marshal(target)
+	targetMap := map[string]interface{}{}
+	yaml.Unmarshal(targetData, &targetMap)
+	return c.PatchIMAdapter(adapterName, func(a map[string]interface{}) {
+		targets, _ := a["targets"].([]interface{})
+		// Replace existing target with same ID, or append.
+		found := false
+		for i, t := range targets {
+			if tm, ok := t.(map[string]interface{}); ok {
+				if id, _ := tm["id"].(string); strings.EqualFold(strings.TrimSpace(id), target.ID) {
+					targets[i] = targetMap
+					found = true
+					break
+				}
+			}
+		}
+		if !found {
+			targets = append(targets, targetMap)
+		}
+		a["targets"] = targets
+	})
 }
 
 func (c *Config) AddIMAdapter(name string, adapter IMAdapterConfig) error {
@@ -320,7 +411,23 @@ func (c *Config) AddIMAdapter(name string, adapter IMAdapterConfig) error {
 		return fmt.Errorf("IM adapter %q already exists", name)
 	}
 	c.IM.Adapters[name] = adapter
-	return c.SaveScoped(c.saveScope)
+	// Use patchConfigFile so all fields (including enabled=false) are written.
+	adapterData, _ := yaml.Marshal(adapter)
+	adapterMap := map[string]interface{}{}
+	yaml.Unmarshal(adapterData, &adapterMap)
+	return c.patchConfigFile(func(raw map[string]interface{}) {
+		imRaw, _ := raw["im"].(map[string]interface{})
+		if imRaw == nil {
+			imRaw = map[string]interface{}{}
+		}
+		adaptersRaw, _ := imRaw["adapters"].(map[string]interface{})
+		if adaptersRaw == nil {
+			adaptersRaw = map[string]interface{}{}
+		}
+		adaptersRaw[name] = adapterMap
+		imRaw["adapters"] = adaptersRaw
+		raw["im"] = imRaw
+	})
 }
 
 // RemoveIMAdapter removes an IM adapter from the configuration.
@@ -339,10 +446,20 @@ func (c *Config) RemoveIMAdapter(name string) error {
 		return fmt.Errorf("IM adapter %q not found", name)
 	}
 	delete(c.IM.Adapters, name)
-	return c.SaveScoped(c.saveScope)
+	// Use patchConfigFile to explicitly delete the adapter from the file,
+	// avoiding merge semantics that would preserve it.
+	return c.patchConfigFile(func(raw map[string]interface{}) {
+		if imRaw, ok := raw["im"].(map[string]interface{}); ok {
+			if adaptersRaw, ok := imRaw["adapters"].(map[string]interface{}); ok {
+				delete(adaptersRaw, name)
+			}
+		}
+	})
 }
 
 // SetIMAdapterEnabled toggles the enabled state of an IM adapter.
+// Uses patchConfigFile so enabled=false is explicitly written (the
+// yaml tag has omitempty, so Save()-based merge would omit it).
 func (c *Config) SetIMAdapterEnabled(name string, enabled bool) error {
 	if c == nil {
 		return fmt.Errorf("config is nil")
@@ -357,10 +474,13 @@ func (c *Config) SetIMAdapterEnabled(name string, enabled bool) error {
 	}
 	adapter.Enabled = enabled
 	c.IM.Adapters[name] = adapter
-	return c.SaveScoped(c.saveScope)
+	return c.PatchIMAdapter(name, func(a map[string]interface{}) {
+		a["enabled"] = enabled
+	})
 }
 
 // SetIMAdapterExtra sets a single key in the adapter's Extra map.
+// Uses patchConfigFile for correct merge semantics.
 func (c *Config) SetIMAdapterExtra(name, key, value string) error {
 	if c == nil {
 		return fmt.Errorf("config is nil")
@@ -382,7 +502,39 @@ func (c *Config) SetIMAdapterExtra(name, key, value string) error {
 	}
 	adapter.Extra[key] = value
 	c.IM.Adapters[name] = adapter
-	return c.SaveScoped(c.saveScope)
+	return c.PatchIMAdapter(name, func(a map[string]interface{}) {
+		extra, _ := a["extra"].(map[string]interface{})
+		if extra == nil {
+			extra = map[string]interface{}{}
+		}
+		extra[key] = value
+		a["extra"] = extra
+	})
+}
+
+// PatchIMAdapter navigates the raw YAML map to reach a single IM adapter
+// and applies a patch function to it. This ensures explicit field writes
+// (including zero values like enabled=false) are correctly persisted,
+// avoiding omitempty issues that arise with Save()-based merge.
+func (c *Config) PatchIMAdapter(name string, patch func(adapter map[string]interface{})) error {
+	return c.patchConfigFile(func(raw map[string]interface{}) {
+		imRaw, _ := raw["im"].(map[string]interface{})
+		if imRaw == nil {
+			imRaw = map[string]interface{}{}
+		}
+		adaptersRaw, _ := imRaw["adapters"].(map[string]interface{})
+		if adaptersRaw == nil {
+			adaptersRaw = map[string]interface{}{}
+		}
+		adapterRaw, _ := adaptersRaw[name].(map[string]interface{})
+		if adapterRaw == nil {
+			adapterRaw = map[string]interface{}{}
+		}
+		patch(adapterRaw)
+		adaptersRaw[name] = adapterRaw
+		imRaw["adapters"] = adaptersRaw
+		raw["im"] = imRaw
+	})
 }
 
 // recompactConfigFile reads a config file, strips defaults, and rewrites it.

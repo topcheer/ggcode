@@ -985,7 +985,10 @@ func (a *configAccess) setToolPermissions(value string) error {
 // Persistence
 // ============================================================================
 
-// saveAndPatch persists a config change using patchConfigFile.
+// saveAndPatch persists a config change via SaveScoped.
+// Save() uses merge semantics: existing file content is preserved and only
+// non-zero fields from the current config are overlaid. This prevents
+// concurrent processes from clobbering each other's changes.
 func (a *configAccess) saveAndPatch(key, value string) error {
 	scope := a.cfg.GetSaveScope()
 	if scope == "" {
