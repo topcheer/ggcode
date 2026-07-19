@@ -64,8 +64,6 @@ func (c *adaptiveCap) OnTruncated() {
 		return
 	}
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	cur := c.cur.Load()
 	// `cur` is now known to be too small → it's a safe lower bound.
 	if cur > c.lo {
@@ -80,11 +78,13 @@ func (c *adaptiveCap) OnTruncated() {
 		next = capCeiling
 	}
 	if next <= cur {
+		c.mu.Unlock()
 		debug.Log("adaptive_cap", "%s TRUNCATED but converged: cur=%d lo=%d hi=%d (no change)", c.key, cur, c.lo, c.hi)
 		return
 	}
 	c.cur.Store(next)
 	debug.Log("adaptive_cap", "%s TRUNCATED: %d → %d (lo=%d hi=%d)", c.key, cur, next, c.lo, c.hi)
+	c.mu.Unlock()
 	saveAdaptiveCaps()
 }
 
@@ -97,8 +97,6 @@ func (c *adaptiveCap) OnRejected(parsedLimit int) {
 		return
 	}
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	cur := c.cur.Load()
 	newHi := int64(parsedLimit)
 	if newHi <= 0 {
@@ -128,6 +126,7 @@ func (c *adaptiveCap) OnRejected(parsedLimit int) {
 	}
 	c.cur.Store(next)
 	debug.Log("adaptive_cap", "%s REJECTED: %d → %d (lo=%d hi=%d, parsed=%d)", c.key, cur, next, c.lo, c.hi, parsedLimit)
+	c.mu.Unlock()
 	saveAdaptiveCaps()
 }
 

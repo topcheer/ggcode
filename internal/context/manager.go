@@ -864,11 +864,11 @@ func (m *Manager) Clear() {
 }
 
 func (m *Manager) UsageRatio() float64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.contextWindow <= 0 {
 		return 0
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	return float64(m.tokenCountLocked()) / float64(m.contextWindow)
 }
 
@@ -972,13 +972,17 @@ func (m *Manager) Summarize(ctx context.Context, prov provider.Provider) error {
 func (m *Manager) CheckAndSummarize(ctx context.Context, prov provider.Provider) (bool, error) {
 	debug.Log("ctx", "CheckAndSummarize: tokens=%d contextWindow=%d threshold=%d ratio=%.2f", m.TokenCount(), m.ContextWindow(), m.AutoCompactThreshold(), m.UsageRatio())
 
+	m.mu.Lock()
 	beforeVersion := m.version
+	m.mu.Unlock()
 	err := m.Summarize(ctx, prov)
 	if err != nil {
 		debug.Log("ctx", "CheckAndSummarize: Summarize FAILED: %v", err)
 		return false, err
 	}
+	m.mu.Lock()
 	summaryChanged := m.version != beforeVersion
+	m.mu.Unlock()
 	debug.Log("ctx", "CheckAndSummarize: done tokens=%d msgs=%d changed=%t",
 		m.TokenCount(), len(m.Messages()), summaryChanged)
 	return summaryChanged, nil
