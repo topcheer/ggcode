@@ -231,9 +231,11 @@ func (m *Manager) ListTeamStatuses() []TeamStatusInfo {
 	out := make([]TeamStatusInfo, 0, len(m.teams))
 	for _, t := range m.teams {
 		taskCount := 0
+		t.mu.RLock()
 		if t.Tasks != nil {
 			taskCount = len(t.Tasks.List())
 		}
+		t.mu.RUnlock()
 		out = append(out, TeamStatusInfo{
 			ID:        t.ID,
 			Name:      t.Name,
@@ -362,6 +364,7 @@ func (m *Manager) SpawnTeammate(teamID, name, color string, allowedTools []strin
 	m.mu.Lock()
 	builder := m.systemPromptBuilder
 	wd := m.workingDir
+	onUsage := m.onUsage
 	m.mu.Unlock()
 	var systemPrompt string
 	if builder != nil {
@@ -372,9 +375,9 @@ func (m *Manager) SpawnTeammate(teamID, name, color string, allowedTools []strin
 	var agent AgentRunner
 	if m.agentFactory != nil {
 		agent = m.agentFactory(m.provider, toolSet, systemPrompt, 0)
-		if m.onUsage != nil {
+		if onUsage != nil {
 			if usageAware, ok := agent.(usageHandlerSetter); ok {
-				usageAware.SetUsageHandler(m.onUsage)
+				usageAware.SetUsageHandler(onUsage)
 			}
 		}
 	}
