@@ -8,7 +8,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -286,17 +285,7 @@ func (a *Agent) executeVerifyCommand(ctx context.Context, command string) *Verif
 	cmd.Dir = workingDir
 	// Kill the entire process group on timeout to prevent orphaned children
 	// from keeping stdout/stderr pipes open (which would make CombinedOutput hang).
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error {
-		if cmd.Process == nil {
-			return nil
-		}
-		pgid, err := syscall.Getpgid(cmd.Process.Pid)
-		if err != nil {
-			return syscall.Kill(cmd.Process.Pid, syscall.SIGKILL)
-		}
-		return syscall.Kill(-pgid, syscall.SIGKILL)
-	}
+	configureVerifyCommand(cmd)
 	cmd.WaitDelay = 5 * time.Second
 	output, err := cmd.CombinedOutput()
 	outputStr := string(output)
