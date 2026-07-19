@@ -44,6 +44,9 @@ export function CronManagement({ onBack }: Props) {
   }, [loadJobs])
 
   const handleDelete = async (id: string) => {
+    if (!window.confirm(t('cron.confirmDelete'))) {
+      return
+    }
     try {
       await App.DeleteCronJob(id)
       setJobs(jobs.filter(j => j.id !== id))
@@ -195,13 +198,13 @@ function JobCard({ job, expanded, onToggleExpand, onEdit, onDelete, onPauseResum
           </div>
           {/* Actions */}
           <div style={{ display: 'flex', gap: 8 }}>
-            <button onClick={onEdit} style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '4px 10px', borderRadius: 6, background: 'transparent', border: '1px solid var(--color-border, #30363d)', cursor: 'pointer', color: 'var(--text-primary)', fontSize: 12 }}>
+            <button onClick={(e) => { e.stopPropagation(); onEdit() }} style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '4px 10px', borderRadius: 6, background: 'transparent', border: '1px solid var(--color-border, #30363d)', cursor: 'pointer', color: 'var(--text-primary)', fontSize: 12 }}>
               <Pencil size={14} /> {t('cron.edit')}
             </button>
-            <button onClick={onPauseResume} style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '4px 10px', borderRadius: 6, background: 'transparent', border: '1px solid var(--color-border, #30363d)', cursor: 'pointer', color: 'var(--text-primary)', fontSize: 12 }}>
+            <button onClick={(e) => { e.stopPropagation(); onPauseResume() }} style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '4px 10px', borderRadius: 6, background: 'transparent', border: '1px solid var(--color-border, #30363d)', cursor: 'pointer', color: 'var(--text-primary)', fontSize: 12 }}>
               {job.paused ? <Play size={14} /> : <Pause size={14} />} {job.paused ? t('cron.resume') : t('cron.pause')}
             </button>
-            <button onClick={onDelete} style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '4px 10px', borderRadius: 6, background: 'transparent', border: '1px solid #ef444455', cursor: 'pointer', color: '#ef4444', fontSize: 12 }}>
+            <button onClick={(e) => { e.stopPropagation(); onDelete() }} style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '4px 10px', borderRadius: 6, background: 'transparent', border: '1px solid #ef444455', cursor: 'pointer', color: '#ef4444', fontSize: 12 }}>
               <Trash2 size={14} /> {t('cron.delete')}
             </button>
           </div>
@@ -341,11 +344,18 @@ function CronJobEditor({ job, onBack, onSave }: {
         </div>
 
         {/* Options */}
-        <div style={{ display: 'flex', gap: 24 }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13 }}>
-            <input type="checkbox" checked={recurring} onChange={e => setRecurring(e.target.checked)} />
-            {t('cron.recurring')}
-          </label>
+        <div style={{ display: 'flex', gap: 24, alignItems: 'center' }}>
+          {!job && (
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13 }}>
+              <input type="checkbox" checked={recurring} onChange={e => setRecurring(e.target.checked)} />
+              {t('cron.recurring')}
+            </label>
+          )}
+          {job && !job.recurring && (
+            <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 4, background: '#6366f122', color: '#818cf8', fontWeight: 600 }}>
+              {t('cron.oneShot')}
+            </span>
+          )}
           <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13 }}>
             <input type="checkbox" checked={queueIfBusy} onChange={e => setQueueIfBusy(e.target.checked)} />
             {t('cron.queueIfBusy')}

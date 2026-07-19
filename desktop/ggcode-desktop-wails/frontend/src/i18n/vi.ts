@@ -14,6 +14,7 @@ const en = {
   'cron.loading': 'Đang tải...',
   'cron.empty': 'Không có tác vụ lịch trình. Nhấp "Tác Vụ Mới" để tạo.',
   'cron.jobDeleted': 'Đã xóa tác vụ',
+  'cron.confirmDelete': 'Bạn có chắc muốn xóa tác vụ lịch trình này không?',
   'cron.deleteFailed': 'Xóa thất bại: {0}',
   'cron.jobCreated': 'Đã tạo tác vụ',
   'cron.jobUpdated': 'Đã cập nhật tác vụ',

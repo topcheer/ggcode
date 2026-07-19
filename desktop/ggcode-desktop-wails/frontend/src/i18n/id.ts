@@ -14,6 +14,7 @@ const id = {
   'cron.loading': 'Memuat...',
   'cron.empty': 'Tidak ada tugas terjadwal. Klik "Tugas Baru" untuk membuat.',
   'cron.jobDeleted': 'Tugas dihapus',
+  'cron.confirmDelete': 'Apakah Anda yakin ingin menghapus tugas terjadwal ini?',
   'cron.deleteFailed': 'Gagal menghapus: {0}',
   'cron.jobCreated': 'Tugas dibuat',
   'cron.jobUpdated': 'Tugas diperbarui',

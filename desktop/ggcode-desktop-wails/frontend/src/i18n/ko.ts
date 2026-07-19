@@ -14,6 +14,7 @@ const en = {
   'cron.loading': '로딩 중...',
   'cron.empty': '예약된 작업이 없습니다. "새 작업"을 클릭하여 생성하세요.',
   'cron.jobDeleted': '작업이 삭제되었습니다',
+  'cron.confirmDelete': '이 예약 작업을 삭제하시겠습니까?',
   'cron.deleteFailed': '삭제 실패: {0}',
   'cron.jobCreated': '작업이 생성되었습니다',
   'cron.jobUpdated': '작업이 업데이트되었습니다',

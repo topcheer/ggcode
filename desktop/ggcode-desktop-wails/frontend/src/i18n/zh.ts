@@ -16,6 +16,7 @@ const zh: Record<TranslationKey, string> = {
   'cron.loading': '加载中...',
   'cron.empty': '暂无定时任务。点击"新建任务"创建。',
   'cron.jobDeleted': '任务已删除',
+  'cron.confirmDelete': '确定要删除这个定时任务吗？',
   'cron.deleteFailed': '删除失败：{0}',
   'cron.jobCreated': '任务已创建',
   'cron.jobUpdated': '任务已更新',

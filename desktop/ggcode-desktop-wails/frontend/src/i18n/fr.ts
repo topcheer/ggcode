@@ -14,6 +14,7 @@ const fr = {
   'cron.loading': 'Chargement...',
   'cron.empty': 'Aucune tâche planifiée. Cliquez sur "Nouvelle Tâche" pour en créer une.',
   'cron.jobDeleted': 'Tâche supprimée',
+  'cron.confirmDelete': 'Êtes-vous sûr de vouloir supprimer cette tâche programmée ?',
   'cron.deleteFailed': 'Échec de la suppression : {0}',
   'cron.jobCreated': 'Tâche créée',
   'cron.jobUpdated': 'Tâche mise à jour',

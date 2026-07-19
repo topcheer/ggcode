@@ -14,6 +14,7 @@ const en = {
   'cron.loading': 'Cargando...',
   'cron.empty': 'No hay tareas programadas. Haga clic en "Nueva Tarea" para crear una.',
   'cron.jobDeleted': 'Tarea eliminada',
+  'cron.confirmDelete': '¿Está seguro de que desea eliminar esta tarea programada?',
   'cron.deleteFailed': 'Error al eliminar: {0}',
   'cron.jobCreated': 'Tarea creada',
   'cron.jobUpdated': 'Tarea actualizada',

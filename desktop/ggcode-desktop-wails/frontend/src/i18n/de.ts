@@ -14,6 +14,7 @@ const en = {
   'cron.loading': 'Laden...',
   'cron.empty': 'Keine geplanten Aufgaben. Klicken Sie auf "Neue Aufgabe".',
   'cron.jobDeleted': 'Aufgabe gelöscht',
+  'cron.confirmDelete': 'Sind Sie sicher, dass Sie diese geplante Aufgabe löschen möchten?',
   'cron.deleteFailed': 'Löschen fehlgeschlagen: {0}',
   'cron.jobCreated': 'Aufgabe erstellt',
   'cron.jobUpdated': 'Aufgabe aktualisiert',

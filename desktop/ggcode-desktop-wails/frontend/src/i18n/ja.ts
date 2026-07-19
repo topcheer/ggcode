@@ -14,6 +14,7 @@ const en = {
   'cron.loading': '読み込み中...',
   'cron.empty': 'スケジュールタスクがありません。「新規タスク」をクリックして作成してください。',
   'cron.jobDeleted': 'タスクを削除しました',
+  'cron.confirmDelete': 'このスケジュールタスクを削除してもよろしいですか？',
   'cron.deleteFailed': '削除失敗：{0}',
   'cron.jobCreated': 'タスクを作成しました',
   'cron.jobUpdated': 'タスクを更新しました',

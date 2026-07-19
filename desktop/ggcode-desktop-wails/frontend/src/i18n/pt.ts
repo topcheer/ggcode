@@ -14,6 +14,7 @@ const en = {
   'cron.loading': 'Carregando...',
   'cron.empty': 'Nenhuma tarefa agendada. Clique em "Nova Tarefa" para criar.',
   'cron.jobDeleted': 'Tarefa excluída',
+  'cron.confirmDelete': 'Tem certeza de que deseja excluir esta tarefa agendada?',
   'cron.deleteFailed': 'Falha ao excluir: {0}',
   'cron.jobCreated': 'Tarefa criada',
   'cron.jobUpdated': 'Tarefa atualizada',

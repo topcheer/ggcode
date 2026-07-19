@@ -14,6 +14,7 @@ const tr = {
   'cron.loading': 'Yükleniyor...',
   'cron.empty': 'Zamanlanmış görev yok. Oluşturmak için "Yeni Görev"e tıklayın.',
   'cron.jobDeleted': 'Görev silindi',
+  'cron.confirmDelete': 'Bu zamanlanmış görevi silmek istediğinizden emin misiniz?',
   'cron.deleteFailed': 'Silme başarısız: {0}',
   'cron.jobCreated': 'Görev oluşturuldu',
   'cron.jobUpdated': 'Görev güncellendi',

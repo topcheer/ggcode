@@ -14,6 +14,7 @@ const en = {
   'cron.loading': 'Loading...',
   'cron.empty': 'No scheduled tasks. Click "New Task" to create one.',
   'cron.jobDeleted': 'Job deleted',
+  'cron.confirmDelete': 'Are you sure you want to delete this scheduled task?',
   'cron.deleteFailed': 'Delete failed: {0}',
   'cron.jobCreated': 'Job created',
   'cron.jobUpdated': 'Job updated',
