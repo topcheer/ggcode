@@ -220,7 +220,13 @@ func (t *Transport) DeliverResponse(resp *JSONRPCResponse) {
 	t.pendingMu.Unlock()
 
 	if ok {
-		ch <- resp
+		// Non-blocking send: buffer is 1, and SendRequest consumes exactly one.
+		// A duplicate response (buggy agent) would block the readLoop here,
+		// deadlocking all subsequent message processing.
+		select {
+		case ch <- resp:
+		default:
+		}
 	}
 }
 
