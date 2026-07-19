@@ -21,7 +21,7 @@ type ConfigAccess interface {
 	// Section can be: "", "core", "api_key", "vendors", "mcp", "im", "a2a", "knight", "harness", "oauth", "runtime".
 	List(section string) (string, error)
 	// Delete removes a config key.
-	// Only works for: mcp_servers.<name>, im.adapters.<name>, oauth_tokens.<provider>.
+	// Only works for: mcp_servers.<name>, im.adapters.<name>.
 	Delete(key string) error
 }
 
@@ -55,7 +55,7 @@ func (t ConfigTool) Parameters() json.RawMessage {
 			},
 			"delete": {
 				"type": "boolean",
-				"description": "Delete the specified key. Supported keys: 'mcp_servers.<name>' (remove MCP server), 'im.adapters.<name>' (remove IM adapter), 'oauth_tokens.<provider>' (clear cached OAuth token)."
+				"description": "Delete the specified key. Supported keys: 'mcp_servers.<name>' (remove MCP server), 'im.adapters.<name>' (remove IM adapter)."
 			},
 			"description": {
 				"type": "string",

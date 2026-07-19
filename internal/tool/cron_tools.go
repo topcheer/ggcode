@@ -134,6 +134,9 @@ func (t CronDeleteTool) Execute(_ context.Context, input json.RawMessage) (Resul
 	if err := json.Unmarshal(input, &args); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
 	}
+	if args.JobID == "" {
+		return Result{IsError: true, Content: "jobId is required"}, nil
+	}
 	deleted, err := t.Scheduler.DeleteWithError(args.JobID)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("delete job %q: %v", args.JobID, err)}, nil
@@ -258,6 +261,9 @@ func (t CronUpdateTool) Execute(_ context.Context, input json.RawMessage) (Resul
 	}
 	if args.Cron == nil && args.Prompt == nil && args.QueueIfBusy == nil {
 		return Result{IsError: true, Content: "at least one of cron, prompt, or queue_if_busy must be provided to update"}, nil
+	}
+	if args.Prompt != nil && strings.TrimSpace(*args.Prompt) == "" {
+		return Result{IsError: true, Content: "prompt cannot be empty"}, nil
 	}
 
 	job, err := t.Scheduler.Update(args.JobID, args.Cron, args.Prompt, args.QueueIfBusy)
