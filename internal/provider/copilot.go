@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/sashabaranov/go-openai"
 	"github.com/topcheer/ggcode/internal/util"
@@ -34,6 +35,7 @@ func NewCopilotProvider(apiKey, model string, maxTokens int, baseURL string) *Co
 type copilotHeaderRoundTripper struct {
 	base           http.RoundTripper
 	token          string
+	uaMu           sync.RWMutex
 	impersonatedUA string // when non-empty, overrides the default "ggcode" UA
 }
 
@@ -66,9 +68,11 @@ func (rt *copilotHeaderRoundTripper) RoundTrip(req *http.Request) (*http.Respons
 		clone.Header.Set("Authorization", "Bearer "+strings.TrimSpace(rt.token))
 	}
 	clone.Header.Set("Openai-Intent", "conversation-edits")
-	ua := "ggcode"
-	if rt.impersonatedUA != "" {
-		ua = rt.impersonatedUA
+	rt.uaMu.RLock()
+	ua := rt.impersonatedUA
+	rt.uaMu.RUnlock()
+	if ua == "" {
+		ua = "ggcode"
 	}
 	clone.Header.Set("User-Agent", ua)
 	return base.RoundTrip(clone)

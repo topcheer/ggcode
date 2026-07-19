@@ -146,7 +146,12 @@ func (p *AnthropicProvider) Chat(ctx context.Context, messages []Message, tools 
 	debug.Log("anthropic", "Chat START model=%s msgs=%d tools=%d", p.model, len(messages), len(tools))
 	params := p.buildParams(messages, tools)
 
-	resp, err := p.client.Messages.New(ctx, params)
+	var resp *anthropic.Message
+	err := retryWithBackoffCtx(ctx, func() error {
+		var callErr error
+		resp, callErr = p.client.Messages.New(ctx, params)
+		return callErr
+	}, providerRetryAttempts)
 	if err != nil {
 		if rejected, parsed := maxTokensRejection(err); rejected {
 			p.cap.OnRejected(parsed)
@@ -307,8 +312,9 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 					// Retry if no content has been emitted yet and the error is retryable.
 					if !emitted && isRetryableForContext(ctx, err) && attempt < providerRetryAttempts-1 {
 						// Notify user about retry
-						ch <- StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Retry %d/%d, waiting %v...] ", attempt+1, providerRetryAttempts, retryDelay(err, attempt))}
-						if sleepErr := retrySleep(ctx, retryDelay(err, attempt)); sleepErr != nil {
+						delay := retryDelay(err, attempt)
+						ch <- StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Retry %d/%d, waiting %v...] ", attempt+1, providerRetryAttempts, delay)}
+						if sleepErr := retrySleep(ctx, delay); sleepErr != nil {
 							ch <- StreamEvent{Type: StreamEventError, Error: sleepErr}
 							return
 						}
