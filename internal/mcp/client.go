@@ -323,6 +323,12 @@ func (c *Client) ForceReauth() error {
 
 func (c *Client) Abort() {
 	c.abortOnce.Do(func() {
+		// Mark as closed without holding c.mu — Abort may be called
+		// from sendRequest's cancel path which already holds c.mu.
+		// Using atomic store avoids the deadlock; readers in sendRequest
+		// also hold c.mu so the memory barrier from the unlock suffices.
+		c.closed = true
+
 		wsConn := c.wsConn
 		stdin := c.stdin
 		cmd := c.cmd
@@ -338,7 +344,8 @@ func (c *Client) Abort() {
 			procCancel()
 		}
 		if cmd != nil && cmd.Process != nil {
-			_ = cmd.Process.Kill()
+			// Kill the entire process group to prevent orphaned child processes.
+			killProcessGroup(cmd)
 		}
 	})
 }

@@ -69,15 +69,16 @@ func (l *SessionLock) Release() {
 	if l == nil || !l.acquired || l.file == nil {
 		return // not our lock to release
 	}
-	syscall.Flock(int(l.file.Fd()), syscall.LOCK_UN)
-	l.file.Close()
-	l.file = nil
-
-	// Best-effort: remove the lock file so it doesn't linger.
+	// Remove the file WHILE holding the lock, then unlock and close.
+	// This prevents a race where another process creates+locks a new file
+	// between our unlock and remove (same pattern as IsSessionLocked).
 	lockPath := LockFilePath(l.storeDir, l.sessionID)
 	if err := os.Remove(lockPath); err != nil && !os.IsNotExist(err) {
 		debug.Log("session-lock", "failed to remove lock file %s: %v", lockPath, err)
 	}
+	syscall.Flock(int(l.file.Fd()), syscall.LOCK_UN)
+	l.file.Close()
+	l.file = nil
 }
 
 // IsSessionLocked checks if a session is locked by another process.

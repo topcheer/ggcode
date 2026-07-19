@@ -18,3 +18,13 @@ func configureMCPCommandProcess(cmd *exec.Cmd) {
 		HideWindow:    true,
 	}
 }
+
+// killProcessGroup kills the process on Windows.
+// Windows uses taskkill for process tree cleanup, but cmd.Process.Kill
+// is the safest portable option without additional dependencies.
+func killProcessGroup(cmd *exec.Cmd) {
+	if cmd == nil || cmd.Process == nil {
+		return
+	}
+	_ = cmd.Process.Kill()
+}
