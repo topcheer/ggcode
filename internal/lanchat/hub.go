@@ -1700,6 +1700,7 @@ func (h *Hub) handleReceiveMessageData(msg Message, source string) {
 func (h *Hub) handleReceiveReceiptData(r Receipt) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	h.receipts[r.MessageID] = r
 	if h.onReceipt != nil {
 		rc := r
 		safego.Go("lanchat.onReceipt", func() { h.onReceipt(rc) })
@@ -1708,19 +1709,29 @@ func (h *Hub) handleReceiveReceiptData(r Receipt) {
 
 // handleNickChangeData processes a nick change from any transport.
 func (h *Hub) handleNickChangeData(nc NickChange) {
-	h.mu.RLock()
+	h.mu.Lock()
 	peer, ok := h.peers[nc.NodeID]
-	h.mu.RUnlock()
 	if !ok {
+		h.mu.Unlock()
 		return
 	}
-	peer.HumanNick = nc.HumanNick
-	peer.AgentNick = nc.AgentNick
-	peer.Role = nc.Role
-	peer.Team = nc.Team
-	if h.onNickChange != nil {
+	if nc.HumanNick != "" {
+		peer.HumanNick = nc.HumanNick
+	}
+	if nc.AgentNick != "" {
+		peer.AgentNick = nc.AgentNick
+	}
+	if nc.Role != "" {
+		peer.Role = nc.Role
+	}
+	if nc.Team != "" {
+		peer.Team = nc.Team
+	}
+	callback := h.onNickChange
+	h.mu.Unlock()
+	if callback != nil {
 		ncCopy := nc
-		safego.Go("lanchat.onNickChange", func() { h.onNickChange(ncCopy.NodeID, ncCopy.HumanNick, ncCopy.AgentNick) })
+		safego.Go("lanchat.onNickChange", func() { callback(ncCopy.NodeID, ncCopy.HumanNick, ncCopy.AgentNick) })
 	}
 }
 
