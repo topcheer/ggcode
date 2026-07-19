@@ -3,6 +3,8 @@ package config
 import (
 	"fmt"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 // AddGRPCPlugin adds or replaces a gRPC plugin entry in the config.
@@ -50,6 +52,25 @@ func (c *Config) RemovePlugin(name string) bool {
 		}
 	}
 	return false
+}
+
+// SavePlugins persists the current c.Plugins slice using patchConfigFile,
+// replacing the entire plugins array. Necessary because Save()-based merge
+// skips empty slices, which would preserve stale entries after removal.
+func (c *Config) SavePlugins() error {
+	if c == nil {
+		return fmt.Errorf("config is nil")
+	}
+	return c.patchConfigFile(func(raw map[string]interface{}) {
+		if len(c.Plugins) == 0 {
+			delete(raw, "plugins")
+			return
+		}
+		data, _ := yaml.Marshal(c.Plugins)
+		var list []interface{}
+		yaml.Unmarshal(data, &list)
+		raw["plugins"] = list
+	})
 }
 
 // FindPlugin returns a plugin by name, or nil if not found.

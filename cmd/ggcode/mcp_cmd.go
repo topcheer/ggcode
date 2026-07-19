@@ -83,7 +83,7 @@ func newMCPCmd(cfgFile *string) *cobra.Command {
 			if !cfg.RemoveMCPServer(name) {
 				return fmt.Errorf("mcp server %s not found", name)
 			}
-			if err := cfg.Save(); err != nil {
+			if err := cfg.SaveMCPServers(); err != nil {
 				return fmt.Errorf("saving config: %w", err)
 			}
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Uninstalled MCP server %s from %s\n", name, cfg.FilePath)
@@ -160,7 +160,7 @@ func loadMCPConfig(path string, persistClaude bool) (*config.Config, error) {
 	}
 	changed := pruneMalformedMCPServers(cfg)
 	if changed {
-		if err := cfg.Save(); err != nil {
+		if err := cfg.SaveMCPServers(); err != nil {
 			return nil, fmt.Errorf("saving repaired config: %w", err)
 		}
 	}

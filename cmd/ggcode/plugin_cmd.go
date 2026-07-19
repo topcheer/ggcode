@@ -160,7 +160,7 @@ func newPluginUninstallCmd(cfgFile *string) *cobra.Command {
 			if !cfg.RemovePlugin(name) {
 				return fmt.Errorf("plugin %q not found in config", name)
 			}
-			if err := cfg.Save(); err != nil {
+			if err := cfg.SavePlugins(); err != nil {
 				return fmt.Errorf("saving config: %w", err)
 			}
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Uninstalled plugin %q from %s\n", name, cfg.FilePath)
