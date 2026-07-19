@@ -284,6 +284,17 @@ func (c *Config) SaveMCPServers() error {
 	})
 }
 
+// SaveMCPServersScoped is like SaveMCPServers but sets the save scope first.
+// Use this when the caller has its own scope tracking (e.g. TUI, WebUI)
+// to ensure the patch writes to the correct config file.
+func (c *Config) SaveMCPServersScoped(scope string) error {
+	if c == nil {
+		return fmt.Errorf("config is nil")
+	}
+	c.saveScope = scope
+	return c.SaveMCPServers()
+}
+
 // AddEndpoint creates a new endpoint under the given vendor. If the endpoint
 // already exists it is updated. The endpoint name is sanitized for use as a
 // YAML map key (lowercase, no spaces).

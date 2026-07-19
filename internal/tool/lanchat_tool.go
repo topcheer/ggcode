@@ -263,11 +263,11 @@ func (t LanChatTool) Parameters() json.RawMessage {
 			"to_role": {
 				"type": "string",
 				"enum": ["human", "agent"],
-				"description": "Direct messages only. 'agent' = deliver to recipient's agent (triggers their approval + agent loop). 'human' = show in recipient's chat panel for the human to read. Default: 'human'."
+				"description": "Direct messages only. 'agent' = deliver to recipient's agent (triggers their approval + agent loop). 'human' = show in recipient's chat panel for the human to read. Default follows as_agent: 'agent' when as_agent=true, 'human' when as_agent=false."
 			},
 			"as_agent": {
 				"type": "boolean",
-				"description": "Sender identity. true = send as agent (fromRole=agent). false = send as the local human user. Default: false."
+				"description": "Sender identity. true = send as agent (fromRole=agent). false = send as the local human user. Default: true."
 			},
 			"message_id": {
 				"type": "string",
@@ -671,9 +671,9 @@ func (t LanChatTool) doSend(ctx context.Context, content string, toNodeIDs []str
 		return Result{IsError: true, Content: errMsg}, nil
 	}
 
-	// Build display names for the success message
+	// Build display names from the actually delivered recipients
 	var displayTargets []string
-	for _, id := range toNodeIDs {
+	for _, id := range resolved {
 		displayTargets = append(displayTargets, t.displayName(id))
 	}
 	target := displayTargets[0]
@@ -682,6 +682,13 @@ func (t LanChatTool) doSend(ctx context.Context, content string, toNodeIDs []str
 	}
 
 	result := fmt.Sprintf("Message sent to %s as %s", target, role)
+	// Report silently dropped recipients (unresolved nicks)
+	if len(resolved) < len(toNodeIDs) {
+		dropped := len(toNodeIDs) - len(resolved) - len(rateLimited)
+		if dropped > 0 {
+			result += fmt.Sprintf(" (%d recipient(s) could not be resolved and were skipped)", dropped)
+		}
+	}
 	if len(errors) > 0 {
 		result += fmt.Sprintf(" (errors: %s)", strings.Join(errors, "; "))
 	}

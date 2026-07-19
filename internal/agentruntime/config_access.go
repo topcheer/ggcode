@@ -327,7 +327,7 @@ func (a *configAccess) Delete(key string) error {
 		if !a.cfg.RemoveMCPServer(name) {
 			return fmt.Errorf("MCP server %q not found", name)
 		}
-		return a.cfg.SaveScoped(a.cfg.GetSaveScope())
+		return a.cfg.SaveMCPServersScoped(a.cfg.GetSaveScope())
 	case strings.HasPrefix(key, "im.adapters."):
 		name := strings.TrimPrefix(key, "im.adapters.")
 		if err := a.cfg.RemoveIMAdapter(name); err != nil {

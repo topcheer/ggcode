@@ -180,5 +180,5 @@ func RemoveMCPServer(name string) error {
 	if !cfg.RemoveMCPServer(name) {
 		return fmt.Errorf("MCP server %q not found", name)
 	}
-	return cfg.Save()
+	return cfg.SaveMCPServers()
 }

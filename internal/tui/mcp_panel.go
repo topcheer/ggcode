@@ -325,7 +325,7 @@ func (m *Model) uninstallMCPServer(name string) tea.Cmd {
 		if !m.config.RemoveMCPServer(name) {
 			return mcpUninstallResultMsg{name: name, err: fmt.Errorf("MCP server %s is not configured", name)}
 		}
-		if err := m.saveConfig(); err != nil {
+		if err := m.config.SaveMCPServersScoped(m.configSaveScope); err != nil {
 			return mcpUninstallResultMsg{name: name, err: fmt.Errorf("saving config: %w", err)}
 		}
 		if m.mcpManager != nil && !m.mcpManager.Uninstall(name) {

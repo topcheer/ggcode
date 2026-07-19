@@ -450,7 +450,7 @@ func (s *Server) handleMCPDetail(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "MCP server not found")
 		return
 	}
-	if err := s.saveConfig(); err != nil {
+	if err := s.cfg.SaveMCPServersScoped(s.saveScope); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
