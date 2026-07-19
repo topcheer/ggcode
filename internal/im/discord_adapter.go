@@ -61,6 +61,7 @@ type discordAdapter struct {
 	stt        imstt.Transcriber
 
 	mu          sync.RWMutex
+	writeMu     sync.Mutex // protects websocket writes (gorilla/websocket not concurrent-safe)
 	connected   bool
 	sessionID   string
 	sequence    int
@@ -260,7 +261,9 @@ func (a *discordAdapter) sendIdentify(conn *websocket.Conn) {
 		},
 	}
 	data, _ := json.Marshal(payload)
+	a.writeMu.Lock()
 	_ = conn.WriteMessage(websocket.TextMessage, data)
+	a.writeMu.Unlock()
 }
 
 func (a *discordAdapter) heartbeatLoop(ctx context.Context, conn *websocket.Conn, intervalMs int) {
@@ -279,11 +282,14 @@ func (a *discordAdapter) heartbeatLoop(ctx context.Context, conn *websocket.Conn
 				"d":  seq,
 			}
 			data, _ := json.Marshal(payload)
+			a.writeMu.Lock()
 			if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+				a.writeMu.Unlock()
 				debug.Log("discord", "adapter=%s heartbeat write error: %v", a.name, err)
 				conn.Close() // Force ReadMessage to unblock → triggers reconnect
 				return
 			}
+			a.writeMu.Unlock()
 		}
 	}
 }
