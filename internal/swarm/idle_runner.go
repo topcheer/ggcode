@@ -149,7 +149,12 @@ func handleMessage(
 
 	// Send result back to caller if they requested it.
 	if msg.ReplyTo != nil {
-		msg.ReplyTo <- TaskResult{Output: result, Error: taskErr}
+		select {
+		case msg.ReplyTo <- TaskResult{Output: result, Error: taskErr}:
+		case <-ctx.Done():
+			// Caller cancelled or teammate is shutting down; don't block forever
+			// on an unbuffered/abandoned ReplyTo channel.
+		}
 	}
 
 	tm.setLastResult(result)
