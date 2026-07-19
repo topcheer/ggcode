@@ -496,6 +496,7 @@ func (c *Client) Close() error {
 	cmd := c.cmd
 	stdin := c.stdin
 	transport := c.transport
+	done := c.done // capture current readLoop's done channel
 	c.mu.Unlock()
 
 	if running && sessionID != "" {
@@ -519,6 +520,14 @@ func (c *Client) Close() error {
 	if cmd != nil && cmd.Process != nil {
 		_ = killACPProcess(cmd)
 		_ = cmd.Wait()
+	}
+
+	// Wait for the readLoop to fully exit before clearing state.
+	// Without this, a subsequent Start() replaces c.done, and the
+	// old readLoop's defer close(c.done) closes the NEW channel,
+	// causing a panic: close of closed channel.
+	if done != nil {
+		<-done
 	}
 
 	c.mu.Lock()
