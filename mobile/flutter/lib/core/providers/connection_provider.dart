@@ -680,7 +680,13 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
             _syncSessionReady();
           }
         });
-        _beginSnapshotSync();
+        // Only show full-screen sync overlay for snapshot_reset during
+        // initial connect. After resume, snapshot_reset from context
+        // compaction or relay reconnect should update silently — the UI
+        // already shows the conversation.
+        if (!_resumeCompleted) {
+          _beginSnapshotSync();
+        }
         _markProjectionAuthoritative();
         if (msg.sessionId != null && msg.sessionId!.isNotEmpty) {
           _sessionId = msg.sessionId!;
