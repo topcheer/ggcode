@@ -1261,8 +1261,14 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		restoreTerminal = readKeyboard(kbCh)
 	}
 
-	// Register PID file for cleanup
-	defer daemon.CleanupDaemon(workingDir)
+	// Register PID file for cleanup (skip if detaching to background —
+	// the forked child owns the PID file after detach).
+	detachedToBackground := false
+	defer func() {
+		if !detachedToBackground {
+			daemon.CleanupDaemon(workingDir)
+		}
+	}()
 
 	// Main loop
 loop:
@@ -1282,6 +1288,7 @@ loop:
 				break loop
 			case 'd': // detach to background
 				detachToBackground(lang, cfgFile, workingDir, ses.ID)
+				detachedToBackground = true
 				break loop
 			case 'f': // toggle follow mode
 				followActive = !followActive
@@ -1371,7 +1378,10 @@ loop:
 					} else {
 						// Wire hooks for status/activity push
 						ctrl := newDaemonTunnelShareController(result.Broker, bridge, sessionInfo, core.Tunnel)
-						bridge.SetRunStateHook(ctrl.HandleRunState)
+						bridge.SetRunStateHook(func(busy bool) {
+							agentBusy.Store(busy)
+							ctrl.HandleRunState(busy)
+						})
 						bridge.SetUserMessageHook(ctrl.HandleUserMessage)
 						unsubscribeTunnel := bridge.Subscribe(ctrl.HandleStreamEvent)
 						_ = unsubscribeTunnel // cleaned up on daemon exit
@@ -1926,7 +1936,11 @@ func readKeyboard(ch chan<- byte) func() {
 
 // detachToBackground forks the daemon into background mode.
 func detachToBackground(lang daemon.Lang, cfgFile, workingDir, sessionID string) {
-	pid, err := daemon.ForkIntoBackground(cfgFile, workingDir, sessionID)
+	var extra []string
+	if sessionID != "" {
+		extra = []string{"--resume=" + sessionID}
+	}
+	pid, err := daemon.ForkIntoBackground(cfgFile, workingDir, sessionID, extra...)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%s\r\n", daemon.Tr(lang, "daemon.bg_fail", err))
 		return
