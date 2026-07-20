@@ -59,6 +59,11 @@ func (epubExtractor) Extract(data []byte) (TextResult, error) {
 		}
 		buf.WriteString(text)
 		chapters++
+		// Cap total extracted text to prevent OOM from crafted archives
+		if buf.Len() > 50*1024*1024 {
+			buf.WriteString("\n\n... (truncated at 50MB)")
+			break
+		}
 	}
 
 	return TextResult{

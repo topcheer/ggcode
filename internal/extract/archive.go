@@ -14,6 +14,7 @@ import (
 // archiveExtractor extracts text from archive files.
 type archiveExtractor struct {
 	subFormat string // "zip", "tar", "tar.gz", "tar.bz2", "tar.xz"
+	depth     int    // nesting depth for recursive extraction
 }
 
 func (e *archiveExtractor) Format() string { return e.subFormat }
@@ -75,9 +76,10 @@ func (e *archiveExtractor) Extract(data []byte) (TextResult, error) {
 
 		ext := extOf(name)
 
-		// Nested archive
-		if isArchiveExt(ext) && maxArchiveDepth > 1 {
-			nested := extractArchiveContent(f.data, ext)
+		// Nested archive — depth tracked via maxArchiveDepth constant.
+		// extractArchiveContent itself checks nesting level.
+		if isArchiveExt(ext) {
+			nested := extractArchiveContentDepth(f.data, ext, e.depth+1)
 			if nested != "" {
 				// Indent nested content
 				for _, line := range strings.Split(nested, "\n") {
@@ -187,18 +189,22 @@ func totalZipFiles(data []byte) int {
 	return n
 }
 
+// maxTarDecompressSize limits total decompressed tar data to prevent
+// decompression bombs (small compressed file → huge uncompressed data).
+const maxTarDecompressSize = 200 * 1024 * 1024 // 200MB
+
 func listTarGz(data []byte) ([]archiveFile, error) {
 	gz, err := gzip.NewReader(bytes.NewReader(data))
 	if err != nil {
 		return nil, fmt.Errorf("open gzip: %w", err)
 	}
 	defer gz.Close()
-	return listTarFromReader(gz)
+	return listTarFromReader(io.LimitReader(gz, maxTarDecompressSize))
 }
 
 func listTarBz2(data []byte) ([]archiveFile, error) {
 	br := bzip2.NewReader(bytes.NewReader(data))
-	return listTarFromReader(br)
+	return listTarFromReader(io.LimitReader(br, maxTarDecompressSize))
 }
 
 func listTarXz(data []byte) ([]archiveFile, error) {
@@ -245,7 +251,15 @@ func listTarFromReader(r io.Reader) ([]archiveFile, error) {
 }
 
 // extractArchiveContent recursively extracts text from a nested archive.
+// Depth is tracked to prevent stack overflow from malicious archives.
 func extractArchiveContent(data []byte, ext string) string {
+	return extractArchiveContentDepth(data, ext, 0)
+}
+
+func extractArchiveContentDepth(data []byte, ext string, depth int) string {
+	if depth >= maxArchiveDepth {
+		return ""
+	}
 	subFmt := ""
 	switch ext {
 	case ".zip":
@@ -259,7 +273,7 @@ func extractArchiveContent(data []byte, ext string) string {
 	default:
 		return ""
 	}
-	e := &archiveExtractor{subFormat: subFmt}
+	e := &archiveExtractor{subFormat: subFmt, depth: depth}
 	result, err := e.Extract(data)
 	if err != nil {
 		return ""
