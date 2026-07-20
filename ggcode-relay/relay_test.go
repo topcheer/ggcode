@@ -306,7 +306,7 @@ func TestHubNotifyRelayRestartingSendsOfflineNoticeBeforeClose(t *testing.T) {
 	if !errors.As(err, &closeErr) {
 		t.Fatalf("expected close error, got %v", err)
 	}
-	if closeErr.Code != websocket.CloseServiceRestart || closeErr.Text != relayRestartReason {
+	if closeErr.Code != websocket.CloseServiceRestart || !strings.Contains(closeErr.Text, relayRestartReason) {
 		t.Fatalf("unexpected close error: %+v", closeErr)
 	}
 }

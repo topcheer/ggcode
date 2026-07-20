@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -24,6 +25,8 @@ const (
 	defaultPendingRoomTTL        = 2 * time.Minute
 	defaultPendingRetryAfter     = 5 * time.Second
 	defaultRecoveryRetryAfter    = 5 * time.Second
+	serverRestartRetryAfter      = 10 * time.Second // host reconnects first to rebuild room
+	clientRestartRetryAfter      = 30 * time.Second // mobile waits for host to settle
 	defaultRecoveryRoomRetention = 5 * time.Minute
 	activeSessionModeReplace     = "replace_history"
 	relayRestartReason           = "relay_restarting"
@@ -1025,23 +1028,27 @@ func (h *hub) notifyRelayRestarting() {
 		room.sendMu.Lock()
 		room.mu.RLock()
 		state := roomRecoveryStateLocked(room)
-		notice := relayServerOfflineMessageWithReason(
-			room.sessionID,
-			state,
-			retryAfterForState(state),
-			relayRestartReason,
-		)
 		clients := room.snapshotClientsLocked(nil)
 		server := room.server
 		room.mu.RUnlock()
 
+		// Send role-specific server_offline notices with staggered retry delays:
+		// server (host) gets 10s, clients (mobile) get 30s. This ensures host
+		// reconnects first and rebuilds the room before mobile tries.
+		serverNotice := relayServerOfflineMessageWithReason(
+			room.sessionID, state, serverRestartRetryAfter, relayRestartReason,
+		)
+		clientNotice := relayServerOfflineMessageWithReason(
+			room.sessionID, state, clientRestartRetryAfter, relayRestartReason,
+		)
 		for _, client := range clients {
-			if client.trySend(notice) {
+			if client.trySend(clientNotice) {
 				clientNotices++
 			}
 			peers = append(peers, client)
 		}
 		if server != nil {
+			server.trySend(serverNotice)
 			peers = append(peers, server)
 		}
 		room.sendMu.Unlock()
@@ -1050,7 +1057,12 @@ func (h *hub) notifyRelayRestarting() {
 	log.Printf("[relay] restart notice: rooms=%d peers=%d notified_clients=%d", len(rooms), len(peers), clientNotices)
 	time.Sleep(relayShutdownNoticeDelay)
 	for _, peer := range peers {
-		peer.closeWithReason(websocket.CloseServiceRestart, relayRestartReason)
+		retryAfter := clientRestartRetryAfter
+		if peer.role == "server" {
+			retryAfter = serverRestartRetryAfter
+		}
+		peer.closeWithReason(websocket.CloseServiceRestart,
+			fmt.Sprintf("%s retry_after_ms=%d", relayRestartReason, retryAfter.Milliseconds()))
 	}
 }
 

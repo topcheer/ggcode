@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -38,6 +39,11 @@ type RelayClient struct {
 	runDone        chan struct{}
 	stopOnce       sync.Once
 	gracefulOnce   sync.Once
+
+	// relayRestartDelayMs stores the retry_after_ms from relay's close reason.
+	// When >0, the first reconnect attempt waits this long instead of using
+	// the default exponential backoff. Reset to 0 after the first use.
+	relayRestartDelayMs atomic.Int64
 
 	onMessage   func(msg GatewayMessage)
 	onConnected func(info RelayConnectedState)
@@ -223,9 +229,21 @@ func (rc *RelayClient) run(conn *websocket.Conn) {
 			}
 			rc.closeMu.Unlock()
 
+			// On the first attempt after a relay restart, honor the
+			// retry_after_ms from the close reason if present.
+			var backoff time.Duration
+			if attempt == 0 {
+				if ms := rc.relayRestartDelayMs.Swap(0); ms > 0 {
+					backoff = time.Duration(ms) * time.Millisecond
+					debug.Log("tunnel", "relay-client: relay restart, waiting %v before reconnect", backoff)
+				}
+			}
+			if backoff == 0 {
+				backoff = relayReconnectDelay(attempt + 1)
+			}
+
 			nextConn, err := rc.dial()
 			if err != nil {
-				backoff := relayReconnectDelay(attempt + 1)
 				debug.Log("tunnel", "relay-client: reconnect failed (attempt %d): %v, retry in %v", attempt+1, err, backoff)
 				select {
 				case <-time.After(backoff):
@@ -356,6 +374,13 @@ func (rc *RelayClient) readPump(conn *websocket.Conn, done func()) {
 		if err != nil {
 			if err != io.EOF {
 				debug.Log("tunnel", "relay-client: read error: %v", err)
+			}
+			// Extract retry_after_ms from WebSocket close reason for
+			// relay restart coordination (host waits 10s, mobile 30s).
+			if ce, ok := err.(*websocket.CloseError); ok {
+				if ms := parseRetryAfterMs(ce.Text); ms > 0 {
+					rc.relayRestartDelayMs.Store(ms)
+				}
 			}
 			return
 		}
@@ -820,4 +845,21 @@ func (rc *RelayClient) handleKeyOffer(clientID string, raw json.RawMessage) erro
 		return err
 	}
 	return rc.enqueueRaw(payload)
+}
+
+// parseRetryAfterMs extracts retry_after_ms=NNNN from a WebSocket close reason.
+// Returns 0 if not found or invalid.
+func parseRetryAfterMs(closeText string) int64 {
+	idx := strings.Index(closeText, "retry_after_ms=")
+	if idx < 0 {
+		return 0
+	}
+	s := closeText[idx+len("retry_after_ms="):]
+	end := strings.IndexAny(s, " ,\t")
+	if end >= 0 {
+		s = s[:end]
+	}
+	var ms int64
+	fmt.Sscanf(s, "%d", &ms)
+	return ms
 }
