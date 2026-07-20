@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync/atomic"
 
 	"github.com/topcheer/ggcode/internal/chat"
 	"github.com/topcheer/ggcode/internal/tool"
@@ -491,8 +492,8 @@ func nextChatID() string {
 var sysIDCounter int64
 
 func nextSystemID() string {
-	sysIDCounter++
-	return fmt.Sprintf("sys-%d", sysIDCounter)
+	n := atomic.AddInt64(&sysIDCounter, 1)
+	return fmt.Sprintf("sys-%d", n)
 }
 
 // assistantCounter generates unique IDs for each assistant turn.
