@@ -1551,7 +1551,13 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       return;
     }
     _gapRecoveryScheduled = true;
-    _beginRelaySyncWaiting(hasLocalState: _hasLocalSessionState());
+    // Only show relaySync overlay for gap recovery when resume hasn't
+    // completed yet (initial connect). After resume, ordinal gaps from
+    // relay send-buffer drops are recoverable on next reconnect — don't
+    // block the UI with a full-screen overlay.
+    if (!_resumeCompleted) {
+      _beginRelaySyncWaiting(hasLocalState: _hasLocalSessionState());
+    }
     final status = _normalizeAgentStatus(ref.read(agentStatusProvider));
     if (status == 'busy') {
       _gapRecoveryDeferred = true;
@@ -1590,7 +1596,9 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       );
       // Reconnect the EXISTING service directly — do NOT call connect()
       // which would demote to background and create a ping-pong loop.
-      _beginRelaySyncWaiting(hasLocalState: _hasLocalSessionState());
+      if (!_resumeCompleted) {
+        _beginRelaySyncWaiting(hasLocalState: _hasLocalSessionState());
+      }
       await svc.connect();
     } finally {
       _gapRecoveryScheduled = false;
