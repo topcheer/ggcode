@@ -506,6 +506,11 @@ func writeKeysEnv(newEntries map[string]string) error {
 
 // writeKeysEnvTo merges new entries into the keys.env file at the given path.
 func writeKeysEnvTo(newEntries map[string]string, path string) error {
+	// Acquire cross-process lock to prevent concurrent read-modify-write
+	// from multiple goroutines (e.g. WebUI setting two different vendor keys).
+	unlock := lockConfigFile(path)
+	defer unlock()
+
 	// Load existing entries first so we merge rather than overwrite.
 	existing := make(map[string]string)
 	if data, err := os.ReadFile(path); err == nil {
