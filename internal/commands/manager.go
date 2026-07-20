@@ -134,6 +134,8 @@ func (m *Manager) combinedCommands() map[string]*Command {
 		base[name] = cmd
 	}
 	providers := append([]func() []*Command(nil), m.extraProviders...)
+	// Apply disabled state under lock — ApplyDisabledState writes
+	// cmd.Enabled which SetEnabled also writes under m.mu.Lock().
 	m.mu.RUnlock()
 
 	out := make(map[string]*Command)
@@ -157,8 +159,11 @@ func (m *Manager) combinedCommands() map[string]*Command {
 	for name, cmd := range base {
 		out[name] = cmd
 	}
-	// Apply persisted disabled state to all merged commands
+	// Apply persisted disabled state under lock — ApplyDisabledState
+	// writes cmd.Enabled, which SetEnabled also writes under m.mu.
+	m.mu.Lock()
 	ApplyDisabledState(out)
+	m.mu.Unlock()
 	return out
 }
 

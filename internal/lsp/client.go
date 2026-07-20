@@ -101,6 +101,9 @@ type stdioClient struct {
 	nextID  int64
 	pending map[string]chan rpcEnvelope
 	mu      sync.Mutex
+	writeMu sync.Mutex // serializes JSON-RPC header+body writes to stdin
+	failed  bool       // set when readLoop exits unexpectedly
+	failMu  sync.Mutex
 
 	stderr              lockedBuffer
 	notificationHandler func(method string, params json.RawMessage)
@@ -663,6 +666,10 @@ func (c *stdioClient) readLoop() {
 	for {
 		msg, err := readRPCMessage(c.reader)
 		if err != nil {
+			// Mark client as failed so callers know the session is dead.
+			c.failMu.Lock()
+			c.failed = true
+			c.failMu.Unlock()
 			c.failPending(err)
 			return
 		}
@@ -818,6 +825,13 @@ func (c *stdioClient) failPending(err error) {
 }
 
 func (c *stdioClient) call(ctx context.Context, method string, params any, out any) error {
+	// Fail fast if readLoop has exited — the session is dead.
+	c.failMu.Lock()
+	failed := c.failed
+	c.failMu.Unlock()
+	if failed {
+		return fmt.Errorf("lsp: session terminated (server crashed or protocol error)")
+	}
 	id := atomic.AddInt64(&c.nextID, 1)
 	idRaw := rpcNumericID(id)
 	rawParams, err := json.Marshal(params)
@@ -871,6 +885,8 @@ func (c *stdioClient) write(msg rpcEnvelope) error {
 	if err != nil {
 		return err
 	}
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
 	if _, err := fmt.Fprintf(c.stdin, "Content-Length: %d\r\n\r\n", len(body)); err != nil {
 		return err
 	}
