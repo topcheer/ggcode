@@ -381,8 +381,8 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		s.mu.RLock()
+		defer s.mu.RUnlock()
 		cfg := s.cfg
-		s.mu.RUnlock()
 
 		// Merge config with runtime status
 		type mcpEntry struct {
