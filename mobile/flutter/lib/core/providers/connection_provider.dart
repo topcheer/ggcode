@@ -2148,15 +2148,6 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     debugPrint(
       '[connection] relaySync=${relaySync == null ? 'clear' : '${relaySync.phase}:${relaySync.remainingReplayCount}:${relaySync.resumeMode}:stalled=${relaySync.stalled}'}',
     );
-    if (relaySync != null && !_resumeCompleted) {
-      // Diagnostic: trace which code path triggered relaySync
-      debugPrint(
-        '[connection] relaySync trigger trace: resumeCompleted=$_resumeCompleted '
-        'barrierOrdinal=$_pendingActiveSessionBarrierOrdinal '
-        'awaitingSnapshot=$_awaitingSnapshotProjection '
-        'stack=${StackTrace.current.toString().split('\n').take(5).join(' | ')}',
-      );
-    }
     state = state.copyWith(relaySync: relaySync);
     _syncSessionReady();
     if (relaySync == null) {
