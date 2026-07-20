@@ -579,8 +579,13 @@ func (m *MCPManager) ForceReauth(name string) bool {
 
 		// 1. Unregister old tools so stale descriptions (e.g. embedded
 		//    accountId) don't survive the reconnect.
+		// Avoid nested RLock: Info() also acquires p.mu.RLock(), which
+		// deadlocks when a writer is waiting (Go RWMutex is non-reentrant).
 		p.mu.RLock()
-		oldToolNames := p.Info().ToolNames
+		var oldToolNames []string
+		if p.adapter != nil {
+			oldToolNames = p.adapter.ToolNames()
+		}
 		p.mu.RUnlock()
 		for _, toolName := range oldToolNames {
 			m.registry.Unregister(toolName)

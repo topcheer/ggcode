@@ -3,6 +3,7 @@ package grpcplugin
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"sync"
 	"time"
@@ -63,7 +64,10 @@ func (m *Manager) loadOne(cfg GRPCPluginConfig, registry *tool.Registry) error {
 
 	cmd := exec.Command(cfg.Command[0], cfg.Command[1:]...)
 	if len(cfg.Env) > 0 {
-		cmd.Env = append(cmd.Env, envSlice(cfg.Env)...)
+		// Start with the parent environment so PATH, HOME, etc. are
+		// inherited. Without this, setting cmd.Env to non-nil replaces
+		// the entire environment.
+		cmd.Env = append(os.Environ(), envSlice(cfg.Env)...)
 	}
 
 	client := plugin.NewClient(&plugin.ClientConfig{
