@@ -585,10 +585,11 @@ func WriteExecutable(path string, data []byte) error {
 		_ = os.Remove(tmp)
 		return fmt.Errorf("chmod binary: %w", err)
 	}
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("remove old binary: %w", err)
-	}
+	// os.Rename atomically replaces the target on Unix (POSIX rename)
+	// and Windows (MoveFileEx with MOVEFILE_REPLACE_EXISTING).
+	// The previous os.Remove was non-atomic: if Rename failed after
+	// Remove succeeded, the binary was permanently deleted with no
+	// replacement.
 	if err := os.Rename(tmp, path); err != nil {
 		_ = os.Remove(tmp)
 		return fmt.Errorf("move binary into place: %w", err)

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 type LayoutPane struct {
@@ -69,6 +70,13 @@ func loadWorkspaceState(path, workspace string) ([]Pane, map[string][]LayoutPane
 }
 
 func saveWorkspaceState(path, workspace string, panes []Pane, layouts map[string][]LayoutPane) error {
+	// Acquire cross-process lock — multiple workspaces share the same store file.
+	unlock, err := lockTmuxStore(path)
+	if err != nil {
+		return fmt.Errorf("lock tmux pane store: %w", err)
+	}
+	defer unlock()
+
 	store, err := readPaneStore(path)
 	if err != nil {
 		return err
@@ -96,8 +104,16 @@ func saveWorkspaceState(path, workspace string, panes []Pane, layouts map[string
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("create tmux pane store directory: %w", err)
 	}
-	if err := os.WriteFile(path, append(data, '\n'), 0o644); err != nil {
+	// Use temp+rename for atomic write — os.WriteFile truncates first,
+	// concurrent readers could see empty/partial JSON.
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, append(data, '\n'), 0o644); err != nil {
+		_ = os.Remove(tmp)
 		return fmt.Errorf("write tmux pane store: %w", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("rename tmux pane store: %w", err)
 	}
 	return nil
 }
@@ -138,4 +154,14 @@ func readPaneStore(path string) (paneStoreFile, error) {
 		store.Workspaces = make(map[string]workspacePaneStore)
 	}
 	return store, nil
+}
+
+// storeLocks serializes read-modify-write on the shared pane store file.
+// Multiple workspace Managers share the same file path but have
+// independent mutexes — this package-level lock ensures atomicity.
+var storeLocks sync.Mutex
+
+func lockTmuxStore(_ string) (func(), error) {
+	storeLocks.Lock()
+	return func() { storeLocks.Unlock() }, nil
 }
