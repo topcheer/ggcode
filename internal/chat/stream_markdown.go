@@ -77,7 +77,7 @@ func splitMarkdownBlocks(src string) []string {
 
 func extractBlockMarkdown(node ast.Node, source []byte) string {
 	switch node.(type) {
-	case *ast.List, *ast.Blockquote, *extast.Table:
+	case *ast.FencedCodeBlock, *ast.List, *ast.Blockquote, *extast.Table:
 		if start, end, ok := rawBlockSpan(node, source); ok {
 			return string(source[start:end])
 		}
