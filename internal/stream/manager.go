@@ -237,22 +237,17 @@ func (m *Manager) frameLoop() {
 
 				// Don't log terminal size on every resize
 
-				m.encoderMu.Lock()
-				if m.encoder != nil {
-					m.encoder.Stop()
-				}
-				m.encoder = NewEncoder(encW, encH, m.config.Quality, m.config.FPS, m.config.HardwareEncoder)
-				if err := m.encoder.Start(); err != nil {
-					m.encoderMu.Unlock()
-					debug.Log("stream", "encoder start failed: %v", err)
-					return
-				}
-				m.encoderMu.Unlock()
-
-				// Connect targets and start broadcaster.
-				// On first frame, targets haven't connected yet.
-				// On resize, old broadcaster exits when old encoder stdout closes.
 				if !frameLoopInit {
+					// First frame: create encoder, connect targets, start broadcaster.
+					m.encoderMu.Lock()
+					m.encoder = NewEncoder(encW, encH, m.config.Quality, m.config.FPS, m.config.HardwareEncoder)
+					if err := m.encoder.Start(); err != nil {
+						m.encoderMu.Unlock()
+						debug.Log("stream", "encoder start failed: %v", err)
+						return
+					}
+					m.encoderMu.Unlock()
+
 					// Snapshot targets under lock to avoid concurrent map iteration race
 					m.mu.Lock()
 					snapshot := make([]*Target, 0, len(m.targets))
@@ -265,10 +260,15 @@ func (m *Manager) frameLoop() {
 							debug.Log("stream", "target %s connect failed: %v", target.Name(), err)
 						}
 					}
+					// Single broadcaster goroutine reads encoder, broadcasts to all targets
+					safego.Go("stream.fanOutBroadcaster", func() { m.fanOutBroadcaster() })
+					frameLoopInit = true
 				}
-				// Single broadcaster goroutine reads encoder, broadcasts to all targets
-				safego.Go("stream.fanOutBroadcaster", func() { m.fanOutBroadcaster() })
-				frameLoopInit = true
+				// On resize: only the renderer is recreated above. The encoder
+				// resolution is locked at first frame (encW/encH don't change
+				// after encW==0 check). Recreating the encoder would orphan the
+				// old broadcaster which still holds a reference, causing it to
+				// read from the new encoder's stdout concurrently.
 				lastCols, lastRows = cols, rows
 			}
 
