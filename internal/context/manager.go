@@ -744,7 +744,7 @@ func (m *Manager) ApplyCompactResult(snapshot CompactSnapshot, result CompactRes
 	if persistFn != nil && persistedSummary != nil {
 		persistFn(*persistedSummary)
 	}
-	return true, m.tokenCountLocked()
+	return true, liveTokensAfter
 }
 
 func (m *Manager) TokenCount() int {
