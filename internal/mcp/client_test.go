@@ -572,7 +572,7 @@ func TestClientErrorContext_ConnectionClosed(t *testing.T) {
 	c := NewClient("my-mcp-server", "nonexistent_cmd", nil)
 	// Mark as closed so sendRequest returns the "connection closed" error path
 	c.mu.Lock()
-	c.closed = true
+	c.closed.Store(true)
 	c.mu.Unlock()
 
 	ctx := context.Background()
@@ -590,7 +590,7 @@ func TestClientErrorContext_ConnectionClosed(t *testing.T) {
 func TestClientErrorContext_ListToolsOnClosed(t *testing.T) {
 	c := NewClient("tool-server", "cmd", nil)
 	c.mu.Lock()
-	c.closed = true
+	c.closed.Store(true)
 	c.mu.Unlock()
 
 	ctx := context.Background()
@@ -608,7 +608,7 @@ func TestClientErrorContext_ListToolsOnClosed(t *testing.T) {
 func TestClientErrorContext_CallToolOnClosed(t *testing.T) {
 	c := NewClient("call-server", "cmd", nil)
 	c.mu.Lock()
-	c.closed = true
+	c.closed.Store(true)
 	c.mu.Unlock()
 
 	ctx := context.Background()
@@ -669,7 +669,7 @@ func TestClientErrorContext_SendRequestClosed(t *testing.T) {
 	ctx := context.Background()
 	// Force the closed state
 	c.mu.Lock()
-	c.closed = true
+	c.closed.Store(true)
 	c.mu.Unlock()
 
 	err := c.sendRequest(ctx, "test/method", nil, nil)

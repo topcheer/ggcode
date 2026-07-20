@@ -49,7 +49,7 @@ type Client struct {
 	stderrBuf         strings.Builder
 	abortOnce         sync.Once
 	nextID            atomic.Int64
-	closed            bool
+	closed            atomic.Bool
 	oauthHandler      *OAuthHandler
 }
 
@@ -277,11 +277,11 @@ func (c *Client) Close() error {
 	c.Abort()
 
 	c.mu.Lock()
-	if c.closed {
+	if c.closed.Load() {
 		c.mu.Unlock()
 		return nil
 	}
-	c.closed = true
+	c.closed.Store(true)
 	cmd := c.cmd
 	transport := c.transport
 	c.sessionID = ""
@@ -323,11 +323,10 @@ func (c *Client) ForceReauth() error {
 
 func (c *Client) Abort() {
 	c.abortOnce.Do(func() {
-		// Mark as closed without holding c.mu — Abort may be called
-		// from sendRequest's cancel path which already holds c.mu.
-		// Using atomic store avoids the deadlock; readers in sendRequest
-		// also hold c.mu so the memory barrier from the unlock suffices.
-		c.closed = true
+		// Mark as closed atomically — Abort may be called from
+		// sendRequest's cancel path which already holds c.mu.
+		// atomic.Bool avoids both the data race and the deadlock.
+		c.closed.Store(true)
 
 		wsConn := c.wsConn
 		stdin := c.stdin
@@ -368,7 +367,7 @@ func (c *Client) sendRequest(ctx context.Context, method string, params interfac
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if c.closed {
+	if c.closed.Load() {
 		return fmt.Errorf("mcp[%s]: connection closed", c.name)
 	}
 
@@ -410,7 +409,7 @@ func (c *Client) sendRequest(ctx context.Context, method string, params interfac
 func (c *Client) sendNotification(ctx context.Context, notif Notification) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.closed {
+	if c.closed.Load() {
 		return fmt.Errorf("mcp[%s]: connection closed", c.name)
 	}
 	_, err := c.send(notif, ctx)
