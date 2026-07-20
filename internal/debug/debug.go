@@ -315,7 +315,12 @@ var (
 // See the Categories variable for the full list.
 func Init() {
 	once.Do(func() {
-		// Always clean up stale log files from crashed/killed previous instances.
+		// Resolve debug log directory first — cleanupStaleLogs needs it.
+		if defaultLogDir == "" {
+			defaultLogDir = resolveDebugDir()
+		}
+
+		// Clean up stale log files from crashed/killed previous instances.
 		cleanupStaleLogs()
 
 		// Check per-category env vars first
@@ -335,11 +340,6 @@ func Init() {
 		}
 
 		pid := os.Getpid()
-
-		// Resolve debug log directory once for all sinks
-		if defaultLogDir == "" {
-			defaultLogDir = resolveDebugDir()
-		}
 
 		// Create main sink (all messages combined)
 		mainPath := filepath.Join(defaultLogDir, fmt.Sprintf("ggcode-debug-%d.log", pid))
@@ -464,8 +464,12 @@ func Log(pkg, format string, args ...interface{}) {
 		msg = msg[:maxMessageLen]
 	}
 
-	// LiveSink works independently of GGCODE_DEBUG — always fires
-	if sink := liveSink; sink != nil {
+	// LiveSink works independently of GGCODE_DEBUG — always fires.
+	// Read liveSink under RLock to avoid race with SetLiveSink.
+	mu.RLock()
+	sink := liveSink
+	mu.RUnlock()
+	if sink != nil {
 		sink(cat, msg)
 	}
 
