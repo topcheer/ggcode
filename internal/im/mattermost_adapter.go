@@ -54,6 +54,7 @@ type mattermostAdapter struct {
 
 	mu          sync.RWMutex
 	ws          *websocket.Conn
+	writeMu     sync.Mutex // protects websocket writes (gorilla/websocket not concurrent-safe)
 	conn        *http.Client
 	connected   bool
 	closed      bool
@@ -239,7 +240,10 @@ func (a *mattermostAdapter) connectAndServe(ctx context.Context) error {
 					"seq":    0,
 					"action": "ping",
 				}
-				if err := wsConn.WriteJSON(pingMsg); err != nil {
+				a.writeMu.Lock()
+				err := wsConn.WriteJSON(pingMsg)
+				a.writeMu.Unlock()
+				if err != nil {
 					debug.Log("mattermost", "adapter=%s heartbeat ping failed: %v", a.name, err)
 					return
 				}
@@ -587,6 +591,8 @@ func (a *mattermostAdapter) triggerNativeTyping(channelID string) error {
 			"channel_id": channelID,
 		},
 	}
+	a.writeMu.Lock()
+	defer a.writeMu.Unlock()
 	return ws.WriteJSON(typingMsg)
 }
 

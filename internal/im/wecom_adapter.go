@@ -52,6 +52,7 @@ type wecomAdapter struct {
 
 	mu          sync.RWMutex
 	ws          *websocket.Conn
+	writeMu     sync.Mutex // protects websocket writes (gorilla/websocket not concurrent-safe)
 	connected   bool
 	closed      bool
 	seen        map[string]time.Time // message dedup
@@ -316,7 +317,10 @@ func (a *wecomAdapter) heartbeatLoop(ctx context.Context) {
 				"headers": map[string]any{"req_id": newWeComReqID("ping")},
 				"body":    map[string]any{},
 			}
-			if err := ws.WriteJSON(pingMsg); err != nil {
+			a.writeMu.Lock()
+			err := ws.WriteJSON(pingMsg)
+			a.writeMu.Unlock()
+			if err != nil {
 				debug.Log("wecom", "adapter=%s heartbeat send failed: %v", a.name, err)
 				// Close the WebSocket to unblock ReadMessage in the main loop,
 				// which triggers the reconnect cycle.
@@ -727,6 +731,8 @@ func (a *wecomAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding
 			},
 		},
 	}
+	a.writeMu.Lock()
+	defer a.writeMu.Unlock()
 	return ws.WriteJSON(typingMsg)
 }
 
@@ -754,7 +760,10 @@ func (a *wecomAdapter) sendRespond(chatID, replyReqID, text string) error {
 			},
 		},
 	}
-	if err := ws.WriteJSON(respondMsg); err != nil {
+	a.writeMu.Lock()
+	err := ws.WriteJSON(respondMsg)
+	a.writeMu.Unlock()
+	if err != nil {
 		// Fall back to proactive send on respond failure
 		debug.Log("wecom", "adapter=%s respond_msg failed: %v, falling back to send_msg", a.name, err)
 		return a.sendProactive(chatID, text)
@@ -782,6 +791,8 @@ func (a *wecomAdapter) sendProactive(chatID, text string) error {
 			},
 		},
 	}
+	a.writeMu.Lock()
+	defer a.writeMu.Unlock()
 	return ws.WriteJSON(sendMsg)
 }
 
