@@ -311,6 +311,10 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 				debug.Log("openai", "Stream retry attempt %d/%d model=%s baseURL=%s", attempt+1, providerRetryAttempts, p.model, p.baseURL)
 			}
 
+			// Reset per-attempt state to avoid leaking failed-attempt usage
+			// into the next (successful) attempt. Same fix as gemini.go.
+			usage = nil
+
 			// (Re-)establish the stream for each attempt
 			var localStreamer *openai.ChatCompletionStream
 			localStreamer, err = p.createChatCompletionStream(ctx, req, hasReasoningEffort)
