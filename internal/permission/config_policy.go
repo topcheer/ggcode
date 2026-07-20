@@ -302,7 +302,7 @@ func extractFilePaths(input json.RawMessage) []string {
 		return nil
 	}
 	var paths []string
-	for _, key := range []string{"file_path", "path", "directory"} {
+	for _, key := range []string{"file_path", "path", "directory", "notebook_path"} {
 		if v, ok := m[key]; ok {
 			var s string
 			if err := json.Unmarshal(v, &s); err == nil {
