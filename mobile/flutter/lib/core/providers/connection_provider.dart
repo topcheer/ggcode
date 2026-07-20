@@ -554,7 +554,8 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
             msg.data?['barrier_event_id'] as String? ??
             '';
         if (barrierOrdinal != null &&
-            barrierOrdinal > (_parseEventOrdinal(_lastAppliedEventId) ?? 0)) {
+            barrierOrdinal > (_parseEventOrdinal(_lastAppliedEventId) ?? 0) &&
+            !_resumeCompleted) {
           _pendingActiveSessionBarrierOrdinal = barrierOrdinal;
           _pendingActiveSessionBarrierEventId = barrierEventId;
           _beginRelaySyncWaiting(hasLocalState: _hasLocalSessionState());
