@@ -306,7 +306,9 @@ func (h *TaskHandler) execute(ctx context.Context, t *Task, perm *SkillPermissio
 	h.mu.Lock()
 	currentState := t.Status.State
 	h.mu.Unlock()
-	if currentState == TaskStateInputRequired {
+	// If the task is no longer Working (e.g., it was canceled or put into
+	// input-required state while execution was finishing), don't override.
+	if currentState != TaskStateWorking {
 		return
 	}
 
@@ -401,6 +403,13 @@ func (h *TaskHandler) cleanupCancel(taskID string) {
 func (h *TaskHandler) updateStatus(t *Task, state TaskState, message string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	// Don't override an existing terminal state with a different one.
+	// This prevents CancelTask's Canceled from being silently overwritten
+	// by execute()'s Completed when the two race.
+	if t.Status.State.IsTerminal() && state != t.Status.State {
+		debug.Log("a2a", "task %s already terminal (%s), not overriding with %s", t.ID, t.Status.State, state)
+		return
+	}
 	t.Status = TaskStatus{State: state, Timestamp: time.Now()}
 	t.UpdatedAt = time.Now()
 	if message != "" {
