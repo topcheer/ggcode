@@ -342,13 +342,19 @@ func (h *TunnelHost) DetachOnlineBroker() {
 func (h *TunnelHost) Close() {
 	h.mu.Lock()
 	online := h.onlineBroker
+	ref := h.activeShare
 	h.onlineBroker = nil
 	h.projBroker = nil
 	h.projStore = nil
+	h.activeShare = nil
 	h.session = nil
 	h.sessionStore = nil
 	h.mu.Unlock()
 
+	// Stop the active share's tunnel session first (relay connection).
+	if ref != nil && ref.session != nil {
+		ref.session.Stop()
+	}
 	// Gracefully stop any active share so relay and mobile clients are notified
 	if online != nil {
 		online.StopSharingGracefully(2 * time.Second)
