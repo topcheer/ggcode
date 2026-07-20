@@ -288,10 +288,13 @@ func (p *peer) sendRaw(raw []byte) {
 	case <-p.done:
 	case <-time.After(2 * time.Second):
 		// Buffer full (slow peer). Message is in history; will be
-		// replayed from cursor on reconnect. Log and move on to avoid
-		// blocking the relay goroutine.
-		log.Printf("[relay] send buffer full, dropping live-forward room=%s peer=%s",
+		// replayed from cursor on reconnect. Close the connection so the
+		// client reconnects immediately and resumes from its last ACKed
+		// cursor — rather than continuing to receive live events with
+		// ordinal gaps that trigger unnecessary sync overlays.
+		log.Printf("[relay] send buffer full, dropping live-forward room=%s peer=%s — closing slow client",
 			shortToken(p.room.token), p.clientID)
+		go p.closeWithReason(1013, "send buffer full (slow client)")
 	}
 }
 
