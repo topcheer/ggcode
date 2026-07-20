@@ -190,7 +190,7 @@ func exchangeCodeForToken(ctx context.Context, cfg A2AOAuth2Config, code, redire
 			// Try URL-encoded
 			vals, parseErr := url.ParseQuery(string(body))
 			if parseErr != nil {
-				return nil, fmt.Errorf("parse token response: %w", err)
+				return nil, fmt.Errorf("parse token response (url-encoded): %w", parseErr)
 			}
 			raw = make(map[string]interface{})
 			for k, v := range vals {
@@ -278,7 +278,11 @@ func StartDeviceFlow(ctx context.Context, cfg A2AOAuth2Config) (*PKCEToken, erro
 	deadline := time.Now().Add(time.Duration(deviceResp.ExpiresIn) * time.Second)
 
 	for {
-		time.Sleep(interval)
+		select {
+		case <-time.After(interval):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 		if time.Now().After(deadline) {
 			return nil, fmt.Errorf("device code expired")
 		}
@@ -327,7 +331,9 @@ func pollDeviceToken(ctx context.Context, cfg A2AOAuth2Config, deviceCode string
 	body, _ := util.ReadAll(resp.Body, util.ReadLimitAuth)
 	_ = data // suppress unused
 	var raw map[string]interface{}
-	json.Unmarshal(body, &raw)
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, fmt.Errorf("parse device token response: %w", err)
+	}
 
 	if errMsg, ok := raw["error"].(string); ok {
 		if errDesc, ok := raw["error_description"].(string); ok {
@@ -497,7 +503,11 @@ func (v *TokenValidator) validateJWT(ctx context.Context, tokenString string) (m
 // isIssuerAllowed checks whether the given issuer matches the configured issuer
 // or any of the additional valid issuers.
 func (v *TokenValidator) isIssuerAllowed(iss string) bool {
-	candidates := []string{v.issuerURL}
+	// Read issuerURL under lock to avoid data race with refreshJWKS
+	v.mu.Lock()
+	issuer := v.issuerURL
+	v.mu.Unlock()
+	candidates := []string{issuer}
 	candidates = append(candidates, v.validIssuers...)
 	for _, candidate := range candidates {
 		if iss == candidate {
