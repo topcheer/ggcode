@@ -154,8 +154,9 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 					}
 					if !emitted && isRetryableForContext(ctx, err) && attempt < providerRetryAttempts-1 {
 						// Notify user about retry
-						ch <- StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Retry %d/%d, waiting %v...] ", attempt+1, providerRetryAttempts, retryDelay(err, attempt))}
-						if sleepErr := retrySleep(ctx, retryDelay(err, attempt)); sleepErr != nil {
+						delay := retryDelay(err, attempt)
+						ch <- StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Retry %d/%d, waiting %v...] ", attempt+1, providerRetryAttempts, delay)}
+						if sleepErr := retrySleep(ctx, delay); sleepErr != nil {
 							ch <- StreamEvent{Type: StreamEventError, Error: sleepErr}
 							return
 						}
