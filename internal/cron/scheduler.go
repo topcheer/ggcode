@@ -496,11 +496,11 @@ func (s *Scheduler) scheduleJobLocked(job *Job) {
 		s.enqueue(prompt, queueIfBusy)
 
 		s.mu.Lock()
-		defer s.mu.Unlock()
 		// Check if job was deleted while we were enqueueing (TOCTOU fix).
 		// Without this check, a deleted recurring job would be re-scheduled
 		// here, creating an infinite loop of phantom firings.
 		if _, exists := s.jobs[job.ID]; !exists {
+			s.mu.Unlock()
 			return
 		}
 		if job.Recurring {
