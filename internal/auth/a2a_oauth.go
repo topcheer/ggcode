@@ -488,13 +488,17 @@ func (v *TokenValidator) validateJWT(ctx context.Context, tokenString string) (m
 		}
 	}
 
-	// Verify expiration
-	if exp, ok := claims["exp"]; ok {
-		if expFloat, ok := exp.(float64); ok {
-			if time.Unix(int64(expFloat), 0).Before(time.Now()) {
-				return nil, fmt.Errorf("token expired at %v", exp)
-			}
-		}
+	// Verify expiration — reject tokens without exp claim or with wrong type
+	exp, hasExp := claims["exp"]
+	if !hasExp {
+		return nil, fmt.Errorf("token missing exp claim")
+	}
+	expFloat, ok := exp.(float64)
+	if !ok {
+		return nil, fmt.Errorf("token exp claim has invalid type: %T", exp)
+	}
+	if time.Unix(int64(expFloat), 0).Before(time.Now()) {
+		return nil, fmt.Errorf("token expired at %v", exp)
 	}
 
 	return map[string]interface{}(claims), nil
@@ -701,7 +705,11 @@ func (v *TokenValidator) parseJWK(jwk struct {
 
 // validateOpaqueToken validates a non-JWT token via introspection.
 func (v *TokenValidator) validateOpaqueToken(ctx context.Context, token string) (map[string]interface{}, error) {
+	// Read issuerURL under lock to avoid data race with refreshJWKS
+	// (same fix as isIssuerAllowed in commit 4629ab0a).
+	v.mu.Lock()
 	introspectURL := v.issuerURL
+	v.mu.Unlock()
 	if strings.HasSuffix(introspectURL, "/token") {
 		introspectURL = strings.Replace(introspectURL, "/token", "/introspect", 1)
 	} else {
