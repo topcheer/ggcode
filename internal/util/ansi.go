@@ -12,7 +12,7 @@ import "regexp"
 // Stripping them at ingestion time reduces token bloat from colored command output.
 var ansiPattern = regexp.MustCompile(
 	"" +
-		`\x1b\[[0-9;?]*[a-zA-Z]` + // CSI: ESC [ params final-byte
+		`\x1b\[[0-9;?<=>]*[ -/]*[@-~]` + // CSI: ESC [ params intermediate-bytes final-byte
 		`|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)` + // OSC: ESC ] ... BEL or ESC \
 		`|\x1b[()][0-9A-Za-z]` + // Charset: ESC ( B, ESC ) 0
 		`|\x1b[=>]`, // Keypad mode: ESC =, ESC >
