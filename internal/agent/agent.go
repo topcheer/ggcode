@@ -1085,6 +1085,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 			// Record the tool call for speculative pattern learning.
 			a.speculator.recordObservation(tc.Name)
+			// File-editing tools invalidate the speculative cache: any
+			// pre-executed read_file/grep results for edited files are now
+			// stale. Clear the cache to prevent serving outdated content.
+			if fileEditingTools[tc.Name] && !result.IsError {
+				a.speculator.invalidateCache()
+			}
 			// Store result in memoization cache for read-only tools.
 			if speculativeSafeTools[tc.Name] && !result.IsError {
 				a.toolMemo.put(tc.Name, tc.Arguments, result)

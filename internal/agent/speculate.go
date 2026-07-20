@@ -462,3 +462,13 @@ func (s *speculator) Close() {
 	s.cacheOrder = make([]string, 0, specMaxCacheSize)
 	s.mu.Unlock()
 }
+
+// invalidateCache clears all cached speculative results. Called after
+// file-editing tools to prevent stale pre-executed read_file/grep results
+// from being served when the agent reads the same file on the next turn.
+func (s *speculator) invalidateCache() {
+	s.mu.Lock()
+	s.cache = make(map[string]*speculativeResult)
+	s.cacheOrder = make([]string, 0, specMaxCacheSize)
+	s.mu.Unlock()
+}
