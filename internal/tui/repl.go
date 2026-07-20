@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -1259,6 +1261,29 @@ func (r *REPL) Run() error {
 	traceMark("schedule startup messages")
 
 	traceMark("before bubbletea Run")
+
+	// SIGHUP handler: when the terminal closes (SSH disconnect, terminal tab
+	// close, display sleep on some macOS versions), the OS sends SIGHUP to the
+	// foreground process group. BubbleTea only handles SIGINT/SIGTERM, so
+	// without this handler SIGHUP kills the process immediately — no session
+	// save, no cleanup, no graceful shutdown. We catch SIGHUP and send a
+	// QuitMsg to BubbleTea so the normal shutdown path runs.
+	sighupCh := make(chan os.Signal, 1)
+	signal.Notify(sighupCh, syscall.SIGHUP)
+	sighupDone := make(chan struct{})
+	defer func() {
+		signal.Stop(sighupCh)
+		close(sighupDone)
+	}()
+	safego.Go("tui.sighupHandler", func() {
+		select {
+		case <-sighupCh:
+			debug.Log("repl", "SIGHUP received (terminal closed?) — initiating graceful shutdown")
+			r.program.Send(tea.QuitMsg{})
+		case <-sighupDone:
+		}
+	})
+
 	finalModel, err := r.program.Run()
 	traceMark("after bubbletea Run")
 	debug.Log("repl", "program.Run() returned err=%v", err)
