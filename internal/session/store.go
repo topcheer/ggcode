@@ -958,7 +958,37 @@ func (s *JSONLStore) runMaintenance() {
 		s.indexDirty = false
 		return
 	}
-	if err := s.saveIndex(validIdx); err != nil {
+	// Acquire cross-process lock before saving — pruneInvalidIndexEntries
+	// may have taken seconds to scan all sessions, and another process could
+	// have appended to the index in the meantime. Without this lock, our
+	// saveIndex would overwrite their entry, losing session data.
+	unlock, lockErr := lockIndexFile(s.indexPath())
+	if lockErr != nil {
+		debug.Log("session", "runMaintenance: failed to acquire index lock: %v", lockErr)
+		s.indexDirty = true
+		return
+	}
+	defer unlock()
+	// Reload index under lock to pick up any changes from other processes.
+	currentIdx, err := s.loadIndexNoRepair()
+	if err != nil {
+		debug.Log("session", "runMaintenance: failed to reload index under lock: %v", err)
+		s.indexDirty = true
+		return
+	}
+	// Merge: keep entries from currentIdx that are still valid, add entries
+	// from validIdx that are missing from currentIdx.
+	validSet := make(map[string]bool, len(validIdx))
+	for _, e := range validIdx {
+		validSet[e.ID] = true
+	}
+	merged := make([]indexEntry, 0, len(currentIdx))
+	for _, e := range currentIdx {
+		if validSet[e.ID] {
+			merged = append(merged, e)
+		}
+	}
+	if err := s.saveIndex(merged); err != nil {
 		s.indexDirty = true
 		return
 	}
