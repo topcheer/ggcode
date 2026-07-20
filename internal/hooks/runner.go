@@ -304,6 +304,10 @@ func matchAny(mode, pattern, toolName, rawInput string) bool {
 func matchTool(pattern, toolName, rawInput string) bool {
 	// Function call pattern: tool_name(args...)
 	if parenIdx := strings.Index(pattern, "("); parenIdx > 0 {
+		// Guard against patterns like "edit_file(" — missing closing paren.
+		if parenIdx+1 > len(pattern)-1 {
+			return false
+		}
 		patTool := pattern[:parenIdx]
 		patArgs := pattern[parenIdx+1 : len(pattern)-1]
 
