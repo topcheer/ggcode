@@ -1672,28 +1672,17 @@ func (h *Hub) handleReceiveMessageData(msg Message, source string) {
 	if msg.FromNodeID == h.nodeID {
 		return
 	}
-	// Delegate to the existing handler (extracted from HTTP handler)
+	// Delegate to the full HandleIncomingMessage path which includes
+	// @agent approval, receipts, and policy checks. The previous
+	// inline implementation bypassed all of these for UDP-delivered
+	// messages, causing @agent messages to be silently lost.
 	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.hasMessageLocked(msg.ID) {
-		return // dedup
+	dedup := h.hasMessageLocked(msg.ID)
+	h.mu.Unlock()
+	if dedup {
+		return
 	}
-	h.messages = append(h.messages, msg)
-	if len(h.messages) > maxHistoryPerSession {
-		h.messages = h.messages[len(h.messages)-maxHistoryPerSession:]
-	}
-	debug.Log("lanchat", "received message from %s via %s: %s", msg.FromNick, source, truncate(msg.Content, 40))
-	// Fire onInboundDM callback for non-broadcast messages so the rate
-	// limiter can reset the DM cooldown for the sender.
-	if !msg.IsBroadcast() && h.onInboundDM != nil {
-		fromID := msg.FromNodeID
-		safego.Go("lanchat.onInboundDM", func() { h.onInboundDM(fromID) })
-	}
-	// Fire onMessage callback outside lock
-	msgCopy := msg
-	if h.onMessage != nil {
-		safego.Go("lanchat.onMessage", func() { h.onMessage(msgCopy) })
-	}
+	h.HandleIncomingMessage(msg)
 }
 
 // handleReceiveReceiptData processes a receipt from any transport.
@@ -1715,6 +1704,7 @@ func (h *Hub) handleNickChangeData(nc NickChange) {
 		h.mu.Unlock()
 		return
 	}
+	oldNick := peer.HumanNick
 	if nc.HumanNick != "" {
 		peer.HumanNick = nc.HumanNick
 	}
@@ -1730,8 +1720,9 @@ func (h *Hub) handleNickChangeData(nc NickChange) {
 	callback := h.onNickChange
 	h.mu.Unlock()
 	if callback != nil {
-		ncCopy := nc
-		safego.Go("lanchat.onNickChange", func() { callback(ncCopy.NodeID, ncCopy.HumanNick, ncCopy.AgentNick) })
+		nodeID := nc.NodeID
+		newNick := nc.HumanNick
+		safego.Go("lanchat.onNickChange", func() { callback(nodeID, oldNick, newNick) })
 	}
 }
 
