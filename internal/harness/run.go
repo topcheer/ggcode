@@ -253,6 +253,15 @@ func ExecuteTask(ctx context.Context, project Project, cfg *Config, task *Task, 
 	task.PromotionStatus = ""
 	task.PromotionNotes = ""
 	task.PromotedAt = nil
+	// Clean up any leftover worktree from a previous failed attempt.
+	// Without this, PrepareWorkspace fails because the worktree path
+	// already exists, causing silent fallback to root mode.
+	if task.WorkspaceMode == "git-worktree" && strings.TrimSpace(task.WorkspacePath) != "" {
+		_ = cleanupWorkspace(project, task)
+		task.WorkspacePath = ""
+		task.WorkspaceMode = ""
+		task.BranchName = ""
+	}
 	workspace, workspaceErr := PrepareWorkspace(ctx, project, cfg, task, WorkspacePrepareOptions{
 		ConfirmDirtyWorkspace: execOpts.ConfirmDirtyWorkspace,
 	})

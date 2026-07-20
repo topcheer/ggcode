@@ -99,6 +99,11 @@ func mergePromotedBranch(ctx context.Context, project Project, branch string) er
 	cmd.Dir = project.RootDir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
+		// Abort the merge to prevent the repo from being stuck in a
+		// conflict state — subsequent git operations would all fail.
+		abortCmd := gitCmd(ctx, "merge", "--abort")
+		abortCmd.Dir = project.RootDir
+		_ = abortCmd.Run()
 		return fmt.Errorf("merge promoted branch %s: %s", branch, strings.TrimSpace(string(out)))
 	}
 	return nil
