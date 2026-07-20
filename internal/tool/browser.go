@@ -617,6 +617,9 @@ func (b *Browser) doExtract(ctx context.Context, profile, session, selector stri
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
 
+	timeoutCtx, cancel := context.WithTimeout(tab.ctx, 30*time.Second)
+	defer cancel()
+
 	if selector != "" {
 		var results []map[string]string
 		js := fmt.Sprintf(`(() => {
@@ -631,10 +634,10 @@ func (b *Browser) doExtract(ctx context.Context, profile, session, selector stri
 				}));
 			})()`, selector)
 
-		if err := chromedp.Run(tab.ctx, chromedp.WaitReady("body", chromedp.ByQuery)); err != nil {
+		if err := chromedp.Run(timeoutCtx, chromedp.WaitReady("body", chromedp.ByQuery)); err != nil {
 			return Result{IsError: true, Content: fmt.Sprintf("wait failed: %v", err)}, nil
 		}
-		if err := chromedp.Run(tab.ctx, chromedp.Evaluate(js, &results)); err != nil {
+		if err := chromedp.Run(timeoutCtx, chromedp.Evaluate(js, &results)); err != nil {
 			return Result{IsError: true, Content: fmt.Sprintf("extract failed: %v", err)}, nil
 		}
 		if len(results) == 0 {
@@ -676,7 +679,7 @@ func (b *Browser) doExtract(ctx context.Context, profile, session, selector stri
 
 	// Full page text
 	var pageText string
-	if err := chromedp.Run(tab.ctx,
+	if err := chromedp.Run(timeoutCtx,
 		chromedp.WaitReady("body", chromedp.ByQuery),
 		chromedp.Evaluate(`document.body.innerText.substring(0, 50000)`, &pageText),
 	); err != nil {
@@ -692,16 +695,19 @@ func (b *Browser) doScreenshot(ctx context.Context, profile, session, selector s
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
 
+	timeoutCtx, cancel := context.WithTimeout(tab.ctx, 30*time.Second)
+	defer cancel()
+
 	var buf []byte
 	if selector != "" {
-		if err := chromedp.Run(tab.ctx,
+		if err := chromedp.Run(timeoutCtx,
 			chromedp.WaitVisible(selector, chromedp.ByQuery),
 			chromedp.Screenshot(selector, &buf, chromedp.ByQuery),
 		); err != nil {
 			return Result{IsError: true, Content: fmt.Sprintf("screenshot failed: %v", err)}, nil
 		}
 	} else {
-		if err := chromedp.Run(tab.ctx, chromedp.FullScreenshot(&buf, 90)); err != nil {
+		if err := chromedp.Run(timeoutCtx, chromedp.FullScreenshot(&buf, 90)); err != nil {
 			return Result{IsError: true, Content: fmt.Sprintf("screenshot failed: %v", err)}, nil
 		}
 	}
@@ -719,6 +725,9 @@ func (b *Browser) doEvaluate(ctx context.Context, profile, session, expression, 
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
 
+	timeoutCtx, cancel := context.WithTimeout(tab.ctx, 30*time.Second)
+	defer cancel()
+
 	// When frame is set, wrap the expression to execute inside the iframe's
 	// contentDocument (same-origin only). This allows evaluating JS and
 	// extracting/clicking elements within iframes.
@@ -734,7 +743,7 @@ func (b *Browser) doEvaluate(ctx context.Context, profile, session, expression, 
 	}
 
 	var result interface{}
-	if err := chromedp.Run(tab.ctx, chromedp.Evaluate(actualExpr, &result)); err != nil {
+	if err := chromedp.Run(timeoutCtx, chromedp.Evaluate(actualExpr, &result)); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("JavaScript evaluation failed: %v", err)}, nil
 	}
 
@@ -768,6 +777,9 @@ func (b *Browser) doLinks(ctx context.Context, profile, session string, headless
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
 
+	timeoutCtx, cancel := context.WithTimeout(tab.ctx, 30*time.Second)
+	defer cancel()
+
 	type linkData struct {
 		Text string `json:"text"`
 		Href string `json:"href"`
@@ -781,7 +793,7 @@ func (b *Browser) doLinks(ctx context.Context, profile, session string, headless
 		}));
 	})()`
 
-	if err := chromedp.Run(tab.ctx,
+	if err := chromedp.Run(timeoutCtx,
 		chromedp.WaitReady("body", chromedp.ByQuery),
 		chromedp.Evaluate(js, &links),
 	); err != nil {
@@ -818,14 +830,17 @@ func (b *Browser) doScroll(ctx context.Context, profile, session, selector strin
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
 
+	timeoutCtx, cancel := context.WithTimeout(tab.ctx, 15*time.Second)
+	defer cancel()
+
 	if selector != "" {
-		if err := chromedp.Run(tab.ctx, chromedp.ScrollIntoView(selector, chromedp.ByQuery)); err != nil {
+		if err := chromedp.Run(timeoutCtx, chromedp.ScrollIntoView(selector, chromedp.ByQuery)); err != nil {
 			return Result{IsError: true, Content: fmt.Sprintf("scroll failed: %v", err)}, nil
 		}
 		return Result{Content: fmt.Sprintf("Scrolled %s into view.", selector)}, nil
 	}
 
-	if err := chromedp.Run(tab.ctx,
+	if err := chromedp.Run(timeoutCtx,
 		chromedp.Evaluate(`window.scrollTo(0, document.body.scrollHeight)`, nil),
 	); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("scroll failed: %v", err)}, nil
@@ -840,12 +855,15 @@ func (b *Browser) doBack(ctx context.Context, profile, session string, headless 
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
 
-	if err := chromedp.Run(tab.ctx, chromedp.NavigateBack()); err != nil {
+	timeoutCtx, cancel := context.WithTimeout(tab.ctx, 30*time.Second)
+	defer cancel()
+
+	if err := chromedp.Run(timeoutCtx, chromedp.NavigateBack()); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("back navigation failed: %v", err)}, nil
 	}
 
 	var urlAfter string
-	_ = chromedp.Run(tab.ctx, chromedp.Location(&urlAfter))
+	_ = chromedp.Run(timeoutCtx, chromedp.Location(&urlAfter))
 	return Result{Content: fmt.Sprintf("Navigated back. Current URL: %s", urlAfter)}, nil
 }
 
@@ -855,6 +873,9 @@ func (b *Browser) doContent(ctx context.Context, profile, session string, headle
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
+
+	timeoutCtx, cancel := context.WithTimeout(tab.ctx, 30*time.Second)
+	defer cancel()
 
 	type pageContent struct {
 		Title    string `json:"title"`
@@ -876,7 +897,7 @@ func (b *Browser) doContent(ctx context.Context, profile, session string, headle
 		};
 	})()`
 
-	if err := chromedp.Run(tab.ctx,
+	if err := chromedp.Run(timeoutCtx,
 		chromedp.WaitReady("body", chromedp.ByQuery),
 		chromedp.Evaluate(js, &content),
 	); err != nil {
