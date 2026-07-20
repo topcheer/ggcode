@@ -129,6 +129,13 @@ func handleMessage(
 				Timestamp:  time.Now(),
 			})
 		}
+		// Reply to caller so they don't block forever on ReplyTo channel.
+		if msg.ReplyTo != nil {
+			select {
+			case msg.ReplyTo <- TaskResult{Error: fmt.Errorf("teammate %q has no agent", tm.ID)}:
+			case <-ctx.Done():
+			}
+		}
 		return
 	}
 
@@ -251,7 +258,7 @@ func tryClaimPendingTask(
 
 		// Execute the task via agent.
 		msg := MailMessage{Content: prompt, Type: "task"}
-		result, _ := executeTask(ctx, agent, msg, tm, onEvent, team, taskTimeout)
+		result, taskErr := executeTask(ctx, agent, msg, tm, onEvent, team, taskTimeout)
 
 		tm.setLastResult(result)
 
@@ -265,16 +272,21 @@ func tryClaimPendingTask(
 			tm.setStatus(TeammateShuttingDown)
 			return
 		}
-		completed := task.StatusCompleted
-		tmMgr.Update(claimed.ID, task.UpdateOptions{Status: &completed})
+		// Mark task status based on whether agent execution succeeded.
+		if taskErr != nil {
+			// Agent errored — revert to pending so another teammate can retry.
+			pending := task.StatusPending
+			owner := ""
+			tmMgr.Update(claimed.ID, task.UpdateOptions{Status: &pending, Owner: &owner})
+		} else {
+			completed := task.StatusCompleted
+			tmMgr.Update(claimed.ID, task.UpdateOptions{Status: &completed})
+		}
 		if onEvent != nil {
 			onEvent(Event{Type: "team_board_updated", TeamID: team.ID, Timestamp: time.Now()})
 		}
 		tm.setStatus(TeammateIdle)
 		tm.setCurrentTask("")
-		tm.mu.Lock()
-		tm.EndedAt = time.Now()
-		tm.mu.Unlock()
 
 		if onEvent != nil {
 			onEvent(Event{
