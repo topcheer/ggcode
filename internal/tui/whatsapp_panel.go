@@ -101,87 +101,87 @@ func (m Model) renderWhatsAppPanel() string {
 
 	body := []string{
 		"",
-		lipgloss.NewStyle().Bold(true).Render("WhatsApp"),
-		fmt.Sprintf(" Directory: %s", wsPath),
+		lipgloss.NewStyle().Bold(true).Render(m.t("panel.whatsapp.title")),
+		" " + m.t("panel.whatsapp.directory", wsPath),
 		"",
-		lipgloss.NewStyle().Bold(true).Render("Adapters"),
-		fmt.Sprintf(" Configured: %d  Bound: %d  Available: %d", len(entries), boundCount, maxWA(len(entries)-boundCount, 0)),
+		lipgloss.NewStyle().Bold(true).Render(m.t("panel.whatsapp.adapters")),
+		" " + m.t("panel.whatsapp.summary", len(entries), boundCount, maxWA(len(entries)-boundCount, 0)),
 		"",
-		lipgloss.NewStyle().Bold(true).Render("Current Binding"),
+		lipgloss.NewStyle().Bold(true).Render(m.t("panel.whatsapp.current_binding")),
 	}
 
 	if len(currentBindings) == 0 {
-		body = append(body, " (none)")
+		body = append(body, " "+m.t("panel.whatsapp.none"))
 	} else {
 		for _, current := range currentBindings {
 			body = append(body,
-				fmt.Sprintf(" Adapter:  %s", current.Adapter),
-				fmt.Sprintf(" Target:   %s", util.FirstNonEmpty(current.TargetID, "(default)")),
-				fmt.Sprintf(" Channel:  %s", util.FirstNonEmpty(current.ChannelID, "(none)")),
+				" "+m.t("panel.whatsapp.adapter", current.Adapter),
+				" "+m.t("panel.whatsapp.target", util.FirstNonEmpty(current.TargetID, m.t("panel.whatsapp.default"))),
+				" "+m.t("panel.whatsapp.channel", util.FirstNonEmpty(current.ChannelID, m.t("panel.whatsapp.none"))),
 			)
 		}
 	}
 
-	body = append(body, "", lipgloss.NewStyle().Bold(true).Render("Adapter List"))
+	body = append(body, "", lipgloss.NewStyle().Bold(true).Render(m.t("panel.whatsapp.adapter_list")))
 	if len(entries) == 0 {
-		body = append(body, " No WhatsApp adapters configured.")
-		body = append(body, "", lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" Add one in ggcode.yaml: im.adapters.<name>.platform = whatsapp"))
+		body = append(body, " "+m.t("panel.whatsapp.no_adapters"))
+		body = append(body, "", lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.whatsapp.add_hint")))
 	} else {
 		selected := clampWASelection(panel.selected, len(entries))
 		labels := m.waBindingLabels(entries)
 		body = append(body, m.renderProviderList(labels, selected, true))
 
 		entry := entries[selected]
-		status := "available"
+		status := m.t("panel.whatsapp.status.available")
 		if entry.Disabled {
-			status = "disabled"
+			status = m.t("panel.whatsapp.status.disabled")
 		} else if entry.OccupiedBy != "" {
-			status = "bound"
+			status = m.t("panel.whatsapp.status.bound")
 		}
 
 		body = append(body,
 			"",
-			lipgloss.NewStyle().Bold(true).Render("Details"),
-			fmt.Sprintf(" Adapter:   %s", entry.Adapter),
-			fmt.Sprintf(" Status:    %s", status),
-			fmt.Sprintf(" Transport: %s", m.waAdapterStatus(entry.AdapterState)),
-			fmt.Sprintf(" Bound to:  %s", util.FirstNonEmpty(entry.OccupiedBy, "(none)")),
-			fmt.Sprintf(" Target:    %s", util.FirstNonEmpty(entry.TargetID, defaultWATargetID(m.currentWorkspacePath()))),
-			fmt.Sprintf(" Channel:   %s", util.FirstNonEmpty(entry.WorkspaceChannel, "(waiting for pairing)")),
+			lipgloss.NewStyle().Bold(true).Render(m.t("panel.whatsapp.details")),
+			" "+m.t("panel.whatsapp.adapter", entry.Adapter),
+			" "+m.t("panel.whatsapp.status", status),
+			" "+m.t("panel.whatsapp.transport", m.waAdapterStatus(entry.AdapterState)),
+			" "+m.t("panel.whatsapp.bound_to", util.FirstNonEmpty(entry.OccupiedBy, m.t("panel.whatsapp.none"))),
+			" "+m.t("panel.whatsapp.target", util.FirstNonEmpty(entry.TargetID, defaultWATargetID(m.currentWorkspacePath()))),
+			" "+m.t("panel.whatsapp.channel", util.FirstNonEmpty(entry.WorkspaceChannel, m.t("panel.whatsapp.waiting_for_pair"))),
 		)
 
 		// Show QR / contact status
 		if entry.AdapterState != nil {
 			if entry.AdapterState.QRCode != "" {
 				body = append(body, "",
-					lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render(" Status: pairing — press q to show QR code"),
+					lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render(" "+m.t("panel.whatsapp.pairing_qr")),
 				)
 			} else if entry.AdapterState.ContactURI != "" {
-				body = append(body, "", fmt.Sprintf(" Contact: %s", entry.AdapterState.ContactURI))
+				body = append(body, "", " "+m.t("panel.whatsapp.contact", entry.AdapterState.ContactURI))
 			}
 		}
 
 		if entry.AdapterState != nil && strings.TrimSpace(entry.AdapterState.LastError) != "" {
-			body = append(body, fmt.Sprintf(" Error: %s", strings.TrimSpace(entry.AdapterState.LastError)))
+			body = append(body, " "+m.t("panel.whatsapp.last_error", strings.TrimSpace(entry.AdapterState.LastError)))
 		}
 		if entry.OccupiedBy != "" && entry.OccupiedBy != m.currentWorkspacePath() {
-			body = append(body, lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render(fmt.Sprintf(" Occupied by: %s", entry.OccupiedBy)))
+			body = append(body, lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render(" "+m.t("panel.whatsapp.occupied_by", entry.OccupiedBy)))
 		}
 	}
 
 	// Actions hint
-	body = append(body, "", lipgloss.NewStyle().Bold(true).Render("Actions"))
+	body = append(body, "", lipgloss.NewStyle().Bold(true).Render(m.t("panel.whatsapp.actions")))
 	if panel.createMode {
 		body = append(body,
-			" Adapter name: "+panel.createInput+"█",
+			" "+m.t("panel.whatsapp.adapter_name", panel.createInput)+"█",
 			"",
 			renderPasteShortcutHint(m.currentLanguage()),
-			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" enter confirm · esc cancel"),
+			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(m.t("panel.whatsapp.enter_confirm")),
 		)
 	} else if len(entries) == 0 {
-		body = append(body, lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" i create new adapter · esc close"))
+		body = append(body, lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(m.t("panel.whatsapp.create_new")))
 	} else {
-		body = append(body, lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" ↑↓ navigate · enter bind · u unbind · x clear · e edit · i new · q QR · esc close"))
+		body = append(body, lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(m.t("panel.whatsapp.actions_hint")))
 	}
 
 	// Edit config section
@@ -200,10 +200,10 @@ func (m Model) renderWhatsAppPanel() string {
 
 func (m *Model) waAdapterStatus(state *im.AdapterState) string {
 	if state == nil {
-		return "not started"
+		return m.t("panel.whatsapp.not_started")
 	}
 	if state.Healthy {
-		return "online"
+		return m.t("panel.whatsapp.online")
 	}
 	if state.Status != "" {
 		return state.Status
@@ -211,7 +211,7 @@ func (m *Model) waAdapterStatus(state *im.AdapterState) string {
 	if state.LastError != "" {
 		return state.LastError
 	}
-	return "unknown"
+	return m.t("panel.whatsapp.unknown")
 }
 
 func (m *Model) handleWhatsAppPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
@@ -241,7 +241,7 @@ func (m *Model) handleWhatsAppPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			panel.createMode = false
 			panel.createInput = ""
 			if name == "" {
-				panel.message = "Adapter name required"
+				panel.message = m.t("panel.whatsapp.adapter_required")
 				return *m, nil
 			}
 			return *m, m.createWAAdapterCmd(name)
@@ -272,25 +272,25 @@ func (m *Model) handleWhatsAppPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		}
 	case "enter", "b", "B":
 		if len(entries) == 0 {
-			panel.message = "No adapter available"
+			panel.message = m.t("panel.whatsapp.no_adapter")
 			return *m, nil
 		}
 		return *m, m.bindWAEntry(entries[clampWASelection(panel.selected, len(entries))])
 	case "x", "X":
 		if len(entries) == 0 {
-			panel.message = "No adapter available"
+			panel.message = m.t("panel.whatsapp.no_adapter")
 			return *m, nil
 		}
 		return *m, m.clearWAChannel(entries[clampWASelection(panel.selected, len(entries))].Adapter)
 	case "u", "U":
 		if len(entries) == 0 {
-			panel.message = "No adapter available"
+			panel.message = m.t("panel.whatsapp.no_adapter")
 			return *m, nil
 		}
 		return *m, m.unbindWAEntry(entries[clampWASelection(panel.selected, len(entries))].Adapter)
 	case "e", "E":
 		if len(entries) == 0 {
-			panel.message = "No adapter available"
+			panel.message = m.t("panel.whatsapp.no_adapter")
 			return *m, nil
 		}
 		entry := entries[clampWASelection(panel.selected, len(entries))]
@@ -305,12 +305,12 @@ func (m *Model) handleWhatsAppPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		return *m, nil
 	case "q", "Q":
 		if len(entries) == 0 {
-			panel.message = "No adapter available"
+			panel.message = m.t("panel.whatsapp.no_adapter")
 			return *m, nil
 		}
 		entry := entries[clampWASelection(panel.selected, len(entries))]
 		if entry.AdapterState == nil {
-			panel.message = "Adapter not started yet"
+			panel.message = m.t("panel.whatsapp.adapter_not_start")
 			return *m, nil
 		}
 		// If pairing, show the dynamically generated QR code
@@ -326,7 +326,7 @@ func (m *Model) handleWhatsAppPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		// If connected, show contact URI QR (wa.me link)
 		states := []*im.AdapterState{entry.AdapterState}
 		if !m.openQROverlayFromStates("WhatsApp", states) {
-			panel.message = "No QR code or contact available yet"
+			panel.message = m.t("panel.whatsapp.no_qr")
 		}
 		return *m, nil
 	case "d":
@@ -364,7 +364,7 @@ func (m *Model) bindWAEntry(entry whatsappBindingEntry) tea.Cmd {
 		if err != nil {
 			return whatsappBindResultMsg{err: err}
 		}
-		return whatsappBindResultMsg{message: "Bound successfully"}
+		return whatsappBindResultMsg{message: m.t("panel.whatsapp.bound_success")}
 	}
 }
 
@@ -376,7 +376,7 @@ func (m *Model) unbindWAEntry(adapterName string) tea.Cmd {
 		if err := m.imManager.UnbindAdapter(adapterName); err != nil {
 			return whatsappBindResultMsg{err: err}
 		}
-		return whatsappBindResultMsg{message: "Unbound"}
+		return whatsappBindResultMsg{message: m.t("panel.whatsapp.unbound")}
 	}
 }
 
@@ -388,14 +388,14 @@ func (m *Model) clearWAChannel(adapterName string) tea.Cmd {
 		if err := m.imManager.ClearChannelByAdapter(adapterName); err != nil {
 			return whatsappBindResultMsg{err: err}
 		}
-		return whatsappBindResultMsg{message: "Channel cleared"}
+		return whatsappBindResultMsg{message: m.t("panel.whatsapp.channel_cleared")}
 	}
 }
 
 func (m *Model) createWAAdapterCmd(name string) tea.Cmd {
 	return func() tea.Msg {
 		if m.config == nil {
-			return whatsappBindResultMsg{err: errors.New("config unavailable")}
+			return whatsappBindResultMsg{err: errors.New(m.t("panel.whatsapp.error.config_unavailable"))}
 		}
 		adapter := config.IMAdapterConfig{
 			Enabled:  true,
@@ -410,17 +410,17 @@ func (m *Model) createWAAdapterCmd(name string) tea.Cmd {
 			return whatsappBindResultMsg{err: fmt.Errorf("save config: %w", err)}
 		}
 		if err := m.ensureWARuntime(); err != nil {
-			return whatsappBindResultMsg{message: fmt.Sprintf("Adapter %q saved (start pending: %v)", name, err)}
+			return whatsappBindResultMsg{message: m.t("panel.whatsapp.saved_start_pending", name, err)}
 		}
 		if err := m.startWAAdapterIfNeeded(name); err != nil {
-			return whatsappBindResultMsg{message: fmt.Sprintf("Adapter %q saved (start failed: %v)", name, err)}
+			return whatsappBindResultMsg{message: m.t("panel.whatsapp.saved_start_failed", name, err)}
 		}
-		return whatsappBindResultMsg{message: fmt.Sprintf("Adapter %q created — scan QR code to pair", name)}
+		return whatsappBindResultMsg{message: m.t("panel.whatsapp.created_scan", name)}
 	}
 }
 
 func (m *Model) ensureWARuntime() error {
-	return m.ensureStartedCurrentWorkspaceIMRuntime("config unavailable", "", true)
+	return m.ensureStartedCurrentWorkspaceIMRuntime(m.t("panel.whatsapp.error.config_unavailable"), "", true)
 }
 
 func (m *Model) startWAAdapterIfNeeded(name string) error {
