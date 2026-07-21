@@ -659,6 +659,9 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 				// Race: session was locked between picker filter and now.
 				fmt.Fprintf(os.Stderr, "  Session %s is locked by another instance. Starting a new session.\n", selectedID[:8])
 			}
+		} else {
+			// User cancelled the picker (Esc/Ctrl-C) — create a new session.
+			resumeID = ""
 		}
 		trace.Mark("pick resume session")
 	} else if resumeID == "" {
@@ -685,7 +688,6 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 				fmt.Fprintf(os.Stderr, "\n  All %d workspace session(s) are in use by other instances. Starting a new session.\n", len(sessions))
 			}
 		}
-		trace.Mark("pick resume session")
 	}
 	homeDir, _ := os.UserHomeDir()
 	knightAgent = knight.New(cfg.Knight(), homeDir, workingDir, store)
