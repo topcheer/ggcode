@@ -1647,8 +1647,79 @@ func newSessionMessageID() string {
 // need IDs. This keeps migration fast even for very large session files.
 //
 // Must be called while holding the store mutex (same as loadSession).
+// hasNewFormatCheckpoint reads the tail of the JSONL file and returns true
+// if the last checkpoint record uses the new format (checkpoint_summary_msg_id).
+// This avoids a full-file scan in migrateMessageIDs for sessions that have
+// already been migrated. For sessions with no checkpoint at all, the full
+// scan in migrateMessageIDs will correctly return 0 anyway (no migration
+// needed).
+//
+// The tail read covers the last 128KB of the file — enough for the final
+// checkpoint record plus any post-checkpoint messages, usage, and metric
+// records that follow it. Checkpoint records are written after compaction
+// and are followed by at most a few hundred messages before the session
+// is loaded again.
+func hasNewFormatCheckpoint(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+
+	const tailSize = 128 * 1024
+	fi, err := f.Stat()
+	if err != nil {
+		return false
+	}
+
+	// For small files, the full migrateMessageIDs scan is cheap (<1ms).
+	// Only use the tail optimization for files larger than 256KB.
+	if fi.Size() <= 256*1024 {
+		return false
+	}
+
+	offset := fi.Size() - tailSize
+	if offset < 0 {
+		offset = 0
+	}
+	_, err = f.Seek(offset, 0)
+	if err != nil {
+		return false
+	}
+
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 2*1024*1024)
+	lastCpIsNewFormat := false
+
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" {
+			continue
+		}
+		// Quick filter: only parse lines containing "checkpoint"
+		if !strings.Contains(line, `"checkpoint"`) {
+			continue
+		}
+		var rec jsonlRecord
+		if json.Unmarshal([]byte(line), &rec) != nil {
+			continue
+		}
+		if rec.Type == "checkpoint" {
+			lastCpIsNewFormat = rec.CheckpointSummaryMsgID != ""
+		}
+	}
+	return lastCpIsNewFormat
+}
+
 func (s *JSONLStore) migrateMessageIDs(id string) (int, error) {
 	path := s.sessionPath(id)
+
+	// Fast path: check if the file has already been migrated by scanning
+	// only the tail of the file for the last checkpoint record. If it's
+	// new format (has summary_msg_id), skip the expensive full-file scan.
+	if hasNewFormatCheckpoint(path) {
+		return 0, nil
+	}
 
 	// Phase 1: read all lines, find last old-format checkpoint.
 	srcF, err := os.Open(path)
