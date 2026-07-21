@@ -125,6 +125,16 @@ func (m Model) renderStatusBar() string {
 		sb.WriteString(tmuxLabel)
 	}
 
+	// Show background compression indicator if active
+	if m.agent != nil {
+		if pc := m.agent.PreCompactStatus(); pc.Running {
+			if sb.Len() > 0 {
+				sb.WriteString(" │ ")
+			}
+			sb.WriteString(fmt.Sprintf("🗜 ctx %dK→…", pc.StartTok/1000))
+		}
+	}
+
 	return m.renderContextBox("", sb.String(), lipgloss.Color("6"))
 }
 
