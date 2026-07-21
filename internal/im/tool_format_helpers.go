@@ -226,6 +226,18 @@ func imLabel(lang ToolLanguage, key string) string {
 			return "Manage command"
 		case "command_input":
 			return "Send input"
+		case "files_edited":
+			return "files edited"
+		case "files_written":
+			return "files written"
+		case "files_failed":
+			return "files failed"
+		case "edits":
+			return "edits"
+		case "failed":
+			return "failed"
+		case "errors":
+			return "errors"
 		}
 	default: // zh-CN
 		switch key {
@@ -439,6 +451,18 @@ func imLabel(lang ToolLanguage, key string) string {
 			return "管理命令"
 		case "command_input":
 			return "发送输入"
+		case "files_edited":
+			return "个文件已编辑"
+		case "files_written":
+			return "个文件已写入"
+		case "files_failed":
+			return "个文件失败"
+		case "edits":
+			return "处修改"
+		case "failed":
+			return "个失败"
+		case "errors":
+			return "个错误"
 		}
 	}
 	return key
@@ -946,6 +970,133 @@ func formatIMWriteResult(tr *ToolResultInfo) string {
 		return fmt.Sprintf("%s Write (%d %s)", icon, lines, imLabel(lang, "lines"))
 	}
 	return fmt.Sprintf("%s %s (%d %s)", icon, baseName, lines, imLabel(lang, "lines"))
+}
+
+// formatIMMultiEditResult renders multi_file_edit result as a concise summary.
+// The result JSON has: {"summary": "...", "results": [{"path": "...", "status": "success", "applied_edit_count": N}, ...]}
+func formatIMMultiEditResult(tr *ToolResultInfo) string {
+	lang := toolLang(tr.Lang)
+	if tr.IsError {
+		return formatIMErrorResult(tr)
+	}
+	var raw struct {
+		Summary string `json:"summary"`
+		Results []struct {
+			Path             string `json:"path"`
+			Status           string `json:"status"`
+			AppliedEditCount int    `json:"applied_edit_count"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(tr.Result)), &raw); err != nil {
+		// Non-JSON result — show trimmed output
+		return fmt.Sprintf("✏ %s", strings.TrimSpace(tr.Result))
+	}
+	successCount := 0
+	failedCount := 0
+	totalEdits := 0
+	for _, r := range raw.Results {
+		if r.Status == "success" {
+			successCount++
+			totalEdits += r.AppliedEditCount
+		} else {
+			failedCount++
+		}
+	}
+	if successCount == 0 && failedCount > 0 {
+		return fmt.Sprintf("✏ %d %s (%d %s)",
+			failedCount, imLabel(lang, "files_failed"), failedCount, imLabel(lang, "errors"))
+	}
+	if failedCount > 0 {
+		return fmt.Sprintf("✏ %d %s (%d %s, %d %s)",
+			successCount, imLabel(lang, "files_edited"), totalEdits, imLabel(lang, "edits"),
+			failedCount, imLabel(lang, "failed"))
+	}
+	return fmt.Sprintf("✏ %d %s (%d %s)",
+		successCount, imLabel(lang, "files_edited"), totalEdits, imLabel(lang, "edits"))
+}
+
+// formatIMMultiWriteResult renders multi_file_write result as a concise summary.
+func formatIMMultiWriteResult(tr *ToolResultInfo) string {
+	lang := toolLang(tr.Lang)
+	if tr.IsError {
+		return formatIMErrorResult(tr)
+	}
+	// multi_file_write returns "Successfully wrote N files" or similar
+	output := strings.TrimSpace(tr.Result)
+	if output == "" {
+		return fmt.Sprintf("📝 %s", imLabel(lang, "write_multi"))
+	}
+	// Try to parse JSON result
+	var raw struct {
+		Results []struct {
+			Path   string `json:"path"`
+			Status string `json:"status"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal([]byte(output), &raw); err == nil && len(raw.Results) > 0 {
+		successCount := 0
+		failedCount := 0
+		for _, r := range raw.Results {
+			if r.Status == "success" {
+				successCount++
+			} else {
+				failedCount++
+			}
+		}
+		if failedCount > 0 {
+			return fmt.Sprintf("📝 %d %s (%d %s)",
+				successCount, imLabel(lang, "files_written"), failedCount, imLabel(lang, "failed"))
+		}
+		return fmt.Sprintf("📝 %d %s", successCount, imLabel(lang, "files_written"))
+	}
+	// Non-JSON fallback
+	return fmt.Sprintf("📝 %s", output)
+}
+
+// formatIMNotebookEditResult renders notebook_edit result similar to edit_file.
+func formatIMNotebookEditResult(tr *ToolResultInfo) string {
+	lang := toolLang(tr.Lang)
+	path := extractFilePathFromArgs(tr.Args)
+	if path == "" {
+		path = tr.Detail
+	}
+	baseName := filepath.Base(path)
+	icon := "📓"
+	if tr.IsError {
+		if path != "" {
+			return fmt.Sprintf("%s %s\n```\n%s\n```", icon, baseName, strings.TrimSpace(tr.Result))
+		}
+		return fmt.Sprintf("%s Notebook\n```\n%s\n```", icon, strings.TrimSpace(tr.Result))
+	}
+	if path == "" {
+		return fmt.Sprintf("%s %s", icon, imLabel(lang, "edit_notebook"))
+	}
+	return fmt.Sprintf("%s %s", icon, baseName)
+}
+
+// formatIMGitShowResult renders git_show result as a commit summary.
+func formatIMGitShowResult(tr *ToolResultInfo) string {
+	if tr.IsError {
+		return formatIMErrorResult(tr)
+	}
+	output := strings.TrimSpace(tr.Result)
+	if output == "" {
+		return "🔍 git show"
+	}
+	// Show first few lines (commit hash, author, date, message)
+	lines := strings.SplitN(output, "\n", 6)
+	var summary string
+	if len(lines) > 0 {
+		// First line is usually "commit <hash>"
+		summary = lines[0]
+		if len(lines) > 4 {
+			// Include up to the commit message line
+			summary = strings.Join(lines[:5], "\n")
+		} else {
+			summary = strings.Join(lines, "\n")
+		}
+	}
+	return fmt.Sprintf("🔍 git show\n```\n%s\n```", summary)
 }
 
 // formatIMSearchResult renders search/grep result with full output in code block.

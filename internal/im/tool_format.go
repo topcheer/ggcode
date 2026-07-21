@@ -481,18 +481,26 @@ func formatSpecialIMToolResult(tr *ToolResultInfo) (bool, string) {
 		return true, "📦 " + imLabel(toolLang(tr.Lang), "git_staged")
 	case "git_commit":
 		return true, "💾 " + imLabel(toolLang(tr.Lang), "git_committed")
-	case "git_show", "git_blame", "git_branch_list", "git_remote",
+	case "git_show":
+		return true, formatIMGitShowResult(tr)
+	case "git_blame", "git_branch_list", "git_remote",
 		"git_stash_list", "git_stash":
 		return true, "" // hidden — secondary git tools
 	// Mode switching
 	case "switch_mode":
 		return true, "🔄 " + imLabel(toolLang(tr.Lang), "mode_switched")
-	// Multi-file operations — hidden (verbose)
-	case "multi_file_read", "multi_file_edit", "multi_file_write":
-		return true, ""
-	// Browser/notebook results — hidden (verbose)
-	case "browser", "notebook_edit":
-		return true, ""
+	// Multi-file operations
+	case "multi_file_read":
+		return true, "" // hidden — large output, not useful in IM
+	case "multi_file_edit":
+		return true, formatIMMultiEditResult(tr)
+	case "multi_file_write":
+		return true, formatIMMultiWriteResult(tr)
+	// Browser — hidden (verbose), notebook — show like edit_file
+	case "browser":
+		return true, "" // hidden — result is typically very large HTML/image
+	case "notebook_edit":
+		return true, formatIMNotebookEditResult(tr)
 	case "delegate":
 		agent := extractArgValue(tr.Args, "agent")
 		if agent == "" {
