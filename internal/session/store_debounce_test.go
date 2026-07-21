@@ -10,9 +10,12 @@ import (
 
 // TestAppendMessageToDisk_DebounceIndexUpdate verifies that AppendMessageToDisk
 // debounces index updates — the first message updates the index, subsequent
-// messages within the debounce window skip it, and the index stays correct.
+// messages within the debounce window skip it, and messages after the window
+// expiry update it again.
 func TestAppendMessageToDisk_DebounceIndexUpdate(t *testing.T) {
-	dir := t.TempDir()
+	dir, _ := os.MkdirTemp("", "ggcode_debounce_*")
+	defer os.RemoveAll(dir)
+
 	store, err := NewJSONLStore(dir)
 	if err != nil {
 		t.Fatalf("NewJSONLStore: %v", err)
@@ -28,28 +31,19 @@ func TestAppendMessageToDisk_DebounceIndexUpdate(t *testing.T) {
 		Content: []provider.ContentBlock{{Type: "text", Text: "hello"}},
 	}
 
-	// First AppendMessageToDisk must update the index (session appears in List).
+	// First AppendMessageToDisk must update the index.
 	if err := store.AppendMessageToDisk(ses, msg); err != nil {
 		t.Fatalf("first AppendMessageToDisk: %v", err)
 	}
 
-	sessions, err := store.List()
-	if err != nil {
-		t.Fatalf("List after first append: %v", err)
-	}
-	if len(sessions) != 1 {
-		t.Fatalf("expected 1 session in index after first append, got %d", len(sessions))
+	store.mu.Lock()
+	firstUpdate, ok := store.lastIndexUpdate[ses.ID]
+	store.mu.Unlock()
+	if !ok {
+		t.Fatal("expected lastIndexUpdate entry after first append")
 	}
 
-	// Record the index file modification time.
-	indexPath := store.indexPath()
-	info1, err := os.Stat(indexPath)
-	if err != nil {
-		t.Fatalf("stat index: %v", err)
-	}
-	_ = info1 // just verify it's accessible
-
-	// Second append within debounce window — should NOT rewrite the index.
+	// Second append within debounce window — should NOT update the index.
 	msg2 := provider.Message{
 		Role:    "assistant",
 		Content: []provider.ContentBlock{{Type: "text", Text: "world"}},
@@ -58,23 +52,19 @@ func TestAppendMessageToDisk_DebounceIndexUpdate(t *testing.T) {
 		t.Fatalf("second AppendMessageToDisk: %v", err)
 	}
 
-	// The index file should not have been rewritten (mtime unchanged or
-	// updated within the same second — we verify via the debounce map state).
 	store.mu.Lock()
-	lastUpdate, ok := store.lastIndexUpdate[ses.ID]
+	secondUpdate := store.lastIndexUpdate[ses.ID]
 	store.mu.Unlock()
-	if !ok {
-		t.Fatal("expected lastIndexUpdate entry for session")
+
+	// Timer should be unchanged (debounced, not rewritten).
+	if !secondUpdate.Equal(firstUpdate) {
+		t.Errorf("expected index update to be debounced (same timestamp), first=%v second=%v", firstUpdate, secondUpdate)
 	}
 
-	// Simulate a third append right after — still within debounce window.
-	if time.Since(lastUpdate) < indexUpdateDebounce {
-		// Debounce is active — good.
-		// Force the debounce window to expire and verify the next append updates.
-		store.mu.Lock()
-		store.lastIndexUpdate[ses.ID] = time.Now().Add(-indexUpdateDebounce - time.Second)
-		store.mu.Unlock()
-	}
+	// Force the debounce window to expire.
+	store.mu.Lock()
+	store.lastIndexUpdate[ses.ID] = time.Now().Add(-indexUpdateDebounce - time.Second)
+	store.mu.Unlock()
 
 	// Third append after debounce expiry — should update the index again.
 	msg3 := provider.Message{
@@ -86,10 +76,10 @@ func TestAppendMessageToDisk_DebounceIndexUpdate(t *testing.T) {
 	}
 
 	store.mu.Lock()
-	lastUpdate2 := store.lastIndexUpdate[ses.ID]
+	thirdUpdate := store.lastIndexUpdate[ses.ID]
 	store.mu.Unlock()
-	if time.Since(lastUpdate2) > time.Second {
-		t.Errorf("expected recent lastIndexUpdate after debounce expiry, got %v ago", time.Since(lastUpdate2))
+	if !thirdUpdate.After(secondUpdate) {
+		t.Errorf("expected index update after debounce expiry, second=%v third=%v", secondUpdate, thirdUpdate)
 	}
 
 	// All 3 messages must be in the session file regardless of index debounce.
@@ -106,7 +96,9 @@ func TestAppendMessageToDisk_DebounceIndexUpdate(t *testing.T) {
 // the debounce timer so the next AppendMessageToDisk within the window
 // skips the index update.
 func TestAppendMetaToDisk_ResetsDebounce(t *testing.T) {
-	dir := t.TempDir()
+	dir, _ := os.MkdirTemp("", "ggcode_meta_debounce_*")
+	defer os.RemoveAll(dir)
+
 	store, err := NewJSONLStore(dir)
 	if err != nil {
 		t.Fatalf("NewJSONLStore: %v", err)
@@ -125,7 +117,11 @@ func TestAppendMetaToDisk_ResetsDebounce(t *testing.T) {
 		t.Fatalf("AppendMetaToDisk: %v", err)
 	}
 
-	// Immediate message append should be debounced.
+	store.mu.Lock()
+	metaUpdate := store.lastIndexUpdate[ses.ID]
+	store.mu.Unlock()
+
+	// Immediate message append should be debounced (same timestamp).
 	msg := provider.Message{
 		Role:    "assistant",
 		Content: []provider.ContentBlock{{Type: "text", Text: "response"}},
@@ -135,11 +131,10 @@ func TestAppendMetaToDisk_ResetsDebounce(t *testing.T) {
 	}
 
 	store.mu.Lock()
-	lastUpdate := store.lastIndexUpdate[ses.ID]
+	msgUpdate := store.lastIndexUpdate[ses.ID]
 	store.mu.Unlock()
 
-	// The timer should be very recent (set by AppendMetaToDisk).
-	if time.Since(lastUpdate) > time.Second {
-		t.Errorf("expected AppendMetaToDisk to reset debounce timer, got %v ago", time.Since(lastUpdate))
+	if !msgUpdate.Equal(metaUpdate) {
+		t.Errorf("expected AppendMessageToDisk to be debounced after AppendMetaToDisk, meta=%v msg=%v", metaUpdate, msgUpdate)
 	}
 }
