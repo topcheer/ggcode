@@ -946,7 +946,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// goal, call an independent LLM to analyze the full conversation
 			// context and decide what the agent should do next. This replaces
 			// the old deterministic text-pattern-matching autopilot logic.
-			const maxAutopilotStrategistCalls = 10
+			//
+			// The strategist is ONLY called when the LLM stops calling tools
+			// (len(toolCalls)==0), i.e., at natural decision points. Between
+			// strategist calls there can be many tool-execution iterations
+			// (3-10 typically), so the effective work per budget unit is much
+			// higher than the raw count suggests.
+			//
+			// Budget: 30 calls per Run. With ~5 tool iterations between each
+			// strategist call, this covers ~150 tool operations — enough for
+			// medium-to-large tasks. For very large projects, the user simply
+			// sends another message ("continue") to reset the budget.
 			if a.currentMode() == permission.AutopilotMode && a.hasAutopilotGoal() && a.autopilotStrategistCount < maxAutopilotStrategistCalls {
 				a.autopilotStrategistCount++
 				debug.Log("agent", "Iteration %d: autopilot calling strategist (call #%d/%d)", i+1, a.autopilotStrategistCount, maxAutopilotStrategistCalls)
@@ -991,10 +1001,21 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					return nil
 				}
 			} else if a.currentMode() == permission.AutopilotMode && a.hasAutopilotGoal() {
-				// Strategist call budget exhausted — notify and stop.
-				onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: fmt.Sprintf("[Strategist budget exhausted (%d/%d) — autopilot stopping]", a.autopilotStrategistCount, maxAutopilotStrategistCalls)})
-				a.clearAutopilotGoal()
-				return nil
+				// Strategist call budget exhausted. Instead of stopping the run,
+				// inject a guidance message that pushes the agent to verify its
+				// work and continue any remaining tasks. This keeps autopilot
+				// running through the natural maxIter limit rather than cutting
+				// short at an arbitrary strategist count.
+				debug.Log("agent", "Iteration %d: strategist budget exhausted (%d/%d), injecting continuation guidance", i+1, a.autopilotStrategistCount, maxAutopilotStrategistCalls)
+				onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: fmt.Sprintf("[Strategist budget at limit (%d/%d) — continuing autonomously]", a.autopilotStrategistCount, maxAutopilotStrategistCalls)})
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: "Strategist guidance budget is exhausted. Review the original goal and all work done so far. If there are any remaining tasks from the plan, continue implementing them. If all planned tasks are done, verify: run build, run tests, check for TODOs or incomplete items. If everything passes, provide a final summary of what was accomplished.",
+					}},
+				})
+				continue
 			}
 
 			// Check for incomplete todos before finishing. If the agent

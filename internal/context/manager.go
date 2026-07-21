@@ -1794,27 +1794,44 @@ func summarizeMessages(ctx context.Context, prov provider.Provider, msgs []provi
 				Role: "system",
 				Content: []provider.ContentBlock{{
 					Type: "text",
-					Text: fmt.Sprintf(`You are summarizing a conversation between a user and an AI coding assistant. Produce a concise, structured summary that preserves the information most critical for continuing work.
+					Text: fmt.Sprintf(`You are summarizing a conversation between a user and an AI coding assistant (agentic coding tool). Produce a concise, structured summary that preserves the information most critical for continuing work autonomously.
 
-Your summary must be under %d tokens. Be extremely concise.
+Your summary must be under %d tokens. Be extremely concise — every token wasted on filler is a token lost to the agent's working memory.
 
-Focus on preserving:
-- Key decisions made and WHY (rationale, trade-offs considered)
-- File paths that were read, created, or modified
-- Code structure: function/class names, signatures, key variables, configuration values
-- Errors encountered and how they were resolved
-- Incomplete or pending work the assistant was about to do, including any todo/task list status
-- Active background tasks (running commands, spawned sub-agents) with their IDs — these survive compaction and can be checked via list_commands/list_agents, but their IDs and purpose must be preserved in the summary
-- User preferences or constraints mentioned
-- **User requests** — the verbatim user requests are provided at the top of the payload; preserve them near-verbatim in a "User Requests" section
+Your summary MUST use these sections (skip a section only if empty):
 
-You may omit:
-- Full source code contents (reference file paths and key changes instead)
-- Verbose command output (summarize the outcome)
-- Repeated status checks or confirmations
-- Tool call mechanics (focus on what was done, not which tool was used)
+## Task
+What the user asked for and the current goal. One sentence.
 
-Format: Use clear sections with bullet points. Be specific with names, paths, and values.`, summaryTokenLimit),
+## Done
+What has been completed and VERIFIED (tests passed, builds succeeded, code committed). Mark each item with ✅. This prevents the agent from redoing finished work.
+
+## In Progress
+What is actively being worked on. Include the specific file, function, or component. If the agent was mid-edit when compaction triggered, state exactly what change was in flight.
+
+## Next Steps
+Concrete next actions the agent should take, in priority order.
+
+## Key Files
+File paths that were read, created, or modified, with a 1-3 word note on what each contains or why it matters. Example: "internal/context/manager.go — compaction logic, summarizeMessages()". Do NOT include full file contents.
+
+## Decisions & Constraints
+Architecture decisions, trade-offs, and USER CONSTRAINTS (e.g. "don't modify tests", "use library X", "follow pattern Y"). These MUST be preserved — losing a user constraint causes wrong behavior.
+
+## Errors Resolved
+Bugs found and fixed, with root cause (1 line each). Example: "nil pointer in swarm ReplyTo — added nil check".
+
+## Background Tasks
+Active background commands or spawned sub-agents with their IDs and purpose. These survive compaction but their context must be preserved here.
+
+## User Requests
+The verbatim user requests (provided at the top of the payload) — preserve near-verbatim.
+
+Omit entirely:
+- Full source code (reference paths + key signatures only)
+- Verbose command output (state the outcome in one phrase)
+- Repeated status checks, confirmations, or idle chatter
+- Tool call mechanics (focus on what was done, not which tool)`, summaryTokenLimit),
 				}},
 			},
 			{

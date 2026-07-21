@@ -10,6 +10,10 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
+// maxAutopilotStrategistCalls is the per-Run budget for strategist LLM calls.
+// See agent.go for rationale.
+const maxAutopilotStrategistCalls = 30
+
 // strategistResult is the output from the autopilot strategist LLM call.
 type strategistResult struct {
 	Guidance string // text to inject into the main agent as a user message
@@ -44,7 +48,20 @@ Based on the conversation so far, your job is to decide what happens next:
 - If a plan exists but implementation is incomplete, direct the agent to continue with the specific next step. Reference which step number and what it entails.
 - If the agent is stuck in a loop or making no progress, suggest a different approach — try a different file, a different technique, or step back and reconsider.
 - If the agent asks for user confirmation or permission to proceed, tell it to use best judgment and continue autonomously — autopilot mode means minimal user interaction.
-- If and only if the goal is fully achieved, start your response with "GOAL_ACHIEVED" and provide a brief summary.
+
+CRITICAL — Anti-premature-convergence rules:
+Before declaring GOAL_ACHIEVED, you MUST verify ALL of the following:
+1. Every file mentioned in the plan was created/modified AND the last tool result for each was successful (not ERROR).
+2. Build/compile was run and succeeded — you saw a successful build/test tool result, not just the agent's claim.
+3. Tests were run and passed — you saw test output with PASS/OK, not just "tests should pass".
+4. No pending TODO items, no commented-out code blocks, no "will do this next" placeholders in the output.
+5. The goal's acceptance criteria are ALL met — if the goal was "add feature X with tests", both the feature AND tests must be verified.
+
+If ANY of these conditions cannot be confirmed from the conversation evidence (tool results you can see), do NOT declare GOAL_ACHIEVED. Instead, direct the agent to verify the missing item. For example: "Run the test suite to confirm all tests pass" or "Build the project and fix any compilation errors."
+
+Remember: false GOAL_ACHIEVED wastes the user's time because they must manually check and redo incomplete work. When in doubt, continue — not stop.
+
+If and only if ALL the above conditions are met, start your response with "GOAL_ACHIEVED" and provide a brief summary.
 
 Be specific and actionable. Reference concrete findings from the conversation. Do not repeat generic advice. Do not hedge — give a clear, confident direction.
 Your response will be injected directly as a user message into the agent's next turn, so write it as a direct instruction to the agent.`
@@ -58,7 +75,10 @@ Your response will be injected directly as a user message into the agent's next 
 ## Agent's Last Output
 %s
 
-What should the agent do next?`, goal, contextStr, lastAssistantText)
+## Budget
+This is strategist call %d of %d for this run. Plan your guidance accordingly — if the goal is close to completion, prioritize verification and cleanup over new exploration.
+
+What should the agent do next?`, goal, contextStr, lastAssistantText, a.autopilotStrategistCount, maxAutopilotStrategistCalls)
 
 	messages := []provider.Message{
 		{Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: systemPrompt}}},

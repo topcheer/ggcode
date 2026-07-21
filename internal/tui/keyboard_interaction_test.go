@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -1316,7 +1317,17 @@ func stripInputANSI(s string) string {
 
 func newTestSessionStore(t *testing.T) session.Store {
 	t.Helper()
-	store, err := session.NewJSONLStore(t.TempDir())
+	// Use os.MkdirTemp + manual cleanup instead of t.TempDir().
+	// The session store's List() method spawns a background maintenance
+	// goroutine (scheduleMaintenanceLocked) that may still be writing
+	// files when t.TempDir() cleanup runs, causing "directory not empty"
+	// errors on CI.
+	dir, err := os.MkdirTemp("", "ggcode_tui_test_*")
+	if err != nil {
+		t.Fatalf("mkdir temp: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	store, err := session.NewJSONLStore(dir)
 	if err != nil {
 		t.Fatalf("new session store: %v", err)
 	}
