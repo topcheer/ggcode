@@ -2113,8 +2113,45 @@ func (s *JSONLStore) backfillIDs(sessionID string, updates map[string]provider.M
 // If the first message already has a timestamp, the entire session is skipped.
 // This is called from loadSession for historical sessions created before
 // the timestamp feature was added.
+// firstMessageHasTimestamp reads the file until it finds the first "message"
+// record and returns true if it has a non-zero timestamp. This is used by
+// backfillTimestamps to skip sessions that don't need backfilling without
+// reading the entire file.
+func firstMessageHasTimestamp(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false // can't determine — let backfillTimestamps handle it
+	}
+	defer f.Close()
+
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 2*1024*1024)
+	for sc.Scan() {
+		line := sc.Text()
+		if !strings.Contains(line, `"message"`) {
+			continue
+		}
+		var rec jsonlRecord
+		if json.Unmarshal([]byte(line), &rec) != nil {
+			continue
+		}
+		if rec.Type == "message" {
+			return !rec.Timestamp.IsZero()
+		}
+	}
+	return false
+}
+
 func (s *JSONLStore) backfillTimestamps(sessionID string) {
 	path := s.sessionPath(sessionID)
+
+	// Fast path: stream-scan only until the first message record.
+	// If it already has a timestamp, the entire session is skipped without
+	// reading the rest of the file. This avoids full-file I/O + memory
+	// allocation for sessions that don't need backfilling (the common case).
+	if firstMessageHasTimestamp(path) {
+		return
+	}
 
 	f, err := os.Open(path)
 	if err != nil {
