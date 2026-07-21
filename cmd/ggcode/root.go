@@ -140,7 +140,22 @@ func NewRootCmd() *cobra.Command {
 
 			resumePicker, _ := cmd.Flags().GetBool("resume-picker")
 			if resumePicker {
-				return run(cfg, cfgFile, "picker", bypassFlag)
+				// Run picker BEFORE any heavy initialization so the user
+				// doesn't wait after selecting/cancelling.
+				sessionDir, _ := session.DefaultDir()
+				store, err := session.NewJSONLStore(sessionDir)
+				if err != nil {
+					return fmt.Errorf("creating session store for picker: %w", err)
+				}
+				selectedID, err := pickResumeSession(store, session.CurrentWorkspacePath())
+				if err != nil {
+					return err
+				}
+				if selectedID == "" {
+					// User cancelled — start fresh (no auto-load)
+					return run(cfg, cfgFile, "__new__", bypassFlag)
+				}
+				return run(cfg, cfgFile, selectedID, bypassFlag)
 			}
 			return run(cfg, cfgFile, resumeID, bypassFlag)
 		},
@@ -645,27 +660,19 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	var replPendingSessionLock *session.SessionLock
 
 	if resumeID == "picker" {
-		selectedID, err := pickResumeSession(store, session.CurrentWorkspacePath())
-		if err != nil {
-			return err
-		}
-		if selectedID != "" {
-			storeDir, _ := session.DefaultDir()
-			lock, lockErr := session.TryAcquireSessionLock(storeDir, selectedID)
-			if lockErr == nil && lock != nil && lock.Acquired() {
-				replPendingSessionLock = lock
-				resumeID = selectedID
-			} else {
-				// Race: session was locked between picker filter and now.
-				fmt.Fprintf(os.Stderr, "  Session %s is locked by another instance. Starting a new session.\n", selectedID[:8])
-			}
+		// Picker is now resolved before run() is called — this should not happen.
+		resumeID = ""
+	} else if resumeID == "__new__" {
+		// Picker cancelled — create new session, skip auto-load.
+	} else if resumeID != "" {
+		// Explicit --resume <id> or picker selection — acquire lock.
+		lock, lockErr := session.TryAcquireSessionLock(storeDir, resumeID)
+		if lockErr == nil && lock != nil && lock.Acquired() {
+			replPendingSessionLock = lock
 		} else {
-			// User cancelled the picker (Esc/Ctrl-C) — create a new session.
-			// Do NOT fall through to auto-load; the user explicitly chose not
-			// to resume anything.
-			resumeID = "__new__"
+			fmt.Fprintf(os.Stderr, "  Session %s is locked by another instance. Starting a new session.\n", resumeID[:8])
+			resumeID = ""
 		}
-		trace.Mark("pick resume session")
 	} else if resumeID == "" {
 		// Auto-load: find the most recent unlocked workspace session.
 		// Walk sessions from newest to oldest; first one we can lock wins.
@@ -899,7 +906,11 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	taskMgr := task.NewManager()
 	repl.SetTaskManager(taskMgr, registry)
 
-	cronScheduler := agentruntime.NewSessionCronScheduler(resumeID, workingDir, nil) // enqueue callback wired by SetCronScheduler
+	cronSessionID := resumeID
+	if cronSessionID == "__new__" {
+		cronSessionID = ""
+	}
+	cronScheduler := agentruntime.NewSessionCronScheduler(cronSessionID, workingDir, nil) // enqueue callback wired by SetCronScheduler
 	repl.SetCronScheduler(cronScheduler, registry)
 	repl.SetPlanModeTools(registry)
 	repl.SetSendMessageTool(subMgr, registry)
@@ -1128,15 +1139,21 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		repl.SetWorkingDir(workingDir)
 		webuiSrv.SetStatusFn(repl.RuntimeStatus)
 		// Write port file for external process discovery
+		actualSessionID := resumeID
+		if actualSessionID == "__new__" || actualSessionID == "" {
+			// Session hasn't been created yet — REPL will create it.
+			// Use empty string; runfile.Write handles it.
+			actualSessionID = ""
+		}
 		runfile.Write(runfile.PortFile{
 			Addr:      actualAddr,
 			Token:     webuiSrv.Token(),
 			PID:       os.Getpid(),
-			SessionID: resumeID,
+			SessionID: actualSessionID,
 			Workspace: workingDir,
 			Mode:      cfg.DefaultMode,
 		})
-		defer runfile.Remove(resumeID)
+		defer runfile.Remove(actualSessionID)
 		// Ensure cleanup on syscall.Exec restart (defers don't fire on exec)
 		repl.SetPreExecCleanup(func() { runfile.Remove(resumeID) })
 	}
