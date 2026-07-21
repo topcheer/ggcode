@@ -233,6 +233,12 @@ func summarizeToolUse(toolName string, input json.RawMessage) string {
 // summarizeToolResult produces a truncated summary of a tool result for the
 // strategist context. It includes enough of the output to evidence success or
 // failure without consuming excessive tokens.
+//
+// For command/shell tools, the result is split: first 300 chars (command echo,
+// initial output) + last 700 chars (test results, PASS/FAIL, error summary).
+// This is critical because build/test output puts the success/failure verdict
+// at the END — a head-only truncation would hide the exact evidence the
+// strategist's anti-premature-convergence gate needs.
 func summarizeToolResult(toolName, output string, isError bool) string {
 	if output == "" {
 		return ""
@@ -241,10 +247,23 @@ func summarizeToolResult(toolName, output string, isError bool) string {
 	if isError {
 		tag = "ERROR"
 	}
-	// Keep first 500 chars of output — enough to see test results, error
-	// messages, file content headers, etc.
-	maxOut := 500
 	runes := []rune(output)
+
+	// Command tools need head+tail to capture test verdicts at the end.
+	if toolName == "run_command" || toolName == "bash" || toolName == "start_command" || toolName == "powershell" {
+		const headLen = 300
+		const tailLen = 700
+		if len(runes) <= headLen+tailLen {
+			return fmt.Sprintf("[Tool Result %s: %s]", tag, string(runes))
+		}
+		head := string(runes[:headLen])
+		tail := string(runes[len(runes)-tailLen:])
+		return fmt.Sprintf("[Tool Result %s: %s\n...[%d chars omitted]...\n%s]", tag, head, len(runes)-headLen-tailLen, tail)
+	}
+
+	// Other tools: head-only truncation at 500 chars (file content headers,
+	// search match previews, etc. — the relevant info is at the top).
+	const maxOut = 500
 	if len(runes) > maxOut {
 		return fmt.Sprintf("[Tool Result %s: %s...]", tag, string(runes[:maxOut]))
 	}
