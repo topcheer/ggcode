@@ -661,7 +661,9 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 			}
 		} else {
 			// User cancelled the picker (Esc/Ctrl-C) — create a new session.
-			resumeID = ""
+			// Do NOT fall through to auto-load; the user explicitly chose not
+			// to resume anything.
+			resumeID = "__new__"
 		}
 		trace.Mark("pick resume session")
 	} else if resumeID == "" {
@@ -1140,7 +1142,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	}
 	trace.Mark("start webui")
 
-	if resumeID != "" {
+	if resumeID != "" && resumeID != "__new__" {
 		repl.SetResumeID(resumeID)
 	}
 	if replPendingSessionLock != nil {

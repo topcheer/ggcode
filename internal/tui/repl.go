@@ -1035,13 +1035,14 @@ func (r *REPL) Run() error {
 	}
 	// Initialize session
 	if r.store != nil {
-		if r.resumeID != "" {
+		if r.resumeID != "" && r.resumeID != "__new__" {
 			// Explicit --resume <id>
 			r.loadSession(r.resumeID)
 			traceMark("load session")
 		} else {
 			// Auto-load: try to resume the most recent workspace session.
-			if r.tryAutoLoadSession() {
+			// Skip auto-load when resumeID is "__new__" (picker cancelled).
+			if r.resumeID != "__new__" && r.tryAutoLoadSession() {
 				traceMark("auto-load session")
 			} else {
 				r.createSession()
