@@ -168,7 +168,19 @@ type JSONLStore struct {
 	indexDirty         bool // set when updateIndex fails; triggers a later reconciliation pass
 	maintenanceRunning bool
 	lastMaintenance    time.Time
+	// lastIndexUpdate tracks per-session index flush times for debouncing.
+	// updateIndex does a full read + JSON parse + JSON marshal + fsync of the
+	// entire index file. Without debouncing, every AppendMessageToDisk call
+	// (one per message = 10-20 per agent iteration) triggers an fsync, adding
+	// 10-200ms of blocked I/O per iteration. With debouncing, the index is
+	// updated at most once per 5 seconds per session during active messaging.
+	lastIndexUpdate map[string]time.Time
 }
+
+// indexUpdateDebounce is the minimum interval between index updates triggered
+// by AppendMessageToDisk for the same session. Other callers (AppendMetaToDisk,
+// AppendCheckpointToDisk, AppendMessagesBatchToDisk) always update the index.
+const indexUpdateDebounce = 5 * time.Second
 
 const sessionMaintenanceInterval = 30 * time.Second
 
@@ -1368,6 +1380,18 @@ func (s *JSONLStore) AppendMessageToDisk(ses *Session, msg provider.Message) err
 		return err
 	}
 
+	// Debounce index updates: only rewrite the index at most once per
+	// indexUpdateDebounce per session. The index is a display cache — it's
+	// also updated by AppendMetaToDisk (model changes, session switches),
+	// AppendCheckpointToDisk (compaction), and AppendMessagesBatchToDisk
+	// (session save). Those callers bypass the debounce.
+	if s.lastIndexUpdate == nil {
+		s.lastIndexUpdate = make(map[string]time.Time)
+	}
+	if last, ok := s.lastIndexUpdate[ses.ID]; ok && time.Since(last) < indexUpdateDebounce {
+		return nil
+	}
+	s.lastIndexUpdate[ses.ID] = time.Now()
 	return s.updateIndex(ses)
 }
 
@@ -1393,6 +1417,12 @@ func (s *JSONLStore) AppendMessagesBatchToDisk(ses *Session, msgs []provider.Mes
 		return err
 	}
 
+	// Batch appends always update the index (they're infrequent — session
+	// save, restore — and the caller expects the index to be current).
+	if s.lastIndexUpdate == nil {
+		s.lastIndexUpdate = make(map[string]time.Time)
+	}
+	s.lastIndexUpdate[ses.ID] = time.Now()
 	return s.updateIndex(ses)
 }
 
@@ -1418,6 +1448,11 @@ func (s *JSONLStore) AppendMetaToDisk(ses *Session) error {
 	if !ses.HasUserInteraction() {
 		return nil
 	}
+	// Meta writes always update the index — reset the debounce timer.
+	if s.lastIndexUpdate == nil {
+		s.lastIndexUpdate = make(map[string]time.Time)
+	}
+	s.lastIndexUpdate[ses.ID] = time.Now()
 	path := s.sessionPath(ses.ID)
 	rec := jsonlRecord{
 		Type:                 "meta",
@@ -1866,6 +1901,11 @@ func (s *JSONLStore) AppendCheckpointToDisk(ses *Session, summaryMsgID, lastMsgI
 		return fmt.Errorf("encoding checkpoint: %w", err)
 	}
 
+	// Checkpoints always update the index — reset the debounce timer.
+	if s.lastIndexUpdate == nil {
+		s.lastIndexUpdate = make(map[string]time.Time)
+	}
+	s.lastIndexUpdate[ses.ID] = time.Now()
 	return s.updateIndex(ses)
 }
 
