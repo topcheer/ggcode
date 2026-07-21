@@ -1647,18 +1647,19 @@ func newSessionMessageID() string {
 // need IDs. This keeps migration fast even for very large session files.
 //
 // Must be called while holding the store mutex (same as loadSession).
-// hasNewFormatCheckpoint reads the tail of the JSONL file and returns true
-// if the last checkpoint record uses the new format (checkpoint_summary_msg_id).
-// This avoids a full-file scan in migrateMessageIDs for sessions that have
-// already been migrated. For sessions with no checkpoint at all, the full
-// scan in migrateMessageIDs will correctly return 0 anyway (no migration
-// needed).
+// hasNewFormatCheckpoint streams through the JSONL file and returns true as
+// soon as it finds any checkpoint record with checkpoint_summary_msg_id.
+// Since migration is a one-time operation (once migrated, all subsequent
+// checkpoints use the new format), finding one new-format checkpoint proves
+// no migration is needed.
 //
-// The tail read covers the last 128KB of the file — enough for the final
-// checkpoint record plus any post-checkpoint messages, usage, and metric
-// records that follow it. Checkpoint records are written after compaction
-// and are followed by at most a few hundred messages before the session
-// is loaded again.
+// Unlike the full migrateMessageIDs scan, this function:
+//   - Does NOT load all lines into memory (uses bufio.Scanner)
+//   - Only JSON-parses lines containing "checkpoint" (fast string filter)
+//   - Returns immediately on first match (early exit)
+//
+// For a 50MB session with a checkpoint in the first 10MB, this exits after
+// reading ~10MB instead of 50MB, and does ~5 JSON parses instead of ~10,000.
 func hasNewFormatCheckpoint(path string) bool {
 	f, err := os.Open(path)
 	if err != nil {
@@ -1666,37 +1667,13 @@ func hasNewFormatCheckpoint(path string) bool {
 	}
 	defer f.Close()
 
-	const tailSize = 128 * 1024
-	fi, err := f.Stat()
-	if err != nil {
-		return false
-	}
-
-	// For small files, the full migrateMessageIDs scan is cheap (<1ms).
-	// Only use the tail optimization for files larger than 256KB.
-	if fi.Size() <= 256*1024 {
-		return false
-	}
-
-	offset := fi.Size() - tailSize
-	if offset < 0 {
-		offset = 0
-	}
-	_, err = f.Seek(offset, 0)
-	if err != nil {
-		return false
-	}
-
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 2*1024*1024)
-	lastCpIsNewFormat := false
-
 	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" {
-			continue
-		}
-		// Quick filter: only parse lines containing "checkpoint"
+		line := sc.Text()
+		// Fast filter: skip lines that can't be checkpoint records.
+		// Most lines are messages/usage/metrics — this avoids JSON parse
+		// for >99% of lines.
 		if !strings.Contains(line, `"checkpoint"`) {
 			continue
 		}
@@ -1704,11 +1681,11 @@ func hasNewFormatCheckpoint(path string) bool {
 		if json.Unmarshal([]byte(line), &rec) != nil {
 			continue
 		}
-		if rec.Type == "checkpoint" {
-			lastCpIsNewFormat = rec.CheckpointSummaryMsgID != ""
+		if rec.Type == "checkpoint" && rec.CheckpointSummaryMsgID != "" {
+			return true // Found new-format checkpoint — no migration needed
 		}
 	}
-	return lastCpIsNewFormat
+	return false // No new-format checkpoint found
 }
 
 func (s *JSONLStore) migrateMessageIDs(id string) (int, error) {
