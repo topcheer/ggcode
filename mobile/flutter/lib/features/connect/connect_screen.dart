@@ -178,7 +178,7 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
       body: _buildGradientBackground(
         child: SafeArea(
           child: showProgress
-              ? _buildConnectingView(connState)
+              ? _buildConnectingView(connState, errorMsg)
               : SingleChildScrollView(
                   padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 0),
                   child: Column(
@@ -720,7 +720,7 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
   // Connecting View (immersive)
   // ═══════════════════════════════════════════════════════
 
-  Widget _buildConnectingView(TunnelConnectionState connState) {
+  Widget _buildConnectingView(TunnelConnectionState connState, String? errorMsg) {
     return Center(
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 40),
@@ -813,6 +813,19 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
               ),
               textAlign: TextAlign.center,
             ),
+            // Error message (e.g., relay restart countdown)
+            if (errorMsg != null && errorMsg.isNotEmpty) ...[
+              SizedBox(height: 12),
+              Text(
+                errorMsg,
+                style: TextStyle(
+                  color: Colors.orange,
+                  fontSize: 13,
+                  height: 1.3,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ],
           ],
         ),
       ),
