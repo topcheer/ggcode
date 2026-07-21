@@ -72,6 +72,20 @@ func (a *Agent) maybeInjectDynamicSystemPrompt() {
 		return
 	}
 
+	// Build the full prompt text to check if it changed since last injection.
+	// This avoids redundant countTokens + UpdateFirstSystemMessage calls on
+	// every agent iteration when the prompt content is identical.
+	var fullText string
+	if len(dynamicParts) == 0 {
+		fullText = base
+	} else {
+		fullText = base + "\n\n" + strings.Join(dynamicParts, "\n\n")
+	}
+	if fullText == a.lastInjectedSystemPrompt {
+		return
+	}
+	a.lastInjectedSystemPrompt = fullText
+
 	cm, ok := a.contextManager.(*context.Manager)
 	if !ok {
 		return

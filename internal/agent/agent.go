@@ -83,6 +83,7 @@ type Agent struct {
 	postEditVerify             postEditVerifyState  // tracks source-code edits to inject periodic verification hints
 	systemPromptInjector       func() string        // returns extra system prompt text to inject (e.g. lanchat peer warnings)
 	baseSystemPrompt           string               // the fully built static system prompt; used as reset base for dynamic injection
+	lastInjectedSystemPrompt   string               // cache of last injected prompt to skip redundant updates
 	onVerifyProgress           func(text string)    // called during async verification (status updates)
 	onVerifyResult             func(VerifyResult)   // called when async verification completes
 	mu                         sync.RWMutex
@@ -444,6 +445,7 @@ func (a *Agent) UpdateSystemPrompt(text string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.baseSystemPrompt = text
+	a.lastInjectedSystemPrompt = "" // force re-injection on next iteration
 	cm, ok := a.contextManager.(*ctxpkg.Manager)
 	if !ok {
 		return
