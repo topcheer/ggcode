@@ -344,6 +344,7 @@ func (m *Model) handleTunnelStartMsg(msg tunnelStartMsg) (tea.Model, tea.Cmd) {
 	}
 	m.tunnelStarting = false
 	if msg.err != nil {
+		debug.Log("tunnel", "tunnel start failed (gen=%d): %v", msg.generation, msg.err)
 		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Tunnel failed: %v", msg.err))
 		m.chatListScrollToBottom()
 		return m, nil
