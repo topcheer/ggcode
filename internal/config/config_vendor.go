@@ -121,9 +121,9 @@ func (c *Config) ResolveEndpointSelection(vendor, endpoint, model string) (*Reso
 	}
 	return &ResolvedEndpoint{
 		VendorID:        vendor,
-		VendorName:      util.FirstNonEmpty(vc.DisplayName, vendor),
+		VendorName:      localizedVendorDisplay(vendor, util.FirstNonEmpty(vc.DisplayName, vendor), c.Language),
 		EndpointID:      endpoint,
-		EndpointName:    util.FirstNonEmpty(ep.DisplayName, endpoint),
+		EndpointName:    localizedEndpointDisplay(vendor, endpoint, util.FirstNonEmpty(ep.DisplayName, endpoint), c.Language),
 		Protocol:        ep.Protocol,
 		AuthType:        authType,
 		BaseURL:         baseURL,
@@ -150,10 +150,10 @@ func (c *Config) ResolveDisplayName(vendor, endpoint string) (vendorDisplay, end
 	}
 	if vc, ok := c.Vendors[vendor]; ok {
 		if vc.DisplayName != "" {
-			vendorDisplay = vc.DisplayName
+			vendorDisplay = localizedVendorDisplay(vendor, vc.DisplayName, c.Language)
 		}
 		if ep, ok := vc.Endpoints[endpoint]; ok && ep.DisplayName != "" {
-			endpointDisplay = ep.DisplayName
+			endpointDisplay = localizedEndpointDisplay(vendor, endpoint, ep.DisplayName, c.Language)
 		}
 	}
 	return
