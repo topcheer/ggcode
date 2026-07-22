@@ -20,7 +20,47 @@ func TestDetectShellUsesShOnUnixLikePlatforms(t *testing.T) {
 	}
 }
 
-func TestDetectShellPrefersGitBashOnWindows(t *testing.T) {
+func TestDetectShellPrefersPowerShellOnWindows(t *testing.T) {
+	// PowerShell should be the first choice on Windows.
+	spec, err := detectShell("windows", func(name string) (string, error) {
+		switch name {
+		case "powershell.exe":
+			return `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`, nil
+		default:
+			return "", fmt.Errorf("missing %s", name)
+		}
+	}, failingStat, func(string) string { return "" })
+	if err != nil {
+		t.Fatalf("detectShell() error = %v", err)
+	}
+	if spec.Name != "powershell" {
+		t.Fatalf("expected powershell as primary, got %q", spec.Name)
+	}
+	if len(spec.Args) == 0 || spec.Args[len(spec.Args)-1] != "-Command" {
+		t.Fatalf("expected PowerShell -Command args, got %v", spec.Args)
+	}
+}
+
+func TestDetectShellPrefersPwshOverPowerShell(t *testing.T) {
+	// pwsh (PowerShell Core) should be preferred over powershell.exe.
+	spec, err := detectShell("windows", func(name string) (string, error) {
+		switch name {
+		case "pwsh.exe", "powershell.exe":
+			return fmt.Sprintf(`C:\%s`, name), nil
+		default:
+			return "", fmt.Errorf("missing %s", name)
+		}
+	}, failingStat, func(string) string { return "" })
+	if err != nil {
+		t.Fatalf("detectShell() error = %v", err)
+	}
+	if spec.Path != `C:\pwsh.exe` {
+		t.Fatalf("expected pwsh.exe first, got %q", spec.Path)
+	}
+}
+
+func TestDetectShellFallsBackToGitBashOnWindows(t *testing.T) {
+	// When no PowerShell is available, fall back to Git Bash.
 	root := t.TempDir()
 	bashPath := filepath.Join(root, "Git", "bin", "bash.exe")
 	if err := os.MkdirAll(filepath.Dir(bashPath), 0o755); err != nil {
@@ -40,30 +80,10 @@ func TestDetectShellPrefersGitBashOnWindows(t *testing.T) {
 		t.Fatalf("detectShell() error = %v", err)
 	}
 	if spec.Path != bashPath {
-		t.Fatalf("expected Git Bash path %q, got %q", bashPath, spec.Path)
+		t.Fatalf("expected Git Bash fallback path %q, got %q", bashPath, spec.Path)
 	}
 	if len(spec.Args) != 1 || spec.Args[0] != "-c" {
 		t.Fatalf("expected bash -c, got %v", spec.Args)
-	}
-}
-
-func TestDetectShellFallsBackToPowerShellOnWindows(t *testing.T) {
-	spec, err := detectShell("windows", func(name string) (string, error) {
-		switch name {
-		case "pwsh.exe":
-			return `C:\Program Files\PowerShell\7\pwsh.exe`, nil
-		default:
-			return "", fmt.Errorf("missing %s", name)
-		}
-	}, failingStat, func(string) string { return "" })
-	if err != nil {
-		t.Fatalf("detectShell() error = %v", err)
-	}
-	if spec.Name != "powershell" {
-		t.Fatalf("expected powershell fallback, got %q", spec.Name)
-	}
-	if len(spec.Args) == 0 || spec.Args[len(spec.Args)-1] != "-Command" {
-		t.Fatalf("expected PowerShell -Command args, got %v", spec.Args)
 	}
 }
 

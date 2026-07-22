@@ -58,10 +58,21 @@ func detectShell(goos string, lookPath lookPathFunc, stat statFunc, getenv geten
 		return ShellSpec{Path: "sh", Args: []string{"-c"}, Name: "sh"}, nil
 	}
 
+	// PowerShell is the primary shell on Windows. Prefer pwsh (PowerShell
+	// Core / cross-platform) over powershell.exe (Windows PowerShell).
+	for _, name := range []string{"pwsh.exe", "pwsh", "powershell.exe", "powershell"} {
+		if path, err := lookPath(name); err == nil {
+			return ShellSpec{
+				Path: path,
+				Args: []string{"-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command"},
+				Name: "powershell",
+			}, nil
+		}
+	}
+
+	// Fall back to Git Bash if PowerShell is not available.
 	for _, candidate := range windowsGitBashCandidates(getenv) {
 		if _, err := stat(candidate); err == nil {
-			// Use -c (not -lc) to avoid slow login shell initialization
-			// (.bash_profile loads nvm/conda/etc., adding 200-2000ms per call)
 			return ShellSpec{Path: candidate, Args: []string{"-c"}, Name: "git-bash"}, nil
 		}
 	}
@@ -72,27 +83,7 @@ func detectShell(goos string, lookPath lookPathFunc, stat statFunc, getenv geten
 		}
 	}
 
-	for _, name := range []string{"pwsh.exe", "pwsh"} {
-		if path, err := lookPath(name); err == nil {
-			return ShellSpec{
-				Path: path,
-				Args: []string{"-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command"},
-				Name: "powershell",
-			}, nil
-		}
-	}
-
-	for _, name := range []string{"powershell.exe", "powershell"} {
-		if path, err := lookPath(name); err == nil {
-			return ShellSpec{
-				Path: path,
-				Args: []string{"-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command"},
-				Name: "powershell",
-			}, nil
-		}
-	}
-
-	return ShellSpec{}, fmt.Errorf("no supported shell found on Windows (expected Git Bash or PowerShell)")
+	return ShellSpec{}, fmt.Errorf("no supported shell found on Windows (expected PowerShell or Git Bash)")
 }
 
 func windowsGitBashCandidates(getenv getenvFunc) []string {

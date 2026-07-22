@@ -28,10 +28,10 @@ func getShellInfo() string {
 		return ""
 	}
 	switch spec.Name {
+	case "powershell":
+		return "PowerShell (use PowerShell syntax: $env:VAR, Get-ChildItem, etc.)"
 	case "git-bash":
 		return "bash (Git Bash)"
-	case "powershell":
-		return "PowerShell"
 	case "sh":
 		if runtime.GOOS == "linux" {
 			return "bash/sh"
