@@ -216,8 +216,12 @@ func isQuotaExhaustedError(err error) bool {
 		strings.Contains(lower, "余额不足") ||
 		strings.Contains(lower, "欠费") ||
 		strings.Contains(lower, "quota exceeded") ||
+		strings.Contains(lower, "quotaexceeded") ||
 		strings.Contains(lower, "exceeded your current quota") ||
 		strings.Contains(lower, "额度已用完") ||
+		strings.Contains(lower, "额度耗尽") ||
+		strings.Contains(lower, "配额超限") ||
+		strings.Contains(lower, "配额耗尽") ||
 		strings.Contains(lower, "allocated quota") ||
 		strings.Contains(lower, "公平使用") ||
 		strings.Contains(lower, "fair usage") ||

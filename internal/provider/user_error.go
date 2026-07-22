@@ -90,8 +90,12 @@ func UserFacingErrorLang(err error, lang string) string {
 			strings.Contains(l429, "余额不足") ||
 			strings.Contains(l429, "欠费") ||
 			strings.Contains(l429, "quota exceeded") ||
+			strings.Contains(l429, "quotaexceeded") ||
 			strings.Contains(l429, "exceeded your current quota") ||
 			strings.Contains(l429, "额度已用完") ||
+			strings.Contains(l429, "额度耗尽") ||
+			strings.Contains(l429, "配额超限") ||
+			strings.Contains(l429, "配额耗尽") ||
 			strings.Contains(l429, "allocated quota") ||
 			strings.Contains(l429, "公平使用") ||
 			strings.Contains(l429, "fair usage") {
@@ -218,11 +222,13 @@ func UserFacingErrorLang(err error, lang string) string {
 
 	// ---- Quota / billing exhausted (string-based, for when error chain was destroyed) ----
 	// Covers Kimi (access_terminated), ZAI/GLM (coding plan 1308-1321),
-	// OpenAI (quota), and generic patterns.
+	// Aliyun (allocated quota), Volcengine Ark (QuotaExceeded),
+	// MiniMax (usage limit), Xiaomi MiMo (额度耗尽), OpenAI (quota).
 	if strings.Contains(lower, "access_terminated") ||
 		strings.Contains(lower, "usage limit") ||
 		strings.Contains(lower, "billing cycle") ||
-		strings.Contains(lower, "quota exhausted") ||
+		strings.Contains(lower, "quota exceeded") ||
+		strings.Contains(lower, "quotaexceeded") ||
 		strings.Contains(lower, "使用上限") ||
 		strings.Contains(lower, "套餐已到期") ||
 		strings.Contains(lower, "package has expired") ||
@@ -230,6 +236,9 @@ func UserFacingErrorLang(err error, lang string) string {
 		strings.Contains(lower, "余额不足") ||
 		strings.Contains(lower, "欠费") ||
 		strings.Contains(lower, "额度已用完") ||
+		strings.Contains(lower, "额度耗尽") ||
+		strings.Contains(lower, "配额超限") ||
+		strings.Contains(lower, "配额耗尽") ||
 		strings.Contains(lower, "allocated quota") ||
 		strings.Contains(lower, "公平使用") ||
 		strings.Contains(lower, "fair usage") ||
