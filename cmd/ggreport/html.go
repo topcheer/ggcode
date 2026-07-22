@@ -112,6 +112,7 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; }
   <div class="tab" data-tab="sessions">Sessions</div>
   <div class="tab" data-tab="detail">Session Detail</div>
   <div class="tab" data-tab="performance">Performance</div>
+  <div class="tab" data-tab="dailyDetails" style="display:none">Daily Details</div>
 </div>
 
 <div class="content">
@@ -208,6 +209,26 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; }
   </div>
 </div>
 
+<!-- DAILY DETAILS -->
+<div class="tab-panel" id="tab-dailyDetails">
+  <div class="detail-header">
+    <button class="back-btn" id="dailyBack">\u2190 Back</button>
+    <div>
+      <div class="detail-title" id="dailyTitle"></div>
+      <div class="detail-info" id="dailyInfo"></div>
+    </div>
+  </div>
+  <div class="cards" id="dailyDetailCards"></div>
+  <div class="chart-box">
+    <h3>Token Usage by Model</h3>
+    <div class="chart-container"><canvas id="dailyModelChart"></canvas></div>
+  </div>
+  <div class="chart-box">
+    <h3>TTFT & Duration by Model</h3>
+    <div class="chart-container"><canvas id="dailyTtftChart"></canvas></div>
+  </div>
+</div>
+
 </div><!-- /content -->
 
 <script>` + chartJS + `</script>
@@ -285,7 +306,7 @@ window.__DATA__ = ` + jsonData + `;
   Chart.defaults.color = '#8b949e';
   Chart.defaults.borderColor = '#30363d';
   const dailyData = D.dailyTokens;
-  new Chart(document.getElementById('dailyChart'), {
+  const dailyChartInstance = new Chart(document.getElementById('dailyChart'), {
     type: 'bar',
     data: {
       labels: dailyData.map(d => d.date),
@@ -297,6 +318,13 @@ window.__DATA__ = ` + jsonData + `;
     },
     options: {
       responsive: true, maintainAspectRatio: false,
+      onClick: (e, elements) => {
+        if (elements.length > 0) {
+          const idx = elements[0].index;
+          showDailyDetails(dailyData[idx].date);
+        }
+      },
+      onHover: (e, elements) => { e.native.target.style.cursor = elements.length > 0 ? 'pointer' : 'default'; },
       scales: {
         x: { grid: { display: false } },
         yLeft: { position: 'left', ticks: { callback: fmt }, title: { display: true, text: 'Input / Cache', color: '#8b949e' } },
@@ -615,8 +643,9 @@ window.__DATA__ = ` + jsonData + `;
 
     // Tool list (static — not affected by range slider)
     const toolEl = document.getElementById('detailToolList');
-    const maxCalls = Math.max(...s.tools.map(t=>t.calls), 1);
-    toolEl.innerHTML = s.tools.slice().sort((a,b)=>b.calls-a.calls).map(t => {
+    const tools = s.tools || [];
+    const maxCalls = Math.max(...tools.map(t=>t.calls), 1);
+    toolEl.innerHTML = tools.slice().sort((a,b)=>b.calls-a.calls).map(t => {
       const pct = (t.calls/maxCalls*100).toFixed(0);
       const failRate = t.calls>0 ? (t.failures/t.calls*100).toFixed(0) : 0;
       const failColor = failRate > 0 ? 'var(--red)' : 'var(--text-dim)';
@@ -703,6 +732,7 @@ window.__DATA__ = ` + jsonData + `;
   // Slowest tools — aggregate from all session tool data
   const slowTools = [];
   D.sessions.forEach(s => {
+    if (!s.tools) return;
     s.tools.forEach(t => {
       if (t.avgMs > 0) slowTools.push({ name: t.name, avgMs: t.avgMs, calls: t.calls, session: s.title || s.id.slice(0,8) });
     });
@@ -715,6 +745,95 @@ window.__DATA__ = ` + jsonData + `;
       '<span class="tool-stat">'+fmtMs(t.avgMs)+'</span>' +
       '<span class="tool-stat muted">'+t.calls+'x</span></div>'
     ).join('') || '<div class="muted">No data</div>';
+
+  // === Daily Details ===
+  let dailyModelChart = null, dailyTtftChartC = null;
+  document.getElementById('dailyBack').addEventListener('click', () => switchTab('overview'));
+
+  function showDailyDetails(dateStr) {
+    // Gather all turns across all sessions that fall on this date
+    const dayTurns = [];
+    D.sessions.forEach(s => {
+      s.turns.forEach(t => {
+        if (t.day === dateStr) dayTurns.push(t);
+      });
+    });
+
+    switchTab('dailyDetails');
+    document.getElementById('dailyTitle').textContent = dateStr;
+    document.getElementById('dailyInfo').textContent = dayTurns.length + ' LLM calls across all sessions';
+
+    // Aggregate by model
+    const byModel = {};
+    dayTurns.forEach(t => {
+      const m = t.model || '(unknown)';
+      if (!byModel[m]) byModel[m] = { model: m, input: 0, output: 0, cache: 0, calls: 0, ttfts: [], durs: [] };
+      byModel[m].input += t.input;
+      byModel[m].output += t.output;
+      byModel[m].cache += t.cache;
+      byModel[m].calls++;
+      if (t.ttftMs > 0) byModel[m].ttfts.push(t.ttftMs);
+      if (t.durMs > 0) byModel[m].durs.push(t.durMs);
+    });
+    const models = Object.values(byModel).sort((a,b) => (b.input+b.output) - (a.input+a.output));
+
+    // Summary cards
+    const sumIn = models.reduce((a,m)=>a+m.input, 0);
+    const sumOut = models.reduce((a,m)=>a+m.output, 0);
+    const sumCache = models.reduce((a,m)=>a+m.cache, 0);
+    document.getElementById('dailyDetailCards').innerHTML =
+      card('Models', models.length) +
+      card('LLM Calls', dayTurns.length) +
+      card('Input', fmt(sumIn), 'tokens') +
+      card('Output', fmt(sumOut), 'tokens') +
+      card('Cache', fmt(sumCache), 'tokens') +
+      card('Avg TTFT', models.length ? fmtMs(Math.round(models.reduce((a,m)=>a + (m.ttfts.length? m.ttfts.reduce((x,y)=>x+y,0)/m.ttfts.length : 0), 0))) : '-', '');
+
+    // Token Usage by Model — grouped bars with dual Y axis
+    if (dailyModelChart) dailyModelChart.destroy();
+    const modelColors = ['#58a6ff','#3fb950','#d29922','#bc8cff','#39c5cf','#f778ba','#79c0ff','#7ee787','#ffa657','#ff7b72'];
+    dailyModelChart = new Chart(document.getElementById('dailyModelChart'), {
+      type: 'bar',
+      data: {
+        labels: models.map(m => m.model),
+        datasets: [
+          { label: 'Input', data: models.map(m=>m.input), backgroundColor: 'rgba(88,166,255,0.7)', yAxisID: 'yLeft' },
+          { label: 'Cache', data: models.map(m=>m.cache), backgroundColor: 'rgba(188,140,255,0.5)', yAxisID: 'yLeft' },
+          { label: 'Output', data: models.map(m=>m.output), backgroundColor: 'rgba(63,185,80,0.7)', yAxisID: 'yRight' },
+        ]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        scales: {
+          x: { grid: { display: false } },
+          yLeft: { position: 'left', ticks: { callback: fmt }, title: { display: true, text: 'Input / Cache', color: '#8b949e' } },
+          yRight: { position: 'right', ticks: { callback: fmt }, title: { display: true, text: 'Output', color: '#8b949e' }, grid: { drawOnChartArea: false } },
+        },
+        plugins: { legend: { position: 'top' }, tooltip: { callbacks: { label: ctx => ctx.dataset.label + ': ' + fmt(ctx.parsed.y) } } }
+      }
+    });
+
+    // TTFT & Duration by model — grouped bar (two metrics)
+    if (dailyTtftChartC) dailyTtftChartC.destroy();
+    const ttftAvg = models.map(m => m.ttfts.length ? Math.round(m.ttfts.reduce((a,b)=>a+b,0)/m.ttfts.length) : 0);
+    const durAvg = models.map(m => m.durs.length ? Math.round(m.durs.reduce((a,b)=>a+b,0)/m.durs.length) : 0);
+    dailyTtftChartC = new Chart(document.getElementById('dailyTtftChart'), {
+      type: 'bar',
+      data: {
+        labels: models.map(m => m.model),
+        datasets: [
+          { label: 'Avg TTFT (ms)', data: ttftAvg, backgroundColor: 'rgba(88,166,255,0.7)' },
+          { label: 'Avg Duration (ms)', data: durAvg, backgroundColor: 'rgba(63,185,80,0.7)' },
+        ]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        scales: { x: { grid: { display: false } }, y: { ticks: { callback: fmtMs } } },
+        plugins: { legend: { position: 'top' }, tooltip: { callbacks: { label: ctx => ctx.dataset.label + ': ' + fmtMs(ctx.parsed.y) } } }
+      }
+    });
+  }
+  window.showDailyDetails = showDailyDetails;
 
 })();
 </script>
