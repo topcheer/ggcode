@@ -388,16 +388,37 @@ func (m *Model) renderProviderPanel() string {
 		footerHeight = 12 // give wizard enough room without info lines
 	}
 
+	// Vendor list: resolve IDs to display names for built-in vendors
+	vendorDisplayNames := make([]string, len(panel.vendorIDs))
+	for i, id := range panel.vendorIDs {
+		if m.config != nil {
+			vd, _ := m.config.ResolveDisplayName(id, "")
+			vendorDisplayNames[i] = vd
+		} else {
+			vendorDisplayNames[i] = id
+		}
+	}
 	leftColumn := renderProviderPanelSection(
 		m.t("panel.provider.vendors"),
-		renderProviderListWindow(m.renderProviderList, panel.vendorIDs, panel.vendorIndex, panel.focus == providerPanelFocusVendor, providerPanelVendorBodyRows(len(panel.vendorIDs))),
+		renderProviderListWindow(m.renderProviderList, vendorDisplayNames, panel.vendorIndex, panel.focus == providerPanelFocusVendor, providerPanelVendorBodyRows(len(vendorDisplayNames))),
 		leftWidth,
 		vendorHeight,
 	)
 
+	// Endpoint list: resolve IDs to display names for built-in endpoints
+	vendorID := panel.selectedVendor()
+	endpointDisplayNames := make([]string, len(panel.endpointIDs))
+	for i, id := range panel.endpointIDs {
+		if m.config != nil {
+			_, ed := m.config.ResolveDisplayName(vendorID, id)
+			endpointDisplayNames[i] = ed
+		} else {
+			endpointDisplayNames[i] = id
+		}
+	}
 	rightTop := renderProviderPanelSection(
 		m.t("panel.provider.endpoints"),
-		renderProviderListWindow(m.renderProviderList, panel.endpointIDs, panel.endpointIndex, panel.focus == providerPanelFocusEndpoint, providerPanelEndpointBodyRows(len(panel.endpointIDs))),
+		renderProviderListWindow(m.renderProviderList, endpointDisplayNames, panel.endpointIndex, panel.focus == providerPanelFocusEndpoint, providerPanelEndpointBodyRows(len(endpointDisplayNames))),
 		rightWidth,
 		endpointHeight,
 	)
@@ -604,25 +625,9 @@ func (m *Model) renderProviderList(items []string, selected int, focused bool) s
 	if len(items) == 0 {
 		return "  " + m.t("panel.model_list.none")
 	}
-	// Pre-compute display name lookup for current vendor's endpoints
-	vendor := ""
-	if m.providerPanel != nil {
-		vendor = m.providerPanel.selectedVendor()
-	}
 	rows := make([]string, 0, len(items))
 	for i, item := range items {
 		prefix := "  "
-		// Resolve display name for built-in vendors/endpoints
-		display := item
-		if m.config != nil {
-			if vd, _ := m.config.ResolveDisplayName(item, ""); vd != item {
-				display = vd
-			} else if vendor != "" {
-				if ed, _ := m.config.ResolveDisplayName(vendor, item); ed != item {
-					display = ed
-				}
-			}
-		}
 		style := lipgloss.NewStyle()
 		if i == selected {
 			prefix = "❯ "
@@ -634,7 +639,7 @@ func (m *Model) renderProviderList(items []string, selected int, focused bool) s
 		} else if focused {
 			style = style.Foreground(lipgloss.Color("8"))
 		}
-		rows = append(rows, style.Render(prefix+display))
+		rows = append(rows, style.Render(prefix+item))
 	}
 	return strings.Join(rows, "\n")
 }
