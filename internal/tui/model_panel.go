@@ -79,6 +79,14 @@ func (m Model) renderModelPanel() string {
 	if panel == nil || m.config == nil {
 		return ""
 	}
+	// Dynamically set model list visible rows based on available panel height.
+	// Reserve ~8 lines for panel chrome (title, vendor/endpoint info, hints).
+	availRows := m.panelAvailableHeight() - 8
+	if availRows > maxVisibleModelRows {
+		maxVisibleModelRows = availRows
+	} else if availRows < 6 {
+		maxVisibleModelRows = 6
+	}
 	source := "built-in"
 	if panel.remote {
 		source = m.t("panel.model.source.remote")

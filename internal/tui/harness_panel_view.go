@@ -40,7 +40,7 @@ func (m Model) renderHarnessPanel() string {
 	if leftWidth+2+rightWidth > width {
 		leftWidth = max(18, width-rightWidth-2)
 	}
-	columnHeight := 26
+	columnHeight := m.panelAvailableHeight()
 
 	leftLines := m.renderHarnessPanelNavLines(leftWidth, columnHeight)
 	rightLines := m.renderHarnessPanelMainLines(rightWidth, columnHeight)
@@ -48,7 +48,7 @@ func (m Model) renderHarnessPanel() string {
 	if footer := m.renderHarnessPanelFooterLines(width); len(footer) > 0 {
 		body += "\n\n" + strings.Join(footer, "\n")
 	}
-	body = normalizeHarnessPanelBody(body, 35)
+	body = normalizeHarnessPanelBody(body, m.panelAvailableHeight())
 	return m.renderContextBox("/harness", body, lipgloss.Color("12"))
 }
 
@@ -415,7 +415,7 @@ func (m Model) renderHarnessPanelNavLines(width, height int) []string {
 	if panel == nil {
 		return normalizeHarnessPanelLines(lines, height)
 	}
-	lines = append(lines, renderHarnessPlainList(harnessSectionTitles(m.currentLanguage()), panel.selectedSection, panel.focus == harnessPanelFocusSection, width, max(1, height-len(lines)), m.currentLanguage())...)
+	lines = append(lines, renderHarnessPlainList(harnessSectionTitles(m.currentLanguage()), panel.selectedSection, panel.focus == harnessPanelFocusSection, width, len(harnessSectionTitles(m.currentLanguage())), m.currentLanguage())...)
 	return normalizeHarnessPanelLines(lines, height)
 }
 
@@ -508,10 +508,19 @@ func harnessPanelListWindow(size, selected, maxLines int) (int, int) {
 }
 
 func joinHarnessPanelColumns(leftLines, rightLines []string, leftWidth, rightWidth, height int) string {
-	leftLines = normalizeHarnessPanelLines(leftLines, height)
-	rightLines = normalizeHarnessPanelLines(rightLines, height)
-	rows := make([]string, 0, height)
-	for i := 0; i < height; i++ {
+	// Use the larger of the two columns and the requested height to avoid
+	// truncating content when panel height is dynamically calculated.
+	actualHeight := height
+	if len(leftLines) > actualHeight {
+		actualHeight = len(leftLines)
+	}
+	if len(rightLines) > actualHeight {
+		actualHeight = len(rightLines)
+	}
+	leftLines = normalizeHarnessPanelLines(leftLines, actualHeight)
+	rightLines = normalizeHarnessPanelLines(rightLines, actualHeight)
+	rows := make([]string, 0, actualHeight)
+	for i := 0; i < actualHeight; i++ {
 		rows = append(rows, padHarnessPanelLine(leftLines[i], leftWidth)+"  "+padHarnessPanelLine(rightLines[i], rightWidth))
 	}
 	return strings.Join(rows, "\n")
@@ -526,9 +535,8 @@ func padHarnessPanelLine(line string, width int) string {
 }
 
 func normalizeHarnessPanelLines(lines []string, height int) []string {
-	if len(lines) > height {
-		return lines[:height]
-	}
+	// Only pad to minimum height; do NOT truncate — the caller (joinHarnessPanelColumns)
+	// will use the max of both columns for final alignment.
 	for len(lines) < height {
 		lines = append(lines, "")
 	}
@@ -784,9 +792,8 @@ func harnessPanelPathLabel(root, path string) string {
 
 func normalizeHarnessPanelBody(body string, height int) string {
 	lines := strings.Split(body, "\n")
-	if len(lines) > height {
-		lines = lines[:height]
-	}
+	// Only pad to minimum height; do NOT truncate — panels should show all
+	// content and let the terminal scroll if needed.
 	for len(lines) < height {
 		lines = append(lines, "")
 	}

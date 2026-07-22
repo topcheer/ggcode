@@ -6,7 +6,10 @@ import (
 	"charm.land/bubbles/v2/textinput"
 )
 
-const maxVisibleModelRows = 10
+// maxVisibleModelRows controls how many model rows are shown in the model
+// panel list. Updated dynamically by resizeModelListHeight() based on
+// available panel height.
+var maxVisibleModelRows = 12
 
 type modelListWindow struct {
 	items         []string

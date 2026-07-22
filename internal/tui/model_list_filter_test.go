@@ -10,6 +10,11 @@ import (
 )
 
 func TestBuildModelListWindowCapsVisibleRows(t *testing.T) {
+	// Reset dynamic maxVisibleModelRows to a known value for this test.
+	origMax := maxVisibleModelRows
+	maxVisibleModelRows = 10
+	defer func() { maxVisibleModelRows = origMax }()
+
 	models := []string{
 		"model-01", "model-02", "model-03", "model-04", "model-05", "model-06",
 		"model-07", "model-08", "model-09", "model-10", "model-11", "model-12",

@@ -128,7 +128,7 @@ func (m Model) renderInspectorPanel() string {
 		if leftWidth+2+rightWidth > width {
 			leftWidth = max(18, width-rightWidth-2)
 		}
-		height := 18
+		height := m.panelAvailableHeight()
 		leftLines := m.renderInspectorPanelListLines(items, 0, leftWidth, height)
 		rightLines := m.renderInspectorPanelDetailLines(items, 0, rightWidth, height)
 		body := joinHarnessPanelColumns(leftLines, rightLines, leftWidth, rightWidth, height)
@@ -146,7 +146,7 @@ func (m Model) renderInspectorPanel() string {
 	if leftWidth+2+rightWidth > width {
 		leftWidth = max(18, width-rightWidth-2)
 	}
-	height := 18
+	height := m.panelAvailableHeight()
 	leftLines := m.renderInspectorPanelListLines(items, cursor, leftWidth, height)
 	rightLines := m.renderInspectorPanelDetailLines(items, cursor, rightWidth, height)
 	body := joinHarnessPanelColumns(leftLines, rightLines, leftWidth, rightWidth, height)

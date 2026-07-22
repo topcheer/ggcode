@@ -166,6 +166,38 @@ func (m Model) conversationPanelHeight() int {
 
 	return availableHeight
 }
+
+// panelAvailableHeight returns the height available for a context panel's
+// content area when the conversation is hidden. It accounts for header,
+// status bar, device banner, composer, and lanChat bar, plus a small
+// padding for the panel's own border (2 lines) and footer spacing (2 lines).
+func (m Model) panelAvailableHeight() int {
+	header := ""
+	if m.topHeaderEnabled() {
+		header = m.renderHeader()
+	}
+	statusBar := m.renderStatusBar()
+	deviceBanner := m.renderDeviceCodeBanner()
+	composer := m.renderComposerPanel()
+
+	h := m.viewHeight() - lipgloss.Height(header) - lipgloss.Height(composer)
+	if statusBar != "" {
+		h -= lipgloss.Height(statusBar)
+	}
+	if deviceBanner != "" {
+		h -= lipgloss.Height(deviceBanner)
+	}
+	lanChatBar := m.renderLanChatNotice()
+	if lanChatBar != "" {
+		h -= lipgloss.Height(lanChatBar)
+	}
+	// Reserve padding for panel border (top+bottom = 2) and footer/hints (2)
+	h -= 4
+	if h < 6 {
+		h = 6
+	}
+	return h
+}
 func (m Model) renderContextBox(title, body string, accent color.Color) string {
 	width := m.boxInnerWidth(m.mainColumnWidth())
 	content := body
