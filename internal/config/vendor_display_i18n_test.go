@@ -82,3 +82,36 @@ func TestResolveDisplayName(t *testing.T) {
 		t.Errorf("unknown endpoint: got %q, want custom-endpoint", e)
 	}
 }
+
+func TestResolveEndpointSelection_LocalizedDisplay(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Vendor = "zai"
+	cfg.Endpoint = "cn-coding-openai"
+	cfg.Model = "glm-5-turbo"
+
+	// English: display names unchanged
+	cfg.Language = "en"
+	resolved, err := cfg.ResolveActiveEndpoint()
+	if err != nil {
+		t.Fatalf("ResolveActiveEndpoint() error = %v", err)
+	}
+	if resolved.VendorName != "Z.ai" {
+		t.Errorf("en VendorName: got %q, want Z.ai", resolved.VendorName)
+	}
+	if resolved.EndpointName != "CN Coding Plan" {
+		t.Errorf("en EndpointName: got %q, want CN Coding Plan", resolved.EndpointName)
+	}
+
+	// Chinese: display names localized
+	cfg.Language = "zh-CN"
+	resolved, err = cfg.ResolveActiveEndpoint()
+	if err != nil {
+		t.Fatalf("ResolveActiveEndpoint() error = %v", err)
+	}
+	if resolved.VendorName != "智谱 Z.AI" {
+		t.Errorf("zh VendorName: got %q, want 智谱 Z.AI", resolved.VendorName)
+	}
+	if resolved.EndpointName != "国内编程套餐" {
+		t.Errorf("zh EndpointName: got %q, want 国内编程套餐", resolved.EndpointName)
+	}
+}
