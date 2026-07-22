@@ -384,6 +384,7 @@ func (m *Manager) AllPersistedBindings() []ChannelBinding {
 	}
 	all, err := m.bindingStore.List()
 	if err != nil {
+		debug.Log("im", "AllPersistedBindings: List failed: %v", err)
 		return nil
 	}
 	return all
@@ -537,6 +538,7 @@ func ClearSessionBindingsGlobal(sessionID string) {
 	}
 	path, err := DefaultBindingsPath()
 	if err != nil {
+		debug.Log("im", "ClearSessionBindingsGlobal: DefaultBindingsPath failed: %v", err)
 		return
 	}
 	store, err := NewJSONFileBindingStore(path)
