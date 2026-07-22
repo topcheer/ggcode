@@ -86,13 +86,7 @@ func (m Model) renderStatsPanel() string {
 		m.statsPanel.viewport.View().Content,
 		lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(statsPanelText(m.currentLanguage(), "hint")),
 	}, "\n")
-	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(chromeBorderColor).
-		Padding(0, 1).
-		Width(max(1, m.viewWidth()-m.terminalRightMargin())).
-		Height(max(6, m.viewHeight())).
-		Render(content)
+	return m.renderContextBox(statsPanelText(m.currentLanguage(), "title"), content, lipgloss.Color("12"))
 }
 
 func (m Model) statsPanelBody(width int) string {

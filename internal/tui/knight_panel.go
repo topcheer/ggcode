@@ -603,5 +603,5 @@ func (m *Model) renderKnightPolicies(w int) string {
 			}
 		}
 	}
-	return sb.String()
+	return m.renderContextBox("/knight", sb.String(), lipgloss.Color("13"))
 }

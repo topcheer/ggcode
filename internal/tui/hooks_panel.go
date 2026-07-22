@@ -213,7 +213,7 @@ func (m Model) renderHooksPanel() string {
 	}
 
 	_ = rightWidth // reserved for future use
-	return sb.String()
+	return m.renderContextBox("/hooks", sb.String(), lipgloss.Color("13"))
 }
 
 func (m Model) renderHooksEditForm() string {
@@ -249,7 +249,7 @@ func (m Model) renderHooksEditForm() string {
 	}
 
 	sb.WriteString(tr(m.language, "hooks.editHelp"))
-	return sb.String()
+	return m.renderContextBox(tr(m.language, "hooks.addTitle"), sb.String(), lipgloss.Color("13"))
 }
 
 func (m *Model) handleHooksPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {

@@ -335,7 +335,8 @@ func (m *Model) renderStreamPanel() string {
 	// Right: config/status — fills remaining space
 	right := m.renderStreamPanelRight(contentWidth)
 
-	return lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
+	joined := lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
+	return m.renderContextBox("/stream", joined, lipgloss.Color("11"))
 }
 
 func (m *Model) renderStreamPanelLeft() string {
