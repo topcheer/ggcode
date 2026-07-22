@@ -73,9 +73,26 @@ func scanSessionFile(path string) (*scanResult, error) {
 			continue
 		}
 
+		// Fast-path: extract the "type" field without full JSON unmarshal.
+		// Most lines in a session file are "reasoning", "tool_result",
+		// "tool_use", "text", "tunnel_event" etc. which we don't need.
+		// Only "meta", "usage", "metric", "message" are processed.
+		// This avoids parsing gigabytes of irrelevant message content.
+		recType := fastType(line)
+		if recType != "meta" && recType != "usage" && recType != "metric" && recType != "message" {
+			continue
+		}
+
 		var rec jsonlRecord
 		if err := json.Unmarshal([]byte(line), &rec); err != nil {
 			continue // skip malformed lines
+		}
+
+		// For "message" type, we only need the count — skip full unmarshal
+		// of the message body.
+		if recType == "message" {
+			sr.msgCount++
+			continue
 		}
 
 		switch rec.Type {
@@ -150,8 +167,6 @@ func scanSessionFile(path string) (*scanResult, error) {
 					}
 				}
 			}
-		case "message":
-			sr.msgCount++
 		}
 	}
 
@@ -226,4 +241,34 @@ func oldestTime(results []*scanResult) time.Time {
 		}
 	}
 	return oldest
+}
+
+// fastType extracts the JSON "type" field value from a line without a full
+// json.Unmarshal. It searches for `"type":"..."` in the first 100 characters
+// of the line (the field is always near the start of session JSONL records).
+// Returns "" if not found. This avoids parsing multi-MB message content lines.
+func fastType(line string) string {
+	maxScan := len(line)
+	if maxScan > 100 {
+		maxScan = 100
+	}
+	i := 0
+	for i < maxScan-6 {
+		if line[i] == '"' && (line[i+1:i+5] == "type" || line[i+1:i+5] == "Type") && line[i+5] == '"' {
+			j := i + 6
+			for j < maxScan && (line[j] == ' ' || line[j] == ':') {
+				j++
+			}
+			if j < maxScan && line[j] == '"' {
+				j++
+				start := j
+				for j < maxScan && line[j] != '"' {
+					j++
+				}
+				return line[start:j]
+			}
+		}
+		i++
+	}
+	return ""
 }
