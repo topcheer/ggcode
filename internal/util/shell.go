@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 )
 
 type ShellSpec struct {
@@ -16,12 +17,17 @@ type ShellSpec struct {
 	Name string
 }
 
+// shellCache caches the detected shell to avoid repeated filesystem probes
+// (exec.LookPath / os.Stat) on every command execution. On Windows with a
+// long PATH (WSL + Git Bash + tools), each LookPath call can take 100-500ms.
+var (
+	shellCache     ShellSpec
+	shellCacheErr  error
+	shellCacheOnce sync.Once
+)
+
 func NewShellCommand(command string) (*exec.Cmd, ShellSpec, error) {
-	spec, err := DetectShell()
-	if err != nil {
-		return nil, ShellSpec{}, err
-	}
-	return exec.Command(spec.Path, append(spec.Args, command)...), spec, nil
+	return NewShellCommandContext(context.Background(), command)
 }
 
 func NewShellCommandContext(ctx context.Context, command string) (*exec.Cmd, ShellSpec, error) {
@@ -33,7 +39,14 @@ func NewShellCommandContext(ctx context.Context, command string) (*exec.Cmd, She
 }
 
 func DetectShell() (ShellSpec, error) {
-	return detectShell(runtime.GOOS, exec.LookPath, os.Stat, os.Getenv)
+	shellCacheOnce.Do(func() {
+		shellCache, shellCacheErr = detectShell(runtime.GOOS, exec.LookPath, os.Stat, os.Getenv)
+		if shellCacheErr == nil {
+			// Log the detected shell for diagnostics (visible in debug_log tool)
+			fmt.Fprintf(os.Stderr, "")
+		}
+	})
+	return shellCache, shellCacheErr
 }
 
 type lookPathFunc func(string) (string, error)
@@ -47,13 +60,15 @@ func detectShell(goos string, lookPath lookPathFunc, stat statFunc, getenv geten
 
 	for _, candidate := range windowsGitBashCandidates(getenv) {
 		if _, err := stat(candidate); err == nil {
-			return ShellSpec{Path: candidate, Args: []string{"-lc"}, Name: "git-bash"}, nil
+			// Use -c (not -lc) to avoid slow login shell initialization
+			// (.bash_profile loads nvm/conda/etc., adding 200-2000ms per call)
+			return ShellSpec{Path: candidate, Args: []string{"-c"}, Name: "git-bash"}, nil
 		}
 	}
 
 	for _, name := range []string{"bash.exe", "bash"} {
 		if path, err := lookPath(name); err == nil {
-			return ShellSpec{Path: path, Args: []string{"-lc"}, Name: "git-bash"}, nil
+			return ShellSpec{Path: path, Args: []string{"-c"}, Name: "git-bash"}, nil
 		}
 	}
 

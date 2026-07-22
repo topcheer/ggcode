@@ -42,8 +42,8 @@ func TestDetectShellPrefersGitBashOnWindows(t *testing.T) {
 	if spec.Path != bashPath {
 		t.Fatalf("expected Git Bash path %q, got %q", bashPath, spec.Path)
 	}
-	if len(spec.Args) != 1 || spec.Args[0] != "-lc" {
-		t.Fatalf("expected bash -lc, got %v", spec.Args)
+	if len(spec.Args) != 1 || spec.Args[0] != "-c" {
+		t.Fatalf("expected bash -c, got %v", spec.Args)
 	}
 }
 
