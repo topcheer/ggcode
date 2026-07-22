@@ -604,6 +604,10 @@ func (m *Manager) CurrentBindings() []ChannelBinding {
 	for _, b := range m.currentBindings {
 		out = append(out, *b)
 	}
+	// Sort by AdapterName for stable display order (map iteration is random).
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].Adapter < out[j].Adapter
+	})
 	return out
 }
 
@@ -642,13 +646,24 @@ func (m *Manager) ListBindings() ([]ChannelBinding, error) {
 		currentSnapshot = append(currentSnapshot, *b)
 	}
 	m.mu.RUnlock()
+	// Sort for stable display order.
+	sort.Slice(currentSnapshot, func(i, j int) bool {
+		return currentSnapshot[i].Adapter < currentSnapshot[j].Adapter
+	})
 	if store == nil {
 		if len(currentSnapshot) == 0 {
 			return nil, nil
 		}
 		return currentSnapshot, nil
 	}
-	return store.List()
+	all, err := store.List()
+	if err != nil {
+		return currentSnapshot, nil
+	}
+	sort.Slice(all, func(i, j int) bool {
+		return all[i].Adapter < all[j].Adapter
+	})
+	return all, nil
 }
 
 func (m *Manager) HandleInbound(ctx context.Context, msg InboundMessage) error {
