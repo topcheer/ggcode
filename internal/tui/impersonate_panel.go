@@ -116,6 +116,49 @@ func (m *Model) closeImpersonatePanel() {
 	m.impersonatePanel = nil
 }
 
+// syncImpersonateVersionToCursor updates the version input when the user
+// moves the cursor to a different preset. If the user has a persisted
+// custom version for this preset, it is loaded; otherwise the preset's
+// default version is used.
+func (m *Model) syncImpersonateVersionToCursor() {
+	panel := m.impersonatePanel
+	if panel == nil || panel.cursor < 0 || panel.cursor >= len(panel.presets) {
+		return
+	}
+	preset := panel.presets[panel.cursor]
+
+	// Check if the persisted version matches this preset (i.e. user
+	// previously customized the version for this specific preset).
+	// Since config stores a single CustomVersion (not per-preset), we
+	// check if the current config's version differs from the old preset's
+	// default — if so, it's a user-customized version and we keep it
+	// only when switching to the same preset type.
+	var persistedVersion string
+	if m.config != nil {
+		persistedVersion = m.config.Impersonation.CustomVersion
+	}
+
+	// If the persisted version is non-empty AND it's different from all
+	// preset defaults, it's a user override — only carry it over when
+	// the target preset is the currently active one.
+	if persistedVersion != "" {
+		isUserCustom := true
+		for _, p := range panel.presets {
+			if p.DefaultVersion == persistedVersion {
+				isUserCustom = false
+				break
+			}
+		}
+		if isUserCustom && panel.currentPreset == preset.ID {
+			panel.versionInput.SetValue(persistedVersion)
+			return
+		}
+	}
+
+	// Otherwise use the preset's default version
+	panel.versionInput.SetValue(preset.DefaultVersion)
+}
+
 func (m Model) renderImpersonatePanel() string {
 	panel := m.impersonatePanel
 	if panel == nil {
@@ -237,6 +280,7 @@ func (m *Model) handleImpersonatePanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) 
 			if panel.cursor < panel.scrollOffset {
 				panel.scrollOffset = panel.cursor
 			}
+			m.syncImpersonateVersionToCursor()
 		}
 		return *m, nil
 
@@ -246,6 +290,7 @@ func (m *Model) handleImpersonatePanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) 
 			if panel.cursor >= panel.scrollOffset+8 {
 				panel.scrollOffset = panel.cursor - 7
 			}
+			m.syncImpersonateVersionToCursor()
 		}
 		return *m, nil
 
