@@ -56,7 +56,7 @@ type dangerPattern struct {
 func NewDangerousDetector() *DangerousDetector {
 	d := &DangerousDetector{}
 	d.patterns = []dangerPattern{
-		// Critical: destructive commands
+		// Critical: destructive commands (Unix)
 		{DangerCritical, regexp.MustCompile(`(?i)\brm\s+(-[a-zA-Z]*f[a-zA-Z]*\s+)?/\s*$`), "rm -rf / would delete the entire filesystem"},
 		{DangerCritical, regexp.MustCompile(`(?i)\brm\s+(-[a-zA-Z]*f[a-zA-Z]*\s+)?/\*`), "rm -rf /* would delete the entire filesystem"},
 		{DangerCritical, regexp.MustCompile(`(?i)\bmkfs\b`), "mkfs would format a disk"},
@@ -65,7 +65,15 @@ func NewDangerousDetector() *DangerousDetector {
 		{DangerCritical, regexp.MustCompile(`(?i)\bchmod\s+(-[a-zA-Z]*R[a-zA-Z]*\s+)?777\s+/\s*$`), "chmod 777 / is dangerous"},
 		{DangerCritical, regexp.MustCompile(`(?i):\(\)\s*\{\s*:\|:\s*&\s*\}\s*;:`), "fork bomb detected"},
 
-		// High: privilege escalation, system-wide changes
+		// Critical: destructive commands (PowerShell / Windows)
+		{DangerCritical, regexp.MustCompile(`(?i)\bRemove-Item\b.*\b-Recurse\b.*\b-Force\b.*[A-Z]:\\?\s*$`), "Remove-Item -Recurse -Force on drive root would delete everything"},
+		{DangerCritical, regexp.MustCompile(`(?i)\bRemove-Item\b.*\b-Recurse\b.*\b-Force\b.*\\Windows`), "removing Windows system directory"},
+		{DangerCritical, regexp.MustCompile(`(?i)\bFormat-Volume\b`), "Format-Volume would format a disk"},
+		{DangerCritical, regexp.MustCompile(`(?i)\bClear-Disk\b`), "Clear-Disk would wipe a disk"},
+		{DangerCritical, regexp.MustCompile(`(?i)\bSet-Content\b.*\\\\\.\\PhysicalDrive`), "writing directly to a physical disk device"},
+		{DangerCritical, regexp.MustCompile(`(?i)\bwhile\s*\(\s*\$true\s*\)\s*\{?\s*Start-Process\b`), "PowerShell fork bomb pattern"},
+
+		// High: privilege escalation, system-wide changes (Unix)
 		{DangerHigh, regexp.MustCompile(`(?i)\bsudo\s+rm\b`), "sudo rm is destructive with elevated privileges"},
 		{DangerHigh, regexp.MustCompile(`(?i)\bsudo\s+mkfs\b`), "sudo mkfs would format a disk"},
 		{DangerHigh, regexp.MustCompile(`(?i)\bsudo\s+dd\b`), "sudo dd with elevated privileges"},
@@ -77,7 +85,15 @@ func NewDangerousDetector() *DangerousDetector {
 		{DangerHigh, regexp.MustCompile(`(?i)\buserdel\b`), "deleting a user account"},
 		{DangerHigh, regexp.MustCompile(`(?i)\bpasswd\b.*\broot\b`), "changing root password"},
 
-		// Medium: potentially destructive
+		// High: privilege escalation (PowerShell / Windows)
+		{DangerHigh, regexp.MustCompile(`(?i)\bStart-Process\b.*\b-Verb\s+RunAs\b`), "Start-Process -Verb RunAs elevates privileges"},
+		{DangerHigh, regexp.MustCompile(`(?i)\bnet\s+(user|localgroup)\s+.*\b/add\b`), "creating new user or adding to group"},
+		{DangerHigh, regexp.MustCompile(`(?i)\bSet-ExecutionPolicy\b`), "changing PowerShell execution policy"},
+		{DangerHigh, regexp.MustCompile(`(?i)\bDisable-WindowsOptionalFeature\b`), "disabling Windows features"},
+		{DangerHigh, regexp.MustCompile(`(?i)\bStop-Service\b.*\b-Force\b`), "force-stopping Windows services"},
+		{DangerHigh, regexp.MustCompile(`(?i)\bSet-ItemProperty\b.*HKLM:\\`), "modifying registry machine settings"},
+
+		// Medium: potentially destructive (Unix)
 		{DangerMedium, regexp.MustCompile(`(?i)\brm\s+(-[a-zA-Z]*r[a-zA-Z]*\s+).*\*`), "recursive rm with wildcard"},
 		{DangerMedium, regexp.MustCompile(`(?i)\brm\s+(-[a-zA-Z]*f[a-zA-Z]*\s+)`), "force rm without confirmation"},
 		{DangerMedium, regexp.MustCompile(`(?i)\bsudo\b`), "running command with elevated privileges"},
@@ -88,6 +104,14 @@ func NewDangerousDetector() *DangerousDetector {
 		{DangerMedium, regexp.MustCompile(`(?i)\bcrontab\b`), "modifying cron jobs"},
 		{DangerMedium, regexp.MustCompile(`(?i)\bnsenter\b`), "nsenter can escape containers"},
 		{DangerMedium, regexp.MustCompile(`(?i)\bchroot\b`), "chroot changes the root directory"},
+
+		// Medium: potentially destructive (PowerShell / Windows)
+		{DangerMedium, regexp.MustCompile(`(?i)\bInvoke-WebRequest\b.*\|\s*Invoke-Expression\b`), "piping remote content to Invoke-Expression (like curl|bash)"},
+		{DangerMedium, regexp.MustCompile(`(?i)\biwr\b.*\|\s*iex\b`), "piping remote content to iex (alias shorthand)"},
+		{DangerMedium, regexp.MustCompile(`(?i)\bInvoke-Expression\b.*\$\(Invoke-WebRequest`), "executing remote content via Invoke-Expression"},
+		{DangerMedium, regexp.MustCompile(`(?i)\bRemove-Item\b.*\b-Recurse\b.*\b-Force\b`), "recursive forced deletion"},
+		{DangerMedium, regexp.MustCompile(`(?i)\bschtasks\s+/create\b`), "creating scheduled tasks"},
+		{DangerMedium, regexp.MustCompile(`(?i)\breg\s+delete\b.*HKLM`), "deleting registry machine keys"},
 
 		// Low: worth noting
 		{DangerLow, regexp.MustCompile(`(?i)\bchmod\s+777\b`), "setting world-writable permissions"},

@@ -13,6 +13,7 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // VerifyResult is the outcome of an auto-verification check.
@@ -262,10 +263,14 @@ func (a *Agent) llmDecideVerifyCommand(ctx context.Context) string {
 		return ""
 	}
 
-	// Reject obviously dangerous commands
+	// Reject obviously dangerous commands (Unix + PowerShell)
 	lower := strings.ToLower(cmd)
 	if strings.Contains(lower, "rm -rf") || strings.Contains(lower, "sudo") ||
-		strings.Contains(lower, "> /dev/") || strings.Contains(lower, "dd if=") {
+		strings.Contains(lower, "> /dev/") || strings.Contains(lower, "dd if=") ||
+		strings.Contains(lower, "format-volume") || strings.Contains(lower, "clear-disk") ||
+		strings.Contains(lower, "remove-item -recurse -force") ||
+		strings.Contains(lower, "set-content") && strings.Contains(lower, "physicaldrive") ||
+		strings.Contains(lower, "set-executionpolicy") {
 		debug.Log("verify", "LLM proposed dangerous command, rejecting: %s", cmd)
 		return ""
 	}
@@ -281,7 +286,11 @@ func (a *Agent) executeVerifyCommand(ctx context.Context, command string) *Verif
 	cmdCtx, cancel := context.WithTimeout(ctx, verifyExecuteTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(cmdCtx, "sh", "-c", command)
+	cmd, _, err := util.NewShellCommandContext(cmdCtx, command)
+	if err != nil {
+		// Fallback to sh for non-Windows
+		cmd = exec.CommandContext(cmdCtx, "sh", "-c", command)
+	}
 	cmd.Dir = workingDir
 	// Kill the entire process group on timeout to prevent orphaned children
 	// from keeping stdout/stderr pipes open (which would make CombinedOutput hang).
