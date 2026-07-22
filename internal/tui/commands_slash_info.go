@@ -74,10 +74,16 @@ func (m *Model) exportSession(id string) tea.Cmd {
 		if m.sessionStore == nil {
 			return streamMsg(m.t("session.store_missing"))
 		}
-		md, err := m.sessionStore.ExportMarkdown(id)
+		// Load session first, then render with display names from config.
+		ses, err := m.sessionStore.Load(id)
 		if err != nil {
 			return streamMsg(m.t("session.export_failed", err))
 		}
+		vendorDisplay, endpointDisplay := "", ""
+		if m.config != nil {
+			vendorDisplay, endpointDisplay = m.config.ResolveDisplayName(ses.Vendor, ses.Endpoint)
+		}
+		md := session.ExportSessionMarkdownWithDisplay(ses, vendorDisplay, endpointDisplay)
 		filename := fmt.Sprintf("session-%s.md", id)
 		if err := os.WriteFile(filename, []byte(md), 0644); err != nil {
 			return streamMsg(m.t("session.write_failed", err))

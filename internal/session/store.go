@@ -1261,15 +1261,29 @@ func (s *JSONLStore) ExportMarkdown(id string) (string, error) {
 
 // ExportSessionMarkdown renders a Session to markdown.
 func ExportSessionMarkdown(ses *Session) string {
+	return ExportSessionMarkdownWithDisplay(ses, "", "")
+}
+
+// ExportSessionMarkdownWithDisplay renders a Session to markdown with
+// optional display names for vendor and endpoint (instead of raw config keys).
+func ExportSessionMarkdownWithDisplay(ses *Session, vendorDisplay, endpointDisplay string) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("# %s\n\n", ses.Title))
 	sb.WriteString(fmt.Sprintf("**Session:** %s\n", ses.ID))
 	sb.WriteString(fmt.Sprintf("**Created:** %s\n", ses.CreatedAt.Format(time.RFC3339)))
 	sb.WriteString(fmt.Sprintf("**Updated:** %s\n", ses.UpdatedAt.Format(time.RFC3339)))
 	if ses.Vendor != "" {
-		sb.WriteString(fmt.Sprintf("**Vendor:** %s", ses.Vendor))
+		vendor := ses.Vendor
+		if vendorDisplay != "" {
+			vendor = vendorDisplay
+		}
+		sb.WriteString(fmt.Sprintf("**Vendor:** %s", vendor))
 		if ses.Endpoint != "" {
-			sb.WriteString(fmt.Sprintf(" / %s", ses.Endpoint))
+			endpoint := ses.Endpoint
+			if endpointDisplay != "" {
+				endpoint = endpointDisplay
+			}
+			sb.WriteString(fmt.Sprintf(" / %s", endpoint))
 		}
 		if ses.Model != "" {
 			sb.WriteString(fmt.Sprintf(" / %s", ses.Model))

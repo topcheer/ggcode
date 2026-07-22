@@ -139,6 +139,26 @@ func (c *Config) ResolveEndpointSelection(vendor, endpoint, model string) (*Reso
 	}, nil
 }
 
+// ResolveDisplayName resolves vendor and endpoint keys to their display names.
+// Falls back to the raw key if the vendor/endpoint is not found or DisplayName is empty.
+// This is a lightweight lookup that does not require API keys or model resolution.
+func (c *Config) ResolveDisplayName(vendor, endpoint string) (vendorDisplay, endpointDisplay string) {
+	vendorDisplay = vendor
+	endpointDisplay = endpoint
+	if c == nil {
+		return
+	}
+	if vc, ok := c.Vendors[vendor]; ok {
+		if vc.DisplayName != "" {
+			vendorDisplay = vc.DisplayName
+		}
+		if ep, ok := vc.Endpoints[endpoint]; ok && ep.DisplayName != "" {
+			endpointDisplay = ep.DisplayName
+		}
+	}
+	return
+}
+
 // VendorNames returns configured vendors in a stable order.
 func (c *Config) VendorNames() []string {
 	if c == nil {

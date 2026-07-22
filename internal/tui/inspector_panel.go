@@ -79,7 +79,7 @@ func (m *Model) openInspectorPanel(kind inspectorPanelKind) {
 					m.program.Send(inspectorItemsLoadedMsg{kind: kind, items: nil, loadErr: err})
 					return
 				}
-				items := buildSessionInspectorItems(sessions, lang, storeDir)
+				items := buildSessionInspectorItems(sessions, lang, storeDir, m.config.ResolveDisplayName)
 				m.program.Send(inspectorItemsLoadedMsg{kind: kind, items: items})
 			}()
 		} else {
@@ -90,7 +90,7 @@ func (m *Model) openInspectorPanel(kind inspectorPanelKind) {
 				m.inspectorPanel.itemsLoaded = true
 				return
 			}
-			m.inspectorPanel.cachedItems = buildSessionInspectorItems(sessions, lang, storeDir)
+			m.inspectorPanel.cachedItems = buildSessionInspectorItems(sessions, lang, storeDir, m.config.ResolveDisplayName)
 			m.inspectorPanel.itemsLoaded = true
 		}
 	}
@@ -456,13 +456,14 @@ func (m Model) inspectorSessionItems() []inspectorPanelItem {
 	} else {
 		storeDir, _ = session.DefaultDir()
 	}
-	return buildSessionInspectorItems(sessions, m.currentLanguage(), storeDir)
+	return buildSessionInspectorItems(sessions, m.currentLanguage(), storeDir, m.config.ResolveDisplayName)
 }
 
 // buildSessionInspectorItems converts session list to inspector items.
 // Extracted so it can be called from a goroutine without holding the Model.
 // storeDir is used to check session locks.
-func buildSessionInspectorItems(sessions []*session.Session, lang Language, storeDir string) []inspectorPanelItem {
+// displayNameResolver converts vendor/endpoint keys to display names (may be nil).
+func buildSessionInspectorItems(sessions []*session.Session, lang Language, storeDir string, displayNameResolver func(vendor, endpoint string) (string, string)) []inspectorPanelItem {
 	currentWD, _ := os.Getwd()
 	currentWS := session.NormalizeWorkspacePath(currentWD)
 	slices.SortStableFunc(sessions, func(a, b *session.Session) int {
@@ -508,14 +509,19 @@ func buildSessionInspectorItems(sessions []*session.Session, lang Language, stor
 		} else if workspace != "" {
 			summaryParts = append(summaryParts, inspectorText(lang, "current_workspace"))
 		}
+		resolveDisplay := displayNameResolver
+		if resolveDisplay == nil {
+			resolveDisplay = func(v, e string) (string, string) { return v, e }
+		}
+		vendorDisplay, endpointDisplay := resolveDisplay(ses.Vendor, ses.Endpoint)
 		detail := []string{
 			title,
 			"",
 			fmt.Sprintf("%s: %s", inspectorText(lang, "session_id"), ses.ID),
 			fmt.Sprintf("%s: %s", inspectorText(lang, "updated"), formatInspectorTime(ses.UpdatedAt)),
 			fmt.Sprintf("%s: %d", inspectorText(lang, "messages"), len(ses.Messages)),
-			fmt.Sprintf("%s: %s", inspectorText(lang, "vendor"), util.FirstNonEmpty(ses.Vendor, "-")),
-			fmt.Sprintf("%s: %s", inspectorText(lang, "endpoint"), util.FirstNonEmpty(ses.Endpoint, "-")),
+			fmt.Sprintf("%s: %s", inspectorText(lang, "vendor"), util.FirstNonEmpty(vendorDisplay, "-")),
+			fmt.Sprintf("%s: %s", inspectorText(lang, "endpoint"), util.FirstNonEmpty(endpointDisplay, "-")),
 			fmt.Sprintf("%s: %s", inspectorText(lang, "model"), util.FirstNonEmpty(ses.Model, "-")),
 		}
 		if workspace != "" {
