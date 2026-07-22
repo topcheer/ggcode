@@ -15,8 +15,32 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/hooks"
 	"github.com/topcheer/ggcode/internal/stream"
+	"github.com/topcheer/ggcode/internal/util"
 	"gopkg.in/yaml.v3"
 )
+
+// getShellInfo returns a human-readable description of the detected shell
+// for inclusion in the system prompt. This tells the LLM which shell syntax
+// to use when generating commands.
+func getShellInfo() string {
+	spec, err := util.DetectShell()
+	if err != nil {
+		return ""
+	}
+	switch spec.Name {
+	case "git-bash":
+		return "bash (Git Bash)"
+	case "powershell":
+		return "PowerShell"
+	case "sh":
+		if runtime.GOOS == "linux" {
+			return "bash/sh"
+		}
+		return "sh"
+	default:
+		return spec.Name
+	}
+}
 
 // configFileLocks serializes read-modify-write operations against a given
 // config file path. Multiple goroutines (TUI Bubble Tea cmds, agent loop,
@@ -1334,6 +1358,9 @@ func BuildSystemPrompt(extraPrompt, workingDir, language string, toolNames []str
 	sb.WriteString("\n\n## Environment\n")
 	sb.WriteString(fmt.Sprintf("- Working directory: %s\n", workingDir))
 	sb.WriteString(fmt.Sprintf("- OS: %s/%s\n", runtime.GOOS, runtime.GOARCH))
+	if shellInfo := getShellInfo(); shellInfo != "" {
+		sb.WriteString(fmt.Sprintf("- Shell: %s\n", shellInfo))
+	}
 	sb.WriteString(fmt.Sprintf("- Tool schemas are attached separately. Available tools: %s\n", summarizeNames(toolNames, 12)))
 
 	if hasAnyToolPrefix(toolNames, "lsp_") {
