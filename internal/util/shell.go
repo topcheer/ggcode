@@ -3,7 +3,6 @@ package util
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -39,13 +38,25 @@ func NewShellCommandContext(ctx context.Context, command string) (*exec.Cmd, She
 	return exec.CommandContext(ctx, spec.Path, append(spec.Args, command)...), spec, nil
 }
 
+// debugLogFn is set by SetDebugLogFn to allow this package to route diagnostic
+// logs through the debug system without creating a circular import.
+var debugLogFn func(category, format string, args ...interface{})
+
+// SetDebugLogFn injects a debug.Log-compatible function. Called once at startup
+// from a package that can import both util and debug.
+func SetDebugLogFn(fn func(category, format string, args ...interface{})) {
+	debugLogFn = fn
+}
+
 func DetectShell() (ShellSpec, error) {
 	shellCacheOnce.Do(func() {
 		shellCache, shellCacheErr = detectShell(runtime.GOOS, exec.LookPath, os.Stat, os.Getenv)
-		if shellCacheErr == nil {
-			log.Printf("[shell] detected shell: %s path=%s args=%v", shellCache.Name, shellCache.Path, shellCache.Args)
-		} else {
-			log.Printf("[shell] shell detection failed: %v", shellCacheErr)
+		if debugLogFn != nil {
+			if shellCacheErr == nil {
+				debugLogFn("shell", "detected shell: %s path=%s args=%v", shellCache.Name, shellCache.Path, shellCache.Args)
+			} else {
+				debugLogFn("shell", "shell detection failed: %v", shellCacheErr)
+			}
 		}
 	})
 	return shellCache, shellCacheErr

@@ -31,6 +31,7 @@ import (
 	"github.com/topcheer/ggcode/internal/plugin"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/runfile"
+	"github.com/topcheer/ggcode/internal/util"
 
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/session"
@@ -1350,6 +1351,8 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 
 func init() {
 	debug.Init()
+	// Inject debug.Log into util package (can't import debug due to circular dep)
+	util.SetDebugLogFn(debug.Log)
 }
 
 // detectGitStatus returns a short git status string or "".
