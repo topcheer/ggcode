@@ -212,7 +212,7 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; }
 <!-- DAILY DETAILS -->
 <div class="tab-panel" id="tab-dailyDetails">
   <div class="detail-header">
-    <button class="back-btn" id="dailyBack">\u2190 Back</button>
+    <button class="back-btn" id="dailyBack">← Back</button>
     <div>
       <div class="detail-title" id="dailyTitle"></div>
       <div class="detail-info" id="dailyInfo"></div>
