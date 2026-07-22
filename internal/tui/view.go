@@ -257,6 +257,23 @@ func (m Model) renderContextBox(title, body string, accent color.Color) string {
 
 	return style.Render(content)
 }
+
+// renderContextBoxAuto renders a context box without forcing full height.
+// Used by compact UI elements like the status bar that should size to content.
+func (m Model) renderContextBoxAuto(title, body string, accent color.Color) string {
+	width := m.boxInnerWidth(m.mainColumnWidth())
+	content := body
+	if strings.TrimSpace(title) != "" {
+		content = lipgloss.NewStyle().Foreground(accent).Bold(true).Render(" "+title) + "\n" + body
+	}
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(chromeBorderColor).
+		Padding(0, 1).
+		Width(width).
+		Render(content)
+}
+
 func (m Model) isAnyPanelOpen() bool {
 	return m.modelPanel != nil || m.providerPanel != nil ||
 		m.qqPanel != nil || m.tgPanel != nil || m.pcPanel != nil ||

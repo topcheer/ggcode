@@ -89,7 +89,7 @@ type providerAuthResultMsg struct {
 	err    error
 }
 
-const providerPanelVisibleModelRows = 5
+const providerPanelVisibleModelRows = 10
 
 const (
 	providerPanelFocusVendor = iota
@@ -495,7 +495,7 @@ func renderProviderPanelSection(title, body string, width, height int) string {
 }
 
 func providerPanelVendorBodyRows(vendorCount int) int {
-	return providerPanelListBodyRows(vendorCount, 4, 12, 1)
+	return providerPanelListBodyRows(vendorCount, 4, 24, 1) // doubled max from 12→24
 }
 
 func providerPanelVendorHeight(vendorCount int) int {
@@ -503,7 +503,7 @@ func providerPanelVendorHeight(vendorCount int) int {
 }
 
 func providerPanelEndpointBodyRows(endpointCount int) int {
-	return providerPanelListBodyRows(endpointCount, 3, 5, 2)
+	return providerPanelListBodyRows(endpointCount, 3, 10, 2) // doubled max from 5→10
 }
 
 func providerPanelEndpointHeight(endpointCount int) int {

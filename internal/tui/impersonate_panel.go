@@ -129,7 +129,7 @@ func (m Model) renderImpersonatePanel() string {
 	body = append(body, sectionStyle.Render(" Identity Presets"))
 	body = append(body, "")
 
-	maxVisible := 8
+	maxVisible := 16 // doubled for full-height panel
 	start, end := panel.scrollOffset, panel.scrollOffset+maxVisible
 	if end > len(panel.presets) {
 		end = len(panel.presets)

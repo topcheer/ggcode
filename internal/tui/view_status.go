@@ -135,7 +135,7 @@ func (m Model) renderStatusBar() string {
 		}
 	}
 
-	return m.renderContextBox("", sb.String(), lipgloss.Color("6"))
+	return m.renderContextBoxAuto("", sb.String(), lipgloss.Color("6"))
 }
 
 func (m Model) sidebarActivity() string {

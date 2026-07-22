@@ -1180,22 +1180,26 @@ func TestProviderPanelEndpointSectionKeepsTightHeight(t *testing.T) {
 
 func TestProviderPanelVendorSectionUsesWindowedHeight(t *testing.T) {
 	height := providerPanelVendorHeight(20)
-	if height != 17 {
-		t.Fatalf("expected vendor section height 17, got %d", height)
+	// maxRows doubled from 12→24, so 20 vendors no longer truncate
+	// bodyRows=21, +1(header)+4(chrome) = 26
+	if height != 26 {
+		t.Fatalf("expected vendor section height 26, got %d", height)
 	}
 }
 
 func TestProviderPanelModelSectionUsesStableFiveRowWindow(t *testing.T) {
 	height := providerPanelModelHeight(false)
-	if height != 6 {
-		t.Fatalf("expected provider model section height 6, got %d", height)
+	// providerPanelVisibleModelRows=10, so height = 10+1(border)=11
+	if height != 11 {
+		t.Fatalf("expected provider model section height 11, got %d", height)
 	}
 }
 
 func TestProviderPanelModelSectionAddsFilterRowWhenNeeded(t *testing.T) {
 	height := providerPanelModelHeight(true)
-	if height != 7 {
-		t.Fatalf("expected provider model section height 7 with filter row, got %d", height)
+	// filter adds 1 row: 10+1(filter)+1(border)=12
+	if height != 12 {
+		t.Fatalf("expected provider model section height 12 with filter row, got %d", height)
 	}
 }
 
