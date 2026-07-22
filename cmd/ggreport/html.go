@@ -336,10 +336,8 @@ window.__DATA__ = ` + jsonData + `;
     });
     // Session count in range
     const days = Object.keys(dayMap).sort();
-    const sessCount = new Set(turns.map(t => {
-      const s = D.sessions.find(s => s.turns.includes(t));
-      return s ? s.id : '';
-    }).filter(Boolean)).size;
+    const sessIds = new Set(turns.map(t => t.sid).filter(Boolean));
+    const sessCount = sessIds.size;
 
     document.getElementById('ovRange').textContent = days.length + ' days · ' + turns.length + ' turns';
 

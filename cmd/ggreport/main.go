@@ -109,6 +109,7 @@ type turnJSON struct {
 	ThinkMs int64  `json:"thinkMs"`
 	Day     string `json:"day,omitempty"`
 	TS      string `json:"ts,omitempty"`
+	SID     string `json:"sid,omitempty"`
 }
 
 type toolJSON struct {
@@ -196,6 +197,7 @@ func buildReport(results []*scanResult) reportData {
 				TTFTMs:  t.TTFTMs,
 				DurMs:   t.DurMs,
 				ThinkMs: t.ThinkMs,
+				SID:     sj.ID,
 			}
 			// Use turn's actual timestamp for daily aggregation
 			if !t.Timestamp.IsZero() {
