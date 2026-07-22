@@ -62,7 +62,15 @@ func (m Model) View() tea.View {
 		debug.Log("layout", "avail=%d", availableHeight)
 	}
 
-	conversation := m.renderConversationPanel(availableHeight)
+	// When a panel is open, hide the conversation entirely and give all
+	// vertical space to the panel. This prevents content-rich panels from
+	// being squeezed and avoids split-screen rendering complexity.
+	var conversation string
+	if actionPanel != "" {
+		conversation = ""
+	} else {
+		conversation = m.renderConversationPanel(availableHeight)
+	}
 
 	sections := make([]string, 0, 8)
 	if lanChatBar != "" {
@@ -71,7 +79,9 @@ func (m Model) View() tea.View {
 	if header != "" {
 		sections = append(sections, header)
 	}
-	sections = append(sections, conversation)
+	if conversation != "" {
+		sections = append(sections, conversation)
+	}
 	if deviceBanner != "" {
 		sections = append(sections, deviceBanner)
 	}
