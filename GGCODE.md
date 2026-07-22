@@ -55,7 +55,8 @@ CGO_ENABLED=0 go build -tags goolm ./...
 | `internal/safego/` | Panic recovery for goroutines |
 | `internal/util/` | Shell detection, path helpers, common utilities |
 | `mobile/flutter/` | Flutter mobile app (iOS + Android) |
-| `desktop/ggcode-desktop/` | Desktop app (CGO + Fyne) |
+| `desktop/ggcode-desktop-wails/` | Desktop app (Wails: Go backend + web frontend) |
+| `desktop/ggcode-desktop/` | Legacy desktop builds (no active go.mod) |
 | `docs/` | Documentation, architecture notes, release process |
 
 ## Architecture
