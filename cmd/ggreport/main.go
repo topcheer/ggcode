@@ -145,6 +145,7 @@ type toolStatJSON struct {
 	Calls    int     `json:"calls"`
 	Failures int     `json:"failures"`
 	AvgMs    float64 `json:"avgMs"`
+	TotalMs  int64   `json:"-"`
 }
 
 func buildReport(results []*scanResult) reportData {
@@ -270,6 +271,7 @@ func buildReport(results []*scanResult) reportData {
 			}
 			ts.Calls += ta.Calls
 			ts.Failures += ta.Failures
+			ts.TotalMs += ta.TotalMs
 		}
 
 		rd.Sessions = append(rd.Sessions, sj)
@@ -321,7 +323,7 @@ func buildReport(results []*scanResult) reportData {
 	})
 	for _, ts := range toolList {
 		if ts.Calls > 0 {
-			ts.AvgMs = 0 // need total ms; we only have per-session totals — skip global avg for now
+			ts.AvgMs = float64(ts.TotalMs) / float64(ts.Calls)
 		}
 		rd.ToolSummary = append(rd.ToolSummary, *ts)
 	}
