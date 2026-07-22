@@ -368,6 +368,12 @@ func FriendlyError(err error) string {
 		return "Payment required (402). Your API account has insufficient credits or billing. " +
 			"Add credits or update billing in your provider dashboard."
 	case 403:
+		if strings.Contains(lower, "access_terminated") ||
+			(strings.Contains(lower, "usage limit") && strings.Contains(lower, "billing cycle")) {
+			return "API quota exhausted (403). You've reached the usage limit for this billing cycle. " +
+				"Your quota will refresh in the next cycle. " +
+				"To continue now, purchase extra usage or upgrade your plan."
+		}
 		if strings.Contains(lower, "rate limit") || strings.Contains(lower, "quota") {
 			return "Rate limit exceeded (403). You've hit your API quota. " +
 				"Wait a moment and try again, or upgrade your plan for higher limits."

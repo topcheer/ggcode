@@ -156,6 +156,7 @@ func (p *AnthropicProvider) Chat(ctx context.Context, messages []Message, tools 
 		if rejected, parsed := maxTokensRejection(err); rejected {
 			p.cap.OnRejected(parsed)
 		}
+		debug.Log("anthropic", "Chat FATAL model=%s: %T: %v", p.model, err, err)
 		return nil, err
 	}
 	if string(resp.StopReason) == "max_tokens" {

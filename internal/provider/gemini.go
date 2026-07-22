@@ -114,6 +114,7 @@ func (p *GeminiProvider) Chat(ctx context.Context, messages []Message, tools []T
 		if rejected, parsed := maxTokensRejection(err); rejected {
 			p.cap.OnRejected(parsed)
 		}
+		debug.Log("gemini", "Chat FATAL model=%s: %T: %v", p.model, err, err)
 		return nil, fmt.Errorf("gemini chat: %w", err)
 	}
 	if len(resp.Candidates) > 0 && resp.Candidates[0].FinishReason == genai.FinishReasonMaxTokens {

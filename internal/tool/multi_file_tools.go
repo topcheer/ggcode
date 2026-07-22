@@ -8,6 +8,8 @@ import (
 	"os"
 	"strings"
 	"sync"
+
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 type MultiFileRead struct {
@@ -123,6 +125,7 @@ func (t MultiFileRead) Execute(ctx context.Context, input json.RawMessage) (Resu
 		wg.Add(1)
 		go func(idx int, r readReq) {
 			defer wg.Done()
+			defer safego.Recover("tool.multi_file_read")
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
@@ -470,6 +473,12 @@ func (t MultiFileEdit) planEntries(entries []multiFileEditEntry) ([]PlannedFileE
 		errMsg     string
 	}
 	planResults := make([]planResult, len(entries))
+	// Pre-initialize to a safe error so a recovered panic (which leaves the
+	// zero-value result) doesn't cause downstream code to treat the file as
+	// successfully planned with empty content — that would truncate it.
+	for i := range planResults {
+		planResults[i] = planResult{errMsg: "internal error: edit planning did not complete"}
+	}
 
 	// Read files + plan edits concurrently.
 	// Each entry's read + planTextEdits is independent — no data dependency between entries.
@@ -483,6 +492,7 @@ func (t MultiFileEdit) planEntries(entries []multiFileEditEntry) ([]PlannedFileE
 		wg.Add(1)
 		go func(idx int, e multiFileEditEntry) {
 			defer wg.Done()
+			defer safego.Recover("tool.multi_file_edit.plan")
 			sem <- struct{}{}
 			defer func() { <-sem }()
 

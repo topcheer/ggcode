@@ -262,6 +262,7 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 		if rejected, parsed := maxTokensRejection(err); rejected {
 			p.cap.OnRejected(parsed)
 		}
+		debug.Log("openai", "Chat FATAL model=%s baseURL=%s: %T: %v", p.model, p.baseURL, err, err)
 		return nil, fmt.Errorf("openai chat: %w", err)
 	}
 

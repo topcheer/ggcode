@@ -14,6 +14,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/diff"
 	"github.com/topcheer/ggcode/internal/lsp"
+	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/session"
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
 	"github.com/topcheer/ggcode/internal/version"
@@ -72,6 +73,7 @@ func (m *Model) openInspectorPanel(kind inspectorPanelKind) {
 			m.inspectorPanel.itemsLoaded = true
 			m.inspectorPanel.loading = true
 			go func() {
+				defer safego.Recover("tui.inspector.loadSessions")
 				sessions, err := store.List()
 				if err != nil {
 					m.program.Send(inspectorItemsLoadedMsg{kind: kind, items: nil, loadErr: err})
