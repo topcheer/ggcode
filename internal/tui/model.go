@@ -133,6 +133,7 @@ type Model struct {
 	config                          *config.Config
 	language                        Language
 	startupVendor                   string
+	cachedPanelHeight               int // set in View() for renderContextBox
 	startupEndpoint                 string
 	startupModel                    string
 	activeVendor                    string

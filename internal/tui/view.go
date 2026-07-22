@@ -30,10 +30,31 @@ func (m Model) View() tea.View {
 	if m.topHeaderEnabled() {
 		header = m.renderHeader()
 	}
-	actionPanel := m.renderContextPanel()
+
+	// Pre-calculate the full panel height so that renderContextBox can use
+	// it without recursively calling render functions (which causes stack
+	// overflow). We compute it from the same elements View() uses.
 	statusBar := m.renderStatusBar()
 	deviceBanner := m.renderDeviceCodeBanner()
 	composer := m.renderComposerPanel()
+	lanChatBar := m.renderLanChatNotice()
+
+	panelH := m.viewHeight() - lipgloss.Height(header) - lipgloss.Height(composer)
+	if statusBar != "" {
+		panelH -= lipgloss.Height(statusBar)
+	}
+	if deviceBanner != "" {
+		panelH -= lipgloss.Height(deviceBanner)
+	}
+	if lanChatBar != "" {
+		panelH -= lipgloss.Height(lanChatBar)
+	}
+	if panelH < 6 {
+		panelH = 6
+	}
+	m.cachedPanelHeight = panelH
+
+	actionPanel := m.renderContextPanel()
 
 	availableHeight := m.viewHeight() - lipgloss.Height(header) - lipgloss.Height(composer)
 	if actionPanel != "" {
@@ -49,7 +70,6 @@ func (m Model) View() tea.View {
 		availableHeight = 8
 	}
 
-	lanChatBar := m.renderLanChatNotice()
 	if lanChatBar != "" {
 		availableHeight -= lipgloss.Height(lanChatBar)
 	}
@@ -172,27 +192,24 @@ func (m Model) conversationPanelHeight() int {
 // status bar, device banner, composer, and lanChat bar, plus a small
 // padding for the panel's own border (2 lines) and footer spacing (2 lines).
 func (m Model) panelAvailableHeight() int {
+	return m.fullPanelHeight() - 4
+}
+
+// fullPanelHeight returns the total height available for a context panel
+// including its border and padding (i.e. the full main content area when
+// conversation is hidden). Use this to set the Height on the panel's
+// outer style so it fills the space and keeps the composer position fixed.
+func (m Model) fullPanelHeight() int {
+	// Use cached value if set (avoids recursion: renderContextBox →
+	// fullPanelHeight → renderComposerPanel → ... → renderContextBox).
+	if m.cachedPanelHeight > 0 {
+		return m.cachedPanelHeight
+	}
 	header := ""
 	if m.topHeaderEnabled() {
 		header = m.renderHeader()
 	}
-	statusBar := m.renderStatusBar()
-	deviceBanner := m.renderDeviceCodeBanner()
-	composer := m.renderComposerPanel()
-
-	h := m.viewHeight() - lipgloss.Height(header) - lipgloss.Height(composer)
-	if statusBar != "" {
-		h -= lipgloss.Height(statusBar)
-	}
-	if deviceBanner != "" {
-		h -= lipgloss.Height(deviceBanner)
-	}
-	lanChatBar := m.renderLanChatNotice()
-	if lanChatBar != "" {
-		h -= lipgloss.Height(lanChatBar)
-	}
-	// Reserve padding for panel border (top+bottom = 2) and footer/hints (2)
-	h -= 4
+	h := m.viewHeight() - lipgloss.Height(header)
 	if h < 6 {
 		h = 6
 	}
@@ -222,12 +239,23 @@ func (m Model) renderContextBox(title, body string, accent color.Color) string {
 			fmt.Sprintf(m.t("config.save_target_line"), scopeLabel, hint))
 	}
 	content += scopeLine
-	return lipgloss.NewStyle().
+
+	// Calculate total available height for the panel (including border+padding).
+	// This ensures the box always fills the main content area, keeping the
+	// composer position fixed regardless of panel content height.
+	availH := m.fullPanelHeight()
+
+	style := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(chromeBorderColor).
 		Padding(0, 1).
-		Width(width).
-		Render(content)
+		Width(width)
+
+	if availH > 0 {
+		style = style.Height(availH)
+	}
+
+	return style.Render(content)
 }
 func (m Model) isAnyPanelOpen() bool {
 	return m.modelPanel != nil || m.providerPanel != nil ||
