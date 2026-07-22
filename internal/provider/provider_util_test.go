@@ -3,7 +3,10 @@ package provider
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
+
+	"github.com/sashabaranov/go-openai"
 )
 
 func TestUserFacingError_Nil(t *testing.T) {
@@ -41,6 +44,39 @@ func TestUserFacingError_WrappedError(t *testing.T) {
 	err := fmt.Errorf("provider call failed: %w", inner)
 	result := UserFacingError(err)
 	t.Logf("UserFacingError(wrapped) = %q", result)
+}
+
+func TestUserFacingError_KimiAccessTerminated(t *testing.T) {
+	// Scenario 1: Original *openai.APIError with HTTP status chain intact
+	apiErr := &openai.APIError{
+		HTTPStatusCode: 403,
+		Message:        "You've reached your usage limit for this billing cycle. Your quota will be refreshed in the next cycle. To continue now, purchase extra usage or upgrade your plan: https://www.kimi.com/code/#pricing",
+	}
+	result := UserFacingErrorLang(apiErr, "en")
+	if !strings.Contains(strings.ToLower(result), "quota") {
+		t.Errorf("expected 'quota' in English result, got %q", result)
+	}
+
+	resultZh := UserFacingErrorLang(apiErr, "zh-CN")
+	if !strings.Contains(resultZh, "额度") {
+		t.Errorf("expected '额度' in Chinese result, got %q", resultZh)
+	}
+
+	// Scenario 2: Error chain destroyed — agent converts to FriendlyError string,
+	// then TUI calls UserFacingErrorLang on the string-only error
+	stringErr := fmt.Errorf("%s", FriendlyError(apiErr))
+	result2 := UserFacingErrorLang(stringErr, "en")
+	if !strings.Contains(strings.ToLower(result2), "quota") {
+		t.Errorf("expected 'quota' in string-only error result, got %q", result2)
+	}
+
+	// Scenario 3: Raw Kimi error string without HTTP status (simulating
+	// stream mid-error where SDK may not wrap into APIError)
+	rawErr := errors.New("access_terminated_error: usage limit reached for billing cycle")
+	result3 := UserFacingErrorLang(rawErr, "en")
+	if !strings.Contains(strings.ToLower(result3), "quota") {
+		t.Errorf("expected 'quota' for raw access_terminated string, got %q", result3)
+	}
 }
 
 func TestImageBlock(t *testing.T) {

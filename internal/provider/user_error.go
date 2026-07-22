@@ -49,6 +49,20 @@ func UserFacingErrorLang(err error, lang string) string {
 		return "Invalid or missing API key. Please check your API key configuration"
 	}
 	if hasHTTPStatus(err, http.StatusForbidden) {
+		raw403 := strings.ToLower(err.Error())
+		if strings.Contains(raw403, "access_terminated") ||
+			(strings.Contains(raw403, "usage limit") && strings.Contains(raw403, "billing cycle")) {
+			if zh {
+				return "API 额度已用完（本计费周期），将在下个周期刷新。如需立即使用，请购买额外额度或升级套餐"
+			}
+			return "API quota exhausted for this billing cycle. It will refresh next cycle. Purchase extra usage or upgrade your plan to continue now"
+		}
+		if strings.Contains(raw403, "rate limit") || strings.Contains(raw403, "quota") {
+			if zh {
+				return "请求太频繁或额度不足，请稍后重试或升级套餐"
+			}
+			return "Rate limited or quota exceeded. Please retry shortly or upgrade your plan"
+		}
 		if zh {
 			return "无权访问该接口，请确认你的账号权限和 API Key"
 		}
@@ -176,6 +190,16 @@ func UserFacingErrorLang(err error, lang string) string {
 			return "对话内容过长，已超出模型上下文限制。请尝试 /compact 或缩短对话"
 		}
 		return "Conversation too long, exceeds model context limit. Try /compact or start a new session"
+	}
+
+	// ---- Quota / billing exhausted (string-based, for when error chain was destroyed) ----
+	if strings.Contains(lower, "access_terminated") ||
+		(strings.Contains(lower, "usage limit") && strings.Contains(lower, "billing cycle")) ||
+		strings.Contains(lower, "quota exhausted") {
+		if zh {
+			return "API 额度已用完（本计费周期），将在下个周期刷新。如需立即使用，请购买额外额度或升级套餐"
+		}
+		return "API quota exhausted for this billing cycle. It will refresh next cycle. Purchase extra usage or upgrade your plan to continue now"
 	}
 
 	// ---- Fallback: generic message, strip provider noise ----
