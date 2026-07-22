@@ -958,7 +958,9 @@ func (m *Model) recordSessionUsage(usage provider.TokenUsage, source string) {
 			if err := jsonlStore.AppendMetaToDisk(ses); err != nil {
 				debug.Log("tui", "async meta persist: %v", err)
 			}
-			_ = jsonlStore.AppendUsageEntry(ses, entry)
+			if err := jsonlStore.AppendUsageEntry(ses, entry); err != nil {
+				debug.Log("tui", "async usage persist (session=%s): %v", ses.ID, err)
+			}
 		} else {
 			_ = store.Save(ses)
 		}
@@ -995,7 +997,9 @@ func (m *Model) recordSessionMetric(ev metrics.MetricEvent) {
 	// Disk I/O is async — see recordSessionUsage for rationale.
 	safego.Go("session.metric", func() {
 		if jsonlStore, ok := store.(*session.JSONLStore); ok {
-			_ = jsonlStore.AppendMetric(ses, ev)
+			if err := jsonlStore.AppendMetric(ses, ev); err != nil {
+				debug.Log("tui", "async metric persist (session=%s): %v", ses.ID, err)
+			}
 		} else {
 			_ = store.Save(ses)
 		}
