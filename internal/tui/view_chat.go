@@ -119,7 +119,15 @@ func (m Model) renderAutoComplete() string {
 		return ""
 	}
 
-	maxVisible := 8
+	// Dynamic max visible based on available panel height.
+	// Reserve ~4 lines for input line, hint, and padding.
+	maxVisible := m.panelAvailableHeight() - 4
+	if maxVisible < 8 {
+		maxVisible = 8
+	}
+	if maxVisible > len(m.autoCompleteItems) {
+		maxVisible = len(m.autoCompleteItems)
+	}
 	start := 0
 	if len(m.autoCompleteItems) > maxVisible {
 		start = m.autoCompleteIndex
