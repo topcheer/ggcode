@@ -78,7 +78,7 @@ That runs `scripts/dev/verify-ci.sh`, which does:
 3. `go build -tags goolm -o /tmp/ggcode ./cmd/ggcode`
 4. `go vet -tags goolm ./cmd/... ./internal/...`
 5. `go test -tags "goolm,integration" ./cmd/... ./internal/...`
-6. Desktop-module `gofmt` / `go vet` / `go test` when `desktop/ggcode-desktop` is present
+6. Desktop-module `gofmt` / `go vet` / `go test` when `desktop/ggcode-desktop-wails` is present
 
 ### Integration test tiers
 
@@ -242,23 +242,24 @@ If all smoke tests pass, the workflow additionally builds:
 After `verify` succeeds, two additional jobs build the desktop application in parallel with the CLI release:
 
 1. `build-desktop-darwin` (macOS runner)
-   - Builds universal binary (amd64 + arm64 via `lipo`)
-   - Creates `.app` bundle with `Info.plist`
+   - Installs Wails CLI
+   - Builds via Wails (Go backend + web frontend)
    - Packages as `.dmg`
    - Script: `scripts/release/build-desktop-darwin.sh`
 
 2. `build-desktop-windows` (Windows runner)
-   - Installs MinGW for CGO support
-   - Builds `ggcode-desktop.exe`
+   - Installs Wails CLI
+   - Builds `ggcode-desktop.exe` via Wails
    - Script: `scripts/release/build-desktop-windows.ps1`
 
 Both jobs upload artifacts to the GitHub Release (tag-driven) or as workflow artifacts (dispatch).
 
 The desktop application uses:
-- Separate Go module: `desktop/ggcode-desktop/go.mod`
-- `CGO_ENABLED=1` (required by Fyne GUI framework)
+- Separate Go module: `desktop/ggcode-desktop-wails/go.mod`
+- Wails framework (Go backend + web frontend)
+- `CGO_ENABLED=1`
 - Build tag `goolm` (same as CLI)
-- `make build-desktop` for local builds
+- `make build-desktop-wails` for local builds
 
 ### 5.6 Site deployment branch refresh
 

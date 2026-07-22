@@ -11,7 +11,7 @@ We're opening beta access to GGCode across all platforms. Here's a quick overvie
 
 ## Desktop GUI
 
-GGCode Desktop is a native macOS/Windows/Linux app built with Fyne. It provides a full graphical interface for the AI coding agent:
+GGCode Desktop is a native macOS/Windows/Linux app built with Wails (Go backend + web frontend). It provides a full graphical interface for the AI coding agent:
 
 - Chat with the AI agent in a rich markdown panel
 - View tool execution results inline (file edits, terminal commands, git operations)
