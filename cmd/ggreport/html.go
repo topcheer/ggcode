@@ -119,6 +119,7 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; }
 
 <!-- OVERVIEW -->
 <div class="tab-panel active" id="tab-overview">
+  <div class="filter-bar" id="overviewFilter"></div>
   <div class="cards" id="overviewCards"></div>
   <div class="chart-box">
     <h3>Daily Token Usage</h3>
@@ -259,21 +260,6 @@ window.__DATA__ = ` + jsonData + `;
     return '#'+t.index;
   };
 
-  // === Global stats ===
-  let totalInput=0, totalOutput=0, totalCache=0, totalLLM=0, totalTool=0;
-  let allTTFT=[], allDur=[];
-  let slowestToolCalls=[];
-
-  D.sessions.forEach(s => {
-    totalInput += s.totalInput; totalOutput += s.totalOutput;
-    totalCache += s.totalCache; totalLLM += s.llmCalls;
-    totalTool += s.toolCalls;
-    s.turns.forEach(t => {
-      if (t.ttftMs > 0) allTTFT.push(t.ttftMs);
-      if (t.durMs > 0) allDur.push(t.durMs);
-    });
-  });
-
   // === Header ===
   document.getElementById('generatedAt').textContent =
     'Generated ' + fmtDate(D.generatedAt) + ' · ' + D.sessions.length + ' sessions';
@@ -289,39 +275,111 @@ window.__DATA__ = ` + jsonData + `;
     t.addEventListener('click', () => switchTab(t.dataset.tab));
   });
 
+  // === Overview date filter ===
+  const allTurnDates = [];
+  D.sessions.forEach(s => s.turns.forEach(t => { if (t.day) allTurnDates.push(t.day); }));
+  allTurnDates.sort();
+  const ovMinDate = allTurnDates[0] || '';
+  const ovMaxDate = allTurnDates[allTurnDates.length-1] || '';
+  let ovFrom = '', ovTo = '';
+
+  const ovFilterEl = document.getElementById('overviewFilter');
+  function buildOverviewFilter() {
+    ovFilterEl.innerHTML =
+      '<div class="filter-group"><span class="filter-label">From</span>' +
+      '<input type="date" class="filter-input" id="ovFrom" min="'+ovMinDate+'" max="'+ovMaxDate+'"></div>' +
+      '<div class="filter-group"><span class="filter-label">To</span>' +
+      '<input type="date" class="filter-input" id="ovTo" min="'+ovMinDate+'" max="'+ovMaxDate+'"></div>' +
+      '<div class="filter-group"><button class="back-btn" id="ovReset">Reset</button></div>' +
+      '<div class="filter-count" id="ovRange"></div>';
+    document.getElementById('ovFrom').addEventListener('change', e => { ovFrom = e.target.value; renderOverview(); });
+    document.getElementById('ovTo').addEventListener('change', e => { ovTo = e.target.value; renderOverview(); });
+    document.getElementById('ovReset').addEventListener('click', () => {
+      ovFrom = ovTo = '';
+      document.getElementById('ovFrom').value = '';
+      document.getElementById('ovTo').value = '';
+      renderOverview();
+    });
+  }
+
+  function getFilteredTurns() {
+    return D.sessions.flatMap(s => s.turns).filter(t => {
+      if (!t.day) return false;
+      if (ovFrom && t.day < ovFrom) return false;
+      if (ovTo && t.day > ovTo) return false;
+      return true;
+    });
+  }
+
   // === Overview cards ===
   const cardsEl = document.getElementById('overviewCards');
   function card(label, value, sub) {
     return '<div class="card"><div class="label">'+label+'</div><div class="value">'+value+'</div>'+(sub?'<div class="sub">'+sub+'</div>':'')+'</div>';
   }
-  cardsEl.innerHTML =
-    card('Sessions', D.sessions.length, '') +
-    card('Total Input', fmt(totalInput), 'tokens') +
-    card('Total Output', fmt(totalOutput), 'tokens') +
-    card('Cache Read', fmt(totalCache), 'tokens') +
-    card('LLM Calls', fmt(totalLLM), '') +
-    card('Tool Calls', fmt(totalTool), '');
 
-  // === Daily chart ===
   Chart.defaults.color = '#8b949e';
   Chart.defaults.borderColor = '#30363d';
-  const dailyData = D.dailyTokens;
-  const dailyChartInstance = new Chart(document.getElementById('dailyChart'), {
+
+  let dailyChartInstance = null, wsChartInstance = null;
+
+  function renderOverview() {
+    const turns = getFilteredTurns();
+    // Aggregate
+    let tIn=0, tOut=0, tCache=0, tLLM=turns.length;
+    const dayMap = {}, wsMap = {}, ttfts = [];
+    turns.forEach(t => {
+      tIn += t.input; tOut += t.output; tCache += t.cache;
+      if (t.ttftMs > 0) ttfts.push(t.ttftMs);
+      // Daily
+      const dr = dayMap[t.day] || (dayMap[t.day] = {date:t.day, input:0, output:0, cache:0});
+      dr.input += t.input; dr.output += t.output; dr.cache += t.cache;
+    });
+    // Session count in range
+    const days = Object.keys(dayMap).sort();
+    const sessCount = new Set(turns.map(t => {
+      const s = D.sessions.find(s => s.turns.includes(t));
+      return s ? s.id : '';
+    }).filter(Boolean)).size;
+
+    document.getElementById('ovRange').textContent = days.length + ' days · ' + turns.length + ' turns';
+
+    cardsEl.innerHTML =
+      card('Sessions', sessCount || D.sessions.length) +
+      card('Input', fmt(tIn), 'tokens') +
+      card('Output', fmt(tOut), 'tokens') +
+      card('Cache', fmt(tCache), 'tokens') +
+      card('LLM Calls', fmt(tLLM)) +
+      card('Tool Calls', fmt(D.toolSummary.reduce((a,t)=>a+t.calls,0)));
+
+    // Daily chart
+    const dailyData = days.map(d => dayMap[d]);
+    if (dailyChartInstance) {
+      dailyChartInstance.data.labels = dailyData.map(d=>d.date);
+      dailyChartInstance.data.datasets[0].data = dailyData.map(d=>d.input);
+      dailyChartInstance.data.datasets[1].data = dailyData.map(d=>d.cache);
+      dailyChartInstance.data.datasets[2].data = dailyData.map(d=>d.output);
+      dailyChartInstance.options.onClick = (e, els) => { if (els.length) showDailyDetails(dailyData[els[0].index].date); };
+      dailyChartInstance.update();
+    }
+  }
+
+  // Initialize daily chart with full data
+  const initDailyData = D.dailyTokens;
+  dailyChartInstance = new Chart(document.getElementById('dailyChart'), {
     type: 'bar',
     data: {
-      labels: dailyData.map(d => d.date),
+      labels: initDailyData.map(d => d.date),
       datasets: [
-        { label: 'Input', data: dailyData.map(d=>d.input), backgroundColor: 'rgba(88,166,255,0.7)', yAxisID: 'yLeft' },
-        { label: 'Cache', data: dailyData.map(d=>d.cache), backgroundColor: 'rgba(188,140,255,0.5)', yAxisID: 'yLeft' },
-        { label: 'Output', data: dailyData.map(d=>d.output), backgroundColor: 'rgba(63,185,80,0.7)', yAxisID: 'yRight' },
+        { label: 'Input', data: initDailyData.map(d=>d.input), backgroundColor: 'rgba(88,166,255,0.7)', yAxisID: 'yLeft' },
+        { label: 'Cache', data: initDailyData.map(d=>d.cache), backgroundColor: 'rgba(188,140,255,0.5)', yAxisID: 'yLeft' },
+        { label: 'Output', data: initDailyData.map(d=>d.output), backgroundColor: 'rgba(63,185,80,0.7)', yAxisID: 'yRight' },
       ]
     },
     options: {
       responsive: true, maintainAspectRatio: false,
       onClick: (e, elements) => {
         if (elements.length > 0) {
-          const idx = elements[0].index;
-          showDailyDetails(dailyData[idx].date);
+          showDailyDetails(initDailyData[elements[0].index].date);
         }
       },
       onHover: (e, elements) => { e.native.target.style.cursor = elements.length > 0 ? 'pointer' : 'default'; },
@@ -330,11 +388,14 @@ window.__DATA__ = ` + jsonData + `;
         yLeft: { position: 'left', ticks: { callback: fmt }, title: { display: true, text: 'Input / Cache', color: '#8b949e' } },
         yRight: { position: 'right', ticks: { callback: fmt }, title: { display: true, text: 'Output', color: '#8b949e' }, grid: { drawOnChartArea: false } },
       },
-      plugins: { legend: { position: 'top' }, tooltip: { callbacks: { label: function(ctx) { return ctx.dataset.label + ': ' + fmt(ctx.parsed.y); } } } }
+      plugins: { legend: { position: 'top' }, tooltip: { callbacks: { label: ctx => ctx.dataset.label + ': ' + fmt(ctx.parsed.y) } } }
     }
   });
 
-  // === Workspace pie ===
+  buildOverviewFilter();
+  renderOverview();
+
+  // === Workspace pie (static — not date-filtered, based on session totals) ===
   const wsData = D.workspaces.slice(0, 12);
   const wsColors = ['#58a6ff','#3fb950','#f85149','#d29922','#bc8cff','#39c5cf','#f778ba','#79c0ff','#7ee787','#ffa657','#ff7b72','#e3b341'];
   new Chart(document.getElementById('wsChart'), {
@@ -349,7 +410,7 @@ window.__DATA__ = ` + jsonData + `;
     }
   });
 
-  // === Tool summary list ===
+  // === Tool summary list (static — global) ===
   const toolSumEl = document.getElementById('toolSummaryList');
   const maxToolCalls = Math.max(...D.toolSummary.map(t=>t.calls), 1);
   toolSumEl.innerHTML = D.toolSummary.slice(0, 15).map(t => {
@@ -676,7 +737,9 @@ window.__DATA__ = ` + jsonData + `;
     const idx = Math.ceil(sortedArr.length * p / 100) - 1;
     return sortedArr[Math.max(0, idx)];
   }
-  const ttftSorted = [...allTTFT].sort((a,b)=>a-b);
+  const perfTTFT = D.sessions.flatMap(s => s.turns.filter(t => t.ttftMs > 0).map(t => t.ttftMs));
+  const perfDur = D.sessions.flatMap(s => s.turns.filter(t => t.durMs > 0).map(t => t.durMs));
+  const ttftSorted = [...perfTTFT].sort((a,b)=>a-b);
   const h1 = histogram(ttftSorted, 20);
   new Chart(document.getElementById('ttftHistChart'), {
     type: 'bar',
@@ -690,7 +753,7 @@ window.__DATA__ = ` + jsonData + `;
       }
     }
   });
-  const durSorted = [...allDur].sort((a,b)=>a-b);
+  const durSorted = [...perfDur].sort((a,b)=>a-b);
   const h2 = histogram(durSorted, 20);
   new Chart(document.getElementById('durHistChart'), {
     type: 'bar',
