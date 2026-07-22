@@ -75,8 +75,32 @@ func UserFacingErrorLang(err error, lang string) string {
 		return "Endpoint not found (404). Please check your Base URL and model name"
 	}
 
-	// ---- Rate limiting ----
+	// ---- Rate limiting (429) ----
+	// Many coding plan providers (ZAI/GLM, OpenAI, Anthropic) return 429 for
+	// both transient rate limits AND permanent quota exhaustion. We must
+	// distinguish them to give the user actionable guidance.
 	if hasHTTPStatus(err, http.StatusTooManyRequests) {
+		l429 := strings.ToLower(err.Error())
+		if strings.Contains(l429, "coding plan") ||
+			strings.Contains(l429, "usage limit") ||
+			strings.Contains(l429, "使用上限") ||
+			strings.Contains(l429, "套餐已到期") ||
+			strings.Contains(l429, "package has expired") ||
+			strings.Contains(l429, "insufficient balance") ||
+			strings.Contains(l429, "余额不足") ||
+			strings.Contains(l429, "欠费") ||
+			strings.Contains(l429, "quota exceeded") ||
+			strings.Contains(l429, "exceeded your current quota") ||
+			strings.Contains(l429, "额度已用完") ||
+			strings.Contains(l429, "allocated quota") ||
+			strings.Contains(l429, "公平使用") ||
+			strings.Contains(l429, "fair usage") {
+			if zh {
+				return "API 额度已用完或套餐已过期。请前往服务商页面查看额度状态、续订或充值后重试"
+			}
+			return "API quota exhausted or plan expired. Check your provider dashboard, renew your plan or add credits, then retry"
+		}
+		// Transient rate limit — safe to retry immediately
 		if zh {
 			return "请求太频繁，服务端已限流。输入 /retry 重试"
 		}
@@ -193,13 +217,27 @@ func UserFacingErrorLang(err error, lang string) string {
 	}
 
 	// ---- Quota / billing exhausted (string-based, for when error chain was destroyed) ----
+	// Covers Kimi (access_terminated), ZAI/GLM (coding plan 1308-1321),
+	// OpenAI (quota), and generic patterns.
 	if strings.Contains(lower, "access_terminated") ||
-		(strings.Contains(lower, "usage limit") && strings.Contains(lower, "billing cycle")) ||
-		strings.Contains(lower, "quota exhausted") {
+		strings.Contains(lower, "usage limit") ||
+		strings.Contains(lower, "billing cycle") ||
+		strings.Contains(lower, "quota exhausted") ||
+		strings.Contains(lower, "使用上限") ||
+		strings.Contains(lower, "套餐已到期") ||
+		strings.Contains(lower, "package has expired") ||
+		strings.Contains(lower, "insufficient balance") ||
+		strings.Contains(lower, "余额不足") ||
+		strings.Contains(lower, "欠费") ||
+		strings.Contains(lower, "额度已用完") ||
+		strings.Contains(lower, "allocated quota") ||
+		strings.Contains(lower, "公平使用") ||
+		strings.Contains(lower, "fair usage") ||
+		strings.Contains(lower, "coding plan") {
 		if zh {
-			return "API 额度已用完（本计费周期），将在下个周期刷新。如需立即使用，请购买额外额度或升级套餐"
+			return "API 额度已用完或套餐已过期。请前往服务商页面查看额度状态、续订或充值后重试"
 		}
-		return "API quota exhausted for this billing cycle. It will refresh next cycle. Purchase extra usage or upgrade your plan to continue now"
+		return "API quota exhausted or plan expired. Check your provider dashboard, renew your plan or add credits, then retry"
 	}
 
 	// ---- Fallback: generic message, strip provider noise ----

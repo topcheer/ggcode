@@ -106,10 +106,19 @@ func isRetryable(err error) bool {
 	// Check for HTTP status codes from known SDK error types.
 	var openaiAPIErr *openai.APIError
 	if errors.As(err, &openaiAPIErr) {
+		// 429 is normally retryable, but coding plan providers (ZAI/GLM, Kimi,
+		// OpenAI) return 429 for permanent quota exhaustion too. Detect those
+		// and don't waste retry attempts.
+		if openaiAPIErr.HTTPStatusCode == http.StatusTooManyRequests && isQuotaExhaustedError(err) {
+			return false
+		}
 		return isRetryableHTTPStatus(openaiAPIErr.HTTPStatusCode)
 	}
 	var openaiReqErr *openai.RequestError
 	if errors.As(err, &openaiReqErr) {
+		if openaiReqErr.HTTPStatusCode == http.StatusTooManyRequests && isQuotaExhaustedError(err) {
+			return false
+		}
 		return isRetryableHTTPStatus(openaiReqErr.HTTPStatusCode)
 	}
 	var anthropicErr *anthropic.Error
@@ -188,6 +197,31 @@ func isRetryableHTTPStatus(status int) bool {
 	default:
 		return true
 	}
+}
+
+// isQuotaExhaustedError checks whether a 429 error is actually a permanent
+// quota/billing exhaustion rather than a transient rate limit. Coding plan
+// providers (ZAI/GLM, Kimi, OpenAI) use 429 for both cases.
+func isQuotaExhaustedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	lower := strings.ToLower(err.Error())
+	return strings.Contains(lower, "coding plan") ||
+		strings.Contains(lower, "usage limit") ||
+		strings.Contains(lower, "使用上限") ||
+		strings.Contains(lower, "套餐已到期") ||
+		strings.Contains(lower, "package has expired") ||
+		strings.Contains(lower, "insufficient balance") ||
+		strings.Contains(lower, "余额不足") ||
+		strings.Contains(lower, "欠费") ||
+		strings.Contains(lower, "quota exceeded") ||
+		strings.Contains(lower, "exceeded your current quota") ||
+		strings.Contains(lower, "额度已用完") ||
+		strings.Contains(lower, "allocated quota") ||
+		strings.Contains(lower, "公平使用") ||
+		strings.Contains(lower, "fair usage") ||
+		strings.Contains(lower, "access_terminated")
 }
 
 // retryWithBackoffCtx retries fn up to maxAttempts times with exponential backoff.

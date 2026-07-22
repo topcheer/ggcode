@@ -79,6 +79,94 @@ func TestUserFacingError_KimiAccessTerminated(t *testing.T) {
 	}
 }
 
+func TestUserFacingError_ZAICodingPlan(t *testing.T) {
+	// ZAI/GLM coding plan returns 429 with business code 1308 (5h limit)
+	t.Run("1308_5h_limit", func(t *testing.T) {
+		err := &openai.APIError{
+			HTTPStatusCode: 429,
+			Message:        "已达到 5 hour 的使用上限。您的限额将在 2025-01-01 05:00:00 重置",
+		}
+		result := UserFacingErrorLang(err, "zh-CN")
+		if !strings.Contains(result, "额度") {
+			t.Errorf("expected '额度' for ZAI 429 quota, got %q", result)
+		}
+	})
+
+	// ZAI code 1309: coding plan expired
+	t.Run("1309_plan_expired", func(t *testing.T) {
+		err := &openai.APIError{
+			HTTPStatusCode: 429,
+			Message:        "您的 GLM Coding Plan 套餐已到期，暂无法使用",
+		}
+		result := UserFacingErrorLang(err, "zh-CN")
+		if !strings.Contains(result, "额度") && !strings.Contains(result, "过期") {
+			t.Errorf("expected '额度/过期' for expired plan, got %q", result)
+		}
+	})
+
+	// ZAI code 1113: insufficient balance
+	t.Run("1113_insufficient_balance", func(t *testing.T) {
+		err := &openai.APIError{
+			HTTPStatusCode: 429,
+			Message:        "您的账户已欠费，请充值后重试",
+		}
+		result := UserFacingErrorLang(err, "zh-CN")
+		if !strings.Contains(result, "额度") && !strings.Contains(result, "充值") {
+			t.Errorf("expected '额度/充值' for arrears, got %q", result)
+		}
+	})
+
+	// ZAI English variant
+	t.Run("english_coding_plan", func(t *testing.T) {
+		err := &openai.APIError{
+			HTTPStatusCode: 429,
+			Message:        "Usage limit reached for 5 hour. Your limit will reset at 2025-01-01 05:00:00",
+		}
+		result := UserFacingErrorLang(err, "en")
+		if !strings.Contains(strings.ToLower(result), "quota") {
+			t.Errorf("expected 'quota' for ZAI English, got %q", result)
+		}
+	})
+
+	// Standard transient rate limit should NOT be treated as quota
+	t.Run("transient_rate_limit", func(t *testing.T) {
+		err := &openai.APIError{
+			HTTPStatusCode: 429,
+			Message:        "Rate limit reached for requests",
+		}
+		result := UserFacingErrorLang(err, "en")
+		if strings.Contains(strings.ToLower(result), "quota exhausted") {
+			t.Errorf("transient 429 should not say 'quota exhausted', got %q", result)
+		}
+	})
+}
+
+func TestIsQuotaExhaustedError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"kimi_access_terminated", &openai.APIError{HTTPStatusCode: 403, Message: "access_terminated_error"}, true},
+		{"zai_5h_limit", &openai.APIError{HTTPStatusCode: 429, Message: "已达到 5 hour 的使用上限"}, true},
+		{"zai_plan_expired", &openai.APIError{HTTPStatusCode: 429, Message: "GLM Coding Plan package has expired"}, true},
+		{"zai_insufficient_balance", &openai.APIError{HTTPStatusCode: 429, Message: "insufficient balance"}, true},
+		{"openai_quota", &openai.APIError{HTTPStatusCode: 429, Message: "You exceeded your current quota"}, true},
+		{"zai_arrears_cn", &openai.APIError{HTTPStatusCode: 429, Message: "您的账户已欠费"}, true},
+		{"zai_fair_usage", &openai.APIError{HTTPStatusCode: 429, Message: "公平使用策略"}, true},
+		{"transient_rate_limit", &openai.APIError{HTTPStatusCode: 429, Message: "Rate limit reached for requests"}, false},
+		{"normal_error", errors.New("something went wrong"), false},
+		{"nil", nil, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isQuotaExhaustedError(tt.err); got != tt.want {
+				t.Errorf("isQuotaExhaustedError() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestImageBlock(t *testing.T) {
 	block := ImageBlock("image/png", "base64data")
 	if block.Type != "image" {
