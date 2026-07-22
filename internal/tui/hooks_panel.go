@@ -6,6 +6,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/hooks"
 )
 
@@ -102,7 +103,9 @@ func (m *Model) saveHooksConfig(cfg hooks.HookConfig) {
 	}
 	if m.config != nil {
 		m.config.Hooks = cfg
-		_ = m.config.Save()
+		if err := m.config.Save(); err != nil {
+			debug.Log("tui", "saveHooksConfig: config save failed: %v", err)
+		}
 	}
 }
 
