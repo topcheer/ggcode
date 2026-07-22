@@ -97,3 +97,29 @@ func TestTurnSummaryForIndex(t *testing.T) {
 		t.Fatal("expected missing turn summary for turn 3")
 	}
 }
+
+func TestSummarizeTokenAggregation(t *testing.T) {
+	events := []MetricEvent{
+		{TurnIndex: 1, Type: "llm", InputTokens: 100, OutputTokens: 50, CacheRead: 200},
+		{TurnIndex: 2, Type: "llm", InputTokens: 300, OutputTokens: 70, CacheRead: 50},
+	}
+	summary := Summarize(events)
+	if summary.TotalInputTokens != 400 {
+		t.Errorf("TotalInputTokens = %d, want 400", summary.TotalInputTokens)
+	}
+	if summary.TotalOutputTokens != 120 {
+		t.Errorf("TotalOutputTokens = %d, want 120", summary.TotalOutputTokens)
+	}
+	if len(summary.Turns) != 2 {
+		t.Fatalf("expected 2 turns, got %d", len(summary.Turns))
+	}
+	if summary.Turns[0].CumInputTokens != 100 {
+		t.Errorf("turn 1 CumInputTokens = %d, want 100", summary.Turns[0].CumInputTokens)
+	}
+	if summary.Turns[1].CumInputTokens != 400 {
+		t.Errorf("turn 2 CumInputTokens = %d, want 400", summary.Turns[1].CumInputTokens)
+	}
+	if summary.Turns[1].CumOutputTokens != 120 {
+		t.Errorf("turn 2 CumOutputTokens = %d, want 120", summary.Turns[1].CumOutputTokens)
+	}
+}

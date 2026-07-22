@@ -1751,6 +1751,39 @@ func TestRunStreamEmitsLLMMetric(t *testing.T) {
 	if llmMetric.Duration < llmMetric.TTFT {
 		t.Errorf("Duration %v should be >= TTFT %v", llmMetric.Duration, llmMetric.TTFT)
 	}
+	// Verify token usage is populated in metric event
+	if llmMetric.InputTokens != 10 {
+		t.Errorf("InputTokens = %d, want 10", llmMetric.InputTokens)
+	}
+	if llmMetric.OutputTokens != 5 {
+		t.Errorf("OutputTokens = %d, want 5", llmMetric.OutputTokens)
+	}
+}
+
+func TestEmitUsageWithSource(t *testing.T) {
+	a := NewAgent(nil, tool.NewRegistry(), "", 5)
+
+	var receivedUsage provider.TokenUsage
+	var receivedSource string
+	a.SetUsageHandler(func(u provider.TokenUsage) {
+		receivedUsage = u
+		receivedSource = a.UsageSource()
+	})
+
+	a.emitUsageWithSource(provider.TokenUsage{InputTokens: 99, OutputTokens: 33}, "strategist")
+
+	if receivedUsage.InputTokens != 99 {
+		t.Errorf("InputTokens = %d, want 99", receivedUsage.InputTokens)
+	}
+	if receivedSource != "strategist" {
+		t.Errorf("source = %q, want %q", receivedSource, "strategist")
+	}
+
+	// Default emitUsage should set source to "agent"
+	a.emitUsage(provider.TokenUsage{InputTokens: 1})
+	if a.UsageSource() != "agent" {
+		t.Errorf("default source = %q, want %q", a.UsageSource(), "agent")
+	}
 }
 
 func TestRunStreamEmitsToolMetric(t *testing.T) {
