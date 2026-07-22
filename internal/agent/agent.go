@@ -1569,11 +1569,11 @@ func (a *Agent) emitUsage(usage provider.TokenUsage) {
 }
 
 func (a *Agent) emitUsageWithSource(usage provider.TokenUsage, source string) {
-	a.mu.RLock()
+	a.mu.Lock()
 	fn := a.onUsage
-	a.mu.RUnlock()
+	a.usageSource = source
+	a.mu.Unlock()
 	if fn != nil {
-		a.usageSource = source
 		fn(usage)
 	}
 }
