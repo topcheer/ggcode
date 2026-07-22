@@ -174,48 +174,71 @@ func scanSessionFile(path string) (*scanResult, error) {
 }
 
 // scanAllSessions scans the sessions directory and returns aggregated results.
+// Files are scanned in parallel — each file's I/O and JSON parsing is independent.
 func scanAllSessions(sessionsDir string) ([]*scanResult, error) {
 	entries, err := os.ReadDir(sessionsDir)
 	if err != nil {
 		return nil, fmt.Errorf("read sessions dir: %w", err)
 	}
 
-	var results []*scanResult
+	var paths []string
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
 		}
-		name := entry.Name()
-		if !strings.HasSuffix(name, ".jsonl") {
+		if !strings.HasSuffix(entry.Name(), ".jsonl") {
 			continue
 		}
-		path := filepath.Join(sessionsDir, name)
-		sr, err := scanSessionFile(path)
-		if err != nil {
-			continue // skip unreadable files
-		}
-		// Fallback: use filename (without .jsonl) as session ID
-		if sr.meta.ID == "" {
-			sr.meta.ID = strings.TrimSuffix(name, ".jsonl")
-		}
-		// Fallback: use file mod time if no created_at from meta records
-		if sr.meta.CreatedAt.IsZero() {
-			if info, err := entry.Info(); err == nil {
-				sr.meta.CreatedAt = info.ModTime()
+		paths = append(paths, filepath.Join(sessionsDir, entry.Name()))
+	}
+
+	type fileResult struct {
+		idx int
+		sr  *scanResult
+	}
+
+	results := make([]*scanResult, len(paths))
+	ch := make(chan fileResult, len(paths))
+
+	for i, path := range paths {
+		go func(idx int, p string) {
+			sr, err := scanSessionFile(p)
+			if err != nil || sr == nil {
+				ch <- fileResult{idx: idx, sr: nil}
+				return
 			}
+			if sr.meta.ID == "" {
+				sr.meta.ID = strings.TrimSuffix(filepath.Base(p), ".jsonl")
+			}
+			if sr.meta.CreatedAt.IsZero() {
+				if info, err := os.Stat(p); err == nil {
+					sr.meta.CreatedAt = info.ModTime()
+				}
+			}
+			ch <- fileResult{idx: idx, sr: sr}
+		}(i, path)
+	}
+
+	for range paths {
+		fr := <-ch
+		if fr.sr != nil && (fr.sr.hasMeta || len(fr.sr.turns) > 0) {
+			results[fr.idx] = fr.sr
 		}
-		if !sr.hasMeta && len(sr.turns) == 0 {
-			continue // skip empty/invalid sessions
+	}
+
+	var valid []*scanResult
+	for _, sr := range results {
+		if sr != nil {
+			valid = append(valid, sr)
 		}
-		results = append(results, sr)
 	}
 
 	// Sort by created_at descending (newest first)
-	sort.Slice(results, func(i, j int) bool {
-		return results[i].meta.CreatedAt.After(results[j].meta.CreatedAt)
+	sort.Slice(valid, func(i, j int) bool {
+		return valid[i].meta.CreatedAt.After(valid[j].meta.CreatedAt)
 	})
 
-	return results, nil
+	return valid, nil
 }
 
 // findSessionsDir locates the sessions directory.
