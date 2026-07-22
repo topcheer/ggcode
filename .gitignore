@@ -66,3 +66,6 @@ ggcode-fixed
 /node_modules/
 internal/plugin/grpc/testdata/echo-plugin/echo-plugin
 internal/plugin/grpc/testdata/echo-plugin/echo-plugin.exe
+
+# Generated ggreport output
+ggreport.html
