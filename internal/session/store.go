@@ -97,6 +97,7 @@ type UsageEntry struct {
 	Model     string              `json:"model,omitempty"`
 	Vendor    string              `json:"vendor,omitempty"`
 	Endpoint  string              `json:"endpoint,omitempty"`
+	Source    string              `json:"source,omitempty"` // "agent", "strategist", "verify", "ratchet", "subagent", "compaction"
 	Usage     provider.TokenUsage `json:"usage"`
 }
 

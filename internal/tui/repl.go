@@ -89,7 +89,9 @@ func NewREPL(a *agent.Agent, policy permission.PermissionPolicy) *REPL {
 	// happen inside the tea.Program which REPL doesn't see).
 	r.model.agentBusy = &r.agentBusy
 	if a != nil {
-		a.SetUsageHandler(r.recordSessionUsage)
+		a.SetUsageHandler(func(usage provider.TokenUsage) {
+			r.recordSessionUsage(usage, a.UsageSource())
+		})
 		collectorCtx, collectorCancel := context.WithCancel(context.Background())
 		r.metricCancel = collectorCancel
 		r.metricCollector = metrics.NewCollector(collectorCtx, 256, func(ev metrics.MetricEvent) {
@@ -114,7 +116,7 @@ func (r *REPL) SetSessionStore(s session.Store) {
 }
 
 func (r *REPL) SessionUsageHandler() func(provider.TokenUsage) {
-	return r.recordSessionUsage
+	return func(usage provider.TokenUsage) { r.recordSessionUsage(usage, "subagent") }
 }
 
 // SetMCPServers passes MCP server info to the TUI model.
@@ -484,12 +486,12 @@ func (r *REPL) InjectRestart() {
 	}
 }
 
-func (r *REPL) recordSessionUsage(usage provider.TokenUsage) {
+func (r *REPL) recordSessionUsage(usage provider.TokenUsage, source string) {
 	if r.program != nil {
-		r.program.Send(sessionUsageMsg{Usage: usage})
+		r.program.Send(sessionUsageMsg{Usage: usage, Source: source})
 		return
 	}
-	r.model.recordSessionUsage(usage)
+	r.model.recordSessionUsage(usage, source)
 }
 
 // recordMetric persists a metric event to the session JSONL.
@@ -557,7 +559,7 @@ func (r *REPL) SetSubAgentManager(mgr *subagent.Manager, prov provider.Provider,
 		Tools:               tools,
 		AgentFactory:        factory,
 		WorkingDir:          r.model.agent.WorkingDir(),
-		OnUsage:             r.recordSessionUsage,
+		OnUsage:             func(usage provider.TokenUsage) { r.recordSessionUsage(usage, "subagent") },
 		SystemPromptBuilder: r.systemPromptBuilder,
 	})
 	tools.Register(tool.WaitAgentTool{Manager: mgr})
@@ -582,7 +584,7 @@ func (r *REPL) SetSubAgentManager(mgr *subagent.Manager, prov provider.Provider,
 		Tools:               tools,
 		AgentFactory:        factory,
 		WorkingDir:          r.model.agent.WorkingDir(),
-		OnUsage:             r.recordSessionUsage,
+		OnUsage:             func(usage provider.TokenUsage) { r.recordSessionUsage(usage, "subagent") },
 		SystemPromptBuilder: r.systemPromptBuilder,
 	})
 

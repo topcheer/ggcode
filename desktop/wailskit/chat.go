@@ -1089,8 +1089,8 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 		}, task, agentType)
 	}
 
-	b.subAgentMgr = agentruntime.NewSubAgentManager(b.cfg.SubAgents, b.registry, p, b.workingDir, b.recordSessionUsage, agentFactory, subAgentPromptBuilder)
-	_ = b.registry.Register(agentruntime.NewSkillTool(commandMgr, mcpMgr, p, b.registry, agentFactory, b.workingDir, b.recordSessionUsage, subAgentPromptBuilder))
+	b.subAgentMgr = agentruntime.NewSubAgentManager(b.cfg.SubAgents, b.registry, p, b.workingDir, func(usage provider.TokenUsage) { b.recordSessionUsage(usage, "subagent") }, agentFactory, subAgentPromptBuilder)
+	_ = b.registry.Register(agentruntime.NewSkillTool(commandMgr, mcpMgr, p, b.registry, agentFactory, b.workingDir, func(usage provider.TokenUsage) { b.recordSessionUsage(usage, "subagent") }, subAgentPromptBuilder))
 	agentruntime.RegisterDelegateTool(b.registry, b.acpClientMgr, func() *subagent.Manager { return b.subAgentMgr }, b.workingDir, func() string {
 		if b.agent != nil {
 			return b.agent.WorkingDir()
@@ -1296,7 +1296,7 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 
 	// Usage handler — accumulate token usage per session (mirrors Fyne recordSessionUsage)
 	a.SetUsageHandler(func(usage provider.TokenUsage) {
-		b.recordSessionUsage(usage)
+		b.recordSessionUsage(usage, a.UsageSource())
 	})
 
 	// Metric collector — async, non-blocking (mirrors Fyne line 715-721)
@@ -2382,7 +2382,7 @@ func buildWailsSystemPrompt(cfg *config.Config, workingDir string, mode permissi
 
 // recordSessionUsage accumulates token usage into the session.
 // Mirrors Fyne AgentBridge.recordSessionUsage and TUI Model.recordSessionUsage exactly.
-func (b *ChatBridge) recordSessionUsage(usage provider.TokenUsage) {
+func (b *ChatBridge) recordSessionUsage(usage provider.TokenUsage, source string) {
 	b.mu.Lock()
 	if b.currentSes == nil || b.sessionStore == nil {
 		b.mu.Unlock()
@@ -2401,6 +2401,7 @@ func (b *ChatBridge) recordSessionUsage(usage provider.TokenUsage) {
 		Vendor:    ses.Vendor,
 		Endpoint:  ses.Endpoint,
 		Usage:     usage,
+		Source:    source,
 	}
 	b.mu.Unlock()
 

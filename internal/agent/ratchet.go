@@ -585,6 +585,7 @@ func (a *Agent) ProcessErrorsWithLLM(errors []string, existingRules []Rule) (*ra
 	if err != nil || resp == nil {
 		return nil, fmt.Errorf("ratchet LLM call failed: %w", err)
 	}
+	a.emitUsageWithSource(resp.Usage, "ratchet")
 
 	text := ""
 	for _, b := range resp.Message.Content {

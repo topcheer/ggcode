@@ -257,6 +257,7 @@ func (a *Agent) llmDecideVerifyCommand(ctx context.Context) string {
 		debug.Log("verify", "LLM decide command failed: %v", err)
 		return ""
 	}
+	a.emitUsageWithSource(resp.Usage, "verify")
 
 	cmd := strings.TrimSpace(extractText(resp.Message))
 	if strings.EqualFold(cmd, "SKIP") || cmd == "" {

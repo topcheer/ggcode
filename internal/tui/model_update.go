@@ -151,7 +151,7 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		)
 
 	case sessionUsageMsg:
-		m.recordSessionUsage(msg.Usage)
+		m.recordSessionUsage(msg.Usage, msg.Source)
 		return m, nil
 
 	case sessionMetricMsg:

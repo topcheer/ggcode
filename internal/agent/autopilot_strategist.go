@@ -89,6 +89,9 @@ What should the agent do next?`, goal, contextStr, lastAssistantText, a.autopilo
 	if err != nil {
 		return nil, fmt.Errorf("strategist call failed: %w", err)
 	}
+	if resp.Usage.InputTokens > 0 || resp.Usage.OutputTokens > 0 {
+		a.emitUsageWithSource(resp.Usage, "strategist")
+	}
 
 	var guidance strings.Builder
 	for _, block := range resp.Message.Content {

@@ -909,7 +909,7 @@ func (m *Model) Session() *session.Session {
 	return m.session
 }
 
-func (m *Model) recordSessionUsage(usage provider.TokenUsage) {
+func (m *Model) recordSessionUsage(usage provider.TokenUsage, source string) {
 	if m.session == nil || m.sessionStore == nil {
 		return
 	}
@@ -941,6 +941,7 @@ func (m *Model) recordSessionUsage(usage provider.TokenUsage) {
 		Model:     model,
 		Vendor:    ses.Vendor,
 		Endpoint:  ses.Endpoint,
+		Source:    source,
 		Usage:     usage,
 	}
 	// Keep in-memory UsageHistory in sync with disk. AppendUsageEntry

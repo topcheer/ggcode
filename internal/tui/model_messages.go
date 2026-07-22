@@ -60,7 +60,8 @@ type tunnelPublishCurrentSessionMsg struct {
 }
 
 type sessionUsageMsg struct {
-	Usage provider.TokenUsage
+	Usage  provider.TokenUsage
+	Source string
 }
 
 type sessionMetricMsg struct {

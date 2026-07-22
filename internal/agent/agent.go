@@ -49,6 +49,7 @@ type Agent struct {
 	policy                     permission.PermissionPolicy
 	onApproval                 ApprovalFunc
 	onUsage                    func(usage provider.TokenUsage)
+	usageSource                string // tracks the source of the current LLM call for usage persistence
 	onMetric                   func(metrics.MetricEvent)
 	onCheckpoint               func(summaryMsgID, lastMsgID string, tokenCount int)
 	lastCheckpointMessageCount int // tracks last fallback checkpoint to avoid spamming
@@ -1561,13 +1562,28 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 
 // --- Internal helpers ---
 
+// emitUsage invokes the usage callback with the given source tag.
+// source values: "agent", "strategist", "verify", "ratchet".
 func (a *Agent) emitUsage(usage provider.TokenUsage) {
+	a.emitUsageWithSource(usage, "agent")
+}
+
+func (a *Agent) emitUsageWithSource(usage provider.TokenUsage, source string) {
 	a.mu.RLock()
 	fn := a.onUsage
 	a.mu.RUnlock()
 	if fn != nil {
+		a.usageSource = source
 		fn(usage)
 	}
+}
+
+// UsageSource returns the source tag of the most recent LLM call.
+// Used by the usage callback to categorize usage entries in the session JSONL.
+func (a *Agent) UsageSource() string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.usageSource
 }
 
 func (a *Agent) emitMetric(m metrics.MetricEvent) {
