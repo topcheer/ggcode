@@ -3,6 +3,7 @@ package util
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -42,8 +43,9 @@ func DetectShell() (ShellSpec, error) {
 	shellCacheOnce.Do(func() {
 		shellCache, shellCacheErr = detectShell(runtime.GOOS, exec.LookPath, os.Stat, os.Getenv)
 		if shellCacheErr == nil {
-			// Log the detected shell for diagnostics (visible in debug_log tool)
-			fmt.Fprintf(os.Stderr, "")
+			log.Printf("[shell] detected shell: %s path=%s args=%v", shellCache.Name, shellCache.Path, shellCache.Args)
+		} else {
+			log.Printf("[shell] shell detection failed: %v", shellCacheErr)
 		}
 	})
 	return shellCache, shellCacheErr
