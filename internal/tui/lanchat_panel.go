@@ -560,20 +560,42 @@ func (m *Model) renderLanChatPanel() string {
 	body = append(body, headerStyle.Render("Online: "+onlineStr))
 	body = append(body, "")
 
-	// Messages
+	// Messages — show as many as fit in the panel, minus chrome lines
+	// (header + blank + input + hint + input line = ~5 lines)
 	if hub != nil {
 		msgs := hub.Messages()
-		maxMsgs := 15
-		start := 0
-		if len(msgs) > maxMsgs {
-			start = len(msgs) - maxMsgs
+		availH := m.panelAvailableHeight()
+		// Reserve lines for header, blank, input hint, input line, padding
+		availMsgLines := availH - 6
+		if availMsgLines < 5 {
+			availMsgLines = 5
 		}
+
 		if len(msgs) == 0 {
 			body = append(body, lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render("  (no messages yet)"))
 		} else {
-			for i := start; i < len(msgs); i++ {
-				body = append(body, m.renderLanChatMessage(msgs[i]))
+			// Render messages from newest backward, accumulating until we run
+			// out of available lines. Each message may wrap to multiple lines.
+			var rendered []string
+			usedLines := 0
+			for i := len(msgs) - 1; i >= 0; i-- {
+				line := m.renderLanChatMessage(msgs[i])
+				lineHeight := lipgloss.Height(line) // may be >1 if content is long
+				if usedLines+lineHeight > availMsgLines && len(rendered) > 0 {
+					// No more room — add truncation indicator
+					remaining := len(msgs) - len(rendered)
+					if remaining > 0 {
+						rendered = append([]string{
+							lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(
+								fmt.Sprintf("  ↑ %d earlier messages hidden", remaining)),
+						}, rendered...)
+					}
+					break
+				}
+				usedLines += lineHeight
+				rendered = append([]string{line}, rendered...)
 			}
+			body = append(body, rendered...)
 		}
 	}
 
