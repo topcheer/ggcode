@@ -137,6 +137,7 @@ go get github.com/topcheer/ggcode/sdk/plugin
 
 ### 3. Implement the plugin
 
+{% raw %}
 ```go
 package main
 
@@ -180,6 +181,7 @@ func main() {
     plugin.Serve(&myPlugin{})
 }
 ```
+{% endraw %}
 
 ### 4. Build and install
 
