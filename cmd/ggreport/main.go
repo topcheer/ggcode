@@ -54,7 +54,9 @@ func main() {
 
 	sizeStr := "bytes"
 	size := int64(len(html))
-	if size >= 1_000_000 {
+	if size >= 1_000_000_000 {
+		sizeStr = fmt.Sprintf("%.1f GB", float64(size)/1_000_000_000)
+	} else if size >= 1_000_000 {
 		sizeStr = fmt.Sprintf("%.1f MB", float64(size)/1_000_000)
 	} else if size >= 1_000 {
 		sizeStr = fmt.Sprintf("%.1f KB", float64(size)/1_000)
@@ -105,6 +107,8 @@ type turnJSON struct {
 	TTFTMs  int64  `json:"ttftMs"`
 	DurMs   int64  `json:"durMs"`
 	ThinkMs int64  `json:"thinkMs"`
+	Day     string `json:"day,omitempty"`
+	TS      string `json:"ts,omitempty"`
 }
 
 type toolJSON struct {
@@ -192,6 +196,20 @@ func buildReport(results []*scanResult) reportData {
 				DurMs:   t.DurMs,
 				ThinkMs: t.ThinkMs,
 			}
+			// Use turn's actual timestamp for daily aggregation
+			if !t.Timestamp.IsZero() {
+				day := t.Timestamp.Format("2006-01-02")
+				tj.Day = day
+				tj.TS = t.Timestamp.Format(time.RFC3339)
+				dr := dailyMap[day]
+				if dr == nil {
+					dr = &dailyTokenRow{Date: day}
+					dailyMap[day] = dr
+				}
+				dr.Input += t.Input
+				dr.Output += t.Output
+				dr.Cache += t.Cache
+			}
 			sj.Turns = append(sj.Turns, tj)
 
 			// Collect model performance data
@@ -255,17 +273,6 @@ func buildReport(results []*scanResult) reportData {
 		}
 
 		rd.Sessions = append(rd.Sessions, sj)
-
-		// Daily aggregation
-		day := sr.meta.CreatedAt.Format("2006-01-02")
-		dr := dailyMap[day]
-		if dr == nil {
-			dr = &dailyTokenRow{Date: day}
-			dailyMap[day] = dr
-		}
-		dr.Input += sj.TotalInput
-		dr.Output += sj.TotalOutput
-		dr.Cache += sj.TotalCache
 
 		// Workspace aggregation
 		ws := sr.meta.Workspace

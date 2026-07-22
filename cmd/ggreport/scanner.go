@@ -37,9 +37,10 @@ type sessionMeta struct {
 }
 
 type usageEntry struct {
-	TurnIndex int    `json:"turn_index"`
-	Model     string `json:"model,omitempty"`
-	Vendor    string `json:"vendor,omitempty"`
+	Timestamp time.Time `json:"timestamp"`
+	TurnIndex int       `json:"turn_index"`
+	Model     string    `json:"model,omitempty"`
+	Vendor    string    `json:"vendor,omitempty"`
 	Usage     struct {
 		InputTokens  int `json:"input_tokens"`
 		OutputTokens int `json:"output_tokens"`

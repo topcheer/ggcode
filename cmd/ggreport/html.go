@@ -232,6 +232,11 @@ window.__DATA__ = ` + jsonData + `;
     if (ms < 1000) return ms+'ms';
     return (ms/1000).toFixed(1)+'s';
   };
+  const fmtTurnTime = (t) => {
+    if (t.ts) { try { return new Date(t.ts).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}); } catch(e){} }
+    if (t.day) return t.day;
+    return '#'+t.index;
+  };
 
   // === Global stats ===
   let totalInput=0, totalOutput=0, totalCache=0, totalLLM=0, totalTool=0;
@@ -435,9 +440,11 @@ window.__DATA__ = ` + jsonData + `;
     const sumIn = filtered.reduce((a,t)=>a+t.input,0);
     const sumOut = filtered.reduce((a,t)=>a+t.output,0);
     const sumCache = filtered.reduce((a,t)=>a+t.cache,0);
+    const tStart = filtered.length ? fmtTurnTime(filtered[0]) : '-';
+    const tEnd = filtered.length ? fmtTurnTime(filtered[filtered.length-1]) : '-';
     document.getElementById('detailCards').innerHTML =
       card('Messages', s.msgCount) +
-      card('LLM Calls', filtered.length, 'turns ' + rangeL + '\u2013' + rangeR) +
+      card('LLM Calls', filtered.length, tStart + ' ~ ' + tEnd) +
       card('Tool Calls', s.toolCalls) +
       card('Input', fmt(sumIn), 'tokens') +
       card('Output', fmt(sumOut), 'tokens') +
@@ -523,8 +530,10 @@ window.__DATA__ = ` + jsonData + `;
       fill.style.width = (pctR - pctL) + '%';
       hL.style.left = pctL + '%';
       hR.style.left = pctR + '%';
-      lblL.textContent = '#' + lo;
-      lblR.textContent = '#' + hi;
+      const turnL = turns.find(t => t.index === lo);
+      const turnR = turns.find(t => t.index === hi);
+      lblL.textContent = turnL ? fmtTurnTime(turnL) : ('#' + lo);
+      lblR.textContent = turnR ? fmtTurnTime(turnR) : ('#' + hi);
       onChange(lo, hi);
     }
 

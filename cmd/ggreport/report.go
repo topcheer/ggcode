@@ -21,14 +21,15 @@ type scanResult struct {
 }
 
 type turnAgg struct {
-	Index   int
-	Model   string
-	Input   int
-	Output  int
-	Cache   int
-	TTFTMs  int64
-	DurMs   int64
-	ThinkMs int64
+	Index     int
+	Model     string
+	Input     int
+	Output    int
+	Cache     int
+	TTFTMs    int64
+	DurMs     int64
+	ThinkMs   int64
+	Timestamp time.Time
 }
 
 type toolAgg struct {
@@ -106,6 +107,9 @@ func scanSessionFile(path string) (*scanResult, error) {
 					t.Input += u.Usage.InputTokens
 					t.Output += u.Usage.OutputTokens
 					t.Cache += u.Usage.CacheRead
+					if !u.Timestamp.IsZero() {
+						t.Timestamp = u.Timestamp
+					}
 					if u.Model != "" && t.Model == "" {
 						t.Model = u.Model
 					}
