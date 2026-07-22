@@ -15,6 +15,12 @@ type MetricEvent struct {
 	ThinkTime time.Duration `json:"think_time,omitempty"` // cumulative reasoning/thinking duration
 	Duration  time.Duration `json:"duration,omitempty"`   // total LLM call wall time
 
+	// Token usage (LLM calls only)
+	InputTokens  int `json:"input_tokens,omitempty"`
+	OutputTokens int `json:"output_tokens,omitempty"`
+	CacheRead    int `json:"cache_read_tokens,omitempty"`
+	CacheWrite   int `json:"cache_write_tokens,omitempty"`
+
 	// Tool metrics
 	ToolName     string        `json:"tool_name,omitempty"`
 	ToolSuccess  bool          `json:"tool_success,omitempty"`

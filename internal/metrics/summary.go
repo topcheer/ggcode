@@ -12,6 +12,11 @@ type SessionSummary struct {
 	ToolCallCount    int
 	ToolFailureCount int
 
+	TotalInputTokens  int
+	TotalOutputTokens int
+	TotalCacheRead    int
+	TotalCacheWrite   int
+
 	AvgTTFT     time.Duration
 	P95TTFT     time.Duration
 	AvgDuration time.Duration
@@ -31,13 +36,22 @@ type ToolSummary struct {
 }
 
 type TurnSummary struct {
-	TurnIndex           int
-	LLMCallCount        int
-	ToolCallCount       int
-	ToolFailureCount    int
-	TTFT                time.Duration
-	Duration            time.Duration
-	ThinkTime           time.Duration
+	TurnIndex        int
+	LLMCallCount     int
+	ToolCallCount    int
+	ToolFailureCount int
+	TTFT             time.Duration
+	Duration         time.Duration
+	ThinkTime        time.Duration
+	InputTokens      int
+	OutputTokens     int
+	CacheRead        int
+	CacheWrite       int
+	// Cumulative totals across all turns up to and including this one.
+	CumInputTokens      int
+	CumOutputTokens     int
+	CumCacheRead        int
+	CumCacheWrite       int
 	SlowestTool         string
 	SlowestToolDuration time.Duration
 }
@@ -83,6 +97,10 @@ func Summarize(events []MetricEvent) SessionSummary {
 			}
 			turn.Duration += ev.Duration
 			turn.ThinkTime += ev.ThinkTime
+			turn.InputTokens += ev.InputTokens
+			turn.OutputTokens += ev.OutputTokens
+			turn.CacheRead += ev.CacheRead
+			turn.CacheWrite += ev.CacheWrite
 		case "tool":
 			turn.ToolCallCount++
 			if !ev.ToolSuccess || ev.ToolError != "" {
@@ -121,6 +139,10 @@ func Summarize(events []MetricEvent) SessionSummary {
 		out.LLMCallCount += turn.LLMCallCount
 		out.ToolCallCount += turn.ToolCallCount
 		out.ToolFailureCount += turn.ToolFailureCount
+		out.TotalInputTokens += turn.InputTokens
+		out.TotalOutputTokens += turn.OutputTokens
+		out.TotalCacheRead += turn.CacheRead
+		out.TotalCacheWrite += turn.CacheWrite
 		if turn.TTFT > 0 {
 			ttfts = append(ttfts, turn.TTFT)
 		}
@@ -139,6 +161,18 @@ func Summarize(events []MetricEvent) SessionSummary {
 		}
 		return out.Turns[i].TurnIndex < out.Turns[j].TurnIndex
 	})
+	// Fill cumulative token totals.
+	var cumIn, cumOut, cumCR, cumCW int
+	for i := range out.Turns {
+		cumIn += out.Turns[i].InputTokens
+		cumOut += out.Turns[i].OutputTokens
+		cumCR += out.Turns[i].CacheRead
+		cumCW += out.Turns[i].CacheWrite
+		out.Turns[i].CumInputTokens = cumIn
+		out.Turns[i].CumOutputTokens = cumOut
+		out.Turns[i].CumCacheRead = cumCR
+		out.Turns[i].CumCacheWrite = cumCW
+	}
 	out.TurnCount = len(out.Turns)
 	out.AvgTTFT = averageDuration(ttfts)
 	out.P95TTFT = percentileDuration(ttfts, 95)

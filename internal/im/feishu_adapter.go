@@ -114,11 +114,10 @@ func newFeishuAdapter(name string, imCfg config.IMConfig, adapterCfg config.IMAd
 	verifyToken := strings.TrimSpace(stringValue(adapterCfg.Extra, "verification_token", "verify_token"))
 	webhookPort := 0
 	if v := strings.TrimSpace(stringValue(adapterCfg.Extra, "webhook_port")); v != "" {
-		var err error
 		if n, ok := intValueStr(v); ok && n > 0 {
 			webhookPort = n
 		} else {
-			_ = err
+			debug.Log("im", "feishu adapter %s: ignoring invalid webhook_port %q", name, v)
 		}
 	}
 	adapter := &feishuAdapter{

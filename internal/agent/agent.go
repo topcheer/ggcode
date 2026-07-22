@@ -1494,11 +1494,15 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 				ttft = firstTokenTime.Sub(llmStartTime)
 			}
 			a.emitMetric(metrics.MetricEvent{
-				Timestamp: now,
-				Type:      "llm",
-				TTFT:      ttft,
-				ThinkTime: thinkDuration,
-				Duration:  now.Sub(llmStartTime),
+				Timestamp:    now,
+				Type:         "llm",
+				TTFT:         ttft,
+				ThinkTime:    thinkDuration,
+				Duration:     now.Sub(llmStartTime),
+				InputTokens:  usage.InputTokens,
+				OutputTokens: usage.OutputTokens,
+				CacheRead:    usage.CacheRead,
+				CacheWrite:   usage.CacheWrite,
 			})
 			onEvent(event)
 
