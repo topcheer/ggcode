@@ -290,15 +290,19 @@ window.__DATA__ = ` + jsonData + `;
     data: {
       labels: dailyData.map(d => d.date),
       datasets: [
-        { label: 'Input', data: dailyData.map(d=>d.input), backgroundColor: 'rgba(88,166,255,0.7)', stack: 'a' },
-        { label: 'Output', data: dailyData.map(d=>d.output), backgroundColor: 'rgba(63,185,80,0.7)', stack: 'a' },
-        { label: 'Cache', data: dailyData.map(d=>d.cache), backgroundColor: 'rgba(188,140,255,0.5)', stack: 'a' },
+        { label: 'Input', data: dailyData.map(d=>d.input), backgroundColor: 'rgba(88,166,255,0.7)', yAxisID: 'yLeft' },
+        { label: 'Cache', data: dailyData.map(d=>d.cache), backgroundColor: 'rgba(188,140,255,0.5)', yAxisID: 'yLeft' },
+        { label: 'Output', data: dailyData.map(d=>d.output), backgroundColor: 'rgba(63,185,80,0.7)', yAxisID: 'yRight' },
       ]
     },
     options: {
       responsive: true, maintainAspectRatio: false,
-      scales: { x: { stacked: true, grid: { display: false } }, y: { stacked: true, ticks: { callback: fmt } } },
-      plugins: { legend: { position: 'top' } }
+      scales: {
+        x: { grid: { display: false } },
+        yLeft: { position: 'left', ticks: { callback: fmt }, title: { display: true, text: 'Input / Cache', color: '#8b949e' } },
+        yRight: { position: 'right', ticks: { callback: fmt }, title: { display: true, text: 'Output', color: '#8b949e' }, grid: { drawOnChartArea: false } },
+      },
+      plugins: { legend: { position: 'top' }, tooltip: { callbacks: { label: function(ctx) { return ctx.dataset.label + ': ' + fmt(ctx.parsed.y); } } } }
     }
   });
 
@@ -457,15 +461,19 @@ window.__DATA__ = ` + jsonData + `;
       data: {
         labels: filtered.map(t => '#'+t.index),
         datasets: [
-          { label: 'Input', data: filtered.map(t=>t.input), backgroundColor: 'rgba(88,166,255,0.7)', stack: 'a' },
-          { label: 'Output', data: filtered.map(t=>t.output), backgroundColor: 'rgba(63,185,80,0.7)', stack: 'a' },
-          { label: 'Cache', data: filtered.map(t=>t.cache), backgroundColor: 'rgba(188,140,255,0.5)', stack: 'a' },
+          { label: 'Input', data: filtered.map(t=>t.input), backgroundColor: 'rgba(88,166,255,0.7)', yAxisID: 'yLeft' },
+          { label: 'Cache', data: filtered.map(t=>t.cache), backgroundColor: 'rgba(188,140,255,0.5)', yAxisID: 'yLeft' },
+          { label: 'Output', data: filtered.map(t=>t.output), backgroundColor: 'rgba(63,185,80,0.7)', yAxisID: 'yRight' },
         ]
       },
       options: {
         responsive: true, maintainAspectRatio: false,
-        scales: { x: { stacked: true, grid:{display:false} }, y: { stacked: true, ticks:{callback:fmt} } },
-        plugins: { legend: { position: 'top' } }
+        scales: {
+          x: { grid:{display:false} },
+          yLeft: { position: 'left', ticks:{callback:fmt}, title: { display: true, text: 'Input / Cache', color: '#8b949e' } },
+          yRight: { position: 'right', ticks:{callback:fmt}, title: { display: true, text: 'Output', color: '#8b949e' }, grid: { drawOnChartArea: false } },
+        },
+        plugins: { legend: { position: 'top' }, tooltip: { callbacks: { label: function(ctx) { return ctx.dataset.label + ': ' + fmt(ctx.parsed.y); } } } }
       }
     });
 
