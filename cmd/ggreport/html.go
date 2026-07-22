@@ -188,6 +188,8 @@ window.__DATA__ = ` + jsonData + `;
   'use strict';
   const D = window.__DATA__;
   const fmt = (n) => {
+    if (n >= 1e12) return (n/1e12).toFixed(1)+'T';
+    if (n >= 1e9) return (n/1e9).toFixed(1)+'B';
     if (n >= 1e6) return (n/1e6).toFixed(1)+'M';
     if (n >= 1e3) return (n/1e3).toFixed(1)+'K';
     return ''+n;
@@ -294,15 +296,15 @@ window.__DATA__ = ` + jsonData + `;
 
   // === Sessions table ===
   const cols = [
-    { key: 'title', label: 'Title', fmt: s => s.title || s.id.slice(0,8) },
-    { key: 'workspace', label: 'Workspace', fmt: s => { const p=s.workspace||''; return p.split('/').pop()||p||'-'; } },
-    { key: 'model', label: 'Model', fmt: s => s.model || '-' },
-    { key: 'createdAt', label: 'Created', fmt: s => new Date(s.createdAt).toLocaleDateString() },
-    { key: 'msgCount', label: 'Msgs', fmt: s => s.msgCount, num: true },
-    { key: 'llmCalls', label: 'LLM', fmt: s => s.llmCalls, num: true },
-    { key: 'toolCalls', label: 'Tools', fmt: s => s.toolCalls, num: true },
-    { key: 'totalInput', label: 'Input', fmt: s => fmt(s.totalInput), num: true },
-    { key: 'totalOutput', label: 'Output', fmt: s => fmt(s.totalOutput), num: true },
+    { key: 'title', label: 'Title', sort: s => s.title || s.id.slice(0,8), display: s => s.title || s.id.slice(0,8) },
+    { key: 'workspace', label: 'Workspace', sort: s => { const p=s.workspace||''; return p.split('/').pop()||p||'-'; }, display: s => { const p=s.workspace||''; return p.split('/').pop()||p||'-'; } },
+    { key: 'model', label: 'Model', sort: s => s.model || '-', display: s => s.model || '-' },
+    { key: 'createdAt', label: 'Created', sort: s => new Date(s.createdAt).getTime(), display: s => { try { return new Date(s.createdAt).toLocaleString(); } catch(e) { return s.createdAt; } } },
+    { key: 'msgCount', label: 'Msgs', sort: s => s.msgCount, display: s => s.msgCount },
+    { key: 'llmCalls', label: 'LLM', sort: s => s.llmCalls, display: s => s.llmCalls },
+    { key: 'toolCalls', label: 'Tools', sort: s => s.toolCalls, display: s => s.toolCalls },
+    { key: 'totalInput', label: 'Input', sort: s => s.totalInput, display: s => fmt(s.totalInput) },
+    { key: 'totalOutput', label: 'Output', sort: s => s.totalOutput, display: s => fmt(s.totalOutput) },
   ];
   let sortKey = 'createdAt', sortDir = -1;
   const headerEl = document.getElementById('sessionsHeader');
@@ -319,15 +321,16 @@ window.__DATA__ = ` + jsonData + `;
       th.classList.remove('sort-asc','sort-desc');
       if (cols[i].key === sortKey) th.classList.add(sortDir===1?'sort-asc':'sort-desc');
     });
+    const col = cols.find(c=>c.key===sortKey);
     const sorted = [...D.sessions].sort((a,b) => {
-      const va = cols.find(c=>c.key===sortKey).fmt(a);
-      const vb = cols.find(c=>c.key===sortKey).fmt(b);
-      if (typeof va === 'number') return (va-vb)*sortDir;
+      const va = col.sort(a);
+      const vb = col.sort(b);
+      if (typeof va === 'number' && typeof vb === 'number') return (va-vb)*sortDir;
       return String(va).localeCompare(String(vb))*sortDir;
     });
     document.getElementById('sessionsBody').innerHTML = sorted.map(s =>
       '<tr class="session-row" data-id="'+s.id+'">' +
-      cols.map(c => '<td'+(c.num?' class="num"':'')+'>'+c.fmt(s)+'</td>').join('') +
+      cols.map(c => '<td class="'+(typeof c.sort(s)==='number'?'num':'')+'">'+c.display(s)+'</td>').join('') +
       '</tr>'
     ).join('');
     document.querySelectorAll('.session-row').forEach(row => {

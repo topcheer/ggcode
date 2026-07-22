@@ -79,13 +79,25 @@ func scanSessionFile(path string) (*scanResult, error) {
 
 		switch rec.Type {
 		case "meta":
-			if len(rec.Meta) > 0 {
-				var m sessionMeta
-				if err := json.Unmarshal(rec.Meta, &m); err == nil {
-					sr.meta = m
-					sr.hasMeta = true
-				}
+			// Meta fields are directly on the record, not nested.
+			// Use SessionID as fallback if meta has no explicit ID.
+			sr.meta.Title = rec.Title
+			if rec.Workspace != "" {
+				sr.meta.Workspace = rec.Workspace
 			}
+			sr.meta.Vendor = rec.Vendor
+			sr.meta.Endpoint = rec.Endpoint
+			sr.meta.Model = rec.Model
+			if !rec.CreatedAt.IsZero() {
+				sr.meta.CreatedAt = rec.CreatedAt
+			}
+			if !rec.UpdatedAt.IsZero() {
+				sr.meta.UpdatedAt = rec.UpdatedAt
+			}
+			if sr.meta.ID == "" && rec.SessionID != "" {
+				sr.meta.ID = rec.SessionID
+			}
+			sr.hasMeta = true
 		case "usage":
 			if len(rec.UsageEntry) > 0 {
 				var u usageEntry
@@ -162,6 +174,16 @@ func scanAllSessions(sessionsDir string) ([]*scanResult, error) {
 		sr, err := scanSessionFile(path)
 		if err != nil {
 			continue // skip unreadable files
+		}
+		// Fallback: use filename (without .jsonl) as session ID
+		if sr.meta.ID == "" {
+			sr.meta.ID = strings.TrimSuffix(name, ".jsonl")
+		}
+		// Fallback: use file mod time if no created_at from meta records
+		if sr.meta.CreatedAt.IsZero() {
+			if info, err := entry.Info(); err == nil {
+				sr.meta.CreatedAt = info.ModTime()
+			}
 		}
 		if !sr.hasMeta && len(sr.turns) == 0 {
 			continue // skip empty/invalid sessions

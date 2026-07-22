@@ -8,10 +8,19 @@ import (
 	"time"
 )
 
-// jsonlRecord is the envelope for every line in a session JSONL file.
+// jsonlRecord matches the top-level JSON structure of each line in a session
+// JSONL file. Meta fields (title, workspace, model, etc.) are directly on the
+// record, NOT nested under a "meta" key.
 type jsonlRecord struct {
 	Type        string          `json:"type"`
-	Meta        json.RawMessage `json:"meta,omitempty"`
+	SessionID   string          `json:"session_id,omitempty"`
+	Title       string          `json:"title,omitempty"`
+	Workspace   string          `json:"workspace,omitempty"`
+	Vendor      string          `json:"vendor,omitempty"`
+	Endpoint    string          `json:"endpoint,omitempty"`
+	Model       string          `json:"model,omitempty"`
+	CreatedAt   time.Time       `json:"created_at,omitempty"`
+	UpdatedAt   time.Time       `json:"updated_at,omitempty"`
 	UsageEntry  json.RawMessage `json:"usage_entry,omitempty"`
 	MetricEvent json.RawMessage `json:"metric_event,omitempty"`
 }
