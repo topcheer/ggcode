@@ -78,6 +78,17 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .tool-bar { flex: 1; height: 8px; background: var(--bg); border-radius: 4px; overflow: hidden; }
 .tool-bar-fill { height: 100%; border-radius: 4px; background: var(--accent); transition: width 0.3s; }
 .tool-stat { min-width: 60px; text-align: right; font-variant-numeric: tabular-nums; color: var(--text-dim); }
+
+/* Filter bar */
+.filter-bar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
+.filter-group { display: flex; align-items: center; gap: 6px; }
+.filter-label { color: var(--text-dim); font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
+.filter-select, .filter-input { background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 6px 10px; border-radius: 6px; font-size: 13px; outline: none; }
+.filter-select:focus, .filter-input:focus { border-color: var(--accent); }
+.filter-select { min-width: 120px; }
+.filter-input { width: 130px; }
+.filter-hint { color: var(--text-dim); font-size: 12px; }
+.filter-count { color: var(--text-dim); font-size: 12px; margin-left: auto; }
 </style>
 </head>
 <body>
@@ -117,6 +128,7 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; }
 
 <!-- SESSIONS -->
 <div class="tab-panel" id="tab-sessions">
+  <div class="filter-bar" id="filterBar"></div>
   <div class="chart-box" style="padding:0;overflow:hidden;">
     <table id="sessionsTable">
       <thead><tr id="sessionsHeader"></tr></thead>
@@ -294,6 +306,56 @@ window.__DATA__ = ` + jsonData + `;
       '<span class="tool-stat" style="color:'+failColor+'">'+(failRate>0?failRate+'% fail':'ok')+'</span></div>';
   }).join('');
 
+  // === Sessions filter bar ===
+  const workspaces = [...new Set(D.sessions.map(s => s.workspace || '(unknown)'))].sort();
+  const dates = D.sessions.map(s => { try { return new Date(s.createdAt); } catch(e) { return null; } }).filter(Boolean);
+  const minDate = dates.length ? new Date(Math.min(...dates)) : null;
+  const maxDate = dates.length ? new Date(Math.max(...dates)) : null;
+  const todateInput = (d) => d.toISOString().slice(0,10);
+  let filterWs = '', filterFrom = '', filterTo = '';
+
+  const filterBar = document.getElementById('filterBar');
+  function buildFilterBar() {
+    let html = '<div class="filter-group"><span class="filter-label">Workspace</span>' +
+      '<select class="filter-select" id="fWs"><option value="">All</option>';
+    workspaces.forEach(ws => {
+      const label = ws.split('/').pop() || ws;
+      html += '<option value="'+esc(ws)+'">'+esc(label)+'</option>';
+    });
+    html += '</select></div>';
+    html += '<div class="filter-group"><span class="filter-label">From</span>' +
+      '<input type="date" class="filter-input" id="fFrom"' + (minDate ? ' min="'+todateInput(minDate)+'"' : '') + '></div>';
+    html += '<div class="filter-group"><span class="filter-label">To</span>' +
+      '<input type="date" class="filter-input" id="fTo"' + (maxDate ? ' max="'+todateInput(maxDate)+'"' : '') + '></div>';
+    html += '<div class="filter-group"><button class="back-btn" id="fReset">Reset</button></div>';
+    html += '<div class="filter-count" id="fCount"></div>';
+    filterBar.innerHTML = html;
+    document.getElementById('fWs').addEventListener('change', e => { filterWs = e.target.value; renderTable(); });
+    document.getElementById('fFrom').addEventListener('change', e => { filterFrom = e.target.value; renderTable(); });
+    document.getElementById('fTo').addEventListener('change', e => { filterTo = e.target.value; renderTable(); });
+    document.getElementById('fReset').addEventListener('click', () => {
+      filterWs = filterFrom = filterTo = '';
+      document.getElementById('fWs').value = '';
+      document.getElementById('fFrom').value = '';
+      document.getElementById('fTo').value = '';
+      renderTable();
+    });
+  }
+  function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+  buildFilterBar();
+
+  function getFilteredSessions() {
+    return D.sessions.filter(s => {
+      if (filterWs && (s.workspace || '(unknown)') !== filterWs) return false;
+      try {
+        const d = new Date(s.createdAt);
+        if (filterFrom && d < new Date(filterFrom + 'T00:00:00')) return false;
+        if (filterTo && d > new Date(filterTo + 'T23:59:59')) return false;
+      } catch(e) {}
+      return true;
+    });
+  }
+
   // === Sessions table ===
   const cols = [
     { key: 'title', label: 'Title', sort: s => s.title || s.id.slice(0,8), display: s => s.title || s.id.slice(0,8) },
@@ -322,7 +384,9 @@ window.__DATA__ = ` + jsonData + `;
       if (cols[i].key === sortKey) th.classList.add(sortDir===1?'sort-asc':'sort-desc');
     });
     const col = cols.find(c=>c.key===sortKey);
-    const sorted = [...D.sessions].sort((a,b) => {
+    const filtered = getFilteredSessions();
+    document.getElementById('fCount').textContent = filtered.length + ' / ' + D.sessions.length + ' sessions';
+    const sorted = filtered.sort((a,b) => {
       const va = col.sort(a);
       const vb = col.sort(b);
       if (typeof va === 'number' && typeof vb === 'number') return (va-vb)*sortDir;
