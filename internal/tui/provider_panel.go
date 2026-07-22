@@ -424,7 +424,10 @@ func (m *Model) renderProviderPanel() string {
 	var footer []string
 	if !wizardActive {
 		footer = []string{
-			fmt.Sprintf(" %s: %s / %s / %s", m.t("panel.provider.active_draft"), panel.selectedVendor(), panel.selectedEndpoint(), model),
+			fmt.Sprintf(" %s: %s / %s / %s", m.t("panel.provider.active_draft"),
+				m.resolveProviderPanelDisplayName(panel.selectedVendor(), ""),
+				m.resolveProviderPanelDisplayName(panel.selectedVendor(), panel.selectedEndpoint()),
+				model),
 			fmt.Sprintf(" %s: %s", m.t("panel.provider.protocol"), util.FirstNonEmpty(ep.Protocol, m.t("panel.provider.protocol.unknown"))),
 			fmt.Sprintf(" %s: %s", m.t("panel.provider.auth"), apiKeyState),
 		}
@@ -583,13 +586,43 @@ func verticalSectionGap() string {
 	return "\n"
 }
 
+func (m *Model) resolveProviderPanelDisplayName(vendor, endpoint string) string {
+	if m.config == nil {
+		if endpoint == "" {
+			return vendor
+		}
+		return endpoint
+	}
+	vd, ed := m.config.ResolveDisplayName(vendor, endpoint)
+	if endpoint == "" {
+		return vd
+	}
+	return ed
+}
+
 func (m *Model) renderProviderList(items []string, selected int, focused bool) string {
 	if len(items) == 0 {
 		return "  " + m.t("panel.model_list.none")
 	}
+	// Pre-compute display name lookup for current vendor's endpoints
+	vendor := ""
+	if m.providerPanel != nil {
+		vendor = m.providerPanel.selectedVendor()
+	}
 	rows := make([]string, 0, len(items))
 	for i, item := range items {
 		prefix := "  "
+		// Resolve display name for built-in vendors/endpoints
+		display := item
+		if m.config != nil {
+			if vd, _ := m.config.ResolveDisplayName(item, ""); vd != item {
+				display = vd
+			} else if vendor != "" {
+				if ed, _ := m.config.ResolveDisplayName(vendor, item); ed != item {
+					display = ed
+				}
+			}
+		}
 		style := lipgloss.NewStyle()
 		if i == selected {
 			prefix = "❯ "
@@ -601,7 +634,7 @@ func (m *Model) renderProviderList(items []string, selected int, focused bool) s
 		} else if focused {
 			style = style.Foreground(lipgloss.Color("8"))
 		}
-		rows = append(rows, style.Render(prefix+item))
+		rows = append(rows, style.Render(prefix+display))
 	}
 	return strings.Join(rows, "\n")
 }
