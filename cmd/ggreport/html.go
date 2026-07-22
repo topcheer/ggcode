@@ -89,6 +89,15 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .filter-input { width: 130px; }
 .filter-hint { color: var(--text-dim); font-size: 12px; }
 .filter-count { color: var(--text-dim); font-size: 12px; margin-left: auto; }
+
+/* Range slider */
+.range-slider { position: relative; height: 40px; margin: 8px 0 4px; user-select: none; }
+.range-track { position: absolute; top: 50%; left: 0; right: 0; height: 6px; background: var(--border); border-radius: 3px; transform: translateY(-50%); }
+.range-fill { position: absolute; top: 50%; height: 6px; background: var(--accent); border-radius: 3px; transform: translateY(-50%); }
+.range-handle { position: absolute; top: 50%; width: 18px; height: 18px; background: var(--surface); border: 2px solid var(--accent); border-radius: 50%; cursor: grab; transform: translate(-50%, -50%); z-index: 2; transition: box-shadow 0.15s; }
+.range-handle:hover, .range-handle.dragging { box-shadow: 0 0 0 6px rgba(88,166,255,0.15); }
+.range-handle.dragging { cursor: grabbing; }
+.range-labels { display: flex; justify-content: space-between; color: var(--text-dim); font-size: 12px; font-variant-numeric: tabular-nums; margin-top: 2px; }
 </style>
 </head>
 <body>
@@ -152,6 +161,16 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; }
       </div>
     </div>
     <div class="cards" id="detailCards"></div>
+    <div class="chart-box">
+      <h3>Turn Range Filter</h3>
+      <div class="range-slider" id="rangeSlider">
+        <div class="range-track"></div>
+        <div class="range-fill" id="rangeFill"></div>
+        <div class="range-handle" id="rangeHandleL"></div>
+        <div class="range-handle" id="rangeHandleR"></div>
+      </div>
+      <div class="range-labels"><span id="rangeLabelL"></span><span id="rangeLabelR"></span></div>
+    </div>
     <div class="chart-box">
       <h3>Per-Turn Token Usage</h3>
       <div class="chart-container"><canvas id="turnTokenChart"></canvas></div>
@@ -405,35 +424,35 @@ window.__DATA__ = ` + jsonData + `;
 
   // === Session Detail ===
   let turnTokenChart = null, ttftChart = null;
-  function showDetail(id) {
-    const s = D.sessions.find(x => x.id === id);
-    if (!s) return;
-    switchTab('detail');
-    document.getElementById('detailEmpty').style.display = 'none';
-    document.getElementById('detailContent').style.display = 'block';
-    document.getElementById('detailTitle').textContent = s.title || s.id.slice(0,12);
-    document.getElementById('detailInfo').innerHTML =
-      (s.model||'') + ' · ' + (s.vendor||'') + ' · ' + new Date(s.createdAt).toLocaleString();
+  let currentDetail = null; // {session, turns, rangeL, rangeR}
 
+  function renderDetailCharts() {
+    if (!currentDetail) return;
+    const { session: s, turns, rangeL, rangeR } = currentDetail;
+    const filtered = turns.filter(t => t.index >= rangeL && t.index <= rangeR);
+
+    // Update detail cards to reflect filtered range
+    const sumIn = filtered.reduce((a,t)=>a+t.input,0);
+    const sumOut = filtered.reduce((a,t)=>a+t.output,0);
+    const sumCache = filtered.reduce((a,t)=>a+t.cache,0);
     document.getElementById('detailCards').innerHTML =
       card('Messages', s.msgCount) +
-      card('LLM Calls', s.llmCalls) +
+      card('LLM Calls', filtered.length, 'turns ' + rangeL + '\u2013' + rangeR) +
       card('Tool Calls', s.toolCalls) +
-      card('Input Tokens', fmt(s.totalInput)) +
-      card('Output Tokens', fmt(s.totalOutput)) +
-      card('Cache Read', fmt(s.totalCache));
+      card('Input', fmt(sumIn), 'tokens') +
+      card('Output', fmt(sumOut), 'tokens') +
+      card('Cache', fmt(sumCache), 'tokens');
 
     // Per-turn token chart
     if (turnTokenChart) turnTokenChart.destroy();
-    const labels = s.turns.map(t => '#'+t.index);
     turnTokenChart = new Chart(document.getElementById('turnTokenChart'), {
       type: 'bar',
       data: {
-        labels,
+        labels: filtered.map(t => '#'+t.index),
         datasets: [
-          { label: 'Input', data: s.turns.map(t=>t.input), backgroundColor: 'rgba(88,166,255,0.7)', stack: 'a' },
-          { label: 'Output', data: s.turns.map(t=>t.output), backgroundColor: 'rgba(63,185,80,0.7)', stack: 'a' },
-          { label: 'Cache', data: s.turns.map(t=>t.cache), backgroundColor: 'rgba(188,140,255,0.5)', stack: 'a' },
+          { label: 'Input', data: filtered.map(t=>t.input), backgroundColor: 'rgba(88,166,255,0.7)', stack: 'a' },
+          { label: 'Output', data: filtered.map(t=>t.output), backgroundColor: 'rgba(63,185,80,0.7)', stack: 'a' },
+          { label: 'Cache', data: filtered.map(t=>t.cache), backgroundColor: 'rgba(188,140,255,0.5)', stack: 'a' },
         ]
       },
       options: {
@@ -443,24 +462,37 @@ window.__DATA__ = ` + jsonData + `;
       }
     });
 
-    // TTFT comparison by model
+    // TTFT comparison by model (only for filtered turns)
     if (ttftChart) ttftChart.destroy();
     const modelColors = ['#58a6ff','#3fb950','#d29922','#bc8cff','#39c5cf','#f778ba'];
-    const allTurnIdx = [...new Set(s.turns.map(t=>t.index))].sort((a,b)=>a-b);
+    const allTurnIdx = filtered.map(t=>t.index);
+    // Group by model
+    const byModel = {};
+    filtered.forEach(t => {
+      const m = t.model || '(unknown)';
+      if (!byModel[m]) byModel[m] = { turns: [], ttfts: [] };
+      byModel[m].turns.push(t.index);
+      byModel[m].ttfts.push(t.ttftMs);
+    });
+    const modelNames = Object.keys(byModel);
     ttftChart = new Chart(document.getElementById('ttftCompareChart'), {
       type: 'line',
       data: {
         labels: allTurnIdx.map(i=>'#'+i),
-        datasets: s.modelPerf.map((mp, i) => ({
-          label: mp.model + ' (avg ' + fmtMs(mp.avgTtft) + ')',
-          data: allTurnIdx.map(idx => {
-            const ti = mp.turnIdx.indexOf(idx);
-            return ti >= 0 ? mp.ttftMs[ti] : null;
-          }),
-          borderColor: modelColors[i % modelColors.length],
-          backgroundColor: modelColors[i % modelColors.length] + '20',
-          tension: 0.2, spanGaps: true, pointRadius: 3,
-        }))
+        datasets: modelNames.map((mname, i) => {
+          const md = byModel[mname];
+          const avg = md.ttfts.reduce((a,b)=>a+b,0) / Math.max(1, md.ttfts.filter(v=>v>0).length);
+          return {
+            label: mname + ' (avg ' + fmtMs(avg) + ')',
+            data: allTurnIdx.map(idx => {
+              const ti = md.turns.indexOf(idx);
+              return ti >= 0 ? md.ttfts[ti] : null;
+            }),
+            borderColor: modelColors[i % modelColors.length],
+            backgroundColor: modelColors[i % modelColors.length] + '20',
+            tension: 0.2, spanGaps: true, pointRadius: 3,
+          };
+        })
       },
       options: {
         responsive: true, maintainAspectRatio: false,
@@ -468,8 +500,103 @@ window.__DATA__ = ` + jsonData + `;
         plugins: { legend: { position: 'top' } }
       }
     });
+  }
 
-    // Tool list
+  // === Range slider ===
+  function initRangeSlider(turns, onChange) {
+    if (turns.length === 0) return;
+    const indices = turns.map(t => t.index);
+    const minV = Math.min(...indices), maxV = Math.max(...indices);
+    let lo = minV, hi = maxV;
+
+    const slider = document.getElementById('rangeSlider');
+    const fill = document.getElementById('rangeFill');
+    const hL = document.getElementById('rangeHandleL');
+    const hR = document.getElementById('rangeHandleR');
+    const lblL = document.getElementById('rangeLabelL');
+    const lblR = document.getElementById('rangeLabelR');
+
+    function update() {
+      const pctL = maxV === minV ? 0 : (lo - minV) / (maxV - minV) * 100;
+      const pctR = maxV === minV ? 100 : (hi - minV) / (maxV - minV) * 100;
+      fill.style.left = pctL + '%';
+      fill.style.width = (pctR - pctL) + '%';
+      hL.style.left = pctL + '%';
+      hR.style.left = pctR + '%';
+      lblL.textContent = '#' + lo;
+      lblR.textContent = '#' + hi;
+      onChange(lo, hi);
+    }
+
+    function startDrag(handle, isLeft) {
+      return function(e) {
+        e.preventDefault();
+        handle.classList.add('dragging');
+        const rect = slider.getBoundingClientRect();
+        function onMove(ev) {
+          const clientX = ev.touches ? ev.touches[0].clientX : ev.clientX;
+          let pct = (clientX - rect.left) / rect.width;
+          pct = Math.max(0, Math.min(1, pct));
+          const val = Math.round(minV + pct * (maxV - minV));
+          if (isLeft) lo = Math.min(val, hi - (maxV > minV ? 1 : 0));
+          else hi = Math.max(val, lo + (maxV > minV ? 1 : 0));
+          update();
+        }
+        function onUp() {
+          handle.classList.remove('dragging');
+          document.removeEventListener('mousemove', onMove);
+          document.removeEventListener('mouseup', onUp);
+          document.removeEventListener('touchmove', onMove);
+          document.removeEventListener('touchend', onUp);
+        }
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+        document.addEventListener('touchmove', onMove, { passive: false });
+        document.addEventListener('touchend', onUp);
+      };
+    }
+
+    hL.addEventListener('mousedown', startDrag(hL, true));
+    hR.addEventListener('mousedown', startDrag(hR, false));
+    hL.addEventListener('touchstart', startDrag(hL, true), { passive: false });
+    hR.addEventListener('touchstart', startDrag(hR, false), { passive: false });
+
+    // Click on track to move nearest handle
+    slider.addEventListener('mousedown', function(e) {
+      if (e.target === hL || e.target === hR) return;
+      const rect = slider.getBoundingClientRect();
+      let pct = (e.clientX - rect.left) / rect.width;
+      pct = Math.max(0, Math.min(1, pct));
+      const val = Math.round(minV + pct * (maxV - minV));
+      if (Math.abs(val - lo) < Math.abs(val - hi)) { lo = Math.min(val, hi - 1); hL.dispatchEvent(new MouseEvent('mousedown')); }
+      else { hi = Math.max(val, lo + 1); }
+      update();
+    });
+
+    // Initialize at full range
+    lo = minV; hi = maxV;
+    update();
+  }
+
+  function showDetail(id) {
+    const s = D.sessions.find(x => x.id === id);
+    if (!s) return;
+    switchTab('detail');
+    document.getElementById('detailEmpty').style.display = 'none';
+    document.getElementById('detailContent').style.display = 'block';
+    document.getElementById('detailTitle').textContent = s.title || s.id.slice(0,12);
+    document.getElementById('detailInfo').innerHTML =
+      (s.model||'') + ' \u00b7 ' + (s.vendor||'') + ' \u00b7 ' + new Date(s.createdAt).toLocaleString();
+
+    currentDetail = { session: s, turns: s.turns, rangeL: 0, rangeR: 0 };
+
+    initRangeSlider(s.turns, function(lo, hi) {
+      currentDetail.rangeL = lo;
+      currentDetail.rangeR = hi;
+      renderDetailCharts();
+    });
+
+    // Tool list (static — not affected by range slider)
     const toolEl = document.getElementById('detailToolList');
     const maxCalls = Math.max(...s.tools.map(t=>t.calls), 1);
     toolEl.innerHTML = s.tools.slice().sort((a,b)=>b.calls-a.calls).map(t => {
