@@ -126,6 +126,27 @@ Multiple instances in the same workspace each appear as separate entries.
 
 Stale port files (from crashed or killed processes) are automatically cleaned up on read.
 
+### report
+
+Generate a self-contained HTML analytics report from all session JSONL files:
+
+```bash
+ggcode report                           # Generate report and open in browser
+ggcode report -o ~/Desktop/report.html  # Specify output path
+ggcode report --no-open                  # Generate without opening browser
+ggcode report --sessions-dir /custom     # Override sessions directory
+```
+
+The report includes:
+- **Overview**: daily token usage trends, workspace distribution, tool call summary, date range filter
+- **Sessions**: sortable table with workspace/date filters, click-through to detail
+- **Session Detail**: per-turn token bars, TTFT model comparison, draggable time range slider
+- **Daily Details**: per-model token breakdown for any selected day (click daily chart bars)
+- **Performance**: TTFT/duration histograms (P50/P95/P99), tool success rates
+
+Charts use embedded Chart.js — fully offline, no CDN dependencies. The generated HTML
+file is self-contained and shareable.
+
 ### completion
 
 Generate shell completion scripts:

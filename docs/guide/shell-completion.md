@@ -52,7 +52,7 @@ ggcode completion powershell | Out-String | Invoke-Expression
 
 | Category | Examples |
 |----------|----------|
-| Subcommands | `config`, `completion`, `resume`, `mcp` |
+| Subcommands | `config`, `completion`, `harness`, `mcp`, `plugin`, `im`, `daemon`, `status`, `report`, `llm-probe`, `acp`, `resume` |
 | Flags | `--help`, `--model`, `--resume`, `--vendor` |
 | Session IDs | Previous session IDs for `--resume` |
 | MCP server names | Configured server names for tab completion |
