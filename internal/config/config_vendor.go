@@ -152,8 +152,12 @@ func (c *Config) ResolveDisplayName(vendor, endpoint string) (vendorDisplay, end
 		if vc.DisplayName != "" {
 			vendorDisplay = localizedVendorDisplay(vendor, vc.DisplayName, c.Language)
 		}
-		if ep, ok := vc.Endpoints[endpoint]; ok && ep.DisplayName != "" {
-			endpointDisplay = localizedEndpointDisplay(vendor, endpoint, ep.DisplayName, c.Language)
+		if ep, ok := vc.Endpoints[endpoint]; ok {
+			epName := ep.DisplayName
+			if epName == "" {
+				epName = endpoint // fallback to raw ID
+			}
+			endpointDisplay = localizedEndpointDisplay(vendor, endpoint, epName, c.Language)
 		}
 	}
 	return
