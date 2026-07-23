@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/safego"
 )
 
@@ -512,8 +513,10 @@ func startClient(ctx context.Context, workspace string, resolved ResolvedServer)
 	}
 	cmd.Stderr = &client.stderr
 	if err := cmd.Start(); err != nil {
+		debug.Log("lsp", "startClient: failed to start %s: %v", resolved.Binary, err)
 		return nil, err
 	}
+	debug.Log("lsp", "startClient: started %s workspace=%s pid=%d", resolved.Binary, workspace, cmd.Process.Pid)
 	safego.Go("lsp.waitProcess", func() { client.waitErr <- cmd.Wait() })
 	safego.Go("lsp.readLoop", func() { client.readLoop() })
 	if err := client.call(ctx, "initialize", map[string]any{
@@ -670,6 +673,7 @@ func (c *stdioClient) readLoop() {
 			c.failMu.Lock()
 			c.failed = true
 			c.failMu.Unlock()
+			debug.Log("lsp", "readLoop: exited with error: %v (server=%s)", err, c.resolved.Binary)
 			c.failPending(err)
 			return
 		}
