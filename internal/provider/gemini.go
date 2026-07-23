@@ -22,6 +22,9 @@ type GeminiProvider struct {
 	transport *headerInjectingTransport // kept for runtime header updates
 }
 
+// ModelName returns the current model name used by this provider.
+func (p *GeminiProvider) ModelName() string { return p.model }
+
 // CloneWithModel returns a shallow copy of this provider with a different model.
 func (p *GeminiProvider) CloneWithModel(model string) Provider {
 	return &GeminiProvider{

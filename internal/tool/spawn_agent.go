@@ -144,9 +144,18 @@ func (t SpawnAgentTool) Execute(ctx context.Context, input json.RawMessage) (Res
 	id := t.Manager.Spawn(name, args.Task, displayTask, args.Tools, ctx)
 
 	// Store the model name on the sub-agent for display purposes
-	if args.Model != "" {
+	// When no model override is specified, inherit the parent agent's runtime model
+	displayModel := args.Model
+	if displayModel == "" {
+		if prov := t.currentProvider(); prov != nil {
+			if mp, ok := prov.(provider.ModelNameProvider); ok {
+				displayModel = mp.ModelName()
+			}
+		}
+	}
+	if displayModel != "" {
 		if sa, ok := t.Manager.Get(id); ok && sa != nil {
-			sa.Model = args.Model
+			sa.Model = displayModel
 		}
 	}
 

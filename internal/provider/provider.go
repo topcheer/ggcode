@@ -199,6 +199,11 @@ type ReasoningEffortProvider interface {
 	ReasoningEffort() string
 }
 
+// ModelNameProvider is implemented by providers that can report their current model name.
+type ModelNameProvider interface {
+	ModelName() string
+}
+
 // ChatResponse is the complete response from a non-streaming Chat call.
 type ChatResponse struct {
 	Message Message
