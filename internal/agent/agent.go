@@ -1442,7 +1442,13 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 		if textBuf.Len() == 0 {
 			return
 		}
-		content = append(content, provider.TextBlock(textBuf.String()))
+		s := textBuf.String()
+		// Skip whitespace-only text blocks — these occur when models emit
+		// newlines/spaces between tool_use blocks with no meaningful content.
+		// Keeping them wastes tokens and can cause API errors on strict providers.
+		if strings.TrimSpace(s) != "" {
+			content = append(content, provider.TextBlock(s))
+		}
 		textBuf.Reset()
 	}
 
