@@ -67,6 +67,7 @@ type SubAgent struct {
 	Name             string // short, meaningful label (required)
 	Task             string
 	DisplayTask      string
+	Model            string
 	Tools            []string
 	ToolCallCount    int
 	Status           Status
@@ -93,6 +94,7 @@ type Snapshot struct {
 	Name            string // short, meaningful label
 	Task            string
 	DisplayTask     string
+	Model           string
 	Tools           []string
 	ToolCallCount   int
 	Status          Status
@@ -115,6 +117,7 @@ type Snapshot struct {
 type StatusInfo struct {
 	ID           string
 	Name         string
+	Model        string
 	Status       Status
 	CurrentPhase string
 	EndedAt      time.Time
@@ -213,6 +216,7 @@ func (s *SubAgent) snapshot() Snapshot {
 		Name:            s.Name,
 		Task:            s.Task,
 		DisplayTask:     s.DisplayTask,
+		Model:           s.Model,
 		Tools:           append([]string(nil), s.Tools...),
 		ToolCallCount:   s.ToolCallCount,
 		Status:          s.Status,
@@ -241,6 +245,7 @@ func (s *SubAgent) statusInfo() StatusInfo {
 	return StatusInfo{
 		ID:           s.ID,
 		Name:         s.Name,
+		Model:        s.Model,
 		Status:       s.Status,
 		CurrentPhase: s.CurrentPhase,
 		EndedAt:      s.EndedAt,

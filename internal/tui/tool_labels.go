@@ -58,6 +58,15 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 		}
 		detail = displayToolTarget(detail)
 		pretty := friendlyToolName(toolName)
+
+		// For spawn_agent, include the model name in brackets: "desc [model] (Spawn Agent)"
+		if toolName == "spawn_agent" {
+			if model := argString(args, "model"); model != "" {
+				displayName := desc + " [" + model + "] (" + pretty + ")"
+				return toolPresentation{DisplayName: displayName, Detail: detail, Activity: desc + " [" + model + "]"}
+			}
+		}
+
 		displayName := desc + " (" + pretty + ")"
 		return toolPresentation{DisplayName: displayName, Detail: detail, Activity: desc}
 	}
@@ -355,7 +364,7 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 			name = toolLabelFor(lang, "spawn_agent")
 		}
 		if model != "" {
-			name = fmt.Sprintf("%s (%s)", name, model)
+			name = name + " [" + model + "]"
 		}
 		return toolPresentation{
 			DisplayName: name,

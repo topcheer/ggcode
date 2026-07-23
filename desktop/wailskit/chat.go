@@ -1673,7 +1673,11 @@ func (b *ChatBridge) subagentPanelTitle(agentID string) string {
 	// Name is set from spawn_agent's "description" field (short label)
 	switch {
 	case strings.TrimSpace(snap.Name) != "":
-		return snap.Name
+		name := snap.Name
+		if strings.TrimSpace(snap.Model) != "" {
+			name = name + " [" + strings.TrimSpace(snap.Model) + "]"
+		}
+		return name
 	case strings.TrimSpace(snap.DisplayTask) != "":
 		return snap.DisplayTask
 	case strings.TrimSpace(snap.Task) != "":

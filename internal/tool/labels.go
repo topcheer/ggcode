@@ -192,11 +192,15 @@ func DescribeTool(toolName, rawArgs string) ToolPresentation {
 		return toolPres("Sleep", d.String())
 	case "spawn_agent":
 		desc := strings.TrimSpace(argStr(args, "description"))
+		model := strings.TrimSpace(argStr(args, "model"))
 		if len([]rune(desc)) > 60 {
 			desc = string([]rune(desc)[:57]) + "..."
 		}
 		if desc == "" {
 			desc = "Spawn Agent"
+		}
+		if model != "" {
+			desc = desc + " [" + model + "]"
 		}
 		return toolPres(desc, "")
 	case "task_create":

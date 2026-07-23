@@ -31,6 +31,7 @@ const (
 type followSlot struct {
 	ID       string
 	Name     string
+	Model    string
 	Kind     followSlotKind
 	Phase    string
 	Terminal bool // completed/failed/cancelled/idle
@@ -91,6 +92,7 @@ func (f *subAgentFollowState) refreshSlots(saMgr *subagent.Manager) {
 					newSlots = append(newSlots, followSlot{
 						ID:       s.ID,
 						Name:     s.Name,
+						Model:    s.Model,
 						Kind:     followSlotSubAgent,
 						Phase:    "done",
 						Terminal: true,
@@ -101,6 +103,7 @@ func (f *subAgentFollowState) refreshSlots(saMgr *subagent.Manager) {
 			newSlots = append(newSlots, followSlot{
 				ID:       s.ID,
 				Name:     s.Name,
+				Model:    s.Model,
 				Kind:     followSlotSubAgent,
 				Phase:    s.CurrentPhase,
 				Terminal: false,
@@ -246,6 +249,7 @@ func (f *subAgentFollowState) getOrCreateView(agentID string, width, height int)
 type followEventData struct {
 	ID            string
 	Name          string
+	Model         string
 	Task          string
 	Status        string // "running", "completed", "failed", "idle", "working"
 	Events        []followEvent
@@ -281,6 +285,9 @@ func buildFollowList(data followEventData, list *chat.List, styles chat.Styles) 
 	name := data.Name
 	if name == "" {
 		name = shortID(data.ID)
+	}
+	if data.Model != "" {
+		name = name + " [" + data.Model + "]"
 	}
 	header := fmt.Sprintf("%s  ·  %s", name, data.Task)
 	switch data.Status {
@@ -419,6 +426,7 @@ func subagentSnapshotToFollowData(snap subagent.Snapshot) followEventData {
 	return followEventData{
 		ID:            snap.ID,
 		Name:          snap.Name,
+		Model:         snap.Model,
 		Task:          snap.DisplayTask,
 		Status:        status,
 		Events:        events,
@@ -578,6 +586,9 @@ func (m *Model) renderSubAgentFollowStrip() string {
 		label := slot.Name
 		if label == "" {
 			label = shortID(slot.ID)
+		}
+		if slot.Model != "" {
+			label = label + " [" + slot.Model + "]"
 		}
 
 		activity := slot.Phase

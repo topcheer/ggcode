@@ -143,6 +143,13 @@ func (t SpawnAgentTool) Execute(ctx context.Context, input json.RawMessage) (Res
 
 	id := t.Manager.Spawn(name, args.Task, displayTask, args.Tools, ctx)
 
+	// Store the model name on the sub-agent for display purposes
+	if args.Model != "" {
+		if sa, ok := t.Manager.Get(id); ok && sa != nil {
+			sa.Model = args.Model
+		}
+	}
+
 	// Build tool info list for sub-agent
 	var allToolInfo []subagent.ToolInfo
 	if t.Tools != nil {
