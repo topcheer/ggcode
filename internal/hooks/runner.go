@@ -109,6 +109,16 @@ func executeCommandHook(h Hook, env HookEnv, payload HookPayload) HookResult {
 
 	debug.Log("hooks", "%s: type=command tool=%s match=%s", env.Event, env.ToolName, h.Match)
 
+	// Apply configured timeout (default 10s for sync hooks).
+	timeout := 10 * time.Second
+	if h.Timeout != "" {
+		if d, err := time.ParseDuration(h.Timeout); err == nil && d > 0 {
+			timeout = d
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
 	// Template expansion — only known vars, preserve unknown for shell.
 	expanded := os.Expand(h.Command, func(key string) string {
 		switch key {
@@ -137,7 +147,7 @@ func executeCommandHook(h Hook, env HookEnv, payload HookPayload) HookResult {
 		}
 	})
 
-	c, _, err := util.NewShellCommand(expanded)
+	c, _, err := util.NewShellCommandContext(ctx, expanded)
 	if err != nil {
 		return HookResult{Allowed: true, Err: fmt.Errorf("resolve hook shell: %w", err)}
 	}
