@@ -59,8 +59,8 @@ func FormatTurnDigest(lang string, turn TurnSummary) string {
 		fmt.Sprintf("%s %s", digestText(lang, "think"), FormatDuration(turn.ThinkTime)),
 		fmt.Sprintf("%s %d", digestText(lang, "tools"), turn.ToolCallCount),
 	}
-	if turn.CumInputTokens > 0 || turn.CumOutputTokens > 0 {
-		parts = append(parts, fmt.Sprintf("%s %s", digestText(lang, "tokens"), FormatTokenUsage(turn.CumInputTokens, turn.CumOutputTokens, turn.CumCacheRead)))
+	if turn.InputTokens > 0 || turn.OutputTokens > 0 {
+		parts = append(parts, fmt.Sprintf("%s %s", digestText(lang, "tokens"), FormatTokenUsage(turn.InputTokens, turn.OutputTokens, turn.CacheRead)))
 	}
 	if turn.SlowestTool != "" {
 		parts = append(parts, fmt.Sprintf("%s %s %s", digestText(lang, "slowest"), turn.SlowestTool, FormatDuration(turn.SlowestToolDuration)))
