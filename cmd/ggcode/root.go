@@ -1157,7 +1157,12 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		})
 		defer runfile.Remove(actualSessionID)
 		// Ensure cleanup on syscall.Exec restart (defers don't fire on exec)
-		repl.SetPreExecCleanup(func() { runfile.Remove(resumeID) })
+		repl.SetPreExecCleanup(func() {
+			runfile.Remove(resumeID)
+			if lanchatHub != nil {
+				lanchatHub.Close()
+			}
+		})
 	}
 	trace.Mark("start webui")
 

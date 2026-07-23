@@ -1303,6 +1303,10 @@ func (r *REPL) Run() error {
 	if r.imManager != nil {
 		r.imManager.UnbindSession()
 	}
+	// Broadcast leave to LAN peers so they detect offline immediately.
+	if r.model.lanChatHub != nil {
+		r.model.lanChatHub.Close()
+	}
 	// Sync final model state from Bubble Tea so exit cleanup uses the
 	// correct session (r.model is a stale snapshot from before Run()).
 	if m, ok := finalModel.(Model); ok {

@@ -2976,6 +2976,14 @@ func (b *ChatBridge) Close() {
 	// Stop A2A server
 	b.stopA2A()
 
+	// Broadcast leave to LAN peers
+	b.mu.Lock()
+	hub := b.lanchatHub
+	b.mu.Unlock()
+	if hub != nil {
+		hub.Close()
+	}
+
 	b.mu.Lock()
 	if b.metricCancel != nil {
 		b.metricCancel()

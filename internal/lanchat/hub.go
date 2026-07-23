@@ -1517,6 +1517,23 @@ func (h *Hub) handleUDPEnvelope(env udpEnvelope, remoteAddr net.Addr) {
 
 	// Dispatch based on type
 	switch env.Type {
+	case "leave":
+		var p Participant
+		if err := json.Unmarshal(env.Payload, &p); err != nil {
+			debug.Log("lanchat-udp", "leave payload parse error: %v", err)
+			return
+		}
+		debug.Log("lanchat", "received leave from %s (%s)", p.NodeID, p.HumanNick)
+		h.mu.Lock()
+		if existing, ok := h.peers[p.NodeID]; ok {
+			existing.LastSeen = time.Now().Add(-offlineNotifyDelay * 2).UnixNano()
+			existing.lastOfflineTime = time.Now().UnixNano()
+			h.peers[p.NodeID] = existing
+		}
+		h.mu.Unlock()
+		h.UpdatePeers(h.Participants())
+		return
+
 	case "message":
 		var msg Message
 		if err := json.Unmarshal(env.Payload, &msg); err != nil {
@@ -1741,4 +1758,31 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// Close broadcasts a leave message to all peers and stops the UDP transport.
+// Call this on application shutdown so peers detect offline immediately
+// instead of waiting for the heartbeat timeout (typically 90s).
+func (h *Hub) Close() {
+	h.mu.RLock()
+	transport := h.udpTransport
+	h.mu.RUnlock()
+
+	if transport == nil {
+		return
+	}
+
+	// Broadcast leave via UDP multicast (best-effort, no retry).
+	self := h.SelfParticipant()
+	if payload, err := json.Marshal(self); err == nil {
+		env := udpEnvelope{
+			Type:    "leave",
+			Payload: payload,
+		}
+		_ = transport.SendMulticast(env)
+		debug.Log("lanchat", "broadcast leave to all peers")
+	}
+
+	// Stop the transport (closes sockets, waits for goroutines).
+	transport.Stop()
 }
