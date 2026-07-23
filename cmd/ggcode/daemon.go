@@ -79,19 +79,20 @@ func newDaemonCmd(cfgFile *string) *cobra.Command {
 			}
 
 			// If --__daemonized, skip fork logic — we ARE the daemonized child
+			newSession, _ := cmd.Flags().GetBool("new-session")
 			if daemonized, _ := cmd.Flags().GetBool("__daemonized"); daemonized {
 				noIM, _ := cmd.Flags().GetBool("__no-im")
-				return runDaemon(cfg, resolvedCfg, bypassFlag, followFlag, resumeID, true, noIM, tunnelFlag)
+				return runDaemon(cfg, resolvedCfg, bypassFlag, followFlag, resumeID, true, noIM, tunnelFlag, newSession)
 			}
 
 			// If --background, fork and exit parent
 			if backgroundFlag {
-				return startBackgroundDaemon(cfg, resolvedCfg, bypassFlag, resumeID)
+				return startBackgroundDaemon(cfg, resolvedCfg, bypassFlag, resumeID, newSession)
 			}
 
 			// Normal foreground start
 			noIM, _ := cmd.Flags().GetBool("__no-im")
-			return runDaemon(cfg, resolvedCfg, bypassFlag, followFlag, resumeID, false, noIM, tunnelFlag)
+			return runDaemon(cfg, resolvedCfg, bypassFlag, followFlag, resumeID, false, noIM, tunnelFlag, newSession)
 		},
 	}
 
@@ -101,23 +102,28 @@ func newDaemonCmd(cfgFile *string) *cobra.Command {
 	cmd.Flags().BoolVar(&tunnelFlag, "tunnel", false, "start with mobile tunnel (QR code for GGCode Mobile)")
 	cmd.Flags().StringVar(&resumeID, "resume", "", "resume a previous session by ID; use --resume-picker for interactive selection")
 	cmd.Flags().Bool("resume-picker", false, "interactively select a session to resume")
+	cmd.Flags().Bool("new-session", false, "skip auto-loading the most recent unlocked session; always start fresh")
 	cmd.Flags().Bool("__daemonized", false, "internal: already daemonized")
 	cmd.Flags().Bool("__no-im", false, "internal: skip IM binding check (A2A-only testing)")
 	_ = cmd.Flags().MarkHidden("__daemonized")
 	_ = cmd.Flags().MarkHidden("__no-im")
 	cmd.MarkFlagsMutuallyExclusive("follow", "background")
+	cmd.MarkFlagsMutuallyExclusive("resume", "resume-picker", "new-session")
 	cmd.MarkFlagsMutuallyExclusive("resume", "resume-picker")
 	return cmd
 }
 
 // startBackgroundDaemon forks the process into background and exits the parent.
-func startBackgroundDaemon(cfg *config.Config, cfgFile string, bypass bool, resumeID string) error {
+func startBackgroundDaemon(cfg *config.Config, cfgFile string, bypass bool, resumeID string, newSession bool) error {
 	workingDir, _ := os.Getwd()
 	lang := daemon.ResolveLang(cfg.Language)
 
 	extraArgs := []string{"--bypass=" + fmt.Sprintf("%v", bypass)}
 	if resumeID != "" {
 		extraArgs = append(extraArgs, "--resume="+resumeID)
+	}
+	if newSession {
+		extraArgs = append(extraArgs, "--new-session")
 	}
 	pid, err := daemon.ForkIntoBackground(cfgFile, workingDir, "", extraArgs...)
 	if err != nil {
@@ -128,7 +134,7 @@ func startBackgroundDaemon(cfg *config.Config, cfgFile string, bypass bool, resu
 	return nil
 }
 
-func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive bool, resumeID string, _ bool, noIM bool, startTunnel bool) error {
+func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive bool, resumeID string, _ bool, noIM bool, startTunnel bool, newSession bool) error {
 	// --- Steps 1-8: same as run() in root.go ---
 
 	prov, resolved, err := ResolveProvider(cfg)
@@ -402,10 +408,36 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 			debug.Log("daemon", "restored permission mode %s from session", sessionMode)
 		}
 	} else {
-		vendor := cfg.Vendor
-		endpoint := cfg.Endpoint
-		modelName := cfg.Model
-		ses = session.NewSession(vendor, endpoint, modelName)
+		// Auto-load: find the most recent unlocked workspace session.
+		// Skip if --new-session flag was passed.
+		if !newSession {
+			workspace := workingDir
+			sessions, err := store.ListForWorkspace(workspace)
+			if err != nil {
+				debug.Log("daemon", "ListForWorkspace error: %v", err)
+			}
+			for _, s := range sessions {
+				lock, lockErr := session.TryAcquireSessionLock(storeDir, s.ID)
+				if lockErr == nil && lock != nil && lock.Acquired() {
+					existing, loadErr := store.Load(s.ID)
+					if loadErr != nil {
+						lock.Release()
+						continue
+					}
+					ses = existing
+					resumeID = s.ID
+					agentruntime.RestoreSessionIntoAgent(ag, ses)
+					debug.Log("daemon", "auto-loaded session %s", s.ID)
+					break
+				}
+			}
+		}
+		if ses == nil {
+			vendor := cfg.Vendor
+			endpoint := cfg.Endpoint
+			modelName := cfg.Model
+			ses = session.NewSession(vendor, endpoint, modelName)
+		}
 	}
 	if err := store.Save(ses); err != nil {
 		return fmt.Errorf("saving session: %w", err)

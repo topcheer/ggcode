@@ -140,6 +140,7 @@ func NewRootCmd() *cobra.Command {
 			}
 
 			resumePicker, _ := cmd.Flags().GetBool("resume-picker")
+			newSession, _ := cmd.Flags().GetBool("new-session")
 			if resumePicker {
 				// Run picker BEFORE any heavy initialization so the user
 				// doesn't wait after selecting/cancelling.
@@ -158,6 +159,9 @@ func NewRootCmd() *cobra.Command {
 				}
 				return run(cfg, cfgFile, selectedID, bypassFlag)
 			}
+			if newSession {
+				return run(cfg, cfgFile, "__new__", bypassFlag)
+			}
 			return run(cfg, cfgFile, resumeID, bypassFlag)
 		},
 	}
@@ -170,6 +174,7 @@ func NewRootCmd() *cobra.Command {
 	cmd.Flags().BoolP("v", "v", false, "shorthand for --version")
 	cmd.Flags().StringVar(&resumeID, "resume", "", "resume a previous session by ID")
 	cmd.Flags().Bool("resume-picker", false, "interactively select a session to resume")
+	cmd.Flags().Bool("new-session", false, "skip auto-loading the most recent unlocked session; always start fresh")
 	cmd.Flags().StringVarP(&pipePrompt, "prompt", "p", "", "pipe mode: non-interactive execution with a prompt")
 	cmd.Flags().StringArrayVar(&allowedTools, "allowedTools", nil, "tools to allow in pipe mode (can be repeated)")
 	cmd.Flags().StringArrayVar(&allowedDirs, "allowedDir", nil, "override writable sandbox directory for pipe mode (can be repeated)")
@@ -679,6 +684,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		// Auto-load: find the most recent unlocked workspace session.
 		// Walk sessions from newest to oldest; first one we can lock wins.
 		// If all are locked by other instances, create a new session.
+		// Skip if --new-session was passed (handled by caller, resumeID="__new__").
 		workspace := workingDir
 		sessions, err := store.ListForWorkspace(workspace)
 		if err != nil {
