@@ -2866,17 +2866,25 @@ func (b *ChatBridge) startA2A(cfg *config.Config, ag *agent.Agent, reg *tool.Reg
 	// Sync peers from A2A registry — initial sync after 3s, then every 15s.
 	safego.Go("desktop.a2a-peer-sync", func() {
 		// Initial sync after 3s (let mDNS browser warm up)
-		time.Sleep(3 * time.Second)
-		b.syncLanChatPeers()
+		select {
+		case <-time.After(3 * time.Second):
+			b.syncLanChatPeers()
+		case <-refreshCtx.Done():
+			return
+		}
 
 		ticker := time.NewTicker(15 * time.Second)
 		defer ticker.Stop()
 		for {
-			<-ticker.C
-			if b.a2aRegistry == nil {
+			select {
+			case <-ticker.C:
+				if b.a2aRegistry == nil {
+					return
+				}
+				b.syncLanChatPeers()
+			case <-refreshCtx.Done():
 				return
 			}
-			b.syncLanChatPeers()
 		}
 	})
 
