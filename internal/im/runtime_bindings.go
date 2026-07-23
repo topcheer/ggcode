@@ -271,6 +271,7 @@ func (m *Manager) DisableBinding(adapterName string) error {
 			debug.Log("im", "DisableBinding: failed to clear LastSessionID for %s: %v", adapterName, err)
 		}
 	}
+	debug.Log("im", "DisableBinding: adapter=%s workspace=%s", adapterName, workspace)
 	m.syncInstanceActiveChannels()
 	return nil
 }
@@ -316,6 +317,7 @@ func (m *Manager) EnableBinding(adapterName string) error {
 			debug.Log("im", "enable restart adapter %s: %v", adapterName, err)
 		}
 	}
+	debug.Log("im", "EnableBinding: adapter=%s workspace=%s", adapterName, workspace)
 	m.syncInstanceActiveChannels()
 	return nil
 }
@@ -366,6 +368,7 @@ func (m *Manager) MuteBinding(adapterName string) error {
 	// release of session ownership. Only disable/unbind releases ownership.
 	// This prevents multi-instance races where one instance's mute clears
 	// the session ownership for all other instances.
+	debug.Log("im", "MuteBinding: adapter=%s", adapterName)
 	m.syncInstanceActiveChannels()
 	return nil
 }
@@ -403,11 +406,11 @@ func (m *Manager) UnmuteBinding(adapterName string) error {
 			debug.Log("im", "unmute restart adapter %s: %v", adapterName, err)
 		}
 	}
+	debug.Log("im", "UnmuteBinding: adapter=%s workspace=%s", adapterName, workspace)
 	m.syncInstanceActiveChannels()
 	return nil
 }
 
-// MuteAll mutes all currently active bindings for this process.
 // Returns the number of adapters that were muted.
 func (m *Manager) MuteAll() (int, error) {
 	return m.MuteAllExcept("")
