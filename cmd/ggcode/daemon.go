@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -29,6 +30,7 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/knight"
+	"github.com/topcheer/ggcode/internal/lanchat"
 	"github.com/topcheer/ggcode/internal/mcp"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
@@ -222,8 +224,13 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	var a2aReg *a2a.Registry
 
 	buildCurrentSystemPrompt := func() (string, []string) {
-		// Remote agents info is not available in daemon mode (no lanchat hub).
-		return agentruntime.BuildInteractiveSystemPromptWithPromptRefs(cfg, workingDir, mode, registry, commandMgr, autoMem, projectAutoMem, gitStatus, "")
+		remoteAgentsInfo := ""
+		if a2aReg != nil {
+			if instances := a2aReg.CachedInstances(); len(instances) > 1 {
+				remoteAgentsInfo = a2a.FormatRemoteAgents(instances, nil)
+			}
+		}
+		return agentruntime.BuildInteractiveSystemPromptWithPromptRefs(cfg, workingDir, mode, registry, commandMgr, autoMem, projectAutoMem, gitStatus, remoteAgentsInfo)
 	}
 	systemPrompt, promptSkillRefs := buildCurrentSystemPrompt()
 
@@ -855,6 +862,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	var a2aSrv *a2a.Server
 	// a2aReg already declared above for system prompt access
 	var a2aHandler *a2a.TaskHandler
+	var lanchatHub *lanchat.Hub
 	if !cfg.A2A.Disabled {
 		// A2A instance override already applied by LoadWithInstance.
 		a2aSrv, a2aReg, a2aHandler, err = startA2AServer(cfg, ag, registry, workingDir)
@@ -866,9 +874,50 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 			defer func() {
 				a2aBgCancel()
 				_ = a2aReg.Unregister()
+				if lanchatHub != nil {
+					lanchatHub.Close()
+				}
 				a2aSrv.Stop()
 			}()
 			fmt.Fprintf(os.Stderr, "🔗 A2A server: %s\n", a2aSrv.Endpoint())
+
+			// Create lanchat Hub for LAN peer discovery and messaging.
+			chatStore := lanchat.NewStore(filepath.Join(config.ConfigDir(), "lanchat"))
+			lanchatHub = lanchat.NewHub(
+				a2aReg.SelfID(),
+				"daemon",
+				a2aSrv.Endpoint(),
+				cfg.A2A.EffectiveAPIKey(),
+				chatStore,
+				lanchat.DetectWorkspaceMeta(workingDir),
+			)
+			lanchatHub.SetAttachments(lanchat.NewAttachmentManager())
+			lanchat.MountHandlers(a2aSrv.Mux(), lanchatHub, a2aSrv.Port())
+
+			// Sync peers from A2A registry
+			safego.Go("daemon.lanchat.syncPeers", func() {
+				syncPeers := func() {
+					instances := a2aReg.CachedInstances()
+					if instances == nil {
+						return
+					}
+					peers := make([]lanchat.Participant, 0, len(instances))
+					for _, inst := range instances {
+						peers = append(peers, lanchat.Participant{
+							NodeID:   inst.ID,
+							Endpoint: inst.Endpoint,
+						})
+					}
+					lanchatHub.UpdatePeers(peers)
+				}
+				time.Sleep(3 * time.Second)
+				syncPeers()
+				ticker := time.NewTicker(10 * time.Second)
+				defer ticker.Stop()
+				for range ticker.C {
+					syncPeers()
+				}
+			})
 
 			// Wire A2A task events to follow display + IM
 			if a2aHandler != nil {
@@ -1411,6 +1460,9 @@ loop:
 			return fmt.Errorf("restart: resolve binary: %w", err)
 		}
 		bridge.Close()
+		if lanchatHub != nil {
+			lanchatHub.Close()
+		}
 		// ⚠️ Do NOT do ses.Messages = ag.Messages() + store.Save(ses).
 		// That would rewrite the JSONL with compacted messages and destroy
 		// pre-compaction history. appendAssistantMessages already appended
