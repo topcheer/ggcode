@@ -11,6 +11,12 @@ func (m *Model) appendStreamChunk(chunk string) {
 	if chunk == "" {
 		return
 	}
+	// Skip whitespace-only chunks that arrive before any real text.
+	// Some models emit spaces/newlines between tool_use blocks — these
+	// would create an empty assistant message bubble in the UI.
+	if strings.TrimSpace(chunk) == "" && !m.streamPrefixWritten {
+		return
+	}
 	chunk = relativizeResult(chunk)
 	if localized, ok := m.localizedStreamStatus(chunk); ok {
 		m.appendStreamStatusLine(localized)
