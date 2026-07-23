@@ -260,6 +260,7 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 			debug.Log("cancel", "Run: context cancelled, calling Complete id=%s", cfg.SubAgentID)
 			cfg.Manager.Complete(cfg.SubAgentID, result, fmt.Errorf("sub-agent cancelled"))
 		} else {
+			debug.Log("subagent", "Run: failed id=%s error=%v", cfg.SubAgentID, err)
 			cfg.Manager.Complete(cfg.SubAgentID, result, err)
 		}
 	} else {
