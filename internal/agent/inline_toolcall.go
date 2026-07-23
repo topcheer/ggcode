@@ -19,11 +19,20 @@ func hasInlineToolCall(text string) bool {
 	if len(text) < 20 {
 		return false
 	}
+	// Limit scan to first 4KB — inline tool calls appear early in the
+	// output. Scanning the entire text for every '{' would be O(n²)
+	// on large code-heavy responses.
+	maxScan := len(text)
+	if maxScan > 4096 {
+		maxScan = 4096
+	}
+	scanText := text[:maxScan]
+
 	// Fast check: must contain "name" or "tool" as a key
-	if !strings.Contains(text, "\"name\"") &&
-		!strings.Contains(text, "\"tool\"") &&
-		!strings.Contains(text, "tool_call") &&
-		!strings.Contains(text, "function_call") {
+	if !strings.Contains(scanText, "\"name\"") &&
+		!strings.Contains(scanText, "\"tool\"") &&
+		!strings.Contains(scanText, "tool_call") &&
+		!strings.Contains(scanText, "function_call") {
 		return false
 	}
 
@@ -32,11 +41,12 @@ func hasInlineToolCall(text string) bool {
 	// We scan for potential JSON object boundaries and validate.
 	// This is a heuristic — false positives are acceptable (worst case
 	// we inject a nudge that the model ignores).
-	for i := 0; i < len(text); i++ {
-		if text[i] != '{' {
+	for i := 0; i < len(scanText); i++ {
+		if scanText[i] != '{' {
 			continue
 		}
-		// Find the matching closing brace
+		// Find the matching closing brace (search in full text to not
+		// miss closing braces beyond maxScan)
 		end := findJSONEnd(text, i)
 		if end <= i {
 			continue
