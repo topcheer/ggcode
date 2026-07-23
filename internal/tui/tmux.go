@@ -11,6 +11,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/tmux"
@@ -215,9 +216,17 @@ func (m *Model) enterTmuxSession(sessionName, setupLayout string) tea.Cmd {
 		// already on disk. Only flush meta for JSONLStore; full Save would
 		// race with concurrent onPersist appends.
 		if jsonlStore, ok := store.(*session.JSONLStore); ok {
-			safego.Go("tui.tmux.metaSave", func() { _ = jsonlStore.AppendMetaToDisk(ses) })
+			safego.Go("tui.tmux.metaSave", func() {
+				if err := jsonlStore.AppendMetaToDisk(ses); err != nil {
+					debug.Log("tui", "tmux metaSave: %v", err)
+				}
+			})
 		} else {
-			safego.Go("tui.tmux.sessionSave", func() { _ = store.Save(ses) })
+			safego.Go("tui.tmux.sessionSave", func() {
+				if err := store.Save(ses); err != nil {
+					debug.Log("tui", "tmux sessionSave: %v", err)
+				}
+			})
 		}
 	}
 	m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Entering tmux session %q and resuming session %s...", sessionName, m.session.ID))

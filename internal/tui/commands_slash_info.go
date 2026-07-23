@@ -12,6 +12,7 @@ import (
 	"github.com/atotto/clipboard"
 	"github.com/topcheer/ggcode/internal/context"
 	"github.com/topcheer/ggcode/internal/cost"
+	"github.com/topcheer/ggcode/internal/debug"
 
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/safego"
@@ -54,7 +55,9 @@ func (m *Model) applyResumedSession(ses *session.Session) {
 		oldStore := m.sessionStore
 		safego.Go("tui.applyResumedSession.metaFlush", func() {
 			if jsonlStore, ok := oldStore.(*session.JSONLStore); ok {
-				_ = jsonlStore.AppendMetaToDisk(oldSes)
+				if err := jsonlStore.AppendMetaToDisk(oldSes); err != nil {
+					debug.Log("tui", "applyResumedSession metaFlush: %v", err)
+				}
 			}
 		})
 	}

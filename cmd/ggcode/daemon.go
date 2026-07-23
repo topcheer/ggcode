@@ -822,7 +822,9 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 			ses.Endpoint = cfg.Endpoint
 			ses.Model = resolved.Model
 			// Persist model selection to session JSONL (session-scoped).
-			_ = store.AppendMetaToDisk(ses)
+			if err := store.AppendMetaToDisk(ses); err != nil {
+				debug.Log("daemon", "model switch: meta persist failed: %v", err)
+			}
 		}
 		// Sync vendor/endpoint definitions to global config.
 		agentruntime.SyncVendorEndpointToGlobal(cfg, cfg.Vendor, cfg.Endpoint)
@@ -902,6 +904,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		// A2A instance override already applied by LoadWithInstance.
 		a2aSrv, a2aReg, a2aHandler, err = startA2AServer(cfg, ag, registry, workingDir)
 		if err != nil {
+			debug.Log("daemon", "A2A server start failed: %v", err)
 			fmt.Fprintf(os.Stderr, "A2A server warning: %v\n", err)
 		} else {
 			a2aBgCtx, a2aBgCancel := context.WithCancel(context.Background())
@@ -1458,6 +1461,7 @@ loop:
 					})
 					shareResult = result
 					if err != nil {
+						debug.Log("daemon", "tunnel share failed: %v", err)
 						fmt.Fprintf(os.Stderr, "\r\n  Tunnel failed: %v\r\n", err)
 					} else {
 						// Wire hooks for status/activity push
@@ -1549,7 +1553,9 @@ loop:
 	// That would rewrite the JSONL with compacted messages and destroy
 	// pre-compaction history. appendAssistantMessages already appended
 	// new messages incrementally during the session. Just update meta.
-	_ = store.AppendMetaToDisk(ses)
+	if err := store.AppendMetaToDisk(ses); err != nil {
+		debug.Log("daemon", "exit: meta persist failed: %v", err)
+	}
 
 	// Clean up empty session files on exit.
 	if err := store.CleanupIfEmpty(ses); err != nil {
