@@ -770,6 +770,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		cm.SetToolDefinitionOverhead(estimateToolDefinitionOverhead(toolDefs))
 	}
 	reactiveCompactRetries := 0
+	inlineToolCallNudges := 0
 	consecutiveEmptyResponses := 0
 	progressCheckInjected := false
 	contextWarningInjected := false
@@ -941,8 +942,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// models that write tool calls in prose instead of structured tool_use blocks).
 			// Nudge the model to use proper tool call format and retry.
 			assistantText := textBuf
-			if hasInlineToolCall(assistantText) {
-				debug.Log("agent", "Iteration %d: inline tool call detected in text, nudging model", i+1)
+			if hasInlineToolCall(assistantText) && inlineToolCallNudges < 2 {
+				inlineToolCallNudges++
+				debug.Log("agent", "Iteration %d: inline tool call detected in text, nudging model (attempt %d/2)", i+1, inlineToolCallNudges)
 				a.contextManager.Add(resp.Message)
 				a.contextManager.Add(provider.Message{
 					Role: "user",
