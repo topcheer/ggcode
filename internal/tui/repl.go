@@ -553,9 +553,16 @@ func (r *REPL) SetSubAgentManager(mgr *subagent.Manager, prov provider.Provider,
 		return agent.NewAgent(prov, t.(*tool.Registry), systemPrompt, maxTurns)
 	}
 
+	providerGetter := func() provider.Provider {
+		if r.model.agent != nil {
+			return r.model.agent.Provider()
+		}
+		return prov
+	}
 	tools.Register(tool.SpawnAgentTool{
 		Manager:             mgr,
 		Provider:            prov,
+		ProviderGetter:      providerGetter,
 		Tools:               tools,
 		AgentFactory:        factory,
 		WorkingDir:          r.model.agent.WorkingDir(),
@@ -581,6 +588,7 @@ func (r *REPL) SetSubAgentManager(mgr *subagent.Manager, prov provider.Provider,
 		Store:               tmplStore,
 		Manager:             mgr,
 		Provider:            prov,
+		ProviderGetter:      providerGetter,
 		Tools:               tools,
 		AgentFactory:        factory,
 		WorkingDir:          r.model.agent.WorkingDir(),

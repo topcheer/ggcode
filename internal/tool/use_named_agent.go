@@ -16,12 +16,22 @@ import (
 type UseNamedAgentTool struct {
 	Store               *subagent.TemplateStore
 	Manager             *subagent.Manager
-	Provider            provider.Provider
+	Provider            provider.Provider        // static fallback; prefer ProviderGetter if set
+	ProviderGetter      func() provider.Provider // resolves the parent agent's live provider
 	Tools               *Registry
 	AgentFactory        func(provider.Provider, interface{}, string, int) subagent.AgentRunner
 	WorkingDir          string
 	OnUsage             func(provider.TokenUsage)
 	SystemPromptBuilder func(task, agentType string) string
+}
+
+// currentProvider returns the live provider if ProviderGetter is set, otherwise
+// falls back to the static Provider field.
+func (t UseNamedAgentTool) currentProvider() provider.Provider {
+	if t.ProviderGetter != nil {
+		return t.ProviderGetter()
+	}
+	return t.Provider
 }
 
 func (t UseNamedAgentTool) Name() string { return "use_namedagent" }
@@ -131,7 +141,7 @@ func (t UseNamedAgentTool) Execute(ctx context.Context, input json.RawMessage) (
 	}
 
 	// Determine provider: clone with model override if set
-	runProv := provider.CloneProviderWithModel(t.Provider, tmpl.Model)
+	runProv := provider.CloneProviderWithModel(t.currentProvider(), tmpl.Model)
 
 	// Capture for goroutine closure
 	tools := t.Tools
@@ -200,6 +210,7 @@ func (t UseNamedAgentTool) Clone() Tool {
 		Store:               t.Store,
 		Manager:             t.Manager,
 		Provider:            t.Provider,
+		ProviderGetter:      t.ProviderGetter,
 		Tools:               t.Tools,
 		AgentFactory:        t.AgentFactory,
 		WorkingDir:          t.WorkingDir,

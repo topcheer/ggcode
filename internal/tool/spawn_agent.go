@@ -28,12 +28,22 @@ var subAgentBlockedTools = []string{
 // SpawnAgentTool implements the spawn_agent tool.
 type SpawnAgentTool struct {
 	Manager             *subagent.Manager
-	Provider            provider.Provider
+	Provider            provider.Provider        // static fallback; prefer ProviderGetter if set
+	ProviderGetter      func() provider.Provider // resolves the parent agent's live provider
 	Tools               *Registry
 	AgentFactory        subagent.AgentFactory
 	WorkingDir          string // working directory to propagate to sub-agent
 	OnUsage             func(provider.TokenUsage)
 	SystemPromptBuilder func(task, agentType string) string // builds rich system prompt with project context
+}
+
+// currentProvider returns the live provider if ProviderGetter is set, otherwise
+// falls back to the static Provider field.
+func (t SpawnAgentTool) currentProvider() provider.Provider {
+	if t.ProviderGetter != nil {
+		return t.ProviderGetter()
+	}
+	return t.Provider
 }
 
 func (t SpawnAgentTool) Name() string { return "spawn_agent" }
@@ -135,9 +145,10 @@ func (t SpawnAgentTool) Execute(ctx context.Context, input json.RawMessage) (Res
 	subagentType := args.SubagentType
 
 	// Launch the sub-agent in a goroutine
+	prov := t.currentProvider()
 	safego.Go("tool.spawnAgent.subagent", func() {
 		subagent.Run(runCtx, subagent.RunnerConfig{
-			Provider:            t.Provider,
+			Provider:            prov,
 			AllTools:            allToolInfo,
 			Task:                args.Task,
 			AllowedTools:        args.Tools,
@@ -184,6 +195,7 @@ func (t SpawnAgentTool) Clone() Tool {
 	return SpawnAgentTool{
 		Manager:             t.Manager,
 		Provider:            t.Provider,
+		ProviderGetter:      t.ProviderGetter,
 		Tools:               t.Tools,
 		AgentFactory:        t.AgentFactory,
 		WorkingDir:          t.WorkingDir,

@@ -89,6 +89,7 @@ func NewSubAgentManager(
 	subCfg config.SubAgentConfig,
 	registry *tool.Registry,
 	prov provider.Provider,
+	providerGetter func() provider.Provider,
 	workingDir string,
 	onUsage func(provider.TokenUsage),
 	agentFactory func(provider.Provider, interface{}, string, int) subagent.AgentRunner,
@@ -101,6 +102,7 @@ func NewSubAgentManager(
 	_ = registry.Register(tool.SpawnAgentTool{
 		Manager:             mgr,
 		Provider:            prov,
+		ProviderGetter:      providerGetter,
 		Tools:               registry,
 		AgentFactory:        agentFactory,
 		WorkingDir:          workingDir,
@@ -119,6 +121,7 @@ func NewSubAgentManager(
 		Store:               tmplStore,
 		Manager:             mgr,
 		Provider:            prov,
+		ProviderGetter:      providerGetter,
 		Tools:               registry,
 		AgentFactory:        agentFactory,
 		WorkingDir:          workingDir,
