@@ -349,9 +349,13 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 	case "spawn_agent":
 		task := argString(args, "task")
 		desc := argString(args, "description")
+		model := argString(args, "model")
 		name := desc
 		if name == "" {
 			name = toolLabelFor(lang, "spawn_agent")
+		}
+		if model != "" {
+			name = fmt.Sprintf("%s (%s)", name, model)
 		}
 		return toolPresentation{
 			DisplayName: name,
@@ -386,8 +390,12 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 		}
 	case "teammate_spawn":
 		name := argString(args, "name")
+		label := localizedToolLabel(lang, "teammate_spawn")
+		if name != "" {
+			label = fmt.Sprintf("%s: %s", label, name)
+		}
 		return toolPresentation{
-			DisplayName: localizedToolLabel(lang, "teammate_spawn"),
+			DisplayName: label,
 			Detail:      name,
 			Activity:    localizedToolActivity(lang, "teammate_spawn", name),
 		}
