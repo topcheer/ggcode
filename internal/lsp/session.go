@@ -56,9 +56,10 @@ type sessionManager struct {
 	mu       sync.Mutex
 	sessions map[string]*sessionClient
 	once     sync.Once
+	stopCh   chan struct{}
 }
 
-var globalSessions = &sessionManager{sessions: make(map[string]*sessionClient)}
+var globalSessions = &sessionManager{sessions: make(map[string]*sessionClient), stopCh: make(chan struct{})}
 
 func withOpenDocument[T any](ctx context.Context, workspace, path string, fn func(context.Context, *sessionClient, string) (T, error)) (T, error) {
 	var zero T
@@ -125,19 +126,24 @@ func (m *sessionManager) acquire(ctx context.Context, workspace string, resolved
 func (m *sessionManager) reapIdle() {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
-	for range ticker.C {
-		now := time.Now()
-		var stale []*sessionClient
-		m.mu.Lock()
-		for key, session := range m.sessions {
-			if session.isClosed() || now.Sub(session.lastTouch()) > sessionIdleTTL {
-				delete(m.sessions, key)
-				stale = append(stale, session)
+	for {
+		select {
+		case <-ticker.C:
+			now := time.Now()
+			var stale []*sessionClient
+			m.mu.Lock()
+			for key, session := range m.sessions {
+				if session.isClosed() || now.Sub(session.lastTouch()) > sessionIdleTTL {
+					delete(m.sessions, key)
+					stale = append(stale, session)
+				}
 			}
-		}
-		m.mu.Unlock()
-		for _, session := range stale {
-			session.close()
+			m.mu.Unlock()
+			for _, session := range stale {
+				session.close()
+			}
+		case <-m.stopCh:
+			return
 		}
 	}
 }
