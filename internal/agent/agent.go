@@ -937,6 +937,23 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 
 		// No tool calls → done unless autopilot should continue with best-effort assumptions.
 		if len(toolCalls) == 0 {
+			// Detect inline tool calls in text/reasoning (common with lower-reasoning
+			// models that write tool calls in prose instead of structured tool_use blocks).
+			// Nudge the model to use proper tool call format and retry.
+			assistantText := textBuf
+			if hasInlineToolCall(assistantText) {
+				debug.Log("agent", "Iteration %d: inline tool call detected in text, nudging model", i+1)
+				a.contextManager.Add(resp.Message)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: "Your response contains tool call syntax in text, but tools must be called using the structured tool calling mechanism. Please call the tools properly using the tool_use format.",
+					}},
+				})
+				continue
+			}
+
 			a.contextManager.Add(resp.Message)
 
 			if a.injectPendingInterruptions() {
