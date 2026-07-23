@@ -458,6 +458,14 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 			return fmt.Errorf("session %s is locked by another instance (PID %d)", ses.ID[:8], pid)
 		}
 	}
+	// Ensure session lock is released on ANY exit path (e.g., IM adapter
+	// start failure at line ~696). Explicit releases below set sessionLock
+	// to nil, so this defer is a no-op on normal/restart exit paths.
+	defer func() {
+		if sessionLock != nil {
+			sessionLock.Release()
+		}
+	}()
 
 	// Create emitter and daemon bridge
 	emitter := im.NewIMEmitter(imMgr, string(lang), workingDir)
