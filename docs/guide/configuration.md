@@ -203,6 +203,58 @@ hooks:
 
 See [Hooks](./hooks.md) for the full guide (5 events, match patterns, command/http types, payload schema).
 
+## Multi-Agent
+
+### Sub-Agents
+
+Control the behavior of sub-agents spawned via the `spawn_agent` tool:
+
+```yaml
+subagents:
+  max_concurrent: 4    # Max concurrent sub-agents (0 = unlimited)
+  timeout: 300s        # Timeout per sub-agent run (0 = no timeout)
+  show_output: true    # Stream sub-agent output to the parent's TUI
+```
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `max_concurrent` | int | 4 | Maximum number of sub-agents running simultaneously |
+| `timeout` | duration | 0 (none) | Maximum duration for a sub-agent run |
+| `show_output` | bool | false | Whether to stream sub-agent events to the parent's UI |
+
+See [Multi-Agent Modes](./multi-agent-modes.md) for the full architecture guide.
+
+### Swarm Teams
+
+Configure persistent team-based coordination:
+
+```yaml
+swarm:
+  max_teammates_per_team: 5    # Max teammates per team
+  teammate_timeout: 600s       # Timeout for a teammate task (0 = no timeout)
+  inbox_size: 32               # Task inbox depth per teammate
+```
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `max_teammates_per_team` | int | 5 | Maximum teammates allowed in a single team |
+| `teammate_timeout` | duration | 0 (none) | Maximum duration for a single teammate task |
+| `inbox_size` | int | 32 | Task inbox buffer size per teammate |
+
+## Knight
+
+Knight is an autonomous code quality agent that runs during idle time. Disabled by default.
+
+```yaml
+knight:
+  enabled: false
+  trust_level: staged    # readonly | staged | auto
+  daily_token_budget: 5000000   # 5M tokens default; 0 = unlimited
+  idle_delay_sec: 300    # Wait time before Knight starts tasks
+  quiet_hours:           # No tasks during these hours
+    # - "22:00-08:00"
+```
+
 ## Cron Jobs
 
 Cron jobs support a `queue_if_busy` parameter (default: `false`):
