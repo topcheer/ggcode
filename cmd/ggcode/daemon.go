@@ -956,12 +956,21 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 					}
 					lanchatHub.UpdatePeers(peers)
 				}
-				time.Sleep(3 * time.Second)
-				syncPeers()
+				select {
+				case <-time.After(3 * time.Second):
+					syncPeers()
+				case <-a2aBgCtx.Done():
+					return
+				}
 				ticker := time.NewTicker(10 * time.Second)
 				defer ticker.Stop()
-				for range ticker.C {
-					syncPeers()
+				for {
+					select {
+					case <-ticker.C:
+						syncPeers()
+					case <-a2aBgCtx.Done():
+						return
+					}
 				}
 			})
 
