@@ -383,6 +383,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 
 	// Create or resume session
 	var ses *session.Session
+	var sessionLock *session.SessionLock
 	if resumeID == "-" || resumeID == "picker" {
 		// Interactive session selection
 		resumeID = pickSessionInteractive(store, lang)
@@ -426,6 +427,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 					}
 					ses = existing
 					resumeID = s.ID
+					sessionLock = lock
 					agentruntime.RestoreSessionIntoAgent(ag, ses)
 					debug.Log("daemon", "auto-loaded session %s", s.ID)
 					break
@@ -445,8 +447,9 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	ag.SetSessionID(ses.ID)
 
 	// Acquire session lock to prevent concurrent instances on the same session.
-	var sessionLock *session.SessionLock
-	if ses.ID != "" {
+	// If auto-load or --resume already acquired a lock for this session,
+	// it is stored in autoLock and we skip the second TryAcquireSessionLock.
+	if sessionLock == nil && ses.ID != "" {
 		lock, lockErr := session.TryAcquireSessionLock(storeDir, ses.ID)
 		if lockErr == nil && lock != nil && lock.Acquired() {
 			sessionLock = lock
