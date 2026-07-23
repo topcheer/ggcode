@@ -853,6 +853,14 @@ func enCatalog(key string) string {
 		return "Loaded %d remote model(s)."
 	case "panel.model.refresh.builtin_loaded":
 		return "Loaded built-in models."
+	case "panel.model.vendor_not_found":
+		return "Vendor not found"
+	case "panel.model.endpoint_not_found":
+		return "Endpoint not found"
+	case "panel.model.save_failed":
+		return "Save failed: %s"
+	case "panel.model.endpoint_save_failed":
+		return "Endpoint config save failed: %s"
 	case "command.unknown":
 		return "Unknown command: %s\n"
 	case "command.retry_empty":

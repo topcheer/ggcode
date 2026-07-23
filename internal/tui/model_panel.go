@@ -316,12 +316,12 @@ func (m *Model) handleModelPanelEditKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		endpoint := m.config.Endpoint
 		vc, ok := m.config.Vendors[vendor]
 		if !ok {
-			panel.message = "vendor not found"
+			panel.message = m.t("panel.model.vendor_not_found")
 			return *m, nil
 		}
 		ep, ok := vc.Endpoints[endpoint]
 		if !ok {
-			panel.message = "endpoint not found"
+			panel.message = m.t("panel.model.endpoint_not_found")
 			return *m, nil
 		}
 
@@ -350,7 +350,7 @@ func (m *Model) handleModelPanelEditKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		}
 		if m.sessionStore != nil {
 			if err := m.sessionStore.AppendMetaToDisk(m.session); err != nil {
-				panel.message = fmt.Sprintf("save failed: %v", err)
+				panel.message = fmt.Sprintf(m.t("panel.model.save_failed"), err)
 				return *m, nil
 			}
 		}
@@ -366,7 +366,7 @@ func (m *Model) handleModelPanelEditKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			mt = n
 		}
 		if err := m.config.SetEndpointModelLimits(vendor, endpoint, cw, mt); err != nil {
-			panel.message = fmt.Sprintf("endpoint config save failed: %v", err)
+			panel.message = fmt.Sprintf(m.t("panel.model.endpoint_save_failed"), err)
 			return *m, nil
 		}
 

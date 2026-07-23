@@ -859,6 +859,14 @@ func deCatalog(key string) string {
 		return "%d remote Modell(e) geladen."
 	case "panel.model.refresh.builtin_loaded":
 		return "Eingebaute Modelle geladen."
+	case "panel.model.vendor_not_found":
+		return "厂商未找到"
+	case "panel.model.endpoint_not_found":
+		return "端点未找到"
+	case "panel.model.save_failed":
+		return "保存失败：%s"
+	case "panel.model.endpoint_save_failed":
+		return "端点配置保存失败：%s"
 
 	// --- Commands ---
 	case "command.unknown":
