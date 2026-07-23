@@ -559,10 +559,23 @@ func (r *REPL) SetSubAgentManager(mgr *subagent.Manager, prov provider.Provider,
 		}
 		return prov
 	}
+	availableModelsGetter := func() []string {
+		cfg := r.model.config
+		if cfg == nil {
+			return nil
+		}
+		if vc, ok := cfg.Vendors[cfg.Vendor]; ok {
+			if ep, ok := vc.Endpoints[cfg.Endpoint]; ok {
+				return ep.Models
+			}
+		}
+		return nil
+	}
 	tools.Register(tool.SpawnAgentTool{
 		Manager:             mgr,
 		Provider:            prov,
 		ProviderGetter:      providerGetter,
+		AvailableModels:     availableModelsGetter,
 		Tools:               tools,
 		AgentFactory:        factory,
 		WorkingDir:          r.model.agent.WorkingDir(),

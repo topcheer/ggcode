@@ -144,7 +144,7 @@ func TestBuildSystemPrompt(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := BuildSystemPrompt(tt.basePrompt, tt.workingDir, tt.language, tt.toolNames, tt.gitStatus, tt.customCmds)
+			result := BuildSystemPrompt(tt.basePrompt, tt.workingDir, tt.language, tt.toolNames, tt.gitStatus, tt.customCmds, nil)
 			for _, substr := range tt.want {
 				if !contains(result, substr) {
 					t.Errorf("BuildSystemPrompt() missing %q in output", substr)

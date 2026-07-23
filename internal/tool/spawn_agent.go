@@ -30,6 +30,7 @@ type SpawnAgentTool struct {
 	Manager             *subagent.Manager
 	Provider            provider.Provider        // static fallback; prefer ProviderGetter if set
 	ProviderGetter      func() provider.Provider // resolves the parent agent's live provider
+	AvailableModels     func() []string          // resolves models on the current endpoint for validation
 	Tools               *Registry
 	AgentFactory        subagent.AgentFactory
 	WorkingDir          string // working directory to propagate to sub-agent
@@ -73,7 +74,7 @@ func (t SpawnAgentTool) Parameters() json.RawMessage {
 		},
 		"model": {
 			"type": "string",
-			"description": "Optional model name override for the sub-agent (any model available on the current endpoint)"
+			"description": "Optional model name for the sub-agent. Must be one of the models listed in 'Sub-agent models' in the system prompt Environment section. Choose a cheaper/faster model for simple tasks, a stronger model for complex reasoning."
 		},
 		"subagent_type": {
 			"type": "string",
@@ -109,6 +110,25 @@ func (t SpawnAgentTool) Execute(ctx context.Context, input json.RawMessage) (Res
 
 	if args.Task == "" {
 		return Result{IsError: true, Content: "task is required"}, nil
+	}
+
+	// Validate model override against available models on the current endpoint.
+	if model := strings.TrimSpace(args.Model); model != "" && t.AvailableModels != nil {
+		available := t.AvailableModels()
+		if len(available) > 0 {
+			found := false
+			for _, m := range available {
+				if m == model {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return Result{IsError: true, Content: fmt.Sprintf(
+					"model %q is not available on the current endpoint. Available models: %s",
+					model, strings.Join(available, ", "))}, nil
+			}
+		}
 	}
 
 	name := strings.TrimSpace(args.Description)
@@ -196,6 +216,7 @@ func (t SpawnAgentTool) Clone() Tool {
 		Manager:             t.Manager,
 		Provider:            t.Provider,
 		ProviderGetter:      t.ProviderGetter,
+		AvailableModels:     t.AvailableModels,
 		Tools:               t.Tools,
 		AgentFactory:        t.AgentFactory,
 		WorkingDir:          t.WorkingDir,

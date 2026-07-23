@@ -49,7 +49,7 @@ func NewAgentLoop(
 	clientCaps ClientCapabilities,
 	prov provider.Provider,
 ) *AgentLoop {
-	systemPrompt := config.BuildSystemPrompt(cfg.ExtraPrompt, session.CWD, "", nil, "", nil)
+	systemPrompt := config.BuildSystemPrompt(cfg.ExtraPrompt, session.CWD, "", nil, "", nil, nil)
 	maxIter := cfg.MaxIterations
 	if maxIter == 0 {
 		maxIter = 100

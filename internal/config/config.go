@@ -1335,7 +1335,7 @@ func uniqueNonEmptyStrings(values ...string) []string {
 // BuildSystemPrompt enhances the base system prompt with runtime context.
 // BuildSystemPrompt builds the full system prompt by prepending the built-in
 // default, appending the user's extra_prompt (if any), then runtime context.
-func BuildSystemPrompt(extraPrompt, workingDir, language string, toolNames []string, gitStatus string, customCmds []string) string {
+func BuildSystemPrompt(extraPrompt, workingDir, language string, toolNames []string, gitStatus string, customCmds []string, availableModels []string) string {
 	toolNames = append([]string(nil), toolNames...)
 	sort.Strings(toolNames)
 	customCmds = append([]string(nil), customCmds...)
@@ -1362,6 +1362,10 @@ func BuildSystemPrompt(extraPrompt, workingDir, language string, toolNames []str
 		sb.WriteString(fmt.Sprintf("- Shell: %s\n", shellInfo))
 	}
 	sb.WriteString(fmt.Sprintf("- Tool schemas are attached separately. Available tools: %s\n", summarizeNames(toolNames, 12)))
+
+	if len(availableModels) > 0 {
+		sb.WriteString(fmt.Sprintf("- Sub-agent models (for spawn_agent 'model' param): %s\n", summarizeNames(availableModels, 20)))
+	}
 
 	if hasAnyToolPrefix(toolNames, "lsp_") {
 		sb.WriteString("\n## LSP Guidance\n")

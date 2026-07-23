@@ -47,7 +47,17 @@ func BuildInteractiveSystemPromptWithPromptRefs(
 			customCmdNames = append(customCmdNames, name)
 		}
 	}
-	prompt := config.BuildSystemPrompt(cfg.ExtraPrompt, workingDir, cfg.Language, toolNames, gitStatus, customCmdNames)
+	// Include available models from the active endpoint so the LLM can choose
+	// appropriate models for sub-agents via spawn_agent's 'model' parameter.
+	var availableModels []string
+	if cfg != nil {
+		if vc, ok := cfg.Vendors[cfg.Vendor]; ok {
+			if ep, ok := vc.Endpoints[cfg.Endpoint]; ok {
+				availableModels = ep.Models
+			}
+		}
+	}
+	prompt := config.BuildSystemPrompt(cfg.ExtraPrompt, workingDir, cfg.Language, toolNames, gitStatus, customCmdNames, availableModels)
 	var promptSkillRefs []string
 	if commandMgr != nil {
 		skillsPrompt, refs := BuildSkillsSystemPromptWithPromptRefs(commandMgr.List())
@@ -203,7 +213,16 @@ func buildSharedAgentPrompt(ctx SubAgentPromptContext) string {
 		extraPrompt = ctx.Cfg.ExtraPrompt
 		language = ctx.Cfg.Language
 	}
-	prompt := config.BuildSystemPrompt(extraPrompt, workingDir, language, toolNames, gitStatus, nil)
+	// Include available models from the active endpoint for sub-agent prompt.
+	var availableModels []string
+	if ctx.Cfg != nil {
+		if vc, ok := ctx.Cfg.Vendors[ctx.Cfg.Vendor]; ok {
+			if ep, ok := vc.Endpoints[ctx.Cfg.Endpoint]; ok {
+				availableModels = ep.Models
+			}
+		}
+	}
+	prompt := config.BuildSystemPrompt(extraPrompt, workingDir, language, toolNames, gitStatus, nil, availableModels)
 
 	// 3. Add skills (same as main agent)
 	if ctx.CommandMgr != nil {

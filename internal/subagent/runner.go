@@ -116,7 +116,15 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 		cfg.Manager.Complete(cfg.SubAgentID, "", fmt.Errorf("AgentFactory not configured"))
 		return
 	}
-	subAgent := cfg.AgentFactory(cfg.Provider, toolSet, systemPrompt, 0)
+	// Apply model override: clone the provider with a different model if specified.
+	// This allows the parent agent to choose a different model for the sub-agent
+	// (e.g., a faster model for simple tasks, a stronger model for complex reasoning).
+	runProv := cfg.Provider
+	if cfg.Model != "" {
+		runProv = provider.CloneProviderWithModel(cfg.Provider, cfg.Model)
+		debug.Log("subagent", "Run: model override id=%s model=%s", cfg.SubAgentID, cfg.Model)
+	}
+	subAgent := cfg.AgentFactory(runProv, toolSet, systemPrompt, 0)
 
 	// Propagate working directory so sub-agent tools operate in the right directory
 	if cfg.WorkingDir != "" {
