@@ -7,4 +7,4 @@ For the full end-to-end publishing playbook, see [`docs/release-process.md`](../
 ## Current release
 
 The newest tag-specific notes live in the highest-versioned `v*.md` file in this directory
-(currently `docs/releases/v1.3.166.md`).
+(currently `docs/releases/v1.3.175.md`).

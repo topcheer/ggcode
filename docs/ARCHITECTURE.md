@@ -4,7 +4,7 @@
 > If you want to install and use ggcode as a product, start with the main [README](../README.md) first.
 
 > Module: `github.com/topcheer/ggcode`
-> Last updated: 2026-07-15
+> Last updated: 2026-07-23
 
 ## Overview
 
@@ -35,10 +35,11 @@ cmd/ggcode/                # CLI entrypoint
   main.go                  # Entry point
   root.go                  # Root command: tool registration, agent wiring, permission modes
   pipe.go                  # Non-interactive pipe mode (-p flag)
-  daemon.go                # Daemon mode: headless agent, follow display, tunnel/IM, keyboard shortcuts
+  daemon.go                # Daemon mode: headless agent, follow display, tunnel/IM, lanchat Hub, session auto-load
   harness_cmd.go           # Harness CLI: scaffold, run, queue, review, promote, release
   im_cmd.go                # IM adapter management CLI
   mcp_cmd.go               # MCP server management CLI
+  report.go                # Session analytics report generator (HTML output)
   acp.go                   # ACP server CLI (expose ggcode as an ACP agent)
   resume_picker.go         # Session resume picker (interactive list)
   onboard.go               # First-run onboarding wizard
@@ -86,6 +87,7 @@ internal/
     agent_memory.go        # Memory management helpers (project/auto memory)
     agent_tool.go          # Tool execution, diff confirmation, pre/post hooks
     agent_prompt_inject.go  # Dynamic system prompt injection (lanchat peers, playbook hints)
+    agent_inline_tool.go    # Inline tool call detection (non-native tool_use models)
     # Optimization layers (see Agent Optimization Stack below):
     # speculate.go, memoize.go, budget_guard.go, cache_keepalive.go,
     # error_classifier.go, confidence.go, playbook.go, ratchet.go,

@@ -113,6 +113,9 @@ Quick checklist:
 - **Panel rendering**: All full-screen panels use `renderContextBox`; compact elements use `renderContextBoxAuto`
 - **Error handling**: Don't swallow errors silently — add `debug.Log` on error paths
 - **i18n**: TUI uses `tr(lang, key)` system; register catalogs via `registerCatalog(en, zh)` in `init()`
+- **Windows shell**: PowerShell is primary (`-NoProfile -ExecutionPolicy Bypass`); Git Bash is fallback. Detection cached with `sync.Once`. Dangerous PowerShell patterns in `dangerous.go`.
+- **Sub-agent model**: `spawn_agent` accepts optional `model` param; inherits parent runtime model if omitted. Sub-agents and swarm teammates always use current runtime provider, not startup-time snapshot.
+- **Inline tool call detection**: `hasInlineToolCall` scans first 4KB of model response to detect non-native tool calls (nudge limited to 2 attempts).
 - **Pre-commit hook**: Runs `gofmt`, `go vet`, `go build` on staged files
 
 ## Testing

@@ -1,6 +1,6 @@
 # Multi-Agent Execution Modes
 
-> Last updated: 2026-07-15
+> Last updated: 2026-07-23
 
 ggcode has multiple mechanisms for delegating work to independent agents. Each differs in isolation level, tool access, and workspace semantics.
 
@@ -52,6 +52,15 @@ RunnerConfig.WorkingDir → agent.SetWorkingDir() after creation
 
 The subagent inherits the main agent's cwd, so file operations work relative to the project root without exploration.
 
+### Model Selection
+
+The `spawn_agent` tool accepts an optional `model` parameter:
+
+- **With `model`**: The sub-agent uses the specified model (validated against available models on the current endpoint). Choose a cheaper/faster model for simple tasks, a stronger model for complex reasoning.
+- **Without `model`**: The sub-agent inherits the parent agent's current runtime model, ensuring consistency.
+
+The model name is displayed in the TUI as `[model-name]` in the sub-agent label, providing visibility into which model each sub-agent is using.
+
 ### Lifecycle
 
 1. `spawn_agent` tool → `Manager.Spawn()` → `safego.Go(subagent.Run)`
@@ -60,6 +69,10 @@ The subagent inherits the main agent's cwd, so file operations work relative to 
 4. Text events accumulated per-turn (not per-chunk), stored in 200-event ring buffer
 5. `Manager.Complete()` stores full output (no truncation)
 6. Parent retrieves result via `wait_agent` or `list_agents`
+
+### Provider Freshness
+
+Sub-agents always use the parent agent's **current runtime provider**, not the provider that was active at process startup. If you switch models mid-session via the model picker, subsequently spawned sub-agents will use the new provider. This ensures sub-agents respect runtime configuration changes.
 
 ---
 

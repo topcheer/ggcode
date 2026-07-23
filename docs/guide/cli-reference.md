@@ -25,16 +25,22 @@ echo "fix typo" | ggcode  # Read from stdin
 ggcode --resume <id>      # Resume a specific session
 ggcode --resume           # Auto-resume latest session
 ggcode --resume-picker    # Open session picker
+ggcode --new-session      # Skip auto-resume, always start fresh
 ```
+
+`--resume`, `--resume-picker`, and `--new-session` are mutually exclusive.
 
 ### Daemon Mode
 
 ```bash
-ggcode daemon             # Start daemon (headless + IM gateway)
+ggcode daemon             # Start daemon (headless + IM gateway + lanchat)
 ggcode daemon --follow    # Daemon with terminal follow display
 ggcode daemon --bypass    # Daemon in bypass mode
 ggcode daemon --background  # Fork to background
+ggcode daemon --new-session  # Skip auto-loading most recent session
 ```
+
+The daemon automatically loads the most recent unlocked session on startup. Use `--new-session` to always start fresh. The daemon also initializes a lanchat Hub for LAN discovery and messaging.
 
 ## Subcommands
 
@@ -173,4 +179,5 @@ ggcode version                         # Print version, commit, and build date
 | `-p, --pipe <prompt>` | Non-interactive pipe mode |
 | `--resume [id]` | Resume a session |
 | `--resume-picker` | Open session picker |
+| `--new-session` | Skip auto-resume, always start a new session |
 | `-h, --help` | Show help |
