@@ -25,6 +25,8 @@ import (
 type Hub struct {
 	mu sync.RWMutex
 
+	closeOnce sync.Once
+
 	nodeID    string // this node's A2A instance ID
 	humanNick string
 	agentNick string
@@ -1761,28 +1763,31 @@ func truncate(s string, maxLen int) string {
 }
 
 // Close broadcasts a leave message to all peers and stops the UDP transport.
-// Call this on application shutdown so peers detect offline immediately
-// instead of waiting for the heartbeat timeout (typically 90s).
+// Idempotent — safe to call multiple times. Call this on application shutdown
+// so peers detect offline immediately instead of waiting for the heartbeat
+// timeout (typically 90s).
 func (h *Hub) Close() {
-	h.mu.RLock()
-	transport := h.udpTransport
-	h.mu.RUnlock()
+	h.closeOnce.Do(func() {
+		h.mu.RLock()
+		transport := h.udpTransport
+		h.mu.RUnlock()
 
-	if transport == nil {
-		return
-	}
-
-	// Broadcast leave via UDP multicast (best-effort, no retry).
-	self := h.SelfParticipant()
-	if payload, err := json.Marshal(self); err == nil {
-		env := udpEnvelope{
-			Type:    "leave",
-			Payload: payload,
+		if transport == nil {
+			return
 		}
-		_ = transport.SendMulticast(env)
-		debug.Log("lanchat", "broadcast leave to all peers")
-	}
 
-	// Stop the transport (closes sockets, waits for goroutines).
-	transport.Stop()
+		// Broadcast leave via UDP multicast (best-effort, no retry).
+		self := h.SelfParticipant()
+		if payload, err := json.Marshal(self); err == nil {
+			env := udpEnvelope{
+				Type:    "leave",
+				Payload: payload,
+			}
+			_ = transport.SendMulticast(env)
+			debug.Log("lanchat", "broadcast leave to all peers")
+		}
+
+		// Stop the transport (closes sockets, waits for goroutines).
+		transport.Stop()
+	})
 }

@@ -37,6 +37,7 @@ type UDPTransport struct {
 	nodeID     string       // our node ID (for filtering multicast DMs)
 	apiKey     string       // community key for auth
 	stopCh     chan struct{}
+	stopOnce   sync.Once
 	wg         sync.WaitGroup
 	listenPort int // port for self-filtering (ReadFromUDP remote port match)
 
@@ -151,18 +152,20 @@ func (t *UDPTransport) Start() {
 	})
 }
 
-// Stop shuts down the UDP transport.
+// Stop shuts down the UDP transport. Idempotent — safe to call multiple times.
 func (t *UDPTransport) Stop() {
-	close(t.stopCh)
-	if t.conn != nil {
-		t.conn.Close()
-	}
-	if t.mcastConn != nil {
-		t.mcastConn.Close()
-	}
-	if t.mcastSend != nil {
-		t.mcastSend.Close()
-	}
+	t.stopOnce.Do(func() {
+		close(t.stopCh)
+		if t.conn != nil {
+			t.conn.Close()
+		}
+		if t.mcastConn != nil {
+			t.mcastConn.Close()
+		}
+		if t.mcastSend != nil {
+			t.mcastSend.Close()
+		}
+	})
 	t.wg.Wait()
 }
 
