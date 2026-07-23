@@ -946,7 +946,12 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		}
 		return cloned
 	}
-	swarmMgr := swarm.NewManager(cfg.Swarm, prov, swarmAgentFactory, swarmToolBuilder)
+	swarmMgr := swarm.NewManagerWithProviderGetter(cfg.Swarm, prov, func() provider.Provider {
+		if ag != nil {
+			return ag.Provider()
+		}
+		return prov
+	}, swarmAgentFactory, swarmToolBuilder)
 	swarmMgr.SetWorkingDir(ag.WorkingDir())
 	swarmMgr.SetUsageHandler(repl.SessionUsageHandler())
 	swarmMgr.SetSystemPromptBuilder(func(name, teamName, wd string) string {

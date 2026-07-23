@@ -42,9 +42,10 @@ const swarmStreamBatchInterval = 500 * time.Millisecond
 const swarmCancelTimeout = 5 * time.Second
 
 type Manager struct {
-	teams    map[string]*Team
-	provider provider.Provider
-	cfg      config.SwarmConfig
+	teams          map[string]*Team
+	provider       provider.Provider        // static fallback; prefer providerGetter if set
+	providerGetter func() provider.Provider // resolves the parent agent's live provider
+	cfg            config.SwarmConfig
 
 	agentFactory AgentFactory
 	toolBuilder  ToolBuilder
@@ -81,6 +82,16 @@ type Manager struct {
 
 // NewManager creates a swarm Manager.
 func NewManager(cfg config.SwarmConfig, prov provider.Provider, factory AgentFactory, builder ToolBuilder) *Manager {
+	return newManager(cfg, prov, nil, factory, builder)
+}
+
+// NewManagerWithProviderGetter creates a swarm Manager that resolves the
+// provider dynamically from the parent agent at teammate spawn time.
+func NewManagerWithProviderGetter(cfg config.SwarmConfig, prov provider.Provider, getter func() provider.Provider, factory AgentFactory, builder ToolBuilder) *Manager {
+	return newManager(cfg, prov, getter, factory, builder)
+}
+
+func newManager(cfg config.SwarmConfig, prov provider.Provider, getter func() provider.Provider, factory AgentFactory, builder ToolBuilder) *Manager {
 	if cfg.MaxTeammatesPerTeam <= 0 {
 		cfg.MaxTeammatesPerTeam = 8
 	}
@@ -95,6 +106,7 @@ func NewManager(cfg config.SwarmConfig, prov provider.Provider, factory AgentFac
 	return &Manager{
 		teams:           make(map[string]*Team),
 		provider:        prov,
+		providerGetter:  getter,
 		cfg:             cfg,
 		agentFactory:    factory,
 		toolBuilder:     builder,
@@ -317,6 +329,15 @@ func (m *Manager) EmitBoardUpdated(teamID string) {
 	m.emit(Event{Type: "team_board_updated", TeamID: teamID, Timestamp: time.Now()})
 }
 
+// currentProvider returns the live provider if providerGetter is set,
+// otherwise falls back to the static provider field.
+func (m *Manager) currentProvider() provider.Provider {
+	if m.providerGetter != nil {
+		return m.providerGetter()
+	}
+	return m.provider
+}
+
 // SpawnTeammate creates a new teammate in the given team and starts its idle loop.
 func (m *Manager) SpawnTeammate(teamID, name, color string, allowedTools []string) (TeammateSnapshot, error) {
 	m.mu.Lock()
@@ -374,7 +395,7 @@ func (m *Manager) SpawnTeammate(teamID, name, color string, allowedTools []strin
 	}
 	var agent AgentRunner
 	if m.agentFactory != nil {
-		agent = m.agentFactory(m.provider, toolSet, systemPrompt, 0)
+		agent = m.agentFactory(m.currentProvider(), toolSet, systemPrompt, 0)
 		if onUsage != nil {
 			if usageAware, ok := agent.(usageHandlerSetter); ok {
 				usageAware.SetUsageHandler(onUsage)
