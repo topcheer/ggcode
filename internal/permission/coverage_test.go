@@ -131,7 +131,7 @@ func TestDangerousDetector_UnicodeInput(t *testing.T) {
 	unicodeCmds := []struct {
 		cmd    string
 		danger bool
-		reason  string
+		reason string
 	}{
 		{"echo 你好世界", false, "Unicode echo should be safe"},
 		{"rm -rf /tmp/测试目录", true, "Unicode path with rm -rf should be dangerous"},
@@ -175,8 +175,8 @@ func TestConfigPolicy_EmptyPathInput(t *testing.T) {
 
 	// Empty file path in various formats
 	emptyPathInputs := []struct {
-		tool    string
-		input   string
+		tool     string
+		input    string
 		wantDeny bool
 	}{
 		{"read_file", `{"file_path":""}`, false}, // Empty path may be allowed
@@ -250,7 +250,7 @@ func TestDangerousDetector_MixedCaseAndSpelling(t *testing.T) {
 		{"sudo RM file", true},
 		{"Do Shell Script \"rm -rf /\"", true},
 		{"remove-item -force", false}, // lowercase remove-item not in pattern (needs capital R)
-		{"Remove-Item", false}, // no -Recurse or -Force
+		{"Remove-Item", false},        // no -Recurse or -Force
 	}
 
 	for _, tc := range mixedCase {
