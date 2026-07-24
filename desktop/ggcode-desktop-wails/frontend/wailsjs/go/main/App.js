@@ -38,8 +38,16 @@ export function CompleteOnboard(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['CompleteOnboard'](arg1, arg2, arg3, arg4);
 }
 
+export function CreateCronJob(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['CreateCronJob'](arg1, arg2, arg3, arg4);
+}
+
 export function CycleReasoningEffort() {
   return window['go']['main']['App']['CycleReasoningEffort']();
+}
+
+export function DeleteCronJob(arg1) {
+  return window['go']['main']['App']['DeleteCronJob'](arg1);
 }
 
 export function DeleteSession(arg1) {
@@ -62,6 +70,10 @@ export function ForceReauthMCPServer(arg1) {
   return window['go']['main']['App']['ForceReauthMCPServer'](arg1);
 }
 
+export function GenerateCronPrompt(arg1) {
+  return window['go']['main']['App']['GenerateCronPrompt'](arg1);
+}
+
 export function GetAnthropicOAuthStatus() {
   return window['go']['main']['App']['GetAnthropicOAuthStatus']();
 }
@@ -72,6 +84,10 @@ export function GetAvailableModels() {
 
 export function GetConfig() {
   return window['go']['main']['App']['GetConfig']();
+}
+
+export function GetCronJob(arg1) {
+  return window['go']['main']['App']['GetCronJob'](arg1);
 }
 
 export function GetCurrentSessionID() {
@@ -206,6 +222,10 @@ export function LanChatSetNick(arg1) {
   return window['go']['main']['App']['LanChatSetNick'](arg1);
 }
 
+export function ListCronJobs() {
+  return window['go']['main']['App']['ListCronJobs']();
+}
+
 export function ListFiles(arg1) {
   return window['go']['main']['App']['ListFiles'](arg1);
 }
@@ -240,6 +260,10 @@ export function NeedsOnboard() {
 
 export function NewSession() {
   return window['go']['main']['App']['NewSession']();
+}
+
+export function PauseCronJob(arg1) {
+  return window['go']['main']['App']['PauseCronJob'](arg1);
 }
 
 export function ReadClipboardAttachments() {
@@ -284,6 +308,10 @@ export function RespondApproval(arg1, arg2) {
 
 export function RespondAskUser(arg1, arg2) {
   return window['go']['main']['App']['RespondAskUser'](arg1, arg2);
+}
+
+export function ResumeCronJob(arg1) {
+  return window['go']['main']['App']['ResumeCronJob'](arg1);
 }
 
 export function SaveA2AEnabled(arg1) {
@@ -390,35 +418,6 @@ export function UpdateConfig(arg1) {
   return window['go']['main']['App']['UpdateConfig'](arg1);
 }
 
-export function CreateCronJob(arg1,arg2,arg3,arg4) {
-  return window['go']['main']['App']['CreateCronJob'](arg1,arg2,arg3,arg4);
+export function UpdateCronJob(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['UpdateCronJob'](arg1, arg2, arg3, arg4);
 }
-
-export function DeleteCronJob(arg1) {
-  return window['go']['main']['App']['DeleteCronJob'](arg1);
-}
-
-export function GenerateCronPrompt(arg1) {
-  return window['go']['main']['App']['GenerateCronPrompt'](arg1);
-}
-
-export function GetCronJob(arg1) {
-  return window['go']['main']['App']['GetCronJob'](arg1);
-}
-
-export function ListCronJobs() {
-  return window['go']['main']['App']['ListCronJobs']();
-}
-
-export function PauseCronJob(arg1) {
-  return window['go']['main']['App']['PauseCronJob'](arg1);
-}
-
-export function ResumeCronJob(arg1) {
-  return window['go']['main']['App']['ResumeCronJob'](arg1);
-}
-
-export function UpdateCronJob(arg1,arg2,arg3,arg4) {
-  return window['go']['main']['App']['UpdateCronJob'](arg1,arg2,arg3,arg4);
-}
-
