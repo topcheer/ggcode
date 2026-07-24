@@ -264,14 +264,12 @@ func (a *Agent) llmDecideVerifyCommand(ctx context.Context) string {
 		return ""
 	}
 
-	// Reject obviously dangerous commands (Unix + PowerShell)
-	lower := strings.ToLower(cmd)
-	if strings.Contains(lower, "rm -rf") || strings.Contains(lower, "sudo") ||
-		strings.Contains(lower, "> /dev/") || strings.Contains(lower, "dd if=") ||
-		strings.Contains(lower, "format-volume") || strings.Contains(lower, "clear-disk") ||
-		strings.Contains(lower, "remove-item -recurse -force") ||
-		strings.Contains(lower, "set-content") && strings.Contains(lower, "physicaldrive") ||
-		strings.Contains(lower, "set-executionpolicy") {
+	// Reject dangerous commands using the comprehensive DangerousDetector
+	// (same detector used by the permission system). This replaces the previous
+	// naive substring matching which missed many dangerous patterns (e.g.,
+	// "git clean -fdx", "find . -delete", "chmod 777", fork bombs, etc.).
+	detector := permission.NewDangerousDetector()
+	if detector.IsDangerous(cmd) {
 		debug.Log("verify", "LLM proposed dangerous command, rejecting: %s", cmd)
 		return ""
 	}
