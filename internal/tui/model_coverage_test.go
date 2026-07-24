@@ -797,6 +797,18 @@ func TestShutdownAll_WithSubAgents(t *testing.T) {
 
 	m.shutdownAll()
 
+	// shutdownAll runs CancelAll asynchronously in a goroutine.
+	// Poll until sub-agents are cancelled or timeout.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		sa1, ok1 := m.subAgentMgr.Get("sa-1")
+		sa2, ok2 := m.subAgentMgr.Get("sa-2")
+		if ok1 && sa1.Status == subagent.StatusCancelled &&
+			ok2 && sa2.Status == subagent.StatusCancelled {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	sa1, _ := m.subAgentMgr.Get("sa-1")
 	sa2, _ := m.subAgentMgr.Get("sa-2")
 	if sa1.Status != subagent.StatusCancelled {
