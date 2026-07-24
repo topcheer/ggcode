@@ -163,11 +163,21 @@ func (m *Model) submitPendingSubmissionCmd() tea.Cmd {
 // shutdownAll cancels all running sub-agents and swarm teammates.
 // Called on exit (double ctrl+c, ctrl+d) to avoid orphaned background work.
 func (m *Model) shutdownAll() {
-	if m.subAgentMgr != nil {
-		m.subAgentMgr.CancelAll()
-	}
-	if m.swarmMgr != nil {
-		m.swarmMgr.CancelAll()
+	// Cancel sub-agents and swarm teammates asynchronously.
+	// CancelAll() waits up to 5s per sub-agent for its goroutine to terminate,
+	// which would freeze the TUI if called synchronously during shutdown.
+	// The process is exiting anyway (tea.Quit follows), so we fire-and-forget.
+	if m.subAgentMgr != nil || m.swarmMgr != nil {
+		subMgr := m.subAgentMgr
+		swarmMgr := m.swarmMgr
+		safego.Go("tui.shutdownAll", func() {
+			if subMgr != nil {
+				subMgr.CancelAll()
+			}
+			if swarmMgr != nil {
+				swarmMgr.CancelAll()
+			}
+		})
 	}
 	if m.extPaneMgr != nil {
 		m.extPaneMgr.CloseAll()

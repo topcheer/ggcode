@@ -80,6 +80,14 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 		m.handleClearChat()
 		return m, nil
 	}
+	// Ctrl+C: if sub-agent follow panel is open, close it (same as Esc).
+	// This prevents Ctrl+C from穿透ing to the exit-confirm path when the
+	// user just wants to exit the follow panel.
+	if msg.String() == "ctrl+c" && m.subAgentFollow.isActive() {
+		m.subAgentFollow.deactivate()
+		return m, nil
+	}
+
 	if msg.String() == "ctrl+c" && len(m.langOptions) == 0 && m.closeActivePanel() {
 		return m, nil
 	}
