@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ggcode — AI Coding Agent for the Terminal | MCP, Multi-Agent, IM Bridging</title>
+    <meta
+      name="description"
+      content="ggcode is a terminal-native AI coding agent with MCP integration, multi-agent support, IM bridging, harness workflows, and resumable sessions. Available on macOS, Linux, Windows, iOS, and Android."
+    />
+    <meta name="keywords" content="AI coding agent, terminal AI, CLI assistant, MCP, multi-agent, code review, harness workflow, developer tools, coding copilot, terminal assistant" />
+    <meta name="author" content="GG AI" />
+    <meta name="theme-color" content="#0d1117" />
+    <link rel="canonical" href="https://ggcode.dev/" />
+
+    <!-- Open Graph -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="ggcode" />
+    <meta property="og:url" content="https://ggcode.dev/" />
+    <meta property="og:title" content="ggcode — AI Coding Agent for the Terminal" />
+    <meta property="og:description" content="Terminal-native AI coding agent with MCP integration, multi-agent support, IM bridging, harness workflows, and resumable sessions." />
+    <meta property="og:image" content="https://ggcode.dev/assets/ggcode-banner.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:locale" content="en_US" />
+    <meta property="og:locale:alternate" content="zh_CN" />
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="ggcode — AI Coding Agent for the Terminal" />
+    <meta name="twitter:description" content="Terminal-native AI coding agent with MCP, multi-agent, IM bridging, harness workflows, and resumable sessions." />
+    <meta name="twitter:image" content="https://ggcode.dev/assets/ggcode-banner.png" />
+
+    <!-- Favicon -->
+    <link rel="icon" type="image/svg+xml" href="./assets/favicon.svg" />
+    <link rel="apple-touch-icon" href="./assets/ggcode-banner.png" />
+
+    <!-- Structured Data -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "SoftwareApplication",
+      "name": "ggcode",
+      "description": "Terminal-native AI coding agent with MCP integration, multi-agent support, IM bridging, harness workflows, and resumable sessions.",
+      "url": "https://ggcode.dev",
+      "applicationCategory": "DeveloperApplication",
+      "operatingSystem": "macOS, Linux, Windows, iOS, Android",
+      "offers": {
+        "@type": "Offer",
+        "price": "0",
+        "priceCurrency": "USD"
+      },
+      "featureList": [
+        "MCP integration",
+        "Multi-agent orchestration",
+        "IM bridging (QQ, Telegram, Discord, Slack, Feishu, DingTalk)",
+        "Harness workflow engine",
+        "Resumable sessions",
+        "Desktop + Mobile apps",
+        "Permission modes with checkpoints"
+      ],
+      "softwareVersion": "1.3.151",
+      "author": {
+        "@type": "Organization",
+        "name": "GG AI",
+        "url": "https://ggcode.dev"
+      }
+    }
+    </script>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css?v=__SITE_ASSET_VERSION__" />
+  </head>
+  <body>
+    <main>
+    <!-- ======================== HERO ======================== -->
+    <section class="hero" id="hero">
+      <div class="hero-bg">
+        <div class="orb orb-1"></div>
+        <div class="orb orb-2"></div>
+        <div class="orb orb-3"></div>
+      </div>
+
+      <nav class="nav">
+        <a class="nav-brand" href="#hero">
+          <span class="nav-mark">&gt;_</span> ggcode
+        </a>
+        <div class="nav-links">
+          <a href="#features" data-i18n="nav.features">Features</a>
+          <a href="#install" data-i18n="nav.install">Install</a>
+          <a href="https://github.com/topcheer/ggcode" target="_blank" rel="noreferrer">GitHub</a>
+          <button class="lang-toggle" id="langToggle">EN / 中</button>
+        </div>
+      </nav>
+
+      <div class="hero-content">
+        <div class="hero-badge">terminal-native · mcp-ready · multi-agent</div>
+        <h1 data-i18n="hero.title">
+          The AI coding agent<br />
+          <span class="gradient-text">that lives in your terminal.</span>
+        </h1>
+        <p class="hero-sub" data-i18n="hero.sub">
+          Read code, edit files, run commands, wire in MCP, manage sessions, ship releases.
+          Not a chat wrapper — a full engineering workflow.
+        </p>
+
+        <div class="hero-install">
+          <div class="install-tabs">
+            <button class="tab active" data-tab="macos">macOS / Linux</button>
+            <button class="tab" data-tab="windows">Windows</button>
+            <button class="tab" data-tab="brew">Homebrew</button>
+          </div>
+          <div class="install-bar">
+            <code id="installCmd">curl -fsSL https://ggcode.dev/install.sh | bash</code>
+            <button class="copy-btn" data-copy="curl -fsSL https://ggcode.dev/install.sh | bash">
+              <svg viewBox="0 0 24 24" width="18" height="18"><rect x="9" y="9" width="12" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M5 15V5a2 2 0 0 1 2-2h8" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="hero-actions">
+          <a class="btn btn-primary" href="#install" data-i18n="hero.cta">Get Started →</a>
+          <a class="btn btn-ghost" href="https://github.com/topcheer/ggcode" target="_blank" rel="noreferrer">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.44 9.8 8.21 11.39.6.11.82-.26.82-.58v-2.03c-3.34.73-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.09-.75.08-.73.08-.73 1.21.09 1.84 1.24 1.84 1.24 1.07 1.84 2.81 1.31 3.5 1 .11-.78.42-1.31.76-1.61-2.67-.3-5.47-1.34-5.47-5.95 0-1.31.47-2.39 1.24-3.23-.13-.31-.54-1.52.12-3.18 0 0 1.01-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.29-1.55 3.3-1.23 3.3-1.23.66 1.66.25 2.87.12 3.18.77.84 1.24 1.92 1.24 3.23 0 4.62-2.81 5.64-5.49 5.94.43.37.81 1.1.81 2.22v3.29c0 .32.22.7.83.58A12 12 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg>
+            GitHub
+          </a>
+        </div>
+      </div>
+
+      <!-- Terminal Preview -->
+      <div class="terminal-preview">
+        <div class="terminal-chrome">
+          <span class="dot dot-r"></span>
+          <span class="dot dot-y"></span>
+          <span class="dot dot-g"></span>
+          <span class="terminal-label">ggcode</span>
+        </div>
+        <div class="terminal-content">
+          <pre class="terminal-line"><span class="t-prompt">$</span> <span class="t-cmd">cd my-project && ggcode</span></pre>
+          <pre class="terminal-line t-muted">▸ Loading project context...</pre>
+          <pre class="terminal-line t-muted">▸ Connected: claude-sonnet · 4 tools ready</pre>
+          <pre class="terminal-line"><span class="t-prompt">&gt;</span> <span data-i18n="terminal.demo">Explain the auth flow and refactor for readability</span></pre>
+          <pre class="terminal-line t-accent">● Reading internal/auth/session.go...</pre>
+          <pre class="terminal-line t-accent">● Reading internal/auth/provider.go...</pre>
+          <pre class="terminal-line t-accent">● Editing 3 files...</pre>
+          <pre class="terminal-line t-success">✓ Done · 3 files edited · 1 commit ready</pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- ======================== FEATURES ======================== -->
+    <section class="features" id="features">
+      <div class="section-header">
+        <span class="section-tag">capabilities</span>
+        <h2 data-i18n="features.title">Everything you need.<br /><span class="muted">Nothing you don't.</span></h2>
+      </div>
+
+      <div class="feature-grid">
+        <div class="feature-card feature-card-wide" data-reveal>
+          <div class="feature-icon">⚡</div>
+          <h3 data-i18n="features.terminal.title">Full toolkit, zero context switching</h3>
+          <p data-i18n="features.terminal.text">File editing, shell commands, Git, LSP, search, code review — all in one session, no window juggling.</p>
+        </div>
+        <div class="feature-card" data-reveal>
+          <div class="feature-icon">🔌</div>
+          <h3 data-i18n="features.mcp.title">MCP integration</h3>
+          <p data-i18n="features.mcp.text">Connect Cloudflare, Playwright, web readers, databases, and custom tools via Model Context Protocol.</p>
+        </div>
+        <div class="feature-card" data-reveal>
+          <div class="feature-icon">🤖</div>
+          <h3 data-i18n="features.agent.title">Multi-agent</h3>
+          <p data-i18n="features.agent.text">Spawn parallel workers, delegate to teammates, collaborate across instances with A2A protocol.</p>
+        </div>
+        <div class="feature-card" data-reveal>
+          <div class="feature-icon">💬</div>
+          <h3 data-i18n="features.im.title">IM bridging</h3>
+          <p data-i18n="features.im.text">Control from QQ, Telegram, Discord, Slack, Feishu, DingTalk. Your agent is always reachable.</p>
+        </div>
+        <div class="feature-card" data-reveal>
+          <div class="feature-icon">🌐</div>
+          <h3 data-i18n="features.lanchat.title">LAN Chat</h3>
+          <p data-i18n="features.lanchat.text">Real-time messaging between ggcode instances on your local network. Type # to chat.</p>
+        </div>
+        <div class="feature-card" data-reveal>
+          <div class="feature-icon">🛡</div>
+          <h3 data-i18n="features.modes.title">Permission modes</h3>
+          <p data-i18n="features.modes.text">Five trust levels from fully supervised to autopilot. Checkpoints and /undo keep changes reversible.</p>
+        </div>
+        <div class="feature-card" data-reveal>
+          <div class="feature-icon">📦</div>
+          <h3 data-i18n="features.harness.title">Harness workflow</h3>
+          <p data-i18n="features.harness.text">Isolated task execution in git worktrees with automated checks, code review, and promotion.</p>
+        </div>
+        <div class="feature-card" data-reveal>
+          <div class="feature-icon">📱</div>
+          <h3 data-i18n="features.mobile.title">Desktop + Mobile</h3>
+          <p data-i18n="features.mobile.text">Native apps for macOS, Windows, Linux, iOS, Android. Pair mobile via encrypted relay.</p>
+        </div>
+        <div class="feature-card feature-card-wide" data-reveal>
+          <div class="feature-icon">🔄</div>
+          <h3 data-i18n="features.sessions.title">Resumable sessions</h3>
+          <p data-i18n="features.sessions.text">Pause any conversation, resume it later. Switch between projects without losing context.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ======================== INSTALL ======================== -->
+    <section class="install" id="install">
+      <div class="section-header">
+        <span class="section-tag">install</span>
+        <h2 data-i18n="install.title">Pick your path.<br /><span class="muted">Get running in seconds.</span></h2>
+      </div>
+
+      <div class="install-cards">
+        <div class="install-card" data-reveal>
+          <div class="install-card-top">
+            <h3>macOS / Linux</h3>
+            <button class="copy-btn small" data-copy="curl -fsSL https://ggcode.dev/install.sh | bash">
+              <svg viewBox="0 0 24 24" width="16" height="16"><rect x="9" y="9" width="12" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M5 15V5a2 2 0 0 1 2-2h8" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+            </button>
+          </div>
+          <p data-i18n="install.script.text">No sudo required. Installs to ~/.local/bin</p>
+          <pre class="cmd"><code>curl -fsSL https://ggcode.dev/install.sh | bash</code></pre>
+        </div>
+
+        <div class="install-card" data-reveal>
+          <div class="install-card-top">
+            <h3>Windows</h3>
+            <button class="copy-btn small" data-copy="irm https://ggcode.dev/install.ps1 | iex">
+              <svg viewBox="0 0 24 24" width="16" height="16"><rect x="9" y="9" width="12" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M5 15V5a2 2 0 0 1 2-2h8" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+            </button>
+          </div>
+          <p data-i18n="install.win.text">No admin required. Uses winget or PowerShell</p>
+          <pre class="cmd"><code>winget install gg.ai.ggcode-cli</code></pre>
+        </div>
+
+        <div class="install-card" data-reveal>
+          <div class="install-card-top">
+            <h3>Homebrew</h3>
+            <button class="copy-btn small" data-copy="brew tap topcheer/ggcode && brew trust topcheer/ggcode && brew install ggcode">
+              <svg viewBox="0 0 24 24" width="16" height="16"><rect x="9" y="9" width="12" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M5 15V5a2 2 0 0 1 2-2h8" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+            </button>
+          </div>
+          <p data-i18n="install.brew.text">macOS and Linux via Homebrew tap</p>
+          <pre class="cmd"><code>brew tap topcheer/ggcode && brew trust topcheer/ggcode && brew install ggcode</code></pre>
+        </div>
+
+        <div class="install-card install-card-link" data-reveal>
+          <div class="install-card-top">
+            <h3 data-i18n="install.native.title">Native packages</h3>
+          </div>
+          <p data-i18n="install.native.text">.pkg · .msi · .deb · .rpm · .apk · AppImage</p>
+          <a class="btn btn-outline" href="https://github.com/topcheer/ggcode/releases/latest" target="_blank" rel="noreferrer">
+            <span data-i18n="install.native.cta">Releases →</span>
+          </a>
+        </div>
+
+        <div class="install-card install-card-link" data-reveal>
+          <div class="install-card-top">
+            <h3>iOS</h3>
+          </div>
+          <p data-i18n="install.ios.text">App Store · also on TestFlight (free)</p>
+          <a class="btn btn-outline" href="https://apps.apple.com/us/app/ggcode-mobile/id6770855612" target="_blank" rel="noreferrer">
+            <span data-i18n="install.ios.cta">App Store →</span>
+          </a>
+          <a class="btn btn-ghost" href="https://testflight.apple.com/join/J34wVD6p" target="_blank" rel="noreferrer" style="margin-top:6px;font-size:12px">
+            <span data-i18n="install.ios.testflight">TestFlight →</span>
+          </a>
+        </div>
+
+        <div class="install-card install-card-link" data-reveal>
+          <div class="install-card-top">
+            <h3>Android</h3>
+          </div>
+          <p data-i18n="install.android.text">Google Play</p>
+          <a class="btn btn-outline" href="https://play.google.com/store/apps/details?id=gg.ai.ggcode.mobile" target="_blank" rel="noreferrer">
+            <span data-i18n="install.android.cta">Google Play →</span>
+          </a>
+        </div>
+      </div>
+    </section>
+
+    <!-- ======================== CTA ======================== -->
+    <section class="cta">
+      <div class="cta-content">
+        <h2 data-i18n="cta.title">
+          <span class="gradient-text">Ship faster</span><br />
+          from your terminal.
+        </h2>
+        <p data-i18n="cta.text">If you live in the terminal, care about workflow integrity, and still want delivery speed — ggcode belongs in your shell.</p>
+        <div class="hero-actions">
+          <a class="btn btn-primary" href="#install" data-i18n="cta.cta">Install now →</a>
+          <a class="btn btn-ghost" href="https://github.com/topcheer/ggcode" target="_blank" rel="noreferrer" data-i18n="cta.github">Star on GitHub</a>
+        </div>
+      </div>
+    </section>
+
+    <!-- ======================== FOOTER ======================== -->
+    <footer class="footer">
+      <p>&copy; 2025 GG AI — <a href="privacy.html">Privacy</a> · <a href="terms.html">Terms</a></p>
+    </footer>
+
+    </main>
+    <script src="./script.js?v=__SITE_ASSET_VERSION__"></script>
+  </body>
+</html>
