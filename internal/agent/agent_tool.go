@@ -135,6 +135,7 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 	result, err := a.safeExecute(t, ctx, tc.Arguments)
 	toolDur := time.Since(toolStart)
 	if err != nil {
+		debug.Log("agent", "tool %s EXECUTE ERROR (dur=%v): %v", tc.Name, toolDur, err)
 		return tool.Result{Content: fmt.Sprintf("tool error: %v", err), IsError: true}
 	}
 
