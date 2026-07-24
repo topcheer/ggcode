@@ -1743,6 +1743,9 @@ func (a *App) StartShare() (*ShareInfo, error) {
 	// Use unified TunnelHost.StartShare — the single canonical entry point
 	// for all frontends. It handles session creation, broker setup,
 	// SetSessionInfo, PrepareOnlineShare, and AnnounceActiveSession.
+	if a.chat == nil {
+		return nil, fmt.Errorf("chat not initialized")
+	}
 	th := a.chat.GetTunnelHost()
 	if th == nil {
 		return nil, fmt.Errorf("tunnel host not initialized")
