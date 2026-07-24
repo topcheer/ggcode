@@ -102,7 +102,9 @@ func IsReadOnlyTool(name string) bool {
 		"web_fetch", "web_search", "browser", "mobile_device",
 		"task_list", "task_get", "plan_status",
 		"cron_list", "cron_get", "list_commands", "read_command_output",
-		"wait_command", "get_config", "runtime":
+		"wait_command", "get_config", "runtime", "code_execution":
+		// code_execution (PTC) is read-only: it only calls tools from its
+		// readOnlyToolNames whitelist, which are themselves read-only.
 		return true
 	}
 	// All MCP tools are allowed in plan mode (they have their own access control)
