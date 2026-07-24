@@ -117,6 +117,26 @@ func NewDangerousDetector() *DangerousDetector {
 		{DangerLow, regexp.MustCompile(`(?i)\bchmod\s+777\b`), "setting world-writable permissions"},
 		{DangerLow, regexp.MustCompile(`(?i)\bfind\b.*-delete\b`), "find with -delete"},
 		{DangerLow, regexp.MustCompile(`(?i)\bmv\b.*\*.*\b/dev/null\b`), "moving files to /dev/null"},
+
+		// Critical: AppleScript destructive commands
+		{DangerCritical, regexp.MustCompile(`(?i)do\s+shell\s+script\s+["\'].*rm\s+-rf\s+/["\']`), "AppleScript do shell script with rm -rf /"},
+		{DangerCritical, regexp.MustCompile(`(?i)do\s+shell\s+script\s+["\'].*rm\s+-rf\s+/\*["\']`), "AppleScript do shell script with rm -rf /*"},
+		{DangerCritical, regexp.MustCompile(`(?i)do\s+shell\s+script\s+["\'].*mkfs\b`), "AppleScript do shell script with mkfs"},
+		{DangerCritical, regexp.MustCompile(`(?i)do\s+shell\s+script\s+["\'].*dd\s+if=/dev/`), "AppleScript do shell script with dd device input"},
+		{DangerCritical, regexp.MustCompile(`(?i)do\s+shell\s+script\s+["\'].*chmod\s+-R\s+777\s+/["\']`), "AppleScript do shell script with chmod 777 /"},
+
+		// High: AppleScript privilege escalation and sensitive access
+		{DangerHigh, regexp.MustCompile(`(?i)do\s+shell\s+script\s+["\'].*sudo\b`), "AppleScript do shell script with sudo"},
+		{DangerHigh, regexp.MustCompile(`(?i)security\s+find-generic-password`), "AppleScript accessing Keychain passwords"},
+		{DangerHigh, regexp.MustCompile(`(?i)security\s+delete-generic-password`), "AppleScript deleting Keychain passwords"},
+		{DangerHigh, regexp.MustCompile(`(?i)do\s+shell\s+script\s+["\'].*curl\b.*\|\s*bash`), "AppleScript piping curl to bash"},
+		{DangerHigh, regexp.MustCompile(`(?i)do\s+shell\s+script\s+["\'].*wget\b.*\|\s*sh`), "AppleScript piping wget to shell"},
+		{DangerHigh, regexp.MustCompile(`(?i)do\s+shell\s+script\s+["\'].*nc\b.*-e`), "AppleScript netcat with -e (reverse shell)"},
+
+		// Medium: AppleScript potentially destructive operations
+		{DangerMedium, regexp.MustCompile(`(?i)do\s+shell\s+script.*rm\s+-rf`), "AppleScript do shell script with rm -rf"},
+		{DangerMedium, regexp.MustCompile(`(?i)do\s+shell\s+script.*rm\s+-rf\s+\*`), "AppleScript do shell script with rm -rf *"},
+		{DangerMedium, regexp.MustCompile(`(?i)do\s+shell\s+script.*>\s*/dev/sd[a-z]`), "AppleScript writing to disk device"},
 	}
 	return d
 }
