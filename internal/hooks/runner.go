@@ -197,7 +197,7 @@ func executeHTTPHook(h Hook, env HookEnv, payload HookPayload) HookResult {
 
 	timeout := 10 * time.Second
 	if h.Timeout != "" {
-		if d, err := time.ParseDuration(h.Timeout); err == nil {
+		if d, err := time.ParseDuration(h.Timeout); err == nil && d > 0 {
 			timeout = d
 		}
 	}
