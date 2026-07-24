@@ -134,6 +134,12 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 		}
 	}
 
+	// Code Execution (PTC): must be registered last — it holds a reference
+	// to the registry to look up tools at execution time.
+	if err := registry.Register(CodeExecution{Registry: registry}); err != nil {
+		return err
+	}
+
 	return nil
 }
 
