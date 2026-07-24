@@ -484,8 +484,8 @@ func (m *Model) chatUpdateTodoItem(todos []todoStateItem) {
 var chatIDCounter int64
 
 func nextChatID() string {
-	chatIDCounter++
-	return fmt.Sprintf("chat-%d", chatIDCounter)
+	n := atomic.AddInt64(&chatIDCounter, 1)
+	return fmt.Sprintf("chat-%d", n)
 }
 
 // nextSystemID generates a unique ID for system messages.
@@ -503,12 +503,12 @@ var assistantCounter int64
 // creating a new one if needed. Each call to nextAssistantID advances to a
 // fresh ID for a new turn.
 func (m *Model) currentAssistantID() string {
-	return fmt.Sprintf("assistant-%d", assistantCounter)
+	return fmt.Sprintf("assistant-%d", atomic.LoadInt64(&assistantCounter))
 }
 
 func (m *Model) nextAssistantID() string {
-	assistantCounter++
-	return fmt.Sprintf("assistant-%d", assistantCounter)
+	n := atomic.AddInt64(&assistantCounter, 1)
+	return fmt.Sprintf("assistant-%d", n)
 }
 
 // chatEnsureAssistant creates a new streaming assistant item if one doesn't

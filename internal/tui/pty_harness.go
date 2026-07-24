@@ -19,6 +19,7 @@ import (
 	"github.com/creack/pty/v2"
 
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 // ptyHarness manages a ggcode process running in a pseudo-terminal.
@@ -154,7 +155,7 @@ func startGGCode(t *testing.T, opts ptyOptions) *ptyHarness {
 	// Background reader: continuously reads PTY output into outputBuf.
 	// This is necessary because PTY files don't support SetReadDeadline on macOS.
 	h.readerDone = make(chan struct{})
-	go func() {
+	safego.Go("tui.ptyHarness.reader", func() {
 		defer close(h.readerDone)
 		buf := make([]byte, 64*1024)
 		for {
@@ -168,7 +169,7 @@ func startGGCode(t *testing.T, opts ptyOptions) *ptyHarness {
 				return
 			}
 		}
-	}()
+	})
 
 	t.Cleanup(func() {
 		h.quit()
