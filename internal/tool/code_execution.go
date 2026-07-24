@@ -200,7 +200,15 @@ func (c CodeExecution) runCode(ctx context.Context, code string) (*execResult, e
 
 		// goja supports async functions via goja.AssertFunction.
 		// We wrap each tool call as a promise-returning function.
-		toolsObj.Set(name, func(call goja.FunctionCall) goja.Value {
+		toolsObj.Set(name, func(call goja.FunctionCall) (rv goja.Value) {
+			defer func() {
+				if r := recover(); r != nil {
+					toolCallsMu.Lock()
+					toolCalls = append(toolCalls, fmt.Sprintf("%s → panic: %v", name, r))
+					toolCallsMu.Unlock()
+					rv = rejectPromise(vm, fmt.Errorf("%s panicked: %v", name, r))
+				}
+			}()
 			// Convert the JS argument (first positional arg) to JSON.
 			var inputJSON json.RawMessage
 			if len(call.Arguments) > 0 && !goja.IsUndefined(call.Arguments[0]) && !goja.IsNull(call.Arguments[0]) {
