@@ -20,7 +20,9 @@ import (
 )
 
 func (m Model) handleModeSwitch() (tea.Model, tea.Cmd) {
+	oldMode := m.mode
 	m.mode = m.mode.Next()
+	debug.Log("mode", "switched %s→%s via Shift+Tab", oldMode, m.mode)
 	// Update policy mode
 	if cp, ok := m.policy.(*permission.ConfigPolicy); ok {
 		cp.SetMode(m.mode)
@@ -31,8 +33,10 @@ func (m Model) handleModeSwitch() (tea.Model, tea.Cmd) {
 
 func (m *Model) handleModeCommand(parts []string) tea.Cmd {
 	if len(parts) > 1 {
+		oldMode := m.mode
 		newMode := permission.ParsePermissionMode(parts[1])
 		m.mode = newMode
+		debug.Log("mode", "switched %s→%s via /mode %s", oldMode, newMode, parts[1])
 		if cp, ok := m.policy.(*permission.ConfigPolicy); ok {
 			cp.SetMode(newMode)
 		}
