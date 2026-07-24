@@ -82,6 +82,18 @@ func (r BinaryRunner) Run(ctx context.Context, req RunRequest) (*RunResult, erro
 	}
 	cmd := exec.CommandContext(ctx, exe, args...)
 	cmd.Dir = req.WorkingDir
+	setProcessGroup(cmd)
+	// When ctx is cancelled, CommandContext sends SIGKILL to the process.
+	// With Setpgid, we must also signal the entire process group to clean up
+	// grandchildren (make, go test, etc.).
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		_ = signalProcessGroup(cmd.Process.Pid)
+		return cmd.Process.Kill()
+	}
+	cmd.WaitDelay = 5 * time.Second
 	var (
 		mu      sync.Mutex
 		builder strings.Builder
