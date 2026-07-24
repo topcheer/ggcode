@@ -47,7 +47,17 @@ class TunnelCrypto {
   /// Expects ciphertext = cipherText + mac (Go AES-GCM format).
   Future<List<int>> decryptData(String nonceB64, String ciphertextB64) async {
     final nonce = base64Decode(nonceB64);
+    if (nonce.length != 12) {
+      throw FormatException(
+          'invalid nonce length: ${nonce.length} bytes (expected 12)');
+    }
     final combined = base64Decode(ciphertextB64);
+    // Guard against malformed/truncated ciphertext from a malicious or buggy relay.
+    // AES-GCM MAC is 16 bytes; anything shorter cannot be valid.
+    if (combined.length < 16) {
+      throw FormatException(
+          'ciphertext too short: ${combined.length} bytes (minimum 16 for GCM MAC)');
+    }
     // Split: mac is last 16 bytes, rest is cipherText
     final macBytes = combined.sublist(combined.length - 16);
     final cipherBytes = combined.sublist(0, combined.length - 16);
