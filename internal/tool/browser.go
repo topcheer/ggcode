@@ -19,6 +19,8 @@ import (
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
+
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 // browserProfile holds a Chrome instance with its own allocator.
@@ -507,9 +509,9 @@ func (b *Browser) getSession(profileName, sessionID string, headless *bool) (*br
 	// (not accepted) so automation can continue.
 	chromedp.ListenTarget(taskCtx, func(ev interface{}) {
 		if _, ok := ev.(*page.EventJavascriptDialogOpening); ok {
-			go func() {
+			safego.Go("browser.dialogHandler", func() {
 				_ = chromedp.Run(taskCtx, page.HandleJavaScriptDialog(false))
-			}()
+			})
 		}
 	})
 
@@ -534,13 +536,13 @@ func (b *Browser) doNavigate(ctx context.Context, profile, session, rawURL, wait
 	defer cancel()
 
 	// Propagate caller cancellation
-	go func() {
+	safego.Go("browser.cancelPropagate", func() {
 		select {
 		case <-ctx.Done():
 			cancel()
 		case <-timeoutCtx.Done():
 		}
-	}()
+	})
 
 	if err := chromedp.Run(timeoutCtx, actions...); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("navigation failed: %v", err)}, nil
