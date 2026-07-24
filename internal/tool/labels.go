@@ -297,6 +297,23 @@ func DescribeTool(toolName, rawArgs string) ToolPresentation {
 		return kittyLabel(args)
 	case "iterm2":
 		return iterm2Label(args)
+	case "code_execution":
+		// Show "Exec" with a preview of the first meaningful line of code
+		code := argStr(args, "code")
+		if code == "" {
+			return toolPres("Exec", "")
+		}
+		// Extract first non-empty, non-comment line as preview
+		preview := ""
+		for _, line := range strings.Split(code, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "//") || strings.HasPrefix(line, "/*") {
+				continue
+			}
+			preview = line
+			break
+		}
+		return toolPres("Exec", compactSingleLineNoTruncate(preview))
 	default:
 		// MCP tools or unknown — prettify the name
 		return toolPres(prettifyToolName(toolName), compactArgsPreview(rawArgs))
