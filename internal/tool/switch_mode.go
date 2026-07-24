@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/permission"
 )
 
@@ -85,6 +86,7 @@ func (t *SwitchModeTool) Execute(ctx context.Context, input json.RawMessage) (Re
 			return Result{Content: fmt.Sprintf("Already in %s mode.", newMode.String())}, nil
 		}
 		t.Switcher.SetMode(newMode)
+		debug.Log("permission", "switch_mode: %s → %s (via Switcher)", oldMode.String(), newMode.String())
 		return Result{Content: fmt.Sprintf("Switched permission mode: %s → %s", oldMode.String(), newMode.String())}, nil
 	}
 
@@ -101,5 +103,6 @@ func (t *SwitchModeTool) Execute(ctx context.Context, input json.RawMessage) (Re
 		return Result{Content: fmt.Sprintf("Already in %s mode.", newMode.String())}, nil
 	}
 	ms.SetMode(newMode)
+	debug.Log("permission", "switch_mode: %s → %s (direct policy)", oldMode.String(), newMode.String())
 	return Result{Content: fmt.Sprintf("Switched permission mode: %s → %s", oldMode.String(), newMode.String())}, nil
 }
