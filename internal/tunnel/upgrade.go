@@ -53,7 +53,7 @@ type UpgradeConfig struct {
 func DefaultUpgradeConfig() UpgradeConfig {
 	return UpgradeConfig{
 		Enabled:           true,
-		ICETimeout:        20 * time.Second,
+		ICETimeout:        30 * time.Second, // includes 3s post-connect delay
 		KeepAliveInterval: 20 * time.Second,
 		RetryDelay:        30 * time.Second,
 	}
@@ -224,6 +224,26 @@ func (m *UpgradeManager) runUpgrade(signalCh chan SignalMessage) {
 	m.mu.Lock()
 	m.cancelNeg = cancel
 	gen := m.generation
+	m.mu.Unlock()
+
+	// Wait for the mobile client to complete key exchange and become "ready"
+	// in the relay. The relay only forwards server broadcasts to ready clients.
+	// Without this delay, the SDP offer is sent before the mobile is ready
+	// and is silently dropped by the relay gateway.
+	select {
+	case <-time.After(3 * time.Second):
+		debug.Log("tunnel", "upgrade: post-connect delay elapsed, mobile should be ready")
+	case <-ctx.Done():
+		return
+	}
+
+	// Check if we've been superseded by a newer restart.
+	m.mu.Lock()
+	if m.generation != gen {
+		m.mu.Unlock()
+		debug.Log("tunnel", "upgrade: stale generation after delay, aborting")
+		return
+	}
 	m.mu.Unlock()
 
 	// Create the peer via factory.
