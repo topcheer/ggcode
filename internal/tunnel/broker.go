@@ -291,6 +291,10 @@ func (b *Broker) HandleP2PMessage(data []byte) {
 		debug.Log("tunnel", "broker: p2p unmarshal error: %v", err)
 		return
 	}
+	// Ignore keepalive pings — they only keep the DataChannel alive.
+	if msg.Type == "ping" {
+		return
+	}
 	b.callbackMu.RLock()
 	fn := b.onCommand
 	b.callbackMu.RUnlock()

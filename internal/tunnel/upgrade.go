@@ -300,6 +300,25 @@ func (m *UpgradeManager) runUpgrade(signalCh chan SignalMessage) {
 			debug.Log("tunnel", "upgrade: DataChannel ready, switching transport")
 			m.broker.SetP2PTransport(p2pTransport)
 			m.setState(UpgradeActive)
+
+			// Start keepalive ping to prevent NAT/ICE timeout during idle periods.
+			// Without this, the P2P connection drops after ~20-30s of inactivity.
+			safego.Go("tunnel.upgrade.keepalive", func() {
+				ticker := time.NewTicker(m.cfg.KeepAliveInterval)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-ticker.C:
+						// Send a minimal ping to keep the DataChannel alive.
+						if err := p2pTransport.Send([]byte(`{"type":"ping"}`)); err != nil {
+							debug.Log("tunnel", "upgrade: keepalive send error: %v", err)
+							return
+						}
+					case <-ctx.Done():
+						return
+					}
+				}
+			})
 		case <-ctx.Done():
 			return
 		}
