@@ -855,7 +855,17 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 			if !b.isSessionStateCurrent(currentSessionID, currentGeneration) {
 				return
 			}
-			b.sendActiveSession(currentSessionID)
+			// When reset is needed, use replace_history mode so the relay
+			// clears its accumulated (potentially duplicated) event history
+			// BEFORE replaying the canonical events. Without this, the relay
+			// appends the replayed events to stale history, causing the relay
+			// event count to snowball (relayCount grows beyond localCount on
+			// every client reconnect, perpetually re-triggering reset=true).
+			if plan.reset {
+				b.sendActiveSessionWithMode(currentSessionID, ActiveSessionModeReplaceHistory)
+			} else {
+				b.sendActiveSession(currentSessionID)
+			}
 			if !b.isSessionStateCurrent(currentSessionID, currentGeneration) {
 				return
 			}
@@ -1076,6 +1086,8 @@ func (b *Broker) relayRecoveryPlan(info RelayConnectedState, currentSessionID st
 		return relayRecoveryPlan{reset: info.HistoryCount > 0}, nil
 	}
 	currentAuthority := b.AuthorityEpoch()
+	debug.Log("tunnel", "broker: recovery plan inputs: relayEpoch=%d localEpoch=%d relaySession=%q localSession=%q relayCount=%d localCount=%d relayLastEvent=%q relayHash=%q",
+		info.AuthorityEpoch, currentAuthority, info.SessionID, currentSessionID, info.HistoryCount, len(events), info.LastEventID, info.ProjectionHash)
 	if info.AuthorityEpoch == 0 || info.AuthorityEpoch != currentAuthority {
 		// Authority epoch mismatch: the relay may have lost epoch metadata
 		// (e.g. after relay restart) but still has the events. If the session
@@ -1086,9 +1098,12 @@ func (b *Broker) relayRecoveryPlan(info RelayConnectedState, currentSessionID st
 			strings.TrimSpace(info.ProjectionHash) != "" &&
 			strings.TrimSpace(info.LastEventID) != "" {
 			prefixHash := ProjectionHashPrefix(events, info.HistoryCount)
-			lastEventID := events[info.HistoryCount-1].EventID
+			localLastAtCount := events[info.HistoryCount-1].EventID
+			debug.Log("tunnel", "broker: epoch mismatch hash check: localPrefix=%q relayHash=%q localLastAtCount=%q relayLastEvent=%q match=%t",
+				prefixHash, info.ProjectionHash, localLastAtCount, info.LastEventID,
+				prefixHash == strings.TrimSpace(info.ProjectionHash) && localLastAtCount == info.LastEventID)
 			if prefixHash == strings.TrimSpace(info.ProjectionHash) &&
-				lastEventID == info.LastEventID {
+				localLastAtCount == info.LastEventID {
 				debug.Log("tunnel", "broker: authority epoch mismatch but projection hash verified, trusting relay history")
 				if info.HistoryCount == len(events) {
 					return relayRecoveryPlan{trusted: true}, events

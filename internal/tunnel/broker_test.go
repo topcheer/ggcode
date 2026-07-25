@@ -1451,6 +1451,95 @@ func TestBrokerHandleRelayConnectedResetsSameSessionWhenRecoveredHistoryDiverges
 	}
 }
 
+func TestBrokerClientReconnectSendsReplaceHistoryWhenRelayCountExceedsLocal(t *testing.T) {
+	b, d := newBrokerForTest()
+	defer b.Stop()
+	live := mustTestRelayClient("wss://test.local")
+	defer live.Close()
+	b.session.client = live
+	b.sessionID = "sess-local"
+	b.SetSnapshotProvider(func() BrokerSnapshot {
+		return BrokerSnapshot{
+			SessionInfo: SessionInfoData{Workspace: "/tmp/project", Version: "dev"},
+		}
+	})
+	b.SetReplayProvider(func() []GatewayMessage {
+		return []GatewayMessage{
+			{
+				SessionID: "sess-local",
+				EventID:   "ev-000000001",
+				Type:      EventSessionInfo,
+				Data:      mustMarshalJSON(SessionInfoData{Workspace: "/tmp/project", Version: "dev"}),
+			},
+			{
+				SessionID: "sess-local",
+				EventID:   "ev-000000002",
+				Type:      EventText,
+				StreamID:  "msg-1",
+				Data:      mustMarshalJSON(TextData{ID: "msg-1", Chunk: "hello"}),
+			},
+			{
+				SessionID: "sess-local",
+				EventID:   "ev-000000003",
+				Type:      EventTextDone,
+				StreamID:  "msg-1",
+				Data:      mustMarshalJSON(TextData{ID: "msg-1", Done: true}),
+			},
+		}
+	})
+
+	// Simulate the snowball condition: relay has accumulated MORE events (10)
+	// than local (3), which happens when previous replays were appended
+	// instead of replacing the relay's history.
+	b.handleRelayConnected(RelayConnectedState{
+		Role:           "client",
+		SessionID:      "sess-local",
+		AuthorityEpoch: b.AuthorityEpoch(),
+		HistoryCount:   10,
+		LastEventID:    "ev-000000010",
+	})
+	time.Sleep(100 * time.Millisecond)
+
+	// The active_session sent to the relay MUST use replace_history mode
+	// so the relay clears its stale (over-counted) history before replay.
+	foundReplaceHistory := false
+Loop:
+	for {
+		select {
+		case raw := <-live.sendCh:
+			var msg struct {
+				Type       string `json:"type"`
+				SessionID  string `json:"session_id"`
+				ResumeMode string `json:"resume_mode"`
+			}
+			if err := json.Unmarshal(raw, &msg); err != nil {
+				t.Fatal(err)
+			}
+			if msg.Type == EventActiveSession && msg.ResumeMode == ActiveSessionModeReplaceHistory {
+				foundReplaceHistory = true
+				break Loop
+			}
+		default:
+			break Loop
+		}
+	}
+	if !foundReplaceHistory {
+		t.Fatal("expected active_session with replace_history mode when relayCount > localCount, preventing relay event snowball")
+	}
+
+	// Verify replayed events are present in the outbound queue
+	msgs := d.drain()
+	hasSnapshotReset := false
+	for _, msg := range msgs {
+		if msg.Type == EventSnapshotReset {
+			hasSnapshotReset = true
+		}
+	}
+	if !hasSnapshotReset {
+		t.Fatalf("expected snapshot_reset in replay for client reset path, got %+v", msgs)
+	}
+}
+
 func TestBrokerHandleRelayConnectedMarksTrustedRecoveredRelayReady(t *testing.T) {
 	b, _ := newBrokerForTest()
 	defer b.Stop()
