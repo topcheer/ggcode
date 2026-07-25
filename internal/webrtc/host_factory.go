@@ -119,7 +119,13 @@ func runHostNegotiation(peer *Peer, sendSignal func(tunnel.SignalMessage), recv 
 				debug.Log("webrtc", "host: received signal from mobile: type=%s", sig.Type)
 				switch sig.Type {
 				case "rtc_answer":
-					close(answerReceived) // stop offer retry
+					// Use sync.Once pattern to prevent panic on duplicate close
+					select {
+					case <-answerReceived:
+						// already closed (duplicate answer from retry)
+					default:
+						close(answerReceived) // stop offer retry
+					}
 					if err := peer.SetRemoteAnswer(sig.SDP); err != nil {
 						debug.Log("webrtc", "host: set remote answer: %v", err)
 					} else {
