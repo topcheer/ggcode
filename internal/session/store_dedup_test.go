@@ -187,3 +187,65 @@ func TestLoadSession_DeduplicatesCorruptedJSONL(t *testing.T) {
 		t.Fatalf("expected 1 unique 'hello' message after dedup, got %d", userMsgs)
 	}
 }
+
+// TestDedupMessageRecords_KeepsSameContentDifferentID verifies that two
+// messages with identical content but different IDs are NOT deduped.
+// This is the key fix: content-based fingerprinting incorrectly merged
+// distinct messages (e.g. user sending "continue" twice, or two identical
+// build outputs). ID-based dedup correctly preserves both.
+func TestDedupMessageRecords_KeepsSameContentDifferentID(t *testing.T) {
+	records := []jsonlRecord{
+		{Type: "message", Message: &provider.Message{
+			ID:      "msg_001",
+			Role:    "user",
+			Content: []provider.ContentBlock{{Type: "text", Text: "continue"}},
+		}},
+		{Type: "message", Message: &provider.Message{
+			ID:      "msg_002",
+			Role:    "user",
+			Content: []provider.ContentBlock{{Type: "text", Text: "continue"}},
+		}},
+	}
+	got := dedupMessageRecords(records)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 records (same content, different IDs), got %d", len(got))
+	}
+}
+
+// TestDedupMessageRecords_DedupSameID verifies that two messages with
+// the same ID are correctly deduped (the original purpose of dedup:
+// cleaning up files corrupted by the StartRunTracking bug).
+func TestDedupMessageRecords_DedupSameID(t *testing.T) {
+	msg := &provider.Message{
+		ID:      "msg_dup_001",
+		Role:    "user",
+		Content: []provider.ContentBlock{{Type: "text", Text: "unique content"}},
+	}
+	records := []jsonlRecord{
+		{Type: "message", Message: msg},
+		{Type: "message", Message: msg}, // same pointer = same ID
+	}
+	got := dedupMessageRecords(records)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 record (same ID deduped), got %d", len(got))
+	}
+}
+
+// TestDedupMessageRecords_NoIDFallsBackToFingerprint verifies that
+// messages without IDs (very old sessions) still use content fingerprint.
+func TestDedupMessageRecords_NoIDFallsBackToFingerprint(t *testing.T) {
+	records := []jsonlRecord{
+		{Type: "message", Message: &provider.Message{
+			Role:    "user",
+			Content: []provider.ContentBlock{{Type: "text", Text: "no id content"}},
+		}},
+		{Type: "message", Message: &provider.Message{
+			Role:    "user",
+			Content: []provider.ContentBlock{{Type: "text", Text: "no id content"}},
+		}},
+	}
+	got := dedupMessageRecords(records)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 record (fingerprint fallback), got %d", len(got))
+	}
+}

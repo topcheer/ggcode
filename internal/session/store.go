@@ -2286,6 +2286,14 @@ func (s *JSONLStore) backfillTimestamps(sessionID string) {
 // dedupMessageRecords removes duplicate message records, keeping only the
 // first occurrence of each unique message. Non-message records are passed
 // through unchanged.
+//
+// Dedup key: if the message has an ID, use the ID (exact match). This is
+// the common case — the StartRunTracking bug produced byte-identical
+// copies with the same ID. For messages without an ID (very old sessions
+// pre-dating the ID feature), fall back to a content fingerprint.
+// Using content fingerprint for ALL messages would incorrectly merge
+// distinct messages that happen to have identical content (e.g. a user
+// sending "continue" twice, or two identical build outputs).
 func dedupMessageRecords(records []jsonlRecord) []jsonlRecord {
 	if len(records) <= 1 {
 		return records
@@ -2297,18 +2305,29 @@ func dedupMessageRecords(records []jsonlRecord) []jsonlRecord {
 			out = append(out, rec)
 			continue
 		}
-		fp := messageFingerprint(rec.Message)
-		if seen[fp] {
+		key := dedupKey(rec.Message)
+		if seen[key] {
 			continue
 		}
-		seen[fp] = true
+		seen[key] = true
 		out = append(out, rec)
 	}
 	return out
 }
 
+// dedupKey returns a deduplication key for a message. Messages with a
+// non-empty ID are deduped by ID; messages without an ID fall back to a
+// content fingerprint.
+func dedupKey(msg *provider.Message) string {
+	if msg.ID != "" {
+		return "id:" + msg.ID
+	}
+	return "fp:" + messageFingerprint(msg)
+}
+
 // dedupLightweightEntries removes duplicate message-type entries from a
 // localLightweightEntry slice. Non-message entries (cost, etc.) are kept as-is.
+// Uses the same ID-first strategy as dedupMessageRecords.
 func dedupLightweightEntries(entries []localLightweightEntry) []localLightweightEntry {
 	if len(entries) <= 1 {
 		return entries
@@ -2320,11 +2339,11 @@ func dedupLightweightEntries(entries []localLightweightEntry) []localLightweight
 			out = append(out, e)
 			continue
 		}
-		fp := messageFingerprint(e.record.Message)
-		if seen[fp] {
+		key := dedupKey(e.record.Message)
+		if seen[key] {
 			continue
 		}
-		seen[fp] = true
+		seen[key] = true
 		out = append(out, e)
 	}
 	return out
