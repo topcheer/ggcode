@@ -523,6 +523,11 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       if (messageId.isNotEmpty) {
         chatNotifier.updateMessageStatus(messageId, MessageStatus.acknowledged);
       }
+      // Update ordinal cursor so the next event doesn't trigger a false
+      // gap detection. Previously this early-returned without updating
+      // _lastAppliedEventId, causing every server_ack to create an
+      // apparent ordinal gap on the next streaming event.
+      _markEventApplied(msg);
       return;
     }
 
