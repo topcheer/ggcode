@@ -557,7 +557,11 @@ func (h *OAuthHandler) fetchAuthorizationServerMeta(ctx context.Context, url str
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("authorization server metadata: status %d", resp.StatusCode)
+		bodyPreview := string(body)
+		if len(bodyPreview) > 200 {
+			bodyPreview = bodyPreview[:200] + "..."
+		}
+		return nil, fmt.Errorf("authorization server metadata at %s: status %d, body: %s", url, resp.StatusCode, bodyPreview)
 	}
 
 	var meta AuthorizationServerMetadata
