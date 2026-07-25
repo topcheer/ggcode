@@ -44,10 +44,14 @@ func (a *Agent) maybeFallbackCheckpoint() {
 	a.lastCheckpointMessageCount = len(msgs)
 	tokenCount := a.contextManager.TokenCount()
 	debug.Log("agent", "fallback checkpoint: %d messages, %d tokens (compaction may have failed)", len(msgs), tokenCount)
-	// Use first message ID as summary_msg_id for fallback (best effort).
-	fallbackID := ""
-	if len(msgs) > 0 {
-		fallbackID = msgs[0].ID
+	// Use the real summary message ID if one exists in context.
+	// Using msgs[0] (typically the system prompt) as summary_msg_id is
+	// wrong — it causes loadSession to treat the system prompt as the
+	// checkpoint summary, loading the wrong context window.
+	fallbackID := a.contextManager.SummaryMsgID()
+	if fallbackID == "" {
+		debug.Log("checkpoint", "fallback checkpoint: no summary message in context, skipping")
+		return
 	}
 	if fallbackID != "" {
 		fn(fallbackID, "", tokenCount)
@@ -352,6 +356,16 @@ func (a *Agent) maybeSaveCheckpoint(lastMsgID ...string) {
 		}
 	}
 	fn(summaryMsgID, lmid, tokens)
+
+	// Update lastCheckpointMessageCount so maybeFallbackCheckpoint doesn't
+	// immediately fire and overwrite this checkpoint with a bogus fallback.
+	// maybeFallbackCheckpoint uses msgs[0].ID as summary_msg_id, which is
+	// typically the system prompt — not a real summary. If it overwrites
+	// the real checkpoint, session reload loses the correct summary and
+	// the agent sees the wrong context window.
+	a.mu.Lock()
+	a.lastCheckpointMessageCount = len(a.contextManager.Messages())
+	a.mu.Unlock()
 }
 
 // SaveCheckpoint persists the current context as a checkpoint.  Called
