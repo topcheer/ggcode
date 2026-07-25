@@ -10,17 +10,19 @@ class ICEConfig {
 
   const ICEConfig({required this.iceServers});
 
+  // NOTE: Chinese ISPs commonly block UDP port 3478 (standard STUN/TURN port).
+  // The self-hosted TURN server on hostyuntk3 uses port 8443 to avoid this.
+  // Public STUN servers on 3478 are omitted (unreachable from CN mobile networks).
   static const defaultConfig = ICEConfig(
     iceServers: [
-      // China-accessible STUN servers (priority for mobile users in CN).
-      {'urls': 'stun:stun.miwifi.com:3478'},
-      {'urls': 'stun:stun.qq.com:3478'},
-      {'urls': 'stun:stun.chat.bilibili.com:3478'},
-      // International STUN.
-      {'urls': 'stun:stun.l.google.com:19302'},
-      // Self-hosted TURN (fallback for symmetric NAT / CGNAT).
+      // Self-hosted TURN (also serves STUN on same port).
+      // Port 8443 avoids ISP blocking of 3478.
       {
-        'urls': 'turn:turn.allpayone.net:3478',
+        'urls': [
+          'turn:turn.allpayone.net:8443?transport=udp',
+          'turn:turn.allpayone.net:8443?transport=tcp',
+          'stun:turn.allpayone.net:8443',
+        ],
         'username': 'admin',
         'credential': 'allwap123',
       },
