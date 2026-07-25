@@ -94,12 +94,11 @@ type Broker struct {
 
 	// P2P transport upgrade. When set, messages are sent over the WebRTC
 	// DataChannel instead of the relay WebSocket. Cleared on P2P disconnect.
-	p2pTransportMu    sync.RWMutex
-	p2pTransport      Transport
-	p2pNegotiating    atomic.Bool  // true while P2P negotiation is in progress
-	relayHistoryCount atomic.Int32 // relay event count at last OnRelayConnected
-	relayLastEventMu  sync.RWMutex
-	relayLastEventID  string // relay last event ID at last OnRelayConnected
+	p2pTransportMu   sync.RWMutex
+	p2pTransport     Transport
+	p2pNegotiating   atomic.Bool // true while P2P negotiation is in progress
+	relayLastEventMu sync.RWMutex
+	relayLastEventID string // relay last event ID at last OnRelayConnected
 
 	// Cached projection hash of canonical events. Updated lazily in
 	// relayRecoveryPlan / trustRelayHistory (which already call the replay
@@ -301,8 +300,7 @@ func (b *Broker) HasP2PTransport() bool {
 }
 
 // TriggerReplayNow sends all projection events to relay when P2P fails.
-// The projection store is capped at ProjectionReplayLimit (1000), so we can't
-// use relayHistoryCount as an array index (it may exceed the cap). Instead,
+// The projection store is capped at ProjectionReplayLimit (1000), so
 // replay ALL projection events — mobile deduplicates by EventID.
 func (b *Broker) TriggerReplayNow() {
 	events := b.canonicalReplayEvents()
@@ -905,7 +903,6 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 		// OnRelayConnected callback.
 		if b.p2pUpgradePending() {
 			// Record relay's last known event for SyncP2PReplay gap detection.
-			b.relayHistoryCount.Store(int32(info.HistoryCount))
 			b.relayLastEventMu.Lock()
 			b.relayLastEventID = info.LastEventID
 			b.relayLastEventMu.Unlock()
