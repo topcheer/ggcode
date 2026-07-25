@@ -504,9 +504,9 @@ func (t *UDPTransport) handleFragment(env udpEnvelope, remoteAddr *net.UDPAddr, 
 		}
 		ackData, _ := json.Marshal(ack)
 		// Use goroutine to avoid holding fragMu during network write
-		go func(data []byte, addr *net.UDPAddr) {
-			_, _ = t.conn.WriteToUDP(data, addr)
-		}(ackData, remoteAddr)
+		safego.Go("lanchat.udp.ack", func() {
+			_, _ = t.conn.WriteToUDP(ackData, remoteAddr)
+		})
 	}
 
 	// Check if we have all fragments
