@@ -49,6 +49,7 @@ func HostPeerFactory() tunnel.PeerFactory {
 func runHostNegotiation(peer *Peer, sendSignal func(tunnel.SignalMessage), recv <-chan tunnel.SignalMessage) error {
 	// Wire local ICE candidate forwarding via the relay.
 	peer.OnICECandidate(func(candidateStr string) {
+		debug.Log("webrtc", "host: gathered ICE candidate: %s", candidateStr)
 		sendSignal(tunnel.SignalMessage{
 			Type:      "rtc_candidate",
 			Candidate: candidateStr,
@@ -67,7 +68,9 @@ func runHostNegotiation(peer *Peer, sendSignal func(tunnel.SignalMessage), recv 
 
 	// Process incoming signaling messages from mobile until DC opens or fails.
 	safego.Go("webrtc.host.signalProcessor", func() {
+		debug.Log("webrtc", "host: signal processor started, waiting for mobile response")
 		for sig := range recv {
+			debug.Log("webrtc", "host: received signal from mobile: type=%s", sig.Type)
 			switch sig.Type {
 			case "rtc_answer":
 				if err := peer.SetRemoteAnswer(sig.SDP); err != nil {

@@ -49,7 +49,7 @@ func NewPeer() (*Peer, error) {
 	// Forward local ICE candidates to the caller for trickle ICE.
 	pc.OnICECandidate(func(candidate *webrtc.ICECandidate) {
 		if candidate == nil {
-			// Gathering complete
+			debug.Log("webrtc", "ICE gathering complete")
 			return
 		}
 		init := candidate.ToJSON()
@@ -64,6 +64,11 @@ func NewPeer() (*Peer, error) {
 		if fn != nil {
 			fn(candidateStr)
 		}
+	})
+
+	// Handle ICE connection state changes
+	pc.OnICEConnectionStateChange(func(state webrtc.ICEConnectionState) {
+		debug.Log("webrtc", "ICE connection state: %s", state.String())
 	})
 
 	// Handle peer connection state changes
