@@ -184,10 +184,17 @@ func (p *Peer) attachDataChannel(dc *webrtc.DataChannel) {
 
 	dc.OnOpen(func() {
 		p.mu.Lock()
+		if p.closed {
+			p.mu.Unlock()
+			return
+		}
 		p.dcReady = true
 		fn := p.onDCOpen
 		p.mu.Unlock()
 		debug.Log("webrtc", "data channel opened")
+		// Signal readiness. Use a recover-free close guarded by closed flag:
+		// Close() also closes this channel, but it sets p.closed=true first
+		// under the same lock, so we won't double-close.
 		close(p.dcReadyCh)
 		if fn != nil {
 			fn()
@@ -271,6 +278,7 @@ func (p *Peer) Close() error {
 	p.closeOnce.Do(func() {
 		p.mu.Lock()
 		p.closed = true
+		wasReady := p.dcReady
 		p.mu.Unlock()
 
 		if p.dc != nil {
@@ -279,7 +287,10 @@ func (p *Peer) Close() error {
 		if p.pc != nil {
 			_ = p.pc.Close()
 		}
-		close(p.dcReadyCh)
+		// Only close dcReadyCh if it hasn't been closed by OnOpen already.
+		if !wasReady {
+			close(p.dcReadyCh)
+		}
 	})
 	return nil
 }
