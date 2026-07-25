@@ -5,25 +5,26 @@ import (
 )
 
 // DefaultICEServers returns the STUN/TURN servers used for NAT traversal.
-// Includes both international and China-accessible servers for reliability.
+//
+// NOTE: Chinese ISPs commonly block UDP port 3478 (the standard STUN/TURN port).
+// The self-hosted TURN server on hostyuntk3 uses port 8443 to avoid this.
+// Public STUN servers on 3478 are omitted because they are unreachable from
+// most CN mobile networks (CGNAT + port 3478 blocking).
 func DefaultICEServers() []webrtc.ICEServer {
-	servers := []webrtc.ICEServer{
-		// China-accessible STUN servers (priority for mobile users in CN).
-		{URLs: []string{"stun:stun.miwifi.com:3478"}},        // Xiaomi
-		{URLs: []string{"stun:stun.qq.com:3478"}},            // Tencent
-		{URLs: []string{"stun:stun.chat.bilibili.com:3478"}}, // Bilibili
-		// International STUN (works outside CN or with VPN).
-		{URLs: []string{"stun:stun.l.google.com:19302"}},
+	return []webrtc.ICEServer{
 		// Self-hosted TURN server (coturn on hostyuntk3).
-		// Handles symmetric NAT / CGNAT where STUN fails.
+		// Also serves STUN (Binding) on the same port.
+		// Port 8443 avoids ISP blocking of 3478.
 		{
-			URLs:       []string{"turn:turn.allpayone.net:3478"},
+			URLs: []string{
+				"turn:turn.allpayone.net:8443?transport=udp",
+				"turn:turn.allpayone.net:8443?transport=tcp",
+				"stun:turn.allpayone.net:8443",
+			},
 			Username:   "admin",
 			Credential: "allwap123",
 		},
 	}
-
-	return servers
 }
 
 // PeerConfig returns the WebRTC configuration for PeerConnection creation.
