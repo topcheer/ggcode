@@ -559,9 +559,19 @@ func (p *peer) handleServerBroadcast(_ []byte, msg relayMessage) {
 		return
 	}
 
-	clients := p.room.snapshotClientsLocked(func(c *peer) bool {
-		return c.ready
-	})
+	// For transient events (no EventID, e.g. rtc_offer), forward to ALL
+	// connected clients regardless of ready state. These are control messages
+	// that must reach the client even during key exchange. The client's
+	// ConnectionService will buffer them until crypto is ready.
+	isTransient := msg.EventID == ""
+	var clients []*peer
+	if isTransient {
+		clients = p.room.snapshotClientsLocked(nil)
+	} else {
+		clients = p.room.snapshotClientsLocked(func(c *peer) bool {
+			return c.ready
+		})
+	}
 	p.room.mu.Unlock()
 	for _, client := range clients {
 		client.sendRaw(wire)

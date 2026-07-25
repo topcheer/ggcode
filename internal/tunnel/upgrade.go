@@ -180,7 +180,7 @@ func (m *UpgradeManager) Restart() {
 		return
 	}
 	// Schedule the next restart window.
-	m.restartAt = now.Add(2 * time.Second)
+	m.restartAt = now.Add(5 * time.Second)
 
 	// Cancel any stale negotiation so its callbacks are ignored.
 	if m.cancelNeg != nil {
@@ -226,13 +226,13 @@ func (m *UpgradeManager) runUpgrade(signalCh chan SignalMessage) {
 	gen := m.generation
 	m.mu.Unlock()
 
-	// Wait briefly for the mobile client to settle into the relay.
-	// The relay gateway only forwards to "ready" clients (key exchange
-	// complete). The host's runHostNegotiation retries the SDP offer
-	// every 3s, so even if the first offer is dropped because the mobile
-	// isn't ready yet, the retry will deliver it.
+	// Wait for the mobile client to complete key exchange and become "ready"
+	// in the relay. The relay gateway only forwards server broadcasts to
+	// "ready" clients. If the offer is sent before the mobile is ready, it
+	// is silently dropped. 3s accounts for key exchange + relay round trips.
 	select {
-	case <-time.After(1 * time.Second):
+	case <-time.After(3 * time.Second):
+		debug.Log("tunnel", "upgrade: mobile-ready delay elapsed")
 	case <-ctx.Done():
 		return
 	}
