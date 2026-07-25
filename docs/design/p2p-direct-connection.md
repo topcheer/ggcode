@@ -1,370 +1,367 @@
-# P2P Direct Connection Design
+# P2P Direct Connection
 
 ## Overview
 
-Replace the current relay-mediated WebSocket transport between Host (Go) and
-Mobile (Flutter) with a WebRTC P2P data channel. The relay server is retained
-for signaling and as a TURN fallback (~30% of connections that cannot establish
-direct P2P due to symmetric NAT or CGNAT).
+Host (Go: CLI + Desktop) 与 Mobile (Flutter) 之间的消息传输支持 WebRTC P2P
+DataChannel 直连。Relay 服务器保留用于信令交换和 TURN 中继回退。
 
-## Current Architecture
+**设计目标：**
+- P2P 优先：移动端连接后自动尝试 P2P 升级
+- 零消息丢失：P2P 失败时无缝回退到 relay，不丢任何消息
+- 协议不变：`GatewayMessage` JSON 协议、session/event ID 排序、replay 语义不变
+- 桌面端通用：CLI 和 Wails 桌面端共用同一套 `internal/` 代码，P2P 同样生效
 
-```
-Mobile (Flutter) ──WSS──→ Relay Server ←──WSS── Host (Go)
-                         (gateway.ggcode.dev)
-```
-
-- All application data flows through the relay.
-- Protocol: `GatewayMessage` JSON over encrypted WebSocket.
-- Encryption: AES-GCM with session key established via relay-mediated key exchange.
-- Pairing: Host requests a room from relay → generates QR code → Mobile scans.
-
-## Target Architecture
+## Architecture
 
 ```
                     ┌──────────────────────┐
                     │   Relay Server       │
-                    │ (signaling + TURN)   │
+                    │ (Railway deployment) │
+                    │  signaling + TURN    │
                     └──┬───────────────┬───┘
-          SDP/ICE sig  │               │  TURN (fallback ~30%)
+          SDP/ICE sig  │               │  TURN relay (fallback)
                 ┌──────┴──┐       ┌────┴──────┐
                 │  Host   │       │           │
-                │  (Go)   │───────┤ P2P DC    │
-                │ pion    │ P2P   │ (~70%)    │
+                │  (Go)   │═══════┤ P2P DC    │
+                │ pion/v4 │ P2P   │ (direct)  │
                 └─────────┘       └───────────┘
                                       │
                                ┌──────┴──────┐
                                │ Mobile (FL) │
                                │flutter_webrtc│
                                └─────────────┘
+
+Host roles: CLI (ggcode serve) | Desktop (Wails)
+Host P2P role: offerer (creates PeerConnection + SDP offer)
+Mobile P2P role: answerer (receives offer, creates answer)
 ```
 
-## Design Principles
+### 消息流向
 
-1. **Protocol-preserving**: The existing `GatewayMessage` JSON protocol,
-   `session_id`/`event_id` ordering, replay, and broker semantics are unchanged.
-   Only the byte transport changes (WebSocket → WebRTC DataChannel).
+```
+Mobile connects → Relay WebSocket (WSS) → Key exchange
+                                         ↓
+                              P2P negotiation (offer/answer via relay signaling)
+                                         ↓
+                              ┌─── ICE connected? ───┐
+                              │                      │
+                           Yes                      No
+                              │                      │
+                     DataChannel opens         Stay on relay
+                     Switch to P2P transport   TriggerReplayNow()
+                     SyncP2PReplay()           (replay all projection events)
+                     (send incremental gap)
+                              │
+                     All messages via P2P
+                     (relay kept for signaling)
+```
 
-2. **Incremental upgrade**: The connection starts as relay WebSocket, then
-   upgrades to P2P when possible. If P2P fails, it stays on the relay
-   (or falls back to it). This guarantees zero regression.
+## Key Components
 
-3. **User transparency**: The user scans the same QR code. The P2P upgrade
-   happens automatically. The only visible difference is a connection-quality
-   indicator (P2P / Relayed / Connecting).
+### 1. Transport Interface (`internal/tunnel/transport.go`)
 
-## Detailed Design
-
-### 1. Transport Abstraction
-
-Introduce a `Transport` interface in the `tunnel` package that both WebSocket
-and WebRTC DataChannel implement:
+WebSocket relay 和 WebRTC DataChannel 都实现此接口：
 
 ```go
-// internal/tunnel/transport.go
-package tunnel
-
-// Transport is a bidirectional byte pipe for tunnel messages.
-// Implementations: WebSocketRelayTransport, WebRTCTransport.
 type Transport interface {
-    // Send writes a raw message (JSON GatewayMessage bytes) to the peer.
     Send(data []byte) error
-    // OnMessage sets the handler for incoming messages.
     OnMessage(handler func(data []byte))
-    // OnDisconnect sets the handler for connection loss.
     OnDisconnect(handler func())
-    // Close terminates the transport.
     Close() error
-    // IsConnected returns whether the transport is currently active.
     IsConnected() bool
 }
 ```
 
-The existing `RelayClient` becomes the WebSocket transport implementation.
-`Broker` is refactored to use `Transport` instead of directly referencing
-`*Session` / `*RelayClient`.
+Broker 通过 `p2pTransport` 字段管理当前活跃传输层。当 P2P transport 存在时，
+所有出站消息走 DataChannel；不存在时走 relay WebSocket。
 
-### 2. WebRTC Layer (Host — Go)
+### 2. Broker (`internal/tunnel/broker.go`)
 
-Package: `internal/webrtc/`
+核心传输切换逻辑：
 
-**Files:**
-- `peer.go` — `PeerConnection` wrapper, DataChannel management
-- `signal.go` — SDP offer/answer marshaling, ICE candidate exchange
-- `transport.go` — implements `tunnel.Transport` via DataChannel
-- `config.go` — STUN/TURN server configuration
+- **`p2pTransport`** — 当前 P2P transport（nil = 使用 relay）
+- **`p2pNegotiating`** — atomic.Bool，P2P 协商进行中标志
+- **`relayHistoryCount` / `relayLastEventID`** — 移动端连接时 relay 的历史状态快照
 
-**PeerConnection lifecycle:**
-```go
-type Peer struct {
-    pc       *webrtc.PeerConnection
-    dc       *webrtc.DataChannel
-    onMessage func([]byte)
-    onDisconnect func()
-    once     sync.Once
-}
-
-// CreateOffer creates a PeerConnection (host side) and returns the SDP offer.
-func (p *Peer) CreateOffer() (sdp string, err error)
-
-// CreateAnswer accepts an SDP offer and returns the answer (mobile side).
-func (p *Peer) CreateAnswer(offer string) (sdp string, err error)
-
-// SetRemoteDescription sets the remote SDP (for the answerer).
-func (p *Peer) SetRemoteDescription(sdp string) error
-
-// AddICECandidate adds a remote ICE candidate.
-func (p *Peer) AddICECandidate(candidate string) error
-
-// OnICECandidate registers a callback for local ICE candidates.
-func (p *Peer) OnICECandidate(fn func(candidate string))
-```
-
-**DataChannel configuration:**
-- `Negotiated: false` (host creates, mobile waits for `ondatachannel`)
-- `Ordered: true` (matches WebSocket semantics)
-- Protocol label: `"ggcode-tunnel"`
-- Max retransmit: 0 (reliable mode, SCTP handles retransmission internally)
-
-### 3. Signaling Protocol
-
-WebRTC signaling (SDP + ICE candidates) is exchanged **over the existing relay
-WebSocket connection** before the upgrade. This reuses the room/pairing
-infrastructure with zero changes to the relay server.
-
-**New GatewayMessage types** (added to `protocol.go`):
+**关键方法：**
 
 ```go
-// WebRTC signaling message types
-const (
-    EventRTCOffer    = "rtc_offer"      // Host → Mobile: SDP offer
-    EventRTCAnswer   = "rtc_answer"     // Mobile → Host: SDP answer
-    EventRTCCandidate = "rtc_candidate" // Bidirectional: ICE candidate
-    EventRTCConnected = "rtc_connected" // Bidirectional: P2P established
-    EventRTCFailed    = "rtc_failed"    // Bidirectional: P2P failed
-)
+// P2P 优先检查：协商中或已激活时跳过 relay recovery replay
+func (b *Broker) p2pUpgradePending() bool
+
+// P2P 建立后：通过 DataChannel 补发移动端缺失的增量消息
+// 使用 relayLastEventID 在 projection events 中查找后缀
+func (b *Broker) SyncP2PReplay()
+
+// P2P 失败后：立即通过 relay 重放所有 projection events
+// 移动端按 EventID 去重，不会收到重复消息
+func (b *Broker) TriggerReplayNow()
+
+// 发送消息：P2P 优先，失败自动回退 relay
+func (b *Broker) sendViaTransport(msg GatewayMessage) bool
 ```
 
-**Signaling flow:**
-```
-1. Host connects to relay (existing flow, WSS)
-2. Mobile connects to relay (existing flow, WSS)
-3. Key exchange + authentication (existing flow)
-4. Host creates PeerConnection, generates SDP offer
-5. Host sends rtc_offer via relay WebSocket
-6. Mobile receives rtc_offer, creates PeerConnection, generates SDP answer
-7. Mobile sends rtc_answer via relay WebSocket
-8. Both sides exchange rtc_candidate messages (trickle ICE)
-9. ICE completes → DataChannel opens → rtc_connected
-10. Switch: all future GatewayMessages go over DataChannel
-11. Keep relay WebSocket as signaling-only heartbeat (for reconnect detection)
-```
-
-### 4. Connection Upgrade Manager
-
-New component: `internal/tunnel/upgrade.go`
-
+**senderLoop 发送逻辑：**
 ```go
-type UpgradeManager struct {
-    relay    Transport       // current relay transport
-    p2p      Transport       // WebRTC transport (nil until established)
-    broker   *Broker         // the active broker
-    mu       sync.Mutex
-    state    UpgradeState
-    onSwitch func(Transport) // notify broker of transport switch
-}
-
-type UpgradeState int
-const (
-    UpgradeIdle UpgradeState = iota  // relay only
-    UpgradeNegotiating                // signaling in progress
-    UpgradeActive                     // P2P active
-    UpgradeFailed                     // P2P failed, staying on relay
-)
+// 1. 尝试 P2P transport（如果存在）
+// 2. P2P 发送失败 → 返回 false → senderLoop 回退到 relay
+// 3. 永远不会静默丢消息
 ```
 
-**Upgrade logic:**
-- Triggered automatically after relay connection is established and authenticated.
-- Timeout: 10 seconds for ICE to complete. If timeout → `UpgradeFailed`,
-  stays on relay.
-- On P2P connect: `broker.SwitchTransport(p2pTransport)`.
-  Messages start flowing over DataChannel. Relay stays open as signaling channel.
-- On P2P disconnect: `broker.SwitchTransport(relayTransport)`.
-  Messages flow back over relay. Re-attempt P2P upgrade after 30s.
+### 3. UpgradeManager (`internal/tunnel/upgrade.go`)
 
-### 5. Broker Transport Switching
+P2P 升级状态机：
 
-`Broker` is modified to support live transport switching:
+```
+UpgradeIdle → UpgradeNegotiating → UpgradeActive (成功)
+                                ↘ UpgradeFailed (超时/失败)
+```
 
+**关键设计：**
+- **`Restart()` 带 5 秒 debounce** — 移动端重连时可能产生多个 `confirmed as client`
+  事件，debounce 合并为一次 P2P 协商
+- **每次 `Restart()` 创建新的 `signalCh`** — 避免旧 offer 的 ICE candidate 竞争
+- **`p2pDone` channel** 替代 `ctx.Done()` — P2P 激活后 ICE timeout 不再触发，
+  只有 DataChannel 断开才退出等待
+- **ICE timeout: 25 秒** — 容忍 GFW/CGNAT 环境下的 UDP 丢包
+
+**升级流程：**
 ```go
-type Broker struct {
-    // ... existing fields ...
-    transport Transport
-    transportMu sync.RWMutex
-}
-
-// SwitchTransport atomically swaps the active transport.
-// In-flight messages in the old transport's buffer are preserved.
-func (b *Broker) SwitchTransport(t Transport) {
-    b.transportMu.Lock()
-    old := b.transport
-    b.transport = t
-    b.transportMu.Unlock()
-    if old != nil {
-        old.Close()
-    }
-}
-
-func (b *Broker) senderLoop() {
-    for {
-        b.outMu.Lock()
-        for len(b.outbound) == 0 && !b.isDone() {
-            b.outCond.Wait()
-        }
-        batch := b.outbound
-        b.outbound = nil
-        b.outMu.Unlock()
-
-        b.transportMu.RLock()
-        t := b.transport
-        b.transportMu.RUnlock()
-
-        for _, msg := range batch {
-            data, _ := json.Marshal(msg)
-            if err := t.Send(data); err != nil {
-                // transport error → buffer for retry
-                b.requeue(msg)
-            }
-        }
-    }
+func (m *UpgradeManager) runUpgrade(signalCh chan SignalMessage) {
+    // 1. 创建 PeerConnection + DataChannel
+    // 2. 生成 SDP offer，通过 relay 发送给 mobile
+    // 3. 等待 mobile 的 answer + ICE candidates
+    // 4. ICE connectivity check (最长 25s)
+    // 5. 成功: SetP2PTransport → SyncP2PReplay → UpgradeActive
+    //    失败: TriggerReplayNow → UpgradeFailed
 }
 ```
 
-### 6. STUN/TURN Configuration
+### 4. WebRTC Peer (`internal/webrtc/peer.go`)
 
+使用 pion/webrtc v4（纯 Go 实现）。
+
+**ICE 配置：**
 ```go
-var defaultICEServers = []webrtc.ICEServer{
-    {URLs: []string{"stun:stun.l.google.com:19302"}},
-    {URLs: []string{"stun:stun1.l.google.com:19302"}},
-    {
-        URLs:       []string{"turn:turn.ggcode.dev:3478"},
-        Username:   "ggcode",
-        Credential: "<rotating-secret>",
-    },
-}
+// STUN servers (Google public)
+stun:stun.l.google.com:19302
+stun:stun1.l.google.com:19302
+
+// TURN server (self-hosted coturn)
+turn:turn.allpayone.net:8443
+// realm: turn.allpayone.net
 ```
 
-TURN server: self-hosted `coturn` Docker container on the relay host.
-Credential rotation via the relay's share session (auth_ticket includes
-TURN credentials).
+**SettingEngine 调优：**
+```go
+settings.SetICETimeouts(15*time.Second, 30*time.Second, 700*time.Millisecond)
+settings.LoggerFactory = &pionLoggerFactory{}  // 重定向到 debug.Log
+```
 
-### 7. Mobile Integration (Flutter)
+**ICE Candidate 类型优先级（高→低）：**
+1. `host` — 局域网直连（同一 WiFi 时最快）
+2. `srflx` — STUN 反射地址（NAT 穿透直连）
+3. `relay` — TURN 中继（任何网络都能通，但带宽受限）
 
-New package: `mobile/flutter/lib/webrtc/`
+ICE agent 并行检查所有候选对，选择第一个成功的。网络切换时自动 failover
+到备用候选对，DataChannel 不中断。
 
-**Files:**
-- `peer_connection.dart` — flutter_webrtc wrapper
-- `p2p_transport.dart` — implements same send/receive interface as ConnectionService
-- `signaling.dart` — handles rtc_offer/rtc_answer/rtc_candidate messages
+### 5. Host Peer Factory (`internal/webrtc/host_factory.go`)
 
-**Connection flow:**
+Host 端 WebRTC 协商入口：
+- 创建 PeerConnection（offerer 角色）
+- 生成 SDP offer
+- 收集本地 ICE candidates（trickle ICE）
+- 处理 mobile 的 answer 和 remote candidates
+
+### 6. Mobile Integration (`mobile/flutter/lib/webrtc/`)
+
+**文件：**
+- `p2p_peer.dart` — flutter_webrtc 封装，`handleOffer` / `createPeerConnection`
+- `p2p_upgrade_manager.dart` — 移动端 P2P 升级管理
+- `connection_service.dart` — `_handleRTCSignal` 处理 rtc_offer/answer/candidate
+
+**Mobile P2P 角色：answerer**
 ```dart
-// After relay WebSocket connects and authenticates:
-// 1. Listen for rtc_offer from host
-// 2. On rtc_offer: create RTCPeerConnection, setRemoteDescription
-// 3. Create answer, send rtc_answer back via relay WebSocket
-// 4. Exchange ICE candidates via rtc_candidate messages
-// 5. OnDataChannel open: switch message routing from WebSocket to DataChannel
-// 6. On DataChannel close: switch back to WebSocket
+// 1. 收到 host 的 rtc_offer
+// 2. 创建 RTCPeerConnection
+// 3. setRemoteDescription(offer)
+// 4. createAnswer → send rtc_answer via relay
+// 5. 交换 ICE candidates
+// 6. onDataChannel → 切换消息路由到 DataChannel
 ```
 
-**UI feedback:**
+## P2P-Priority Protocol
+
+移动端连接时的完整时序：
+
 ```
-┌─────────────────────────────┐
-│  ● P2P Direct    ← green    │  P2P active, lowest latency
-│  ● Relayed       ← yellow   │  TURN fallback, slightly higher latency
-│  ● Connecting... ← gray     │  Negotiating
-└─────────────────────────────┘
+1. Mobile → Relay: connect (QR scan)
+2. Relay → Mobile: confirmed as client (HistoryCount, LastEventID)
+3. Host: SetP2PNegotiating(true) ← 在 handleRelayConnected 之前
+4. Host: handleRelayConnected → 检查 p2pUpgradePending()
+   → YES: 跳过 relay recovery replay，记录 relayLastEventID
+5. Host: p2pMgr.Restart() → 5s debounce → 发送 SDP offer
+6. Mobile: 收到 offer → 创建 answer → 交换 ICE candidates
+7. ICE connected → DataChannel opens
+8. Host: SetP2PTransport(dc) → SyncP2PReplay()
+   → 通过 DataChannel 补发 relayLastEventID 之后的增量事件
+9. 所有后续消息走 P2P DataChannel
 ```
 
-### 8. Security
+**如果 P2P 失败（步骤 7 超时）：**
+```
+7'. ICE timeout (25s)
+8'. Host: TriggerReplayNow()
+    → 清除 p2pNegotiating 标志
+    → 通过 relay 重放所有 projection events（移动端按 EventID 去重）
+9'. 所有消息继续走 relay
+```
 
-- **DTLS-SRTP**: WebRTC mandates DTLS for DataChannel encryption. This
-  replaces the current AES-GCM layer for P2P messages.
-- **Relay messages**: Still encrypted via existing AES-GCM (for signaling).
-- **TURN credentials**: Short-lived, rotated per share session.
-- **Fingerprint verification**: SDP fingerprints are verified against the
-  authenticated peer (the relay already authenticates both parties).
+## Message Loss Prevention
 
-### 9. Reconnection and Edge Cases
+### 问题：Projection Store 容量限制
 
-| Scenario | Behavior |
-|---|---|
-| P2P established, then drops | Switch back to relay, re-attempt P2P after 30s |
-| Relay drops while P2P active | Keep P2P, attempt relay reconnect in background |
-| Both drop | Full reconnect cycle (relay first, then P2P upgrade) |
-| ICE timeout (10s) | Stay on relay, mark `UpgradeFailed` |
-| Mobile background (iOS) | DataChannel may be killed by OS. On foreground: reconnect relay + re-upgrade |
-| Mobile network change (WiFi→4G) | P2P drops → relay reconnect → re-upgrade |
+Projection store 有 1000 条事件的 cap（`ProjectionReplayLimit = 1000`），
+但 relay 历史计数可能达到 2000+。不能用数字索引做 gap 检测。
 
-### 10. Relay Server Changes
+### 解决方案
 
-**Minimal.** The relay server requires **zero protocol changes**. It only needs
-to forward `rtc_offer`, `rtc_answer`, and `rtc_candidate` messages between the
-two WebSocket clients in the same room — which it already does for any
-GatewayMessage.
+| 场景 | 方法 | 去重机制 |
+|------|------|----------|
+| P2P 成功 | `SyncP2PReplay` — 用 `relayLastEventID` 在 projection events 中查找后缀 | EventID 匹配 |
+| P2P 失败 | `TriggerReplayNow` — 重放所有 projection events | 移动端按 EventID 去重 |
+| P2P 发送失败 | `sendViaTransport` 返回 false → senderLoop 回退 relay | 不丢消息 |
 
-**Optional TURN deployment:** Add a `coturn` container alongside the relay.
+### sendViaTransport 回退逻辑
 
-### 11. Rollout Strategy
+```go
+func (b *Broker) sendViaTransport(msg GatewayMessage) bool {
+    t := b.currentP2PTransport()
+    if t == nil {
+        return false  // 没有 P2P，走 relay
+    }
+    if err := t.Send(data); err != nil {
+        return false  // P2P 失败，回退 relay
+    }
+    return true  // P2P 成功
+}
+// 返回 false 时，senderLoop 将消息放入 relay 队列
+```
 
-**Phase 1 (this implementation):**
-- Add WebRTC transport layer to Host
-- Add Transport abstraction to Broker
-- Add upgrade manager
-- Mobile-side flutter_webrtc integration
-- Feature-flagged via config: `p2p.enabled = true|false`
-- Default: OFF in production until tested
+## Signaling Protocol
 
-**Phase 2 (post-verification):**
-- Enable P2P upgrade for all connections
-- Deploy TURN server
-- Monitor P2P success rate
+WebRTC 信令（SDP + ICE candidates）通过现有 relay WebSocket 交换，
+**不需要修改 relay 协议**。新增的 GatewayMessage 类型：
 
-### 12. File Manifest
+```go
+const (
+    EventRTCOffer     = "rtc_offer"      // Host → Mobile: SDP offer
+    EventRTCAnswer    = "rtc_answer"     // Mobile → Host: SDP answer
+    EventRTCCandidate = "rtc_candidate"  // 双向: ICE candidate
+)
+```
 
-**Host (Go):**
-- `internal/tunnel/transport.go` — Transport interface
-- `internal/tunnel/upgrade.go` — UpgradeManager
-- `internal/tunnel/protocol.go` — add RTC signaling types
-- `internal/tunnel/broker.go` — use Transport, add SwitchTransport
-- `internal/webrtc/peer.go` — PeerConnection wrapper
-- `internal/webrtc/signal.go` — SDP/ICE helpers
-- `internal/webrtc/transport.go` — DataChannel → tunnel.Transport
-- `internal/webrtc/config.go` — ICE servers
+Relay 服务器将这些消息原样转发给同房间的对端。对于没有 EventID 的
+transient signaling 消息，relay 会转发给所有已连接的 client（不只是 ready 状态）。
 
-**Mobile (Flutter):**
-- `mobile/flutter/lib/webrtc/peer_connection.dart`
-- `mobile/flutter/lib/webrtc/p2p_transport.dart`
-- `mobile/flutter/lib/webrtc/signaling.dart`
-- `mobile/flutter/lib/core/connection_service.dart` — add RTC message routing
+## Relay Server (`ggcode-relay/`)
 
-**Shared (config):**
-- `internal/config/config.go` — add `p2p.enabled` setting
+部署在 Railway，**不需要为 P2P 做任何特殊修改**：
+- 转发 `rtc_offer` / `rtc_answer` / `rtc_candidate` 消息
+- transient 事件（无 EventID）转发给所有 client
+- 支持 cursor-based replay recovery
 
-### 13. Dependencies
+**TURN 服务器**（独立部署）：
+- coturn at `turn.allpayone.net:8443`
+- realm: `turn.allpayone.net`
+- credential 由 share session 提供
+
+## Reconnection & Edge Cases
+
+| 场景 | 行为 |
+|------|------|
+| P2P 建立后断开 | DataChannel OnDisconnect → 清除 p2pTransport → 回退 relay |
+| Relay 断开但 P2P 活跃 | P2P 继续工作，后台重连 relay |
+| 移动端切换网络 (WiFi→4G) | ICE 自动 failover 到备用 candidate，DataChannel 可能不中断 |
+| ICE timeout (25s) | TriggerReplayNow → 留在 relay |
+| 移动端后台 (iOS) | OS 可能杀死 DataChannel → 前台后重连 relay + 重新 P2P 升级 |
+| 移动端杀掉重启 | 全新连接周期：relay first → P2P upgrade |
+
+## Host Support
+
+P2P 对 CLI 和桌面端（Wails）同样生效。两者都通过同一个入口：
+
+```go
+// internal/agentruntime/tunnel_host.go
+func (h *TunnelHost) StartShare(cfg ShareConfig) (*ShareResult, error)
+```
+
+桌面端 `desktop/ggcode-desktop-wails/app.go` 调用相同的 `StartShare`，
+共享 `internal/tunnel/`、`internal/webrtc/` 全部代码。
+
+**角色限制：** Host 只做 offerer（发起 P2P），Mobile 只做 answerer（接收 offer）。
+
+## File Manifest
+
+**Host (Go) — 共享代码：**
+- `internal/tunnel/transport.go` — Transport 接口定义
+- `internal/tunnel/broker.go` — 传输切换、消息发送、P2P replay 同步
+- `internal/tunnel/upgrade.go` — UpgradeManager 状态机
+- `internal/tunnel/relay_client.go` — Relay WebSocket transport + RTC 信号路由
+- `internal/webrtc/peer.go` — PeerConnection 封装、pion 日志重定向、ICE timeout
+- `internal/webrtc/host_factory.go` — Host 端 offer 协商
+- `internal/webrtc/signal.go` — SDP 编解码
+- `internal/agentruntime/tunnel_host.go` — StartShare 入口、OnRelayConnected 回调
+
+**Mobile (Flutter)：**
+- `mobile/flutter/lib/webrtc/p2p_peer.dart` — flutter_webrtc 封装
+- `mobile/flutter/lib/webrtc/p2p_upgrade_manager.dart` — 移动端升级管理
+- `mobile/flutter/lib/core/connection_service.dart` — RTC 信号处理
+
+**Relay：**
+- `ggcode-relay/relay.go` — 消息转发（无 P2P 特殊逻辑，原样转发 signaling）
+
+**TURN：**
+- coturn config at `turn.allpayone.net:8443`
+
+## Dependencies
 
 **Host:**
-- `github.com/pion/webrtc/v4` — pure Go WebRTC implementation
+- `github.com/pion/webrtc/v4` — 纯 Go WebRTC 实现
 
 **Mobile:**
-- `flutter_webrtc: ^0.12.0` — Flutter WebRTC plugin
+- `flutter_webrtc: ^0.12.0` — Flutter WebRTC 插件
 
-### 14. Testing Plan
+## Configuration
 
-1. **Unit tests**: PeerConnection creation, SDP marshaling, Transport interface
-2. **Integration test**: Host ↔ Host (loopback) DataChannel round-trip
-3. **NAT traversal test**: Two machines behind different NATs
-4. **Fallback test**: Force ICE failure → verify relay stays active
-5. **Reconnect test**: Kill DataChannel → verify relay reconnection + re-upgrade
-6. **Mobile background test**: App to background → foreground → verify reconnect
+ICE timeout 可通过 `UpgradeConfig` 配置：
+
+```go
+type UpgradeConfig struct {
+    ICETimeout    time.Duration // 默认 25s
+    ICETimeoutMax time.Duration // 默认 30s
+    Keepalive     time.Duration // 默认 700ms
+}
+```
+
+日志通过 `debug.Log("webrtc", ...)` 和 `debug.Log("tunnel", ...)` 输出到
+内部 debug 系统，不污染 TUI。
+
+## Debugging
+
+查看 P2P 连接状态：
+
+```bash
+# 通过 debug_log 工具
+debug_log(category="tunnel")
+
+# 关键日志行：
+# - "confirmed as client" → relay 连接确认
+# - "skipping relay recovery replay (P2P upgrade pending)" → P2P 优先逻辑生效
+# - "DataChannel ready, switching transport" → P2P 建立成功
+# - "syncP2PReplay: sending N missed events via P2P" → 增量同步
+# - "p2p send ... ok" → 消息通过 P2P 发送
+# - "ICE timeout" → P2P 失败
+# - "triggerReplayNow: replaying N projection events" → 回退 relay
+```
