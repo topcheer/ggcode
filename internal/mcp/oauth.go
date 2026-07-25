@@ -53,8 +53,6 @@ type ProtectedResourceMetadata struct {
 }
 
 // AuthorizationServerMetadata represents RFC 8414 authorization server metadata.
-// It also captures OIDC Discovery (RFC 8414 super-set) fields that are useful
-// for MCP authentication, such as device_authorization_endpoint.
 type AuthorizationServerMetadata struct {
 	Issuer                            string   `json:"issuer"`
 	AuthorizationEndpoint             string   `json:"authorization_endpoint"`
@@ -66,7 +64,6 @@ type AuthorizationServerMetadata struct {
 	ResponseTypesSupported            []string `json:"response_types_supported,omitempty"`
 	TokenEndpointAuthMethodsSupported []string `json:"token_endpoint_auth_methods_supported,omitempty"`
 	RevocationEndpoint                string   `json:"revocation_endpoint,omitempty"`
-	DeviceAuthorizationEndpoint       string   `json:"device_authorization_endpoint,omitempty"`
 }
 
 // ClientRegistration represents RFC 7591 dynamic client registration response.
@@ -515,26 +512,15 @@ func (h *OAuthHandler) discoverProtectedResource(ctx context.Context, metadataUR
 }
 
 func (h *OAuthHandler) discoverAuthorizationServer(ctx context.Context, authServerURL string) error {
-	// Build the RFC 8414 well-known URL from the authorization server URL.
-	// We reconstruct from parsed URL components to place .well-known at the
-	// host root, not after any path component.
-	basePath := ""
+	// Try RFC 8414 well-known first, then direct URL
+	wellKnown := strings.TrimRight(authServerURL, "/") + "/.well-known/oauth-authorization-server"
 	if u, err := url.Parse(authServerURL); err == nil {
-		authServerURL = fmt.Sprintf("%s://%s", u.Scheme, u.Host)
-		basePath = u.Path
+		wellKnown = fmt.Sprintf("%s://%s/.well-known/oauth-authorization-server%s", u.Scheme, u.Host, u.Path)
 	}
-	rfc8414URL := authServerURL + "/.well-known/oauth-authorization-server" + basePath
 
-	meta, err := h.fetchAuthorizationServerMeta(ctx, rfc8414URL)
+	meta, err := h.fetchAuthorizationServerMeta(ctx, wellKnown)
 	if err != nil {
-		// Fallback 1: OIDC Discovery (RFC 8414 super-set, used by Keycloak,
-		// Authentik, and other OIDC providers that don't expose the
-		// OAuth-only authorization-server endpoint).
-		oidcURL := authServerURL + "/.well-known/openid-configuration" + basePath
-		meta, err = h.fetchAuthorizationServerMeta(ctx, oidcURL)
-	}
-	if err != nil {
-		// Fallback 2: try the direct URL (some servers serve metadata at root)
+		// Fallback: try direct URL
 		meta, err = h.fetchAuthorizationServerMeta(ctx, authServerURL)
 		if err != nil {
 			return err
@@ -1134,7 +1120,7 @@ func (h *OAuthHandler) SupportsDeviceFlow() bool {
 		return true
 	}
 	// RFC 8628: check device_authorization_endpoint in server metadata
-	return h.state.authorizationServerMeta.DeviceAuthorizationEndpoint != ""
+	return false
 }
 
 // StartDeviceFlow initiates a device authorization flow (RFC 8628).
@@ -1155,14 +1141,9 @@ func (h *OAuthHandler) StartDeviceFlow(ctx context.Context, scopes []string) (*D
 		return nil, fmt.Errorf("no client_id for device flow")
 	}
 
-	// Find device code endpoint: prefer metadata, fall back to well-known map
-	deviceEndpoint := ""
-	if h.state.authorizationServerMeta != nil && h.state.authorizationServerMeta.DeviceAuthorizationEndpoint != "" {
-		deviceEndpoint = h.state.authorizationServerMeta.DeviceAuthorizationEndpoint
-	} else {
-		deviceEndpoint, _ = wellKnownDeviceEndpoints[issuer]
-	}
-	if deviceEndpoint == "" {
+	// Find device code endpoint
+	deviceEndpoint, ok := wellKnownDeviceEndpoints[issuer]
+	if !ok {
 		return nil, fmt.Errorf("no device code endpoint for issuer %s", issuer)
 	}
 
