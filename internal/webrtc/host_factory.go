@@ -2,6 +2,7 @@ package webrtc
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/safego"
@@ -71,9 +72,39 @@ func runHostNegotiation(peer *Peer, sendSignal func(tunnel.SignalMessage), recv 
 		return fmt.Errorf("create offer: %w", err)
 	}
 
-	// Send offer via relay to the mobile client.
-	sendSignal(tunnel.SignalMessage{Type: "rtc_offer", SDP: offerSDP})
-	debug.Log("webrtc", "host: sent SDP offer via relay")
+	// Track whether mobile responded so the retry timer can stop.
+	answerReceived := make(chan struct{})
+
+	// Send offer via relay to the mobile client, with retry.
+	// The relay gateway only forwards to "ready" clients. The mobile
+	// may not have completed key exchange when the first offer arrives,
+	// causing it to be silently dropped. Retrying every 3s ensures the
+	// offer reaches the mobile once it's ready.
+	sendOffer := func() {
+		sendSignal(tunnel.SignalMessage{Type: "rtc_offer", SDP: offerSDP})
+		debug.Log("webrtc", "host: sent SDP offer via relay")
+	}
+	sendOffer() // initial send
+
+	// Retry timer: re-send offer every 3s until answer arrives or done.
+	safego.Go("webrtc.host.offerRetry", func() {
+		ticker := time.NewTicker(3 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				select {
+				case <-answerReceived:
+					return // mobile responded, stop retrying
+				default:
+				}
+				debug.Log("webrtc", "host: re-sending SDP offer (mobile may not have been ready)")
+				sendOffer()
+			case <-done:
+				return
+			}
+		}
+	})
 
 	// Process incoming signaling messages from mobile until DC opens,
 	// fails, or the negotiation is cancelled (done channel closed).
@@ -88,6 +119,7 @@ func runHostNegotiation(peer *Peer, sendSignal func(tunnel.SignalMessage), recv 
 				debug.Log("webrtc", "host: received signal from mobile: type=%s", sig.Type)
 				switch sig.Type {
 				case "rtc_answer":
+					close(answerReceived) // stop offer retry
 					if err := peer.SetRemoteAnswer(sig.SDP); err != nil {
 						debug.Log("webrtc", "host: set remote answer: %v", err)
 					} else {

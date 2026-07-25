@@ -53,7 +53,7 @@ type UpgradeConfig struct {
 func DefaultUpgradeConfig() UpgradeConfig {
 	return UpgradeConfig{
 		Enabled:           true,
-		ICETimeout:        30 * time.Second, // includes 3s post-connect delay
+		ICETimeout:        25 * time.Second, // includes 1s settle delay + offer retries
 		KeepAliveInterval: 20 * time.Second,
 		RetryDelay:        30 * time.Second,
 	}
@@ -226,13 +226,13 @@ func (m *UpgradeManager) runUpgrade(signalCh chan SignalMessage) {
 	gen := m.generation
 	m.mu.Unlock()
 
-	// Wait for the mobile client to complete key exchange and become "ready"
-	// in the relay. The relay only forwards server broadcasts to ready clients.
-	// Without this delay, the SDP offer is sent before the mobile is ready
-	// and is silently dropped by the relay gateway.
+	// Wait briefly for the mobile client to settle into the relay.
+	// The relay gateway only forwards to "ready" clients (key exchange
+	// complete). The host's runHostNegotiation retries the SDP offer
+	// every 3s, so even if the first offer is dropped because the mobile
+	// isn't ready yet, the retry will deliver it.
 	select {
-	case <-time.After(3 * time.Second):
-		debug.Log("tunnel", "upgrade: post-connect delay elapsed, mobile should be ready")
+	case <-time.After(1 * time.Second):
 	case <-ctx.Done():
 		return
 	}
