@@ -417,6 +417,22 @@ func (p *tuiRuntimeProvider) RuntimeIMAdapters() []tool.RuntimeIMAdapterInfo {
 
 func (p *tuiRuntimeProvider) RuntimeMobile() tool.RuntimeMobileInfo {
 	var info tool.RuntimeMobileInfo
+	// Query tunnelHost directly as the authoritative source (matches desktop
+	// implementation). The Model-level tunnelSession/tunnelBroker fields can
+	// become stale after relay reconnection or restart, causing false
+	// "not connected" reports even when the tunnel is alive.
+	if host := p.repl.model.tunnelHost; host != nil {
+		if broker := host.OnlineBroker(); broker != nil {
+			info.Connected = broker.SessionID() != ""
+			info.SessionID = broker.SessionID()
+		}
+		if shareInfo := host.GetShareInfo(); shareInfo != nil {
+			info.RelayURL = shareInfo.ConnectURL
+			info.ConnectCode = shareInfo.RoomID
+		}
+		return info
+	}
+	// Fallback: Model-level fields (used before tunnelHost is initialized).
 	if p.repl.model.tunnelSession != nil {
 		info.Connected = p.repl.model.tunnelBroker != nil && p.repl.model.tunnelBroker.SessionID() != ""
 		if ti := p.repl.model.tunnelSession.Info(); ti != nil {
@@ -733,8 +749,17 @@ func (r *REPL) RuntimeStatus() webui.RuntimeStatus {
 		}
 	}
 
-	// Mobile tunnel connection status
-	if r.model.tunnelSession != nil {
+	// Mobile tunnel connection status — query tunnelHost directly (authoritative).
+	if host := r.model.tunnelHost; host != nil {
+		if broker := host.OnlineBroker(); broker != nil {
+			m.MobileConn.Connected = broker.SessionID() != ""
+			m.MobileConn.SessionID = broker.SessionID()
+		}
+		if shareInfo := host.GetShareInfo(); shareInfo != nil {
+			m.MobileConn.RelayURL = shareInfo.ConnectURL
+			m.MobileConn.ConnectCode = shareInfo.RoomID
+		}
+	} else if r.model.tunnelSession != nil {
 		m.MobileConn.Connected = r.model.tunnelBroker != nil && r.model.tunnelBroker.SessionID() != ""
 		if info := r.model.tunnelSession.Info(); info != nil {
 			m.MobileConn.RelayURL = info.ConnectURL
