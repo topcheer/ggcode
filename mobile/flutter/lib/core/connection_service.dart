@@ -718,7 +718,13 @@ class ConnectionService {
           // These arrive encrypted (like all relay traffic) but are consumed
           // internally — they never reach the application message stream.
           if (_isRTCSignalType(msg.type)) {
-            await _handleRTCSignal(msg.type, msg.data);
+            try {
+              debugPrint('[p2p] received RTC signal: type=${msg.type}');
+              await _handleRTCSignal(msg.type, msg.data);
+            } catch (e, st) {
+              debugPrint('[p2p] ERROR handling RTC signal ${msg.type}: $e');
+              debugPrint('[p2p] stack: $st');
+            }
             return;
           }
 
@@ -1075,6 +1081,7 @@ class ConnectionService {
     // Callback that encrypts signaling responses and sends via relay.
     void sendSignal(String signalJson) {
       final signalMap = jsonDecode(signalJson) as Map<String, dynamic>;
+      debugPrint('[p2p] sending RTC response: type=${signalMap['type']}');
       sendEncrypted(proto.WsMessage(
         type: signalMap['type'] as String,
         data: signalMap,
