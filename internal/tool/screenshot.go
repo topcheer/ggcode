@@ -15,16 +15,17 @@ import (
 type ScreenshotTool struct{}
 
 type screenshotParams struct {
-	Action     string            `json:"action"`      // capture, list_displays, list_windows
-	Window     string            `json:"window"`      // window title/app name
-	Display    int               `json:"display"`     // 1-based monitor index
-	Region     *screenshotRegion `json:"region"`      // rectangular area
-	Cursor     bool              `json:"cursor"`      // include cursor
-	DelayMs    int               `json:"delay_ms"`    // delay before capture
-	Format     string            `json:"format"`      // png or jpeg
-	Quality    int               `json:"quality"`     // jpeg quality 1-100
-	OutputPath string            `json:"output_path"` // save to file
-	MaxWidth   int               `json:"max_width"`   // auto-resize max width
+	Action        string            `json:"action"`          // capture, list_displays, list_windows
+	Window        string            `json:"window"`          // window title/app name
+	Display       int               `json:"display"`         // 1-based monitor index
+	Region        *screenshotRegion `json:"region"`          // rectangular area
+	Cursor        bool              `json:"cursor"`          // include cursor
+	DelayMs       int               `json:"delay_ms"`        // delay before capture
+	Format        string            `json:"format"`          // png or jpeg
+	Quality       int               `json:"quality"`         // jpeg quality 1-100
+	OutputPath    string            `json:"output_path"`     // save finalized image to file
+	RawOutputPath string            `json:"raw_output_path"` // save raw (unprocessed) image to file
+	MaxWidth      int               `json:"max_width"`       // auto-resize max width
 }
 
 type screenshotRegion struct {
@@ -96,7 +97,11 @@ func (ScreenshotTool) Parameters() json.RawMessage {
     },
     "output_path": {
       "type": "string",
-      "description": "Save the screenshot to this file path. If omitted, the screenshot is only returned inline for analysis."
+      "description": "Save the finalized screenshot (after resize/format conversion) to this file path. If omitted, the screenshot is only returned inline for analysis."
+    },
+    "raw_output_path": {
+      "type": "string",
+      "description": "Save the raw, unprocessed screenshot (full resolution, original format) to this file path. Useful when a high-fidelity copy is needed alongside the compressed version sent to the LLM."
     },
     "max_width": {
       "type": "integer",
@@ -133,14 +138,15 @@ func (t ScreenshotTool) Execute(ctx context.Context, input json.RawMessage) (Res
 
 func (t ScreenshotTool) executeCapture(params screenshotParams) (Result, error) {
 	opts := image.ScreenshotOptions{
-		Window:     params.Window,
-		Display:    params.Display,
-		Cursor:     params.Cursor,
-		DelayMs:    params.DelayMs,
-		Format:     params.Format,
-		Quality:    params.Quality,
-		OutputPath: params.OutputPath,
-		MaxWidth:   params.MaxWidth,
+		Window:        params.Window,
+		Display:       params.Display,
+		Cursor:        params.Cursor,
+		DelayMs:       params.DelayMs,
+		Format:        params.Format,
+		Quality:       params.Quality,
+		OutputPath:    params.OutputPath,
+		RawOutputPath: params.RawOutputPath,
+		MaxWidth:      params.MaxWidth,
 	}
 	if params.Region != nil {
 		opts.Region = &image.ScreenshotRegion{
@@ -168,6 +174,9 @@ func (t ScreenshotTool) executeCapture(params screenshotParams) (Result, error) 
 	}
 	if result.SavedPath != "" {
 		contentParts = append(contentParts, fmt.Sprintf("saved: %s", result.SavedPath))
+	}
+	if params.RawOutputPath != "" {
+		contentParts = append(contentParts, fmt.Sprintf("raw saved: %s", params.RawOutputPath))
 	}
 
 	img := result.Image

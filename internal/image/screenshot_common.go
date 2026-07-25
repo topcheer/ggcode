@@ -25,15 +25,16 @@ const (
 
 // ScreenshotOptions controls screenshot capture behavior.
 type ScreenshotOptions struct {
-	Display    int               // 1-based monitor index, 0=primary
-	Window     string            // match by title/app name
-	Region     *ScreenshotRegion // rectangular area
-	Cursor     bool              // include mouse cursor
-	DelayMs    int               // delay before capture
-	Format     string            // "png" or "jpeg"
-	Quality    int               // JPEG quality 1-100
-	OutputPath string            // save to file
-	MaxWidth   int               // auto-resize max width
+	Display       int               // 1-based monitor index, 0=primary
+	Window        string            // match by title/app name
+	Region        *ScreenshotRegion // rectangular area
+	Cursor        bool              // include mouse cursor
+	DelayMs       int               // delay before capture
+	Format        string            // "png" or "jpeg"
+	Quality       int               // JPEG quality 1-100
+	OutputPath    string            // save finalized image to file
+	RawOutputPath string            // save raw (unprocessed) image to file
+	MaxWidth      int               // auto-resize max width
 }
 
 // ScreenshotRegion defines a rectangular area to capture.
@@ -84,6 +85,13 @@ func finalizeImage(rawPath string, opts ScreenshotOptions) (Image, error) {
 		return Image{}, fmt.Errorf("reading screenshot file: %w", err)
 	}
 
+	// Save the raw (unprocessed) screenshot if requested.
+	if opts.RawOutputPath != "" {
+		if werr := os.WriteFile(opts.RawOutputPath, data, 0644); werr != nil {
+			return Image{}, fmt.Errorf("writing raw screenshot to %s: %w", opts.RawOutputPath, werr)
+		}
+	}
+
 	mime := DetectMIME(data)
 	if mime == "" {
 		mime = MIMEPNG
@@ -131,6 +139,15 @@ func finalizeImage(rawPath string, opts ScreenshotOptions) (Image, error) {
 				img.Data = buf
 				img.MIME = MIMEPNG
 			}
+		}
+	}
+
+	// When output_path is set, the raw screenshot was written directly to
+	// that path. Overwrite it with the finalized (resized/converted) image
+	// so the saved file matches what is returned to the caller.
+	if opts.OutputPath != "" {
+		if werr := os.WriteFile(opts.OutputPath, img.Data, 0644); werr != nil {
+			return Image{}, fmt.Errorf("writing finalized screenshot to %s: %w", opts.OutputPath, werr)
 		}
 	}
 
