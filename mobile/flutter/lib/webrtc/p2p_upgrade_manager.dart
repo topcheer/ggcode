@@ -45,6 +45,16 @@ class P2PUpgradeManager {
         final sdp = data['sdp'] as String?;
         if (sdp == null) return false;
 
+        // Deactivate P2P before disposing the old peer. Without this,
+        // _p2pActive stays true from the old connection, but the new
+        // peer's DataChannel isn't open yet. Any message sent during
+        // this gap would be silently lost (P2PPeer.send returns void
+        // when _dc is null, and send() interprets that as success).
+        if (_p2pActive) {
+          _p2pActive = false;
+          onP2PDisconnected();
+        }
+
         // Dispose any existing peer before creating a new one.
         await _peer?.dispose();
         _peer = P2PPeer(
