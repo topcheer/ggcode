@@ -263,6 +263,9 @@ func (m *UpgradeManager) runUpgrade(signalCh chan SignalMessage) {
 		return m.generation != gen
 	}
 
+	p2pDone := make(chan struct{}) // closed when P2P disconnects or is cancelled
+	var p2pDoneOnce sync.Once
+
 	// Wire disconnect handler.
 	p2pTransport.OnDisconnect(func() {
 		if staleGen() {
@@ -271,6 +274,7 @@ func (m *UpgradeManager) runUpgrade(signalCh chan SignalMessage) {
 		debug.Log("tunnel", "upgrade: P2P disconnected, reverting to relay")
 		m.broker.SetP2PTransport(nil)
 		m.setState(UpgradeFailed)
+		p2pDoneOnce.Do(func() { close(p2pDone) })
 		// Schedule retry
 		safego.Go("tunnel.upgrade.retry", func() {
 			select {
@@ -322,16 +326,20 @@ func (m *UpgradeManager) runUpgrade(signalCh chan SignalMessage) {
 		return
 	}
 
-	// Wait for ICE timeout
-	<-ctx.Done()
-	if ctx.Err() == context.DeadlineExceeded {
-		m.mu.Lock()
-		if m.state != UpgradeActive {
+	// Wait for P2P disconnect. Once active, ignore ICE timeout —
+	// the DataChannel should persist until network disconnect or Stop().
+	select {
+	case <-p2pDone:
+		// P2P disconnected, OnDisconnect already handled cleanup.
+	case <-ctx.Done():
+		if m.state == UpgradeActive {
+			// P2P is active — wait for disconnect instead of timing out.
+			debug.Log("tunnel", "upgrade: ctx done but P2P active, waiting for disconnect")
+			<-p2pDone
+		} else if ctx.Err() == context.DeadlineExceeded {
 			debug.Log("tunnel", "upgrade: ICE timeout, staying on relay")
-			m.state = UpgradeFailed
+			m.setState(UpgradeFailed)
 		}
-		m.mu.Unlock()
-		m.notifyState()
 	}
 }
 

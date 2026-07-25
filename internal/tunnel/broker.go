@@ -253,6 +253,8 @@ func (b *Broker) sendViaTransport(msg GatewayMessage) bool {
 	}
 	if err := t.Send(data); err != nil {
 		debug.Log("tunnel", "broker: p2p send %s event=%s failed: %v", msg.Type, msg.EventID, err)
+	} else {
+		debug.Log("tunnel", "broker: p2p send %s event=%s ok", msg.Type, msg.EventID)
 	}
 	return true
 }
