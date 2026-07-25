@@ -58,6 +58,10 @@ func (m *Manager) Start(viewFunc ViewFunc) error {
 		return fmt.Errorf("stream: already running")
 	}
 
+	// Recreate stopCh in case Stop() was previously called (close() is
+	// permanent — a closed channel can never be reused).
+	m.stopCh = make(chan struct{})
+
 	if viewFunc == nil {
 		return fmt.Errorf("stream: viewFunc is required")
 	}
