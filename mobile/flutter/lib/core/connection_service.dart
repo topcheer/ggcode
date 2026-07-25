@@ -5,6 +5,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 
+import '../webrtc/p2p_upgrade_manager.dart';
 import 'crypto.dart';
 import 'models/protocol.dart' as proto;
 
@@ -317,6 +318,12 @@ class ConnectionService {
   ShareKeyExchangeState? _keyExchangeState;
   Completer<void>? _keyExchangeReady;
   bool _keyOfferSent = false;
+
+  // P2P WebRTC upgrade manager. When a DataChannel is established,
+  // application data flows directly between mobile and host without
+  // relay mediation. Signaling (SDP/ICE) still rides the relay.
+  P2PUpgradeManager? _p2pManager;
+  bool _p2pActive = false;
 
   ConnectionService({required ShareConnectionDescriptor descriptor})
       : _descriptor = descriptor {
@@ -706,6 +713,15 @@ class ConnectionService {
           _decryptErrorCount = 0;
           final replayTag =
               map['event_id'] != null ? ' event=${map['event_id']}' : '';
+
+          // Intercept WebRTC signaling messages and route to P2P manager.
+          // These arrive encrypted (like all relay traffic) but are consumed
+          // internally — they never reach the application message stream.
+          if (_isRTCSignalType(msg.type)) {
+            await _handleRTCSignal(msg.type, msg.data);
+            return;
+          }
+
           debugPrint(
               '[connection] encrypted decrypted:$replayTag type=${msg.type} sessionId=${msg.sessionId}');
           _messageController.add(msg);
@@ -797,6 +813,12 @@ class ConnectionService {
     _stopHeartbeat();
     _socketSub?.cancel();
     _socketSub = null;
+    // Reset P2P state — the DataChannel is tied to this relay session.
+    // A stale P2P connection from a previous relay session must not
+    // survive a reconnect, or data could be sent into the void.
+    _p2pActive = false;
+    _p2pManager?.dispose();
+    _p2pManager = null;
   }
 
   bool _maybeHandleRelayRestartClose({
@@ -961,6 +983,21 @@ class ConnectionService {
   }
 
   Future<void> sendEncrypted(proto.WsMessage msg) async {
+    final plaintext = utf8.encode(msg.toJson());
+
+    // When P2P DataChannel is active, send raw (unencrypted) over the
+    // direct connection. DTLS-SRTP already provides transport encryption.
+    // RTC signal messages are excluded — they must always go via relay
+    // because they are needed to establish/maintain the P2P connection
+    // itself. Sending them over a half-dead DataChannel would lose them.
+    if (_p2pActive &&
+        _p2pManager != null &&
+        !_isRTCSignalType(msg.type)) {
+      final sent = await _p2pManager!.send(plaintext);
+      if (sent) return;
+      // P2P send failed — fall back to encrypted relay.
+    }
+
     final ready = _keyExchangeReady;
     if (ready != null && !ready.isCompleted) {
       await ready.future;
@@ -969,7 +1006,6 @@ class ConnectionService {
     if (crypto == null) {
       throw StateError('Tunnel crypto is not ready');
     }
-    final plaintext = utf8.encode(msg.toJson());
     final encrypted = await crypto.encryptData(plaintext);
     final relayMsg = jsonEncode({
       'type': 'encrypted',
@@ -993,12 +1029,76 @@ class ConnectionService {
 
   void dispose() {
     _disposed = true;
+    _p2pManager?.dispose();
+    _p2pManager = null;
+    _p2pActive = false;
     disconnect();
     _statusController.close();
     _errorController.close();
     _messageController.close();
     _ackController.close();
     _metadataController.close();
+  }
+
+  // ─── P2P WebRTC Upgrade ───
+
+  /// Whether a P2P DataChannel is currently active for this connection.
+  bool get isP2PActive => _p2pActive;
+
+  static bool _isRTCSignalType(String type) {
+    return type == 'rtc_offer' ||
+        type == 'rtc_answer' ||
+        type == 'rtc_candidate' ||
+        type == 'rtc_failed';
+  }
+
+  /// Routes a decrypted WebRTC signaling message to the P2P upgrade manager.
+  /// Outbound signaling responses (rtc_answer, rtc_candidate) are encrypted
+  /// and sent over the relay WebSocket — they must go through the relay
+  /// because the P2P DataChannel is not yet (or no longer) established.
+  Future<void> _handleRTCSignal(
+    String type,
+    Map<String, dynamic>? data,
+  ) async {
+    _p2pManager ??= P2PUpgradeManager(
+      onP2PMessage: _handleP2PData,
+      onP2PConnected: () {
+        _p2pActive = true;
+        debugPrint('[p2p] DataChannel connected — switching to P2P transport');
+      },
+      onP2PDisconnected: () {
+        _p2pActive = false;
+        debugPrint('[p2p] DataChannel disconnected — reverting to relay');
+      },
+    );
+
+    // Callback that encrypts signaling responses and sends via relay.
+    void sendSignal(String signalJson) {
+      final signalMap = jsonDecode(signalJson) as Map<String, dynamic>;
+      sendEncrypted(proto.WsMessage(
+        type: signalMap['type'] as String,
+        data: signalMap,
+      ));
+    }
+
+    final handled = await _p2pManager!.handleSignal(type, data, sendSignal);
+    if (!handled) {
+      debugPrint('[connection] unhandled RTC signal type: $type');
+    }
+  }
+
+  /// Processes a raw message received over the P2P DataChannel.
+  /// The DataChannel carries unencrypted GatewayMessage JSON (DTLS
+  /// provides transport-level encryption). Parse and forward to the
+  /// application message stream, same as decrypted relay messages.
+  void _handleP2PData(List<int> bytes) {
+    try {
+      final json = utf8.decode(bytes);
+      final msg = proto.WsMessage.fromJson(json);
+      _messageController.add(msg);
+    } catch (e) {
+      debugPrint('[p2p] failed to parse DataChannel message: $e');
+    }
   }
 }
 

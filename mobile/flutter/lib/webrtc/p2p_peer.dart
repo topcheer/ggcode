@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter_webrtc/flutter_webrtc.dart';
-import 'package:web_socket_channel/web_socket_channel.dart';
 
 /// Configuration for STUN/TURN ICE servers.
 class ICEConfig {
@@ -88,7 +88,13 @@ class P2PPeer {
 
   /// Creates a PeerConnection and prepares to receive the host's DataChannel.
   /// Called when an rtc_offer is received from the host.
-  Future<void> handleOffer(String sdpJson, WebSocketChannel signalingSocket) async {
+  ///
+  /// [sendSignal] delivers outbound signaling messages (rtc_answer,
+  /// rtc_candidate) back to the host via the relay WebSocket.
+  Future<void> handleOffer(
+    String sdpJson,
+    void Function(String signalJson) sendSignal,
+  ) async {
     if (_disposed) return;
 
     _pc = await createPeerConnection(_iceConfig.toMap(), {});
@@ -98,18 +104,17 @@ class P2PPeer {
       _attachDataChannel(dc);
     };
 
-    // Forward local ICE candidates to the host via the signaling channel.
+    // Forward local ICE candidates to the host via the relay.
     _pc!.onIceCandidate = (RTCIceCandidate candidate) {
       final candidateMap = {
         'candidate': candidate.candidate,
         'sdpMid': candidate.sdpMid,
         'sdpMLineIndex': candidate.sdpMLineIndex,
       };
-      final signal = jsonEncode({
+      sendSignal(jsonEncode({
         'type': 'rtc_candidate',
         'candidate': jsonEncode(candidateMap),
-      });
-      signalingSocket.sink.add(signal);
+      }));
     };
 
     _pc!.onConnectionState = (RTCPeerConnectionState state) {
@@ -120,18 +125,24 @@ class P2PPeer {
     };
 
     // Set remote description (the host's offer).
-    final desc = RTCSessionDescription(sdpJson, 'offer');
+    // The host sends SDP as JSON-encoded SessionDescription
+    // ({"type":"offer","sdp":"v=0\r\n..."}). Decode it to extract the
+    // raw SDP string that RTCSessionDescription expects.
+    final sdpMap = jsonDecode(sdpJson) as Map<String, dynamic>;
+    final desc = RTCSessionDescription(
+      sdpMap['sdp'] as String,
+      sdpMap['type'] as String? ?? 'offer',
+    );
     await _pc!.setRemoteDescription(desc);
 
     // Create and send answer.
     final answer = await _pc!.createAnswer({});
     await _pc!.setLocalDescription(answer);
 
-    final answerSignal = jsonEncode({
+    sendSignal(jsonEncode({
       'type': 'rtc_answer',
       'sdp': jsonEncode({'sdp': answer.sdp, 'type': answer.type}),
-    });
-    signalingSocket.sink.add(answerSignal);
+    }));
   }
 
   /// Adds a remote ICE candidate received from the host.
@@ -161,14 +172,19 @@ class P2PPeer {
     };
 
     dc.onMessage = (RTCDataChannelMessage message) {
-      onMessage?.call(message.binary ?? utf8.encode(message.text));
+      if (message.isBinary) {
+        onMessage?.call(message.binary);
+      } else {
+        onMessage?.call(utf8.encode(message.text));
+      }
     };
   }
 
   /// Sends data over the DataChannel.
   Future<void> send(List<int> data) async {
     if (_dc == null || !_connected) return;
-    await _dc!.send(RTCDataChannelMessage.fromBinary(data));
+    final bytes = data is Uint8List ? data : Uint8List.fromList(data);
+    await _dc!.send(RTCDataChannelMessage.fromBinary(bytes));
   }
 
   void _handleDisconnect() {

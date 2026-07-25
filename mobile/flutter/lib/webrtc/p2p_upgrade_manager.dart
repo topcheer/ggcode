@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 
@@ -28,12 +27,15 @@ class P2PUpgradeManager {
 
   bool get isP2PActive => _p2pActive;
 
-  /// Handles an incoming RTC signaling message from the relay WebSocket.
+  /// Handles an incoming RTC signaling message from the relay.
   /// Returns true if the message was handled (it's an RTC signal).
+  ///
+  /// [sendSignal] delivers outbound signaling (rtc_answer, rtc_candidate)
+  /// back to the host via the relay WebSocket (encrypted by ConnectionService).
   Future<bool> handleSignal(
     String type,
     Map<String, dynamic>? data,
-    dynamic signalingSink,
+    void Function(String signalJson) sendSignal,
   ) async {
     if (_disposed) return false;
 
@@ -63,7 +65,7 @@ class P2PUpgradeManager {
           },
         );
 
-        await _peer!.handleOffer(sdp, _SignalingSink(signalingSink));
+        await _peer!.handleOffer(sdp, sendSignal);
         return true;
 
       case 'rtc_candidate':
@@ -107,46 +109,5 @@ class P2PUpgradeManager {
     _p2pActive = false;
     await _peer?.dispose();
     _peer = null;
-  }
-}
-
-/// Adapts a raw WebSocket sink into a type usable by P2PPeer for signaling.
-class _SignalingSink implements WebSocketChannel {
-  final dynamic _sink;
-
-  _SignalingSink(this._sink);
-
-  @override
-  dynamic noSuchMethod(Invocation invocation) {
-    if (invocation.memberName == #sink) return _sink;
-    return super.noSuchMethod(invocation);
-  }
-
-  @override
-  Stream get stream => throw UnimplementedError();
-
-  @override
-  WebSocketSink get sink {
-    if (_sink is WebSocketSink) return _sink as WebSocketSink;
-    throw StateError('signaling sink is not a WebSocketSink');
-  }
-
-  @override
-  String? get closeReason => null;
-
-  @override
-  int? get closeCode => null;
-
-  @override
-  bool get closeCodeIsError => false;
-
-  @override
-  Future<void> get ready => Future.value();
-
-  @override
-  Future<void> close([int? closeCode, String? closeReason]) async {
-    if (_sink != null) {
-      // Don't close the actual WebSocket — it's managed by ConnectionService.
-    }
   }
 }

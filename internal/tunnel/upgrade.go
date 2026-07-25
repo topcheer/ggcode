@@ -64,12 +64,14 @@ func DefaultUpgradeConfig() UpgradeConfig {
 // Returns:
 //   - transport: the DataChannel transport (implements tunnel.Transport)
 //   - readyCh: closed when the DataChannel becomes ready for use
-//   - startNegotiation: begins SDP/ICE exchange using the given signal channel
+//   - startNegotiation: begins SDP/ICE exchange. sendSignal delivers outbound
+//     signals (offer, local ICE candidates) to the peer via the relay.
+//     recv delivers inbound signals (answer, remote ICE candidates) from the peer.
 //   - cleanup: function to call when the P2P connection is torn down
 type PeerFactory func() (
 	transport Transport,
 	readyCh <-chan struct{},
-	startNegotiation func(signalCh chan SignalMessage) error,
+	startNegotiation func(sendSignal func(SignalMessage), recv <-chan SignalMessage) error,
 	cleanup func(),
 	err error,
 )
@@ -192,6 +194,13 @@ func (m *UpgradeManager) runUpgrade() {
 		})
 	})
 
+	// Wire incoming DataChannel messages: route to broker's command handler,
+	// same as relay session messages. RTC signals from mobile (rtc_answer,
+	// rtc_candidate) are intercepted by the broker's OnCommand wrapper.
+	p2pTransport.OnMessage(func(data []byte) {
+		m.broker.HandleP2PMessage(data)
+	})
+
 	// Wait for DataChannel ready in a background goroutine.
 	safego.Go("tunnel.upgrade.waitReady", func() {
 		select {
@@ -205,7 +214,15 @@ func (m *UpgradeManager) runUpgrade() {
 	})
 
 	// Start the negotiation (creates SDP offer/answer, begins ICE gathering).
-	if err := startNeg(m.signalCh); err != nil {
+	// Outbound signals are routed through the broker to the relay.
+	// Inbound signals arrive on m.signalCh from HandleSignalMessage.
+	sendSignal := func(signal SignalMessage) {
+		if err := m.broker.SendSignal(signal); err != nil {
+			debug.Log("tunnel", "upgrade: send signal error: %v", err)
+		}
+	}
+	recvCh := (<-chan SignalMessage)(m.signalCh)
+	if err := startNeg(sendSignal, recvCh); err != nil {
 		debug.Log("tunnel", "upgrade: negotiation start error: %v", err)
 		m.setState(UpgradeFailed)
 		return

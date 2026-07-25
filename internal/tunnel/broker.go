@@ -274,6 +274,36 @@ func (b *Broker) HasP2PTransport() bool {
 	return b.p2pTransport != nil
 }
 
+// HandleP2PMessage processes a raw message received over the P2P DataChannel.
+// The DataChannel carries unencrypted GatewayMessage JSON (DTLS provides
+// transport encryption). This parses and routes it through the same
+// onCommand handler as relay messages.
+func (b *Broker) HandleP2PMessage(data []byte) {
+	var msg GatewayMessage
+	if err := json.Unmarshal(data, &msg); err != nil {
+		debug.Log("tunnel", "broker: p2p unmarshal error: %v", err)
+		return
+	}
+	b.callbackMu.RLock()
+	fn := b.onCommand
+	b.callbackMu.RUnlock()
+	if fn != nil {
+		fn(msg)
+	}
+}
+
+// SendSignal encodes a WebRTC SignalMessage and enqueues it for
+// transmission over the relay WebSocket to the peer (mobile client).
+// Used by the upgrade manager to send SDP offers and ICE candidates.
+func (b *Broker) SendSignal(signal SignalMessage) error {
+	gm, err := EncodeSignalMessage(signal)
+	if err != nil {
+		return err
+	}
+	b.enqueueOut(gm)
+	return nil
+}
+
 // textFlushLoop periodically flushes accumulated text buffers to the sendQueue.
 func (b *Broker) textFlushLoop() {
 	for {
