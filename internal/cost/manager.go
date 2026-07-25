@@ -8,6 +8,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // Manager tracks cost across all sessions.
@@ -81,6 +83,12 @@ func (m *Manager) TotalCost() float64 {
 
 // Save persists session cost data to disk.
 func (m *Manager) Save(sessionID string) error {
+	// Sanitize sessionID to prevent path traversal.
+	cleanID := filepath.Base(sessionID)
+	if cleanID != sessionID || cleanID == "." || cleanID == ".." {
+		return fmt.Errorf("invalid session ID: %q", sessionID)
+	}
+
 	m.mu.RLock()
 	t, ok := m.trackers[sessionID]
 	m.mu.RUnlock()
@@ -88,7 +96,7 @@ func (m *Manager) Save(sessionID string) error {
 		return nil
 	}
 
-	if err := os.MkdirAll(m.dataDir, 0755); err != nil {
+	if err := os.MkdirAll(m.dataDir, 0700); err != nil {
 		return err
 	}
 
@@ -98,12 +106,8 @@ func (m *Manager) Save(sessionID string) error {
 		return err
 	}
 
-	path := filepath.Join(m.dataDir, sessionID+".cost.json")
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	path := filepath.Join(m.dataDir, cleanID+".cost.json")
+	return util.AtomicWriteFile(path, data, 0600)
 }
 
 // Load restores session cost data from disk.
