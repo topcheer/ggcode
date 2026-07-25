@@ -1102,8 +1102,6 @@ class ConnectionService {
     try {
       final json = utf8.decode(bytes);
       final msg = proto.WsMessage.fromJson(json);
-      // Ignore keepalive pings — they only keep the DataChannel alive.
-      if (msg.type == 'ping') return;
       _messageController.add(msg);
     } catch (e) {
       debugPrint('[p2p] failed to parse DataChannel message: $e');
