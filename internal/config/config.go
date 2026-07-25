@@ -267,6 +267,7 @@ type Config struct {
 	Stream         stream.StreamConfig        `yaml:"stream,omitempty" json:"stream,omitempty"`
 	LSPServers     map[string]LSPServerConfig `yaml:"lsp_servers,omitempty" json:"lsp_servers,omitempty"`
 	ProbeContext   bool                       `yaml:"probe_context,omitempty" json:"probe_context,omitempty"`
+	P2P            P2PConfig                  `yaml:"p2p,omitempty" json:"p2p,omitempty"`
 	FilePath       string                     `yaml:"-" json:"-"`
 	FirstRun       bool                       `yaml:"-" json:"-"`
 	instanceDir    string                     `yaml:"-" json:"-"` // ~/.ggcode/instances/{sha256}/
@@ -391,6 +392,13 @@ type A2AConfig struct {
 	TaskTimeout string        `yaml:"task_timeout"`         // per-task timeout (default "5m")
 	Interfaces  []string      `yaml:"interfaces,omitempty"` // mDNS advertise interfaces (default: auto-detect default route)
 	Auth        A2AAuthConfig `yaml:"auth,omitempty"`
+}
+
+// P2PConfig controls WebRTC P2P direct connection between host and mobile.
+// When enabled, the tunnel attempts to upgrade from relay-mediated WebSocket
+// to a direct P2P DataChannel, reducing relay bandwidth by ~70%.
+type P2PConfig struct {
+	Enabled bool `yaml:"enabled" json:"enabled"` // opt-in, default false
 }
 
 // HasAuth returns true if at least one authentication mechanism is configured.

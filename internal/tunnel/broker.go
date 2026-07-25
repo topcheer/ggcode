@@ -92,6 +92,11 @@ type Broker struct {
 	projectionCond    *sync.Cond
 	projectionSyncing bool
 
+	// P2P transport upgrade. When set, messages are sent over the WebRTC
+	// DataChannel instead of the relay WebSocket. Cleared on P2P disconnect.
+	p2pTransportMu sync.RWMutex
+	p2pTransport   Transport
+
 	clientReplayMu         sync.Mutex
 	clientReplayInFlight   bool
 	activeClientReplay     *pendingClientReplay
@@ -209,6 +214,11 @@ func (b *Broker) senderLoop() {
 		b.outMu.Unlock()
 
 		for _, msg := range batch {
+			// Prefer P2P transport if active, fall back to relay session.
+			if b.sendViaTransport(msg) {
+				b.signalSent(msg.EventID)
+				continue
+			}
 			if b.session != nil {
 				if err := b.session.Send(msg); err != nil {
 					debug.Log("tunnel", "broker: send %s event=%s failed: %v", msg.Type, msg.EventID, err)
@@ -217,6 +227,51 @@ func (b *Broker) senderLoop() {
 			b.signalSent(msg.EventID)
 		}
 	}
+}
+
+// sendViaTransport attempts to send a message over the P2P transport.
+// Returns true if the message was handled (sent or definitively failed).
+// Returns false if no P2P transport is active (caller should use relay).
+func (b *Broker) sendViaTransport(msg GatewayMessage) bool {
+	b.p2pTransportMu.RLock()
+	t := b.p2pTransport
+	b.p2pTransportMu.RUnlock()
+	if t == nil {
+		return false
+	}
+	data, err := json.Marshal(msg)
+	if err != nil {
+		debug.Log("tunnel", "broker: marshal for p2p: %v", err)
+		return true // don't fall back to relay for marshal errors
+	}
+	if err := t.Send(data); err != nil {
+		debug.Log("tunnel", "broker: p2p send %s event=%s failed: %v", msg.Type, msg.EventID, err)
+	}
+	return true
+}
+
+// SetP2PTransport upgrades the broker to send over a P2P DataChannel.
+// Pass nil to revert to the relay session.
+func (b *Broker) SetP2PTransport(t Transport) {
+	b.p2pTransportMu.Lock()
+	old := b.p2pTransport
+	b.p2pTransport = t
+	b.p2pTransportMu.Unlock()
+	if old != nil && old != t {
+		_ = old.Close()
+	}
+	if t != nil {
+		debug.Log("tunnel", "broker: upgraded to P2P transport")
+	} else if old != nil {
+		debug.Log("tunnel", "broker: reverted to relay transport")
+	}
+}
+
+// HasP2PTransport returns whether a P2P transport is currently active.
+func (b *Broker) HasP2PTransport() bool {
+	b.p2pTransportMu.RLock()
+	defer b.p2pTransportMu.RUnlock()
+	return b.p2pTransport != nil
 }
 
 // textFlushLoop periodically flushes accumulated text buffers to the sendQueue.

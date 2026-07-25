@@ -60,6 +60,13 @@ const (
 	EventSharingStopped        = "sharing_stopped"
 	EventRelayAck              = "relay_ack"  // Relay → Client: relay received the message
 	EventServerAck             = "server_ack" // Server → Client: desktop processed the message
+
+	// WebRTC P2P signaling types (bidirectional, exchanged over relay).
+	EventRTCOffer     = "rtc_offer"     // Host → Mobile: WebRTC SDP offer
+	EventRTCAnswer    = "rtc_answer"    // Mobile → Host: WebRTC SDP answer
+	EventRTCCandidate = "rtc_candidate" // Bidirectional: trickle ICE candidate
+	EventRTCConnected = "rtc_connected" // Bidirectional: P2P DataChannel established
+	EventRTCFailed    = "rtc_failed"    // Bidirectional: P2P negotiation failed
 )
 
 const ActiveSessionModeReplaceHistory = "replace_history"
@@ -374,4 +381,25 @@ type SubagentCompleteData struct {
 	Name    string `json:"name"`
 	Summary string `json:"summary"` // one-line summary of what was done
 	Success bool   `json:"success"`
+}
+
+// ─── WebRTC P2P signaling data ───
+
+// RTCOfferData carries the WebRTC SDP offer from host to mobile.
+type RTCOfferData struct {
+	SDP  string `json:"sdp"`
+	Type string `json:"type"` // always "offer"
+}
+
+// RTCAnswerData carries the WebRTC SDP answer from mobile to host.
+type RTCAnswerData struct {
+	SDP  string `json:"sdp"`
+	Type string `json:"type"` // always "answer"
+}
+
+// RTCCandidateData carries a trickle ICE candidate.
+type RTCCandidateData struct {
+	Candidate     string  `json:"candidate"`
+	SDPMid        string  `json:"sdp_mid,omitempty"`
+	SDPMLineIndex *uint16 `json:"sdp_mline_index,omitempty"`
 }

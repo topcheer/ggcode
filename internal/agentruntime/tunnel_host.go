@@ -40,6 +40,14 @@ type TunnelHost struct {
 
 	// Active share session reference (set by StartShare, cleared by StopShare).
 	activeShare *tunnelSessionRef
+
+	// P2P upgrade manager (nil if P2P disabled or not started).
+	upgradeMgr *tunnel.UpgradeManager
+
+	// p2pFactory creates WebRTC peers. Injected from the webrtc package.
+	// Nil when P2P is disabled.
+	p2pFactory tunnel.PeerFactory
+	p2pConfig  tunnel.UpgradeConfig
 }
 
 // NewTunnelHost creates a new TunnelHost with an offline projection broker.
@@ -49,7 +57,53 @@ func NewTunnelHost() *TunnelHost {
 	}
 }
 
-// BindSession binds the tunnel host to a session for event recording.
+// SetP2PEnabled configures whether the tunnel host should attempt P2P
+// upgrades. Must be called before StartShare. The factory is injected
+// from the webrtc package to avoid a circular dependency.
+func (h *TunnelHost) SetP2PEnabled(factory tunnel.PeerFactory, cfg tunnel.UpgradeConfig) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.p2pFactory = factory
+	h.p2pConfig = cfg
+}
+
+// handleRTCSignal routes incoming WebRTC signaling messages from the relay
+// to the P2P upgrade manager.
+func (h *TunnelHost) handleRTCSignal(cmd tunnel.GatewayMessage) {
+	h.mu.Lock()
+	mgr := h.upgradeMgr
+	h.mu.Unlock()
+	if mgr == nil {
+		return
+	}
+	signal, ok := tunnel.DecodeSignalMessage(cmd)
+	if !ok {
+		return
+	}
+	mgr.HandleSignalMessage(signal)
+}
+
+// IsP2PActive returns whether a P2P DataChannel is currently in use
+// for the active share.
+func (h *TunnelHost) IsP2PActive() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.onlineBroker == nil {
+		return false
+	}
+	return h.onlineBroker.HasP2PTransport()
+}
+
+// P2PUpgradeState returns the current P2P upgrade state.
+func (h *TunnelHost) P2PUpgradeState() tunnel.UpgradeState {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.upgradeMgr == nil {
+		return tunnel.UpgradeIdle
+	}
+	return h.upgradeMgr.State()
+}
+
 // Call this when the session changes or is first created.
 // Returns the projection broker state with replay events and authority epoch.
 func (h *TunnelHost) BindSession(ses *session.Session, store session.Store) ProjectionBrokerState {
@@ -163,9 +217,17 @@ func (h *TunnelHost) StartShare(cfg ShareConfig) (*ShareResult, error) {
 	// 2. Create broker
 	broker := tunnel.NewBroker(sess)
 
-	// 3. Wire frontend callbacks onto broker
+	// 3. Wire frontend callbacks onto broker, intercepting RTC signaling.
 	if cfg.OnCommand != nil {
-		broker.OnCommand(cfg.OnCommand)
+		userHandler := cfg.OnCommand
+		broker.OnCommand(func(cmd tunnel.GatewayMessage) {
+			// Intercept RTC signaling messages before forwarding to the frontend.
+			if tunnel.IsRTCSignalMessage(cmd) {
+				h.handleRTCSignal(cmd)
+				return
+			}
+			userHandler(cmd)
+		})
 	}
 	if cfg.OnConnected != nil {
 		broker.OnRelayConnected(cfg.OnConnected)
@@ -193,7 +255,15 @@ func (h *TunnelHost) StartShare(cfg ShareConfig) (*ShareResult, error) {
 	// 7. Store ref for cleanup
 	h.mu.Lock()
 	h.activeShare = &tunnelSessionRef{session: sess, broker: broker}
-	h.mu.Unlock()
+
+	// 8. Start P2P upgrade if enabled.
+	if h.p2pFactory != nil && h.p2pConfig.Enabled {
+		h.upgradeMgr = tunnel.NewUpgradeManager(broker, h.p2pFactory, h.p2pConfig)
+		h.mu.Unlock()
+		h.upgradeMgr.Start()
+	} else {
+		h.mu.Unlock()
+	}
 
 	return &ShareResult{
 		ConnectURL: info.ConnectURL,
@@ -211,7 +281,13 @@ func (h *TunnelHost) StopShare() {
 	h.mu.Lock()
 	ref := h.activeShare
 	h.activeShare = nil
+	mgr := h.upgradeMgr
+	h.upgradeMgr = nil
 	h.mu.Unlock()
+
+	if mgr != nil {
+		mgr.Stop()
+	}
 
 	h.DetachOnlineBroker()
 

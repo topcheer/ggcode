@@ -117,6 +117,22 @@ require (
 	github.com/oklog/run v1.1.0 // indirect
 	github.com/otiai10/gosseract/v2 v2.4.1 // indirect
 	github.com/petermattis/goid v0.0.0-20260330135022-df67b199bc81 // indirect
+	github.com/pion/datachannel v1.6.2 // indirect
+	github.com/pion/dtls/v3 v3.1.5 // indirect
+	github.com/pion/ice/v4 v4.3.0 // indirect
+	github.com/pion/interceptor v0.1.45 // indirect
+	github.com/pion/logging v0.2.4 // indirect
+	github.com/pion/mdns/v2 v2.1.0 // indirect
+	github.com/pion/randutil v0.1.0 // indirect
+	github.com/pion/rtcp v1.2.17 // indirect
+	github.com/pion/rtp v1.10.4 // indirect
+	github.com/pion/sctp v1.11.0 // indirect
+	github.com/pion/sdp/v3 v3.0.19 // indirect
+	github.com/pion/srtp/v3 v3.0.12 // indirect
+	github.com/pion/stun/v3 v3.1.6 // indirect
+	github.com/pion/transport/v4 v4.0.2 // indirect
+	github.com/pion/turn/v5 v5.0.12 // indirect
+	github.com/pion/webrtc/v4 v4.2.17 // indirect
 	github.com/puzpuzpuz/xsync/v3 v3.5.1 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
@@ -129,6 +145,7 @@ require (
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasthttp v1.59.0 // indirect
 	github.com/vektah/gqlparser/v2 v2.5.27 // indirect
+	github.com/wlynxg/anet v0.0.5 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	github.com/yuin/goldmark-emoji v1.0.6 // indirect
 	go.mau.fi/libsignal v0.2.1 // indirect
@@ -140,6 +157,7 @@ require (
 	golang.org/x/exp v0.0.0-20260410095643-746e56fc9e2f // indirect
 	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/text v0.36.0 // indirect
+	golang.org/x/time v0.14.0 // indirect
 	golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260226221140-a57be14db171 // indirect
 	gopkg.in/check.v1 v1.0.0-20200227125254-8fa46927fb4f // indirect
