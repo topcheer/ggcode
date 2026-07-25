@@ -1,10 +1,8 @@
 package webrtc
 
 import (
-	"context"
 	"fmt"
 	"sync"
-	"time"
 
 	"github.com/pion/webrtc/v4"
 
@@ -261,18 +259,6 @@ func (p *Peer) IsReady() bool {
 	return p.dcReady
 }
 
-// WaitForReady blocks until the DataChannel opens or the timeout elapses.
-func (p *Peer) WaitForReady(timeout time.Duration) bool {
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-	select {
-	case <-p.dcReadyCh:
-		return true
-	case <-timer.C:
-		return false
-	}
-}
-
 // Close terminates the PeerConnection and DataChannel.
 func (p *Peer) Close() error {
 	p.closeOnce.Do(func() {
@@ -302,31 +288,4 @@ func (p *Peer) handleDisconnect() {
 	if fn != nil {
 		safego.Go("webrtc.disconnect", fn)
 	}
-}
-
-// KeepICEWarm starts a background goroutine that keeps the ICE connection
-// alive by periodically sending a small ping over the DataChannel.
-// This prevents NAT timeout from silently killing the P2P connection.
-func (p *Peer) KeepICEWarm(ctx context.Context, interval time.Duration) {
-	safego.Go("webrtc.iceKeepalive", func() {
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				p.mu.Lock()
-				ready := p.dcReady
-				p.mu.Unlock()
-				if !ready {
-					continue
-				}
-				// SCTP keepalive is handled internally by pion, but we
-				// also send an application-level ping to detect dead
-				// connections faster than the OS TCP timeout.
-				_ = p.Send([]byte(`{"type":"rtc_ping"}`))
-			}
-		}
-	})
 }

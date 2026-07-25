@@ -1,9 +1,7 @@
 package webrtc
 
 import (
-	"encoding/json"
 	"fmt"
-	"sync"
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/safego"
@@ -16,7 +14,7 @@ func HostPeerFactory() tunnel.PeerFactory {
 	return func() (
 		transport tunnel.Transport,
 		readyCh <-chan struct{},
-		startNegotiation func(signalCh chan tunnel.SignalMessage) error,
+		startNegotiation func(sendSignal func(tunnel.SignalMessage), recv <-chan tunnel.SignalMessage) error,
 		cleanup func(),
 		err error,
 	) {
@@ -28,14 +26,13 @@ func HostPeerFactory() tunnel.PeerFactory {
 		dc := NewDataChannelTransport(peer)
 
 		// readyCh is closed when the DataChannel opens.
-		// Peer.dcReadyCh is already a chan struct{} — we expose it read-only.
 		ready := make(chan struct{})
 		peer.OnDCOpen(func() {
 			close(ready)
 		})
 
-		startNeg := func(signalCh chan tunnel.SignalMessage) error {
-			return runHostNegotiation(peer, signalCh)
+		startNeg := func(sendSignal func(tunnel.SignalMessage), recv <-chan tunnel.SignalMessage) error {
+			return runHostNegotiation(peer, sendSignal, recv)
 		}
 
 		cleanupFn := func() {
@@ -46,21 +43,16 @@ func HostPeerFactory() tunnel.PeerFactory {
 	}
 }
 
-// runHostNegotiation creates an SDP offer, sends it via signalCh,
-// and processes incoming answers and ICE candidates.
-func runHostNegotiation(peer *Peer, signalCh chan tunnel.SignalMessage) error {
-	var once sync.Once
-
-	// Wire ICE candidate forwarding.
+// runHostNegotiation creates an SDP offer, sends it via sendSignal (which
+// routes through the broker to the relay), and processes incoming answers
+// and ICE candidates from recv (which come from the mobile via the relay).
+func runHostNegotiation(peer *Peer, sendSignal func(tunnel.SignalMessage), recv <-chan tunnel.SignalMessage) error {
+	// Wire local ICE candidate forwarding via the relay.
 	peer.OnICECandidate(func(candidateStr string) {
-		sig := tunnel.SignalMessage{
+		sendSignal(tunnel.SignalMessage{
 			Type:      "rtc_candidate",
 			Candidate: candidateStr,
-		}
-		select {
-		case signalCh <- sig:
-		default:
-		}
+		})
 	})
 
 	// Create offer.
@@ -69,21 +61,13 @@ func runHostNegotiation(peer *Peer, signalCh chan tunnel.SignalMessage) error {
 		return fmt.Errorf("create offer: %w", err)
 	}
 
-	// Send offer.
-	select {
-	case signalCh <- tunnel.SignalMessage{Type: "rtc_offer", SDP: offerSDP}:
-		debug.Log("webrtc", "host: sent SDP offer")
-	default:
-		return fmt.Errorf("signal channel full when sending offer")
-	}
+	// Send offer via relay to the mobile client.
+	sendSignal(tunnel.SignalMessage{Type: "rtc_offer", SDP: offerSDP})
+	debug.Log("webrtc", "host: sent SDP offer via relay")
 
-	// Wait for answer and ICE candidates from mobile.
-	// This runs in a background goroutine started by the upgrade manager.
-	once.Do(func() {}) // placeholder for future cleanup
-
-	// Process incoming signaling messages until DC opens or fails.
+	// Process incoming signaling messages from mobile until DC opens or fails.
 	safego.Go("webrtc.host.signalProcessor", func() {
-		for sig := range signalCh {
+		for sig := range recv {
 			switch sig.Type {
 			case "rtc_answer":
 				if err := peer.SetRemoteAnswer(sig.SDP); err != nil {
@@ -100,17 +84,4 @@ func runHostNegotiation(peer *Peer, signalCh chan tunnel.SignalMessage) error {
 	})
 
 	return nil
-}
-
-// SerializeSignalMessage converts a tunnel.SignalMessage to JSON bytes
-// for transmission over the relay WebSocket.
-func SerializeSignalMessage(sig tunnel.SignalMessage) ([]byte, error) {
-	return json.Marshal(sig)
-}
-
-// DeserializeSignalMessage parses JSON bytes into a tunnel.SignalMessage.
-func DeserializeSignalMessage(data []byte) (tunnel.SignalMessage, error) {
-	var sig tunnel.SignalMessage
-	err := json.Unmarshal(data, &sig)
-	return sig, err
 }
