@@ -230,9 +230,6 @@ func (h *TunnelHost) StartShare(cfg ShareConfig) (*ShareResult, error) {
 			userHandler(cmd)
 		}
 	})
-	if cfg.OnConnected != nil {
-		broker.OnRelayConnected(cfg.OnConnected)
-	}
 	if cfg.SnapshotProvider != nil {
 		broker.SetSnapshotProvider(cfg.SnapshotProvider)
 	}
@@ -253,18 +250,31 @@ func (h *TunnelHost) StartShare(cfg ShareConfig) (*ShareResult, error) {
 	// 6. Run full canonical share bootstrap
 	h.PrepareOnlineShare(broker)
 
-	// 7. Store ref for cleanup
+	// 7. Store ref for cleanup + create P2P upgrade manager.
 	h.mu.Lock()
 	h.activeShare = &tunnelSessionRef{session: sess, broker: broker}
-
-	// 8. Start P2P upgrade if enabled.
 	if h.p2pFactory != nil && h.p2pConfig.Enabled {
 		h.upgradeMgr = tunnel.NewUpgradeManager(broker, h.p2pFactory, h.p2pConfig)
-		h.mu.Unlock()
-		h.upgradeMgr.Start()
-	} else {
-		h.mu.Unlock()
 	}
+	h.mu.Unlock()
+
+	// 8. Wire OnRelayConnected: trigger P2P upgrade only when a mobile
+	// client actually connects (role == "client"), not at share start.
+	// Starting the upgrade before the mobile client has joined means the
+	// SDP offer is sent to an empty relay room and silently discarded.
+	onConnected := cfg.OnConnected
+	p2pMgr := h.upgradeMgr
+	broker.OnRelayConnected(func(info tunnel.RelayConnectedState) {
+		if onConnected != nil {
+			onConnected(info)
+		}
+		if info.Role == "client" && p2pMgr != nil {
+			// Use Restart instead of Start so that if the mobile reconnected
+			// (dropping the previous SDP offer), a fresh offer is sent. Start()
+			// would skip because state is already UpgradeNegotiating.
+			p2pMgr.Restart()
+		}
+	})
 
 	return &ShareResult{
 		ConnectURL: info.ConnectURL,

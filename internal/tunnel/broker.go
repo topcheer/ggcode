@@ -97,6 +97,13 @@ type Broker struct {
 	p2pTransportMu sync.RWMutex
 	p2pTransport   Transport
 
+	// Cached projection hash of canonical events. Updated lazily in
+	// relayRecoveryPlan / trustRelayHistory (which already call the replay
+	// provider). activeSessionBarrier reads this cache instead of calling
+	// the replay provider directly, avoiding potential blocking.
+	projectionHashCacheMu sync.RWMutex
+	projectionHashCache   string
+
 	clientReplayMu         sync.Mutex
 	clientReplayInFlight   bool
 	activeClientReplay     *pendingClientReplay
@@ -688,7 +695,14 @@ func (b *Broker) activeSessionBarrier() (string, int64, string) {
 	if ordinal > 0 {
 		eventID = fmt.Sprintf("ev-%09d", ordinal)
 	}
-	return eventID, ordinal, ""
+	// Return cached projection hash. The cache is updated by
+	// relayRecoveryPlan / trustRelayHistory during client/server
+	// reconnection handling. This avoids calling the replay provider
+	// (which may block) from this code path.
+	b.projectionHashCacheMu.RLock()
+	hash := b.projectionHashCache
+	b.projectionHashCacheMu.RUnlock()
+	return eventID, ordinal, hash
 }
 
 func (b *Broker) sendActiveSession(sessionID string) {
@@ -1050,11 +1064,38 @@ func (b *Broker) trustRelayHistory(info RelayConnectedState, currentSessionID st
 
 func (b *Broker) relayRecoveryPlan(info RelayConnectedState, currentSessionID string) (relayRecoveryPlan, []GatewayMessage) {
 	events, available := b.canonicalReplayState()
+	// Cache the projection hash for activeSessionBarrier to use without
+	// calling the replay provider (which may block).
+	if available && len(events) > 0 {
+		h := ProjectionHash(events)
+		b.projectionHashCacheMu.Lock()
+		b.projectionHashCache = h
+		b.projectionHashCacheMu.Unlock()
+	}
 	if !available {
 		return relayRecoveryPlan{reset: info.HistoryCount > 0}, nil
 	}
 	currentAuthority := b.AuthorityEpoch()
 	if info.AuthorityEpoch == 0 || info.AuthorityEpoch != currentAuthority {
+		// Authority epoch mismatch: the relay may have lost epoch metadata
+		// (e.g. after relay restart) but still has the events. If the session
+		// ID and projection hash match, we can trust the relay's history
+		// without a full reset replay.
+		if info.SessionID == currentSessionID &&
+			info.HistoryCount > 0 && info.HistoryCount <= len(events) &&
+			strings.TrimSpace(info.ProjectionHash) != "" &&
+			strings.TrimSpace(info.LastEventID) != "" {
+			prefixHash := ProjectionHashPrefix(events, info.HistoryCount)
+			lastEventID := events[info.HistoryCount-1].EventID
+			if prefixHash == strings.TrimSpace(info.ProjectionHash) &&
+				lastEventID == info.LastEventID {
+				debug.Log("tunnel", "broker: authority epoch mismatch but projection hash verified, trusting relay history")
+				if info.HistoryCount == len(events) {
+					return relayRecoveryPlan{trusted: true}, events
+				}
+				return relayRecoveryPlan{replayFrom: info.HistoryCount}, events
+			}
+		}
 		if len(events) == 0 && info.HistoryCount == 0 {
 			return relayRecoveryPlan{trusted: true}, events
 		}
