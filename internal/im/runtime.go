@@ -890,7 +890,7 @@ func (m *Manager) HandlePairingInbound(msg InboundMessage) (PairingResult, error
 	if kind == PairingKindRebind && current != nil && strings.TrimSpace(current.ChannelID) != "" {
 		notice := fmt.Sprintf("⚠ 有新渠道正在请求绑定到当前工作空间。配对码：%s\n如非本人操作请忽略，本人操作请在 ggcode 屏幕确认。", code)
 		go func(b ChannelBinding) {
-			defer func() { recover() }()
+			defer safego.Recover("im.rebindNotice")
 			_ = m.SendDirect(context.Background(), b, OutboundEvent{
 				Kind: OutboundEventText,
 				Text: notice,
