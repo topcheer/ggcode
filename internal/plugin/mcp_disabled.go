@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 var (
@@ -92,8 +93,8 @@ func SetMCPDisabled(name string, disabled bool) {
 		}
 	}
 	data, _ := json.MarshalIndent(names, "", "  ")
-	_ = os.MkdirAll(filepath.Dir(path), 0o755)
-	_ = os.WriteFile(path, data, 0o644)
+	_ = os.MkdirAll(filepath.Dir(path), 0o700)
+	_ = util.AtomicWriteFile(path, data, 0o600)
 
 	mcpDisabledMu.Lock()
 	mcpDisabledCache = disabledSet
