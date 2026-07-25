@@ -461,9 +461,13 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 					// Check for finish reason to emit completed tool calls
 					finishReason := string(choice.FinishReason)
 					if finishReason != "" {
-						debug.Log("openai", "finish_reason=%s tool_calls=%d", finishReason, len(toolCalls))
+						if debug.IsVerbose("openai") {
+							debug.Log("openai", "finish_reason=%s tool_calls=%d", finishReason, len(toolCalls))
+							for _, tc := range toolCalls {
+								debug.Log("openai", "tool_call id=%s name=%s args=%s", tc.ID, tc.Name, string(tc.Arguments))
+							}
+						}
 						for idx, tc := range toolCalls {
-							debug.Log("openai", "tool_call id=%s name=%s args=%s", tc.ID, tc.Name, string(tc.Arguments))
 							outputChars += len(tc.Name) + len(tc.Arguments)
 							emitted = true
 							ch <- StreamEvent{Type: StreamEventToolCallDone, Tool: *tc}

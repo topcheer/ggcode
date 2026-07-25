@@ -471,7 +471,9 @@ func (a *Agent) syncContextManagerUsageHandlerLocked() {
 
 func (a *Agent) syncContextManagerUsage(usage provider.TokenUsage) {
 	if cm, ok := a.contextManager.(usageAwareContextManager); ok {
-		debug.Log("agent", "syncUsage: input=%d output=%d", usage.InputTokens, usage.OutputTokens)
+		if debug.IsVerbose("agent") {
+			debug.Log("agent", "syncUsage: input=%d output=%d", usage.InputTokens, usage.OutputTokens)
+		}
 		cm.RecordUsage(usage)
 	}
 }
@@ -810,8 +812,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		if runStats.ContextWindow == 0 {
 			runStats.ContextWindow = a.contextManager.ContextWindow()
 		}
-		debug.Log("agent", "Iteration %d/%d: contextManager messages=%d tokens=%d threshold=%d usage_ratio=%.3f maxTokens=%d",
-			i+1, a.maxIter, len(msgs), a.contextManager.TokenCount(), a.contextManager.AutoCompactThreshold(), a.contextManager.UsageRatio(), a.contextManager.ContextWindow())
+		if debug.IsVerbose("agent") {
+			debug.Log("agent", "Iteration %d/%d: contextManager messages=%d tokens=%d threshold=%d usage_ratio=%.3f maxTokens=%d",
+				i+1, a.maxIter, len(msgs), a.contextManager.TokenCount(), a.contextManager.AutoCompactThreshold(), a.contextManager.UsageRatio(), a.contextManager.ContextWindow())
+		}
 
 		// Mid-point progress checkpoint: at 60% of max iterations, inject a
 		// one-time progress assessment. This is the lightweight "overseer"
