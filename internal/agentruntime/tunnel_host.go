@@ -218,17 +218,18 @@ func (h *TunnelHost) StartShare(cfg ShareConfig) (*ShareResult, error) {
 	broker := tunnel.NewBroker(sess)
 
 	// 3. Wire frontend callbacks onto broker, intercepting RTC signaling.
-	if cfg.OnCommand != nil {
-		userHandler := cfg.OnCommand
-		broker.OnCommand(func(cmd tunnel.GatewayMessage) {
-			// Intercept RTC signaling messages before forwarding to the frontend.
-			if tunnel.IsRTCSignalMessage(cmd) {
-				h.handleRTCSignal(cmd)
-				return
-			}
+	// RTC signal interception must be set up unconditionally (even when the
+	// frontend provides no OnCommand handler) so that P2P upgrade works.
+	userHandler := cfg.OnCommand
+	broker.OnCommand(func(cmd tunnel.GatewayMessage) {
+		if tunnel.IsRTCSignalMessage(cmd) {
+			h.handleRTCSignal(cmd)
+			return
+		}
+		if userHandler != nil {
 			userHandler(cmd)
-		})
-	}
+		}
+	})
 	if cfg.OnConnected != nil {
 		broker.OnRelayConnected(cfg.OnConnected)
 	}

@@ -49,9 +49,10 @@ type UpgradeConfig struct {
 }
 
 // DefaultUpgradeConfig returns production-ready defaults.
+// P2P is enabled by default; users can opt out via config.
 func DefaultUpgradeConfig() UpgradeConfig {
 	return UpgradeConfig{
-		Enabled:           false, // opt-in until verified
+		Enabled:           true,
 		ICETimeout:        10 * time.Second,
 		KeepAliveInterval: 20 * time.Second,
 		RetryDelay:        30 * time.Second,

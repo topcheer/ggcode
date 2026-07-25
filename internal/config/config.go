@@ -395,10 +395,10 @@ type A2AConfig struct {
 }
 
 // P2PConfig controls WebRTC P2P direct connection between host and mobile.
-// When enabled, the tunnel attempts to upgrade from relay-mediated WebSocket
+// When not disabled, the tunnel attempts to upgrade from relay-mediated WebSocket
 // to a direct P2P DataChannel, reducing relay bandwidth by ~70%.
 type P2PConfig struct {
-	Enabled bool `yaml:"enabled" json:"enabled"` // opt-in, default false
+	Disabled bool `yaml:"disabled,omitempty" json:"disabled,omitempty"` // opt-out, default enabled
 }
 
 // HasAuth returns true if at least one authentication mechanism is configured.

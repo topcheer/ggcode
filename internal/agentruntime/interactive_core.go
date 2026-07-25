@@ -13,9 +13,12 @@ import (
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/plugin"
 	grpcplugin "github.com/topcheer/ggcode/internal/plugin/grpc"
+
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/subagent"
 	"github.com/topcheer/ggcode/internal/tool"
+	"github.com/topcheer/ggcode/internal/tunnel"
+	"github.com/topcheer/ggcode/internal/webrtc"
 )
 
 type InteractiveRuntimeCore struct {
@@ -76,6 +79,12 @@ func BuildInteractiveRuntimeCore(cfg *config.Config, workingDir string, policy p
 		return BuildMCPSkillCommands(mcpMgr.SnapshotMCP())
 	})
 
+	// Build tunnel host with P2P enabled by default.
+	th := NewTunnelHost()
+	upgCfg := tunnel.DefaultUpgradeConfig()
+	upgCfg.Enabled = !cfg.P2P.Disabled
+	th.SetP2PEnabled(webrtc.HostPeerFactory(), upgCfg)
+
 	return &InteractiveRuntimeCore{
 		Registry:       registry,
 		MCPManager:     mcpMgr,
@@ -86,7 +95,7 @@ func BuildInteractiveRuntimeCore(cfg *config.Config, workingDir string, policy p
 		SaveMemoryTool: saveMemoryTool,
 		StartupAssets:  startupAssets,
 		CommandManager: commandMgr,
-		Tunnel:         NewTunnelHost(),
+		Tunnel:         th,
 		configAccess:   cfgAccess,
 	}, nil
 }
