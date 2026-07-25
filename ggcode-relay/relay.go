@@ -482,6 +482,8 @@ func (p *peer) handleClientEncrypted(raw []byte, msg relayMessage) {
 	// user message to feed into the agent loop. Skipping this breaks
 	// mobile→agent delivery after relay restarts or history hydration.
 	if srv != nil {
+		log.Printf("[relay] client_to_server: room=%s type=%s eventID=%s server_online=%t",
+			p.room.token, msg.Type, msg.EventID, srv != nil)
 		srv.sendRaw(raw)
 		if p.hub.stats != nil {
 			p.hub.stats.recordForwardToServer()
@@ -573,6 +575,12 @@ func (p *peer) handleServerBroadcast(_ []byte, msg relayMessage) {
 		})
 	}
 	p.room.mu.Unlock()
+
+	// Log P2P signal routing for debugging SDP offer/answer/candidate delivery
+	if msg.Type == "encrypted" {
+		log.Printf("[relay] server_broadcast: room=%s type=%s transient=%t clients=%d ready_clients=%d",
+			p.room.token, msg.Type, isTransient, len(clients), countReady(clients))
+	}
 	for _, client := range clients {
 		client.sendRaw(wire)
 	}
@@ -1733,4 +1741,14 @@ func main() {
 			log.Fatal(err)
 		}
 	}
+}
+
+func countReady(clients []*peer) int {
+	n := 0
+	for _, c := range clients {
+		if c.ready {
+			n++
+		}
+	}
+	return n
 }
