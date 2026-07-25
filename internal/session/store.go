@@ -841,6 +841,19 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 		}
 	}
 
+	// Diagnostic summary: log the final ContextMessages state so that
+	// context-loss issues can be diagnosed via debug_log without needing
+	// to reproduce the problem. This single line captures:
+	//   - session ID and message counts (context vs total)
+	//   - whether a checkpoint was used and its key IDs
+	//   - token baseline from the checkpoint
+	cpInfo := "no-checkpoint"
+	if lastCpSummaryMsgID != "" {
+		cpInfo = fmt.Sprintf("checkpoint summary=%s last_msg=%s tokens=%d", lastCpSummaryMsgID, lastCpLastMsgID, lastCpTokens)
+	}
+	debug.Log("session", "loadSession %s: ContextMessages=%d (total=%d) [%s]",
+		id, len(ses.ContextMessages), len(ses.Messages), cpInfo)
+
 	// Backfill missing IDs for ContextMessages and persist to JSONL.
 	// This ensures checkpoint restore can find messages by ID even for
 	// sessions that were created before the msgID feature.
