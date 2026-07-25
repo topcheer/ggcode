@@ -94,8 +94,12 @@ type Broker struct {
 
 	// P2P transport upgrade. When set, messages are sent over the WebRTC
 	// DataChannel instead of the relay WebSocket. Cleared on P2P disconnect.
-	p2pTransportMu sync.RWMutex
-	p2pTransport   Transport
+	p2pTransportMu    sync.RWMutex
+	p2pTransport      Transport
+	p2pNegotiating    atomic.Bool  // true while P2P negotiation is in progress
+	relayHistoryCount atomic.Int32 // relay event count at last OnRelayConnected
+	relayLastEventMu  sync.RWMutex
+	relayLastEventID  string // relay last event ID at last OnRelayConnected
 
 	// Cached projection hash of canonical events. Updated lazily in
 	// relayRecoveryPlan / trustRelayHistory (which already call the replay
@@ -252,10 +256,10 @@ func (b *Broker) sendViaTransport(msg GatewayMessage) bool {
 		return true // don't fall back to relay for marshal errors
 	}
 	if err := t.Send(data); err != nil {
-		debug.Log("tunnel", "broker: p2p send %s event=%s failed: %v", msg.Type, msg.EventID, err)
-	} else {
-		debug.Log("tunnel", "broker: p2p send %s event=%s ok", msg.Type, msg.EventID)
+		debug.Log("tunnel", "broker: p2p send %s event=%s failed, falling back to relay: %v", msg.Type, msg.EventID, err)
+		return false // fall back to relay — never drop messages
 	}
+	debug.Log("tunnel", "broker: p2p send %s event=%s ok", msg.Type, msg.EventID)
 	return true
 }
 
@@ -277,10 +281,98 @@ func (b *Broker) SetP2PTransport(t Transport) {
 }
 
 // HasP2PTransport returns whether a P2P transport is currently active.
+// p2pUpgradePending returns true if a P2P negotiation is in progress
+// or active. Used to defer relay recovery replay until P2P resolves.
+func (b *Broker) p2pUpgradePending() bool {
+	return b.p2pNegotiating.Load() || b.HasP2PTransport()
+}
+
+// SetP2PNegotiating marks that a P2P negotiation is about to start.
+// Called before Restart() so that subsequent handleRelayConnected calls
+// in the same connect event see P2P as pending and skip recovery replay.
+func (b *Broker) SetP2PNegotiating(v bool) {
+	b.p2pNegotiating.Store(v)
+}
+
 func (b *Broker) HasP2PTransport() bool {
 	b.p2pTransportMu.RLock()
 	defer b.p2pTransportMu.RUnlock()
 	return b.p2pTransport != nil
+}
+
+// TriggerReplayNow sends all projection events to relay when P2P fails.
+// The projection store is capped at ProjectionReplayLimit (1000), so we can't
+// use relayHistoryCount as an array index (it may exceed the cap). Instead,
+// replay ALL projection events — mobile deduplicates by EventID.
+func (b *Broker) TriggerReplayNow() {
+	events := b.canonicalReplayEvents()
+	if len(events) == 0 {
+		debug.Log("tunnel", "broker: triggerReplayNow: no projection events")
+		return
+	}
+	// Clear P2P negotiating flag so future relay events run normal recovery.
+	b.SetP2PNegotiating(false)
+	debug.Log("tunnel", "broker: triggerReplayNow: replaying %d projection events to relay (mobile dedupes by EventID)", len(events))
+	if replayed := b.replayCanonicalEvents(false, events); replayed {
+		b.enqueueControl(EventReplayDone, nil)
+		b.markRelayReady()
+	}
+}
+
+func (b *Broker) canonicalReplayEvents() []GatewayMessage {
+	b.snapshotMu.RLock()
+	provider := b.replayProvider
+	b.snapshotMu.RUnlock()
+	if provider == nil {
+		return nil
+	}
+	return provider()
+}
+
+// SyncP2PReplay sends projection events that mobile may have missed during
+// P2P negotiation. Called after P2P DataChannel opens. Uses relayLastEventID
+// (stored at connect time) to find the suffix in the projection store.
+// If the last event ID isn't found (e.g., projection store capped), sends
+// all events — mobile deduplicates by EventID.
+func (b *Broker) SyncP2PReplay() {
+	events := b.canonicalReplayEvents()
+	if len(events) == 0 {
+		return
+	}
+	b.p2pTransportMu.RLock()
+	t := b.p2pTransport
+	b.p2pTransportMu.RUnlock()
+	if t == nil {
+		return
+	}
+	// Find suffix starting after the relay's last known event ID.
+	b.relayLastEventMu.RLock()
+	relayLastID := b.relayLastEventID
+	b.relayLastEventMu.RUnlock()
+	suffix := events
+	if relayLastID != "" {
+		for i, ev := range events {
+			if ev.EventID == relayLastID {
+				suffix = events[i+1:]
+				break
+			}
+		}
+	}
+	if len(suffix) == 0 {
+		debug.Log("tunnel", "broker: syncP2PReplay: no gap (relayLast=%s, local=%d events)", relayLastID, len(events))
+		return
+	}
+	debug.Log("tunnel", "broker: syncP2PReplay: sending %d missed events via P2P (relayLast=%s, local=%d)", len(suffix), relayLastID, len(events))
+	for _, msg := range suffix {
+		data, err := json.Marshal(msg)
+		if err != nil {
+			continue
+		}
+		if err := t.Send(data); err != nil {
+			debug.Log("tunnel", "broker: syncP2PReplay send error: %v", err)
+			return
+		}
+	}
 }
 
 // HandleP2PMessage processes a raw message received over the P2P DataChannel.
@@ -803,6 +895,21 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 		if b.clientProjectionSeeded.Load() && b.trustRelayHistory(info, currentSessionID) {
 			b.bumpNextEvent(info.LastEventID)
 			b.flushAllText()
+			return
+		}
+		// P2P-first: if P2P upgrade is pending or active, skip relay recovery
+		// replay. The P2P offer/answer must complete (or fail) before we
+		// flood the relay channel with replay traffic. If P2P succeeds, all
+		// messages flow over DataChannel. If P2P fails, the resulting
+		// UpgradeFailed state will allow recovery replay on the next
+		// OnRelayConnected callback.
+		if b.p2pUpgradePending() {
+			// Record relay's last known event for SyncP2PReplay gap detection.
+			b.relayHistoryCount.Store(int32(info.HistoryCount))
+			b.relayLastEventMu.Lock()
+			b.relayLastEventID = info.LastEventID
+			b.relayLastEventMu.Unlock()
+			debug.Log("tunnel", "broker: skipping relay recovery replay (P2P upgrade pending), relay count=%d lastEvent=%s", info.HistoryCount, info.LastEventID)
 			return
 		}
 		b.snapshotMu.RLock()
@@ -1885,16 +1992,6 @@ func (b *Broker) recordEvent(msg GatewayMessage) {
 	if recorder != nil {
 		recorder(msg)
 	}
-}
-
-func (b *Broker) canonicalReplayEvents() []GatewayMessage {
-	b.snapshotMu.RLock()
-	provider := b.replayProvider
-	b.snapshotMu.RUnlock()
-	if provider == nil {
-		return nil
-	}
-	return provider()
 }
 
 func (b *Broker) canonicalReplayState() ([]GatewayMessage, bool) {

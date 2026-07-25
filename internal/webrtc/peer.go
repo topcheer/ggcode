@@ -3,7 +3,9 @@ package webrtc
 import (
 	"fmt"
 	"sync"
+	"time"
 
+	pionlogging "github.com/pion/logging"
 	"github.com/pion/webrtc/v4"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -34,9 +36,46 @@ type Peer struct {
 	dcReadyCh chan struct{}
 }
 
+// pionLogger adapts pion/logging to our debug.Log system,
+// preventing pion from writing directly to stderr (which breaks the TUI).
+type pionLogger struct {
+	scope string
+}
+
+func (l *pionLogger) Trace(msg string)                          {}
+func (l *pionLogger) Tracef(format string, args ...interface{}) {}
+func (l *pionLogger) Debug(msg string)                          {}
+func (l *pionLogger) Debugf(format string, args ...interface{}) {}
+func (l *pionLogger) Info(msg string)                           {}
+func (l *pionLogger) Infof(format string, args ...interface{})  {}
+func (l *pionLogger) Warn(msg string) {
+	debug.Log("webrtc", "pion[%s] WARN: %s", l.scope, msg)
+}
+func (l *pionLogger) Warnf(format string, args ...interface{}) {
+	debug.Log("webrtc", "pion[%s] WARN: "+format, append([]interface{}{l.scope}, args...)...)
+}
+func (l *pionLogger) Error(msg string) {
+	debug.Log("webrtc", "pion[%s] ERROR: %s", l.scope, msg)
+}
+func (l *pionLogger) Errorf(format string, args ...interface{}) {
+	debug.Log("webrtc", "pion[%s] ERROR: "+format, append([]interface{}{l.scope}, args...)...)
+}
+
+type pionLoggerFactory struct{}
+
+func (f *pionLoggerFactory) NewLogger(scope string) pionlogging.LeveledLogger {
+	return &pionLogger{scope: scope}
+}
+
 // NewPeer creates a new WebRTC Peer with default ICE configuration.
 func NewPeer() (*Peer, error) {
-	pc, err := webrtc.NewPeerConnection(PeerConfig())
+	settings := webrtc.SettingEngine{}
+	settings.LoggerFactory = &pionLoggerFactory{}
+	// Give TURN/STUN servers more time to respond (default is ~5s which is
+	// too short for networks behind GFW/CGNAT with UDP packet loss).
+	settings.SetICETimeouts(15*time.Second, 30*time.Second, 700*time.Millisecond)
+
+	pc, err := webrtc.NewAPI(webrtc.WithSettingEngine(settings)).NewPeerConnection(PeerConfig())
 	if err != nil {
 		return nil, fmt.Errorf("webrtc: create peer connection: %w", err)
 	}

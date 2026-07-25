@@ -269,9 +269,11 @@ func (h *TunnelHost) StartShare(cfg ShareConfig) (*ShareResult, error) {
 			onConnected(info)
 		}
 		if info.Role == "client" && p2pMgr != nil {
-			// Use Restart instead of Start so that if the mobile reconnected
-			// (dropping the previous SDP offer), a fresh offer is sent. Start()
-			// would skip because state is already UpgradeNegotiating.
+			// Set p2pNegotiating before Restart so that handleRelayConnected
+			// (which runs before OnRelayConnected in the same call chain)
+			// sees P2P as pending on the next confirmed-as-client event
+			// and skips recovery replay.
+			broker.SetP2PNegotiating(true)
 			p2pMgr.Restart()
 		}
 	})

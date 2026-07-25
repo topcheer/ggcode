@@ -217,6 +217,9 @@ func (m *UpgradeManager) HandleSignalMessage(msg SignalMessage) {
 
 func (m *UpgradeManager) runUpgrade(signalCh chan SignalMessage) {
 	debug.Log("tunnel", "upgrade: starting P2P negotiation")
+	m.broker.p2pNegotiating.Store(true)
+	// Note: p2pNegotiating stays true through P2P disconnect. It's cleared
+	// when P2P fails and we revert to relay (allowing recovery replay).
 
 	ctx, cancel := context.WithTimeout(context.Background(), m.cfg.ICETimeout)
 	defer cancel()
@@ -303,6 +306,11 @@ func (m *UpgradeManager) runUpgrade(signalCh chan SignalMessage) {
 			}
 			debug.Log("tunnel", "upgrade: DataChannel ready, switching transport")
 			m.broker.SetP2PTransport(p2pTransport)
+			// Now that P2P is active, sync any messages that mobile missed
+			// during P2P negotiation. This sends only the incremental events
+			// that relay doesn't have yet (relay history lags behind because
+			// we skipped recovery replay during P2P negotiation).
+			m.broker.SyncP2PReplay()
 			m.setState(UpgradeActive)
 		case <-ctx.Done():
 			return
@@ -336,8 +344,12 @@ func (m *UpgradeManager) runUpgrade(signalCh chan SignalMessage) {
 			// P2P is active — wait for disconnect instead of timing out.
 			debug.Log("tunnel", "upgrade: ctx done but P2P active, waiting for disconnect")
 			<-p2pDone
+			m.broker.p2pNegotiating.Store(false)
+			m.broker.TriggerReplayNow()
 		} else if ctx.Err() == context.DeadlineExceeded {
 			debug.Log("tunnel", "upgrade: ICE timeout, staying on relay")
+			m.broker.p2pNegotiating.Store(false)
+			m.broker.TriggerReplayNow()
 			m.setState(UpgradeFailed)
 		}
 	}
