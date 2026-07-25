@@ -81,6 +81,7 @@ individual A2A auth configuration.
 
 - **Codebase-aware** — reads, understands, and edits your entire project
 - **Full dev toolkit** — file edits, shell commands, Git, LSP, search
+- **PTC (Programmatic Tool Calling)** — the agent writes JavaScript in a sandboxed VM to batch-call read-only tools (read_file, grep, git_log, web_search, etc.) in a single round-trip, dramatically reducing context window consumption for multi-step analysis
 - **MCP integration** — connect external tools and data sources
 - **gRPC plugins** — extend ggcode with custom tools in Go, Python, Node.js, or any language
 - **Multi-agent** — spawn parallel workers, delegate to teammates, A2A protocol
