@@ -756,6 +756,21 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 							ses.ContextMessages = append(ses.ContextMessages, *mr.Message)
 						}
 					}
+				} else {
+					// Fallback: checkpoint last_msg_id not found in allMessages.
+					// This happens when dedup removed a duplicate message, or
+					// the message ID wasn't persisted (older ggcode versions).
+					// Without this fallback, ALL post-checkpoint messages are
+					// lost and the agent sees only the summary on reload.
+					// Load all messages after the summary as extra messages,
+					// same as the no-last_msg_id path below.
+					afterSummary := len(allMessages) - summaryIdx - 1
+					debug.Log("session", "loadSession %s: checkpoint last_msg_id %q not found in allMessages, using post-summary fallback (%d messages after summary)", id, lastCpLastMsgID, afterSummary)
+					for _, mr := range allMessages[summaryIdx+1:] {
+						if mr.Message != nil {
+							ses.ContextMessages = append(ses.ContextMessages, *mr.Message)
+						}
+					}
 				}
 			} else {
 				// No last_msg_id (migrated checkpoint): load all messages

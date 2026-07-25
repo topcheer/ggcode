@@ -1477,3 +1477,72 @@ func min(a, b int) int {
 	}
 	return b
 }
+
+// TestLoadCheckpointWithMissingLastMsgID verifies that when a checkpoint's
+// last_msg_id points to a message not present in the JSONL (due to dedup
+// removing a duplicate, or older versions not persisting IDs), the loader
+// falls back to loading all messages after the summary message instead of
+// silently dropping every post-checkpoint message.
+//
+// Before the fix, this scenario resulted in ContextMessages containing only
+// the summary message — the agent would lose all context after reload.
+func TestLoadCheckpointWithMissingLastMsgID(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "ggcode_test_*")
+	defer os.RemoveAll(dir)
+
+	store, _ := NewJSONLStore(dir)
+	ses := NewSession("zai", "cn-coding-openai", "glm-5-turbo")
+	ses.Title = "missing-lastmsgid"
+	ses.Workspace = "/tmp/test-ws"
+
+	// Initial messages (pre-compaction history).
+	ses.Messages = []provider.Message{
+		{ID: "msg_1", Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "old question"}}},
+		{ID: "msg_2", Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "old answer"}}},
+	}
+	saveFullForTest(t, store, ses)
+
+	// Summary message + post-checkpoint messages.
+	summaryMsg := provider.Message{
+		ID:   "msg_summary",
+		Role: "system",
+		Content: []provider.ContentBlock{{
+			Type: "text",
+			Text: "[Previous conversation summary]\nUser discussed old topics.",
+		}},
+	}
+	postMsg1 := provider.Message{ID: "msg_post_1", Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "post-checkpoint question"}}}
+	postMsg2 := provider.Message{ID: "msg_post_2", Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "post-checkpoint answer"}}}
+
+	store.AppendMessageToDisk(ses, summaryMsg)
+	store.AppendMessageToDisk(ses, postMsg1)
+	store.AppendMessageToDisk(ses, postMsg2)
+
+	// Checkpoint with last_msg_id pointing to a NON-EXISTENT message ID.
+	// This simulates dedup removing the target message or an ID not persisted.
+	store.AppendCheckpoint(ses, summaryMsg.ID, "msg_NONEXISTENT", 42)
+
+	loaded, err := store.Load(ses.ID)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	// ContextMessages should be: [summary, post_1, post_2] = 3 messages.
+	// Before the fix, this would be just [summary] = 1 message (bug).
+	if len(loaded.ContextMessages) != 3 {
+		t.Fatalf("expected 3 ContextMessages (summary + 2 post-checkpoint via fallback), got %d", len(loaded.ContextMessages))
+	}
+
+	// First should be the summary.
+	if loaded.ContextMessages[0].ID != "msg_summary" {
+		t.Fatalf("expected first ContextMessage 'msg_summary', got '%s'", loaded.ContextMessages[0].ID)
+	}
+	// Second should be post-checkpoint user message.
+	if loaded.ContextMessages[1].ID != "msg_post_1" {
+		t.Fatalf("expected second ContextMessage 'msg_post_1', got '%s'", loaded.ContextMessages[1].ID)
+	}
+	// Third should be post-checkpoint assistant message.
+	if loaded.ContextMessages[2].ID != "msg_post_2" {
+		t.Fatalf("expected third ContextMessage 'msg_post_2', got '%s'", loaded.ContextMessages[2].ID)
+	}
+}
