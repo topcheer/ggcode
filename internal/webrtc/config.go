@@ -1,9 +1,6 @@
 package webrtc
 
 import (
-	"os"
-	"strings"
-
 	"github.com/pion/webrtc/v4"
 )
 
@@ -16,17 +13,13 @@ func DefaultICEServers() []webrtc.ICEServer {
 		{URLs: []string{"stun:stun1.l.google.com:19302"}},
 	}
 
-	// Optional self-hosted TURN server (coturn).
-	// Env: GGCODE_TURN_URL=turn:turn.ggcode.dev:3478
-	//      GGCODE_TURN_USER=ggcode
-	//      GGCODE_TURN_PASS=<secret>
-	if turnURL := strings.TrimSpace(os.Getenv("GGCODE_TURN_URL")); turnURL != "" {
-		servers = append(servers, webrtc.ICEServer{
-			URLs:       []string{turnURL},
-			Username:   os.Getenv("GGCODE_TURN_USER"),
-			Credential: os.Getenv("GGCODE_TURN_PASS"),
-		})
-	}
+	// Self-hosted TURN server (coturn on hostyuntk3).
+	// Credentials match /etc/turnserver.conf on the host.
+	servers = append(servers, webrtc.ICEServer{
+		URLs:       []string{"turn:turn.allpayone.net:3478"},
+		Username:   "admin",
+		Credential: "allwap123",
+	})
 
 	return servers
 }

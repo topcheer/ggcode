@@ -14,6 +14,11 @@ class ICEConfig {
     iceServers: [
       {'urls': 'stun:stun.l.google.com:19302'},
       {'urls': 'stun:stun1.l.google.com:19302'},
+      {
+        'urls': 'turn:turn.allpayone.net:3478',
+        'username': 'admin',
+        'credential': 'allwap123',
+      },
     ],
   );
 
