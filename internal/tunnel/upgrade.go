@@ -53,7 +53,7 @@ type UpgradeConfig struct {
 func DefaultUpgradeConfig() UpgradeConfig {
 	return UpgradeConfig{
 		Enabled:           true,
-		ICETimeout:        10 * time.Second,
+		ICETimeout:        20 * time.Second,
 		KeepAliveInterval: 20 * time.Second,
 		RetryDelay:        30 * time.Second,
 	}
@@ -95,10 +95,14 @@ type UpgradeManager struct {
 	cancelNeg  context.CancelFunc // cancels ongoing negotiation
 	generation uint64             // incremented on each Restart to invalidate stale callbacks
 
-	// signalCh carries signaling messages to/from the relay.
-	// The relay forwards rtc_offer/rtc_answer/rtc_candidate GatewayMessages
-	// here via HandleSignalMessage.
+	// signalCh carries signaling messages from the relay to the active
+	// negotiation. It is replaced on each Restart so stale goroutines
+	// cannot consume signals meant for the new peer.
 	signalCh chan SignalMessage
+
+	// restartAt is the earliest time a Restart can actually execute.
+	// Used for debouncing rapid reconnect events.
+	restartAt time.Time
 
 	// onStateChange is an optional callback for UI status updates.
 	onStateChange func(UpgradeState)
@@ -140,12 +144,13 @@ func (m *UpgradeManager) Start() {
 		return
 	}
 	m.state = UpgradeNegotiating
+	signalCh := m.signalCh
 	m.mu.Unlock()
 
 	m.notifyState()
 
 	safego.Go("tunnel.upgrade.start", func() {
-		m.runUpgrade()
+		m.runUpgrade(signalCh)
 	})
 }
 
@@ -153,6 +158,10 @@ func (m *UpgradeManager) Start() {
 // Called when the mobile client reconnects to ensure the SDP offer reaches
 // the newly established relay connection. If P2P is already active
 // (DataChannel open), it is left untouched.
+//
+// Debounce: if called within 2s of a previous Restart, the call is
+// coalesced into the pending restart to avoid tearing down peers when
+// the relay fires multiple connect events in rapid succession.
 func (m *UpgradeManager) Restart() {
 	if !m.cfg.Enabled {
 		return
@@ -162,33 +171,51 @@ func (m *UpgradeManager) Restart() {
 		m.mu.Unlock()
 		return // P2P is working, don't disrupt it
 	}
+
+	now := time.Now()
+	if now.Before(m.restartAt) {
+		// A restart is already pending; coalesce.
+		m.mu.Unlock()
+		debug.Log("tunnel", "upgrade: restart debounced (pending)")
+		return
+	}
+	// Schedule the next restart window.
+	m.restartAt = now.Add(2 * time.Second)
+
 	// Cancel any stale negotiation so its callbacks are ignored.
 	if m.cancelNeg != nil {
 		m.cancelNeg()
 	}
+	// Replace signalCh so stale signal processors stop receiving.
+	m.signalCh = make(chan SignalMessage, 64)
 	m.generation++
 	m.state = UpgradeNegotiating
+	gen := m.generation
+	signalCh := m.signalCh
 	m.mu.Unlock()
 
-	debug.Log("tunnel", "upgrade: restarting P2P negotiation (mobile reconnected)")
+	debug.Log("tunnel", "upgrade: restarting P2P negotiation (gen=%d, mobile reconnected)", gen)
 	m.notifyState()
 
 	safego.Go("tunnel.upgrade.restart", func() {
-		m.runUpgrade()
+		m.runUpgrade(signalCh)
 	})
 }
 
 // HandleSignalMessage routes a signaling message from the relay to the
 // P2P negotiation. This is called when the broker receives rtc_* messages.
 func (m *UpgradeManager) HandleSignalMessage(msg SignalMessage) {
+	m.mu.Lock()
+	ch := m.signalCh
+	m.mu.Unlock()
 	select {
-	case m.signalCh <- msg:
+	case ch <- msg:
 	default:
 		debug.Log("tunnel", "upgrade: signal channel full, dropping %s", msg.Type)
 	}
 }
 
-func (m *UpgradeManager) runUpgrade() {
+func (m *UpgradeManager) runUpgrade(signalCh chan SignalMessage) {
 	debug.Log("tunnel", "upgrade: starting P2P negotiation")
 
 	ctx, cancel := context.WithTimeout(context.Background(), m.cfg.ICETimeout)
@@ -266,7 +293,7 @@ func (m *UpgradeManager) runUpgrade() {
 			debug.Log("tunnel", "upgrade: send signal error: %v", err)
 		}
 	}
-	recvCh := (<-chan SignalMessage)(m.signalCh)
+	recvCh := (<-chan SignalMessage)(signalCh)
 	if err := startNeg(sendSignal, recvCh); err != nil {
 		debug.Log("tunnel", "upgrade: negotiation start error: %v", err)
 		if !staleGen() {

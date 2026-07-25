@@ -1674,9 +1674,7 @@ func (m *Manager) countTokens(msg provider.Message) int {
 		// Fast path: if we've already determined the provider doesn't do RPC,
 		// skip context creation and go straight to estimation.
 		if m.providerCountChecked && !m.providerCountSupportsRPC {
-			n := m.estimateTokens(msg)
-			debug.Log("ctx", "countTokens: heuristic estimate=%d blocks=%d role=%s (cached fast path)", n, len(msg.Content), msg.Role)
-			return n
+			return m.estimateTokens(msg)
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), tokenCountTimeout)
 		defer cancel()
@@ -1702,9 +1700,7 @@ func (m *Manager) countTokens(msg provider.Message) int {
 			debug.Log("ctx", "countTokens: provider.CountTokens failed (%v), falling back to heuristic", err)
 		}
 	}
-	n := m.estimateTokens(msg)
-	debug.Log("ctx", "countTokens: heuristic estimate=%d blocks=%d role=%s", n, len(msg.Content), msg.Role)
-	return n
+	return m.estimateTokens(msg)
 }
 
 // estimateTokensStandalone provides estimation with default (uncalibrated) ratios.
