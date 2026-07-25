@@ -12,8 +12,13 @@ class ICEConfig {
 
   static const defaultConfig = ICEConfig(
     iceServers: [
+      // China-accessible STUN servers (priority for mobile users in CN).
+      {'urls': 'stun:stun.miwifi.com:3478'},
+      {'urls': 'stun:stun.qq.com:3478'},
+      {'urls': 'stun:stun.chat.bilibili.com:3478'},
+      // International STUN.
       {'urls': 'stun:stun.l.google.com:19302'},
-      {'urls': 'stun:stun1.l.google.com:19302'},
+      // Self-hosted TURN (fallback for symmetric NAT / CGNAT).
       {
         'urls': 'turn:turn.allpayone.net:3478',
         'username': 'admin',

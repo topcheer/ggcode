@@ -5,21 +5,23 @@ import (
 )
 
 // DefaultICEServers returns the STUN/TURN servers used for NAT traversal.
-// TURN credentials may be overridden via environment variables for
-// per-session rotation or self-hosted deployments.
+// Includes both international and China-accessible servers for reliability.
 func DefaultICEServers() []webrtc.ICEServer {
 	servers := []webrtc.ICEServer{
+		// China-accessible STUN servers (priority for mobile users in CN).
+		{URLs: []string{"stun:stun.miwifi.com:3478"}},        // Xiaomi
+		{URLs: []string{"stun:stun.qq.com:3478"}},            // Tencent
+		{URLs: []string{"stun:stun.chat.bilibili.com:3478"}}, // Bilibili
+		// International STUN (works outside CN or with VPN).
 		{URLs: []string{"stun:stun.l.google.com:19302"}},
-		{URLs: []string{"stun:stun1.l.google.com:19302"}},
+		// Self-hosted TURN server (coturn on hostyuntk3).
+		// Handles symmetric NAT / CGNAT where STUN fails.
+		{
+			URLs:       []string{"turn:turn.allpayone.net:3478"},
+			Username:   "admin",
+			Credential: "allwap123",
+		},
 	}
-
-	// Self-hosted TURN server (coturn on hostyuntk3).
-	// Credentials match /etc/turnserver.conf on the host.
-	servers = append(servers, webrtc.ICEServer{
-		URLs:       []string{"turn:turn.allpayone.net:3478"},
-		Username:   "admin",
-		Credential: "allwap123",
-	})
 
 	return servers
 }
