@@ -307,6 +307,7 @@ func (b *Broker) SendSignal(signal SignalMessage) error {
 	if err != nil {
 		return err
 	}
+	debug.Log("tunnel", "broker: SendSignal type=%s enqueued", signal.Type)
 	b.enqueueOut(gm)
 	return nil
 }

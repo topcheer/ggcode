@@ -496,6 +496,10 @@ func (rc *RelayClient) readPump(conn *websocket.Conn, done func()) {
 			// keepalive
 
 		case "encrypted":
+			if rc.crypto == nil {
+				debug.Log("tunnel", "relay-client: encrypted msg but no crypto (dropping)")
+				continue
+			}
 			plaintext, err := rc.crypto.Decrypt(relayMsg.Nonce, relayMsg.Ciphertext)
 			if err != nil {
 				debug.Log("tunnel", "relay-client: decrypt error: %v", err)
@@ -503,7 +507,12 @@ func (rc *RelayClient) readPump(conn *websocket.Conn, done func()) {
 			}
 			var msg GatewayMessage
 			if json.Unmarshal(plaintext, &msg) != nil {
+				debug.Log("tunnel", "relay-client: unmarshal error for plaintext len=%d", len(plaintext))
 				continue
+			}
+			// Log RTC signal messages for P2P debugging
+			if msg.Type == EventRTCOffer || msg.Type == EventRTCAnswer || msg.Type == EventRTCCandidate {
+				debug.Log("tunnel", "relay-client: received RTC signal type=%s from relay", msg.Type)
 			}
 			if msg.SessionID == "" {
 				msg.SessionID = relayMsg.SessionID
