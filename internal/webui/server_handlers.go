@@ -15,6 +15,24 @@ import (
 
 // --- Config API ---
 
+// sanitizeEndpoints returns a copy of endpoints with API keys replaced by
+// has_api_key booleans, preventing key leakage via the WebUI JSON API.
+func sanitizeEndpoints(endpoints map[string]config.EndpointConfig) map[string]interface{} {
+	out := make(map[string]interface{}, len(endpoints))
+	for name, ep := range endpoints {
+		entry := map[string]interface{}{
+			"base_url":    ep.BaseURL,
+			"protocol":    ep.Protocol,
+			"has_api_key": strings.TrimSpace(ep.APIKey) != "",
+		}
+		if ep.Models != nil {
+			entry["models"] = ep.Models
+		}
+		out[name] = entry
+	}
+	return out
+}
+
 // GET /api/config -- full config as JSON (includes scope info)
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -183,7 +201,7 @@ func (s *Server) handleVendorDetail(w http.ResponseWriter, r *http.Request) {
 			"id":           vendor,
 			"display_name": vc.DisplayName,
 			"has_api_key":  strings.TrimSpace(vc.APIKey) != "",
-			"endpoints":    vc.Endpoints,
+			"endpoints":    sanitizeEndpoints(vc.Endpoints),
 		})
 
 	case http.MethodPut:
@@ -252,7 +270,7 @@ func (s *Server) handleEndpoints(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "vendor not found")
 			return
 		}
-		writeJSON(w, vc.Endpoints)
+		writeJSON(w, sanitizeEndpoints(vc.Endpoints))
 
 	case http.MethodPost:
 		var req struct {
