@@ -492,6 +492,14 @@ func (a *Agent) CheckpointManager() *checkpoint.Manager {
 	return a.checkpoints
 }
 
+// InvalidateToolCaches clears the speculator and memoize caches. Called after
+// external file changes (e.g., /undo, /revert) that bypass the normal tool
+// execution path, to prevent serving stale cached results.
+func (a *Agent) InvalidateToolCaches() {
+	a.speculator.invalidateCache()
+	a.toolMemo.invalidateTTLBased()
+}
+
 // SetDiffConfirm sets the diff confirmation callback.
 func (a *Agent) SetDiffConfirm(fn DiffConfirmFunc) {
 	a.mu.Lock()

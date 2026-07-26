@@ -130,6 +130,11 @@ func (m *Model) handleUndoCommand() tea.Cmd {
 		if err != nil {
 			return streamMsg(m.t("checkpoint.undo_failed", err))
 		}
+		// Invalidate tool caches so the agent doesn't serve stale results
+		// from before the undo. The speculator cache and memoize TTL entries
+		// are cleared; mtime-based entries (read_file) are safe because the
+		// file's mtime changed during the undo write.
+		m.agent.InvalidateToolCaches()
 		// Show diff (new -> old)
 		diffText := diff.UnifiedDiff(cp.NewContent, cp.OldContent, 3)
 		var b strings.Builder

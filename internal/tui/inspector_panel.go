@@ -302,6 +302,8 @@ func (m *Model) handleInspectorPrimaryAction(items []inspectorPanelItem) (Model,
 			m.setInspectorMessage(inspectorText(m.currentLanguage(), "revert_failed", err))
 			return *m, nil
 		}
+		// Invalidate tool caches (same as /undo) to prevent stale results.
+		m.agent.InvalidateToolCaches()
 		m.setInspectorMessage(inspectorText(m.currentLanguage(), "reverted", displayToolFileTarget(cp.FilePath)))
 		return *m, nil
 	case inspectorPanelStatus:
