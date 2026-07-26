@@ -319,6 +319,11 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 		case provider.StreamEventText:
 			// Always append to round state immediately (not throttled).
 			round.AppendText(event.Text)
+			// Track streaming speed for tok/s indicator.
+			if m.streamTextStart.IsZero() {
+				m.streamTextStart = time.Now()
+			}
+			m.streamChars += len(event.Text)
 			// Accumulate for batched TUI delivery.
 			batchMu.Lock()
 			batchBuf.WriteString(event.Text)
@@ -480,6 +485,9 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 			batchMu.Lock()
 			fullReasoningBuf.Reset()
 			batchMu.Unlock()
+			// Reset streaming speed tracker for next turn.
+			m.streamChars = 0
+			m.streamTextStart = time.Time{}
 			switch {
 			case round.AskUserText != "":
 				m.program.Send(agentAskUserMsg{RunID: runID, Text: round.AskUserText})

@@ -96,6 +96,8 @@ type Model struct {
 	loading                         bool
 	agentBusy                       *atomic.Bool // shared with REPL for /api/status
 	loopStart                       time.Time    // when current agent loop started (user sent message)
+	streamChars                     int          // characters streamed in current LLM turn
+	streamTextStart                 time.Time    // when first text chunk arrived in current turn
 	quitting                        bool
 	restartRequested                bool
 	restartDebug                    bool

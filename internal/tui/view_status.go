@@ -212,6 +212,20 @@ func (m Model) renderComposerPanel() string {
 			timerLabel = "brewing " + formatDuration(elapsed)
 		}
 		hints = append(hints, lipgloss.NewStyle().Foreground(lipgloss.Color("6")).Render(timerLabel))
+
+		// Show generation speed (tok/s) when actively streaming text
+		if m.streamChars > 0 && !m.streamTextStart.IsZero() {
+			streamElapsed := time.Since(m.streamTextStart)
+			if streamElapsed >= 500*time.Millisecond {
+				// Estimate tokens: ~4 chars per token for mixed CJK/ASCII
+				estTokens := m.streamChars / 4
+				tps := float64(estTokens) / streamElapsed.Seconds()
+				if tps > 0 {
+					speedLabel := fmt.Sprintf("%.0ftok/s", tps)
+					hints = append(hints, lipgloss.NewStyle().Foreground(lipgloss.Color("2")).Render(speedLabel))
+				}
+			}
+		}
 	}
 
 	// Ctrl+N follow/unfollow hint when subagent/teammate slots exist
