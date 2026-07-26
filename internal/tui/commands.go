@@ -244,7 +244,7 @@ func shouldExecuteWhileBusy(text string) bool {
 		"/checkpoints", "/memory", "/todo", "/plugins", "/config", "/status", "/inspector",
 		"/stream", "/restart", "/help", "/?",
 		"/share", "/tunnel", "/unshare",
-		"/diff", "/hooks", "/cost", "/retry", "/edit", "/copy", "/context", "/regenerate", "/regen", "/cron":
+		"/diff", "/hooks", "/cost", "/retry", "/edit", "/copy", "/context", "/regenerate", "/regen", "/cron", "/debug":
 		return true
 	// Harness: only the bare command (opens panel) is safe
 	case "/harness":
@@ -495,6 +495,8 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 			return m.handleRedoCommand()
 		case "/context":
 			return m.handleContextCommand()
+		case "/debug":
+			return m.handleDebugCommand(parts)
 		case "/regenerate", "/regen":
 			return m.handleRegenerateCommand()
 		case "/branch", "/fork":
