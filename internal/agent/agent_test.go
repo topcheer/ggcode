@@ -2076,3 +2076,34 @@ func TestSummarizeToolResult(t *testing.T) {
 		t.Fatalf("expected truncation indicator, got %q", got)
 	}
 }
+
+func TestIsAgentRetryableLLMError(t *testing.T) {
+	tests := []struct {
+		err  error
+		want bool
+	}{
+		{nil, false},
+		{context.Canceled, false},
+		{errors.New("connection reset by peer"), true},
+		{errors.New("unexpected EOF"), true},
+		{errors.New("broken pipe"), true},
+		{errors.New("tls handshake timeout"), true},
+		{errors.New("server closed idle connection"), true},
+		{errors.New("dial tcp: lookup api.example.com: no such host"), true},
+		{errors.New("connection refused"), true},
+		{errors.New("i/o timeout"), true},
+		{errors.New("openai stream: 20 retry attempts exhausted"), true},
+		{errors.New("anthropic stream: 20 retry attempts exhausted"), true},
+		// Non-retryable:
+		{errors.New("401 unauthorized"), false},
+		{errors.New("context length exceeded"), false},
+		{errors.New("invalid api key"), false},
+		{errors.New("model not found"), false},
+	}
+	for _, tt := range tests {
+		got := isAgentRetryableLLMError(tt.err)
+		if got != tt.want {
+			t.Errorf("isAgentRetryableLLMError(%v) = %v, want %v", tt.err, got, tt.want)
+		}
+	}
+}

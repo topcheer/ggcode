@@ -40,6 +40,41 @@ type runResultHandler func([]provider.ContentBlock, error)
 
 var errStreamInterruptedForReplan = errors.New("stream interrupted for replan")
 
+// maxAgentLLMRetries is the number of agent-level retries for transient LLM
+// errors that slip past the provider's own retry loop (providerRetryAttempts=20).
+// These are typically mid-stream disconnects or DNS hiccups after partial output.
+const maxAgentLLMRetries = 3
+
+// isAgentRetryableLLMError returns true for transient errors that warrant an
+// agent-level retry. Excludes: context overflow (handled by reactive compact),
+// user cancellation (should not retry), and auth errors (retrying won't help).
+func isAgentRetryableLLMError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	for _, keyword := range []string{
+		"connection reset by peer",
+		"unexpected eof",
+		"broken pipe",
+		"tls handshake timeout",
+		"server closed idle connection",
+		"no such host",
+		"connection refused",
+		"i/o timeout",
+		"eof",
+		"retry attempts exhausted", // provider gave up after 20 tries
+	} {
+		if strings.Contains(s, keyword) {
+			return true
+		}
+	}
+	return false
+}
+
 // Agent orchestrates the agentic loop: send messages to LLM, execute tool calls, loop.
 type Agent struct {
 	provider                   provider.Provider
@@ -780,6 +815,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		cm.SetToolDefinitionOverhead(estimateToolDefinitionOverhead(toolDefs))
 	}
 	reactiveCompactRetries := 0
+	agentLLMRetries := 0
 	inlineToolCallNudges := 0
 	consecutiveEmptyResponses := 0
 	progressCheckInjected := false
@@ -879,10 +915,30 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		if err != nil {
 			if errors.Is(err, errStreamInterruptedForReplan) {
 				reactiveCompactRetries = 0
+				agentLLMRetries = 0
 				continue
 			}
 			if a.tryReactiveCompact(ctx, onEvent, err, &reactiveCompactRetries) {
 				runStats.recordCompaction()
+				continue
+			}
+			// Agent-level retry for transient LLM errors that slip past the
+			// provider's own retry loop (e.g. mid-stream disconnect after
+			// partial output, DNS hiccup between provider retries).
+			if isAgentRetryableLLMError(err) && agentLLMRetries < maxAgentLLMRetries {
+				agentLLMRetries++
+				delay := time.Duration(agentLLMRetries) * 2 * time.Second
+				debug.Log("agent", "transient LLM error (attempt %d/%d), retrying in %v: %v",
+					agentLLMRetries, maxAgentLLMRetries, delay, err)
+				onEvent(provider.StreamEvent{Type: provider.StreamEventSystem,
+					Text: fmt.Sprintf("[Retrying LLM call (%d/%d) after %v...] ",
+						agentLLMRetries, maxAgentLLMRetries, delay)})
+				select {
+				case <-time.After(delay):
+				case <-ctx.Done():
+					onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: ctx.Err()})
+					return ctx.Err()
+				}
 				continue
 			}
 			// User cancellation: return the original error (which wraps
@@ -897,6 +953,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			return friendlyErr
 		}
 		reactiveCompactRetries = 0
+		agentLLMRetries = 0
 
 		// Autopilot: extract GOAL: declaration from LLM output as early as
 		// possible, so the strategist detection is active
