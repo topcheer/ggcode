@@ -234,3 +234,49 @@ func TestMemoize_PutDuplicateKeyNoLRUDuplication(t *testing.T) {
 		t.Fatal("expected hit after repeated puts")
 	}
 }
+
+func TestMemoize_InvalidateTTLBased(t *testing.T) {
+	tmpFile := filepath.Join(t.TempDir(), "test.go")
+	os.WriteFile(tmpFile, []byte("package main"), 0644)
+
+	m := newToolMemo()
+
+	// Add mtime-based entry (read_file)
+	readArgs := []byte(`{"path":"` + tmpFile + `"}`)
+	m.put("read_file", readArgs, tool.Result{Content: "file content"})
+
+	// Add TTL-based entries (grep, LSP, git)
+	m.put("grep", []byte(`{"pattern":"func","path":"."}`), tool.Result{Content: "match1"})
+	m.put("lsp_diagnostics", []byte(`{"path":"`+tmpFile+`"}`), tool.Result{Content: "no errors"})
+	m.put("git_status", []byte(`{}`), tool.Result{Content: "clean"})
+
+	// All 4 entries should exist before invalidation
+	if len(m.entries) != 4 {
+		t.Fatalf("expected 4 entries before invalidation, got %d", len(m.entries))
+	}
+
+	// Invalidate TTL-based entries (simulates file edit)
+	m.invalidateTTLBased()
+
+	// mtime-based entry (read_file) should survive
+	_, readHit := m.get("read_file", readArgs)
+	if !readHit {
+		t.Fatal("expected read_file (mtime-based) to survive invalidateTTLBased")
+	}
+
+	// TTL-based entries should be cleared
+	_, grepHit := m.get("grep", []byte(`{"pattern":"func","path":"."}`))
+	if grepHit {
+		t.Fatal("expected grep (TTL-based) to be cleared by invalidateTTLBased")
+	}
+
+	_, lspHit := m.get("lsp_diagnostics", []byte(`{"path":"`+tmpFile+`"}`))
+	if lspHit {
+		t.Fatal("expected lsp_diagnostics (TTL-based) to be cleared")
+	}
+
+	_, gitHit := m.get("git_status", []byte(`{}`))
+	if gitHit {
+		t.Fatal("expected git_status (TTL-based) to be cleared")
+	}
+}

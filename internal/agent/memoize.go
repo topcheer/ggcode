@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
@@ -212,6 +213,37 @@ func (m *toolMemo) reset() {
 	defer m.mu.Unlock()
 	m.entries = make(map[string]*memoEntry)
 	m.order = nil
+}
+
+// invalidateTTLBased removes TTL-based cache entries (grep, LSP, git tools)
+// while preserving mtime-based entries (read_file, list_directory) whose
+// validity is tied to a specific file path. Called after file edits to
+// prevent serving stale search/diagnostic/git results.
+func (m *toolMemo) invalidateTTLBased() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cleared := 0
+	kept := 0
+	newOrder := make([]string, 0, len(m.order))
+	for _, k := range m.order {
+		entry, ok := m.entries[k]
+		if !ok {
+			continue
+		}
+		if entry.path != "" {
+			// mtime-based entry — keep (validity depends on file, not TTL)
+			newOrder = append(newOrder, k)
+			kept++
+		} else {
+			// TTL-based entry — clear (search/LSP/git results may be stale)
+			delete(m.entries, k)
+			cleared++
+		}
+	}
+	m.order = newOrder
+	if cleared > 0 {
+		debug.Log("memoize", "invalidateTTLBased: cleared %d TTL entries, kept %d mtime entries", cleared, kept)
+	}
 }
 
 // extractJSONStringField extracts a string field from JSON args.

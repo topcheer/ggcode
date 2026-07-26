@@ -1137,6 +1137,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// stale. Clear the cache to prevent serving outdated content.
 			if fileEditingTools[tc.Name] && !result.IsError {
 				a.speculator.invalidateCache()
+				// Also invalidate TTL-based memoize entries (grep, LSP, git)
+				// whose results may be stale after a file edit. mtime-based
+				// entries (read_file, list_directory) are kept — their
+				// validity is tied to the file's modification time.
+				a.toolMemo.invalidateTTLBased()
 			}
 			// Store result in memoization cache for read-only tools.
 			if speculativeSafeTools[tc.Name] && !result.IsError {
