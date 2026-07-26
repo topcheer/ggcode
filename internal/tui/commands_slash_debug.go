@@ -69,7 +69,6 @@ func (m *Model) handleDebugCommand(parts []string) tea.Cmd {
 	sb.WriteString(fmt.Sprintf("# ggcode debug log export\n"))
 	sb.WriteString(fmt.Sprintf("# Timestamp: %s\n", time.Now().Format(time.RFC3339)))
 	sb.WriteString(fmt.Sprintf("# Category: %s\n", catLabel))
-	sb.WriteString(fmt.Sprintf("# Category: %s\n", catLabel))
 	sb.WriteString(fmt.Sprintf("# Entries: %d\n\n", len(entries)))
 
 	for _, e := range entries {
