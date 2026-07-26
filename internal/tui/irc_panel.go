@@ -82,7 +82,6 @@ func (m Model) renderIRCPanel() string {
 	}
 
 	entries := m.ircBindingEntries()
-	currentBindings := currentIRCBindings(m.imManager)
 	boundCount := 0
 	for _, entry := range entries {
 		if strings.TrimSpace(entry.OccupiedBy) != "" {
@@ -103,20 +102,6 @@ func (m Model) renderIRCPanel() string {
 		fmt.Sprintf(" %s", m.t("panel.irc.created", len(entries))),
 		fmt.Sprintf(" %s", m.t("panel.irc.bound", boundCount)),
 		fmt.Sprintf(" %s", m.t("panel.irc.available", maxIRC(len(entries)-boundCount, 0))),
-		"",
-		lipgloss.NewStyle().Bold(true).Render(m.t("panel.irc.current_binding")),
-	}
-
-	if len(currentBindings) == 0 {
-		body = append(body, fmt.Sprintf(" %s", m.t("panel.irc.none")))
-	} else {
-		for _, current := range currentBindings {
-			body = append(body,
-				fmt.Sprintf(" %s", m.t("panel.irc.adapter", current.Adapter)),
-				fmt.Sprintf(" %s", m.t("panel.irc.target", util.FirstNonEmpty(current.TargetID, m.t("panel.irc.default")))),
-				fmt.Sprintf(" %s", m.t("panel.irc.channel", util.FirstNonEmpty(current.ChannelID, m.t("panel.irc.none")))),
-			)
-		}
 	}
 
 	body = append(body, "", lipgloss.NewStyle().Bold(true).Render(m.t("panel.irc.bot_list")))

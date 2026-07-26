@@ -56,7 +56,6 @@ func (m Model) renderFeishuPanel() string {
 		return ""
 	}
 	entries := m.feishuBindingEntries()
-	currentBindings := currentFeishuBindings(m.imManager)
 	boundCount := 0
 	for _, entry := range entries {
 		if strings.TrimSpace(entry.OccupiedBy) != "" {
@@ -71,19 +70,6 @@ func (m Model) renderFeishuPanel() string {
 		fmt.Sprintf(" %s", m.t("panel.feishu.created", len(entries))),
 		fmt.Sprintf(" %s", m.t("panel.feishu.bound", boundCount)),
 		fmt.Sprintf(" %s", m.t("panel.feishu.available", maxFeishu(len(entries)-boundCount, 0))),
-		"",
-		lipgloss.NewStyle().Bold(true).Render(m.t("panel.feishu.current_binding")),
-	}
-	if len(currentBindings) == 0 {
-		body = append(body, fmt.Sprintf(" %s", m.t("panel.feishu.none")))
-	} else {
-		for _, current := range currentBindings {
-			body = append(body,
-				fmt.Sprintf(" %s", m.t("panel.feishu.adapter", current.Adapter)),
-				fmt.Sprintf(" %s", m.t("panel.feishu.target", util.FirstNonEmpty(current.TargetID, m.t("panel.feishu.default")))),
-				fmt.Sprintf(" %s", m.t("panel.feishu.channel", util.FirstNonEmpty(current.ChannelID, m.t("panel.feishu.none")))),
-			)
-		}
 	}
 	body = append(body, "", lipgloss.NewStyle().Bold(true).Render(m.t("panel.feishu.bot_list")))
 	if len(entries) == 0 {

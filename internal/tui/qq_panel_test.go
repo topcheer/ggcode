@@ -108,7 +108,7 @@ func TestQQPanelRenderLocalizesToChinese(t *testing.T) {
 	m.openQQPanel()
 
 	rendered := m.renderQQPanel()
-	if !strings.Contains(rendered, "目录") || !strings.Contains(rendered, "QQ 机器人") || !strings.Contains(rendered, "当前绑定") {
+	if !strings.Contains(rendered, "目录") || !strings.Contains(rendered, "QQ 机器人") {
 		t.Fatalf("expected localized qq panel, got:\n%s", rendered)
 	}
 	if !strings.Contains(rendered, "j/k 移动") || !strings.Contains(rendered, "绑定渠道") {

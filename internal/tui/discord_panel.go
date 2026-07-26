@@ -56,7 +56,6 @@ func (m Model) renderDiscordPanel() string {
 		return ""
 	}
 	entries := m.discordBindingEntries()
-	currentBindings := currentDiscordBindings(m.imManager)
 	boundCount := 0
 	for _, entry := range entries {
 		if strings.TrimSpace(entry.OccupiedBy) != "" {
@@ -71,19 +70,6 @@ func (m Model) renderDiscordPanel() string {
 		fmt.Sprintf(" %s", m.t("panel.discord.created", len(entries))),
 		fmt.Sprintf(" %s", m.t("panel.discord.bound", boundCount)),
 		fmt.Sprintf(" %s", m.t("panel.discord.available", maxDiscord(len(entries)-boundCount, 0))),
-		"",
-		lipgloss.NewStyle().Bold(true).Render(m.t("panel.discord.current_binding")),
-	}
-	if len(currentBindings) == 0 {
-		body = append(body, fmt.Sprintf(" %s", m.t("panel.discord.none")))
-	} else {
-		for _, current := range currentBindings {
-			body = append(body,
-				fmt.Sprintf(" %s", m.t("panel.discord.adapter", current.Adapter)),
-				fmt.Sprintf(" %s", m.t("panel.discord.target", util.FirstNonEmpty(current.TargetID, m.t("panel.discord.default")))),
-				fmt.Sprintf(" %s", m.t("panel.discord.channel", util.FirstNonEmpty(current.ChannelID, m.t("panel.discord.none")))),
-			)
-		}
 	}
 	body = append(body, "", lipgloss.NewStyle().Bold(true).Render(m.t("panel.discord.bot_list")))
 	if len(entries) == 0 {

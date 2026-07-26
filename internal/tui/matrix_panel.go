@@ -82,7 +82,6 @@ func (m Model) renderMatrixPanel() string {
 	}
 
 	entries := m.matrixBindingEntries()
-	currentBindings := currentMatBindings(m.imManager)
 	boundCount := 0
 	for _, entry := range entries {
 		if strings.TrimSpace(entry.OccupiedBy) != "" {
@@ -103,20 +102,6 @@ func (m Model) renderMatrixPanel() string {
 		fmt.Sprintf(" %s", m.t("panel.matrix.created", len(entries))),
 		fmt.Sprintf(" %s", m.t("panel.matrix.bound", boundCount)),
 		fmt.Sprintf(" %s", m.t("panel.matrix.available", maxMat(len(entries)-boundCount, 0))),
-		"",
-		lipgloss.NewStyle().Bold(true).Render(m.t("panel.matrix.current_binding")),
-	}
-
-	if len(currentBindings) == 0 {
-		body = append(body, fmt.Sprintf(" %s", m.t("panel.matrix.none")))
-	} else {
-		for _, current := range currentBindings {
-			body = append(body,
-				fmt.Sprintf(" %s", m.t("panel.matrix.adapter", current.Adapter)),
-				fmt.Sprintf(" %s", m.t("panel.matrix.target", util.FirstNonEmpty(current.TargetID, m.t("panel.matrix.default")))),
-				fmt.Sprintf(" %s", m.t("panel.matrix.channel", util.FirstNonEmpty(current.ChannelID, m.t("panel.matrix.none")))),
-			)
-		}
 	}
 
 	body = append(body, "", lipgloss.NewStyle().Bold(true).Render(m.t("panel.matrix.bot_list")))

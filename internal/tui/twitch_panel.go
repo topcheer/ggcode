@@ -82,7 +82,6 @@ func (m Model) renderTwitchPanel() string {
 	}
 
 	entries := m.twitchBindingEntries()
-	currentBindings := currentTwitchBindings(m.imManager)
 	boundCount := 0
 	for _, entry := range entries {
 		if strings.TrimSpace(entry.OccupiedBy) != "" {
@@ -103,20 +102,6 @@ func (m Model) renderTwitchPanel() string {
 		fmt.Sprintf(" %s", m.t("panel.twitch.created", len(entries))),
 		fmt.Sprintf(" %s", m.t("panel.twitch.bound", boundCount)),
 		fmt.Sprintf(" %s", m.t("panel.twitch.available", maxTwitch(len(entries)-boundCount, 0))),
-		"",
-		lipgloss.NewStyle().Bold(true).Render(m.t("panel.twitch.current_binding")),
-	}
-
-	if len(currentBindings) == 0 {
-		body = append(body, fmt.Sprintf(" %s", m.t("panel.twitch.none")))
-	} else {
-		for _, current := range currentBindings {
-			body = append(body,
-				fmt.Sprintf(" %s", m.t("panel.twitch.adapter", current.Adapter)),
-				fmt.Sprintf(" %s", m.t("panel.twitch.target", util.FirstNonEmpty(current.TargetID, m.t("panel.twitch.default")))),
-				fmt.Sprintf(" %s", m.t("panel.twitch.channel", util.FirstNonEmpty(current.ChannelID, m.t("panel.twitch.none")))),
-			)
-		}
 	}
 
 	body = append(body, "", lipgloss.NewStyle().Bold(true).Render(m.t("panel.twitch.bot_list")))

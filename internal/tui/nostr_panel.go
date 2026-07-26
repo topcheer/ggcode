@@ -89,7 +89,6 @@ func (m Model) renderNostrPanel() string {
 	}
 
 	entries := m.nostrBindingEntries()
-	currentBindings := currentNostrBindings(m.imManager)
 	boundCount := 0
 	for _, entry := range entries {
 		if strings.TrimSpace(entry.OccupiedBy) != "" {
@@ -112,21 +111,7 @@ func (m Model) renderNostrPanel() string {
 		fmt.Sprintf(" %s", m.t("panel.nostr.created", len(entries))),
 		fmt.Sprintf(" %s", m.t("panel.nostr.bound", boundCount)),
 		fmt.Sprintf(" %s", m.t("panel.nostr.available", maxNostr(len(entries)-boundCount, 0))),
-		"",
-		lipgloss.NewStyle().Bold(true).Render(m.t("panel.nostr.current_binding")),
 	)
-
-	if len(currentBindings) == 0 {
-		body = append(body, fmt.Sprintf(" %s", m.t("panel.nostr.none")))
-	} else {
-		for _, current := range currentBindings {
-			body = append(body,
-				fmt.Sprintf(" %s", m.t("panel.nostr.adapter", current.Adapter)),
-				fmt.Sprintf(" %s", m.t("panel.nostr.target", util.FirstNonEmpty(current.TargetID, m.t("panel.nostr.default")))),
-				fmt.Sprintf(" %s", m.t("panel.nostr.channel", util.FirstNonEmpty(current.ChannelID, m.t("panel.nostr.none")))),
-			)
-		}
-	}
 
 	body = append(body, "", lipgloss.NewStyle().Bold(true).Render(m.t("panel.nostr.bot_list")))
 	if len(entries) == 0 {

@@ -172,7 +172,6 @@ func (m Model) renderSignalPanel() string {
 	}
 
 	entries := m.signalBindingEntries()
-	currentBindings := currentSignalBindings(m.imManager)
 	boundCount := 0
 	for _, entry := range entries {
 		if strings.TrimSpace(entry.OccupiedBy) != "" {
@@ -196,21 +195,7 @@ func (m Model) renderSignalPanel() string {
 		fmt.Sprintf(" %s", m.t("panel.signal.created", len(entries))),
 		fmt.Sprintf(" %s", m.t("panel.signal.bound", boundCount)),
 		fmt.Sprintf(" %s", m.t("panel.signal.available", maxSignal(len(entries)-boundCount, 0))),
-		"",
-		lipgloss.NewStyle().Bold(true).Render(m.t("panel.signal.current_binding")),
 	)
-
-	if len(currentBindings) == 0 {
-		body = append(body, fmt.Sprintf(" %s", m.t("panel.signal.none")))
-	} else {
-		for _, current := range currentBindings {
-			body = append(body,
-				fmt.Sprintf(" %s", m.t("panel.signal.adapter", current.Adapter)),
-				fmt.Sprintf(" %s", m.t("panel.signal.target", util.FirstNonEmpty(current.TargetID, m.t("panel.signal.default")))),
-				fmt.Sprintf(" %s", m.t("panel.signal.channel", util.FirstNonEmpty(current.ChannelID, m.t("panel.signal.none")))),
-			)
-		}
-	}
 
 	body = append(body, "", lipgloss.NewStyle().Bold(true).Render(m.t("panel.signal.bot_list")))
 	if len(entries) == 0 {

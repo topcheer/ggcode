@@ -86,7 +86,6 @@ func (m Model) renderWhatsAppPanel() string {
 	}
 
 	entries := m.waBindingEntries()
-	currentBindings := currentWABindings(m.imManager)
 	boundCount := 0
 	for _, entry := range entries {
 		if strings.TrimSpace(entry.OccupiedBy) != "" {
@@ -106,20 +105,6 @@ func (m Model) renderWhatsAppPanel() string {
 		"",
 		lipgloss.NewStyle().Bold(true).Render(m.t("panel.whatsapp.adapters")),
 		" " + m.t("panel.whatsapp.summary", len(entries), boundCount, maxWA(len(entries)-boundCount, 0)),
-		"",
-		lipgloss.NewStyle().Bold(true).Render(m.t("panel.whatsapp.current_binding")),
-	}
-
-	if len(currentBindings) == 0 {
-		body = append(body, " "+m.t("panel.whatsapp.none"))
-	} else {
-		for _, current := range currentBindings {
-			body = append(body,
-				" "+m.t("panel.whatsapp.adapter", current.Adapter),
-				" "+m.t("panel.whatsapp.target", util.FirstNonEmpty(current.TargetID, m.t("panel.whatsapp.default"))),
-				" "+m.t("panel.whatsapp.channel", util.FirstNonEmpty(current.ChannelID, m.t("panel.whatsapp.none"))),
-			)
-		}
 	}
 
 	body = append(body, "", lipgloss.NewStyle().Bold(true).Render(m.t("panel.whatsapp.adapter_list")))

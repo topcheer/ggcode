@@ -56,7 +56,6 @@ func (m Model) renderTGPanel() string {
 		return ""
 	}
 	entries := m.tgBindingEntries()
-	currentBindings := currentTGBindings(m.imManager)
 	boundCount := 0
 	for _, entry := range entries {
 		if strings.TrimSpace(entry.OccupiedBy) != "" {
@@ -71,23 +70,6 @@ func (m Model) renderTGPanel() string {
 		fmt.Sprintf(" %s", m.t("panel.tg.created", len(entries))),
 		fmt.Sprintf(" %s", m.t("panel.tg.bound", boundCount)),
 		fmt.Sprintf(" %s", m.t("panel.tg.available", maxTG(len(entries)-boundCount, 0))),
-		"",
-		lipgloss.NewStyle().Bold(true).Render(m.t("panel.tg.current_binding")),
-	}
-	if len(currentBindings) == 0 {
-		body = append(body, fmt.Sprintf(" %s", m.t("panel.tg.none")))
-	} else {
-		for _, current := range currentBindings {
-			status := "active"
-			if current.Muted {
-				status = "muted"
-			}
-			body = append(body,
-				fmt.Sprintf(" %s (%s)", current.Adapter, status),
-				fmt.Sprintf(" %s", m.t("panel.tg.target", util.FirstNonEmpty(current.TargetID, m.t("panel.tg.default")))),
-				fmt.Sprintf(" %s", m.t("panel.tg.channel", util.FirstNonEmpty(current.ChannelID, m.t("panel.tg.none")))),
-			)
-		}
 	}
 	body = append(body, "", lipgloss.NewStyle().Bold(true).Render(m.t("panel.tg.bot_list")))
 	if len(entries) == 0 {

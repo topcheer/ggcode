@@ -82,7 +82,6 @@ func (m Model) renderMattermostPanel() string {
 	}
 
 	entries := m.mattermostBindingEntries()
-	currentBindings := currentMMBindings(m.imManager)
 	boundCount := 0
 	for _, entry := range entries {
 		if strings.TrimSpace(entry.OccupiedBy) != "" {
@@ -103,20 +102,6 @@ func (m Model) renderMattermostPanel() string {
 		fmt.Sprintf(" %s", m.t("panel.mattermost.created", len(entries))),
 		fmt.Sprintf(" %s", m.t("panel.mattermost.bound", boundCount)),
 		fmt.Sprintf(" %s", m.t("panel.mattermost.available", maxMM(len(entries)-boundCount, 0))),
-		"",
-		lipgloss.NewStyle().Bold(true).Render(m.t("panel.mattermost.current_binding")),
-	}
-
-	if len(currentBindings) == 0 {
-		body = append(body, fmt.Sprintf(" %s", m.t("panel.mattermost.none")))
-	} else {
-		for _, current := range currentBindings {
-			body = append(body,
-				fmt.Sprintf(" %s", m.t("panel.mattermost.adapter", current.Adapter)),
-				fmt.Sprintf(" %s", m.t("panel.mattermost.target", util.FirstNonEmpty(current.TargetID, m.t("panel.mattermost.default")))),
-				fmt.Sprintf(" %s", m.t("panel.mattermost.channel", util.FirstNonEmpty(current.ChannelID, m.t("panel.mattermost.none")))),
-			)
-		}
 	}
 
 	body = append(body, "", lipgloss.NewStyle().Bold(true).Render(m.t("panel.mattermost.bot_list")))

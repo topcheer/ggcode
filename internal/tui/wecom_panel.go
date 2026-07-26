@@ -83,7 +83,6 @@ func (m Model) renderWeComPanel() string {
 	}
 
 	entries := m.wecomBindingEntries()
-	currentBindings := currentWeComBindings(m.imManager)
 	boundCount := 0
 	for _, entry := range entries {
 		if strings.TrimSpace(entry.OccupiedBy) != "" {
@@ -99,20 +98,6 @@ func (m Model) renderWeComPanel() string {
 		fmt.Sprintf(" %s", m.t("panel.wecom.created", len(entries))),
 		fmt.Sprintf(" %s", m.t("panel.wecom.bound", boundCount)),
 		fmt.Sprintf(" %s", m.t("panel.wecom.available", maxWeCom(len(entries)-boundCount, 0))),
-		"",
-		lipgloss.NewStyle().Bold(true).Render(m.t("panel.wecom.current_binding")),
-	}
-
-	if len(currentBindings) == 0 {
-		body = append(body, fmt.Sprintf(" %s", m.t("panel.wecom.none")))
-	} else {
-		for _, current := range currentBindings {
-			body = append(body,
-				fmt.Sprintf(" %s", m.t("panel.wecom.adapter", current.Adapter)),
-				fmt.Sprintf(" %s", m.t("panel.wecom.target", util.FirstNonEmpty(current.TargetID, m.t("panel.wecom.default")))),
-				fmt.Sprintf(" %s", m.t("panel.wecom.channel", util.FirstNonEmpty(current.ChannelID, m.t("panel.wecom.none")))),
-			)
-		}
 	}
 
 	body = append(body, "", lipgloss.NewStyle().Bold(true).Render(m.t("panel.wecom.bot_list")))

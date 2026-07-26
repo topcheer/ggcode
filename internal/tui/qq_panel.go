@@ -62,7 +62,6 @@ func (m Model) renderQQPanel() string {
 		return ""
 	}
 	entries := m.qqBindingEntries()
-	currentBindings := currentQQBindings(m.imManager)
 	currentWS := m.currentWorkspacePath()
 	boundCount := 0
 	for _, entry := range entries {
@@ -78,23 +77,6 @@ func (m Model) renderQQPanel() string {
 		fmt.Sprintf(" %s", m.t("panel.qq.created", len(entries))),
 		fmt.Sprintf(" %s", m.t("panel.qq.bound", boundCount)),
 		fmt.Sprintf(" %s", m.t("panel.qq.available", maxQQ(len(entries)-boundCount, 0))),
-		"",
-		lipgloss.NewStyle().Bold(true).Render(m.t("panel.qq.current_binding")),
-	}
-	if len(currentBindings) == 0 {
-		body = append(body, fmt.Sprintf(" %s", m.t("panel.qq.none")))
-	} else {
-		for _, current := range currentBindings {
-			status := "active"
-			if current.Muted {
-				status = "muted"
-			}
-			body = append(body,
-				fmt.Sprintf(" %s (%s)", current.Adapter, status),
-				fmt.Sprintf(" %s", m.t("panel.qq.target", util.FirstNonEmpty(current.TargetID, m.t("panel.qq.default")))),
-				fmt.Sprintf(" %s", m.t("panel.qq.channel", util.FirstNonEmpty(current.ChannelID, m.t("panel.qq.none")))),
-			)
-		}
 	}
 	body = append(body, "", lipgloss.NewStyle().Bold(true).Render(m.t("panel.qq.bot_list")))
 	if len(entries) == 0 {
