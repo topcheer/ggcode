@@ -314,6 +314,46 @@ func (m *Model) handleHooksCommand() tea.Cmd {
 	return nil
 }
 
+// handleTitleCommand sets or displays the current session title.
+// Usage: /title <new title>  — set title
+//
+//	/title              — show current title
+func (m *Model) handleTitleCommand(title string) tea.Cmd {
+	if m.session == nil {
+		return func() tea.Msg { return streamMsg("No active session.") }
+	}
+	if title == "" {
+		current := m.session.Title
+		if current == "" {
+			current = "(untitled)"
+		}
+		msg := fmt.Sprintf("Current title: %s\n\nUsage: /title <new title> to rename this session.\n", current)
+		return func() tea.Msg { return streamMsg(msg) }
+	}
+	// Truncate to reasonable length
+	if len([]rune(title)) > 120 {
+		title = string([]rune(title)[:117]) + "..."
+	}
+	oldTitle := m.session.Title
+	m.session.Title = title
+	m.session.UpdatedAt = time.Now()
+
+	// Persist the title change to disk
+	store := m.sessionStore
+	if store != nil {
+		successMsg := fmt.Sprintf("Session renamed: %s → %s\n", oldTitle, title)
+		ses := m.session
+		return func() tea.Msg {
+			if err := store.AppendMetaToDisk(ses); err != nil {
+				return streamMsg(fmt.Sprintf("Failed to save title: %v\n", err))
+			}
+			return streamMsg(successMsg)
+		}
+	}
+	msg := fmt.Sprintf("Session renamed: %s → %s\n", oldTitle, title)
+	return func() tea.Msg { return streamMsg(msg) }
+}
+
 // handleCostCommand displays the session token usage and estimated cost,
 // grouped by model. A session may use multiple models if the user switches
 // mid-session; each model's contribution is shown separately.

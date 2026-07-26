@@ -203,6 +203,7 @@ var SlashCommands = []string{
 	"/edit",
 	"/regenerate", "/regen", "/branch", "/fork",
 	"/cron",
+	"/title",
 }
 
 // SlashCommandDescriptions provides short descriptions for slash commands.
@@ -279,6 +280,7 @@ var SlashCommandDescriptions = map[string]string{
 	"/regen":       "Regenerate last AI response (discard and re-run)",
 	"/cron":        "Manage scheduled jobs (list, pause, resume)",
 	"/branch":      "Fork current conversation into a new session",
+	"/title":       "Set or show the session title (e.g. /title My new title)",
 	"/fork":        "Fork current conversation into a new session",
 	"/mode":        "Set permission mode (supervised|plan|auto|bypass|autopilot)",
 	"/allow":       "Always allow a specific tool",
@@ -365,6 +367,7 @@ var SlashCommandPlaceholders = map[string]string{
 	"/regenerate":  "",
 	"/regen":       "",
 	"/branch":      "",
+	"/title":       "<new title>",
 	"/fork":        "",
 }
 
