@@ -67,6 +67,10 @@ func (t EditFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
 	}
 
+	if msg := CheckRequired("file_path", args.FilePath, "old_text", args.OldText); msg != "" {
+		return Result{IsError: true, Content: "Error: " + msg}, nil
+	}
+
 	if t.SandboxCheck != nil && !t.SandboxCheck(args.FilePath) {
 		return Result{IsError: true, Content: "Error: path not allowed by sandbox policy"}, nil
 	}

@@ -1,6 +1,7 @@
 package tool
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -71,4 +72,37 @@ func TestTodoFilePath_Fn(t *testing.T) {
 func TestFormatCommandJobSnapshot_NilInput(t *testing.T) {
 	got := formatCommandJobSnapshot(CommandJobSnapshot{}, false)
 	_ = got
+}
+
+func TestCheckRequired(t *testing.T) {
+	// All present
+	if msg := CheckRequired("path", "/tmp/test.go", "content", "hello"); msg != "" {
+		t.Errorf("expected empty message, got %q", msg)
+	}
+
+	// Single missing
+	msg := CheckRequired("path", "", "content", "hello")
+	if !strings.Contains(msg, "path") {
+		t.Errorf("expected 'path' in message, got %q", msg)
+	}
+	if strings.Contains(msg, "content") {
+		t.Errorf("should not mention 'content', got %q", msg)
+	}
+
+	// Multiple missing
+	msg = CheckRequired("path", "", "content", "")
+	if !strings.Contains(msg, "path") || !strings.Contains(msg, "content") {
+		t.Errorf("expected both 'path' and 'content', got %q", msg)
+	}
+
+	// Whitespace-only
+	msg = CheckRequired("path", "   ")
+	if msg == "" {
+		t.Error("expected error for whitespace-only path")
+	}
+
+	// No arguments
+	if msg := CheckRequired(); msg != "" {
+		t.Errorf("expected empty message for no fields, got %q", msg)
+	}
 }

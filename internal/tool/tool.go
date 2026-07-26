@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/topcheer/ggcode/internal/provider"
@@ -188,4 +189,31 @@ func (r *Registry) Clone() *Registry {
 		}
 	}
 	return newReg
+}
+
+// CheckRequired validates that the given fields are non-empty (after trimming
+// whitespace for string fields). Returns a user-friendly error message listing
+// which fields are missing, or "" if all fields are present.
+//
+// Usage:
+//
+//	if msg := CheckRequired("file_path", args.FilePath, "old_text", args.OldText); msg != "" {
+//	    return Result{IsError: true, Content: msg}, nil
+//	}
+func CheckRequired(fields ...string) string {
+	var missing []string
+	for i := 0; i+1 < len(fields); i += 2 {
+		name := fields[i]
+		value := fields[i+1]
+		if strings.TrimSpace(value) == "" {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) == 0 {
+		return ""
+	}
+	if len(missing) == 1 {
+		return fmt.Sprintf("missing required parameter: %s", missing[0])
+	}
+	return fmt.Sprintf("missing required parameters: %s", strings.Join(missing, ", "))
 }

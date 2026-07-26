@@ -191,6 +191,10 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
 	}
 
+	if msg := CheckRequired("command", args.Command); msg != "" {
+		return Result{IsError: true, Content: "Error: " + msg}, nil
+	}
+
 	if args.Description != "" {
 		debug.Log("run_command", "description: %s", args.Description)
 	}

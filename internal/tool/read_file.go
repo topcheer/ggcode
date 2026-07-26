@@ -67,6 +67,10 @@ func (t ReadFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
 	}
 
+	if msg := CheckRequired("path", args.Path); msg != "" {
+		return Result{IsError: true, Content: "Error: " + msg}, nil
+	}
+
 	if t.SandboxCheck != nil && !t.SandboxCheck(args.Path) {
 		return Result{IsError: true, Content: "Error: path not allowed by sandbox policy"}, nil
 	}
