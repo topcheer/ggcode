@@ -80,7 +80,8 @@ const (
 	defaultOutputReserveRatio = 0.10
 	maxOutputReserveRatio     = 0.25
 	safetyMarginRatio         = 0.05
-	minRecentGroups           = 0 // summarize all groups, keep none verbatim
+	minRecentGroups           = 1    // keep last interaction group verbatim (budget permitting)
+	maxRecentGroupTokenRatio  = 0.15 // recent groups may occupy at most 15% of context window
 	minSummaryReserve         = 64
 	maxPTLRetries             = 3
 	tokenCountTimeout         = 100 * time.Millisecond
@@ -961,6 +962,7 @@ func (m *Manager) Summarize(ctx context.Context, prov provider.Provider) error {
 		}
 		newMsgs = append(newMsgs, stateMsg)
 	}
+	newMsgs = append(newMsgs, plan.recentMsgs...)
 	newMsgs = append(newMsgs, extraMsgs...)
 
 	oldLen := len(m.messages)
@@ -1772,13 +1774,52 @@ func (m *Manager) buildSummaryPlan() (summaryPlan, bool) {
 		return summaryPlan{}, false
 	}
 
-	// Rolling compaction: summarize ALL messages (except system prompt).
-	// No "recent groups" are kept verbatim. Messages produced during the
-	// compaction window are preserved later by ApplyCompactResult as "extra".
-	plan.oldMsgs = append([]provider.Message(nil), m.messages[start:]...)
-	plan.recentMsgs = nil
-	debug.Log("ctx", "buildSummaryPlan: summarizing all %d messages (groups=%d)", len(plan.oldMsgs), len(groups))
+	// Adaptive recent group retention: keep the last few interaction groups
+	// verbatim to preserve immediate working context after compaction
+	// (same approach as Claude Code). Budget-aware: only keep groups that
+	// fit within maxRecentGroupTokenRatio of the context window. Requires
+	// at least minRecentGroups+1 total groups so there's something to summarize.
+	recentCount := 0
+	maxRecentTokens := int(float64(m.contextWindow) * maxRecentGroupTokenRatio)
+	if len(groups) > minRecentGroups {
+		accumulatedTokens := 0
+		for i := 0; i < minRecentGroups && i < len(groups); i++ {
+			g := groups[len(groups)-1-i]
+			groupTokens := estimateMessagesTokens(m.messages[g.start:g.end])
+			if accumulatedTokens+groupTokens > maxRecentTokens {
+				break
+			}
+			accumulatedTokens += groupTokens
+			recentCount++
+		}
+	}
+
+	if recentCount > 0 {
+		splitIdx := groups[len(groups)-recentCount].start
+		plan.oldMsgs = append([]provider.Message(nil), m.messages[start:splitIdx]...)
+		plan.recentMsgs = append([]provider.Message(nil), m.messages[splitIdx:]...)
+		debug.Log("ctx", "buildSummaryPlan: summarizing %d msgs, keeping %d recent msgs (%d groups, ~%d tokens, budget=%d)",
+			len(plan.oldMsgs), len(plan.recentMsgs), recentCount, estimateMessagesTokens(plan.recentMsgs), maxRecentTokens)
+	} else {
+		// Budget exceeded or too few groups: summarize all (rolling compaction).
+		plan.oldMsgs = append([]provider.Message(nil), m.messages[start:]...)
+		plan.recentMsgs = nil
+		debug.Log("ctx", "buildSummaryPlan: summarizing all %d messages (groups=%d, recent=0 budget_exceeded)", len(plan.oldMsgs), len(groups))
+	}
 	return plan, len(plan.oldMsgs) > 0
+}
+
+// estimateMessagesTokens returns a rough token estimate for a slice of
+// messages, used for budget-aware recent group retention decisions.
+func estimateMessagesTokens(msgs []provider.Message) int {
+	total := 0
+	for _, msg := range msgs {
+		for _, block := range msg.Content {
+			total += EstimateTokens(block.Text)
+			total += EstimateTokens(block.Output)
+		}
+	}
+	return total
 }
 
 func summarizeMessages(ctx context.Context, prov provider.Provider, msgs []provider.Message, onUsage func(provider.TokenUsage), summaryTokenLimit int) (string, error) {

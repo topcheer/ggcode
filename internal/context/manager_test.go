@@ -189,7 +189,7 @@ func TestContextManager_Summarize_TooFewMessages(t *testing.T) {
 	}
 }
 
-func TestContextManager_Summarize_RollingCompactionSummarizesAll(t *testing.T) {
+func TestContextManager_Summarize_RetainsRecentGroup(t *testing.T) {
 	ctx := context.Background()
 	prov := &mockProvider{}
 
@@ -206,20 +206,23 @@ func TestContextManager_Summarize_RollingCompactionSummarizesAll(t *testing.T) {
 	}
 
 	msgs := cm.Messages()
-	// Rolling compaction: [system][summary_system] — no recent conversation messages retained
-	if len(msgs) != 2 {
-		t.Fatalf("expected system + summary = 2 messages, got %d", len(msgs))
+	// Adaptive recent group retention: [system][summary][last user][last assistant]
+	// The most recent interaction group is kept verbatim for working context.
+	if len(msgs) != 4 {
+		t.Fatalf("expected system + summary + 2 recent = 4 messages, got %d", len(msgs))
 	}
 	if msgs[0].Role != "system" {
 		t.Fatalf("expected first message to be system, got %s", msgs[0].Role)
 	}
-	if msgs[1].Role != "system" || !strings.Contains(msgs[1].Content[0].Text, "[Previous conversation summary]") {
-		t.Fatalf("expected second message to be summary, got role=%s", msgs[1].Role)
+	if !containsSummaryMarker(msgs[1]) {
+		t.Fatalf("expected second message to be summary")
 	}
-	// No conversation messages should be retained verbatim
-	retained := retainedConversationMessages(msgs)
-	if retained != 0 {
-		t.Fatalf("expected 0 retained conversation messages, got %d", retained)
+	// Last 2 messages should be the most recent interaction group (verbatim)
+	if msgs[2].Role != "user" || !strings.Contains(msgs[2].Content[0].Text, "user-49") {
+		t.Fatalf("expected retained user-49, got role=%s text=%q", msgs[2].Role, msgs[2].Content[0].Text)
+	}
+	if msgs[3].Role != "assistant" || !strings.Contains(msgs[3].Content[0].Text, "assistant-49") {
+		t.Fatalf("expected retained assistant-49, got role=%s text=%q", msgs[3].Role, msgs[3].Content[0].Text)
 	}
 }
 
@@ -613,8 +616,8 @@ func messageContainsTextInList(messages []provider.Message, want string) bool {
 }
 
 func TestContextManager_Summarize_PreservesExtraMessages(t *testing.T) {
-	// Rolling compaction: ALL snapshot messages are summarized.
-	// Messages produced during the async compaction window are preserved.
+	// Adaptive retention: the most recent interaction group is kept verbatim.
+	// Messages produced during the async compaction window are also preserved.
 	cm := NewManager(500)
 	ctx := context.Background()
 	prov := &mockProvider{}
@@ -634,23 +637,25 @@ func TestContextManager_Summarize_PreservesExtraMessages(t *testing.T) {
 	}
 
 	msgs := cm.Messages()
-	// Rolling compaction: [system, summary_system] only.
-	// No conversation messages retained verbatim.
-	if len(msgs) != 2 {
-		t.Fatalf("expected system + summary = 2 messages, got %d", len(msgs))
+	// [system, summary, recent_question, recent_tool_call, recent_tool_result, recent_answer]
+	if len(msgs) != 6 {
+		t.Fatalf("expected system + summary + 4 recent = 6 messages, got %d", len(msgs))
 	}
 	if !containsSummaryMarker(msgs[1]) {
 		t.Fatal("expected summary marker after system prompt")
 	}
-	retained := retainedConversationMessages(msgs)
-	if retained != 0 {
-		t.Fatalf("expected 0 retained conversation messages, got %d", retained)
+	// The most recent interaction group must be retained verbatim
+	if msgs[2].Role != "user" || !strings.Contains(msgs[2].Content[0].Text, "recent question") {
+		t.Fatalf("expected retained 'recent question', got role=%s", msgs[2].Role)
+	}
+	if msgs[5].Role != "assistant" || !strings.Contains(msgs[5].Content[0].Text, "recent answer") {
+		t.Fatalf("expected retained 'recent answer', got role=%s", msgs[5].Role)
 	}
 }
 
 func TestContextManager_Summarize_SingleGroupCanBeSummarized(t *testing.T) {
-	// With rolling compaction (minRecentGroups=0), even a single group
-	// can be summarized. This test verifies the behavior.
+	// With minRecentGroups=1, a single group still gets summarized because
+	// there must be at least minRecentGroups+1 groups (something to summarize + something to keep).
 	cm := NewManager(120)
 	ctx := context.Background()
 	prov := &mockProvider{}
@@ -2169,5 +2174,34 @@ func TestExtractReadPaths(t *testing.T) {
 	paths = extractReadPaths("read_file", nil)
 	if len(paths) != 0 {
 		t.Errorf("empty input: expected [], got %v", paths)
+	}
+}
+
+func TestContextManager_Summarize_RecentGroupBudgetExceeded(t *testing.T) {
+	// When the most recent group exceeds the token budget (15% of context
+	// window), it should be summarized along with everything else (fallback
+	// to rolling compaction).
+	ctx := context.Background()
+	prov := &mockProvider{}
+
+	cm := NewManager(100) // maxRecentTokens = int(100*0.15) = 15
+	cm.Add(provider.Message{Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "System prompt."}}})
+	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "old question"}}})
+	cm.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "old answer"}}})
+	// Recent group is large enough to exceed 15-token budget
+	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: strings.Repeat("x", 200)}}})
+	cm.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: strings.Repeat("y", 200)}}})
+
+	if err := cm.Summarize(ctx, prov); err != nil {
+		t.Fatalf("Summarize failed: %v", err)
+	}
+
+	msgs := cm.Messages()
+	// Budget exceeded → all summarized: [system, summary]
+	if len(msgs) != 2 {
+		t.Fatalf("expected system + summary = 2 messages (budget exceeded), got %d", len(msgs))
+	}
+	if !containsSummaryMarker(msgs[1]) {
+		t.Fatal("expected summary marker")
 	}
 }
