@@ -1,6 +1,10 @@
 package diff
 
-import "testing"
+import (
+	"fmt"
+	"strings"
+	"testing"
+)
 
 func TestUnifiedDiff(t *testing.T) {
 	old := "line1\nline2\nline3\nline4\nline5\n"
@@ -54,4 +58,39 @@ func contains(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+func TestUnifiedDiffLargeFileFallback(t *testing.T) {
+	// Generate two files large enough to trigger the fallback (>5000 combined lines)
+	var oldLines, newLines []string
+	for i := 0; i < 3000; i++ {
+		oldLines = append(oldLines, "line "+itoa(i))
+	}
+	newLines = append([]string(nil), oldLines...)
+	// Modify lines 10-12 and last 3 lines
+	newLines[10] = "changed line 10"
+	newLines[11] = "changed line 11"
+	newLines[len(newLines)-1] = "changed last"
+
+	oldText := strings.Join(oldLines, "\n")
+	newText := strings.Join(newLines, "\n")
+
+	result := UnifiedDiff(oldText, newText, 3)
+
+	// Must not be empty
+	if result == "" {
+		t.Fatal("expected non-empty diff for large file")
+	}
+	// Must contain truncation indicator
+	if !strings.Contains(result, "diff truncated") {
+		t.Fatal("expected truncation indicator for large file diff")
+	}
+	// Must contain the changed lines
+	if !strings.Contains(result, "changed line 10") {
+		t.Error("expected changed content in diff")
+	}
+}
+
+func itoa(n int) string {
+	return fmt.Sprintf("%d", n)
 }

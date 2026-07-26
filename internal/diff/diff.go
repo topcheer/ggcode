@@ -5,14 +5,82 @@ import (
 	"strings"
 )
 
+// maxDiffLines is the safety limit for LCS computation. Files exceeding this
+// combined line count get a truncated diff instead of running the O(n*m)
+// algorithm, which would freeze the TUI on very large files.
+const maxDiffLines = 5000
+
 // UnifiedDiff generates a unified diff string between old and new content.
 // contextLines controls how many unchanged lines surround each change.
+// For very large files (>5000 combined lines), falls back to showing only
+// the first N changed lines to avoid OOM and TUI freeze.
 func UnifiedDiff(old, new string, contextLines int) string {
 	oldLines := splitLines(old)
 	newLines := splitLines(new)
 
+	// Safety: if the combined input is too large, use a line-based fallback
+	// that avoids the O(n*m) LCS table allocation.
+	if len(oldLines)+len(newLines) > maxDiffLines {
+		return fastDiffFallback(oldLines, newLines, contextLines)
+	}
+
 	editScript := computeEditScript(oldLines, newLines)
 	return formatUnifiedDiff(oldLines, newLines, editScript, contextLines)
+}
+
+// fastDiffFallback produces a diff for large files without the O(n*m) LCS
+// table. It uses a simple prefix/suffix matching approach to find the common
+// header and trailer, then shows only the changed middle section.
+func fastDiffFallback(oldLines, newLines []string, contextLines int) string {
+	// Find common prefix
+	prefix := 0
+	minLen := len(oldLines)
+	if len(newLines) < minLen {
+		minLen = len(newLines)
+	}
+	for prefix < minLen && oldLines[prefix] == newLines[prefix] {
+		prefix++
+	}
+
+	// Find common suffix
+	suffix := 0
+	for suffix < (len(oldLines)-prefix) && suffix < (len(newLines)-prefix) &&
+		oldLines[len(oldLines)-1-suffix] == newLines[len(newLines)-1-suffix] {
+		suffix++
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("(diff truncated: %d+%d lines, showing changes only)\n", len(oldLines), len(newLines)))
+
+	if prefix > 0 {
+		show := contextLines
+		if show > prefix {
+			show = prefix
+		}
+		start := prefix - show
+		for i := start; i < prefix; i++ {
+			sb.WriteString("  " + oldLines[i] + "\n")
+		}
+	}
+
+	for i := prefix; i < len(oldLines)-suffix; i++ {
+		sb.WriteString("- " + oldLines[i] + "\n")
+	}
+	for i := prefix; i < len(newLines)-suffix; i++ {
+		sb.WriteString("+ " + newLines[i] + "\n")
+	}
+
+	if suffix > 0 {
+		show := contextLines
+		if show > suffix {
+			show = suffix
+		}
+		for i := 0; i < show; i++ {
+			sb.WriteString("  " + oldLines[len(oldLines)-suffix+i] + "\n")
+		}
+	}
+
+	return sb.String()
 }
 
 // splitLines splits text into lines, preserving a trailing newline indicator.
