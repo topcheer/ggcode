@@ -305,6 +305,9 @@ func (h *TunnelHost) StopShare() {
 	h.DetachOnlineBroker()
 
 	if ref != nil {
+		if ref.broker != nil {
+			ref.broker.Stop()
+		}
 		if ref.session != nil {
 			ref.session.Stop()
 		}
