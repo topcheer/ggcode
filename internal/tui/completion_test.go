@@ -211,8 +211,8 @@ func TestCompleteSlashCommandOnlyIncludesLegacyCommands(t *testing.T) {
 		},
 	})
 
-	if len(matches) != 1 || matches[0] != "/deploy" {
-		t.Fatalf("matches = %v, want [/deploy]", matches)
+	if len(matches) != 2 || matches[0] != "/debug" || matches[1] != "/deploy" {
+		t.Fatalf("matches = %v, want [/debug /deploy]", matches)
 	}
 }
 
