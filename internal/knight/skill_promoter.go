@@ -380,11 +380,7 @@ func updateSkillFrontmatter(path string, mutate func(map[string]interface{})) er
 	if err != nil {
 		return err
 	}
-	tmpPath := path + ".tmp"
-	if err := os.WriteFile(tmpPath, []byte(updated), info.Mode().Perm()); err != nil {
-		return err
-	}
-	return os.Rename(tmpPath, path)
+	return util.AtomicWriteFile(path, []byte(updated), info.Mode().Perm())
 }
 
 func mutateSkillFrontmatter(content string, mutate func(map[string]interface{})) (string, error) {
