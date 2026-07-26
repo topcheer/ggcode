@@ -224,6 +224,12 @@ func tryClaimPendingTask(
 		if assignee, ok := tk.Metadata["assignee"]; ok && assignee != "" && assignee != tm.ID {
 			continue
 		}
+		// Skip tasks with unmet dependencies — all BlockedBy tasks must be
+		// completed before this task can be claimed. This prevents premature
+		// execution of tasks that depend on other tasks' output.
+		if !allBlockersComplete(tmMgr, tk) {
+			continue
+		}
 
 		// Atomically claim: only succeeds if status is still pending.
 		owner := tm.ID
@@ -457,4 +463,23 @@ func executeTask(
 
 	debug.Log("swarm", "teammate %s task complete output_len=%d", tm.ID, output.Len())
 	return output.String(), err
+}
+
+// allBlockersComplete returns true if every task listed in tk.BlockedBy has
+// status "completed". Tasks with no BlockedBy entries return true.
+func allBlockersComplete(tmMgr *task.Manager, tk task.Task) bool {
+	if len(tk.BlockedBy) == 0 {
+		return true
+	}
+	for _, blockerID := range tk.BlockedBy {
+		blocker, ok := tmMgr.Get(blockerID)
+		if !ok {
+			// Blocker doesn't exist (deleted?) — treat as unmet dependency.
+			return false
+		}
+		if blocker.Status != task.StatusCompleted {
+			return false
+		}
+	}
+	return true
 }

@@ -685,3 +685,55 @@ func TestIdleRunner_ClaimsUnassignedTask(t *testing.T) {
 		t.Errorf("task should be completed, got %s", tasks[0].Status)
 	}
 }
+
+func TestIdleRunner_SkipsTaskWithUnmetDependency(t *testing.T) {
+	// Use a blocking agent so we can observe task ordering.
+	agent := &blockingAgent{}
+	agent.unblock = make(chan struct{})
+	defer close(agent.unblock)
+
+	tm := &Teammate{
+		ID:     "tm-1",
+		Name:   "worker",
+		Status: TeammateIdle,
+		Inbox:  make(chan MailMessage, 16),
+	}
+
+	taskMgr := task.NewManager()
+	team := &Team{
+		ID:        "team-1",
+		Name:      "test",
+		LeaderID:  "leader",
+		Teammates: map[string]*Teammate{"tm-1": tm},
+		Tasks:     taskMgr,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	tm.ctx = ctx
+
+	mgr := newTestManager()
+	mgr.mu.Lock()
+	mgr.teams["team-1"] = team
+	mgr.mu.Unlock()
+
+	go runTeammateLoop(ctx, tm, team, agent, mgr, nil, 30*time.Minute)
+
+	// Create two tasks: A (no dependency) and B (blocked by A).
+	taskA := taskMgr.Create("Task A", "Do first", "", nil)
+	taskB := taskMgr.Create("Task B", "Do after A", "", nil)
+	taskMgr.Update(taskB.ID, task.UpdateOptions{AddBlockedBy: []string{taskA.ID}})
+
+	time.Sleep(300 * time.Millisecond)
+
+	// Task A should be claimed (agent is blocked on it); Task B should be pending.
+	taskAGot, _ := taskMgr.Get(taskA.ID)
+	if taskAGot.Status != task.StatusInProgress {
+		t.Errorf("task A should be in_progress, got %s", taskAGot.Status)
+	}
+
+	taskBGot, _ := taskMgr.Get(taskB.ID)
+	if taskBGot.Status != task.StatusPending {
+		t.Errorf("task B should be pending while A is in_progress (unmet dependency), got %s", taskBGot.Status)
+	}
+}
