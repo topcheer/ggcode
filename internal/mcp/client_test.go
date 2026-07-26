@@ -189,15 +189,20 @@ func TestMCPToolExecuteInvalidJSON(t *testing.T) {
 	mt := &mcpTool{
 		name:     "mcp__srv__tool",
 		toolName: "tool",
+		srvName:  "srv",
 	}
-	// Execute with invalid JSON — should fail at process spawn since "echo" isn't a real MCP server
-	// but the JSON parse happens before that
 	ctx := context.Background()
-	_, err := mt.Execute(ctx, json.RawMessage(`{invalid`))
-	// The error could be from JSON parse or from process spawn
-	// Either way it should return an error
-	if err == nil {
-		t.Error("expected error for invalid JSON input")
+	result, err := mt.Execute(ctx, json.RawMessage(`{invalid`))
+	// Invalid JSON should now return a tool.Result with IsError=true
+	// (not a Go error return), with the server name in the message.
+	if err != nil {
+		t.Errorf("expected nil Go error, got: %v", err)
+	}
+	if !result.IsError {
+		t.Error("expected IsError=true for invalid JSON input")
+	}
+	if !strings.Contains(result.Content, "mcp[srv]") {
+		t.Errorf("expected server name 'srv' in error message, got: %q", result.Content)
 	}
 }
 

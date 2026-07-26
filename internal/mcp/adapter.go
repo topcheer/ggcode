@@ -123,15 +123,21 @@ func (t *mcpTool) Execute(ctx context.Context, input json.RawMessage) (tool.Resu
 	var args map[string]interface{}
 	if input != nil && string(input) != "" {
 		if err := json.Unmarshal(input, &args); err != nil {
-			return tool.Result{IsError: true}, fmt.Errorf("parsing tool arguments: %w", err)
+			return tool.Result{Content: fmt.Sprintf("mcp[%s]: parsing tool arguments: %v", t.srvName, err), IsError: true}, nil
 		}
 	}
 	if t.caller == nil {
-		return tool.Result{IsError: true}, fmt.Errorf("mcp tool %s is not connected", t.toolName)
+		return tool.Result{
+			Content: fmt.Sprintf("mcp[%s]: tool '%s' is not connected (server may have crashed or not started)", t.srvName, t.toolName),
+			IsError: true,
+		}, nil
 	}
 	result, err := t.caller.CallTool(ctx, t.toolName, args)
 	if err != nil {
-		return tool.Result{IsError: true}, err
+		return tool.Result{
+			Content: fmt.Sprintf("mcp[%s]: %s → %v", t.srvName, t.toolName, err),
+			IsError: true,
+		}, nil
 	}
 
 	// Extract text from content blocks
@@ -142,8 +148,15 @@ func (t *mcpTool) Execute(ctx context.Context, input json.RawMessage) (tool.Resu
 		}
 	}
 
+	content := strings.Join(parts, "\n")
+	// When the MCP server itself reports an error (IsError=true), prefix
+	// the content with the server name so the agent knows which server failed.
+	if result.IsError {
+		content = fmt.Sprintf("mcp[%s]: %s", t.srvName, content)
+	}
+
 	return tool.Result{
-		Content: strings.Join(parts, "\n"),
+		Content: content,
 		IsError: result.IsError,
 	}, nil
 }
