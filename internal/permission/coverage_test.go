@@ -917,3 +917,39 @@ func TestExtractCommand_VariousInputs(t *testing.T) {
 		}
 	}
 }
+
+func TestIsSensitivePath_EnvFiles(t *testing.T) {
+	sensitive := []string{
+		".env",
+		".env.local",
+		".env.production",
+		".env.development",
+		"/home/user/.env",
+		"/project/.env",
+		"~/.aws/credentials",
+		"~/.docker/config.json",
+		"~/.npmrc",
+		"~/.netrc",
+		"keys.env",
+		"~/.ssh/config",
+		"~/.gnupg",
+		"my-credentials.json",
+	}
+	for _, p := range sensitive {
+		if !isSensitivePath(p) {
+			t.Errorf("isSensitivePath(%q) should be true", p)
+		}
+	}
+
+	notSensitive := []string{
+		"/project/src/main.go",
+		"/project/README.md",
+		"config.yaml",
+		"package.json",
+	}
+	for _, p := range notSensitive {
+		if isSensitivePath(p) {
+			t.Errorf("isSensitivePath(%q) should be false", p)
+		}
+	}
+}

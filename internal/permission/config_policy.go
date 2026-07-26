@@ -2,6 +2,7 @@ package permission
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -249,11 +250,27 @@ func isSensitivePath(path string) bool {
 		".bashrc", ".bash_profile", ".zshrc", ".zprofile", ".profile",
 		".ssh/config", ".ssh/authorized_keys", ".ssh/id_rsa", ".ssh/id_ed25519",
 		".gitconfig", ".gnupg",
+		// Credential and secret files
+		".aws/credentials", ".aws/config",
+		".docker/config.json",
+		".npmrc", ".pypirc", ".netrc",
+		// Keys and token files (used by various CLI tools)
+		"keys.env", ".env",
 	}
 	for _, f := range sensitiveFiles {
 		if strings.HasSuffix(path, f) || path == f {
 			return true
 		}
+	}
+	// .env files anywhere in the project (contain secrets)
+	base := filepath.Base(path)
+	if base == ".env" || strings.HasPrefix(base, ".env.") {
+		return true
+	}
+	// Files containing credentials/secrets/tokens in their name
+	lowerBase := strings.ToLower(base)
+	if strings.Contains(lowerBase, "credential") || strings.Contains(lowerBase, "id_rsa") || strings.Contains(lowerBase, "id_ed25519") {
+		return true
 	}
 	// Writing directly to $HOME root (e.g., ~/.somefile where somefile is not a known app)
 	if strings.HasPrefix(path, home+"/") && !strings.Contains(strings.TrimPrefix(path, home+"/"), "/") {
