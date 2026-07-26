@@ -4,12 +4,14 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/atotto/clipboard"
+	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/context"
 	"github.com/topcheer/ggcode/internal/cost"
 	"github.com/topcheer/ggcode/internal/debug"
@@ -315,7 +317,12 @@ func (m *Model) handleHooksCommand() tea.Cmd {
 // handleCostCommand displays the session token usage and estimated cost,
 // grouped by model. A session may use multiple models if the user switches
 // mid-session; each model's contribution is shown separately.
-func (m *Model) handleCostCommand() tea.Cmd {
+func (m *Model) handleCostCommand(args []string) tea.Cmd {
+	// /cost all — cross-session cost summary
+	if len(args) > 0 && (args[0] == "all" || args[0] == "-a" || args[0] == "--all") {
+		return m.handleCostAllCommand()
+	}
+
 	if m.session == nil {
 		m.chatWriteSystem(nextSystemID(), "No active session.")
 		return nil
@@ -419,6 +426,59 @@ func (m *Model) handleCostCommand() tea.Cmd {
 	sb.WriteString(fmt.Sprintf("  Total tokens:       %s\n", humanizeTokenCount(usage.Total())))
 	if hasMeteredRate && grandCost > 0 {
 		sb.WriteString(fmt.Sprintf("  Total estimated:    $%.4f\n", grandCost))
+	}
+
+	m.chatWriteSystem(nextSystemID(), sb.String())
+	return nil
+}
+
+// handleCostAllCommand displays cross-session cost totals by loading all
+// .cost.json files from the cost data directory.
+func (m *Model) handleCostAllCommand() tea.Cmd {
+	dataDir := filepath.Join(config.ConfigDir(), "cost")
+	mgr := cost.NewManager(cost.DefaultPricingTable(), dataDir)
+	loaded := mgr.LoadAllFromDisk()
+
+	var sb strings.Builder
+	sb.WriteString("Cross-Session Cost Summary:\n\n")
+
+	if loaded == 0 {
+		sb.WriteString("  No cost data found. Cost files are saved in:\n")
+		sb.WriteString(fmt.Sprintf("  %s\n", dataDir))
+		m.chatWriteSystem(nextSystemID(), sb.String())
+		return nil
+	}
+
+	allCosts := mgr.AllCosts()
+	agg := mgr.AggregateAllCosts()
+
+	// Per-session breakdown (top 10 by cost)
+	maxShow := 10
+	if len(allCosts) < maxShow {
+		maxShow = len(allCosts)
+	}
+	sb.WriteString(fmt.Sprintf("  Sessions tracked: %d (showing top %d)\n\n", loaded, maxShow))
+	for i := 0; i < maxShow; i++ {
+		sc := allCosts[i]
+		sb.WriteString(fmt.Sprintf("  %s (%s) — %s\n",
+			sc.Model, sc.Provider, cost.FormatCost(sc.TotalCostUSD)))
+	}
+	if len(allCosts) > maxShow {
+		sb.WriteString(fmt.Sprintf("  ... and %d more\n\n", len(allCosts)-maxShow))
+	} else {
+		sb.WriteString("\n")
+	}
+
+	// Grand totals
+	sb.WriteString("--- All-Time Totals ---\n")
+	sb.WriteString(fmt.Sprintf("  Total cost:         %s\n", cost.FormatCost(agg.TotalCostUSD)))
+	sb.WriteString(fmt.Sprintf("  Input tokens:       %s\n", humanizeTokenCount(int(agg.InputTokens))))
+	sb.WriteString(fmt.Sprintf("  Output tokens:      %s\n", humanizeTokenCount(int(agg.OutputTokens))))
+	if agg.CacheReadTokens > 0 {
+		sb.WriteString(fmt.Sprintf("  Cache read:         %s\n", humanizeTokenCount(int(agg.CacheReadTokens))))
+	}
+	if agg.CacheWriteTokens > 0 {
+		sb.WriteString(fmt.Sprintf("  Cache write:        %s\n", humanizeTokenCount(int(agg.CacheWriteTokens))))
 	}
 
 	m.chatWriteSystem(nextSystemID(), sb.String())

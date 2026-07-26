@@ -359,7 +359,7 @@ var SlashCommandPlaceholders = map[string]string{
 	"/retry":       "",
 	"/edit":        "",
 	"/hooks":       "",
-	"/cost":        "",
+	"/cost":        "[all]",
 	"/copy":        "",
 	"/context":     "",
 	"/regenerate":  "",

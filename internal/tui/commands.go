@@ -488,7 +488,7 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 		case "/hooks":
 			return m.handleHooksCommand()
 		case "/cost":
-			return m.handleCostCommand()
+			return m.handleCostCommand(parts[1:])
 		case "/copy":
 			return m.handleCopyCommand()
 		case "/redo":

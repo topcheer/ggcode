@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -129,6 +130,59 @@ func (m *Manager) Load(sessionID, providerName, model string) {
 	t := NewTracker(providerName, model, m.pricing)
 	t.cost = sc
 	m.trackers[sessionID] = t
+}
+
+// LoadAllFromDisk scans the data directory for all .cost.json files and loads
+// them into the manager. This enables cross-session cost aggregation.
+func (m *Manager) LoadAllFromDisk() int {
+	entries, err := os.ReadDir(m.dataDir)
+	if err != nil {
+		return 0
+	}
+	loaded := 0
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".cost.json") {
+			continue
+		}
+		sessionID := strings.TrimSuffix(name, ".cost.json")
+		path := filepath.Join(m.dataDir, name)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		var sc SessionCost
+		if err := json.Unmarshal(data, &sc); err != nil {
+			continue // skip corrupt files
+		}
+		m.mu.Lock()
+		t := NewTracker(sc.Provider, sc.Model, m.pricing)
+		t.cost = sc
+		m.trackers[sessionID] = t
+		m.mu.Unlock()
+		loaded++
+	}
+	return loaded
+}
+
+// AggregateAllCosts returns the summed totals across all sessions.
+func (m *Manager) AggregateAllCosts() SessionCost {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var agg SessionCost
+	sessions := 0
+	for _, t := range m.trackers {
+		sc := t.SessionCost()
+		agg.InputTokens += sc.InputTokens
+		agg.OutputTokens += sc.OutputTokens
+		agg.CacheReadTokens += sc.CacheReadTokens
+		agg.CacheWriteTokens += sc.CacheWriteTokens
+		agg.TotalCostUSD += sc.TotalCostUSD
+		sessions++
+	}
+	agg.Provider = fmt.Sprintf("%d sessions", sessions)
+	return agg
 }
 
 // FormatCost returns a human-readable cost string.
