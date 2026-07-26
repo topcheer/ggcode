@@ -6,8 +6,10 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/debug"
 )
 
 // AutoMemory manages automatic memory persistence in ~/.ggcode/memory/.
@@ -49,27 +51,23 @@ func (am *AutoMemory) SaveMemory(key, content string) error {
 }
 
 // LoadIndex loads all memory file keys and returns a formatted index (titles
-// only) plus the list of file paths. This is much lighter than LoadAll(), which
-// includes full file contents.
+// only) plus the list of file paths. Applies curation filtering (expiry +
+// dedup) so the system prompt only shows active memories.
 func (am *AutoMemory) LoadIndex() (string, []string, error) {
-	entries, err := os.ReadDir(am.dir)
+	metas, err := am.collectMetas()
 	if err != nil {
-		if os.IsNotExist(err) {
-			return "", nil, nil
-		}
 		return "", nil, err
 	}
+	now := time.Now()
+	active, expired, deduped := curateEntries(metas, now)
+	debug.Log("memory", "%s", formatMemorySummary(len(metas), len(active), expired, deduped))
 
 	var keys, files []string
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
-			continue
-		}
-		key := strings.TrimSuffix(e.Name(), ".md")
-		keys = append(keys, key)
-		files = append(files, filepath.Join(am.dir, e.Name()))
+	for _, m := range active {
+		keys = append(keys, m.Key)
+		files = append(files, filepath.Join(am.dir, m.Key+".md"))
 	}
-	sort.Strings(keys)
+	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
 
 	var builder strings.Builder
 	for _, key := range keys {
@@ -79,35 +77,33 @@ func (am *AutoMemory) LoadIndex() (string, []string, error) {
 }
 
 // LoadAll loads all memory files and returns their combined content.
+// Applies curation filtering (expiry + dedup) so only active memories
+// are injected into the LLM context.
 func (am *AutoMemory) LoadAll() (string, []string, error) {
-	entries, err := os.ReadDir(am.dir)
+	metas, err := am.collectMetas()
 	if err != nil {
-		if os.IsNotExist(err) {
-			return "", nil, nil
-		}
 		return "", nil, err
 	}
+	now := time.Now()
+	active, expired, deduped := curateEntries(metas, now)
+	debug.Log("memory", "%s", formatMemorySummary(len(metas), len(active), expired, deduped))
 
 	var files []string
 	var builder strings.Builder
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
-			continue
-		}
-		path := filepath.Join(am.dir, e.Name())
+	for _, m := range active {
+		path := filepath.Join(am.dir, m.Key+".md")
 		data, err := os.ReadFile(path)
 		if err != nil {
 			continue
 		}
-		key := strings.TrimSuffix(e.Name(), ".md")
-		builder.WriteString(fmt.Sprintf("### %s\n%s\n\n", key, string(data)))
+		builder.WriteString(fmt.Sprintf("### %s\n%s\n\n", m.Key, string(data)))
 		files = append(files, path)
 	}
 
 	return strings.TrimSpace(builder.String()), files, nil
 }
 
-// List returns all memory keys.
+// List returns all memory keys (unfiltered — includes expired/deduped).
 func (am *AutoMemory) List() ([]string, error) {
 	entries, err := os.ReadDir(am.dir)
 	if err != nil {
@@ -125,6 +121,30 @@ func (am *AutoMemory) List() ([]string, error) {
 	}
 	sort.Strings(keys)
 	return keys, nil
+}
+
+// collectMetas reads the memory directory and returns MemoryMeta for each .md file.
+func (am *AutoMemory) collectMetas() ([]MemoryMeta, error) {
+	entries, err := os.ReadDir(am.dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var metas []MemoryMeta
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		key := strings.TrimSuffix(e.Name(), ".md")
+		metas = append(metas, buildMemoryMeta(key, info.ModTime()))
+	}
+	return metas, nil
 }
 
 // Clear removes all memory files.
