@@ -75,7 +75,14 @@ func (t ListDir) Execute(ctx context.Context, input json.RawMessage) (Result, er
 	})
 
 	var sb strings.Builder
-	for _, e := range entries {
+	const maxDirEntries = 200
+	total := len(entries)
+	shown := total
+	if total > maxDirEntries {
+		shown = maxDirEntries
+	}
+	for i := 0; i < shown; i++ {
+		e := entries[i]
 		info, _ := e.Info()
 		typ := "file"
 		size := ""
@@ -90,6 +97,9 @@ func (t ListDir) Execute(ctx context.Context, input json.RawMessage) (Result, er
 			}
 		}
 		fmt.Fprintf(&sb, "%s  [%s]%s\n", e.Name(), typ, size)
+	}
+	if total > maxDirEntries {
+		fmt.Fprintf(&sb, "\n... [%d more entries — use glob to filter by pattern]\n", total-maxDirEntries)
 	}
 
 	return Result{Content: sb.String()}, nil
