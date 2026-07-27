@@ -70,9 +70,19 @@ func (t WriteFile) Execute(ctx context.Context, input json.RawMessage) (Result, 
 		}
 	}
 
+	// Check if file already exists (for overwrite awareness)
+	var oldSize int64
+	if info, err := os.Stat(args.Path); err == nil {
+		oldSize = info.Size()
+	}
+
 	if err := atomicWriteFile(args.Path, []byte(args.Content), 0644); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("error writing file: %v", err)}, nil
 	}
 
-	return Result{Content: fmt.Sprintf("Successfully wrote %d bytes to %s", len(args.Content), args.Path)}, nil
+	newSize := len(args.Content)
+	if oldSize > 0 {
+		return Result{Content: fmt.Sprintf("Overwrote %s: %d bytes → %d bytes (was %d bytes)", args.Path, oldSize, newSize, oldSize)}, nil
+	}
+	return Result{Content: fmt.Sprintf("Created %s (%d bytes)", args.Path, newSize)}, nil
 }
