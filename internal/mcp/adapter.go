@@ -155,6 +155,18 @@ func (t *mcpTool) Execute(ctx context.Context, input json.RawMessage) (tool.Resu
 		content = fmt.Sprintf("mcp[%s]: %s", t.srvName, content)
 	}
 
+	// Cap result size to protect the agent's context window. MCP servers
+	// can return arbitrary content (database dumps, large file contents,
+	// API responses) that could flood the context. 50KB matches web_fetch.
+	const maxMCPResultBytes = 50 * 1024
+	if len(content) > maxMCPResultBytes {
+		content = content[:maxMCPResultBytes] +
+			fmt.Sprintf("\n\n[... MCP result truncated: %d bytes total, showing first %d ...]",
+				len(content), maxMCPResultBytes)
+		debug.Log("mcp", "result truncated: server=%s tool=%s total=%d cap=%d",
+			t.srvName, t.toolName, len(content), maxMCPResultBytes)
+	}
+
 	return tool.Result{
 		Content: content,
 		IsError: result.IsError,
