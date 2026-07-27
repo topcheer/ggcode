@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os/exec"
 	"strings"
 
@@ -120,10 +121,29 @@ func (c *CommandTool) Execute(ctx context.Context, input json.RawMessage) (tool.
 	// to kill the entire group so orphaned grandchildren don't hold pipes open.
 	// On Windows: no-op (CommandContext already handles cancellation correctly).
 	setupProcessGroupCancel(cmd)
-	out, err := cmd.CombinedOutput()
+
+	// Cap combined output at 1MB to prevent OOM from misbehaving plugins.
+	var out []byte
+	const maxPluginOutput = 1 << 20 // 1MB
+	pipe, err := cmd.StdoutPipe()
 	if err != nil {
+		return tool.Result{Content: fmt.Sprintf("Command %q failed to create pipe: %v", c.name, err), IsError: true}, nil
+	}
+	cmd.Stderr = cmd.Stdout // merge stderr into stdout via the same pipe
+	if err := cmd.Start(); err != nil {
 		return tool.Result{
-			Content: fmt.Sprintf("Command %q failed: %s\n%s", c.name, err, string(out)),
+			Content: fmt.Sprintf("Command %q failed to start: %v", c.name, err),
+			IsError: true,
+		}, nil
+	}
+	out, err = io.ReadAll(io.LimitReader(pipe, maxPluginOutput+1))
+	cmdErr := cmd.Wait()
+	if int64(len(out)) > maxPluginOutput {
+		out = append(out[:maxPluginOutput], []byte("\n...[output truncated at 1MB]")...)
+	}
+	if cmdErr != nil {
+		return tool.Result{
+			Content: fmt.Sprintf("Command %q failed: %s\n%s", c.name, cmdErr, string(out)),
 			IsError: true,
 		}, nil
 	}
