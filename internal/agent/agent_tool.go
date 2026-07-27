@@ -64,8 +64,13 @@ func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolC
 	}
 
 	toolStart := time.Now()
-	result := a.executeTool(ctx, tc)
+	result := a.executeToolWithTimeout(ctx, tc)
 	toolDur := time.Since(toolStart)
+
+	// Log slow tool calls for performance debugging
+	if toolDur > slowToolThreshold {
+		debug.Log("agent", "slow tool: %s took %v", tc.Name, toolDur)
+	}
 
 	// Fire tool metric (non-blocking — caller must handle asynchronously).
 	errMsg := ""
@@ -81,6 +86,69 @@ func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolC
 		ToolDuration: toolDur,
 	})
 	return result
+}
+
+// defaultToolTimeout is the maximum time a single tool call can take.
+// Most tools finish in milliseconds; this catches hung tools (stuck network
+// requests, deadlocked processes). Tools that legitimately need more time
+// (run_command, start_command) implement their own internal timeouts.
+const defaultToolTimeout = 5 * time.Minute
+
+// slowToolThreshold logs a debug warning when a tool takes longer than expected.
+const slowToolThreshold = 30 * time.Second
+
+// toolsWithoutTimeout lists tools that manage their own timeout and should
+// not be wrapped. run_command already has a 30-minute timeout; start_command
+// runs detached with no timeout.
+var toolsWithoutTimeout = map[string]bool{
+	"run_command":         true,
+	"start_command":       true,
+	"wait_command":        true,
+	"read_command_output": true,
+	"write_command_input": true,
+	"sleep":               true,
+	"stop_command":        true,
+}
+
+// executeToolWithTimeout wraps executeTool with a deadline. If the tool
+// exceeds defaultToolTimeout, it returns a timeout error result.
+func (a *Agent) executeToolWithTimeout(ctx context.Context, tc provider.ToolCallDelta) tool.Result {
+	if toolsWithoutTimeout[tc.Name] {
+		return a.executeTool(ctx, tc)
+	}
+
+	type toolResult struct {
+		result tool.Result
+	}
+	resultCh := make(chan toolResult, 1)
+
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				resultCh <- toolResult{tool.Result{
+					Content: fmt.Sprintf("tool %s panicked: %v", tc.Name, r),
+					IsError: true,
+				}}
+			}
+		}()
+		resultCh <- toolResult{a.executeTool(ctx, tc)}
+	}()
+
+	timer := time.NewTimer(defaultToolTimeout)
+	defer timer.Stop()
+
+	select {
+	case <-timer.C:
+		debug.Log("agent", "tool timeout: %s exceeded %v", tc.Name, defaultToolTimeout)
+		return tool.Result{
+			Content: fmt.Sprintf("Tool %q timed out after %v. If this is a long-running operation, consider using start_command instead.", tc.Name, defaultToolTimeout),
+			IsError: true,
+		}
+	case r := <-resultCh:
+		return r.result
+	case <-ctx.Done():
+		return tool.Result{Content: fmt.Sprintf("cancelled: %v", ctx.Err()), IsError: true}
+	}
 }
 
 // executeTool runs pre-hooks, executes the tool, then runs post-hooks.
