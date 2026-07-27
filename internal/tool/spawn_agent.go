@@ -112,6 +112,21 @@ func (t SpawnAgentTool) Execute(ctx context.Context, input json.RawMessage) (Res
 		return Result{IsError: true, Content: "task is required"}, nil
 	}
 
+	// Validate requested tool names against the registry. Warn (don't block)
+	// if unknown tools are requested — the BuildToolSet filter will silently
+	// drop them, so the sub-agent would run with fewer tools than expected.
+	if len(args.Tools) > 0 && t.Tools != nil {
+		var unknown []string
+		for _, name := range args.Tools {
+			if _, ok := t.Tools.Get(name); !ok {
+				unknown = append(unknown, name)
+			}
+		}
+		if len(unknown) > 0 {
+			return Result{IsError: true, Content: fmt.Sprintf("unknown tool(s) requested: %s. Use the tool registry to find valid tool names.", strings.Join(unknown, ", "))}, nil
+		}
+	}
+
 	// Validate model override against available models on the current endpoint.
 	if model := strings.TrimSpace(args.Model); model != "" && t.AvailableModels != nil {
 		available := t.AvailableModels()
