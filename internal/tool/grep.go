@@ -328,7 +328,19 @@ func (t Grep) rgSearch(ctx context.Context, args grepArgs, re *regexp.Regexp) (R
 
 func formatGrepOutput(output string, args grepArgs) (Result, error) {
 	if output == "" {
-		return Result{Content: "No matches found."}, nil
+		var hints []string
+		if args.IgnoreCase {
+			hints = append(hints, fmt.Sprintf("Case-insensitive search for %q found nothing. Try without -i or check spelling.", args.Pattern))
+		} else {
+			hints = append(hints, fmt.Sprintf("Try case-insensitive search (-i) or check if the pattern %q is correct.", args.Pattern))
+		}
+		if args.Type != "" {
+			hints = append(hints, fmt.Sprintf("You restricted to type %q — try widening to more file types.", args.Type))
+		}
+		if args.Path != "" && args.Path != "." {
+			hints = append(hints, "Try searching from a broader directory (e.g., the project root).")
+		}
+		return Result{Content: "No matches found.\nSuggestions:\n  " + strings.Join(hints, "\n  ")}, nil
 	}
 
 	lines := strings.Split(strings.TrimRight(output, "\n"), "\n")
