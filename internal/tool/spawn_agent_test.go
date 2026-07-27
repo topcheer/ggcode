@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -144,6 +145,55 @@ func TestSpawnAgentWithAllowedTools(t *testing.T) {
 	}
 	if result.IsError {
 		t.Fatalf("unexpected error: %s", result.Content)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+}
+
+func TestSpawnAgentRejectsUnknownTools(t *testing.T) {
+	mgr := subagent.NewManager(config.SubAgentConfig{
+		MaxConcurrent: 2,
+		Timeout:       5 * time.Second,
+	})
+	defer mgr.Shutdown()
+
+	reg := NewRegistry()
+	reg.Register(ReadFile{})
+	reg.Register(WriteFile{})
+
+	s := SpawnAgentTool{
+		Manager:  mgr,
+		Provider: nil,
+		Tools:    reg,
+	}
+
+	// Unknown tool name should be rejected
+	input, _ := json.Marshal(map[string]interface{}{
+		"task":  "test task",
+		"tools": []string{"read_file", "nonexistent_tool"},
+	})
+	result, err := s.Execute(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.IsError {
+		t.Fatal("expected error for unknown tool name")
+	}
+	if !strings.Contains(result.Content, "nonexistent_tool") {
+		t.Errorf("expected 'nonexistent_tool' in error message, got: %s", result.Content)
+	}
+
+	// Valid tool names should be accepted
+	input2, _ := json.Marshal(map[string]interface{}{
+		"task":  "test task",
+		"tools": []string{"read_file", "write_file"},
+	})
+	result2, err := s.Execute(context.Background(), input2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result2.IsError {
+		t.Fatalf("expected success for valid tools, got: %s", result2.Content)
 	}
 
 	time.Sleep(100 * time.Millisecond)
