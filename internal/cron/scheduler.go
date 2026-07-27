@@ -199,11 +199,25 @@ func (s *Scheduler) save() error {
 //	minute hour day-of-month month day-of-week
 //
 // Supports: *, */N, N, N-M, N,M,K, N-M/S
+// minCronIntervalMinutes is the minimum allowed interval between cron job
+// firings. Prevents the agent from creating jobs that fire too frequently
+// (e.g. every second or every minute), which would flood the context with
+// repeated prompts and waste API budget.
+const minCronIntervalMinutes = 5
+
 func (s *Scheduler) Create(cronExpr, prompt string, recurring bool, queueIfBusy bool) (Job, error) {
 	now := time.Now()
 	next, err := NextTime(cronExpr, now)
 	if err != nil {
 		return Job{}, err
+	}
+
+	// Enforce minimum interval: check that the second fire is at least
+	// minCronIntervalMinutes after the first.
+	second, _ := NextTime(cronExpr, next)
+	interval := second.Sub(next)
+	if interval > 0 && interval < time.Duration(minCronIntervalMinutes)*time.Minute {
+		return Job{}, fmt.Errorf("cron interval too short: %v (minimum %d minutes). Use a larger interval to avoid flooding the agent with repeated prompts.", interval, minCronIntervalMinutes)
 	}
 
 	s.mu.Lock()
@@ -311,9 +325,17 @@ func (s *Scheduler) Update(id string, cronExpr *string, prompt *string, queueIfB
 
 	// Validate new cron expression before mutating.
 	if cronExpr != nil {
-		if _, err := NextTime(*cronExpr, time.Now()); err != nil {
+		next, err := NextTime(*cronExpr, time.Now())
+		if err != nil {
 			s.mu.Unlock()
 			return Job{}, fmt.Errorf("invalid cron expression %q: %w", *cronExpr, err)
+		}
+		// Enforce minimum interval (same as Create).
+		second, _ := NextTime(*cronExpr, next)
+		interval := second.Sub(next)
+		if interval > 0 && interval < time.Duration(minCronIntervalMinutes)*time.Minute {
+			s.mu.Unlock()
+			return Job{}, fmt.Errorf("cron interval too short: %v (minimum %d minutes)", interval, minCronIntervalMinutes)
 		}
 	}
 

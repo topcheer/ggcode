@@ -39,7 +39,7 @@ func TestCronCreateTool_Execute(t *testing.T) {
 
 	// Basic create — fires in ~1 minute
 	result, err := tool.Execute(context.Background(), json.RawMessage(`{
-		"cron": "* * * * *",
+		"cron": "*/5 * * * *",
 		"prompt": "check status",
 		"recurring": false
 	}`))
@@ -98,7 +98,7 @@ func TestCronCreateTool_EmptyPrompt(t *testing.T) {
 	defer s.Shutdown()
 	tool := CronCreateTool{Scheduler: s}
 
-	result, err := tool.Execute(context.Background(), json.RawMessage(`{"cron":"* * * * *","prompt":""}`))
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"cron":"*/5 * * * *","prompt":""}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +113,7 @@ func TestCronCreateTool_DefaultRecurring(t *testing.T) {
 	tool := CronCreateTool{Scheduler: s}
 
 	// No recurring field → defaults to true
-	result, err := tool.Execute(context.Background(), json.RawMessage(`{"cron":"* * * * *","prompt":"test"}`))
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"cron":"*/5 * * * *","prompt":"test"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +137,7 @@ func TestCronDeleteTool_Execute(t *testing.T) {
 
 	// Create a job first
 	createTool := CronCreateTool{Scheduler: s}
-	result, _ := createTool.Execute(context.Background(), json.RawMessage(`{"cron":"* * * * *","prompt":"test"}`))
+	result, _ := createTool.Execute(context.Background(), json.RawMessage(`{"cron":"*/5 * * * *","prompt":"test"}`))
 
 	// Extract job ID
 	var job struct{ ID string }
@@ -237,7 +237,7 @@ func TestCronCreateTool_ExecuteFiresOneShot(t *testing.T) {
 
 	// Create a recurring job that fires every minute
 	result, err := tool.Execute(context.Background(), json.RawMessage(`{
-		"cron": "* * * * *",
+		"cron": "*/5 * * * *",
 		"prompt": "hello from cron",
 		"recurring": true
 	}`))
@@ -284,7 +284,7 @@ func TestCronUpdateTool_ChangesPrompt(t *testing.T) {
 	defer s.Shutdown()
 
 	createTool := CronCreateTool{Scheduler: s}
-	createResult, _ := createTool.Execute(context.Background(), json.RawMessage(`{"cron":"* * * * *","prompt":"old prompt"}`))
+	createResult, _ := createTool.Execute(context.Background(), json.RawMessage(`{"cron":"*/5 * * * *","prompt":"old prompt"}`))
 	var job struct{ ID string }
 	json.Unmarshal([]byte(strings.TrimSpace(createResult.Content)), &job)
 
@@ -305,7 +305,7 @@ func TestCronUpdateTool_ChangesPrompt(t *testing.T) {
 		t.Errorf("expected prompt 'new prompt', got %q", got.Prompt)
 	}
 	// Cron should be unchanged
-	if got.CronExpr != "* * * * *" {
+	if got.CronExpr != "*/5 * * * *" {
 		t.Errorf("cron expression should be unchanged, got %q", got.CronExpr)
 	}
 }
@@ -315,7 +315,7 @@ func TestCronUpdateTool_ChangesCronExpr(t *testing.T) {
 	defer s.Shutdown()
 
 	createTool := CronCreateTool{Scheduler: s}
-	createResult, _ := createTool.Execute(context.Background(), json.RawMessage(`{"cron":"* * * * *","prompt":"test"}`))
+	createResult, _ := createTool.Execute(context.Background(), json.RawMessage(`{"cron":"*/5 * * * *","prompt":"test"}`))
 	var job struct{ ID string }
 	json.Unmarshal([]byte(strings.TrimSpace(createResult.Content)), &job)
 
@@ -347,7 +347,7 @@ func TestCronUpdateTool_NoFieldsProvided(t *testing.T) {
 	defer s.Shutdown()
 
 	createTool := CronCreateTool{Scheduler: s}
-	createTool.Execute(context.Background(), json.RawMessage(`{"cron":"* * * * *","prompt":"test"}`))
+	createTool.Execute(context.Background(), json.RawMessage(`{"cron":"*/5 * * * *","prompt":"test"}`))
 
 	updateTool := CronUpdateTool{Scheduler: s}
 	result, _ := updateTool.Execute(context.Background(), json.RawMessage(`{"jobId":"cron-1"}`))
@@ -361,7 +361,7 @@ func TestCronUpdateTool_InvalidCronExpr(t *testing.T) {
 	defer s.Shutdown()
 
 	createTool := CronCreateTool{Scheduler: s}
-	createTool.Execute(context.Background(), json.RawMessage(`{"cron":"* * * * *","prompt":"test"}`))
+	createTool.Execute(context.Background(), json.RawMessage(`{"cron":"*/5 * * * *","prompt":"test"}`))
 
 	updateTool := CronUpdateTool{Scheduler: s}
 	result, _ := updateTool.Execute(context.Background(), json.RawMessage(`{"jobId":"cron-1","cron":"invalid expr"}`))
@@ -371,7 +371,7 @@ func TestCronUpdateTool_InvalidCronExpr(t *testing.T) {
 
 	// Original should be unchanged
 	got, _ := s.Get("cron-1")
-	if got.CronExpr != "* * * * *" {
+	if got.CronExpr != "*/5 * * * *" {
 		t.Errorf("cron expression should be unchanged after failed update, got %q", got.CronExpr)
 	}
 }
@@ -391,7 +391,7 @@ func TestCronPauseResumeTool(t *testing.T) {
 	defer s.Shutdown()
 
 	createTool := CronCreateTool{Scheduler: s}
-	createTool.Execute(context.Background(), json.RawMessage(`{"cron":"* * * * *","prompt":"test","recurring":true}`))
+	createTool.Execute(context.Background(), json.RawMessage(`{"cron":"*/5 * * * *","prompt":"test","recurring":true}`))
 
 	// Pause
 	pauseTool := CronPauseTool{Scheduler: s}
@@ -461,7 +461,7 @@ func TestCronPauseResume_Idempotent(t *testing.T) {
 	defer s.Shutdown()
 
 	createTool := CronCreateTool{Scheduler: s}
-	createTool.Execute(context.Background(), json.RawMessage(`{"cron":"* * * * *","prompt":"test","recurring":true}`))
+	createTool.Execute(context.Background(), json.RawMessage(`{"cron":"*/5 * * * *","prompt":"test","recurring":true}`))
 
 	// Double pause should be fine
 	pauseTool := CronPauseTool{Scheduler: s}
@@ -513,7 +513,7 @@ func TestCronGetTool_ShowsPausedState(t *testing.T) {
 	defer s.Shutdown()
 
 	createTool := CronCreateTool{Scheduler: s}
-	createTool.Execute(context.Background(), json.RawMessage(`{"cron":"* * * * *","prompt":"test","recurring":true}`))
+	createTool.Execute(context.Background(), json.RawMessage(`{"cron":"*/5 * * * *","prompt":"test","recurring":true}`))
 
 	pauseTool := CronPauseTool{Scheduler: s}
 	pauseTool.Execute(context.Background(), json.RawMessage(`{"jobId":"cron-1"}`))

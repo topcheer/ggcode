@@ -15,14 +15,14 @@ func TestCreateEveryNMinutes(t *testing.T) {
 		called.Add(1)
 	}, "")
 
-	job, err := s.Create("*/1 * * * *", "test prompt", true, false)
+	job, err := s.Create("*/5 * * * *", "test prompt", true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if job.ID != "cron-1" {
 		t.Errorf("expected cron-1, got %s", job.ID)
 	}
-	if job.CronExpr != "*/1 * * * *" {
+	if job.CronExpr != "*/5 * * * *" {
 		t.Errorf("unexpected cron expr: %s", job.CronExpr)
 	}
 	if !job.Recurring {
@@ -58,8 +58,8 @@ func TestOneShotJob(t *testing.T) {
 		called.Add(1)
 	}, "")
 
-	// Use a very short interval for testing: */1 minute
-	job, err := s.Create("*/1 * * * *", "test", false, false)
+	// Use minimum allowed interval for testing
+	job, err := s.Create("*/5 * * * *", "test", false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +160,7 @@ func TestOneShotNotPersisted(t *testing.T) {
 	s := NewScheduler(nil, storePath)
 	s.Load()
 
-	_, err := s.Create("*/1 * * * *", "one-shot reminder", false, false)
+	_, err := s.Create("*/5 * * * *", "one-shot reminder", false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
