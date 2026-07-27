@@ -32,6 +32,8 @@ package agent
 import (
 	"fmt"
 	"strings"
+
+	"github.com/topcheer/ggcode/internal/debug"
 )
 
 const (
@@ -48,6 +50,12 @@ const (
 	// BAGEN uses 3; we use 3 as well for the same reason: it captures recent
 	// behavior without being too sensitive to a single noisy step.
 	budgetRecentWindow = 3
+
+	// absoluteTokenWarningThreshold: total output tokens that triggers a
+	// one-time cost warning regardless of escalation pattern. At ~200K output
+	// tokens, the user has spent roughly $1-3 depending on model. This catches
+	// runaway sessions that burn tokens steadily (missed by escalation check).
+	absoluteTokenWarningThreshold = 200_000
 
 	// budgetContextThreshold: only warn when context utilization exceeds this
 	// fraction. At low utilization, cost escalation is not a concern — the
@@ -75,8 +83,11 @@ type budgetGuardState struct {
 	// Total output tokens consumed
 	totalConsumed int
 
-	// Whether we've already fired (one warning per run)
+	// Whether we've already fired the escalation warning (one per run)
 	warningGiven bool
+
+	// Whether we've already fired the absolute consumption warning
+	absoluteWarningGiven bool
 }
 
 func newBudgetGuardState() *budgetGuardState {
@@ -91,6 +102,7 @@ func (b *budgetGuardState) reset() {
 	b.prevInputTokens = 0
 	b.totalConsumed = 0
 	b.warningGiven = false
+	b.absoluteWarningGiven = false
 }
 
 // recordStep feeds per-iteration token usage into the budget guard.
@@ -175,6 +187,22 @@ func (b *budgetGuardState) computeAvgFromSum(totalSum int, costs []int) (overall
 // Returns guidance text if the trajectory shows cost escalation under
 // context pressure, or empty string otherwise.
 func (b *budgetGuardState) maybeWarn(contextWindow, currentTokens int) string {
+	// Absolute consumption check: fires independently of escalation.
+	// Catches steady-burn sessions that the escalation detector misses.
+	if !b.absoluteWarningGiven && b.totalConsumed >= absoluteTokenWarningThreshold && len(b.stepCosts) >= budgetMinSteps {
+		b.absoluteWarningGiven = true
+		debug.Log("budget-guard", "absolute consumption threshold reached: totalConsumed=%d threshold=%d",
+			b.totalConsumed, absoluteTokenWarningThreshold)
+		return fmt.Sprintf(
+			"[budget guard: high token consumption] This session has consumed %d output tokens across %d steps.\n"+
+				"To reduce further cost:\n"+
+				"1. Avoid re-reading files or re-running searches already done\n"+
+				"2. Batch related operations to reduce round-trips\n"+
+				"3. Use /cost to check spending details",
+			b.totalConsumed, len(b.stepCosts),
+		)
+	}
+
 	if b.warningGiven {
 		return ""
 	}

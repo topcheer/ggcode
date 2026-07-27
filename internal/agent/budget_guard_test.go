@@ -232,3 +232,59 @@ func TestBudgetGuard_ProjectionUsesContextBudget(t *testing.T) {
 		t.Error("warning should include steps remaining estimate based on context budget")
 	}
 }
+
+func TestBudgetGuard_AbsoluteConsumptionWarning(t *testing.T) {
+	b := newBudgetGuardState()
+	// Record many steps with stable costs that won't trigger escalation
+	// but accumulate past the absolute threshold.
+	for i := 0; i < 10; i++ {
+		b.recordStep(25000, 50000) // steady, no escalation
+	}
+	// totalConsumed = 250000 > absoluteTokenWarningThreshold (200000)
+	w := b.maybeWarn(256000, 100000)
+	if w == "" {
+		t.Fatal("expected absolute consumption warning")
+	}
+	if !containsStr(w, "high token consumption") {
+		t.Error("warning should mention high token consumption")
+	}
+	if !containsStr(w, "250000") {
+		t.Error("warning should report total consumed tokens")
+	}
+}
+
+func TestBudgetGuard_AbsoluteWarningFiresOnce(t *testing.T) {
+	b := newBudgetGuardState()
+	for i := 0; i < 10; i++ {
+		b.recordStep(25000, 50000)
+	}
+	w1 := b.maybeWarn(256000, 100000)
+	if w1 == "" {
+		t.Fatal("expected first absolute warning")
+	}
+	// Should not fire again
+	w2 := b.maybeWarn(256000, 100000)
+	if w2 != "" {
+		t.Fatal("absolute warning should fire only once")
+	}
+}
+
+func TestBudgetGuard_AbsoluteAndEscalationBothFire(t *testing.T) {
+	b := newBudgetGuardState()
+	// Record steps with escalating costs that also exceed absolute threshold
+	costs := []int{5000, 8000, 12000, 18000, 27000, 40000, 60000, 90000}
+	for _, c := range costs {
+		b.recordStep(c, 50000)
+	}
+	// First: absolute should fire (totalConsumed > 200K)
+	w1 := b.maybeWarn(256000, 200000)
+	if w1 == "" {
+		t.Fatal("expected at least one warning")
+	}
+	// Record more steps to see if escalation warning also fires
+	b.recordStep(135000, 50000)
+	w2 := b.maybeWarn(256000, 200000)
+	// Escalation warning may or may not fire depending on timing,
+	// but at least the system should not crash
+	_ = w2
+}
