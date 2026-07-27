@@ -76,6 +76,9 @@ func (t MultiFileWrite) Execute(ctx context.Context, input json.RawMessage) (Res
 	if len(args.Files) == 0 {
 		return Result{IsError: true, Content: "no files provided"}, nil
 	}
+	if len(args.Files) > maxMultiFileWriteFiles {
+		return Result{IsError: true, Content: fmt.Sprintf("too many files: got %d, max %d. Split the write into smaller batches.", len(args.Files), maxMultiFileWriteFiles)}, nil
+	}
 
 	mode := args.Mode
 	if mode == "" {
@@ -111,6 +114,15 @@ func (t MultiFileWrite) Execute(ctx context.Context, input json.RawMessage) (Res
 		}
 	}
 	args.Files = dedupedFiles
+
+	// Enforce total payload size to prevent context window flooding.
+	var totalBytes int
+	for _, f := range args.Files {
+		totalBytes += len(f.Content)
+	}
+	if totalBytes > maxMultiFileWritePayloadBytes {
+		return Result{IsError: true, Content: fmt.Sprintf("total payload too large: %d bytes, max %d. Split the write into smaller batches.", totalBytes, maxMultiFileWritePayloadBytes)}, nil
+	}
 
 	// Sandbox validation — check all paths first.
 	for _, f := range args.Files {

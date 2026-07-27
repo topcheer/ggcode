@@ -21,6 +21,8 @@ const (
 	maxMultiFileEditEditsPerFile  = 20
 	maxMultiFileEditTotalEdits    = 200
 	maxMultiFileEditPayloadBytes  = 200 * 1024
+	maxMultiFileWriteFiles        = 20
+	maxMultiFileWritePayloadBytes = 500 * 1024
 )
 
 type textEdit struct {
