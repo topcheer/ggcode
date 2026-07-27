@@ -222,3 +222,73 @@ func TestTruncateMiddle_LineAwareNoPartialLines(t *testing.T) {
 		t.Error("line-aware truncation should report 'lines omitted'")
 	}
 }
+
+func TestDiagnoseCommandFailure(t *testing.T) {
+	tests := []struct {
+		name   string
+		stdout string
+		stderr string
+		want   string
+	}{
+		{
+			name:   "command not found",
+			stderr: "bash: foo: command not found",
+			want:   "command not found",
+		},
+		{
+			name:   "go undefined",
+			stdout: "main.go:10:3: undefined: foo.Bar",
+			want:   "undefined reference",
+		},
+		{
+			name:   "go missing module",
+			stderr: "no required module provides package github.com/foo/bar",
+			want:   "go mod tidy",
+		},
+		{
+			name:   "python module error",
+			stderr: "ModuleNotFoundError: No module named 'requests'",
+			want:   "Python module missing",
+		},
+		{
+			name:   "node module error",
+			stderr: "Error: Cannot find module 'express'\nnode:",
+			want:   "npm install",
+		},
+		{
+			name:   "permission denied",
+			stderr: "/bin/foo: permission denied",
+			want:   "permission denied",
+		},
+		{
+			name:   "port in use",
+			stderr: "listen tcp: address already in use",
+			want:   "port conflict",
+		},
+		{
+			name:   "make no rule",
+			stderr: "make: No rule to make target `foo'",
+			want:   "Makefile target not found",
+		},
+		{
+			name:   "no match",
+			stdout: "some random output",
+			want:   "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := diagnoseCommandFailure(tt.stdout, tt.stderr)
+			if tt.want == "" {
+				if got != "" {
+					t.Errorf("expected empty hint, got: %s", got)
+				}
+				return
+			}
+			if !containsStr(got, tt.want) {
+				t.Errorf("expected hint containing %q, got: %s", tt.want, got)
+			}
+		})
+	}
+}

@@ -341,7 +341,12 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 		if t.OnPostExec != nil {
 			t.OnPostExec(exitCode, err)
 		}
-		return Result{IsError: true, Content: fmt.Sprintf("%s\nCommand failed: %v", sb.String(), err)}, nil
+		diagnostic := diagnoseCommandFailure(sb.String(), errOutput)
+		msg := fmt.Sprintf("%s\nCommand failed: %v", sb.String(), err)
+		if diagnostic != "" {
+			msg += "\n" + diagnostic
+		}
+		return Result{IsError: true, Content: msg}, nil
 	}
 
 	if t.OnPostExec != nil {
@@ -483,4 +488,62 @@ func (t RunCommand) Clone() Tool {
 		OnPreExec:  t.OnPreExec,
 		OnPostExec: t.OnPostExec,
 	}
+}
+
+// diagnoseCommandFailure analyzes command output for common error patterns
+// and returns a helpful hint appended to the error message. This gives the
+// agent immediate context about likely causes without needing a separate
+// diagnostic step.
+func diagnoseCommandFailure(stdout, stderr string) string {
+	combined := stdout + "\n" + stderr
+	var hints []string
+
+	// "command not found" — likely missing dependency or typo
+	if strings.Contains(combined, "command not found") || strings.Contains(combined, "not recognized as") {
+		hints = append(hints, "Hint: command not found — check if the tool is installed and in PATH")
+	}
+
+	// Go compilation errors
+	if strings.Contains(combined, "undefined:") && strings.Contains(combined, ".go") {
+		hints = append(hints, "Hint: Go undefined reference — check for missing imports or renamed symbols")
+	}
+	if strings.Contains(combined, "no required module provides package") {
+		hints = append(hints, "Hint: missing Go module — run 'go mod tidy' to resolve dependencies")
+	}
+	if strings.Contains(combined, "cannot find module") || strings.Contains(combined, "cannot find package") {
+		hints = append(hints, "Hint: Go package not found — check import path or run 'go mod tidy'")
+	}
+
+	// Python import errors
+	if strings.Contains(combined, "ModuleNotFoundError") || strings.Contains(combined, "ImportError") {
+		hints = append(hints, "Hint: Python module missing — install with pip or check virtual environment")
+	}
+
+	// Node/npm errors
+	if strings.Contains(combined, "Cannot find module") && strings.Contains(combined, "node") {
+		hints = append(hints, "Hint: Node module missing — run 'npm install' or 'yarn install'")
+	}
+	if strings.Contains(combined, "ELIFECYCLE") {
+		hints = append(hints, "Hint: npm script failed — check the script output above for the actual error")
+	}
+
+	// Permission denied
+	if strings.Contains(combined, "permission denied") {
+		hints = append(hints, "Hint: permission denied — check file permissions or ownership")
+	}
+
+	// Port already in use
+	if strings.Contains(combined, "address already in use") || strings.Contains(combined, "port is already allocated") {
+		hints = append(hints, "Hint: port conflict — another process may be using the same port")
+	}
+
+	// Make: no rule
+	if strings.Contains(combined, "No rule to make target") {
+		hints = append(hints, "Hint: Makefile target not found — check spelling or run 'make help' for available targets")
+	}
+
+	if len(hints) == 0 {
+		return ""
+	}
+	return "[Diagnostics]\n" + strings.Join(hints, "\n")
 }
