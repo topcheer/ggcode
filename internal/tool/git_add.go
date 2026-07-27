@@ -62,6 +62,10 @@ func (t GitAdd) Execute(ctx context.Context, input json.RawMessage) (Result, err
 
 	dir := resolveDir(args.Path, t.WorkingDir)
 
+	// Sensitive file detection: warn about files that commonly contain
+	// secrets and should not be committed. Non-blocking advisory.
+	secretWarning := checkSensitiveFiles(args.Files)
+
 	// Non-git VCS path.
 	if v := vcs.Detect(dir); v != nil && v.Name() != "git" {
 		out, err := v.Add(ctx, dir, args.Files)
@@ -88,10 +92,51 @@ func (t GitAdd) Execute(ctx context.Context, input json.RawMessage) (Result, err
 
 	trimmed := strings.TrimSpace(string(out))
 	if trimmed == "" {
-		return Result{Content: fmt.Sprintf("Staged %d file(s).", len(args.Files))}, nil
+		msg := fmt.Sprintf("Staged %d file(s).", len(args.Files))
+		if secretWarning != "" {
+			msg += "\n\n" + secretWarning
+		}
+		return Result{Content: msg}, nil
 	}
 
+	if secretWarning != "" {
+		trimmed += "\n\n" + secretWarning
+	}
 	return Result{Content: trimmed}, nil
+}
+
+// sensitiveFilePatterns are file names/suffixes that commonly contain secrets.
+var sensitiveFilePatterns = []string{
+	".env", ".env.local", ".env.production", ".env.staging", ".env.development",
+	".aws/credentials", ".npmrc", ".pypirc",
+	"id_rsa", "id_dsa", "id_ecdsa", "id_ed25519",
+	".pem", ".key", ".pfx", ".p12",
+	"credentials.json", "service-account.json",
+	".htpasswd", ".netrc",
+}
+
+// checkSensitiveFiles returns a warning if any staged file matches known
+// sensitive file patterns. Non-blocking advisory.
+func checkSensitiveFiles(files []string) string {
+	var flagged []string
+	for _, f := range files {
+		lf := strings.ToLower(f)
+		for _, pattern := range sensitiveFilePatterns {
+			if strings.HasSuffix(lf, pattern) || strings.Contains(lf, pattern) {
+				flagged = append(flagged, f)
+				break
+			}
+		}
+	}
+	if len(flagged) == 0 {
+		return ""
+	}
+	return fmt.Sprintf(
+		"Warning: the following staged file(s) may contain secrets: %s.\n"+
+			"Verify these do NOT contain API keys, passwords, or private keys before committing.\n"+
+			"If they do, unstage them with 'git reset HEAD <file>' and add them to .gitignore.",
+		strings.Join(flagged, ", "),
+	)
 }
 
 // Clone returns an independent copy of this tool for use by a different agent.
