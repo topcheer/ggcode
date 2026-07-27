@@ -171,8 +171,16 @@ func (m *Manager) Update(taskID string, opts UpdateOptions) (Task, error) {
 
 	// Add block relationships
 	for _, blockID := range opts.AddBlocks {
+		if blockID == taskID {
+			return Task{}, fmt.Errorf("task %q cannot block itself (self-dependency)", taskID)
+		}
 		if !m.hasTask(blockID) {
 			return Task{}, fmt.Errorf("blocked task %q not found", blockID)
+		}
+		// Cycle detection: if blockID is already (transitively) blocked by
+		// taskID, adding this edge would create a circular dependency.
+		if m.wouldCreateCycle(blockID, taskID) {
+			return Task{}, fmt.Errorf("circular dependency detected: task %q is (transitively) blocked by task %q — cannot add block %q → %q", taskID, blockID, taskID, blockID)
 		}
 		if !contains(t.Blocks, blockID) {
 			t.Blocks = append(t.Blocks, blockID)
@@ -184,8 +192,16 @@ func (m *Manager) Update(taskID string, opts UpdateOptions) (Task, error) {
 		}
 	}
 	for _, blockerID := range opts.AddBlockedBy {
+		if blockerID == taskID {
+			return Task{}, fmt.Errorf("task %q cannot be blocked by itself (self-dependency)", taskID)
+		}
 		if !m.hasTask(blockerID) {
 			return Task{}, fmt.Errorf("blocker task %q not found", blockerID)
+		}
+		// Cycle detection: if taskID is already (transitively) blocking
+		// blockerID, adding blockerID→taskID would create a cycle.
+		if m.wouldCreateCycle(taskID, blockerID) {
+			return Task{}, fmt.Errorf("circular dependency detected: task %q already (transitively) blocks task %q — cannot add blockedBy %q → %q", blockerID, taskID, taskID, blockerID)
 		}
 		if !contains(t.BlockedBy, blockerID) {
 			t.BlockedBy = append(t.BlockedBy, blockerID)
@@ -244,6 +260,39 @@ func removeString(slice []string, s string) []string {
 func (m *Manager) hasTask(id string) bool {
 	_, ok := m.tasks[id]
 	return ok
+}
+
+// wouldCreateCycle checks if adding "from blocks to" would create a
+// circular dependency. It traverses the BlockedBy chain starting from
+// 'start' to see if 'target' is reachable. If so, adding the edge
+// target→start would close a cycle.
+//
+// Example: A blocks B, B blocks C. If we try to add C blocks A:
+// wouldCreateCycle(C, A) traverses C.BlockedBy → [B], B.BlockedBy → [A]
+// finds A → returns true (cycle detected).
+func (m *Manager) wouldCreateCycle(start, target string) bool {
+	visited := make(map[string]bool)
+	var check func(taskID string) bool
+	check = func(taskID string) bool {
+		if taskID == target {
+			return true
+		}
+		if visited[taskID] {
+			return false
+		}
+		visited[taskID] = true
+		t, ok := m.tasks[taskID]
+		if !ok {
+			return false
+		}
+		for _, blockerID := range t.BlockedBy {
+			if check(blockerID) {
+				return true
+			}
+		}
+		return false
+	}
+	return check(start)
 }
 
 func contains(slice []string, s string) bool {
