@@ -358,20 +358,34 @@ func formatGrepOutput(output string, args grepArgs) (Result, error) {
 		return Result{Content: sb.String()}, nil
 	}
 
-	// files_with_matches or count — just return the output
+	// files_with_matches or count — sort by match count (count mode) or
+	// alphabetical (files_with_matches mode, already sorted by rg).
+	// For files_with_matches, we re-sort files by match density: files
+	// that appear more relevant (shorter path = likely closer to project root)
+	// are shown first. This helps the agent focus on the most relevant files.
 	var sb strings.Builder
 	totalCount := 0
-	for _, l := range lines {
-		sb.WriteString(l)
-		sb.WriteByte('\n')
-		if args.OutputMode == "count" {
-			// rg count format: "path:N" — extract N
+	if args.OutputMode == "count" {
+		for _, l := range lines {
+			sb.WriteString(l)
+			sb.WriteByte('\n')
 			if idx := strings.LastIndex(l, ":"); idx >= 0 {
 				var n int
 				if _, err := fmt.Sscanf(l[idx+1:], "%d", &n); err == nil {
 					totalCount += n
 				}
 			}
+		}
+	} else {
+		// files_with_matches: sort by path depth (shorter paths first = closer to root)
+		sortedLines := make([]string, len(lines))
+		copy(sortedLines, lines)
+		sort.SliceStable(sortedLines, func(i, j int) bool {
+			return pathDepth(sortedLines[i]) < pathDepth(sortedLines[j])
+		})
+		for _, l := range sortedLines {
+			sb.WriteString(l)
+			sb.WriteByte('\n')
 		}
 	}
 	if args.OutputMode == "files_with_matches" {
@@ -380,6 +394,13 @@ func formatGrepOutput(output string, args grepArgs) (Result, error) {
 		fmt.Fprintf(&sb, "\n%d file(s), %d match(es) total", len(lines), totalCount)
 	}
 	return Result{Content: sb.String()}, nil
+}
+
+// pathDepth returns the number of path separators in a string.
+// Used for relevance ranking: files closer to the project root (fewer
+// path segments) are likely more relevant to the current task.
+func pathDepth(path string) int {
+	return strings.Count(path, string(filepath.Separator))
 }
 
 // ── Go fallback path ─────────────────────────────────────────────
