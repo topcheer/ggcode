@@ -92,6 +92,7 @@ type SubAgent struct {
 	cancel           context.CancelFunc
 	done             chan struct{} // closed when the sub-agent reaches any terminal state
 	goroutineStarted bool          // true once Run() has started the goroutine (SetCancel alone doesn't set this)
+	lastActivity     time.Time     // updated on every LLM chunk / tool call; used by watchdog
 	mu               sync.Mutex
 }
 
@@ -200,6 +201,7 @@ func (s *SubAgent) setActivity(phase, toolName, args string) {
 	s.CurrentPhase = phase
 	s.CurrentTool = toolName
 	s.CurrentArgs = args
+	s.lastActivity = time.Now()
 }
 
 func (s *SubAgent) setProgressSummary(summary string) {
@@ -293,11 +295,13 @@ type Manager struct {
 	// them at streamBatchInterval. This prevents the TUI event loop from
 	// being flooded with per-token messages when multiple sub-agents stream
 	// concurrently. Guarded by streamBatchMu.
-	streamBatchMu   sync.Mutex
-	streamTextBuf   map[string]*strings.Builder // agentID → accumulated text
-	streamRsnBuf    map[string]*strings.Builder // agentID → accumulated reasoning
-	streamBatchDone chan struct{}               // closed to stop the ticker goroutine
-	shutdownOnce    sync.Once
+	streamBatchMu     sync.Mutex
+	streamTextBuf     map[string]*strings.Builder // agentID → accumulated text
+	streamRsnBuf      map[string]*strings.Builder // agentID → accumulated reasoning
+	streamBatchDone   chan struct{}               // closed to stop the ticker goroutine
+	shutdownOnce      sync.Once
+	watchdogDone      chan struct{} // closed to stop the watchdog goroutine
+	inactivityTimeout time.Duration // max time without activity before cancelling
 }
 
 // NewManager creates a Manager with the given config.
@@ -311,16 +315,61 @@ func NewManager(cfg config.SubAgentConfig) *Manager {
 		timeout = 30 * time.Minute
 	}
 	rootCtx, rootCancel := context.WithCancel(context.Background())
-	return &Manager{
-		agents:          make(map[string]*SubAgent),
-		sem:             make(chan struct{}, max),
-		timeout:         timeout,
-		showOutput:      cfg.ShowOutput,
-		rootCtx:         rootCtx,
-		rootCancel:      rootCancel,
-		streamTextBuf:   make(map[string]*strings.Builder),
-		streamRsnBuf:    make(map[string]*strings.Builder),
-		streamBatchDone: make(chan struct{}),
+	m := &Manager{
+		agents:            make(map[string]*SubAgent),
+		sem:               make(chan struct{}, max),
+		timeout:           timeout,
+		showOutput:        cfg.ShowOutput,
+		rootCtx:           rootCtx,
+		rootCancel:        rootCancel,
+		streamTextBuf:     make(map[string]*strings.Builder),
+		streamRsnBuf:      make(map[string]*strings.Builder),
+		streamBatchDone:   make(chan struct{}),
+		watchdogDone:      make(chan struct{}),
+		inactivityTimeout: 5 * time.Minute,
+	}
+	m.startWatchdog()
+	return m
+}
+
+// startWatchdog launches a background goroutine that periodically checks all
+// running sub-agents for inactivity. If a sub-agent has not updated its
+// lastActivity timestamp within the inactivity timeout, it is cancelled
+// to prevent zombie processes from consuming concurrency slots indefinitely.
+func (m *Manager) startWatchdog() {
+	safego.Go("subagent.watchdog", func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				m.reapInactiveAgents()
+			case <-m.watchdogDone:
+				return
+			}
+		}
+	})
+}
+
+// reapInactiveAgents cancels any running sub-agent whose lastActivity
+// timestamp is older than the inactivity timeout.
+func (m *Manager) reapInactiveAgents() {
+	threshold := time.Now().Add(-m.inactivityTimeout)
+	m.mu.Lock()
+	var stale []string
+	for id, sa := range m.agents {
+		sa.mu.Lock()
+		isRunning := sa.Status == StatusRunning && sa.goroutineStarted
+		isStale := !sa.lastActivity.IsZero() && sa.lastActivity.Before(threshold)
+		sa.mu.Unlock()
+		if isRunning && isStale {
+			stale = append(stale, id)
+		}
+	}
+	m.mu.Unlock()
+	for _, id := range stale {
+		debug.Log("subagent", "watchdog: cancelling stale sub-agent %s (no activity for %v)", id, m.inactivityTimeout)
+		m.Cancel(id)
 	}
 }
 
@@ -339,6 +388,7 @@ func (m *Manager) RootContext() context.Context {
 func (m *Manager) Shutdown() {
 	m.shutdownOnce.Do(func() {
 		close(m.streamBatchDone)
+		close(m.watchdogDone)
 	})
 	// Flush any remaining buffered text before shutdown.
 	m.flushStreamBatch()

@@ -490,3 +490,66 @@ func TestManager_EventsSince_Integration(t *testing.T) {
 
 	m.CancelAll()
 }
+
+func TestWatchdog_CancelsInactiveAgent(t *testing.T) {
+	m := NewManager(config.SubAgentConfig{})
+	defer m.Shutdown()
+	// Use a very short inactivity timeout for testing
+	m.inactivityTimeout = 100 * time.Millisecond
+
+	ctx := context.Background()
+	id := m.Spawn("test", "test", "do something", nil, ctx)
+
+	// Simulate the agent starting and then going stale
+	sa, ok := m.Get(id)
+	if !ok {
+		t.Fatal("expected sub-agent to exist")
+	}
+	// Mark as running with goroutine started
+	sa.mu.Lock()
+	sa.Status = StatusRunning
+	sa.goroutineStarted = true
+	// Set lastActivity to the past — older than the inactivity timeout
+	sa.lastActivity = time.Now().Add(-200 * time.Millisecond)
+	sa.mu.Unlock()
+
+	// Run reapInactiveAgents manually (don't wait for 30s ticker)
+	m.reapInactiveAgents()
+
+	// Verify the agent was cancelled
+	sa.mu.Lock()
+	status := sa.Status
+	sa.mu.Unlock()
+	if status != StatusCancelled {
+		t.Errorf("expected stale agent to be cancelled, got %s", status)
+	}
+}
+
+func TestWatchdog_DoesNotCancelActiveAgent(t *testing.T) {
+	m := NewManager(config.SubAgentConfig{})
+	defer m.Shutdown()
+	m.inactivityTimeout = 100 * time.Millisecond
+
+	ctx := context.Background()
+	id := m.Spawn("test", "test", "do something", nil, ctx)
+
+	sa, ok := m.Get(id)
+	if !ok {
+		t.Fatal("expected sub-agent to exist")
+	}
+	// Mark as running with recent activity
+	sa.mu.Lock()
+	sa.Status = StatusRunning
+	sa.goroutineStarted = true
+	sa.lastActivity = time.Now() // active right now
+	sa.mu.Unlock()
+
+	m.reapInactiveAgents()
+
+	sa.mu.Lock()
+	status := sa.Status
+	sa.mu.Unlock()
+	if status != StatusRunning {
+		t.Errorf("expected active agent to remain running, got %s", status)
+	}
+}
