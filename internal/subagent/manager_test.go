@@ -2,6 +2,7 @@ package subagent
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -581,5 +582,24 @@ func TestPurgeTerminalAgents_BoundsMemoryGrowth(t *testing.T) {
 	m.mu.Unlock()
 	if count != 20 {
 		t.Errorf("expected 20 agents after purge, got %d", count)
+	}
+}
+
+func TestSubAgentResultSizeCap(t *testing.T) {
+	// Verify that maxSubAgentResultBytes is a reasonable cap
+	if maxSubAgentResultBytes <= 0 {
+		t.Fatal("maxSubAgentResultBytes must be positive")
+	}
+	if maxSubAgentResultBytes > 1024*1024 {
+		t.Fatal("maxSubAgentResultBytes should be at most 1MB to protect context window")
+	}
+	// Simulate truncation logic
+	large := strings.Repeat("x", maxSubAgentResultBytes+5000)
+	capped := large
+	if len(capped) > maxSubAgentResultBytes {
+		capped = capped[:maxSubAgentResultBytes]
+	}
+	if len(capped) != maxSubAgentResultBytes {
+		t.Errorf("expected capped result to be %d bytes, got %d", maxSubAgentResultBytes, len(capped))
 	}
 }

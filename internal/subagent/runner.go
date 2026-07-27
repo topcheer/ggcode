@@ -261,6 +261,19 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 	flushText()
 
 	result := output.String()
+
+	// Cap result size to prevent context window exhaustion when the parent
+	// agent consumes the result. Sub-agents that read large files can easily
+	// generate megabytes of output. Truncate to maxSubAgentResultBytes with
+	// a truncation notice.
+	if len(result) > maxSubAgentResultBytes {
+		result = result[:maxSubAgentResultBytes] +
+			fmt.Sprintf("\n\n[... result truncated: %d bytes total, showing first %d ...]",
+				len(result), maxSubAgentResultBytes)
+		debug.Log("subagent", "Run: result truncated id=%s total=%d cap=%d",
+			cfg.SubAgentID, len(output.String()), maxSubAgentResultBytes)
+	}
+
 	if err != nil {
 		if subCtx.Err() == context.DeadlineExceeded {
 			cfg.Manager.Complete(cfg.SubAgentID, result, fmt.Errorf("sub-agent timed out after %v", timeout))

@@ -45,6 +45,12 @@ const maxAgentEvents = 200
 // in parallel, exhausting API rate limits and memory.
 const maxConcurrentSubAgents = 5
 
+// maxSubAgentResultBytes caps the result text stored and returned by a
+// sub-agent. Without this, a sub-agent that reads large files can produce
+// megabytes of output that floods the parent agent's context window.
+// 100KB is generous enough for normal results while preventing abuse.
+const maxSubAgentResultBytes = 100 * 1024
+
 // cancelAllTimeout is the maximum time CancelAll waits for each sub-agent to
 // actually terminate after its context is cancelled. Sub-agents running long
 // LLM streams or external tool calls may not finish instantly.
