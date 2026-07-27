@@ -12,6 +12,11 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
+// maxTodoItems limits the number of todo items in a single todo_write call.
+// The todo summary is reinjected into context after compaction, so excessive
+// items waste context space. 50 is generous for complex multi-phase work.
+const maxTodoItems = 50
+
 // Todo represents a single todo item.
 type Todo struct {
 	ID      string `json:"id"`
@@ -130,6 +135,9 @@ func (t *TodoWrite) Execute(ctx context.Context, input json.RawMessage) (Result,
 	defer t.mu.Unlock()
 
 	// Validate
+	if len(args.Todos) > maxTodoItems {
+		return Result{IsError: true, Content: fmt.Sprintf("too many todo items: got %d, max %d. Consolidate or remove completed items.", len(args.Todos), maxTodoItems)}, nil
+	}
 	ids := make(map[string]struct{}, len(args.Todos))
 	for _, td := range args.Todos {
 		if td.ID == "" {
