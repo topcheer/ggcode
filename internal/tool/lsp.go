@@ -261,7 +261,7 @@ func (t lspPathTool) Execute(ctx context.Context, input json.RawMessage) (Result
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
-	return Result{Content: out}, nil
+	return Result{Content: capLSPOutput(out)}, nil
 }
 
 func (t lspPositionTool) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
@@ -283,7 +283,7 @@ func (t lspPositionTool) Execute(ctx context.Context, input json.RawMessage) (Re
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
-	return Result{Content: out}, nil
+	return Result{Content: capLSPOutput(out)}, nil
 }
 
 func (t lspRangeTool) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
@@ -310,7 +310,7 @@ func (t lspRangeTool) Execute(ctx context.Context, input json.RawMessage) (Resul
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
-	return Result{Content: out}, nil
+	return Result{Content: capLSPOutput(out)}, nil
 }
 
 func (t lspWorkspaceQueryTool) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
@@ -326,7 +326,7 @@ func (t lspWorkspaceQueryTool) Execute(ctx context.Context, input json.RawMessag
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
-	return Result{Content: out}, nil
+	return Result{Content: capLSPOutput(out)}, nil
 }
 
 func (t lspRenameTool) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
@@ -349,7 +349,7 @@ func (t lspRenameTool) Execute(ctx context.Context, input json.RawMessage) (Resu
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
-	return Result{Content: out}, nil
+	return Result{Content: capLSPOutput(out)}, nil
 }
 
 func (t lspCallHierarchyTool) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
@@ -368,7 +368,7 @@ func (t lspCallHierarchyTool) Execute(ctx context.Context, input json.RawMessage
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
-	return Result{Content: out}, nil
+	return Result{Content: capLSPOutput(out)}, nil
 }
 
 func (t lspPathTool) resolvePath(path string) (string, error) {
@@ -381,6 +381,18 @@ func (t lspPositionTool) resolvePath(path string) (string, error) {
 
 func (t lspRangeTool) resolvePath(path string) (string, error) {
 	return resolveLSPToolPath(path, t.workingDir, t.sandboxCheck)
+}
+
+// maxLSPOutputBytes caps LSP tool results to protect the context window.
+// lsp_references in large codebases can return thousands of entries.
+const maxLSPOutputBytes = 20 * 1024
+
+// capLSPOutput truncates LSP tool output to maxLSPOutputBytes.
+func capLSPOutput(s string) string {
+	if len(s) <= maxLSPOutputBytes {
+		return s
+	}
+	return s[:maxLSPOutputBytes] + "\n... [LSP output truncated]"
 }
 
 func resolveLSPToolPath(path, workingDir string, sandboxCheck AllowedPathChecker) (string, error) {
