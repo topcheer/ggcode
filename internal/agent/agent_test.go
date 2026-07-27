@@ -2106,6 +2106,16 @@ func TestIsAgentRetryableLLMError(t *testing.T) {
 		{errors.New("context length exceeded"), false},
 		{errors.New("invalid api key"), false},
 		{errors.New("model not found"), false},
+		// Quota exhaustion with 429 status — NOT retryable even though
+		// the error message may contain "rate limit" or "429"
+		{errors.New("429: coding plan package has expired"), false},
+		{errors.New("429 rate_limit: usage limit exceeded"), false},
+		{errors.New("429: 已达到 5 hour 的使用上限"), false},
+		{errors.New("429: 您的账户已欠费"), false},
+		{errors.New("429: You exceeded your current quota"), false},
+		{errors.New("429: insufficient balance"), false},
+		{errors.New("429: 额度已用完"), false},
+		{errors.New("429: 配额超限"), false},
 	}
 	for _, tt := range tests {
 		got := isAgentRetryableLLMError(tt.err)

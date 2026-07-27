@@ -47,7 +47,9 @@ const maxAgentLLMRetries = 3
 
 // isAgentRetryableLLMError returns true for transient errors that warrant an
 // agent-level retry. Excludes: context overflow (handled by reactive compact),
-// user cancellation (should not retry), and auth errors (retrying won't help).
+// user cancellation (should not retry), auth errors (retrying won't help),
+// and permanent quota exhaustion (429 with billing/quota keywords — provider
+// layer already detected and chose not to retry, agent should respect that).
 func isAgentRetryableLLMError(err error) bool {
 	if err == nil {
 		return false
@@ -56,6 +58,16 @@ func isAgentRetryableLLMError(err error) bool {
 		return false
 	}
 	s := strings.ToLower(err.Error())
+
+	// Quota/billing exhaustion is permanent — never retry, even if the error
+	// contains "rate limit" or "429". Coding plan providers (ZAI/GLM, Kimi,
+	// OpenAI) use 429 for both transient rate limits AND permanent quota
+	// exhaustion. The provider layer's isQuotaExhaustedError already filters
+	// these out; we must do the same at the agent level.
+	if isAgentQuotaExhausted(s) {
+		return false
+	}
+
 	for _, keyword := range []string{
 		"connection reset by peer",
 		"unexpected eof",
@@ -79,6 +91,30 @@ func isAgentRetryableLLMError(err error) bool {
 		}
 	}
 	return false
+}
+
+// isAgentQuotaExhausted mirrors provider.isQuotaExhaustedError but works on
+// a pre-lowercased string. Must stay in sync with the provider layer.
+func isAgentQuotaExhausted(s string) bool {
+	return strings.Contains(s, "coding plan") ||
+		strings.Contains(s, "usage limit") ||
+		strings.Contains(s, "使用上限") ||
+		strings.Contains(s, "套餐已到期") ||
+		strings.Contains(s, "package has expired") ||
+		strings.Contains(s, "insufficient balance") ||
+		strings.Contains(s, "余额不足") ||
+		strings.Contains(s, "欠费") ||
+		strings.Contains(s, "quota exceeded") ||
+		strings.Contains(s, "quotaexceeded") ||
+		strings.Contains(s, "exceeded your current quota") ||
+		strings.Contains(s, "额度已用完") ||
+		strings.Contains(s, "额度耗尽") ||
+		strings.Contains(s, "配额超限") ||
+		strings.Contains(s, "配额耗尽") ||
+		strings.Contains(s, "allocated quota") ||
+		strings.Contains(s, "公平使用") ||
+		strings.Contains(s, "fair usage") ||
+		strings.Contains(s, "access_terminated")
 }
 
 // Agent orchestrates the agentic loop: send messages to LLM, execute tool calls, loop.
