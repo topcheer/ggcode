@@ -60,6 +60,11 @@ func (t GitCommit) Execute(ctx context.Context, input json.RawMessage) (Result, 
 		return Result{IsError: true, Content: "message is required"}, nil
 	}
 
+	// Message quality check: warn about vague commit messages that don't
+	// explain what changed or why. This is advisory (non-blocking) — the
+	// commit still proceeds, but the warning helps the agent self-correct.
+	msgWarning := checkCommitMessageQuality(args.Message)
+
 	// Append Co-Authored-By trailer
 	fullMessage := args.Message + "\n\n" + coAuthorTrailer
 
@@ -97,10 +102,20 @@ func (t GitCommit) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	}
 
 	trimmed := strings.TrimSpace(string(out))
+	// Append branch warning and message quality warning if present.
+	if branchWarning != "" {
+		trimmed += "\n\n" + branchWarning
+	}
+	if msgWarning != "" {
+		trimmed += "\n\n" + msgWarning
+	}
 	if trimmed == "" {
 		result := "Committed successfully."
 		if branchWarning != "" {
 			result += "\n\n" + branchWarning
+		}
+		if msgWarning != "" {
+			result += "\n\n" + msgWarning
 		}
 		return Result{Content: result}, nil
 	}
@@ -109,6 +124,32 @@ func (t GitCommit) Execute(ctx context.Context, input json.RawMessage) (Result, 
 		trimmed += "\n\n" + branchWarning
 	}
 	return Result{Content: trimmed}, nil
+}
+
+// checkCommitMessageQuality returns a warning string if the commit message
+// is too short or matches common vague patterns. Non-blocking advisory.
+func checkCommitMessageQuality(msg string) string {
+	trimmed := strings.TrimSpace(msg)
+	if len(trimmed) < 10 {
+		return fmt.Sprintf(
+			"Warning: commit message is very short (%d chars). "+
+				"A good commit message describes what changed and why, e.g., "+
+				"'fix: handle nil pointer in context manager on resume'.",
+			len(trimmed),
+		)
+	}
+	lower := strings.ToLower(trimmed)
+	vague := []string{"wip", "fix", "update", "changes", "misc", "stuff", "todo", "temp", "hack"}
+	for _, v := range vague {
+		if lower == v || lower == v+"." {
+			return fmt.Sprintf(
+				"Warning: commit message %q is too vague. "+
+					"Describe what was changed, e.g., 'fix: null pointer exception in session loader'.",
+				trimmed,
+			)
+		}
+	}
+	return ""
 }
 
 // Clone returns an independent copy of this tool for use by a different agent.
