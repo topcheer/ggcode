@@ -97,17 +97,33 @@ const defaultToolTimeout = 5 * time.Minute
 // slowToolThreshold logs a debug warning when a tool takes longer than expected.
 const slowToolThreshold = 30 * time.Second
 
-// toolsWithoutTimeout lists tools that manage their own timeout and should
-// not be wrapped. run_command already has a 30-minute timeout; start_command
-// runs detached with no timeout.
+// toolsWithoutTimeout lists tools that manage their own timeout or have
+// inherently unbounded execution time. These are NOT wrapped with the
+// defaultToolTimeout deadline:
+//   - run_command/start_command/etc: implement their own timeout (default 30min)
+//   - sleep: explicitly waits for a duration
+//   - wait_agent/use_namedagent/delegate: spawn sub-agents that may run for
+//     many minutes or hours; they have their own internal lifecycle and timeouts
+//   - ask_user: blocks indefinitely waiting for human input
+//   - task_output: polls a background task that may still be running
 var toolsWithoutTimeout = map[string]bool{
+	// Command lifecycle (own timeout)
 	"run_command":         true,
 	"start_command":       true,
 	"wait_command":        true,
 	"read_command_output": true,
 	"write_command_input": true,
-	"sleep":               true,
 	"stop_command":        true,
+	"sleep":               true,
+	// Sub-agent / delegation (inherently long-running)
+	"wait_agent":       true,
+	"use_namedagent":   true,
+	"delegate":         true,
+	"spawn_agent":      true,
+	"task_output":      true,
+	"teammate_results": true,
+	// Human-in-the-loop (unbounded wait)
+	"ask_user": true,
 }
 
 // executeToolWithTimeout wraps executeTool with a deadline. If the tool
