@@ -93,7 +93,7 @@ func (m Model) renderContextPanel() string {
 			m.t("label.tool"),
 			toolLine,
 			m.t("label.input"),
-			util.Truncate(compactToolArgsPreview(strings.ReplaceAll(m.pendingApproval.Input, "\n", " ")), 220),
+			util.Truncate(compactToolArgsPreview(strings.ReplaceAll(m.pendingApproval.Input, "\n", " ")), 500),
 			m.renderApprovalOptions(m.approvalOptions, m.approvalCursor),
 			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" Tab/j/k move • Enter confirm • y/n/a shortcuts"),
 		)
