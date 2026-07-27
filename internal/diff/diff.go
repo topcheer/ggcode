@@ -249,3 +249,50 @@ func formatUnifiedDiff(oldLines, newLines []string, script []op, contextLines in
 func HasChanges(old, new string) bool {
 	return old != new
 }
+
+// countChanges returns the number of added and deleted lines.
+func countChanges(old, new string) (additions, deletions int) {
+	oldLines := splitLines(old)
+	newLines := splitLines(new)
+	if len(oldLines)+len(newLines) > maxDiffLines {
+		// For large files, count prefix/suffix matching
+		prefix := 0
+		minLen := len(oldLines)
+		if len(newLines) < minLen {
+			minLen = len(newLines)
+		}
+		for prefix < minLen && oldLines[prefix] == newLines[prefix] {
+			prefix++
+		}
+		suffix := 0
+		for suffix < (len(oldLines)-prefix) && suffix < (len(newLines)-prefix) &&
+			oldLines[len(oldLines)-1-suffix] == newLines[len(newLines)-1-suffix] {
+			suffix++
+		}
+		deletions = len(oldLines) - prefix - suffix
+		additions = len(newLines) - prefix - suffix
+		if deletions < 0 {
+			deletions = 0
+		}
+		if additions < 0 {
+			additions = 0
+		}
+		return
+	}
+	script := computeEditScript(oldLines, newLines)
+	for _, s := range script {
+		switch s.kind {
+		case '+':
+			additions++
+		case '-':
+			deletions++
+		}
+	}
+	return
+}
+
+// Stats returns a human-readable summary of changes.
+func Stats(old, new string) string {
+	additions, deletions := countChanges(old, new)
+	return fmt.Sprintf("+%d additions, -%d deletions", additions, deletions)
+}

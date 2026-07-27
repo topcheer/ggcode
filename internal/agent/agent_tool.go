@@ -275,7 +275,7 @@ func (a *Agent) executeFileTool(ctx context.Context, t tool.Tool, tc provider.To
 
 	// Show diff and ask for confirmation if diffConfirm is set
 	if diffFn != nil && diff.HasChanges(oldContent, newContent) {
-		diffText := diff.UnifiedDiff(oldContent, newContent, 3)
+		diffText := diff.Stats(oldContent, newContent) + "\n" + diff.UnifiedDiff(oldContent, newContent, 3)
 		if !diffFn(ctx, filePath, diffText) {
 			return tool.Result{Content: fmt.Sprintf("File write to %s cancelled by user.", filePath), IsError: true}
 		}
@@ -382,6 +382,7 @@ func buildMultiFileDiffText(plans []tool.PlannedFileEdit) (string, bool) {
 		out.WriteString("=== ")
 		out.WriteString(plan.Path)
 		out.WriteString(" ===\n")
+		out.WriteString(diff.Stats(plan.OldContent, plan.NewContent) + "\n")
 		out.WriteString(diff.UnifiedDiff(plan.OldContent, plan.NewContent, 3))
 		hasChanges = true
 	}

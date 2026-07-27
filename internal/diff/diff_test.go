@@ -91,6 +91,32 @@ func TestUnifiedDiffLargeFileFallback(t *testing.T) {
 	}
 }
 
+func TestStats(t *testing.T) {
+	// No changes
+	s := Stats("hello\nworld", "hello\nworld")
+	if !strings.Contains(s, "+0") || !strings.Contains(s, "-0") {
+		t.Fatalf("expected 0 changes, got: %s", s)
+	}
+
+	// Additions only
+	s = Stats("hello\nworld", "hello\nworld\nfoo")
+	if !strings.Contains(s, "+1") || !strings.Contains(s, "-0") {
+		t.Fatalf("expected +1 -0, got: %s", s)
+	}
+
+	// Deletions only
+	s = Stats("hello\nworld\nfoo", "hello\nworld")
+	if !strings.Contains(s, "+0") || !strings.Contains(s, "-1") {
+		t.Fatalf("expected +0 -1, got: %s", s)
+	}
+
+	// Mixed changes
+	s = Stats("a\nb\nc", "a\nx\nc")
+	if !strings.Contains(s, "+1") || !strings.Contains(s, "-1") {
+		t.Fatalf("expected +1 -1, got: %s", s)
+	}
+}
+
 func itoa(n int) string {
 	return fmt.Sprintf("%d", n)
 }
