@@ -194,7 +194,7 @@ func CompleteMention(prefix string, workDir string) []string {
 var SlashCommands = []string{
 	"/help", "/?", "/sessions", "/resume", "/model", "/provider", "/impersonate",
 	"/clear", "/im", "/qq", "/telegram", "/tg", "/pc", "/discord", "/feishu", "/lark", "/slack", "/dingtalk", "/ding", "/wechat", "/wecom", "/mattermost", "/mm", "/matrix", "/signal", "/irc", "/nostr", "/twitch", "/whatsapp", "/wa",
-	"/mcp", "/memory", "/undo", "/files", "/checkpoints", "/plugins",
+	"/mcp", "/memory", "/undo", "/files", "/tools", "/checkpoints", "/plugins",
 	"/inspector", "/image", "/mode", "/allow", "/export", "/bug", "/config", "/reflect", "/rules",
 	"/chat", "/nick", "/init", "/harness", "/exit", "/quit",
 	"/compact", "/todo", "/status", "/stats", "/knight", "/tmux", "/update", "/restart", "/lang", "/skills", "/stream", "/share", "/tunnel", "/unshare",
@@ -245,6 +245,7 @@ var SlashCommandDescriptions = map[string]string{
 	"/undo":        "Undo last file edit",
 	"/redo":        "Redo last undone edit (restore from git)",
 	"/files":       "Show files modified by agent",
+	"/tools":       "List available tools",
 	"/checkpoints": "List checkpoints",
 	"/plugins":     "List loaded plugins",
 	"/inspector":   "Open inspector panel (sessions|checkpoints|memory|plugins|config|status)",

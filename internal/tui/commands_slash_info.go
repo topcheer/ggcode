@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -94,6 +95,44 @@ func (m *Model) exportSession(id string) tea.Cmd {
 			return streamMsg(m.t("session.write_failed", err))
 		}
 		return streamMsg(m.t("session.exported", id, filename))
+	}
+}
+
+func (m *Model) handleToolsCommand() tea.Cmd {
+	if m.agent == nil {
+		return func() tea.Msg {
+			return streamMsg("Agent not initialized.")
+		}
+	}
+	reg := m.agent.ToolRegistry()
+	if reg == nil {
+		return func() tea.Msg {
+			return streamMsg("Tool registry not available.")
+		}
+	}
+	tools := reg.List()
+	if len(tools) == 0 {
+		return func() tea.Msg {
+			return streamMsg("No tools registered.")
+		}
+	}
+	// Sort tools alphabetically for consistent display
+	sort.Slice(tools, func(i, j int) bool {
+		return tools[i].Name() < tools[j].Name()
+	})
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("Available tools (%d):\n\n", len(tools)))
+	for _, t := range tools {
+		name := t.Name()
+		desc := t.Description()
+		// Truncate long descriptions for readability
+		if len(desc) > 120 {
+			desc = desc[:117] + "..."
+		}
+		b.WriteString(fmt.Sprintf("  %-20s %s\n", name, desc))
+	}
+	return func() tea.Msg {
+		return streamMsg(b.String())
 	}
 }
 
