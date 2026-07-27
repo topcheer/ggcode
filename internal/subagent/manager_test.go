@@ -553,3 +553,33 @@ func TestWatchdog_DoesNotCancelActiveAgent(t *testing.T) {
 		t.Errorf("expected active agent to remain running, got %s", status)
 	}
 }
+
+func TestPurgeTerminalAgents_BoundsMemoryGrowth(t *testing.T) {
+	m := NewManager(config.SubAgentConfig{})
+	defer m.Shutdown()
+	m.inactivityTimeout = 100 * time.Millisecond
+
+	// Create 25 completed agents — exceeds maxTerminalAgents (20)
+	for i := 0; i < 25; i++ {
+		id := m.Spawn("test", "task", "display", nil, context.Background())
+		sa, ok := m.Get(id)
+		if !ok {
+			t.Fatal("expected sub-agent to exist")
+		}
+		sa.mu.Lock()
+		sa.Status = StatusCompleted
+		sa.EndedAt = time.Now().Add(-time.Duration(25-i) * time.Minute) // older = lower i
+		sa.mu.Unlock()
+	}
+
+	// Run purge
+	m.purgeTerminalAgents()
+
+	// Should have maxTerminalAgents (20) remaining
+	m.mu.Lock()
+	count := len(m.agents)
+	m.mu.Unlock()
+	if count != 20 {
+		t.Errorf("expected 20 agents after purge, got %d", count)
+	}
+}

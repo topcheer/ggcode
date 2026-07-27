@@ -3,6 +3,7 @@ package subagent
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -371,6 +372,8 @@ func (m *Manager) reapInactiveAgents() {
 		debug.Log("subagent", "watchdog: cancelling stale sub-agent %s (no activity for %v)", id, m.inactivityTimeout)
 		m.Cancel(id)
 	}
+	// Also purge old terminal agents to bound memory growth
+	m.purgeTerminalAgents()
 }
 
 // RootContext returns the manager's lifecycle context. spawn_agent uses this
@@ -986,4 +989,45 @@ func (m *Manager) notifyUpdate(sa *SubAgent) {
 		return
 	}
 	fn(sa)
+}
+
+// maxTerminalAgents is the maximum number of terminal (completed/failed/
+// cancelled) sub-agents retained in the map. Older terminal entries are
+// purged to prevent unbounded memory growth in long-running sessions.
+const maxTerminalAgents = 20
+
+// purgeTerminalAgents removes the oldest terminal sub-agents when the
+// count exceeds maxTerminalAgents. Called from reapInactiveAgents to
+// piggyback on the watchdog's periodic sweep.
+func (m *Manager) purgeTerminalAgents() {
+	type terminalEntry struct {
+		id      string
+		endedAt time.Time
+	}
+	m.mu.Lock()
+	var terminals []terminalEntry
+	for id, sa := range m.agents {
+		sa.mu.Lock()
+		isTerminal := sa.Status == StatusCompleted || sa.Status == StatusFailed || sa.Status == StatusCancelled
+		ended := sa.EndedAt
+		sa.mu.Unlock()
+		if isTerminal {
+			terminals = append(terminals, terminalEntry{id: id, endedAt: ended})
+		}
+	}
+	if len(terminals) <= maxTerminalAgents {
+		m.mu.Unlock()
+		return
+	}
+	// Sort by EndedAt ascending (oldest first)
+	sort.Slice(terminals, func(i, j int) bool {
+		return terminals[i].endedAt.Before(terminals[j].endedAt)
+	})
+	// Delete oldest entries until we're at the limit
+	toDelete := len(terminals) - maxTerminalAgents
+	for i := 0; i < toDelete; i++ {
+		delete(m.agents, terminals[i].id)
+	}
+	debug.Log("subagent", "purgeTerminalAgents: removed %d old terminal agents, %d remaining", toDelete, len(terminals)-toDelete)
+	m.mu.Unlock()
 }
