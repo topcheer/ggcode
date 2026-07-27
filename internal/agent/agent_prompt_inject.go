@@ -86,6 +86,18 @@ func (a *Agent) maybeInjectDynamicSystemPrompt() {
 	}
 	a.lastInjectedSystemPrompt = fullText
 
+	// System prompt budget check: warn if the prompt is excessively large.
+	// A system prompt consuming >15% of the context window significantly
+	// reduces available conversation space and accelerates compaction.
+	ctxWindow := a.contextManager.ContextWindow()
+	if ctxWindow > 0 {
+		estTokens := context.EstimateTokens(fullText)
+		ratio := float64(estTokens) / float64(ctxWindow)
+		if ratio > 0.15 {
+			debug.Log("agent", "WARNING: system prompt is %.1f%% of context window (%d tokens / %d). Consider trimming memory files, ratchet rules, or reducing ExtraPrompt.", ratio*100, estTokens, ctxWindow)
+		}
+	}
+
 	cm, ok := a.contextManager.(*context.Manager)
 	if !ok {
 		return
