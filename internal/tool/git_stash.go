@@ -104,11 +104,48 @@ func (t GitStash) Execute(ctx context.Context, input json.RawMessage) (Result, e
 	}
 
 	trimmed := strings.TrimSpace(string(out))
+
+	// After push: warn about untracked files that were NOT stashed.
+	// git stash push only saves tracked changes by default. Untracked
+	// files (e.g., newly created by the agent) remain in the working tree.
+	if action == "push" {
+		untracked := countUntrackedFiles(ctx, cmd.Dir)
+		if untracked > 0 {
+			warning := fmt.Sprintf(
+				"\n\nWarning: %d untracked file(s) were NOT stashed. "+
+					"git stash push only saves tracked changes. To include untracked files, "+
+					"use 'git stash push --include-untracked'.",
+				untracked,
+			)
+			if trimmed == "" {
+				return Result{Content: fmt.Sprintf("git stash %s completed.%s", action, warning)}, nil
+			}
+			trimmed += warning
+		}
+	}
+
 	if trimmed == "" {
 		return Result{Content: fmt.Sprintf("git stash %s completed.", action)}, nil
 	}
 
 	return Result{Content: trimmed}, nil
+}
+
+// countUntrackedFiles runs 'git status --porcelain' and counts untracked entries (?? prefix).
+func countUntrackedFiles(ctx context.Context, dir string) int {
+	cmd := gitCommand(ctx, "status", "--porcelain")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return 0
+	}
+	count := 0
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.HasPrefix(line, "?? ") {
+			count++
+		}
+	}
+	return count
 }
 
 // Clone returns an independent copy of this tool for use by a different agent.
