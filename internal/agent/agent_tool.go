@@ -127,11 +127,17 @@ var toolsWithoutTimeout = map[string]bool{
 }
 
 // executeToolWithTimeout wraps executeTool with a deadline. If the tool
-// exceeds defaultToolTimeout, it returns a timeout error result.
+// exceeds defaultToolTimeout, it cancels the context (to signal the tool
+// to abort) and returns a timeout error result.
 func (a *Agent) executeToolWithTimeout(ctx context.Context, tc provider.ToolCallDelta) tool.Result {
 	if toolsWithoutTimeout[tc.Name] {
 		return a.executeTool(ctx, tc)
 	}
+
+	// Create a cancellable sub-context so that on timeout we can signal
+	// the tool to abort (tools that check ctx.Done() will exit promptly).
+	toolCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
 	type toolResult struct {
 		result tool.Result
@@ -147,7 +153,7 @@ func (a *Agent) executeToolWithTimeout(ctx context.Context, tc provider.ToolCall
 				}}
 			}
 		}()
-		resultCh <- toolResult{a.executeTool(ctx, tc)}
+		resultCh <- toolResult{a.executeTool(toolCtx, tc)}
 	}()
 
 	timer := time.NewTimer(defaultToolTimeout)
@@ -155,6 +161,7 @@ func (a *Agent) executeToolWithTimeout(ctx context.Context, tc provider.ToolCall
 
 	select {
 	case <-timer.C:
+		cancel() // signal the tool goroutine to abort
 		debug.Log("agent", "tool timeout: %s exceeded %v", tc.Name, defaultToolTimeout)
 		return tool.Result{
 			Content: fmt.Sprintf("Tool %q timed out after %v. If this is a long-running operation, consider using start_command instead.", tc.Name, defaultToolTimeout),
