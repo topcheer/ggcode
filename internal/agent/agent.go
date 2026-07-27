@@ -1223,6 +1223,15 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// consumed in-order; side-effect tools still run sequentially.
 		preExecuted := a.preExecuteReadOnlyTools(ctx, toolCalls)
 
+		// Deduplicate identical read-only tool calls within the same LLM response.
+		// LLMs occasionally emit duplicate calls (e.g., two read_file for the
+		// same path). Skip the second execution and reuse the first result.
+		type dedupKey struct {
+			tool string
+			args string
+		}
+		seenReadOnly := make(map[dedupKey]int) // key → index of first result in toolResults
+
 		for idx, tc := range toolCalls {
 			if err := ctx.Err(); err != nil {
 				// Context cancelled mid-tool-execution. The assistant message
@@ -1251,6 +1260,23 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				}
 			}
 			// Don't log executeToolWithPermission start — the permission check log already covers this
+			// In-turn deduplication: if the LLM sent the same read-only tool call
+			// twice in this response, reuse the first result instead of re-executing.
+			dedupK := dedupKey{tool: tc.Name, args: string(tc.Arguments)}
+			if speculativeSafeTools[tc.Name] {
+				if firstIdx, ok := seenReadOnly[dedupK]; ok && firstIdx < len(toolResults) {
+					dedupContent := toolResults[firstIdx].Text
+					debug.Log("agent", "in-turn dedup: %s already executed in this response, reusing result", tc.Name)
+					toolResults = append(toolResults, provider.ToolResultNamedBlock(tc.ID, tc.Name, dedupContent, false))
+					onEvent(provider.StreamEvent{
+						Type:    provider.StreamEventToolResult,
+						Tool:    tc,
+						Result:  dedupContent,
+						IsError: false,
+					})
+					continue
+				}
+			}
 			// Check memoization cache: if a read-only tool was called with identical args
 			// earlier in this run (and the underlying resource hasn't changed), return the
 			// cached result. This prevents redundant re-execution after tool-result clearing.
@@ -1428,6 +1454,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				Result:  result.Content,
 				IsError: result.IsError,
 			})
+
+			// Register read-only tool results for in-turn deduplication.
+			if speculativeSafeTools[tc.Name] && !result.IsError {
+				seenReadOnly[dedupK] = len(toolResults) - 1
+			}
 
 			if err := ctx.Err(); err != nil {
 				// Context cancelled after completing some tools. Fill "cancelled"
