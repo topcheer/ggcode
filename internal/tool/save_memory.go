@@ -8,6 +8,17 @@ import (
 	"github.com/topcheer/ggcode/internal/memory"
 )
 
+const (
+	// maxMemoryKeyLen limits key length. Keys become filenames, so excessively
+	// long keys cause filesystem issues. 100 chars is generous for a key.
+	maxMemoryKeyLen = 100
+
+	// maxMemoryContentBytes limits content size. Memory entries are loaded
+	// into the system prompt at startup, so large entries waste context on
+	// every session. 10KB is enough for concise rules and patterns.
+	maxMemoryContentBytes = 10 * 1024
+)
+
 // SaveMemoryTool lets the agent save experiences to persistent memory.
 type SaveMemoryTool struct {
 	globalMem  *memory.AutoMemory
@@ -84,6 +95,17 @@ func (t *SaveMemoryTool) Execute(ctx context.Context, input json.RawMessage) (Re
 
 	if target == nil {
 		return Result{IsError: true, Content: fmt.Sprintf("%s memory not available", scopeLabel)}, nil
+	}
+
+	// Validate key
+	if len(params.Key) > maxMemoryKeyLen {
+		return Result{IsError: true, Content: fmt.Sprintf("key too long: %d chars (max %d). Use a shorter identifier.", len(params.Key), maxMemoryKeyLen)}, nil
+	}
+
+	// Validate content size — memory is loaded into the system prompt at
+	// startup, so excessively large entries waste context on every session.
+	if len(params.Content) > maxMemoryContentBytes {
+		return Result{IsError: true, Content: fmt.Sprintf("content too large: %d bytes (max %d bytes). Summarize or split into smaller entries.", len(params.Content), maxMemoryContentBytes)}, nil
 	}
 
 	if err := target.SaveMemory(params.Key, params.Content); err != nil {
