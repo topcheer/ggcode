@@ -65,6 +65,11 @@ func (t GitCommit) Execute(ctx context.Context, input json.RawMessage) (Result, 
 
 	dir := resolveDir(args.Path, t.WorkingDir)
 
+	// Branch safety: warn when committing to main/master/trunk to prevent
+	// accidental direct-to-trunk commits. We check the current branch name
+	// and append a warning to the commit result if it's a protected branch.
+	branchWarning := checkProtectedBranch(ctx, dir)
+
 	// Non-git VCS path.
 	if v := vcs.Detect(dir); v != nil && v.Name() != "git" {
 		out, err := v.Commit(ctx, dir, fullMessage)
@@ -93,13 +98,50 @@ func (t GitCommit) Execute(ctx context.Context, input json.RawMessage) (Result, 
 
 	trimmed := strings.TrimSpace(string(out))
 	if trimmed == "" {
-		return Result{Content: "Committed successfully."}, nil
+		result := "Committed successfully."
+		if branchWarning != "" {
+			result += "\n\n" + branchWarning
+		}
+		return Result{Content: result}, nil
 	}
 
+	if branchWarning != "" {
+		trimmed += "\n\n" + branchWarning
+	}
 	return Result{Content: trimmed}, nil
 }
 
 // Clone returns an independent copy of this tool for use by a different agent.
 func (t GitCommit) Clone() Tool {
 	return &GitCommit{WorkingDir: t.WorkingDir}
+}
+
+// checkProtectedBranch returns a warning string if the current git branch
+// is a protected branch (main, master, trunk, develop). Returns empty string
+// if on a feature/working branch or not in a git repo.
+func checkProtectedBranch(ctx context.Context, dir string) string {
+	cmd := gitCommand(ctx, "symbolic-ref", "--short", "HEAD")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return "" // not in git repo or detached HEAD — don't block
+	}
+	branch := strings.TrimSpace(string(out))
+
+	protectedBranches := map[string]bool{
+		"main":       true,
+		"master":     true,
+		"trunk":      true,
+		"develop":    true,
+		"production": true,
+	}
+	if !protectedBranches[branch] {
+		return ""
+	}
+	return fmt.Sprintf(
+		"Warning: committed to protected branch %q. "+
+			"Consider creating a feature branch for changes (e.g., 'git checkout -b feature/your-feature'). "+
+			"Direct commits to %s may bypass code review and CI checks.",
+		branch, branch,
+	)
 }

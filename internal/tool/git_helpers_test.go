@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -181,4 +182,47 @@ func containsStringAt(s, substr string) int {
 		}
 	}
 	return -1
+}
+
+func TestCheckProtectedBranch(t *testing.T) {
+	// Create a temporary git repo
+	dir := t.TempDir()
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	// Init repo
+	if out, err := exec.Command("git", "init", dir).CombinedOutput(); err != nil {
+		t.Skipf("git not available: %v\n%s", err, out)
+	}
+	// Set git config for commit
+	exec.Command("git", "-C", dir, "config", "user.email", "test@test.com").Run()
+	exec.Command("git", "-C", dir, "config", "user.name", "Test").Run()
+
+	// Default branch might be master or main depending on git version.
+	// Create a file and commit to have at least one commit.
+	os.WriteFile(filepath.Join(dir, "test.txt"), []byte("test"), 0644)
+	exec.Command("git", "-C", dir, "add", "test.txt").Run()
+	exec.Command("git", "-C", dir, "commit", "-m", "init").Run()
+
+	// Test: default branch (main or master) should trigger warning
+	warning := checkProtectedBranch(t.Context(), dir)
+	if warning == "" {
+		// Might be on a non-default branch in CI, check current branch
+		out, _ := exec.Command("git", "-C", dir, "symbolic-ref", "--short", "HEAD").Output()
+		branch := strings.TrimSpace(string(out))
+		if branch == "main" || branch == "master" {
+			t.Errorf("expected warning on %s, got empty string", branch)
+		}
+	} else {
+		if !containsString(warning, "protected") {
+			t.Errorf("warning should mention 'protected', got: %s", warning)
+		}
+	}
+
+	// Create a feature branch and test no warning
+	exec.Command("git", "-C", dir, "checkout", "-b", "feature/test").Run()
+	warning = checkProtectedBranch(t.Context(), dir)
+	if warning != "" {
+		t.Errorf("expected no warning on feature branch, got: %s", warning)
+	}
 }
