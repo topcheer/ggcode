@@ -39,6 +39,16 @@ var fileEditingTools = map[string]bool{
 	"multi_file_write": true,
 }
 
+// gitFileModifyingTools are git operations that change file contents on
+// disk (checkout, stash pop/apply, etc.). These must invalidate tool caches
+// just like direct file edits, otherwise stale cached results (grep, LSP)
+// will be served after the working tree changes.
+var gitFileModifyingTools = map[string]bool{
+	"git_stash":      true, // pop/apply restores changed files
+	"enter_worktree": true, // switches working directory + files
+	"exit_worktree":  true, // switches back, files may differ
+}
+
 // sourceCodeExtensions maps file extensions to whether they're compiled/interpreted code.
 var sourceCodeExtensions = map[string]bool{
 	".go":    true,

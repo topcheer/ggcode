@@ -1200,7 +1200,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// File-editing tools invalidate the speculative cache: any
 			// pre-executed read_file/grep results for edited files are now
 			// stale. Clear the cache to prevent serving outdated content.
-			if fileEditingTools[tc.Name] && !result.IsError {
+			if (fileEditingTools[tc.Name] || gitFileModifyingTools[tc.Name] || tc.Name == "notebook_edit") && !result.IsError {
 				a.speculator.invalidateCache()
 				// Also invalidate TTL-based memoize entries (grep, LSP, git)
 				// whose results may be stale after a file edit. mtime-based
