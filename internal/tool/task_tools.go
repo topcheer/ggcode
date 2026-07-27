@@ -10,6 +10,10 @@ import (
 	"github.com/topcheer/ggcode/internal/task"
 )
 
+// maxTaskSubjectLen limits task subject length. Subjects appear in task_list
+// output and task board UI; excessively long subjects waste context.
+const maxTaskSubjectLen = 200
+
 // ————————————————————————————————————————
 // TaskCreate
 // ————————————————————————————————————————
@@ -83,6 +87,9 @@ func (t TaskCreateTool) Execute(_ context.Context, input json.RawMessage) (Resul
 	}
 	if strings.TrimSpace(args.Subject) == "" {
 		return Result{IsError: true, Content: "subject is required"}, nil
+	}
+	if len(args.Subject) > maxTaskSubjectLen {
+		return Result{IsError: true, Content: fmt.Sprintf("subject too long: %d chars (max %d). Use a shorter title.", len(args.Subject), maxTaskSubjectLen)}, nil
 	}
 
 	created := t.Manager.Create(args.Subject, args.Description, args.ActiveForm, args.Metadata)
