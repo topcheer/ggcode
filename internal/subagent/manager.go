@@ -38,6 +38,12 @@ type AgentEvent struct {
 
 const maxAgentEvents = 200
 
+// maxConcurrentSubAgents limits how many sub-agents can run simultaneously.
+// Each sub-agent consumes a goroutine, an LLM API connection, and context
+// window tokens. Without a limit, an agent can spawn dozens of sub-agents
+// in parallel, exhausting API rate limits and memory.
+const maxConcurrentSubAgents = 5
+
 // cancelAllTimeout is the maximum time CancelAll waits for each sub-agent to
 // actually terminate after its context is cancelled. Sub-agents running long
 // LLM streams or external tool calls may not finish instantly.
@@ -343,7 +349,33 @@ func (m *Manager) Shutdown() {
 
 // Spawn creates a new sub-agent with the given task and returns its ID.
 func (m *Manager) Spawn(name, task, displayTask string, tools []string, ctx context.Context) string {
+	// Enforce concurrent sub-agent limit to prevent resource exhaustion.
 	m.mu.Lock()
+	running := 0
+	for _, sa := range m.agents {
+		if sa.Status == StatusRunning || sa.Status == StatusPending {
+			running++
+		}
+	}
+	if running >= maxConcurrentSubAgents {
+		m.mu.Unlock()
+		// Return a synthetic error ID that wait_agent will report as failed.
+		errID := fmt.Sprintf("sa-limit-%d", time.Now().UnixNano())
+		sa := &SubAgent{
+			ID:           errID,
+			Name:         name,
+			Task:         task,
+			DisplayTask:  displayTask,
+			Status:       StatusFailed,
+			CurrentPhase: "rejected",
+			CreatedAt:    time.Now(),
+			Error:        fmt.Errorf("concurrent sub-agent limit reached (%d). Wait for existing sub-agents to finish before spawning new ones.", maxConcurrentSubAgents),
+			done:         make(chan struct{}),
+		}
+		close(sa.done)
+		m.agents[errID] = sa
+		return errID
+	}
 	m.nextID++
 	id := fmt.Sprintf("sa-%d", m.nextID)
 	m.mu.Unlock()
