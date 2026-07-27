@@ -192,7 +192,7 @@ func (t SearchFiles) parallelSearch(ctx context.Context, args struct {
 	})
 
 	if len(files) == 0 {
-		return Result{Content: "No matches found."}, nil
+		return Result{Content: searchFilesZeroMatchHint(args.Pattern, args.Directory, args.IncludePattern)}, nil
 	}
 
 	// Phase 2: parallel search
@@ -251,11 +251,25 @@ func (t SearchFiles) parallelSearch(ctx context.Context, args struct {
 	wg.Wait()
 
 	if len(results) == 0 {
-		return Result{Content: "No matches found."}, nil
+		return Result{Content: searchFilesZeroMatchHint(args.Pattern, args.Directory, args.IncludePattern)}, nil
 	}
 
 	total := int(atomic.LoadInt64(&totalMatches))
 	return formatResults(results, total), nil
+}
+
+// searchFilesZeroMatchHint returns a contextual suggestion string for zero-result searches.
+func searchFilesZeroMatchHint(pattern, directory, includePattern string) string {
+	var hints []string
+	hints = append(hints, fmt.Sprintf("No matches found for pattern %q", pattern))
+	if includePattern != "" {
+		hints = append(hints, fmt.Sprintf("You restricted to files matching %q — try removing the include_pattern or widening it.", includePattern))
+	}
+	if directory != "" && directory != "." {
+		hints = append(hints, fmt.Sprintf("You searched in %q — try searching from the project root instead.", directory))
+	}
+	hints = append(hints, "Try: simplify the regex, remove anchors (^/$), or use grep with ignore_case=true")
+	return strings.Join(hints, "\n")
 }
 
 func searchFile(path, baseDir string, re *regexp.Regexp) []string {
