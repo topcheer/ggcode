@@ -2094,6 +2094,13 @@ func TestIsAgentRetryableLLMError(t *testing.T) {
 		{errors.New("i/o timeout"), true},
 		{errors.New("openai stream: 20 retry attempts exhausted"), true},
 		{errors.New("anthropic stream: 20 retry attempts exhausted"), true},
+		// Rate limiting and server overload are retryable
+		{errors.New("rate limit exceeded"), true},
+		{errors.New("Too Many Requests"), true},
+		{errors.New("Error: 429 rate_limit_error"), true},
+		{errors.New("overloaded"), true},
+		{errors.New("service unavailable"), true},
+		{errors.New("502 bad gateway"), true},
 		// Non-retryable:
 		{errors.New("401 unauthorized"), false},
 		{errors.New("context length exceeded"), false},

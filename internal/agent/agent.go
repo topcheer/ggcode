@@ -67,6 +67,12 @@ func isAgentRetryableLLMError(err error) bool {
 		"i/o timeout",
 		"eof",
 		"retry attempts exhausted", // provider gave up after 20 tries
+		"rate limit",               // 429 Too Many Requests after provider retries
+		"rate_limit",               // snake_case variant from API error codes
+		"too many requests",        // standard HTTP 429 message
+		"overloaded",               // Anthropic overload response
+		"service unavailable",      // 503 temporary server overload
+		"bad gateway",              // 502 transient proxy error
 	} {
 		if strings.Contains(s, keyword) {
 			return true
@@ -927,7 +933,15 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// partial output, DNS hiccup between provider retries).
 			if isAgentRetryableLLMError(err) && agentLLMRetries < maxAgentLLMRetries {
 				agentLLMRetries++
-				delay := time.Duration(agentLLMRetries) * 2 * time.Second
+				// Use longer backoff for rate limiting errors (429/overloaded)
+				// vs. transient network errors. Rate limits need more time
+				// to reset before retrying.
+				multiplier := 2 // seconds per retry step
+				errStr := strings.ToLower(err.Error())
+				if strings.Contains(errStr, "rate limit") || strings.Contains(errStr, "rate_limit") || strings.Contains(errStr, "too many") || strings.Contains(errStr, "overloaded") {
+					multiplier = 5 // 5s, 10s, 15s for rate-limited requests
+				}
+				delay := time.Duration(agentLLMRetries*multiplier) * time.Second
 				debug.Log("agent", "transient LLM error (attempt %d/%d), retrying in %v: %v",
 					agentLLMRetries, maxAgentLLMRetries, delay, err)
 				onEvent(provider.StreamEvent{Type: provider.StreamEventSystem,
