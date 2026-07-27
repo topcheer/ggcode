@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/hooks"
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
@@ -152,7 +153,14 @@ func (a *Agent) tryReactiveCompact(ctx context.Context, onEvent func(provider.St
 		return false
 	}
 	debug.Log("agent", "reactive compact: conversation compacted successfully")
-	onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: fmt.Sprintf("[Context compressed (%d → %d tokens), retrying...] ", tokens, a.contextManager.TokenCount())})
+	newTokens := a.contextManager.TokenCount()
+	onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: fmt.Sprintf("[Context compressed (%d → %d tokens), retrying...] ", tokens, newTokens)})
+	// Fire on_compaction hooks (fire-and-forget).
+	hookCfg := a.GetHookConfig()
+	hooks.RunCompactionHooks(hookCfg, hooks.HookEnv{
+		TokenBefore: tokens,
+		TokenAfter:  newTokens,
+	})
 	// Always save checkpoint after reactive compact — the live context was
 	// modified and must be persisted so --resume can restore the compacted
 	// state instead of re-loading the full pre-compaction message history.

@@ -43,6 +43,7 @@ const (
 	EventPostToolUse   = "post_tool_use"
 	EventOnAgentStop   = "on_agent_stop"
 	EventOnStreamStop  = "on_stream_stop"
+	EventOnCompaction  = "on_compaction"
 )
 
 // HookConfig holds all hooks from configuration, keyed by event.
@@ -52,6 +53,7 @@ type HookConfig struct {
 	PostToolUse   []Hook `yaml:"post_tool_use" json:"post_tool_use"`
 	OnAgentStop   []Hook `yaml:"on_agent_stop" json:"on_agent_stop"`
 	OnStreamStop  []Hook `yaml:"on_stream_stop" json:"on_stream_stop"`
+	OnCompaction  []Hook `yaml:"on_compaction" json:"on_compaction"`
 }
 
 // HookResult is the result of running one or more hooks.
@@ -88,6 +90,10 @@ type HookEnv struct {
 	// Stop context (on_agent_stop, on_stream_stop only)
 	StopReason string // "completed", "cancelled", "error"
 	StopError  string
+
+	// Compaction context (on_compaction only)
+	TokenBefore int // token count before compaction
+	TokenAfter  int // token count after compaction
 }
 
 // ValidateHooks checks a HookConfig for common misconfigurations.

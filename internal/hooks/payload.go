@@ -14,10 +14,11 @@ type HookPayload struct {
 	SessionID string `json:"session_id,omitempty"`
 	Workspace string `json:"workspace,omitempty"`
 
-	Tool   *PayloadTool   `json:"tool,omitempty"`    // pre/post_tool_use
-	Result *PayloadResult `json:"result,omitempty"`  // post_tool_use only
-	Msg    *PayloadMsg    `json:"message,omitempty"` // on_user_message only
-	Stop   *PayloadStop   `json:"stop,omitempty"`    // on_agent_stop / on_stream_stop
+	Tool       *PayloadTool       `json:"tool,omitempty"`       // pre/post_tool_use
+	Result     *PayloadResult     `json:"result,omitempty"`     // post_tool_use only
+	Msg        *PayloadMsg        `json:"message,omitempty"`    // on_user_message only
+	Stop       *PayloadStop       `json:"stop,omitempty"`       // on_agent_stop / on_stream_stop
+	Compaction *PayloadCompaction `json:"compaction,omitempty"` // on_compaction only
 }
 
 type PayloadTool struct {
@@ -41,6 +42,13 @@ type PayloadMsg struct {
 type PayloadStop struct {
 	Reason string `json:"reason"` // "completed", "cancelled", "error"
 	Error  string `json:"error,omitempty"`
+}
+
+// PayloadCompaction carries compaction metrics for on_compaction hooks.
+type PayloadCompaction struct {
+	TokenBefore int `json:"token_before"` // token count before compaction
+	TokenAfter  int `json:"token_after"`  // token count after compaction
+	Reclaimed   int `json:"reclaimed"`    // tokens reclaimed (before - after)
 }
 
 // BuildPayload constructs the standardized payload from HookEnv.
@@ -80,6 +88,13 @@ func BuildPayload(env HookEnv) HookPayload {
 		p.Stop = &PayloadStop{
 			Reason: env.StopReason,
 			Error:  env.StopError,
+		}
+
+	case EventOnCompaction:
+		p.Compaction = &PayloadCompaction{
+			TokenBefore: env.TokenBefore,
+			TokenAfter:  env.TokenAfter,
+			Reclaimed:   env.TokenBefore - env.TokenAfter,
 		}
 	}
 

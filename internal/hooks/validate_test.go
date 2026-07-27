@@ -92,3 +92,45 @@ func TestValidateHooks_Empty(t *testing.T) {
 		t.Errorf("empty config should have no errors, got %v", errs)
 	}
 }
+
+func TestValidateHooks_OnCompaction(t *testing.T) {
+	cfg := HookConfig{
+		OnCompaction: []Hook{
+			{Match: "*", Command: "echo compacted"},
+		},
+	}
+	errs := ValidateHooks(cfg)
+	if len(errs) != 0 {
+		t.Errorf("on_compaction hook should be valid, got %v", errs)
+	}
+}
+
+func TestRunCompactionHooks_FireAndForget(t *testing.T) {
+	cfg := HookConfig{
+		OnCompaction: []Hook{
+			{Match: "*", Command: "true"},
+		},
+	}
+	// Should not block or panic
+	RunCompactionHooks(cfg, HookEnv{
+		TokenBefore: 50000,
+		TokenAfter:  15000,
+	})
+}
+
+func TestBuildPayload_OnCompaction(t *testing.T) {
+	p := BuildPayload(HookEnv{
+		Event:       EventOnCompaction,
+		TokenBefore: 50000,
+		TokenAfter:  15000,
+	})
+	if p.Compaction == nil {
+		t.Fatal("expected Compaction payload")
+	}
+	if p.Compaction.TokenBefore != 50000 || p.Compaction.TokenAfter != 15000 {
+		t.Errorf("unexpected compaction payload: %+v", p.Compaction)
+	}
+	if p.Compaction.Reclaimed != 35000 {
+		t.Errorf("expected reclaimed=35000, got %d", p.Compaction.Reclaimed)
+	}
+}

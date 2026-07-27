@@ -44,12 +44,14 @@ func Dispatch(cfg HookConfig, env HookEnv) HookResult {
 		hooks = cfg.OnAgentStop
 	case EventOnStreamStop:
 		hooks = cfg.OnStreamStop
+	case EventOnCompaction:
+		hooks = cfg.OnCompaction
 	default:
 		return HookResult{Allowed: true}
 	}
 
 	// Async fire-and-forget for stop events.
-	if env.Event == EventOnAgentStop || env.Event == EventOnStreamStop {
+	if env.Event == EventOnAgentStop || env.Event == EventOnStreamStop || env.Event == EventOnCompaction {
 		payload := BuildPayload(env)
 		for _, h := range hooks {
 			if !matchAny(h.MatchMode, h.Match, env.ToolName, env.RawInput) {
@@ -284,6 +286,14 @@ func RunAgentStopHooks(cfg HookConfig, env HookEnv) {
 // RunStreamStopHooks runs on_stream_stop hooks asynchronously (fire-and-forget).
 func RunStreamStopHooks(cfg HookConfig, env HookEnv) {
 	env.Event = EventOnStreamStop
+	Dispatch(cfg, env)
+}
+
+// RunCompactionHooks runs on_compaction hooks asynchronously (fire-and-forget).
+// env should include TokenBefore and TokenAfter for the hook to see how much
+// context was reclaimed.
+func RunCompactionHooks(cfg HookConfig, env HookEnv) {
+	env.Event = EventOnCompaction
 	Dispatch(cfg, env)
 }
 

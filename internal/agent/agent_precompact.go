@@ -9,6 +9,7 @@ import (
 
 	ctxpkg "github.com/topcheer/ggcode/internal/context"
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/hooks"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/safego"
 )
@@ -259,6 +260,12 @@ func (a *Agent) consumeReadyPreCompact(onEvent func(provider.StreamEvent)) bool 
 		if onEvent != nil {
 			onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: fmt.Sprintf("[Auto-compressing context... done (%d → %d tokens)] ", pc.startTok, newTokens)})
 		}
+		// Fire on_compaction hooks (fire-and-forget).
+		hookCfg := a.GetHookConfig()
+		hooks.RunCompactionHooks(hookCfg, hooks.HookEnv{
+			TokenBefore: pc.startTok,
+			TokenAfter:  newTokens,
+		})
 		return true
 	default:
 		debug.Log("precompact", "still running; continuing without waiting")
