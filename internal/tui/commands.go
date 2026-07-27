@@ -535,6 +535,10 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 				}
 			}
 			m.chatWriteSystem(nextSystemID(), m.t("command.unknown", text))
+			// Suggest similar commands for typos (e.g., /stas → /stats)
+			if suggestion := suggestCommand(text); suggestion != "" {
+				m.chatWriteSystem(nextSystemID(), suggestion)
+			}
 			m.chatWriteSystem(nextSystemID(), m.t("command.help_hint"))
 			return nil
 		}
@@ -885,4 +889,79 @@ func (m *Model) handleEditCommand() tea.Cmd {
 	m.chatWriteSystem(nextSystemID(), m.t("command.edit_ready"))
 	m.chatListScrollToBottom()
 	return nil
+}
+
+// suggestCommand finds the closest matching slash command by edit distance.
+// Returns a "Did you mean?" suggestion string, or empty if no close match.
+func suggestCommand(input string) string {
+	input = strings.ToLower(strings.TrimSpace(input))
+	if len(input) < 2 {
+		return ""
+	}
+
+	bestMatch := ""
+	bestDist := 1 << 30 // large number
+	// Use a slightly relaxed threshold for short commands
+	maxDist := 3
+	if len(input) <= 4 {
+		maxDist = 2
+	}
+
+	for _, cmd := range SlashCommands {
+		// Skip aliases (they're already short forms)
+		if len(cmd) <= 3 {
+			continue
+		}
+		dist := levenshteinDistance(input, strings.ToLower(cmd))
+		if dist < bestDist && dist <= maxDist {
+			bestDist = dist
+			bestMatch = cmd
+		}
+	}
+
+	if bestMatch == "" {
+		return ""
+	}
+	return fmt.Sprintf("Did you mean %s?", bestMatch)
+}
+
+// levenshteinDistance computes the edit distance between two strings.
+func levenshteinDistance(a, b string) int {
+	la, lb := len(a), len(b)
+	if la == 0 {
+		return lb
+	}
+	if lb == 0 {
+		return la
+	}
+
+	// Use a single row for DP
+	prev := make([]int, lb+1)
+	curr := make([]int, lb+1)
+	for j := 0; j <= lb; j++ {
+		prev[j] = j
+	}
+
+	for i := 1; i <= la; i++ {
+		curr[0] = i
+		for j := 1; j <= lb; j++ {
+			cost := 1
+			if a[i-1] == b[j-1] {
+				cost = 0
+			}
+			curr[j] = min3(prev[j]+1, curr[j-1]+1, prev[j-1]+cost)
+		}
+		prev, curr = curr, prev
+	}
+	return prev[lb]
+}
+
+func min3(a, b, c int) int {
+	if b < a {
+		a = b
+	}
+	if c < a {
+		a = c
+	}
+	return a
 }
