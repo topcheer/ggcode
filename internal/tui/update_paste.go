@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"runtime"
 
 	tea "charm.land/bubbletea/v2"
@@ -228,6 +229,15 @@ func (m Model) handlePaste(msg tea.PasteMsg, spinnerCmd tea.Cmd) (tea.Model, tea
 		// PasteMsg. Try reading a clipboard image first; if the clipboard holds
 		// text instead, fall back to a plain text paste.
 		return m, m.handleClipboardPasteFallback(msg)
+	}
+	// Large paste protection: warn when pasting content that exceeds
+	// reasonable size. The input textarea can handle it, but sending a
+	// 50K-line paste as a single user message wastes context window.
+	const maxPasteBytes = 100 * 1024 // 100KB
+	if len(msg.Content) > maxPasteBytes {
+		// Still paste it, but warn the user.
+		warning := fmt.Sprintf("\n[Warning: pasted %d bytes (%.1f KB). Consider using a file or /review for large content.]\n", len(msg.Content), float64(len(msg.Content))/1024)
+		msg.Content = msg.Content + warning
 	}
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
