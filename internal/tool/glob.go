@@ -83,7 +83,17 @@ func (t Glob) Execute(ctx context.Context, input json.RawMessage) (Result, error
 	}
 
 	if len(matches) == 0 {
-		return Result{Content: "No files matched the pattern."}, nil
+		var hints []string
+		hints = append(hints, fmt.Sprintf("No files matched pattern %q in %q.", args.Pattern, args.Directory))
+		if strings.Contains(args.Pattern, "**") {
+			hints = append(hints, "The ** wildcard requires recursive matching — verify the base directory has subdirectories.")
+		}
+		if !strings.ContainsAny(args.Pattern, "*?[") {
+			hints = append(hints, "Your pattern has no wildcards — try adding * (e.g., '*.go') or ** for recursive search.")
+		}
+		// Suggest listing the directory to see what's there
+		hints = append(hints, fmt.Sprintf("Try list_directory on %q to see available files, or broaden the pattern.", args.Directory))
+		return Result{Content: strings.Join(hints, "\n")}, nil
 	}
 
 	// Make paths relative
