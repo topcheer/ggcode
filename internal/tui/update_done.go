@@ -1,9 +1,12 @@
 package tui
 
 import (
-	tea "charm.land/bubbletea/v2"
 	"context"
 	"errors"
+	"fmt"
+	"time"
+
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/topcheer/ggcode/internal/tunnel"
 )
@@ -97,6 +100,12 @@ func (m Model) handleAgentDoneMsg(msg agentDoneMsg) (Model, tea.Cmd) {
 		m.appendTurnMetricsDigest(m.usageTurnIndex)
 	}
 	m.chatListScrollToBottom()
+	// Terminal bell on completion for long-running tasks (>3s), so users
+	// who switched windows get notified. The bell character (\x07) is
+	// silently ignored by terminals that don't support it.
+	if !m.runStartTime.IsZero() && time.Since(m.runStartTime) > 3*time.Second {
+		fmt.Print("\x07")
+	}
 	if !wasCanceled && !wasFailed {
 		m.persistFullSessionMessages()
 	}

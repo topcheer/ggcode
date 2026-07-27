@@ -284,8 +284,9 @@ type Model struct {
 	projectMemoryLoading  bool
 	runCanceled           bool
 	runFailed             bool
-	subAgentsCanceling    bool   // true while async CancelAll() is in progress after user cancel
-	lastUserSubmission    string // last non-slash user prompt, for /retry
+	runStartTime          time.Time // when the current agent run started (for bell timing)
+	subAgentsCanceling    bool      // true while async CancelAll() is in progress after user cancel
+	lastUserSubmission    string    // last non-slash user prompt, for /retry
 	activeAgentRunID      int
 	activeShellRunID      int
 	shellCommandSubmitter func(command string, addToHistory bool) tea.Cmd
@@ -583,6 +584,9 @@ func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 // used by /api/status for external process visibility.
 func (m *Model) setLoading(val bool) {
 	m.loading = val
+	if val {
+		m.runStartTime = time.Now()
+	}
 	if m.agentBusy != nil {
 		m.agentBusy.Store(val)
 	}
