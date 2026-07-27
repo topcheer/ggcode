@@ -861,7 +861,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	inlineToolCallNudges := 0
 	consecutiveEmptyResponses := 0
 	progressCheckInjected := false
-	contextWarningInjected := false
+	contextWarningLevel := 0 // 0=none, 1=95%, 2=99%, 3=100%
 	todoCheckCount := 0
 
 	a.autopilotStrategistCount = 0
@@ -927,26 +927,49 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			msgs = a.contextManager.Messages() // refresh after adding checkpoint
 		}
 
-		// Context budget warning: at 80% context window utilization, inject a
-		// one-time hint to use context-efficient strategies. This implements
-		// the "context density awareness" pattern — the agent adjusts tool
-		// usage when context space is scarce.
-		if !contextWarningInjected && a.contextManager.ContextWindow() > 0 {
+		// Context budget warnings at 95%, 99%, and 100% utilization.
+		// Each level fires once, with escalating urgency. The goal is to help
+		// the agent prepare for imminent compaction — NOT to make it stop.
+		if a.contextManager.ContextWindow() > 0 {
 			usage := a.contextManager.UsageRatio()
-			if usage >= 0.80 {
-				contextWarningInjected = true
-				debug.Log("agent", "Injecting context budget warning at %.0f%% utilization", usage*100)
+			var newLevel int
+			var msgText string
+			switch {
+			case usage >= 1.0 && contextWarningLevel < 3:
+				newLevel = 3
+				msgText = fmt.Sprintf(
+					"Context critical: 100%% of the context window is in use. " +
+						"A compaction is about to happen — your work will continue automatically after it.\n" +
+						"1. Finish your current thought/tool call naturally\n" +
+						"2. The system will preserve your recent files, todo list, and summary\n" +
+						"3. Do NOT stop or abandon your task",
+				)
+			case usage >= 0.99 && contextWarningLevel < 2:
+				newLevel = 2
+				msgText = fmt.Sprintf(
+					"Context note: 99%% of the context window is now in use — compaction is imminent.\n" +
+						"1. Keep going with your task — do NOT stop or wrap up prematurely\n" +
+						"2. Avoid full file reads — use targeted grep searches instead\n" +
+						"3. The system automatically preserves recent files and todo list through compaction",
+				)
+			case usage >= 0.95 && contextWarningLevel < 1:
+				newLevel = 1
+				msgText = fmt.Sprintf(
+					"Context note: 95%% of the context window is now in use. " +
+						"An automatic compaction will happen soon — this is normal and your work will continue after it.\n" +
+						"1. Keep going with your current task — do NOT stop or try to wrap up prematurely\n" +
+						"2. Prefer targeted searches (grep) over full file reads to conserve space\n" +
+						"3. Avoid re-reading files you've already seen",
+				)
+			}
+			if newLevel > contextWarningLevel {
+				contextWarningLevel = newLevel
+				debug.Log("agent", "Injecting context budget warning level %d at %.0f%% utilization", newLevel, usage*100)
 				a.contextManager.Add(provider.Message{
 					Role: "user",
 					Content: []provider.ContentBlock{{
 						Type: "text",
-						Text: fmt.Sprintf(
-							"Context note: %.0f%% of the context window is now in use. "+
-								"To conserve context space: prefer targeted searches (grep) over full file reads, "+
-								"avoid re-reading files you've already seen, and keep responses concise. "+
-								"If possible, complete the task with fewer, more focused tool calls.",
-							usage*100,
-						),
+						Text: msgText,
 					}},
 				})
 				msgs = a.contextManager.Messages()

@@ -26,8 +26,8 @@ package agent
 //   - Budget guard: tracks per-iteration TOKEN COST TREND — dual signal (predictive)
 //
 // The budget guard fires at most once per run. It detects a cost-escalation
-// pattern BEFORE the agent runs out of context — giving it a chance to wrap up
-// or switch strategy.
+// pattern BEFORE context compaction triggers — giving the agent a chance to
+// adjust its tool usage to be more context-efficient while continuing its work.
 
 import (
 	"fmt"
@@ -282,11 +282,12 @@ func (b *budgetGuardState) maybeWarn(contextWindow, currentTokens int) string {
 
 	return fmt.Sprintf(
 		"[budget guard: token cost escalation detected] %s.\n"+
-			"Token usage per step is increasing. To work more efficiently within the remaining context budget:\n"+
+			"Token usage per step is increasing. A context compaction will happen automatically when needed — your work will continue seamlessly after it.\n"+
+			"To reduce per-step cost while continuing your task:\n"+
 			"1. Keep responses concise — avoid repeating information already stated\n"+
 			"2. Batch related operations into fewer steps instead of one-at-a-time\n"+
 			"3. Avoid re-reading files or running searches you've already done\n"+
-			"4. Focus on the most direct path to completing the current task",
+			"4. Continue working on your current task — do NOT stop or wrap up prematurely",
 		reasonStr,
 	)
 }

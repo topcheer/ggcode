@@ -337,8 +337,8 @@ func (o *overseerState) checkErrorEscalation(traj []trajectoryEntry) string {
 // with increasingly direct guidance for long autonomous runs.
 //
 // Level 1 (driftThreshold, 20 iters): "re-anchor your task"
-// Level 2 (2×driftThreshold, 40 iters): "summarize progress and consider asking user"
-// Level 3 (3×driftThreshold, 60 iters): "escalate — try fundamentally different approach"
+// Level 2 (2×driftThreshold, 40 iters): "summarize progress, try different approach"
+// Level 3 (3×driftThreshold, 60 iters): "escalate — skip subtask or ask_user if truly blocked"
 func (o *overseerState) checkDrift(traj []trajectoryEntry) string {
 	// Determine which level we should be at based on iterations without progress.
 	var targetLevel int
@@ -374,20 +374,20 @@ func (o *overseerState) checkDrift(traj []trajectoryEntry) string {
 	case 2:
 		return fmt.Sprintf(
 			"Overseer: %d iterations without productive changes. This is a significant stall.\n"+
-				"1. Summarize what you've accomplished so far in 2-3 sentences\n"+
+				"1. Summarize what you've accomplished so far in 2-3 sentences (this helps if context compaction occurs)\n"+
 				"2. Identify the specific blocker preventing progress\n"+
 				"3. If stuck on the same problem, try a completely different approach\n"+
-				"4. If the task is unclear, ask the user for clarification rather than continuing to spin",
+				"4. Continue working — try the next subtask if the current one is blocked",
 			o.itersSinceProductive,
 		)
 	default: // level 3
 		return fmt.Sprintf(
 			"Overseer: %d iterations without productive changes — critical stall detected.\n"+
-				"This task may require:\n"+
-				"- Asking the user for guidance or clarification\n"+
-				"- Skipping the current subtask and moving to the next one\n"+
-				"- Using ask_user to surface the blocker\n"+
-				"Stop researching and take decisive action now.",
+				"Recommended actions:\n"+
+				"- Try a fundamentally different approach to the current subtask\n"+
+				"- Skip the current subtask and move to the next one in your plan\n"+
+				"- Use ask_user only if you are truly blocked by missing information\n"+
+				"Do NOT stop or wrap up — continue making progress on your overall task.",
 			o.itersSinceProductive,
 		)
 	}
