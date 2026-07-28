@@ -1814,10 +1814,24 @@ func (m *Manager) buildSummaryPlan() (summaryPlan, bool) {
 func estimateMessagesTokens(msgs []provider.Message) int {
 	total := 0
 	for _, msg := range msgs {
+		var hasImage bool
 		for _, block := range msg.Content {
 			total += EstimateTokens(block.Text)
 			total += EstimateTokens(block.Output)
+			total += EstimateTokens(block.ToolName)
+			if len(block.Input) > 0 {
+				total += EstimateTokens(string(block.Input))
+			}
+			if block.Type == "image" || block.ImageData != "" || len(block.Images) > 0 {
+				hasImage = true
+			}
 		}
+		// Images are roughly 85-170 tokens for standard thumbnails, up to
+		// 1100 for large ones — same heuristic as estimateTokens().
+		if hasImage {
+			total += 170
+		}
+		total += 4 // structural overhead (role, separators)
 	}
 	return total
 }
@@ -2072,6 +2086,9 @@ func buildSummaryPayload(msgs []provider.Message) string {
 			case "text":
 				sb.WriteString(block.Text)
 				sb.WriteByte('\n')
+			case "image":
+				sb.WriteString(formatImageBlockForSummary(block))
+				sb.WriteByte('\n')
 			case "tool_use":
 				input := formatToolInputForSummary(block.Input, payloadToolInputMaxLen)
 				if input != "" {
@@ -2085,6 +2102,9 @@ func buildSummaryPayload(msgs []provider.Message) string {
 					output = output[:payloadToolResultHead] + fmt.Sprintf("\n... (truncated, original %d chars)", len(output))
 				}
 				sb.WriteString(fmt.Sprintf("Tool result: %s\n", output))
+				if n := len(block.Images); n > 0 {
+					sb.WriteString(fmt.Sprintf("(tool result included %d image(s); visual content is NOT preserved in this summary)\n", n))
+				}
 			}
 		}
 		sb.WriteByte('\n')
@@ -2125,6 +2145,40 @@ func extractUserRequests(msgs []provider.Message, maxLen int) []string {
 // call's JSON input and returns a concise human-readable string. This lets the
 // summarization LLM know WHICH file was read, WHAT command was run, etc.
 // Without this, the summarizer only sees "Tool call: read_file" with no path.
+// formatImageBlockForSummary renders a textual marker for an image content block.
+// Images cannot be carried through the textual summarization payload, so without
+// this marker an image would be silently erased during compaction — the agent
+// would forget it ever existed (e.g., a screenshot of an error, a design mockup).
+// The marker preserves metadata (MIME type, approximate size) so the summarizer
+// can record that an image was relevant to the conversation.
+func formatImageBlockForSummary(block provider.ContentBlock) string {
+	mime := block.ImageMIME
+	if mime == "" {
+		mime = "unknown"
+	}
+	note := fmt.Sprintf("[IMAGE attached (%s", mime)
+	if sizeKB := approxImageKB(block.ImageData); sizeKB > 0 {
+		note += fmt.Sprintf(", ~%dKB", sizeKB)
+	}
+	note += ") — visual content is NOT preserved in this summary]"
+	return note
+}
+
+// approxImageKB returns an approximate decoded size in KB from base64-encoded
+// image data, without decoding it (cheap, allocation-free). Returns 0 if the
+// data is empty or too short.
+func approxImageKB(b64 string) int {
+	if len(b64) < 8 {
+		return 0
+	}
+	// base64 encodes 3 bytes per 4 characters.
+	decoded := len(b64) * 3 / 4
+	if decoded <= 0 {
+		return 0
+	}
+	return decoded / 1024
+}
+
 func formatToolInputForSummary(input []byte, maxLen int) string {
 	if len(input) == 0 || maxLen <= 0 {
 		return ""

@@ -1301,6 +1301,88 @@ func TestBuildSummaryPayload_UserRequestsTruncated(t *testing.T) {
 	}
 }
 
+// TestBuildSummaryPayload_ImageBlockMarker verifies that image content blocks
+// are NOT silently dropped during summarization. Previously images were erased
+// with no trace; now a textual marker is emitted so the summarizer (and the
+// downstream agent) knows an image was part of the conversation.
+func TestBuildSummaryPayload_ImageBlockMarker(t *testing.T) {
+	msgs := []provider.Message{
+		{Role: "user", Content: []provider.ContentBlock{
+			{Type: "text", Text: "Look at this screenshot"},
+			provider.ImageBlock("image/png", strings.Repeat("A", 4096)), // ~3KB decoded
+		}},
+		{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "I see the error."}}},
+	}
+
+	payload := buildSummaryPayload(msgs)
+
+	if !strings.Contains(payload, "IMAGE attached") {
+		t.Error("payload should contain an IMAGE marker for image content blocks")
+	}
+	if !strings.Contains(payload, "image/png") {
+		t.Error("payload should record the image MIME type")
+	}
+	if !strings.Contains(payload, "NOT preserved") {
+		t.Error("payload should warn that visual content is not preserved")
+	}
+}
+
+// TestBuildSummaryPayload_ToolResultImages verifies that images embedded in a
+// tool_result (e.g. read_file returning an image) are surfaced as a marker.
+func TestBuildSummaryPayload_ToolResultImages(t *testing.T) {
+	msgs := []provider.Message{
+		{Role: "user", Content: []provider.ContentBlock{
+			{Type: "tool_result", ToolID: "c1", ToolName: "read_file", Output: "binary data",
+				Images: []provider.ContentImage{{MIME: "image/png", Base64: "AAAA"}}},
+		}},
+	}
+
+	payload := buildSummaryPayload(msgs)
+
+	if !strings.Contains(payload, "1 image") {
+		t.Errorf("payload should note the tool result included images, got:\n%s", payload)
+	}
+}
+
+// TestApproxImageKB verifies the cheap base64-length → KB estimate.
+func TestApproxImageKB(t *testing.T) {
+	if approxImageKB("") != 0 {
+		t.Error("empty data should yield 0 KB")
+	}
+	if approxImageKB("short") != 0 {
+		t.Error("short data should yield 0 KB")
+	}
+	// 4096 base64 chars → 3072 bytes → 3 KB
+	if got := approxImageKB(strings.Repeat("A", 4096)); got != 3 {
+		t.Errorf("expected 3 KB for 4096 base64 chars, got %d", got)
+	}
+}
+
+// TestEstimateMessagesTokensCountsImages verifies images contribute to the
+// budget-aware recent retention estimate (previously ignored).
+func TestEstimateMessagesTokensCountsImages(t *testing.T) {
+	textMsgs := []provider.Message{
+		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "hello"}}},
+	}
+	textOnly := estimateMessagesTokens(textMsgs)
+
+	imageMsgs := []provider.Message{
+		{Role: "user", Content: []provider.ContentBlock{
+			{Type: "text", Text: "hello"},
+			provider.ImageBlock("image/png", strings.Repeat("A", 100)),
+		}},
+	}
+	withImage := estimateMessagesTokens(imageMsgs)
+
+	if withImage <= textOnly {
+		t.Errorf("image message should cost more tokens than text-only (text=%d, withImg=%d)", textOnly, withImage)
+	}
+	// Images add ~170 tokens (same heuristic as estimateTokens).
+	if withImage-textOnly < 160 {
+		t.Errorf("expected ~170 token image overhead, got %d", withImage-textOnly)
+	}
+}
+
 func TestExtractUserRequests(t *testing.T) {
 	msgs := []provider.Message{
 		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "Hello"}}},
