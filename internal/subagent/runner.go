@@ -267,17 +267,13 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 	// generate megabytes of output. Truncate to maxSubAgentResultBytes with
 	// a truncation notice.
 	if len(result) > maxSubAgentResultBytes {
-		// Keep head + tail, truncate middle. Sub-agent results typically have
-		// process detail at the top and conclusions at the bottom. Head-only
-		// truncation would lose the all-important conclusion.
-		headSize := maxSubAgentResultBytes * 3 / 5    // 60% head
-		tailSize := maxSubAgentResultBytes - headSize // 40% tail
-		result = result[:headSize] +
-			fmt.Sprintf("\n\n[... truncated: %d bytes total, showing first %d and last %d ...]\n\n",
-				len(result), headSize, tailSize) +
-			result[len(result)-tailSize:]
-		debug.Log("subagent", "Run: result truncated id=%s total=%d cap=%d (head=%d tail=%d)",
-			cfg.SubAgentID, len(output.String()), maxSubAgentResultBytes, headSize, tailSize)
+		// Keep tail only — the conclusion/summary at the bottom is what
+		// matters most to the parent agent.
+		result = fmt.Sprintf("[... truncated: %d bytes total, showing last %d ...]\n\n",
+			len(result), maxSubAgentResultBytes) +
+			result[len(result)-maxSubAgentResultBytes:]
+		debug.Log("subagent", "Run: result truncated id=%s total=%d cap=%d (tail only)",
+			cfg.SubAgentID, len(output.String()), maxSubAgentResultBytes)
 	}
 
 	if err != nil {
