@@ -9,6 +9,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 const subagentRedactedReasoningPlaceholder = "Reasoning hidden by model."
@@ -263,16 +264,26 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 	result := output.String()
 
 	// Cap result size to prevent context window exhaustion when the parent
-	// agent consumes the result. Sub-agents that read large files can easily
-	// generate megabytes of output. Truncate to maxSubAgentResultBytes with
-	// a truncation notice.
+	// agent consumes the result. Use head+tail with rune-safe boundaries:
+	// head preserves task context and initial findings, tail preserves the
+	// conclusion.
 	if len(result) > maxSubAgentResultBytes {
-		// Keep tail only — the conclusion/summary at the bottom is what
-		// matters most to the parent agent.
-		result = fmt.Sprintf("[... truncated: %d bytes total, showing last %d ...]\n\n",
-			len(result), maxSubAgentResultBytes) +
-			result[len(result)-maxSubAgentResultBytes:]
-		debug.Log("subagent", "Run: result truncated id=%s total=%d cap=%d (tail only)",
+		marker := fmt.Sprintf("\n\n[... truncated: %d bytes total, showing head + tail ...]\n\n", len(result))
+		budget := maxSubAgentResultBytes - len(marker)
+		if budget >= 1000 {
+			headEnd := util.SnapToRuneStart(result, budget/2)
+			tailStart := util.SnapToRuneStart(result, len(result)-budget/2)
+			if headEnd < tailStart {
+				result = result[:headEnd] + marker + result[tailStart:]
+			} else {
+				// Rune snapping caused overlap; keep tail only.
+				result = result[util.SnapToRuneStart(result, len(result)-budget):]
+			}
+		} else {
+			// Budget too small for head+tail; keep tail only.
+			result = result[util.SnapToRuneStart(result, len(result)-maxSubAgentResultBytes):]
+		}
+		debug.Log("subagent", "Run: result truncated id=%s total=%d cap=%d",
 			cfg.SubAgentID, len(output.String()), maxSubAgentResultBytes)
 	}
 

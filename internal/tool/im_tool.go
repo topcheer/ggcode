@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // IMManager is the subset of im.Manager methods needed by the IM tool.
@@ -416,8 +418,5 @@ func firstNonEmptyStr(a, b string) string {
 }
 
 func truncateStr(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	return s[:max-3] + "..."
+	return util.Truncate(s, max)
 }

@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // MobileDeviceTool controls native mobile apps on iOS Simulator and Android
@@ -371,8 +373,9 @@ func formatSnapshot(root *uiElement, deviceInfo string) string {
 	out := sb.String()
 	const maxSnapshotBytes = 30 * 1024
 	if len(out) > maxSnapshotBytes {
-		out = out[:maxSnapshotBytes] +
-			fmt.Sprintf("\n... [snapshot truncated: %d elements shown, %d bytes total]", counter, len(out))
+		origLen := len(out)
+		out = out[:util.SnapToRuneStart(out, maxSnapshotBytes)] +
+			fmt.Sprintf("\n... [snapshot truncated: %d elements shown, %d bytes total]", counter, origLen)
 	}
 	return out
 }

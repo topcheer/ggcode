@@ -9,6 +9,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/safego"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // RunStats accumulates observability data during a single RunStreamWithContent
@@ -406,10 +407,7 @@ func (a *Agent) maybeReflect(stats *RunStats) {
 }
 
 func truncatePrompt(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen-3] + "..."
+	return util.Truncate(s, maxLen)
 }
 
 // MergeInsights appends a new run reflection to the existing insights file,

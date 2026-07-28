@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // Context-fill-aware tool output truncation.
@@ -65,7 +66,8 @@ func guardToolOutput(content string, contextFill float64) string {
 }
 
 // truncateHeadTail keeps the first ~40% and last ~50% of content, with a
-// truncation marker in between. Snaps to line boundaries for readability.
+// truncation marker in between. Snaps to rune boundaries to prevent UTF-8
+// corruption, then to line boundaries for readability.
 func truncateHeadTail(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
@@ -75,15 +77,17 @@ func truncateHeadTail(s string, maxLen int) string {
 	marker := fmt.Sprintf("\n\n[... output truncated: %s total, showing head + tail ...]\n\n", formatBytes(len(s)))
 	usable := maxLen - len(marker)
 	if usable < 1000 {
-		// Limit too small for meaningful truncation; just hard-cut.
-		return s[:maxLen]
+		// Limit too small for meaningful truncation; hard-cut at rune boundary.
+		return s[:util.SnapToRuneStart(s, maxLen)]
 	}
 
 	headLen := usable * 2 / 5 // 40% head
 	tailLen := usable * 3 / 5 // 50% tail (errors/results at end are more important)
 
-	head := s[:headLen]
-	tail := s[len(s)-tailLen:]
+	// Snap byte offsets to rune boundaries to prevent UTF-8 corruption.
+	head := s[:util.SnapToRuneStart(s, headLen)]
+	tailStart := util.SnapToRuneStart(s, len(s)-tailLen)
+	tail := s[tailStart:]
 
 	// Snap to line boundaries for cleaner output.
 	if idx := strings.LastIndex(head, "\n"); idx > headLen/2 {
