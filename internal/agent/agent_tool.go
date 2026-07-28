@@ -41,7 +41,11 @@ func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolC
 		switch decision {
 		case permission.Deny:
 			return tool.Result{
-				Content: fmt.Sprintf("Permission denied for tool %q. The operation was blocked by the permission policy.", tc.Name),
+				Content: fmt.Sprintf("Permission denied for tool %q. The operation was blocked by the permission policy.\n"+
+					"To proceed:\n"+
+					"1. If this is a file write, ensure the path is within the workspace\n"+
+					"2. Ask the user to switch to a more permissive mode (Shift+Tab) or approve the specific operation\n"+
+					"3. Do NOT retry the same operation — it will be denied again", tc.Name),
 				IsError: true,
 			}
 		case permission.Ask:
