@@ -81,8 +81,12 @@ func (t WriteFile) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	}
 
 	newSize := len(args.Content)
+	var msg string
 	if oldSize > 0 {
-		return Result{Content: fmt.Sprintf("Overwrote %s: %d bytes → %d bytes (was %d bytes)", args.Path, oldSize, newSize, oldSize)}, nil
+		msg = fmt.Sprintf("Overwrote %s: %d bytes → %d bytes (was %d bytes)", args.Path, oldSize, newSize, oldSize)
+	} else {
+		msg = fmt.Sprintf("Created %s (%d bytes)", args.Path, newSize)
 	}
-	return Result{Content: fmt.Sprintf("Created %s (%d bytes)", args.Path, newSize)}, nil
+	msg += scanAndWarn(args.Path, args.Content)
+	return Result{Content: msg}, nil
 }

@@ -334,6 +334,9 @@ func (t MultiFileEdit) Execute(ctx context.Context, input json.RawMessage) (Resu
 		out.WrittenFiles = len(out.WrittenPaths)
 		out.Applied = true
 		out.Summary = fmt.Sprintf("Requested %d files: %d written, 0 failed, 0 skipped", len(entries), out.WrittenFiles)
+		for _, plan := range plans {
+			out.SecretWarnings += scanAndWarn(plan.Path, plan.NewContent)
+		}
 		content, err := json.Marshal(out)
 		if err != nil {
 			return Result{IsError: true, Content: fmt.Sprintf("error marshaling result: %v", err)}, nil
@@ -374,6 +377,11 @@ func (t MultiFileEdit) Execute(ctx context.Context, input json.RawMessage) (Resu
 	}
 	out.Applied = out.FailedFiles == 0 && out.WrittenFiles == len(entries)
 	out.Summary = fmt.Sprintf("Requested %d files: %d written, %d failed, %d skipped", len(entries), out.WrittenFiles, out.FailedFiles, out.SkippedFiles)
+	for _, plan := range plans {
+		if idx, ok := byPath[plan.Path]; ok && out.Results[idx].Status == "success" {
+			out.SecretWarnings += scanAndWarn(plan.Path, plan.NewContent)
+		}
+	}
 	content, err := json.Marshal(out)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("error marshaling result: %v", err)}, nil

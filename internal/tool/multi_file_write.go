@@ -238,6 +238,13 @@ func (t MultiFileWrite) Execute(ctx context.Context, input json.RawMessage) (Res
 		isError = true
 	}
 
+	// Scan written files for potential secrets.
+	for _, f := range args.Files {
+		if warning := scanAndWarn(f.Path, f.Content); warning != "" {
+			sb.WriteString(warning)
+		}
+	}
+
 	return Result{Content: strings.TrimSuffix(sb.String(), "\n"), IsError: isError}, nil
 }
 

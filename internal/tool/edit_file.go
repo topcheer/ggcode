@@ -133,10 +133,14 @@ func (t EditFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 	// Build a summary
 	oldLines := strings.Count(args.OldText, "\n") + 1
 	newLines := strings.Count(args.NewText, "\n") + 1
+	var msg string
 	if args.ReplaceAll {
-		return Result{Content: fmt.Sprintf("Replaced %d occurrence(s) in %s: %d lines -> %d lines", count, args.FilePath, oldLines, newLines)}, nil
+		msg = fmt.Sprintf("Replaced %d occurrence(s) in %s: %d lines -> %d lines", count, args.FilePath, oldLines, newLines)
+	} else {
+		msg = fmt.Sprintf("Replaced 1 occurrence in %s: %d lines -> %d lines", args.FilePath, oldLines, newLines)
 	}
-	return Result{Content: fmt.Sprintf("Replaced 1 occurrence in %s: %d lines -> %d lines", args.FilePath, oldLines, newLines)}, nil
+	msg += scanAndWarn(args.FilePath, newContent)
+	return Result{Content: msg}, nil
 }
 
 // normalizeIndentation converts the indentation of text to match the file's style.
