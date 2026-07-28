@@ -366,12 +366,19 @@ func formatSnapshot(root *uiElement, deviceInfo string) string {
 		sb.WriteString("\n\n")
 	}
 	counter := 0
-	formatElement(&sb, root, 0, &counter)
-	return sb.String()
+	const maxSnapshotElements = 500
+	formatElement(&sb, root, 0, &counter, maxSnapshotElements)
+	out := sb.String()
+	const maxSnapshotBytes = 30 * 1024
+	if len(out) > maxSnapshotBytes {
+		out = out[:maxSnapshotBytes] +
+			fmt.Sprintf("\n... [snapshot truncated: %d elements shown, %d bytes total]", counter, len(out))
+	}
+	return out
 }
 
-func formatElement(sb *strings.Builder, el *uiElement, indent int, counter *int) {
-	if el == nil {
+func formatElement(sb *strings.Builder, el *uiElement, indent int, counter *int, maxElements int) {
+	if el == nil || *counter >= maxElements {
 		return
 	}
 	refID := ""
@@ -403,7 +410,7 @@ func formatElement(sb *strings.Builder, el *uiElement, indent int, counter *int)
 		sb.WriteString("\n")
 	}
 	for _, child := range el.Children {
-		formatElement(sb, child, indent+1, counter)
+		formatElement(sb, child, indent+1, counter, maxElements)
 	}
 }
 
