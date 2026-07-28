@@ -255,7 +255,16 @@ func (t ReadMCPResourceTool) Execute(ctx context.Context, input json.RawMessage)
 			sb.WriteString(fmt.Sprintf("\n[binary content, %d base64 chars]", len(content.Blob)))
 		}
 	}
-	return Result{Content: strings.TrimSpace(sb.String())}, nil
+	out := strings.TrimSpace(sb.String())
+	// Cap result size — MCP resources (database dumps, log files, etc.)
+	// can be arbitrarily large. 50KB matches mcpTool.Execute's cap.
+	const maxMCPResourceBytes = 50 * 1024
+	if len(out) > maxMCPResourceBytes {
+		out = out[:maxMCPResourceBytes] +
+			fmt.Sprintf("\n\n[... MCP resource truncated: %d bytes total, showing first %d ...]",
+				len(out), maxMCPResourceBytes)
+	}
+	return Result{Content: out}, nil
 }
 
 func joinOrNone(values []string) string {
