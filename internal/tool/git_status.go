@@ -73,6 +73,34 @@ func (t GitStatus) Execute(ctx context.Context, input json.RawMessage) (Result, 
 		return Result{Content: "Working tree clean. No changes."}, nil
 	}
 
+	// Cap output — repos with thousands of untracked files (e.g., missing
+	// .gitignore for node_modules) would flood the context.
+	const maxGitStatusLines = 200
+	lines := strings.Split(trimmed, "\n")
+	if len(lines) > maxGitStatusLines {
+		// Count by status type for the summary
+		var modified, added, deleted, untracked int
+		for _, l := range lines {
+			if len(l) < 2 {
+				continue
+			}
+			switch {
+			case strings.HasPrefix(l, "?? "):
+				untracked++
+			case strings.Contains(l[:2], "M"):
+				modified++
+			case strings.Contains(l[:2], "A"):
+				added++
+			case strings.Contains(l[:2], "D"):
+				deleted++
+			}
+		}
+		shown := strings.Join(lines[:maxGitStatusLines], "\n")
+		return Result{Content: shown +
+			fmt.Sprintf("\n\n... [%d more files hidden. Summary: %d modified, %d added, %d deleted, %d untracked. Use 'git status --short | grep <pattern>' to filter.]",
+				len(lines)-maxGitStatusLines, modified, added, deleted, untracked)}, nil
+	}
+
 	return Result{Content: trimmed}, nil
 }
 
