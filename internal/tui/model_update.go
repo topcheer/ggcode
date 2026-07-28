@@ -443,7 +443,8 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			m.chatWriteSystem(nextSystemID(), sysMsg)
 			m.queuePendingSubmissionHidden(msg.Prompt)
 		}
-		// queue_if_busy=false and agent busy: skip silently
+		// queue_if_busy=false and agent busy: skip silently (debug log for observability)
+		debug.Log("cron", "skipped firing (agent busy, queue_if_busy=false): %s", msg.Prompt)
 		return m, nil
 
 	case skillsChangedMsg:
