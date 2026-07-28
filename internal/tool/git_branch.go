@@ -66,6 +66,16 @@ func (t GitBranchList) Execute(ctx context.Context, input json.RawMessage) (Resu
 		return Result{Content: "No branches found."}, nil
 	}
 
+	// Cap output — repos with hundreds of branches (especially --remotes)
+	// would flood the context.
+	const maxBranchLines = 100
+	lines := strings.Split(trimmed, "\n")
+	if len(lines) > maxBranchLines {
+		shown := strings.Join(lines[:maxBranchLines], "\n")
+		return Result{Content: shown +
+			fmt.Sprintf("\n\n... [%d more branches hidden — use 'git branch | grep <pattern>' to filter]", len(lines)-maxBranchLines)}, nil
+	}
+
 	return Result{Content: trimmed}, nil
 }
 
