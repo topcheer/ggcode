@@ -294,7 +294,11 @@ func (s *Server) Start(addr string) (string, error) {
 	s.addr = ln.Addr().String()
 
 	safego.Go("webui.httpServe", func() {
-		_ = http.Serve(ln, s.mux)
+		// Wrap mux with a body size limit middleware (1MB) to prevent
+		// memory exhaustion from oversized POST bodies. The WebUI is
+		// localhost-only but may be accessible on the LAN if bound to 0.0.0.0.
+		handler := http.MaxBytesHandler(s.mux, 1<<20)
+		_ = http.Serve(ln, handler)
 	})
 
 	return s.addr, nil
