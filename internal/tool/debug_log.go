@@ -99,8 +99,18 @@ func (t DebugLogTool) doRead(lines int, category string) (Result, error) {
 
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("Showing %d of %d entries (ring buffer capacity: %d):\n\n", len(entries), count, capacity))
+	const maxDebugReadBytes = 20 * 1024
+	truncated := false
 	for _, e := range entries {
-		b.WriteString(fmt.Sprintf("[%s] %s\n", e.Time, e.Message))
+		line := fmt.Sprintf("[%s] %s\n", e.Time, e.Message)
+		if b.Len()+len(line) > maxDebugReadBytes {
+			truncated = true
+			break
+		}
+		b.WriteString(line)
+	}
+	if truncated {
+		b.WriteString(fmt.Sprintf("\n... [truncated at %d bytes — use export action for full log]", maxDebugReadBytes))
 	}
 
 	return Result{Content: b.String()}, nil
