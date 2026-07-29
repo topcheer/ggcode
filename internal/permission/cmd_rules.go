@@ -18,9 +18,11 @@ import (
 // This is inspired by Claude Code's Bash(git diff:*) permission rules
 // and Cursor's per-command approval system.
 type CommandRuleSet struct {
-	mu    sync.RWMutex
-	allow []*regexp.Regexp
-	deny  []*regexp.Regexp
+	mu        sync.RWMutex
+	allow     []*regexp.Regexp
+	deny      []*regexp.Regexp
+	allowPats []string // original patterns for display/persistence
+	denyPats  []string // original patterns for display/persistence
 }
 
 // NewCommandRuleSet creates an empty rule set.
@@ -34,6 +36,7 @@ func NewCommandRuleSetFromLists(allow, deny []string) *CommandRuleSet {
 	for _, p := range allow {
 		if re, err := compileCommandPattern(p); err == nil {
 			rs.allow = append(rs.allow, re)
+			rs.allowPats = append(rs.allowPats, p)
 		} else {
 			debug.Log("permission", "invalid command allow pattern %q: %v", p, err)
 		}
@@ -41,6 +44,7 @@ func NewCommandRuleSetFromLists(allow, deny []string) *CommandRuleSet {
 	for _, p := range deny {
 		if re, err := compileCommandPattern(p); err == nil {
 			rs.deny = append(rs.deny, re)
+			rs.denyPats = append(rs.denyPats, p)
 		} else {
 			debug.Log("permission", "invalid command deny pattern %q: %v", p, err)
 		}
@@ -93,6 +97,7 @@ func (rs *CommandRuleSet) AddAllowPattern(pattern string) {
 		}
 	}
 	rs.allow = append(rs.allow, re)
+	rs.allowPats = append(rs.allowPats, pattern)
 	rs.mu.Unlock()
 }
 
@@ -114,6 +119,7 @@ func (rs *CommandRuleSet) AddDenyPattern(pattern string) {
 		}
 	}
 	rs.deny = append(rs.deny, re)
+	rs.denyPats = append(rs.denyPats, pattern)
 	rs.mu.Unlock()
 }
 
@@ -124,11 +130,7 @@ func (rs *CommandRuleSet) AllowPatterns() []string {
 	}
 	rs.mu.RLock()
 	defer rs.mu.RUnlock()
-	out := make([]string, 0, len(rs.allow))
-	for _, re := range rs.allow {
-		out = append(out, re.String())
-	}
-	return out
+	return append([]string(nil), rs.allowPats...)
 }
 
 // DenyPatterns returns the current deny patterns as strings (for display).
@@ -138,11 +140,7 @@ func (rs *CommandRuleSet) DenyPatterns() []string {
 	}
 	rs.mu.RLock()
 	defer rs.mu.RUnlock()
-	out := make([]string, 0, len(rs.deny))
-	for _, re := range rs.deny {
-		out = append(out, re.String())
-	}
-	return out
+	return append([]string(nil), rs.denyPats...)
 }
 
 // Clear removes all rules.
@@ -153,6 +151,8 @@ func (rs *CommandRuleSet) Clear() {
 	rs.mu.Lock()
 	rs.allow = nil
 	rs.deny = nil
+	rs.allowPats = nil
+	rs.denyPats = nil
 	rs.mu.Unlock()
 }
 
@@ -169,8 +169,8 @@ func (rs *CommandRuleSet) Save(path string) error {
 	}
 	rs.mu.RLock()
 	data := commandRuleFile{
-		Allow: patternsToStrings(rs.allow),
-		Deny:  patternsToStrings(rs.deny),
+		Allow: append([]string(nil), rs.allowPats...),
+		Deny:  append([]string(nil), rs.denyPats...),
 	}
 	rs.mu.RUnlock()
 
@@ -205,7 +205,7 @@ func patternsToStrings(patterns []*regexp.Regexp) []string {
 		out = append(out, re.String())
 	}
 	return out
-}
+} // retained for fallback/debugging; display paths now use original pattern strings
 
 // compileCommandPattern converts a user-friendly pattern into a compiled regex.
 //
@@ -225,7 +225,7 @@ func compileCommandPattern(pattern string) (*regexp.Regexp, error) {
 	}
 	// Escape regex special chars except our wildcard *
 	var sb strings.Builder
-	sb.WriteString("(?i)^")
+	sb.WriteString("(?i)^") // anchor at start
 	for _, ch := range pattern {
 		if ch == '*' {
 			sb.WriteString(".*")
@@ -237,6 +237,9 @@ func compileCommandPattern(pattern string) (*regexp.Regexp, error) {
 			sb.WriteRune(ch)
 		}
 	}
+	sb.WriteString("$")
+	sb.WriteString("$") // anchor at end — without this, 'git status' would
+	// match 'git status; rm -rf /' (command chaining injection)
 	return regexp.Compile(sb.String())
 }
 
