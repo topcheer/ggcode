@@ -1014,6 +1014,13 @@ func Load(path string) (*Config, error) {
 	if !skipAuto {
 		migrateLegacyMaxIterations(path, raw, cfg)
 	}
+
+	// Load external sections (vendors, im, mcp_servers) from standalone files.
+	// Auto-migrates from main config file if standalone files don't exist yet.
+	if !skipAuto {
+		loadExternalSections(cfg, path)
+	}
+
 	cfg.expandEnvWithLookup(lookup)
 	cfg.normalizeActiveModel()
 	if err := cfg.Validate(); err != nil {

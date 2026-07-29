@@ -42,6 +42,9 @@ func (c *Config) Save() error {
 		return err
 	}
 
+	// 0. Save external sections (vendors, im, mcp_servers) to standalone files.
+	saveExternalSections(c)
+
 	// 1. Marshal current config into a raw map.
 	currentData, err := yaml.Marshal(c)
 	if err != nil {
@@ -51,6 +54,12 @@ func (c *Config) Save() error {
 	if err := yaml.Unmarshal(currentData, &currentRaw); err != nil {
 		return fmt.Errorf("parsing current config: %w", err)
 	}
+
+	// 1b. Strip external sections from the main config map — they live in
+	//     separate files now. This prevents them from being written back.
+	delete(currentRaw, "vendors")
+	delete(currentRaw, "im")
+	delete(currentRaw, "mcp_servers")
 
 	// 2. Exclude fields that came from instance config merge so they don't
 	//    leak into the global file.
@@ -411,22 +420,32 @@ func (c *Config) AddIMAdapter(name string, adapter IMAdapterConfig) error {
 		return fmt.Errorf("IM adapter %q already exists", name)
 	}
 	c.IM.Adapters[name] = adapter
-	// Use patchConfigFile so all fields (including enabled=false) are written.
+	// Instance scope: write to instance ggcode.yaml; Global: write to im.yaml
 	adapterData, _ := yaml.Marshal(adapter)
 	adapterMap := map[string]interface{}{}
 	yaml.Unmarshal(adapterData, &adapterMap)
-	return c.patchConfigFile(func(raw map[string]interface{}) {
-		imRaw, _ := raw["im"].(map[string]interface{})
-		if imRaw == nil {
-			imRaw = map[string]interface{}{}
-		}
-		adaptersRaw, _ := imRaw["adapters"].(map[string]interface{})
+	if c.saveScope == "instance" {
+		return c.patchConfigFile(func(raw map[string]interface{}) {
+			imRaw, _ := raw["im"].(map[string]interface{})
+			if imRaw == nil {
+				imRaw = map[string]interface{}{}
+			}
+			adaptersRaw, _ := imRaw["adapters"].(map[string]interface{})
+			if adaptersRaw == nil {
+				adaptersRaw = map[string]interface{}{}
+			}
+			adaptersRaw[name] = adapterMap
+			imRaw["adapters"] = adaptersRaw
+			raw["im"] = imRaw
+		})
+	}
+	return c.patchExternalFile("im", func(raw map[string]interface{}) {
+		adaptersRaw, _ := raw["adapters"].(map[string]interface{})
 		if adaptersRaw == nil {
 			adaptersRaw = map[string]interface{}{}
 		}
 		adaptersRaw[name] = adapterMap
-		imRaw["adapters"] = adaptersRaw
-		raw["im"] = imRaw
+		raw["adapters"] = adaptersRaw
 	})
 }
 
@@ -446,13 +465,18 @@ func (c *Config) RemoveIMAdapter(name string) error {
 		return fmt.Errorf("IM adapter %q not found", name)
 	}
 	delete(c.IM.Adapters, name)
-	// Use patchConfigFile to explicitly delete the adapter from the file,
-	// avoiding merge semantics that would preserve it.
-	return c.patchConfigFile(func(raw map[string]interface{}) {
-		if imRaw, ok := raw["im"].(map[string]interface{}); ok {
-			if adaptersRaw, ok := imRaw["adapters"].(map[string]interface{}); ok {
-				delete(adaptersRaw, name)
+	if c.saveScope == "instance" {
+		return c.patchConfigFile(func(raw map[string]interface{}) {
+			if imRaw, ok := raw["im"].(map[string]interface{}); ok {
+				if adaptersRaw, ok := imRaw["adapters"].(map[string]interface{}); ok {
+					delete(adaptersRaw, name)
+				}
 			}
+		})
+	}
+	return c.patchExternalFile("im", func(raw map[string]interface{}) {
+		if adaptersRaw, ok := raw["adapters"].(map[string]interface{}); ok {
+			delete(adaptersRaw, name)
 		}
 	})
 }
@@ -512,29 +536,97 @@ func (c *Config) SetIMAdapterExtra(name, key, value string) error {
 	})
 }
 
-// PatchIMAdapter navigates the raw YAML map to reach a single IM adapter
-// and applies a patch function to it. This ensures explicit field writes
-// (including zero values like enabled=false) are correctly persisted,
-// avoiding omitempty issues that arise with Save()-based merge.
+// PatchIMAdapter patches a single IM adapter. For global scope, it operates
+// on im.yaml (external file). For instance scope, it patches the instance
+// ggcode.yaml directly (instance configs keep inline im: section).
 func (c *Config) PatchIMAdapter(name string, patch func(adapter map[string]interface{})) error {
-	return c.patchConfigFile(func(raw map[string]interface{}) {
-		imRaw, _ := raw["im"].(map[string]interface{})
-		if imRaw == nil {
-			imRaw = map[string]interface{}{}
-		}
-		adaptersRaw, _ := imRaw["adapters"].(map[string]interface{})
-		if adaptersRaw == nil {
-			adaptersRaw = map[string]interface{}{}
-		}
-		adapterRaw, _ := adaptersRaw[name].(map[string]interface{})
-		if adapterRaw == nil {
-			adapterRaw = map[string]interface{}{}
-		}
-		patch(adapterRaw)
-		adaptersRaw[name] = adapterRaw
-		imRaw["adapters"] = adaptersRaw
-		raw["im"] = imRaw
-	})
+	// Instance scope: patch instance ggcode.yaml directly (old behavior)
+	if c.saveScope == "instance" {
+		return c.patchConfigFile(func(raw map[string]interface{}) {
+			imRaw, _ := raw["im"].(map[string]interface{})
+			if imRaw == nil {
+				imRaw = map[string]interface{}{}
+			}
+			adaptersRaw, _ := imRaw["adapters"].(map[string]interface{})
+			if adaptersRaw == nil {
+				adaptersRaw = map[string]interface{}{}
+			}
+			adapterRaw, _ := adaptersRaw[name].(map[string]interface{})
+			if adapterRaw == nil {
+				adapterRaw = map[string]interface{}{}
+			}
+			patch(adapterRaw)
+			adaptersRaw[name] = adapterRaw
+			imRaw["adapters"] = adaptersRaw
+			raw["im"] = imRaw
+		})
+	}
+
+	// Global scope: patch im.yaml (external file)
+	configDir := c.externalConfigDir()
+	imPath := IMPath(configDir)
+
+	unlock := lockConfigFile(imPath)
+	defer unlock()
+
+	raw := map[string]interface{}{}
+	if data, err := os.ReadFile(imPath); err == nil {
+		yaml.Unmarshal(data, &raw)
+	}
+
+	adaptersRaw, _ := raw["adapters"].(map[string]interface{})
+	if adaptersRaw == nil {
+		adaptersRaw = map[string]interface{}{}
+	}
+	adapterRaw, _ := adaptersRaw[name].(map[string]interface{})
+	if adapterRaw == nil {
+		adapterRaw = map[string]interface{}{}
+	}
+	patch(adapterRaw)
+	adaptersRaw[name] = adapterRaw
+	raw["adapters"] = adaptersRaw
+
+	out, err := yaml.Marshal(raw)
+	if err != nil {
+		return fmt.Errorf("marshaling im config: %w", err)
+	}
+	return writeSecureConfigFile(imPath, out)
+}
+
+// patchExternalFile is the external-file equivalent of patchConfigFile.
+// It patches a standalone YAML file (vendors.yaml, im.yaml, mcp_servers.yaml).
+func (c *Config) patchExternalFile(section string, patch func(raw map[string]interface{})) error {
+	configDir := c.externalConfigDir()
+	path := externalFilePath(configDir, section)
+
+	unlock := lockConfigFile(path)
+	defer unlock()
+
+	raw := map[string]interface{}{}
+	if data, err := os.ReadFile(path); err == nil {
+		yaml.Unmarshal(data, &raw)
+	}
+
+	patch(raw)
+
+	out, err := yaml.Marshal(raw)
+	if err != nil {
+		return fmt.Errorf("marshaling %s: %w", section, err)
+	}
+	return writeSecureConfigFile(path, out)
+}
+
+// externalConfigDir returns the directory where external config files live.
+func (c *Config) externalConfigDir() string {
+	// For instance scope, write external files in the instance directory.
+	if c.saveScope == "instance" && c.instanceDir != "" {
+		return c.instanceDir
+	}
+	d := filepath.Dir(c.FilePath)
+	if d == "." {
+		return ConfigDir()
+	}
+	return d
 }
 
 // recompactConfigFile reads a config file, strips defaults, and rewrites it.

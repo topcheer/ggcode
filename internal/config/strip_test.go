@@ -227,7 +227,7 @@ func TestMigrateToCompactFormat(t *testing.T) {
 		t.Fatalf("Save error: %v", err)
 	}
 
-	// Read back the file
+	// Read back the main config file
 	data, err := os.ReadFile(cfgPath)
 	if err != nil {
 		t.Fatalf("ReadFile error: %v", err)
@@ -238,25 +238,32 @@ func TestMigrateToCompactFormat(t *testing.T) {
 	t.Logf("After: %d lines, %d bytes", newLines, len(data))
 	t.Logf("Content:\n%s", newContent)
 
-	// Should be much smaller (stripped all 22 default vendors)
+	// Main config should be much smaller (vendors migrated to vendors.yaml)
 	if newLines >= originalLines/2 {
-		t.Errorf("file should be much smaller: before=%d after=%d", originalLines, newLines)
+		t.Errorf("main config should be much smaller: before=%d after=%d", originalLines, newLines)
 	}
 
-	// Should NOT contain default vendors that match DefaultConfig exactly
+	// Main config should NOT contain default vendors (they're stripped/external now)
 	for _, name := range []string{"anthropic", "openai", "gemini", "groq", "deepseek"} {
 		if strings.Contains(newContent, "    "+name+":") {
-			t.Errorf("default vendor %q should be stripped (it matches DefaultConfig)", name)
+			t.Errorf("default vendor %q should be stripped from main config", name)
 		}
 	}
 
-	// Should contain the user's custom vendor
-	if !strings.Contains(newContent, "my-custom") {
-		t.Error("user's custom vendor 'my-custom' should be preserved")
+	// Main config should NOT contain the custom vendor either (it's in vendors.yaml now)
+	if strings.Contains(newContent, "my-custom") {
+		t.Error("user's custom vendor should be in vendors.yaml, not main config")
 	}
 
-	// Models should be inline, not block style
-	if strings.Contains(newContent, "        - ") {
-		t.Error("models should use inline format, not block style with '- '")
+	// Vendors.yaml should contain the user's custom vendor
+	vendorsData, _ := os.ReadFile(VendorsPath(tmpDir))
+	vendorsContent := string(vendorsData)
+	if !strings.Contains(vendorsContent, "my-custom") {
+		t.Error("user's custom vendor 'my-custom' should be in vendors.yaml")
+	}
+
+	// Models in vendors.yaml should be inline, not block style
+	if strings.Contains(vendorsContent, "        - ") {
+		t.Error("models should use inline format in vendors.yaml, not block style")
 	}
 }

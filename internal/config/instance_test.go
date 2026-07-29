@@ -1853,9 +1853,9 @@ func TestRemoveIMAdapter_Instance(t *testing.T) {
 		t.Errorf("instance config should not contain removed adapter:\n%s", string(instData))
 	}
 
-	globalData, _ := os.ReadFile(globalPath)
+	globalData, _ := os.ReadFile(IMPath(filepath.Dir(globalPath)))
 	if !strings.Contains(string(globalData), "globalbot") {
-		t.Errorf("global config should still have globalbot:\n%s", string(globalData))
+		t.Errorf("global im.yaml should still have globalbot:\n%s", string(globalData))
 	}
 }
 
@@ -2436,10 +2436,11 @@ func TestSave_MergePreservesExistingVendorFromOtherProcess(t *testing.T) {
 		t.Fatalf("Process A save: %v", err)
 	}
 
-	// Verify vendor was written
-	dataA, _ := os.ReadFile(globalPath)
+	// Verify vendor was written to vendors.yaml (external file)
+	vendorsPath := VendorsPath(filepath.Dir(globalPath))
+	dataA, _ := os.ReadFile(vendorsPath)
 	if !strings.Contains(string(dataA), "myvendor") {
-		t.Fatalf("vendor myvendor should be in file after Process A save:\n%s", string(dataA))
+		t.Fatalf("vendor myvendor should be in vendors.yaml after Process A save:\n%s", string(dataA))
 	}
 
 	// Process B loads the same file (simulating a separate instance)
@@ -2451,13 +2452,15 @@ func TestSave_MergePreservesExistingVendorFromOtherProcess(t *testing.T) {
 		t.Fatalf("Process B save: %v", err)
 	}
 
-	// Verify: myvendor must STILL be in the file (merge preserved it)
-	dataB, _ := os.ReadFile(globalPath)
+	// Verify: myvendor must STILL be in vendors.yaml (external file preserved it)
+	dataB, _ := os.ReadFile(vendorsPath)
 	if !strings.Contains(string(dataB), "myvendor") {
 		t.Errorf("DISASTER: Process B's save clobbered Process A's vendor!\n%s", string(dataB))
 	}
-	if !strings.Contains(string(dataB), "zh-CN") {
-		t.Errorf("Process B's language change should be in file:\n%s", string(dataB))
+	// Language change should be in main config file (not vendors.yaml)
+	mainData, _ := os.ReadFile(globalPath)
+	if !strings.Contains(string(mainData), "zh-CN") {
+		t.Errorf("Process B's language change should be in main config:\n%s", string(mainData))
 	}
 }
 
