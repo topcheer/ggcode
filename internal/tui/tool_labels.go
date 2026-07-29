@@ -18,6 +18,13 @@ type toolPresentation struct {
 	Activity    string
 }
 
+// spawnAgentModelResolver resolves the effective model shown in spawn_agent
+// labels when the tool call omits the model param (the sub-agent then
+// inherits the parent's runtime model — see spawn_agent.go's displayModel
+// fallback). Wired by REPL.SetSubAgentManager; nil in tests and non-TUI
+// frontends, preserving the explicit-model-only behavior there.
+var spawnAgentModelResolver func() string
+
 type commandPreview struct {
 	Title                  string
 	CommandLines           []string
@@ -61,7 +68,13 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 
 		// For spawn_agent, include the model name in brackets: "desc [model] (Spawn Agent)"
 		if toolName == "spawn_agent" {
-			if model := argString(args, "model"); model != "" {
+			model := argString(args, "model")
+			if model == "" && spawnAgentModelResolver != nil {
+				// No explicit override — the sub-agent inherits the parent's
+				// runtime model, so show that instead of hiding the model.
+				model = spawnAgentModelResolver()
+			}
+			if model != "" {
 				displayName := desc + " [" + model + "] (" + pretty + ")"
 				return toolPresentation{DisplayName: displayName, Detail: detail, Activity: desc + " [" + model + "]"}
 			}

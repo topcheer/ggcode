@@ -587,6 +587,21 @@ func (r *REPL) SetSubAgentManager(mgr *subagent.Manager, prov provider.Provider,
 		}
 		return nil
 	}
+	// Let spawn_agent tool labels show the effective model even when the LLM
+	// omits the model param (the sub-agent inherits the parent's runtime
+	// model). Mirrors the displayModel fallback in SpawnAgentTool.Execute.
+	agentRef := r.model.agent
+	spawnAgentModelResolver = func() string {
+		if agentRef == nil {
+			return ""
+		}
+		if prov := agentRef.Provider(); prov != nil {
+			if mp, ok := prov.(provider.ModelNameProvider); ok {
+				return mp.ModelName()
+			}
+		}
+		return ""
+	}
 	tools.Register(tool.SpawnAgentTool{
 		Manager:             mgr,
 		Provider:            prov,

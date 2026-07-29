@@ -432,6 +432,41 @@ func TestDescribeToolEditFileWithDescription(t *testing.T) {
 	}
 }
 
+func TestDescribeToolSpawnAgentExplicitModel(t *testing.T) {
+	present := describeTool(LangEnglish, "spawn_agent", `{"task":"do x","description":"Reviewing security","model":"k3"}`)
+	if present.DisplayName != "Reviewing security [k3] (Spawn Agent)" {
+		t.Fatalf("expected explicit model in brackets, got %q", present.DisplayName)
+	}
+	if present.Activity != "Reviewing security [k3]" {
+		t.Fatalf("expected activity with model, got %q", present.Activity)
+	}
+}
+
+func TestDescribeToolSpawnAgentInheritedModel(t *testing.T) {
+	// When the LLM omits the model param, the sub-agent inherits the parent's
+	// runtime model — the label should show it via the resolver.
+	old := spawnAgentModelResolver
+	spawnAgentModelResolver = func() string { return "kimi-for-coding" }
+	defer func() { spawnAgentModelResolver = old }()
+
+	present := describeTool(LangEnglish, "spawn_agent", `{"task":"do x","description":"Researching trends"}`)
+	if present.DisplayName != "Researching trends [kimi-for-coding] (Spawn Agent)" {
+		t.Fatalf("expected inherited model in brackets, got %q", present.DisplayName)
+	}
+}
+
+func TestDescribeToolSpawnAgentNoResolver(t *testing.T) {
+	// Without a resolver (tests, non-TUI frontends), no model brackets.
+	old := spawnAgentModelResolver
+	spawnAgentModelResolver = nil
+	defer func() { spawnAgentModelResolver = old }()
+
+	present := describeTool(LangEnglish, "spawn_agent", `{"task":"do x","description":"Researching trends"}`)
+	if present.DisplayName != "Researching trends (Spawn Agent)" {
+		t.Fatalf("expected no model brackets without resolver, got %q", present.DisplayName)
+	}
+}
+
 func TestDescribeToolWriteFileWithDescription(t *testing.T) {
 	present := describeTool(LangEnglish, "write_file", `{"path":"output.txt","content":"hello","description":"Creating output"}`)
 	if present.DisplayName != "Creating output (Write File)" {
