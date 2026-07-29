@@ -381,11 +381,6 @@ func (m Model) topHeaderEnabled() bool {
 	return false
 }
 
-// narrowMode returns true when the sidebar cannot fit and we're in the main view.
-func (m Model) narrowMode() bool {
-	return !m.sidebarEnabled()
-}
-
 func (m Model) sidebarAvailableByWidth() bool {
 	required := 72 + m.sidebarWidth() + 1 + m.terminalLeftMargin() + m.terminalRightMargin()
 	return m.viewWidth() >= required

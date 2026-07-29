@@ -238,12 +238,6 @@ func cloneTunnelMessageData(data *tunnel.MessageData) *tunnel.MessageData {
 	return &cp
 }
 
-func (q *pendingQueue) ensureQueue() *agentruntime.PendingQueue[*tunnel.MessageData] {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	return q.ensureQueueLocked()
-}
-
 func (q *pendingQueue) ensureQueueLocked() *agentruntime.PendingQueue[*tunnel.MessageData] {
 	if q.q != nil {
 		return q.q

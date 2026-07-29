@@ -474,13 +474,6 @@ var imPanelConfigs = map[string]imPanelConfig{
 
 // Generic helper functions
 
-func maxIM(v, min int) int {
-	if v < min {
-		return min
-	}
-	return v
-}
-
 func defaultIMTargetID(workspace string) string {
 	base := filepath.Base(strings.TrimSpace(workspace))
 	if base == "" || base == "." || base == string(filepath.Separator) {

@@ -319,12 +319,6 @@ func (m *Model) applyIMEditResult(s *imAdapterEditState, msg imEditResultMsg) {
 	*s = refreshed
 }
 
-// isSecretKey checks if a key name looks like a secret field.
-// Reuses the config package's looksLikeSecretField naming convention.
-func isSecretKey(key string) bool {
-	return looksLikeSecretField(key)
-}
-
 // maskSecret masks a secret value, showing only the last 4 characters.
 func maskSecret(value string) string {
 	runes := []rune(value)
