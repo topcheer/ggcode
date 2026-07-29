@@ -4,12 +4,10 @@ import (
 	"bytes"
 	"encoding/base64"
 	"fmt"
-	"github.com/topcheer/ggcode/internal/util"
 	"image"
 	_ "image/gif"
 	_ "image/jpeg"
 	_ "image/png"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -112,15 +110,6 @@ func ReadFile(path string) (Image, error) {
 		return Image{}, err
 	}
 	return img, nil
-}
-
-// ReadFromReader reads an image from an io.Reader.
-func ReadFromReader(r io.Reader) (Image, error) {
-	data, err := util.ReadAll(r, util.ReadLimitGeneral)
-	if err != nil {
-		return Image{}, fmt.Errorf("reading image data: %w", err)
-	}
-	return Decode(data)
 }
 
 // Placeholder returns a TUI-friendly placeholder string for an image.

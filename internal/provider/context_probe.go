@@ -251,12 +251,6 @@ func MakeProbeKey(vendor, baseURL, model string) string {
 	}, "|")
 }
 
-// GetCachedContextWindow checks the persistent cache and returns the
-// stored context window, or 0 if not cached.
-func GetCachedContextWindow(vendor, baseURL, model string) int {
-	return LookupProbeCache(MakeProbeKey(vendor, baseURL, model))
-}
-
 // ─── probe logic ────────────────────────────────────────────────────────────
 
 // ProbeContextWindow probes the actual context window limit for the given

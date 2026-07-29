@@ -7,8 +7,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-
-	"github.com/golang/freetype/truetype"
 )
 
 //go:embed embedfonts/DejaVuSansMono.ttf
@@ -22,26 +20,6 @@ func DejaVuMonoRegular() []byte { return dejaVuMonoRegular }
 
 // DejaVuMonoBold returns the embedded DejaVu Sans Mono bold font bytes.
 func DejaVuMonoBold() []byte { return dejaVuMonoBold }
-
-// DejaVuMonoAdvance returns the advance width and line height of DejaVu Mono at the given point size.
-func DejaVuMonoAdvance(points float64) (charWidth, charHeight int) {
-	ttf, err := truetype.Parse(dejaVuMonoRegular)
-	if err != nil {
-		return 10, 19
-	}
-	face := truetype.NewFace(ttf, &truetype.Options{Size: points, DPI: 72})
-	if adv, ok := face.GlyphAdvance('M'); ok && adv.Ceil() > 0 {
-		charWidth = adv.Ceil()
-	} else {
-		charWidth = 10
-	}
-	if h := face.Metrics().Height.Ceil(); h > 0 {
-		charHeight = h
-	} else {
-		charHeight = 19
-	}
-	return
-}
 
 // IsWide returns true if the rune is a wide (CJK) character.
 func IsWide(r rune) bool {

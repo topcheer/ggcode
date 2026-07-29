@@ -87,21 +87,6 @@ const (
 	tokenCountTimeout         = 100 * time.Millisecond
 )
 
-// AutoCompactThresholdTokens returns a conservative threshold for callers that
-// do not have a Manager instance. It assumes no system prompt and only reserves
-// the effective output reserve for the given context window.
-func AutoCompactThresholdTokens(contextWindow int) int {
-	if contextWindow <= 0 {
-		return 0
-	}
-	m := &Manager{contextWindow: contextWindow}
-	threshold := contextWindow - m.fixedPromptOverheadLocked()
-	if threshold < minSummaryReserve {
-		return minSummaryReserve
-	}
-	return threshold
-}
-
 // Manager implements ContextManager.
 type Manager struct {
 	mu                       sync.Mutex
@@ -1953,22 +1938,6 @@ func (m *Manager) tokenCountLocked() int {
 	// Without a real LLM usage baseline, estimate everything we send to the
 	// provider: conversation messages plus the tool definitions overhead.
 	return m.tokens + m.toolDefinitionOverhead
-}
-
-// fixedPromptOverheadLocked returns the tokens that are not available for
-// conversation messages: the current system prompt, the output reserve, and
-// the tool-definition overhead set by the Agent. It is recalculated on each call
-// so it tracks a dynamically updated system prompt (e.g. ratchet rules injected
-// at runtime).
-func (m *Manager) fixedPromptOverheadLocked() int {
-	overhead := m.effectiveOutputReserveLocked()
-	overhead += m.toolDefinitionOverhead
-	if len(m.messages) > 0 && m.messages[0].Role == "system" {
-		overhead += m.estimateTokens(m.messages[0])
-	}
-	debug.Log("ctx", "fixedPromptOverhead: outputReserve=%d toolDefOverhead=%d systemMsg=%d total=%d contextWindow=%d",
-		m.effectiveOutputReserveLocked(), m.toolDefinitionOverhead, overhead-m.effectiveOutputReserveLocked()-m.toolDefinitionOverhead, overhead, m.contextWindow)
-	return overhead
 }
 
 func (m *Manager) autoCompactThresholdLocked() int {

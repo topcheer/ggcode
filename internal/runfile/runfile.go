@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -183,14 +182,4 @@ func normalizeWorkspace(workspace string) string {
 // isAlive checks whether a process with the given PID exists.
 func isAlive(pid int) bool {
 	return processExists(pid)
-}
-
-// PID is a convenience helper for the current process.
-func PID() int {
-	return os.Getpid()
-}
-
-// FormatAddr is a convenience helper that joins host and port.
-func FormatAddr(host string, port int) string {
-	return host + ":" + strconv.Itoa(port)
 }

@@ -14,8 +14,3 @@ func Display() string {
 	}
 	return "dev"
 }
-
-func IsDev() bool {
-	v := strings.TrimSpace(strings.ToLower(Display()))
-	return v == "" || v == "dev"
-}
