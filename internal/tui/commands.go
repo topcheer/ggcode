@@ -402,7 +402,7 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 			}
 			return nil
 		case "/sessions":
-			m.openInspectorPanel(inspectorPanelSessions)
+			m.openInspectorPanelWithFilter(inspectorPanelSessions, strings.TrimSpace(strings.Join(parts[1:], " ")))
 			return nil
 		case "/title":
 			return m.handleTitleCommand(strings.TrimSpace(strings.Join(parts[1:], " ")))

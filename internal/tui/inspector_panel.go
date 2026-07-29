@@ -43,6 +43,8 @@ type inspectorPanelState struct {
 	cachedItems       []inspectorPanelItem // cached items to avoid sync loading on every render
 	itemsLoaded       bool                 // true once items have been loaded (or async load started)
 	loading           bool                 // true while async loading is in progress
+	filter            string               // sessions panel: current type-to-filter query
+	filtering         bool                 // sessions panel: true while '/' filter input mode is active
 }
 
 type inspectorPanelItem struct {
@@ -100,6 +102,71 @@ func (m *Model) closeInspectorPanel() {
 	m.inspectorPanel = nil
 }
 
+// openInspectorPanelWithFilter opens the panel and presets the sessions
+// type-to-filter query (e.g. from "/sessions <filter>").
+func (m *Model) openInspectorPanelWithFilter(kind inspectorPanelKind, filter string) {
+	m.openInspectorPanel(kind)
+	if m.inspectorPanel != nil && filter != "" {
+		m.inspectorPanel.filter = filter
+	}
+}
+
+// filterInspectorItems narrows inspector items by a case-insensitive
+// substring match on title and summary. Empty filter returns items as-is.
+func filterInspectorItems(items []inspectorPanelItem, filter string) []inspectorPanelItem {
+	filter = strings.TrimSpace(filter)
+	if filter == "" {
+		return items
+	}
+	needle := strings.ToLower(filter)
+	out := make([]inspectorPanelItem, 0, len(items))
+	for _, item := range items {
+		if strings.Contains(strings.ToLower(item.Title), needle) ||
+			strings.Contains(strings.ToLower(item.Summary), needle) {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+// handleSessionFilterKey implements less/vim-style filtering for the sessions
+// panel: '/' enters filter input mode; while active, printable characters are
+// appended to the filter, backspace deletes, Esc clears the filter and exits
+// filter mode. Returns true if the key was consumed.
+func (m *Model) handleSessionFilterKey(msg tea.KeyPressMsg) bool {
+	p := m.inspectorPanel
+	if p.filtering {
+		switch msg.String() {
+		case "esc":
+			p.filter = ""
+			p.filtering = false
+			p.cursor = 0
+			return true
+		case "backspace":
+			if p.filter != "" {
+				r := []rune(p.filter)
+				p.filter = string(r[:len(r)-1])
+				p.cursor = 0
+			}
+			return true
+		case "enter", "up", "down", "tab", "shift+tab", "ctrl+c":
+			return false
+		default:
+			if msg.Text != "" {
+				p.filter += msg.Text
+				p.cursor = 0
+				return true
+			}
+			return false
+		}
+	}
+	if msg.String() == "/" {
+		p.filtering = true
+		return true
+	}
+	return false
+}
+
 func (m *Model) setInspectorMessage(message string) {
 	if m.inspectorPanel == nil {
 		return
@@ -139,6 +206,9 @@ func (m Model) renderInspectorPanel() string {
 		return m.renderContextBox(title, body, lipgloss.Color("12"))
 	}
 	items := m.inspectorPanelItems(m.inspectorPanel.kind)
+	if m.inspectorPanel.kind == inspectorPanelSessions {
+		items = filterInspectorItems(items, m.inspectorPanel.filter)
+	}
 	cursor := clampInspectorCursor(m.inspectorPanel.cursor, len(items))
 	width := m.boxInnerWidth(m.mainColumnWidth())
 	leftWidth := inspectorPanelLeftWidth(width)
@@ -215,6 +285,10 @@ func (m Model) renderInspectorPanelFooter(width int) string {
 	lines := []string{
 		lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(m.inspectorPanelHints(m.inspectorPanel.kind)),
 	}
+	if m.inspectorPanel.kind == inspectorPanelSessions && (m.inspectorPanel.filtering || m.inspectorPanel.filter != "") {
+		filterLine := inspectorText(m.currentLanguage(), "session_filter", m.inspectorPanel.filter)
+		lines = append([]string{lipgloss.NewStyle().Foreground(lipgloss.Color("12")).Render(filterLine)}, lines...)
+	}
 	if msg := strings.TrimSpace(m.inspectorPanel.message); msg != "" {
 		lines = append(lines, lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Render(truncateDisplayWidth(msg, width)))
 	}
@@ -234,6 +308,12 @@ func (m *Model) handleInspectorPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		return *m, nil
 	}
 	items := m.inspectorPanelItems(m.inspectorPanel.kind)
+	if m.inspectorPanel.kind == inspectorPanelSessions {
+		items = filterInspectorItems(items, m.inspectorPanel.filter)
+		if m.handleSessionFilterKey(msg) {
+			return *m, nil
+		}
+	}
 	m.inspectorPanel.cursor = clampInspectorCursor(m.inspectorPanel.cursor, len(items))
 	switch msg.String() {
 	case "up", "k":
@@ -1065,7 +1145,9 @@ func inspectorText(lang Language, key string, args ...any) string {
 	case LangZhCN:
 		switch key {
 		case "hint_sessions":
-			msg = "↑/↓ 选择 • Enter 恢复 • E 导出 • Esc 关闭"
+			msg = "↑/↓ 选择 • Enter 恢复 • E 导出 • / 过滤 • Esc 关闭"
+		case "session_filter":
+			msg = "过滤: %s (Esc 清除)"
 		case "hint_agents":
 			msg = "↑/↓ 选择 • X 取消 • Esc 关闭"
 		case "hint_checkpoints":
@@ -1228,7 +1310,9 @@ func inspectorText(lang Language, key string, args ...any) string {
 	default:
 		switch key {
 		case "hint_sessions":
-			msg = "↑/↓ select • Enter resume • E export • Esc close"
+			msg = "↑/↓ select • Enter resume • E export • / filter • Esc close"
+		case "session_filter":
+			msg = "Filter: %s (Esc to clear)"
 		case "hint_agents":
 			msg = "↑/↓ select • X cancel • Esc close"
 		case "hint_checkpoints":

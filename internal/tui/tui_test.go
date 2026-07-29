@@ -127,6 +127,67 @@ func TestInspectorSessionsEnterSchedulesResumeCommand(t *testing.T) {
 	}
 }
 
+func TestInspectorSessionsTypeToFilter(t *testing.T) {
+	m := newTestModel()
+	m.inspectorPanel = &inspectorPanelState{
+		kind: inspectorPanelSessions,
+		cachedItems: []inspectorPanelItem{
+			{ID: "s1", Title: "Fix auth bug", Summary: "s1 • 2026-01-01"},
+			{ID: "s2", Title: "Refactor parser", Summary: "s2 • 2026-01-02"},
+		},
+		itemsLoaded: true,
+	}
+
+	// '/' enters filter input mode.
+	next, _ := m.handleInspectorPanelKey(tea.KeyPressMsg{Text: "/", Code: '/'})
+	if !next.inspectorPanel.filtering {
+		t.Fatal("expected '/' to enter filter mode")
+	}
+	m = next
+
+	// Typing narrows the list; 'j'/'k'/'e' go to the filter while active.
+	for _, ch := range []string{"a", "u", "t", "h"} {
+		next, _ = m.handleInspectorPanelKey(tea.KeyPressMsg{Text: ch, Code: rune(ch[0])})
+		m = next
+	}
+	if m.inspectorPanel.filter != "auth" {
+		t.Fatalf("expected filter %q, got %q", "auth", m.inspectorPanel.filter)
+	}
+	filtered := filterInspectorItems(m.inspectorPanel.cachedItems, m.inspectorPanel.filter)
+	if len(filtered) != 1 || filtered[0].ID != "s1" {
+		t.Fatalf("expected only s1 after filter, got %+v", filtered)
+	}
+
+	// Backspace deletes one rune.
+	next, _ = m.handleInspectorPanelKey(tea.KeyPressMsg{Code: tea.KeyBackspace})
+	m = next
+	if m.inspectorPanel.filter != "aut" {
+		t.Fatalf("expected filter %q after backspace, got %q", "aut", m.inspectorPanel.filter)
+	}
+
+	// Esc clears the filter and exits filter mode (panel stays open).
+	next, _ = m.handleInspectorPanelKey(tea.KeyPressMsg{Code: tea.KeyEscape})
+	m = next
+	if m.inspectorPanel == nil {
+		t.Fatal("expected panel to stay open when Esc clears filter")
+	}
+	if m.inspectorPanel.filter != "" || m.inspectorPanel.filtering {
+		t.Fatalf("expected filter cleared, got filter=%q filtering=%v", m.inspectorPanel.filter, m.inspectorPanel.filtering)
+	}
+}
+
+func TestOpenInspectorPanelWithFilter(t *testing.T) {
+	m := newTestModel()
+	m.inspectorPanel = nil
+	m.openInspectorPanelWithFilter(inspectorPanelSessions, "deploy")
+	if m.inspectorPanel == nil {
+		t.Fatal("expected panel to open")
+	}
+	if m.inspectorPanel.filter != "deploy" {
+		t.Fatalf("expected preset filter %q, got %q", "deploy", m.inspectorPanel.filter)
+	}
+}
+
 func TestInspectorTodosClearActionPersistsEmptyList(t *testing.T) {
 	// Isolate HOME so the session-scoped todo file lands in a temp dir.
 	origHome := os.Getenv("HOME")
