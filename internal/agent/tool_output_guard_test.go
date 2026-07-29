@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -152,5 +153,150 @@ func TestGuardToolOutput_Escalation(t *testing.T) {
 	}
 	if len(r2) <= len(r3) {
 		t.Errorf("high fill should produce larger output than critical fill: %d vs %d", len(r2), len(r3))
+	}
+}
+
+func TestExtractCriticalLines_Basic(t *testing.T) {
+	content := strings.Join([]string{
+		"Running tests...",
+		"test_a ... ok",
+		"test_b ... ok",
+		"FAIL: test_c - expected 42 got 41",
+		"test_d ... ok",
+		"panic: runtime error: index out of range",
+		"goroutine 1 [running]:",
+		"error: undefined variable foo",
+	}, "\n")
+
+	critical := extractCriticalLines(content)
+	if len(critical) < 3 {
+		t.Errorf("expected at least 3 critical lines, got %d: %v", len(critical), critical)
+	}
+
+	found := make(map[string]bool)
+	for _, c := range critical {
+		found[c] = true
+	}
+	if !found["FAIL: test_c - expected 42 got 41"] {
+		t.Errorf("expected FAIL line in critical lines: %v", critical)
+	}
+	if !found["panic: runtime error: index out of range"] {
+		t.Errorf("expected panic line in critical lines: %v", critical)
+	}
+	if !found["error: undefined variable foo"] {
+		t.Errorf("expected error line in critical lines: %v", critical)
+	}
+}
+
+func TestExtractCriticalLines_Deduplication(t *testing.T) {
+	content := strings.Repeat("error: same problem here\n", 10)
+	critical := extractCriticalLines(content)
+	if len(critical) != 1 {
+		t.Errorf("expected 1 deduplicated line, got %d: %v", len(critical), critical)
+	}
+}
+
+func TestExtractCriticalLines_Empty(t *testing.T) {
+	content := strings.Repeat("just normal output\n", 100)
+	critical := extractCriticalLines(content)
+	if len(critical) != 0 {
+		t.Errorf("expected 0 critical lines for normal content, got %d", len(critical))
+	}
+}
+
+func TestExtractCriticalLines_MaxLines(t *testing.T) {
+	var lines []string
+	for i := 0; i < 50; i++ {
+		lines = append(lines, fmt.Sprintf("error: problem number %d", i))
+	}
+	critical := extractCriticalLines(strings.Join(lines, "\n"))
+	if len(critical) > maxCriticalLines {
+		t.Errorf("expected at most %d critical lines, got %d", maxCriticalLines, len(critical))
+	}
+}
+
+func TestTruncateHeadTail_PreservesCriticalLines(t *testing.T) {
+	// Build content where the error is in the middle and would be lost
+	// with simple head-tail truncation. Uses newline-separated lines to
+	// simulate real tool output (build logs, test results).
+	head := strings.Repeat("normal build line\n", 400) // ~7.2KB
+	middle := "FAIL: test_critical - expected success got failure\n" +
+		"error: undefined reference to 'calculate'\n" +
+		"panic: segment violation at 0x1234\n"
+	tail := strings.Repeat("normal tail line\n", 400) // ~7.2KB
+	content := head + middle + tail
+
+	result := truncateHeadTail(content, 8000)
+
+	// The critical lines should appear in the output
+	if !strings.Contains(result, "FAIL: test_critical") {
+		t.Errorf("truncated output should preserve FAIL line from middle")
+	}
+	if !strings.Contains(result, "undefined reference") {
+		t.Errorf("truncated output should preserve error line from middle")
+	}
+	if !strings.Contains(result, "panic:") {
+		t.Errorf("truncated output should preserve panic line from middle")
+	}
+	// Should still contain the truncation marker
+	if !strings.Contains(result, "truncated") {
+		t.Errorf("should contain truncation marker")
+	}
+}
+
+func TestTruncateHeadTail_NoHighlightsForRepetitiveContent(t *testing.T) {
+	// Pure repetitive content (no critical lines) should behave same as before
+	content := strings.Repeat("x", 50000)
+	result := truncateHeadTail(content, 10000)
+	if strings.Contains(result, "key lines") {
+		t.Errorf("should not contain highlight section for non-critical content")
+	}
+}
+
+func TestGuardToolOutput_PreservesCriticalLinesInMiddle(t *testing.T) {
+	// Integration test: large output with errors buried in the middle
+	var parts []string
+	parts = append(parts, strings.Repeat("build output line\n", 500)) // ~9.5KB head
+	parts = append(parts, "main.go:42:5: error: cannot use foo (type int) as type string\n")
+	parts = append(parts, "main.go:50:3: FAIL: TestExample - assertion failed\n")
+	parts = append(parts, strings.Repeat("more output\n", 500)) // ~6.5KB tail
+	content := strings.Join(parts, "")
+
+	result := guardToolOutput(content, 0.55) // moderate fill → ~40KB limit
+
+	if !strings.Contains(result, "error: cannot use foo") {
+		t.Errorf("guardToolOutput should preserve error line from middle section")
+	}
+	if !strings.Contains(result, "FAIL: TestExample") {
+		t.Errorf("guardToolOutput should preserve FAIL line from middle section")
+	}
+}
+
+func TestFormatHighlights_Basic(t *testing.T) {
+	lines := []string{"error: foo", "FAIL: bar", "panic: baz"}
+	result := formatHighlights(lines, 1000)
+	if !strings.Contains(result, "error: foo") {
+		t.Errorf("should contain first line")
+	}
+	if !strings.Contains(result, "FAIL: bar") {
+		t.Errorf("should contain second line")
+	}
+	if !strings.Contains(result, "3 key lines") {
+		t.Errorf("should contain count in header")
+	}
+}
+
+func TestFormatHighlights_BudgetLimit(t *testing.T) {
+	lines := []string{"error: line 1", "error: line 2", "error: line 3", "error: line 4"}
+	result := formatHighlights(lines, 40) // very small budget
+	if !strings.Contains(result, "more") {
+		t.Errorf("should indicate truncated highlights when budget exceeded")
+	}
+}
+
+func TestFormatHighlights_Empty(t *testing.T) {
+	result := formatHighlights(nil, 1000)
+	if result != "" {
+		t.Errorf("empty input should return empty string, got %q", result)
 	}
 }

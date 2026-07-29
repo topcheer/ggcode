@@ -66,8 +66,11 @@ func guardToolOutput(content string, contextFill float64) string {
 }
 
 // truncateHeadTail keeps the first ~40% and last ~50% of content, with a
-// truncation marker in between. Snaps to rune boundaries to prevent UTF-8
-// corruption, then to line boundaries for readability.
+// truncation marker in between. It also extracts critical lines (errors,
+// panics, test failures, etc.) from the truncated middle section so the
+// agent doesn't lose actionable diagnostics buried in large outputs.
+// Snaps to rune boundaries to prevent UTF-8 corruption, then to line
+// boundaries for readability.
 func truncateHeadTail(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
@@ -81,8 +84,34 @@ func truncateHeadTail(s string, maxLen int) string {
 		return s[:util.SnapToRuneStart(s, maxLen)]
 	}
 
-	headLen := usable * 2 / 5 // 40% head
-	tailLen := usable * 3 / 5 // 50% tail (errors/results at end are more important)
+	// First pass: rough head-tail split to identify the middle section.
+	roughHeadLen := usable * 2 / 5
+	roughTailLen := usable * 3 / 5
+	roughTailStart := len(s) - roughTailLen
+	if roughTailStart < roughHeadLen {
+		roughTailStart = roughHeadLen
+	}
+
+	// Extract critical lines from the middle section (the part that will be
+	// discarded). If highlights are found, reserve budget for them and shrink
+	// the head-tail allocation proportionally. When no critical lines exist,
+	// behavior is identical to the original implementation.
+	var highlightSection string
+	contentBudget := usable
+	if roughTailStart > roughHeadLen {
+		middle := s[roughHeadLen:roughTailStart]
+		highlights := extractCriticalLines(middle)
+		if len(highlights) > 0 {
+			maxHL := usable / 7 // ~14% of usable budget for highlights
+			if hlText := formatHighlights(highlights, maxHL); hlText != "" {
+				highlightSection = hlText
+				contentBudget = usable - len(highlightSection)
+			}
+		}
+	}
+
+	headLen := contentBudget * 2 / 5 // 40% head
+	tailLen := contentBudget * 3 / 5 // 50% tail (errors/results at end are more important)
 
 	// Snap byte offsets to rune boundaries to prevent UTF-8 corruption.
 	head := s[:util.SnapToRuneStart(s, headLen)]
@@ -97,7 +126,93 @@ func truncateHeadTail(s string, maxLen int) string {
 		tail = tail[idx+1:]
 	}
 
-	return head + marker + tail
+	return head + marker + highlightSection + tail
+}
+
+// criticalLinePatterns are substrings that indicate an actionable diagnostic
+// line worth preserving during truncation. Matching is case-insensitive.
+var criticalLinePatterns = []string{
+	"panic:", "panic(", "fatal error", "fatal:",
+	"error:", "error ", " errors ",
+	"undefined:", "undefined reference", "undefined symbol",
+	"cannot find", "not found", "no such file",
+	"exception", "traceback",
+	"fail:", "fail ", "failed", "failure",
+	"segmentation fault", "sigsegv",
+	"assertion failed", "assert failed",
+	"warning:", "deprecated",
+	"securitywarning", "vulnerability",
+	"syntaxerror", "indentationerror",
+	"permission denied", "access denied",
+	"timeout", "timed out",
+	"exit code", "exit status",
+}
+
+// maxCriticalLines caps the number of extracted highlight lines to avoid
+// overwhelming the context budget with diagnostics from very noisy logs.
+const maxCriticalLines = 20
+
+// maxCriticalLineLen skips lines longer than this — they are typically stack
+// traces or data dumps that are too verbose to be useful as highlights.
+const maxCriticalLineLen = 300
+
+// extractCriticalLines scans content for lines containing error, warning, or
+// failure patterns. Returns deduplicated lines in order of first appearance.
+func extractCriticalLines(s string) []string {
+	lines := strings.Split(s, "\n")
+	var critical []string
+	seen := make(map[string]bool)
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if len(trimmed) == 0 || len(trimmed) > maxCriticalLineLen {
+			continue
+		}
+		lower := strings.ToLower(trimmed)
+		matched := false
+		for _, pattern := range criticalLinePatterns {
+			if strings.Contains(lower, pattern) {
+				matched = true
+				break
+			}
+		}
+		if matched && !seen[trimmed] {
+			seen[trimmed] = true
+			critical = append(critical, trimmed)
+			if len(critical) >= maxCriticalLines {
+				break
+			}
+		}
+	}
+	return critical
+}
+
+// formatHighlights renders extracted critical lines into a compact section
+// suitable for insertion into truncated output. Returns empty string if the
+// formatted result would exceed maxLen or no lines are provided.
+func formatHighlights(lines []string, maxLen int) string {
+	if len(lines) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("[... %d key lines from truncated section ...]\n", len(lines)))
+	for i, line := range lines {
+		entry := line + "\n"
+		remaining := len(lines) - i - 1
+		footer := "\n\n"
+		if remaining > 0 {
+			footer = fmt.Sprintf("  (... %d more ...)\n\n", remaining)
+		}
+		if sb.Len()+len(entry)+len(footer) > maxLen {
+			if remaining > 0 {
+				sb.WriteString(fmt.Sprintf("  (... %d more ...)\n", remaining))
+			}
+			break
+		}
+		sb.WriteString(entry)
+	}
+	sb.WriteString("\n")
+	return sb.String()
 }
 
 func formatBytes(n int) string {
