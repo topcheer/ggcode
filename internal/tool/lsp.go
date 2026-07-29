@@ -610,6 +610,7 @@ func NewLSPTools(workingDir string, readSandbox, writeSandbox AllowedPathChecker
 			},
 		},
 		lspPathTool{
+			name:         "lsp_symbols",
 			description:  "List document symbols for a source file.",
 			workingDir:   workingDir,
 			sandboxCheck: readSandbox,
