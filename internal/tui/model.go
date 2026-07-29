@@ -72,8 +72,6 @@ type policyModeGetter interface {
 	Mode() permission.PermissionMode
 }
 
-const maxOutputLines = 50000
-
 // startupInputGateWindow suppresses terminal noise (CSI/OSC responses) that
 // arrive shortly after program start. During this window, only single
 // printable characters with no modifiers are passed to textinput; everything

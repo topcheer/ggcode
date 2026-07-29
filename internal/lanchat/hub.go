@@ -1764,13 +1764,6 @@ func (h *Hub) hasMessageLocked(msgID string) bool {
 	return false
 }
 
-func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
-}
-
 // Close broadcasts a leave message to all peers and stops the UDP transport.
 // Idempotent — safe to call multiple times. Call this on application shutdown
 // so peers detect offline immediately instead of waiting for the heartbeat

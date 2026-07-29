@@ -250,12 +250,8 @@ func listTarFromReader(r io.Reader) ([]archiveFile, error) {
 	return files, nil
 }
 
-// extractArchiveContent recursively extracts text from a nested archive.
+// extractArchiveContentDepth recursively extracts text from a nested archive.
 // Depth is tracked to prevent stack overflow from malicious archives.
-func extractArchiveContent(data []byte, ext string) string {
-	return extractArchiveContentDepth(data, ext, 0)
-}
-
 func extractArchiveContentDepth(data []byte, ext string, depth int) string {
 	if depth >= maxArchiveDepth {
 		return ""
