@@ -62,6 +62,26 @@ func (Git) IsClean(ctx context.Context, dir string) (bool, error) {
 	return strings.TrimSpace(out) == "", nil
 }
 
+// AheadBehind returns the number of commits the local branch is ahead of and
+// behind its upstream tracking branch. ok is false if there is no upstream
+// configured or the command fails.
+func (Git) AheadBehind(ctx context.Context, dir string) (ahead, behind int, ok bool) {
+	out, err := runVCSCmd(ctx, dir, "git", "rev-list", "--left-right", "--count", "@{upstream}...HEAD")
+	if err != nil {
+		return 0, 0, false
+	}
+	fields := strings.Fields(strings.TrimSpace(out))
+	if len(fields) != 2 {
+		return 0, 0, false
+	}
+	b, err1 := strconv.Atoi(fields[0])
+	a, err2 := strconv.Atoi(fields[1])
+	if err1 != nil || err2 != nil {
+		return 0, 0, false
+	}
+	return a, b, true
+}
+
 // runVCSCmd executes a VCS command in the given directory.
 func runVCSCmd(ctx context.Context, dir, name string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, name, args...)

@@ -1376,11 +1376,9 @@ func init() {
 
 // detectGitStatus returns a short git status string or "".
 func detectGitStatus(workingDir string) string {
-	v := vcs.Detect(workingDir)
-	if v == nil {
-		return "not a version-controlled repository"
-	}
-	return "in a " + v.DisplayName() + " repository"
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	return vcs.Summary(ctx, workingDir)
 }
 
 func toTuiMCPInfos(infos []plugin.MCPServerInfo) []tui.MCPInfo {
