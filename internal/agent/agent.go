@@ -125,6 +125,7 @@ type Agent struct {
 	autopilotGoalAsked         bool                 // true after the goal-collection instruction has been injected
 	autopilotGoalSet           bool                 // true after the user has confirmed a goal (goal text is non-empty)
 	autopilotStrategistCount   int                  // number of strategist calls this run (safety valve)
+	strategistBudgetAnnounced  bool                 // true once the budget-exhausted message has been injected
 	reflectionFunc             ReflectionFunc       // called after each run with accumulated stats
 	loopDetector               loopDetector         // tracks consecutive identical tool calls to detect stuck loops
 	errorClassifier            *ErrorClassifier     // immediate type-specific guidance on tool errors (AgentDebug-inspired)
@@ -861,6 +862,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	todoCheckCount := 0
 
 	a.autopilotStrategistCount = 0
+	a.strategistBudgetAnnounced = false
 
 	// Reset monitoring systems once at run start, NOT inside the iteration
 	// loop. These systems accumulate state across iterations within a run.
@@ -1138,13 +1140,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					a.clearAutopilotGoal()
 					return nil
 				}
-			} else if a.currentMode() == permission.AutopilotMode && a.hasAutopilotGoal() {
-				// Strategist call budget exhausted. Instead of stopping the run,
-				// inject a guidance message that pushes the agent to verify its
-				// work and continue any remaining tasks. This keeps autopilot
-				// running through the natural maxIter limit rather than cutting
-				// short at an arbitrary strategist count.
-				debug.Log("agent", "Iteration %d: strategist budget exhausted (%d/%d), injecting continuation guidance", i+1, a.autopilotStrategistCount, maxAutopilotStrategistCalls)
+			} else if a.currentMode() == permission.AutopilotMode && a.hasAutopilotGoal() && !a.strategistBudgetAnnounced {
+				// Strategist call budget exhausted. Inject a one-time guidance
+				// message so the agent can wrap up or continue with its own
+				// judgment. Without the flag this would re-inject on every
+				// subsequent no-tool-call iteration, creating an infinite loop.
+				a.strategistBudgetAnnounced = true
+				debug.Log("agent", "Iteration %d: strategist budget exhausted (%d/%d), injecting one-time continuation guidance", i+1, a.autopilotStrategistCount, maxAutopilotStrategistCalls)
 				onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: fmt.Sprintf("[Strategist budget at limit (%d/%d) — continuing autonomously]", a.autopilotStrategistCount, maxAutopilotStrategistCalls)})
 				a.contextManager.Add(provider.Message{
 					Role: "user",
