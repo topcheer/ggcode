@@ -97,6 +97,9 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 
 		// Screenshot
 		ScreenshotTool{},
+
+		// Clipboard (read/write system clipboard)
+		ClipboardTool{},
 	)
 	for _, tool := range tools {
 		if err := registry.Register(tool); err != nil {

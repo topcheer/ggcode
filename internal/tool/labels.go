@@ -134,6 +134,12 @@ func DescribeTool(toolName, rawArgs string) ToolPresentation {
 		return browserLabel(args)
 	case "screenshot":
 		return screenshotLabel(args)
+	case "clipboard":
+		action := argStr(args, "action")
+		if action == "write" {
+			return toolPres("Copy to Clipboard", "")
+		}
+		return toolPres("Read Clipboard", "")
 	case "mobile_device":
 		return mobileDeviceLabel(args)
 	case "todo_write":

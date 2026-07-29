@@ -563,6 +563,7 @@ func TestIsReadOnlyTool_AllTools(t *testing.T) {
 	writeTools := []string{
 		"write_file", "edit_file", "multi_edit_file", "multi_file_edit", "run_command",
 		"start_command", "write_command_input", "git_add", "git_commit", "git_push",
+		"clipboard",
 	}
 
 	for _, tool := range writeTools {
