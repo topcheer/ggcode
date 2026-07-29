@@ -72,10 +72,6 @@ func (m *Model) clearPendingSubmissions() {
 	m.pending.clear()
 }
 
-func (m *Model) pendingSubmissionSnapshot() []string {
-	return m.pending.snapshot()
-}
-
 func (m *Model) cancelActiveRun() {
 	m.resetCancelConfirm()
 	if m.runCanceled {
@@ -294,15 +290,6 @@ func (q *pendingQueue) syncItemsFromQueueLocked(queue *agentruntime.PendingQueue
 	}
 	q.items = items
 	q.q = queue
-}
-
-func (q *pendingQueue) enqueue(text string) int {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	queue := q.ensureQueueLocked()
-	count := queue.Enqueue(text, false, nil)
-	q.syncItemsFromQueueLocked(queue)
-	return count
 }
 
 // enqueueWithImages stores images alongside the pending text in q.items.

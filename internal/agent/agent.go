@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -1868,10 +1867,4 @@ func (a *Agent) fillCancelledToolResults(pending []provider.ToolCallDelta, resul
 			Content: *results,
 		})
 	}
-}
-
-// isJSON checks if raw message is valid JSON (for tool calls).
-func isJSON(data json.RawMessage) bool {
-	var v interface{}
-	return json.Unmarshal(data, &v) == nil
 }

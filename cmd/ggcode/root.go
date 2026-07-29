@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -20,7 +19,6 @@ import (
 	"github.com/topcheer/ggcode/internal/agentruntime"
 	"github.com/topcheer/ggcode/internal/auth"
 	"github.com/topcheer/ggcode/internal/checkpoint"
-	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/im"
@@ -1383,168 +1381,6 @@ func detectGitStatus(workingDir string) string {
 		return "not a version-controlled repository"
 	}
 	return "in a " + v.DisplayName() + " repository"
-}
-
-func buildSkillsSystemPrompt(skills []*commands.Command) string {
-	prompt, _ := buildSkillsSystemPromptWithPromptRefs(skills)
-	return prompt
-}
-
-func buildSkillsSystemPromptWithPromptRefs(skills []*commands.Command) (string, []string) {
-	var lines []string
-	lines = append(lines,
-		"Use the skill tool to load reusable workflows when they clearly match the user's task.",
-		"",
-		"When a listed skill is a close match, invoke the skill tool before continuing.",
-		"Do not mention a skill without calling the skill tool.",
-		"Do not use the skill tool for built-in CLI commands like /help or /clear.",
-		"",
-		"Available skills:",
-	)
-	const maxChars = 4000
-	const maxDescChars = 180
-	total := 0
-	included := 0
-	mcpSkillCount := 0
-	mcpServers := make(map[string]struct{})
-	var promptSkillRefs []string
-	for _, skill := range prioritizedSkillsForPrompt(skills) {
-		name := strings.TrimSpace(skill.Name)
-		if name == "" {
-			continue
-		}
-		if skill.LoadedFrom == commands.LoadedFromMCP || skill.Source == commands.SourceMCP {
-			mcpSkillCount++
-			if server, _, ok := strings.Cut(name, ":"); ok {
-				server = strings.TrimSpace(server)
-				if server != "" {
-					mcpServers[server] = struct{}{}
-				}
-			}
-			continue
-		}
-		desc := strings.TrimSpace(skill.Description)
-		if when := strings.TrimSpace(skill.WhenToUse); when != "" {
-			if desc != "" {
-				desc += " - "
-			}
-			desc += when
-		}
-		if len(desc) > maxDescChars {
-			desc = desc[:maxDescChars-1] + "..."
-		}
-		line := fmt.Sprintf("- %s: %s", name, desc)
-		if total+len(line)+1 > maxChars {
-			break
-		}
-		lines = append(lines, line)
-		total += len(line) + 1
-		included++
-		if ref := skillPromptExposureRef(skill); ref != "" {
-			promptSkillRefs = append(promptSkillRefs, ref)
-		}
-	}
-	if mcpSkillCount > 0 {
-		servers := sortedStringKeys(mcpServers)
-		summary := fmt.Sprintf("- MCP prompt-backed skills are also available from connected MCP servers (%d total", mcpSkillCount)
-		if len(servers) > 0 {
-			summary += "; servers: " + strings.Join(servers, ", ")
-		}
-		summary += ")."
-		if total+len(summary)+1 <= maxChars {
-			lines = append(lines, summary)
-			total += len(summary) + 1
-		}
-	}
-	if hidden := countModelVisibleSkills(skills) - included - mcpSkillCount; hidden > 0 {
-		lines = append(lines, fmt.Sprintf("- ... and %d more skills available via the skill tool and /skills", hidden))
-	}
-	return strings.Join(lines, "\n"), promptSkillRefs
-}
-
-func skillPromptExposureRef(skill *commands.Command) string {
-	if skill == nil || skill.LoadedFrom != commands.LoadedFromSkills {
-		return ""
-	}
-	name := strings.TrimSpace(skill.Name)
-	if name == "" {
-		return ""
-	}
-	switch skill.Source {
-	case commands.SourceProject:
-		return knight.FormatSkillRefForDisplay("project", name)
-	case commands.SourceUser:
-		return knight.FormatSkillRefForDisplay("global", name)
-	default:
-		return ""
-	}
-}
-
-func prioritizedSkillsForPrompt(skills []*commands.Command) []*commands.Command {
-	out := make([]*commands.Command, 0, len(skills))
-	for _, skill := range skills {
-		if skill == nil || skill.DisableModelInvocation || !skill.Enabled || strings.TrimSpace(skill.Name) == "" {
-			continue
-		}
-		out = append(out, skill)
-	}
-	sort.SliceStable(out, func(i, j int) bool {
-		iBundled := out[i].LoadedFrom == commands.LoadedFromBundled || out[i].Source == commands.SourceBundled
-		jBundled := out[j].LoadedFrom == commands.LoadedFromBundled || out[j].Source == commands.SourceBundled
-		if iBundled != jBundled {
-			return iBundled
-		}
-		iMCP := out[i].LoadedFrom == commands.LoadedFromMCP || out[i].Source == commands.SourceMCP
-		jMCP := out[j].LoadedFrom == commands.LoadedFromMCP || out[j].Source == commands.SourceMCP
-		if iMCP != jMCP {
-			return !iMCP
-		}
-		return out[i].Name < out[j].Name
-	})
-	return out
-}
-
-func sortedStringKeys(values map[string]struct{}) []string {
-	if len(values) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(values))
-	for value := range values {
-		out = append(out, value)
-	}
-	sort.Strings(out)
-	return out
-}
-
-func countModelVisibleSkills(skills []*commands.Command) int {
-	count := 0
-	for _, skill := range skills {
-		if skill != nil && !skill.DisableModelInvocation && skill.Enabled && strings.TrimSpace(skill.Name) != "" {
-			count++
-		}
-	}
-	return count
-}
-
-func buildMCPSkillCommands(snapshots []tool.MCPServerSnapshot) []*commands.Command {
-	out := make([]*commands.Command, 0)
-	for _, snap := range snapshots {
-		for _, promptName := range snap.PromptNames {
-			name := strings.TrimSpace(snap.Name + ":" + promptName)
-			if name == ":" || strings.TrimSpace(promptName) == "" || strings.TrimSpace(snap.Name) == "" {
-				continue
-			}
-			out = append(out, &commands.Command{
-				Name:          name,
-				Description:   fmt.Sprintf("MCP prompt from %s", snap.Name),
-				WhenToUse:     fmt.Sprintf("Use when the %s MCP prompt %q matches the user's request.", snap.Name, promptName),
-				Source:        commands.SourceMCP,
-				LoadedFrom:    commands.LoadedFromMCP,
-				UserInvocable: true,
-			})
-		}
-	}
-	return out
 }
 
 func toTuiMCPInfos(infos []plugin.MCPServerInfo) []tui.MCPInfo {

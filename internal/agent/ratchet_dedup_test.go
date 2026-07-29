@@ -4,7 +4,6 @@ package agent
 
 import (
 	"testing"
-	"time"
 )
 
 func TestRuleSimilarity_IdenticalRules(t *testing.T) {
@@ -45,16 +44,5 @@ func TestRuleSimilarity_EmptyRules(t *testing.T) {
 	b := Rule{Rule: "test", ToolPattern: "x"}
 	if sim := ruleSimilarity(a, b); sim != 0 {
 		t.Errorf("empty rule should have 0 similarity, got %.2f", sim)
-	}
-}
-
-func TestMaxTime(t *testing.T) {
-	a := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
-	b := time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC)
-	if maxTime(a, b) != b {
-		t.Error("maxTime should return later time")
-	}
-	if maxTime(b, a) != b {
-		t.Error("maxTime should be symmetric")
 	}
 }

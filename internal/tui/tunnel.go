@@ -406,10 +406,6 @@ func (m *Model) handleTunnelRefreshMsg(msg tunnelRefreshMsg) (tea.Model, tea.Cmd
 	return m, nil
 }
 
-func (m *Model) handleTunnelClientConnectedMsg() (tea.Model, tea.Cmd) {
-	return m.handleTunnelClientConnectedMsgForGeneration(0)
-}
-
 func (m *Model) handleTunnelClientConnectedMsgForGeneration(generation uint64) (tea.Model, tea.Cmd) {
 	if !m.isCurrentTunnelGeneration(generation) {
 		return m, nil
@@ -1970,64 +1966,6 @@ func (m *Model) prepareCurrentSessionTunnelLedger() {
 				m.tunnelBroker.SetAuthorityEpoch(epoch)
 			}
 		}
-	}
-}
-
-func (m *Model) resetCurrentSessionTunnelLedger() {
-	m.sessionMutex().Lock()
-	if m.session == nil || m.sessionStore == nil {
-		m.sessionMutex().Unlock()
-		return
-	}
-	m.session.TunnelEvents = nil
-	m.session.TunnelEventsComplete = false
-	ses := m.session
-	projectionStore := m.tunnelHostProjectionStore()
-	m.sessionMutex().Unlock()
-
-	// Tunnel events are no longer persisted to session JSONL.
-	// Only cut authority in the projection store to reset the ledger.
-	if projectionStore != nil {
-		if epoch, err := projectionStore.CutAuthority(ses.ID); err == nil {
-			if m.tunnelEventBroker() != nil {
-				m.tunnelEventBroker().SetAuthorityEpoch(epoch)
-			}
-			if m.tunnelBroker != nil {
-				m.tunnelBroker.SetAuthorityEpoch(epoch)
-			}
-		}
-	}
-}
-
-func (m *Model) recordTunnelEvent(ev tunnel.GatewayMessage) {
-	m.sessionMutex().Lock()
-	if m.session == nil || m.sessionStore == nil || ev.EventID == "" || ev.Type == tunnel.EventSnapshotReset {
-		m.sessionMutex().Unlock()
-		return
-	}
-	record := session.TunnelEvent{
-		EventID:  ev.EventID,
-		StreamID: ev.StreamID,
-		Type:     ev.Type,
-		Data:     append([]byte(nil), ev.Data...),
-	}
-	m.session.TunnelEvents = append(m.session.TunnelEvents, record)
-	// Prune old tunnel events to bound memory and future Save() output.
-	// The relay server has its own SQLite persistence for full replay.
-	if len(m.session.TunnelEvents) > session.MaxTunnelEvents {
-		pruneIdx := len(m.session.TunnelEvents) - session.MaxTunnelEvents
-		m.session.TunnelEvents = m.session.TunnelEvents[pruneIdx:]
-	}
-	ses := m.session
-	store := m.sessionStore
-	m.sessionMutex().Unlock()
-
-	if jsonlStore, ok := store.(*session.JSONLStore); ok {
-		_ = jsonlStore.AppendTunnelEventToDisk(ses, record)
-	} else {
-		m.sessionMutex().Lock()
-		_ = store.Save(ses)
-		m.sessionMutex().Unlock()
 	}
 }
 

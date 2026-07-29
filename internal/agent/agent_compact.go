@@ -2,11 +2,7 @@ package agent
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io"
-	"net"
-	"strings"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -283,54 +279,6 @@ func (a *Agent) compactLocallyForSendBudget(reason string) bool {
 		debug.Log("agent", "%s: truncation unavailable/ineffective tokens=%d budget=%d", reason, before, budget)
 	}
 	return changed
-}
-
-// shouldIgnoreAutoCompactError returns true for transient network/timeout errors
-// that should not abort the agent loop.
-func shouldIgnoreAutoCompactError(err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || isPromptTooLongError(err) {
-		return false
-	}
-	if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
-		return true
-	}
-	var netErr net.Error
-	if errors.As(err, &netErr) {
-		return true
-	}
-	s := strings.ToLower(err.Error())
-	for _, keyword := range []string{
-		"unexpected eof",
-		"connection reset by peer",
-		"broken pipe",
-		"timeout awaiting response headers",
-		"tls handshake timeout",
-		"server closed idle connection",
-		"temporary failure in name resolution",
-	} {
-		if strings.Contains(s, keyword) {
-			return true
-		}
-	}
-	return false
-}
-
-// compactErrorReason returns a human-readable summary of a compaction error.
-func compactErrorReason(err error) string {
-	if err == nil {
-		return "unknown error"
-	}
-	text := strings.TrimSpace(err.Error())
-	text = strings.TrimPrefix(text, "summarization call failed: ")
-	text = strings.TrimPrefix(text, "auto-summarize failed: ")
-	text = strings.ReplaceAll(text, "\n", " ")
-	if len([]rune(text)) > 120 {
-		text = string([]rune(text)[:117]) + "..."
-	}
-	return text
 }
 
 // maybeSaveCheckpoint triggers the checkpoint callback if one is registered.

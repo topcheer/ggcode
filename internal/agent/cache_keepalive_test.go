@@ -8,17 +8,31 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
+// keepaliveIsActive returns true if keepalive is currently running.
+func keepaliveIsActive(k *cacheKeepaliveState) bool {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.timer != nil
+}
+
+// keepaliveTouchCount returns the number of keepalive pings sent so far.
+func keepaliveTouchCount(k *cacheKeepaliveState) int {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.touches
+}
+
 func TestCacheKeepalive_BasicLifecycle(t *testing.T) {
 	k := newCacheKeepaliveState()
 
 	// Initially not active
-	if k.isActive() {
+	if keepaliveIsActive(k) {
 		t.Fatal("keepalive should not be active initially")
 	}
 
 	// Stop when not started should be a no-op
 	k.stopIdle()
-	if k.isActive() {
+	if keepaliveIsActive(k) {
 		t.Fatal("keepalive should not be active after stopIdle on unstarted state")
 	}
 }
@@ -27,7 +41,7 @@ func TestCacheKeepalive_NilProviderNoOp(t *testing.T) {
 	k := newCacheKeepaliveState()
 	// startIdle with nil provider should be a no-op
 	k.startIdle(nil, nil, nil)
-	if k.isActive() {
+	if keepaliveIsActive(k) {
 		t.Fatal("keepalive should not start with nil provider")
 	}
 }
@@ -37,7 +51,7 @@ func TestCacheKeepalive_NonAnthropicProviderNoOp(t *testing.T) {
 
 	p := &mockKeepaliveProvider{name: "openai"}
 	k.startIdle(p, nil, nil)
-	if k.isActive() {
+	if keepaliveIsActive(k) {
 		t.Fatal("keepalive should not start for non-Anthropic provider")
 	}
 }
@@ -47,15 +61,15 @@ func TestCacheKeepalive_AnthropicProviderStarts(t *testing.T) {
 	p := &mockKeepaliveProvider{name: "anthropic"}
 
 	k.startIdle(p, nil, nil)
-	if !k.isActive() {
+	if !keepaliveIsActive(k) {
 		t.Fatal("keepalive should be active for Anthropic provider")
 	}
 
 	k.stopIdle()
-	if k.isActive() {
+	if keepaliveIsActive(k) {
 		t.Fatal("keepalive should not be active after stopIdle")
 	}
-	if k.touchCount() != 0 {
+	if keepaliveTouchCount(k) != 0 {
 		t.Fatal("touch count should be reset to 0 after stopIdle")
 	}
 }
@@ -65,7 +79,7 @@ func TestCacheKeepalive_MaxTouchesPreventsScheduling(t *testing.T) {
 	p := &mockKeepaliveProvider{name: "anthropic"}
 
 	k.startIdle(p, nil, nil)
-	if !k.isActive() {
+	if !keepaliveIsActive(k) {
 		t.Fatal("keepalive should be active for Anthropic provider")
 	}
 
@@ -74,8 +88,8 @@ func TestCacheKeepalive_MaxTouchesPreventsScheduling(t *testing.T) {
 	k.touches = cacheKeepaliveMaxTouches
 	k.mu.Unlock()
 
-	if k.touchCount() != cacheKeepaliveMaxTouches {
-		t.Fatalf("expected %d touches, got %d", cacheKeepaliveMaxTouches, k.touchCount())
+	if keepaliveTouchCount(k) != cacheKeepaliveMaxTouches {
+		t.Fatalf("expected %d touches, got %d", cacheKeepaliveMaxTouches, keepaliveTouchCount(k))
 	}
 
 	k.stopIdle()

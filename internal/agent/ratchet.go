@@ -263,7 +263,10 @@ func (rs *RuleStore) DeduplicateRules() int {
 			if sim >= 0.55 {
 				// Merge into the kept rule: sum hit counts, keep latest LastSeen
 				kept[j].HitCount += rs.rules[i].HitCount
-				kept[j].LastSeen = maxTime(kept[j].LastSeen, rs.rules[i].LastSeen)
+				kept[j].LastSeen = rs.rules[i].LastSeen
+				if rs.rules[i].LastSeen.After(kept[j].LastSeen) {
+					kept[j].LastSeen = rs.rules[i].LastSeen
+				}
 				merged++
 				isDup = true
 				debug.Log("ratchet", "dedup merged #%d into #%d (sim=%.2f)", i+1, j+1, sim)
@@ -283,13 +286,6 @@ func (rs *RuleStore) DeduplicateRules() int {
 		debug.Log("ratchet", "dedup removed %d duplicate rules (%d → %d)", merged, len(rs.rules)+merged, len(kept))
 	}
 	return merged
-}
-
-func maxTime(a, b time.Time) time.Time {
-	if a.After(b) {
-		return a
-	}
-	return b
 }
 
 // Rules returns a copy of all rules.
@@ -378,44 +374,6 @@ func recencyWeightedScore(hitCount int, lastSeen, now time.Time) float64 {
 	}
 	recencyWeight := 1.0 / (1.0 + daysSince/7.0)
 	return float64(hitCount) * recencyWeight
-}
-
-// CleanStale removes rules that are both stale (not hit in staleRuleThreshold)
-// and low-value (HitCount < staleRuleMinHits). High-value rules
-// (HitCount >= staleRuleMinHits) are always preserved even if stale.
-// Returns the number of rules removed.
-func (rs *RuleStore) CleanStale() int {
-	rs.mu.Lock()
-	defer rs.mu.Unlock()
-	rs.load()
-
-	if len(rs.rules) == 0 {
-		return 0
-	}
-
-	now := time.Now()
-	kept := rs.rules[:0]
-	removed := 0
-	for _, r := range rs.rules {
-		isStale := now.Sub(r.LastSeen) > staleRuleThreshold
-		isLowValue := r.HitCount < staleRuleMinHits
-		if isStale && isLowValue {
-			removed++
-			debug.Log("ratchet", "cleaned stale rule %s (hits=%d, last_seen=%s ago)",
-				r.ID, r.HitCount, r.LastSeen.Format("2006-01-02"))
-			continue
-		}
-		kept = append(kept, r)
-	}
-	rs.rules = kept
-
-	if removed > 0 {
-		if err := rs.save(); err != nil {
-			debug.Log("ratchet", "failed to save after cleaning stale rules: %v", err)
-		}
-		debug.Log("ratchet", "cleaned %d stale rules (%d → %d)", removed, len(rs.rules)+removed, len(rs.rules))
-	}
-	return removed
 }
 
 // MatchingRulesForTool returns rules whose category matches the tool name

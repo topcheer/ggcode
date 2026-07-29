@@ -456,26 +456,6 @@ func TestAgent_ProjectMemoryFiles(t *testing.T) {
 // agent.go — internal helpers
 // ---------------------------------------------------------------------------
 
-func TestIsJSON(t *testing.T) {
-	tests := []struct {
-		input string
-		want  bool
-	}{
-		{`{"key": "value"}`, true},
-		{`[1, 2, 3]`, true},
-		{`null`, true},
-		{`not json`, false},
-		{``, false},
-		{`{"unclosed": `, false},
-	}
-	for _, tt := range tests {
-		got := isJSON(json.RawMessage(tt.input))
-		if got != tt.want {
-			t.Errorf("isJSON(%q) = %v, want %v", tt.input, got, tt.want)
-		}
-	}
-}
-
 func TestTruncateStr(t *testing.T) {
 	if got := util.Truncate("hello", 3); got != "hel" {
 		t.Fatalf("expected 'hel', got %q", got)
@@ -800,25 +780,6 @@ func TestExecuteFileTool_InvalidArgs(t *testing.T) {
 // agent_tool.go — indexOf
 // ---------------------------------------------------------------------------
 
-func TestIndexOf(t *testing.T) {
-	tests := []struct {
-		s, substr string
-		want      int
-	}{
-		{"hello world", "world", 6},
-		{"hello", "x", -1},
-		{"", "a", -1},
-		{"abc", "", 0},
-		{"aaa", "a", 0},
-	}
-	for _, tt := range tests {
-		got := indexOf(tt.s, tt.substr)
-		if got != tt.want {
-			t.Errorf("indexOf(%q, %q) = %d, want %d", tt.s, tt.substr, got, tt.want)
-		}
-	}
-}
-
 // ---------------------------------------------------------------------------
 // agent_memory.go — projectMemoryTargetsForTool, collectProjectMemoryTargets,
 // toolCanTriggerProjectMemory, projectMemoryPathKey, normalizeProjectMemoryPath
@@ -999,51 +960,6 @@ func TestIsPromptTooLongError(t *testing.T) {
 		got := isPromptTooLongError(tt.err)
 		if got != tt.want {
 			t.Errorf("isPromptTooLongError(%v) = %v, want %v", tt.err, got, tt.want)
-		}
-	}
-}
-
-func TestShouldIgnoreAutoCompactError(t *testing.T) {
-	tests := []struct {
-		err  error
-		want bool
-	}{
-		{errors.New("unexpected EOF"), true},
-		{errors.New("connection reset by peer"), true},
-		{errors.New("broken pipe"), true},
-		{errors.New("server closed idle connection"), true},
-		{errors.New("tls handshake timeout"), true},
-		{errors.New("temporary failure in name resolution"), true},
-		{errors.New("timeout awaiting response headers"), true},
-		{context.Canceled, false},
-		{context.DeadlineExceeded, false},
-		{errors.New("prompt too long"), false},
-		{errors.New("some retryable API error"), false},
-		{nil, false},
-	}
-	for _, tt := range tests {
-		got := shouldIgnoreAutoCompactError(tt.err)
-		if got != tt.want {
-			t.Errorf("shouldIgnoreAutoCompactError(%v) = %v, want %v", tt.err, got, tt.want)
-		}
-	}
-}
-
-func TestCompactErrorReason(t *testing.T) {
-	tests := []struct {
-		err  error
-		want string
-	}{
-		{errors.New("summarization call failed: timeout"), "timeout"},
-		{errors.New("auto-summarize failed: rate limit"), "rate limit"},
-		{errors.New("simple error"), "simple error"},
-		{nil, "unknown error"},
-		{errors.New(strings.Repeat("x", 200)), strings.Repeat("x", 117) + "..."},
-	}
-	for _, tt := range tests {
-		got := compactErrorReason(tt.err)
-		if got != tt.want {
-			t.Errorf("compactErrorReason(%v) = %q, want %q", tt.err, got, tt.want)
 		}
 	}
 }

@@ -155,17 +155,3 @@ func (k *cacheKeepaliveState) doPing(ctx context.Context) {
 	}
 	k.mu.Unlock()
 }
-
-// isActive returns true if keepalive is currently running.
-func (k *cacheKeepaliveState) isActive() bool {
-	k.mu.Lock()
-	defer k.mu.Unlock()
-	return k.timer != nil
-}
-
-// touchCount returns the number of keepalive pings sent so far.
-func (k *cacheKeepaliveState) touchCount() int {
-	k.mu.Lock()
-	defer k.mu.Unlock()
-	return k.touches
-}

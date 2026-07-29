@@ -243,32 +243,6 @@ func truncateTailByWidth(s string, maxW int) string {
 	return ""
 }
 
-// truncateHeadByWidth truncates a string from the head so that its visual
-// width does not exceed maxW, keeping the tail (useful for file paths where
-// the filename is at the end).
-func truncateHeadByWidth(s string, maxW int) string {
-	if lipgloss.Width(s) <= maxW {
-		return s
-	}
-	runes := []rune(s)
-	for len(runes) > 0 {
-		runes = runes[1:]
-		if lipgloss.Width(string(runes)) <= maxW {
-			// Skip leading partial ANSI escape
-			result := string(runes)
-			if idx := strings.Index(result, "\x1b["); idx > 0 {
-				// Check if there's a broken escape at the start
-				if end := strings.Index(result[idx:], "m"); end != -1 {
-					return result
-				}
-				return result[:idx] + result[idx:]
-			}
-			return result
-		}
-	}
-	return ""
-}
-
 // ToolBodyMaxLines is the maximum number of body lines shown before truncation.
 const ToolBodyMaxLines = 10
 

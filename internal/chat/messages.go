@@ -373,25 +373,3 @@ func (s *SystemItem) Height(width int) int {
 	}
 	return measureHeight(s.Render(width))
 }
-
-// --- Spacer Item ---
-
-// SpacerItem adds vertical space between message groups.
-type SpacerItem struct {
-	height int
-}
-
-// NewSpacerItem creates a spacer with the given height in lines.
-func NewSpacerItem(height int) *SpacerItem {
-	return &SpacerItem{height: height}
-}
-
-func (s *SpacerItem) ID() string { return "" }
-
-func (s *SpacerItem) Render(width int) string {
-	return strings.Repeat("\n", max(s.height-1, 0))
-}
-
-func (s *SpacerItem) Height(width int) int {
-	return s.height
-}

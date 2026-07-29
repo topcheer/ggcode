@@ -6,28 +6,6 @@ import (
 	"unicode/utf8"
 )
 
-func TestParseToolInputArg(t *testing.T) {
-	got := parseToolInputArg(`{"file_path": "/tmp/test.go"}`, "file_path")
-	if got != "/tmp/test.go" {
-		t.Errorf("expected '/tmp/test.go', got %q", got)
-	}
-	got = parseToolInputArg(`{"file_path": "/tmp/test.go"}`, "command")
-	if got != "" {
-		t.Errorf("expected empty for missing key, got %q", got)
-	}
-	got = parseToolInputArg("invalid json", "file_path")
-	if got != "" {
-		t.Errorf("expected empty for invalid json, got %q", got)
-	}
-}
-
-func TestParseToolInputArgAny(t *testing.T) {
-	got := parseToolInputArgAny(`{"file_path": "/tmp/test.go"}`, "command", "file_path")
-	if got != "/tmp/test.go" {
-		t.Errorf("expected '/tmp/test.go', got %q", got)
-	}
-}
-
 func TestFormatJSONResult(t *testing.T) {
 	got := FormatJSONResult(`{"ID": "123", "Prompt": "test prompt"}`)
 	if got == "" {
@@ -80,23 +58,6 @@ func TestPrettifyJSONKey(t *testing.T) {
 func TestSwarmTaskCreateUsesMarkdownBody(t *testing.T) {
 	if got := GetToolBodyBehavior("swarm_task_create"); got != BodyMarkdown {
 		t.Fatalf("expected swarm_task_create markdown body, got %v", got)
-	}
-}
-
-func TestNewSpacerItem(t *testing.T) {
-	item := NewSpacerItem(5)
-	if item == nil {
-		t.Error("expected non-nil")
-	}
-	if item.ID() != "" {
-		t.Errorf("expected empty ID for spacer, got %q", item.ID())
-	}
-}
-
-func TestSpacerHeight(t *testing.T) {
-	item := SpacerItem{height: 3}
-	if item.Height(80) != 3 {
-		t.Errorf("expected 3, got %d", item.Height(80))
 	}
 }
 
@@ -187,13 +148,6 @@ func TestTodoToolItemRenderKeepsActiveTaskUTF8Valid(t *testing.T) {
 	}
 	if strings.ContainsRune(rendered, utf8.RuneError) {
 		t.Fatalf("expected no replacement rune in render, got %q", rendered)
-	}
-}
-
-func TestTruncateHeadByWidth(t *testing.T) {
-	got := truncateHeadByWidth("hello world", 5)
-	if got == "" {
-		t.Error("expected non-empty")
 	}
 }
 

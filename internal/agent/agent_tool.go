@@ -484,12 +484,6 @@ func buildMultiFileDiffText(plans []tool.PlannedFileEdit) (string, bool) {
 	return out.String(), hasChanges
 }
 
-// indexOf returns the index of the first occurrence of substr in s, or -1.
-// Delegates to strings.Index which uses optimized search algorithms.
-func indexOf(s, substr string) int {
-	return strings.Index(s, substr)
-}
-
 // toolWorkingDirMu is a safety-net mutex for syncToolWorkingDir. With Registry.Clone(),
 // each agent has its own tool instances and this mutex should never be contended.
 // It exists as a last resort in case a tool without a Clone() implementation is

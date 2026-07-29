@@ -6,15 +6,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 
-	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/harness"
 	"github.com/topcheer/ggcode/internal/session"
-	"github.com/topcheer/ggcode/internal/tool"
 )
 
 func TestRootHelpUsesCompactLayout(t *testing.T) {
@@ -270,83 +267,6 @@ func TestResumePickerPaginatesEachGroupSeparately(t *testing.T) {
 	}
 }
 
-func TestBuildSkillsSystemPromptPrioritizesBundledAndSummarizesMCP(t *testing.T) {
-	prompt := buildSkillsSystemPrompt([]*commands.Command{
-		{
-			Name:        "docs:summarize",
-			Description: "MCP prompt from docs",
-			Source:      commands.SourceMCP,
-			LoadedFrom:  commands.LoadedFromMCP,
-			Enabled:     true,
-		},
-		{
-			Name:        "verify",
-			Description: "Verify work",
-			Source:      commands.SourceBundled,
-			LoadedFrom:  commands.LoadedFromBundled,
-			Enabled:     true,
-		},
-		{
-			Name:        "update-config",
-			Description: "Update config",
-			Source:      commands.SourceBundled,
-			LoadedFrom:  commands.LoadedFromBundled,
-			Enabled:     true,
-		},
-	})
-
-	if !strings.Contains(prompt, "- verify: Verify work") {
-		t.Fatalf("expected bundled skill in prompt, got:\n%s", prompt)
-	}
-	if !strings.Contains(prompt, "MCP prompt-backed skills are also available") {
-		t.Fatalf("expected MCP summary in prompt, got:\n%s", prompt)
-	}
-	if strings.Contains(prompt, "docs:summarize: MCP prompt from docs") {
-		t.Fatalf("expected MCP skill to be summarized rather than listed verbatim, got:\n%s", prompt)
-	}
-}
-
-func TestBuildSkillsSystemPromptReturnsPromptVisibleSkillRefs(t *testing.T) {
-	prompt, refs := buildSkillsSystemPromptWithPromptRefs([]*commands.Command{
-		{
-			Name:        "project-flow",
-			Description: "Project workflow",
-			Source:      commands.SourceProject,
-			LoadedFrom:  commands.LoadedFromSkills,
-			Enabled:     true,
-		},
-		{
-			Name:        "global-flow",
-			Description: "Global workflow",
-			Source:      commands.SourceUser,
-			LoadedFrom:  commands.LoadedFromSkills,
-			Enabled:     true,
-		},
-		{
-			Name:        "legacy-command",
-			Description: "Legacy command",
-			Source:      commands.SourceProject,
-			LoadedFrom:  commands.LoadedFromCommands,
-			Enabled:     true,
-		},
-		{
-			Name:        "verify",
-			Description: "Bundled skill",
-			Source:      commands.SourceBundled,
-			LoadedFrom:  commands.LoadedFromBundled,
-			Enabled:     true,
-		},
-	})
-
-	if !strings.Contains(prompt, "- project-flow: Project workflow") {
-		t.Fatalf("expected project skill in prompt, got:\n%s", prompt)
-	}
-	want := []string{"global:global-flow", "project:project-flow"}
-	if !reflect.DeepEqual(refs, want) {
-		t.Fatalf("prompt refs = %#v, want %#v", refs, want)
-	}
-}
-
 func TestMCPInstallCommandPersistsServer(t *testing.T) {
 	dir := t.TempDir()
 	path := dir + "/ggcode.yaml"
@@ -568,20 +488,6 @@ func TestMCPInstallCommandPersistsHTTPHeaders(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected installed %s server with headers in config, got %+v", name, cfg.MCPServers)
-	}
-}
-
-func TestBuildMCPSkillCommandsMarksMCPMetadata(t *testing.T) {
-	cmds := buildMCPSkillCommands([]tool.MCPServerSnapshot{{
-		Name:        "docs",
-		Connected:   true,
-		PromptNames: []string{"summarize"},
-	}})
-	if len(cmds) != 1 {
-		t.Fatalf("expected 1 MCP skill command, got %d", len(cmds))
-	}
-	if cmds[0].Name != "docs:summarize" || cmds[0].Source != commands.SourceMCP || cmds[0].LoadedFrom != commands.LoadedFromMCP || !cmds[0].UserInvocable {
-		t.Fatalf("unexpected MCP skill command: %+v", cmds[0])
 	}
 }
 

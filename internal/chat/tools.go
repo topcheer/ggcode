@@ -789,29 +789,6 @@ func NewMarkdownToolItem(id, displayName string, status ToolStatus, detail strin
 	}
 }
 
-// NewToolItem creates the appropriate tool item type based on tool name.
-// parseToolInputArg extracts a single string argument from raw JSON input.
-// Uses map[string]any to correctly handle mixed-type JSON objects
-// (e.g. {"command":"ls","timeout":30} where timeout is a number).
-func parseToolInputArg(input, key string) string {
-	var m map[string]any
-	if json.Unmarshal([]byte(input), &m) != nil {
-		return ""
-	}
-	v, _ := m[key].(string)
-	return v
-}
-
-// parseToolInputArgAny tries multiple keys and returns the first non-empty match.
-func parseToolInputArgAny(input string, keys ...string) string {
-	for _, key := range keys {
-		if v := parseToolInputArg(input, key); v != "" {
-			return v
-		}
-	}
-	return ""
-}
-
 // ToolContext carries pre-resolved display information from the caller
 // (typically describeTool in the TUI layer). It is the primary data source
 // for tool rendering — the caller is responsible for extracting the right

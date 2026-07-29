@@ -430,31 +430,6 @@ func (s *speculator) speculate(ctx context.Context, tools *tool.Registry, lastTo
 	}
 }
 
-// specStats returns current speculation statistics for observability.
-type specStats struct {
-	Hits             int   `json:"hits"`
-	Misses           int   `json:"misses"`
-	Speculations     int   `json:"speculations"`
-	SavedMicros      int64 `json:"saved_micros"`
-	AdaptiveMinCount int   `json:"adaptive_min_count"`
-	CacheSize        int   `json:"cache_size"`
-	ActiveSpecs      int   `json:"active_specs"`
-}
-
-func (s *speculator) stats() specStats {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return specStats{
-		Hits:             s.hits,
-		Misses:           s.misses,
-		Speculations:     s.speculations,
-		SavedMicros:      s.savedMicros,
-		AdaptiveMinCount: s.adaptiveMinCount,
-		CacheSize:        len(s.cache),
-		ActiveSpecs:      s.activeSpeculations,
-	}
-}
-
 // Close stops all background goroutines and clears the cache.
 func (s *speculator) Close() {
 	s.mu.Lock()

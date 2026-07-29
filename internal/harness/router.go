@@ -2,7 +2,6 @@ package harness
 
 import (
 	"context"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"unicode"
@@ -152,75 +151,6 @@ func ExtractFeatures(input string) PromptFeatures {
 //
 // Layer 1: Exclusion — signals that clearly indicate no routing.
 // Layer 2: Structural features — file paths, action verbs, task goals.
-// Layer 3: Conservative default — ambiguous cases go to normal agent.
-//
-// The mode parameter controls the decision for detected code-change tasks:
-//   - "off":     Never route.
-//   - "suggest": Route to RouteSuggest (ask user).
-//   - "on"/"strict": Route to RouteHarness.
-func DecideRoute(input string, mode string) RouteDecision {
-	input = strings.TrimSpace(input)
-	if input == "" {
-		return RouteNormal
-	}
-
-	features := ExtractFeatures(input)
-
-	// Layer 1: Exclusion — definite non-routing signals.
-	if features.IsTooShort {
-		return RouteNormal
-	}
-	if strings.HasPrefix(input, "/") {
-		return RouteNormal // slash command
-	}
-	if strings.HasPrefix(input, "$") || strings.HasPrefix(input, ">") {
-		return RouteNormal // shell directive
-	}
-	if features.ExplicitExclude {
-		return RouteNormal
-	}
-
-	// Check mode first — unknown modes are treated as "off".
-	mode = strings.ToLower(strings.TrimSpace(mode))
-	if mode == "" || mode == "off" || (mode != "suggest" && mode != "on" && mode != "strict") {
-		return RouteNone
-	}
-
-	// Layer 2: Structural feature scoring.
-	score := 0
-	if features.HasFilePath {
-		score += 2
-	}
-	if features.HasActionVerb {
-		score += 2
-	}
-	if features.HasTaskGoal {
-		score += 1
-	}
-	if features.HasCodeBlock {
-		score += 1
-	}
-
-	// Strong question signal without action → not a code task
-	if features.IsQuestionOnly && !features.HasActionVerb {
-		return RouteNormal
-	}
-
-	// High confidence: multiple structural signals indicate a code task.
-	// Threshold: score >= 3 means at least filepath+verb or verb+goal+code.
-	if score >= 3 {
-		switch mode {
-		case "suggest":
-			return RouteSuggest
-		case "on", "strict":
-			return RouteHarness
-		}
-	}
-
-	// Layer 3: Ambiguous — conservative, go to normal agent.
-	return RouteNormal
-}
-
 // DecideRouteWithFeatures is like DecideRoute but accepts pre-extracted
 // features and route context for richer decision making.
 func DecideRouteWithFeatures(input string, mode string, features PromptFeatures, ctx RouteContext) RouteDecision {
@@ -372,19 +302,6 @@ func hasExcludePattern(normalized string) bool {
 		if strings.Contains(normalized, pattern) {
 			return true
 		}
-	}
-	return false
-}
-
-// IsFilePath checks if a string looks like a source file path.
-func IsFilePath(s string) bool {
-	ext := strings.ToLower(filepath.Ext(s))
-	switch ext {
-	case ".go", ".py", ".js", ".ts", ".tsx", ".jsx", ".rs", ".java", ".rb",
-		".c", ".cpp", ".h", ".hpp", ".cs", ".swift", ".kt", ".scala",
-		".sh", ".bash", ".zsh", ".yaml", ".yml", ".toml", ".json", ".xml",
-		".html", ".css", ".scss", ".sql", ".md", ".proto", ".graphql", ".tf":
-		return true
 	}
 	return false
 }

@@ -131,28 +131,6 @@ func TestSpeculator_CacheExpiry(t *testing.T) {
 	}
 }
 
-func TestSpeculator_StatsTracking(t *testing.T) {
-	s := newSpeculator()
-
-	args := json.RawMessage(`{"path":"/test.go"}`)
-	s.store("read_file", args, mockToolResult("content"))
-
-	// 2 hits.
-	s.getCached("read_file", args)
-	s.getCached("read_file", args)
-
-	// 1 miss (different args).
-	s.getCached("read_file", json.RawMessage(`{"path":"/other.go"}`))
-
-	stats := s.stats()
-	if stats.Hits != 2 {
-		t.Errorf("expected 2 hits, got %d", stats.Hits)
-	}
-	if stats.Misses != 1 {
-		t.Errorf("expected 1 miss, got %d", stats.Misses)
-	}
-}
-
 func TestSpeculator_ResetSequence(t *testing.T) {
 	s := newSpeculator()
 
@@ -237,8 +215,10 @@ func TestSpeculator_SpeculateWithRealPattern(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// The speculation counter should have been incremented.
-	stats := s.stats()
-	if stats.Speculations == 0 {
+	s.mu.Lock()
+	got := s.speculations
+	s.mu.Unlock()
+	if got == 0 {
 		t.Fatal("expected speculations > 0")
 	}
 }
@@ -266,9 +246,11 @@ func TestSpeculator_CacheEvictionLRU(t *testing.T) {
 		s.store("read_file", json.RawMessage(`{"path":"`+path+`"}`), mockToolResult(path))
 	}
 
-	stats := s.stats()
-	if stats.CacheSize > specMaxCacheSize {
-		t.Fatalf("cache size %d exceeds max %d", stats.CacheSize, specMaxCacheSize)
+	s.mu.Lock()
+	cacheSize := len(s.cache)
+	s.mu.Unlock()
+	if cacheSize > specMaxCacheSize {
+		t.Fatalf("cache size %d exceeds max %d", cacheSize, specMaxCacheSize)
 	}
 
 	// The earliest entries should have been evicted.
@@ -298,9 +280,11 @@ func TestSpeculator_AdaptiveThresholdLowHitRate(t *testing.T) {
 		s.getCached("read_file", json.RawMessage(`{"path":"/miss`+string(rune('a'+i%26))+`.go"}`))
 	}
 
-	stats := s.stats()
-	if stats.AdaptiveMinCount <= 2 {
-		t.Fatalf("expected adaptive threshold to increase above 2 with low hit rate, got %d", stats.AdaptiveMinCount)
+	s.mu.Lock()
+	adaptiveMin := s.adaptiveMinCount
+	s.mu.Unlock()
+	if adaptiveMin <= 2 {
+		t.Fatalf("expected adaptive threshold to increase above 2 with low hit rate, got %d", adaptiveMin)
 	}
 }
 
@@ -315,16 +299,18 @@ func TestSpeculator_AdaptiveThresholdHighHitRate(t *testing.T) {
 		s.getCached("read_file", args) // always hit
 	}
 
-	stats := s.stats()
-	if stats.AdaptiveMinCount < specAdaptiveFloor {
-		t.Fatalf("adaptive threshold below floor: %d", stats.AdaptiveMinCount)
+	s.mu.Lock()
+	adaptiveMin := s.adaptiveMinCount
+	s.mu.Unlock()
+	if adaptiveMin < specAdaptiveFloor {
+		t.Fatalf("adaptive threshold below floor: %d", adaptiveMin)
 	}
 	// With 100% hit rate, threshold should have been lowered.
-	if stats.AdaptiveMinCount > 1 {
+	if adaptiveMin > 1 {
 		// It may not have lowered yet if it started at 2, but let's verify
 		// it didn't increase. The key assertion is it should be <= initial 2.
-		if stats.AdaptiveMinCount > 2 {
-			t.Fatalf("adaptive threshold should not increase with high hit rate, got %d", stats.AdaptiveMinCount)
+		if adaptiveMin > 2 {
+			t.Fatalf("adaptive threshold should not increase with high hit rate, got %d", adaptiveMin)
 		}
 	}
 }
@@ -371,29 +357,18 @@ func TestSpeculator_ConcurrencyLimit(t *testing.T) {
 	s.recordObservation("edit_file")
 	s.recordObservation("read_file")
 
-	beforeStats := s.stats()
+	s.mu.Lock()
+	beforeSpecs := s.speculations
+	s.mu.Unlock()
 	s.speculate(context.Background(), nil, "edit_file", json.RawMessage(`{"file_path":"/test.go"}`))
-	afterStats := s.stats()
+	s.mu.Lock()
+	afterSpecs := s.speculations
+	s.mu.Unlock()
 
 	// Speculations count should not increase (skipped due to concurrency).
-	if afterStats.Speculations != beforeStats.Speculations {
+	if afterSpecs != beforeSpecs {
 		t.Fatalf("expected no new speculations with max concurrency reached, got delta %d",
-			afterStats.Speculations-beforeStats.Speculations)
-	}
-}
-
-func TestSpeculator_StatsIncludeNewFields(t *testing.T) {
-	s := newSpeculator()
-
-	stats := s.stats()
-	if stats.AdaptiveMinCount != 2 {
-		t.Errorf("expected initial adaptiveMinCount=2, got %d", stats.AdaptiveMinCount)
-	}
-	if stats.CacheSize != 0 {
-		t.Errorf("expected initial cacheSize=0, got %d", stats.CacheSize)
-	}
-	if stats.ActiveSpecs != 0 {
-		t.Errorf("expected initial activeSpecs=0, got %d", stats.ActiveSpecs)
+			afterSpecs-beforeSpecs)
 	}
 }
 

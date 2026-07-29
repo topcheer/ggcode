@@ -1,7 +1,6 @@
 package harness
 
 import (
-	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -322,40 +321,3 @@ func monitorDisplayPath(path string) string {
 
 // firstNonEmptyText is already defined elsewhere in the package; avoid redeclaration.
 // The harness package already has this helper.
-
-// marshalSnapshotJSON is kept for backward compat — it now just returns the
-// JSON bytes directly since we no longer need SQL-compatible any values.
-// Deprecated: not needed anymore, kept only if other files reference it.
-func marshalSnapshotJSON(v any) any {
-	data, err := json.Marshal(v)
-	if err != nil || string(data) == "null" {
-		return nil
-	}
-	return string(data)
-}
-
-func nullableText(text string) any {
-	if strings.TrimSpace(text) == "" {
-		return nil
-	}
-	return text
-}
-
-func nullableTime(ts *time.Time) any {
-	if ts == nil {
-		return nil
-	}
-	return ts.UTC().Format(time.RFC3339Nano)
-}
-
-func parseMonitorTime(raw string) time.Time {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return time.Time{}
-	}
-	parsed, err := time.Parse(time.RFC3339Nano, raw)
-	if err == nil {
-		return parsed.UTC()
-	}
-	return time.Time{}
-}

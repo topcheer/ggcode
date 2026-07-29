@@ -183,14 +183,6 @@ func (w *lineWriter) Flush() {
 	}
 }
 
-func RunTask(ctx context.Context, project Project, cfg *Config, goal string, runner Runner) (*RunSummary, error) {
-	return RunTaskWithOptions(ctx, project, cfg, goal, runner, RunTaskOptions{})
-}
-
-func RerunTask(ctx context.Context, project Project, cfg *Config, taskID string, runner Runner) (*RunSummary, error) {
-	return RerunTaskWithOptions(ctx, project, cfg, taskID, runner, RunTaskOptions{})
-}
-
 func RerunTaskWithOptions(ctx context.Context, project Project, cfg *Config, taskID string, runner Runner, opts RunTaskOptions) (*RunSummary, error) {
 	taskID = strings.TrimSpace(taskID)
 	if taskID == "" {

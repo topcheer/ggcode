@@ -293,9 +293,9 @@ func TestRunTaskPersistsCompletedTaskAndLog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Init() error = %v", err)
 	}
-	summary, err := RunTask(context.Background(), result.Project, result.Config, "Implement ERP inventory module", fakeRunner{
+	summary, err := RunTaskWithOptions(context.Background(), result.Project, result.Config, "Implement ERP inventory module", fakeRunner{
 		result: &RunResult{Output: "done"},
-	})
+	}, RunTaskOptions{})
 	if err != nil {
 		t.Fatalf("RunTask() error = %v", err)
 	}
@@ -748,9 +748,9 @@ func TestApproveTaskReviewMarksTaskApproved(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Init() error = %v", err)
 	}
-	summary, err := RunTask(context.Background(), result.Project, result.Config, "Review-ready ERP task", fakeRunner{
+	summary, err := RunTaskWithOptions(context.Background(), result.Project, result.Config, "Review-ready ERP task", fakeRunner{
 		result: &RunResult{Output: "done"},
-	})
+	}, RunTaskOptions{})
 	if err != nil {
 		t.Fatalf("RunTask() error = %v", err)
 	}
@@ -774,9 +774,9 @@ func TestRejectTaskReviewReturnsTaskToRetryFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Init() error = %v", err)
 	}
-	summary, err := RunTask(context.Background(), result.Project, result.Config, "Rejectable ERP task", fakeRunner{
+	summary, err := RunTaskWithOptions(context.Background(), result.Project, result.Config, "Rejectable ERP task", fakeRunner{
 		result: &RunResult{Output: "done"},
-	})
+	}, RunTaskOptions{})
 	if err != nil {
 		t.Fatalf("RunTask() error = %v", err)
 	}
@@ -803,9 +803,9 @@ func TestPromoteTaskMarksApprovedTaskPromoted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Init() error = %v", err)
 	}
-	summary, err := RunTask(context.Background(), result.Project, result.Config, "Promotable ERP task", fakeRunner{
+	summary, err := RunTaskWithOptions(context.Background(), result.Project, result.Config, "Promotable ERP task", fakeRunner{
 		result: &RunResult{Output: "done"},
-	})
+	}, RunTaskOptions{})
 	if err != nil {
 		t.Fatalf("RunTask() error = %v", err)
 	}
@@ -975,9 +975,9 @@ func TestPromoteApprovedTasksPromotesAllReadyTasks(t *testing.T) {
 		t.Fatalf("Init() error = %v", err)
 	}
 	for _, goal := range []string{"Promote ERP inventory", "Promote ERP pricing"} {
-		summary, err := RunTask(context.Background(), result.Project, result.Config, goal, fakeRunner{
+		summary, err := RunTaskWithOptions(context.Background(), result.Project, result.Config, goal, fakeRunner{
 			result: &RunResult{Output: "done"},
-		})
+		}, RunTaskOptions{})
 		if err != nil {
 			t.Fatalf("RunTask(%q) error = %v", goal, err)
 		}
@@ -1089,10 +1089,10 @@ func TestRerunTaskRetriesSingleFailedTask(t *testing.T) {
 		t.Fatalf("ExecuteTask() error = %v", err)
 	}
 	var seen []RunRequest
-	summary, err := RerunTask(context.Background(), result.Project, result.Config, task.ID, fakeRunner{
+	summary, err := RerunTaskWithOptions(context.Background(), result.Project, result.Config, task.ID, fakeRunner{
 		result: &RunResult{Output: "ok", ExitCode: 0},
 		seen:   &seen,
-	})
+	}, RunTaskOptions{})
 	if err != nil {
 		t.Fatalf("RerunTask() error = %v", err)
 	}
@@ -1118,9 +1118,9 @@ func TestRerunTaskRejectsNonFailedTask(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EnqueueTask() error = %v", err)
 	}
-	if _, err := RerunTask(context.Background(), result.Project, result.Config, task.ID, fakeRunner{
+	if _, err := RerunTaskWithOptions(context.Background(), result.Project, result.Config, task.ID, fakeRunner{
 		result: &RunResult{Output: "ok"},
-	}); err == nil || !strings.Contains(err.Error(), "only failed tasks can be rerun") {
+	}, RunTaskOptions{}); err == nil || !strings.Contains(err.Error(), "only failed tasks can be rerun") {
 		t.Fatalf("RerunTask() error = %v, want failed-task guard", err)
 	}
 }
@@ -1786,9 +1786,9 @@ func TestDoctorCountsReviewReadyTasks(t *testing.T) {
 		t.Fatalf("Init() error = %v", err)
 	}
 	result.Config.Checks.Commands = nil
-	if _, err := RunTask(context.Background(), result.Project, result.Config, "Reviewable ERP change", fakeRunner{
+	if _, err := RunTaskWithOptions(context.Background(), result.Project, result.Config, "Reviewable ERP change", fakeRunner{
 		result: &RunResult{Output: "done"},
-	}); err != nil {
+	}, RunTaskOptions{}); err != nil {
 		t.Fatalf("RunTask() error = %v", err)
 	}
 	report, err := Doctor(result.Project, result.Config)
@@ -1809,9 +1809,9 @@ func TestDoctorCountsPromotionReadyTasks(t *testing.T) {
 		t.Fatalf("Init() error = %v", err)
 	}
 	result.Config.Checks.Commands = nil
-	summary, err := RunTask(context.Background(), result.Project, result.Config, "Promotion-ready ERP change", fakeRunner{
+	summary, err := RunTaskWithOptions(context.Background(), result.Project, result.Config, "Promotion-ready ERP change", fakeRunner{
 		result: &RunResult{Output: "done"},
-	})
+	}, RunTaskOptions{})
 	if err != nil {
 		t.Fatalf("RunTask() error = %v", err)
 	}
