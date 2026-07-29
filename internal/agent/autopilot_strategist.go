@@ -11,8 +11,11 @@ import (
 )
 
 // maxAutopilotStrategistCalls is the per-Run budget for strategist LLM calls.
-// See agent.go for rationale.
-const maxAutopilotStrategistCalls = 30
+// Set to 100 to support large-scale implementation tasks that span many hours
+// or days. Each strategist call consumes one LLM turn; the budget prevents
+// runaway loops while giving long-horizon goals (e.g. multi-day feature
+// implementation with hundreds of subtasks) enough room to complete.
+const maxAutopilotStrategistCalls = 100
 
 // strategistResult is the output from the autopilot strategist LLM call.
 type strategistResult struct {
