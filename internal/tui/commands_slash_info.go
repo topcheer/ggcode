@@ -24,12 +24,73 @@ import (
 	"github.com/topcheer/ggcode/internal/version"
 )
 
+// resolveSessionID resolves a user-supplied session reference to a full
+// session ID. The query may be an exact ID, a unique ID prefix, a unique ID
+// substring, or a unique case-insensitive title substring (in that order).
+// Ambiguous queries return an error listing the candidate sessions.
+func resolveSessionID(store session.Store, query string) (string, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return "", fmt.Errorf("empty session id")
+	}
+	sessions, err := store.List()
+	if err != nil {
+		return "", err
+	}
+	for _, s := range sessions {
+		if s.ID == query {
+			return s.ID, nil
+		}
+	}
+	lowerQuery := strings.ToLower(query)
+	stages := []struct {
+		name string
+		fn   func(*session.Session) bool
+	}{
+		{"id prefix", func(s *session.Session) bool { return strings.HasPrefix(s.ID, query) }},
+		{"id substring", func(s *session.Session) bool { return strings.Contains(s.ID, query) }},
+		{"title substring", func(s *session.Session) bool {
+			return s.Title != "" && strings.Contains(strings.ToLower(s.Title), lowerQuery)
+		}},
+	}
+	for _, st := range stages {
+		var matches []*session.Session
+		for _, s := range sessions {
+			if st.fn(s) {
+				matches = append(matches, s)
+			}
+		}
+		if len(matches) == 1 {
+			return matches[0].ID, nil
+		}
+		if len(matches) > 1 {
+			var b strings.Builder
+			fmt.Fprintf(&b, "ambiguous session reference %q (%d matches by %s):", query, len(matches), st.name)
+			const maxList = 5
+			for i, s := range matches {
+				if i >= maxList {
+					fmt.Fprintf(&b, "\n  ... and %d more", len(matches)-maxList)
+					break
+				}
+				ts := s.CreatedAt.Format("2006-01-02 15:04")
+				fmt.Fprintf(&b, "\n  %s  %s  (%s)", s.ID, s.Title, ts)
+			}
+			return "", fmt.Errorf("%s", b.String())
+		}
+	}
+	return "", fmt.Errorf("no session matching %q", query)
+}
+
 func (m *Model) resumeSession(id string) tea.Cmd {
 	return func() tea.Msg {
 		if m.sessionStore == nil {
 			return streamMsg(m.t("session.store_missing"))
 		}
-		ses, err := m.sessionStore.Load(id)
+		resolved, err := resolveSessionID(m.sessionStore, id)
+		if err != nil {
+			return sessionResumeLoadedMsg{requestedID: id, err: err}
+		}
+		ses, err := m.sessionStore.Load(resolved)
 		return sessionResumeLoadedMsg{
 			requestedID: id,
 			session:     ses,
@@ -81,7 +142,11 @@ func (m *Model) exportSession(id string) tea.Cmd {
 			return streamMsg(m.t("session.store_missing"))
 		}
 		// Load session first, then render with display names from config.
-		ses, err := m.sessionStore.Load(id)
+		resolved, err := resolveSessionID(m.sessionStore, id)
+		if err != nil {
+			return streamMsg(m.t("session.export_failed", err))
+		}
+		ses, err := m.sessionStore.Load(resolved)
 		if err != nil {
 			return streamMsg(m.t("session.export_failed", err))
 		}
@@ -90,11 +155,11 @@ func (m *Model) exportSession(id string) tea.Cmd {
 			vendorDisplay, endpointDisplay = m.config.ResolveDisplayName(ses.Vendor, ses.Endpoint)
 		}
 		md := session.ExportSessionMarkdownWithDisplay(ses, vendorDisplay, endpointDisplay)
-		filename := fmt.Sprintf("session-%s.md", id)
+		filename := fmt.Sprintf("session-%s.md", resolved)
 		if err := os.WriteFile(filename, []byte(md), 0644); err != nil {
 			return streamMsg(m.t("session.write_failed", err))
 		}
-		return streamMsg(m.t("session.exported", id, filename))
+		return streamMsg(m.t("session.exported", resolved, filename))
 	}
 }
 
