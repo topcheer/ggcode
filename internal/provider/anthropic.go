@@ -16,12 +16,13 @@ import (
 
 // AnthropicProvider implements Provider using the Anthropic SDK.
 type AnthropicProvider struct {
-	client     anthropic.Client
-	model      string
-	maxTokens  int
-	cap        *adaptiveCap
-	transport  *headerInjectingTransport // kept for runtime header updates
-	calibrator *tokenCountCalibrator     // periodic real-API token calibration
+	client          anthropic.Client
+	model           string
+	maxTokens       int
+	cap             *adaptiveCap
+	transport       *headerInjectingTransport // kept for runtime header updates
+	calibrator      *tokenCountCalibrator     // periodic real-API token calibration
+	reasoningEffort string                    // "", "low", "medium", "high" — maps to thinking budget
 }
 
 // ModelName returns the current model name used by this provider.
@@ -30,14 +31,28 @@ func (p *AnthropicProvider) ModelName() string { return p.model }
 // CloneWithModel returns a shallow copy of this provider with a different model.
 func (p *AnthropicProvider) CloneWithModel(model string) Provider {
 	return &AnthropicProvider{
-		client:     p.client,
-		model:      model,
-		maxTokens:  p.maxTokens,
-		cap:        p.cap,
-		transport:  p.transport,
-		calibrator: p.calibrator,
+		client:          p.client,
+		model:           model,
+		maxTokens:       p.maxTokens,
+		cap:             p.cap,
+		transport:       p.transport,
+		calibrator:      p.calibrator,
+		reasoningEffort: p.reasoningEffort,
 	}
 }
+
+// SetReasoningEffort sets the reasoning effort, which maps to Anthropic's
+// extended thinking budget_tokens parameter. Effort levels: "low" (~5K),
+// "medium" (~16K), "high" (~32K). Empty string disables thinking.
+func (p *AnthropicProvider) SetReasoningEffort(effort string) {
+	effort = strings.ToLower(strings.TrimSpace(effort))
+	switch effort {
+	case "", "low", "medium", "high":
+		p.reasoningEffort = effort
+	}
+}
+
+func (p *AnthropicProvider) ReasoningEffort() string { return p.reasoningEffort }
 
 // SetAdaptiveCap installs the adaptive max-output-tokens cap.
 func (p *AnthropicProvider) SetAdaptiveCap(c *adaptiveCap) { p.cap = c }
@@ -57,6 +72,55 @@ func (p *AnthropicProvider) effectiveMaxTokens() int {
 		}
 	}
 	return p.maxTokens
+}
+
+// thinkingBudgetForEffort converts a reasoning effort level to an Anthropic
+// thinking budget_tokens value. Returns 0 if thinking should be disabled.
+// Anthropic API requires budget_tokens >= 1024 and max_tokens > budget_tokens.
+func (p *AnthropicProvider) thinkingBudgetForEffort(effort string) int64 {
+	effort = strings.ToLower(strings.TrimSpace(effort))
+	if effort == "" {
+		return 0
+	}
+	maxTok := p.effectiveMaxTokens()
+	if maxTok <= 1024 {
+		return 0 // not enough room for thinking
+	}
+	var budget int64
+	var ceiling int64
+	switch effort {
+	case "low":
+		budget = int64(maxTok) / 4
+		ceiling = 5000
+	case "medium":
+		budget = int64(maxTok) * 2 / 5
+		ceiling = 16000
+	case "high":
+		budget = int64(maxTok) / 2
+		ceiling = 32000
+	default:
+		return 0
+	}
+	if budget > ceiling {
+		budget = ceiling
+	}
+	if budget < 1024 {
+		budget = 1024
+	}
+	if budget >= int64(maxTok) {
+		budget = int64(maxTok) - 1
+	}
+	return budget
+}
+
+// isThinkingError reports whether an API error is related to extended thinking
+// (e.g., the model does not support thinking or budget_tokens is invalid).
+func isThinkingError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "thinking") || strings.Contains(msg, "budget_tokens")
 }
 
 // NewAnthropicProvider creates a new Anthropic provider.
@@ -155,6 +219,16 @@ func (p *AnthropicProvider) Chat(ctx context.Context, messages []Message, tools 
 		resp, callErr = p.client.Messages.New(ctx, params)
 		return callErr
 	}, providerRetryAttempts)
+	// Retry once without extended thinking if the model rejects it.
+	if err != nil && params.Thinking.OfEnabled != nil && isThinkingError(err) {
+		debug.Log("anthropic", "Chat: retrying without extended thinking")
+		params.Thinking = anthropic.ThinkingConfigParamUnion{}
+		err = retryWithBackoffCtx(ctx, func() error {
+			var callErr error
+			resp, callErr = p.client.Messages.New(ctx, params)
+			return callErr
+		}, providerRetryAttempts)
+	}
 	if err != nil {
 		if rejected, parsed := maxTokensRejection(err); rejected {
 			p.cap.OnRejected(parsed)
@@ -312,6 +386,13 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 					debug.Log("anthropic", "Stream ERROR: %v", err)
 					if rejected, parsed := maxTokensRejection(err); rejected {
 						p.cap.OnRejected(parsed)
+					}
+					// Retry without extended thinking if the model rejects it.
+					if !emitted && params.Thinking.OfEnabled != nil && isThinkingError(err) && attempt < providerRetryAttempts-1 {
+						debug.Log("anthropic", "Stream: retrying without extended thinking")
+						params.Thinking = anthropic.ThinkingConfigParamUnion{}
+						retry = true
+						return
 					}
 					// Retry if no content has been emitted yet and the error is retryable.
 					if !emitted && isRetryableForContext(ctx, err) && attempt < providerRetryAttempts-1 {
@@ -651,6 +732,11 @@ func (p *AnthropicProvider) buildParams(messages []Message, tools []ToolDefiniti
 		Model:     p.model,
 		MaxTokens: int64(p.effectiveMaxTokens()),
 		Messages:  msgParams,
+	}
+
+	// Enable extended thinking when reasoning effort is set.
+	if budget := p.thinkingBudgetForEffort(p.reasoningEffort); budget > 0 {
+		params.Thinking = anthropic.ThinkingConfigParamOfEnabled(budget)
 	}
 
 	if len(tools) > 0 {
