@@ -227,6 +227,61 @@ func TestResetPostEditVerify(t *testing.T) {
 	}
 }
 
+func TestTargetedVerifyCommand(t *testing.T) {
+	tmp := t.TempDir()
+	os.WriteFile(filepath.Join(tmp, "go.mod"), []byte("module test\n"), 0644)
+	sub := filepath.Join(tmp, "internal", "agent")
+	os.MkdirAll(sub, 0755)
+
+	tests := []struct {
+		name     string
+		workDir  string
+		filePath string
+		want     string
+	}{
+		{"subpackage absolute", tmp, filepath.Join(sub, "verify.go"), "go test ./internal/agent/"},
+		{"subpackage relative", tmp, filepath.Join("internal", "agent", "verify.go"), "go test ./internal/agent/"},
+		{"root package", tmp, filepath.Join(tmp, "main.go"), "go test ./"},
+		{"non-go file", tmp, filepath.Join(sub, "readme.md"), ""},
+		{"outside module", tmp, "/nonexistent/outside.go", ""},
+		{"empty path", tmp, "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := targetedVerifyCommand(tt.workDir, tt.filePath)
+			if got != tt.want {
+				t.Errorf("targetedVerifyCommand(%q, %q) = %q, want %q", tt.workDir, tt.filePath, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPostEditVerifyHintTargeted(t *testing.T) {
+	tmp := t.TempDir()
+	os.WriteFile(filepath.Join(tmp, "go.mod"), []byte("module test\n"), 0644)
+	sub := filepath.Join(tmp, "internal", "agent")
+	os.MkdirAll(sub, 0755)
+
+	a := &Agent{workingDir: tmp}
+
+	// Edit a file in a subpackage 3 times → hint should suggest the targeted
+	// `go test ./internal/agent/` AND the full-suite fallback command.
+	args, _ := json.Marshal(map[string]string{"file_path": filepath.Join(sub, "foo.go")})
+	var hint string
+	for i := 0; i < 3; i++ {
+		hint = a.postEditVerifyHint("edit_file", args)
+	}
+	if hint == "" {
+		t.Fatal("expected hint after 3 edits")
+	}
+	if !strings.Contains(hint, "go test ./internal/agent/") {
+		t.Errorf("hint should include targeted package test command, got: %s", hint)
+	}
+	if !strings.Contains(hint, "go build ./...") {
+		t.Errorf("hint should include full-suite fallback command, got: %s", hint)
+	}
+}
+
 func TestIsVerifyCommand(t *testing.T) {
 	tests := []struct {
 		cmd  string

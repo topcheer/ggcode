@@ -299,10 +299,25 @@ func (a *Agent) postEditVerifyHint(toolName string, args json.RawMessage) string
 	}
 
 	a.postEditVerify.sourceEditsSinceHint = 0
-	debug.Log("agent", "post-edit verify hint: suggesting %q after %d source-code edits", cmd, postEditVerifyInterval)
+
+	// Affected-test detection: derive a fast, scope-limited verification
+	// command for the package just edited (e.g. `go test ./internal/agent/`).
+	// This is far cheaper than the full project suite for a mid-session check
+	// and gives the agent faster compile/test feedback on its latest change.
+	// The full-suite command (cmd) is still surfaced for final verification.
+	targeted := targetedVerifyCommand(a.workingDir, filePath)
+	fileName := filepath.Base(filePath)
+	debug.Log("agent", "post-edit verify hint: targeted=%q full=%q after %d source-code edits", targeted, cmd, postEditVerifyInterval)
 
 	// Context-aware: if last build failed, make it urgent.
 	if a.postEditVerify.lastBuildFailed {
+		if targeted != "" {
+			return fmt.Sprintf(
+				"[Verification reminder: you've edited %d source files since the last build check (which FAILED). "+
+					"Run `%s` for a fast check of the package you just edited (`%s`), or `%s` for the full suite before finishing.]",
+				postEditVerifyInterval, targeted, fileName, cmd,
+			)
+		}
 		return fmt.Sprintf(
 			"[Verification reminder: you've edited %d source files since the last build check (which FAILED). "+
 				"Run `%s` to verify your fixes compile before making further edits.]",
@@ -310,6 +325,13 @@ func (a *Agent) postEditVerifyHint(toolName string, args json.RawMessage) string
 		)
 	}
 
+	if targeted != "" {
+		return fmt.Sprintf(
+			"[Verification reminder: you've edited %d source files since the last build check. "+
+				"Run `%s` for a fast check of the package you just edited (`%s`), or `%s` for the full suite before finishing.]",
+			postEditVerifyInterval, targeted, fileName, cmd,
+		)
+	}
 	return fmt.Sprintf(
 		"[Verification reminder: you've edited %d source files since the last build check. "+
 			"Run `%s` to verify your changes compile before making further edits.]",
@@ -411,4 +433,70 @@ func (a *Agent) resetPostEditVerify() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.postEditVerify = postEditVerifyState{}
+}
+
+// targetedVerifyCommand returns a fast, scope-limited verification command for
+// the package containing filePath, when one can be derived. This implements
+// test-impact analysis: instead of nudging the agent to run the entire project
+// suite (e.g. `make verify-ci`) after every few edits, we scope the suggestion
+// to the package that actually changed — `go test ./internal/agent/` for a Go
+// edit. That compiles the edited package and runs its tests, giving much
+// faster mid-session feedback than the full suite. Returns "" when no targeted
+// command applies, in which case the caller falls back to the full-suite build
+// command.
+func targetedVerifyCommand(workingDir, filePath string) string {
+	if filePath == "" {
+		return ""
+	}
+	switch strings.ToLower(filepath.Ext(filePath)) {
+	case ".go":
+		return goTargetedTestCommand(workingDir, filePath)
+	default:
+		return ""
+	}
+}
+
+// goTargetedTestCommand computes `go test ./<pkg-dir>/` for an edited Go file,
+// scoped to the Go module that contains it. It walks up from the file's
+// directory to locate go.mod, then expresses the package directory relative to
+// the module root. Returns "" if no module root is found or the file escapes
+// the module (e.g. an absolute path outside the workspace).
+func goTargetedTestCommand(workingDir, filePath string) string {
+	abs := filePath
+	if !filepath.IsAbs(abs) {
+		abs = filepath.Join(workingDir, abs)
+	}
+	abs = filepath.Clean(abs)
+
+	// Walk up from the file's directory to find the module root (go.mod).
+	dir := filepath.Dir(abs)
+	modRoot := ""
+	for {
+		if fileExists(filepath.Join(dir, "go.mod")) {
+			modRoot = dir
+			break
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break // reached filesystem root
+		}
+		dir = parent
+	}
+	if modRoot == "" {
+		return ""
+	}
+
+	rel, err := filepath.Rel(modRoot, filepath.Dir(abs))
+	if err != nil {
+		return ""
+	}
+	rel = filepath.ToSlash(rel)
+	// Guard against a relative path that escapes the module.
+	if strings.HasPrefix(rel, "..") {
+		return ""
+	}
+	if rel == "." {
+		return "go test ./"
+	}
+	return "go test ./" + rel + "/"
 }

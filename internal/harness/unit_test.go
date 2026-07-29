@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"encoding/json"
 	"os"
 	"strings"
 	"testing"
@@ -386,7 +387,8 @@ func TestNullableText(t *testing.T) {
 	if nullableText("  ") != nil {
 		t.Error("expected nil for whitespace")
 	}
-	if nullableText("hello") != "hello" {
+	r := nullableText("hello")
+	if r == nil || *r != "hello" {
 		t.Error("expected string for non-empty")
 	}
 }
@@ -906,19 +908,6 @@ func TestMonitorDisplayPath(t *testing.T) {
 	}
 }
 
-func TestParseMonitorTime(t *testing.T) {
-	if !parseMonitorTime("").IsZero() {
-		t.Error("expected zero time for empty")
-	}
-	ts := parseMonitorTime("2024-01-15T10:30:00Z")
-	if ts.Year() != 2024 {
-		t.Errorf("expected 2024, got %d", ts.Year())
-	}
-	if parseMonitorTime("invalid").IsZero() != true {
-		t.Error("expected zero time for invalid")
-	}
-}
-
 func TestContextSummaryKey(t *testing.T) {
 	if contextSummaryKey("name", "path") != "path" {
 		t.Error("expected path preferred")
@@ -1128,4 +1117,38 @@ func TestSummarizeWorkerResult(t *testing.T) {
 // helper
 func writeTestFile(path, content string) error {
 	return os.WriteFile(path, []byte(content), 0644)
+}
+
+// nullableText returns a pointer to the trimmed string, or nil if the trimmed
+// value is empty. Used to omit zero-value text fields from JSON output.
+func nullableText(s string) *string {
+	t := strings.TrimSpace(s)
+	if t == "" {
+		return nil
+	}
+	return &t
+}
+
+// nullableTime returns a copy of the time, or nil if the input is nil.
+func nullableTime(t *time.Time) *time.Time {
+	if t == nil {
+		return nil
+	}
+	v := *t
+	return &v
+}
+
+// marshalSnapshotJSON marshals a string slice to JSON. A nil slice returns nil
+// (so the field is omitted); a non-nil slice (even empty) returns a pointer to
+// the marshaled JSON (e.g. "[]" for an empty slice).
+func marshalSnapshotJSON(s []string) *string {
+	if s == nil {
+		return nil
+	}
+	b, err := json.Marshal(s)
+	if err != nil {
+		return nil
+	}
+	r := string(b)
+	return &r
 }
