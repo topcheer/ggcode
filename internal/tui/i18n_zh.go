@@ -1233,6 +1233,8 @@ func zhCatalog(key string) string {
 		return "打开统一 IM 渠道面板"
 	case "slash.diff":
 		return "在聊天中显示 git diff（支持 --cached、<文件>、--stat）"
+	case "slash.commit":
+		return "暂存变更并用 AI 从 diff 生成提交信息"
 	case "slash.hooks":
 		return "打开 hooks 配置面板"
 	case "hooks.title":

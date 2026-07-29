@@ -1229,6 +1229,8 @@ func enCatalog(key string) string {
 		return "Configure streaming output mode"
 	case "slash.diff":
 		return "Show git diff in chat (supports --cached, <file>, --stat)"
+	case "slash.commit":
+		return "Stage changes and generate an AI commit message from the diff"
 	case "slash.hooks":
 		return "Open hooks configuration panel"
 	case "hooks.title":

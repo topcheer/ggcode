@@ -392,6 +392,8 @@ func localizeSlashDescription(lang Language, cmd string) string {
 		return tr(lang, "slash.stream")
 	case "/diff":
 		return tr(lang, "slash.diff")
+	case "/commit":
+		return tr(lang, "slash.commit")
 	case "/hooks":
 		return tr(lang, "slash.hooks")
 	case "/cost":

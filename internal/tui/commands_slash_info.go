@@ -661,6 +661,108 @@ type reviewReadyMsg struct {
 	text string
 }
 
+// handleCommitCommand gathers the current staged/unstaged diff and sends it
+// to the agent with a structured commit-message generation prompt.
+// Supports: /commit, /commit <message>, /commit --amend
+func (m *Model) handleCommitCommand(parts []string) tea.Cmd {
+	return func() tea.Msg {
+		dir := workingDirFromModel(m)
+
+		// Check if a custom message was provided: /commit my message here
+		customMsg := ""
+		amendFlag := false
+		for _, p := range parts[1:] {
+			if p == "--amend" {
+				amendFlag = true
+			} else {
+				customMsg += p + " "
+			}
+		}
+		customMsg = strings.TrimSpace(customMsg)
+
+		// Gather staged diff
+		stagedCmd := exec.Command("git", "diff", "--cached", "--stat")
+		stagedCmd.Dir = dir
+		stagedStat, _ := stagedCmd.CombinedOutput()
+		stagedStatStr := strings.TrimSpace(string(stagedStat))
+
+		// Gather unstaged diff summary
+		unstagedCmd := exec.Command("git", "status", "--porcelain")
+		unstagedCmd.Dir = dir
+		statusOut, _ := unstagedCmd.CombinedOutput()
+		statusStr := strings.TrimSpace(string(statusOut))
+
+		if stagedStatStr == "" && statusStr == "" {
+			return streamMsg("Nothing to commit — working tree clean.")
+		}
+
+		// Get the full staged diff (for the prompt)
+		fullDiffCmd := exec.Command("git", "diff", "--cached")
+		fullDiffCmd.Dir = dir
+		fullDiffOut, _ := fullDiffCmd.CombinedOutput()
+		fullDiff := strings.TrimSpace(string(fullDiffOut))
+
+		// Build commit prompt
+		var prompt strings.Builder
+		prompt.WriteString("Create a git commit for the current changes. Follow these steps:\n\n")
+		prompt.WriteString("1. Review the staged and unstaged changes below\n")
+		if stagedStatStr == "" && statusStr != "" {
+			prompt.WriteString("2. Nothing is staged yet — use git_add to stage the appropriate files\n")
+		} else {
+			prompt.WriteString("2. Files are already staged — proceed to commit\n")
+		}
+		prompt.WriteString("3. Generate a conventional commit message:\n")
+		prompt.WriteString("   - Format: type(scope): description\n")
+		prompt.WriteString("   - Types: feat, fix, refactor, docs, test, chore, perf, ci, style, build\n")
+		prompt.WriteString("   - First line under 72 chars\n")
+		prompt.WriteString("   - Add a body paragraph if the change is complex or touches multiple areas\n")
+		prompt.WriteString("4. Use git_commit with the generated message\n")
+		if amendFlag {
+			prompt.WriteString("5. This is an --amend: update the previous commit instead of creating a new one\n")
+		}
+
+		if customMsg != "" {
+			prompt.WriteString("\n\n**User-specified commit message (use this as the commit message):**\n")
+			prompt.WriteString(customMsg)
+			prompt.WriteString("\n")
+		}
+
+		prompt.WriteString("\n**Current status (git status --porcelain):**\n```\n")
+		prompt.WriteString(statusStr)
+		prompt.WriteString("\n```\n")
+
+		if stagedStatStr != "" {
+			prompt.WriteString("\n**Staged changes (--stat):**\n```\n")
+			prompt.WriteString(stagedStatStr)
+			prompt.WriteString("\n```\n")
+		}
+
+		if fullDiff != "" {
+			// Truncate very large diffs for the prompt
+			maxLines := 500
+			lines := strings.Split(fullDiff, "\n")
+			truncated := false
+			if len(lines) > maxLines {
+				fullDiff = strings.Join(lines[:maxLines], "\n")
+				truncated = true
+			}
+			prompt.WriteString("\n**Full staged diff:**\n```diff\n")
+			prompt.WriteString(fullDiff)
+			prompt.WriteString("\n```")
+			if truncated {
+				prompt.WriteString(fmt.Sprintf("\n\n(diff truncated: showing first %d of %d lines)", maxLines, len(lines)))
+			}
+		}
+
+		return commitReadyMsg{text: prompt.String()}
+	}
+}
+
+// commitReadyMsg carries the expanded commit prompt to be sent to the agent.
+type commitReadyMsg struct {
+	text string
+}
+
 // handleCopyCommand copies the last assistant response to the system clipboard.
 // Usage: /copy  — copies the most recent agent reply (markdown source, not rendered).
 func (m *Model) handleCopyCommand() tea.Cmd {
