@@ -12,6 +12,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/topcheer/ggcode/internal/lanchat"
+	"github.com/topcheer/ggcode/internal/provider"
 )
 
 // ---- Messages ----
@@ -66,6 +67,28 @@ func (m *Model) SetLanChatHub(hub *lanchat.Hub, sendMsg func(tea.Msg)) {
 	m.lanChatHub = hub
 	if hub == nil {
 		return
+	}
+	// Model health reporting: classify run failures into degraded status,
+	// probe recovery in the background, and keep peers informed of the
+	// current model. The agent instance persists across provider swaps
+	// (ApplyProviderToAgent), so one-time registration is safe.
+	hub.SetHealthProber(func(ctx context.Context) error {
+		if m.agent == nil {
+			return fmt.Errorf("agent not ready")
+		}
+		return m.agent.HealthCheck(ctx)
+	})
+	if m.agent != nil {
+		m.agent.SetRunHealthHandler(func(err error) {
+			if err == nil {
+				hub.ReportAgentSuccess()
+			} else {
+				hub.ReportAgentFailure(provider.ClassifyLLMError(err))
+			}
+		})
+	}
+	if m.config != nil {
+		hub.SetModel(m.config.Model)
 	}
 	hub.SetCallbacks(
 		// On message

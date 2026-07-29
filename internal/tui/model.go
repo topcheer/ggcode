@@ -1374,6 +1374,11 @@ func (m *Model) setActiveRuntimeSelection(vendor, endpoint, model string) {
 	m.activeVendor = strings.TrimSpace(vendor)
 	m.activeEndpoint = strings.TrimSpace(endpoint)
 	m.activeModel = strings.TrimSpace(model)
+	// Keep LAN peers informed of the current model. Switching models also
+	// clears any degraded health status (different quota pool / credential).
+	if m.lanChatHub != nil {
+		m.lanChatHub.SetModel(m.activeModel)
+	}
 }
 
 func newTerminalTitleWriter() func(string) {

@@ -202,30 +202,9 @@ func isRetryableHTTPStatus(status int) bool {
 // isQuotaExhaustedError checks whether a 429 error is actually a permanent
 // quota/billing exhaustion rather than a transient rate limit. Coding plan
 // providers (ZAI/GLM, Kimi, OpenAI) use 429 for both cases.
+// Delegates to the shared classifier in errclass.go (single source of truth).
 func isQuotaExhaustedError(err error) bool {
-	if err == nil {
-		return false
-	}
-	lower := strings.ToLower(err.Error())
-	return strings.Contains(lower, "coding plan") ||
-		strings.Contains(lower, "usage limit") ||
-		strings.Contains(lower, "使用上限") ||
-		strings.Contains(lower, "套餐已到期") ||
-		strings.Contains(lower, "package has expired") ||
-		strings.Contains(lower, "insufficient balance") ||
-		strings.Contains(lower, "余额不足") ||
-		strings.Contains(lower, "欠费") ||
-		strings.Contains(lower, "quota exceeded") ||
-		strings.Contains(lower, "quotaexceeded") ||
-		strings.Contains(lower, "exceeded your current quota") ||
-		strings.Contains(lower, "额度已用完") ||
-		strings.Contains(lower, "额度耗尽") ||
-		strings.Contains(lower, "配额超限") ||
-		strings.Contains(lower, "配额耗尽") ||
-		strings.Contains(lower, "allocated quota") ||
-		strings.Contains(lower, "公平使用") ||
-		strings.Contains(lower, "fair usage") ||
-		strings.Contains(lower, "access_terminated")
+	return IsQuotaExhaustedError(err)
 }
 
 // retryWithBackoffCtx retries fn up to maxAttempts times with exponential backoff.

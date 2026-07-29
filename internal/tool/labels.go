@@ -598,6 +598,7 @@ func describeLanchatListResult(trimmed string) (ToolResultPresentation, bool) {
 		ProjectName string   `json:"project_name,omitempty"`
 		Languages   []string `json:"languages,omitempty"`
 		AgentBusy   bool     `json:"agent_busy"`
+		AgentStatus string   `json:"agent_status,omitempty"`
 		Self        bool     `json:"self"`
 	}
 	if err := json.Unmarshal([]byte(jsonStr), &peers); err != nil || len(peers) == 0 {
@@ -626,6 +627,9 @@ func describeLanchatListResult(trimmed string) (ToolResultPresentation, bool) {
 				status = "busy"
 			} else {
 				status = "online"
+			}
+			if p.AgentStatus != "" {
+				status += " · degraded:" + p.AgentStatus
 			}
 		}
 

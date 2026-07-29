@@ -935,6 +935,23 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 			lanchatHub.SetAttachments(lanchat.NewAttachmentManager())
 			lanchat.MountHandlers(a2aSrv.Mux(), lanchatHub, a2aSrv.Port())
 
+			// Model health reporting: advertise current model, classify run
+			// failures into degraded status, and probe recovery in the
+			// background (daemon has no user watching errors, so the probe
+			// loop is the primary recovery signal here).
+			lanchatHub.SetModel(cfg.Model)
+			lanchatHub.SetHealthProber(ag.HealthCheck)
+			ag.SetRunHealthHandler(func(runErr error) {
+				if lanchatHub == nil {
+					return
+				}
+				if runErr == nil {
+					lanchatHub.ReportAgentSuccess()
+				} else {
+					lanchatHub.ReportAgentFailure(provider.ClassifyLLMError(runErr))
+				}
+			})
+
 			// Sync peers from A2A registry
 			safego.Go("daemon.lanchat.syncPeers", func() {
 				syncPeers := func() {

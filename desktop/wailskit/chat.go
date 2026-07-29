@@ -558,6 +558,13 @@ func (b *ChatBridge) finishRun(err error) {
 	// Notify LAN Chat peers that our agent is now idle
 	if b.lanchatHub != nil {
 		b.lanchatHub.SetAgentBusy(false)
+		// Model health reporting: classify run failures into degraded
+		// status; success (including after internal retries) clears it.
+		if err == nil {
+			b.lanchatHub.ReportAgentSuccess()
+		} else if !errors.Is(err, context.Canceled) {
+			b.lanchatHub.ReportAgentFailure(provider.ClassifyLLMError(err))
+		}
 	}
 
 	// Signal run complete
@@ -2804,6 +2811,17 @@ func (b *ChatBridge) startA2A(cfg *config.Config, ag *agent.Agent, reg *tool.Reg
 	b.lanchatHub.SetAttachments(lanchat.NewAttachmentManager())
 	lanchat.MountHandlers(srv.Mux(), b.lanchatHub, srv.Port())
 
+	// Model health reporting: probe recovery after degraded status and
+	// advertise the current model to peers. Lazy b.agent access because
+	// the agent may be (re)created after the hub.
+	b.lanchatHub.SetHealthProber(func(ctx context.Context) error {
+		if b.agent == nil {
+			return fmt.Errorf("agent not ready")
+		}
+		return b.agent.HealthCheck(ctx)
+	})
+	b.lanchatHub.SetModel(b.cfg.Model)
+
 	// Register lanchat tool so the agent can autonomously send/approve messages.
 	b.registry.Register(tool.NewLanChatTool(b.lanchatHub, b.cfg.LanChat))
 
@@ -3208,6 +3226,11 @@ func (b *ChatBridge) OnConfigProviderChanged() {
 	resolved, err := b.cfg.ResolveActiveEndpoint()
 	if err != nil {
 		return
+	}
+	// Keep LAN peers informed of the current model. Switching models also
+	// clears any degraded health status (different quota pool / credential).
+	if b.lanchatHub != nil {
+		b.lanchatHub.SetModel(resolved.Model)
 	}
 	b.mu.Lock()
 	b.resolved = resolved

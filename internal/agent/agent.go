@@ -62,9 +62,9 @@ func isAgentRetryableLLMError(err error) bool {
 	// Quota/billing exhaustion is permanent — never retry, even if the error
 	// contains "rate limit" or "429". Coding plan providers (ZAI/GLM, Kimi,
 	// OpenAI) use 429 for both transient rate limits AND permanent quota
-	// exhaustion. The provider layer's isQuotaExhaustedError already filters
+	// exhaustion. The provider layer's shared classifier already filters
 	// these out; we must do the same at the agent level.
-	if isAgentQuotaExhausted(s) {
+	if provider.ClassifyLLMError(err) == provider.FailureQuota {
 		return false
 	}
 
@@ -93,30 +93,6 @@ func isAgentRetryableLLMError(err error) bool {
 	return false
 }
 
-// isAgentQuotaExhausted mirrors provider.isQuotaExhaustedError but works on
-// a pre-lowercased string. Must stay in sync with the provider layer.
-func isAgentQuotaExhausted(s string) bool {
-	return strings.Contains(s, "coding plan") ||
-		strings.Contains(s, "usage limit") ||
-		strings.Contains(s, "使用上限") ||
-		strings.Contains(s, "套餐已到期") ||
-		strings.Contains(s, "package has expired") ||
-		strings.Contains(s, "insufficient balance") ||
-		strings.Contains(s, "余额不足") ||
-		strings.Contains(s, "欠费") ||
-		strings.Contains(s, "quota exceeded") ||
-		strings.Contains(s, "quotaexceeded") ||
-		strings.Contains(s, "exceeded your current quota") ||
-		strings.Contains(s, "额度已用完") ||
-		strings.Contains(s, "额度耗尽") ||
-		strings.Contains(s, "配额超限") ||
-		strings.Contains(s, "配额耗尽") ||
-		strings.Contains(s, "allocated quota") ||
-		strings.Contains(s, "公平使用") ||
-		strings.Contains(s, "fair usage") ||
-		strings.Contains(s, "access_terminated")
-}
-
 // Agent orchestrates the agentic loop: send messages to LLM, execute tool calls, loop.
 type Agent struct {
 	provider                   provider.Provider
@@ -131,6 +107,7 @@ type Agent struct {
 	onCheckpoint               func(summaryMsgID, lastMsgID string, tokenCount int)
 	lastCheckpointMessageCount int // tracks last fallback checkpoint to avoid spamming
 	onRunResult                runResultHandler
+	onRunHealth                func(error) // run-level health signal (success/failure) for node health reporting
 	hookConfig                 hooks.HookConfig
 	workingDir                 string
 	sessionID                  string // current session ID; determines todo file path
@@ -299,6 +276,17 @@ func (a *Agent) SetRunResultWithContentHandler(fn func([]provider.ContentBlock, 
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.onRunResult = fn
+}
+
+// SetRunHealthHandler sets a callback invoked after each RunStreamWithContent
+// completes, receiving the final error (nil on success, including success
+// after internal retries). Unlike onRunResult it is a dedicated slot for
+// node health reporting (e.g. lanchat presence) and does not conflict with
+// the session-persistence handler.
+func (a *Agent) SetRunHealthHandler(fn func(error)) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.onRunHealth = fn
 }
 
 // SetSystemPromptInjector sets a callback that returns extra text to inject
@@ -742,6 +730,14 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		a.mu.RUnlock()
 		if fn != nil {
 			fn(content, err)
+		}
+		// Node health reporting: separate slot from onRunResult so both
+		// can be registered without conflict.
+		a.mu.RLock()
+		healthFn := a.onRunHealth
+		a.mu.RUnlock()
+		if healthFn != nil {
+			healthFn(err)
 		}
 		// Clean up session todos on agent stop. This prevents permanent todo
 		// residue when the LLM creates todos but forgets to clear them.

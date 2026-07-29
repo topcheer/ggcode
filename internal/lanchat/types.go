@@ -53,6 +53,17 @@ type Participant struct {
 	// which agents are available and which are occupied.
 	AgentBusy bool `json:"agent_busy,omitempty"`
 
+	// AgentStatus reports model health: "" when healthy, or "quota" /
+	// "rate_limited" / "auth" when the node's current model is unusable.
+	// Advisory — peers still deliver DMs, but orchestrating agents can
+	// skip or deprioritize degraded nodes when choosing collaborators.
+	AgentStatus      string `json:"agent_status,omitempty"`
+	AgentStatusSince int64  `json:"agent_status_since,omitempty"` // unix; 0 when healthy
+
+	// Model is the node's currently configured model name, helping peers
+	// judge which model is degraded (or available after a switch).
+	Model string `json:"model,omitempty"`
+
 	// UDPCapable indicates this node supports UDP transport for lanchat
 	// messages. When true, peers can fallback to UDP unicast/multicast
 	// if TCP is blocked by a firewall.

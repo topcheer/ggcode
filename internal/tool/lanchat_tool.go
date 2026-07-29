@@ -526,6 +526,8 @@ func (t LanChatTool) doList(teamFilter string) Result {
 		ProjectName string   `json:"project_name,omitempty"`
 		Languages   []string `json:"languages,omitempty"`
 		AgentBusy   bool     `json:"agent_busy"`
+		AgentStatus string   `json:"agent_status,omitempty"` // "" healthy; quota/rate_limited/auth degraded
+		Model       string   `json:"model,omitempty"`
 		Self        bool     `json:"self"`
 	}
 
@@ -553,6 +555,8 @@ func (t LanChatTool) doList(teamFilter string) Result {
 			ProjectName: p.ProjectName,
 			Languages:   p.Languages,
 			AgentBusy:   p.AgentBusy,
+			AgentStatus: p.AgentStatus,
+			Model:       p.Model,
 			Self:        p.NodeID == selfNodeID,
 		})
 	}

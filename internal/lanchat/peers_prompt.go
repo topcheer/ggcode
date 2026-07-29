@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 )
 
 // lanchatPeersInfo builds a dynamic system prompt section listing all online
@@ -26,6 +27,9 @@ func FormatPeersInfo(hub *Hub, workspace string) string {
 		languages string
 		busy      bool
 		sameWS    bool
+		health    string // "" healthy; "quota"/"rate_limited"/"auth" degraded
+		since     int64  // unix; degraded since
+		model     string
 	}
 
 	var peers []peerEntry
@@ -48,6 +52,9 @@ func FormatPeersInfo(hub *Hub, workspace string) string {
 			languages: strings.Join(p.Languages, "+"),
 			busy:      p.AgentBusy,
 			sameWS:    p.Workspace == workspace,
+			health:    p.AgentStatus,
+			since:     p.AgentStatusSince,
+			model:     p.Model,
 		})
 	}
 
@@ -72,12 +79,23 @@ func FormatPeersInfo(hub *Hub, workspace string) string {
 		if p.busy {
 			status = "busy"
 		}
+		// Model health: degraded nodes are still reachable (status is
+		// advisory), but orchestrating agents should prefer healthy peers
+		// for time-critical delegation.
+		if p.health != "" {
+			status = fmt.Sprintf("%s, MODEL DEGRADED:%s since %s (may recover; prefer healthy peers for urgent tasks)",
+				status, p.health, time.Unix(p.since, 0).Format("15:04"))
+		}
 		langs := p.languages
 		if langs == "" {
 			langs = "-"
 		}
-		return fmt.Sprintf("- %s (%s) — %s [team=%s, role=%s, langs=%s]",
-			p.name, p.workspace, status, p.team, p.role, langs)
+		model := p.model
+		if model == "" {
+			model = "-"
+		}
+		return fmt.Sprintf("- %s (%s) — %s [team=%s, role=%s, langs=%s, model=%s]",
+			p.name, p.workspace, status, p.team, p.role, langs, model)
 	}
 
 	var sameWSBusy, sameWSIdle, others []peerEntry

@@ -48,6 +48,14 @@ type Hub struct {
 	// Propagated to peers via presence exchange.
 	agentBusy bool
 
+	// Model health state (see health.go). agentStatus is "" when healthy.
+	agentStatus          string
+	agentStatusSince     int64
+	model                string
+	consecRateLimitFails int
+	healthProber         HealthProber
+	probeCancel          context.CancelFunc
+
 	// peers discovered via A2A registry callbacks
 	peers map[string]*Participant // key = NodeID
 
@@ -317,22 +325,25 @@ func (h *Hub) SelfParticipant() Participant {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	return Participant{
-		NodeID:      h.nodeID,
-		HumanNick:   h.humanNick,
-		AgentNick:   h.agentNick,
-		Mode:        h.mode,
-		Endpoint:    h.endpoint,
-		Role:        h.role,
-		Team:        h.team,
-		Online:      true,
-		LastSeen:    time.Now().Unix(),
-		Workspace:   h.workspace,
-		ProjectName: h.projectName,
-		Languages:   h.languages,
-		Frameworks:  h.frameworks,
-		HasGit:      h.hasGit,
-		HasTests:    h.hasTests,
-		AgentBusy:   h.agentBusy,
+		NodeID:           h.nodeID,
+		HumanNick:        h.humanNick,
+		AgentNick:        h.agentNick,
+		Mode:             h.mode,
+		Endpoint:         h.endpoint,
+		Role:             h.role,
+		Team:             h.team,
+		Online:           true,
+		LastSeen:         time.Now().Unix(),
+		Workspace:        h.workspace,
+		ProjectName:      h.projectName,
+		Languages:        h.languages,
+		Frameworks:       h.frameworks,
+		HasGit:           h.hasGit,
+		HasTests:         h.hasTests,
+		AgentBusy:        h.agentBusy,
+		AgentStatus:      h.agentStatus,
+		AgentStatusSince: h.agentStatusSince,
+		Model:            h.model,
 	}
 }
 
@@ -345,18 +356,10 @@ func (h *Hub) SetAgentBusy(busy bool) {
 		return
 	}
 	h.agentBusy = busy
-	peers := make([]Participant, 0, len(h.peers))
-	for _, p := range h.peers {
-		if p.Online {
-			peers = append(peers, *p)
-		}
-	}
 	h.mu.Unlock()
 
 	// Notify peers of the state change
-	for _, peer := range peers {
-		safego.Go("lanchat.agentBusyPresence", func() { h.sendPresence(peer) })
-	}
+	h.broadcastPresence()
 }
 
 // shouldNotifyJoin returns true if we should fire the "is online" callback
@@ -782,6 +785,12 @@ func (h *Hub) HandlePresence(p Participant) {
 		}
 		// Update agent busy state (always overwrite — busy state changes are meaningful)
 		existing.AgentBusy = p.AgentBusy
+		// Update model health fields (always overwrite — presence is authoritative)
+		existing.AgentStatus = p.AgentStatus
+		existing.AgentStatusSince = p.AgentStatusSince
+		if p.Model != "" {
+			existing.Model = p.Model
+		}
 		// If we previously didn't know the nick but now we do, fire callback
 		// so the join notification shows the real name.
 		if existing.HumanNick != "" && !existing.notifiedJoin && h.shouldNotifyJoin(existing.HumanNick) {
@@ -1768,6 +1777,14 @@ func truncate(s string, maxLen int) string {
 // timeout (typically 90s).
 func (h *Hub) Close() {
 	h.closeOnce.Do(func() {
+		// Stop the health probe loop first — it must not outlive the hub.
+		h.mu.Lock()
+		if h.probeCancel != nil {
+			h.probeCancel()
+			h.probeCancel = nil
+		}
+		h.mu.Unlock()
+
 		h.mu.RLock()
 		transport := h.udpTransport
 		h.mu.RUnlock()
