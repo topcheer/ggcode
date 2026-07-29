@@ -870,7 +870,14 @@ window.__DATA__ = ` + jsonData + `;
           yLeft: { position: 'left', ticks: { callback: fmt }, title: { display: true, text: 'Input / Cache', color: '#8b949e' } },
           yRight: { position: 'right', ticks: { callback: fmt }, title: { display: true, text: 'Output', color: '#8b949e' }, grid: { drawOnChartArea: false } },
         },
-        plugins: { legend: { position: 'top' }, tooltip: { callbacks: { label: ctx => ctx.dataset.label + ': ' + fmt(ctx.parsed.y) } } }
+        interaction: { mode: 'index', intersect: false },
+        plugins: { legend: { position: 'top' }, tooltip: { filter: (item, idx) => idx === 0, callbacks: {
+          title: items => items[0].label,
+          label: ctx => {
+            const m = models[ctx.dataIndex];
+            return ['Input: ' + fmt(m.input), 'Cache: ' + fmt(m.cache), 'Output: ' + fmt(m.output), 'Total: ' + fmt(m.input + m.cache + m.output)];
+          }
+        } } }
       }
     });
 
