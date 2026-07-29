@@ -91,6 +91,14 @@ func (t WriteFile) Execute(ctx context.Context, input json.RawMessage) (Result, 
 		}
 	}
 
+	// Capture old content before overwriting (for diff feedback).
+	var oldContent string
+	if oldSize > 0 {
+		if data, err := os.ReadFile(args.Path); err == nil {
+			oldContent = string(data)
+		}
+	}
+
 	writeData := []byte(args.Content)
 	writeData, fmtChanged := formatGoBytes(args.Path, writeData)
 	if err := atomicWriteFile(args.Path, writeData, 0644); err != nil {
@@ -108,6 +116,7 @@ func (t WriteFile) Execute(ctx context.Context, input json.RawMessage) (Result, 
 		msg += " (auto-formatted)"
 	}
 	msg += scanAndWarn(args.Path, string(writeData))
+	msg += compactDiff(oldContent, string(writeData))
 	msg += postEditDiagnostics(t.WorkingDir, args.Path)
 	return Result{Content: msg}, nil
 }
