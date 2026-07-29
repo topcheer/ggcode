@@ -131,6 +131,10 @@ func (t ReadFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
+
+	// Record the file's mtime for stale-read detection by write_file.
+	defaultFileTracker.RecordRead(args.Path)
+
 	return Result{Content: text}, nil
 }
 

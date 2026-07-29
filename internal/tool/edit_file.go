@@ -147,6 +147,11 @@ func (t EditFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 	}
 	msg += scanAndWarn(args.FilePath, string(writeData))
 	msg += postEditDiagnostics(t.WorkingDir, args.FilePath)
+
+	// Record the file's new mtime so subsequent write_file calls don't see
+	// a false stale-read from this edit.
+	defaultFileTracker.RecordWrite(args.FilePath)
+
 	return Result{Content: msg}, nil
 }
 

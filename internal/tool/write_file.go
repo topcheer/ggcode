@@ -77,6 +77,20 @@ func (t WriteFile) Execute(ctx context.Context, input json.RawMessage) (Result, 
 		oldSize = info.Size()
 	}
 
+	// Stale-read guard: if the file was modified externally since the agent's
+	// last read/write, refuse the overwrite to prevent silent data loss.
+	// This is critical in multi-agent scenarios where concurrent edits can
+	// cause lost updates.
+	if oldSize > 0 {
+		if stale, since := defaultFileTracker.CheckStale(args.Path); stale {
+			return Result{IsError: true, Content: fmt.Sprintf(
+				"file was modified externally since last read (changed after %s). "+
+					"Re-read the file with read_file before writing to avoid overwriting external changes.",
+				since.Format("2006-01-02 15:04:05"),
+			)}, nil
+		}
+	}
+
 	writeData := []byte(args.Content)
 	writeData, fmtChanged := formatGoBytes(args.Path, writeData)
 	if err := atomicWriteFile(args.Path, writeData, 0644); err != nil {

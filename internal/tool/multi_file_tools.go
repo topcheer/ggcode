@@ -189,6 +189,12 @@ func (t MultiFileRead) Execute(ctx context.Context, input json.RawMessage) (Resu
 	if body.Len() > 0 {
 		content += "\n\n" + strings.TrimSuffix(body.String(), "\n")
 	}
+
+	// Record mtimes for all successfully read files.
+	for _, req := range reqs {
+		defaultFileTracker.RecordRead(req.Path)
+	}
+
 	return Result{Content: content, IsError: false}, nil
 }
 
@@ -384,6 +390,8 @@ func (t MultiFileEdit) Execute(ctx context.Context, input json.RawMessage) (Resu
 		if idx, ok := byPath[plan.Path]; ok && out.Results[idx].Status == "success" {
 			out.SecretWarnings += scanAndWarn(plan.Path, plan.NewContent)
 			out.DiagnosticWarnings += postEditDiagnostics(t.WorkingDir, plan.Path)
+			// Record the file's new mtime for stale-read detection.
+			defaultFileTracker.RecordWrite(plan.Path)
 		}
 	}
 	content, err := json.Marshal(out)

@@ -200,6 +200,20 @@ func (t MultiFileWrite) Execute(ctx context.Context, input json.RawMessage) (Res
 			continue
 		}
 
+		// Stale-read guard: refuse to overwrite if the file was modified
+		// externally since the agent's last read/write.
+		if info, err := os.Stat(f.Path); err == nil && info.Size() > 0 {
+			if stale, since := defaultFileTracker.CheckStale(f.Path); stale {
+				failed++
+				results = append(results, writeResult{
+					Path:   f.Path,
+					Status: "error",
+					Error:  fmt.Sprintf("file modified externally since last read (changed after %s) — re-read before writing", since.Format("2006-01-02 15:04:05")),
+				})
+				continue
+			}
+		}
+
 		// Write the file using atomic write (temp+rename) to prevent
 		// corruption on crash/mid-write failure. Consistent with all
 		// other file writing tools in the package.
@@ -213,6 +227,9 @@ func (t MultiFileWrite) Execute(ctx context.Context, input json.RawMessage) (Res
 			})
 			continue
 		}
+
+		// Record the new mtime so subsequent writes don't see false staleness.
+		defaultFileTracker.RecordWrite(f.Path)
 
 		written++
 		results = append(results, writeResult{

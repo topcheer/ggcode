@@ -109,5 +109,10 @@ func (t MultiEditFile) Execute(ctx context.Context, input json.RawMessage) (Resu
 	}
 	result += scanAndWarn(args.FilePath, string(writeData))
 	result += postEditDiagnostics(t.WorkingDir, args.FilePath)
+
+	// Record the file's new mtime so subsequent write_file calls don't see
+	// a false stale-read from this edit.
+	defaultFileTracker.RecordWrite(args.FilePath)
+
 	return Result{Content: result}, nil
 }
