@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -13,7 +12,6 @@ import (
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/im"
-	"github.com/topcheer/ggcode/internal/util"
 )
 
 // imPanelConfig captures per-adapter differences
@@ -528,93 +526,6 @@ func currentIMBindings(mgr *im.Manager, platform im.Platform) []im.ChannelBindin
 		}
 	}
 	return result
-}
-
-func imBindingEntries(m *Model, cfg imPanelConfig) []imBindingEntry {
-	if m.config == nil {
-		return nil
-	}
-	occupied := make(map[string]string)
-	adapterStates := make(map[string]im.AdapterState)
-	bindingByAdapter := make(map[string]im.ChannelBinding)
-	currentWorkspace := strings.TrimSpace(m.currentWorkspacePath())
-	if m.imManager != nil {
-		snapshot := m.imManager.Snapshot()
-		for _, state := range snapshot.Adapters {
-			adapterStates[state.Name] = state
-		}
-		for _, b := range currentIMBindings(m.imManager, cfg.platform) {
-			bindingByAdapter[b.Adapter] = b
-		}
-		if bindings, err := m.imManager.ListBindings(); err == nil {
-			for _, binding := range bindings {
-				occupied[binding.Adapter] = binding.Workspace
-			}
-		}
-	}
-	keys := make([]string, 0, len(m.config.IM.Adapters))
-	for name, adapter := range m.config.IM.Adapters {
-		if strings.EqualFold(adapter.Platform, string(cfg.platform)) {
-			keys = append(keys, name)
-		}
-	}
-	sort.Strings(keys)
-	entries := make([]imBindingEntry, 0)
-	for _, name := range keys {
-		targetID := defaultIMTargetID(currentWorkspace)
-		workspaceChannel := ""
-		if b, ok := bindingByAdapter[name]; ok && strings.TrimSpace(b.Workspace) == currentWorkspace {
-			targetID = util.FirstNonEmpty(b.TargetID, targetID)
-			workspaceChannel = strings.TrimSpace(b.ChannelID)
-		}
-		entries = append(entries, imBindingEntry{
-			Adapter:          name,
-			Label:            name,
-			TargetID:         targetID,
-			WorkspaceChannel: workspaceChannel,
-			OccupiedBy:       occupied[name],
-			AdapterState:     imStatePtr(adapterStates[name]),
-			Disabled:         !m.config.IM.Adapters[name].Enabled,
-			Muted:            bindingByAdapter[name].Muted,
-		})
-	}
-	return entries
-}
-
-func imBindingLabels(m *Model, entries []imBindingEntry, cfg imPanelConfig) []string {
-	currentWS := m.currentWorkspacePath()
-	labels := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		var status string
-		switch {
-		case entry.Disabled:
-			status = m.t("panel." + cfg.adapterType + ".entry.disabled")
-		case entry.Muted:
-			status = m.t("panel." + cfg.adapterType + ".entry.muted")
-		case entry.OccupiedBy != "" && entry.OccupiedBy == currentWS:
-			status = m.t("panel." + cfg.adapterType + ".entry.active")
-		case entry.OccupiedBy != "":
-			status = m.t("panel."+cfg.adapterType+".entry.bound_other", entry.OccupiedBy)
-		default:
-			status = m.t("panel." + cfg.adapterType + ".entry.available")
-		}
-		labels = append(labels, fmt.Sprintf("%s · %s", entry.Adapter, status))
-	}
-	return labels
-}
-
-func imAdapterStatus(m *Model, state *im.AdapterState, cfg imPanelConfig) string {
-	if state == nil {
-		return m.t("panel." + cfg.adapterType + ".status.not_started")
-	}
-	status := strings.TrimSpace(state.Status)
-	if status == "" {
-		status = m.t("panel." + cfg.adapterType + ".status.unknown")
-	}
-	if state.Healthy {
-		return status
-	}
-	return status
 }
 
 // createIMPanelAdapterCmd creates a command to add a new adapter

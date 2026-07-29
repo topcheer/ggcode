@@ -199,14 +199,6 @@ func LoadCommandRules(path string) *CommandRuleSet {
 	return NewCommandRuleSetFromLists(data.Allow, data.Deny)
 }
 
-func patternsToStrings(patterns []*regexp.Regexp) []string {
-	out := make([]string, 0, len(patterns))
-	for _, re := range patterns {
-		out = append(out, re.String())
-	}
-	return out
-} // retained for fallback/debugging; display paths now use original pattern strings
-
 // compileCommandPattern converts a user-friendly pattern into a compiled regex.
 //
 // Pattern syntax:
