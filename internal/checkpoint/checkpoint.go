@@ -20,9 +20,10 @@ type Checkpoint struct {
 	ToolCall   string    `json:"tool_call"`
 }
 
-// Manager manages file checkpoints for undo support.
+// Manager manages file checkpoints for undo/redo support.
 type Manager struct {
 	checkpoints    []Checkpoint
+	redoStack      []Checkpoint // checkpoints popped by Undo, available for Redo
 	maxCheckpoints int
 	mu             sync.Mutex
 }
@@ -36,6 +37,7 @@ func NewManager(maxCheckpoints int) *Manager {
 }
 
 // Save records a checkpoint before a file edit.
+// A new edit invalidates the redo history (standard undo/redo semantics).
 func (m *Manager) Save(filePath, oldContent, newContent, toolCall string) Checkpoint {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -56,10 +58,14 @@ func (m *Manager) Save(filePath, oldContent, newContent, toolCall string) Checkp
 		m.checkpoints = m.checkpoints[len(m.checkpoints)-m.maxCheckpoints:]
 	}
 
+	// New edit invalidates redo history
+	m.redoStack = nil
+
 	return cp
 }
 
 // Undo rolls back the most recent checkpoint by writing OldContent back to the file.
+// The undone checkpoint is pushed onto the redo stack so it can be re-applied.
 func (m *Manager) Undo() (*Checkpoint, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -78,6 +84,7 @@ func (m *Manager) Undo() (*Checkpoint, error) {
 	}
 
 	m.checkpoints = m.checkpoints[:len(m.checkpoints)-1]
+	m.redoStack = append(m.redoStack, cp)
 	return &cp, nil
 }
 
@@ -173,11 +180,40 @@ func (m *Manager) Last() *Checkpoint {
 	return &cp
 }
 
-// Clear removes all checkpoints.
+// Redo re-applies the most recently undone checkpoint by writing NewContent
+// back to the file. The checkpoint is returned to the main checkpoint list.
+func (m *Manager) Redo() (*Checkpoint, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if len(m.redoStack) == 0 {
+		return nil, fmt.Errorf("nothing to redo")
+	}
+
+	cp := m.redoStack[len(m.redoStack)-1]
+
+	if err := util.AtomicWriteFile(cp.FilePath, []byte(cp.NewContent), 0644); err != nil {
+		return nil, fmt.Errorf("failed to write file: %w", err)
+	}
+
+	m.redoStack = m.redoStack[:len(m.redoStack)-1]
+	m.checkpoints = append(m.checkpoints, cp)
+	return &cp, nil
+}
+
+// CanRedo returns true if there are checkpoints available for redo.
+func (m *Manager) CanRedo() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.redoStack) > 0
+}
+
+// Clear removes all checkpoints and redo history.
 func (m *Manager) Clear() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.checkpoints = nil
+	m.redoStack = nil
 }
 
 func generateID() string {

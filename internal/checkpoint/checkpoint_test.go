@@ -183,3 +183,123 @@ func TestModifiedFilesEmpty(t *testing.T) {
 		t.Errorf("expected empty slice, got %d items", len(files))
 	}
 }
+
+func TestRedo(t *testing.T) {
+	m := NewManager(50)
+
+	dir := t.TempDir()
+	fp := filepath.Join(dir, "test.txt")
+	os.WriteFile(fp, []byte("hello"), 0644)
+
+	m.Save(fp, "hello", "world", "edit_file")
+	os.WriteFile(fp, []byte("world"), 0644)
+
+	// Undo
+	_, err := m.Undo()
+	if err != nil {
+		t.Fatalf("Undo failed: %v", err)
+	}
+	data, _ := os.ReadFile(fp)
+	if string(data) != "hello" {
+		t.Fatalf("expected hello after undo, got %s", string(data))
+	}
+
+	// CanRedo should be true now
+	if !m.CanRedo() {
+		t.Error("expected CanRedo to be true after undo")
+	}
+
+	// Redo
+	cp, err := m.Redo()
+	if err != nil {
+		t.Fatalf("Redo failed: %v", err)
+	}
+	data, _ = os.ReadFile(fp)
+	if string(data) != "world" {
+		t.Errorf("expected world after redo, got %s", string(data))
+	}
+	if cp.NewContent != "world" {
+		t.Errorf("expected new_content world, got %s", cp.NewContent)
+	}
+
+	// Checkpoint should be back on the main list
+	if len(m.List()) != 1 {
+		t.Errorf("expected 1 checkpoint after redo, got %d", len(m.List()))
+	}
+
+	// CanRedo should be false now
+	if m.CanRedo() {
+		t.Error("expected CanRedo to be false after redo")
+	}
+}
+
+func TestRedoEmpty(t *testing.T) {
+	m := NewManager(50)
+	_, err := m.Redo()
+	if err == nil {
+		t.Fatal("expected error for redo on empty redo stack")
+	}
+}
+
+func TestRedoMultiple(t *testing.T) {
+	m := NewManager(50)
+
+	dir := t.TempDir()
+	fp := filepath.Join(dir, "test.txt")
+	os.WriteFile(fp, []byte("a"), 0644)
+
+	m.Save(fp, "a", "b", "edit_file")
+	os.WriteFile(fp, []byte("b"), 0644)
+	m.Save(fp, "b", "c", "edit_file")
+	os.WriteFile(fp, []byte("c"), 0644)
+
+	// Undo twice
+	m.Undo() // c -> b
+	m.Undo() // b -> a
+	data, _ := os.ReadFile(fp)
+	if string(data) != "a" {
+		t.Fatalf("expected a after 2 undos, got %s", string(data))
+	}
+
+	// Redo twice
+	m.Redo() // a -> b
+	data, _ = os.ReadFile(fp)
+	if string(data) != "b" {
+		t.Errorf("expected b after 1 redo, got %s", string(data))
+	}
+	m.Redo() // b -> c
+	data, _ = os.ReadFile(fp)
+	if string(data) != "c" {
+		t.Errorf("expected c after 2 redos, got %s", string(data))
+	}
+
+	// Redo again should fail
+	_, err := m.Redo()
+	if err == nil {
+		t.Fatal("expected error for redo when redo stack is empty")
+	}
+}
+
+func TestSaveClearsRedoStack(t *testing.T) {
+	m := NewManager(50)
+
+	dir := t.TempDir()
+	fp := filepath.Join(dir, "test.txt")
+	os.WriteFile(fp, []byte("a"), 0644)
+
+	m.Save(fp, "a", "b", "edit_file")
+	os.WriteFile(fp, []byte("b"), 0644)
+
+	m.Undo() // b -> a, pushes to redo stack
+
+	if !m.CanRedo() {
+		t.Fatal("expected CanRedo true after undo")
+	}
+
+	// New edit should clear redo stack
+	m.Save(fp, "a", "d", "edit_file")
+
+	if m.CanRedo() {
+		t.Error("expected CanRedo false after new Save (redo stack should be cleared)")
+	}
+}

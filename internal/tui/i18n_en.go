@@ -955,6 +955,10 @@ func enCatalog(key string) string {
 		return "Undo failed: %v\n\n"
 	case "checkpoint.undid":
 		return "Undid %s on %s (checkpoint %s)\n"
+	case "checkpoint.redo_failed":
+		return "Redo failed: %v\n\n"
+	case "checkpoint.redid":
+		return "Redid %s on %s (checkpoint %s)\n"
 	case "checkpoint.none":
 		return "No checkpoints.\n\n"
 	case "files.disabled":
@@ -966,13 +970,13 @@ func enCatalog(key string) string {
 	case "files.item":
 		return "  %s  %d edits  last: %s%s\n"
 	case "files.hint":
-		return "\nUse /undo to revert the most recent edit, /checkpoints for details.\n\n"
+		return "\nUse /undo to revert the most recent edit, /redo to re-apply, /checkpoints for details.\n\n"
 	case "checkpoint.list.title":
 		return "Checkpoints (%d):\n\n"
 	case "checkpoint.list.item":
 		return "  %d. %s  %s  %s  %s\n"
 	case "checkpoint.list.hint":
-		return "\nUse /undo to revert the most recent.\n\n"
+		return "\nUse /undo to revert the most recent, /redo to re-apply.\n\n"
 	case "memory.auto_unavailable":
 		return "Auto memory not initialized.\n\n"
 	case "memory.list_failed":

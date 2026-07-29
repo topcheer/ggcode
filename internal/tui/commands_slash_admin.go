@@ -145,10 +145,31 @@ func (m *Model) handleUndoCommand() tea.Cmd {
 	}
 }
 
-// Iteration 4: handleRedoCommand restores the last undone file edit via git.
+// handleRedoCommand re-applies the most recently undone file edit.
 func (m *Model) handleRedoCommand() tea.Cmd {
+	if m.agent == nil {
+		return func() tea.Msg {
+			return streamMsg(m.t("checkpoint.disabled"))
+		}
+	}
 	return func() tea.Msg {
-		return streamMsg("Redo: use `git checkout <file>` to restore. The undo stack is not reversible.")
+		cpMgr := m.agent.CheckpointManager()
+		if cpMgr == nil {
+			return streamMsg(m.t("checkpoint.disabled"))
+		}
+		cp, err := cpMgr.Redo()
+		if err != nil {
+			return streamMsg(m.t("checkpoint.redo_failed", err))
+		}
+		// Invalidate tool caches so the agent doesn't serve stale results.
+		m.agent.InvalidateToolCaches()
+		// Show diff (old -> new) — the re-applied change
+		diffText := diff.UnifiedDiff(cp.OldContent, cp.NewContent, 3)
+		var b strings.Builder
+		b.WriteString(m.t("checkpoint.redid", cp.ToolCall, displayToolFileTarget(cp.FilePath), cp.ID))
+		b.WriteString(FormatDiff(diffText))
+		b.WriteString("\n")
+		return streamMsg(b.String())
 	}
 }
 

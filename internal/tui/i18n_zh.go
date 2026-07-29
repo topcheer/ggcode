@@ -953,6 +953,10 @@ func zhCatalog(key string) string {
 		return "正在撤销最近一次修改（Esc+Esc）...\n\n"
 	case "checkpoint.undo_failed":
 		return "撤销失败：%v\n\n"
+	case "checkpoint.redo_failed":
+		return "重做失败：%v\n\n"
+	case "checkpoint.redid":
+		return "重做 %s 于 %s（检查点 %s）\n"
 	case "checkpoint.undid":
 		return "已撤销 %s 对 %s 的修改（检查点 %s）\n"
 	case "checkpoint.none":
@@ -966,13 +970,13 @@ func zhCatalog(key string) string {
 	case "files.item":
 		return "  %s  %d 次编辑  最后: %s%s\n"
 	case "files.hint":
-		return "\n使用 /undo 撤销最近一次编辑，/checkpoints 查看详情。\n\n"
+		return "\n使用 /undo 撤销最近一次编辑，/redo 重做，/checkpoints 查看详情。\n\n"
 	case "checkpoint.list.title":
 		return "检查点（%d）：\n\n"
 	case "checkpoint.list.item":
 		return "  %d. %s  %s  %s  %s\n"
 	case "checkpoint.list.hint":
-		return "\n使用 /undo 回滚最近一次修改。\n\n"
+		return "\n使用 /undo 回滚最近一次修改，/redo 重做。\n\n"
 	case "memory.auto_unavailable":
 		return "自动记忆未初始化。\n\n"
 	case "memory.list_failed":

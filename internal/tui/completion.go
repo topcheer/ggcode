@@ -243,7 +243,7 @@ var SlashCommandDescriptions = map[string]string{
 	"/mcp":         "Show MCP servers",
 	"/memory":      "Manage memory",
 	"/undo":        "Undo last file edit",
-	"/redo":        "Redo last undone edit (restore from git)",
+	"/redo":        "Redo the last undone file edit (re-apply checkpoint)",
 	"/files":       "Show files modified by agent",
 	"/tools":       "List available tools",
 	"/checkpoints": "List checkpoints",
