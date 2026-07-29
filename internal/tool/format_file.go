@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"go/format"
 	"path/filepath"
+
+	"github.com/topcheer/ggcode/internal/debug"
 )
 
 // formatGoBytes applies gofmt-style formatting to Go source files (.go).
@@ -22,5 +24,6 @@ func formatGoBytes(path string, data []byte) ([]byte, bool) {
 	if bytes.Equal(formatted, data) {
 		return data, false
 	}
+	debug.Log("tool", "auto-format: %s (%d → %d bytes)", filepath.Base(path), len(data), len(formatted))
 	return formatted, true
 }
