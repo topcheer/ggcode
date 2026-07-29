@@ -23,6 +23,17 @@ func normalizeToolInputValue(raw json.RawMessage) any {
 			"value": decoded,
 		}
 	}
+	// Attempt JSON repair before falling back to raw wrapper.
+	// Stream truncation and weak models frequently produce nearly-valid
+	// JSON that can be salvaged instead of lost.
+	if repaired, ok := RepairJSON(trimmed); ok {
+		if err := json.Unmarshal(repaired, &decoded); err == nil {
+			if _, ok := decoded.(map[string]any); ok {
+				return decoded
+			}
+			return map[string]any{"value": decoded}
+		}
+	}
 	return map[string]any{
 		"_ggcode_raw_input": string(trimmed),
 	}

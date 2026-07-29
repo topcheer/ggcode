@@ -27,6 +27,8 @@ func TestAnthropicBuildParamsMarshalsValidToolUseInput(t *testing.T) {
 }
 
 func TestAnthropicBuildParamsFallsBackForInvalidToolUseInput(t *testing.T) {
+	// Truncated JSON that can be repaired (missing closing brace).
+	// normalizeToolInputValue should repair it to valid JSON.
 	p := &AnthropicProvider{model: "test-model", maxTokens: 128}
 	params := p.buildParams([]Message{
 		{
@@ -43,10 +45,39 @@ func TestAnthropicBuildParamsFallsBackForInvalidToolUseInput(t *testing.T) {
 
 	data, err := json.Marshal(params)
 	if err != nil {
+		t.Fatalf("expected anthropic params to marshal with repaired input, got %v", err)
+	}
+	// Repaired JSON should contain the valid path, not the raw fallback.
+	if !strings.Contains(string(data), "README.md") {
+		t.Fatalf("expected repaired path in marshaled params, got %s", string(data))
+	}
+	if strings.Contains(string(data), "_ggcode_raw_input") {
+		t.Fatalf("repairable JSON should not fall back to raw input, got %s", string(data))
+	}
+}
+
+func TestAnthropicBuildParamsFallsBackForUnrepairableInput(t *testing.T) {
+	// Truly garbled input that cannot be repaired.
+	p := &AnthropicProvider{model: "test-model", maxTokens: 128}
+	params := p.buildParams([]Message{
+		{
+			Role: "assistant",
+			Content: []ContentBlock{
+				ToolUseBlock("tool-1", "edit_file", json.RawMessage(`<<garbage>>`)),
+			},
+		},
+		{
+			Role:    "user",
+			Content: []ContentBlock{ToolResultBlock("tool-1", "updated", false)},
+		},
+	}, nil)
+
+	data, err := json.Marshal(params)
+	if err != nil {
 		t.Fatalf("expected anthropic params to marshal with fallback input, got %v", err)
 	}
 	if !strings.Contains(string(data), "_ggcode_raw_input") {
-		t.Fatalf("expected fallback marker in marshaled params, got %s", string(data))
+		t.Fatalf("expected fallback marker for unrepairable input, got %s", string(data))
 	}
 }
 

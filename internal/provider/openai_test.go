@@ -61,6 +61,7 @@ func TestOpenAIConvertMessages_Empty(t *testing.T) {
 }
 
 func TestOpenAIConvertMessages_NormalizesInvalidToolUseInput(t *testing.T) {
+	// Truncated JSON (missing closing brace) that should be repaired.
 	p := &OpenAIProvider{}
 	msgs := []Message{
 		{Role: "assistant", Content: []ContentBlock{
@@ -75,8 +76,12 @@ func TestOpenAIConvertMessages_NormalizesInvalidToolUseInput(t *testing.T) {
 	if !json.Valid([]byte(args)) {
 		t.Fatalf("expected normalized OpenAI tool arguments to be valid JSON, got %q", args)
 	}
-	if !strings.Contains(args, "_ggcode_raw_input") {
-		t.Fatalf("expected fallback marker in normalized OpenAI tool arguments, got %q", args)
+	// Repaired JSON should contain the valid path, not the raw fallback.
+	if !strings.Contains(args, "README.md") {
+		t.Fatalf("expected repaired path in OpenAI tool arguments, got %q", args)
+	}
+	if strings.Contains(args, "_ggcode_raw_input") {
+		t.Fatalf("repairable JSON should not fall back to raw input, got %q", args)
 	}
 }
 
@@ -160,6 +165,7 @@ func TestAnthropicBuildParams_SystemInUser(t *testing.T) {
 }
 
 func TestGeminiConvertMessages_NormalizesInvalidToolUseInput(t *testing.T) {
+	// Truncated JSON (missing closing brace) that should be repaired.
 	p := &GeminiProvider{}
 	contents, _ := p.convertMessages([]Message{
 		{Role: "assistant", Content: []ContentBlock{
@@ -169,8 +175,12 @@ func TestGeminiConvertMessages_NormalizesInvalidToolUseInput(t *testing.T) {
 	if len(contents) != 1 || len(contents[0].Parts) != 1 || contents[0].Parts[0].FunctionCall == nil {
 		t.Fatalf("expected one Gemini function call part, got %#v", contents)
 	}
-	if got := contents[0].Parts[0].FunctionCall.Args["_ggcode_raw_input"]; got == nil {
-		t.Fatalf("expected fallback marker in Gemini function args, got %#v", contents[0].Parts[0].FunctionCall.Args)
+	// Repaired JSON should contain the valid path.
+	if got := contents[0].Parts[0].FunctionCall.Args["path"]; got != "README.md" {
+		t.Fatalf("expected repaired path in Gemini function args, got %#v", contents[0].Parts[0].FunctionCall.Args)
+	}
+	if got := contents[0].Parts[0].FunctionCall.Args["_ggcode_raw_input"]; got != nil {
+		t.Fatalf("repairable JSON should not fall back to raw input, got %#v", contents[0].Parts[0].FunctionCall.Args)
 	}
 }
 

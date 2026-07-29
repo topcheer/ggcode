@@ -368,10 +368,18 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 						if tc.Name == "" || tc.ID == "" {
 							continue
 						}
-						// Validate arguments look like complete JSON
+						// Validate arguments look like complete JSON.
+						// If invalid, attempt JSON repair before skipping —
+						// stream truncation and weak models frequently produce
+						// nearly-valid JSON that can be salvaged.
 						if len(tc.Arguments) > 0 && !json.Valid(tc.Arguments) {
-							debug.Log("openai", "skip flush incomplete tool_call id=%s name=%s (invalid JSON args)", tc.ID, tc.Name)
-							continue
+							if repaired, ok := RepairJSON(tc.Arguments); ok {
+								debug.Log("openai", "flush tool_call id=%s name=%s: JSON repaired %d→%d bytes", tc.ID, tc.Name, len(tc.Arguments), len(repaired))
+								tc.Arguments = repaired
+							} else {
+								debug.Log("openai", "skip flush incomplete tool_call id=%s name=%s (invalid JSON args, repair failed)", tc.ID, tc.Name)
+								continue
+							}
 						}
 						debug.Log("openai", "flush residual tool_call id=%s name=%s args=%s", tc.ID, tc.Name, string(tc.Arguments))
 						outputChars += len(tc.Name) + len(tc.Arguments)
@@ -469,6 +477,16 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 							}
 						}
 						for idx, tc := range toolCalls {
+							// Attempt JSON repair for truncated/malformed args.
+							// This is especially important when finish_reason is
+							// "length" (max_tokens truncation) — the args may be
+							// cut off mid-object.
+							if len(tc.Arguments) > 0 && !json.Valid(tc.Arguments) {
+								if repaired, ok := RepairJSON(tc.Arguments); ok {
+									debug.Log("openai", "finish_reason tool_call id=%s name=%s: JSON repaired %d→%d bytes", tc.ID, tc.Name, len(tc.Arguments), len(repaired))
+									tc.Arguments = repaired
+								}
+							}
 							outputChars += len(tc.Name) + len(tc.Arguments)
 							emitted = true
 							ch <- StreamEvent{Type: StreamEventToolCallDone, Tool: *tc}
