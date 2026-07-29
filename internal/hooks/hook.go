@@ -146,6 +146,7 @@ func ValidateHooks(cfg HookConfig) []string {
 	validate("post_tool_use", cfg.PostToolUse)
 	validate("on_agent_stop", cfg.OnAgentStop)
 	validate("on_stream_stop", cfg.OnStreamStop)
+	validate("on_compaction", cfg.OnCompaction)
 
 	return errs
 }

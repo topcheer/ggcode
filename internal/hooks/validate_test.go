@@ -1,6 +1,7 @@
 package hooks
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -102,6 +103,36 @@ func TestValidateHooks_OnCompaction(t *testing.T) {
 	errs := ValidateHooks(cfg)
 	if len(errs) != 0 {
 		t.Errorf("on_compaction hook should be valid, got %v", errs)
+	}
+}
+
+func TestValidateHooks_OnCompaction_Invalid(t *testing.T) {
+	// Missing command and match — should be caught now that on_compaction
+	// is validated.
+	cfg := HookConfig{
+		OnCompaction: []Hook{
+			{Match: "", Command: ""},
+		},
+	}
+	errs := ValidateHooks(cfg)
+	if len(errs) < 2 {
+		t.Fatalf("expected at least 2 errors for invalid on_compaction hook, got %d: %v", len(errs), errs)
+	}
+	foundMatchErr := false
+	foundCmdErr := false
+	for _, e := range errs {
+		if strings.Contains(e, "on_compaction[0]: match is required") {
+			foundMatchErr = true
+		}
+		if strings.Contains(e, "on_compaction[0]: type=command requires command") {
+			foundCmdErr = true
+		}
+	}
+	if !foundMatchErr {
+		t.Errorf("expected match-required error, got %v", errs)
+	}
+	if !foundCmdErr {
+		t.Errorf("expected command-required error, got %v", errs)
 	}
 }
 
