@@ -120,12 +120,13 @@ func TestSandbox_ExactMatch(t *testing.T) {
 
 func TestConfigPolicy_DefaultAsk(t *testing.T) {
 	p := NewConfigPolicy(nil, nil)
-	d, err := p.Check("read_file", json.RawMessage(`{"file_path":"/tmp/test"}`))
+	// Use a non-read-only tool: read-only tools are now auto-allowed.
+	d, err := p.Check("edit_file", json.RawMessage(`{"file_path":"/tmp/test"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if d != Ask {
-		t.Errorf("expected Ask for unlisted tool, got %s", d)
+		t.Errorf("expected Ask for unlisted write tool, got %s", d)
 	}
 }
 
@@ -142,14 +143,15 @@ func TestConfigPolicy_ExplicitAllow(t *testing.T) {
 }
 
 func TestConfigPolicy_SandboxDeny(t *testing.T) {
-	rules := map[string]Decision{"read_file": Allow}
+	rules := map[string]Decision{"write_file": Allow}
 	p := NewConfigPolicy(rules, []string{"/tmp"})
-	d, err := p.Check("read_file", json.RawMessage(`{"file_path":"/etc/passwd"}`))
+	// Write tools outside sandbox are still denied (not auto-allowed).
+	d, err := p.Check("write_file", json.RawMessage(`{"file_path":"/etc/passwd"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if d != Deny {
-		t.Errorf("expected Deny for path outside sandbox, got %s", d)
+		t.Errorf("expected Deny for write path outside sandbox, got %s", d)
 	}
 }
 
@@ -254,13 +256,15 @@ func TestConfigPolicy_MultiFileToolPaths(t *testing.T) {
 		t.Fatalf("expected multi_file_read allow, got %s", d)
 	}
 
-	outsideRead := json.RawMessage(`{"files":[{"path":"/tmp/work/a.txt"},{"path":"/etc/passwd"}]}`)
+	outsideRead := json.RawMessage(`{"files":[{"path":"/tmp/work/a.txt"},{"path":"/root/.ssh/id_rsa"}]}`)
 	d, err = p.Check("multi_file_read", outsideRead)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d != Deny {
-		t.Fatalf("expected multi_file_read deny for outside path, got %s", d)
+	// multi_file_read is read-only: sensitive paths outside sandbox now
+	// return Ask (user confirmation) instead of hard Deny.
+	if d != Ask {
+		t.Fatalf("expected multi_file_read Ask for sensitive path outside sandbox, got %s", d)
 	}
 
 	outsideWrite := json.RawMessage(`{"files":[{"path":"/tmp/work/a.txt","edits":[{"old_text":"x","new_text":"y"}]},{"path":"/etc/passwd","edits":[{"old_text":"x","new_text":"y"}]}]}`)

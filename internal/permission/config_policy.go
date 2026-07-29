@@ -165,8 +165,19 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 		return Allow, nil
 	}
 
-	// Supervised mode (default): check command-level rules first,
-	// then per-tool overrides, then ask.
+	// Supervised mode (default): read-only tools are auto-allowed
+	// (no per-call confirmation needed), but sensitive paths outside the
+	// sandbox still require confirmation to prevent secret exfiltration.
+	if IsReadOnlyTool(toolName) {
+		if isFileTool(toolName) {
+			for _, path := range extractFilePaths(input) {
+				if path != "" && !p.sandbox.Allowed(path) && isSensitivePath(path) {
+					return Ask, nil
+				}
+			}
+		}
+		return Allow, nil
+	}
 	if isCommandTool(toolName) {
 		cmd, _ := extractCommand(input)
 		if cmd != "" {

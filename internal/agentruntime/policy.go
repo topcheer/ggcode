@@ -38,5 +38,14 @@ func BuildInteractivePermissionPolicy(cfg *config.Config, workingDir string, byp
 		}
 	}
 	mode := InteractivePermissionMode(cfg, bypass)
-	return permission.NewConfigPolicyWithMode(rules, allowedDirs, mode)
+	policy := permission.NewConfigPolicyWithMode(rules, allowedDirs, mode)
+
+	// Load persisted permission rules (tool overrides + command patterns)
+	// from ~/.ggcode/permission_rules.json so they survive across sessions.
+	rulesPath := permission.RulesFilePath(config.ConfigDir())
+	if data := permission.LoadRules(rulesPath); data != nil {
+		data.ApplyToPolicy(policy)
+	}
+
+	return policy
 }

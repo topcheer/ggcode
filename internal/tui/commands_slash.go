@@ -12,6 +12,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/topcheer/ggcode/internal/agentruntime"
+	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/image"
 	"github.com/topcheer/ggcode/internal/metrics"
@@ -263,6 +264,10 @@ func (m *Model) handleApprovalAllowAlways() tea.Cmd {
 			}
 		}
 	}
+
+	// Persist updated permission rules so they survive across sessions.
+	m.persistPermissionRules()
+
 	if pa != nil && pa.Response != nil {
 		safego.Go("tui.commands.approvalAlwaysAllow", func() {
 			select {
@@ -665,4 +670,21 @@ func extractCommandFromInput(input string) string {
 		}
 	}
 	return ""
+}
+
+// persistPermissionRules saves the current tool overrides and command patterns
+// to ~/.ggcode/permission_rules.json so they persist across sessions.
+func (m *Model) persistPermissionRules() {
+	if m.policy == nil {
+		return
+	}
+	cp, ok := m.policy.(*permission.ConfigPolicy)
+	if !ok {
+		return
+	}
+	rulesPath := permission.RulesFilePath(config.ConfigDir())
+	data := permission.SnapshotRules(cp, config.ConfigDir())
+	if err := permission.SaveRules(rulesPath, data); err != nil {
+		debug.Log("tui", "failed to persist permission rules: %v", err)
+	}
 }
