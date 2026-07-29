@@ -24,11 +24,17 @@ import (
 	"github.com/topcheer/ggcode/internal/version"
 )
 
+// sessionLister is the minimal interface resolveSessionID needs.
+// session.Store satisfies this, but tests can pass a simpler mock.
+type sessionLister interface {
+	List() ([]*session.Session, error)
+}
+
 // resolveSessionID resolves a user-supplied session reference to a full
 // session ID. The query may be an exact ID, a unique ID prefix, a unique ID
 // substring, or a unique case-insensitive title substring (in that order).
 // Ambiguous queries return an error listing the candidate sessions.
-func resolveSessionID(store session.Store, query string) (string, error) {
+func resolveSessionID(store sessionLister, query string) (string, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return "", fmt.Errorf("empty session id")

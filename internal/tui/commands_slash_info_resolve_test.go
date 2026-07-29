@@ -3,20 +3,35 @@ package tui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/session"
 )
 
-func newResolveTestStore(t *testing.T, sessions ...*session.Session) session.Store {
-	t.Helper()
-	store, err := session.NewJSONLStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("NewJSONLStore: %v", err)
+// resolveTestStore is a minimal sessionLister for testing resolveSessionID.
+// We avoid JSONLStore because its Save() does not populate the index
+// (index updates happen on AppendMessageToDisk), so List() would return
+// empty. This mock holds sessions directly in memory.
+type resolveTestStore struct {
+	sessions map[string]*session.Session
+}
+
+func (s *resolveTestStore) List() ([]*session.Session, error) {
+	out := make([]*session.Session, 0, len(s.sessions))
+	for _, ses := range s.sessions {
+		out = append(out, ses)
 	}
+	return out, nil
+}
+
+func newResolveTestStore(t *testing.T, sessions ...*session.Session) *resolveTestStore {
+	t.Helper()
+	store := &resolveTestStore{sessions: make(map[string]*session.Session)}
 	for _, s := range sessions {
-		if err := store.Save(s); err != nil {
-			t.Fatalf("Save(%s): %v", s.ID, err)
+		if s.CreatedAt.IsZero() {
+			s.CreatedAt = time.Now()
 		}
+		store.sessions[s.ID] = s
 	}
 	return store
 }
@@ -89,9 +104,12 @@ func TestResolveSessionIDAmbiguous(t *testing.T) {
 	if !strings.Contains(err.Error(), "ambiguous") {
 		t.Fatalf("expected ambiguous error, got %v", err)
 	}
-	// Error should list candidate IDs so the user can pick one.
+	// Error should list candidate IDs and timestamps so the user can pick one.
 	if !strings.Contains(err.Error(), "aaaabbbb") || !strings.Contains(err.Error(), "eeeeffff") {
 		t.Fatalf("error should list candidates, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "2026-") {
+		t.Fatalf("error should include timestamps, got %v", err)
 	}
 }
 
