@@ -861,9 +861,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	consecutiveEmptyResponses := 0
 	truncationContinues := 0
 	progressCheckInjected := false
-	convergence85Injected := false // 85% iteration budget: shift to convergence
-	convergence95Injected := false // 95% iteration budget: must finalize now
-	contextWarningLevel := 0       // 0=none, 1=95%, 2=99%, 3=100%
+	convergence85Injected := false    // 85% iteration budget: shift to convergence
+	convergence95Injected := false    // 95% iteration budget: must finalize now
+	contextWarningLevel := 0          // 0=none, 1=95%, 2=99%, 3=100%
+	budgetHintLevel := budgetHintNone // proactive context conservation (70%, 85%)
 	todoCheckCount := 0
 
 	a.autopilotStrategistCount = 0
@@ -965,6 +966,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					),
 				}},
 			})
+			msgs = a.contextManager.Messages()
+		}
+
+		// Proactive context budget efficiency hints at 70% and 85% fill.
+		// These fire BEFORE the crisis-level warnings below, giving the agent
+		// a chance to self-regulate and avoid or delay compaction entirely.
+		if a.maybeInjectBudgetHint(&budgetHintLevel) {
 			msgs = a.contextManager.Messages()
 		}
 
