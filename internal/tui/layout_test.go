@@ -1257,6 +1257,77 @@ func TestStatusBarWithCostInfo(t *testing.T) {
 
 // --- Status bar rendering ---
 
+func TestSessionCostHintEmptyWhenNoSession(t *testing.T) {
+	m := newTestModel()
+	m.session = nil
+	if hint := m.sessionCostHint(); hint != "" {
+		t.Errorf("expected empty hint when session is nil, got %q", hint)
+	}
+}
+
+func TestSessionCostHintEmptyWhenNoUsage(t *testing.T) {
+	m := newTestModel()
+	m.session = &session.Session{ID: "test"}
+	if hint := m.sessionCostHint(); hint != "" {
+		t.Errorf("expected empty hint when no token usage, got %q", hint)
+	}
+}
+
+func TestSessionCostHintShowsTokens(t *testing.T) {
+	m := newTestModel()
+	m.session = &session.Session{
+		ID:         "test",
+		Vendor:     "github-copilot",
+		Endpoint:   "default",
+		Model:      "claude-sonnet-4.5",
+		TokenUsage: provider.TokenUsage{InputTokens: 30000, OutputTokens: 15000},
+	}
+	hint := stripAnsi(m.sessionCostHint())
+	if !strings.Contains(hint, "tok") {
+		t.Errorf("expected 'tok' in hint, got %q", hint)
+	}
+	if !strings.Contains(hint, "45") {
+		t.Errorf("expected token count '45' (for 45K) in hint, got %q", hint)
+	}
+}
+
+func TestSessionCostHintShowsDollarForMetered(t *testing.T) {
+	m := newTestModel()
+	m.session = &session.Session{
+		ID:       "test",
+		Vendor:   "openai",
+		Endpoint: "default",
+		Model:    "gpt-4o",
+		UsageHistory: []session.UsageEntry{
+			{
+				Vendor: "openai",
+				Model:  "gpt-4o",
+				Usage:  provider.TokenUsage{InputTokens: 1000000, OutputTokens: 500000},
+			},
+		},
+	}
+	hint := stripAnsi(m.sessionCostHint())
+	// Token count should be present
+	if !strings.Contains(hint, "tok") {
+		t.Errorf("expected 'tok' in hint, got %q", hint)
+	}
+}
+
+func TestSessionCostHintInComposerPanel(t *testing.T) {
+	m := newTestModel()
+	m.session = &session.Session{
+		ID:         "test",
+		Vendor:     "github-copilot",
+		Endpoint:   "default",
+		Model:      "claude-sonnet-4.5",
+		TokenUsage: provider.TokenUsage{InputTokens: 10000, OutputTokens: 5000},
+	}
+	panel := stripAnsi(m.renderComposerPanel())
+	if !strings.Contains(panel, "tok") {
+		t.Errorf("expected 'tok' in composer panel, got: %q", panel)
+	}
+}
+
 func TestStatusBarWithToolInfo(t *testing.T) {
 	m := newTestModel()
 	m.loading = true

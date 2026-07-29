@@ -158,6 +158,11 @@ func (f FullscreenModel) renderStatusBar() string {
 		parts = append(parts, scrollInfo)
 	}
 
+	// Session cost/token usage — persistent visibility.
+	if costLabel := f.inner.sessionCostHint(); costLabel != "" {
+		parts = append(parts, costLabel)
+	}
+
 	if len(parts) == 0 {
 		return ""
 	}

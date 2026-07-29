@@ -7,6 +7,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 
+	"github.com/topcheer/ggcode/internal/cost"
 	"github.com/topcheer/ggcode/internal/util"
 )
 
@@ -155,6 +156,10 @@ func (m Model) renderComposerPanel() string {
 	// Context window usage indicator — show when agent exists.
 	if ctxLabel := m.contextUsageHint(); ctxLabel != "" {
 		hints = append(hints, ctxLabel)
+	}
+	// Session cost / token usage — persistent visibility without /cost.
+	if costLabel := m.sessionCostHint(); costLabel != "" {
+		hints = append(hints, costLabel)
 	}
 	hints = append(hints, m.t("hint.help"))
 	// Iteration 6: Word count for current input
@@ -352,4 +357,86 @@ func (m Model) contextUsageHint() string {
 		ratio*100,
 	)
 	return lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Render(label)
+}
+
+// sessionCostHint returns a compact session cost + token summary for the
+// composer hints bar. Shows "$0.04 · 45K tok" so users always know their
+// spending without typing /cost. Color codes by cost tier for quick scanning.
+func (m Model) sessionCostHint() string {
+	if m.session == nil {
+		return ""
+	}
+	usage := m.session.TokenUsage
+	if usage.Total() == 0 {
+		usage = m.sidebarSessionUsage()
+	}
+	// Fallback: aggregate from UsageHistory if session-level total is still 0.
+	if usage.Total() == 0 && len(m.session.UsageHistory) > 0 {
+		for _, entry := range m.session.UsageHistory {
+			usage = usage.Add(entry.Usage)
+		}
+	}
+	totalTokens := usage.Total()
+	if totalTokens == 0 {
+		return ""
+	}
+
+	// Compute estimated cost from per-model usage history (same logic as /cost).
+	totalCost := m.estimateSessionCost()
+
+	var label string
+	if totalCost > 0 {
+		label = fmt.Sprintf("%s · %s tok", cost.FormatCost(totalCost), humanizeTokenCount(totalTokens))
+	} else {
+		label = fmt.Sprintf("%s tok", humanizeTokenCount(totalTokens))
+	}
+
+	// Color by cost tier: green < $0.50, yellow < $2.00, red >= $2.00
+	var color string
+	switch {
+	case totalCost >= 2.0:
+		color = "196" // red
+	case totalCost >= 0.50:
+		color = "214" // orange/yellow
+	default:
+		color = "245" // muted gray — unobtrusive at low cost
+	}
+	return lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Render(label)
+}
+
+// estimateSessionCost computes the total estimated USD cost for the current
+// session by applying pricing rates to per-model usage history entries.
+// Returns 0 if no pricing data is available (subscription plans, unknown models).
+func (m Model) estimateSessionCost() float64 {
+	if m.session == nil {
+		return 0
+	}
+	var total float64
+	for _, entry := range m.session.UsageHistory {
+		if entry.Usage.Total() == 0 {
+			continue
+		}
+		rate := resolveRate(entry.Vendor, entry.Endpoint, entry.Model)
+		if !rate.IsKnown() || !rate.IsMetered() {
+			continue
+		}
+		u := entry.Usage
+		total += float64(u.InputTokens)*rate.InputPerM/1e6 +
+			float64(u.OutputTokens)*rate.OutputPerM/1e6 +
+			float64(u.CacheRead)*rate.CacheReadPerM/1e6 +
+			float64(u.CacheWrite)*rate.CacheWritePerM/1e6
+	}
+
+	// Fallback: if no UsageHistory entries, use session-level aggregate.
+	if total == 0 && m.session.TokenUsage.Total() > 0 {
+		rate := resolveRate(m.session.Vendor, m.session.Endpoint, m.session.Model)
+		if rate.IsKnown() && rate.IsMetered() {
+			u := m.session.TokenUsage
+			total = float64(u.InputTokens)*rate.InputPerM/1e6 +
+				float64(u.OutputTokens)*rate.OutputPerM/1e6 +
+				float64(u.CacheRead)*rate.CacheReadPerM/1e6 +
+				float64(u.CacheWrite)*rate.CacheWritePerM/1e6
+		}
+	}
+	return total
 }
