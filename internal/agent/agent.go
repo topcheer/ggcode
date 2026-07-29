@@ -916,10 +916,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				Content: []provider.ContentBlock{{
 					Type: "text",
 					Text: fmt.Sprintf(
-						"Progress checkpoint: you are at iteration %d of %d. "+
-							"Briefly assess: Are you on track to complete the task? "+
-							"If your current approach isn't working efficiently, consider switching to a different strategy. "+
-							"Prioritize completing the core task over perfectionism.",
+						"Progress checkpoint: iteration %d/%d. Assess — on track? If not, switch strategy.",
 						i+1, a.maxIter,
 					),
 				}},
@@ -937,30 +934,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			switch {
 			case usage >= 1.0 && contextWarningLevel < 3:
 				newLevel = 3
-				msgText = fmt.Sprintf(
-					"Context critical: 100%% of the context window is in use. " +
-						"A compaction is about to happen — your work will continue automatically after it.\n" +
-						"1. Finish your current thought/tool call naturally\n" +
-						"2. The system will preserve your recent files, todo list, and summary\n" +
-						"3. Do NOT stop or abandon your task",
-				)
+				msgText = "Context full — compaction now. Finish current step, do not stop."
 			case usage >= 0.99 && contextWarningLevel < 2:
 				newLevel = 2
-				msgText = fmt.Sprintf(
-					"Context note: 99%% of the context window is now in use — compaction is imminent.\n" +
-						"1. Keep going with your task — do NOT stop or wrap up prematurely\n" +
-						"2. Avoid full file reads — use targeted grep searches instead\n" +
-						"3. The system automatically preserves recent files and todo list through compaction",
-				)
+				msgText = "Context at 99%. Compaction imminent — avoid full file reads."
 			case usage >= 0.95 && contextWarningLevel < 1:
 				newLevel = 1
-				msgText = fmt.Sprintf(
-					"Context note: 95%% of the context window is now in use. " +
-						"An automatic compaction will happen soon — this is normal and your work will continue after it.\n" +
-						"1. Keep going with your current task — do NOT stop or try to wrap up prematurely\n" +
-						"2. Prefer targeted searches (grep) over full file reads to conserve space\n" +
-						"3. Avoid re-reading files you've already seen",
-				)
+				msgText = "Context at 95%. Compaction soon — prefer grep over full file reads."
 			}
 			if newLevel > contextWarningLevel {
 				contextWarningLevel = newLevel
@@ -1092,7 +1072,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					Role: "user",
 					Content: []provider.ContentBlock{{
 						Type: "text",
-						Text: "Your response contains tool call syntax in text, but tools must be called using the structured tool calling mechanism. Please call the tools properly using the tool_use format.",
+						Text: "Use structured tool_use format, not inline text syntax for tool calls.",
 					}},
 				})
 				continue
@@ -1174,7 +1154,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					Role: "user",
 					Content: []provider.ContentBlock{{
 						Type: "text",
-						Text: "Strategist guidance budget is exhausted. Review the original goal and all work done so far. If there are any remaining tasks from the plan, continue implementing them. If all planned tasks are done, verify: run build, run tests, check for TODOs or incomplete items. If everything passes, provide a final summary of what was accomplished.",
+						Text: "Strategist budget exhausted. Continue remaining tasks autonomously — build, test, verify, then summarize.",
 					}},
 				})
 				continue

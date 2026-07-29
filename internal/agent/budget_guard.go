@@ -194,11 +194,7 @@ func (b *budgetGuardState) maybeWarn(contextWindow, currentTokens int) string {
 		debug.Log("budget-guard", "absolute consumption threshold reached: totalConsumed=%d threshold=%d",
 			b.totalConsumed, absoluteTokenWarningThreshold)
 		return fmt.Sprintf(
-			"[budget guard: high token consumption] This session has consumed %d output tokens across %d steps.\n"+
-				"To reduce further cost:\n"+
-				"1. Avoid re-reading files or re-running searches already done\n"+
-				"2. Batch related operations to reduce round-trips\n"+
-				"3. Use /cost to check spending details",
+			"[budget guard] High token usage: %d output tokens across %d steps. Avoid re-reading files and batch operations to reduce cost.",
 			b.totalConsumed, len(b.stepCosts),
 		)
 	}
@@ -281,13 +277,7 @@ func (b *budgetGuardState) maybeWarn(contextWindow, currentTokens int) string {
 	}
 
 	return fmt.Sprintf(
-		"[budget guard: token cost escalation detected] %s.\n"+
-			"Token usage per step is increasing. A context compaction will happen automatically when needed — your work will continue seamlessly after it.\n"+
-			"To reduce per-step cost while continuing your task:\n"+
-			"1. Keep responses concise — avoid repeating information already stated\n"+
-			"2. Batch related operations into fewer steps instead of one-at-a-time\n"+
-			"3. Avoid re-reading files or running searches you've already done\n"+
-			"4. Continue working on your current task — do NOT stop or wrap up prematurely",
+		"[budget guard] Token cost escalating (%s). Keep responses concise, batch operations, avoid re-reads. Do not stop.",
 		reasonStr,
 	)
 }

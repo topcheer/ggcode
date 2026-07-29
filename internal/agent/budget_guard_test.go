@@ -245,8 +245,8 @@ func TestBudgetGuard_AbsoluteConsumptionWarning(t *testing.T) {
 	if w == "" {
 		t.Fatal("expected absolute consumption warning")
 	}
-	if !containsStr(w, "high token consumption") {
-		t.Error("warning should mention high token consumption")
+	if !containsStr(w, "High token usage") {
+		t.Error("warning should mention high token usage")
 	}
 	if !containsStr(w, "250000") {
 		t.Error("warning should report total consumed tokens")
