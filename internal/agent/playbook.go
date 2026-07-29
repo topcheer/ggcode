@@ -161,7 +161,8 @@ func abstractToolSequence(tools map[string]int) string {
 		"lsp_symbols": "lsp", "lsp_workspace_symbols": "lsp", "lsp_diagnostics": "lsp",
 		"lsp_rename": "lsp", "lsp_implementation": "lsp", "lsp_code_actions": "lsp",
 		"lsp_prepare_call_hierarchy": "lsp", "lsp_incoming_calls": "lsp",
-		"lsp_outgoing_calls": "lsp",
+		"lsp_outgoing_calls":      "lsp",
+		"lsp_document_highlights": "lsp",
 	}
 
 	seen := map[string]bool{}

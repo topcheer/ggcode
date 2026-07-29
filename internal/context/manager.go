@@ -1351,7 +1351,7 @@ func buildToolSummary(toolName string, origLen int, output string, args map[stri
 
 	case "lsp_symbols", "lsp_definition", "lsp_references", "lsp_hover",
 		"lsp_diagnostics", "lsp_implementation", "lsp_code_actions",
-		"lsp_rename", "lsp_workspace_symbols":
+		"lsp_rename", "lsp_workspace_symbols", "lsp_document_highlights":
 		return fmt.Sprintf("%s output (~%dKB)", toolName, kbSize)
 
 	case "web_fetch", "web_search":

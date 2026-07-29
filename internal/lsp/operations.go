@@ -211,6 +211,24 @@ func diagnosticsToLSP(diagnostics []Diagnostic) []map[string]any {
 	return out
 }
 
+func parseDocumentHighlights(raw json.RawMessage) []DocumentHighlight {
+	var list []struct {
+		Range rawRange `json:"range"`
+		Kind  int      `json:"kind"`
+	}
+	if err := json.Unmarshal(raw, &list); err != nil {
+		return nil
+	}
+	out := make([]DocumentHighlight, 0, len(list))
+	for _, item := range list {
+		out = append(out, DocumentHighlight{
+			Range: toRange(item.Range),
+			Kind:  item.Kind,
+		})
+	}
+	return out
+}
+
 func toLSPRange(rng Range) map[string]any {
 	return map[string]any{
 		"start": toLSPPosition(rng.Start),

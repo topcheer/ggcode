@@ -42,7 +42,7 @@ func TestLSPSymbolsToolWithInstalledGopls(t *testing.T) {
 	if err := os.WriteFile(path, []byte("package sample\n\nfunc Add(a int, b int) int { return a + b }\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile(sample.go) error = %v", err)
 	}
-	tool := NewLSPTools(workspace, nil, nil)[3]
+	tool := NewLSPTools(workspace, nil, nil)[4]
 	input, err := json.Marshal(map[string]string{"path": path})
 	if err != nil {
 		t.Fatalf("json.Marshal() error = %v", err)
@@ -71,7 +71,7 @@ func TestLSPWorkspaceSymbolsToolWithInstalledGopls(t *testing.T) {
 	if err := os.WriteFile(path, []byte("package sample\n\nfunc Add(a int, b int) int { return a + b }\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile(sample.go) error = %v", err)
 	}
-	tool := NewLSPTools(workspace, nil, nil)[4]
+	tool := NewLSPTools(workspace, nil, nil)[5]
 	input, err := json.Marshal(map[string]string{"query": "Add"})
 	if err != nil {
 		t.Fatalf("json.Marshal() error = %v", err)
@@ -102,7 +102,7 @@ func TestLSPRenameToolWithInstalledGopls(t *testing.T) {
 		t.Fatalf("WriteFile(sample.go) error = %v", err)
 	}
 	allow := func(candidate string) bool { return strings.HasPrefix(candidate, workspace) }
-	tool := NewLSPTools(workspace, allow, allow)[7]
+	tool := NewLSPTools(workspace, allow, allow)[8]
 	input, err := json.Marshal(map[string]any{"path": path, "line": 3, "character": 6, "new_name": "Sum"})
 	if err != nil {
 		t.Fatalf("json.Marshal() error = %v", err)
@@ -120,6 +120,38 @@ func TestLSPRenameToolWithInstalledGopls(t *testing.T) {
 	}
 	if !strings.Contains(string(updated), "func Sum") || !strings.Contains(string(updated), "return Sum(1, 2)") {
 		t.Fatalf("expected rename to update file, got %q", string(updated))
+	}
+}
+
+func TestLSPDocumentHighlightsToolWithInstalledGopls(t *testing.T) {
+	if _, err := exec.LookPath("gopls"); err != nil {
+		t.Skip("gopls not installed")
+	}
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "go.mod"), []byte("module example.com/test\n\ngo 1.26.1\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(go.mod) error = %v", err)
+	}
+	path := filepath.Join(workspace, "sample.go")
+	source := "package sample\n\nfunc Add(a int, b int) int { return a + b }\n\nfunc Use() int { return Add(1, 2) }\n"
+	if err := os.WriteFile(path, []byte(source), 0o644); err != nil {
+		t.Fatalf("WriteFile(sample.go) error = %v", err)
+	}
+	// Index 3 = lsp_document_highlights
+	tool := NewLSPTools(workspace, nil, nil)[3]
+	input, err := json.Marshal(map[string]any{"path": path, "line": 5, "character": 22})
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	result, err := tool.Execute(context.Background(), input)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected tool error: %+v", result)
+	}
+	// Should highlight both occurrences of Add in the file
+	if strings.Contains(result.Content, "No document highlights returned.") {
+		t.Fatalf("expected document highlights, got %q", result.Content)
 	}
 }
 
@@ -189,7 +221,7 @@ func TestLSPToolsWithExternalPythonFixture(t *testing.T) {
 	if err != nil {
 		t.Fatalf("json.Marshal(symbolsInput) error = %v", err)
 	}
-	symbolsResult, err := tools[3].Execute(context.Background(), symbolsInput)
+	symbolsResult, err := tools[4].Execute(context.Background(), symbolsInput)
 	if err != nil {
 		t.Fatalf("symbols Execute() error = %v", err)
 	}

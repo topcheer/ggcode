@@ -91,7 +91,7 @@ func (m *toolMemo) getTTL(toolName string) time.Duration {
 		return memoizeSearchTTL
 	case "lsp_hover", "lsp_definition", "lsp_references", "lsp_symbols",
 		"lsp_workspace_symbols", "lsp_diagnostics", "lsp_implementation",
-		"lsp_incoming_calls", "lsp_outgoing_calls":
+		"lsp_incoming_calls", "lsp_outgoing_calls", "lsp_document_highlights":
 		return memoizeLSPTTL
 	case "git_status", "git_diff", "git_log", "git_branch_list",
 		"git_show", "git_blame":

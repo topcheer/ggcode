@@ -130,6 +130,33 @@ func (lb *lockedBuffer) String() string {
 	return lb.buf.String()
 }
 
+// DocumentHighlight represents a single highlight occurrence of a symbol
+// within the current document. Kind follows the LSP DocumentHighlightKind
+// values: 1=Text, 2=Read, 3=Write.
+type DocumentHighlight struct {
+	Range Range
+	Kind  int
+}
+
+// DocumentHighlights returns all occurrences of the symbol at pos within the
+// current document, classified by access kind (read/write/text). This is
+// faster and more precise than grep for understanding local symbol usage.
+func DocumentHighlights(ctx context.Context, workspace, path string, pos Position) ([]DocumentHighlight, error) {
+	return withOpenDocument(ctx, workspace, path, func(ctx context.Context, session *sessionClient, docURI string) ([]DocumentHighlight, error) {
+		call := func() ([]DocumentHighlight, error) {
+			var raw json.RawMessage
+			if err := session.client.call(ctx, "textDocument/documentHighlight", map[string]any{
+				"textDocument": map[string]any{"uri": docURI},
+				"position":     toLSPPosition(pos),
+			}, &raw); err != nil {
+				return nil, err
+			}
+			return parseDocumentHighlights(raw), nil
+		}
+		return retryEmptySliceResult(ctx, session, call)
+	})
+}
+
 func Hover(ctx context.Context, workspace, path string, pos Position) (string, error) {
 	result, err := withOpenDocument(ctx, workspace, path, func(ctx context.Context, session *sessionClient, docURI string) (string, error) {
 		call := func() (string, error) {

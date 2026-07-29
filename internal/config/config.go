@@ -1391,7 +1391,7 @@ func BuildSystemPrompt(extraPrompt, workingDir, language string, toolNames []str
 	if hasAnyToolPrefix(toolNames, "lsp_") {
 		sb.WriteString("\n## LSP Guidance\n")
 		sb.WriteString("- If lsp_* tools are available and the user asks about symbol definitions, references, hover/type information, diagnostics, rename, code actions, or workspace symbol lookup in a supported source file, prefer lsp_* tools before broad text search.\n")
-		sb.WriteString("- If you know a symbol name but not its exact position, use lsp_symbols or lsp_workspace_symbols first to obtain the precise line/character range, then call lsp_definition, lsp_references, or lsp_hover with that position.\n")
+		sb.WriteString("- If you know a symbol name but not its exact position, use lsp_symbols or lsp_workspace_symbols first to obtain the precise line/character range, then call lsp_definition, lsp_references, lsp_document_highlights, or lsp_hover with that position.\n")
 		sb.WriteString("- When several LSP checks are obviously needed, batch them into one turn instead of alternating single LSP calls with new model turns.\n")
 		sb.WriteString("- Use read_file or search tools after LSP when you need extra surrounding context or when LSP is unavailable for that file.\n")
 	}

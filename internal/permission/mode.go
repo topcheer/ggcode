@@ -95,7 +95,7 @@ func IsReadOnlyTool(name string) bool {
 	case "lsp_hover", "lsp_definition", "lsp_references", "lsp_symbols",
 		"lsp_diagnostics", "lsp_workspace_symbols", "lsp_code_actions",
 		"lsp_implementation", "lsp_prepare_call_hierarchy",
-		"lsp_incoming_calls", "lsp_outgoing_calls":
+		"lsp_incoming_calls", "lsp_outgoing_calls", "lsp_document_highlights":
 		return true
 	case "sleep", "git_status", "git_diff", "git_log", "git_show",
 		"git_blame", "git_branch_list", "git_remote", "git_stash_list",

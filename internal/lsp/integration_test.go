@@ -123,6 +123,30 @@ func TestLSP_Go_References(t *testing.T) {
 	}
 }
 
+func TestLSP_Go_DocumentHighlights(t *testing.T) {
+	skipIfNoBinary(t, "gopls")
+	ws, f := createGoWorkspace(t)
+	defer cleanupSessions(t, ws)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Position on "Name" field usage in Greet() — line 9, char ~40
+	highlights, err := DocumentHighlights(ctx, ws, f, Position{Line: 9, Character: 40})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(highlights) == 0 {
+		t.Error("expected document highlights for Name field")
+	}
+	// Verify that at least one highlight has a valid kind
+	for _, hl := range highlights {
+		if hl.Kind < 1 || hl.Kind > 3 {
+			t.Errorf("unexpected highlight kind: %d", hl.Kind)
+		}
+	}
+}
+
 func TestLSP_Go_Implementation(t *testing.T) {
 	skipIfNoBinary(t, "gopls")
 	ws, f := createGoWorkspace(t)

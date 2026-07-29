@@ -1279,3 +1279,49 @@ func truncateForLog(s string, max int) string {
 	}
 	return s[:max] + "..."
 }
+
+func TestParseDocumentHighlights(t *testing.T) {
+	raw, err := json.Marshal([]map[string]any{
+		{
+			"range": map[string]any{
+				"start": map[string]any{"line": 2, "character": 5},
+				"end":   map[string]any{"line": 2, "character": 8},
+			},
+			"kind": 2, // read
+		},
+		{
+			"range": map[string]any{
+				"start": map[string]any{"line": 5, "character": 0},
+				"end":   map[string]any{"line": 5, "character": 3},
+			},
+			"kind": 3, // write
+		},
+	})
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	highlights := parseDocumentHighlights(raw)
+	if len(highlights) != 2 {
+		t.Fatalf("expected 2 highlights, got %d", len(highlights))
+	}
+	if highlights[0].Kind != 2 {
+		t.Fatalf("expected first highlight kind=2 (read), got %d", highlights[0].Kind)
+	}
+	if highlights[0].Range.Start.Line != 3 || highlights[0].Range.Start.Character != 6 {
+		t.Fatalf("expected start position 3:6, got %#v", highlights[0].Range.Start)
+	}
+	if highlights[1].Kind != 3 {
+		t.Fatalf("expected second highlight kind=3 (write), got %d", highlights[1].Kind)
+	}
+}
+
+func TestParseDocumentHighlightsEmpty(t *testing.T) {
+	highlights := parseDocumentHighlights(json.RawMessage(`null`))
+	if len(highlights) != 0 {
+		t.Fatalf("expected 0 highlights for null input, got %d", len(highlights))
+	}
+	highlights = parseDocumentHighlights(json.RawMessage(`[]`))
+	if len(highlights) != 0 {
+		t.Fatalf("expected 0 highlights for empty array, got %d", len(highlights))
+	}
+}

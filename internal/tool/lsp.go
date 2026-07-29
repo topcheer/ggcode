@@ -576,8 +576,40 @@ func NewLSPTools(workingDir string, readSandbox, writeSandbox AllowedPathChecker
 				return strings.Join(lines, "\n"), nil
 			},
 		},
+		lspPositionTool{
+			name:         "lsp_document_highlights",
+			description:  "Find all occurrences of the symbol at a specific position within the CURRENT file, classified as read/write/text. Faster and more precise than lsp_references or grep for local edits — use this when you need to understand how a variable/function is used within one file.",
+			workingDir:   workingDir,
+			sandboxCheck: readSandbox,
+			exec: func(ctx context.Context, workspace, path string, pos lsp.Position) (string, error) {
+				highlights, err := runLSPPositionFallback(path, pos, func(candidate lsp.Position) ([]lsp.DocumentHighlight, error) {
+					return lsp.DocumentHighlights(ctx, workspace, path, candidate)
+				}, func(result []lsp.DocumentHighlight) bool {
+					return len(result) > 0
+				})
+				if err != nil {
+					return "", err
+				}
+				if len(highlights) == 0 {
+					return "No document highlights returned.", nil
+				}
+				lines := make([]string, 0, len(highlights))
+				for _, hl := range highlights {
+					kind := "text"
+					switch hl.Kind {
+					case 1:
+						kind = "text"
+					case 2:
+						kind = "read"
+					case 3:
+						kind = "write"
+					}
+					lines = append(lines, fmt.Sprintf("L%d:%d [%s]", hl.Range.Start.Line, hl.Range.Start.Character, kind))
+				}
+				return strings.Join(lines, "\n"), nil
+			},
+		},
 		lspPathTool{
-			name:         "lsp_symbols",
 			description:  "List document symbols for a source file.",
 			workingDir:   workingDir,
 			sandboxCheck: readSandbox,
