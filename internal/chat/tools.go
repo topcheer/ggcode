@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 	"unicode"
 
 	"charm.land/lipgloss/v2"
@@ -31,14 +32,16 @@ type BaseToolItem struct {
 	formatJSON     bool // parse JSON result and render as formatted key-value pairs
 	noTruncate     bool // render body without line limit (e.g., lanchat)
 	styles         Styles
-	fileBodyMode   string // "" default, "linecount" for read/write, "editdiff" for edit
-	lang           string // "zh-CN", "en"
-	rawArgs        string // raw JSON args for body rendering (e.g. edit diff)
+	fileBodyMode   string        // "" default, "linecount" for read/write, "editdiff" for edit
+	lang           string        // "zh-CN", "en"
+	rawArgs        string        // raw JSON args for body rendering (e.g. edit diff)
+	startedAt      time.Time     // wall-clock when the tool started running
+	finalElapsed   time.Duration // elapsed at completion (0 while running)
 }
 
 // NewBaseToolItem creates a base tool item.
 func NewBaseToolItem(id, toolName string, status ToolStatus, input string, styles Styles) *BaseToolItem {
-	return &BaseToolItem{
+	t := &BaseToolItem{
 		id:       id,
 		toolName: toolName,
 		status:   status,
@@ -46,6 +49,10 @@ func NewBaseToolItem(id, toolName string, status ToolStatus, input string, style
 		params:   input, // default: use input as params
 		styles:   styles,
 	}
+	if status == StatusRunning {
+		t.startedAt = time.Now()
+	}
+	return t
 }
 
 func (t *BaseToolItem) ID() string { return t.id }
@@ -53,6 +60,13 @@ func (t *BaseToolItem) ID() string { return t.id }
 // SetStatus updates the tool status and invalidates cache.
 func (t *BaseToolItem) SetStatus(s ToolStatus) {
 	if t.status != s {
+		if t.status == StatusRunning && s != StatusRunning {
+			// Capture final elapsed on transition out of Running,
+			// but only if not already set explicitly via SetElapsed.
+			if t.finalElapsed == 0 && !t.startedAt.IsZero() {
+				t.finalElapsed = time.Since(t.startedAt)
+			}
+		}
 		t.status = s
 		t.Invalidate()
 	}
@@ -63,6 +77,47 @@ func (t *BaseToolItem) SetResult(result string, isError bool) {
 	t.result = result
 	t.isError = isError
 	t.Invalidate()
+}
+
+// SetElapsed sets the final elapsed duration explicitly (used when the
+// caller already tracked timing externally).
+func (t *BaseToolItem) SetElapsed(d time.Duration) {
+	t.finalElapsed = d
+	t.Invalidate()
+}
+
+// elapsedString returns a compact elapsed-time label for the header.
+// While running, it computes from startedAt; after completion, uses finalElapsed.
+func (t *BaseToolItem) elapsedString() string {
+	if t.status == StatusRunning {
+		if t.startedAt.IsZero() {
+			return ""
+		}
+		return formatElapsed(time.Since(t.startedAt))
+	}
+	if t.finalElapsed > 0 {
+		return formatElapsed(t.finalElapsed)
+	}
+	return ""
+}
+
+// formatElapsed renders a duration as a compact timer string.
+func formatElapsed(d time.Duration) string {
+	if d < time.Second {
+		return ""
+	}
+	d = d.Truncate(time.Second)
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	m := int(d.Minutes())
+	s := int(d.Seconds()) - m*60
+	if d < time.Hour {
+		return fmt.Sprintf("%dm%02ds", m, s)
+	}
+	h := m / 60
+	m = m % 60
+	return fmt.Sprintf("%dh%02dm", h, m)
 }
 
 // Status returns the current tool status.
@@ -463,8 +518,11 @@ func (t *BaseToolItem) renderCronBody() string {
 // This is the base implementation. Concrete types should call renderCore
 // with their own params/body overrides.
 func (t *BaseToolItem) Render(width int) string {
-	if cached, _, ok := t.GetCached(width); ok {
-		return cached
+	// Bypass cache for running tools so the live elapsed timer updates.
+	if t.status != StatusRunning {
+		if cached, _, ok := t.GetCached(width); ok {
+			return cached
+		}
 	}
 	if t.suppressHeader {
 		body := t.RenderBody(width - 4)
@@ -484,6 +542,14 @@ func (t *BaseToolItem) Render(width int) string {
 // renderCore builds the full tool output string from header params and body.
 func (t *BaseToolItem) renderCore(width int, params string, body string) string {
 	var sb strings.Builder
+	// Append elapsed timer to params for both running and completed tools.
+	if elapsed := t.elapsedString(); elapsed != "" {
+		if params != "" {
+			params = params + "  " + elapsed
+		} else {
+			params = elapsed
+		}
+	}
 	sb.WriteString(t.styles.ToolHeader(t.status, t.toolName, width, params))
 	if body != "" {
 		sb.WriteString("\n")

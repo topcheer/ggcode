@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"charm.land/lipgloss/v2"
 )
@@ -243,6 +244,68 @@ func TestBashToolItem(t *testing.T) {
 	// Bash tool body is suppressed — only header visible
 	if strings.Contains(rendered, "1.234s") {
 		t.Fatalf("Bash tool body should be suppressed: %s", rendered)
+	}
+}
+
+func TestToolElapsedTimer(t *testing.T) {
+	styles := DefaultStyles()
+
+	// Running tool should show live elapsed timer
+	item := NewBashToolItem("t1", "Bash", "go build ./...", StatusRunning, styles)
+	if item.startedAt.IsZero() {
+		t.Fatal("startedAt should be set for running items")
+	}
+	rendered := stripTestAnsi(item.Render(80))
+	firstLine := strings.SplitN(rendered, "\n", 2)[0]
+	if !strings.Contains(firstLine, "Bash") {
+		t.Fatalf("expected tool name in render: %s", firstLine)
+	}
+	// Elapsed should be empty (< 1s since just created) — no timer shown yet
+	// but after manually setting startedAt to the past, timer should appear
+	item.startedAt = time.Now().Add(-5 * time.Second)
+	rendered = stripTestAnsi(item.Render(80))
+	firstLine = strings.SplitN(rendered, "\n", 2)[0]
+	if !strings.Contains(firstLine, "5s") {
+		t.Fatalf("running tool should show elapsed time '5s', got: %q", firstLine)
+	}
+
+	// Completed tool should show final elapsed via SetElapsed
+	item.SetElapsed(3 * time.Second)
+	item.SetStatus(StatusSuccess)
+	item.SetResult("ok", false)
+	rendered = stripTestAnsi(item.Render(80))
+	firstLine = strings.SplitN(rendered, "\n", 2)[0]
+	if !strings.Contains(firstLine, "3s") {
+		t.Fatalf("completed tool should show final elapsed '3s', got: %q", firstLine)
+	}
+
+	// Tool created as Success (not previously Running) has no elapsed
+	item2 := NewBashToolItem("t2", "Bash", "echo hi", StatusSuccess, styles)
+	item2.SetResult("ok", false)
+	rendered2 := stripTestAnsi(item2.Render(80))
+	firstLine2 := strings.SplitN(rendered2, "\n", 2)[0]
+	if strings.Contains(firstLine2, "0s") || strings.Contains(firstLine2, "1s") {
+		t.Fatalf("tool that was never running should not show elapsed, got: %q", firstLine2)
+	}
+}
+
+func TestFormatElapsed(t *testing.T) {
+	tests := []struct {
+		d     time.Duration
+		want  string
+		found bool
+	}{
+		{500 * time.Millisecond, "", false},
+		{1 * time.Second, "1s", true},
+		{45 * time.Second, "45s", true},
+		{90 * time.Second, "1m30s", true},
+		{3725 * time.Second, "1h02m", true},
+	}
+	for _, tt := range tests {
+		got := formatElapsed(tt.d)
+		if got != tt.want {
+			t.Errorf("formatElapsed(%v) = %q, want %q", tt.d, got, tt.want)
+		}
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/chat"
 	"github.com/topcheer/ggcode/internal/tool"
@@ -207,6 +208,9 @@ func (m *Model) chatFinishTool(ts ToolStatusMsg) {
 		}
 		m.chatUpdateToolStatus(id, status)
 		m.setToolResult(item, ts.Result, ts.IsError)
+		if ts.Elapsed > 0 {
+			m.setToolElapsed(item, ts.Elapsed)
+		}
 		return
 	}
 
@@ -271,6 +275,9 @@ func (m *Model) chatFinishTool(ts ToolStatusMsg) {
 
 	// Update existing item
 	m.chatUpdateToolStatus(id, status)
+	if ts.Elapsed > 0 {
+		m.setToolElapsed(existing, ts.Elapsed)
+	}
 	result := suppressToolResult(ts.ToolName, ts.RawArgs, ts.Result, ts.IsError)
 	m.setToolResult(existing, result, ts.IsError)
 }
@@ -293,6 +300,13 @@ func (m *Model) chatUpdateToolStatus(id string, status chat.ToolStatus) {
 func (m *Model) setToolResult(item chat.Item, result string, isError bool) {
 	if setter, ok := item.(interface{ SetResult(string, bool) }); ok {
 		setter.SetResult(result, isError)
+	}
+}
+
+// setToolElapsed sets the final elapsed duration on a tool item.
+func (m *Model) setToolElapsed(item chat.Item, elapsed time.Duration) {
+	if setter, ok := item.(interface{ SetElapsed(time.Duration) }); ok {
+		setter.SetElapsed(elapsed)
 	}
 }
 
