@@ -305,6 +305,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 		var usage *TokenUsage
 		var outputChars int
 		var err error
+		var truncated bool
 		streamError := false // set when a non-retryable error was sent to ch
 
 		for attempt := 0; attempt < providerRetryAttempts; attempt++ {
@@ -473,10 +474,12 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 							ch <- StreamEvent{Type: StreamEventToolCallDone, Tool: *tc}
 							delete(toolCalls, idx)
 						}
-						if finishErr := finishReasonError(finishReason); finishErr != nil {
-							if isLengthFinishReason(finishReason) {
-								p.cap.OnTruncated()
-							}
+						if isLengthFinishReason(finishReason) {
+							// Output was truncated by max_tokens limit — this is NOT an
+							// error. We keep the partial content already streamed.
+							p.cap.OnTruncated()
+							truncated = true
+						} else if finishErr := finishReasonError(finishReason); finishErr != nil {
 							ch <- StreamEvent{Type: StreamEventError, Error: finishErr}
 							streamError = true
 							return
@@ -501,7 +504,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 						PromptTokensTotal: inputTokens,
 					}
 				}
-				ch <- StreamEvent{Type: StreamEventDone, Usage: usage}
+				ch <- StreamEvent{Type: StreamEventDone, Usage: usage, Truncated: truncated}
 			}
 			return
 		}

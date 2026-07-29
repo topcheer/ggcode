@@ -260,6 +260,7 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 
 		var usage *TokenUsage
 		var outputChars int
+		var truncated bool
 		streamError := false // set when a non-retryable error was sent to ch
 
 		for attempt := 0; attempt < providerRetryAttempts; attempt++ {
@@ -362,10 +363,11 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 						// Check stop_reason for truncation / policy errors.
 						if stopReason := string(event.Delta.StopReason); stopReason != "" {
 							debug.Log("anthropic", "stop_reason=%s", stopReason)
-							if stopErr := anthropicStopReasonError(stopReason); stopErr != nil {
-								if stopReason == "max_tokens" {
-									p.cap.OnTruncated()
-								}
+							if stopReason == "max_tokens" {
+								// Output was truncated — NOT an error. Keep partial content.
+								p.cap.OnTruncated()
+								truncated = true
+							} else if stopErr := anthropicStopReasonError(stopReason); stopErr != nil {
 								ch <- StreamEvent{Type: StreamEventError, Error: stopErr}
 								streamError = true
 								return
@@ -451,7 +453,7 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 			}
 		}
 		if !streamError {
-			ch <- StreamEvent{Type: StreamEventDone, Usage: usage}
+			ch <- StreamEvent{Type: StreamEventDone, Usage: usage, Truncated: truncated}
 		}
 	})
 

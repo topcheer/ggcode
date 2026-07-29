@@ -146,6 +146,7 @@ type StreamEvent struct {
 	IsError           bool          // for ToolResult
 	Usage             *TokenUsage   // for Done (nil if not final)
 	Error             error         // for Error
+	Truncated         bool          // for Done: true if output was cut off by length/max_tokens limit
 }
 
 type StreamEventType int

@@ -148,6 +148,7 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 
 		for attempt := 0; attempt < providerRetryAttempts; attempt++ {
 			var usage TokenUsage // reset per attempt to avoid leaking failed-attempt usage
+			var truncated bool
 			iter := p.client.Models.GenerateContentStream(ctx, p.model, contents, config)
 			emitted := false
 			retry := false
@@ -173,10 +174,12 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 
 				// Check finish reason for truncation / policy errors.
 				if len(resp.Candidates) > 0 {
-					if finishErr := geminiFinishReasonError(resp.Candidates[0].FinishReason); finishErr != nil {
-						if resp.Candidates[0].FinishReason == genai.FinishReasonMaxTokens {
-							p.cap.OnTruncated()
-						}
+					fr := resp.Candidates[0].FinishReason
+					if fr == genai.FinishReasonMaxTokens {
+						// Output was truncated — NOT an error. Keep partial content.
+						p.cap.OnTruncated()
+						truncated = true
+					} else if finishErr := geminiFinishReasonError(fr); finishErr != nil {
 						ch <- StreamEvent{Type: StreamEventError, Error: finishErr}
 						return
 					}
@@ -220,7 +223,7 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 			if retry {
 				continue
 			}
-			ch <- StreamEvent{Type: StreamEventDone, Usage: &usage}
+			ch <- StreamEvent{Type: StreamEventDone, Usage: &usage, Truncated: truncated}
 			return
 		}
 		// All retry attempts exhausted without success.

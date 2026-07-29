@@ -857,6 +857,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	agentLLMRetries := 0
 	inlineToolCallNudges := 0
 	consecutiveEmptyResponses := 0
+	truncationContinues := 0
 	progressCheckInjected := false
 	contextWarningLevel := 0 // 0=none, 1=95%, 2=99%, 3=100%
 	todoCheckCount := 0
@@ -954,7 +955,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 		}
 
-		resp, textBuf, toolCalls, err := a.streamChatResponse(ctx, a.ensureMessagesSendable(msgs), toolDefs, onEvent)
+		resp, textBuf, toolCalls, truncated, err := a.streamChatResponse(ctx, a.ensureMessagesSendable(msgs), toolDefs, onEvent)
 		if err != nil {
 			if errors.Is(err, errStreamInterruptedForReplan) {
 				reactiveCompactRetries = 0
@@ -1058,6 +1059,29 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 
 		// No tool calls → done unless autopilot should continue with best-effort assumptions.
 		if len(toolCalls) == 0 {
+			// Truncated response recovery: the LLM hit the output token limit
+			// mid-response. Save the partial output and inject a continuation
+			// prompt so the model picks up where it left off. This prevents
+			// silent loss of partial content (the old behavior sent a hard error
+			// and discarded everything already streamed).
+			if truncated && truncationContinues < 3 {
+				truncationContinues++
+				debug.Log("agent", "Iteration %d: response truncated by output limit, auto-continuing (attempt %d/3)", i+1, truncationContinues)
+				a.contextManager.Add(resp.Message)
+				onEvent(provider.StreamEvent{
+					Type: provider.StreamEventSystem,
+					Text: "[Response was truncated by output length limit — continuing...] ",
+				})
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: "Your previous response was cut off by the output token limit. Continue from where you left off — do not repeat what you already wrote.",
+					}},
+				})
+				continue
+			}
+
 			// Detect inline tool calls in text/reasoning (common with lower-reasoning
 			// models that write tool calls in prose instead of structured tool_use blocks).
 			// Nudge the model to use proper tool call format and retry.
@@ -1583,14 +1607,14 @@ func (a *Agent) injectPendingInterruptions() bool {
 // streamChatResponse opens a streaming chat, collects text/tool-call events,
 // and returns the assembled response, the raw assistant text buffer, and any
 // completed tool calls.
-func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message, toolDefs []provider.ToolDefinition, onEvent func(provider.StreamEvent)) (*provider.ChatResponse, string, []provider.ToolCallDelta, error) {
+func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message, toolDefs []provider.ToolDefinition, onEvent func(provider.StreamEvent)) (*provider.ChatResponse, string, []provider.ToolCallDelta, bool, error) {
 	streamCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	stream, err := a.provider.ChatStream(streamCtx, msgs, toolDefs)
 	if err != nil {
 		debug.Log("agent", "ChatStream error: %v", err)
-		return nil, "", nil, fmt.Errorf("chat error: %w", err)
+		return nil, "", nil, false, fmt.Errorf("chat error: %w", err)
 	}
 
 	var (
@@ -1599,6 +1623,7 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 		content          []provider.ContentBlock
 		toolCalls        []provider.ToolCallDelta
 		usage            provider.TokenUsage
+		truncated        bool
 	)
 
 	flushText := func() {
@@ -1669,6 +1694,7 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 			if event.Usage != nil {
 				usage = *event.Usage
 			}
+			truncated = event.Truncated
 			// Close thinking window if open
 			if !thinkStartTime.IsZero() {
 				thinkDuration += time.Since(thinkStartTime)
@@ -1709,7 +1735,7 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 			onEvent(event)
 		case provider.StreamEventError:
 			debug.Log("agent", "ChatStream event error: %v", event.Error)
-			return nil, assistantTextBuf.String(), nil, fmt.Errorf("chat error: %w", event.Error)
+			return nil, assistantTextBuf.String(), nil, false, fmt.Errorf("chat error: %w", event.Error)
 		}
 	}
 
@@ -1743,7 +1769,7 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 	return &provider.ChatResponse{
 		Message: respMsg,
 		Usage:   usage,
-	}, assistantTextBuf.String(), toolCalls, nil
+	}, assistantTextBuf.String(), toolCalls, truncated, nil
 }
 
 // --- Internal helpers ---
