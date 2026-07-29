@@ -704,6 +704,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	runStats := newRunStats(userPromptForStats)
 	// asyncVerifyStats captures run stats for the background verification goroutine.
 	asyncVerifyStats := (*RunStats)(nil)
+	// syncVerifyRetries tracks how many auto-repair cycles have been consumed
+	// by the synchronous verification gate. Bounded by maxSyncVerifyRetries.
+	syncVerifyRetries := 0
 
 	// Reset loop detector for each new user turn.
 	a.resetLoopDetector()
@@ -1199,8 +1202,29 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					continue
 				}
 			}
-			// Capture stats for async verification before returning.
-			asyncVerifyStats = runStats
+			// Synchronous verification with auto-repair.
+			// Before returning, verify the build if code was changed. If it
+			// fails and retry budget remains, inject errors and continue the
+			// loop — this is the "fix-on-fail" pattern used by Claude Code,
+			// Aider, and Cursor. It eliminates the manual round-trip where
+			// the user must say "fix the build" after every failed change.
+			syncPassed := false
+			if codeChangedInRun(runStats) && a.currentMode() != permission.PlanMode && ctx.Err() == nil {
+				if a.syncVerifyAndGate(ctx, runStats, syncVerifyRetries) {
+					syncVerifyRetries++
+					debug.Log("agent", "Iteration %d: sync verify failed, auto-repairing (retry %d/%d)", i+1, syncVerifyRetries, maxSyncVerifyRetries)
+					continue
+				}
+				// Sync verify ran (passed or budget exhausted).
+				// If it passed on the first attempt, skip redundant async verify.
+				syncPassed = syncVerifyRetries == 0
+			}
+			if syncPassed {
+				debug.Log("agent", "sync verify passed, skipping async verify")
+			} else {
+				// Capture stats for async verification before returning.
+				asyncVerifyStats = runStats
+			}
 			debug.Log("agent", "Iteration %d: no tool calls, returning", i+1)
 			return nil
 		}

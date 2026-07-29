@@ -29,6 +29,14 @@ type VerifyResult struct {
 const verifyPromptTimeout = 30 * time.Second
 const verifyExecuteTimeout = 120 * time.Second
 
+// maxSyncVerifyRetries is the maximum number of automatic verification-and-fix
+// cycles within a single agent run. When the agent finishes editing code but
+// verification (build/test) fails, the errors are injected back into the
+// conversation and the loop continues — up to this many times. This eliminates
+// the manual round-trip where the user must say "fix the build" after every
+// failed change. Competitors (Claude Code, Aider, Cursor) all have this pattern.
+const maxSyncVerifyRetries = 3
+
 // asyncVerify runs build/test verification in the background after the agent
 // loop completes. It does NOT block the agent's response — the user sees the
 // agent's output immediately, and verification results arrive asynchronously
@@ -383,4 +391,99 @@ func (a *Agent) injectRulesIntoResult(toolName string, args json.RawMessage, res
 	b.WriteString("\n")
 	b.WriteString(resultContent)
 	return b.String()
+}
+
+// syncVerifyAndGate runs verification synchronously before the agent loop
+// returns. This implements the "fix-on-fail" pattern: when code was changed,
+// build/test is executed inline. If it fails and retry budget remains, the
+// errors are injected into the conversation context and the method returns
+// true to signal the caller to continue the loop (auto-repair). If it passes
+// or the budget is exhausted, it returns false to signal "proceed to return."
+//
+// When verification passes, the caller should skip the redundant async
+// verification. When it fails with budget exhausted, async verify still runs
+// (in the defer) for ratchet rule learning.
+//
+// retryCount is the number of sync verify retries already consumed (0 on the
+// first check). The method returns:
+//   - (false, nil)  — verification passed or no verification needed; proceed to return
+//   - (true,  nil)  — verification failed, errors injected; continue the loop
+//   - (false, nil)  — verification failed but budget exhausted; proceed to return
+func (a *Agent) syncVerifyAndGate(ctx context.Context, runStats *RunStats, retryCount int) (shouldContinue bool) {
+	workingDir := a.WorkingDir()
+	if workingDir == "" {
+		return false
+	}
+
+	if !codeChangedInRun(runStats) {
+		return false
+	}
+
+	// Determine verification command — deterministic first, then LLM.
+	cmd := detectBuildSystem(workingDir)
+	if cmd == "" {
+		cmd = a.llmDecideVerifyCommand(ctx)
+	}
+	if cmd == "" {
+		debug.Log("verify", "sync: no verification command determined")
+		return false
+	}
+
+	if retryCount == 0 {
+		a.verifyProgress(fmt.Sprintf("Running verification: `%s`…", cmd))
+	} else {
+		a.verifyProgress(fmt.Sprintf("Re-running verification: `%s` (attempt %d/%d)…", cmd, retryCount+1, maxSyncVerifyRetries+1))
+	}
+	debug.Log("verify", "sync: running '%s' (retry %d/%d)", cmd, retryCount, maxSyncVerifyRetries)
+
+	result := a.executeVerifyCommand(ctx, cmd)
+
+	if result.Passed {
+		debug.Log("verify", "sync: PASSED")
+		a.verifyResult(*result)
+		return false // proceed to return — caller skips async verify
+	}
+
+	// Verification failed.
+	debug.Log("verify", "sync: FAILED: %d errors", len(result.Errors))
+
+	// Ratchet: learn rules from the errors (same as async path).
+	rs := NewRuleStore(workingDir)
+	if rs != nil {
+		matched, unmatched := rs.MatchErrors(result.Errors)
+		debug.Log("verify", "sync ratchet: %d matched, %d unmatched", len(matched), len(unmatched))
+		if len(unmatched) > 0 {
+			newRules := a.generalizeErrorsWithRetry(ctx, unmatched, cmd)
+			for _, r := range newRules {
+				rs.AddRule(r)
+			}
+			debug.Log("verify", "sync ratchet: learned %d new rules", len(newRules))
+		}
+	}
+
+	// Budget exhausted — report and let the caller proceed to return.
+	// The async verify in the defer will run for final reporting.
+	if retryCount >= maxSyncVerifyRetries {
+		debug.Log("verify", "sync: budget exhausted (%d/%d), proceeding to return", retryCount, maxSyncVerifyRetries)
+		a.verifyProgress(fmt.Sprintf("Verification still failing after %d attempts — please review manually.", maxSyncVerifyRetries+1))
+		return false
+	}
+
+	// Budget remains — inject errors into context and signal continue.
+	a.verifyProgress(fmt.Sprintf("Verification failed — auto-repairing (attempt %d/%d)…", retryCount+1, maxSyncVerifyRetries))
+
+	errorSummary := fmt.Sprintf("Verification failed with the following command:\n```\n%s\n```\n\nErrors:\n", cmd)
+	for _, e := range result.Errors {
+		errorSummary += fmt.Sprintf("- %s\n", e)
+	}
+	errorSummary += "\nFix these issues and ensure the build passes."
+	a.contextManager.Add(provider.Message{
+		Role: "user",
+		Content: []provider.ContentBlock{{
+			Type: "text",
+			Text: errorSummary,
+		}},
+	})
+
+	return true // continue the loop for auto-repair
 }
