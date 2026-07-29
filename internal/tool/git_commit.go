@@ -88,6 +88,18 @@ func (t GitCommit) Execute(ctx context.Context, input json.RawMessage) (Result, 
 		return Result{Content: trimmed}, nil
 	}
 
+	// Pre-commit diff scan: check staged changes for common quality issues
+	// (debug statements, merge conflict markers, secrets, TODOs, debugger
+	// breakpoints). This is advisory (non-blocking) — the commit proceeds, but
+	// the warnings help the agent self-correct before pushing.
+	var diffScanWarning string
+	if !args.All {
+		// For non -a commits, staged diff is available before commit.
+		diffOutput := getStagedDiff(ctx, dir)
+		issues := ScanStagedDiffForIssues(diffOutput)
+		diffScanWarning = FormatDiffIssues(issues)
+	}
+
 	gitArgs := []string{"commit", "-m", fullMessage}
 	if args.All {
 		gitArgs = []string{"commit", "-a", "-m", fullMessage}
@@ -102,12 +114,16 @@ func (t GitCommit) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	}
 
 	trimmed := strings.TrimSpace(string(out))
-	// Append branch warning and message quality warning if present.
+	// Append branch warning, message quality warning, and diff scan warning
+	// if present.
 	if branchWarning != "" {
 		trimmed += "\n\n" + branchWarning
 	}
 	if msgWarning != "" {
 		trimmed += "\n\n" + msgWarning
+	}
+	if diffScanWarning != "" {
+		trimmed += "\n\n" + diffScanWarning
 	}
 	if trimmed == "" {
 		result := "Committed successfully."
@@ -117,12 +133,12 @@ func (t GitCommit) Execute(ctx context.Context, input json.RawMessage) (Result, 
 		if msgWarning != "" {
 			result += "\n\n" + msgWarning
 		}
+		if diffScanWarning != "" {
+			result += "\n\n" + diffScanWarning
+		}
 		return Result{Content: result}, nil
 	}
 
-	if branchWarning != "" {
-		trimmed += "\n\n" + branchWarning
-	}
 	return Result{Content: trimmed}, nil
 }
 
