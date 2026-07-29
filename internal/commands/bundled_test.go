@@ -21,7 +21,7 @@ func TestBundledSkillsIncludeOperationalSkills(t *testing.T) {
 		}
 	}
 
-	required := []string{"verify", "debug", "simplify", "update-config", "browser-automation", "documentation-update", "harness-run", "harness-review", "harness-promote", "harness-diagnose"}
+	required := []string{"verify", "debug", "simplify", "update-config", "browser-automation", "documentation-update", "spec", "harness-run", "harness-review", "harness-promote", "harness-diagnose"}
 	for _, name := range required {
 		if _, ok := byName[name]; !ok {
 			t.Fatalf("missing bundled skill %q", name)

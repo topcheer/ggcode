@@ -70,6 +70,17 @@ func bundledSkills() []*Command {
 		},
 		// --- Harness bundled skills ---
 		{
+			Name:          "spec",
+			DisplayName:   "Spec-driven development",
+			Description:   "Turn a feature idea into an executable spec (requirements, design, task plan) before writing code, in the style of Kiro / GitHub Spec Kit.",
+			WhenToUse:     "Use when the user asks to plan or spec out a feature before implementation, wants a requirements/design/tasks breakdown, or mentions spec-driven development, /spec, or a feature spec.",
+			Template:      "Run a spec-driven workflow for the requested feature. Work in three phases, asking for confirmation between phases: 1) Requirements: write `specs/<feature-name>/requirements.md` with user stories and acceptance criteria in EARS-like form (WHEN/WHILE/IF ... THEN/SHALL). 2) Design: after requirements are approved, write `specs/<feature-name>/design.md` covering architecture, key components, data models, error handling, and how it integrates with the existing codebase (read relevant code first; reuse existing patterns). 3) Tasks: after design is approved, write `specs/<feature-name>/tasks.md` as a numbered checklist of small, verifiable implementation steps, each referencing the requirements it satisfies. Keep each document concise and grounded in this repository's actual conventions. Create the `specs/` directory if missing. Do not start implementing until the user explicitly asks; when they do, work through tasks.md in order and check items off as they are verified.",
+			Source:        SourceBundled,
+			LoadedFrom:    LoadedFromBundled,
+			UserInvocable: false,
+			Enabled:       true,
+		},
+		{
 			Name:          "harness-run",
 			DisplayName:   "Run task in harness",
 			Description:   "Execute a coding task in an isolated harness environment with worktree, checks, and review.",
