@@ -194,6 +194,7 @@ func (t MultiFileRead) Execute(ctx context.Context, input json.RawMessage) (Resu
 
 type MultiFileEdit struct {
 	SandboxCheck AllowedPathChecker
+	WorkingDir   string
 }
 
 func (t MultiFileEdit) Name() string { return "multi_file_edit" }
@@ -336,6 +337,7 @@ func (t MultiFileEdit) Execute(ctx context.Context, input json.RawMessage) (Resu
 		out.Summary = fmt.Sprintf("Requested %d files: %d written, 0 failed, 0 skipped", len(entries), out.WrittenFiles)
 		for _, plan := range plans {
 			out.SecretWarnings += scanAndWarn(plan.Path, plan.NewContent)
+			out.DiagnosticWarnings += postEditDiagnostics(t.WorkingDir, plan.Path)
 		}
 		content, err := json.Marshal(out)
 		if err != nil {
@@ -381,6 +383,7 @@ func (t MultiFileEdit) Execute(ctx context.Context, input json.RawMessage) (Resu
 	for _, plan := range plans {
 		if idx, ok := byPath[plan.Path]; ok && out.Results[idx].Status == "success" {
 			out.SecretWarnings += scanAndWarn(plan.Path, plan.NewContent)
+			out.DiagnosticWarnings += postEditDiagnostics(t.WorkingDir, plan.Path)
 		}
 	}
 	content, err := json.Marshal(out)

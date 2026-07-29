@@ -10,6 +10,7 @@ import (
 // MultiEditFile applies multiple find-and-replace edits to a single file in one call.
 type MultiEditFile struct {
 	SandboxCheck AllowedPathChecker
+	WorkingDir   string
 }
 
 func (t MultiEditFile) Name() string { return "multi_edit_file" }
@@ -106,5 +107,7 @@ func (t MultiEditFile) Execute(ctx context.Context, input json.RawMessage) (Resu
 	if fmtChanged {
 		result += " (auto-formatted)"
 	}
+	result += scanAndWarn(args.FilePath, string(writeData))
+	result += postEditDiagnostics(t.WorkingDir, args.FilePath)
 	return Result{Content: result}, nil
 }

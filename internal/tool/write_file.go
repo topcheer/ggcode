@@ -11,6 +11,7 @@ import (
 // WriteFile implements the write_file tool.
 type WriteFile struct {
 	SandboxCheck AllowedPathChecker
+	WorkingDir   string
 }
 
 func (t WriteFile) Name() string { return "write_file" }
@@ -93,5 +94,6 @@ func (t WriteFile) Execute(ctx context.Context, input json.RawMessage) (Result, 
 		msg += " (auto-formatted)"
 	}
 	msg += scanAndWarn(args.Path, string(writeData))
+	msg += postEditDiagnostics(t.WorkingDir, args.Path)
 	return Result{Content: msg}, nil
 }

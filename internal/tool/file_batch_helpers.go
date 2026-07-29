@@ -45,18 +45,19 @@ type MultiFileEditFileResult struct {
 }
 
 type MultiFileEditContent struct {
-	Summary        string                    `json:"summary"`
-	Mode           string                    `json:"mode"`
-	Applied        bool                      `json:"applied"`
-	PlannedFiles   int                       `json:"planned_files"`
-	WrittenFiles   int                       `json:"written_files"`
-	FailedFiles    int                       `json:"failed_files"`
-	SkippedFiles   int                       `json:"skipped_files"`
-	WrittenPaths   []string                  `json:"written_paths"`
-	FailedPaths    []string                  `json:"failed_paths"`
-	SkippedPaths   []string                  `json:"skipped_paths"`
-	Results        []MultiFileEditFileResult `json:"results"`
-	SecretWarnings string                    `json:"secret_warnings,omitempty"`
+	Summary            string                    `json:"summary"`
+	Mode               string                    `json:"mode"`
+	Applied            bool                      `json:"applied"`
+	PlannedFiles       int                       `json:"planned_files"`
+	WrittenFiles       int                       `json:"written_files"`
+	FailedFiles        int                       `json:"failed_files"`
+	SkippedFiles       int                       `json:"skipped_files"`
+	WrittenPaths       []string                  `json:"written_paths"`
+	FailedPaths        []string                  `json:"failed_paths"`
+	SkippedPaths       []string                  `json:"skipped_paths"`
+	Results            []MultiFileEditFileResult `json:"results"`
+	SecretWarnings     string                    `json:"secret_warnings,omitempty"`
+	DiagnosticWarnings string                    `json:"diagnostic_warnings,omitempty"`
 }
 
 func cleanAbsolutePath(path string) (string, error) {

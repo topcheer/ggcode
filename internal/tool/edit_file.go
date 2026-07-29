@@ -11,6 +11,7 @@ import (
 // EditFile implements the edit_file tool for find-and-replace editing.
 type EditFile struct {
 	SandboxCheck AllowedPathChecker
+	WorkingDir   string
 }
 
 func (t EditFile) Name() string { return "edit_file" }
@@ -145,6 +146,7 @@ func (t EditFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 		msg += " (auto-formatted)"
 	}
 	msg += scanAndWarn(args.FilePath, string(writeData))
+	msg += postEditDiagnostics(t.WorkingDir, args.FilePath)
 	return Result{Content: msg}, nil
 }
 

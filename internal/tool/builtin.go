@@ -25,11 +25,11 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 		// File operations
 		ReadFile{SandboxCheck: sandboxFor("read_file")},
 		MultiFileRead{SandboxCheck: sandboxFor("multi_file_read")},
-		WriteFile{SandboxCheck: sandboxFor("write_file")},
-		MultiFileWrite{SandboxCheck: sandboxFor("multi_file_write")},
+		WriteFile{SandboxCheck: sandboxFor("write_file"), WorkingDir: workingDir},
+		MultiFileWrite{SandboxCheck: sandboxFor("multi_file_write"), WorkingDir: workingDir},
 		ListDir{SandboxCheck: sandboxFor("list_directory")},
-		EditFile{SandboxCheck: sandboxFor("edit_file")},
-		MultiFileEdit{SandboxCheck: sandboxFor("multi_file_edit")},
+		EditFile{SandboxCheck: sandboxFor("edit_file"), WorkingDir: workingDir},
+		MultiFileEdit{SandboxCheck: sandboxFor("multi_file_edit"), WorkingDir: workingDir},
 
 		// Search
 		SearchFiles{SandboxCheck: sandboxFor("search_files")},
@@ -40,7 +40,7 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 	tools = append(tools,
 
 		// Multi-edit and notebook
-		MultiEditFile{SandboxCheck: sandboxFor("multi_edit_file")},
+		MultiEditFile{SandboxCheck: sandboxFor("multi_edit_file"), WorkingDir: workingDir},
 		NotebookEdit{SandboxCheck: sandboxFor("notebook_edit")},
 
 		// Sleep

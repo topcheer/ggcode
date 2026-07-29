@@ -13,6 +13,7 @@ import (
 // Parent directories are created automatically if they do not exist.
 type MultiFileWrite struct {
 	SandboxCheck AllowedPathChecker
+	WorkingDir   string
 }
 
 func (t MultiFileWrite) Name() string { return "multi_file_write" }
@@ -246,9 +247,16 @@ func (t MultiFileWrite) Execute(ctx context.Context, input json.RawMessage) (Res
 		}
 	}
 
+	// Post-edit LSP diagnostics for written source files.
+	for _, f := range args.Files {
+		if diag := postEditDiagnostics(t.WorkingDir, f.Path); diag != "" {
+			sb.WriteString(diag)
+		}
+	}
+
 	return Result{Content: strings.TrimSuffix(sb.String(), "\n"), IsError: isError}, nil
 }
 
 func (t MultiFileWrite) Clone() MultiFileWrite {
-	return MultiFileWrite{SandboxCheck: t.SandboxCheck}
+	return MultiFileWrite{SandboxCheck: t.SandboxCheck, WorkingDir: t.WorkingDir}
 }
