@@ -1417,6 +1417,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				a.mu.Unlock()
 				debug.Log("agent", "working dir changed: %s -> %s (suggested by %s)", oldDir, result.SuggestedWorkingDir, tc.Name)
 			}
+			// Prompt injection guard: scan external-content tool results for
+			// adversarial injection patterns and wrap them with a security
+			// notice so the model treats them as untrusted data.
+			result.Content = guardPromptInjection(tc.Name, result.Content)
+
 			// Context-fill-aware output guard: proactively truncate large
 			// non-error results when context is getting full. This prevents
 			// a single 50KB build log from consuming 12K+ tokens when the
