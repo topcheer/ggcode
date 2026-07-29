@@ -41,31 +41,33 @@ func TestStripDefaultsFromYAML_SaveOnlyCustom(t *testing.T) {
 	}
 	content := string(data)
 
-	t.Logf("Saved config:\n%s", content)
-	t.Logf("Lines: %d, Bytes: %d", len(data)/60+1, len(data))
+	t.Logf("Saved main config:\n%s", content)
 
-	// Should contain the custom vendor
-	if !strings.Contains(content, "my-custom") {
-		t.Error("saved config should contain 'my-custom' vendor")
+	// Custom vendor should be in vendors.yaml (external file), NOT in main config
+	vendorsPath := VendorsPath(tmpDir)
+	vendorsData, _ := os.ReadFile(vendorsPath)
+	vendorsContent := string(vendorsData)
+
+	if !strings.Contains(vendorsContent, "my-custom") {
+		t.Error("vendors.yaml should contain 'my-custom' vendor")
 	}
-	// Should contain zh-CN
+	// Main config should contain zh-CN
 	if !strings.Contains(content, "zh-CN") {
 		t.Error("saved config should contain 'zh-CN' language")
 	}
-	// Should NOT contain default vendor names that were not customized
-	// Check for vendor key pattern "    vendorname:" (YAML map key under vendors:)
+	// Should NOT contain default vendor names in main config
 	for _, name := range []string{"openai", "gemini", "groq", "perplexity", "together",
 		"aihubmix", "ark", "dashscope", "getgoapi", "kimi", "minimax",
 		"mistral", "moonshot", "novita", "nvidia", "poe", "requesty",
 		"vercel", "zai", "deepseek"} {
-		pattern := "    " + name + ":"
-		if strings.Contains(content, pattern) {
-			t.Errorf("saved config should NOT contain default vendor %q", name)
+		pattern := "\n" + name + ":"
+		if strings.Contains(content, pattern) || strings.Contains(vendorsContent, pattern) {
+			t.Errorf("default vendor %q should be stripped from both files", name)
 		}
 	}
-	// Also verify the file is small (no 22-vendor bloat)
+	// Also verify the main config file is small (no vendor bloat)
 	if len(data) > 2000 {
-		t.Errorf("saved config too large (%d bytes) — default vendors probably not stripped", len(data))
+		t.Errorf("main config too large (%d bytes) — vendors probably not migrated to external file", len(data))
 	}
 }
 
@@ -100,18 +102,22 @@ func TestStripDefaultsFromYAML_SavePreservesModifiedDefault(t *testing.T) {
 	}
 	content := string(data)
 
-	t.Logf("Saved config:\n%s", content)
+	t.Logf("Saved main config:\n%s", content)
 
-	// Should contain anthropic because it was customized
-	if !strings.Contains(content, "anthropic:") {
-		t.Error("saved config should contain 'anthropic' vendor (it was customized)")
+	// Customized anthropic vendor should be in vendors.yaml (external file)
+	vendorsPath := VendorsPath(tmpDir)
+	vendorsData, _ := os.ReadFile(vendorsPath)
+	vendorsContent := string(vendorsData)
+
+	if !strings.Contains(vendorsContent, "anthropic:") {
+		t.Error("vendors.yaml should contain 'anthropic' vendor (it was customized)")
 	}
-	if !strings.Contains(content, "custom-proxy.example.com") {
-		t.Error("saved config should contain the custom base_url")
+	if !strings.Contains(vendorsContent, "custom-proxy.example.com") {
+		t.Error("vendors.yaml should contain the custom base_url")
 	}
-	// File should be small (only 1 vendor, not 22)
+	// Main config file should be small (no vendor bloat)
 	if len(data) > 2000 {
-		t.Errorf("saved config too large (%d bytes) — default vendors probably not stripped", len(data))
+		t.Errorf("main config too large (%d bytes) — vendors not migrated to external file", len(data))
 	}
 }
 
@@ -152,30 +158,36 @@ func TestStripDefaultsFromYAML_ModelsInlineFormat(t *testing.T) {
 		t.Fatalf("ReadFile error: %v", err)
 	}
 	content := string(data)
-	t.Logf("Saved config:\n%s", content)
+	t.Logf("Saved main config:\n%s", content)
+
+	// Vendor data is now in vendors.yaml (external file)
+	vendorsPath := VendorsPath(tmpDir)
+	vendorsData, _ := os.ReadFile(vendorsPath)
+	vendorsContent := string(vendorsData)
+	t.Logf("vendors.yaml:\n%s", vendorsContent)
 
 	// Models should be on a single line (flow style), not one-per-line
-	if !strings.Contains(content, "models: [") {
-		t.Error("models should use inline format 'models: [...]' not block style")
+	if !strings.Contains(vendorsContent, "models: [") {
+		t.Error("models should use inline format 'models: [...]' not block style in vendors.yaml")
 	}
 	// Tags should also be inline
-	if !strings.Contains(content, "tags: [") {
-		t.Error("tags should use inline format 'tags: [...]' not block style")
+	if !strings.Contains(vendorsContent, "tags: [") {
+		t.Error("tags should use inline format 'tags: [...]' not block style in vendors.yaml")
 	}
 
 	// Verify the models line contains actual model names
-	if !strings.Contains(content, "gpt-4o") {
-		t.Error("models should contain 'gpt-4o'")
+	if !strings.Contains(vendorsContent, "gpt-4o") {
+		t.Error("vendors.yaml should contain 'gpt-4o' in models")
 	}
-	if !strings.Contains(content, "llama-3.1-70b") {
-		t.Error("models should contain 'llama-3.1-70b'")
+	if !strings.Contains(vendorsContent, "llama-3.1-70b") {
+		t.Error("vendors.yaml should contain 'llama-3.1-70b' in models")
 	}
 
-	// Count lines — should be compact, not 15+ lines for models
+	// Main config should be compact
 	lineCount := strings.Count(content, "\n") + 1
-	t.Logf("Total lines: %d", lineCount)
+	t.Logf("Main config lines: %d", lineCount)
 	if lineCount > 50 {
-		t.Errorf("config too large (%d lines) — models probably not inlined", lineCount)
+		t.Errorf("main config too large (%d lines) — vendor data should be in vendors.yaml", lineCount)
 	}
 }
 

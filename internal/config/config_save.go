@@ -93,7 +93,13 @@ func (c *Config) Save() error {
 		}
 	} else {
 		// File doesn't exist or is empty — full write.
-		data = stripDefaultsFromYAML(currentData)
+		// Use currentRaw (after stripping external sections) so vendors/im/mcp_servers
+		// don't leak into the main config file on first write.
+		fullData, marshalErr := yaml.Marshal(currentRaw)
+		if marshalErr != nil {
+			return fmt.Errorf("marshaling config for first write: %w", marshalErr)
+		}
+		data = stripDefaultsFromYAML(fullData)
 	}
 
 	if err := writeSecureConfigFile(c.FilePath, data); err != nil {

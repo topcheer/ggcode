@@ -268,15 +268,19 @@ func loadMCPServersFile(path string) []MCPServerConfig {
 		return nil
 	}
 	lookup := runtimeEnvLookup(nil)
-	raw := map[string]interface{}{}
-	if err := yaml.Unmarshal(data, &raw); err != nil {
-		debug.Log("config", "failed to parse %s: %v", path, err)
+
+	// mcp_servers.yaml is a YAML array at top level (a sequence of maps).
+	// Parse as []map[string]interface{} so env expansion works on each element.
+	var rawList []map[string]interface{}
+	if err := yaml.Unmarshal(data, &rawList); err != nil {
+		debug.Log("config", "failed to parse mcp servers from %s: %v", path, err)
 		return nil
 	}
-	expanded := ExpandEnvRecursiveWithLookup(raw, lookup)
-	expandedData, _ := yaml.Marshal(expanded)
+	for i, m := range rawList {
+		rawList[i] = ExpandEnvRecursiveWithLookup(m, lookup)
+	}
+	expandedData, _ := yaml.Marshal(rawList)
 
-	// mcp_servers.yaml is a YAML array at top level
 	var servers []MCPServerConfig
 	if err := yaml.Unmarshal(expandedData, &servers); err != nil {
 		debug.Log("config", "failed to parse mcp servers from %s: %v", path, err)
