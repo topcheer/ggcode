@@ -24,9 +24,10 @@ func TestBuildProjectOverview_Basic(t *testing.T) {
 			t.Errorf("overview missing %q:\n%s", want, out)
 		}
 	}
-	// Directories should sort before files.
-	if strings.Index(out, "internal/") > strings.Index(out, "main.go") {
-		t.Errorf("expected directories before files:\n%s", out)
+	// At the root, key manifest files sort before directories so they
+	// survive the line budget.
+	if strings.Index(out, "go.mod") > strings.Index(out, "internal/") {
+		t.Errorf("expected root files before directories:\n%s", out)
 	}
 }
 
@@ -61,6 +62,31 @@ func TestBuildProjectOverview_DepthLimit(t *testing.T) {
 	}
 	if strings.Contains(out, "c/") || strings.Contains(out, "deep.go") {
 		t.Errorf("expected depth >2 entries omitted:\n%s", out)
+	}
+}
+
+func TestBuildProjectOverview_FilesOnlyAtRoot(t *testing.T) {
+	root := t.TempDir()
+	mustMkdir(t, filepath.Join(root, "pkg", "sub"))
+	// Many files inside a subdirectory must not consume the line budget —
+	// only directory names are shown below the root.
+	for i := 0; i < 30; i++ {
+		mustWrite(t, filepath.Join(root, "pkg", strings.Repeat("f", i+1)+".go"), "package pkg\n")
+	}
+	mustWrite(t, filepath.Join(root, "go.mod"), "module example\n")
+
+	out := BuildProjectOverview(root)
+	if !strings.Contains(out, "pkg/") || !strings.Contains(out, "  sub/") {
+		t.Errorf("expected pkg/ and sub/ dirs:\n%s", out)
+	}
+	if !strings.Contains(out, "go.mod") {
+		t.Errorf("expected root file go.mod listed:\n%s", out)
+	}
+	if strings.Contains(out, ".go\n") || strings.Contains(out, "f.go") {
+		t.Errorf("expected subdirectory files omitted:\n%s", out)
+	}
+	if strings.Contains(out, "truncated") {
+		t.Errorf("30 subdir files should not cause truncation:\n%s", out)
 	}
 }
 

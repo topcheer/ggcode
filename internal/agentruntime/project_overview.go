@@ -22,6 +22,17 @@ var overviewSkipDirs = map[string]bool{
 	"bin":          true,
 }
 
+// overviewSkipFileExts are file extensions excluded from the root listing —
+// build artifacts, media, and archives carry no structural signal.
+var overviewSkipFileExts = map[string]bool{
+	".exe": true, ".test": true, ".out": true,
+	".jpg": true, ".jpeg": true, ".png": true, ".gif": true,
+	".webp": true, ".bmp": true, ".ico": true, ".svg": true,
+	".pdf": true, ".zip": true, ".gz": true, ".dmg": true,
+	".msi": true, ".pkg": true, ".deb": true, ".rpm": true,
+	".mp4": true, ".mov": true, ".pen": true, ".html": true,
+}
+
 const (
 	// overviewMaxDepth limits how deep the layout walk descends (root = depth 0).
 	overviewMaxDepth = 2
@@ -63,11 +74,34 @@ func BuildProjectOverview(root string) string {
 			if item.IsDir() && overviewSkipDirs[name] {
 				continue
 			}
+			// Files are only listed at the root (depth 0) — they are usually
+			// the few important manifests (go.mod, package.json, README).
+			// Deeper levels show directory names only, so the line budget
+			// covers the whole directory tree instead of being consumed by
+			// file listings in a single large subdirectory.
+			if !item.IsDir() {
+				if depth > 0 || overviewSkipFileExts[strings.ToLower(filepath.Ext(name))] {
+					continue
+				}
+				// Skip extension-less executables (built binaries like
+				// `ggcode`) but keep Makefile/LICENSE-style files.
+				if filepath.Ext(name) == "" {
+					if info, err := item.Info(); err == nil && info.Mode()&0o111 != 0 {
+						continue
+					}
+				}
+			}
 			names = append(names, item)
 		}
 		sort.Slice(names, func(i, j int) bool {
-			// Directories first, then alphabetical — mirrors how engineers scan trees.
 			if names[i].IsDir() != names[j].IsDir() {
+				// At the root, files come first: they are the few key
+				// manifests (go.mod, README, Makefile) and would otherwise
+				// be truncated away by subdirectory listings. Deeper levels
+				// contain directories only (see filter above).
+				if depth == 0 {
+					return !names[i].IsDir()
+				}
 				return names[i].IsDir()
 			}
 			return names[i].Name() < names[j].Name()
@@ -109,5 +143,5 @@ func projectOverviewSection(workingDir string) string {
 	if overview == "" {
 		return ""
 	}
-	return fmt.Sprintf("\n\n## Project layout\nWorkspace directory structure (depth-limited, noise directories omitted). Use glob, search_files, or list_directory to explore deeper.\n```\n%s\n```", overview)
+	return fmt.Sprintf("\n\n## Project layout\nWorkspace directory structure (depth-limited, noise directories omitted, files shown at root only). Use glob, search_files, or list_directory to explore deeper.\n```\n%s\n```", overview)
 }
