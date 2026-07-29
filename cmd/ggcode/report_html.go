@@ -875,7 +875,7 @@ window.__DATA__ = ` + jsonData + `;
           title: items => items[0].label,
           label: ctx => {
             const m = models[ctx.dataIndex];
-            return ['Input: ' + fmt(m.input), 'Cache: ' + fmt(m.cache), 'Output: ' + fmt(m.output), 'Total: ' + fmt(m.input + m.cache + m.output)];
+            return ['Input: ' + fmt(m.input), 'Cached: ' + fmt(m.cache), 'Output: ' + fmt(m.output), 'Total: ' + fmt(m.input + m.output)];
           }
         } } }
       }
