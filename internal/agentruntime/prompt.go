@@ -58,6 +58,7 @@ func BuildInteractiveSystemPromptWithPromptRefs(
 		}
 	}
 	prompt := config.BuildSystemPrompt(cfg.ExtraPrompt, workingDir, cfg.Language, toolNames, gitStatus, customCmdNames, availableModels)
+	prompt += projectOverviewSection(workingDir)
 	var promptSkillRefs []string
 	if commandMgr != nil {
 		skillsPrompt, refs := BuildSkillsSystemPromptWithPromptRefs(commandMgr.List())
@@ -223,6 +224,7 @@ func buildSharedAgentPrompt(ctx SubAgentPromptContext) string {
 		}
 	}
 	prompt := config.BuildSystemPrompt(extraPrompt, workingDir, language, toolNames, gitStatus, nil, availableModels)
+	prompt += projectOverviewSection(workingDir)
 
 	// 3. Add skills (same as main agent)
 	if ctx.CommandMgr != nil {
