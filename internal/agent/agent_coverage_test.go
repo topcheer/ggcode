@@ -1067,6 +1067,7 @@ func (p *askAlwaysPolicy) IsDangerous(command string) bool                      
 func (p *askAlwaysPolicy) AllowedPath(path string) bool                              { return true }
 func (p *askAlwaysPolicy) AllowedPathForTool(toolName, path string) bool             { return true }
 func (p *askAlwaysPolicy) SetOverride(toolName string, decision permission.Decision) {}
+func (p *askAlwaysPolicy) AllowCommandPattern(pattern string)                        {}
 func (p *askAlwaysPolicy) Mode() permission.PermissionMode                           { return permission.SupervisedMode }
 
 // denyAlwaysPolicy always returns Deny for any tool.
@@ -1079,6 +1080,7 @@ func (p *denyAlwaysPolicy) IsDangerous(command string) bool                     
 func (p *denyAlwaysPolicy) AllowedPath(path string) bool                              { return true }
 func (p *denyAlwaysPolicy) AllowedPathForTool(toolName, path string) bool             { return true }
 func (p *denyAlwaysPolicy) SetOverride(toolName string, decision permission.Decision) {}
+func (p *denyAlwaysPolicy) AllowCommandPattern(pattern string)                        {}
 func (p *denyAlwaysPolicy) Mode() permission.PermissionMode                           { return permission.SupervisedMode }
 
 // fileWriteTool is a test tool that simulates write_file.

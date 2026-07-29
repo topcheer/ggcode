@@ -24,6 +24,7 @@ type ConfigPolicy struct {
 	readOnlySandbox *PathSandbox
 	detector        *DangerousDetector
 	mode            PermissionMode
+	cmdRules        *CommandRuleSet
 	mu              sync.RWMutex
 }
 
@@ -50,6 +51,31 @@ func NewConfigPolicyWithModeAndReadOnlyDirs(rules map[string]Decision, allowedDi
 		readOnlySandbox: newOptionalPathSandbox(readOnlyDirs),
 		detector:        NewDangerousDetector(),
 		mode:            mode,
+		cmdRules:        NewCommandRuleSet(),
+	}
+}
+
+// SetCommandRuleSet replaces the command-level permission rules.
+func (p *ConfigPolicy) SetCommandRuleSet(rs *CommandRuleSet) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.cmdRules = rs
+}
+
+// CommandRuleSet returns the current command-level rule set.
+func (p *ConfigPolicy) CommandRuleSet() *CommandRuleSet {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.cmdRules
+}
+
+// AllowCommandPattern adds a runtime allow pattern for commands.
+func (p *ConfigPolicy) AllowCommandPattern(pattern string) {
+	p.mu.RLock()
+	rs := p.cmdRules
+	p.mu.RUnlock()
+	if rs != nil {
+		rs.AddAllowPattern(pattern)
 	}
 }
 
@@ -139,7 +165,28 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 		return Allow, nil
 	}
 
-	// Supervised mode (default): check overrides, then ask
+	// Supervised mode (default): check command-level rules first,
+	// then per-tool overrides, then ask.
+	if isCommandTool(toolName) {
+		cmd, _ := extractCommand(input)
+		if cmd != "" {
+			p.mu.RLock()
+			rs := p.cmdRules
+			p.mu.RUnlock()
+			if rs != nil {
+				if d, matched := rs.Check(cmd); matched {
+					if d == Deny {
+						return Deny, nil
+					}
+					// Allow matched, but still check dangerous detector
+					if p.detector.IsDangerous(cmd) {
+						return Ask, nil
+					}
+					return Allow, nil
+				}
+			}
+		}
+	}
 	if d, ok := p.rules[toolName]; ok {
 		if isFileTool(toolName) {
 			for _, path := range extractFilePaths(input) {

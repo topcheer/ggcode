@@ -43,4 +43,8 @@ type PermissionPolicy interface {
 
 	// SetOverride allows runtime modification of per-tool policy (e.g., 'a' key in TUI).
 	SetOverride(toolName string, decision Decision)
+
+	// AllowCommandPattern adds a fine-grained command-level allow rule.
+	// Only applies to command tools (run_command, start_command, etc.) in supervised mode.
+	AllowCommandPattern(pattern string)
 }

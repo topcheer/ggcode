@@ -550,6 +550,7 @@ func (m *mockPolicy) IsDangerous(command string) bool                           
 func (m *mockPolicy) AllowedPath(path string) bool                              { return true }
 func (m *mockPolicy) AllowedPathForTool(toolName, path string) bool             { return true }
 func (m *mockPolicy) SetOverride(toolName string, decision permission.Decision) {}
+func (m *mockPolicy) AllowCommandPattern(pattern string)                        {}
 
 func newBypassPolicy() *mockPolicy     { return &mockPolicy{mode: permission.BypassMode} }
 func newSupervisedPolicy() *mockPolicy { return &mockPolicy{mode: permission.SupervisedMode} }

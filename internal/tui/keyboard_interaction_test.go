@@ -634,8 +634,21 @@ func TestScenario_UserAlwaysAllowsTool(t *testing.T) {
 	if decision != permission.Allow {
 		t.Errorf("expected Allow, got %v", decision)
 	}
-	if policy.GetDecision("run_command") != permission.Allow {
-		t.Error("expected run_command to be allowed after 'always allow'")
+	// With command-level rules, "npm test" creates pattern "npm test*"
+	// instead of blanket-allowing run_command
+	rs := policy.CommandRuleSet()
+	if rs == nil || len(rs.AllowPatterns()) == 0 {
+		t.Error("expected command allow pattern after 'always allow' on run_command")
+	}
+	// Verify the pattern actually matches the original command
+	d, matched := rs.Check("npm test")
+	if !matched || d != permission.Allow {
+		t.Errorf("expected 'npm test' to be allowed by command rule, got (%v, %v)", d, matched)
+	}
+	// Unrelated command should NOT be auto-allowed
+	d2, matched2 := rs.Check("rm -rf /tmp")
+	if matched2 && d2 == permission.Allow {
+		t.Error("unrelated command should not be auto-allowed")
 	}
 	output := stripAnsi(renderedOutput(&m))
 	if !strings.Contains(output, "Always allow") && !strings.Contains(output, "已总是允许") {

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -234,13 +235,32 @@ func (m *Model) handleApprovalAllowAlways() tea.Cmd {
 	m.pendingApproval = nil
 	m.tunnelPendingApprovalID = ""
 	if pa != nil && m.policy != nil {
-		m.policy.SetOverride(pa.ToolName, permission.Allow)
-		present := describeTool(m.currentLanguage(), pa.ToolName, pa.Input)
-		toolLine := formatToolInline(present.DisplayName, present.Detail)
-		if m.currentLanguage() == LangZhCN {
-			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("\u2713 已总是允许：%s", toolLine))
+		// For command tools, use fine-grained command-level permission
+		// instead of blanket-allowing the entire tool. This prevents
+		// "always allow run_command" from auto-approving every future command.
+		if cmd := extractCommandFromInput(pa.Input); cmd != "" {
+			pattern := permission.CommandPrefixToPattern(cmd)
+			if pattern != "" {
+				m.policy.AllowCommandPattern(pattern)
+				present := describeTool(m.currentLanguage(), pa.ToolName, pa.Input)
+				toolLine := formatToolInline(present.DisplayName, present.Detail)
+				if m.currentLanguage() == LangZhCN {
+					m.chatWriteSystem(nextSystemID(), fmt.Sprintf("\u2713 已总是允许：%s (%s)", toolLine, pattern))
+				} else {
+					m.chatWriteSystem(nextSystemID(), fmt.Sprintf("\u2713 Always allow: %s (%s)", toolLine, pattern))
+				}
+			} else {
+				m.policy.SetOverride(pa.ToolName, permission.Allow)
+			}
 		} else {
-			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("\u2713 Always allow: %s", toolLine))
+			m.policy.SetOverride(pa.ToolName, permission.Allow)
+			present := describeTool(m.currentLanguage(), pa.ToolName, pa.Input)
+			toolLine := formatToolInline(present.DisplayName, present.Detail)
+			if m.currentLanguage() == LangZhCN {
+				m.chatWriteSystem(nextSystemID(), fmt.Sprintf("\u2713 已总是允许：%s", toolLine))
+			} else {
+				m.chatWriteSystem(nextSystemID(), fmt.Sprintf("\u2713 Always allow: %s", toolLine))
+			}
 		}
 	}
 	if pa != nil && pa.Response != nil {
@@ -624,4 +644,25 @@ func (m *Model) handleBranchCommand() tea.Cmd {
 	m.chatWriteSystem(nextSystemID(), m.t("branch.success", branched.ID, origTitle))
 	m.chatListScrollToBottom()
 	return nil
+}
+
+// extractCommandFromInput parses a tool input JSON and extracts the command string.
+func extractCommandFromInput(input string) string {
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return ""
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(input), &m); err != nil {
+		return ""
+	}
+	for _, key := range []string{"command", "input"} {
+		if v, ok := m[key]; ok {
+			var s string
+			if err := json.Unmarshal(v, &s); err == nil {
+				return s
+			}
+		}
+	}
+	return ""
 }
