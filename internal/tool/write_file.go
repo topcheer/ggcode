@@ -76,17 +76,22 @@ func (t WriteFile) Execute(ctx context.Context, input json.RawMessage) (Result, 
 		oldSize = info.Size()
 	}
 
-	if err := atomicWriteFile(args.Path, []byte(args.Content), 0644); err != nil {
+	writeData := []byte(args.Content)
+	writeData, fmtChanged := formatGoBytes(args.Path, writeData)
+	if err := atomicWriteFile(args.Path, writeData, 0644); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("error writing file: %v", err)}, nil
 	}
 
-	newSize := len(args.Content)
+	newSize := len(writeData)
 	var msg string
 	if oldSize > 0 {
 		msg = fmt.Sprintf("Overwrote %s: %d bytes → %d bytes (was %d bytes)", args.Path, oldSize, newSize, oldSize)
 	} else {
 		msg = fmt.Sprintf("Created %s (%d bytes)", args.Path, newSize)
 	}
-	msg += scanAndWarn(args.Path, args.Content)
+	if fmtChanged {
+		msg += " (auto-formatted)"
+	}
+	msg += scanAndWarn(args.Path, string(writeData))
 	return Result{Content: msg}, nil
 }

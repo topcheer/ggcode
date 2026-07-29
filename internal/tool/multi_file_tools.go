@@ -356,7 +356,8 @@ func (t MultiFileEdit) Execute(ctx context.Context, input json.RawMessage) (Resu
 			out.FailedPaths = append(out.FailedPaths, plan.Path)
 			continue
 		}
-		if err := atomicWriteFile(plan.Path, []byte(plan.NewContent), 0644); err != nil {
+		writeData, _ := formatGoBytes(plan.Path, []byte(plan.NewContent))
+		if err := atomicWriteFile(plan.Path, writeData, 0644); err != nil {
 			idx := byPath[plan.Path]
 			out.Results[idx].Status = "error"
 			out.Results[idx].Error = fmt.Sprintf("error writing file: %v", err)
@@ -558,7 +559,8 @@ func applyAtomicPlans(ctx context.Context, plans []PlannedFileEdit) (string, err
 			}
 			return plan.Path, fmt.Errorf("cancelled")
 		}
-		if err := atomicWriteFile(plan.Path, []byte(plan.NewContent), 0644); err != nil {
+		writeData, _ := formatGoBytes(plan.Path, []byte(plan.NewContent))
+		if err := atomicWriteFile(plan.Path, writeData, 0644); err != nil {
 			for i := len(written) - 1; i >= 0; i-- {
 				_ = atomicWriteFile(written[i].Path, []byte(written[i].OldContent), 0644)
 			}

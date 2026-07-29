@@ -11,7 +11,7 @@ import (
 
 func TestMultiEdit_FallbackChain(t *testing.T) {
 	dir := t.TempDir()
-	fp := filepath.Join(dir, "test.go")
+	fp := filepath.Join(dir, "test.txt") // .txt: isolate edit-matching from Go auto-format
 	// Tab-indented file, CRLF line endings on the second site.
 	content := "package main\n\nfunc a() {\n\tprintln(\"a\")\n}\nfunc b() {\r\n\tprintln(\"b\")\r\n}\n"
 	if err := os.WriteFile(fp, []byte(content), 0644); err != nil {

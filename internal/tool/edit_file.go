@@ -126,7 +126,9 @@ func (t EditFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 		newContent = strings.Replace(content, oldText, newText, 1)
 	}
 
-	if err := atomicWriteFile(args.FilePath, []byte(newContent), 0644); err != nil {
+	writeData := []byte(newContent)
+	writeData, fmtChanged := formatGoBytes(args.FilePath, writeData)
+	if err := atomicWriteFile(args.FilePath, writeData, 0644); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("error writing file: %v", err)}, nil
 	}
 
@@ -139,7 +141,10 @@ func (t EditFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 	} else {
 		msg = fmt.Sprintf("Replaced 1 occurrence in %s: %d lines -> %d lines", args.FilePath, oldLines, newLines)
 	}
-	msg += scanAndWarn(args.FilePath, newContent)
+	if fmtChanged {
+		msg += " (auto-formatted)"
+	}
+	msg += scanAndWarn(args.FilePath, string(writeData))
 	return Result{Content: msg}, nil
 }
 

@@ -202,7 +202,8 @@ func (t MultiFileWrite) Execute(ctx context.Context, input json.RawMessage) (Res
 		// Write the file using atomic write (temp+rename) to prevent
 		// corruption on crash/mid-write failure. Consistent with all
 		// other file writing tools in the package.
-		if err := atomicWriteFile(f.Path, []byte(f.Content), 0o644); err != nil {
+		writeData, _ := formatGoBytes(f.Path, []byte(f.Content))
+		if err := atomicWriteFile(f.Path, writeData, 0o644); err != nil {
 			failed++
 			results = append(results, writeResult{
 				Path:   f.Path,
@@ -216,7 +217,7 @@ func (t MultiFileWrite) Execute(ctx context.Context, input json.RawMessage) (Res
 		results = append(results, writeResult{
 			Path:   f.Path,
 			Status: "written",
-			Bytes:  len(f.Content),
+			Bytes:  len(writeData),
 		})
 	}
 

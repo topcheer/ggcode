@@ -96,9 +96,15 @@ func (t MultiEditFile) Execute(ctx context.Context, input json.RawMessage) (Resu
 		return Result{IsError: true, Content: msg}, nil
 	}
 
-	if err := atomicWriteFile(args.FilePath, []byte(content), 0644); err != nil {
+	writeData := []byte(content)
+	writeData, fmtChanged := formatGoBytes(args.FilePath, writeData)
+	if err := atomicWriteFile(args.FilePath, writeData, 0644); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("error writing file: %v", err)}, nil
 	}
 
-	return Result{Content: fmt.Sprintf("Applied %d edits to %s", len(args.Edits), args.FilePath)}, nil
+	result := fmt.Sprintf("Applied %d edits to %s", len(args.Edits), args.FilePath)
+	if fmtChanged {
+		result += " (auto-formatted)"
+	}
+	return Result{Content: result}, nil
 }

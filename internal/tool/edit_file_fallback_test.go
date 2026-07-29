@@ -167,7 +167,7 @@ func TestEditFile_LeadingIndentShift(t *testing.T) {
 
 func TestEditFile_LeadingIndentShift_MultiLine(t *testing.T) {
 	dir := t.TempDir()
-	fp := filepath.Join(dir, "test.go")
+	fp := filepath.Join(dir, "test.txt") // .txt: isolate indent-shift from Go auto-format
 	// Block has consistent 2-tab base indent + relative indent within.
 	content := "func x() {\n\t\tif a {\n\t\t\treturn 1\n\t\t}\n}\n"
 	if err := os.WriteFile(fp, []byte(content), 0644); err != nil {
