@@ -9,7 +9,6 @@ import (
 
 	"github.com/topcheer/ggcode/internal/auth"
 	"github.com/topcheer/ggcode/internal/util"
-	"gopkg.in/yaml.v3"
 )
 
 // ResolveActiveEndpoint resolves the selected vendor + endpoint into runtime settings.
@@ -288,24 +287,15 @@ func (c *Config) RemoveMCPServer(name string) bool {
 	return false
 }
 
-// SaveMCPServers persists the current c.MCPServers slice to the config file
-// using patchConfigFile, which replaces the entire mcp_servers array. This
-// is necessary because Save()-based merge would treat an empty slice as a
-// zero value and skip it, preserving stale entries in the file.
+// SaveMCPServers persists the current c.MCPServers slice to mcp_servers.yaml.
+// Uses the package-level SaveMCPServers which writes the standalone external
+// file directly (not the main config file).
 func (c *Config) SaveMCPServers() error {
 	if c == nil {
 		return fmt.Errorf("config is nil")
 	}
-	return c.patchConfigFile(func(raw map[string]interface{}) {
-		if len(c.MCPServers) == 0 {
-			delete(raw, "mcp_servers")
-			return
-		}
-		serversData, _ := yaml.Marshal(c.MCPServers)
-		var serversList []interface{}
-		yaml.Unmarshal(serversData, &serversList)
-		raw["mcp_servers"] = serversList
-	})
+	configDir := c.externalConfigDir()
+	return SaveMCPServers(configDir, c.MCPServers)
 }
 
 // SaveMCPServersScoped is like SaveMCPServers but sets the save scope first.
