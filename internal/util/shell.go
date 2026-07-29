@@ -35,13 +35,14 @@ func NewShellCommandContext(ctx context.Context, command string) (*exec.Cmd, She
 	if err != nil {
 		return nil, ShellSpec{}, err
 	}
-	// On Windows, PowerShell treats stderr output from native commands (git,
-	// npm, python, etc.) as errors via $ErrorActionPreference. This causes
-	// PowerShell to exit with code 1 even when the underlying command succeeds,
-	// making every git/npm/etc. invocation look like a failure.
-	// Prepend $ErrorActionPreference='Continue' to suppress this behavior.
+	// On Windows, PowerShell may treat stderr output from native commands
+	// (git, npm, python, etc.) as errors. In pwsh 7.4+ the native-command
+	// stderr-to-error switch is $PSNativeCommandUseErrorActionPreference
+	// (default true); $ErrorActionPreference alone does not cover it.
+	// Disable both so native stderr doesn't make successful commands look
+	// like failures.
 	if spec.Name == "powershell" {
-		command = "$ErrorActionPreference='Continue'; " + command
+		command = "$ErrorActionPreference='Continue'; $PSNativeCommandUseErrorActionPreference=$false; " + command
 	}
 	return exec.CommandContext(ctx, spec.Path, append(spec.Args, command)...), spec, nil
 }

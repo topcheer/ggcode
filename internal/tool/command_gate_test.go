@@ -553,3 +553,71 @@ func (m *mockPolicy) SetOverride(toolName string, decision permission.Decision) 
 
 func newBypassPolicy() *mockPolicy     { return &mockPolicy{mode: permission.BypassMode} }
 func newSupervisedPolicy() *mockPolicy { return &mockPolicy{mode: permission.SupervisedMode} }
+
+// ============================================================================
+// Windows destructive command rules
+// ============================================================================
+
+func TestCommandGate_WindowsBlockRules(t *testing.T) {
+	gate := NewCommandGate()
+
+	blocked := []string{
+		`rd /s /q C:\`,
+		`rmdir /s /q C:\`,
+		`rd /s /q "C:\"`,
+		`rd /s /q "C:\Windows"`,
+		`rd /s /q C:\Windows\System32`,
+		`rmdir /s /q C:\Users`,
+		`rd /s /q "C:\Program Files"`,
+		`del /s /q C:\Windows\System32\drivers`,
+		`del /s /q "C:\Program Files\App"`,
+		`format c:`,
+		`format C: /q`,
+		`format D:`,
+		`FORMAT E: /FS:NTFS`,
+	}
+	for _, cmd := range blocked {
+		result := gate.Check(cmd)
+		if result.Behavior != Block {
+			t.Errorf("expected BLOCK for %q, got %v (reason=%s)", cmd, result.Behavior, result.Reason)
+		}
+	}
+}
+
+func TestCommandGate_WindowsAskRules(t *testing.T) {
+	gate := NewCommandGate()
+
+	asked := []string{
+		`rd /s C:\temp\mybuild`,    // recursive delete, non-system path
+		`rd /s /q C:\temp\mybuild`, // /s /q on non-system path: ask, not block
+		`rmdir /s C:\build\output`,
+		`del /s C:\temp\logs`,
+		`del C:\temp\logs /s`,
+		`reg delete HKLM\SOFTWARE\MyApp`,
+	}
+	for _, cmd := range asked {
+		result := gate.Check(cmd)
+		if result.Behavior != Ask {
+			t.Errorf("expected ASK for %q, got %v (reason=%s)", cmd, result.Behavior, result.Reason)
+		}
+	}
+}
+
+func TestCommandGate_WindowsRulesNoUnixFalsePositives(t *testing.T) {
+	gate := NewCommandGate()
+
+	allowed := []string{
+		`rmdir /Users/foo/emptydir`,             // Unix path containing 's'
+		`rmdir /srv/data`,                       // Unix path starting with s
+		`del /srv/file`,                         // not a real Unix command, but must not match /s rule
+		`format c:foo`,                          // not a drive-format command
+		`go run format.go`,                      // 'format' as filename, not command
+		`rd /s /q C:\temp\mybuild && echo done`, // compound: ask-level only
+	}
+	for _, cmd := range allowed {
+		result := gate.Check(cmd)
+		if result.Behavior == Block {
+			t.Errorf("expected non-BLOCK for %q, got Block (reason=%s)", cmd, result.Reason)
+		}
+	}
+}

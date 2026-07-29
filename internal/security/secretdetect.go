@@ -148,7 +148,8 @@ var secretPatterns = []SecretPattern{
 		ID:       "openai_api_key",
 		Name:     "OpenAI API Key",
 		Severity: "high",
-		Pattern:  regexp.MustCompile(`sk-[A-Za-z0-9]{20}`),
+		// Covers classic sk-... and modern sk-proj-.../sk-svcacct-... formats
+		Pattern: regexp.MustCompile(`sk-(?:proj-|svcacct-)?[A-Za-z0-9\-_]{20,}`),
 	},
 	{
 		ID:       "anthropic_api_key",
@@ -176,11 +177,11 @@ var secretPatterns = []SecretPattern{
 var fileAllowlistPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`_test\.go$`),
 	regexp.MustCompile(`\.test\.`),
-	regexp.MustCompile(`testdata/`),
+	regexp.MustCompile(`testdata[/\\]`), // both Unix and Windows path separators
 	regexp.MustCompile(`_fixture`),
-	regexp.MustCompile(`\.example$`),
-	regexp.MustCompile(`\.sample$`),
-	regexp.MustCompile(`\.template$`),
+	regexp.MustCompile(`(?i)\.example$`),
+	regexp.MustCompile(`(?i)\.sample$`),
+	regexp.MustCompile(`(?i)\.template$`),
 	regexp.MustCompile(`secretdetect_test\.go$`),
 }
 

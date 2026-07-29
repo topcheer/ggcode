@@ -97,11 +97,11 @@ func NewCommandGate() *CommandGate {
 			pattern: regexp.MustCompile(`(?i)\bchmod\s+(-R\s+)?000\s+/`)},
 		// --- Windows filesystem destruction ---
 		{kind: "catastrophic", desc: "Windows recursive delete (rd/rmdir /s /q on system drive)",
-			pattern: regexp.MustCompile(`(?i)\b(rd|rmdir)\s+.*(/[a-z]*s[a-z]*q[a-z]*|/s\s*/q|/q\s*/s)\s+([Cc]:\\|C:\\Windows|C:\\Program)`)},
+			pattern: regexp.MustCompile(`(?i)\b(rd|rmdir)\s+.*(/[a-z]*s[a-z]*q[a-z]*|/s\s*/q|/q\s*/s)\s+"?([Cc]:\\"?\s*$|[Cc]:\\(Windows|Users|Program))`)},
 		{kind: "catastrophic", desc: "Windows force delete of system files (del /s /q on system dir)",
-			pattern: regexp.MustCompile(`(?i)\bdel\s+.*(/[a-z]*s[a-z]*q[a-z]*|/s\s*/q|/q\s*/s)\s+([Cc]:\\Windows|C:\\Program)`)},
+			pattern: regexp.MustCompile(`(?i)\bdel\s+.*(/[a-z]*s[a-z]*q[a-z]*|/s\s*/q|/q\s*/s)\s+"?[Cc]:\\(Windows|Program)`)},
 		{kind: "catastrophic", desc: "Windows disk format (format command)",
-			pattern: regexp.MustCompile(`(?i)\bformat\s+([Cc]:|[Dd]:)\b`)},
+			pattern: regexp.MustCompile(`(?i)\bformat\s+"?[A-Za-z]:("?$|[\s/"])`)},
 
 		// --- System control ---
 		{kind: "catastrophic", desc: "system shutdown/reboot",
@@ -152,11 +152,12 @@ func NewCommandGate() *CommandGate {
 			pattern: regexp.MustCompile(`(?i)\brm\s+(-[a-zA-Z]*f[a-zA-Z]*\s+)?-[a-zA-Z]*r[a-zA-Z]*\s+`)},
 		{kind: "destructive", desc: "force delete without confirmation",
 			pattern: regexp.MustCompile(`(?i)\brm\s+-[a-zA-Z]*f[a-zA-Z]*\s+`)},
-		// Windows recursive delete
+		// Windows recursive delete — flags anchored as standalone tokens so
+		// Unix paths containing 's' (/Users, /srv) don't trigger false asks
 		{kind: "destructive", desc: "Windows recursive directory delete (rd/rmdir /s)",
-			pattern: regexp.MustCompile(`(?i)\b(rd|rmdir)\s+.*(/[a-z]*s[a-z]*|/s\b)`)},
+			pattern: regexp.MustCompile(`(?i)\b(rd|rmdir)\s+(/[a-z]{0,3}s[a-z]{0,2}(\s|$)|.*\s/[a-z]{0,3}s[a-z]{0,2}(\s|$))`)},
 		{kind: "destructive", desc: "Windows recursive file delete (del /s)",
-			pattern: regexp.MustCompile(`(?i)\bdel\s+.*(/[a-z]*s[a-z]*|/s\b)`)},
+			pattern: regexp.MustCompile(`(?i)\bdel\s+(/[a-z]{0,3}s[a-z]{0,2}(\s|$)|.*\s/[a-z]{0,3}s[a-z]{0,2}(\s|$))`)},
 		{kind: "destructive", desc: "Windows registry deletion (reg delete)",
 			pattern: regexp.MustCompile(`(?i)\breg\s+delete\b`)},
 		{kind: "destructive", desc: "overwrite /etc/hosts",

@@ -668,6 +668,15 @@ func (m *Model) handleCommitCommand(parts []string) tea.Cmd {
 	return func() tea.Msg {
 		dir := workingDirFromModel(m)
 
+		// Distinguish "not a git repo" from "clean tree" — git diff/status
+		// both return empty output outside a repository, which would
+		// misleadingly report "working tree clean".
+		revCmd := exec.Command("git", "rev-parse", "--is-inside-work-tree")
+		revCmd.Dir = dir
+		if out, err := revCmd.CombinedOutput(); err != nil || strings.TrimSpace(string(out)) != "true" {
+			return streamMsg("Not a git repository — nothing to commit.")
+		}
+
 		// Check if a custom message was provided: /commit my message here
 		customMsg := ""
 		amendFlag := false

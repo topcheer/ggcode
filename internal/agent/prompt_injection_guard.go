@@ -33,12 +33,18 @@ var externalContentTools = map[string]bool{
 	"web_fetch":           true,
 	"web_search":          true,
 	"read_file":           true,
+	"multi_file_read":     true,
 	"grep":                true,
 	"search_files":        true,
 	"run_command":         true,
 	"read_command_output": true,
 	"wait_command":        true,
 	"browser":             true,
+	"git_diff":            true,
+	"git_log":             true,
+	"git_show":            true,
+	"task_output":         true,
+	"read_mcp_resource":   true,
 }
 
 // injectionPatterns are case-insensitive patterns that strongly indicate an
@@ -85,7 +91,9 @@ const injectionWarning = "[SECURITY NOTICE: This tool output contains text that 
 // Returns the (possibly annotated) content. No-ops for tools not in the
 // external content set or when no patterns are found.
 func guardPromptInjection(toolName, content string) string {
-	if !externalContentTools[toolName] {
+	// MCP tools (mcp__*) return content from external servers — always
+	// untrusted, so they are guarded via prefix match in addition to the map.
+	if !externalContentTools[toolName] && !strings.HasPrefix(toolName, "mcp__") {
 		return content
 	}
 	if len(content) < 20 {

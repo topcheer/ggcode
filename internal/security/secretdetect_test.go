@@ -131,6 +131,28 @@ func TestScanForSecrets_SkipsFixtures(t *testing.T) {
 	}
 }
 
+func TestScanForSecrets_SkipsFixturesWindowsPath(t *testing.T) {
+	content := `token = "sk-realsecretkey1234567890abcdef"`
+	findings := ScanForSecrets(`testdata\config.json`, content)
+	if len(findings) != 0 {
+		t.Fatalf("Windows testdata paths should be skipped, got %d findings", len(findings))
+	}
+}
+
+func TestScanForSecrets_OpenAIProjectKey(t *testing.T) {
+	content := `OPENAI_API_KEY=sk-proj-AbCdEfGhIjKlMnOpQrStUvWx`
+	findings := ScanForSecrets("config.env", content)
+	found := false
+	for _, f := range findings {
+		if f.PatternID == "openai_api_key" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected sk-proj- OpenAI key detection")
+	}
+}
+
 func TestScanForSecrets_SkipsExamples(t *testing.T) {
 	content := `api_key = "sk-realsecretkey1234567890abcdef"`
 	findings := ScanForSecrets(".env.example", content)

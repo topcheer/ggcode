@@ -937,10 +937,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				msgText = "Context full — compaction now. Finish current step, do not stop."
 			case usage >= 0.99 && contextWarningLevel < 2:
 				newLevel = 2
-				msgText = "Context at 99%. Compaction imminent — avoid full file reads."
+				msgText = "Context at 99%. Compaction imminent — keep working, do NOT wrap up; avoid full file reads."
 			case usage >= 0.95 && contextWarningLevel < 1:
 				newLevel = 1
-				msgText = "Context at 95%. Compaction soon — prefer grep over full file reads."
+				msgText = "Context at 95%. Compaction soon — keep working, do NOT wrap up; prefer grep over full file reads."
 			}
 			if newLevel > contextWarningLevel {
 				contextWarningLevel = newLevel
