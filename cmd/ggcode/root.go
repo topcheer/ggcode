@@ -677,7 +677,11 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		if lockErr == nil && lock != nil && lock.Acquired() {
 			replPendingSessionLock = lock
 		} else {
-			fmt.Fprintf(os.Stderr, "  Session %s is locked by another instance. Starting a new session.\n", resumeID[:8])
+			shortID := resumeID
+			if len(shortID) > 8 {
+				shortID = shortID[:8]
+			}
+			fmt.Fprintf(os.Stderr, "  Session %s is locked by another instance. Starting a new session.\n", shortID)
 			resumeID = ""
 		}
 	} else if resumeID == "" {
