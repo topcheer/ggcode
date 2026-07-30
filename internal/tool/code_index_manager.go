@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/config"
@@ -32,6 +33,7 @@ type CodeIndexManager struct {
 	indexPath  string           // disk cache path
 	workingDir string
 	stopCh     chan struct{}
+	lockFile   *os.File // cross-process flock handle
 
 	// indexStats tracks basic stats for debugging/logging.
 	stats codeIndexStats
@@ -97,6 +99,10 @@ func (m *CodeIndexManager) computeIndexPath() string {
 // StartBackgroundIndex begins asynchronous index construction.
 // This is safe to call multiple times — if already building, it's a no-op.
 // The method returns immediately; all work happens in a goroutine.
+//
+// A cross-process file lock ensures only one ggcode instance builds the
+// index for a given workspace at a time. If another instance holds the
+// lock, this instance skips the build and reads whatever cache exists.
 func (m *CodeIndexManager) StartBackgroundIndex() {
 	m.mu.Lock()
 	if m.building {
@@ -116,11 +122,101 @@ func (m *CodeIndexManager) StartBackgroundIndex() {
 		ctx, cancel := context.WithTimeout(context.Background(), codeIndexBuildTimeout)
 		defer cancel()
 
+		// Try to acquire cross-process lock. If another instance is
+		// already building, we skip — the other instance will write
+		// the index, and we'll pick it up on the next dirty-check cycle.
+		if !m.tryLock() {
+			debug.Log("codeindex", "another instance is building the index, skipping")
+			// Still try to load the existing disk cache.
+			m.loadDiskCache()
+			return
+		}
+		defer m.unlock()
+
 		m.doBuild(ctx)
 
 		// Start periodic dirty-file checker.
 		safego.Go("codeindex.dirtycheck", m.dirtyCheckLoop)
 	})
+}
+
+// tryLock acquires a cross-process exclusive lock on the index lock file.
+// Returns true if the lock was acquired, false if another process holds it.
+// Uses non-blocking flock (LOCK_EX | LOCK_NB) on Unix.
+func (m *CodeIndexManager) tryLock() bool {
+	lockPath := m.indexPath + ".lock"
+	// Ensure the directory exists.
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0755); err != nil {
+		return false
+	}
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0644)
+	if err != nil {
+		debug.Log("codeindex", "lock: open error: %v", err)
+		return false
+	}
+	// Non-blocking exclusive lock.
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		_ = f.Close()
+		return false
+	}
+	m.lockFile = f
+	return true
+}
+
+// unlock releases the cross-process lock.
+func (m *CodeIndexManager) unlock() {
+	if m.lockFile != nil {
+		_ = syscall.Flock(int(m.lockFile.Fd()), syscall.LOCK_UN)
+		_ = m.lockFile.Close()
+		m.lockFile = nil
+	}
+}
+
+// loadDiskCache loads only the existing disk cache into memory without
+// doing a full rebuild. Used when another instance holds the lock.
+func (m *CodeIndexManager) loadDiskCache() {
+	data, err := os.ReadFile(m.indexPath)
+	if err != nil {
+		return
+	}
+	var pi persistedIndex
+	if json.Unmarshal(data, &pi) != nil || pi.Version != codeIndexVersion {
+		return
+	}
+	if len(pi.Docs) == 0 {
+		return
+	}
+	idx := &bm25Index{
+		docs: make([]bm25Doc, 0, len(pi.Docs)),
+		df:   make(map[string]int, 512),
+	}
+	var totalLength int
+	for _, d := range pi.Docs {
+		if len(d.TF) == 0 {
+			continue
+		}
+		doc := bm25Doc{path: d.Path, tf: d.TF, length: d.Length}
+		idx.docs = append(idx.docs, doc)
+		totalLength += d.Length
+		for term := range d.TF {
+			idx.df[term]++
+		}
+	}
+	if len(idx.docs) == 0 {
+		return
+	}
+	idx.avgLength = float64(totalLength) / float64(len(idx.docs))
+
+	m.mu.Lock()
+	m.index = idx
+	m.ready = true
+	m.stats = codeIndexStats{
+		TotalFiles:   len(idx.docs),
+		IndexedFiles: len(idx.docs),
+		UpdatedAt:    pi.UpdatedAt,
+	}
+	m.mu.Unlock()
+	debug.Log("codeindex", "loaded %d docs from disk cache (locked by another instance)", len(idx.docs))
 }
 
 // doBuild loads the disk cache, does an mtime-diff incremental update,
@@ -369,10 +465,20 @@ func (m *CodeIndexManager) dirtyCheckLoop() {
 			if dirtyCount == 0 {
 				continue
 			}
+			// Only rebuild if we can acquire the cross-process lock.
+			// If another instance holds it, skip — they'll rebuild.
+			if !m.tryLock() {
+				debug.Log("codeindex", "dirty check: skipping rebuild, lock held by another instance")
+				m.mu.Lock()
+				m.dirtyFiles = make(map[string]int64)
+				m.mu.Unlock()
+				continue
+			}
 			debug.Log("codeindex", "dirty check: %d files changed, rebuilding", dirtyCount)
 			ctx, cancel := context.WithTimeout(context.Background(), codeIndexBuildTimeout)
 			m.doBuild(ctx)
 			cancel()
+			m.unlock()
 			m.mu.Lock()
 			m.dirtyFiles = make(map[string]int64)
 			m.mu.Unlock()
@@ -425,7 +531,7 @@ func (m *CodeIndexManager) Stats() codeIndexStats {
 	return m.stats
 }
 
-// Stop shuts down the background dirty-check goroutine.
+// Stop shuts down the background dirty-check goroutine and releases the lock.
 func (m *CodeIndexManager) Stop() {
 	select {
 	case <-m.stopCh:
@@ -433,6 +539,7 @@ func (m *CodeIndexManager) Stop() {
 	default:
 		close(m.stopCh)
 	}
+	m.unlock()
 }
 
 // errIndexNotReady is returned when Search is called before the
