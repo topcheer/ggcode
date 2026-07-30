@@ -61,10 +61,16 @@ type Task struct {
 	ReleasedAt             *time.Time `json:"released_at,omitempty"`
 	ExitCode               int        `json:"exit_code,omitempty"`
 	Error                  string     `json:"error,omitempty"`
-	CreatedAt              time.Time  `json:"created_at"`
-	UpdatedAt              time.Time  `json:"updated_at"`
-	StartedAt              *time.Time `json:"started_at,omitempty"`
-	FinishedAt             *time.Time `json:"finished_at,omitempty"`
+	// Spec-driven fields (PRD-to-Code pipeline). These are populated by
+	// SpecToTasks when decomposing a spec into tasks, and enable Code-to-Spec
+	// traceability. All omitempty for backward compatibility with existing tasks.
+	SpecRef            string     `json:"spec_ref,omitempty"`            // originating requirement ID (e.g. "REQ-1")
+	AcceptanceCriteria []string   `json:"acceptance_criteria,omitempty"` // verifiable success conditions from the spec
+	Metadata           string     `json:"metadata,omitempty"`            // free-form key=value pairs (spec metadata, priority, etc.)
+	CreatedAt          time.Time  `json:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at"`
+	StartedAt          *time.Time `json:"started_at,omitempty"`
+	FinishedAt         *time.Time `json:"finished_at,omitempty"`
 }
 
 func NewTask(goal, entryPoint string) (*Task, error) {
@@ -397,6 +403,12 @@ func FormatTaskList(tasks []*Task) string {
 		}
 		if task.Error != "" {
 			b.WriteString(fmt.Sprintf("  error: %s\n", task.Error))
+		}
+		if task.SpecRef != "" {
+			b.WriteString(fmt.Sprintf("  spec_ref: %s\n", task.SpecRef))
+		}
+		if len(task.AcceptanceCriteria) > 0 {
+			b.WriteString(fmt.Sprintf("  acceptance_criteria: %d\n", len(task.AcceptanceCriteria)))
 		}
 	}
 	return strings.TrimRight(b.String(), "\n")

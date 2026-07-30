@@ -307,36 +307,70 @@ func (a *Agent) postEditVerifyHint(toolName string, args json.RawMessage) string
 	// The full-suite command (cmd) is still surfaced for final verification.
 	targeted := targetedVerifyCommand(a.workingDir, filePath)
 	fileName := filepath.Base(filePath)
-	debug.Log("agent", "post-edit verify hint: targeted=%q full=%q after %d source-code edits", targeted, cmd, postEditVerifyInterval)
+
+	// Test impact analysis with transitive dependencies: if multiple
+	// packages/directories changed (detected via git status), suggest an
+	// impact-scoped test command that covers all affected packages AND their
+	// downstream importers — not just the single file being edited.
+	// Multi-language: works for Go, TypeScript, Python, Rust, Java, etc.
+	impact := impactScopedTestCommandMulti(a.workingDir)
+
+	// Test coverage gap: surface changed files that lack test counterparts
+	// (any language), nudging the agent toward test generation.
+	coverageNudge := funcLevelCoverageNudgeMulti(a.workingDir)
+	if coverageNudge == "" {
+		coverageNudge = testCoverageNudgeMulti(a.workingDir)
+	}
+
+	debug.Log("agent", "post-edit verify hint: targeted=%q impact=%q full=%q after %d source-code edits", targeted, impact, cmd, postEditVerifyInterval)
+
+	// Prefer the impact-scoped command when it covers more than the targeted
+	// package alone; fall back to the single-package targeted command.
+	fastCmd := targeted
+	if impact != "" && impact != targeted {
+		fastCmd = impact
+	}
 
 	// Context-aware: if last build failed, make it urgent.
 	if a.postEditVerify.lastBuildFailed {
-		if targeted != "" {
-			return fmt.Sprintf(
+		var hint string
+		if fastCmd != "" {
+			hint = fmt.Sprintf(
 				"[Verification reminder: you've edited %d source files since the last build check (which FAILED). "+
-					"Run `%s` for a fast check of the package you just edited (`%s`), or `%s` for the full suite before finishing.]",
-				postEditVerifyInterval, targeted, fileName, cmd,
+					"Run `%s` for a fast check of the affected packages (`%s`), or `%s` for the full suite before finishing.]",
+				postEditVerifyInterval, fastCmd, fileName, cmd,
+			)
+		} else {
+			hint = fmt.Sprintf(
+				"[Verification reminder: you've edited %d source files since the last build check (which FAILED). "+
+					"Run `%s` to verify your fixes compile before making further edits.]",
+				postEditVerifyInterval, cmd,
 			)
 		}
-		return fmt.Sprintf(
-			"[Verification reminder: you've edited %d source files since the last build check (which FAILED). "+
-				"Run `%s` to verify your fixes compile before making further edits.]",
+		if coverageNudge != "" {
+			hint += " " + coverageNudge
+		}
+		return hint
+	}
+
+	var hint string
+	if fastCmd != "" {
+		hint = fmt.Sprintf(
+			"[Verification reminder: you've edited %d source files since the last build check. "+
+				"Run `%s` for a fast check of the affected packages (`%s`), or `%s` for the full suite before finishing.]",
+			postEditVerifyInterval, fastCmd, fileName, cmd,
+		)
+	} else {
+		hint = fmt.Sprintf(
+			"[Verification reminder: you've edited %d source files since the last build check. "+
+				"Run `%s` to verify your changes compile before making further edits.]",
 			postEditVerifyInterval, cmd,
 		)
 	}
-
-	if targeted != "" {
-		return fmt.Sprintf(
-			"[Verification reminder: you've edited %d source files since the last build check. "+
-				"Run `%s` for a fast check of the package you just edited (`%s`), or `%s` for the full suite before finishing.]",
-			postEditVerifyInterval, targeted, fileName, cmd,
-		)
+	if coverageNudge != "" {
+		hint += " " + coverageNudge
 	}
-	return fmt.Sprintf(
-		"[Verification reminder: you've edited %d source files since the last build check. "+
-			"Run `%s` to verify your changes compile before making further edits.]",
-		postEditVerifyInterval, cmd,
-	)
+	return hint
 }
 
 // verifyCommands is a set of command substrings that indicate a build/test/verify
@@ -427,6 +461,53 @@ func extractCommandFromArgs(args json.RawMessage) string {
 	return ""
 }
 
+// funcLevelCoverageNudge generates a function-level coverage hint showing
+// which specific exported functions in changed files lack tests. This is
+// richer than the file-level testCoverageNudge — it mirrors GitHub Copilot's
+// per-function test generation suggestions.
+//
+// Returns "" when no function-level gaps are found.
+func funcLevelCoverageNudge(workingDir string) string {
+	gaps := funcLevelCoverageGaps(workingDir, 3, 4)
+	if len(gaps) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("[Untested functions: ")
+	for i, gap := range gaps {
+		if i > 0 {
+			b.WriteString("; ")
+		}
+		b.WriteString(gap.File)
+		b.WriteString(": ")
+		b.WriteString(strings.Join(gap.Funcs, ", "))
+	}
+	b.WriteString(". Consider generating tests for these functions.]")
+	return b.String()
+}
+
+// funcLevelCoverageNudgeMulti is the multi-language version of
+// funcLevelCoverageNudge. It uses funcLevelCoverageGapsMulti to analyze
+// changed files across all supported languages (not just Go).
+func funcLevelCoverageNudgeMulti(workingDir string) string {
+	gaps := funcLevelCoverageGapsMulti(workingDir, 3, 4)
+	if len(gaps) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("[Untested functions: ")
+	for i, gap := range gaps {
+		if i > 0 {
+			b.WriteString("; ")
+		}
+		b.WriteString(gap.File)
+		b.WriteString(": ")
+		b.WriteString(strings.Join(gap.Funcs, ", "))
+	}
+	b.WriteString(". Consider generating tests for these functions.]")
+	return b.String()
+}
+
 // resetPostEditVerify clears edit tracking state. Called at the start of
 // each new RunStreamWithContent (new user turn).
 func (a *Agent) resetPostEditVerify() {
@@ -437,23 +518,20 @@ func (a *Agent) resetPostEditVerify() {
 
 // targetedVerifyCommand returns a fast, scope-limited verification command for
 // the package containing filePath, when one can be derived. This implements
-// test-impact analysis: instead of nudging the agent to run the entire project
-// suite (e.g. `make verify-ci`) after every few edits, we scope the suggestion
-// to the package that actually changed — `go test ./internal/agent/` for a Go
-// edit. That compiles the edited package and runs its tests, giving much
-// faster mid-session feedback than the full suite. Returns "" when no targeted
-// command applies, in which case the caller falls back to the full-suite build
-// command.
+// multi-language test-impact analysis: instead of nudging the agent to run the
+// entire project suite (e.g. `make verify-ci`) after every few edits, we scope
+// the suggestion to the package/module that actually changed — `go test
+// ./internal/agent/` for a Go edit, `npx vitest run src/foo` for TypeScript,
+// `python -m pytest src/foo` for Python, etc.
+//
+// Returns "" when no targeted command applies.
 func targetedVerifyCommand(workingDir, filePath string) string {
 	if filePath == "" {
 		return ""
 	}
-	switch strings.ToLower(filepath.Ext(filePath)) {
-	case ".go":
-		return goTargetedTestCommand(workingDir, filePath)
-	default:
-		return ""
-	}
+	// Use multi-language dispatcher; Go files are handled by
+	// goTargetedTestCommand via the Go language profile.
+	return targetedVerifyCommandMulti(workingDir, filePath)
 }
 
 // goTargetedTestCommand computes `go test ./<pkg-dir>/` for an edited Go file,
