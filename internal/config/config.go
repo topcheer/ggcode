@@ -249,40 +249,41 @@ Antinoise rules (for lanchat/swarm):
 
 // Config is the top-level configuration.
 type Config struct {
-	Vendor         string                     `yaml:"vendor" json:"vendor"`
-	Endpoint       string                     `yaml:"endpoint" json:"endpoint"`
-	Model          string                     `yaml:"model" json:"model"`
-	Language       string                     `yaml:"language" json:"language"`
-	UI             UIConfig                   `yaml:"ui,omitempty" json:"ui,omitempty"`
-	IM             IMConfig                   `yaml:"im,omitempty" json:"im,omitempty"`
-	ExtraPrompt    string                     `yaml:"extra_prompt" json:"extra_prompt"`
-	Vendors        map[string]VendorConfig    `yaml:"vendors" json:"vendors"`
-	AllowedDirs    []string                   `yaml:"allowed_dirs" json:"allowed_dirs"`
-	MaxIterations  int                        `yaml:"max_iterations" json:"max_iterations"`
-	ToolPerms      map[string]ToolPermission  `yaml:"tool_permissions" json:"tool_permissions"`
-	Plugins        []PluginConfigEntry        `yaml:"plugins" json:"plugins"`
-	MCPServers     []MCPServerConfig          `yaml:"mcp_servers" json:"mcp_servers"`
-	Hooks          hooks.HookConfig           `yaml:"hooks" json:"hooks"`
-	DefaultMode    string                     `yaml:"default_mode" json:"default_mode"`
-	SubAgents      SubAgentConfig             `yaml:"subagents" json:"subagents"`
-	Impersonation  ImpersonationConfig        `yaml:"impersonation,omitempty" json:"impersonation,omitempty"`
-	KnightConfig   KnightConfig               `yaml:"knight,omitempty" json:"knight,omitempty"`
-	Swarm          SwarmConfig                `yaml:"swarm,omitempty" json:"swarm,omitempty"`
-	A2A            A2AConfig                  `yaml:"a2a,omitempty" json:"a2a,omitempty"`
-	LanChat        LanChatConfig              `yaml:"lanchat,omitempty" json:"lanchat,omitempty"`
-	Harness        HarnessConfig              `yaml:"harness,omitempty" json:"harness,omitempty"`
-	Stream         stream.StreamConfig        `yaml:"stream,omitempty" json:"stream,omitempty"`
-	LSPServers     map[string]LSPServerConfig `yaml:"lsp_servers,omitempty" json:"lsp_servers,omitempty"`
-	ProbeContext   bool                       `yaml:"probe_context,omitempty" json:"probe_context,omitempty"`
-	P2P            P2PConfig                  `yaml:"p2p,omitempty" json:"p2p,omitempty"`
-	FilePath       string                     `yaml:"-" json:"-"`
-	FirstRun       bool                       `yaml:"-" json:"-"`
-	instanceDir    string                     `yaml:"-" json:"-"` // ~/.ggcode/instances/{sha256}/
-	instancePath   string                     `yaml:"-" json:"-"` // instanceDir + "/ggcode.yaml"
-	instanceWS     string                     `yaml:"-" json:"-"` // workspace path for SaveInstance
-	saveScope      string                     `yaml:"-" json:"-"` // current save scope: "global" or "instance"
-	globalSnap     *Config                    `yaml:"-" json:"-"` // deep copy of global config before instance merge
-	instanceFields map[string]bool            `yaml:"-" json:"-"` // fields that were filled by instance config
+	Vendor             string                     `yaml:"vendor" json:"vendor"`
+	Endpoint           string                     `yaml:"endpoint" json:"endpoint"`
+	Model              string                     `yaml:"model" json:"model"`
+	Language           string                     `yaml:"language" json:"language"`
+	UI                 UIConfig                   `yaml:"ui,omitempty" json:"ui,omitempty"`
+	IM                 IMConfig                   `yaml:"im,omitempty" json:"im,omitempty"`
+	ExtraPrompt        string                     `yaml:"extra_prompt" json:"extra_prompt"`
+	Vendors            map[string]VendorConfig    `yaml:"vendors" json:"vendors"`
+	AllowedDirs        []string                   `yaml:"allowed_dirs" json:"allowed_dirs"`
+	MaxIterations      int                        `yaml:"max_iterations" json:"max_iterations"`
+	SessionTokenBudget int64                      `yaml:"session_token_budget,omitempty" json:"session_token_budget,omitempty"`
+	ToolPerms          map[string]ToolPermission  `yaml:"tool_permissions" json:"tool_permissions"`
+	Plugins            []PluginConfigEntry        `yaml:"plugins" json:"plugins"`
+	MCPServers         []MCPServerConfig          `yaml:"mcp_servers" json:"mcp_servers"`
+	Hooks              hooks.HookConfig           `yaml:"hooks" json:"hooks"`
+	DefaultMode        string                     `yaml:"default_mode" json:"default_mode"`
+	SubAgents          SubAgentConfig             `yaml:"subagents" json:"subagents"`
+	Impersonation      ImpersonationConfig        `yaml:"impersonation,omitempty" json:"impersonation,omitempty"`
+	KnightConfig       KnightConfig               `yaml:"knight,omitempty" json:"knight,omitempty"`
+	Swarm              SwarmConfig                `yaml:"swarm,omitempty" json:"swarm,omitempty"`
+	A2A                A2AConfig                  `yaml:"a2a,omitempty" json:"a2a,omitempty"`
+	LanChat            LanChatConfig              `yaml:"lanchat,omitempty" json:"lanchat,omitempty"`
+	Harness            HarnessConfig              `yaml:"harness,omitempty" json:"harness,omitempty"`
+	Stream             stream.StreamConfig        `yaml:"stream,omitempty" json:"stream,omitempty"`
+	LSPServers         map[string]LSPServerConfig `yaml:"lsp_servers,omitempty" json:"lsp_servers,omitempty"`
+	ProbeContext       bool                       `yaml:"probe_context,omitempty" json:"probe_context,omitempty"`
+	P2P                P2PConfig                  `yaml:"p2p,omitempty" json:"p2p,omitempty"`
+	FilePath           string                     `yaml:"-" json:"-"`
+	FirstRun           bool                       `yaml:"-" json:"-"`
+	instanceDir        string                     `yaml:"-" json:"-"` // ~/.ggcode/instances/{sha256}/
+	instancePath       string                     `yaml:"-" json:"-"` // instanceDir + "/ggcode.yaml"
+	instanceWS         string                     `yaml:"-" json:"-"` // workspace path for SaveInstance
+	saveScope          string                     `yaml:"-" json:"-"` // current save scope: "global" or "instance"
+	globalSnap         *Config                    `yaml:"-" json:"-"` // deep copy of global config before instance merge
+	instanceFields     map[string]bool            `yaml:"-" json:"-"` // fields that were filled by instance config
 }
 
 // ImpersonationConfig holds persisted impersonation settings.
@@ -1195,6 +1196,9 @@ func (c *Config) Validate() error {
 	}
 	if c.MaxIterations < 0 {
 		return fmt.Errorf("max_iterations must not be negative")
+	}
+	if c.SessionTokenBudget < 0 {
+		return fmt.Errorf("session_token_budget must not be negative")
 	}
 	if c.DefaultMode != "" {
 		switch strings.ToLower(c.DefaultMode) {

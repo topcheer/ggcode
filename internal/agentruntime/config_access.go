@@ -860,9 +860,9 @@ func (a *configAccess) setA2ASecret(field, value string) error {
 // ============================================================================
 
 func (a *configAccess) listSectionCore() string {
-	return fmt.Sprintf("== Core ==\n  vendor: %s\n  endpoint: %s\n  model: %s\n  language: %s\n  default_mode: %s\n  max_iterations: %d\n  extra_prompt: %s\n  probe_context: %v\n",
+	return fmt.Sprintf("== Core ==\n  vendor: %s\n  endpoint: %s\n  model: %s\n  language: %s\n  default_mode: %s\n  max_iterations: %d\n  session_token_budget: %d\n  extra_prompt: %s\n  probe_context: %v\n",
 		a.cfg.Vendor, a.cfg.Endpoint, a.cfg.Model, a.cfg.Language,
-		a.cfg.DefaultMode, a.cfg.MaxIterations,
+		a.cfg.DefaultMode, a.cfg.MaxIterations, a.cfg.SessionTokenBudget,
 		truncate(a.cfg.ExtraPrompt, 80), a.cfg.ProbeContext)
 }
 
@@ -1067,6 +1067,7 @@ func (a *configAccess) reloadProvider() {
 	}
 
 	ApplyProviderToAgent(a.agentInst, prov, resolved)
+	ApplySessionTokenBudget(a.agentInst, a.cfg)
 	StartAsyncRelayModelLimitRefresh(a.cfg, resolved, a.agentInst, nil)
 	debug.Log("config", "provider reloaded: %s/%s/%s", resolved.VendorID, resolved.EndpointID, resolved.Model)
 

@@ -136,6 +136,7 @@ type Agent struct {
 	toolMemo                   *toolMemo            // read-only tool result memoization (ToolCaching-inspired)
 	confidence                 *confidenceState     // holistic trajectory confidence scoring (HTC-inspired)
 	budgetGuard                *budgetGuardState    // per-step token cost trend monitoring (BAGEN-inspired)
+	costBudget                 *sessionCostBudget   // absolute session-level token budget enforcement
 	cacheKeepalive             *cacheKeepaliveState // prompt cache warming pings during idle (Anthropic)
 	commandCache               *commandCache        // deterministic build/test command result caching
 	emptySearch                *emptySearchState    // empty search spiral detection (futile search guidance)
@@ -189,6 +190,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		toolMemo:         newToolMemo(),
 		confidence:       newConfidenceState(),
 		budgetGuard:      newBudgetGuardState(),
+		costBudget:       newSessionCostBudget(),
 		cacheKeepalive:   newCacheKeepaliveState(),
 		commandCache:     newCommandCache(),
 		emptySearch:      newEmptySearchState(),
@@ -637,6 +639,14 @@ func (a *Agent) SetHookConfig(cfg hooks.HookConfig) {
 	a.hookConfig = cfg
 }
 
+// SetSessionTokenBudget sets the maximum total tokens (input + output)
+// allowed for a single agent run. 0 disables budget enforcement.
+func (a *Agent) SetSessionTokenBudget(budget int64) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.costBudget.SetBudget(budget)
+}
+
 // GetHookConfig returns the current hook configuration (thread-safe).
 func (a *Agent) GetHookConfig() hooks.HookConfig {
 	a.mu.RLock()
@@ -943,6 +953,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.commandCache.reset()
 	a.confidence.reset()
 	a.budgetGuard.reset()
+	a.costBudget.reset()
 	a.emptySearch.reset()
 	// Reset the unread-file edit tracker so each run starts fresh.
 	a.unreadEdit.reset()
@@ -1162,6 +1173,30 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				}},
 			})
 			msgs = a.contextManager.Messages()
+		}
+
+		// Cost budget: track absolute session-level token consumption.
+		// Enforces a configurable per-session token budget with progressive
+		// warnings (75%, 90%) and a hard stop at 100%.
+		a.costBudget.recordStep(resp.Usage.InputTokens, resp.Usage.OutputTokens)
+		if costMsg, stop := a.costBudget.check(); costMsg != "" {
+			debug.Log("cost-budget", "budget threshold crossed: consumed=%d budget=%d stop=%v",
+				a.costBudget.totalTokens, a.costBudget.budget, stop)
+			a.contextManager.Add(provider.Message{
+				Role: "user",
+				Content: []provider.ContentBlock{{
+					Type: "text",
+					Text: costMsg,
+				}},
+			})
+			msgs = a.contextManager.Messages()
+			if stop {
+				onEvent(provider.StreamEvent{
+					Type: provider.StreamEventSystem,
+					Text: costMsg,
+				})
+				return nil
+			}
 		}
 
 		// Detect empty LLM response: API accepted input but produced no output.

@@ -60,6 +60,17 @@ func ApplyProviderToAgent(agentInst *agent.Agent, prov provider.Provider, resolv
 	}
 }
 
+// ApplySessionTokenBudget propagates the configured session-level token
+// budget to the agent. Call this after agent creation or config reload.
+func ApplySessionTokenBudget(agentInst *agent.Agent, cfg *config.Config) {
+	if agentInst == nil || cfg == nil {
+		return
+	}
+	if cfg.SessionTokenBudget > 0 {
+		agentInst.SetSessionTokenBudget(cfg.SessionTokenBudget)
+	}
+}
+
 // SyncVendorEndpointToGlobal ensures a vendor/endpoint definition exists in
 // the global config file so new sessions can discover it without re-configuring
 // API keys. This is called after model switches to propagate vendor/endpoint
