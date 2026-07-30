@@ -1586,6 +1586,15 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// notice so the model treats them as untrusted data.
 			result.Content = guardPromptInjection(tc.Name, result.Content)
 
+			// Repetitive-line compression: collapse consecutive identical or
+			// template-similar lines (common in build/test/install output) before
+			// the size-based guard. This may prevent truncation entirely for
+			// outputs that are large only due to repetition.
+			if compressed := compressRepetitiveLines(result.Content); len(compressed) < len(result.Content) {
+				debug.Log("compress", "repetitive-line compression: tool=%s %d→%d bytes", tc.Name, len(result.Content), len(compressed))
+				result.Content = compressed
+			}
+
 			// Context-fill-aware output guard: proactively truncate large
 			// non-error results when context is getting full. This prevents
 			// a single 50KB build log from consuming 12K+ tokens when the
