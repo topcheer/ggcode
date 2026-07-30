@@ -411,12 +411,6 @@ func langProfileForFile(filePath string) *langProfile {
 	return nil
 }
 
-// langProfileForExt returns the language profile matching a file extension
-// (including the dot, e.g. ".py"). Returns nil for unsupported extensions.
-func langProfileForExt(ext string) *langProfile {
-	return langProfileForFile("test" + ext)
-}
-
 // isSourceFile checks whether a path is a source file in a supported language
 // (not a test file, not a vendored/generated file).
 func isSupportedSourceFile(path string) bool {
