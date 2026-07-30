@@ -141,6 +141,7 @@ type Agent struct {
 	emptySearch                *emptySearchState    // empty search spiral detection (futile search guidance)
 	postEditVerify             postEditVerifyState  // tracks source-code edits to inject periodic verification hints
 	planner                    *planState           // agent-side auto task decomposition (Devin/Claude Code-inspired)
+	recurringError             *recurringErrorState // recurring build/test error fingerprint detection across edit cycles
 	systemPromptInjector       func() string        // returns extra system prompt text to inject (e.g. lanchat peer warnings)
 	baseSystemPrompt           string               // the fully built static system prompt; used as reset base for dynamic injection
 	lastInjectedSystemPrompt   string               // cache of last injected prompt to skip redundant updates
@@ -192,6 +193,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		emptySearch:      newEmptySearchState(),
 		errorClassifier:  NewErrorClassifier(),
 		planner:          newPlanState(),
+		recurringError:   newRecurringErrorState(),
 	}
 	a.syncContextManagerProviderLocked()
 	a.syncContextManagerUsageHandlerLocked()
@@ -933,6 +935,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	// loop. These systems accumulate state across iterations within a run.
 	a.resetOverseer()
 	a.resetPlanner()
+	a.recurringError.reset()
 	a.speculator.resetSequence()
 	a.toolMemo.reset()
 	a.commandCache.reset()
@@ -1482,6 +1485,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				// Invalidate the deterministic command cache: any build/test
 				// results are now stale because source files changed.
 				a.commandCache.invalidate()
+				// Track edit for recurring-error detection: increments the
+				// "edits since last build error" counter so that a recurring
+				// error with edits in between is flagged as a root-cause gap.
+				a.recurringErrorRecordEdit()
 				// Mark edited files as dirty in the code index so the
 				// background indexer can update them incrementally.
 				if a.codeIndex != nil {
@@ -1583,6 +1590,18 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Smart verify hint reset: if the agent ran a build/test/verify command,
 			// reset the edit counter and track the result.
 			a.maybeResetVerifyOnCommand(tc.Name, tc.Arguments, result.IsError)
+
+			// Recurring error detection: when a build/test command returns the
+			// SAME error after file edits, inject guidance that the edits aren't
+			// addressing the root cause. This catches the #1 agent failure mode
+			// (incremental edits that don't fix the underlying problem).
+			if recurringGuidance := a.recurringErrorCheckCommand(tc.Name, tc.Arguments, result.Content, result.IsError); recurringGuidance != "" {
+				if result.Content != "" {
+					result.Content = result.Content + "\n\n" + recurringGuidance
+				} else {
+					result.Content = recurringGuidance
+				}
+			}
 
 			// Post-edit verification hint: after successful source-code edits,
 			// periodically suggest running the build command to verify changes.
