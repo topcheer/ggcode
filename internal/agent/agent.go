@@ -1419,6 +1419,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// consumed in-order; side-effect tools still run sequentially.
 		preExecuted := a.preExecuteReadOnlyTools(ctx, toolCalls)
 
+		// Batch edit conflict detection: when the LLM emits multiple file-editing
+		// calls targeting the same file in one batch, warn upfront so the model
+		// knows subsequent edits may fail (file content changes after each edit).
+		batchConflictWarnings := detectBatchEditConflicts(toolCalls)
+
 		// Deduplicate identical read-only tool calls within the same LLM response.
 		// LLMs occasionally emit duplicate calls (e.g., two read_file for the
 		// same path). Skip the second execution and reuse the first result.
@@ -1595,6 +1600,16 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 			// Inject matching harness rules into the result
 			result.Content = a.injectRulesIntoResult(tc.Name, tc.Arguments, result.Content)
+			// Batch edit conflict warning: if this tool call targets a file that
+			// is also edited by another call in the same batch, inject a warning
+			// so the model understands why edits may fail and how to consolidate.
+			if warn, ok := batchConflictWarnings[idx]; ok {
+				if result.Content != "" {
+					result.Content = result.Content + "\n\n" + warn
+				} else {
+					result.Content = warn
+				}
+			}
 			if result.IsError {
 				debug.Log("agent", "tool result ERROR: tool=%s output=%s", tc.Name, util.Truncate(result.Content, 200))
 			}
