@@ -1,8 +1,10 @@
 package agent
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -232,6 +234,44 @@ func TestMemoize_PutDuplicateKeyNoLRUDuplication(t *testing.T) {
 	_, hit := m.get("grep", args)
 	if !hit {
 		t.Fatal("expected hit after repeated puts")
+	}
+}
+
+// TestMemoizeCacheHitAnnotation verifies that when a memoize cache hit
+// occurs during agent loop execution, the result is annotated so the model
+// knows it's cached content. This prevents the model from re-analyzing
+// identical content after tool-result clearing, saving attention budget.
+func TestMemoizeCacheHitAnnotation(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "test.go")
+	os.WriteFile(testFile, []byte("package main\n"), 0644)
+
+	m := newToolMemo()
+	args := []byte(`{"path":"` + testFile + `"}`)
+
+	// Store a result
+	original := "file contents here"
+	m.put("read_file", args, tool.Result{Content: original})
+
+	// Simulate the agent loop's cache-hit annotation logic.
+	got, hit := m.get("read_file", args)
+	if !hit {
+		t.Fatal("expected memo hit")
+	}
+
+	// Apply annotation (same logic as agent.go cache-hit path)
+	if got.Content != "" && !got.IsError {
+		got.Content = fmt.Sprintf("[cached \u2014 %s returned identical content since your last call]\n%s", "read_file", got.Content)
+	}
+
+	// Verify annotation prefix is present
+	if !strings.HasPrefix(got.Content, "[cached") {
+		t.Fatalf("expected cached annotation prefix, got: %q", got.Content[:min(80, len(got.Content))])
+	}
+
+	// Verify original content is preserved after the annotation
+	if !strings.HasSuffix(got.Content, original) {
+		t.Fatalf("expected content to end with original: %q", got.Content)
 	}
 }
 

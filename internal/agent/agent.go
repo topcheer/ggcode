@@ -1359,6 +1359,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			var result tool.Result
 			if memoResult, hit := a.toolMemo.get(tc.Name, tc.Arguments); hit {
 				result = memoResult
+				// Annotate cache hits so the model knows this is cached content, not a
+				// fresh execution. After tool-result clearing replaces old results with
+				// placeholders, the model re-calls the tool and gets identical content back.
+				// Without this annotation, the model treats it as new information and
+				// re-analyzes identical content (wasting attention budget). The annotation
+				// lets the model skip redundant analysis and proceed efficiently.
+				// Context-efficient: only added for non-empty, non-error results, and the
+				// prefix is capped at 80 chars.
+				if result.Content != "" && !result.IsError {
+					result.Content = fmt.Sprintf("[cached — %s returned identical content since your last call]\n%s", tc.Name, result.Content)
+				}
 				debug.Log("memoize", "memo hit for %s (saved tool execution)", tc.Name)
 			} else if cachedResult, hit := a.speculator.getCached(tc.Name, tc.Arguments); hit {
 				result = cachedResult
