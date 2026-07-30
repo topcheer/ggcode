@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/config"
@@ -155,7 +154,7 @@ func (m *CodeIndexManager) tryLock() bool {
 		return false
 	}
 	// Non-blocking exclusive lock.
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	if !lockFileExcl(f) {
 		_ = f.Close()
 		return false
 	}
@@ -166,7 +165,7 @@ func (m *CodeIndexManager) tryLock() bool {
 // unlock releases the cross-process lock.
 func (m *CodeIndexManager) unlock() {
 	if m.lockFile != nil {
-		_ = syscall.Flock(int(m.lockFile.Fd()), syscall.LOCK_UN)
+		unlockFileExcl(m.lockFile)
 		_ = m.lockFile.Close()
 		m.lockFile = nil
 	}
