@@ -90,6 +90,16 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 		warnings = append(warnings, debugWarnings...)
 	}
 
+	// 5. Go import analysis — detects unused imports and likely missing imports
+	//    using AST analysis. Catches the top two build-failure categories
+	//    ("imported and not used" and "undefined: pkg.X") before the agent
+	//    wastes a build cycle.
+	if filepath.Ext(filePath) == ".go" && strings.TrimSpace(newContent) != "" {
+		if importWarnings := checkGoImports(filePath, newContent); len(importWarnings) > 0 {
+			warnings = append(warnings, importWarnings...)
+		}
+	}
+
 	if len(warnings) == 0 {
 		return ""
 	}
