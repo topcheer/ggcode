@@ -88,17 +88,19 @@ func (t GitCommit) Execute(ctx context.Context, input json.RawMessage) (Result, 
 		return Result{Content: trimmed}, nil
 	}
 
-	// Pre-commit diff scan: check staged changes for common quality issues
-	// (debug statements, merge conflict markers, secrets, TODOs, debugger
-	// breakpoints). This is advisory (non-blocking) — the commit proceeds, but
-	// the warnings help the agent self-correct before pushing.
-	var diffScanWarning string
+	// Pre-commit analysis: check staged changes for quality issues (debug
+	// statements, merge conflict markers, secrets, TODOs, debugger breakpoints)
+	// and evaluate commit scope (size, cohesion). Also suggest Conventional
+	// Commits format for the message. All advisory (non-blocking).
+	var diffScanWarning, scopeWarning, convTip string
 	if !args.All {
-		// For non -a commits, staged diff is available before commit.
 		diffOutput := getStagedDiff(ctx, dir)
 		issues := ScanStagedDiffForIssues(diffOutput)
 		diffScanWarning = FormatDiffIssues(issues)
+		cohesion, size := AnalyzeCommitScope(diffOutput)
+		scopeWarning = combineScopeWarnings(cohesion, size)
 	}
+	convTip = AnalyzeCommitMessage(args.Message)
 
 	gitArgs := []string{"commit", "-m", fullMessage}
 	if args.All {
@@ -114,29 +116,22 @@ func (t GitCommit) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	}
 
 	trimmed := strings.TrimSpace(string(out))
-	// Append branch warning, message quality warning, and diff scan warning
-	// if present.
-	if branchWarning != "" {
-		trimmed += "\n\n" + branchWarning
-	}
-	if msgWarning != "" {
-		trimmed += "\n\n" + msgWarning
-	}
-	if diffScanWarning != "" {
-		trimmed += "\n\n" + diffScanWarning
+	// Append advisory warnings (branch, message quality, diff scan, scope, convention tip).
+	for _, w := range []string{branchWarning, msgWarning, diffScanWarning, scopeWarning, convTip} {
+		if w != "" {
+			trimmed += "\n\n" + w
+		}
 	}
 	if trimmed == "" {
-		result := "Committed successfully."
-		if branchWarning != "" {
-			result += "\n\n" + branchWarning
+		var b strings.Builder
+		b.WriteString("Committed successfully.")
+		for _, w := range []string{branchWarning, msgWarning, diffScanWarning, scopeWarning, convTip} {
+			if w != "" {
+				b.WriteString("\n\n")
+				b.WriteString(w)
+			}
 		}
-		if msgWarning != "" {
-			result += "\n\n" + msgWarning
-		}
-		if diffScanWarning != "" {
-			result += "\n\n" + diffScanWarning
-		}
-		return Result{Content: result}, nil
+		return Result{Content: b.String()}, nil
 	}
 
 	return Result{Content: trimmed}, nil
