@@ -1662,6 +1662,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// notice so the model treats them as untrusted data.
 			result.Content = guardPromptInjection(tc.Name, result.Content)
 
+			// Secret redaction: mask API keys, tokens, private keys, and other
+			// credentials in tool outputs before they enter context. Prevents
+			// accidental leakage of secrets to external LLM providers and
+			// session history persistence.
+			result.Content = redactSecrets(tc.Name, result.Content)
+
 			// Repetitive-line compression: collapse consecutive identical or
 			// template-similar lines (common in build/test/install output) before
 			// the size-based guard. This may prevent truncation entirely for
