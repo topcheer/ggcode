@@ -111,6 +111,7 @@ func (t MultiEditFile) Execute(ctx context.Context, input json.RawMessage) (Resu
 		result += " (auto-formatted)"
 	}
 	result += scanAndWarn(args.FilePath, string(writeData))
+	result += syntaxCheck(args.FilePath, writeData)
 	result += postEditDiagnostics(t.WorkingDir, args.FilePath)
 
 	// Record the file's new mtime so subsequent write_file calls don't see

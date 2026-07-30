@@ -161,6 +161,7 @@ func (t EditFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 	}
 	msg += scanAndWarn(args.FilePath, string(writeData))
 	msg += compactDiff(content, string(writeData))
+	msg += syntaxCheck(args.FilePath, writeData)
 	msg += postEditDiagnostics(t.WorkingDir, args.FilePath)
 
 	// Record the file's new mtime so subsequent write_file calls don't see

@@ -279,6 +279,13 @@ func (t MultiFileWrite) Execute(ctx context.Context, input json.RawMessage) (Res
 		}
 	}
 
+	// Syntax validation for written source files.
+	for _, f := range args.Files {
+		if syn := syntaxCheck(f.Path, []byte(f.Content)); syn != "" {
+			sb.WriteString(syn)
+		}
+	}
+
 	// Post-edit LSP diagnostics for written source files.
 	for _, f := range args.Files {
 		if diag := postEditDiagnostics(t.WorkingDir, f.Path); diag != "" {

@@ -344,6 +344,7 @@ func (t MultiFileEdit) Execute(ctx context.Context, input json.RawMessage) (Resu
 		for _, plan := range plans {
 			out.SecretWarnings += scanAndWarn(plan.Path, plan.NewContent)
 			out.DiagnosticWarnings += postEditDiagnostics(t.WorkingDir, plan.Path)
+			out.DiagnosticWarnings += syntaxCheck(plan.Path, []byte(plan.NewContent))
 		}
 		content, err := json.Marshal(out)
 		if err != nil {
@@ -401,6 +402,7 @@ func (t MultiFileEdit) Execute(ctx context.Context, input json.RawMessage) (Resu
 		if idx, ok := byPath[plan.Path]; ok && out.Results[idx].Status == "success" {
 			out.SecretWarnings += scanAndWarn(plan.Path, plan.NewContent)
 			out.DiagnosticWarnings += postEditDiagnostics(t.WorkingDir, plan.Path)
+			out.DiagnosticWarnings += syntaxCheck(plan.Path, []byte(plan.NewContent))
 			// Record the file's new mtime for stale-read detection.
 			defaultFileTracker.RecordWrite(plan.Path)
 		}
