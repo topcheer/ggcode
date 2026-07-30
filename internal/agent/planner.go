@@ -37,7 +37,6 @@ package agent
 // todo_write and task systems.
 
 import (
-	"fmt"
 	"strings"
 	"sync"
 
@@ -430,19 +429,4 @@ func countKeywordMatches(lower string, keywords []string) int {
 		}
 	}
 	return count
-}
-
-// plannerStats returns a human-readable summary of the planner state for debugging.
-func (a *Agent) plannerStats() string {
-	if a.planner == nil {
-		return ""
-	}
-	p := a.planner
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if !p.isComplex {
-		return ""
-	}
-	return fmt.Sprintf("planner: complex=%v suggested=%v reminded=%v todoCreated=%v",
-		p.isComplex, p.suggested, p.reminded, p.todoCreated)
 }

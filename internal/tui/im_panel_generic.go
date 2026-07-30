@@ -480,14 +480,6 @@ func defaultIMTargetID(workspace string) string {
 	return base
 }
 
-func imStatePtr(state im.AdapterState) *im.AdapterState {
-	if strings.TrimSpace(state.Name) == "" {
-		return nil
-	}
-	copy := state
-	return &copy
-}
-
 func waitForIMAdapterHealthy(m *Model, mgr *im.Manager, adapter string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	var lastStatus im.AdapterState

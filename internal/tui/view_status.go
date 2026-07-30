@@ -139,15 +139,6 @@ func (m Model) renderStatusBar() string {
 	return m.renderContextBoxAuto("", sb.String(), lipgloss.Color("6"))
 }
 
-func (m Model) sidebarActivity() string {
-	if m.activeTodo != nil {
-		return util.Truncate(localizeTodoFocus(m.currentLanguage(), m.activeTodo.Content), m.sidebarWidth()-12)
-	}
-	if m.statusActivity != "" {
-		return m.statusActivity
-	}
-	return m.t("activity.idle")
-}
 func (m Model) renderComposerPanel() string {
 	accent := m.modeColor()
 	hints := []string{

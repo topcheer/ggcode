@@ -47,25 +47,6 @@ func newStreamPanel(cfg stream.StreamConfig) *streamPanelState {
 	return p
 }
 
-func (p *streamPanelState) selectedPreset() *stream.PlatformPreset {
-	if p.customMode {
-		return nil
-	}
-	presets := stream.Presets
-	idx := p.selectedIndex - len(p.targets) // index into presets after existing targets
-	if idx >= 0 && idx < len(presets) {
-		return &presets[idx]
-	}
-	// Check if selectedIndex points to a target with a preset ID
-	if p.selectedIndex >= 0 && p.selectedIndex < len(p.targets) {
-		t := p.targets[p.selectedIndex]
-		if preset := stream.PresetByID(t.Name); preset != nil {
-			return preset
-		}
-	}
-	return nil
-}
-
 func (p *streamPanelState) totalItems() int {
 	return len(p.targets) + len(stream.Presets) + 1 // +1 for "Custom"
 }

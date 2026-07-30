@@ -8,7 +8,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 	"path/filepath"
 	"sync"
-	"time"
 )
 
 // pcPersistedSession contains the minimal data needed to restore a PC session after restart.
@@ -20,14 +19,6 @@ type pcPersistedSession struct {
 	GroupMode  bool   `json:"groupMode"`
 	Label      string `json:"label"`
 	CreatedAt  string `json:"createdAt"`
-}
-
-func (s pcPersistedSession) isExpired() bool {
-	t, err := time.Parse(time.RFC3339, s.ExpiresAt)
-	if err != nil {
-		return true
-	}
-	return time.Now().After(t)
 }
 
 // PCSessionStore persists PC session data across restarts.
