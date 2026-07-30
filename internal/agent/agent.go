@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -111,6 +112,7 @@ type Agent struct {
 	workingDir                 string
 	sessionID                  string // current session ID; determines todo file path
 	checkpoints                *checkpoint.Manager
+	codeIndex                  *tool.CodeIndexManager // optional: background BM25 index for code_search
 	diffConfirm                DiffConfirmFunc
 	onInterrupt                interruptionHandler
 	projectMemory              map[string]struct{}
@@ -565,6 +567,51 @@ func (a *Agent) CheckpointManager() *checkpoint.Manager {
 func (a *Agent) InvalidateToolCaches() {
 	a.speculator.invalidateCache()
 	a.toolMemo.invalidateTTLBased()
+}
+
+// extractEditedPaths parses a tool call's arguments to extract file paths
+// from file-editing tools. Used to mark files dirty in the code index.
+func extractEditedPaths(tc provider.ToolCallDelta) []string {
+	if len(tc.Arguments) == 0 {
+		return nil
+	}
+	var args map[string]any
+	if json.Unmarshal(tc.Arguments, &args) != nil {
+		return nil
+	}
+	var paths []string
+	switch tc.Name {
+	case "write_file", "edit_file", "read_file":
+		if p, ok := args["path"].(string); ok {
+			paths = append(paths, p)
+		}
+		if p, ok := args["file_path"].(string); ok {
+			paths = append(paths, p)
+		}
+	case "multi_file_edit", "multi_file_write":
+		if files, ok := args["files"].([]any); ok {
+			for _, f := range files {
+				if fm, ok := f.(map[string]any); ok {
+					if p, ok := fm["path"].(string); ok {
+						paths = append(paths, p)
+					}
+				}
+			}
+		}
+	case "notebook_edit":
+		if p, ok := args["notebook_path"].(string); ok {
+			paths = append(paths, p)
+		}
+	}
+	return paths
+}
+
+// SetCodeIndexManager sets the persistent code index for semantic search.
+// When set, file edits are tracked so the index stays fresh via MarkDirty.
+func (a *Agent) SetCodeIndexManager(m *tool.CodeIndexManager) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.codeIndex = m
 }
 
 // SetDiffConfirm sets the diff confirmation callback.
@@ -1418,6 +1465,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				// entries (read_file, list_directory) are kept — their
 				// validity is tied to the file's modification time.
 				a.toolMemo.invalidateTTLBased()
+				// Mark edited files as dirty in the code index so the
+				// background indexer can update them incrementally.
+				if a.codeIndex != nil {
+					a.codeIndex.MarkDirty(extractEditedPaths(tc))
+				}
 			}
 			// Store result in memoization cache for read-only tools.
 			if speculativeSafeTools[tc.Name] && !result.IsError {

@@ -21,6 +21,8 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 		}
 	}
 	jobManager := NewCommandJobManager(workingDir)
+	codeIndex := NewCodeIndexManager(workingDir)
+	codeIndex.StartBackgroundIndex()
 	tools := []Tool{
 		// File operations
 		ReadFile{SandboxCheck: sandboxFor("read_file")},
@@ -35,6 +37,7 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 		SearchFiles{SandboxCheck: sandboxFor("search_files")},
 		Grep{SandboxCheck: sandboxFor("grep")},
 		Glob{SandboxCheck: sandboxFor("glob")},
+		CodeSearch{SandboxCheck: sandboxFor("code_search"), Index: codeIndex},
 	}
 	tools = append(tools, NewLSPTools(workingDir, sandboxFor("read_file"), sandboxFor("edit_file"))...)
 	tools = append(tools,
