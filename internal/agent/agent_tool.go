@@ -202,6 +202,19 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 		tc.Arguments = coercedArgs
 	}
 
+	// Schema-aware required-parameter validation: catches missing required
+	// fields before tool execution, giving the model a clear error message
+	// instead of a confusing downstream failure. This complements
+	// CoerceArguments (which fixes types, not omissions) and is a no-op for
+	// tools that already call CheckRequired internally.
+	if missingMsg := tool.ValidateRequiredParams(t.Parameters(), tc.Arguments); missingMsg != "" {
+		debug.Log("agent", "required param validation failed for %s: %s", tc.Name, missingMsg)
+		return tool.Result{
+			Content: fmt.Sprintf("Tool %q: %s. Please provide all required parameters and retry.", tc.Name, missingMsg),
+			IsError: true,
+		}
+	}
+
 	a.mu.RLock()
 	hookCfg := a.hookConfig
 	workDir := a.workingDir

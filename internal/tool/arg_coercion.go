@@ -2,6 +2,7 @@ package tool
 
 import (
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 )
@@ -143,6 +144,83 @@ func coerceBoolean(val json.RawMessage) (json.RawMessage, bool) {
 	default:
 		return val, false
 	}
+}
+
+// ValidateRequiredParams checks that all fields listed in the schema's
+// "required" array are present and non-empty in the provided arguments.
+// Returns an empty string if all required fields are satisfied, or a
+// user-friendly error message listing the missing fields.
+//
+// This runs BEFORE tool execution to give the model a clear, actionable
+// error message ("missing required parameter: pattern") instead of a
+// confusing downstream failure (grep with empty pattern, unmarshal error,
+// or silently wrong results). It complements CoerceArguments: coercion
+// fixes types, validation catches omissions.
+//
+// A field is considered "missing" when it is absent from the arguments JSON,
+// null, an empty string, or an empty array/object. Numeric and boolean
+// values (including 0 and false) are always considered present.
+func ValidateRequiredParams(schema json.RawMessage, args json.RawMessage) string {
+	if len(schema) == 0 || len(args) == 0 {
+		return ""
+	}
+
+	var props map[string]json.RawMessage
+	if err := json.Unmarshal(schema, &props); err != nil {
+		return ""
+	}
+	requiredRaw, ok := props["required"]
+	if !ok {
+		return "" // no required fields declared
+	}
+	var requiredFields []string
+	if err := json.Unmarshal(requiredRaw, &requiredFields); err != nil {
+		return ""
+	}
+	if len(requiredFields) == 0 {
+		return ""
+	}
+
+	var argMap map[string]json.RawMessage
+	if err := json.Unmarshal(args, &argMap); err != nil {
+		// Can't parse args — let the tool's own unmarshal produce the error.
+		return ""
+	}
+
+	var missing []string
+	for _, field := range requiredFields {
+		val, exists := argMap[field]
+		if !exists || isEmptyValue(val) {
+			missing = append(missing, field)
+		}
+	}
+
+	if len(missing) == 0 {
+		return ""
+	}
+	if len(missing) == 1 {
+		return fmt.Sprintf("missing required parameter: %s", missing[0])
+	}
+	return fmt.Sprintf("missing required parameters: %s", strings.Join(missing, ", "))
+}
+
+// isEmptyValue returns true if a JSON RawMessage represents an empty value:
+// null, empty string "", empty array [], or empty object {}.
+// Numbers (including 0) and booleans (including false) are NOT empty.
+func isEmptyValue(val json.RawMessage) bool {
+	s := strings.TrimSpace(string(val))
+	if s == "" || s == "null" {
+		return true
+	}
+	// Empty string: "" (with JSON quotes)
+	if s == `""` {
+		return true
+	}
+	// Empty array or object
+	if s == "[]" || s == "{}" {
+		return true
+	}
+	return false
 }
 
 // isJSONNumber returns true if val is a JSON number (not a string).
