@@ -110,6 +110,13 @@ func splitCamelCase(word string) []string {
 				current.Reset()
 			}
 		}
+		// Transition: digit → letter (e.g., "BM25Index" → "BM25", "Index")
+		if i > 0 && unicode.IsLetter(r) && unicode.IsDigit(runes[i-1]) {
+			if current.Len() > 0 {
+				parts = append(parts, current.String())
+				current.Reset()
+			}
+		}
 		current.WriteRune(r)
 	}
 	if current.Len() > 0 {

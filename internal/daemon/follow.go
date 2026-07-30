@@ -417,7 +417,7 @@ func (d *TerminalFollowDisplay) formatSpecialBody(toolName, rawArgs, result stri
 		return formatEditBody(d.lang, rawArgs, isError)
 	case "list_directory":
 		return ""
-	case "search_files", "grep", "glob":
+	case "search_files", "grep", "glob", "code_search":
 		return formatSearchCount(d.lang, result, isError)
 	case "git_status":
 		return formatGitStatus(result, isError)

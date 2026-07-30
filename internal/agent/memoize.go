@@ -87,7 +87,7 @@ func (m *toolMemo) getTTL(toolName string) time.Duration {
 	switch toolName {
 	case "read_file", "list_directory":
 		return 0 // use mtime invalidation, no TTL
-	case "grep", "search_files", "glob":
+	case "grep", "search_files", "glob", "code_search":
 		return memoizeSearchTTL
 	case "lsp_hover", "lsp_definition", "lsp_references", "lsp_symbols",
 		"lsp_workspace_symbols", "lsp_diagnostics", "lsp_implementation",

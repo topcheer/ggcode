@@ -375,7 +375,7 @@ func (al *AgentLoop) handleStreamEvent(event provider.StreamEvent) error {
 // toolKind maps tool names to ACP tool kinds: "read", "write", or "execute".
 func toolKind(toolName string) string {
 	switch toolName {
-	case "read_file", "list_directory", "search_files", "glob", "grep",
+	case "read_file", "list_directory", "search_files", "glob", "grep", "code_search",
 		"git_status", "git_diff", "git_log":
 		return "read"
 	case "write_file", "edit_file", "multi_edit", "diff_apply":

@@ -540,7 +540,7 @@ func TestIsReadOnlyTool_MCPTools(t *testing.T) {
 func TestIsReadOnlyTool_AllTools(t *testing.T) {
 	// Known read-only tools from the code
 	readOnlyTools := []string{
-		"read_file", "multi_file_read", "list_directory", "search_files", "glob", "grep",
+		"read_file", "multi_file_read", "list_directory", "search_files", "glob", "grep", "code_search",
 		"lsp_hover", "lsp_definition", "lsp_references", "lsp_symbols",
 		"lsp_diagnostics", "lsp_workspace_symbols", "lsp_code_actions",
 		"lsp_implementation", "lsp_prepare_call_hierarchy",

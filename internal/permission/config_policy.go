@@ -341,7 +341,7 @@ func isSensitivePath(path string) bool {
 
 func isFileTool(name string) bool {
 	switch name {
-	case "read_file", "multi_file_read", "write_file", "edit_file", "multi_edit_file", "multi_file_edit", "multi_file_write", "notebook_edit", "list_directory", "search_files", "glob":
+	case "read_file", "multi_file_read", "write_file", "edit_file", "multi_edit_file", "multi_file_edit", "multi_file_write", "notebook_edit", "list_directory", "search_files", "glob", "code_search":
 		return true
 	}
 	return false

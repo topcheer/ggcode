@@ -649,7 +649,7 @@ type SkillPermission struct {
 }
 
 var skillPermissions = map[string]*SkillPermission{
-	SkillFileSearch:  {AllowedTools: []string{"read_file", "list_directory", "search_files", "glob"}, ReadOnly: true, MaxIterations: 0},
+	SkillFileSearch:  {AllowedTools: []string{"read_file", "list_directory", "search_files", "glob", "code_search"}, ReadOnly: true, MaxIterations: 0},
 	SkillGitOps:      {AllowedTools: []string{"git_status", "git_diff", "git_log"}, ReadOnly: true, MaxIterations: 0},
 	SkillCommandExec: {AllowedTools: []string{"run_command"}, ReadOnly: false, MaxIterations: 0},
 	SkillCodeEdit:    {AllowedTools: []string{"read_file", "write_file", "edit_file", "search_files"}, ReadOnly: false, MaxIterations: 0},

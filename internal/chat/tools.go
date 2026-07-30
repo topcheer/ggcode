@@ -829,7 +829,7 @@ func classifyTool(name string) toolCategory {
 		"edit_file", "Edit", "multiEdit", "MultiEdit",
 		"multi_edit_file", "multi_file_edit", "notebook_edit":
 		return catFile
-	case "search_files", "grep", "Grep", "glob", "Glob", "find":
+	case "search_files", "grep", "Grep", "glob", "Glob", "find", "code_search":
 		return catSearch
 	case "list_directory":
 		return catList

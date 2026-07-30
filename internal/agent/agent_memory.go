@@ -105,7 +105,7 @@ func collectProjectMemoryTargets(value any, key string, seen map[string]struct{}
 // contain file paths that could trigger project memory loading.
 func toolCanTriggerProjectMemory(toolName string) bool {
 	switch toolName {
-	case "read_file", "write_file", "edit_file", "list_directory", "glob", "search_files":
+	case "read_file", "write_file", "edit_file", "list_directory", "glob", "search_files", "code_search":
 		return true
 	default:
 		return strings.HasPrefix(toolName, "lsp_")
