@@ -93,9 +93,13 @@ func (CodeExecution) Parameters() json.RawMessage {
 			"code": {
 				"type": "string",
 				"description": "JavaScript code to execute. Use ` + "`await tools.NAME(args)`" + ` to call tools. Use ` + "`console.log()`" + ` to return output."
+			},
+			"description": {
+				"type": "string",
+				"description": "REQUIRED. Brief activity label shown in the UI in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). Write a concise description of what this code execution does."
 			}
 		},
-		"required": ["code"]
+		"required": ["code", "description"]
 	}`)
 }
 
