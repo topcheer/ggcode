@@ -137,6 +137,7 @@ type Agent struct {
 	confidence                 *confidenceState     // holistic trajectory confidence scoring (HTC-inspired)
 	budgetGuard                *budgetGuardState    // per-step token cost trend monitoring (BAGEN-inspired)
 	cacheKeepalive             *cacheKeepaliveState // prompt cache warming pings during idle (Anthropic)
+	commandCache               *commandCache        // deterministic build/test command result caching
 	postEditVerify             postEditVerifyState  // tracks source-code edits to inject periodic verification hints
 	planner                    *planState           // agent-side auto task decomposition (Devin/Claude Code-inspired)
 	systemPromptInjector       func() string        // returns extra system prompt text to inject (e.g. lanchat peer warnings)
@@ -186,6 +187,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		confidence:       newConfidenceState(),
 		budgetGuard:      newBudgetGuardState(),
 		cacheKeepalive:   newCacheKeepaliveState(),
+		commandCache:     newCommandCache(),
 		errorClassifier:  NewErrorClassifier(),
 		planner:          newPlanState(),
 	}
@@ -567,6 +569,7 @@ func (a *Agent) CheckpointManager() *checkpoint.Manager {
 func (a *Agent) InvalidateToolCaches() {
 	a.speculator.invalidateCache()
 	a.toolMemo.invalidateTTLBased()
+	a.commandCache.invalidate()
 }
 
 // extractEditedPaths parses a tool call's arguments to extract file paths
@@ -930,6 +933,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.resetPlanner()
 	a.speculator.resetSequence()
 	a.toolMemo.reset()
+	a.commandCache.reset()
 	a.confidence.reset()
 	a.budgetGuard.reset()
 
@@ -1445,8 +1449,15 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				// Parallel pre-execution result (LLMCompiler/W&D-inspired).
 				// Runs permission check; if denied, the read-only result is discarded.
 				result = a.usePreExecutedWithPermission(ctx, tc, pre)
+			} else if cmdCached, hit := a.checkCommandCache(tc.Name, tc.Arguments); hit {
+				// Deterministic command cache: skip re-running build/test commands
+				// when no source files have changed since the last execution.
+				result = cmdCached
 			} else {
 				result = a.executeToolWithPermission(ctx, tc)
+				// Cache deterministic command results (build, test, lint, etc.)
+				// for reuse when the same command is called again without file changes.
+				a.storeCommandResult(tc.Name, tc.Arguments, result)
 			}
 			// Record the tool call for speculative pattern learning.
 			a.speculator.recordObservation(tc.Name)
@@ -1465,6 +1476,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				// entries (read_file, list_directory) are kept — their
 				// validity is tied to the file's modification time.
 				a.toolMemo.invalidateTTLBased()
+				// Invalidate the deterministic command cache: any build/test
+				// results are now stale because source files changed.
+				a.commandCache.invalidate()
 				// Mark edited files as dirty in the code index so the
 				// background indexer can update them incrementally.
 				if a.codeIndex != nil {
