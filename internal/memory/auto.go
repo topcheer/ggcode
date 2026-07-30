@@ -59,8 +59,8 @@ func (am *AutoMemory) LoadIndex() (string, []string, error) {
 		return "", nil, err
 	}
 	now := time.Now()
-	active, expired, deduped := curateEntries(metas, now)
-	debug.Log("memory", "%s", formatMemorySummary(len(metas), len(active), expired, deduped))
+	active, expired, deduped, capped := curateEntries(metas, now)
+	debug.Log("memory", "%s", formatMemorySummary(len(metas), len(active), expired, deduped, capped))
 
 	var keys, files []string
 	for _, m := range active {
@@ -85,8 +85,8 @@ func (am *AutoMemory) LoadAll() (string, []string, error) {
 		return "", nil, err
 	}
 	now := time.Now()
-	active, expired, deduped := curateEntries(metas, now)
-	debug.Log("memory", "%s", formatMemorySummary(len(metas), len(active), expired, deduped))
+	active, expired, deduped, capped := curateEntries(metas, now)
+	debug.Log("memory", "%s", formatMemorySummary(len(metas), len(active), expired, deduped, capped))
 
 	var files []string
 	var builder strings.Builder

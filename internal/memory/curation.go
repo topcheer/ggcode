@@ -2,6 +2,7 @@ package memory
 
 import (
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 )
@@ -37,6 +38,16 @@ type MemoryMeta struct {
 
 // transientExpiry is how long transient memories stay active.
 const transientExpiry = 30 * 24 * time.Hour
+
+// maxActiveMemories caps the total number of active memory entries loaded
+// into the system prompt. After expiry and dedup, if the count still exceeds
+// this limit, the oldest default-category memories are evicted (they have no
+// special curation rules and are lowest priority). Persistent and evolving
+// memories are always retained.
+//
+// 60 entries is a generous cap: at ~50 bytes/title, the full index fits in
+// ~3KB (~800 tokens), keeping system-prompt overhead bounded.
+const maxActiveMemories = 60
 
 // Patterns for classification (ordered: first match wins).
 var transientPatterns = []*regexp.Regexp{
@@ -157,7 +168,7 @@ func shouldExpire(meta MemoryMeta, now time.Time) bool {
 //   - All other entries are kept as-is.
 //
 // Returns the curated list and counts for diagnostics.
-func curateEntries(metas []MemoryMeta, now time.Time) (active []MemoryMeta, expiredCount, dedupedCount int) {
+func curateEntries(metas []MemoryMeta, now time.Time) (active []MemoryMeta, expiredCount, dedupedCount, cappedCount int) {
 	// Phase 1: filter expired transient entries.
 	var survived []MemoryMeta
 	for _, m := range metas {
@@ -199,7 +210,56 @@ func curateEntries(metas []MemoryMeta, now time.Time) (active []MemoryMeta, expi
 		}
 		active = append(active, m)
 	}
-	return active, expiredCount, dedupedCount
+
+	// Phase 4: total-count cap. If the number of active memories still exceeds
+	// maxActiveMemories after expiry + dedup, evict the oldest default-category
+	// entries (lowest priority). Persistent and evolving memories are always kept.
+	active, cappedCount = capByCount(active, maxActiveMemories)
+
+	return active, expiredCount, dedupedCount, cappedCount
+}
+
+// capByCount enforces a total-count limit on active memory entries. When the
+// count exceeds max, it evicts the oldest default-category entries until the
+// limit is reached. If all defaults are exhausted and the count still exceeds
+// max, the remaining entries are kept (persistent/evolving are never dropped).
+func capByCount(active []MemoryMeta, max int) ([]MemoryMeta, int) {
+	if len(active) <= max {
+		return active, 0
+	}
+
+	// Separate default-category entries (evictable) from protected entries.
+	var defaults []MemoryMeta
+	for _, m := range active {
+		if m.Category == CategoryDefault {
+			defaults = append(defaults, m)
+		}
+	}
+
+	overflow := len(active) - max
+	if overflow > len(defaults) {
+		overflow = len(defaults)
+	}
+	if overflow <= 0 {
+		return active, 0
+	}
+
+	// Sort defaults oldest-first; the oldest `overflow` entries are evicted.
+	sort.Slice(defaults, func(i, j int) bool {
+		return defaults[i].CreatedAt.Before(defaults[j].CreatedAt)
+	})
+	evictedKeys := make(map[string]bool, overflow)
+	for i := 0; i < overflow; i++ {
+		evictedKeys[defaults[i].Key] = true
+	}
+
+	var result []MemoryMeta
+	for _, m := range active {
+		if !evictedKeys[m.Key] {
+			result = append(result, m)
+		}
+	}
+	return result, overflow
 }
 
 // buildMemoryMeta creates metadata for a memory file from its key and modtime.
@@ -213,7 +273,7 @@ func buildMemoryMeta(key string, modTime time.Time) MemoryMeta {
 }
 
 // formatMemorySummary returns a one-line diagnostic summary of curation results.
-func formatMemorySummary(total, active, expired, deduped int) string {
+func formatMemorySummary(total, active, expired, deduped, capped int) string {
 	var sb strings.Builder
 	sb.WriteString("memory: ")
 	sb.WriteString(activeStr(active, total))
@@ -225,6 +285,10 @@ func formatMemorySummary(total, active, expired, deduped int) string {
 	if deduped > 0 {
 		sb.WriteString(", deduped=")
 		sb.WriteString(itoa(deduped))
+	}
+	if capped > 0 {
+		sb.WriteString(", capped=")
+		sb.WriteString(itoa(capped))
 	}
 	return sb.String()
 }
