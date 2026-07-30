@@ -94,6 +94,9 @@ func (t MultiEditFile) Execute(ctx context.Context, input json.RawMessage) (Resu
 	}
 	content, _, msg := planTextEdits(content, edits)
 	if msg != "" {
+		if stale := staleReadHint(args.FilePath); stale != "" {
+			msg += ". " + stale
+		}
 		return Result{IsError: true, Content: msg}, nil
 	}
 

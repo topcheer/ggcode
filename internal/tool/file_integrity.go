@@ -1,6 +1,7 @@
 package tool
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -103,4 +104,23 @@ func (t *FileIntegrityTracker) Reset() {
 	t.mu.Lock()
 	t.modtimes = make(map[string]time.Time)
 	t.mu.Unlock()
+}
+
+// staleReadHint checks whether the file at path was modified externally since
+// the agent's last read or write. If stale, it returns a diagnostic string
+// suitable for appending to an edit tool's error message. If not stale (or
+// never tracked), it returns an empty string.
+//
+// This is used by edit_file, multi_edit_file, and multi_file_edit to provide
+// actionable context when an old_text match fails: instead of a bare
+// "old_text not found", the agent learns that the file changed externally and
+// should be re-read. This saves multiple wasted retry cycles in multi-agent
+// scenarios (spawn_agent, swarm teammates) and after git operations that
+// modify the working tree.
+func staleReadHint(path string) string {
+	stale, since := defaultFileTracker.CheckStale(path)
+	if !stale {
+		return ""
+	}
+	return fmt.Sprintf("file was modified externally since last read (changed after %s) — re-read with read_file to get current content", since.Format("2006-01-02 15:04:05"))
 }

@@ -528,6 +528,9 @@ func (t MultiFileEdit) planEntries(entries []multiFileEditEntry) ([]PlannedFileE
 			oldContent := string(data)
 			newContent, applied, msg := planTextEdits(oldContent, e.Edits)
 			if msg != "" {
+				if stale := staleReadHint(e.Path); stale != "" {
+					msg += ". " + stale
+				}
 				planResults[idx] = planResult{errMsg: msg}
 				return
 			}

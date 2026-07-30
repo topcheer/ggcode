@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -289,5 +290,88 @@ func TestNormalizePath(t *testing.T) {
 				t.Errorf("expected base 'bar.txt', got %q", filepath.Base(result))
 			}
 		})
+	}
+}
+
+// TestStaleReadHint verifies that staleReadHint returns a helpful diagnostic
+// when the file was modified externally, and returns empty when not stale.
+func TestStaleReadHint(t *testing.T) {
+	// Save and restore the default tracker.
+	orig := defaultFileTracker
+	defer func() { defaultFileTracker = orig }()
+	defaultFileTracker = NewFileIntegrityTracker()
+
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "stale_test.go")
+
+	// Create file and record a read.
+	if err := os.WriteFile(path, []byte("package main\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	defaultFileTracker.RecordRead(path)
+
+	// Not stale yet.
+	hint := staleReadHint(path)
+	if hint != "" {
+		t.Errorf("expected empty hint for non-stale file, got %q", hint)
+	}
+
+	// Simulate external modification.
+	time.Sleep(10 * time.Millisecond)
+	if err := os.WriteFile(path, []byte("package main\n// changed\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Now stale — hint should be non-empty and mention "externally".
+	hint = staleReadHint(path)
+	if hint == "" {
+		t.Error("expected non-empty hint for stale file")
+	}
+	if !strings.Contains(hint, "externally") {
+		t.Errorf("hint should mention 'externally', got %q", hint)
+	}
+}
+
+// TestStaleReadHint_NeverTracked verifies that a file never read returns empty.
+func TestStaleReadHint_NeverTracked(t *testing.T) {
+	orig := defaultFileTracker
+	defer func() { defaultFileTracker = orig }()
+	defaultFileTracker = NewFileIntegrityTracker()
+
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "untracked.txt")
+	if err := os.WriteFile(path, []byte("hello"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	hint := staleReadHint(path)
+	if hint != "" {
+		t.Errorf("expected empty hint for never-tracked file, got %q", hint)
+	}
+}
+
+// TestStaleReadHint_AfterWriteNotStale verifies that after RecordWrite, the
+// file is not considered stale (the agent's own edit updates the baseline).
+func TestStaleReadHint_AfterWriteNotStale(t *testing.T) {
+	orig := defaultFileTracker
+	defer func() { defaultFileTracker = orig }()
+	defaultFileTracker = NewFileIntegrityTracker()
+
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "write_test.txt")
+	if err := os.WriteFile(path, []byte("v1"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	defaultFileTracker.RecordRead(path)
+
+	time.Sleep(10 * time.Millisecond)
+	if err := os.WriteFile(path, []byte("v2"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	defaultFileTracker.RecordWrite(path)
+
+	hint := staleReadHint(path)
+	if hint != "" {
+		t.Errorf("expected empty hint after RecordWrite, got %q", hint)
 	}
 }

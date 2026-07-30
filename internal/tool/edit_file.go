@@ -90,6 +90,9 @@ func (t EditFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 		if hint != "" {
 			msg += ". " + hint
 		}
+		if stale := staleReadHint(args.FilePath); stale != "" {
+			msg += ". " + stale
+		}
 		return Result{IsError: true, Content: msg}, nil
 	}
 	oldText := mr.canonical
