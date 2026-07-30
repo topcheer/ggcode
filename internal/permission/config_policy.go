@@ -181,9 +181,7 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 	if isCommandTool(toolName) {
 		cmd, _ := extractCommand(input)
 		if cmd != "" {
-			p.mu.RLock()
 			rs := p.cmdRules
-			p.mu.RUnlock()
 			if rs != nil {
 				if d, matched := rs.Check(cmd); matched {
 					if d == Deny {
