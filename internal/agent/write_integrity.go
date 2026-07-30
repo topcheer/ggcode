@@ -84,6 +84,12 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 		}
 	}
 
+	// 4. Debug statement detection — flags leftover debug prints/logs that
+	//    agents commonly introduce (console.log, debugger, dd(), etc.).
+	if debugWarnings := checkDebugStatements(filePath, oldContent, newContent); len(debugWarnings) > 0 {
+		warnings = append(warnings, debugWarnings...)
+	}
+
 	if len(warnings) == 0 {
 		return ""
 	}
