@@ -144,6 +144,7 @@ type Agent struct {
 	planner                    *planState           // agent-side auto task decomposition (Devin/Claude Code-inspired)
 	recurringError             *recurringErrorState // recurring build/test error fingerprint detection across edit cycles
 	unreadEdit                 *unreadEditState     // read-before-edit guard: warns when editing unread files
+	editFailRecovery           *editFailState       // consecutive edit failure recovery guidance
 	systemPromptInjector       func() string        // returns extra system prompt text to inject (e.g. lanchat peer warnings)
 	baseSystemPrompt           string               // the fully built static system prompt; used as reset base for dynamic injection
 	lastInjectedSystemPrompt   string               // cache of last injected prompt to skip redundant updates
@@ -198,6 +199,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		planner:          newPlanState(),
 		recurringError:   newRecurringErrorState(),
 		unreadEdit:       newUnreadEditState(),
+		editFailRecovery: newEditFailState(),
 	}
 	a.syncContextManagerProviderLocked()
 	a.syncContextManagerUsageHandlerLocked()
@@ -957,6 +959,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.emptySearch.reset()
 	// Reset the unread-file edit tracker so each run starts fresh.
 	a.unreadEdit.reset()
+	// Reset the edit failure recovery tracker.
+	a.editFailRecovery.reset()
 
 	for i := 0; a.maxIter <= 0 || i < a.maxIter; i++ {
 		runStats.Iterations = i + 1
@@ -1547,6 +1551,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			if (tc.Name == "read_file" || tc.Name == "multi_file_read") && !result.IsError {
 				for _, p := range extractReadFilePaths(tc.Name, tc.Arguments) {
 					a.unreadEdit.recordRead(p)
+					a.editFailRecovery.recordRead(p)
 				}
 			}
 			// Unread-file edit guard: warn when editing a file not read in
@@ -1554,7 +1559,23 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// result alongside any error from the edit attempt.
 			if !result.IsError && (tc.Name == "edit_file" || tc.Name == "multi_edit_file" || tc.Name == "multi_file_edit") {
 				for _, p := range extractEditFilePaths(tc.Name, tc.Arguments) {
+					a.editFailRecovery.recordEditSuccess(p)
 					if hint := a.unreadEdit.checkUnreadEdit(p); hint != "" {
+						if result.Content != "" {
+							result.Content = result.Content + "\n\n" + hint
+						} else {
+							result.Content = hint
+						}
+					}
+				}
+			}
+			// Consecutive edit failure recovery: when an edit fails on a file
+			// 2+ times in a row, inject targeted guidance to re-read the file
+			// before retrying. This catches the common "edit fail loop" pattern
+			// faster than the overseer (which runs every 12 iterations).
+			if result.IsError && (tc.Name == "edit_file" || tc.Name == "multi_edit_file" || tc.Name == "multi_file_edit") {
+				for _, p := range extractEditFilePaths(tc.Name, tc.Arguments) {
+					if hint := a.editFailRecovery.recordEditFailure(p); hint != "" {
 						if result.Content != "" {
 							result.Content = result.Content + "\n\n" + hint
 						} else {
