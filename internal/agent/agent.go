@@ -146,6 +146,7 @@ type Agent struct {
 	recurringError             *recurringErrorState // recurring build/test error fingerprint detection across edit cycles
 	unreadEdit                 *unreadEditState     // read-before-edit guard: warns when editing unread files
 	editFailRecovery           *editFailState       // consecutive edit failure recovery guidance
+	scopeDrift                 *scopeDriftState     // semantic scope creep detection (file-diversity tracking)
 	systemPromptInjector       func() string        // returns extra system prompt text to inject (e.g. lanchat peer warnings)
 	baseSystemPrompt           string               // the fully built static system prompt; used as reset base for dynamic injection
 	lastInjectedSystemPrompt   string               // cache of last injected prompt to skip redundant updates
@@ -202,6 +203,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		recurringError:   newRecurringErrorState(),
 		unreadEdit:       newUnreadEditState(),
 		editFailRecovery: newEditFailState(),
+		scopeDrift:       newScopeDriftState(),
 	}
 	a.syncContextManagerProviderLocked()
 	a.syncContextManagerUsageHandlerLocked()
@@ -952,6 +954,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.resetOverseer()
 	a.resetPlanner()
 	a.resetTodoStaleness()
+	a.resetScopeDrift()
 	a.recurringError.reset()
 	a.speculator.resetSequence()
 	a.toolMemo.reset()
@@ -1659,6 +1662,16 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					result.Content = result.Content + "\n\n" + errorGuidance
 				} else {
 					result.Content = errorGuidance
+				}
+			}
+
+			// Scope drift: track productive file edits for semantic scope creep.
+			a.scopeDriftRecord(tc.Name, extractFileHint(tc.Name, tc.Arguments))
+			if scopeGuidance := a.scopeDriftCheck(); scopeGuidance != "" {
+				if result.Content != "" {
+					result.Content = result.Content + "\n\n" + scopeGuidance
+				} else {
+					result.Content = scopeGuidance
 				}
 			}
 
