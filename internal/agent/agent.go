@@ -136,6 +136,7 @@ type Agent struct {
 	budgetGuard                *budgetGuardState    // per-step token cost trend monitoring (BAGEN-inspired)
 	cacheKeepalive             *cacheKeepaliveState // prompt cache warming pings during idle (Anthropic)
 	postEditVerify             postEditVerifyState  // tracks source-code edits to inject periodic verification hints
+	planner                    *planState           // agent-side auto task decomposition (Devin/Claude Code-inspired)
 	systemPromptInjector       func() string        // returns extra system prompt text to inject (e.g. lanchat peer warnings)
 	baseSystemPrompt           string               // the fully built static system prompt; used as reset base for dynamic injection
 	lastInjectedSystemPrompt   string               // cache of last injected prompt to skip redundant updates
@@ -184,6 +185,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		budgetGuard:      newBudgetGuardState(),
 		cacheKeepalive:   newCacheKeepaliveState(),
 		errorClassifier:  NewErrorClassifier(),
+		planner:          newPlanState(),
 	}
 	a.syncContextManagerProviderLocked()
 	a.syncContextManagerUsageHandlerLocked()
@@ -807,6 +809,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		return fmt.Errorf("user message blocked by hook: %s", userMsgResult.Output)
 	}
 
+	// Agent-side planning: analyze the user's first message for complexity.
+	// If complex (multi-file, multi-goal, multi-step), suggest a structured
+	// plan early in the conversation (Devin/Claude Code auto-planning pattern).
+	a.plannerAnalyze(userText)
+
 	// on_agent_stop hook (async, fire-and-forget on return).
 	defer func() {
 		stopReason := "completed"
@@ -873,6 +880,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	// Reset monitoring systems once at run start, NOT inside the iteration
 	// loop. These systems accumulate state across iterations within a run.
 	a.resetOverseer()
+	a.resetPlanner()
 	a.speculator.resetSequence()
 	a.toolMemo.reset()
 	a.confidence.reset()
@@ -905,6 +913,18 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		if debug.IsVerbose("agent") {
 			debug.Log("agent", "Iteration %d/%d: contextManager messages=%d tokens=%d threshold=%d usage_ratio=%.3f maxTokens=%d",
 				i+1, a.maxIter, len(msgs), a.contextManager.TokenCount(), a.contextManager.AutoCompactThreshold(), a.contextManager.UsageRatio(), a.contextManager.ContextWindow())
+		}
+
+		// Agent-side planning: inject a plan suggestion or reminder early in
+		// the conversation when the request was detected as complex. This is
+		// a deterministic, zero-LLM-cost approach inspired by Devin's Planner
+		// and Claude Code's auto-todo behavior.
+		if planHint := a.maybeSuggestPlan(i + 1); planHint != "" {
+			a.contextManager.Add(provider.Message{
+				Role:    "user",
+				Content: []provider.ContentBlock{{Type: "text", Text: planHint}},
+			})
+			msgs = a.contextManager.Messages()
 		}
 
 		// Mid-point progress checkpoint: at 60% of max iterations, inject a
@@ -1383,6 +1403,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 			// Record the tool call for speculative pattern learning.
 			a.speculator.recordObservation(tc.Name)
+			// Track todo_write usage for the agent-side planner: once the
+			// agent creates a todo list, plan suggestions and reminders stop.
+			if tc.Name == "todo_write" && !result.IsError {
+				a.plannerMarkTodoCreated()
+			}
 			// File-editing tools invalidate the speculative cache: any
 			// pre-executed read_file/grep results for edited files are now
 			// stale. Clear the cache to prevent serving outdated content.
