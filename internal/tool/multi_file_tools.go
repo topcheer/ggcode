@@ -365,6 +365,17 @@ func (t MultiFileEdit) Execute(ctx context.Context, input json.RawMessage) (Resu
 			continue
 		}
 		writeData, _ := formatGoBytes(plan.Path, []byte(plan.NewContent))
+
+		// No-op guard: skip files whose content is already identical.
+		if string(writeData) == plan.OldContent {
+			idx := byPath[plan.Path]
+			out.Results[idx].Status = "skipped"
+			out.Results[idx].Error = "no change: content identical"
+			out.SkippedPaths = append(out.SkippedPaths, plan.Path)
+			out.SkippedFiles = len(out.SkippedPaths)
+			continue
+		}
+
 		if err := atomicWriteFile(plan.Path, writeData, 0644); err != nil {
 			idx := byPath[plan.Path]
 			out.Results[idx].Status = "error"
@@ -384,7 +395,7 @@ func (t MultiFileEdit) Execute(ctx context.Context, input json.RawMessage) (Resu
 			out.FailedPaths = append(out.FailedPaths, result.Path)
 		}
 	}
-	out.Applied = out.FailedFiles == 0 && out.WrittenFiles == len(entries)
+	out.Applied = out.FailedFiles == 0 && (out.WrittenFiles+out.SkippedFiles) == len(entries)
 	out.Summary = fmt.Sprintf("Requested %d files: %d written, %d failed, %d skipped", len(entries), out.WrittenFiles, out.FailedFiles, out.SkippedFiles)
 	for _, plan := range plans {
 		if idx, ok := byPath[plan.Path]; ok && out.Results[idx].Status == "success" {

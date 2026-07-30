@@ -130,6 +130,17 @@ func (t EditFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 		newContent = strings.Replace(content, oldText, newText, 1)
 	}
 
+	// No-op guard: if the edit produces identical content, skip the write.
+	// This prevents unnecessary mtime changes, checkpoint saves, cache
+	// invalidation, and file-integrity tracking noise from no-effect edits
+	// (e.g. the LLM retried an edit that was already applied).
+	if newContent == content {
+		return Result{Content: fmt.Sprintf(
+			"No change: old_text and new_text produce identical content in %s. The file is already in the desired state.",
+			args.FilePath,
+		)}, nil
+	}
+
 	writeData := []byte(newContent)
 	writeData, fmtChanged := formatGoBytes(args.FilePath, writeData)
 	if err := atomicWriteFile(args.FilePath, writeData, 0644); err != nil {

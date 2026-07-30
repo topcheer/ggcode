@@ -164,6 +164,7 @@ func (t MultiFileWrite) Execute(ctx context.Context, input json.RawMessage) (Res
 
 	written := 0
 	failed := 0
+	skipped := 0
 
 	for _, f := range args.Files {
 		// Check for cancellation before each file write.
@@ -218,6 +219,18 @@ func (t MultiFileWrite) Execute(ctx context.Context, input json.RawMessage) (Res
 		// corruption on crash/mid-write failure. Consistent with all
 		// other file writing tools in the package.
 		writeData, _ := formatGoBytes(f.Path, []byte(f.Content))
+
+		// No-op guard: skip if existing content is identical.
+		if oldData, rErr := os.ReadFile(f.Path); rErr == nil && string(writeData) == string(oldData) {
+			skipped++
+			results = append(results, writeResult{
+				Path:   f.Path,
+				Status: "skipped",
+				Error:  "no change: content identical",
+			})
+			continue
+		}
+
 		if err := atomicWriteFile(f.Path, writeData, 0o644); err != nil {
 			failed++
 			results = append(results, writeResult{
@@ -241,13 +254,15 @@ func (t MultiFileWrite) Execute(ctx context.Context, input json.RawMessage) (Res
 
 	// Build summary.
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("[multi_file_write] requested=%d written=%d failed=%d\n", len(args.Files), written, failed))
+	sb.WriteString(fmt.Sprintf("[multi_file_write] requested=%d written=%d failed=%d skipped=%d\n", len(args.Files), written, failed, skipped))
 	for _, r := range results {
 		switch r.Status {
 		case "written":
 			sb.WriteString(fmt.Sprintf("  ✓ %s (%d bytes)\n", r.Path, r.Bytes))
 		case "error":
 			sb.WriteString(fmt.Sprintf("  ✗ %s: %s\n", r.Path, r.Error))
+		case "skipped":
+			sb.WriteString(fmt.Sprintf("  ○ %s: %s\n", r.Path, r.Error))
 		}
 	}
 

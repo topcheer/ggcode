@@ -101,6 +101,18 @@ func (t WriteFile) Execute(ctx context.Context, input json.RawMessage) (Result, 
 
 	writeData := []byte(args.Content)
 	writeData, fmtChanged := formatGoBytes(args.Path, writeData)
+
+	// No-op guard: if the file already exists with identical content,
+	// skip the write to avoid unnecessary mtime changes, checkpoint saves,
+	// and cache invalidation (e.g. the LLM retried a write_file with the
+	// same content it just wrote).
+	if oldSize > 0 && string(writeData) == oldContent {
+		return Result{Content: fmt.Sprintf(
+			"No change: %s already contains the requested content (%d bytes). Skipping write.",
+			args.Path, len(writeData),
+		)}, nil
+	}
+
 	if err := atomicWriteFile(args.Path, writeData, 0644); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("error writing file: %v", err)}, nil
 	}
