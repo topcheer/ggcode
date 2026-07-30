@@ -142,6 +142,7 @@ type Agent struct {
 	postEditVerify             postEditVerifyState  // tracks source-code edits to inject periodic verification hints
 	planner                    *planState           // agent-side auto task decomposition (Devin/Claude Code-inspired)
 	recurringError             *recurringErrorState // recurring build/test error fingerprint detection across edit cycles
+	unreadEdit                 *unreadEditState     // read-before-edit guard: warns when editing unread files
 	systemPromptInjector       func() string        // returns extra system prompt text to inject (e.g. lanchat peer warnings)
 	baseSystemPrompt           string               // the fully built static system prompt; used as reset base for dynamic injection
 	lastInjectedSystemPrompt   string               // cache of last injected prompt to skip redundant updates
@@ -194,6 +195,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		errorClassifier:  NewErrorClassifier(),
 		planner:          newPlanState(),
 		recurringError:   newRecurringErrorState(),
+		unreadEdit:       newUnreadEditState(),
 	}
 	a.syncContextManagerProviderLocked()
 	a.syncContextManagerUsageHandlerLocked()
@@ -942,6 +944,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.confidence.reset()
 	a.budgetGuard.reset()
 	a.emptySearch.reset()
+	// Reset the unread-file edit tracker so each run starts fresh.
+	a.unreadEdit.reset()
 
 	for i := 0; a.maxIter <= 0 || i < a.maxIter; i++ {
 		runStats.Iterations = i + 1
@@ -1485,6 +1489,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				// Invalidate the deterministic command cache: any build/test
 				// results are now stale because source files changed.
 				a.commandCache.invalidate()
+				// Record created files so the unread-edit guard exempts them.
+				for _, p := range extractCreateFilePaths(tc.Name, tc.Arguments) {
+					a.unreadEdit.recordCreated(p)
+				}
 				// Track edit for recurring-error detection: increments the
 				// "edits since last build error" counter so that a recurring
 				// error with edits in between is flagged as a root-cause gap.
@@ -1498,6 +1506,27 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Store result in memoization cache for read-only tools.
 			if speculativeSafeTools[tc.Name] && !result.IsError {
 				a.toolMemo.put(tc.Name, tc.Arguments, result)
+			}
+			// Track files read during this run so the unread-edit guard
+			// knows which files the agent has seen.
+			if (tc.Name == "read_file" || tc.Name == "multi_file_read") && !result.IsError {
+				for _, p := range extractReadFilePaths(tc.Name, tc.Arguments) {
+					a.unreadEdit.recordRead(p)
+				}
+			}
+			// Unread-file edit guard: warn when editing a file not read in
+			// this run. Fires before the tool executes so the hint is in the
+			// result alongside any error from the edit attempt.
+			if !result.IsError && (tc.Name == "edit_file" || tc.Name == "multi_edit_file" || tc.Name == "multi_file_edit") {
+				for _, p := range extractEditFilePaths(tc.Name, tc.Arguments) {
+					if hint := a.unreadEdit.checkUnreadEdit(p); hint != "" {
+						if result.Content != "" {
+							result.Content = result.Content + "\n\n" + hint
+						} else {
+							result.Content = hint
+						}
+					}
+				}
 			}
 			// Inject matching harness rules into the result
 			result.Content = a.injectRulesIntoResult(tc.Name, tc.Arguments, result.Content)
