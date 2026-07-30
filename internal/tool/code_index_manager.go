@@ -28,6 +28,8 @@ type CodeIndexManager struct {
 	index      *bm25Index
 	ready      bool
 	building   bool
+	started    bool             // true after StartBackgroundIndex has been called
+	lastSearch time.Time        // last time Search() was called; used for idle release
 	dirtyFiles map[string]int64 // path → known mtime at last index
 	indexPath  string           // disk cache path
 	workingDir string
@@ -68,8 +70,13 @@ const (
 	codeIndexMaxFiles     = 50000
 	codeIndexMaxFileSize  = 256 * 1024 // 256 KB per file
 	codeIndexBuildTimeout = 5 * time.Minute
-	codeIndexRebuildTick  = 60 * time.Second // periodic dirty-check interval
+	codeIndexRebuildTick  = 5 * time.Minute // periodic dirty-check interval (reduced frequency for lower CPU)
 )
+
+// codeIndexIdleRelease is how long the index sits idle (no Search calls)
+// before being released from memory. The disk cache persists, so the next
+// Search will reload from disk. Set to 10 minutes.
+const codeIndexIdleRelease = 10 * time.Minute
 
 // NewCodeIndexManager creates a manager for the given working directory.
 // The index path is derived from a hash of the absolute path so that
@@ -96,7 +103,7 @@ func (m *CodeIndexManager) computeIndexPath() string {
 }
 
 // StartBackgroundIndex begins asynchronous index construction.
-// This is safe to call multiple times — if already building, it's a no-op.
+// This is safe to call multiple times — if already building or started, it's a no-op.
 // The method returns immediately; all work happens in a goroutine.
 //
 // A cross-process file lock ensures only one ggcode instance builds the
@@ -104,11 +111,13 @@ func (m *CodeIndexManager) computeIndexPath() string {
 // lock, this instance skips the build and reads whatever cache exists.
 func (m *CodeIndexManager) StartBackgroundIndex() {
 	m.mu.Lock()
-	if m.building {
+	if m.building || m.started {
 		m.mu.Unlock()
 		return
 	}
 	m.building = true
+	m.started = true
+	m.lastSearch = time.Now()
 	m.mu.Unlock()
 
 	safego.Go("codeindex.background", func() {
@@ -134,8 +143,8 @@ func (m *CodeIndexManager) StartBackgroundIndex() {
 
 		m.doBuild(ctx)
 
-		// Start periodic dirty-file checker.
-		safego.Go("codeindex.dirtycheck", m.dirtyCheckLoop)
+		// Start periodic dirty-file checker + idle release monitor.
+		safego.Go("codeindex.dirtycheck", m.backgroundLoop)
 	})
 }
 
@@ -448,9 +457,12 @@ func (m *CodeIndexManager) persistIndex(ctx context.Context, docs []bm25Doc) {
 	debug.Log("codeindex", "persisted %d docs to %s (%d bytes)", len(pi.Docs), m.indexPath, len(data))
 }
 
-// dirtyCheckLoop periodically checks for dirty files and triggers
-// incremental re-indexing. Runs until Stop() is called.
-func (m *CodeIndexManager) dirtyCheckLoop() {
+// backgroundLoop combines periodic dirty-file checking with idle memory
+// release. Every codeIndexRebuildTick (5 min):
+//  1. If the index hasn't been searched in codeIndexIdleRelease (10 min),
+//     release the in-memory index to free ~60MB. Disk cache persists.
+//  2. Otherwise, if there are dirty files, do an incremental rebuild.
+func (m *CodeIndexManager) backgroundLoop() {
 	ticker := time.NewTicker(codeIndexRebuildTick)
 	defer ticker.Stop()
 	for {
@@ -458,6 +470,25 @@ func (m *CodeIndexManager) dirtyCheckLoop() {
 		case <-m.stopCh:
 			return
 		case <-ticker.C:
+			// Check for idle release first.
+			m.mu.RLock()
+			idle := time.Since(m.lastSearch)
+			ready := m.ready
+			m.mu.RUnlock()
+
+			if ready && idle > codeIndexIdleRelease {
+				m.mu.Lock()
+				if m.index != nil {
+					debug.Log("codeindex", "idle for %v, releasing in-memory index (%d docs)", idle.Round(time.Minute), len(m.index.docs))
+					m.index = nil
+					m.ready = false
+					m.stats = codeIndexStats{}
+				}
+				m.mu.Unlock()
+				continue
+			}
+
+			// Check for dirty files.
 			m.mu.RLock()
 			dirtyCount := len(m.dirtyFiles)
 			m.mu.RUnlock()
@@ -465,7 +496,6 @@ func (m *CodeIndexManager) dirtyCheckLoop() {
 				continue
 			}
 			// Only rebuild if we can acquire the cross-process lock.
-			// If another instance holds it, skip — they'll rebuild.
 			if !m.tryLock() {
 				debug.Log("codeindex", "dirty check: skipping rebuild, lock held by another instance")
 				m.mu.Lock()
@@ -496,15 +526,29 @@ func (m *CodeIndexManager) MarkDirty(paths []string) {
 }
 
 // Search queries the BM25 index. Returns an error if the index is not
-// yet ready (still building in the background).
+// yet ready (still building in the background). If the index was released
+// due to idle timeout, Search triggers a background reload from disk.
 func (m *CodeIndexManager) Search(query string, maxResults int) ([]bm25Result, error) {
-	m.mu.RLock()
-	if !m.ready || m.index == nil {
-		m.mu.RUnlock()
+	m.mu.Lock()
+	m.lastSearch = time.Now()
+	ready := m.ready
+	building := m.building
+	m.mu.Unlock()
+
+	if !ready {
+		// If not currently building, trigger a lazy reload from disk.
+		if !building {
+			m.lazyLoad()
+		}
 		return nil, errIndexNotReady
 	}
+
+	m.mu.RLock()
 	idx := m.index
 	m.mu.RUnlock()
+	if idx == nil {
+		return nil, errIndexNotReady
+	}
 
 	terms := tokenizeForSearch(query)
 	if len(terms) == 0 {
@@ -515,6 +559,10 @@ func (m *CodeIndexManager) Search(query string, maxResults int) ([]bm25Result, e
 	}
 	return idx.score(terms, maxResults), nil
 }
+
+// lazyLoad starts a background disk-cache reload if the index was released
+// due to idle timeout. This is non-blocking; Search will return
+// errIndexNotReady until the reload completes.
 
 // IsReady returns true if the index is available for queries.
 func (m *CodeIndexManager) IsReady() bool {
@@ -539,6 +587,39 @@ func (m *CodeIndexManager) Stop() {
 		close(m.stopCh)
 	}
 	m.unlock()
+}
+
+// lazyLoad starts a background disk-cache reload if the index was released
+// due to idle timeout. This is non-blocking; Search will return
+// errIndexNotReady until the reload completes.
+func (m *CodeIndexManager) lazyLoad() {
+	m.mu.Lock()
+	if m.building || m.ready {
+		m.mu.Unlock()
+		return
+	}
+	m.building = true
+	m.mu.Unlock()
+
+	safego.Go("codeindex.lazyload", func() {
+		defer func() {
+			m.mu.Lock()
+			m.building = false
+			m.mu.Unlock()
+		}()
+
+		if !m.tryLock() {
+			debug.Log("codeindex", "lazy load: lock held, reading cache without lock")
+			m.loadDiskCache()
+			return
+		}
+		defer m.unlock()
+
+		ctx, cancel := context.WithTimeout(context.Background(), codeIndexBuildTimeout)
+		defer cancel()
+		m.doBuild(ctx)
+		debug.Log("codeindex", "lazy load complete from disk cache")
+	})
 }
 
 // errIndexNotReady is returned when Search is called before the

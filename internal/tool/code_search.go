@@ -101,6 +101,11 @@ func (t CodeSearch) Execute(ctx context.Context, input json.RawMessage) (Result,
 		return t.executeLegacy(ctx, args)
 	}
 
+	// Lazy start: trigger background index build on first code_search call
+	// rather than at tool registration time. This avoids loading ~60MB of
+	// index data for instances that never use code_search.
+	t.Index.StartBackgroundIndex()
+
 	// Query the persistent background index.
 	results, err := t.Index.Search(args.Query, args.MaxResults)
 	if err != nil {

@@ -44,8 +44,9 @@ type importGraphEntry struct {
 
 var importGraphCache struct {
 	sync.Mutex
-	dir  string
-	data importGraphEntry
+	dir      string
+	data     importGraphEntry
+	building bool
 }
 
 // goModulePath reads go.mod and extracts the module import path.
@@ -121,12 +122,48 @@ func buildImportGraph(workingDir string) (map[string][]string, string) {
 	importGraphCache.Lock()
 	defer importGraphCache.Unlock()
 
+	// Return cached result if valid.
 	if importGraphCache.dir == workingDir &&
 		time.Since(importGraphCache.data.builtAt) < importGraphTTL &&
 		importGraphCache.data.graph != nil {
 		return importGraphCache.data.graph, importGraphCache.data.modPath
 	}
 
+	// If no cache exists yet, do NOT block the caller — return nil and
+	// trigger a background build. The next call (after the background build
+	// completes) will have the cached graph. This prevents the verify hint
+	// path from stalling on `go list` for 1-3 seconds on first invocation.
+	if importGraphCache.data.graph == nil || importGraphCache.dir != workingDir {
+		// Kick off background build (deduplicated via building flag).
+		if !importGraphCache.building {
+			importGraphCache.building = true
+			importGraphCache.dir = workingDir
+			go func() {
+				graph, modPath := runGoList(workingDir)
+				importGraphCache.Lock()
+				importGraphCache.building = false
+				if graph != nil {
+					importGraphCache.data = importGraphEntry{
+						graph:   graph,
+						modPath: modPath,
+						builtAt: time.Now(),
+					}
+					debug.Log("test-impact", "import graph built in background: %d packages in %s", len(graph), workingDir)
+				}
+				importGraphCache.Unlock()
+			}()
+		}
+		return nil, ""
+	}
+
+	// Cache exists but is stale — return stale data immediately and refresh
+	// in the background on next tick. This avoids blocking on every TTL expiry.
+	return importGraphCache.data.graph, importGraphCache.data.modPath
+}
+
+// runGoList executes `go list ./...` and builds the import graph.
+// Returns nil if the command fails or times out.
+func runGoList(workingDir string) (map[string][]string, string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
@@ -166,15 +203,6 @@ func buildImportGraph(workingDir string) (map[string][]string, string) {
 			graph[importPath] = nil
 		}
 	}
-
-	importGraphCache.dir = workingDir
-	importGraphCache.data = importGraphEntry{
-		graph:   graph,
-		modPath: modPath,
-		builtAt: time.Now(),
-	}
-
-	debug.Log("test-impact", "import graph built: %d packages in %s", len(graph), workingDir)
 	return graph, modPath
 }
 

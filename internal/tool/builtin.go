@@ -22,7 +22,6 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 	}
 	jobManager := NewCommandJobManager(workingDir)
 	codeIndex := NewCodeIndexManager(workingDir)
-	codeIndex.StartBackgroundIndex()
 	tools := []Tool{
 		// File operations
 		ReadFile{SandboxCheck: sandboxFor("read_file")},
