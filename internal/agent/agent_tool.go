@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -187,7 +188,18 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 	}
 	t, ok := a.tools.Get(tc.Name)
 	if !ok {
-		return tool.Result{Content: fmt.Sprintf("unknown tool: %s", tc.Name), IsError: true}
+		return tool.Result{Content: tool.FormatUnknownToolError(a.tools, tc.Name), IsError: true}
+	}
+
+	// Schema-aware argument coercion: weak models (open-weight models via
+	// goolm, third-party endpoints) frequently send string values for
+	// integer/number/boolean parameters (e.g. {"offset": "50"}). Without
+	// coercion this causes a json.Unmarshal type error, wasting a full loop
+	// iteration. CoerceArguments is a no-op when args are already well-typed.
+	coercedArgs := tool.CoerceArguments(t.Parameters(), tc.Arguments)
+	if !bytes.Equal(coercedArgs, tc.Arguments) {
+		debug.Log("agent", "coerced arguments for tool %s", tc.Name)
+		tc.Arguments = coercedArgs
 	}
 
 	a.mu.RLock()
