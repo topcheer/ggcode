@@ -313,6 +313,26 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 		}
 	}
 
+	// Post-write integrity check: validate each written file's content.
+	if !result.IsError && len(plans) > 0 {
+		var integrityWarnings []string
+		for _, plan := range plans {
+			if diff.HasChanges(plan.OldContent, plan.NewContent) {
+				if w := checkWriteIntegrity(plan.Path, plan.OldContent, plan.NewContent); w != "" {
+					integrityWarnings = append(integrityWarnings, w)
+				}
+			}
+		}
+		if len(integrityWarnings) > 0 {
+			combined := strings.Join(integrityWarnings, "\n\n")
+			if result.Content != "" {
+				result.Content = result.Content + "\n\n" + combined
+			} else {
+				result.Content = combined
+			}
+		}
+	}
+
 	postEnv := env
 	postEnv.ToolSuccess = !result.IsError
 	if result.IsError {
@@ -408,6 +428,19 @@ func (a *Agent) executeFileTool(ctx context.Context, t tool.Tool, tc provider.To
 	// Save checkpoint
 	if cpMgr != nil && !result.IsError {
 		cpMgr.Save(filePath, oldContent, newContent, tc.Name)
+	}
+
+	// Post-write integrity check: validate file content for syntax errors,
+	// binary corruption, or content loss. Catches issues immediately so the
+	// agent can fix them in the same turn instead of wasting a build cycle.
+	if !result.IsError {
+		if warning := checkWriteIntegrity(filePath, oldContent, newContent); warning != "" {
+			if result.Content != "" {
+				result.Content = result.Content + "\n\n" + warning
+			} else {
+				result.Content = warning
+			}
+		}
 	}
 
 	// Post-tool-use hooks
