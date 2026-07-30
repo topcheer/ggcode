@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 
@@ -89,12 +90,12 @@ func redactSecrets(toolName, content string) string {
 		return content
 	}
 
-	scanContent := content
-	if len(scanContent) > maxRedactScanLen {
-		scanContent = scanContent[:maxRedactScanLen]
-	}
-
 	redacted := content
+	if len(redacted) > maxRedactScanLen {
+		// Truncate scan window for CPU protection. Secrets beyond 256KB are
+		// unlikely and scanning the full content would waste CPU.
+		redacted = redacted[:maxRedactScanLen]
+	}
 	count := 0
 
 	for _, sp := range secretPatterns {
@@ -135,5 +136,5 @@ func redactSecrets(toolName, content string) string {
 	}
 
 	debug.Log("secret-redact", "masked %d secret(s) in tool=%s content_len=%d", count, toolName, len(content))
-	return redacted
+	return fmt.Sprintf(redactionNotice, count) + redacted
 }
