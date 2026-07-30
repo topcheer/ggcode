@@ -138,6 +138,7 @@ type Agent struct {
 	budgetGuard                *budgetGuardState    // per-step token cost trend monitoring (BAGEN-inspired)
 	cacheKeepalive             *cacheKeepaliveState // prompt cache warming pings during idle (Anthropic)
 	commandCache               *commandCache        // deterministic build/test command result caching
+	emptySearch                *emptySearchState    // empty search spiral detection (futile search guidance)
 	postEditVerify             postEditVerifyState  // tracks source-code edits to inject periodic verification hints
 	planner                    *planState           // agent-side auto task decomposition (Devin/Claude Code-inspired)
 	systemPromptInjector       func() string        // returns extra system prompt text to inject (e.g. lanchat peer warnings)
@@ -188,6 +189,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		budgetGuard:      newBudgetGuardState(),
 		cacheKeepalive:   newCacheKeepaliveState(),
 		commandCache:     newCommandCache(),
+		emptySearch:      newEmptySearchState(),
 		errorClassifier:  NewErrorClassifier(),
 		planner:          newPlanState(),
 	}
@@ -936,6 +938,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.commandCache.reset()
 	a.confidence.reset()
 	a.budgetGuard.reset()
+	a.emptySearch.reset()
 
 	for i := 0; a.maxIter <= 0 || i < a.maxIter; i++ {
 		runStats.Iterations = i + 1
@@ -1563,6 +1566,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					result.Content = result.Content + "\n\n" + confidenceGuidance
 				} else {
 					result.Content = confidenceGuidance
+				}
+			}
+
+			// Empty search spiral detection: tracks consecutive search tools
+			// returning no results and injects alternative strategy guidance.
+			// Fires before other guards so the guidance is visible early.
+			if emptyGuidance := a.emptySearch.recordResult(tc.Name, result.Content, result.IsError, extractFileHint(tc.Name, tc.Arguments)); emptyGuidance != "" {
+				if result.Content != "" {
+					result.Content = result.Content + "\n\n" + emptyGuidance
+				} else {
+					result.Content = emptyGuidance
 				}
 			}
 
