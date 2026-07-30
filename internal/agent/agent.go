@@ -142,6 +142,7 @@ type Agent struct {
 	emptySearch                *emptySearchState    // empty search spiral detection (futile search guidance)
 	postEditVerify             postEditVerifyState  // tracks source-code edits to inject periodic verification hints
 	planner                    *planState           // agent-side auto task decomposition (Devin/Claude Code-inspired)
+	todoStaleness              *todoStalenessState  // mid-run stale todo detection (plan abandonment awareness)
 	recurringError             *recurringErrorState // recurring build/test error fingerprint detection across edit cycles
 	unreadEdit                 *unreadEditState     // read-before-edit guard: warns when editing unread files
 	editFailRecovery           *editFailState       // consecutive edit failure recovery guidance
@@ -197,6 +198,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		emptySearch:      newEmptySearchState(),
 		errorClassifier:  NewErrorClassifier(),
 		planner:          newPlanState(),
+		todoStaleness:    newTodoStalenessState(),
 		recurringError:   newRecurringErrorState(),
 		unreadEdit:       newUnreadEditState(),
 		editFailRecovery: newEditFailState(),
@@ -949,6 +951,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	// loop. These systems accumulate state across iterations within a run.
 	a.resetOverseer()
 	a.resetPlanner()
+	a.resetTodoStaleness()
 	a.recurringError.reset()
 	a.speculator.resetSequence()
 	a.toolMemo.reset()
@@ -999,6 +1002,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.contextManager.Add(provider.Message{
 				Role:    "user",
 				Content: []provider.ContentBlock{{Type: "text", Text: planHint}},
+			})
+			msgs = a.contextManager.Messages()
+		}
+
+		// Mid-run stale todo detection: if the agent created a todo list but
+		// hasn't updated it for several iterations while there are still
+		// incomplete items, inject a one-time reminder to sync the plan.
+		if staleReminder := a.maybeRemindStaleTodo(i + 1); staleReminder != "" {
+			a.contextManager.Add(provider.Message{
+				Role:    "user",
+				Content: []provider.ContentBlock{{Type: "text", Text: staleReminder}},
 			})
 			msgs = a.contextManager.Messages()
 		}
@@ -1519,6 +1533,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// agent creates a todo list, plan suggestions and reminders stop.
 			if tc.Name == "todo_write" && !result.IsError {
 				a.plannerMarkTodoCreated()
+				// Track for stale todo detection: record the iteration so we
+				// can detect plan abandonment if the agent stops updating.
+				todoCount := parseTodoCount(tc.Arguments)
+				a.recordTodoStalenessUpdate(i+1, todoCount)
 			}
 			// File-editing tools invalidate the speculative cache: any
 			// pre-executed read_file/grep results for edited files are now
