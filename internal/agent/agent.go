@@ -1567,6 +1567,15 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 							result.Content = hint
 						}
 					}
+					// Stale-read detection: warn when the file was modified on
+					// disk since the last read (external edit, git pull, etc.).
+					if hint := a.unreadEdit.checkStaleRead(p); hint != "" {
+						if result.Content != "" {
+							result.Content = result.Content + "\n\n" + hint
+						} else {
+							result.Content = hint
+						}
+					}
 				}
 			}
 			// Consecutive edit failure recovery: when an edit fails on a file

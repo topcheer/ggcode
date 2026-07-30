@@ -2,7 +2,11 @@ package agent
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestUnreadEditState_BasicTracking(t *testing.T) {
@@ -183,4 +187,168 @@ func TestExtractCreateFilePaths(t *testing.T) {
 			t.Fatalf("expected 2 paths, got %v", paths)
 		}
 	})
+}
+
+// --- Stale-read detection tests ---
+
+func TestStaleRead_NoWarningForUnreadFile(t *testing.T) {
+	s := newUnreadEditState()
+	// A file that was never read should not trigger stale-read.
+	if hint := s.checkStaleRead("/nonexistent/path.go"); hint != "" {
+		t.Fatalf("expected empty hint for unread file, got: %s", hint)
+	}
+}
+
+func TestStaleRead_WarnsOnExternalModification(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "main.go")
+
+	if err := os.WriteFile(path, []byte("package main\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := newUnreadEditState()
+	s.recordRead(path)
+
+	// Simulate external modification with a newer mtime.
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(path, future, future); err != nil {
+		t.Fatal(err)
+	}
+
+	hint := s.checkStaleRead(path)
+	if hint == "" {
+		t.Fatal("expected stale-read warning after external modification")
+	}
+	if hint == "" || !strings.Contains(hint, "modified on disk") {
+		t.Fatalf("expected warning about external modification, got: %s", hint)
+	}
+}
+
+func TestStaleRead_NoWarningForUnchangedFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "main.go")
+
+	if err := os.WriteFile(path, []byte("package main\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := newUnreadEditState()
+	s.recordRead(path)
+
+	// No modification — should not warn.
+	if hint := s.checkStaleRead(path); hint != "" {
+		t.Fatalf("expected no warning for unchanged file, got: %s", hint)
+	}
+}
+
+func TestStaleRead_WarnsOnlyOnce(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "main.go")
+
+	if err := os.WriteFile(path, []byte("package main\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := newUnreadEditState()
+	s.recordRead(path)
+
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(path, future, future); err != nil {
+		t.Fatal(err)
+	}
+
+	// First check should warn.
+	hint1 := s.checkStaleRead(path)
+	if hint1 == "" {
+		t.Fatal("expected first stale-read warning")
+	}
+	// Second check should not warn (already warned).
+	hint2 := s.checkStaleRead(path)
+	if hint2 != "" {
+		t.Fatal("expected no second stale-read warning (already warned)")
+	}
+}
+
+func TestStaleRead_CreatedFilesExempt(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "new.go")
+
+	if err := os.WriteFile(path, []byte("package main\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := newUnreadEditState()
+	s.recordRead(path)
+	s.recordCreated(path) // Agent wrote this file after reading
+
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(path, future, future); err != nil {
+		t.Fatal(err)
+	}
+
+	// Even though file changed on disk, agent authored it — no warning.
+	if hint := s.checkStaleRead(path); hint != "" {
+		t.Fatalf("expected no stale warning for agent-created file, got: %s", hint)
+	}
+}
+
+func TestStaleRead_ResetClearsMtime(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "main.go")
+
+	if err := os.WriteFile(path, []byte("package main\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := newUnreadEditState()
+	s.recordRead(path)
+
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(path, future, future); err != nil {
+		t.Fatal(err)
+	}
+
+	hint := s.checkStaleRead(path)
+	if hint == "" {
+		t.Fatal("expected stale-read warning before reset")
+	}
+
+	s.reset()
+
+	// After reset, no mtime is tracked — should not warn.
+	hint2 := s.checkStaleRead(path)
+	if hint2 != "" {
+		t.Fatalf("expected no stale warning after reset, got: %s", hint2)
+	}
+}
+
+func TestStaleRead_ReReadClearsStaleState(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "main.go")
+
+	if err := os.WriteFile(path, []byte("package main\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := newUnreadEditState()
+	s.recordRead(path)
+
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(path, future, future); err != nil {
+		t.Fatal(err)
+	}
+
+	// First check warns.
+	if hint := s.checkStaleRead(path); hint == "" {
+		t.Fatal("expected first stale-read warning")
+	}
+
+	// Agent re-reads the file — this updates the mtime baseline.
+	s.recordRead(path)
+
+	// No further external modification — should not warn.
+	if hint := s.checkStaleRead(path); hint != "" {
+		t.Fatalf("expected no warning after re-read, got: %s", hint)
+	}
 }
