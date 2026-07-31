@@ -237,7 +237,8 @@ func shouldExecuteWhileBusy(text string) bool {
 	cmd := parts[0]
 	switch cmd {
 	// Panel / UI commands — always safe
-	case "/lang", "/model", "/provider", "/impersonate", "/chat", "/nick",
+	case "/export-trace",
+		"/lang", "/model", "/provider", "/impersonate", "/chat", "/nick",
 		"/qq", "/telegram", "/tg", "/pc", "/discord",
 		"/feishu", "/lark", "/slack", "/dingtalk", "/ding", "/wechat", "/wecom", "/mattermost", "/mm", "/matrix", "/signal", "/irc", "/nostr", "/twitch", "/whatsapp", "/wa", "/im",
 		"/skills", "/stats", "/sessions", "/mcp",
@@ -418,6 +419,11 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 			}
 			m.openInspectorPanel(inspectorPanelSessions)
 			return nil
+		case "/export-trace":
+			if len(parts) > 1 {
+				return m.exportTraceSession(parts[1])
+			}
+			return m.exportTraceSession("")
 		case "/plugins":
 			return m.handlePluginsCommand()
 		case "/inspector":

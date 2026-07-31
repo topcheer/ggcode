@@ -957,6 +957,16 @@ func zhCatalog(key string) string {
 		return "写入文件失败：%v\n\n"
 	case "session.exported":
 		return "已导出会话 %s 到 %s\n\n"
+	case "trace.no_session":
+		return "没有活动会话可导出 trace。\n\n"
+	case "trace.export_failed":
+		return "导出 trace 失败：%v\n\n"
+	case "trace.write_failed":
+		return "写入 trace 文件失败：%v\n\n"
+	case "trace.no_metrics":
+		return "此会话尚未记录任何指标。\n\n"
+	case "trace.exported":
+		return "已导出会话 %s 的 trace 到 %s\n%d 轮，%d 次 LLM 调用，%d 次工具调用\nToken：%d 输入 / %d 输出\n\n"
 	case "checkpoint.disabled":
 		return "未启用检查点。\n\n"
 	case "rewind.activated":

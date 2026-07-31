@@ -16,6 +16,7 @@ import (
 	"github.com/topcheer/ggcode/internal/context"
 	"github.com/topcheer/ggcode/internal/cost"
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/metrics"
 
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/safego"
@@ -166,6 +167,73 @@ func (m *Model) exportSession(id string) tea.Cmd {
 			return streamMsg(m.t("session.write_failed", err))
 		}
 		return streamMsg(m.t("session.exported", resolved, filename))
+	}
+}
+
+// exportTraceSession exports the execution metrics (LLM call timings, tool
+// latencies, token usage, cache stats) for a session as a structured JSON file.
+// If id is empty, exports the current session's metrics.
+//
+// The output file (trace-<session-id>.json) is written to the current working
+// directory and is suitable for offline analysis, sharing, or piping into
+// observability platforms.
+func (m *Model) exportTraceSession(id string) tea.Cmd {
+	return func() tea.Msg {
+		var events []metrics.MetricEvent
+		var sessionID, vendor, endpoint, model string
+		var createdAt time.Time
+
+		if id == "" {
+			// Export current session metrics.
+			if m.session == nil {
+				return streamMsg(m.t("trace.no_session"))
+			}
+			sessionID = m.session.ID
+			vendor = m.session.Vendor
+			endpoint = m.session.Endpoint
+			model = m.session.Model
+			createdAt = m.session.CreatedAt
+			events = m.session.Metrics
+		} else {
+			// Export by session ID.
+			if m.sessionStore == nil {
+				return streamMsg(m.t("session.store_missing"))
+			}
+			resolved, err := resolveSessionID(m.sessionStore, id)
+			if err != nil {
+				return streamMsg(m.t("trace.export_failed", err))
+			}
+			ses, err := m.sessionStore.Load(resolved)
+			if err != nil {
+				return streamMsg(m.t("trace.export_failed", err))
+			}
+			sessionID = resolved
+			vendor = ses.Vendor
+			endpoint = ses.Endpoint
+			model = ses.Model
+			createdAt = ses.CreatedAt
+			events = ses.Metrics
+		}
+
+		if len(events) == 0 {
+			return streamMsg(m.t("trace.no_metrics"))
+		}
+
+		data, err := metrics.ExportTrace(sessionID, vendor, endpoint, model, createdAt, events)
+		if err != nil {
+			return streamMsg(m.t("trace.export_failed", err))
+		}
+
+		filename := fmt.Sprintf("trace-%s.json", sessionID)
+		if err := os.WriteFile(filename, data, 0644); err != nil {
+			return streamMsg(m.t("trace.write_failed", err))
+		}
+
+		summary := metrics.Summarize(events)
+		return streamMsg(m.t("trace.exported",
+			sessionID, filename,
+			summary.TurnCount, summary.LLMCallCount, summary.ToolCallCount,
+			summary.TotalInputTokens, summary.TotalOutputTokens))
 	}
 }
 
