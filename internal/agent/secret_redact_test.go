@@ -108,9 +108,11 @@ func TestRedactSecrets_GCPAPIKey(t *testing.T) {
 }
 
 func TestRedactSecrets_StripeKey(t *testing.T) {
-	content := `stripe_key: sk_test_FAKEKEY_FAKEKEY_FAKE`
+	// Build key at runtime to avoid triggering GitHub Secret Scanning.
+	stripeKey := "sk_test_" + strings.Repeat("x", 24)
+	content := "stripe_key: " + stripeKey
 	result := redactSecrets("read_file", content)
-	if strings.Contains(result, "sk_test_FAKEKEY_FAKEKEY_FAKE") {
+	if strings.Contains(result, stripeKey) {
 		t.Errorf("Stripe key should be redacted, got: %s", result)
 	}
 }
