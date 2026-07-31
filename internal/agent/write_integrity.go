@@ -100,6 +100,18 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 		}
 	}
 
+	// 6. Merge conflict markers — always a build failure. Agents sometimes
+	//    copy conflict markers from context verbatim into written files.
+	if markerWarn := checkMergeConflictMarkers(filePath, newContent); markerWarn != "" {
+		warnings = append(warnings, markerWarn)
+	}
+
+	// 7. Content duplication / massive growth — catches accidental double-paste
+	//    or whole-file duplication (file growing 5x+ in one edit).
+	if growthWarn := checkContentGrowth(filePath, oldContent, newContent); growthWarn != "" {
+		warnings = append(warnings, growthWarn)
+	}
+
 	if len(warnings) == 0 {
 		return ""
 	}
