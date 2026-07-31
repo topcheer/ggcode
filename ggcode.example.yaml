@@ -402,6 +402,18 @@ vendors:
 allowed_dirs:
   - .
 
+# Write-protection patterns: glob patterns that block write tools (write_file,
+# edit_file, etc.) from modifying matching files, even within allowed_dirs.
+# Defaults (if omitted): [".env", ".env.*", ".git/"]
+# Setting this explicitly replaces the defaults.
+# Supports: glob (".env*", "*.lock"), directory prefix (".git/"), and ** ("src/secrets/**")
+# protected_paths:
+#   - ".env"
+#   - ".env.*"
+#   - ".git/"
+#   - "*.lock"
+#   - "go.sum"
+
 # ------------------------------------------------------------------
 # IM (Instant Messaging) integration
 # Connect ggcode to chat platforms for remote coding via IM.

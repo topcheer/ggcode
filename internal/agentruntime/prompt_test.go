@@ -12,7 +12,7 @@ import (
 func TestBuildSubAgentSystemPrompt_FullContext(t *testing.T) {
 	// Build a minimal registry with a few tools
 	reg := tool.NewRegistry()
-	_ = tool.RegisterBuiltinTools(reg, nil, "/tmp/test-project")
+	_ = tool.RegisterBuiltinTools(reg, nil, "/tmp/test-project", nil)
 
 	cfg := &config.Config{
 		Language: "en",
@@ -71,7 +71,7 @@ func TestBuildSubAgentSystemPrompt_NilFields(t *testing.T) {
 
 func TestBuildTeammateSystemPrompt_FullContext(t *testing.T) {
 	reg := tool.NewRegistry()
-	_ = tool.RegisterBuiltinTools(reg, nil, "/tmp/test-project")
+	_ = tool.RegisterBuiltinTools(reg, nil, "/tmp/test-project", nil)
 
 	cfg := &config.Config{Language: "en"}
 	ctx := SubAgentPromptContext{
@@ -143,7 +143,7 @@ func TestBuildSubAgentSystemPrompt_WithMemory(t *testing.T) {
 
 	cfg := &config.Config{Language: "en"}
 	reg := tool.NewRegistry()
-	_ = tool.RegisterBuiltinTools(reg, nil, "/tmp/test")
+	_ = tool.RegisterBuiltinTools(reg, nil, "/tmp/test", nil)
 
 	autoMem := memory.NewAutoMemory()
 	projectAutoMem := memory.NewProjectAutoMemory("/tmp/test-ggcode-project")
@@ -167,7 +167,7 @@ func TestBuildSubAgentSystemPrompt_WithMemory(t *testing.T) {
 
 func TestBuildSubAgentSystemPrompt_DeterministicToolOrder(t *testing.T) {
 	reg := tool.NewRegistry()
-	_ = tool.RegisterBuiltinTools(reg, nil, "/tmp/test")
+	_ = tool.RegisterBuiltinTools(reg, nil, "/tmp/test", nil)
 
 	ctx := SubAgentPromptContext{
 		WorkingDir: "/tmp/test",
@@ -187,7 +187,7 @@ func TestBuildSubAgentSystemPrompt_MemoryFraming(t *testing.T) {
 
 	cfg := &config.Config{Language: "en"}
 	reg := tool.NewRegistry()
-	_ = tool.RegisterBuiltinTools(reg, nil, "/tmp/test")
+	_ = tool.RegisterBuiltinTools(reg, nil, "/tmp/test", nil)
 
 	autoMem := memory.NewAutoMemory()
 

@@ -8,7 +8,7 @@ import (
 func registerTestTools(t *testing.T) *Registry {
 	t.Helper()
 	r := NewRegistry()
-	err := RegisterBuiltinTools(r, nil, t.TempDir())
+	err := RegisterBuiltinTools(r, nil, t.TempDir(), nil)
 	if err != nil {
 		t.Fatalf("RegisterBuiltinTools error: %v", err)
 	}

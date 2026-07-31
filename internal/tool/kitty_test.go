@@ -248,7 +248,7 @@ func TestKittyTool_RegisterWithBuiltinTools(t *testing.T) {
 	t.Setenv("TERM_PROGRAM", "kitty")
 
 	registry := NewRegistry()
-	if err := RegisterBuiltinTools(registry, nil, "/tmp"); err != nil {
+	if err := RegisterBuiltinTools(registry, nil, "/tmp", nil); err != nil {
 		t.Fatalf("RegisterBuiltinTools failed: %v", err)
 	}
 	if _, ok := registry.Get("kitty"); !ok {
@@ -261,7 +261,7 @@ func TestKittyTool_NotRegisteredOutsideKitty(t *testing.T) {
 	t.Setenv("KITTY_WINDOW_ID", "")
 
 	registry := NewRegistry()
-	if err := RegisterBuiltinTools(registry, nil, "/tmp"); err != nil {
+	if err := RegisterBuiltinTools(registry, nil, "/tmp", nil); err != nil {
 		t.Fatalf("RegisterBuiltinTools failed: %v", err)
 	}
 	if _, ok := registry.Get("kitty"); ok {

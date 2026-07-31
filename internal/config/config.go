@@ -277,6 +277,7 @@ type Config struct {
 	ProbeContext       bool                       `yaml:"probe_context,omitempty" json:"probe_context,omitempty"`
 	P2P                P2PConfig                  `yaml:"p2p,omitempty" json:"p2p,omitempty"`
 	FilePath           string                     `yaml:"-" json:"-"`
+	ProtectedPaths     []string                   `yaml:"protected_paths,omitempty" json:"protected_paths,omitempty"`
 	FirstRun           bool                       `yaml:"-" json:"-"`
 	instanceDir        string                     `yaml:"-" json:"-"` // ~/.ggcode/instances/{sha256}/
 	instancePath       string                     `yaml:"-" json:"-"` // instanceDir + "/ggcode.yaml"

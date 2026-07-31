@@ -1208,7 +1208,7 @@ func newAskUserTestHarness(t *testing.T) *askUserTestHarness {
 
 	registry := tool.NewRegistry()
 	policy := permission.NewConfigPolicyWithMode(nil, nil, permission.AutoMode)
-	if err := tool.RegisterBuiltinTools(registry, policy, "/tmp"); err != nil {
+	if err := tool.RegisterBuiltinTools(registry, policy, "/tmp", nil); err != nil {
 		t.Fatalf("register builtin tools: %v", err)
 	}
 
@@ -1283,7 +1283,7 @@ func setupAskUserTest(t *testing.T) (*tool.AskUserTool, *Transport, context.Canc
 
 	registry := tool.NewRegistry()
 	policy := permission.NewConfigPolicyWithMode(nil, nil, permission.AutoMode)
-	if err := tool.RegisterBuiltinTools(registry, policy, "/tmp"); err != nil {
+	if err := tool.RegisterBuiltinTools(registry, policy, "/tmp", nil); err != nil {
 		t.Fatalf("register builtin tools: %v", err)
 	}
 
@@ -1350,7 +1350,7 @@ func TestAskUserHandlerSingleChoice(t *testing.T) {
 
 	registry := tool.NewRegistry()
 	policy := permission.NewConfigPolicyWithMode(nil, nil, permission.AutoMode)
-	if err := tool.RegisterBuiltinTools(registry, policy, "/tmp"); err != nil {
+	if err := tool.RegisterBuiltinTools(registry, policy, "/tmp", nil); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 
@@ -1455,7 +1455,7 @@ func TestAskUserHandlerTextSubmit(t *testing.T) {
 
 	registry := tool.NewRegistry()
 	policy := permission.NewConfigPolicyWithMode(nil, nil, permission.AutoMode)
-	tool.RegisterBuiltinTools(registry, policy, "/tmp")
+	tool.RegisterBuiltinTools(registry, policy, "/tmp", nil)
 
 	cfg := &config.Config{MaxIterations: 100}
 	session := NewSession("/tmp", nil)
@@ -1525,7 +1525,7 @@ func TestAskUserHandlerCancelled(t *testing.T) {
 
 	registry := tool.NewRegistry()
 	policy := permission.NewConfigPolicyWithMode(nil, nil, permission.AutoMode)
-	tool.RegisterBuiltinTools(registry, policy, "/tmp")
+	tool.RegisterBuiltinTools(registry, policy, "/tmp", nil)
 
 	cfg := &config.Config{MaxIterations: 100}
 	session := NewSession("/tmp", nil)
@@ -1591,7 +1591,7 @@ func TestAskUserHandlerCancelled(t *testing.T) {
 func TestAskUserHandlerNoHandlerWithoutACP(t *testing.T) {
 	registry := tool.NewRegistry()
 	policy := permission.NewConfigPolicyWithMode(nil, nil, permission.AutoMode)
-	if err := tool.RegisterBuiltinTools(registry, policy, "/tmp"); err != nil {
+	if err := tool.RegisterBuiltinTools(registry, policy, "/tmp", nil); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 
@@ -2020,7 +2020,7 @@ func TestCleanupEmptySessionsOnEOF(t *testing.T) {
 
 	registry := tool.NewRegistry()
 	policy := permission.NewConfigPolicyWithMode(nil, nil, permission.AutoMode)
-	tool.RegisterBuiltinTools(registry, policy, "/tmp")
+	tool.RegisterBuiltinTools(registry, policy, "/tmp", nil)
 
 	cfg := &config.Config{MaxIterations: 100}
 	handler := NewHandler(cfg, registry, transport, nil)

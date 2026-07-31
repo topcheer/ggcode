@@ -74,7 +74,7 @@ func newCluster(t *testing.T, specs []struct{ Name, Role string }) *testCluster 
 
 		policy := permission.NewConfigPolicyWithMode(nil, []string{dir}, permission.BypassMode)
 		registry := tool.NewRegistry()
-		if err := tool.RegisterBuiltinTools(registry, policy, dir); err != nil {
+		if err := tool.RegisterBuiltinTools(registry, policy, dir, nil); err != nil {
 			t.Fatalf("[%s] tools: %v", name, err)
 		}
 

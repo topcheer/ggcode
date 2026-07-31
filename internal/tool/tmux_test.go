@@ -56,7 +56,7 @@ func TestTmuxToolCloneSharesManager(t *testing.T) {
 func TestRegisterBuiltinToolsSkipsTmuxOutsideTmuxSession(t *testing.T) {
 	t.Setenv("TMUX", "")
 	registry := NewRegistry()
-	if err := RegisterBuiltinTools(registry, nil, t.TempDir()); err != nil {
+	if err := RegisterBuiltinTools(registry, nil, t.TempDir(), nil); err != nil {
 		t.Fatalf("RegisterBuiltinTools error: %v", err)
 	}
 	if _, ok := registry.Get("tmux"); ok {

@@ -188,7 +188,7 @@ func TestGhosttyTool_RegisterWithBuiltinTools(t *testing.T) {
 	t.Setenv("TERM_PROGRAM", "ghostty")
 
 	registry := NewRegistry()
-	if err := RegisterBuiltinTools(registry, nil, "/tmp"); err != nil {
+	if err := RegisterBuiltinTools(registry, nil, "/tmp", nil); err != nil {
 		t.Fatalf("RegisterBuiltinTools failed: %v", err)
 	}
 	if _, ok := registry.Get("ghostty"); !ok {
@@ -200,7 +200,7 @@ func TestGhosttyTool_NotRegisteredOutsideGhostty(t *testing.T) {
 	t.Setenv("TERM_PROGRAM", "xterm")
 
 	registry := NewRegistry()
-	if err := RegisterBuiltinTools(registry, nil, "/tmp"); err != nil {
+	if err := RegisterBuiltinTools(registry, nil, "/tmp", nil); err != nil {
 		t.Fatalf("RegisterBuiltinTools failed: %v", err)
 	}
 	if _, ok := registry.Get("ghostty"); ok {

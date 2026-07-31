@@ -43,7 +43,7 @@ func BuildInteractiveRuntimeCore(cfg *config.Config, workingDir string, policy p
 	lsp.SetServerOverrides(cfg.LSPServers)
 
 	registry := tool.NewRegistry()
-	if err := tool.RegisterBuiltinTools(registry, policy, workingDir); err != nil {
+	if err := tool.RegisterBuiltinTools(registry, policy, workingDir, cfg.ProtectedPaths); err != nil {
 		return nil, err
 	}
 

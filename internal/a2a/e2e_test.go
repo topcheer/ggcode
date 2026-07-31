@@ -66,7 +66,7 @@ func setupRealE2E(t *testing.T, name, workspaceDir string) *e2eEnv {
 
 	// 4. Register all built-in tools.
 	registry := tool.NewRegistry()
-	if err := tool.RegisterBuiltinTools(registry, policy, workspaceDir); err != nil {
+	if err := tool.RegisterBuiltinTools(registry, policy, workspaceDir, nil); err != nil {
 		t.Fatalf("register tools: %v", err)
 	}
 

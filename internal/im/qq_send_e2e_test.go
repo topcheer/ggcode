@@ -351,7 +351,7 @@ func TestE2ERealLLMToQQCallRealLLM(t *testing.T) {
 
 			// Create agent with full built-in tools (exactly like TUI does).
 			registry := tool.NewRegistry()
-			if regErr := tool.RegisterBuiltinTools(registry, nil, projectDir); regErr != nil {
+			if regErr := tool.RegisterBuiltinTools(registry, nil, projectDir, nil); regErr != nil {
 				t.Fatalf("register builtin tools: %v", regErr)
 			}
 			maxIter := 15

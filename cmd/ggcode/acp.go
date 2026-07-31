@@ -80,7 +80,7 @@ func newACPCommand(cfgFile *string) *cobra.Command {
 			// actual per-session permission control is in AgentLoop's ApprovalHandler.
 			registry := tool.NewRegistry()
 			policy := permission.NewConfigPolicyWithMode(nil, cfg.AllowedDirs, permission.BypassMode)
-			if err := tool.RegisterBuiltinTools(registry, policy, workingDir); err != nil {
+			if err := tool.RegisterBuiltinTools(registry, policy, workingDir, cfg.ProtectedPaths); err != nil {
 				return fmt.Errorf("registering tools: %w", err)
 			}
 

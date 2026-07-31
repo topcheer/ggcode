@@ -5,20 +5,27 @@ import (
 	"os"
 	"time"
 
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/tmux"
 )
 
 // RegisterBuiltinTools registers all built-in tools.
 // If policy is nil, no sandbox path checking is enforced (permissive mode).
-func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy, workingDir string) error {
+// protectedPaths are optional glob patterns that block write tools from
+// modifying sensitive files (e.g. ".env*", ".git/", "*.lock").
+func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy, workingDir string, protectedPaths []string) error {
+	fileGuard := NewFileGuard(protectedPaths)
+	debug.Log("fileguard", "initialized with %d patterns: %v", len(fileGuard.Patterns()), fileGuard.Patterns())
+
 	sandboxFor := func(toolName string) AllowedPathChecker {
-		if policy == nil {
-			return nil
+		var base AllowedPathChecker
+		if policy != nil {
+			base = func(path string) bool {
+				return policy.AllowedPathForTool(toolName, path)
+			}
 		}
-		return func(path string) bool {
-			return policy.AllowedPathForTool(toolName, path)
-		}
+		return MergeFileGuards(base, fileGuard, workingDir)
 	}
 	jobManager := NewCommandJobManager(workingDir)
 	codeIndex := NewCodeIndexManager(workingDir)
