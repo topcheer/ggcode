@@ -258,17 +258,15 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 	// Sync working directory for tools that have a WorkingDir field.
 	syncToolWorkingDir(t, workDir)
 
-	// Execute the actual tool (with panic recovery)
+	// Execute the actual tool (with panic recovery + transient retry)
 	if err := ctx.Err(); err != nil {
 		return tool.Result{Content: err.Error(), IsError: true}
 	}
 	toolStart := time.Now()
-	result, err := a.safeExecute(t, ctx, tc.Arguments)
+	result := a.executeWithTransientRetry(ctx, t.Name(), tc.Arguments, func(execCtx context.Context, args []byte) (tool.Result, error) {
+		return a.safeExecute(t, execCtx, args)
+	})
 	toolDur := time.Since(toolStart)
-	if err != nil {
-		debug.Log("agent", "tool %s EXECUTE ERROR (dur=%v): %v", tc.Name, toolDur, err)
-		return tool.Result{Content: fmt.Sprintf("tool error: %v", err), IsError: true}
-	}
 
 	// Post-tool-use hooks
 	postEnv := env

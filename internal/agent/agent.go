@@ -150,6 +150,8 @@ type Agent struct {
 	unreadEdit                 *unreadEditState     // read-before-edit guard: warns when editing unread files
 	editFailRecovery           *editFailState       // consecutive edit failure recovery guidance
 	scopeDrift                 *scopeDriftState     // semantic scope creep detection (file-diversity tracking)
+	exportGuard                *exportGuardState    // breaking change detection for exported Go symbols (regression guard)
+	transientRetryBudget       int                  // remaining automatic retries for transient tool failures (per run)
 	latencyTracker             *LatencyTracker      // per-tool latency baseline & slow-tool outlier detection
 	effortAdapter              *adaptiveEffortState // per-turn reasoning effort adaptation (Opus 5 effort toggle pattern)
 	ruleStore                  *RuleStore           // cached rule store for hot-path rule injection (avoids per-tool disk I/O)
@@ -186,33 +188,35 @@ type modeAwarePolicy interface {
 func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, maxIter int) *Agent {
 	ctx, cancel := context.WithCancel(context.Background())
 	a := &Agent{
-		provider:         p,
-		tools:            tools,
-		maxIter:          maxIter,
-		contextManager:   ctxpkg.NewManager(128000),
-		projectMemory:    make(map[string]struct{}),
-		baseSystemPrompt: systemPrompt,
-		shutdownCtx:      ctx,
-		shutdownCancel:   cancel,
-		overseer:         newOverseerState(),
-		repetition:       newRepetitionTracker(),
-		speculator:       newSpeculator(),
-		toolMemo:         newToolMemo(),
-		confidence:       newConfidenceState(),
-		budgetGuard:      newBudgetGuardState(),
-		costBudget:       newSessionCostBudget(),
-		cacheKeepalive:   newCacheKeepaliveState(),
-		commandCache:     newCommandCache(),
-		emptySearch:      newEmptySearchState(),
-		errorClassifier:  NewErrorClassifier(),
-		planner:          newPlanState(),
-		todoStaleness:    newTodoStalenessState(),
-		recurringError:   newRecurringErrorState(),
-		unreadEdit:       newUnreadEditState(),
-		editFailRecovery: newEditFailState(),
-		scopeDrift:       newScopeDriftState(),
-		latencyTracker:   NewLatencyTracker(),
-		effortAdapter:    newAdaptiveEffortState(),
+		provider:             p,
+		tools:                tools,
+		maxIter:              maxIter,
+		contextManager:       ctxpkg.NewManager(128000),
+		projectMemory:        make(map[string]struct{}),
+		baseSystemPrompt:     systemPrompt,
+		shutdownCtx:          ctx,
+		shutdownCancel:       cancel,
+		overseer:             newOverseerState(),
+		repetition:           newRepetitionTracker(),
+		speculator:           newSpeculator(),
+		toolMemo:             newToolMemo(),
+		confidence:           newConfidenceState(),
+		budgetGuard:          newBudgetGuardState(),
+		costBudget:           newSessionCostBudget(),
+		cacheKeepalive:       newCacheKeepaliveState(),
+		commandCache:         newCommandCache(),
+		emptySearch:          newEmptySearchState(),
+		errorClassifier:      NewErrorClassifier(),
+		planner:              newPlanState(),
+		todoStaleness:        newTodoStalenessState(),
+		recurringError:       newRecurringErrorState(),
+		unreadEdit:           newUnreadEditState(),
+		editFailRecovery:     newEditFailState(),
+		scopeDrift:           newScopeDriftState(),
+		exportGuard:          newExportGuardState(),
+		latencyTracker:       NewLatencyTracker(),
+		effortAdapter:        newAdaptiveEffortState(),
+		transientRetryBudget: maxTransientRetryBudgetPerRun,
 	}
 	a.syncContextManagerProviderLocked()
 	a.syncContextManagerUsageHandlerLocked()
@@ -997,6 +1001,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.unreadEdit.reset()
 	// Reset the edit failure recovery tracker.
 	a.editFailRecovery.reset()
+	// Reset the export guard so each run starts with a clean checked set.
+	a.exportGuard.reset()
+	a.resetTransientRetryBudget()
 
 	for i := 0; a.maxIter <= 0 || i < a.maxIter; i++ {
 		runStats.Iterations = i + 1
@@ -1653,6 +1660,16 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					// Stale-read detection: warn when the file was modified on
 					// disk since the last read (external edit, git pull, etc.).
 					if hint := a.unreadEdit.checkStaleRead(p); hint != "" {
+						if result.Content != "" {
+							result.Content = result.Content + "\n\n" + hint
+						} else {
+							result.Content = hint
+						}
+					}
+					// Export guard: detect breaking changes to exported Go symbols
+					// (removed functions, changed signatures) by comparing against
+					// git HEAD. Fires once per file per run.
+					if hint := a.checkExportGuard(p); hint != "" {
 						if result.Content != "" {
 							result.Content = result.Content + "\n\n" + hint
 						} else {
