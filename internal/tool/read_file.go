@@ -77,7 +77,13 @@ func (t ReadFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 	// Pre-check file size — but allow range reads of large files via offset/limit
 	info, err := os.Stat(args.Path)
 	if err != nil {
-		return Result{IsError: true, Content: fmt.Sprintf("error accessing file: %v", err)}, nil
+		msg := fmt.Sprintf("error accessing file: %v", err)
+		if os.IsNotExist(err) {
+			if suggestion := suggestFilePath(args.Path); suggestion != "" {
+				msg += suggestion
+			}
+		}
+		return Result{IsError: true, Content: msg}, nil
 	}
 	if info.Size() > maxFileSize {
 		if args.Offset > 0 || args.Limit > 0 {

@@ -78,7 +78,13 @@ func (t EditFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 
 	data, err := os.ReadFile(args.FilePath)
 	if err != nil {
-		return Result{IsError: true, Content: fmt.Sprintf("error reading file: %v", err)}, nil
+		msg := fmt.Sprintf("error reading file: %v", err)
+		if os.IsNotExist(err) {
+			if suggestion := suggestFilePath(args.FilePath); suggestion != "" {
+				msg += suggestion
+			}
+		}
+		return Result{IsError: true, Content: msg}, nil
 	}
 
 	content := string(data)
