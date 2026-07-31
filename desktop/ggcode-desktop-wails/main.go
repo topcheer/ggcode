@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"embed"
+	"log"
 	"os"
 	"os/signal"
 	"syscall"
 
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -15,10 +17,24 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options/windows"
 )
 
+// logWriter redirects standard library log output to debug.Log so that
+// third-party libraries (pion/turn, pion/webrtc) writing via the standard
+// log package don't corrupt the terminal output by writing to stderr.
+type logWriter struct{}
+
+func (logWriter) Write(p []byte) (int, error) {
+	debug.Log("stderr", "%s", string(p))
+	return len(p), nil
+}
+
 //go:embed all:frontend/dist
 var assets embed.FS
 
 func main() {
+	// Redirect standard log output away from stderr.
+	log.SetOutput(logWriter{})
+	log.SetFlags(0)
+
 	app := NewApp()
 	shutdownSignals := make(chan os.Signal, 1)
 	signal.Notify(shutdownSignals, os.Interrupt, syscall.SIGTERM)
