@@ -62,6 +62,7 @@ func BuildInteractiveSystemPromptWithPromptRefs(
 		prompt += "\n\n" + styleGuidance
 	}
 	prompt += projectOverviewSection(workingDir)
+	prompt += modifiedFilesSection(workingDir)
 	prompt += projectCommandsSection(workingDir)
 	prompt += toolchainSection(workingDir)
 	prompt += buildGoPackageSymbolsSection(workingDir)
@@ -236,6 +237,7 @@ func buildSharedAgentPrompt(ctx SubAgentPromptContext) string {
 		}
 	}
 	prompt += projectOverviewSection(workingDir)
+	prompt += modifiedFilesSection(workingDir)
 	prompt += projectCommandsSection(workingDir)
 	prompt += toolchainSection(workingDir)
 	prompt += buildGoPackageSymbolsSection(workingDir)
