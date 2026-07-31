@@ -11,6 +11,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:io';
 
+import 'package:ggcode_mobile/core/secure_storage.dart';
 import 'package:ggcode_mobile/core/models/protocol.dart' as proto;
 import 'package:ggcode_mobile/core/providers/session_provider.dart';
 import 'package:ggcode_mobile/core/theme/app_theme.dart';
@@ -119,6 +120,7 @@ void main() {
   late Directory cacheDir;
   setUp(() {
     SharedPreferences.setMockInitialValues({});
+    SecureTokenStorage.disableForTesting();
     cacheDir =
         Directory.systemTemp.createTempSync('ggcode_mobile_widget_cache_');
     debugWorkspaceCacheDatabasePathOverride =

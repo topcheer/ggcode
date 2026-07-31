@@ -42,6 +42,15 @@ class SecureTokenStorage {
     _instance = null;
   }
 
+  /// Disable secure storage for testing — forces all reads/writes to
+  /// use SharedPreferences immediately, avoiding 3s timeout timers
+  /// that leak into widget tests.
+  static void disableForTesting() {
+    final s = SecureTokenStorage._(storage: const FlutterSecureStorage());
+    s._secureAvailable = false;
+    _instance = s;
+  }
+
   final FlutterSecureStorage _storage;
 
   /// Whether secure storage has been confirmed working.
