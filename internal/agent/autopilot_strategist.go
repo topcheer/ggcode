@@ -17,6 +17,14 @@ import (
 // implementation with hundreds of subtasks) enough room to complete.
 const maxAutopilotStrategistCalls = 100
 
+// maxConsecutiveStrategistNoProgress is the maximum number of consecutive
+// strategist calls where the main agent made NO tool calls between them.
+// When the agent says "I'm done" but the strategist keeps saying "verify first"
+// and the agent still doesn't call tools, this creates a deadlock loop that
+// burns the entire 100-call budget. After this many consecutive no-progress
+// rounds, the autopilot force-terminates with the agent's last result.
+const maxConsecutiveStrategistNoProgress = 3
+
 // strategistResult is the output from the autopilot strategist LLM call.
 type strategistResult struct {
 	Guidance string // text to inject into the main agent as a user message
@@ -108,7 +116,10 @@ What should the agent do next?`, goal, contextStr, lastAssistantText, a.autopilo
 	}
 
 	upper := strings.ToUpper(result.Guidance)
-	if strings.HasPrefix(upper, "GOAL_ACHIEVED") {
+	// Use Contains instead of HasPrefix to handle markdown formatting
+	// (e.g. "**GOAL_ACHIEVED**" or "## GOAL_ACHIEVED") and minor wording
+	// drift that caused the strict prefix match to fail.
+	if strings.Contains(upper, "GOAL_ACHIEVED") {
 		result.Complete = true
 	}
 

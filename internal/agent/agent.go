@@ -129,6 +129,7 @@ type Agent struct {
 	autopilotGoalSet           bool                 // true after the user has confirmed a goal (goal text is non-empty)
 	autopilotStrategistCount   int                  // number of strategist calls this run (safety valve)
 	strategistBudgetAnnounced  bool                 // true once the budget-exhausted message has been injected
+	strategistNoProgressCount  int                  // consecutive strategist calls where agent made no tool calls
 	reflectionFunc             ReflectionFunc       // called after each run with accumulated stats
 	loopDetector               loopDetector         // tracks consecutive identical tool calls to detect stuck loops
 	errorClassifier            *ErrorClassifier     // immediate type-specific guidance on tool errors (AgentDebug-inspired)
@@ -963,6 +964,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 
 	a.autopilotStrategistCount = 0
 	a.strategistBudgetAnnounced = false
+	a.strategistNoProgressCount = 0
 
 	// Reset monitoring systems once at run start, NOT inside the iteration
 	// loop. These systems accumulate state across iterations within a run.
@@ -1334,8 +1336,25 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// medium-to-large tasks. For very large projects, the user simply
 			// sends another message ("continue") to reset the budget.
 			if a.currentMode() == permission.AutopilotMode && a.hasAutopilotGoal() && a.autopilotStrategistCount < maxAutopilotStrategistCalls {
+				a.strategistNoProgressCount++
 				a.autopilotStrategistCount++
-				debug.Log("agent", "Iteration %d: autopilot calling strategist (call #%d/%d)", i+1, a.autopilotStrategistCount, maxAutopilotStrategistCalls)
+
+				// Deadlock detection: if the agent has made NO tool calls for
+				// several consecutive strategist rounds, the agent believes it's
+				// done but the strategist keeps asking for verification. This is
+				// a deadlock that wastes the entire 100-call budget. Force-terminate.
+				if a.strategistNoProgressCount >= maxConsecutiveStrategistNoProgress {
+					debug.Log("agent", "Iteration %d: autopilot force-terminate after %d consecutive no-progress rounds", i+1, a.strategistNoProgressCount)
+					preview := textBuf
+					if len(preview) > 200 {
+						preview = preview[:200]
+					}
+					onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: fmt.Sprintf("[Autopilot: agent idle for %d consecutive rounds — terminating to avoid deadlock. Last output: %s]", a.strategistNoProgressCount, preview)})
+					a.clearAutopilotGoal()
+					return nil
+				}
+
+				debug.Log("agent", "Iteration %d: autopilot calling strategist (call #%d/%d, no-progress=%d/%d)", i+1, a.autopilotStrategistCount, maxAutopilotStrategistCalls, a.strategistNoProgressCount, maxConsecutiveStrategistNoProgress)
 				onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: fmt.Sprintf("[Strategist #%d/%d: analyzing conversation and deciding next steps...] ", a.autopilotStrategistCount, maxAutopilotStrategistCalls)})
 
 				result, sErr := a.runAutopilotStrategist(ctx, textBuf)
@@ -1443,6 +1462,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		a.contextManager.Add(resp.Message)
 
 		// Execute tool calls and build tool_result message
+		// Reset the no-progress counter — the agent is making forward progress.
+		a.strategistNoProgressCount = 0
 		var toolResults []provider.ContentBlock
 		// Collect follow-up messages from tools (e.g., inline skills)
 		var followUpMessages []provider.Message
