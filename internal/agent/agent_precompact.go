@@ -124,7 +124,16 @@ func (a *Agent) StartPreCompact() {
 	// content (Headroom-inspired context deduplication).
 	if threshold > 0 {
 		if mgr, ok := cm.(*ctxpkg.Manager); ok {
-			freed := mgr.CompactSupersededReads()
+			// Reasoning block compaction: cheapest tier — replaces verbose
+			// reasoning text from old turns with compact placeholders. This
+			// runs first because reasoning blocks are often the single largest
+			// source of context waste in reasoning-model sessions.
+			freed := mgr.CompactOldReasoningBlocks()
+			if freed > 0 {
+				debug.Log("precompact", "REASONING: freed %d tokens from old reasoning blocks", freed)
+				tokens = cm.TokenCount()
+			}
+			freed = mgr.CompactSupersededReads()
 			debug.Log("precompact", "SUPERSEDED: freed %d tokens from superseded reads, tokens now %d (threshold=%d)",
 				freed, tokens, threshold)
 			if freed > 0 {

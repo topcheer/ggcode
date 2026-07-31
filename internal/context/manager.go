@@ -1066,6 +1066,12 @@ const toolResultClearMinLen = 500
 // that aren't worth truncating.
 const toolUseInputClearMinLen = 200
 
+// reasoningCompactMinLen is the minimum ReasoningContent length to bother
+// compacting. Short reasoning traces waste negligible tokens. Reasoning
+// from past turns provides zero marginal value once the turn is complete
+// and the model has produced its response/tool calls.
+const reasoningCompactMinLen = 200
+
 // EstimateClearableTokens performs a read-only scan to estimate how many
 // characters would be freed by ClearOldToolResults(keepN) WITHOUT actually
 // mutating any content. This enables cache-break-aware decisions: only clear
@@ -1485,6 +1491,86 @@ func (m *Manager) ClearOldToolUseInputs() int {
 	return freed
 }
 
+// CompactOldReasoningBlocks truncates the ReasoningContent of thinking/reasoning
+// blocks in all assistant messages EXCEPT the most recent one. Reasoning content
+// from past turns consumes significant context (often 1K-10K+ tokens per turn)
+// with zero marginal value once the turn is complete and the model has produced
+// its response or tool calls.
+//
+// Both Anthropic extended thinking (ThinkingSignature) and DeepSeek reasoning
+// (plain text) are handled. ThinkingSignature and ThinkingData are preserved
+// intact for provider echo-back requirements — only the verbose reasoning text
+// is replaced with a compact placeholder.
+//
+// This is a purely mechanical operation (no LLM call needed) and is safe because:
+//  1. Anthropic's API verifies thinking blocks by signature, not by text content
+//  2. DeepSeek reasoning_content is advisory — an empty/short string is accepted
+//
+// Returns the estimated number of tokens freed.
+func (m *Manager) CompactOldReasoningBlocks() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if len(m.messages) == 0 {
+		return 0
+	}
+
+	// Find the most recent assistant message index to protect it.
+	lastAssistantIdx := -1
+	for i := len(m.messages) - 1; i >= 0; i-- {
+		if m.messages[i].Role == "assistant" {
+			lastAssistantIdx = i
+			break
+		}
+	}
+	if lastAssistantIdx < 0 {
+		return 0
+	}
+
+	// Collect targets: reasoning blocks in older assistant messages.
+	type target struct {
+		msgIdx  int
+		blkIdx  int
+		origLen int
+	}
+	var targets []target
+
+	for i := 0; i < lastAssistantIdx; i++ {
+		if m.messages[i].Role != "assistant" {
+			continue
+		}
+		for j, b := range m.messages[i].Content {
+			if b.ReasoningContent == "" {
+				continue
+			}
+			if len(b.ReasoningContent) < reasoningCompactMinLen {
+				continue
+			}
+			// Idempotency: skip already-compacted blocks
+			if strings.HasPrefix(b.ReasoningContent, "[compacted:") {
+				continue
+			}
+			targets = append(targets, target{msgIdx: i, blkIdx: j, origLen: len(b.ReasoningContent)})
+		}
+	}
+
+	if len(targets) == 0 {
+		return 0
+	}
+
+	for _, t := range targets {
+		block := &m.messages[t.msgIdx].Content[t.blkIdx]
+		block.ReasoningContent = fmt.Sprintf("[compacted: original %d chars]", t.origLen)
+	}
+
+	before := m.tokens
+	m.version++
+	m.recalcTokens()
+	freed := before - m.tokens
+	debug.Log("ctx", "CompactOldReasoningBlocks: compacted %d reasoning blocks, freed ~%d tokens", len(targets), freed)
+	return freed
+}
+
 // CompactSupersededReads finds pairs of read_file/multi_file_read tool calls
 // that target the same file path, and replaces the earlier (stale) result with
 // a compact placeholder. When an agent reads a file, edits it, then re-reads
@@ -1703,6 +1789,7 @@ func (m *Manager) estimateTokens(msg provider.Message) int {
 	var toolCallCount int
 	for _, b := range msg.Content {
 		sb.WriteString(b.Text)
+		sb.WriteString(b.ReasoningContent)
 		sb.WriteString(b.ToolName)
 		sb.WriteString(b.Output)
 		sb.Write(b.Input)
