@@ -278,6 +278,7 @@ type Config struct {
 	P2P                P2PConfig                  `yaml:"p2p,omitempty" json:"p2p,omitempty"`
 	OutputStyle        string                     `yaml:"output_style,omitempty" json:"output_style,omitempty"`
 	Notifications      NotificationConfig         `yaml:"notifications,omitempty" json:"notifications,omitempty"`
+	Fallback           FallbackConfig             `yaml:"fallback,omitempty" json:"fallback,omitempty"`
 	FilePath           string                     `yaml:"-" json:"-"`
 	ProtectedPaths     []string                   `yaml:"protected_paths,omitempty" json:"protected_paths,omitempty"`
 	FirstRun           bool                       `yaml:"-" json:"-"`
@@ -449,6 +450,22 @@ func (n NotificationConfig) ShouldBell() bool {
 		return n.Bell
 	}
 	return true // backward-compatible default
+}
+
+// FallbackConfig configures automatic provider/model failover.
+// When the primary provider fails with a permanent error (quota exhaustion,
+// auth failure) or sustained transient errors, requests are transparently
+// rerouted to the configured fallback vendor/endpoint/model.
+type FallbackConfig struct {
+	Enabled  bool   `yaml:"enabled" json:"enabled"`
+	Vendor   string `yaml:"vendor,omitempty" json:"vendor,omitempty"`
+	Endpoint string `yaml:"endpoint,omitempty" json:"endpoint,omitempty"`
+	Model    string `yaml:"model,omitempty" json:"model,omitempty"`
+}
+
+// IsConfigured reports whether the fallback has enough info to be usable.
+func (f FallbackConfig) IsConfigured() bool {
+	return f.Enabled && f.Vendor != "" && f.Model != ""
 }
 
 // HasAuth returns true if at least one authentication mechanism is configured.

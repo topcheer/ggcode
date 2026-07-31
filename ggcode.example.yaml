@@ -7,6 +7,15 @@ vendor: zai
 endpoint: cn-coding-openai
 model: glm-5-turbo
 
+# Fallback provider — automatically switches when the primary fails
+# with quota exhaustion, auth errors, or sustained transient failures.
+# The fallback vendor/endpoint must be configured in the vendors section above.
+# fallback:
+#   enabled: true
+#   vendor: anthropic
+#   endpoint: default
+#   model: claude-sonnet-4-20250514
+
 # TUI language: en or zh-CN
 language: en
 

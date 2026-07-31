@@ -5,6 +5,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
@@ -26,6 +27,12 @@ func ResolveCurrentSelection(cfg *config.Config) (*config.ResolvedEndpoint, prov
 	if err != nil {
 		return nil, nil, err
 	}
+
+	// Wrap in FallbackProvider if a fallback is configured and resolvable.
+	if cfg.Fallback.IsConfigured() {
+		prov = wrapWithFallback(cfg, prov, resolved)
+	}
+
 	return resolved, prov, nil
 }
 
@@ -97,4 +104,31 @@ func SyncVendorEndpointToGlobal(cfg *config.Config, vendor, endpoint string) {
 	if changed {
 		_ = cfg.SaveScoped("global")
 	}
+}
+
+// wrapWithFallback creates a FallbackProvider wrapping the primary provider.
+// If the fallback endpoint cannot be resolved (missing vendor/endpoint/API key),
+// the primary is returned unwrapped — failover is best-effort, never blocking.
+func wrapWithFallback(cfg *config.Config, primary provider.Provider, primaryResolved *config.ResolvedEndpoint) provider.Provider {
+	fbResolved, err := cfg.ResolveEndpoint(cfg.Fallback.Vendor, cfg.Fallback.Endpoint)
+	if err != nil {
+		debug.Log("provider", "fallback disabled: cannot resolve %s/%s: %v", cfg.Fallback.Vendor, cfg.Fallback.Endpoint, err)
+		return primary
+	}
+	if fbResolved.APIKey == "" {
+		debug.Log("provider", "fallback disabled: no API key for %s/%s", cfg.Fallback.Vendor, cfg.Fallback.Endpoint)
+		return primary
+	}
+	// Override model from fallback config.
+	fbResolved.Model = cfg.Fallback.Model
+	fbProv, err := provider.NewProvider(fbResolved)
+	if err != nil {
+		debug.Log("provider", "fallback disabled: cannot create provider: %v", err)
+		return primary
+	}
+	desc := fmt.Sprintf("%s/%s/%s -> %s/%s/%s",
+		primaryResolved.VendorID, primaryResolved.EndpointID, primaryResolved.Model,
+		fbResolved.VendorID, fbResolved.EndpointID, fbResolved.Model)
+	debug.Log("provider", "fallback enabled: %s", desc)
+	return provider.NewFallbackProvider(primary, fbProv, desc)
 }
