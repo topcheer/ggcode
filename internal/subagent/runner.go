@@ -234,6 +234,11 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 				})
 			}
 			cfg.Manager.NotifyToolResult(cfg.SubAgentID, event.Tool.ID, meta.Name, "", "", event.Result, event.IsError)
+		case provider.StreamEventSystem:
+			// Forward system events (retry, compaction) to the main panel
+			// so users see them alongside the main conversation, not just
+			// in the follow panel.
+			cfg.Manager.NotifySystem(cfg.SubAgentID, event.Text)
 		case provider.StreamEventError:
 			flushText()
 			output.WriteString(fmt.Sprintf("[error: %v]\n", event.Error))

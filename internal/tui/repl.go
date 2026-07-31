@@ -692,6 +692,12 @@ func (r *REPL) SetSubAgentManager(mgr *subagent.Manager, prov provider.Provider,
 		})
 	})
 
+	// Forward sub-agent system events (retry, compaction) to the main panel
+	// as system messages, matching how the main agent displays them.
+	mgr.SetOnSystem(func(agentID, text string) {
+		r.sendProgramMsgs(subAgentSystemMsg{AgentID: agentID, Text: text})
+	})
+
 	// Start the background ticker that flushes accumulated stream
 	// text/reasoning chunks at ~12.5 Hz instead of per-token (~50-100 Hz
 	// per agent). Without this, 2+ concurrent sub-agents flood Bubble Tea's

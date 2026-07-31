@@ -286,6 +286,7 @@ type Manager struct {
 	onReasoning  func(agentID, text string)                                                        // called on batched reasoning
 	onToolCall   func(agentID, toolID, toolName, displayName, args, detail string)                 // called on tool call
 	onToolResult func(agentID, toolID, toolName, displayName, detail, result string, isError bool) // called on tool result
+	onSystem     func(agentID, text string)                                                        // called on system events (retry, compaction)
 	lastNotify   time.Time                                                                         // throttle: last time onUpdate was called
 	nextID       int
 	// cancelAllTimeout is the max time CancelAll waits for each Running sub-agent's
@@ -787,6 +788,21 @@ func (m *Manager) SetOnToolResult(fn func(agentID, toolID, toolName, displayName
 	m.mu.Lock()
 	m.onToolResult = fn
 	m.mu.Unlock()
+}
+
+func (m *Manager) SetOnSystem(fn func(agentID, text string)) {
+	m.mu.Lock()
+	m.onSystem = fn
+	m.mu.Unlock()
+}
+
+func (m *Manager) NotifySystem(agentID, text string) {
+	m.mu.Lock()
+	fn := m.onSystem
+	m.mu.Unlock()
+	if fn != nil {
+		fn(agentID, text)
+	}
 }
 
 func (m *Manager) NotifyToolCall(agentID, toolID, toolName, displayName, args, detail string) {

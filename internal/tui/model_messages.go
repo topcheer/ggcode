@@ -133,6 +133,13 @@ type subAgentUpdateMsg struct {
 	AgentID string // empty for general update
 }
 
+// subAgentSystemMsg carries a system event (retry, compaction) from a
+// sub-agent to the main panel for display as a system message.
+type subAgentSystemMsg struct {
+	AgentID string
+	Text    string
+}
+
 type subAgentTunnelStreamTextMsg struct {
 	AgentID string
 	Text    string

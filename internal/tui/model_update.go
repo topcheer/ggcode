@@ -377,6 +377,18 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 	case subAgentUpdateMsg:
 		return m.handleSubAgentUpdateMsg(msg)
 
+	case subAgentSystemMsg:
+		// Display sub-agent system events (retry, compaction) in the main
+		// panel as system messages. Reuse the same system message item per
+		// agent so consecutive retry events accumulate into one item.
+		itemID := "sa-sys-" + msg.AgentID
+		if m.chatList != nil && m.chatList.FindByID(itemID) != nil {
+			m.chatAppendSystemText(itemID, "\n"+msg.Text)
+		} else {
+			m.chatWriteSystem(itemID, msg.Text)
+		}
+		return m, nil
+
 	case subAgentTunnelStreamTextMsg:
 		return m.handleSubAgentTunnelStreamTextMsg(msg)
 
