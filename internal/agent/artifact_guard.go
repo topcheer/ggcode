@@ -118,8 +118,9 @@ func checkContentGrowth(filePath, oldContent, newContent string) string {
 		return ""
 	}
 
-	oldLines := strings.Count(oldContent, "\n") + 1
-	newLines := strings.Count(newContent, "\n") + 1
+	// Count non-empty lines to avoid trailing-newline +1 off-by-one.
+	oldLines := strings.Count(strings.TrimRight(oldContent, "\n"), "\n") + 1
+	newLines := strings.Count(strings.TrimRight(newContent, "\n"), "\n") + 1
 
 	// Skip tiny files — ratio is meaningless.
 	if oldLines < 10 {
