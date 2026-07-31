@@ -30,9 +30,11 @@ func TestRedactSecrets_AWSSecretKey(t *testing.T) {
 }
 
 func TestRedactSecrets_GitHubToken(t *testing.T) {
-	content := `GITHUB_TOKEN=ghp_FAKE_TOKEN_FAKE_TOKEN_FAKE`
+	// Build token at runtime to avoid triggering GitHub Secret Scanning.
+	ghToken := "ghp_" + strings.Repeat("a", 36)
+	content := "GITHUB_TOKEN=" + ghToken
 	result := redactSecrets("run_command", content)
-	if strings.Contains(result, "ghp_FAKE_TOKEN_FAKE_TOKEN_FAKE") {
+	if strings.Contains(result, ghToken) {
 		t.Errorf("GitHub token should be redacted, got: %s", result)
 	}
 	if !strings.Contains(result, "[REDACTED:github_token]") {
@@ -97,9 +99,11 @@ func TestRedactSecrets_JWT(t *testing.T) {
 }
 
 func TestRedactSecrets_GCPAPIKey(t *testing.T) {
-	content := `key: AIzaFAKE_GOOGLE_API_KEY_1234567`
+	// Build key at runtime to avoid triggering GitHub Secret Scanning.
+	gcpKey := "AIza" + strings.Repeat("a", 35)
+	content := "key: " + gcpKey
 	result := redactSecrets("read_file", content)
-	if strings.Contains(result, "AIzaFAKE_GOOGLE_API_KEY_1234567") {
+	if strings.Contains(result, gcpKey) {
 		t.Errorf("GCP API key should be redacted, got: %s", result)
 	}
 	if !strings.Contains(result, "[REDACTED:gcp_api_key]") {
@@ -154,18 +158,20 @@ func TestRedactSecrets_SkipsNonContentTools(t *testing.T) {
 }
 
 func TestRedactSecrets_MCPTool(t *testing.T) {
-	content := `GITHUB_TOKEN=ghp_FAKE_TOKEN_FAKE_TOKEN_FAKE`
+	ghToken := "ghp_" + strings.Repeat("a", 36)
+	content := "GITHUB_TOKEN=" + ghToken
 	result := redactSecrets("mcp__github__get_file", content)
-	if strings.Contains(result, "ghp_FAKE_TOKEN_FAKE_TOKEN_FAKE") {
+	if strings.Contains(result, ghToken) {
 		t.Errorf("MCP tool result should be redacted, got: %s", result)
 	}
 }
 
 func TestRedactSecrets_MultipleSecrets(t *testing.T) {
-	content := `AWS_KEY=AKIAFAKEEXAMPLEKEY00
-GH_TOKEN=ghp_FAKE_TOKEN_FAKE_TOKEN_FAKE`
+	awsKey := "AKIA" + strings.Repeat("A", 16)
+	ghToken := "ghp_" + strings.Repeat("a", 36)
+	content := "AWS_KEY=" + awsKey + "\nGH_TOKEN=" + ghToken
 	result := redactSecrets("read_file", content)
-	if strings.Contains(result, "AKIAFAKEEXAMPLEKEY00") {
+	if strings.Contains(result, awsKey) {
 		t.Errorf("AWS key should be redacted")
 	}
 	if strings.Contains(result, "ghp_") {
