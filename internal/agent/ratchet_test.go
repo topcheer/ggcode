@@ -182,7 +182,8 @@ func TestInjectRulesIntoResult(t *testing.T) {
 	a := &Agent{workingDir: dir}
 
 	// Add a build rule with separate error and tool patterns
-	rs := NewRuleStore(dir)
+	// Use the agent's cached rule store so injectRulesIntoResult sees the rules.
+	rs := a.getRuleStore()
 	rs.AddRule(Rule{
 		Category:     "build",
 		Rule:         "Use -tags goolm",

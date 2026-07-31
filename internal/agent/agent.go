@@ -151,6 +151,7 @@ type Agent struct {
 	scopeDrift                 *scopeDriftState     // semantic scope creep detection (file-diversity tracking)
 	latencyTracker             *LatencyTracker      // per-tool latency baseline & slow-tool outlier detection
 	effortAdapter              *adaptiveEffortState // per-turn reasoning effort adaptation (Opus 5 effort toggle pattern)
+	ruleStore                  *RuleStore           // cached rule store for hot-path rule injection (avoids per-tool disk I/O)
 	systemPromptInjector       func() string        // returns extra system prompt text to inject (e.g. lanchat peer warnings)
 	baseSystemPrompt           string               // the fully built static system prompt; used as reset base for dynamic injection
 	lastInjectedSystemPrompt   string               // cache of last injected prompt to skip redundant updates

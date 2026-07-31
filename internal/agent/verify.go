@@ -368,7 +368,7 @@ func (a *Agent) injectRulesIntoResult(toolName string, args json.RawMessage, res
 	if workingDir == "" {
 		return resultContent
 	}
-	rs := NewRuleStore(workingDir)
+	rs := a.getRuleStore()
 	if rs == nil {
 		return resultContent
 	}

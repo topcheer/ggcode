@@ -45,11 +45,12 @@ const (
 
 // RuleStore manages harness rules persisted to .ggcode/agent-rules.json.
 type RuleStore struct {
-	mu       sync.Mutex
-	path     string
-	rules    []Rule
-	loaded   bool
-	maxRules int
+	mu         sync.Mutex
+	path       string
+	rules      []Rule
+	loaded     bool
+	maxRules   int
+	regexCache map[string]*regexp.Regexp // pre-compiled patterns to avoid repeated compilation
 }
 
 // NewRuleStore creates a RuleStore for the given working directory.
@@ -59,9 +60,40 @@ func NewRuleStore(workingDir string) *RuleStore {
 	}
 	path := filepath.Join(workingDir, ".ggcode", "agent-rules.json")
 	return &RuleStore{
-		path:     path,
-		maxRules: defaultMaxRules,
+		path:       path,
+		maxRules:   defaultMaxRules,
+		regexCache: make(map[string]*regexp.Regexp),
 	}
+}
+
+// getRuleStore returns a cached RuleStore for the agent's working directory.
+// The store is created once and reused across all tool calls to avoid
+// repeated disk reads and regex compilation on the hot path.
+func (a *Agent) getRuleStore() *RuleStore {
+	if a.ruleStore != nil {
+		return a.ruleStore
+	}
+	workingDir := a.WorkingDir()
+	if workingDir == "" {
+		return nil
+	}
+	rs := NewRuleStore(workingDir)
+	a.ruleStore = rs // cache for future calls
+	return rs
+}
+
+// compilePattern returns a cached compiled regex for the given pattern.
+// This avoids re-compiling the same patterns on every tool call.
+func (rs *RuleStore) compilePattern(pattern string) (*regexp.Regexp, error) {
+	if re, ok := rs.regexCache[pattern]; ok {
+		return re, nil
+	}
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, err
+	}
+	rs.regexCache[pattern] = re
+	return re, nil
 }
 
 func (rs *RuleStore) load() {
@@ -116,7 +148,7 @@ func (rs *RuleStore) MatchErrors(errors []string) (matched []string, unmatched [
 	for _, errMsg := range errors {
 		found := false
 		for i := range rs.rules {
-			re, err := regexp.Compile(rs.rules[i].MatchPattern)
+			re, err := rs.compilePattern(rs.rules[i].MatchPattern)
 			if err != nil {
 				continue
 			}
@@ -398,7 +430,7 @@ func (rs *RuleStore) MatchingRulesForTool(toolName, args string) []Rule {
 		if pattern == "" {
 			continue
 		}
-		re, err := regexp.Compile(pattern)
+		re, err := rs.compilePattern(pattern)
 		if err != nil {
 			continue
 		}
@@ -589,7 +621,13 @@ func (a *Agent) runRatchet(stats *RunStats) {
 
 	debug.Log("ratchet", "processing %d unmatched errors (%d matched)", len(unmatched), len(matched))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	// Use the agent's shutdown context as parent so reflection is cancelled
+	// when the agent shuts down, instead of an uncancellable context.Background().
+	parentCtx := a.shutdownCtx
+	if parentCtx == nil {
+		parentCtx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parentCtx, 60*time.Second)
 	defer cancel()
 
 	newRules := a.generalizeErrorsWithRetry(ctx, unmatched, "reflection")

@@ -29,6 +29,8 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+
+	"github.com/topcheer/ggcode/internal/debug"
 )
 
 // checkDelimiterBalance validates that brackets (), {}, [] are balanced in
@@ -38,11 +40,21 @@ import (
 // Only runs on file types where bracket balance is syntactically significant
 // and where no dedicated parser already exists in the integrity pipeline (Go
 // files are excluded because go/parser is strictly more powerful).
+// maxDelimiterScanSize is the file size limit for delimiter balance checking.
+// Files larger than this are skipped to avoid O(n) scan overhead on very large
+// generated/minified files where bracket balance is unlikely to be actionable.
+const maxDelimiterScanSize = 1 << 20 // 1MB
+
 func checkDelimiterBalance(filePath, content string) string {
 	if !shouldCheckDelimiters(filePath) {
 		return ""
 	}
 	if strings.TrimSpace(content) == "" {
+		return ""
+	}
+	// Skip very large files to avoid unnecessary O(n) scanning overhead.
+	if len(content) > maxDelimiterScanSize {
+		debug.Log("delimiter", "skipping delimiter check for %s: size %d > %d limit", filePath, len(content), maxDelimiterScanSize)
 		return ""
 	}
 
