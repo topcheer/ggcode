@@ -38,7 +38,7 @@ type AgentEvent struct {
 	Time            time.Time // when the event was recorded
 }
 
-const maxAgentEvents = 200
+const maxAgentEvents = 400
 
 // maxConcurrentSubAgents limits how many sub-agents can run simultaneously.
 // Each sub-agent consumes a goroutine, an LLM API connection, and context
@@ -154,12 +154,12 @@ func (s *SubAgent) AppendEvent(ev AgentEvent) {
 // before they are flushed as separate events. Events arriving within this
 // window are coalesced into one, reducing event spam from fine-grained
 // streaming providers (e.g., GLM sends 3-5 token chunks).
-const textMergeInterval = 80 * time.Millisecond
+const textMergeInterval = 50 * time.Millisecond
 
 // textMergeMaxChars is the maximum accumulated text before a merged event
 // is flushed, even if more text is still arriving. This ensures the follow
 // panel shows progressive output rather than waiting indefinitely.
-const textMergeMaxChars = 500
+const textMergeMaxChars = 2000
 
 // isTurnBoundary returns true if the event marks a boundary between LLM turns
 // (tool calls/results), meaning any text before it represents a complete turn.

@@ -841,8 +841,8 @@ func TestSubAgentEventOverflow(t *testing.T) {
 
 	// Fill beyond maxAgentEvents using tool events (not text — text would
 	// coalesce). Each turn: tool_call + tool_result = 2 events.
-	// With 120 turns = 240 events, eviction triggers at 200 and drops whole turns.
-	for turn := 0; turn < 120; turn++ {
+	// With 250 turns = 500 events, eviction triggers at 400 and drops whole turns.
+	for turn := 0; turn < 250; turn++ {
 		sa.appendEvent(AgentEvent{Type: AgentEventToolCall, ToolName: "read_file", ToolID: fmt.Sprintf("call-%d", turn)})
 		sa.appendEvent(AgentEvent{Type: AgentEventToolResult, ToolName: "read_file", ToolID: fmt.Sprintf("call-%d", turn)})
 	}
