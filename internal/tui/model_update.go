@@ -386,9 +386,10 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			m.saSysItemIDs = make(map[string]string)
 		}
 		itemID := m.saSysItemIDs[msg.AgentID]
-		// New retry sequence: "[Retry 1/" signals the start of a fresh
-		// provider retry chain — allocate a new item ID.
-		if strings.HasPrefix(msg.Text, "[Retry 1/") || itemID == "" {
+		// New retry sequence: "Retry 1/" signals the start of a fresh
+		// provider retry chain — allocate a new item ID. The text may be
+		// prefixed with "[agentName] " so we use Contains, not HasPrefix.
+		if strings.Contains(msg.Text, "[Retry 1/") || itemID == "" {
 			itemID = nextSystemID()
 			m.saSysItemIDs[msg.AgentID] = itemID
 			m.chatWriteSystem(itemID, msg.Text)
