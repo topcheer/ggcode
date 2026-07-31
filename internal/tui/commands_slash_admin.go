@@ -421,6 +421,9 @@ func (m *Model) handleStyleCommand(parts []string) tea.Cmd {
 func (m *Model) setOutputStyle(style string) {
 	if m.config != nil {
 		m.config.OutputStyle = style
+		if err := m.saveConfig(); err != nil {
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Output style set to %s but not saved: %s", config.DisplayOutputStyle(style), err))
+		}
 	}
 	m.rebuildSystemPrompt()
 }
