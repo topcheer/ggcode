@@ -34,6 +34,9 @@ type OpenAIProvider struct {
 	transport       *headerInjectingTransport // kept for runtime header updates
 }
 
+// ModelName returns the current model name, implementing ModelNameProvider.
+func (p *OpenAIProvider) ModelName() string { return p.model }
+
 // CloneWithModel returns a shallow copy of this provider with a different model.
 // Used by named subagents to run with a model override.
 func (p *OpenAIProvider) CloneWithModel(model string) Provider {
