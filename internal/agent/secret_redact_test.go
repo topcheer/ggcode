@@ -6,11 +6,10 @@ import (
 )
 
 func TestRedactSecrets_AWSAccessKey(t *testing.T) {
-	content := `config:
-  access_key_id: AKIAFAKEEXAMPLEKEY00
-  region: us-east-1`
+	awsKey := "AKIA" + strings.Repeat("A", 16)
+	content := "config:\n  access_key_id: " + awsKey + "\n  region: us-east-1"
 	result := redactSecrets("read_file", content)
-	if strings.Contains(result, "AKIAFAKEEXAMPLEKEY00") {
+	if strings.Contains(result, awsKey) {
 		t.Errorf("AWS access key should be redacted, got: %s", result)
 	}
 	if !strings.Contains(result, "[REDACTED:aws_access_key]") {
@@ -43,7 +42,8 @@ func TestRedactSecrets_GitHubToken(t *testing.T) {
 }
 
 func TestRedactSecrets_SlackToken(t *testing.T) {
-	content := `token: xoxb-FAKE-SLACK-TOKEN-FAKE-FAKE1234`
+	slackToken := "xoxb-" + strings.Repeat("1", 12) + "-" + strings.Repeat("2", 12) + "-" + strings.Repeat("3", 24)
+	content := "token: " + slackToken
 	result := redactSecrets("read_file", content)
 	if strings.Contains(result, "xoxb-") {
 		t.Errorf("Slack token should be redacted, got: %s", result)
