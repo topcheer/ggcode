@@ -326,6 +326,84 @@ func DocumentSymbols(ctx context.Context, workspace, path string) ([]Symbol, err
 	})
 }
 
+// SiblingDiagnostic holds a diagnostic found in a file other than the edited
+// file, along with the source file's path so the caller can report where the
+// error originates.
+type SiblingDiagnostic struct {
+	File       string
+	Diagnostic Diagnostic
+}
+
+// SiblingDiagnostics returns diagnostics for Go source files in the same
+// directory as editedPath (excluding editedPath itself). Language servers like
+// gopls push diagnostics for all files in a package via
+// textDocument/publishDiagnostics; those diagnostics are cached in the session.
+// This function reads from that cache — it does NOT open sibling documents or
+// issue additional LSP requests — so it is fast and non-blocking.
+//
+// This catches cross-file compilation errors that the per-file Diagnostics
+// call misses. For example, renaming a function in file A breaks callers in
+// sibling file B; gopls pushes diagnostics for both files, but only file A is
+// queried by the standard post-edit diagnostics check.
+//
+// Only files with severity 1 (Error) or 2 (Warning) are returned.
+func SiblingDiagnostics(ctx context.Context, workspace, editedPath string) ([]SiblingDiagnostic, error) {
+	// Only check sibling diagnostics for Go files (gopls pushes package-wide).
+	if filepath.Ext(editedPath) != ".go" {
+		return nil, nil
+	}
+
+	resolved, ok := ResolveServerForWorkspace(workspace)
+	if !ok {
+		return nil, nil
+	}
+
+	dir := filepath.Dir(editedPath)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, nil
+	}
+
+	// Acquire the existing session to read cached diagnostics.
+	session, err := globalSessions.acquire(ctx, workspace, resolved)
+	if err != nil {
+		return nil, nil // session not available — silently skip
+	}
+
+	editedAbs, _ := filepath.Abs(editedPath)
+	var result []SiblingDiagnostic
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		// Only check Go files, excluding the edited file and test files
+		// that pair with the edited file (their diagnostics overlap).
+		if filepath.Ext(name) != ".go" {
+			continue
+		}
+		siblingPath := filepath.Join(dir, name)
+		siblingAbs, _ := filepath.Abs(siblingPath)
+		if siblingAbs == editedAbs {
+			continue
+		}
+		uri := fileURI(siblingPath)
+		diags, seen := session.cachedDiagnostics(uri)
+		if !seen || len(diags) == 0 {
+			continue
+		}
+		for _, d := range diags {
+			if d.Severity <= 2 { // Error or Warning only
+				result = append(result, SiblingDiagnostic{
+					File:       siblingPath,
+					Diagnostic: d,
+				})
+			}
+		}
+	}
+	return result, nil
+}
+
 func Diagnostics(ctx context.Context, workspace, path string) ([]Diagnostic, error) {
 	return withOpenDocument(ctx, workspace, path, func(ctx context.Context, session *sessionClient, docURI string) ([]Diagnostic, error) {
 		if session.supportsPullDiagnostics() {
