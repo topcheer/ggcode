@@ -313,7 +313,7 @@ func buildFollowList(data followEventData, list *chat.List, styles chat.Styles) 
 	flushText := func(buf *strings.Builder) {
 		text := buf.String()
 		buf.Reset()
-		if strings.TrimSpace(text) == "" {
+		if text == "" {
 			return
 		}
 		ai := chat.NewAssistantItem("", styles)

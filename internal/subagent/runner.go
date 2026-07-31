@@ -262,7 +262,7 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 			// leading/trailing spaces that are the only separator between
 			// words. Trimming them causes "every10sevenwhentheappisidle".
 			text := event.Text
-			if strings.TrimSpace(text) == "" {
+			if text == "" {
 				break
 			}
 			if text == "__redacted_thinking__" {
