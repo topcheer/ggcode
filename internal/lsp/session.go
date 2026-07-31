@@ -17,7 +17,7 @@ import (
 const sessionIdleTTL = 2 * time.Minute
 const csharpWarmupRetryDelay = 400 * time.Millisecond
 const csharpWarmupRetryAttempts = 8
-const publishedDiagnosticsWait = 1200 * time.Millisecond
+const publishedDiagnosticsWait = 500 * time.Millisecond
 
 type documentState struct {
 	version int
@@ -387,4 +387,22 @@ func (s *sessionClient) setPublishedDiagnostics(uri string, diagnostics []Diagno
 	copy(out, diagnostics)
 	s.diagnostics[uri] = diagnosticsState{seen: true, diagnostics: out}
 	s.lastUsed = time.Now()
+}
+
+// cachedDiagnostics returns the diagnostics for a URI from the session cache
+// without waiting for new pushes. The seen flag indicates whether any
+// publishDiagnostics notification has been received for this URI.
+func (s *sessionClient) cachedDiagnostics(uri string) ([]Diagnostic, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	state, ok := s.diagnostics[uri]
+	if !ok {
+		return nil, false
+	}
+	if len(state.diagnostics) == 0 {
+		return nil, state.seen
+	}
+	out := make([]Diagnostic, len(state.diagnostics))
+	copy(out, state.diagnostics)
+	return out, state.seen
 }

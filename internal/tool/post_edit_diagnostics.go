@@ -21,10 +21,11 @@ func SetPostEditDiagEnabled(enabled bool) {
 }
 
 // postEditDiagTimeout is the maximum time to wait for LSP diagnostics after
-// an edit. This is intentionally short (3s) to avoid blocking the agent loop
-// — if the LSP server is slow to respond, we skip diagnostics rather than
-// stalling the edit tool result.
-const postEditDiagTimeout = 3 * time.Second
+// an edit. Kept under 1s to avoid blocking the agent loop — if the LSP
+// server is slow to respond, we skip diagnostics rather than stalling the
+// edit tool result. The previous 3s timeout caused multi-second perceived
+// latency on every edit_file/write_file call.
+const postEditDiagTimeout = 800 * time.Millisecond
 
 // postEditDiagnostics fetches LSP diagnostics for a file after an edit and
 // returns a formatted warning string if any errors or warnings are found.
@@ -64,7 +65,83 @@ func postEditDiagnostics(workingDir, filePath string) string {
 		return ""
 	}
 
-	return formatDiagnostics(diagnostics)
+	result := formatDiagnostics(diagnostics)
+
+	// Check sibling files in the same directory for cross-file errors.
+	// gopls pushes diagnostics for all files in a Go package; this catches
+	// errors in sibling files (e.g., callers of a renamed function) that
+	// the per-file Diagnostics call above misses.
+	if siblings := checkSiblingDiagnostics(ctx, workingDir, filePath); siblings != "" {
+		result += siblings
+	}
+
+	return result
+}
+
+// checkSiblingDiagnostics queries cached LSP diagnostics for Go files in the
+// same directory as the edited file, returning formatted warnings for any
+// errors or warnings found in sibling files. This is read-only (no LSP
+// requests) and very fast.
+func checkSiblingDiagnostics(ctx context.Context, workingDir, filePath string) string {
+	siblings, err := lsp.SiblingDiagnostics(ctx, workingDir, filePath)
+	if err != nil || len(siblings) == 0 {
+		return ""
+	}
+
+	var errors []string
+	var warnings []string
+	for _, sd := range siblings {
+		msg := strings.TrimSpace(sd.Diagnostic.Message)
+		if msg == "" {
+			continue
+		}
+		base := filepath.Base(sd.File)
+		line := sd.Diagnostic.Range.Start.Line + 1
+		formatted := fmt.Sprintf("  %s:%d: %s", base, line, msg)
+		if sd.Diagnostic.Severity <= 1 {
+			errors = append(errors, formatted)
+		} else if sd.Diagnostic.Severity == 2 {
+			warnings = append(warnings, formatted)
+		}
+	}
+
+	if len(errors) == 0 && len(warnings) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString("\n[Cross-file Diagnostics — sibling files in same package]\n")
+	if len(errors) > 0 {
+		b.WriteString(fmt.Sprintf("Errors (%d) in other files:\n", len(errors)))
+		shown := errors
+		if len(shown) > 5 {
+			shown = shown[:5]
+		}
+		for _, e := range shown {
+			b.WriteString(e + "\n")
+		}
+		if len(errors) > 5 {
+			b.WriteString(fmt.Sprintf("  ... and %d more\n", len(errors)-5))
+		}
+	}
+	if len(warnings) > 0 {
+		if len(errors) > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString(fmt.Sprintf("Warnings (%d) in other files:\n", len(warnings)))
+		shown := warnings
+		if len(shown) > 3 {
+			shown = shown[:3]
+		}
+		for _, w := range shown {
+			b.WriteString(w + "\n")
+		}
+		if len(warnings) > 3 {
+			b.WriteString(fmt.Sprintf("  ... and %d more\n", len(warnings)-3))
+		}
+	}
+	b.WriteString("These errors are in sibling files caused by your edit. Fix them too.")
+	return b.String()
 }
 
 // formatDiagnostics formats LSP diagnostics into a concise warning string.
