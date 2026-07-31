@@ -2,6 +2,7 @@ package subagent
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -427,9 +428,9 @@ func TestSubAgent_EventsSince(t *testing.T) {
 		t.Fatalf("expected 0 events, got %d", len(events))
 	}
 
-	// Add events
+	// Add events — use tool_call events to avoid text coalescing
 	for i := 0; i < 5; i++ {
-		sa.appendEvent(AgentEvent{Type: AgentEventText, Text: "chunk"})
+		sa.appendEvent(AgentEvent{Type: AgentEventToolCall, ToolName: "read_file", ToolID: fmt.Sprintf("t%d", i)})
 	}
 
 	// Get all
@@ -470,7 +471,7 @@ func TestManager_EventsSince_Integration(t *testing.T) {
 	for _, sa := range agents {
 		if sa.ID == id {
 			for i := 0; i < 20; i++ {
-				sa.appendEvent(AgentEvent{Type: AgentEventText, Text: "data"})
+				sa.appendEvent(AgentEvent{Type: AgentEventToolCall, ToolName: "read_file", ToolID: fmt.Sprintf("t%d", i)})
 			}
 		}
 	}

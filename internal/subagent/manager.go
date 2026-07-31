@@ -27,14 +27,15 @@ const (
 // AgentEvent is a single recorded event from a sub-agent's execution.
 type AgentEvent struct {
 	Type            AgentEventType
-	Text            string // AgentEventText / AgentEventError
-	ToolName        string // AgentEventToolCall / AgentEventToolResult
-	ToolID          string // AgentEventToolCall / AgentEventToolResult — unique ID for precise matching
-	ToolArgs        string // AgentEventToolCall / AgentEventToolResult
-	ToolDisplayName string // AgentEventToolCall / AgentEventToolResult
-	ToolDetail      string // AgentEventToolCall / AgentEventToolResult
-	Result          string // AgentEventToolResult
-	IsError         bool   // AgentEventToolResult / AgentEventError
+	Text            string    // AgentEventText / AgentEventError
+	ToolName        string    // AgentEventToolCall / AgentEventToolResult
+	ToolID          string    // AgentEventToolCall / AgentEventToolResult — unique ID for precise matching
+	ToolArgs        string    // AgentEventToolCall / AgentEventToolResult
+	ToolDisplayName string    // AgentEventToolCall / AgentEventToolResult
+	ToolDetail      string    // AgentEventToolCall / AgentEventToolResult
+	Result          string    // AgentEventToolResult
+	IsError         bool      // AgentEventToolResult / AgentEventError
+	Time            time.Time // when the event was recorded
 }
 
 const maxAgentEvents = 200
@@ -149,12 +150,67 @@ func (s *SubAgent) AppendEvent(ev AgentEvent) {
 	s.appendEvent(ev)
 }
 
+// textMergeInterval is the maximum gap between consecutive text events
+// before they are flushed as separate events. Events arriving within this
+// window are coalesced into one, reducing event spam from fine-grained
+// streaming providers (e.g., GLM sends 3-5 token chunks).
+const textMergeInterval = 80 * time.Millisecond
+
+// textMergeMaxChars is the maximum accumulated text before a merged event
+// is flushed, even if more text is still arriving. This ensures the follow
+// panel shows progressive output rather than waiting indefinitely.
+const textMergeMaxChars = 500
+
+// isTurnBoundary returns true if the event marks a boundary between LLM turns
+// (tool calls/results), meaning any text before it represents a complete turn.
+func isTurnBoundary(ev AgentEvent) bool {
+	return ev.Type == AgentEventToolCall || ev.Type == AgentEventToolResult
+}
+
 func (s *SubAgent) appendEvent(ev AgentEvent) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	now := time.Now()
+	ev.Time = now
+
+	// Text event coalescing: if the last event is also text and arrived
+	// within textMergeInterval, merge into it. Flush if accumulated text
+	// exceeds textMergeMaxChars to preserve streaming feel.
+	if ev.Type == AgentEventText && len(s.events) > 0 {
+		last := &s.events[len(s.events)-1]
+		if last.Type == AgentEventText && now.Sub(last.Time) < textMergeInterval {
+			last.Text += ev.Text
+			last.Time = now
+			if len(last.Text) > textMergeMaxChars {
+				// Mark as flushed by setting Time to zero so the next chunk
+				// starts a new event even if it arrives quickly.
+				last.Time = time.Time{}
+			}
+			return
+		}
+	}
+
+	// Turn-aware eviction: when the event buffer is full, drop events up to
+	// the next turn boundary (tool_call/tool_result) so the oldest visible
+	// text is always a complete LLM turn, not a fragment.
 	if len(s.events) >= maxAgentEvents {
-		s.events = s.events[1:]
-		s.eventsDropped++
+		dropIdx := 0
+		for i, e := range s.events {
+			if isTurnBoundary(e) {
+				dropIdx = i + 1
+				break
+			}
+		}
+		// If no boundary found (all text), drop 10% to avoid 1-by-1 churn.
+		if dropIdx == 0 {
+			dropIdx = len(s.events) / 10
+			if dropIdx < 1 {
+				dropIdx = 1
+			}
+		}
+		s.events = s.events[dropIdx:]
+		s.eventsDropped += dropIdx
 	}
 	s.events = append(s.events, ev)
 }

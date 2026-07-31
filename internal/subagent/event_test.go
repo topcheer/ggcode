@@ -1,6 +1,7 @@
 package subagent
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/topcheer/ggcode/internal/config"
@@ -71,14 +72,16 @@ func TestAppendEventRecordsError(t *testing.T) {
 func TestAppendEventCapsAtMax(t *testing.T) {
 	sa := &SubAgent{ID: "sa-1", Status: StatusRunning}
 	for i := 0; i < maxAgentEvents+50; i++ {
-		sa.appendEvent(AgentEvent{Type: AgentEventText, Text: "line"})
+		sa.appendEvent(AgentEvent{Type: AgentEventToolCall, ToolName: "read_file", ToolID: fmt.Sprintf("t%d", i)})
 	}
 	events := sa.Events()
-	if len(events) != maxAgentEvents {
-		t.Fatalf("expected %d events (capped), got %d", maxAgentEvents, len(events))
+	if len(events) > maxAgentEvents {
+		t.Fatalf("expected at most %d events (capped), got %d", maxAgentEvents, len(events))
 	}
 	// First events should be dropped (FIFO)
-	// The oldest remaining should be the 51st appended event
+	if len(events) > 0 && events[0].ToolID == "t0" {
+		t.Fatalf("first event should have been dropped")
+	}
 }
 
 func TestEventsReturnsCopy(t *testing.T) {

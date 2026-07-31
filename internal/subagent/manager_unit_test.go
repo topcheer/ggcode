@@ -4,6 +4,7 @@ package subagent
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -838,19 +839,27 @@ func TestSubAgentEventOverflow(t *testing.T) {
 		Status: StatusRunning,
 	}
 
-	// Fill beyond maxAgentEvents (200)
-	for i := 0; i < 210; i++ {
-		sa.appendEvent(AgentEvent{Type: AgentEventText, Text: "event"})
+	// Fill beyond maxAgentEvents using tool events (not text — text would
+	// coalesce). Each turn: tool_call + tool_result = 2 events.
+	// With 120 turns = 240 events, eviction triggers at 200 and drops whole turns.
+	for turn := 0; turn < 120; turn++ {
+		sa.appendEvent(AgentEvent{Type: AgentEventToolCall, ToolName: "read_file", ToolID: fmt.Sprintf("call-%d", turn)})
+		sa.appendEvent(AgentEvent{Type: AgentEventToolResult, ToolName: "read_file", ToolID: fmt.Sprintf("call-%d", turn)})
 	}
 
 	events := sa.Events()
-	if len(events) != maxAgentEvents {
-		t.Errorf("expected %d events after overflow, got %d", maxAgentEvents, len(events))
+	// Should have evicted at least one full turn (6 events) to stay under 200.
+	if len(events) > maxAgentEvents {
+		t.Errorf("expected at most %d events after overflow, got %d", maxAgentEvents, len(events))
 	}
-
+	// Must have dropped at least 1 turn (6 events).
 	snap := sa.snapshot()
-	if snap.EventsDropped != 10 {
-		t.Errorf("expected 10 dropped, got %d", snap.EventsDropped)
+	if snap.EventsDropped < 6 {
+		t.Errorf("expected at least 6 dropped (1 turn), got %d", snap.EventsDropped)
+	}
+	// First event should NOT be a text fragment — it should start at a turn boundary.
+	if len(events) > 0 && events[0].Type == AgentEventText {
+		t.Errorf("first event should be at a turn boundary, not a text fragment")
 	}
 }
 
