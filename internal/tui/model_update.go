@@ -415,18 +415,9 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		return m.handleSubAgentTunnelReasoningMsg(msg)
 
 	case subAgentTunnelToolCallMsg:
-		// A tool call marks a new LLM turn boundary — reset the system
-		// message item ID so the next retry sequence gets a fresh item
-		// instead of replacing the previous turn's system message.
-		if m.saSysItemIDs != nil {
-			delete(m.saSysItemIDs, msg.AgentID)
-		}
 		return m.handleSubAgentTunnelToolCallMsg(msg)
 
 	case subAgentTunnelToolResultMsg:
-		if m.saSysItemIDs != nil {
-			delete(m.saSysItemIDs, msg.AgentID)
-		}
 		return m.handleSubAgentTunnelToolResultMsg(msg)
 
 	case swarmTunnelEventMsg:
