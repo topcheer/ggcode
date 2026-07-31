@@ -66,6 +66,17 @@ type MCPPlugin struct {
 	// forceReauthPending signals Connect() to call ForceReauth on the new
 	// OAuthHandler so it skips the canonical (shared) credential fallback.
 	forceReauthPending bool
+
+	// autoReconnect controls whether the plugin watches for unexpected
+	// process exits and attempts to reconnect automatically.
+	autoReconnect bool
+
+	// reconnectCancel stops the auto-reconnect watcher goroutine.
+	reconnectCancel context.CancelFunc
+
+	// registry holds a reference to the tool registry for re-registering
+	// tools after auto-reconnect.
+	registry *tool.Registry
 }
 
 // NewMCPPlugin creates a plugin from an MCP server configuration.
@@ -141,7 +152,84 @@ func (m *MCPPlugin) Connect(ctx context.Context) (*mcp.Adapter, error) {
 	m.lastError = ""
 	m.prompts = prompts
 	m.resources = resources
+	m.startReconnectWatcher(client)
 	return m.adapter, nil
+}
+
+// startReconnectWatcher launches a goroutine that monitors the stdio MCP
+// server process for unexpected exits and attempts automatic reconnection
+// with exponential backoff. Only active for stdio transports when
+// autoReconnect is true (default for stdio servers).
+func (m *MCPPlugin) startReconnectWatcher(client *mcp.Client) {
+	// Cancel any previous watcher
+	if m.reconnectCancel != nil {
+		m.reconnectCancel()
+	}
+	exitCh := client.ProcessExit()
+	if exitCh == nil {
+		return // non-stdio transport, no process to watch
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	m.reconnectCancel = cancel
+	m.autoReconnect = true
+
+	safego.Go("plugin.mcp.reconnectWatch", func() {
+		select {
+		case <-ctx.Done():
+			return
+		case <-exitCh:
+			// Process exited unexpectedly; attempt reconnect.
+		}
+		debug.Log("mcp-reconnect", "server=%s detected crash, starting auto-reconnect", m.cfg.Name)
+		backoff := []time.Duration{2 * time.Second, 5 * time.Second, 10 * time.Second, 20 * time.Second}
+		for attempt, delay := range backoff {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(delay):
+			}
+			debug.Log("mcp-reconnect", "server=%s reconnect attempt %d", m.cfg.Name, attempt+1)
+			// Mark as disconnected
+			m.mu.Lock()
+			oldAdapter := m.adapter
+			m.adapter = nil
+			m.connected = false
+			m.client = nil
+			m.status = MCPStatusPending
+			m.mu.Unlock()
+			// Unregister old tools so stale definitions don't linger
+			if oldAdapter != nil && m.registry != nil {
+				for _, tn := range oldAdapter.ToolNames() {
+					m.registry.Unregister(tn)
+				}
+			}
+			// Attempt reconnection
+			adapter, err := m.Connect(ctx)
+			if err == nil && adapter != nil {
+				debug.Log("mcp-reconnect", "server=%s reconnected successfully", m.cfg.Name)
+				// Re-register tools if we have a registry reference
+				if m.registry != nil {
+					if regErr := adapter.RegisterTools(m.registry); regErr != nil {
+						debug.Log("mcp-reconnect", "server=%s tool re-registration failed: %v", m.cfg.Name, regErr)
+					}
+				}
+				return
+			}
+			if err != nil {
+				m.mu.Lock()
+				m.status = MCPStatusFailed
+				m.lastError = normalizeMCPError(err)
+				m.mu.Unlock()
+				debug.Log("mcp-reconnect", "server=%s attempt %d failed: %v", m.cfg.Name, attempt+1, err)
+			}
+		}
+		// All retries exhausted
+		debug.Log("mcp-reconnect", "server=%s all reconnect attempts exhausted", m.cfg.Name)
+		m.mu.Lock()
+		m.status = MCPStatusFailed
+		m.lastError = "server crashed and auto-reconnect failed after all retries"
+		m.mu.Unlock()
+	})
 }
 
 func discoverCapabilities(ctx context.Context, client *mcp.Client) ([]mcp.ToolDefinition, []string, []string, error) {
@@ -237,6 +325,11 @@ func (m *MCPPlugin) Info() MCPServerInfo {
 }
 
 func (m *MCPPlugin) Close() error {
+	// Stop the auto-reconnect watcher first
+	if m.reconnectCancel != nil {
+		m.reconnectCancel()
+		m.reconnectCancel = nil
+	}
 	m.mu.Lock()
 	if m.client == nil {
 		m.adapter = nil
@@ -308,7 +401,9 @@ type MCPManager struct {
 func NewMCPManager(servers []config.MCPServerConfig, registry *tool.Registry) *MCPManager {
 	plugins := make([]*MCPPlugin, 0, len(servers))
 	for _, server := range servers {
-		plugins = append(plugins, NewMCPPlugin(server))
+		p := NewMCPPlugin(server)
+		p.registry = registry
+		plugins = append(plugins, p)
 	}
 	return &MCPManager{
 		plugins:      plugins,
@@ -390,6 +485,7 @@ func (m *MCPManager) connectOne(ctx context.Context, p *MCPPlugin) {
 	connectCtx, cancel := context.WithTimeout(ctx, m.connectTimeoutFor(p))
 	defer cancel()
 	p.markPending()
+	p.registry = m.registry
 	m.emitUpdate()
 	debug.Log("mcp-connect", "start server=%s timeout=%v", p.Name(), m.connectTimeoutFor(p))
 	if err := p.RegisterTools(connectCtx, m.registry); err != nil {

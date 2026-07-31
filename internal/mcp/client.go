@@ -51,6 +51,11 @@ type Client struct {
 	nextID            atomic.Int64
 	closed            atomic.Bool
 	oauthHandler      *OAuthHandler
+
+	// processExit is closed when the stdio server process exits unexpectedly
+	// (i.e., not via Close/Abort). Consumers can use this for auto-reconnect.
+	// It is closed at most once; nil for non-stdio transports.
+	processExit chan struct{}
 }
 
 // NewClient creates a new MCP client for the given server config.
@@ -144,6 +149,19 @@ func (c *Client) Start(ctx context.Context) error {
 	c.stdin = stdin
 	c.stdout = stdout
 	c.reader = bufio.NewReader(stdout)
+	c.processExit = make(chan struct{})
+
+	// Monitor process exit. When the process dies on its own (not via
+	// Close/Abort), close the processExit channel so watchers can react.
+	safego.Go("mcp.procWatch", func() {
+		_ = cmd.Wait()
+		// Only signal unexpected exit if we haven't been closed by the user.
+		if !c.closed.Load() {
+			c.closed.Store(true)
+			close(c.processExit)
+			debug.Log("mcp-procwatch", "server=%s process exited unexpectedly", c.name)
+		}
+	})
 
 	return nil
 }
@@ -351,6 +369,19 @@ func (c *Client) Abort() {
 
 // Name returns the MCP server name.
 func (c *Client) Name() string { return c.name }
+
+// ProcessExit returns a channel that is closed when the stdio server process
+// exits unexpectedly. Returns nil for non-stdio transports or if the process
+// hasn't started yet. Used by the auto-reconnect watcher.
+func (c *Client) ProcessExit() <-chan struct{} {
+	return c.processExit
+}
+
+// IsClosed returns whether the client has been closed (either explicitly or
+// because the underlying process exited).
+func (c *Client) IsClosed() bool {
+	return c.closed.Load()
+}
 
 func (c *Client) nextRequestID() *ID {
 	id := c.nextID.Add(1)
