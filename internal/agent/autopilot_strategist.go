@@ -17,6 +17,14 @@ import (
 // implementation with hundreds of subtasks) enough room to complete.
 const maxAutopilotStrategistCalls = 100
 
+// strategistCompleteMarker is the exact sentinel the strategist must emit to
+// declare the goal achieved. It is deliberately an uncommon XML-like tag rather
+// than the bare phrase "GOAL_ACHIEVED" so that the strategist can freely discuss
+// the concept (e.g. "do NOT emit the GOAL_ACHIEVED tag yet, more work remains")
+// without accidentally triggering completion. Detection matches only this tag,
+// not the substring "GOAL_ACHIEVED" anywhere in the response.
+const strategistCompleteMarker = "<GOAL_ACHIEVED/>"
+
 // maxConsecutiveStrategistNoProgress is the maximum number of consecutive
 // strategist calls where the main agent made NO tool calls between them.
 // When the agent says "I'm done" but the strategist keeps saying "verify first"
@@ -68,11 +76,14 @@ Before declaring GOAL_ACHIEVED, you MUST verify ALL of the following:
 4. No pending TODO items, no commented-out code blocks, no "will do this next" placeholders in the output.
 5. The goal's acceptance criteria are ALL met — if the goal was "add feature X with tests", both the feature AND tests must be verified.
 
-If ANY of these conditions cannot be confirmed from the conversation evidence (tool results you can see), do NOT declare GOAL_ACHIEVED. Instead, direct the agent to verify the missing item. For example: "Run the test suite to confirm all tests pass" or "Build the project and fix any compilation errors."
+If ANY of these conditions cannot be confirmed from the conversation evidence (tool results you can see), do NOT declare the goal achieved. Instead, direct the agent to verify the missing item. For example: "Run the test suite to confirm all tests pass" or "Build the project and fix any compilation errors."
 
-Remember: false GOAL_ACHIEVED wastes the user's time because they must manually check and redo incomplete work. When in doubt, continue — not stop.
+IMPORTANT — Completion signal format:
+- The ONLY signal that stops the agent is the exact token <GOAL_ACHIEVED/> (angle brackets, trailing slash) placed at the START of your response, followed by the summary on the next line.
+- If the goal is NOT yet achieved and you want the agent to CONTINUE working, you MUST NOT emit <GOAL_ACHIEVED/> — even to negate it. Do not write "don't emit <GOAL_ACHIEVED/>", do not quote it, do not mention it. Just give the next instruction plainly. Any appearance of <GOAL_ACHIEVED/> in your response is treated as a stop signal.
+- Remember: false completion wastes the user's time because they must manually check and redo incomplete work. When in doubt, continue — not stop.
 
-If and only if ALL the above conditions are met, start your response with "GOAL_ACHIEVED" and provide a brief summary.
+If and only if ALL the above conditions are met, start your response with <GOAL_ACHIEVED/> on the first line and provide a brief summary on the following line.
 
 Be specific and actionable. Reference concrete findings from the conversation. Do not repeat generic advice. Do not hedge — give a clear, confident direction.
 Your response will be injected directly as a user message into the agent's next turn, so write it as a direct instruction to the agent.`
@@ -116,10 +127,13 @@ What should the agent do next?`, goal, contextStr, lastAssistantText, a.autopilo
 	}
 
 	upper := strings.ToUpper(result.Guidance)
-	// Use Contains instead of HasPrefix to handle markdown formatting
-	// (e.g. "**GOAL_ACHIEVED**" or "## GOAL_ACHIEVED") and minor wording
-	// drift that caused the strict prefix match to fail.
-	if strings.Contains(upper, "GOAL_ACHIEVED") {
+	// Match the exact completion marker only. We deliberately do NOT use
+	// Contains("GOAL_ACHIEVED") because the strategist may legitimately write
+	// "do not emit GOAL_ACHIEVED yet, more work remains" while continuing — a
+	// substring match would falsely stop the agent. The marker is an uncommon
+	// XML-like tag (<GOAL_ACHIEVED/>) that the prompt tells the strategist to
+	// use ONLY to declare completion, and never to mention otherwise.
+	if strings.Contains(upper, strategistCompleteMarker) {
 		result.Complete = true
 	}
 

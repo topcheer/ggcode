@@ -1331,9 +1331,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// (3-10 typically), so the effective work per budget unit is much
 			// higher than the raw count suggests.
 			//
-			// Budget: 30 calls per Run. With ~5 tool iterations between each
-			// strategist call, this covers ~150 tool operations — enough for
-			// medium-to-large tasks. For very large projects, the user simply
+			// Budget: 100 calls per Run. With ~5 tool iterations between each
+			// strategist call, this covers ~500 tool operations — enough for
+			// large-scale implementation tasks. For very large projects, the user
 			// sends another message ("continue") to reset the budget.
 			if a.currentMode() == permission.AutopilotMode && a.hasAutopilotGoal() && a.autopilotStrategistCount < maxAutopilotStrategistCalls {
 				a.strategistNoProgressCount++
@@ -1364,11 +1364,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					// Fall through to normal return — can't drive autonomously.
 				} else if result.Complete {
 					debug.Log("agent", "Iteration %d: strategist declared goal achieved", i+1)
-					// Strip the "GOAL_ACHIEVED" sentinel; the rest is the
-					// strategist's summary of what was accomplished.
 					summary := result.Guidance
-					if len(summary) >= 13 && strings.EqualFold(summary[:13], "GOAL_ACHIEVED") {
-						summary = strings.TrimSpace(summary[13:])
+					// Strip the completion marker (possibly markdown-wrapped); the
+					// rest is the strategist's summary of what was accomplished.
+					if idx := strings.Index(strings.ToUpper(summary), strategistCompleteMarker); idx >= 0 {
+						after := summary[idx+len(strategistCompleteMarker):]
+						summary = strings.TrimSpace(after)
 					}
 					msg := "[Strategist: goal achieved — autopilot complete.]"
 					if summary != "" {
