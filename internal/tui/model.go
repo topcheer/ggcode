@@ -218,6 +218,7 @@ type Model struct {
 	shellBuffer         *bytes.Buffer
 	shellOutputID       string // ID of the system message for shell command output
 	shellOutputIDs      map[string]struct{}
+	saSysItemIDs        map[string]string // sub-agent system message item ID per agent (for retry grouping)
 	streamPrefixWritten bool
 	reasoningActive     bool // true while reasoning block is expanded in current LLM turn
 	harnessRunRemainder string

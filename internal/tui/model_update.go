@@ -379,13 +379,21 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 
 	case subAgentSystemMsg:
 		// Display sub-agent system events (retry, compaction) in the main
-		// panel as system messages. Reuse the same system message item per
-		// agent so consecutive retry events accumulate into one item.
-		itemID := "sa-sys-" + msg.AgentID
-		if m.chatList != nil && m.chatList.FindByID(itemID) != nil {
-			m.chatAppendSystemText(itemID, "\n"+msg.Text)
-		} else {
+		// panel as system messages. Group consecutive retry events from the
+		// same LLM turn into one item, but allocate a new item when a new
+		// retry sequence starts (detected by "Retry 1/" prefix).
+		if m.saSysItemIDs == nil {
+			m.saSysItemIDs = make(map[string]string)
+		}
+		itemID := m.saSysItemIDs[msg.AgentID]
+		// New retry sequence: "[Retry 1/" signals the start of a fresh
+		// provider retry chain — allocate a new item ID.
+		if strings.HasPrefix(msg.Text, "[Retry 1/") || itemID == "" {
+			itemID = nextSystemID()
+			m.saSysItemIDs[msg.AgentID] = itemID
 			m.chatWriteSystem(itemID, msg.Text)
+		} else {
+			m.chatAppendSystemText(itemID, "\n"+msg.Text)
 		}
 		return m, nil
 
