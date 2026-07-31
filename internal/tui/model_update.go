@@ -393,7 +393,18 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			m.saSysItemIDs[msg.AgentID] = itemID
 			m.chatWriteSystem(itemID, msg.Text)
 		} else {
-			m.chatAppendSystemText(itemID, "\n"+msg.Text)
+			// Replace (not append) so only the latest retry status is shown,
+			// matching how the main agent renders retry messages.
+			if item := m.chatList.FindByID(itemID); item != nil {
+				if sys, ok := item.(*chat.SystemItem); ok {
+					sys.SetText(msg.Text)
+					m.chatListScrollToBottom()
+				} else {
+					m.chatWriteSystem(itemID, msg.Text)
+				}
+			} else {
+				m.chatWriteSystem(itemID, msg.Text)
+			}
 		}
 		return m, nil
 
