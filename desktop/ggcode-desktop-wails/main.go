@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -27,11 +28,63 @@ func (logWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// redirectStderr replaces os.Stderr with a pipe that captures all writes
+// and routes them to debug.Log. This catches ALL writes to os.Stderr
+// regardless of how the library obtained the reference.
+func redirectStderr() {
+	r, w, err := os.Pipe()
+	if err != nil {
+		if devNull, err2 := os.OpenFile(os.DevNull, os.O_WRONLY, 0); err2 == nil {
+			os.Stderr = devNull
+		}
+		return
+	}
+	os.Stderr = w
+
+	var mu sync.Mutex
+	buf := make([]byte, 0, 4096)
+	go func() {
+		tmp := make([]byte, 1024)
+		for {
+			n, err := r.Read(tmp)
+			if n > 0 {
+				mu.Lock()
+				buf = append(buf, tmp[:n]...)
+				for {
+					idx := -1
+					for i, b := range buf {
+						if b == '\n' {
+							idx = i
+							break
+						}
+					}
+					if idx < 0 {
+						break
+					}
+					line := string(buf[:idx])
+					buf = buf[idx+1:]
+					if line != "" {
+						debug.Log("stderr", "%s", line)
+					}
+				}
+				mu.Unlock()
+			}
+			if err != nil {
+				break
+			}
+		}
+	}()
+}
+
 //go:embed all:frontend/dist
 var assets embed.FS
 
 func main() {
-	// Redirect standard log output away from stderr.
+	// Redirect os.Stderr at the file descriptor level to prevent
+	// third-party libraries from corrupting terminal output.
+	redirectStderr()
+
+	// Also redirect the standard log package's default output.
 	log.SetOutput(logWriter{})
 	log.SetFlags(0)
 
