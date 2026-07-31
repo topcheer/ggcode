@@ -221,6 +221,10 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	for i, t := range tools {
 		toolNames[i] = t.Name()
 	}
+	// Start the background section collector (same pattern as root.go).
+	agentruntime.InitGlobalSectionCollector(workingDir)
+	defer agentruntime.StopGlobalSectionCollector()
+
 	// Declare early so buildCurrentSystemPrompt closure can reference it.
 	var a2aReg *a2a.Registry
 

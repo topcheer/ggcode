@@ -61,11 +61,22 @@ func BuildInteractiveSystemPromptWithPromptRefs(
 	if styleGuidance := config.OutputStyleGuidance(cfg.OutputStyle); styleGuidance != "" {
 		prompt += "\n\n" + styleGuidance
 	}
-	prompt += projectOverviewSection(workingDir)
-	prompt += modifiedFilesSection(workingDir)
-	prompt += projectCommandsSection(workingDir)
-	prompt += toolchainSection(workingDir)
-	prompt += buildGoPackageSymbolsSection(workingDir)
+	// I/O-heavy sections are pre-computed by a background collector.
+	// If the collector isn't initialized (pipe mode, tests), fall back to
+	// direct computation.
+	if snap, ok := GlobalSectionSnapshot(); ok {
+		prompt += snap.Overview
+		prompt += snap.Modified
+		prompt += snap.Commands
+		prompt += snap.Toolchain
+		prompt += snap.Symbols
+	} else {
+		prompt += projectOverviewSection(workingDir)
+		prompt += modifiedFilesSection(workingDir)
+		prompt += projectCommandsSection(workingDir)
+		prompt += toolchainSection(workingDir)
+		prompt += buildGoPackageSymbolsSection(workingDir)
+	}
 	var promptSkillRefs []string
 	if commandMgr != nil {
 		skillsPrompt, refs := BuildSkillsSystemPromptWithPromptRefs(commandMgr.List())
@@ -236,11 +247,20 @@ func buildSharedAgentPrompt(ctx SubAgentPromptContext) string {
 			prompt += "\n\n" + styleGuidance
 		}
 	}
-	prompt += projectOverviewSection(workingDir)
-	prompt += modifiedFilesSection(workingDir)
-	prompt += projectCommandsSection(workingDir)
-	prompt += toolchainSection(workingDir)
-	prompt += buildGoPackageSymbolsSection(workingDir)
+	// Sub-agent prompts also use the background collector when available.
+	if snap, ok := GlobalSectionSnapshot(); ok {
+		prompt += snap.Overview
+		prompt += snap.Modified
+		prompt += snap.Commands
+		prompt += snap.Toolchain
+		prompt += snap.Symbols
+	} else {
+		prompt += projectOverviewSection(workingDir)
+		prompt += modifiedFilesSection(workingDir)
+		prompt += projectCommandsSection(workingDir)
+		prompt += toolchainSection(workingDir)
+		prompt += buildGoPackageSymbolsSection(workingDir)
+	}
 
 	// 3. Add skills (same as main agent)
 	if ctx.CommandMgr != nil {

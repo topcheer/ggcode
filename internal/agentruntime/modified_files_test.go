@@ -39,7 +39,6 @@ func setupTestGitRepo(t *testing.T) string {
 }
 
 func TestModifiedFilesSection_NotARepo(t *testing.T) {
-	InvalidateModifiedFilesCache()
 	dir := t.TempDir()
 	got := modifiedFilesSection(dir)
 	if got != "" {
@@ -48,7 +47,6 @@ func TestModifiedFilesSection_NotARepo(t *testing.T) {
 }
 
 func TestModifiedFilesSection_CleanRepo(t *testing.T) {
-	InvalidateModifiedFilesCache()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
 	}

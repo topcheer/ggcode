@@ -554,6 +554,14 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		return meta
 	}
 
+	// Start the background section collector before building the first system
+	// prompt. It performs a synchronous first refresh so all I/O-heavy sections
+	// (git status, project overview, toolchain, package symbols) are ready
+	// immediately, then refreshes on a timer. rebuildSystemPrompt reads the
+	// cached values without any I/O on the UI thread.
+	agentruntime.InitGlobalSectionCollector(workingDir)
+	defer agentruntime.StopGlobalSectionCollector()
+
 	buildCurrentSystemPrompt := func() (string, []string) {
 		// Remote agents info is injected dynamically via systemPromptInjector
 		// (lanchat peers), not baked into the static prompt.

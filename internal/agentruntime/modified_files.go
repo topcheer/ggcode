@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -32,59 +31,19 @@ const (
 	// modifiedFilesTimeout bounds the git status command so prompt construction
 	// is never delayed by slow VCS operations.
 	modifiedFilesTimeout = 2 * time.Second
-	// modifiedFilesCacheTTL is how long the cached result is valid. Since
-	// rebuildSystemPrompt is called synchronously on every user message submit,
-	// we cache the result to avoid running git status on every submission.
-	// The TTL is short enough to pick up recent edits but long enough to
-	// eliminate the perceived latency.
-	modifiedFilesCacheTTL = 10 * time.Second
 )
-
-var (
-	modifiedFilesCache    string
-	modifiedFilesCacheDir string
-	modifiedFilesCachedAt time.Time
-	modifiedFilesCacheMu  sync.Mutex
-)
-
-// InvalidateModifiedFilesCache clears the cached modified-files section.
-// Used by tests to force a fresh git status read between test cases.
-func InvalidateModifiedFilesCache() {
-	modifiedFilesCacheMu.Lock()
-	modifiedFilesCache = ""
-	modifiedFilesCacheDir = ""
-	modifiedFilesCachedAt = time.Time{}
-	modifiedFilesCacheMu.Unlock()
-}
 
 // modifiedFilesSection returns a compact list of files with uncommitted changes
 // for injection into the system prompt. Returns an empty string if the
 // directory is not a VCS repo, the working tree is clean, or an error occurs.
 //
-// Results are cached for modifiedFilesCacheTTL to avoid blocking the UI thread
-// with git subprocess calls on every prompt rebuild.
+// This function does I/O (git subprocess). In the interactive REPL it is
+// called by the background SectionCollector, not by the prompt builder
+// directly. The prompt builder reads the pre-computed value from the
+// collector's snapshot. In pipe/test mode where no collector exists, it
+// falls back to direct computation.
 func modifiedFilesSection(workingDir string) string {
-	if strings.TrimSpace(workingDir) == "" {
-		return ""
-	}
-
-	modifiedFilesCacheMu.Lock()
-	if modifiedFilesCacheDir == workingDir && time.Since(modifiedFilesCachedAt) < modifiedFilesCacheTTL {
-		result := modifiedFilesCache
-		modifiedFilesCacheMu.Unlock()
-		return result
-	}
-	modifiedFilesCacheMu.Unlock()
-
-	result := computeModifiedFilesSection(workingDir)
-
-	modifiedFilesCacheMu.Lock()
-	modifiedFilesCache = result
-	modifiedFilesCacheDir = workingDir
-	modifiedFilesCachedAt = time.Now()
-	modifiedFilesCacheMu.Unlock()
-
-	return result
+	return computeModifiedFilesSection(workingDir)
 }
 
 func computeModifiedFilesSection(workingDir string) string {
