@@ -51,8 +51,10 @@ func (m *Model) openModelPanel() tea.Cmd {
 		return nil
 	}
 	models := uniqueStrings(append([]string(nil), resolved.Models...))
-	if len(models) == 0 {
-		models = []string{resolved.Model}
+	// Always include the currently active model, even if it's not in the
+	// configured models list (e.g. a user-defined custom model).
+	if resolved.Model != "" && indexOf(models, resolved.Model) < 0 {
+		models = append([]string{resolved.Model}, models...)
 	}
 	panel := &modelPanelState{
 		models:   models,
@@ -272,8 +274,18 @@ func (m *Model) refreshActiveModelList() tea.Cmd {
 			}
 		}
 
+		// Merge: remote models + any configured models that aren't in the
+		// remote list. This preserves user-defined custom models (e.g.
+		// "glm-5.2-highspeed") that the discovery API doesn't return.
+		merged := uniqueStrings(append([]string(nil), models...))
+		for _, bm := range builtIn {
+			if indexOf(merged, bm) < 0 {
+				merged = append(merged, bm)
+			}
+		}
+
 		result := modelPanelRefreshResultMsg{
-			models: uniqueStrings(models),
+			models: merged,
 			remote: true,
 		}
 		if err := m.config.SetEndpointModels(m.config.Vendor, m.config.Endpoint, result.models); err == nil {
