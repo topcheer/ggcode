@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -686,5 +687,128 @@ func (m *Model) persistPermissionRules() {
 	data := permission.SnapshotRules(cp, config.ConfigDir())
 	if err := permission.SaveRules(rulesPath, data); err != nil {
 		debug.Log("tui", "failed to persist permission rules: %v", err)
+	}
+}
+
+// handleNotifyCommand handles /notify: view or set notification preferences.
+//
+// Usage:
+//
+//	/notify                         — show current settings
+//	/notify mode <all|long|errors|off>
+//	/notify bell <on|off>
+//	/notify desktop <on|off>
+//	/notify min_duration <seconds>
+func (m *Model) handleNotifyCommand(args []string) tea.Cmd {
+	if m.config == nil {
+		m.chatWriteSystem(nextSystemID(), "Configuration not available.")
+		m.chatListScrollToBottom()
+		return nil
+	}
+
+	// No args: show current settings.
+	if len(args) == 0 {
+		n := m.config.Notifications
+		mode := n.EffectiveMode()
+		bell := "off"
+		if n.ShouldBell() {
+			bell = "on"
+		}
+		desktop := "off"
+		if n.Desktop {
+			desktop = "on"
+		}
+		minDur := n.EffectiveMinDuration()
+		msg := fmt.Sprintf("Notification settings:\n  mode: %s (all=every run, long=>Nsec, errors=failures only, off=disabled)\n  bell: %s (terminal bell on completion)\n  desktop: %s (OS desktop notification)\n  min_duration_sec: %d (threshold for 'long' mode)\n\nUsage: /notify mode <all|long|errors|off> | bell <on|off> | desktop <on|off> | min_duration <seconds>",
+			mode, bell, desktop, minDur)
+		m.chatWriteSystem(nextSystemID(), msg)
+		m.chatListScrollToBottom()
+		return nil
+	}
+
+	changed := false
+	i := 0
+	for i < len(args) {
+		key := args[i]
+		switch key {
+		case "mode":
+			if i+1 >= len(args) {
+				m.chatWriteSystem(nextSystemID(), "Usage: /notify mode <all|long|errors|off>")
+				m.chatListScrollToBottom()
+				return nil
+			}
+			val := args[i+1]
+			switch val {
+			case "all", "long", "errors", "off":
+				m.config.Notifications.Mode = val
+				changed = true
+			default:
+				m.chatWriteSystem(nextSystemID(), "Invalid mode. Use: all, long, errors, or off.")
+				m.chatListScrollToBottom()
+				return nil
+			}
+			i += 2
+		case "bell":
+			if i+1 >= len(args) {
+				m.chatWriteSystem(nextSystemID(), "Usage: /notify bell <on|off>")
+				m.chatListScrollToBottom()
+				return nil
+			}
+			m.config.Notifications.Bell = parseOnOff(args[i+1])
+			changed = true
+			i += 2
+		case "desktop":
+			if i+1 >= len(args) {
+				m.chatWriteSystem(nextSystemID(), "Usage: /notify desktop <on|off>")
+				m.chatListScrollToBottom()
+				return nil
+			}
+			m.config.Notifications.Desktop = parseOnOff(args[i+1])
+			changed = true
+			i += 2
+		case "min_duration":
+			if i+1 >= len(args) {
+				m.chatWriteSystem(nextSystemID(), "Usage: /notify min_duration <seconds>")
+				m.chatListScrollToBottom()
+				return nil
+			}
+			sec, err := strconv.Atoi(args[i+1])
+			if err != nil || sec < 0 {
+				m.chatWriteSystem(nextSystemID(), "Invalid seconds value. Use a non-negative integer.")
+				m.chatListScrollToBottom()
+				return nil
+			}
+			m.config.Notifications.MinDuration = sec
+			changed = true
+			i += 2
+		default:
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Unknown key %q. Use: mode, bell, desktop, or min_duration.", key))
+			m.chatListScrollToBottom()
+			return nil
+		}
+	}
+
+	if changed {
+		if err := m.config.Save(); err != nil {
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Failed to save notification settings: %v", err))
+		} else {
+			n := m.config.Notifications
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf(
+				"Notification settings saved: mode=%s, bell=%v, desktop=%v, min_duration=%ds",
+				n.EffectiveMode(), n.ShouldBell(), n.Desktop, n.EffectiveMinDuration(),
+			))
+		}
+	}
+	m.chatListScrollToBottom()
+	return nil
+}
+
+// parseOnOff parses on/off strings to booleans.
+func parseOnOff(s string) bool {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "on", "true", "1", "yes":
+		return true
+	default:
+		return false
 	}
 }

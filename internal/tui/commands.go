@@ -499,6 +499,8 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 			return m.handleRedoCommand()
 		case "/context":
 			return m.handleContextCommand()
+		case "/notify":
+			return m.handleNotifyCommand(parts[1:])
 		case "/debug":
 			return m.handleDebugCommand(parts)
 		case "/regenerate", "/regen":

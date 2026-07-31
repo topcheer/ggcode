@@ -8,10 +8,21 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/notify"
 	"github.com/topcheer/ggcode/internal/tunnel"
 )
 
-// handleDoneMsg handles the corresponding message case.
+// notificationSummary builds a short human-readable summary of the completed
+// agent run for use in desktop notifications.
+func (m Model) notificationSummary(duration time.Duration) string {
+	toolCount := m.statusToolCount
+	if toolCount > 0 {
+		return fmt.Sprintf("Agent completed after %s (%d tool calls).", duration.Round(time.Second), toolCount)
+	}
+	return fmt.Sprintf("Agent completed after %s.", duration.Round(time.Second))
+}
+
 func (m Model) handleDoneMsg(msg doneMsg) (Model, tea.Cmd) {
 	finalIMText := m.pendingIMStreamText()
 	m.setLoading(false)
@@ -100,12 +111,18 @@ func (m Model) handleAgentDoneMsg(msg agentDoneMsg) (Model, tea.Cmd) {
 		m.appendTurnMetricsDigest(m.usageTurnIndex)
 	}
 	m.chatListScrollToBottom()
-	// Terminal bell on completion for long-running tasks (>3s), so users
-	// who switched windows get notified. The bell character (\x07) is
-	// silently ignored by terminals that don't support it.
-	if !m.runStartTime.IsZero() && time.Since(m.runStartTime) > 3*time.Second {
-		fmt.Print("\x07")
+	// Fire configurable notification (bell and/or desktop) based on user
+	// preferences. Replaces the previously hardcoded bell-only approach.
+	notifCfg := config.NotificationConfig{}
+	if m.config != nil {
+		notifCfg = m.config.Notifications
 	}
+	var runDur time.Duration
+	if !m.runStartTime.IsZero() {
+		runDur = time.Since(m.runStartTime)
+	}
+	summary := m.notificationSummary(runDur)
+	notify.OnCompletion(notifCfg, runDur, wasFailed, summary)
 	if !wasCanceled && !wasFailed {
 		m.persistFullSessionMessages()
 	}
@@ -158,6 +175,16 @@ func (m Model) handleErrMsg(msg errMsg) (Model, tea.Cmd) {
 	m.pushTunnelCurrentActivity()
 	m.chatWriteSystem(nextSystemID(), formatUserFacingError(m.currentLanguage(), msg.err))
 	m.chatListScrollToBottom()
+	// Fire notification for error completion.
+	notifCfg := config.NotificationConfig{}
+	if m.config != nil {
+		notifCfg = m.config.Notifications
+	}
+	var runDur time.Duration
+	if !m.runStartTime.IsZero() {
+		runDur = time.Since(m.runStartTime)
+	}
+	notify.OnCompletion(notifCfg, runDur, true, "Agent run failed with an error.")
 	m.persistFullSessionMessages()
 	return m, nil
 
@@ -207,6 +234,16 @@ func (m Model) handleAgentErrMsg(msg agentErrMsg) (Model, tea.Cmd) {
 	m.chatWriteSystem(nextSystemID(), formatUserFacingError(m.currentLanguage(), msg.Err))
 	m.emitIMText(formatUserFacingError(m.currentLanguage(), msg.Err))
 	m.chatListScrollToBottom()
+	// Fire notification for agent error completion.
+	notifCfg := config.NotificationConfig{}
+	if m.config != nil {
+		notifCfg = m.config.Notifications
+	}
+	var runDur time.Duration
+	if !m.runStartTime.IsZero() {
+		runDur = time.Since(m.runStartTime)
+	}
+	notify.OnCompletion(notifCfg, runDur, true, "Agent run failed with an error.")
 	m.persistFullSessionMessages()
 	return m, nil
 

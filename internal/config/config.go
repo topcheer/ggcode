@@ -277,6 +277,7 @@ type Config struct {
 	ProbeContext       bool                       `yaml:"probe_context,omitempty" json:"probe_context,omitempty"`
 	P2P                P2PConfig                  `yaml:"p2p,omitempty" json:"p2p,omitempty"`
 	OutputStyle        string                     `yaml:"output_style,omitempty" json:"output_style,omitempty"`
+	Notifications      NotificationConfig         `yaml:"notifications,omitempty" json:"notifications,omitempty"`
 	FilePath           string                     `yaml:"-" json:"-"`
 	ProtectedPaths     []string                   `yaml:"protected_paths,omitempty" json:"protected_paths,omitempty"`
 	FirstRun           bool                       `yaml:"-" json:"-"`
@@ -409,6 +410,45 @@ type A2AConfig struct {
 // to a direct P2P DataChannel, reducing relay bandwidth by ~70%.
 type P2PConfig struct {
 	Disabled bool `yaml:"disabled,omitempty" json:"disabled,omitempty"` // opt-out, default enabled
+}
+
+// NotificationConfig controls how the user is notified when an agent run
+// completes (success or failure). Mode "all" fires on every completion,
+// "long" (default) only for runs exceeding MinDuration, "errors" only on
+// failures, and "off" disables all notifications.
+type NotificationConfig struct {
+	Mode        string `yaml:"mode,omitempty" json:"mode,omitempty"`                         // all|long|errors|off (default: long)
+	Bell        bool   `yaml:"bell,omitempty" json:"bell,omitempty"`                         // terminal bell (\x07)
+	Desktop     bool   `yaml:"desktop,omitempty" json:"desktop,omitempty"`                   // OS desktop notification
+	MinDuration int    `yaml:"min_duration_sec,omitempty" json:"min_duration_sec,omitempty"` // minimum run seconds before "long" fires (default: 3)
+}
+
+// EffectiveMode returns the notification mode, defaulting to "long".
+func (n NotificationConfig) EffectiveMode() string {
+	switch n.Mode {
+	case "all", "long", "errors", "off":
+		return n.Mode
+	default:
+		return "long"
+	}
+}
+
+// EffectiveMinDuration returns the minimum duration in seconds, defaulting to 3.
+func (n NotificationConfig) EffectiveMinDuration() int {
+	if n.MinDuration > 0 {
+		return n.MinDuration
+	}
+	return 3
+}
+
+// ShouldBell reports whether terminal bell is enabled. Defaults to true.
+func (n NotificationConfig) ShouldBell() bool {
+	// Explicit opt-in for bell — but default is true for backward compat.
+	// If neither Bell nor Desktop is set, bell defaults to on.
+	if n.Bell || n.Desktop {
+		return n.Bell
+	}
+	return true // backward-compatible default
 }
 
 // HasAuth returns true if at least one authentication mechanism is configured.
