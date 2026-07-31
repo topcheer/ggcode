@@ -174,17 +174,17 @@ func (s *SubAgent) appendEvent(ev AgentEvent) {
 	now := time.Now()
 	ev.Time = now
 
-	// Text event coalescing: if the last event is also text and arrived
-	// within textMergeInterval, merge into it. Flush if accumulated text
-	// exceeds textMergeMaxChars to preserve streaming feel.
-	if ev.Type == AgentEventText && len(s.events) > 0 {
+	// Text and reasoning event coalescing: if the last event has the same
+	// type (text or reasoning) and arrived within textMergeInterval, merge
+	// into it. This prevents hundreds of tiny streaming chunks from filling
+	// the event buffer. Flush if accumulated text exceeds textMergeMaxChars.
+	isCoalescable := ev.Type == AgentEventText || ev.Type == AgentEventReasoning
+	if isCoalescable && len(s.events) > 0 {
 		last := &s.events[len(s.events)-1]
-		if last.Type == AgentEventText && now.Sub(last.Time) < textMergeInterval {
+		if last.Type == ev.Type && now.Sub(last.Time) < textMergeInterval {
 			last.Text += ev.Text
 			last.Time = now
 			if len(last.Text) > textMergeMaxChars {
-				// Mark as flushed by setting Time to zero so the next chunk
-				// starts a new event even if it arrives quickly.
 				last.Time = time.Time{}
 			}
 			return

@@ -258,21 +258,23 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 			}
 			cfg.Manager.Notify(cfg.SubAgentID)
 		case provider.StreamEventReasoning:
-			text := strings.TrimSpace(event.Text)
-			switch text {
-			case "":
-			case "__redacted_thinking__":
+			// Do NOT TrimSpace the text — reasoning chunks often have
+			// leading/trailing spaces that are the only separator between
+			// words. Trimming them causes "every10sevenwhentheappisidle".
+			text := event.Text
+			if strings.TrimSpace(text) == "" {
+				break
+			}
+			if text == "__redacted_thinking__" {
 				text = subagentRedactedReasoningPlaceholder
 			}
-			if text != "" {
-				if sa, ok := cfg.Manager.Get(cfg.SubAgentID); ok {
-					sa.appendEvent(AgentEvent{
-						Type: AgentEventReasoning,
-						Text: text,
-					})
-				}
-				cfg.Manager.NotifyReasoning(cfg.SubAgentID, text)
+			if sa, ok := cfg.Manager.Get(cfg.SubAgentID); ok {
+				sa.appendEvent(AgentEvent{
+					Type: AgentEventReasoning,
+					Text: text,
+				})
 			}
+			cfg.Manager.NotifyReasoning(cfg.SubAgentID, text)
 		}
 	})
 	// Flush any remaining text at the end of the stream
