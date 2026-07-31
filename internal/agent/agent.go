@@ -83,6 +83,8 @@ func isAgentRetryableLLMError(err error) bool {
 		"rate_limit",               // snake_case variant from API error codes
 		"too many requests",        // standard HTTP 429 message
 		"overloaded",               // Anthropic overload response
+		"resource_exhausted",       // Gemini 429 rate limit error type
+		"engine_overloaded",        // Kimi engine_overloaded_error
 		"service unavailable",      // 503 temporary server overload
 		"bad gateway",              // 502 transient proxy error
 	} {

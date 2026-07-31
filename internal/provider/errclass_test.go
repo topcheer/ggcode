@@ -19,6 +19,8 @@ func TestClassifyLLMError(t *testing.T) {
 		{"quota coding plan", errors.New("rate limit: coding plan usage limit reached"), FailureQuota},
 		{"quota chinese", errors.New("错误：余额不足，请充值"), FailureQuota},
 		{"quota fair usage", errors.New("access_terminated due to fair usage policy"), FailureQuota},
+		{"quota kimi exceeded_current_quota", errors.New("429: type: exceeded_current_quota_error"), FailureQuota},
+		{"quota openai insufficient_quota", errors.New("insufficient_quota: You exceeded your quota"), FailureQuota},
 		// Auth.
 		{"auth 401", errors.New("401 unauthorized"), FailureAuth},
 		{"auth invalid key", errors.New("invalid api key provided"), FailureAuth},
@@ -26,6 +28,9 @@ func TestClassifyLLMError(t *testing.T) {
 		{"rate limit plain", errors.New("rate limit exceeded, retry after 30s"), FailureRateLimit},
 		{"rate limit 429", errors.New("HTTP 429 too many requests"), FailureRateLimit},
 		{"overloaded", errors.New("anthropic API overloaded"), FailureRateLimit},
+		{"anthropic 529 overloaded", errors.New("Error 529: overloaded_error"), FailureRateLimit},
+		{"gemini resource_exhausted", errors.New("Error 429: RESOURCE_EXHAUSTED"), FailureRateLimit},
+		{"kimi engine_overloaded", errors.New("engine_overloaded_error: server busy"), FailureRateLimit},
 		// Network.
 		{"network eof", errors.New("unexpected EOF"), FailureNetwork},
 		{"network dns", errors.New("dial tcp: no such host"), FailureNetwork},

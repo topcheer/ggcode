@@ -57,6 +57,15 @@ func (c FailureClass) String() string {
 // quotaKeywords are lowercased substrings indicating permanent quota/billing
 // exhaustion. Single source of truth — previously duplicated between
 // provider.isQuotaExhaustedError and agent.isAgentQuotaExhausted.
+//
+// Vendor-specific error types covered:
+//   - Kimi/Moonshot: exceeded_current_quota_error, access_terminated
+//   - OpenAI: insufficient_quota, quota_exceeded
+//   - ZAI/GLM: coding plan, 使用上限, 套餐已到期
+//   - Volcengine Ark: QuotaExceeded
+//   - Aliyun: allocated quota
+//   - MiniMax: usage limit
+//   - Xiaomi MiMo: 额度耗尽
 var quotaKeywords = []string{
 	"coding plan",
 	"usage limit",
@@ -68,6 +77,9 @@ var quotaKeywords = []string{
 	"欠费",
 	"quota exceeded",
 	"quotaexceeded",
+	"quota_exceeded",
+	"insufficient_quota",
+	"exceeded_current_quota", // Kimi: exceeded_current_quota_error
 	"exceeded your current quota",
 	"额度已用完",
 	"额度耗尽",
@@ -97,12 +109,23 @@ var authKeywords = []string{
 
 // rateLimitKeywords are lowercased substrings indicating transient rate
 // limiting or server overload (recoverable within minutes).
+//
+// Vendor-specific error types covered:
+//   - Anthropic: overloaded_error (HTTP 529), rate_limit_error (HTTP 429)
+//   - Kimi/Moonshot: rate_limit_reached_error, engine_overloaded_error
+//   - Google Gemini: RESOURCE_EXHAUSTED (HTTP 429), 503 UNAVAILABLE
+//   - OpenAI: rate_limit_exceeded
 var rateLimitKeywords = []string{
 	"rate limit",
 	"rate_limit",
 	"too many requests",
 	"429",
 	"overloaded",
+	"529",                 // Anthropic overloaded (non-standard HTTP status)
+	"resource_exhausted",  // Gemini quota/rate limit error type
+	"engine_overloaded",   // Kimi engine_overloaded_error
+	"rate_limit_exceeded", // OpenAI error type
+	"rate_limit_reached",  // Kimi rate_limit_reached_error
 }
 
 // networkKeywords are lowercased substrings indicating transport-level

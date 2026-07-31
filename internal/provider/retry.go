@@ -156,7 +156,7 @@ func isRetryable(err error) bool {
 	// invalid tool_use/tool_result pairing, bad parameters).
 	for _, code := range []string{
 		"408", "409", "422", "429",
-		"500", "502", "503", "504", "520", "521", "522", "523", "524",
+		"500", "502", "503", "504", "520", "521", "522", "523", "524", "529",
 	} {
 		if strings.Contains(msg, code) {
 			return true
