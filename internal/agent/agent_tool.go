@@ -77,6 +77,17 @@ func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolC
 		debug.Log("agent", "slow tool: %s took %v", tc.Name, toolDur)
 	}
 
+	// Latency baseline outlier detection: warn the agent when a read/search
+	// tool call is dramatically slower than its established baseline, so it
+	// can self-optimize (narrow scope, use offset/limit, etc.).
+	if latencyHint := a.latencyTracker.RecordAndCheck(tc.Name, toolDur); latencyHint != "" {
+		if result.Content != "" {
+			result.Content = result.Content + "\n\n" + latencyHint
+		} else {
+			result.Content = latencyHint
+		}
+	}
+
 	// Fire tool metric (non-blocking — caller must handle asynchronously).
 	errMsg := ""
 	if result.IsError {

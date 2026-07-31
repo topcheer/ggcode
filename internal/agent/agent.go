@@ -147,6 +147,7 @@ type Agent struct {
 	unreadEdit                 *unreadEditState     // read-before-edit guard: warns when editing unread files
 	editFailRecovery           *editFailState       // consecutive edit failure recovery guidance
 	scopeDrift                 *scopeDriftState     // semantic scope creep detection (file-diversity tracking)
+	latencyTracker             *LatencyTracker      // per-tool latency baseline & slow-tool outlier detection
 	systemPromptInjector       func() string        // returns extra system prompt text to inject (e.g. lanchat peer warnings)
 	baseSystemPrompt           string               // the fully built static system prompt; used as reset base for dynamic injection
 	lastInjectedSystemPrompt   string               // cache of last injected prompt to skip redundant updates
@@ -204,6 +205,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		unreadEdit:       newUnreadEditState(),
 		editFailRecovery: newEditFailState(),
 		scopeDrift:       newScopeDriftState(),
+		latencyTracker:   NewLatencyTracker(),
 	}
 	a.syncContextManagerProviderLocked()
 	a.syncContextManagerUsageHandlerLocked()
