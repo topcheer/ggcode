@@ -357,7 +357,7 @@ func nextReasoningEffort(current string) string {
 
 func displayReasoningEffort(effort string) string {
 	if strings.TrimSpace(effort) == "" {
-		return "auto"
+		return "auto (adaptive)"
 	}
 	return strings.TrimSpace(effort)
 }

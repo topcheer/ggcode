@@ -12,14 +12,14 @@ import (
 // --- displayReasoningEffort ---
 
 func TestDisplayReasoningEffort_EmptyReturnsAuto(t *testing.T) {
-	if got := displayReasoningEffort(""); got != "auto" {
-		t.Fatalf("expected 'auto', got %q", got)
+	if got := displayReasoningEffort(""); got != "auto (adaptive)" {
+		t.Fatalf("expected 'auto (adaptive)', got %q", got)
 	}
 }
 
 func TestDisplayReasoningEffort_WhitespaceReturnsAuto(t *testing.T) {
-	if got := displayReasoningEffort("  "); got != "auto" {
-		t.Fatalf("expected 'auto' for whitespace, got %q", got)
+	if got := displayReasoningEffort("  "); got != "auto (adaptive)" {
+		t.Fatalf("expected 'auto (adaptive)' for whitespace, got %q", got)
 	}
 }
 

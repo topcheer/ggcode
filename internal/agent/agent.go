@@ -150,6 +150,7 @@ type Agent struct {
 	editFailRecovery           *editFailState       // consecutive edit failure recovery guidance
 	scopeDrift                 *scopeDriftState     // semantic scope creep detection (file-diversity tracking)
 	latencyTracker             *LatencyTracker      // per-tool latency baseline & slow-tool outlier detection
+	effortAdapter              *adaptiveEffortState // per-turn reasoning effort adaptation (Opus 5 effort toggle pattern)
 	systemPromptInjector       func() string        // returns extra system prompt text to inject (e.g. lanchat peer warnings)
 	baseSystemPrompt           string               // the fully built static system prompt; used as reset base for dynamic injection
 	lastInjectedSystemPrompt   string               // cache of last injected prompt to skip redundant updates
@@ -208,6 +209,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		editFailRecovery: newEditFailState(),
 		scopeDrift:       newScopeDriftState(),
 		latencyTracker:   NewLatencyTracker(),
+		effortAdapter:    newAdaptiveEffortState(),
 	}
 	a.syncContextManagerProviderLocked()
 	a.syncContextManagerUsageHandlerLocked()
@@ -465,12 +467,17 @@ func (a *Agent) Provider() provider.Provider {
 
 func (a *Agent) SetReasoningEffort(effort string) bool {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	p, ok := a.provider.(provider.ReasoningEffortProvider)
 	if !ok {
+		a.mu.Unlock()
 		return false
 	}
 	p.SetReasoningEffort(effort)
+	// Mark that the user has explicitly set effort — adaptive effort stays dormant.
+	if a.effortAdapter != nil {
+		a.effortAdapter.setUserOverride(effort != "")
+	}
+	a.mu.Unlock()
 	return true
 }
 
@@ -790,6 +797,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.errorClassifier.reset()
 	a.resetPostEditVerify()
 	a.resetRepetitionTracker()
+	if a.effortAdapter != nil {
+		a.effortAdapter.reset()
+	}
 
 	defer func() {
 		runStats.finalize(err)
@@ -1125,7 +1135,14 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 		}
 
+		// Adaptive effort: adjust reasoning budget per-turn based on recent
+		// tool complexity. Only activates when user hasn't explicitly set effort.
+		effortApplied, effortPrev := a.applyAdaptiveEffort()
+
 		resp, textBuf, toolCalls, truncated, err := a.streamChatResponse(ctx, a.ensureMessagesSendable(msgs), toolDefs, onEvent)
+		if effortApplied != "" {
+			a.restoreEffort(effortPrev)
+		}
 		if err != nil {
 			if errors.Is(err, errStreamInterruptedForReplan) {
 				reactiveCompactRetries = 0
@@ -1642,6 +1659,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Record tool errors for reflection/ratchet rule extraction.
 			if result.IsError {
 				runStats.recordToolError(tc.Name, result.Content)
+			}
+			// Record tool result for adaptive effort classification.
+			if a.effortAdapter != nil {
+				a.effortAdapter.recordToolResult(tc.Name, result.IsError)
 			}
 
 			// Error classifier: immediate type-specific guidance on the first
