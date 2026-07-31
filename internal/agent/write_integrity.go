@@ -117,6 +117,13 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 		warnings = append(warnings, growthWarn)
 	}
 
+	// 8. Placeholder / stub code — detects incomplete implementations that
+	//    agents commonly leave behind (panic("not implemented"), vague TODOs).
+	//    Only flags NEW placeholders introduced by this edit.
+	if placeholderWarnings := checkPlaceholderCode(filePath, oldContent, newContent); len(placeholderWarnings) > 0 {
+		warnings = append(warnings, placeholderWarnings...)
+	}
+
 	if len(warnings) == 0 {
 		return ""
 	}
