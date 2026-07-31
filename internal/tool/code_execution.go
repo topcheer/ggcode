@@ -81,54 +81,22 @@ type CodeExecution struct {
 func (CodeExecution) Name() string { return "code_execution" }
 
 func (CodeExecution) Description() string {
-	return `Execute JavaScript code in a sandbox to batch-call read-only tools. This dramatically reduces context usage for multi-step analysis.
+	return `Execute JavaScript code in a sandbox to batch-call read-only tools, reducing context usage for multi-step analysis.
 
 Available tools (call via await tools.NAME(args)):
-  tools.read_file({path}) — Read file contents. Returns text.
-  tools.multi_file_read({files:[{path,offset,limit}]}) — Read multiple files.
-  tools.search_files({pattern, directory, include_pattern, max_results}) — Search file contents by regex.
-  tools.grep({pattern, path, output_mode, type, context}) — Ripgrep search. output_mode: "content"|"files_with_matches"|"count".
-  tools.glob({pattern, directory}) — Find files by glob pattern.
-  tools.list_directory({path}) — List directory entries.
-  tools.git_status() — Show working tree status.
-  tools.git_diff({cached, file}) — Show changes.
-  tools.git_log({count, path}) — Show commit history.
-  tools.git_show({revision, file, stat}) — Show commit details.
-  tools.git_blame({file}) — Show per-line authorship.
-  tools.git_branch_list({remote}) — List branches.
-  tools.git_remote({verbose}) — Show remotes.
-  tools.git_stash_list() — List stashes.
-  tools.web_search({query, max_results}) — Search the web.
-  tools.web_fetch({url}) — Fetch a URL.
-  tools.code_search({query, max_results}) — BM25 semantic code search.
-  tools.lsp_hover({path, line, character}) — Symbol hover/type info.
-  tools.lsp_definition({path, line, character}) — Go to definition.
-  tools.lsp_references({path, line, character}) — Find references.
-  tools.lsp_diagnostics({path}) — File diagnostics.
-  tools.lsp_workspace_symbols({query}) — Workspace symbol search.
-  tools.lsp_implementation({path, line, character}) — Find implementations.
-  tools.lsp_document_highlights({path, line, character}) — Document highlights.
-  tools.lsp_code_actions({path, start_line, start_character, end_line, end_character}) — Code actions.
-  tools.lsp_incoming_calls({item}) — Incoming calls (from lsp_prepare_call_hierarchy).
-  tools.lsp_outgoing_calls({item}) — Outgoing calls.
-  tools.lsp_prepare_call_hierarchy({path, line, character}) — Prepare call hierarchy.
-  tools.runtime() — Session info, model, mode.
-  tools.debug_log({lines, category}) — Read debug log ring buffer.
-  tools.list_agents() — List sub-agent runs.
-  tools.list_mcp_capabilities({server}) — List MCP server tools/resources.
-  tools.read_mcp_resource({server, uri}) — Read MCP resource.
-  tools.task_list() — List session tasks.
-  tools.task_get({taskId}) — Get task details.
+  read_file, multi_file_read, search_files, grep, glob, code_search, list_directory
+  git_status, git_diff, git_log, git_show, git_blame, git_branch_list, git_remote, git_stash_list
+  lsp_hover, lsp_definition, lsp_references, lsp_diagnostics, lsp_workspace_symbols, lsp_implementation, lsp_document_highlights, lsp_code_actions, lsp_incoming_calls, lsp_outgoing_calls, lsp_prepare_call_hierarchy
+  web_search, web_fetch, runtime, debug_log, list_agents, list_mcp_capabilities, read_mcp_resource, task_list, task_get
 
-console.log(...) output is returned to you. Tool results are strings — use JSON.parse() if you need structured data. async/await is supported.
+Tool results are strings — use JSON.parse() if needed. async/await supported.
+console.log(...) output is returned to you.
 
 Example:
-  const results = await tools.search_files({pattern: "TODO", directory: "/workspace"});
-  console.log("Found " + results.split("\\n").length + " matches");
+  const r = await tools.grep({pattern: "TODO", path: "/workspace"});
+  console.log(r.split("\\n").length + " matches");
 
-Rules:
-  - Only read-only tools are available. To edit files or run commands, use the regular tool_use format.
-  - Execution timeout: 30 seconds.`
+Rules: Only read-only tools. Execution timeout: 30 seconds.`
 }
 
 func (CodeExecution) Parameters() json.RawMessage {
