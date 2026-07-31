@@ -2,9 +2,8 @@ import 'dart:convert';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
-const _kConnectionsKey = 'ggcode_connections';
+import '../secure_storage.dart';
 
 /// A persisted relay connection with its own independent resume state.
 ///
@@ -174,10 +173,9 @@ class ConnectionStore {
 
   List<StoredConnection> _connections = [];
 
-  /// Load all connections from disk and deduplicate by sessionId.
+  /// Load all connections from secure storage and deduplicate by sessionId.
   Future<void> load() async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(_kConnectionsKey);
+    final raw = await SecureTokenStorage.instance.loadConnectionsJson();
     if (raw == null || raw.isEmpty) {
       _connections = [];
       return;
@@ -229,11 +227,10 @@ class ConnectionStore {
     }
   }
 
-  /// Save all connections to disk.
+  /// Save all connections to secure storage.
   Future<void> save() async {
-    final prefs = await SharedPreferences.getInstance();
     final raw = jsonEncode(_connections.map((c) => c.toJson()).toList());
-    await prefs.setString(_kConnectionsKey, raw);
+    await SecureTokenStorage.instance.saveConnectionsJson(raw);
   }
 
   /// All stored connections (including failed ones).

@@ -325,6 +325,9 @@ class ConnectionService {
   P2PUpgradeManager? _p2pManager;
   bool _p2pActive = false;
 
+  /// Called when P2P DataChannel connects/disconnects.
+  void Function(bool active)? onP2PStateChanged;
+
   ConnectionService({required ShareConnectionDescriptor descriptor})
       : _descriptor = descriptor {
     // v3: crypto key is established via key exchange, not set at construction.
@@ -1070,10 +1073,12 @@ class ConnectionService {
       onP2PMessage: _handleP2PData,
       onP2PConnected: () {
         _p2pActive = true;
+        onP2PStateChanged?.call(true);
         debugPrint('[p2p] DataChannel connected — switching to P2P transport');
       },
       onP2PDisconnected: () {
         _p2pActive = false;
+        onP2PStateChanged?.call(false);
         debugPrint('[p2p] DataChannel disconnected — reverting to relay');
       },
     );

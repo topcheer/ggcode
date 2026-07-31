@@ -315,6 +315,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
           }),
           _ConnectionStatusIcon(
             status: connState.status,
+            isP2P: connState.isP2P,
             onDisconnectTap: () {
               final isDisconnected =
                   connState.status == ConnectionStatus.disconnected;
@@ -1497,11 +1498,13 @@ class _SyncingOverlay extends StatelessWidget {
 /// - disconnected: red broken link icon (tappable to disconnect)
 class _ConnectionStatusIcon extends StatelessWidget {
   final ConnectionStatus status;
+  final bool isP2P;
   final VoidCallback onDisconnectTap;
 
   const _ConnectionStatusIcon({
     required this.status,
     required this.onDisconnectTap,
+    this.isP2P = false,
   });
 
   @override
@@ -1510,7 +1513,14 @@ class _ConnectionStatusIcon extends StatelessWidget {
       case ConnectionStatus.connected:
         return Padding(
           padding: EdgeInsets.symmetric(horizontal: 12),
-          child: Icon(Icons.cloud_done, size: 18, color: AppColors.success),
+          child: Tooltip(
+            message: isP2P ? 'P2P' : 'Relay',
+            child: Icon(
+              isP2P ? Icons.bolt : Icons.cloud_done,
+              size: 18,
+              color: isP2P ? AppColors.warning : AppColors.success,
+            ),
+          ),
         );
       case ConnectionStatus.connecting:
         return Padding(

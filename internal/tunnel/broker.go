@@ -81,12 +81,14 @@ type Broker struct {
 	activeReasoning    map[string]string // msgID -> agentID (empty for main agent)
 	activeReasoningBuf map[string]string // msgID -> accumulated reasoning text
 
-	// Text batching
+	// Text + reasoning batching
 	textMu     sync.Mutex
 	textBuf    map[string]*textEntry // msgID → unflushed text entry
 	activeText map[string]*textEntry // msgID → full in-flight text entry
 	textTick   *time.Ticker
 	textDone   chan struct{} // stop text flusher
+
+	reasoningBuf map[string]*reasoningEntry // msgID → unflushed reasoning entry
 
 	projectionMu      sync.Mutex
 	projectionCond    *sync.Cond
@@ -150,6 +152,7 @@ func NewBroker(sess *Session) *Broker {
 		activeText:         make(map[string]*textEntry),
 		textTick:           time.NewTicker(300 * time.Millisecond),
 		textDone:           make(chan struct{}),
+		reasoningBuf:       make(map[string]*reasoningEntry),
 		sendWaiters:        make(map[string]chan struct{}),
 		toolArgs:           make(map[string]string),
 		subagentToolMeta:   make(map[string]subagentToolMeta),
@@ -411,6 +414,7 @@ func (b *Broker) textFlushLoop() {
 		case <-b.textTick.C:
 			b.waitProjectionSync()
 			b.flushAllText()
+			b.flushAllReasoning()
 		case <-b.textDone:
 			return
 		}
@@ -476,6 +480,80 @@ func (b *Broker) flushText(msgID string) {
 		b.enqueueWithStream(EventSubagentText, msgID, SubagentTextData{AgentID: entry.agentID, ID: msgID, Chunk: entry.text})
 	} else {
 		b.enqueueWithStream(EventText, msgID, TextData{ID: msgID, Chunk: entry.text, Kind: entry.kind})
+	}
+}
+
+// ─── Reasoning batching (mirrors text batching) ───
+
+// appendReasoningLocked adds a reasoning chunk to the pending flush buffer
+// and the active snapshot. Does NOT enqueue — the ticker flushes it.
+func (b *Broker) appendReasoningLocked(msgID, agentID, chunk string) {
+	b.reasoningMu.Lock()
+	defer b.reasoningMu.Unlock()
+	if b.activeReasoning == nil {
+		b.activeReasoning = make(map[string]string)
+	}
+	if b.activeReasoningBuf == nil {
+		b.activeReasoningBuf = make(map[string]string)
+	}
+	if b.reasoningBuf == nil {
+		b.reasoningBuf = make(map[string]*reasoningEntry)
+	}
+	b.activeReasoning[msgID] = agentID
+	b.activeReasoningBuf[msgID] += chunk
+	if b.reasoningBuf[msgID] == nil {
+		b.reasoningBuf[msgID] = &reasoningEntry{agentID: agentID}
+	}
+	b.reasoningBuf[msgID].text += chunk
+}
+
+// flushAllReasoning sends all accumulated reasoning chunks as a single
+// message per msgID.
+func (b *Broker) flushAllReasoning() {
+	b.reasoningMu.Lock()
+	if len(b.reasoningBuf) == 0 {
+		b.reasoningMu.Unlock()
+		return
+	}
+	bufs := make(map[string]*reasoningEntry)
+	for k, v := range b.reasoningBuf {
+		if v.text != "" {
+			bufs[k] = v
+		}
+	}
+	for k := range b.reasoningBuf {
+		delete(b.reasoningBuf, k)
+	}
+	b.reasoningMu.Unlock()
+
+	for msgID, entry := range bufs {
+		if entry.agentID != "" {
+			b.enqueueWithStream(EventSubagentReasoning, msgID, SubagentReasoningData{
+				AgentID: entry.agentID, ID: msgID, Chunk: entry.text,
+			})
+		} else {
+			b.enqueueWithStream(EventReasoning, msgID, TextData{ID: msgID, Chunk: entry.text})
+		}
+	}
+}
+
+// flushReasoning flushes the buffer for a specific msgID immediately.
+func (b *Broker) flushReasoning(msgID string) {
+	b.reasoningMu.Lock()
+	entry := b.reasoningBuf[msgID]
+	if entry == nil || entry.text == "" {
+		b.reasoningMu.Unlock()
+		return
+	}
+	delete(b.reasoningBuf, msgID)
+	b.reasoningMu.Unlock()
+
+	if entry.agentID != "" {
+		b.enqueueWithStream(EventSubagentReasoning, msgID, SubagentReasoningData{
+			AgentID: entry.agentID, ID: msgID, Chunk: entry.text,
+		})
+	} else {
+		b.enqueueWithStream(EventReasoning, msgID, TextData{ID: msgID, Chunk: entry.text})
 	}
 }
 
@@ -1324,17 +1402,7 @@ func (b *Broker) PushReasoning(id, chunk string) {
 	if strings.TrimSpace(id) == "" || chunk == "" {
 		return
 	}
-	b.reasoningMu.Lock()
-	if b.activeReasoning == nil {
-		b.activeReasoning = make(map[string]string)
-	}
-	if b.activeReasoningBuf == nil {
-		b.activeReasoningBuf = make(map[string]string)
-	}
-	b.activeReasoning[id] = ""
-	b.activeReasoningBuf[id] += chunk
-	b.reasoningMu.Unlock()
-	b.enqueueWithStream(EventReasoning, id, TextData{ID: id, Chunk: chunk})
+	b.appendReasoningLocked(id, "", chunk)
 }
 
 func (b *Broker) PushReasoningDone(id string) {
@@ -1343,6 +1411,8 @@ func (b *Broker) PushReasoningDone(id string) {
 	if id == "" {
 		return
 	}
+	// Flush remaining reasoning immediately, then send done event.
+	b.flushReasoning(id)
 	b.reasoningMu.Lock()
 	agentID, ok := b.activeReasoning[id]
 	if ok {
@@ -1512,21 +1582,7 @@ func (b *Broker) PushSubagentReasoning(agentID, msgID, chunk string, done bool) 
 		return
 	}
 	if chunk != "" {
-		b.reasoningMu.Lock()
-		if b.activeReasoning == nil {
-			b.activeReasoning = make(map[string]string)
-		}
-		if b.activeReasoningBuf == nil {
-			b.activeReasoningBuf = make(map[string]string)
-		}
-		b.activeReasoning[msgID] = agentID
-		b.activeReasoningBuf[msgID] += chunk
-		b.reasoningMu.Unlock()
-		b.enqueueWithStream(EventSubagentReasoning, msgID, SubagentReasoningData{
-			AgentID: agentID,
-			ID:      msgID,
-			Chunk:   chunk,
-		})
+		b.appendReasoningLocked(msgID, agentID, chunk)
 	}
 	if done {
 		b.PushReasoningDone(msgID)

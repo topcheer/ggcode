@@ -4,9 +4,8 @@ import 'dart:developer';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-
 import '../connection_service.dart';
+import '../secure_storage.dart';
 export '../connection_service.dart' show ConnectionStatus, normalizeTunnelUrl;
 import 'session_context.dart';
 import '../l10n/app_localizations.dart';
@@ -83,6 +82,7 @@ class TunnelConnectionState {
   final String? error;
   final RelaySyncState? relaySync;
   final bool sessionReady;
+  final bool isP2P;
 
   TunnelConnectionState({
     required this.status,
@@ -90,6 +90,7 @@ class TunnelConnectionState {
     this.error,
     this.relaySync,
     this.sessionReady = false,
+    this.isP2P = false,
   });
 
   TunnelConnectionState copyWith(
@@ -97,7 +98,8 @@ class TunnelConnectionState {
           Object? url = _noTunnelStateChange,
           Object? error = _noTunnelStateChange,
           Object? relaySync = _noTunnelStateChange,
-          bool? sessionReady}) =>
+          bool? sessionReady,
+          bool? isP2P}) =>
       TunnelConnectionState(
         status: status ?? this.status,
         url: identical(url, _noTunnelStateChange) ? this.url : url as String?,
@@ -108,6 +110,7 @@ class TunnelConnectionState {
             ? this.relaySync
             : relaySync as RelaySyncState?,
         sessionReady: sessionReady ?? this.sessionReady,
+        isP2P: isP2P ?? this.isP2P,
       );
 }
 
@@ -369,6 +372,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       return;
     }
     service = localService;
+    localService.onP2PStateChanged = (active) {
+      if (!ref.mounted) return;
+      state = state.copyWith(isP2P: active);
+    };
     _liveUrl = url;
     debugPrint(
       '[connection] provider connect url=${descriptor.publicUrl} clearState=$clearState '
@@ -493,8 +500,6 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     _clearRelaySyncState();
     _recentEventIds.clear();
     _recentEventSet.clear();
-    final prefs = await SharedPreferences.getInstance();
-    await _clearPersistedResumeState(prefs);
     await ref.read(workspaceCacheProvider.notifier).clearSelection();
     // User is leaving the session — mark connection as dead
     if (_currentConnection != null) {
@@ -1299,18 +1304,20 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
   }
 
   Future<void> _saveUrl(String url) async {
-    final prefs = await SharedPreferences.getInstance();
-    final urls = prefs.getStringList('ggcode_history') ?? [];
-    if (!urls.contains(url)) {
-      urls.insert(0, url);
-      if (urls.length > 10) urls.removeLast();
-      prefs.setStringList('ggcode_history', urls);
+    try {
+      final urls = await SecureTokenStorage.instance.loadHistory();
+      if (!urls.contains(url)) {
+        urls.insert(0, url);
+        if (urls.length > 10) urls.removeLast();
+        await SecureTokenStorage.instance.saveHistory(urls);
+      }
+    } catch (e) {
+      debugPrint('[connection] _saveUrl failed: $e');
     }
   }
 
   static Future<List<String>> loadHistory() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getStringList('ggcode_history') ?? [];
+    return SecureTokenStorage.instance.loadHistory();
   }
 
   Future<void> _handlePermanentRoomFailure(
@@ -1349,8 +1356,6 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     if (failedConnId != null) {
       await _connectionStore.markAndRemove(failedConnId, error);
     }
-    final prefs = await SharedPreferences.getInstance();
-    await _clearPersistedResumeState(prefs);
     await ref.read(workspaceCacheProvider.notifier).clearReconnectTarget(
           sessionId: _sessionId,
           workspaceKey: ref.read(workspaceCacheProvider).liveWorkspaceKey ??
@@ -2251,10 +2256,6 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       await _connectionStore.update(
           _currentConnection!.id, _currentConnection!);
     }
-  }
-
-  Future<void> _clearPersistedResumeState([SharedPreferences? prefs]) async {
-    // Resume state is now per-connection in ConnectionStore.
   }
 
   /// Construct a SessionInfoData from the workspace metadata embedded in
