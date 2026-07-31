@@ -300,7 +300,7 @@ func (m *CodeIndexManager) doBuild(ctx context.Context) {
 			skipped++
 			continue
 		}
-		terms := tokenizeForSearch(string(data))
+		terms := tokenizeForIndex(string(data)) // index without expansion
 		if len(terms) == 0 {
 			continue
 		}

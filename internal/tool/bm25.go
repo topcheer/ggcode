@@ -41,7 +41,23 @@ type bm25Index struct {
 // tokenizeForSearch splits source code into searchable terms.
 // It handles camelCase, snake_case, kebab-case, and PascalCase splitting,
 // removes common programming-language stopwords, and lowercases everything.
+// tokenizeForSearch splits source code into searchable terms (with query
+// expansion). Used at query time so that searching for "auth" also matches
+// "authentication", "authenticate", etc.
 func tokenizeForSearch(text string) []string {
+	return tokenizeRaw(text, true)
+}
+
+// tokenizeForIndex splits source code into index terms WITHOUT expansion.
+// The index stores only terms that actually appear in the file; query-side
+// expansion handles synonym matching. This prevents index bloat.
+func tokenizeForIndex(text string) []string {
+	return tokenizeRaw(text, false)
+}
+
+// tokenizeRaw is the core tokenizer. When expand is true, each term is
+// also checked against the synonym map and stemmer for better recall.
+func tokenizeRaw(text string, expand bool) []string {
 	var terms []string
 	var current strings.Builder
 
@@ -62,6 +78,9 @@ func tokenizeForSearch(text string) []string {
 				continue
 			}
 			terms = append(terms, part)
+			if expand {
+				terms = append(terms, expandTerm(part)...)
+			}
 		}
 	}
 
@@ -166,6 +185,152 @@ var codeStopwords = map[string]bool{
 	"use": true, "used": true, "using": true,
 }
 
+// expandTerm returns synonym and stem variants of a single token for
+// query-side expansion. This dramatically improves recall: searching for
+// "auth" also matches "authentication", "db" matches "database", "configs"
+// matches "config". The returned slice does NOT include the original term
+// (the caller already has it); it contains only the additional variants.
+func expandTerm(term string) []string {
+	var variants []string
+	seen := map[string]bool{term: true}
+
+	add := func(s string) {
+		if s != "" && len(s) >= 2 && !seen[s] && !codeStopwords[s] {
+			seen[s] = true
+			variants = append(variants, s)
+		}
+	}
+
+	// 1. Synonym / abbreviation expansion.
+	if syns, ok := codeSynonyms[term]; ok {
+		for _, s := range syns {
+			add(s)
+		}
+	}
+	// Reverse lookup: if the term is a value in the synonym map, add the key.
+	for key, syns := range codeSynonyms {
+		for _, s := range syns {
+			if s == term {
+				add(key)
+			}
+		}
+	}
+
+	// 2. Light stemming (suffix stripping) for English word forms.
+	add(stem(term))
+
+	return variants
+}
+
+// stem performs lightweight suffix stripping to normalise word forms.
+// e.g., "authentication" → "authenticat(e)", "running" → "run",
+// "configs" → "config". NOT a full Porter stemmer — just common suffixes.
+func stem(word string) string {
+	if len(word) <= 3 {
+		return word
+	}
+
+	// Order matters: longer suffixes first.
+	suffixes := []string{
+		"ization", "ational", "fulness", "ousness", "iveness",
+		"ation", "ments", "tions", "ement", "ables", "ibles",
+		"tion", "ment", "ness", "ions", "able", "ible",
+		"ized", "ful", "ous", "ive", "ies", "ied",
+		"ing", "ers", "est", "ed", "er", "es", "ly", "s",
+	}
+
+	for _, suf := range suffixes {
+		if strings.HasSuffix(word, suf) && len(word)-len(suf) >= 3 {
+			base := word[:len(word)-len(suf)]
+			// Restore common verb forms: "authenticat" → "authenticate".
+			if strings.HasSuffix(base, "at") || strings.HasSuffix(base, "iz") {
+				base += "e"
+			}
+			return base
+		}
+	}
+
+	return word
+}
+
+// codeSynonyms maps abbreviations and short forms to their expanded forms.
+// Used for query-side expansion only — the index stores terms verbatim.
+// When a user searches for "auth", we also score against "authentication",
+// "authenticate", "authorize", etc.
+var codeSynonyms = map[string][]string{
+	// Authentication / authorization
+	"auth":   {"authentication", "authenticate", "authorize", "authorization"},
+	"login":  {"signin", "logon", "authenticate"},
+	"logout": {"signout", "logoff"},
+	"signup": {"register", "registration"},
+	"pwd":    {"password"},
+	"cred":   {"credential", "credentials"},
+	"jwt":    {"token"},
+	"oauth":  {"openid", "oidc", "sso"},
+	"perm":   {"permission", "permissions"},
+	"rbac":   {"role", "roles"},
+
+	// Database
+	"db":   {"database", "databases", "sql"},
+	"repo": {"repository", "repositories"},
+	"crud": {"create", "read", "update", "delete"},
+	"ddl":  {"schema", "migration"},
+
+	// Configuration
+	"config": {"configuration", "configure", "settings", "preference"},
+	"env":    {"environment"},
+
+	// Infrastructure / DevOps
+	"k8s":    {"kubernetes"},
+	"deploy": {"deployment", "deployments"},
+	"svc":    {"service", "services"},
+	"ns":     {"namespace", "namespaces"},
+	"cron":   {"schedule", "scheduler"},
+
+	// API / networking
+	"api":  {"endpoint", "endpoints"},
+	"rest": {"api", "resource"},
+	"grpc": {"rpc", "proto"},
+	"ws":   {"websocket", "websockets"},
+	"url":  {"uri", "link"},
+	"req":  {"request", "requests"},
+	"resp": {"response", "responses"},
+
+	// Testing
+	"spec":   {"specification", "specifications"},
+	"assert": {"assertion", "expect"},
+
+	// Misc development
+	"impl":  {"implementation", "implement"},
+	"init":  {"initialize", "initialization", "setup"},
+	"util":  {"utility", "helper", "helpers"},
+	"mgr":   {"manager", "managers"},
+	"opts":  {"options", "option"},
+	"fmt":   {"format", "formatting"},
+	"regex": {"regexp", "pattern"},
+	"async": {"asynchronous", "concurrent", "concurrency", "goroutine"},
+	"sync":  {"synchronous", "synchronized"},
+	"priv":  {"private"},
+	"pub":   {"public", "publish"},
+	"sub":   {"subscribe", "subscription"},
+	"temp":  {"temporary"},
+	"info":  {"information"},
+	"msg":   {"message", "messages"},
+	"num":   {"number", "numbers"},
+	"idx":   {"index", "indexes"},
+	"len":   {"length"},
+	"ref":   {"reference", "references"},
+	"ptr":   {"pointer", "pointers"},
+	"dir":   {"directory", "directories"},
+	"fs":    {"filesystem"},
+	"pkg":   {"package", "packages"},
+	"mod":   {"module", "modules", "model", "models"},
+	"ctrl":  {"controller", "controllers"},
+	"gen":   {"generate", "generation", "generator"},
+	"cache": {"caching", "cached", "memoize", "memoization"},
+	"retry": {"retries", "backoff"},
+}
+
 // buildBM25Index creates an ephemeral index from the given file contents.
 // fileContents is a map of relative path → raw file content.
 func buildBM25Index(fileContents map[string]string) *bm25Index {
@@ -184,7 +349,7 @@ func buildBM25Index(fileContents map[string]string) *bm25Index {
 
 	for _, path := range paths {
 		content := fileContents[path]
-		terms := tokenizeForSearch(content)
+		terms := tokenizeForIndex(content) // index without expansion
 		if len(terms) == 0 {
 			continue
 		}

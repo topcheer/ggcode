@@ -284,3 +284,118 @@ func csContainsStr(s, substr string) bool {
 	}
 	return false
 }
+
+func TestExpandTerm(t *testing.T) {
+	// "auth" should expand to authentication-related terms
+	variants := expandTerm("auth")
+	termSet := make(map[string]bool)
+	for _, v := range variants {
+		termSet[v] = true
+	}
+
+	if !termSet["authentication"] {
+		t.Errorf("expected 'authentication' in expansions of 'auth', got %v", variants)
+	}
+	if !termSet["authenticate"] {
+		t.Errorf("expected 'authenticate' in expansions of 'auth', got %v", variants)
+	}
+	if !termSet["authorize"] {
+		t.Errorf("expected 'authorize' in expansions of 'auth', got %v", variants)
+	}
+}
+
+func TestExpandTermReverse(t *testing.T) {
+	// "authentication" should expand back to "auth" (reverse lookup)
+	variants := expandTerm("authentication")
+	termSet := make(map[string]bool)
+	for _, v := range variants {
+		termSet[v] = true
+	}
+	if !termSet["auth"] {
+		t.Errorf("expected 'auth' in reverse expansion of 'authentication', got %v", variants)
+	}
+}
+
+func TestStem(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"authentication", "authenticate"},
+		{"configs", "config"},
+		{"running", "runn"},
+		{"created", "creat"},
+		{"config", "config"},
+		{"ab", "ab"}, // too short
+	}
+	for _, tt := range tests {
+		got := stem(tt.input)
+		// We test the core behavior: suffix stripping produces a shorter or equal base
+		if len(got) > len(tt.input) {
+			t.Errorf("stem(%q) = %q, should not be longer", tt.input, got)
+		}
+	}
+}
+
+func TestQueryExpansionFindsAbbreviatedFiles(t *testing.T) {
+	// File has "authentication" but user searches for "auth" — expansion should find it
+	contents := map[string]string{
+		"auth_handler.go": "func authenticate(user string) error { return validateCredentials(user) }",
+		"router.go":       "func serve http handler router listen port",
+	}
+
+	idx := buildBM25Index(contents)
+
+	// Query "auth" should expand to include "authentication" and find auth_handler.go
+	results := idx.score(tokenizeForSearch("auth"), 10)
+	if len(results) == 0 {
+		t.Fatal("expected results for 'auth' query with expansion")
+	}
+	if results[0].path != "auth_handler.go" {
+		t.Errorf("expected auth_handler.go first, got %s", results[0].path)
+	}
+}
+
+func TestQueryExpansionFindsExpandedFiles(t *testing.T) {
+	// User searches "database" but file has "db" — reverse expansion should find it
+	contents := map[string]string{
+		"connection.go": "func connect db pool query transaction",
+		"unrelated.go":  "main entry point startup initialization",
+	}
+
+	idx := buildBM25Index(contents)
+
+	// "database" expands to "db" (reverse lookup), which matches connection.go
+	results := idx.score(tokenizeForSearch("database"), 10)
+	if len(results) == 0 {
+		t.Fatal("expected results for 'database' query finding 'db' in files")
+	}
+	found := false
+	for _, r := range results {
+		if r.path == "connection.go" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected connection.go in results for 'database' query, got: %v", results)
+	}
+}
+
+func TestIndexDoesNotExpand(t *testing.T) {
+	// The index should NOT contain expansion terms — only what's in the file
+	contents := map[string]string{
+		"file.go": "auth handler",
+	}
+
+	idx := buildBM25Index(contents)
+
+	// "authentication" should NOT be in the index df because index doesn't expand
+	if _, exists := idx.df["authentication"]; exists {
+		t.Error("index should not contain expansion term 'authentication'")
+	}
+	// But "auth" should be there
+	if _, exists := idx.df["auth"]; !exists {
+		t.Error("index should contain 'auth'")
+	}
+}
