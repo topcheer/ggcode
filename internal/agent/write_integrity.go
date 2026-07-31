@@ -124,6 +124,14 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 		warnings = append(warnings, placeholderWarnings...)
 	}
 
+	// 9. Delimiter balance — validates (), {}, [] are balanced for non-Go source
+	//    files (JS, TS, Python, Rust, Java, Dart, JSON, YAML, CSS). Go files are
+	//    covered by go/parser above. This catches the common edit failure where
+	//    the agent adds or removes a bracket without its match.
+	if delimWarn := checkDelimiterBalance(filePath, newContent); delimWarn != "" {
+		warnings = append(warnings, delimWarn)
+	}
+
 	if len(warnings) == 0 {
 		return ""
 	}
