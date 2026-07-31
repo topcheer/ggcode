@@ -416,3 +416,155 @@ func TestOverseer_DriftResetsOnProductiveAction(t *testing.T) {
 		t.Fatalf("expected level 1 guidance after reset, got: %s", msg2)
 	}
 }
+
+// TestOverseer_ResearchMode_NoPrematureStall verifies that in research mode,
+// read-only operations don't trigger stall/spam/drift at normal thresholds.
+func TestOverseer_ResearchMode_NoPrematureStall(t *testing.T) {
+	o := newOverseerState()
+	o.researchMode = true
+
+	// In normal mode, 15 mixed read-only calls would trigger stall.
+	// In research mode, this should NOT fire.
+	readOnlyTools := []string{"read_file", "search_files", "grep", "list_directory", "glob",
+		"git_log", "git_status", "git_diff", "lsp_definition", "lsp_references",
+		"web_search", "web_fetch", "lsp_symbols", "git_blame", "git_show"}
+	for i := 0; i < stallThreshold; i++ {
+		o.recordToolCall(readOnlyTools[i%len(readOnlyTools)], false, "/path.go")
+	}
+	msg := o.analyze(stallThreshold)
+	if msg != "" {
+		t.Fatalf("research mode should not trigger stall at %d iterations, got: %s", stallThreshold, msg)
+	}
+}
+
+// TestOverseer_ResearchMode_NoPrematureSpam verifies that in research mode,
+// repeated read tool calls don't trigger spam at the normal threshold.
+func TestOverseer_ResearchMode_NoPrematureSpam(t *testing.T) {
+	o := newOverseerState()
+	o.researchMode = true
+
+	// In normal mode, >6 calls to search_files triggers spam.
+	// In research mode, we need >researchSpamThreshold (15).
+	for i := 0; i < spamThreshold+5; i++ { // 11 calls — above normal threshold
+		o.recordToolCall("search_files", false, "")
+	}
+	msg := o.analyze(spamThreshold + 5)
+	if msg != "" {
+		t.Fatalf("research mode should not trigger spam at %d calls (threshold=%d), got: %s",
+			spamThreshold+5, researchSpamThreshold, msg)
+	}
+}
+
+// TestOverseer_ResearchMode_NoPrematureDrift verifies that in research mode,
+// drift doesn't fire at the normal threshold.
+func TestOverseer_ResearchMode_NoPrematureDrift(t *testing.T) {
+	o := newOverseerState()
+	o.researchMode = true
+
+	tools := []string{"read_file", "grep", "search_files", "glob"}
+	// In normal mode, driftThreshold (20) iterations triggers drift.
+	// In research mode, this should NOT fire.
+	for i := 0; i < driftThreshold; i++ {
+		o.recordToolCall(tools[i%len(tools)], false, "/path.go")
+	}
+	msg := o.analyze(driftThreshold)
+	if msg != "" {
+		t.Fatalf("research mode should not trigger drift at %d iterations, got: %s", driftThreshold, msg)
+	}
+}
+
+// TestOverseer_ResearchMode_StallAtHighThreshold verifies that stall DOES
+// eventually fire in research mode at the higher threshold.
+func TestOverseer_ResearchMode_StallAtHighThreshold(t *testing.T) {
+	o := newOverseerState()
+	o.researchMode = true
+
+	readOnlyTools := []string{"read_file", "search_files", "grep", "list_directory", "glob"}
+	// Need researchStallThreshold (40) consecutive read-only calls.
+	for i := 0; i < researchStallThreshold; i++ {
+		o.recordToolCall(readOnlyTools[i%len(readOnlyTools)], false, "/path.go")
+	}
+	msg := o.analyze(researchStallThreshold)
+	if msg == "" {
+		t.Fatal("expected stall intervention at research threshold")
+	}
+	// Research-mode stall message should mention "research" or "findings", not "implementing your solution"
+	if strings.Contains(msg, "implementing your solution") {
+		t.Fatalf("research-mode stall should not push for implementation, got: %s", msg)
+	}
+}
+
+// TestOverseer_ResearchMode_ResearchToolsAreProductive verifies that in
+// research mode, web_search/code_search count as productive work and reset
+// the drift counter.
+func TestOverseer_ResearchMode_ResearchToolsAreProductive(t *testing.T) {
+	o := newOverseerState()
+	o.researchMode = true
+
+	// Read some files, then do a web_search (should reset productive counter).
+	for i := 0; i < 10; i++ {
+		o.recordToolCall("read_file", false, "/path.go")
+	}
+	o.recordToolCall("web_search", false, "")
+	if o.itersSinceProductive != 0 {
+		t.Fatalf("expected itersSinceProductive=0 after web_search in research mode, got %d", o.itersSinceProductive)
+	}
+
+	// code_search should also be productive in research mode.
+	for i := 0; i < 10; i++ {
+		o.recordToolCall("read_file", false, "/path.go")
+	}
+	o.recordToolCall("code_search", false, "")
+	if o.itersSinceProductive != 0 {
+		t.Fatalf("expected itersSinceProductive=0 after code_search in research mode, got %d", o.itersSinceProductive)
+	}
+}
+
+// TestOverseer_ResearchMode_ResearchToolsNotProductiveInNormalMode verifies
+// that web_search/code_search are NOT productive in normal (implementation) mode.
+func TestOverseer_ResearchMode_ResearchToolsNotProductiveInNormalMode(t *testing.T) {
+	o := newOverseerState()
+	o.researchMode = false // normal implementation mode
+
+	for i := 0; i < 10; i++ {
+		o.recordToolCall("read_file", false, "/path.go")
+	}
+	o.recordToolCall("web_search", false, "")
+	if o.itersSinceProductive == 0 {
+		t.Fatal("web_search should NOT reset productive counter in normal mode")
+	}
+}
+
+// TestDetectResearchMode verifies keyword detection for research tasks.
+func TestDetectResearchMode(t *testing.T) {
+	researchTasks := []string{
+		"Research the latest trends in AI agents",
+		"Analyze the codebase for security gaps",
+		"Audit the authentication flow",
+		"Investigate memory leak in goroutines",
+		"Explore competitor implementations",
+		"Evaluate different caching strategies",
+		"Assess the impact of the refactoring",
+		"Compare performance before and after optimization",
+		"Benchmark the new parser against the old one",
+		"Review the API for consistency",
+	}
+	for _, task := range researchTasks {
+		if !detectResearchMode(task) {
+			t.Errorf("detectResearchMode(%q) = false, want true", task)
+		}
+	}
+
+	implTasks := []string{
+		"Fix the bug in the login handler",
+		"Add a new endpoint for user profiles",
+		"Build the dashboard component",
+		"Deploy the service to production",
+		"Refactor the database connection pool",
+	}
+	for _, task := range implTasks {
+		if detectResearchMode(task) {
+			t.Errorf("detectResearchMode(%q) = true, want false", task)
+		}
+	}
+}

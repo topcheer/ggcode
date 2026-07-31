@@ -39,6 +39,11 @@ const (
 	fileStuckThreshold    = 4   // same file read >N times without edit = stuck
 	driftThreshold        = 20  // >N iterations without productive action = drift
 	errorEscalationFactor = 2.0 // recent error rate > 2× early rate
+
+	// Research-mode thresholds (significantly higher to allow deep exploration).
+	researchStallThreshold = 40 // read-only iterations before stall in research mode
+	researchSpamThreshold  = 15 // same read tool calls before spam in research mode
+	researchDriftThreshold = 50 // iterations without productive action in research mode
 )
 
 // overseerState tracks the agent's tool-call trajectory for analysis.
@@ -65,6 +70,12 @@ type overseerState struct {
 
 	// Last analysis iteration (to avoid re-analyzing too frequently).
 	lastAnalysisIter int
+
+	// researchMode is set when the task involves research, analysis, audit,
+	// or exploration. In research mode, thresholds for read-only stall, spam,
+	// and drift are significantly higher, and research tools (web_search,
+	// code_search, code_execution) count as productive work.
+	researchMode bool
 }
 
 type trajectoryEntry struct {
@@ -86,6 +97,17 @@ var productiveTools = map[string]bool{
 	"notebook_edit":       true,
 	"enter_worktree":      true,
 	"write_command_input": true,
+}
+
+// researchProductiveTools are tools that represent forward progress in
+// research mode. Reading and searching IS the work during research tasks.
+var researchProductiveTools = map[string]bool{
+	"web_search":            true,
+	"web_fetch":             true,
+	"code_search":           true,
+	"code_execution":        true,
+	"lsp_symbols":           true,
+	"lsp_workspace_symbols": true,
 }
 
 // readOnlyTools are tools that only consume information without changing state.
@@ -120,6 +142,49 @@ func newOverseerState() *overseerState {
 	}
 }
 
+// detectResearchMode checks if a task description indicates research work.
+// Returns true for tasks involving research, analysis, audit, exploration,
+// evaluation, or comparison — where extensive reading IS the primary work.
+func detectResearchMode(taskText string) bool {
+	p := strings.ToLower(taskText)
+	keywords := []string{
+		"research", "analyze", "analysis", "audit", "investigate",
+		"explore", "evaluate", "assess", "examine", "compare",
+		"benchmark", "survey", "study", "gap analysis", "trend",
+		"review", "inspect", "identify",
+	}
+	for _, kw := range keywords {
+		if strings.Contains(p, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+// effectiveStallThreshold returns the stall threshold based on mode.
+func (o *overseerState) effectiveStallThreshold() int {
+	if o.researchMode {
+		return researchStallThreshold
+	}
+	return stallThreshold
+}
+
+// effectiveSpamThreshold returns the spam threshold based on mode.
+func (o *overseerState) effectiveSpamThreshold() int {
+	if o.researchMode {
+		return researchSpamThreshold
+	}
+	return spamThreshold
+}
+
+// effectiveDriftThreshold returns the drift threshold based on mode.
+func (o *overseerState) effectiveDriftThreshold() int {
+	if o.researchMode {
+		return researchDriftThreshold
+	}
+	return driftThreshold
+}
+
 // recordToolCall adds a tool call to the trajectory.
 func (o *overseerState) recordToolCall(toolName string, isError bool, fileHint string) {
 	o.mu.Lock()
@@ -135,7 +200,14 @@ func (o *overseerState) recordToolCall(toolName string, isError bool, fileHint s
 	// Failed run_command calls (e.g. failed builds) are NOT productive —
 	// they don't represent forward progress. This prevents the drift detector
 	// from being suppressed when the agent is stuck running failing commands.
-	if productiveTools[toolName] && !(isError && toolName == "run_command") {
+	//
+	// In research mode, research-specific tools (web_search, code_search, etc.)
+	// also count as productive because reading and searching IS the work.
+	isProductive := productiveTools[toolName]
+	if o.researchMode && !isProductive {
+		isProductive = researchProductiveTools[toolName]
+	}
+	if isProductive && !(isError && toolName == "run_command") {
 		o.itersSinceProductive = 0
 		// Reset file-read tracking after an edit.
 		o.fileReadsSinceEdit = make(map[string]int)
@@ -208,14 +280,16 @@ func (o *overseerState) analyze(iteration int) string {
 // checkToolSpam detects when a single non-productive tool is called
 // excessively without progress. Only fires when there are NO productive
 // actions in the trajectory (to avoid false positives on healthy read-edit cycles).
+// In research mode, the threshold is significantly higher.
 func (o *overseerState) checkToolSpam(traj []trajectoryEntry) string {
 	if o.fired["spam"] {
 		return ""
 	}
+	threshold := o.effectiveSpamThreshold()
 	// Only check spam if there are no productive tools at all.
 	hasProductive := false
 	for _, e := range traj {
-		if productiveTools[e.toolName] {
+		if productiveTools[e.toolName] || (o.researchMode && researchProductiveTools[e.toolName]) {
 			hasProductive = true
 			break
 		}
@@ -228,9 +302,19 @@ func (o *overseerState) checkToolSpam(traj []trajectoryEntry) string {
 		counts[e.toolName]++
 	}
 	for tool, count := range counts {
-		if count > spamThreshold {
+		if count > threshold {
 			o.fired["spam"] = true
-			debug.Log("overseer", "tool spam detected: %s called %d times without productive action", tool, count)
+			debug.Log("overseer", "tool spam detected: %s called %d times without productive action (research=%t)", tool, count, o.researchMode)
+			if o.researchMode {
+				return fmt.Sprintf(
+					"Overseer: You have called %s %d times. While research involves extensive "+
+						"reading, you may be over-searching the same resource. Consider:\n"+
+						"1. Summarize your key findings so far\n"+
+						"2. Move to a different area of the codebase or a different research angle\n"+
+						"3. If you have enough information, start forming your analysis or plan",
+					tool, count,
+				)
+			}
 			return fmt.Sprintf(
 				"Overseer: You have called %s %d times without making progress. "+
 					"You may be stuck exploring without acting. Consider:\n"+
@@ -246,15 +330,17 @@ func (o *overseerState) checkToolSpam(traj []trajectoryEntry) string {
 
 // checkReadOnlyStall detects when the agent has been only reading/searching
 // for too many iterations without any writes or commands.
+// In research mode, the threshold is significantly higher.
 func (o *overseerState) checkReadOnlyStall(traj []trajectoryEntry) string {
 	if o.fired["stall"] {
 		return ""
 	}
-	// Look at the last stallThreshold entries.
-	if len(traj) < stallThreshold {
+	threshold := o.effectiveStallThreshold()
+	// Look at the last threshold entries.
+	if len(traj) < threshold {
 		return ""
 	}
-	recent := traj[len(traj)-stallThreshold:]
+	recent := traj[len(traj)-threshold:]
 	allReadOnly := true
 	for _, e := range recent {
 		if !readOnlyTools[e.toolName] {
@@ -264,12 +350,22 @@ func (o *overseerState) checkReadOnlyStall(traj []trajectoryEntry) string {
 	}
 	if allReadOnly {
 		o.fired["stall"] = true
-		debug.Log("overseer", "read-only stall: %d consecutive read-only iterations", stallThreshold)
+		debug.Log("overseer", "read-only stall: %d consecutive read-only iterations (research=%t)", threshold, o.researchMode)
+		if o.researchMode {
+			return fmt.Sprintf(
+				"Overseer: You have spent %d iterations reading and searching. You have done "+
+					"thorough research. Consider transitioning to the next phase:\n"+
+					"1. Summarize your key findings and insights\n"+
+					"2. Formulate concrete recommendations or a plan\n"+
+					"3. If implementation is needed, start with the highest-priority item",
+				threshold,
+			)
+		}
 		return fmt.Sprintf(
 			"Overseer: You have spent %d iterations only reading and searching without "+
 				"making any changes. You have enough context to act. Start implementing your "+
 				"solution — make edits, run builds, or execute commands to move the task forward.",
-			stallThreshold,
+			threshold,
 		)
 	}
 	return ""
@@ -277,8 +373,14 @@ func (o *overseerState) checkReadOnlyStall(traj []trajectoryEntry) string {
 
 // checkFileStuck detects when the same file is read repeatedly without
 // being edited, suggesting the agent can't figure out what to change.
+// In research mode, this check is skipped entirely — re-reading files
+// during analysis is normal.
 func (o *overseerState) checkFileStuck(traj []trajectoryEntry) string {
 	if o.fired["file_stuck"] {
+		return ""
+	}
+	// Skip in research mode: re-reading files during research/analysis is normal.
+	if o.researchMode {
 		return ""
 	}
 	for file, count := range o.fileReadsSinceEdit {
@@ -337,18 +439,23 @@ func (o *overseerState) checkErrorEscalation(traj []trajectoryEntry) string {
 // Uses progressive escalation (SICA-inspired): each level fires at most once,
 // with increasingly direct guidance for long autonomous runs.
 //
-// Level 1 (driftThreshold, 20 iters): "re-anchor your task"
-// Level 2 (2×driftThreshold, 40 iters): "summarize progress, try different approach"
-// Level 3 (3×driftThreshold, 60 iters): "escalate — skip subtask or ask_user if truly blocked"
+// Normal mode:
+//
+//	Level 1 (driftThreshold, 20 iters): "re-anchor your task"
+//	Level 2 (2×driftThreshold, 40 iters): "summarize progress, try different approach"
+//	Level 3 (3×driftThreshold, 60 iters): "escalate — skip subtask or ask_user if truly blocked"
+//
+// Research mode uses researchDriftThreshold (50 iters) as the base.
 func (o *overseerState) checkDrift(traj []trajectoryEntry) string {
+	base := o.effectiveDriftThreshold()
 	// Determine which level we should be at based on iterations without progress.
 	var targetLevel int
 	switch {
-	case o.itersSinceProductive >= driftThreshold*3:
+	case o.itersSinceProductive >= base*3:
 		targetLevel = 3
-	case o.itersSinceProductive >= driftThreshold*2:
+	case o.itersSinceProductive >= base*2:
 		targetLevel = 2
-	case o.itersSinceProductive >= driftThreshold:
+	case o.itersSinceProductive >= base:
 		targetLevel = 1
 	default:
 		return ""
@@ -364,6 +471,16 @@ func (o *overseerState) checkDrift(traj []trajectoryEntry) string {
 
 	switch targetLevel {
 	case 1:
+		if o.researchMode {
+			return fmt.Sprintf(
+				"Overseer: %d iterations since your last concrete output. While research "+
+					"involves extensive reading, consider producing an intermediate artifact:\n"+
+					"1. Summarize your key findings so far\n"+
+					"2. Identify the most important gap or insight\n"+
+					"3. Decide whether to continue researching or move to implementation",
+				o.itersSinceProductive,
+			)
+		}
 		return fmt.Sprintf(
 			"Overseer: %d iterations since you last made a productive change (edit, command, commit). "+
 				"You may be drifting from the original task. Re-anchor:\n"+
@@ -408,6 +525,22 @@ func (a *Agent) overseerCheck(toolName string, isError bool, fileHint string, it
 func (a *Agent) resetOverseer() {
 	if a.overseer == nil {
 		return
+	}
+	// Detect research mode from the autopilot goal or the first user message.
+	taskText := a.getAutopilotGoal()
+	msgs := a.Messages()
+	if taskText == "" && len(msgs) > 0 {
+		// Scan the first user message for research indicators.
+		for _, block := range msgs[0].Content {
+			if block.Type == "text" {
+				taskText = block.Text
+				break
+			}
+		}
+	}
+	a.overseer.researchMode = detectResearchMode(taskText)
+	if a.overseer.researchMode {
+		debug.Log("overseer", "research mode detected — thresholds raised")
 	}
 	a.overseer.reset()
 }
