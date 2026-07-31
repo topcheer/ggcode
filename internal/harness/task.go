@@ -185,23 +185,6 @@ func ListTasks(project Project) ([]*Task, error) {
 	return tasks, nil
 }
 
-func NextQueuedTask(project Project) (*Task, error) {
-	tasks, err := ListTasks(project)
-	if err != nil {
-		return nil, err
-	}
-	var next *Task
-	for _, task := range tasks {
-		if task.Status != TaskQueued {
-			continue
-		}
-		if next == nil || task.CreatedAt.Before(next.CreatedAt) {
-			next = task
-		}
-	}
-	return next, nil
-}
-
 func NextRunnableTask(project Project, cfg *Config, opts QueueRunOptions) (*Task, error) {
 	tasks, err := ListTasks(project)
 	if err != nil {

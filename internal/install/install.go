@@ -205,10 +205,6 @@ func ChecksumsURL(version string) string {
 	return checksumsURLForBase("", version)
 }
 
-func ReleaseBaseURL(version string) string {
-	return releaseBaseURLForBase("", version)
-}
-
 func ResolveReleaseVersion(ctx context.Context, client *http.Client, version string) (string, error) {
 	return resolveReleaseVersion(ctx, client, "", version)
 }

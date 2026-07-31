@@ -650,24 +650,6 @@ func GetInstallOptions(languageID, workspace string) []InstallOption {
 	return nil
 }
 
-// IsInstallable returns true if the language has at least one install option
-// whose command is a real install (not just an error message).
-func IsInstallable(languageID, workspace string) bool {
-	opts := GetInstallOptions(languageID, workspace)
-	for _, opt := range opts {
-		cmd := strings.TrimSpace(opt.Command)
-		if cmd == "" {
-			continue
-		}
-		// Skip pure error commands (unsupportedInstallCommand outputs).
-		if strings.HasPrefix(cmd, "echo ") || strings.HasPrefix(cmd, "Write-Error ") {
-			continue
-		}
-		return true
-	}
-	return false
-}
-
 func installOptions(spec serverSpec, workspace string) []InstallOption {
 	switch spec.id {
 	case "python":

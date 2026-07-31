@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/image"
-	"github.com/topcheer/ggcode/internal/provider"
 )
 
 // AllowedPathChecker is a function that checks if a path is allowed by sandbox policy.
@@ -220,15 +219,4 @@ func detectEncoding(data []byte) string {
 		}
 	}
 	return ""
-}
-
-// --- provider.ToolDefinition helper ---
-
-// ToolDef creates a provider.ToolDefinition from a Tool.
-func ToolDef(t Tool) provider.ToolDefinition {
-	return provider.ToolDefinition{
-		Name:        t.Name(),
-		Description: t.Description(),
-		Parameters:  t.Parameters(),
-	}
 }

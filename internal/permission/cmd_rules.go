@@ -184,21 +184,6 @@ func (rs *CommandRuleSet) Save(path string) error {
 	return os.WriteFile(path, b, 0644)
 }
 
-// LoadCommandRules reads a persisted rule set from a JSON file.
-// Returns an empty rule set if the file doesn't exist.
-func LoadCommandRules(path string) *CommandRuleSet {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return NewCommandRuleSet()
-	}
-	var data commandRuleFile
-	if err := json.Unmarshal(b, &data); err != nil {
-		debug.Log("permission", "failed to parse command rules %s: %v", path, err)
-		return NewCommandRuleSet()
-	}
-	return NewCommandRuleSetFromLists(data.Allow, data.Deny)
-}
-
 // compileCommandPattern converts a user-friendly pattern into a compiled regex.
 //
 // Pattern syntax:
