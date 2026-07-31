@@ -58,6 +58,20 @@ var todoCategorySeverity = map[string]string{
 	"NOTE":       "low",
 }
 
+// todoMarkerOrder defines the search order for markers within a line.
+// Longer markers come first to prevent false matches (e.g., "BUG" inside
+// "WORKAROUND: for bug 123"). This is critical because map iteration order
+// in Go is randomized.
+var todoMarkerOrder = []string{
+	"WORKAROUND",
+	"FIXME",
+	"TODO",
+	"HACK",
+	"NOTE",
+	"BUG",
+	"XXX",
+}
+
 // todoSeverityOrder defines priority ordering for sorting.
 var todoSeverityOrder = map[string]int{
 	"critical": 0,
@@ -278,7 +292,7 @@ func scanFileForTodos(path string, categoryFilter map[string]bool) ([]TodoMarker
 // returns a TodoMarker if so. Returns nil otherwise.
 func extractTodoMarker(file string, lineNum int, line string, categoryFilter map[string]bool) *TodoMarker {
 	upper := strings.ToUpper(line)
-	for cat := range todoCategorySeverity {
+	for _, cat := range todoMarkerOrder {
 		// Search for the category keyword as a word boundary
 		idx := findMarkerIndex(upper, cat)
 		if idx < 0 {
