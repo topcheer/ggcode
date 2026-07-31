@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"go/ast"
 	"go/parser"
 	"go/scanner"
 	"go/token"
@@ -77,10 +78,24 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 				"Verify this was intended — the old_text match may have consumed the entire file content.", len(oldContent)))
 	}
 
-	// 3. Go syntax check for .go files — catches syntax errors immediately.
+	// 3+5. Parse Go AST ONCE and share across syntax + import checks.
+	// This avoids calling parser.ParseFile 2-3 times per .go file write.
+	var goAST *ast.File
+	var goSyntaxErr error
 	if filepath.Ext(filePath) == ".go" && strings.TrimSpace(newContent) != "" {
-		if syntaxWarnings := checkGoSyntax(filePath, newContent); len(syntaxWarnings) > 0 {
+		fset := token.NewFileSet()
+		goAST, goSyntaxErr = parser.ParseFile(fset, filePath, newContent, 0)
+
+		// Syntax errors.
+		if syntaxWarnings := goSyntaxWarnings(filePath, goSyntaxErr); len(syntaxWarnings) > 0 {
 			warnings = append(warnings, syntaxWarnings...)
+		}
+
+		// Import analysis only if AST parsed cleanly.
+		if goSyntaxErr == nil {
+			if importWarnings := checkGoImportsAST(filePath, goAST); len(importWarnings) > 0 {
+				warnings = append(warnings, importWarnings...)
+			}
 		}
 	}
 
@@ -88,16 +103,6 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 	//    agents commonly introduce (console.log, debugger, dd(), etc.).
 	if debugWarnings := checkDebugStatements(filePath, oldContent, newContent); len(debugWarnings) > 0 {
 		warnings = append(warnings, debugWarnings...)
-	}
-
-	// 5. Go import analysis — detects unused imports and likely missing imports
-	//    using AST analysis. Catches the top two build-failure categories
-	//    ("imported and not used" and "undefined: pkg.X") before the agent
-	//    wastes a build cycle.
-	if filepath.Ext(filePath) == ".go" && strings.TrimSpace(newContent) != "" {
-		if importWarnings := checkGoImports(filePath, newContent); len(importWarnings) > 0 {
-			warnings = append(warnings, importWarnings...)
-		}
 	}
 
 	// 6. Merge conflict markers — always a build failure. Agents sometimes
@@ -134,13 +139,11 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 	return b.String()
 }
 
-// checkGoSyntax parses Go source and returns syntax error descriptions.
-// Uses go/parser from the standard library — fast (<1ms for typical files)
-// and cannot hang (pure in-memory operation).
-func checkGoSyntax(filename, src string) []string {
-	fset := token.NewFileSet()
-	_, err := parser.ParseFile(fset, filename, src, 0)
-	if err == nil {
+// goSyntaxWarnings converts a parser error into human-readable syntax error
+// descriptions. The caller must have already called parser.ParseFile and pass
+// the resulting error (nil means no errors).
+func goSyntaxWarnings(filename string, parseErr error) []string {
+	if parseErr == nil {
 		return nil
 	}
 
@@ -148,7 +151,7 @@ func checkGoSyntax(filename, src string) []string {
 
 	// go/parser wraps errors in scanner.ErrorList (a []*scanner.Error).
 	// Each error has a position and message, e.g. "main.go:5:2: expected declaration, found 'if'".
-	if el, ok := err.(scanner.ErrorList); ok {
+	if el, ok := parseErr.(scanner.ErrorList); ok {
 		for i, e := range el {
 			if i >= maxGoSyntaxErrors {
 				remaining := len(el) - maxGoSyntaxErrors
@@ -162,6 +165,14 @@ func checkGoSyntax(filename, src string) []string {
 	}
 
 	// Fallback for non-ErrorList errors.
-	warnings = append(warnings, err.Error())
+	warnings = append(warnings, parseErr.Error())
 	return warnings
+}
+
+// checkGoSyntax is a convenience wrapper that parses src then calls
+// goSyntaxWarnings. Used by tests and as a standalone entry point.
+func checkGoSyntax(filename, src string) []string {
+	fset := token.NewFileSet()
+	_, err := parser.ParseFile(fset, filename, src, 0)
+	return goSyntaxWarnings(filename, err)
 }

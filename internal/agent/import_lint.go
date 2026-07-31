@@ -123,16 +123,8 @@ var commonGoStdlib = map[string]string{
 // checkGoImports analyzes Go source for unused and missing imports.
 // Returns warning strings. Returns nil if the file has syntax errors
 // (those are already caught by checkGoSyntax) or no import issues.
-func checkGoImports(filePath, src string) []string {
-	if strings.TrimSpace(src) == "" {
-		return nil
-	}
-
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, filePath, src, 0)
-	if err != nil {
-		// Syntax errors are already caught by checkGoSyntax; skip import
-		// analysis to avoid cascading false positives from broken AST.
+func checkGoImportsAST(filePath string, f *ast.File) []string {
+	if f == nil {
 		return nil
 	}
 
@@ -250,4 +242,18 @@ func hasGoCodeDecls(f *ast.File) bool {
 		}
 	}
 	return false
+}
+
+// checkGoImports is a convenience wrapper that parses src then calls
+// checkGoImportsAST. Used by tests and as a standalone entry point.
+func checkGoImports(filePath, src string) []string {
+	if strings.TrimSpace(src) == "" {
+		return nil
+	}
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, filePath, src, 0)
+	if err != nil {
+		return nil
+	}
+	return checkGoImportsAST(filePath, f)
 }
