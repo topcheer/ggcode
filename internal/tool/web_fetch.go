@@ -185,6 +185,12 @@ func (t WebFetch) Execute(ctx context.Context, input json.RawMessage) (Result, e
 	return Result{Content: text}, nil
 }
 
+// IsPrivateHost checks if a hostname resolves to a private IP or is a loopback hostname.
+// Exported for reuse by the TUI's URL auto-fetch expansion.
+func IsPrivateHost(host string) bool {
+	return isPrivateHost(host)
+}
+
 // isPrivateHost checks if a hostname resolves to a private IP or is a loopback hostname.
 func isPrivateHost(host string) bool {
 	lower := strings.ToLower(host)
@@ -200,6 +206,12 @@ func isPrivateHost(host string) bool {
 		return isPrivateIP(ip)
 	}
 	return false
+}
+
+// IsPrivateIP returns true if the IP is in a private, loopback, or link-local range.
+// Exported for reuse by the TUI's URL auto-fetch expansion.
+func IsPrivateIP(ip net.IP) bool {
+	return isPrivateIP(ip)
 }
 
 // isPrivateIP returns true if the IP is in a private, loopback, or link-local range.

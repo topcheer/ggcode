@@ -166,6 +166,10 @@ func (m *Model) startAgentWithExpand(text string) tea.Cmd {
 				return
 			}
 
+			// Auto-fetch URLs in the user message (saves a web_fetch tool-call round-trip).
+			// Runs after @mention expansion so URLs in expanded file content are also fetched.
+			expandedMsg = ExpandURLs(ctx, expandedMsg)
+
 			if err := m.runAgentSubmission(ctx, runID, expandedMsg, imgs); err != nil && !errors.Is(err, context.Canceled) && m.program != nil {
 				m.program.Send(agentErrMsg{RunID: runID, Err: err})
 			}
