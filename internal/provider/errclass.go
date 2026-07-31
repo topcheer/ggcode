@@ -173,7 +173,13 @@ func ClassifyLLMError(err error) FailureClass {
 	if errors.Is(err, context.Canceled) {
 		return FailureNone
 	}
-	s := strings.ToLower(err.Error())
+	// Guard against SDK error types whose .Error() panics on nil internals
+	// (e.g. anthropic.Error with nil Response). Same pattern as
+	// IsContextOverflowError in retry.go.
+	s := strings.ToLower(func() string {
+		defer func() { recover() }()
+		return err.Error()
+	}())
 
 	if containsAny(s, quotaKeywords) {
 		return FailureQuota

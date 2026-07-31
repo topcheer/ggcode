@@ -342,3 +342,51 @@ func TestIsRetryable_DefaultTrue(t *testing.T) {
 		t.Error("expected retryable for 500")
 	}
 }
+
+// TestIsRetryable_QuotaAndAuthFailFast verifies that permanent quota/billing
+// exhaustion and auth errors are never retried, regardless of how the error
+// is packaged. Previously, string-based quota errors (e.g. "coding plan
+// expired") that didn't match typed SDK error types fell through to the
+// default `return true`, wasting 20 retry attempts.
+func TestIsRetryable_QuotaAndAuthFailFast(t *testing.T) {
+	// Quota errors — must not retry regardless of packaging.
+	quotaErrs := []error{
+		errors.New("coding plan usage limit reached"),
+		errors.New("HTTP 429: insufficient_quota"),
+		errors.New("insufficient balance, please recharge"),
+		errors.New("套餐已到期"),
+		errors.New("exceeded_current_quota_error"),
+	}
+	for _, err := range quotaErrs {
+		if isRetryable(err) {
+			t.Errorf("quota error should not be retryable: %v", err)
+		}
+	}
+
+	// Auth errors — must not retry.
+	authErrs := []error{
+		errors.New("401 unauthorized"),
+		errors.New("invalid api key"),
+		errors.New("authentication_error: bad key"),
+	}
+	for _, err := range authErrs {
+		if isRetryable(err) {
+			t.Errorf("auth error should not be retryable: %v", err)
+		}
+	}
+
+	// Transient rate limit (no quota keywords) MUST still be retryable.
+	if !isRetryable(errors.New("429 too many requests")) {
+		t.Error("transient 429 without quota keywords should be retryable")
+	}
+	if !isRetryable(errors.New("rate limit exceeded, retry after 30s")) {
+		t.Error("transient rate limit should be retryable")
+	}
+	// Server errors and network errors must still be retryable.
+	if !isRetryable(errors.New("503 service unavailable")) {
+		t.Error("503 should be retryable")
+	}
+	if !isRetryable(errors.New("unexpected EOF")) {
+		t.Error("network EOF should be retryable")
+	}
+}

@@ -103,6 +103,17 @@ func isRetryable(err error) bool {
 		return false
 	}
 
+	// Fail fast on permanent failures: quota/billing exhaustion and auth
+	// errors will never succeed on retry. ClassifyLLMError uses keyword
+	// matching that works for ALL error types (typed SDK errors AND raw
+	// string errors), catching cases the per-type checks below miss —
+	// e.g. a string error like "coding plan expired" or a generic HTTP
+	// error wrapper around a 429 quota response.
+	switch ClassifyLLMError(err) {
+	case FailureQuota, FailureAuth:
+		return false
+	}
+
 	// Check for HTTP status codes from known SDK error types.
 	var openaiAPIErr *openai.APIError
 	if errors.As(err, &openaiAPIErr) {
