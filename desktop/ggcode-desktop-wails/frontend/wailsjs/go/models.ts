@@ -36,6 +36,7 @@ export namespace hooks {
 	    post_tool_use: Hook[];
 	    on_agent_stop: Hook[];
 	    on_stream_stop: Hook[];
+	    on_compaction: Hook[];
 	
 	    static createFrom(source: any = {}) {
 	        return new HookConfig(source);
@@ -48,6 +49,7 @@ export namespace hooks {
 	        this.post_tool_use = this.convertValues(source["post_tool_use"], Hook);
 	        this.on_agent_stop = this.convertValues(source["on_agent_stop"], Hook);
 	        this.on_stream_stop = this.convertValues(source["on_stream_stop"], Hook);
+	        this.on_compaction = this.convertValues(source["on_compaction"], Hook);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -156,6 +158,9 @@ export namespace lanchat {
 	    has_git?: boolean;
 	    has_tests?: boolean;
 	    agent_busy?: boolean;
+	    agent_status?: string;
+	    agent_status_since?: number;
+	    model?: string;
 	    udp_capable?: boolean;
 	
 	    static createFrom(source: any = {}) {
@@ -180,6 +185,9 @@ export namespace lanchat {
 	        this.has_git = source["has_git"];
 	        this.has_tests = source["has_tests"];
 	        this.agent_busy = source["agent_busy"];
+	        this.agent_status = source["agent_status"];
+	        this.agent_status_since = source["agent_status_since"];
+	        this.model = source["model"];
 	        this.udp_capable = source["udp_capable"];
 	    }
 	}
