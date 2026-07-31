@@ -18,11 +18,17 @@ import (
 // file modifications still go through the normal per-call permission flow
 // with UI diff preview and approval.
 var readOnlyToolNames = map[string]bool{
+	// File reads
 	"read_file":       true,
-	"search_files":    true,
-	"grep":            true,
-	"glob":            true,
-	"list_directory":  true,
+	"multi_file_read": true,
+	// Search
+	"search_files": true,
+	"grep":         true,
+	"glob":         true,
+	"code_search":  true, // BM25 semantic search (read-only)
+	// Directory listing
+	"list_directory": true,
+	// Git read-only
 	"git_status":      true,
 	"git_diff":        true,
 	"git_log":         true,
@@ -31,9 +37,29 @@ var readOnlyToolNames = map[string]bool{
 	"git_branch_list": true,
 	"git_remote":      true,
 	"git_stash_list":  true,
-	"web_search":      true,
-	"web_fetch":       true,
-	"multi_file_read": true,
+	// LSP read-only (rename excluded — it writes)
+	"lsp_hover":                  true,
+	"lsp_definition":             true,
+	"lsp_references":             true,
+	"lsp_document_highlights":    true,
+	"lsp_implementation":         true,
+	"lsp_workspace_symbols":      true,
+	"lsp_diagnostics":            true,
+	"lsp_incoming_calls":         true,
+	"lsp_outgoing_calls":         true,
+	"lsp_prepare_call_hierarchy": true,
+	"lsp_code_actions":           true,
+	// Runtime / metadata
+	"runtime":               true,
+	"debug_log":             true,
+	"list_agents":           true,
+	"list_mcp_capabilities": true,
+	"read_mcp_resource":     true,
+	"task_list":             true,
+	"task_get":              true,
+	// Web
+	"web_search": true,
+	"web_fetch":  true,
 }
 
 // CodeExecution implements the code_execution tool — a sandboxed JavaScript
@@ -74,6 +100,25 @@ Available tools (call via await tools.NAME(args)):
   tools.git_stash_list() — List stashes.
   tools.web_search({query, max_results}) — Search the web.
   tools.web_fetch({url}) — Fetch a URL.
+  tools.code_search({query, max_results}) — BM25 semantic code search.
+  tools.lsp_hover({path, line, character}) — Symbol hover/type info.
+  tools.lsp_definition({path, line, character}) — Go to definition.
+  tools.lsp_references({path, line, character}) — Find references.
+  tools.lsp_diagnostics({path}) — File diagnostics.
+  tools.lsp_workspace_symbols({query}) — Workspace symbol search.
+  tools.lsp_implementation({path, line, character}) — Find implementations.
+  tools.lsp_document_highlights({path, line, character}) — Document highlights.
+  tools.lsp_code_actions({path, start_line, start_character, end_line, end_character}) — Code actions.
+  tools.lsp_incoming_calls({item}) — Incoming calls (from lsp_prepare_call_hierarchy).
+  tools.lsp_outgoing_calls({item}) — Outgoing calls.
+  tools.lsp_prepare_call_hierarchy({path, line, character}) — Prepare call hierarchy.
+  tools.runtime() — Session info, model, mode.
+  tools.debug_log({lines, category}) — Read debug log ring buffer.
+  tools.list_agents() — List sub-agent runs.
+  tools.list_mcp_capabilities({server}) — List MCP server tools/resources.
+  tools.read_mcp_resource({server, uri}) — Read MCP resource.
+  tools.task_list() — List session tasks.
+  tools.task_get({taskId}) — Get task details.
 
 console.log(...) output is returned to you. Tool results are strings — use JSON.parse() if you need structured data. async/await is supported.
 
