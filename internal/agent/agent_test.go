@@ -1088,7 +1088,7 @@ func TestRunStreamAutopilotContinuesClarificationTurn(t *testing.T) {
 			// [2] ChatStream call 2: agent reports completion
 			{Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("I inspected the tests first and fixed the root cause.")}}},
 			// [3] Chat call 2 (strategist): goal achieved
-			{Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("GOAL_ACHIEVED\nThe agent fixed the root cause.")}}},
+			{Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("<GOAL_ACHIEVED/>\nThe agent fixed the root cause.")}}},
 		},
 	}
 
@@ -1237,7 +1237,7 @@ func TestRunStreamAutopilotContinuesAfterPartialProgressUpdate(t *testing.T) {
 			// [2] stream 2: completion
 			{Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("Completed the optimization pass and updated the related code paths.")}}},
 			// [3] Chat strategist: goal achieved
-			{Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("GOAL_ACHIEVED\nOptimization complete.")}}},
+			{Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("<GOAL_ACHIEVED/>\nOptimization complete.")}}},
 		},
 	}
 
@@ -1251,6 +1251,43 @@ func TestRunStreamAutopilotContinuesAfterPartialProgressUpdate(t *testing.T) {
 
 	if mp.streamCalls != 2 {
 		t.Fatalf("expected 2 stream calls, got %d", mp.streamCalls)
+	}
+	if mp.chatCalls != 2 {
+		t.Fatalf("expected 2 strategist Chat calls, got %d", mp.chatCalls)
+	}
+}
+
+// TestRunStreamAutopilotDoesNotStopWhenStrategistMentionsMarkerButContinues
+// guards against the false-stop bug: the strategist must emit the exact
+// <GOAL_ACHIEVED/> marker to stop the agent. Merely discussing the concept
+// (e.g. "do NOT emit GOAL_ACHIEVED yet, more work remains") must NOT stop it.
+func TestRunStreamAutopilotDoesNotStopWhenStrategistMentionsMarkerButContinues(t *testing.T) {
+	mp := &mockProvider{
+		chatResponses: []*provider.ChatResponse{
+			// [0] stream 1: agent reports partial work
+			{Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("I finished the first half of the refactor.")}}},
+			// [1] strategist mentions the marker in prose while telling agent to CONTINUE.
+			// This must NOT be treated as completion (old substring-match bug would stop).
+			{Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("Do not emit GOAL_ACHIEVED yet — there is still the second half to refactor. Continue with it.")}}},
+			// [2] stream 2: agent continues
+			{Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("Refactored the second half as directed.")}}},
+			// [3] strategist: real completion marker
+			{Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("<GOAL_ACHIEVED/>\nRefactor complete.")}}},
+		},
+	}
+
+	a := NewAgent(mp, tool.NewRegistry(), "", 3)
+	a.SetPermissionPolicy(permission.NewConfigPolicyWithMode(nil, []string{"."}, permission.AutopilotMode))
+	a.SetAutopilotGoal("refactor the codebase")
+
+	if err := a.RunStream(context.Background(), "refactor the codebase", func(event provider.StreamEvent) {}); err != nil {
+		t.Fatalf("RunStream failed: %v", err)
+	}
+
+	// The strategist's prose mention must not terminate early: we expect the full
+	// 2 stream calls + 2 strategist calls before the real marker stops it.
+	if mp.streamCalls != 2 {
+		t.Fatalf("expected 2 stream calls (agent kept working after prose mention), got %d", mp.streamCalls)
 	}
 	if mp.chatCalls != 2 {
 		t.Fatalf("expected 2 strategist Chat calls, got %d", mp.chatCalls)
@@ -1661,7 +1698,7 @@ func TestRunStreamWithZeroMaxIterationsDoesNotCapAutopilot(t *testing.T) {
 			// [2] stream 2
 			{Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("Completed the requested UI updates.")}}},
 			// [3] Chat strategist: goal achieved
-			{Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("GOAL_ACHIEVED\nUI updates complete.")}}},
+			{Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("<GOAL_ACHIEVED/>\nUI updates complete.")}}},
 		},
 	}
 
