@@ -280,10 +280,28 @@ func tryClaimPendingTask(
 		}
 		// Mark task status based on whether agent execution succeeded.
 		if taskErr != nil {
-			// Agent errored — revert to pending so another teammate can retry.
-			pending := task.StatusPending
-			owner := ""
-			tmMgr.Update(claimed.ID, task.UpdateOptions{Status: &pending, Owner: &owner})
+			// Check if the error is permanent (quota exhaustion or auth failure).
+			// If so, don't revert to pending — another teammate would hit the
+			// same permanent failure, creating a wasteful retry loop.
+			fc := provider.ClassifyLLMError(taskErr)
+			if fc == provider.FailureQuota || fc == provider.FailureAuth {
+				// Mark task as completed with error metadata so it's not re-claimed.
+				// Using "completed" instead of adding a new "failed" status keeps the
+				// task board consistent — the metadata records the permanent failure.
+				completed := task.StatusCompleted
+				errMsg := util.Truncate(taskErr.Error(), 200)
+				tmMgr.Update(claimed.ID, task.UpdateOptions{
+					Status:   &completed,
+					Metadata: map[string]string{"permanent_error": fc.String(), "error": errMsg},
+				})
+				debug.Log("swarm", "teammate %s task %s permanently failed (%s): %v",
+					tm.ID, claimed.ID, fc, taskErr)
+			} else {
+				// Transient error — revert to pending so another teammate can retry.
+				pending := task.StatusPending
+				owner := ""
+				tmMgr.Update(claimed.ID, task.UpdateOptions{Status: &pending, Owner: &owner})
+			}
 		} else {
 			completed := task.StatusCompleted
 			tmMgr.Update(claimed.ID, task.UpdateOptions{Status: &completed})
