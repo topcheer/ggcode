@@ -237,8 +237,14 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 		case provider.StreamEventSystem:
 			// Forward system events (retry, compaction) to the main panel
 			// so users see them alongside the main conversation, not just
-			// in the follow panel.
-			cfg.Manager.NotifySystem(cfg.SubAgentID, event.Text)
+			// in the follow panel. Prefix with the agent name for clarity.
+			agentName := cfg.SubAgentID
+			if sa, ok := cfg.Manager.Get(cfg.SubAgentID); sa != nil && ok {
+				if sa.Name != "" {
+					agentName = sa.Name
+				}
+			}
+			cfg.Manager.NotifySystem(cfg.SubAgentID, fmt.Sprintf("[%s] %s", agentName, event.Text))
 		case provider.StreamEventError:
 			flushText()
 			output.WriteString(fmt.Sprintf("[error: %v]\n", event.Error))
