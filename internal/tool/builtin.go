@@ -112,6 +112,9 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 
 		// Code health analysis (cyclomatic complexity, technical debt)
 		CodeHealthTool{WorkingDir: workingDir},
+
+		// Technical debt marker scanner (TODO/FIXME/HACK/XXX/BUG/NOTE)
+		ScanTodosTool{WorkingDir: workingDir},
 	)
 	for _, tool := range tools {
 		if err := registry.Register(tool); err != nil {
