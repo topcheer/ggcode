@@ -604,6 +604,16 @@ func zhCatalog(key string) string {
 		return "当前提供商不支持推理强度"
 	case "reasoning.effort.unsupported":
 		return "当前提供商不支持推理强度"
+	case "output.style.set":
+		return "输出风格已设为 %s"
+	case "output.style.status":
+		return "风格: %s"
+	case "output.style.unknown":
+		return "未知输出风格: %s (可用: default, concise, detailed, socratic)"
+	case "output.style.current":
+		return "当前"
+	case "output.style.list.header":
+		return "可用输出风格:"
 	case "follow.loading":
 		return "  正在加载跟随视图..."
 	case "follow.active_agent":
@@ -1551,6 +1561,7 @@ func zhCatalog(key string) string {
   Tab                在补全或确认选项中切换
   Shift+Tab          反向切换补全，否则切换权限模式
   Ctrl+G             切换推理深度（关闭/低/中/高）
+  Ctrl+O             切换输出风格（默认/简洁/详细/苏格拉底）
   Ctrl+R             切换侧边栏
   Ctrl+\             切换紧凑模式（全宽对话）
   Ctrl+L             新建会话（等同 /clear）

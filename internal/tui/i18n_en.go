@@ -596,6 +596,16 @@ func enCatalog(key string) string {
 		return "Reasoning effort not supported by current provider"
 	case "reasoning.effort.unsupported":
 		return "Reasoning effort is not supported by the current provider"
+	case "output.style.set":
+		return "Output style set to %s"
+	case "output.style.status":
+		return "Style: %s"
+	case "output.style.unknown":
+		return "Unknown output style: %s (available: default, concise, detailed, socratic)"
+	case "output.style.current":
+		return "active"
+	case "output.style.list.header":
+		return "Available output styles:"
 	case "follow.loading":
 		return "  Loading follow view..."
 	case "follow.active_agent":
@@ -1549,6 +1559,7 @@ Keyboard shortcuts:
   Tab                Cycle autocomplete or approval choices
   Shift+Tab          Reverse cycle autocomplete, otherwise toggle permission mode
   Ctrl+G             Cycle reasoning effort (off/low/medium/high)
+  Ctrl+O             Cycle output style (default/concise/detailed/socratic)
   Ctrl+R             Toggle sidebar
   Ctrl+\             Toggle compact mode (full-width chat)
   Ctrl+L             Start new session (same as /clear)

@@ -276,6 +276,7 @@ type Config struct {
 	LSPServers         map[string]LSPServerConfig `yaml:"lsp_servers,omitempty" json:"lsp_servers,omitempty"`
 	ProbeContext       bool                       `yaml:"probe_context,omitempty" json:"probe_context,omitempty"`
 	P2P                P2PConfig                  `yaml:"p2p,omitempty" json:"p2p,omitempty"`
+	OutputStyle        string                     `yaml:"output_style,omitempty" json:"output_style,omitempty"`
 	FilePath           string                     `yaml:"-" json:"-"`
 	ProtectedPaths     []string                   `yaml:"protected_paths,omitempty" json:"protected_paths,omitempty"`
 	FirstRun           bool                       `yaml:"-" json:"-"`
@@ -1546,4 +1547,78 @@ func rewriteYAML(path string, raw map[string]interface{}) error {
 		return err
 	}
 	return writeSecureConfigFile(path, data)
+}
+
+// OutputStyleNames lists the built-in output styles in display cycle order.
+var outputStyleOrder = []string{"", "concise", "detailed", "socratic"}
+
+// OutputStyleCycle returns the ordered list of output style keys.
+func OutputStyleCycle() []string {
+	return append([]string(nil), outputStyleOrder...)
+}
+
+// NormalizeOutputStyle returns the canonical key for the given style,
+// defaulting to "" (standard) if unrecognized.
+func NormalizeOutputStyle(style string) string {
+	style = strings.ToLower(strings.TrimSpace(style))
+	for _, s := range outputStyleOrder {
+		if s == style {
+			return style
+		}
+	}
+	return ""
+}
+
+// NextOutputStyle returns the next style in the cycle after the given one.
+func NextOutputStyle(current string) string {
+	current = strings.ToLower(strings.TrimSpace(current))
+	for i, s := range outputStyleOrder {
+		if s == current {
+			return outputStyleOrder[(i+1)%len(outputStyleOrder)]
+		}
+	}
+	return outputStyleOrder[1]
+}
+
+// outputStyleGuidanceMap maps style keys to system prompt directives.
+var outputStyleGuidanceMap = map[string]string{
+	"concise": "## Output Style: Concise\n" +
+		"- Keep explanations minimal — one or two sentences max.\n" +
+		"- Skip preamble and restating the request; go straight to the result.\n" +
+		"- Prefer code/commands over prose explanations.\n" +
+		"- Only add explanation when the change is non-obvious or risky.",
+
+	"detailed": "## Output Style: Detailed\n" +
+		"- Explain your reasoning and design decisions clearly.\n" +
+		"- Include relevant context: why this approach, what alternatives were considered.\n" +
+		"- After completing work, provide a summary of changes and any follow-up recommendations.\n" +
+		"- When debugging, walk through the root cause analysis step by step.",
+
+	"socratic": "## Output Style: Socratic\n" +
+		"- When the user's request is ambiguous or has multiple valid approaches, ask a clarifying question before proceeding.\n" +
+		"- Guide the user to better solutions by explaining trade-offs rather than just implementing the first option.\n" +
+		"- When reviewing code, raise questions about design decisions rather than silently changing them.\n" +
+		"- Prefer collaborative problem-solving for architectural decisions; implement directly for straightforward tasks.",
+}
+
+// OutputStyleGuidance returns the system prompt section for the given style.
+// Returns "" for the default ("") style.
+func OutputStyleGuidance(style string) string {
+	style = NormalizeOutputStyle(style)
+	if style == "" {
+		return ""
+	}
+	if guidance, ok := outputStyleGuidanceMap[style]; ok {
+		return guidance
+	}
+	return ""
+}
+
+// DisplayOutputStyle returns a human-friendly label for the status bar.
+func DisplayOutputStyle(style string) string {
+	style = NormalizeOutputStyle(style)
+	if style == "" {
+		return "default"
+	}
+	return style
 }

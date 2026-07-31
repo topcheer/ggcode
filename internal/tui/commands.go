@@ -507,6 +507,8 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 			return m.handleBranchCommand()
 		case "/tools":
 			return m.handleToolsCommand()
+		case "/style":
+			return m.handleStyleCommand(parts)
 		default:
 			// Check custom commands
 			if cmdName := strings.TrimPrefix(cmd, "/"); cmdName != "" {

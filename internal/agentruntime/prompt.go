@@ -58,6 +58,9 @@ func BuildInteractiveSystemPromptWithPromptRefs(
 		}
 	}
 	prompt := config.BuildSystemPrompt(cfg.ExtraPrompt, workingDir, cfg.Language, toolNames, gitStatus, customCmdNames, availableModels)
+	if styleGuidance := config.OutputStyleGuidance(cfg.OutputStyle); styleGuidance != "" {
+		prompt += "\n\n" + styleGuidance
+	}
 	prompt += projectOverviewSection(workingDir)
 	prompt += projectCommandsSection(workingDir)
 	prompt += toolchainSection(workingDir)
@@ -227,6 +230,11 @@ func buildSharedAgentPrompt(ctx SubAgentPromptContext) string {
 		}
 	}
 	prompt := config.BuildSystemPrompt(extraPrompt, workingDir, language, toolNames, gitStatus, nil, availableModels)
+	if ctx.Cfg != nil {
+		if styleGuidance := config.OutputStyleGuidance(ctx.Cfg.OutputStyle); styleGuidance != "" {
+			prompt += "\n\n" + styleGuidance
+		}
+	}
 	prompt += projectOverviewSection(workingDir)
 	prompt += projectCommandsSection(workingDir)
 	prompt += toolchainSection(workingDir)

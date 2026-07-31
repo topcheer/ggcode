@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/atotto/clipboard"
 	"github.com/topcheer/ggcode/internal/agentruntime"
+	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/diff"
 	"github.com/topcheer/ggcode/internal/knight"
@@ -371,6 +372,83 @@ func (m *Model) cycleReasoningEffort() (string, bool) {
 	if !m.agent.SetReasoningEffort(next) {
 		return current, false
 	}
+	return next, true
+}
+
+// handleStyleCommand handles the /style slash command.
+// Usage:
+//
+//	/style            - cycle to next style
+//	/style concise    - set to a specific style
+//	/style default    - reset to default
+//	/style list       - show all available styles
+func (m *Model) handleStyleCommand(parts []string) tea.Cmd {
+	var current string
+	if m.config != nil {
+		current = m.config.OutputStyle
+	}
+
+	// If an argument is given, set directly
+	if len(parts) > 1 {
+		arg := strings.ToLower(strings.TrimSpace(parts[1]))
+		if arg == "list" {
+			m.chatWriteSystem(nextSystemID(), m.buildStyleListMessage(current))
+			return nil
+		}
+		if arg == "off" || arg == "reset" || arg == "none" || arg == "default" {
+			arg = ""
+		}
+		normalized := config.NormalizeOutputStyle(arg)
+		if normalized != arg && arg != "" {
+			// Unknown style
+			m.chatWriteSystem(nextSystemID(), m.t("output.style.unknown", arg))
+			return nil
+		}
+		m.setOutputStyle(normalized)
+		label := config.DisplayOutputStyle(normalized)
+		m.chatWriteSystem(nextSystemID(), m.t("output.style.set", label))
+		return nil
+	}
+
+	// No argument — cycle
+	next := config.NextOutputStyle(current)
+	m.setOutputStyle(next)
+	label := config.DisplayOutputStyle(next)
+	m.chatWriteSystem(nextSystemID(), m.t("output.style.set", label))
+	return nil
+}
+
+func (m *Model) setOutputStyle(style string) {
+	if m.config != nil {
+		m.config.OutputStyle = style
+	}
+	m.rebuildSystemPrompt()
+}
+
+func (m *Model) buildStyleListMessage(current string) string {
+	current = config.NormalizeOutputStyle(current)
+	var sb strings.Builder
+	sb.WriteString(m.t("output.style.list.header"))
+	sb.WriteString("\n")
+	for _, s := range config.OutputStyleCycle() {
+		label := config.DisplayOutputStyle(s)
+		if s == current {
+			sb.WriteString(fmt.Sprintf("  * %s (%s)\n", label, m.t("output.style.current")))
+		} else {
+			sb.WriteString(fmt.Sprintf("    %s\n", label))
+		}
+	}
+	return sb.String()
+}
+
+// cycleOutputStyle cycles to the next output style (used by keybinding).
+func (m *Model) cycleOutputStyle() (string, bool) {
+	var current string
+	if m.config != nil {
+		current = m.config.OutputStyle
+	}
+	next := config.NextOutputStyle(current)
+	m.setOutputStyle(next)
 	return next, true
 }
 

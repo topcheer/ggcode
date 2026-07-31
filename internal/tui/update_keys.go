@@ -4,6 +4,7 @@ import (
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 	"fmt"
+	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/permission"
 	"strings"
 	"time"
@@ -50,6 +51,17 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 		} else {
 			m.statusActivity = m.t("reasoning.effort.unsupported.status")
 			m.chatWriteSystem(nextSystemID(), m.t("reasoning.effort.unsupported"))
+		}
+		return m, nil
+	}
+
+	// Ctrl+O cycles output style (concise/detailed/socratic/default)
+	if msg.String() == "ctrl+o" {
+		style, ok := m.cycleOutputStyle()
+		if ok {
+			label := config.DisplayOutputStyle(style)
+			m.statusActivity = m.t("output.style.status", label)
+			m.chatWriteSystem(nextSystemID(), m.t("output.style.set", label))
 		}
 		return m, nil
 	}
