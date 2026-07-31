@@ -250,8 +250,8 @@ func HasChanges(old, new string) bool {
 	return old != new
 }
 
-// countChanges returns the number of added and deleted lines.
-func countChanges(old, new string) (additions, deletions int) {
+// CountChanges returns the number of added and deleted lines.
+func CountChanges(old, new string) (additions, deletions int) {
 	oldLines := splitLines(old)
 	newLines := splitLines(new)
 	if len(oldLines)+len(newLines) > maxDiffLines {
@@ -293,6 +293,6 @@ func countChanges(old, new string) (additions, deletions int) {
 
 // Stats returns a human-readable summary of changes.
 func Stats(old, new string) string {
-	additions, deletions := countChanges(old, new)
+	additions, deletions := CountChanges(old, new)
 	return fmt.Sprintf("+%d additions, -%d deletions", additions, deletions)
 }

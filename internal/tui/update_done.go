@@ -109,6 +109,7 @@ func (m Model) handleAgentDoneMsg(msg agentDoneMsg) (Model, tea.Cmd) {
 	}
 	if !wasCanceled && !wasFailed {
 		m.appendTurnMetricsDigest(m.usageTurnIndex)
+		m.appendRunChangeSummary()
 	}
 	m.chatListScrollToBottom()
 	// Fire configurable notification (bell and/or desktop) based on user

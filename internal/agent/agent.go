@@ -153,6 +153,7 @@ type Agent struct {
 	latencyTracker             *LatencyTracker      // per-tool latency baseline & slow-tool outlier detection
 	effortAdapter              *adaptiveEffortState // per-turn reasoning effort adaptation (Opus 5 effort toggle pattern)
 	ruleStore                  *RuleStore           // cached rule store for hot-path rule injection (avoids per-tool disk I/O)
+	lastRunStats               *RunStats            // stats from the most recent run (for post-run summary display)
 	systemPromptInjector       func() string        // returns extra system prompt text to inject (e.g. lanchat peer warnings)
 	baseSystemPrompt           string               // the fully built static system prompt; used as reset base for dynamic injection
 	lastInjectedSystemPrompt   string               // cache of last injected prompt to skip redundant updates
@@ -590,6 +591,15 @@ func (a *Agent) CheckpointManager() *checkpoint.Manager {
 	return a.checkpoints
 }
 
+// LastRunStats returns stats from the most recent RunStreamWithContent call.
+// Returns nil if no run has completed yet. The pointer is safe to read but
+// must not be mutated by callers.
+func (a *Agent) LastRunStats() *RunStats {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.lastRunStats
+}
+
 // InvalidateToolCaches clears the speculator and memoize caches. Called after
 // external file changes (e.g., /undo, /revert) that bypass the normal tool
 // execution path, to prevent serving stale cached results.
@@ -805,6 +815,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 
 	defer func() {
 		runStats.finalize(err)
+		a.mu.Lock()
+		a.lastRunStats = runStats
+		a.mu.Unlock()
 		// Skip reflection, ratchet LLM calls, and playbook recording on
 		// cancellation. These post-run actions can trigger expensive,
 		// un-cancellable LLM calls (ratchet uses context.Background() with
