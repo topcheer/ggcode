@@ -84,18 +84,6 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 			}
 		}
 
-		// For use_namedagent, resolve the template's model and show it.
-		if toolName == "use_namedagent" && spawnAgentModelResolver != nil {
-			model := namedAgentModelResolver(argString(args, "name"))
-			if model == "" {
-				model = spawnAgentModelResolver()
-			}
-			if model != "" {
-				displayName := desc + " [" + model + "] (" + pretty + ")"
-				return toolPresentation{DisplayName: displayName, Detail: detail, Activity: desc + " [" + model + "]"}
-			}
-		}
-
 		displayName := desc + " (" + pretty + ")"
 		return toolPresentation{DisplayName: displayName, Detail: detail, Activity: desc}
 	}
@@ -493,6 +481,12 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 		label := localizedToolLabel(lang, "use_namedagent")
 		if name != "" {
 			label = fmt.Sprintf("%s: %s", label, name)
+		}
+		// Resolve model: try template's configured model first, then parent agent's model.
+		if namedAgentModelResolver != nil {
+			if m := namedAgentModelResolver(name); m != "" {
+				label += " [" + m + "]"
+			}
 		}
 		return toolPresentation{
 			DisplayName: label,

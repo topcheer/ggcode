@@ -21,6 +21,16 @@ type ToolResultPresentation struct {
 	PayloadMode string // "", "text", "task_fields", "task_list"
 }
 
+// namedAgentModelResolver returns the model configured for a named agent
+// template, or "" if unknown. Set by the TUI at startup.
+var namedAgentModelResolver func(name string) string
+
+// SetNamedAgentModelResolver registers a function that resolves the model
+// configured for a named agent template by name.
+func SetNamedAgentModelResolver(fn func(name string) string) {
+	namedAgentModelResolver = fn
+}
+
 // DescribeTool returns a human-readable presentation for a tool call.
 // It picks the key argument(s) for each tool and formats them compactly.
 // This is the shared implementation used by TUI, daemon, IM, and ACP.
@@ -276,7 +286,13 @@ func DescribeTool(toolName, rawArgs string) ToolPresentation {
 		name := argStr(args, "name")
 		task := argStr(args, "task")
 		if name != "" {
-			return toolPres("Run Agent: "+name, compactPreview(task))
+			label := "Run Agent: " + name
+			if namedAgentModelResolver != nil {
+				if m := namedAgentModelResolver(name); m != "" {
+					label += " [" + m + "]"
+				}
+			}
+			return toolPres(label, compactPreview(task))
 		}
 		return toolPres("Run Named Agent", compactPreview(task))
 	case "create_namedagent":
