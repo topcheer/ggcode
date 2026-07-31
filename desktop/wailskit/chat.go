@@ -989,6 +989,10 @@ func (b *ChatBridge) EnsureSession() {
 // InitAgent sets up provider, tools, and agent — full parity with Fyne bridge.
 // Called on startup or before the first message if not yet initialized.
 func (b *ChatBridge) InitAgent(_ ...context.Context) error {
+	// Start the background section collector so buildWailsSystemPrompt reads
+	// pre-computed values without I/O. Same pattern as TUI's root.go.
+	agentruntime.InitGlobalSectionCollector(b.workingDir)
+
 	// Permission policy (auto mode)
 	mode := agentruntime.InteractivePermissionModeWithDefault(b.cfg, false, "auto")
 	b.permissionMode = mode
@@ -2978,6 +2982,9 @@ func parseA2ATimeout(s string) time.Duration {
 }
 
 func (b *ChatBridge) Close() {
+	// Stop the background section collector.
+	agentruntime.StopGlobalSectionCollector()
+
 	// Cancel all running sub-agents and swarm teammates before shutdown.
 	// Without this, closing the app orphans all background work.
 	if b.subAgentMgr != nil {
