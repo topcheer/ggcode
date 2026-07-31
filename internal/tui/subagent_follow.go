@@ -38,8 +38,10 @@ type followSlot struct {
 }
 
 type followViewEntry struct {
-	list    *chat.List
-	dropped int
+	list            *chat.List
+	dropped         int
+	eventsProcessed int    // number of events rendered in last build; skip rebuild if unchanged
+	status          string // last rendered status; rebuild if changed
 }
 
 // stripRefreshInterval is the minimum time between follow-strip refreshes.
@@ -488,7 +490,18 @@ func (f *subAgentFollowState) rebuildActiveView(saMgr *subagent.Manager, swMgr *
 	// Try sub-agent first
 	if saMgr != nil {
 		if snap, ok := saMgr.Snapshot(f.activeID); ok {
-			buildFollowList(subagentSnapshotToFollowData(snap), entry.list, styles)
+			data := subagentSnapshotToFollowData(snap)
+			// Skip full rebuild if nothing changed (same event count + status).
+			// This avoids re-processing hundreds of events on every 1s tick
+			// when the sub-agent is idle or between tool calls.
+			if entry.eventsProcessed == len(data.Events) && entry.status == data.Status && entry.dropped == data.EventsDropped {
+				f.markRebuilt(f.activeID)
+				return
+			}
+			buildFollowList(data, entry.list, styles)
+			entry.eventsProcessed = len(data.Events)
+			entry.status = data.Status
+			entry.dropped = data.EventsDropped
 			f.markRebuilt(f.activeID)
 			return
 		}
@@ -496,7 +509,15 @@ func (f *subAgentFollowState) rebuildActiveView(saMgr *subagent.Manager, swMgr *
 	// Try swarm teammate
 	if swMgr != nil {
 		if snap, ok := swMgr.TeammateSnapshot(f.activeID); ok {
-			buildFollowList(teammateSnapshotToFollowData(snap), entry.list, styles)
+			data := teammateSnapshotToFollowData(snap)
+			if entry.eventsProcessed == len(data.Events) && entry.status == data.Status && entry.dropped == data.EventsDropped {
+				f.markRebuilt(f.activeID)
+				return
+			}
+			buildFollowList(data, entry.list, styles)
+			entry.eventsProcessed = len(data.Events)
+			entry.status = data.Status
+			entry.dropped = data.EventsDropped
 			f.markRebuilt(f.activeID)
 		}
 	}
