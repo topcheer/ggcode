@@ -202,14 +202,30 @@ func (s *SubAgent) appendEvent(ev AgentEvent) {
 				break
 			}
 		}
-		// If no boundary found (all text), drop 10% to avoid 1-by-1 churn.
 		if dropIdx == 0 {
+			// All-text scenario: no turn boundaries found.
+			// Drop 10% but PRESERVE content by prepending dropped text
+			// to the first remaining event. This prevents word boundary
+			// corruption (e.g. "Letmereadlines" instead of "Let me read lines").
 			dropIdx = len(s.events) / 10
 			if dropIdx < 1 {
 				dropIdx = 1
 			}
+			var savedText strings.Builder
+			for i := 0; i < dropIdx; i++ {
+				if s.events[i].Type == AgentEventText {
+					savedText.WriteString(s.events[i].Text)
+				}
+			}
+			remaining := s.events[dropIdx:]
+			if savedText.Len() > 0 && len(remaining) > 0 && remaining[0].Type == AgentEventText {
+				// Merge dropped text into the first remaining text event.
+				remaining[0].Text = savedText.String() + remaining[0].Text
+			}
+			s.events = remaining
+		} else {
+			s.events = s.events[dropIdx:]
 		}
-		s.events = s.events[dropIdx:]
 		s.eventsDropped += dropIdx
 	}
 	s.events = append(s.events, ev)

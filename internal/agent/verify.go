@@ -81,6 +81,8 @@ func (a *Agent) asyncVerify(ctx context.Context, runStats *RunStats) {
 
 	if result.Passed {
 		debug.Log("verify", "PASSED: %s", cmd)
+		// Build/test passed — run lint as advisory secondary check.
+		a.runLintAfterBuild(ctx, workingDir)
 		a.verifyResult(*result)
 		return
 	}
@@ -440,6 +442,9 @@ func (a *Agent) syncVerifyAndGate(ctx context.Context, runStats *RunStats, retry
 
 	if result.Passed {
 		debug.Log("verify", "sync: PASSED")
+		// Build/test passed — run lint as advisory secondary check.
+		// Warnings are injected into context for the agent to fix.
+		a.runLintAfterBuild(ctx, workingDir)
 		a.verifyResult(*result)
 		return false // proceed to return — caller skips async verify
 	}
