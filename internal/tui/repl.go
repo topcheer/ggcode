@@ -618,6 +618,15 @@ func (r *REPL) SetSubAgentManager(mgr *subagent.Manager, prov provider.Provider,
 
 	// Named subagent templates (persisted per-workspace)
 	tmplStore := subagent.NewTemplateStore(r.model.agent.WorkingDir())
+	// Wire the named agent model resolver so tool call labels show the
+	// template's configured model (e.g. "cron-runner [glm-4.5-air]").
+	namedAgentModelResolver = func(name string) string {
+		tmpl, err := tmplStore.Load(name)
+		if err != nil {
+			return ""
+		}
+		return tmpl.Model
+	}
 	debug.Log("tui", "SetSubAgentManager: registering named agent tools, workingDir=%s", r.model.agent.WorkingDir())
 	if err := tools.Register(tool.CreateNamedAgentTool{Store: tmplStore}); err != nil {
 		debug.Log("tui", "Register create_namedagent FAILED: %v", err)

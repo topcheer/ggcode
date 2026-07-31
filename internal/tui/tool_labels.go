@@ -25,6 +25,10 @@ type toolPresentation struct {
 // frontends, preserving the explicit-model-only behavior there.
 var spawnAgentModelResolver func() string
 
+// namedAgentModelResolver resolves a named agent template's model override
+// by name. Returns "" if the template has no model override. Wired by REPL.
+var namedAgentModelResolver func(name string) string
+
 type commandPreview struct {
 	Title                  string
 	CommandLines           []string
@@ -72,6 +76,18 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 			if model == "" && spawnAgentModelResolver != nil {
 				// No explicit override — the sub-agent inherits the parent's
 				// runtime model, so show that instead of hiding the model.
+				model = spawnAgentModelResolver()
+			}
+			if model != "" {
+				displayName := desc + " [" + model + "] (" + pretty + ")"
+				return toolPresentation{DisplayName: displayName, Detail: detail, Activity: desc + " [" + model + "]"}
+			}
+		}
+
+		// For use_namedagent, resolve the template's model and show it.
+		if toolName == "use_namedagent" && spawnAgentModelResolver != nil {
+			model := namedAgentModelResolver(argString(args, "name"))
+			if model == "" {
 				model = spawnAgentModelResolver()
 			}
 			if model != "" {
