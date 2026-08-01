@@ -77,6 +77,9 @@ func newVerifyRegressionState() *verifyRegressionState {
 }
 
 func (v *verifyRegressionState) reset() {
+	if v == nil {
+		return
+	}
 	v.prevErrors = make(map[string]bool)
 	v.hasBaseline = false
 }
@@ -88,6 +91,9 @@ func (v *verifyRegressionState) reset() {
 // message injected into the agent's context. When no baseline exists (first run),
 // it returns empty string and simply records the baseline.
 func (v *verifyRegressionState) classifyErrors(errors []string) string {
+	if v == nil {
+		return ""
+	}
 	if len(errors) == 0 {
 		// Verification passed — reset to "no baseline" so the next failure
 		// starts fresh rather than comparing against a stale empty set.
