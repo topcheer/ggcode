@@ -38,3 +38,12 @@ No competitor provides a **deterministic** pre-commit quality scanner. They all 
 - Line numbers tracked from git hunk headers
 
 **Bug fix:** Fixed pre-existing duplicate `branchWarning` append in git_commit.go.
+
+## Update: all:true Path Coverage (2026-08-06)
+
+**Gap fixed:** The original implementation skipped the pre-commit diff scan entirely when `git_commit` was called with `all: true` (the `git commit -a` path). This was the most common commit path, yet it received no quality scanning — debug statements, secrets, and merge conflict markers slipped through silently.
+
+**Fix:**
+- Added `getWorkingTreeDiff()` in `diff_scan.go` — runs `git diff HEAD` to capture all tracked changes (staged + unstaged) that `commit -a` would include.
+- Updated `git_commit.go` to run `ScanStagedDiffForIssues` and `AnalyzeCommitScope` on **both** paths: staged-only for regular commits, working-tree for `all: true`.
+- Added 3 tests in `git_commit_diffscan_test.go` covering: diff detection on unstaged changes, graceful handling when no HEAD exists, and empty diff on clean working tree.

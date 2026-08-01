@@ -88,18 +88,28 @@ func (t GitCommit) Execute(ctx context.Context, input json.RawMessage) (Result, 
 		return Result{Content: trimmed}, nil
 	}
 
-	// Pre-commit analysis: check staged changes for quality issues (debug
-	// statements, merge conflict markers, secrets, TODOs, debugger breakpoints)
-	// and evaluate commit scope (size, cohesion). Also suggest Conventional
-	// Commits format for the message. All advisory (non-blocking).
+	// Pre-commit analysis: check changes for quality issues (debug statements,
+	// merge conflict markers, secrets, TODOs, debugger breakpoints) and evaluate
+	// commit scope (size, cohesion). Also suggest Conventional Commits format.
+	// All advisory (non-blocking).
+	//
+	// For regular commits, scan staged changes ("git diff --cached").
+	// For all:true commits (git commit -a), scan ALL tracked changes relative
+	// to HEAD ("git diff HEAD") — this is exactly the set that -a will commit.
+	// Previously, the all:true path skipped the scan entirely, which meant
+	// debug statements and secrets slipped through on the most common commit
+	// path.
 	var diffScanWarning, scopeWarning, convTip string
-	if !args.All {
-		diffOutput := getStagedDiff(ctx, dir)
-		issues := ScanStagedDiffForIssues(diffOutput)
-		diffScanWarning = FormatDiffIssues(issues)
-		cohesion, size := AnalyzeCommitScope(diffOutput)
-		scopeWarning = combineScopeWarnings(cohesion, size)
+	var diffOutput string
+	if args.All {
+		diffOutput = getWorkingTreeDiff(ctx, dir)
+	} else {
+		diffOutput = getStagedDiff(ctx, dir)
 	}
+	issues := ScanStagedDiffForIssues(diffOutput)
+	diffScanWarning = FormatDiffIssues(issues)
+	cohesion, size := AnalyzeCommitScope(diffOutput)
+	scopeWarning = combineScopeWarnings(cohesion, size)
 	convTip = AnalyzeCommitMessage(args.Message)
 
 	gitArgs := []string{"commit", "-m", fullMessage}

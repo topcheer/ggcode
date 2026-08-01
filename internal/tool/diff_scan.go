@@ -300,3 +300,18 @@ func getStagedDiff(ctx context.Context, dir string) string {
 	}
 	return string(out)
 }
+
+// getWorkingTreeDiff runs "git diff HEAD" in the given directory and returns
+// the output. This captures ALL tracked changes (both staged and unstaged)
+// relative to HEAD — exactly the set of changes that "git commit -a" would
+// commit. Returns empty string if git fails (e.g., no HEAD yet) or there are
+// no changes.
+func getWorkingTreeDiff(ctx context.Context, dir string) string {
+	cmd := gitCommand(ctx, "diff", "HEAD")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return string(out)
+}

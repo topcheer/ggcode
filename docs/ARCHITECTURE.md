@@ -177,6 +177,7 @@ internal/
     web_fetch.go           # HTTP fetch with SSRF protection
     web_search.go          # Web search
     git_diff.go / git_log.go / git_status.go / git_add.go / git_commit.go / git_blame.go  # Git tools
+    diff_scan.go           # Pre-commit quality scanner (debug stmts, secrets, merge markers, TODOs)
     git_show.go / git_branch_list.go / git_remote.go / git_stash.go / git_stash_list.go  # Git tools
     save_memory.go         # Save memory entries
     todo_write.go          # Write todo lists
