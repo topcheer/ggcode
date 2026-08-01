@@ -54,8 +54,9 @@ type Scheduler struct {
 	nextID      int
 	enqueue     func(prompt string, queueIfBusy bool)
 	timers      map[string]*time.Timer
-	generations map[string]uint64 // job ID -> generation counter to detect stale timers
-	storePath   string            // path to this session's JSON file
+	generations map[string]uint64    // job ID -> generation counter to detect stale timers
+	lastEnqueue map[string]time.Time // job ID -> last enqueue timestamp (dedup guard)
+	storePath   string               // path to this session's JSON file
 }
 
 // NewScheduler creates a scheduler with the given enqueue callback and
@@ -70,6 +71,7 @@ func NewScheduler(enqueue func(prompt string, queueIfBusy bool), storePath strin
 		enqueue:     enqueue,
 		timers:      make(map[string]*time.Timer),
 		generations: make(map[string]uint64),
+		lastEnqueue: make(map[string]time.Time),
 		storePath:   storePath,
 	}
 }
@@ -528,8 +530,17 @@ func (s *Scheduler) scheduleJobLocked(job *Job) {
 			s.mu.Unlock()
 			return
 		}
+		// Debounce: skip if this job was enqueued within the last 5 seconds.
+		// This prevents double-fire when Update runs during the unlocked
+		// enqueue window and creates a new timer that fires at the same time.
+		if last, ok := s.lastEnqueue[job.ID]; ok && time.Since(last) < 5*time.Second {
+			debug.Log("cron", "debounced duplicate fire for job %s (last enqueue %s ago)", job.ID, time.Since(last).Round(time.Millisecond))
+			s.mu.Unlock()
+			return
+		}
 		prompt := job.Prompt
 		queueIfBusy := job.QueueIfBusy
+		s.lastEnqueue[job.ID] = time.Now()
 		s.mu.Unlock()
 
 		s.enqueue(prompt, queueIfBusy)
@@ -620,6 +631,9 @@ func (s *Scheduler) SwitchSession(storePath, oldStorePath, workspaceDir string) 
 	for id := range s.jobs {
 		delete(s.jobs, id)
 	}
+	for id := range s.lastEnqueue {
+		delete(s.lastEnqueue, id)
+	}
 	s.nextID = 0
 	s.storePath = storePath
 	s.mu.Unlock()
@@ -643,5 +657,8 @@ func (s *Scheduler) Shutdown() {
 	}
 	for id := range s.jobs {
 		delete(s.jobs, id)
+	}
+	for id := range s.lastEnqueue {
+		delete(s.lastEnqueue, id)
 	}
 }
