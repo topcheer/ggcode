@@ -20,6 +20,7 @@ package agent
 //   - JetBrains AI: per-language coverage gap detection
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -27,6 +28,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 )
 
 // langProfile defines the test conventions for a programming language.
@@ -472,7 +474,9 @@ func changedFilesFromGitRaw(workingDir string) []string {
 // runGitStatusShort executes `git status --short --untracked-files=all` and
 // returns its output.
 func runGitStatusShort(workingDir string) ([]byte, error) {
-	cmd := exec.Command("git", "status", "--short", "--untracked-files=all")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", "status", "--short", "--untracked-files=all")
 	cmd.Dir = workingDir
 	return cmd.CombinedOutput()
 }

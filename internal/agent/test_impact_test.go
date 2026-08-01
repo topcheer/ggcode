@@ -308,15 +308,25 @@ func TestPostEditVerifyHintWithImpactAndCoverage(t *testing.T) {
 	// command and coverage nudge when in a git repo. We create a real git repo
 	// with changed Go files and verify the hint includes both pieces.
 	dir := initGitRepo(t)
-	os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module test\n"), 0644)
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module test\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 	writeGoFile(t, dir, "main.go", "package main\n")
-	exec.Command("git", "-C", dir, "add", ".").Run()
-	exec.Command("git", "-C", dir, "commit", "-m", "init").Run()
+	if out, err := exec.Command("git", "-C", dir, "add", ".").CombinedOutput(); err != nil {
+		t.Fatalf("git add failed: %v: %s", err, out)
+	}
+	if out, err := exec.Command("git", "-C", dir, "commit", "-m", "init").CombinedOutput(); err != nil {
+		t.Fatalf("git commit failed: %v: %s", err, out)
+	}
 
 	// Create an untested Go file in a subpackage.
 	sub := filepath.Join(dir, "internal", "agent")
-	os.MkdirAll(sub, 0755)
-	os.WriteFile(filepath.Join(sub, "foo.go"), []byte("package agent\n"), 0644)
+	if err := os.MkdirAll(sub, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, "foo.go"), []byte("package agent\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	a := &Agent{workingDir: dir}
 
