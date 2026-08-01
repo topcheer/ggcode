@@ -283,27 +283,23 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 	progressFn, _ := ctx.Value(ToolProgressKey{}).(ToolProgressFunc)
 
 	var stdout, stderr bytes.Buffer
-	if t.OutputTee != nil {
-		if progressFn != nil {
-			// Wrap with streaming progress writer for real-time TUI updates.
-			pwOut := newStreamingProgressWriter(&stdout, t.OutputTee, progressFn)
-			pwErr := newStreamingProgressWriter(&stderr, t.OutputTee, progressFn)
-			cmd.Stdout = io.MultiWriter(pwOut, t.OutputTee)
-			cmd.Stderr = io.MultiWriter(pwErr, t.OutputTee)
-		} else {
-			cmd.Stdout = io.MultiWriter(&stdout, t.OutputTee)
-			cmd.Stderr = io.MultiWriter(&stderr, t.OutputTee)
+	if progressFn != nil {
+		// Wrap with streaming progress writer for real-time TUI updates.
+		// The streamingProgressWriter writes to both the buffer and the tee.
+		var tee io.Writer
+		if t.OutputTee != nil {
+			tee = t.OutputTee
 		}
+		pwOut := newStreamingProgressWriter(&stdout, tee, progressFn)
+		pwErr := newStreamingProgressWriter(&stderr, tee, progressFn)
+		cmd.Stdout = pwOut
+		cmd.Stderr = pwErr
+	} else if t.OutputTee != nil {
+		cmd.Stdout = io.MultiWriter(&stdout, t.OutputTee)
+		cmd.Stderr = io.MultiWriter(&stderr, t.OutputTee)
 	} else {
-		if progressFn != nil {
-			pwOut := newStreamingProgressWriter(&stdout, nil, progressFn)
-			pwErr := newStreamingProgressWriter(&stderr, nil, progressFn)
-			cmd.Stdout = pwOut
-			cmd.Stderr = pwErr
-		} else {
-			cmd.Stdout = &stdout
-			cmd.Stderr = &stderr
-		}
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
 	}
 
 	// GUI commands: start and return immediately.

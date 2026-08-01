@@ -166,17 +166,6 @@ func (a *Agent) executeToolWithTimeout(ctx context.Context, tc provider.ToolCall
 	// the tool to abort (tools that check ctx.Done() will exit promptly).
 	toolCtx, cancel := context.WithCancel(ctx)
 
-	// Inject progress callback for streaming tools (e.g. wait_command).
-	if a.onToolProgress != nil {
-		fn := a.onToolProgress
-		toolID := tc.ID
-		toolCtx = context.WithValue(toolCtx, tool.ToolProgressKey{}, tool.ToolProgressFunc(
-			func(_, toolName, output string) {
-				fn(toolID, toolName, output)
-			},
-		))
-	}
-
 	defer cancel()
 
 	type toolResult struct {
@@ -221,6 +210,21 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 	if err := ctx.Err(); err != nil {
 		return tool.Result{Content: err.Error(), IsError: true}
 	}
+
+	// Inject progress callback for streaming tools (e.g. run_command, wait_command).
+	// This is done here (not in executeToolWithTimeout) because tools like
+	// run_command and wait_command are in toolsWithoutTimeout and bypass that
+	// function entirely. If ToolProgressKey is already set, don't overwrite.
+	if a.onToolProgress != nil && ctx.Value(tool.ToolProgressKey{}) == nil {
+		fn := a.onToolProgress
+		toolID := tc.ID
+		ctx = context.WithValue(ctx, tool.ToolProgressKey{}, tool.ToolProgressFunc(
+			func(_, toolName, output string) {
+				fn(toolID, toolName, output)
+			},
+		))
+	}
+
 	t, ok := a.tools.Get(tc.Name)
 	if !ok {
 		return tool.Result{Content: tool.FormatUnknownToolError(a.tools, tc.Name), IsError: true}
