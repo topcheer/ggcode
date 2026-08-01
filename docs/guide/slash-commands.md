@@ -8,6 +8,7 @@ Slash commands are typed directly in the chat input within the TUI.
 |---------|-------------|
 | `/help` | Show available commands |
 | `/sessions` | List and resume sessions |
+| `/search <query>` | Search message content across all saved sessions |
 | `/resume` | Resume a specific session |
 | `/compact` | Compact conversation to save context |
 | `/clear` | Clear conversation |

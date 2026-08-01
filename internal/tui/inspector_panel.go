@@ -24,6 +24,7 @@ type inspectorPanelKind string
 
 const (
 	inspectorPanelSessions    inspectorPanelKind = "sessions"
+	inspectorPanelSearch      inspectorPanelKind = "search"
 	inspectorPanelCheckpoints inspectorPanelKind = "checkpoints"
 	inspectorPanelMemory      inspectorPanelKind = "memory"
 	inspectorPanelTodos       inspectorPanelKind = "todos"
@@ -359,7 +360,7 @@ func (m *Model) handleInspectorPrimaryAction(items []inspectorPanelItem) (Model,
 	idx := clampInspectorCursor(m.inspectorPanel.cursor, len(items))
 	item := items[idx]
 	switch m.inspectorPanel.kind {
-	case inspectorPanelSessions:
+	case inspectorPanelSessions, inspectorPanelSearch:
 		if item.ID == "" {
 			return *m, nil
 		}
@@ -505,6 +506,8 @@ func (m Model) inspectorPanelItems(kind inspectorPanelKind) []inspectorPanelItem
 	switch kind {
 	case inspectorPanelSessions:
 		return m.inspectorSessionItems()
+	case inspectorPanelSearch:
+		return m.inspectorPanel.cachedItems
 	case inspectorPanelCheckpoints:
 		return m.inspectorCheckpointItems()
 	case inspectorPanelMemory:
@@ -978,7 +981,7 @@ func (m Model) inspectorPanelEmptyState() string {
 		return ""
 	}
 	switch m.inspectorPanel.kind {
-	case inspectorPanelSessions:
+	case inspectorPanelSessions, inspectorPanelSearch:
 		return inspectorText(m.currentLanguage(), "sessions_empty")
 	case inspectorPanelCheckpoints:
 		return inspectorText(m.currentLanguage(), "checkpoints_empty")
@@ -999,6 +1002,8 @@ func (m Model) inspectorPanelHints(kind inspectorPanelKind) string {
 	switch kind {
 	case inspectorPanelSessions:
 		return inspectorText(m.currentLanguage(), "hint_sessions")
+	case inspectorPanelSearch:
+		return inspectorText(m.currentLanguage(), "hint_search")
 	case inspectorPanelCheckpoints:
 		return inspectorText(m.currentLanguage(), "hint_checkpoints")
 	case inspectorPanelMemory:
@@ -1151,6 +1156,8 @@ func inspectorText(lang Language, key string, args ...any) string {
 			msg = "↑/↓ 选择 • Enter 恢复 • E 导出 • / 过滤 • Esc 关闭"
 		case "session_filter":
 			msg = "过滤: %s (Esc 清除)"
+		case "hint_search":
+			msg = "↑/↓ 选择 • Enter 恢复该会话 • Esc 关闭"
 		case "hint_agents":
 			msg = "↑/↓ 选择 • X 取消 • Esc 关闭"
 		case "hint_checkpoints":
@@ -1316,6 +1323,14 @@ func inspectorText(lang Language, key string, args ...any) string {
 			msg = "↑/↓ select • Enter resume • E export • / filter • Esc close"
 		case "session_filter":
 			msg = "Filter: %s (Esc to clear)"
+		case "search_no_query":
+			msg = "用法：/search <关键词> — 在所有会话的消息内容中搜索"
+		case "search_no_results":
+			msg = "未找到匹配的会话。"
+		case "search_results":
+			msg = "找到 %d 条结果（来自 %d 个会话）"
+		case "hint_search":
+			msg = "↑/↓ select • Enter resume session • Esc close"
 		case "hint_agents":
 			msg = "↑/↓ select • X cancel • Esc close"
 		case "hint_checkpoints":
@@ -1480,4 +1495,82 @@ func inspectorText(lang Language, key string, args ...any) string {
 		return msg
 	}
 	return fmt.Sprintf(msg, args...)
+}
+
+// openSearchPanel opens the inspector panel showing cross-session search results.
+// The search runs asynchronously to avoid blocking the UI on large session stores.
+func (m *Model) openSearchPanel(query string) {
+	if m.sessionStore == nil {
+		return
+	}
+	kind := inspectorPanelSearch
+	m.inspectorPanel = &inspectorPanelState{
+		kind:        kind,
+		itemsLoaded: true,
+		loading:     true,
+	}
+
+	store := m.sessionStore
+	lang := m.currentLanguage()
+	if m.program != nil {
+		go func() {
+			defer safego.Recover("tui.inspector.search")
+			items := executeSessionSearch(store, query, lang)
+			m.program.Send(inspectorItemsLoadedMsg{kind: kind, items: items})
+		}()
+	} else {
+		// Synchronous fallback for test/headless mode
+		items := executeSessionSearch(store, query, lang)
+		m.inspectorPanel.cachedItems = items
+		m.inspectorPanel.loading = false
+	}
+}
+
+// executeSessionSearch runs the search and converts results to inspector items.
+func executeSessionSearch(store session.Store, query string, lang Language) []inspectorPanelItem {
+	results, err := searchSessionsFromStore(store, query)
+	if err != nil {
+		return []inspectorPanelItem{{Title: inspectorText(lang, "sessions_error"), Detail: err.Error(), Disabled: true}}
+	}
+	if len(results) == 0 {
+		return []inspectorPanelItem{{Title: inspectorText(lang, "search_no_results"), Disabled: true}}
+	}
+
+	// Count unique sessions
+	sessionSet := map[string]bool{}
+	for _, r := range results {
+		sessionSet[r.SessionID] = true
+	}
+
+	items := make([]inspectorPanelItem, 0, len(results))
+	for _, r := range results {
+		title := strings.TrimSpace(r.Title)
+		if title == "" {
+			title = inspectorText(lang, "untitled_session")
+		}
+		role := "User"
+		if r.Role == "assistant" {
+			role = "Assistant"
+		}
+		summary := fmt.Sprintf("%s • %s", r.SessionID, role)
+		if !r.Timestamp.IsZero() {
+			summary = fmt.Sprintf("%s • %s", summary, r.Timestamp.Local().Format("01-02 15:04"))
+		}
+		items = append(items, inspectorPanelItem{
+			ID:      r.SessionID,
+			Title:   title,
+			Summary: summary,
+			Detail:  r.Snippet,
+		})
+	}
+	return items
+}
+
+// searchSessionsFromStore calls SearchSessions on a JSONLStore.
+// For non-JSONLStore backends (tests), it returns an error.
+func searchSessionsFromStore(store session.Store, query string) ([]session.SearchResult, error) {
+	if js, ok := store.(*session.JSONLStore); ok {
+		return js.SearchSessions(query, 100)
+	}
+	return nil, fmt.Errorf("search not supported for this store type")
 }

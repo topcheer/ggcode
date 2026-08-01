@@ -241,7 +241,7 @@ func shouldExecuteWhileBusy(text string) bool {
 		"/lang", "/model", "/provider", "/impersonate", "/chat", "/nick",
 		"/qq", "/telegram", "/tg", "/pc", "/discord",
 		"/feishu", "/lark", "/slack", "/dingtalk", "/ding", "/wechat", "/wecom", "/mattermost", "/mm", "/matrix", "/signal", "/irc", "/nostr", "/twitch", "/whatsapp", "/wa", "/im",
-		"/skills", "/stats", "/sessions", "/mcp",
+		"/skills", "/stats", "/sessions", "/search", "/mcp",
 		"/checkpoints", "/memory", "/todo", "/plugins", "/config", "/status", "/inspector",
 		"/stream", "/restart", "/help", "/?",
 		"/share", "/tunnel", "/unshare",
@@ -404,6 +404,15 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 			return nil
 		case "/sessions":
 			m.openInspectorPanelWithFilter(inspectorPanelSessions, strings.TrimSpace(strings.Join(parts[1:], " ")))
+			return nil
+		case "/search":
+			query := strings.TrimSpace(strings.Join(parts[1:], " "))
+			if query == "" {
+				m.chatWriteSystem(nextSystemID(), inspectorText(m.currentLanguage(), "search_no_query"))
+				m.chatListScrollToBottom()
+				return nil
+			}
+			m.openSearchPanel(query)
 			return nil
 		case "/title":
 			return m.handleTitleCommand(strings.TrimSpace(strings.Join(parts[1:], " ")))

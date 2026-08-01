@@ -204,6 +204,7 @@ var SlashCommands = []string{
 	"/regenerate", "/regen", "/branch", "/fork",
 	"/cron",
 	"/title",
+	"/search",
 }
 
 // SlashCommandDescriptions provides short descriptions for slash commands.
@@ -213,6 +214,7 @@ var SlashCommandDescriptions = map[string]string{
 	"/edit":         "Edit and resend last submission",
 	"/?":            "Show help message",
 	"/sessions":     "List saved sessions",
+	"/search":       "Search message content across all sessions",
 	"/resume":       "Resume a previous session",
 	"/model":        "Open model panel",
 	"/impersonate":  "Set client identity (impersonate CLI tools)",

@@ -103,6 +103,7 @@ individual A2A auth configuration.
 - **Harness workflow** — isolated task execution with review and promotion
 - **Scheduled tasks** — cron jobs, reminders, and background automation
 - **Resumable sessions** — pause and resume any conversation
+- **Cross-session search** — `/search <query>` finds messages by content across all saved sessions, with snippet preview and quick-resume
 - **Desktop + Mobile** — native apps for macOS, Windows, Linux, iOS, Android
 
 ## Platforms
