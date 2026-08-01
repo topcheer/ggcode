@@ -207,11 +207,27 @@ func DescribeTool(toolName, rawArgs string) ToolPresentation {
 			return toolPres("Branch", "create "+branch)
 		}
 		return toolPres("Branch", "switch "+branch)
+	case "git_revert":
+		return toolPres("Revert", displayTarget(argStr(args, "commit")))
+	case "git_reset":
+		return toolPres("Reset", argStr(args, "mode"))
+	case "git_tag":
+		action := argStr(args, "action")
+		if action == "" {
+			action = "list"
+		}
+		return toolPres("Tag", action+" "+argStr(args, "name"))
 	case "sleep":
 		sec, _ := strconv.Atoi(argStr(args, "seconds"))
 		ms, _ := strconv.Atoi(argStr(args, "milliseconds"))
 		d := time.Duration(sec)*time.Second + time.Duration(ms)*time.Millisecond
 		return toolPres("Sleep", d.String())
+	case "undo_edit":
+		action := argStr(args, "action")
+		if action == "" {
+			action = "undo"
+		}
+		return toolPres("Undo", action)
 	case "spawn_agent":
 		desc := strings.TrimSpace(argStr(args, "description"))
 		model := strings.TrimSpace(argStr(args, "model"))

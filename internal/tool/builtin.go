@@ -86,6 +86,9 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 		&GitCommit{},
 		&GitStash{},
 		&GitCheckout{},
+		&GitRevert{},
+		&GitReset{},
+		&GitTag{},
 
 		// Web
 		WebFetch{},
@@ -119,6 +122,9 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 
 		// Technical debt marker scanner (TODO/FIXME/HACK/XXX/BUG/NOTE)
 		ScanTodosTool{WorkingDir: workingDir},
+
+		// Undo/revert file edits (checkpoint-based, intercepted by agent runtime)
+		UndoEditTool{},
 	)
 	for _, tool := range tools {
 		if err := registry.Register(tool); err != nil {
