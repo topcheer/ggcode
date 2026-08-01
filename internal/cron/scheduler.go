@@ -548,6 +548,10 @@ func (s *Scheduler) scheduleJobLocked(job *Job) {
 		// enqueue window and creates a new timer that fires at the same time.
 		if last, ok := s.lastEnqueue[job.ID]; ok && time.Since(last) < 5*time.Second {
 			debug.Log("cron", "debounced duplicate fire for job %s (last enqueue %s ago)", job.ID, time.Since(last).Round(time.Millisecond))
+			// Still reschedule the next timer — without this, a debounced fire
+			// would permanently break the timer chain and the job would never
+			// fire again.
+			s.scheduleJobLocked(job)
 			s.mu.Unlock()
 			return
 		}
