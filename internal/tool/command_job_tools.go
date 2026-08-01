@@ -114,21 +114,9 @@ func (t StartCommandTool) Execute(ctx context.Context, input json.RawMessage) (R
 		}
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
-
-	// Stream initial output for 3 seconds before returning the job ID.
-	// This gives the user immediate visibility into startup output (e.g.
-	// "Server listening on port 3000" or compilation errors) without
-	// blocking on long-running commands.
-	if progressFn, ok := ctx.Value(ToolProgressKey{}).(ToolProgressFunc); ok && progressFn != nil {
-		job, jobErr := t.Manager.get(snap.ID)
-		if jobErr == nil && job != nil {
-			streamJobOutput(job, 3*time.Second, progressFn)
-			// Refresh snapshot after streaming.
-			updated := t.Manager.snapshot(job)
-			snap = &updated
-		}
-	}
-
+	// start_command is async — we don't know the exit code yet.
+	// OnPostExec will be called by the caller via read_command_output/wait_command
+	// when the job completes, not here.
 	return Result{Content: formatCommandJobSnapshot(*snap, false)}, nil
 }
 
