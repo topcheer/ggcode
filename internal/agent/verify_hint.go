@@ -393,6 +393,21 @@ var verifyCommands = map[string]bool{
 	"cmake":         true,
 	"ctest":         true,
 	"rake test":     true,
+	// Lint / format commands also count as verification — running them
+	// resets the post-edit verify hint counter.
+	"golangci-lint": true,
+	"gofmt":         true,
+	"goimports":     true,
+	"eslint":        true,
+	"prettier":      true,
+	"ruff":          true,
+	"rubocop":       true,
+	"rustfmt":       true,
+	"cargo fmt":     true,
+	"cargo clippy":  true,
+	"flake8":        true,
+	"mypy":          true,
+	"pylint":        true,
 }
 
 // isVerifyCommand checks whether a command string looks like a build/test/verify
