@@ -136,4 +136,20 @@ func TestSummarizeTokenAggregation(t *testing.T) {
 	if tpsSummary.AvgOutputTPS < expectedTPS-1 || tpsSummary.AvgOutputTPS > expectedTPS+1 {
 		t.Errorf("AvgOutputTPS = %.1f, want ~%.0f", tpsSummary.AvgOutputTPS, expectedTPS)
 	}
+
+	// Verify per-LLM-call weighted TPS with multiple calls in one turn.
+	// Each call has its own prefill (TTFT) that must be subtracted independently.
+	multiEvents := []MetricEvent{
+		// Call 1: TTFT=1s, Duration=6s → decode=5s, 200 tokens
+		{TurnIndex: 1, Type: "llm", TTFT: 1 * time.Second, Duration: 6 * time.Second, OutputTokens: 200},
+		// Call 2: TTFT=0.5s, Duration=3s → decode=2.5s, 300 tokens
+		{TurnIndex: 1, Type: "llm", TTFT: 500 * time.Millisecond, Duration: 3 * time.Second, OutputTokens: 300},
+	}
+	multiSummary := Summarize(multiEvents)
+	// Old (wrong) calculation: (200+300) / ((6+3) - 0.5) = 500/8.5 ≈ 58.8 tok/s
+	// New (correct) calculation: (200+300) / (5 + 2.5) = 500/7.5 ≈ 66.7 tok/s
+	expectedMultiTPS := 500.0 / 7.5
+	if multiSummary.Turns[0].OutputTPS < expectedMultiTPS-0.5 || multiSummary.Turns[0].OutputTPS > expectedMultiTPS+0.5 {
+		t.Errorf("multi-call OutputTPS = %.1f, want ~%.1f", multiSummary.Turns[0].OutputTPS, expectedMultiTPS)
+	}
 }

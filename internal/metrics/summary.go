@@ -48,7 +48,7 @@ type TurnSummary struct {
 	TTFT             time.Duration
 	Duration         time.Duration
 	ThinkTime        time.Duration
-	OutputTPS        float64 // output tokens/sec during generation (Duration - TTFT - ThinkTime)
+	OutputTPS        float64 // weighted avg output tokens/sec during decode (per-LLM-call, excludes prefill)
 	InputTokens      int
 	OutputTokens     int
 	CacheRead        int
@@ -60,6 +60,12 @@ type TurnSummary struct {
 	CumCacheWrite       int
 	SlowestTool         string
 	SlowestToolDuration time.Duration
+
+	// Unexported accumulators for per-LLM-call TPS computation.
+	// Each LLM call has its own prefill (TTFT), so decode duration
+	// must be computed per-call and summed, not subtracted once at the end.
+	sumDecodeDuration time.Duration // sum of (Duration - TTFT) across valid LLM calls
+	sumDecodeTokens   int           // sum of OutputTokens from LLM calls with valid decode
 }
 
 func (s SessionSummary) HasData() bool {
@@ -107,6 +113,16 @@ func Summarize(events []MetricEvent) SessionSummary {
 			turn.OutputTokens += ev.OutputTokens
 			turn.CacheRead += ev.CacheRead
 			turn.CacheWrite += ev.CacheWrite
+			// Accumulate per-call decode metrics for precise TPS calculation.
+			// Each LLM call has its own TTFT (prefill), so we subtract TTFT
+			// from each call's Duration individually, not once at turn level.
+			if ev.OutputTokens > 0 && ev.Duration > ev.TTFT {
+				decodeDur := ev.Duration - ev.TTFT
+				if decodeDur > 0 {
+					turn.sumDecodeDuration += decodeDur
+					turn.sumDecodeTokens += ev.OutputTokens
+				}
+			}
 		case "tool":
 			turn.ToolCallCount++
 			if !ev.ToolSuccess || ev.ToolError != "" {
@@ -159,15 +175,12 @@ func Summarize(events []MetricEvent) SessionSummary {
 		if turn.ThinkTime > 0 {
 			thinks = append(thinks, turn.ThinkTime)
 		}
-		// Calculate decode TPS: output tokens / decode duration.
-		// Decode duration = total duration - TTFT (prefill time).
-		// ThinkTime is part of decode (thinking tokens are also generated output).
-		if turn.OutputTokens > 0 && turn.Duration > turn.TTFT {
-			decodeDuration := turn.Duration - turn.TTFT
-			if decodeDuration > 0 {
-				turn.OutputTPS = float64(turn.OutputTokens) / decodeDuration.Seconds()
-				tpsValues = append(tpsValues, turn.OutputTPS)
-			}
+		// Calculate decode TPS using per-LLM-call weighted average.
+		// Each call's decode duration (Duration - TTFT) was accumulated
+		// individually, so multiple prefill periods are correctly excluded.
+		if turn.sumDecodeTokens > 0 && turn.sumDecodeDuration > 0 {
+			turn.OutputTPS = float64(turn.sumDecodeTokens) / turn.sumDecodeDuration.Seconds()
+			tpsValues = append(tpsValues, turn.OutputTPS)
 		}
 		out.Turns = append(out.Turns, *turn)
 	}
