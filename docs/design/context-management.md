@@ -46,6 +46,19 @@ When context fills up, the following pipeline runs in order:
 
 Error results are never truncated.
 
+## Tool Argument Size Guard
+
+`internal/agent/arg_size_guard.go` detects oversized tool arguments that waste context tokens in tool_use blocks. The guard inspects arguments for known bloat patterns and injects a guidance hint (does not block execution):
+
+| Pattern | Threshold | Guidance |
+|---------|-----------|----------|
+| `edit_file`/`multi_edit_file` `old_text`/`new_text` | 4 KB warn, 16 KB severe | Use concise line-number anchors instead of pasting large code blocks |
+| `write_file` `content` | 4 KB | Use `edit_file` with targeted anchors instead of rewriting entire file |
+| `grep`/`search_files` `pattern` | 4 KB | Use shorter regex pattern |
+| Any tool total arguments | 8 KB | Consider more concise parameters |
+
+The guard fires at most once per run to avoid repetition. It resets at the start of each user turn. This complements the output guard (which truncates results) by addressing argument-side bloat before it enters context.
+
 ## Compaction Threshold
 
 The precompact trigger is `AutoCompactThreshold()` = 99% of the usable prompt budget. The usable budget is `contextWindow - outputReserve - safetyMargin`. Defaults: 10% output reserve (capped at 25% if configured), 5% safety margin, and a minimum of 64 tokens. This means the default trigger for a 128k-window manager is roughly 84% of the total context window, but it varies with the configured output reserve.

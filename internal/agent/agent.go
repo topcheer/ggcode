@@ -155,6 +155,7 @@ type Agent struct {
 	fulfillmentGate            *fulfillmentGateState                 // pre-completion coverage verification (request-vs-work match)
 	complexityGate             *complexityGateState                  // post-completion code complexity quality gate
 	transientRetryBudget       int                                   // remaining automatic retries for transient tool failures (per run)
+	argSizeGuardFires          int                                   // count of argument size guard injections this run
 	latencyTracker             *LatencyTracker                       // per-tool latency baseline & slow-tool outlier detection
 	effortAdapter              *adaptiveEffortState                  // per-turn reasoning effort adaptation (Opus 5 effort toggle pattern)
 	ruleStore                  *RuleStore                            // cached rule store for hot-path rule injection (avoids per-tool disk I/O)
@@ -854,6 +855,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.resetRepetitionTracker()
 	a.fulfillmentGate.reset()
 	a.complexityGate.reset()
+	a.argSizeGuardFires = 0
 	if a.effortAdapter != nil {
 		a.effortAdapter.reset()
 	}
@@ -1046,6 +1048,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.exportGuard.reset()
 	a.fulfillmentGate.reset()
 	a.complexityGate.reset()
+	a.argSizeGuardFires = 0
 	a.toolFilter = tool.NewRelevanceFilter()
 	a.resetTransientRetryBudget()
 
@@ -1790,6 +1793,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 			if result.IsError {
 				debug.Log("agent", "tool result ERROR: tool=%s output=%s", tc.Name, util.Truncate(result.Content, 200))
+			}
+
+			// Argument size guard: detect oversized tool arguments (e.g., huge
+			// old_text anchors in edit_file, massive write_file content) and
+			// inject a context-efficiency hint. Fires at most once per run.
+			if argSizeHint := a.checkArgSizeGuard(tc.Name, tc.Arguments); argSizeHint != "" {
+				if result.Content != "" {
+					result.Content = result.Content + "\n\n" + argSizeHint
+				} else {
+					result.Content = argSizeHint
+				}
 			}
 
 			// Record tool errors for reflection/ratchet rule extraction.
