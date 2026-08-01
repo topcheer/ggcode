@@ -121,7 +121,7 @@ func (m *Model) chatStartTool(ts ToolStatusMsg) {
 
 	// Background cmd tools → skip (no header/body needed)
 	switch ts.ToolName {
-	case "read_command_output", "wait_command", "stop_command",
+	case "read_command_output", "stop_command",
 		"write_command_input", "list_commands":
 		return
 	}
@@ -216,7 +216,7 @@ func (m *Model) chatFinishTool(ts ToolStatusMsg) {
 
 	// Background cmd tools → skip (no header/body needed)
 	switch ts.ToolName {
-	case "read_command_output", "wait_command", "stop_command",
+	case "read_command_output", "stop_command",
 		"write_command_input", "list_commands":
 		return
 	}

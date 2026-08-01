@@ -197,7 +197,7 @@ func summarizeToolResult(lang Language, msg ToolStatusMsg) string {
 			return tr(lang, "tool.no_output")
 		}
 		return summarizeTextPayload(lang, result, tr(lang, "tool.output"))
-	case "start_command", "read_command_output", "wait_command", "stop_command", "write_command_input", "list_commands":
+	case "start_command", "read_command_output", "stop_command", "write_command_input", "list_commands":
 		if summary := summarizeAsyncCommandResult(result); summary != "" {
 			return summary
 		}
