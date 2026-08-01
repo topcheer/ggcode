@@ -660,7 +660,6 @@ func PrettifyToolName(name string) string {
 
 func NewBashToolItem(id, displayName, command string, status ToolStatus, styles Styles) *BashToolItem {
 	b := NewBaseToolItem(id, displayName, status, command, styles)
-	b.suppressBody = true
 	return &BashToolItem{BaseToolItem: *b}
 }
 
