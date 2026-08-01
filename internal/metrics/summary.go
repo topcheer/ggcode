@@ -62,10 +62,10 @@ type TurnSummary struct {
 	SlowestToolDuration time.Duration
 
 	// Unexported accumulators for per-LLM-call TPS computation.
-	// Each LLM call has its own prefill (TTFT), so decode duration
-	// must be computed per-call and summed, not subtracted once at the end.
-	sumDecodeDuration time.Duration // sum of (Duration - TTFT) across valid LLM calls
-	sumDecodeTokens   int           // sum of OutputTokens from LLM calls with valid decode
+	// Each call independently computes TPS = tokens / (Duration - TTFT),
+	// then the turn-level TPS is the simple average across all calls.
+	sumTPS   float64 // sum of per-call TPS values
+	tpsCount int     // number of LLM calls with valid TPS
 }
 
 func (s SessionSummary) HasData() bool {
@@ -113,14 +113,13 @@ func Summarize(events []MetricEvent) SessionSummary {
 			turn.OutputTokens += ev.OutputTokens
 			turn.CacheRead += ev.CacheRead
 			turn.CacheWrite += ev.CacheWrite
-			// Accumulate per-call decode metrics for precise TPS calculation.
-			// Each LLM call has its own TTFT (prefill), so we subtract TTFT
-			// from each call's Duration individually, not once at turn level.
+			// Per-call TPS: independently compute each call's decode speed,
+			// then average at the turn level (not weighted sum).
 			if ev.OutputTokens > 0 && ev.Duration > ev.TTFT {
 				decodeDur := ev.Duration - ev.TTFT
 				if decodeDur > 0 {
-					turn.sumDecodeDuration += decodeDur
-					turn.sumDecodeTokens += ev.OutputTokens
+					turn.sumTPS += float64(ev.OutputTokens) / decodeDur.Seconds()
+					turn.tpsCount++
 				}
 			}
 		case "tool":
@@ -175,11 +174,9 @@ func Summarize(events []MetricEvent) SessionSummary {
 		if turn.ThinkTime > 0 {
 			thinks = append(thinks, turn.ThinkTime)
 		}
-		// Calculate decode TPS using per-LLM-call weighted average.
-		// Each call's decode duration (Duration - TTFT) was accumulated
-		// individually, so multiple prefill periods are correctly excluded.
-		if turn.sumDecodeTokens > 0 && turn.sumDecodeDuration > 0 {
-			turn.OutputTPS = float64(turn.sumDecodeTokens) / turn.sumDecodeDuration.Seconds()
+		// Turn-level TPS = simple average of per-call TPS values.
+		if turn.tpsCount > 0 {
+			turn.OutputTPS = turn.sumTPS / float64(turn.tpsCount)
 			tpsValues = append(tpsValues, turn.OutputTPS)
 		}
 		out.Turns = append(out.Turns, *turn)
