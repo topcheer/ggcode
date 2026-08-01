@@ -30,6 +30,8 @@ type OpenAIProvider struct {
 	cap             *adaptiveCap // optional; when non-nil, takes precedence over maxTokens
 	reasoningEffort string
 	toolChoice      string // "", "auto", "required", "none"
+	temperature     float64
+	topP            float64
 	name            string
 	baseURL         string                    // endpoint URL, for logging
 	transport       *headerInjectingTransport // kept for runtime header updates
@@ -48,6 +50,8 @@ func (p *OpenAIProvider) CloneWithModel(model string) Provider {
 		cap:             p.cap,
 		reasoningEffort: p.reasoningEffort,
 		toolChoice:      p.toolChoice,
+		temperature:     p.temperature,
+		topP:            p.topP,
 		name:            p.name,
 		baseURL:         p.baseURL,
 		transport:       p.transport,
@@ -104,6 +108,28 @@ func (p *OpenAIProvider) applyToolChoice(req *openai.ChatCompletionRequest) {
 	switch p.toolChoice {
 	case "auto", "required", "none":
 		req.ToolChoice = p.toolChoice
+	}
+}
+
+// SetTemperature sets the sampling temperature. A value of 0 means "use provider
+// default" (which is typically 1.0). Values between 0 and 2 are valid.
+func (p *OpenAIProvider) SetTemperature(temp float64) { p.temperature = temp }
+func (p *OpenAIProvider) Temperature() float64        { return p.temperature }
+
+// SetTopP sets the nucleus sampling parameter. A value of 0 means "use provider
+// default". Values between 0 and 1 are valid.
+func (p *OpenAIProvider) SetTopP(topP float64) { p.topP = topP }
+func (p *OpenAIProvider) TopP() float64        { return p.topP }
+
+// applySampling sets temperature and top_p on the request when configured.
+// Following the OpenAI API guidance, both can be set simultaneously (unlike
+// Anthropic which recommends using only one).
+func (p *OpenAIProvider) applySampling(req *openai.ChatCompletionRequest) {
+	if p.temperature > 0 {
+		req.Temperature = float32(p.temperature)
+	}
+	if p.topP > 0 {
+		req.TopP = float32(p.topP)
 	}
 }
 
@@ -292,6 +318,7 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 		req.Tools = p.convertTools(tools)
 	}
 	p.applyToolChoice(&req)
+	p.applySampling(&req)
 
 	var resp openai.ChatCompletionResponse
 	err := retryWithBackoffCtx(ctx, func() error {
@@ -336,6 +363,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 		req.Tools = p.convertTools(tools)
 	}
 	p.applyToolChoice(&req)
+	p.applySampling(&req)
 
 	debug.Log("openai", "ChatStream START model=%s msgs=%d tools=%d", p.model, len(chatMsgs), len(req.Tools))
 
