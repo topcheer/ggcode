@@ -82,7 +82,10 @@ func (a *Agent) asyncVerify(ctx context.Context, runStats *RunStats) {
 	if result.Passed {
 		debug.Log("verify", "PASSED: %s", cmd)
 		// Build/test passed — run lint as advisory secondary check.
+		a.verifyProgress("Running lint check…")
+		lintStart := time.Now()
 		a.runLintAfterBuild(ctx, workingDir)
+		debug.Log("verify", "async: lint completed in %s", time.Since(lintStart))
 		a.verifyResult(*result)
 		return
 	}
@@ -424,7 +427,10 @@ func (a *Agent) syncVerifyAndGate(ctx context.Context, runStats *RunStats, retry
 	// Determine verification command — deterministic first, then LLM.
 	cmd := detectBuildSystem(workingDir)
 	if cmd == "" {
+		a.verifyProgress("Determining verification command…")
+		start := time.Now()
 		cmd = a.llmDecideVerifyCommand(ctx)
+		debug.Log("verify", "sync: LLM decided verify command in %s: %q", time.Since(start), cmd)
 	}
 	if cmd == "" {
 		debug.Log("verify", "sync: no verification command determined")
@@ -444,7 +450,10 @@ func (a *Agent) syncVerifyAndGate(ctx context.Context, runStats *RunStats, retry
 		debug.Log("verify", "sync: PASSED")
 		// Build/test passed — run lint as advisory secondary check.
 		// Warnings are injected into context for the agent to fix.
+		a.verifyProgress("Running lint check…")
+		lintStart := time.Now()
 		a.runLintAfterBuild(ctx, workingDir)
+		debug.Log("verify", "sync: lint completed in %s", time.Since(lintStart))
 		a.verifyResult(*result)
 		return false // proceed to return — caller skips async verify
 	}
