@@ -471,8 +471,9 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		// If busy and queue_if_busy=false (default), skip this firing.
 		// Append a doc-sync reminder if the prompt doesn't already mention docs.
 		prompt := withDocSyncReminder(msg.Prompt)
+		ts := time.Now().Format("15:04:05")
 		if !m.loading {
-			sysMsg := m.t("cron.firing")
+			sysMsg := fmt.Sprintf("%s (%s)", m.t("cron.firing"), ts)
 			m.suppressNextTunnelSystem = sysMsg
 			m.chatWriteSystem(nextSystemID(), sysMsg)
 			if broker := m.tunnelEventBroker(); broker != nil {
@@ -486,7 +487,7 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			return m, m.submitHiddenText(prompt)
 		}
 		if msg.QueueIfBusy {
-			sysMsg := m.t("cron.firing")
+			sysMsg := fmt.Sprintf("%s (%s)", m.t("cron.firing"), ts)
 			m.suppressNextTunnelSystem = sysMsg
 			m.chatWriteSystem(nextSystemID(), sysMsg)
 			m.queuePendingSubmissionHidden(prompt)

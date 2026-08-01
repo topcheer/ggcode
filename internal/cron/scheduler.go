@@ -640,6 +640,12 @@ func (s *Scheduler) SwitchSession(storePath, oldStorePath, workspaceDir string) 
 	}
 
 	// Stop all existing timers and clear all jobs from the old session.
+	// Bump ALL generation counters so that any in-flight timer callback
+	// from the old session detects a stale generation and aborts before
+	// calling enqueue. Without this, Load() could recreate a job with the
+	// same ID before an old callback checks s.jobs[job.ID], allowing the
+	// old callback to pass both the generation and existence checks and
+	// fire alongside the new timer — causing a double-fire.
 	s.mu.Lock()
 	for id, timer := range s.timers {
 		timer.Stop()
@@ -647,6 +653,10 @@ func (s *Scheduler) SwitchSession(storePath, oldStorePath, workspaceDir string) 
 	}
 	for id := range s.jobs {
 		delete(s.jobs, id)
+	}
+	// Bump generations for ALL known jobs so old callbacks abort.
+	for id := range s.generations {
+		s.generations[id]++
 	}
 	// Do NOT clear lastEnqueue here — if a timer from the old session is
 	// still executing its callback (Stop doesn't wait for in-flight callbacks),
@@ -656,7 +666,7 @@ func (s *Scheduler) SwitchSession(storePath, oldStorePath, workspaceDir string) 
 	s.storePath = storePath
 	s.mu.Unlock()
 
-	debug.Log("cron", "SwitchSession: cleared old jobs, rebinding to %s", storePath)
+	debug.Log("cron", "SwitchSession: cleared old jobs, bumped generations, rebinding to %s", storePath)
 
 	// Migrate from old workspace-scoped store if present.
 	MigrateWorkspaceJobs(oldStorePath, storePath, workspaceDir)
