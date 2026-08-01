@@ -116,6 +116,12 @@ func (s *Scheduler) Load() {
 		createdAt, _ := time.Parse(time.RFC3339, jj.CreatedAt)
 
 		s.mu.Lock()
+		// Skip if this job was already loaded (prevents duplicate timers
+		// when Load() is called multiple times for the same file).
+		if _, exists := s.jobs[jj.ID]; exists {
+			s.mu.Unlock()
+			continue
+		}
 		s.nextID++
 		job := &Job{
 			ID:          jj.ID,
@@ -502,6 +508,13 @@ func (s *Scheduler) scheduleJob(job *Job) {
 // from inside the timer callback to avoid deadlock (Go's sync.Mutex
 // is not reentrant).
 func (s *Scheduler) scheduleJobLocked(job *Job) {
+	// Stop any existing timer for this job before creating a new one.
+	// Without this, Load() called twice (e.g., initial Load + SwitchSession→Load)
+	// would leave the old timer running alongside the new one → double-fire.
+	if old, ok := s.timers[job.ID]; ok {
+		old.Stop()
+		delete(s.timers, job.ID)
+	}
 	// Increment generation so that any previously scheduled timer callback
 	// can detect that it is stale and abort, preventing double-fire races.
 	s.generations[job.ID]++
@@ -631,9 +644,10 @@ func (s *Scheduler) SwitchSession(storePath, oldStorePath, workspaceDir string) 
 	for id := range s.jobs {
 		delete(s.jobs, id)
 	}
-	for id := range s.lastEnqueue {
-		delete(s.lastEnqueue, id)
-	}
+	// Do NOT clear lastEnqueue here — if a timer from the old session is
+	// still executing its callback (Stop doesn't wait for in-flight callbacks),
+	// clearing lastEnqueue would remove the debounce protection and allow
+	// the new session's timer to double-fire.
 	s.nextID = 0
 	s.storePath = storePath
 	s.mu.Unlock()
