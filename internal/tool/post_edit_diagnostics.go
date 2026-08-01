@@ -94,6 +94,13 @@ func postEditDiagnostics(workingDir, filePath string) string {
 		result += siblings
 	}
 
+	// Check files in OTHER packages that import the edited file's package.
+	// This catches cross-package breakage: editing a function signature in
+	// package A can break callers in package B that import A.
+	if crossPkg := checkCrossPackageDiagnostics(ctx, workingDir, filePath); crossPkg != "" {
+		result += crossPkg
+	}
+
 	return result
 }
 
@@ -161,6 +168,85 @@ func checkSiblingDiagnostics(ctx context.Context, workingDir, filePath string) s
 	}
 	b.WriteString("These errors are in sibling files caused by your edit. Fix them too.")
 	return b.String()
+}
+
+// checkCrossPackageDiagnostics queries cached LSP diagnostics for Go files in
+// OTHER packages (different directories) that import the edited file's package.
+// This catches cross-package breakage that checkSiblingDiagnostics misses: when
+// editing a function in package A breaks callers in package B.
+//
+// Uses lsp.CrossPackageDiagnostics which reads the cached workspace diagnostics
+// maintained by gopls and filters to files that import the edited package.
+func checkCrossPackageDiagnostics(ctx context.Context, workingDir, filePath string) string {
+	cross, err := lsp.CrossPackageDiagnostics(ctx, workingDir, filePath)
+	if err != nil || len(cross) == 0 {
+		return ""
+	}
+
+	var errors []string
+	var warnings []string
+	for _, sd := range cross {
+		msg := strings.TrimSpace(sd.Diagnostic.Message)
+		if msg == "" {
+			continue
+		}
+		display := shortenForDisplay(sd.File, workingDir)
+		line := sd.Diagnostic.Range.Start.Line + 1
+		formatted := fmt.Sprintf("  %s:%d: %s", display, line, msg)
+		if sd.Diagnostic.Severity <= 1 {
+			errors = append(errors, formatted)
+		} else if sd.Diagnostic.Severity == 2 {
+			warnings = append(warnings, formatted)
+		}
+	}
+
+	if len(errors) == 0 && len(warnings) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString("\n[Cross-package Diagnostics — files in other packages that import this package]\n")
+	if len(errors) > 0 {
+		b.WriteString(fmt.Sprintf("Errors (%d) in dependent packages:\n", len(errors)))
+		shown := errors
+		if len(shown) > 5 {
+			shown = shown[:5]
+		}
+		for _, e := range shown {
+			b.WriteString(e + "\n")
+		}
+		if len(errors) > 5 {
+			b.WriteString(fmt.Sprintf("  ... and %d more\n", len(errors)-5))
+		}
+	}
+	if len(warnings) > 0 {
+		if len(errors) > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString(fmt.Sprintf("Warnings (%d) in dependent packages:\n", len(warnings)))
+		shown := warnings
+		if len(shown) > 3 {
+			shown = shown[:3]
+		}
+		for _, w := range shown {
+			b.WriteString(w + "\n")
+		}
+		if len(warnings) > 3 {
+			b.WriteString(fmt.Sprintf("  ... and %d more\n", len(warnings)-3))
+		}
+	}
+	b.WriteString("These errors are in files that import the package you just edited. Fix them too.")
+	return b.String()
+}
+
+// shortenForDisplay converts an absolute path to a project-relative one for display.
+func shortenForDisplay(absPath, workingDir string) string {
+	if workingDir != "" {
+		if rel, err := filepath.Rel(workingDir, absPath); err == nil && !strings.HasPrefix(rel, "..") {
+			return rel
+		}
+	}
+	return absPath
 }
 
 // formatDiagnostics formats LSP diagnostics into a concise warning string.

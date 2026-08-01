@@ -404,6 +404,223 @@ func SiblingDiagnostics(ctx context.Context, workspace, editedPath string) ([]Si
 	return result, nil
 }
 
+// CrossPackageDiagnostics checks cached LSP diagnostics for Go files OUTSIDE the
+// edited file's directory that may be affected by the edit. Language servers like
+// gopls push diagnostics for all files in the workspace via
+// textDocument/publishDiagnostics; those diagnostics are cached in the session.
+//
+// Unlike SiblingDiagnostics (which checks files in the same directory/package),
+// this function catches cross-package breakage: when editing a file in package A
+// breaks callers in package B that import A. For example, changing a function
+// signature in internal/agent/agent.go will cause compilation errors in
+// internal/tui/ files that call that function.
+//
+// To minimize false positives (pre-existing errors in unrelated files), this
+// function only reports errors in files whose import block references the edited
+// file's package. The package import path is derived from the go.mod module path
+// plus the edited file's directory relative to the module root.
+//
+// This function reads from the cached diagnostics — it does NOT open documents or
+// issue additional LSP requests — so it is fast and non-blocking. However, it
+// does read candidate files to check their imports; this is capped to a small
+// number of files (maxCrossPackageFiles) to stay fast.
+func CrossPackageDiagnostics(ctx context.Context, workspace, editedPath string) ([]SiblingDiagnostic, error) {
+	// Only check for Go files.
+	if filepath.Ext(editedPath) != ".go" {
+		return nil, nil
+	}
+
+	resolved, ok := ResolveServerForWorkspace(workspace)
+	if !ok {
+		return nil, nil
+	}
+
+	// Determine the Go package import path for the edited file.
+	pkgPath, ok := goPackageImportPath(workspace, editedPath)
+	if !ok || pkgPath == "" {
+		return nil, nil
+	}
+
+	// Acquire the existing session to read cached diagnostics.
+	session, err := globalSessions.acquire(ctx, workspace, resolved)
+	if err != nil {
+		return nil, nil // session not available — silently skip
+	}
+
+	// Collect all URIs with cached error/warning diagnostics.
+	editedDir := filepath.Dir(editedPath)
+	editedAbs, _ := filepath.Abs(editedPath)
+
+	var candidates []crossPackageCandidate
+
+	session.mu.Lock()
+	for uri, state := range session.diagnostics {
+		if !state.seen || len(state.diagnostics) == 0 {
+			continue
+		}
+		// Convert URI to filesystem path.
+		fp := uriToPath(uri)
+		if fp == "" {
+			continue
+		}
+		fpAbs, _ := filepath.Abs(fp)
+		// Skip the edited file itself and files in the same directory
+		// (those are handled by SiblingDiagnostics).
+		if fpAbs == editedAbs {
+			continue
+		}
+		if filepath.Dir(fp) == editedDir {
+			continue
+		}
+		// Only consider Go source files.
+		if filepath.Ext(fp) != ".go" {
+			continue
+		}
+		// Collect error/warning diagnostics.
+		var diags []Diagnostic
+		for _, d := range state.diagnostics {
+			if d.Severity <= 2 {
+				diags = append(diags, d)
+			}
+		}
+		if len(diags) > 0 {
+			candidates = append(candidates, crossPackageCandidate{path: fp, diag: diags})
+		}
+	}
+	session.mu.Unlock()
+
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+
+	// Filter candidates: only include files that import the edited file's package.
+	// This reduces false positives from pre-existing errors in unrelated files.
+	// Sort candidates by number of errors (most errors first) so we check the
+	// most likely affected files first within our cap.
+	sortCandidatesByErrorCount(candidates)
+
+	checked := 0
+	var result []SiblingDiagnostic
+	for _, c := range candidates {
+		if checked >= maxCrossPackageFiles {
+			break
+		}
+		checked++
+
+		// Quick check: does this file import the edited file's package?
+		if !fileImportsPackage(c.path, pkgPath) {
+			continue
+		}
+
+		for _, d := range c.diag {
+			result = append(result, SiblingDiagnostic{
+				File:       c.path,
+				Diagnostic: d,
+			})
+		}
+	}
+
+	return result, nil
+}
+
+// maxCrossPackageFiles limits how many candidate files we read to check imports,
+// keeping the post-edit diagnostics fast even in large workspaces.
+const maxCrossPackageFiles = 20
+
+// goPackageImportPath derives the Go import path for a source file from the
+// workspace's go.mod module path and the file's directory relative to the module root.
+// Returns the import path and true on success, or empty string and false if the
+// module path cannot be determined.
+func goPackageImportPath(workspace, filePath string) (string, bool) {
+	// Walk up from the file's directory to find go.mod.
+	dir := filepath.Dir(filePath)
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return "", false
+	}
+
+	var modDir, modulePath string
+	searchDir := absDir
+	for i := 0; i < 30; i++ { // cap at 30 levels to prevent infinite loops
+		modFile := filepath.Join(searchDir, "go.mod")
+		if data, err := os.ReadFile(modFile); err == nil {
+			modDir = searchDir
+			modulePath = parseGoModModule(string(data))
+			break
+		}
+		parent := filepath.Dir(searchDir)
+		if parent == searchDir {
+			break
+		}
+		searchDir = parent
+	}
+
+	if modulePath == "" || modDir == "" {
+		return "", false
+	}
+
+	// Compute the relative path from the module root to the file's directory.
+	relDir, err := filepath.Rel(modDir, absDir)
+	if err != nil || relDir == "." {
+		return modulePath, true
+	}
+
+	// Join module path with the relative directory, using forward slashes.
+	return modulePath + "/" + filepath.ToSlash(relDir), true
+}
+
+// parseGoModModule extracts the module path from a go.mod file content.
+func parseGoModModule(content string) string {
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "module ") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "module "))
+		}
+	}
+	return ""
+}
+
+// fileImportsPackage checks whether a Go source file imports the given package path.
+// This is a fast heuristic: it searches the file content for the import path string
+// within an import block. It does not fully parse the Go AST.
+func fileImportsPackage(filePath, pkgPath string) bool {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return false
+	}
+	content := string(data)
+
+	// Fast path: if the package path doesn't appear anywhere in the file, skip.
+	if !strings.Contains(content, pkgPath) {
+		return false
+	}
+
+	// More precise check: look for the path in quoted strings within import context.
+	// Check both single and block import forms.
+	quoted := `"` + pkgPath + `"`
+	if strings.Contains(content, quoted) {
+		return true
+	}
+
+	return false
+}
+
+// crossPackageCandidate holds a file path and its cached error/warning diagnostics
+// for cross-package impact analysis.
+type crossPackageCandidate struct {
+	path string
+	diag []Diagnostic
+}
+
+// sortCandidatesByErrorCount sorts candidates in descending order by number of errors.
+func sortCandidatesByErrorCount(candidates []crossPackageCandidate) {
+	for i := 1; i < len(candidates); i++ {
+		for j := i; j > 0 && len(candidates[j].diag) > len(candidates[j-1].diag); j-- {
+			candidates[j], candidates[j-1] = candidates[j-1], candidates[j]
+		}
+	}
+}
+
 func Diagnostics(ctx context.Context, workspace, path string) ([]Diagnostic, error) {
 	return withOpenDocument(ctx, workspace, path, func(ctx context.Context, session *sessionClient, docURI string) ([]Diagnostic, error) {
 		if session.supportsPullDiagnostics() {
