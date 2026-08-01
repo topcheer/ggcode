@@ -140,6 +140,11 @@ func (t ReadFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 	// Record the file's mtime for stale-read detection by write_file.
 	defaultFileTracker.RecordRead(args.Path)
 
+	// Check for unresolved merge conflict markers in the raw content and
+	// append a warning. We check raw content (not the line-numbered display
+	// text) because line-number prefixes shift the markers off column 0.
+	text += CheckContentForConflicts(string(data))
+
 	return Result{Content: text}, nil
 }
 

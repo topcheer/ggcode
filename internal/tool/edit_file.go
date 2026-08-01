@@ -174,6 +174,7 @@ func (t EditFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 	msg += compactDiff(content, string(writeData))
 	msg += syntaxCheck(args.FilePath, writeData)
 	msg += postEditDiagnostics(t.WorkingDir, args.FilePath)
+	msg += CheckContentForConflicts(newContent)
 
 	// Record the file's new mtime so subsequent write_file calls don't see
 	// a false stale-read from this edit.
