@@ -23,6 +23,11 @@ type SessionSummary struct {
 	P95Duration time.Duration
 	AvgThink    time.Duration
 
+	// OutputTPS is the average output tokens/sec during the generation phase
+	// (excluding TTFT and think time). 0 if no output or duration.
+	AvgOutputTPS float64
+	P95OutputTPS float64
+
 	SlowTools []ToolSummary
 	Turns     []TurnSummary
 }
@@ -43,6 +48,7 @@ type TurnSummary struct {
 	TTFT             time.Duration
 	Duration         time.Duration
 	ThinkTime        time.Duration
+	OutputTPS        float64 // output tokens/sec during generation (Duration - TTFT - ThinkTime)
 	InputTokens      int
 	OutputTokens     int
 	CacheRead        int
@@ -134,6 +140,7 @@ func Summarize(events []MetricEvent) SessionSummary {
 	ttfts := make([]time.Duration, 0, len(turnsByIndex))
 	durations := make([]time.Duration, 0, len(turnsByIndex))
 	thinks := make([]time.Duration, 0, len(turnsByIndex))
+	tpsValues := make([]float64, 0, len(turnsByIndex))
 
 	for _, turn := range turnsByIndex {
 		out.LLMCallCount += turn.LLMCallCount
@@ -151,6 +158,16 @@ func Summarize(events []MetricEvent) SessionSummary {
 		}
 		if turn.ThinkTime > 0 {
 			thinks = append(thinks, turn.ThinkTime)
+		}
+		// Calculate decode TPS: output tokens / decode duration.
+		// Decode duration = total duration - TTFT (prefill time).
+		// ThinkTime is part of decode (thinking tokens are also generated output).
+		if turn.OutputTokens > 0 && turn.Duration > turn.TTFT {
+			decodeDuration := turn.Duration - turn.TTFT
+			if decodeDuration > 0 {
+				turn.OutputTPS = float64(turn.OutputTokens) / decodeDuration.Seconds()
+				tpsValues = append(tpsValues, turn.OutputTPS)
+			}
 		}
 		out.Turns = append(out.Turns, *turn)
 	}
@@ -179,6 +196,8 @@ func Summarize(events []MetricEvent) SessionSummary {
 	out.AvgDuration = averageDuration(durations)
 	out.P95Duration = percentileDuration(durations, 95)
 	out.AvgThink = averageDuration(thinks)
+	out.AvgOutputTPS = averageFloat(tpsValues)
+	out.P95OutputTPS = percentileFloat(tpsValues, 95)
 
 	out.SlowTools = make([]ToolSummary, 0, len(toolsByName))
 	for name, agg := range toolsByName {
@@ -240,6 +259,39 @@ func percentileDuration(values []time.Duration, percentile int) time.Duration {
 	}
 	cloned := append([]time.Duration(nil), values...)
 	sort.Slice(cloned, func(i, j int) bool { return cloned[i] < cloned[j] })
+	if percentile <= 0 {
+		return cloned[0]
+	}
+	if percentile >= 100 {
+		return cloned[len(cloned)-1]
+	}
+	index := int(math.Ceil(float64(percentile)*float64(len(cloned))/100.0)) - 1
+	if index < 0 {
+		index = 0
+	}
+	if index >= len(cloned) {
+		index = len(cloned) - 1
+	}
+	return cloned[index]
+}
+
+func averageFloat(values []float64) float64 {
+	if len(values) == 0 {
+		return 0
+	}
+	var total float64
+	for _, v := range values {
+		total += v
+	}
+	return total / float64(len(values))
+}
+
+func percentileFloat(values []float64, percentile int) float64 {
+	if len(values) == 0 {
+		return 0
+	}
+	cloned := append([]float64(nil), values...)
+	sort.Float64s(cloned)
 	if percentile <= 0 {
 		return cloned[0]
 	}

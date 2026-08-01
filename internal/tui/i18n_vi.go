@@ -124,6 +124,10 @@ func viCatalog(key string) string {
 		return "tg p95"
 	case "label.avg_think":
 		return "suy nghĩ tb"
+	case "label.avg_tps":
+		return "tps tb"
+	case "label.p95_tps":
+		return "p95 tps"
 	case "label.fail_rate":
 		return "tỷ lệ lỗi"
 	case "label.slow_tools":

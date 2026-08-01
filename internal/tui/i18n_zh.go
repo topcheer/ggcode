@@ -120,6 +120,10 @@ func zhCatalog(key string) string {
 		return "P95时长"
 	case "label.avg_think":
 		return "平均思考"
+	case "label.avg_tps":
+		return "平均解码"
+	case "label.p95_tps":
+		return "P95解码"
 	case "label.fail_rate":
 		return "失败率"
 	case "label.slow_tools":

@@ -122,6 +122,10 @@ func enCatalog(key string) string {
 		return "p95 dur"
 	case "label.avg_think":
 		return "avg think"
+	case "label.avg_tps":
+		return "avg tps"
+	case "label.p95_tps":
+		return "p95 tps"
 	case "label.fail_rate":
 		return "fail rate"
 	case "label.slow_tools":

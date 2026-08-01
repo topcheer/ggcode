@@ -124,6 +124,10 @@ func frCatalog(key string) string {
 		return "dur. p95"
 	case "label.avg_think":
 		return "réflex. moyenne"
+	case "label.avg_tps":
+		return "tps moyen"
+	case "label.p95_tps":
+		return "p95 tps"
 	case "label.fail_rate":
 		return "taux échec"
 	case "label.slow_tools":

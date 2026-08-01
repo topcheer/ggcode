@@ -599,6 +599,10 @@ func ptCatalog(key string) string {
 		return "duração média"
 	case "label.avg_think":
 		return "think médio"
+	case "label.avg_tps":
+		return "tps médio"
+	case "label.p95_tps":
+		return "p95 tps"
 	case "label.avg_ttft":
 		return "ttft médio"
 	case "label.branch":

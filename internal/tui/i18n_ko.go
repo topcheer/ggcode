@@ -125,6 +125,10 @@ func koCatalog(key string) string {
 		return "P95 소요"
 	case "label.avg_think":
 		return "평균 사고"
+	case "label.avg_tps":
+		return "평균 TPS"
+	case "label.p95_tps":
+		return "P95 TPS"
 	case "label.fail_rate":
 		return "실패율"
 	case "label.slow_tools":

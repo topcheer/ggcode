@@ -24,6 +24,17 @@ func FormatDuration(d time.Duration) string {
 	return d.Round(time.Second).String()
 }
 
+// FormatTPS formats a tokens-per-second value for human-readable display.
+func FormatTPS(tps float64) string {
+	if tps <= 0 {
+		return "-"
+	}
+	if tps < 10 {
+		return fmt.Sprintf("%.1f tok/s", tps)
+	}
+	return fmt.Sprintf("%.0f tok/s", tps)
+}
+
 // FormatTokenUsage produces a compact token usage string like "12.0K↑ 3.0K↓".
 func FormatTokenUsage(input, output, cacheRead int) string {
 	parts := make([]string, 0, 3)
@@ -61,6 +72,9 @@ func FormatTurnDigest(lang string, turn TurnSummary) string {
 	}
 	if turn.InputTokens > 0 || turn.OutputTokens > 0 {
 		parts = append(parts, fmt.Sprintf("%s %s", digestText(lang, "tokens"), FormatTokenUsage(turn.InputTokens, turn.OutputTokens, turn.CacheRead)))
+		if turn.OutputTPS > 0 {
+			parts = append(parts, fmt.Sprintf("%s %s", digestText(lang, "tps"), FormatTPS(turn.OutputTPS)))
+		}
 	}
 	if turn.SlowestTool != "" {
 		parts = append(parts, fmt.Sprintf("%s %s %s", digestText(lang, "slowest"), turn.SlowestTool, FormatDuration(turn.SlowestToolDuration)))
@@ -92,6 +106,7 @@ var digestTranslations = map[string]map[string]string{
 		"ttft":     "首字",
 		"duration": "时长",
 		"think":    "思考",
+		"tps":      "解码速度",
 		"tools":    "工具",
 		"tokens":   "Token",
 		"slowest":  "最慢",
@@ -102,6 +117,7 @@ var digestTranslations = map[string]map[string]string{
 		"ttft":     "TTFT",
 		"duration": "Dur",
 		"think":    "Think",
+		"tps":      "TPS",
 		"tools":    "Tools",
 		"tokens":   "Tokens",
 		"slowest":  "Slowest",

@@ -131,6 +131,10 @@ func ruCatalog(key string) string {
 		return "p95 длительность"
 	case "label.avg_think":
 		return "Ø размышление"
+	case "label.avg_tps":
+		return "Ø TPS"
+	case "label.p95_tps":
+		return "P95 TPS"
 	case "label.fail_rate":
 		return "Уровень ошибок"
 	case "label.slow_tools":

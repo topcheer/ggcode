@@ -131,6 +131,10 @@ func deCatalog(key string) string {
 		return "p95 Dauer"
 	case "label.avg_think":
 		return "Ø Denken"
+	case "label.avg_tps":
+		return "Ø TPS"
+	case "label.p95_tps":
+		return "P95 TPS"
 	case "label.fail_rate":
 		return "Fehlerrate"
 	case "label.slow_tools":

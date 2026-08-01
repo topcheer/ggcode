@@ -122,4 +122,18 @@ func TestSummarizeTokenAggregation(t *testing.T) {
 	if summary.Turns[1].CumOutputTokens != 120 {
 		t.Errorf("turn 2 CumOutputTokens = %d, want 120", summary.Turns[1].CumOutputTokens)
 	}
+
+	// Verify decode TPS is computed correctly when duration data is present.
+	tpsEvents := []MetricEvent{
+		{TurnIndex: 1, Type: "llm", TTFT: 500 * time.Millisecond, Duration: 5500 * time.Millisecond, OutputTokens: 500},
+	}
+	tpsSummary := Summarize(tpsEvents)
+	// Decode duration = 5500ms - 500ms = 5000ms = 5s; 500 tokens / 5s = 100 tok/s
+	expectedTPS := 100.0
+	if tpsSummary.Turns[0].OutputTPS < expectedTPS-1 || tpsSummary.Turns[0].OutputTPS > expectedTPS+1 {
+		t.Errorf("OutputTPS = %.1f, want ~%.0f", tpsSummary.Turns[0].OutputTPS, expectedTPS)
+	}
+	if tpsSummary.AvgOutputTPS < expectedTPS-1 || tpsSummary.AvgOutputTPS > expectedTPS+1 {
+		t.Errorf("AvgOutputTPS = %.1f, want ~%.0f", tpsSummary.AvgOutputTPS, expectedTPS)
+	}
 }

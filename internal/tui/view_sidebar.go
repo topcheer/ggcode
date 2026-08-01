@@ -123,6 +123,8 @@ func (m Model) renderSidebarMetricsSection() string {
 		renderRow(m.t("label.avg_duration"), metrics.FormatDuration(summary.AvgDuration)),
 		renderRow(m.t("label.p95_duration"), metrics.FormatDuration(summary.P95Duration)),
 		renderRow(m.t("label.avg_think"), metrics.FormatDuration(summary.AvgThink)),
+		renderRow(m.t("label.avg_tps"), metrics.FormatTPS(summary.AvgOutputTPS)),
+		renderRow(m.t("label.p95_tps"), metrics.FormatTPS(summary.P95OutputTPS)),
 		renderRow(m.t("label.tools"), fmt.Sprintf("%d", summary.ToolCallCount)),
 		renderRow(m.t("label.fail_rate"), fmt.Sprintf("%d%%", summary.ToolFailureRate())),
 	)

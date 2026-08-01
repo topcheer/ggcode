@@ -124,6 +124,10 @@ func esCatalog(key string) string {
 		return "dur. p95"
 	case "label.avg_think":
 		return "pens. medio"
+	case "label.avg_tps":
+		return "tps medio"
+	case "label.p95_tps":
+		return "p95 tps"
 	case "label.fail_rate":
 		return "tasa fallos"
 	case "label.slow_tools":

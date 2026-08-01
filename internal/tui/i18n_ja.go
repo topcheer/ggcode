@@ -123,6 +123,10 @@ func jaCatalog(key string) string {
 		return "P95時間"
 	case "label.avg_think":
 		return "平均思考"
+	case "label.avg_tps":
+		return "平均TPS"
+	case "label.p95_tps":
+		return "P95 TPS"
 	case "label.fail_rate":
 		return "失敗率"
 	case "label.slow_tools":
