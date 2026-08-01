@@ -1985,7 +1985,7 @@ func TestAutopilotGoalLifecycle(t *testing.T) {
 	}
 
 	// Clear goal
-	a.clearAutopilotGoal()
+	a.ClearAutopilotGoal()
 	if a.hasAutopilotGoal() {
 		t.Fatal("expected goal to be cleared")
 	}

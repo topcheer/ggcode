@@ -1120,3 +1120,39 @@ func (m *Model) handleRegenerateCommand() tea.Cmd {
 
 	return tea.Batch(m.startLoadingSpinner(m.statusActivity), m.startAgentWithExpand(lastUserText))
 }
+
+// handleGoalCommand manages the autopilot goal.
+//   - /goal          → show current goal
+//   - /goal <text>   → set a new goal (enters autopilot mode if not already)
+//   - /goal clear    → clear the current goal
+//
+// The goal persists in the system prompt across context compaction,
+// ensuring the agent never loses sight of its objective mid-session.
+func (m *Model) handleGoalCommand(parts []string) tea.Cmd {
+	if m.agent == nil {
+		m.chatWriteSystem(nextSystemID(), "Agent not initialized.")
+		return nil
+	}
+
+	arg := strings.TrimSpace(strings.Join(parts[1:], " "))
+
+	if arg == "" {
+		goal := m.agent.GetAutopilotGoal()
+		if goal == "" {
+			m.chatWriteSystem(nextSystemID(), m.t("goal.none"))
+		} else {
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf(m.t("goal.current"), goal))
+		}
+		return nil
+	}
+
+	if strings.EqualFold(arg, "clear") || strings.EqualFold(arg, "off") {
+		m.agent.ClearAutopilotGoal()
+		m.chatWriteSystem(nextSystemID(), m.t("goal.cleared"))
+		return nil
+	}
+
+	m.agent.SetAutopilotGoal(arg)
+	m.chatWriteSystem(nextSystemID(), fmt.Sprintf(m.t("goal.set"), arg))
+	return nil
+}

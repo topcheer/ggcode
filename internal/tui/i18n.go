@@ -434,6 +434,8 @@ func localizeSlashDescription(lang Language, cmd string) string {
 		return tr(lang, "slash.rules")
 	case "/cron":
 		return tr(lang, "slash.cron")
+	case "/goal":
+		return tr(lang, "slash.goal")
 	default:
 		return cmd
 	}

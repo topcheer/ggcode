@@ -1,10 +1,12 @@
 package agent
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/context"
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
@@ -33,6 +35,23 @@ func (a *Agent) maybeInjectDynamicSystemPrompt() {
 
 	// Collect dynamic layers.
 	var dynamicParts []string
+
+	// Layer 1.5: autopilot goal (must survive compaction).
+	// The goal is injected into the system prompt rather than the conversation
+	// body so it persists across context compaction. Without this, the main
+	// agent loses sight of its objective after summarization — only the
+	// strategist remembers it. This is the "Goal Mode" pattern (Codex CLI /goal):
+	// a persistent directive that survives compaction and interruptions.
+	if a.currentMode() == permission.AutopilotMode {
+		if goal := a.getAutopilotGoal(); goal != "" {
+			dynamicParts = append(dynamicParts, fmt.Sprintf(
+				"⏵ ACTIVE GOAL (persistent — do not lose sight of this):\n%s\n\n"+
+					"Continue working toward this goal. Do not ask the user for confirmation "+
+					"unless genuinely blocked. Use best judgment for implementation decisions.",
+				goal,
+			))
+		}
+	}
 
 	// Layer 2: dynamic system prompt from external injector.
 	if fn != nil {

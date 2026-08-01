@@ -1485,6 +1485,16 @@ func enCatalog(key string) string {
 		return "Toggle tunnel connection for mobile relay"
 	case "slash.unshare":
 		return "Stop sharing session via tunnel"
+	case "slash.goal":
+		return "Show, set, or clear the persistent autopilot goal"
+	case "goal.none":
+		return "No autopilot goal set. Use /goal <description> to set one."
+	case "goal.current":
+		return "Active goal: %s\n\nThe goal persists across context compaction and session interruptions."
+	case "goal.set":
+		return "Goal set: %s\n\nSwitch to autopilot mode (/mode autopilot) for autonomous execution. The goal survives context compaction."
+	case "goal.cleared":
+		return "Autopilot goal cleared."
 	case "regenerate.busy":
 		return "Cannot regenerate while the agent is running. Press Ctrl+C to cancel first."
 	case "regenerate.no_agent":
@@ -1528,6 +1538,7 @@ Model & Provider:
   /provider [vendor] Open provider manager
   /impersonate [p/m] Test a provider/model without switching config
   /mode <mode>       Set agent mode (supervised|plan|auto|bypass|autopilot)
+  /goal [text]       Show, set, or clear persistent autopilot goal
   /stream            Toggle stream output mode
 
 Development:

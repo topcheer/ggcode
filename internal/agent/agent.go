@@ -1381,7 +1381,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 						preview = preview[:200]
 					}
 					onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: fmt.Sprintf("[Autopilot: agent idle for %d consecutive rounds — terminating to avoid deadlock. Last output: %s]", a.strategistNoProgressCount, preview)})
-					a.clearAutopilotGoal()
+					a.ClearAutopilotGoal()
 					return nil
 				}
 
@@ -1407,7 +1407,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 						msg = fmt.Sprintf("[Strategist: goal achieved — autopilot complete. %s]", summary)
 					}
 					onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: msg})
-					a.clearAutopilotGoal()
+					a.ClearAutopilotGoal()
 					return nil
 				} else if result.Guidance != "" {
 					debug.Log("agent", "Iteration %d: strategist injecting guidance (%d chars)", i+1, len(result.Guidance))
@@ -1424,7 +1424,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					// This can happen with content-filtered or malformed API responses.
 					debug.Log("agent", "Iteration %d: strategist returned empty guidance", i+1)
 					onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: "[Strategist returned no guidance — autopilot stopping]"})
-					a.clearAutopilotGoal()
+					a.ClearAutopilotGoal()
 					return nil
 				}
 			} else if a.currentMode() == permission.AutopilotMode && a.hasAutopilotGoal() && !a.strategistBudgetAnnounced {

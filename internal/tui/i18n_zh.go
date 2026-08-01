@@ -1487,6 +1487,16 @@ func zhCatalog(key string) string {
 		return "切换移动中继隧道连接"
 	case "slash.unshare":
 		return "停止通过隧道分享会话"
+	case "slash.goal":
+		return "查看、设置或清除持久化的自动驾驶目标"
+	case "goal.none":
+		return "未设置自动驾驶目标。使用 /goal <描述> 来设置。"
+	case "goal.current":
+		return "当前目标：%s\n\n该目标在上下文压缩和会话中断后仍然保留。"
+	case "goal.set":
+		return "目标已设置：%s\n\n切换到自动驾驶模式（/mode autopilot）以自主执行。目标在上下文压缩后仍然保留。"
+	case "goal.cleared":
+		return "自动驾驶目标已清除。"
 	case "regenerate.busy":
 		return "Agent 正在运行，无法重新生成。请先按 Ctrl+C 取消。"
 	case "regenerate.no_agent":
@@ -1529,6 +1539,7 @@ func zhCatalog(key string) string {
   /provider [vendor] 打开供应商管理界面
   /impersonate [p/m] 测试供应商/模型而不切换配置
   /mode <mode>       设置运行模式（supervised|plan|auto|bypass|autopilot）
+  /goal [text]       查看、设置或清除持久化自动驾驶目标
   /stream            切换流式输出模式
 
 开发工具：

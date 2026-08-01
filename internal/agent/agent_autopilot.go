@@ -140,6 +140,17 @@ func (a *Agent) getAutopilotGoal() string {
 	return a.autopilotGoal
 }
 
+// GetAutopilotGoal returns the current autopilot goal text (empty if none).
+// Public accessor for TUI/API consumers (e.g. /goal slash command).
+func (a *Agent) GetAutopilotGoal() string {
+	return a.getAutopilotGoal()
+}
+
+// HasAutopilotGoal returns true if a goal is currently set and active.
+func (a *Agent) HasAutopilotGoal() bool {
+	return a.hasAutopilotGoal()
+}
+
 // hasAutopilotGoal returns true if a goal has been confirmed.
 func (a *Agent) hasAutopilotGoal() bool {
 	a.mu.RLock()
@@ -147,8 +158,8 @@ func (a *Agent) hasAutopilotGoal() bool {
 	return a.autopilotGoalSet && a.autopilotGoal != ""
 }
 
-// clearAutopilotGoal removes the current goal.
-func (a *Agent) clearAutopilotGoal() {
+// ClearAutopilotGoal removes the current goal.
+func (a *Agent) ClearAutopilotGoal() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.autopilotGoal = ""
