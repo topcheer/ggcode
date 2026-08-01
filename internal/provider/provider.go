@@ -209,6 +209,18 @@ type ToolChoiceProvider interface {
 	ToolChoice() string
 }
 
+// SamplingConfigProvider is implemented by providers that support temperature
+// and top_p (nucleus sampling) inference parameters. Temperature controls
+// randomness: 0.0 is fully deterministic, 1.0 is the default for most models.
+// TopP controls nucleus sampling: 0.1 means only tokens comprising the top 10%
+// probability mass are considered. Both values of 0 mean "use provider default".
+type SamplingConfigProvider interface {
+	SetTemperature(temp float64)
+	Temperature() float64
+	SetTopP(topP float64)
+	TopP() float64
+}
+
 // ModelNameProvider is implemented by providers that can report their current model name.
 type ModelNameProvider interface {
 	ModelName() string

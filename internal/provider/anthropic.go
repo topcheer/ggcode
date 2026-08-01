@@ -11,6 +11,7 @@ import (
 
 	anthropic "github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
+	"github.com/anthropics/anthropic-sdk-go/packages/param"
 	"net/http"
 )
 
@@ -24,6 +25,8 @@ type AnthropicProvider struct {
 	calibrator      *tokenCountCalibrator     // periodic real-API token calibration
 	reasoningEffort string                    // "", "low", "medium", "high" — maps to thinking budget
 	toolChoice      string                    // "", "auto", "required", "none" — maps to Anthropic tool_choice
+	temperature     float64                   // 0 = provider default
+	topP            float64                   // 0 = provider default
 }
 
 // ModelName returns the current model name used by this provider.
@@ -40,6 +43,8 @@ func (p *AnthropicProvider) CloneWithModel(model string) Provider {
 		calibrator:      p.calibrator,
 		reasoningEffort: p.reasoningEffort,
 		toolChoice:      p.toolChoice,
+		temperature:     p.temperature,
+		topP:            p.topP,
 	}
 }
 
@@ -63,6 +68,14 @@ func (p *AnthropicProvider) SetToolChoice(choice string) {
 }
 
 func (p *AnthropicProvider) ToolChoice() string { return p.toolChoice }
+
+// SetTemperature sets the sampling temperature. 0 means "use provider default".
+func (p *AnthropicProvider) SetTemperature(temp float64) { p.temperature = temp }
+func (p *AnthropicProvider) Temperature() float64        { return p.temperature }
+
+// SetTopP sets the nucleus sampling parameter. 0 means "use provider default".
+func (p *AnthropicProvider) SetTopP(topP float64) { p.topP = topP }
+func (p *AnthropicProvider) TopP() float64        { return p.topP }
 
 // SetAdaptiveCap installs the adaptive max-output-tokens cap.
 func (p *AnthropicProvider) SetAdaptiveCap(c *adaptiveCap) { p.cap = c }
@@ -753,6 +766,15 @@ func (p *AnthropicProvider) buildParams(messages []Message, tools []ToolDefiniti
 		Model:     p.model,
 		MaxTokens: int64(p.effectiveMaxTokens()),
 		Messages:  msgParams,
+	}
+
+	// Apply temperature when set (0 means use provider default).
+	if p.temperature > 0 {
+		params.Temperature = param.NewOpt(p.temperature)
+	}
+	// Apply top_p when set (0 means use provider default).
+	if p.topP > 0 {
+		params.TopP = param.NewOpt(p.topP)
 	}
 
 	// Enable extended thinking when reasoning effort is set.

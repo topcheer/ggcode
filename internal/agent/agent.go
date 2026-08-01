@@ -158,6 +158,7 @@ type Agent struct {
 	transientRetryBudget       int                                   // remaining automatic retries for transient tool failures (per run)
 	argSizeGuardFires          int                                   // count of argument size guard injections this run
 	latencyTracker             *LatencyTracker                       // per-tool latency baseline & slow-tool outlier detection
+	adaptiveSampling           *adaptiveSamplingState                // per-turn temperature adaptation (phase-aware sampling control)
 	effortAdapter              *adaptiveEffortState                  // per-turn reasoning effort adaptation (Opus 5 effort toggle pattern)
 	ruleStore                  *RuleStore                            // cached rule store for hot-path rule injection (avoids per-tool disk I/O)
 	lastRunStats               *RunStats                             // stats from the most recent run (for post-run summary display)
@@ -225,6 +226,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		complexityGate:       newComplexityGateState(),
 		toolFilter:           tool.NewRelevanceFilter(),
 		latencyTracker:       NewLatencyTracker(),
+		adaptiveSampling:     newAdaptiveSamplingState(),
 		effortAdapter:        newAdaptiveEffortState(),
 		transientRetryBudget: maxTransientRetryBudgetPerRun,
 	}
@@ -870,6 +872,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	if a.effortAdapter != nil {
 		a.effortAdapter.reset()
 	}
+	if a.adaptiveSampling != nil {
+		a.adaptiveSampling.reset()
+	}
 
 	defer func() {
 		runStats.finalize(err)
@@ -1222,12 +1227,21 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// tool complexity. Only activates when user hasn't explicitly set effort.
 		effortApplied, effortPrev := a.applyAdaptiveEffort()
 
+		// Adaptive sampling: adjust temperature per-turn based on task phase.
+		// Lower temperature for code edits and error recovery, higher for
+		// exploration and creative writing. Only activates when user hasn't
+		// explicitly set temperature.
+		samplingApplied, samplingPrev := a.applyAdaptiveSampling()
+
 		// Dynamic tool pruning: filter out low-relevance MCP tools to reduce
 		// context overhead and improve tool-selection accuracy. Only activates
 		// when total tool count exceeds a threshold.
 		activeToolDefs := a.toolFilter.Filter(toolDefs, tool.ExtractContextFromMessages(msgs, 6))
 
 		resp, textBuf, toolCalls, truncated, err := a.streamChatResponse(ctx, a.ensureMessagesSendable(msgs), activeToolDefs, onEvent)
+		if samplingApplied >= 0 {
+			a.restoreSampling(samplingPrev)
+		}
 		if effortApplied != "" {
 			a.restoreEffort(effortPrev)
 		}
@@ -1827,6 +1841,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Record tool result for adaptive effort classification.
 			if a.effortAdapter != nil {
 				a.effortAdapter.recordToolResult(tc.Name, result.IsError)
+			}
+			// Record tool result for adaptive sampling classification.
+			if a.adaptiveSampling != nil {
+				a.adaptiveSampling.recordToolResult(tc.Name, result.IsError)
 			}
 
 			// Error classifier: immediate type-specific guidance on the first

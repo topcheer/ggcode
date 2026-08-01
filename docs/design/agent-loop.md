@@ -36,6 +36,7 @@ All optimization layers are deterministic and run in-process without extra LLM c
 | Tool-use input clearing | `agent_precompact.go` | Truncate old edit/write inputs after results are cleared |
 | Reasoning block compaction | `internal/context/manager.go` | Clear old thinking/reasoning_content blocks |
 | Adaptive effort | `adaptive_effort.go` | Per-turn reasoning effort adaptation based on tool complexity (Opus 5 effort toggle pattern) |
+| Adaptive sampling | `adaptive_sampling.go` | Per-turn temperature adaptation based on task phase: low for edits/errors, higher for exploration/creative |
 | Command caching | `command_cache.go` | Deterministic build/test command result caching |
 | Prompt cache keepalive | `cache_keepalive.go` | Anthropic prompt-cache warming pings during idle (saves ~83K tokens on resume) |
 
@@ -101,3 +102,16 @@ Before the agent returns (no more tool calls), multiple gates check that the wor
 - `provider/rate_limit.go` — captures rate-limit headers from Anthropic/OpenAI responses for proactive quota awareness.
 
 See also `docs/design/context-management.md` for context management details.
+
+## Provider Sampling Control
+
+The `SamplingConfigProvider` interface (`internal/provider/provider.go`) exposes `SetTemperature`/`SetTopP` to all providers that support these inference parameters. The adaptive sampling controller (`adaptive_sampling.go`) uses this interface to dynamically adjust temperature per LLM turn based on the agent's current task phase:
+
+| Phase | Temperature | Trigger |
+|-------|------------|----------|
+| Exploration | 0.4 | >50% read-only tools in window |
+| Code editing | 0.1 | File edits in recent history |
+| Error recovery | 0.0 | 2+ consecutive tool errors |
+| Creative | 0.5 | git_commit / docs writing |
+
+The controller is dormant when the user explicitly sets temperature via config or slash command. It applies temperature for exactly one LLM turn then restores the previous value, matching the ephemeral pattern used by adaptive effort. See `docs/design/adaptive-sampling.md` for full design details.

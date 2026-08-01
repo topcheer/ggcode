@@ -96,6 +96,7 @@ individual A2A auth configuration.
 - **gRPC plugins** — extend ggcode with custom tools in Go, Python, Node.js, or any language
 - **Multi-agent** — spawn parallel workers, delegate to teammates, A2A protocol
 - **Multi-provider** — OpenAI, Anthropic, Gemini, DeepSeek, Kimi, Copilot, and more; configurable reasoning effort and tool choice across all protocols
+- **Adaptive sampling** — per-turn temperature adjustment based on task phase: low temperature for precise code edits and error recovery, higher for exploration and creative writing
 - **[LAN Chat](docs/guide/lan-chat.md)** — zero-config P2P real-time messaging between instances on your LAN
 - **Editor integration** — JetBrains, Zed, and ACP-compatible editors via ACP
 - **WebUI** — built-in web interface accessible from any browser

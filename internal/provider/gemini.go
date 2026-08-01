@@ -21,6 +21,8 @@ type GeminiProvider struct {
 	cap             *adaptiveCap
 	reasoningEffort string                    // "", "low", "medium", "high" — maps to Gemini ThinkingConfig
 	toolChoice      string                    // "", "auto", "required", "none" — maps to Gemini FunctionCallingConfig
+	temperature     float64                   // 0 = provider default
+	topP            float64                   // 0 = provider default
 	transport       *headerInjectingTransport // kept for runtime header updates
 }
 
@@ -36,6 +38,8 @@ func (p *GeminiProvider) CloneWithModel(model string) Provider {
 		cap:             p.cap,
 		reasoningEffort: p.reasoningEffort,
 		toolChoice:      p.toolChoice,
+		temperature:     p.temperature,
+		topP:            p.topP,
 		transport:       p.transport,
 	}
 }
@@ -53,6 +57,14 @@ func (p *GeminiProvider) SetReasoningEffort(effort string) {
 }
 
 func (p *GeminiProvider) ReasoningEffort() string { return p.reasoningEffort }
+
+// SetTemperature sets the sampling temperature. 0 means "use provider default".
+func (p *GeminiProvider) SetTemperature(temp float64) { p.temperature = temp }
+func (p *GeminiProvider) Temperature() float64        { return p.temperature }
+
+// SetTopP sets the nucleus sampling parameter. 0 means "use provider default".
+func (p *GeminiProvider) SetTopP(topP float64) { p.topP = topP }
+func (p *GeminiProvider) TopP() float64        { return p.topP }
 
 // SetToolChoice sets the tool_choice parameter: "auto" (model decides),
 // "required" (force at least one tool call), "none" (disable tools), or ""
@@ -135,6 +147,7 @@ func (p *GeminiProvider) Chat(ctx context.Context, messages []Message, tools []T
 		config.Tools = p.convertTools(tools)
 	}
 	p.applyReasoningEffort(config)
+	p.applySamplingConfig(config)
 	p.applyToolChoice(config, tools)
 
 	var resp *genai.GenerateContentResponse
@@ -171,6 +184,7 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 		config.Tools = p.convertTools(tools)
 	}
 	p.applyReasoningEffort(config)
+	p.applySamplingConfig(config)
 	p.applyToolChoice(config, tools)
 
 	ch := make(chan StreamEvent, 64)
@@ -351,6 +365,19 @@ func (p *GeminiProvider) applyToolChoice(config *genai.GenerateContentConfig, to
 
 // ptrToInt32 returns a pointer to the given int32 value.
 func ptrToInt32(v int32) *int32 { return &v }
+
+// applySamplingConfig injects temperature and top_p into the Gemini config
+// when they are set (non-zero). Both map directly to genai fields.
+func (p *GeminiProvider) applySamplingConfig(config *genai.GenerateContentConfig) {
+	if p.temperature > 0 {
+		config.Temperature = ptrToFloat32(float32(p.temperature))
+	}
+	if p.topP > 0 {
+		config.TopP = ptrToFloat32(float32(p.topP))
+	}
+}
+
+func ptrToFloat32(v float32) *float32 { return &v }
 
 func (p *GeminiProvider) convertMessages(messages []Message) ([]*genai.Content, *genai.Content) {
 	var contents []*genai.Content

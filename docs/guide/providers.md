@@ -187,3 +187,35 @@ Use `llm-probe` to verify your setup and list available models:
 ```bash
 ggcode llm-probe
 ```
+
+## Temperature and Sampling
+
+Control the randomness of model output. Supported by `openai`, `anthropic`,
+and `gemini` protocols. When unset, the provider's default applies.
+
+```yaml
+vendors:
+  openai:
+    protocol: openai
+    temperature: 0.2          # 0.0-2.0 (0 = omit, use provider default)
+    top_p: 0.95               # 0.0-1.0 (0 = omit)
+    endpoints:
+      default:
+        model: gpt-4o
+```
+
+### Adaptive Sampling
+
+When temperature is not explicitly set, ggcode automatically adjusts it per
+LLM turn based on the current task phase:
+
+| Phase | Temperature | When |
+|-------|------------|------|
+| Exploration | 0.4 | Reading and searching code |
+| Code editing | 0.1 | Making file edits |
+| Error recovery | 0.0 | Recovering from tool errors |
+| Creative | 0.5 | Writing commit messages or docs |
+
+This improves edit precision and error recovery while allowing creative
+flexibility during exploration. Setting an explicit `temperature` in config
+disables adaptive sampling. See `docs/design/adaptive-sampling.md` for details.
