@@ -159,6 +159,7 @@ type Agent struct {
 	transientRetryBudget       int                                   // remaining automatic retries for transient tool failures (per run)
 	argSizeGuardFires          int                                   // count of argument size guard injections this run
 	latencyTracker             *LatencyTracker                       // per-tool latency baseline & slow-tool outlier detection
+	toolSequence               *toolSequenceValidator                // cross-iteration tool call anti-pattern detection
 	adaptiveSampling           *adaptiveSamplingState                // per-turn temperature adaptation (phase-aware sampling control)
 	effortAdapter              *adaptiveEffortState                  // per-turn reasoning effort adaptation (Opus 5 effort toggle pattern)
 	ruleStore                  *RuleStore                            // cached rule store for hot-path rule injection (avoids per-tool disk I/O)
@@ -228,6 +229,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		verifyRegression:     newVerifyRegressionState(),
 		toolFilter:           tool.NewRelevanceFilter(),
 		latencyTracker:       NewLatencyTracker(),
+		toolSequence:         newToolSequenceValidator(),
 		adaptiveSampling:     newAdaptiveSamplingState(),
 		effortAdapter:        newAdaptiveEffortState(),
 		transientRetryBudget: maxTransientRetryBudgetPerRun,
@@ -871,6 +873,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.fulfillmentGate.reset()
 	a.complexityGate.reset()
 	a.argSizeGuardFires = 0
+	a.toolSequence.reset()
 	if a.effortAdapter != nil {
 		a.effortAdapter.reset()
 	}
@@ -1070,6 +1073,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.complexityGate.reset()
 	a.verifyRegression.reset()
 	a.argSizeGuardFires = 0
+	a.toolSequence.reset()
 	a.toolFilter = tool.NewRelevanceFilter()
 	a.resetTransientRetryBudget()
 
@@ -1840,6 +1844,18 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					result.Content = result.Content + "\n\n" + argSizeHint
 				} else {
 					result.Content = argSizeHint
+				}
+			}
+
+			// Tool call sequence validator: detect cross-iteration anti-patterns
+			// (e.g., full read then targeted re-read, sequential individual reads
+			// instead of batch, list_directory then glob on same dir). Each
+			// pattern type fires at most once per run.
+			if seqHint := a.toolSequence.record(tc, i+1); seqHint != "" {
+				if result.Content != "" {
+					result.Content = result.Content + "\n\n" + seqHint
+				} else {
+					result.Content = seqHint
 				}
 			}
 
