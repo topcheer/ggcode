@@ -355,9 +355,6 @@ var genericCompileErrorRe = regexp.MustCompile(`([^\s:]+\.(?:go|rs|py|ts|js|tsx|
 
 // summarizeCompilerErrors extracts compiler-style errors from any command output.
 func summarizeCompilerErrors(output string) string {
-	lines := strings.Split(output, "\n")
-	_ = lines // lines not used directly; we use regex on the full output
-
 	matches := genericCompileErrorRe.FindAllStringSubmatch(output, -1)
 	if len(matches) == 0 {
 		return ""
