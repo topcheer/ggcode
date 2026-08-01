@@ -89,6 +89,7 @@ individual A2A auth configuration.
 - **Clipboard integration** — read from and write to the system clipboard
 - **Editor launcher** — `open_editor` opens files in the user's IDE (VS Code, Cursor, JetBrains, Vim, etc.) at a specific line/column, auto-detected from env vars
 - **Agent-accessible undo** — `undo_edit` lets the LLM revert its own file edits via checkpoints, avoiding error-prone fix-forward when a previous change was wrong
+- **Schema-constrained tool validation** — pre-execution pipeline that validates enum values, numeric bounds (min/max), string length constraints, and strips hallucinated parameters — saving wasted iterations on weak models
 - **PTC (Programmatic Tool Calling)** — the agent writes JavaScript in a sandboxed VM to batch-call read-only tools (read_file, grep, git_log, web_search, etc.) in a single round-trip, dramatically reducing context window consumption for multi-step analysis
 - **MCP integration** — connect external tools and data sources, with dynamic tool refresh, server logging, full capability detection, and MCP sampling (servers can request LLM completions)
 - **gRPC plugins** — extend ggcode with custom tools in Go, Python, Node.js, or any language

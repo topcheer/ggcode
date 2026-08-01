@@ -226,6 +226,27 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 		}
 	}
 
+	// Schema-constraint validation: catches enum violations, out-of-range
+	// numbers, and string length violations before execution. Weak models
+	// frequently send invalid enum values (e.g. "xyz" for ["read","write"])
+	// or out-of-range offsets. Early detection saves a wasted tool iteration.
+	if constraintMsg := tool.ValidateSchemaConstraints(t.Parameters(), tc.Arguments); constraintMsg != "" {
+		debug.Log("agent", "schema constraint validation failed for %s: %s", tc.Name, constraintMsg)
+		return tool.Result{
+			Content: fmt.Sprintf("Tool %q: %s.", tc.Name, constraintMsg),
+			IsError: true,
+		}
+	}
+
+	// Strip unknown parameters: some models hallucinate extra parameters that
+	// aren't in the tool schema. Removing them prevents confusing failures in
+	// tools that use strict deserialization. No-op when all params are known.
+	strippedArgs := tool.StripUnknownParams(t.Parameters(), tc.Arguments)
+	if !bytes.Equal(strippedArgs, tc.Arguments) {
+		debug.Log("agent", "stripped unknown params for tool %s", tc.Name)
+		tc.Arguments = strippedArgs
+	}
+
 	a.mu.RLock()
 	hookCfg := a.hookConfig
 	workDir := a.workingDir
@@ -253,6 +274,9 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 	}
 	if tc.Name == "edit_file" || tc.Name == "write_file" {
 		return a.executeFileTool(ctx, t, tc, env)
+	}
+	if tc.Name == "undo_edit" {
+		return a.executeUndoEdit(ctx, tc)
 	}
 
 	// Sync working directory for tools that have a WorkingDir field.
@@ -529,6 +553,92 @@ func (a *Agent) computeFileChange(tc provider.ToolCallDelta) (filePath, oldConte
 // replaceFirst replaces the first occurrence of old in s with new.
 func replaceFirst(s, old, new string) string {
 	return strings.Replace(s, old, new, 1)
+}
+
+// executeUndoEdit handles the undo_edit tool by routing to the checkpoint manager.
+// Supports three actions: "undo" (revert last edit), "list" (show checkpoints),
+// and "revert" (roll back to a specific checkpoint by ID).
+func (a *Agent) executeUndoEdit(ctx context.Context, tc provider.ToolCallDelta) tool.Result {
+	a.mu.Lock()
+	cpMgr := a.checkpoints
+	a.mu.Unlock()
+
+	if cpMgr == nil {
+		return tool.Result{
+			IsError: true,
+			Content: "Checkpoint system is not initialized. Cannot undo edits.",
+		}
+	}
+
+	var args struct {
+		Action       string `json:"action"`
+		CheckpointID string `json:"checkpoint_id"`
+	}
+	if err := json.Unmarshal(tc.Arguments, &args); err != nil {
+		return tool.Result{Content: fmt.Sprintf("invalid input: %v", err), IsError: true}
+	}
+	if args.Action == "" {
+		args.Action = "undo"
+	}
+
+	switch args.Action {
+	case "undo":
+		cp, err := cpMgr.Undo()
+		if err != nil {
+			return tool.Result{
+				IsError: true,
+				Content: fmt.Sprintf("Nothing to undo: %v", err),
+			}
+		}
+		isNew := cp.OldContent == ""
+		result := tool.FormatUndoResult(cp.FilePath, cp.ToolCall, isNew)
+		// Include a diff summary of what changed
+		if !isNew && diff.HasChanges(cp.NewContent, cp.OldContent) {
+			result += "\n\n" + diff.Stats(cp.NewContent, cp.OldContent)
+		}
+		debug.Log("agent", "undo_edit: reverted %s (was %s)", cp.FilePath, cp.ToolCall)
+		return tool.Result{Content: result}
+
+	case "list":
+		cps := cpMgr.List()
+		infos := make([]tool.CheckpointInfo, len(cps))
+		for i, cp := range cps {
+			infos[i] = tool.CheckpointInfo{
+				ID:        cp.ID,
+				FilePath:  cp.FilePath,
+				ToolCall:  cp.ToolCall,
+				Timestamp: cp.Timestamp,
+				IsNew:     cp.OldContent == "",
+			}
+		}
+		return tool.Result{Content: tool.FormatCheckpointList(infos)}
+
+	case "revert":
+		if args.CheckpointID == "" {
+			return tool.Result{
+				IsError: true,
+				Content: "checkpoint_id is required for action=revert. Use action=list to see available checkpoint IDs.",
+			}
+		}
+		cp, err := cpMgr.Revert(args.CheckpointID)
+		if err != nil {
+			return tool.Result{
+				IsError: true,
+				Content: fmt.Sprintf("Revert failed: %v", err),
+			}
+		}
+		isNew := cp.OldContent == ""
+		result := tool.FormatUndoResult(cp.FilePath, cp.ToolCall, isNew)
+		result += fmt.Sprintf("\n\nAll edits after checkpoint %s have also been reverted.", args.CheckpointID)
+		debug.Log("agent", "undo_edit: reverted to %s for %s", args.CheckpointID, cp.FilePath)
+		return tool.Result{Content: result}
+
+	default:
+		return tool.Result{
+			IsError: true,
+			Content: fmt.Sprintf("Unknown action %q. Supported: undo, list, revert.", args.Action),
+		}
+	}
 }
 
 func buildMultiFileDiffText(plans []tool.PlannedFileEdit) (string, bool) {

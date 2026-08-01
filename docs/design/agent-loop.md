@@ -63,6 +63,10 @@ The loop monitors its own trajectory and injects guidance when patterns look pat
 
 | Layer | File | Purpose |
 |-------|------|---------|
+| Argument coercion | `tool/arg_coercion.go` | Schema-aware type coercion: fixes string→int/bool mismatches from weak models before unmarshalling fails |
+| Required param validation | `tool/arg_coercion.go` | Catches missing required fields before tool execution, giving the model a precise error message |
+| Schema constraint validation | `tool/schema_validation.go` | Validates enum values, numeric bounds (min/max/exclusive), and string length constraints before execution |
+| Unknown param stripping | `tool/schema_validation.go` | Removes hallucinated parameters not declared in the tool's JSON schema |
 | Transient retry | `transient_retry.go` | Automatic retry of idempotent read-only tools on transient errors (LSP timeout, network blips). Max 2 retries with 200ms/400ms backoff, 8 total per run. |
 | Export guard | `export_guard.go` | Detects breaking changes to exported Go symbols (removed functions, changed signatures) by comparing against git HEAD. Fires once per file per run. |
 
