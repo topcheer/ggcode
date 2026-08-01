@@ -162,6 +162,7 @@ type Agent struct {
 	argSizeGuardFires          int                                   // count of argument size guard injections this run
 	latencyTracker             *LatencyTracker                       // per-tool latency baseline & slow-tool outlier detection
 	toolSequence               *toolSequenceValidator                // cross-iteration tool call anti-pattern detection
+	convergenceLock            *convergenceLockState                 // post-verification unnecessary edit drift detection
 	taskAnchor                 *taskAnchorState                      // periodic task re-anchoring for context collapse prevention
 	adaptiveSampling           *adaptiveSamplingState                // per-turn temperature adaptation (phase-aware sampling control)
 	effortAdapter              *adaptiveEffortState                  // per-turn reasoning effort adaptation (Opus 5 effort toggle pattern)
@@ -1833,6 +1834,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			if !result.IsError && (tc.Name == "edit_file" || tc.Name == "multi_edit_file" || tc.Name == "multi_file_edit") {
 				for _, p := range extractEditFilePaths(tc.Name, tc.Arguments) {
 					a.editFailRecovery.recordEditSuccess(p)
+					// Convergence lock: track post-verification edits.
+					a.convergenceRecordEdit(tc.Name)
 					if hint := a.unreadEdit.checkUnreadEdit(p); hint != "" {
 						if result.Content != "" {
 							result.Content = result.Content + "\n\n" + hint
@@ -1866,6 +1869,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// before retrying. This catches the common "edit fail loop" pattern
 			// faster than the overseer (which runs every 12 iterations).
 			if result.IsError && (tc.Name == "edit_file" || tc.Name == "multi_edit_file" || tc.Name == "multi_file_edit") {
+				a.convergenceRecordEditError()
 				for _, p := range extractEditFilePaths(tc.Name, tc.Arguments) {
 					if hint := a.editFailRecovery.recordEditFailure(p); hint != "" {
 						if result.Content != "" {
@@ -2019,6 +2023,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// reset the edit counter and track the result.
 			a.maybeResetVerifyOnCommand(tc.Name, tc.Arguments, result.IsError)
 
+			// Convergence lock: record verification result to detect post-verify
+			// unnecessary edit drift. A successful verify arms the lock; a failed
+			// verify disarms it (agent is legitimately fixing issues).
+			a.convergenceRecordVerify(tc.Name, tc.Arguments, result.IsError)
+
 			// Recurring error detection: when a build/test command returns the
 			// SAME error after file edits, inject guidance that the edits aren't
 			// addressing the root cause. This catches the #1 agent failure mode
@@ -2040,6 +2049,16 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					} else {
 						result.Content = verifyHint
 					}
+				}
+			}
+
+			// Convergence lock: detect post-verification unnecessary edits.
+			// Fires when the agent continues editing after its changes verified.
+			if convergenceGuidance := a.convergenceCheck(); convergenceGuidance != "" {
+				if result.Content != "" {
+					result.Content = result.Content + "\n\n" + convergenceGuidance
+				} else {
+					result.Content = convergenceGuidance
 				}
 			}
 
