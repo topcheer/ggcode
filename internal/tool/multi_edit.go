@@ -116,6 +116,7 @@ func (t MultiEditFile) Execute(ctx context.Context, input json.RawMessage) (Resu
 		result += " (auto-formatted)"
 	}
 	result += scanAndWarn(args.FilePath, string(writeData))
+	result += criticalFileWarning(args.FilePath)
 	result += syntaxCheck(args.FilePath, writeData)
 	result += postEditDiagnostics(t.WorkingDir, args.FilePath)
 

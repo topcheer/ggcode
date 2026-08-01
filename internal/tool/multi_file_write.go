@@ -285,6 +285,13 @@ func (t MultiFileWrite) Execute(ctx context.Context, input json.RawMessage) (Res
 		}
 	}
 
+	// Warn about critical infrastructure files.
+	for _, f := range args.Files {
+		if warning := criticalFileWarning(f.Path); warning != "" {
+			sb.WriteString(warning)
+		}
+	}
+
 	// Syntax validation for written source files.
 	for _, f := range args.Files {
 		if syn := syntaxCheck(f.Path, []byte(f.Content)); syn != "" {

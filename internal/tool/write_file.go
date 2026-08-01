@@ -133,6 +133,7 @@ func (t WriteFile) Execute(ctx context.Context, input json.RawMessage) (Result, 
 		msg += " (auto-formatted)"
 	}
 	msg += scanAndWarn(args.Path, string(writeData))
+	msg += criticalFileWarning(args.Path)
 	msg += compactDiff(oldContent, string(writeData))
 	msg += syntaxCheck(args.Path, writeData)
 	msg += postEditDiagnostics(t.WorkingDir, args.Path)

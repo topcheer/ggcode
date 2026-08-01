@@ -170,6 +170,7 @@ func (t EditFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 		msg += " (auto-formatted)"
 	}
 	msg += scanAndWarn(args.FilePath, string(writeData))
+	msg += criticalFileWarning(args.FilePath)
 	msg += compactDiff(content, string(writeData))
 	msg += syntaxCheck(args.FilePath, writeData)
 	msg += postEditDiagnostics(t.WorkingDir, args.FilePath)
