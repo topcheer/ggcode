@@ -88,6 +88,10 @@ func (t GitCommit) Execute(ctx context.Context, input json.RawMessage) (Result, 
 		return Result{Content: trimmed}, nil
 	}
 
+	// Pre-commit build gate: run a fast project-wide build check to catch
+	// compile errors before they enter the commit history. Advisory (non-blocking).
+	buildWarning := precommitBuildCheck(ctx, dir)
+
 	// Pre-commit analysis: check changes for quality issues (debug statements,
 	// merge conflict markers, secrets, TODOs, debugger breakpoints) and evaluate
 	// commit scope (size, cohesion). Also suggest Conventional Commits format.
@@ -126,8 +130,8 @@ func (t GitCommit) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	}
 
 	trimmed := strings.TrimSpace(string(out))
-	// Append advisory warnings (branch, message quality, diff scan, scope, convention tip).
-	for _, w := range []string{branchWarning, msgWarning, diffScanWarning, scopeWarning, convTip} {
+	// Append advisory warnings (build gate, branch, message quality, diff scan, scope, convention tip).
+	for _, w := range []string{buildWarning, branchWarning, msgWarning, diffScanWarning, scopeWarning, convTip} {
 		if w != "" {
 			trimmed += "\n\n" + w
 		}
@@ -135,7 +139,7 @@ func (t GitCommit) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	if trimmed == "" {
 		var b strings.Builder
 		b.WriteString("Committed successfully.")
-		for _, w := range []string{branchWarning, msgWarning, diffScanWarning, scopeWarning, convTip} {
+		for _, w := range []string{buildWarning, branchWarning, msgWarning, diffScanWarning, scopeWarning, convTip} {
 			if w != "" {
 				b.WriteString("\n\n")
 				b.WriteString(w)
