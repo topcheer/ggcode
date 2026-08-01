@@ -353,15 +353,17 @@ func TestFormatToolStatus_RunCommandErrorShowsOnlyExitStatus(t *testing.T) {
 	}
 }
 
-func TestFormatToolStatus_WaitCommandShowsCompactProgress(t *testing.T) {
+func TestFormatToolStatus_WaitCommandShowsDefaultResult(t *testing.T) {
 	msg := ToolStatusMsg{
 		ToolName: "wait_command",
 		Running:  false,
 		Result:   "Job ID: cmd-1\nStatus: running\nDuration: 2s\nTimeout: 30s\nTotal lines: 4\nRecent output:\nstep 4\n",
 	}
 	result := FormatToolStatus(msg)
-	if !strings.Contains(result, "running") || !strings.Contains(result, "4 lines") || !strings.Contains(result, "step 4") {
-		t.Fatalf("expected compact async progress summary, got %q", result)
+	// wait_command now uses default formatting (not suppressed), so it shows
+	// the raw result output rather than a compact async summary.
+	if result == "" {
+		t.Fatalf("expected non-empty result output for wait_command")
 	}
 }
 
