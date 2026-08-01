@@ -114,6 +114,14 @@ func (t GitCommit) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	diffScanWarning = FormatDiffIssues(issues)
 	cohesion, size := AnalyzeCommitScope(diffOutput)
 	scopeWarning = combineScopeWarnings(cohesion, size)
+	// When scope analysis detects multi-concern changes, append a concrete
+	// partition plan so the agent knows exactly which files to group together
+	// in separate commits — rather than having to reason about it from scratch.
+	if scopeWarning != "" {
+		if partition := SuggestCommitPartition(diffOutput); len(partition) >= 2 {
+			scopeWarning += "\n\n" + FormatCommitPartition(partition)
+		}
+	}
 	convTip = AnalyzeCommitMessage(args.Message)
 
 	gitArgs := []string{"commit", "-m", fullMessage}
