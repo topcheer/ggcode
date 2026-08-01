@@ -118,6 +118,32 @@ func NewDangerousDetector() *DangerousDetector {
 		{DangerLow, regexp.MustCompile(`(?i)\bfind\b.*-delete\b`), "find with -delete"},
 		{DangerLow, regexp.MustCompile(`(?i)\bmv\b.*\*.*\b/dev/null\b`), "moving files to /dev/null"},
 
+		// High: destructive git operations that can permanently destroy work.
+		// AI coding agents frequently run these without understanding consequences.
+		// Patterns use (?:\s|$) after --force to exclude --force-with-lease.
+		{DangerHigh, regexp.MustCompile(`(?i)\bgit\s+push\b.*--force(?:\s|$)`), "git push --force can overwrite remote history irrevocably"},
+		{DangerHigh, regexp.MustCompile(`(?i)\bgit\s+push\b.*\s-f(?:\s|$)`), "git push -f can overwrite remote history irrevocably"},
+		{DangerHigh, regexp.MustCompile(`(?i)\bgit\s+push\b.*--mirror\b`), "git push --mirror can force-delete remote branches"},
+		{DangerHigh, regexp.MustCompile(`(?i)\bgit\s+push\b.*--delete\b`), "git push --delete removes a remote branch"},
+		{DangerHigh, regexp.MustCompile(`(?i)\bgit\s+reset\s+--hard\b`), "git reset --hard discards ALL uncommitted changes permanently"},
+		{DangerHigh, regexp.MustCompile(`(?i)\bgit\s+clean\s+-[a-z]*f`), "git clean -f permanently deletes untracked files"},
+		{DangerHigh, regexp.MustCompile(`(?i)\bgit\s+checkout\s+--\s+\.`), "git checkout -- . discards ALL working tree changes"},
+		{DangerHigh, regexp.MustCompile(`(?i)\bgit\s+checkout\s+\.\s*$`), "git checkout . discards ALL working tree changes"},
+		{DangerHigh, regexp.MustCompile(`(?i)\bgit\s+restore\s+--staged\s+--worktree\s+\.`), "git restore --staged --worktree . discards ALL changes"},
+		{DangerHigh, regexp.MustCompile(`(?i)\bgit\s+restore\s+--worktree\s+\.`), "git restore --worktree . discards ALL working tree changes"},
+
+		// Medium: potentially destructive git operations.
+		// Note: git branch -D uses case-sensitive D (not (?i)) to distinguish
+		// from -d which only deletes fully merged branches.
+		{DangerMedium, regexp.MustCompile(`git\s+branch\s+-[a-z]*D[a-z]*`), "git branch -D force-deletes a branch (loses unmerged work)"},
+		{DangerMedium, regexp.MustCompile(`(?i)\bgit\s+tag\s+-[a-z]*d[a-z]*\s+.*\*`), "git tag -d with wildcard deletes multiple tags"},
+		{DangerMedium, regexp.MustCompile(`(?i)\bgit\s+stash\s+clear\b`), "git stash clear permanently removes ALL stashed changes"},
+		{DangerMedium, regexp.MustCompile(`(?i)\bgit\s+stash\s+drop\b`), "git stash drop permanently removes a stash entry"},
+		{DangerMedium, regexp.MustCompile(`(?i)\bgit\s+push\b.*--force-with-lease\b`), "git push --force-with-lease can overwrite remote (safer but still risky)"},
+		{DangerMedium, regexp.MustCompile(`(?i)\bgit\s+rebase\s+--abort\b`), "git rebase --abort discards in-progress rebase work"},
+		{DangerMedium, regexp.MustCompile(`(?i)\bgit\s+merge\s+--abort\b`), "git merge --abort discards in-progress merge work"},
+		{DangerMedium, regexp.MustCompile(`(?i)\bgit\s+restore\s+--staged\s+\.\s*$`), "git restore --staged . unstages ALL staged changes"},
+
 		// Critical: AppleScript destructive commands
 		{DangerCritical, regexp.MustCompile(`(?i)do\s+shell\s+script\s+["\'].*rm\s+-rf\s+/["\']`), "AppleScript do shell script with rm -rf /"},
 		{DangerCritical, regexp.MustCompile(`(?i)do\s+shell\s+script\s+["\'].*rm\s+-rf\s+/\*["\']`), "AppleScript do shell script with rm -rf /*"},
