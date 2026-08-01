@@ -1030,6 +1030,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	// in-place without calling agent.SetPermissionPolicy().
 	a.clearGoalIfNotAutopilot()
 	a.maybeInjectAutopilotGoalCollection()
+	a.maybeInjectCorrectionFeedback()
 	a.maybeInjectDynamicSystemPrompt()
 	a.maybeInjectRatchetRules()
 

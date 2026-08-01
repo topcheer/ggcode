@@ -21,6 +21,17 @@ type Checkpoint struct {
 	RunID      string    `json:"run_id,omitempty"` // agent run that created this checkpoint
 }
 
+// Correction represents a user-initiated undo of agent file changes.
+// It captures which files were reverted and the tool that made the original
+// change, enabling the agent to learn from the rejection and try a different
+// approach on the next run.
+type Correction struct {
+	Files    []string  // file paths that were reverted
+	ToolCall string    // the tool call that made the original change
+	RunID    string    // the run ID whose changes were reverted
+	Time     time.Time // when the correction occurred
+}
+
 // Manager manages file checkpoints for undo/redo support.
 type Manager struct {
 	checkpoints    []Checkpoint
@@ -28,6 +39,10 @@ type Manager struct {
 	maxCheckpoints int
 	mu             sync.Mutex
 	currentRunID   string // active run ID, set by StartRun
+
+	// corrections records user-initiated undos so the agent can be told its
+	// previous approach was rejected. Cleared at the start of each new run.
+	corrections []Correction
 }
 
 // NewManager creates a new checkpoint manager with the given max limit.
@@ -97,6 +112,15 @@ func (m *Manager) Undo() (*Checkpoint, error) {
 
 	m.checkpoints = m.checkpoints[:len(m.checkpoints)-1]
 	m.redoStack = append(m.redoStack, cp)
+
+	// Record the correction so the agent can learn from the rejection.
+	m.corrections = append(m.corrections, Correction{
+		Files:    []string{cp.FilePath},
+		ToolCall: cp.ToolCall,
+		RunID:    cp.RunID,
+		Time:     time.Now(),
+	})
+
 	return &cp, nil
 }
 
@@ -241,6 +265,27 @@ func (m *Manager) UndoRun() ([]Checkpoint, error) {
 		m.redoStack = append(m.redoStack, removed[i])
 	}
 
+	// Record the correction so the agent can learn from the rejection.
+	// Collect unique file paths from the reverted checkpoints.
+	fileSet := make(map[string]bool)
+	for _, cp := range reverted {
+		fileSet[cp.FilePath] = true
+	}
+	files := make([]string, 0, len(fileSet))
+	for f := range fileSet {
+		files = append(files, f)
+	}
+	toolCall := ""
+	if len(reverted) > 0 {
+		toolCall = reverted[0].ToolCall
+	}
+	m.corrections = append(m.corrections, Correction{
+		Files:    files,
+		ToolCall: toolCall,
+		RunID:    runID,
+		Time:     time.Now(),
+	})
+
 	return reverted, nil
 }
 
@@ -301,6 +346,28 @@ func (m *Manager) Clear() {
 	defer m.mu.Unlock()
 	m.checkpoints = nil
 	m.redoStack = nil
+	m.corrections = nil
+}
+
+// RecentCorrections returns corrections recorded since the last run start.
+// Returns nil if no user-initiated undos have occurred.
+func (m *Manager) RecentCorrections() []Correction {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.corrections) == 0 {
+		return nil
+	}
+	out := make([]Correction, len(m.corrections))
+	copy(out, m.corrections)
+	return out
+}
+
+// ClearCorrections removes all recorded corrections. Called at the start
+// of a new agent run so the correction feedback is one-shot.
+func (m *Manager) ClearCorrections() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.corrections = nil
 }
 
 func generateID() string {
