@@ -21,12 +21,14 @@ func NewProvider(resolved *config.ResolvedEndpoint) (Provider, error) {
 	case "anthropic":
 		p := NewAnthropicProviderWithBaseURL(resolved.APIKey, resolved.Model, resolved.MaxTokens, resolved.BaseURL)
 		p.SetAdaptiveCap(cap)
+		p.SetToolChoice(resolved.ToolChoice)
 		return p, nil
 
 	case "openai":
 		p := NewOpenAIProviderWithBaseURL(resolved.APIKey, resolved.Model, resolved.MaxTokens, resolved.BaseURL)
 		p.SetAdaptiveCap(cap)
 		p.SetReasoningEffort(resolved.ReasoningEffort)
+		p.SetToolChoice(resolved.ToolChoice)
 		return p, nil
 
 	case "copilot":
@@ -43,6 +45,8 @@ func NewProvider(resolved *config.ResolvedEndpoint) (Provider, error) {
 			return nil, fmt.Errorf("creating gemini provider: %w", err)
 		}
 		prov.SetAdaptiveCap(cap)
+		prov.SetReasoningEffort(resolved.ReasoningEffort)
+		prov.SetToolChoice(resolved.ToolChoice)
 		return prov, nil
 
 	default:

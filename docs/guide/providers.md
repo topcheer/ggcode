@@ -116,6 +116,70 @@ vendors:
 | `gemini` | Google Gemini native API |
 | `copilot` | GitHub Copilot (OAuth-based, no API key needed) |
 
+## Reasoning Effort
+
+Configure how much "thinking" the model does before responding. Supported by
+`openai`, `anthropic`, and `gemini` protocols.
+
+```yaml
+vendors:
+  openai:
+    protocol: openai
+    reasoning_effort: high    # low | medium | high
+    endpoints:
+      default:
+        model: o3
+  anthropic:
+    protocol: anthropic
+    reasoning_effort: high
+    endpoints:
+      default:
+        model: claude-sonnet-4
+  google:
+    protocol: gemini
+    reasoning_effort: high
+    endpoints:
+      default:
+        model: gemini-2.5-pro
+```
+
+Effort levels:
+
+| Level | OpenAI | Anthropic | Gemini |
+|-------|--------|-----------|--------|
+| `low` | `reasoning_effort: low` | `budget_tokens` ~5K | `thinkingBudget` ~25% |
+| `medium` | `reasoning_effort: medium` | `budget_tokens` ~16K | `thinkingBudget` ~50% |
+| `high` | `reasoning_effort: high` | `budget_tokens` ~32K | `thinkingBudget` ~75% |
+
+When the effort level is empty (default), no reasoning parameters are sent and
+the model uses its default behavior. If a model does not support reasoning, the
+provider automatically retries without the parameter (no manual intervention needed).
+
+## Tool Choice
+
+Control whether the model is allowed to call tools. Supported by `openai`,
+`anthropic`, and `gemini` protocols.
+
+```yaml
+vendors:
+  openai:
+    protocol: openai
+    tool_choice: required    # auto | required | none
+    endpoints:
+      default:
+        model: gpt-4o
+```
+
+| Value | Behavior |
+|-------|----------|
+| `auto` (default) | Model decides whether to call a tool |
+| `required` | Force the model to call at least one tool |
+| `none` | Disable all tool calls |
+
+Setting `tool_choice: required` is useful when you want to force the model into
+agentic action (e.g., in autopilot mode). `none` is useful for pure
+conversational responses without tool use.
+
 ## Test Connectivity
 
 Use `llm-probe` to verify your setup and list available models:

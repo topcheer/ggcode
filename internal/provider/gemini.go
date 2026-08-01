@@ -15,11 +15,13 @@ import (
 
 // GeminiProvider implements Provider using the Google Generative AI API.
 type GeminiProvider struct {
-	client    *genai.Client
-	model     string
-	maxTokens int
-	cap       *adaptiveCap
-	transport *headerInjectingTransport // kept for runtime header updates
+	client          *genai.Client
+	model           string
+	maxTokens       int
+	cap             *adaptiveCap
+	reasoningEffort string                    // "", "low", "medium", "high" — maps to Gemini ThinkingConfig
+	toolChoice      string                    // "", "auto", "required", "none" — maps to Gemini FunctionCallingConfig
+	transport       *headerInjectingTransport // kept for runtime header updates
 }
 
 // ModelName returns the current model name used by this provider.
@@ -28,13 +30,39 @@ func (p *GeminiProvider) ModelName() string { return p.model }
 // CloneWithModel returns a shallow copy of this provider with a different model.
 func (p *GeminiProvider) CloneWithModel(model string) Provider {
 	return &GeminiProvider{
-		client:    p.client,
-		model:     model,
-		maxTokens: p.maxTokens,
-		cap:       p.cap,
-		transport: p.transport,
+		client:          p.client,
+		model:           model,
+		maxTokens:       p.maxTokens,
+		cap:             p.cap,
+		reasoningEffort: p.reasoningEffort,
+		toolChoice:      p.toolChoice,
+		transport:       p.transport,
 	}
 }
+
+// SetReasoningEffort sets the reasoning effort, which maps to Gemini's
+// ThinkingConfig.ThinkingBudget parameter. Effort levels: "low" (~25% of
+// max tokens), "medium" (~50%), "high" (~75%). Empty string disables
+// explicit thinking budget (uses model default behavior).
+func (p *GeminiProvider) SetReasoningEffort(effort string) {
+	effort = strings.ToLower(strings.TrimSpace(effort))
+	switch effort {
+	case "", "low", "medium", "high":
+		p.reasoningEffort = effort
+	}
+}
+
+func (p *GeminiProvider) ReasoningEffort() string { return p.reasoningEffort }
+
+// SetToolChoice sets the tool_choice parameter: "auto" (model decides),
+// "required" (force at least one tool call), "none" (disable tools), or ""
+// (API default). These map to Gemini's FunctionCallingConfig.Mode values
+// AUTO, ANY, and NONE respectively.
+func (p *GeminiProvider) SetToolChoice(choice string) {
+	p.toolChoice = strings.ToLower(strings.TrimSpace(choice))
+}
+
+func (p *GeminiProvider) ToolChoice() string { return p.toolChoice }
 
 // SetAdaptiveCap installs the adaptive max-output-tokens cap.
 func (p *GeminiProvider) SetAdaptiveCap(c *adaptiveCap) { p.cap = c }
@@ -106,6 +134,8 @@ func (p *GeminiProvider) Chat(ctx context.Context, messages []Message, tools []T
 	if len(tools) > 0 {
 		config.Tools = p.convertTools(tools)
 	}
+	p.applyReasoningEffort(config)
+	p.applyToolChoice(config, tools)
 
 	var resp *genai.GenerateContentResponse
 	err := retryWithBackoffCtx(ctx, func() error {
@@ -140,6 +170,8 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 	if len(tools) > 0 {
 		config.Tools = p.convertTools(tools)
 	}
+	p.applyReasoningEffort(config)
+	p.applyToolChoice(config, tools)
 
 	ch := make(chan StreamEvent, 64)
 
@@ -236,6 +268,89 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 func (p *GeminiProvider) CountTokens(ctx context.Context, messages []Message) (int, error) {
 	return estimateTokensForMessages(messages), nil
 }
+
+// applyReasoningEffort maps the reasoning effort level to Gemini's
+// ThinkingConfig. Gemini 2.5+ models support a thinking budget expressed in
+// tokens. We convert effort levels to approximate token budgets as a fraction
+// of maxTokens, similar to the Anthropic provider's budget_tokens mapping.
+//
+//   - low:    ~25% of maxTokens (min 512)
+//   - medium: ~50% of maxTokens
+//   - high:   ~75% of maxTokens
+//
+// An empty effort string leaves ThinkingConfig unset (model default).
+// The budget is clamped to [512, maxTokens-1] to satisfy API constraints.
+func (p *GeminiProvider) applyReasoningEffort(config *genai.GenerateContentConfig) {
+	if p.reasoningEffort == "" {
+		return
+	}
+	maxTok := p.maxTokens
+	if p.cap != nil {
+		if v := p.cap.Get(); v > 0 {
+			maxTok = v
+		}
+	}
+	if maxTok <= 512 {
+		// Not enough room for meaningful thinking — set budget to 0
+		// which disables thinking on Gemini.
+		config.ThinkingConfig = &genai.ThinkingConfig{
+			ThinkingBudget: ptrToInt32(0),
+		}
+		return
+	}
+	var budget int32
+	switch p.reasoningEffort {
+	case "low":
+		budget = int32(maxTok) / 4
+	case "medium":
+		budget = int32(maxTok) / 2
+	case "high":
+		budget = int32(maxTok) * 3 / 4
+	default:
+		return
+	}
+	if budget < 512 {
+		budget = 512
+	}
+	if budget >= int32(maxTok) {
+		budget = int32(maxTok) - 1
+	}
+	config.ThinkingConfig = &genai.ThinkingConfig{
+		ThinkingBudget: &budget,
+	}
+	debug.Log("gemini", "thinking budget=%d (effort=%s maxTok=%d)", budget, p.reasoningEffort, maxTok)
+}
+
+// applyToolChoice maps the tool_choice setting to Gemini's
+// FunctionCallingConfig.Mode. Only applied when tools are present and
+// toolChoice is non-empty. Values map as:
+//   - "auto"     → AUTO (model decides whether to call a function)
+//   - "required" → ANY  (model must call one of the provided functions)
+//   - "none"     → NONE (model must not call any function)
+func (p *GeminiProvider) applyToolChoice(config *genai.GenerateContentConfig, tools []ToolDefinition) {
+	if p.toolChoice == "" || len(tools) == 0 {
+		return
+	}
+	var mode genai.FunctionCallingConfigMode
+	switch p.toolChoice {
+	case "auto":
+		mode = genai.FunctionCallingConfigModeAuto
+	case "required":
+		mode = genai.FunctionCallingConfigModeAny
+	case "none":
+		mode = genai.FunctionCallingConfigModeNone
+	default:
+		return
+	}
+	config.ToolConfig = &genai.ToolConfig{
+		FunctionCallingConfig: &genai.FunctionCallingConfig{
+			Mode: mode,
+		},
+	}
+}
+
+// ptrToInt32 returns a pointer to the given int32 value.
+func ptrToInt32(v int32) *int32 { return &v }
 
 func (p *GeminiProvider) convertMessages(messages []Message) ([]*genai.Content, *genai.Content) {
 	var contents []*genai.Content
