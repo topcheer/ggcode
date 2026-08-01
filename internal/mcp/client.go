@@ -56,6 +56,15 @@ type Client struct {
 	// (i.e., not via Close/Abort). Consumers can use this for auto-reconnect.
 	// It is closed at most once; nil for non-stdio transports.
 	processExit chan struct{}
+
+	// notificationHandler is called for every server-initiated notification
+	// (e.g., notifications/tools/list_changed, notifications/message).
+	// If nil, notifications are silently dropped (legacy behavior).
+	notificationHandler func(method string, params json.RawMessage)
+
+	// serverCaps holds the capabilities advertised by the server during
+	// initialize. Used to gate feature-specific requests (e.g., logging).
+	serverCaps ServerCaps
 }
 
 // NewClient creates a new MCP client for the given server config.
@@ -190,12 +199,20 @@ func (c *Client) NegotiatedVersion() string {
 func (c *Client) Initialize(ctx context.Context) (*InitializeResult, error) {
 	params := InitializeParams{
 		ProtocolVersion: latestMCPProtocolVersion,
-		ClientInfo:      Implementation{Name: "ggcode", Version: "0.1.0"},
+		Capabilities: ClientCaps{
+			Roots: struct {
+				ListChanged bool `json:"listChanged,omitempty"`
+			}{ListChanged: true},
+		},
+		ClientInfo: Implementation{Name: "ggcode", Version: "0.1.0"},
 	}
 	var result InitializeResult
 	if err := c.sendRequest(ctx, "initialize", params, &result); err != nil {
 		return nil, fmt.Errorf("mcp[%s]: initialize: %w", c.name, err)
 	}
+
+	// Cache server capabilities for feature gating.
+	c.serverCaps = result.Capabilities
 
 	// Version negotiation: the server may respond with the same version
 	// (if it supports ours) or a different one (its latest supported).
@@ -738,6 +755,7 @@ func (c *Client) readResponse(ctx context.Context) (*Response, error) {
 		case *Response:
 			return typed, nil
 		case *Notification:
+			c.processNotification(typed)
 			continue
 		case *Request:
 			if err := c.handleServerRequest(typed); err != nil {
@@ -950,6 +968,63 @@ func (c *Client) withStderr(err error) error {
 	return err
 }
 
+// SetNotificationHandler registers a callback for server-initiated notifications.
+// The handler receives the notification method (e.g., "notifications/tools/list_changed")
+// and raw params. It is called from the read loop; handlers must not block.
+// Pass nil to disable notification processing (notifications are silently dropped).
+func (c *Client) SetNotificationHandler(h func(method string, params json.RawMessage)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.notificationHandler = h
+}
+
+// processNotification dispatches a server notification to the registered handler.
+func (c *Client) processNotification(notif *Notification) {
+	if notif == nil {
+		return
+	}
+	c.mu.Lock()
+	h := c.notificationHandler
+	c.mu.Unlock()
+	if h == nil {
+		return
+	}
+	debug.Log("mcp-notif", "server=%s method=%s", c.name, notif.Method)
+	h(notif.Method, notif.Params)
+}
+
+// SetLevel requests the server to set its minimum logging level.
+// The server must advertise the logging capability during initialize.
+// Valid levels: "debug", "info", "notice", "warning", "error", "critical",
+// "alert", "emergency".
+func (c *Client) SetLevel(ctx context.Context, level string) error {
+	if c.serverCaps.Logging == nil {
+		return fmt.Errorf("mcp[%s]: server does not support logging", c.name)
+	}
+	params := struct {
+		Level string `json:"level"`
+	}{Level: level}
+	if err := c.sendRequest(ctx, "logging/setLevel", params, nil); err != nil {
+		return fmt.Errorf("mcp[%s]: logging/setLevel: %w", c.name, err)
+	}
+	return nil
+}
+
+// HasToolsListChanged returns true if the server advertised tools with listChanged.
+func (c *Client) HasToolsListChanged() bool {
+	return c.serverCaps.Tools != nil && c.serverCaps.Tools.ListChanged
+}
+
+// HasLogging returns true if the server supports the logging capability.
+func (c *Client) HasLogging() bool {
+	return c.serverCaps.Logging != nil
+}
+
+// HasResourceSubscribe returns true if the server supports resource subscriptions.
+func (c *Client) HasResourceSubscribe() bool {
+	return c.serverCaps.Resources != nil && c.serverCaps.Resources.Subscribe
+}
+
 // --- MCP Protocol Types ---
 
 type InitializeParams struct {
@@ -976,9 +1051,27 @@ type InitializeResult struct {
 }
 
 type ServerCaps struct {
-	Tools *struct {
-		ListChanged bool `json:"listChanged,omitempty"`
-	} `json:"tools,omitempty"`
+	Tools      *ToolsCapability     `json:"tools,omitempty"`
+	Resources  *ResourcesCapability `json:"resources,omitempty"`
+	Prompts    *PromptsCapability   `json:"prompts,omitempty"`
+	Logging    *struct{}            `json:"logging,omitempty"`
+	Completion *struct{}            `json:"completion,omitempty"`
+}
+
+// ToolsCapability describes the server's tool capabilities.
+type ToolsCapability struct {
+	ListChanged bool `json:"listChanged,omitempty"`
+}
+
+// ResourcesCapability describes the server's resource capabilities.
+type ResourcesCapability struct {
+	Subscribe   bool `json:"subscribe,omitempty"`
+	ListChanged bool `json:"listChanged,omitempty"`
+}
+
+// PromptsCapability describes the server's prompt capabilities.
+type PromptsCapability struct {
+	ListChanged bool `json:"listChanged,omitempty"`
 }
 
 type ListToolsParams struct {

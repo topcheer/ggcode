@@ -762,3 +762,131 @@ func mustWSURL(t *testing.T, httpURL string) string {
 	}
 	return parsed.String()
 }
+
+func TestNotificationHandlerInvoked(t *testing.T) {
+	stream := encodeStdioMessages(
+		t,
+		Notification{JSONRPC: "2.0", Method: "notifications/tools/list_changed"},
+		Notification{JSONRPC: "2.0", Method: "notifications/message", Params: json.RawMessage(`{"level":"info","data":"hello"}`)},
+		Response{JSONRPC: "2.0", ID: json.RawMessage(`1`), Result: json.RawMessage(`{"ok":true}`)},
+	)
+
+	var receivedMethods []string
+	client := &Client{
+		name:   "notif-test",
+		reader: bufio.NewReader(bytes.NewReader(stream)),
+	}
+	client.SetNotificationHandler(func(method string, params json.RawMessage) {
+		receivedMethods = append(receivedMethods, method)
+	})
+
+	resp, err := client.readResponse(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(resp.Result) != `{"ok":true}` {
+		t.Fatalf("unexpected response: %s", string(resp.Result))
+	}
+	if len(receivedMethods) != 2 {
+		t.Fatalf("expected 2 notifications, got %d: %v", len(receivedMethods), receivedMethods)
+	}
+	if receivedMethods[0] != "notifications/tools/list_changed" {
+		t.Errorf("first notification: got %s", receivedMethods[0])
+	}
+	if receivedMethods[1] != "notifications/message" {
+		t.Errorf("second notification: got %s", receivedMethods[1])
+	}
+}
+
+func TestNoNotificationHandlerStillWorks(t *testing.T) {
+	stream := encodeStdioMessages(
+		t,
+		Notification{JSONRPC: "2.0", Method: "notifications/tools/list_changed"},
+		Response{JSONRPC: "2.0", ID: json.RawMessage(`1`), Result: json.RawMessage(`{"ok":true}`)},
+	)
+	client := &Client{
+		name:   "silent-test",
+		reader: bufio.NewReader(bytes.NewReader(stream)),
+	}
+	// No handler set — notifications should be silently skipped
+	resp, err := client.readResponse(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(resp.Result) != `{"ok":true}` {
+		t.Fatalf("unexpected response: %s", string(resp.Result))
+	}
+}
+
+func TestServerCapsParsing(t *testing.T) {
+	capsJSON := `{
+		"capabilities": {
+			"tools": {"listChanged": true},
+			"resources": {"subscribe": true, "listChanged": true},
+			"prompts": {"listChanged": false},
+			"logging": {}
+		}
+	}`
+	var result InitializeResult
+	if err := json.Unmarshal([]byte(capsJSON), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Capabilities.Tools == nil || !result.Capabilities.Tools.ListChanged {
+		t.Error("expected tools.listChanged=true")
+	}
+	if result.Capabilities.Resources == nil || !result.Capabilities.Resources.Subscribe {
+		t.Error("expected resources.subscribe=true")
+	}
+	if result.Capabilities.Logging == nil {
+		t.Error("expected logging capability")
+	}
+	if result.Capabilities.Prompts == nil {
+		t.Error("expected prompts capability")
+	}
+}
+
+func TestHasToolsListChanged(t *testing.T) {
+	client := &Client{
+		name:       "caps-test",
+		serverCaps: ServerCaps{Tools: &ToolsCapability{ListChanged: true}},
+	}
+	if !client.HasToolsListChanged() {
+		t.Error("expected HasToolsListChanged=true")
+	}
+	client.serverCaps.Tools = &ToolsCapability{ListChanged: false}
+	if client.HasToolsListChanged() {
+		t.Error("expected HasToolsListChanged=false")
+	}
+	client.serverCaps.Tools = nil
+	if client.HasToolsListChanged() {
+		t.Error("expected HasToolsListChanged=false with nil Tools")
+	}
+}
+
+func TestHasLogging(t *testing.T) {
+	client := &Client{
+		name:       "caps-test",
+		serverCaps: ServerCaps{Logging: &struct{}{}},
+	}
+	if !client.HasLogging() {
+		t.Error("expected HasLogging=true")
+	}
+	client.serverCaps.Logging = nil
+	if client.HasLogging() {
+		t.Error("expected HasLogging=false")
+	}
+}
+
+func TestHasResourceSubscribe(t *testing.T) {
+	client := &Client{
+		name:       "caps-test",
+		serverCaps: ServerCaps{Resources: &ResourcesCapability{Subscribe: true}},
+	}
+	if !client.HasResourceSubscribe() {
+		t.Error("expected HasResourceSubscribe=true")
+	}
+	client.serverCaps.Resources = &ResourcesCapability{Subscribe: false}
+	if client.HasResourceSubscribe() {
+		t.Error("expected HasResourceSubscribe=false")
+	}
+}

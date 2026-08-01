@@ -84,6 +84,22 @@ mcp_servers:
 
 When `read_only: true`, ggcode blocks any MCP tool whose name contains a write/create/delete/execute keyword, including: `write`, `edit`, `delete`, `remove`, `create`, `update`, `insert`, `set`, `put`, `post`, `patch`, `execute`, `run`, `exec`, `shell`, `move`, `rename`, `upload`, `install`, `deploy`. Read-only tools such as `read`, `get`, `list`, `search`, `fetch`, `query`, `stat`, and `show` are still allowed. Blocked tool calls return an error result explaining that the server is in read-only mode.
 
+## Dynamic Tool Refresh
+
+When an MCP server signals that its tool list has changed (via the `notifications/tools/list_changed` notification), ggcode automatically re-fetches and re-registers the updated tools — no restart needed. This keeps the agent in sync with servers that add, remove, or update tools at runtime (e.g., a database server exposing new tables, or a plugin system loading new capabilities).
+
+Similarly, `notifications/resources/list_changed` triggers a resource list refresh. Server logging notifications (`notifications/message`) and progress notifications are forwarded to the debug log for observability.
+
+## Server Capability Detection
+
+During the MCP handshake, ggcode detects and caches the server's advertised capabilities:
+- **Tools** with `listChanged` — enables dynamic tool refresh
+- **Resources** with `subscribe` and `listChanged` — enables resource change tracking
+- **Prompts** with `listChanged` — enables prompt list refresh
+- **Logging** — enables `logging/setLevel` for server log control
+
+This capability-aware design means ggcode only sends feature-specific requests to servers that support them, avoiding protocol errors.
+
 ## Auto-Start
 
 MCP servers start automatically when ggcode launches. If a server fails to start, a warning is shown in the TUI.

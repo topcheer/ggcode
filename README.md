@@ -88,7 +88,7 @@ individual A2A auth configuration.
 - **Screenshot capture** — full screen, window, or region screenshots for visual debugging
 - **Clipboard integration** — read from and write to the system clipboard
 - **PTC (Programmatic Tool Calling)** — the agent writes JavaScript in a sandboxed VM to batch-call read-only tools (read_file, grep, git_log, web_search, etc.) in a single round-trip, dramatically reducing context window consumption for multi-step analysis
-- **MCP integration** — connect external tools and data sources
+- **MCP integration** — connect external tools and data sources, with dynamic tool refresh, server logging, and full capability detection
 - **gRPC plugins** — extend ggcode with custom tools in Go, Python, Node.js, or any language
 - **Multi-agent** — spawn parallel workers, delegate to teammates, A2A protocol
 - **[LAN Chat](docs/guide/lan-chat.md)** — zero-config P2P real-time messaging between instances on your LAN

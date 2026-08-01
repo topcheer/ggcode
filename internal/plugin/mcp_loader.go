@@ -152,8 +152,107 @@ func (m *MCPPlugin) Connect(ctx context.Context) (*mcp.Adapter, error) {
 	m.lastError = ""
 	m.prompts = prompts
 	m.resources = resources
+	m.setupNotificationHandler(client)
 	m.startReconnectWatcher(client)
 	return m.adapter, nil
+}
+
+// setupNotificationHandler registers a notification handler on the MCP client
+// to process server-initiated notifications:
+//   - notifications/tools/list_changed: triggers hot tool list refresh
+//   - notifications/resources/list_changed: logs for awareness
+//   - notifications/message (logging): forwards to debug log
+//
+// This enables dynamic MCP servers that add/remove tools at runtime.
+func (m *MCPPlugin) setupNotificationHandler(client *mcp.Client) {
+	client.SetNotificationHandler(func(method string, params json.RawMessage) {
+		switch method {
+		case "notifications/tools/list_changed":
+			debug.Log("mcp-notif", "server=%s tools/list_changed received, refreshing tools", m.cfg.Name)
+			m.refreshTools(client)
+		case "notifications/resources/list_changed":
+			debug.Log("mcp-notif", "server=%s resources/list_changed received, refreshing resources", m.cfg.Name)
+			m.refreshResources(client)
+		case "notifications/prompts/list_changed":
+			debug.Log("mcp-notif", "server=%s prompts/list_changed received", m.cfg.Name)
+		case "notifications/message":
+			// Server logging notification — forward to debug log for visibility.
+			var msg struct {
+				Level string `json:"level"`
+				Data  any    `json:"data"`
+			}
+			if json.Unmarshal(params, &msg) == nil {
+				debug.Log("mcp-log", "server=%s level=%s data=%v", m.cfg.Name, msg.Level, msg.Data)
+			} else {
+				debug.Log("mcp-log", "server=%s raw=%s", m.cfg.Name, string(params))
+			}
+		case "notifications/progress":
+			debug.Log("mcp-notif", "server=%s progress: %s", m.cfg.Name, string(params))
+		default:
+			debug.Log("mcp-notif", "server=%s unhandled notification: %s", m.cfg.Name, method)
+		}
+	})
+}
+
+// refreshTools re-fetches the tool list from the MCP server and updates the
+// adapter and registry. Called when the server signals tools/list_changed.
+func (m *MCPPlugin) refreshTools(client *mcp.Client) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	tools, err := client.ListTools(ctx)
+	if err != nil {
+		debug.Log("mcp-notif", "server=%s tool refresh failed: %v", m.cfg.Name, err)
+		return
+	}
+
+	m.mu.Lock()
+	oldAdapter := m.adapter
+	registry := m.registry
+	readOnly := m.cfg.ReadOnly
+	m.mu.Unlock()
+
+	// Unregister old tools
+	if oldAdapter != nil && registry != nil {
+		for _, tn := range oldAdapter.ToolNames() {
+			registry.Unregister(tn)
+		}
+	}
+
+	// Create new adapter with updated tools
+	var newAdapter *mcp.Adapter
+	if readOnly {
+		newAdapter = mcp.NewReadOnlyAdapter(m.cfg.Name, client, tools)
+	} else {
+		newAdapter = mcp.NewAdapter(m.cfg.Name, client, tools)
+	}
+
+	m.mu.Lock()
+	m.adapter = newAdapter
+	m.mu.Unlock()
+
+	// Re-register tools if we have a registry
+	if registry != nil {
+		if regErr := newAdapter.RegisterTools(registry); regErr != nil {
+			debug.Log("mcp-notif", "server=%s tool re-registration failed: %v", m.cfg.Name, regErr)
+		}
+	}
+
+	debug.Log("mcp-notif", "server=%s tools refreshed: %d tools", m.cfg.Name, len(tools))
+}
+
+// refreshResources re-fetches the resource list from the MCP server.
+func (m *MCPPlugin) refreshResources(client *mcp.Client) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	resources := listResourceNames(client.ListResources(ctx))
+
+	m.mu.Lock()
+	m.resources = resources
+	m.mu.Unlock()
+
+	debug.Log("mcp-notif", "server=%s resources refreshed: %d items", m.cfg.Name, len(resources))
 }
 
 // startReconnectWatcher launches a goroutine that monitors the stdio MCP
