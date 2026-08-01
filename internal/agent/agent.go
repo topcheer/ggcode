@@ -140,6 +140,7 @@ type Agent struct {
 	confidence                 *confidenceState                      // holistic trajectory confidence scoring (HTC-inspired)
 	budgetGuard                *budgetGuardState                     // per-step token cost trend monitoring (BAGEN-inspired)
 	costBudget                 *sessionCostBudget                    // absolute session-level token budget enforcement
+	toolCallBudget             *toolCallBudget                       // per-session tool invocation limit (action-level guardrail)
 	cacheKeepalive             *cacheKeepaliveState                  // prompt cache warming pings during idle (Anthropic)
 	commandCache               *commandCache                         // deterministic build/test command result caching
 	emptySearch                *emptySearchState                     // empty search spiral detection (futile search guidance)
@@ -208,6 +209,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		confidence:           newConfidenceState(),
 		budgetGuard:          newBudgetGuardState(),
 		costBudget:           newSessionCostBudget(),
+		toolCallBudget:       newToolCallBudget(),
 		cacheKeepalive:       newCacheKeepaliveState(),
 		commandCache:         newCommandCache(),
 		emptySearch:          newEmptySearchState(),
@@ -720,6 +722,15 @@ func (a *Agent) SetSessionTokenBudget(budget int64) {
 	a.costBudget.SetBudget(budget)
 }
 
+// SetToolCallBudget sets the maximum total tool calls allowed for a single
+// agent run. 0 disables explicit enforcement (auto-derivation from maxIter
+// may still apply).
+func (a *Agent) SetToolCallBudget(budget int) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.toolCallBudget.SetBudget(budget)
+}
+
 // GetHookConfig returns the current hook configuration (thread-safe).
 func (a *Agent) GetHookConfig() hooks.HookConfig {
 	a.mu.RLock()
@@ -1039,6 +1050,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.confidence.reset()
 	a.budgetGuard.reset()
 	a.costBudget.reset()
+	a.toolCallBudget.reset()
+	a.toolCallBudget.SetDefaultBudget(deriveDefaultBudget(a.maxIter))
 	a.emptySearch.reset()
 	// Reset the unread-file edit tracker so each run starts fresh.
 	a.unreadEdit.reset()
@@ -1612,6 +1625,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 			// Track tool call for reflection stats
 			runStats.recordToolCall(tc.Name)
+			a.toolCallBudget.record()
 			extractPathsFromToolCall(tc.Name, tc.Arguments, runStats)
 			// Check for consecutive duplicate tool calls (loop detection).
 			// If detected, inject a guidance message into the tool result.
@@ -2095,6 +2109,28 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			})
 			a.SetProjectMemoryFiles(deferredMemoryFiles)
 			debug.Log("agent", "injected deferred path-scoped project memory for %s (%d files)", targetLabel, len(deferredMemoryFiles))
+		}
+
+		// Tool call budget: check after all tools in this turn executed.
+		// Progressive warnings (80%, 95%) and hard stop at 100%.
+		if tcMsg, stop := a.toolCallBudget.check(); tcMsg != "" {
+			debug.Log("tool-call-budget", "threshold crossed: calls=%d budget=%d stop=%v",
+				a.toolCallBudget.totalCalls, a.toolCallBudget.effectiveBudget(), stop)
+			a.contextManager.Add(provider.Message{
+				Role: "user",
+				Content: []provider.ContentBlock{{
+					Type: "text",
+					Text: tcMsg,
+				}},
+			})
+			msgs = a.contextManager.Messages()
+			if stop {
+				onEvent(provider.StreamEvent{
+					Type: provider.StreamEventSystem,
+					Text: tcMsg,
+				})
+				return nil
+			}
 		}
 	}
 

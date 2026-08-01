@@ -78,6 +78,18 @@ func ApplySessionTokenBudget(agentInst *agent.Agent, cfg *config.Config) {
 	}
 }
 
+// ApplyToolCallBudget propagates the configured tool call budget to the agent.
+// Call this after agent creation or config reload. When unset (0), the agent
+// auto-derives a default from maxIterations.
+func ApplyToolCallBudget(agentInst *agent.Agent, cfg *config.Config) {
+	if agentInst == nil || cfg == nil {
+		return
+	}
+	if cfg.ToolCallBudget > 0 {
+		agentInst.SetToolCallBudget(cfg.ToolCallBudget)
+	}
+}
+
 // SyncVendorEndpointToGlobal ensures a vendor/endpoint definition exists in
 // the global config file so new sessions can discover it without re-configuring
 // API keys. This is called after model switches to propagate vendor/endpoint

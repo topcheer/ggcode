@@ -28,6 +28,8 @@ Per-workspace overrides are stored in `~/.ggcode/instances/<hash>/`. Use `scope=
 | `default_mode` | string | Permission mode for **new** sessions: `supervised` (default), `plan`, `auto`, `bypass`, `autopilot` |
 | `language` | string | Interface language: `en` or `zh-CN` |
 | `max_iterations` | int | Agent loop limit per turn (0 = unlimited) |
+| `session_token_budget` | int | Max total tokens (input + output) per agent run. Progressive warnings at 75%/90%, hard stop at 100%. |
+| `tool_call_budget` | int | Max total tool calls per agent run. Warnings at 80%/95%, hard stop at 100%. When unset, auto-derived from `max_iterations` (x8), or 500 for unlimited. |
 | `output_style` | string | Response verbosity: `default`, `concise` (terse), `detailed` (reasoning + context), `socratic` (guided learning). Default: `default`. Cycle at runtime with `Ctrl+O` or `/style`. |
 | `allowed_dirs` | []string | Directories the agent may access |
 

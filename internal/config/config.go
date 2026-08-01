@@ -262,6 +262,7 @@ type Config struct {
 	AllowedDirs        []string                   `yaml:"allowed_dirs" json:"allowed_dirs"`
 	MaxIterations      int                        `yaml:"max_iterations" json:"max_iterations"`
 	SessionTokenBudget int64                      `yaml:"session_token_budget,omitempty" json:"session_token_budget,omitempty"`
+	ToolCallBudget     int                        `yaml:"tool_call_budget,omitempty" json:"tool_call_budget,omitempty"`
 	ToolPerms          map[string]ToolPermission  `yaml:"tool_permissions" json:"tool_permissions"`
 	Plugins            []PluginConfigEntry        `yaml:"plugins" json:"plugins"`
 	MCPServers         []MCPServerConfig          `yaml:"mcp_servers" json:"mcp_servers"`
