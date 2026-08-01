@@ -37,6 +37,8 @@ func (m *Model) queuePendingSubmission(text string) {
 	// pending list so they don't leak into the next submission.
 	imgs := m.pendingImages
 	m.pendingImages = nil
+	chatID := nextChatID()
+	m.lastQueuedChatID = chatID
 	count := m.pending.enqueueWithImages(text, imgs)
 	debug.Log("tui", "queuePendingSubmission: count=%d text=%s imgs=%d", count, util.Truncate(text, 100), len(imgs))
 	if count == 0 {
@@ -49,8 +51,25 @@ func (m *Model) queuePendingSubmission(text string) {
 	for _, img := range imgs {
 		displayText = strings.TrimSpace(img.placeholder + " " + displayText)
 	}
-	m.chatWriteUser(nextChatID(), displayText)
+	m.chatWriteUser(chatID, displayText)
 	m.chatListScrollToBottom()
+}
+
+// dequeueLastVisible removes the last visible (non-hidden) pending submission
+// from the queue, removes its rendered chat bubble, and returns the text and
+// images so the caller can put them back in the input box.
+func (m *Model) dequeueLastVisible() (text string, imgs []imageAttachedMsg, ok bool) {
+	text, imgs, ok = m.pending.popLastVisible()
+	if !ok {
+		return "", nil, false
+	}
+	// Remove the chat bubble for this queued message.
+	if m.lastQueuedChatID != "" {
+		m.chatList.RemoveByID(m.lastQueuedChatID)
+		m.lastQueuedChatID = ""
+	}
+	debug.Log("tui", "dequeueLastVisible: dequeued text=%s", util.Truncate(text, 100))
+	return text, imgs, ok
 }
 
 // queuePendingSubmissionHidden enqueues text for LLM submission without
@@ -342,6 +361,28 @@ func (q *pendingQueue) snapshot() []string {
 		out = append(out, item.Text)
 	}
 	return out
+}
+
+// popLastVisible removes and returns the last visible (non-hidden, non-cron)
+// pending submission from the queue.
+func (q *pendingQueue) popLastVisible() (text string, imgs []imageAttachedMsg, ok bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	queue := q.ensureQueueLocked()
+	item, found := queue.PopLastVisible()
+	if !found {
+		q.syncItemsFromQueueLocked(queue)
+		return "", nil, false
+	}
+	// Find images from q.items by matching text (before sync destroys them).
+	for i := len(q.items) - 1; i >= 0; i-- {
+		if q.items[i].Text == item.Text && !q.items[i].Hidden {
+			imgs = q.items[i].Images
+			break
+		}
+	}
+	q.syncItemsFromQueueLocked(queue)
+	return strings.TrimSpace(item.Text), imgs, true
 }
 
 func (q *pendingQueue) consume() string {

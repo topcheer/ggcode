@@ -318,6 +318,21 @@ func (m *Model) handleHarnessCheckpointConfirm(approved bool) tea.Cmd {
 }
 
 func (m Model) handleHistoryUp() (tea.Model, tea.Cmd) {
+	// De-queue feature: when agent is busy, input is empty, and there are
+	// visible pending submissions, press Up to pull the last queued message
+	// back into the input box for editing.
+	if m.loading && m.input.Value() == "" && m.pendingSubmissionCount() > 0 {
+		text, imgs, ok := m.dequeueLastVisible()
+		if ok {
+			m.input.SetValue(text)
+			// Restore images so they're available if the user re-sends.
+			if len(imgs) > 0 {
+				m.pendingImages = imgs
+			}
+			composerCursorEnd(&m.input)
+			return m, nil
+		}
+	}
 	if m.historyIdx > 0 {
 		m.historyIdx--
 		m.input.SetValue(m.history[m.historyIdx])
