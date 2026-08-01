@@ -19,6 +19,13 @@ model: glm-5-turbo
 # TUI language: en or zh-CN
 language: en
 
+# Output style controls agent response verbosity:
+#   default   — standard balanced responses
+#   concise   — terse, minimal output
+#   detailed  — include reasoning and context
+#   socratic  — guided learning with questions
+# output_style: default
+
 # Runtime mode: supervised, plan, auto, bypass, or autopilot
 default_mode: supervised
 

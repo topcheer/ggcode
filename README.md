@@ -81,6 +81,12 @@ individual A2A auth configuration.
 
 - **Codebase-aware** — reads, understands, and edits your entire project
 - **Full dev toolkit** — file edits, shell commands, Git, LSP, search
+- **Semantic code search** — BM25-based `code_search` finds conceptually related code, not just keyword matches
+- **Code health analysis** — cyclomatic complexity, function length, nesting depth metrics via `code_health`
+- **Tech-debt scanner** — `scan_todos` surfaces TODO/FIXME/HACK markers with severity ranking and git-blame staleness
+- **Browser automation** — Go-native CDP for SPA/JS testing without Node.js or Playwright
+- **Screenshot capture** — full screen, window, or region screenshots for visual debugging
+- **Clipboard integration** — read from and write to the system clipboard
 - **PTC (Programmatic Tool Calling)** — the agent writes JavaScript in a sandboxed VM to batch-call read-only tools (read_file, grep, git_log, web_search, etc.) in a single round-trip, dramatically reducing context window consumption for multi-step analysis
 - **MCP integration** — connect external tools and data sources
 - **gRPC plugins** — extend ggcode with custom tools in Go, Python, Node.js, or any language

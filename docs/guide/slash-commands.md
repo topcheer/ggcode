@@ -98,6 +98,9 @@ Slash commands are typed directly in the chat input within the TUI.
 | `/bug` | Report a bug |
 | `/review [file]` | Review code changes (harness review) |
 | `/reflect` | Trigger agent self-reflection on recent runs |
+| `/export-trace` | Export session execution trace as structured JSON (TTFT, tool latency, token usage) |
+| `/doctor` | Run health diagnostics (provider, config, MCP, LSP, permissions) |
+| `/style` | Cycle output style (default → concise → detailed → socratic) |
 | `/branch` / `/fork` | Branch/fork current session |
 
 ## IM-Specific Commands
@@ -161,6 +164,7 @@ Quick-send messages to other ggcode instances on your LAN directly from the main
 | `Ctrl+R` | Toggle sidebar visibility |
 | `Ctrl+L` | Clear screen (equivalent to `/clear`) |
 | `Ctrl+G` | Cycle reasoning effort level |
+| `Ctrl+O` | Cycle output style (default → concise → detailed → socratic) |
 | `Ctrl+\` | Toggle compact mode (hide/show sidebar) |
 | `Ctrl+T` | Toggle config save scope (global ↔ instance) |
 | `Ctrl+X` | Open terminal pane menu (tmux/Ghostty/Warp/Kitty/iTerm2) |

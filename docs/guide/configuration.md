@@ -28,6 +28,7 @@ Per-workspace overrides are stored in `~/.ggcode/instances/<hash>/`. Use `scope=
 | `default_mode` | string | Permission mode for **new** sessions: `supervised` (default), `plan`, `auto`, `bypass`, `autopilot` |
 | `language` | string | Interface language: `en` or `zh-CN` |
 | `max_iterations` | int | Agent loop limit per turn (0 = unlimited) |
+| `output_style` | string | Response verbosity: `default`, `concise` (terse), `detailed` (reasoning + context), `socratic` (guided learning). Default: `default`. Cycle at runtime with `Ctrl+O` or `/style`. |
 | `allowed_dirs` | []string | Directories the agent may access |
 
 ## Vendors & Endpoints
@@ -223,6 +224,25 @@ subagents:
 | `show_output` | bool | false | Whether to stream sub-agent events to the parent's UI |
 
 See [Multi-Agent Modes](./multi-agent-modes.md) for the full architecture guide.
+
+## Provider Failover
+
+Configure automatic provider switching when the primary provider fails with quota exhaustion, auth errors, or sustained transient failures:
+
+```yaml
+fallback:
+  enabled: true
+  vendor: anthropic            # Must be configured in vendors section
+  endpoint: default            # Optional, defaults to "default"
+  model: claude-sonnet-4-20250514
+```
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `enabled` | bool | false | Enable automatic provider failover |
+| `vendor` | string | — | Fallback vendor name (must exist in `vendors`) |
+| `endpoint` | string | `default` | Fallback endpoint name |
+| `model` | string | — | Fallback model name |
 
 ### Swarm Teams
 
