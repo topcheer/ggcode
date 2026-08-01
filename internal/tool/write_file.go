@@ -113,7 +113,12 @@ func (t WriteFile) Execute(ctx context.Context, input json.RawMessage) (Result, 
 		)}, nil
 	}
 
+	// Capture diagnostic baseline BEFORE the write so post-edit diagnostics
+	// can diff and show only newly introduced issues.
+	CaptureDiagnosticBaseline(t.WorkingDir, args.Path)
+
 	if err := atomicWriteFile(args.Path, writeData, 0644); err != nil {
+		ClearDiagnosticBaseline(args.Path)
 		return Result{IsError: true, Content: fmt.Sprintf("error writing file: %v", err)}, nil
 	}
 

@@ -29,11 +29,18 @@ const postEditDiagTimeout = 800 * time.Millisecond
 
 // postEditDiagnostics fetches LSP diagnostics for a file after an edit and
 // returns a formatted warning string if any errors or warnings are found.
+//
+// If a diagnostic baseline was captured before the edit (via
+// CaptureDiagnosticBaseline), only NEWLY INTRODUCED diagnostics are shown —
+// pre-existing issues are suppressed to reduce noise and focus the agent on
+// problems caused by its own change.
+//
 // Returns empty string if:
 //   - post-edit diagnostics are disabled
 //   - no LSP server is available for the file's language
 //   - the LSP call fails or times out
 //   - no errors/warnings are found (only info/hints are suppressed)
+//   - baseline diff shows zero new issues (clean edit)
 //
 // This gives the agent immediate, actionable feedback after code edits,
 // without requiring a separate lsp_diagnostics tool call or waiting for the
@@ -62,10 +69,22 @@ func postEditDiagnostics(workingDir, filePath string) string {
 	diagnostics, err := lsp.Diagnostics(ctx, workingDir, filePath)
 	if err != nil {
 		debug.Log("post-edit-diag", "LSP diagnostics failed for %s: %v", filePath, err)
+		// Clear any stale baseline since we couldn't get post-edit diagnostics.
+		ClearDiagnosticBaseline(filePath)
 		return ""
 	}
 
-	result := formatDiagnostics(diagnostics)
+	// Diff against pre-edit baseline if available. When a baseline exists,
+	// only show NEWLY INTRODUCED diagnostics — pre-existing issues are
+	// suppressed to keep the signal focused on what the agent's edit caused.
+	newDiags, resolvedCount, hasBaseline := diffAgainstBaseline(filePath, diagnostics)
+
+	var result string
+	if hasBaseline {
+		result = formatNewDiagnostics(newDiags, resolvedCount)
+	} else {
+		result = formatDiagnostics(diagnostics)
+	}
 
 	// Check sibling files in the same directory for cross-file errors.
 	// gopls pushes diagnostics for all files in a Go package; this catches

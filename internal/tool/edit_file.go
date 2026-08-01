@@ -147,6 +147,10 @@ func (t EditFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 		)}, nil
 	}
 
+	// Capture diagnostic baseline BEFORE the write so post-edit diagnostics
+	// can diff and show only newly introduced issues.
+	CaptureDiagnosticBaseline(t.WorkingDir, args.FilePath)
+
 	writeData := []byte(newContent)
 	writeData, fmtChanged := formatGoBytes(args.FilePath, writeData)
 	if err := atomicWriteFile(args.FilePath, writeData, 0644); err != nil {

@@ -166,6 +166,12 @@ func (t MultiFileWrite) Execute(ctx context.Context, input json.RawMessage) (Res
 	failed := 0
 	skipped := 0
 
+	// Capture diagnostic baselines BEFORE any writes so post-edit
+	// diagnostics can diff and show only newly introduced issues.
+	for _, f := range args.Files {
+		CaptureDiagnosticBaseline(t.WorkingDir, f.Path)
+	}
+
 	for _, f := range args.Files {
 		// Check for cancellation before each file write.
 		if ctx.Err() != nil {

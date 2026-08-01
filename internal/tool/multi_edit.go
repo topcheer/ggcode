@@ -100,9 +100,14 @@ func (t MultiEditFile) Execute(ctx context.Context, input json.RawMessage) (Resu
 		return Result{IsError: true, Content: msg}, nil
 	}
 
+	// Capture diagnostic baseline BEFORE the write so post-edit diagnostics
+	// can diff and show only newly introduced issues.
+	CaptureDiagnosticBaseline(t.WorkingDir, args.FilePath)
+
 	writeData := []byte(content)
 	writeData, fmtChanged := formatGoBytes(args.FilePath, writeData)
 	if err := atomicWriteFile(args.FilePath, writeData, 0644); err != nil {
+		ClearDiagnosticBaseline(args.FilePath)
 		return Result{IsError: true, Content: fmt.Sprintf("error writing file: %v", err)}, nil
 	}
 

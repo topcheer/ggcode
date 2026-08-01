@@ -109,6 +109,17 @@ lsp_servers:
     binary: rust-analyzer
 ```
 
+### Post-Edit Diagnostics with Baseline Diffing
+
+After every file edit (`edit_file`, `write_file`, `multi_edit`, `multi_file_write`), ggcode queries the LSP server for diagnostics. Instead of showing **all** issues, it uses **diagnostic baseline diffing**:
+
+1. Before the edit, a pre-edit diagnostic snapshot is captured (150ms timeout)
+2. After the edit, post-edit diagnostics are compared against the snapshot
+3. Only **newly introduced** issues are shown — pre-existing warnings are suppressed
+4. If the edit **resolved** pre-existing issues, you get positive feedback
+
+This keeps the signal focused on what the agent's change actually caused. See [design doc](../design/diagnostic-baseline-diffing.md) for details.
+
 ## Plugins
 
 ggcode supports two plugin types:
