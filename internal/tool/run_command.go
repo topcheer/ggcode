@@ -357,7 +357,14 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 			t.OnPostExec(exitCode, err)
 		}
 		diagnostic := diagnoseCommandFailure(sb.String(), errOutput)
-		msg := fmt.Sprintf("%s\nCommand failed: %v", sb.String(), err)
+		summary := summarizeCommandOutput(args.Command, sb.String())
+		var msg string
+		if summary != "" {
+			msg = summary + sb.String()
+		} else {
+			msg = sb.String()
+		}
+		msg += fmt.Sprintf("\nCommand failed: %v", err)
 		if diagnostic != "" {
 			msg += "\n" + diagnostic
 		}
@@ -370,6 +377,14 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 
 	if sb.Len() == 0 {
 		return Result{Content: "Command completed with no output."}, nil
+	}
+
+	// Build/test output intelligence: prepend structured summary when available
+	// so the agent sees actionable results first, reducing context consumption
+	// for large test/build outputs.
+	summary := summarizeCommandOutput(args.Command, sb.String())
+	if summary != "" {
+		return Result{Content: summary + sb.String()}, nil
 	}
 
 	return Result{Content: sb.String()}, nil
@@ -465,6 +480,10 @@ func (t RunCommand) executeWithAutoBackground(ctx context.Context, cancel contex
 	t.JobManager.forget(snapshot.ID)
 	if t.OnPostExec != nil {
 		t.OnPostExec(0, nil)
+	}
+	// Build/test output intelligence for auto-background completed commands
+	if summary := summarizeCommandOutput(command, content); summary != "" {
+		return Result{Content: summary + content}, nil
 	}
 	return Result{Content: content}, nil
 }
