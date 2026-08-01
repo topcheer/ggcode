@@ -814,6 +814,63 @@ vendors:
 	}
 }
 
+func TestLoad_InvalidToolChoice(t *testing.T) {
+	withTestHome(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ggcode.yaml")
+	content := `
+vendor: zai
+endpoint: cn-coding-openai
+model: test
+vendors:
+  zai:
+    api_key: key
+    endpoints:
+      cn-coding-openai:
+        protocol: openai
+        base_url: https://example.com
+        tool_choice: bogus
+`
+	os.WriteFile(path, []byte(content), 0644)
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected validation error for tool_choice")
+	}
+}
+
+func TestLoad_ValidToolChoice(t *testing.T) {
+	withTestHome(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ggcode.yaml")
+	content := `
+vendor: zai
+endpoint: cn-coding-openai
+model: test
+vendors:
+  zai:
+    api_key: key
+    endpoints:
+      cn-coding-openai:
+        protocol: openai
+        base_url: https://example.com
+        tool_choice: required
+`
+	os.WriteFile(path, []byte(content), 0644)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error for valid tool_choice: %v", err)
+	}
+	resolved, err := cfg.ResolveActiveEndpoint()
+	if err != nil {
+		t.Fatalf("ResolveActiveEndpoint: %v", err)
+	}
+	if resolved.ToolChoice != "required" {
+		t.Fatalf("expected tool_choice %q, got %q", "required", resolved.ToolChoice)
+	}
+}
+
 func TestDefaultConfig(t *testing.T) {
 	cfg := DefaultConfig()
 	if cfg == nil {

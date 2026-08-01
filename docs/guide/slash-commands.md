@@ -173,3 +173,5 @@ Quick-send messages to other ggcode instances on your LAN directly from the main
 | `Alt+Up` / `Alt+K` | Cycle to previous session |
 | `Alt+Down` / `Alt+J` | Cycle to next session |
 | `Esc Esc` (double) | Trigger `/undo` (checkpoint rollback) |
+
+> **Note:** The agent can also undo its own edits programmatically via the `undo_edit` tool (actions: `undo`, `list`, `revert`). This shares the same checkpoint store as the user-facing `/undo` command.

@@ -85,6 +85,7 @@ type EndpointConfig struct {
 	ContextWindow   int      `yaml:"context_window,omitempty" json:"context_window,omitempty"`
 	MaxTokens       int      `yaml:"max_tokens" json:"max_tokens"`
 	ReasoningEffort string   `yaml:"reasoning_effort,omitempty" json:"reasoning_effort,omitempty"`
+	ToolChoice      string   `yaml:"tool_choice,omitempty" json:"tool_choice,omitempty"` // "auto", "required", "none" (empty = auto/default)
 	SupportsVision  *bool    `yaml:"supports_vision,omitempty" json:"supports_vision,omitempty"`
 	DefaultModel    string   `yaml:"default_model,omitempty" json:"default_model,omitempty"`
 	SelectedModel   string   `yaml:"selected_model,omitempty" json:"selected_model,omitempty"`
@@ -118,6 +119,7 @@ type ResolvedEndpoint struct {
 	ContextWindow   int
 	MaxTokens       int
 	ReasoningEffort string
+	ToolChoice      string
 	SupportsVision  bool
 	Models          []string
 	Tags            []string
@@ -1255,6 +1257,14 @@ func (c *Config) Validate() error {
 	}
 	if c.MaxIterations < 0 {
 		return fmt.Errorf("max_iterations must not be negative")
+	}
+	// Validate tool_choice on the active endpoint.
+	if ep.ToolChoice != "" {
+		switch strings.ToLower(strings.TrimSpace(ep.ToolChoice)) {
+		case "auto", "required", "none":
+		default:
+			return fmt.Errorf("tool_choice %q must be one of: auto, required, none", ep.ToolChoice)
+		}
 	}
 	if c.SessionTokenBudget < 0 {
 		return fmt.Errorf("session_token_budget must not be negative")

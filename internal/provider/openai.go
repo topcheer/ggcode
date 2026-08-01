@@ -29,6 +29,7 @@ type OpenAIProvider struct {
 	maxTokens       int
 	cap             *adaptiveCap // optional; when non-nil, takes precedence over maxTokens
 	reasoningEffort string
+	toolChoice      string // "", "auto", "required", "none"
 	name            string
 	baseURL         string                    // endpoint URL, for logging
 	transport       *headerInjectingTransport // kept for runtime header updates
@@ -46,6 +47,7 @@ func (p *OpenAIProvider) CloneWithModel(model string) Provider {
 		maxTokens:       p.maxTokens,
 		cap:             p.cap,
 		reasoningEffort: p.reasoningEffort,
+		toolChoice:      p.toolChoice,
 		name:            p.name,
 		baseURL:         p.baseURL,
 		transport:       p.transport,
@@ -66,6 +68,14 @@ func (p *OpenAIProvider) SetReasoningEffort(effort string) {
 
 func (p *OpenAIProvider) ReasoningEffort() string { return p.reasoningEffort }
 
+// SetToolChoice sets the tool_choice parameter: "auto" (model decides),
+// "required" (force tool use), "none" (disable tools), or "" (API default).
+func (p *OpenAIProvider) SetToolChoice(choice string) {
+	p.toolChoice = strings.ToLower(strings.TrimSpace(choice))
+}
+
+func (p *OpenAIProvider) ToolChoice() string { return p.toolChoice }
+
 // probeChat sends a single chat request without retry, adaptive cap
 // tracking, or token counting. Used by context window probing.
 func (p *OpenAIProvider) probeChat(ctx context.Context, messages []Message) error {
@@ -83,6 +93,18 @@ func (p *OpenAIProvider) applyReasoningEffort(req *openai.ChatCompletionRequest)
 	}
 	req.ReasoningEffort = p.reasoningEffort
 	return true
+}
+
+// applyToolChoice sets the tool_choice field on the request when tools are
+// present and tool_choice is configured. Values: "auto", "required", "none".
+func (p *OpenAIProvider) applyToolChoice(req *openai.ChatCompletionRequest) {
+	if p.toolChoice == "" || len(req.Tools) == 0 {
+		return
+	}
+	switch p.toolChoice {
+	case "auto", "required", "none":
+		req.ToolChoice = p.toolChoice
+	}
 }
 
 func retryWithoutReasoningEffort(err error) bool {
@@ -269,6 +291,7 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 	if len(tools) > 0 {
 		req.Tools = p.convertTools(tools)
 	}
+	p.applyToolChoice(&req)
 
 	var resp openai.ChatCompletionResponse
 	err := retryWithBackoffCtx(ctx, func() error {
@@ -312,6 +335,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 	if len(tools) > 0 {
 		req.Tools = p.convertTools(tools)
 	}
+	p.applyToolChoice(&req)
 
 	debug.Log("openai", "ChatStream START model=%s msgs=%d tools=%d", p.model, len(chatMsgs), len(req.Tools))
 

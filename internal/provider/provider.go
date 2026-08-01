@@ -200,6 +200,15 @@ type ReasoningEffortProvider interface {
 	ReasoningEffort() string
 }
 
+// ToolChoiceProvider is implemented by providers that support the
+// tool_choice API parameter. Values: "auto" (default, model decides),
+// "required" (force at least one tool call), "none" (disable tool calls).
+// An empty string is treated as "auto" (the API default).
+type ToolChoiceProvider interface {
+	SetToolChoice(choice string)
+	ToolChoice() string
+}
+
 // ModelNameProvider is implemented by providers that can report their current model name.
 type ModelNameProvider interface {
 	ModelName() string

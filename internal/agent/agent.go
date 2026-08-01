@@ -502,6 +502,30 @@ func (a *Agent) ReasoningEffort() string {
 	return p.ReasoningEffort()
 }
 
+// SetToolChoice controls whether the model uses tools: "auto" (model decides),
+// "required" (force tool use), "none" (disable tools). Returns false if the
+// provider does not support tool_choice.
+func (a *Agent) SetToolChoice(choice string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	p, ok := a.provider.(provider.ToolChoiceProvider)
+	if !ok {
+		return false
+	}
+	p.SetToolChoice(choice)
+	return true
+}
+
+func (a *Agent) ToolChoice() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	p, ok := a.provider.(provider.ToolChoiceProvider)
+	if !ok {
+		return ""
+	}
+	return p.ToolChoice()
+}
+
 // ToolRegistry returns the tool registry used by this agent.
 func (a *Agent) ToolRegistry() *tool.Registry {
 	a.mu.RLock()

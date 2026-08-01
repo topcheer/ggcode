@@ -23,6 +23,7 @@ type AnthropicProvider struct {
 	transport       *headerInjectingTransport // kept for runtime header updates
 	calibrator      *tokenCountCalibrator     // periodic real-API token calibration
 	reasoningEffort string                    // "", "low", "medium", "high" — maps to thinking budget
+	toolChoice      string                    // "", "auto", "required", "none" — maps to Anthropic tool_choice
 }
 
 // ModelName returns the current model name used by this provider.
@@ -38,6 +39,7 @@ func (p *AnthropicProvider) CloneWithModel(model string) Provider {
 		transport:       p.transport,
 		calibrator:      p.calibrator,
 		reasoningEffort: p.reasoningEffort,
+		toolChoice:      p.toolChoice,
 	}
 }
 
@@ -53,6 +55,14 @@ func (p *AnthropicProvider) SetReasoningEffort(effort string) {
 }
 
 func (p *AnthropicProvider) ReasoningEffort() string { return p.reasoningEffort }
+
+// SetToolChoice sets the tool_choice parameter: "auto" (model decides),
+// "required" (force tool use), "none" (disable tools), or "" (API default).
+func (p *AnthropicProvider) SetToolChoice(choice string) {
+	p.toolChoice = strings.ToLower(strings.TrimSpace(choice))
+}
+
+func (p *AnthropicProvider) ToolChoice() string { return p.toolChoice }
 
 // SetAdaptiveCap installs the adaptive max-output-tokens cap.
 func (p *AnthropicProvider) SetAdaptiveCap(c *adaptiveCap) { p.cap = c }
@@ -774,6 +784,24 @@ func (p *AnthropicProvider) buildParams(messages []Message, tools []ToolDefiniti
 			}
 		}
 		params.Tools = toolParams
+	}
+
+	// Apply tool_choice when set. Only sent when tools are present (API requirement).
+	if len(tools) > 0 {
+		switch p.toolChoice {
+		case "auto":
+			params.ToolChoice = anthropic.ToolChoiceUnionParam{
+				OfAuto: &anthropic.ToolChoiceAutoParam{},
+			}
+		case "required":
+			params.ToolChoice = anthropic.ToolChoiceUnionParam{
+				OfAny: &anthropic.ToolChoiceAnyParam{},
+			}
+		case "none":
+			params.ToolChoice = anthropic.ToolChoiceUnionParam{
+				OfNone: &anthropic.ToolChoiceNoneParam{},
+			}
+		}
 	}
 
 	// Dump full request JSON for debugging protocol violations.
