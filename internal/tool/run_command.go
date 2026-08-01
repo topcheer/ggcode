@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -278,13 +279,31 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 		t.OnPreExec(args.Command, args.Description)
 	}
 
+	// Extract progress callback for streaming (if available).
+	progressFn, _ := ctx.Value(ToolProgressKey{}).(ToolProgressFunc)
+
 	var stdout, stderr bytes.Buffer
 	if t.OutputTee != nil {
-		cmd.Stdout = io.MultiWriter(&stdout, t.OutputTee)
-		cmd.Stderr = io.MultiWriter(&stderr, t.OutputTee)
+		if progressFn != nil {
+			// Wrap with streaming progress writer for real-time TUI updates.
+			pwOut := newStreamingProgressWriter(&stdout, t.OutputTee, progressFn)
+			pwErr := newStreamingProgressWriter(&stderr, t.OutputTee, progressFn)
+			cmd.Stdout = io.MultiWriter(pwOut, t.OutputTee)
+			cmd.Stderr = io.MultiWriter(pwErr, t.OutputTee)
+		} else {
+			cmd.Stdout = io.MultiWriter(&stdout, t.OutputTee)
+			cmd.Stderr = io.MultiWriter(&stderr, t.OutputTee)
+		}
 	} else {
-		cmd.Stdout = &stdout
-		cmd.Stderr = &stderr
+		if progressFn != nil {
+			pwOut := newStreamingProgressWriter(&stdout, nil, progressFn)
+			pwErr := newStreamingProgressWriter(&stderr, nil, progressFn)
+			cmd.Stdout = pwOut
+			cmd.Stderr = pwErr
+		} else {
+			cmd.Stdout = &stdout
+			cmd.Stderr = &stderr
+		}
 	}
 
 	// GUI commands: start and return immediately.
@@ -307,7 +326,7 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 		if isDevServerCommand(args.Command) {
 			delay = autoBackgroundDelay
 		}
-		return t.executeWithAutoBackground(cmdCtx, cancel, cmd, args.Command, time.Duration(args.Timeout)*time.Second, delay)
+		return t.executeWithAutoBackground(ctx, cancel, cmd, args.Command, time.Duration(args.Timeout)*time.Second, delay, progressFn)
 	}
 
 	err = cmd.Run()
@@ -407,7 +426,7 @@ func truncateMiddle(s string, maxLen int, label string) string {
 // the given delay. If the command finishes quickly, its output is returned
 // directly. If it runs longer than the delay, the already-managed job ID is
 // returned. The job manager owns the process and performs the only Wait call.
-func (t RunCommand) executeWithAutoBackground(ctx context.Context, cancel context.CancelFunc, cmd *exec.Cmd, command string, timeout time.Duration, delay time.Duration) (Result, error) {
+func (t RunCommand) executeWithAutoBackground(ctx context.Context, cancel context.CancelFunc, cmd *exec.Cmd, command string, timeout time.Duration, delay time.Duration, progressFn ToolProgressFunc) (Result, error) {
 	if t.JobManager == nil {
 		return Result{IsError: true, Content: "command job manager not available"}, nil
 	}
@@ -425,12 +444,9 @@ func (t RunCommand) executeWithAutoBackground(ctx context.Context, cancel contex
 		return Result{IsError: true, Content: "failed to start command job"}, nil
 	}
 
-	if err := waitForCommandJob(context.Background(), job, delay); err != nil {
-		if t.OnPostExec != nil {
-			t.OnPostExec(-1, err)
-		}
-		return Result{IsError: true, Content: err.Error()}, nil
-	}
+	// Stream job output in real-time during the wait period.
+	// Poll every 300ms, pushing the last 5 lines to the TUI via progressFn.
+	streamJobOutput(job, delay, progressFn)
 	snap := t.JobManager.snapshot(job)
 	snapshot = &snap
 	if snapshot.Status == CommandJobRunning {
@@ -544,4 +560,145 @@ func diagnoseCommandFailure(stdout, stderr string) string {
 		return ""
 	}
 	return "[Diagnostics]\n" + strings.Join(hints, "\n")
+}
+
+// streamJobOutput polls a running command job's output and pushes the last
+// 5 lines to the TUI via the progress callback. Polls every 300ms for
+// near-real-time streaming. Returns when the job finishes or the delay expires.
+func streamJobOutput(job *CommandJob, delay time.Duration, progressFn ToolProgressFunc) {
+	if progressFn == nil {
+		// No progress callback — fall back to simple wait.
+		_ = waitForCommandJob(context.Background(), job, delay)
+		return
+	}
+
+	pollInterval := 300 * time.Millisecond
+	deadline := time.Now().Add(delay)
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
+	for {
+		// Read current output snapshot.
+		snap := snapshotJobLines(job, 5)
+		if snap != "" {
+			progressFn("", "run_command", snap)
+		}
+
+		// Check if job is done.
+		if isFinishedCommandStatus(jobSnapshotStatus(job)) {
+			return
+		}
+
+		// Check deadline.
+		if !time.Now().Before(deadline) {
+			return
+		}
+
+		select {
+		case <-job.done:
+			// Final read after job completes.
+			snap := snapshotJobLines(job, 5)
+			if snap != "" {
+				progressFn("", "run_command", snap)
+			}
+			return
+		case <-ticker.C:
+			continue
+		}
+	}
+}
+
+// snapshotJobLines reads the last n lines from a running job's ring buffer.
+func snapshotJobLines(job *CommandJob, n int) string {
+	job.mu.Lock()
+	defer job.mu.Unlock()
+
+	lines := job.Lines
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	statusPrefix := "[...] "
+	if isFinishedCommandStatus(job.Status) {
+		statusPrefix = fmt.Sprintf("[%s] ", job.Status)
+	}
+	sb.WriteString(statusPrefix)
+	for i, line := range lines {
+		if i > 0 {
+			sb.WriteString("\n")
+		}
+		sb.WriteString(util.StripANSI(line))
+	}
+	return sb.String()
+}
+
+// streamingProgressWriter wraps an io.Writer and pushes the last 5 lines
+// of output to the TUI via a progress callback. Used for the direct cmd.Run()
+// path (no JobManager) to provide real-time streaming.
+type streamingProgressWriter struct {
+	buf      *bytes.Buffer
+	extra    io.Writer
+	progress ToolProgressFunc
+	lines    []string // rolling buffer of recent lines
+	lastEmit time.Time
+	mu       sync.Mutex
+}
+
+func newStreamingProgressWriter(buf *bytes.Buffer, extra io.Writer, progress ToolProgressFunc) *streamingProgressWriter {
+	return &streamingProgressWriter{
+		buf:      buf,
+		extra:    extra,
+		progress: progress,
+	}
+}
+
+func (w *streamingProgressWriter) Write(p []byte) (int, error) {
+	n := len(p)
+	// Write to the underlying buffer first.
+	w.buf.Write(p)
+	// Write to extra tee if present.
+	if w.extra != nil {
+		w.extra.Write(p)
+	}
+
+	// Track lines for progress streaming.
+	w.mu.Lock()
+	text := util.StripANSI(string(p))
+	for _, line := range strings.Split(text, "\n") {
+		if line == "" {
+			continue
+		}
+		w.lines = append(w.lines, line)
+		if len(w.lines) > 20 {
+			w.lines = w.lines[len(w.lines)-20:]
+		}
+	}
+
+	// Throttle progress emission to 300ms.
+	if time.Since(w.lastEmit) < 300*time.Millisecond {
+		w.mu.Unlock()
+		return n, nil
+	}
+	w.lastEmit = time.Now()
+
+	// Emit last 5 lines.
+	tail := w.lines
+	if len(tail) > 5 {
+		tail = tail[len(tail)-5:]
+	}
+	var sb strings.Builder
+	sb.WriteString("[...] ")
+	for i, line := range tail {
+		if i > 0 {
+			sb.WriteString("\n")
+		}
+		sb.WriteString(line)
+	}
+	w.mu.Unlock()
+
+	w.progress("", "run_command", sb.String())
+	return n, nil
 }
