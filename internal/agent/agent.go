@@ -152,6 +152,7 @@ type Agent struct {
 	scopeDrift                 *scopeDriftState      // semantic scope creep detection (file-diversity tracking)
 	exportGuard                *exportGuardState     // breaking change detection for exported Go symbols (regression guard)
 	toolFilter                 *tool.RelevanceFilter // dynamic MCP tool pruning based on conversation relevance
+	fulfillmentGate            *fulfillmentGateState // pre-completion coverage verification (request-vs-work match)
 	transientRetryBudget       int                   // remaining automatic retries for transient tool failures (per run)
 	latencyTracker             *LatencyTracker       // per-tool latency baseline & slow-tool outlier detection
 	effortAdapter              *adaptiveEffortState  // per-turn reasoning effort adaptation (Opus 5 effort toggle pattern)
@@ -215,6 +216,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		editFailRecovery:     newEditFailState(),
 		scopeDrift:           newScopeDriftState(),
 		exportGuard:          newExportGuardState(),
+		fulfillmentGate:      newFulfillmentGateState(),
 		toolFilter:           tool.NewRelevanceFilter(),
 		latencyTracker:       NewLatencyTracker(),
 		effortAdapter:        newAdaptiveEffortState(),
@@ -1005,6 +1007,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.editFailRecovery.reset()
 	// Reset the export guard so each run starts with a clean checked set.
 	a.exportGuard.reset()
+	a.fulfillmentGate.reset()
 	a.toolFilter = tool.NewRelevanceFilter()
 	a.resetTransientRetryBudget()
 
@@ -1454,6 +1457,23 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 						Content: []provider.ContentBlock{{
 							Type: "text",
 							Text: reminder,
+						}},
+					})
+					continue
+				}
+
+				// Request fulfillment gate: before returning, verify that the
+				// agent's actual work matches the user's request. This catches
+				// silent partial completion when no todo list was created.
+				// Zero-LLM-cost heuristic inspired by Claude Code/Cursor/Aider
+				// completion verification patterns.
+				if fulfillmentMsg := a.checkFulfillmentGate(userPromptForStats, runStats, textBuf); fulfillmentMsg != "" {
+					debug.Log("agent", "Iteration %d: fulfillment gate detected gap, injecting reminder", i+1)
+					a.contextManager.Add(provider.Message{
+						Role: "user",
+						Content: []provider.ContentBlock{{
+							Type: "text",
+							Text: fulfillmentMsg,
 						}},
 					})
 					continue
