@@ -45,6 +45,8 @@ func (m *Model) appendUserMessage(text string) {
 	if m.session.Title == "" || m.session.Title == "New session" {
 		m.session.Title = util.Truncate(text, 60)
 	}
+	// Update preview snippet from latest user message
+	m.session.Preview = util.Truncate(strings.TrimSpace(text), 120)
 	store := m.sessionStore
 	m.sessionMutex().Unlock()
 

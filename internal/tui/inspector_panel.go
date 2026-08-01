@@ -606,6 +606,9 @@ func buildSessionInspectorItems(sessions []*session.Session, lang Language, stor
 			fmt.Sprintf("%s: %s", inspectorText(lang, "endpoint"), util.FirstNonEmpty(endpointDisplay, "-")),
 			fmt.Sprintf("%s: %s", inspectorText(lang, "model"), util.FirstNonEmpty(ses.Model, "-")),
 		}
+		if preview := strings.TrimSpace(ses.Preview); preview != "" {
+			detail = append(detail, fmt.Sprintf("Last: %s", preview))
+		}
 		if workspace != "" {
 			detail = append(detail, fmt.Sprintf("%s: %s", inspectorText(lang, "workspace"), workspace))
 		}

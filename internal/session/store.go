@@ -24,14 +24,18 @@ import (
 
 // Session represents a single conversation session.
 type Session struct {
-	ID              string                           `json:"id"`
-	CreatedAt       time.Time                        `json:"created_at"`
-	UpdatedAt       time.Time                        `json:"updated_at"`
-	Title           string                           `json:"title"`
-	Workspace       string                           `json:"workspace,omitempty"`
-	Vendor          string                           `json:"vendor"`
-	Endpoint        string                           `json:"endpoint"`
-	Model           string                           `json:"model"`
+	ID        string    `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Title     string    `json:"title"`
+	Workspace string    `json:"workspace,omitempty"`
+	Vendor    string    `json:"vendor"`
+	Endpoint  string    `json:"endpoint"`
+	Model     string    `json:"model"`
+	// Preview is a short snippet of the last user message, shown in the
+	// resume picker and session list so users can quickly identify sessions.
+	// Populated automatically on each user message; persisted to index and meta.
+	Preview         string                           `json:"preview,omitempty"`
 	TokenUsage      provider.TokenUsage              `json:"token_usage,omitempty"`
 	EndpointUsage   map[string]provider.TokenUsage   `json:"endpoint_usage,omitempty"`
 	UsageHistory    []UsageEntry                     `json:"usage_history,omitempty"`
@@ -148,6 +152,7 @@ type Store interface {
 type indexEntry struct {
 	ID        string    `json:"id"`
 	Title     string    `json:"title"`
+	Preview   string    `json:"preview,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 	MsgCount  int       `json:"msg_count"`
@@ -425,6 +430,7 @@ func sessionToIndexEntry(s *Session) indexEntry {
 	return indexEntry{
 		ID:        s.ID,
 		Title:     s.Title,
+		Preview:   s.Preview,
 		CreatedAt: s.CreatedAt,
 		UpdatedAt: s.UpdatedAt,
 		Workspace: s.Workspace,
@@ -442,6 +448,7 @@ type jsonlRecord struct {
 	Type                 string              `json:"type"` // "meta", "message", "cost", "usage", "metric", or "checkpoint"
 	SessionID            string              `json:"session_id,omitempty"`
 	Title                string              `json:"title,omitempty"`
+	Preview              string              `json:"preview,omitempty"`
 	Workspace            string              `json:"workspace,omitempty"`
 	Vendor               string              `json:"vendor,omitempty"`
 	Endpoint             string              `json:"endpoint,omitempty"`
@@ -656,6 +663,7 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 	// Apply metadata from meta records (always the latest meta wins)
 	for _, rec := range metaRecords {
 		ses.Title = rec.Title
+		ses.Preview = rec.Preview
 		// Only overwrite workspace if the meta record has one. Older sessions
 		// (or sessions created before the workspace field existed) may have
 		// empty workspace in their meta records. Overwriting with "" would
@@ -948,6 +956,7 @@ func (s *JSONLStore) List() ([]*Session, error) {
 		result = append(result, &Session{
 			ID:        e.ID,
 			Title:     e.Title,
+			Preview:   e.Preview,
 			CreatedAt: e.CreatedAt,
 			UpdatedAt: e.UpdatedAt,
 			Workspace: e.Workspace,
@@ -1501,6 +1510,7 @@ func (s *JSONLStore) AppendMetaToDisk(ses *Session) error {
 		Type:                 "meta",
 		SessionID:            ses.ID,
 		Title:                ses.Title,
+		Preview:              ses.Preview,
 		Workspace:            ses.Workspace,
 		Vendor:               ses.Vendor,
 		Endpoint:             ses.Endpoint,

@@ -343,7 +343,12 @@ func formatResumePickerSession(ses *session.Session, currentLabel string) string
 	if workspace != "" && workspace != currentLabel {
 		meta = append(meta, workspace)
 	}
-	return title + "\n    " + strings.Join(meta, " • ")
+	line := title + "\n    " + strings.Join(meta, " • ")
+	// Add preview line if available — helps users identify sessions quickly.
+	if preview := strings.TrimSpace(ses.Preview); preview != "" && preview != title {
+		line += "\n    " + preview
+	}
+	return line
 }
 
 func compactWorkspaceLabel(path string) string {
