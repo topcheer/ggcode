@@ -112,7 +112,9 @@ func (a *Agent) asyncVerify(ctx context.Context, runStats *RunStats) {
 		errorSummary += fmt.Sprintf("- %s\n", e)
 	}
 	errorSummary += "\nFix these issues and ensure the build passes."
-	errorSummary += a.verifyRegression.classifyErrors(result.Errors)
+	if a.verifyRegression != nil {
+		errorSummary += a.verifyRegression.classifyErrors(result.Errors)
+	}
 	a.contextManager.Add(provider.Message{
 		Role: "user",
 		Content: []provider.ContentBlock{{
@@ -492,7 +494,9 @@ func (a *Agent) syncVerifyAndGate(ctx context.Context, runStats *RunStats, retry
 		errorSummary += fmt.Sprintf("- %s\n", e)
 	}
 	errorSummary += "\nFix these issues and ensure the build passes."
-	errorSummary += a.verifyRegression.classifyErrors(result.Errors)
+	if a.verifyRegression != nil {
+		errorSummary += a.verifyRegression.classifyErrors(result.Errors)
+	}
 	a.contextManager.Add(provider.Message{
 		Role: "user",
 		Content: []provider.ContentBlock{{
