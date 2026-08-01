@@ -115,9 +115,14 @@ func Summarize(events []MetricEvent) SessionSummary {
 			turn.CacheWrite += ev.CacheWrite
 			// Per-call TPS: independently compute each call's decode speed,
 			// then average at the turn level (not weighted sum).
+			// Skip calls with very short decode time (<200ms): at that scale,
+			// Duration/TTFT measurement noise dominates, producing absurd TPS
+			// values (e.g. 50K+ tok/s). These are typically fast tool-use calls
+			// where decode is nearly instantaneous — not representative of
+			// sustained generation throughput.
 			if ev.OutputTokens > 0 && ev.Duration > ev.TTFT {
 				decodeDur := ev.Duration - ev.TTFT
-				if decodeDur > 0 {
+				if decodeDur >= 200*time.Millisecond {
 					turn.sumTPS += float64(ev.OutputTokens) / decodeDur.Seconds()
 					turn.tpsCount++
 				}
