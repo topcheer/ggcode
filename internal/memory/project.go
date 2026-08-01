@@ -10,12 +10,25 @@ import (
 )
 
 // ProjectMemoryFilenames lists the supported project bootstrap documents in
-// priority order.
+// priority order. Primary files (ggcode-native + cross-tool open standard) are
+// loaded first, followed by compatibility files from other AI coding tools.
 var ProjectMemoryFilenames = []string{
+	// Primary
 	"GGCODE.md",
 	"AGENTS.md",
 	"CLAUDE.md",
 	"COPILOT.md",
+	// Cross-tool compatibility — loaded after primary so ggcode-native
+	// conventions take precedence.
+	".cursorrules",
+	".windsurfrules",
+	".clinerules",
+}
+
+// CompatibilitySubdirRules lists rules files stored in subdirectories (not the
+// project root). Each entry is a path relative to the project root.
+var CompatibilitySubdirRules = []string{
+	".github/copilot-instructions.md",
 }
 
 const DefaultProjectMemoryFilename = "GGCODE.md"
@@ -113,6 +126,13 @@ func listProjectMemoryFiles(dir string) []string {
 	var files []string
 	for _, name := range ProjectMemoryFilenames {
 		path := filepath.Join(dir, name)
+		if _, err := os.Stat(path); err == nil {
+			files = append(files, path)
+		}
+	}
+	// Check subdirectory compatibility rules (e.g. .github/copilot-instructions.md)
+	for _, rel := range CompatibilitySubdirRules {
+		path := filepath.Join(dir, rel)
 		if _, err := os.Stat(path); err == nil {
 			files = append(files, path)
 		}

@@ -88,6 +88,7 @@ individual A2A auth configuration.
 - **Screenshot capture** — full screen, window, or region screenshots for visual debugging
 - **Clipboard integration** — read from and write to the system clipboard
 - **Editor launcher** — `open_editor` opens files in the user's IDE (VS Code, Cursor, JetBrains, Vim, etc.) at a specific line/column, auto-detected from env vars
+- **Agent-accessible undo** — `undo_edit` lets the LLM revert its own file edits via checkpoints, avoiding error-prone fix-forward when a previous change was wrong
 - **PTC (Programmatic Tool Calling)** — the agent writes JavaScript in a sandboxed VM to batch-call read-only tools (read_file, grep, git_log, web_search, etc.) in a single round-trip, dramatically reducing context window consumption for multi-step analysis
 - **MCP integration** — connect external tools and data sources, with dynamic tool refresh, server logging, and full capability detection
 - **gRPC plugins** — extend ggcode with custom tools in Go, Python, Node.js, or any language
@@ -129,7 +130,7 @@ individual A2A auth configuration.
 | [Multi-Agent](docs/guide/multi-agent-modes.md) | Sub-agents, teammates, and team coordination |
 | [LAN Chat](docs/guide/lan-chat.md) | Real-time messaging between instances on your LAN |
 | [Configuration](docs/guide/configuration.md) | Full config file reference |
-| [Project Memory](docs/guide/project-memory.md) | GGCODE.md, AGENTS.md, CLAUDE.md |
+| [Project Memory](docs/guide/project-memory.md) | GGCODE.md, AGENTS.md, CLAUDE.md + .cursorrules, .windsurfrules, .clinerules compat |
 | [Skills](docs/guide/skills.md) | Reusable workflow patterns |
 | [Shell Completion](docs/guide/shell-completion.md) | bash, zsh, fish, powershell |
 

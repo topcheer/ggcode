@@ -8,12 +8,16 @@ Project memory gives ggcode persistent context about your project across session
 
 ggcode reads context files from the project root. All files are loaded and merged — each serves a different purpose:
 
-| File | Description |
-|------|-------------|
-| `GGCODE.md` | Project-specific instructions (primary conventions) |
-| `AGENTS.md` | Agent-specific instructions (used by TeamClaw workers) |
-| `CLAUDE.md` | Claude-specific instructions |
-| `COPILOT.md` | GitHub Copilot-specific instructions |
+| File | Source | Description |
+|------|--------|-------------|
+| `GGCODE.md` | ggcode | Project-specific instructions (primary conventions) |
+| `AGENTS.md` | Open standard | Agent-specific instructions (used by TeamClaw workers) |
+| `CLAUDE.md` | Claude Code | Claude-specific instructions |
+| `COPILOT.md` | GitHub Copilot | GitHub Copilot-specific instructions |
+| `.cursorrules` | Cursor | Cursor rules file (compatibility) |
+| `.windsurfrules` | Windsurf | Windsurf rules file (compatibility) |
+| `.clinerules` | Cline | Cline rules file (compatibility) |
+| `.github/copilot-instructions.md` | GitHub Copilot | Copilot instructions (compatibility) |
 
 ## What to Put in These Files
 
@@ -38,6 +42,18 @@ ggcode reads context files from the project root. All files are loaded and merge
 ## Auto-Loaded
 
 ggcode reads these files automatically on startup — no flags or commands needed.
+
+## Cross-Tool Compatibility
+ggcode automatically reads rules files from other AI coding tools, so you can
+use the same project across multiple agents without duplicating configuration:
+
+- `.cursorrules` (Cursor)
+- `.windsurfrules` (Windsurf)
+- `.clinerules` (Cline)
+- `.github/copilot-instructions.md` (GitHub Copilot)
+
+These are loaded after primary files (GGCODE.md, AGENTS.md, etc.), so your
+ggcode-native conventions always take precedence.
 
 ## Global Memory
 

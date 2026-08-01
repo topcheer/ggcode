@@ -314,6 +314,113 @@ func TestBuildProjectMemoryHint_GlobalFileShowsFullPath(t *testing.T) {
 	}
 }
 
+func TestLoadProjectMemory_CrossToolCompatibility(t *testing.T) {
+	tmpDir := t.TempDir()
+	projectDir := filepath.Join(tmpDir, "project")
+	if err := os.MkdirAll(projectDir, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	// Create cross-tool rules files
+	if err := os.WriteFile(filepath.Join(projectDir, ".cursorrules"), []byte("cursor rules"), 0644); err != nil {
+		t.Fatalf("write .cursorrules: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, ".windsurfrules"), []byte("windsurf rules"), 0644); err != nil {
+		t.Fatalf("write .windsurfrules: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, ".clinerules"), []byte("cline rules"), 0644); err != nil {
+		t.Fatalf("write .clinerules: %v", err)
+	}
+
+	t.Setenv("HOME", tmpDir)
+
+	content, files, err := LoadProjectMemory(projectDir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !contains(content, "cursor rules") {
+		t.Errorf("missing cursor rules content")
+	}
+	if !contains(content, "windsurf rules") {
+		t.Errorf("missing windsurf rules content")
+	}
+	if !contains(content, "cline rules") {
+		t.Errorf("missing cline rules content")
+	}
+	if len(files) != 3 {
+		t.Errorf("expected 3 files, got %d: %v", len(files), files)
+	}
+}
+
+func TestLoadProjectMemory_GitHubCopilotInstructions(t *testing.T) {
+	tmpDir := t.TempDir()
+	projectDir := filepath.Join(tmpDir, "project")
+	githubDir := filepath.Join(projectDir, ".github")
+	if err := os.MkdirAll(githubDir, 0755); err != nil {
+		t.Fatalf("mkdir .github: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(githubDir, "copilot-instructions.md"), []byte("copilot instructions"), 0644); err != nil {
+		t.Fatalf("write copilot-instructions.md: %v", err)
+	}
+
+	t.Setenv("HOME", tmpDir)
+
+	content, files, err := LoadProjectMemory(projectDir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !contains(content, "copilot instructions") {
+		t.Errorf("missing copilot-instructions.md content")
+	}
+	if len(files) != 1 {
+		t.Errorf("expected 1 file, got %d: %v", len(files), files)
+	}
+}
+
+func TestLoadProjectMemory_PrimaryOverridesCompatibility(t *testing.T) {
+	tmpDir := t.TempDir()
+	projectDir := filepath.Join(tmpDir, "project")
+	if err := os.MkdirAll(projectDir, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	os.WriteFile(filepath.Join(projectDir, "GGCODE.md"), []byte("ggcode-primary"), 0644)
+	os.WriteFile(filepath.Join(projectDir, ".cursorrules"), []byte("cursor-compat"), 0644)
+
+	t.Setenv("HOME", tmpDir)
+
+	content, files, err := LoadProjectMemory(projectDir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Primary files should appear first in the list
+	if len(files) != 2 {
+		t.Fatalf("expected 2 files, got %d: %v", len(files), files)
+	}
+	if filepath.Base(files[0]) != "GGCODE.md" {
+		t.Errorf("expected GGCODE.md first, got %s", files[0])
+	}
+	if filepath.Base(files[1]) != ".cursorrules" {
+		t.Errorf("expected .cursorrules second, got %s", files[1])
+	}
+
+	// Both contents should be present
+	if !contains(content, "ggcode-primary") || !contains(content, "cursor-compat") {
+		t.Errorf("missing expected content: %q", content)
+	}
+
+	// Primary should appear before compatibility in merged content
+	ggcodeIdx := strings.Index(content, "ggcode-primary")
+	cursorIdx := strings.Index(content, "cursor-compat")
+	if ggcodeIdx > cursorIdx {
+		t.Errorf("primary content should appear before compatibility content")
+	}
+}
+
 func contains(s, sub string) bool {
 	return strings.Contains(s, sub)
 }
