@@ -51,6 +51,20 @@ func (l *List) RemoveByID(id string) {
 	l.mu.Unlock()
 }
 
+// UpdateByID finds an item by ID and applies the given mutation function.
+// If the item is not found, it is a no-op.
+func (l *List) UpdateByID(id string, fn func(Item)) {
+	l.mu.Lock()
+	for _, item := range l.items {
+		if item.ID() == id {
+			fn(item)
+			l.dirty = true
+			break
+		}
+	}
+	l.mu.Unlock()
+}
+
 // SetItems replaces all items.
 func (l *List) SetItems(items []Item) {
 	l.mu.Lock()

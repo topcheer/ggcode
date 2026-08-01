@@ -165,6 +165,18 @@ func (a *Agent) executeToolWithTimeout(ctx context.Context, tc provider.ToolCall
 	// Create a cancellable sub-context so that on timeout we can signal
 	// the tool to abort (tools that check ctx.Done() will exit promptly).
 	toolCtx, cancel := context.WithCancel(ctx)
+
+	// Inject progress callback for streaming tools (e.g. wait_command).
+	if a.onToolProgress != nil {
+		fn := a.onToolProgress
+		toolID := tc.ID
+		toolCtx = context.WithValue(toolCtx, tool.ToolProgressKey{}, tool.ToolProgressFunc(
+			func(_, toolName, output string) {
+				fn(toolID, toolName, output)
+			},
+		))
+	}
+
 	defer cancel()
 
 	type toolResult struct {

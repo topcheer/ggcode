@@ -167,6 +167,19 @@ func (r *REPL) SetLanChatHub(hub *lanchat.Hub) {
 			}
 		},
 	)
+
+	// Register tool progress callback for streaming tools (e.g. wait_command).
+	// Sends a dedicated message type that updates the running tool's body
+	// in-place, creating a live scrolling output effect.
+	r.agent.SetToolProgressCallback(func(toolID, toolName, output string) {
+		if prog != nil {
+			prog.Send(toolProgressMsg{
+				toolID:   toolID,
+				toolName: toolName,
+				output:   output,
+			})
+		}
+	})
 	// Register auto-approve callback: inject the message into the TUI event
 	// loop as a lanchatApprovalReqMsg so the existing approval→submit flow
 	// handles it. This ensures "always approve" policy actually triggers the

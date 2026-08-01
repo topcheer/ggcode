@@ -26,6 +26,14 @@ type verifyResultMsg struct {
 	result agent.VerifyResult
 }
 
+// toolProgressMsg is sent by streaming tools (e.g. wait_command) to update
+// the running tool's output in-place, creating a live scrolling effect.
+type toolProgressMsg struct {
+	toolID   string
+	toolName string
+	output   string
+}
+
 // streamMsg wraps a string from the agent goroutine.
 type streamMsg string
 

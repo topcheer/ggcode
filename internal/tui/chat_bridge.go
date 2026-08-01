@@ -23,6 +23,24 @@ func (m *Model) chatWriteUser(id, text string) {
 	m.chatWrite(chat.NewUserItem(id, text, m.chatStyles))
 }
 
+// chatUpdateToolOutput updates the result text of a running tool item
+// identified by toolID. Used for streaming tools like wait_command to show
+// live scrolling output during the wait period.
+func (m *Model) chatUpdateToolOutput(toolID, output string) {
+	if m.chatList == nil || toolID == "" {
+		return
+	}
+	m.chatList.UpdateByID(toolID, func(item chat.Item) {
+		// BaseToolItem implements SetResult which updates the rendered body.
+		type resultSetter interface {
+			SetResult(string, bool)
+		}
+		if rs, ok := item.(resultSetter); ok {
+			rs.SetResult(output, false)
+		}
+	})
+}
+
 // chatWriteUserMarkdown appends a user message that renders its content as
 // markdown. Used for LAN Chat agent-to-agent messages that contain structured text.
 func (m *Model) chatWriteUserMarkdown(id, text string) {

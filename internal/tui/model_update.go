@@ -740,6 +740,14 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		m.chatListScrollToBottom()
 		return m, nil
 
+	case toolProgressMsg:
+		// Update the running tool's output in-place for a streaming effect.
+		if msg.toolID != "" {
+			m.chatUpdateToolOutput(msg.toolID, msg.output)
+		}
+		m.chatListScrollToBottom()
+		return m, nil
+
 	case verifyResultMsg:
 		if msg.result.Passed {
 			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("✅ [Verification passed: `%s`]", msg.result.Command))

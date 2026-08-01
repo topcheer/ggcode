@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -231,12 +232,73 @@ func (t WaitCommandTool) Execute(ctx context.Context, input json.RawMessage) (Re
 	if t.Manager == nil {
 		return Result{IsError: true, Content: "command job manager is unavailable"}, nil
 	}
+
 	wait := secondsToDuration(args.WaitSeconds, 30*time.Second)
-	snap, err := t.Manager.Wait(ctx, args.JobID, wait, args.TailLines, args.SinceLine)
-	if err != nil {
-		return Result{IsError: true, Content: err.Error()}, nil
+	tailLines := args.TailLines
+	if tailLines <= 0 {
+		tailLines = 5 // default tail for streaming
 	}
-	return Result{Content: formatCommandJobSnapshot(snap, true)}, nil
+
+	// Extract progress callback from context (if available).
+	progressFn, _ := ctx.Value(ToolProgressKey{}).(ToolProgressFunc)
+
+	// Polling loop: read output every 2s during the wait period,
+	// streaming the last `tailLines` lines to the TUI.
+	pollInterval := 2 * time.Second
+	deadline := time.Now().Add(wait)
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
+	var lastSnap CommandJobSnapshot
+
+	for {
+		// Read current output on every iteration (including first).
+		snap, err := t.Manager.Read(args.JobID, tailLines, args.SinceLine)
+		if err != nil {
+			return Result{IsError: true, Content: err.Error()}, nil
+		}
+		lastSnap = snap
+
+		// Stream to TUI if output changed.
+		if progressFn != nil {
+			output := formatStreamingOutput(snap, tailLines)
+			progressFn("", "wait_command", output)
+		}
+
+		// Check if job is done.
+		if isFinishedCommandStatus(snap.Status) {
+			return Result{Content: formatCommandJobSnapshot(snap, true)}, nil
+		}
+
+		// Check deadline.
+		if !time.Now().Before(deadline) {
+			return Result{Content: formatCommandJobSnapshot(snap, true)}, nil
+		}
+
+		// Wait for next poll interval or cancellation.
+		select {
+		case <-ctx.Done():
+			return Result{Content: formatCommandJobSnapshot(lastSnap, true)}, nil
+		case <-ticker.C:
+			continue
+		}
+	}
+}
+
+// formatStreamingOutput renders the tail of command output for live display.
+// Shows only the recent lines, creating a scrolling-log effect.
+func formatStreamingOutput(snap CommandJobSnapshot, tailLines int) string {
+	var sb strings.Builder
+	if isFinishedCommandStatus(snap.Status) {
+		sb.WriteString(fmt.Sprintf("[%s] ", snap.Status))
+	} else {
+		sb.WriteString("[...] ")
+	}
+	for _, line := range snap.Lines {
+		sb.WriteString(line)
+		sb.WriteString("\n")
+	}
+	return sb.String()
 }
 
 type StopCommandTool struct {

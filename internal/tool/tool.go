@@ -13,6 +13,15 @@ import (
 // Result is the output returned to the LLM.
 // IsError: true means the tool execution had a user-visible error (shown to LLM).
 // The Go error return is for system-level failures only (panic recovery, etc).
+// ToolProgressKey is a context key for tools that want to emit progress
+// updates during execution. The value must be ToolProgressFunc.
+// Used by wait_command to stream output lines during the wait period.
+type ToolProgressKey struct{}
+
+// ToolProgressFunc lets a running tool push intermediate output to the TUI.
+// toolID and toolName identify the calling tool; output is the text to display.
+type ToolProgressFunc func(toolID, toolName, output string)
+
 type Result struct {
 	Content string        `json:"content"`
 	IsError bool          `json:"is_error"`
