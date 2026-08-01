@@ -111,6 +111,9 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 		// Clipboard (read/write system clipboard)
 		ClipboardTool{},
 
+		// Open file in external editor/IDE
+		OpenEditorTool{WorkingDir: workingDir},
+
 		// Code health analysis (cyclomatic complexity, technical debt)
 		CodeHealthTool{WorkingDir: workingDir},
 
