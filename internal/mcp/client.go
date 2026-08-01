@@ -66,6 +66,11 @@ type Client struct {
 	// server. If nil, sampling requests are rejected with an error.
 	samplingHandler SamplingHandler
 
+	// elicitationHandler processes elicitation/create requests from the
+	// server (MCP 2025-06-18+). If nil, elicitation requests are rejected
+	// with an error.
+	elicitationHandler ElicitationHandler
+
 	// serverCaps holds the capabilities advertised by the server during
 	// initialize. Used to gate feature-specific requests (e.g., logging).
 	serverCaps ServerCaps
@@ -208,6 +213,9 @@ func (c *Client) Initialize(ctx context.Context) (*InitializeResult, error) {
 	}
 	if c.samplingHandler != nil {
 		caps.Sampling = &struct{}{}
+	}
+	if c.elicitationHandler != nil {
+		caps.Elicitation = &struct{}{}
 	}
 	params := InitializeParams{
 		ProtocolVersion: latestMCPProtocolVersion,
@@ -863,6 +871,8 @@ func (c *Client) handleServerRequest(req *Request) error {
 	switch req.Method {
 	case "sampling/createMessage":
 		return c.handleSampling(req)
+	case "elicitation/create":
+		return c.handleElicitation(req)
 	case "roots/list":
 		rootURI, err := currentRootURI()
 		if err != nil {
@@ -900,6 +910,41 @@ func (c *Client) handleSampling(req *Request) error {
 		return c.writeErrorResponse(req.ID, -32603, fmt.Sprintf("sampling failed: %v", err))
 	}
 	return c.writeResultResponse(req.ID, result)
+}
+
+// handleElicitation processes an elicitation/create request from the MCP server.
+// Servers use this to ask the client to collect structured input from the user.
+func (c *Client) handleElicitation(req *Request) error {
+	if c.elicitationHandler == nil {
+		return c.writeErrorResponse(req.ID, -32601, "elicitation not supported")
+	}
+
+	params, err := ParseElicitationParams(req.Params)
+	if err != nil {
+		return c.writeErrorResponse(req.ID, -32602, fmt.Sprintf("invalid elicitation params: %v", err))
+	}
+
+	// Validate the server-provided schema before presenting it to the user.
+	if err := ValidateElicitationSchema(params.Schema); err != nil {
+		return c.writeErrorResponse(req.ID, -32602, fmt.Sprintf("invalid elicitation schema: %v", err))
+	}
+
+	// Bounded timeout to prevent blocking the MCP read loop indefinitely.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	result, err := c.elicitationHandler(ctx, params)
+	if err != nil {
+		return c.writeErrorResponse(req.ID, -32603, fmt.Sprintf("elicitation failed: %v", err))
+	}
+	return c.writeResultResponse(req.ID, result)
+}
+
+// SetElicitationHandler registers a handler for elicitation/create requests.
+// When set, the client advertises elicitation capability during initialize.
+// Pass nil to disable elicitation support.
+func (c *Client) SetElicitationHandler(h ElicitationHandler) {
+	c.elicitationHandler = h
 }
 
 // SetSamplingHandler registers a handler for sampling/createMessage requests.
@@ -1078,7 +1123,8 @@ type ClientCaps struct {
 	Roots struct {
 		ListChanged bool `json:"listChanged,omitempty"`
 	} `json:"roots,omitempty"`
-	Sampling *struct{} `json:"sampling,omitempty"`
+	Sampling    *struct{} `json:"sampling,omitempty"`
+	Elicitation *struct{} `json:"elicitation,omitempty"`
 }
 
 type Implementation struct {

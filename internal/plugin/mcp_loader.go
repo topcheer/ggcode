@@ -81,6 +81,10 @@ type MCPPlugin struct {
 	// samplingHandler, if set, is propagated to each new MCP client so
 	// the server can request LLM completions via sampling/createMessage.
 	samplingHandler mcp.SamplingHandler
+
+	// elicitationHandler, if set, is propagated to each new MCP client so
+	// the server can request structured user input via elicitation/create.
+	elicitationHandler mcp.ElicitationHandler
 }
 
 // NewMCPPlugin creates a plugin from an MCP server configuration.
@@ -100,6 +104,13 @@ func (m *MCPPlugin) SetSamplingHandler(h mcp.SamplingHandler) {
 	m.samplingHandler = h
 }
 
+// SetElicitationHandler sets the user elicitation handler on this plugin.
+// The handler is propagated to each new MCP client when it connects.
+// Must be called before Connect.
+func (m *MCPPlugin) SetElicitationHandler(h mcp.ElicitationHandler) {
+	m.elicitationHandler = h
+}
+
 // Connect initializes the MCP server, discovers tools, and returns an adapter.
 func (m *MCPPlugin) Connect(ctx context.Context) (*mcp.Adapter, error) {
 	m.mu.RLock()
@@ -113,6 +124,9 @@ func (m *MCPPlugin) Connect(ctx context.Context) (*mcp.Adapter, error) {
 	client := mcp.NewClientFromConfig(m.cfg)
 	if m.samplingHandler != nil {
 		client.SetSamplingHandler(m.samplingHandler)
+	}
+	if m.elicitationHandler != nil {
+		client.SetElicitationHandler(m.elicitationHandler)
 	}
 	m.mu.Lock()
 	forceReauth := m.forceReauthPending
@@ -546,6 +560,17 @@ func (m *MCPManager) SetSamplingHandler(h mcp.SamplingHandler) {
 	defer m.mu.RUnlock()
 	for _, plugin := range m.plugins {
 		plugin.SetSamplingHandler(h)
+	}
+}
+
+// SetElicitationHandler propagates the user elicitation handler to all MCP
+// plugins. Each plugin will pass the handler to its MCP client on connect,
+// enabling servers to request structured user input via elicitation/create.
+func (m *MCPManager) SetElicitationHandler(h mcp.ElicitationHandler) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, plugin := range m.plugins {
+		plugin.SetElicitationHandler(h)
 	}
 }
 

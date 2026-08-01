@@ -111,6 +111,20 @@ ggcode handles these requests automatically:
 
 No configuration is needed — sampling is enabled automatically when a provider is configured. If no provider is available (e.g., during startup before the agent is created), sampling requests are rejected with an error.
 
+## MCP Elicitation (Server-to-User Input Requests)
+
+MCP servers can request structured input directly from the user via the `elicitation/create` method (introduced in MCP protocol 2025-06-18). Unlike sampling (which asks the LLM), elicitation asks the human — useful for collecting API keys, configuration choices, confirmations, or free-form text.
+
+ggcode handles these requests by routing them through the same `ask_user` interaction system used by the agent:
+- When an MCP server sends an `elicitation/create` request with a JSON schema describing the desired fields, ggcode converts the schema into an interactive prompt.
+- The prompt is delivered through whatever UI surface is active (TUI, IM adapter, desktop, or mobile).
+- The user can accept (provide data), decline (reject), or cancel (dismiss).
+- Responses are validated against the schema and returned to the server.
+
+**Security**: The server-provided schema is validated before presentation — field count is capped at 20, only primitive types (string, number, integer, boolean) are allowed, and the server message is treated as untrusted content. In non-interactive contexts (no interaction broker available), elicitation requests are rejected.
+
+No configuration is needed — elicitation is enabled automatically when an interactive session is active.
+
 ## Auto-Start
 
 MCP servers start automatically when ggcode launches. If a server fails to start, a warning is shown in the TUI.
