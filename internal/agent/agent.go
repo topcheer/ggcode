@@ -161,6 +161,7 @@ type Agent struct {
 	argSizeGuardFires          int                                   // count of argument size guard injections this run
 	latencyTracker             *LatencyTracker                       // per-tool latency baseline & slow-tool outlier detection
 	toolSequence               *toolSequenceValidator                // cross-iteration tool call anti-pattern detection
+	taskAnchor                 *taskAnchorState                      // periodic task re-anchoring for context collapse prevention
 	adaptiveSampling           *adaptiveSamplingState                // per-turn temperature adaptation (phase-aware sampling control)
 	effortAdapter              *adaptiveEffortState                  // per-turn reasoning effort adaptation (Opus 5 effort toggle pattern)
 	ruleStore                  *RuleStore                            // cached rule store for hot-path rule injection (avoids per-tool disk I/O)
@@ -232,6 +233,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		toolFilter:           tool.NewRelevanceFilter(),
 		latencyTracker:       NewLatencyTracker(),
 		toolSequence:         newToolSequenceValidator(),
+		taskAnchor:           newTaskAnchorState("", time.Time{}),
 		adaptiveSampling:     newAdaptiveSamplingState(),
 		effortAdapter:        newAdaptiveEffortState(),
 		transientRetryBudget: maxTransientRetryBudgetPerRun,
@@ -1078,6 +1080,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.verifyRegression.reset()
 	a.argSizeGuardFires = 0
 	a.toolSequence.reset()
+	a.taskAnchor.reset(userPromptForStats, time.Now())
 	a.toolFilter = tool.NewRelevanceFilter()
 	a.resetTransientRetryBudget()
 
@@ -1135,6 +1138,21 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.contextManager.Add(provider.Message{
 				Role:    "user",
 				Content: []provider.ContentBlock{{Type: "text", Text: staleReminder}},
+			})
+			msgs = a.contextManager.Messages()
+		}
+
+		// Task re-anchoring: prevent context collapse on long repair chains.
+		// After 8-10+ tool calls, models lose track of the original task
+		// (AgentMarketCap 2026 survey, arXiv:2603.07670). Re-inject a compact
+		// reminder periodically based on cumulative tool call count — not
+		// iteration count, since parallel tools accelerate collapse.
+		if anchorMsg := a.taskAnchor.maybeReanchorTask(
+			runStats.totalToolCalls(), i+1, runStats.FilesEdited,
+		); anchorMsg != "" {
+			a.contextManager.Add(provider.Message{
+				Role:    "user",
+				Content: []provider.ContentBlock{{Type: "text", Text: anchorMsg}},
 			})
 			msgs = a.contextManager.Messages()
 		}
