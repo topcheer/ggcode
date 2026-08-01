@@ -37,6 +37,7 @@ type BaseToolItem struct {
 	rawArgs        string        // raw JSON args for body rendering (e.g. edit diff)
 	startedAt      time.Time     // wall-clock when the tool started running
 	finalElapsed   time.Duration // elapsed at completion (0 while running)
+	streamingBody  string        // live intermediate output shown while running
 }
 
 // NewBaseToolItem creates a base tool item.
@@ -76,6 +77,13 @@ func (t *BaseToolItem) SetStatus(s ToolStatus) {
 func (t *BaseToolItem) SetResult(result string, isError bool) {
 	t.result = result
 	t.isError = isError
+	t.Invalidate()
+}
+
+// SetStreamingBody sets live intermediate output shown while the tool is running.
+// When the tool finishes, the final result replaces this via SetResult.
+func (t *BaseToolItem) SetStreamingBody(body string) {
+	t.streamingBody = body
 	t.Invalidate()
 }
 
@@ -160,6 +168,10 @@ func (t *BaseToolItem) setToolMeta(rawToolName, rawArgs string) {
 // RenderBody renders the tool output body.
 // Override in concrete types for specialized body rendering.
 func (t *BaseToolItem) RenderBody(width int) string {
+	// While running, show live streaming output if available.
+	if t.status == StatusRunning && t.streamingBody != "" {
+		return t.styles.ToolBody.Render(t.streamingBody)
+	}
 	if t.result == "" || t.suppressBody {
 		return ""
 	}

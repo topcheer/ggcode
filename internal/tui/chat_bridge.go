@@ -31,12 +31,11 @@ func (m *Model) chatUpdateToolOutput(toolID, output string) {
 		return
 	}
 	m.chatList.UpdateByID(toolID, func(item chat.Item) {
-		// BaseToolItem implements SetResult which updates the rendered body.
-		type resultSetter interface {
-			SetResult(string, bool)
+		type streamSetter interface {
+			SetStreamingBody(string)
 		}
-		if rs, ok := item.(resultSetter); ok {
-			rs.SetResult(output, false)
+		if ss, ok := item.(streamSetter); ok {
+			ss.SetStreamingBody(output)
 		}
 	})
 }

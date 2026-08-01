@@ -67,6 +67,21 @@ The precompact trigger is `AutoCompactThreshold()` = 99% of the usable prompt bu
 
 `buildPostCompactState()` currently preserves the most recent file paths (up to 5) and a todo summary, if any. It does **not** currently preserve arbitrary user constraint sentences across compaction; those still live only in the summarization prompt and the summarized text.
 
+## System Prompt Sections (Background SectionCollector)
+
+`internal/agentruntime/section_collector.go` runs a background goroutine that pre-computes I/O-heavy system-prompt sections every 10 seconds, so prompt construction never blocks on subprocess calls. The following sections are injected into both the main agent prompt and sub-agent/teammate prompts:
+
+| Section | Source | Purpose |
+|---------|--------|---------|
+| **Project layout** | Directory walk (depth 2, max 60 entries) | Codebase structure awareness without tool calls |
+| **Modified files** | `git status --short` (max 20 files) | Working-tree state visibility |
+| **Recent commits** | `git log --oneline -5` | Session continuity — recent development direction and commit conventions |
+| **Project commands** | Build/test/lint command detection | Verify command suggestions |
+| **Toolchain** | Go/Node/Python version detection | Compatible code generation |
+| **Package symbols** | Go exported declarations per package | API surface awareness for Go projects |
+
+Each section has a 2-second timeout and fails silently (returns empty string) on error. The collector is initialized once and shared globally; pipe/test mode falls back to direct computation.
+
 ## Persistent Storage
 
 Session messages are persisted as JSONL files in `~/.ggcode/sessions/`. The context manager itself is in-memory; the session store restores messages into it on resume.
