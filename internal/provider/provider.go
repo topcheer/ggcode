@@ -205,6 +205,13 @@ type ModelNameProvider interface {
 	ModelName() string
 }
 
+// RateLimitProvider is implemented by providers that capture rate-limit
+// headers from API responses. The agent uses this to proactively warn the
+// user when quotas are running low, rather than waiting for a 429 error.
+type RateLimitProvider interface {
+	RateLimitInfo() RateLimitInfo
+}
+
 // ChatResponse is the complete response from a non-streaming Chat call.
 type ChatResponse struct {
 	Message Message

@@ -119,11 +119,13 @@ func (p *OpenAIProvider) createChatCompletionStream(ctx context.Context, req ope
 }
 
 // headerInjectingTransport wraps an http.RoundTripper to inject custom headers
-// that mimic the claude-cli client identity.
+// that mimic the claude-cli client identity, and captures rate-limit headers
+// from responses for proactive quota monitoring.
 type headerInjectingTransport struct {
-	base    http.RoundTripper
-	mu      sync.RWMutex
-	headers http.Header
+	base       http.RoundTripper
+	mu         sync.RWMutex
+	headers    http.Header
+	rateLimits *rateLimitTracker // nil if rate-limit capture is disabled
 }
 
 func (t *headerInjectingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -134,7 +136,11 @@ func (t *headerInjectingTransport) RoundTrip(req *http.Request) (*http.Response,
 		}
 	}
 	t.mu.RUnlock()
-	return t.base.RoundTrip(req)
+	resp, err := t.base.RoundTrip(req)
+	if err == nil && resp != nil && t.rateLimits != nil {
+		t.rateLimits.Update(resp.Header)
+	}
+	return resp, err
 }
 
 // UpdateHeaders replaces the injected headers. Safe for concurrent use with RoundTrip.
@@ -195,8 +201,9 @@ func NewOpenAIProviderWithConfig(config openai.ClientConfig, apiKey, model strin
 		baseTransport = newProviderHTTPTransport()
 	}
 	transport := &headerInjectingTransport{
-		base:    baseTransport,
-		headers: extraHeaders,
+		base:       baseTransport,
+		headers:    extraHeaders,
+		rateLimits: newRateLimitTracker(),
 	}
 	config.HTTPClient = &http.Client{
 		Transport: transport,
@@ -231,6 +238,14 @@ func (p *OpenAIProvider) UpdateRuntimeHeaders(headers http.Header) {
 	if p.transport != nil {
 		p.transport.UpdateHeaders(headers)
 	}
+}
+
+// RateLimitInfo returns the latest rate-limit status parsed from response headers.
+func (p *OpenAIProvider) RateLimitInfo() RateLimitInfo {
+	if p.transport != nil && p.transport.rateLimits != nil {
+		return p.transport.rateLimits.Snapshot()
+	}
+	return RateLimitInfo{RemainingRequests: -1, RemainingTokens: -1, LimitRequests: -1, LimitTokens: -1}
 }
 
 // SetSessionID injects the session ID into outgoing requests via a custom

@@ -122,45 +122,46 @@ type Agent struct {
 	precompact                 *precompactState
 	precompactCooldownUntil    time.Time // earliest next precompact; guarded by mu
 	shutdownCtx                context.Context
-	shutdownCancel             context.CancelFunc   // cancels on Close()
-	probeKey                   string               // "vendor|baseURL|model" for context window auto-detection
-	autopilotGoal              string               // current autopilot goal text; empty when no goal is active
-	autopilotGoalAsked         bool                 // true after the goal-collection instruction has been injected
-	autopilotGoalSet           bool                 // true after the user has confirmed a goal (goal text is non-empty)
-	autopilotStrategistCount   int                  // number of strategist calls this run (safety valve)
-	strategistBudgetAnnounced  bool                 // true once the budget-exhausted message has been injected
-	strategistNoProgressCount  int                  // consecutive strategist calls where agent made no tool calls
-	reflectionFunc             ReflectionFunc       // called after each run with accumulated stats
-	loopDetector               loopDetector         // tracks consecutive identical tool calls to detect stuck loops
-	errorClassifier            *ErrorClassifier     // immediate type-specific guidance on tool errors (AgentDebug-inspired)
-	overseer                   *overseerState       // deterministic async-overseer: trajectory analysis for stuck/drift/spam
-	repetition                 *repetitionTracker   // semantic-level repetition detection for failed edit clusters
-	speculator                 *speculator          // pattern-aware speculative tool execution (PASTE-inspired)
-	toolMemo                   *toolMemo            // read-only tool result memoization (ToolCaching-inspired)
-	confidence                 *confidenceState     // holistic trajectory confidence scoring (HTC-inspired)
-	budgetGuard                *budgetGuardState    // per-step token cost trend monitoring (BAGEN-inspired)
-	costBudget                 *sessionCostBudget   // absolute session-level token budget enforcement
-	cacheKeepalive             *cacheKeepaliveState // prompt cache warming pings during idle (Anthropic)
-	commandCache               *commandCache        // deterministic build/test command result caching
-	emptySearch                *emptySearchState    // empty search spiral detection (futile search guidance)
-	postEditVerify             postEditVerifyState  // tracks source-code edits to inject periodic verification hints
-	planner                    *planState           // agent-side auto task decomposition (Devin/Claude Code-inspired)
-	todoStaleness              *todoStalenessState  // mid-run stale todo detection (plan abandonment awareness)
-	recurringError             *recurringErrorState // recurring build/test error fingerprint detection across edit cycles
-	unreadEdit                 *unreadEditState     // read-before-edit guard: warns when editing unread files
-	editFailRecovery           *editFailState       // consecutive edit failure recovery guidance
-	scopeDrift                 *scopeDriftState     // semantic scope creep detection (file-diversity tracking)
-	exportGuard                *exportGuardState    // breaking change detection for exported Go symbols (regression guard)
-	transientRetryBudget       int                  // remaining automatic retries for transient tool failures (per run)
-	latencyTracker             *LatencyTracker      // per-tool latency baseline & slow-tool outlier detection
-	effortAdapter              *adaptiveEffortState // per-turn reasoning effort adaptation (Opus 5 effort toggle pattern)
-	ruleStore                  *RuleStore           // cached rule store for hot-path rule injection (avoids per-tool disk I/O)
-	lastRunStats               *RunStats            // stats from the most recent run (for post-run summary display)
-	systemPromptInjector       func() string        // returns extra system prompt text to inject (e.g. lanchat peer warnings)
-	baseSystemPrompt           string               // the fully built static system prompt; used as reset base for dynamic injection
-	lastInjectedSystemPrompt   string               // cache of last injected prompt to skip redundant updates
-	onVerifyProgress           func(text string)    // called during async verification (status updates)
-	onVerifyResult             func(VerifyResult)   // called when async verification completes
+	shutdownCancel             context.CancelFunc    // cancels on Close()
+	probeKey                   string                // "vendor|baseURL|model" for context window auto-detection
+	autopilotGoal              string                // current autopilot goal text; empty when no goal is active
+	autopilotGoalAsked         bool                  // true after the goal-collection instruction has been injected
+	autopilotGoalSet           bool                  // true after the user has confirmed a goal (goal text is non-empty)
+	autopilotStrategistCount   int                   // number of strategist calls this run (safety valve)
+	strategistBudgetAnnounced  bool                  // true once the budget-exhausted message has been injected
+	strategistNoProgressCount  int                   // consecutive strategist calls where agent made no tool calls
+	reflectionFunc             ReflectionFunc        // called after each run with accumulated stats
+	loopDetector               loopDetector          // tracks consecutive identical tool calls to detect stuck loops
+	errorClassifier            *ErrorClassifier      // immediate type-specific guidance on tool errors (AgentDebug-inspired)
+	overseer                   *overseerState        // deterministic async-overseer: trajectory analysis for stuck/drift/spam
+	repetition                 *repetitionTracker    // semantic-level repetition detection for failed edit clusters
+	speculator                 *speculator           // pattern-aware speculative tool execution (PASTE-inspired)
+	toolMemo                   *toolMemo             // read-only tool result memoization (ToolCaching-inspired)
+	confidence                 *confidenceState      // holistic trajectory confidence scoring (HTC-inspired)
+	budgetGuard                *budgetGuardState     // per-step token cost trend monitoring (BAGEN-inspired)
+	costBudget                 *sessionCostBudget    // absolute session-level token budget enforcement
+	cacheKeepalive             *cacheKeepaliveState  // prompt cache warming pings during idle (Anthropic)
+	commandCache               *commandCache         // deterministic build/test command result caching
+	emptySearch                *emptySearchState     // empty search spiral detection (futile search guidance)
+	postEditVerify             postEditVerifyState   // tracks source-code edits to inject periodic verification hints
+	planner                    *planState            // agent-side auto task decomposition (Devin/Claude Code-inspired)
+	todoStaleness              *todoStalenessState   // mid-run stale todo detection (plan abandonment awareness)
+	recurringError             *recurringErrorState  // recurring build/test error fingerprint detection across edit cycles
+	unreadEdit                 *unreadEditState      // read-before-edit guard: warns when editing unread files
+	editFailRecovery           *editFailState        // consecutive edit failure recovery guidance
+	scopeDrift                 *scopeDriftState      // semantic scope creep detection (file-diversity tracking)
+	exportGuard                *exportGuardState     // breaking change detection for exported Go symbols (regression guard)
+	toolFilter                 *tool.RelevanceFilter // dynamic MCP tool pruning based on conversation relevance
+	transientRetryBudget       int                   // remaining automatic retries for transient tool failures (per run)
+	latencyTracker             *LatencyTracker       // per-tool latency baseline & slow-tool outlier detection
+	effortAdapter              *adaptiveEffortState  // per-turn reasoning effort adaptation (Opus 5 effort toggle pattern)
+	ruleStore                  *RuleStore            // cached rule store for hot-path rule injection (avoids per-tool disk I/O)
+	lastRunStats               *RunStats             // stats from the most recent run (for post-run summary display)
+	systemPromptInjector       func() string         // returns extra system prompt text to inject (e.g. lanchat peer warnings)
+	baseSystemPrompt           string                // the fully built static system prompt; used as reset base for dynamic injection
+	lastInjectedSystemPrompt   string                // cache of last injected prompt to skip redundant updates
+	onVerifyProgress           func(text string)     // called during async verification (status updates)
+	onVerifyResult             func(VerifyResult)    // called when async verification completes
 	mu                         sync.RWMutex
 }
 
@@ -214,6 +215,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		editFailRecovery:     newEditFailState(),
 		scopeDrift:           newScopeDriftState(),
 		exportGuard:          newExportGuardState(),
+		toolFilter:           tool.NewRelevanceFilter(),
 		latencyTracker:       NewLatencyTracker(),
 		effortAdapter:        newAdaptiveEffortState(),
 		transientRetryBudget: maxTransientRetryBudgetPerRun,
@@ -1003,6 +1005,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.editFailRecovery.reset()
 	// Reset the export guard so each run starts with a clean checked set.
 	a.exportGuard.reset()
+	a.toolFilter = tool.NewRelevanceFilter()
 	a.resetTransientRetryBudget()
 
 	for i := 0; a.maxIter <= 0 || i < a.maxIter; i++ {
@@ -1162,7 +1165,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// tool complexity. Only activates when user hasn't explicitly set effort.
 		effortApplied, effortPrev := a.applyAdaptiveEffort()
 
-		resp, textBuf, toolCalls, truncated, err := a.streamChatResponse(ctx, a.ensureMessagesSendable(msgs), toolDefs, onEvent)
+		// Dynamic tool pruning: filter out low-relevance MCP tools to reduce
+		// context overhead and improve tool-selection accuracy. Only activates
+		// when total tool count exceeds a threshold.
+		activeToolDefs := a.toolFilter.Filter(toolDefs, tool.ExtractContextFromMessages(msgs, 6))
+
+		resp, textBuf, toolCalls, truncated, err := a.streamChatResponse(ctx, a.ensureMessagesSendable(msgs), activeToolDefs, onEvent)
 		if effortApplied != "" {
 			a.restoreEffort(effortPrev)
 		}
@@ -2160,6 +2168,18 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 				CacheWrite:   usage.CacheWrite,
 			})
 			onEvent(event)
+
+			// Proactive rate-limit check: if the provider exposes rate-limit
+			// info and quotas are critical, emit a system warning event so
+			// the UI/user is informed before a 429 occurs.
+			if rl, ok := a.provider.(provider.RateLimitProvider); ok {
+				info := rl.RateLimitInfo()
+				if info.IsCritical() && !info.IsEmpty() {
+					debug.Log("agent", "rate limit warning: req %d/%d (%.0f%%), tok %d/%d (%.0f%%)",
+						info.RemainingRequests, info.LimitRequests, info.RequestFractionRemaining()*100,
+						info.RemainingTokens, info.LimitTokens, info.TokenFractionRemaining()*100)
+				}
+			}
 
 			// on_stream_stop hook (async fire-and-forget).
 			a.mu.RLock()

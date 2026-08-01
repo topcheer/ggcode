@@ -148,8 +148,9 @@ func newAnthropicProvider(apiKey, model string, maxTokens int, baseURL string) *
 		headers.Set("X-OpenRouter-Categories", "cli-agent,programming-app")
 	}
 	transport := &headerInjectingTransport{
-		base:    newProviderHTTPTransport(),
-		headers: headers,
+		base:       newProviderHTTPTransport(),
+		headers:    headers,
+		rateLimits: newRateLimitTracker(),
 	}
 	opts := anthropicProviderOptions(apiKey, baseURL)
 	opts = append(opts, option.WithHTTPClient(&http.Client{Transport: transport}))
@@ -196,6 +197,14 @@ func (p *AnthropicProvider) UpdateRuntimeHeaders(headers http.Header) {
 	if p.transport != nil {
 		p.transport.UpdateHeaders(headers)
 	}
+}
+
+// RateLimitInfo returns the latest rate-limit status parsed from response headers.
+func (p *AnthropicProvider) RateLimitInfo() RateLimitInfo {
+	if p.transport != nil && p.transport.rateLimits != nil {
+		return p.transport.rateLimits.Snapshot()
+	}
+	return RateLimitInfo{RemainingRequests: -1, RemainingTokens: -1, LimitRequests: -1, LimitTokens: -1}
 }
 
 // SetSessionID injects the session ID into outgoing requests via a custom

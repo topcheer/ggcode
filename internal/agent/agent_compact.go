@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	ctxpkg "github.com/topcheer/ggcode/internal/context"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/hooks"
 	"github.com/topcheer/ggcode/internal/provider"
@@ -210,6 +211,14 @@ func (a *Agent) maybeAutoCompact(ctx context.Context, onEvent func(provider.Stre
 	a.mu.Unlock()
 
 	debug.Log("agent", "maybeAutoCompact: scheduling background precompact tokens=%d threshold=%d cooldown=%s", tokens, threshold, precompactCooldown)
+
+	// Log context budget breakdown to provide visibility into what's consuming
+	// tokens. This helps diagnose context pressure and informs optimization.
+	if msgs, _ := a.contextManager.MessagesAndTokenCount(); len(msgs) > 0 {
+		bd := ctxpkg.AnalyzeBudget(msgs)
+		debug.Log("agent", "context budget breakdown:\n%s", bd.FormatHumanReadable())
+	}
+
 	a.StartPreCompact()
 	return nil
 }
