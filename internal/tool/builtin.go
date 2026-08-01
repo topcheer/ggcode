@@ -85,6 +85,7 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 		&GitAdd{},
 		&GitCommit{},
 		&GitStash{},
+		&GitCheckout{},
 
 		// Web
 		WebFetch{},

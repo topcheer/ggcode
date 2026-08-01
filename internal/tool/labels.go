@@ -201,6 +201,12 @@ func DescribeTool(toolName, rawArgs string) ToolPresentation {
 			action = "push"
 		}
 		return toolPres("Stash", action)
+	case "git_checkout":
+		branch := argStr(args, "branch")
+		if argStr(args, "create") == "true" {
+			return toolPres("Branch", "create "+branch)
+		}
+		return toolPres("Branch", "switch "+branch)
 	case "sleep":
 		sec, _ := strconv.Atoi(argStr(args, "seconds"))
 		ms, _ := strconv.Atoi(argStr(args, "milliseconds"))
