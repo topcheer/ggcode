@@ -239,14 +239,14 @@ func TestMultiEdit_CorpusReplay_ValidCompatibilityCases(t *testing.T) {
 		},
 		{
 			name:    "numbered import block ignores dangling final line number like corpus failures",
-			content: "package main\n\nimport (\n\t\"strings\"\n\t\"syscall\"\n\t\"time\"\n\n\t\"github.com/hashicorp/mdns\"\n\t\"github.com/topcheer/ggcode/internal/debug\"\n)\n",
+			content: "package main\n\nimport (\n\t\"strings\"\n\t\"syscall\"\n\t\"time\"\n\n\t\"github.com/hashicorp/mdns\"\n\t\"github.com/topcheer/ggcode/internal/debug\"\n)\n\nfunc useImports() {\n\t_ = strings.TrimSpace\n\t_ = syscall.SIGTERM\n\t_ = time.Now\n\t_ = mdns.DefaultParams\n\t_ = debug.Log\n\t_ = safego.Go\n}\n",
 			edits: []map[string]string{
 				{
 					"old_text": "   4\t\t\"strings\"\n   5\t\t\"syscall\"\n   6\t\t\"time\"\n   7\n   8\t\t\"github.com/hashicorp/mdns\"\n   9\t\t\"github.com/topcheer/ggcode/internal/debug\"\n   10",
 					"new_text": "   4\t\t\"strings\"\n   5\t\t\"syscall\"\n   6\t\t\"time\"\n   7\n   8\t\t\"github.com/hashicorp/mdns\"\n   9\t\t\"github.com/topcheer/ggcode/internal/debug\"\n   10\t\t\"github.com/topcheer/ggcode/internal/safego\"",
 				},
 			},
-			want: "package main\n\nimport (\n\t\"strings\"\n\t\"syscall\"\n\t\"time\"\n\n\t\"github.com/hashicorp/mdns\"\n\t\"github.com/topcheer/ggcode/internal/debug\"\n\t\"github.com/topcheer/ggcode/internal/safego\"\n)\n",
+			want: "package main\n\nimport (\n\t\"strings\"\n\t\"syscall\"\n\t\"time\"\n\n\t\"github.com/hashicorp/mdns\"\n\t\"github.com/topcheer/ggcode/internal/debug\"\n\t\"github.com/topcheer/ggcode/internal/safego\"\n)\n\nfunc useImports() {\n\t_ = strings.TrimSpace\n\t_ = syscall.SIGTERM\n\t_ = time.Now\n\t_ = mdns.DefaultParams\n\t_ = debug.Log\n\t_ = safego.Go\n}\n",
 		},
 	}
 
