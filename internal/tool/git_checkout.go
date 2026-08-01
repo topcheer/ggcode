@@ -3,8 +3,12 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os/exec"
 	"strings"
+
+	"github.com/topcheer/ggcode/internal/vcs"
 )
 
 // GitCheckout implements the git_checkout tool for creating new branches and
@@ -72,39 +76,41 @@ func (t GitCheckout) Execute(ctx context.Context, input json.RawMessage) (Result
 
 	dir := resolveDir(args.Path, t.WorkingDir)
 
-	// Safety check: warn about uncommitted changes before switching.
-	dirtyWarning := checkWorkingTreeDirty(ctx, dir)
-
-	// Track the branch we're leaving for context in the result.
-	prevBranch := currentBranchName(ctx, dir)
-
-	// Build the git checkout command.
-	var gitArgs []string
-	if args.Create {
-		// Validate start point if provided.
-		if args.StartPoint != "" {
-			if err := validateRefName(args.StartPoint); err != nil {
-				return Result{IsError: true, Content: err.Error()}, nil
-			}
-			gitArgs = []string{"checkout", "-b", args.Branch, args.StartPoint}
-		} else {
-			gitArgs = []string{"checkout", "-b", args.Branch}
-		}
-	} else {
-		gitArgs = []string{"checkout", args.Branch}
+	// Detect VCS and use the appropriate checkout implementation.
+	vcsImpl := vcs.Detect(dir)
+	if vcsImpl == nil {
+		return Result{IsError: true, Content: "no VCS detected in " + dir}, nil
 	}
 
-	cmd := gitCommand(ctx, gitArgs...)
-	cmd.Dir = dir
+	// Safety check: warn about uncommitted changes before switching.
+	clean, _ := vcsImpl.IsClean(ctx, dir)
+	var dirtyWarning string
+	if !clean {
+		dirtyWarning = checkWorkingTreeDirty(ctx, dir, vcsImpl.Name())
+	}
 
-	out, err := cmd.CombinedOutput()
+	// Track the branch we're leaving for context in the result.
+	prevBranch, _ := vcsImpl.CurrentBranch(ctx, dir)
+
+	// Validate start point if provided.
+	if args.Create && args.StartPoint != "" {
+		if err := validateRefName(args.StartPoint); err != nil {
+			return Result{IsError: true, Content: err.Error()}, nil
+		}
+	}
+
+	// Execute checkout via VCS abstraction.
+	out, err := vcsImpl.Checkout(ctx, dir, args.Branch, args.Create, args.StartPoint)
 	if err != nil {
-		return Result{IsError: true, Content: fmt.Sprintf("git checkout failed: %v\n%s", err, out)}, nil
+		if errors.Is(err, vcs.ErrCheckoutNotSupported) {
+			return Result{IsError: true, Content: fmt.Sprintf("%s does not support branch checkout", vcsImpl.DisplayName())}, nil
+		}
+		return Result{IsError: true, Content: fmt.Sprintf("%s checkout failed: %v\n%s", vcsImpl.Name(), err, out)}, nil
 	}
 
 	// Build result message.
 	trimmed := strings.TrimSpace(string(out))
-	nowBranch := currentBranchName(ctx, dir)
+	nowBranch, _ := vcsImpl.CurrentBranch(ctx, dir)
 
 	var b strings.Builder
 	if trimmed != "" {
@@ -199,8 +205,14 @@ func validateRefName(ref string) error {
 
 // checkWorkingTreeDirty checks if the working tree has uncommitted changes
 // and returns a warning string if so. Non-blocking advisory.
-func checkWorkingTreeDirty(ctx context.Context, dir string) string {
-	cmd := gitCommand(ctx, "status", "--porcelain")
+func checkWorkingTreeDirty(ctx context.Context, dir string, vcsName string) string {
+	var cmd *exec.Cmd
+	if vcsName == "git" {
+		cmd = exec.CommandContext(ctx, "git", "status", "--porcelain")
+	} else {
+		// For non-git VCS, just check if status output is non-empty.
+		cmd = exec.CommandContext(ctx, vcsName, "status")
+	}
 	cmd.Dir = dir
 	out, err := cmd.Output()
 	if err != nil {

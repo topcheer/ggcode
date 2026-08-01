@@ -5,7 +5,12 @@ package vcs
 
 import (
 	"context"
+	"errors"
 )
+
+// ErrCheckoutNotSupported is returned by VCS implementations that don't
+// support branch switching (e.g. Subversion).
+var ErrCheckoutNotSupported = errors.New("checkout not supported for this VCS")
 
 // VCS represents a version control system backend.
 type VCS interface {
@@ -36,4 +41,11 @@ type VCS interface {
 
 	// IsClean reports whether the working tree has no uncommitted changes.
 	IsClean(ctx context.Context, dir string) (bool, error)
+
+	// Checkout switches to an existing branch or creates a new one.
+	// If create is true, a new branch is created (and startPoint is used as
+	// the starting commit if non-empty). Returns the command output.
+	// VCS systems without a branch concept (e.g. Subversion) should return
+	// ErrCheckoutNotSupported.
+	Checkout(ctx context.Context, dir, branch string, create bool, startPoint string) (string, error)
 }

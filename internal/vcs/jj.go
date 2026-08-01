@@ -87,5 +87,25 @@ func (Jujutsu) IsClean(ctx context.Context, dir string) (bool, error) {
 	return strings.Contains(out, "The working copy has no changes"), nil
 }
 
+// Checkout switches to an existing bookmark or creates a new one.
+// jj uses bookmarks (similar to git branches); the working copy follows
+// automatically when you switch.
+func (Jujutsu) Checkout(ctx context.Context, dir, branch string, create bool, startPoint string) (string, error) {
+	if create {
+		args := []string{"bookmark", "create", branch}
+		if startPoint != "" {
+			args = append(args, "-r", startPoint)
+		}
+		out, err := runVCSCmd(ctx, dir, "jj", args...)
+		if err != nil {
+			return out, err
+		}
+		// Also set the new bookmark as the current working copy target.
+		_, _ = runVCSCmd(ctx, dir, "jj", "bookmark", "set", branch)
+		return out, nil
+	}
+	return runVCSCmd(ctx, dir, "jj", "bookmark", "set", branch)
+}
+
 // Ensure Jujutsu satisfies VCS at compile time.
 var _ VCS = Jujutsu{}

@@ -58,5 +58,14 @@ func (Mercurial) IsClean(ctx context.Context, dir string) (bool, error) {
 	return strings.TrimSpace(out) == "", nil
 }
 
-// Ensure Mercurial satisfies VCS at compile time.
-var _ VCS = Mercurial{}
+// Checkout switches to an existing bookmark/branch or creates a new one.
+func (Mercurial) Checkout(ctx context.Context, dir, branch string, create bool, startPoint string) (string, error) {
+	if create {
+		args := []string{"bookmark", branch}
+		if startPoint != "" {
+			args = append(args, "-r", startPoint)
+		}
+		return runVCSCmd(ctx, dir, "hg", args...)
+	}
+	return runVCSCmd(ctx, dir, "hg", "update", branch)
+}

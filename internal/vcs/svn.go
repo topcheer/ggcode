@@ -72,5 +72,10 @@ func (Subversion) IsClean(ctx context.Context, dir string) (bool, error) {
 	return strings.TrimSpace(out) == "", nil
 }
 
+// Checkout is not supported for Subversion (no branch concept).
+func (Subversion) Checkout(ctx context.Context, dir, branch string, create bool, startPoint string) (string, error) {
+	return "", ErrCheckoutNotSupported
+}
+
 // Ensure Subversion satisfies VCS at compile time.
 var _ VCS = Subversion{}

@@ -82,6 +82,20 @@ func (Git) AheadBehind(ctx context.Context, dir string) (ahead, behind int, ok b
 	return a, b, true
 }
 
+// Checkout switches to an existing branch or creates a new one.
+func (Git) Checkout(ctx context.Context, dir, branch string, create bool, startPoint string) (string, error) {
+	args := []string{"checkout"}
+	if create {
+		args = append(args, "-b", branch)
+		if startPoint != "" {
+			args = append(args, startPoint)
+		}
+	} else {
+		args = append(args, branch)
+	}
+	return runVCSCmd(ctx, dir, "git", args...)
+}
+
 // runVCSCmd executes a VCS command in the given directory.
 func runVCSCmd(ctx context.Context, dir, name string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
