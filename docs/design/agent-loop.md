@@ -88,6 +88,7 @@ Before the agent returns (no more tool calls), multiple gates check that the wor
 |------|------|---------|
 | Incomplete todo check | `todo_check.go` | Detects unfinished todo items and injects reminders (max 2) |
 | Fulfillment gate | `fulfillment_gate.go` | Zero-LLM-cost heuristic that verifies the agent's actual work matches the user's request. Detects: action-but-no-changes, wrong-file detection, multi-part coverage gaps. Fires at most once per run. |
+| Complexity gate | `complexity_gate.go` | Post-completion code quality check: runs codehealth.Analyze on edited Go files after build passes, flags functions with complexity >= 15, length > 80, or nesting > 5. Advisory only. |
 | Sync verify | `verify.go` | Build/test verification with auto-repair on failure |
 | Async verify | `verify.go` | Background lint check after successful build |
 

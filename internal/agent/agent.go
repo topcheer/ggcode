@@ -153,6 +153,7 @@ type Agent struct {
 	exportGuard                *exportGuardState     // breaking change detection for exported Go symbols (regression guard)
 	toolFilter                 *tool.RelevanceFilter // dynamic MCP tool pruning based on conversation relevance
 	fulfillmentGate            *fulfillmentGateState // pre-completion coverage verification (request-vs-work match)
+	complexityGate             *complexityGateState  // post-completion code complexity quality gate
 	transientRetryBudget       int                   // remaining automatic retries for transient tool failures (per run)
 	latencyTracker             *LatencyTracker       // per-tool latency baseline & slow-tool outlier detection
 	effortAdapter              *adaptiveEffortState  // per-turn reasoning effort adaptation (Opus 5 effort toggle pattern)
@@ -217,6 +218,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		scopeDrift:           newScopeDriftState(),
 		exportGuard:          newExportGuardState(),
 		fulfillmentGate:      newFulfillmentGateState(),
+		complexityGate:       newComplexityGateState(),
 		toolFilter:           tool.NewRelevanceFilter(),
 		latencyTracker:       NewLatencyTracker(),
 		effortAdapter:        newAdaptiveEffortState(),
@@ -841,6 +843,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.errorClassifier.reset()
 	a.resetPostEditVerify()
 	a.resetRepetitionTracker()
+	a.fulfillmentGate.reset()
+	a.complexityGate.reset()
 	if a.effortAdapter != nil {
 		a.effortAdapter.reset()
 	}
@@ -1032,6 +1036,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	// Reset the export guard so each run starts with a clean checked set.
 	a.exportGuard.reset()
 	a.fulfillmentGate.reset()
+	a.complexityGate.reset()
 	a.toolFilter = tool.NewRelevanceFilter()
 	a.resetTransientRetryBudget()
 
@@ -1526,6 +1531,23 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				// Capture stats for async verification before returning.
 				asyncVerifyStats = runStats
 			}
+
+			// Complexity quality gate: after build verification passes (or no
+			// build was needed), check edited Go files for complexity hotspots.
+			// This is an advisory warning — it doesn't block completion but
+			// alerts the agent to refactor-worthy functions before finishing.
+			if complexityMsg := a.checkComplexityGate(runStats); complexityMsg != "" {
+				debug.Log("agent", "Iteration %d: complexity gate detected quality issues, injecting advisory", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: complexityMsg,
+					}},
+				})
+				continue
+			}
+
 			debug.Log("agent", "Iteration %d: no tool calls, returning", i+1)
 			return nil
 		}
