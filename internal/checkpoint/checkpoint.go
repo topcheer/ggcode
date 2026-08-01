@@ -18,6 +18,7 @@ type Checkpoint struct {
 	NewContent string    `json:"new_content"`
 	Timestamp  time.Time `json:"timestamp"`
 	ToolCall   string    `json:"tool_call"`
+	RunID      string    `json:"run_id,omitempty"` // agent run that created this checkpoint
 }
 
 // Manager manages file checkpoints for undo/redo support.
@@ -26,6 +27,7 @@ type Manager struct {
 	redoStack      []Checkpoint // checkpoints popped by Undo, available for Redo
 	maxCheckpoints int
 	mu             sync.Mutex
+	currentRunID   string // active run ID, set by StartRun
 }
 
 // NewManager creates a new checkpoint manager with the given max limit.
@@ -34,6 +36,15 @@ func NewManager(maxCheckpoints int) *Manager {
 		maxCheckpoints = 50
 	}
 	return &Manager{maxCheckpoints: maxCheckpoints}
+}
+
+// StartRun marks the beginning of a new agent run. All subsequent Save()
+// calls are tagged with runID until the next StartRun. This enables
+// UndoRun() to batch-revert all file changes from a single run.
+func (m *Manager) StartRun(runID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.currentRunID = runID
 }
 
 // Save records a checkpoint before a file edit.
@@ -49,6 +60,7 @@ func (m *Manager) Save(filePath, oldContent, newContent, toolCall string) Checkp
 		NewContent: newContent,
 		Timestamp:  time.Now(),
 		ToolCall:   toolCall,
+		RunID:      m.currentRunID,
 	}
 
 	m.checkpoints = append(m.checkpoints, cp)
@@ -155,6 +167,81 @@ func (m *Manager) ModifiedFiles() []FileSummary {
 		out = append(out, *summary[p])
 	}
 	return out
+}
+
+// UndoRun reverts all checkpoints belonging to the most recent run in one
+// batch operation. It identifies the run ID of the last checkpoint, then
+// reverts every checkpoint with that run ID, writing each file's original
+// (pre-run) content back to disk. The reverted checkpoints are pushed onto
+// the redo stack in reverse order so Redo() can re-apply them one at a time.
+//
+// Returns the reverted checkpoints (in revert order: last-to-first) and nil
+// on success. If no checkpoints exist, returns an error.
+//
+// Files are reverted to their state at the FIRST checkpoint of the run for
+// each unique file path — this is the pre-run baseline.
+func (m *Manager) UndoRun() ([]Checkpoint, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if len(m.checkpoints) == 0 {
+		return nil, fmt.Errorf("no checkpoints to undo")
+	}
+
+	// Identify the run ID of the most recent checkpoint.
+	runID := m.checkpoints[len(m.checkpoints)-1].RunID
+
+	// Collect indices belonging to this run (from the end backward).
+	var runIndices []int
+	for i := len(m.checkpoints) - 1; i >= 0; i-- {
+		if m.checkpoints[i].RunID != runID {
+			break
+		}
+		runIndices = append(runIndices, i)
+	}
+	if len(runIndices) == 0 {
+		return nil, fmt.Errorf("no checkpoints in current run")
+	}
+
+	// For each unique file, we need the ORIGINAL content from the FIRST
+	// checkpoint of the run for that file. Build a map: filePath -> firstOldContent.
+	// runIndices is in reverse order (last first), so the first occurrence
+	// in forward order gives us the earliest checkpoint per file.
+	baselines := make(map[string]string)
+	for i := len(runIndices) - 1; i >= 0; i-- {
+		cp := m.checkpoints[runIndices[i]]
+		if _, exists := baselines[cp.FilePath]; !exists {
+			baselines[cp.FilePath] = cp.OldContent
+		}
+	}
+
+	// Write baseline content for each unique file.
+	var reverted []Checkpoint
+	revertedFiles := make(map[string]bool)
+	for _, idx := range runIndices {
+		cp := m.checkpoints[idx]
+		if revertedFiles[cp.FilePath] {
+			continue // already reverted this file to baseline
+		}
+		baseline := baselines[cp.FilePath]
+		if err := util.AtomicWriteFile(cp.FilePath, []byte(baseline), 0644); err != nil {
+			return reverted, fmt.Errorf("failed to revert %s: %w", cp.FilePath, err)
+		}
+		revertedFiles[cp.FilePath] = true
+		reverted = append(reverted, cp)
+	}
+
+	// Remove all run checkpoints from the list and push onto redo stack.
+	cutoff := runIndices[len(runIndices)-1] // earliest index in this run
+	removed := make([]Checkpoint, len(m.checkpoints[cutoff:]))
+	copy(removed, m.checkpoints[cutoff:])
+	m.checkpoints = m.checkpoints[:cutoff]
+	// Push in reverse so Redo() re-applies in original order.
+	for i := len(removed) - 1; i >= 0; i-- {
+		m.redoStack = append(m.redoStack, removed[i])
+	}
+
+	return reverted, nil
 }
 
 // List returns all checkpoints (most recent last).

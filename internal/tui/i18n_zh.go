@@ -1191,6 +1191,8 @@ func zhCatalog(key string) string {
 		return "管理记忆"
 	case "slash.undo":
 		return "撤销最近一次文件修改"
+	case "slash.undorun":
+		return "撤销最近一轮运行的所有文件修改"
 	case "slash.files":
 		return "查看 agent 修改的文件"
 	case "slash.checkpoints":

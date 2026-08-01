@@ -1189,6 +1189,8 @@ func enCatalog(key string) string {
 		return "Manage memory"
 	case "slash.undo":
 		return "Undo last file edit"
+	case "slash.undorun":
+		return "Revert all file changes from last run"
 	case "slash.files":
 		return "Show files modified by agent"
 	case "slash.checkpoints":
@@ -1525,6 +1527,7 @@ Session & History:
   /clear             Clear conversation history
   /compact           Compress conversation history (manual)
   /undo              Undo the last file edit (checkpoint rollback)
+  /undo-run          Revert ALL file changes from the last agent run
   /redo              Redo previously undone file changes
   /checkpoints       List all file edit checkpoints
   /retry             Retry the last agent run (recover from transient errors)

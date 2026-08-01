@@ -314,6 +314,8 @@ func localizeSlashDescription(lang Language, cmd string) string {
 		return tr(lang, "slash.memory")
 	case "/undo":
 		return tr(lang, "slash.undo")
+	case "/undo-run":
+		return tr(lang, "slash.undorun")
 	case "/files":
 		return tr(lang, "slash.files")
 	case "/checkpoints":

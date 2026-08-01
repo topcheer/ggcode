@@ -1073,6 +1073,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.toolFilter = tool.NewRelevanceFilter()
 	a.resetTransientRetryBudget()
 
+	// Mark a new run boundary in the checkpoint manager so UndoRun() can
+	// batch-revert all file changes from this run in one operation.
+	if a.checkpoints != nil {
+		a.checkpoints.StartRun(runStats.RunID())
+	}
+
 	for i := 0; a.maxIter <= 0 || i < a.maxIter; i++ {
 		runStats.Iterations = i + 1
 		if err := ctx.Err(); err != nil {

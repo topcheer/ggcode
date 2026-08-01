@@ -146,6 +146,56 @@ func (m *Model) handleUndoCommand() tea.Cmd {
 	}
 }
 
+// handleUndoRunCommand reverts ALL file changes from the most recent agent run
+// in one batch operation. Unlike /undo (which reverts a single checkpoint),
+// /undo-run identifies all checkpoints belonging to the current run and
+// reverts every file to its pre-run state. This is the equivalent of Cursor's
+// "Reject All" or Claude Code's "undo all changes" — essential when an agent
+// made bad changes across multiple files.
+func (m *Model) handleUndoRunCommand() tea.Cmd {
+	if m.agent == nil {
+		return func() tea.Msg {
+			return streamMsg(m.t("checkpoint.disabled"))
+		}
+	}
+	return func() tea.Msg {
+		cpMgr := m.agent.CheckpointManager()
+		if cpMgr == nil {
+			return streamMsg(m.t("checkpoint.disabled"))
+		}
+		// Check if there are any checkpoints before attempting undo.
+		if cpMgr.Last() == nil {
+			return streamMsg("No file changes to revert in this run.")
+		}
+		reverted, err := cpMgr.UndoRun()
+		if err != nil {
+			return streamMsg(fmt.Sprintf("Undo-run failed: %v", err))
+		}
+		if len(reverted) == 0 {
+			return streamMsg("No file changes to revert in this run.")
+		}
+		// Invalidate tool caches so the agent doesn't serve stale results.
+		m.agent.InvalidateToolCaches()
+
+		// Build summary of reverted files.
+		seen := make(map[string]bool)
+		var files []string
+		for _, cp := range reverted {
+			if !seen[cp.FilePath] {
+				seen[cp.FilePath] = true
+				files = append(files, displayToolFileTarget(cp.FilePath))
+			}
+		}
+		var b strings.Builder
+		b.WriteString(fmt.Sprintf("Reverted %d file(s) from the last agent run:\n", len(files)))
+		for _, f := range files {
+			b.WriteString(fmt.Sprintf("  - %s\n", f))
+		}
+		b.WriteString("\nUse /redo to re-apply changes one at a time.")
+		return streamMsg(b.String())
+	}
+}
+
 // handleRedoCommand re-applies the most recently undone file edit.
 func (m *Model) handleRedoCommand() tea.Cmd {
 	if m.agent == nil {

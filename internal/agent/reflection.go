@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -55,6 +57,10 @@ type RunStats struct {
 
 	// startTime is used internally to compute Duration.
 	startTime time.Time
+
+	// runID is a unique identifier for this run, used for checkpoint
+	// run-boundary tracking (UndoRun). Generated at creation time.
+	runID string
 }
 
 // newRunStats creates a fresh RunStats with the start time set.
@@ -63,7 +69,18 @@ func newRunStats(userPrompt string) *RunStats {
 		ToolCalls:  make(map[string]int),
 		UserPrompt: truncatePrompt(userPrompt, 200),
 		startTime:  time.Now(),
+		runID:      generateRunID(),
 	}
+}
+
+// RunID returns the unique run identifier.
+func (s *RunStats) RunID() string { return s.runID }
+
+// generateRunID produces a short hex string for run identification.
+func generateRunID() string {
+	b := make([]byte, 8)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
 }
 
 // recordToolCall increments the invocation count for a tool.

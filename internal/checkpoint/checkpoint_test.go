@@ -303,3 +303,165 @@ func TestSaveClearsRedoStack(t *testing.T) {
 		t.Error("expected CanRedo false after new Save (redo stack should be cleared)")
 	}
 }
+
+func TestUndoRunMultipleFiles(t *testing.T) {
+	m := NewManager(50)
+	dir := t.TempDir()
+
+	fp1 := filepath.Join(dir, "a.go")
+	fp2 := filepath.Join(dir, "b.go")
+	os.WriteFile(fp1, []byte("original-a"), 0644)
+	os.WriteFile(fp2, []byte("original-b"), 0644)
+
+	// Simulate a run that edits two files
+	m.StartRun("run-1")
+	m.Save(fp1, "original-a", "modified-a", "edit_file")
+	os.WriteFile(fp1, []byte("modified-a"), 0644)
+	m.Save(fp2, "original-b", "modified-b", "write_file")
+	os.WriteFile(fp2, []byte("modified-b"), 0644)
+
+	// Verify both files are modified
+	data, _ := os.ReadFile(fp1)
+	if string(data) != "modified-a" {
+		t.Fatalf("expected modified-a, got %s", data)
+	}
+
+	// UndoRun should revert both files to pre-run state
+	reverted, err := m.UndoRun()
+	if err != nil {
+		t.Fatalf("UndoRun failed: %v", err)
+	}
+	if len(reverted) != 2 {
+		t.Fatalf("expected 2 reverted checkpoints, got %d", len(reverted))
+	}
+
+	// Both files should be back to original
+	data, _ = os.ReadFile(fp1)
+	if string(data) != "original-a" {
+		t.Errorf("expected original-a, got %s", data)
+	}
+	data, _ = os.ReadFile(fp2)
+	if string(data) != "original-b" {
+		t.Errorf("expected original-b, got %s", data)
+	}
+
+	// Checkpoints should be empty
+	if len(m.List()) != 0 {
+		t.Errorf("expected 0 checkpoints after UndoRun, got %d", len(m.List()))
+	}
+}
+
+func TestUndoRunRespectsRunBoundaries(t *testing.T) {
+	m := NewManager(50)
+	dir := t.TempDir()
+
+	fp := filepath.Join(dir, "test.go")
+	os.WriteFile(fp, []byte("v0"), 0644)
+
+	// Run 1
+	m.StartRun("run-1")
+	m.Save(fp, "v0", "v1", "edit_file")
+	os.WriteFile(fp, []byte("v1"), 0644)
+
+	// Run 2 (same file, further edits)
+	m.StartRun("run-2")
+	m.Save(fp, "v1", "v2", "edit_file")
+	os.WriteFile(fp, []byte("v2"), 0644)
+	m.Save(fp, "v2", "v3", "edit_file")
+	os.WriteFile(fp, []byte("v3"), 0644)
+
+	// UndoRun should only revert run-2 (v3 -> v1), not run-1
+	// Only 1 entry returned because both run-2 checkpoints are for the same file
+	// (deduplicated by file path).
+	reverted, err := m.UndoRun()
+	if err != nil {
+		t.Fatalf("UndoRun failed: %v", err)
+	}
+	if len(reverted) != 1 {
+		t.Fatalf("expected 1 reverted file (deduped), got %d", len(reverted))
+	}
+
+	// File should be at v1 (pre-run-2 state), not v0
+	data, _ := os.ReadFile(fp)
+	if string(data) != "v1" {
+		t.Errorf("expected v1, got %s", data)
+	}
+
+	// Run 1 checkpoints should still be present
+	if len(m.List()) != 1 {
+		t.Errorf("expected 1 checkpoint remaining from run-1, got %d", len(m.List()))
+	}
+}
+
+func TestUndoRunRedoStack(t *testing.T) {
+	m := NewManager(50)
+	dir := t.TempDir()
+
+	fp := filepath.Join(dir, "test.go")
+	os.WriteFile(fp, []byte("original"), 0644)
+
+	m.StartRun("run-1")
+	m.Save(fp, "original", "changed", "edit_file")
+	os.WriteFile(fp, []byte("changed"), 0644)
+
+	// UndoRun pushes checkpoints onto redo stack
+	m.UndoRun()
+
+	if !m.CanRedo() {
+		t.Fatal("expected CanRedo after UndoRun")
+	}
+
+	// Redo should re-apply the change
+	cp, err := m.Redo()
+	if err != nil {
+		t.Fatalf("Redo failed: %v", err)
+	}
+	if cp.NewContent != "changed" {
+		t.Errorf("expected NewContent 'changed', got %s", cp.NewContent)
+	}
+
+	data, _ := os.ReadFile(fp)
+	if string(data) != "changed" {
+		t.Errorf("expected 'changed' after redo, got %s", data)
+	}
+}
+
+func TestUndoRunEmpty(t *testing.T) {
+	m := NewManager(50)
+	_, err := m.UndoRun()
+	if err == nil {
+		t.Fatal("expected error for UndoRun with no checkpoints")
+	}
+}
+
+func TestUndoRunSingleFileMultipleEdits(t *testing.T) {
+	m := NewManager(50)
+	dir := t.TempDir()
+
+	fp := filepath.Join(dir, "test.go")
+	os.WriteFile(fp, []byte("baseline"), 0644)
+
+	m.StartRun("run-1")
+	// Multiple edits to the same file within one run
+	m.Save(fp, "baseline", "edit1", "edit_file")
+	os.WriteFile(fp, []byte("edit1"), 0644)
+	m.Save(fp, "edit1", "edit2", "edit_file")
+	os.WriteFile(fp, []byte("edit2"), 0644)
+	m.Save(fp, "edit2", "edit3", "edit_file")
+	os.WriteFile(fp, []byte("edit3"), 0644)
+
+	reverted, err := m.UndoRun()
+	if err != nil {
+		t.Fatalf("UndoRun failed: %v", err)
+	}
+	// Should only write the file once (to baseline)
+	if len(reverted) != 1 {
+		t.Fatalf("expected 1 reverted file (deduped), got %d", len(reverted))
+	}
+
+	// File should be at baseline
+	data, _ := os.ReadFile(fp)
+	if string(data) != "baseline" {
+		t.Errorf("expected 'baseline', got %s", data)
+	}
+}
