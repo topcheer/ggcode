@@ -1097,6 +1097,20 @@ type cronPromptMsg struct {
 	QueueIfBusy bool
 }
 
+// withDocSyncReminder appends a documentation sync reminder to cron prompts
+// that don't already mention docs. This ensures cron-triggered tasks keep
+// documentation up to date without requiring the prompt author to remember.
+func withDocSyncReminder(prompt string) string {
+	lower := strings.ToLower(prompt)
+	// Skip if prompt already mentions documentation.
+	for _, kw := range []string{"doc", "文档", "readme", "changelog", "release note"} {
+		if strings.Contains(lower, kw) {
+			return prompt
+		}
+	}
+	return prompt + "\n\n[Reminder] If this task involves code changes, update related documentation (docs/guide/, README.md, docs/design/) to keep them in sync."
+}
+
 // Run starts the REPL event loop.
 func (r *REPL) Run() error {
 	traceStart := time.Now()

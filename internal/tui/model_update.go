@@ -469,6 +469,8 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		// If agent is idle, submit the cron prompt immediately.
 		// If busy and queue_if_busy=true, queue for after current run.
 		// If busy and queue_if_busy=false (default), skip this firing.
+		// Append a doc-sync reminder if the prompt doesn't already mention docs.
+		prompt := withDocSyncReminder(msg.Prompt)
 		if !m.loading {
 			sysMsg := m.t("cron.firing")
 			m.suppressNextTunnelSystem = sysMsg
@@ -481,13 +483,13 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 				})
 			}
 			m.emitIMText(sysMsg)
-			return m, m.submitHiddenText(msg.Prompt)
+			return m, m.submitHiddenText(prompt)
 		}
 		if msg.QueueIfBusy {
 			sysMsg := m.t("cron.firing")
 			m.suppressNextTunnelSystem = sysMsg
 			m.chatWriteSystem(nextSystemID(), sysMsg)
-			m.queuePendingSubmissionHidden(msg.Prompt)
+			m.queuePendingSubmissionHidden(prompt)
 		}
 		// queue_if_busy=false and agent busy: skip silently (debug log for observability)
 		debug.Log("cron", "skipped firing (agent busy, queue_if_busy=false): %s", msg.Prompt)
