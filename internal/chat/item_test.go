@@ -241,9 +241,9 @@ func TestBashToolItem(t *testing.T) {
 
 	item.SetResult("ok  github.com/example  1.234s", false)
 	rendered = item.Render(80)
-	// Bash tool body is suppressed — only header visible
-	if strings.Contains(rendered, "1.234s") {
-		t.Fatalf("Bash tool body should be suppressed: %s", rendered)
+	// Bash tool body is now rendered (was suppressed before streaming support)
+	if !strings.Contains(rendered, "1.234s") {
+		t.Fatalf("Bash tool body should be visible: %s", rendered)
 	}
 }
 
