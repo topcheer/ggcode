@@ -100,6 +100,17 @@ During the MCP handshake, ggcode detects and caches the server's advertised capa
 
 This capability-aware design means ggcode only sends feature-specific requests to servers that support them, avoiding protocol errors.
 
+## MCP Sampling (Server-to-Client LLM Requests)
+
+MCP servers can request LLM completions from the client via the `sampling/createMessage` method. This enables servers to perform tasks that require language model reasoning — for example, summarizing search results, generating commit messages, or classifying data.
+
+ggcode handles these requests automatically:
+- When an MCP server sends a `sampling/createMessage` request, ggcode uses the currently configured LLM provider to generate a completion.
+- The server's requested messages, system prompt, and max tokens are passed to the provider. Max tokens are capped at 4096 to prevent runaway generation.
+- The response (model name, stop reason, and generated text) is returned to the server.
+
+No configuration is needed — sampling is enabled automatically when a provider is configured. If no provider is available (e.g., during startup before the agent is created), sampling requests are rejected with an error.
+
 ## Auto-Start
 
 MCP servers start automatically when ggcode launches. If a server fails to start, a warning is shown in the TUI.

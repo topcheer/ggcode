@@ -77,6 +77,10 @@ type MCPPlugin struct {
 	// registry holds a reference to the tool registry for re-registering
 	// tools after auto-reconnect.
 	registry *tool.Registry
+
+	// samplingHandler, if set, is propagated to each new MCP client so
+	// the server can request LLM completions via sampling/createMessage.
+	samplingHandler mcp.SamplingHandler
 }
 
 // NewMCPPlugin creates a plugin from an MCP server configuration.
@@ -89,6 +93,13 @@ func NewMCPPlugin(cfg config.MCPServerConfig) *MCPPlugin {
 
 func (m *MCPPlugin) Name() string { return m.cfg.Name }
 
+// SetSamplingHandler sets the LLM sampling handler on this plugin.
+// The handler is propagated to each new MCP client when it connects.
+// Must be called before Connect.
+func (m *MCPPlugin) SetSamplingHandler(h mcp.SamplingHandler) {
+	m.samplingHandler = h
+}
+
 // Connect initializes the MCP server, discovers tools, and returns an adapter.
 func (m *MCPPlugin) Connect(ctx context.Context) (*mcp.Adapter, error) {
 	m.mu.RLock()
@@ -100,6 +111,9 @@ func (m *MCPPlugin) Connect(ctx context.Context) (*mcp.Adapter, error) {
 	m.mu.RUnlock()
 
 	client := mcp.NewClientFromConfig(m.cfg)
+	if m.samplingHandler != nil {
+		client.SetSamplingHandler(m.samplingHandler)
+	}
 	m.mu.Lock()
 	forceReauth := m.forceReauthPending
 	m.forceReauthPending = false // one-shot: clear immediately
@@ -522,6 +536,17 @@ func (m *MCPManager) SetURLOpener(fn func(string) error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.urlOpener = fn
+}
+
+// SetSamplingHandler propagates the LLM sampling handler to all MCP plugins.
+// Each plugin will pass the handler to its MCP client on connect, enabling
+// servers to request LLM completions via sampling/createMessage.
+func (m *MCPManager) SetSamplingHandler(h mcp.SamplingHandler) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, plugin := range m.plugins {
+		plugin.SetSamplingHandler(h)
+	}
 }
 
 func (m *MCPManager) PendingOAuth() *MCPOAuthRequiredError {

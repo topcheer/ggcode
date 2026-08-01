@@ -62,6 +62,10 @@ type Client struct {
 	// If nil, notifications are silently dropped (legacy behavior).
 	notificationHandler func(method string, params json.RawMessage)
 
+	// samplingHandler processes sampling/createMessage requests from the
+	// server. If nil, sampling requests are rejected with an error.
+	samplingHandler SamplingHandler
+
 	// serverCaps holds the capabilities advertised by the server during
 	// initialize. Used to gate feature-specific requests (e.g., logging).
 	serverCaps ServerCaps
@@ -197,14 +201,18 @@ func (c *Client) NegotiatedVersion() string {
 
 // Initialize sends the initialize request and returns server capabilities.
 func (c *Client) Initialize(ctx context.Context) (*InitializeResult, error) {
+	caps := ClientCaps{
+		Roots: struct {
+			ListChanged bool `json:"listChanged,omitempty"`
+		}{ListChanged: true},
+	}
+	if c.samplingHandler != nil {
+		caps.Sampling = &struct{}{}
+	}
 	params := InitializeParams{
 		ProtocolVersion: latestMCPProtocolVersion,
-		Capabilities: ClientCaps{
-			Roots: struct {
-				ListChanged bool `json:"listChanged,omitempty"`
-			}{ListChanged: true},
-		},
-		ClientInfo: Implementation{Name: "ggcode", Version: "0.1.0"},
+		Capabilities:    caps,
+		ClientInfo:      Implementation{Name: "ggcode", Version: "0.1.0"},
 	}
 	var result InitializeResult
 	if err := c.sendRequest(ctx, "initialize", params, &result); err != nil {
@@ -853,6 +861,8 @@ func (c *Client) handleServerRequest(req *Request) error {
 		return nil
 	}
 	switch req.Method {
+	case "sampling/createMessage":
+		return c.handleSampling(req)
 	case "roots/list":
 		rootURI, err := currentRootURI()
 		if err != nil {
@@ -866,6 +876,37 @@ func (c *Client) handleServerRequest(req *Request) error {
 	default:
 		return c.writeErrorResponse(req.ID, -32601, fmt.Sprintf("method not found: %s", req.Method))
 	}
+}
+
+// handleSampling processes a sampling/createMessage request from the MCP server.
+// Servers use this to ask the client to generate an LLM completion on their behalf.
+func (c *Client) handleSampling(req *Request) error {
+	if c.samplingHandler == nil {
+		return c.writeErrorResponse(req.ID, -32601, "sampling not supported")
+	}
+
+	params, err := ParseSamplingParams(req.Params)
+	if err != nil {
+		return c.writeErrorResponse(req.ID, -32602, fmt.Sprintf("invalid sampling params: %v", err))
+	}
+
+	// Use a bounded timeout to prevent runaway sampling from blocking the
+	// MCP read loop. The handler itself may use a shorter context.
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	result, err := c.samplingHandler(ctx, params)
+	if err != nil {
+		return c.writeErrorResponse(req.ID, -32603, fmt.Sprintf("sampling failed: %v", err))
+	}
+	return c.writeResultResponse(req.ID, result)
+}
+
+// SetSamplingHandler registers a handler for sampling/createMessage requests.
+// When set, the client advertises sampling capability during initialize.
+// Pass nil to disable sampling support.
+func (c *Client) SetSamplingHandler(h SamplingHandler) {
+	c.samplingHandler = h
 }
 
 func (c *Client) writeResultResponse(id *ID, result interface{}) error {
@@ -1037,6 +1078,7 @@ type ClientCaps struct {
 	Roots struct {
 		ListChanged bool `json:"listChanged,omitempty"`
 	} `json:"roots,omitempty"`
+	Sampling *struct{} `json:"sampling,omitempty"`
 }
 
 type Implementation struct {

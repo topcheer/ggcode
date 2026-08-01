@@ -90,7 +90,7 @@ individual A2A auth configuration.
 - **Editor launcher** — `open_editor` opens files in the user's IDE (VS Code, Cursor, JetBrains, Vim, etc.) at a specific line/column, auto-detected from env vars
 - **Agent-accessible undo** — `undo_edit` lets the LLM revert its own file edits via checkpoints, avoiding error-prone fix-forward when a previous change was wrong
 - **PTC (Programmatic Tool Calling)** — the agent writes JavaScript in a sandboxed VM to batch-call read-only tools (read_file, grep, git_log, web_search, etc.) in a single round-trip, dramatically reducing context window consumption for multi-step analysis
-- **MCP integration** — connect external tools and data sources, with dynamic tool refresh, server logging, and full capability detection
+- **MCP integration** — connect external tools and data sources, with dynamic tool refresh, server logging, full capability detection, and MCP sampling (servers can request LLM completions)
 - **gRPC plugins** — extend ggcode with custom tools in Go, Python, Node.js, or any language
 - **Multi-agent** — spawn parallel workers, delegate to teammates, A2A protocol
 - **[LAN Chat](docs/guide/lan-chat.md)** — zero-config P2P real-time messaging between instances on your LAN

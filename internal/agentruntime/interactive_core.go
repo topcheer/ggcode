@@ -52,6 +52,7 @@ func BuildInteractiveRuntimeCore(cfg *config.Config, workingDir string, policy p
 	_ = registry.Register(tool.ListMCPCapabilitiesTool{Runtime: mcpMgr})
 	_ = registry.Register(tool.GetMCPPromptTool{Runtime: mcpMgr})
 	_ = registry.Register(tool.ReadMCPResourceTool{Runtime: mcpMgr})
+	mcpMgr.SetSamplingHandler(mcpSamplingHandler)
 
 	pluginMgr := plugin.NewManager()
 	pluginMgr.LoadAll(cfg.Plugins)
@@ -107,6 +108,9 @@ func BuildInteractiveRuntimeCore(cfg *config.Config, workingDir string, policy p
 func (c *InteractiveRuntimeCore) SetConfigAgent(ag *agent.Agent) {
 	if c.configAccess != nil {
 		c.configAccess.SetAgent(ag)
+	}
+	if ag != nil {
+		SetSamplingProvider(ag.Provider())
 	}
 }
 
