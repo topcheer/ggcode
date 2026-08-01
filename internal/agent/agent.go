@@ -155,6 +155,7 @@ type Agent struct {
 	toolFilter                 *tool.RelevanceFilter                 // dynamic MCP tool pruning based on conversation relevance
 	fulfillmentGate            *fulfillmentGateState                 // pre-completion coverage verification (request-vs-work match)
 	complexityGate             *complexityGateState                  // post-completion code complexity quality gate
+	verifyRegression           *verifyRegressionState                // cross-run error diff: detects correction-induced regressions
 	transientRetryBudget       int                                   // remaining automatic retries for transient tool failures (per run)
 	argSizeGuardFires          int                                   // count of argument size guard injections this run
 	latencyTracker             *LatencyTracker                       // per-tool latency baseline & slow-tool outlier detection
@@ -224,6 +225,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		exportGuard:          newExportGuardState(),
 		fulfillmentGate:      newFulfillmentGateState(),
 		complexityGate:       newComplexityGateState(),
+		verifyRegression:     newVerifyRegressionState(),
 		toolFilter:           tool.NewRelevanceFilter(),
 		latencyTracker:       NewLatencyTracker(),
 		adaptiveSampling:     newAdaptiveSamplingState(),
@@ -1066,6 +1068,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.exportGuard.reset()
 	a.fulfillmentGate.reset()
 	a.complexityGate.reset()
+	a.verifyRegression.reset()
 	a.argSizeGuardFires = 0
 	a.toolFilter = tool.NewRelevanceFilter()
 	a.resetTransientRetryBudget()
