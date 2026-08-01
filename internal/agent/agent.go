@@ -154,6 +154,7 @@ type Agent struct {
 	exportGuard                *exportGuardState                     // breaking change detection for exported Go symbols (regression guard)
 	toolFilter                 *tool.RelevanceFilter                 // dynamic MCP tool pruning based on conversation relevance
 	fulfillmentGate            *fulfillmentGateState                 // pre-completion coverage verification (request-vs-work match)
+	companionGuard             *companionGuardState                  // companion test file coverage check (unedited paired tests)
 	complexityGate             *complexityGateState                  // post-completion code complexity quality gate
 	verifyRegression           *verifyRegressionState                // cross-run error diff: detects correction-induced regressions
 	transientRetryBudget       int                                   // remaining automatic retries for transient tool failures (per run)
@@ -225,6 +226,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		scopeDrift:           newScopeDriftState(),
 		exportGuard:          newExportGuardState(),
 		fulfillmentGate:      newFulfillmentGateState(),
+		companionGuard:       newCompanionGuardState(),
 		complexityGate:       newComplexityGateState(),
 		verifyRegression:     newVerifyRegressionState(),
 		toolFilter:           tool.NewRelevanceFilter(),
@@ -871,6 +873,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.resetPostEditVerify()
 	a.resetRepetitionTracker()
 	a.fulfillmentGate.reset()
+	a.companionGuard.reset()
 	a.complexityGate.reset()
 	a.argSizeGuardFires = 0
 	a.toolSequence.reset()
@@ -1070,6 +1073,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	// Reset the export guard so each run starts with a clean checked set.
 	a.exportGuard.reset()
 	a.fulfillmentGate.reset()
+	a.companionGuard.reset()
 	a.complexityGate.reset()
 	a.verifyRegression.reset()
 	a.argSizeGuardFires = 0
@@ -1555,6 +1559,21 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 						Content: []provider.ContentBlock{{
 							Type: "text",
 							Text: fulfillmentMsg,
+						}},
+					})
+					continue
+				}
+
+				// Companion file guard: before returning, check if the agent
+				// edited source files that have existing test companions but
+				// did not update those tests. Zero-LLM-cost heuristic.
+				if companionMsg := a.companionGuard.checkCompanionFiles(runStats, a.WorkingDir()); companionMsg != "" {
+					debug.Log("agent", "Iteration %d: companion file guard detected unedited test companions", i+1)
+					a.contextManager.Add(provider.Message{
+						Role: "user",
+						Content: []provider.ContentBlock{{
+							Type: "text",
+							Text: companionMsg,
 						}},
 					})
 					continue
