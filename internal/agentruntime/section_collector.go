@@ -34,11 +34,12 @@ type SectionCollector struct {
 	mu      sync.RWMutex
 	working string
 
-	overview  string
-	modified  string
-	commands  string
-	toolchain string
-	symbols   string
+	overview      string
+	modified      string
+	commands      string
+	toolchain     string
+	symbols       string
+	recentCommits string
 
 	stop chan struct{}
 	done chan struct{}
@@ -50,11 +51,12 @@ var globalSectionCollector *SectionCollector
 
 // sectionSnapshot is an immutable point-in-time copy of all cached sections.
 type sectionSnapshot struct {
-	Overview  string
-	Modified  string
-	Commands  string
-	Toolchain string
-	Symbols   string
+	Overview      string
+	Modified      string
+	Commands      string
+	Toolchain     string
+	Symbols       string
+	RecentCommits string
 }
 
 // InitGlobalSectionCollector creates the global collector for workingDir,
@@ -127,11 +129,12 @@ func (sc *SectionCollector) Snapshot() sectionSnapshot {
 	sc.mu.RLock()
 	defer sc.mu.RUnlock()
 	return sectionSnapshot{
-		Overview:  sc.overview,
-		Modified:  sc.modified,
-		Commands:  sc.commands,
-		Toolchain: sc.toolchain,
-		Symbols:   sc.symbols,
+		Overview:      sc.overview,
+		Modified:      sc.modified,
+		Commands:      sc.commands,
+		Toolchain:     sc.toolchain,
+		Symbols:       sc.symbols,
+		RecentCommits: sc.recentCommits,
 	}
 }
 
@@ -146,6 +149,7 @@ func (sc *SectionCollector) refresh() {
 	commands := projectCommandsSection(sc.working)
 	toolchain := toolchainSection(sc.working)
 	symbols := buildGoPackageSymbolsSection(sc.working)
+	recentCommits := computeRecentCommitsSection(sc.working)
 
 	sc.mu.Lock()
 	sc.overview = overview
@@ -153,6 +157,7 @@ func (sc *SectionCollector) refresh() {
 	sc.commands = commands
 	sc.toolchain = toolchain
 	sc.symbols = symbols
+	sc.recentCommits = recentCommits
 	sc.mu.Unlock()
 
 	debug.Log("agentruntime", "section collector refreshed in %s", time.Since(start).Round(time.Millisecond))
