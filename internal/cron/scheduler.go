@@ -49,12 +49,13 @@ type sessionStore struct {
 
 // Scheduler manages cron-like prompt scheduling with optional persistence.
 type Scheduler struct {
-	mu        sync.Mutex
-	jobs      map[string]*Job
-	nextID    int
-	enqueue   func(prompt string, queueIfBusy bool)
-	timers    map[string]*time.Timer
-	storePath string // path to this session's JSON file
+	mu          sync.Mutex
+	jobs        map[string]*Job
+	nextID      int
+	enqueue     func(prompt string, queueIfBusy bool)
+	timers      map[string]*time.Timer
+	generations map[string]uint64 // job ID -> generation counter to detect stale timers
+	storePath   string            // path to this session's JSON file
 }
 
 // NewScheduler creates a scheduler with the given enqueue callback and
@@ -65,10 +66,11 @@ func NewScheduler(enqueue func(prompt string, queueIfBusy bool), storePath strin
 		enqueue = func(string, bool) {}
 	}
 	return &Scheduler{
-		jobs:      make(map[string]*Job),
-		enqueue:   enqueue,
-		timers:    make(map[string]*time.Timer),
-		storePath: storePath,
+		jobs:        make(map[string]*Job),
+		enqueue:     enqueue,
+		timers:      make(map[string]*time.Timer),
+		generations: make(map[string]uint64),
+		storePath:   storePath,
 	}
 }
 
@@ -498,6 +500,11 @@ func (s *Scheduler) scheduleJob(job *Job) {
 // from inside the timer callback to avoid deadlock (Go's sync.Mutex
 // is not reentrant).
 func (s *Scheduler) scheduleJobLocked(job *Job) {
+	// Increment generation so that any previously scheduled timer callback
+	// can detect that it is stale and abort, preventing double-fire races.
+	s.generations[job.ID]++
+	gen := s.generations[job.ID]
+
 	delay := time.Until(job.NextFire)
 	if delay < 0 {
 		delay = 0
@@ -511,6 +518,16 @@ func (s *Scheduler) scheduleJobLocked(job *Job) {
 
 		// Read mutable fields under lock to avoid data race with Update().
 		s.mu.Lock()
+		// If a newer timer was scheduled (Update/Resume/Create), abort this
+		// stale callback to prevent a duplicate fire.
+		if s.generations[job.ID] != gen {
+			s.mu.Unlock()
+			return
+		}
+		if _, exists := s.jobs[job.ID]; !exists {
+			s.mu.Unlock()
+			return
+		}
 		prompt := job.Prompt
 		queueIfBusy := job.QueueIfBusy
 		s.mu.Unlock()
@@ -518,6 +535,13 @@ func (s *Scheduler) scheduleJobLocked(job *Job) {
 		s.enqueue(prompt, queueIfBusy)
 
 		s.mu.Lock()
+		// Re-check generation after enqueue: Update may have run during the
+		// unlocked window, scheduling a newer timer. If so, this stale callback
+		// must NOT reschedule (that would create an orphaned duplicate timer).
+		if s.generations[job.ID] != gen {
+			s.mu.Unlock()
+			return
+		}
 		// Check if job was deleted while we were enqueueing (TOCTOU fix).
 		// Without this check, a deleted recurring job would be re-scheduled
 		// here, creating an infinite loop of phantom firings.
