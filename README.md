@@ -87,6 +87,7 @@ individual A2A auth configuration.
 - **Browser automation** — Go-native CDP for SPA/JS testing without Node.js or Playwright
 - **Screenshot capture** — full screen, window, or region screenshots for visual debugging
 - **Clipboard integration** — read from and write to the system clipboard
+- **Editor launcher** — `open_editor` opens files in the user's IDE (VS Code, Cursor, JetBrains, Vim, etc.) at a specific line/column, auto-detected from env vars
 - **PTC (Programmatic Tool Calling)** — the agent writes JavaScript in a sandboxed VM to batch-call read-only tools (read_file, grep, git_log, web_search, etc.) in a single round-trip, dramatically reducing context window consumption for multi-step analysis
 - **MCP integration** — connect external tools and data sources, with dynamic tool refresh, server logging, and full capability detection
 - **gRPC plugins** — extend ggcode with custom tools in Go, Python, Node.js, or any language
