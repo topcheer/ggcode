@@ -159,6 +159,26 @@ func NewDangerousDetector() *DangerousDetector {
 		{DangerHigh, regexp.MustCompile(`(?i)do\s+shell\s+script\s+["\'].*wget\b.*\|\s*sh`), "AppleScript piping wget to shell"},
 		{DangerHigh, regexp.MustCompile(`(?i)do\s+shell\s+script\s+["\'].*nc\b.*-e`), "AppleScript netcat with -e (reverse shell)"},
 
+		// High: output redirection to sensitive system paths.
+		// AI agents can be tricked via prompt injection into writing malicious
+		// content to SSH keys, shell startup files, cron jobs, or system
+		// binaries. These paths allow persistent backdoors.
+		{DangerHigh, regexp.MustCompile(`(?i)>\s*\S*\.ssh/`), "writing to SSH directory could install unauthorized keys"},
+		{DangerHigh, regexp.MustCompile(`(?i)>\s*/etc/cron`), "writing to cron directory could install persistent scheduled tasks"},
+		{DangerHigh, regexp.MustCompile(`(?i)>\s*/etc/passwd`), "writing to passwd file could add unauthorized users"},
+		{DangerHigh, regexp.MustCompile(`(?i)>\s*/etc/shadow`), "writing to shadow file could modify password hashes"},
+		{DangerHigh, regexp.MustCompile(`(?i)>\s*/etc/sudoers`), "writing to sudoers could grant unauthorized root access"},
+		{DangerHigh, regexp.MustCompile(`(?i)>\s*/usr/local/bin/`), "writing to system binary directory could install trojans"},
+		{DangerHigh, regexp.MustCompile(`(?i)>\s*/usr/bin/`), "writing to system binary directory could install trojans"},
+
+		// Medium: output redirection to shell startup files and system config.
+		// These allow code execution on next login/shell start.
+		{DangerMedium, regexp.MustCompile(`(?i)>\s*~//.bashrc`), "writing to .bashrc could execute malicious code on shell startup"},
+		{DangerMedium, regexp.MustCompile(`(?i)>\s*~//.zshrc`), "writing to .zshrc could execute malicious code on shell startup"},
+		{DangerMedium, regexp.MustCompile(`(?i)>\s*~//.profile`), "writing to .profile could execute malicious code on login"},
+		{DangerMedium, regexp.MustCompile(`(?i)>\s*/etc/hosts`), "writing to hosts file could hijack DNS resolution"},
+		{DangerMedium, regexp.MustCompile(`(?i)>\s*/etc/environment`), "writing to environment config could inject malicious variables"},
+
 		// Medium: AppleScript potentially destructive operations
 		{DangerMedium, regexp.MustCompile(`(?i)do\s+shell\s+script.*rm\s+-rf`), "AppleScript do shell script with rm -rf"},
 		{DangerMedium, regexp.MustCompile(`(?i)do\s+shell\s+script.*rm\s+-rf\s+\*`), "AppleScript do shell script with rm -rf *"},
