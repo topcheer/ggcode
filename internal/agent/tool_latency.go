@@ -81,11 +81,12 @@ const maxLatencySamples = 20
 // RecordAndCheck records a tool execution duration and returns a non-empty
 // advisory string if this call is a statistical outlier relative to the
 // tool's baseline. Returns "" when no warning is warranted.
+//
+// Latency is recorded for ALL tools (not just latencyMonitoredTools) so the
+// adaptive timeout system (adaptive_timeout.go) can compute per-tool timeouts.
+// The outlier warning, however, is only generated for monitored tools.
 func (lt *LatencyTracker) RecordAndCheck(toolName string, dur time.Duration) string {
 	if lt == nil {
-		return ""
-	}
-	if !latencyMonitoredTools[toolName] {
 		return ""
 	}
 
@@ -96,10 +97,13 @@ func (lt *LatencyTracker) RecordAndCheck(toolName string, dur time.Duration) str
 
 	// Compute warning BEFORE adding the current sample so the outlier is
 	// measured against the prior baseline (otherwise an extreme value
-	// inflates the mean and masks itself).
-	warning := lt.checkOutlier(toolName, dur, samples)
+	// inflates the mean and masks itself). Only for monitored tools.
+	var warning string
+	if latencyMonitoredTools[toolName] {
+		warning = lt.checkOutlier(toolName, dur, samples)
+	}
 
-	// Append current sample to the rolling window.
+	// Record latency for ALL tools (used by adaptive timeout computation).
 	samples = append(samples, latencySample{dur: dur, recorded: time.Now()})
 	if len(samples) > maxLatencySamples {
 		samples = samples[len(samples)-maxLatencySamples:]

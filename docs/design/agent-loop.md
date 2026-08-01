@@ -68,6 +68,7 @@ The loop monitors its own trajectory and injects guidance when patterns look pat
 | Schema constraint validation | `tool/schema_validation.go` | Validates enum values, numeric bounds (min/max/exclusive), and string length constraints before execution |
 | Unknown param stripping | `tool/schema_validation.go` | Removes hallucinated parameters not declared in the tool's JSON schema |
 | Transient retry | `transient_retry.go` | Automatic retry of idempotent read-only tools on transient errors (LSP timeout, network blips). Max 2 retries with 200ms/400ms backoff, 8 total per run. |
+| Adaptive timeout | `adaptive_timeout.go` | Per-tool category-based timeout that adapts to observed latency. Replaces flat 5-min default with sensible bounds (30-180s per category) and latency-derived computation. |
 | Export guard | `export_guard.go` | Detects breaking changes to exported Go symbols (removed functions, changed signatures) by comparing against git HEAD. Fires once per file per run. |
 
 ## Failure Learning

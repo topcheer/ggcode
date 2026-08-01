@@ -104,7 +104,11 @@ func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolC
 	return result
 }
 
-// defaultToolTimeout is the maximum time a single tool call can take.
+// defaultToolTimeout is the maximum time a single tool call can take when no
+// adaptive or category-specific timeout applies. This is the hard ceiling —
+// the adaptive system may compute a lower timeout based on tool category and
+// historical latency data (see adaptive_timeout.go).
+//
 // Most tools finish in milliseconds; this catches hung tools (stuck network
 // requests, deadlocked processes). Tools that legitimately need more time
 // (run_command, start_command) implement their own internal timeouts.
@@ -143,12 +147,20 @@ var toolsWithoutTimeout = map[string]bool{
 }
 
 // executeToolWithTimeout wraps executeTool with a deadline. If the tool
-// exceeds defaultToolTimeout, it cancels the context (to signal the tool
+// exceeds the computed timeout, it cancels the context (to signal the tool
 // to abort) and returns a timeout error result.
+//
+// The timeout is computed adaptively (see adaptive_timeout.go):
+//   - Category-based defaults provide sensible bounds per tool type
+//   - Historical latency data tightens the timeout once enough samples exist
+//   - Hard floor (10s) and ceiling (5min) bounds prevent extremes
 func (a *Agent) executeToolWithTimeout(ctx context.Context, tc provider.ToolCallDelta) tool.Result {
 	if toolsWithoutTimeout[tc.Name] {
 		return a.executeTool(ctx, tc)
 	}
+
+	// Compute the adaptive timeout for this tool.
+	timeout := a.latencyTracker.computeAdaptiveTimeout(tc.Name)
 
 	// Create a cancellable sub-context so that on timeout we can signal
 	// the tool to abort (tools that check ctx.Done() will exit promptly).
@@ -172,15 +184,15 @@ func (a *Agent) executeToolWithTimeout(ctx context.Context, tc provider.ToolCall
 		resultCh <- toolResult{a.executeTool(toolCtx, tc)}
 	}()
 
-	timer := time.NewTimer(defaultToolTimeout)
+	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 
 	select {
 	case <-timer.C:
 		cancel() // signal the tool goroutine to abort
-		debug.Log("agent", "tool timeout: %s exceeded %v", tc.Name, defaultToolTimeout)
+		debug.Log("agent", "tool timeout: %s exceeded %v", tc.Name, timeout)
 		return tool.Result{
-			Content: fmt.Sprintf("Tool %q timed out after %v. If this is a long-running operation, consider using start_command instead.", tc.Name, defaultToolTimeout),
+			Content: fmt.Sprintf("Tool %q timed out after %v. If this is a long-running operation, consider using start_command instead.", tc.Name, timeout),
 			IsError: true,
 		}
 	case r := <-resultCh:
