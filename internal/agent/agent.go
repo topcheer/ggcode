@@ -156,6 +156,7 @@ type Agent struct {
 	fulfillmentGate            *fulfillmentGateState                 // pre-completion coverage verification (request-vs-work match)
 	companionGuard             *companionGuardState                  // companion test file coverage check (unedited paired tests)
 	complexityGate             *complexityGateState                  // post-completion code complexity quality gate
+	changeReconcile            *changeReconcileState                 // pre-completion git diff reconciliation (unexpected side-effect detection)
 	verifyRegression           *verifyRegressionState                // cross-run error diff: detects correction-induced regressions
 	transientRetryBudget       int                                   // remaining automatic retries for transient tool failures (per run)
 	argSizeGuardFires          int                                   // count of argument size guard injections this run
@@ -229,6 +230,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		fulfillmentGate:      newFulfillmentGateState(),
 		companionGuard:       newCompanionGuardState(),
 		complexityGate:       newComplexityGateState(),
+		changeReconcile:      newChangeReconcileState(),
 		verifyRegression:     newVerifyRegressionState(),
 		toolFilter:           tool.NewRelevanceFilter(),
 		latencyTracker:       NewLatencyTracker(),
@@ -1632,6 +1634,22 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					Content: []provider.ContentBlock{{
 						Type: "text",
 						Text: complexityMsg,
+					}},
+				})
+				continue
+			}
+
+			// Change reconciliation gate: after all other gates pass, check
+			// whether shell commands caused unexpected source file changes.
+			// This catches side effects from tools like go mod tidy, code
+			// generators, or format-on-save hooks.
+			if reconcileMsg := a.checkChangeReconcile(runStats); reconcileMsg != "" {
+				debug.Log("agent", "Iteration %d: change reconciliation detected unexpected files", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: reconcileMsg,
 					}},
 				})
 				continue
