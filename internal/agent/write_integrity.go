@@ -263,6 +263,15 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 		warnings = append(warnings, exitWarnings...)
 	}
 
+	// 24. Mutex lock-without-unlock detection - flags Lock/RLock/TryLock calls
+	//     without a matching Unlock/RUnlock in the same function. Causes
+	//     permanent deadlocks. The existing resource_leak_check only detects
+	//     resource-acquiring assignments (os.Open), not bare method calls like
+	//     mu.Lock(). Delta-aware.
+	if lockWarnings := checkLockWithoutUnlock(filePath, oldContent, newContent); len(lockWarnings) > 0 {
+		warnings = append(warnings, lockWarnings...)
+	}
+
 	if len(warnings) == 0 {
 		return ""
 	}
