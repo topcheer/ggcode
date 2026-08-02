@@ -374,6 +374,9 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 	case HarnessCheckpointConfirmMsg:
 		return m.handleHarnessCheckpointConfirmMsg(msg)
 
+	case inputBellMsg:
+		return m.handleInputBellMsg(msg)
+
 	case subAgentUpdateMsg:
 		return m.handleSubAgentUpdateMsg(msg)
 

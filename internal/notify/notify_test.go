@@ -99,6 +99,23 @@ func TestEffectiveMinDuration(t *testing.T) {
 	}
 }
 
+func TestEffectiveInputBellDelay(t *testing.T) {
+	tests := []struct {
+		cfg  config.NotificationConfig
+		want int
+	}{
+		{config.NotificationConfig{}, 5},                    // default
+		{config.NotificationConfig{InputBellDelay: 0}, 5},   // zero = default
+		{config.NotificationConfig{InputBellDelay: 10}, 10}, // explicit
+		{config.NotificationConfig{InputBellDelay: -1}, 0},  // negative = disabled
+	}
+	for _, tt := range tests {
+		if got := tt.cfg.EffectiveInputBellDelay(); got != tt.want {
+			t.Errorf("EffectiveInputBellDelay() = %d, want %d", got, tt.want)
+		}
+	}
+}
+
 func TestShouldBell(t *testing.T) {
 	tests := []struct {
 		cfg  config.NotificationConfig

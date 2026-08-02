@@ -1,8 +1,12 @@
 package tui
 
 import (
+	"time"
+
 	tea "charm.land/bubbletea/v2"
 	"github.com/topcheer/ggcode/internal/agentruntime"
+	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/notify"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/safego"
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
@@ -19,6 +23,7 @@ func (m Model) handleApprovalMsg(msg ApprovalMsg) (Model, tea.Cmd) {
 	m.pendingApproval = &msg
 	m.approvalOptions = defaultApprovalOptions()
 	m.approvalCursor = 0
+	m.inputBellFired = false
 	// Push to IM if available so user can approve remotely
 	m.approvalNotifiedIM = false
 	if m.imEmitter != nil {
@@ -33,7 +38,8 @@ func (m Model) handleApprovalMsg(msg ApprovalMsg) (Model, tea.Cmd) {
 			Status:    tunnel.StatusBusy,
 		})
 	}
-	return m, nil
+	// Schedule delayed input bell so users who switched windows get notified
+	return m, m.scheduleInputBell("Approval needed: " + msg.ToolName)
 
 }
 
@@ -46,7 +52,9 @@ func (m Model) handleDiffConfirmMsg(msg DiffConfirmMsg) (Model, tea.Cmd) {
 	m.pendingDiffConfirm = &msg
 	m.diffOptions = diffConfirmOptions()
 	m.diffCursor = 0
-	return m, nil
+	m.inputBellFired = false
+	// Schedule delayed input bell
+	return m, m.scheduleInputBell("Diff confirmation needed")
 
 }
 
@@ -66,6 +74,7 @@ func (m Model) handleAskUserMsg(msg AskUserMsg) (Model, tea.Cmd) {
 	}
 	m.pendingQuestionnaire = newQuestionnaireState(msg.Request, msg.Response, m.currentLanguage())
 	m.syncQuestionnaireInputWidth()
+	m.inputBellFired = false
 	// Push the first question to IM so remote users can answer.
 	if len(msg.Request.Questions) > 0 {
 		q := msg.Request.Questions[0]
@@ -84,7 +93,8 @@ func (m Model) handleAskUserMsg(msg AskUserMsg) (Model, tea.Cmd) {
 			Status:    tunnel.StatusBusy,
 		})
 	}
-	return m, nil
+	// Schedule delayed input bell
+	return m, m.scheduleInputBell("Question: " + msg.Request.Title)
 
 }
 
@@ -97,6 +107,47 @@ func (m Model) handleHarnessCheckpointConfirmMsg(msg HarnessCheckpointConfirmMsg
 	m.pendingHarnessCheckpointConfirm = &msg
 	m.diffOptions = diffConfirmOptions()
 	m.diffCursor = 0
-	return m, nil
+	m.inputBellFired = false
+	return m, m.scheduleInputBell("Harness checkpoint confirmation needed")
 
+}
+
+// scheduleInputBell returns a tea.Cmd that fires an inputBellMsg after the
+// configured delay. If the delay is zero or the feature is disabled, it
+// returns nil (no notification will fire).
+func (m Model) scheduleInputBell(summary string) tea.Cmd {
+	var delaySec int
+	if m.config != nil {
+		delaySec = m.config.Notifications.EffectiveInputBellDelay()
+	} else {
+		delaySec = config.NotificationConfig{}.EffectiveInputBellDelay()
+	}
+	if delaySec <= 0 {
+		return nil
+	}
+	delay := time.Duration(delaySec) * time.Second
+	return tea.Tick(delay, func(time.Time) tea.Msg {
+		return inputBellMsg{summary: summary}
+	})
+}
+
+// handleInputBellMsg fires the delayed notification if the user hasn't
+// responded yet. It's idempotent — if the input was already handled, the
+// pending fields will be nil and nothing fires.
+func (m Model) handleInputBellMsg(msg inputBellMsg) (Model, tea.Cmd) {
+	// Only fire if something is still pending and we haven't already fired
+	if m.inputBellFired {
+		return m, nil
+	}
+	if m.pendingApproval == nil && m.pendingDiffConfirm == nil &&
+		m.pendingQuestionnaire == nil && m.pendingHarnessCheckpointConfirm == nil {
+		return m, nil
+	}
+	m.inputBellFired = true
+	var cfg config.NotificationConfig
+	if m.config != nil {
+		cfg = m.config.Notifications
+	}
+	notify.OnInputNeeded(cfg, msg.summary)
+	return m, nil
 }

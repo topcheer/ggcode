@@ -421,10 +421,11 @@ type P2PConfig struct {
 // "long" (default) only for runs exceeding MinDuration, "errors" only on
 // failures, and "off" disables all notifications.
 type NotificationConfig struct {
-	Mode        string `yaml:"mode,omitempty" json:"mode,omitempty"`                         // all|long|errors|off (default: long)
-	Bell        bool   `yaml:"bell,omitempty" json:"bell,omitempty"`                         // terminal bell (\x07)
-	Desktop     bool   `yaml:"desktop,omitempty" json:"desktop,omitempty"`                   // OS desktop notification
-	MinDuration int    `yaml:"min_duration_sec,omitempty" json:"min_duration_sec,omitempty"` // minimum run seconds before "long" fires (default: 3)
+	Mode           string `yaml:"mode,omitempty" json:"mode,omitempty"`                                 // all|long|errors|off (default: long)
+	Bell           bool   `yaml:"bell,omitempty" json:"bell,omitempty"`                                 // terminal bell (\x07)
+	Desktop        bool   `yaml:"desktop,omitempty" json:"desktop,omitempty"`                           // OS desktop notification
+	MinDuration    int    `yaml:"min_duration_sec,omitempty" json:"min_duration_sec,omitempty"`         // minimum run seconds before "long" fires (default: 3)
+	InputBellDelay int    `yaml:"input_bell_delay_sec,omitempty" json:"input_bell_delay_sec,omitempty"` // seconds to wait before alerting on pending input (default: 5, 0 = off)
 }
 
 // EffectiveMode returns the notification mode, defaulting to "long".
@@ -443,6 +444,19 @@ func (n NotificationConfig) EffectiveMinDuration() int {
 		return n.MinDuration
 	}
 	return 3
+}
+
+// EffectiveInputBellDelay returns the delay (in seconds) before firing an
+// input-needed notification. Returns 5 by default, or 0 if the feature is
+// disabled by the user (set to a negative or zero value explicitly).
+func (n NotificationConfig) EffectiveInputBellDelay() int {
+	if n.InputBellDelay < 0 {
+		return 0 // explicitly disabled
+	}
+	if n.InputBellDelay == 0 {
+		return 5 // default: 5 seconds
+	}
+	return n.InputBellDelay
 }
 
 // ShouldBell reports whether terminal bell is enabled. Defaults to true.

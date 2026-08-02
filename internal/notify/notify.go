@@ -69,6 +69,38 @@ func OnCompletion(cfg config.NotificationConfig, duration time.Duration, failed 
 	}
 }
 
+// OnInputNeeded fires a notification when the agent is blocked waiting for
+// user input (approval, diff confirmation, or an interactive question).
+//
+// Unlike OnCompletion — which fires immediately when a run ends —
+// OnInputNeeded is designed to be called on a delay: the TUI schedules a
+// tick after InputBellDelay seconds. If the user hasn't responded by then,
+// the notification fires, alerting users who have switched to another window
+// during long agent runs.
+//
+// This addresses the "scaling human-agent oversight" problem: developers
+// manage multiple concurrent agent sessions and need reliable alerts when
+// an agent is blocked. Without this, agents silently stall until the user
+// happens to check the terminal.
+func OnInputNeeded(cfg config.NotificationConfig, summary string) {
+	if cfg.EffectiveMode() == "off" {
+		return
+	}
+	if cfg.ShouldBell() {
+		fireBell()
+	}
+	if cfg.Desktop {
+		title := "ggcode: input needed"
+		body := summary
+		if body == "" {
+			body = "The agent is waiting for your response."
+		}
+		safego.Go("notify.desktop", func() {
+			fireDesktop(title, body)
+		})
+	}
+}
+
 // fireBell writes the terminal bell character to stdout. This is the same
 // behavior as the previous hardcoded bell, extracted into a reusable function.
 func fireBell() {

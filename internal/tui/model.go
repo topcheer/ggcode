@@ -68,6 +68,13 @@ type approvalResponseMsg struct {
 	decision permission.Decision
 }
 
+// inputBellMsg is dispatched after a delay when an approval or input request
+// is pending. It fires a terminal bell / desktop notification so users who
+// have switched windows know the agent is blocked.
+type inputBellMsg struct {
+	summary string
+}
+
 type policyModeGetter interface {
 	Mode() permission.PermissionMode
 }
@@ -117,6 +124,7 @@ type Model struct {
 	historyIdx                      int
 	pendingApproval                 *ApprovalMsg
 	approvalNotifiedIM              bool // true when approval was pushed to IM
+	inputBellFired                  bool // true when delayed input bell already fired
 	session                         *session.Session
 	sessionStore                    session.Store
 	imManager                       *im.Manager
