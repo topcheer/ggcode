@@ -246,6 +246,16 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 		warnings = append(warnings, timerWarnings...)
 	}
 
+	// 22. HTTP client missing-timeout detection - AST-based analysis to catch
+	//     HTTP requests without any timeout. http.Get/Post/Head/PostForm use
+	//     DefaultClient (no timeout), and &http.Client{} without a Timeout field
+	//     also hangs indefinitely. This is distinct from resource leaks (missing
+	//     Close()) -- a request can have defer resp.Body.Close() but still hang
+	//     forever without a timeout. Delta-aware.
+	if timeoutWarnings := checkHTTPTimeout(filePath, oldContent, newContent); len(timeoutWarnings) > 0 {
+		warnings = append(warnings, timeoutWarnings...)
+	}
+
 	if len(warnings) == 0 {
 		return ""
 	}
