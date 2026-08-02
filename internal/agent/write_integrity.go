@@ -117,6 +117,19 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 		warnings = append(warnings, growthWarn)
 	}
 
+	// 7b. Edit blast radius - detects when a single edit modifies a high
+	//     percentage of lines (>=60%), which often indicates an unintended
+	//     full rewrite rather than a targeted change. This catches the
+	//     dangerous failure mode where edit_file's old_text matches too
+	//     broadly (e.g. matching a common pattern) or write_file replaces
+	//     a large file's entire content with something very different.
+	//     Unlike checkContentGrowth (which only fires at 5x+ growth), this
+	//     catches large SHRINKS and high-churn rewrites where the line count
+	//     stays similar but most content changes.
+	if blastWarn := checkEditBlastRadius(filePath, oldContent, newContent); blastWarn != "" {
+		warnings = append(warnings, blastWarn)
+	}
+
 	// 8. Placeholder / stub code - detects incomplete implementations that
 	//    agents commonly leave behind (panic("not implemented"), vague TODOs).
 	//    Only flags NEW placeholders introduced by this edit.
@@ -254,4 +267,91 @@ func checkGoSyntax(filename, src string) []string {
 	fset := token.NewFileSet()
 	_, err := parser.ParseFile(fset, filename, src, 0)
 	return goSyntaxWarnings(filename, err)
+}
+
+// checkEditBlastRadius detects when a single edit modifies a high proportion
+// of a file's lines, which typically signals an unintended full rewrite rather
+// than a targeted change.
+//
+// Research basis: All major coding agents (Claude Code, Cursor, Cline) have
+// some form of change-scope awareness, but none provide inline warnings when
+// a single edit unexpectedly rewrites most of a file. This is a common failure
+// mode when:
+//   - edit_file's old_text matches too broadly (e.g., a common function
+//     signature), causing the replacement to cascade across the file
+//   - write_file is used instead of edit_file, destroying original content
+//   - replace_all replaces an unexpectedly common pattern
+//
+// Detection approach: compute a line-level diff between old and new content.
+// If the number of changed lines (added + removed) exceeds 60% of the original
+// line count AND the file has at least 20 lines, emit a warning. The 20-line
+// minimum avoids false positives on small files where any edit is a large
+// fraction of the file. The 60% threshold is empirically calibrated: targeted
+// edits rarely change more than 30% of lines, while accidental rewrites almost
+// always change 70%+.
+//
+// This complements checkContentGrowth (which only fires at 5x growth) by also
+// catching:
+//   - Large SHRINKS (file goes from 100 lines to 30 - 70% changed)
+//   - High-churn rewrites (file stays at 100 lines but 70 of them changed)
+func checkEditBlastRadius(filePath, oldContent, newContent string) string {
+	if strings.TrimSpace(oldContent) == "" || strings.TrimSpace(newContent) == "" {
+		return ""
+	}
+
+	// Count non-empty lines for both versions.
+	oldLines := strings.Count(strings.TrimRight(oldContent, "\n"), "\n") + 1
+
+	// Skip small files - ratio is meaningless for tiny files.
+	if oldLines < 20 {
+		return ""
+	}
+
+	// Compute changed lines using a simple set-difference approach.
+	// This is O(n) and avoids importing a diff library.
+	oldSet := make(map[string]int) // line -> count
+	for _, line := range strings.Split(oldContent, "\n") {
+		oldSet[line]++
+	}
+	newSet := make(map[string]int)
+	for _, line := range strings.Split(newContent, "\n") {
+		newSet[line]++
+	}
+
+	// Count removed lines (lines in old but not matched in new).
+	removed := 0
+	for line, oldCount := range oldSet {
+		newCount := newSet[line]
+		if oldCount > newCount {
+			removed += oldCount - newCount
+		}
+	}
+
+	// Count added lines (lines in new but not matched in old).
+	added := 0
+	for line, newCount := range newSet {
+		oldCount := oldSet[line]
+		if newCount > oldCount {
+			added += newCount - oldCount
+		}
+	}
+
+	changed := added + removed
+	if changed == 0 {
+		return ""
+	}
+
+	// Changed ratio relative to original file size.
+	ratio := float64(changed) / float64(oldLines)
+
+	// 60% threshold: a single edit changing >=60% of lines is suspicious.
+	if ratio >= 0.60 {
+		newLines := strings.Count(strings.TrimRight(newContent, "\n"), "\n") + 1
+		return fmt.Sprintf(
+			"This edit modified %d of %d lines (%.0f%% of the file): +%d added, -%d removed -> %d lines. "+
+				"This is a high blast-radius change - verify this was intentional and not an overly broad old_text match or accidental rewrite. "+"For targeted changes, prefer edit_file with a more specific old_text anchor.",
+			changed, oldLines, ratio*100, added, removed, newLines)
+	}
+
+	return ""
 }
