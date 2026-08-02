@@ -88,6 +88,94 @@ func (r *toolOrderTestRunner) RunStream(ctx context.Context, prompt string, onEv
 	return nil
 }
 
+func TestFormatProgressSummary(t *testing.T) {
+	tests := []struct {
+		name     string
+		snap     Snapshot
+		contains []string
+	}{
+		{
+			name:     "empty snapshot",
+			snap:     Snapshot{Status: StatusRunning},
+			contains: []string{"[running]"},
+		},
+		{
+			name: "with tool info",
+			snap: Snapshot{
+				Status:        StatusRunning,
+				ToolCallCount: 5,
+				CurrentTool:   "read_file",
+				CurrentPhase:  "tool",
+			},
+			contains: []string{"[running]", "5 tools", "read_file", "tool"},
+		},
+		{
+			name: "with progress summary",
+			snap: Snapshot{
+				Status:          StatusRunning,
+				ToolCallCount:   3,
+				ProgressSummary: "Searching for patterns...",
+			},
+			contains: []string{"[running]", "3 tools", "Searching for patterns..."},
+		},
+		{
+			name: "truncates long progress summary",
+			snap: Snapshot{
+				Status:          StatusRunning,
+				ProgressSummary: strings.Repeat("x", 100),
+			},
+			contains: []string{"..."},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := formatProgressSummary(tt.snap)
+			for _, s := range tt.contains {
+				if !strings.Contains(got, s) {
+					t.Errorf("formatProgressSummary() = %q, expected to contain %q", got, s)
+				}
+			}
+		})
+	}
+}
+
+func TestWaitForSnapshotWithProgress_CallsProgressFn(t *testing.T) {
+	mgr := NewManager(config.SubAgentConfig{MaxConcurrent: 1, Timeout: 2 * time.Second})
+	id := mgr.Spawn("worker", "task", "display task", nil, context.Background())
+
+	// Spawn starts in StatusRunning. WaitForSnapshotWithProgress will poll
+	// and call progressFn before timing out.
+	var callCount int
+	var lastSummary string
+	progressFn := func(summary string) {
+		callCount++
+		lastSummary = summary
+	}
+
+	// Use a short wait so the test completes quickly.
+	_, err := WaitForSnapshotWithProgress(context.Background(), mgr, id, 300*time.Millisecond, progressFn)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if callCount == 0 {
+		t.Error("expected progressFn to be called at least once")
+	}
+	if !strings.Contains(lastSummary, "[") {
+		t.Errorf("expected summary to contain status marker, got %q", lastSummary)
+	}
+}
+
+func TestWaitForSnapshotWithProgress_NilFn(t *testing.T) {
+	mgr := NewManager(config.SubAgentConfig{MaxConcurrent: 1, Timeout: 2 * time.Second})
+	id := mgr.Spawn("worker", "task", "task", nil, context.Background())
+
+	// Should not panic with nil progressFn.
+	_, err := WaitForSnapshotWithProgress(context.Background(), mgr, id, 200*time.Millisecond, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestRun_MatchesToolResultsByID(t *testing.T) {
 	mgr := NewManager(config.SubAgentConfig{MaxConcurrent: 1, Timeout: time.Second})
 	id := mgr.Spawn("worker", "task", "task", nil, context.Background())

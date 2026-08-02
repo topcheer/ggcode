@@ -355,7 +355,19 @@ func Wait(ctx context.Context, mgr *Manager, id string) (string, error) {
 	}
 }
 
+// SnapshotProgressFunc is called with each progress snapshot during WaitForSnapshotWithProgress.
+// It receives a human-readable progress summary suitable for live TUI display.
+type SnapshotProgressFunc func(summary string)
+
+// WaitForSnapshot waits for a sub-agent to complete or timeout, returning a snapshot.
 func WaitForSnapshot(ctx context.Context, mgr *Manager, id string, wait time.Duration) (Snapshot, error) {
+	return WaitForSnapshotWithProgress(ctx, mgr, id, wait, nil)
+}
+
+// WaitForSnapshotWithProgress is like WaitForSnapshot but also calls progressFn with
+// a human-readable summary on each poll tick (throttled to ~1s). This enables
+// live streaming of sub-agent progress to the TUI while waiting.
+func WaitForSnapshotWithProgress(ctx context.Context, mgr *Manager, id string, wait time.Duration, progressFn SnapshotProgressFunc) (Snapshot, error) {
 	sa, ok := mgr.Get(id)
 	if !ok {
 		return Snapshot{}, fmt.Errorf("sub-agent %s not found", id)
@@ -370,11 +382,25 @@ func WaitForSnapshot(ctx context.Context, mgr *Manager, id string, wait time.Dur
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 
+	var lastSummary string
+	var lastEmit time.Time
+
 	for {
 		snap := sa.snapshot()
 		switch snap.Status {
 		case StatusCompleted, StatusFailed, StatusCancelled:
 			return snap, nil
+		}
+
+		// Push progress to TUI (throttled to ~1s or on summary change).
+		if progressFn != nil {
+			summary := formatProgressSummary(snap)
+			now := time.Now()
+			if summary != lastSummary || now.Sub(lastEmit) >= 1*time.Second {
+				progressFn(summary)
+				lastSummary = summary
+				lastEmit = now
+			}
 		}
 
 		select {
@@ -386,6 +412,29 @@ func WaitForSnapshot(ctx context.Context, mgr *Manager, id string, wait time.Dur
 			return Snapshot{}, ctx.Err()
 		}
 	}
+}
+
+// formatProgressSummary produces a concise one-line progress summary for TUI streaming.
+func formatProgressSummary(snap Snapshot) string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("[%s] ", snap.Status))
+	if snap.ToolCallCount > 0 {
+		sb.WriteString(fmt.Sprintf("%d tools", snap.ToolCallCount))
+	}
+	if snap.CurrentTool != "" {
+		sb.WriteString(fmt.Sprintf(" · %s", snap.CurrentTool))
+	}
+	if snap.CurrentPhase != "" {
+		sb.WriteString(fmt.Sprintf(" · %s", snap.CurrentPhase))
+	}
+	if summary := strings.TrimSpace(snap.ProgressSummary); summary != "" {
+		trunced := summary
+		if len(trunced) > 80 {
+			trunced = trunced[:77] + "..."
+		}
+		sb.WriteString(fmt.Sprintf("\n  %s", trunced))
+	}
+	return sb.String()
 }
 
 func subagentToolProgressSummary(toolName, result string) string {

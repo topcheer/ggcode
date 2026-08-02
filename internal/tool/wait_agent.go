@@ -64,7 +64,16 @@ func (t WaitAgentTool) Execute(ctx context.Context, input json.RawMessage) (Resu
 	if args.WaitSeconds > 0 {
 		wait = time.Duration(args.WaitSeconds) * time.Second
 	}
-	snap, err := subagent.WaitForSnapshot(ctx, t.Manager, args.AgentID, wait)
+
+	// Extract progress callback from context (if available) for live streaming.
+	var progressFn subagent.SnapshotProgressFunc
+	if tpf, ok := ctx.Value(ToolProgressKey{}).(ToolProgressFunc); ok {
+		progressFn = func(summary string) {
+			tpf("", "wait_agent", summary)
+		}
+	}
+
+	snap, err := subagent.WaitForSnapshotWithProgress(ctx, t.Manager, args.AgentID, wait, progressFn)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("wait failed: %v", err)}, nil
 	}
