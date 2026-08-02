@@ -233,6 +233,12 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 		warnings = append(warnings, deferLoopWarnings...)
 	}
 
+	// 20. Unchecked type assertion detection - flags x.(T) without comma-ok
+	//     guard, which causes runtime panics if the assertion fails. Delta-aware.
+	if assertWarnings := checkUncheckedTypeAssert(filePath, oldContent, newContent); len(assertWarnings) > 0 {
+		warnings = append(warnings, assertWarnings...)
+	}
+
 	if len(warnings) == 0 {
 		return ""
 	}
