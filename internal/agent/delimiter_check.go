@@ -309,6 +309,29 @@ func scanDelimiters(content string, style commentStyle) string {
 		}
 	}
 
+	// Check for unclosed string literals, block comments, or triple-quoted
+	// strings. An agent edit that leaves a string or comment unterminated
+	// causes a syntax error in every language — this is a very common failure
+	// mode for partial edits. The scanner state machine tracks these states
+	// while scanning (to skip brackets inside them), but previously did not
+	// report them if the file ended while still inside one.
+	if state != dsCode {
+		switch state {
+		case dsStringSingle:
+			return fmt.Sprintf("line %d: unterminated single-quoted string - missing closing '", unclosedStringLine(content, i))
+		case dsStringDouble:
+			return fmt.Sprintf("line %d: unterminated double-quoted string - missing closing double-quote", unclosedStringLine(content, i))
+		case dsStringBack:
+			return fmt.Sprintf("line %d: unterminated template literal - missing closing backtick", unclosedStringLine(content, i))
+		case dsBlockComment:
+			return fmt.Sprintf("line %d: unterminated block comment - missing closing */", unclosedStringLine(content, i))
+		case dsTripleDouble:
+			return fmt.Sprintf("line %d: unterminated triple-quoted string - missing closing triple double-quote", unclosedStringLine(content, i))
+		case dsTripleSingle:
+			return fmt.Sprintf("line %d: unterminated triple-quoted string - missing closing '''", unclosedStringLine(content, i))
+		}
+	}
+
 	// Check for unclosed opening delimiters.
 	if len(stack) > 0 {
 		unclosed := stack[0] // outermost unclosed
@@ -316,6 +339,24 @@ func scanDelimiters(content string, style commentStyle) string {
 	}
 
 	return ""
+}
+
+// unclosedStringLine returns the line number where the unclosed construct
+// started. Since the scanner already advanced past the opening delimiter, we
+// approximate by using the current line count (which is where the scanner
+// stopped). For multi-line strings/comments, the opening was earlier, but
+// reporting the current line still points the agent to the right area.
+func unclosedStringLine(content string, pos int) int {
+	if pos > len(content) {
+		pos = len(content)
+	}
+	line := 1
+	for i := 0; i < pos; i++ {
+		if content[i] == '\n' {
+			line++
+		}
+	}
+	return line
 }
 
 // isMatchingBracket returns true if open and close form a matching pair.

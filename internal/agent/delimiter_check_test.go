@@ -327,3 +327,82 @@ public class Example {
 		t.Errorf("expected no warning for balanced Java, got: %s", result)
 	}
 }
+
+func TestCheckDelimiterBalance_UnterminatedDoubleString(t *testing.T) {
+	content := `const msg = "hello world;`
+	result := checkDelimiterBalance("test.js", content)
+	if result == "" {
+		t.Fatal("expected warning for unterminated double-quoted string")
+	}
+	if !strings.Contains(result, "unterminated") {
+		t.Errorf("warning should mention 'unterminated', got: %s", result)
+	}
+}
+
+func TestCheckDelimiterBalance_UnterminatedSingleString(t *testing.T) {
+	content := `const ch = 'a;`
+	result := checkDelimiterBalance("test.ts", content)
+	if result == "" {
+		t.Fatal("expected warning for unterminated single-quoted string")
+	}
+	if !strings.Contains(result, "unterminated") {
+		t.Errorf("warning should mention 'unterminated', got: %s", result)
+	}
+}
+
+func TestCheckDelimiterBalance_UnterminatedTemplateLiteral(t *testing.T) {
+	content := "const msg = `hello ${name"
+	result := checkDelimiterBalance("test.js", content)
+	if result == "" {
+		t.Fatal("expected warning for unterminated template literal")
+	}
+	if !strings.Contains(result, "unterminated") {
+		t.Errorf("warning should mention 'unterminated', got: %s", result)
+	}
+}
+
+func TestCheckDelimiterBalance_UnterminatedBlockComment(t *testing.T) {
+	content := `/* this comment never ends
+const x = 1;`
+	result := checkDelimiterBalance("test.ts", content)
+	if result == "" {
+		t.Fatal("expected warning for unterminated block comment")
+	}
+	if !strings.Contains(result, "unterminated") {
+		t.Errorf("warning should mention 'unterminated', got: %s", result)
+	}
+}
+
+func TestCheckDelimiterBalance_UnterminatedPythonTripleString(t *testing.T) {
+	content := `x = """this string
+never
+closes`
+	result := checkDelimiterBalance("test.py", content)
+	if result == "" {
+		t.Fatal("expected warning for unterminated Python triple-quoted string")
+	}
+	if !strings.Contains(result, "unterminated") {
+		t.Errorf("warning should mention 'unterminated', got: %s", result)
+	}
+}
+
+func TestCheckDelimiterBalance_TerminatedStringsNoFalsePositive(t *testing.T) {
+	content := `
+const a = "properly closed";
+const b = 'also fine';
+const c = ` + "`template`" + `;
+const d = "nested \"quote\"";
+`
+	result := checkDelimiterBalance("test.js", content)
+	if result != "" {
+		t.Errorf("expected no warning for properly terminated strings, got: %s", result)
+	}
+}
+
+func TestUnclosedStringLine(t *testing.T) {
+	content := "line1\nline2\nline3"
+	line := unclosedStringLine(content, len(content))
+	if line != 3 {
+		t.Errorf("expected line 3, got %d", line)
+	}
+}
