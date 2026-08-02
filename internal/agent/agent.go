@@ -167,6 +167,7 @@ type Agent struct {
 	taskAnchor                 *taskAnchorState                      // periodic task re-anchoring for context collapse prevention
 	adaptiveSampling           *adaptiveSamplingState                // per-turn temperature adaptation (phase-aware sampling control)
 	effortAdapter              *adaptiveEffortState                  // per-turn reasoning effort adaptation (Opus 5 effort toggle pattern)
+	branchGuard                *branchGuardState                     // protected branch edit warning (main/master/develop awareness)
 	ruleStore                  *RuleStore                            // cached rule store for hot-path rule injection (avoids per-tool disk I/O)
 	lastRunStats               *RunStats                             // stats from the most recent run (for post-run summary display)
 	systemPromptInjector       func() string                         // returns extra system prompt text to inject (e.g. lanchat peer warnings)
@@ -230,6 +231,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		scopeDrift:           newScopeDriftState(),
 		exportGuard:          newExportGuardState(),
 		artifactGuard:        newGeneratedArtifactState(),
+		branchGuard:          newBranchGuardState(),
 		fulfillmentGate:      newFulfillmentGateState(),
 		companionGuard:       newCompanionGuardState(),
 		complexityGate:       newComplexityGateState(),
@@ -1081,6 +1083,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	// Reset the export guard so each run starts with a clean checked set.
 	a.exportGuard.reset()
 	a.artifactGuard.reset()
+	a.branchGuard.reset()
 	a.fulfillmentGate.reset()
 	a.companionGuard.reset()
 	a.complexityGate.reset()
@@ -1896,6 +1899,15 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					// generated code, vendored files, or files with DO NOT EDIT
 					// headers. Suggests the correct regeneration command.
 					if hint := a.artifactGuard.checkGeneratedArtifact(p); hint != "" {
+						if result.Content != "" {
+							result.Content = result.Content + "\n\n" + hint
+						} else {
+							result.Content = hint
+						}
+					}
+					// Branch guard: warn once per run when editing on a protected
+					// branch (main, master, develop, release/*).
+					if hint := a.checkBranchGuard(); hint != "" {
 						if result.Content != "" {
 							result.Content = result.Content + "\n\n" + hint
 						} else {
