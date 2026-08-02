@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/debug"
 )
 
 // DefaultMode is the default permission mode if not specified.
@@ -25,6 +26,7 @@ type ConfigPolicy struct {
 	detector        *DangerousDetector
 	mode            PermissionMode
 	cmdRules        *CommandRuleSet
+	networkDetector bool // if true, network egress commands trigger Ask in auto/bypass
 	mu              sync.RWMutex
 }
 
@@ -52,6 +54,7 @@ func NewConfigPolicyWithModeAndReadOnlyDirs(rules map[string]Decision, allowedDi
 		detector:        NewDangerousDetector(),
 		mode:            mode,
 		cmdRules:        NewCommandRuleSet(),
+		networkDetector: true,
 	}
 }
 
@@ -102,10 +105,20 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 	switch p.mode {
 	case BypassMode, AutopilotMode:
 		// Bypass mode: allow everything except extremely dangerous operations
+		// and network exfiltration (data egress always requires human gating).
 		if isCommandTool(toolName) {
 			cmd, _ := extractCommand(input)
-			if cmd != "" && p.detector.IsExtremelyDangerous(cmd) {
-				return Ask, nil
+			if cmd != "" {
+				if p.detector.IsExtremelyDangerous(cmd) {
+					return Ask, nil
+				}
+				// Network exfiltration (file contents sent externally) always
+				// requires confirmation, even in bypass/autopilot. General
+				// network access is allowed in bypass mode.
+				if p.networkDetector && IsNetworkExfiltrate(cmd) {
+					debug.Log("permission", "network exfiltration blocked in bypass mode")
+					return Ask, nil
+				}
 			}
 		}
 		// Check sandbox for file tools (still protect workspace boundary).
@@ -147,11 +160,22 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 		}
 		return Deny, nil
 	case AutoMode:
-		// Auto mode: allow safe ops, deny dangerous ones, no prompts
+		// Auto mode: allow safe ops, deny dangerous ones, no prompts.
+		// Network egress commands are downgraded to Ask — they require human
+		// confirmation even in auto mode because they can exfiltrate data
+		// to external endpoints (prompt injection defense).
 		if isCommandTool(toolName) {
 			cmd, _ := extractCommand(input)
-			if cmd != "" && p.detector.IsDangerous(cmd) {
-				return Deny, nil
+			if cmd != "" {
+				if p.detector.IsDangerous(cmd) {
+					return Deny, nil
+				}
+				if p.networkDetector {
+					if nc := CheckNetwork(cmd); nc.Risk != NetworkNone {
+						debug.Log("permission", "network egress in auto mode: %s (risk=%s)", nc.Reason, nc.Risk)
+						return Ask, nil
+					}
+				}
 			}
 		}
 		// Check sandbox for file tools
