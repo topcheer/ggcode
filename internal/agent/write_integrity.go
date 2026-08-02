@@ -153,6 +153,14 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 		warnings = append(warnings, configWarn)
 	}
 
+	// 12. Problematic Unicode character detection — catches smart quotes,
+	//     non-breaking spaces, zero-width characters, and other invisible
+	//     Unicode that LLMs frequently introduce. Delta-based detection
+	//     only flags characters introduced by this edit.
+	if unicodeWarn := checkUnicodeChars(filePath, oldContent, newContent); unicodeWarn != "" {
+		warnings = append(warnings, unicodeWarn)
+	}
+
 	if len(warnings) == 0 {
 		return ""
 	}
