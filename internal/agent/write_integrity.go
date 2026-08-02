@@ -168,6 +168,13 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 		warnings = append(warnings, unicodeWarn)
 	}
 
+	// 13. Context propagation leak detection - flags context.TODO() or
+	//     context.Background() used in functions that receive a ctx parameter,
+	//     which breaks cancellation/deadline/trace propagation. Delta-aware.
+	if ctxLeakWarn := checkContextLeak(filePath, oldContent, newContent); ctxLeakWarn != "" {
+		warnings = append(warnings, ctxLeakWarn)
+	}
+
 	if len(warnings) == 0 {
 		return ""
 	}
