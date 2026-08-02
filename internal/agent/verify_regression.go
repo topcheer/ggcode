@@ -84,6 +84,13 @@ func (v *verifyRegressionState) reset() {
 	v.hasBaseline = false
 }
 
+// errorTransition summarizes the per-round error diff for downstream consumers.
+type errorTransition struct {
+	newErrors        []string
+	persistentErrors []string
+	resolvedCount    int
+}
+
 // classifyErrors takes the current verification errors and returns an annotated
 // summary that categorizes each error relative to the previous run.
 //
@@ -91,15 +98,25 @@ func (v *verifyRegressionState) reset() {
 // message injected into the agent's context. When no baseline exists (first run),
 // it returns empty string and simply records the baseline.
 func (v *verifyRegressionState) classifyErrors(errors []string) string {
+	_, summary := v.classifyErrorsWithTransition(errors)
+	return summary
+}
+
+// classifyErrorsWithTransition is the same as classifyErrors but also returns
+// the structured per-round transition data (new/persistent/resolved counts).
+// This enables the self-correction stability gate to compute EIR/ECR without
+// re-parsing the summary text.
+func (v *verifyRegressionState) classifyErrorsWithTransition(errors []string) (errorTransition, string) {
+	var tr errorTransition
 	if v == nil {
-		return ""
+		return tr, ""
 	}
 	if len(errors) == 0 {
 		// Verification passed — reset to "no baseline" so the next failure
 		// starts fresh rather than comparing against a stale empty set.
 		v.prevErrors = make(map[string]bool)
 		v.hasBaseline = false
-		return ""
+		return tr, ""
 	}
 
 	// Fingerprint each current error individually.
@@ -120,7 +137,7 @@ func (v *verifyRegressionState) classifyErrors(errors []string) string {
 		v.prevErrors = currentSet
 		v.hasBaseline = true
 		debug.Log("verify-regression", "baseline established: %d errors", len(currentSet))
-		return ""
+		return tr, ""
 	}
 
 	// Categorize each error.
@@ -152,7 +169,12 @@ func (v *verifyRegressionState) classifyErrors(errors []string) string {
 			len(newErrors), len(persistentErrors), resolvedCount)
 	}
 
-	return summary
+	tr = errorTransition{
+		newErrors:        newErrors,
+		persistentErrors: persistentErrors,
+		resolvedCount:    resolvedCount,
+	}
+	return tr, summary
 }
 
 // buildRegressionSummary constructs the human-readable annotation injected into

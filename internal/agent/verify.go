@@ -113,7 +113,19 @@ func (a *Agent) asyncVerify(ctx context.Context, runStats *RunStats) {
 	}
 	errorSummary += "\nFix these issues and ensure the build passes."
 	if a.verifyRegression != nil {
-		errorSummary += a.verifyRegression.classifyErrors(result.Errors)
+		transition, regressionSummary := a.verifyRegression.classifyErrorsWithTransition(result.Errors)
+		errorSummary += regressionSummary
+
+		// Feed the per-round transition into the self-correction stability gate.
+		// This detects when the correction loop is net-negative (introducing
+		// more errors than it fixes) and injects a step-back warning.
+		if gateGuidance := a.selfCorrectionGateRecordRound(
+			len(transition.newErrors),
+			len(transition.persistentErrors),
+			transition.resolvedCount,
+		); gateGuidance != "" {
+			errorSummary += "\n\n" + gateGuidance
+		}
 	}
 	a.contextManager.Add(provider.Message{
 		Role: "user",
@@ -495,7 +507,19 @@ func (a *Agent) syncVerifyAndGate(ctx context.Context, runStats *RunStats, retry
 	}
 	errorSummary += "\nFix these issues and ensure the build passes."
 	if a.verifyRegression != nil {
-		errorSummary += a.verifyRegression.classifyErrors(result.Errors)
+		transition, regressionSummary := a.verifyRegression.classifyErrorsWithTransition(result.Errors)
+		errorSummary += regressionSummary
+
+		// Feed the per-round transition into the self-correction stability gate.
+		// This detects when the correction loop is net-negative (introducing
+		// more errors than it fixes) and injects a step-back warning.
+		if gateGuidance := a.selfCorrectionGateRecordRound(
+			len(transition.newErrors),
+			len(transition.persistentErrors),
+			transition.resolvedCount,
+		); gateGuidance != "" {
+			errorSummary += "\n\n" + gateGuidance
+		}
 	}
 	a.contextManager.Add(provider.Message{
 		Role: "user",

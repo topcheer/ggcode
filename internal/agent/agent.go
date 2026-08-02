@@ -159,6 +159,7 @@ type Agent struct {
 	complexityGate             *complexityGateState                  // post-completion code complexity quality gate
 	changeReconcile            *changeReconcileState                 // pre-completion git diff reconciliation (unexpected side-effect detection)
 	verifyRegression           *verifyRegressionState                // cross-run error diff: detects correction-induced regressions
+	selfCorrectionGate         *selfCorrectionGateState              // EIR/ECR stability gate: detects net-negative self-correction loops
 	transientRetryBudget       int                                   // remaining automatic retries for transient tool failures (per run)
 	argSizeGuardFires          int                                   // count of argument size guard injections this run
 	latencyTracker             *LatencyTracker                       // per-tool latency baseline & slow-tool outlier detection
@@ -237,6 +238,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		complexityGate:       newComplexityGateState(),
 		changeReconcile:      newChangeReconcileState(),
 		verifyRegression:     newVerifyRegressionState(),
+		selfCorrectionGate:   newSelfCorrectionGateState(),
 		toolFilter:           tool.NewRelevanceFilter(),
 		latencyTracker:       NewLatencyTracker(),
 		toolSequence:         newToolSequenceValidator(),
@@ -1088,6 +1090,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.companionGuard.reset()
 	a.complexityGate.reset()
 	a.verifyRegression.reset()
+	a.resetSelfCorrectionGate()
 	a.argSizeGuardFires = 0
 	a.toolSequence.reset()
 	a.taskAnchor.reset(userPromptForStats, time.Now())
