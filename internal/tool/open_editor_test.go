@@ -209,8 +209,16 @@ func TestOpenEditor_LaunchAndVerify(t *testing.T) {
 		t.Fatalf("startDetached failed: %v", err)
 	}
 
-	// Wait for the marker file to appear (up to 5s for slow CI)
-	for i := 0; i < 500; i++ {
+	// Wait for the detached process to complete (it exits immediately after
+	// writing the marker). This is more reliable than polling under CI load
+	// where the detached process may be starved of CPU.
+	// Ignore the error — the process may have already exited (ESRCH) when
+	// running in a new session.
+	_ = cmd.Wait()
+
+	// Fall back to polling if Wait() didn't catch the process (can happen
+	// with Setsid on some platforms).
+	for i := 0; i < 100; i++ {
 		if _, err := os.Stat(markerPath); err == nil {
 			break
 		}
