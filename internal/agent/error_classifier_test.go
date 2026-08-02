@@ -189,6 +189,30 @@ func TestErrorClassifier_Reset(t *testing.T) {
 	}
 }
 
+func TestClassifyErrorContent_GitLockContention(t *testing.T) {
+	tests := []struct {
+		name    string
+		tool    string
+		content string
+	}{
+		{"index.lock", "git_commit", "fatal: Unable to create '/repo/.git/index.lock': File exists."},
+		{"another git process", "git_add", "error: another git process seems to be running in this repository"},
+		{"unable to create index.lock", "git_commit", "fatal: unable to create '.git/index.lock': File exists"},
+		{"write new index file", "git_commit", "fatal: unable to write new index file"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cat := classifyErrorContent(tt.tool, tt.content)
+			if cat.Name != "git_lock_contention" {
+				t.Errorf("for %q: expected git_lock_contention, got %s", tt.content, cat.Name)
+			}
+			if cat.Guidance == "" {
+				t.Error("guidance should not be empty")
+			}
+		})
+	}
+}
+
 func TestErrorContainsAny(t *testing.T) {
 	if !errorContainsAny("hello world", "hello", "foo") {
 		t.Error("expected match for 'hello'")

@@ -221,6 +221,24 @@ func classifyErrorContent(toolName, content string) ErrorCategory {
 		}
 	}
 
+	// Git lock contention - concurrent git operations (common in multi-agent
+	// workflows with spawn_agent, swarm teammates, or parallel user activity)
+	if errorContainsAny(c,
+		"index.lock",
+		"another git process",
+		"unable to create '.git/index.lock'",
+		"fatal: unable to write new index file",
+		"exists already",
+	) {
+		return ErrorCategory{
+			Name: "git_lock_contention",
+			Guidance: "Another git process is running or left a stale index.lock. " +
+				"This is common in multi-agent workflows. Wait a few seconds for the " +
+				"other process to finish, then retry. If it persists, the lock may be " +
+				"stale (from a crashed process) - remove .git/index.lock with rm, then retry.",
+		}
+	}
+
 	// Edit-specific: anchor text not found
 	if toolName == "edit_file" || toolName == "multi_edit_file" {
 		if errorContainsAny(c,
