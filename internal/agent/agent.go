@@ -159,6 +159,7 @@ type Agent struct {
 	companionGuard             *companionGuardState                  // companion test file coverage check (unedited paired tests)
 	complexityGate             *complexityGateState                  // post-completion code complexity quality gate
 	changeReconcile            *changeReconcileState                 // pre-completion git diff reconciliation (unexpected side-effect detection)
+	diffSummary                *diffSummaryState                     // pre-completion holistic change summary for self-review
 	verifyRegression           *verifyRegressionState                // cross-run error diff: detects correction-induced regressions
 	selfCorrectionGate         *selfCorrectionGateState              // EIR/ECR stability gate: detects net-negative self-correction loops
 	lastGoodCheckpoint         *lastGoodCheckpoint                   // last-known-good file snapshot: actionable revert targets for failed self-correction
@@ -243,6 +244,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		companionGuard:       newCompanionGuardState(),
 		complexityGate:       newComplexityGateState(),
 		changeReconcile:      newChangeReconcileState(),
+		diffSummary:          newDiffSummaryState(),
 		verifyRegression:     newVerifyRegressionState(),
 		selfCorrectionGate:   newSelfCorrectionGateState(),
 		lastGoodCheckpoint:   newLastGoodCheckpoint(),
@@ -1125,6 +1127,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	// (user's own uncommitted work) from genuine side-effect changes introduced
 	// by the agent's tool calls. Also resets the gate for the new run.
 	a.changeReconcile.reset()
+	a.diffSummary.reset()
 	if workingDir := a.WorkingDir(); workingDir != "" {
 		a.changeReconcile.capturePreRunState(workingDir)
 		// Inject awareness if the tree is dirty — the agent should know about
@@ -1748,6 +1751,21 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					Content: []provider.ContentBlock{{
 						Type: "text",
 						Text: reconcileMsg,
+					}},
+				})
+				continue
+			}
+
+			// Diff summary self-review gate: inject a compact git diff --stat
+			// summary so the agent can holistically review ALL its changes before
+			// returning to the user. Fires once per run, only for multi-file edits.
+			if diffSummaryMsg := a.checkDiffSummaryGate(runStats); diffSummaryMsg != "" {
+				debug.Log("agent", "Iteration %d: diff summary gate injected self-review", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: diffSummaryMsg,
 					}},
 				})
 				continue
