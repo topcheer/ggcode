@@ -303,6 +303,14 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 		warnings = append(warnings, receiverWarnings...)
 	}
 
+	// 29. Variable shadowing detection - flags := declarations in inner scopes
+	//     that hide outer variables of the same name. Error variable (err)
+	//     shadowing is especially dangerous as it silently swallows errors.
+	//     go vet does not flag this. Delta-aware.
+	if shadowWarnings := checkVarShadowing(filePath, oldContent, newContent); len(shadowWarnings) > 0 {
+		warnings = append(warnings, shadowWarnings...)
+	}
+
 	if len(warnings) == 0 {
 		return ""
 	}
