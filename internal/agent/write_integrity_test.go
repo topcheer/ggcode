@@ -109,6 +109,33 @@ func main() {
 	}
 }
 
+func TestCheckWriteIntegrity_SelectTimerLeak(t *testing.T) {
+	// time.After inside a select inside a for loop should be caught by the
+	// integration checkWriteIntegrity entry point.
+	old := "package main\n\nfunc worker(ch chan int) {}\n"
+	newContent := `package main
+
+import "time"
+
+func worker(ch chan int) {
+	for {
+		select {
+		case <-ch:
+		case <-time.After(100 * time.Millisecond):
+			return
+		}
+	}
+}
+`
+	warning := checkWriteIntegrity("worker.go", old, newContent)
+	if warning == "" {
+		t.Fatal("expected timer leak warning, got empty string")
+	}
+	if !strings.Contains(warning, "time.After timer leak") {
+		t.Errorf("warning should mention time.After timer leak, got: %s", warning)
+	}
+}
+
 func TestCheckWriteIntegrity_WarningCap(t *testing.T) {
 	// Create content that triggers multiple warnings:
 	// null bytes + content loss + Go syntax errors
