@@ -261,6 +261,7 @@ type Config struct {
 	Vendors            map[string]VendorConfig    `yaml:"vendors" json:"vendors"`
 	AllowedDirs        []string                   `yaml:"allowed_dirs" json:"allowed_dirs"`
 	MaxIterations      int                        `yaml:"max_iterations" json:"max_iterations"`
+	SessionTimeout     time.Duration              `yaml:"session_timeout,omitempty" json:"session_timeout,omitempty"`
 	SessionTokenBudget int64                      `yaml:"session_token_budget,omitempty" json:"session_token_budget,omitempty"`
 	ToolCallBudget     int                        `yaml:"tool_call_budget,omitempty" json:"tool_call_budget,omitempty"`
 	ToolPerms          map[string]ToolPermission  `yaml:"tool_permissions" json:"tool_permissions"`

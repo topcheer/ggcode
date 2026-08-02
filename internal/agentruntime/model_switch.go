@@ -90,6 +90,16 @@ func ApplyToolCallBudget(agentInst *agent.Agent, cfg *config.Config) {
 	}
 }
 
+// ApplySessionTimeout propagates the configured wall-clock session timeout to
+// the agent. In autopilot mode, a default timeout is applied when unset.
+func ApplySessionTimeout(agentInst *agent.Agent, cfg *config.Config, isAutopilot bool) {
+	if agentInst == nil || cfg == nil {
+		return
+	}
+	timeout := agent.EffectiveSessionTimeout(cfg.SessionTimeout, isAutopilot)
+	agentInst.SetSessionTimeout(timeout)
+}
+
 // SyncVendorEndpointToGlobal ensures a vendor/endpoint definition exists in
 // the global config file so new sessions can discover it without re-configuring
 // API keys. This is called after model switches to propagate vendor/endpoint

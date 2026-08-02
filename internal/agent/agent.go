@@ -161,6 +161,7 @@ type Agent struct {
 	verifyRegression           *verifyRegressionState                // cross-run error diff: detects correction-induced regressions
 	selfCorrectionGate         *selfCorrectionGateState              // EIR/ECR stability gate: detects net-negative self-correction loops
 	lastGoodCheckpoint         *lastGoodCheckpoint                   // last-known-good file snapshot: actionable revert targets for failed self-correction
+	sessionTimeout             *sessionTimeoutState                  // wall-clock timeout for agent runs (autopilot guardrail)
 	transientRetryBudget       int                                   // remaining automatic retries for transient tool failures (per run)
 	argSizeGuardFires          int                                   // count of argument size guard injections this run
 	latencyTracker             *LatencyTracker                       // per-tool latency baseline & slow-tool outlier detection
@@ -247,6 +248,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		taskAnchor:           newTaskAnchorState("", time.Time{}),
 		adaptiveSampling:     newAdaptiveSamplingState(),
 		effortAdapter:        newAdaptiveEffortState(),
+		sessionTimeout:       newSessionTimeoutState(0),
 		transientRetryBudget: maxTransientRetryBudgetPerRun,
 	}
 	a.syncContextManagerProviderLocked()
@@ -752,6 +754,15 @@ func (a *Agent) SetToolCallBudget(budget int) {
 	a.toolCallBudget.SetBudget(budget)
 }
 
+// SetSessionTimeout sets the maximum wall-clock duration for a single agent run.
+// A value of 0 disables the timeout (interactive default). In autopilot mode,
+// a default timeout is applied when this is 0.
+func (a *Agent) SetSessionTimeout(timeout time.Duration) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.sessionTimeout.timeout = timeout
+}
+
 // GetHookConfig returns the current hook configuration (thread-safe).
 func (a *Agent) GetHookConfig() hooks.HookConfig {
 	a.mu.RLock()
@@ -1134,10 +1145,24 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		a.checkpoints.StartRun(runStats.RunID())
 	}
 
+	// Start the session wall-clock timeout timer.
+	a.sessionTimeout.start(a.currentMode() == permission.AutopilotMode)
+
 	for i := 0; a.maxIter <= 0 || i < a.maxIter; i++ {
 		runStats.Iterations = i + 1
 		if err := ctx.Err(); err != nil {
 			return err
+		}
+		// Check session wall-clock timeout: inject warning or stop.
+		if msg := a.sessionTimeout.check(); msg != "" {
+			a.contextManager.Add(provider.Message{
+				Role:    "user",
+				Content: []provider.ContentBlock{{Type: "text", Text: msg}},
+			})
+			if a.sessionTimeout.shouldStop() {
+				debug.Log("session-timeout", "wall-clock timeout exceeded, stopping agent loop")
+				break
+			}
 		}
 		// Adopt a completed background pre-compact only at an LLM turn
 		// boundary. If it is still running, do not wait; this ChatStream uses
