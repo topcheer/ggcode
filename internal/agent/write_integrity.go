@@ -287,6 +287,14 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 		warnings = append(warnings, orderWarnings...)
 	}
 
+	// 27. Printf format string mismatch detection - flags non-constant format
+	//     arguments (injection risk), redundant Sprintf inside Println (double
+	//     formatting), and format verb/argument count mismatches. These cause
+	//     garbled output, runtime panics, and go vet failures. Delta-aware.
+	if printfWarnings := checkPrintfFormat(filePath, oldContent, newContent); len(printfWarnings) > 0 {
+		warnings = append(warnings, printfWarnings...)
+	}
+
 	if len(warnings) == 0 {
 		return ""
 	}
