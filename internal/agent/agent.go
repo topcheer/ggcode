@@ -171,6 +171,7 @@ type Agent struct {
 	latencyTracker             *LatencyTracker                       // per-tool latency baseline & slow-tool outlier detection
 	toolSequence               *toolSequenceValidator                // cross-iteration tool call anti-pattern detection
 	convergenceLock            *convergenceLockState                 // post-verification unnecessary edit drift detection
+	userSentiment              *userSentimentState                   // negative user feedback detection (frustration/rejection course correction)
 	taskAnchor                 *taskAnchorState                      // periodic task re-anchoring for context collapse prevention
 	adaptiveSampling           *adaptiveSamplingState                // per-turn temperature adaptation (phase-aware sampling control)
 	effortAdapter              *adaptiveEffortState                  // per-turn reasoning effort adaptation (Opus 5 effort toggle pattern)
@@ -256,6 +257,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		effortAdapter:        newAdaptiveEffortState(),
 		sessionTimeout:       newSessionTimeoutState(0),
 		fileFreshness:        newFileFreshnessSentinel(),
+		userSentiment:        newUserSentimentState(),
 		transientRetryBudget: maxTransientRetryBudgetPerRun,
 	}
 	a.syncContextManagerProviderLocked()
@@ -1058,6 +1060,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.clearGoalIfNotAutopilot()
 	a.maybeInjectAutopilotGoalCollection()
 	a.maybeInjectCorrectionFeedback()
+	a.maybeInjectSentimentFeedback(userPromptForStats)
 	a.maybeInjectDynamicSystemPrompt()
 	a.maybeInjectRatchetRules()
 

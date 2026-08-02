@@ -88,7 +88,52 @@ func (a *Agent) maybeInjectCorrectionFeedback() {
 
 	debug.Log("agent", "injected correction feedback: %d corrections, %d unique files", len(corrections), len(files))
 
-	// Clear corrections so they're one-shot — only the most recent undo
+	// Clear corrections so they're one-shot -- only the most recent undo
 	// batch is surfaced, not accumulated history.
 	cpMgr.ClearCorrections()
+}
+
+// maybeInjectSentimentFeedback analyzes the user's latest message for negative
+// feedback signals (frustration, rejection, redirection). When detected, it
+// injects escalating course-correction guidance and resets monitoring state
+// (overseer, repetition tracker, scope drift) so the agent starts fresh with
+// the corrected approach.
+//
+// This complements maybeInjectCorrectionFeedback (which handles file reverts)
+// by catching TEXTUAL negative feedback in the user's message itself.
+func (a *Agent) maybeInjectSentimentFeedback(userPrompt string) {
+	if a.userSentiment == nil {
+		return
+	}
+
+	fb := a.userSentiment.analyzeAndUpdate(userPrompt)
+	if fb.Level == 0 {
+		return
+	}
+
+	guidance := buildSentimentGuidance(fb)
+	if guidance == "" {
+		return
+	}
+
+	a.contextManager.Add(provider.Message{
+		Role: "user",
+		Content: []provider.ContentBlock{
+			{Type: "text", Text: guidance},
+		},
+	})
+
+	debug.Log("agent", "%s", formatSentimentLogLine(fb))
+
+	// Reset monitoring state when the user strongly rejects the approach.
+	// The previous trajectory is now invalid -- those systems would carry
+	// stale progress data from the rejected work.
+	if shouldResetMonitoringOnFeedback(fb) {
+		a.resetOverseer()
+		a.resetScopeDrift()
+		a.recurringError.reset()
+		a.confidence.reset()
+		a.resetPlanner()
+		debug.Log("agent", "reset monitoring systems due to strong negative user feedback (level=%d)", fb.Level)
+	}
 }
