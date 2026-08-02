@@ -136,16 +136,10 @@ func (m *Manager) Pinned() *PinnedContext {
 //
 // Must be called with m.mu held.
 func (m *Manager) injectPinnedAfterCompaction() {
+	// Always remove any stale pinned message from a previous compaction cycle.
+	m.removeSystemMessageByMarker(pinnedMarker)
+
 	if m.pinned == nil || m.pinned.IsEmpty() {
-		// Remove any stale pinned message if pins were cleared.
-		for i := 0; i < len(m.messages); i++ {
-			if m.messages[i].Role == "system" && len(m.messages[i].Content) > 0 &&
-				m.messages[i].Content[0].Type == "text" &&
-				strings.Contains(m.messages[i].Content[0].Text, pinnedMarker) {
-				m.messages = append(m.messages[:i], m.messages[i+1:]...)
-				break
-			}
-		}
 		return
 	}
 
@@ -162,36 +156,15 @@ func (m *Manager) injectPinnedAfterCompaction() {
 	}
 	pinnedMsg.ID = newMessageID()
 
-	// Find insertion point: right after the compaction summary message.
-	// If no summary exists (shouldn't happen in this code path, but be safe),
-	// insert after the first system message.
-	insertIdx := -1
-	for i, msg := range m.messages {
-		if msg.Role == "system" && len(msg.Content) > 0 &&
-			strings.Contains(msg.Content[0].Text, "[Previous conversation summary]") {
-			insertIdx = i + 1
-			break
-		}
-	}
-	if insertIdx < 0 {
-		// Fallback: after the first system message (index 0).
-		if len(m.messages) > 0 && m.messages[0].Role == "system" {
-			insertIdx = 1
-		} else {
-			insertIdx = 0
-		}
-	}
-
-	// Remove any existing pinned message first (from a previous compaction).
-	for i := insertIdx; i < len(m.messages); i++ {
-		if m.messages[i].Role == "system" && len(m.messages[i].Content) > 0 &&
-			strings.Contains(m.messages[i].Content[0].Text, pinnedMarker) {
-			m.messages = append(m.messages[:i], m.messages[i+1:]...)
-			if i < insertIdx {
-				insertIdx--
-			}
-			break
-		}
+	// Insert right after the compaction summary, or after the first system
+	// message as a fallback.
+	insertIdx := m.findSystemMessageIdx("[Previous conversation summary]")
+	if insertIdx >= 0 {
+		insertIdx++ // after the summary
+	} else if len(m.messages) > 0 && m.messages[0].Role == "system" {
+		insertIdx = 1
+	} else {
+		insertIdx = 0
 	}
 
 	// Insert the pinned message at the insertion point.
@@ -200,6 +173,28 @@ func (m *Manager) injectPinnedAfterCompaction() {
 	m.messages[insertIdx] = pinnedMsg
 
 	debug.Log("ctx", "injectPinnedAfterCompaction: injected %d pinned items at position %d", len(m.pinned.List()), insertIdx)
+}
+
+// findSystemMessageIdx returns the index of the first system message whose
+// text content contains the given marker, or -1 if not found.
+func (m *Manager) findSystemMessageIdx(marker string) int {
+	for i, msg := range m.messages {
+		if msg.Role == "system" && len(msg.Content) > 0 &&
+			msg.Content[0].Type == "text" &&
+			strings.Contains(msg.Content[0].Text, marker) {
+			return i
+		}
+	}
+	return -1
+}
+
+// removeSystemMessageByMarker removes the first system message containing the
+// given marker string. No-op if not found.
+func (m *Manager) removeSystemMessageByMarker(marker string) {
+	idx := m.findSystemMessageIdx(marker)
+	if idx >= 0 {
+		m.messages = append(m.messages[:idx], m.messages[idx+1:]...)
+	}
 }
 
 // SetPersistHandler sets a callback invoked on every Add() for real-time
