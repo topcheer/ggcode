@@ -424,6 +424,25 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 		}
 	}
 
+	// Post-write debug statement detection for multi-file edits.
+	if !result.IsError && len(plans) > 0 {
+		var debugWarnings []string
+		for _, plan := range plans {
+			if diff.HasChanges(plan.OldContent, plan.NewContent) {
+				if w := checkDebugStmts(plan.Path, plan.OldContent, plan.NewContent); w != "" {
+					debugWarnings = append(debugWarnings, w)
+				}
+			}
+		}
+		for _, w := range debugWarnings {
+			if result.Content != "" {
+				result.Content = result.Content + "\n\n" + w
+			} else {
+				result.Content = w
+			}
+		}
+	}
+
 	// Post-write auto-format: run formatters on all successfully written files.
 	if !result.IsError {
 		for _, plan := range plans {
@@ -560,6 +579,19 @@ func (a *Agent) executeFileTool(ctx context.Context, t tool.Tool, tc provider.To
 				result.Content = result.Content + "\n\n" + w
 			} else {
 				result.Content = w
+			}
+		}
+	}
+
+	// Post-write debug statement detection: warn when the agent introduces
+	// leftover debug print statements (fmt.Println, console.log, etc.) that
+	// are typically added during debugging and forgotten.
+	if !result.IsError {
+		if debugWarning := checkDebugStmts(filePath, oldContent, newContent); debugWarning != "" {
+			if result.Content != "" {
+				result.Content = result.Content + "\n\n" + debugWarning
+			} else {
+				result.Content = debugWarning
 			}
 		}
 	}
