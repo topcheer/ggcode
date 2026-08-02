@@ -200,6 +200,12 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 		debug.Log("run_command", "description: %s", args.Description)
 	}
 
+	// Snapshot tracked file mtimes before execution so we can detect which
+	// previously-read files were modified by this command (e.g. gofmt, sed -i,
+	// git checkout, protoc). This gives the agent proactive staleness feedback
+	// instead of waiting for a stale-read error on the next edit_file.
+	mtimeSnapshot := defaultFileTracker.SnapshotTracked()
+
 	// === Safety gate — Allow/Ask/Block (runs regardless of autopilot) ===
 	gate := NewCommandGate()
 	gateResult := gate.Check(args.Command)
@@ -381,8 +387,10 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 		t.OnPostExec(0, nil)
 	}
 
+	fileChanges := detectChangedFilesFromCommand(mtimeSnapshot)
+
 	if sb.Len() == 0 {
-		return Result{Content: preWarning + "Command completed with no output."}, nil
+		return Result{Content: preWarning + "Command completed with no output." + fileChanges}, nil
 	}
 
 	// Build/test output intelligence: prepend structured summary when available
@@ -390,10 +398,10 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 	// for large test/build outputs.
 	summary := summarizeCommandOutput(args.Command, sb.String())
 	if summary != "" {
-		return Result{Content: preWarning + summary + sb.String()}, nil
+		return Result{Content: preWarning + summary + sb.String() + fileChanges}, nil
 	}
 
-	return Result{Content: preWarning + sb.String()}, nil
+	return Result{Content: preWarning + sb.String() + fileChanges}, nil
 }
 
 // truncateMiddle keeps the first 40% and last 50% of output, inserting a

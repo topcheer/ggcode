@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -115,11 +117,78 @@ func (t *FileIntegrityTracker) HasBeenSeen(path string) bool {
 	return ok
 }
 
+// SnapshotTracked returns a snapshot of all tracked paths and their last-known
+// mtimes. Used by run_command to detect which files the agent previously read
+// were modified by an external command (e.g. gofmt, sed -i, git checkout, or a
+// code generator).
+func (t *FileIntegrityTracker) SnapshotTracked() map[string]time.Time {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	out := make(map[string]time.Time, len(t.modtimes))
+	for k, v := range t.modtimes {
+		out[k] = v
+	}
+	return out
+}
+
+// ChangedSince returns the paths whose current mtime is newer than the
+// recorded mtime in the snapshot. This detects files that were modified on
+// disk between the snapshot and now — typically by a command the agent ran.
+// Files that no longer exist are excluded.
+func (t *FileIntegrityTracker) ChangedSince(snapshot map[string]time.Time) []string {
+	var changed []string
+	for path, oldMtime := range snapshot {
+		info, err := os.Stat(path)
+		if err != nil {
+			continue
+		}
+		if info.ModTime().After(oldMtime) {
+			changed = append(changed, path)
+			// Update the tracker so subsequent stale-read checks are relative
+			// to this external change, not the agent's prior read.
+			t.mu.Lock()
+			t.modtimes[path] = info.ModTime()
+			t.mu.Unlock()
+		}
+	}
+	return changed
+}
+
 // Reset removes all tracked mtimes. Primarily for testing.
 func (t *FileIntegrityTracker) Reset() {
 	t.mu.Lock()
 	t.modtimes = make(map[string]time.Time)
 	t.mu.Unlock()
+}
+
+// detectChangedFilesFromCommand returns a notice string listing any tracked
+// files whose mtime changed during command execution. This gives the agent
+// proactive feedback about which files were modified by a command (e.g.
+// gofmt, sed -i, git checkout, protoc) so it knows to re-read them before
+// editing, without waiting for a stale-read error on the next edit_file call.
+//
+// The snapshot is taken BEFORE the command runs (by SnapshotTracked). Returns
+// an empty string if no tracked files changed.
+func detectChangedFilesFromCommand(snapshot map[string]time.Time) string {
+	changed := defaultFileTracker.ChangedSince(snapshot)
+	if len(changed) == 0 {
+		return ""
+	}
+	sort.Strings(changed)
+	// Limit to 20 files to avoid flooding the output for commands that touch
+	// many files (e.g. gofmt .).
+	shown := changed
+	more := ""
+	if len(shown) > 20 {
+		shown = shown[:20]
+		more = fmt.Sprintf(" (+%d more)", len(changed)-20)
+	}
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("\n[files changed by command] %d file(s) modified on disk%s - re-read before editing:", len(changed), more))
+	for _, p := range shown {
+		sb.WriteString("\n  " + p)
+	}
+	return sb.String()
 }
 
 // staleReadHint checks whether the file at path was modified externally since
