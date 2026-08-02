@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/topcheer/ggcode/internal/agentruntime"
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/notify"
 	"github.com/topcheer/ggcode/internal/tunnel"
 )
@@ -126,6 +129,7 @@ func (m Model) handleAgentDoneMsg(msg agentDoneMsg) (Model, tea.Cmd) {
 	notify.OnCompletion(notifCfg, runDur, wasFailed, summary)
 	if !wasCanceled && !wasFailed {
 		m.persistFullSessionMessages()
+		m.maybeRefineSessionTitle()
 	}
 	if !wasCanceled && !wasFailed && m.pendingSubmissionCount() > 0 {
 		return m, m.submitPendingSubmissionCmd()
@@ -248,4 +252,82 @@ func (m Model) handleAgentErrMsg(msg agentErrMsg) (Model, tea.Cmd) {
 	m.persistFullSessionMessages()
 	return m, nil
 
+}
+
+// maybeRefineSessionTitle improves the session title after the first agent run.
+// If the initial title was generic (e.g., "hi", "help"), it tries to derive a
+// better title from the first user message or the agent's activity summary.
+// User-set titles (via /title) are never overridden.
+func (m Model) maybeRefineSessionTitle() {
+	if m.session == nil || m.sessionStore == nil {
+		return
+	}
+
+	// Only refine on the first or second run (when titles are most uncertain).
+	agentTurnCount := 0
+	for _, msg := range m.session.Messages {
+		if msg.Role == "assistant" {
+			agentTurnCount++
+		}
+	}
+	if agentTurnCount > 2 {
+		return
+	}
+
+	// Get the first user message for title extraction.
+	var firstUserMsg string
+	for _, msg := range m.session.Messages {
+		if msg.Role == "user" {
+			for _, block := range msg.Content {
+				if block.Type == "text" && block.Text != "" {
+					firstUserMsg = block.Text
+					break
+				}
+			}
+			if firstUserMsg != "" {
+				break
+			}
+		}
+	}
+	if firstUserMsg == "" {
+		return
+	}
+
+	// Build a brief summary of what the agent did.
+	agentSummary := m.buildAgentTitleSummary()
+
+	newTitle := agentruntime.RefineTitleAfterRun(m.session.Title, firstUserMsg, agentSummary)
+	if newTitle == "" || newTitle == m.session.Title {
+		return
+	}
+
+	oldTitle := m.session.Title
+	m.session.Title = newTitle
+	m.session.UpdatedAt = time.Now()
+
+	ses := m.session
+	store := m.sessionStore
+	go func() {
+		_ = store.AppendMetaToDisk(ses)
+	}()
+
+	debug.Log("tui", "refined session title: %q -> %q", oldTitle, newTitle)
+}
+
+// buildAgentTitleSummary creates a brief description of the agent's activity
+// for use as a fallback title when the user message is too generic.
+func (m Model) buildAgentTitleSummary() string {
+	if m.statusToolCount > 0 {
+		return fmt.Sprintf("Agent task (%d tool calls)", m.statusToolCount)
+	}
+	return ""
+}
+
+// shortPath returns the last 1-2 path segments of a file path for brevity.
+func shortPath(path string) string {
+	segs := strings.Split(strings.ReplaceAll(path, "\\", "/"), "/")
+	if len(segs) <= 2 {
+		return strings.Join(segs, "/")
+	}
+	return strings.Join(segs[len(segs)-2:], "/")
 }

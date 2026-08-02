@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/topcheer/ggcode/internal/agentruntime"
 	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/util"
 
@@ -41,9 +42,11 @@ func (m *Model) appendUserMessage(text string) {
 	// will re-append this message to the JSONL file (duplicate record).
 	m.persistedMsgCount++
 	m.session.UpdatedAt = time.Now()
-	// Auto-generate title from first user message
-	if m.session.Title == "" || m.session.Title == "New session" {
-		m.session.Title = util.Truncate(text, 60)
+	// Auto-generate smart title from first user message
+	if m.session.Title == "" || m.session.Title == "New session" || m.session.Title == "新会话" {
+		if smart := agentruntime.GenerateTitle(text); smart != "" {
+			m.session.Title = smart
+		}
 	}
 	// Update preview snippet from latest user message
 	m.session.Preview = util.Truncate(strings.TrimSpace(text), 120)
