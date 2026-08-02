@@ -152,6 +152,7 @@ type Agent struct {
 	editFailRecovery           *editFailState                        // consecutive edit failure recovery guidance
 	scopeDrift                 *scopeDriftState                      // semantic scope creep detection (file-diversity tracking)
 	exportGuard                *exportGuardState                     // breaking change detection for exported Go symbols (regression guard)
+	hubPackageGuard            *hubPackageState                      // per-edit blast-radius awareness for high fan-in packages
 	artifactGuard              *generatedArtifactState               // generated artifact / lock file edit warning
 	toolFilter                 *tool.RelevanceFilter                 // dynamic MCP tool pruning based on conversation relevance
 	fulfillmentGate            *fulfillmentGateState                 // pre-completion coverage verification (request-vs-work match)
@@ -235,6 +236,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		editFailRecovery:     newEditFailState(),
 		scopeDrift:           newScopeDriftState(),
 		exportGuard:          newExportGuardState(),
+		hubPackageGuard:      newHubPackageState(),
 		artifactGuard:        newGeneratedArtifactState(),
 		branchGuard:          newBranchGuardState(),
 		fulfillmentGate:      newFulfillmentGateState(),
@@ -1101,6 +1103,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.editFailRecovery.reset()
 	// Reset the export guard so each run starts with a clean checked set.
 	a.exportGuard.reset()
+	a.hubPackageGuard.reset()
 	a.artifactGuard.reset()
 	a.branchGuard.reset()
 	a.fulfillmentGate.reset()
@@ -1952,6 +1955,16 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					// (removed functions, changed signatures) by comparing against
 					// git HEAD. Fires once per file per run.
 					if hint := a.checkExportGuard(p); hint != "" {
+						if result.Content != "" {
+							result.Content = result.Content + "\n\n" + hint
+						} else {
+							result.Content = hint
+						}
+					}
+					// Hub package guard: per-edit blast-radius awareness for
+					// widely-imported packages. Complements export_guard by
+					// providing scale context even for non-breaking edits.
+					if hint := a.checkHubPackage(p); hint != "" {
 						if result.Content != "" {
 							result.Content = result.Content + "\n\n" + hint
 						} else {
