@@ -66,6 +66,7 @@ The loop monitors its own trajectory and injects guidance when patterns look pat
 | Layer | File | Purpose |
 |-------|------|---------|
 | Argument coercion | `tool/arg_coercion.go` | Schema-aware type coercion: fixes string→int/bool mismatches from weak models before unmarshalling fails |
+| Enum value correction | `tool/enum_correction.go` | Auto-corrects near-miss enum values (case mismatch, typos within edit distance 2) before validation. Unambiguous fixes are applied silently; ambiguous cases get "Did you mean?" suggestions in the error message. |
 | Required param validation | `tool/arg_coercion.go` | Catches missing required fields before tool execution, giving the model a precise error message |
 | Schema constraint validation | `tool/schema_validation.go` | Validates enum values, numeric bounds (min/max/exclusive), and string length constraints before execution |
 | Unknown param stripping | `tool/schema_validation.go` | Removes hallucinated parameters not declared in the tool's JSON schema |

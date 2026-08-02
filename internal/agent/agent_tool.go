@@ -241,6 +241,16 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 		tc.Arguments = coercedArgs
 	}
 
+	// Enum value auto-correction: weak models frequently send near-miss enum
+	// values (case mismatch like "JSON" instead of "json", or typos like
+	// "overwite" instead of "overwrite"). CoerceEnumValues silently fixes
+	// unambiguous corrections, saving a wasted agent loop iteration.
+	enumCorrected := tool.CoerceEnumValues(t.Parameters(), tc.Arguments)
+	if !bytes.Equal(enumCorrected, tc.Arguments) {
+		debug.Log("agent", "enum-corrected arguments for tool %s", tc.Name)
+		tc.Arguments = enumCorrected
+	}
+
 	// Schema-aware required-parameter validation: catches missing required
 	// fields before tool execution, giving the model a clear error message
 	// instead of a confusing downstream failure. This complements

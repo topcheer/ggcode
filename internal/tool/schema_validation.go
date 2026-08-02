@@ -82,7 +82,13 @@ func validateField(fieldName string, fieldSchema, val json.RawMessage) string {
 			for i, e := range spec.Enum {
 				allowed[i] = strings.Trim(string(e), `"`)
 			}
-			return fmt.Sprintf("parameter %q must be one of [%s], got %s", fieldName, strings.Join(allowed, ", "), strings.TrimSpace(string(val)))
+			msg := fmt.Sprintf("parameter %q must be one of [%s], got %s", fieldName, strings.Join(allowed, ", "), strings.TrimSpace(string(val)))
+			// Suggest closest match for typos (did-you-mean hint).
+			provided := strings.TrimSpace(strings.Trim(string(val), `"`))
+			if hint := suggestClosestEnum(provided, spec.Enum); hint != "" {
+				msg += fmt.Sprintf(". Did you mean %q?", hint)
+			}
+			return msg
 		}
 	}
 
