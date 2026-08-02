@@ -225,6 +225,12 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 			debug.Log("run_command", "WARNING: %s", w)
 		}
 	}
+	// Surface interactive-command warnings to the agent via the result content
+	// so it can self-correct before the timeout fires.
+	var preWarning string
+	if interactive := gate.InteractiveCommandWarning(args.Command); interactive != "" {
+		preWarning = "[Interactive command warning] " + interactive + "\n\n"
+	}
 	// Use cleaned command if modifications were made
 	if gateResult.CleanedCmd != "" && gateResult.CleanedCmd != args.Command {
 		debug.Log("run_command", "cleaned command: %s → %s", args.Command, gateResult.CleanedCmd)
@@ -368,7 +374,7 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 		if diagnostic != "" {
 			msg += "\n" + diagnostic
 		}
-		return Result{IsError: true, Content: msg}, nil
+		return Result{IsError: true, Content: preWarning + msg}, nil
 	}
 
 	if t.OnPostExec != nil {
@@ -376,7 +382,7 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 	}
 
 	if sb.Len() == 0 {
-		return Result{Content: "Command completed with no output."}, nil
+		return Result{Content: preWarning + "Command completed with no output."}, nil
 	}
 
 	// Build/test output intelligence: prepend structured summary when available
@@ -384,10 +390,10 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 	// for large test/build outputs.
 	summary := summarizeCommandOutput(args.Command, sb.String())
 	if summary != "" {
-		return Result{Content: summary + sb.String()}, nil
+		return Result{Content: preWarning + summary + sb.String()}, nil
 	}
 
-	return Result{Content: sb.String()}, nil
+	return Result{Content: preWarning + sb.String()}, nil
 }
 
 // truncateMiddle keeps the first 40% and last 50% of output, inserting a

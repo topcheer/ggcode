@@ -100,6 +100,12 @@ func (t StartCommandTool) Execute(ctx context.Context, input json.RawMessage) (R
 		args.Command = gateResult.CleanedCmd
 	}
 
+	// Surface interactive-command warnings to the agent so it can self-correct.
+	var preWarning string
+	if interactive := gate.InteractiveCommandWarning(args.Command); interactive != "" {
+		preWarning = "[Interactive command warning] " + interactive + "\n\n"
+	}
+
 	if t.OnPreExec != nil {
 		t.OnPreExec(args.Command, "")
 	}
@@ -117,7 +123,7 @@ func (t StartCommandTool) Execute(ctx context.Context, input json.RawMessage) (R
 	// start_command is async — we don't know the exit code yet.
 	// OnPostExec will be called by the caller via read_command_output/wait_command
 	// when the job completes, not here.
-	return Result{Content: formatCommandJobSnapshot(*snap, false)}, nil
+	return Result{Content: preWarning + formatCommandJobSnapshot(*snap, false)}, nil
 }
 
 type ReadCommandOutputTool struct {

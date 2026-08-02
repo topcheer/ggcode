@@ -2,6 +2,7 @@ package tool
 
 import (
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"unicode"
@@ -251,6 +252,14 @@ func (g *CommandGate) Check(cmd string) GateResult {
 	// ---- Layer 3: Destructive warnings (informational only) ----
 	result.Warnings = g.destructiveWarnings(cmd)
 
+	// ---- Layer 3b: Interactive command warning ----
+	// Detect commands that will hang indefinitely waiting for stdin or that
+	// run forever. These waste the full timeout. We add it as a warning so
+	// the agent sees it in the tool result.
+	if interactive := g.InteractiveCommandWarning(cmd); interactive != "" {
+		result.Warnings = append(result.Warnings, interactive)
+	}
+
 	// ---- Apply cleaning rules ----
 	cleaned := cmd
 	for _, rule := range g.cleanRules {
@@ -353,6 +362,366 @@ func (g *CommandGate) destructiveWarnings(cmd string) []string {
 	}
 
 	return warnings
+}
+
+// InteractiveCommandWarning detects commands that will hang indefinitely waiting
+// for stdin or that run forever without exiting. These are the #1 cause of
+// 30-minute timeout waste in AI coding agents.
+//
+// Three categories:
+//  1. Bare REPL invocations — `python`, `node`, `irb` without a script argument.
+//     These drop into a read-eval-print loop that blocks on stdin forever.
+//  2. Interactive pagers/editors — `vim`, `nano`, `less`, `more` always wait
+//     for keystrokes and never exit on their own.
+//  3. Infinite-follow/monitor commands — `tail -f`, `top`, `watch` run forever
+//     by design.
+//
+// Returns a non-empty warning string if detected, or "" otherwise.
+func (g *CommandGate) InteractiveCommandWarning(cmd string) string {
+	cmd = strings.TrimSpace(cmd)
+	if cmd == "" {
+		return ""
+	}
+
+	// Handle compound commands: check each sub-command independently.
+	// Split on common separators (|, ;, &&, ||) and check each part.
+	parts := splitCompoundCommand(cmd)
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if w := checkInteractivePart(part); w != "" {
+			return w
+		}
+	}
+	return ""
+}
+
+// splitCompoundCommand splits on shell separators (|, ;, &&, ||).
+func splitCompoundCommand(cmd string) []string {
+	// Simple approach: split on top-level |, ;, and the word operators && and ||.
+	var parts []string
+	var current strings.Builder
+	inSingleQuote := false
+	inDoubleQuote := false
+
+	i := 0
+	for i < len(cmd) {
+		ch := cmd[i]
+
+		if ch == '\\' && i+1 < len(cmd) {
+			current.WriteByte(ch)
+			current.WriteByte(cmd[i+1])
+			i += 2
+			continue
+		}
+
+		if ch == '\'' && !inDoubleQuote {
+			inSingleQuote = !inSingleQuote
+			current.WriteByte(ch)
+			i++
+			continue
+		}
+
+		if ch == '"' && !inSingleQuote {
+			inDoubleQuote = !inDoubleQuote
+			current.WriteByte(ch)
+			i++
+			continue
+		}
+
+		if !inSingleQuote && !inDoubleQuote {
+			// Check for && or ||
+			if i+1 < len(cmd) && ch == '&' && cmd[i+1] == '&' {
+				parts = append(parts, current.String())
+				current.Reset()
+				i += 2
+				continue
+			}
+			if i+1 < len(cmd) && ch == '|' && cmd[i+1] == '|' {
+				parts = append(parts, current.String())
+				current.Reset()
+				i += 2
+				continue
+			}
+			if ch == ';' || ch == '|' {
+				parts = append(parts, current.String())
+				current.Reset()
+				i++
+				continue
+			}
+		}
+
+		current.WriteByte(ch)
+		i++
+	}
+
+	if current.Len() > 0 {
+		parts = append(parts, current.String())
+	}
+	return parts
+}
+
+// checkInteractivePart checks a single command pipeline segment for interactive
+// behavior.
+func checkInteractivePart(cmd string) string {
+	cmd = strings.TrimSpace(cmd)
+
+	// Extract the first word (the command name) and the remaining arguments.
+	fields := strings.Fields(cmd)
+	if len(fields) == 0 {
+		return ""
+	}
+
+	// Strip any path prefix from the command (e.g., /usr/bin/python → python).
+	binName := filepath.Base(fields[0])
+	binName = strings.ToLower(binName)
+	// Strip common Windows extensions.
+	for _, ext := range []string{".exe", ".bat", ".cmd", ".ps1"} {
+		binName = strings.TrimSuffix(binName, ext)
+	}
+
+	args := fields[1:]
+
+	// --- Category 1: Bare REPL invocations (no script argument) ---
+	// These launch a REPL when invoked without arguments. With -c, -e, or a
+	// script file, they run one-shot and exit normally.
+	if isBareREPL(binName, args) {
+		return fmt.Sprintf(
+			"Command %q appears to be a bare REPL invocation that will wait for stdin input indefinitely "+
+				"(30-minute timeout). This will block the agent loop for the full timeout duration. "+
+				"Instead: pass a script file (%s script.py), use -c/%s -e for inline code, or use start_command for interactive sessions.",
+			binName, binName, binName)
+	}
+
+	// --- Category 2: Interactive pagers and editors ---
+	// These ALWAYS wait for keyboard input regardless of arguments.
+	if isInteractiveApp(binName) {
+		// Check for non-interactive overrides that make these safe.
+		if hasNonInteractiveOverride(binName, args) {
+			return ""
+		}
+		suggestion := interactiveAppSuggestion(binName)
+		return fmt.Sprintf(
+			"Command %q is an interactive application that will wait for keyboard input indefinitely "+
+				"(30-minute timeout). %s Alternatively, use start_command for interactive sessions.",
+			binName, suggestion)
+	}
+
+	// --- Category 3: Infinite-follow and monitor commands ---
+	// tail -f, top, watch, etc. run forever by design.
+	if isInfiniteCommand(binName, args) {
+		suggestion := infiniteCommandSuggestion(binName)
+		return fmt.Sprintf(
+			"Command %q runs indefinitely and will not exit on its own (30-minute timeout). %s "+
+				"Use start_command for long-running processes, or add appropriate arguments to make it exit.",
+			binName, suggestion)
+	}
+
+	return ""
+}
+
+// isBareREPL returns true if the binary is a REPL interpreter invoked without
+// a script file or inline-code flag.
+func isBareREPL(bin string, args []string) bool {
+	repls := map[string]bool{
+		"python": true, "python2": true, "python3": true,
+		"node": true, "deno": true, "bun": true,
+		"irb": true, "pry": true,
+		"php": true, "psy": true,
+		"lua":   true,
+		"erl":   true,
+		"swipl": true,
+		"r":     true,
+		"psql":  true, "mysql": true, "sqlite3": true,
+		"redis-cli": true, "mongosh": true, "mongo": true,
+		"elixir": true,
+		"jshell": true, "kotlin": true, "kotlinc": true,
+		"ghci":  true,
+		"ocaml": true,
+		"clj":   true,
+		"tclsh": true,
+		"bc":    true,
+	}
+	if !repls[bin] {
+		return false
+	}
+
+	// Common flags that make REPLs non-interactive (run-once).
+	// - python: -c (inline code), -m (run module)
+	// - node: -e (inline), --eval
+	// - deno: -e (inline)
+	// - bun: -e (inline)
+	// - sqlite3: < file.sql or .read
+	// - bc: -q (quiet, but still interactive without input)
+	nonInteractiveFlags := map[string]bool{
+		"-c": true, "--command": true,
+		"-e": true, "--eval": true,
+		"-m": true,
+	}
+	// If any argument is a non-interactive flag or a file path (not starting
+	// with -), the REPL will run one-shot, not hang.
+	for _, a := range args {
+		if nonInteractiveFlags[a] {
+			return false
+		}
+		// A positional argument that looks like a file (has a dot, or is a
+		// relative/absolute path) means a script file — non-interactive.
+		if !strings.HasPrefix(a, "-") {
+			return false
+		}
+	}
+
+	// Special case: sqlite3 with a database file but no piped input.
+	// `sqlite3 db.sqlite` still drops into interactive mode.
+	// However, `sqlite3 db.sqlite < dump.sql` or with a SQL command arg is fine.
+	// We only flag truly bare invocations.
+	if bin == "sqlite3" || bin == "mysql" || bin == "psql" || bin == "redis-cli" {
+		// These hang with just a database/connection name.
+		return true
+	}
+
+	return true
+}
+
+// isInteractiveApp returns true for pagers and editors that always wait for
+// keyboard input.
+func isInteractiveApp(bin string) bool {
+	apps := map[string]bool{
+		// Editors
+		"vim": true, "vi": true, "nvim": true, "nano": true, "emacs": true,
+		"pico": true, "micro": true, "helix": true, "hx": true,
+		"ed": true, "ex": true,
+		// Pagers
+		"less": true, "more": true, "most": true,
+		// Interactive monitors
+		"top": true, "htop": true, "btop": true, "iotop": true, "atop": true,
+		"glances": true,
+		// Interactive shells launched explicitly
+		"bash": true, "zsh": true, "sh": true, "fish": true, "csh": true,
+		"tcsh": true, "pwsh": true, "powershell": true,
+	}
+	return apps[bin]
+}
+
+// hasNonInteractiveOverride checks if the command has flags that make an
+// otherwise interactive app non-interactive.
+func hasNonInteractiveOverride(bin string, args []string) bool {
+	for _, a := range args {
+		switch bin {
+		case "less":
+			// less can be used non-interactively with these flags.
+			if a == "-E" || a == "--quit-at-eof" || a == "-F" || a == "--quit-if-one-screen" {
+				return true
+			}
+		case "bash", "sh", "zsh", "fish":
+			// Shell with -c runs a single command and exits.
+			if a == "-c" {
+				return true
+			}
+		case "top", "htop":
+			// -b (batch mode), -n 1 (one iteration)
+			if a == "-b" || a == "-n" || strings.HasPrefix(a, "-n") {
+				return true
+			}
+		case "powershell", "pwsh":
+			if a == "-Command" || a == "-c" || a == "-File" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// interactiveAppSuggestion returns a helpful suggestion for how to replace the
+// interactive command with a non-interactive alternative.
+func interactiveAppSuggestion(bin string) string {
+	switch bin {
+	case "vim", "vi", "nvim", "nano", "emacs", "pico", "micro", "helix", "hx", "ed", "ex":
+		return "Use edit_file/write_file/read_file tools instead of a text editor."
+	case "less", "more", "most":
+		return "Use read_file or run_command with 'cat' to view file contents."
+	case "top", "htop", "btop", "iotop", "atop", "glances":
+		return "Use run_command with 'ps aux' or specific metrics commands instead."
+	case "bash", "zsh", "sh", "fish", "csh", "tcsh":
+		return "Use run_command with the shell script (bash -c 'commands') instead of an interactive shell."
+	case "powershell", "pwsh":
+		return "Use run_command with 'pwsh -Command \"...\"' instead of an interactive shell."
+	default:
+		return "Use a non-interactive alternative."
+	}
+}
+
+// isInfiniteCommand returns true for commands that run forever by design.
+func isInfiniteCommand(bin string, args []string) bool {
+	switch bin {
+	case "tail":
+		// tail -f follows forever. tail without -f exits normally.
+		for _, a := range args {
+			if a == "-f" || a == "--follow" || strings.HasPrefix(a, "-F") {
+				return true
+			}
+			// Combined flags like -fq
+			if strings.HasPrefix(a, "-") && !strings.HasPrefix(a, "--") && strings.Contains(a, "f") {
+				return true
+			}
+		}
+		return false
+	case "watch":
+		// watch runs a command repeatedly forever.
+		return true
+	case "yes":
+		// yes loops forever printing a string.
+		return true
+	case "cat":
+		// cat with no arguments reads from stdin forever.
+		if len(args) == 0 {
+			return true
+		}
+		return false
+	case "tee":
+		// tee with no file args reads stdin forever.
+		if len(args) == 0 {
+			return true
+		}
+		return false
+	case "nc", "ncat", "netcat":
+		// netcat in listen mode (-l) blocks forever waiting for connections.
+		for _, a := range args {
+			if a == "-l" || a == "--listen" {
+				return true
+			}
+		}
+		return false
+	case "sleep":
+		// Very long sleeps can effectively hang. Only flag if no duration
+		// argument is given (bare sleep).
+		if len(args) == 0 {
+			return true
+		}
+		return false
+	}
+	return false
+}
+
+// infiniteCommandSuggestion returns a helpful suggestion for making an infinite
+// command exit.
+func infiniteCommandSuggestion(bin string) string {
+	switch bin {
+	case "tail":
+		return "Use tail without -f to read the end of a file, or use run_command with a line count (tail -n 100 file)."
+	case "watch":
+		return "Use run_command to run the command once instead of repeatedly."
+	case "yes":
+		return "Pipe to head -n 1 to limit output (yes | head -n 1)."
+	case "cat", "tee":
+		return "Provide a file argument or pipe input instead of reading from stdin."
+	case "nc", "ncat", "netcat":
+		return "Provide a timeout or use non-interactive alternatives for network testing."
+	default:
+		return "Add a timeout or exit condition."
+	}
 }
 
 // IsDestructive returns true if the command matches any block or ask rule.
