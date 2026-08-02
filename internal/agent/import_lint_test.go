@@ -242,3 +242,44 @@ func TestCheckGoImports_NonGoFile(t *testing.T) {
 		t.Errorf("expected nil for non-parseable content, got: %v", warnings)
 	}
 }
+
+func TestIsVersionSegment(t *testing.T) {
+	cases := map[string]bool{
+		"v2":       true,
+		"v3":       true,
+		"v10":      true,
+		"v":        false,
+		"vA":       false,
+		"lipgloss": false,
+		"fmt":      false,
+		"":         false,
+	}
+	for input, expected := range cases {
+		got := isVersionSegment(input)
+		if got != expected {
+			t.Errorf("isVersionSegment(%q) = %v, want %v", input, got, expected)
+		}
+	}
+}
+
+func TestCheckGoImports_VersionedPathNoFalsePositive(t *testing.T) {
+	// "charm.land/lipgloss/v2" has path segment "v2" which is NOT the package name.
+	// The code uses "lipgloss.Width()" but the analyzer would see "v2" as the name
+	// and incorrectly report it as unused. This test verifies the fix.
+	src := `package main
+
+import (
+	"charm.land/lipgloss/v2"
+)
+
+func main() {
+	_ = lipgloss.Width("hello")
+}
+`
+	warnings := checkGoImports("main.go", src)
+	for _, w := range warnings {
+		if strings.Contains(w, "Unused import") && strings.Contains(w, "v2") {
+			t.Errorf("versioned path should not trigger false unused import: %s", w)
+		}
+	}
+}

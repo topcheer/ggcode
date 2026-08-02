@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-	"time"
 
 	"charm.land/lipgloss/v2"
+	"time"
 )
 
 func TestCachedItem(t *testing.T) {
@@ -819,5 +819,39 @@ func testVisualWidthForItemType(t *testing.T, styles Styles, text string, width 
 				}
 			}
 		})
+	}
+}
+
+func TestMeasureHeightWidth(t *testing.T) {
+	cases := []struct {
+		s     string
+		width int
+		want  int
+	}{
+		{"hello", 80, 1},
+		{"hello\nworld", 80, 2},
+		{"", 80, 1},
+		{"abcdefghijklmnopqrstuvwxyz", 10, 3},
+		{"aaaa\nabcdefghijklmnopqrstuvwxyz", 10, 4},
+		{"hello\n", 80, 1},
+		{"abcdefghijklmnopqrstuvwxyz", 0, 1},
+		{"\n\n", 80, 2},
+	}
+	for _, c := range cases {
+		got := measureHeightWidth(c.s, c.width)
+		if got != c.want {
+			t.Errorf("measureHeightWidth(%q, %d) = %d, want %d", c.s, c.width, got, c.want)
+		}
+	}
+}
+
+func TestMeasureHeightWidthMatchesMeasureHeightWhenNoWrap(t *testing.T) {
+	cases := []string{
+		"hello", "hello\nworld", "hello\nworld\n", "a\nb\nc\n", "",
+	}
+	for _, s := range cases {
+		if measureHeightWidth(s, 200) != measureHeight(s) {
+			t.Errorf("measureHeightWidth(%q, 200) should equal measureHeight when no wrapping", s)
+		}
 	}
 }
