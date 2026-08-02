@@ -239,6 +239,13 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 		warnings = append(warnings, assertWarnings...)
 	}
 
+	// 21. Select-loop timer leak detection - flags time.After() inside a select
+	//     within a for/range loop, which leaks timers each iteration (timer is
+	//     not GC'd until it fires). Should use time.NewTimer + Stop/Reset. Delta-aware.
+	if timerWarnings := checkSelectTimerLeak(filePath, oldContent, newContent); len(timerWarnings) > 0 {
+		warnings = append(warnings, timerWarnings...)
+	}
+
 	if len(warnings) == 0 {
 		return ""
 	}
