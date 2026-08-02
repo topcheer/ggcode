@@ -8,9 +8,9 @@ import (
 	"time"
 	"unicode"
 
-	"charm.land/lipgloss/v2"
 	"charm.land/lipgloss/v2/tree"
 
+	"charm.land/lipgloss/v2"
 	"github.com/topcheer/ggcode/internal/markdown"
 )
 
@@ -543,11 +543,11 @@ func (t *BaseToolItem) Render(width int) string {
 			return ""
 		}
 		rendered := t.styles.ToolBody.Render(body)
-		t.SetCached(rendered, width, measureHeight(rendered))
+		t.SetCached(rendered, width, measureHeightWidth(rendered, width))
 		return rendered
 	}
 	rendered := t.renderCore(width, t.RenderParams(), t.RenderBody(width-4))
-	t.SetCached(rendered, width, measureHeight(rendered))
+	t.SetCached(rendered, width, measureHeightWidth(rendered, width))
 	return rendered
 }
 
@@ -578,7 +578,7 @@ func (t *BaseToolItem) Height(width int) int {
 	if _, h, ok := t.GetCached(width); ok {
 		return h
 	}
-	return measureHeight(t.Render(width))
+	return measureHeightWidth(t.Render(width), width)
 }
 
 // --- Specific Tool Types ---
@@ -1046,7 +1046,7 @@ func (t *TodoToolItem) Render(width int) string {
 	sb.WriteString(header)
 
 	rendered := sb.String()
-	t.SetCached(rendered, width, measureHeight(rendered))
+	t.SetCached(rendered, width, measureHeightWidth(rendered, width))
 	return rendered
 }
 
@@ -1136,7 +1136,7 @@ func (a *AgentToolItem) Render(width int) string {
 
 	if len(a.nestedItems) == 0 {
 		rendered := header
-		a.SetCached(rendered, width, measureHeight(rendered))
+		a.SetCached(rendered, width, measureHeightWidth(rendered, width))
 		return rendered
 	}
 
@@ -1152,7 +1152,7 @@ func (a *AgentToolItem) Render(width int) string {
 	t.EnumeratorStyle(enumStyle)
 
 	rendered := t.String()
-	a.SetCached(rendered, width, measureHeight(rendered))
+	a.SetCached(rendered, width, measureHeightWidth(rendered, width))
 	return rendered
 }
 
@@ -1160,7 +1160,7 @@ func (a *AgentToolItem) Height(width int) int {
 	if _, h, ok := a.GetCached(width); ok {
 		return h
 	}
-	return measureHeight(a.Render(width))
+	return measureHeightWidth(a.Render(width), width)
 }
 
 // FormatJSONResult parses a JSON string and renders it as human-readable key-value pairs.

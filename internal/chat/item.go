@@ -1,6 +1,10 @@
 package chat
 
-import "strings"
+import (
+	"strings"
+
+	"charm.land/lipgloss/v2"
+)
 
 // Item is the core interface for any renderable element in the conversation.
 type Item interface {
@@ -46,7 +50,10 @@ func (c *CachedItem) Invalidate() {
 	c.cachedHeight = 0
 }
 
-// measureHeight counts the visual lines in a rendered string.
+// measureHeight counts the visual lines in a rendered string, ignoring
+// terminal width. Each \n-separated segment counts as exactly one line
+// regardless of how long it is. Use measureHeightWidth when you need to
+// account for wrapping at a specific terminal width.
 func measureHeight(s string) int {
 	if s == "" {
 		return 1
@@ -56,4 +63,40 @@ func measureHeight(s string) int {
 		n--
 	}
 	return n
+}
+
+// measureHeightWidth counts visual lines in a rendered string at the given
+// terminal width. Unlike measureHeight, it accounts for line wrapping: when
+// a \n-separated line's visual width exceeds the available width, it is
+// counted as ceil(visualWidth / width) lines. ANSI escape sequences are
+// correctly handled via lipgloss.Width.
+func measureHeightWidth(s string, width int) int {
+	if s == "" {
+		return 1
+	}
+	if width <= 0 {
+		return measureHeight(s)
+	}
+	lines := strings.Split(s, "\n")
+	// A trailing "\n" produces a spurious empty element with no visual presence.
+	if len(lines) > 0 && strings.HasSuffix(s, "\n") && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	total := 0
+	for _, line := range lines {
+		vw := lipgloss.Width(line)
+		if vw == 0 {
+			total++
+			continue
+		}
+		wrapped := (vw + width - 1) / width // ceil division
+		if wrapped < 1 {
+			wrapped = 1
+		}
+		total += wrapped
+	}
+	if total == 0 {
+		return 1
+	}
+	return total
 }

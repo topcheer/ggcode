@@ -87,7 +87,7 @@ func (u *UserItem) Render(width int) string {
 	}
 
 	rendered := sb.String()
-	u.SetCached(rendered, width, measureHeight(rendered))
+	u.SetCached(rendered, width, measureHeightWidth(rendered, width))
 	return rendered
 }
 
@@ -95,7 +95,7 @@ func (u *UserItem) Height(width int) int {
 	if _, h, ok := u.GetCached(width); ok {
 		return h
 	}
-	return measureHeight(u.Render(width))
+	return measureHeightWidth(u.Render(width), width)
 }
 
 // wrapLines does simple word wrapping at the given width.
@@ -250,7 +250,7 @@ func (a *AssistantItem) Render(width int) string {
 		}
 	}
 
-	a.SetCached(result, width, measureHeight(result))
+	a.SetCached(result, width, measureHeightWidth(result, width))
 	return result
 }
 
@@ -295,7 +295,7 @@ func (a *AssistantItem) Height(width int) int {
 	if _, h, ok := a.GetCached(width); ok {
 		return h
 	}
-	return measureHeight(a.Render(width))
+	return measureHeightWidth(a.Render(width), width)
 }
 
 // --- System Item ---
@@ -363,7 +363,7 @@ func (s *SystemItem) Render(width int) string {
 	}
 
 	rendered := sb.String()
-	s.SetCached(rendered, width, measureHeight(rendered))
+	s.SetCached(rendered, width, measureHeightWidth(rendered, width))
 	return rendered
 }
 
