@@ -256,6 +256,13 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 		warnings = append(warnings, timeoutWarnings...)
 	}
 
+	// 23. Premature exit call detection - flags os.Exit/log.Fatal/log.Panic
+	//     in non-main/init functions. These skip deferred cleanup, make functions
+	//     untestable, and prevent error propagation. Delta-aware.
+	if exitWarnings := checkPrematureExit(filePath, oldContent, newContent); len(exitWarnings) > 0 {
+		warnings = append(warnings, exitWarnings...)
+	}
+
 	if len(warnings) == 0 {
 		return ""
 	}
