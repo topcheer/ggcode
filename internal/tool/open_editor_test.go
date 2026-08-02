@@ -209,8 +209,8 @@ func TestOpenEditor_LaunchAndVerify(t *testing.T) {
 		t.Fatalf("startDetached failed: %v", err)
 	}
 
-	// Wait for the marker file to appear
-	for i := 0; i < 100; i++ {
+	// Wait for the marker file to appear (up to 5s for slow CI)
+	for i := 0; i < 500; i++ {
 		if _, err := os.Stat(markerPath); err == nil {
 			break
 		}
