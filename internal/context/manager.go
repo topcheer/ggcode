@@ -49,6 +49,9 @@ type ContextManager interface {
 	// the dynamic prompt overhead when calculating AutoCompactThreshold.
 	SetToolDefinitionOverhead(tokens int)
 	ReconcileToolCalls() bool
+	// Pinned returns the pinned-context store for user-pinned items that
+	// survive context compaction. Returns nil if pinning is not supported.
+	Pinned() *PinnedContext
 }
 
 // CompactSnapshot is an immutable point-in-time view used by background
@@ -108,6 +111,7 @@ type Manager struct {
 	calibrator               *TokenCalibrator
 	onPersist                func(msg provider.Message) // called on every Add() for real-time JSONL persistence
 	toolDefinitionOverhead   int                        // tokens reserved for tool definitions (set by Agent)
+	pinned                   *PinnedContext             // user-pinned context that survives compaction
 }
 
 // NewManager creates a ContextManager with the given context window limit.
@@ -115,7 +119,87 @@ func NewManager(contextWindow int) *Manager {
 	return &Manager{
 		contextWindow: contextWindow,
 		calibrator:    NewTokenCalibrator(),
+		pinned:        newPinnedContext(),
 	}
+}
+
+// Pinned returns the PinnedContext store for user-pinned context items.
+// Pinned items survive compaction and are re-injected after each summary.
+func (m *Manager) Pinned() *PinnedContext {
+	return m.pinned
+}
+
+// injectPinnedAfterCompaction inserts a system message containing all pinned
+// context items right after the compaction summary message. This is called
+// after ApplyCompactResult sets the new message list. If a pinned message
+// already exists (from a previous compaction cycle), it is replaced.
+//
+// Must be called with m.mu held.
+func (m *Manager) injectPinnedAfterCompaction() {
+	if m.pinned == nil || m.pinned.IsEmpty() {
+		// Remove any stale pinned message if pins were cleared.
+		for i := 0; i < len(m.messages); i++ {
+			if m.messages[i].Role == "system" && len(m.messages[i].Content) > 0 &&
+				m.messages[i].Content[0].Type == "text" &&
+				strings.Contains(m.messages[i].Content[0].Text, pinnedMarker) {
+				m.messages = append(m.messages[:i], m.messages[i+1:]...)
+				break
+			}
+		}
+		return
+	}
+
+	rendered := m.pinned.Render()
+	if rendered == "" {
+		return
+	}
+
+	pinnedMsg := provider.Message{
+		Role: "system",
+		Content: []provider.ContentBlock{
+			{Type: "text", Text: rendered},
+		},
+	}
+	pinnedMsg.ID = newMessageID()
+
+	// Find insertion point: right after the compaction summary message.
+	// If no summary exists (shouldn't happen in this code path, but be safe),
+	// insert after the first system message.
+	insertIdx := -1
+	for i, msg := range m.messages {
+		if msg.Role == "system" && len(msg.Content) > 0 &&
+			strings.Contains(msg.Content[0].Text, "[Previous conversation summary]") {
+			insertIdx = i + 1
+			break
+		}
+	}
+	if insertIdx < 0 {
+		// Fallback: after the first system message (index 0).
+		if len(m.messages) > 0 && m.messages[0].Role == "system" {
+			insertIdx = 1
+		} else {
+			insertIdx = 0
+		}
+	}
+
+	// Remove any existing pinned message first (from a previous compaction).
+	for i := insertIdx; i < len(m.messages); i++ {
+		if m.messages[i].Role == "system" && len(m.messages[i].Content) > 0 &&
+			strings.Contains(m.messages[i].Content[0].Text, pinnedMarker) {
+			m.messages = append(m.messages[:i], m.messages[i+1:]...)
+			if i < insertIdx {
+				insertIdx--
+			}
+			break
+		}
+	}
+
+	// Insert the pinned message at the insertion point.
+	m.messages = append(m.messages, provider.Message{})
+	copy(m.messages[insertIdx+1:], m.messages[insertIdx:])
+	m.messages[insertIdx] = pinnedMsg
+
+	debug.Log("ctx", "injectPinnedAfterCompaction: injected %d pinned items at position %d", len(m.pinned.List()), insertIdx)
 }
 
 // SetPersistHandler sets a callback invoked on every Add() for real-time
@@ -694,6 +778,13 @@ func (m *Manager) ApplyCompactResult(snapshot CompactSnapshot, result CompactRes
 	}
 
 	m.messages = newMsgs
+
+	// Inject pinned context after compaction. Pinned items survive
+	// compaction by being re-inserted as a system message right after the
+	// summary. This ensures critical context (build flags, constraints, etc.)
+	// is never lost during context summarization.
+	m.injectPinnedAfterCompaction()
+
 	m.version++
 	m.recalcTokens()
 	liveTokensAfter := m.tokenCountLocked()

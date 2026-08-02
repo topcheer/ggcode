@@ -1171,3 +1171,88 @@ func (m *Model) handleConfigRemoveEndpoint(args []string) tea.Cmd {
 	m.chatWriteSystem(nextSystemID(), fmt.Sprintf("\u2713 Removed endpoint %q from vendor %q", name, vendor))
 	return nil
 }
+
+// handlePinCommand manages user-pinned context items that survive compaction.
+//
+// Usage:
+//
+//	/pin <text>     Pin a piece of context (survives compaction)
+//	/pin list       Show all pinned items
+//	/pin clear      Remove all pinned items
+//	/pin remove <n> Remove pinned item by index or ID prefix
+func (m *Model) handlePinCommand(parts []string) tea.Cmd {
+	if m.agent == nil || m.agent.ContextManager() == nil {
+		m.chatWriteSystem(nextSystemID(), "Context manager not available.")
+		return nil
+	}
+
+	pinned := m.agent.ContextManager().Pinned()
+	if pinned == nil {
+		m.chatWriteSystem(nextSystemID(), "Context pinning not supported.")
+		return nil
+	}
+
+	if len(parts) < 2 || strings.TrimSpace(parts[1]) == "" {
+		m.chatWriteSystem(nextSystemID(), m.pinUsageText())
+		return nil
+	}
+
+	sub := parts[1]
+	rest := strings.TrimSpace(strings.Join(parts[2:], " "))
+
+	switch sub {
+	case "list":
+		items := pinned.List()
+		if len(items) == 0 {
+			m.chatWriteSystem(nextSystemID(), "No pinned context items.")
+			return nil
+		}
+		var sb strings.Builder
+		sb.WriteString(fmt.Sprintf("Pinned context (%d items, survives compaction):\n", len(items)))
+		for i, item := range items {
+			preview := item.Text
+			if len(preview) > 80 {
+				preview = preview[:80] + "..."
+			}
+			sb.WriteString(fmt.Sprintf("  %d. [%s] %s\n", i+1, item.ID, preview))
+		}
+		m.chatWriteSystem(nextSystemID(), strings.TrimRight(sb.String(), "\n"))
+		return nil
+
+	case "clear":
+		n := pinned.Clear()
+		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("\u2713 Cleared %d pinned item(s).", n))
+		return nil
+
+	case "remove", "delete", "del":
+		if rest == "" {
+			m.chatWriteSystem(nextSystemID(), "Usage: /pin remove <index|id>")
+			return nil
+		}
+		if pinned.Remove(rest) {
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("\u2713 Removed pinned item %q.", rest))
+		} else {
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Pinned item %q not found.", rest))
+		}
+		return nil
+
+	default:
+		// Treat the entire remaining text as the pin content.
+		text := strings.TrimSpace(strings.Join(parts[1:], " "))
+		id, err := pinned.Add(text)
+		if err != nil {
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Failed to pin: %s", err))
+			return nil
+		}
+		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("\u2713 Pinned context [%s]. It will survive compaction.", id))
+		return nil
+	}
+}
+
+func (m *Model) pinUsageText() string {
+	return "Usage:\n" +
+		"  /pin <text>     Pin context (survives compaction)\n" +
+		"  /pin list       Show pinned items\n" +
+		"  /pin clear      Remove all pinned items\n" +
+		"  /pin remove <n> Remove item by index or ID"
+}
