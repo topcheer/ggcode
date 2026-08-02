@@ -172,6 +172,15 @@ func (t MultiFileWrite) Execute(ctx context.Context, input json.RawMessage) (Res
 		CaptureDiagnosticBaseline(t.WorkingDir, f.Path)
 	}
 
+	// Capture blind-write warnings BEFORE any writes or RecordWrite calls,
+	// because RecordWrite inside the loop would mark files as seen.
+	blindWarnings := make(map[string]string, len(args.Files))
+	for _, f := range args.Files {
+		if w := blindWriteWarning(f.Path); w != "" {
+			blindWarnings[f.Path] = w
+		}
+	}
+
 	for _, f := range args.Files {
 		// Check for cancellation before each file write.
 		if ctx.Err() != nil {
@@ -289,6 +298,13 @@ func (t MultiFileWrite) Execute(ctx context.Context, input json.RawMessage) (Res
 	for _, f := range args.Files {
 		if warning := criticalFileWarning(f.Path); warning != "" {
 			sb.WriteString(warning)
+		}
+	}
+
+	// Warn about blind overwrites (existing files the agent never read).
+	for _, f := range args.Files {
+		if w, ok := blindWarnings[f.Path]; ok {
+			sb.WriteString(w)
 		}
 	}
 

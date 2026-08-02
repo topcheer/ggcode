@@ -99,6 +99,22 @@ func (t *FileIntegrityTracker) CheckStale(path string) (stale bool, since time.T
 	return false, time.Time{}
 }
 
+// HasBeenSeen reports whether the file at path has ever been recorded by the
+// agent (via read_file, edit_file, write_file, or multi_file_write) in the
+// current process. Returns false for files the agent has never interacted
+// with, even if they exist on disk.
+//
+// This is used by write_file and multi_file_write to detect "blind overwrites"
+// — cases where the agent is about to overwrite an existing file whose current
+// contents it has never seen, risking silent data loss.
+func (t *FileIntegrityTracker) HasBeenSeen(path string) bool {
+	key := normalizePath(path)
+	t.mu.RLock()
+	_, ok := t.modtimes[key]
+	t.mu.RUnlock()
+	return ok
+}
+
 // Reset removes all tracked mtimes. Primarily for testing.
 func (t *FileIntegrityTracker) Reset() {
 	t.mu.Lock()
@@ -123,4 +139,29 @@ func staleReadHint(path string) string {
 		return ""
 	}
 	return fmt.Sprintf("file was modified externally since last read (changed after %s) — re-read with read_file to get current content", since.Format("2006-01-02 15:04:05"))
+}
+
+// blindWriteWarning checks whether the agent is about to overwrite a file it
+// has never read in the current session. If so, it returns a warning string
+// suitable for appending to write_file and multi_file_write output.
+//
+// This catches a common data-loss scenario: the agent uses write_file to
+// replace a file's contents without first reading it, destroying existing
+// code it never saw. Unlike edit_file (which requires old_text to match the
+// current content), write_file performs no such verification — this warning
+// fills that gap by making the model aware it is doing a blind overwrite.
+//
+// Returns an empty string for new files (no existing content to lose) or
+// files the agent has already interacted with.
+func blindWriteWarning(path string) string {
+	if !defaultFileTracker.HasBeenSeen(path) {
+		if info, err := os.Stat(path); err == nil && info.Size() > 0 {
+			return fmt.Sprintf(
+				"\nWarning: overwriting %s (%d bytes) without having read it in this session. "+
+					"The previous content will be lost. Consider using read_file first, or edit_file for targeted changes.",
+				path, info.Size(),
+			)
+		}
+	}
+	return ""
 }
