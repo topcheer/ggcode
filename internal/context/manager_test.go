@@ -289,6 +289,88 @@ func TestContextManager_ApplyCompactResultPreservesMessagesAppendedAfterSnapshot
 	}
 }
 
+func TestContextManager_PinnedContextSurvivesCompaction(t *testing.T) {
+	cm := NewManager(1000)
+	ctx := context.Background()
+	prov := &mockProvider{}
+
+	// Pin a critical piece of context before compaction.
+	pinID, err := cm.Pinned().Add("CRITICAL: build with go build -tags goolm ./...")
+	if err != nil {
+		t.Fatalf("pin add failed: %v", err)
+	}
+	if pinID == "" {
+		t.Fatal("expected non-empty pin ID")
+	}
+
+	cm.Add(provider.Message{Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "System prompt."}}})
+	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: strings.Repeat("old question ", 80)}}})
+	cm.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: strings.Repeat("old answer ", 80)}}})
+	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "recent question"}}})
+
+	// Trigger compaction.
+	snapshot := cm.CompactSnapshot()
+	result, err := snapshot.Compact(ctx, prov)
+	if err != nil {
+		t.Fatalf("snapshot compact failed: %v", err)
+	}
+
+	applied, _ := cm.ApplyCompactResult(snapshot, result)
+	if !applied {
+		t.Fatal("expected compact result to apply")
+	}
+
+	msgs := cm.Messages()
+	// Verify the summary was inserted.
+	if !messageContainsTextInList(msgs, "[Previous conversation summary]") {
+		t.Fatal("expected compaction summary")
+	}
+	// Verify pinned context survived compaction.
+	if !messageContainsTextInList(msgs, "[Pinned Context") {
+		t.Fatal("expected pinned context to survive compaction")
+	}
+	if !messageContainsTextInList(msgs, "go build -tags goolm") {
+		t.Fatal("expected pinned text content to be present after compaction")
+	}
+
+	// Verify pinned message is positioned after the summary.
+	summaryIdx := -1
+	pinnedIdx := -1
+	for i, msg := range msgs {
+		if msg.Role == "system" && len(msg.Content) > 0 {
+			text := msg.Content[0].Text
+			if strings.Contains(text, "[Previous conversation summary]") {
+				summaryIdx = i
+			}
+			if strings.Contains(text, "[Pinned Context") {
+				pinnedIdx = i
+			}
+		}
+	}
+	if summaryIdx < 0 || pinnedIdx < 0 {
+		t.Fatalf("summary=%d pinned=%d (both should be found)", summaryIdx, pinnedIdx)
+	}
+	if pinnedIdx <= summaryIdx {
+		t.Fatalf("pinned context (idx %d) should come after summary (idx %d)", pinnedIdx, summaryIdx)
+	}
+
+	// Verify clearing pins removes the pinned message.
+	cm.Pinned().Clear()
+	// Trigger another compaction to re-apply.
+	snapshot2 := cm.CompactSnapshot()
+	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: strings.Repeat("more content ", 80)}}})
+	result2, err := snapshot2.Compact(ctx, prov)
+	if err != nil {
+		t.Fatalf("second compact failed: %v", err)
+	}
+	cm.ApplyCompactResult(snapshot2, result2)
+
+	msgs2 := cm.Messages()
+	if messageContainsTextInList(msgs2, "[Pinned Context") {
+		t.Fatal("expected pinned message removed after Clear + compaction")
+	}
+}
+
 func TestContextManager_VersionCounter_IncrementsOnMutation(t *testing.T) {
 	cm := NewManager(1000)
 
