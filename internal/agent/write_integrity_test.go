@@ -136,6 +136,30 @@ func worker(ch chan int) {
 	}
 }
 
+func TestCheckWriteIntegrity_ErrorOrder(t *testing.T) {
+	newGo := `package main
+import "net/http"
+func fetch(url string) error {
+	resp, err := http.Get(url)
+	defer resp.Body.Close()
+	if err != nil {
+		return err
+	}
+	return nil
+}
+`
+	warning := checkWriteIntegrity("fetch.go", "", newGo)
+	if warning == "" {
+		t.Fatal("expected error order warning, got empty string")
+	}
+	if !strings.Contains(warning, "resp") {
+		t.Errorf("warning should mention resp, got: %s", warning)
+	}
+	if !strings.Contains(warning, "error") {
+		t.Errorf("warning should mention error, got: %s", warning)
+	}
+}
+
 func TestCheckWriteIntegrity_WarningCap(t *testing.T) {
 	// Create content that triggers multiple warnings:
 	// null bytes + content loss + Go syntax errors
