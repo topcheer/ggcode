@@ -15,7 +15,7 @@ package agent
 //   - Cursor: Auto-imports on completion + "Add all missing imports" command
 //   - Aider: Runs goimports automatically after edits
 //   - Claude Code: Relies on LSP diagnostics (requires running language server)
-//   - Cline/OpenHands: Reactive only — catches import errors after build fails
+//   - Cline/OpenHands: Reactive only - catches import errors after build fails
 //
 // ggcode's approach: zero-cost AST-based analysis that runs synchronously after
 // each Go file write/edit, catching unused imports and suggesting missing stdlib
@@ -23,7 +23,7 @@ package agent
 // (no external dependencies, <1ms per file).
 //
 // Design decisions:
-//   - Only runs on .go files (highest value — Go has strict import rules)
+//   - Only runs on .go files (highest value - Go has strict import rules)
 //   - Skips files with syntax errors (already caught by checkGoSyntax)
 //   - Unused import detection is near-zero false-positive: it checks whether the
 //     package identifier appears anywhere outside the import block
@@ -34,7 +34,12 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
+	"sync"
+	"time"
 )
 
 // maxImportWarnings caps the number of import warnings per write.
@@ -96,7 +101,7 @@ var commonGoStdlib = map[string]string{
 	"zip":       "archive/zip",
 	"sql":       "database/sql",
 	"driver":    "database/sql/driver",
-	"redis":     "", // not stdlib — skip
+	"redis":     "", // not stdlib - skip
 	"testing":   "testing",
 	"tabwriter": "text/tabwriter",
 	"scanner":   "text/scanner",
@@ -120,10 +125,207 @@ var commonGoStdlib = map[string]string{
 	"uuid":      "github.com/google/uuid",
 }
 
+// goModCacheTTL limits how often we re-read go.mod for the same directory.
+// go.mod changes are infrequent during a session; caching avoids redundant I/O
+// on every file write.
+const goModCacheTTL = 30 * time.Second
+
+type goModCacheEntry struct {
+	importMap map[string]string
+	modTime   time.Time
+	loadedAt  time.Time
+}
+
+var (
+	goModCacheMu    sync.RWMutex
+	goModCacheStore = make(map[string]goModCacheEntry)
+)
+
+// goModRequirePattern matches lines like:
+//
+//	github.com/google/uuid v1.6.0
+//	golang.org/x/crypto v0.20.0 // indirect
+//
+// It captures the module path (everything before the version).
+var goModRequirePattern = regexp.MustCompile(`^\s*([a-zA-Z0-9._\-/]+)\s+v[0-9]`)
+
+// loadGoModImports reads go.mod from the working directory (or nearest parent)
+// and builds a map of package short-name to import path for third-party modules.
+// This enables missing-import detection beyond the curated stdlib map.
+//
+// For example, if go.mod contains `require github.com/charmbracelet/lipgloss v2.x`,
+// this returns {"lipgloss": "github.com/charmbracelet/lipgloss/v2"} so that
+// code referencing lipgloss.New() without the import is detected.
+//
+// The result is cached for goModCacheTTL to avoid repeated file I/O.
+func loadGoModImports(workingDir string) map[string]string {
+	if workingDir == "" {
+		return nil
+	}
+
+	goModCacheMu.RLock()
+	if entry, ok := goModCacheStore[workingDir]; ok && time.Since(entry.loadedAt) < goModCacheTTL {
+		goModCacheMu.RUnlock()
+		return entry.importMap
+	}
+	goModCacheMu.RUnlock()
+
+	goModPath := findGoMod(workingDir)
+	if goModPath == "" {
+		goModCacheMu.Lock()
+		goModCacheStore[workingDir] = goModCacheEntry{importMap: nil, loadedAt: time.Now()}
+		goModCacheMu.Unlock()
+		return nil
+	}
+
+	info, err := os.Stat(goModPath)
+	if err != nil {
+		return nil
+	}
+
+	goModCacheMu.RLock()
+	if entry, ok := goModCacheStore[workingDir]; ok && !info.ModTime().After(entry.modTime) {
+		goModCacheMu.RUnlock()
+		return entry.importMap
+	}
+	goModCacheMu.RUnlock()
+
+	data, err := os.ReadFile(goModPath)
+	if err != nil {
+		return nil
+	}
+
+	result := parseGoModRequires(string(data), goModPath)
+
+	goModCacheMu.Lock()
+	goModCacheStore[workingDir] = goModCacheEntry{
+		importMap: result,
+		modTime:   info.ModTime(),
+		loadedAt:  time.Now(),
+	}
+	goModCacheMu.Unlock()
+
+	return result
+}
+
+// findGoMod walks up from startDir to find the nearest go.mod file.
+func findGoMod(startDir string) string {
+	dir := startDir
+	for i := 0; i < 20; i++ { // limit depth to avoid infinite loops
+		p := filepath.Join(dir, "go.mod")
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	return ""
+}
+
+// parseGoModRequires extracts require directives from go.mod content and builds
+// a package-name → import-path map. For versioned module paths (e.g.
+// /v2, /v3), the path is kept as-is since the import path includes the version
+// segment but the package name does not.
+func parseGoModRequires(content, goModPath string) map[string]string {
+	result := make(map[string]string)
+
+	// Determine module path to identify internal vs. external imports.
+	modulePath := ""
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "module ") {
+			modulePath = strings.TrimSpace(strings.TrimPrefix(line, "module "))
+			break
+		}
+	}
+
+	inRequireBlock := false
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+
+		// Detect start of require block or single-line require.
+		// Check for "require (" first - "require (" would also match
+		// HasPrefix(trimmed, "require ") since the paren is preceded by a space.
+		if trimmed == "require (" {
+			inRequireBlock = true
+			continue
+		}
+		if strings.HasPrefix(trimmed, "require ") {
+			// Single-line require: require path v1.0.0
+			parseRequireLine(trimmed[len("require "):], modulePath, result)
+			continue
+		}
+		if trimmed == ")" && inRequireBlock {
+			inRequireBlock = false
+			continue
+		}
+		if inRequireBlock {
+			parseRequireLine(trimmed, modulePath, result)
+		}
+	}
+
+	return result
+}
+
+// parseRequireLine processes a single require directive line and adds entries
+// to the result map if the module path yields a usable package name.
+func parseRequireLine(line, modulePath string, result map[string]string) {
+	matches := goModRequirePattern.FindStringSubmatch(line)
+	if len(matches) < 2 {
+		return
+	}
+	modPath := matches[1]
+
+	// Skip internal modules (within the same module path prefix).
+	if modulePath != "" && strings.HasPrefix(modPath, modulePath) {
+		return
+	}
+
+	// Skip indirect dependencies - they're less likely to be directly imported
+	// by the code being edited, and including them would bloat the map with noise.
+	if strings.Contains(line, "// indirect") {
+		return
+	}
+
+	// Derive package name: last non-version segment of the module path.
+	segments := strings.Split(modPath, "/")
+	last := segments[len(segments)-1]
+	if isVersionSegment(last) && len(segments) >= 2 {
+		last = segments[len(segments)-2]
+	}
+
+	// Skip if we can't derive a meaningful package name.
+	if last == "" || isVersionSegment(last) {
+		return
+	}
+
+	// Don't overwrite stdlib entries - stdlib map takes priority.
+	if _, isStdlib := commonGoStdlib[last]; isStdlib {
+		return
+	}
+
+	// If two modules map to the same package name, keep the first (deterministic).
+	// This is a rare edge case and either suggestion would be a valid import.
+	if result[last] == "" {
+		result[last] = modPath
+	}
+}
+
 // checkGoImports analyzes Go source for unused and missing imports.
 // Returns warning strings. Returns nil if the file has syntax errors
 // (those are already caught by checkGoSyntax) or no import issues.
 func checkGoImportsAST(filePath string, f *ast.File) []string {
+	return checkGoImportsASTWithDir(filePath, f, "")
+}
+
+// checkGoImportsASTWithDir is like checkGoImportsAST but also uses the working
+// directory's go.mod to detect missing third-party imports (e.g. lipgloss.New()
+// without importing the lipgloss package). When workingDir is empty or no go.mod
+// is found, behavior is identical to checkGoImportsAST.
+func checkGoImportsASTWithDir(filePath string, f *ast.File, workingDir string) []string {
 	if f == nil {
 		return nil
 	}
@@ -142,7 +344,7 @@ func checkGoImportsAST(filePath string, f *ast.File) []string {
 			parts := strings.Split(rawPath, "/")
 			name = parts[len(parts)-1]
 		}
-		// Blank (_) and dot (.) imports are always "used" — they have side effects.
+		// Blank (_) and dot (.) imports are always "used" - they have side effects.
 		if name == "_" || name == "." {
 			continue
 		}
@@ -158,7 +360,7 @@ func checkGoImportsAST(filePath string, f *ast.File) []string {
 	}
 
 	if len(imports) == 0 && !hasGoCodeDecls(f) {
-		// No imports and no code — nothing to analyze.
+		// No imports and no code - nothing to analyze.
 		return nil
 	}
 
@@ -185,7 +387,7 @@ func checkGoImportsAST(filePath string, f *ast.File) []string {
 		importNameSet[imp.name] = true
 		if !usedIdents[imp.name] {
 			warnings = append(warnings, fmt.Sprintf(
-				"Unused import: %q (%s) is imported but never referenced — "+
+				"Unused import: %q (%s) is imported but never referenced - "+
 					"remove it or the build will fail with \"imported and not used\".",
 				imp.name, imp.path))
 		}
@@ -217,6 +419,17 @@ func checkGoImportsAST(filePath string, f *ast.File) []string {
 			// Skip identifiers starting with lowercase that aren't known packages
 			// (likely local variables, receivers, struct fields).
 			suggestedPath, known := commonGoStdlib[pkgName]
+			if !known {
+				// Check project's go.mod for third-party module imports.
+				if workingDir != "" {
+					if modPath := loadGoModImports(workingDir); modPath != nil {
+						if p, ok := modPath[pkgName]; ok && p != "" {
+							suggestedPath = p
+							known = true
+						}
+					}
+				}
+			}
 			if !known || suggestedPath == "" {
 				return true
 			}
@@ -255,6 +468,13 @@ func hasGoCodeDecls(f *ast.File) bool {
 // checkGoImports is a convenience wrapper that parses src then calls
 // checkGoImportsAST. Used by tests and as a standalone entry point.
 func checkGoImports(filePath, src string) []string {
+	return checkGoImportsWithDir(filePath, src, "")
+}
+
+// checkGoImportsWithDir is like checkGoImports but also leverages the project's
+// go.mod for third-party import detection. The workingDir should be the agent's
+// working directory.
+func checkGoImportsWithDir(filePath, src, workingDir string) []string {
 	if strings.TrimSpace(src) == "" {
 		return nil
 	}
@@ -263,7 +483,7 @@ func checkGoImports(filePath, src string) []string {
 	if err != nil {
 		return nil
 	}
-	return checkGoImportsAST(filePath, f)
+	return checkGoImportsASTWithDir(filePath, f, workingDir)
 }
 
 // isVersionSegment reports whether s looks like a Go module version path

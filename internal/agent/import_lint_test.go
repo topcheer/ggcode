@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -281,5 +283,179 @@ func main() {
 		if strings.Contains(w, "Unused import") && strings.Contains(w, "v2") {
 			t.Errorf("versioned path should not trigger false unused import: %s", w)
 		}
+	}
+}
+
+func TestParseGoModRequires(t *testing.T) {
+	content := `module github.com/topcheer/ggcode
+
+go 1.26
+
+require (
+	github.com/charmbracelet/lipgloss/v2 v2.0.0
+	github.com/sirupsen/logrus v1.9.0
+	golang.org/x/mod v0.20.0 // indirect
+	github.com/topcheer/ggcode/internal v0.0.0
+)
+`
+	result := parseGoModRequires(content, "github.com/topcheer/ggcode")
+	// lipgloss from a versioned module path
+	if p, ok := result["lipgloss"]; !ok {
+		t.Errorf("expected lipgloss in go.mod import map, got: %v", result)
+	} else if p != "github.com/charmbracelet/lipgloss/v2" {
+		t.Errorf("lipgloss path = %q, want github.com/charmbracelet/lipgloss/v2", p)
+	}
+	// logrus from a direct module path
+	if p, ok := result["logrus"]; !ok {
+		t.Errorf("expected logrus in go.mod import map")
+	} else if p != "github.com/sirupsen/logrus" {
+		t.Errorf("logrus path = %q, want github.com/sirupsen/logrus", p)
+	}
+	// indirect deps should be skipped
+	if _, ok := result["mod"]; ok {
+		t.Errorf("indirect dep golang.org/x/mod should not be in import map")
+	}
+	// internal modules should be skipped
+	if _, ok := result["internal"]; ok {
+		t.Errorf("internal module should not be in import map")
+	}
+}
+
+func TestLoadGoModImports_Caching(t *testing.T) {
+	dir := t.TempDir()
+	goMod := filepath.Join(dir, "go.mod")
+	err := os.WriteFile(goMod, []byte("module test.example/mymod\n\ngo 1.26\n\nrequire (\n\tgithub.com/sirupsen/logrus v1.9.0\n)\n"), 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Clear cache for this dir
+	goModCacheMu.Lock()
+	delete(goModCacheStore, dir)
+	goModCacheMu.Unlock()
+
+	result := loadGoModImports(dir)
+	if result == nil {
+		t.Fatal("expected non-nil import map from go.mod")
+	}
+	if p, ok := result["logrus"]; !ok || p != "github.com/sirupsen/logrus" {
+		t.Errorf("logrus not found correctly in go.mod import map: %v", result)
+	}
+
+	// Second call should use cache and return same result
+	result2 := loadGoModImports(dir)
+	if p, ok := result2["logrus"]; !ok || p != "github.com/sirupsen/logrus" {
+		t.Errorf("cached call returned different result: %v", result2)
+	}
+}
+
+func TestLoadGoModImports_NoGoMod(t *testing.T) {
+	dir := t.TempDir()
+	goModCacheMu.Lock()
+	delete(goModCacheStore, dir)
+	goModCacheMu.Unlock()
+	result := loadGoModImports(dir)
+	if result != nil {
+		t.Errorf("expected nil result when no go.mod exists, got: %v", result)
+	}
+}
+
+func TestCheckGoImportsWithDir_MissingThirdPartyImport(t *testing.T) {
+	dir := t.TempDir()
+	goMod := filepath.Join(dir, "go.mod")
+	// Create a go.mod with a third-party dependency
+	err := os.WriteFile(goMod, []byte(`module test.example/mymod
+
+go 1.26
+
+require (
+	github.com/sirupsen/logrus v1.9.0
+)
+`), 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Clear cache
+	goModCacheMu.Lock()
+	delete(goModCacheStore, dir)
+	goModCacheMu.Unlock()
+
+	// Source that uses logrus without importing it
+	src := `package main
+
+func main() {
+	_ = logrus.New()
+}
+`
+	warnings := checkGoImportsWithDir("main.go", src, dir)
+	found := false
+	for _, w := range warnings {
+		if strings.Contains(w, "Likely missing import") && strings.Contains(w, "logrus") {
+			found = true
+			if !strings.Contains(w, "github.com/sirupsen/logrus") {
+				t.Errorf("warning should suggest github.com/sirupsen/logrus, got: %s", w)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("expected missing import warning for logrus, got: %v", warnings)
+	}
+}
+
+func TestCheckGoImportsWithDir_NoFalsePositiveForLowercase(t *testing.T) {
+	dir := t.TempDir()
+	goMod := filepath.Join(dir, "go.mod")
+	err := os.WriteFile(goMod, []byte(`module test.example/mymod
+
+go 1.26
+
+require (
+	github.com/somepkg/logger v1.0.0
+)
+`), 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	goModCacheMu.Lock()
+	delete(goModCacheStore, dir)
+	goModCacheMu.Unlock()
+
+	// Source uses logger as a package reference without importing it.
+	// Since logger is in go.mod, this SHOULD be detected as missing import.
+	src := `package main
+
+func main() {
+	_ = logger.Println("hello")
+}
+`
+	warnings := checkGoImportsWithDir("main.go", src, dir)
+	found := false
+	for _, w := range warnings {
+		if strings.Contains(w, "Likely missing import") && strings.Contains(w, "logger") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected missing import for logger, got: %v", warnings)
+	}
+}
+
+func TestCheckGoImportsWithDir_EmptyWorkingDir(t *testing.T) {
+	// With empty workingDir, should behave exactly like checkGoImports (stdlib only)
+	src := `package main
+
+func main() {
+	_ = fmt.Println("hello")
+}
+`
+	warnings := checkGoImportsWithDir("main.go", src, "")
+	found := false
+	for _, w := range warnings {
+		if strings.Contains(w, "Likely missing import") && strings.Contains(w, "fmt") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected missing import warning for fmt with empty workingDir")
 	}
 }

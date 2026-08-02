@@ -92,8 +92,11 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 		}
 
 		// Import analysis only if AST parsed cleanly.
+		// Use the file's directory as the working dir so go.mod-aware
+		// third-party import detection can find the module file.
 		if goSyntaxErr == nil {
-			if importWarnings := checkGoImportsAST(filePath, goAST); len(importWarnings) > 0 {
+			fileDir := filepath.Dir(filePath)
+			if importWarnings := checkGoImportsASTWithDir(filePath, goAST, fileDir); len(importWarnings) > 0 {
 				warnings = append(warnings, importWarnings...)
 			}
 		}
