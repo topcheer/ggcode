@@ -132,6 +132,34 @@ func (r *REPL) SetA2AHandler(h *a2a.TaskHandler) {
 // SetLanChatHub connects the LAN chat hub for /chat panel support and
 // registers the lanchat tool so the agent can send messages, list
 // participants, and manage approvals programmatically.
+// RegisterCallbacks wires the TUI message-delivery callbacks into the agent.
+// This must be called after both r.agent and r.program are set, regardless
+// of whether LAN chat is configured. Previously these callbacks were inside
+// SetLanChatHub, which meant they were never registered when lanchat was
+// disabled — causing wait_command streaming and verify progress to silently
+// not work.
+func (r *REPL) RegisterCallbacks() {
+	if r.agent == nil {
+		return
+	}
+	// Use sendProgramMsgs which handles nil program gracefully.
+	r.agent.SetVerifyCallbacks(
+		func(text string) {
+			r.sendProgramMsgs(verifyProgressMsg{text: text})
+		},
+		func(result agent.VerifyResult) {
+			r.sendProgramMsgs(verifyResultMsg{result: result})
+		},
+	)
+	r.agent.SetToolProgressCallback(func(toolID, toolName, output string) {
+		r.sendProgramMsgs(toolProgressMsg{
+			toolID:   toolID,
+			toolName: toolName,
+			output:   output,
+		})
+	})
+}
+
 func (r *REPL) SetLanChatHub(hub *lanchat.Hub) {
 	r.model.SetLanChatHub(hub, r.sendTUI)
 	if r.agent != nil && hub != nil {
@@ -152,34 +180,6 @@ func (r *REPL) SetLanChatHub(hub *lanchat.Hub) {
 			return lanchat.FormatPeersInfo(hubCopy, wd)
 		})
 	}
-	// Register async verification callbacks — progress updates and final
-	// results are delivered as TUI messages so the user sees them live.
-	prog := r.program
-	r.agent.SetVerifyCallbacks(
-		func(text string) {
-			if prog != nil {
-				prog.Send(verifyProgressMsg{text: text})
-			}
-		},
-		func(result agent.VerifyResult) {
-			if prog != nil {
-				prog.Send(verifyResultMsg{result: result})
-			}
-		},
-	)
-
-	// Register tool progress callback for streaming tools (e.g. wait_command).
-	// Sends a dedicated message type that updates the running tool's body
-	// in-place, creating a live scrolling output effect.
-	r.agent.SetToolProgressCallback(func(toolID, toolName, output string) {
-		if prog != nil {
-			prog.Send(toolProgressMsg{
-				toolID:   toolID,
-				toolName: toolName,
-				output:   output,
-			})
-		}
-	})
 	// Register auto-approve callback: inject the message into the TUI event
 	// loop as a lanchatApprovalReqMsg so the existing approval→submit flow
 	// handles it. This ensures "always approve" policy actually triggers the
@@ -1179,6 +1179,10 @@ func (r *REPL) Run() error {
 	if r.planSwitcher != nil {
 		r.planSwitcher.program = r.program
 	}
+	// Register TUI callbacks (verify progress, tool streaming) now that
+	// r.program is set. Previously inside SetLanChatHub which was called
+	// before Run() — so r.program was always nil at registration time.
+	r.RegisterCallbacks()
 	traceMark("new bubbletea program")
 	debug.Log("repl", "program created stdin_is_term=%v stdout_is_term=%v",
 		term.IsTerminal(os.Stdin.Fd()), term.IsTerminal(os.Stdout.Fd()))
