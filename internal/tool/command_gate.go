@@ -400,7 +400,6 @@ func (g *CommandGate) InteractiveCommandWarning(cmd string) string {
 
 // splitCompoundCommand splits on shell separators (|, ;, &&, ||).
 func splitCompoundCommand(cmd string) []string {
-	// Simple approach: split on top-level |, ;, and the word operators && and ||.
 	var parts []string
 	var current strings.Builder
 	inSingleQuote := false
@@ -410,20 +409,21 @@ func splitCompoundCommand(cmd string) []string {
 	for i < len(cmd) {
 		ch := cmd[i]
 
-		if ch == '\\' && i+1 < len(cmd) {
+		// Handle escape sequences outside single quotes.
+		if ch == '\\' && !inSingleQuote && i+1 < len(cmd) {
 			current.WriteByte(ch)
 			current.WriteByte(cmd[i+1])
 			i += 2
 			continue
 		}
 
+		// Toggle quote state.
 		if ch == '\'' && !inDoubleQuote {
 			inSingleQuote = !inSingleQuote
 			current.WriteByte(ch)
 			i++
 			continue
 		}
-
 		if ch == '"' && !inSingleQuote {
 			inDoubleQuote = !inDoubleQuote
 			current.WriteByte(ch)
@@ -431,24 +431,12 @@ func splitCompoundCommand(cmd string) []string {
 			continue
 		}
 
+		// Check for top-level separators when not quoted.
 		if !inSingleQuote && !inDoubleQuote {
-			// Check for && or ||
-			if i+1 < len(cmd) && ch == '&' && cmd[i+1] == '&' {
+			if sep, advance := matchSeparator(cmd, i); sep {
 				parts = append(parts, current.String())
 				current.Reset()
-				i += 2
-				continue
-			}
-			if i+1 < len(cmd) && ch == '|' && cmd[i+1] == '|' {
-				parts = append(parts, current.String())
-				current.Reset()
-				i += 2
-				continue
-			}
-			if ch == ';' || ch == '|' {
-				parts = append(parts, current.String())
-				current.Reset()
-				i++
+				i += advance
 				continue
 			}
 		}
@@ -461,6 +449,23 @@ func splitCompoundCommand(cmd string) []string {
 		parts = append(parts, current.String())
 	}
 	return parts
+}
+
+// matchSeparator checks if position i in cmd is a shell separator (|, ;, &&, ||).
+// Returns (true, advance) where advance is how many bytes to skip.
+func matchSeparator(cmd string, i int) (bool, int) {
+	ch := cmd[i]
+	if ch == ';' || ch == '|' {
+		// Check for || (but single | is also a pipe separator)
+		if i+1 < len(cmd) && ch == '|' && cmd[i+1] == '|' {
+			return true, 2
+		}
+		return true, 1
+	}
+	if i+1 < len(cmd) && ch == '&' && cmd[i+1] == '&' {
+		return true, 2
+	}
+	return false, 0
 }
 
 // checkInteractivePart checks a single command pipeline segment for interactive
@@ -605,30 +610,34 @@ func isInteractiveApp(bin string) bool {
 	return apps[bin]
 }
 
+// nonInteractiveOverrides maps binary names to the set of flags that make
+// them non-interactive (exit after one-shot).
+var nonInteractiveOverrides = map[string]map[string]bool{
+	"less":       {"-E": true, "--quit-at-eof": true, "-F": true, "--quit-if-one-screen": true},
+	"bash":       {"-c": true},
+	"sh":         {"-c": true},
+	"zsh":        {"-c": true},
+	"fish":       {"-c": true},
+	"top":        {"-b": true, "-n": true},
+	"htop":       {"-C": true},
+	"powershell": {"-Command": true, "-c": true, "-File": true},
+	"pwsh":       {"-Command": true, "-c": true, "-File": true},
+}
+
 // hasNonInteractiveOverride checks if the command has flags that make an
 // otherwise interactive app non-interactive.
 func hasNonInteractiveOverride(bin string, args []string) bool {
+	overrides, ok := nonInteractiveOverrides[bin]
+	if !ok {
+		return false
+	}
 	for _, a := range args {
-		switch bin {
-		case "less":
-			// less can be used non-interactively with these flags.
-			if a == "-E" || a == "--quit-at-eof" || a == "-F" || a == "--quit-if-one-screen" {
-				return true
-			}
-		case "bash", "sh", "zsh", "fish":
-			// Shell with -c runs a single command and exits.
-			if a == "-c" {
-				return true
-			}
-		case "top", "htop":
-			// -b (batch mode), -n 1 (one iteration)
-			if a == "-b" || a == "-n" || strings.HasPrefix(a, "-n") {
-				return true
-			}
-		case "powershell", "pwsh":
-			if a == "-Command" || a == "-c" || a == "-File" {
-				return true
-			}
+		if overrides[a] {
+			return true
+		}
+		// Combined short flags: top -n1, top -bn1
+		if bin == "top" && strings.HasPrefix(a, "-n") {
+			return true
 		}
 	}
 	return false
@@ -653,54 +662,56 @@ func interactiveAppSuggestion(bin string) string {
 	}
 }
 
+// infiniteCmdCheckers maps binary names to functions that check whether the
+// command runs forever. Each checker receives the args and returns true if the
+// invocation is infinite/hanging.
+var infiniteCmdCheckers = map[string]func(args []string) bool{
+	"tail":   isInfiniteTail,
+	"cat":    isBareStdinReader,
+	"tee":    isBareStdinReader,
+	"sleep":  isBareStdinReader,
+	"nc":     isInfiniteNetcat,
+	"ncat":   isInfiniteNetcat,
+	"netcat": isInfiniteNetcat,
+	"watch":  func(_ []string) bool { return true },
+	"yes":    func(_ []string) bool { return true },
+}
+
 // isInfiniteCommand returns true for commands that run forever by design.
 func isInfiniteCommand(bin string, args []string) bool {
-	switch bin {
-	case "tail":
-		// tail -f follows forever. tail without -f exits normally.
-		for _, a := range args {
-			if a == "-f" || a == "--follow" || strings.HasPrefix(a, "-F") {
-				return true
-			}
-			// Combined flags like -fq
-			if strings.HasPrefix(a, "-") && !strings.HasPrefix(a, "--") && strings.Contains(a, "f") {
-				return true
-			}
-		}
+	checker, ok := infiniteCmdCheckers[bin]
+	if !ok {
 		return false
-	case "watch":
-		// watch runs a command repeatedly forever.
-		return true
-	case "yes":
-		// yes loops forever printing a string.
-		return true
-	case "cat":
-		// cat with no arguments reads from stdin forever.
-		if len(args) == 0 {
+	}
+	return checker(args)
+}
+
+// isInfiniteTail detects tail -f / --follow / -F / combined -fq flags.
+func isInfiniteTail(args []string) bool {
+	for _, a := range args {
+		if a == "-f" || a == "--follow" || strings.HasPrefix(a, "-F") {
 			return true
 		}
-		return false
-	case "tee":
-		// tee with no file args reads stdin forever.
-		if len(args) == 0 {
+		// Combined short flags containing 'f' (e.g. -fq)
+		if strings.HasPrefix(a, "-") && !strings.HasPrefix(a, "--") && strings.Contains(a, "f") {
 			return true
 		}
-		return false
-	case "nc", "ncat", "netcat":
-		// netcat in listen mode (-l) blocks forever waiting for connections.
-		for _, a := range args {
-			if a == "-l" || a == "--listen" {
-				return true
-			}
-		}
-		return false
-	case "sleep":
-		// Very long sleeps can effectively hang. Only flag if no duration
-		// argument is given (bare sleep).
-		if len(args) == 0 {
+	}
+	return false
+}
+
+// isBareStdinReader returns true when a command that normally reads from stdin
+// is invoked with no arguments (cat, tee, sleep without duration).
+func isBareStdinReader(args []string) bool {
+	return len(args) == 0
+}
+
+// isInfiniteNetcat detects nc/ncat/netcat in listen mode (-l / --listen).
+func isInfiniteNetcat(args []string) bool {
+	for _, a := range args {
+		if a == "-l" || a == "--listen" {
 			return true
 		}
-		return false
 	}
 	return false
 }
