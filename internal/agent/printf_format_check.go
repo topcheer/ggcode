@@ -381,38 +381,63 @@ func countFormatVerbs(format string) int {
 			break
 		}
 		// %% is a literal percent, not a verb.
-		if i < len(format) && format[i] == '%' {
+		if format[i] == '%' {
 			i++
 			continue
 		}
-		// Skip explicit argument index: %[N]
-		if i < len(format) && format[i] == '[' {
-			i++
-			for i < len(format) && isDigit(format[i]) {
-				i++
-			}
-			if i < len(format) && format[i] == ']' {
-				i++
-			}
-		}
-		// Skip over flags, width, precision, '*'.
-		for i < len(format) && (isFlagChar(format[i]) || format[i] == '*' || isDigit(format[i])) {
-			i++
-		}
-		// Skip precision dot and its digits.
-		if i < len(format) && format[i] == '.' {
-			i++
-			for i < len(format) && (format[i] == '*' || isDigit(format[i])) {
-				i++
-			}
-		}
-		// The next non-flag character is the verb.
-		if i < len(format) && isVerbChar(format[i]) {
+		// Parse a single format directive (index, flags, width, precision, verb).
+		if verb, ok := parseFormatDirective(format, i); ok {
 			count++
-			i++
+			i = verb
+		} else {
+			i++ // unrecognized; skip to avoid infinite loop
 		}
 	}
 	return count
+}
+
+// parseFormatDirective parses a printf format directive starting at position
+// `start` (the character immediately after the opening %). It skips the
+// explicit arg index (%[N]), flags, width, and precision, then checks if the
+// next character is a valid verb. Returns the position after the verb and true
+// if a verb was found; otherwise returns start and false.
+func parseFormatDirective(format string, start int) (int, bool) {
+	i := start
+	// Skip explicit argument index: %[N]
+	if i < len(format) && format[i] == '[' {
+		i++
+		for i < len(format) && isDigit(format[i]) {
+			i++
+		}
+		if i < len(format) && format[i] == ']' {
+			i++
+		}
+	}
+	// Skip over flags, width, '*'.
+	i = skipWhile(format, i, func(b byte) bool {
+		return isFlagChar(b) || b == '*' || isDigit(b)
+	})
+	// Skip precision dot and its digits/star.
+	if i < len(format) && format[i] == '.' {
+		i++
+		i = skipWhile(format, i, func(b byte) bool {
+			return b == '*' || isDigit(b)
+		})
+	}
+	// The next non-flag character is the verb.
+	if i < len(format) && isVerbChar(format[i]) {
+		return i + 1, true
+	}
+	return start, false
+}
+
+// skipWhile advances index i past all consecutive bytes for which pred returns
+// true, bounded by the string length.
+func skipWhile(s string, i int, pred func(byte) bool) int {
+	for i < len(s) && pred(s[i]) {
+		i++
+	}
+	return i
 }
 
 func isFlagChar(c byte) bool {
