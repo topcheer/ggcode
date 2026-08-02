@@ -212,6 +212,13 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 		warnings = append(warnings, pathWarnings...)
 	}
 
+	// 17. Resource leak detection - AST-based analysis of Go functions to find
+	//     resource acquisitions (os.Open, http.Get, net.Listen) without matching
+	//     defer Close() cleanup. LLMs frequently omit cleanup calls.
+	if leakWarnings := checkResourceLeaks(filePath, newContent); len(leakWarnings) > 0 {
+		warnings = append(warnings, leakWarnings...)
+	}
+
 	if len(warnings) == 0 {
 		return ""
 	}
