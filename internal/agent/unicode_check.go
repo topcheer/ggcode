@@ -97,26 +97,37 @@ func init() {
 // maxUnicodeWarnings caps the number of character-type warnings per write.
 const maxUnicodeWarnings = 5
 
+// charFinding records a newly introduced problematic character type.
+type charFinding struct {
+	confusable unicodeConfusable
+	count      int // newly introduced count
+	firstLine  int // 1-based line number of first occurrence
+}
+
 // checkUnicodeChars detects problematic Unicode characters INTRODUCED by
 // this edit (present in newContent but not in oldContent). Returns a
 // non-empty guidance string if issues are detected.
 //
 // Delta-based detection avoids false positives on pre-existing content.
 func checkUnicodeChars(filePath, oldContent, newContent string) string {
-	// Count how many of each problematic char was in the old content so we
-	// can compute the delta (newly introduced instances).
+	findings := scanUnicodeDelta(oldContent, newContent)
+	if len(findings) == 0 {
+		return ""
+	}
+
+	debug.Log("unicode-check", "detected %d type(s) of problematic Unicode chars in %s", len(findings), filePath)
+	return formatUnicodeFindings(filePath, findings)
+}
+
+// scanUnicodeDelta scans newContent and returns findings for problematic
+// Unicode characters that were NOT present in oldContent (delta detection).
+func scanUnicodeDelta(oldContent, newContent string) []charFinding {
+	// Count how many of each problematic char was in the old content.
 	oldCounts := make(map[rune]int)
 	for _, r := range oldContent {
 		if _, ok := unicodeCharMap[r]; ok {
 			oldCounts[r]++
 		}
-	}
-
-	// Count newly introduced instances in new content.
-	type charFinding struct {
-		confusable unicodeConfusable
-		count      int // newly introduced count
-		firstLine  int // 1-based line number of first occurrence
 	}
 
 	var findings []charFinding
@@ -128,35 +139,34 @@ func checkUnicodeChars(filePath, oldContent, newContent string) string {
 			lineNum++
 			continue
 		}
-		if info, ok := unicodeCharMap[r]; ok {
-			// Compute remaining count (how many of this char existed before)
-			if oldCounts[r] > 0 {
-				oldCounts[r]--
-				continue // this instance was pre-existing, not introduced
-			}
-
-			// This is a newly introduced problematic character
-			idx, exists := findingMap[r]
-			if !exists {
-				findingMap[r] = len(findings)
-				findings = append(findings, charFinding{
-					confusable: info,
-					count:      1,
-					firstLine:  lineNum,
-				})
-			} else {
-				findings[idx].count++
-			}
+		info, ok := unicodeCharMap[r]
+		if !ok {
+			continue
+		}
+		// Skip if this instance was pre-existing (not introduced by this edit).
+		if oldCounts[r] > 0 {
+			oldCounts[r]--
+			continue
+		}
+		// Record newly introduced problematic character.
+		if idx, exists := findingMap[r]; exists {
+			findings[idx].count++
+		} else {
+			findingMap[r] = len(findings)
+			findings = append(findings, charFinding{
+				confusable: info,
+				count:      1,
+				firstLine:  lineNum,
+			})
 		}
 	}
+	return findings
+}
 
-	if len(findings) == 0 {
-		return ""
-	}
-
-	debug.Log("unicode-check", "detected %d type(s) of problematic Unicode chars in %s", len(findings), filePath)
-
-	// Separate errors from warnings for clearer messaging.
+// formatUnicodeFindings renders a human-readable warning string from
+// the detected findings, prioritizing errors over warnings.
+func formatUnicodeFindings(filePath string, findings []charFinding) string {
+	// Separate errors from warnings for prioritized messaging.
 	var errs, warns []charFinding
 	for _, f := range findings {
 		if f.confusable.severity == "error" {
@@ -167,8 +177,7 @@ func checkUnicodeChars(filePath, oldContent, newContent string) string {
 	}
 
 	// Prioritize errors, then warnings, cap at maxUnicodeWarnings.
-	var selected []charFinding
-	selected = append(selected, errs...)
+	selected := append([]charFinding{}, errs...)
 	if len(selected) < maxUnicodeWarnings {
 		remaining := maxUnicodeWarnings - len(selected)
 		if len(warns) > remaining {
@@ -190,20 +199,23 @@ func checkUnicodeChars(filePath, oldContent, newContent string) string {
 	b.WriteString("\nThese characters cause invisible compilation errors or subtle bugs:")
 
 	for _, f := range selected {
-		name := f.confusable.name
-		if f.confusable.ascii != 0 {
-			name = fmt.Sprintf("%s (U+%04X), replace with '%c'", name, f.confusable.rune, f.confusable.ascii)
-		} else {
-			name = fmt.Sprintf("%s (U+%04X), remove it", name, f.confusable.rune)
-		}
-		b.WriteString(fmt.Sprintf("\n  - %dx %s, first at line %d", f.count, name, f.firstLine))
+		b.WriteString(fmt.Sprintf("\n  - %s", formatCharFinding(f)))
 	}
 
 	if len(findings) > len(selected) {
 		b.WriteString(fmt.Sprintf("\n  ...and %d more character type(s).", len(findings)-len(selected)))
 	}
-
 	b.WriteString("\nReplace these with their ASCII equivalents and re-write the file.")
-
 	return b.String()
+}
+
+// formatCharFinding renders a single character finding as a one-liner.
+func formatCharFinding(f charFinding) string {
+	name := f.confusable.name
+	if f.confusable.ascii != 0 {
+		name = fmt.Sprintf("%s (U+%04X), replace with '%c'", name, f.confusable.rune, f.confusable.ascii)
+	} else {
+		name = fmt.Sprintf("%s (U+%04X), remove it", name, f.confusable.rune)
+	}
+	return fmt.Sprintf("%dx %s, first at line %d", f.count, name, f.firstLine)
 }
