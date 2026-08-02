@@ -279,6 +279,14 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 		warnings = append(warnings, recursionWarnings...)
 	}
 
+	// 26. Result-used-before-error-check detection - flags result variables
+	//     (resp, val, etc.) used before their error is checked. The classic
+	//     pattern is `defer resp.Body.Close()` before `if err != nil`, which
+	//     causes nil pointer panics when the error is non-nil. Delta-aware.
+	if orderWarnings := checkErrorOrder(filePath, oldContent, newContent); len(orderWarnings) > 0 {
+		warnings = append(warnings, orderWarnings...)
+	}
+
 	if len(warnings) == 0 {
 		return ""
 	}
