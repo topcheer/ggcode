@@ -34,7 +34,8 @@ type CodeIndexManager struct {
 	indexPath  string           // disk cache path
 	workingDir string
 	stopCh     chan struct{}
-	lockFile   *os.File // cross-process flock handle
+	rebuildCh  chan struct{} // signaled by MarkDirty to trigger immediate debounced rebuild
+	lockFile   *os.File      // cross-process flock handle
 
 	// indexStats tracks basic stats for debugging/logging.
 	stats codeIndexStats
@@ -71,6 +72,12 @@ const (
 	codeIndexMaxFileSize  = 256 * 1024 // 256 KB per file
 	codeIndexBuildTimeout = 5 * time.Minute
 	codeIndexRebuildTick  = 5 * time.Minute // periodic dirty-check interval (reduced frequency for lower CPU)
+
+	// codeIndexRebuildDebounce is the delay after the last MarkDirty call
+	// before triggering an incremental rebuild. This batches rapid edits
+	// (e.g. multi_file_edit) into a single rebuild instead of rebuilding
+	// after each file.
+	codeIndexRebuildDebounce = 3 * time.Second
 )
 
 // codeIndexIdleRelease is how long the index sits idle (no Search calls)
@@ -86,6 +93,7 @@ func NewCodeIndexManager(workingDir string) *CodeIndexManager {
 		workingDir: workingDir,
 		dirtyFiles: make(map[string]int64),
 		stopCh:     make(chan struct{}),
+		rebuildCh:  make(chan struct{}, 1), // buffered: non-blocking signal
 	}
 	m.indexPath = m.computeIndexPath()
 	return m
@@ -457,71 +465,119 @@ func (m *CodeIndexManager) persistIndex(ctx context.Context, docs []bm25Doc) {
 	debug.Log("codeindex", "persisted %d docs to %s (%d bytes)", len(pi.Docs), m.indexPath, len(data))
 }
 
-// backgroundLoop combines periodic dirty-file checking with idle memory
-// release. Every codeIndexRebuildTick (5 min):
-//  1. If the index hasn't been searched in codeIndexIdleRelease (10 min),
-//     release the in-memory index to free ~60MB. Disk cache persists.
-//  2. Otherwise, if there are dirty files, do an incremental rebuild.
+// backgroundLoop combines periodic dirty-file checking, on-demand
+// debounced rebuilds triggered by MarkDirty, and idle memory release.
+//
+// Every codeIndexRebuildTick (5 min) the periodic check runs.
+// Additionally, when MarkDirty signals rebuildCh, a debounced rebuild is
+// triggered within codeIndexRebuildDebounce (3s), so the index reflects
+// edits promptly instead of waiting up to 5 minutes.
+//
+// Idle release: if the index hasn't been searched in codeIndexIdleRelease
+// (10 min), the in-memory index is freed. Disk cache persists.
 func (m *CodeIndexManager) backgroundLoop() {
 	ticker := time.NewTicker(codeIndexRebuildTick)
 	defer ticker.Stop()
+
+	// debounceTimer fires after a quiescent period following MarkDirty.
+	var debounceTimer *time.Timer
+
 	for {
 		select {
 		case <-m.stopCh:
 			return
 		case <-ticker.C:
-			// Check for idle release first.
-			m.mu.RLock()
-			idle := time.Since(m.lastSearch)
-			ready := m.ready
-			m.mu.RUnlock()
-
-			if ready && idle > codeIndexIdleRelease {
-				m.mu.Lock()
-				if m.index != nil {
-					debug.Log("codeindex", "idle for %v, releasing in-memory index (%d docs)", idle.Round(time.Minute), len(m.index.docs))
-					m.index = nil
-					m.ready = false
-					m.stats = codeIndexStats{}
-				}
-				m.mu.Unlock()
-				continue
+			m.periodicCheck()
+		case <-m.rebuildCh:
+			// Reset debounce: batch rapid edits into a single rebuild.
+			if debounceTimer != nil {
+				debounceTimer.Stop()
 			}
-
-			// Check for dirty files.
-			m.mu.RLock()
-			dirtyCount := len(m.dirtyFiles)
-			m.mu.RUnlock()
-			if dirtyCount == 0 {
-				continue
+			debounceTimer = time.NewTimer(codeIndexRebuildDebounce)
+		case <-func() <-chan time.Time {
+			if debounceTimer == nil {
+				return nil
 			}
-			// Only rebuild if we can acquire the cross-process lock.
-			if !m.tryLock() {
-				debug.Log("codeindex", "dirty check: skipping rebuild, lock held by another instance")
-				m.mu.Lock()
-				m.dirtyFiles = make(map[string]int64)
-				m.mu.Unlock()
-				continue
-			}
-			debug.Log("codeindex", "dirty check: %d files changed, rebuilding", dirtyCount)
-			ctx, cancel := context.WithTimeout(context.Background(), codeIndexBuildTimeout)
-			m.doBuild(ctx)
-			cancel()
-			m.unlock()
-			m.mu.Lock()
-			m.dirtyFiles = make(map[string]int64)
-			m.mu.Unlock()
+			return debounceTimer.C
+		}():
+			debounceTimer = nil
+			m.rebuildDirty("debounced")
 		}
 	}
 }
 
-// MarkDirty records that the given files have been modified.
-// This is non-blocking and safe to call from the agent loop.
+// periodicCheck handles the 5-minute periodic tick: idle release and
+// dirty-file rebuild.
+func (m *CodeIndexManager) periodicCheck() {
+	// Check for idle release first.
+	m.mu.RLock()
+	idle := time.Since(m.lastSearch)
+	ready := m.ready
+	m.mu.RUnlock()
+
+	if ready && idle > codeIndexIdleRelease {
+		m.mu.Lock()
+		if m.index != nil {
+			debug.Log("codeindex", "idle for %v, releasing in-memory index (%d docs)", idle.Round(time.Minute), len(m.index.docs))
+			m.index = nil
+			m.ready = false
+			m.stats = codeIndexStats{}
+		}
+		m.mu.Unlock()
+		return
+	}
+
+	m.rebuildDirty("periodic")
+}
+
+// rebuildDirty performs an incremental rebuild if there are dirty files.
+// reason is used for debug logging ("debounced", "periodic").
+func (m *CodeIndexManager) rebuildDirty(reason string) {
+	m.mu.RLock()
+	dirtyCount := len(m.dirtyFiles)
+	ready := m.ready
+	m.mu.RUnlock()
+	if dirtyCount == 0 || !ready {
+		return
+	}
+	// Only rebuild if we can acquire the cross-process lock.
+	if !m.tryLock() {
+		debug.Log("codeindex", "%s rebuild: skipping, lock held by another instance", reason)
+		m.mu.Lock()
+		m.dirtyFiles = make(map[string]int64)
+		m.mu.Unlock()
+		return
+	}
+	debug.Log("codeindex", "%s rebuild: %d files changed, rebuilding", reason, dirtyCount)
+	ctx, cancel := context.WithTimeout(context.Background(), codeIndexBuildTimeout)
+	m.doBuild(ctx)
+	cancel()
+	m.unlock()
+	m.mu.Lock()
+	m.dirtyFiles = make(map[string]int64)
+	m.mu.Unlock()
+}
+
+// MarkDirty records that the given files have been modified and signals
+// the background loop to trigger a debounced incremental rebuild. This is
+// non-blocking and safe to call from the agent loop.
 func (m *CodeIndexManager) MarkDirty(paths []string) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	for _, p := range paths {
 		m.dirtyFiles[p] = time.Now().Unix()
+	}
+	ready := m.ready
+	started := m.started
+	m.mu.Unlock()
+
+	// Only signal a rebuild if the index is ready and the background loop
+	// is running. During initial build or after idle release, the periodic
+	// tick will pick up dirty files.
+	if ready && started {
+		select {
+		case m.rebuildCh <- struct{}{}:
+		default: // already pending — the debounce timer will handle it
+		}
 	}
 }
 
