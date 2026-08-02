@@ -226,6 +226,13 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 		warnings = append(warnings, swallowWarnings...)
 	}
 
+	// 19. Defer-in-loop detection - flags defer statements inside for/range
+	//     loops, which cause resource accumulation (defer runs at function
+	//     return, not iteration end). Delta-aware.
+	if deferLoopWarnings := checkDeferInLoop(filePath, oldContent, newContent); len(deferLoopWarnings) > 0 {
+		warnings = append(warnings, deferLoopWarnings...)
+	}
+
 	if len(warnings) == 0 {
 		return ""
 	}
