@@ -124,8 +124,15 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 		warnings = append(warnings, placeholderWarnings...)
 	}
 
-	// 9. Delimiter balance — validates (), {}, [] are balanced for non-Go source
-	//    files (JS, TS, Python, Rust, Java, Dart, JSON, YAML, CSS). Go files are
+	// 9. Duplicate declaration detection — detects duplicate functions, types,
+	//    imports, consts, and vars introduced by this edit. These are guaranteed
+	//    compilation errors that waste iterations if not caught immediately.
+	if dupWarn := checkDuplicateDeclarations(filePath, oldContent, newContent); dupWarn != "" {
+		warnings = append(warnings, dupWarn)
+	}
+
+	// 10. Delimiter balance — validates (), {}, [] are balanced for non-Go source
+	//     files (JS, TS, Python, Rust, Java, Dart, JSON, YAML, CSS). Go files are
 	//    covered by go/parser above. This catches the common edit failure where
 	//    the agent adds or removes a bracket without its match.
 	if delimWarn := checkDelimiterBalance(filePath, newContent); delimWarn != "" {
