@@ -189,6 +189,13 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 		warnings = append(warnings, twWarn)
 	}
 
+	// 16. Hardcoded absolute path detection - flags machine-specific paths
+	//     (/Users/.../, /home/.../, /root/.../, C:\Users\..\) introduced by
+	//     this edit. These break portability, CI/CD, and collaboration.
+	if pathWarnings := checkHardcodedPaths(filePath, oldContent, newContent); len(pathWarnings) > 0 {
+		warnings = append(warnings, pathWarnings...)
+	}
+
 	if len(warnings) == 0 {
 		return ""
 	}
