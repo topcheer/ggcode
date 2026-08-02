@@ -65,7 +65,10 @@ func (f *RelevanceFilter) Filter(defs []provider.ToolDefinition, context string)
 	if len(defs) <= minToolsToActivate {
 		f.activated = false
 		f.prunedCount = 0
-		return defs
+		// Even when relevance filtering is not active, still apply description
+		// budgeting — verbose MCP descriptions waste context on every turn
+		// regardless of total tool count.
+		return trimToolDescriptions(defs)
 	}
 
 	f.activated = true
@@ -136,6 +139,11 @@ func (f *RelevanceFilter) Filter(defs []provider.ToolDefinition, context string)
 		debug.Log("toolfilter", "pruned %d/%d tools (kept %d): pruned=[%s]",
 			f.prunedCount, len(defs), len(result), truncateForLog(prunedKey, 300))
 	}
+
+	// Apply description token budget: trim verbose MCP/plugin tool descriptions
+	// to reduce per-turn schema overhead. This runs after relevance filtering
+	// so we only spend trimming effort on tools that survive the filter.
+	result = trimToolDescriptions(result)
 
 	return result
 }
