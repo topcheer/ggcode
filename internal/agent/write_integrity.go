@@ -295,6 +295,14 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 		warnings = append(warnings, printfWarnings...)
 	}
 
+	// 28. Inconsistent receiver name detection - flags Go types where methods
+	//     use different receiver variable names (e.g., (s *Server) vs (srv *Server)).
+	//     This violates Go style conventions, triggers staticcheck ST1016, and is
+	//     a common LLM failure mode. Also flags "this"/"self" anti-pattern. Delta-aware.
+	if receiverWarnings := checkReceiverConsistency(filePath, oldContent, newContent); len(receiverWarnings) > 0 {
+		warnings = append(warnings, receiverWarnings...)
+	}
+
 	if len(warnings) == 0 {
 		return ""
 	}
