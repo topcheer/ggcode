@@ -219,6 +219,13 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 		warnings = append(warnings, leakWarnings...)
 	}
 
+	// 18. Error swallowing detection - AST-based analysis to catch empty error
+	//     handlers (if err != nil {}) and bare returns that drop errors
+	//     (if err != nil { return } in error-returning functions). Delta-aware.
+	if swallowWarnings := checkErrorSwallowing(filePath, oldContent, newContent); len(swallowWarnings) > 0 {
+		warnings = append(warnings, swallowWarnings...)
+	}
+
 	if len(warnings) == 0 {
 		return ""
 	}
