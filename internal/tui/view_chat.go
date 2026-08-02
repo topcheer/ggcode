@@ -11,6 +11,11 @@ import (
 )
 
 func (m Model) renderConversationPanel(panelHeight int) string {
+	// Sync the spinner's animation frame to the chat package so that running
+	// tool icons (◐◓◑◒) animate on every tick. This must happen before any
+	// chat item rendering.
+	chat.SetToolAnimFrame(m.spinner.CurrentFrame())
+
 	innerW := m.conversationInnerWidth()
 	innerH := conversationInnerHeight(panelHeight)
 

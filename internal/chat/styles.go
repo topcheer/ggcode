@@ -97,11 +97,28 @@ func DefaultStyles() Styles {
 	}
 }
 
+// toolAnimGlyphs are the rotating quarter-circle frames for running tools.
+// They keep the circle aesthetic of the static pending icon (○) while
+// clearly showing the tool is actively executing.
+var toolAnimGlyphs = []string{"◐", "◓", "◑", "◒"}
+
+// toolAnimFrame is the current animation frame index, set by the TUI on each
+// spinner tick (every ~150ms). Read by ToolIcon when rendering running tools.
+var toolAnimFrame int
+
+// SetToolAnimFrame updates the global animation frame for running tool icons.
+// Called by the TUI before rendering the conversation panel.
+func SetToolAnimFrame(frame int) {
+	toolAnimFrame = frame
+}
+
 // ToolIcon returns the icon for a given tool status.
 func (s Styles) ToolIcon(status ToolStatus) string {
 	switch status {
-	case StatusPending, StatusRunning:
+	case StatusPending:
 		return "○"
+	case StatusRunning:
+		return toolAnimGlyphs[toolAnimFrame%len(toolAnimGlyphs)]
 	case StatusSuccess:
 		return "●"
 	case StatusError:

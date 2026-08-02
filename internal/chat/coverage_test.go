@@ -159,6 +159,43 @@ func TestToolIconCoverage(t *testing.T) {
 	}
 }
 
+func TestToolIconAnimationFrames(t *testing.T) {
+	s := Styles{}
+
+	// Running icon should change with frame
+	SetToolAnimFrame(0)
+	frame0 := s.ToolIcon(StatusRunning)
+	SetToolAnimFrame(1)
+	frame1 := s.ToolIcon(StatusRunning)
+	SetToolAnimFrame(2)
+	frame2 := s.ToolIcon(StatusRunning)
+	SetToolAnimFrame(3)
+	frame3 := s.ToolIcon(StatusRunning)
+
+	if frame0 == "" || frame1 == "" || frame2 == "" || frame3 == "" {
+		t.Fatal("expected non-empty animation frames")
+	}
+	if frame0 == frame1 || frame1 == frame2 || frame2 == frame3 {
+		t.Errorf("expected distinct animation frames, got %q %q %q %q", frame0, frame1, frame2, frame3)
+	}
+
+	// Frame should wrap around
+	SetToolAnimFrame(4) // same as frame 0
+	if got := s.ToolIcon(StatusRunning); got != frame0 {
+		t.Errorf("expected frame wrap to %q, got %q", frame0, got)
+	}
+
+	// Pending should always be the static circle, regardless of frame
+	pendingIcon := s.ToolIcon(StatusPending)
+	if pendingIcon != "○" {
+		t.Errorf("expected pending icon ○, got %q", pendingIcon)
+	}
+	// Running should differ from pending
+	if frame0 == pendingIcon {
+		t.Errorf("running icon %q should differ from pending %q", frame0, pendingIcon)
+	}
+}
+
 func TestToolIconStyleCoverage(t *testing.T) {
 	s := Styles{}
 	style := s.ToolIconStyle(StatusRunning)
