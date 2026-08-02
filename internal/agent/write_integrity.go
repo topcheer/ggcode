@@ -182,6 +182,13 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 		warnings = append(warnings, testGamingWarn)
 	}
 
+	// 15. Trailing whitespace detection - flags trailing spaces/tabs newly
+	//     introduced by this edit. Causes lint failures, git diff noise, and
+	//     pre-commit hook rejections. Delta-based; Go files skipped (gofmt handles).
+	if twWarn := checkTrailingWhitespace(filePath, oldContent, newContent); twWarn != "" {
+		warnings = append(warnings, twWarn)
+	}
+
 	if len(warnings) == 0 {
 		return ""
 	}
