@@ -146,6 +146,14 @@ func checkGoImportsAST(filePath string, f *ast.File) []string {
 		if name == "_" || name == "." {
 			continue
 		}
+		// Versioned paths like "charm.land/lipgloss/v2" have a last segment "v2"
+		// that does NOT match the actual package name (e.g. "lipgloss"). Static
+		// analysis can't reliably resolve the real package name without loading
+		// the package, so skip unused-import detection for these to avoid
+		// false positives.
+		if isVersionSegment(name) {
+			continue
+		}
 		imports = append(imports, goImportInfo{name: name, path: rawPath})
 	}
 
@@ -256,4 +264,19 @@ func checkGoImports(filePath, src string) []string {
 		return nil
 	}
 	return checkGoImportsAST(filePath, f)
+}
+
+// isVersionSegment reports whether s looks like a Go module version path
+// segment (e.g. "v2", "v3"). These segments do NOT correspond to the actual
+// package name and should be excluded from unused-import detection.
+func isVersionSegment(s string) bool {
+	if len(s) < 2 || s[0] != 'v' {
+		return false
+	}
+	for _, c := range s[1:] {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
