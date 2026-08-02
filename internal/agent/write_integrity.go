@@ -153,7 +153,14 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 		warnings = append(warnings, configWarn)
 	}
 
-	// 12. Problematic Unicode character detection — catches smart quotes,
+	// 11b. Python indentation consistency — detects mixed tabs/spaces in
+	//      indentation runs, which cause TabError in Python 3. This is
+	//      syntactically significant (unlike Go where gofmt handles it).
+	if pyIndentWarn := checkPythonIndentation(filePath, newContent); pyIndentWarn != "" {
+		warnings = append(warnings, pyIndentWarn)
+	}
+
+	// 12. Problematic Unicode character detection - catches smart quotes,
 	//     non-breaking spaces, zero-width characters, and other invisible
 	//     Unicode that LLMs frequently introduce. Delta-based detection
 	//     only flags characters introduced by this edit.
