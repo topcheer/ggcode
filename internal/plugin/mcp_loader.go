@@ -955,7 +955,6 @@ func (m *MCPManager) pluginByName(name string) *MCPPlugin {
 func (m *MCPManager) Reload(ctx context.Context, servers []config.MCPServerConfig) {
 	m.mu.Lock()
 
-	// Build lookup of new servers by name+config hash for quick comparison.
 	newByName := make(map[string]config.MCPServerConfig, len(servers))
 	for _, s := range servers {
 		newByName[s.Name] = s
@@ -964,7 +963,9 @@ func (m *MCPManager) Reload(ctx context.Context, servers []config.MCPServerConfi
 	// Categorize current plugins into kept/removed/changed.
 	var removed, changed []*MCPPlugin
 	finalPlugins := make([]*MCPPlugin, 0, len(servers))
+	oldNames := make(map[string]bool, len(m.plugins))
 	for _, p := range m.plugins {
+		oldNames[p.Name()] = true
 		newCfg, exists := newByName[p.Name()]
 		if !exists {
 			removed = append(removed, p)
@@ -972,47 +973,22 @@ func (m *MCPManager) Reload(ctx context.Context, servers []config.MCPServerConfi
 		}
 		if !mcpServerConfigEqual(p.cfg, newCfg) {
 			changed = append(changed, p)
-			continue // will be re-created below with new config
+			continue
 		}
 		finalPlugins = append(finalPlugins, p)
 	}
 
-	// Add new + changed servers as fresh plugins.
+	// Create fresh plugins for changed + new servers.
 	changedNames := make(map[string]bool, len(changed))
 	for _, p := range changed {
 		changedNames[p.Name()] = true
 	}
 	var connectPlugins []*MCPPlugin
 	for _, s := range servers {
-		if changedNames[s.Name] {
-			p := NewMCPPlugin(s)
-			p.registry = m.registry
-			if m.samplingHandler != nil {
-				p.SetSamplingHandler(m.samplingHandler)
-			}
-			if m.elicitationHandler != nil {
-				p.SetElicitationHandler(m.elicitationHandler)
-			}
-			finalPlugins = append(finalPlugins, p)
-			connectPlugins = append(connectPlugins, p)
-		}
-	}
-
-	// Add brand-new servers (names not in old list).
-	oldNames := make(map[string]bool, len(m.plugins))
-	for _, p := range m.plugins {
-		oldNames[p.Name()] = true
-	}
-	for _, s := range servers {
-		if !oldNames[s.Name] && !changedNames[s.Name] {
-			p := NewMCPPlugin(s)
-			p.registry = m.registry
-			if m.samplingHandler != nil {
-				p.SetSamplingHandler(m.samplingHandler)
-			}
-			if m.elicitationHandler != nil {
-				p.SetElicitationHandler(m.elicitationHandler)
-			}
+		isChanged := changedNames[s.Name]
+		isNew := !oldNames[s.Name] && !isChanged
+		if isChanged || isNew {
+			p := m.newPluginFromConfig(s)
 			finalPlugins = append(finalPlugins, p)
 			connectPlugins = append(connectPlugins, p)
 		}
@@ -1022,19 +998,18 @@ func (m *MCPManager) Reload(ctx context.Context, servers []config.MCPServerConfi
 	m.mu.Unlock()
 
 	// Unregister tools + close removed/changed plugins (outside lock).
-	for _, p := range removed {
+	closeAndUnregister := func(p *MCPPlugin, reason string) {
 		for _, toolName := range p.Info().ToolNames {
 			m.registry.Unregister(toolName)
 		}
 		_ = p.Close()
-		debug.Log("mcp-reload", "removed server=%s", p.Name())
+		debug.Log("mcp-reload", "%s server=%s", reason, p.Name())
+	}
+	for _, p := range removed {
+		closeAndUnregister(p, "removed")
 	}
 	for _, p := range changed {
-		for _, toolName := range p.Info().ToolNames {
-			m.registry.Unregister(toolName)
-		}
-		_ = p.Close()
-		debug.Log("mcp-reload", "replaced server=%s (config changed)", p.Name())
+		closeAndUnregister(p, "replaced")
 	}
 
 	m.emitUpdate()
@@ -1051,6 +1026,20 @@ func (m *MCPManager) Reload(ctx context.Context, servers []config.MCPServerConfi
 	}
 
 	debug.Log("mcp-reload", "reload complete: removed=%d changed=%d total=%d", len(removed), len(changed), len(finalPlugins))
+}
+
+// newPluginFromConfig creates an MCPPlugin from a server config, propagating
+// the manager's sampling and elicitation handlers.
+func (m *MCPManager) newPluginFromConfig(s config.MCPServerConfig) *MCPPlugin {
+	p := NewMCPPlugin(s)
+	p.registry = m.registry
+	if m.samplingHandler != nil {
+		p.SetSamplingHandler(m.samplingHandler)
+	}
+	if m.elicitationHandler != nil {
+		p.SetElicitationHandler(m.elicitationHandler)
+	}
+	return p
 }
 
 // mcpServerConfigEqual compares two MCP server configs to determine if
