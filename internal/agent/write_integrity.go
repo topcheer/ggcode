@@ -272,6 +272,13 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 		warnings = append(warnings, lockWarnings...)
 	}
 
+	// 25. Unbounded recursion detection - flags recursive functions where every
+	//     execution path calls itself (no base case/termination condition).
+	//     Causes guaranteed stack overflow panics at runtime. Delta-aware.
+	if recursionWarnings := checkUnboundedRecursion(filePath, oldContent, newContent); len(recursionWarnings) > 0 {
+		warnings = append(warnings, recursionWarnings...)
+	}
+
 	if len(warnings) == 0 {
 		return ""
 	}
