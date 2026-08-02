@@ -124,6 +124,13 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 		warnings = append(warnings, placeholderWarnings...)
 	}
 
+	// 8b. Commented-out code blocks — detects blocks of commented-out executable
+	//     code introduced by this edit. Agents frequently comment out old code
+	//     instead of deleting it, leaving dead code that clutters diffs.
+	if commentedWarnings := checkCommentedCodeBlocks(filePath, oldContent, newContent); len(commentedWarnings) > 0 {
+		warnings = append(warnings, commentedWarnings...)
+	}
+
 	// 9. Duplicate declaration detection — detects duplicate functions, types,
 	//    imports, consts, and vars introduced by this edit. These are guaranteed
 	//    compilation errors that waste iterations if not caught immediately.
