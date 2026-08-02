@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -239,5 +240,78 @@ func TestLSPToolsWithExternalPythonFixture(t *testing.T) {
 	}
 	if hoverResult.IsError || strings.Contains(hoverResult.Content, "deadline exceeded") || strings.Contains(hoverResult.Content, "No hover information returned.") {
 		t.Fatalf("expected python hover to complete with semantic output, got %+v", hoverResult)
+	}
+}
+
+// TestApplyLSPFileEdits_BlastRadiusWarning verifies that when a rename touches
+// 3+ files, the result includes a prominent blast-radius warning. This prevents
+// the agent from silently modifying many files when renaming exported symbols.
+func TestApplyLSPFileEdits_BlastRadiusWarning(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create 4 files with content to edit (exceeds threshold of 3)
+	files := make([]string, 4)
+	for i := range files {
+		files[i] = filepath.Join(dir, fmt.Sprintf("file%d.go", i))
+		content := fmt.Sprintf("package test\n\nvar OldName%d = %d\n", i, i)
+		if err := os.WriteFile(files[i], []byte(content), 0o644); err != nil {
+			t.Fatalf("WriteFile error = %v", err)
+		}
+	}
+
+	edits := make([]lsp.FileEdit, len(files))
+	for i, f := range files {
+		edits[i] = lsp.FileEdit{
+			Path: f,
+			Edits: []lsp.TextEdit{{
+				Range:   lsp.Range{Start: lsp.Position{Line: 3, Character: 5}, End: lsp.Position{Line: 3, Character: 12}},
+				NewText: fmt.Sprintf("NewName%d", i),
+			}},
+		}
+	}
+
+	allow := func(p string) bool { return strings.HasPrefix(p, dir) }
+	result, err := applyLSPFileEdits(edits, allow)
+	if err != nil {
+		t.Fatalf("applyLSPFileEdits error = %v", err)
+	}
+
+	if !strings.Contains(result, "WARNING: High blast-radius rename") {
+		t.Fatalf("expected blast-radius warning in result, got:\n%s", result)
+	}
+	if !strings.Contains(result, "4 files changed") {
+		t.Fatalf("expected '4 files changed' in result, got:\n%s", result)
+	}
+}
+
+// TestApplyLSPFileEdits_NoWarningForSingleFile verifies that a rename touching
+// only 1 file does NOT trigger the blast-radius warning.
+func TestApplyLSPFileEdits_NoWarningForSingleFile(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "single.go")
+	content := "package test\n\nvar OldName = 1\n"
+	if err := os.WriteFile(filePath, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+
+	edits := []lsp.FileEdit{{
+		Path: filePath,
+		Edits: []lsp.TextEdit{{
+			Range:   lsp.Range{Start: lsp.Position{Line: 3, Character: 5}, End: lsp.Position{Line: 3, Character: 12}},
+			NewText: "NewName",
+		}},
+	}}
+
+	allow := func(p string) bool { return strings.HasPrefix(p, dir) }
+	result, err := applyLSPFileEdits(edits, allow)
+	if err != nil {
+		t.Fatalf("applyLSPFileEdits error = %v", err)
+	}
+
+	if strings.Contains(result, "WARNING") {
+		t.Fatalf("did not expect blast-radius warning for single file, got:\n%s", result)
+	}
+	if !strings.Contains(result, "Applied workspace edits") {
+		t.Fatalf("expected normal output, got:\n%s", result)
 	}
 }

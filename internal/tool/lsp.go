@@ -704,7 +704,7 @@ func NewLSPTools(workingDir string, readSandbox, writeSandbox AllowedPathChecker
 		},
 		lspRenameTool{
 			name:         "lsp_rename",
-			description:  "Rename a symbol and apply the returned workspace edits to allowed files.",
+			description:  "Rename a symbol and apply the returned workspace edits to allowed files. When the rename touches 3+ files (high blast-radius), the result includes a prominent warning with the total file and edit count.",
 			workingDir:   workingDir,
 			readSandbox:  readSandbox,
 			writeSandbox: writeSandbox,
@@ -831,8 +831,16 @@ func NewLSPTools(workingDir string, readSandbox, writeSandbox AllowedPathChecker
 	}
 }
 
+// renameBlastRadiusThreshold is the number of distinct files at which a
+// rename is considered "high blast-radius". Renames touching exported symbols
+// in large codebases can silently modify dozens of files. When the threshold
+// is exceeded, the result includes a prominent warning so the agent and user
+// are aware of the widespread impact before committing to the change.
+const renameBlastRadiusThreshold = 3
+
 func applyLSPFileEdits(edits []lsp.FileEdit, sandboxCheck AllowedPathChecker) (string, error) {
 	summaries := make([]string, 0, len(edits))
+	totalEdits := 0
 	for _, fileEdit := range edits {
 		if strings.TrimSpace(fileEdit.Path) == "" {
 			continue
@@ -851,13 +859,25 @@ func applyLSPFileEdits(edits []lsp.FileEdit, sandboxCheck AllowedPathChecker) (s
 		if err := atomicWriteFile(fileEdit.Path, []byte(next), 0o644); err != nil {
 			return "", err
 		}
+		totalEdits += count
 		summaries = append(summaries, fmt.Sprintf("%s (%d edits)", fileEdit.Path, count))
 	}
 	if len(summaries) == 0 {
 		return "No editable workspace changes returned.", nil
 	}
 	sort.Strings(summaries)
-	return "Applied workspace edits:\n" + strings.Join(summaries, "\n"), nil
+	var sb strings.Builder
+	// Blast-radius warning: when a rename touches many files, prepend a
+	// prominent summary so the agent understands the scope of the change.
+	// This prevents the agent from blindly renaming exported symbols without
+	// realizing it just modified 15 files across the codebase.
+	if len(summaries) >= renameBlastRadiusThreshold {
+		sb.WriteString(fmt.Sprintf("WARNING: High blast-radius rename -- %d files changed (%d total edits).\n", len(summaries), totalEdits))
+		sb.WriteString("This rename touched many files. Verify all changes are correct before proceeding.\n\n")
+	}
+	sb.WriteString("Applied workspace edits:\n")
+	sb.WriteString(strings.Join(summaries, "\n"))
+	return sb.String(), nil
 }
 
 func applyTextEdits(content string, edits []lsp.TextEdit) (string, int, error) {
