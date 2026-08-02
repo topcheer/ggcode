@@ -40,6 +40,7 @@ type SectionCollector struct {
 	toolchain     string
 	symbols       string
 	recentCommits string
+	deps          string
 
 	stop chan struct{}
 	done chan struct{}
@@ -57,6 +58,7 @@ type sectionSnapshot struct {
 	Toolchain     string
 	Symbols       string
 	RecentCommits string
+	Deps          string
 }
 
 // InitGlobalSectionCollector creates the global collector for workingDir,
@@ -135,6 +137,7 @@ func (sc *SectionCollector) Snapshot() sectionSnapshot {
 		Toolchain:     sc.toolchain,
 		Symbols:       sc.symbols,
 		RecentCommits: sc.recentCommits,
+		Deps:          sc.deps,
 	}
 }
 
@@ -149,6 +152,7 @@ func (sc *SectionCollector) refresh() {
 	commands := projectCommandsSection(sc.working)
 	toolchain := toolchainSection(sc.working)
 	symbols := buildGoPackageSymbolsSection(sc.working)
+	deps := buildPackageDepsSection(sc.working)
 	recentCommits := computeRecentCommitsSection(sc.working)
 
 	sc.mu.Lock()
@@ -157,6 +161,7 @@ func (sc *SectionCollector) refresh() {
 	sc.commands = commands
 	sc.toolchain = toolchain
 	sc.symbols = symbols
+	sc.deps = deps
 	sc.recentCommits = recentCommits
 	sc.mu.Unlock()
 

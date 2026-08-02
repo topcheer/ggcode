@@ -71,6 +71,7 @@ func BuildInteractiveSystemPromptWithPromptRefs(
 		prompt += snap.Commands
 		prompt += snap.Toolchain
 		prompt += snap.Symbols
+		prompt += snap.Deps
 	} else {
 		prompt += projectOverviewSection(workingDir)
 		prompt += modifiedFilesSection(workingDir)
@@ -78,6 +79,7 @@ func BuildInteractiveSystemPromptWithPromptRefs(
 		prompt += projectCommandsSection(workingDir)
 		prompt += toolchainSection(workingDir)
 		prompt += buildGoPackageSymbolsSection(workingDir)
+		prompt += buildPackageDepsSection(workingDir)
 	}
 	var promptSkillRefs []string
 	if commandMgr != nil {
@@ -257,6 +259,7 @@ func buildSharedAgentPrompt(ctx SubAgentPromptContext) string {
 		prompt += snap.Commands
 		prompt += snap.Toolchain
 		prompt += snap.Symbols
+		prompt += snap.Deps
 	} else {
 		prompt += projectOverviewSection(workingDir)
 		prompt += modifiedFilesSection(workingDir)
@@ -264,6 +267,7 @@ func buildSharedAgentPrompt(ctx SubAgentPromptContext) string {
 		prompt += projectCommandsSection(workingDir)
 		prompt += toolchainSection(workingDir)
 		prompt += buildGoPackageSymbolsSection(workingDir)
+		prompt += buildPackageDepsSection(workingDir)
 	}
 
 	// 3. Add skills (same as main agent)
