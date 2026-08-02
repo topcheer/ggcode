@@ -139,6 +139,13 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 		warnings = append(warnings, delimWarn)
 	}
 
+	// 11. Config file syntax validation — parses JSON, YAML, TOML, XML after
+	//     write to catch malformed config files that would cause runtime failures.
+	//     Uses existing project parsers (zero new dependencies).
+	if configWarn := configSyntaxCheck(filePath, newContent); configWarn != "" {
+		warnings = append(warnings, configWarn)
+	}
+
 	if len(warnings) == 0 {
 		return ""
 	}
