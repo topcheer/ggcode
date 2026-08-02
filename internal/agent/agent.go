@@ -165,6 +165,7 @@ type Agent struct {
 	velocityForecast           *velocityForecastState                // iteration velocity forecasting (TAAS-inspired predictive productivity check)
 	transientRetryBudget       int                                   // remaining automatic retries for transient tool failures (per run)
 	argSizeGuardFires          int                                   // count of argument size guard injections this run
+	fileFreshness              *fileFreshnessSentinel                // proactive cross-iteration external file change detection
 	latencyTracker             *LatencyTracker                       // per-tool latency baseline & slow-tool outlier detection
 	toolSequence               *toolSequenceValidator                // cross-iteration tool call anti-pattern detection
 	convergenceLock            *convergenceLockState                 // post-verification unnecessary edit drift detection
@@ -250,6 +251,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		adaptiveSampling:     newAdaptiveSamplingState(),
 		effortAdapter:        newAdaptiveEffortState(),
 		sessionTimeout:       newSessionTimeoutState(0),
+		fileFreshness:        newFileFreshnessSentinel(),
 		transientRetryBudget: maxTransientRetryBudgetPerRun,
 	}
 	a.syncContextManagerProviderLocked()
@@ -1113,6 +1115,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.taskAnchor.reset(userPromptForStats, time.Now())
 	a.toolFilter = tool.NewRelevanceFilter()
 	a.resetTransientRetryBudget()
+	a.fileFreshness.reset()
 
 	// Capture the git working tree state BEFORE the agent makes any changes.
 	// This lets the reconciliation gate distinguish pre-existing dirty files
@@ -1224,6 +1227,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.contextManager.Add(provider.Message{
 				Role:    "user",
 				Content: []provider.ContentBlock{{Type: "text", Text: anchorMsg}},
+			})
+			msgs = a.contextManager.Messages()
+		}
+
+		// File freshness sentinel: proactively detect externally modified files
+		// (IDE save, formatter, git pull, another agent). Injects a notification
+		// BEFORE the agent uses stale content, not reactively at edit time.
+		if staleMsg := a.fileFreshness.maybeCheckStaleFiles(i + 1); staleMsg != "" {
+			a.contextManager.Add(provider.Message{
+				Role:    "user",
+				Content: []provider.ContentBlock{{Type: "text", Text: staleMsg}},
 			})
 			msgs = a.contextManager.Messages()
 		}
@@ -1884,6 +1898,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				// Record created files so the unread-edit guard exempts them.
 				for _, p := range extractCreateFilePaths(tc.Name, tc.Arguments) {
 					a.unreadEdit.recordCreated(p)
+					a.fileFreshness.recordWrite(p)
 				}
 				// Track edit for recurring-error detection: increments the
 				// "edits since last build error" counter so that a recurring
@@ -1905,6 +1920,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				for _, p := range extractReadFilePaths(tc.Name, tc.Arguments) {
 					a.unreadEdit.recordRead(p)
 					a.editFailRecovery.recordRead(p)
+					a.fileFreshness.recordRead(p)
 				}
 			}
 			// Unread-file edit guard: warn when editing a file not read in
@@ -1913,6 +1929,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			if !result.IsError && (tc.Name == "edit_file" || tc.Name == "multi_edit_file" || tc.Name == "multi_file_edit") {
 				for _, p := range extractEditFilePaths(tc.Name, tc.Arguments) {
 					a.editFailRecovery.recordEditSuccess(p)
+					a.fileFreshness.recordWrite(p)
 					// Convergence lock: track post-verification edits.
 					a.convergenceRecordEdit(tc.Name)
 					if hint := a.unreadEdit.checkUnreadEdit(p); hint != "" {
