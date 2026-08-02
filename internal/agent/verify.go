@@ -81,6 +81,7 @@ func (a *Agent) asyncVerify(ctx context.Context, runStats *RunStats) {
 
 	if result.Passed {
 		debug.Log("verify", "PASSED: %s", cmd)
+		a.lastGoodCheckpointRecordPass()
 		// Build/test passed — run lint as advisory secondary check.
 		a.verifyProgress("Running lint check…")
 		lintStart := time.Now()
@@ -105,6 +106,7 @@ func (a *Agent) asyncVerify(ctx context.Context, runStats *RunStats) {
 	}
 
 	debug.Log("verify", "FAILED: %s — %d errors", cmd, len(result.Errors))
+	a.lastGoodCheckpointRecordFail()
 
 	// Inject errors into context for the next turn. No auto-retry.
 	errorSummary := fmt.Sprintf("Verification failed with the following command:\n```\n%s\n```\n\nErrors:\n", cmd)
@@ -125,6 +127,12 @@ func (a *Agent) asyncVerify(ctx context.Context, runStats *RunStats) {
 			transition.resolvedCount,
 		); gateGuidance != "" {
 			errorSummary += "\n\n" + gateGuidance
+
+			// When the self-correction gate fires, provide actionable revert
+			// targets from the last-known-good checkpoint.
+			if checkpointGuidance := a.lastGoodCheckpointGuidance(); checkpointGuidance != "" {
+				errorSummary += "\n\n" + checkpointGuidance
+			}
 		}
 	}
 	a.contextManager.Add(provider.Message{
@@ -463,7 +471,8 @@ func (a *Agent) syncVerifyAndGate(ctx context.Context, runStats *RunStats, retry
 
 	if result.Passed {
 		debug.Log("verify", "sync: PASSED")
-		// Build/test passed — run lint as advisory secondary check.
+		a.lastGoodCheckpointRecordPass()
+		// Build/test passed -- run lint as advisory secondary check.
 		// Warnings are injected into context for the agent to fix.
 		a.verifyProgress("Running lint check…")
 		lintStart := time.Now()
@@ -475,6 +484,7 @@ func (a *Agent) syncVerifyAndGate(ctx context.Context, runStats *RunStats, retry
 
 	// Verification failed.
 	debug.Log("verify", "sync: FAILED: %d errors", len(result.Errors))
+	a.lastGoodCheckpointRecordFail()
 
 	// Ratchet: learn rules from the errors (same as async path).
 	rs := NewRuleStore(workingDir)
@@ -519,6 +529,12 @@ func (a *Agent) syncVerifyAndGate(ctx context.Context, runStats *RunStats, retry
 			transition.resolvedCount,
 		); gateGuidance != "" {
 			errorSummary += "\n\n" + gateGuidance
+
+			// When the self-correction gate fires, provide actionable revert
+			// targets from the last-known-good checkpoint.
+			if checkpointGuidance := a.lastGoodCheckpointGuidance(); checkpointGuidance != "" {
+				errorSummary += "\n\n" + checkpointGuidance
+			}
 		}
 	}
 	a.contextManager.Add(provider.Message{

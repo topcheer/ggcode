@@ -160,6 +160,7 @@ type Agent struct {
 	changeReconcile            *changeReconcileState                 // pre-completion git diff reconciliation (unexpected side-effect detection)
 	verifyRegression           *verifyRegressionState                // cross-run error diff: detects correction-induced regressions
 	selfCorrectionGate         *selfCorrectionGateState              // EIR/ECR stability gate: detects net-negative self-correction loops
+	lastGoodCheckpoint         *lastGoodCheckpoint                   // last-known-good file snapshot: actionable revert targets for failed self-correction
 	transientRetryBudget       int                                   // remaining automatic retries for transient tool failures (per run)
 	argSizeGuardFires          int                                   // count of argument size guard injections this run
 	latencyTracker             *LatencyTracker                       // per-tool latency baseline & slow-tool outlier detection
@@ -239,6 +240,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		changeReconcile:      newChangeReconcileState(),
 		verifyRegression:     newVerifyRegressionState(),
 		selfCorrectionGate:   newSelfCorrectionGateState(),
+		lastGoodCheckpoint:   newLastGoodCheckpoint(),
 		toolFilter:           tool.NewRelevanceFilter(),
 		latencyTracker:       NewLatencyTracker(),
 		toolSequence:         newToolSequenceValidator(),
@@ -1068,6 +1070,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.resetPlanner()
 	a.resetTodoStaleness()
 	a.resetScopeDrift()
+	a.resetLastGoodCheckpoint()
 	a.recurringError.reset()
 	a.speculator.resetSequence()
 	a.toolMemo.reset()
@@ -1091,6 +1094,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.complexityGate.reset()
 	a.verifyRegression.reset()
 	a.resetSelfCorrectionGate()
+
 	a.argSizeGuardFires = 0
 	a.toolSequence.reset()
 	a.taskAnchor.reset(userPromptForStats, time.Now())
@@ -2014,6 +2018,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 
 			// Scope drift: track productive file edits for semantic scope creep.
 			a.scopeDriftRecord(tc.Name, extractFileHint(tc.Name, tc.Arguments))
+			// Last-known-good checkpoint: track edits for revert targeting.
+			a.lastGoodCheckpointRecordEdit(tc.Name, extractFileHint(tc.Name, tc.Arguments))
 			if scopeGuidance := a.scopeDriftCheck(); scopeGuidance != "" {
 				if result.Content != "" {
 					result.Content = result.Content + "\n\n" + scopeGuidance
