@@ -21,19 +21,19 @@ import (
 // ggcode already has LSP diagnostics integration and verify hints, but LSP
 // requires a running language server (not always available, e.g. for generated
 // code or exotic languages) and verify hints only suggest running the build
-// command — they don't catch the error inline.
+// command - they don't catch the error inline.
 //
 // This module provides a lightweight, always-available structural validation
 // that runs synchronously after successful file writes and catches the most
 // common post-edit issues with zero external dependencies:
 //
-//  1. Go syntax errors — uses go/parser from the standard library to catch
+//  1. Go syntax errors - uses go/parser from the standard library to catch
 //     syntax issues immediately (<1ms for typical files). This is the most
 //     impactful check since this is a Go project and syntax errors are the
 //     #1 cause of failed builds after agent edits.
-//  2. Binary corruption — null bytes in what should be a text file indicate
+//  2. Binary corruption - null bytes in what should be a text file indicate
 //     encoding issues or accidental binary writes.
-//  3. Content loss — a non-empty file becoming empty/whitespace-only after an
+//  3. Content loss - a non-empty file becoming empty/whitespace-only after an
 //     edit signals a catastrophic edit failure (e.g., old_text consumed the
 //     entire file).
 //
@@ -66,7 +66,7 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 	if strings.ContainsRune(newContent, 0) {
 		count := strings.Count(newContent, "\x00")
 		warnings = append(warnings,
-			fmt.Sprintf("File contains %d null byte(s) (\\x00) — content may be corrupted or incorrectly encoded. Check encoding and re-write if needed.", count))
+			fmt.Sprintf("File contains %d null byte(s) (\\x00) - content may be corrupted or incorrectly encoded. Check encoding and re-write if needed.", count))
 	}
 
 	// 2. Content loss: non-empty source file became empty/whitespace-only.
@@ -75,7 +75,7 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 	if strings.TrimSpace(oldContent) != "" && strings.TrimSpace(newContent) == "" {
 		warnings = append(warnings,
 			fmt.Sprintf("This edit resulted in an EMPTY file (was %d bytes before). "+
-				"Verify this was intended — the old_text match may have consumed the entire file content.", len(oldContent)))
+				"Verify this was intended - the old_text match may have consumed the entire file content.", len(oldContent)))
 	}
 
 	// 3+5. Parse Go AST ONCE and share across syntax + import checks.
@@ -99,46 +99,46 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 		}
 	}
 
-	// 4. Debug statement detection — flags leftover debug prints/logs that
+	// 4. Debug statement detection - flags leftover debug prints/logs that
 	//    agents commonly introduce (console.log, debugger, dd(), etc.).
 	if debugWarnings := checkDebugStatements(filePath, oldContent, newContent); len(debugWarnings) > 0 {
 		warnings = append(warnings, debugWarnings...)
 	}
 
-	// 6. Merge conflict markers — always a build failure. Agents sometimes
+	// 6. Merge conflict markers - always a build failure. Agents sometimes
 	//    copy conflict markers from context verbatim into written files.
 	if markerWarn := checkMergeConflictMarkers(filePath, newContent); markerWarn != "" {
 		warnings = append(warnings, markerWarn)
 	}
 
-	// 7. Content duplication / massive growth — catches accidental double-paste
+	// 7. Content duplication / massive growth - catches accidental double-paste
 	//    or whole-file duplication (file growing 5x+ in one edit).
 	if growthWarn := checkContentGrowth(filePath, oldContent, newContent); growthWarn != "" {
 		warnings = append(warnings, growthWarn)
 	}
 
-	// 8. Placeholder / stub code — detects incomplete implementations that
+	// 8. Placeholder / stub code - detects incomplete implementations that
 	//    agents commonly leave behind (panic("not implemented"), vague TODOs).
 	//    Only flags NEW placeholders introduced by this edit.
 	if placeholderWarnings := checkPlaceholderCode(filePath, oldContent, newContent); len(placeholderWarnings) > 0 {
 		warnings = append(warnings, placeholderWarnings...)
 	}
 
-	// 8b. Commented-out code blocks — detects blocks of commented-out executable
+	// 8b. Commented-out code blocks - detects blocks of commented-out executable
 	//     code introduced by this edit. Agents frequently comment out old code
 	//     instead of deleting it, leaving dead code that clutters diffs.
 	if commentedWarnings := checkCommentedCodeBlocks(filePath, oldContent, newContent); len(commentedWarnings) > 0 {
 		warnings = append(warnings, commentedWarnings...)
 	}
 
-	// 9. Duplicate declaration detection — detects duplicate functions, types,
+	// 9. Duplicate declaration detection - detects duplicate functions, types,
 	//    imports, consts, and vars introduced by this edit. These are guaranteed
 	//    compilation errors that waste iterations if not caught immediately.
 	if dupWarn := checkDuplicateDeclarations(filePath, oldContent, newContent); dupWarn != "" {
 		warnings = append(warnings, dupWarn)
 	}
 
-	// 10. Delimiter balance — validates (), {}, [] are balanced for non-Go source
+	// 10. Delimiter balance - validates (), {}, [] are balanced for non-Go source
 	//     files (JS, TS, Python, Rust, Java, Dart, JSON, YAML, CSS). Go files are
 	//    covered by go/parser above. This catches the common edit failure where
 	//    the agent adds or removes a bracket without its match.
@@ -146,14 +146,14 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 		warnings = append(warnings, delimWarn)
 	}
 
-	// 11. Config file syntax validation — parses JSON, YAML, TOML, XML after
+	// 11. Config file syntax validation - parses JSON, YAML, TOML, XML after
 	//     write to catch malformed config files that would cause runtime failures.
 	//     Uses existing project parsers (zero new dependencies).
 	if configWarn := configSyntaxCheck(filePath, newContent); configWarn != "" {
 		warnings = append(warnings, configWarn)
 	}
 
-	// 11b. Python indentation consistency — detects mixed tabs/spaces in
+	// 11b. Python indentation consistency - detects mixed tabs/spaces in
 	//      indentation runs, which cause TabError in Python 3. This is
 	//      syntactically significant (unlike Go where gofmt handles it).
 	if pyIndentWarn := checkPythonIndentation(filePath, newContent); pyIndentWarn != "" {
@@ -173,6 +173,13 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 	//     which breaks cancellation/deadline/trace propagation. Delta-aware.
 	if ctxLeakWarn := checkContextLeak(filePath, oldContent, newContent); ctxLeakWarn != "" {
 		warnings = append(warnings, ctxLeakWarn)
+	}
+
+	// 14. Test gaming detection - flags suspicious modifications to test files
+	//     that weaken verification: deleted test functions, added skip directives,
+	//     removed assertions. Delta-based (only flags changes introduced by this edit).
+	if testGamingWarn := checkTestGaming(filePath, oldContent, newContent); testGamingWarn != "" {
+		warnings = append(warnings, testGamingWarn)
 	}
 
 	if len(warnings) == 0 {
