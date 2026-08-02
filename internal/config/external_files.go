@@ -289,6 +289,13 @@ func loadMCPServersFile(path string) []MCPServerConfig {
 	return servers
 }
 
+// LoadMCPServersPublic loads MCP server configs from the given file path.
+// It is an exported wrapper around loadMCPServersFile for use by the
+// hot-reload watcher.
+func LoadMCPServersPublic(path string) []MCPServerConfig {
+	return loadMCPServersFile(path)
+}
+
 // mergeVendors merges external vendors on top of in-memory vendors.
 // External file values take precedence (they are the source of truth).
 func mergeVendors(base, external map[string]VendorConfig) map[string]VendorConfig {

@@ -513,16 +513,18 @@ func (m *MCPPlugin) Init(cfg map[string]interface{}) error {
 }
 
 type MCPManager struct {
-	plugins      []*MCPPlugin
-	registry     *tool.Registry
-	onUpdate     func([]MCPServerInfo)
-	mu           sync.RWMutex
-	warnings     []string
-	startOnce    sync.Once
-	timeout      time.Duration
-	stdioTimeout time.Duration
-	pendingOAuth *MCPOAuthRequiredError
-	urlOpener    func(string) error
+	plugins            []*MCPPlugin
+	registry           *tool.Registry
+	onUpdate           func([]MCPServerInfo)
+	mu                 sync.RWMutex
+	warnings           []string
+	startOnce          sync.Once
+	timeout            time.Duration
+	stdioTimeout       time.Duration
+	pendingOAuth       *MCPOAuthRequiredError
+	urlOpener          func(string) error
+	samplingHandler    mcp.SamplingHandler
+	elicitationHandler mcp.ElicitationHandler
 }
 
 func NewMCPManager(servers []config.MCPServerConfig, registry *tool.Registry) *MCPManager {
@@ -556,9 +558,11 @@ func (m *MCPManager) SetURLOpener(fn func(string) error) {
 // Each plugin will pass the handler to its MCP client on connect, enabling
 // servers to request LLM completions via sampling/createMessage.
 func (m *MCPManager) SetSamplingHandler(h mcp.SamplingHandler) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	for _, plugin := range m.plugins {
+	m.mu.Lock()
+	m.samplingHandler = h
+	plugins := append([]*MCPPlugin(nil), m.plugins...)
+	m.mu.Unlock()
+	for _, plugin := range plugins {
 		plugin.SetSamplingHandler(h)
 	}
 }
@@ -567,9 +571,11 @@ func (m *MCPManager) SetSamplingHandler(h mcp.SamplingHandler) {
 // plugins. Each plugin will pass the handler to its MCP client on connect,
 // enabling servers to request structured user input via elicitation/create.
 func (m *MCPManager) SetElicitationHandler(h mcp.ElicitationHandler) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	for _, plugin := range m.plugins {
+	m.mu.Lock()
+	m.elicitationHandler = h
+	plugins := append([]*MCPPlugin(nil), m.plugins...)
+	m.mu.Unlock()
+	for _, plugin := range plugins {
 		plugin.SetElicitationHandler(h)
 	}
 }
@@ -936,6 +942,160 @@ func (m *MCPManager) pluginByName(name string) *MCPPlugin {
 		}
 	}
 	return nil
+}
+
+// Reload hot-swaps MCP server configurations without restarting the session.
+// It diffs the new server list against the current one:
+//   - Removed servers: disconnect + unregister tools + remove from list
+//   - Changed servers: disconnect + unregister + replace plugin + reconnect
+//   - New servers: add plugin + connect
+//   - Unchanged servers: left alone
+//
+// This enables hot-reloading mcp_servers.yaml at runtime.
+func (m *MCPManager) Reload(ctx context.Context, servers []config.MCPServerConfig) {
+	m.mu.Lock()
+
+	// Build lookup of new servers by name+config hash for quick comparison.
+	newByName := make(map[string]config.MCPServerConfig, len(servers))
+	for _, s := range servers {
+		newByName[s.Name] = s
+	}
+
+	// Categorize current plugins into kept/removed/changed.
+	var removed, changed []*MCPPlugin
+	finalPlugins := make([]*MCPPlugin, 0, len(servers))
+	for _, p := range m.plugins {
+		newCfg, exists := newByName[p.Name()]
+		if !exists {
+			removed = append(removed, p)
+			continue
+		}
+		if !mcpServerConfigEqual(p.cfg, newCfg) {
+			changed = append(changed, p)
+			continue // will be re-created below with new config
+		}
+		finalPlugins = append(finalPlugins, p)
+	}
+
+	// Add new + changed servers as fresh plugins.
+	changedNames := make(map[string]bool, len(changed))
+	for _, p := range changed {
+		changedNames[p.Name()] = true
+	}
+	var connectPlugins []*MCPPlugin
+	for _, s := range servers {
+		if changedNames[s.Name] {
+			p := NewMCPPlugin(s)
+			p.registry = m.registry
+			if m.samplingHandler != nil {
+				p.SetSamplingHandler(m.samplingHandler)
+			}
+			if m.elicitationHandler != nil {
+				p.SetElicitationHandler(m.elicitationHandler)
+			}
+			finalPlugins = append(finalPlugins, p)
+			connectPlugins = append(connectPlugins, p)
+		}
+	}
+
+	// Add brand-new servers (names not in old list).
+	oldNames := make(map[string]bool, len(m.plugins))
+	for _, p := range m.plugins {
+		oldNames[p.Name()] = true
+	}
+	for _, s := range servers {
+		if !oldNames[s.Name] && !changedNames[s.Name] {
+			p := NewMCPPlugin(s)
+			p.registry = m.registry
+			if m.samplingHandler != nil {
+				p.SetSamplingHandler(m.samplingHandler)
+			}
+			if m.elicitationHandler != nil {
+				p.SetElicitationHandler(m.elicitationHandler)
+			}
+			finalPlugins = append(finalPlugins, p)
+			connectPlugins = append(connectPlugins, p)
+		}
+	}
+
+	m.plugins = finalPlugins
+	m.mu.Unlock()
+
+	// Unregister tools + close removed/changed plugins (outside lock).
+	for _, p := range removed {
+		for _, toolName := range p.Info().ToolNames {
+			m.registry.Unregister(toolName)
+		}
+		_ = p.Close()
+		debug.Log("mcp-reload", "removed server=%s", p.Name())
+	}
+	for _, p := range changed {
+		for _, toolName := range p.Info().ToolNames {
+			m.registry.Unregister(toolName)
+		}
+		_ = p.Close()
+		debug.Log("mcp-reload", "replaced server=%s (config changed)", p.Name())
+	}
+
+	m.emitUpdate()
+
+	// Connect new + changed plugins in background.
+	for _, p := range connectPlugins {
+		if MCPDisabled(p.Name()) {
+			continue
+		}
+		pluginCopy := p
+		safego.Go("plugin.mcp.reloadConnect", func() {
+			m.connectOne(ctx, pluginCopy)
+		})
+	}
+
+	debug.Log("mcp-reload", "reload complete: removed=%d changed=%d total=%d", len(removed), len(changed), len(finalPlugins))
+}
+
+// mcpServerConfigEqual compares two MCP server configs to determine if
+// anything that affects the connection has changed.
+func mcpServerConfigEqual(a, b config.MCPServerConfig) bool {
+	if a.Name != b.Name {
+		return false
+	}
+	if a.Type != b.Type {
+		return false
+	}
+	if a.Command != b.Command {
+		return false
+	}
+	if a.URL != b.URL {
+		return false
+	}
+	if a.ReadOnly != b.ReadOnly {
+		return false
+	}
+	if len(a.Args) != len(b.Args) {
+		return false
+	}
+	for i := range a.Args {
+		if a.Args[i] != b.Args[i] {
+			return false
+		}
+	}
+	if len(a.Env) != len(b.Env) {
+		return false
+	}
+	for k, v := range a.Env {
+		if bv, ok := b.Env[k]; !ok || bv != v {
+			return false
+		}
+	}
+	if len(a.Headers) != len(b.Headers) {
+		return false
+	}
+	for k, v := range a.Headers {
+		if bv, ok := b.Headers[k]; !ok || bv != v {
+			return false
+		}
+	}
+	return true
 }
 
 func (m *MCPManager) Close() error {

@@ -33,9 +33,11 @@ type InteractiveRuntimeCore struct {
 	CommandManager *commands.Manager
 	Tunnel         *TunnelHost // unified tunnel event management
 	configAccess   *configAccess
+	workingDir     string
 
-	mcpCtx    context.Context
-	mcpCancel context.CancelFunc
+	mcpCtx       context.Context
+	mcpCancel    context.CancelFunc
+	mcpHotReload *MCPHotReload
 }
 
 func BuildInteractiveRuntimeCore(cfg *config.Config, workingDir string, policy permission.PermissionPolicy) (*InteractiveRuntimeCore, error) {
@@ -99,6 +101,7 @@ func BuildInteractiveRuntimeCore(cfg *config.Config, workingDir string, policy p
 		CommandManager: commandMgr,
 		Tunnel:         th,
 		configAccess:   cfgAccess,
+		workingDir:     workingDir,
 	}, nil
 }
 
@@ -129,6 +132,10 @@ func (c *InteractiveRuntimeCore) StartBackgroundServices() {
 	if c.MCPManager != nil {
 		c.mcpCtx, c.mcpCancel = context.WithCancel(context.Background())
 		c.MCPManager.StartBackground(c.mcpCtx)
+
+		// Start MCP config hot-reload watcher.
+		c.mcpHotReload = NewMCPHotReload(config.ConfigDir(), c.workingDir, c.MCPManager)
+		c.mcpHotReload.Start(c.mcpCtx)
 	}
 }
 
