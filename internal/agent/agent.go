@@ -1088,6 +1088,33 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.toolFilter = tool.NewRelevanceFilter()
 	a.resetTransientRetryBudget()
 
+	// Capture the git working tree state BEFORE the agent makes any changes.
+	// This lets the reconciliation gate distinguish pre-existing dirty files
+	// (user's own uncommitted work) from genuine side-effect changes introduced
+	// by the agent's tool calls. Also resets the gate for the new run.
+	a.changeReconcile.reset()
+	if workingDir := a.WorkingDir(); workingDir != "" {
+		a.changeReconcile.capturePreRunState(workingDir)
+		// Inject awareness if the tree is dirty — the agent should know about
+		// pre-existing uncommitted changes so it can avoid accidentally
+		// staging or committing them.
+		if n := a.changeReconcile.dirtyFileCount(); n > 0 {
+			a.contextManager.Add(provider.Message{
+				Role: "user",
+				Content: []provider.ContentBlock{{
+					Type: "text",
+					Text: fmt.Sprintf(
+						"[workspace] Note: %d file(s) have uncommitted changes in the working tree "+
+							"(your own work before this session). When committing, stage only the files "+
+							"you modified during this task — do not use 'git add -A' or 'git commit -a' "+
+							"unless the user explicitly asks.",
+						n,
+					),
+				}},
+			})
+		}
+	}
+
 	// Mark a new run boundary in the checkpoint manager so UndoRun() can
 	// batch-revert all file changes from this run in one operation.
 	if a.checkpoints != nil {

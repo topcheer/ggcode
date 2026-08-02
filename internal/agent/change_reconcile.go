@@ -41,13 +41,59 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// changeReconcileState tracks whether the reconciliation gate has fired.
+// changeReconcileState tracks whether the reconciliation gate has fired
+// and stores the set of files that were already dirty before the run started.
 type changeReconcileState struct {
-	fired bool
+	fired          bool
+	preRunDirty    map[string]bool // normalized paths of files changed before this run
+	preRunCaptured bool            // true after capturePreRunState has executed
 }
 
 func newChangeReconcileState() *changeReconcileState {
-	return &changeReconcileState{}
+	return &changeReconcileState{
+		preRunDirty: make(map[string]bool),
+	}
+}
+
+// capturePreRunState records the set of files with uncommitted changes
+// relative to HEAD at the START of a run. This lets checkChangeReconcile
+// distinguish pre-existing dirty files (user's own work) from genuine
+// side-effect changes introduced by the agent's tool calls.
+//
+// Without this, any file the user left uncommitted before invoking the
+// agent would be flagged as an "unexpected side effect" — a false positive
+// that undermines trust in the reconciliation gate.
+func (c *changeReconcileState) capturePreRunState(workingDir string) {
+	if c.preRunCaptured || workingDir == "" {
+		return
+	}
+	c.preRunCaptured = true
+
+	files, err := gitChangedFiles(workingDir)
+	if err != nil {
+		debug.Log("reconcile", "capturePreRunState: git diff failed: %v", err)
+		return
+	}
+	for _, f := range files {
+		c.preRunDirty[normalizeReconcilePath(workingDir, f)] = true
+	}
+	if len(files) > 0 {
+		debug.Log("reconcile", "capturePreRunState: %d files were dirty before run start", len(files))
+	}
+}
+
+// dirtyFileCount returns the number of pre-existing dirty files (for
+// run-start awareness injection).
+func (c *changeReconcileState) dirtyFileCount() int {
+	return len(c.preRunDirty)
+}
+
+// reset clears the state so the gate can fire on a new run.
+// Called once at the start of each RunStreamWithContent.
+func (c *changeReconcileState) reset() {
+	c.fired = false
+	c.preRunCaptured = false
+	c.preRunDirty = make(map[string]bool)
 }
 
 // sideEffectFiles are files commonly modified by tooling commands (go mod tidy,
@@ -145,6 +191,11 @@ func (a *Agent) checkChangeReconcile(runStats *RunStats) string {
 		}
 		normalized := normalizeReconcilePath(workingDir, f)
 		if edited[normalized] {
+			continue
+		}
+		// Skip files that were already dirty before this run started.
+		// These are the user's own uncommitted changes, not agent side effects.
+		if a.changeReconcile.preRunDirty[normalized] {
 			continue
 		}
 		unexpected = append(unexpected, f)

@@ -407,6 +407,23 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 		}
 	}
 
+	// Post-write hardcoded credential detection for multi-file edits.
+	if !result.IsError && len(plans) > 0 {
+		var secretWarnings []string
+		for _, plan := range plans {
+			if diff.HasChanges(plan.OldContent, plan.NewContent) {
+				secretWarnings = append(secretWarnings, checkHardcodedSecrets(plan.Path, plan.OldContent, plan.NewContent)...)
+			}
+		}
+		for _, w := range secretWarnings {
+			if result.Content != "" {
+				result.Content = result.Content + "\n\n" + w
+			} else {
+				result.Content = w
+			}
+		}
+	}
+
 	// Post-write auto-format: run formatters on all successfully written files.
 	if !result.IsError {
 		for _, plan := range plans {
@@ -528,6 +545,21 @@ func (a *Agent) executeFileTool(ctx context.Context, t tool.Tool, tc provider.To
 				result.Content = result.Content + "\n\n" + warning
 			} else {
 				result.Content = warning
+			}
+		}
+	}
+
+	// Post-write hardcoded credential detection: warn when the agent introduces
+	// real credential patterns (AWS keys, GitHub tokens, private keys, etc.) into
+	// source files. This prevents the agent from creating security vulnerabilities.
+	// Uses delta-based detection: only flags secrets INTRODUCED by this edit.
+	if !result.IsError {
+		secretWarnings := checkHardcodedSecrets(filePath, oldContent, newContent)
+		for _, w := range secretWarnings {
+			if result.Content != "" {
+				result.Content = result.Content + "\n\n" + w
+			} else {
+				result.Content = w
 			}
 		}
 	}
