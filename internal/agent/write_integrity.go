@@ -354,6 +354,13 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 		warnings = append(warnings, wrapWarnings...)
 	}
 
+	// 33b. Interface compliance detection - checks if edits to Go interfaces
+	//      (adding/removing/renaming methods) break existing implementations in
+	//      the same package. Delta-aware (only checks changed interfaces).
+	if ifaceWarn := checkInterfaceCompliance(filePath, oldContent, newContent); ifaceWarn != "" {
+		warnings = append(warnings, ifaceWarn)
+	}
+
 	if len(warnings) == 0 {
 		return ""
 	}
