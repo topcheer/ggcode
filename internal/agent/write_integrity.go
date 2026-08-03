@@ -410,6 +410,14 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 		warnings = append(warnings, deprecatedWarn)
 	}
 
+	// 40. Unsafe numeric type conversion detection - flags narrowing integer
+	//     conversions (int32(len(x)), uint8(count)) that silently truncate, and
+	//     time function calls with bare numeric literals (time.Sleep(5) = 5ns).
+	//     Go does NOT panic on integer overflow (wraps silently). Delta-aware.
+	if numericWarn := checkUnsafeNumericConversion(filePath, oldContent, newContent); numericWarn != "" {
+		warnings = append(warnings, numericWarn)
+	}
+
 	if len(warnings) == 0 {
 		return ""
 	}
