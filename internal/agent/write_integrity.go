@@ -485,6 +485,15 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 		warnings = append(warnings, nplus1Warnings...)
 	}
 
+	// 49. Concurrent map access detection - flags map writes in functions
+	//     that also spawn goroutines without sync primitives (Mutex/RWMutex/
+	//     sync.Map). Go maps are NOT safe for concurrent use and cause fatal
+	//     runtime crashes ('concurrent map writes'). This is among the most
+	//     common production incidents in Go. Delta-aware.
+	if concurrentMapWarn := checkConcurrentMapAccess(filePath, oldContent, newContent); concurrentMapWarn != "" {
+		warnings = append(warnings, concurrentMapWarn)
+	}
+
 	if len(warnings) == 0 {
 		return ""
 	}
