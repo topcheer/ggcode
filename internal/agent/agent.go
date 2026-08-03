@@ -167,6 +167,7 @@ type Agent struct {
 	sessionTimeout             *sessionTimeoutState                  // wall-clock timeout for agent runs (autopilot guardrail)
 	velocityForecast           *velocityForecastState                // iteration velocity forecasting (TAAS-inspired predictive productivity check)
 	transientRetryBudget       int                                   // remaining automatic retries for transient tool failures (per run)
+	compoundingFailure         *compoundingFailureState              // sliding-window cross-tool failure rate (strategy reset detection)
 	argSizeGuardFires          int                                   // count of argument size guard injections this run
 	fileFreshness              *fileFreshnessSentinel                // proactive cross-iteration external file change detection
 	latencyTracker             *LatencyTracker                       // per-tool latency baseline & slow-tool outlier detection
@@ -265,6 +266,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		fileFreshness:        newFileFreshnessSentinel(),
 		userSentiment:        newUserSentimentState(),
 		transientRetryBudget: maxTransientRetryBudgetPerRun,
+		compoundingFailure:   newCompoundingFailureState(),
 	}
 	a.syncContextManagerProviderLocked()
 	a.syncContextManagerUsageHandlerLocked()
@@ -1130,6 +1132,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.taskAnchor.reset(userPromptForStats, time.Now())
 	a.toolFilter = tool.NewRelevanceFilter()
 	a.resetTransientRetryBudget()
+	a.compoundingFailure.reset()
 	a.fileFreshness.reset()
 
 	// Capture the git working tree state BEFORE the agent makes any changes.
@@ -2139,6 +2142,18 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					result.Content = result.Content + "\n\n" + errorGuidance
 				} else {
 					result.Content = errorGuidance
+				}
+			}
+
+			// Compounding failure detection: sliding-window cross-tool failure
+			// rate analysis. Catches interleaved fail-succeed-fail patterns that
+			// consecutive-error detection cannot (any success resets the streak).
+			a.compoundingFailure.recordResult(tc.Name, result.IsError)
+			if compoundingGuidance := a.compoundingFailure.check(); compoundingGuidance != "" {
+				if result.Content != "" {
+					result.Content = result.Content + "\n\n" + compoundingGuidance
+				} else {
+					result.Content = compoundingGuidance
 				}
 			}
 
