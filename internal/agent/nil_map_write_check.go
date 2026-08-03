@@ -132,24 +132,21 @@ func checkNilMapWrite(filePath, oldContent, newContent string) string {
 
 // findNilMapWritesInFunc analyzes a single function for nil map write patterns.
 func findNilMapWritesInFunc(fset *token.FileSet, fn *ast.FuncDecl) []nilMapWriteInstance {
-	// Collect all map-typed local variables that are declared WITHOUT initialization.
-	// A map variable is "nil-risk" if it's:
-	//   - Declared via `var m map[K]V` (no initializer)
-	//   - Never assigned via make(), a map literal, or another potentially-initialized map
-	//   - Then used in a write context: m[key] = value, delete(m, key) is safe (no panic on nil)
+	nilMaps := collectNilRiskMaps(fn.Body)
+	if len(nilMaps) == 0 {
+		return nil
+	}
+	instances := findUninitializedMapWrites(fset, fn.Body, nilMaps)
+	return deduplicateByMapName(instances)
+}
 
-	nilMaps := make(map[string]bool) // map name -> is nil-risk
-
-	// First pass: find nil-risk map declarations.
-	ast.Inspect(fn.Body, func(n ast.Node) bool {
+// collectNilRiskMaps finds var m map[K]V declarations (without initializer)
+// and returns the set of variable names that are nil-risk.
+func collectNilRiskMaps(body *ast.BlockStmt) map[string]bool {
+	nilMaps := make(map[string]bool)
+	ast.Inspect(body, func(n ast.Node) bool {
 		switch decl := n.(type) {
 		case *ast.AssignStmt:
-			// Short variable declaration: m := make(...) or m := map[K]V{...}
-			// These are initialized, so NOT nil-risk.
-			// Short variable declarations (m := ...) are always initialized,
-			// so they cannot be nil-risk. Skip them.
-			// Regular assignment: m = make(...) or m = someMap
-			// This REMOVES nil-risk if the map was previously declared.
 			if decl.Tok == token.ASSIGN {
 				for _, lhs := range decl.Lhs {
 					if ident, ok := lhs.(*ast.Ident); ok {
@@ -159,9 +156,7 @@ func findNilMapWritesInFunc(fset *token.FileSet, fn *ast.FuncDecl) []nilMapWrite
 					}
 				}
 			}
-
 		case *ast.DeclStmt:
-			// var m map[K]V (no initializer) -> nil-risk
 			genDecl, ok := decl.Decl.(*ast.GenDecl)
 			if !ok || genDecl.Tok != token.VAR {
 				return true
@@ -171,15 +166,11 @@ func findNilMapWritesInFunc(fset *token.FileSet, fn *ast.FuncDecl) []nilMapWrite
 				if !ok {
 					continue
 				}
-				// Check if type is a map
 				if vs.Type != nil {
-					if _, isMap := vs.Type.(*ast.MapType); isMap {
-						// No initializer = nil-risk
-						if len(vs.Values) == 0 {
-							for _, name := range vs.Names {
-								if name.Name != "_" {
-									nilMaps[name.Name] = true
-								}
+					if _, isMap := vs.Type.(*ast.MapType); isMap && len(vs.Values) == 0 {
+						for _, name := range vs.Names {
+							if name.Name != "_" {
+								nilMaps[name.Name] = true
 							}
 						}
 					}
@@ -188,66 +179,53 @@ func findNilMapWritesInFunc(fset *token.FileSet, fn *ast.FuncDecl) []nilMapWrite
 		}
 		return true
 	})
+	return nilMaps
+}
 
-	if len(nilMaps) == 0 {
-		return nil
-	}
-
-	// Second pass: remove maps that get initialized before write (sequential order matters).
-	// Walk statements in order and track initialization state.
-	initializedMaps := make(map[string]bool)
+// findUninitializedMapWrites tracks initialization state and flags writes
+// to nil-risk maps that haven't been initialized yet.
+func findUninitializedMapWrites(fset *token.FileSet, body *ast.BlockStmt, nilMaps map[string]bool) []nilMapWriteInstance {
+	initialized := make(map[string]bool)
 	var instances []nilMapWriteInstance
-
-	ast.Inspect(fn.Body, func(n ast.Node) bool {
+	ast.Inspect(body, func(n ast.Node) bool {
 		switch node := n.(type) {
 		case *ast.AssignStmt:
-			// Check if this initializes a previously-nil map.
 			for _, lhs := range node.Lhs {
 				if ident, ok := lhs.(*ast.Ident); ok && nilMaps[ident.Name] {
-					if isMakeMapCall(node.Rhs) || isMapLiteral(node.Rhs) {
-						initializedMaps[ident.Name] = true
-					}
-					// Also consider assignment from another expression as potentially initialized.
-					// This reduces false positives but may miss some nil cases.
 					if node.Tok == token.ASSIGN && len(node.Rhs) > 0 {
-						initializedMaps[ident.Name] = true
+						initialized[ident.Name] = true
 					}
 				}
-			}
-
-			// Check if this is a write to a nil map: m[key] = value
-			for _, lhs := range node.Lhs {
-				if indexExpr, ok := lhs.(*ast.IndexExpr); ok {
-					if ident, ok := indexExpr.X.(*ast.Ident); ok {
-						if nilMaps[ident.Name] && !initializedMaps[ident.Name] {
-							pos := fset.Position(indexExpr.Pos())
-							instances = append(instances, nilMapWriteInstance{
-								posStr:  fmt.Sprintf("%s:%d", filepath.Base(pos.Filename), pos.Line),
-								mapName: ident.Name,
-							})
-						}
-					}
+				if idx, ok := lhs.(*ast.IndexExpr); ok {
+					instances = append(instances, checkNilMapWriteInstance(fset, idx, nilMaps, initialized)...)
 				}
 			}
-
 		case *ast.IncDecStmt:
-			// m[key]++ or m[key]-- are also writes
-			if indexExpr, ok := node.X.(*ast.IndexExpr); ok {
-				if ident, ok := indexExpr.X.(*ast.Ident); ok {
-					if nilMaps[ident.Name] && !initializedMaps[ident.Name] {
-						pos := fset.Position(indexExpr.Pos())
-						instances = append(instances, nilMapWriteInstance{
-							posStr:  fmt.Sprintf("%s:%d", filepath.Base(pos.Filename), pos.Line),
-							mapName: ident.Name,
-						})
-					}
-				}
+			if idx, ok := node.X.(*ast.IndexExpr); ok {
+				instances = append(instances, checkNilMapWriteInstance(fset, idx, nilMaps, initialized)...)
 			}
 		}
 		return true
 	})
+	return instances
+}
 
-	// Deduplicate by map name (report first occurrence only).
+// checkNilMapWriteInstance returns a warning instance if the index expression
+// writes to a nil-risk map that hasn't been initialized.
+func checkNilMapWriteInstance(fset *token.FileSet, idx *ast.IndexExpr, nilMaps, initialized map[string]bool) []nilMapWriteInstance {
+	ident, ok := idx.X.(*ast.Ident)
+	if !ok || !nilMaps[ident.Name] || initialized[ident.Name] {
+		return nil
+	}
+	pos := fset.Position(idx.Pos())
+	return []nilMapWriteInstance{{
+		posStr:  fmt.Sprintf("%s:%d", filepath.Base(pos.Filename), pos.Line),
+		mapName: ident.Name,
+	}}
+}
+
+// deduplicateByMapName keeps only the first occurrence per map name.
+func deduplicateByMapName(instances []nilMapWriteInstance) []nilMapWriteInstance {
 	seen := make(map[string]bool)
 	var deduped []nilMapWriteInstance
 	for _, inst := range instances {
@@ -256,7 +234,6 @@ func findNilMapWritesInFunc(fset *token.FileSet, fn *ast.FuncDecl) []nilMapWrite
 			deduped = append(deduped, inst)
 		}
 	}
-
 	return deduped
 }
 
