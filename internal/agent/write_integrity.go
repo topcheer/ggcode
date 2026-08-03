@@ -462,6 +462,15 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 		warnings = append(warnings, breakingWarn)
 	}
 
+	// 47. Self-assignment detection - flags statements where a variable or
+	//     field is assigned to itself (x = x, s.Field = s.Field). These are
+	//     no-ops that compile cleanly but represent refactoring mistakes.
+	//     staticcheck S1011 only catches trivial x = x, not field chains.
+	//     Delta-aware.
+	if selfAssignWarn := checkSelfAssignment(filePath, oldContent, newContent); selfAssignWarn != "" {
+		warnings = append(warnings, selfAssignWarn)
+	}
+
 	// 44. Missing test companion detection is NOT called here because it
 	//     requires filesystem access (checking for _test.go files in the same
 	//     directory). It is invoked separately from agent_tool.go via
