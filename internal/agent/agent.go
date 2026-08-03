@@ -168,6 +168,7 @@ type Agent struct {
 	velocityForecast           *velocityForecastState                // iteration velocity forecasting (TAAS-inspired predictive productivity check)
 	transientRetryBudget       int                                   // remaining automatic retries for transient tool failures (per run)
 	compoundingFailure         *compoundingFailureState              // sliding-window cross-tool failure rate (strategy reset detection)
+	toolFallback               *toolFallbackState                    // tool error fallback chain (actionable recovery suggestions)
 	argSizeGuardFires          int                                   // count of argument size guard injections this run
 	fileFreshness              *fileFreshnessSentinel                // proactive cross-iteration external file change detection
 	latencyTracker             *LatencyTracker                       // per-tool latency baseline & slow-tool outlier detection
@@ -267,6 +268,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		userSentiment:        newUserSentimentState(),
 		transientRetryBudget: maxTransientRetryBudgetPerRun,
 		compoundingFailure:   newCompoundingFailureState(),
+		toolFallback:         newToolFallbackState(),
 	}
 	a.syncContextManagerProviderLocked()
 	a.syncContextManagerUsageHandlerLocked()
@@ -1133,6 +1135,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.toolFilter = tool.NewRelevanceFilter()
 	a.resetTransientRetryBudget()
 	a.compoundingFailure.reset()
+	a.toolFallback.reset()
 	a.fileFreshness.reset()
 
 	// Capture the git working tree state BEFORE the agent makes any changes.
@@ -2120,6 +2123,18 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 						result.Content = result.Content + "\n\n" + g
 					} else {
 						result.Content = g
+					}
+				}
+			}
+
+			// Tool error fallback chain: on tool failure, inject actionable
+			// alternative strategy suggestions. Fires once per tool per run.
+			if result.IsError {
+				if fallbackHint := a.toolFallbackCheck(tc.Name, result.Content); fallbackHint != "" {
+					if result.Content != "" {
+						result.Content = result.Content + "\n\n" + fallbackHint
+					} else {
+						result.Content = fallbackHint
 					}
 				}
 			}
