@@ -1,6 +1,10 @@
 package uiusage
 
-import "github.com/topcheer/ggcode/internal/provider"
+import (
+	"fmt"
+
+	"github.com/topcheer/ggcode/internal/provider"
+)
 
 type ContextDisplay struct {
 	UsedTokens       int
@@ -65,11 +69,18 @@ func BuildSessionUsageDisplay(usage provider.TokenUsage) SessionUsageDisplay {
 }
 
 func HumanizeTokenCount(n int) string {
+	if n < 0 {
+		return "-" + HumanizeTokenCount(-n)
+	}
 	switch {
-	case n >= 1_000_000 && n%1_000_000 == 0:
-		return itoa(n/1_000_000) + "m"
-	case n >= 1000 && n%1000 == 0:
-		return itoa(n/1000) + "k"
+	case n >= 1_000_000_000_000:
+		return fmt.Sprintf("%.2fT", float64(n)/1e12)
+	case n >= 1_000_000_000:
+		return fmt.Sprintf("%.2fB", float64(n)/1e9)
+	case n >= 1_000_000:
+		return fmt.Sprintf("%.2fM", float64(n)/1e6)
+	case n >= 1_000:
+		return fmt.Sprintf("%.2fK", float64(n)/1e3)
 	default:
 		return itoa(n)
 	}

@@ -143,11 +143,11 @@ func (m Model) renderComposerPanel() string {
 	hints := []string{
 		m.t("hint.mode") + " " + m.renderModeBadge(),
 	}
-	// Context window usage indicator — show when agent exists.
+	// Context window usage indicator -- show when agent exists.
 	if ctxLabel := m.contextUsageHint(); ctxLabel != "" {
 		hints = append(hints, ctxLabel)
 	}
-	// Session cost / token usage — persistent visibility without /cost.
+	// Session cost only (short format). Token breakdown is in sidebar.
 	if costLabel := m.sessionCostHint(); costLabel != "" {
 		hints = append(hints, costLabel)
 	}
@@ -399,11 +399,13 @@ func (m Model) sessionCostHint() string {
 	// Compute estimated cost from per-model usage history (same logic as /cost).
 	totalCost := m.estimateSessionCost()
 
+	// Short format: cost only when available, otherwise token count.
+	// e.g. "$0.04" or "45K tok" -- token detail is in the sidebar.
 	var label string
 	if totalCost > 0 {
-		label = fmt.Sprintf("%s · %s tok", cost.FormatCost(totalCost), humanizeTokenCount(totalTokens))
+		label = cost.FormatCost(totalCost)
 	} else {
-		label = fmt.Sprintf("%s tok", humanizeTokenCount(totalTokens))
+		label = humanizeTokenCount(totalTokens) + " tok"
 	}
 
 	// Color by cost tier: green < $0.50, yellow < $2.00, red >= $2.00

@@ -17,11 +17,11 @@ func TestBuildContextDisplayMatchesTUISemantics(t *testing.T) {
 	if display.RemainingPercent != 0 {
 		t.Fatalf("remaining_percent = %d, want 0", display.RemainingPercent)
 	}
-	if display.UsedLabel != "1500" {
-		t.Fatalf("used_label = %q, want 1500", display.UsedLabel)
+	if display.UsedLabel != "1.50K" {
+		t.Fatalf("used_label = %q, want 1.50K", display.UsedLabel)
 	}
-	if display.MaxLabel != "2k" {
-		t.Fatalf("max_label = %q, want 2k", display.MaxLabel)
+	if display.MaxLabel != "2.00K" {
+		t.Fatalf("max_label = %q, want 2.00K", display.MaxLabel)
 	}
 }
 
@@ -32,11 +32,11 @@ func TestBuildSessionUsageDisplayMatchesTUIFormatting(t *testing.T) {
 		CacheRead:    800,
 		CacheWrite:   64,
 	})
-	if display.TotalLabel != "1340" {
-		t.Fatalf("total_label = %q, want 1340", display.TotalLabel)
+	if display.TotalLabel != "1.34K" {
+		t.Fatalf("total_label = %q, want 1.34K", display.TotalLabel)
 	}
-	if display.InputLabel != "1k" {
-		t.Fatalf("input_label = %q, want 1k", display.InputLabel)
+	if display.InputLabel != "1.00K" {
+		t.Fatalf("input_label = %q, want 1.00K", display.InputLabel)
 	}
 	if display.OutputLabel != "340" {
 		t.Fatalf("output_label = %q, want 340", display.OutputLabel)
