@@ -435,6 +435,14 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 		warnings = append(warnings, dupWarnings...)
 	}
 
+	// 43. Magic number detection - flags bare numeric literals (>=3) introduced
+	//     by this edit in comparisons, function arguments, and assignments where a
+	//     named constant would be clearer. LLMs frequently hardcode numbers instead
+	//     of using named constants. Delta-aware (only flags new occurrences).
+	if magicWarn := checkMagicNumbers(filePath, oldContent, newContent); magicWarn != "" {
+		warnings = append(warnings, magicWarn)
+	}
+
 	if len(warnings) == 0 {
 		return ""
 	}
