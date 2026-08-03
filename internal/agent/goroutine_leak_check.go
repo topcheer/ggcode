@@ -161,56 +161,64 @@ func hasGoroutineLifecycle(body *ast.BlockStmt) bool {
 
 	ast.Inspect(body, func(node ast.Node) bool {
 		if found {
-			return false // already found, stop traversing
+			return false
 		}
-
-		switch n := node.(type) {
-		case *ast.SelectorExpr:
-			// sync.WaitGroup methods: Add, Done, Wait
-			// errgroup methods: Wait, Go, SetLimit
-			if n.Sel == nil {
-				return true
-			}
-			switch n.Sel.Name {
-			case "Wait", "Done", "Add":
-				// Could be WaitGroup, errgroup, or custom. Treat as lifecycle.
-				found = true
-				return false
-			}
-
-		case *ast.CallExpr:
-			// Check for context.WithCancel/WithTimeout/WithDeadline,
-			// errgroup.WithContext, and close(ch).
-			if sel, ok := n.Fun.(*ast.SelectorExpr); ok && sel.Sel != nil {
-				switch sel.Sel.Name {
-				case "WithCancel", "WithTimeout", "WithDeadline", "WithCancelCause",
-					"WithTimeoutCause", "WithDeadlineCause", "WithContext":
-					found = true
-					return false
-				}
-			}
-			// close(ch) -- channel close is a signaling mechanism.
-			if ident, ok := n.Fun.(*ast.Ident); ok && ident.Name == "close" {
-				found = true
-				return false
-			}
-
-		case *ast.SendStmt:
-			// Channel send: ch <- value. Only treat as lifecycle if the channel
-			// appears to be a signal/stop channel (conservative heuristic).
-			if ident, ok := n.Chan.(*ast.Ident); ok {
-				lower := strings.ToLower(ident.Name)
-				for _, sig := range []string{"stop", "done", "quit", "shutdown", "cancel", "exit", "term"} {
-					if strings.Contains(lower, sig) {
-						found = true
-						return false
-					}
-				}
-			}
+		if isLifecycleNode(node) {
+			found = true
+			return false
 		}
-
 		return true
 	})
 
 	return found
+}
+
+// waitGroupMethods are sync.WaitGroup / errgroup method names that indicate
+// goroutine lifecycle management.
+var waitGroupMethods = map[string]bool{
+	"Wait": true, "Done": true, "Add": true,
+}
+
+// contextDeriveMethods are context package functions that create cancellable
+// contexts, indicating goroutine lifecycle management.
+var contextDeriveMethods = map[string]bool{
+	"WithCancel": true, "WithTimeout": true, "WithDeadline": true,
+	"WithCancelCause": true, "WithTimeoutCause": true, "WithDeadlineCause": true,
+	"WithContext": true, // errgroup.WithContext
+}
+
+// signalChannelKeywords are keywords in channel variable names that suggest
+// the channel is used for goroutine signaling (shutdown/cancel).
+var signalChannelKeywords = []string{"stop", "done", "quit", "shutdown", "cancel", "exit", "term"}
+
+// isLifecycleNode returns true if the AST node represents a goroutine
+// lifecycle management mechanism.
+func isLifecycleNode(node ast.Node) bool {
+	switch n := node.(type) {
+	case *ast.SelectorExpr:
+		// sync.WaitGroup methods: Add, Done, Wait.
+		return n.Sel != nil && waitGroupMethods[n.Sel.Name]
+
+	case *ast.CallExpr:
+		// context.WithCancel/WithTimeout/WithDeadline, errgroup.WithContext.
+		if sel, ok := n.Fun.(*ast.SelectorExpr); ok && sel.Sel != nil {
+			return contextDeriveMethods[sel.Sel.Name]
+		}
+		// close(ch) -- channel close is a signaling mechanism.
+		if ident, ok := n.Fun.(*ast.Ident); ok {
+			return ident.Name == "close"
+		}
+
+	case *ast.SendStmt:
+		// Channel send to a signal-like channel name.
+		if ident, ok := n.Chan.(*ast.Ident); ok {
+			lower := strings.ToLower(ident.Name)
+			for _, kw := range signalChannelKeywords {
+				if strings.Contains(lower, kw) {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
