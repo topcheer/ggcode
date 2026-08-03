@@ -230,6 +230,23 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 		return tool.Result{Content: tool.FormatUnknownToolError(a.tools, tc.Name), IsError: true}
 	}
 
+	// JSON argument repair: many OpenAI-compatible backends (vLLM, LiteLLM,
+	// goolm) and weaker models produce arguments that are *almost* valid JSON
+	// but fail strict parsing due to stream truncation, trailing commas, smart
+	// quotes, or surrounding markdown fences. When this happens, every
+	// downstream pre-processor (CoerceArguments, ValidateRequiredParams, etc.)
+	// silently bails out on json.Unmarshal failure, and the tool itself fails
+	// with a confusing "invalid input" error — wasting a full agent iteration.
+	//
+	// RepairJSON is a no-op for already-valid JSON (fast path via json.Valid).
+	// It is already applied in the OpenAI streaming path (provider layer), but
+	// not for other providers (Gemini, Anthropic) or for inline tool calls.
+	// Applying it here in the agent pipeline ensures ALL providers benefit.
+	if repaired, ok := provider.RepairJSON(tc.Arguments); ok {
+		debug.Log("agent", "repaired malformed JSON arguments for tool %s", tc.Name)
+		tc.Arguments = repaired
+	}
+
 	// Schema-aware argument coercion: weak models (open-weight models via
 	// goolm, third-party endpoints) frequently send string values for
 	// integer/number/boolean parameters (e.g. {"offset": "50"}). Without
