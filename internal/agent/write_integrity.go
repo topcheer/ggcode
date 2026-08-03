@@ -418,6 +418,14 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 		warnings = append(warnings, numericWarn)
 	}
 
+	// 41. Flaky test pattern detection - flags non-deterministic test patterns
+	//     that LLMs commonly generate: time.Now()/time.Sleep() in assertions,
+	//     unseeded math/rand, goroutines without WaitGroup, map iteration order
+	//     dependence. These cause intermittent CI failures. Delta-aware.
+	if flakyWarn := checkFlakyTestPatterns(filePath, oldContent, newContent); flakyWarn != "" {
+		warnings = append(warnings, flakyWarn)
+	}
+
 	if len(warnings) == 0 {
 		return ""
 	}
