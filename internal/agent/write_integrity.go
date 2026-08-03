@@ -339,6 +339,14 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 		warnings = append(warnings, goroutineWarnings...)
 	}
 
+	// 33. Inconsistent error wrapping detection - flags fmt.Errorf with %v
+	//     instead of %w for error args, errors.New(err.Error()), and string
+	//     concatenation in Errorf. These break errors.Is()/errors.As() chains.
+	//     Delta-aware.
+	if wrapWarnings := checkErrorWrapping(filePath, oldContent, newContent); len(wrapWarnings) > 0 {
+		warnings = append(warnings, wrapWarnings...)
+	}
+
 	if len(warnings) == 0 {
 		return ""
 	}
