@@ -182,6 +182,7 @@ type Agent struct {
 	branchGuard                *branchGuardState                     // protected branch edit warning (main/master/develop awareness)
 	shellNativeHint            *shellNativeHintState                 // suggests native tools when agent uses shell for equivalent operations
 	contextFootprint           *contextFootprintState                // per-tool context budget attribution (which tools consume the most context)
+	redundantRead              *redundantReadState                   // redundant re-read detection (context waste prevention)
 	ruleStore                  *RuleStore                            // cached rule store for hot-path rule injection (avoids per-tool disk I/O)
 	ruleInjectCount            map[string]int                        // per-rule injection counter for dedup (caps repetitive hints)
 	approvalMemory             *permission.ApprovalMemory            // session-level learned approval patterns (auto-approve after N repeats)
@@ -274,6 +275,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		compoundingFailure:   newCompoundingFailureState(),
 		toolFallback:         newToolFallbackState(),
 		contextFootprint:     newContextFootprintState(),
+		redundantRead:        newRedundantReadState(),
 	}
 	a.syncContextManagerProviderLocked()
 	a.syncContextManagerUsageHandlerLocked()
@@ -924,6 +926,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.companionGuard.reset()
 	a.complexityGate.reset()
 	a.argSizeGuardFires = 0
+	a.redundantRead.reset()
 	a.toolSequence.reset()
 	a.shellNativeHint.reset()
 	if a.effortAdapter != nil {
@@ -1135,6 +1138,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.velocityForecast = newVelocityForecastState()
 
 	a.argSizeGuardFires = 0
+	a.redundantRead.reset()
 	a.toolSequence.reset()
 	a.taskAnchor.reset(userPromptForStats, time.Now())
 	a.toolFilter = tool.NewRelevanceFilter()
@@ -2001,6 +2005,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					a.unreadEdit.recordRead(p)
 					a.editFailRecovery.recordRead(p)
 					a.fileFreshness.recordRead(p)
+					if hint := a.redundantRead.checkRedundantRead(p); hint != "" {
+						if result.Content != "" {
+							result.Content = result.Content + "\n\n" + hint
+						} else {
+							result.Content = hint
+						}
+					}
 				}
 			}
 			// Unread-file edit guard: warn when editing a file not read in
@@ -2010,6 +2021,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				for _, p := range extractEditFilePaths(tc.Name, tc.Arguments) {
 					a.editFailRecovery.recordEditSuccess(p)
 					a.fileFreshness.recordWrite(p)
+					a.redundantRead.recordWrite(p)
 					// Convergence lock: track post-verification edits.
 					a.convergenceRecordEdit(tc.Name)
 					if hint := a.unreadEdit.checkUnreadEdit(p); hint != "" {
