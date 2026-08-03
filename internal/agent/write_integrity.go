@@ -320,6 +320,15 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 		warnings = append(warnings, ignoredErrWarnings...)
 	}
 
+	// 31. Range loop value copy modification detection - flags modifications
+	//     to range loop value variables (e.g., `item.Field = ...` in
+	//     `for _, item := range slice`). Range values are copies of slice
+	//     elements, so field modifications do NOT affect the original slice.
+	//     This is a silent runtime bug that compiles cleanly. Delta-aware.
+	if rangeCopyWarnings := checkRangeCopyMod(filePath, oldContent, newContent); len(rangeCopyWarnings) > 0 {
+		warnings = append(warnings, rangeCopyWarnings...)
+	}
+
 	if len(warnings) == 0 {
 		return ""
 	}
