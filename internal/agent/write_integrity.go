@@ -311,6 +311,15 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 		warnings = append(warnings, shadowWarnings...)
 	}
 
+	// 30. Ignored error return detection - flags calls to error-returning
+	//     functions where the error is completely discarded (standalone call
+	//     statement or explicit _ = discard). Distinct from error_swallow_check
+	//     which only catches `if err != nil {}` empty handlers and bare returns.
+	//     Delta-aware.
+	if ignoredErrWarnings := checkIgnoredErrorReturn(filePath, oldContent, newContent); len(ignoredErrWarnings) > 0 {
+		warnings = append(warnings, ignoredErrWarnings...)
+	}
+
 	if len(warnings) == 0 {
 		return ""
 	}
