@@ -394,6 +394,14 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 		warnings = append(warnings, unreachableWarnings...)
 	}
 
+	// 38. Hollow test detection - flags Go test functions (Test*) that contain
+	//     zero assertion calls (t.Error, t.Fatal, require.*, assert.*). LLMs
+	//     frequently generate plausible-looking test stubs that never actually
+	//     verify behavior, giving false confidence. Delta-aware.
+	if hollowWarn := checkAssertionPresence(filePath, oldContent, newContent); hollowWarn != "" {
+		warnings = append(warnings, hollowWarn)
+	}
+
 	if len(warnings) == 0 {
 		return ""
 	}
