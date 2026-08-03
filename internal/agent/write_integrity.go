@@ -402,6 +402,14 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 		warnings = append(warnings, hollowWarn)
 	}
 
+	// 39. Deprecated API detection - flags usage of deprecated Go standard
+	//     library APIs (io/ioutil package, rand.Seed, strings.Title, os.SEEK_*)
+	//     that LLMs frequently recommend based on outdated training data.
+	//     Provides actionable migration guidance. Delta-aware.
+	if deprecatedWarn := checkDeprecatedAPI(filePath, oldContent, newContent); deprecatedWarn != "" {
+		warnings = append(warnings, deprecatedWarn)
+	}
+
 	if len(warnings) == 0 {
 		return ""
 	}
