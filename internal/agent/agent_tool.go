@@ -414,6 +414,31 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 		return tool.Result{Content: preResult.Output, IsError: true}
 	}
 
+	// Pre-write dry-run validation: check all planned edits for fatal errors
+	// before any file is written. Blocks the entire batch if any file has a
+	// guaranteed-failure condition (syntax error, corruption, etc.).
+	if err == nil && len(plans) > 0 {
+		planBatch := make([]fileEditPlan, 0, len(plans))
+		for _, p := range plans {
+			if diff.HasChanges(p.OldContent, p.NewContent) {
+				planBatch = append(planBatch, fileEditPlan{
+					Path:       p.Path,
+					OldContent: p.OldContent,
+					NewContent: p.NewContent,
+				})
+			}
+		}
+		if blockers := dryRunValidateBatch(planBatch); len(blockers) > 0 {
+			var b strings.Builder
+			b.WriteString("[Multi-file edit blocked by pre-write validation]\n")
+			b.WriteString("One or more files have fatal issues. NO files were modified.\n\n")
+			for path, msg := range blockers {
+				b.WriteString(fmt.Sprintf("File: %s\n%s\n\n", path, msg))
+			}
+			return tool.Result{Content: strings.TrimRight(b.String(), "\n"), IsError: true}
+		}
+	}
+
 	multiStart := time.Now()
 	result, err := a.safeExecute(t, ctx, tc.Arguments)
 	multiDur := time.Since(multiStart)
@@ -572,6 +597,16 @@ func (a *Agent) executeFileTool(ctx context.Context, t tool.Tool, tc provider.To
 	filePath, oldContent, newContent, err := a.computeFileChange(tc)
 	if err != nil {
 		return tool.Result{Content: fmt.Sprintf("file change error: %v", err), IsError: true}
+	}
+
+	// Pre-write dry-run validation: check proposed content for fatal errors
+	// (syntax errors, binary corruption, content loss, conflict markers)
+	// BEFORE writing. Blocks the write if a guaranteed-failure condition is
+	// detected, saving a full write-detect-recover iteration cycle.
+	if diff.HasChanges(oldContent, newContent) {
+		if blockMsg := dryRunValidate(filePath, oldContent, newContent); blockMsg != "" {
+			return tool.Result{Content: blockMsg, IsError: true}
+		}
 	}
 
 	// Show diff and ask for confirmation if diffConfirm is set
