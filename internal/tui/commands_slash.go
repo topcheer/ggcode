@@ -176,6 +176,12 @@ func (m *Model) switchToSession(ses *session.Session, isNew bool) {
 		// Only restore input history for resumed sessions (new sessions
 		// start with empty history so applyAutoComplete can add commands).
 		m.restoreHistoryFromMessages(ses.Messages)
+
+		// Show a concise recap of the resumed session so users get immediate
+		// context without scrolling through the full conversation history.
+		if recap := sessionRecap(ses, time.Now()); recap != "" {
+			m.chatWriteSystem(nextSystemID(), recap)
+		}
 	}
 
 	// Notify mobile client of session switch.
