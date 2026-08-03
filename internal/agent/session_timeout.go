@@ -42,7 +42,11 @@ import (
 const (
 	// defaultAutopilotSessionTimeout is the default wall-clock timeout for
 	// autopilot/cron runs where maxIter=0 and there is no natural stopping point.
-	defaultAutopilotSessionTimeout = 30 * time.Minute
+	// Set to 600 minutes (10 hours) so that complex autonomous tasks -- deep
+	// research, multi-file implementations, long sub-agent chains -- are not
+	// killed prematurely while still providing an ultimate backstop against
+	// truly runaway processes.
+	defaultAutopilotSessionTimeout = 600 * time.Minute
 )
 
 // sessionTimeoutState tracks wall-clock elapsed time for the current run.

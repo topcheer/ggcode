@@ -1172,14 +1172,20 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		}
 		// Check session wall-clock timeout: inject warning or stop.
 		if msg := a.sessionTimeout.check(); msg != "" {
+			if a.sessionTimeout.shouldStop() {
+				// Emit a visible system event so the user sees why the agent stopped.
+				onEvent(provider.StreamEvent{
+					Type: provider.StreamEventSystem,
+					Text: msg,
+				})
+				debug.Log("session-timeout", "wall-clock timeout exceeded, stopping agent loop")
+				break
+			}
+			// For 80%/95% warnings, inject into context so the LLM reacts.
 			a.contextManager.Add(provider.Message{
 				Role:    "user",
 				Content: []provider.ContentBlock{{Type: "text", Text: msg}},
 			})
-			if a.sessionTimeout.shouldStop() {
-				debug.Log("session-timeout", "wall-clock timeout exceeded, stopping agent loop")
-				break
-			}
 		}
 		// Adopt a completed background pre-compact only at an LLM turn
 		// boundary. If it is still running, do not wait; this ChatStream uses
