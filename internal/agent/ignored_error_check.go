@@ -296,56 +296,55 @@ func findIgnoredErrors(filename, src string) []ignoredErrorInstance {
 	// Walk the AST looking for standalone call expressions (ExprStmt) where
 	// the called function is known to return an error.
 	ast.Inspect(file, func(n ast.Node) bool {
-		// Pattern 1: Standalone call statement - `someFunc()` where someFunc
-		// returns error. The call result is completely discarded.
-		if stmt, ok := n.(*ast.ExprStmt); ok {
-			if call, ok := stmt.X.(*ast.CallExpr); ok {
-				name := resolveCallName(call)
-				if name != "" && isErrorReturningName(name) {
-					pos := fset.Position(call.Pos())
-					results = append(results, ignoredErrorInstance{
-						pattern: name,
-						line:    pos.Line,
-					})
-					return true
-				}
+		switch node := n.(type) {
+		case *ast.ExprStmt:
+			// Pattern 1: Standalone call statement - `someFunc()` where someFunc
+			// returns error. The call result is completely discarded.
+			if call, ok := node.X.(*ast.CallExpr); ok {
+				results = append(results, checkIgnoredCall(call, fset)...)
 			}
+		case *ast.AssignStmt:
+			// Pattern 2: Explicit discard with blank identifier - `_ = someFunc()`
+			// or `_, _ = someFunc()`. Flag if the called function returns error.
+			results = append(results, checkBlankAssign(node, fset)...)
 		}
-
-		// Pattern 2: Explicit discard with blank identifier - `_ = someFunc()`
-		// or `_, _ = someFunc()`. Flag if the called function returns error.
-		if assign, ok := n.(*ast.AssignStmt); ok {
-			// Check if all LHS are blank identifiers.
-			allBlank := true
-			for _, lhs := range assign.Lhs {
-				ident, ok := lhs.(*ast.Ident)
-				if !ok || ident.Name != "_" {
-					allBlank = false
-					break
-				}
-			}
-			if !allBlank || len(assign.Rhs) == 0 {
-				return true
-			}
-
-			// Check if any RHS is a call to an error-returning function.
-			for _, rhs := range assign.Rhs {
-				if call, ok := rhs.(*ast.CallExpr); ok {
-					name := resolveCallName(call)
-					if name != "" && isErrorReturningName(name) {
-						pos := fset.Position(call.Pos())
-						results = append(results, ignoredErrorInstance{
-							pattern: name,
-							line:    pos.Line,
-						})
-					}
-				}
-			}
-		}
-
 		return true
 	})
 
+	return results
+}
+
+// checkIgnoredCall checks a standalone call expression for ignored error returns.
+func checkIgnoredCall(call *ast.CallExpr, fset *token.FileSet) []ignoredErrorInstance {
+	name := resolveCallName(call)
+	if name == "" || !isErrorReturningName(name) {
+		return nil
+	}
+	pos := fset.Position(call.Pos())
+	return []ignoredErrorInstance{{pattern: name, line: pos.Line}}
+}
+
+// checkBlankAssign checks an assignment statement where all LHS are blank
+// identifiers for calls to error-returning functions on the RHS.
+func checkBlankAssign(assign *ast.AssignStmt, fset *token.FileSet) []ignoredErrorInstance {
+	allBlank := true
+	for _, lhs := range assign.Lhs {
+		ident, ok := lhs.(*ast.Ident)
+		if !ok || ident.Name != "_" {
+			allBlank = false
+			break
+		}
+	}
+	if !allBlank || len(assign.Rhs) == 0 {
+		return nil
+	}
+
+	var results []ignoredErrorInstance
+	for _, rhs := range assign.Rhs {
+		if call, ok := rhs.(*ast.CallExpr); ok {
+			results = append(results, checkIgnoredCall(call, fset)...)
+		}
+	}
 	return results
 }
 
