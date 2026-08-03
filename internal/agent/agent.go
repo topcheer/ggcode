@@ -1971,11 +1971,22 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// stale. Clear the cache to prevent serving outdated content.
 			if (fileEditingTools[tc.Name] || gitFileModifyingTools[tc.Name] || tc.Name == "notebook_edit") && !result.IsError {
 				a.speculator.invalidateCache()
-				// Also invalidate TTL-based memoize entries (grep, LSP, git)
-				// whose results may be stale after a file edit. mtime-based
-				// entries (read_file, list_directory) are kept — their
-				// validity is tied to the file's modification time.
-				a.toolMemo.invalidateTTLBased()
+
+				// Git whole-tree operations (checkout, reset, revert) change
+				// potentially all files at once. They need nuclear invalidation:
+				// clear mtime-based entries too, because cached reads from the
+				// old branch are now wrong even if individual file mtimes
+				// happened to not change.
+				if gitWholeTreeTools[tc.Name] {
+					a.toolMemo.invalidateAll()
+					debug.Log("agent", "whole-tree git operation %s: invalidated all caches", tc.Name)
+				} else {
+					// Normal file edit or partial git op: invalidate
+					// TTL-based memoize entries (grep, LSP, git) whose
+					// results may be stale. mtime-based entries are kept.
+					a.toolMemo.invalidateTTLBased()
+				}
+
 				// Invalidate the deterministic command cache: any build/test
 				// results are now stale because source files changed.
 				a.commandCache.invalidate()

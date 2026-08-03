@@ -20,7 +20,7 @@ import (
 // markdown) don't count toward the threshold.
 //
 // Smart detection: if the agent runs a build/test/verify command between edits,
-// the counter resets — the agent already verified, no need to nag.
+// the counter resets - the agent already verified, no need to nag.
 type postEditVerifyState struct {
 	sourceEditsSinceHint int    // consecutive source-code edits since last hint or build
 	buildCmd             string // cached build command (detected lazily, empty = not yet checked)
@@ -48,6 +48,28 @@ var gitFileModifyingTools = map[string]bool{
 	"git_stash":      true, // pop/apply restores changed files
 	"enter_worktree": true, // switches working directory + files
 	"exit_worktree":  true, // switches back, files may differ
+}
+
+// gitWholeTreeTools are git operations that can change the ENTIRE working tree
+// (branch switches, hard resets, reverts). Unlike single-file edits, these
+// operations may silently change dozens of files at once. When they run,
+// ALL caches must be fully invalidated - including mtime-based entries -
+// because the agent's read cache, command results, and LSP diagnostics are
+// all potentially stale relative to the new working tree state.
+//
+// Competitive analysis:
+//   - Claude Code: re-reads files after git operations
+//   - Cursor: IDE detects branch switches and refreshes file state
+//   - Aider: operates on a single commit, catches changes via git diff
+//   - OpenHands: full file refresh on git operations
+//
+// The gap: without this, the agent may edit files based on cached content
+// from the previous branch, or claim "build passes" from a cached result
+// that predates the branch switch. Especially dangerous in autonomous mode.
+var gitWholeTreeTools = map[string]bool{
+	"git_checkout": true, // branch switch changes potentially all files
+	"git_reset":    true, // hard mode discards all changes to tracked files
+	"git_revert":   true, // creates new commit undoing prior changes
 }
 
 // sourceCodeExtensions maps file extensions to whether they're compiled/interpreted code.
@@ -89,7 +111,7 @@ func detectBuildSystem(workingDir string) string {
 		return ""
 	}
 
-	// 1. Makefile — the project's authoritative build configuration.
+	// 1. Makefile - the project's authoritative build configuration.
 	// Check for specific high-value targets in priority order.
 	makefiles := []string{
 		filepath.Join(workingDir, "Makefile"),
@@ -107,12 +129,12 @@ func detectBuildSystem(workingDir string) string {
 				}
 			}
 			// Makefile exists but no recognized target. Fall through to
-			// language detection — bare "make" might run the wrong thing.
+			// language detection - bare "make" might run the wrong thing.
 			break
 		}
 	}
 
-	// 2. Justfile — modern command runner (just).
+	// 2. Justfile - modern command runner (just).
 	justfiles := []string{
 		filepath.Join(workingDir, "Justfile"),
 		filepath.Join(workingDir, "justfile"),
@@ -134,7 +156,7 @@ func detectBuildSystem(workingDir string) string {
 		}
 	}
 
-	// 3. Taskfile — modern task runner (task).
+	// 3. Taskfile - modern task runner (task).
 	taskfiles := []string{
 		filepath.Join(workingDir, "Taskfile.yml"),
 		filepath.Join(workingDir, "Taskfile.yaml"),
@@ -168,7 +190,7 @@ func detectBuildSystem(workingDir string) string {
 		}
 	}
 
-	// 5. Language-specific defaults (lower confidence — may miss build tags).
+	// 5. Language-specific defaults (lower confidence - may miss build tags).
 	// Only suggest commands for tools that are actually available on the host.
 	if fileExists(filepath.Join(workingDir, "go.mod")) && commandAvailable("go") {
 		return "go build ./..."
@@ -352,7 +374,7 @@ func (a *Agent) postEditVerifyHint(toolName string, args json.RawMessage) string
 	// Test impact analysis with transitive dependencies: if multiple
 	// packages/directories changed (detected via git status), suggest an
 	// impact-scoped test command that covers all affected packages AND their
-	// downstream importers — not just the single file being edited.
+	// downstream importers - not just the single file being edited.
 	// Multi-language: works for Go, TypeScript, Python, Rust, Java, etc.
 	impact := impactScopedTestCommandMulti(a.workingDir)
 
@@ -434,7 +456,7 @@ var verifyCommands = map[string]bool{
 	"cmake":         true,
 	"ctest":         true,
 	"rake test":     true,
-	// Lint / format commands also count as verification — running them
+	// Lint / format commands also count as verification - running them
 	// resets the post-edit verify hint counter.
 	"golangci-lint": true,
 	"gofmt":         true,
@@ -519,7 +541,7 @@ func extractCommandFromArgs(args json.RawMessage) string {
 
 // funcLevelCoverageNudge generates a function-level coverage hint showing
 // which specific exported functions in changed files lack tests. This is
-// richer than the file-level testCoverageNudge — it mirrors GitHub Copilot's
+// richer than the file-level testCoverageNudge - it mirrors GitHub Copilot's
 // per-function test generation suggestions.
 //
 // Returns "" when no function-level gaps are found.
@@ -576,7 +598,7 @@ func (a *Agent) resetPostEditVerify() {
 // the package containing filePath, when one can be derived. This implements
 // multi-language test-impact analysis: instead of nudging the agent to run the
 // entire project suite (e.g. `make verify-ci`) after every few edits, we scope
-// the suggestion to the package/module that actually changed — `go test
+// the suggestion to the package/module that actually changed - `go test
 // ./internal/agent/` for a Go edit, `npx vitest run src/foo` for TypeScript,
 // `python -m pytest src/foo` for Python, etc.
 //

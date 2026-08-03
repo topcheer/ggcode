@@ -20,7 +20,7 @@ import (
 // replaces old results with placeholders, and the agent re-calls the tool.
 //
 // Invalidation strategy:
-//   - File-based tools (read_file): check file mtime — if unchanged, result is fresh
+//   - File-based tools (read_file): check file mtime - if unchanged, result is fresh
 //   - Directory tools (list_directory, glob): check directory mtime
 //   - Search tools (grep, search_files): 30s TTL (results may change as files are edited)
 //   - LSP tools: 15s TTL (LSP server state changes as code is edited)
@@ -118,13 +118,13 @@ func (m *toolMemo) get(toolName string, args []byte) (tool.Result, bool) {
 		// File-based invalidation: check mtime.
 		info, err := os.Stat(entry.path)
 		if err != nil {
-			// File doesn't exist anymore — cache miss.
+			// File doesn't exist anymore - cache miss.
 			m.removeLocked(k)
 			m.misses++
 			return tool.Result{}, false
 		}
 		if !info.ModTime().Equal(entry.mtime) {
-			// File changed — cache miss.
+			// File changed - cache miss.
 			m.removeLocked(k)
 			m.misses++
 			return tool.Result{}, false
@@ -215,6 +215,23 @@ func (m *toolMemo) reset() {
 	m.order = nil
 }
 
+// invalidateAll clears all cache entries - both TTL-based and mtime-based.
+// Called when a git operation changes the entire working tree (checkout,
+// reset, revert), making all cached file reads, search results, and LSP
+// diagnostics potentially stale. Unlike invalidateTTLBased which preserves
+// mtime entries (since normal file edits only affect specific files), this
+// is nuclear: after a branch switch, every file's content may differ.
+func (m *toolMemo) invalidateAll() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	count := len(m.entries)
+	m.entries = make(map[string]*memoEntry)
+	m.order = nil
+	if count > 0 {
+		debug.Log("memoize", "invalidateAll: cleared %d entries (whole-tree git operation)", count)
+	}
+}
+
 // invalidateTTLBased removes TTL-based cache entries (grep, LSP, git tools)
 // while preserving mtime-based entries (read_file, list_directory) whose
 // validity is tied to a specific file path. Called after file edits to
@@ -231,11 +248,11 @@ func (m *toolMemo) invalidateTTLBased() {
 			continue
 		}
 		if entry.path != "" {
-			// mtime-based entry — keep (validity depends on file, not TTL)
+			// mtime-based entry - keep (validity depends on file, not TTL)
 			newOrder = append(newOrder, k)
 			kept++
 		} else {
-			// TTL-based entry — clear (search/LSP/git results may be stale)
+			// TTL-based entry - clear (search/LSP/git results may be stale)
 			delete(m.entries, k)
 			cleared++
 		}
