@@ -176,6 +176,7 @@ type Agent struct {
 	adaptiveSampling           *adaptiveSamplingState                // per-turn temperature adaptation (phase-aware sampling control)
 	effortAdapter              *adaptiveEffortState                  // per-turn reasoning effort adaptation (Opus 5 effort toggle pattern)
 	branchGuard                *branchGuardState                     // protected branch edit warning (main/master/develop awareness)
+	shellNativeHint            *shellNativeHintState                 // suggests native tools when agent uses shell for equivalent operations
 	ruleStore                  *RuleStore                            // cached rule store for hot-path rule injection (avoids per-tool disk I/O)
 	lastRunStats               *RunStats                             // stats from the most recent run (for post-run summary display)
 	systemPromptInjector       func() string                         // returns extra system prompt text to inject (e.g. lanchat peer warnings)
@@ -241,6 +242,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		hubPackageGuard:      newHubPackageState(),
 		artifactGuard:        newGeneratedArtifactState(),
 		branchGuard:          newBranchGuardState(),
+		shellNativeHint:      newShellNativeHintState(),
 		fulfillmentGate:      newFulfillmentGateState(),
 		companionGuard:       newCompanionGuardState(),
 		complexityGate:       newComplexityGateState(),
@@ -910,6 +912,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.complexityGate.reset()
 	a.argSizeGuardFires = 0
 	a.toolSequence.reset()
+	a.shellNativeHint.reset()
 	if a.effortAdapter != nil {
 		a.effortAdapter.reset()
 	}
@@ -2093,6 +2096,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					} else {
 						result.Content = g
 					}
+				}
+			}
+
+			// Shell-to-native tool suggestion: when the agent uses run_command
+			// for something a native tool does better (cat, grep, git log, etc.),
+			// suggest the native tool for richer output and better integration.
+			if nativeHint := a.shellNativeHint.maybeShellNativeHint(tc.Name, tc.Arguments); nativeHint != "" {
+				if result.Content != "" {
+					result.Content = result.Content + "\n\n" + nativeHint
+				} else {
+					result.Content = nativeHint
 				}
 			}
 
