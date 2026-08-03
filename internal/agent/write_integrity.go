@@ -378,6 +378,15 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 		warnings = append(warnings, insecureWarnings...)
 	}
 
+	// 36. Loop performance anti-pattern detection - flags O(n^2) string
+	//     building inside for/range loops (string += and fmt.Sprintf concat).
+	//     LLMs frequently generate these patterns which cause quadratic
+	//     allocations. Suggests strings.Builder for O(n) alternative.
+	//     Delta-aware.
+	if perfWarnings := checkLoopPerf(filePath, oldContent, newContent); len(perfWarnings) > 0 {
+		warnings = append(warnings, perfWarnings...)
+	}
+
 	if len(warnings) == 0 {
 		return ""
 	}
