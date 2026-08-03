@@ -49,6 +49,30 @@ const (
 	// minTrimLength avoids trimming descriptions that are only slightly over
 	// the limit — the truncation marker would take more space than it saves.
 	minTrimLength = 350
+
+	// Adaptive budget levels based on context pressure (0.0–1.0).
+	// As context fills up, descriptions are trimmed more aggressively to
+	// free space for actual conversation content.
+	//
+	// Research basis: Claude Code and Cursor both implement context-pressure
+	// aware optimizations. Claude Code trims system prompt sections dynamically;
+	// Cursor compresses tool schemas under pressure. The key insight is that
+	// tool descriptions are low-value when the model already knows the tool
+	// from recent calls — the description was needed for discovery, not for
+	// repeated use within the same session.
+	//
+	// Pressure tiers:
+	//   < 0.50 (low):     no trimming (maxDescriptionBytes = 500)
+	//   0.50–0.70 (moderate): standard trimming (500 bytes)
+	//   0.70–0.85 (high): aggressive trimming (250 bytes)
+	//   > 0.85 (critical): minimal descriptions (120 bytes)
+	pressureTierModerate = 0.50
+	pressureTierHigh     = 0.70
+	pressureTierCritical = 0.85
+
+	budgetAtModerate = 500 // standard budget
+	budgetAtHigh     = 250 // aggressive: keep purpose + first param
+	budgetAtCritical = 120 // minimal: purpose only
 )
 
 // trimToolDescriptions applies a description budget to tool definitions.
@@ -62,12 +86,25 @@ const (
 // This is called after relevance filtering so we only spend trimming effort
 // on tools that will actually be sent to the LLM.
 func trimToolDescriptions(defs []provider.ToolDefinition) []provider.ToolDefinition {
+	return trimToolDescriptionsWithPressure(defs, 0)
+}
+
+// trimToolDescriptionsWithPressure applies context-pressure-aware adaptive
+// description budgeting. As context utilization rises, the per-tool description
+// budget shrinks progressively, freeing context tokens for actual conversation
+// content.
+//
+// pressure is the context utilization ratio (0.0–1.0). A value of 0 or
+// negative means no pressure information available — uses standard budget.
+func trimToolDescriptionsWithPressure(defs []provider.ToolDefinition, pressure float64) []provider.ToolDefinition {
+	budget := pressureBudget(pressure)
+
 	var trimmedCount int
 	var bytesSaved int
 
 	for i := range defs {
 		d := &defs[i]
-		if len(d.Description) <= maxDescriptionBytes {
+		if len(d.Description) <= budget {
 			continue
 		}
 		// Only trim external tool descriptions.
@@ -76,7 +113,7 @@ func trimToolDescriptions(defs []provider.ToolDefinition) []provider.ToolDefinit
 		}
 
 		original := d.Description
-		trimmed := trimDescription(original)
+		trimmed := trimDescriptionTo(original, budget)
 
 		if len(trimmed) < len(original) {
 			d.Description = trimmed
@@ -86,38 +123,67 @@ func trimToolDescriptions(defs []provider.ToolDefinition) []provider.ToolDefinit
 	}
 
 	if trimmedCount > 0 {
-		debug.Log("toolfilter", "trimmed %d tool descriptions, saved ~%d bytes (~%d tokens)",
-			trimmedCount, bytesSaved, bytesSaved/4)
+		debug.Log("toolfilter", "trimmed %d tool descriptions (budget=%d, pressure=%.0f%%), saved ~%d bytes (~%d tokens)",
+			trimmedCount, budget, pressure*100, bytesSaved, bytesSaved/4)
 	}
 
 	return defs
 }
 
-// trimDescription truncates a description string to fit within the budget.
-// It tries to cut at the first paragraph boundary (double newline). If no
-// paragraph boundary exists within the limit, it cuts at the last sentence
-// boundary (period followed by space). If neither exists, it hard-cuts at
-// maxDescriptionBytes.
+// pressureBudget returns the description byte budget for the given context
+// pressure level. Higher pressure = smaller budget.
+func pressureBudget(pressure float64) int {
+	if pressure <= 0 || pressure < pressureTierModerate {
+		return budgetAtModerate
+	}
+	if pressure < pressureTierHigh {
+		return budgetAtModerate
+	}
+	if pressure < pressureTierCritical {
+		return budgetAtHigh
+	}
+	return budgetAtCritical
+}
+
+// trimDescription truncates a description string to fit within the standard
+// budget. It tries to cut at the first paragraph boundary (double newline).
+// If no paragraph boundary exists within the limit, it cuts at the last
+// sentence boundary (period followed by space). If neither exists, it
+// hard-cuts at maxDescriptionBytes.
 func trimDescription(desc string) string {
+	return trimDescriptionTo(desc, maxDescriptionBytes)
+}
+
+// trimDescriptionTo truncates a description string to fit within the given
+// byte budget. Uses the same paragraph/sentence/hard-cut strategy as
+// trimDescription but with a caller-specified budget.
+func trimDescriptionTo(desc string, maxBytes int) string {
+	if maxBytes <= 0 {
+		maxBytes = maxDescriptionBytes
+	}
 	// Don't trim if we're barely over the limit.
-	if len(desc) <= minTrimLength {
+	minLen := maxBytes * 7 / 10 // 70% of budget as minimum trim threshold
+	if len(desc) <= minLen {
 		return desc
 	}
 
 	// Try to cut at the first paragraph boundary (blank line).
-	cut := findParagraphCut(desc, maxDescriptionBytes)
+	cut := findParagraphCut(desc, maxBytes)
 	if cut > 0 {
 		return strings.TrimSpace(desc[:cut]) + " …"
 	}
 
 	// Try to cut at the last sentence boundary within the limit.
-	cut = findSentenceCut(desc, maxDescriptionBytes)
+	cut = findSentenceCut(desc, maxBytes)
 	if cut > 0 {
 		return desc[:cut]
 	}
 
-	// Hard cut at maxDescriptionBytes.
-	return desc[:maxDescriptionBytes] + " …"
+	// Hard cut at maxBytes.
+	if maxBytes >= len(desc) {
+		return desc
+	}
+	return desc[:maxBytes] + " …"
 }
 
 // findParagraphCut finds the byte position of the first paragraph boundary

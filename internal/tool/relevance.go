@@ -62,13 +62,23 @@ func NewRelevanceFilter() *RelevanceFilter {
 // unchanged. Otherwise, built-in tools are always kept, and MCP/plugin tools
 // are scored — only those with sufficient relevance are included.
 func (f *RelevanceFilter) Filter(defs []provider.ToolDefinition, context string) []provider.ToolDefinition {
+	return f.FilterWithPressure(defs, context, 0)
+}
+
+// FilterWithPressure is like Filter but also applies context-pressure-aware
+// description budgeting. When context utilization is high, tool descriptions
+// are trimmed more aggressively to free context tokens for conversation.
+//
+// pressure is the context window utilization ratio (0.0–1.0). Pass 0 or
+// negative to disable pressure-aware behavior (uses standard budget).
+func (f *RelevanceFilter) FilterWithPressure(defs []provider.ToolDefinition, context string, pressure float64) []provider.ToolDefinition {
 	if len(defs) <= minToolsToActivate {
 		f.activated = false
 		f.prunedCount = 0
 		// Even when relevance filtering is not active, still apply description
 		// budgeting — verbose MCP descriptions waste context on every turn
 		// regardless of total tool count.
-		return trimToolDescriptions(defs)
+		return trimToolDescriptionsWithPressure(defs, pressure)
 	}
 
 	f.activated = true
@@ -140,10 +150,10 @@ func (f *RelevanceFilter) Filter(defs []provider.ToolDefinition, context string)
 			f.prunedCount, len(defs), len(result), truncateForLog(prunedKey, 300))
 	}
 
-	// Apply description token budget: trim verbose MCP/plugin tool descriptions
-	// to reduce per-turn schema overhead. This runs after relevance filtering
-	// so we only spend trimming effort on tools that survive the filter.
-	result = trimToolDescriptions(result)
+	// Apply description token budget with context pressure awareness: trim
+	// verbose MCP/plugin tool descriptions to reduce per-turn schema overhead.
+	// Under high context pressure, descriptions are trimmed more aggressively.
+	result = trimToolDescriptionsWithPressure(result, pressure)
 
 	return result
 }

@@ -1392,8 +1392,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 
 		// Dynamic tool pruning: filter out low-relevance MCP tools to reduce
 		// context overhead and improve tool-selection accuracy. Only activates
-		// when total tool count exceeds a threshold.
-		activeToolDefs := a.toolFilter.Filter(toolDefs, tool.ExtractContextFromMessages(msgs, 6))
+		// when total tool count exceeds a threshold. Pass context pressure so
+		// tool descriptions are trimmed more aggressively as context fills up.
+		var ctxPressure float64
+		if cw := a.contextManager.ContextWindow(); cw > 0 {
+			ctxPressure = float64(a.contextManager.TokenCount()) / float64(cw)
+		}
+		activeToolDefs := a.toolFilter.FilterWithPressure(toolDefs, tool.ExtractContextFromMessages(msgs, 6), ctxPressure)
 
 		resp, textBuf, toolCalls, truncated, err := a.streamChatResponse(ctx, a.ensureMessagesSendable(msgs), activeToolDefs, onEvent)
 		if samplingApplied >= 0 {
