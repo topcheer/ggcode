@@ -133,6 +133,34 @@ func TestFormatGoBytes_RemovesUnusedAliasedImport(t *testing.T) {
 	}
 }
 
+func TestFormatGoBytes_KeepsVersionedImport(t *testing.T) {
+	// Regression test: imports with /v2, /v3 suffixes (e.g. "charm.land/lipgloss/v2")
+	// must NOT be removed as "unused" just because the last path segment ("v2")
+	// doesn't appear as an identifier in the code. The actual identifier is the
+	// segment before the version ("lipgloss").
+	src := []byte(`package main
+
+import (
+	"fmt"
+	"charm.land/lipgloss/v2"
+)
+
+func main() {
+	fmt.Println(lipgloss.Width("hello"))
+}
+`)
+	out, changed := formatGoBytes("main.go", src)
+	s := string(out)
+	if !strings.Contains(s, `"charm.land/lipgloss/v2"`) {
+		t.Fatalf("versioned import lipgloss/v2 should be KEPT (it is used via lipgloss.Width); got:\n%s", s)
+	}
+	// "fmt" should also be kept since it's used.
+	if !strings.Contains(s, `"fmt"`) {
+		t.Fatalf("used \"fmt\" import should be kept; got:\n%s", s)
+	}
+	_ = changed
+}
+
 func TestFormatGoBytes_PreservesComments(t *testing.T) {
 	src := []byte("package main\n\n// important comment\nimport \"fmt\"\n\nfunc main() {\n\tfmt.Println(\"hello\") // inline comment\n}\n")
 	out, _ := formatGoBytes("main.go", src)

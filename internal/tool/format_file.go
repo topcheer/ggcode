@@ -142,12 +142,38 @@ func removeUnusedGoImports(data []byte) ([]byte, int) {
 
 // effectiveImportName returns the identifier through which an import is
 // referenced in code: the explicit alias if present, otherwise the last
-// component of the import path.
+// non-version component of the import path.
+//
+// For versioned module paths like "charm.land/lipgloss/v2", the last segment
+// "v2" is a module version indicator, not the package name. The actual package
+// name is "lipgloss" (the segment before the version). Without this correction,
+// the import remover would look for an identifier "v2" in the code, fail to
+// find it, and wrongly delete the import — breaking the build.
 func effectiveImportName(imp *ast.ImportSpec) string {
 	if imp.Name != nil {
 		return imp.Name.Name
 	}
 	rawPath := strings.Trim(imp.Path.Value, `"`)
 	parts := strings.Split(rawPath, "/")
-	return parts[len(parts)-1]
+	last := parts[len(parts)-1]
+	// If the last segment is a version indicator (v2, v3, ...), use the
+	// segment before it, which is the actual package name.
+	if isVersionSegment(last) && len(parts) >= 2 {
+		return parts[len(parts)-2]
+	}
+	return last
+}
+
+// isVersionSegment reports whether s looks like a Go module version path
+// segment (e.g. "v2", "v3").
+func isVersionSegment(s string) bool {
+	if len(s) < 2 || s[0] != 'v' {
+		return false
+	}
+	for _, c := range s[1:] {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }

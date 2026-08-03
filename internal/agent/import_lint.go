@@ -342,18 +342,17 @@ func checkGoImportsASTWithDir(filePath string, f *ast.File, workingDir string) [
 			name = imp.Name.Name
 		} else {
 			parts := strings.Split(rawPath, "/")
-			name = parts[len(parts)-1]
+			last := parts[len(parts)-1]
+			// For versioned paths like "charm.land/lipgloss/v2", the last
+			// segment "v2" is not the package name - use the segment before it.
+			if isVersionSegment(last) && len(parts) >= 2 {
+				name = parts[len(parts)-2]
+			} else {
+				name = last
+			}
 		}
 		// Blank (_) and dot (.) imports are always "used" - they have side effects.
 		if name == "_" || name == "." {
-			continue
-		}
-		// Versioned paths like "charm.land/lipgloss/v2" have a last segment "v2"
-		// that does NOT match the actual package name (e.g. "lipgloss"). Static
-		// analysis can't reliably resolve the real package name without loading
-		// the package, so skip unused-import detection for these to avoid
-		// false positives.
-		if isVersionSegment(name) {
 			continue
 		}
 		imports = append(imports, goImportInfo{name: name, path: rawPath})

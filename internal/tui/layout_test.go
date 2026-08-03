@@ -593,7 +593,7 @@ func TestWideLayoutUsesRightSidebar(t *testing.T) {
 	if !strings.Contains(view, "ggcode") {
 		t.Error("expected branded logo content in right sidebar")
 	}
-	if !strings.Contains(view, "Session usage") || !strings.Contains(view, "1540") {
+	if !strings.Contains(view, "Session usage") || !strings.Contains(view, "1.54K") {
 		t.Error("expected session usage section in sidebar")
 	}
 }
@@ -1453,7 +1453,7 @@ func TestRenderSidebarSessionUsageShowsNonCachedInputTokens(t *testing.T) {
 
 	rendered := stripAnsi(m.renderSidebarSessionUsageSection())
 	normalized := strings.Join(strings.Fields(rendered), " ")
-	if !strings.Contains(normalized, "total 1500") {
+	if !strings.Contains(normalized, "total 1.50K") {
 		t.Fatalf("expected total to use non-cached input tokens, got %q", rendered)
 	}
 	if !strings.Contains(normalized, "input 400") {
