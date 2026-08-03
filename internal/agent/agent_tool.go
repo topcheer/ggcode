@@ -392,6 +392,14 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 		result.Content += destructiveWarning
 	}
 
+	// Prompt injection defense: sanitize tool results that may contain
+	// adversarial content from external sources (web pages, files, command
+	// output). Wraps suspicious content with explicit untrusted-data markers.
+	// No-op for file-writing tools and tools that produce self-generated results.
+	if !result.IsError {
+		result.Content = sanitizeToolResult(tc.Name, result.Content)
+	}
+
 	return result
 }
 
