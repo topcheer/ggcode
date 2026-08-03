@@ -115,7 +115,13 @@ func (t CodeSearch) Execute(ctx context.Context, input json.RawMessage) (Result,
 		return Result{Content: fmt.Sprintf("No files matched query %q. Try different keywords or broader search terms.", args.Query)}, nil
 	}
 
+	// Tokenize query for both search and re-ranking.
 	queryTerms := tokenizeForSearch(args.Query)
+
+	// Re-rank with path-based boosting (no structural boost for index path
+	// since we don't have file contents readily available).
+	rerankResults(results, queryTerms, nil)
+
 	stats := t.Index.Stats()
 	return formatSearchResults(results, queryTerms, stats.TotalFiles, args), nil
 }
@@ -146,6 +152,13 @@ func (t CodeSearch) executeLegacy(ctx context.Context, args searchArgs) (Result,
 	results := idx.score(queryTerms, args.MaxResults)
 	if len(results) == 0 {
 		return Result{Content: fmt.Sprintf("No files matched query %q. Try different keywords or broader search terms.", args.Query)}, nil
+	}
+
+	// Re-rank with path and structural signal boosting.
+	rerankResults(results, queryTerms, contents)
+	// Trim to maxResults after re-ranking (boosts may change order).
+	if args.MaxResults > 0 && len(results) > args.MaxResults {
+		results = results[:args.MaxResults]
 	}
 
 	return formatSearchResults(results, queryTerms, len(files), args), nil
