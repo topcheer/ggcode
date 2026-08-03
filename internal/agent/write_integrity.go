@@ -361,6 +361,15 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 		warnings = append(warnings, ifaceWarn)
 	}
 
+	// 34. Insecure code pattern detection - flags security anti-patterns commonly
+	//     introduced by LLMs: TLS bypass (InsecureSkipVerify), weak crypto
+	//     (math/rand for tokens, MD5 for passwords), SQL injection (string
+	//     concatenation in queries), command injection (shell+concat). Multi-language
+	//     (Go, JS/TS, Python). Delta-aware.
+	if insecureWarnings := checkInsecurePatterns(filePath, oldContent, newContent); len(insecureWarnings) > 0 {
+		warnings = append(warnings, insecureWarnings...)
+	}
+
 	if len(warnings) == 0 {
 		return ""
 	}
