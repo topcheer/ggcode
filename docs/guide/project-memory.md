@@ -81,6 +81,31 @@ Memory is scoped:
 
 Prefer `project` scope unless the knowledge is truly universal.
 
+### Deleting Memories
+
+The agent can remove outdated or incorrect memories via the `delete_memory` tool:
+
+```
+delete_memory(key="old-build-process", scope="project")
+```
+
+This gives the agent full lifecycle control: save, read, and delete. Only
+auto-saved memory entries can be deleted - project bootstrap files (GGCODE.md,
+AGENTS.md, etc.) are not affected.
+
+### Automatic Garbage Collection
+
+At session start, ggcode runs garbage collection on the memory directory. This
+physically removes files that the curation logic has already filtered out:
+
+- **Expired transient entries**: implementation task logs older than 30 days
+- **Superseded evolving entries**: older versions of research/analysis that
+  have been deduped (e.g. `competitor-analysis-2026-07-01-r1` is removed when
+  `competitor-analysis-2026-07-13-r3` exists)
+
+GC is best-effort and never blocks session startup. It prevents the memory
+directory from growing unbounded across hundreds of sessions.
+
 ## Auto-Injection: How Memory Reaches the Agent
 
 ggcode automatically injects saved memory into the system prompt at session

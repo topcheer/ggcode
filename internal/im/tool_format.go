@@ -253,6 +253,12 @@ func formatToolCallText(tc *ToolCallInfo) string {
 			key = tc.Detail
 		}
 		return fmt.Sprintf("💾 %s: `%s`", imLabel(lang, "save_memory"), key)
+	case "delete_memory":
+		key := extractArgValue(args, "key")
+		if key == "" {
+			key = tc.Detail
+		}
+		return fmt.Sprintf("🗑️ %s: `%s`", imLabel(lang, "delete_memory"), key)
 	case "config":
 		setting := extractArgValue(args, "setting")
 		if setting == "" {
@@ -392,6 +398,8 @@ func formatSpecialIMToolResult(tr *ToolResultInfo) (bool, string) {
 		return true, formatIMSkillResult(tr)
 	case "save_memory":
 		return true, formatIMSaveMemoryResult(tr)
+	case "delete_memory":
+		return true, formatIMDeleteMemoryResult(tr)
 	case "sleep":
 		return true, formatIMSleepResult(tr)
 	case "cron_create":

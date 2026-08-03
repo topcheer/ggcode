@@ -110,6 +110,12 @@ func imLabel(lang ToolLanguage, key string) string {
 			return "Memory saved"
 		case "memory_save":
 			return "Memory save"
+		case "memory_deleted":
+			return "Memory deleted"
+		case "memory_delete":
+			return "Memory delete"
+		case "delete_memory":
+			return "Delete memory"
 		case "reply_received":
 			return "Reply received"
 		case "todos":
@@ -652,6 +658,19 @@ func formatIMSaveMemoryResult(tr *ToolResultInfo) string {
 		return fmt.Sprintf("💾 %s", imLabel(lang, "memory_saved"))
 	}
 	return fmt.Sprintf("💾\n```\n%s\n```", output)
+}
+
+// formatIMDeleteMemoryResult renders delete_memory result.
+func formatIMDeleteMemoryResult(tr *ToolResultInfo) string {
+	lang := toolLang(tr.Lang)
+	output := strings.TrimSpace(tr.Result)
+	if tr.IsError {
+		return fmt.Sprintf("🗑️ %s\n```\n%s\n```", imLabel(lang, "memory_delete"), output)
+	}
+	if output == "" {
+		return fmt.Sprintf("🗑️ %s", imLabel(lang, "memory_deleted"))
+	}
+	return fmt.Sprintf("🗑️\n```\n%s\n```", output)
 }
 
 // formatIMSleepResult renders sleep result — suppressed on success

@@ -35,6 +35,7 @@ func LoadInteractiveStartupAssets(
 	safego.Go("agentruntime.startup.autoMem", func() {
 		defer wg.Done()
 		start := time.Now()
+		autoMem.GarbageCollect()
 		_, autoFiles, _ = autoMem.LoadIndex()
 		debug.Log("agentruntime", "startup assets autoMem files=%d duration=%s", len(autoFiles), time.Since(start).Round(time.Millisecond))
 	})

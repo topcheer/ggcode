@@ -219,6 +219,7 @@ const DefaultSystemPrompt = `You are ggcode, an AI coding assistant running in a
 
 ## Memory
 - Use ` + "`save_memory`" + ` for durable patterns and decisions that will matter later.
+- Use ` + "`delete_memory`" + ` to remove outdated or incorrect memories when you discover better information.
 - Check project memory files such as ` + "`GGCODE.md`" + `, ` + "`AGENTS.md`" + `, ` + "`CLAUDE.md`" + `, and ` + "`COPILOT.md`" + ` for project-specific guidance.
 
 ## Tool output security

@@ -8,9 +8,9 @@ import (
 	"time"
 	"unicode"
 
+	"charm.land/lipgloss/v2"
 	"charm.land/lipgloss/v2/tree"
 
-	"charm.land/lipgloss/v2"
 	"github.com/topcheer/ggcode/internal/markdown"
 )
 
@@ -603,7 +603,7 @@ const (
 // GetToolBodyBehavior returns the body rendering behavior for a given tool name.
 func GetToolBodyBehavior(toolName string) ToolBodyBehavior {
 	switch toolName {
-	case "save_memory", "team_delete",
+	case "save_memory", "delete_memory", "team_delete",
 		"teammate_shutdown", "teammate_list",
 		"swarm_task_claim", "swarm_task_complete", "swarm_task_list",
 		"send_message", "config",

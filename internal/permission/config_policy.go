@@ -94,7 +94,7 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 		return Allow, nil
 	}
 	switch toolName {
-	case "ask_user", "save_memory":
+	case "ask_user", "save_memory", "delete_memory":
 		return Allow, nil
 	}
 

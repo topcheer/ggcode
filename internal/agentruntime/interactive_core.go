@@ -22,18 +22,19 @@ import (
 )
 
 type InteractiveRuntimeCore struct {
-	Registry       *tool.Registry
-	MCPManager     *plugin.MCPManager
-	PluginManager  *plugin.Manager
-	GRPCPluginMgr  *grpcplugin.Manager
-	AutoMemory     *memory.AutoMemory
-	ProjectAutoMem *memory.AutoMemory
-	SaveMemoryTool *tool.SaveMemoryTool
-	StartupAssets  StartupAssets
-	CommandManager *commands.Manager
-	Tunnel         *TunnelHost // unified tunnel event management
-	configAccess   *configAccess
-	workingDir     string
+	Registry         *tool.Registry
+	MCPManager       *plugin.MCPManager
+	PluginManager    *plugin.Manager
+	GRPCPluginMgr    *grpcplugin.Manager
+	AutoMemory       *memory.AutoMemory
+	ProjectAutoMem   *memory.AutoMemory
+	SaveMemoryTool   *tool.SaveMemoryTool
+	DeleteMemoryTool *tool.DeleteMemoryTool
+	StartupAssets    StartupAssets
+	CommandManager   *commands.Manager
+	Tunnel           *TunnelHost // unified tunnel event management
+	configAccess     *configAccess
+	workingDir       string
 
 	mcpCtx       context.Context
 	mcpCancel    context.CancelFunc
@@ -73,6 +74,9 @@ func BuildInteractiveRuntimeCore(cfg *config.Config, workingDir string, policy p
 	saveMemoryTool := tool.NewSaveMemoryTool(autoMem, projectAutoMem)
 	_ = registry.Register(saveMemoryTool)
 
+	deleteMemoryTool := tool.NewDeleteMemoryTool(autoMem, projectAutoMem)
+	_ = registry.Register(deleteMemoryTool)
+
 	// Config tool — unified config management across all config files
 	cfgAccess := NewConfigAccess(cfg, workingDir)
 	_ = registry.Register(tool.ConfigTool{Access: cfgAccess})
@@ -90,18 +94,19 @@ func BuildInteractiveRuntimeCore(cfg *config.Config, workingDir string, policy p
 	th.SetP2PEnabled(webrtc.HostPeerFactory(), upgCfg)
 
 	return &InteractiveRuntimeCore{
-		Registry:       registry,
-		MCPManager:     mcpMgr,
-		PluginManager:  pluginMgr,
-		GRPCPluginMgr:  grpcMgr,
-		AutoMemory:     autoMem,
-		ProjectAutoMem: projectAutoMem,
-		SaveMemoryTool: saveMemoryTool,
-		StartupAssets:  startupAssets,
-		CommandManager: commandMgr,
-		Tunnel:         th,
-		configAccess:   cfgAccess,
-		workingDir:     workingDir,
+		Registry:         registry,
+		MCPManager:       mcpMgr,
+		PluginManager:    pluginMgr,
+		GRPCPluginMgr:    grpcMgr,
+		AutoMemory:       autoMem,
+		ProjectAutoMem:   projectAutoMem,
+		SaveMemoryTool:   saveMemoryTool,
+		DeleteMemoryTool: deleteMemoryTool,
+		StartupAssets:    startupAssets,
+		CommandManager:   commandMgr,
+		Tunnel:           th,
+		configAccess:     cfgAccess,
+		workingDir:       workingDir,
 	}, nil
 }
 
