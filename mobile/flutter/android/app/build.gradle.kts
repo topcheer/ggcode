@@ -40,7 +40,7 @@ android {
     defaultConfig {
         applicationId = "gg.ai.ggcode.mobile"
         minSdk = 24
-        targetSdk = 35
+        targetSdk = 36
         versionCode = 2026080301
         versionName = "1.3.190"
     }
