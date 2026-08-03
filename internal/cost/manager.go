@@ -212,3 +212,50 @@ func FormatSessionCost(sc SessionCost, now time.Time) string {
 		FormatCost(sc.TotalCostUSD),
 	)
 }
+
+// FormatAgentCostBreakdown returns a multi-line breakdown of per-agent costs.
+// This gives visibility into which sub-agents, teammates, or delegations
+// consumed the most resources within a session — enabling cost optimization
+// decisions (e.g., "spawn:research-1 used 60% of session cost").
+//
+// The total line is always included; individual agents are listed only if
+// per-agent tracking data exists (i.e., RecordForAgent was used).
+func FormatAgentCostBreakdown(breakdown AgentCostBreakdown) string {
+	if len(breakdown.Entries) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString("  Per-agent cost breakdown:\n")
+	for _, e := range breakdown.Entries {
+		label := e.AgentID
+		if label == "" {
+			label = "main"
+		}
+		// Compute percentage of total cost.
+		pct := 0.0
+		if breakdown.Total.TotalCostUSD > 0 {
+			pct = e.TotalCostUSD / breakdown.Total.TotalCostUSD * 100
+		}
+		b.WriteString(fmt.Sprintf(
+			"    %-24s in: %s  out: %s  cost: %s (%.0f%%)\n",
+			label,
+			FormatTokens(e.InputTokens),
+			FormatTokens(e.OutputTokens),
+			FormatCost(e.TotalCostUSD),
+			pct,
+		))
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// GetAgentCostBreakdown returns the per-agent cost breakdown for a session.
+func (m *Manager) GetAgentCostBreakdown(sessionID string) (AgentCostBreakdown, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	t, ok := m.trackers[sessionID]
+	if !ok {
+		return AgentCostBreakdown{}, false
+	}
+	return t.AgentCostBreakdown(), true
+}
