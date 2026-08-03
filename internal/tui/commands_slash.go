@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -674,24 +673,10 @@ func (m *Model) handleBranchCommand() tea.Cmd {
 }
 
 // extractCommandFromInput parses a tool input JSON and extracts the command string.
+// extractCommandFromInput delegates to permission.ExtractCommandFromInput.
+// Kept as a local wrapper for compatibility with existing call sites.
 func extractCommandFromInput(input string) string {
-	input = strings.TrimSpace(input)
-	if input == "" {
-		return ""
-	}
-	var m map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(input), &m); err != nil {
-		return ""
-	}
-	for _, key := range []string{"command", "input"} {
-		if v, ok := m[key]; ok {
-			var s string
-			if err := json.Unmarshal(v, &s); err == nil {
-				return s
-			}
-		}
-	}
-	return ""
+	return permission.ExtractCommandFromInput(input)
 }
 
 // persistPermissionRules saves the current tool overrides and command patterns

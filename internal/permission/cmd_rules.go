@@ -279,6 +279,29 @@ func isCommonTwoWordPrefix(first, second string) bool {
 	return !strings.HasPrefix(second, "-")
 }
 
+// ExtractCommandFromInput parses a tool input JSON string and extracts the
+// command field. Returns "" if the input is not valid JSON or has no command.
+// This is the exported version of the same logic used internally by the TUI.
+func ExtractCommandFromInput(input string) string {
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return ""
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(input), &m); err != nil {
+		return ""
+	}
+	for _, key := range []string{"command", "input"} {
+		if v, ok := m[key]; ok {
+			var s string
+			if err := json.Unmarshal(v, &s); err == nil {
+				return s
+			}
+		}
+	}
+	return ""
+}
+
 func min(a, b int) int {
 	if a < b {
 		return a

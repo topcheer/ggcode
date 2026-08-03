@@ -2284,10 +2284,22 @@ func (b *ChatBridge) RespondApproval(requestID, decision string) {
 		return
 	}
 
-	// Always-allow: persist override on the agent's permission policy
+	// Always-allow: use fine-grained command-level permission for command tools
+	// (mirrors TUI behavior). For command tools like run_command, this extracts
+	// the command prefix and adds a pattern like "git diff*" instead of
+	// blanket-allowing ALL future commands. For non-command tools, falls back to
+	// tool-level override.
 	if (decision == "always_allow" || decision == "always") && b.agent != nil {
 		if p, ok := b.agent.PermissionPolicy().(*permission.ConfigPolicy); ok {
-			p.SetOverride(req.ToolName, permission.Allow)
+			if cmd := permission.ExtractCommandFromInput(req.Input); cmd != "" {
+				if pattern := permission.CommandPrefixToPattern(cmd); pattern != "" {
+					p.AllowCommandPattern(pattern)
+				} else {
+					p.SetOverride(req.ToolName, permission.Allow)
+				}
+			} else {
+				p.SetOverride(req.ToolName, permission.Allow)
+			}
 		}
 	}
 
