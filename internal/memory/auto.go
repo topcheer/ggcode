@@ -167,6 +167,82 @@ func (am *AutoMemory) Dir() string {
 	return am.dir
 }
 
+// maxInlineBytes is the per-entry size limit for inlining memory content
+// directly into the system prompt. Entries larger than this are kept as
+// title-only index entries. 1200 bytes ~ 300 tokens - enough for a concise
+// build-process note or architecture decision, small enough to stay cheap.
+const maxInlineBytes = 1200
+
+// maxTotalInlineBytes is the combined size budget for all inlined memory
+// entries. This prevents memory content from consuming too much of the
+// context window. 6000 bytes ≈ 1500 tokens.
+const maxTotalInlineBytes = 6000
+
+// MemoryEntry pairs a curated memory's metadata with its file content.
+type MemoryEntry struct {
+	Key     string
+	Content string
+	Meta    MemoryMeta
+}
+
+// LoadForPrompt returns curated memory entries split into two groups:
+//
+//   - inline: entries whose full content should be injected directly into the
+//     system prompt. These are persistent-category entries (architecture
+//     decisions, build processes, design docs) that are small enough to fit
+//     within the inline budget.
+//   - indexOnly: entries whose titles should be listed as a reference index.
+//     The LLM can read_file these when needed. This includes transient,
+//     evolving, and oversized persistent entries.
+//
+// This implements relevance-free auto-injection: persistent knowledge from
+// previous sessions is immediately available in context without requiring the
+// LLM to manually read_file each memory entry.
+func (am *AutoMemory) LoadForPrompt() (inline []MemoryEntry, indexOnly []string, err error) {
+	metas, err := am.collectMetas()
+	if err != nil {
+		return nil, nil, err
+	}
+	now := time.Now()
+	active, _, _, _ := curateEntries(metas, now)
+
+	// Sort active entries: persistent first (inline priority), then by key
+	// for deterministic output.
+	sort.Slice(active, func(i, j int) bool {
+		if active[i].Category == CategoryPersistent && active[j].Category != CategoryPersistent {
+			return true
+		}
+		if active[i].Category != CategoryPersistent && active[j].Category == CategoryPersistent {
+			return false
+		}
+		return active[i].Key < active[j].Key
+	})
+
+	totalInline := 0
+	for _, m := range active {
+		path := filepath.Join(am.dir, m.Key+".md")
+		data, readErr := os.ReadFile(path)
+		content := ""
+		if readErr == nil {
+			content = strings.TrimSpace(string(data))
+		}
+
+		// Inline persistent entries that are small enough and within budget.
+		if m.Category == CategoryPersistent && len(content) > 0 && len(content) <= maxInlineBytes && totalInline+len(content) <= maxTotalInlineBytes {
+			inline = append(inline, MemoryEntry{
+				Key:     m.Key,
+				Content: content,
+				Meta:    m,
+			})
+			totalInline += len(content)
+		} else {
+			indexOnly = append(indexOnly, m.Key)
+		}
+	}
+
+	return inline, indexOnly, nil
+}
+
 func sanitizeKey(key string) string {
 	safe := strings.Map(func(r rune) rune {
 		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {

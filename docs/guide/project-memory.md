@@ -80,3 +80,31 @@ Memory is scoped:
 | `global` | Shared | All projects |
 
 Prefer `project` scope unless the knowledge is truly universal.
+
+## Auto-Injection: How Memory Reaches the Agent
+
+ggcode automatically injects saved memory into the system prompt at session
+start, using a two-tier strategy:
+
+**Tier 1 - Inline (persistent memories):**
+Entries classified as *persistent* (architecture decisions, build processes,
+design docs - keys ending in `-impl`, `-design`, `-architecture`, or starting
+with `build-`, `release-`) are inlined directly into the system prompt. The
+agent has immediate access to their full content without needing to call
+`read_file`. This ensures critical project knowledge from previous sessions is
+always available.
+
+**Tier 2 - Index (transient and evolving memories):**
+Entries classified as *transient* (implementation tasks, bug fixes) or
+*evolving* (research, competitor analysis, performance benchmarks) are listed
+as title-only entries. The agent can selectively `read_file` these when a
+title is relevant to the current task. Transient entries older than 30 days
+are automatically expired.
+
+**Size budgets:**
+- Per-entry inline limit: ~1200 bytes (~300 tokens)
+- Total inline budget: ~6000 bytes (~1500 tokens)
+
+If a persistent entry exceeds the per-entry limit, it falls back to the
+title-only index. This keeps the system prompt small while ensuring the most
+valuable knowledge is always in context.
