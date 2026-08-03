@@ -361,7 +361,15 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 		warnings = append(warnings, ifaceWarn)
 	}
 
-	// 34. Insecure code pattern detection - flags security anti-patterns commonly
+	// 34b. Nil map write detection - flags writes to uninitialized (nil) map
+	//      variables (var m map[K]V; m["key"] = val). This causes a guaranteed
+	//      runtime panic in Go. LLMs frequently declare map variables without
+	//      make() initialization. Delta-aware.
+	if nilMapWarn := checkNilMapWrite(filePath, oldContent, newContent); nilMapWarn != "" {
+		warnings = append(warnings, nilMapWarn)
+	}
+
+	// 35. Insecure code pattern detection - flags security anti-patterns commonly
 	//     introduced by LLMs: TLS bypass (InsecureSkipVerify), weak crypto
 	//     (math/rand for tokens, MD5 for passwords), SQL injection (string
 	//     concatenation in queries), command injection (shell+concat). Multi-language
