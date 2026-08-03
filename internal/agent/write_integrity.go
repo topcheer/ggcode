@@ -162,6 +162,13 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 		warnings = append(warnings, delimWarn)
 	}
 
+	// 10b. HTML/XML/JSX tag balance - validates markup tags are properly
+	//      balanced in HTML, JSX, TSX, Vue, Svelte, and XML files. Catches a
+	//      common agent failure that bracket checking cannot detect.
+	if tagWarn := checkTagBalance(filePath, newContent); tagWarn != "" {
+		warnings = append(warnings, tagWarn)
+	}
+
 	// 11. Config file syntax validation - parses JSON, YAML, TOML, XML after
 	//     write to catch malformed config files that would cause runtime failures.
 	//     Uses existing project parsers (zero new dependencies).
