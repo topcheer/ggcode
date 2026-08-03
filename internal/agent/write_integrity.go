@@ -329,6 +329,16 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 		warnings = append(warnings, rangeCopyWarnings...)
 	}
 
+	// 32. Goroutine lifecycle leak detection - flags `go func()` or `go someFn()`
+	//     calls without any lifecycle management (WaitGroup, context cancellation,
+	//     errgroup, or channel signaling) in the spawning function. These goroutines
+	//     outlive the function scope, causing resource and memory leaks. The existing
+	//     resource_leak_check only detects resource acquisitions (os.Open), not
+	//     goroutine lifecycle problems. Delta-aware.
+	if goroutineWarnings := checkGoroutineLeak(filePath, oldContent, newContent); len(goroutineWarnings) > 0 {
+		warnings = append(warnings, goroutineWarnings...)
+	}
+
 	if len(warnings) == 0 {
 		return ""
 	}
