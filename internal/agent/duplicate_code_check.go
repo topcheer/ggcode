@@ -184,6 +184,40 @@ func collectFuncSignatures(fset *token.FileSet, file *ast.File) []funcSignature 
 	return sigs
 }
 
+// literalKindTokens maps Go token kinds to normalized placeholders.
+var literalKindTokens = map[token.Token]string{
+	token.STRING: "STR",
+	token.INT:    "INT",
+	token.FLOAT:  "FLOAT",
+	token.CHAR:   "CHAR",
+}
+
+// keywordTokens maps AST node types to their fixed normalized tokens.
+// This replaces a large switch statement with a table lookup.
+var keywordTokens = map[string]string{
+	"*ast.ReturnStmt":     "return",
+	"*ast.IfStmt":         "if",
+	"*ast.ForStmt":        "for",
+	"*ast.RangeStmt":      "range",
+	"*ast.SwitchStmt":     "switch",
+	"*ast.SelectStmt":     "select",
+	"*ast.DeferStmt":      "defer",
+	"*ast.GoStmt":         "go",
+	"*ast.CallExpr":       "call",
+	"*ast.SelectorExpr":   ".",
+	"*ast.IndexExpr":      "[]",
+	"*ast.SliceExpr":      "[:]",
+	"*ast.TypeAssertExpr": ".()",
+	"*ast.StarExpr":       "*",
+	"*ast.CompositeLit":   "{}",
+}
+
+// nodeTypeName returns the Go AST type name string for a node.
+func nodeTypeName(n ast.Node) string {
+	// Using fmt.Sprintf("%T") is the simplest portable approach.
+	return fmt.Sprintf("%T", n)
+}
+
 // normalizeBodyTokens converts a function body into a normalized token
 // sequence suitable for comparison. It replaces identifiers with a generic
 // placeholder to catch Type 2 clones (renamed copies).
@@ -191,72 +225,42 @@ func normalizeBodyTokens(body *ast.BlockStmt) []string {
 	var tokens []string
 
 	ast.Inspect(body, func(n ast.Node) bool {
-		switch node := n.(type) {
-		case *ast.Ident:
-			// Replace identifiers with a placeholder, but keep
-			// builtin/function-call structure distinguishable.
-			// We preserve the context: if the identifier starts with
-			// an uppercase letter (exported), use "E" else "v".
-			if len(node.Name) > 0 && node.Name[0] >= 'A' && node.Name[0] <= 'Z' {
-				tokens = append(tokens, "E")
-			} else {
-				tokens = append(tokens, "v")
-			}
-		case *ast.BasicLit:
-			// Replace all literals with a type-based placeholder.
-			switch node.Kind {
-			case token.STRING:
-				tokens = append(tokens, "STR")
-			case token.INT:
-				tokens = append(tokens, "INT")
-			case token.FLOAT:
-				tokens = append(tokens, "FLOAT")
-			case token.CHAR:
-				tokens = append(tokens, "CHAR")
-			default:
-				tokens = append(tokens, "LIT")
-			}
-		case *ast.BinaryExpr:
-			tokens = append(tokens, node.Op.String())
-		case *ast.UnaryExpr:
-			tokens = append(tokens, node.Op.String())
-		case *ast.AssignStmt:
-			tokens = append(tokens, node.Tok.String())
-		case *ast.ReturnStmt:
-			tokens = append(tokens, "return")
-		case *ast.IfStmt:
-			tokens = append(tokens, "if")
-		case *ast.ForStmt:
-			tokens = append(tokens, "for")
-		case *ast.RangeStmt:
-			tokens = append(tokens, "range")
-		case *ast.SwitchStmt:
-			tokens = append(tokens, "switch")
-		case *ast.SelectStmt:
-			tokens = append(tokens, "select")
-		case *ast.DeferStmt:
-			tokens = append(tokens, "defer")
-		case *ast.GoStmt:
-			tokens = append(tokens, "go")
-		case *ast.CallExpr:
-			tokens = append(tokens, "call")
-		case *ast.SelectorExpr:
-			tokens = append(tokens, ".")
-		case *ast.IndexExpr:
-			tokens = append(tokens, "[]")
-		case *ast.SliceExpr:
-			tokens = append(tokens, "[:]")
-		case *ast.TypeAssertExpr:
-			tokens = append(tokens, ".()")
-		case *ast.StarExpr:
-			tokens = append(tokens, "*")
-		case *ast.CompositeLit:
-			tokens = append(tokens, "{}")
+		if tok, ok := normalizeNodeToken(n); ok {
+			tokens = append(tokens, tok)
 		}
 		return true
 	})
 
 	return tokens
+}
+
+// normalizeNodeToken converts a single AST node to its normalized token
+// representation. Returns (token, true) if the node produces a token,
+// (empty, false) otherwise.
+func normalizeNodeToken(n ast.Node) (string, bool) {
+	switch node := n.(type) {
+	case *ast.Ident:
+		if len(node.Name) > 0 && node.Name[0] >= 'A' && node.Name[0] <= 'Z' {
+			return "E", true
+		}
+		return "v", true
+	case *ast.BasicLit:
+		if tok, ok := literalKindTokens[node.Kind]; ok {
+			return tok, true
+		}
+		return "LIT", true
+	case *ast.BinaryExpr:
+		return node.Op.String(), true
+	case *ast.UnaryExpr:
+		return node.Op.String(), true
+	case *ast.AssignStmt:
+		return node.Tok.String(), true
+	default:
+		if tok, ok := keywordTokens[nodeTypeName(n)]; ok {
+			return tok, true
+		}
+		return "", false
+	}
 }
 
 // computeSimilarity calculates the cosine-similarity-like overlap between
