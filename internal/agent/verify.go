@@ -413,13 +413,21 @@ func extractText(msg provider.Message) string {
 
 // --- Rule injection into tool results ---
 
+// maxRuleInjectPerSession caps how many times the same rule can be injected
+// into tool results within a single session. This prevents repetitive noise
+// where the same hint (e.g. "use -tags goolm") appears on every go build call.
+const maxRuleInjectPerSession = 2
+
 // injectRulesIntoResult prepends matching harness rules to a tool result.
 // Rules are matched via two paths:
 //  1. Preventive: MatchingRulesForTool matches rule patterns against tool ARGS
 //     (warns before the error occurs, e.g. "go build" without -tags goolm).
 //  2. Reactive: MatchingRulesForResult matches rule patterns against the tool
 //     RESULT content (warns when a known error pattern appears in the output,
-//     e.g. "cannot find package olm" → injects the fix hint immediately).
+//     e.g. "cannot find package olm" -> injects the fix hint immediately).
+//
+// Dedup: each rule ID is injected at most maxRuleInjectPerSession times per
+// session to avoid repetitive noise on successful operations.
 func (a *Agent) injectRulesIntoResult(toolName string, args json.RawMessage, resultContent string) string {
 	workingDir := a.WorkingDir()
 	if workingDir == "" {
@@ -437,12 +445,30 @@ func (a *Agent) injectRulesIntoResult(toolName string, args json.RawMessage, res
 		return resultContent
 	}
 
+	// Dedup: filter out rules that have already been injected enough times.
+	a.mu.Lock()
+	if a.ruleInjectCount == nil {
+		a.ruleInjectCount = make(map[string]int)
+	}
+	var filtered []Rule
+	for _, r := range matching {
+		if a.ruleInjectCount[r.ID] < maxRuleInjectPerSession {
+			filtered = append(filtered, r)
+			a.ruleInjectCount[r.ID]++
+		}
+	}
+	a.mu.Unlock()
+
+	if len(filtered) == 0 {
+		return resultContent
+	}
+
 	var b strings.Builder
 	b.WriteString("[Harness Rules — learned from past mistakes]\n")
-	for _, r := range matching {
-		b.WriteString(fmt.Sprintf("⚠ %s\n", r.Rule))
+	for _, r := range filtered {
+		b.WriteString(fmt.Sprintf("\u26a0 %s\n", r.Rule))
 		if r.FixHint != "" {
-			b.WriteString(fmt.Sprintf("  → %s\n", r.FixHint))
+			b.WriteString(fmt.Sprintf("  \u2192 %s\n", r.FixHint))
 		}
 	}
 	b.WriteString("\n")

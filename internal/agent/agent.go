@@ -183,6 +183,7 @@ type Agent struct {
 	shellNativeHint            *shellNativeHintState                 // suggests native tools when agent uses shell for equivalent operations
 	contextFootprint           *contextFootprintState                // per-tool context budget attribution (which tools consume the most context)
 	ruleStore                  *RuleStore                            // cached rule store for hot-path rule injection (avoids per-tool disk I/O)
+	ruleInjectCount            map[string]int                        // per-rule injection counter for dedup (caps repetitive hints)
 	approvalMemory             *permission.ApprovalMemory            // session-level learned approval patterns (auto-approve after N repeats)
 	lastRunStats               *RunStats                             // stats from the most recent run (for post-run summary display)
 	systemPromptInjector       func() string                         // returns extra system prompt text to inject (e.g. lanchat peer warnings)
