@@ -476,6 +476,15 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 	//     directory). It is invoked separately from agent_tool.go via
 	//     CheckMissingTestCompanionWithFS after the write completes.
 
+	// 48. N+1 I/O in loop detection - detects I/O operations (database queries,
+	//     HTTP requests, file I/O) inside for/range loops. This is the classic
+	//     N+1 query anti-pattern that causes O(N) network/disk round-trips
+	//     instead of a single batched operation. The #1 production performance
+	//     anti-pattern that LLMs frequently generate. Delta-aware.
+	if nplus1Warnings := checkNPlus1Loop(filePath, oldContent, newContent); len(nplus1Warnings) > 0 {
+		warnings = append(warnings, nplus1Warnings...)
+	}
+
 	if len(warnings) == 0 {
 		return ""
 	}
