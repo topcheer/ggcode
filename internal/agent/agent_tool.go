@@ -50,13 +50,27 @@ func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolC
 				IsError: true,
 			}
 		case permission.Ask:
+			// Check learned approval memory: if the user has approved this
+			// pattern 3+ times, auto-approve to reduce prompt fatigue.
+			if a.approvalMemory != nil && a.approvalMemory.ShouldAutoApprove(tc.Name, tc.Arguments) {
+				debug.Log("approval-memory", "auto-approved %s (learned pattern)", tc.Name)
+				// Fall through to execution — treated as Allow.
+				break
+			}
 			if onApproval != nil {
 				resp := onApproval(ctx, tc.Name, string(tc.Arguments))
 				if resp == permission.Deny {
+					if a.approvalMemory != nil {
+						a.approvalMemory.RecordDeny(tc.Name, tc.Arguments)
+					}
 					return tool.Result{
 						Content: fmt.Sprintf("Permission denied for tool %q. User rejected the request.", tc.Name),
 						IsError: true,
 					}
+				}
+				// User approved — record for future auto-approval.
+				if a.approvalMemory != nil {
+					a.approvalMemory.RecordApproval(tc.Name, tc.Arguments)
 				}
 			} else {
 				// No approval handler → deny by default

@@ -179,6 +179,7 @@ type Agent struct {
 	branchGuard                *branchGuardState                     // protected branch edit warning (main/master/develop awareness)
 	shellNativeHint            *shellNativeHintState                 // suggests native tools when agent uses shell for equivalent operations
 	ruleStore                  *RuleStore                            // cached rule store for hot-path rule injection (avoids per-tool disk I/O)
+	approvalMemory             *permission.ApprovalMemory            // session-level learned approval patterns (auto-approve after N repeats)
 	lastRunStats               *RunStats                             // stats from the most recent run (for post-run summary display)
 	systemPromptInjector       func() string                         // returns extra system prompt text to inject (e.g. lanchat peer warnings)
 	baseSystemPrompt           string                                // the fully built static system prompt; used as reset base for dynamic injection
@@ -244,6 +245,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		artifactGuard:        newGeneratedArtifactState(),
 		branchGuard:          newBranchGuardState(),
 		shellNativeHint:      newShellNativeHintState(),
+		approvalMemory:       permission.NewApprovalMemory(),
 		fulfillmentGate:      newFulfillmentGateState(),
 		companionGuard:       newCompanionGuardState(),
 		complexityGate:       newComplexityGateState(),
