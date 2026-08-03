@@ -453,6 +453,15 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 		warnings = append(warnings, panicWarnings...)
 	}
 
+	// 46. Breaking change detection - compares exported symbol signatures
+	//     (functions, types, vars/consts) before and after the edit. When an
+	//     exported symbol's signature changes, it likely breaks callers in other
+	//     files/packages. This is the #1 multi-file refactoring failure mode.
+	//     Delta-aware (only fires when a signature actually changed).
+	if breakingWarn := checkBreakingChanges(filePath, oldContent, newContent); breakingWarn != "" {
+		warnings = append(warnings, breakingWarn)
+	}
+
 	// 44. Missing test companion detection is NOT called here because it
 	//     requires filesystem access (checking for _test.go files in the same
 	//     directory). It is invoked separately from agent_tool.go via
