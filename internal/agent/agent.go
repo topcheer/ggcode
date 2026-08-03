@@ -2381,7 +2381,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					fillRatio := float64(a.contextManager.TokenCount()) / float64(threshold)
 					if truncated := guardToolOutput(result.Content, fillRatio); len(truncated) < len(result.Content) {
 						debug.Log("agent", "tool output guarded: tool=%s tokens=%d threshold=%d fill=%.0f%% %d→%d bytes", tc.Name, a.contextManager.TokenCount(), threshold, fillRatio*100, len(result.Content), len(truncated))
-						result.Content = truncated
+						result.Content = withTruncationAdvisory(truncated, tc.Name, len(result.Content))
 					}
 				}
 			}
