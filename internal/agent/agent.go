@@ -168,6 +168,7 @@ type Agent struct {
 	velocityForecast           *velocityForecastState                // iteration velocity forecasting (TAAS-inspired predictive productivity check)
 	transientRetryBudget       int                                   // remaining automatic retries for transient tool failures (per run)
 	compoundingFailure         *compoundingFailureState              // sliding-window cross-tool failure rate (strategy reset detection)
+	failureMode                *failureModeState                     // meta-level failure mode classification (transient/structural/systemic)
 	toolFallback               *toolFallbackState                    // tool error fallback chain (actionable recovery suggestions)
 	argSizeGuardFires          int                                   // count of argument size guard injections this run
 	fileFreshness              *fileFreshnessSentinel                // proactive cross-iteration external file change detection
@@ -275,6 +276,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		userSentiment:        newUserSentimentState(),
 		transientRetryBudget: maxTransientRetryBudgetPerRun,
 		compoundingFailure:   newCompoundingFailureState(),
+		failureMode:          newFailureModeState(),
 		toolFallback:         newToolFallbackState(),
 		contextFootprint:     newContextFootprintState(),
 		redundantRead:        newRedundantReadState(),
@@ -1147,6 +1149,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.toolFilter = tool.NewRelevanceFilter()
 	a.resetTransientRetryBudget()
 	a.compoundingFailure.reset()
+	a.failureMode.reset()
 	a.toolFallback.reset()
 	a.fileFreshness.reset()
 	a.toolThermal.reset()
@@ -2220,6 +2223,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					result.Content = result.Content + "\n\n" + compoundingGuidance
 				} else {
 					result.Content = compoundingGuidance
+				}
+			}
+
+			// Failure mode classification: meta-level strategy guidance.
+			// Classifies each error into transient/structural/systemic and
+			// injects high-level strategy when a dominant mode emerges.
+			if modeGuidance := a.failureMode.recordResult(tc.Name, result.IsError, result.Content); modeGuidance != "" {
+				if result.Content != "" {
+					result.Content = result.Content + "\n\n" + modeGuidance
+				} else {
+					result.Content = modeGuidance
 				}
 			}
 
