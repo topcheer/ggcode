@@ -180,6 +180,7 @@ type Agent struct {
 	adaptiveSampling           *adaptiveSamplingState                // per-turn temperature adaptation (phase-aware sampling control)
 	effortAdapter              *adaptiveEffortState                  // per-turn reasoning effort adaptation (Opus 5 effort toggle pattern)
 	branchGuard                *branchGuardState                     // protected branch edit warning (main/master/develop awareness)
+	destructiveGuard           *gitDestructiveState                  // destructive git operation detection (reset --hard, force push, etc.)
 	shellNativeHint            *shellNativeHintState                 // suggests native tools when agent uses shell for equivalent operations
 	contextFootprint           *contextFootprintState                // per-tool context budget attribution (which tools consume the most context)
 	redundantRead              *redundantReadState                   // redundant re-read detection (context waste prevention)
@@ -250,6 +251,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		hubPackageGuard:      newHubPackageState(),
 		artifactGuard:        newGeneratedArtifactState(),
 		branchGuard:          newBranchGuardState(),
+		destructiveGuard:     newGitDestructiveState(),
 		shellNativeHint:      newShellNativeHintState(),
 		approvalMemory:       permission.NewApprovalMemory(),
 		fulfillmentGate:      newFulfillmentGateState(),
@@ -1130,6 +1132,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.hubPackageGuard.reset()
 	a.artifactGuard.reset()
 	a.branchGuard.reset()
+	a.destructiveGuard.reset()
 	a.fulfillmentGate.reset()
 	a.companionGuard.reset()
 	a.complexityGate.reset()

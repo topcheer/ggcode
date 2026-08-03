@@ -307,6 +307,11 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 		}
 	}
 
+	// Git destructive operation detection: inspect shell commands and git_*
+	// tool calls for irreversible operations (reset --hard, force push, clean
+	// -fd, rm -rf, etc.). Advisory only — injects a warning but does not block.
+	destructiveWarning := a.checkGitDestructive(tc.Name, tc.Arguments)
+
 	// Strip unknown parameters: some models hallucinate extra parameters that
 	// aren't in the tool schema. Removing them prevents confusing failures in
 	// tools that use strict deserialization. No-op when all params are known.
@@ -380,6 +385,11 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 		if hint := toolFallbackHint(t.Name(), result.Content); hint != "" {
 			result.Content += hint
 		}
+	}
+
+	// Append destructive git operation warning (if any was detected pre-execution)
+	if destructiveWarning != "" {
+		result.Content += destructiveWarning
 	}
 
 	return result
@@ -543,6 +553,7 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 	if postResult.Output != "" {
 		result.Content += "\n" + postResult.Output
 	}
+
 	return result
 }
 
