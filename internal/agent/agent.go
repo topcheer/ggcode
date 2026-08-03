@@ -181,6 +181,7 @@ type Agent struct {
 	effortAdapter              *adaptiveEffortState                  // per-turn reasoning effort adaptation (Opus 5 effort toggle pattern)
 	branchGuard                *branchGuardState                     // protected branch edit warning (main/master/develop awareness)
 	shellNativeHint            *shellNativeHintState                 // suggests native tools when agent uses shell for equivalent operations
+	contextFootprint           *contextFootprintState                // per-tool context budget attribution (which tools consume the most context)
 	ruleStore                  *RuleStore                            // cached rule store for hot-path rule injection (avoids per-tool disk I/O)
 	approvalMemory             *permission.ApprovalMemory            // session-level learned approval patterns (auto-approve after N repeats)
 	lastRunStats               *RunStats                             // stats from the most recent run (for post-run summary display)
@@ -271,6 +272,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		transientRetryBudget: maxTransientRetryBudgetPerRun,
 		compoundingFailure:   newCompoundingFailureState(),
 		toolFallback:         newToolFallbackState(),
+		contextFootprint:     newContextFootprintState(),
 	}
 	a.syncContextManagerProviderLocked()
 	a.syncContextManagerUsageHandlerLocked()
@@ -1140,6 +1142,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.toolFallback.reset()
 	a.fileFreshness.reset()
 	a.toolThermal.reset()
+	a.contextFootprint.reset()
 
 	// Capture the git working tree state BEFORE the agent makes any changes.
 	// This lets the reconciliation gate distinguish pre-existing dirty files
@@ -2253,6 +2256,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					result.Content = result.Content + "\n\n" + confidenceGuidance
 				} else {
 					result.Content = confidenceGuidance
+				}
+			}
+
+			// Context footprint: track per-tool result size and warn when a
+			// category dominates context consumption (Cost Intelligence).
+			a.contextFootprint.recordResult(tc.Name, result.Content, runStats.Iterations)
+			if footprintGuidance := a.contextFootprint.check(); footprintGuidance != "" {
+				if result.Content != "" {
+					result.Content = result.Content + "\n\n" + footprintGuidance
+				} else {
+					result.Content = footprintGuidance
 				}
 			}
 
