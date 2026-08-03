@@ -176,3 +176,23 @@ func TestCheckWriteIntegrity_WarningCap(t *testing.T) {
 		t.Errorf("expected at most %d warnings, got %d: %v", maxIntegrityWarnings, len(warningLines), warningLines)
 	}
 }
+
+func TestCheckWriteIntegrity_GoroutineLeak(t *testing.T) {
+	// A function with a bare `go` call and no lifecycle management should
+	// trigger the goroutine leak check via the main checkWriteIntegrity entry.
+	src := `package main
+
+func worker() {
+	go doStuff()
+}
+
+func doStuff() {}
+`
+	warning := checkWriteIntegrity("main.go", "", src)
+	if warning == "" {
+		t.Fatal("expected goroutine leak warning from checkWriteIntegrity")
+	}
+	if !strings.Contains(warning, "goroutine leak") {
+		t.Errorf("expected 'goroutine leak' in warning, got: %s", warning)
+	}
+}
