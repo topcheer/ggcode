@@ -314,8 +314,26 @@ func (a *Agent) llmDecideVerifyCommand(ctx context.Context) string {
 }
 
 // executeVerifyCommand runs the command and returns the result.
+// If the command's binary is not available on the system (exit 127 scenario),
+// it returns a Passed=true result with a skipped note instead of capturing
+// "command not found" as a verification failure. This prevents pointless
+// error injection and auto-repair loops when the host lacks the required
+// toolchain (e.g. no `go`, `make`, `cargo` in PATH).
 func (a *Agent) executeVerifyCommand(ctx context.Context, command string) *VerifyResult {
 	workingDir := a.WorkingDir()
+
+	// Pre-flight: check if the command's binary is available on PATH.
+	// This prevents "command not found" output from being captured as a
+	// verification failure and injected into the LLM context.
+	if !verifyCommandAvailable(command) {
+		debug.Log("verify", "skipping: binary not available for command: %s", command)
+		return &VerifyResult{
+			Command: command,
+			Passed:  true, // treat as pass (skip) to avoid error injection
+			Output:  "verification skipped: tool not available on this system",
+		}
+	}
+
 	debug.Log("verify", "running: %s in %s", command, workingDir)
 
 	cmdCtx, cancel := context.WithTimeout(ctx, verifyExecuteTimeout)
@@ -340,6 +358,17 @@ func (a *Agent) executeVerifyCommand(ctx context.Context, command string) *Verif
 	}
 
 	if err != nil {
+		// Defense-in-depth: if somehow the binary was available per
+		// LookPath but the shell still returned exit code 127, treat it
+		// as "tool unavailable" rather than a code failure.
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 127 {
+			debug.Log("verify", "skipping: exit 127 (command not found): %s", command)
+			return &VerifyResult{
+				Command: command,
+				Passed:  true,
+				Output:  "verification skipped: tool not available on this system",
+			}
+		}
 		result.Passed = false
 		result.Errors = extractErrorLines(outputStr)
 		if len(result.Errors) == 0 {

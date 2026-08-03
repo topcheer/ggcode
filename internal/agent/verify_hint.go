@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -168,24 +169,64 @@ func detectBuildSystem(workingDir string) string {
 	}
 
 	// 5. Language-specific defaults (lower confidence — may miss build tags).
-	if fileExists(filepath.Join(workingDir, "go.mod")) {
+	// Only suggest commands for tools that are actually available on the host.
+	if fileExists(filepath.Join(workingDir, "go.mod")) && commandAvailable("go") {
 		return "go build ./..."
 	}
-	if fileExists(filepath.Join(workingDir, "Cargo.toml")) {
+	if fileExists(filepath.Join(workingDir, "Cargo.toml")) && commandAvailable("cargo") {
 		return "cargo build"
 	}
-	if fileExists(filepath.Join(workingDir, "package.json")) {
+	if fileExists(filepath.Join(workingDir, "package.json")) && commandAvailable("npm") {
 		return "npm run build"
 	}
-	if fileExists(filepath.Join(workingDir, "CMakeLists.txt")) {
+	if fileExists(filepath.Join(workingDir, "CMakeLists.txt")) && commandAvailable("cmake") {
 		return "cmake --build build"
 	}
-	if fileExists(filepath.Join(workingDir, "pyproject.toml")) ||
-		fileExists(filepath.Join(workingDir, "setup.py")) {
+	if (fileExists(filepath.Join(workingDir, "pyproject.toml")) ||
+		fileExists(filepath.Join(workingDir, "setup.py"))) && commandAvailable("python") {
 		return "python -m pytest"
 	}
 
 	return ""
+}
+
+// commandAvailable checks if the given binary is available in PATH.
+// Used by detectBuildSystem to avoid suggesting verification commands
+// for tools that are not installed on the host system.
+func commandAvailable(binary string) bool {
+	_, err := exec.LookPath(binary)
+	return err == nil
+}
+
+// verifyCommandAvailable checks if the command's primary binary is available.
+// Handles compound commands like "make verify-ci" or "python -m pytest".
+// Returns true for shell builtins and commands that bypass PATH (e.g. "bash /path/script.sh").
+func verifyCommandAvailable(command string) bool {
+	parts := strings.Fields(command)
+	if len(parts) == 0 {
+		return false
+	}
+	primary := parts[0]
+
+	// Shell builtins and wrappers that are always available.
+	switch primary {
+	case "bash", "sh", "source":
+		return true
+	}
+
+	// For scripts run via bash/sh, check the script path instead.
+	if primary == "bash" || primary == "sh" {
+		if len(parts) > 1 {
+			return fileExists(parts[1])
+		}
+	}
+
+	// `make` is assumed available if detectBuildSystem found a Makefile.
+	if primary == "make" {
+		return commandAvailable("make")
+	}
+
+	return commandAvailable(primary)
 }
 
 // hasMakeTarget checks if a Makefile defines a target with the given name.
