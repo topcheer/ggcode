@@ -401,6 +401,14 @@ func (m *Manager) SpawnTeammate(teamID, name, color string, allowedTools []strin
 				usageAware.SetUsageHandler(onUsage)
 			}
 		}
+		// Isolate session-scoped state (todo_write) from the parent agent.
+		// Without this, teammates share the parent's todo file and clobber
+		// each other's task tracking.
+		if tmID != "" {
+			if sid, ok := agent.(interface{ SetSessionID(string) }); ok {
+				sid.SetSessionID(tmID)
+			}
+		}
 	}
 
 	// Start idle loop in a goroutine

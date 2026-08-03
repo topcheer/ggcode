@@ -3,10 +3,13 @@ package subagent
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	runtimedebug "runtime/debug"
 	"strings"
 	"time"
 
+	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/util"
@@ -137,6 +140,16 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 	if cfg.WorkingDir != "" {
 		if wd, ok := subAgent.(interface{ SetWorkingDir(string) }); ok {
 			wd.SetWorkingDir(cfg.WorkingDir)
+		}
+	}
+	// Propagate the sub-agent ID as the session ID so todo_write and other
+	// session-scoped state is isolated from the parent agent. Without this,
+	// the sub-agent's TodoWrite tool (cloned from the parent's registry)
+	// retains the parent's session ID, causing both agents to read/write the
+	// same todo file and clobber each other's state.
+	if cfg.SubAgentID != "" {
+		if sid, ok := subAgent.(interface{ SetSessionID(string) }); ok {
+			sid.SetSessionID(cfg.SubAgentID)
 		}
 	}
 	if cfg.OnUsage != nil {
@@ -305,6 +318,11 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 		debug.Log("subagent", "Run: result truncated id=%s total=%d cap=%d",
 			cfg.SubAgentID, len(output.String()), maxSubAgentResultBytes)
 	}
+
+	// Clean up sub-agent's todo file. Sub-agent todos are transient -- they
+	// exist only for the sub-agent's lifetime and should not persist after.
+	todoPath := filepath.Join(config.HomeDir(), ".ggcode", "todos", cfg.SubAgentID+".json")
+	os.Remove(todoPath)
 
 	if err != nil {
 		if subCtx.Err() == context.DeadlineExceeded {
