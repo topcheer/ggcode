@@ -426,6 +426,15 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 		warnings = append(warnings, flakyWarn)
 	}
 
+	// 42. Duplicate code detection - detects structurally similar function bodies
+	//     (Type 1 exact clones and Type 2 renamed clones) introduced by this edit.
+	//     LLMs frequently copy-paste functions with minor modifications instead of
+	//     extracting shared logic. Uses AST-based body fingerprinting with 85%
+	//     similarity threshold. Delta-aware (at least one function must be new).
+	if dupWarnings := checkDuplicateCode(filePath, oldContent, newContent); len(dupWarnings) > 0 {
+		warnings = append(warnings, dupWarnings...)
+	}
+
 	if len(warnings) == 0 {
 		return ""
 	}
