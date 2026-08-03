@@ -171,6 +171,7 @@ type Agent struct {
 	toolFallback               *toolFallbackState                    // tool error fallback chain (actionable recovery suggestions)
 	argSizeGuardFires          int                                   // count of argument size guard injections this run
 	fileFreshness              *fileFreshnessSentinel                // proactive cross-iteration external file change detection
+	toolThermal                *thermalState                         // cross-tool usage balance monitor (explore/modify/verify distribution)
 	latencyTracker             *LatencyTracker                       // per-tool latency baseline & slow-tool outlier detection
 	toolSequence               *toolSequenceValidator                // cross-iteration tool call anti-pattern detection
 	convergenceLock            *convergenceLockState                 // post-verification unnecessary edit drift detection
@@ -265,6 +266,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		effortAdapter:        newAdaptiveEffortState(),
 		sessionTimeout:       newSessionTimeoutState(0),
 		fileFreshness:        newFileFreshnessSentinel(),
+		toolThermal:          newThermalState(),
 		userSentiment:        newUserSentimentState(),
 		transientRetryBudget: maxTransientRetryBudgetPerRun,
 		compoundingFailure:   newCompoundingFailureState(),
@@ -1137,6 +1139,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.compoundingFailure.reset()
 	a.toolFallback.reset()
 	a.fileFreshness.reset()
+	a.toolThermal.reset()
 
 	// Capture the git working tree state BEFORE the agent makes any changes.
 	// This lets the reconciliation gate distinguish pre-existing dirty files
@@ -1263,6 +1266,18 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.contextManager.Add(provider.Message{
 				Role:    "user",
 				Content: []provider.ContentBlock{{Type: "text", Text: staleMsg}},
+			})
+			msgs = a.contextManager.Messages()
+		}
+
+		// Tool thermal profile: detect imbalanced tool-call distribution
+		// (e.g., 90% reads with no edits = agent is spinning). Zero-LLM-cost
+		// heuristic based on cross-tool category analysis.
+		if thermalMsg := a.toolThermal.maybeWarn(i); thermalMsg != "" {
+			debug.Log("thermal-profile", "imbalanced tool usage detected at iteration %d: %s", i+1, a.toolThermal.categoryBreakdown())
+			a.contextManager.Add(provider.Message{
+				Role:    "user",
+				Content: []provider.ContentBlock{{Type: "text", Text: thermalMsg}},
 			})
 			msgs = a.contextManager.Messages()
 		}
@@ -1863,6 +1878,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Track tool call for reflection stats
 			runStats.recordToolCall(tc.Name)
 			a.toolCallBudget.record()
+			a.toolThermal.recordToolCall(tc.Name)
 			extractPathsFromToolCall(tc.Name, tc.Arguments, runStats)
 			// Check for consecutive duplicate tool calls (loop detection).
 			// If detected, inject a guidance message into the tool result.
