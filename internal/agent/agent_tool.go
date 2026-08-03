@@ -360,6 +360,14 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 		result.Content += "\n" + postResult.Output
 	}
 
+	// Append fallback hint for tool errors - context-aware alternative
+	// tool suggestions that save 1-2 wasted agent iterations.
+	if result.IsError {
+		if hint := toolFallbackHint(t.Name(), result.Content); hint != "" {
+			result.Content += hint
+		}
+	}
+
 	return result
 }
 
