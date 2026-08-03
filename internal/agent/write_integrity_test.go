@@ -196,3 +196,24 @@ func doStuff() {}
 		t.Errorf("expected 'goroutine leak' in warning, got: %s", warning)
 	}
 }
+
+func TestCheckWriteIntegrity_BarePanicSafety(t *testing.T) {
+	// A bare panic() in library code should trigger the panic safety check
+	// via the main checkWriteIntegrity entry.
+	src := `package mypkg
+
+func validate(x int) int {
+	if x < 0 {
+		panic("negative value")
+	}
+	return x
+}
+`
+	warning := checkWriteIntegrity("src/mypkg/validate.go", "", src)
+	if warning == "" {
+		t.Fatal("expected panic safety warning from checkWriteIntegrity")
+	}
+	if !strings.Contains(warning, "panic()") {
+		t.Errorf("expected 'panic()' in warning, got: %s", warning)
+	}
+}

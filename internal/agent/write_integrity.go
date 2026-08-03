@@ -443,6 +443,16 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 		warnings = append(warnings, magicWarn)
 	}
 
+	// 45. Bare panic safety detection - flags bare `panic()` calls in
+	//     non-main/init Go functions without recover(). The existing
+	//     exit_call_check catches log.Panic* but NOT the Go built-in panic()
+	//     because it uses qualifiedCallName which only matches package-qualified
+	//     calls. Panic in library code crashes the process in goroutines and
+	//     makes functions untestable. Delta-aware.
+	if panicWarnings := checkPanicSafety(filePath, oldContent, newContent); len(panicWarnings) > 0 {
+		warnings = append(warnings, panicWarnings...)
+	}
+
 	// 44. Missing test companion detection is NOT called here because it
 	//     requires filesystem access (checking for _test.go files in the same
 	//     directory). It is invoked separately from agent_tool.go via
