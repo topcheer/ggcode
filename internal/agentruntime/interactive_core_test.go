@@ -26,7 +26,7 @@ func TestBuildInteractiveRuntimeCoreRegistersSharedBootstrapTools(t *testing.T) 
 	for _, toolDef := range core.Registry.List() {
 		names[toolDef.Name()] = true
 	}
-	for _, want := range []string{"save_memory", "list_mcp_capabilities", "get_mcp_prompt", "read_mcp_resource", "run_command"} {
+	for _, want := range []string{"save_memory", "delete_memory", "list_mcp_capabilities", "get_mcp_prompt", "read_mcp_resource", "run_command"} {
 		if !names[want] {
 			t.Fatalf("expected tool %q in runtime core registry", want)
 		}

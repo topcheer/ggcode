@@ -378,6 +378,7 @@ func TestFormatSpecialIMToolResult(t *testing.T) {
 		{name: "sleep", tr: &ToolResultInfo{ToolName: "sleep", Args: `{"seconds":5}`}, handled: true},
 		{name: "skill", tr: &ToolResultInfo{ToolName: "skill"}, handled: true},
 		{name: "save_memory", tr: &ToolResultInfo{ToolName: "save_memory"}, handled: true},
+		{name: "delete_memory", tr: &ToolResultInfo{ToolName: "delete_memory"}, handled: true},
 		{name: "web_fetch", tr: &ToolResultInfo{ToolName: "web_fetch", Args: `{"url":"https://example.com"}`}, handled: true},
 		{name: "web_search", tr: &ToolResultInfo{ToolName: "web_search", Args: `{"query":"golang"}`}, handled: true},
 		{name: "worktree_enter", tr: &ToolResultInfo{ToolName: "worktree_enter"}, handled: true},

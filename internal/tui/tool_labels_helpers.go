@@ -90,6 +90,8 @@ func localizedToolLabel(lang Language, action string) string {
 			return "使用技能"
 		case "save_memory":
 			return "保存记忆"
+		case "delete_memory":
+			return "删除记忆"
 		case "sleep":
 			return "等待"
 		case "cron_create":
@@ -229,6 +231,8 @@ func localizedToolLabel(lang Language, action string) string {
 			return "Using Skill"
 		case "save_memory":
 			return "Save Memory"
+		case "delete_memory":
+			return "Delete Memory"
 		case "sleep":
 			return "Sleep"
 		case "cron_create":
@@ -375,6 +379,8 @@ func localizedToolActivity(lang Language, action, target string) string {
 				return "加载技能"
 			case "save_memory":
 				return "保存记忆中..."
+			case "delete_memory":
+				return "删除记忆中..."
 			case "sleep":
 				return "等待中..."
 			case "cron_create":
@@ -490,6 +496,8 @@ func localizedToolActivity(lang Language, action, target string) string {
 				return "Loading skill"
 			case "save_memory":
 				return "Saving memory..."
+			case "delete_memory":
+				return "Deleting memory..."
 			case "sleep":
 				return "Sleeping..."
 			case "cron_create":

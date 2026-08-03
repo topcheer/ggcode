@@ -1074,6 +1074,18 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 		b.mu.Unlock()
 	})
 
+	// When delete_memory removes entries, rebuild system prompt so agent sees current memory
+	if core.DeleteMemoryTool != nil {
+		core.DeleteMemoryTool.SetAfterSave(func() {
+			newPrompt := buildWailsSystemPrompt(b.cfg, b.workingDir, b.permissionMode, autoMem, projectAutoMem, commandMgr)
+			b.mu.Lock()
+			if b.agent != nil {
+				b.agent.UpdateSystemPrompt(newPrompt)
+			}
+			b.mu.Unlock()
+		})
+	}
+
 	// ACP client manager (mirrors Fyne setupAgent)
 	if b.acpClientMgr != nil {
 		b.acpClientMgr.CloseAll()

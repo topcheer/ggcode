@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mattn/go-runewidth"
+	runewidth "github.com/mattn/go-runewidth"
 	"github.com/topcheer/ggcode/internal/hooks"
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
 	"github.com/topcheer/ggcode/internal/util"
@@ -315,6 +315,13 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 			DisplayName: localizedToolLabel(lang, "save_memory"),
 			Detail:      key,
 			Activity:    localizedToolActivity(lang, "save_memory", key),
+		}
+	case "delete_memory":
+		key := argString(args, "key")
+		return toolPresentation{
+			DisplayName: localizedToolLabel(lang, "delete_memory"),
+			Detail:      key,
+			Activity:    localizedToolActivity(lang, "delete_memory", key),
 		}
 	case "config":
 		setting := argString(args, "setting")

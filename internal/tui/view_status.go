@@ -5,8 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"charm.land/lipgloss/v2"
-
+	lipgloss "charm.land/lipgloss/v2"
 	"github.com/topcheer/ggcode/internal/cost"
 	"github.com/topcheer/ggcode/internal/util"
 )
@@ -310,7 +309,9 @@ func (m Model) renderAttachmentBar() string {
 }
 
 // contextUsageHint returns a colored context window usage string for the composer hints.
-// Shows "ctx 12.3K/128K (10%)" with color coding: green <50%, yellow <80%, red >=80%.
+// Shows a mini progress bar like "[███░░░░░░] ctx 12.3K/128K (10%)" with color coding:
+// green <50%, yellow <80%, red >=80%. When approaching auto-compact threshold,
+// a warning marker is appended.
 func (m Model) contextUsageHint() string {
 	if m.agent == nil {
 		return ""
@@ -328,25 +329,48 @@ func (m Model) contextUsageHint() string {
 
 	// Color based on usage level.
 	var color string
-	var bar string
 	switch {
 	case ratio >= 0.80:
 		color = "196" // red
-		bar = "█"
 	case ratio >= 0.50:
 		color = "214" // orange/yellow
-		bar = "▓"
 	default:
 		color = "46" // green
-		bar = "░"
 	}
 
-	label := fmt.Sprintf("%s ctx %s/%s (%.0f%%)",
-		bar,
+	// Build a 8-segment mini progress bar.
+	const barWidth = 8
+	filled := int(ratio * float64(barWidth))
+	if filled > barWidth {
+		filled = barWidth
+	}
+	var barBuilder strings.Builder
+	for i := 0; i < barWidth; i++ {
+		if i < filled {
+			barBuilder.WriteRune('█')
+		} else {
+			barBuilder.WriteRune('░')
+		}
+	}
+
+	label := fmt.Sprintf("[%s] ctx %s/%s (%.0f%%)",
+		barBuilder.String(),
 		humanizeTokenCount(tokens),
 		humanizeTokenCount(cw),
 		ratio*100,
 	)
+
+	// Append compaction warning when approaching threshold.
+	threshold := cm.AutoCompactThreshold()
+	if threshold > 0 && tokens >= threshold {
+		label += " ⚡ compact"
+	} else if threshold > 0 {
+		compactRatio := float64(tokens) / float64(threshold)
+		if compactRatio >= 0.85 {
+			label += " ⚡ soon"
+		}
+	}
+
 	return lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Render(label)
 }
 
