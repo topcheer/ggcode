@@ -32,25 +32,63 @@ func TestDetectBuildSystem(t *testing.T) {
 		t.Errorf("expected 'make build', got %q", cmd)
 	}
 
-	// Rust.
+	// Rust (only if cargo is installed).
 	rustDir := filepath.Join(tmp, "rustproject")
 	os.MkdirAll(rustDir, 0755)
 	os.WriteFile(filepath.Join(rustDir, "Cargo.toml"), []byte("[package]\nname=\"t\"\n"), 0644)
 	if cmd := detectBuildSystem(rustDir); cmd != "cargo build" {
-		t.Errorf("expected 'cargo build', got %q", cmd)
+		if commandAvailable("cargo") {
+			t.Errorf("expected 'cargo build', got %q", cmd)
+		}
+		// else: cargo not installed, skip is correct behavior
 	}
 
-	// Node.
+	// Node (only if npm is installed).
 	nodeDir := filepath.Join(tmp, "nodeproject")
 	os.MkdirAll(nodeDir, 0755)
 	os.WriteFile(filepath.Join(nodeDir, "package.json"), []byte("{}"), 0644)
 	if cmd := detectBuildSystem(nodeDir); cmd != "npm run build" {
-		t.Errorf("expected 'npm run build', got %q", cmd)
+		if commandAvailable("npm") {
+			t.Errorf("expected 'npm run build', got %q", cmd)
+		}
+		// else: npm not installed, skip is correct behavior
 	}
 
 	// Empty working dir.
 	if cmd := detectBuildSystem(""); cmd != "" {
 		t.Errorf("expected empty for empty dir, got %q", cmd)
+	}
+}
+
+func TestCommandAvailable(t *testing.T) {
+	// These binaries should always exist on a dev machine running Go tests.
+	if !commandAvailable("go") {
+		t.Error("expected 'go' to be available in PATH")
+	}
+	// A definitely-nonexistent binary.
+	if commandAvailable("definitely_not_a_real_binary_xyz123") {
+		t.Error("expected nonexistent binary to be unavailable")
+	}
+}
+
+func TestVerifyCommandAvailable(t *testing.T) {
+	tests := []struct {
+		cmd  string
+		want bool
+	}{
+		{"echo hello", true},                // shell builtin
+		{"sh -c 'echo hi'", true},           // sh is always available
+		{"go build ./...", true},            // go is available (we're running Go tests)
+		{"make build", true},                // make is assumed available
+		{"", false},                         // empty command
+		{"nonexistent_tool_xyz arg", false}, // tool not in PATH
+		{"bash /tmp/script.sh", true},       // bash is a shell
+	}
+	for _, tt := range tests {
+		got := verifyCommandAvailable(tt.cmd)
+		if got != tt.want {
+			t.Errorf("verifyCommandAvailable(%q) = %v, want %v", tt.cmd, got, tt.want)
+		}
 	}
 }
 

@@ -4,6 +4,7 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 )
@@ -44,6 +45,21 @@ func TestExecuteVerifyCommand_Timeout(t *testing.T) {
 	result := a.executeVerifyCommand(ctx, "sleep 30")
 	if result.Passed {
 		t.Error("expected failure due to timeout")
+	}
+}
+
+func TestExecuteVerifyCommand_MissingBinarySkips(t *testing.T) {
+	a := &Agent{
+		workingDir: ".",
+	}
+	// A command whose binary does not exist should be skipped (Passed=true),
+	// not treated as a verification failure.
+	result := a.executeVerifyCommand(context.Background(), "nonexistent_tool_xyz123 --flag")
+	if !result.Passed {
+		t.Errorf("expected pass (skip) for missing binary, got errors: %v", result.Errors)
+	}
+	if !strings.Contains(result.Output, "skipped") {
+		t.Errorf("expected output to mention 'skipped', got: %s", result.Output)
 	}
 }
 
