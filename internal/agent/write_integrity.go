@@ -443,6 +443,11 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 		warnings = append(warnings, magicWarn)
 	}
 
+	// 44. Missing test companion detection is NOT called here because it
+	//     requires filesystem access (checking for _test.go files in the same
+	//     directory). It is invoked separately from agent_tool.go via
+	//     CheckMissingTestCompanionWithFS after the write completes.
+
 	if len(warnings) == 0 {
 		return ""
 	}

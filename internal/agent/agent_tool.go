@@ -499,6 +499,26 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 		}
 	}
 
+	// Post-write missing test companion detection for multi-file edits.
+	if !result.IsError && len(plans) > 0 {
+		var testCompanionWarnings []string
+		for _, plan := range plans {
+			if diff.HasChanges(plan.OldContent, plan.NewContent) {
+				if w := CheckMissingTestCompanionWithFS(plan.Path, plan.OldContent, plan.NewContent); w != "" {
+					testCompanionWarnings = append(testCompanionWarnings, w)
+				}
+			}
+		}
+		if len(testCompanionWarnings) > 0 {
+			combined := strings.Join(testCompanionWarnings, "\n\n")
+			if result.Content != "" {
+				result.Content = result.Content + "\n\n" + combined
+			} else {
+				result.Content = combined
+			}
+		}
+	}
+
 	// Post-write hardcoded credential detection for multi-file edits.
 	if !result.IsError && len(plans) > 0 {
 		var secretWarnings []string
@@ -663,6 +683,20 @@ func (a *Agent) executeFileTool(ctx context.Context, t tool.Tool, tc provider.To
 	// agent can fix them in the same turn instead of wasting a build cycle.
 	if !result.IsError {
 		if warning := checkWriteIntegrity(filePath, oldContent, newContent); warning != "" {
+			if result.Content != "" {
+				result.Content = result.Content + "\n\n" + warning
+			} else {
+				result.Content = warning
+			}
+		}
+	}
+
+	// Post-write missing test companion detection: warn when production Go
+	// code is written without a corresponding _test.go file. Advisory and
+	// non-blocking. Only fires for significant changes (new files with 10+
+	// substantive lines, or edits adding new exported functions).
+	if !result.IsError {
+		if warning := CheckMissingTestCompanionWithFS(filePath, oldContent, newContent); warning != "" {
 			if result.Content != "" {
 				result.Content = result.Content + "\n\n" + warning
 			} else {
