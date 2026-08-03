@@ -387,6 +387,13 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 		warnings = append(warnings, perfWarnings...)
 	}
 
+	// 37. Unreachable / dead code detection - flags statements that can never
+	//     execute: code after return/panic/break, or dead branches (if false).
+	//     LLMs frequently leave unreachable code during refactoring. Delta-aware.
+	if unreachableWarnings := checkUnreachableCode(filePath, oldContent, newContent); len(unreachableWarnings) > 0 {
+		warnings = append(warnings, unreachableWarnings...)
+	}
+
 	if len(warnings) == 0 {
 		return ""
 	}
