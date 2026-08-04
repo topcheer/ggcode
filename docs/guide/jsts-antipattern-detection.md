@@ -11,12 +11,15 @@ ggcode includes a post-write integrity check that detects common JavaScript/Type
 | Loose equality (`==`, `!=`) | High | JS/TS | Type coercion can cause subtle bugs. Use strict equality (`===`, `!==`) instead. |
 | `var` declaration | Medium | JS/TS | Function-scoped with hoisting issues. Use `const` or `let`. |
 | Explicit `any` type | Medium | TS only | Defeats TypeScript type safety. Use `unknown` with type narrowing or define proper types. |
+| `as any` type assertion | Medium | TS only | Bypasses type checking at the call site. Use proper type narrowing or define an interface. |
+| Empty catch block | High | JS/TS | Silently swallows errors. At minimum, log the error or rethrow it. |
+| `@ts-ignore`/`@ts-nocheck`/`@ts-expect-error` | Medium | TS only | Suppresses compiler diagnostics, masking potential type errors. Fix the underlying issue instead. |
 
 ## How It Works
 
 - **Delta-based**: Only flags anti-patterns *introduced* by the current edit (count in new content > count in old content). Pre-existing anti-patterns are not flagged.
 - **Zero LLM cost**: Pure regex-based detection, <1ms per file.
-- **Language-aware**: `any` type check only fires for TypeScript files (`.ts`, `.tsx`, `.mts`, `.cts`).
+- **Language-aware**: `any` type and `@ts-*` suppression checks only fire for TypeScript files (`.ts`, `.tsx`, `.mts`, `.cts`). Empty catch detection runs for all JS/TS files.
 - **Exempt directories**: Skips `node_modules/`, `dist/`, `build/`, vendor dirs, and minified files.
 
 ## Competitor Comparison

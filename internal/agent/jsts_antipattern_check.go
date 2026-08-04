@@ -8,6 +8,9 @@ package agent
 //   - Loose equality (==, !=) instead of strict (===, !==): type coercion bugs
 //   - var declarations instead of const/let: scope and hoisting bugs
 //   - Explicit `any` type annotations: defeats TypeScript type safety
+//   - `as any` type assertions: bypasses TypeScript type checking
+//   - Empty catch blocks: silently swallows errors, hides bugs
+//   - @ts-ignore / @ts-nocheck: suppresses compiler diagnostics, masks type errors
 //
 // Competitor analysis:
 //   - Claude Code: no automatic detection (relies on external linters)
@@ -55,6 +58,23 @@ var jstsAntiPatterns = []jstsAntiPattern{
 		name:        "explicit any type",
 		pattern:     regexp.MustCompile(`:\s*any\b`),
 		description: "Explicit `any` type defeats TypeScript's type safety. Consider using `unknown` with type narrowing, or define a proper interface/type.",
+		tsOnly:      true,
+	},
+	{
+		name:        "as any type assertion",
+		pattern:     regexp.MustCompile(`\bas\s+any\b`),
+		description: "`as any` bypasses TypeScript type checking at the call site. Use proper type narrowing, or define an interface for the expected shape.",
+		tsOnly:      true,
+	},
+	{
+		name:        "empty catch block",
+		pattern:     regexp.MustCompile(`catch\s*(?:\([^)]*\))?\s*\{\s*\}`),
+		description: "Empty catch block silently swallows errors. At minimum, log the error or rethrow it. If intentional, add a comment explaining why.",
+	},
+	{
+		name:        "@ts-ignore/@ts-nocheck/@ts-expect-error suppression",
+		pattern:     regexp.MustCompile(`@ts-(?:ignore|nocheck|expect-error)`),
+		description: "@ts-ignore/@ts-nocheck/@ts-expect-error suppresses TypeScript compiler diagnostics, masking potential type errors. Fix the underlying type issue instead.",
 		tsOnly:      true,
 	},
 }
