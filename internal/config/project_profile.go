@@ -1,7 +1,6 @@
 package config
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -273,45 +272,37 @@ func DetectProjectProfile(workingDir string) *ProjectProfile {
 	return profile
 }
 
-// FormatForSystemPrompt returns a compact string representation suitable
-// for injection into the system prompt's Environment section.
+// FormatForSystemPrompt returns a compact single-line representation for
+// minimal token overhead in the system prompt.
 func (p *ProjectProfile) FormatForSystemPrompt() string {
 	if p == nil {
 		return ""
 	}
-	var lines []string
+	var parts []string
 
 	if len(p.Languages) > 0 {
-		lines = append(lines, fmt.Sprintf("- Languages: %s", strings.Join(p.Languages, ", ")))
+		parts = append(parts, "lang="+strings.Join(p.Languages, ","))
 	}
 	if p.BuildSystem != "" {
-		lines = append(lines, fmt.Sprintf("- Build system: %s", p.BuildSystem))
+		parts = append(parts, "build="+p.BuildSystem)
 	}
 	if p.BuildCommand != "" {
-		lines = append(lines, fmt.Sprintf("- Build command: %s", p.BuildCommand))
+		parts = append(parts, "build-cmd="+p.BuildCommand)
 	}
 	if p.TestCommand != "" {
-		lines = append(lines, fmt.Sprintf("- Test command: %s", p.TestCommand))
+		parts = append(parts, "test="+p.TestCommand)
 	}
 	if p.LintCommand != "" {
-		lines = append(lines, fmt.Sprintf("- Lint command: %s", p.LintCommand))
+		parts = append(parts, "lint="+p.LintCommand)
 	}
 	if len(p.Frameworks) > 0 {
-		lines = append(lines, fmt.Sprintf("- Frameworks: %s", strings.Join(p.Frameworks, ", ")))
-	}
-	if len(p.KeyFiles) > 0 {
-		lines = append(lines, fmt.Sprintf("- Key files: %s", strings.Join(p.KeyFiles, ", ")))
+		parts = append(parts, "fw="+strings.Join(p.Frameworks, ","))
 	}
 
-	if len(lines) == 0 {
+	if len(parts) == 0 {
 		return ""
 	}
-
-	var sb strings.Builder
-	sb.WriteString("## Project Profile (auto-detected)\n")
-	sb.WriteString(strings.Join(lines, "\n"))
-	sb.WriteString("\n")
-	return sb.String()
+	return "Project: " + strings.Join(parts, " | ")
 }
 
 // detectProfileText is a thin wrapper for BuildSystemPrompt integration.

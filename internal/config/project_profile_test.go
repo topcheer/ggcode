@@ -144,8 +144,8 @@ func TestFormatForSystemPrompt(t *testing.T) {
 		KeyFiles:     []string{"go.mod", "Makefile"},
 	}
 	text := profile.FormatForSystemPrompt()
-	if !strings.Contains(text, "Go") {
-		t.Errorf("expected Go in output, got %s", text)
+	if !strings.Contains(text, "lang=Go") {
+		t.Errorf("expected lang=Go in output, got %s", text)
 	}
 	if !strings.Contains(text, "go build -tags goolm") {
 		t.Errorf("expected build command in output, got %s", text)
@@ -168,8 +168,8 @@ func TestDetectProfileText(t *testing.T) {
 	if text == "" {
 		t.Error("expected non-empty profile text")
 	}
-	if !strings.Contains(text, "Project Profile") {
-		t.Errorf("expected 'Project Profile' header, got %s", text)
+	if !strings.Contains(text, "Project:") {
+		t.Errorf("expected 'Project:' prefix, got %s", text)
 	}
 }
 
@@ -186,7 +186,7 @@ func TestBuildSystemPrompt_WithProjectProfile(t *testing.T) {
 	mustWriteFile(t, dir, "go.mod", "module test\n\ngo 1.21\n")
 
 	prompt := BuildSystemPrompt("", dir, "en", []string{"read_file"}, "", nil, nil)
-	if !strings.Contains(prompt, "Project Profile") {
+	if !strings.Contains(prompt, "Project:") {
 		t.Errorf("expected project profile in system prompt, got tail: %s", prompt[len(prompt)-500:])
 	}
 	if !strings.Contains(prompt, "Go") {
