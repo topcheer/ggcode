@@ -51,6 +51,17 @@ func TestExportTrace_ValidJSON(t *testing.T) {
 	if doc.ExportedAt.IsZero() {
 		t.Error("expected exported_at to be set")
 	}
+	// Verify span tree is populated.
+	if doc.SpanTree.Kind != "session" {
+		t.Errorf("expected span_tree kind 'session', got %q", doc.SpanTree.Kind)
+	}
+	if len(doc.SpanTree.Children) != 2 {
+		t.Errorf("expected 2 turn spans, got %d", len(doc.SpanTree.Children))
+	}
+	// Verify waterfall analysis is populated.
+	if len(doc.Waterfall) != 2 {
+		t.Errorf("expected 2 waterfall analyses, got %d", len(doc.Waterfall))
+	}
 }
 
 func TestExportTrace_EmptyEvents(t *testing.T) {
@@ -69,6 +80,19 @@ func TestExportTrace_EmptyEvents(t *testing.T) {
 	}
 	if len(doc.Events) != 0 {
 		t.Errorf("expected 0 events, got %d", len(doc.Events))
+	}
+	// Empty events should still produce a valid (empty) span tree root.
+	if doc.SpanTree.Kind != "session" {
+		t.Errorf("expected span_tree kind 'session' for empty, got %q", doc.SpanTree.Kind)
+	}
+	if len(doc.SpanTree.Children) != 0 {
+		t.Errorf("expected 0 span children for empty, got %d", len(doc.SpanTree.Children))
+	}
+	if len(doc.Waterfall) != 0 {
+		t.Errorf("expected 0 waterfall analyses for empty, got %d", len(doc.Waterfall))
+	}
+	if len(doc.ErrorSpans) != 0 {
+		t.Errorf("expected 0 error spans for empty, got %d", len(doc.ErrorSpans))
 	}
 }
 
@@ -107,6 +131,13 @@ func TestExportTrace_IncludesToolSummaries(t *testing.T) {
 	}
 	if readFileSummary.Calls != 3 {
 		t.Errorf("expected 3 calls for read_file, got %d", readFileSummary.Calls)
+	}
+	// Verify error spans are extracted (1 tool failed with error).
+	if len(doc.ErrorSpans) != 1 {
+		t.Errorf("expected 1 error span, got %d", len(doc.ErrorSpans))
+	}
+	if doc.ErrorSpans[0].Kind != "tool" {
+		t.Errorf("expected error span kind 'tool', got %q", doc.ErrorSpans[0].Kind)
 	}
 	if readFileSummary.Failures != 1 {
 		t.Errorf("expected 1 failure for read_file, got %d", readFileSummary.Failures)
