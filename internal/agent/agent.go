@@ -189,7 +189,6 @@ type Agent struct {
 	ruleStore                  *RuleStore                            // cached rule store for hot-path rule injection (avoids per-tool disk I/O)
 	ruleInjectCount            map[string]int                        // per-rule injection counter for dedup (caps repetitive hints)
 	approvalMemory             *permission.ApprovalMemory            // session-level learned approval patterns (auto-approve after N repeats)
-	behaviorPattern            *behaviorPatternState                 // cross-run behavioral anti-pattern detection (systemic issue awareness)
 	lastRunStats               *RunStats                             // stats from the most recent run (for post-run summary display)
 	systemPromptInjector       func() string                         // returns extra system prompt text to inject (e.g. lanchat peer warnings)
 	baseSystemPrompt           string                                // the fully built static system prompt; used as reset base for dynamic injection
@@ -257,7 +256,6 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		destructiveGuard:     newGitDestructiveState(),
 		shellNativeHint:      newShellNativeHintState(),
 		approvalMemory:       permission.NewApprovalMemory(),
-		behaviorPattern:      newBehaviorPatternState(),
 		fulfillmentGate:      newFulfillmentGateState(),
 		companionGuard:       newCompanionGuardState(),
 		complexityGate:       newComplexityGateState(),
@@ -933,7 +931,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.fulfillmentGate.reset()
 	a.companionGuard.reset()
 	a.complexityGate.reset()
-	a.behaviorPattern.reset()
 	a.argSizeGuardFires = 0
 	a.redundantRead.reset()
 	a.toolSequence.reset()
@@ -963,11 +960,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.maybeReflect(runStats)
 		} else {
 			debug.Log("agent", "skipping reflection/ratchet on cancellation")
-		}
-		// Record completed run stats for cross-run behavioral pattern detection.
-		// Runs even on cancellation since partial work is still observable behavior.
-		if a.behaviorPattern != nil {
-			a.behaviorPattern.recordRun(runStats)
 		}
 		a.mu.RLock()
 		fn := a.onRunResult
@@ -1095,7 +1087,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.maybeInjectAutopilotGoalCollection()
 	a.maybeInjectCorrectionFeedback()
 	a.maybeInjectSentimentFeedback(userPromptForStats)
-	a.maybeInjectBehaviorPattern()
 	a.maybeInjectDynamicSystemPrompt()
 	a.maybeInjectRatchetRules()
 
