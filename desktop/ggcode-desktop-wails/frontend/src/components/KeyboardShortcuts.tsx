@@ -19,6 +19,8 @@ const SHORTCUT_GROUPS: ShortcutGroup[] = [
       { keys: ['⌘', '-'], labelKey: 'kb.zoomOut', icon: ZoomIn },
       { keys: ['⌘', '0'], labelKey: 'kb.zoomReset', icon: ZoomIn },
       { keys: ['⌘', '⇧', 'F'], labelKey: 'kb.searchSessions', icon: FolderSearch },
+      { keys: ['⌘', '⇧', '['], labelKey: 'kb.prevSession', icon: ArrowUp },
+      { keys: ['⌘', '⇧', ']'], labelKey: 'kb.nextSession', icon: ArrowDown },
       { keys: ['⌘', ','], labelKey: 'kb.openSettings', icon: Settings },
       { keys: ['?'], labelKey: 'kb.showShortcuts', icon: Search },
       { keys: ['Esc'], labelKey: 'kb.closeDialog' },

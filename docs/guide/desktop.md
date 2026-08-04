@@ -71,3 +71,21 @@ ggcode Desktop checks for updates automatically and applies them on restart. No 
 ## Keyboard Shortcuts
 
 Common TUI keyboard shortcuts work in the desktop app's chat input. See [Slash Commands](./slash-commands.md) for the full list.
+
+Desktop-specific shortcuts:
+
+| Shortcut | Action |
+|----------|--------|
+| `⌘K` | Command palette |
+| `⌘N` | New session |
+| `⌘⇧[` | Previous session |
+| `⌘⇧]` | Next session |
+| `⌘⇧F` | Focus session search |
+| `⌘B` | Toggle sidebar |
+| `⌘.` | Toggle context panel |
+| `⌘⇧T` | Toggle theme |
+| `⌘⇧S` | Share session (mobile tunnel) |
+| `⌘,` | Settings |
+| `⌘+` / `⌘-` / `⌘0` | Zoom in / out / reset |
+| `⌘1`-`⌘7` | Switch view (chat, files, IM, MCP, settings, debug, LAN chat) |
+| `?` | Show keyboard shortcuts |
