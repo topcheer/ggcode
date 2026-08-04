@@ -3,6 +3,7 @@ import { ArrowLeft, Eye, EyeOff, Plus, Zap, RefreshCw, Check, Server, Radio, Pan
 import * as App from '../../wailsjs/go/main/App'
 import { EventsEmit } from '../../wailsjs/runtime/runtime'
 import { useTranslation, type Locale, LOCALE_LABELS } from '../i18n'
+import { useTheme, type ThemeMode } from '../hooks/useTheme'
 import { ViewMode } from '../types'
 import { parseTokenValue, formatTokenValue, isValidTokenValue } from '../utils/tokenFormat'
 import { HooksSettings } from './HooksSettings'
@@ -28,27 +29,7 @@ interface ImpersonationPreset {
 export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, onOpenAbout, showToast }: Props) {
   const { t, locale, setLocale } = useTranslation()
   const [tab, setTab] = useState<SettingsTab>('provider')
-  const [themeMode, setThemeMode] = useState<'light' | 'dark' | 'auto'>(() => {
-    const saved = localStorage.getItem('ggcode-theme')
-    return saved === 'dark' || saved === 'light' ? saved : 'auto'
-  })
-
-  const applyTheme = (mode: 'light' | 'dark' | 'auto') => {
-    setThemeMode(mode)
-    if (mode === 'light') {
-      document.documentElement.classList.remove('dark')
-      localStorage.setItem('ggcode-theme', 'light')
-    } else if (mode === 'dark') {
-      document.documentElement.classList.add('dark')
-      localStorage.setItem('ggcode-theme', 'dark')
-    } else {
-      localStorage.removeItem('ggcode-theme')
-      const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
-      document.documentElement.classList.toggle('dark', prefersDark)
-    }
-  }
-
-  const isDark = themeMode === 'dark' || (themeMode === 'auto' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches)
+  const { mode: themeMode, setMode: applyTheme, isDark } = useTheme()
   const [vendors, setVendors] = useState<string[]>([])
   const [endpoints, setEndpoints] = useState<{ key: string; displayName: string }[]>([])
   const [models, setModels] = useState<string[]>([])

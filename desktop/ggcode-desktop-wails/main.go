@@ -97,6 +97,13 @@ func main() {
 		os.Exit(0)
 	})
 
+	// Determine system appearance for initial window background.
+	// This prevents a flash of wrong-colored background before React mounts.
+	bgColor := &options.RGBA{R: 13, G: 17, B: 23, A: 255} // dark default (#0D1117)
+	if !isSystemDark() {
+		bgColor = &options.RGBA{R: 255, G: 255, B: 255, A: 255} // light (#FFFFFF)
+	}
+
 	err := wails.Run(&options.App{
 		Title:     "GGCode Desktop",
 		Width:     1280,
@@ -110,7 +117,7 @@ func main() {
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
-		BackgroundColour:         &options.RGBA{R: 13, G: 17, B: 23, A: 255},
+		BackgroundColour:         bgColor,
 		OnStartup:                app.startup,
 		OnShutdown:               app.shutdown,
 		EnableDefaultContextMenu: true,

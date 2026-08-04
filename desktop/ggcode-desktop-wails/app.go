@@ -2043,3 +2043,20 @@ func encodeQRBase64(pngData []byte) string {
 	}
 	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(pngData)
 }
+
+// SystemAppearance returns the OS-level appearance preference.
+// Returns "dark" or "light". Used by the frontend to set initial window
+// background before React mounts, preventing a flash of wrong theme.
+func (a *App) SystemAppearance() string {
+	if isSystemDark() {
+		return "dark"
+	}
+	return "light"
+}
+
+// isSystemDark detects whether the OS is in dark mode.
+// macOS: uses NSUserDefaults via CGO.
+// Linux/Windows: falls back to "dark" (our default UI is dark-themed).
+func isSystemDark() bool {
+	return detectMacDarkMode()
+}

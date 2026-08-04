@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { Plus, Search, Share2, PanelRight, SunMoon, Settings, MessageSquare, PanelLeft, FolderOpen, Radio, Server, Bug, Terminal } from 'lucide-react'
 import { ViewMode, StatusBarData } from '../types'
 import { I18nProvider, useTranslation, detectSystemLocale, type Locale } from '../i18n'
+import { useTheme } from '../hooks/useTheme'
 import { NavRail } from './NavRail'
 import { Sidebar } from './Sidebar'
 import { ChatView } from './ChatView'
@@ -30,15 +31,8 @@ import * as App from '../../wailsjs/go/main/App'
 
 // Inner layout that uses useTranslation (must be inside I18nProvider)
 function LayoutInner() {
-  // --- Theme initialization (auto-detect OS preference, persist user choice) ---
-  useEffect(() => {
-    const saved = localStorage.getItem('ggcode-theme')
-    if (saved === 'dark' || saved === 'light') {
-      document.documentElement.classList.toggle('dark', saved === 'dark')
-    } else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
-      document.documentElement.classList.add('dark')
-    }
-  }, [])
+  // --- Theme: use shared hook with real-time OS theme following ---
+  const { toggle: toggleTheme } = useTheme()
 
   // --- Window focus tracking for desktop notifications ---
   // When the window loses focus, the backend will send OS-level
@@ -405,7 +399,7 @@ function LayoutInner() {
     { nameKey: 'cmd.searchSessions', shortcut: '⌘⇧F', categoryKey: 'cmd.cat.session', icon: Search, action: () => { setView('chat'); setSidebarOpen(true) } },
     { nameKey: 'cmd.shareSession', shortcut: '⌘⇧S', categoryKey: 'cmd.cat.chat', icon: Share2, action: () => setShareDialogOpen(true) },
     { nameKey: 'cmd.toggleContext', shortcut: '⌘.', categoryKey: 'cmd.cat.chat', icon: PanelRight, action: () => setContextPanelOpen(prev => !prev) },
-    { nameKey: 'cmd.toggleTheme', shortcut: '⌘⇧T', categoryKey: 'cmd.cat.settings', icon: SunMoon, action: () => { const isDark = document.documentElement.classList.toggle('dark'); localStorage.setItem('ggcode-theme', isDark ? 'dark' : 'light') } },
+    { nameKey: 'cmd.toggleTheme', shortcut: '⌘⇧T', categoryKey: 'cmd.cat.settings', icon: SunMoon, action: () => toggleTheme() },
     { nameKey: 'cmd.openSettings', shortcut: '⌘,', categoryKey: 'cmd.cat.settings', icon: Settings, action: () => setView('settings') },
     { nameKey: 'cmd.switchModel', categoryKey: 'cmd.cat.settings', icon: Settings, action: () => setView('settings') },
     { nameKey: 'cmd.toggleSidebar', shortcut: '⌘B', categoryKey: 'cmd.cat.navigation', icon: PanelLeft, action: () => setSidebarOpen(prev => !prev) },

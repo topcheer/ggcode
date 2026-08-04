@@ -17,3 +17,10 @@ to this in your browser, and you can call your Go code from devtools.
 ## Building
 
 To build a redistributable, production mode package, use `wails build`.
+
+## Features
+
+- **System Theme Integration**: Automatically follows the OS dark/light mode in real-time. When mode is set to "Auto", the UI reacts instantly to OS appearance changes without requiring a restart. Users can also explicitly choose Light or Dark mode in Settings.
+  - `useTheme` hook (`frontend/src/hooks/useTheme.ts`) provides shared theme state with a `prefers-color-scheme` media query listener.
+  - `SystemAppearance()` Go method detects OS appearance at startup for correct initial window background.
+  - macOS dark mode detection via NSUserDefaults (`appearance_darwin.go`).
