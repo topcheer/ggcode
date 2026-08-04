@@ -3,6 +3,8 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -329,5 +331,106 @@ func TestSkillToolExecutePassesWhenRequiredToolPresent(t *testing.T) {
 	}
 	if result.IsError {
 		t.Fatalf("expected success when required tool present, got: %s", result.Content)
+	}
+}
+
+func TestSkillToolExecuteExport(t *testing.T) {
+	tmp := t.TempDir()
+	skillDir := filepath.Join(tmp, "my-export")
+	os.MkdirAll(skillDir, 0755)
+	skillMD := "---\nname: my-export\ndescription: exportable skill\nversion: 1.0.0\n---\n# my-export\nBody.\n"
+	os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(skillMD), 0644)
+
+	tool := SkillTool{
+		Skills: stubSkillLookup{
+			"my-export": {
+				Name:        "my-export",
+				Description: "exportable skill",
+				Version:     "1.0.0",
+				Enabled:     true,
+				Path:        filepath.Join(skillDir, "SKILL.md"),
+			},
+		},
+	}
+	outPath := filepath.Join(tmp, "exported.ggskill")
+	input, _ := json.Marshal(map[string]string{
+		"skill": "#export:my-export",
+		"args":  outPath,
+	})
+	result, err := tool.Execute(context.Background(), input)
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.Content)
+	}
+	if _, err := os.Stat(outPath); os.IsNotExist(err) {
+		t.Errorf("expected .ggskill file at %s", outPath)
+	}
+	if !strings.Contains(result.Content, "exported successfully") {
+		t.Errorf("expected success message, got: %s", result.Content)
+	}
+}
+
+func TestSkillToolExecuteExportNotFound(t *testing.T) {
+	tool := SkillTool{
+		Skills: stubSkillLookup{},
+	}
+	input := json.RawMessage(`{"skill":"#export:nonexistent"}`)
+	result, _ := tool.Execute(context.Background(), input)
+	if !result.IsError {
+		t.Fatal("expected error for non-existent skill export")
+	}
+	if !strings.Contains(result.Content, "not found") {
+		t.Errorf("expected 'not found' message, got: %s", result.Content)
+	}
+}
+
+func TestSkillToolExecuteImportRoundTrip(t *testing.T) {
+	tmp := t.TempDir()
+	// Create a skill dir and export it
+	skillDir := filepath.Join(tmp, "source-skill")
+	os.MkdirAll(skillDir, 0755)
+	skillMD := "---\nname: source-skill\ndescription: test\nversion: 2.0.0\n---\n# source-skill\nBody.\n"
+	os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(skillMD), 0644)
+
+	exportTool := SkillTool{
+		Skills: stubSkillLookup{
+			"source-skill": {
+				Name:    "source-skill",
+				Version: "2.0.0",
+				Enabled: true,
+				Path:    filepath.Join(skillDir, "SKILL.md"),
+			},
+		},
+	}
+	bundlePath := filepath.Join(tmp, "source-skill.ggskill")
+	exportInput, _ := json.Marshal(map[string]string{
+		"skill": "#export:source-skill",
+		"args":  bundlePath,
+	})
+	exportTool.Execute(context.Background(), exportInput)
+
+	// Now import it to a different dir
+	importDir := filepath.Join(tmp, "imported-skills")
+	importTool := SkillTool{Skills: stubSkillLookup{}}
+	importInput, _ := json.Marshal(map[string]string{
+		"skill": "#import:" + bundlePath,
+		"args":  importDir,
+	})
+	result, err := importTool.Execute(context.Background(), importInput)
+	if err != nil {
+		t.Fatalf("import Execute error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected import error: %s", result.Content)
+	}
+	// Verify the skill was extracted
+	importedSkill := filepath.Join(importDir, "source-skill", "SKILL.md")
+	if _, err := os.Stat(importedSkill); os.IsNotExist(err) {
+		t.Errorf("expected imported SKILL.md at %s", importedSkill)
+	}
+	if !strings.Contains(result.Content, "imported successfully") {
+		t.Errorf("expected success message, got: %s", result.Content)
 	}
 }
