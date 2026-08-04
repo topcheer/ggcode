@@ -245,18 +245,18 @@ func (f *contextFootprintState) check() string {
 		if i >= 3 {
 			break
 		}
-		topTools = append(topTools, fmt.Sprintf("%s (%s)", s.name, formatTokenCount(int64(s.tokens))))
+		topTools = append(topTools, fmt.Sprintf("%s (%s)", s.name, formatFootprintTokens(int64(s.tokens))))
 	}
 
 	debug.Log("context-footprint", "%s category dominates: %s/%s tokens (%.0f%%), top: %s",
-		dominantCat.label(), formatTokenCount(int64(dominantTokens)),
-		formatTokenCount(int64(f.totalTokens)), pct*100, strings.Join(topTools, ", "))
+		dominantCat.label(), formatFootprintTokens(int64(dominantTokens)),
+		formatFootprintTokens(int64(f.totalTokens)), pct*100, strings.Join(topTools, ", "))
 
 	msg := fmt.Sprintf(
 		"[context footprint] %s dominate tool-result context: %s of %s total (%.0f%%). Top: %s. %s",
 		dominantCat.label(),
-		formatTokenCount(int64(dominantTokens)),
-		formatTokenCount(int64(f.totalTokens)),
+		formatFootprintTokens(int64(dominantTokens)),
+		formatFootprintTokens(int64(f.totalTokens)),
 		pct*100,
 		strings.Join(topTools, ", "),
 		dominantCat.hint(dominantTokens),
@@ -287,7 +287,17 @@ func (f *contextFootprintState) summary() string {
 	var parts []string
 	for _, s := range stats {
 		pct := float64(s.tokens) / float64(f.totalTokens) * 100
-		parts = append(parts, fmt.Sprintf("%s: %s (%.0f%%)", s.cat.label(), formatTokenCount(int64(s.tokens)), pct))
+		parts = append(parts, fmt.Sprintf("%s: %s (%.0f%%)", s.cat.label(), formatFootprintTokens(int64(s.tokens)), pct))
 	}
 	return strings.Join(parts, ", ")
+}
+
+func formatFootprintTokens(n int64) string {
+	if n >= 1_000_000 {
+		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
+	}
+	if n >= 1_000 {
+		return fmt.Sprintf("%.1fK", float64(n)/1_000)
+	}
+	return fmt.Sprintf("%d", n)
 }

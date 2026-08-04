@@ -165,7 +165,6 @@ type Agent struct {
 	selfCorrectionGate         *selfCorrectionGateState              // EIR/ECR stability gate: detects net-negative self-correction loops
 	lastGoodCheckpoint         *lastGoodCheckpoint                   // last-known-good file snapshot: actionable revert targets for failed self-correction
 	sessionTimeout             *sessionTimeoutState                  // wall-clock timeout for agent runs (autopilot guardrail)
-	velocityForecast           *velocityForecastState                // iteration velocity forecasting (TAAS-inspired predictive productivity check)
 	diskSpace                  *diskSpaceState                       // low disk space detection (resource exhaustion awareness)
 	envDrift                   *envDriftState                        // env var drift detection (.env.example vs actual env)
 	transientRetryBudget       int                                   // remaining automatic retries for transient tool failures (per run)
@@ -1200,7 +1199,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.complexityGate.reset()
 	a.verifyRegression.reset()
 	a.resetSelfCorrectionGate()
-	a.velocityForecast = newVelocityForecastState()
 
 	a.argSizeGuardFires = 0
 	a.redundantRead.reset()
@@ -2244,16 +2242,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					result.Content = result.Content + "\n\n" + overseerGuidance
 				} else {
 					result.Content = overseerGuidance
-				}
-			}
-
-			// Velocity forecast: track whether this tool call was productive.
-			// Productive tools are the same set defined by the overseer.
-			if a.velocityForecast != nil && !result.IsError {
-				if productiveTools[tc.Name] || (a.overseer != nil && a.overseer.researchMode && researchProductiveTools[tc.Name]) {
-					a.velocityForecast.recordIteration(true)
-				} else {
-					a.velocityForecast.recordIteration(false)
 				}
 			}
 
