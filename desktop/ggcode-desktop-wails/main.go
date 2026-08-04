@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/safego"
@@ -16,7 +17,12 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	"github.com/wailsapp/wails/v2/pkg/options/mac"
 	"github.com/wailsapp/wails/v2/pkg/options/windows"
+	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
+
+// appInstance holds a reference to the running App for tray callbacks.
+// Set in main(), used by exported CGO functions in tray_export_darwin.go.
+var appInstance *App
 
 // logWriter redirects standard library log output to debug.Log so that
 // third-party libraries (pion/turn, pion/webrtc) writing via the standard
@@ -89,6 +95,7 @@ func main() {
 	log.SetFlags(0)
 
 	app := NewApp()
+	appInstance = app
 	shutdownSignals := make(chan os.Signal, 1)
 	signal.Notify(shutdownSignals, os.Interrupt, syscall.SIGTERM)
 	safego.Go("desktop.shutdown-signal", func() {
@@ -117,9 +124,25 @@ func main() {
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
-		BackgroundColour:         bgColor,
-		OnStartup:                app.startup,
-		OnShutdown:               app.shutdown,
+		BackgroundColour: bgColor,
+		OnStartup:        app.startup,
+		OnShutdown:       app.shutdown,
+		OnBeforeClose: func(ctx context.Context) (prevent bool) {
+			// Close-to-tray: hide the window instead of quitting.
+			// The user can re-open via the tray icon or fully quit via tray menu.
+			// Only intercept the first close attempt; a second close within 3s
+			// actually quits (to avoid trapping users who don't want tray mode).
+			now := time.Now()
+			if app.lastCloseAttempt != nil && now.Sub(*app.lastCloseAttempt) < 3*time.Second {
+				// Double close within 3s -> actually quit
+				return false
+			}
+			app.lastCloseAttempt = &now
+			runtime.WindowHide(ctx)
+			// Notify frontend that window was hidden to tray
+			app.enqueueUIEvent("tray:hidden", nil)
+			return true
+		},
 		EnableDefaultContextMenu: true,
 		DragAndDrop: &options.DragAndDrop{
 			EnableFileDrop:     true,

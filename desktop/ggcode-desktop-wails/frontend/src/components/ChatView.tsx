@@ -1012,6 +1012,16 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     return () => { offFileDrop() }
   }, [])
 
+  // === SYSTEM TRAY EVENTS ===
+  // tray:show -> bring window to front (handled by OS already)
+  // tray:new-session -> start a new chat session
+  useEffect(() => {
+    const offTrayNew = EventsOn('tray:new-session', () => {
+      if (onNewSession) onNewSession()
+    })
+    return () => { offTrayNew() }
+  }, [onNewSession])
+
   const currentTabStreaming = activeTab === 'main'
     ? isStreaming
     : (agentPanels.get(activeTab)?.status === 'running')

@@ -55,6 +55,9 @@ type App struct {
 
 	notifications *NotificationManager
 
+	// Close-to-tray support
+	lastCloseAttempt *time.Time
+
 	streamEvents chan uiEvent
 	streamOnce   sync.Once
 	shutdownOnce sync.Once
@@ -84,6 +87,9 @@ func NewApp() *App {
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	a.startEventLoop()
+
+	// Initialize system tray icon with quick actions.
+	a.initSystemTray()
 
 	// Register native file drag-and-drop handler.
 	// When the user drags files from the OS file manager into the window,
@@ -374,6 +380,7 @@ func (a *App) shutdown(_ context.Context) {
 		}
 		a.stopShare()
 		a.stopIMAdapters()
+		a.removeSystemTray()
 		if a.chat != nil {
 			a.chat.Cancel()
 		}
