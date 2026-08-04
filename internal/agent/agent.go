@@ -188,6 +188,7 @@ type Agent struct {
 	mcpEcosystem               *mcpEcosystemState                    // MCP server health, conflict, and capability intelligence
 	mcpRuntime                 tool.MCPRuntime                       // MCP runtime for server snapshots (optional)
 	bgOrphan                   *bgOrphanState                        // orphaned background command detection (unchecked start_command jobs)
+	delegationOrch             *delegationState                      // delegation orchestration intelligence (orphaned delegations, serial anti-pattern, over-delegation)
 	crossFileImpact            *crossFileImpactState                 // pre-completion cross-file impact analysis (removed symbol breakage detection)
 	contextFootprint           *contextFootprintState                // per-tool context budget attribution (which tools consume the most context)
 	redundantRead              *redundantReadState                   // redundant re-read detection (context waste prevention)
@@ -1000,6 +1001,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.monorepoScoper.reset()
 	a.mcpEcosystem.reset()
 	a.resetBgOrphan()
+	if a.delegationOrch != nil {
+		a.delegationOrch.resetForNewTurn()
+	}
 	if a.effortAdapter != nil {
 		a.effortAdapter.reset()
 	}
@@ -1408,6 +1412,35 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.contextManager.Add(provider.Message{
 				Role:    "user",
 				Content: []provider.ContentBlock{{Type: "text", Text: bgOrphanMsg}},
+			})
+			msgs = a.contextManager.Messages()
+		}
+
+		// Delegation orchestration intelligence: detect orphaned delegations
+		// (spawned agents whose results were never consumed), serial delegation
+		// anti-pattern (should batch parallelizable tasks), and over-delegation
+		// (excessive delegation ratio). Zero-LLM-cost deterministic heuristics.
+		if delOrchMsg := a.delegationOrch.maybeWarnOrphanedDelegations(i + 1); delOrchMsg != "" {
+			debug.Log("agent", "Iteration %d: delegation orphan gate injected guidance", i+1)
+			a.contextManager.Add(provider.Message{
+				Role:    "user",
+				Content: []provider.ContentBlock{{Type: "text", Text: delOrchMsg}},
+			})
+			msgs = a.contextManager.Messages()
+		}
+		if serialMsg := a.delegationOrch.maybeWarnSerialDelegation(); serialMsg != "" {
+			debug.Log("agent", "Iteration %d: serial delegation gate injected guidance", i+1)
+			a.contextManager.Add(provider.Message{
+				Role:    "user",
+				Content: []provider.ContentBlock{{Type: "text", Text: serialMsg}},
+			})
+			msgs = a.contextManager.Messages()
+		}
+		if overDelMsg := a.delegationOrch.maybeWarnOverDelegation(); overDelMsg != "" {
+			debug.Log("agent", "Iteration %d: over-delegation gate injected guidance", i+1)
+			a.contextManager.Add(provider.Message{
+				Role:    "user",
+				Content: []provider.ContentBlock{{Type: "text", Text: overDelMsg}},
 			})
 			msgs = a.contextManager.Messages()
 		}
@@ -2178,6 +2211,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Orphaned background command tracking: record start_command jobs
 			// and mark output checks. Detects forgotten background processes.
 			a.recordBgToolCall(tc.Name, tc.Arguments, result.Content, i+1)
+
+			// Delegation orchestration: track spawned agents and result consumption.
+			if a.delegationOrch != nil {
+				if delegationToolNames[tc.Name] {
+					taskSum := extractDelegationTaskSummary(tc.Name, tc.Arguments)
+					a.delegationOrch.recordDelegationCall(tc.ID, tc.Name, taskSum, i+1)
+				} else if delegationResultTools[tc.Name] {
+					a.delegationOrch.recordResultCheck(tc.Name, i+1)
+				}
+				a.delegationOrch.recordToolCallCount()
+			}
 
 			// Record tool errors for reflection/ratchet rule extraction.
 			if result.IsError {

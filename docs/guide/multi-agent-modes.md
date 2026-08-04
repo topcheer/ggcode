@@ -203,3 +203,33 @@ run.go ExecuteTask():
 | Real-time question/coordination with other ggcode instances on LAN | **LAN Chat** (`lanchat` tool) |
 | Fire-and-forget code editing in another workspace | **A2A Remote** (`a2a_remote` tool) |
 | Delegate to external CLI agent (Claude, Codex, Copilot, etc.) | **Delegate** (`delegate` tool) |
+
+---
+
+## Delegation Orchestration Intelligence
+
+ggcode automatically monitors delegation patterns and injects guidance when anti-patterns are detected. These are zero-cost deterministic checks (no LLM overhead) that run in the agent loop.
+
+**Code**: `internal/agent/delegation_orchestration.go`
+
+### Three Orchestration Gates
+
+| Gate | Trigger | Guidance |
+|---|---|---|
+| **Orphaned Delegation** | A spawned agent's results haven't been checked for 3+ iterations | Reminds to use `wait_agent` / `teammate_results` / `task_output` to retrieve results |
+| **Serial Delegation** | 3+ consecutive delegation calls across separate turns | Recommends batching independent tasks into parallel `spawn_agent` calls (single response) for 3x latency reduction |
+| **Over-Delegation** | Delegation ratio exceeds 60% of all tool calls (min 10 calls) | Advises doing simpler tasks directly instead of over-delegating |
+
+### How It Works
+
+1. Every `spawn_agent`, `delegate`, `teammate_spawn`, `swarm_task_create`, `a2a_remote`, `a2a_send_task`, and `use_namedagent` call is tracked as a delegation
+2. Every `wait_agent`, `list_agents`, `task_output`, `teammate_results`, `swarm_task_list`, `a2a_get_task`, and `a2a_list_tasks` call resets the orphan timer
+3. The serial delegation counter resets when a non-delegation tool is used
+4. State resets at the start of each user turn
+
+### Inspiration
+
+- **LangGraph**: State graph orchestration patterns for multi-agent workflows
+- **CrewAI**: Role-based task assignment and sequential/process pipelines
+- **OpenAI Swarm**: Lightweight agent handoff patterns
+- **LLMCompiler** (Kim et al., ICML 2024): Parallel DAG execution of independent tool calls (3.7x speedup)
