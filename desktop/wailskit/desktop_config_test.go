@@ -76,6 +76,37 @@ func TestDesktopConfig_SetLastSession(t *testing.T) {
 	}
 }
 
+func TestDesktopConfig_SetWindowState(t *testing.T) {
+	withTestHome(t)
+	dc := &DesktopConfig{WindowW: 100, WindowH: 100}
+	dc.SetWindowState(1920, 1080, 250, 100, true)
+	if dc.WindowW != 1920 || dc.WindowH != 1080 {
+		t.Fatalf("size mismatch: %dx%d", dc.WindowW, dc.WindowH)
+	}
+	if dc.WindowX != 250 || dc.WindowY != 100 {
+		t.Fatalf("position mismatch: %d,%d", dc.WindowX, dc.WindowY)
+	}
+	if !dc.WindowMax {
+		t.Fatal("expected maximized=true")
+	}
+}
+
+func TestDesktopConfig_WindowStateRoundTrip(t *testing.T) {
+	withTestHome(t)
+	dc := &DesktopConfig{}
+	dc.SetWindowState(1600, 900, 300, 200, true)
+	if err := dc.Save(); err != nil {
+		t.Fatal(err)
+	}
+	loaded := LoadDesktopConfig()
+	if loaded.WindowX != 300 || loaded.WindowY != 200 {
+		t.Fatalf("position round-trip mismatch: %d,%d", loaded.WindowX, loaded.WindowY)
+	}
+	if !loaded.WindowMax {
+		t.Fatal("maximized flag lost in round-trip")
+	}
+}
+
 func TestDesktopConfig_CreatesDirectoryIfMissing(t *testing.T) {
 	withTestHome(t)
 

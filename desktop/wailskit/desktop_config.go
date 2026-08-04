@@ -17,6 +17,9 @@ type DesktopConfig struct {
 	WorkDir     string `json:"work_dir,omitempty"`
 	WindowW     int    `json:"window_width,omitempty"`
 	WindowH     int    `json:"window_height,omitempty"`
+	WindowX     int    `json:"window_x,omitempty"`
+	WindowY     int    `json:"window_y,omitempty"`
+	WindowMax   bool   `json:"window_maximized,omitempty"`
 	LastSession string `json:"last_session_id,omitempty"`
 	Language    string `json:"language,omitempty"`
 }
@@ -60,6 +63,17 @@ func (dc *DesktopConfig) SetWorkDir(dir string) {
 	dc.mu.Lock()
 	defer dc.mu.Unlock()
 	dc.WorkDir = dir
+}
+
+// SetWindowState saves the window position and size.
+func (dc *DesktopConfig) SetWindowState(w, h, x, y int, maximized bool) {
+	dc.mu.Lock()
+	defer dc.mu.Unlock()
+	dc.WindowW = w
+	dc.WindowH = h
+	dc.WindowX = x
+	dc.WindowY = y
+	dc.WindowMax = maximized
 }
 
 // SetLastSession saves the last active session ID.

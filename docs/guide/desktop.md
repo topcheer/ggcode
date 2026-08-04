@@ -36,6 +36,7 @@ Download from GitHub Releases:
 - **Chat interface** — visual chat with streaming responses, tool call visualization, and reasoning display
 - **Session management** — create, switch, filter by workspace, and manage coding sessions
 - **Multiple workspaces** — manage several projects side by side
+- **Window state persistence** — window position, size, and maximized state are saved on exit and restored on next launch
 
 ### Settings & Configuration
 - **Config editor** — edit vendor, endpoint, model, API key, and permission settings through a structured UI

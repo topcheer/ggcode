@@ -86,6 +86,18 @@ func (a *App) startup(ctx context.Context) {
 	// Load shared desktop config (same file as Fyne desktop)
 	a.dc = wailskit.LoadDesktopConfig()
 
+	// Restore window position and size from the saved desktop config.
+	// This makes the window reopen at the same location/size as last session.
+	if a.dc.WindowW > 0 && a.dc.WindowH > 0 {
+		runtime.WindowSetSize(ctx, a.dc.WindowW, a.dc.WindowH)
+	}
+	if a.dc.WindowX != 0 || a.dc.WindowY != 0 {
+		runtime.WindowSetPosition(ctx, a.dc.WindowX, a.dc.WindowY)
+	}
+	if a.dc.WindowMax {
+		runtime.WindowMaximise(ctx)
+	}
+
 	// Restore last workspace — but verify it still exists.
 	// Desktop uses a cached workspace path; if the directory was moved or
 	// deleted since last run, we must not silently continue with a stale path.
@@ -307,6 +319,14 @@ func (a *App) switchWorkspace(dir string) error {
 // shutdown is called when the app is closing.
 func (a *App) shutdown(_ context.Context) {
 	a.shutdownOnce.Do(func() {
+		// Persist window position/size so it can be restored on next launch.
+		if a.ctx != nil {
+			w, h := runtime.WindowGetSize(a.ctx)
+			x, y := runtime.WindowGetPosition(a.ctx)
+			maximized := runtime.WindowIsMaximised(a.ctx)
+			a.dc.SetWindowState(w, h, x, y, maximized)
+			_ = a.dc.Save()
+		}
 		a.stopShare()
 		a.stopIMAdapters()
 		if a.chat != nil {
