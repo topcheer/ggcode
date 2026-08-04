@@ -122,6 +122,11 @@ func (c *InteractiveRuntimeCore) SetConfigAgent(ag *agent.Agent) {
 	if ag != nil {
 		SetSamplingProvider(ag.Provider())
 	}
+	// Wire MCP runtime so the agent can access server snapshots for
+	// ecosystem intelligence (health, conflicts, capabilities).
+	if c.MCPManager != nil {
+		ag.SetMCPRuntime(c.MCPManager)
+	}
 }
 
 // SetConfigUINotify sets an optional callback for UI refresh after provider changes.

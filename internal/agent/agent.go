@@ -185,6 +185,8 @@ type Agent struct {
 	destructiveGuard           *gitDestructiveState                  // destructive git operation detection (reset --hard, force push, etc.)
 	shellNativeHint            *shellNativeHintState                 // suggests native tools when agent uses shell for equivalent operations
 	monorepoScoper             *monorepoScoperState                  // monorepo package scope sprawl detection
+	mcpEcosystem               *mcpEcosystemState                    // MCP server health, conflict, and capability intelligence
+	mcpRuntime                 tool.MCPRuntime                       // MCP runtime for server snapshots (optional)
 	bgOrphan                   *bgOrphanState                        // orphaned background command detection (unchecked start_command jobs)
 	crossFileImpact            *crossFileImpactState                 // pre-completion cross-file impact analysis (removed symbol breakage detection)
 	contextFootprint           *contextFootprintState                // per-tool context budget attribution (which tools consume the most context)
@@ -261,6 +263,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		destructiveGuard:     newGitDestructiveState(),
 		shellNativeHint:      newShellNativeHintState(),
 		monorepoScoper:       newMonorepoScoperState(),
+		mcpEcosystem:         newMCPEcosystemState(),
 		approvalMemory:       permission.NewApprovalMemory(),
 		behaviorPattern:      newBehaviorPatternState(),
 		perfBaseline:         newPerfBaselineState(),
@@ -714,6 +717,15 @@ func (a *Agent) SetCheckpointManager(m *checkpoint.Manager) {
 	a.checkpoints = m
 }
 
+// SetMCPRuntime wires the MCP runtime for ecosystem intelligence.
+// This enables the agent to detect MCP server health issues, tool name
+// conflicts, and capability gaps at session start.
+func (a *Agent) SetMCPRuntime(rt tool.MCPRuntime) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.mcpRuntime = rt
+}
+
 // CheckpointManager returns the checkpoint manager.
 func (a *Agent) CheckpointManager() *checkpoint.Manager {
 	a.mu.Lock()
@@ -986,6 +998,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.toolSequence.reset()
 	a.shellNativeHint.reset()
 	a.monorepoScoper.reset()
+	a.mcpEcosystem.reset()
 	a.resetBgOrphan()
 	if a.effortAdapter != nil {
 		a.effortAdapter.reset()
@@ -1407,6 +1420,16 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.contextManager.Add(provider.Message{
 				Role:    "user",
 				Content: []provider.ContentBlock{{Type: "text", Text: monorepoMsg}},
+			})
+			msgs = a.contextManager.Messages()
+		}
+
+		// MCP ecosystem intelligence: one-time check at session start for
+		// failed servers, tool name conflicts, empty servers, and auth issues.
+		if mcpMsg := a.maybeWarnMCP(i + 1); mcpMsg != "" {
+			a.contextManager.Add(provider.Message{
+				Role:    "user",
+				Content: []provider.ContentBlock{{Type: "text", Text: mcpMsg}},
 			})
 			msgs = a.contextManager.Messages()
 		}
