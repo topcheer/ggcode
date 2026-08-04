@@ -637,6 +637,8 @@ const en = {
   'common.minimizeWindow': 'Fenster minimieren',
   'common.maximizeWindow': 'Fenster maximieren',
   'common.restoreWindow': 'Fenster wiederherstellen',
+  'common.pinWindow': 'Fenster anheften',
+  'common.unpinWindow': 'Fenster lösen',
 
   // SettingsPage option labels
   'settings.chooseVendor': 'Anbieter wählen...',

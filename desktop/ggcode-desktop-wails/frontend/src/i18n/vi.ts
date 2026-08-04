@@ -637,6 +637,8 @@ const en = {
   'common.minimizeWindow': 'Thu nhỏ cửa sổ',
   'common.maximizeWindow': 'Phóng to cửa sổ',
   'common.restoreWindow': 'Khôi phục cửa sổ',
+  'common.pinWindow': 'Ghim cửa sổ lên trên',
+  'common.unpinWindow': 'Bỏ ghim cửa sổ',
 
   // SettingsPage option labels
   'settings.chooseVendor': 'Chọn nhà cung cấp...',

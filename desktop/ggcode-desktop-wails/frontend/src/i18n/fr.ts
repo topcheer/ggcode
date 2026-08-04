@@ -637,6 +637,8 @@ const fr = {
   'common.minimizeWindow': 'Réduire la fenêtre',
   'common.maximizeWindow': 'Agrandir la fenêtre',
   'common.restoreWindow': 'Restaurer la fenêtre',
+  'common.pinWindow': 'Épingler la fenêtre',
+  'common.unpinWindow': 'Désépingler la fenêtre',
 
   // SettingsPage option labels
   'settings.chooseVendor': 'Choisir un fournisseur...',

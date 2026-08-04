@@ -637,6 +637,8 @@ const id = {
   'common.minimizeWindow': 'Minimalkan jendela',
   'common.maximizeWindow': 'Maksimalkan jendela',
   'common.restoreWindow': 'Pulihkan jendela',
+  'common.pinWindow': 'Sematkan jendela di atas',
+  'common.unpinWindow': 'Lepas sematan',
 
   // SettingsPage option labels
   'settings.chooseVendor': 'Pilih vendor...',

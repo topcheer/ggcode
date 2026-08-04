@@ -102,6 +102,10 @@ export function GetEndpoints(arg1) {
   return window['go']['main']['App']['GetEndpoints'](arg1);
 }
 
+export function GetFontZoom() {
+  return window['go']['main']['App']['GetFontZoom']();
+}
+
 export function GetHooks() {
   return window['go']['main']['App']['GetHooks']();
 }
@@ -220,6 +224,10 @@ export function LanChatSetApprovalPolicy(arg1, arg2) {
 
 export function LanChatSetNick(arg1) {
   return window['go']['main']['App']['LanChatSetNick'](arg1);
+}
+
+export function IsAlwaysOnTop() {
+  return window['go']['main']['App']['IsAlwaysOnTop']();
 }
 
 export function ListCronJobs() {
@@ -354,6 +362,10 @@ export function SetEndpointLimits(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['SetEndpointLimits'](arg1, arg2, arg3, arg4);
 }
 
+export function SetFontZoom(arg1) {
+  return window['go']['main']['App']['SetFontZoom'](arg1);
+}
+
 export function SetIMAdapterEnabled(arg1, arg2) {
   return window['go']['main']['App']['SetIMAdapterEnabled'](arg1, arg2);
 }
@@ -408,6 +420,10 @@ export function TestIMConnection(arg1) {
 
 export function ToggleLogStream(arg1) {
   return window['go']['main']['App']['ToggleLogStream'](arg1);
+}
+
+export function ToggleAlwaysOnTop() {
+  return window['go']['main']['App']['ToggleAlwaysOnTop']();
 }
 
 export function UnbindIMAdapter(arg1) {

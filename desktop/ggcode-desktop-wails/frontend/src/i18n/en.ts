@@ -77,6 +77,9 @@ const en = {
   'status.thinking': 'Thinking...',
   'status.streaming': 'Streaming',
   'status.offline': 'Offline',
+  'status.zoomIn': 'Zoom In (Cmd+)',
+  'status.zoomOut': 'Zoom Out (Cmd-)',
+  'status.zoomReset': 'Reset Zoom (Cmd+0)',
 
   // ChatView
   'chat.placeholder': 'Message ggcode...',
@@ -118,6 +121,9 @@ const en = {
   'cmd.goLanChat': 'Go to LAN Chat',
   'cmd.goDebug': 'Go to Debug Console',
   'cmd.showShortcuts': 'Show Keyboard Shortcuts',
+  'cmd.zoomIn': 'Zoom In',
+  'cmd.zoomOut': 'Zoom Out',
+  'cmd.zoomReset': 'Reset Zoom',
   'cmd.hintNavigate': 'navigate',
   'cmd.hintSelect': 'select',
   'cmd.hintClose': 'esc close',
@@ -156,6 +162,9 @@ const en = {
   'kb.goSettings': 'Go to Settings',
   'kb.goDebug': 'Go to Debug Console',
   'kb.goLanChat': 'Go to LAN Chat',
+  'kb.zoomIn': 'Zoom In',
+  'kb.zoomOut': 'Zoom Out',
+  'kb.zoomReset': 'Reset Zoom',
 
   // ContextPanel
   'context.title': 'Context',
@@ -637,6 +646,8 @@ const en = {
   'common.minimizeWindow': 'Minimize window',
   'common.maximizeWindow': 'Maximize window',
   'common.restoreWindow': 'Restore window',
+  'common.pinWindow': 'Pin window on top',
+  'common.unpinWindow': 'Unpin window',
 
   // SettingsPage option labels
   'settings.chooseVendor': 'Choose vendor...',

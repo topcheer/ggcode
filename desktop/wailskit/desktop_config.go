@@ -23,6 +23,12 @@ type DesktopConfig struct {
 	LastSession string `json:"last_session_id,omitempty"`
 	Language    string `json:"language,omitempty"`
 
+	// Font zoom level (0.7 to 1.8). Default 0 means 100%.
+	FontZoom float64 `json:"font_zoom,omitempty"`
+
+	// AlwaysOnTop keeps the window floating above other windows.
+	AlwaysOnTop bool `json:"always_on_top,omitempty"`
+
 	// Desktop notification preferences
 	// NotificationsSet tracks whether the user has explicitly configured notifications.
 	// When false (default), notifications are treated as enabled.
@@ -107,4 +113,36 @@ func (dc *DesktopConfig) SetNotificationsEnabled(enabled bool) {
 	defer dc.mu.Unlock()
 	dc.NotificationsEnabled = enabled
 	dc.NotificationsSet = true
+}
+
+// GetFontZoom returns the persisted font zoom level.
+// Returns 1.0 (100%) when not set.
+func (dc *DesktopConfig) GetFontZoom() float64 {
+	dc.mu.Lock()
+	defer dc.mu.Unlock()
+	if dc.FontZoom <= 0 {
+		return 1.0
+	}
+	return dc.FontZoom
+}
+
+// SetFontZoom saves the font zoom level.
+func (dc *DesktopConfig) SetFontZoom(zoom float64) {
+	dc.mu.Lock()
+	defer dc.mu.Unlock()
+	dc.FontZoom = zoom
+}
+
+// IsAlwaysOnTop returns whether the window should float above others.
+func (dc *DesktopConfig) IsAlwaysOnTop() bool {
+	dc.mu.Lock()
+	defer dc.mu.Unlock()
+	return dc.AlwaysOnTop
+}
+
+// SetAlwaysOnTop persists the always-on-top preference.
+func (dc *DesktopConfig) SetAlwaysOnTop(on bool) {
+	dc.mu.Lock()
+	defer dc.mu.Unlock()
+	dc.AlwaysOnTop = on
 }

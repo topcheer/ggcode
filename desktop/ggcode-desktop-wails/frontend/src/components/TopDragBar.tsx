@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { WindowMinimise, WindowToggleMaximise, WindowIsMaximised, Quit } from '../../wailsjs/runtime/runtime'
+import { ToggleAlwaysOnTop, IsAlwaysOnTop } from '../../wailsjs/go/main/App'
 import { useTranslation } from '../i18n'
 
 // TopDragBar — fully custom-drawn title bar for ALL platforms.
@@ -18,10 +19,17 @@ export function TopDragBar({ title = 'GGCode Desktop', subtitle }: TopDragBarPro
   const { t } = useTranslation()
   const [isMaximized, setIsMaximized] = useState(false)
   const [lightsHover, setLightsHover] = useState(false)
+  const [isPinned, setIsPinned] = useState(false)
 
   useEffect(() => {
     WindowIsMaximised().then((maximized: boolean) => setIsMaximized(maximized))
+    IsAlwaysOnTop().then((pinned: boolean) => setIsPinned(pinned))
   }, [])
+
+  const handleTogglePin = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    ToggleAlwaysOnTop().then((pinned: boolean) => setIsPinned(pinned))
+  }
 
   const handleMinimize = (e: React.MouseEvent) => {
     e.stopPropagation()
@@ -183,8 +191,36 @@ export function TopDragBar({ title = 'GGCode Desktop', subtitle }: TopDragBarPro
         </div>
       </div>
 
-      {/* Right: Windows/Linux buttons only */}
-      {winButtons}
+      {/* Right: pin button (all platforms) + Windows/Linux buttons */}
+      <div style={{ display: 'flex', alignItems: 'center', height: '100%' }}>
+        <button
+          onClick={handleTogglePin}
+          title={isPinned ? t('common.unpinWindow') : t('common.pinWindow')}
+          aria-label={isPinned ? t('common.unpinWindow') : t('common.pinWindow')}
+          style={{
+            width: 32,
+            height: '100%',
+            border: 'none',
+            background: 'transparent',
+            color: isPinned ? 'var(--color-primary, #3b82f6)' : 'var(--text-tertiary, #888)',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: 14,
+            transition: 'color 0.12s',
+          }}
+          onMouseEnter={(e) => { if (!isPinned) e.currentTarget.style.color = 'var(--text-primary, #ccc)' }}
+          onMouseLeave={(e) => { if (!isPinned) e.currentTarget.style.color = 'var(--text-tertiary, #888)' }}
+        >
+          {isPinned ? (
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M9.828 0.172a.586.586 0 0 1 .828 0l5.172 5.172a.586.586 0 0 1-.828.828L14 5.172l-3 3 1.5 4.5-2 2-3-4.5L3 14.5 1.5 13l4.328-4.5-4.5-3 2-2L8 6l3-3-1.172-1.172a.586.586 0 0 1 0-.828z"/></svg>
+          ) : (
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M9.828 0.172a.586.586 0 0 1 .828 0l5.172 5.172a.586.586 0 0 1-.828.828L14 5.172l-3 3 1.5 4.5-2 2-3-4.5L3 14.5 1.5 13l4.328-4.5-4.5-3 2-2L8 6l3-3-1.172-1.172a.586.586 0 0 1 0-.828z"/></svg>
+          )}
+        </button>
+        {winButtons}
+      </div>
     </div>
   )
 }

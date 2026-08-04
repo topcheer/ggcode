@@ -161,3 +161,37 @@ func TestDesktopConfig_NotificationsRoundTrip(t *testing.T) {
 		t.Fatal("expected notifications disabled after round-trip")
 	}
 }
+
+func TestDesktopConfig_AlwaysOnTopDefault(t *testing.T) {
+	withTestHome(t)
+	dc := LoadDesktopConfig()
+	if dc.IsAlwaysOnTop() {
+		t.Fatal("expected always-on-top to default to false")
+	}
+}
+
+func TestDesktopConfig_SetAlwaysOnTop(t *testing.T) {
+	withTestHome(t)
+	dc := &DesktopConfig{WindowW: 100, WindowH: 100}
+	dc.SetAlwaysOnTop(true)
+	if !dc.IsAlwaysOnTop() {
+		t.Fatal("expected always-on-top true after SetAlwaysOnTop(true)")
+	}
+	dc.SetAlwaysOnTop(false)
+	if dc.IsAlwaysOnTop() {
+		t.Fatal("expected always-on-top false after SetAlwaysOnTop(false)")
+	}
+}
+
+func TestDesktopConfig_AlwaysOnTopRoundTrip(t *testing.T) {
+	withTestHome(t)
+	dc := &DesktopConfig{WindowW: 100, WindowH: 100}
+	dc.SetAlwaysOnTop(true)
+	if err := dc.Save(); err != nil {
+		t.Fatal(err)
+	}
+	loaded := LoadDesktopConfig()
+	if !loaded.IsAlwaysOnTop() {
+		t.Fatal("expected always-on-top true after round-trip")
+	}
+}

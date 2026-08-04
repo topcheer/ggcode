@@ -639,6 +639,8 @@ const zh: Record<TranslationKey, string> = {
   'common.minimizeWindow': '最小化窗口',
   'common.maximizeWindow': '最大化窗口',
   'common.restoreWindow': '恢复窗口',
+  'common.pinWindow': '窗口置顶',
+  'common.unpinWindow': '取消置顶',
 
   // SettingsPage option labels
   'settings.chooseVendor': '选择供应商...',

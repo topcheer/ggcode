@@ -637,6 +637,8 @@ const en = {
   'common.minimizeWindow': 'ウィンドウを最小化',
   'common.maximizeWindow': 'ウィンドウを最大化',
   'common.restoreWindow': 'ウィンドウを復元',
+  'common.pinWindow': 'ウィンドウを最前面に固定',
+  'common.unpinWindow': '最前面固定を解除',
 
   // SettingsPage option labels
   'settings.chooseVendor': 'ベンダーを選択...',

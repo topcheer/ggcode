@@ -123,6 +123,11 @@ func (a *App) startup(ctx context.Context) {
 		runtime.WindowMaximise(ctx)
 	}
 
+	// Restore always-on-top state from saved config.
+	if a.dc.IsAlwaysOnTop() {
+		runtime.WindowSetAlwaysOnTop(ctx, true)
+	}
+
 	// Restore last workspace — but verify it still exists.
 	// Desktop uses a cached workspace path; if the directory was moved or
 	// deleted since last run, we must not silently continue with a stale path.
@@ -801,6 +806,29 @@ func (a *App) GetUnreadNotifications() int {
 	return a.notifications.GetUnread()
 }
 
+// GetFontZoom returns the persisted font zoom level (default 1.0 = 100%).
+func (a *App) GetFontZoom() float64 {
+	if a.dc != nil {
+		return a.dc.GetFontZoom()
+	}
+	return 1.0
+}
+
+// SetFontZoom persists the font zoom level and returns the clamped value.
+func (a *App) SetFontZoom(zoom float64) float64 {
+	if zoom < 0.7 {
+		zoom = 0.7
+	}
+	if zoom > 1.8 {
+		zoom = 1.8
+	}
+	if a.dc != nil {
+		a.dc.SetFontZoom(zoom)
+		_ = a.dc.Save()
+	}
+	return zoom
+}
+
 // SwitchModel changes the active model at runtime.
 func (a *App) SwitchModel(model string) error {
 	if a.chat != nil {
@@ -1248,6 +1276,28 @@ func (a *App) CheckForUpdates() (map[string]interface{}, error) {
 // GetPlatform returns the current platform.
 func (a *App) GetPlatform() string {
 	return runtime.Environment(a.ctx).Platform
+}
+
+// ToggleAlwaysOnTop toggles the window's always-on-top state.
+// When enabled, the window floats above all other application windows.
+func (a *App) ToggleAlwaysOnTop() (bool, error) {
+	if a.ctx == nil || a.dc == nil {
+		return false, fmt.Errorf("app not initialized")
+	}
+	newState := !a.dc.IsAlwaysOnTop()
+	runtime.WindowSetAlwaysOnTop(a.ctx, newState)
+	a.dc.SetAlwaysOnTop(newState)
+	_ = a.dc.Save()
+	debug.Log("desktop", "always-on-top toggled to %v", newState)
+	return newState, nil
+}
+
+// IsAlwaysOnTop returns the current always-on-top state.
+func (a *App) IsAlwaysOnTop() bool {
+	if a.dc == nil {
+		return false
+	}
+	return a.dc.IsAlwaysOnTop()
 }
 
 // ListFiles returns files in the given directory (1 level deep).

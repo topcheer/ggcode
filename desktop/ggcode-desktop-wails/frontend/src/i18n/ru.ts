@@ -637,6 +637,8 @@ const en = {
   'common.minimizeWindow': 'Свернуть окно',
   'common.maximizeWindow': 'Развернуть окно',
   'common.restoreWindow': 'Восстановить окно',
+  'common.pinWindow': 'Закрепить окно поверх',
+  'common.unpinWindow': 'Открепить окно',
 
   // SettingsPage option labels
   'settings.chooseVendor': 'Выберите поставщика...',

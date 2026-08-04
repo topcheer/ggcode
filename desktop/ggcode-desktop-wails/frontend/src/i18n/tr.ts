@@ -637,6 +637,8 @@ const tr = {
   'common.minimizeWindow': 'Pencereyi küçült',
   'common.maximizeWindow': 'Pencereyi büyült',
   'common.restoreWindow': 'Pencereyi geri yükle',
+  'common.pinWindow': 'Pencereyi üste sabitle',
+  'common.unpinWindow': 'Sabitlemeyi kaldır',
 
   // SettingsPage option labels
   'settings.chooseVendor': 'Sağlayıcı seç...',

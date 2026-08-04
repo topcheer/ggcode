@@ -637,6 +637,8 @@ const en = {
   'common.minimizeWindow': '창 최소화',
   'common.maximizeWindow': '창 최대화',
   'common.restoreWindow': '창 복원',
+  'common.pinWindow': '창을 맨 위에 고정',
+  'common.unpinWindow': '고정 해제',
 
   // SettingsPage option labels
   'settings.chooseVendor': '제공자 선택...',

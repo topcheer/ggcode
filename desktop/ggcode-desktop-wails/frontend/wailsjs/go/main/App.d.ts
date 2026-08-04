@@ -54,6 +54,8 @@ export function GetCurrentSessionID():Promise<string>;
 
 export function GetEndpointDetails(arg1:string,arg2:string):Promise<wailskit.EndpointDetails>;
 
+export function GetFontZoom():Promise<number>;
+
 export function GetEndpoints(arg1:string):Promise<Array<wailskit.EndpointInfo>>;
 
 export function GetHooks():Promise<hooks.HookConfig>;
@@ -88,6 +90,8 @@ export function GetVersion():Promise<string>;
 
 export function GetWorkDir():Promise<string>;
 
+export function SetFontZoom(arg1:number):Promise<number>;
+
 export function InitWorkspace(arg1:string):Promise<void>;
 
 export function InstallLSPServer(arg1:string,arg2:string):Promise<wailskit.LSPInstallResult>;
@@ -115,6 +119,8 @@ export function LanChatSend(arg1:string,arg2:string,arg3:string,arg4:boolean):Pr
 export function LanChatSetApprovalPolicy(arg1:string,arg2:string):Promise<void>;
 
 export function LanChatSetNick(arg1:string):Promise<void>;
+
+export function IsAlwaysOnTop():Promise<boolean>;
 
 export function ListCronJobs():Promise<Array<wailskit.CronJobInfo>>;
 
@@ -209,6 +215,8 @@ export function TestHookMatch(arg1:string,arg2:string,arg3:string,arg4:string):P
 export function TestIMConnection(arg1:string):Promise<void>;
 
 export function ToggleLogStream(arg1:boolean):Promise<void>;
+
+export function ToggleAlwaysOnTop():Promise<boolean>;
 
 export function UnbindIMAdapter(arg1:string):Promise<void>;
 
