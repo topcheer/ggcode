@@ -84,6 +84,22 @@ func (m *Manager) RecordUsage(name string) {
 	_ = RecordUsage(name)
 }
 
+// SkillNames returns the names of all enabled, model-invocable skills.
+// Used by the skill tool for fuzzy name matching.
+func (m *Manager) SkillNames() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	cmds := m.combinedCommands()
+	names := make([]string, 0, len(cmds))
+	for name, cmd := range cmds {
+		if cmd == nil || !cmd.Enabled || cmd.DisableModelInvocation {
+			continue
+		}
+		names = append(names, name)
+	}
+	return names
+}
+
 func usageScoreForCommand(cmd *Command, usage map[string]skillUsageEntry, now time.Time) float64 {
 	if cmd == nil {
 		return 0

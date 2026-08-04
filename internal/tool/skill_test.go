@@ -228,3 +228,56 @@ func TestSkillToolDescriptionRejectsBuiltInCommands(t *testing.T) {
 		t.Fatalf("skill schema should reject built-in CLI/slash commands, got %s", params)
 	}
 }
+
+// stubNameLister implements SkillNameLister for testing fuzzy suggestions.
+type stubNameLister []string
+
+func (s stubNameLister) SkillNames() []string { return []string(s) }
+
+func TestSkillToolNotFoundWithSuggestions(t *testing.T) {
+	tool := SkillTool{
+		Skills: stubSkillLookup{
+			"browser-automation": {Name: "browser-automation", Enabled: true},
+			"debug":              {Name: "debug", Enabled: true},
+		},
+		NameLister: stubNameLister{"browser-automation", "debug"},
+	}
+	input := json.RawMessage(`{"skill":"browser_automation"}`)
+
+	result, err := tool.Execute(context.Background(), input)
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected error result for unknown skill")
+	}
+	if !strings.Contains(result.Content, "browser-automation") {
+		t.Fatalf("expected suggestion 'browser-automation' in error, got: %s", result.Content)
+	}
+	if !strings.Contains(result.Content, "Did you mean") {
+		t.Fatalf("expected 'Did you mean' in error, got: %s", result.Content)
+	}
+}
+
+func TestSkillToolNotFoundWithoutLister(t *testing.T) {
+	tool := SkillTool{
+		Skills: stubSkillLookup{
+			"debug": {Name: "debug", Enabled: true},
+		},
+	}
+	input := json.RawMessage(`{"skill":"nonexistent"}`)
+
+	result, err := tool.Execute(context.Background(), input)
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected error result for unknown skill")
+	}
+	if !strings.Contains(result.Content, "not found") {
+		t.Fatalf("expected 'not found' in error, got: %s", result.Content)
+	}
+	if strings.Contains(result.Content, "Did you mean") {
+		t.Fatalf("should not suggest without NameLister, got: %s", result.Content)
+	}
+}

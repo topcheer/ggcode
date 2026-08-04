@@ -180,6 +180,7 @@ func NewSkillTool(
 ) tool.SkillTool {
 	return tool.SkillTool{
 		Skills:              commandMgr,
+		NameLister:          commandMgr,
 		Runtime:             mcpMgr,
 		Provider:            prov,
 		Tools:               registry,

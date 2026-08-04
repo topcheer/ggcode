@@ -63,9 +63,22 @@ trigger: "error message | test failure | stack trace"
 
 Project-specific skills override global skills with the same name.
 
+## Fuzzy Name Matching
+
+When a skill name is slightly off -- different casing, hyphens vs underscores,
+or a partial name -- the `skill` tool suggests the closest matches instead of
+failing with a bare "not found" error. For example:
+
+```
+skill(skill="browser_automation")  → "Did you mean: browser-automation?"
+skill(skill="verify")               → "Did you mean: verify, verify-lint, verify-changes?"
+```
+
+This saves the agent an iteration by pointing directly to the correct name.
+
 ## Skill Chaining
 
-Skills can chain — one skill can invoke another within its workflow:
+Skills can chain -- one skill can invoke another within its workflow:
 
 ```markdown
 ## Workflow

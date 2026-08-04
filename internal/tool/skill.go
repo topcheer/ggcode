@@ -19,6 +19,12 @@ type SkillLookup interface {
 	Get(name string) (*commands.Command, bool)
 }
 
+// SkillNameLister provides all available skill names for fuzzy matching.
+// Implemented by commands.Manager.
+type SkillNameLister interface {
+	SkillNames() []string
+}
+
 type skillUsageRecorder interface {
 	RecordUsage(name string)
 }
@@ -42,6 +48,7 @@ type SkillExecutionEvent struct {
 
 type SkillTool struct {
 	Skills              SkillLookup
+	NameLister          SkillNameLister
 	Runtime             MCPRuntime
 	Provider            provider.Provider
 	Tools               *Registry
@@ -101,7 +108,7 @@ func (t SkillTool) Execute(ctx context.Context, input json.RawMessage) (Result, 
 				return result, nil
 			}
 		}
-		return Result{IsError: true, Content: fmt.Sprintf("skill %q not found", strings.TrimSpace(args.Skill))}, nil
+		return Result{IsError: true, Content: t.skillNotFoundMsg(args.Skill)}, nil
 	}
 	if !cmd.Enabled {
 		return Result{IsError: true, Content: fmt.Sprintf("skill %q is disabled", cmd.Name)}, nil
@@ -330,6 +337,7 @@ func skillScopeForCommand(cmd *commands.Command) string {
 func (t SkillTool) Clone() Tool {
 	return SkillTool{
 		Skills:              t.Skills,
+		NameLister:          t.NameLister,
 		Runtime:             t.Runtime,
 		Provider:            t.Provider,
 		Tools:               t.Tools,
@@ -340,4 +348,29 @@ func (t SkillTool) Clone() Tool {
 		OnSkillCompleted:    t.OnSkillCompleted,
 		SystemPromptBuilder: t.SystemPromptBuilder,
 	}
+}
+
+// skillNotFoundMsg returns an error message for an unknown skill, augmented
+// with fuzzy match suggestions when close matches exist.
+func (t SkillTool) skillNotFoundMsg(query string) string {
+	q := strings.TrimSpace(query)
+	base := fmt.Sprintf("skill %q not found", q)
+	if t.NameLister == nil {
+		return base
+	}
+	suggestions := suggestSkills(q, t.NameLister.SkillNames())
+	if len(suggestions) == 0 {
+		return base
+	}
+	var sb strings.Builder
+	sb.WriteString(base)
+	sb.WriteString(". Did you mean: ")
+	for i, s := range suggestions {
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		sb.WriteString(fmt.Sprintf("%q", s))
+	}
+	sb.WriteString("?")
+	return sb.String()
 }
