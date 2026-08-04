@@ -392,58 +392,75 @@ func (t SkillTool) searchSkills(query string) Result {
 		return Result{Content: "No skills are currently available."}
 	}
 	queryLower := strings.ToLower(strings.TrimSpace(query))
-	type skillMatch struct {
-		name  string
-		desc  string
-		score int
+	matches := t.collectSkillMatches(names, queryLower)
+	if len(matches) == 0 {
+		return Result{Content: fmt.Sprintf("No skills found matching %q. Try a different keyword or browse all skills with skill: \"?\".", query)}
 	}
-	var matches []skillMatch
+	sortMatches(matches)
+	total := len(matches)
+	if len(matches) > maxSearchResults {
+		matches = matches[:maxSearchResults]
+	}
+	return Result{Content: formatSkillSearchResults(matches, queryLower, query, total)}
+}
+
+type skillSearchMatch struct {
+	name  string
+	desc  string
+	score int
+}
+
+// collectSkillMatches iterates all skills, scoring each against the query.
+func (t SkillTool) collectSkillMatches(names []string, queryLower string) []skillSearchMatch {
+	var matches []skillSearchMatch
 	for _, name := range names {
 		cmd, ok := t.Skills.Get(name)
 		if !ok || cmd == nil {
 			continue
 		}
-		score := 0
-		nameLower := strings.ToLower(name)
-		desc := strings.TrimSpace(cmd.Description)
-		when := strings.TrimSpace(cmd.WhenToUse)
-		if queryLower == "" {
-			score = 1
-		} else {
-			if nameLower == queryLower {
-				score += 20
-			} else if strings.Contains(nameLower, queryLower) {
-				score += 10
-			}
-			if desc != "" && strings.Contains(strings.ToLower(desc), queryLower) {
-				score += 5
-			}
-			if when != "" && strings.Contains(strings.ToLower(when), queryLower) {
-				score += 5
-			}
-		}
+		score, desc := scoreSkill(name, cmd, queryLower)
 		if score > 0 {
-			d := desc
-			if d == "" {
-				d = when
-			}
-			matches = append(matches, skillMatch{name: name, desc: d, score: score})
+			matches = append(matches, skillSearchMatch{name: name, desc: desc, score: score})
 		}
 	}
-	if len(matches) == 0 {
-		return Result{Content: fmt.Sprintf("No skills found matching %q. Try a different keyword or browse all skills with skill: \"?\".", query)}
+	return matches
+}
+
+// scoreSkill returns a relevance score and display description for a skill.
+func scoreSkill(name string, cmd *commands.Command, queryLower string) (int, string) {
+	desc := strings.TrimSpace(cmd.Description)
+	when := strings.TrimSpace(cmd.WhenToUse)
+	if queryLower == "" {
+		return 1, firstNonEmptyString(desc, when)
 	}
+	score := 0
+	nameLower := strings.ToLower(name)
+	if nameLower == queryLower {
+		score += 20
+	} else if strings.Contains(nameLower, queryLower) {
+		score += 10
+	}
+	if desc != "" && strings.Contains(strings.ToLower(desc), queryLower) {
+		score += 5
+	}
+	if when != "" && strings.Contains(strings.ToLower(when), queryLower) {
+		score += 5
+	}
+	return score, firstNonEmptyString(desc, when)
+}
+
+func sortMatches(matches []skillSearchMatch) {
 	sort.Slice(matches, func(i, j int) bool {
 		if matches[i].score != matches[j].score {
 			return matches[i].score > matches[j].score
 		}
 		return matches[i].name < matches[j].name
 	})
-	const maxResults = 25
-	total := len(matches)
-	if len(matches) > maxResults {
-		matches = matches[:maxResults]
-	}
+}
+
+const maxSearchResults = 25
+
+func formatSkillSearchResults(matches []skillSearchMatch, queryLower, query string, total int) string {
 	var sb strings.Builder
 	if queryLower == "" {
 		sb.WriteString(fmt.Sprintf("Available skills (%d total):\n\n", total))
@@ -451,20 +468,20 @@ func (t SkillTool) searchSkills(query string) Result {
 		sb.WriteString(fmt.Sprintf("Skills matching %q (%d found):\n\n", query, total))
 	}
 	for _, m := range matches {
-		line := fmt.Sprintf("- %s", m.name)
+		sb.WriteString("- " + m.name)
 		if m.desc != "" {
 			const maxDesc = 120
 			if len(m.desc) > maxDesc {
-				line += ": " + m.desc[:maxDesc-3] + "..."
+				sb.WriteString(": " + m.desc[:maxDesc-3] + "...")
 			} else {
-				line += ": " + m.desc
+				sb.WriteString(": " + m.desc)
 			}
 		}
-		sb.WriteString(line + "\n")
+		sb.WriteString("\n")
 	}
-	if total > maxResults {
-		sb.WriteString(fmt.Sprintf("\n... and %d more. Refine your query to narrow results.\n", total-maxResults))
+	if total > maxSearchResults {
+		sb.WriteString(fmt.Sprintf("\n... and %d more. Refine your query to narrow results.\n", total-maxSearchResults))
 	}
 	sb.WriteString("\nUse the skill tool with the exact skill name to load one.")
-	return Result{Content: sb.String()}
+	return sb.String()
 }
