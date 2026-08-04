@@ -50,6 +50,85 @@ type EfficiencyReport struct {
 	Recommendations []string
 }
 
+// effCheckResult holds a single anti-pattern finding.
+type effCheckResult struct {
+	deduct         int
+	antiPattern    string
+	recommendation string
+}
+
+// checkEditRatio flags low edit-to-iteration ratio (excessive exploration).
+func checkEditRatio(edits, iters int) (effCheckResult, bool) {
+	if edits == 0 || iters <= 5 {
+		return effCheckResult{}, false
+	}
+	ratio := float64(edits) / float64(iters)
+	if ratio >= 0.15 {
+		return effCheckResult{}, false
+	}
+	return effCheckResult{
+		deduct:         25,
+		antiPattern:    fmt.Sprintf("Low edit-to-iteration ratio (%d edits / %d iterations = %.2f)", edits, iters, ratio),
+		recommendation: "Plan file edits before starting - excessive iterations on few edits suggests exploration loops.",
+	}, true
+}
+
+// checkReadAmplification flags excessive reads without edits when errors present.
+func checkReadAmplification(reads, edits, errors int) (effCheckResult, bool) {
+	if reads < 8 || edits > 0 || errors == 0 {
+		return effCheckResult{}, false
+	}
+	return effCheckResult{
+		deduct:         15,
+		antiPattern:    fmt.Sprintf("High read count (%d) with no edits and %d errors", reads, errors),
+		recommendation: "After reading, form a concrete plan before attempting edits to avoid trial-and-error cycles.",
+	}, true
+}
+
+// checkErrorRate flags high tool failure rate.
+func checkErrorRate(totalCalls, errors int) (effCheckResult, bool) {
+	if totalCalls <= 5 || errors == 0 {
+		return effCheckResult{}, false
+	}
+	errRate := float64(errors) / float64(totalCalls) * 100
+	if errRate <= 40 {
+		return effCheckResult{}, false
+	}
+	return effCheckResult{
+		deduct:         20,
+		antiPattern:    fmt.Sprintf("High tool error rate (%d/%d = %.0f%%)", errors, totalCalls, errRate),
+		recommendation: "Check file existence and read files before editing to reduce edit failures.",
+	}, true
+}
+
+// checkContextPressure flags near-limit context usage.
+func checkContextPressure(peakTokens, window int) (effCheckResult, bool) {
+	if window <= 0 || peakTokens <= 0 {
+		return effCheckResult{}, false
+	}
+	peakPct := float64(peakTokens) / float64(window) * 100
+	if peakPct <= 85 {
+		return effCheckResult{}, false
+	}
+	return effCheckResult{
+		deduct:         15,
+		antiPattern:    fmt.Sprintf("Context near capacity (%.0f%% of %dK)", peakPct, window/1000),
+		recommendation: "Batch reads and avoid re-reading - use targeted offset/limit reads for large files.",
+	}, true
+}
+
+// checkCompactionWaste flags excessive context compaction events.
+func checkCompactionWaste(count int) (effCheckResult, bool) {
+	if count < 2 {
+		return effCheckResult{}, false
+	}
+	return effCheckResult{
+		deduct:         15,
+		antiPattern:    fmt.Sprintf("%d context compaction events", count),
+		recommendation: "Act sooner after gathering information - compacting multiple times loses critical context.",
+	}, true
+}
+
 // AnalyzeEfficiency inspects RunStats and identifies efficiency anti-patterns.
 // Returns a report with a score, detected patterns, and actionable advice.
 func AnalyzeEfficiency(stats RunStats) EfficiencyReport {
@@ -61,75 +140,28 @@ func AnalyzeEfficiency(stats RunStats) EfficiencyReport {
 	errors := len(stats.Errors)
 	iters := stats.Iterations
 
-	// --- 1. Edit-to-iteration ratio ---
-	// Healthy: at least 1 meaningful action per ~3 iterations for editing tasks.
-	// Tasks with edits but low ratio indicate excessive exploration.
-	if edits > 0 && iters > 5 {
-		ratio := float64(edits) / float64(iters)
-		if ratio < 0.15 {
-			r.Score -= 25
-			r.AntiPatterns = append(r.AntiPatterns,
-				fmt.Sprintf("Low edit-to-iteration ratio (%d edits / %d iterations = %.2f)", edits, iters, ratio))
-			r.Recommendations = append(r.Recommendations,
-				"Plan file edits before starting — excessive iterations on few edits suggests exploration loops.")
+	checks := []func() (effCheckResult, bool){
+		func() (effCheckResult, bool) { return checkEditRatio(edits, iters) },
+		func() (effCheckResult, bool) { return checkReadAmplification(reads, edits, errors) },
+		func() (effCheckResult, bool) { return checkErrorRate(totalCalls, errors) },
+		func() (effCheckResult, bool) {
+			return checkContextPressure(stats.ContextPeakTokens, stats.ContextWindow)
+		},
+		func() (effCheckResult, bool) { return checkCompactionWaste(stats.CompactionCount) },
+	}
+
+	for _, check := range checks {
+		if res, found := check(); found {
+			r.Score -= res.deduct
+			r.AntiPatterns = append(r.AntiPatterns, res.antiPattern)
+			r.Recommendations = append(r.Recommendations, res.recommendation)
 		}
 	}
 
-	// --- 2. Read amplification ---
-	// If reads >> unique files edited, the agent is re-reading or over-exploring.
-	// Threshold: 8+ reads with 0 edits is pure exploration (could be research, so
-	// only flag if there were also errors).
-	if reads >= 8 && edits == 0 && errors > 0 {
-		r.Score -= 15
-		r.AntiPatterns = append(r.AntiPatterns,
-			fmt.Sprintf("High read count (%d) with no edits and %d errors", reads, errors))
-		r.Recommendations = append(r.Recommendations,
-			"After reading, form a concrete plan before attempting edits to avoid trial-and-error cycles.")
-	}
-
-	// --- 3. Error rate ---
-	// High error rate (>40% of tool calls erroring) signals a struggle.
-	if totalCalls > 5 && errors > 0 {
-		errRate := float64(errors) / float64(totalCalls) * 100
-		if errRate > 40 {
-			r.Score -= 20
-			r.AntiPatterns = append(r.AntiPatterns,
-				fmt.Sprintf("High tool error rate (%d/%d = %.0f%%)", errors, totalCalls, errRate))
-			r.Recommendations = append(r.Recommendations,
-				"Check file existence and read files before editing to reduce edit failures.")
-		}
-	}
-
-	// --- 4. Context pressure ---
-	// Approaching context limit degrades output quality.
-	if stats.ContextWindow > 0 && stats.ContextPeakTokens > 0 {
-		peakPct := float64(stats.ContextPeakTokens) / float64(stats.ContextWindow) * 100
-		if peakPct > 85 {
-			r.Score -= 15
-			r.AntiPatterns = append(r.AntiPatterns,
-				fmt.Sprintf("Context near capacity (%.0f%% of %dK)", peakPct, stats.ContextWindow/1000))
-			r.Recommendations = append(r.Recommendations,
-				"Batch reads and avoid re-reading — use targeted offset/limit reads for large files.")
-		}
-	}
-
-	// --- 5. Compaction waste ---
-	// Each compaction loses earlier context. Multiple compactions in one run
-	// indicate the agent accumulated too much context before acting.
-	if stats.CompactionCount >= 2 {
-		r.Score -= 15
-		r.AntiPatterns = append(r.AntiPatterns,
-			fmt.Sprintf("%d context compaction events", stats.CompactionCount))
-		r.Recommendations = append(r.Recommendations,
-			"Act sooner after gathering information — compacting multiple times loses critical context.")
-	}
-
-	// Clamp score
 	if r.Score < 0 {
 		r.Score = 0
 	}
 
-	// Determine level
 	switch len(r.AntiPatterns) {
 	case 0:
 		r.Level = efficiencyGood
