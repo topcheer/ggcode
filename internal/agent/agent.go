@@ -1420,29 +1420,31 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// (spawned agents whose results were never consumed), serial delegation
 		// anti-pattern (should batch parallelizable tasks), and over-delegation
 		// (excessive delegation ratio). Zero-LLM-cost deterministic heuristics.
-		if delOrchMsg := a.delegationOrch.maybeWarnOrphanedDelegations(i + 1); delOrchMsg != "" {
-			debug.Log("agent", "Iteration %d: delegation orphan gate injected guidance", i+1)
-			a.contextManager.Add(provider.Message{
-				Role:    "user",
-				Content: []provider.ContentBlock{{Type: "text", Text: delOrchMsg}},
-			})
-			msgs = a.contextManager.Messages()
-		}
-		if serialMsg := a.delegationOrch.maybeWarnSerialDelegation(); serialMsg != "" {
-			debug.Log("agent", "Iteration %d: serial delegation gate injected guidance", i+1)
-			a.contextManager.Add(provider.Message{
-				Role:    "user",
-				Content: []provider.ContentBlock{{Type: "text", Text: serialMsg}},
-			})
-			msgs = a.contextManager.Messages()
-		}
-		if overDelMsg := a.delegationOrch.maybeWarnOverDelegation(); overDelMsg != "" {
-			debug.Log("agent", "Iteration %d: over-delegation gate injected guidance", i+1)
-			a.contextManager.Add(provider.Message{
-				Role:    "user",
-				Content: []provider.ContentBlock{{Type: "text", Text: overDelMsg}},
-			})
-			msgs = a.contextManager.Messages()
+		if a.delegationOrch != nil {
+			if delOrchMsg := a.delegationOrch.maybeWarnOrphanedDelegations(i + 1); delOrchMsg != "" {
+				debug.Log("agent", "Iteration %d: delegation orphan gate injected guidance", i+1)
+				a.contextManager.Add(provider.Message{
+					Role:    "user",
+					Content: []provider.ContentBlock{{Type: "text", Text: delOrchMsg}},
+				})
+				msgs = a.contextManager.Messages()
+			}
+			if serialMsg := a.delegationOrch.maybeWarnSerialDelegation(); serialMsg != "" {
+				debug.Log("agent", "Iteration %d: serial delegation gate injected guidance", i+1)
+				a.contextManager.Add(provider.Message{
+					Role:    "user",
+					Content: []provider.ContentBlock{{Type: "text", Text: serialMsg}},
+				})
+				msgs = a.contextManager.Messages()
+			}
+			if overDelMsg := a.delegationOrch.maybeWarnOverDelegation(); overDelMsg != "" {
+				debug.Log("agent", "Iteration %d: over-delegation gate injected guidance", i+1)
+				a.contextManager.Add(provider.Message{
+					Role:    "user",
+					Content: []provider.ContentBlock{{Type: "text", Text: overDelMsg}},
+				})
+				msgs = a.contextManager.Messages()
+			}
 		}
 
 		// Monorepo scope sprawl detection: if the agent is editing across many
