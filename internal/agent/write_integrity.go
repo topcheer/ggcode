@@ -158,6 +158,8 @@ func registerAllChecks() {
 
 		// --- Multi-language checks ---
 		{Name: "insecure-patterns", Langs: []Language{LangGo, LangJSTS, LangPython}, Run: sliceCheck(checkInsecurePatterns)},
+		// --- Dependency manifest checks ---
+		{Name: "dep-breaking-change", Run: stringCheck(checkBreakingChangeDepAsString)},
 		{Name: "flaky-test-patterns", Langs: []Language{LangGo, LangJSTS, LangPython}, Run: stringCheck(checkFlakyTestPatterns)},
 
 		// --- Dependency vulnerability check (SCA) ---
