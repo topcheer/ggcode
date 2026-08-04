@@ -380,6 +380,9 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 		if diagnostic != "" {
 			msg += "\n" + diagnostic
 		}
+		if compatHint := diagnoseShellCompat(args.Command, sb.String(), errOutput); compatHint != "" {
+			msg += "\n" + compatHint
+		}
 		if exitIntel := interpretExitCode(exitCode); exitIntel != "" {
 			msg += "\n" + exitIntel
 		}

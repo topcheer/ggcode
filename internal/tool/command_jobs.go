@@ -305,6 +305,9 @@ func (m *CommandJobManager) waitForJob(ctx context.Context, cmd *exec.Cmd, job *
 		job.finish(CommandJobCancelled, "command cancelled")
 	case err != nil:
 		errMsg := fmt.Sprintf("command failed: %v", err)
+		if compatHint := diagnoseShellCompat(job.Command, strings.Join(job.Lines, "\n"), ""); compatHint != "" {
+			errMsg += "\n" + compatHint
+		}
 		if ee, ok := err.(*exec.ExitError); ok {
 			if exitIntel := interpretExitCode(ee.ExitCode()); exitIntel != "" {
 				errMsg += "\n" + exitIntel
