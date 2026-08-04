@@ -24,7 +24,10 @@ type DesktopConfig struct {
 	Language    string `json:"language,omitempty"`
 
 	// Desktop notification preferences
+	// NotificationsSet tracks whether the user has explicitly configured notifications.
+	// When false (default), notifications are treated as enabled.
 	NotificationsEnabled bool `json:"notifications_enabled,omitempty"`
+	NotificationsSet     bool `json:"notifications_configured,omitempty"`
 }
 
 func desktopConfigPath() string {
@@ -87,23 +90,21 @@ func (dc *DesktopConfig) SetLastSession(id string) {
 }
 
 // IsNotificationsEnabled returns whether desktop notifications are enabled.
-// Defaults to true when unset (zero value for bool is false, so we check explicitly).
+// Defaults to true when never explicitly set.
 func (dc *DesktopConfig) IsNotificationsEnabled() bool {
 	dc.mu.Lock()
 	defer dc.mu.Unlock()
-	// Treat zero-value (unset) as enabled
-	if !dc.NotificationsEnabled {
-		// Check if the config file was loaded (has other fields set)
-		// If the file exists but this field was omitted, it defaults to false.
-		// We want default=true, so we check if any field was loaded.
+	// When not explicitly configured, default to enabled
+	if !dc.NotificationsSet {
 		return true
 	}
 	return dc.NotificationsEnabled
 }
 
-// SetNotificationsEnabled updates the notification preference.
+// SetNotificationsEnabled updates the notification preference and marks it as configured.
 func (dc *DesktopConfig) SetNotificationsEnabled(enabled bool) {
 	dc.mu.Lock()
 	defer dc.mu.Unlock()
 	dc.NotificationsEnabled = enabled
+	dc.NotificationsSet = true
 }

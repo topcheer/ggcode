@@ -126,3 +126,38 @@ func TestDesktopConfig_CreatesDirectoryIfMissing(t *testing.T) {
 		t.Fatalf("expected .ggcode to exist after Save: %v", err)
 	}
 }
+
+func TestDesktopConfig_NotificationsDefault(t *testing.T) {
+	withTestHome(t)
+	dc := LoadDesktopConfig()
+	// Default should be enabled (even though JSON field is omitted/zero-value)
+	if !dc.IsNotificationsEnabled() {
+		t.Fatal("expected notifications enabled by default")
+	}
+}
+
+func TestDesktopConfig_SetNotificationsEnabled(t *testing.T) {
+	withTestHome(t)
+	dc := &DesktopConfig{WindowW: 100, WindowH: 100}
+	dc.SetNotificationsEnabled(false)
+	if dc.IsNotificationsEnabled() {
+		t.Fatal("expected notifications disabled after SetNotificationsEnabled(false)")
+	}
+	dc.SetNotificationsEnabled(true)
+	if !dc.IsNotificationsEnabled() {
+		t.Fatal("expected notifications enabled after SetNotificationsEnabled(true)")
+	}
+}
+
+func TestDesktopConfig_NotificationsRoundTrip(t *testing.T) {
+	withTestHome(t)
+	dc := &DesktopConfig{WindowW: 100, WindowH: 100}
+	dc.SetNotificationsEnabled(false)
+	if err := dc.Save(); err != nil {
+		t.Fatal(err)
+	}
+	loaded := LoadDesktopConfig()
+	if loaded.IsNotificationsEnabled() {
+		t.Fatal("expected notifications disabled after round-trip")
+	}
+}
