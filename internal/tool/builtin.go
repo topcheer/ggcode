@@ -137,6 +137,9 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 
 		// Command snippet library (persistent, project-scoped reusable shell commands)
 		&CmdSnippetTool{WorkingDir: workingDir},
+
+		// Package-level dependency graph analysis (import graph, cycles, hotspots)
+		DepGraphTool{WorkingDir: workingDir},
 	)
 	for _, tool := range tools {
 		if err := registry.Register(tool); err != nil {
