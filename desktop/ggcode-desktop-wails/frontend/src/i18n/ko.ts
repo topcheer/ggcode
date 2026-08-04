@@ -138,6 +138,8 @@ const en = {
   'kb.toggleContext': '컨텍스트 패널 전환',
   'kb.toggleTheme': '다크/라이트 테마 전환',
   'kb.searchSessions': '세션 검색',
+  'kb.prevSession': '이전 세션',
+  'kb.nextSession': '다음 세션',
   'kb.openSettings': '설정 열기',
   'kb.showShortcuts': '도움말 표시',
   'kb.closeDialog': '대화상자 닫기',

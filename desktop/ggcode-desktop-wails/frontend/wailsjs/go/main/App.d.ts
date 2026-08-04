@@ -204,6 +204,8 @@ export function SetPermissionMode(arg1:string):Promise<void>;
 
 export function SetSessionLimits(arg1:number,arg2:number):Promise<void>;
 
+export function SetWindowFocused(arg1:boolean):Promise<void>;
+
 export function StartAnthropicOAuth():Promise<string>;
 
 export function StartMCPOAuth(arg1:string):Promise<wailskit.MCPOAuthStartResult>;

@@ -138,6 +138,8 @@ const en = {
   'kb.toggleContext': 'Kontext-Panel umschalten',
   'kb.toggleTheme': 'Hell/Dunkel-Design umschalten',
   'kb.searchSessions': 'Sitzungen durchsuchen',
+  'kb.prevSession': 'Vorherige Sitzung',
+  'kb.nextSession': 'Nächste Sitzung',
   'kb.openSettings': 'Einstellungen öffnen',
   'kb.showShortcuts': 'Diese Hilfe anzeigen',
   'kb.closeDialog': 'Dialog schließen',

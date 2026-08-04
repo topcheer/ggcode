@@ -138,6 +138,8 @@ const tr = {
   'kb.toggleContext': 'Bağlam Panelini Aç/Kapat',
   'kb.toggleTheme': 'Koyu/Açık Temayı Değiştir',
   'kb.searchSessions': 'Oturumları Ara',
+  'kb.prevSession': 'Önceki oturum',
+  'kb.nextSession': 'Sonraki oturum',
   'kb.openSettings': 'Ayarları Aç',
   'kb.showShortcuts': 'Bu Yardımı Göster',
   'kb.closeDialog': 'İletişimi Kapat',

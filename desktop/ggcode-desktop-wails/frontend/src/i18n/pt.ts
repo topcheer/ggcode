@@ -138,6 +138,8 @@ const en = {
   'kb.toggleContext': 'Alternar Painel de Contexto',
   'kb.toggleTheme': 'Alternar Tema Claro/Escuro',
   'kb.searchSessions': 'Buscar Sessões',
+  'kb.prevSession': 'Sessão anterior',
+  'kb.nextSession': 'Próxima sessão',
   'kb.openSettings': 'Abrir Configurações',
   'kb.showShortcuts': 'Mostrar Esta Ajuda',
   'kb.closeDialog': 'Fechar Diálogo',

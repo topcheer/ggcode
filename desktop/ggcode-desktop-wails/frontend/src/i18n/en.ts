@@ -144,6 +144,8 @@ const en = {
   'kb.toggleContext': 'Toggle Context Panel',
   'kb.toggleTheme': 'Toggle Dark/Light Theme',
   'kb.searchSessions': 'Search Sessions',
+  'kb.prevSession': 'Previous Session',
+  'kb.nextSession': 'Next Session',
   'kb.openSettings': 'Open Settings',
   'kb.showShortcuts': 'Show This Help',
   'kb.closeDialog': 'Close Dialog',

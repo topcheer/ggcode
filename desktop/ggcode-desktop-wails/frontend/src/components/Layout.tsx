@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
-import { Plus, Search, Share2, PanelRight, SunMoon, Settings, MessageSquare, PanelLeft, FolderOpen, Radio, Server, Bug, Terminal, ZoomIn, ZoomOut } from 'lucide-react'
+import { Plus, Search, Share2, PanelRight, SunMoon, Settings, MessageSquare, PanelLeft, FolderOpen, Radio, Server, Bug, Terminal, ZoomIn, ZoomOut, FileDown, ChevronLeft, ChevronRight } from 'lucide-react'
 import { ViewMode, StatusBarData } from '../types'
 import { I18nProvider, useTranslation, detectSystemLocale, type Locale } from '../i18n'
 import { useTheme } from '../hooks/useTheme'
@@ -105,6 +105,9 @@ function LayoutInner() {
   const [askUserRequest, setAskUserRequest] = useState<AskUserRequest | null>(null)
   const [pairingRequest, setPairingRequest] = useState<PairingRequest | null>(null)
   const [activeSessionId, setActiveSessionId] = useState<string | undefined>()
+  // Ref mirror for access inside keyboard handler closures (which have stale deps)
+  const activeSessionIdRef = useRef<string | undefined>(undefined)
+  activeSessionIdRef.current = activeSessionId
   const [needsOnboard, setNeedsOnboard] = useState(false)
   const [currentWorkspace, setCurrentWorkspace] = useState('')
   const [toasts, setToasts] = useState<ToastMessage[]>([])
@@ -364,6 +367,11 @@ function LayoutInner() {
         setView('chat')
         setSidebarOpen(true)
       }
+      // ⌘⇧[ / ⌘⇧]: Switch to previous / next session
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === '[' || e.key === ']')) {
+        e.preventDefault()
+        switchSession(e.key === '[' ? -1 : 1)
+      }
       if (e.key === 'Escape') {
         setCmdPaletteOpen(false)
         setShareDialogOpen(false)
@@ -395,6 +403,31 @@ function LayoutInner() {
   }, [])
 
   const backToChat = () => setView('chat')
+
+  // Session switching: direction = -1 (prev) or +1 (next)
+  const switchSession = useCallback((direction: number) => {
+    App.ListSessions().then(async (sessions: any[]) => {
+      if (!sessions || sessions.length === 0) return
+      const ids = sessions.map(s => s.ID || s.id).filter(Boolean)
+      const current = activeSessionIdRef.current
+      const idx = current ? ids.indexOf(current) : -1
+      let nextIdx: number
+      if (idx === -1) {
+        nextIdx = direction > 0 ? 0 : ids.length - 1
+      } else {
+        nextIdx = (idx + direction + ids.length) % ids.length
+      }
+      const nextId = ids[nextIdx]
+      if (nextId && nextId !== current) {
+        try {
+          await App.LoadSession(nextId)
+          setActiveSessionId(nextId)
+          setView('chat')
+        } catch {}
+      }
+    }).catch(() => {})
+  }, [])
+
   const handleWorkspaceSelected = useCallback((dir: string) => {
     setCurrentWorkspace(dir)
     setActiveSessionId(undefined)
@@ -406,7 +439,33 @@ function LayoutInner() {
   const cmdPaletteActions = useMemo<CommandAction[]>(() => [
     { nameKey: 'cmd.newSession', shortcut: '⌘N', categoryKey: 'cmd.cat.session', icon: Plus, action: () => { App.NewSession().then((id: any) => { if (typeof id === 'string') setActiveSessionId(id) }).catch(() => {}) } },
     { nameKey: 'cmd.searchSessions', shortcut: '⌘⇧F', categoryKey: 'cmd.cat.session', icon: Search, action: () => { setView('chat'); setSidebarOpen(true) } },
+    { nameKey: 'cmd.prevSession', shortcut: '⌘⇧[', categoryKey: 'cmd.cat.session', icon: ChevronLeft, action: () => switchSession(-1) },
+    { nameKey: 'cmd.nextSession', shortcut: '⌘⇧]', categoryKey: 'cmd.cat.session', icon: ChevronRight, action: () => switchSession(1) },
     { nameKey: 'cmd.shareSession', shortcut: '⌘⇧S', categoryKey: 'cmd.cat.chat', icon: Share2, action: () => setShareDialogOpen(true) },
+    { nameKey: 'cmd.exportMarkdown', categoryKey: 'cmd.cat.chat', icon: FileDown, action: () => {
+      App.ExportSessionAsMarkdown('').then((content: string) => {
+        if (!content) return
+        App.SaveExportedFile('session.md', content).then((path: string) => {
+          if (path) showToast('success', 'Session exported')
+        }).catch(() => {})
+      }).catch(() => {})
+    } },
+    { nameKey: 'cmd.exportJSON', categoryKey: 'cmd.cat.chat', icon: FileDown, action: () => {
+      App.ExportSessionAsJSON('').then((content: string) => {
+        if (!content) return
+        App.SaveExportedFile('session.json', content).then((path: string) => {
+          if (path) showToast('success', 'Session exported')
+        }).catch(() => {})
+      }).catch(() => {})
+    } },
+    { nameKey: 'cmd.copyMarkdown', categoryKey: 'cmd.cat.chat', icon: FileDown, action: () => {
+      App.ExportSessionAsMarkdown('').then((content: string) => {
+        if (!content) return
+        navigator.clipboard.writeText(content).then(() => {
+          showToast('success', 'Markdown copied to clipboard')
+        }).catch(() => {})
+      }).catch(() => {})
+    } },
     { nameKey: 'cmd.toggleContext', shortcut: '⌘.', categoryKey: 'cmd.cat.chat', icon: PanelRight, action: () => setContextPanelOpen(prev => !prev) },
     { nameKey: 'cmd.toggleTheme', shortcut: '⌘⇧T', categoryKey: 'cmd.cat.settings', icon: SunMoon, action: () => toggleTheme() },
     { nameKey: 'cmd.zoomIn', shortcut: '⌘+', categoryKey: 'cmd.cat.settings', icon: ZoomIn, action: () => zoomIn() },

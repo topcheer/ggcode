@@ -138,6 +138,8 @@ const id = {
   'kb.toggleContext': 'Alihkan Panel Konteks',
   'kb.toggleTheme': 'Alihkan Tema Gelap/Terang',
   'kb.searchSessions': 'Cari Sesi',
+  'kb.prevSession': 'Sesi sebelumnya',
+  'kb.nextSession': 'Sesi berikutnya',
   'kb.openSettings': 'Buka Pengaturan',
   'kb.showShortcuts': 'Tampilkan Bantuan Ini',
   'kb.closeDialog': 'Tutup Dialog',

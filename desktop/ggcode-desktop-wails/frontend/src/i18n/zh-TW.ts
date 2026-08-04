@@ -146,6 +146,8 @@ const zh: Record<TranslationKey, string> = {
   'kb.toggleContext': '切換上下文面板',
   'kb.toggleTheme': '切換深色/浅色主題',
   'kb.searchSessions': '搜索會話',
+  'kb.prevSession': '上一個工作階段',
+  'kb.nextSession': '下一個工作階段',
   'kb.openSettings': '打開設置',
   'kb.showShortcuts': '顯示此幫助',
   'kb.closeDialog': '關閉對話框',

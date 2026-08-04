@@ -398,6 +398,10 @@ export function SetSessionLimits(arg1, arg2) {
   return window['go']['main']['App']['SetSessionLimits'](arg1, arg2);
 }
 
+export function SetWindowFocused(arg1) {
+  return window['go']['main']['App']['SetWindowFocused'](arg1);
+}
+
 export function StartAnthropicOAuth() {
   return window['go']['main']['App']['StartAnthropicOAuth']();
 }

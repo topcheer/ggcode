@@ -138,6 +138,8 @@ const en = {
   'kb.toggleContext': 'Переключить панель контекста',
   'kb.toggleTheme': 'Переключить тёмную/светлую тему',
   'kb.searchSessions': 'Поиск сессий',
+  'kb.prevSession': 'Предыдущая сессия',
+  'kb.nextSession': 'Следующая сессия',
   'kb.openSettings': 'Открыть настройки',
   'kb.showShortcuts': 'Показать эту справку',
   'kb.closeDialog': 'Закрыть диалог',

@@ -138,6 +138,8 @@ const en = {
   'kb.toggleContext': 'コンテキストパネルの切り替え',
   'kb.toggleTheme': 'ダーク/ライトテーマの切り替え',
   'kb.searchSessions': 'セッションを検索',
+  'kb.prevSession': '前のセッション',
+  'kb.nextSession': '次のセッション',
   'kb.openSettings': '設定を開く',
   'kb.showShortcuts': 'このヘルプを表示',
   'kb.closeDialog': 'ダイアログを閉じる',

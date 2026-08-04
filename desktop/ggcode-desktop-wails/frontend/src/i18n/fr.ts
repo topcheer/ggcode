@@ -138,6 +138,8 @@ const fr = {
   'kb.toggleContext': 'Basculer le panneau de contexte',
   'kb.toggleTheme': 'Basculer le thème sombre/clair',
   'kb.searchSessions': 'Rechercher des sessions',
+  'kb.prevSession': 'Session précédente',
+  'kb.nextSession': 'Session suivante',
   'kb.openSettings': 'Ouvrir les paramètres',
   'kb.showShortcuts': 'Afficher cette aide',
   'kb.closeDialog': 'Fermer la boîte de dialogue',

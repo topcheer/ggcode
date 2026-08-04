@@ -138,6 +138,8 @@ const en = {
   'kb.toggleContext': 'Bật/tắt bảng ngữ cảnh',
   'kb.toggleTheme': 'Bật/tắt giao diện sáng/tối',
   'kb.searchSessions': 'Tìm phiên',
+  'kb.prevSession': 'Phiên trước',
+  'kb.nextSession': 'Phiên tiếp theo',
   'kb.openSettings': 'Mở cài đặt',
   'kb.showShortcuts': 'Hiển thị trợ giúp này',
   'kb.closeDialog': 'Đóng hộp thoại',
