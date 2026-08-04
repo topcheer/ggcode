@@ -194,6 +194,7 @@ type Agent struct {
 	ruleInjectCount            map[string]int                        // per-rule injection counter for dedup (caps repetitive hints)
 	approvalMemory             *permission.ApprovalMemory            // session-level learned approval patterns (auto-approve after N repeats)
 	behaviorPattern            *behaviorPatternState                 // cross-run behavioral anti-pattern detection (systemic issue awareness)
+	perfBaseline               *perfBaselineState                    // cross-session performance regression detection
 	lastRunStats               *RunStats                             // stats from the most recent run (for post-run summary display)
 	qualityScorer              *ResponseQualityScorer                // per-run response quality scoring for provider/model A/B comparison
 	systemPromptInjector       func() string                         // returns extra system prompt text to inject (e.g. lanchat peer warnings)
@@ -263,6 +264,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		shellNativeHint:      newShellNativeHintState(),
 		approvalMemory:       permission.NewApprovalMemory(),
 		behaviorPattern:      newBehaviorPatternState(),
+		perfBaseline:         newPerfBaselineState(),
 		fulfillmentGate:      newFulfillmentGateState(),
 		companionGuard:       newCompanionGuardState(),
 		complexityGate:       newComplexityGateState(),
@@ -979,6 +981,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.companionGuard.reset()
 	a.complexityGate.reset()
 	a.behaviorPattern.reset()
+	a.perfBaseline.reset()
 	a.argSizeGuardFires = 0
 	a.redundantRead.reset()
 	a.toolSequence.reset()
@@ -1018,6 +1021,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		if a.behaviorPattern != nil {
 			a.behaviorPattern.recordRun(runStats)
 		}
+		// Record run metrics for cross-session regression detection.
+		recordPerfBaseline(a.WorkingDir(), runStats)
 		a.mu.RLock()
 		fn := a.onRunResult
 		a.mu.RUnlock()
@@ -1145,6 +1150,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.maybeInjectCorrectionFeedback()
 	a.maybeInjectSentimentFeedback(userPromptForStats)
 	a.maybeInjectBehaviorPattern()
+	a.maybeInjectPerfRegression()
 	a.maybeInjectDynamicSystemPrompt()
 	a.maybeInjectRatchetRules()
 
