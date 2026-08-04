@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -184,6 +185,7 @@ type Agent struct {
 	destructiveGuard           *gitDestructiveState                  // destructive git operation detection (reset --hard, force push, etc.)
 	shellNativeHint            *shellNativeHintState                 // suggests native tools when agent uses shell for equivalent operations
 	bgOrphan                   *bgOrphanState                        // orphaned background command detection (unchecked start_command jobs)
+	crossFileImpact            *crossFileImpactState                 // pre-completion cross-file impact analysis (removed symbol breakage detection)
 	contextFootprint           *contextFootprintState                // per-tool context budget attribution (which tools consume the most context)
 	redundantRead              *redundantReadState                   // redundant re-read detection (context waste prevention)
 	ruleStore                  *RuleStore                            // cached rule store for hot-path rule injection (avoids per-tool disk I/O)
@@ -284,6 +286,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		contextFootprint:     newContextFootprintState(),
 		redundantRead:        newRedundantReadState(),
 		bgOrphan:             newBgOrphanState(),
+		crossFileImpact:      newCrossFileImpactState(),
 	}
 	a.syncContextManagerProviderLocked()
 	a.syncContextManagerUsageHandlerLocked()
@@ -882,6 +885,17 @@ func (a *Agent) RunStream(ctx context.Context, userMsg string, onEvent func(prov
 	return a.RunStreamWithContent(ctx, []provider.ContentBlock{{Type: "text", Text: userMsg}}, onEvent)
 }
 
+// userPromptForStatsSafe extracts text from content blocks for journaling.
+func userPromptForStatsSafe(content []provider.ContentBlock) string {
+	var sb strings.Builder
+	for _, b := range content {
+		if b.Type == "text" {
+			sb.WriteString(b.Text)
+		}
+	}
+	return sb.String()
+}
+
 // estimateToolDefinitionOverhead approximates the tokens consumed by the tool
 // definitions (names + descriptions + JSON schemas) that are passed to the
 // provider on every request. This is added to the context manager's dynamic
@@ -903,6 +917,14 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	// Stop any background cache-keepalive pings — the user is sending a new
 	// message, so the cache will be refreshed naturally by this request.
 	a.cacheKeepalive.stopIdle()
+
+	// Write run-start journal entry for crash detection. If the process dies
+	// before the defer below runs, CheckCrashedRun() on next startup will detect
+	// the stale "running" entry and alert the user.
+	a.mu.RLock()
+	sid := a.sessionID
+	a.mu.RUnlock()
+	MarkRunning(sid, userPromptForStatsSafe(content), os.Getpid())
 
 	// Start tracking messages added during this run for session persistence.
 	// persistFullSessionMessages() will use this to know which messages
@@ -947,6 +969,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	}
 
 	defer func() {
+		// Mark the run as completed in the journal (crash detection cleanup).
+		// This runs for all exit paths: success, error, and cancellation.
+		MarkCompleted(sid, err == nil, runStats.Iterations, len(runStats.FilesEdited))
+
 		runStats.finalize(err)
 		a.mu.Lock()
 		a.lastRunStats = runStats
@@ -1172,6 +1198,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	// (user's own uncommitted work) from genuine side-effect changes introduced
 	// by the agent's tool calls. Also resets the gate for the new run.
 	a.changeReconcile.reset()
+	a.crossFileImpact.reset()
 	a.diffSummary.reset()
 	a.commitHint.reset()
 	if workingDir := a.WorkingDir(); workingDir != "" {
@@ -1811,6 +1838,21 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					Content: []provider.ContentBlock{{
 						Type: "text",
 						Text: complexityMsg,
+					}},
+				})
+				continue
+			}
+
+			// Cross-file impact analysis gate: detect removed/renamed exported symbols
+			// that are referenced by sibling files the agent did NOT edit. This catches
+			// breakage from function/type/method removal before the agent declares done.
+			if impactMsg := a.checkCrossFileImpact(runStats); impactMsg != "" {
+				debug.Log("agent", "Iteration %d: cross-file impact analysis detected potential breakage", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: impactMsg,
 					}},
 				})
 				continue
