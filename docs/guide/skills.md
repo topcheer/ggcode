@@ -76,6 +76,45 @@ skill(skill="verify")               → "Did you mean: verify, verify-lint, veri
 
 This saves the agent an iteration by pointing directly to the correct name.
 
+## Skill Versioning
+
+Skills can declare a semantic version in frontmatter. This enables version-aware
+dependency management and helps track which version of a workflow is active.
+
+```markdown
+---
+name: deploy-to-vercel
+version: "1.2.0"
+description: Deploy the project to Vercel
+---
+```
+
+The version is displayed when the skill is loaded (`Skill "deploy-to-vercel" (v1.2.0) loaded.`)
+and in search results.
+
+### Version-Constrained Dependencies
+
+Dependencies can specify version constraints using the `@` syntax:
+
+```yaml
+dependencies:
+  - check-env@>=1.0.0      # minimum version 1.0.0
+  - build-app@2.0.0         # exact version 2.0.0
+  - deploy-helper@<3.0.0    # any version before 3.0.0
+```
+
+Supported operators: `>=`, `>`, `<=`, `<`, `==` (or `=`), and bare version (exact match).
+
+When a loaded dependency's version does not satisfy the constraint, the agent
+receives a warning like:
+
+```
+Version mismatch: check-env (requires >=1.0.0, found 0.9.0).
+```
+
+Version mismatches are advisory -- they do not block execution. This lets the
+agent proceed while alerting it to potential incompatibilities.
+
 ## Skill Chaining
 
 Skills can chain -- one skill can invoke another within its workflow:

@@ -144,8 +144,12 @@ func (t SkillTool) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	// Return a brief confirmation + inject skill content as follow-up user message.
 	// This forces the model to process and act on the skill instructions,
 	// matching Claude Code's inline skill behavior.
+	loadMsg := fmt.Sprintf("Skill %q loaded.", cmd.Name)
+	if v := strings.TrimSpace(cmd.Version); v != "" {
+		loadMsg = fmt.Sprintf("Skill %q (v%s) loaded.", cmd.Name, v)
+	}
 	result := Result{
-		Content: fmt.Sprintf("Skill %q loaded. Follow the instructions below to complete the task.", cmd.Name),
+		Content: fmt.Sprintf("%s Follow the instructions below to complete the task.", loadMsg),
 		FollowUpMessages: []provider.Message{
 			{
 				Role: "user",
@@ -430,9 +434,10 @@ func (t SkillTool) searchSkills(query string) Result {
 }
 
 type skillSearchMatch struct {
-	name  string
-	desc  string
-	score int
+	name    string
+	desc    string
+	version string
+	score   int
 }
 
 // collectSkillMatches iterates all skills, scoring each against the query.
@@ -445,7 +450,7 @@ func (t SkillTool) collectSkillMatches(names []string, queryLower string) []skil
 		}
 		score, desc := scoreSkill(name, cmd, queryLower)
 		if score > 0 {
-			matches = append(matches, skillSearchMatch{name: name, desc: desc, score: score})
+			matches = append(matches, skillSearchMatch{name: name, desc: desc, version: cmd.Version, score: score})
 		}
 	}
 	return matches
@@ -494,6 +499,9 @@ func formatSkillSearchResults(matches []skillSearchMatch, queryLower, query stri
 	}
 	for _, m := range matches {
 		sb.WriteString("- " + m.name)
+		if m.version != "" {
+			sb.WriteString(" (v" + m.version + ")")
+		}
 		if m.desc != "" {
 			const maxDesc = 120
 			if len(m.desc) > maxDesc {
@@ -529,30 +537,49 @@ func checkRequiredTools(tools []string) []string {
 // buildDependencyHint returns a short advisory message if the skill declares
 // prerequisite skills that should be loaded first. Missing dependencies are
 // noted but do not block execution - the agent can still proceed.
+// Supports version constraints: "dep-name@>=1.0.0".
 func buildDependencyHint(cmd *commands.Command, lookup SkillLookup) string {
 	if cmd == nil || len(cmd.Dependencies) == 0 {
 		return ""
 	}
-	var available, missing []string
+	var available, missing, mismatched []string
 	for _, dep := range cmd.Dependencies {
 		dep = strings.TrimSpace(dep)
 		if dep == "" {
 			continue
 		}
+		dc := commands.ParseDependency(dep)
 		if lookup != nil {
-			if dc, ok := lookup.Get(dep); ok && dc != nil && dc.Enabled {
-				available = append(available, dep)
+			if depCmd, ok := lookup.Get(dc.Name); ok && depCmd != nil && depCmd.Enabled {
+				if dc.Version != "" && !commands.CheckVersionConstraint(depCmd.Version, dc.Op, dc.Version) {
+					mismatched = append(mismatched, fmt.Sprintf(
+						"%s (requires %s%s, found %s)",
+						dc.Name, dc.Op, dc.Version, nonEmptyVersion(depCmd.Version)))
+					continue
+				}
+				available = append(available, dc.Name)
 				continue
 			}
 		}
-		missing = append(missing, dep)
+		missing = append(missing, dc.Name)
 	}
 	var parts []string
 	if len(available) > 0 {
 		parts = append(parts, fmt.Sprintf("Prerequisite skills: %s. Load them via the skill tool if needed.", strings.Join(available, ", ")))
 	}
+	if len(mismatched) > 0 {
+		parts = append(parts, fmt.Sprintf("Version mismatch: %s.", strings.Join(mismatched, "; ")))
+	}
 	if len(missing) > 0 {
 		parts = append(parts, fmt.Sprintf("Note: declared dependencies not found or disabled: %s.", strings.Join(missing, ", ")))
 	}
 	return strings.Join(parts, " ")
+}
+
+func nonEmptyVersion(v string) string {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return "none"
+	}
+	return v
 }

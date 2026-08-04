@@ -72,3 +72,43 @@ func TestFrontmatter_NoDeps(t *testing.T) {
 		t.Errorf("expected 0 dependencies, got %d", len(cmd.Dependencies))
 	}
 }
+
+func TestFrontmatter_Version(t *testing.T) {
+	dir := t.TempDir()
+	skillDir := filepath.Join(dir, ".ggcode", "skills", "versioned")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := "---\n" +
+		"name: versioned\n" +
+		"description: A versioned skill\n" +
+		"version: \"1.2.0\"\n" +
+		"dependencies:\n" +
+		"  - base-skill@>=1.0.0\n" +
+		"  - exact-skill@2.0.0\n" +
+		"---\n\nVersioned body"
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	loader := NewLoader(dir)
+	cmds := loader.Load()
+	cmd, ok := cmds["versioned"]
+	if !ok {
+		t.Fatal("expected versioned skill to be loaded")
+	}
+	if cmd.Version != "1.2.0" {
+		t.Errorf("expected version 1.2.0, got %q", cmd.Version)
+	}
+	if len(cmd.Dependencies) != 2 {
+		t.Fatalf("expected 2 dependencies, got %d", len(cmd.Dependencies))
+	}
+	dep1 := ParseDependency(cmd.Dependencies[0])
+	if dep1.Name != "base-skill" || dep1.Op != ">=" || dep1.Version != "1.0.0" {
+		t.Errorf("unexpected parsed dep1: %+v", dep1)
+	}
+	dep2 := ParseDependency(cmd.Dependencies[1])
+	if dep2.Name != "exact-skill" || dep2.Op != "==" || dep2.Version != "2.0.0" {
+		t.Errorf("unexpected parsed dep2: %+v", dep2)
+	}
+}

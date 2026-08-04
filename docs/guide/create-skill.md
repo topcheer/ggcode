@@ -20,7 +20,7 @@ The `create_skill` tool lets the agent create **reusable skill files** that pers
 | `when_to_use` | No | When this skill should be used (shown in skill search) |
 | `allowed_tools` | No | Tools this skill can use in fork mode |
 | `requires_tools` | No | External CLI tools that must be on PATH (e.g. `["docker", "kubectl"]`). Validated at load time |
-| `dependencies` | No | Prerequisite skill names that should be loaded first |
+| `dependencies` | No | Prerequisite skill names, optionally with version constraints (e.g. `base-skill@>=1.0.0`) |
 | `scope` | No | `project` (default, saved to `.ggcode/skills/`) or `global` (saved to `~/.ggcode/skills/`) |
 | `context` | No | `inline` (default) or `fork` execution mode |
 
@@ -71,7 +71,19 @@ dependencies:
   - build-app
 ```
 
-When the skill is loaded, the agent receives an advisory hint listing prerequisite skills. Available dependencies are suggested for loading; missing or disabled ones are noted but do not block execution.
+#### Version Constraints
+
+Dependencies can include version constraints using the `@` syntax:
+
+```yaml
+dependencies:
+  - check-env@>=1.0.0
+  - build-app@2.0.0
+```
+
+Supported operators: `>=`, `>`, `<=`, `<`, `==`, or bare version (exact match).
+When a dependency's declared version does not satisfy the constraint, a warning
+is shown but execution proceeds.
 
 ## Scope
 
@@ -87,6 +99,8 @@ When the skill is loaded, the agent receives an advisory hint listing prerequisi
 | Immediate availability | Yes (auto-reload) | Manual restart | Manual | N/A |
 | Skill search/discovery | Yes | Yes | No | No |
 | Skill dependency declaration | Yes | No | No | No |
+| Version-constrained dependencies | Yes | No | No | No |
+| Skill version metadata | Yes | No | No | No |
 | External tool validation | Yes | No | No | No |
 
 ## Related
