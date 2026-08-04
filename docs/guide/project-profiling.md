@@ -42,6 +42,24 @@ React, Vue, Next.js, Svelte, Express, Wails.
 
 For Rust projects, `Cargo.toml` dependencies are checked for tokio, Actix, Axum.
 
+### Package Symbol Maps
+
+ggcode injects a compact symbol map into the system prompt at session start.
+This gives the agent structural awareness of the codebase without any tool
+calls, similar to Aider's "repo map" but zero-cost.
+
+- **Go**: exported types and functions parsed via `go/ast` (`project_symbols.go`)
+- **TypeScript/JavaScript**: exported functions, classes, interfaces, types, and
+  constants parsed via lightweight regex (`multilang_symbols.go`)
+- **Python**: top-level public functions and classes (no leading underscore)
+  parsed via lightweight regex (`multilang_symbols.go`)
+
+All languages share the same constraints:
+- Time budget of 200ms
+- Directory depth 0-2
+- Max 25 packages shown, 10 symbols per package
+- Test files and generated artifacts are skipped
+
 ### Monorepo Detection
 
 Common monorepo indicators are detected: `workspaces` in `package.json`,

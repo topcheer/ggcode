@@ -79,6 +79,8 @@ func BuildInteractiveSystemPromptWithPromptRefs(
 		prompt += projectCommandsSection(workingDir)
 		prompt += toolchainSection(workingDir)
 		prompt += buildGoPackageSymbolsSection(workingDir)
+		prompt += buildTSSymbolsSection(workingDir)
+		prompt += buildPythonSymbolsSection(workingDir)
 		prompt += buildPackageDepsSection(workingDir)
 	}
 	var promptSkillRefs []string

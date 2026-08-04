@@ -152,6 +152,8 @@ func (sc *SectionCollector) refresh() {
 	commands := projectCommandsSection(sc.working)
 	toolchain := toolchainSection(sc.working)
 	symbols := buildGoPackageSymbolsSection(sc.working)
+	symbols += buildTSSymbolsSection(sc.working)
+	symbols += buildPythonSymbolsSection(sc.working)
 	deps := buildPackageDepsSection(sc.working)
 	recentCommits := computeRecentCommitsSection(sc.working)
 
