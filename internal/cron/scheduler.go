@@ -578,7 +578,12 @@ func (s *Scheduler) scheduleJobLocked(job *Job) {
 			return
 		}
 		if job.Recurring {
-			next, err := NextTime(job.CronExpr, time.Now())
+			// Reschedule from job.NextFire (the intended fire time), NOT time.Now().
+			// If the timer fired slightly early (e.g., NextFire=08:55:00 but fired at
+			// 08:54:59), using time.Now() would cause NextTime to return 08:55:00
+			// again - the same slot - resulting in a double-fire. Using NextFire
+			// guarantees we always advance past the current slot.
+			next, err := NextTime(job.CronExpr, job.NextFire)
 			if err != nil {
 				delete(s.jobs, job.ID)
 				delete(s.timers, job.ID)
