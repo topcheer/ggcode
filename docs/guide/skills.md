@@ -127,3 +127,16 @@ Skills can chain -- one skill can invoke another within its workflow:
 ```
 
 This makes skills composable building blocks rather than isolated scripts.
+
+## Hot-Reload
+
+Skills are automatically hot-reloaded during a running session. When you edit,
+add, or remove a `SKILL.md` file (or a legacy `.md` command file), ggcode detects
+the change within a few seconds and applies it immediately -- no restart needed.
+
+This covers all skill directories: global (`~/.agents/skills`, `~/.ggcode/skills`),
+project-local (`.ggcode/skills`), and legacy command directories.
+
+The watcher uses a 5-second polling interval with a 500ms debounce window, so
+multi-file edits and atomic-save patterns (temp file + rename) are handled
+correctly. Changes are detected via file mtime signatures, keeping overhead low.

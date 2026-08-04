@@ -129,6 +129,15 @@ func (m *Manager) SetExtraProviders(providers ...func() []*Command) {
 	m.extraProviders = append([]func() []*Command(nil), providers...)
 }
 
+// WatchedDirs returns the directories scanned for skills/commands.
+// Used by the hot-reload watcher to know which paths to monitor.
+func (m *Manager) WatchedDirs() []string {
+	if m == nil || m.loader == nil {
+		return nil
+	}
+	return m.loader.CommandDirs()
+}
+
 // SetEnabled enables or disables a skill by name and persists the state.
 func (m *Manager) SetEnabled(name string, enabled bool) {
 	if m == nil {

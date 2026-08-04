@@ -36,9 +36,10 @@ type InteractiveRuntimeCore struct {
 	configAccess     *configAccess
 	workingDir       string
 
-	mcpCtx       context.Context
-	mcpCancel    context.CancelFunc
-	mcpHotReload *MCPHotReload
+	mcpCtx         context.Context
+	mcpCancel      context.CancelFunc
+	mcpHotReload   *MCPHotReload
+	skillHotReload *SkillHotReload
 }
 
 func BuildInteractiveRuntimeCore(cfg *config.Config, workingDir string, policy permission.PermissionPolicy) (*InteractiveRuntimeCore, error) {
@@ -141,6 +142,15 @@ func (c *InteractiveRuntimeCore) StartBackgroundServices() {
 		// Start MCP config hot-reload watcher.
 		c.mcpHotReload = NewMCPHotReload(config.ConfigDir(), c.workingDir, c.MCPManager)
 		c.mcpHotReload.Start(c.mcpCtx)
+	}
+
+	// Start skill/command hot-reload watcher.
+	if c.CommandManager != nil {
+		dirs := c.CommandManager.WatchedDirs()
+		if len(dirs) > 0 {
+			c.skillHotReload = NewSkillHotReload(c.CommandManager, dirs)
+			c.skillHotReload.Start(c.mcpCtx)
+		}
 	}
 }
 
