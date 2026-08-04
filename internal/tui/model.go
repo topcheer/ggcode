@@ -347,8 +347,9 @@ type Model struct {
 	cmdPaneMgr *cmdpane.Manager
 
 	// Terminal pet (animated ASCII art at the bottom of the composer)
-	petEnabled bool
-	pet        *petState
+	petEnabled  bool
+	pet         *petState
+	recoveryMsg string // crash recovery message from previous interrupted run
 }
 
 // pendingQueue holds the queue of user messages submitted while the agent
