@@ -2,7 +2,6 @@ package agent
 
 import (
 	"fmt"
-	"go/ast"
 	"go/parser"
 	"go/scanner"
 	"go/token"
@@ -14,511 +13,540 @@ import (
 
 // Post-write file integrity validation.
 //
-// Research basis: Claude Code uses LSP for immediate post-edit syntax feedback;
-// Cursor runs in-process diagnostics; OpenHands/Cline rely on post-edit build
-// verification. Aider shows a live diff and validates structure before commit.
-//
-// ggcode already has LSP diagnostics integration and verify hints, but LSP
-// requires a running language server (not always available, e.g. for generated
-// code or exotic languages) and verify hints only suggest running the build
-// command - they don't catch the error inline.
-//
-// This module provides a lightweight, always-available structural validation
-// that runs synchronously after successful file writes and catches the most
-// common post-edit issues with zero external dependencies:
-//
-//  1. Go syntax errors - uses go/parser from the standard library to catch
-//     syntax issues immediately (<1ms for typical files). This is the most
-//     impactful check since this is a Go project and syntax errors are the
-//     #1 cause of failed builds after agent edits.
-//  2. Binary corruption - null bytes in what should be a text file indicate
-//     encoding issues or accidental binary writes.
-//  3. Content loss - a non-empty file becoming empty/whitespace-only after an
-//     edit signals a catastrophic edit failure (e.g., old_text consumed the
-//     entire file).
-//
-// When issues are found, a concise warning is injected into the tool result so
-// the agent can fix the problem in the same turn, avoiding a wasted build/test
-// cycle iteration. The check is non-blocking and cannot hang (go/parser is a
-// pure in-memory operation).
+// This module now uses a Check Registry (see check_registry.go) that runs
+// checks in parallel with language-aware filtering and panic recovery.
+// Each check is registered as a self-contained unit with language metadata,
+// enabling:
+//   - Go-only checks to be skipped for non-Go files (saves CPU)
+//   - Parallel execution across all applicable checks
+//   - Fault isolation: a panic in one check never crashes the pipeline
+//   - External command safety: checks must handle missing tools gracefully
 
 const (
-	// maxIntegrityWarnings caps the number of warnings per write to avoid
-	// flooding the tool result with excessive output.
 	maxIntegrityWarnings = 3
-
-	// maxGoSyntaxErrors limits how many Go syntax errors we report. Go files
-	// with many errors produce a cascade; the first 2 are usually the root cause.
-	maxGoSyntaxErrors = 2
+	maxGoSyntaxErrors    = 2
 )
 
 // checkWriteIntegrity validates the content of a file after a write/edit.
-// Returns a non-empty guidance string if issues are detected.
-//
-// Parameters:
-//   - filePath: the path of the written file (used for language detection)
-//   - oldContent: the file content before the write ("" for new files)
-//   - newContent: the file content after the write
+// Delegates to the Check Registry for parallel, language-aware execution.
 func checkWriteIntegrity(filePath, oldContent, newContent string) string {
-	var warnings []string
+	ctx := newCheckContext(filePath, oldContent, newContent)
+	warnings := runChecksParallel(ctx)
+	return formatWarnings(warnings)
+}
 
-	// 1. Binary corruption: null bytes in what should be a text file.
-	if strings.ContainsRune(newContent, 0) {
-		count := strings.Count(newContent, "\x00")
-		warnings = append(warnings,
-			fmt.Sprintf("File contains %d null byte(s) (\\x00) - content may be corrupted or incorrectly encoded. Check encoding and re-write if needed.", count))
+// registerAllChecks registers all post-write integrity checks with their
+// language filters. Called from check_registry.go init().
+//
+// Language filters ensure Go-only checks are never executed for non-Go files,
+// eliminating wasted CPU and avoiding false positives.
+func registerAllChecks() {
+	allChecks = []IntegrityCheck{
+		// 1. Binary corruption (any language)
+		{
+			Name: "binary-corruption",
+			Run: func(ctx CheckContext) []string {
+				count := strings.Count(ctx.NewContent, "\x00")
+				if count == 0 {
+					return nil
+				}
+				return []string{fmt.Sprintf("File contains %d null byte(s) (\\x00) - content may be corrupted or incorrectly encoded. Check encoding and re-write if needed.", count)}
+			},
+		},
+		// 2. Content loss - file became empty (any language)
+		{
+			Name: "content-loss",
+			Run: func(ctx CheckContext) []string {
+				if strings.TrimSpace(ctx.OldContent) == "" || strings.TrimSpace(ctx.NewContent) != "" {
+					return nil
+				}
+				return []string{fmt.Sprintf("This edit resulted in an EMPTY file (was %d bytes before). Verify this was intended - the old_text match may have consumed the entire file content.", len(ctx.OldContent))}
+			},
+		},
+		// 3. Go syntax errors (Go only)
+		{
+			Name:  "go-syntax",
+			Langs: []Language{LangGo},
+			Run: func(ctx CheckContext) []string {
+				if ctx.GoAST != nil {
+					return nil // parsed OK
+				}
+				if strings.TrimSpace(ctx.NewContent) == "" {
+					return nil
+				}
+				// Re-parse to get the error details.
+				fset := token.NewFileSet()
+				_, err := parser.ParseFile(fset, ctx.FilePath, ctx.NewContent, 0)
+				return goSyntaxWarnings(ctx.FilePath, err)
+			},
+		},
+		// 4. Debug statement detection (any language)
+		{
+			Name: "debug-statements",
+			Run: func(ctx CheckContext) []string {
+				return checkDebugStatements(ctx.FilePath, ctx.OldContent, ctx.NewContent)
+			},
+		},
+		// 5. Go import analysis (Go only)
+		{
+			Name:  "go-imports",
+			Langs: []Language{LangGo},
+			Run: func(ctx CheckContext) []string {
+				if ctx.GoAST == nil {
+					return nil
+				}
+				fileDir := filepath.Dir(ctx.FilePath)
+				return checkGoImportsASTWithDir(ctx.FilePath, ctx.GoAST, fileDir)
+			},
+		},
+		// 6. Merge conflict markers (any language)
+		{
+			Name: "merge-conflict-markers",
+			Run: func(ctx CheckContext) []string {
+				if w := checkMergeConflictMarkers(ctx.FilePath, ctx.NewContent); w != "" {
+					return []string{w}
+				}
+				return nil
+			},
+		},
+		// 7. Content growth (any language)
+		{
+			Name: "content-growth",
+			Run: func(ctx CheckContext) []string {
+				if w := checkContentGrowth(ctx.FilePath, ctx.OldContent, ctx.NewContent); w != "" {
+					return []string{w}
+				}
+				return nil
+			},
+		},
+		// 7b. Edit blast radius (any language)
+		{
+			Name: "edit-blast-radius",
+			Run: func(ctx CheckContext) []string {
+				if w := checkEditBlastRadius(ctx.FilePath, ctx.OldContent, ctx.NewContent); w != "" {
+					return []string{w}
+				}
+				return nil
+			},
+		},
+		// 8. Placeholder code (any language)
+		{
+			Name: "placeholder-code",
+			Run: func(ctx CheckContext) []string {
+				return checkPlaceholderCode(ctx.FilePath, ctx.OldContent, ctx.NewContent)
+			},
+		},
+		// 8b. Commented-out code (any language)
+		{
+			Name: "commented-code",
+			Run: func(ctx CheckContext) []string {
+				return checkCommentedCodeBlocks(ctx.FilePath, ctx.OldContent, ctx.NewContent)
+			},
+		},
+		// 9. Duplicate declarations (Go)
+		{
+			Name:  "duplicate-decls",
+			Langs: []Language{LangGo},
+			Run: func(ctx CheckContext) []string {
+				if w := checkDuplicateDeclarations(ctx.FilePath, ctx.OldContent, ctx.NewContent); w != "" {
+					return []string{w}
+				}
+				return nil
+			},
+		},
+		// 10. Delimiter balance (non-Go, self-filters internally)
+		{
+			Name: "delimiter-balance",
+			Run: func(ctx CheckContext) []string {
+				if w := checkDelimiterBalance(ctx.FilePath, ctx.NewContent); w != "" {
+					return []string{w}
+				}
+				return nil
+			},
+		},
+		// 10b. HTML/XML/JSX tag balance (markup)
+		{
+			Name:  "tag-balance",
+			Langs: []Language{LangMarkup, LangJSTS},
+			Run: func(ctx CheckContext) []string {
+				if w := checkTagBalance(ctx.FilePath, ctx.NewContent); w != "" {
+					return []string{w}
+				}
+				return nil
+			},
+		},
+		// 11. Config file syntax (config files)
+		{
+			Name:  "config-syntax",
+			Langs: []Language{LangConfig},
+			Run: func(ctx CheckContext) []string {
+				if w := configSyntaxCheck(ctx.FilePath, ctx.NewContent); w != "" {
+					return []string{w}
+				}
+				return nil
+			},
+		},
+		// 11b. Python indentation (Python only)
+		{
+			Name:  "python-indentation",
+			Langs: []Language{LangPython},
+			Run: func(ctx CheckContext) []string {
+				if w := checkPythonIndentation(ctx.FilePath, ctx.NewContent); w != "" {
+					return []string{w}
+				}
+				return nil
+			},
+		},
+		// 12. Unicode characters (any language)
+		{
+			Name: "unicode-chars",
+			Run: func(ctx CheckContext) []string {
+				if w := checkUnicodeChars(ctx.FilePath, ctx.OldContent, ctx.NewContent); w != "" {
+					return []string{w}
+				}
+				return nil
+			},
+		},
+		// 13. Context leak (Go only)
+		{
+			Name:  "context-leak",
+			Langs: []Language{LangGo},
+			Run: func(ctx CheckContext) []string {
+				if w := checkContextLeak(ctx.FilePath, ctx.OldContent, ctx.NewContent); w != "" {
+					return []string{w}
+				}
+				return nil
+			},
+		},
+		// 14. Test gaming (Go only)
+		{
+			Name:  "test-gaming",
+			Langs: []Language{LangGo},
+			Run: func(ctx CheckContext) []string {
+				if w := checkTestGaming(ctx.FilePath, ctx.OldContent, ctx.NewContent); w != "" {
+					return []string{w}
+				}
+				return nil
+			},
+		},
+		// 15. Trailing whitespace (non-Go, self-filters internally)
+		{
+			Name: "trailing-whitespace",
+			Run: func(ctx CheckContext) []string {
+				if w := checkTrailingWhitespace(ctx.FilePath, ctx.OldContent, ctx.NewContent); w != "" {
+					return []string{w}
+				}
+				return nil
+			},
+		},
+		// 16. Hardcoded paths (any language)
+		{
+			Name: "hardcoded-paths",
+			Run: func(ctx CheckContext) []string {
+				return checkHardcodedPaths(ctx.FilePath, ctx.OldContent, ctx.NewContent)
+			},
+		},
+		// 17. Resource leak (Go only)
+		{
+			Name:  "resource-leak",
+			Langs: []Language{LangGo},
+			Run: func(ctx CheckContext) []string {
+				return checkResourceLeaks(ctx.FilePath, ctx.NewContent)
+			},
+		},
+		// 18. Error swallowing (Go only)
+		{
+			Name:  "error-swallowing",
+			Langs: []Language{LangGo},
+			Run: func(ctx CheckContext) []string {
+				return checkErrorSwallowing(ctx.FilePath, ctx.OldContent, ctx.NewContent)
+			},
+		},
+		// 19. Defer in loop (Go only)
+		{
+			Name:  "defer-in-loop",
+			Langs: []Language{LangGo},
+			Run: func(ctx CheckContext) []string {
+				return checkDeferInLoop(ctx.FilePath, ctx.OldContent, ctx.NewContent)
+			},
+		},
+		// 20. Unchecked type assertion (Go only)
+		{
+			Name:  "unchecked-type-assert",
+			Langs: []Language{LangGo},
+			Run: func(ctx CheckContext) []string {
+				return checkUncheckedTypeAssert(ctx.FilePath, ctx.OldContent, ctx.NewContent)
+			},
+		},
+		// 21. Select timer leak (Go only)
+		{
+			Name:  "select-timer-leak",
+			Langs: []Language{LangGo},
+			Run: func(ctx CheckContext) []string {
+				return checkSelectTimerLeak(ctx.FilePath, ctx.OldContent, ctx.NewContent)
+			},
+		},
+		// 22. HTTP timeout (Go only)
+		{
+			Name:  "http-timeout",
+			Langs: []Language{LangGo},
+			Run: func(ctx CheckContext) []string {
+				return checkHTTPTimeout(ctx.FilePath, ctx.OldContent, ctx.NewContent)
+			},
+		},
+		// 23. Premature exit (Go only)
+		{
+			Name:  "premature-exit",
+			Langs: []Language{LangGo},
+			Run: func(ctx CheckContext) []string {
+				return checkPrematureExit(ctx.FilePath, ctx.OldContent, ctx.NewContent)
+			},
+		},
+		// 24. Lock without unlock (Go only)
+		{
+			Name:  "lock-without-unlock",
+			Langs: []Language{LangGo},
+			Run: func(ctx CheckContext) []string {
+				return checkLockWithoutUnlock(ctx.FilePath, ctx.OldContent, ctx.NewContent)
+			},
+		},
+		// 25. Unbounded recursion (Go only)
+		{
+			Name:  "unbounded-recursion",
+			Langs: []Language{LangGo},
+			Run: func(ctx CheckContext) []string {
+				return checkUnboundedRecursion(ctx.FilePath, ctx.OldContent, ctx.NewContent)
+			},
+		},
+		// 26. Error order (Go only)
+		{
+			Name:  "error-order",
+			Langs: []Language{LangGo},
+			Run: func(ctx CheckContext) []string {
+				return checkErrorOrder(ctx.FilePath, ctx.OldContent, ctx.NewContent)
+			},
+		},
+		// 27. Printf format (Go only)
+		{
+			Name:  "printf-format",
+			Langs: []Language{LangGo},
+			Run: func(ctx CheckContext) []string {
+				return checkPrintfFormat(ctx.FilePath, ctx.OldContent, ctx.NewContent)
+			},
+		},
+		// 28. Receiver consistency (Go only)
+		{
+			Name:  "receiver-consistency",
+			Langs: []Language{LangGo},
+			Run: func(ctx CheckContext) []string {
+				return checkReceiverConsistency(ctx.FilePath, ctx.OldContent, ctx.NewContent)
+			},
+		},
+		// 29. Variable shadowing (Go only)
+		{
+			Name:  "variable-shadowing",
+			Langs: []Language{LangGo},
+			Run: func(ctx CheckContext) []string {
+				return checkVarShadowing(ctx.FilePath, ctx.OldContent, ctx.NewContent)
+			},
+		},
+		// 30. Ignored error return (Go only)
+		{
+			Name:  "ignored-error-return",
+			Langs: []Language{LangGo},
+			Run: func(ctx CheckContext) []string {
+				return checkIgnoredErrorReturn(ctx.FilePath, ctx.OldContent, ctx.NewContent)
+			},
+		},
+		// 31. Range copy modification (Go only)
+		{
+			Name:  "range-copy-mod",
+			Langs: []Language{LangGo},
+			Run: func(ctx CheckContext) []string {
+				return checkRangeCopyMod(ctx.FilePath, ctx.OldContent, ctx.NewContent)
+			},
+		},
+		// 32. Goroutine leak (Go only)
+		{
+			Name:  "goroutine-leak",
+			Langs: []Language{LangGo},
+			Run: func(ctx CheckContext) []string {
+				return checkGoroutineLeak(ctx.FilePath, ctx.OldContent, ctx.NewContent)
+			},
+		},
+		// 33. Error wrapping (Go only)
+		{
+			Name:  "error-wrapping",
+			Langs: []Language{LangGo},
+			Run: func(ctx CheckContext) []string {
+				return checkErrorWrapping(ctx.FilePath, ctx.OldContent, ctx.NewContent)
+			},
+		},
+		// 33b. Interface compliance (Go only)
+		{
+			Name:  "interface-compliance",
+			Langs: []Language{LangGo},
+			Run: func(ctx CheckContext) []string {
+				if w := checkInterfaceCompliance(ctx.FilePath, ctx.OldContent, ctx.NewContent); w != "" {
+					return []string{w}
+				}
+				return nil
+			},
+		},
+		// 34b. Nil map write (Go only)
+		{
+			Name:  "nil-map-write",
+			Langs: []Language{LangGo},
+			Run: func(ctx CheckContext) []string {
+				if w := checkNilMapWrite(ctx.FilePath, ctx.OldContent, ctx.NewContent); w != "" {
+					return []string{w}
+				}
+				return nil
+			},
+		},
+		// 35. Insecure patterns (multi-language: Go, JS/TS, Python)
+		{
+			Name:  "insecure-patterns",
+			Langs: []Language{LangGo, LangJSTS, LangPython},
+			Run: func(ctx CheckContext) []string {
+				return checkInsecurePatterns(ctx.FilePath, ctx.OldContent, ctx.NewContent)
+			},
+		},
+		// 36. Loop performance (Go only)
+		{
+			Name:  "loop-perf",
+			Langs: []Language{LangGo},
+			Run: func(ctx CheckContext) []string {
+				return checkLoopPerf(ctx.FilePath, ctx.OldContent, ctx.NewContent)
+			},
+		},
+		// 37. Unreachable code (Go only)
+		{
+			Name:  "unreachable-code",
+			Langs: []Language{LangGo},
+			Run: func(ctx CheckContext) []string {
+				return checkUnreachableCode(ctx.FilePath, ctx.OldContent, ctx.NewContent)
+			},
+		},
+		// 38. Hollow test / assertion presence (Go only)
+		{
+			Name:  "hollow-test",
+			Langs: []Language{LangGo},
+			Run: func(ctx CheckContext) []string {
+				if w := checkAssertionPresence(ctx.FilePath, ctx.OldContent, ctx.NewContent); w != "" {
+					return []string{w}
+				}
+				return nil
+			},
+		},
+		// 39. Deprecated API (Go only)
+		{
+			Name:  "deprecated-api",
+			Langs: []Language{LangGo},
+			Run: func(ctx CheckContext) []string {
+				if w := checkDeprecatedAPI(ctx.FilePath, ctx.OldContent, ctx.NewContent); w != "" {
+					return []string{w}
+				}
+				return nil
+			},
+		},
+		// 40. Unsafe numeric conversion (Go only)
+		{
+			Name:  "numeric-conversion",
+			Langs: []Language{LangGo},
+			Run: func(ctx CheckContext) []string {
+				if w := checkUnsafeNumericConversion(ctx.FilePath, ctx.OldContent, ctx.NewContent); w != "" {
+					return []string{w}
+				}
+				return nil
+			},
+		},
+		// 41. Flaky test patterns (multi-language)
+		{
+			Name:  "flaky-test-patterns",
+			Langs: []Language{LangGo, LangJSTS, LangPython},
+			Run: func(ctx CheckContext) []string {
+				if w := checkFlakyTestPatterns(ctx.FilePath, ctx.OldContent, ctx.NewContent); w != "" {
+					return []string{w}
+				}
+				return nil
+			},
+		},
+		// 42. Duplicate code (Go only)
+		{
+			Name:  "duplicate-code",
+			Langs: []Language{LangGo},
+			Run: func(ctx CheckContext) []string {
+				return checkDuplicateCode(ctx.FilePath, ctx.OldContent, ctx.NewContent)
+			},
+		},
+		// 43. Magic number (Go only)
+		{
+			Name:  "magic-number",
+			Langs: []Language{LangGo},
+			Run: func(ctx CheckContext) []string {
+				if w := checkMagicNumbers(ctx.FilePath, ctx.OldContent, ctx.NewContent); w != "" {
+					return []string{w}
+				}
+				return nil
+			},
+		},
+		// 45. Panic safety (Go only)
+		{
+			Name:  "panic-safety",
+			Langs: []Language{LangGo},
+			Run: func(ctx CheckContext) []string {
+				return checkPanicSafety(ctx.FilePath, ctx.OldContent, ctx.NewContent)
+			},
+		},
+		// 46. Breaking change (Go only)
+		{
+			Name:  "breaking-change",
+			Langs: []Language{LangGo},
+			Run: func(ctx CheckContext) []string {
+				if w := checkBreakingChanges(ctx.FilePath, ctx.OldContent, ctx.NewContent); w != "" {
+					return []string{w}
+				}
+				return nil
+			},
+		},
+		// 47. Self-assignment (Go only)
+		{
+			Name:  "self-assignment",
+			Langs: []Language{LangGo},
+			Run: func(ctx CheckContext) []string {
+				if w := checkSelfAssignment(ctx.FilePath, ctx.OldContent, ctx.NewContent); w != "" {
+					return []string{w}
+				}
+				return nil
+			},
+		},
+		// 48. N+1 I/O in loop (Go only)
+		{
+			Name:  "nplus1-loop",
+			Langs: []Language{LangGo},
+			Run: func(ctx CheckContext) []string {
+				return checkNPlus1Loop(ctx.FilePath, ctx.OldContent, ctx.NewContent)
+			},
+		},
+		// 49. Concurrent map access (Go only)
+		{
+			Name:  "concurrent-map-access",
+			Langs: []Language{LangGo},
+			Run: func(ctx CheckContext) []string {
+				if w := checkConcurrentMapAccess(ctx.FilePath, ctx.OldContent, ctx.NewContent); w != "" {
+					return []string{w}
+				}
+				return nil
+			},
+		},
 	}
 
-	// 2. Content loss: non-empty source file became empty/whitespace-only.
-	//    This catches the common failure where edit_file's old_text matches
-	//    and removes the entire file content.
-	if strings.TrimSpace(oldContent) != "" && strings.TrimSpace(newContent) == "" {
-		warnings = append(warnings,
-			fmt.Sprintf("This edit resulted in an EMPTY file (was %d bytes before). "+
-				"Verify this was intended - the old_text match may have consumed the entire file content.", len(oldContent)))
-	}
-
-	// 3+5. Parse Go AST ONCE and share across syntax + import checks.
-	// This avoids calling parser.ParseFile 2-3 times per .go file write.
-	var goAST *ast.File
-	var goSyntaxErr error
-	if filepath.Ext(filePath) == ".go" && strings.TrimSpace(newContent) != "" {
-		fset := token.NewFileSet()
-		goAST, goSyntaxErr = parser.ParseFile(fset, filePath, newContent, 0)
-
-		// Syntax errors.
-		if syntaxWarnings := goSyntaxWarnings(filePath, goSyntaxErr); len(syntaxWarnings) > 0 {
-			warnings = append(warnings, syntaxWarnings...)
-		}
-
-		// Import analysis only if AST parsed cleanly.
-		// Use the file's directory as the working dir so go.mod-aware
-		// third-party import detection can find the module file.
-		if goSyntaxErr == nil {
-			fileDir := filepath.Dir(filePath)
-			if importWarnings := checkGoImportsASTWithDir(filePath, goAST, fileDir); len(importWarnings) > 0 {
-				warnings = append(warnings, importWarnings...)
-			}
-		}
-	}
-
-	// 4. Debug statement detection - flags leftover debug prints/logs that
-	//    agents commonly introduce (console.log, debugger, dd(), etc.).
-	if debugWarnings := checkDebugStatements(filePath, oldContent, newContent); len(debugWarnings) > 0 {
-		warnings = append(warnings, debugWarnings...)
-	}
-
-	// 6. Merge conflict markers - always a build failure. Agents sometimes
-	//    copy conflict markers from context verbatim into written files.
-	if markerWarn := checkMergeConflictMarkers(filePath, newContent); markerWarn != "" {
-		warnings = append(warnings, markerWarn)
-	}
-
-	// 7. Content duplication / massive growth - catches accidental double-paste
-	//    or whole-file duplication (file growing 5x+ in one edit).
-	if growthWarn := checkContentGrowth(filePath, oldContent, newContent); growthWarn != "" {
-		warnings = append(warnings, growthWarn)
-	}
-
-	// 7b. Edit blast radius - detects when a single edit modifies a high
-	//     percentage of lines (>=60%), which often indicates an unintended
-	//     full rewrite rather than a targeted change. This catches the
-	//     dangerous failure mode where edit_file's old_text matches too
-	//     broadly (e.g. matching a common pattern) or write_file replaces
-	//     a large file's entire content with something very different.
-	//     Unlike checkContentGrowth (which only fires at 5x+ growth), this
-	//     catches large SHRINKS and high-churn rewrites where the line count
-	//     stays similar but most content changes.
-	if blastWarn := checkEditBlastRadius(filePath, oldContent, newContent); blastWarn != "" {
-		warnings = append(warnings, blastWarn)
-	}
-
-	// 8. Placeholder / stub code - detects incomplete implementations that
-	//    agents commonly leave behind (panic("not implemented"), vague TODOs).
-	//    Only flags NEW placeholders introduced by this edit.
-	if placeholderWarnings := checkPlaceholderCode(filePath, oldContent, newContent); len(placeholderWarnings) > 0 {
-		warnings = append(warnings, placeholderWarnings...)
-	}
-
-	// 8b. Commented-out code blocks - detects blocks of commented-out executable
-	//     code introduced by this edit. Agents frequently comment out old code
-	//     instead of deleting it, leaving dead code that clutters diffs.
-	if commentedWarnings := checkCommentedCodeBlocks(filePath, oldContent, newContent); len(commentedWarnings) > 0 {
-		warnings = append(warnings, commentedWarnings...)
-	}
-
-	// 9. Duplicate declaration detection - detects duplicate functions, types,
-	//    imports, consts, and vars introduced by this edit. These are guaranteed
-	//    compilation errors that waste iterations if not caught immediately.
-	if dupWarn := checkDuplicateDeclarations(filePath, oldContent, newContent); dupWarn != "" {
-		warnings = append(warnings, dupWarn)
-	}
-
-	// 10. Delimiter balance - validates (), {}, [] are balanced for non-Go source
-	//     files (JS, TS, Python, Rust, Java, Dart, JSON, YAML, CSS). Go files are
-	//    covered by go/parser above. This catches the common edit failure where
-	//    the agent adds or removes a bracket without its match.
-	if delimWarn := checkDelimiterBalance(filePath, newContent); delimWarn != "" {
-		warnings = append(warnings, delimWarn)
-	}
-
-	// 10b. HTML/XML/JSX tag balance - validates markup tags are properly
-	//      balanced in HTML, JSX, TSX, Vue, Svelte, and XML files. Catches a
-	//      common agent failure that bracket checking cannot detect.
-	if tagWarn := checkTagBalance(filePath, newContent); tagWarn != "" {
-		warnings = append(warnings, tagWarn)
-	}
-
-	// 11. Config file syntax validation - parses JSON, YAML, TOML, XML after
-	//     write to catch malformed config files that would cause runtime failures.
-	//     Uses existing project parsers (zero new dependencies).
-	if configWarn := configSyntaxCheck(filePath, newContent); configWarn != "" {
-		warnings = append(warnings, configWarn)
-	}
-
-	// 11b. Python indentation consistency - detects mixed tabs/spaces in
-	//      indentation runs, which cause TabError in Python 3. This is
-	//      syntactically significant (unlike Go where gofmt handles it).
-	if pyIndentWarn := checkPythonIndentation(filePath, newContent); pyIndentWarn != "" {
-		warnings = append(warnings, pyIndentWarn)
-	}
-
-	// 12. Problematic Unicode character detection - catches smart quotes,
-	//     non-breaking spaces, zero-width characters, and other invisible
-	//     Unicode that LLMs frequently introduce. Delta-based detection
-	//     only flags characters introduced by this edit.
-	if unicodeWarn := checkUnicodeChars(filePath, oldContent, newContent); unicodeWarn != "" {
-		warnings = append(warnings, unicodeWarn)
-	}
-
-	// 13. Context propagation leak detection - flags context.TODO() or
-	//     context.Background() used in functions that receive a ctx parameter,
-	//     which breaks cancellation/deadline/trace propagation. Delta-aware.
-	if ctxLeakWarn := checkContextLeak(filePath, oldContent, newContent); ctxLeakWarn != "" {
-		warnings = append(warnings, ctxLeakWarn)
-	}
-
-	// 14. Test gaming detection - flags suspicious modifications to test files
-	//     that weaken verification: deleted test functions, added skip directives,
-	//     removed assertions. Delta-based (only flags changes introduced by this edit).
-	if testGamingWarn := checkTestGaming(filePath, oldContent, newContent); testGamingWarn != "" {
-		warnings = append(warnings, testGamingWarn)
-	}
-
-	// 15. Trailing whitespace detection - flags trailing spaces/tabs newly
-	//     introduced by this edit. Causes lint failures, git diff noise, and
-	//     pre-commit hook rejections. Delta-based; Go files skipped (gofmt handles).
-	if twWarn := checkTrailingWhitespace(filePath, oldContent, newContent); twWarn != "" {
-		warnings = append(warnings, twWarn)
-	}
-
-	// 16. Hardcoded absolute path detection - flags machine-specific paths
-	//     (/Users/.../, /home/.../, /root/.../, C:\Users\..\) introduced by
-	//     this edit. These break portability, CI/CD, and collaboration.
-	if pathWarnings := checkHardcodedPaths(filePath, oldContent, newContent); len(pathWarnings) > 0 {
-		warnings = append(warnings, pathWarnings...)
-	}
-
-	// 17. Resource leak detection - AST-based analysis of Go functions to find
-	//     resource acquisitions (os.Open, http.Get, net.Listen) without matching
-	//     defer Close() cleanup. LLMs frequently omit cleanup calls.
-	if leakWarnings := checkResourceLeaks(filePath, newContent); len(leakWarnings) > 0 {
-		warnings = append(warnings, leakWarnings...)
-	}
-
-	// 18. Error swallowing detection - AST-based analysis to catch empty error
-	//     handlers (if err != nil {}) and bare returns that drop errors
-	//     (if err != nil { return } in error-returning functions). Delta-aware.
-	if swallowWarnings := checkErrorSwallowing(filePath, oldContent, newContent); len(swallowWarnings) > 0 {
-		warnings = append(warnings, swallowWarnings...)
-	}
-
-	// 19. Defer-in-loop detection - flags defer statements inside for/range
-	//     loops, which cause resource accumulation (defer runs at function
-	//     return, not iteration end). Delta-aware.
-	if deferLoopWarnings := checkDeferInLoop(filePath, oldContent, newContent); len(deferLoopWarnings) > 0 {
-		warnings = append(warnings, deferLoopWarnings...)
-	}
-
-	// 20. Unchecked type assertion detection - flags x.(T) without comma-ok
-	//     guard, which causes runtime panics if the assertion fails. Delta-aware.
-	if assertWarnings := checkUncheckedTypeAssert(filePath, oldContent, newContent); len(assertWarnings) > 0 {
-		warnings = append(warnings, assertWarnings...)
-	}
-
-	// 21. Select-loop timer leak detection - flags time.After() inside a select
-	//     within a for/range loop, which leaks timers each iteration (timer is
-	//     not GC'd until it fires). Should use time.NewTimer + Stop/Reset. Delta-aware.
-	if timerWarnings := checkSelectTimerLeak(filePath, oldContent, newContent); len(timerWarnings) > 0 {
-		warnings = append(warnings, timerWarnings...)
-	}
-
-	// 22. HTTP client missing-timeout detection - AST-based analysis to catch
-	//     HTTP requests without any timeout. http.Get/Post/Head/PostForm use
-	//     DefaultClient (no timeout), and &http.Client{} without a Timeout field
-	//     also hangs indefinitely. This is distinct from resource leaks (missing
-	//     Close()) -- a request can have defer resp.Body.Close() but still hang
-	//     forever without a timeout. Delta-aware.
-	if timeoutWarnings := checkHTTPTimeout(filePath, oldContent, newContent); len(timeoutWarnings) > 0 {
-		warnings = append(warnings, timeoutWarnings...)
-	}
-
-	// 23. Premature exit call detection - flags os.Exit/log.Fatal/log.Panic
-	//     in non-main/init functions. These skip deferred cleanup, make functions
-	//     untestable, and prevent error propagation. Delta-aware.
-	if exitWarnings := checkPrematureExit(filePath, oldContent, newContent); len(exitWarnings) > 0 {
-		warnings = append(warnings, exitWarnings...)
-	}
-
-	// 24. Mutex lock-without-unlock detection - flags Lock/RLock/TryLock calls
-	//     without a matching Unlock/RUnlock in the same function. Causes
-	//     permanent deadlocks. The existing resource_leak_check only detects
-	//     resource-acquiring assignments (os.Open), not bare method calls like
-	//     mu.Lock(). Delta-aware.
-	if lockWarnings := checkLockWithoutUnlock(filePath, oldContent, newContent); len(lockWarnings) > 0 {
-		warnings = append(warnings, lockWarnings...)
-	}
-
-	// 25. Unbounded recursion detection - flags recursive functions where every
-	//     execution path calls itself (no base case/termination condition).
-	//     Causes guaranteed stack overflow panics at runtime. Delta-aware.
-	if recursionWarnings := checkUnboundedRecursion(filePath, oldContent, newContent); len(recursionWarnings) > 0 {
-		warnings = append(warnings, recursionWarnings...)
-	}
-
-	// 26. Result-used-before-error-check detection - flags result variables
-	//     (resp, val, etc.) used before their error is checked. The classic
-	//     pattern is `defer resp.Body.Close()` before `if err != nil`, which
-	//     causes nil pointer panics when the error is non-nil. Delta-aware.
-	if orderWarnings := checkErrorOrder(filePath, oldContent, newContent); len(orderWarnings) > 0 {
-		warnings = append(warnings, orderWarnings...)
-	}
-
-	// 27. Printf format string mismatch detection - flags non-constant format
-	//     arguments (injection risk), redundant Sprintf inside Println (double
-	//     formatting), and format verb/argument count mismatches. These cause
-	//     garbled output, runtime panics, and go vet failures. Delta-aware.
-	if printfWarnings := checkPrintfFormat(filePath, oldContent, newContent); len(printfWarnings) > 0 {
-		warnings = append(warnings, printfWarnings...)
-	}
-
-	// 28. Inconsistent receiver name detection - flags Go types where methods
-	//     use different receiver variable names (e.g., (s *Server) vs (srv *Server)).
-	//     This violates Go style conventions, triggers staticcheck ST1016, and is
-	//     a common LLM failure mode. Also flags "this"/"self" anti-pattern. Delta-aware.
-	if receiverWarnings := checkReceiverConsistency(filePath, oldContent, newContent); len(receiverWarnings) > 0 {
-		warnings = append(warnings, receiverWarnings...)
-	}
-
-	// 29. Variable shadowing detection - flags := declarations in inner scopes
-	//     that hide outer variables of the same name. Error variable (err)
-	//     shadowing is especially dangerous as it silently swallows errors.
-	//     go vet does not flag this. Delta-aware.
-	if shadowWarnings := checkVarShadowing(filePath, oldContent, newContent); len(shadowWarnings) > 0 {
-		warnings = append(warnings, shadowWarnings...)
-	}
-
-	// 30. Ignored error return detection - flags calls to error-returning
-	//     functions where the error is completely discarded (standalone call
-	//     statement or explicit _ = discard). Distinct from error_swallow_check
-	//     which only catches `if err != nil {}` empty handlers and bare returns.
-	//     Delta-aware.
-	if ignoredErrWarnings := checkIgnoredErrorReturn(filePath, oldContent, newContent); len(ignoredErrWarnings) > 0 {
-		warnings = append(warnings, ignoredErrWarnings...)
-	}
-
-	// 31. Range loop value copy modification detection - flags modifications
-	//     to range loop value variables (e.g., `item.Field = ...` in
-	//     `for _, item := range slice`). Range values are copies of slice
-	//     elements, so field modifications do NOT affect the original slice.
-	//     This is a silent runtime bug that compiles cleanly. Delta-aware.
-	if rangeCopyWarnings := checkRangeCopyMod(filePath, oldContent, newContent); len(rangeCopyWarnings) > 0 {
-		warnings = append(warnings, rangeCopyWarnings...)
-	}
-
-	// 32. Goroutine lifecycle leak detection - flags `go func()` or `go someFn()`
-	//     calls without any lifecycle management (WaitGroup, context cancellation,
-	//     errgroup, or channel signaling) in the spawning function. These goroutines
-	//     outlive the function scope, causing resource and memory leaks. The existing
-	//     resource_leak_check only detects resource acquisitions (os.Open), not
-	//     goroutine lifecycle problems. Delta-aware.
-	if goroutineWarnings := checkGoroutineLeak(filePath, oldContent, newContent); len(goroutineWarnings) > 0 {
-		warnings = append(warnings, goroutineWarnings...)
-	}
-
-	// 33. Inconsistent error wrapping detection - flags fmt.Errorf with %v
-	//     instead of %w for error args, errors.New(err.Error()), and string
-	//     concatenation in Errorf. These break errors.Is()/errors.As() chains.
-	//     Delta-aware.
-	if wrapWarnings := checkErrorWrapping(filePath, oldContent, newContent); len(wrapWarnings) > 0 {
-		warnings = append(warnings, wrapWarnings...)
-	}
-
-	// 33b. Interface compliance detection - checks if edits to Go interfaces
-	//      (adding/removing/renaming methods) break existing implementations in
-	//      the same package. Delta-aware (only checks changed interfaces).
-	if ifaceWarn := checkInterfaceCompliance(filePath, oldContent, newContent); ifaceWarn != "" {
-		warnings = append(warnings, ifaceWarn)
-	}
-
-	// 34b. Nil map write detection - flags writes to uninitialized (nil) map
-	//      variables (var m map[K]V; m["key"] = val). This causes a guaranteed
-	//      runtime panic in Go. LLMs frequently declare map variables without
-	//      make() initialization. Delta-aware.
-	if nilMapWarn := checkNilMapWrite(filePath, oldContent, newContent); nilMapWarn != "" {
-		warnings = append(warnings, nilMapWarn)
-	}
-
-	// 35. Insecure code pattern detection - flags security anti-patterns commonly
-	//     introduced by LLMs: TLS bypass (InsecureSkipVerify), weak crypto
-	//     (math/rand for tokens, MD5 for passwords), SQL injection (string
-	//     concatenation in queries), command injection (shell+concat). Multi-language
-	//     (Go, JS/TS, Python). Delta-aware.
-	if insecureWarnings := checkInsecurePatterns(filePath, oldContent, newContent); len(insecureWarnings) > 0 {
-		warnings = append(warnings, insecureWarnings...)
-	}
-
-	// 36. Loop performance anti-pattern detection - flags O(n^2) string
-	//     building inside for/range loops (string += and fmt.Sprintf concat).
-	//     LLMs frequently generate these patterns which cause quadratic
-	//     allocations. Suggests strings.Builder for O(n) alternative.
-	//     Delta-aware.
-	if perfWarnings := checkLoopPerf(filePath, oldContent, newContent); len(perfWarnings) > 0 {
-		warnings = append(warnings, perfWarnings...)
-	}
-
-	// 37. Unreachable / dead code detection - flags statements that can never
-	//     execute: code after return/panic/break, or dead branches (if false).
-	//     LLMs frequently leave unreachable code during refactoring. Delta-aware.
-	if unreachableWarnings := checkUnreachableCode(filePath, oldContent, newContent); len(unreachableWarnings) > 0 {
-		warnings = append(warnings, unreachableWarnings...)
-	}
-
-	// 38. Hollow test detection - flags Go test functions (Test*) that contain
-	//     zero assertion calls (t.Error, t.Fatal, require.*, assert.*). LLMs
-	//     frequently generate plausible-looking test stubs that never actually
-	//     verify behavior, giving false confidence. Delta-aware.
-	if hollowWarn := checkAssertionPresence(filePath, oldContent, newContent); hollowWarn != "" {
-		warnings = append(warnings, hollowWarn)
-	}
-
-	// 39. Deprecated API detection - flags usage of deprecated Go standard
-	//     library APIs (io/ioutil package, rand.Seed, strings.Title, os.SEEK_*)
-	//     that LLMs frequently recommend based on outdated training data.
-	//     Provides actionable migration guidance. Delta-aware.
-	if deprecatedWarn := checkDeprecatedAPI(filePath, oldContent, newContent); deprecatedWarn != "" {
-		warnings = append(warnings, deprecatedWarn)
-	}
-
-	// 40. Unsafe numeric type conversion detection - flags narrowing integer
-	//     conversions (int32(len(x)), uint8(count)) that silently truncate, and
-	//     time function calls with bare numeric literals (time.Sleep(5) = 5ns).
-	//     Go does NOT panic on integer overflow (wraps silently). Delta-aware.
-	if numericWarn := checkUnsafeNumericConversion(filePath, oldContent, newContent); numericWarn != "" {
-		warnings = append(warnings, numericWarn)
-	}
-
-	// 41. Flaky test pattern detection - flags non-deterministic test patterns
-	//     that LLMs commonly generate: time.Now()/time.Sleep() in assertions,
-	//     unseeded math/rand, goroutines without WaitGroup, map iteration order
-	//     dependence. These cause intermittent CI failures. Delta-aware.
-	if flakyWarn := checkFlakyTestPatterns(filePath, oldContent, newContent); flakyWarn != "" {
-		warnings = append(warnings, flakyWarn)
-	}
-
-	// 42. Duplicate code detection - detects structurally similar function bodies
-	//     (Type 1 exact clones and Type 2 renamed clones) introduced by this edit.
-	//     LLMs frequently copy-paste functions with minor modifications instead of
-	//     extracting shared logic. Uses AST-based body fingerprinting with 85%
-	//     similarity threshold. Delta-aware (at least one function must be new).
-	if dupWarnings := checkDuplicateCode(filePath, oldContent, newContent); len(dupWarnings) > 0 {
-		warnings = append(warnings, dupWarnings...)
-	}
-
-	// 43. Magic number detection - flags bare numeric literals (>=3) introduced
-	//     by this edit in comparisons, function arguments, and assignments where a
-	//     named constant would be clearer. LLMs frequently hardcode numbers instead
-	//     of using named constants. Delta-aware (only flags new occurrences).
-	if magicWarn := checkMagicNumbers(filePath, oldContent, newContent); magicWarn != "" {
-		warnings = append(warnings, magicWarn)
-	}
-
-	// 45. Bare panic safety detection - flags bare `panic()` calls in
-	//     non-main/init Go functions without recover(). The existing
-	//     exit_call_check catches log.Panic* but NOT the Go built-in panic()
-	//     because it uses qualifiedCallName which only matches package-qualified
-	//     calls. Panic in library code crashes the process in goroutines and
-	//     makes functions untestable. Delta-aware.
-	if panicWarnings := checkPanicSafety(filePath, oldContent, newContent); len(panicWarnings) > 0 {
-		warnings = append(warnings, panicWarnings...)
-	}
-
-	// 46. Breaking change detection - compares exported symbol signatures
-	//     (functions, types, vars/consts) before and after the edit. When an
-	//     exported symbol's signature changes, it likely breaks callers in other
-	//     files/packages. This is the #1 multi-file refactoring failure mode.
-	//     Delta-aware (only fires when a signature actually changed).
-	if breakingWarn := checkBreakingChanges(filePath, oldContent, newContent); breakingWarn != "" {
-		warnings = append(warnings, breakingWarn)
-	}
-
-	// 47. Self-assignment detection - flags statements where a variable or
-	//     field is assigned to itself (x = x, s.Field = s.Field). These are
-	//     no-ops that compile cleanly but represent refactoring mistakes.
-	//     staticcheck S1011 only catches trivial x = x, not field chains.
-	//     Delta-aware.
-	if selfAssignWarn := checkSelfAssignment(filePath, oldContent, newContent); selfAssignWarn != "" {
-		warnings = append(warnings, selfAssignWarn)
-	}
-
-	// 44. Missing test companion detection is NOT called here because it
-	//     requires filesystem access (checking for _test.go files in the same
-	//     directory). It is invoked separately from agent_tool.go via
-	//     CheckMissingTestCompanionWithFS after the write completes.
-
-	// 48. N+1 I/O in loop detection - detects I/O operations (database queries,
-	//     HTTP requests, file I/O) inside for/range loops. This is the classic
-	//     N+1 query anti-pattern that causes O(N) network/disk round-trips
-	//     instead of a single batched operation. The #1 production performance
-	//     anti-pattern that LLMs frequently generate. Delta-aware.
-	if nplus1Warnings := checkNPlus1Loop(filePath, oldContent, newContent); len(nplus1Warnings) > 0 {
-		warnings = append(warnings, nplus1Warnings...)
-	}
-
-	// 49. Concurrent map access detection - flags map writes in functions
-	//     that also spawn goroutines without sync primitives (Mutex/RWMutex/
-	//     sync.Map). Go maps are NOT safe for concurrent use and cause fatal
-	//     runtime crashes ('concurrent map writes'). This is among the most
-	//     common production incidents in Go. Delta-aware.
-	if concurrentMapWarn := checkConcurrentMapAccess(filePath, oldContent, newContent); concurrentMapWarn != "" {
-		warnings = append(warnings, concurrentMapWarn)
-	}
-
-	if len(warnings) == 0 {
-		return ""
-	}
-
-	// Cap warnings to avoid excessive output.
-	if len(warnings) > maxIntegrityWarnings {
-		warnings = warnings[:maxIntegrityWarnings]
-	}
-
-	debug.Log("integrity", "post-write check found %d issue(s) in %s", len(warnings), filePath)
-
-	var b strings.Builder
-	b.WriteString("[Post-write integrity check]\n")
-	for i, w := range warnings {
-		if i > 0 {
-			b.WriteString("\n")
-		}
-		b.WriteString(w)
-	}
-	return b.String()
+	debug.Log("integrity", "registered %d post-write checks", len(allChecks))
 }
 
 // goSyntaxWarnings converts a parser error into human-readable syntax error
-// descriptions. The caller must have already called parser.ParseFile and pass
-// the resulting error (nil means no errors).
+// descriptions.
 func goSyntaxWarnings(filename string, parseErr error) []string {
 	if parseErr == nil {
 		return nil
@@ -526,8 +554,6 @@ func goSyntaxWarnings(filename string, parseErr error) []string {
 
 	var warnings []string
 
-	// go/parser wraps errors in scanner.ErrorList (a []*scanner.Error).
-	// Each error has a position and message, e.g. "main.go:5:2: expected declaration, found 'if'".
 	if el, ok := parseErr.(scanner.ErrorList); ok {
 		for i, e := range el {
 			if i >= maxGoSyntaxErrors {
@@ -541,13 +567,11 @@ func goSyntaxWarnings(filename string, parseErr error) []string {
 		return warnings
 	}
 
-	// Fallback for non-ErrorList errors.
 	warnings = append(warnings, parseErr.Error())
 	return warnings
 }
 
-// checkGoSyntax is a convenience wrapper that parses src then calls
-// goSyntaxWarnings. Used by tests and as a standalone entry point.
+// checkGoSyntax is a convenience wrapper for tests.
 func checkGoSyntax(filename, src string) []string {
 	fset := token.NewFileSet()
 	_, err := parser.ParseFile(fset, filename, src, 0)
@@ -555,46 +579,18 @@ func checkGoSyntax(filename, src string) []string {
 }
 
 // checkEditBlastRadius detects when a single edit modifies a high proportion
-// of a file's lines, which typically signals an unintended full rewrite rather
-// than a targeted change.
-//
-// Research basis: All major coding agents (Claude Code, Cursor, Cline) have
-// some form of change-scope awareness, but none provide inline warnings when
-// a single edit unexpectedly rewrites most of a file. This is a common failure
-// mode when:
-//   - edit_file's old_text matches too broadly (e.g., a common function
-//     signature), causing the replacement to cascade across the file
-//   - write_file is used instead of edit_file, destroying original content
-//   - replace_all replaces an unexpectedly common pattern
-//
-// Detection approach: compute a line-level diff between old and new content.
-// If the number of changed lines (added + removed) exceeds 60% of the original
-// line count AND the file has at least 20 lines, emit a warning. The 20-line
-// minimum avoids false positives on small files where any edit is a large
-// fraction of the file. The 60% threshold is empirically calibrated: targeted
-// edits rarely change more than 30% of lines, while accidental rewrites almost
-// always change 70%+.
-//
-// This complements checkContentGrowth (which only fires at 5x growth) by also
-// catching:
-//   - Large SHRINKS (file goes from 100 lines to 30 - 70% changed)
-//   - High-churn rewrites (file stays at 100 lines but 70 of them changed)
+// of a file's lines, signaling an unintended full rewrite.
 func checkEditBlastRadius(filePath, oldContent, newContent string) string {
 	if strings.TrimSpace(oldContent) == "" || strings.TrimSpace(newContent) == "" {
 		return ""
 	}
 
-	// Count non-empty lines for both versions.
 	oldLines := strings.Count(strings.TrimRight(oldContent, "\n"), "\n") + 1
-
-	// Skip small files - ratio is meaningless for tiny files.
 	if oldLines < 20 {
 		return ""
 	}
 
-	// Compute changed lines using a simple set-difference approach.
-	// This is O(n) and avoids importing a diff library.
-	oldSet := make(map[string]int) // line -> count
+	oldSet := make(map[string]int)
 	for _, line := range strings.Split(oldContent, "\n") {
 		oldSet[line]++
 	}
@@ -603,7 +599,6 @@ func checkEditBlastRadius(filePath, oldContent, newContent string) string {
 		newSet[line]++
 	}
 
-	// Count removed lines (lines in old but not matched in new).
 	removed := 0
 	for line, oldCount := range oldSet {
 		newCount := newSet[line]
@@ -612,7 +607,6 @@ func checkEditBlastRadius(filePath, oldContent, newContent string) string {
 		}
 	}
 
-	// Count added lines (lines in new but not matched in old).
 	added := 0
 	for line, newCount := range newSet {
 		oldCount := oldSet[line]
@@ -626,15 +620,13 @@ func checkEditBlastRadius(filePath, oldContent, newContent string) string {
 		return ""
 	}
 
-	// Changed ratio relative to original file size.
 	ratio := float64(changed) / float64(oldLines)
-
-	// 60% threshold: a single edit changing >=60% of lines is suspicious.
 	if ratio >= 0.60 {
 		newLines := strings.Count(strings.TrimRight(newContent, "\n"), "\n") + 1
 		return fmt.Sprintf(
 			"This edit modified %d of %d lines (%.0f%% of the file): +%d added, -%d removed -> %d lines. "+
-				"This is a high blast-radius change - verify this was intentional and not an overly broad old_text match or accidental rewrite. "+"For targeted changes, prefer edit_file with a more specific old_text anchor.",
+				"This is a high blast-radius change - verify this was intentional and not an overly broad old_text match or accidental rewrite. "+
+				"For targeted changes, prefer edit_file with a more specific old_text anchor.",
 			changed, oldLines, ratio*100, added, removed, newLines)
 	}
 
