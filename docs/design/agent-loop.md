@@ -31,6 +31,7 @@ All optimization layers are deterministic and run in-process without extra LLM c
 | Parallel pre-execution | `parallel_tools.go` | Execute read-only tools from a batch concurrently (max 3) |
 | Dynamic tool pruning | `tool/relevance.go` | Filter low-relevance MCP tools when total tool count >30, using BM25 relevance scoring (RAG-MCP-inspired) |
 | Tool output guard | `tool_output_guard.go` | Progressive output truncation by context fill level |
+| Exit code intelligence | `exit_code_intel.go` | Translates signal-based exit codes (137=OOM, 139=segfault, 134=abort, etc.) into actionable diagnostic hints appended to command failure messages |
 | Superseded reads | `internal/context/manager.go` | Replace stale re-reads of the same file |
 | Tool-result clearing | `agent_precompact.go` | Mechanical placeholder replacement at 50/65/75% fill |
 | Tool-use input clearing | `agent_precompact.go` | Truncate old edit/write inputs after results are cleared |

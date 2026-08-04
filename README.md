@@ -91,6 +91,7 @@ individual A2A auth configuration.
 - **Agent-accessible undo** — `undo_edit` lets the LLM revert its own file edits via checkpoints, avoiding error-prone fix-forward when a previous change was wrong
 - **Schema-constrained tool validation** — pre-execution pipeline that validates enum values, numeric bounds (min/max), string length constraints, and strips hallucinated parameters — saving wasted iterations on weak models
 - **Adaptive tool timeout** — per-tool category-based timeout that adapts to observed latency, replacing a flat 5-minute default with sensible bounds (30–180s per category) so hung tools fail fast instead of wasting minutes
+- **Exit code intelligence** — when commands fail with signals (137=OOM, 139=segfault, 134=abort, 130=SIGINT, 143=SIGTERM), the agent receives an actionable diagnostic hint instead of a bare exit code, enabling immediate root-cause diagnosis
 - **PTC (Programmatic Tool Calling)** — the agent writes JavaScript in a sandboxed VM to batch-call read-only tools (read_file, grep, git_log, web_search, etc.) in a single round-trip, dramatically reducing context window consumption for multi-step analysis
 - **MCP integration** — connect external tools and data sources, with dynamic tool refresh, server logging, full capability detection, and MCP sampling (servers can request LLM completions)
 - **gRPC plugins** — extend ggcode with custom tools in Go, Python, Node.js, or any language
