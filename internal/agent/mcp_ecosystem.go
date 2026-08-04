@@ -108,89 +108,125 @@ func extractMCPToolBaseName(fullName string) string {
 	return fullName
 }
 
+const mcpErrorTruncateLimit = 200
+
+// classifyMCPServer categorizes a single server snapshot into issue buckets.
+// Returns the category and whether the server matched any issue.
+func classifyMCPServer(snap tool.MCPServerSnapshot) (failed, oauth, empty bool) {
+	if snap.Connected {
+		if len(snap.ToolNames) == 0 && len(snap.PromptNames) == 0 && len(snap.ResourceNames) == 0 {
+			empty = true
+		}
+	} else if !snap.Pending {
+		failed = true
+	}
+
+	errLower := strings.ToLower(snap.Error)
+	if strings.Contains(errLower, "oauth") ||
+		strings.Contains(errLower, "unauthorized") ||
+		strings.Contains(errLower, "authentication") {
+		oauth = true
+	}
+	return
+}
+
+// mcpIssues holds the categorized results of scanning MCP snapshots.
+type mcpIssues struct {
+	failedServers []string
+	oauthPending  []string
+	emptyServers  []string
+	errors        map[string]string // server name -> error message
+	conflicts     []mcpConflictEntry
+}
+
+func (iss *mcpIssues) hasIssues() bool {
+	return len(iss.failedServers) > 0 || len(iss.emptyServers) > 0 ||
+		len(iss.oauthPending) > 0 || len(iss.conflicts) > 0
+}
+
+func truncateMCPError(msg string) string {
+	if len(msg) > mcpErrorTruncateLimit {
+		return msg[:mcpErrorTruncateLimit] + "..."
+	}
+	return msg
+}
+
 // analyzeMCPEcosystem examines MCP server snapshots and returns a guidance
 // message if actionable issues are found. Returns empty string if healthy.
 func (s *mcpEcosystemState) analyzeMCPEcosystem(snapshots []tool.MCPServerSnapshot) string {
 	if len(snapshots) == 0 {
-		return "" // No MCP servers configured, nothing to report
+		return ""
 	}
 
-	var failedServers []string
-	var oauthPending []string
-	var emptyServers []string
+	iss := scanMCPSnapshots(snapshots)
+	if !iss.hasIssues() {
+		return ""
+	}
 
+	debug.Log("mcp-ecosystem", "detected %d failed, %d oauth, %d empty, %d conflicts",
+		len(iss.failedServers), len(iss.oauthPending), len(iss.emptyServers), len(iss.conflicts))
+	return buildMCPEcosystemReport(iss)
+}
+
+// scanMCPSnapshots classifies all servers and detects conflicts.
+func scanMCPSnapshots(snapshots []tool.MCPServerSnapshot) *mcpIssues {
+	iss := &mcpIssues{errors: make(map[string]string)}
 	for _, snap := range snapshots {
-		switch {
-		case snap.Connected:
-			if len(snap.ToolNames) == 0 && len(snap.PromptNames) == 0 && len(snap.ResourceNames) == 0 {
-				emptyServers = append(emptyServers, snap.Name)
+		failed, oauth, empty := classifyMCPServer(snap)
+		if failed {
+			iss.failedServers = append(iss.failedServers, snap.Name)
+			if snap.Error != "" {
+				iss.errors[snap.Name] = snap.Error
 			}
-		case snap.Pending:
-			// Pending is transient; skip
-		default:
-			// Failed or disconnected
-			failedServers = append(failedServers, snap.Name)
 		}
-
-		// Check for OAuth-required state
-		if strings.Contains(strings.ToLower(snap.Error), "oauth") ||
-			strings.Contains(strings.ToLower(snap.Error), "unauthorized") ||
-			strings.Contains(strings.ToLower(snap.Error), "authentication") {
-			oauthPending = append(oauthPending, snap.Name)
+		if oauth {
+			iss.oauthPending = append(iss.oauthPending, snap.Name)
+		}
+		if empty {
+			iss.emptyServers = append(iss.emptyServers, snap.Name)
 		}
 	}
+	iss.conflicts = detectToolConflicts(snapshots)
+	return iss
+}
 
-	// Detect tool name conflicts
-	conflicts := detectToolConflicts(snapshots)
-
-	if len(failedServers) == 0 && len(emptyServers) == 0 && len(oauthPending) == 0 && len(conflicts) == 0 {
-		return "" // All healthy
-	}
-
-	// Build guidance message
+// buildMCPEcosystemReport formats the issues into a human-readable guidance message.
+func buildMCPEcosystemReport(iss *mcpIssues) string {
 	var sb strings.Builder
 	sb.WriteString("[MCP Ecosystem Intelligence] The following MCP issues were detected:\n\n")
 
-	if len(failedServers) > 0 {
-		sb.WriteString(fmt.Sprintf("Failed/disconnected servers (%d): %s\n", len(failedServers), strings.Join(failedServers, ", ")))
-		// Include specific error messages for actionable debugging
-		for _, snap := range snapshots {
-			for _, failed := range failedServers {
-				if snap.Name == failed && snap.Error != "" {
-					// Truncate long error messages
-					errMsg := snap.Error
-					if len(errMsg) > 200 {
-						errMsg = errMsg[:200] + "..."
-					}
-					sb.WriteString(fmt.Sprintf("  - %s: %s\n", snap.Name, errMsg))
-					break
-				}
+	if len(iss.failedServers) > 0 {
+		sb.WriteString(fmt.Sprintf("Failed/disconnected servers (%d): %s\n",
+			len(iss.failedServers), strings.Join(iss.failedServers, ", ")))
+		for _, name := range iss.failedServers {
+			if errMsg, ok := iss.errors[name]; ok {
+				sb.WriteString(fmt.Sprintf("  - %s: %s\n", name, truncateMCPError(errMsg)))
 			}
 		}
 		sb.WriteString("  Tip: Check server command/path, network connectivity, or run `ggcode mcp list` to verify config.\n\n")
 	}
 
-	if len(oauthPending) > 0 {
-		sb.WriteString(fmt.Sprintf("Servers requiring authentication (%d): %s\n", len(oauthPending), strings.Join(oauthPending, ", ")))
+	if len(iss.oauthPending) > 0 {
+		sb.WriteString(fmt.Sprintf("Servers requiring authentication (%d): %s\n",
+			len(iss.oauthPending), strings.Join(iss.oauthPending, ", ")))
 		sb.WriteString("  Tip: OAuth tokens may be expired. Re-authenticate or update credentials in config.\n\n")
 	}
 
-	if len(emptyServers) > 0 {
-		sb.WriteString(fmt.Sprintf("Connected servers with no tools/resources (%d): %s\n", len(emptyServers), strings.Join(emptyServers, ", ")))
+	if len(iss.emptyServers) > 0 {
+		sb.WriteString(fmt.Sprintf("Connected servers with no tools/resources (%d): %s\n",
+			len(iss.emptyServers), strings.Join(iss.emptyServers, ", ")))
 		sb.WriteString("  Tip: These servers connected successfully but expose no capabilities. Verify server configuration or upgrade.\n\n")
 	}
 
-	if len(conflicts) > 0 {
-		sb.WriteString(fmt.Sprintf("Tool name conflicts (%d):\n", len(conflicts)))
-		for _, c := range conflicts {
+	if len(iss.conflicts) > 0 {
+		sb.WriteString(fmt.Sprintf("Tool name conflicts (%d):\n", len(iss.conflicts)))
+		for _, c := range iss.conflicts {
 			sb.WriteString(fmt.Sprintf("  - %s: provided by %s\n", c.toolName, strings.Join(c.servers, ", ")))
 		}
 		sb.WriteString("  Tip: Only the first server's tool will be available. Consider renaming or disabling duplicate servers.\n\n")
 	}
 
 	sb.WriteString("You can still proceed with available MCP tools. Use `list_mcp_capabilities` for current status.")
-	debug.Log("mcp-ecosystem", "detected %d failed, %d oauth, %d empty, %d conflicts",
-		len(failedServers), len(oauthPending), len(emptyServers), len(conflicts))
 	return strings.TrimSpace(sb.String())
 }
 
