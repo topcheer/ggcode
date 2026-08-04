@@ -68,34 +68,35 @@ func AnalyzeWaterfall(events []MetricEvent) []WaterfallAnalysis {
 	return results
 }
 
-func analyzeTurn(turnIdx int, events []MetricEvent) WaterfallAnalysis {
-	var toolSpans []ToolSpan
-	var llmDuration time.Duration
-	var minStart, maxEnd time.Time
+// turnMetrics holds the intermediate data extracted from a turn's events.
+type turnMetrics struct {
+	toolSpans   []ToolSpan
+	llmDuration time.Duration
+	minStart    time.Time
+	maxEnd      time.Time
+}
 
+// collectTurnMetrics iterates a turn's events and extracts tool spans,
+// LLM duration, and time bounds.
+func collectTurnMetrics(events []MetricEvent) turnMetrics {
+	var m turnMetrics
 	for _, ev := range events {
 		start := eventStart(ev)
 		end := ev.Timestamp
 		if end.IsZero() {
 			end = start
 		}
-
-		if !start.IsZero() {
-			if minStart.IsZero() || start.Before(minStart) {
-				minStart = start
-			}
+		if !start.IsZero() && (m.minStart.IsZero() || start.Before(m.minStart)) {
+			m.minStart = start
 		}
-		if !end.IsZero() {
-			if maxEnd.IsZero() || end.After(maxEnd) {
-				maxEnd = end
-			}
+		if !end.IsZero() && (m.maxEnd.IsZero() || end.After(m.maxEnd)) {
+			m.maxEnd = end
 		}
-
 		switch ev.Type {
 		case "llm":
-			llmDuration += ev.Duration
+			m.llmDuration += ev.Duration
 		case "tool":
-			toolSpans = append(toolSpans, ToolSpan{
+			m.toolSpans = append(m.toolSpans, ToolSpan{
 				Name:      ev.ToolName,
 				StartTime: start,
 				EndTime:   end,
@@ -105,50 +106,71 @@ func analyzeTurn(turnIdx int, events []MetricEvent) WaterfallAnalysis {
 			})
 		}
 	}
+	return m
+}
+
+// findBottleneck returns the name and duration of the slowest tool span.
+func findBottleneck(spans []ToolSpan) (string, time.Duration) {
+	var name string
+	var dur time.Duration
+	for _, ts := range spans {
+		if ts.Duration > dur {
+			dur = ts.Duration
+			name = ts.Name
+		}
+	}
+	return name, dur
+}
+
+// sumDurations returns the total duration across all tool spans.
+func sumDurations(spans []ToolSpan) time.Duration {
+	var total time.Duration
+	for _, ts := range spans {
+		total += ts.Duration
+	}
+	return total
+}
+
+// computeOverlapRatio measures how much tool execution overlapped.
+// Returns 0 for fully sequential, approaching 1 for fully parallel.
+func computeOverlapRatio(spans []ToolSpan, totalToolTime, wallClock time.Duration) float64 {
+	if totalToolTime <= 0 || wallClock <= 0 {
+		return 0
+	}
+	toolWallClock := computeToolWallClock(spans)
+	if totalToolTime <= toolWallClock {
+		return 0
+	}
+	return float64(totalToolTime-toolWallClock) / float64(totalToolTime)
+}
+
+func analyzeTurn(turnIdx int, events []MetricEvent) WaterfallAnalysis {
+	m := collectTurnMetrics(events)
 
 	// Sort tool spans by start time.
-	sort.SliceStable(toolSpans, func(i, j int) bool {
-		return toolSpans[i].StartTime.Before(toolSpans[j].StartTime)
+	sort.SliceStable(m.toolSpans, func(i, j int) bool {
+		return m.toolSpans[i].StartTime.Before(m.toolSpans[j].StartTime)
 	})
 
-	var totalToolTime time.Duration
-	var bottleneckName string
-	var bottleneckDur time.Duration
-	for _, ts := range toolSpans {
-		totalToolTime += ts.Duration
-		if ts.Duration > bottleneckDur {
-			bottleneckDur = ts.Duration
-			bottleneckName = ts.Name
-		}
-	}
+	totalToolTime := sumDurations(m.toolSpans)
+	bottleneckName, bottleneckDur := findBottleneck(m.toolSpans)
 
 	wallClock := time.Duration(0)
-	if !minStart.IsZero() && !maxEnd.IsZero() {
-		wallClock = maxEnd.Sub(minStart)
+	if !m.minStart.IsZero() && !m.maxEnd.IsZero() {
+		wallClock = m.maxEnd.Sub(m.minStart)
 	}
 
-	overlapRatio := 0.0
-	if totalToolTime > 0 && wallClock > 0 {
-		// overlapRatio = (sum_of_tool_durations - wall_clock_tool_time) / sum_of_tool_durations
-		// If tools are fully sequential, ratio ≈ 0; if fully parallel, ratio → 1.
-		toolWallClock := computeToolWallClock(toolSpans)
-		if totalToolTime > toolWallClock {
-			overlapRatio = float64(totalToolTime-toolWallClock) / float64(totalToolTime)
-		}
-	}
+	overlapRatio := computeOverlapRatio(m.toolSpans, totalToolTime, wallClock)
 
-	parallelGroups := findParallelGroups(toolSpans)
-	seqChain := findCriticalPath(toolSpans)
-	criticalPath := time.Duration(0)
-	for _, ts := range seqChain {
-		criticalPath += ts.Duration
-	}
+	parallelGroups := findParallelGroups(m.toolSpans)
+	seqChain := findCriticalPath(m.toolSpans)
+	criticalPath := sumDurations(seqChain)
 
 	return WaterfallAnalysis{
 		TurnIndex:            turnIdx,
 		WallClock:            wallClock,
 		TotalToolTime:        totalToolTime,
-		LLMTime:              llmDuration,
+		LLMTime:              m.llmDuration,
 		OverlapRatio:         overlapRatio,
 		CriticalPathDuration: criticalPath,
 		BottleneckTool:       bottleneckName,
