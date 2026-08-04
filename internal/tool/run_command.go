@@ -268,9 +268,22 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 		cmd.Dir = t.WorkingDir
 	}
 
-	// Inject GIT_PAGER=cat for git commands to prevent pager hangs
+	// Normalize the terminal environment for all commands so that CLI tools
+	// produce clean, deterministic output suitable for LLM consumption:
+	//   - TERM=dumb: suppresses terminfo-based color, cursor movement, and
+	//     interactive UI (progress bars, spinners) from ncurses/tput-based tools
+	//   - NO_COLOR=1: the no-color.org standard honored by Go, Rust, Node,
+	//     Python (pytest, rich), and many CLI frameworks; prevents color codes
+	//     at the source rather than relying on post-hoc ANSI stripping
+	//   - COLUMNS=120: consistent wrapping width so table/list output (kubectl,
+	//     terraform, pytest -v) wraps predictably regardless of the user's
+	//     actual terminal width
+	//   - CI=true: signals non-interactive mode to tools that check for CI
+	//     (npm, cargo, gradle, gcloud, etc.), suppressing interactive prompts
+	//     and progress bars
+	cmd.Env = normalizedCommandEnv()
 	if isGitCommand(args.Command) {
-		cmd.Env = append(os.Environ(), "GIT_PAGER=cat")
+		cmd.Env = append(cmd.Env, "GIT_PAGER=cat")
 	}
 	// Inject Co-Authored-By trailer for git commit commands
 	if isGitCommitCommand(args.Command) {
@@ -284,7 +297,10 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 		if t.WorkingDir != "" {
 			cmd.Dir = t.WorkingDir
 		}
-		cmd.Env = append(os.Environ(), "GIT_PAGER=cat")
+		cmd.Env = normalizedCommandEnv()
+		if isGitCommand(args.Command) {
+			cmd.Env = append(cmd.Env, "GIT_PAGER=cat")
+		}
 	}
 
 	if t.OnPreExec != nil {
@@ -736,4 +752,20 @@ func (w *streamingProgressWriter) Write(p []byte) (int, error) {
 
 	w.progress("", "run_command", sb.String())
 	return n, nil
+}
+
+// commandEnvOverrides are environment variables injected into every command
+// to normalize terminal behavior for clean, deterministic LLM-consumable output.
+var commandEnvOverrides = []string{
+	"TERM=dumb",   // Suppress color, cursor movement, progress bars
+	"NO_COLOR=1",  // no-color.org standard; prevents color at the source
+	"COLUMNS=120", // Consistent wrapping width for tables and lists
+	"CI=true",     // Non-interactive mode for npm, cargo, gradle, etc.
+}
+
+// normalizedCommandEnv returns os.Environ() with terminal normalization
+// overrides applied. Later entries take precedence in Go's cmd.Env semantics,
+// so the overrides replace any user-set TERM, NO_COLOR, COLUMNS, or CI values.
+func normalizedCommandEnv() []string {
+	return append(os.Environ(), commandEnvOverrides...)
 }
