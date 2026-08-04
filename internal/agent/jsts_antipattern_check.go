@@ -65,6 +65,52 @@ var jstsExemptDirs = []string{
 	".min.js", "bundle.js",
 }
 
+// jstsExts and tsExts define file extensions for JS/TS and TS-only files.
+var jstsExts = map[string]bool{
+	".js": true, ".jsx": true, ".mjs": true, ".cjs": true,
+	".ts": true, ".tsx": true, ".mts": true, ".cts": true,
+}
+
+var tsExts = map[string]bool{
+	".ts": true, ".tsx": true, ".mts": true, ".cts": true,
+}
+
+// capScanLen truncates content to the maximum scan length.
+func capScanLen(s string) string {
+	const maxScan = 256 * 1024
+	if len(s) > maxScan {
+		return s[:maxScan]
+	}
+	return s
+}
+
+// isExemptJSTSPath returns true if the file is in an exempt directory or is minified.
+func isExemptJSTSPath(lowerPath string) bool {
+	for _, dir := range jstsExemptDirs {
+		if strings.Contains(lowerPath, dir) {
+			return true
+		}
+	}
+	return false
+}
+
+// detectJSTSAntiPatternDeltas compares old vs new content for each applicable
+// anti-pattern and returns descriptions of newly introduced ones.
+func detectJSTSAntiPatternDeltas(scanOld, scanNew string, isTS bool) []string {
+	var flagged []string
+	for _, ap := range jstsAntiPatterns {
+		if ap.tsOnly && !isTS {
+			continue
+		}
+		oldCount := len(ap.pattern.FindAllString(scanOld, -1))
+		newCount := len(ap.pattern.FindAllString(scanNew, -1))
+		if introduced := newCount - oldCount; introduced > 0 {
+			flagged = append(flagged, fmt.Sprintf("%d x %s - %s", introduced, ap.name, ap.description))
+		}
+	}
+	return flagged
+}
+
 // checkJSTSAntiPatterns detects JS/TS anti-patterns INTRODUCED by this edit.
 // Returns a combined warning string if any new anti-patterns are found.
 func checkJSTSAntiPatterns(filePath, oldContent, newContent string) string {
@@ -73,49 +119,17 @@ func checkJSTSAntiPatterns(filePath, oldContent, newContent string) string {
 	}
 
 	ext := strings.ToLower(filepath.Ext(filePath))
-	isJSTS := ext == ".js" || ext == ".jsx" || ext == ".mjs" || ext == ".cjs" ||
-		ext == ".ts" || ext == ".tsx" || ext == ".mts" || ext == ".cts"
-	if !isJSTS {
+	if !jstsExts[ext] {
 		return ""
 	}
 
-	// Skip minified/generated files and exempt directories
-	lowerPath := strings.ToLower(filePath)
-	for _, dir := range jstsExemptDirs {
-		if strings.Contains(lowerPath, dir) {
-			return ""
-		}
+	if isExemptJSTSPath(strings.ToLower(filePath)) {
+		return ""
 	}
 
-	isTS := ext == ".ts" || ext == ".tsx" || ext == ".mts" || ext == ".cts"
-
-	// Cap scan length
-	const maxScan = 256 * 1024
-	scanNew := newContent
-	if len(scanNew) > maxScan {
-		scanNew = scanNew[:maxScan]
-	}
-	scanOld := oldContent
-	if len(scanOld) > maxScan {
-		scanOld = scanOld[:maxScan]
-	}
-
-	var flagged []string
-
-	for _, ap := range jstsAntiPatterns {
-		if ap.tsOnly && !isTS {
-			continue
-		}
-
-		oldCount := len(ap.pattern.FindAllString(scanOld, -1))
-		newCount := len(ap.pattern.FindAllString(scanNew, -1))
-
-		introduced := newCount - oldCount
-		if introduced > 0 {
-			flagged = append(flagged, fmt.Sprintf("%d x %s - %s", introduced, ap.name, ap.description))
-		}
-	}
-
+	flagged := detectJSTSAntiPatternDeltas(
+		capScanLen(oldContent), capScanLen(newContent), tsExts[ext],
+	)
 	if len(flagged) == 0 {
 		return ""
 	}
