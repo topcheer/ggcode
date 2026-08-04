@@ -19,6 +19,8 @@ The `create_skill` tool lets the agent create **reusable skill files** that pers
 | `content` | Yes | Full skill body -- the prompt/instructions executed when invoked |
 | `when_to_use` | No | When this skill should be used (shown in skill search) |
 | `allowed_tools` | No | Tools this skill can use in fork mode |
+| `requires_tools` | No | External CLI tools that must be on PATH (e.g. `["docker", "kubectl"]`). Validated at load time |
+| `dependencies` | No | Prerequisite skill names that should be loaded first |
 | `scope` | No | `project` (default, saved to `.ggcode/skills/`) or `global` (saved to `~/.ggcode/skills/`) |
 | `context` | No | `inline` (default) or `fork` execution mode |
 
@@ -31,12 +33,45 @@ Created skills use the standard `SKILL.md` format with YAML frontmatter:
 name: deploy-to-vercel
 description: Deploy the project to Vercel
 when_to_use: When the user wants to deploy to Vercel
+requires-tools:
+  - vercel
+dependencies:
+  - build-app
 ---
 
 ## Steps
 1. Run the build...
 2. Deploy with vercel CLI...
 ```
+
+## Dependency Declaration
+
+Skills can declare two types of dependencies in frontmatter:
+
+### `requires-tools`
+
+External CLI tools that must be installed and on `PATH` for the skill to work.
+
+```yaml
+requires-tools:
+  - docker
+  - kubectl
+  - terraform
+```
+
+When the skill is invoked, ggcode validates each tool exists on `PATH` via `exec.LookPath`. If any are missing, execution is blocked with a clear error message listing the missing tools.
+
+### `dependencies`
+
+Prerequisite skill names that should be loaded before the current skill.
+
+```yaml
+dependencies:
+  - check-env
+  - build-app
+```
+
+When the skill is loaded, the agent receives an advisory hint listing prerequisite skills. Available dependencies are suggested for loading; missing or disabled ones are noted but do not block execution.
 
 ## Scope
 
@@ -51,6 +86,8 @@ when_to_use: When the user wants to deploy to Vercel
 | Skills persist across sessions | Yes | Yes (manual) | Yes (.cursorrules) | No |
 | Immediate availability | Yes (auto-reload) | Manual restart | Manual | N/A |
 | Skill search/discovery | Yes | Yes | No | No |
+| Skill dependency declaration | Yes | No | No | No |
+| External tool validation | Yes | No | No | No |
 
 ## Related
 

@@ -59,6 +59,16 @@ func (t CreateSkillTool) Parameters() json.RawMessage {
 				"items": {"type": "string"},
 				"description": "Tools this skill is allowed to use when executed in fork mode. If empty, all tools are available."
 			},
+			"requires_tools": {
+				"type": "array",
+				"items": {"type": "string"},
+				"description": "External CLI tools that must be on PATH for this skill to work (e.g. ["docker", "kubectl"]). Validated at load time."
+			},
+			"dependencies": {
+				"type": "array",
+				"items": {"type": "string"},
+				"description": "Prerequisite skill names that should be loaded before this skill. Advised to the agent at load time."
+			},
 			"scope": {
 				"type": "string",
 				"enum": ["project", "global"],
@@ -80,13 +90,15 @@ func (t CreateSkillTool) Parameters() json.RawMessage {
 
 func (t CreateSkillTool) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
 	var args struct {
-		Name         string   `json:"name"`
-		Description  string   `json:"description"`
-		Content      string   `json:"content"`
-		WhenToUse    string   `json:"when_to_use"`
-		AllowedTools []string `json:"allowed_tools"`
-		Scope        string   `json:"scope"`
-		Context      string   `json:"context"`
+		Name          string   `json:"name"`
+		Description   string   `json:"description"`
+		Content       string   `json:"content"`
+		WhenToUse     string   `json:"when_to_use"`
+		AllowedTools  []string `json:"allowed_tools"`
+		RequiresTools []string `json:"requires_tools"`
+		Dependencies  []string `json:"dependencies"`
+		Scope         string   `json:"scope"`
+		Context       string   `json:"context"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
@@ -111,7 +123,7 @@ func (t CreateSkillTool) Execute(ctx context.Context, input json.RawMessage) (Re
 	}
 
 	skillFile := filepath.Join(skillsDir, name, "SKILL.md")
-	markdown := buildSkillMarkdown(name, desc, args.WhenToUse, args.AllowedTools, args.Context, body)
+	markdown := buildSkillMarkdown(name, desc, args.WhenToUse, args.AllowedTools, args.RequiresTools, args.Dependencies, args.Context, body)
 	if err := os.MkdirAll(filepath.Dir(skillFile), 0o755); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("cannot create skill directory: %v", err)}, nil
 	}
@@ -227,12 +239,14 @@ func validateSkillName(name string) error {
 }
 
 // buildSkillMarkdown creates the SKILL.md file content with YAML frontmatter.
-func buildSkillMarkdown(name, description, whenToUse string, allowedTools []string, execMode, body string) string {
+func buildSkillMarkdown(name, description, whenToUse string, allowedTools, requiresTools, dependencies []string, execMode, body string) string {
 	type frontmatter struct {
 		Name                   string   `yaml:"name"`
 		Description            string   `yaml:"description"`
 		WhenToUse              string   `yaml:"when_to_use,omitempty"`
 		AllowedTools           []string `yaml:"allowed-tools,omitempty"`
+		RequiresTools          []string `yaml:"requires-tools,omitempty"`
+		Dependencies           []string `yaml:"dependencies,omitempty"`
 		Context                string   `yaml:"context,omitempty"`
 		DisableModelInvocation bool     `yaml:"disable-model-invocation,omitempty"`
 	}
@@ -246,6 +260,12 @@ func buildSkillMarkdown(name, description, whenToUse string, allowedTools []stri
 	}
 	if len(allowedTools) > 0 {
 		fm.AllowedTools = allowedTools
+	}
+	if len(requiresTools) > 0 {
+		fm.RequiresTools = requiresTools
+	}
+	if len(dependencies) > 0 {
+		fm.Dependencies = dependencies
 	}
 	if mode := strings.TrimSpace(execMode); mode == "fork" || mode == "inline" {
 		fm.Context = mode

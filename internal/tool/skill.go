@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"sort"
 	"strings"
 	"time"
@@ -122,6 +123,13 @@ func (t SkillTool) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	if cmd.DisableModelInvocation {
 		return Result{IsError: true, Content: fmt.Sprintf("skill %q is only available for direct user invocation", cmd.Name)}, nil
 	}
+
+	// Validate external CLI tool dependencies before execution.
+	if missing := checkRequiredTools(cmd.RequiresTools); len(missing) > 0 {
+		return Result{IsError: true, Content: fmt.Sprintf(
+			"skill %q requires the following tools to be installed and on PATH: %s. Install them before invoking this skill.",
+			cmd.Name, strings.Join(missing, ", "))}, nil
+	}
 	if recorder, ok := t.Skills.(skillUsageRecorder); ok {
 		recorder.RecordUsage(cmd.Name)
 	}
@@ -145,6 +153,12 @@ func (t SkillTool) Execute(ctx context.Context, input json.RawMessage) (Result, 
 		"ARGS": strings.TrimSpace(args.Args),
 	})
 	content = strings.TrimSpace(content)
+
+	// If the skill declares dependencies on other skills, advise the agent.
+	if depHint := buildDependencyHint(cmd, t.Skills); depHint != "" {
+		content = depHint + "\n\n" + content
+	}
+
 	// Return a brief confirmation + inject skill content as follow-up user message.
 	// This forces the model to process and act on the skill instructions,
 	// matching Claude Code's inline skill behavior.
@@ -484,4 +498,50 @@ func formatSkillSearchResults(matches []skillSearchMatch, queryLower, query stri
 	}
 	sb.WriteString("\nUse the skill tool with the exact skill name to load one.")
 	return sb.String()
+}
+
+// checkRequiredTools returns the subset of tools that are not found on PATH.
+func checkRequiredTools(tools []string) []string {
+	var missing []string
+	for _, tool := range tools {
+		tool = strings.TrimSpace(tool)
+		if tool == "" {
+			continue
+		}
+		if _, err := exec.LookPath(tool); err != nil {
+			missing = append(missing, tool)
+		}
+	}
+	return missing
+}
+
+// buildDependencyHint returns a short advisory message if the skill declares
+// prerequisite skills that should be loaded first. Missing dependencies are
+// noted but do not block execution - the agent can still proceed.
+func buildDependencyHint(cmd *commands.Command, lookup SkillLookup) string {
+	if cmd == nil || len(cmd.Dependencies) == 0 {
+		return ""
+	}
+	var available, missing []string
+	for _, dep := range cmd.Dependencies {
+		dep = strings.TrimSpace(dep)
+		if dep == "" {
+			continue
+		}
+		if lookup != nil {
+			if dc, ok := lookup.Get(dep); ok && dc != nil && dc.Enabled {
+				available = append(available, dep)
+				continue
+			}
+		}
+		missing = append(missing, dep)
+	}
+	var parts []string
+	if len(available) > 0 {
+		parts = append(parts, fmt.Sprintf("Prerequisite skills: %s. Load them via the skill tool if needed.", strings.Join(available, ", ")))
+	}
+	if len(missing) > 0 {
+		parts = append(parts, fmt.Sprintf("Note: declared dependencies not found or disabled: %s.", strings.Join(missing, ", ")))
+	}
+	return strings.Join(parts, " ")
 }

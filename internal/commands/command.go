@@ -35,6 +35,8 @@ type Command struct {
 	ArgumentHint           string
 	Arguments              []string
 	WhenToUse              string
+	RequiresTools          []string // external CLI tools that must be on PATH (e.g. docker, kubectl)
+	Dependencies           []string // prerequisite skill names that should be loaded first
 	UserInvocable          bool
 	DisableModelInvocation bool
 	Context                string

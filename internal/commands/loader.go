@@ -24,6 +24,8 @@ type frontmatter struct {
 	ArgumentHint           string   `yaml:"argument-hint"`
 	Arguments              []string `yaml:"arguments"`
 	WhenToUse              string   `yaml:"when_to_use"`
+	RequiresTools          []string `yaml:"requires-tools"`
+	Dependencies           []string `yaml:"dependencies"`
 	UserInvocable          *bool    `yaml:"user-invocable"`
 	DisableModelInvocation bool     `yaml:"disable-model-invocation"`
 	Context                string   `yaml:"context"`
@@ -166,6 +168,8 @@ func loadCommandFile(path, name string, target loadTarget) (*Command, bool) {
 		ArgumentHint:           strings.TrimSpace(meta.ArgumentHint),
 		Arguments:              append([]string(nil), meta.Arguments...),
 		WhenToUse:              strings.TrimSpace(meta.WhenToUse),
+		RequiresTools:          append([]string(nil), meta.RequiresTools...),
+		Dependencies:           append([]string(nil), meta.Dependencies...),
 		DisableModelInvocation: meta.DisableModelInvocation,
 		Context:                strings.TrimSpace(meta.Context),
 		UserInvocable:          true,
