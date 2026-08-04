@@ -183,11 +183,13 @@ type Agent struct {
 	branchGuard                *branchGuardState                     // protected branch edit warning (main/master/develop awareness)
 	destructiveGuard           *gitDestructiveState                  // destructive git operation detection (reset --hard, force push, etc.)
 	shellNativeHint            *shellNativeHintState                 // suggests native tools when agent uses shell for equivalent operations
+	bgOrphan                   *bgOrphanState                        // orphaned background command detection (unchecked start_command jobs)
 	contextFootprint           *contextFootprintState                // per-tool context budget attribution (which tools consume the most context)
 	redundantRead              *redundantReadState                   // redundant re-read detection (context waste prevention)
 	ruleStore                  *RuleStore                            // cached rule store for hot-path rule injection (avoids per-tool disk I/O)
 	ruleInjectCount            map[string]int                        // per-rule injection counter for dedup (caps repetitive hints)
 	approvalMemory             *permission.ApprovalMemory            // session-level learned approval patterns (auto-approve after N repeats)
+	behaviorPattern            *behaviorPatternState                 // cross-run behavioral anti-pattern detection (systemic issue awareness)
 	lastRunStats               *RunStats                             // stats from the most recent run (for post-run summary display)
 	systemPromptInjector       func() string                         // returns extra system prompt text to inject (e.g. lanchat peer warnings)
 	baseSystemPrompt           string                                // the fully built static system prompt; used as reset base for dynamic injection
@@ -255,6 +257,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		destructiveGuard:     newGitDestructiveState(),
 		shellNativeHint:      newShellNativeHintState(),
 		approvalMemory:       permission.NewApprovalMemory(),
+		behaviorPattern:      newBehaviorPatternState(),
 		fulfillmentGate:      newFulfillmentGateState(),
 		companionGuard:       newCompanionGuardState(),
 		complexityGate:       newComplexityGateState(),
@@ -280,6 +283,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		toolFallback:         newToolFallbackState(),
 		contextFootprint:     newContextFootprintState(),
 		redundantRead:        newRedundantReadState(),
+		bgOrphan:             newBgOrphanState(),
 	}
 	a.syncContextManagerProviderLocked()
 	a.syncContextManagerUsageHandlerLocked()
@@ -929,10 +933,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.fulfillmentGate.reset()
 	a.companionGuard.reset()
 	a.complexityGate.reset()
+	a.behaviorPattern.reset()
 	a.argSizeGuardFires = 0
 	a.redundantRead.reset()
 	a.toolSequence.reset()
 	a.shellNativeHint.reset()
+	a.resetBgOrphan()
 	if a.effortAdapter != nil {
 		a.effortAdapter.reset()
 	}
@@ -1084,6 +1090,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.maybeInjectAutopilotGoalCollection()
 	a.maybeInjectCorrectionFeedback()
 	a.maybeInjectSentimentFeedback(userPromptForStats)
+	a.maybeInjectBehaviorPattern()
 	a.maybeInjectDynamicSystemPrompt()
 	a.maybeInjectRatchetRules()
 
@@ -1292,6 +1299,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.contextManager.Add(provider.Message{
 				Role:    "user",
 				Content: []provider.ContentBlock{{Type: "text", Text: thermalMsg}},
+			})
+			msgs = a.contextManager.Messages()
+		}
+
+		// Orphaned background command detection: nudge the agent to check
+		// output of background commands (start_command) that haven't been
+		// read for several iterations.
+		if bgOrphanMsg := a.maybeWarnBgOrphan(i + 1); bgOrphanMsg != "" {
+			a.contextManager.Add(provider.Message{
+				Role:    "user",
+				Content: []provider.ContentBlock{{Type: "text", Text: bgOrphanMsg}},
 			})
 			msgs = a.contextManager.Messages()
 		}
@@ -2152,6 +2170,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					result.Content = seqHint
 				}
 			}
+
+			// Orphaned background command tracking: record start_command jobs
+			// and mark output checks. Detects forgotten background processes.
+			a.recordBgToolCall(tc.Name, tc.Arguments, result.Content, i+1)
 
 			// Record tool errors for reflection/ratchet rule extraction.
 			if result.IsError {
