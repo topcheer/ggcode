@@ -193,6 +193,7 @@ type Agent struct {
 	approvalMemory             *permission.ApprovalMemory            // session-level learned approval patterns (auto-approve after N repeats)
 	behaviorPattern            *behaviorPatternState                 // cross-run behavioral anti-pattern detection (systemic issue awareness)
 	lastRunStats               *RunStats                             // stats from the most recent run (for post-run summary display)
+	qualityScorer              *ResponseQualityScorer                // per-run response quality scoring for provider/model A/B comparison
 	systemPromptInjector       func() string                         // returns extra system prompt text to inject (e.g. lanchat peer warnings)
 	baseSystemPrompt           string                                // the fully built static system prompt; used as reset base for dynamic injection
 	lastInjectedSystemPrompt   string                                // cache of last injected prompt to skip redundant updates
@@ -287,6 +288,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		redundantRead:        newRedundantReadState(),
 		bgOrphan:             newBgOrphanState(),
 		crossFileImpact:      newCrossFileImpactState(),
+		qualityScorer:        NewResponseQualityScorer(100),
 	}
 	a.syncContextManagerProviderLocked()
 	a.syncContextManagerUsageHandlerLocked()
@@ -298,6 +300,23 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		})
 	}
 	return a
+}
+
+// QualityComparison returns aggregated quality stats per provider/model pair,
+// sorted by average score descending. Returns nil if no runs have been scored.
+func (a *Agent) QualityComparison() []ProviderComparison {
+	if a.qualityScorer == nil {
+		return nil
+	}
+	return a.qualityScorer.Compare()
+}
+
+// QualityReport returns a human-readable provider/model comparison summary.
+func (a *Agent) QualityReport() string {
+	if a.qualityScorer == nil {
+		return "Quality scoring not available."
+	}
+	return a.qualityScorer.FormatComparison()
 }
 
 // SetProbeKey sets the probe cache key ("vendor|baseURL|model") used for

@@ -406,6 +406,20 @@ func (a *Agent) maybeReflect(stats *RunStats) {
 		return
 	}
 	s := *stats // copy to avoid race
+
+	// Score run quality for provider/model A/B comparison.
+	if a.qualityScorer != nil {
+		providerName := ""
+		modelName := ""
+		if p, ok := a.provider.(interface{ Name() string }); ok {
+			providerName = p.Name()
+		}
+		if m, ok := a.provider.(interface{ ModelName() string }); ok {
+			modelName = m.ModelName()
+		}
+		a.qualityScorer.ScoreRun(&s, providerName, modelName)
+	}
+
 	safego.Go("agent.reflection", func() {
 		defer func() {
 			if r := recover(); r != nil {
