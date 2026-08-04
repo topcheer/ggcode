@@ -124,5 +124,16 @@ func bundledSkills() []*Command {
 			UserInvocable: false,
 			Enabled:       true,
 		},
+		{
+			Name:          "review-changes",
+			DisplayName:   "Review code changes",
+			Description:   "Produce a structured code review report of current working tree changes with categorized severity findings.",
+			WhenToUse:     "Use when the user asks to review their changes, check code quality before committing, or get a pre-commit review pass.",
+			Template:      "Run the `review_changes` tool to get a structured review report of current git changes. The tool analyzes added lines for debug statements, hardcoded secrets, new TODOs, commented-out code blocks, large changes, and untracked files. Choose scope: 'all' (default), 'staged', or 'unstaged'. After getting results, summarize the critical and warning findings for the user and suggest fixes.",
+			Source:        SourceBundled,
+			LoadedFrom:    LoadedFromBundled,
+			UserInvocable: false,
+			Enabled:       true,
+		},
 	}
 }
