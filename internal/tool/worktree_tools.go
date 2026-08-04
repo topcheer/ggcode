@@ -321,39 +321,57 @@ func (t ListWorktree) Execute(ctx context.Context, input json.RawMessage) (Resul
 		return Result{IsError: true, Content: fmt.Sprintf("not a git repository: %v", err)}, nil
 	}
 
-	// Get porcelain v2 output: worktree <path> <head> <upstream> <branch>
+	entries, err := parseWorktreeList(ctx, gitRoot)
+	if err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("error listing worktrees: %v", err)}, nil
+	}
+
+	for i := range entries {
+		if entries[i].Path == gitRoot || (t.WorkingDir != "" && entries[i].Path == t.WorkingDir) {
+			entries[i].IsCurrent = true
+		}
+	}
+
+	checkWorktreeDirty(ctx, entries)
+
+	return Result{
+		Content: formatWorktreeList(entries),
+	}, nil
+}
+
+// parseWorktreeList runs `git worktree list --porcelain` and parses the output.
+func parseWorktreeList(ctx context.Context, gitRoot string) ([]worktreeEntry, error) {
 	cmd := exec.CommandContext(ctx, "git", "worktree", "list", "--porcelain")
 	cmd.Dir = gitRoot
 	cmd.Env = append(os.Environ(), "GIT_PAGER=cat")
 	out, err := cmd.Output()
 	if err != nil {
-		return Result{IsError: true, Content: fmt.Sprintf("error listing worktrees: %v", err)}, nil
+		return nil, err
 	}
 
-	// Parse porcelain output
 	var entries []worktreeEntry
 	var cur *worktreeEntry
-	for _, line := range strings.Split(string(out), "\n") {
-		line = strings.TrimSpace(line)
+	for _, raw := range strings.Split(string(out), "\n") {
+		line := strings.TrimSpace(raw)
 		if line == "" {
 			continue
 		}
-		if strings.HasPrefix(line, "worktree ") {
+		switch {
+		case strings.HasPrefix(line, "worktree "):
 			wtPath := strings.TrimPrefix(line, "worktree ")
 			entries = append(entries, worktreeEntry{Path: wtPath})
 			cur = &entries[len(entries)-1]
-			if wtPath == gitRoot || t.WorkingDir != "" && wtPath == t.WorkingDir {
-				cur.IsCurrent = true
-			}
-		} else if cur != nil && strings.HasPrefix(line, "HEAD ") {
+		case cur != nil && strings.HasPrefix(line, "HEAD "):
 			cur.HEAD = strings.TrimPrefix(line, "HEAD ")
-		} else if cur != nil && strings.HasPrefix(line, "branch ") {
-			cur.Branch = strings.TrimPrefix(line, "branch ")
-			cur.Branch = strings.TrimPrefix(cur.Branch, "refs/heads/")
+		case cur != nil && strings.HasPrefix(line, "branch "):
+			cur.Branch = strings.TrimPrefix(strings.TrimPrefix(line, "branch "), "refs/heads/")
 		}
 	}
+	return entries, nil
+}
 
-	// Check dirty status for each worktree
+// checkWorktreeDirty checks each worktree for uncommitted changes in-place.
+func checkWorktreeDirty(ctx context.Context, entries []worktreeEntry) {
 	for i := range entries {
 		stCmd := exec.CommandContext(ctx, "git", "status", "--porcelain")
 		stCmd.Dir = entries[i].Path
@@ -363,12 +381,13 @@ func (t ListWorktree) Execute(ctx context.Context, input json.RawMessage) (Resul
 			entries[i].Dirty = true
 		}
 	}
+}
 
+// formatWorktreeList renders worktree entries as a human-readable summary.
+func formatWorktreeList(entries []worktreeEntry) string {
 	if len(entries) == 0 {
-		entries = []worktreeEntry{}
+		return "0 worktree(s)."
 	}
-
-	// Build human-readable summary
 	var sb strings.Builder
 	for _, e := range entries {
 		marker := " "
@@ -381,14 +400,15 @@ func (t ListWorktree) Execute(ctx context.Context, input json.RawMessage) (Resul
 		}
 		branchStr := e.Branch
 		if branchStr == "" {
-			branchStr = "(detached HEAD " + e.HEAD[:min(7, len(e.HEAD))] + ")"
+			if len(e.HEAD) > 7 {
+				branchStr = "(detached HEAD " + e.HEAD[:7] + ")"
+			} else {
+				branchStr = "(detached HEAD " + e.HEAD + ")"
+			}
 		}
 		sb.WriteString(fmt.Sprintf("%s %-40s  %s%s\n", marker, e.Path, branchStr, dirtyStr))
 	}
-
-	return Result{
-		Content: fmt.Sprintf("%d worktree(s):\n%s", len(entries), strings.TrimSpace(sb.String())),
-	}, nil
+	return fmt.Sprintf("%d worktree(s):\n%s", len(entries), strings.TrimSpace(sb.String()))
 }
 
 // Clone returns an independent copy of ListWorktree for use by a different agent.
