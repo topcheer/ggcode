@@ -42,7 +42,7 @@ func hasPythonSource(root string) bool {
 }
 
 func hasSourceWithSuffixes(root string, suffixes []string) bool {
-	has := func(name string) bool {
+	match := func(name string) bool {
 		for _, s := range suffixes {
 			if strings.HasSuffix(name, s) {
 				return true
@@ -50,44 +50,59 @@ func hasSourceWithSuffixes(root string, suffixes []string) bool {
 		}
 		return false
 	}
-
+	// Depth 0
+	if dirContainsMatchingFile(root, match) {
+		return true
+	}
+	// Depth 1 and 2
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		return false
 	}
-	for _, e := range entries {
-		if !e.IsDir() && has(e.Name()) {
-			return true
-		}
-	}
-	for _, e := range entries {
-		if !e.IsDir() || overviewSkipDirs[e.Name()] || strings.HasPrefix(e.Name(), ".") {
+	for _, e1 := range entries {
+		if !e1.IsDir() || skipScanDir(e1.Name()) {
 			continue
 		}
-		sub, err := os.ReadDir(filepath.Join(root, e.Name()))
+		dir1 := filepath.Join(root, e1.Name())
+		if dirContainsMatchingFile(dir1, match) {
+			return true
+		}
+		// Depth 2
+		sub, err := os.ReadDir(dir1)
 		if err != nil {
 			continue
 		}
-		for _, s := range sub {
-			if !s.IsDir() && has(s.Name()) {
+		for _, e2 := range sub {
+			if !e2.IsDir() || skipScanDir(e2.Name()) {
+				continue
+			}
+			if dirContainsMatchingFile(filepath.Join(dir1, e2.Name()), match) {
 				return true
-			}
-			// Depth 2
-			if !s.IsDir() || overviewSkipDirs[s.Name()] || strings.HasPrefix(s.Name(), ".") {
-				continue
-			}
-			sub2, err := os.ReadDir(filepath.Join(root, e.Name(), s.Name()))
-			if err != nil {
-				continue
-			}
-			for _, s2 := range sub2 {
-				if !s2.IsDir() && has(s2.Name()) {
-					return true
-				}
 			}
 		}
 	}
 	return false
+}
+
+// dirContainsMatchingFile checks whether a directory has at least one
+// non-directory entry matching the given predicate.
+func dirContainsMatchingFile(dir string, match func(string) bool) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if !e.IsDir() && match(e.Name()) {
+			return true
+		}
+	}
+	return false
+}
+
+// skipScanDir returns true for directories that should never be scanned
+// (hidden, overview-skip-listed).
+func skipScanDir(name string) bool {
+	return overviewSkipDirs[name] || strings.HasPrefix(name, ".")
 }
 
 // TS/JS export patterns.
@@ -219,20 +234,9 @@ func collectMultilangDirs(root string, langTag string, deadline time.Time) []str
 	var dirs []string
 
 	hasFiles := func(dir string) bool {
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			return false
-		}
-		for _, e := range entries {
-			if e.IsDir() {
-				continue
-			}
-			name := e.Name()
-			if isMultilangSourceFile(name, langTag) {
-				return true
-			}
-		}
-		return false
+		return dirContainsMatchingFile(dir, func(name string) bool {
+			return isMultilangSourceFile(name, langTag)
+		})
 	}
 
 	// Root level
@@ -246,7 +250,7 @@ func collectMultilangDirs(root string, langTag string, deadline time.Time) []str
 	}
 
 	for _, e1 := range level1 {
-		if !e1.IsDir() || overviewSkipDirs[e1.Name()] || strings.HasPrefix(e1.Name(), ".") {
+		if !e1.IsDir() || skipScanDir(e1.Name()) {
 			continue
 		}
 		if time.Now().After(deadline) {
@@ -264,7 +268,7 @@ func collectMultilangDirs(root string, langTag string, deadline time.Time) []str
 			continue
 		}
 		for _, e2 := range level2 {
-			if !e2.IsDir() || overviewSkipDirs[e2.Name()] || strings.HasPrefix(e2.Name(), ".") {
+			if !e2.IsDir() || skipScanDir(e2.Name()) {
 				continue
 			}
 			dir2 := filepath.Join(dir1, e2.Name())
