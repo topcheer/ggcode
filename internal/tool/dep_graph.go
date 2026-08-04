@@ -120,7 +120,25 @@ func (t DepGraphTool) Execute(ctx context.Context, input json.RawMessage) (Resul
 		return Result{IsError: true, Content: fmt.Sprintf("failed to build dependency graph: %v", err)}, nil
 	}
 
-	// Compute reverse edges (imported_by)
+	computeReverseEdges(graph)
+
+	result := depGraphResult{
+		ModulePath: modPath,
+		Action:     args.Action,
+		Packages:   len(graph),
+		Edges:      countEdges(graph),
+	}
+
+	if err := populateActionResult(&result, args, graph, fileCount); err != nil {
+		return Result{IsError: true, Content: err.Error()}, nil
+	}
+
+	return Result{Content: formatDepGraphResult(result)}, nil
+}
+
+// computeReverseEdges populates the Imported field for each node by reversing
+// the forward import edges, then deduplicates.
+func computeReverseEdges(graph map[string]*pkgNode) {
 	for pkg, node := range graph {
 		for _, imp := range node.Imports {
 			if dep, ok := graph[imp]; ok {
@@ -128,30 +146,33 @@ func (t DepGraphTool) Execute(ctx context.Context, input json.RawMessage) (Resul
 			}
 		}
 	}
-	// Dedup reverse edges
 	for _, node := range graph {
 		node.Imported = dedupSorted(node.Imported)
 	}
+}
 
-	// Count edges
-	edgeCount := 0
+// countEdges returns total forward import edges in the graph.
+func countEdges(graph map[string]*pkgNode) int {
+	count := 0
 	for _, node := range graph {
-		edgeCount += len(node.Imports)
+		count += len(node.Imports)
 	}
+	return count
+}
 
-	result := depGraphResult{
-		ModulePath: modPath,
-		Action:     args.Action,
-		Packages:   len(graph),
-		Edges:      edgeCount,
-	}
-
+// populateActionResult fills the result struct based on the requested action.
+func populateActionResult(result *depGraphResult, args struct {
+	Path       string `json:"path"`
+	Action     string `json:"action"`
+	Target     string `json:"target"`
+	MaxResults int    `json:"max_results"`
+}, graph map[string]*pkgNode, fileCount map[string]int) error {
 	switch args.Action {
 	case "overview":
 		result.Nodes = buildOverview(graph, fileCount, args.MaxResults)
 	case "reverse_deps":
 		if args.Target == "" {
-			return Result{IsError: true, Content: "target parameter is required for reverse_deps action"}, nil
+			return fmt.Errorf("target parameter is required for reverse_deps action")
 		}
 		result.Target = args.Target
 		result.ReverseDeps = findReverseDeps(graph, args.Target, args.MaxResults)
@@ -160,10 +181,9 @@ func (t DepGraphTool) Execute(ctx context.Context, input json.RawMessage) (Resul
 	case "hotspots":
 		result.Hotspots = findHotspots(graph, args.MaxResults)
 	default:
-		return Result{IsError: true, Content: fmt.Sprintf("unknown action: %s", args.Action)}, nil
+		return fmt.Errorf("unknown action: %s", args.Action)
 	}
-
-	return Result{Content: formatDepGraphResult(result)}, nil
+	return nil
 }
 
 // findModulePath walks up from dir to find go.mod and returns (modulePath, modRoot).
@@ -194,77 +214,23 @@ func buildDepGraph(ctx context.Context, modRoot, modulePath string) (map[string]
 
 	fset := token.NewFileSet()
 
-	err := filepath.Walk(modRoot, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return nil // skip unreadable paths
-		}
-		if info.IsDir() {
-			name := info.Name()
-			// Skip hidden dirs, vendor, testdata, etc.
-			if name == "vendor" || name == "testdata" || name == ".git" ||
-				strings.HasPrefix(name, ".") && name != "." {
-				return filepath.SkipDir
-			}
+	var walkCtx context.Context = ctx
+	err := filepath.Walk(modRoot, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
 			return nil
 		}
-		if !strings.HasSuffix(path, ".go") {
+		if shouldSkipDir(info) {
+			return filepath.SkipDir
+		}
+		if !shouldParseFile(info) {
 			return nil
 		}
-		// Skip _test.go files for dependency graph (test deps are ephemeral)
-		if strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-
-		// Check context cancellation
 		select {
-		case <-ctx.Done():
-			return ctx.Err()
+		case <-walkCtx.Done():
+			return walkCtx.Err()
 		default:
 		}
-
-		// Parse imports only (skip function bodies for speed)
-		f, err := parser.ParseFile(fset, path, nil, parser.ImportsOnly)
-		if err != nil {
-			return nil // skip unparseable files
-		}
-
-		// Determine the package's import path relative to module root
-		relDir, err := filepath.Rel(modRoot, filepath.Dir(path))
-		if err != nil {
-			return nil
-		}
-		var pkgPath string
-		if relDir == "." {
-			pkgPath = modulePath
-		} else {
-			pkgPath = modulePath + "/" + filepath.ToSlash(relDir)
-		}
-
-		// Get or create node
-		node, ok := graph[pkgPath]
-		if !ok {
-			node = &pkgNode{
-				Path:      pkgPath,
-				ShortName: shortPkgName(pkgPath, modulePath),
-			}
-			graph[pkgPath] = node
-		}
-		node.FileCount++
-		fileCount[pkgPath]++
-
-		// Extract imports - only keep intra-module imports
-		for _, imp := range f.Imports {
-			impPath := strings.Trim(imp.Path.Value, `"`)
-			if !strings.HasPrefix(impPath, modulePath) {
-				continue // skip external deps
-			}
-			if impPath == pkgPath {
-				continue // skip self-import
-			}
-			node.Imports = append(node.Imports, impPath)
-		}
-
-		return nil
+		return processGoFile(fset, path, modRoot, modulePath, graph, fileCount)
 	})
 	if err != nil {
 		return nil, nil, err
@@ -289,6 +255,64 @@ func buildDepGraph(ctx context.Context, modRoot, modulePath string) (map[string]
 	}
 
 	return graph, fileCount, nil
+}
+
+// shouldSkipDir returns true for directories that should not be traversed.
+func shouldSkipDir(info os.FileInfo) bool {
+	if !info.IsDir() {
+		return false
+	}
+	name := info.Name()
+	return name == "vendor" || name == "testdata" || name == ".git" ||
+		(strings.HasPrefix(name, ".") && name != ".")
+}
+
+// shouldParseFile returns true for non-test .go files.
+func shouldParseFile(info os.FileInfo) bool {
+	if info.IsDir() {
+		return false
+	}
+	path := info.Name()
+	return strings.HasSuffix(path, ".go") && !strings.HasSuffix(path, "_test.go")
+}
+
+// processGoFile parses a single .go file and records its package imports in the graph.
+func processGoFile(fset *token.FileSet, path, modRoot, modulePath string, graph map[string]*pkgNode, fileCount map[string]int) error {
+	f, err := parser.ParseFile(fset, path, nil, parser.ImportsOnly)
+	if err != nil {
+		return nil // skip unparseable files
+	}
+
+	relDir, err := filepath.Rel(modRoot, filepath.Dir(path))
+	if err != nil {
+		return nil
+	}
+	var pkgPath string
+	if relDir == "." {
+		pkgPath = modulePath
+	} else {
+		pkgPath = modulePath + "/" + filepath.ToSlash(relDir)
+	}
+
+	node, ok := graph[pkgPath]
+	if !ok {
+		node = &pkgNode{
+			Path:      pkgPath,
+			ShortName: shortPkgName(pkgPath, modulePath),
+		}
+		graph[pkgPath] = node
+	}
+	node.FileCount++
+	fileCount[pkgPath]++
+
+	for _, imp := range f.Imports {
+		impPath := strings.Trim(imp.Path.Value, `"`)
+		if !strings.HasPrefix(impPath, modulePath) || impPath == pkgPath {
+			continue
+		}
+		node.Imports = append(node.Imports, impPath)
+	}
+	return nil
 }
 
 // shortPkgName returns the last component of a package path, relative to module.
