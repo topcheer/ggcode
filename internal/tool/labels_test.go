@@ -236,6 +236,13 @@ func TestDescribeTool(t *testing.T) {
 			wantDetail:  "my-pattern",
 			wantDisplay: "Save Memory my-pattern",
 		},
+		{
+			name: "cmd_snippet", toolName: "cmd_snippet",
+			rawArgs:     `{"action":"save","name":"build-go"}`,
+			wantName:    "Snippet",
+			wantDetail:  "save",
+			wantDisplay: "Snippet save",
+		},
 
 		// Git
 		{

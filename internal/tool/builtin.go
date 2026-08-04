@@ -134,6 +134,9 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 
 		// Code review (on-demand structured diff analysis)
 		ReviewChanges{WorkingDir: workingDir},
+
+		// Command snippet library (persistent, project-scoped reusable shell commands)
+		&CmdSnippetTool{WorkingDir: workingDir},
 	)
 	for _, tool := range tools {
 		if err := registry.Register(tool); err != nil {
