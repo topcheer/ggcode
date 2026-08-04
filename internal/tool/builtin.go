@@ -143,6 +143,9 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 
 		// Cross-session knowledge graph (typed entities + relationships)
 		&KnowledgeGraphTool{WorkingDir: workingDir},
+
+		// Project scaffolding (multi-language templates: Go, TS, Python, Rust)
+		ScaffoldProject{SandboxCheck: sandboxFor("scaffold_project"), WorkingDir: workingDir},
 	)
 	for _, tool := range tools {
 		if err := registry.Register(tool); err != nil {
