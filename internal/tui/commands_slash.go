@@ -12,6 +12,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/topcheer/ggcode/internal/agentruntime"
+	"github.com/topcheer/ggcode/internal/chat"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/image"
@@ -119,6 +120,12 @@ func (m *Model) switchToSession(ses *session.Session, isNew bool) {
 			cpMgr.Clear()
 		}
 		agentruntime.RestoreSessionIntoAgent(m.agent, ses)
+	}
+
+	// Check if the previous run in this session was interrupted by a crash.
+	// If so, display a recovery message to the user via the chat list.
+	if recoveryMsg := agentruntime.CheckCrashRecovery(ses.ID); recoveryMsg != "" {
+		m.chatWrite(chat.NewSystemItem("crash-recovery", recoveryMsg, m.chatStyles))
 	}
 
 	m.SetSession(ses, m.sessionStore)

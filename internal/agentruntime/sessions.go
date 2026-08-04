@@ -302,3 +302,20 @@ func RestoreSessionIntoAgent(agentInst *agent.Agent, ses *session.Session) (comp
 
 	return compacted, beforeTokens, afterTokens
 }
+
+// CheckCrashRecovery detects whether the session's previous run was interrupted
+// by a crash (SIGKILL, panic, power loss). If so, it returns a human-readable
+// recovery message that callers can display to the user or inject into the
+// agent's context. Returns empty string if no crash is detected.
+//
+// This should be called after RestoreSessionIntoAgent during session resume.
+func CheckCrashRecovery(sessionID string) string {
+	info := agent.CheckCrashedRun(sessionID)
+	return agent.FormatCrashRecoveryMessage(info)
+}
+
+// CleanupJournals removes stale run journals older than maxAge. Call this at
+// application startup to prevent unbounded journal file accumulation.
+func CleanupJournals(maxAge time.Duration) {
+	agent.CleanupOldJournals(maxAge)
+}
