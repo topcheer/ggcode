@@ -122,25 +122,8 @@ func (e *envDriftState) check(workingDir string) string {
 		return ""
 	}
 
-	// Collect actual env vars from .env files
-	actualVars := make(map[string]bool)
-	for _, name := range envActualFiles {
-		p := filepath.Join(absDir, name)
-		if content, err := os.ReadFile(p); err == nil {
-			for k, v := range parseEnvContent(string(content)) {
-				if v {
-					actualVars[k] = true
-				}
-			}
-		}
-	}
-
-	// Also check os.Environ for vars set in the shell environment
-	for _, kv := range os.Environ() {
-		if idx := strings.IndexByte(kv, '='); idx > 0 {
-			actualVars[kv[:idx]] = true
-		}
-	}
+	// Collect actual env vars from .env files and shell environment
+	actualVars := collectActualEnvVars(absDir)
 
 	// Find missing vars
 	var missing []string
@@ -161,6 +144,27 @@ func (e *envDriftState) check(workingDir string) string {
 	e.lastResult = msg
 	e.fired = true
 	return msg
+}
+
+// collectActualEnvVars gathers all env vars from .env files and the shell environment.
+func collectActualEnvVars(absDir string) map[string]bool {
+	actualVars := make(map[string]bool)
+	for _, name := range envActualFiles {
+		p := filepath.Join(absDir, name)
+		if content, err := os.ReadFile(p); err == nil {
+			for k, v := range parseEnvContent(string(content)) {
+				if v {
+					actualVars[k] = true
+				}
+			}
+		}
+	}
+	for _, kv := range os.Environ() {
+		if idx := strings.IndexByte(kv, '='); idx > 0 {
+			actualVars[kv[:idx]] = true
+		}
+	}
+	return actualVars
 }
 
 // envVar represents a parsed env var from a template file.
