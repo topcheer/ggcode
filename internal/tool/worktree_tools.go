@@ -282,6 +282,120 @@ func findGitRootFromWorktree(worktreePath string) (string, error) {
 	return gitDir, nil
 }
 
+// ListWorktree lists all git worktrees with their branches, dirty status, and paths.
+type ListWorktree struct {
+	WorkingDir string
+}
+
+func (t ListWorktree) Name() string { return "list_worktree" }
+
+func (t ListWorktree) Description() string {
+	return "List all git worktrees with branch, dirty status, and last commit. " +
+		"Use before creating a new worktree to avoid name collisions, or to find an existing worktree to resume work in."
+}
+
+func (t ListWorktree) Parameters() json.RawMessage {
+	return json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"description": {
+				"type": "string",
+				"description": "REQUIRED. Brief activity label shown in the UI."
+			}
+		},
+		"required": ["description"]
+	}`)
+}
+
+type worktreeEntry struct {
+	Path      string `json:"path"`
+	Branch    string `json:"branch"`
+	HEAD      string `json:"head"`
+	Dirty     bool   `json:"dirty"`
+	IsCurrent bool   `json:"is_current"`
+}
+
+func (t ListWorktree) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
+	gitRoot, err := findGitRoot(ctx, t.WorkingDir)
+	if err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("not a git repository: %v", err)}, nil
+	}
+
+	// Get porcelain v2 output: worktree <path> <head> <upstream> <branch>
+	cmd := exec.CommandContext(ctx, "git", "worktree", "list", "--porcelain")
+	cmd.Dir = gitRoot
+	cmd.Env = append(os.Environ(), "GIT_PAGER=cat")
+	out, err := cmd.Output()
+	if err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("error listing worktrees: %v", err)}, nil
+	}
+
+	// Parse porcelain output
+	var entries []worktreeEntry
+	var cur *worktreeEntry
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "worktree ") {
+			wtPath := strings.TrimPrefix(line, "worktree ")
+			entries = append(entries, worktreeEntry{Path: wtPath})
+			cur = &entries[len(entries)-1]
+			if wtPath == gitRoot || t.WorkingDir != "" && wtPath == t.WorkingDir {
+				cur.IsCurrent = true
+			}
+		} else if cur != nil && strings.HasPrefix(line, "HEAD ") {
+			cur.HEAD = strings.TrimPrefix(line, "HEAD ")
+		} else if cur != nil && strings.HasPrefix(line, "branch ") {
+			cur.Branch = strings.TrimPrefix(line, "branch ")
+			cur.Branch = strings.TrimPrefix(cur.Branch, "refs/heads/")
+		}
+	}
+
+	// Check dirty status for each worktree
+	for i := range entries {
+		stCmd := exec.CommandContext(ctx, "git", "status", "--porcelain")
+		stCmd.Dir = entries[i].Path
+		stCmd.Env = append(os.Environ(), "GIT_PAGER=cat")
+		stOut, stErr := stCmd.Output()
+		if stErr == nil && len(strings.TrimSpace(string(stOut))) > 0 {
+			entries[i].Dirty = true
+		}
+	}
+
+	if len(entries) == 0 {
+		entries = []worktreeEntry{}
+	}
+
+	// Build human-readable summary
+	var sb strings.Builder
+	for _, e := range entries {
+		marker := " "
+		if e.IsCurrent {
+			marker = "*"
+		}
+		dirtyStr := ""
+		if e.Dirty {
+			dirtyStr = " (uncommitted changes)"
+		}
+		branchStr := e.Branch
+		if branchStr == "" {
+			branchStr = "(detached HEAD " + e.HEAD[:min(7, len(e.HEAD))] + ")"
+		}
+		sb.WriteString(fmt.Sprintf("%s %-40s  %s%s\n", marker, e.Path, branchStr, dirtyStr))
+	}
+
+	return Result{
+		Content: fmt.Sprintf("%d worktree(s):\n%s", len(entries), strings.TrimSpace(sb.String())),
+	}, nil
+}
+
+// Clone returns an independent copy of ListWorktree for use by a different agent.
+func (t ListWorktree) Clone() Tool {
+	return &ListWorktree{WorkingDir: t.WorkingDir}
+}
+
 // Clone returns an independent copy of EnterWorktree for use by a different agent.
 func (t EnterWorktree) Clone() Tool {
 	return &EnterWorktree{WorkingDir: t.WorkingDir}

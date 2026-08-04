@@ -126,6 +126,8 @@ func formatToolCallText(tc *ToolCallInfo) string {
 	case "exit_worktree":
 		action := extractArgValue(args, "action")
 		return fmt.Sprintf("🌿 Exit worktree (%s)", action)
+	case "list_worktree":
+		return "📋 List worktrees"
 	// Team/swarm/a2a tools
 	case "teammate_list", "swarm_task_list", "swarm_task_claim",
 		"a2a_discover", "a2a_list_tasks", "a2a_cancel_task", "a2a_get_task":
@@ -425,6 +427,8 @@ func formatSpecialIMToolResult(tr *ToolResultInfo) (bool, string) {
 		return true, formatIMWorktreeResult("🌿", tr)
 	case "exit_worktree":
 		return true, formatIMWorktreeResult("🌿", tr)
+	case "list_worktree":
+		return true, formatIMWorktreeResult("📋", tr)
 	// Team/swarm/a2a tools — hidden
 	case "teammate_list", "swarm_task_list", "swarm_task_claim",
 		"a2a_discover", "a2a_list_tasks", "a2a_cancel_task", "a2a_get_task":

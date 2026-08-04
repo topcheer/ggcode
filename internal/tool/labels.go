@@ -306,6 +306,8 @@ func DescribeTool(toolName, rawArgs string) ToolPresentation {
 		return toolPres("Worktree", displayTarget(argStr(args, "name")))
 	case "exit_worktree":
 		return toolPres("Exit Worktree", displayTarget(argStr(args, "action")))
+	case "list_worktree":
+		return toolPres("List Worktrees", "")
 	case "use_namedagent":
 		name := argStr(args, "name")
 		task := argStr(args, "task")

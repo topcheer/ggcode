@@ -440,3 +440,116 @@ func TestFindGitRootFromWorktree_NotWorktree(t *testing.T) {
 		t.Error("expected error for non-worktree directory")
 	}
 }
+
+// --- ListWorktree ---
+
+func TestListWorktree_SingleRepo(t *testing.T) {
+	dir := initTestGitRepo(t)
+	tool := ListWorktree{WorkingDir: dir}
+
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.Content)
+	}
+	// Main repo should appear as a worktree
+	if !strings.Contains(result.Content, "worktree") {
+		t.Errorf("expected worktree listing, got: %s", result.Content)
+	}
+}
+
+func TestListWorktree_MultipleWorktrees(t *testing.T) {
+	dir := initTestGitRepo(t)
+
+	// Create two worktrees
+	enterTool := EnterWorktree{WorkingDir: dir}
+	r1, err := enterTool.Execute(context.Background(), json.RawMessage(`{"name":"wt-alpha"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r1.IsError {
+		t.Fatalf("create wt-alpha failed: %s", r1.Content)
+	}
+
+	r2, err := enterTool.Execute(context.Background(), json.RawMessage(`{"name":"wt-beta"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r2.IsError {
+		t.Fatalf("create wt-beta failed: %s", r2.Content)
+	}
+
+	// List should show all three (main + 2 worktrees)
+	listTool := ListWorktree{WorkingDir: dir}
+	result, err := listTool.Execute(context.Background(), json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.Content)
+	}
+	if !strings.Contains(result.Content, "wt-alpha") {
+		t.Errorf("expected wt-alpha in listing: %s", result.Content)
+	}
+	if !strings.Contains(result.Content, "wt-beta") {
+		t.Errorf("expected wt-beta in listing: %s", result.Content)
+	}
+	if !strings.Contains(result.Content, "3 worktree") {
+		t.Errorf("expected 3 worktrees, got: %s", result.Content)
+	}
+
+	// Clean up
+	exec.Command("git", "worktree", "remove", "--force", r1.SuggestedWorkingDir).Run()
+	exec.Command("git", "worktree", "remove", "--force", r2.SuggestedWorkingDir).Run()
+}
+
+func TestListWorktree_DirtyDetection(t *testing.T) {
+	dir := initTestGitRepo(t)
+
+	// Create a worktree
+	enterTool := EnterWorktree{WorkingDir: dir}
+	r1, err := enterTool.Execute(context.Background(), json.RawMessage(`{"name":"wt-dirty"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r1.IsError {
+		t.Fatalf("create wt-dirty failed: %s", r1.Content)
+	}
+	wtPath := r1.SuggestedWorkingDir
+
+	// Make it dirty
+	cmd := exec.Command("sh", "-c", "echo 'uncommitted' > newfile.txt")
+	cmd.Dir = wtPath
+	cmd.Run()
+
+	// List should show dirty marker
+	listTool := ListWorktree{WorkingDir: dir}
+	result, err := listTool.Execute(context.Background(), json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.Content)
+	}
+	if !strings.Contains(result.Content, "uncommitted") {
+		t.Errorf("expected dirty marker in listing: %s", result.Content)
+	}
+
+	// Clean up
+	exec.Command("git", "worktree", "remove", "--force", wtPath).Run()
+}
+
+func TestListWorktree_NonGitRepo(t *testing.T) {
+	dir := t.TempDir()
+	tool := ListWorktree{WorkingDir: dir}
+
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.IsError {
+		t.Error("expected error for non-git directory")
+	}
+}

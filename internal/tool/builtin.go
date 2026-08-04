@@ -63,6 +63,7 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 		// Worktree
 		&EnterWorktree{WorkingDir: workingDir},
 		&ExitWorktree{WorkingDir: workingDir},
+		&ListWorktree{WorkingDir: workingDir},
 
 		// Execution
 		&RunCommand{WorkingDir: workingDir, Policy: policy},
