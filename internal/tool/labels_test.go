@@ -243,6 +243,13 @@ func TestDescribeTool(t *testing.T) {
 			wantDetail:  "save",
 			wantDisplay: "Snippet save",
 		},
+		{
+			name: "scaffold_project", toolName: "scaffold_project",
+			rawArgs:     `{"language":"go","project_name":"my-app"}`,
+			wantName:    "Scaffold",
+			wantDetail:  "go",
+			wantDisplay: "Scaffold go",
+		},
 
 		// Git
 		{
