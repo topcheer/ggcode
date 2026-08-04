@@ -54,22 +54,8 @@ func DetectProjectProfile(workingDir string) *ProjectProfile {
 				profile.BuildCommand = "go build ./..."
 				profile.TestCommand = "go test ./..."
 			}
-			// Check for Makefile with build tags (ggcode uses -tags goolm)
-			if data, err := os.ReadFile(filepath.Join(workingDir, "Makefile")); err == nil {
-				mf := string(data)
-				if strings.Contains(mf, "goolm") || strings.Contains(mf, "TAGS") {
-					profile.BuildCommand = "go build -tags goolm ./..."
-					profile.TestCommand = "go test -tags goolm ./..."
-				}
-				profile.BuildSystem = "Make"
-			}
-			// Check for build tags in go.mod or common patterns
-			if content, err := os.ReadFile(p); err == nil {
-				modContent := string(content)
-				if strings.Contains(modContent, "mautrix") {
-					profile.Frameworks = appendUnique(profile.Frameworks, "mautrix")
-				}
-			}
+			detectGoMakefileTags(profile, workingDir)
+			detectGoModFrameworks(profile, p)
 		}},
 
 		// --- Node.js / JavaScript / TypeScript ---
@@ -80,37 +66,7 @@ func DetectProjectProfile(workingDir string) *ProjectProfile {
 				profile.BuildCommand = "npm run build"
 				profile.TestCommand = "npm test"
 			}
-			if content, err := os.ReadFile(p); err == nil {
-				pj := string(content)
-				if strings.Contains(pj, "\"react\"") {
-					profile.Frameworks = appendUnique(profile.Frameworks, "React")
-				}
-				if strings.Contains(pj, "\"vue\"") {
-					profile.Frameworks = appendUnique(profile.Frameworks, "Vue")
-				}
-				if strings.Contains(pj, "\"next\"") {
-					profile.Frameworks = appendUnique(profile.Frameworks, "Next.js")
-				}
-				if strings.Contains(pj, "\"svelte\"") {
-					profile.Frameworks = appendUnique(profile.Frameworks, "Svelte")
-				}
-				if strings.Contains(pj, "\"express\"") {
-					profile.Frameworks = appendUnique(profile.Frameworks, "Express")
-				}
-				if strings.Contains(pj, "\"wails\"") || strings.Contains(pj, "\"@wailsapp") {
-					profile.Frameworks = appendUnique(profile.Frameworks, "Wails")
-				}
-				// Detect scripts
-				if strings.Contains(pj, "\"lint\"") && profile.LintCommand == "" {
-					profile.LintCommand = "npm run lint"
-				}
-				if strings.Contains(pj, "\"test\"") {
-					profile.TestCommand = "npm test"
-				}
-				if strings.Contains(pj, "\"build\"") {
-					profile.BuildCommand = "npm run build"
-				}
-			}
+			detectNpmFrameworks(profile, p)
 		}},
 
 		// --- TypeScript config ---
@@ -127,18 +83,7 @@ func DetectProjectProfile(workingDir string) *ProjectProfile {
 				profile.TestCommand = "cargo test"
 				profile.LintCommand = "cargo clippy"
 			}
-			if content, err := os.ReadFile(p); err == nil {
-				ct := string(content)
-				if strings.Contains(ct, "tokio") {
-					profile.Frameworks = appendUnique(profile.Frameworks, "tokio")
-				}
-				if strings.Contains(ct, "actix") {
-					profile.Frameworks = appendUnique(profile.Frameworks, "Actix")
-				}
-				if strings.Contains(ct, "axum") {
-					profile.Frameworks = appendUnique(profile.Frameworks, "Axum")
-				}
-			}
+			detectCargoFrameworks(profile, p)
 		}},
 
 		// --- Python ---
@@ -374,4 +319,72 @@ func isMonorepo(dir string) bool {
 		return true
 	}
 	return false
+}
+
+// detectGoMakefileTags checks for Makefile with build tags like goolm.
+func detectGoMakefileTags(p *ProjectProfile, workingDir string) {
+	if data, err := os.ReadFile(filepath.Join(workingDir, "Makefile")); err == nil {
+		mf := string(data)
+		if strings.Contains(mf, "goolm") || strings.Contains(mf, "TAGS") {
+			p.BuildCommand = "go build -tags goolm ./..."
+			p.TestCommand = "go test -tags goolm ./..."
+		}
+		p.BuildSystem = "Make"
+	}
+}
+
+// detectGoModFrameworks detects frameworks from go.mod content.
+func detectGoModFrameworks(p *ProjectProfile, goModPath string) {
+	if content, err := os.ReadFile(goModPath); err == nil {
+		if strings.Contains(string(content), "mautrix") {
+			p.Frameworks = appendUnique(p.Frameworks, "mautrix")
+		}
+	}
+}
+
+// detectNpmFrameworks detects JS frameworks and scripts from package.json.
+func detectNpmFrameworks(p *ProjectProfile, pkgPath string) {
+	content, err := os.ReadFile(pkgPath)
+	if err != nil {
+		return
+	}
+	pj := string(content)
+	fwMap := map[string]string{
+		"\"react\"":   "React",
+		"\"vue\"":     "Vue",
+		"\"next\"":    "Next.js",
+		"\"svelte\"":  "Svelte",
+		"\"express\"": "Express",
+	}
+	for key, name := range fwMap {
+		if strings.Contains(pj, key) {
+			p.Frameworks = appendUnique(p.Frameworks, name)
+		}
+	}
+	if strings.Contains(pj, "\"wails\"") || strings.Contains(pj, "\"@wailsapp") {
+		p.Frameworks = appendUnique(p.Frameworks, "Wails")
+	}
+	if strings.Contains(pj, "\"lint\"") && p.LintCommand == "" {
+		p.LintCommand = "npm run lint"
+	}
+	if strings.Contains(pj, "\"test\"") {
+		p.TestCommand = "npm test"
+	}
+	if strings.Contains(pj, "\"build\"") {
+		p.BuildCommand = "npm run build"
+	}
+}
+
+// detectCargoFrameworks detects Rust frameworks from Cargo.toml.
+func detectCargoFrameworks(p *ProjectProfile, cargoPath string) {
+	content, err := os.ReadFile(cargoPath)
+	if err != nil {
+		return
+	}
+	ct := string(content)
+	for _, fw := range []string{"tokio", "actix", "axum"} {
+		if strings.Contains(ct, fw) {
+			p.Frameworks = appendUnique(p.Frameworks, fw)
+		}
+	}
 }
