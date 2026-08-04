@@ -30,13 +30,33 @@ import * as App from '../../wailsjs/go/main/App'
 
 // Inner layout that uses useTranslation (must be inside I18nProvider)
 function LayoutInner() {
-  // ── Theme initialization (auto-detect OS preference, persist user choice) ──
+  // --- Theme initialization (auto-detect OS preference, persist user choice) ---
   useEffect(() => {
     const saved = localStorage.getItem('ggcode-theme')
     if (saved === 'dark' || saved === 'light') {
       document.documentElement.classList.toggle('dark', saved === 'dark')
     } else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
       document.documentElement.classList.add('dark')
+    }
+  }, [])
+
+  // --- Window focus tracking for desktop notifications ---
+  // When the window loses focus, the backend will send OS-level
+  // notifications on task completion, errors, and approval requests.
+  useEffect(() => {
+    const updateFocus = () => {
+      const focused = !document.hidden && document.hasFocus()
+      App.SetWindowFocused(focused).catch(() => {})
+    }
+    // Set initial state (focused on mount)
+    App.SetWindowFocused(true).catch(() => {})
+    document.addEventListener('visibilitychange', updateFocus)
+    window.addEventListener('blur', updateFocus)
+    window.addEventListener('focus', updateFocus)
+    return () => {
+      document.removeEventListener('visibilitychange', updateFocus)
+      window.removeEventListener('blur', updateFocus)
+      window.removeEventListener('focus', updateFocus)
     }
   }, [])
 

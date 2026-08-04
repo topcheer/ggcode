@@ -993,6 +993,25 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
   useEffect(() => { if (statusBar.usagePercent < 80) setContextBannerDismissed(false) }, [statusBar.usagePercent])
   const [isDragOver, setIsDragOver] = useState(false)
   const dragCounterRef = useRef(0)
+
+  // === NATIVE FILE DROP (OS file manager drag-and-drop via Wails) ===
+  // Wails emits 'file:drop' with absolute file paths when the user drags
+  // files from Finder/Explorer into the window. We insert the paths as
+  // text references into the input box.
+  useEffect(() => {
+    const offFileDrop = EventsOn('file:drop', (data: { paths: string[] }) => {
+      if (!data?.paths || data.paths.length === 0) return
+      const pathRefs = data.paths.map((p: string) => `\`${p}\``).join('\n')
+      setInput(prev => {
+        const sep = prev && !prev.endsWith('\n') ? '\n' : ''
+        return `${prev}${sep}${pathRefs}\n`
+      })
+      // Focus input after file drop
+      requestAnimationFrame(() => inputRef.current?.focus())
+    })
+    return () => { offFileDrop() }
+  }, [])
+
   const currentTabStreaming = activeTab === 'main'
     ? isStreaming
     : (agentPanels.get(activeTab)?.status === 'running')

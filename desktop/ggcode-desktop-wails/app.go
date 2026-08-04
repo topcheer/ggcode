@@ -53,6 +53,8 @@ type App struct {
 	askUserReq    tool.AskUserRequest
 	hasAskUserReq bool
 
+	notifications *NotificationManager
+
 	streamEvents chan uiEvent
 	streamOnce   sync.Once
 	shutdownOnce sync.Once
@@ -83,8 +85,31 @@ func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	a.startEventLoop()
 
+	// Register native file drag-and-drop handler.
+	// When the user drags files from the OS file manager into the window,
+	// Wails provides the absolute file paths. We emit them as a frontend
+	// event so ChatView can insert file references into the input.
+	runtime.OnFileDrop(ctx, func(x, y int, paths []string) {
+		if len(paths) == 0 {
+			return
+		}
+		debug.Log("desktop", "file-drop: %d file(s) dropped at (%d,%d)", len(paths), x, y)
+		a.enqueueUIEvent("file:drop", map[string]interface{}{
+			"x":     x,
+			"y":     y,
+			"paths": paths,
+		})
+	})
+
+	// Initialize notification manager
+	a.notifications = NewNotificationManager()
+	a.notifications.SetContext(ctx)
+
 	// Load shared desktop config (same file as Fyne desktop)
 	a.dc = wailskit.LoadDesktopConfig()
+
+	// Sync notification preference from config
+	a.notifications.SetEnabled(a.dc.IsNotificationsEnabled())
 
 	// Restore window position and size from the saved desktop config.
 	// This makes the window reopen at the same location/size as last session.
@@ -286,6 +311,21 @@ func (a *App) emitStreamEvent(eventType string, data json.RawMessage) {
 	}
 	if eventType == "pending_consumed" {
 		a.enqueueUIEvent(eventType, nil)
+	}
+
+	// Trigger desktop notifications for important events when the
+	// window is not focused (user switched to another app).
+	if a.notifications != nil {
+		switch eventType {
+		case "complete":
+			a.notifications.Notify("GGCode", "Task completed")
+		case "error":
+			a.notifications.Notify("GGCode", "An error occurred")
+		case "approval:request":
+			a.notifications.NotifyApprovalNeeded("GGCode", "Approval needed")
+		case "ask_user:request":
+			a.notifications.NotifyApprovalNeeded("GGCode", "Question from agent")
+		}
 	}
 }
 
@@ -730,6 +770,35 @@ func (a *App) SetPermissionMode(mode string) {
 	if a.chat != nil {
 		a.chat.SetPermissionMode(mode)
 	}
+}
+
+// --- Desktop Notification API (called from frontend) ---
+
+// SetWindowFocused tells the backend whether the window currently has focus.
+// Notifications are suppressed when focused, and the unread badge resets.
+func (a *App) SetWindowFocused(focused bool) {
+	if a.notifications != nil {
+		a.notifications.SetFocused(focused)
+	}
+}
+
+// SetNotificationsEnabled toggles the master notification switch and persists to config.
+func (a *App) SetNotificationsEnabled(enabled bool) {
+	if a.notifications != nil {
+		a.notifications.SetEnabled(enabled)
+	}
+	if a.dc != nil {
+		a.dc.SetNotificationsEnabled(enabled)
+		_ = a.dc.Save()
+	}
+}
+
+// GetUnreadNotifications returns the current unread notification count.
+func (a *App) GetUnreadNotifications() int {
+	if a.notifications == nil {
+		return 0
+	}
+	return a.notifications.GetUnread()
 }
 
 // SwitchModel changes the active model at runtime.

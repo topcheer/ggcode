@@ -114,6 +114,12 @@ func main() {
 		OnStartup:                app.startup,
 		OnShutdown:               app.shutdown,
 		EnableDefaultContextMenu: true,
+		DragAndDrop: &options.DragAndDrop{
+			EnableFileDrop:     true,
+			DisableWebViewDrop: true,
+			CSSDropProperty:    "--wails-drop-target",
+			CSSDropValue:       "drop",
+		},
 		Bind: []interface{}{
 			app,
 		},
