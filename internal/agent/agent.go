@@ -964,6 +964,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		} else {
 			debug.Log("agent", "skipping reflection/ratchet on cancellation")
 		}
+		// Record completed run stats for cross-run behavioral pattern detection.
+		// Runs even on cancellation since partial work is still observable behavior.
+		if a.behaviorPattern != nil {
+			a.behaviorPattern.recordRun(runStats)
+		}
 		a.mu.RLock()
 		fn := a.onRunResult
 		a.mu.RUnlock()
