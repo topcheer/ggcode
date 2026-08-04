@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -63,7 +64,7 @@ type SkillTool struct {
 func (t SkillTool) Name() string { return "skill" }
 
 func (t SkillTool) Description() string {
-	return "Load a reusable skill workflow or prompt. Use this when a listed skill clearly matches the user's task, then continue the task using the returned guidance. Do not use this for built-in CLI commands like /help or /clear."
+	return "Load a reusable skill workflow or prompt, or search available skills by keyword. Use this when a listed skill clearly matches the user's task, then continue using the returned guidance. To discover skills by keyword, prefix the query with a question mark (e.g. skill: \"?deploy\"). Do not use for built-in CLI commands like /help or /clear."
 }
 
 func (t SkillTool) Parameters() json.RawMessage {
@@ -72,7 +73,7 @@ func (t SkillTool) Parameters() json.RawMessage {
 	"properties": {
 		"skill": {
 			"type": "string",
-			"description": "Skill name to load. Must match a listed reusable skill; do not pass built-in CLI/slash commands."
+			"description": "Skill name to load, or prefix with '?' to search skills by keyword (e.g. '?deploy' finds deployment-related skills). Must match a listed reusable skill; do not pass built-in CLI/slash commands."
 		},
 		"args": {
 			"type": "string",
@@ -100,6 +101,11 @@ func (t SkillTool) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	}
 	if t.Skills == nil {
 		return Result{IsError: true, Content: "skill system is unavailable"}, nil
+	}
+	// Skill search mode: prefix '?' triggers keyword search across all skills.
+	if strings.HasPrefix(args.Skill, "?") {
+		query := strings.TrimSpace(strings.TrimPrefix(args.Skill, "?"))
+		return t.searchSkills(query), nil
 	}
 	cmd, ok := t.Skills.Get(args.Skill)
 	if !ok {
@@ -373,4 +379,92 @@ func (t SkillTool) skillNotFoundMsg(query string) string {
 	}
 	sb.WriteString("?")
 	return sb.String()
+}
+
+// searchSkills performs keyword search across all available skills and returns
+// ranked results. Empty query returns all skills (for browsing/discovery).
+func (t SkillTool) searchSkills(query string) Result {
+	if t.NameLister == nil || t.Skills == nil {
+		return Result{IsError: true, Content: "skill search is unavailable"}
+	}
+	names := t.NameLister.SkillNames()
+	if len(names) == 0 {
+		return Result{Content: "No skills are currently available."}
+	}
+	queryLower := strings.ToLower(strings.TrimSpace(query))
+	type skillMatch struct {
+		name  string
+		desc  string
+		score int
+	}
+	var matches []skillMatch
+	for _, name := range names {
+		cmd, ok := t.Skills.Get(name)
+		if !ok || cmd == nil {
+			continue
+		}
+		score := 0
+		nameLower := strings.ToLower(name)
+		desc := strings.TrimSpace(cmd.Description)
+		when := strings.TrimSpace(cmd.WhenToUse)
+		if queryLower == "" {
+			score = 1
+		} else {
+			if nameLower == queryLower {
+				score += 20
+			} else if strings.Contains(nameLower, queryLower) {
+				score += 10
+			}
+			if desc != "" && strings.Contains(strings.ToLower(desc), queryLower) {
+				score += 5
+			}
+			if when != "" && strings.Contains(strings.ToLower(when), queryLower) {
+				score += 5
+			}
+		}
+		if score > 0 {
+			d := desc
+			if d == "" {
+				d = when
+			}
+			matches = append(matches, skillMatch{name: name, desc: d, score: score})
+		}
+	}
+	if len(matches) == 0 {
+		return Result{Content: fmt.Sprintf("No skills found matching %q. Try a different keyword or browse all skills with skill: \"?\".", query)}
+	}
+	sort.Slice(matches, func(i, j int) bool {
+		if matches[i].score != matches[j].score {
+			return matches[i].score > matches[j].score
+		}
+		return matches[i].name < matches[j].name
+	})
+	const maxResults = 25
+	total := len(matches)
+	if len(matches) > maxResults {
+		matches = matches[:maxResults]
+	}
+	var sb strings.Builder
+	if queryLower == "" {
+		sb.WriteString(fmt.Sprintf("Available skills (%d total):\n\n", total))
+	} else {
+		sb.WriteString(fmt.Sprintf("Skills matching %q (%d found):\n\n", query, total))
+	}
+	for _, m := range matches {
+		line := fmt.Sprintf("- %s", m.name)
+		if m.desc != "" {
+			const maxDesc = 120
+			if len(m.desc) > maxDesc {
+				line += ": " + m.desc[:maxDesc-3] + "..."
+			} else {
+				line += ": " + m.desc
+			}
+		}
+		sb.WriteString(line + "\n")
+	}
+	if total > maxResults {
+		sb.WriteString(fmt.Sprintf("\n... and %d more. Refine your query to narrow results.\n", total-maxResults))
+	}
+	sb.WriteString("\nUse the skill tool with the exact skill name to load one.")
+	return Result{Content: sb.String()}
 }

@@ -71,6 +71,7 @@ func BuildSkillsSystemPromptWithPromptRefs(skills []*commands.Command) (string, 
 	var lines []string
 	lines = append(lines,
 		"Use the skill tool to load reusable workflows when they clearly match the user's task.",
+		"To discover skills by keyword, use skill with a '?' prefix (e.g. \"?deploy\").",
 		"",
 		"When a listed skill is a close match, invoke the skill tool before continuing.",
 		"Do not mention a skill without calling the skill tool.",
@@ -134,7 +135,7 @@ func BuildSkillsSystemPromptWithPromptRefs(skills []*commands.Command) (string, 
 		}
 	}
 	if hidden := countModelVisibleSkills(skills) - included - mcpSkillCount; hidden > 0 {
-		lines = append(lines, fmt.Sprintf("- ... and %d more skills available via the skill tool and /skills", hidden))
+		lines = append(lines, fmt.Sprintf("- ... and %d more skills. Use skill: \"?\" to browse all, or skill: \"?keyword\" to search by topic.", hidden))
 	}
 	return strings.Join(lines, "\n"), promptSkillRefs
 }

@@ -218,7 +218,7 @@ func TestSkillToolExecuteMCPPromptSkill(t *testing.T) {
 func TestSkillToolDescriptionRejectsBuiltInCommands(t *testing.T) {
 	tool := SkillTool{}
 	desc := tool.Description()
-	for _, want := range []string{"listed skill clearly matches", "Do not use this for built-in CLI commands"} {
+	for _, want := range []string{"listed skill clearly matches", "Do not use for built-in CLI commands"} {
 		if !strings.Contains(desc, want) {
 			t.Fatalf("skill description should mention %q, got %q", want, desc)
 		}

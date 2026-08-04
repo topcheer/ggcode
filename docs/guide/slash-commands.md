@@ -54,7 +54,7 @@ Slash commands are typed directly in the chat input within the TUI.
 |---------|-------------|
 | `/mcp` | Show MCP server status |
 | `/im` | Show IM adapter status |
-| `/skills` | Manage skills |
+| `/skills` | Manage skills. The agent can also search skills by keyword via the skill tool (prefix `?`, e.g. `"?deploy"`). |
 | `/plugins` | Manage plugins |
 | `/image` | Image handling |
 | `/todo` | View/manage todo list |
