@@ -167,6 +167,7 @@ type Agent struct {
 	lastGoodCheckpoint         *lastGoodCheckpoint                   // last-known-good file snapshot: actionable revert targets for failed self-correction
 	sessionTimeout             *sessionTimeoutState                  // wall-clock timeout for agent runs (autopilot guardrail)
 	velocityForecast           *velocityForecastState                // iteration velocity forecasting (TAAS-inspired predictive productivity check)
+	diskSpace                  *diskSpaceState                       // low disk space detection (resource exhaustion awareness)
 	transientRetryBudget       int                                   // remaining automatic retries for transient tool failures (per run)
 	compoundingFailure         *compoundingFailureState              // sliding-window cross-tool failure rate (strategy reset detection)
 	failureMode                *failureModeState                     // meta-level failure mode classification (transient/structural/systemic)
@@ -288,6 +289,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		redundantRead:        newRedundantReadState(),
 		bgOrphan:             newBgOrphanState(),
 		crossFileImpact:      newCrossFileImpactState(),
+		diskSpace:            newDiskSpaceState(),
 		qualityScorer:        NewResponseQualityScorer(100),
 	}
 	a.syncContextManagerProviderLocked()
@@ -1238,6 +1240,20 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 						n,
 					),
 				}},
+			})
+		}
+	}
+
+	// Check disk space on the workspace volume. If critically low, inject an
+	// advisory so the agent can prioritize cleanup before file operations fail.
+	// Zero-LLM-cost, fires at most once per run.
+	a.diskSpace.reset()
+	if workingDir := a.WorkingDir(); workingDir != "" {
+		if diskMsg := a.diskSpace.check(workingDir); diskMsg != "" {
+			debug.Log("disk-space", "low disk space detected, injecting advisory")
+			a.contextManager.Add(provider.Message{
+				Role:    "user",
+				Content: []provider.ContentBlock{{Type: "text", Text: diskMsg}},
 			})
 		}
 	}
