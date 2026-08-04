@@ -11,7 +11,7 @@ package agent
 // than reactive stall detection.
 //
 // Gap in existing ggcode systems:
-//   - budget_guard.go: tracks TOKEN COST escalation (spending too much per step),
+//   - cost_budget: tracks absolute session token spending,
 //     not whether the agent is making PROGRESS fast enough to finish.
 //   - overseer.go: detects absolute stalls (N iterations without productive action)
 //     -- reactive, fires AFTER the damage is done. Also fires at fixed thresholds

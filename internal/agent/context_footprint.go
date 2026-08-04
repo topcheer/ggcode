@@ -19,7 +19,7 @@ package agent
 // This is different from:
 //   - tool_output_guard: truncates individual oversized results (per-call)
 //   - arg_size_guard: detects oversized tool arguments (input side)
-//   - budget_guard: tracks per-step token cost trends (LLM call side)
+//   - cost_budget: tracks absolute session token spending (LLM call side)
 //   - cost_budget: enforces absolute session token limit (LLM tokens)
 //
 // This tracks the OUTPUT side across the full session: which tools are

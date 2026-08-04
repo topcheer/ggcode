@@ -139,7 +139,6 @@ type Agent struct {
 	speculator                 *speculator                           // pattern-aware speculative tool execution (PASTE-inspired)
 	toolMemo                   *toolMemo                             // read-only tool result memoization (ToolCaching-inspired)
 	confidence                 *confidenceState                      // holistic trajectory confidence scoring (HTC-inspired)
-	budgetGuard                *budgetGuardState                     // per-step token cost trend monitoring (BAGEN-inspired)
 	costBudget                 *sessionCostBudget                    // absolute session-level token budget enforcement
 	toolCallBudget             *toolCallBudget                       // per-session tool invocation limit (action-level guardrail)
 	cacheKeepalive             *cacheKeepaliveState                  // prompt cache warming pings during idle (Anthropic)
@@ -243,7 +242,6 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		speculator:           newSpeculator(),
 		toolMemo:             newToolMemo(),
 		confidence:           newConfidenceState(),
-		budgetGuard:          newBudgetGuardState(),
 		costBudget:           newSessionCostBudget(),
 		toolCallBudget:       newToolCallBudget(),
 		cacheKeepalive:       newCacheKeepaliveState(),
@@ -1165,10 +1163,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	consecutiveEmptyResponses := 0
 	truncationContinues := 0
 	progressCheckInjected := false
-	convergence85Injected := false    // 85% iteration budget: shift to convergence
-	convergence95Injected := false    // 95% iteration budget: must finalize now
-	contextWarningLevel := 0          // 0=none, 1=95%, 2=99%, 3=100%
-	budgetHintLevel := budgetHintNone // proactive context conservation (70%, 85%)
+	convergence85Injected := false // 85% iteration budget: shift to convergence
+	convergence95Injected := false // 95% iteration budget: must finalize now
 	todoCheckCount := 0
 
 	a.autopilotStrategistCount = 0
@@ -1187,7 +1183,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.toolMemo.reset()
 	a.commandCache.reset()
 	a.confidence.reset()
-	a.budgetGuard.reset()
 	a.costBudget.reset()
 	a.toolCallBudget.reset()
 	a.toolCallBudget.SetDefaultBudget(deriveDefaultBudget(a.maxIter))
@@ -1477,45 +1472,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			msgs = a.contextManager.Messages()
 		}
 
-		// Proactive context budget efficiency hints at 70% and 85% fill.
-		// These fire BEFORE the crisis-level warnings below, giving the agent
-		// a chance to self-regulate and avoid or delay compaction entirely.
-		if a.maybeInjectBudgetHint(&budgetHintLevel) {
-			msgs = a.contextManager.Messages()
-		}
-
-		// Context budget warnings at 95%, 99%, and 100% utilization.
-		// Each level fires once, with escalating urgency. The goal is to help
-		// the agent prepare for imminent compaction — NOT to make it stop.
-		if a.contextManager.ContextWindow() > 0 {
-			usage := a.contextManager.UsageRatio()
-			var newLevel int
-			var msgText string
-			switch {
-			case usage >= 1.0 && contextWarningLevel < 3:
-				newLevel = 3
-				msgText = "Context full — compaction now. Finish current step, do not stop."
-			case usage >= 0.99 && contextWarningLevel < 2:
-				newLevel = 2
-				msgText = "Context at 99%. Compaction imminent — keep working, do NOT wrap up; avoid full file reads."
-			case usage >= 0.95 && contextWarningLevel < 1:
-				newLevel = 1
-				msgText = "Context at 95%. Compaction soon — keep working, do NOT wrap up; prefer grep over full file reads."
-			}
-			if newLevel > contextWarningLevel {
-				contextWarningLevel = newLevel
-				debug.Log("agent", "Injecting context budget warning level %d at %.0f%% utilization", newLevel, usage*100)
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: msgText,
-					}},
-				})
-				msgs = a.contextManager.Messages()
-			}
-		}
-
 		// Adaptive effort: adjust reasoning budget per-turn based on recent
 		// tool complexity. Only activates when user hasn't explicitly set effort.
 		effortApplied, effortPrev := a.applyAdaptiveEffort()
@@ -1601,21 +1557,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 
 		a.syncContextManagerUsage(resp.Usage)
 		a.emitUsage(resp.Usage)
-
-		// Budget guard: track per-step output token cost trend (BAGEN-inspired).
-		// Detects cost-escalation patterns that indicate a doomed trajectory.
-		a.budgetGuard.recordStep(resp.Usage.OutputTokens, resp.Usage.InputTokens)
-		if budgetWarning := a.budgetGuard.maybeWarn(a.contextManager.ContextWindow(), a.contextManager.TokenCount()); budgetWarning != "" {
-			debug.Log("budget-guard", "cost escalation detected: steps=%d consumed=%d", len(a.budgetGuard.stepCosts), a.budgetGuard.totalConsumed)
-			a.contextManager.Add(provider.Message{
-				Role: "user",
-				Content: []provider.ContentBlock{{
-					Type: "text",
-					Text: budgetWarning,
-				}},
-			})
-			msgs = a.contextManager.Messages()
-		}
 
 		// Cost budget: track absolute session-level token consumption.
 		// Enforces a configurable per-session token budget with progressive

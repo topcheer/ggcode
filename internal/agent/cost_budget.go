@@ -2,7 +2,7 @@ package agent
 
 // Cost Budget — Session-Level Token Budget Enforcement
 //
-// While budget_guard.go detects per-iteration COST ESCALATION patterns
+// While cost_budget detects absolute session-level spending
 // (relative trend analysis, BAGEN-inspired), this module enforces an
 // ABSOLUTE session-level token budget. It answers: "how much have we
 // spent TOTAL this session, and should we warn or stop?"
@@ -49,7 +49,7 @@ const (
 )
 
 // sessionCostBudget tracks total token consumption against a configurable
-// session budget. Unlike budgetGuardState (which tracks per-step trends),
+// session budget.
 // this tracks absolute cumulative consumption.
 type sessionCostBudget struct {
 	// totalTokens is the cumulative input+output tokens consumed this session.
