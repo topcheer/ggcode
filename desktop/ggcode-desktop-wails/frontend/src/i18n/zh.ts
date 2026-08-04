@@ -78,6 +78,7 @@ const zh: Record<TranslationKey, string> = {
   'status.ready': '就绪',
   'status.thinking': '思考中...',
   'status.streaming': '输出中',
+  'status.offline': '离线',
 
   // ChatView
   'chat.placeholder': '给 ggcode 发消息...',

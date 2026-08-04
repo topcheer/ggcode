@@ -76,6 +76,7 @@ const id = {
   'status.ready': 'Siap',
   'status.thinking': 'Berpikir...',
   'status.streaming': 'Streaming',
+  'status.offline': 'Offline',
 
   // ChatView
   'chat.placeholder': 'Kirim pesan ke ggcode...',

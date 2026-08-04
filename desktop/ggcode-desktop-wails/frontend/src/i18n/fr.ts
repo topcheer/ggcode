@@ -76,6 +76,7 @@ const fr = {
   'status.ready': 'Prêt',
   'status.thinking': 'Réflexion...',
   'status.streaming': 'Diffusion',
+  'status.offline': 'Hors ligne',
 
   // ChatView
   'chat.placeholder': 'Écrire à ggcode...',

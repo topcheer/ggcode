@@ -76,6 +76,7 @@ const en = {
   'status.ready': 'Sẵn sàng',
   'status.thinking': 'Đang suy nghĩ...',
   'status.streaming': 'Đang phát trực tiếp',
+  'status.offline': 'Ngoại tuyến',
 
   // ChatView
   'chat.placeholder': 'Nhắn tin cho ggcode...',

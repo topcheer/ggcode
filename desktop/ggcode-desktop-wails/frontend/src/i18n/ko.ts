@@ -76,6 +76,7 @@ const en = {
   'status.ready': '준비됨',
   'status.thinking': '생각 중...',
   'status.streaming': '스트리밍 중',
+  'status.offline': '오프라인',
 
   // ChatView
   'chat.placeholder': 'ggcode에 메시지 입력...',

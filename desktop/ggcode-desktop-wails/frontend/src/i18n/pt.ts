@@ -76,6 +76,7 @@ const en = {
   'status.ready': 'Pronto',
   'status.thinking': 'Pensando...',
   'status.streaming': 'Transmitindo',
+  'status.offline': 'Offline',
 
   // ChatView
   'chat.placeholder': 'Envie uma mensagem para o ggcode...',

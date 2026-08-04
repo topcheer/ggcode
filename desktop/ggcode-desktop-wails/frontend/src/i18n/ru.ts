@@ -76,6 +76,7 @@ const en = {
   'status.ready': 'Готово',
   'status.thinking': 'Размышление...',
   'status.streaming': 'Поток данных',
+  'status.offline': 'Не в сети',
 
   // ChatView
   'chat.placeholder': 'Сообщение ggcode...',

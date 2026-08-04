@@ -76,6 +76,7 @@ const tr = {
   'status.ready': 'Hazır',
   'status.thinking': 'Düşünüyor...',
   'status.streaming': 'Akıyor',
+  'status.offline': 'Cevrimdisi',
 
   // ChatView
   'chat.placeholder': 'ggcode\'a mesaj gönder...',

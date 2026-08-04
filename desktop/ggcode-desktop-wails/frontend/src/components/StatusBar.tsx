@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { Radio, Smartphone, Settings2 } from 'lucide-react'
+import { Radio, Smartphone, Settings2, WifiOff } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
 import type { StatusBarData } from '../types'
+import { useOnlineStatus } from '../hooks/useOnlineStatus'
 import { useTranslation } from '../i18n'
 import { parseTokenValue, formatTokenValue, isValidTokenValue } from '../utils/tokenFormat'
 
@@ -31,6 +32,7 @@ export function StatusBar({ onContextToggle, data }: StatusBarProps) {
   // IM adapter active count + mobile tunnel connection status
   const [imCount, setImCount] = useState(0)
   const [mobileConnected, setMobileConnected] = useState(false)
+  const { isOnline } = useOnlineStatus()
 
   // Elapsed timer: tracks how long the agent has been working
   const [workStartTime, setWorkStartTime] = useState<number | null>(null)
@@ -318,6 +320,16 @@ export function StatusBar({ onContextToggle, data }: StatusBarProps) {
       })()}
       {info.cacheHit > 0 && (
         <span style={{ color: 'var(--color-success)', fontVariantNumeric: 'tabular-nums' }}>cache {info.cacheHit}%</span>
+      )}
+      {/* Offline indicator */}
+      {!isOnline && (
+        <span title={t('status.offline')} style={{
+          display: 'flex', alignItems: 'center', gap: 3,
+          color: 'var(--color-error, #ef4444)', fontSize: 10,
+        }}>
+          <WifiOff size={11} />
+          {t('status.offline')}
+        </span>
       )}
       <div style={{ flex: 1 }} />
       {/* IM adapter count */}

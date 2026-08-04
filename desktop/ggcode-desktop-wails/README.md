@@ -24,3 +24,5 @@ To build a redistributable, production mode package, use `wails build`.
   - `useTheme` hook (`frontend/src/hooks/useTheme.ts`) provides shared theme state with a `prefers-color-scheme` media query listener.
   - `SystemAppearance()` Go method detects OS appearance at startup for correct initial window background.
   - macOS dark mode detection via NSUserDefaults (`appearance_darwin.go`).
+- **Offline Mode Indicator**: Shows a red "Offline" indicator in the status bar when the network is unavailable. Uses `navigator.onLine` and listens to `online`/`offline` window events for real-time detection. When offline, users get immediate visual feedback instead of waiting for confusing timeout errors.
+  - `useOnlineStatus` hook (`frontend/src/hooks/useOnlineStatus.ts`) tracks connectivity state.
