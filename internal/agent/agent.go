@@ -168,6 +168,7 @@ type Agent struct {
 	sessionTimeout             *sessionTimeoutState                  // wall-clock timeout for agent runs (autopilot guardrail)
 	velocityForecast           *velocityForecastState                // iteration velocity forecasting (TAAS-inspired predictive productivity check)
 	diskSpace                  *diskSpaceState                       // low disk space detection (resource exhaustion awareness)
+	envDrift                   *envDriftState                        // env var drift detection (.env.example vs actual env)
 	transientRetryBudget       int                                   // remaining automatic retries for transient tool failures (per run)
 	compoundingFailure         *compoundingFailureState              // sliding-window cross-tool failure rate (strategy reset detection)
 	failureMode                *failureModeState                     // meta-level failure mode classification (transient/structural/systemic)
@@ -290,6 +291,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		bgOrphan:             newBgOrphanState(),
 		crossFileImpact:      newCrossFileImpactState(),
 		diskSpace:            newDiskSpaceState(),
+		envDrift:             newEnvDriftState(),
 		qualityScorer:        NewResponseQualityScorer(100),
 	}
 	a.syncContextManagerProviderLocked()
@@ -1254,6 +1256,20 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.contextManager.Add(provider.Message{
 				Role:    "user",
 				Content: []provider.ContentBlock{{Type: "text", Text: diskMsg}},
+			})
+		}
+	}
+
+	// Check for env var drift: if .env.example exists but vars are missing
+	// from the local .env or shell environment, inject an advisory so the
+	// agent knows commands may fail. Zero-LLM-cost, fires at most once per run.
+	a.envDrift.reset()
+	if workingDir := a.WorkingDir(); workingDir != "" {
+		if envMsg := a.envDrift.check(workingDir); envMsg != "" {
+			debug.Log("env-drift", "env var drift detected, injecting advisory")
+			a.contextManager.Add(provider.Message{
+				Role:    "user",
+				Content: []provider.ContentBlock{{Type: "text", Text: envMsg}},
 			})
 		}
 	}
