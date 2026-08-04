@@ -97,6 +97,7 @@ func registerAllChecks() {
 
 		// --- Markup / JS-TS checks ---
 		{Name: "tag-balance", Langs: []Language{LangMarkup, LangJSTS}, Run: stringCheckNew(checkTagBalance)},
+		{Name: "jsts-antipatterns", Langs: []Language{LangJSTS}, Run: stringCheck(checkJSTSAntiPatterns)},
 
 		// --- Config checks ---
 		{Name: "config-syntax", Langs: []Language{LangConfig}, Run: stringCheckNew(configSyntaxCheck)},
