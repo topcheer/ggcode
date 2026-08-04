@@ -91,6 +91,9 @@ func (a *App) startup(ctx context.Context) {
 	// Initialize system tray icon with quick actions.
 	a.initSystemTray()
 
+	// Register system-wide global hotkey (Option+Cmd+G) to toggle window.
+	a.initGlobalHotkey()
+
 	// Register native file drag-and-drop handler.
 	// When the user drags files from the OS file manager into the window,
 	// Wails provides the absolute file paths. We emit them as a frontend
@@ -380,6 +383,7 @@ func (a *App) shutdown(_ context.Context) {
 		}
 		a.stopShare()
 		a.stopIMAdapters()
+		a.removeGlobalHotkey()
 		a.removeSystemTray()
 		if a.chat != nil {
 			a.chat.Cancel()
@@ -1335,6 +1339,31 @@ func (a *App) IsAlwaysOnTop() bool {
 		return false
 	}
 	return a.dc.IsAlwaysOnTop()
+}
+
+// SetGlobalHotkeyEnabled toggles the system-wide global hotkey.
+// When enabled, Option+Command+G shows/hides the window from any app.
+func (a *App) SetGlobalHotkeyEnabled(enabled bool) error {
+	if a.dc == nil {
+		return fmt.Errorf("app not initialized")
+	}
+	a.dc.SetGlobalHotkey(enabled)
+	_ = a.dc.Save()
+	if enabled {
+		a.initGlobalHotkey()
+	} else {
+		a.removeGlobalHotkey()
+	}
+	debug.Log("desktop", "global hotkey set to %v", enabled)
+	return nil
+}
+
+// IsGlobalHotkeyEnabled returns the current global hotkey state.
+func (a *App) IsGlobalHotkeyEnabled() bool {
+	if a.dc == nil {
+		return false
+	}
+	return a.dc.IsGlobalHotkeyEnabled()
 }
 
 // ListFiles returns files in the given directory (1 level deep).

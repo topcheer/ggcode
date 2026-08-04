@@ -22,6 +22,7 @@ const SHORTCUT_GROUPS: ShortcutGroup[] = [
       { keys: ['⌘', '⇧', '['], labelKey: 'kb.prevSession', icon: ArrowUp },
       { keys: ['⌘', '⇧', ']'], labelKey: 'kb.nextSession', icon: ArrowDown },
       { keys: ['⌘', ','], labelKey: 'kb.openSettings', icon: Settings },
+      { keys: ['⌥', '⌘', 'G'], labelKey: 'kb.globalHotkey', icon: Command },
       { keys: ['?'], labelKey: 'kb.showShortcuts', icon: Search },
       { keys: ['Esc'], labelKey: 'kb.closeDialog' },
     ],

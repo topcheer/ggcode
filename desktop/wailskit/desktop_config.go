@@ -29,6 +29,11 @@ type DesktopConfig struct {
 	// AlwaysOnTop keeps the window floating above other windows.
 	AlwaysOnTop bool `json:"always_on_top,omitempty"`
 
+	// GlobalHotkey enables a system-wide keyboard shortcut (Option+Cmd+G)
+	// to toggle window visibility from any application.
+	GlobalHotkey    bool `json:"global_hotkey,omitempty"`
+	GlobalHotkeySet bool `json:"global_hotkey_configured,omitempty"`
+
 	// Desktop notification preferences
 	// NotificationsSet tracks whether the user has explicitly configured notifications.
 	// When false (default), notifications are treated as enabled.
@@ -145,4 +150,25 @@ func (dc *DesktopConfig) SetAlwaysOnTop(on bool) {
 	dc.mu.Lock()
 	defer dc.mu.Unlock()
 	dc.AlwaysOnTop = on
+}
+
+// IsGlobalHotkeyEnabled returns whether the global hotkey is enabled.
+// Defaults to true when never explicitly set (the hotkey enhances discoverability).
+func (dc *DesktopConfig) IsGlobalHotkeyEnabled() bool {
+	dc.mu.Lock()
+	defer dc.mu.Unlock()
+	// First-run default: enabled. Once the user explicitly toggles it,
+	// GlobalHotkeySet becomes true and the explicit value takes effect.
+	if !dc.GlobalHotkeySet {
+		return true
+	}
+	return dc.GlobalHotkey
+}
+
+// SetGlobalHotkey persists the global hotkey preference.
+func (dc *DesktopConfig) SetGlobalHotkey(on bool) {
+	dc.mu.Lock()
+	defer dc.mu.Unlock()
+	dc.GlobalHotkey = on
+	dc.GlobalHotkeySet = true
 }

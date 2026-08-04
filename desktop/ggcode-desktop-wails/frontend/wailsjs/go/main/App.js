@@ -238,6 +238,10 @@ export function IsAlwaysOnTop() {
   return window['go']['main']['App']['IsAlwaysOnTop']();
 }
 
+export function IsGlobalHotkeyEnabled() {
+  return window['go']['main']['App']['IsGlobalHotkeyEnabled']();
+}
+
 export function ListCronJobs() {
   return window['go']['main']['App']['ListCronJobs']();
 }
@@ -376,6 +380,10 @@ export function SetEndpointLimits(arg1, arg2, arg3, arg4) {
 
 export function SetFontZoom(arg1) {
   return window['go']['main']['App']['SetFontZoom'](arg1);
+}
+
+export function SetGlobalHotkeyEnabled(arg1) {
+  return window['go']['main']['App']['SetGlobalHotkeyEnabled'](arg1);
 }
 
 export function SetIMAdapterEnabled(arg1, arg2) {

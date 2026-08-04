@@ -96,6 +96,8 @@ export function GetWorkDir():Promise<string>;
 
 export function SetFontZoom(arg1:number):Promise<number>;
 
+export function SetGlobalHotkeyEnabled(arg1:boolean):Promise<void>;
+
 export function InitWorkspace(arg1:string):Promise<void>;
 
 export function InstallLSPServer(arg1:string,arg2:string):Promise<wailskit.LSPInstallResult>;
@@ -125,6 +127,8 @@ export function LanChatSetApprovalPolicy(arg1:string,arg2:string):Promise<void>;
 export function LanChatSetNick(arg1:string):Promise<void>;
 
 export function IsAlwaysOnTop():Promise<boolean>;
+
+export function IsGlobalHotkeyEnabled():Promise<boolean>;
 
 export function ListCronJobs():Promise<Array<wailskit.CronJobInfo>>;
 

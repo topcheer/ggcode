@@ -63,6 +63,7 @@ Download from GitHub Releases:
 - **Context panel** — inspect conversation context and token usage
 - **Onboarding wizard** — guided setup for first-time users
 - **Session export** — export any session as Markdown or JSON via the sidebar context menu (right-click a session). Copy to clipboard or save to file. Also available from the command palette.
+- **Global hotkey** — show or hide GGCode from any application with Option+Command+G (macOS). Toggle in Settings > Appearance.
 
 ## Auto-Update
 
@@ -85,6 +86,7 @@ Desktop-specific shortcuts:
 | `⌘.` | Toggle context panel |
 | `⌘⇧T` | Toggle theme |
 | `⌘⇧S` | Share session (mobile tunnel) |
+| `⌥⌘G` | Toggle window visibility (global, any app) |
 | `⌘,` | Settings |
 | `⌘+` / `⌘-` / `⌘0` | Zoom in / out / reset |
 | `⌘1`-`⌘7` | Switch view (chat, files, IM, MCP, settings, debug, LAN chat) |

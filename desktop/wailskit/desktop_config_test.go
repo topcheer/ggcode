@@ -229,3 +229,38 @@ func TestDesktopConfig_FontZoomRoundTrip(t *testing.T) {
 		t.Fatalf("expected zoom 1.3 after round-trip, got %v", got)
 	}
 }
+
+func TestDesktopConfig_GlobalHotkeyDefault(t *testing.T) {
+	withTestHome(t)
+	dc := &DesktopConfig{WindowW: 100, WindowH: 100}
+	// Default should be enabled (never explicitly configured)
+	if !dc.IsGlobalHotkeyEnabled() {
+		t.Fatal("expected global hotkey enabled by default")
+	}
+}
+
+func TestDesktopConfig_GlobalHotkeySetGet(t *testing.T) {
+	withTestHome(t)
+	dc := &DesktopConfig{WindowW: 100, WindowH: 100}
+	dc.SetGlobalHotkey(false)
+	if dc.IsGlobalHotkeyEnabled() {
+		t.Fatal("expected global hotkey disabled after SetGlobalHotkey(false)")
+	}
+	dc.SetGlobalHotkey(true)
+	if !dc.IsGlobalHotkeyEnabled() {
+		t.Fatal("expected global hotkey enabled after SetGlobalHotkey(true)")
+	}
+}
+
+func TestDesktopConfig_GlobalHotkeyRoundTrip(t *testing.T) {
+	withTestHome(t)
+	dc := &DesktopConfig{WindowW: 100, WindowH: 100}
+	dc.SetGlobalHotkey(false)
+	if err := dc.Save(); err != nil {
+		t.Fatal(err)
+	}
+	loaded := LoadDesktopConfig()
+	if loaded.IsGlobalHotkeyEnabled() {
+		t.Fatal("expected global hotkey disabled after round-trip")
+	}
+}

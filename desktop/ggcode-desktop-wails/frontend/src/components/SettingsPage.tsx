@@ -45,6 +45,9 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
   const [apiKey, setApiKey] = useState('')
   const [showKey, setShowKey] = useState(false)
 
+  // Global hotkey toggle
+  const [globalHotkey, setGlobalHotkey] = useState(false)
+
   // Model refresh
   const [modelsLoading, setModelsLoading] = useState(false)
   const [modelsSource, setModelsSource] = useState<'static' | 'dynamic' | 'error'>('static')
@@ -108,6 +111,11 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
         setDefaultMode(cfg.defaultMode || 'supervised')
         setSelectedPreset(cfg.impersonatePreset || 'none')
         setImpVersion(cfg.impersonateCustomVersion || '')
+
+        // Load global hotkey state
+        App.IsGlobalHotkeyEnabled().then((enabled: boolean) => {
+          if (!cancelled) setGlobalHotkey(enabled)
+        }).catch(() => {})
 
         // Vendor list
         const v = await App.GetVendors()
@@ -695,10 +703,34 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
                 {t('settings.themeShortcut')}
               </span>
             </FieldRow>
+
+            <FieldRow label={t('settings.globalHotkey')}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <button
+                  onClick={() => {
+                    const next = !globalHotkey
+                    setGlobalHotkey(next)
+                    App.SetGlobalHotkeyEnabled(next).catch(() => {
+                      setGlobalHotkey(!next)
+                    })
+                  }}
+                  style={{
+                    padding: '8px 16px', borderRadius: 'var(--radius-md)',
+                    border: '1px solid var(--color-border)',
+                    background: globalHotkey ? 'var(--color-primary)' : 'var(--color-card)',
+                    color: globalHotkey ? '#fff' : 'var(--text-secondary)',
+                    cursor: 'pointer', fontWeight: 600, fontSize: 13,
+                  }}
+                >
+                  {globalHotkey ? t('settings.enabled') : t('settings.disabled')}
+                </button>
+              </div>
+              <span style={{ display: 'block', marginTop: 6, fontSize: 11, color: 'var(--text-tertiary)' }}>
+                {t('settings.globalHotkeyHint')}
+              </span>
+            </FieldRow>
           </>
         )}
-
-        {/* Integrations Tab */}
         {tab === 'integrations' && (
           <>
             <h3 style={sectionTitle}>{t('settings.integrations')}</h3>
