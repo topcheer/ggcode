@@ -112,6 +112,10 @@ func (t WebSearch) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	// Apply domain filtering
 	results = filterByDomain(results, args.AllowedDomains, args.BlockedDomains)
 
+	// Apply quality assessment: spam filtering, type classification,
+	// relevance scoring, domain deduplication.
+	results = assessSearchResults(args.Query, results)
+
 	// Trim to requested max after filtering
 	if len(results) > args.MaxResults {
 		results = results[:args.MaxResults]
