@@ -1495,6 +1495,15 @@ func BuildSystemPrompt(extraPrompt, workingDir, language string, toolNames []str
 		sb.WriteString(fmt.Sprintf("- Custom slash commands: %s\n", summarizeNames(customCmds, 8)))
 	}
 
+	// Auto-detected project profile (languages, build system, frameworks).
+	// Zero-LLM-cost deterministic detection via marker files (go.mod,
+	// package.json, Cargo.toml, etc.). Helps the agent use correct
+	// commands from the first interaction without trial-and-error.
+	if profileText := detectProfileText(workingDir); profileText != "" {
+		sb.WriteString("\n")
+		sb.WriteString(profileText)
+	}
+
 	return sb.String()
 }
 
