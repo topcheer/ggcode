@@ -20,8 +20,6 @@ package agent
 // This check is delta-based: it only flags trailing whitespace that is NEWLY
 // introduced by this edit (lines that didn't have trailing whitespace before).
 // Pre-existing trailing whitespace is not flagged to avoid noise on legacy files.
-// Go files are skipped because gofmt (run by auto_format.go) already strips
-// trailing whitespace automatically.
 
 import (
 	"fmt"
@@ -62,12 +60,11 @@ const maxTrailingWhitespaceWarns = 5
 const trailingWhitespaceOldRatio = 0.40
 
 // shouldCheckTrailingWhitespace returns true for file types where trailing
-// whitespace is a meaningful quality issue and is NOT already handled by a
-// formatter (Go files are excluded because gofmt strips it automatically).
+// whitespace is a meaningful quality issue.
 func shouldCheckTrailingWhitespace(filePath string) bool {
 	ext := strings.ToLower(filepath.Ext(filePath))
 	if ext == ".go" {
-		return false // gofmt handles trailing whitespace for Go
+		return true
 	}
 	if trailingWhitespaceExts[ext] {
 		return true

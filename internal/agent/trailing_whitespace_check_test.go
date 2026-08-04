@@ -44,12 +44,15 @@ func TestCheckTrailingWhitespace_PreservesExistingNotFlagged(t *testing.T) {
 	}
 }
 
-func TestCheckTrailingWhitespace_GoFilesSkipped(t *testing.T) {
+func TestCheckTrailingWhitespace_GoFilesChecked(t *testing.T) {
 	old := "package main\n"
 	newContent := "package main  \nfunc foo() {}  \n"
 	result := checkTrailingWhitespace("main.go", old, newContent)
-	if result != "" {
-		t.Errorf("Go files should be skipped (gofmt handles), got: %s", result)
+	if result == "" {
+		t.Error("Go files should be checked for trailing whitespace (auto-format removed)")
+	}
+	if !strings.Contains(result, "line") {
+		t.Errorf("expected trailing whitespace warning, got: %s", result)
 	}
 }
 

@@ -555,21 +555,6 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 		}
 	}
 
-	// Post-write auto-format: run formatters on all successfully written files.
-	if !result.IsError {
-		for _, plan := range plans {
-			if diff.HasChanges(plan.OldContent, plan.NewContent) {
-				if formatNotice := autoFormatFile(plan.Path); formatNotice != "" {
-					if result.Content != "" {
-						result.Content = result.Content + "\n\n" + formatNotice
-					} else {
-						result.Content = formatNotice
-					}
-				}
-			}
-		}
-	}
-
 	postEnv := env
 	postEnv.ToolSuccess = !result.IsError
 	if result.IsError {
@@ -729,19 +714,6 @@ func (a *Agent) executeFileTool(ctx context.Context, t tool.Tool, tc provider.To
 				result.Content = result.Content + "\n\n" + debugWarning
 			} else {
 				result.Content = debugWarning
-			}
-		}
-	}
-
-	// Post-write auto-format: run the language-appropriate formatter
-	// (gofmt, goimports, prettier, rustfmt, etc.) on the file after a
-	// successful write. Silently skips if the formatter is not installed.
-	if !result.IsError {
-		if formatNotice := autoFormatFile(filePath); formatNotice != "" {
-			if result.Content != "" {
-				result.Content = result.Content + "\n\n" + formatNotice
-			} else {
-				result.Content = formatNotice
 			}
 		}
 	}
