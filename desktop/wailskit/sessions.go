@@ -301,3 +301,125 @@ func GetSessionHistory() ([]SessionMessage, error) {
 	}
 	return chat.CurrentSessionHistory(), nil
 }
+
+// ExportSessionToMarkdown converts a session's messages into a readable
+// Markdown document. If sessionID is empty, exports the current session.
+func ExportSessionToMarkdown(sessionID string) (string, error) {
+	msgs, title, err := loadSessionForExport(sessionID)
+	if err != nil {
+		return "", err
+	}
+	return formatMessagesAsMarkdown(msgs, title), nil
+}
+
+// formatMessagesAsMarkdown converts session messages into a Markdown document.
+// Extracted for testability (no session store dependency).
+func formatMessagesAsMarkdown(msgs []SessionMessage, title string) string {
+	var b strings.Builder
+	b.WriteString("# ")
+	if title != "" {
+		b.WriteString(title)
+	} else {
+		b.WriteString("GGCode Session")
+	}
+	b.WriteString("\n\n")
+
+	for _, msg := range msgs {
+		switch msg.Role {
+		case "user":
+			b.WriteString("## User\n\n")
+			b.WriteString(msg.Content)
+			b.WriteString("\n\n")
+		case "assistant":
+			b.WriteString("## Assistant\n\n")
+			b.WriteString(msg.Content)
+			b.WriteString("\n\n")
+		case "tool":
+			label := msg.ToolDisplay
+			if label == "" {
+				label = msg.ToolName
+			}
+			if label == "" {
+				label = "Tool"
+			}
+			b.WriteString("### ")
+			b.WriteString(label)
+			b.WriteString("\n\n")
+			if msg.ToolDetail != "" {
+				b.WriteString("```\n")
+				b.WriteString(msg.ToolDetail)
+				b.WriteString("\n```\n\n")
+			}
+			if msg.Content != "" {
+				if len(msg.Content) > 2000 {
+					b.WriteString(msg.Content[:2000])
+					b.WriteString("\n... (truncated)\n")
+				} else {
+					b.WriteString(msg.Content)
+					b.WriteString("\n")
+				}
+				b.WriteString("\n")
+			}
+		}
+	}
+	return b.String()
+}
+
+// ExportSessionToJSON converts a session's messages into a JSON document.
+// If sessionID is empty, exports the current session.
+func ExportSessionToJSON(sessionID string) (string, error) {
+	msgs, title, err := loadSessionForExport(sessionID)
+	if err != nil {
+		return "", err
+	}
+	return formatMessagesAsJSON(msgs, title)
+}
+
+// formatMessagesAsJSON converts session messages into a JSON document.
+// Extracted for testability.
+func formatMessagesAsJSON(msgs []SessionMessage, title string) (string, error) {
+	export := struct {
+		Title    string           `json:"title"`
+		Messages []SessionMessage `json:"messages"`
+	}{
+		Title:    title,
+		Messages: msgs,
+	}
+
+	data, err := json.MarshalIndent(export, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("marshal export: %w", err)
+	}
+	return string(data), nil
+}
+
+// loadSessionForExport retrieves messages and title for export.
+// If sessionID is empty, uses the current active session.
+func loadSessionForExport(sessionID string) ([]SessionMessage, string, error) {
+	if sessionID == "" {
+		globalMu.RLock()
+		chat := activeChatBridge
+		globalMu.RUnlock()
+		if chat == nil {
+			return nil, "", fmt.Errorf("no active session")
+		}
+		msgs := chat.CurrentSessionHistory()
+		title := ""
+		if ses := chat.CurrentSession(); ses != nil {
+			title = ses.Title
+		}
+		return msgs, title, nil
+	}
+
+	// Load a specific session by ID from the store.
+	store, err := session.NewDefaultStore()
+	if err != nil {
+		return nil, "", fmt.Errorf("open session store: %w", err)
+	}
+	ses, err := store.Load(sessionID)
+	if err != nil {
+		return nil, "", fmt.Errorf("load session: %w", err)
+	}
+	msgs := buildSessionHistoryFromMessages(ses.Messages)
+	return msgs, ses.Title, nil
+}

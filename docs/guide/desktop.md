@@ -62,6 +62,7 @@ Download from GitHub Releases:
 - **Debug console** — view debug logs
 - **Context panel** — inspect conversation context and token usage
 - **Onboarding wizard** — guided setup for first-time users
+- **Session export** — export any session as Markdown or JSON via the sidebar context menu (right-click a session). Copy to clipboard or save to file. Also available from the command palette.
 
 ## Auto-Update
 

@@ -32,6 +32,10 @@ export function DeleteCronJob(arg1:string):Promise<void>;
 
 export function DeleteSession(arg1:string):Promise<void>;
 
+export function ExportSessionAsJSON(arg1:string):Promise<string>;
+
+export function ExportSessionAsMarkdown(arg1:string):Promise<string>;
+
 export function DrainLogStream():Promise<string>;
 
 export function DrainStreamEvents():Promise<Array<main.StreamEventEnvelope>>;
@@ -177,6 +181,8 @@ export function SaveDefaultMode(arg1:string):Promise<void>;
 export function SaveHooks(arg1:hooks.HookConfig):Promise<void>;
 
 export function SaveIMAdapter(arg1:string,arg2:Record<string, string>):Promise<void>;
+
+export function SaveExportedFile(arg1:string,arg2:string):Promise<string>;
 
 export function SelectDirectory():Promise<string>;
 

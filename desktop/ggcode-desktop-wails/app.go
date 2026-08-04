@@ -1113,6 +1113,36 @@ func (a *App) GetSessionHistory() ([]wailskit.SessionMessage, error) {
 	return a.chat.CurrentSessionHistory(), nil
 }
 
+// ExportSessionAsMarkdown exports a session to Markdown text.
+// If sessionID is empty, exports the current session.
+func (a *App) ExportSessionAsMarkdown(sessionID string) (string, error) {
+	return wailskit.ExportSessionToMarkdown(sessionID)
+}
+
+// ExportSessionAsJSON exports a session to JSON text.
+// If sessionID is empty, exports the current session.
+func (a *App) ExportSessionAsJSON(sessionID string) (string, error) {
+	return wailskit.ExportSessionToJSON(sessionID)
+}
+
+// SaveExportedFile shows a native save dialog and writes content to the chosen path.
+func (a *App) SaveExportedFile(defaultName string, content string) (string, error) {
+	path, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
+		Title:           "Export Session",
+		DefaultFilename: defaultName,
+	})
+	if err != nil {
+		return "", fmt.Errorf("save dialog: %w", err)
+	}
+	if path == "" {
+		return "", nil // user cancelled
+	}
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		return "", fmt.Errorf("write file: %w", err)
+	}
+	return path, nil
+}
+
 // ─── Workspace ────────────────────────────────────────────
 
 // GetWorkDir returns the current working directory.

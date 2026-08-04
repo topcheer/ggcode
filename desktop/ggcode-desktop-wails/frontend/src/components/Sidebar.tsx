@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { Plus, Search, Smartphone, Trash2, Lock, FolderOpen, Copy, Pencil, X, MessageSquare, Pin, ChevronRight, ChevronDown } from 'lucide-react'
+import { Plus, Search, Smartphone, Trash2, Lock, FolderOpen, Copy, Pencil, X, MessageSquare, Pin, ChevronRight, ChevronDown, FileDown, FileJson } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
 import { useTranslation } from '../i18n'
 import { SkeletonList } from './Skeleton'
@@ -310,6 +310,45 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
     }
     scrolledToActive.current = true
   }, [loading, sortedFiltered, activeSessionId])
+
+  const handleExportMarkdown = useCallback(async (session: SessionItem) => {
+    try {
+      const content = await App.ExportSessionAsMarkdown(session.id)
+      if (!content) return
+      const safeTitle = session.title.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 60) || 'session'
+      const savedPath = await App.SaveExportedFile(`${safeTitle}.md`, content)
+      if (savedPath && showToast) {
+        showToast('success', t('sidebar.exportSaved'))
+      }
+    } catch (e: any) {
+      if (showToast) showToast('error', e?.message || String(e))
+    }
+  }, [t, showToast])
+
+  const handleExportJSON = useCallback(async (session: SessionItem) => {
+    try {
+      const content = await App.ExportSessionAsJSON(session.id)
+      if (!content) return
+      const safeTitle = session.title.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 60) || 'session'
+      const savedPath = await App.SaveExportedFile(`${safeTitle}.json`, content)
+      if (savedPath && showToast) {
+        showToast('success', t('sidebar.exportSaved'))
+      }
+    } catch (e: any) {
+      if (showToast) showToast('error', e?.message || String(e))
+    }
+  }, [t, showToast])
+
+  const handleCopyMarkdown = useCallback(async (session: SessionItem) => {
+    try {
+      const content = await App.ExportSessionAsMarkdown(session.id)
+      if (!content) return
+      await navigator.clipboard.writeText(content)
+      if (showToast) showToast('success', t('sidebar.copiedMarkdown'))
+    } catch (e: any) {
+      if (showToast) showToast('error', e?.message || String(e))
+    }
+  }, [t, showToast])
 
   return (
     <div style={{
@@ -646,6 +685,21 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
               label: t('sidebar.menuCopyId'),
               icon: <Copy size={14} />,
               onClick: () => handleCopyId(ctxMenu.session),
+            },
+            {
+              label: t('sidebar.menuCopyMarkdown'),
+              icon: <FileDown size={14} />,
+              onClick: () => handleCopyMarkdown(ctxMenu.session),
+            },
+            {
+              label: t('sidebar.menuExportMarkdown'),
+              icon: <FileDown size={14} />,
+              onClick: () => handleExportMarkdown(ctxMenu.session),
+            },
+            {
+              label: t('sidebar.menuExportJSON'),
+              icon: <FileJson size={14} />,
+              onClick: () => handleExportJSON(ctxMenu.session),
             },
             {
               label: t('sidebar.delete'),

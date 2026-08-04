@@ -54,6 +54,14 @@ export function DeleteSession(arg1) {
   return window['go']['main']['App']['DeleteSession'](arg1);
 }
 
+export function ExportSessionAsJSON(arg1) {
+  return window['go']['main']['App']['ExportSessionAsJSON'](arg1);
+}
+
+export function ExportSessionAsMarkdown(arg1) {
+  return window['go']['main']['App']['ExportSessionAsMarkdown'](arg1);
+}
+
 export function DrainLogStream() {
   return window['go']['main']['App']['DrainLogStream']();
 }
@@ -340,6 +348,10 @@ export function SaveHooks(arg1) {
 
 export function SaveIMAdapter(arg1, arg2) {
   return window['go']['main']['App']['SaveIMAdapter'](arg1, arg2);
+}
+
+export function SaveExportedFile(arg1, arg2) {
+  return window['go']['main']['App']['SaveExportedFile'](arg1, arg2);
 }
 
 export function SelectDirectory() {
