@@ -377,6 +377,32 @@ func TestMigrateNoOldFile(t *testing.T) {
 	}
 }
 
+// TestRecurringRescheduleFromNextFire verifies that when a recurring job's
+// timer fires slightly early (e.g., NextFire=08:55:00 but OS fires at 08:54:59),
+// the reschedule computes the next slot from NextFire, not time.Now(). Without
+// this, NextTime would return the same slot (08:55:00) and cause a double-fire.
+func TestRecurringRescheduleFromNextFire(t *testing.T) {
+	expr := "25,55 * * * *" // fires at minute 25 and 55
+
+	// Simulate NextFire = 08:55:00, but actual fire at 08:54:59 (1s early).
+	nextFire := time.Date(2026, 1, 1, 8, 55, 0, 0, time.UTC)
+	actualFire := nextFire.Add(-1 * time.Second) // 08:54:59
+
+	// Demonstrate the bug: NextTime from actualFire returns the same slot.
+	// This is why the old code (time.Now()-based) caused double-fires.
+	buggyNext, _ := NextTime(expr, actualFire)
+	if !buggyNext.Equal(nextFire) {
+		t.Fatalf("expected bug demonstration: NextTime(actualFire)=%v should equal nextFire=%v", buggyNext, nextFire)
+	}
+
+	// Verify the fix: NextTime from NextFire skips to the NEXT slot (09:25:00).
+	fixedNext, _ := NextTime(expr, nextFire)
+	expected := time.Date(2026, 1, 1, 9, 25, 0, 0, time.UTC)
+	if !fixedNext.Equal(expected) {
+		t.Errorf("expected next slot %v after fix, got %v", expected, fixedNext)
+	}
+}
+
 func TestWorkspaceKeyDeterministic(t *testing.T) {
 	dir := "/Users/user/projects/my-project"
 	k1 := workspaceKey(dir)
