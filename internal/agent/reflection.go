@@ -338,6 +338,12 @@ func GenerateInsights(stats RunStats) string {
 		b.WriteString("\n")
 	}
 
+	// Efficiency analysis - detects anti-patterns and provides recommendations
+	effReport := AnalyzeEfficiency(stats)
+	if effText := effReport.Format(stats); effText != "" {
+		fmt.Fprintf(&b, "\n%s\n", effText)
+	}
+
 	return strings.TrimSpace(b.String())
 }
 
