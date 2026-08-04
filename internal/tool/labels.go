@@ -164,6 +164,8 @@ func DescribeTool(toolName, rawArgs string) ToolPresentation {
 		return toolPres("Snippet", argStr(args, "action"))
 	case "dep_graph":
 		return toolPres("DepGraph", argStr(args, "action"))
+	case "knowledge_graph":
+		return toolPres("KG", argStr(args, "action"))
 	case "delete_memory":
 		return toolPres("Delete Memory", argStr(args, "key"))
 	case "git_status":

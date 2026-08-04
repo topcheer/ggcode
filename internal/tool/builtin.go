@@ -140,6 +140,9 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 
 		// Package-level dependency graph analysis (import graph, cycles, hotspots)
 		DepGraphTool{WorkingDir: workingDir},
+
+		// Cross-session knowledge graph (typed entities + relationships)
+		&KnowledgeGraphTool{WorkingDir: workingDir},
 	)
 	for _, tool := range tools {
 		if err := registry.Register(tool); err != nil {
