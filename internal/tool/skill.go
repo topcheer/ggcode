@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -65,7 +66,7 @@ type SkillTool struct {
 func (t SkillTool) Name() string { return "skill" }
 
 func (t SkillTool) Description() string {
-	return "Load a reusable skill workflow or prompt, or search available skills by keyword. Use this when a listed skill clearly matches the user's task, then continue using the returned guidance. To discover skills by keyword, prefix the query with a question mark (e.g. skill: \"?deploy\"). Do not use for built-in CLI commands like /help or /clear."
+	return "Load a reusable skill workflow or prompt, or search available skills by keyword. Use this when a listed skill clearly matches the user's task, then continue using the returned guidance. To discover skills by keyword, prefix with '?' (e.g. skill: '?deploy'). To export a skill as a portable .ggskill bundle, use '#export:<name>'. To import a .ggskill bundle from a path or URL, use '#import:<path-or-url>'. Do not use for built-in CLI commands like /help or /clear."
 }
 
 func (t SkillTool) Parameters() json.RawMessage {
@@ -74,7 +75,7 @@ func (t SkillTool) Parameters() json.RawMessage {
 	"properties": {
 		"skill": {
 			"type": "string",
-			"description": "Skill name to load, or prefix with '?' to search skills by keyword (e.g. '?deploy' finds deployment-related skills). Must match a listed reusable skill; do not pass built-in CLI/slash commands."
+			"description": "Skill name to load, '?' to search by keyword, '#export:<name>' to bundle a skill into a .ggskill file, or '#import:<path-or-url>' to extract a .ggskill bundle. Must match a listed reusable skill; do not pass built-in CLI/slash commands."
 		},
 		"args": {
 			"type": "string",
@@ -107,6 +108,14 @@ func (t SkillTool) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	if strings.HasPrefix(args.Skill, "?") {
 		query := strings.TrimSpace(strings.TrimPrefix(args.Skill, "?"))
 		return t.searchSkills(query), nil
+	}
+	// Skill export mode: prefix '#export:' packages a skill into a .ggskill bundle.
+	if rest, ok := strings.CutPrefix(args.Skill, "#export:"); ok {
+		return t.handleExportSkill(rest, strings.TrimSpace(args.Args)), nil
+	}
+	// Skill import mode: prefix '#import:' extracts a .ggskill bundle.
+	if rest, ok := strings.CutPrefix(args.Skill, "#import:"); ok {
+		return t.handleImportSkill(rest, strings.TrimSpace(args.Args)), nil
 	}
 	cmd, errResult, resolved := t.resolveSkill(ctx, args.Skill, args.Args)
 	if !resolved {
@@ -582,4 +591,70 @@ func nonEmptyVersion(v string) string {
 		return "none"
 	}
 	return v
+}
+
+// handleExportSkill packages the named skill into a .ggskill bundle.
+// rest is "skillName" and args is the optional output path.
+func (t SkillTool) handleExportSkill(rest, args string) Result {
+	name := strings.TrimSpace(rest)
+	if name == "" {
+		return Result{IsError: true, Content: "usage: skill #export:<name> [output-path]"}
+	}
+	cmd, ok := t.Skills.Get(name)
+	if !ok || cmd == nil {
+		return Result{IsError: true, Content: t.skillNotFoundMsg(name)}
+	}
+	// Determine output path: explicit arg, or default to ./<name>.ggskill
+	outPath := strings.TrimSpace(args)
+	if outPath == "" {
+		outPath = name + ".ggskill"
+	}
+	if !strings.HasSuffix(outPath, ".ggskill") {
+		outPath += ".ggskill"
+	}
+	manifest, path, err := exportSkill(cmd, outPath)
+	if err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("failed to export skill %q: %v", name, err)}
+	}
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Skill %q exported successfully.\n", name))
+	sb.WriteString(fmt.Sprintf("Bundle: %s\n", path))
+	sb.WriteString(fmt.Sprintf("Files: %d\n", len(manifest.Files)))
+	if manifest.Version != "" {
+		sb.WriteString(fmt.Sprintf("Version: %s\n", manifest.Version))
+	}
+	sb.WriteString("\nShare the .ggskill file with teammates or import it elsewhere with: skill #import:<path-or-url>")
+	return Result{Content: sb.String()}
+}
+
+// handleImportSkill extracts a .ggskill bundle into the user skills directory.
+// rest is "source-path-or-url" and args is the optional destination directory.
+func (t SkillTool) handleImportSkill(rest, args string) Result {
+	source := strings.TrimSpace(rest)
+	if source == "" {
+		return Result{IsError: true, Content: "usage: skill #import:<path-or-url> [dest-dir]"}
+	}
+	destDir := strings.TrimSpace(args)
+	if destDir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return Result{IsError: true, Content: fmt.Sprintf("cannot determine home directory: %v", err)}
+		}
+		destDir = filepath.Join(home, ".ggcode", "skills")
+	}
+	manifest, skillDir, err := importSkill(source, destDir)
+	if err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("failed to import skill: %v", err)}
+	}
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Skill %q imported successfully.\n", manifest.Name))
+	sb.WriteString(fmt.Sprintf("Location: %s\n", skillDir))
+	if manifest.Version != "" {
+		sb.WriteString(fmt.Sprintf("Version: %s\n", manifest.Version))
+	}
+	if manifest.Description != "" {
+		sb.WriteString(fmt.Sprintf("Description: %s\n", manifest.Description))
+	}
+	sb.WriteString("\nThe skill is now available. Use the skill tool to load it.")
+	return Result{Content: sb.String()}
 }

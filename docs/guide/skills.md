@@ -140,3 +140,56 @@ project-local (`.ggcode/skills`), and legacy command directories.
 The watcher uses a 5-second polling interval with a 500ms debounce window, so
 multi-file edits and atomic-save patterns (temp file + rename) are handled
 correctly. Changes are detected via file mtime signatures, keeping overhead low.
+
+## Exporting & Importing Skills
+
+Skills can be packaged into portable `.ggskill` bundles for sharing across
+machines, teams, or the broader community. A `.ggskill` file is a gzipped tar
+archive containing a `manifest.json` metadata file plus all skill source files.
+
+### Export
+
+Package a skill into a `.ggskill` file:
+
+```
+skill(skill="#export:debug")
+```
+
+This creates `debug.ggskill` in the current directory. Specify a custom output
+path via `args`:
+
+```
+skill(skill="#export:debug", args="/tmp/shared/debug-skill.ggskill")
+```
+
+The bundle includes all files in the skill directory (SKILL.md plus any
+companion files like scripts, templates, or configuration).
+
+### Import
+
+Extract a `.ggskill` bundle into your global skills directory:
+
+```
+skill(skill="#import:./debug.ggskill")
+```
+
+Import from a URL:
+
+```
+skill(skill="#import:https://example.com/skills/debug.ggskill")
+```
+
+Specify a custom destination directory via `args`:
+
+```
+skill(skill="#import:./debug.ggskill", args="/path/to/project/.ggcode/skills")
+```
+
+By default, imported skills are placed in `~/.ggcode/skills/<skill-name>/` and
+become immediately available (no restart needed thanks to hot-reload).
+
+### Security
+
+- Bundle size is capped at 16 MB to prevent abuse
+- Path traversal entries (e.g., `../../etc/passwd`) are rejected during extraction
+- Only simple filenames are allowed inside bundles -- no subdirectories
