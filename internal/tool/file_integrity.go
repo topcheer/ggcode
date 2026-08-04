@@ -154,6 +154,15 @@ func (t *FileIntegrityTracker) ChangedSince(snapshot map[string]time.Time) []str
 	return changed
 }
 
+// RemoveTracking removes a path from the tracker. Called by file_ops delete
+// and move operations so the tracker doesn't flag a non-existent file as stale.
+func (t *FileIntegrityTracker) RemoveTracking(path string) {
+	key := normalizePath(path)
+	t.mu.Lock()
+	delete(t.modtimes, key)
+	t.mu.Unlock()
+}
+
 // Reset removes all tracked mtimes. Primarily for testing.
 func (t *FileIntegrityTracker) Reset() {
 	t.mu.Lock()

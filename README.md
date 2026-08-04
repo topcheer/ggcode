@@ -80,7 +80,7 @@ individual A2A auth configuration.
 ## Features
 
 - **Codebase-aware** — reads, understands, and edits your entire project
-- **Full dev toolkit** — file edits, shell commands, Git, LSP, search
+- **Full dev toolkit** — file edits, shell commands, Git, LSP, search, batch operations
 - **Semantic code search** — BM25-based `code_search` finds conceptually related code, not just keyword matches
 - **Code health analysis** — cyclomatic complexity, function length, nesting depth metrics via `code_health`
 - **Tech-debt scanner** — `scan_todos` surfaces TODO/FIXME/HACK markers with severity ranking and git-blame staleness
@@ -89,6 +89,7 @@ individual A2A auth configuration.
 - **Clipboard integration** — read from and write to the system clipboard
 - **Editor launcher** — `open_editor` opens files in the user's IDE (VS Code, Cursor, JetBrains, Vim, etc.) at a specific line/column, auto-detected from env vars
 - **Agent-accessible undo** — `undo_edit` lets the LLM revert its own file edits via checkpoints, avoiding error-prone fix-forward when a previous change was wrong
+- **Batch file operations** — `file_ops` (delete, move/rename, mkdir with sandbox enforcement and file-tracker integration) and `batch_replace` (regex/literal find-and-replace across many files in one call) replace unsafe `run_command("rm/mv")` with first-class protected tools
 - **Schema-constrained tool validation** — pre-execution pipeline that validates enum values, numeric bounds (min/max), string length constraints, and strips hallucinated parameters — saving wasted iterations on weak models
 - **Adaptive tool timeout** — per-tool category-based timeout that adapts to observed latency, replacing a flat 5-minute default with sensible bounds (30–180s per category) so hung tools fail fast instead of wasting minutes
 - **Exit code intelligence** — when commands fail with signals (137=OOM, 139=segfault, 134=abort, 130=SIGINT, 143=SIGTERM), the agent receives an actionable diagnostic hint instead of a bare exit code, enabling immediate root-cause diagnosis

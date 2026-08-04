@@ -38,6 +38,8 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 		ListDir{SandboxCheck: sandboxFor("list_directory")},
 		EditFile{SandboxCheck: sandboxFor("edit_file"), WorkingDir: workingDir},
 		MultiFileEdit{SandboxCheck: sandboxFor("multi_file_edit"), WorkingDir: workingDir},
+		BatchReplace{SandboxCheck: sandboxFor("batch_replace"), WorkingDir: workingDir},
+		FileOps{SandboxCheck: sandboxFor("file_ops"), WorkingDir: workingDir},
 
 		// Search
 		SearchFiles{SandboxCheck: sandboxFor("search_files")},
