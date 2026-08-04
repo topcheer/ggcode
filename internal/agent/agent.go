@@ -184,6 +184,7 @@ type Agent struct {
 	branchGuard                *branchGuardState                     // protected branch edit warning (main/master/develop awareness)
 	destructiveGuard           *gitDestructiveState                  // destructive git operation detection (reset --hard, force push, etc.)
 	shellNativeHint            *shellNativeHintState                 // suggests native tools when agent uses shell for equivalent operations
+	monorepoScoper             *monorepoScoperState                  // monorepo package scope sprawl detection
 	bgOrphan                   *bgOrphanState                        // orphaned background command detection (unchecked start_command jobs)
 	crossFileImpact            *crossFileImpactState                 // pre-completion cross-file impact analysis (removed symbol breakage detection)
 	contextFootprint           *contextFootprintState                // per-tool context budget attribution (which tools consume the most context)
@@ -259,6 +260,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		branchGuard:          newBranchGuardState(),
 		destructiveGuard:     newGitDestructiveState(),
 		shellNativeHint:      newShellNativeHintState(),
+		monorepoScoper:       newMonorepoScoperState(),
 		approvalMemory:       permission.NewApprovalMemory(),
 		behaviorPattern:      newBehaviorPatternState(),
 		perfBaseline:         newPerfBaselineState(),
@@ -983,6 +985,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.redundantRead.reset()
 	a.toolSequence.reset()
 	a.shellNativeHint.reset()
+	a.monorepoScoper.reset()
 	a.resetBgOrphan()
 	if a.effortAdapter != nil {
 		a.effortAdapter.reset()
@@ -1262,6 +1265,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	// agent knows commands may fail. Zero-LLM-cost, fires at most once per run.
 	a.envDrift.reset()
 	if workingDir := a.WorkingDir(); workingDir != "" {
+		// Detect monorepo structure for package-scoped intelligence.
+		a.monorepoScoper.detectMonorepo(workingDir)
 		if envMsg := a.envDrift.check(workingDir); envMsg != "" {
 			debug.Log("env-drift", "env var drift detected, injecting advisory")
 			a.contextManager.Add(provider.Message{
@@ -1390,6 +1395,18 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.contextManager.Add(provider.Message{
 				Role:    "user",
 				Content: []provider.ContentBlock{{Type: "text", Text: bgOrphanMsg}},
+			})
+			msgs = a.contextManager.Messages()
+		}
+
+		// Monorepo scope sprawl detection: if the agent is editing across many
+		// packages in a monorepo without apparent cross-package intent, inject
+		// a one-time hint to confirm scope and consider package-scoped ops.
+		if monorepoMsg := a.monorepoScoper.maybeWarnScopeSprawl(); monorepoMsg != "" {
+			debug.Log("monorepo-scope", "package scope sprawl detected: %s", monorepoMsg)
+			a.contextManager.Add(provider.Message{
+				Role:    "user",
+				Content: []provider.ContentBlock{{Type: "text", Text: monorepoMsg}},
 			})
 			msgs = a.contextManager.Messages()
 		}
@@ -2227,6 +2244,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.scopeDriftRecord(tc.Name, extractFileHint(tc.Name, tc.Arguments))
 			// Last-known-good checkpoint: track edits for revert targeting.
 			a.lastGoodCheckpointRecordEdit(tc.Name, extractFileHint(tc.Name, tc.Arguments))
+			// Monorepo scoper: track which packages are being edited.
+			if fh := extractFileHint(tc.Name, tc.Arguments); fh != "" {
+				a.monorepoScoper.recordEdit(fh)
+			}
 			if scopeGuidance := a.scopeDriftCheck(); scopeGuidance != "" {
 				if result.Content != "" {
 					result.Content = result.Content + "\n\n" + scopeGuidance
