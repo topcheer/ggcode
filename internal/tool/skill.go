@@ -108,27 +108,9 @@ func (t SkillTool) Execute(ctx context.Context, input json.RawMessage) (Result, 
 		query := strings.TrimSpace(strings.TrimPrefix(args.Skill, "?"))
 		return t.searchSkills(query), nil
 	}
-	cmd, ok := t.Skills.Get(args.Skill)
-	if !ok {
-		if strings.TrimSpace(args.Skill) != "" && t.Runtime != nil {
-			if result, handled := t.executeMCPPromptSkill(ctx, strings.TrimSpace(args.Skill), strings.TrimSpace(args.Args)); handled {
-				return result, nil
-			}
-		}
-		return Result{IsError: true, Content: t.skillNotFoundMsg(args.Skill)}, nil
-	}
-	if !cmd.Enabled {
-		return Result{IsError: true, Content: fmt.Sprintf("skill %q is disabled", cmd.Name)}, nil
-	}
-	if cmd.DisableModelInvocation {
-		return Result{IsError: true, Content: fmt.Sprintf("skill %q is only available for direct user invocation", cmd.Name)}, nil
-	}
-
-	// Validate external CLI tool dependencies before execution.
-	if missing := checkRequiredTools(cmd.RequiresTools); len(missing) > 0 {
-		return Result{IsError: true, Content: fmt.Sprintf(
-			"skill %q requires the following tools to be installed and on PATH: %s. Install them before invoking this skill.",
-			cmd.Name, strings.Join(missing, ", "))}, nil
+	cmd, errResult, resolved := t.resolveSkill(ctx, args.Skill, args.Args)
+	if !resolved {
+		return errResult, nil
 	}
 	if recorder, ok := t.Skills.(skillUsageRecorder); ok {
 		recorder.RecordUsage(cmd.Name)
@@ -175,6 +157,35 @@ func (t SkillTool) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	}
 	t.notifySkillCompleted(cmd, SkillExecutionModeInline, result, nil)
 	return result, nil
+}
+
+// resolveSkill looks up the named skill, handles MCP prompt fallback,
+// and validates enabled/model-invocation/required-tools constraints.
+// Returns (cmd, errorResult, true) on success, or (nil, errorResult, false)
+// if the caller should return the errorResult immediately.
+func (t SkillTool) resolveSkill(ctx context.Context, name, rawArgs string) (*commands.Command, Result, bool) {
+	cmd, ok := t.Skills.Get(name)
+	if !ok {
+		if strings.TrimSpace(name) != "" && t.Runtime != nil {
+			if result, handled := t.executeMCPPromptSkill(ctx, strings.TrimSpace(name), strings.TrimSpace(rawArgs)); handled {
+				return nil, result, false
+			}
+		}
+		return nil, Result{IsError: true, Content: t.skillNotFoundMsg(name)}, false
+	}
+	if !cmd.Enabled {
+		return nil, Result{IsError: true, Content: fmt.Sprintf("skill %q is disabled", cmd.Name)}, false
+	}
+	if cmd.DisableModelInvocation {
+		return nil, Result{IsError: true, Content: fmt.Sprintf("skill %q is only available for direct user invocation", cmd.Name)}, false
+	}
+	// Validate external CLI tool dependencies before execution.
+	if missing := checkRequiredTools(cmd.RequiresTools); len(missing) > 0 {
+		return nil, Result{IsError: true, Content: fmt.Sprintf(
+			"skill %q requires the following tools to be installed and on PATH: %s. Install them before invoking this skill.",
+			cmd.Name, strings.Join(missing, ", "))}, false
+	}
+	return cmd, Result{}, true
 }
 
 func (t SkillTool) executeForkedSkill(ctx context.Context, cmd *commands.Command, args string) (Result, error) {
