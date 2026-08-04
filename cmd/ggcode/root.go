@@ -596,6 +596,10 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	_ = registry.Register(skillTool)
 	trace.Mark("register skill tool")
 
+	// Register create_skill tool so the agent can create reusable skills.
+	_ = registry.Register(tool.CreateSkillTool{CommandMgr: commandMgr, WorkingDir: workingDir})
+	trace.Mark("register create_skill tool")
+
 	var promptSkillRefsMu sync.RWMutex
 	currentPromptSkillRefs := func() []string {
 		promptSkillRefsMu.RLock()

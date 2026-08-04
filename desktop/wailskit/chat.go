@@ -1128,6 +1128,7 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 		return nil
 	}, b.workingDir, func(usage provider.TokenUsage) { b.recordSessionUsage(usage, "subagent") }, agentFactory, subAgentPromptBuilder)
 	_ = b.registry.Register(agentruntime.NewSkillTool(commandMgr, mcpMgr, p, b.registry, agentFactory, b.workingDir, func(usage provider.TokenUsage) { b.recordSessionUsage(usage, "subagent") }, subAgentPromptBuilder))
+	_ = b.registry.Register(tool.CreateSkillTool{CommandMgr: commandMgr, WorkingDir: b.workingDir})
 	agentruntime.RegisterDelegateTool(b.registry, b.acpClientMgr, func() *subagent.Manager { return b.subAgentMgr }, b.workingDir, func() string {
 		if b.agent != nil {
 			return b.agent.WorkingDir()

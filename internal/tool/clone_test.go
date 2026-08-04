@@ -185,6 +185,7 @@ func TestAllWorkingDirToolsImplementCloner(t *testing.T) {
 		&ExitWorktree{},
 		SpawnAgentTool{},
 		SkillTool{},
+		CreateSkillTool{},
 	}
 
 	for _, t2 := range toolsWithWorkingDir {
