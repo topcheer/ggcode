@@ -79,6 +79,9 @@ const zh: Record<TranslationKey, string> = {
   'status.thinking': '思考中...',
   'status.streaming': '輸出中',
   'status.offline': '離線',
+  'status.zoomIn': '放大 (Cmd+)',
+  'status.zoomOut': '縮小 (Cmd-)',
+  'status.zoomReset': '重置縮放 (Cmd+0)',
 
   // ChatView
   'chat.placeholder': '给 ggcode 發消息...',
@@ -120,6 +123,9 @@ const zh: Record<TranslationKey, string> = {
   'cmd.goLanChat': '局域網聊天',
   'cmd.goDebug': '調試控制台',
   'cmd.showShortcuts': '顯示快捷鍵',
+  'cmd.zoomIn': '放大',
+  'cmd.zoomOut': '縮小',
+  'cmd.zoomReset': '重置縮放',
   'cmd.hintNavigate': '導航',
   'cmd.hintSelect': '選擇',
   'cmd.hintClose': 'esc 關閉',
@@ -158,6 +164,9 @@ const zh: Record<TranslationKey, string> = {
   'kb.goSettings': '跳到設置',
   'kb.goDebug': '跳到調試控制台',
   'kb.goLanChat': '跳到局域網聊天',
+  'kb.zoomIn': '放大',
+  'kb.zoomOut': '縮小',
+  'kb.zoomReset': '重置縮放',
 
   // ContextPanel
   'context.title': '上下文',

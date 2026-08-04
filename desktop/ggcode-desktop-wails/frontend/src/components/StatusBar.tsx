@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { Radio, Smartphone, Settings2, WifiOff } from 'lucide-react'
+import { Radio, Smartphone, Settings2, WifiOff, ZoomIn, ZoomOut } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
 import type { StatusBarData } from '../types'
 import { useOnlineStatus } from '../hooks/useOnlineStatus'
@@ -9,9 +9,13 @@ import { parseTokenValue, formatTokenValue, isValidTokenValue } from '../utils/t
 interface StatusBarProps {
   onContextToggle?: () => void
   data?: StatusBarData
+  zoom?: number
+  onZoomIn?: () => void
+  onZoomOut?: () => void
+  onZoomReset?: () => void
 }
 
-export function StatusBar({ onContextToggle, data }: StatusBarProps) {
+export function StatusBar({ onContextToggle, data, zoom, onZoomIn, onZoomOut, onZoomReset }: StatusBarProps) {
   const { t } = useTranslation()
   const [info, setInfo] = useState<StatusBarData>(data ?? {
     vendor: '...',
@@ -330,6 +334,54 @@ export function StatusBar({ onContextToggle, data }: StatusBarProps) {
           <WifiOff size={11} />
           {t('status.offline')}
         </span>
+      )}
+      {/* Zoom controls */}
+      {zoom !== undefined && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+          <button
+            onClick={onZoomOut}
+            title={t('status.zoomOut')}
+            aria-label={t('status.zoomOut')}
+            style={{
+              background: 'none', border: 'none',
+              color: 'var(--text-secondary)', cursor: 'pointer',
+              padding: '2px 3px', borderRadius: 'var(--radius-sm)',
+              display: 'flex', alignItems: 'center',
+              transition: 'background 0.15s',
+            }}
+            onMouseEnter={e => { e.currentTarget.style.background = 'var(--color-card)' }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
+          ><ZoomOut size={12} /></button>
+          <button
+            onClick={onZoomReset}
+            title={t('status.zoomReset')}
+            style={{
+              background: 'none', border: 'none',
+              color: 'var(--text-secondary)', cursor: 'pointer',
+              fontSize: 10, fontFamily: 'var(--font-mono)',
+              padding: '2px 4px', borderRadius: 'var(--radius-sm)',
+              fontVariantNumeric: 'tabular-nums',
+              minWidth: 32, textAlign: 'center',
+              transition: 'background 0.15s',
+            }}
+            onMouseEnter={e => { e.currentTarget.style.background = 'var(--color-card)' }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
+          >{Math.round(zoom * 100)}%</button>
+          <button
+            onClick={onZoomIn}
+            title={t('status.zoomIn')}
+            aria-label={t('status.zoomIn')}
+            style={{
+              background: 'none', border: 'none',
+              color: 'var(--text-secondary)', cursor: 'pointer',
+              padding: '2px 3px', borderRadius: 'var(--radius-sm)',
+              display: 'flex', alignItems: 'center',
+              transition: 'background 0.15s',
+            }}
+            onMouseEnter={e => { e.currentTarget.style.background = 'var(--color-card)' }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
+          ><ZoomIn size={12} /></button>
+        </div>
       )}
       <div style={{ flex: 1 }} />
       {/* IM adapter count */}

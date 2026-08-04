@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react'
-import { X, Command, CornerDownLeft, ArrowUp, ArrowDown, Search, PanelLeft, PanelRight, Settings, Plus, Share2, UserCog, SunMoon, FolderSearch, Square } from 'lucide-react'
+import { X, Command, CornerDownLeft, ArrowUp, ArrowDown, Search, PanelLeft, PanelRight, Settings, Plus, Share2, UserCog, SunMoon, FolderSearch, Square, ZoomIn } from 'lucide-react'
 import { useTranslation, type TranslationKey } from '../i18n'
 
 interface ShortcutGroup {
@@ -15,6 +15,9 @@ const SHORTCUT_GROUPS: ShortcutGroup[] = [
       { keys: ['⌘', 'B'], labelKey: 'kb.toggleSidebar', icon: PanelLeft },
       { keys: ['⌘', '.'], labelKey: 'kb.toggleContext', icon: PanelRight },
       { keys: ['⌘', '⇧', 'T'], labelKey: 'kb.toggleTheme', icon: SunMoon },
+      { keys: ['⌘', '+'], labelKey: 'kb.zoomIn', icon: ZoomIn },
+      { keys: ['⌘', '-'], labelKey: 'kb.zoomOut', icon: ZoomIn },
+      { keys: ['⌘', '0'], labelKey: 'kb.zoomReset', icon: ZoomIn },
       { keys: ['⌘', '⇧', 'F'], labelKey: 'kb.searchSessions', icon: FolderSearch },
       { keys: ['⌘', ','], labelKey: 'kb.openSettings', icon: Settings },
       { keys: ['?'], labelKey: 'kb.showShortcuts', icon: Search },

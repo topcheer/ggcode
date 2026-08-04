@@ -195,3 +195,37 @@ func TestDesktopConfig_AlwaysOnTopRoundTrip(t *testing.T) {
 		t.Fatal("expected always-on-top true after round-trip")
 	}
 }
+
+func TestDesktopConfig_FontZoomDefault(t *testing.T) {
+	withTestHome(t)
+	dc := &DesktopConfig{WindowW: 100, WindowH: 100}
+	if got := dc.GetFontZoom(); got != 1.0 {
+		t.Fatalf("expected default zoom 1.0, got %v", got)
+	}
+}
+
+func TestDesktopConfig_FontZoomSetGet(t *testing.T) {
+	withTestHome(t)
+	dc := &DesktopConfig{WindowW: 100, WindowH: 100}
+	dc.SetFontZoom(1.5)
+	if got := dc.GetFontZoom(); got != 1.5 {
+		t.Fatalf("expected zoom 1.5, got %v", got)
+	}
+	dc.SetFontZoom(0.8)
+	if got := dc.GetFontZoom(); got != 0.8 {
+		t.Fatalf("expected zoom 0.8, got %v", got)
+	}
+}
+
+func TestDesktopConfig_FontZoomRoundTrip(t *testing.T) {
+	withTestHome(t)
+	dc := &DesktopConfig{WindowW: 100, WindowH: 100}
+	dc.SetFontZoom(1.3)
+	if err := dc.Save(); err != nil {
+		t.Fatal(err)
+	}
+	loaded := LoadDesktopConfig()
+	if got := loaded.GetFontZoom(); got != 1.3 {
+		t.Fatalf("expected zoom 1.3 after round-trip, got %v", got)
+	}
+}

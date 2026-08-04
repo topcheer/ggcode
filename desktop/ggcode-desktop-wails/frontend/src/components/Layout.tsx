@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
-import { Plus, Search, Share2, PanelRight, SunMoon, Settings, MessageSquare, PanelLeft, FolderOpen, Radio, Server, Bug, Terminal } from 'lucide-react'
+import { Plus, Search, Share2, PanelRight, SunMoon, Settings, MessageSquare, PanelLeft, FolderOpen, Radio, Server, Bug, Terminal, ZoomIn, ZoomOut } from 'lucide-react'
 import { ViewMode, StatusBarData } from '../types'
 import { I18nProvider, useTranslation, detectSystemLocale, type Locale } from '../i18n'
 import { useTheme } from '../hooks/useTheme'
+import { useZoom } from '../hooks/useZoom'
 import { NavRail } from './NavRail'
 import { Sidebar } from './Sidebar'
 import { ChatView } from './ChatView'
@@ -33,6 +34,14 @@ import * as App from '../../wailsjs/go/main/App'
 function LayoutInner() {
   // --- Theme: use shared hook with real-time OS theme following ---
   const { toggle: toggleTheme } = useTheme()
+
+  // --- Zoom controls (Cmd+/Cmd-/Cmd+0) ---
+  const { zoom, zoomIn, zoomOut, resetZoom } = useZoom()
+
+  // Persist zoom to Go backend config on change
+  useEffect(() => {
+    App.SetFontZoom(zoom).catch(() => {})
+  }, [zoom])
 
   // --- Window focus tracking for desktop notifications ---
   // When the window loses focus, the backend will send OS-level
@@ -400,6 +409,9 @@ function LayoutInner() {
     { nameKey: 'cmd.shareSession', shortcut: '⌘⇧S', categoryKey: 'cmd.cat.chat', icon: Share2, action: () => setShareDialogOpen(true) },
     { nameKey: 'cmd.toggleContext', shortcut: '⌘.', categoryKey: 'cmd.cat.chat', icon: PanelRight, action: () => setContextPanelOpen(prev => !prev) },
     { nameKey: 'cmd.toggleTheme', shortcut: '⌘⇧T', categoryKey: 'cmd.cat.settings', icon: SunMoon, action: () => toggleTheme() },
+    { nameKey: 'cmd.zoomIn', shortcut: '⌘+', categoryKey: 'cmd.cat.settings', icon: ZoomIn, action: () => zoomIn() },
+    { nameKey: 'cmd.zoomOut', shortcut: '⌘-', categoryKey: 'cmd.cat.settings', icon: ZoomOut, action: () => zoomOut() },
+    { nameKey: 'cmd.zoomReset', shortcut: '⌘0', categoryKey: 'cmd.cat.settings', icon: ZoomOut, action: () => resetZoom() },
     { nameKey: 'cmd.openSettings', shortcut: '⌘,', categoryKey: 'cmd.cat.settings', icon: Settings, action: () => setView('settings') },
     { nameKey: 'cmd.switchModel', categoryKey: 'cmd.cat.settings', icon: Settings, action: () => setView('settings') },
     { nameKey: 'cmd.toggleSidebar', shortcut: '⌘B', categoryKey: 'cmd.cat.navigation', icon: PanelLeft, action: () => setSidebarOpen(prev => !prev) },
@@ -485,6 +497,10 @@ function LayoutInner() {
           <StatusBar
             onContextToggle={() => setContextPanelOpen(prev => !prev)}
             data={statusBarData}
+            zoom={zoom}
+            onZoomIn={zoomIn}
+            onZoomOut={zoomOut}
+            onZoomReset={resetZoom}
           />
         </>
       )}
