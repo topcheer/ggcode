@@ -159,6 +159,10 @@ func registerAllChecks() {
 		// --- Multi-language checks ---
 		{Name: "insecure-patterns", Langs: []Language{LangGo, LangJSTS, LangPython}, Run: sliceCheck(checkInsecurePatterns)},
 		{Name: "flaky-test-patterns", Langs: []Language{LangGo, LangJSTS, LangPython}, Run: stringCheck(checkFlakyTestPatterns)},
+
+		// --- Dependency vulnerability check (SCA) ---
+		// Triggers on dependency manifest files: go.mod, package.json, etc.
+		{Name: "dependency-vulns", Run: stringCheck(checkDependencyVulnsAsString)},
 	}
 
 	debug.Log("integrity", "registered %d post-write checks", len(allChecks))
