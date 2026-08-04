@@ -281,3 +281,53 @@ func TestSkillToolNotFoundWithoutLister(t *testing.T) {
 		t.Fatalf("should not suggest without NameLister, got: %s", result.Content)
 	}
 }
+
+func TestSkillToolExecuteBlocksMissingRequiredTool(t *testing.T) {
+	tool := SkillTool{
+		Skills: stubSkillLookup{
+			"deploy": {
+				Name:          "deploy",
+				Template:      "Run deploy",
+				Enabled:       true,
+				RequiresTools: []string{"this-tool-does-not-exist-xyz"},
+			},
+		},
+	}
+	input := json.RawMessage(`{"skill":"deploy"}`)
+
+	result, err := tool.Execute(context.Background(), input)
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if !result.IsError {
+		t.Fatalf("expected error for missing required tool, got %+v", result)
+	}
+	if !strings.Contains(result.Content, "this-tool-does-not-exist-xyz") {
+		t.Fatalf("error should mention missing tool name, got: %s", result.Content)
+	}
+	if !strings.Contains(result.Content, "requires") {
+		t.Fatalf("error should explain the requirement, got: %s", result.Content)
+	}
+}
+
+func TestSkillToolExecutePassesWhenRequiredToolPresent(t *testing.T) {
+	tool := SkillTool{
+		Skills: stubSkillLookup{
+			"deploy": {
+				Name:          "deploy",
+				Template:      "Run deploy",
+				Enabled:       true,
+				RequiresTools: []string{"go"},
+			},
+		},
+	}
+	input := json.RawMessage(`{"skill":"deploy"}`)
+
+	result, err := tool.Execute(context.Background(), input)
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("expected success when required tool present, got: %s", result.Content)
+	}
+}

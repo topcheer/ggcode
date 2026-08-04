@@ -170,6 +170,48 @@ func TestValidateSkillName(t *testing.T) {
 	}
 }
 
+func TestCreateSkill_Execute_WithDependencies(t *testing.T) {
+	dir := t.TempDir()
+	tool := CreateSkillTool{
+		CommandMgr: &stubReloader{cmds: map[string]*commands.Command{}},
+		WorkingDir: dir,
+	}
+
+	input, _ := json.Marshal(map[string]interface{}{
+		"name":           "deploy-app",
+		"description":    "Deploy the application",
+		"content":        "Run deployment steps",
+		"requires_tools": []string{"docker", "kubectl"},
+		"dependencies":   []string{"check-env", "build-app"},
+		"scope":          "project",
+	})
+
+	result, err := tool.Execute(t.Context(), input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("expected success, got error: %s", result.Content)
+	}
+
+	skillFile := filepath.Join(dir, ".ggcode", "skills", "deploy-app", "SKILL.md")
+	data, _ := os.ReadFile(skillFile)
+	content := string(data)
+
+	if !contains(content, "requires-tools:") {
+		t.Errorf("expected requires-tools in frontmatter, got: %s", content)
+	}
+	if !contains(content, "docker") || !contains(content, "kubectl") {
+		t.Errorf("expected docker and kubectl in requires-tools, got: %s", content)
+	}
+	if !contains(content, "dependencies:") {
+		t.Errorf("expected dependencies in frontmatter, got: %s", content)
+	}
+	if !contains(content, "check-env") || !contains(content, "build-app") {
+		t.Errorf("expected check-env and build-app in dependencies, got: %s", content)
+	}
+}
+
 func makeLongName(n int) string {
 	b := make([]byte, n)
 	for i := range b {
