@@ -304,7 +304,13 @@ func (m *CommandJobManager) waitForJob(ctx context.Context, cmd *exec.Cmd, job *
 	case ctx.Err() == context.Canceled:
 		job.finish(CommandJobCancelled, "command cancelled")
 	case err != nil:
-		job.finish(CommandJobFailed, fmt.Sprintf("command failed: %v", err))
+		errMsg := fmt.Sprintf("command failed: %v", err)
+		if ee, ok := err.(*exec.ExitError); ok {
+			if exitIntel := interpretExitCode(ee.ExitCode()); exitIntel != "" {
+				errMsg += "\n" + exitIntel
+			}
+		}
+		job.finish(CommandJobFailed, errMsg)
 	default:
 		job.finish(CommandJobCompleted, "")
 	}

@@ -380,6 +380,9 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 		if diagnostic != "" {
 			msg += "\n" + diagnostic
 		}
+		if exitIntel := interpretExitCode(exitCode); exitIntel != "" {
+			msg += "\n" + exitIntel
+		}
 		return Result{IsError: true, Content: preWarning + msg}, nil
 	}
 
