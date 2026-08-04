@@ -1163,8 +1163,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	consecutiveEmptyResponses := 0
 	truncationContinues := 0
 	progressCheckInjected := false
-	convergence85Injected := false // 85% iteration budget: shift to convergence
-	convergence95Injected := false // 95% iteration budget: must finalize now
 	todoCheckCount := 0
 
 	a.autopilotStrategistCount = 0
@@ -1419,59 +1417,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			msgs = a.contextManager.Messages() // refresh after adding checkpoint
 		}
 
-		// Convergence pressure: at 85% and 95% of max iterations, inject
-		// one-time wrap-up guidance. The mid-point checkpoint (60%) asks the
-		// agent to assess strategy; these tell it to shift into finalization
-		// mode. This prevents the agent from being abruptly cut off mid-task
-		// when the iteration budget runs out — a common UX problem in agents
-		// without convergence awareness (Claude Code and Cursor both have
-		// iteration-end convergence behavior).
-		// Only fires when maxIter >= 20 to avoid interfering with short runs.
-		if a.maxIter >= 20 && !convergence85Injected && i+1 >= a.maxIter*85/100 {
-			convergence85Injected = true
-			remaining := a.maxIter - (i + 1)
-			debug.Log("agent", "Injecting convergence pressure (85%%) at iteration %d/%d (%d remaining)", i+1, a.maxIter, remaining)
-			a.contextManager.Add(provider.Message{
-				Role: "user",
-				Content: []provider.ContentBlock{{
-					Type: "text",
-					Text: fmt.Sprintf(
-						"Iteration budget low: %d/%d used, ~%d remaining. Shift to convergence — finalize current changes, run build/test verification, and prepare a concise summary of what was accomplished. Do not start new exploration or unrelated tasks.",
-						i+1, a.maxIter, remaining,
-					),
-				}},
-			})
-			msgs = a.contextManager.Messages()
-		}
-		if a.maxIter >= 20 && !convergence95Injected && i+1 >= a.maxIter*95/100 {
-			convergence95Injected = true
-			remaining := a.maxIter - (i + 1)
-			debug.Log("agent", "Injecting final convergence (95%%) at iteration %d/%d (%d remaining)", i+1, a.maxIter, remaining)
-			a.contextManager.Add(provider.Message{
-				Role: "user",
-				Content: []provider.ContentBlock{{
-					Type: "text",
-					Text: fmt.Sprintf(
-						"Final iterations: only ~%d remaining. You MUST produce your final response now — verify your changes compile, then summarize what was done and any remaining issues.",
-						remaining,
-					),
-				}},
-			})
-			msgs = a.contextManager.Messages()
-		}
-
-		// Iteration velocity forecast: predict whether the agent will run out
-		// of iteration budget before completing the task. Fires at ~40% and ~60%
-		// of budget when productive rate is too low. Gives the agent data-driven
-		// course-correction guidance before it's too late (TAAS-inspired).
-		if forecastMsg := a.velocityForecast.maybeForecast(i+1, a.maxIter, a.overseer != nil && a.overseer.researchMode); forecastMsg != "" {
-			a.contextManager.Add(provider.Message{
-				Role:    "user",
-				Content: []provider.ContentBlock{{Type: "text", Text: forecastMsg}},
-			})
-			msgs = a.contextManager.Messages()
-		}
-
 		// Adaptive effort: adjust reasoning budget per-turn based on recent
 		// tool complexity. Only activates when user hasn't explicitly set effort.
 		effortApplied, effortPrev := a.applyAdaptiveEffort()
@@ -1557,30 +1502,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 
 		a.syncContextManagerUsage(resp.Usage)
 		a.emitUsage(resp.Usage)
-
-		// Cost budget: track absolute session-level token consumption.
-		// Enforces a configurable per-session token budget with progressive
-		// warnings (75%, 90%) and a hard stop at 100%.
-		a.costBudget.recordStep(resp.Usage.InputTokens, resp.Usage.OutputTokens)
-		if costMsg, stop := a.costBudget.check(); costMsg != "" {
-			debug.Log("cost-budget", "budget threshold crossed: consumed=%d budget=%d stop=%v",
-				a.costBudget.totalTokens, a.costBudget.budget, stop)
-			a.contextManager.Add(provider.Message{
-				Role: "user",
-				Content: []provider.ContentBlock{{
-					Type: "text",
-					Text: costMsg,
-				}},
-			})
-			msgs = a.contextManager.Messages()
-			if stop {
-				onEvent(provider.StreamEvent{
-					Type: provider.StreamEventSystem,
-					Text: costMsg,
-				})
-				return nil
-			}
-		}
 
 		// Detect empty LLM response: API accepted input but produced no output.
 		// Only trigger when InputTokens > 0 (real API call) to avoid false positives
