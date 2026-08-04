@@ -209,7 +209,7 @@ func TestNewCheckContext_GoSyntaxError(t *testing.T) {
 }
 
 func TestAllChecksRegistered(t *testing.T) {
-	// Verify that all 49 checks are registered
+	// Verify that all checks are registered (49+ as of latest addition)
 	if len(allChecks) < 40 {
 		t.Errorf("expected at least 40 registered checks, got %d", len(allChecks))
 	}
