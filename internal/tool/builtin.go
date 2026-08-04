@@ -125,6 +125,9 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 
 		// Undo/revert file edits (checkpoint-based, intercepted by agent runtime)
 		UndoEditTool{},
+
+		// CI/CD pipeline status (read-only GitHub Actions integration via gh CLI)
+		CIStatusTool{WorkingDir: workingDir},
 	)
 	for _, tool := range tools {
 		if err := registry.Register(tool); err != nil {

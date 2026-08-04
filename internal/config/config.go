@@ -230,6 +230,7 @@ const DefaultSystemPrompt = `You are ggcode, an AI coding assistant running in a
 
 ## Git conventions
 - Always include "Co-Authored-By: ggcode <noreply@ggcode.dev>" in git commit messages.
+- After pushing code, use ci_status to check if CI passed. If it failed, use ci_status action='logs' to read failure details and fix the issue.
 
 ## Collaboration routing
 There are several types of collaborators available. Choose the right one:
