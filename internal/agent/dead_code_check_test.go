@@ -55,7 +55,7 @@ func TestCheckDeadCode_EmptyFuncBody(t *testing.T) {
 	old := ""
 	src := `package foo
 
-func unimplemented() {
+func unimplemented(data string) int {
 }
 `
 	warnings := checkDeadCode("test.go", old, src)

@@ -159,6 +159,13 @@ func detectEmptyFuncBodies(fset *token.FileSet, root *ast.File, oldContent strin
 			continue
 		}
 
+		// Skip functions with no params and no return values - these are
+		// common test fixtures (func a() {}). Only flag empty bodies when
+		// the signature indicates a real implementation was expected.
+		if !funcHasRealSignature(fn) {
+			continue
+		}
+
 		// Skip test functions.
 		name := fn.Name.Name
 		if strings.HasPrefix(name, "Test") || strings.HasPrefix(name, "Benchmark") ||
@@ -263,6 +270,23 @@ func detectUnusedParams(fset *token.FileSet, root *ast.File, oldContent string) 
 }
 
 // --- Helpers ---
+
+// funcHasRealSignature returns true if the function has at least one
+// parameter or at least one return value. Used to distinguish real
+// implementations (which should never be empty) from minimal stubs.
+func funcHasRealSignature(fn *ast.FuncDecl) bool {
+	if fn.Type.Params != nil {
+		for _, field := range fn.Type.Params.List {
+			if len(field.Names) > 0 {
+				return true
+			}
+		}
+	}
+	if fn.Type.Results != nil && len(fn.Type.Results.List) > 0 {
+		return true
+	}
+	return false
+}
 
 // hasCommentsInRange returns true if any comment falls between the start and
 // end token positions (exclusive). Used to detect bodies that have comments
