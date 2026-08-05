@@ -176,6 +176,7 @@ type Agent struct {
 	toolThermal                *thermalState                         // cross-tool usage balance monitor (explore/modify/verify distribution)
 	latencyTracker             *LatencyTracker                       // per-tool latency baseline & slow-tool outlier detection
 	toolSequence               *toolSequenceValidator                // cross-iteration tool call anti-pattern detection
+	planDrift                  *planDriftState                       // plan drift detection (exit_plan_mode item tracking)
 	convergenceLock            *convergenceLockState                 // post-verification unnecessary edit drift detection
 	userSentiment              *userSentimentState                   // negative user feedback detection (frustration/rejection course correction)
 	taskAnchor                 *taskAnchorState                      // periodic task re-anchoring for context collapse prevention
@@ -273,6 +274,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		behaviorPattern:      newBehaviorPatternState(),
 		perfBaseline:         newPerfBaselineState(),
 		fulfillmentGate:      newFulfillmentGateState(),
+		planDrift:            newPlanDriftState(),
 		companionGuard:       newCompanionGuardState(),
 		complexityGate:       newComplexityGateState(),
 		changeReconcile:      newChangeReconcileState(),
@@ -998,6 +1000,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.resetPostEditVerify()
 	a.resetRepetitionTracker()
 	a.fulfillmentGate.reset()
+	a.planDrift.reset()
 	a.companionGuard.reset()
 	a.complexityGate.reset()
 	a.behaviorPattern.reset()
@@ -1225,6 +1228,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.branchGuard.reset()
 	a.destructiveGuard.reset()
 	a.fulfillmentGate.reset()
+	a.planDrift.reset()
 	a.companionGuard.reset()
 	a.complexityGate.reset()
 	a.verifyRegression.reset()
@@ -1806,6 +1810,21 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					continue
 				}
 
+				// Plan drift gate: before returning, check if plan items (from
+				// exit_plan_mode) were actually addressed by the agent's work.
+				// Zero-LLM-cost heuristic inspired by Kiro/GitHub Spec Kit.
+				if driftMsg := a.planDrift.checkPlanDrift(runStats, textBuf); driftMsg != "" {
+					debug.Log("agent", "Iteration %d: plan drift detected, injecting reminder", i+1)
+					a.contextManager.Add(provider.Message{
+						Role: "user",
+						Content: []provider.ContentBlock{{
+							Type: "text",
+							Text: driftMsg,
+						}},
+					})
+					continue
+				}
+
 				// Request fulfillment gate: before returning, verify that the
 				// agent's actual work matches the user's request. This catches
 				// silent partial completion when no todo list was created.
@@ -2268,6 +2287,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Orphaned background command tracking: record start_command jobs
 			// and mark output checks. Detects forgotten background processes.
 			a.recordBgToolCall(tc.Name, tc.Arguments, result.Content, i+1)
+
+			// Plan drift capture: when exit_plan_mode fires, extract plan items
+			// for later drift detection (spec-driven development tracking).
+			if tc.Name == "exit_plan_mode" {
+				a.planDrift.capturePlan(extractPlanFromArgs(tc.Arguments))
+			}
 
 			// Delegation orchestration: track spawned agents and result consumption.
 			if a.delegationOrch != nil {
