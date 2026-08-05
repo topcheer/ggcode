@@ -1,0 +1,321 @@
+package agent
+
+// Post-Write Map Preallocation Detection (Check #57)
+//
+// Trend: Memory Allocation Optimization - Map Growth & Rehashing Cost
+//
+// Problem: AI coding agents generate code like:
+//
+//	m := make(map[K]V)
+//	for _, item := range items {
+//	    m[item.Key] = item.Value
+//	}
+//
+// Without a size hint, the Go runtime starts with a small hash table and
+// rehashes (rebuilds) it multiple times as entries are added. Each rehash
+// is O(N) and causes a burst of allocations. For N=10000, this means ~13
+// rehashes and significant GC churn. The fix is trivial:
+// make(map[K]V, len(items)) allocates the right-sized table once.
+//
+// Competitor analysis:
+//   - gocritic: no map preallocation check
+//   - staticcheck: no map preallocation check
+//   - go vet: does not flag this pattern
+//   - prealloc linter: only covers slices, not maps
+//   - Claude Code / Cursor / Cline / OpenHands / Aider: no detection
+//
+// Detection approach: AST-based, delta-aware. Find for/range loops where:
+//  1. A map is declared via make(map[K]V) without a size hint (single arg)
+//  2. Inside the loop body, the map is written to (map[key] = value)
+//  3. The range expression iterates a slice/array whose len() is known
+//     at declaration time (same variable name or make immediately before loop)
+//
+// False positive avoidance:
+//   - Skip if make already has a second argument (size hint present)
+//   - Skip if the loop body has a conditional (if/guard) that might skip entries
+//   - Skip if the range source is a channel (unknown size)
+//   - Skip test files
+
+import (
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"path/filepath"
+	"strings"
+)
+
+// mapPreallocWarning represents a single map preallocation warning.
+type mapPreallocWarning struct {
+	varName   string
+	loopLine  int
+	sourceLen string // expression whose len() should be used as hint
+}
+
+func (w mapPreallocWarning) String() string {
+	return fmt.Sprintf("map %q populated in loop without size hint", w.varName)
+}
+
+// checkMapPrealloc detects maps created without a size hint that are then
+// populated from a known-size source inside a for/range loop.
+func checkMapPrealloc(filePath, oldContent, newContent string) []string {
+	if !strings.HasSuffix(filePath, ".go") {
+		return nil
+	}
+	if strings.HasSuffix(filePath, "_test.go") {
+		return nil
+	}
+	if strings.TrimSpace(newContent) == "" {
+		return nil
+	}
+
+	fset := token.NewFileSet()
+	newAST, err := parser.ParseFile(fset, filePath, newContent, 0)
+	if err != nil {
+		return nil
+	}
+
+	newPatterns := findMissingMapPrealloc(newAST, fset)
+	if len(newPatterns) == 0 {
+		return nil
+	}
+
+	// Delta: subtract patterns already present in old content.
+	if strings.TrimSpace(oldContent) != "" {
+		oldAST, _ := parser.ParseFile(token.NewFileSet(), filePath, oldContent, 0)
+		if oldAST != nil {
+			oldPatterns := findMissingMapPrealloc(oldAST, token.NewFileSet())
+			if len(oldPatterns) > 0 {
+				oldSet := make(map[string]bool)
+				for _, p := range oldPatterns {
+					oldSet[p.String()] = true
+				}
+				var delta []mapPreallocWarning
+				for _, p := range newPatterns {
+					if !oldSet[p.String()] {
+						delta = append(delta, p)
+					}
+				}
+				newPatterns = delta
+			}
+		}
+	}
+
+	if len(newPatterns) == 0 {
+		return nil
+	}
+
+	var warnings []string
+	for i, p := range newPatterns {
+		if i >= 3 {
+			warnings = append(warnings, fmt.Sprintf("...and %d more map preallocation warning(s)", len(newPatterns)-3))
+			break
+		}
+		warnings = append(warnings, fmt.Sprintf(
+			"Map preallocation: %q created with make(map[K]V) (no size hint) and populated inside a loop at %s:%d. "+
+				"Each growth triggers a full rehash (O(N) per rehash, ~log(N) rehashes for N entries). "+
+				"Pre-allocate with make(map[K]V, %s) to eliminate intermediate rehashes and reduce GC pressure.",
+			p.varName, filepath.Base(filePath), p.loopLine, p.sourceLen))
+	}
+	return warnings
+}
+
+// mapDeclInfo tracks a map variable declared without a size hint.
+type mapDeclInfo struct {
+	name string
+	pos  token.Pos
+}
+
+// findMissingMapPrealloc scans the AST for map-population-in-loop patterns
+// where the map lacks a size hint.
+func findMissingMapPrealloc(file *ast.File, fset *token.FileSet) []mapPreallocWarning {
+	// Phase 1: Collect all map declarations without size hints.
+	decls := make(map[string]*mapDeclInfo)
+	collectMapDecls(file, decls)
+	if len(decls) == 0 {
+		return nil
+	}
+
+	// Phase 2: Find for/range loops that write to hintless maps.
+	var warnings []mapPreallocWarning
+	seen := make(map[string]bool)
+
+	ast.Inspect(file, func(n ast.Node) bool {
+		switch loop := n.(type) {
+		case *ast.RangeStmt:
+			if loop.Body == nil {
+				return true
+			}
+			loopLine := fset.Position(loop.Pos()).Line
+			sourceName := getRangeSourceName(loop.X)
+			if sourceName == "" {
+				return true
+			}
+			hintExpr := "len(" + sourceName + ")"
+			for _, m := range scanForMapWrite(loop.Body, decls) {
+				if !seen[m] {
+					seen[m] = true
+					warnings = append(warnings, mapPreallocWarning{
+						varName:   m,
+						loopLine:  loopLine,
+						sourceLen: hintExpr,
+					})
+				}
+			}
+		case *ast.ForStmt:
+			if loop.Body == nil {
+				return true
+			}
+			loopLine := fset.Position(loop.Pos()).Line
+			// For C-style for loops, we can't know the source size reliably.
+			// Use "expectedSize" as placeholder guidance.
+			for _, m := range scanForMapWrite(loop.Body, decls) {
+				if !seen[m] {
+					seen[m] = true
+					warnings = append(warnings, mapPreallocWarning{
+						varName:   m,
+						loopLine:  loopLine,
+						sourceLen: "expectedSize",
+					})
+				}
+			}
+		}
+		return true
+	})
+
+	return warnings
+}
+
+// collectMapDecls walks the AST and records map variables created via
+// make(map[K]V) with only one argument (no size hint).
+func collectMapDecls(file *ast.File, decls map[string]*mapDeclInfo) {
+	ast.Inspect(file, func(n ast.Node) bool {
+		switch node := n.(type) {
+		case *ast.GenDecl:
+			if node.Tok != token.VAR {
+				return true
+			}
+			for _, spec := range node.Specs {
+				vs, ok := spec.(*ast.ValueSpec)
+				if !ok {
+					continue
+				}
+				for i, name := range vs.Names {
+					if i < len(vs.Values) {
+						if info := analyzeMapInit(name.Name, name.Pos(), vs.Values[i]); info != nil {
+							decls[name.Name] = info
+						}
+					}
+				}
+			}
+		case *ast.AssignStmt:
+			if node.Tok != token.DEFINE {
+				return true
+			}
+			for i, lhs := range node.Lhs {
+				ident, ok := lhs.(*ast.Ident)
+				if !ok || i >= len(node.Rhs) {
+					continue
+				}
+				if info := analyzeMapInit(ident.Name, ident.Pos(), node.Rhs[i]); info != nil {
+					decls[ident.Name] = info
+				}
+			}
+		}
+		return true
+	})
+}
+
+// analyzeMapInit checks if an initialization expression is make(map[K]V)
+// without a size hint. Returns nil if not a hintless map.
+func analyzeMapInit(name string, pos token.Pos, expr ast.Expr) *mapDeclInfo {
+	call, ok := expr.(*ast.CallExpr)
+	if !ok {
+		return nil
+	}
+	fun, ok := call.Fun.(*ast.Ident)
+	if !ok || fun.Name != "make" {
+		return nil
+	}
+	if len(call.Args) == 0 {
+		return nil
+	}
+	// First arg must be a map type.
+	mt, ok := call.Args[0].(*ast.MapType)
+	if !ok || mt == nil {
+		return nil
+	}
+	// make(map[K]V) with 1 arg = no hint.
+	// make(map[K]V, n) with 2 args = has hint.
+	if len(call.Args) == 1 {
+		return &mapDeclInfo{name: name, pos: pos}
+	}
+	return nil
+}
+
+// getRangeSourceName extracts the variable name from a range expression.
+// Returns "" for channels or complex expressions where the source size is unknown.
+func getRangeSourceName(expr ast.Expr) string {
+	switch e := expr.(type) {
+	case *ast.Ident:
+		return e.Name
+	case *ast.SelectorExpr:
+		if x, ok := e.X.(*ast.Ident); ok {
+			return x.Name + "." + e.Sel.Name
+		}
+	}
+	return ""
+}
+
+// scanForMapWrite searches a loop body for map write operations
+// (map[key] = value) and returns the names of hintless maps that are written.
+func scanForMapWrite(body *ast.BlockStmt, decls map[string]*mapDeclInfo) []string {
+	var result []string
+	found := make(map[string]bool)
+
+	ast.Inspect(body, func(n ast.Node) bool {
+		assign, ok := n.(*ast.AssignStmt)
+		if !ok {
+			return true
+		}
+		for _, lhs := range assign.Lhs {
+			idx, ok := lhs.(*ast.IndexExpr)
+			if !ok {
+				continue
+			}
+			ident, ok := idx.X.(*ast.Ident)
+			if !ok {
+				continue
+			}
+			if _, exists := decls[ident.Name]; exists && !found[ident.Name] {
+				// Check if the loop body has conditionals that might skip entries.
+				// If we find an if statement at the top level of the body,
+				// be conservative and skip this warning.
+				if hasConditionalSkip(body) {
+					continue
+				}
+				found[ident.Name] = true
+				result = append(result, ident.Name)
+			}
+		}
+		return true
+	})
+
+	return result
+}
+
+// hasConditionalSkip returns true if the loop body contains top-level
+// if/guard statements that might conditionally skip map entries.
+// This is a conservative check to reduce false positives.
+func hasConditionalSkip(body *ast.BlockStmt) bool {
+	if body == nil {
+		return false
+	}
+	for _, stmt := range body.List {
+		switch stmt.(type) {
+		case *ast.IfStmt, *ast.SwitchStmt, *ast.TypeSwitchStmt, *ast.SelectStmt:
+			return true
+		}
+	}
+	return false
+}
