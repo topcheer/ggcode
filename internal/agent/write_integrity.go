@@ -161,6 +161,7 @@ func registerAllChecks() {
 		{Name: "duplicate-code", Langs: []Language{LangGo}, Run: sliceCheck(checkDuplicateCode)},
 		{Name: "magic-number", Langs: []Language{LangGo}, Run: stringCheck(checkMagicNumbers)},
 		{Name: "panic-safety", Langs: []Language{LangGo}, Run: sliceCheck(checkPanicSafety)},
+		{Name: "nil-deref-after-error", Langs: []Language{LangGo}, Run: stringCheck(checkNilDerefAfterError)},
 		{Name: "breaking-change", Langs: []Language{LangGo}, Run: stringCheck(checkBreakingChanges)},
 		{Name: "self-assignment", Langs: []Language{LangGo}, Run: stringCheck(checkSelfAssignment)},
 		{Name: "suspicious-comparison", Langs: []Language{LangGo}, Run: stringCheck(checkSuspiciousComparison)},
