@@ -183,6 +183,7 @@ func registerAllChecks() {
 		{Name: "regex-loop", Langs: []Language{LangGo}, Run: sliceCheck(checkRegexLoop)},
 		{Name: "time-format", Langs: []Language{LangGo}, Run: sliceCheck(checkTimeFormat)},
 		{Name: "channel-safety", Langs: []Language{LangGo}, Run: sliceCheck(checkChannelSafety)},
+		{Name: "loop-capture", Langs: []Language{LangGo}, Run: sliceCheck(checkLoopVarCapture)},
 		{Name: "excessive-params", Langs: []Language{LangGo}, Run: sliceCheck(checkExcessiveParams)},
 		{Name: "excessive-returns", Langs: []Language{LangGo}, Run: sliceCheck(checkExcessiveReturns)},
 		{Name: "exported-doc", Langs: []Language{LangGo}, Run: func(ctx CheckContext) []string {
