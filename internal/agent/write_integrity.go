@@ -196,6 +196,7 @@ func registerAllChecks() {
 			}
 			return checkMissingExportedDocsAST(ctx.FilePath, ctx.OldContent, ctx.GoAST)
 		}},
+		{Name: "nesting-depth", Langs: []Language{LangGo}, Run: sliceCheck(checkNestingDepth)},
 
 		// --- Multi-language checks ---
 		{Name: "insecure-patterns", Langs: []Language{LangGo, LangJSTS, LangPython}, Run: sliceCheck(checkInsecurePatterns)},
