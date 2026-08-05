@@ -100,64 +100,74 @@ func findExcessiveParams(src string) []paramCountInstance {
 	var instances []paramCountInstance
 
 	ast.Inspect(file, func(n ast.Node) bool {
-		fn, ok := n.(*ast.FuncDecl)
-		if !ok {
-			// Also check function literals assigned to variables.
-			assign, ok := n.(*ast.AssignStmt)
-			if !ok {
-				return true
+		switch node := n.(type) {
+		case *ast.FuncDecl:
+			inst, ok := inspectFuncDecl(node, fset)
+			if ok {
+				instances = append(instances, inst)
 			}
-			for _, e := range assign.Rhs {
+		case *ast.AssignStmt:
+			for _, e := range node.Rhs {
 				if lit, ok := e.(*ast.FuncLit); ok {
-					count := countParams(lit.Type.Params)
-					if count >= paramCountThreshold {
-						pos := fset.Position(lit.Pos())
-						instances = append(instances, paramCountInstance{
-							funcName: "<anonymous>",
-							pos:      pos,
-							count:    count,
-							params:   paramNames(lit.Type.Params),
-						})
+					if inst := inspectFuncLit(lit, fset); inst != nil {
+						instances = append(instances, *inst)
 					}
 				}
 			}
-			return true
 		}
-
-		if fn.Name == nil {
-			return true
-		}
-
-		// Skip test helper functions that legitimately take many params.
-		if strings.HasPrefix(fn.Name.Name, "Test") || strings.HasPrefix(fn.Name.Name, "Benchmark") {
-			return true
-		}
-
-		// Count receiver as a parameter (SonarQube convention).
-		count := countParams(fn.Type.Params)
-		if fn.Recv != nil && len(fn.Recv.List) > 0 {
-			count += len(fn.Recv.List)
-		}
-
-		if count >= paramCountThreshold {
-			pos := fset.Position(fn.Pos())
-			var params []string
-			if fn.Recv != nil {
-				params = append(params, paramNames(fn.Recv)...)
-			}
-			params = append(params, paramNames(fn.Type.Params)...)
-			instances = append(instances, paramCountInstance{
-				funcName: fn.Name.Name,
-				pos:      pos,
-				count:    count,
-				params:   params,
-			})
-		}
-
 		return true
 	})
 
 	return instances
+}
+
+// inspectFuncDecl checks a named function declaration for excessive params.
+// Returns the instance and true if it should be flagged.
+func inspectFuncDecl(fn *ast.FuncDecl, fset *token.FileSet) (paramCountInstance, bool) {
+	if fn.Name == nil || isTestOrBenchFunction(fn.Name.Name) {
+		return paramCountInstance{}, false
+	}
+
+	count := countParams(fn.Type.Params)
+	if fn.Recv != nil {
+		count += len(fn.Recv.List)
+	}
+
+	if count < paramCountThreshold {
+		return paramCountInstance{}, false
+	}
+
+	var params []string
+	if fn.Recv != nil {
+		params = append(params, paramNames(fn.Recv)...)
+	}
+	params = append(params, paramNames(fn.Type.Params)...)
+
+	return paramCountInstance{
+		funcName: fn.Name.Name,
+		pos:      fset.Position(fn.Pos()),
+		count:    count,
+		params:   params,
+	}, true
+}
+
+// inspectFuncLit checks an anonymous function literal for excessive params.
+func inspectFuncLit(lit *ast.FuncLit, fset *token.FileSet) *paramCountInstance {
+	count := countParams(lit.Type.Params)
+	if count < paramCountThreshold {
+		return nil
+	}
+	return &paramCountInstance{
+		funcName: "<anonymous>",
+		pos:      fset.Position(lit.Pos()),
+		count:    count,
+		params:   paramNames(lit.Type.Params),
+	}
+}
+
+// isTestOrBenchFunction returns true for Test/Benchmark function names.
+func isTestOrBenchFunction(name string) bool {
+	return strings.HasPrefix(name, "Test") || strings.HasPrefix(name, "Benchmark")
 }
 
 // countParams counts the total number of named parameters in a FieldList.
