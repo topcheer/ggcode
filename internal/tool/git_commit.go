@@ -112,6 +112,7 @@ func (t GitCommit) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	}
 	issues := ScanStagedDiffForIssues(diffOutput)
 	diffScanWarning = FormatDiffIssues(issues)
+	stagingWarning := AnalyzeStagingQuality(diffOutput)
 	cohesion, size := AnalyzeCommitScope(diffOutput)
 	scopeWarning = combineScopeWarnings(cohesion, size)
 	// When scope analysis detects multi-concern changes, append a concrete
@@ -139,7 +140,7 @@ func (t GitCommit) Execute(ctx context.Context, input json.RawMessage) (Result, 
 
 	trimmed := strings.TrimSpace(string(out))
 	// Append advisory warnings (build gate, branch, message quality, diff scan, scope, convention tip).
-	for _, w := range []string{buildWarning, branchWarning, msgWarning, diffScanWarning, scopeWarning, convTip} {
+	for _, w := range []string{buildWarning, branchWarning, msgWarning, diffScanWarning, stagingWarning, scopeWarning, convTip} {
 		if w != "" {
 			trimmed += "\n\n" + w
 		}
@@ -147,7 +148,7 @@ func (t GitCommit) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	if trimmed == "" {
 		var b strings.Builder
 		b.WriteString("Committed successfully.")
-		for _, w := range []string{buildWarning, branchWarning, msgWarning, diffScanWarning, scopeWarning, convTip} {
+		for _, w := range []string{buildWarning, branchWarning, msgWarning, diffScanWarning, stagingWarning, scopeWarning, convTip} {
 			if w != "" {
 				b.WriteString("\n\n")
 				b.WriteString(w)
