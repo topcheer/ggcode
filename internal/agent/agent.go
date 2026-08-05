@@ -2708,11 +2708,12 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 	streamCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	stream, err := a.provider.ChatStream(streamCtx, msgs, toolDefs)
+	rawStream, err := a.provider.ChatStream(streamCtx, msgs, toolDefs)
 	if err != nil {
 		debug.Log("agent", "ChatStream error: %v", err)
 		return nil, "", nil, false, fmt.Errorf("chat error: %w", err)
 	}
+	stream := streamWithStallDetection(rawStream, streamStallThreshold)
 
 	var (
 		textBuf          strings.Builder
