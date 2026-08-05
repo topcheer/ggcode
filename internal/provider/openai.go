@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,11 +11,11 @@ import (
 	"strings"
 	"sync"
 
+	openai "github.com/sashabaranov/go-openai"
+
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/util"
-
-	"github.com/sashabaranov/go-openai"
 )
 
 const (
@@ -893,16 +894,25 @@ func (p *OpenAIProvider) convertMessages(messages []Message) []openai.ChatComple
 }
 
 func (p *OpenAIProvider) convertTools(tools []ToolDefinition) []openai.Tool {
-	result := make([]openai.Tool, len(tools))
-	for i, t := range tools {
-		result[i] = openai.Tool{
+	result := make([]openai.Tool, 0, len(tools))
+	for _, t := range tools {
+		params := t.Parameters
+		// Validate the schema is well-formed JSON. MCP servers and plugins
+		// may return invalid JSON schemas that crash the entire request
+		// serialization (json.RawMessage.MarshalJSON panics on invalid content).
+		// Fall back to an empty object schema instead of failing all 191 tools.
+		if len(bytes.TrimSpace(params)) == 0 || !json.Valid(params) {
+			debug.Log("openai", "WARNING: tool %q has invalid JSON schema (%d bytes), using empty object fallback", t.Name, len(params))
+			params = json.RawMessage(`{"type":"object","properties":{}}`)
+		}
+		result = append(result, openai.Tool{
 			Type: openai.ToolTypeFunction,
 			Function: &openai.FunctionDefinition{
 				Name:        t.Name,
 				Description: t.Description,
-				Parameters:  t.Parameters,
+				Parameters:  params,
 			},
-		}
+		})
 	}
 	return result
 }

@@ -12,7 +12,7 @@ import (
 	"time"
 
 	anthropic "github.com/anthropics/anthropic-sdk-go"
-	"github.com/sashabaranov/go-openai"
+	openai "github.com/sashabaranov/go-openai"
 )
 
 func TestOpenAIConvertMessages_SystemText(t *testing.T) {
@@ -646,5 +646,42 @@ func TestRetryDelayRetryAfterCapped(t *testing.T) {
 	delay := retryDelay(err, 0)
 	if delay != providerRetryBackoffCap {
 		t.Fatalf("Retry-After 300s should be capped to %v, got %v", providerRetryBackoffCap, delay)
+	}
+}
+
+func TestConvertToolsSchemaValidation(t *testing.T) {
+	p := &OpenAIProvider{}
+	tools := []ToolDefinition{
+		{Name: "valid_tool", Description: "ok", Parameters: json.RawMessage(`{"type":"object","properties":{"a":{"type":"string"}}}`)},
+		{Name: "empty_schema", Description: "ok", Parameters: json.RawMessage(``)},
+		{Name: "whitespace_only", Description: "ok", Parameters: json.RawMessage(`   `)},
+		{Name: "invalid_json", Description: "ok", Parameters: json.RawMessage(`{invalid because description not quoted}`)},
+		{Name: "another_valid", Description: "ok", Parameters: json.RawMessage(`{"type":"object"}`)},
+	}
+	result := p.convertTools(tools)
+	if len(result) != len(tools) {
+		t.Fatalf("expected %d tools, got %d", len(tools), len(result))
+	}
+	// Every tool's parameters must be valid JSON (either original or fallback)
+	for i, r := range result {
+		name := tools[i].Name
+		raw, _ := r.Function.Parameters.(json.RawMessage)
+		if raw == nil {
+			// May be marshaled as other types; serialize to check
+			data, _ := json.Marshal(r.Function.Parameters)
+			raw = data
+		}
+		if !json.Valid(raw) {
+			t.Errorf("tool %q: parameters is not valid JSON: %s", name, string(raw))
+		}
+	}
+	// Verify fallback applied for invalid entries
+	raw, _ := result[1].Function.Parameters.(json.RawMessage)
+	var emptyParams map[string]any
+	if err := json.Unmarshal(raw, &emptyParams); err != nil {
+		t.Errorf("empty schema fallback should be valid JSON: %v", err)
+	}
+	if _, ok := emptyParams["properties"]; !ok {
+		t.Error("empty schema should get fallback with properties key")
 	}
 }
