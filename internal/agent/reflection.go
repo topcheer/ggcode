@@ -418,6 +418,9 @@ func (a *Agent) maybeReflect(stats *RunStats) {
 			modelName = m.ModelName()
 		}
 		a.qualityScorer.ScoreRun(&s, providerName, modelName)
+		// Detect quality regression against the rolling historical baseline
+		// (Eval-Driven Development: catch quality degradation early).
+		a.qualityScorer.maybeDetectRegression()
 	}
 
 	safego.Go("agent.reflection", func() {

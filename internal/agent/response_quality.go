@@ -19,6 +19,10 @@ type ResponseQualityScorer struct {
 	mu     sync.RWMutex
 	runs   []QualityEntry
 	maxRun int
+
+	// latestRegression is the most recent regression report (if any).
+	// Populated by maybeDetectRegression after each scored run.
+	latestRegression RegressionReport
 }
 
 // QualityEntry records quality signals for a single agent run.
