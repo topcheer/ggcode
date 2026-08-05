@@ -74,46 +74,16 @@ func detectEmptyBranches(fset *token.FileSet, root *ast.File, oldContent string)
 			return false
 		}
 
-		var body *ast.BlockStmt
-		var construct string
-
-		switch node := n.(type) {
-		case *ast.IfStmt:
-			if node.Body != nil && len(node.Body.List) == 0 {
-				body = node.Body
-				construct = "if"
-			}
-		case *ast.ForStmt:
-			if node.Body != nil && len(node.Body.List) == 0 {
-				body = node.Body
-				construct = "for"
-			}
-		case *ast.SwitchStmt:
-			if node.Body != nil && len(node.Body.List) == 0 {
-				body = node.Body
-				construct = "switch"
-			}
-		case *ast.RangeStmt:
-			if node.Body != nil && len(node.Body.List) == 0 {
-				body = node.Body
-				construct = "range"
-			}
-		}
-
+		body, construct := extractEmptyBranch(n)
 		if body == nil {
 			return true
 		}
 
-		// Skip if the body has comments (not truly empty).
-		if hasCommentsInRange(comments, body.Lbrace, body.Rbrace) {
+		if shouldSkipEmptyBlock(comments, body, fset) {
 			return true
 		}
 
 		pos := fset.Position(body.Pos())
-		if isInTestFile(pos.Filename) {
-			return true
-		}
-
 		warnings = append(warnings, fmt.Sprintf(
 			"Empty %s body at %s:%d - branch has no statements. "+
 				"Remove the dead branch or add the missing implementation.",
@@ -122,6 +92,41 @@ func detectEmptyBranches(fset *token.FileSet, root *ast.File, oldContent string)
 	})
 
 	return warnings
+}
+
+// extractEmptyBranch returns the body and construct name if the node is a
+// branch statement (if/for/switch/range) with an empty body.
+func extractEmptyBranch(n ast.Node) (*ast.BlockStmt, string) {
+	var body *ast.BlockStmt
+	var construct string
+
+	switch node := n.(type) {
+	case *ast.IfStmt:
+		body, construct = node.Body, "if"
+	case *ast.ForStmt:
+		body, construct = node.Body, "for"
+	case *ast.SwitchStmt:
+		body, construct = node.Body, "switch"
+	case *ast.RangeStmt:
+		body, construct = node.Body, "range"
+	default:
+		return nil, ""
+	}
+
+	if body == nil || len(body.List) != 0 {
+		return nil, ""
+	}
+	return body, construct
+}
+
+// shouldSkipEmptyBlock returns true if the block should be skipped because it
+// has comments or is in a test file.
+func shouldSkipEmptyBlock(comments []*ast.CommentGroup, body *ast.BlockStmt, fset *token.FileSet) bool {
+	if hasCommentsInRange(comments, body.Lbrace, body.Rbrace) {
+		return true
+	}
+	pos := fset.Position(body.Pos())
+	return isInTestFile(pos.Filename)
 }
 
 // detectEmptyFuncBodies flags non-test, non-interface functions with empty bodies.
@@ -167,9 +172,7 @@ func detectEmptyFuncBodies(fset *token.FileSet, root *ast.File, oldContent strin
 		}
 
 		// Skip test functions.
-		name := fn.Name.Name
-		if strings.HasPrefix(name, "Test") || strings.HasPrefix(name, "Benchmark") ||
-			strings.HasPrefix(name, "Example") || strings.HasPrefix(name, "Fuzz") {
+		if isTestFunctionName(fn.Name.Name) {
 			continue
 		}
 
@@ -237,35 +240,42 @@ func detectUnusedParams(fset *token.FileSet, root *ast.File, oldContent string) 
 		if !ok || fn.Body == nil {
 			continue
 		}
-
-		// Skip test functions.
-		if strings.HasPrefix(fn.Name.Name, "Test") || strings.HasPrefix(fn.Name.Name, "Benchmark") ||
-			strings.HasPrefix(fn.Name.Name, "Example") || strings.HasPrefix(fn.Name.Name, "Fuzz") {
+		if isTestFunctionName(fn.Name.Name) {
 			continue
 		}
-
 		if fn.Type.Params == nil || len(fn.Type.Params.List) == 0 {
 			continue
 		}
 
-		referenced := collectBodyIdentifiers(fn.Body)
-
-		for _, field := range fn.Type.Params.List {
-			for _, name := range field.Names {
-				if name.Name == "_" || name.Name == "" {
-					continue
-				}
-				if !referenced[name.Name] {
-					pos := fset.Position(name.Pos())
-					warnings = append(warnings, fmt.Sprintf(
-						"Unused parameter %q in function %s at %s:%d - parameter is declared "+
-							"but never used in the function body. Remove it or use it (or rename to _).",
-						name.Name, fn.Name.Name, filepath.Base(pos.Filename), pos.Line))
-				}
-			}
-		}
+		warnings = append(warnings, findUnusedParamsInFunc(fset, fn)...)
 	}
 
+	return warnings
+}
+
+// isTestFunctionName returns true for Test/Benchmark/Example/Fuzz prefixed names.
+func isTestFunctionName(name string) bool {
+	return strings.HasPrefix(name, "Test") || strings.HasPrefix(name, "Benchmark") ||
+		strings.HasPrefix(name, "Example") || strings.HasPrefix(name, "Fuzz")
+}
+
+// findUnusedParamsInFunc checks a single function for unused parameters.
+func findUnusedParamsInFunc(fset *token.FileSet, fn *ast.FuncDecl) []string {
+	referenced := collectBodyIdentifiers(fn.Body)
+	var warnings []string
+
+	for _, field := range fn.Type.Params.List {
+		for _, name := range field.Names {
+			if name.Name == "_" || name.Name == "" || referenced[name.Name] {
+				continue
+			}
+			pos := fset.Position(name.Pos())
+			warnings = append(warnings, fmt.Sprintf(
+				"Unused parameter %q in function %s at %s:%d - parameter is declared "+
+					"but never used in the function body. Remove it or use it (or rename to _).",
+				name.Name, fn.Name.Name, filepath.Base(pos.Filename), pos.Line))
+		}
+	}
 	return warnings
 }
 
