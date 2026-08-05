@@ -173,6 +173,7 @@ type Agent struct {
 	toolFallback               *toolFallbackState                    // tool error fallback chain (actionable recovery suggestions)
 	argSizeGuardFires          int                                   // count of argument size guard injections this run
 	fileFreshness              *fileFreshnessSentinel                // proactive cross-iteration external file change detection
+	readHash                   *readHashTracker                      // content-fingerprint read validity (sub-second mtime race detection, false-positive suppression)
 	toolThermal                *thermalState                         // cross-tool usage balance monitor (explore/modify/verify distribution)
 	latencyTracker             *LatencyTracker                       // per-tool latency baseline & slow-tool outlier detection
 	toolSequence               *toolSequenceValidator                // cross-iteration tool call anti-pattern detection
@@ -293,6 +294,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		effortAdapter:        newAdaptiveEffortState(),
 		sessionTimeout:       newSessionTimeoutState(0),
 		fileFreshness:        newFileFreshnessSentinel(),
+		readHash:             newReadHashTracker(),
 		toolThermal:          newThermalState(),
 		userSentiment:        newUserSentimentState(),
 		transientRetryBudget: maxTransientRetryBudgetPerRun,
@@ -1252,6 +1254,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.toolFallback.reset()
 	a.errorCascade.reset()
 	a.fileFreshness.reset()
+	a.readHash.reset()
 	a.toolThermal.reset()
 	a.contextFootprint.reset()
 	a.cacheEffMonitor.reset()
@@ -2142,6 +2145,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				for _, p := range extractCreateFilePaths(tc.Name, tc.Arguments) {
 					a.unreadEdit.recordCreated(p)
 					a.fileFreshness.recordWrite(p)
+					a.readHash.recordWriteHash(p)
 				}
 				// Track edit for recurring-error detection: increments the
 				// "edits since last build error" counter so that a recurring
@@ -2164,6 +2168,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					a.unreadEdit.recordRead(p)
 					a.editFailRecovery.recordRead(p)
 					a.fileFreshness.recordRead(p)
+					a.readHash.recordReadHash(p)
 					if hint := a.redundantRead.checkRedundantRead(p); hint != "" {
 						if result.Content != "" {
 							result.Content = result.Content + "\n\n" + hint
@@ -2180,6 +2185,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				for _, p := range extractEditFilePaths(tc.Name, tc.Arguments) {
 					a.editFailRecovery.recordEditSuccess(p)
 					a.fileFreshness.recordWrite(p)
+					a.readHash.recordWriteHash(p)
 					a.redundantRead.recordWrite(p)
 					// Convergence lock: track post-verification edits.
 					a.convergenceRecordEdit(tc.Name)
@@ -2193,6 +2199,15 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					// Stale-read detection: warn when the file was modified on
 					// disk since the last read (external edit, git pull, etc.).
 					if hint := a.unreadEdit.checkStaleRead(p); hint != "" {
+						if result.Content != "" {
+							result.Content = result.Content + "\n\n" + hint
+						} else {
+							result.Content = hint
+						}
+					}
+					// Content-fingerprint validation: catches sub-second edits that
+					// mtime misses, suppresses false positives from touch/NFS.
+					if hint := a.readHash.validateContentAtEdit(p, 0); hint != "" {
 						if result.Content != "" {
 							result.Content = result.Content + "\n\n" + hint
 						} else {

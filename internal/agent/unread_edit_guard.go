@@ -219,6 +219,18 @@ func extractEditFilePaths(toolName string, args json.RawMessage) []string {
 			}
 			return paths
 		}
+	case "batch_replace":
+		// batch_replace modifies files in-place (codemod). Track them so the
+		// freshness sentinel and read-validity check know the agent wrote them.
+		if files, ok := m["files"].([]any); ok {
+			var paths []string
+			for _, f := range files {
+				if s, ok := f.(string); ok {
+					paths = append(paths, s)
+				}
+			}
+			return paths
+		}
 	}
 	return nil
 }
@@ -275,6 +287,16 @@ func extractCreateFilePaths(toolName string, args json.RawMessage) []string {
 					if p, ok := fm["path"].(string); ok {
 						paths = append(paths, p)
 					}
+				}
+			}
+			return paths
+		}
+	case "batch_replace":
+		if files, ok := m["files"].([]any); ok {
+			var paths []string
+			for _, f := range files {
+				if s, ok := f.(string); ok {
+					paths = append(paths, s)
 				}
 			}
 			return paths
