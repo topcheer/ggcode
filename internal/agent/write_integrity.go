@@ -145,6 +145,7 @@ func registerAllChecks() {
 		{Name: "ignored-error-return", Langs: []Language{LangGo}, Run: sliceCheck(checkIgnoredErrorReturn)},
 		{Name: "range-copy-mod", Langs: []Language{LangGo}, Run: sliceCheck(checkRangeCopyMod)},
 		{Name: "goroutine-leak", Langs: []Language{LangGo}, Run: sliceCheck(checkGoroutineLeak)},
+		{Name: "waitgroup-misuse", Langs: []Language{LangGo}, Run: sliceCheck(checkWaitGroupMisuse)},
 		{Name: "race-verify-hint", Langs: []Language{LangGo}, Run: sliceCheck(checkRaceVerifyHint)},
 		{Name: "error-wrapping", Langs: []Language{LangGo}, Run: sliceCheck(checkErrorWrapping)},
 		{Name: "error-msg-quality", Langs: []Language{LangGo}, Run: sliceCheck(checkErrorMsgQuality)},
