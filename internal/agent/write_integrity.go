@@ -179,6 +179,7 @@ func registerAllChecks() {
 		{Name: "concurrent-map-access", Langs: []Language{LangGo}, Run: stringCheck(checkConcurrentMapAccess)},
 		{Name: "struct-tag-consistency", Langs: []Language{LangGo}, Run: sliceCheck(checkStructTagConsistency)},
 		{Name: "copylock", Langs: []Language{LangGo}, Run: sliceCheck(checkCopylock)},
+		{Name: "map-iter-write", Langs: []Language{LangGo}, Run: sliceCheck(checkMapIterWrite)},
 		{Name: "excessive-params", Langs: []Language{LangGo}, Run: sliceCheck(checkExcessiveParams)},
 		{Name: "excessive-returns", Langs: []Language{LangGo}, Run: sliceCheck(checkExcessiveReturns)},
 		{Name: "exported-doc", Langs: []Language{LangGo}, Run: func(ctx CheckContext) []string {
