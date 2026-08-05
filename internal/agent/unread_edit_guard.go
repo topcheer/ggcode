@@ -186,6 +186,40 @@ func (s *unreadEditState) checkStaleRead(path string) string {
 		"Re-read the file with read_file before editing to avoid clobbering external changes."
 }
 
+// extractObjectArrayPaths extracts "path" fields from an array of objects.
+// Used by multi_file_edit and multi_file_read where files is [{"path": ...}, ...].
+func extractObjectArrayPaths(m map[string]any) []string {
+	files, ok := m["files"].([]any)
+	if !ok {
+		return nil
+	}
+	var paths []string
+	for _, f := range files {
+		if fm, ok := f.(map[string]any); ok {
+			if p, ok := fm["path"].(string); ok {
+				paths = append(paths, p)
+			}
+		}
+	}
+	return paths
+}
+
+// extractStringArrayPaths extracts string elements from a "files" array.
+// Used by batch_replace where files is ["/a/foo.go", "/b/bar.go", ...].
+func extractStringArrayPaths(m map[string]any) []string {
+	files, ok := m["files"].([]any)
+	if !ok {
+		return nil
+	}
+	var paths []string
+	for _, f := range files {
+		if s, ok := f.(string); ok {
+			paths = append(paths, s)
+		}
+	}
+	return paths
+}
+
 // extractEditFilePaths returns file paths from edit tool arguments.
 func extractEditFilePaths(toolName string, args json.RawMessage) []string {
 	if len(args) == 0 {
@@ -197,39 +231,22 @@ func extractEditFilePaths(toolName string, args json.RawMessage) []string {
 	}
 	switch toolName {
 	case "edit_file":
-		if p, ok := m["file_path"].(string); ok {
-			return []string{p}
-		}
-		if p, ok := m["path"].(string); ok {
-			return []string{p}
-		}
+		return extractSinglePath(m, "file_path", "path")
 	case "multi_edit_file":
-		if p, ok := m["file_path"].(string); ok {
-			return []string{p}
-		}
+		return extractSinglePath(m, "file_path")
 	case "multi_file_edit":
-		if files, ok := m["files"].([]any); ok {
-			var paths []string
-			for _, f := range files {
-				if fm, ok := f.(map[string]any); ok {
-					if p, ok := fm["path"].(string); ok {
-						paths = append(paths, p)
-					}
-				}
-			}
-			return paths
-		}
+		return extractObjectArrayPaths(m)
 	case "batch_replace":
-		// batch_replace modifies files in-place (codemod). Track them so the
-		// freshness sentinel and read-validity check know the agent wrote them.
-		if files, ok := m["files"].([]any); ok {
-			var paths []string
-			for _, f := range files {
-				if s, ok := f.(string); ok {
-					paths = append(paths, s)
-				}
-			}
-			return paths
+		return extractStringArrayPaths(m)
+	}
+	return nil
+}
+
+// extractSinglePath returns the first matching key from a map as a single-element slice.
+func extractSinglePath(m map[string]any, keys ...string) []string {
+	for _, k := range keys {
+		if p, ok := m[k].(string); ok {
+			return []string{p}
 		}
 	}
 	return nil
