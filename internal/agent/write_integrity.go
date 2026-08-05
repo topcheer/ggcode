@@ -152,6 +152,7 @@ func registerAllChecks() {
 		{Name: "nil-map-write", Langs: []Language{LangGo}, Run: stringCheck(checkNilMapWrite)},
 		{Name: "loop-perf", Langs: []Language{LangGo}, Run: sliceCheck(checkLoopPerf)},
 		{Name: "unreachable-code", Langs: []Language{LangGo}, Run: sliceCheck(checkUnreachableCode)},
+		{Name: "dead-code", Langs: []Language{LangGo}, Run: sliceCheck(checkDeadCode)},
 		{Name: "hollow-test", Langs: []Language{LangGo}, Run: stringCheck(checkAssertionPresence)},
 		{Name: "test-isolation", Langs: []Language{LangGo}, Run: stringCheck(checkTestIsolation)},
 		{Name: "deprecated-api", Langs: []Language{LangGo}, Run: stringCheck(checkDeprecatedAPI)},
