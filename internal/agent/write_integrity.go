@@ -151,6 +151,7 @@ func registerAllChecks() {
 		{Name: "interface-compliance", Langs: []Language{LangGo}, Run: stringCheck(checkInterfaceCompliance)},
 		{Name: "nil-map-write", Langs: []Language{LangGo}, Run: stringCheck(checkNilMapWrite)},
 		{Name: "loop-perf", Langs: []Language{LangGo}, Run: sliceCheck(checkLoopPerf)},
+		{Name: "string-efficiency", Langs: []Language{LangGo}, Run: sliceCheck(checkStringEfficiency)},
 		{Name: "unreachable-code", Langs: []Language{LangGo}, Run: sliceCheck(checkUnreachableCode)},
 		{Name: "dead-code", Langs: []Language{LangGo}, Run: sliceCheck(checkDeadCode)},
 		{Name: "hollow-test", Langs: []Language{LangGo}, Run: stringCheck(checkAssertionPresence)},
