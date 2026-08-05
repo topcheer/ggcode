@@ -159,6 +159,7 @@ func registerAllChecks() {
 		{Name: "breaking-change", Langs: []Language{LangGo}, Run: stringCheck(checkBreakingChanges)},
 		{Name: "self-assignment", Langs: []Language{LangGo}, Run: stringCheck(checkSelfAssignment)},
 		{Name: "nplus1-loop", Langs: []Language{LangGo}, Run: sliceCheck(checkNPlus1Loop)},
+		{Name: "missing-prealloc", Langs: []Language{LangGo}, Run: sliceCheck(checkMissingPrealloc)},
 		{Name: "concurrent-map-access", Langs: []Language{LangGo}, Run: stringCheck(checkConcurrentMapAccess)},
 
 		// --- Multi-language checks ---
