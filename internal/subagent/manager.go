@@ -392,7 +392,7 @@ func NewManager(cfg config.SubAgentConfig) *Manager {
 	}
 	timeout := cfg.Timeout
 	if timeout <= 0 {
-		timeout = 30 * time.Minute
+		timeout = 180 * time.Minute
 	}
 	rootCtx, rootCancel := context.WithCancel(context.Background())
 	m := &Manager{

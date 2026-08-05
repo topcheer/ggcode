@@ -517,8 +517,8 @@ func TestManagerSemaphoreCancelledCtx(t *testing.T) {
 
 func TestManagerDefaults(t *testing.T) {
 	mgr := NewManager(config.SubAgentConfig{})
-	if mgr.Timeout() != 30*time.Minute {
-		t.Errorf("default timeout = %v, want 30m", mgr.Timeout())
+	if mgr.Timeout() != 180*time.Minute {
+		t.Errorf("default timeout = %v, want 180m", mgr.Timeout())
 	}
 	if mgr.ShowOutput() {
 		t.Error("default ShowOutput should be false")
