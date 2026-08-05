@@ -99,6 +99,7 @@ func registerAllChecks() {
 		{Name: "tag-balance", Langs: []Language{LangMarkup, LangJSTS}, Run: stringCheckNew(checkTagBalance)},
 		{Name: "jsts-antipatterns", Langs: []Language{LangJSTS}, Run: stringCheck(checkJSTSAntiPatterns)},
 		{Name: "accessibility", Langs: []Language{LangMarkup, LangJSTS}, Run: sliceCheck(checkAccessibility)},
+		{Name: "i18n", Langs: []Language{LangJSTS, LangGo}, Run: sliceCheck(checkI18n)},
 
 		// --- Config checks ---
 		{Name: "config-syntax", Langs: []Language{LangConfig}, Run: stringCheckNew(configSyntaxCheck)},
