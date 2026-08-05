@@ -176,6 +176,7 @@ func registerAllChecks() {
 		{Name: "missing-prealloc", Langs: []Language{LangGo}, Run: sliceCheck(checkMissingPrealloc)},
 		{Name: "map-prealloc", Langs: []Language{LangGo}, Run: sliceCheck(checkMapPrealloc)},
 		{Name: "concurrent-map-access", Langs: []Language{LangGo}, Run: stringCheck(checkConcurrentMapAccess)},
+		{Name: "struct-tag-consistency", Langs: []Language{LangGo}, Run: sliceCheck(checkStructTagConsistency)},
 		{Name: "excessive-params", Langs: []Language{LangGo}, Run: sliceCheck(checkExcessiveParams)},
 		{Name: "excessive-returns", Langs: []Language{LangGo}, Run: sliceCheck(checkExcessiveReturns)},
 		{Name: "exported-doc", Langs: []Language{LangGo}, Run: func(ctx CheckContext) []string {
