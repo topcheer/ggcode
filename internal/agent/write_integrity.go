@@ -186,6 +186,7 @@ func registerAllChecks() {
 		{Name: "loop-capture", Langs: []Language{LangGo}, Run: sliceCheck(checkLoopVarCapture)},
 		{Name: "slice-bounds-risk", Langs: []Language{LangGo}, Run: sliceCheck(checkSliceBoundsRisk)},
 		{Name: "unsafe-usage", Langs: []Language{LangGo}, Run: sliceCheck(checkUnsafeUsage)},
+		{Name: "retry-quality", Langs: []Language{LangGo}, Run: sliceCheck(checkRetryQuality)},
 		{Name: "excessive-params", Langs: []Language{LangGo}, Run: sliceCheck(checkExcessiveParams)},
 		{Name: "excessive-returns", Langs: []Language{LangGo}, Run: sliceCheck(checkExcessiveReturns)},
 		{Name: "exported-doc", Langs: []Language{LangGo}, Run: func(ctx CheckContext) []string {
