@@ -156,6 +156,15 @@ func computeMaxNesting(body *ast.BlockStmt) int {
 	return maxDepth
 }
 
+// enterDepth increments depth by 1, updates maxDepth, and returns the new depth.
+func enterDepth(depth int, maxDepth *int) int {
+	d := depth + 1
+	if d > *maxDepth {
+		*maxDepth = d
+	}
+	return d
+}
+
 // walkNesting recursively walks statements, tracking control-flow nesting depth.
 // Only control-flow statements (if, for, range, switch, type-switch, select)
 // increment depth. Else-if chains are treated as flat (same depth).
@@ -165,47 +174,38 @@ func walkNesting(stmt ast.Stmt, depth int, maxDepth *int) {
 	}
 	switch s := stmt.(type) {
 	case *ast.IfStmt:
-		d := depth + 1
-		if d > *maxDepth {
-			*maxDepth = d
-		}
+		d := enterDepth(depth, maxDepth)
 		walkBlockStmt(s.Body, d, maxDepth)
 		walkElseChain(s.Else, d, maxDepth)
-	case *ast.ForStmt:
-		d := depth + 1
-		if d > *maxDepth {
-			*maxDepth = d
-		}
-		walkBlockStmt(s.Body, d, maxDepth)
-	case *ast.RangeStmt:
-		d := depth + 1
-		if d > *maxDepth {
-			*maxDepth = d
-		}
-		walkBlockStmt(s.Body, d, maxDepth)
-	case *ast.SwitchStmt:
-		d := depth + 1
-		if d > *maxDepth {
-			*maxDepth = d
-		}
-		walkCaseClauses(s.Body, d, maxDepth)
-	case *ast.TypeSwitchStmt:
-		d := depth + 1
-		if d > *maxDepth {
-			*maxDepth = d
-		}
-		walkCaseClauses(s.Body, d, maxDepth)
+	case *ast.ForStmt, *ast.RangeStmt:
+		d := enterDepth(depth, maxDepth)
+		walkBlockStmt(getBlock(s), d, maxDepth)
+	case *ast.SwitchStmt, *ast.TypeSwitchStmt:
+		d := enterDepth(depth, maxDepth)
+		walkCaseClauses(getBlock(s), d, maxDepth)
 	case *ast.SelectStmt:
-		d := depth + 1
-		if d > *maxDepth {
-			*maxDepth = d
-		}
+		d := enterDepth(depth, maxDepth)
 		walkCommClauses(s.Body, d, maxDepth)
 	case *ast.BlockStmt:
 		walkBlockStmt(s, depth, maxDepth)
 	case *ast.LabeledStmt:
 		walkNesting(s.Stmt, depth, maxDepth)
 	}
+}
+
+// getBlock extracts the *ast.BlockStmt body from a control-flow statement.
+func getBlock(stmt ast.Stmt) *ast.BlockStmt {
+	switch s := stmt.(type) {
+	case *ast.ForStmt:
+		return s.Body
+	case *ast.RangeStmt:
+		return s.Body
+	case *ast.SwitchStmt:
+		return s.Body
+	case *ast.TypeSwitchStmt:
+		return s.Body
+	}
+	return nil
 }
 
 // walkBlockStmt walks all statements in a block at the given depth.
