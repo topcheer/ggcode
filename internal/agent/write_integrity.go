@@ -188,6 +188,7 @@ func registerAllChecks() {
 		{Name: "unsafe-usage", Langs: []Language{LangGo}, Run: sliceCheck(checkUnsafeUsage)},
 		{Name: "retry-quality", Langs: []Language{LangGo}, Run: sliceCheck(checkRetryQuality)},
 		{Name: "error-sentinel-cmp", Langs: []Language{LangGo}, Run: sliceCheck(checkErrorSentinelCmp)},
+		{Name: "type-switch-exhaustive", Langs: []Language{LangGo}, Run: sliceCheck(checkTypeSwitchExhaustive)},
 		{Name: "excessive-params", Langs: []Language{LangGo}, Run: sliceCheck(checkExcessiveParams)},
 		{Name: "excessive-returns", Langs: []Language{LangGo}, Run: sliceCheck(checkExcessiveReturns)},
 		{Name: "exported-doc", Langs: []Language{LangGo}, Run: func(ctx CheckContext) []string {
