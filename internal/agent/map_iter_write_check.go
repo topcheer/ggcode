@@ -104,7 +104,6 @@ func findMapIterWrites(filename, src string) []mapIterWriteInfo {
 	}
 
 	mapNames := collectMapNames(file)
-
 	var results []mapIterWriteInfo
 
 	ast.Inspect(file, func(n ast.Node) bool {
@@ -112,48 +111,67 @@ func findMapIterWrites(filename, src string) []mapIterWriteInfo {
 		if !ok {
 			return true
 		}
-
 		mapName := rangeExprName(rng.X)
-		if mapName == "" || !isKnownMap(mapName, mapNames) {
+		if mapName == "" || !isKnownMap(mapName, mapNames) || rng.Body == nil {
 			return true
 		}
-		if rng.Body == nil {
-			return true
-		}
-
-		ast.Inspect(rng.Body, func(inner ast.Node) bool {
-			if inner == nil {
-				return true
-			}
-			if call, ok := inner.(*ast.CallExpr); ok {
-				if id, ok := call.Fun.(*ast.Ident); ok && id.Name == "delete" {
-					if len(call.Args) > 0 {
-						if argName := exprName(call.Args[0]); argName == mapName {
-							pos := fset.Position(call.Pos())
-							results = append(results, mapIterWriteInfo{
-								line: pos.Line, mapName: mapName, op: "delete",
-							})
-						}
-					}
-				}
-			}
-			if assign, ok := inner.(*ast.AssignStmt); ok {
-				for _, lhs := range assign.Lhs {
-					if idx, ok := lhs.(*ast.IndexExpr); ok {
-						if targetName := exprName(idx.X); targetName == mapName {
-							pos := fset.Position(assign.Pos())
-							results = append(results, mapIterWriteInfo{
-								line: pos.Line, mapName: mapName, op: "assign",
-							})
-						}
-					}
-				}
-			}
-			return true
-		})
+		results = append(results, findMapWritesInBody(rng.Body, mapName, fset)...)
 		return true
 	})
 
+	return results
+}
+
+// findMapWritesInBody walks a loop body and returns all write/delete ops
+// targeting the given map variable.
+func findMapWritesInBody(body *ast.BlockStmt, mapName string, fset *token.FileSet) []mapIterWriteInfo {
+	var results []mapIterWriteInfo
+	ast.Inspect(body, func(inner ast.Node) bool {
+		if inner == nil {
+			return true
+		}
+		if mi := matchDeleteCall(inner, mapName, fset); mi != nil {
+			results = append(results, *mi)
+		}
+		results = append(results, matchAssignWrites(inner, mapName, fset)...)
+		return true
+	})
+	return results
+}
+
+// matchDeleteCall checks if a node is a delete(m, key) call targeting mapName.
+func matchDeleteCall(n ast.Node, mapName string, fset *token.FileSet) *mapIterWriteInfo {
+	call, ok := n.(*ast.CallExpr)
+	if !ok {
+		return nil
+	}
+	id, ok := call.Fun.(*ast.Ident)
+	if !ok || id.Name != "delete" || len(call.Args) == 0 {
+		return nil
+	}
+	if exprName(call.Args[0]) != mapName {
+		return nil
+	}
+	pos := fset.Position(call.Pos())
+	return &mapIterWriteInfo{line: pos.Line, mapName: mapName, op: "delete"}
+}
+
+// matchAssignWrites checks if a node is an m[key] = val assignment targeting
+// mapName. Returns all matching LHS writes (multiple in cases like m[k], m[k2] = a, b).
+func matchAssignWrites(n ast.Node, mapName string, fset *token.FileSet) []mapIterWriteInfo {
+	assign, ok := n.(*ast.AssignStmt)
+	if !ok {
+		return nil
+	}
+	var results []mapIterWriteInfo
+	for _, lhs := range assign.Lhs {
+		idx, ok := lhs.(*ast.IndexExpr)
+		if !ok || exprName(idx.X) != mapName {
+			continue
+		}
+		pos := fset.Position(assign.Pos())
+		results = append(results, mapIterWriteInfo{line: pos.Line, mapName: mapName, op: "assign"})
+	}
 	return results
 }
 
@@ -162,57 +180,89 @@ func findMapIterWrites(filename, src string) []mapIterWriteInfo {
 // composite map literals, and struct fields with map types.
 func collectMapNames(file *ast.File) map[string]bool {
 	names := make(map[string]bool)
-
 	ast.Inspect(file, func(n ast.Node) bool {
 		switch node := n.(type) {
 		case *ast.FuncDecl:
-			if node.Type != nil && node.Type.Params != nil {
-				for _, field := range node.Type.Params.List {
-					if _, ok := field.Type.(*ast.MapType); ok {
-						for _, name := range field.Names {
-							names[name.Name] = true
-						}
-					}
-				}
-			}
+			collectMapParams(node.Type, names)
 		case *ast.StructType:
-			if node.Fields != nil {
-				for _, field := range node.Fields.List {
-					if _, ok := field.Type.(*ast.MapType); ok {
-						for _, name := range field.Names {
-							names[name.Name] = true
-						}
-					}
-				}
-			}
+			collectMapFields(node.Fields, names)
 		case *ast.AssignStmt:
-			// m := make(map[K]V, ...) or m := map[K]V{...}
-			for i, lhs := range node.Lhs {
-				if id, ok := lhs.(*ast.Ident); ok && i < len(node.Rhs) {
-					rhs := node.Rhs[i]
-					// make(map[...]) call
-					if call, ok := rhs.(*ast.CallExpr); ok {
-						if fnId, ok := call.Fun.(*ast.Ident); ok && fnId.Name == "make" {
-							if len(call.Args) > 0 {
-								if _, ok := call.Args[0].(*ast.MapType); ok {
-									names[id.Name] = true
-								}
-							}
-						}
-					}
-					// m := map[K]V{...} composite literal
-					if cl, ok := rhs.(*ast.CompositeLit); ok {
-						if _, isMap := cl.Type.(*ast.MapType); isMap {
-							names[id.Name] = true
-						}
-					}
-				}
-			}
+			collectMapAssigns(node, names)
 		}
 		return true
 	})
-
 	return names
+}
+
+// collectMapParams collects map-typed parameter names from a function type.
+func collectMapParams(ft *ast.FuncType, names map[string]bool) {
+	if ft == nil || ft.Params == nil {
+		return
+	}
+	for _, field := range ft.Params.List {
+		if _, ok := field.Type.(*ast.MapType); !ok {
+			continue
+		}
+		for _, name := range field.Names {
+			names[name.Name] = true
+		}
+	}
+}
+
+// collectMapFields collects map-typed struct field names.
+func collectMapFields(fields *ast.FieldList, names map[string]bool) {
+	if fields == nil {
+		return
+	}
+	for _, field := range fields.List {
+		if _, ok := field.Type.(*ast.MapType); !ok {
+			continue
+		}
+		for _, name := range field.Names {
+			names[name.Name] = true
+		}
+	}
+}
+
+// collectMapAssigns collects map names from assignments like m := make(map[...])
+// or m := map[K]V{...}.
+func collectMapAssigns(stmt *ast.AssignStmt, names map[string]bool) {
+	for i, lhs := range stmt.Lhs {
+		id, ok := lhs.(*ast.Ident)
+		if !ok || i >= len(stmt.Rhs) {
+			continue
+		}
+		if isMapMakeCall(stmt.Rhs[i]) {
+			names[id.Name] = true
+		}
+		if isMapCompositeLit(stmt.Rhs[i]) {
+			names[id.Name] = true
+		}
+	}
+}
+
+// isMapMakeCall returns true if expr is a make(map[...]) call.
+func isMapMakeCall(expr ast.Expr) bool {
+	call, ok := expr.(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	id, ok := call.Fun.(*ast.Ident)
+	if !ok || id.Name != "make" || len(call.Args) == 0 {
+		return false
+	}
+	_, ok = call.Args[0].(*ast.MapType)
+	return ok
+}
+
+// isMapCompositeLit returns true if expr is a map[K]V{...} literal.
+func isMapCompositeLit(expr ast.Expr) bool {
+	cl, ok := expr.(*ast.CompositeLit)
+	if !ok {
+		return false
+	}
+	_, ok = cl.Type.(*ast.MapType)
+	return ok
 }
 
 // isKnownMap checks if a name refers to a known map-typed variable. Handles
