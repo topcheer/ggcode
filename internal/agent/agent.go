@@ -191,6 +191,8 @@ type Agent struct {
 	delegationOrch             *delegationState                      // delegation orchestration intelligence (orphaned delegations, serial anti-pattern, over-delegation)
 	crossFileImpact            *crossFileImpactState                 // pre-completion cross-file impact analysis (removed symbol breakage detection)
 	contextFootprint           *contextFootprintState                // per-tool context budget attribution (which tools consume the most context)
+	cacheEffMonitor            *cacheEffMonitor                      // prompt cache efficiency monitoring (cache bust storm detection)
+	pressureForecaster         *pressureForecaster                   // context window pressure forecasting (predictive compaction warning)
 	redundantRead              *redundantReadState                   // redundant re-read detection (context waste prevention)
 	ruleStore                  *RuleStore                            // cached rule store for hot-path rule injection (avoids per-tool disk I/O)
 	ruleInjectCount            map[string]int                        // per-rule injection counter for dedup (caps repetitive hints)
@@ -292,6 +294,8 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		failureMode:          newFailureModeState(),
 		toolFallback:         newToolFallbackState(),
 		contextFootprint:     newContextFootprintState(),
+		cacheEffMonitor:      newCacheEffMonitor(),
+		pressureForecaster:   newPressureForecaster(),
 		redundantRead:        newRedundantReadState(),
 		bgOrphan:             newBgOrphanState(),
 		crossFileImpact:      newCrossFileImpactState(),
@@ -1232,6 +1236,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.fileFreshness.reset()
 	a.toolThermal.reset()
 	a.contextFootprint.reset()
+	a.cacheEffMonitor.reset()
+	a.pressureForecaster.reset()
 
 	// Capture the git working tree state BEFORE the agent makes any changes.
 	// This lets the reconciliation gate distinguish pre-existing dirty files
@@ -1575,6 +1581,35 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 
 		a.syncContextManagerUsage(resp.Usage)
 		a.emitUsage(resp.Usage)
+
+		// Context Engineering: monitor cache efficiency and forecast context
+		// window pressure after each LLM call. Both are zero-LLM-cost
+		// deterministic analysis. Guidance is injected into the context
+		// manager as a low-priority system note.
+		if cacheGuidance := a.cacheEffMonitor.record(resp.Usage); cacheGuidance != "" {
+			a.contextManager.Add(provider.Message{
+				Role: "user",
+				Content: []provider.ContentBlock{{
+					Type: "text",
+					Text: cacheGuidance,
+				}},
+			})
+			debug.Log("cache-efficiency", "injecting cache bust storm guidance at iteration %d", i+1)
+		}
+		// Sync context window size from the context manager for forecasting.
+		if cm, ok := a.contextManager.(*ctxpkg.Manager); ok {
+			a.pressureForecaster.setContextWindow(cm.ContextWindow())
+		}
+		if pressureGuidance := a.pressureForecaster.record(i+1, resp.Usage); pressureGuidance != "" {
+			a.contextManager.Add(provider.Message{
+				Role: "user",
+				Content: []provider.ContentBlock{{
+					Type: "text",
+					Text: pressureGuidance,
+				}},
+			})
+			debug.Log("context-pressure", "injecting pressure forecast guidance at iteration %d", i+1)
+		}
 
 		// Detect empty LLM response: API accepted input but produced no output.
 		// Only trigger when InputTokens > 0 (real API call) to avoid false positives
