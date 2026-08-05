@@ -146,6 +146,7 @@ func registerAllChecks() {
 		{Name: "goroutine-leak", Langs: []Language{LangGo}, Run: sliceCheck(checkGoroutineLeak)},
 		{Name: "race-verify-hint", Langs: []Language{LangGo}, Run: sliceCheck(checkRaceVerifyHint)},
 		{Name: "error-wrapping", Langs: []Language{LangGo}, Run: sliceCheck(checkErrorWrapping)},
+		{Name: "error-msg-quality", Langs: []Language{LangGo}, Run: sliceCheck(checkErrorMsgQuality)},
 		{Name: "interface-compliance", Langs: []Language{LangGo}, Run: stringCheck(checkInterfaceCompliance)},
 		{Name: "nil-map-write", Langs: []Language{LangGo}, Run: stringCheck(checkNilMapWrite)},
 		{Name: "loop-perf", Langs: []Language{LangGo}, Run: sliceCheck(checkLoopPerf)},
