@@ -80,35 +80,9 @@ func checkTestIsolation(filePath, oldContent, newContent string) string {
 		return ""
 	}
 
-	// Categorize new violations.
 	introduced := len(newViolations) - len(oldViolations)
-
-	// Aggregate by type for reporting.
-	typeCounts := map[string]int{}
-	for _, v := range newViolations {
-		typeCounts[v.kind]++
-	}
-	// Subtract old counts to get net new per type.
-	for _, v := range oldViolations {
-		typeCounts[v.kind]--
-	}
-
-	var details []string
-	for kind, count := range typeCounts {
-		if count <= 0 {
-			continue
-		}
-		switch kind {
-		case "os-setenv":
-			details = append(details, fmt.Sprintf("%d os.Setenv() call(s) - use t.Setenv() which auto-restores env after the test and prevents parallel env races", count))
-		case "os-args":
-			details = append(details, fmt.Sprintf("%d os.Args mutation(s) - save/restore with defer to prevent test pollution", count))
-		case "os-stdio":
-			details = append(details, fmt.Sprintf("%d os.Stdout/Stderr mutation(s) - restore with defer to prevent output capture issues in other tests", count))
-		case "global-var":
-			details = append(details, fmt.Sprintf("%d package-level variable mutation(s) from test function(s) - use local variables or t.Cleanup to restore", count))
-		}
-	}
+	typeCounts := computeNetCounts(newViolations, oldViolations)
+	details := formatIsolationDetails(typeCounts)
 
 	if len(details) == 0 {
 		return ""
@@ -130,6 +104,38 @@ func checkTestIsolation(filePath, oldContent, newContent string) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
+// computeNetCounts returns per-kind net counts (new minus old).
+func computeNetCounts(newViolations, oldViolations []globalStateMutation) map[string]int {
+	typeCounts := map[string]int{}
+	for _, v := range newViolations {
+		typeCounts[v.kind]++
+	}
+	for _, v := range oldViolations {
+		typeCounts[v.kind]--
+	}
+	return typeCounts
+}
+
+// formatIsolationDetails converts net counts into human-readable detail strings.
+func formatIsolationDetails(typeCounts map[string]int) []string {
+	kindMessages := map[string]string{
+		"os-setenv":  "os.Setenv() call(s) - use t.Setenv() which auto-restores env after the test and prevents parallel env races",
+		"os-args":    "os.Args mutation(s) - save/restore with defer to prevent test pollution",
+		"os-stdio":   "os.Stdout/Stderr mutation(s) - restore with defer to prevent output capture issues in other tests",
+		"global-var": "package-level variable mutation(s) from test function(s) - use local variables or t.Cleanup to restore",
+	}
+	var details []string
+	for kind, count := range typeCounts {
+		if count <= 0 {
+			continue
+		}
+		if msg, ok := kindMessages[kind]; ok {
+			details = append(details, fmt.Sprintf("%d %s", count, msg))
+		}
+	}
+	return details
+}
+
 // globalStateMutation records a single global state mutation in a test function.
 type globalStateMutation struct {
 	kind string
@@ -149,14 +155,25 @@ func findGlobalStateMutations(filename, src string) []globalStateMutation {
 		return nil
 	}
 
-	// Collect package-level variable names for detecting global writes.
+	packageVars := collectPackageVarNames(file)
+
+	var mutations []globalStateMutation
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || !isTestFunction(fn.Name.Name) {
+			continue
+		}
+		mutations = append(mutations, inspectTestFuncBody(fn.Body, packageVars, fset)...)
+	}
+	return mutations
+}
+
+// collectPackageVarNames returns a set of package-level variable names.
+func collectPackageVarNames(file *ast.File) map[string]bool {
 	packageVars := make(map[string]bool)
 	for _, decl := range file.Decls {
 		gen, ok := decl.(*ast.GenDecl)
-		if !ok {
-			continue
-		}
-		if gen.Tok != token.VAR {
+		if !ok || gen.Tok != token.VAR {
 			continue
 		}
 		for _, spec := range gen.Specs {
@@ -171,78 +188,93 @@ func findGlobalStateMutations(filename, src string) []globalStateMutation {
 			}
 		}
 	}
+	return packageVars
+}
 
+// inspectTestFuncBody walks a test function body and collects global state mutations.
+func inspectTestFuncBody(body *ast.BlockStmt, packageVars map[string]bool, fset *token.FileSet) []globalStateMutation {
 	var mutations []globalStateMutation
-
-	for _, decl := range file.Decls {
-		fn, ok := decl.(*ast.FuncDecl)
-		if !ok {
-			continue
-		}
-		// Only inspect Test*, Benchmark*, Example* functions.
-		if !isTestFunction(fn.Name.Name) {
-			continue
-		}
-
-		ast.Inspect(fn.Body, func(n ast.Node) bool {
-			switch node := n.(type) {
-			case *ast.CallExpr:
-				// Detect os.Setenv("KEY", "value")
-				if se, ok := node.Fun.(*ast.SelectorExpr); ok {
-					if pkgIdent, ok := se.X.(*ast.Ident); ok {
-						pkgName := pkgIdent.Name
-						methodName := se.Sel.Name
-
-						// os.Setenv in test code
-						if (pkgName == "os" || pkgName == "OS") && methodName == "Setenv" {
-							mutations = append(mutations, globalStateMutation{
-								kind: "os-setenv",
-								line: fset.Position(node.Pos()).Line,
-							})
-						}
-					}
-				}
-
-			case *ast.AssignStmt:
-				// Detect assignments to os.Args, os.Stdout, os.Stderr
-				for _, lhs := range node.Lhs {
-					if sel, ok := lhs.(*ast.SelectorExpr); ok {
-						if pkgIdent, ok := sel.X.(*ast.Ident); ok {
-							pkgName := pkgIdent.Name
-							fieldName := sel.Sel.Name
-							if (pkgName == "os" || pkgName == "OS") &&
-								(fieldName == "Args" || fieldName == "Stdout" || fieldName == "Stderr") {
-								kind := "os-args"
-								if fieldName == "Stdout" || fieldName == "Stderr" {
-									kind = "os-stdio"
-								}
-								mutations = append(mutations, globalStateMutation{
-									kind: kind,
-									line: fset.Position(node.Pos()).Line,
-								})
-							}
-						}
-					}
-					// Detect direct writes to package-level variables
-					if ident, ok := lhs.(*ast.Ident); ok {
-						if packageVars[ident.Name] && ident.Obj != nil {
-							// Obj.Kind == ast.Var means it's a variable declaration.
-							// If it's in the file's package scope, it's global.
-							if ident.Obj.Kind == ast.Var {
-								mutations = append(mutations, globalStateMutation{
-									kind: "global-var",
-									line: fset.Position(node.Pos()).Line,
-								})
-							}
-						}
-					}
-				}
+	ast.Inspect(body, func(n ast.Node) bool {
+		switch node := n.(type) {
+		case *ast.CallExpr:
+			if m := detectOSSetenvCall(node, fset); m != nil {
+				mutations = append(mutations, *m)
 			}
-			return true
-		})
-	}
-
+		case *ast.AssignStmt:
+			mutations = append(mutations, detectAssignMutations(node, packageVars, fset)...)
+		}
+		return true
+	})
 	return mutations
+}
+
+// detectOSSetenvCall checks if a CallExpr is os.Setenv and returns a mutation if so.
+func detectOSSetenvCall(node *ast.CallExpr, fset *token.FileSet) *globalStateMutation {
+	se, ok := node.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return nil
+	}
+	pkgIdent, ok := se.X.(*ast.Ident)
+	if !ok {
+		return nil
+	}
+	if (pkgIdent.Name == "os" || pkgIdent.Name == "OS") && se.Sel.Name == "Setenv" {
+		return &globalStateMutation{
+			kind: "os-setenv",
+			line: fset.Position(node.Pos()).Line,
+		}
+	}
+	return nil
+}
+
+// detectAssignMutations inspects an AssignStmt's LHS for global state mutations.
+func detectAssignMutations(node *ast.AssignStmt, packageVars map[string]bool, fset *token.FileSet) []globalStateMutation {
+	var mutations []globalStateMutation
+	for _, lhs := range node.Lhs {
+		if m := detectOSGlobalAssignment(lhs, fset); m != nil {
+			mutations = append(mutations, *m)
+			continue
+		}
+		if m := detectPackageVarAssignment(lhs, packageVars, fset); m != nil {
+			mutations = append(mutations, *m)
+		}
+	}
+	return mutations
+}
+
+// detectOSGlobalAssignment checks if an LHS expression is os.Args, os.Stdout, or os.Stderr.
+func detectOSGlobalAssignment(lhs ast.Expr, fset *token.FileSet) *globalStateMutation {
+	sel, ok := lhs.(*ast.SelectorExpr)
+	if !ok {
+		return nil
+	}
+	pkgIdent, ok := sel.X.(*ast.Ident)
+	if !ok {
+		return nil
+	}
+	if pkgIdent.Name != "os" && pkgIdent.Name != "OS" {
+		return nil
+	}
+	field := sel.Sel.Name
+	switch field {
+	case "Args":
+		return &globalStateMutation{kind: "os-args", line: fset.Position(lhs.Pos()).Line}
+	case "Stdout", "Stderr":
+		return &globalStateMutation{kind: "os-stdio", line: fset.Position(lhs.Pos()).Line}
+	}
+	return nil
+}
+
+// detectPackageVarAssignment checks if an LHS expression writes to a package-level variable.
+func detectPackageVarAssignment(lhs ast.Expr, packageVars map[string]bool, fset *token.FileSet) *globalStateMutation {
+	ident, ok := lhs.(*ast.Ident)
+	if !ok || !packageVars[ident.Name] || ident.Obj == nil {
+		return nil
+	}
+	if ident.Obj.Kind == ast.Var {
+		return &globalStateMutation{kind: "global-var", line: fset.Position(lhs.Pos()).Line}
+	}
+	return nil
 }
 
 // isTestFunction returns true if the function name matches Go test conventions:
