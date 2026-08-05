@@ -141,6 +141,21 @@ func TestExtractEditFilePaths(t *testing.T) {
 			t.Fatalf("expected nil for read_file, got %v", paths)
 		}
 	})
+
+	t.Run("batch_replace", func(t *testing.T) {
+		args, _ := json.Marshal(map[string]any{
+			"files":       []any{"/a/foo.go", "/b/bar.go"},
+			"pattern":     "old",
+			"replacement": "new",
+		})
+		paths := extractEditFilePaths("batch_replace", args)
+		if len(paths) != 2 {
+			t.Fatalf("expected 2 paths, got %d: %v", len(paths), paths)
+		}
+		if paths[0] != "/a/foo.go" || paths[1] != "/b/bar.go" {
+			t.Fatalf("unexpected paths: %v", paths)
+		}
+	})
 }
 
 func TestExtractReadFilePaths(t *testing.T) {
@@ -185,6 +200,18 @@ func TestExtractCreateFilePaths(t *testing.T) {
 		paths := extractCreateFilePaths("multi_file_write", args)
 		if len(paths) != 2 {
 			t.Fatalf("expected 2 paths, got %v", paths)
+		}
+	})
+
+	t.Run("batch_replace", func(t *testing.T) {
+		args, _ := json.Marshal(map[string]any{
+			"files":       []any{"/x/y.go"},
+			"pattern":     "a",
+			"replacement": "b",
+		})
+		paths := extractCreateFilePaths("batch_replace", args)
+		if len(paths) != 1 || paths[0] != "/x/y.go" {
+			t.Fatalf("expected [/x/y.go], got %v", paths)
 		}
 	})
 }
