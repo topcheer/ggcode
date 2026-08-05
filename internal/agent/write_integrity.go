@@ -94,6 +94,7 @@ func registerAllChecks() {
 		{Name: "unicode-chars", Run: stringCheck(checkUnicodeChars)},
 		{Name: "trailing-whitespace", Run: stringCheck(checkTrailingWhitespace)},
 		{Name: "hardcoded-paths", Run: sliceCheck(checkHardcodedPaths)},
+		{Name: "logging-intel", Langs: []Language{LangGo, LangJSTS}, Run: sliceCheck(checkLoggingIntel)},
 
 		// --- Markup / JS-TS checks ---
 		{Name: "tag-balance", Langs: []Language{LangMarkup, LangJSTS}, Run: stringCheckNew(checkTagBalance)},
