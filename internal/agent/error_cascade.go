@@ -255,30 +255,7 @@ func (e *errorCascadeState) recordError(toolName, content string) string {
 
 	// Bound memory: if too many roots, evict the one with fewest entries.
 	if len(e.roots) > cascadeMaxRoots {
-		var minKey string
-		var secondMinKey string
-		minCount := -1
-		secondMinCount := -1
-		for k, v := range e.roots {
-			c := len(v)
-			if minCount == -1 || c < minCount {
-				secondMinKey = minKey
-				secondMinCount = minCount
-				minKey = k
-				minCount = c
-			} else if secondMinCount == -1 || c < secondMinCount {
-				secondMinKey = k
-				secondMinCount = c
-			}
-		}
-		// Evict the root with fewest entries, but never evict the one we just added.
-		evictKey := minKey
-		if minKey == rootKey && secondMinKey != "" {
-			evictKey = secondMinKey
-		}
-		if evictKey != "" && evictKey != rootKey {
-			delete(e.roots, evictKey)
-		}
+		e.evictMinRoot(rootKey)
 	}
 
 	count := len(e.roots[rootKey])
@@ -343,4 +320,27 @@ func (e *errorCascadeState) cascadeStats() (totalRoots, maxCluster, totalErrors 
 		}
 	}
 	return len(e.roots), maxCluster, e.totalErrors
+}
+
+// evictMinRoot removes the root with fewest entries, preferring one that is
+// not the just-added rootKey. This keeps roots bounded at cascadeMaxRoots.
+func (e *errorCascadeState) evictMinRoot(rootKey string) {
+	var minKey, secondMinKey string
+	minCount, secondMinCount := -1, -1
+	for k, v := range e.roots {
+		c := len(v)
+		if minCount == -1 || c < minCount {
+			secondMinKey, secondMinCount = minKey, minCount
+			minKey, minCount = k, c
+		} else if secondMinCount == -1 || c < secondMinCount {
+			secondMinKey, secondMinCount = k, c
+		}
+	}
+	evictKey := minKey
+	if minKey == rootKey && secondMinKey != "" {
+		evictKey = secondMinKey
+	}
+	if evictKey != "" && evictKey != rootKey {
+		delete(e.roots, evictKey)
+	}
 }
