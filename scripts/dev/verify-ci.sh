@@ -33,7 +33,7 @@ echo "[verify-ci] downloading modules"
 go mod download
 
 echo "[verify-ci] building ggcode"
-GOMEMLIMIT=4GiB go build -tags goolm -o /tmp/ggcode ./cmd/ggcode
+GOMEMLIMIT=2GiB go build -tags goolm -o /tmp/ggcode ./cmd/ggcode
 
 echo "[verify-ci] cross-platform compile check (linux + windows)"
 # Catch errors in platform-specific files (*_darwin.go, *_linux.go, *_windows.go)
@@ -50,14 +50,26 @@ done
 echo "[verify-ci] cross-platform compile check passed"
 
 echo "[verify-ci] running go vet (main module)"
-GOMEMLIMIT=4GiB go vet -tags goolm ./cmd/... ./internal/...
+GOMEMLIMIT=2GiB go vet -tags goolm ./cmd/... ./internal/...
 
 echo "[verify-ci] running tests (main module, unit only)"
 # NOTE: do NOT use the "integration" tag here — integration tests (e.g. browser
 # tests that spawn Chrome) are too heavy for CI and will OOM. Run them
 # separately via: go test -tags "goolm,integration" ./internal/tool/ -run TestBrowserIntegration
-# 16GiB limit + default parallelism on 64GB machines.
-GOMEMLIMIT=16GiB go test -tags goolm -timeout 600s ./cmd/... ./internal/...
+# 2GiB limit + limited parallelism to avoid OOM on resource-constrained machines.
+# Tests run per-package so memory is freed between packages instead of all
+# packages compiling into one huge test binary heap at once.
+test_failed=0
+for pkg in $(go list -tags goolm ./cmd/... ./internal/... 2>/dev/null); do
+  echo "[verify-ci] testing ${pkg}"
+  if ! GOMEMLIMIT=2GiB go test -tags goolm -timeout 300s -p 1 -parallel 1 "${pkg}"; then
+    test_failed=1
+  fi
+done
+if [ "${test_failed}" -ne 0 ]; then
+  echo "[verify-ci] one or more test packages failed"
+  exit 1
+fi
 
 # ── Desktop module (CGO required, macOS only) ────────────────────────────
 desktop_dir="${repo_root}/desktop/ggcode-desktop-wails"
