@@ -133,6 +133,7 @@ func registerAllChecks() {
 		{Name: "defer-in-loop", Langs: []Language{LangGo}, Run: sliceCheck(checkDeferInLoop)},
 		{Name: "unchecked-type-assert", Langs: []Language{LangGo}, Run: sliceCheck(checkUncheckedTypeAssert)},
 		{Name: "select-timer-leak", Langs: []Language{LangGo}, Run: sliceCheck(checkSelectTimerLeak)},
+		{Name: "lost-cancel", Langs: []Language{LangGo}, Run: sliceCheck(checkLostCancel)},
 		{Name: "http-timeout", Langs: []Language{LangGo}, Run: sliceCheck(checkHTTPTimeout)},
 		{Name: "premature-exit", Langs: []Language{LangGo}, Run: sliceCheck(checkPrematureExit)},
 		{Name: "lock-without-unlock", Langs: []Language{LangGo}, Run: sliceCheck(checkLockWithoutUnlock)},
