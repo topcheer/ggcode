@@ -699,6 +699,17 @@ func (m *Model) handleCostAllCommand() tea.Cmd {
 		sb.WriteString(fmt.Sprintf("  Cache write:        %s\n", humanizeTokenCount(int(agg.CacheWriteTokens))))
 	}
 
+	// Cache efficiency analysis: shows whether prompt caching is actually
+	// saving money or losing it (cache thrashing). Uses the aggregate
+	// SessionCost with the default pricing table.
+	if agg.CacheReadTokens > 0 || agg.CacheWriteTokens > 0 {
+		cacheAnalysis := cost.AnalyzeCacheFromSessionCost(agg, cost.DefaultPricingTable())
+		if cacheLine := cost.FormatCacheAnalysis(cacheAnalysis); cacheLine != "" {
+			sb.WriteString("\n--- Cache Efficiency ---\n")
+			sb.WriteString(cacheLine + "\n")
+		}
+	}
+
 	m.chatWriteSystem(nextSystemID(), sb.String())
 	return nil
 }
