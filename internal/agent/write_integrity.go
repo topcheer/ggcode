@@ -163,6 +163,7 @@ func registerAllChecks() {
 		{Name: "panic-safety", Langs: []Language{LangGo}, Run: sliceCheck(checkPanicSafety)},
 		{Name: "breaking-change", Langs: []Language{LangGo}, Run: stringCheck(checkBreakingChanges)},
 		{Name: "self-assignment", Langs: []Language{LangGo}, Run: stringCheck(checkSelfAssignment)},
+		{Name: "suspicious-comparison", Langs: []Language{LangGo}, Run: stringCheck(checkSuspiciousComparison)},
 		{Name: "nplus1-loop", Langs: []Language{LangGo}, Run: sliceCheck(checkNPlus1Loop)},
 		{Name: "missing-prealloc", Langs: []Language{LangGo}, Run: sliceCheck(checkMissingPrealloc)},
 		{Name: "map-prealloc", Langs: []Language{LangGo}, Run: sliceCheck(checkMapPrealloc)},

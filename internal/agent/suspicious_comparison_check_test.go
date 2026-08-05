@@ -195,3 +195,95 @@ func broken(`
 		t.Errorf("expected no detection for syntax error, got: %s", result)
 	}
 }
+
+func TestCheckSuspiciousComparison_FloatEquality(t *testing.T) {
+	code := `package main
+func check(ratio float64) bool {
+	if ratio == 0.1 {
+		return true
+	}
+	return false
+}
+`
+	result := checkSuspiciousComparison("test.go", "", code)
+	if result == "" {
+		t.Fatal("expected detection of float equality comparison")
+	}
+	if !strings.Contains(result, "float") {
+		t.Errorf("expected mention of float, got: %s", result)
+	}
+}
+
+func TestCheckSuspiciousComparison_SelfComparison(t *testing.T) {
+	code := `package main
+func check(x int) bool {
+	if x == x {
+		return true
+	}
+	return false
+}
+`
+	result := checkSuspiciousComparison("test.go", "", code)
+	if result == "" {
+		t.Fatal("expected detection of self-comparison x == x")
+	}
+	if !strings.Contains(result, "self-comparison") {
+		t.Errorf("expected mention of self-comparison, got: %s", result)
+	}
+}
+
+func TestCheckSuspiciousComparison_ConstantBoolCondition(t *testing.T) {
+	code := `package main
+func check() {
+	if true {
+		_ = 1
+	}
+	for false {
+		_ = 2
+	}
+}
+`
+	result := checkSuspiciousComparison("test.go", "", code)
+	if result == "" {
+		t.Fatal("expected detection of constant boolean condition")
+	}
+	if !strings.Contains(result, "constant boolean") {
+		t.Errorf("expected mention of constant boolean, got: %s", result)
+	}
+}
+
+func TestCheckSuspiciousComparison_FloatNotFlaggedForInt(t *testing.T) {
+	code := `package main
+func check(x int) bool {
+	return x == 42
+}
+`
+	result := checkSuspiciousComparison("test.go", "", code)
+	if result != "" {
+		t.Errorf("expected no detection for int literal comparison, got: %s", result)
+	}
+}
+
+func TestCheckSuspiciousComparison_DeltaAwareFloat(t *testing.T) {
+	oldCode := `package main
+func check(r float64) bool {
+	if r == 0.1 { return true }
+	return false
+}
+`
+	newCode := `package main
+func check(r float64) bool {
+	if r == 0.1 { return true }
+	if r == 0.2 { return false }
+	return false
+}
+`
+	result := checkSuspiciousComparison("test.go", oldCode, newCode)
+	// Should only flag the NEW float comparison (0.2), not the existing one (0.1)
+	if !strings.Contains(result, "0.2") {
+		t.Errorf("expected detection of new 0.2 comparison, got: %s", result)
+	}
+	if strings.Contains(result, "0.1") {
+		t.Errorf("should not re-flag existing 0.1 comparison, got: %s", result)
+	}
+}

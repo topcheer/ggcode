@@ -1,32 +1,30 @@
 package agent
 
-// Suspicious Comparison Pattern Detection in Go Code (Check #50)
+// Suspicious Comparison & Equality Intelligence (Check #50)
 //
 // Problem: AI coding agents frequently generate Go code with comparison patterns
-// that silently break error handling when errors are wrapped with fmt.Errorf %w.
-// The most common category:
+// that are either incorrect (break error handling) or always-true/false (dead logic).
+// Detected categories:
 //
-//  1. Sentinel error comparison with == instead of errors.Is():
-//     `if err == sql.ErrNoRows` breaks when errors are wrapped (fmt.Errorf %w),
-//     which is the recommended Go 1.13+ pattern. The comparison silently fails
-//     to match, causing the error to propagate as if it were unknown.
-//  2. Comparing named error variables from standard library / well-known packages
-//     (io.EOF, sql.ErrNoRows, os.ErrNotExist, etc.) with == instead of errors.Is().
-//
-// Research basis: Go team recommends errors.Is() for ALL sentinel error checks
-// since Go 1.13. Static analysis tools (staticcheck SA1029) catch some cases
-// but only for known sentinel errors. LLMs trained on pre-Go-1.13 code or
-// non-Go languages frequently use == for error comparison.
+//  1. Sentinel error comparison with == instead of errors.Is() (errors.Is gap):
+//     `if err == sql.ErrNoRows` breaks when errors are wrapped (fmt.Errorf %w).
+//  2. Float equality comparison (staticcheck SA4003):
+//     `if ratio == 0.1` is unreliable due to floating-point representation errors.
+//     Should use math.Abs(ratio - 0.1) < epsilon.
+//  3. Self-comparison (staticcheck SA4000):
+//     `if x == x` is always true (except for NaN), indicating a typo.
+//  4. Constant boolean condition (staticcheck SA4015):
+//     `if true { ... }` or `if 1 > 2 { ... }` — always-true/false conditions are
+//     dead logic, usually indicating a logic error.
 //
 // Competitor analysis:
-//   - Claude Code: no detection (relies on go vet)
-//   - Cursor: staticcheck may catch SA1029 post-hoc, inconsistent
+//   - Claude Code: no write-time detection
+//   - Cursor: staticcheck may catch SA4000/SA4003/SA4015 post-hoc, inconsistent
 //   - Cline/OpenHands: no detection
 //   - Aider: no detection
 //
-// Approach: AST-based analysis. For each == or != comparison where one operand
-// is a known sentinel error from stdlib, flag it. Delta-aware: only flags
-// comparisons newly introduced by this edit.
+// Approach: AST-based analysis, zero LLM cost. Delta-aware: only flags patterns
+// newly introduced by this edit.
 
 import (
 	"fmt"
@@ -97,6 +95,7 @@ func checkSuspiciousComparison(filePath, oldContent, newContent string) string {
 	}
 
 	instances := findSuspiciousComparisons(fset, file)
+	instances = append(instances, findConstantConditions(fset, file)...)
 	if len(instances) == 0 {
 		return ""
 	}
@@ -105,7 +104,7 @@ func checkSuspiciousComparison(filePath, oldContent, newContent string) string {
 
 	var newInstances []suspiciousCmpInstance
 	for _, inst := range instances {
-		key := inst.leftText + inst.op + inst.rightText
+		key := inst.leftText + inst.op + inst.rightText + inst.reason
 		if !oldSet[key] {
 			newInstances = append(newInstances, inst)
 		}
@@ -116,12 +115,11 @@ func checkSuspiciousComparison(filePath, oldContent, newContent string) string {
 	}
 
 	var b strings.Builder
-	b.WriteString("[Suspicious comparison detection] The following comparison(s) use == or != where errors.Is() should be used:\n")
+	b.WriteString("[Suspicious comparison detection] The following comparison(s) have issues:\n")
 	for _, inst := range newInstances {
 		b.WriteString(fmt.Sprintf("  - %s: '%s %s %s'. %s\n",
 			inst.posStr, inst.leftText, inst.op, inst.rightText, inst.reason))
 	}
-	b.WriteString("Use errors.Is(err, sentinel) instead to support wrapped errors (fmt.Errorf with %w).\n")
 	return b.String()
 }
 
@@ -146,6 +144,32 @@ func findSuspiciousComparisons(fset *token.FileSet, file *ast.File) []suspicious
 		}
 
 		if leftText == "nil" || rightText == "nil" {
+			return true
+		}
+
+		// SA4000: self-comparison (x == x) is always true except for NaN
+		if leftText != "" && leftText == rightText && isSimpleIdent(leftText) {
+			pos := fset.Position(binExpr.Pos())
+			instances = append(instances, suspiciousCmpInstance{
+				posStr:    fmt.Sprintf("%s:%d", filepath.Base(pos.Filename), pos.Line),
+				leftText:  leftText,
+				rightText: rightText,
+				op:        opStr,
+				reason:    "self-comparison is always true (except for NaN) - likely a typo",
+			})
+			return true
+		}
+
+		// SA4003: float equality comparison is unreliable
+		if isFloatLiteral(binExpr.X) || isFloatLiteral(binExpr.Y) {
+			pos := fset.Position(binExpr.Pos())
+			instances = append(instances, suspiciousCmpInstance{
+				posStr:    fmt.Sprintf("%s:%d", filepath.Base(pos.Filename), pos.Line),
+				leftText:  leftText,
+				rightText: rightText,
+				op:        opStr,
+				reason:    "float equality with ==/!= is unreliable due to precision - use math.Abs(a-b) < epsilon",
+			})
 			return true
 		}
 
@@ -211,20 +235,27 @@ func isErrorNamed(text string) bool {
 	return false
 }
 
+// isIdentStart reports whether ch can start a Go identifier.
+func isIdentStart(ch rune) bool {
+	return ch == '_' || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
+}
+
+// isIdentPart reports whether ch can appear in a Go identifier (after the first char).
+func isIdentPart(ch rune) bool {
+	return isIdentStart(ch) || (ch >= '0' && ch <= '9')
+}
+
 // isSimpleIdent checks if text is a simple Go identifier.
 func isSimpleIdent(s string) bool {
 	if s == "" || strings.Contains(s, ".") {
 		return false
 	}
 	for idx, ch := range s {
-		if idx == 0 {
-			if !(ch == '_' || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')) {
-				return false
-			}
-		} else {
-			if !(ch == '_' || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9')) {
-				return false
-			}
+		if idx == 0 && !isIdentStart(ch) {
+			return false
+		}
+		if idx > 0 && !isIdentPart(ch) {
+			return false
 		}
 	}
 	return true
@@ -243,6 +274,8 @@ func exprText(expr ast.Expr) string {
 		return x + "." + e.Sel.Name
 	case *ast.ParenExpr:
 		return exprText(e.X)
+	case *ast.BasicLit:
+		return e.Value
 	default:
 		return ""
 	}
@@ -260,10 +293,55 @@ func collectSuspiciousCmps(filePath, oldContent string) map[string]bool {
 		return nil
 	}
 	oldInstances := findSuspiciousComparisons(oldFset, oldFile)
+	oldInstances = append(oldInstances, findConstantConditions(oldFset, oldFile)...)
 	result := make(map[string]bool, len(oldInstances))
 	for _, inst := range oldInstances {
-		key := inst.leftText + inst.op + inst.rightText
+		key := inst.leftText + inst.op + inst.rightText + inst.reason
 		result[key] = true
 	}
 	return result
+}
+
+// isFloatLiteral returns true if the expression is a floating-point literal.
+func isFloatLiteral(expr ast.Expr) bool {
+	lit, ok := expr.(*ast.BasicLit)
+	if !ok || lit.Kind != token.FLOAT {
+		return false
+	}
+	return true
+}
+
+// findConstantConditions detects conditions that are always true or false (SA4015).
+// Flags: literal `true`/`false` used as if/for conditions, and binary expressions
+// where both operands are constant literals (e.g., 1 > 2, 3.0 <= 3.0).
+func findConstantConditions(fset *token.FileSet, file *ast.File) []suspiciousCmpInstance {
+	var instances []suspiciousCmpInstance
+
+	ast.Inspect(file, func(n ast.Node) bool {
+		// Detect `if true` / `if false` and `for true` / `for false`
+		var cond ast.Expr
+		switch stmt := n.(type) {
+		case *ast.IfStmt:
+			cond = stmt.Cond
+		case *ast.ForStmt:
+			if stmt.Cond != nil {
+				cond = stmt.Cond
+			}
+		}
+		if cond != nil {
+			if ident, ok := cond.(*ast.Ident); ok && (ident.Name == "true" || ident.Name == "false") {
+				pos := fset.Position(cond.Pos())
+				instances = append(instances, suspiciousCmpInstance{
+					posStr:    fmt.Sprintf("%s:%d", filepath.Base(pos.Filename), pos.Line),
+					leftText:  ident.Name,
+					rightText: "",
+					op:        "",
+					reason:    "constant boolean condition is always " + ident.Name + " - likely a logic error or leftover debug code",
+				})
+			}
+		}
+		return true
+	})
+
+	return instances
 }
