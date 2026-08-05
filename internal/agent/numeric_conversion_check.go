@@ -303,50 +303,58 @@ func isLargeValueIdentifier(name string) bool {
 	return false
 }
 
+// maxIntValues maps target type names to their maximum signed value.
+var maxIntValues = map[string]int64{
+	"int8":   127,
+	"uint8":  255,
+	"byte":   255,
+	"int16":  32767,
+	"uint16": 65535,
+	"int32":  2147483647,
+	"uint32": 4294967295,
+}
+
 // fitsInTargetType checks if an integer literal string fits in the target type.
 func fitsInTargetType(literal, targetType string) bool {
 	cleaned := strings.ReplaceAll(literal, "_", "")
 
-	var maxVal int64
-	switch targetType {
-	case "int8":
-		maxVal = 127
-	case "uint8", "byte":
-		maxVal = 255
-	case "int16":
-		maxVal = 32767
-	case "uint16":
-		maxVal = 65535
-	case "int32":
-		maxVal = 2147483647
-	case "uint32":
-		maxVal = 4294967295
-	default:
+	maxVal, ok := maxIntValues[targetType]
+	if !ok {
 		return true
 	}
 
-	// Parse the literal value and compare against maxVal.
-	var val int64
 	if strings.HasPrefix(cleaned, "0x") || strings.HasPrefix(cleaned, "0X") {
-		for _, ch := range cleaned[2:] {
-			d := hexDigitVal(ch)
-			if d < 0 {
-				return true // unparseable, skip
-			}
-			val = val*16 + d
-			if val > maxVal {
-				return false
-			}
+		return literalFitsHex(cleaned[2:], maxVal)
+	}
+	return literalFitsDecimal(cleaned, maxVal)
+}
+
+// literalFitsHex checks if a hex string fits within maxVal.
+func literalFitsHex(hexStr string, maxVal int64) bool {
+	var val int64
+	for _, ch := range hexStr {
+		d := hexDigitVal(ch)
+		if d < 0 {
+			return true // unparseable, skip
 		}
-	} else {
-		for _, ch := range cleaned {
-			if ch < '0' || ch > '9' {
-				return true // unparseable, skip
-			}
-			val = val*10 + int64(ch-'0')
-			if val > maxVal {
-				return false
-			}
+		val = val*16 + d
+		if val > maxVal {
+			return false
+		}
+	}
+	return true
+}
+
+// literalFitsDecimal checks if a decimal string fits within maxVal.
+func literalFitsDecimal(decStr string, maxVal int64) bool {
+	var val int64
+	for _, ch := range decStr {
+		if ch < '0' || ch > '9' {
+			return true // unparseable, skip
+		}
+		val = val*10 + int64(ch-'0')
+		if val > maxVal {
+			return false
 		}
 	}
 	return true
