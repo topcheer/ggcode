@@ -148,6 +148,7 @@ func registerAllChecks() {
 		{Name: "loop-perf", Langs: []Language{LangGo}, Run: sliceCheck(checkLoopPerf)},
 		{Name: "unreachable-code", Langs: []Language{LangGo}, Run: sliceCheck(checkUnreachableCode)},
 		{Name: "hollow-test", Langs: []Language{LangGo}, Run: stringCheck(checkAssertionPresence)},
+		{Name: "test-isolation", Langs: []Language{LangGo}, Run: stringCheck(checkTestIsolation)},
 		{Name: "deprecated-api", Langs: []Language{LangGo}, Run: stringCheck(checkDeprecatedAPI)},
 		{Name: "numeric-conversion", Langs: []Language{LangGo}, Run: stringCheck(checkUnsafeNumericConversion)},
 		{Name: "duplicate-code", Langs: []Language{LangGo}, Run: sliceCheck(checkDuplicateCode)},
