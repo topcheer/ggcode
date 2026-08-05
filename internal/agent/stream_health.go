@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 // streamStallThreshold is the maximum gap between stream events before a
@@ -31,7 +32,7 @@ const streamStallThreshold = 30 * time.Second
 //     channel, avoiding concurrent onEvent calls
 func streamWithStallDetection(stream <-chan provider.StreamEvent, stallThreshold time.Duration) <-chan provider.StreamEvent {
 	out := make(chan provider.StreamEvent)
-	go func() {
+	safego.Go("stream.stall_detection", func() {
 		defer close(out)
 		timer := time.NewTimer(stallThreshold)
 		defer timer.Stop()
@@ -62,6 +63,6 @@ func streamWithStallDetection(stream <-chan provider.StreamEvent, stallThreshold
 				timer.Reset(stallThreshold)
 			}
 		}
-	}()
+	})
 	return out
 }
