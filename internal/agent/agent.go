@@ -193,6 +193,7 @@ type Agent struct {
 	delegationOrch             *delegationState                      // delegation orchestration intelligence (orphaned delegations, serial anti-pattern, over-delegation)
 	crossFileImpact            *crossFileImpactState                 // pre-completion cross-file impact analysis (removed symbol breakage detection)
 	contextFootprint           *contextFootprintState                // per-tool context budget attribution (which tools consume the most context)
+	promptOps                  *promptOpsState                       // system prompt redundancy and token efficiency intelligence (PromptOps)
 	cacheEffMonitor            *cacheEffMonitor                      // prompt cache efficiency monitoring (cache bust storm detection)
 	pressureForecaster         *pressureForecaster                   // context window pressure forecasting (predictive compaction warning)
 	redundantRead              *redundantReadState                   // redundant re-read detection (context waste prevention)
@@ -299,6 +300,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		failureMode:          newFailureModeState(),
 		toolFallback:         newToolFallbackState(),
 		contextFootprint:     newContextFootprintState(),
+		promptOps:            newPromptOpsState(),
 		cacheEffMonitor:      newCacheEffMonitor(),
 		pressureForecaster:   newPressureForecaster(),
 		redundantRead:        newRedundantReadState(),
@@ -1185,6 +1187,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.maybeInjectPerfRegression()
 	a.maybeInjectDynamicSystemPrompt()
 	a.maybeInjectRatchetRules()
+	a.maybeCheckPromptOps()
 
 	transientCompactWarned := false
 	toolDefs := a.tools.ToDefinitions()
@@ -1253,6 +1256,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.contextFootprint.reset()
 	a.cacheEffMonitor.reset()
 	a.pressureForecaster.reset()
+	a.promptOps.reset()
 
 	// Capture the git working tree state BEFORE the agent makes any changes.
 	// This lets the reconciliation gate distinguish pre-existing dirty files
