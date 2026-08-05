@@ -181,6 +181,7 @@ func registerAllChecks() {
 		{Name: "copylock", Langs: []Language{LangGo}, Run: sliceCheck(checkCopylock)},
 		{Name: "map-iter-write", Langs: []Language{LangGo}, Run: sliceCheck(checkMapIterWrite)},
 		{Name: "regex-loop", Langs: []Language{LangGo}, Run: sliceCheck(checkRegexLoop)},
+		{Name: "time-format", Langs: []Language{LangGo}, Run: sliceCheck(checkTimeFormat)},
 		{Name: "excessive-params", Langs: []Language{LangGo}, Run: sliceCheck(checkExcessiveParams)},
 		{Name: "excessive-returns", Langs: []Language{LangGo}, Run: sliceCheck(checkExcessiveReturns)},
 		{Name: "exported-doc", Langs: []Language{LangGo}, Run: func(ctx CheckContext) []string {
