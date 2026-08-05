@@ -194,6 +194,8 @@ type Agent struct {
 	cacheEffMonitor            *cacheEffMonitor                      // prompt cache efficiency monitoring (cache bust storm detection)
 	pressureForecaster         *pressureForecaster                   // context window pressure forecasting (predictive compaction warning)
 	redundantRead              *redundantReadState                   // redundant re-read detection (context waste prevention)
+	searchParamGuard           *searchParamGuardState                // search parameter quality guard (vague/broad pattern detection)
+	toolRedundancy             *toolRedundancyState                  // scattered duplicate tool call detection (non-consecutive redundancy)
 	ruleStore                  *RuleStore                            // cached rule store for hot-path rule injection (avoids per-tool disk I/O)
 	ruleInjectCount            map[string]int                        // per-rule injection counter for dedup (caps repetitive hints)
 	approvalMemory             *permission.ApprovalMemory            // session-level learned approval patterns (auto-approve after N repeats)
@@ -297,6 +299,8 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		cacheEffMonitor:      newCacheEffMonitor(),
 		pressureForecaster:   newPressureForecaster(),
 		redundantRead:        newRedundantReadState(),
+		searchParamGuard:     newSearchParamGuard(),
+		toolRedundancy:       newToolRedundancyAnalyzer(),
 		bgOrphan:             newBgOrphanState(),
 		crossFileImpact:      newCrossFileImpactState(),
 		diskSpace:            newDiskSpaceState(),
@@ -1000,6 +1004,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.perfBaseline.reset()
 	a.argSizeGuardFires = 0
 	a.redundantRead.reset()
+	a.searchParamGuard.reset()
+	a.toolRedundancy.reset()
 	a.toolSequence.reset()
 	a.shellNativeHint.reset()
 	a.monorepoScoper.reset()
@@ -1226,6 +1232,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 
 	a.argSizeGuardFires = 0
 	a.redundantRead.reset()
+	a.searchParamGuard.reset()
+	a.toolRedundancy.reset()
 	a.toolSequence.reset()
 	a.taskAnchor.reset(userPromptForStats, time.Now())
 	a.toolFilter = tool.NewRelevanceFilter()
@@ -1992,6 +2000,18 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			if guidance := a.loopDetectionInjection(tc); guidance != "" {
 				loopGuidance = guidance
 			}
+			// Search parameter quality guard: detect overly broad/vague search
+			// parameters BEFORE execution to prevent context flooding.
+			var searchParamHint string
+			if hint := a.searchParamGuard.checkParamQuality(tc.Name, tc.Arguments); hint != "" {
+				searchParamHint = hint
+			}
+			// Tool call redundancy analyzer: detect scattered (non-consecutive)
+			// duplicate calls to the same tool with identical arguments.
+			var redundancyHint string
+			if hint := a.toolRedundancy.recordCall(tc.Name, tc.Arguments); hint != "" {
+				redundancyHint = hint
+			}
 			// Check for project memory but defer injection
 			if mc, mf, mt := a.pendingProjectMemoryForTool(tc); len(mf) > 0 && strings.TrimSpace(mc) != "" {
 				if deferredMemoryContent == "" {
@@ -2519,13 +2539,33 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				for i, ri := range result.Images {
 					imgs[i] = provider.ContentImage{MIME: ri.MIME, Base64: ri.Base64}
 				}
-				if loopGuidance != "" {
-					result.Content = result.Content + "\n\n" + loopGuidance
+				if loopGuidance != "" || searchParamHint != "" || redundancyHint != "" {
+					var hints []string
+					if searchParamHint != "" {
+						hints = append(hints, searchParamHint)
+					}
+					if loopGuidance != "" {
+						hints = append(hints, loopGuidance)
+					}
+					if redundancyHint != "" {
+						hints = append(hints, redundancyHint)
+					}
+					result.Content = result.Content + "\n\n" + strings.Join(hints, "\n\n")
 				}
 				toolResults = append(toolResults, provider.ToolResultWithImages(tc.ID, tc.Name, result.Content, imgs, result.IsError))
 			} else {
-				if loopGuidance != "" {
-					result.Content = result.Content + "\n\n" + loopGuidance
+				if loopGuidance != "" || searchParamHint != "" || redundancyHint != "" {
+					var hints []string
+					if searchParamHint != "" {
+						hints = append(hints, searchParamHint)
+					}
+					if loopGuidance != "" {
+						hints = append(hints, loopGuidance)
+					}
+					if redundancyHint != "" {
+						hints = append(hints, redundancyHint)
+					}
+					result.Content = result.Content + "\n\n" + strings.Join(hints, "\n\n")
 				}
 				toolResults = append(toolResults, provider.ToolResultNamedBlock(tc.ID, tc.Name, result.Content, result.IsError))
 			}
