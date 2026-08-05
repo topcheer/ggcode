@@ -149,6 +149,20 @@ func checkClickableDiv(content string) []string {
 	return warnings
 }
 
+// inputTypeSkipsLabel lists input types that don't need a label.
+var inputTypeSkipsLabel = map[string]bool{
+	"hidden": true, "submit": true, "button": true, "reset": true, "image": true,
+}
+
+// inputHasLabel checks whether an input element has an accessible name via
+// <label for>, aria-label, aria-labelledby, or title.
+func inputHasLabel(attrs string, labelTargets map[string]bool) bool {
+	if id := a11yGetAttr(attrs, "id"); id != "" && labelTargets[strings.ToLower(id)] {
+		return true
+	}
+	return a11yHasAttr(attrs, "aria-label") || a11yHasAttr(attrs, "aria-labelledby") || a11yHasAttr(attrs, "title")
+}
+
 // checkInputWithoutLabel detects <input> elements without an associated label.
 func checkInputWithoutLabel(content string) []string {
 	matches := inputTagRe.FindAllStringSubmatch(content, -1)
@@ -167,19 +181,11 @@ func checkInputWithoutLabel(content string) []string {
 	for _, m := range matches {
 		attrs := m[1]
 		if tm := typeAttrRe.FindStringSubmatch(attrs); tm != nil {
-			it := strings.ToLower(tm[1])
-			if it == "hidden" || it == "submit" || it == "button" || it == "reset" || it == "image" {
+			if inputTypeSkipsLabel[strings.ToLower(tm[1])] {
 				continue
 			}
 		}
-		hasLabel := false
-		if id := a11yGetAttr(attrs, "id"); id != "" && labelTargets[strings.ToLower(id)] {
-			hasLabel = true
-		}
-		if a11yHasAttr(attrs, "aria-label") || a11yHasAttr(attrs, "aria-labelledby") || a11yHasAttr(attrs, "title") {
-			hasLabel = true
-		}
-		if !hasLabel {
+		if !inputHasLabel(attrs, labelTargets) {
 			warnings = append(warnings,
 				"  - <input> without associated <label> (WCAG 1.3.1/3.3.2). Add <label for=\"id\"> or aria-label.")
 		}
