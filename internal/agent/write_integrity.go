@@ -149,6 +149,12 @@ func registerAllChecks() {
 		{Name: "error-wrapping", Langs: []Language{LangGo}, Run: sliceCheck(checkErrorWrapping)},
 		{Name: "error-msg-quality", Langs: []Language{LangGo}, Run: sliceCheck(checkErrorMsgQuality)},
 		{Name: "interface-compliance", Langs: []Language{LangGo}, Run: stringCheck(checkInterfaceCompliance)},
+		{Name: "interface-design", Langs: []Language{LangGo}, Run: func(ctx CheckContext) []string {
+			if ctx.GoAST == nil {
+				return nil
+			}
+			return checkInterfaceDesign(ctx)
+		}},
 		{Name: "nil-map-write", Langs: []Language{LangGo}, Run: stringCheck(checkNilMapWrite)},
 		{Name: "loop-perf", Langs: []Language{LangGo}, Run: sliceCheck(checkLoopPerf)},
 		{Name: "string-efficiency", Langs: []Language{LangGo}, Run: sliceCheck(checkStringEfficiency)},
