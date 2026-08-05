@@ -59,32 +59,41 @@ func checkExitPath(filePath, oldContent, newContent string) []string {
 	}
 
 	// Delta-aware: subtract issues present in old content.
-	if strings.TrimSpace(oldContent) != "" {
-		oldIssues := findExitPathIssues(filePath, oldContent)
-		if len(oldIssues) > 0 {
-			oldSet := make(map[string]bool, len(oldIssues))
-			for _, oi := range oldIssues {
-				oldSet[oi.message] = true
-			}
-			filtered := newIssues[:0]
-			for _, ni := range newIssues {
-				if oldSet[ni.message] {
-					continue
-				}
-				filtered = append(filtered, ni)
-			}
-			newIssues = filtered
-		}
-	}
-
+	newIssues = filterExitPathDelta(newIssues, oldContent, filePath)
 	if len(newIssues) == 0 {
 		return nil
 	}
+	return buildExitPathWarnings(newIssues)
+}
 
-	var warnings []string
+// filterExitPathDelta removes issues that already existed in oldContent.
+func filterExitPathDelta(newIssues []exitPathIssue, oldContent, filePath string) []exitPathIssue {
+	if strings.TrimSpace(oldContent) == "" {
+		return newIssues
+	}
+	oldIssues := findExitPathIssues(filePath, oldContent)
+	if len(oldIssues) == 0 {
+		return newIssues
+	}
+	oldSet := make(map[string]bool, len(oldIssues))
+	for _, oi := range oldIssues {
+		oldSet[oi.message] = true
+	}
+	filtered := newIssues[:0]
+	for _, ni := range newIssues {
+		if oldSet[ni.message] {
+			continue
+		}
+		filtered = append(filtered, ni)
+	}
+	return filtered
+}
+
+// buildExitPathWarnings converts issues into human-readable warning strings.
+func buildExitPathWarnings(issues []exitPathIssue) []string {
 	redundantCount := 0
 	deepNestCount := 0
-	for _, issue := range newIssues {
+	for _, issue := range issues {
 		switch issue.kind {
 		case "redundant-else":
 			redundantCount++
@@ -92,6 +101,7 @@ func checkExitPath(filePath, oldContent, newContent string) []string {
 			deepNestCount++
 		}
 	}
+	var warnings []string
 	if redundantCount > 0 {
 		warnings = append(warnings, fmt.Sprintf(
 			"Found %d redundant else clause(s) after return/break/continue/panic. "+
@@ -106,7 +116,6 @@ func checkExitPath(filePath, oldContent, newContent string) []string {
 				"and improve readability.",
 			deepNestCount, exitPathMaxNesting))
 	}
-
 	if len(warnings) > exitPathMaxWarnings {
 		warnings = warnings[:exitPathMaxWarnings]
 	}
