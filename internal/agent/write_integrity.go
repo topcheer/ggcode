@@ -168,6 +168,12 @@ func registerAllChecks() {
 		// --- Dependency vulnerability check (SCA) ---
 		// Triggers on dependency manifest files: go.mod, package.json, etc.
 		{Name: "dependency-vulns", Run: stringCheck(checkDependencyVulnsAsString)},
+		// --- Supply chain: typosquatting detection ---
+		// Flags new dependencies whose names are 1-2 edits from popular packages.
+		{Name: "typosquatting", Run: stringCheck(checkTyposquattingAsString)},
+		// --- HTTP plaintext detection ---
+		// Flags http:// URLs in source code that should use https://.
+		{Name: "http-plaintext", Langs: []Language{LangGo, LangJSTS, LangPython}, Run: sliceCheck(checkHTTPPlaintext)},
 	}
 
 	debug.Log("integrity", "registered %d post-write checks", len(allChecks))
