@@ -163,6 +163,12 @@ func registerAllChecks() {
 		{Name: "concurrent-map-access", Langs: []Language{LangGo}, Run: stringCheck(checkConcurrentMapAccess)},
 		{Name: "excessive-params", Langs: []Language{LangGo}, Run: sliceCheck(checkExcessiveParams)},
 		{Name: "excessive-returns", Langs: []Language{LangGo}, Run: sliceCheck(checkExcessiveReturns)},
+		{Name: "exported-doc", Langs: []Language{LangGo}, Run: func(ctx CheckContext) []string {
+			if ctx.GoAST == nil {
+				return nil
+			}
+			return checkMissingExportedDocsAST(ctx.FilePath, ctx.OldContent, ctx.GoAST)
+		}},
 
 		// --- Multi-language checks ---
 		{Name: "insecure-patterns", Langs: []Language{LangGo, LangJSTS, LangPython}, Run: sliceCheck(checkInsecurePatterns)},
