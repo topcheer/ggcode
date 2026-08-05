@@ -189,6 +189,7 @@ type Agent struct {
 	mcpEcosystem               *mcpEcosystemState                    // MCP server health, conflict, and capability intelligence
 	mcpRuntime                 tool.MCPRuntime                       // MCP runtime for server snapshots (optional)
 	bgOrphan                   *bgOrphanState                        // orphaned background command detection (unchecked start_command jobs)
+	errorCascade               *errorCascadeState                    // cascading failure detection (common-root-cause error clustering)
 	delegationOrch             *delegationState                      // delegation orchestration intelligence (orphaned delegations, serial anti-pattern, over-delegation)
 	crossFileImpact            *crossFileImpactState                 // pre-completion cross-file impact analysis (removed symbol breakage detection)
 	contextFootprint           *contextFootprintState                // per-tool context budget attribution (which tools consume the most context)
@@ -304,6 +305,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		searchParamGuard:     newSearchParamGuard(),
 		toolRedundancy:       newToolRedundancyAnalyzer(),
 		bgOrphan:             newBgOrphanState(),
+		errorCascade:         newErrorCascadeState(),
 		crossFileImpact:      newCrossFileImpactState(),
 		diskSpace:            newDiskSpaceState(),
 		envDrift:             newEnvDriftState(),
@@ -1245,6 +1247,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.compoundingFailure.reset()
 	a.failureMode.reset()
 	a.toolFallback.reset()
+	a.errorCascade.reset()
 	a.fileFreshness.reset()
 	a.toolThermal.reset()
 	a.contextFootprint.reset()
@@ -2386,6 +2389,18 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					result.Content = result.Content + "\n\n" + modeGuidance
 				} else {
 					result.Content = modeGuidance
+				}
+			}
+
+			// Error cascade detection: when multiple errors share a common root
+			// resource (file path or symbol), inject root-cause-first guidance.
+			if result.IsError {
+				if cascadeGuidance := a.errorCascade.recordError(tc.Name, result.Content); cascadeGuidance != "" {
+					if result.Content != "" {
+						result.Content = result.Content + "\n\n" + cascadeGuidance
+					} else {
+						result.Content = cascadeGuidance
+					}
 				}
 			}
 
