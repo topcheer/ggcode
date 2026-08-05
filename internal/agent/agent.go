@@ -1519,11 +1519,15 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// tool complexity. Only activates when user hasn't explicitly set effort.
 		effortApplied, effortPrev := a.applyAdaptiveEffort()
 
-		// Adaptive sampling: adjust temperature per-turn based on task phase.
-		// Lower temperature for code edits and error recovery, higher for
-		// exploration and creative writing. Only activates when user hasn't
-		// explicitly set temperature.
-		samplingApplied, samplingPrev := a.applyAdaptiveSampling()
+		// Adaptive sampling: DISABLED. Some models (e.g. Kimi k3-256k) reject
+		// any temperature value other than 1, causing 400 errors. The benefit
+		// of micro-adjusting temperature per task phase does not justify the
+		// risk of breaking model compatibility. Temperature is left at the
+		// provider default unless the user explicitly sets it.
+		var samplingApplied float64 = -1
+		var samplingPrev float64 = 0
+		_ = samplingApplied
+		_ = samplingPrev
 
 		// Dynamic tool pruning: filter out low-relevance MCP tools to reduce
 		// context overhead and improve tool-selection accuracy. Only activates
