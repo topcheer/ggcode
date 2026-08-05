@@ -256,15 +256,28 @@ func (e *errorCascadeState) recordError(toolName, content string) string {
 	// Bound memory: if too many roots, evict the one with fewest entries.
 	if len(e.roots) > cascadeMaxRoots {
 		var minKey string
+		var secondMinKey string
 		minCount := -1
+		secondMinCount := -1
 		for k, v := range e.roots {
-			if minCount == -1 || len(v) < minCount {
+			c := len(v)
+			if minCount == -1 || c < minCount {
+				secondMinKey = minKey
+				secondMinCount = minCount
 				minKey = k
-				minCount = len(v)
+				minCount = c
+			} else if secondMinCount == -1 || c < secondMinCount {
+				secondMinKey = k
+				secondMinCount = c
 			}
 		}
-		if minKey != "" && minKey != rootKey {
-			delete(e.roots, minKey)
+		// Evict the root with fewest entries, but never evict the one we just added.
+		evictKey := minKey
+		if minKey == rootKey && secondMinKey != "" {
+			evictKey = secondMinKey
+		}
+		if evictKey != "" && evictKey != rootKey {
+			delete(e.roots, evictKey)
 		}
 	}
 
