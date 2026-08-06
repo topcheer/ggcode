@@ -159,6 +159,7 @@ type Agent struct {
 	toolFilter                 *tool.RelevanceFilter                 // dynamic MCP tool pruning based on conversation relevance
 	fulfillmentGate            *fulfillmentGateState                 // pre-completion coverage verification (request-vs-work match)
 	companionGuard             *companionGuardState                  // companion test file coverage check (unedited paired tests)
+	specGaming                 *specGamingState                      // specification gaming detection (reward hacking / verification tampering)
 	complexityGate             *complexityGateState                  // post-completion code complexity quality gate
 	changeReconcile            *changeReconcileState                 // pre-completion git diff reconciliation (unexpected side-effect detection)
 	claimVerify                *claimVerifyState                     // tool output misinterpretation detection (AgentRx-inspired)
@@ -296,6 +297,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		planDrift:            newPlanDriftState(),
 		unverifiedClaim:      newUnverifiedClaimState(),
 		companionGuard:       newCompanionGuardState(),
+		specGaming:           newSpecGamingState(),
 		complexityGate:       newComplexityGateState(),
 		changeReconcile:      newChangeReconcileState(),
 		claimVerify:          newClaimVerifyState(),
@@ -1037,6 +1039,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.planDrift.reset()
 	a.unverifiedClaim.reset()
 	a.companionGuard.reset()
+	a.specGaming.reset()
 	a.complexityGate.reset()
 	a.behaviorPattern.reset()
 	a.perfBaseline.reset()
@@ -1270,6 +1273,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.planDrift.reset()
 	a.unverifiedClaim.reset()
 	a.companionGuard.reset()
+	a.specGaming.reset()
 	a.complexityGate.reset()
 	a.verifyRegression.reset()
 	a.resetSelfCorrectionGate()
@@ -1946,6 +1950,22 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 						Content: []provider.ContentBlock{{
 							Type: "text",
 							Text: companionMsg,
+						}},
+					})
+					continue
+				}
+
+				// Specification gaming detection: before returning, check if
+				// the agent is gaming verification (editing tests instead of
+				// source, adding skip markers, tampering with CI config) rather
+				// than fixing the actual problem. Zero-LLM-cost heuristic.
+				if specGamingMsg := a.checkSpecGaming(runStats, userPromptForStats); specGamingMsg != "" {
+					debug.Log("agent", "Iteration %d: specification gaming detected, injecting warning", i+1)
+					a.contextManager.Add(provider.Message{
+						Role: "user",
+						Content: []provider.ContentBlock{{
+							Type: "text",
+							Text: specGamingMsg,
 						}},
 					})
 					continue
