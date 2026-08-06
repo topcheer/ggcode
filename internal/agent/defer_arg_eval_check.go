@@ -68,35 +68,44 @@ func checkDeferArgEval(filePath, _, newContent string) []string {
 			if !ok {
 				return true
 			}
-			if _, ok := ds.Call.Fun.(*ast.FuncLit); ok {
-				return true // defer func(){}() -- closure, safe
-			}
-			args := ds.Call.Args
-			if len(args) == 0 {
+			if daeShouldWarn(ds, fset, &warnings) {
 				return true
-			}
-			for _, arg := range args {
-				if daeContainsCall(arg) {
-					if len(warnings) < maxDeferArgWarnings {
-						pos := fset.Position(ds.Pos())
-						warnings = append(warnings, fmt.Sprintf(
-							"%s:%d: defer argument evaluated immediately -- "+
-								"in `defer f(g())`, g() runs NOW, not at defer time; "+
-								"wrap in a closure: `defer func() { f(g()) }()`",
-							filepath.Base(pos.Filename), pos.Line,
-						))
-					}
-					break
-				}
 			}
 			return true
 		})
 	}
 
-	if len(warnings) >= maxDeferArgWarnings {
-		warnings = append(warnings, fmt.Sprintf("... (%d defer argument warnings truncated)", maxDeferArgWarnings))
-	}
+	daeAppendTruncation(warnings, &warnings)
 	return warnings
+}
+
+// daeShouldWarn checks a defer statement for eager argument evaluation.
+func daeShouldWarn(ds *ast.DeferStmt, fset *token.FileSet, warnings *[]string) bool {
+	if _, ok := ds.Call.Fun.(*ast.FuncLit); ok {
+		return false // defer func(){}() -- closure, safe
+	}
+	for _, arg := range ds.Call.Args {
+		if daeContainsCall(arg) {
+			if len(*warnings) < maxDeferArgWarnings {
+				pos := fset.Position(ds.Pos())
+				*warnings = append(*warnings, fmt.Sprintf(
+					"%s:%d: defer argument evaluated immediately -- "+
+						"in `defer f(g())`, g() runs NOW, not at defer time; "+
+						"wrap in a closure: `defer func() { f(g()) }()`",
+					filepath.Base(pos.Filename), pos.Line,
+				))
+			}
+			return true
+		}
+	}
+	return false
+}
+
+// daeAppendTruncation adds truncation notice if warnings were capped.
+func daeAppendTruncation(_ []string, warnings *[]string) {
+	if len(*warnings) >= maxDeferArgWarnings {
+		*warnings = append(*warnings, fmt.Sprintf("... (%d defer argument warnings truncated)", maxDeferArgWarnings))
+	}
 }
 
 // daeContainsCall checks whether an expression contains a function call.
