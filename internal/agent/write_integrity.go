@@ -288,6 +288,11 @@ func registerAllChecks() {
 		// Flags if-statements whose condition is a compile-time constant
 		// (if true, if false, if 1 == 1, etc.) - dead branches hiding logic.
 		{Name: "constant-conditional", Langs: []Language{LangGo}, Run: sliceCheck(checkConstantConditional)},
+
+		// --- Unused function parameter detection ---
+		// Flags unexported function parameters that are never referenced
+		// in the body, indicating dead code or incomplete refactoring.
+		{Name: "unused-param", Langs: []Language{LangGo}, Run: sliceCheck(checkUnusedParam)},
 	}
 
 	debug.Log("integrity", "registered %d post-write checks", len(allChecks))
