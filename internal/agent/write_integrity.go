@@ -253,6 +253,11 @@ func registerAllChecks() {
 		// Flags float32/float64 values compared with == or != which is
 		// unreliable due to IEEE 754 precision. Use math.Abs(a-b) < epsilon.
 		{Name: "float-equality", Langs: []Language{LangGo}, Run: sliceCheck(checkFloatEquality)},
+
+		// --- Deferred call argument evaluation detection ---
+		// Flags defer statements where arguments contain function calls
+		// that are evaluated immediately (eager) rather than at defer time.
+		{Name: "defer-arg-eval", Langs: []Language{LangGo}, Run: sliceCheck(checkDeferArgEval)},
 	}
 
 	debug.Log("integrity", "registered %d post-write checks", len(allChecks))
