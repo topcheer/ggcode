@@ -150,6 +150,7 @@ type Agent struct {
 	todoStaleness              *todoStalenessState                   // mid-run stale todo detection (plan abandonment awareness)
 	recurringError             *recurringErrorState                  // recurring build/test error fingerprint detection across edit cycles
 	fixCascade                 *fixCascadeState                      // failed fix cascade (wrong-hypothesis lock-in) detection
+	errRegression              *errRegressionState                   // error count regression (negative progress) detection
 	unreadEdit                 *unreadEditState                      // read-before-edit guard: warns when editing unread files
 	editFailRecovery           *editFailState                        // consecutive edit failure recovery guidance
 	scopeDrift                 *scopeDriftState                      // semantic scope creep detection (file-diversity tracking)
@@ -284,6 +285,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		todoStaleness:        newTodoStalenessState(),
 		recurringError:       newRecurringErrorState(),
 		fixCascade:           newFixCascadeState(),
+		errRegression:        newErrRegressionState(),
 		unreadEdit:           newUnreadEditState(),
 		editFailRecovery:     newEditFailState(),
 		scopeDrift:           newScopeDriftState(),
@@ -1264,6 +1266,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.resetLastGoodCheckpoint()
 	a.recurringError.reset()
 	a.fixCascade.reset()
+	a.errRegression.reset()
 	a.speculator.resetSequence()
 	a.toolMemo.reset()
 	a.commandCache.reset()
@@ -2354,6 +2357,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					a.convergenceRecordEdit(tc.Name)
 					// Fix cascade: track edits for wrong-hypothesis lock-in detection.
 					a.fixCascade.recordEdit()
+					// Error regression: track edits for negative progress detection.
+					a.errRegression.recordEdit()
 					if hint := a.unreadEdit.checkUnreadEdit(p); hint != "" {
 						if result.Content != "" {
 							result.Content = result.Content + "\n\n" + hint
@@ -2854,6 +2859,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Fix cascade detection: tracks edit->verify->fail cycles regardless
 			// of specific errors. Detects wrong-hypothesis lock-in where each
 			// edit produces a DIFFERENT error (so recurring_error never fires).
+			if regressionGuidance := a.errorRegressionCheckCommand(tc.Name, tc.Arguments, result.Content, result.IsError); regressionGuidance != "" {
+				if result.Content != "" {
+					result.Content = result.Content + "\n\n" + regressionGuidance
+				} else {
+					result.Content = regressionGuidance
+				}
+			}
 			if cascadeGuidance := a.fixCascadeCheckCommand(tc.Name, tc.Arguments, result.IsError); cascadeGuidance != "" {
 				if result.Content != "" {
 					result.Content = result.Content + "\n\n" + cascadeGuidance
