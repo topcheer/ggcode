@@ -139,6 +139,7 @@ type Agent struct {
 	speculator                 *speculator                           // pattern-aware speculative tool execution (PASTE-inspired)
 	toolMemo                   *toolMemo                             // read-only tool result memoization (ToolCaching-inspired)
 	confidence                 *confidenceState                      // holistic trajectory confidence scoring (HTC-inspired)
+	verifDebt                  *verificationDebtState                // verification debt tracker (SAUP-inspired uncertainty propagation)
 	costBudget                 *sessionCostBudget                    // absolute session-level token budget enforcement
 	toolCallBudget             *toolCallBudget                       // per-session tool invocation limit (action-level guardrail)
 	cacheKeepalive             *cacheKeepaliveState                  // prompt cache warming pings during idle (Anthropic)
@@ -255,6 +256,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		speculator:           newSpeculator(),
 		toolMemo:             newToolMemo(),
 		confidence:           newConfidenceState(),
+		verifDebt:            newVerificationDebtState(),
 		costBudget:           newSessionCostBudget(),
 		toolCallBudget:       newToolCallBudget(),
 		cacheKeepalive:       newCacheKeepaliveState(),
@@ -1225,6 +1227,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.toolMemo.reset()
 	a.commandCache.reset()
 	a.confidence.reset()
+	a.verifDebt.reset()
 	a.costBudget.reset()
 	a.toolCallBudget.reset()
 	a.toolCallBudget.SetDefaultBudget(deriveDefaultBudget(a.maxIter))
@@ -2502,6 +2505,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					result.Content = result.Content + "\n\n" + confidenceGuidance
 				} else {
 					result.Content = confidenceGuidance
+				}
+			}
+
+			// Verification debt: track unverified modifications (SAUP-inspired).
+			// Detects when the agent stacks edits without building/testing.
+			a.verifDebt.recordToolCall(tc.Name, string(tc.Arguments))
+			if debtGuidance := a.verifDebt.maybeWarn(); debtGuidance != "" {
+				if result.Content != "" {
+					result.Content = result.Content + "\n\n" + debtGuidance
+				} else {
+					result.Content = debtGuidance
 				}
 			}
 
