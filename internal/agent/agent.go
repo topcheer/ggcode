@@ -225,6 +225,7 @@ type Agent struct {
 	toolOveruse                *toolOveruseState                     // tool overuse / self-awareness detection (unnecessary tool calls for known info)
 	assumptionTracker          *assumptionTrackerState               // implicit assumption detection (unverified guesses in assistant text)
 	scopeCreep                 *scopeCreepState                      // scope creep detection (unsolicited changes beyond request)
+	reversibility              *reversibilityState                   // pre-action reversibility assessment (irreversible action safety check)
 	mindlessAction             *mindlessActionState                  // mindless action detection (rapid-fire tool calls without reasoning)
 	behaviorPattern            *behaviorPatternState                 // cross-run behavioral anti-pattern detection (systemic issue awareness)
 	perfBaseline               *perfBaselineState                    // cross-session performance regression detection
@@ -355,6 +356,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		assumptionTracker:    newAssumptionTrackerState(),
 		scopeCreep:           newScopeCreepState(),
 		mindlessAction:       newMindlessActionState(),
+		reversibility:        newReversibilityState(),
 		errorCascade:         newErrorCascadeState(),
 		crossFileImpact:      newCrossFileImpactState(),
 		diskSpace:            newDiskSpaceState(),
@@ -1318,6 +1320,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.assumptionTracker.reset()
 	a.scopeCreep.reset()
 	a.mindlessAction.reset()
+	a.reversibility.reset()
 	a.constraintAmnesia.reset()
 	a.tunnelVision.reset()
 	a.queryConverge.reset()
@@ -2230,6 +2233,22 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			if hint := a.searchParamGuard.checkParamQuality(tc.Name, tc.Arguments); hint != "" {
 				searchParamHint = hint
 			}
+			// Pre-action reversibility assessment: evaluate high-stakes actions
+			// BEFORE execution. Counterfactual Pre-Mortem Loops (Curve Labs 2026).
+			if revGuidance := a.reversibility.checkPreAction(tc.Name, string(tc.Arguments)); revGuidance != "" {
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: revGuidance,
+					}},
+				})
+				msgs = a.contextManager.Messages()
+			}
+
+			// Record safety signals for subsequent reversibility checks.
+			a.reversibility.recordSafetySignal(tc.Name, string(tc.Arguments))
+
 			// Tool call redundancy analyzer: detect scattered (non-consecutive)
 			// duplicate calls to the same tool with identical arguments.
 			var redundancyHint string
