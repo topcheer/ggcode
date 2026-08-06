@@ -224,6 +224,7 @@ type Agent struct {
 	verbosityDrift             *verbosityDriftState                  // verbosity drift detection (token-to-productivity ratio degradation)
 	toolOveruse                *toolOveruseState                     // tool overuse / self-awareness detection (unnecessary tool calls for known info)
 	assumptionTracker          *assumptionTrackerState               // implicit assumption detection (unverified guesses in assistant text)
+	scopeCreep                 *scopeCreepState                      // scope creep detection (unsolicited changes beyond request)
 	behaviorPattern            *behaviorPatternState                 // cross-run behavioral anti-pattern detection (systemic issue awareness)
 	perfBaseline               *perfBaselineState                    // cross-session performance regression detection
 	lastRunStats               *RunStats                             // stats from the most recent run (for post-run summary display)
@@ -351,6 +352,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		verbosityDrift:       newVerbosityDriftState(),
 		toolOveruse:          newToolOveruseState(),
 		assumptionTracker:    newAssumptionTrackerState(),
+		scopeCreep:           newScopeCreepState(),
 		errorCascade:         newErrorCascadeState(),
 		crossFileImpact:      newCrossFileImpactState(),
 		diskSpace:            newDiskSpaceState(),
@@ -1312,6 +1314,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.verbosityDrift.reset()
 	a.toolOveruse.reset()
 	a.assumptionTracker.reset()
+	a.scopeCreep.reset()
 	a.constraintAmnesia.reset()
 	a.tunnelVision.reset()
 	a.queryConverge.reset()
@@ -1829,6 +1832,21 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					Content: []provider.ContentBlock{{
 						Type: "text",
 						Text: assumptionHint,
+					}},
+				})
+			}
+
+			// Scope creep detector: scan assistant text for language indicating
+			// unsolicited expansion beyond the user's request ("while I'm at it",
+			// "I've gone ahead and also fixed...", etc.). If threshold is exceeded,
+			// inject guidance to stay within scope.
+			if scopeHint := a.maybeWarnScopeCreep(assistantText); scopeHint != "" {
+				debug.Log("agent", "Iteration %d: scope creep detector detected unsolicited expansion", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: scopeHint,
 					}},
 				})
 			}
