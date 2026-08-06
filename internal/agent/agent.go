@@ -159,6 +159,7 @@ type Agent struct {
 	companionGuard             *companionGuardState                  // companion test file coverage check (unedited paired tests)
 	complexityGate             *complexityGateState                  // post-completion code complexity quality gate
 	changeReconcile            *changeReconcileState                 // pre-completion git diff reconciliation (unexpected side-effect detection)
+	claimVerify                *claimVerifyState                     // tool output misinterpretation detection (AgentRx-inspired)
 	diffSummary                *diffSummaryState                     // pre-completion holistic change summary for self-review
 	commitHint                 *commitHintState                      // post-completion commit reminder for uncommitted changes
 	verifyRegression           *verifyRegressionState                // cross-run error diff: detects correction-induced regressions
@@ -281,6 +282,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		companionGuard:       newCompanionGuardState(),
 		complexityGate:       newComplexityGateState(),
 		changeReconcile:      newChangeReconcileState(),
+		claimVerify:          newClaimVerifyState(),
 		diffSummary:          newDiffSummaryState(),
 		commitHint:           newCommitHintState(),
 		verifyRegression:     newVerifyRegressionState(),
@@ -1266,6 +1268,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	// (user's own uncommitted work) from genuine side-effect changes introduced
 	// by the agent's tool calls. Also resets the gate for the new run.
 	a.changeReconcile.reset()
+	a.claimVerify.reset()
 	a.crossFileImpact.reset()
 	a.diffSummary.reset()
 	a.commitHint.reset()
@@ -2401,6 +2404,19 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					result.Content = result.Content + "\n\n" + compoundingGuidance
 				} else {
 					result.Content = compoundingGuidance
+				}
+			}
+
+			// Tool output claim verification: detect commonly misread failure
+			// signals in nominally-successful tool results (AgentRx-inspired).
+			// Catches "exit code 1" in output, panics, "no results", etc. that
+			// IsError does not capture, preventing the agent from claiming
+			// success when the tool output contradicts that interpretation.
+			if claimGuidance := a.claimVerify.check(tc.Name, result.Content, result.IsError); claimGuidance != "" {
+				if result.Content != "" {
+					result.Content = result.Content + "\n\n" + claimGuidance
+				} else {
+					result.Content = claimGuidance
 				}
 			}
 
