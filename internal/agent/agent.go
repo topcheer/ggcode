@@ -213,6 +213,7 @@ type Agent struct {
 	approvalMemory             *permission.ApprovalMemory            // session-level learned approval patterns (auto-approve after N repeats)
 	toolDiversity              *diversityState                       // tool diversity stagnation detection (strategy imbalance awareness)
 	fileChurn                  *churnState                           // file churn detection (invalidated assumption awareness)
+	editOscillation            *oscillationState                     // edit oscillation detection (semantic back-and-forth awareness)
 	analysisParalysis          *analysisParalysisState               // analysis paralysis detection (exploration-heavy / action-starved loops)
 	silentError                *silentErrorState                     // silent error advancement detection (unaddressed error proceeding)
 	verbosityDrift             *verbosityDriftState                  // verbosity drift detection (token-to-productivity ratio degradation)
@@ -332,6 +333,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		diagnosticDisconnect: newDiagnosticDisconnectState(),
 		toolDiversity:        newDiversityState(),
 		fileChurn:            newChurnState(),
+		editOscillation:      newOscillationState(),
 		analysisParalysis:    newAnalysisParalysisState(),
 		silentError:          newSilentErrorState(),
 		verbosityDrift:       newVerbosityDriftState(),
@@ -1283,6 +1285,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.compoundingFailure.reset()
 	a.toolDiversity.reset()
 	a.fileChurn.reset()
+	a.editOscillation.reset()
 	a.analysisParalysis.reset()
 	a.silentError.reset()
 	a.verbosityDrift.reset()
@@ -2656,6 +2659,19 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 						result.Content = result.Content + "\n\n" + churnGuidance
 					} else {
 						result.Content = churnGuidance
+					}
+				}
+
+				// Edit oscillation detection: track content signature reversals.
+				// Convergence Detection (agentpatterns.ai, 2026) identifies
+				// oscillation as a critical failure pattern where the agent
+				// alternates between two versions without resolving trade-offs.
+				a.editOscillation.recordEdit(tc.Name, tc.Arguments, i+1)
+				if oscMsg := a.editOscillation.check(); oscMsg != "" {
+					if result.Content != "" {
+						result.Content = result.Content + "\n\n" + oscMsg
+					} else {
+						result.Content = oscMsg
 					}
 				}
 			}
