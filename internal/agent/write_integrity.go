@@ -248,6 +248,11 @@ func registerAllChecks() {
 		// Flags package-level variables mutated inside goroutines without
 		// synchronization (mutex, atomic, or channel).
 		{Name: "global-var-race", Langs: []Language{LangGo}, Run: sliceCheck(checkGlobalVarRace)},
+
+		// --- Float equality comparison detection ---
+		// Flags float32/float64 values compared with == or != which is
+		// unreliable due to IEEE 754 precision. Use math.Abs(a-b) < epsilon.
+		{Name: "float-equality", Langs: []Language{LangGo}, Run: sliceCheck(checkFloatEquality)},
 	}
 
 	debug.Log("integrity", "registered %d post-write checks", len(allChecks))
