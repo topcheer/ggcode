@@ -283,6 +283,11 @@ func registerAllChecks() {
 		// Flags init() functions that perform I/O, network calls, goroutine
 		// launches, or process termination at package import time.
 		{Name: "init-side-effects", Langs: []Language{LangGo}, Run: sliceCheck(checkInitSideEffects)},
+
+		// --- Constant conditional detection ---
+		// Flags if-statements whose condition is a compile-time constant
+		// (if true, if false, if 1 == 1, etc.) - dead branches hiding logic.
+		{Name: "constant-conditional", Langs: []Language{LangGo}, Run: sliceCheck(checkConstantConditional)},
 	}
 
 	debug.Log("integrity", "registered %d post-write checks", len(allChecks))
