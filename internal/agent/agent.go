@@ -207,6 +207,7 @@ type Agent struct {
 	ruleInjectCount            map[string]int                        // per-rule injection counter for dedup (caps repetitive hints)
 	approvalMemory             *permission.ApprovalMemory            // session-level learned approval patterns (auto-approve after N repeats)
 	toolDiversity              *diversityState                       // tool diversity stagnation detection (strategy imbalance awareness)
+	fileChurn                  *churnState                           // file churn detection (invalidated assumption awareness)
 	behaviorPattern            *behaviorPatternState                 // cross-run behavioral anti-pattern detection (systemic issue awareness)
 	perfBaseline               *perfBaselineState                    // cross-session performance regression detection
 	lastRunStats               *RunStats                             // stats from the most recent run (for post-run summary display)
@@ -317,6 +318,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		toolRedundancy:       newToolRedundancyAnalyzer(),
 		bgOrphan:             newBgOrphanState(),
 		toolDiversity:        newDiversityState(),
+		fileChurn:            newChurnState(),
 		errorCascade:         newErrorCascadeState(),
 		crossFileImpact:      newCrossFileImpactState(),
 		diskSpace:            newDiskSpaceState(),
@@ -1261,6 +1263,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.resetTransientRetryBudget()
 	a.compoundingFailure.reset()
 	a.toolDiversity.reset()
+	a.fileChurn.reset()
 	a.failureMode.reset()
 	a.toolFallback.reset()
 	a.errorCascade.reset()
@@ -2531,6 +2534,19 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					result.Content = result.Content + "\n\n" + diversityGuidance
 				} else {
 					result.Content = diversityGuidance
+				}
+			}
+
+			// File churn detection: track repeated edits to the same file.
+			// Each re-edit signals an invalidated assumption about the file.
+			if isEditTool(tc.Name) {
+				a.fileChurn.recordEdit(extractEditedPaths(tc))
+				if churnGuidance := a.fileChurn.check(); churnGuidance != "" {
+					if result.Content != "" {
+						result.Content = result.Content + "\n\n" + churnGuidance
+					} else {
+						result.Content = churnGuidance
+					}
 				}
 			}
 
