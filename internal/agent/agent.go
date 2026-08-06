@@ -206,6 +206,7 @@ type Agent struct {
 	ruleStore                  *RuleStore                            // cached rule store for hot-path rule injection (avoids per-tool disk I/O)
 	ruleInjectCount            map[string]int                        // per-rule injection counter for dedup (caps repetitive hints)
 	approvalMemory             *permission.ApprovalMemory            // session-level learned approval patterns (auto-approve after N repeats)
+	toolDiversity              *diversityState                       // tool diversity stagnation detection (strategy imbalance awareness)
 	behaviorPattern            *behaviorPatternState                 // cross-run behavioral anti-pattern detection (systemic issue awareness)
 	perfBaseline               *perfBaselineState                    // cross-session performance regression detection
 	lastRunStats               *RunStats                             // stats from the most recent run (for post-run summary display)
@@ -315,6 +316,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		searchParamGuard:     newSearchParamGuard(),
 		toolRedundancy:       newToolRedundancyAnalyzer(),
 		bgOrphan:             newBgOrphanState(),
+		toolDiversity:        newDiversityState(),
 		errorCascade:         newErrorCascadeState(),
 		crossFileImpact:      newCrossFileImpactState(),
 		diskSpace:            newDiskSpaceState(),
@@ -1258,6 +1260,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.toolFilter = tool.NewRelevanceFilter()
 	a.resetTransientRetryBudget()
 	a.compoundingFailure.reset()
+	a.toolDiversity.reset()
 	a.failureMode.reset()
 	a.toolFallback.reset()
 	a.errorCascade.reset()
@@ -2516,6 +2519,18 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					result.Content = result.Content + "\n\n" + debtGuidance
 				} else {
 					result.Content = debtGuidance
+				}
+			}
+
+			// Tool diversity stagnation: detect when one tool category dominates
+			// recent calls (strategy imbalance). AgentForesight-inspired leading
+			// indicator of trajectory failure.
+			a.toolDiversity.recordCall(tc.Name)
+			if diversityGuidance := a.toolDiversity.check(); diversityGuidance != "" {
+				if result.Content != "" {
+					result.Content = result.Content + "\n\n" + diversityGuidance
+				} else {
+					result.Content = diversityGuidance
 				}
 			}
 
