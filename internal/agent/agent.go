@@ -154,6 +154,7 @@ type Agent struct {
 	editFailRecovery           *editFailState                        // consecutive edit failure recovery guidance
 	scopeDrift                 *scopeDriftState                      // semantic scope creep detection (file-diversity tracking)
 	driftRecurrence            *driftRecurrenceState                 // drift recurrence detection (post-warning behavioral persistence)
+	constraintAmnesia          *constraintAmnesiaState               // constraint amnesia detection (early constraint forgetting)
 	exportGuard                *exportGuardState                     // breaking change detection for exported Go symbols (regression guard)
 	hubPackageGuard            *hubPackageState                      // per-edit blast-radius awareness for high fan-in packages
 	artifactGuard              *generatedArtifactState               // generated artifact / lock file edit warning
@@ -287,6 +288,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		editFailRecovery:     newEditFailState(),
 		scopeDrift:           newScopeDriftState(),
 		driftRecurrence:      newDriftRecurrenceState(),
+		constraintAmnesia:    newConstraintAmnesiaState(),
 		exportGuard:          newExportGuardState(),
 		hubPackageGuard:      newHubPackageState(),
 		artifactGuard:        newGeneratedArtifactState(),
@@ -1161,6 +1163,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			userText += b.Text
 		}
 	}
+
+	// Record explicit constraints from user message for amnesia detection.
+	a.constraintAmnesia.recordConstraints(userText, 1)
 	a.mu.RLock()
 	hookCfg := a.hookConfig
 	workDir := a.workingDir
@@ -1304,6 +1309,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.verbosityDrift.reset()
 	a.toolOveruse.reset()
 	a.assumptionTracker.reset()
+	a.constraintAmnesia.reset()
 	a.tunnelVision.reset()
 	a.queryConverge.reset()
 	a.prematureCommit.reset()
@@ -1519,6 +1525,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.contextManager.Add(provider.Message{
 				Role:    "user",
 				Content: []provider.ContentBlock{{Type: "text", Text: bgOrphanMsg}},
+			})
+			msgs = a.contextManager.Messages()
+		}
+
+		// Constraint amnesia: remind the agent of user-specified constraints
+		// that may have scrolled out of effective attention after many iterations.
+		// Catastrophic forgetting in token space (Letta/MemGPT 2025).
+		if caMsg := a.constraintAmnesia.maybeWarn(i + 1); caMsg != "" {
+			a.contextManager.Add(provider.Message{
+				Role:    "user",
+				Content: []provider.ContentBlock{{Type: "text", Text: caMsg}},
 			})
 			msgs = a.contextManager.Messages()
 		}
