@@ -225,6 +225,7 @@ type Agent struct {
 	toolOveruse                *toolOveruseState                     // tool overuse / self-awareness detection (unnecessary tool calls for known info)
 	assumptionTracker          *assumptionTrackerState               // implicit assumption detection (unverified guesses in assistant text)
 	scopeCreep                 *scopeCreepState                      // scope creep detection (unsolicited changes beyond request)
+	trajectoryHealth           *trajectoryHealthState                // metacognitive trajectory health synthesis (multi-signal composite)
 	reversibility              *reversibilityState                   // pre-action reversibility assessment (irreversible action safety check)
 	mindlessAction             *mindlessActionState                  // mindless action detection (rapid-fire tool calls without reasoning)
 	behaviorPattern            *behaviorPatternState                 // cross-run behavioral anti-pattern detection (systemic issue awareness)
@@ -355,6 +356,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		toolOveruse:          newToolOveruseState(),
 		assumptionTracker:    newAssumptionTrackerState(),
 		scopeCreep:           newScopeCreepState(),
+		trajectoryHealth:     newTrajectoryHealthState(),
 		mindlessAction:       newMindlessActionState(),
 		reversibility:        newReversibilityState(),
 		errorCascade:         newErrorCascadeState(),
@@ -1319,6 +1321,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.toolOveruse.reset()
 	a.assumptionTracker.reset()
 	a.scopeCreep.reset()
+	a.trajectoryHealth.reset()
 	a.mindlessAction.reset()
 	a.reversibility.reset()
 	a.constraintAmnesia.reset()
@@ -1867,6 +1870,27 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					Content: []provider.ContentBlock{{
 						Type: "text",
 						Text: mindlessActionWarning(a.mindlessAction.streak),
+					}},
+				})
+			}
+
+			// Trajectory health synthesizer (metacognitive layer): record
+			// per-iteration tool activity stats for composite health scoring.
+			if a.trajectoryHealth != nil {
+				eCnt, rCnt := countToolTypes(toolCalls)
+				assCnt := len(scanAssumptions(assistantText))
+				a.trajectoryHealth.recordIteration(eCnt, 0, len(toolCalls), rCnt, assCnt)
+			}
+
+			// Trajectory health warning: when composite score exceeds threshold,
+			// inject holistic guidance about accumulating risk.
+			if healthHint := a.maybeWarnTrajectoryHealth(); healthHint != "" {
+				debug.Log("agent", "Iteration %d: trajectory health synthesizer detected composite degradation", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: healthHint,
 					}},
 				})
 			}
