@@ -211,6 +211,7 @@ type Agent struct {
 	fileChurn                  *churnState                           // file churn detection (invalidated assumption awareness)
 	analysisParalysis          *analysisParalysisState               // analysis paralysis detection (exploration-heavy / action-starved loops)
 	silentError                *silentErrorState                     // silent error advancement detection (unaddressed error proceeding)
+	verbosityDrift             *verbosityDriftState                  // verbosity drift detection (token-to-productivity ratio degradation)
 	behaviorPattern            *behaviorPatternState                 // cross-run behavioral anti-pattern detection (systemic issue awareness)
 	perfBaseline               *perfBaselineState                    // cross-session performance regression detection
 	lastRunStats               *RunStats                             // stats from the most recent run (for post-run summary display)
@@ -325,6 +326,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		fileChurn:            newChurnState(),
 		analysisParalysis:    newAnalysisParalysisState(),
 		silentError:          newSilentErrorState(),
+		verbosityDrift:       newVerbosityDriftState(),
 		errorCascade:         newErrorCascadeState(),
 		crossFileImpact:      newCrossFileImpactState(),
 		diskSpace:            newDiskSpaceState(),
@@ -1273,6 +1275,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.fileChurn.reset()
 	a.analysisParalysis.reset()
 	a.silentError.reset()
+	a.verbosityDrift.reset()
 	a.failureMode.reset()
 	a.toolFallback.reset()
 	a.errorCascade.reset()
@@ -2592,6 +2595,18 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// SICA (arXiv:2504.15228) identifies exploration-heavy / action-starved
 			// trajectories as a leading indicator of task failure.
 			a.analysisParalysis.recordCall(tc.Name)
+
+			// Verbosity drift: track token-to-productivity ratio degradation.
+			// Agent Drift paper (arXiv:2601.04170) identifies verbosity growth
+			// without productive output as a key drift indicator.
+			a.verbosityDrift.recordIteration(a.contextManager.TokenCount(), len(runStats.FilesEdited))
+			if vdMsg := a.verbosityDrift.maybeWarn(runStats.Iterations); vdMsg != "" {
+				if result.Content != "" {
+					result.Content = result.Content + "\n\n" + vdMsg
+				} else {
+					result.Content = vdMsg
+				}
+			}
 			if apGuidance := a.analysisParalysis.check(); apGuidance != "" {
 				if result.Content != "" {
 					result.Content = result.Content + "\n\n" + apGuidance
