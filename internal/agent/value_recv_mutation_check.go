@@ -80,37 +80,14 @@ func checkValueRecvMutation(filePath, oldContent, newContent string) []string {
 
 	var issues []string
 	for _, decl := range file.Decls {
-		fn, ok := decl.(*ast.FuncDecl)
-		if !ok || fn.Recv == nil || len(fn.Recv.List) == 0 {
-			continue
-		}
-
-		recvName, isValueReceiver := vrmExtractReceiverName(fn.Recv.List[0])
-		if !isValueReceiver || recvName == "" || recvName == "_" {
-			continue
-		}
-
-		if fn.Body == nil {
-			continue
-		}
-
-		mutations := vrmFindReceiverMutations(fn.Body, recvName)
-		for _, msg := range mutations {
-			pos := fset.Position(msg.pos)
-			typeName := vrmReceiverTypeShort(fn.Recv.List[0].Type)
-			issues = append(issues, fmt.Sprintf(
-				"%s:%d: method (%s) %s has a VALUE receiver but mutates %s.%s -- "+
-					"changes are lost (operates on a copy). Use a POINTER receiver (*%s) instead.",
-				filePath, pos.Line, typeName,
-				fn.Name.Name, recvName, msg.field, typeName,
-			))
-			if len(issues) >= maxValueRecvMutationWarnings {
-				break
-			}
-		}
 		if len(issues) >= maxValueRecvMutationWarnings {
 			break
 		}
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok {
+			continue
+		}
+		vrmCheckFunc(fn, fset, filePath, &issues)
 	}
 
 	if len(issues) >= maxValueRecvMutationWarnings {
@@ -118,6 +95,31 @@ func checkValueRecvMutation(filePath, oldContent, newContent string) []string {
 	}
 
 	return issues
+}
+
+// vrmCheckFunc checks a single function declaration for value-receiver
+// mutations and appends any warnings to issues.
+func vrmCheckFunc(fn *ast.FuncDecl, fset *token.FileSet, filePath string, issues *[]string) {
+	if fn.Recv == nil || len(fn.Recv.List) == 0 || fn.Body == nil {
+		return
+	}
+	recvName, isValueReceiver := vrmExtractReceiverName(fn.Recv.List[0])
+	if !isValueReceiver || recvName == "" || recvName == "_" {
+		return
+	}
+	typeName := vrmReceiverTypeShort(fn.Recv.List[0].Type)
+	for _, msg := range vrmFindReceiverMutations(fn.Body, recvName) {
+		if len(*issues) >= maxValueRecvMutationWarnings {
+			return
+		}
+		pos := fset.Position(msg.pos)
+		*issues = append(*issues, fmt.Sprintf(
+			"%s:%d: method (%s) %s has a VALUE receiver but mutates %s.%s -- "+
+				"changes are lost (operates on a copy). Use a POINTER receiver (*%s) instead.",
+			filePath, pos.Line, typeName,
+			fn.Name.Name, recvName, msg.field, typeName,
+		))
+	}
 }
 
 // vrmMutation records where a receiver field was mutated.
