@@ -197,6 +197,7 @@ type Agent struct {
 	wastedExplore              *wastedExploreState                   // wasted exploration detection (search results never acted upon)
 	tunnelVision               *tunnelVisionState                    // tunnel vision detection (narrow file scope / under-exploration)
 	prematureCommit            *prematureCommitState                 // premature commitment detection (insufficient evidence before first edit)
+	diagnosticDisconnect       *diagnosticDisconnectState            // diagnostic-action disconnect detection (ignored diagnostics from failed tool calls)
 	errorCascade               *errorCascadeState                    // cascading failure detection (common-root-cause error clustering)
 	delegationOrch             *delegationState                      // delegation orchestration intelligence (orphaned delegations, serial anti-pattern, over-delegation)
 	crossFileImpact            *crossFileImpactState                 // pre-completion cross-file impact analysis (removed symbol breakage detection)
@@ -328,6 +329,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		wastedExplore:        newWastedExploreState(),
 		tunnelVision:         newTunnelVisionState(),
 		prematureCommit:      newPrematureCommitState(),
+		diagnosticDisconnect: newDiagnosticDisconnectState(),
 		toolDiversity:        newDiversityState(),
 		fileChurn:            newChurnState(),
 		analysisParalysis:    newAnalysisParalysisState(),
@@ -1286,6 +1288,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.verbosityDrift.reset()
 	a.tunnelVision.reset()
 	a.prematureCommit.reset()
+	a.diagnosticDisconnect.reset()
 	a.failureMode.reset()
 	a.toolFallback.reset()
 	a.errorCascade.reset()
@@ -1487,6 +1490,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.contextManager.Add(provider.Message{
 				Role:    "user",
 				Content: []provider.ContentBlock{{Type: "text", Text: bgOrphanMsg}},
+			})
+			msgs = a.contextManager.Messages()
+		}
+
+		// Diagnostic-action disconnect detection: when the agent has received
+		// diagnostic content (errors, undefined symbols) but subsequent actions
+		// don't address it, inject guidance to refocus on the known issue.
+		if ddMsg := a.diagnosticDisconnect.check(); ddMsg != "" {
+			a.contextManager.Add(provider.Message{
+				Role:    "user",
+				Content: []provider.ContentBlock{{Type: "text", Text: ddMsg}},
 			})
 			msgs = a.contextManager.Messages()
 		}
@@ -2489,6 +2503,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					result.Content = compoundingGuidance
 				}
 			}
+
+			// Diagnostic-action disconnect detection: when a tool result contains
+			// diagnostic content (errors, undefined symbols, etc.), track whether
+			// subsequent actions address it. Fires after N disconnected actions.
+			a.diagnosticDisconnect.recordToolResult(tc.Name, extractFilePathFromArgs(tc.Name, tc.Arguments), result.Content, i+1)
+			a.diagnosticDisconnect.recordAction(i + 1)
 
 			// Tool output claim verification: detect commonly misread failure
 			// signals in nominally-successful tool results (AgentRx-inspired).
