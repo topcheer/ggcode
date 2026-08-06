@@ -217,6 +217,10 @@ func registerAllChecks() {
 		// --- HTTP plaintext detection ---
 		// Flags http:// URLs in source code that should use https://.
 		{Name: "http-plaintext", Langs: []Language{LangGo, LangJSTS, LangPython}, Run: sliceCheck(checkHTTPPlaintext)},
+
+		// --- Path traversal vulnerability detection (OWASP A01:2021) ---
+		// Flags file I/O with user-controlled input lacking sanitization.
+		{Name: "path-traversal", Langs: []Language{LangGo, LangJSTS, LangPython}, Run: sliceCheck(checkPathTraversal)},
 	}
 
 	debug.Log("integrity", "registered %d post-write checks", len(allChecks))
