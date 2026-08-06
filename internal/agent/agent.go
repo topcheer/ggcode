@@ -181,6 +181,7 @@ type Agent struct {
 	latencyTracker             *LatencyTracker                       // per-tool latency baseline & slow-tool outlier detection
 	toolSequence               *toolSequenceValidator                // cross-iteration tool call anti-pattern detection
 	planDrift                  *planDriftState                       // plan drift detection (exit_plan_mode item tracking)
+	unverifiedClaim            *unverifiedClaimState                 // unverified success claim detection (text claims vs actual verification)
 	convergenceLock            *convergenceLockState                 // post-verification unnecessary edit drift detection
 	userSentiment              *userSentimentState                   // negative user feedback detection (frustration/rejection course correction)
 	taskAnchor                 *taskAnchorState                      // periodic task re-anchoring for context collapse prevention
@@ -289,6 +290,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		perfBaseline:         newPerfBaselineState(),
 		fulfillmentGate:      newFulfillmentGateState(),
 		planDrift:            newPlanDriftState(),
+		unverifiedClaim:      newUnverifiedClaimState(),
 		companionGuard:       newCompanionGuardState(),
 		complexityGate:       newComplexityGateState(),
 		changeReconcile:      newChangeReconcileState(),
@@ -1025,6 +1027,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.resetRepetitionTracker()
 	a.fulfillmentGate.reset()
 	a.planDrift.reset()
+	a.unverifiedClaim.reset()
 	a.companionGuard.reset()
 	a.complexityGate.reset()
 	a.behaviorPattern.reset()
@@ -1257,6 +1260,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.destructiveGuard.reset()
 	a.fulfillmentGate.reset()
 	a.planDrift.reset()
+	a.unverifiedClaim.reset()
 	a.companionGuard.reset()
 	a.complexityGate.reset()
 	a.verifyRegression.reset()
@@ -1888,6 +1892,22 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 						Content: []provider.ContentBlock{{
 							Type: "text",
 							Text: fulfillmentMsg,
+						}},
+					})
+					continue
+				}
+
+				// Unverified success claim detection: before returning, check if
+				// the agent's response claims verification results ("tests pass",
+				// "build succeeds") without having actually run verification
+				// commands. Zero-LLM-cost heuristic.
+				if claimMsg := a.checkUnverifiedClaim(textBuf, runStats); claimMsg != "" {
+					debug.Log("agent", "Iteration %d: unverified success claim detected, injecting reminder", i+1)
+					a.contextManager.Add(provider.Message{
+						Role: "user",
+						Content: []provider.ContentBlock{{
+							Type: "text",
+							Text: claimMsg,
 						}},
 					})
 					continue
