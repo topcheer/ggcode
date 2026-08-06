@@ -263,6 +263,11 @@ func registerAllChecks() {
 		// Flags bare `return` (no values) in long functions (>20 lines) with
 		// named return values, per Effective Go guidance.
 		{Name: "naked-return", Langs: []Language{LangGo}, Run: sliceCheck(checkNakedReturn)},
+
+		// --- Ignored error from Close() detection ---
+		// Flags `defer x.Close()` where the Close error is silently discarded.
+		// For writable handles this can mask data loss from failed flush.
+		{Name: "close-error-ignored", Langs: []Language{LangGo}, Run: sliceCheck(checkCloseErrorIgnored)},
 	}
 
 	debug.Log("integrity", "registered %d post-write checks", len(allChecks))
