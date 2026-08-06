@@ -208,6 +208,7 @@ type Agent struct {
 	approvalMemory             *permission.ApprovalMemory            // session-level learned approval patterns (auto-approve after N repeats)
 	toolDiversity              *diversityState                       // tool diversity stagnation detection (strategy imbalance awareness)
 	fileChurn                  *churnState                           // file churn detection (invalidated assumption awareness)
+	analysisParalysis          *analysisParalysisState               // analysis paralysis detection (exploration-heavy / action-starved loops)
 	behaviorPattern            *behaviorPatternState                 // cross-run behavioral anti-pattern detection (systemic issue awareness)
 	perfBaseline               *perfBaselineState                    // cross-session performance regression detection
 	lastRunStats               *RunStats                             // stats from the most recent run (for post-run summary display)
@@ -319,6 +320,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		bgOrphan:             newBgOrphanState(),
 		toolDiversity:        newDiversityState(),
 		fileChurn:            newChurnState(),
+		analysisParalysis:    newAnalysisParalysisState(),
 		errorCascade:         newErrorCascadeState(),
 		crossFileImpact:      newCrossFileImpactState(),
 		diskSpace:            newDiskSpaceState(),
@@ -1264,6 +1266,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.compoundingFailure.reset()
 	a.toolDiversity.reset()
 	a.fileChurn.reset()
+	a.analysisParalysis.reset()
 	a.failureMode.reset()
 	a.toolFallback.reset()
 	a.errorCascade.reset()
@@ -2547,6 +2550,18 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					} else {
 						result.Content = churnGuidance
 					}
+				}
+			}
+
+			// Analysis paralysis: detect prolonged exploration without action.
+			// SICA (arXiv:2504.15228) identifies exploration-heavy / action-starved
+			// trajectories as a leading indicator of task failure.
+			a.analysisParalysis.recordCall(tc.Name)
+			if apGuidance := a.analysisParalysis.check(); apGuidance != "" {
+				if result.Content != "" {
+					result.Content = result.Content + "\n\n" + apGuidance
+				} else {
+					result.Content = apGuidance
 				}
 			}
 
