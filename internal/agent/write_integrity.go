@@ -293,6 +293,11 @@ func registerAllChecks() {
 		// Flags unexported function parameters that are never referenced
 		// in the body, indicating dead code or incomplete refactoring.
 		{Name: "unused-param", Langs: []Language{LangGo}, Run: sliceCheck(checkUnusedParam)},
+
+		// --- Infinite loop without exit detection ---
+		// Flags `for {}` loops with no break/return/panic/os.Exit in the body.
+		// These compile cleanly but hang forever at runtime.
+		{Name: "infinite-loop", Langs: []Language{LangGo}, Run: sliceCheck(checkInfiniteLoop)},
 	}
 
 	debug.Log("integrity", "registered %d post-write checks", len(allChecks))
