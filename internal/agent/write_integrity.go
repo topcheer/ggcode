@@ -273,6 +273,11 @@ func registerAllChecks() {
 		// Flags methods with VALUE receivers that mutate receiver fields --
 		// changes are silently lost since the receiver is a copy.
 		{Name: "value-recv-mutation", Langs: []Language{LangGo}, Run: sliceCheck(checkValueRecvMutation)},
+
+		// --- Range over nil pointer detection ---
+		// Flags `for _, v := range *ptr {}` without a preceding nil check on ptr.
+		// If ptr is nil, this panics with a nil pointer dereference.
+		{Name: "range-nil-ptr", Langs: []Language{LangGo}, Run: stringCheck(checkRangeNilPtr)},
 	}
 
 	debug.Log("integrity", "registered %d post-write checks", len(allChecks))
