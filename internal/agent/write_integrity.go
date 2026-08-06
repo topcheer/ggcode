@@ -200,6 +200,7 @@ func registerAllChecks() {
 		{Name: "nesting-depth", Langs: []Language{LangGo}, Run: sliceCheck(checkNestingDepth)},
 		{Name: "goroutine-recover", Langs: []Language{LangGo}, Run: sliceCheck(checkGoroutineRecover)},
 		{Name: "unkeyed-struct", Langs: []Language{LangGo}, Run: sliceCheck(checkUnkeyedStruct)},
+		{Name: "context-key-misuse", Langs: []Language{LangGo}, Run: sliceCheck(checkContextKeyMisuse)},
 
 		// --- Multi-language checks ---
 		{Name: "insecure-patterns", Langs: []Language{LangGo, LangJSTS, LangPython}, Run: sliceCheck(checkInsecurePatterns)},
