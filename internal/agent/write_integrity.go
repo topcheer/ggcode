@@ -243,6 +243,11 @@ func registerAllChecks() {
 		// --- SQL injection detection (OWASP A03:2021) ---
 		// Flags SQL queries built via string concatenation or fmt.Sprintf.
 		{Name: "sql-injection", Langs: []Language{LangGo}, Run: sliceCheck(checkSQLInjection)},
+
+		// --- Global variable race detection ---
+		// Flags package-level variables mutated inside goroutines without
+		// synchronization (mutex, atomic, or channel).
+		{Name: "global-var-race", Langs: []Language{LangGo}, Run: sliceCheck(checkGlobalVarRace)},
 	}
 
 	debug.Log("integrity", "registered %d post-write checks", len(allChecks))
