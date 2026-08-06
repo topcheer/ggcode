@@ -193,6 +193,7 @@ type Agent struct {
 	mcpEcosystem               *mcpEcosystemState                    // MCP server health, conflict, and capability intelligence
 	mcpRuntime                 tool.MCPRuntime                       // MCP runtime for server snapshots (optional)
 	bgOrphan                   *bgOrphanState                        // orphaned background command detection (unchecked start_command jobs)
+	wastedExplore              *wastedExploreState                   // wasted exploration detection (search results never acted upon)
 	errorCascade               *errorCascadeState                    // cascading failure detection (common-root-cause error clustering)
 	delegationOrch             *delegationState                      // delegation orchestration intelligence (orphaned delegations, serial anti-pattern, over-delegation)
 	crossFileImpact            *crossFileImpactState                 // pre-completion cross-file impact analysis (removed symbol breakage detection)
@@ -319,6 +320,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		searchParamGuard:     newSearchParamGuard(),
 		toolRedundancy:       newToolRedundancyAnalyzer(),
 		bgOrphan:             newBgOrphanState(),
+		wastedExplore:        newWastedExploreState(),
 		toolDiversity:        newDiversityState(),
 		fileChurn:            newChurnState(),
 		analysisParalysis:    newAnalysisParalysisState(),
@@ -1034,6 +1036,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.monorepoScoper.reset()
 	a.mcpEcosystem.reset()
 	a.resetBgOrphan()
+	a.resetWastedExplore()
 	if a.delegationOrch != nil {
 		a.delegationOrch.resetForNewTurn()
 	}
@@ -1450,6 +1453,16 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.contextManager.Add(provider.Message{
 				Role:    "user",
 				Content: []provider.ContentBlock{{Type: "text", Text: thermalMsg}},
+			})
+			msgs = a.contextManager.Messages()
+		}
+
+		// Wasted exploration detection: nudge the agent when previous
+		// search results containing file paths were never acted upon.
+		if wastedExploreMsg := a.maybeWarnWastedExplore(i + 1); wastedExploreMsg != "" {
+			a.contextManager.Add(provider.Message{
+				Role:    "user",
+				Content: []provider.ContentBlock{{Type: "text", Text: wastedExploreMsg}},
 			})
 			msgs = a.contextManager.Messages()
 		}
@@ -2336,6 +2349,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Orphaned background command tracking: record start_command jobs
 			// and mark output checks. Detects forgotten background processes.
 			a.recordBgToolCall(tc.Name, tc.Arguments, result.Content, i+1)
+
+			// Wasted exploration tracking: record search tool results and
+			// file path consumption. Detects searches whose results were
+			// never acted upon.
+			a.recordWastedExploreToolCall(tc.Name, tc.Arguments, result.Content, i+1)
 
 			// Plan drift capture: when exit_plan_mode fires, extract plan items
 			// for later drift detection (spec-driven development tracking).
