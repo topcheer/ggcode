@@ -278,6 +278,11 @@ func registerAllChecks() {
 		// Flags `for _, v := range *ptr {}` without a preceding nil check on ptr.
 		// If ptr is nil, this panics with a nil pointer dereference.
 		{Name: "range-nil-ptr", Langs: []Language{LangGo}, Run: stringCheck(checkRangeNilPtr)},
+
+		// --- Init function with side effects detection ---
+		// Flags init() functions that perform I/O, network calls, goroutine
+		// launches, or process termination at package import time.
+		{Name: "init-side-effects", Langs: []Language{LangGo}, Run: sliceCheck(checkInitSideEffects)},
 	}
 
 	debug.Log("integrity", "registered %d post-write checks", len(allChecks))
