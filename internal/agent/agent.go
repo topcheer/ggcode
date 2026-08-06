@@ -219,6 +219,7 @@ type Agent struct {
 	silentError                *silentErrorState                     // silent error advancement detection (unaddressed error proceeding)
 	verbosityDrift             *verbosityDriftState                  // verbosity drift detection (token-to-productivity ratio degradation)
 	toolOveruse                *toolOveruseState                     // tool overuse / self-awareness detection (unnecessary tool calls for known info)
+	assumptionTracker          *assumptionTrackerState               // implicit assumption detection (unverified guesses in assistant text)
 	behaviorPattern            *behaviorPatternState                 // cross-run behavioral anti-pattern detection (systemic issue awareness)
 	perfBaseline               *perfBaselineState                    // cross-session performance regression detection
 	lastRunStats               *RunStats                             // stats from the most recent run (for post-run summary display)
@@ -341,6 +342,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		silentError:          newSilentErrorState(),
 		verbosityDrift:       newVerbosityDriftState(),
 		toolOveruse:          newToolOveruseState(),
+		assumptionTracker:    newAssumptionTrackerState(),
 		errorCascade:         newErrorCascadeState(),
 		crossFileImpact:      newCrossFileImpactState(),
 		diskSpace:            newDiskSpaceState(),
@@ -1296,6 +1298,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.silentError.reset()
 	a.verbosityDrift.reset()
 	a.toolOveruse.reset()
+	a.assumptionTracker.reset()
 	a.tunnelVision.reset()
 	a.prematureCommit.reset()
 	a.diagnosticDisconnect.reset()
@@ -1779,6 +1782,20 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 
 			a.contextManager.Add(resp.Message)
+
+			// Assumption tracker: scan assistant text for implicit unverified
+			// assumption language ("I assume", "probably", etc.). If threshold
+			// is exceeded, inject guidance to verify before proceeding.
+			if assumptionHint := a.maybeWarnAssumptions(assistantText); assumptionHint != "" {
+				debug.Log("agent", "Iteration %d: assumption tracker detected implicit assumptions", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: assumptionHint,
+					}},
+				})
+			}
 
 			if a.injectPendingInterruptions() {
 				continue
