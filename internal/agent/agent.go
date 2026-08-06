@@ -196,6 +196,7 @@ type Agent struct {
 	bgOrphan                   *bgOrphanState                        // orphaned background command detection (unchecked start_command jobs)
 	wastedExplore              *wastedExploreState                   // wasted exploration detection (search results never acted upon)
 	tunnelVision               *tunnelVisionState                    // tunnel vision detection (narrow file scope / under-exploration)
+	prematureCommit            *prematureCommitState                 // premature commitment detection (insufficient evidence before first edit)
 	errorCascade               *errorCascadeState                    // cascading failure detection (common-root-cause error clustering)
 	delegationOrch             *delegationState                      // delegation orchestration intelligence (orphaned delegations, serial anti-pattern, over-delegation)
 	crossFileImpact            *crossFileImpactState                 // pre-completion cross-file impact analysis (removed symbol breakage detection)
@@ -326,6 +327,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		bgOrphan:             newBgOrphanState(),
 		wastedExplore:        newWastedExploreState(),
 		tunnelVision:         newTunnelVisionState(),
+		prematureCommit:      newPrematureCommitState(),
 		toolDiversity:        newDiversityState(),
 		fileChurn:            newChurnState(),
 		analysisParalysis:    newAnalysisParalysisState(),
@@ -1283,6 +1285,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.silentError.reset()
 	a.verbosityDrift.reset()
 	a.tunnelVision.reset()
+	a.prematureCommit.reset()
 	a.failureMode.reset()
 	a.toolFallback.reset()
 	a.errorCascade.reset()
@@ -2583,6 +2586,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Verification debt: track unverified modifications (SAUP-inspired).
 			// Detects when the agent stacks edits without building/testing.
 			a.verifDebt.recordToolCall(tc.Name, string(tc.Arguments))
+
+			// Premature commitment: record exploratory actions to track
+			// evidence gathering before the first edit.
+			a.prematureCommit.recordExploration(tc.Name, extractFileHint(tc.Name, tc.Arguments))
 			if debtGuidance := a.verifDebt.maybeWarn(); debtGuidance != "" {
 				if result.Content != "" {
 					result.Content = result.Content + "\n\n" + debtGuidance
@@ -2610,6 +2617,20 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				for _, p := range extractEditedPaths(tc) {
 					a.tunnelVision.recordFile(p)
 				}
+
+				// Premature commitment detection: check evidence sufficiency
+				// at the first edit. ECLoop (arXiv:2607.28815) shows that
+				// editing before gathering sufficient context (callers, tests,
+				// related code) leads to incorrect patches in 20-27% of cases.
+				pcMsg := a.prematureCommit.checkFirstEdit(extractEditedPaths(tc))
+				if pcMsg != "" {
+					if result.Content != "" {
+						result.Content = result.Content + "\n\n" + pcMsg
+					} else {
+						result.Content = pcMsg
+					}
+				}
+
 				if churnGuidance := a.fileChurn.check(); churnGuidance != "" {
 					if result.Content != "" {
 						result.Content = result.Content + "\n\n" + churnGuidance
