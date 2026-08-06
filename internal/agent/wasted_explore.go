@@ -448,59 +448,85 @@ func looksLikeFilePath(s string) bool {
 }
 
 // extractFilePathsFromArgs extracts file paths from tool call arguments.
-func extractFilePathsFromArgs(args json.RawMessage, toolName string) []string {
-	var paths []string
-
+func extractFilePathsFromArgs(args json.RawMessage, _ string) []string {
 	var raw map[string]interface{}
 	if err := json.Unmarshal(args, &raw); err != nil {
-		return paths
+		return nil
 	}
+	paths := extractStringKeys(raw, "path", "file_path", "file", "directory", "source", "notebook_path", "url")
+	paths = append(paths, extractArrayPaths(raw)...)
+	return dedupPaths(paths)
+}
 
-	// Common path parameter names
-	pathKeys := []string{"path", "file_path", "file", "directory", "source",
-		"file_path", "notebook_path", "url"}
-	for _, key := range pathKeys {
-		if val, ok := raw[key]; ok {
-			if str, ok := val.(string); ok {
-				paths = append(paths, str)
-			}
+// extractStringKeys collects string values for the given keys from a map.
+func extractStringKeys(raw map[string]interface{}, keys ...string) []string {
+	var paths []string
+	for _, key := range keys {
+		val, ok := raw[key]
+		if !ok {
+			continue
 		}
-	}
-
-	// Handle array paths (multi_file_read, multi_file_edit, batch_replace, push_files)
-	for _, key := range []string{"files", "paths"} {
-		if val, ok := raw[key]; ok {
-			if arr, ok := val.([]interface{}); ok {
-				for _, item := range arr {
-					if m, ok := item.(map[string]interface{}); ok {
-						for _, pk := range []string{"path", "file_path"} {
-							if p, ok := m[pk].(string); ok {
-								paths = append(paths, p)
-							}
-						}
-					}
-					if s, ok := item.(string); ok {
-						paths = append(paths, s)
-					}
-				}
-			}
+		str, ok := val.(string)
+		if !ok {
+			continue
 		}
-	}
-
-	// For grep/search_files, extract the "path" or "directory" parameter
-	for _, key := range []string{"path", "directory"} {
-		if val, ok := raw[key]; ok {
-			if str, ok := val.(string); ok && str != "" && str != "." {
-				paths = append(paths, str)
-			}
+		// Skip trivial path values that don't represent a specific file
+		if (key == "path" || key == "directory") && (str == "" || str == ".") {
+			continue
 		}
+		paths = append(paths, str)
 	}
-
 	return paths
 }
 
-// extractSearchQuery extracts the search query/pattern from tool args for display.
-func extractSearchQuery(args json.RawMessage, toolName string) string {
+// extractArrayPaths collects paths from "files" and "paths" array parameters.
+func extractArrayPaths(raw map[string]interface{}) []string {
+	var paths []string
+	for _, key := range []string{"files", "paths"} {
+		val, ok := raw[key]
+		if !ok {
+			continue
+		}
+		arr, ok := val.([]interface{})
+		if !ok {
+			continue
+		}
+		paths = append(paths, extractItemsFromArray(arr)...)
+	}
+	return paths
+}
+
+// extractItemsFromArray extracts path strings from array items (maps or strings).
+func extractItemsFromArray(arr []interface{}) []string {
+	var paths []string
+	for _, item := range arr {
+		if m, ok := item.(map[string]interface{}); ok {
+			for _, pk := range []string{"path", "file_path"} {
+				if p, ok := m[pk].(string); ok {
+					paths = append(paths, p)
+				}
+			}
+		}
+		if s, ok := item.(string); ok {
+			paths = append(paths, s)
+		}
+	}
+	return paths
+}
+
+// dedupPaths removes duplicate entries while preserving order.
+func dedupPaths(paths []string) []string {
+	seen := make(map[string]bool)
+	var result []string
+	for _, p := range paths {
+		if !seen[p] {
+			seen[p] = true
+			result = append(result, p)
+		}
+	}
+	return result
+}
+func extractSearchQuery(args json.RawMessage, _ string) string {
 	var raw map[string]interface{}
 	if err := json.Unmarshal(args, &raw); err != nil {
 		return ""
