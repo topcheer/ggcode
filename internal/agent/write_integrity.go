@@ -268,6 +268,11 @@ func registerAllChecks() {
 		// Flags `defer x.Close()` where the Close error is silently discarded.
 		// For writable handles this can mask data loss from failed flush.
 		{Name: "close-error-ignored", Langs: []Language{LangGo}, Run: sliceCheck(checkCloseErrorIgnored)},
+
+		// --- Value receiver mutation detection ---
+		// Flags methods with VALUE receivers that mutate receiver fields --
+		// changes are silently lost since the receiver is a copy.
+		{Name: "value-recv-mutation", Langs: []Language{LangGo}, Run: sliceCheck(checkValueRecvMutation)},
 	}
 
 	debug.Log("integrity", "registered %d post-write checks", len(allChecks))
