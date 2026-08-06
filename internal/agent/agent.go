@@ -225,6 +225,7 @@ type Agent struct {
 	toolOveruse                *toolOveruseState                     // tool overuse / self-awareness detection (unnecessary tool calls for known info)
 	assumptionTracker          *assumptionTrackerState               // implicit assumption detection (unverified guesses in assistant text)
 	scopeCreep                 *scopeCreepState                      // scope creep detection (unsolicited changes beyond request)
+	mindlessAction             *mindlessActionState                  // mindless action detection (rapid-fire tool calls without reasoning)
 	behaviorPattern            *behaviorPatternState                 // cross-run behavioral anti-pattern detection (systemic issue awareness)
 	perfBaseline               *perfBaselineState                    // cross-session performance regression detection
 	lastRunStats               *RunStats                             // stats from the most recent run (for post-run summary display)
@@ -353,6 +354,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		toolOveruse:          newToolOveruseState(),
 		assumptionTracker:    newAssumptionTrackerState(),
 		scopeCreep:           newScopeCreepState(),
+		mindlessAction:       newMindlessActionState(),
 		errorCascade:         newErrorCascadeState(),
 		crossFileImpact:      newCrossFileImpactState(),
 		diskSpace:            newDiskSpaceState(),
@@ -1315,6 +1317,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.toolOveruse.reset()
 	a.assumptionTracker.reset()
 	a.scopeCreep.reset()
+	a.mindlessAction.reset()
 	a.constraintAmnesia.reset()
 	a.tunnelVision.reset()
 	a.queryConverge.reset()
@@ -1847,6 +1850,20 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					Content: []provider.ContentBlock{{
 						Type: "text",
 						Text: scopeHint,
+					}},
+				})
+			}
+
+			// Mindless action detector: tracks consecutive tool-call steps
+			// with minimal reasoning text. When 4+ consecutive mindless steps
+			// occur, inject guidance to pause and reflect before continuing.
+			if a.mindlessAction.recordStep(len(assistantText), len(toolCalls) > 0) {
+				debug.Log("agent", "Iteration %d: mindless action detector triggered (streak=%d)", i+1, a.mindlessAction.streak)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: mindlessActionWarning(a.mindlessAction.streak),
 					}},
 				})
 			}
