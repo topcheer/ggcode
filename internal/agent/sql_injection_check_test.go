@@ -1,0 +1,172 @@
+package agent
+
+import (
+	"testing"
+)
+
+func TestSQLInjection_StringConcat(t *testing.T) {
+	src := `package main
+import "database/sql"
+func f(db *sql.DB, name string) {
+	db.Query("SELECT * FROM users WHERE name = '" + name + "'")
+}`
+	warnings := checkSQLInjection("test.go", "", src)
+	if len(warnings) != 1 {
+		t.Fatalf("expected 1 warning, got %d: %v", len(warnings), warnings)
+	}
+	if !contains(warnings[0], "string concatenation") {
+		t.Errorf("expected concat mention, got: %s", warnings[0])
+	}
+}
+
+func TestSQLInjection_FmtSprintf(t *testing.T) {
+	src := `package main
+import ("database/sql"; "fmt")
+func f(db *sql.DB, role string) {
+	db.Exec(fmt.Sprintf("DELETE FROM orders WHERE role = '%s'", role))
+}`
+	warnings := checkSQLInjection("test.go", "", src)
+	if len(warnings) != 1 {
+		t.Fatalf("expected 1 warning, got %d: %v", len(warnings), warnings)
+	}
+	if !contains(warnings[0], "fmt.Sprintf") {
+		t.Errorf("expected Sprintf mention, got: %s", warnings[0])
+	}
+}
+
+func TestSQLInjection_SafeParam(t *testing.T) {
+	src := `package main
+import "database/sql"
+func f(db *sql.DB, name string) {
+	db.Query("SELECT * FROM users WHERE name = ?", name)
+}`
+	warnings := checkSQLInjection("test.go", "", src)
+	if len(warnings) != 0 {
+		t.Fatalf("expected 0 warnings for parameterized query, got %d: %v", len(warnings), warnings)
+	}
+}
+
+func TestSQLInjection_QueryRowContext(t *testing.T) {
+	src := `package main
+import ("database/sql"; "context")
+func f(ctx context.Context, db *sql.DB, id string) {
+	db.QueryRowContext(ctx, "SELECT * FROM t WHERE id = " + id)
+}`
+	warnings := checkSQLInjection("test.go", "", src)
+	if len(warnings) != 1 {
+		t.Fatalf("expected 1 warning for context method, got %d: %v", len(warnings), warnings)
+	}
+}
+
+func TestSQLInjection_ExecContextSafe(t *testing.T) {
+	src := `package main
+import ("database/sql"; "context")
+func f(ctx context.Context, db *sql.DB, id int) {
+	db.ExecContext(ctx, "UPDATE t SET active = 1 WHERE id = ?", id)
+}`
+	warnings := checkSQLInjection("test.go", "", src)
+	if len(warnings) != 0 {
+		t.Fatalf("expected 0 for safe ExecContext, got %d: %v", len(warnings), warnings)
+	}
+}
+
+func TestSQLInjection_NonDBMethodIgnored(t *testing.T) {
+	src := `package main
+func f(s string) string {
+	return "prefix" + s
+}`
+	warnings := checkSQLInjection("test.go", "", src)
+	if len(warnings) != 0 {
+		t.Fatalf("expected 0 for non-DB method, got %d: %v", len(warnings), warnings)
+	}
+}
+
+func TestSQLInjection_PrepareSprintf(t *testing.T) {
+	src := `package main
+import ("database/sql"; "fmt")
+func f(db *sql.DB, table string) {
+	db.Prepare(fmt.Sprintf("SELECT * FROM %s WHERE id = ?", table))
+}`
+	warnings := checkSQLInjection("test.go", "", src)
+	if len(warnings) != 1 {
+		t.Fatalf("expected 1 warning for Prepare+Sprintf, got %d: %v", len(warnings), warnings)
+	}
+}
+
+func TestSQLInjection_MultipleMethods(t *testing.T) {
+	src := `package main
+import "database/sql"
+func f(db *sql.DB, a, b string) {
+	db.Query("SELECT 1 WHERE x = '" + a + "'")
+	db.Exec("DELETE FROM t WHERE y = '" + b + "'")
+}`
+	warnings := checkSQLInjection("test.go", "", src)
+	if len(warnings) != 2 {
+		t.Fatalf("expected 2 warnings, got %d: %v", len(warnings), warnings)
+	}
+}
+
+func TestSQLInjection_CappedWarnings(t *testing.T) {
+	src := `package main
+import "database/sql"
+func f(db *sql.DB) {
+	db.Query("x" + "a")
+	db.Query("x" + "b")
+	db.Query("x" + "c")
+	db.Query("x" + "d")
+	db.Query("x" + "e")
+}`
+	warnings := checkSQLInjection("test.go", "", src)
+	if len(warnings) != maxSQLInjectionWarnings+1 {
+		t.Fatalf("expected %d warnings (capped + notice), got %d", maxSQLInjectionWarnings+1, len(warnings))
+	}
+}
+
+func TestSQLInjection_NonGoFile(t *testing.T) {
+	warnings := checkSQLInjection("test.py", "", "print('hello')")
+	if len(warnings) != 0 {
+		t.Fatalf("expected 0 for non-Go file, got %d", len(warnings))
+	}
+}
+
+func TestSQLInjection_EmptyContent(t *testing.T) {
+	warnings := checkSQLInjection("test.go", "", "")
+	if len(warnings) != 0 {
+		t.Fatalf("expected 0 for empty content, got %d", len(warnings))
+	}
+}
+
+func TestSQLInjection_SyntaxError(t *testing.T) {
+	src := `package main
+func f(db) {
+	db.Query("x" +`
+	warnings := checkSQLInjection("test.go", "", src)
+	if len(warnings) != 0 {
+		t.Fatalf("expected 0 for syntax error, got %d", len(warnings))
+	}
+}
+
+func TestSQLInjection_NamedExec(t *testing.T) {
+	src := `package main
+func f(db interface{ NamedExec(string, interface{}) interface{} }, name string) {
+	db.NamedExec("SELECT * FROM u WHERE n = '" + name + "'", nil)
+}`
+	warnings := checkSQLInjection("test.go", "", src)
+	if len(warnings) != 1 {
+		t.Fatalf("expected 1 for NamedExec concat, got %d: %v", len(warnings), warnings)
+	}
+}
+
+func TestSQLInjection_LiteralOnly(t *testing.T) {
+	src := `package main
+import "database/sql"
+func f(db *sql.DB) {
+	db.Query("SELECT * FROM users")
+}`
+	warnings := checkSQLInjection("test.go", "", src)
+	if len(warnings) != 0 {
+		t.Fatalf("expected 0 for literal query, got %d: %v", len(warnings), warnings)
+	}
+}
+
+// Note: `contains` helper is defined in reflection_test.go

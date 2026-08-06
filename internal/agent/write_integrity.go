@@ -239,6 +239,10 @@ func registerAllChecks() {
 		// --- Ignored append() return value detection ---
 		// Flags standalone `append(slice, item)` without assignment -- original slice unchanged.
 		{Name: "append-ignored", Langs: []Language{LangGo}, Run: sliceCheck(checkAppendIgnored)},
+
+		// --- SQL injection detection (OWASP A03:2021) ---
+		// Flags SQL queries built via string concatenation or fmt.Sprintf.
+		{Name: "sql-injection", Langs: []Language{LangGo}, Run: sliceCheck(checkSQLInjection)},
 	}
 
 	debug.Log("integrity", "registered %d post-write checks", len(allChecks))
