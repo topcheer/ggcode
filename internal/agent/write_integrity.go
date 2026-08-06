@@ -231,6 +231,10 @@ func registerAllChecks() {
 		// --- Hardcoded host/port detection (12-factor violation) ---
 		// Flags hardcoded bind addresses (:8080, 0.0.0.0:3000, etc.) in server code.
 		{Name: "hardcoded-host", Langs: []Language{LangGo, LangJSTS, LangPython}, Run: sliceCheck(checkHardcodedHost)},
+
+		// --- Empty error check body detection ---
+		// Flags `if err != nil {}` with empty body - error is checked but not handled.
+		{Name: "empty-error-body", Langs: []Language{LangGo}, Run: sliceCheck(checkEmptyErrorBody)},
 	}
 
 	debug.Log("integrity", "registered %d post-write checks", len(allChecks))
