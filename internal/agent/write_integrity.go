@@ -258,6 +258,11 @@ func registerAllChecks() {
 		// Flags defer statements where arguments contain function calls
 		// that are evaluated immediately (eager) rather than at defer time.
 		{Name: "defer-arg-eval", Langs: []Language{LangGo}, Run: sliceCheck(checkDeferArgEval)},
+
+		// --- Naked return in long function detection ---
+		// Flags bare `return` (no values) in long functions (>20 lines) with
+		// named return values, per Effective Go guidance.
+		{Name: "naked-return", Langs: []Language{LangGo}, Run: sliceCheck(checkNakedReturn)},
 	}
 
 	debug.Log("integrity", "registered %d post-write checks", len(allChecks))
