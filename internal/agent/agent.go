@@ -196,6 +196,7 @@ type Agent struct {
 	mcpEcosystem               *mcpEcosystemState                    // MCP server health, conflict, and capability intelligence
 	mcpRuntime                 tool.MCPRuntime                       // MCP runtime for server snapshots (optional)
 	bgOrphan                   *bgOrphanState                        // orphaned background command detection (unchecked start_command jobs)
+	queryConverge              *queryConvergeState                   // query convergence failure detection (repeated similar searches without action)
 	wastedExplore              *wastedExploreState                   // wasted exploration detection (search results never acted upon)
 	tunnelVision               *tunnelVisionState                    // tunnel vision detection (narrow file scope / under-exploration)
 	prematureCommit            *prematureCommitState                 // premature commitment detection (insufficient evidence before first edit)
@@ -333,6 +334,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		searchParamGuard:     newSearchParamGuard(),
 		toolRedundancy:       newToolRedundancyAnalyzer(),
 		bgOrphan:             newBgOrphanState(),
+		queryConverge:        newQueryConvergeState(),
 		wastedExplore:        newWastedExploreState(),
 		tunnelVision:         newTunnelVisionState(),
 		prematureCommit:      newPrematureCommitState(),
@@ -1303,6 +1305,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.toolOveruse.reset()
 	a.assumptionTracker.reset()
 	a.tunnelVision.reset()
+	a.queryConverge.reset()
 	a.prematureCommit.reset()
 	a.diagnosticDisconnect.reset()
 	a.failureMode.reset()
@@ -1502,6 +1505,16 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// Orphaned background command detection: nudge the agent to check
 		// output of background commands (start_command) that haven't been
 		// read for several iterations.
+		// Query convergence failure: detect repeated similar search queries
+		// across iterations without progressing to code action.
+		if qcMsg := a.queryConverge.maybeWarn(i + 1); qcMsg != "" {
+			a.contextManager.Add(provider.Message{
+				Role:    "user",
+				Content: []provider.ContentBlock{{Type: "text", Text: qcMsg}},
+			})
+			msgs = a.contextManager.Messages()
+		}
+
 		if bgOrphanMsg := a.maybeWarnBgOrphan(i + 1); bgOrphanMsg != "" {
 			a.contextManager.Add(provider.Message{
 				Role:    "user",
@@ -2453,6 +2466,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// file path consumption. Detects searches whose results were
 			// never acted upon.
 			a.recordWastedExploreToolCall(tc.Name, tc.Arguments, result.Content, i+1)
+
+			// Query convergence tracking: record search queries and code
+			// actions to detect repeated similar searches without progress.
+			a.queryConverge.recordToolCall(tc.Name, string(tc.Arguments), i+1)
 
 			// Plan drift capture: when exit_plan_mode fires, extract plan items
 			// for later drift detection (spec-driven development tracking).
