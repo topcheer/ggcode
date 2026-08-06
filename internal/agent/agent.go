@@ -218,6 +218,7 @@ type Agent struct {
 	analysisParalysis          *analysisParalysisState               // analysis paralysis detection (exploration-heavy / action-starved loops)
 	silentError                *silentErrorState                     // silent error advancement detection (unaddressed error proceeding)
 	verbosityDrift             *verbosityDriftState                  // verbosity drift detection (token-to-productivity ratio degradation)
+	toolOveruse                *toolOveruseState                     // tool overuse / self-awareness detection (unnecessary tool calls for known info)
 	behaviorPattern            *behaviorPatternState                 // cross-run behavioral anti-pattern detection (systemic issue awareness)
 	perfBaseline               *perfBaselineState                    // cross-session performance regression detection
 	lastRunStats               *RunStats                             // stats from the most recent run (for post-run summary display)
@@ -339,6 +340,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		analysisParalysis:    newAnalysisParalysisState(),
 		silentError:          newSilentErrorState(),
 		verbosityDrift:       newVerbosityDriftState(),
+		toolOveruse:          newToolOveruseState(),
 		errorCascade:         newErrorCascadeState(),
 		crossFileImpact:      newCrossFileImpactState(),
 		diskSpace:            newDiskSpaceState(),
@@ -1293,6 +1295,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.analysisParalysis.reset()
 	a.silentError.reset()
 	a.verbosityDrift.reset()
+	a.toolOveruse.reset()
 	a.tunnelVision.reset()
 	a.prematureCommit.reset()
 	a.diagnosticDisconnect.reset()
@@ -2145,6 +2148,14 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			if hint := a.toolRedundancy.recordCall(tc.Name, tc.Arguments); hint != "" {
 				redundancyHint = hint
 			}
+			// Tool overuse / self-awareness detection: warn when the agent
+			// calls tools to retrieve information it already has (read-after-
+			// write, unchanged dir re-list, trivial env commands).
+			var overuseHint string
+			if hint := a.toolOveruse.maybeWarn(tc.Name, string(tc.Arguments), i+1); hint != "" {
+				overuseHint = hint
+				debug.Log("agent", "Iteration %d: tool overuse detected for %s", i+1, tc.Name)
+			}
 			// Check for project memory but defer injection
 			if mc, mf, mt := a.pendingProjectMemoryForTool(tc); len(mf) > 0 && strings.TrimSpace(mc) != "" {
 				if deferredMemoryContent == "" {
@@ -2860,7 +2871,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				for i, ri := range result.Images {
 					imgs[i] = provider.ContentImage{MIME: ri.MIME, Base64: ri.Base64}
 				}
-				if loopGuidance != "" || searchParamHint != "" || redundancyHint != "" {
+				if loopGuidance != "" || searchParamHint != "" || redundancyHint != "" || overuseHint != "" {
 					var hints []string
 					if searchParamHint != "" {
 						hints = append(hints, searchParamHint)
@@ -2870,12 +2881,15 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					}
 					if redundancyHint != "" {
 						hints = append(hints, redundancyHint)
+					}
+					if overuseHint != "" {
+						hints = append(hints, overuseHint)
 					}
 					result.Content = result.Content + "\n\n" + strings.Join(hints, "\n\n")
 				}
 				toolResults = append(toolResults, provider.ToolResultWithImages(tc.ID, tc.Name, result.Content, imgs, result.IsError))
 			} else {
-				if loopGuidance != "" || searchParamHint != "" || redundancyHint != "" {
+				if loopGuidance != "" || searchParamHint != "" || redundancyHint != "" || overuseHint != "" {
 					var hints []string
 					if searchParamHint != "" {
 						hints = append(hints, searchParamHint)
@@ -2885,6 +2899,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					}
 					if redundancyHint != "" {
 						hints = append(hints, redundancyHint)
+					}
+					if overuseHint != "" {
+						hints = append(hints, overuseHint)
 					}
 					result.Content = result.Content + "\n\n" + strings.Join(hints, "\n\n")
 				}
