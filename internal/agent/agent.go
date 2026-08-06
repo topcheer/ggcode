@@ -199,6 +199,7 @@ type Agent struct {
 	pressureForecaster         *pressureForecaster                   // context window pressure forecasting (predictive compaction warning)
 	redundantRead              *redundantReadState                   // redundant re-read detection (context waste prevention)
 	searchParamGuard           *searchParamGuardState                // search parameter quality guard (vague/broad pattern detection)
+	contextBudgetGate          *contextBudgetGate                    // context-budget-aware tool call gate (prevents expensive calls near compaction)
 	toolRedundancy             *toolRedundancyState                  // scattered duplicate tool call detection (non-consecutive redundancy)
 	ruleStore                  *RuleStore                            // cached rule store for hot-path rule injection (avoids per-tool disk I/O)
 	ruleInjectCount            map[string]int                        // per-rule injection counter for dedup (caps repetitive hints)
@@ -307,6 +308,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		pressureForecaster:   newPressureForecaster(),
 		redundantRead:        newRedundantReadState(),
 		searchParamGuard:     newSearchParamGuard(),
+		contextBudgetGate:    newContextBudgetGate(),
 		toolRedundancy:       newToolRedundancyAnalyzer(),
 		bgOrphan:             newBgOrphanState(),
 		errorCascade:         newErrorCascadeState(),
@@ -1014,6 +1016,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.argSizeGuardFires = 0
 	a.redundantRead.reset()
 	a.searchParamGuard.reset()
+	a.contextBudgetGate.reset()
 	a.toolRedundancy.reset()
 	a.toolSequence.reset()
 	a.shellNativeHint.reset()
@@ -1244,6 +1247,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.argSizeGuardFires = 0
 	a.redundantRead.reset()
 	a.searchParamGuard.reset()
+	a.contextBudgetGate.reset()
 	a.toolRedundancy.reset()
 	a.toolSequence.reset()
 	a.taskAnchor.reset(userPromptForStats, time.Now())
@@ -2039,6 +2043,18 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			if hint := a.searchParamGuard.checkParamQuality(tc.Name, tc.Arguments); hint != "" {
 				searchParamHint = hint
 			}
+			// Context budget gate: warn about expensive tool calls when context
+			// is near compaction threshold (e.g., read_file without limit at 80% fill).
+			var budgetHint string
+			if hint := a.contextBudgetGate.checkBudgetAwareness(tc.Name, tc.Arguments, func() float64 {
+				threshold := a.contextManager.AutoCompactThreshold()
+				if threshold <= 0 {
+					return 0
+				}
+				return float64(a.contextManager.TokenCount()) / float64(threshold)
+			}()); hint != "" {
+				budgetHint = hint
+			}
 			// Tool call redundancy analyzer: detect scattered (non-consecutive)
 			// duplicate calls to the same tool with identical arguments.
 			var redundancyHint string
@@ -2602,10 +2618,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				for i, ri := range result.Images {
 					imgs[i] = provider.ContentImage{MIME: ri.MIME, Base64: ri.Base64}
 				}
-				if loopGuidance != "" || searchParamHint != "" || redundancyHint != "" {
+				if loopGuidance != "" || searchParamHint != "" || redundancyHint != "" || budgetHint != "" {
 					var hints []string
 					if searchParamHint != "" {
 						hints = append(hints, searchParamHint)
+					}
+					if budgetHint != "" {
+						hints = append(hints, budgetHint)
 					}
 					if loopGuidance != "" {
 						hints = append(hints, loopGuidance)
@@ -2617,10 +2636,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				}
 				toolResults = append(toolResults, provider.ToolResultWithImages(tc.ID, tc.Name, result.Content, imgs, result.IsError))
 			} else {
-				if loopGuidance != "" || searchParamHint != "" || redundancyHint != "" {
+				if loopGuidance != "" || searchParamHint != "" || redundancyHint != "" || budgetHint != "" {
 					var hints []string
 					if searchParamHint != "" {
 						hints = append(hints, searchParamHint)
+					}
+					if budgetHint != "" {
+						hints = append(hints, budgetHint)
 					}
 					if loopGuidance != "" {
 						hints = append(hints, loopGuidance)
