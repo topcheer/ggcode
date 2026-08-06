@@ -130,6 +130,7 @@ func registerAllChecks() {
 			return checkResourceLeaks(fp, nc)
 		})},
 		{Name: "error-swallowing", Langs: []Language{LangGo}, Run: sliceCheck(checkErrorSwallowing)},
+		{Name: "error-nopropagate", Langs: []Language{LangGo}, Run: sliceCheck(checkErrorNoPropagate)},
 		{Name: "defer-in-loop", Langs: []Language{LangGo}, Run: sliceCheck(checkDeferInLoop)},
 		{Name: "unchecked-type-assert", Langs: []Language{LangGo}, Run: sliceCheck(checkUncheckedTypeAssert)},
 		{Name: "select-timer-leak", Langs: []Language{LangGo}, Run: sliceCheck(checkSelectTimerLeak)},
