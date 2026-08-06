@@ -195,6 +195,7 @@ type Agent struct {
 	mcpRuntime                 tool.MCPRuntime                       // MCP runtime for server snapshots (optional)
 	bgOrphan                   *bgOrphanState                        // orphaned background command detection (unchecked start_command jobs)
 	wastedExplore              *wastedExploreState                   // wasted exploration detection (search results never acted upon)
+	tunnelVision               *tunnelVisionState                    // tunnel vision detection (narrow file scope / under-exploration)
 	errorCascade               *errorCascadeState                    // cascading failure detection (common-root-cause error clustering)
 	delegationOrch             *delegationState                      // delegation orchestration intelligence (orphaned delegations, serial anti-pattern, over-delegation)
 	crossFileImpact            *crossFileImpactState                 // pre-completion cross-file impact analysis (removed symbol breakage detection)
@@ -324,6 +325,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		toolRedundancy:       newToolRedundancyAnalyzer(),
 		bgOrphan:             newBgOrphanState(),
 		wastedExplore:        newWastedExploreState(),
+		tunnelVision:         newTunnelVisionState(),
 		toolDiversity:        newDiversityState(),
 		fileChurn:            newChurnState(),
 		analysisParalysis:    newAnalysisParalysisState(),
@@ -1280,6 +1282,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.analysisParalysis.reset()
 	a.silentError.reset()
 	a.verbosityDrift.reset()
+	a.tunnelVision.reset()
 	a.failureMode.reset()
 	a.toolFallback.reset()
 	a.errorCascade.reset()
@@ -2201,6 +2204,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				// Record created files so the unread-edit guard exempts them.
 				for _, p := range extractCreateFilePaths(tc.Name, tc.Arguments) {
 					a.unreadEdit.recordCreated(p)
+					a.tunnelVision.recordFile(p)
 					a.fileFreshness.recordWrite(p)
 					a.readHash.recordWriteHash(p)
 				}
@@ -2223,6 +2227,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			if (tc.Name == "read_file" || tc.Name == "multi_file_read") && !result.IsError {
 				for _, p := range extractReadFilePaths(tc.Name, tc.Arguments) {
 					a.unreadEdit.recordRead(p)
+					a.tunnelVision.recordFile(p)
 					a.editFailRecovery.recordRead(p)
 					a.fileFreshness.recordRead(p)
 					a.readHash.recordReadHash(p)
@@ -2602,6 +2607,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Each re-edit signals an invalidated assumption about the file.
 			if isEditTool(tc.Name) {
 				a.fileChurn.recordEdit(extractEditedPaths(tc))
+				for _, p := range extractEditedPaths(tc) {
+					a.tunnelVision.recordFile(p)
+				}
 				if churnGuidance := a.fileChurn.check(); churnGuidance != "" {
 					if result.Content != "" {
 						result.Content = result.Content + "\n\n" + churnGuidance
@@ -2632,6 +2640,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					result.Content = result.Content + "\n\n" + apGuidance
 				} else {
 					result.Content = apGuidance
+				}
+			}
+
+			// Tunnel vision detection: warn when the agent has done many
+			// iterations but only touched a few files (under-exploration).
+			// Coppersun.dev 2026: "context window holds 1-2 files; bugs span 3+"
+			if tvMsg := a.tunnelVision.check(runStats.Iterations); tvMsg != "" {
+				if result.Content != "" {
+					result.Content = result.Content + "\n\n" + tvMsg
+				} else {
+					result.Content = tvMsg
 				}
 			}
 
