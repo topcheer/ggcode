@@ -233,38 +233,11 @@ func nrInspectStmt(stmt ast.Stmt, funcName string, bodyLen int,
 			nrFindNakedReturns(s.Body, funcName, bodyLen, fset, results)
 		}
 
-	case *ast.SwitchStmt:
-		if s.Body != nil {
-			for _, c := range s.Body.List {
-				if clause, ok := c.(*ast.CaseClause); ok {
-					for _, cs := range clause.Body {
-						nrInspectStmt(cs, funcName, bodyLen, fset, results)
-					}
-				}
-			}
-		}
-
-	case *ast.TypeSwitchStmt:
-		if s.Body != nil {
-			for _, c := range s.Body.List {
-				if clause, ok := c.(*ast.CaseClause); ok {
-					for _, cs := range clause.Body {
-						nrInspectStmt(cs, funcName, bodyLen, fset, results)
-					}
-				}
-			}
-		}
+	case *ast.SwitchStmt, *ast.TypeSwitchStmt:
+		nrWalkCaseClauses(s, funcName, bodyLen, fset, results)
 
 	case *ast.SelectStmt:
-		if s.Body != nil {
-			for _, comm := range s.Body.List {
-				if clause, ok := comm.(*ast.CommClause); ok {
-					for _, cs := range clause.Body {
-						nrInspectStmt(cs, funcName, bodyLen, fset, results)
-					}
-				}
-			}
-		}
+		nrWalkCommClauses(s, funcName, bodyLen, fset, results)
 
 	case *ast.BlockStmt:
 		nrFindNakedReturns(s, funcName, bodyLen, fset, results)
@@ -272,6 +245,45 @@ func nrInspectStmt(stmt ast.Stmt, funcName string, bodyLen int,
 	case *ast.LabeledStmt:
 		if s.Stmt != nil {
 			nrInspectStmt(s.Stmt, funcName, bodyLen, fset, results)
+		}
+	}
+}
+
+// nrWalkCaseClauses iterates case clauses in switch/type-switch statements.
+func nrWalkCaseClauses(stmt ast.Stmt, funcName string, bodyLen int,
+	fset *token.FileSet, results *[]nakedReturnInfo) {
+
+	var body *ast.BlockStmt
+	switch s := stmt.(type) {
+	case *ast.SwitchStmt:
+		body = s.Body
+	case *ast.TypeSwitchStmt:
+		body = s.Body
+	}
+	if body == nil {
+		return
+	}
+	for _, c := range body.List {
+		if clause, ok := c.(*ast.CaseClause); ok {
+			for _, cs := range clause.Body {
+				nrInspectStmt(cs, funcName, bodyLen, fset, results)
+			}
+		}
+	}
+}
+
+// nrWalkCommClauses iterates comm clauses in select statements.
+func nrWalkCommClauses(s *ast.SelectStmt, funcName string, bodyLen int,
+	fset *token.FileSet, results *[]nakedReturnInfo) {
+
+	if s.Body == nil {
+		return
+	}
+	for _, comm := range s.Body.List {
+		if clause, ok := comm.(*ast.CommClause); ok {
+			for _, cs := range clause.Body {
+				nrInspectStmt(cs, funcName, bodyLen, fset, results)
+			}
 		}
 	}
 }
