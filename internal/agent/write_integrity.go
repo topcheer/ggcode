@@ -235,6 +235,10 @@ func registerAllChecks() {
 		// --- Empty error check body detection ---
 		// Flags `if err != nil {}` with empty body - error is checked but not handled.
 		{Name: "empty-error-body", Langs: []Language{LangGo}, Run: sliceCheck(checkEmptyErrorBody)},
+
+		// --- Ignored append() return value detection ---
+		// Flags standalone `append(slice, item)` without assignment -- original slice unchanged.
+		{Name: "append-ignored", Langs: []Language{LangGo}, Run: sliceCheck(checkAppendIgnored)},
 	}
 
 	debug.Log("integrity", "registered %d post-write checks", len(allChecks))
