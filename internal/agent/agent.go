@@ -209,6 +209,7 @@ type Agent struct {
 	toolDiversity              *diversityState                       // tool diversity stagnation detection (strategy imbalance awareness)
 	fileChurn                  *churnState                           // file churn detection (invalidated assumption awareness)
 	analysisParalysis          *analysisParalysisState               // analysis paralysis detection (exploration-heavy / action-starved loops)
+	silentError                *silentErrorState                     // silent error advancement detection (unaddressed error proceeding)
 	behaviorPattern            *behaviorPatternState                 // cross-run behavioral anti-pattern detection (systemic issue awareness)
 	perfBaseline               *perfBaselineState                    // cross-session performance regression detection
 	lastRunStats               *RunStats                             // stats from the most recent run (for post-run summary display)
@@ -321,6 +322,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		toolDiversity:        newDiversityState(),
 		fileChurn:            newChurnState(),
 		analysisParalysis:    newAnalysisParalysisState(),
+		silentError:          newSilentErrorState(),
 		errorCascade:         newErrorCascadeState(),
 		crossFileImpact:      newCrossFileImpactState(),
 		diskSpace:            newDiskSpaceState(),
@@ -1267,6 +1269,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.toolDiversity.reset()
 	a.fileChurn.reset()
 	a.analysisParalysis.reset()
+	a.silentError.reset()
 	a.failureMode.reset()
 	a.toolFallback.reset()
 	a.errorCascade.reset()
@@ -2354,6 +2357,20 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Record tool errors for reflection/ratchet rule extraction.
 			if result.IsError {
 				runStats.recordToolError(tc.Name, result.Content)
+			}
+			// Silent error advancement detection: track when errors go unaddressed.
+			if result.IsError {
+				rKey := extractErrorResourceKey(tc.Name, tc.Arguments)
+				a.silentError.recordToolError(tc.Name, rKey, result.Content, i+1)
+			} else {
+				rKey := extractErrorResourceKey(tc.Name, tc.Arguments)
+				if silentMsg := a.silentError.recordToolAction(tc.Name, rKey); silentMsg != "" {
+					if result.Content != "" {
+						result.Content = result.Content + "\n\n" + silentMsg
+					} else {
+						result.Content = silentMsg
+					}
+				}
 			}
 			// Record tool result for adaptive effort classification.
 			if a.effortAdapter != nil {
