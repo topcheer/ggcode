@@ -153,6 +153,7 @@ type Agent struct {
 	unreadEdit                 *unreadEditState                      // read-before-edit guard: warns when editing unread files
 	editFailRecovery           *editFailState                        // consecutive edit failure recovery guidance
 	scopeDrift                 *scopeDriftState                      // semantic scope creep detection (file-diversity tracking)
+	driftRecurrence            *driftRecurrenceState                 // drift recurrence detection (post-warning behavioral persistence)
 	exportGuard                *exportGuardState                     // breaking change detection for exported Go symbols (regression guard)
 	hubPackageGuard            *hubPackageState                      // per-edit blast-radius awareness for high fan-in packages
 	artifactGuard              *generatedArtifactState               // generated artifact / lock file edit warning
@@ -284,6 +285,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		unreadEdit:           newUnreadEditState(),
 		editFailRecovery:     newEditFailState(),
 		scopeDrift:           newScopeDriftState(),
+		driftRecurrence:      newDriftRecurrenceState(),
 		exportGuard:          newExportGuardState(),
 		hubPackageGuard:      newHubPackageState(),
 		artifactGuard:        newGeneratedArtifactState(),
@@ -1251,6 +1253,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.resetPlanner()
 	a.resetTodoStaleness()
 	a.resetScopeDrift()
+	a.resetDriftRecurrence()
 	a.resetLastGoodCheckpoint()
 	a.recurringError.reset()
 	a.fixCascade.reset()
@@ -2599,6 +2602,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 
 			// Scope drift: track productive file edits for semantic scope creep.
 			a.scopeDriftRecord(tc.Name, extractFileHint(tc.Name, tc.Arguments))
+			// Drift recurrence: track edits and verifications relative to any drift warning.
+			a.driftRecurrenceRecord(tc.Name, extractFileHint(tc.Name, tc.Arguments))
 			// Last-known-good checkpoint: track edits for revert targeting.
 			a.lastGoodCheckpointRecordEdit(tc.Name, extractFileHint(tc.Name, tc.Arguments))
 			// Monorepo scoper: track which packages are being edited.
@@ -2606,10 +2611,20 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				a.monorepoScoper.recordEdit(fh)
 			}
 			if scopeGuidance := a.scopeDriftCheck(); scopeGuidance != "" {
+				// Mark that a drift warning fired, so drift recurrence can track behavior.
+				a.driftRecurrenceMarkWarn(runStats.Iterations)
 				if result.Content != "" {
 					result.Content = result.Content + "\n\n" + scopeGuidance
 				} else {
 					result.Content = scopeGuidance
+				}
+			}
+			// Drift recurrence: check if the agent continued the warned pattern.
+			if recurrenceGuidance := a.driftRecurrenceCheck(); recurrenceGuidance != "" {
+				if result.Content != "" {
+					result.Content = result.Content + "\n\n" + recurrenceGuidance
+				} else {
+					result.Content = recurrenceGuidance
 				}
 			}
 
