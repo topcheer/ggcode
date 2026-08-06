@@ -222,6 +222,10 @@ func registerAllChecks() {
 		// --- Path traversal vulnerability detection (OWASP A01:2021) ---
 		// Flags file I/O with user-controlled input lacking sanitization.
 		{Name: "path-traversal", Langs: []Language{LangGo, LangJSTS, LangPython}, Run: sliceCheck(checkPathTraversal)},
+
+		// --- Hardcoded host/port detection (12-factor violation) ---
+		// Flags hardcoded bind addresses (:8080, 0.0.0.0:3000, etc.) in server code.
+		{Name: "hardcoded-host", Langs: []Language{LangGo, LangJSTS, LangPython}, Run: sliceCheck(checkHardcodedHost)},
 	}
 
 	debug.Log("integrity", "registered %d post-write checks", len(allChecks))
