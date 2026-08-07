@@ -230,6 +230,7 @@ type Agent struct {
 	selectiveEvidence          *selectiveEvidenceTrackerState        // confirmation bias detection (cherry-picked evidence + dismissed negatives)
 	deferredWork               *deferredWorkState                    // deferred work tracking (forgotten follow-up detection)
 	circularReasoning          *circularReasoningState               // circular reasoning detection (tautological justification)
+	contradiction              *contradictionState                   // cross-turn contradiction detection (root-cause reversals)
 	actionHedging              *actionHedgingState                   // action hedging detection (verbalized uncertainty during mutations)
 	scopeCreep                 *scopeCreepState                      // scope creep detection (unsolicited changes beyond request)
 	trajectoryHealth           *trajectoryHealthState                // metacognitive trajectory health synthesis (multi-signal composite)
@@ -372,6 +373,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		selectiveEvidence:    newSelectiveEvidenceTrackerState(),
 		deferredWork:         newDeferredWorkState(),
 		circularReasoning:    newCircularReasoningState(),
+		contradiction:        newContradictionState(),
 		actionHedging:        newActionHedgingState(),
 		scopeCreep:           newScopeCreepState(),
 		trajectoryHealth:     newTrajectoryHealthState(),
@@ -1354,6 +1356,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.selectiveEvidence.reset()
 	a.deferredWork.reset()
 	a.circularReasoning.reset()
+	a.contradiction.reset()
 	a.actionHedging.reset()
 	a.scopeCreep.reset()
 	a.trajectoryHealth.reset()
@@ -1971,6 +1974,20 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					Content: []provider.ContentBlock{{
 						Type: "text",
 						Text: circularHint,
+					}},
+				})
+			}
+
+			// Cross-turn contradiction detector: tracks root-cause/location
+			// claims across iterations. When the agent contradicts its own prior
+			// claim about where the bug/issue is, injects guidance to reconcile.
+			if contradictionHint := a.maybeWarnContradiction(assistantText, i); contradictionHint != "" {
+				debug.Log("agent", "Iteration %d: cross-turn contradiction detector triggered (%d contradictions)", i+1, len(a.contradiction.contradictions))
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: contradictionHint,
 					}},
 				})
 			}
