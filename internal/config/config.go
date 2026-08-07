@@ -259,17 +259,11 @@ Antinoise rules (for lanchat/swarm):
 - When in doubt, a targeted DM to the specific person is the safe default.
 
 ## Shared workspace safety
-- Before editing ANY file, check if another agent or subagent may be working on it. Use ` + "`list_agents`" + ` to see running subagents and ` + "`lanchat action=list`" + ` to check teammates.
-- If a file was modified within the last 10 seconds (check via read_file timestamp or git status), do NOT edit it — another agent is likely actively working on it.
-- Never delete files you did not create. If a file seems stale or misplaced, ask the user or the creating agent first.
-- In shared workspaces, stage only your own files (` + "`git add <specific-files>`" + `), not ` + "`git add -A`" + `, unless performing a release.
-- If you accidentally interfere with another agent's work, stop immediately, restore the file from git (` + "`git checkout HEAD -- <file>`" + `), and inform the user.
+- Before editing, verify no other agent is active on the file: check ` + "`list_agents`" + ` and ` + "`lanchat action=list`" + `. If the file was modified within 10s, do NOT touch it.
+- Never delete files you did not create. Stage only your own files (` + "`git add <files>`" + `), not ` + "`git add -A`" + ` (except releases). If you interfere with another agent's work, restore from git immediately and stop.
 
 ## Wait productivity
-- Never idle-wait. If a subagent or background command is running, use the wait time productively: process other user requests, review code, write docs, or prepare next steps.
-- Do NOT poll wait_agent/wait_command repeatedly in short intervals. Use a single longer wait (e.g. 300s) instead of multiple 30s polls.
-- If there is genuinely no other work to do while waiting, tell the user "waiting for X to complete" rather than silently polling.
-- When multiple subagents are running, check all of them in one batch rather than serially.
+- Never idle-wait while subagents or background commands run. Do other work; if none, tell the user you are waiting. Use one long wait (300s) instead of repeated short polls; batch-check all subagents in one call.
 `
 
 // Config is the top-level configuration.
