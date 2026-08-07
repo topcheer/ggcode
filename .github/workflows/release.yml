@@ -452,6 +452,17 @@ jobs:
       WINGET_PACKAGE_ID: gg.ai.ggcode-desktop
     steps:
       - uses: actions/checkout@v6
+      - name: Sync winget-pkgs fork
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.WINGET_CREATE_GITHUB_TOKEN }}
+        run: |
+          try {
+            gh api repos/topcheer/winget-pkgs/merge-upstream -X POST -f branch=master 2>$null
+            Write-Host "winget-pkgs fork synced successfully."
+          } catch {
+            Write-Host "::Warning::Fork sync failed (may already be up to date): $_"
+          }
       - name: Check for existing winget PR
         id: check-pr
         shell: pwsh
@@ -500,6 +511,17 @@ jobs:
       WINGET_PACKAGE_ID: gg.ai.ggcode-cli
     steps:
       - uses: actions/checkout@v6
+      - name: Sync winget-pkgs fork
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.WINGET_CREATE_GITHUB_TOKEN }}
+        run: |
+          try {
+            gh api repos/topcheer/winget-pkgs/merge-upstream -X POST -f branch=master 2>$null
+            Write-Host "winget-pkgs fork synced successfully."
+          } catch {
+            Write-Host "::Warning::Fork sync failed (may already be up to date): $_"
+          }
       - name: Check for existing winget PR
         id: check-pr
         shell: pwsh
