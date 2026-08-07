@@ -245,6 +245,7 @@ type Agent struct {
 	successDeclare             *successDeclareState                  // premature success declaration detection (calibration gap: done claim + continued work)
 	reasonAction               *reasonActionState                    // reasoning-action alignment verification (cognitive category mismatch)
 	symbolGrounding            *symbolGroundingState                 // symbol grounding verification (ungrounded code symbol reference detection)
+	inputUnderspec             *inputUnderspecState                  // input underspecification detection (vague/underspecified user request)
 	strategyStagnation         *strategyStagnationState              // strategy stagnation detection (same-tool+target retries after failure)
 	iterPressure               *iterPressureState                    // iteration pressure degradation detection (verify/edit ratio drop near budget limit)
 	momentumLoss               *momentumLossState                    // late-phase productivity collapse detection (last-mile stall)
@@ -404,6 +405,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		successDeclare:       newSuccessDeclareState(),
 		reasonAction:         newReasonActionState(),
 		symbolGrounding:      newSymbolGroundingState(),
+		inputUnderspec:       newInputUnderspecState(),
 		qualityScorer:        NewResponseQualityScorer(100),
 	}
 	a.syncContextManagerProviderLocked()
@@ -1390,6 +1392,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.reversibility.reset()
 	a.constraintAmnesia.reset()
 	a.symbolGrounding.reset()
+	a.inputUnderspec.reset()
 	a.tunnelVision.reset()
 	a.queryConverge.reset()
 	a.prematureCommit.reset()
@@ -1474,6 +1477,18 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 
 	// Start the session wall-clock timeout timer.
 	a.sessionTimeout.start(a.currentMode() == permission.AutopilotMode)
+
+	// Input underspecification detection: if the user's initial request is
+	// vague/underspecified (no concrete identifiers, short, vague verbs),
+	// inject an advisory before the agent starts exploring. Zero-LLM-cost,
+	// fires at most once per run. Based on Ambig-SWE (arXiv 2502.13069).
+	if underspecHint := a.maybeWarnInputUnderspec(userText); underspecHint != "" {
+		debug.Log("input-underspec", "underspecified user request detected, injecting advisory")
+		a.contextManager.Add(provider.Message{
+			Role:    "user",
+			Content: []provider.ContentBlock{{Type: "text", Text: underspecHint}},
+		})
+	}
 
 	for i := 0; a.maxIter <= 0 || i < a.maxIter; i++ {
 		runStats.Iterations = i + 1
