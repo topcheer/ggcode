@@ -200,6 +200,7 @@ type Agent struct {
 	mcpEcosystem               *mcpEcosystemState                    // MCP server health, conflict, and capability intelligence
 	mcpRuntime                 tool.MCPRuntime                       // MCP runtime for server snapshots (optional)
 	bgOrphan                   *bgOrphanState                        // orphaned background command detection (unchecked start_command jobs)
+	toolStorm                  *toolStormState                       // tool call storm detection (diverse tools fired without reasoning)
 	queryConverge              *queryConvergeState                   // query convergence failure detection (repeated similar searches without action)
 	errorCompound              *errorCompoundState                   // error compounding risk detector (systemic trajectory reliability)
 	wastedExplore              *wastedExploreState                   // wasted exploration detection (search results never acted upon)
@@ -372,6 +373,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		searchParamGuard:     newSearchParamGuard(),
 		toolRedundancy:       newToolRedundancyAnalyzer(),
 		bgOrphan:             newBgOrphanState(),
+		toolStorm:            newToolStormState(),
 		queryConverge:        newQueryConvergeState(),
 		causalAttribution:    newCausalAttributionState(),
 		errorCompound:        newErrorCompoundState(),
@@ -1405,6 +1407,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.toolOveruse.reset()
 	a.assumptionTracker.reset()
 	a.unverifiedConfidence.reset()
+	a.toolStorm.reset()
 	a.selectiveEvidence.reset()
 	a.deferredWork.reset()
 	a.circularReasoning.reset()
@@ -1704,6 +1707,18 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.contextManager.Add(provider.Message{
 				Role:    "user",
 				Content: []provider.ContentBlock{{Type: "text", Text: bgOrphanMsg}},
+			})
+			msgs = a.contextManager.Messages()
+		}
+
+		// Tool call storm detection: when diverse tools are fired in
+		// rapid succession without interleaved reasoning, inject a
+		// guidance nudge to pause and synthesize (test-time scaling).
+		if stormMsg := a.toolStorm.maybeWarn(); stormMsg != "" {
+			debug.Log("agent", "Iteration %d: tool call storm detected", i+1)
+			a.contextManager.Add(provider.Message{
+				Role:    "user",
+				Content: []provider.ContentBlock{{Type: "text", Text: stormMsg}},
 			})
 			msgs = a.contextManager.Messages()
 		}
@@ -2009,6 +2024,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// models that write tool calls in prose instead of structured tool_use blocks).
 			// Nudge the model to use proper tool call format and retry.
 			assistantText := textBuf
+			a.toolStorm.recordReasoning(assistantText)
 			if hasInlineToolCall(assistantText) && inlineToolCallNudges < 2 {
 				inlineToolCallNudges++
 				debug.Log("agent", "Iteration %d: inline tool call detected in text, nudging model (attempt %d/2)", i+1, inlineToolCallNudges)
@@ -2939,6 +2955,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Orphaned background command tracking: record start_command jobs
 			// and mark output checks. Detects forgotten background processes.
 			a.recordBgToolCall(tc.Name, tc.Arguments, result.Content, i+1)
+
+			// Tool call storm tracking: record each tool call to detect
+			// diverse-tool bursts without interleaved reasoning.
+			a.toolStorm.recordToolCall(tc.Name, i+1)
 
 			// Unverified confidence tracking: record tool calls to track
 			// whether verification (build/test/lint) was run after edits.
