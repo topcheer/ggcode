@@ -265,6 +265,7 @@ type Agent struct {
 	prematureSurrender         *surrenderState                       // premature task abandonment detection (metacognitive surrender awareness)
 	infoScent                  *infoScentState                       // information scent decay detection (diminishing novelty across explorations)
 	causalAttribution          *causalAttributionState               // causal failure attribution (CausalFlow-inspired root-cause step identification)
+	attemptBrief               *attemptBriefState                    // compact attempt summary for knowledge reuse across failed approaches
 	behaviorPattern            *behaviorPatternState                 // cross-run behavioral anti-pattern detection (systemic issue awareness)
 	perfBaseline               *perfBaselineState                    // cross-session performance regression detection
 	lastRunStats               *RunStats                             // stats from the most recent run (for post-run summary display)
@@ -432,6 +433,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		envDrift:               newEnvDriftState(),
 		successDeclare:         newSuccessDeclareState(),
 		reasonAction:           newReasonActionState(),
+		attemptBrief:           newAttemptBriefState(),
 		symbolGrounding:        newSymbolGroundingState(),
 		inputUnderspec:         newInputUnderspecState(),
 		qualityScorer:          NewResponseQualityScorer(100),
@@ -1183,6 +1185,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		a.verifyDebt.reset()
 		a.successDeclare.reset()
 		a.reasonAction.reset()
+		a.attemptBrief.reset()
 	}
 
 	defer func() {
@@ -1706,6 +1709,16 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.contextManager.Add(provider.Message{
 				Role:    "user",
 				Content: []provider.ContentBlock{{Type: "text", Text: sdMsg}},
+			})
+			msgs = a.contextManager.Messages()
+		}
+		// Attempt brief: compact summary of failed approaches to prevent
+		// repeating the same dead-end strategy.
+		if abMsg := a.attemptBrief.maybeBrief(i + 1); abMsg != "" {
+			debug.Log("agent", "Iteration %d: injecting attempt brief", i+1)
+			a.contextManager.Add(provider.Message{
+				Role:    "user",
+				Content: []provider.ContentBlock{{Type: "text", Text: abMsg}},
 			})
 			msgs = a.contextManager.Messages()
 		}
@@ -3594,6 +3607,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				a.stalledConvergence.recordEdit()
 			}
 			a.successDeclare.recordToolCall()
+			// Attempt brief: record outcome for knowledge reuse.
+			a.attemptBrief.recordOutcome(tc.Name, extractToolTarget(tc.Name, string(tc.Arguments)), !result.IsError, i, result.Content)
 			// Symbol grounding: record file paths and code identifiers from
 			// tool I/O so we can detect ungrounded references later.
 			a.symbolGrounding.recordGrounding(string(tc.Arguments), result.Content)
