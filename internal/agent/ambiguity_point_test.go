@@ -192,11 +192,11 @@ func TestAmbiguityQuickTaskSkip(t *testing.T) {
 		ambiguityPoint: newAmbiguityPointState(),
 	}
 
-	// These should be skipped (informational)
+	// These should be skipped (start with informational phrases)
 	infoPrompts := []string{
 		"what is the remove duplicates function doing",
-		"show me the sorted list of files",
-		"list all the duplicate entries in the log",
+		"explain how the sorted list works",
+		"describe the duplicate entries in the log",
 	}
 
 	for _, p := range infoPrompts {
