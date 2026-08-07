@@ -273,6 +273,7 @@ type Agent struct {
 	causalAttribution          *causalAttributionState               // causal failure attribution (CausalFlow-inspired root-cause step identification)
 	attemptBrief               *attemptBriefState                    // compact attempt summary for knowledge reuse across failed approaches
 	behaviorPattern            *behaviorPatternState                 // cross-run behavioral anti-pattern detection (systemic issue awareness)
+	crossDetectorConsensus     *consensusState                       // cross-detector consensus (systemic failure from simultaneous detector firings)
 	perfBaseline               *perfBaselineState                    // cross-session performance regression detection
 	lastRunStats               *RunStats                             // stats from the most recent run (for post-run summary display)
 	qualityScorer              *ResponseQualityScorer                // per-run response quality scoring for provider/model A/B comparison
@@ -353,6 +354,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		mcpEcosystem:           newMCPEcosystemState(),
 		approvalMemory:         permission.NewApprovalMemory(),
 		behaviorPattern:        newBehaviorPatternState(),
+		crossDetectorConsensus: newConsensusState(),
 		perfBaseline:           newPerfBaselineState(),
 		fulfillmentGate:        newFulfillmentGateState(),
 		ambiguityPoint:         newAmbiguityPointState(),
@@ -1157,6 +1159,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.specGaming.reset()
 	a.complexityGate.reset()
 	a.behaviorPattern.reset()
+	a.crossDetectorConsensus.reset()
 	a.perfBaseline.reset()
 	a.argSizeGuardFires = 0
 	a.redundantRead.reset()
@@ -3748,6 +3751,18 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					result.Content = result.Content + "\n\n" + convergenceGuidance
 				} else {
 					result.Content = convergenceGuidance
+				}
+			}
+
+			// Cross-detector consensus: scan accumulated result content for
+			// detector tag signatures. When 3+ independent detectors fire within
+			// a narrow window, inject a systemic-failure "step back" alert.
+			// Research: Nelson-Narens metacognition; MAPE-K cross-stream anomalies.
+			if consensusGuidance := a.crossDetectorConsensus.scanAndCheck(result.Content); consensusGuidance != "" {
+				if result.Content != "" {
+					result.Content = result.Content + "\n\n" + consensusGuidance
+				} else {
+					result.Content = consensusGuidance
 				}
 			}
 
