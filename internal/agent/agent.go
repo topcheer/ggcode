@@ -140,6 +140,7 @@ type Agent struct {
 	toolMemo                   *toolMemo                             // read-only tool result memoization (ToolCaching-inspired)
 	confidence                 *confidenceState                      // holistic trajectory confidence scoring (HTC-inspired)
 	verifDebt                  *verificationDebtState                // verification debt tracker (SAUP-inspired uncertainty propagation)
+	editAbandon                *editAbandonState                     // edit abandonment detection (PASTE/LLMCompiler-inspired attention-shift tracking)
 	costBudget                 *sessionCostBudget                    // absolute session-level token budget enforcement
 	toolCallBudget             *toolCallBudget                       // per-session tool invocation limit (action-level guardrail)
 	cacheKeepalive             *cacheKeepaliveState                  // prompt cache warming pings during idle (Anthropic)
@@ -298,6 +299,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		toolMemo:             newToolMemo(),
 		confidence:           newConfidenceState(),
 		verifDebt:            newVerificationDebtState(),
+		editAbandon:          newEditAbandonState(),
 		costBudget:           newSessionCostBudget(),
 		toolCallBudget:       newToolCallBudget(),
 		cacheKeepalive:       newCacheKeepaliveState(),
@@ -1327,6 +1329,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.commandCache.reset()
 	a.confidence.reset()
 	a.verifDebt.reset()
+	a.editAbandon.reset()
 	a.costBudget.reset()
 	a.toolCallBudget.reset()
 	a.toolCallBudget.SetDefaultBudget(deriveDefaultBudget(a.maxIter))
@@ -3118,6 +3121,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Detects when the agent stacks edits without building/testing.
 			a.verifDebt.recordToolCall(tc.Name, string(tc.Arguments))
 
+			// Edit abandonment: track qualitative attention shift away
+			// from edited files without verification (PASTE-inspired).
+			a.editAbandon.recordToolCall(tc.Name, string(tc.Arguments))
+
 			// Premature commitment: record exploratory actions to track
 			// evidence gathering before the first edit.
 			a.prematureCommit.recordExploration(tc.Name, extractFileHint(tc.Name, tc.Arguments))
@@ -3126,6 +3133,14 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					result.Content = result.Content + "\n\n" + debtGuidance
 				} else {
 					result.Content = debtGuidance
+				}
+			}
+
+			if abandonGuidance := a.editAbandon.maybeWarn(); abandonGuidance != "" {
+				if result.Content != "" {
+					result.Content = result.Content + "\n\n" + abandonGuidance
+				} else {
+					result.Content = abandonGuidance
 				}
 			}
 
