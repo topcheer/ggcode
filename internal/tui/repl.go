@@ -213,17 +213,14 @@ func (r *REPL) SetCore(core *agentruntime.InteractiveRuntimeCore) {
 			debug.Log("codeindex", "SetCore: code index manager found, scheduling delayed start")
 			go func() {
 				time.Sleep(3 * time.Second)
-				debug.Log("codeindex", "delayed start: program=%v, ready=%v", r.program != nil, cim.IsReady())
+				if !cim.IsReady() && r.program != nil {
+					r.program.Send(systemMsg{msg: "Building code index for @ fuzzy search..."})
+				}
 				cim.SetOnReady(func(stats tool.CodeIndexStats) {
-					if stats.IndexedFiles > 0 {
-						debug.Log("codeindex", "onReady callback: %d files, sending system msg", stats.IndexedFiles)
-						r.sendTUI(systemMsg{msg: fmt.Sprintf("Code index ready: %d files indexed - @ fuzzy search enabled", stats.IndexedFiles)})
+					if stats.IndexedFiles > 0 && r.program != nil {
+						r.program.Send(systemMsg{msg: fmt.Sprintf("Code index ready: %d files indexed - @ fuzzy search enabled", stats.IndexedFiles)})
 					}
 				})
-				if !cim.IsReady() {
-					debug.Log("codeindex", "sending 'Building...' system msg")
-					r.sendTUI(systemMsg{msg: "Building code index for @ fuzzy search..."})
-				}
 				cim.StartBackgroundIndex()
 			}()
 		} else {
