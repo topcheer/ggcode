@@ -230,6 +230,7 @@ type Agent struct {
 	mindlessAction             *mindlessActionState                  // mindless action detection (rapid-fire tool calls without reasoning)
 	strategyStagnation         *strategyStagnationState              // strategy stagnation detection (same-tool+target retries after failure)
 	iterPressure               *iterPressureState                    // iteration pressure degradation detection (verify/edit ratio drop near budget limit)
+	infoScent                  *infoScentState                       // information scent decay detection (diminishing novelty across explorations)
 	behaviorPattern            *behaviorPatternState                 // cross-run behavioral anti-pattern detection (systemic issue awareness)
 	perfBaseline               *perfBaselineState                    // cross-session performance regression detection
 	lastRunStats               *RunStats                             // stats from the most recent run (for post-run summary display)
@@ -362,6 +363,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		mindlessAction:       newMindlessActionState(),
 		strategyStagnation:   newStrategyStagnationState(),
 		iterPressure:         newIterPressureState(maxIter),
+		infoScent:            newInfoScentState(),
 		reversibility:        newReversibilityState(),
 		errorCascade:         newErrorCascadeState(),
 		crossFileImpact:      newCrossFileImpactState(),
@@ -1331,6 +1333,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.trajectoryHealth.reset()
 	a.mindlessAction.reset()
 	a.strategyStagnation.reset()
+	a.infoScent.reset()
 	a.reversibility.reset()
 	a.constraintAmnesia.reset()
 	a.tunnelVision.reset()
@@ -1527,6 +1530,16 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.contextManager.Add(provider.Message{
 				Role:    "user",
 				Content: []provider.ContentBlock{{Type: "text", Text: wastedExploreMsg}},
+			})
+			msgs = a.contextManager.Messages()
+		}
+
+		// Information scent decay detection: nudge when consecutive
+		// exploration calls yield diminishing novel information.
+		if scentMsg := a.infoScent.maybeWarn(i + 1); scentMsg != "" {
+			a.contextManager.Add(provider.Message{
+				Role:    "user",
+				Content: []provider.ContentBlock{{Type: "text", Text: scentMsg}},
 			})
 			msgs = a.contextManager.Messages()
 		}
@@ -2585,6 +2598,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// file path consumption. Detects searches whose results were
 			// never acted upon.
 			a.recordWastedExploreToolCall(tc.Name, tc.Arguments, result.Content, i+1)
+
+			// Information scent tracking: record exploration calls and their
+			// path novelty to detect depleted information patches.
+			a.infoScent.recordExploration(tc.Name, string(tc.Arguments), result.Content, i+1)
 
 			// Query convergence tracking: record search queries and code
 			// actions to detect repeated similar searches without progress.
