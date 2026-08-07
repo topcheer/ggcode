@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -814,18 +815,76 @@ func (m *CodeIndexManager) FilePathFuzzy(query string, maxResults int) []string 
 	}
 
 	query = strings.ToLower(query)
-	var results []string
+	type scored struct {
+		path  string
+		score int
+	}
+	var results []scored
 	for _, doc := range idx.docs {
-		// Fuzzy match on the full relative path, not just basename.
-		// This lets "tui/comp" match "internal/tui/completion.go".
-		if fuzzySubsequenceMatch(strings.ToLower(doc.path), query) {
-			results = append(results, doc.path)
-			if len(results) >= maxResults {
-				break
-			}
+		lowerPath := strings.ToLower(doc.path)
+		score := fuzzyScore(lowerPath, query)
+		if score > 0 {
+			results = append(results, scored{path: doc.path, score: score})
 		}
 	}
-	return results
+	// Sort by score descending
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].score > results[j].score
+	})
+	if len(results) > maxResults {
+		results = results[:maxResults]
+	}
+	out := make([]string, len(results))
+	for i, r := range results {
+		out[i] = r.path
+	}
+	return out
+}
+
+// fuzzyScore returns a relevance score for how well query matches path.
+// Higher = better match. Returns 0 if no match.
+// Scoring priorities:
+//   - Contiguous basename match (e.g. "wechat" in "wechat.go") = highest
+//   - Contiguous path match = high
+//   - Shorter path = higher (fewer noise segments)
+//   - Non-contiguous subsequence match = lower
+func fuzzyScore(path, query string) int {
+	if query == "" {
+		return 1
+	}
+	if !fuzzySubsequenceMatch(path, query) {
+		return 0
+	}
+	score := 0
+	// Check contiguous match in basename
+	basename := path
+	if idx := strings.LastIndex(path, "/"); idx >= 0 {
+		basename = path[idx+1:]
+	}
+	if strings.Contains(basename, query) {
+		score += 1000
+		// Exact basename match (e.g. query == basename without extension)
+		baseNoExt := basename
+		if dot := strings.LastIndex(baseNoExt, "."); dot > 0 {
+			baseNoExt = baseNoExt[:dot]
+		}
+		if baseNoExt == query {
+			score += 500
+		}
+	}
+	// Check contiguous match in full path
+	if strings.Contains(path, query) {
+		score += 500
+	}
+	// Prefer shorter paths (fewer directory segments)
+	dirs := strings.Count(path, "/")
+	score -= dirs * 10
+	// Base score for subsequence match
+	score += 100
+	if score < 1 {
+		score = 1
+	}
+	return score
 }
 
 // fuzzySubsequenceMatch returns true if all characters of query appear in s
