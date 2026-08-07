@@ -253,7 +253,7 @@ func parseEnvAssignment(line string) (string, string, bool) {
 			return name, unquoted, true
 		}
 	}
-	if strings.HasPrefix(value, "'") && strings.HasSuffix(value, "'") {
+	if len(value) >= 2 && strings.HasPrefix(value, "'") && strings.HasSuffix(value, "'") {
 		return name, value[1 : len(value)-1], true
 	}
 	if idx := strings.Index(value, " #"); idx >= 0 {
