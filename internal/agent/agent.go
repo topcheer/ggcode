@@ -225,6 +225,7 @@ type Agent struct {
 	toolOveruse                *toolOveruseState                     // tool overuse / self-awareness detection (unnecessary tool calls for known info)
 	assumptionTracker          *assumptionTrackerState               // implicit assumption detection (unverified guesses in assistant text)
 	deferredWork               *deferredWorkState                    // deferred work tracking (forgotten follow-up detection)
+	circularReasoning          *circularReasoningState               // circular reasoning detection (tautological justification)
 	actionHedging              *actionHedgingState                   // action hedging detection (verbalized uncertainty during mutations)
 	scopeCreep                 *scopeCreepState                      // scope creep detection (unsolicited changes beyond request)
 	trajectoryHealth           *trajectoryHealthState                // metacognitive trajectory health synthesis (multi-signal composite)
@@ -361,6 +362,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		toolOveruse:          newToolOveruseState(),
 		assumptionTracker:    newAssumptionTrackerState(),
 		deferredWork:         newDeferredWorkState(),
+		circularReasoning:    newCircularReasoningState(),
 		actionHedging:        newActionHedgingState(),
 		scopeCreep:           newScopeCreepState(),
 		trajectoryHealth:     newTrajectoryHealthState(),
@@ -1334,6 +1336,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.toolOveruse.reset()
 	a.assumptionTracker.reset()
 	a.deferredWork.reset()
+	a.circularReasoning.reset()
 	a.actionHedging.reset()
 	a.scopeCreep.reset()
 	a.trajectoryHealth.reset()
@@ -1893,6 +1896,20 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					Content: []provider.ContentBlock{{
 						Type: "text",
 						Text: deferredHint,
+					}},
+				})
+			}
+
+			// Circular reasoning detector: scan assistant text for tautological
+			// or circular justification patterns. When 2+ instances accumulate,
+			// inject guidance to provide concrete evidence instead.
+			if circularHint := a.maybeWarnCircularReasoning(assistantText, i); circularHint != "" {
+				debug.Log("agent", "Iteration %d: circular reasoning detector triggered (%d instances)", i+1, len(a.circularReasoning.instances))
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: circularHint,
 					}},
 				})
 			}
