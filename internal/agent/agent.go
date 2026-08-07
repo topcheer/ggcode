@@ -224,6 +224,7 @@ type Agent struct {
 	verbosityDrift             *verbosityDriftState                  // verbosity drift detection (token-to-productivity ratio degradation)
 	toolOveruse                *toolOveruseState                     // tool overuse / self-awareness detection (unnecessary tool calls for known info)
 	assumptionTracker          *assumptionTrackerState               // implicit assumption detection (unverified guesses in assistant text)
+	deferredWork               *deferredWorkState                    // deferred work tracking (forgotten follow-up detection)
 	actionHedging              *actionHedgingState                   // action hedging detection (verbalized uncertainty during mutations)
 	scopeCreep                 *scopeCreepState                      // scope creep detection (unsolicited changes beyond request)
 	trajectoryHealth           *trajectoryHealthState                // metacognitive trajectory health synthesis (multi-signal composite)
@@ -359,6 +360,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		verbosityDrift:       newVerbosityDriftState(),
 		toolOveruse:          newToolOveruseState(),
 		assumptionTracker:    newAssumptionTrackerState(),
+		deferredWork:         newDeferredWorkState(),
 		actionHedging:        newActionHedgingState(),
 		scopeCreep:           newScopeCreepState(),
 		trajectoryHealth:     newTrajectoryHealthState(),
@@ -1331,6 +1333,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.verbosityDrift.reset()
 	a.toolOveruse.reset()
 	a.assumptionTracker.reset()
+	a.deferredWork.reset()
 	a.actionHedging.reset()
 	a.scopeCreep.reset()
 	a.trajectoryHealth.reset()
@@ -1875,6 +1878,21 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					Content: []provider.ContentBlock{{
 						Type: "text",
 						Text: assumptionHint,
+					}},
+				})
+			}
+
+			// Deferred work tracker: detect when the agent defers work to
+			// "later" or "next" but never circles back. If stale deferrals
+			// accumulate or the agent declares completion with open items,
+			// inject guidance to address them.
+			if deferredHint := a.maybeWarnDeferredWork(assistantText, i); deferredHint != "" {
+				debug.Log("agent", "Iteration %d: deferred work tracker detected unaddressed deferrals", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: deferredHint,
 					}},
 				})
 			}
