@@ -257,6 +257,7 @@ type Agent struct {
 	strategyStagnation         *strategyStagnationState              // strategy stagnation detection (same-tool+target retries after failure)
 	iterPressure               *iterPressureState                    // iteration pressure degradation detection (verify/edit ratio drop near budget limit)
 	momentumLoss               *momentumLossState                    // late-phase productivity collapse detection (last-mile stall)
+	prematureSurrender         *surrenderState                       // premature task abandonment detection (metacognitive surrender awareness)
 	infoScent                  *infoScentState                       // information scent decay detection (diminishing novelty across explorations)
 	causalAttribution          *causalAttributionState               // causal failure attribution (CausalFlow-inspired root-cause step identification)
 	behaviorPattern            *behaviorPatternState                 // cross-run behavioral anti-pattern detection (systemic issue awareness)
@@ -412,6 +413,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		strategyStagnation:   newStrategyStagnationState(),
 		iterPressure:         newIterPressureState(maxIter),
 		momentumLoss:         newMomentumLossState(),
+		prematureSurrender:   newSurrenderState(),
 		infoScent:            newInfoScentState(),
 		reversibility:        newReversibilityState(),
 		errorCascade:         newErrorCascadeState(),
@@ -1159,6 +1161,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		a.bareEditStreak.reset()
 		if a.recklessExec != nil {
 			a.recklessExec.reset()
+		}
+		if a.prematureSurrender != nil {
+			a.prematureSurrender.reset()
 		}
 		a.futileCycle.reset()
 		a.verifyDebt.reset()
@@ -2059,6 +2064,21 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					Content: []provider.ContentBlock{{
 						Type: "text",
 						Text: assumptionHint,
+					}},
+				})
+			}
+
+			// Premature surrender detection: scan assistant text for give-up
+			// language ("this isn't possible", "I can't do this", etc.) and
+			// push the agent to try alternative strategies before abandoning.
+			// arXiv:2506.05109 -- intrinsic metacognitive awareness.
+			if surrenderMsg := a.prematureSurrender.checkSurrender(assistantText, i+1, a.maxIter); surrenderMsg != "" {
+				debug.Log("surrender-detect", "Iteration %d: premature surrender language detected", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: surrenderMsg,
 					}},
 				})
 			}
