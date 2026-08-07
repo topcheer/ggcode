@@ -224,6 +224,7 @@ type Agent struct {
 	verbosityDrift             *verbosityDriftState                  // verbosity drift detection (token-to-productivity ratio degradation)
 	toolOveruse                *toolOveruseState                     // tool overuse / self-awareness detection (unnecessary tool calls for known info)
 	assumptionTracker          *assumptionTrackerState               // implicit assumption detection (unverified guesses in assistant text)
+	actionHedging              *actionHedgingState                   // action hedging detection (verbalized uncertainty during mutations)
 	scopeCreep                 *scopeCreepState                      // scope creep detection (unsolicited changes beyond request)
 	trajectoryHealth           *trajectoryHealthState                // metacognitive trajectory health synthesis (multi-signal composite)
 	reversibility              *reversibilityState                   // pre-action reversibility assessment (irreversible action safety check)
@@ -358,6 +359,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		verbosityDrift:       newVerbosityDriftState(),
 		toolOveruse:          newToolOveruseState(),
 		assumptionTracker:    newAssumptionTrackerState(),
+		actionHedging:        newActionHedgingState(),
 		scopeCreep:           newScopeCreepState(),
 		trajectoryHealth:     newTrajectoryHealthState(),
 		mindlessAction:       newMindlessActionState(),
@@ -1329,6 +1331,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.verbosityDrift.reset()
 	a.toolOveruse.reset()
 	a.assumptionTracker.reset()
+	a.actionHedging.reset()
 	a.scopeCreep.reset()
 	a.trajectoryHealth.reset()
 	a.mindlessAction.reset()
@@ -2228,6 +2231,28 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		debug.Log("agent", "Iteration %d: tool_calls=%d", i+1, len(toolCalls))
 
 		a.contextManager.Add(resp.Message)
+
+		// Action hedging detector: scan assistant text for verbalized
+		// uncertainty ("hopefully this fixes", "let's try", "best guess")
+		// when the iteration includes mutation tools. If threshold exceeded,
+		// inject guidance to verify before proceeding with edits.
+		hedgingHasMutation := false
+		for _, tc := range toolCalls {
+			if isMutationTool(tc.Name) {
+				hedgingHasMutation = true
+				break
+			}
+		}
+		if hedgingHint := a.maybeWarnActionHedging(textBuf, hedgingHasMutation); hedgingHint != "" {
+			debug.Log("agent", "Iteration %d: action hedging detector detected verbalized uncertainty during mutation", i+1)
+			a.contextManager.Add(provider.Message{
+				Role: "user",
+				Content: []provider.ContentBlock{{
+					Type: "text",
+					Text: hedgingHint,
+				}},
+			})
+		}
 
 		// Execute tool calls and build tool_result message
 		// Reset the no-progress counter — the agent is making forward progress.
