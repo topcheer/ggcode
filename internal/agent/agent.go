@@ -208,6 +208,7 @@ type Agent struct {
 	prematureCommit            *prematureCommitState                 // premature commitment detection (insufficient evidence before first edit)
 	diagnosticDisconnect       *diagnosticDisconnectState            // diagnostic-action disconnect detection (ignored diagnostics from failed tool calls)
 	bareEditStreak             *bareEditStreakState                  // unverified mutation streak detection (consecutive edits without verification)
+	recklessExec               *recklessExecState                    // reckless execution detection (edits to unexplored files in early iterations)
 	verifyDebt                 *verifyDebtState                      // verification debt accumulator (edits since last green build)
 	errorCascade               *errorCascadeState                    // cascading failure detection (common-root-cause error clustering)
 	delegationOrch             *delegationState                      // delegation orchestration intelligence (orphaned delegations, serial anti-pattern, over-delegation)
@@ -383,6 +384,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		prematureCommit:      newPrematureCommitState(),
 		diagnosticDisconnect: newDiagnosticDisconnectState(),
 		bareEditStreak:       newBareEditState(),
+		recklessExec:         newRecklessExecState(),
 		verifyDebt:           newVerifyDebtState(),
 		toolDiversity:        newDiversityState(),
 		fileChurn:            newChurnState(),
@@ -1155,6 +1157,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		a.momentumLoss.reset()
 		a.errorCompound.reset()
 		a.bareEditStreak.reset()
+		if a.recklessExec != nil {
+			a.recklessExec.reset()
+		}
 		a.futileCycle.reset()
 		a.verifyDebt.reset()
 		a.successDeclare.reset()
@@ -3451,6 +3456,22 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 			// Unverified mutation streak: track consecutive edits without verification.
 			a.bareEditStreak.recordToolCall(tc.Name)
+			// Reckless execution: track exploration vs edit targets.
+			if a.recklessExec != nil {
+				argsStr := string(tc.Arguments)
+				if recklessIsExplorationTool(tc.Name) {
+					a.recklessExec.recordReadTool(tc.Name, argsStr)
+				} else if recklessIsEditTool(tc.Name) {
+					a.recklessExec.iteration = i + 1
+					if a.recklessExec.recordEditTool(tc.Name, argsStr) {
+						msg := recklessWarning(a.recklessExec.unexplored)
+						a.contextManager.Add(provider.Message{
+							Role:    "user",
+							Content: []provider.ContentBlock{{Type: "text", Text: msg}},
+						})
+					}
+				}
+			}
 			// Futile cycle: track reads vs writes to detect circular exploration.
 			if fileEditingTools[tc.Name] {
 				a.futileCycle.recordWrite()
