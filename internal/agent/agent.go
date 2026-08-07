@@ -223,6 +223,7 @@ type Agent struct {
 	editOscillation            *oscillationState                     // edit oscillation detection (semantic back-and-forth awareness)
 	analysisParalysis          *analysisParalysisState               // analysis paralysis detection (exploration-heavy / action-starved loops)
 	silentError                *silentErrorState                     // silent error advancement detection (unaddressed error proceeding)
+	verifySuppress             *verifySuppressState                  // verification suppression detection (reward hacking via error masking)
 	verbosityDrift             *verbosityDriftState                  // verbosity drift detection (token-to-productivity ratio degradation)
 	toolOveruse                *toolOveruseState                     // tool overuse / self-awareness detection (unnecessary tool calls for known info)
 	assumptionTracker          *assumptionTrackerState               // implicit assumption detection (unverified guesses in assistant text)
@@ -364,6 +365,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		editOscillation:      newOscillationState(),
 		analysisParalysis:    newAnalysisParalysisState(),
 		silentError:          newSilentErrorState(),
+		verifySuppress:       newVerifySuppressState(),
 		verbosityDrift:       newVerbosityDriftState(),
 		toolOveruse:          newToolOveruseState(),
 		assumptionTracker:    newAssumptionTrackerState(),
@@ -1345,6 +1347,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.editOscillation.reset()
 	a.analysisParalysis.reset()
 	a.silentError.reset()
+	a.verifySuppress.reset()
 	a.verbosityDrift.reset()
 	a.toolOveruse.reset()
 	a.assumptionTracker.reset()
@@ -2758,6 +2761,19 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 						result.Content = result.Content + "\n\n" + silentMsg
 					} else {
 						result.Content = silentMsg
+					}
+				}
+			}
+			// Verification suppression detection: check shell commands for error-masking operators.
+			if tc.Name == "run_command" || tc.Name == "start_command" {
+				cmd := extractCommandFromToolCall(tc.Arguments)
+				if cmd != "" {
+					if suppressMsg := a.verifySuppress.checkVerificationSuppression(tc.Name, cmd); suppressMsg != "" {
+						if result.Content != "" {
+							result.Content = result.Content + "\n\n" + suppressMsg
+						} else {
+							result.Content = suppressMsg
+						}
 					}
 				}
 			}
