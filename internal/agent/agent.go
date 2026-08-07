@@ -204,6 +204,7 @@ type Agent struct {
 	tunnelVision               *tunnelVisionState                    // tunnel vision detection (narrow file scope / under-exploration)
 	prematureCommit            *prematureCommitState                 // premature commitment detection (insufficient evidence before first edit)
 	diagnosticDisconnect       *diagnosticDisconnectState            // diagnostic-action disconnect detection (ignored diagnostics from failed tool calls)
+	bareEditStreak             *bareEditStreakState                  // unverified mutation streak detection (consecutive edits without verification)
 	errorCascade               *errorCascadeState                    // cascading failure detection (common-root-cause error clustering)
 	delegationOrch             *delegationState                      // delegation orchestration intelligence (orphaned delegations, serial anti-pattern, over-delegation)
 	crossFileImpact            *crossFileImpactState                 // pre-completion cross-file impact analysis (removed symbol breakage detection)
@@ -356,6 +357,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		tunnelVision:         newTunnelVisionState(),
 		prematureCommit:      newPrematureCommitState(),
 		diagnosticDisconnect: newDiagnosticDisconnectState(),
+		bareEditStreak:       newBareEditState(),
 		toolDiversity:        newDiversityState(),
 		fileChurn:            newChurnState(),
 		editOscillation:      newOscillationState(),
@@ -1104,6 +1106,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	if a.momentumLoss != nil {
 		a.momentumLoss.reset()
 		a.errorCompound.reset()
+		a.bareEditStreak.reset()
 	}
 
 	defer func() {
@@ -1609,6 +1612,16 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.contextManager.Add(provider.Message{
 				Role:    "user",
 				Content: []provider.ContentBlock{{Type: "text", Text: ipMsg}},
+			})
+			msgs = a.contextManager.Messages()
+		}
+
+		// Unverified mutation streak: detect consecutive edits without any
+		// verification (build/test/run) to encourage tight feedback loops.
+		if bsMsg := a.bareEditStreak.maybeWarn(i + 1); bsMsg != "" {
+			a.contextManager.Add(provider.Message{
+				Role:    "user",
+				Content: []provider.ContentBlock{{Type: "text", Text: bsMsg}},
 			})
 			msgs = a.contextManager.Messages()
 		}
@@ -3090,6 +3103,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			if hadError := a.errorCompound.recordResult(tc.Name, result.IsError, i+1); true {
 				a.errorCompound.recordStep(hadError)
 			}
+			// Unverified mutation streak: track consecutive edits without verification.
+			a.bareEditStreak.recordToolCall(tc.Name)
 			if cascadeGuidance := a.fixCascadeCheckCommand(tc.Name, tc.Arguments, result.IsError); cascadeGuidance != "" {
 				if result.Content != "" {
 					result.Content = result.Content + "\n\n" + cascadeGuidance
