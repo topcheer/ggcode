@@ -241,6 +241,7 @@ type Agent struct {
 	reversibility              *reversibilityState                   // pre-action reversibility assessment (irreversible action safety check)
 	mindlessAction             *mindlessActionState                  // mindless action detection (rapid-fire tool calls without reasoning)
 	successDeclare             *successDeclareState                  // premature success declaration detection (calibration gap: done claim + continued work)
+	reasonAction               *reasonActionState                    // reasoning-action alignment verification (cognitive category mismatch)
 	symbolGrounding            *symbolGroundingState                 // symbol grounding verification (ungrounded code symbol reference detection)
 	strategyStagnation         *strategyStagnationState              // strategy stagnation detection (same-tool+target retries after failure)
 	iterPressure               *iterPressureState                    // iteration pressure degradation detection (verify/edit ratio drop near budget limit)
@@ -397,6 +398,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		diskSpace:            newDiskSpaceState(),
 		envDrift:             newEnvDriftState(),
 		successDeclare:       newSuccessDeclareState(),
+		reasonAction:         newReasonActionState(),
 		symbolGrounding:      newSymbolGroundingState(),
 		qualityScorer:        NewResponseQualityScorer(100),
 	}
@@ -1125,6 +1127,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		a.errorCompound.reset()
 		a.bareEditStreak.reset()
 		a.successDeclare.reset()
+		a.reasonAction.reset()
 	}
 
 	defer func() {
@@ -2090,6 +2093,22 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					Content: []provider.ContentBlock{{
 						Type: "text",
 						Text: ttHint,
+					}},
+				})
+			}
+
+			// Reasoning-action alignment verifier: checks whether the cognitive
+			// category of the agent's stated reasoning matches the cognitive
+			// category of its actual tool calls. Metacognition-driven LLM
+			// frameworks (SAGE Journals 2025) show this alignment is a core
+			// predictor of agent success.
+			if raHint := a.maybeWarnReasonAction(assistantText, toolCalls); raHint != "" {
+				debug.Log("agent", "Iteration %d: reasoning-action alignment verifier triggered", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: raHint,
 					}},
 				})
 			}
