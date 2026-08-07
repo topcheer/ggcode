@@ -81,7 +81,13 @@ func (m *Model) updateAutoComplete() {
 	// Check for @mention
 	if active, prefix := DetectMention(m.input.Value(), inputCursor(&m.input)); active {
 		workDir, _ := os.Getwd()
-		matches := CompleteMention(prefix, workDir)
+		var fuzzyFallback FuzzyFileSearcher
+		if m.agent != nil {
+			if cim := m.agent.CodeIndexManager(); cim != nil {
+				fuzzyFallback = cim.FilePathFuzzy
+			}
+		}
+		matches := CompleteMention(prefix, workDir, fuzzyFallback)
 		if len(matches) > 0 {
 			m.autoCompleteActive = true
 			m.autoCompleteKind = "mention"

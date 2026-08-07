@@ -82,6 +82,10 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		}
 		return m, nil
 
+	case systemMsg:
+		m.chatWriteSystem(nextSystemID(), msg.msg)
+		return m, nil
+
 	case a2aEventUpdatedMsg:
 		return m, nil
 

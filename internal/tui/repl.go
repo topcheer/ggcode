@@ -204,6 +204,25 @@ func (r *REPL) SetCore(core *agentruntime.InteractiveRuntimeCore) {
 		r.model.tunnelHost.Close()
 	}
 	r.model.tunnelHost = core.Tunnel
+
+	// Wire the code index manager from the tool registry to the agent so
+	// that @ fuzzy file search (CompleteMention) can use it.
+	if r.agent != nil && core.Registry != nil {
+		if cim := core.Registry.CodeIndex(); cim != nil {
+			r.agent.SetCodeIndexManager(cim)
+			// Start index build after a short delay so it doesn't compete
+			// with startup I/O. When ready, show a system message in the TUI.
+			cim.SetOnReady(func(stats tool.CodeIndexStats) {
+				if stats.IndexedFiles > 0 && r.programSend != nil {
+					r.programSend(systemMsg{msg: fmt.Sprintf("Code index ready: %d files indexed - @ fuzzy search enabled", stats.IndexedFiles)})
+				}
+			})
+			go func() {
+				time.Sleep(3 * time.Second)
+				cim.StartBackgroundIndex()
+			}()
+		}
+	}
 }
 
 // SetResumeID sets the session ID to resume.
@@ -305,6 +324,11 @@ func (r *REPL) OnConfigProviderChanged() {
 
 // providerChangedMsg triggers a UI refresh after config tool changes the provider.
 type providerChangedMsg struct{}
+
+// systemMsg is a tea.Msg that displays a system message in the chat list.
+type systemMsg struct {
+	msg string
+}
 
 func (r *REPL) sendTUI(msg tea.Msg) {
 	if r.programSend != nil {

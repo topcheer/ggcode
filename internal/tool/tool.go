@@ -72,13 +72,21 @@ type Closer interface {
 
 // Registry manages the set of available tools.
 type Registry struct {
-	tools map[string]Tool
-	mu    sync.RWMutex
+	tools     map[string]Tool
+	codeIndex *CodeIndexManager // optional: shared code index for @ fuzzy search
+	mu        sync.RWMutex
 }
 
 // NewRegistry creates an empty tool registry.
 func NewRegistry() *Registry {
 	return &Registry{tools: make(map[string]Tool)}
+}
+
+// CodeIndex returns the shared code index manager if one was registered.
+func (r *Registry) CodeIndex() *CodeIndexManager {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.codeIndex
 }
 
 // Register adds a tool to the registry. Returns error if name is already taken.

@@ -29,6 +29,7 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 	}
 	jobManager := NewCommandJobManager(workingDir)
 	codeIndex := NewCodeIndexManager(workingDir)
+	registry.codeIndex = codeIndex
 	tools := []Tool{
 		// File operations
 		ReadFile{SandboxCheck: sandboxFor("read_file")},

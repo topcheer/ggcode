@@ -71,13 +71,12 @@ func TestCompleteMention(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "makefile"), []byte(""), 0644)
 	os.MkdirAll(filepath.Join(dir, "internal"), 0755)
 
-	completions := CompleteMention("m", dir)
+	completions := CompleteMention("m", dir, nil)
 	if len(completions) != 2 {
 		t.Errorf("expected 2 completions for 'm', got %d: %v", len(completions), completions)
 	}
 
-	completions = CompleteMention("internal/", dir)
-	// Directory is empty so 0 completions is valid
+	completions = CompleteMention("internal/", dir, nil) // Directory is empty so 0 completions is valid
 }
 
 func TestCompleteMentionEmptyPrefix(t *testing.T) {
@@ -87,7 +86,7 @@ func TestCompleteMentionEmptyPrefix(t *testing.T) {
 	os.MkdirAll(filepath.Join(dir, "internal"), 0755)
 	os.WriteFile(filepath.Join(dir, "go.mod"), []byte(""), 0644)
 
-	completions := CompleteMention("", dir)
+	completions := CompleteMention("", dir, nil)
 	if len(completions) < 3 {
 		t.Errorf("expected at least 3 completions for empty prefix, got %d: %v", len(completions), completions)
 	}
@@ -112,7 +111,7 @@ func TestCompleteMentionTrailingSlash(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "internal", "main.go"), []byte(""), 0644)
 
 	// "internal/" should list internal/ contents, not re-match "internal" in parent
-	completions := CompleteMention("internal/", dir)
+	completions := CompleteMention("internal/", dir, nil)
 	names := map[string]bool{}
 	for _, c := range completions {
 		names[c] = true

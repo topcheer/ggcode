@@ -143,7 +143,7 @@ func ExpandMentions(input string, workDir string) (string, error) {
 
 // CompleteMention returns file/directory completions for an @mention prefix.
 // prefix is the text after "@" (e.g., "internal/t" from "@internal/t").
-func CompleteMention(prefix string, workDir string) []string {
+func CompleteMention(prefix string, workDir string, fuzzyFallback FuzzyFileSearcher) []string {
 	var dir string
 	var partial string
 
@@ -187,7 +187,90 @@ func CompleteMention(prefix string, workDir string) []string {
 		}
 		completions = append(completions, displayPath)
 	}
+
+	// If no prefix matches in the current directory and the prefix is a simple
+	// term (no /), fall back to fuzzy search via the code index if available.
+	// This lets users type @comple to find internal/tui/completion.go without
+	// navigating directory by directory (issue #8).
+	if len(completions) == 0 && prefix != "" && !strings.Contains(prefix, "/") {
+		if fuzzyFallback != nil {
+			fuzzyResults := fuzzyFallback(prefix, 30)
+			completions = append(completions, fuzzyResults...)
+		}
+		// Also do a shallow recursive walk as fallback when no index is available
+		if len(completions) == 0 {
+			fuzzyResults := recursiveFuzzySearch(workDir, prefix, 4, 30)
+			completions = append(completions, fuzzyResults...)
+		}
+	}
+
 	return completions
+}
+
+// FuzzyFileSearcher returns file paths matching a fuzzy query.
+// Used by CompleteMention to leverage the code index for @ autocomplete.
+type FuzzyFileSearcher func(query string, maxResults int) []string
+
+// recursiveFuzzySearch walks the workspace up to maxDepth levels deep,
+// returning relative paths whose basename fuzzy-matches the query.
+// Results are capped at maxResults to keep the autocomplete snappy.
+func recursiveFuzzySearch(root, query string, maxDepth, maxResults int) []string {
+	query = strings.ToLower(query)
+	var results []string
+	count := 0
+
+	filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil || count >= maxResults {
+			return nil
+		}
+
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return nil
+		}
+
+		// Skip common noise directories
+		base := d.Name()
+		if d.IsDir() {
+			if base == ".git" || base == "node_modules" || base == "vendor" ||
+				base == ".ggcode" || base == "dist" || base == "build" ||
+				base == "target" || base == ".next" || base == "__pycache__" {
+				return filepath.SkipDir
+			}
+			// Check depth
+			depth := strings.Count(rel, string(filepath.Separator))
+			if depth >= maxDepth {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		// Fuzzy match: check if query is a subsequence of the basename
+		if fuzzySubsequenceMatch(strings.ToLower(base), query) {
+			results = append(results, rel)
+			count++
+		}
+		return nil
+	})
+
+	return results
+}
+
+// fuzzySubsequenceMatch returns true if all characters of query appear in s
+// in the same order (not necessarily contiguous). This is the same algorithm
+// used by Sublime Text / VS Code file search (e.g. "cml" matches "completion.go").
+func fuzzySubsequenceMatch(s, query string) bool {
+	if query == "" {
+		return true
+	}
+	si, qi := 0, 0
+	for si < len(s) && qi < len(query) {
+		if s[si] == query[qi] {
+			qi++
+		}
+		si++
+	}
+	return qi == len(query)
 }
 
 // SlashCommands is the list of all available slash commands.

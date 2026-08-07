@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -34,14 +35,15 @@ type CodeIndexManager struct {
 	indexPath  string           // disk cache path
 	workingDir string
 	stopCh     chan struct{}
-	rebuildCh  chan struct{} // signaled by MarkDirty to trigger immediate debounced rebuild
-	lockFile   *os.File      // cross-process flock handle
+	rebuildCh  chan struct{}              // signaled by MarkDirty to trigger immediate debounced rebuild
+	lockFile   *os.File                   // cross-process flock handle
+	onReady    func(stats CodeIndexStats) // optional callback when index build completes
 
 	// indexStats tracks basic stats for debugging/logging.
-	stats codeIndexStats
+	stats CodeIndexStats
 }
 
-type codeIndexStats struct {
+type CodeIndexStats struct {
 	TotalFiles   int       `json:"total_files"`
 	IndexedFiles int       `json:"indexed_files"`
 	IndexSize    int       `json:"index_size"` // approximate bytes
@@ -226,7 +228,7 @@ func (m *CodeIndexManager) loadDiskCache() {
 	m.mu.Lock()
 	m.index = idx
 	m.ready = true
-	m.stats = codeIndexStats{
+	m.stats = CodeIndexStats{
 		TotalFiles:   len(idx.docs),
 		IndexedFiles: len(idx.docs),
 		UpdatedAt:    pi.UpdatedAt,
@@ -349,15 +351,39 @@ func (m *CodeIndexManager) doBuild(ctx context.Context) {
 	m.mu.Lock()
 	m.index = idx
 	m.ready = true
-	m.stats = codeIndexStats{
+	m.stats = CodeIndexStats{
 		TotalFiles:   len(files),
 		IndexedFiles: len(docs),
 		UpdatedAt:    time.Now(),
 	}
+	onReady := m.onReady
+	stats := m.stats
 	m.mu.Unlock()
 
 	debug.Log("codeindex", "index ready: %d docs, %d cached, %d skipped, build in %s",
 		len(docs), indexed-len(docs), skipped, time.Since(start))
+
+	if onReady != nil {
+		onReady(stats)
+	}
+}
+
+// SetOnReady registers a callback fired when the index build completes
+// (both fresh builds and disk-cache loads). Used by REPL to show a system
+// message when @ fuzzy search becomes available.
+func (m *CodeIndexManager) SetOnReady(fn func(stats CodeIndexStats)) {
+	m.mu.Lock()
+	m.onReady = fn
+	// If already ready, fire immediately.
+	if m.ready {
+		stats := m.stats
+		m.mu.Unlock()
+		if fn != nil {
+			fn(stats)
+		}
+		return
+	}
+	m.mu.Unlock()
 }
 
 // collectFiles walks the working directory and returns a list of
@@ -521,7 +547,7 @@ func (m *CodeIndexManager) periodicCheck() {
 			debug.Log("codeindex", "idle for %v, releasing in-memory index (%d docs)", idle.Round(time.Minute), len(m.index.docs))
 			m.index = nil
 			m.ready = false
-			m.stats = codeIndexStats{}
+			m.stats = CodeIndexStats{}
 		}
 		m.mu.Unlock()
 		return
@@ -584,6 +610,52 @@ func (m *CodeIndexManager) MarkDirty(paths []string) {
 // Search queries the BM25 index. Returns an error if the index is not
 // yet ready (still building in the background). If the index was released
 // due to idle timeout, Search triggers a background reload from disk.
+// FilePathFuzzy returns up to maxResults file paths from the index whose
+// basename or path fuzzy-matches the query (subsequence match). If the index
+// is not ready, returns nil. This reuses the already-indexed file list,
+// avoiding a fresh directory walk.
+func (m *CodeIndexManager) FilePathFuzzy(query string, maxResults int) []string {
+	m.mu.RLock()
+	ready := m.ready
+	idx := m.index
+	m.mu.RUnlock()
+
+	if !ready || idx == nil {
+		return nil
+	}
+
+	query = strings.ToLower(query)
+	var results []string
+	for _, doc := range idx.docs {
+		// Fuzzy match on the full relative path, not just basename.
+		// This lets "tui/comp" match "internal/tui/completion.go".
+		if fuzzySubsequenceMatch(strings.ToLower(doc.path), query) {
+			results = append(results, doc.path)
+			if len(results) >= maxResults {
+				break
+			}
+		}
+	}
+	return results
+}
+
+// fuzzySubsequenceMatch returns true if all characters of query appear in s
+// in the same order (not necessarily contiguous). Same algorithm as VS Code
+// file search (e.g. "cml" matches "completion").
+func fuzzySubsequenceMatch(s, query string) bool {
+	if query == "" {
+		return true
+	}
+	si, qi := 0, 0
+	for si < len(s) && qi < len(query) {
+		if s[si] == query[qi] {
+			qi++
+		}
+		si++
+	}
+	return qi == len(query)
+}
+
 func (m *CodeIndexManager) Search(query string, maxResults int) ([]bm25Result, error) {
 	m.mu.Lock()
 	m.lastSearch = time.Now()
@@ -628,7 +700,7 @@ func (m *CodeIndexManager) IsReady() bool {
 }
 
 // Stats returns basic index statistics for debugging.
-func (m *CodeIndexManager) Stats() codeIndexStats {
+func (m *CodeIndexManager) Stats() CodeIndexStats {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.stats
