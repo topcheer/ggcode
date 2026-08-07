@@ -231,6 +231,7 @@ type Agent struct {
 	deferredWork               *deferredWorkState                    // deferred work tracking (forgotten follow-up detection)
 	circularReasoning          *circularReasoningState               // circular reasoning detection (tautological justification)
 	contradiction              *contradictionState                   // cross-turn contradiction detection (root-cause reversals)
+	ungroundedReflect          *ungroundedReflectionState            // ungrounded reflection detector (text-only thinking loops)
 	actionHedging              *actionHedgingState                   // action hedging detection (verbalized uncertainty during mutations)
 	scopeCreep                 *scopeCreepState                      // scope creep detection (unsolicited changes beyond request)
 	trajectoryHealth           *trajectoryHealthState                // metacognitive trajectory health synthesis (multi-signal composite)
@@ -374,6 +375,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		deferredWork:         newDeferredWorkState(),
 		circularReasoning:    newCircularReasoningState(),
 		contradiction:        newContradictionState(),
+		ungroundedReflect:    newUngroundedReflectionState(),
 		actionHedging:        newActionHedgingState(),
 		scopeCreep:           newScopeCreepState(),
 		trajectoryHealth:     newTrajectoryHealthState(),
@@ -1361,6 +1363,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.scopeCreep.reset()
 	a.trajectoryHealth.reset()
 	a.mindlessAction.reset()
+	a.ungroundedReflect.reset()
 	a.strategyStagnation.reset()
 	a.infoScent.reset()
 	a.reversibility.reset()
@@ -2017,6 +2020,21 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					Content: []provider.ContentBlock{{
 						Type: "text",
 						Text: mindlessActionWarning(a.mindlessAction.streak),
+					}},
+				})
+			}
+
+			// Ungrounded reflection detector: detect consecutive iterations
+			// with substantial text but no tool calls (overthinking loops).
+			// Research (2024-2025) shows intrinsic self-correction without
+			// external grounding degrades performance.
+			if ugrMsg := a.ungroundedReflect.recordIteration(i+1, len(toolCalls) > 0, len(assistantText)); ugrMsg != "" {
+				debug.Log("agent", "Iteration %d: ungrounded reflection detector triggered", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: ugrMsg,
 					}},
 				})
 			}
