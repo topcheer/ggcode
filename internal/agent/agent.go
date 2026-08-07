@@ -225,6 +225,7 @@ type Agent struct {
 	fileChurn                  *churnState                           // file churn detection (invalidated assumption awareness)
 	editOscillation            *oscillationState                     // edit oscillation detection (semantic back-and-forth awareness)
 	analysisParalysis          *analysisParalysisState               // analysis paralysis detection (exploration-heavy / action-starved loops)
+	toolCallEconomy            *toolCallEconomyState                 // tool call economy detection (batchable individual calls)
 	silentError                *silentErrorState                     // silent error advancement detection (unaddressed error proceeding)
 	verifySuppress             *verifySuppressState                  // verification suppression detection (reward hacking via error masking)
 	verbosityDrift             *verbosityDriftState                  // verbosity drift detection (token-to-productivity ratio degradation)
@@ -384,6 +385,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		fileChurn:            newChurnState(),
 		editOscillation:      newOscillationState(),
 		analysisParalysis:    newAnalysisParalysisState(),
+		toolCallEconomy:      newToolCallEconomyState(),
 		silentError:          newSilentErrorState(),
 		verifySuppress:       newVerifySuppressState(),
 		verbosityDrift:       newVerbosityDriftState(),
@@ -1396,6 +1398,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.fileChurn.reset()
 	a.editOscillation.reset()
 	a.analysisParalysis.reset()
+	a.toolCallEconomy.reset()
 	a.silentError.reset()
 	a.verifySuppress.reset()
 	a.verbosityDrift.reset()
@@ -3297,6 +3300,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// SICA (arXiv:2504.15228) identifies exploration-heavy / action-starved
 			// trajectories as a leading indicator of task failure.
 			a.analysisParalysis.recordCall(tc.Name)
+			a.toolCallEconomy.recordCall(tc.Name)
 
 			// Verbosity drift: track token-to-productivity ratio degradation.
 			// Agent Drift paper (arXiv:2601.04170) identifies verbosity growth
@@ -3314,6 +3318,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					result.Content = result.Content + "\n\n" + apGuidance
 				} else {
 					result.Content = apGuidance
+				}
+			}
+			if tcEconomy := a.toolCallEconomy.check(); tcEconomy != "" {
+				if result.Content != "" {
+					result.Content = result.Content + "\n\n" + tcEconomy
+				} else {
+					result.Content = tcEconomy
 				}
 			}
 
