@@ -207,27 +207,11 @@ func (r *REPL) SetCore(core *agentruntime.InteractiveRuntimeCore) {
 
 	// Wire the code index manager from the tool registry to the agent so
 	// that @ fuzzy file search (CompleteMention) can use it.
+	// Index start happens in Run() after TUI is fully ready.
 	if r.agent != nil && core.Registry != nil {
 		if cim := core.Registry.CodeIndex(); cim != nil {
 			r.agent.SetCodeIndexManager(cim)
-			debug.Log("codeindex", "SetCore: code index manager found, scheduling delayed start")
-			go func() {
-				time.Sleep(3 * time.Second)
-				if !cim.IsReady() && r.program != nil {
-					r.program.Send(systemMsg{msg: "Building code index for @ fuzzy search..."})
-				}
-				cim.SetOnReady(func(stats tool.CodeIndexStats) {
-					if stats.IndexedFiles > 0 && r.program != nil {
-						r.program.Send(systemMsg{msg: fmt.Sprintf("Code index ready: %d files indexed - @ fuzzy search enabled", stats.IndexedFiles)})
-					}
-				})
-				cim.StartBackgroundIndex()
-			}()
-		} else {
-			debug.Log("codeindex", "SetCore: CodeIndex() returned nil")
 		}
-	} else {
-		debug.Log("codeindex", "SetCore: agent=%v, registry=%v", r.agent != nil, core.Registry != nil)
 	}
 }
 
@@ -1380,6 +1364,21 @@ func (r *REPL) Run() error {
 		}
 		if r.knightStartupHint != "" {
 			r.program.Send(knightStartupHintMsg{Hint: r.knightStartupHint})
+		}
+		// Start code index after TUI is ready, not on a fixed timer.
+		// Loading large sessions can take far longer than 3s.
+		if r.agent != nil {
+			if cim := r.agent.CodeIndexManager(); cim != nil {
+				if !cim.IsReady() {
+					r.program.Send(systemMsg{msg: "Building code index for @ fuzzy search..."})
+				}
+				cim.SetOnReady(func(stats tool.CodeIndexStats) {
+					if stats.IndexedFiles > 0 && r.program != nil {
+						r.program.Send(systemMsg{msg: fmt.Sprintf("Code index ready: %d files indexed - @ fuzzy search enabled", stats.IndexedFiles)})
+					}
+				})
+				cim.StartBackgroundIndex()
+			}
 		}
 		if r.projectMemoryLoader != nil {
 			loader := r.projectMemoryLoader
