@@ -165,6 +165,7 @@ type Agent struct {
 	artifactGuard              *generatedArtifactState               // generated artifact / lock file edit warning
 	toolFilter                 *tool.RelevanceFilter                 // dynamic MCP tool pruning based on conversation relevance
 	fulfillmentGate            *fulfillmentGateState                 // pre-completion coverage verification (request-vs-work match)
+	ambiguityPoint             *ambiguityPointState                  // pre-run intent disambiguation (ambiguity detection in user request)
 	companionGuard             *companionGuardState                  // companion test file coverage check (unedited paired tests)
 	specGaming                 *specGamingState                      // specification gaming detection (reward hacking / verification tampering)
 	complexityGate             *complexityGateState                  // post-completion code complexity quality gate
@@ -352,6 +353,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		behaviorPattern:        newBehaviorPatternState(),
 		perfBaseline:           newPerfBaselineState(),
 		fulfillmentGate:        newFulfillmentGateState(),
+		ambiguityPoint:         newAmbiguityPointState(),
 		planDrift:              newPlanDriftState(),
 		unverifiedClaim:        newUnverifiedClaimState(),
 		companionGuard:         newCompanionGuardState(),
@@ -1144,6 +1146,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.resetPostEditVerify()
 	a.resetRepetitionTracker()
 	a.fulfillmentGate.reset()
+	a.ambiguityPoint.reset()
 	a.planDrift.reset()
 	a.unverifiedClaim.reset()
 	a.companionGuard.reset()
@@ -1360,6 +1363,21 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.maybeInjectAutopilotGoalCollection()
 	a.maybeInjectCorrectionFeedback()
 	a.maybeInjectSentimentFeedback(userPromptForStats)
+
+	// Ambiguity point detector: check the user's request for phrases with
+	// multiple valid interpretations. If detected, inject guidance to clarify
+	// before starting work. Zero-LLM-cost heuristic. Research: arXiv:2603.17150
+	if ambMsg := a.checkAmbiguityPoints(userPromptForStats); ambMsg != "" {
+		debug.Log("agent", "ambiguity point detector: injecting disambiguation guidance")
+		a.contextManager.Add(provider.Message{
+			Role: "user",
+			Content: []provider.ContentBlock{{
+				Type: "text",
+				Text: ambMsg,
+			}},
+		})
+	}
+
 	a.maybeInjectBehaviorPattern()
 	a.maybeInjectPerfRegression()
 	a.maybeInjectDynamicSystemPrompt()
@@ -1418,6 +1436,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.branchGuard.reset()
 	a.destructiveGuard.reset()
 	a.fulfillmentGate.reset()
+	a.ambiguityPoint.reset()
 	a.planDrift.reset()
 	a.unverifiedClaim.reset()
 	a.companionGuard.reset()
