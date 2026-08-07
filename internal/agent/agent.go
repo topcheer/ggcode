@@ -207,6 +207,7 @@ type Agent struct {
 	toolStorm                  *toolStormState                       // tool call storm detection (diverse tools fired without reasoning)
 	reasoningRedund            *reasoningRedundancyState             // reasoning redundancy detection (consecutive text-only overthinking)
 	queryConverge              *queryConvergeState                   // query convergence failure detection (repeated similar searches without action)
+	strategyFixation           *strategyFixationState                // strategy fixation detection (same file edited N times with failed verifications -- approach-level failure)
 	errorCompound              *errorCompoundState                   // error compounding risk detector (systemic trajectory reliability)
 	correctionSpiral           *correctionSpiralState                // correction spiral detector (error severity escalation across fixes)
 	wastedExplore              *wastedExploreState                   // wasted exploration detection (search results never acted upon)
@@ -401,6 +402,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		prematureCommit:        newPrematureCommitState(),
 		diagnosticDisconnect:   newDiagnosticDisconnectState(),
 		bareEditStreak:         newBareEditState(),
+		strategyFixation:       newStrategyFixationState(),
 		recklessExec:           newRecklessExecState(),
 		irrevGate:              newIrrevGateState(),
 		verifyDebt:             newVerifyDebtState(),
@@ -1183,6 +1185,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		a.errorCompound.reset()
 		a.correctionSpiral.reset()
 		a.bareEditStreak.reset()
+		a.strategyFixation.reset()
 		if a.recklessExec != nil {
 			a.recklessExec.reset()
 		}
@@ -1832,6 +1835,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.contextManager.Add(provider.Message{
 				Role:    "user",
 				Content: []provider.ContentBlock{{Type: "text", Text: bsMsg}},
+			})
+			msgs = a.contextManager.Messages()
+		}
+
+		// Strategy fixation: detect when the agent has edited the same file
+		// multiple times with intervening failed verifications, suggesting an
+		// approach-level failure (PARC arXiv:2512.03549).
+		if sfMsg := a.strategyFixation.check(); sfMsg != "" {
+			a.contextManager.Add(provider.Message{
+				Role:    "user",
+				Content: []provider.ContentBlock{{Type: "text", Text: sfMsg}},
 			})
 			msgs = a.contextManager.Messages()
 		}
@@ -3633,6 +3647,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 			// Unverified mutation streak: track consecutive edits without verification.
 			a.bareEditStreak.recordToolCall(tc.Name)
+			// Strategy fixation: track per-file edits and verification outcomes.
+			if strategyFixationIsMutation(tc.Name) {
+				fp := extractFilePathFromArgs(tc.Name, tc.Arguments)
+				a.strategyFixation.recordEdit(fp)
+			} else if strategyFixationIsVerification(tc.Name) {
+				a.strategyFixation.recordVerification(tc.Name, result.Content, result.IsError)
+			}
 			// Reckless execution: track exploration vs edit targets.
 			if a.recklessExec != nil {
 				argsStr := string(tc.Arguments)
