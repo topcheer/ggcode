@@ -202,6 +202,7 @@ type Agent struct {
 	mcpRuntime                 tool.MCPRuntime                       // MCP runtime for server snapshots (optional)
 	bgOrphan                   *bgOrphanState                        // orphaned background command detection (unchecked start_command jobs)
 	toolStorm                  *toolStormState                       // tool call storm detection (diverse tools fired without reasoning)
+	reasoningRedund            *reasoningRedundancyState             // reasoning redundancy detection (consecutive text-only overthinking)
 	queryConverge              *queryConvergeState                   // query convergence failure detection (repeated similar searches without action)
 	errorCompound              *errorCompoundState                   // error compounding risk detector (systemic trajectory reliability)
 	correctionSpiral           *correctionSpiralState                // correction spiral detector (error severity escalation across fixes)
@@ -382,6 +383,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		toolRedundancy:         newToolRedundancyAnalyzer(),
 		bgOrphan:               newBgOrphanState(),
 		toolStorm:              newToolStormState(),
+		reasoningRedund:        newReasoningRedundancyState(),
 		queryConverge:          newQueryConvergeState(),
 		causalAttribution:      newCausalAttributionState(),
 		errorCompound:          newErrorCompoundState(),
@@ -1435,6 +1437,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.evidenceOverconfidence.reset()
 	a.verifyDisconnect.reset()
 	a.toolStorm.reset()
+	a.reasoningRedund.reset()
 	a.selectiveEvidence.reset()
 	a.deferredWork.reset()
 	a.circularReasoning.reset()
@@ -1760,6 +1763,18 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			msgs = a.contextManager.Messages()
 		}
 
+		// Reasoning redundancy detection: consecutive text-only iterations with
+		// near-duplicate content indicate overthinking (arXiv:2503.16419).
+		// Nudge the agent to stop deliberating and act.
+		if rrMsg := a.reasoningRedund.maybeWarn(i+1, a.maxIter); rrMsg != "" {
+			debug.Log("reasoning-redund", "Iteration %d: reasoning redundancy detected -- consecutive text-only overthinking", i+1)
+			a.contextManager.Add(provider.Message{
+				Role:    "user",
+				Content: []provider.ContentBlock{{Type: "text", Text: rrMsg}},
+			})
+			msgs = a.contextManager.Messages()
+		}
+
 		// Iteration pressure degradation: detect verify/edit ratio drop
 		// near the iteration budget limit (metacognitive monitoring).
 		if ipMsg := a.maybeWarnIterPressure(i + 1); ipMsg != "" {
@@ -2062,6 +2077,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Nudge the model to use proper tool call format and retry.
 			assistantText := textBuf
 			a.toolStorm.recordReasoning(assistantText)
+			a.reasoningRedund.recordReasoning(assistantText, false)
 			if hasInlineToolCall(assistantText) && inlineToolCallNudges < 2 {
 				inlineToolCallNudges++
 				debug.Log("agent", "Iteration %d: inline tool call detected in text, nudging model (attempt %d/2)", i+1, inlineToolCallNudges)
@@ -3048,6 +3064,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Tool call storm tracking: record each tool call to detect
 			// diverse-tool bursts without interleaved reasoning.
 			a.toolStorm.recordToolCall(tc.Name, i+1)
+			a.reasoningRedund.recordReasoning("", true) // tool call breaks text-only streak
 
 			// Unverified confidence tracking: record tool calls to track
 			// whether verification (build/test/lint) was run after edits.
