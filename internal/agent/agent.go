@@ -154,6 +154,7 @@ type Agent struct {
 	errRegression              *errRegressionState                   // error count regression (negative progress) detection
 	stalledConvergence         *stalledConvergenceState              // stalled convergence detection (diminishing returns pattern)
 	unreadEdit                 *unreadEditState                      // read-before-edit guard: warns when editing unread files
+	expiredRead                *expiredReadState                     // expired-read detection: self-invalidated context awareness (AgentDiet)
 	editFailRecovery           *editFailState                        // consecutive edit failure recovery guidance
 	scopeDrift                 *scopeDriftState                      // semantic scope creep detection (file-diversity tracking)
 	driftRecurrence            *driftRecurrenceState                 // drift recurrence detection (post-warning behavioral persistence)
@@ -326,6 +327,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		errRegression:          newErrRegressionState(),
 		stalledConvergence:     newStalledConvergenceState(),
 		unreadEdit:             newUnreadEditState(),
+		expiredRead:            newExpiredReadState(),
 		editFailRecovery:       newEditFailState(),
 		scopeDrift:             newScopeDriftState(),
 		driftRecurrence:        newDriftRecurrenceState(),
@@ -1384,6 +1386,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.emptySearch.reset()
 	// Reset the unread-file edit tracker so each run starts fresh.
 	a.unreadEdit.reset()
+	a.expiredRead.reset()
 	// Reset the edit failure recovery tracker.
 	a.editFailRecovery.reset()
 	// Reset the export guard so each run starts with a clean checked set.
@@ -2906,6 +2909,15 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 							result.Content = hint
 						}
 					}
+					// Expired-read detection: warn when the agent edits a file
+					// it previously read, marking the prior read as expired.
+					if hint := a.expiredRead.recordEdit(p); hint != "" {
+						if result.Content != "" {
+							result.Content = result.Content + "\n\n" + hint
+						} else {
+							result.Content = hint
+						}
+					}
 					// Content-fingerprint validation: catches sub-second edits that
 					// mtime misses, suppresses false positives from touch/NFS.
 					if hint := a.readHash.validateContentAtEdit(p, 0); hint != "" {
@@ -3515,6 +3527,16 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				a.futileCycle.recordWrite()
 			} else if filePath := extractToolFilePath(tc.Name, tc.Arguments); filePath != "" {
 				a.futileCycle.recordRead(filePath)
+				// Expired-read: track reads for self-invalidation detection.
+				a.expiredRead.recordRead(filePath)
+				// Post-edit re-read check: warn if re-reading shortly after edit.
+				if hint := a.expiredRead.checkPostEditReread(filePath); hint != "" {
+					if result.Content != "" {
+						result.Content = result.Content + "\n\n" + hint
+					} else {
+						result.Content = hint
+					}
+				}
 			}
 			if fileEditingTools[tc.Name] && !result.IsError {
 				a.verifyDebt.recordSourceEdit()
