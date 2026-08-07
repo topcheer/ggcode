@@ -409,7 +409,7 @@ func (m *CodeIndexManager) collectFiles(ctx context.Context) []string {
 		default:
 		}
 		if d.IsDir() {
-			if skipDirs[d.Name()] {
+			if isSkipDir(d.Name()) {
 				return filepath.SkipDir
 			}
 			return nil
