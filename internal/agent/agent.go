@@ -240,6 +240,7 @@ type Agent struct {
 	reversibility              *reversibilityState                   // pre-action reversibility assessment (irreversible action safety check)
 	mindlessAction             *mindlessActionState                  // mindless action detection (rapid-fire tool calls without reasoning)
 	successDeclare             *successDeclareState                  // premature success declaration detection (calibration gap: done claim + continued work)
+	symbolGrounding            *symbolGroundingState                 // symbol grounding verification (ungrounded code symbol reference detection)
 	strategyStagnation         *strategyStagnationState              // strategy stagnation detection (same-tool+target retries after failure)
 	iterPressure               *iterPressureState                    // iteration pressure degradation detection (verify/edit ratio drop near budget limit)
 	momentumLoss               *momentumLossState                    // late-phase productivity collapse detection (last-mile stall)
@@ -395,6 +396,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		diskSpace:            newDiskSpaceState(),
 		envDrift:             newEnvDriftState(),
 		successDeclare:       newSuccessDeclareState(),
+		symbolGrounding:      newSymbolGroundingState(),
 		qualityScorer:        NewResponseQualityScorer(100),
 	}
 	a.syncContextManagerProviderLocked()
@@ -1377,6 +1379,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.infoScent.reset()
 	a.reversibility.reset()
 	a.constraintAmnesia.reset()
+	a.symbolGrounding.reset()
 	a.tunnelVision.reset()
 	a.queryConverge.reset()
 	a.prematureCommit.reset()
@@ -1975,6 +1978,19 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				})
 			}
 			a.successDeclare.recordAssistantText(assistantText, i)
+
+			// Symbol grounding verifier: detect code symbols mentioned in
+			// assistant text that were never found via tool calls.
+			if groundingHint := a.maybeWarnGrounding(assistantText, i); groundingHint != "" {
+				debug.Log("agent", "Iteration %d: symbol grounding verifier detected ungrounded symbol references", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: groundingHint,
+					}},
+				})
+			}
 
 			// Selective evidence detector: detect confirmation bias pattern where
 			// the agent emphasizes positive evidence while dismissing negatives.
@@ -3230,6 +3246,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Unverified mutation streak: track consecutive edits without verification.
 			a.bareEditStreak.recordToolCall(tc.Name)
 			a.successDeclare.recordToolCall()
+			// Symbol grounding: record file paths and code identifiers from
+			// tool I/O so we can detect ungrounded references later.
+			a.symbolGrounding.recordGrounding(string(tc.Arguments), result.Content)
 			if cascadeGuidance := a.fixCascadeCheckCommand(tc.Name, tc.Arguments, result.IsError); cascadeGuidance != "" {
 				if result.Content != "" {
 					result.Content = result.Content + "\n\n" + cascadeGuidance
