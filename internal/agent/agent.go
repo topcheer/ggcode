@@ -236,6 +236,7 @@ type Agent struct {
 	actionHedging              *actionHedgingState                   // action hedging detection (verbalized uncertainty during mutations)
 	scopeCreep                 *scopeCreepState                      // scope creep detection (unsolicited changes beyond request)
 	planAbandon                *planAbandonState                     // plan abandonment detection (declare plan, claim done without executing)
+	toolTargetMismatch         *toolTargetState                      // tool-target mismatch detection (stated intent vs actual tool target)
 	trajectoryHealth           *trajectoryHealthState                // metacognitive trajectory health synthesis (multi-signal composite)
 	reversibility              *reversibilityState                   // pre-action reversibility assessment (irreversible action safety check)
 	mindlessAction             *mindlessActionState                  // mindless action detection (rapid-fire tool calls without reasoning)
@@ -2075,6 +2076,20 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					Content: []provider.ContentBlock{{
 						Type: "text",
 						Text: planHint,
+					}},
+				})
+			}
+
+			// Tool-target mismatch detector: compares the agent's stated intent
+			// ("I'll read X") against the actual tool call target. When they
+			// diverge, inject guidance to verify the correct target.
+			if ttHint := a.maybeWarnToolTargetMismatch(assistantText, toolCalls); ttHint != "" {
+				debug.Log("agent", "Iteration %d: tool-target mismatch detector triggered", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: ttHint,
 					}},
 				})
 			}
