@@ -234,6 +234,7 @@ type Agent struct {
 	ungroundedReflect          *ungroundedReflectionState            // ungrounded reflection detector (text-only thinking loops)
 	actionHedging              *actionHedgingState                   // action hedging detection (verbalized uncertainty during mutations)
 	scopeCreep                 *scopeCreepState                      // scope creep detection (unsolicited changes beyond request)
+	planAbandon                *planAbandonState                     // plan abandonment detection (declare plan, claim done without executing)
 	trajectoryHealth           *trajectoryHealthState                // metacognitive trajectory health synthesis (multi-signal composite)
 	reversibility              *reversibilityState                   // pre-action reversibility assessment (irreversible action safety check)
 	mindlessAction             *mindlessActionState                  // mindless action detection (rapid-fire tool calls without reasoning)
@@ -378,6 +379,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		ungroundedReflect:    newUngroundedReflectionState(),
 		actionHedging:        newActionHedgingState(),
 		scopeCreep:           newScopeCreepState(),
+		planAbandon:          newPlanAbandonState(),
 		trajectoryHealth:     newTrajectoryHealthState(),
 		mindlessAction:       newMindlessActionState(),
 		strategyStagnation:   newStrategyStagnationState(),
@@ -1361,6 +1363,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.contradiction.reset()
 	a.actionHedging.reset()
 	a.scopeCreep.reset()
+	a.planAbandon.reset()
 	a.trajectoryHealth.reset()
 	a.mindlessAction.reset()
 	a.ungroundedReflect.reset()
@@ -2006,6 +2009,22 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					Content: []provider.ContentBlock{{
 						Type: "text",
 						Text: scopeHint,
+					}},
+				})
+			}
+
+			// Plan abandonment detector: tracks multi-step plans declared by
+			// the agent across iterations. If a completion claim appears after
+			// 3+ plan steps were declared in a prior turn, inject guidance to
+			// verify all steps were actually executed. Prevents half-finished
+			// work from being shipped as "done".
+			if planHint := a.maybeWarnPlanAbandon(assistantText); planHint != "" {
+				debug.Log("agent", "Iteration %d: plan abandonment detector triggered (declared %d steps)", i+1, len(a.planAbandon.declaredSteps))
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: planHint,
 					}},
 				})
 			}
