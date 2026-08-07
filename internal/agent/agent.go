@@ -253,6 +253,7 @@ type Agent struct {
 	iterPressure               *iterPressureState                    // iteration pressure degradation detection (verify/edit ratio drop near budget limit)
 	momentumLoss               *momentumLossState                    // late-phase productivity collapse detection (last-mile stall)
 	infoScent                  *infoScentState                       // information scent decay detection (diminishing novelty across explorations)
+	causalAttribution          *causalAttributionState               // causal failure attribution (CausalFlow-inspired root-cause step identification)
 	behaviorPattern            *behaviorPatternState                 // cross-run behavioral anti-pattern detection (systemic issue awareness)
 	perfBaseline               *perfBaselineState                    // cross-session performance regression detection
 	lastRunStats               *RunStats                             // stats from the most recent run (for post-run summary display)
@@ -369,6 +370,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		toolRedundancy:       newToolRedundancyAnalyzer(),
 		bgOrphan:             newBgOrphanState(),
 		queryConverge:        newQueryConvergeState(),
+		causalAttribution:    newCausalAttributionState(),
 		errorCompound:        newErrorCompoundState(),
 		wastedExplore:        newWastedExploreState(),
 		tunnelVision:         newTunnelVisionState(),
@@ -1410,6 +1412,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.ungroundedReflect.reset()
 	a.strategyStagnation.reset()
 	a.infoScent.reset()
+	a.causalAttribution.reset()
 	a.reversibility.reset()
 	a.constraintAmnesia.reset()
 	a.symbolGrounding.reset()
@@ -3182,7 +3185,21 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 
 			// Trajectory confidence: record result and check for early warning.
 			// HTC-inspired: detect "overconfidence in failure" before errors compound.
+			// Causal attribution: record edit steps for failure root-cause tracing.
+			a.causalAttribution.recordEdit(tc.Name, extractFileHint(tc.Name, tc.Arguments), i)
+
 			a.confidence.recordResult(tc.Name, result.IsError, extractFileHint(tc.Name, tc.Arguments))
+			// Causal attribution: on failures, trace backward to the likely causal edit.
+			if result.IsError || looksLikeFailure(result.Content) {
+				if causalHint := a.causalAttribution.attributeFailure(result.Content); causalHint != "" {
+					if result.Content != "" {
+						result.Content = result.Content + "\n\n" + causalHint
+					} else {
+						result.Content = causalHint
+					}
+				}
+			}
+
 			if confidenceGuidance := a.confidence.maybeIntervene(); confidenceGuidance != "" {
 				if result.Content != "" {
 					result.Content = result.Content + "\n\n" + confidenceGuidance
