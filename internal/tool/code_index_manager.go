@@ -556,7 +556,10 @@ func (m *CodeIndexManager) periodicCheck() {
 	m.rebuildDirty("periodic")
 }
 
-// rebuildDirty performs an incremental rebuild if there are dirty files.
+// rebuildDirty performs a true incremental update for dirty files.
+// Only the changed files are re-read and re-tokenized; the existing BM25
+// index (DF map, avgLength) is updated in-place rather than rebuilt from
+// scratch. Deleted files are removed from the index.
 // reason is used for debug logging ("debounced", "periodic").
 func (m *CodeIndexManager) rebuildDirty(reason string) {
 	m.mu.RLock()
@@ -566,7 +569,7 @@ func (m *CodeIndexManager) rebuildDirty(reason string) {
 	if dirtyCount == 0 || !ready {
 		return
 	}
-	// Only rebuild if we can acquire the cross-process lock.
+	// Only update if we can acquire the cross-process lock.
 	if !m.tryLock() {
 		debug.Log("codeindex", "%s rebuild: skipping, lock held by another instance", reason)
 		m.mu.Lock()
@@ -574,14 +577,147 @@ func (m *CodeIndexManager) rebuildDirty(reason string) {
 		m.mu.Unlock()
 		return
 	}
-	debug.Log("codeindex", "%s rebuild: %d files changed, rebuilding", reason, dirtyCount)
-	ctx, cancel := context.WithTimeout(context.Background(), codeIndexBuildTimeout)
-	m.doBuild(ctx)
-	cancel()
-	m.unlock()
+
+	// Snapshot dirty files under lock, then clear.
 	m.mu.Lock()
+	dirty := make(map[string]int64, len(m.dirtyFiles))
+	for k, v := range m.dirtyFiles {
+		dirty[k] = v
+	}
 	m.dirtyFiles = make(map[string]int64)
+	idx := m.index // hold reference; we'll mutate a copy
 	m.mu.Unlock()
+
+	if idx == nil {
+		debug.Log("codeindex", "%s rebuild: index nil, falling back to full build", reason)
+		ctx, cancel := context.WithTimeout(context.Background(), codeIndexBuildTimeout)
+		m.doBuild(ctx)
+		cancel()
+		m.unlock()
+		return
+	}
+
+	debug.Log("codeindex", "%s incremental: %d files changed", reason, len(dirty))
+	start := time.Now()
+
+	// Build a path→index lookup for the existing docs.
+	docIdx := make(map[string]int, len(idx.docs))
+	for i, d := range idx.docs {
+		docIdx[d.path] = i
+	}
+
+	updated, added, removed := 0, 0, 0
+	for dirtyPath := range dirty {
+		// Normalize to relative path. MarkDirty may receive absolute or relative paths.
+		relPath := dirtyPath
+		if filepath.IsAbs(dirtyPath) {
+			if rp, err := filepath.Rel(m.workingDir, dirtyPath); err == nil {
+				relPath = rp
+			}
+		}
+		absPath := filepath.Join(m.workingDir, relPath)
+		info, err := os.Stat(absPath)
+		if err != nil {
+			// File deleted or inaccessible: remove from index.
+			if di, ok := docIdx[relPath]; ok {
+				m.removeDocFromIndex(idx, di)
+				delete(docIdx, relPath)
+				removed++
+			}
+			continue
+		}
+		if info.IsDir() || info.Size() > codeIndexMaxFileSize {
+			continue
+		}
+
+		data, err := os.ReadFile(absPath)
+		if err != nil {
+			continue
+		}
+		terms := tokenizeForIndex(string(data))
+		newTF := make(map[string]int, len(terms))
+		for _, t := range terms {
+			newTF[t]++
+		}
+		newDoc := bm25Doc{path: relPath, tf: newTF, length: len(terms)}
+
+		if i, ok := docIdx[relPath]; ok {
+			// Existing doc: replace in-place.
+			m.replaceDocInIndex(idx, i, newDoc)
+			updated++
+		} else {
+			// New file: append.
+			idx.docs = append(idx.docs, newDoc)
+			docIdx[relPath] = len(idx.docs) - 1
+			for term := range newTF {
+				idx.df[term]++
+			}
+			added++
+		}
+	}
+
+	// Recalculate avgLength.
+	totalLen := 0
+	for _, d := range idx.docs {
+		totalLen += d.length
+	}
+	if len(idx.docs) > 0 {
+		idx.avgLength = float64(totalLen) / float64(len(idx.docs))
+	}
+
+	// Persist updated index to disk.
+	m.persistIndex(context.Background(), idx.docs)
+
+	// Update stats.
+	m.mu.Lock()
+	m.index = idx
+	m.stats = CodeIndexStats{
+		TotalFiles:   len(idx.docs),
+		IndexedFiles: len(idx.docs),
+		UpdatedAt:    time.Now(),
+	}
+	m.mu.Unlock()
+
+	m.unlock()
+
+	debug.Log("codeindex", "%s incremental done: %d updated, %d added, %d removed in %s",
+		reason, updated, added, removed, time.Since(start))
+}
+
+// removeDocFromIndex removes the doc at index i from the BM25 index,
+// updating DF counts and shrinking the docs slice. Uses swap-with-last
+// for O(1) removal.
+func (m *CodeIndexManager) removeDocFromIndex(idx *bm25Index, i int) {
+	doc := idx.docs[i]
+	// Decrement DF for this doc's terms.
+	for term := range doc.tf {
+		idx.df[term]--
+		if idx.df[term] <= 0 {
+			delete(idx.df, term)
+		}
+	}
+	// Swap with last element, then truncate.
+	last := len(idx.docs) - 1
+	idx.docs[i] = idx.docs[last]
+	idx.docs = idx.docs[:last]
+}
+
+// replaceDocInIndex replaces the doc at index i with newDoc, updating
+// DF counts for terms that were added or removed.
+func (m *CodeIndexManager) replaceDocInIndex(idx *bm25Index, i int, newDoc bm25Doc) {
+	oldDoc := idx.docs[i]
+	// Decrement DF for old terms.
+	for term := range oldDoc.tf {
+		idx.df[term]--
+		if idx.df[term] <= 0 {
+			delete(idx.df, term)
+		}
+	}
+	// Increment DF for new terms.
+	for term := range newDoc.tf {
+		idx.df[term]++
+	}
+	idx.docs[i] = newDoc
 }
 
 // MarkDirty records that the given files have been modified and signals
