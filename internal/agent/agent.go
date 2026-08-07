@@ -204,6 +204,7 @@ type Agent struct {
 	toolStorm                  *toolStormState                       // tool call storm detection (diverse tools fired without reasoning)
 	queryConverge              *queryConvergeState                   // query convergence failure detection (repeated similar searches without action)
 	errorCompound              *errorCompoundState                   // error compounding risk detector (systemic trajectory reliability)
+	correctionSpiral           *correctionSpiralState                // correction spiral detector (error severity escalation across fixes)
 	wastedExplore              *wastedExploreState                   // wasted exploration detection (search results never acted upon)
 	tunnelVision               *tunnelVisionState                    // tunnel vision detection (narrow file scope / under-exploration)
 	prematureCommit            *prematureCommitState                 // premature commitment detection (insufficient evidence before first edit)
@@ -383,6 +384,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		queryConverge:          newQueryConvergeState(),
 		causalAttribution:      newCausalAttributionState(),
 		errorCompound:          newErrorCompoundState(),
+		correctionSpiral:       newCorrectionSpiralState(),
 		wastedExplore:          newWastedExploreState(),
 		tunnelVision:           newTunnelVisionState(),
 		prematureCommit:        newPrematureCommitState(),
@@ -1162,6 +1164,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	if a.momentumLoss != nil {
 		a.momentumLoss.reset()
 		a.errorCompound.reset()
+		a.correctionSpiral.reset()
 		a.bareEditStreak.reset()
 		if a.recklessExec != nil {
 			a.recklessExec.reset()
@@ -1662,6 +1665,16 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.contextManager.Add(provider.Message{
 				Role:    "user",
 				Content: []provider.ContentBlock{{Type: "text", Text: ecMsg}},
+			})
+			msgs = a.contextManager.Messages()
+		}
+
+		// Correction spiral: detect error severity escalation across fix attempts.
+		// Warns when each correction introduces a worse error (feedback control instability).
+		if csMsg := a.correctionSpiral.maybeWarn(i + 1); csMsg != "" {
+			a.contextManager.Add(provider.Message{
+				Role:    "user",
+				Content: []provider.ContentBlock{{Type: "text", Text: csMsg}},
 			})
 			msgs = a.contextManager.Messages()
 		}
@@ -3503,6 +3516,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Computes geometric compounding probability to detect systemic risk.
 			if hadError := a.errorCompound.recordResult(tc.Name, result.IsError, i+1); true {
 				a.errorCompound.recordStep(hadError)
+			}
+			// Correction spiral: track edits and verify results to detect
+			// error severity escalation across fix attempts.
+			if csIsEditTool(tc.Name) {
+				a.correctionSpiral.recordEdit(i + 1)
+			} else if csIsVerifyTool(tc.Name) {
+				a.correctionSpiral.recordVerifyResult(tc.Name, result.Content, result.IsError, i+1)
 			}
 			// Unverified mutation streak: track consecutive edits without verification.
 			a.bareEditStreak.recordToolCall(tc.Name)
