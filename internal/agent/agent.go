@@ -248,6 +248,7 @@ type Agent struct {
 	symbolGrounding            *symbolGroundingState                 // symbol grounding verification (ungrounded code symbol reference detection)
 	inputUnderspec             *inputUnderspecState                  // input underspecification detection (vague/underspecified user request)
 	futileCycle                *futileCycleState                     // futile cycle detection (circular exploration without writes)
+	trajIntel                  *trajIntelState                       // post-run trajectory intelligence extraction
 	strategyStagnation         *strategyStagnationState              // strategy stagnation detection (same-tool+target retries after failure)
 	iterPressure               *iterPressureState                    // iteration pressure degradation detection (verify/edit ratio drop near budget limit)
 	momentumLoss               *momentumLossState                    // late-phase productivity collapse detection (last-mile stall)
@@ -411,6 +412,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		inputUnderspec:       newInputUnderspecState(),
 		qualityScorer:        NewResponseQualityScorer(100),
 		futileCycle:          newFutileCycleState(),
+		trajIntel:            newTrajIntelState(),
 	}
 	a.syncContextManagerProviderLocked()
 	a.syncContextManagerUsageHandlerLocked()
@@ -1175,6 +1177,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// Runs even on cancellation since partial work is still observable behavior.
 		if a.behaviorPattern != nil {
 			a.behaviorPattern.recordRun(runStats)
+		}
+		// Post-run trajectory intelligence extraction (arXiv:2603.10600).
+		// Extracts strategy/recovery/optimization learnings from the
+		// completed run and persists them for future improvement.
+		if a.trajIntel != nil {
+			a.trajIntel.maybeExtractAndPersist(a.WorkingDir(), runStats)
 		}
 		// Record run metrics for cross-session regression detection.
 		recordPerfBaseline(a.WorkingDir(), runStats)
