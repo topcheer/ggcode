@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -255,6 +256,9 @@ func parseEnvAssignment(line string) (string, string, bool) {
 	}
 	if len(value) >= 2 && strings.HasPrefix(value, "'") && strings.HasSuffix(value, "'") {
 		return name, value[1 : len(value)-1], true
+	}
+	if strings.Contains(value, "'") {
+		fmt.Fprintf(os.Stderr, "warning: env variable %q has unmatched single-quote value %q, using raw value\n", name, value)
 	}
 	if idx := strings.Index(value, " #"); idx >= 0 {
 		value = strings.TrimSpace(value[:idx])
