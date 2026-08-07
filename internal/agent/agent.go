@@ -211,6 +211,7 @@ type Agent struct {
 	diagnosticDisconnect       *diagnosticDisconnectState            // diagnostic-action disconnect detection (ignored diagnostics from failed tool calls)
 	bareEditStreak             *bareEditStreakState                  // unverified mutation streak detection (consecutive edits without verification)
 	recklessExec               *recklessExecState                    // reckless execution detection (edits to unexplored files in early iterations)
+	irrevGate                  *irrevGateState                       // irreversibility-weighted calibration gate (caution scales with action reversibility)
 	verifyDebt                 *verifyDebtState                      // verification debt accumulator (edits since last green build)
 	errorCascade               *errorCascadeState                    // cascading failure detection (common-root-cause error clustering)
 	delegationOrch             *delegationState                      // delegation orchestration intelligence (orphaned delegations, serial anti-pattern, over-delegation)
@@ -391,6 +392,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		diagnosticDisconnect:   newDiagnosticDisconnectState(),
 		bareEditStreak:         newBareEditState(),
 		recklessExec:           newRecklessExecState(),
+		irrevGate:              newIrrevGateState(),
 		verifyDebt:             newVerifyDebtState(),
 		toolDiversity:          newDiversityState(),
 		fileChurn:              newChurnState(),
@@ -1168,6 +1170,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		a.bareEditStreak.reset()
 		if a.recklessExec != nil {
 			a.recklessExec.reset()
+		}
+		if a.irrevGate != nil {
+			a.irrevGate.reset()
 		}
 		if a.prematureSurrender != nil {
 			a.prematureSurrender.reset()
@@ -3540,6 +3545,15 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 							Content: []provider.ContentBlock{{Type: "text", Text: msg}},
 						})
 					}
+				}
+			}
+			// Irreversibility gate: warn on under-grounded high-impact actions.
+			if a.irrevGate != nil {
+				if warn := a.irrevGate.recordAction(tc.Name, string(tc.Arguments)); warn != "" {
+					a.contextManager.Add(provider.Message{
+						Role:    "user",
+						Content: []provider.ContentBlock{{Type: "text", Text: warn}},
+					})
 				}
 			}
 			// Futile cycle: track reads vs writes to detect circular exploration.
