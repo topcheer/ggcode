@@ -227,6 +227,7 @@ type Agent struct {
 	verbosityDrift             *verbosityDriftState                  // verbosity drift detection (token-to-productivity ratio degradation)
 	toolOveruse                *toolOveruseState                     // tool overuse / self-awareness detection (unnecessary tool calls for known info)
 	assumptionTracker          *assumptionTrackerState               // implicit assumption detection (unverified guesses in assistant text)
+	unverifiedConfidence       *unverifiedConfidenceState            // unverified confidence detection (overconfident claims without verification)
 	selectiveEvidence          *selectiveEvidenceTrackerState        // confirmation bias detection (cherry-picked evidence + dismissed negatives)
 	deferredWork               *deferredWorkState                    // deferred work tracking (forgotten follow-up detection)
 	circularReasoning          *circularReasoningState               // circular reasoning detection (tautological justification)
@@ -372,6 +373,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		verbosityDrift:       newVerbosityDriftState(),
 		toolOveruse:          newToolOveruseState(),
 		assumptionTracker:    newAssumptionTrackerState(),
+		unverifiedConfidence: newUnverifiedConfidenceState(),
 		selectiveEvidence:    newSelectiveEvidenceTrackerState(),
 		deferredWork:         newDeferredWorkState(),
 		circularReasoning:    newCircularReasoningState(),
@@ -1357,6 +1359,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.verbosityDrift.reset()
 	a.toolOveruse.reset()
 	a.assumptionTracker.reset()
+	a.unverifiedConfidence.reset()
 	a.selectiveEvidence.reset()
 	a.deferredWork.reset()
 	a.circularReasoning.reset()
@@ -1938,6 +1941,21 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					Content: []provider.ContentBlock{{
 						Type: "text",
 						Text: assumptionHint,
+					}},
+				})
+			}
+
+			// Unverified confidence detector: scan for overconfident completion
+			// claims ("this definitely works", "fix is complete") that aren't
+			// backed by actual verification (build/test/lint). EpiCaR-inspired
+			// calibration gap detection.
+			if confHint := a.maybeWarnUnverifiedConfidence(assistantText); confHint != "" {
+				debug.Log("agent", "Iteration %d: unverified confidence detector found overconfident claims without verification", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: confHint,
 					}},
 				})
 			}
@@ -2769,6 +2787,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Orphaned background command tracking: record start_command jobs
 			// and mark output checks. Detects forgotten background processes.
 			a.recordBgToolCall(tc.Name, tc.Arguments, result.Content, i+1)
+
+			// Unverified confidence tracking: record tool calls to track
+			// whether verification (build/test/lint) was run after edits.
+			a.unverifiedConfidence.recordToolCall(tc.Name, string(tc.Arguments))
 
 			// Wasted exploration tracking: record search tool results and
 			// file path consumption. Detects searches whose results were
