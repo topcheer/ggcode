@@ -233,6 +233,7 @@ type Agent struct {
 	toolOveruse                *toolOveruseState                     // tool overuse / self-awareness detection (unnecessary tool calls for known info)
 	assumptionTracker          *assumptionTrackerState               // implicit assumption detection (unverified guesses in assistant text)
 	unverifiedConfidence       *unverifiedConfidenceState            // unverified confidence detection (overconfident claims without verification)
+	verifyDisconnect           *verifyDisconnectState                // verification outcome disconnect (advancing past failures)
 	selectiveEvidence          *selectiveEvidenceTrackerState        // confirmation bias detection (cherry-picked evidence + dismissed negatives)
 	deferredWork               *deferredWorkState                    // deferred work tracking (forgotten follow-up detection)
 	circularReasoning          *circularReasoningState               // circular reasoning detection (tautological justification)
@@ -394,6 +395,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		toolOveruse:          newToolOveruseState(),
 		assumptionTracker:    newAssumptionTrackerState(),
 		unverifiedConfidence: newUnverifiedConfidenceState(),
+		verifyDisconnect:     newVerifyDisconnectState(),
 		selectiveEvidence:    newSelectiveEvidenceTrackerState(),
 		deferredWork:         newDeferredWorkState(),
 		circularReasoning:    newCircularReasoningState(),
@@ -1407,6 +1409,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.toolOveruse.reset()
 	a.assumptionTracker.reset()
 	a.unverifiedConfidence.reset()
+	a.verifyDisconnect.reset()
 	a.toolStorm.reset()
 	a.selectiveEvidence.reset()
 	a.deferredWork.reset()
@@ -2066,6 +2069,20 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					Content: []provider.ContentBlock{{
 						Type: "text",
 						Text: confHint,
+					}},
+				})
+			}
+
+			// Verification outcome disconnect: detect verification failures
+			// that the agent advances past without addressing. Behavioral
+			// overconfidence gap (arXiv:2508.06225).
+			if vdHint := a.maybeWarnVerifyDisconnect(assistantText, i+1); vdHint != "" {
+				debug.Log("agent", "Iteration %d: verification disconnect detector found unresolved failure", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: vdHint,
 					}},
 				})
 			}
@@ -2963,6 +2980,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Unverified confidence tracking: record tool calls to track
 			// whether verification (build/test/lint) was run after edits.
 			a.unverifiedConfidence.recordToolCall(tc.Name, string(tc.Arguments))
+
+			// Verification disconnect: record result to detect failures
+			// that get advanced past without resolution.
+			a.verifyDisconnect.recordVerificationResult(tc.Name, string(tc.Arguments), result.Content, i+1)
+			a.verifyDisconnect.recordToolCallForVD(tc.Name)
 
 			// Wasted exploration tracking: record search tool results and
 			// file path consumption. Detects searches whose results were
