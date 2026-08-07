@@ -152,6 +152,7 @@ type Agent struct {
 	recurringError             *recurringErrorState                  // recurring build/test error fingerprint detection across edit cycles
 	fixCascade                 *fixCascadeState                      // failed fix cascade (wrong-hypothesis lock-in) detection
 	errRegression              *errRegressionState                   // error count regression (negative progress) detection
+	stalledConvergence         *stalledConvergenceState              // stalled convergence detection (diminishing returns pattern)
 	unreadEdit                 *unreadEditState                      // read-before-edit guard: warns when editing unread files
 	editFailRecovery           *editFailState                        // consecutive edit failure recovery guidance
 	scopeDrift                 *scopeDriftState                      // semantic scope creep detection (file-diversity tracking)
@@ -317,6 +318,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		recurringError:       newRecurringErrorState(),
 		fixCascade:           newFixCascadeState(),
 		errRegression:        newErrRegressionState(),
+		stalledConvergence:   newStalledConvergenceState(),
 		unreadEdit:           newUnreadEditState(),
 		editFailRecovery:     newEditFailState(),
 		scopeDrift:           newScopeDriftState(),
@@ -1351,6 +1353,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.recurringError.reset()
 	a.fixCascade.reset()
 	a.errRegression.reset()
+	a.stalledConvergence.reset()
 	a.speculator.resetSequence()
 	a.toolMemo.reset()
 	a.commandCache.reset()
@@ -3372,6 +3375,15 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Fix cascade detection: tracks edit->verify->fail cycles regardless
 			// of specific errors. Detects wrong-hypothesis lock-in where each
 			// edit produces a DIFFERENT error (so recurring_error never fires).
+			// Stalled convergence: track error counts across verifications
+			// to detect diminishing returns (convergence plateau).
+			if stalledGuidance := a.stalledConvergenceCheckCommand(tc.Name, tc.Arguments, result.Content, result.IsError); stalledGuidance != "" {
+				if result.Content != "" {
+					result.Content = result.Content + "\n\n" + stalledGuidance
+				} else {
+					result.Content = stalledGuidance
+				}
+			}
 			if regressionGuidance := a.errorRegressionCheckCommand(tc.Name, tc.Arguments, result.Content, result.IsError); regressionGuidance != "" {
 				if result.Content != "" {
 					result.Content = result.Content + "\n\n" + regressionGuidance
@@ -3394,6 +3406,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 			if fileEditingTools[tc.Name] && !result.IsError {
 				a.verifyDebt.recordSourceEdit()
+				a.stalledConvergence.recordEdit()
 			}
 			a.successDeclare.recordToolCall()
 			// Symbol grounding: record file paths and code identifiers from
