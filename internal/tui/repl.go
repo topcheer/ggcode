@@ -216,12 +216,12 @@ func (r *REPL) SetCore(core *agentruntime.InteractiveRuntimeCore) {
 			go func() {
 				time.Sleep(3 * time.Second)
 				cim.SetOnReady(func(stats tool.CodeIndexStats) {
-					if stats.IndexedFiles > 0 && r.programSend != nil {
-						r.programSend(systemMsg{msg: fmt.Sprintf("Code index ready: %d files indexed - @ fuzzy search enabled", stats.IndexedFiles)})
+					if stats.IndexedFiles > 0 {
+						r.sendTUI(systemMsg{msg: fmt.Sprintf("Code index ready: %d files indexed - @ fuzzy search enabled", stats.IndexedFiles)})
 					}
 				})
-				if !cim.IsReady() && r.programSend != nil {
-					r.programSend(systemMsg{msg: "Building code index for @ fuzzy search..."})
+				if !cim.IsReady() {
+					r.sendTUI(systemMsg{msg: "Building code index for @ fuzzy search..."})
 				}
 				cim.StartBackgroundIndex()
 			}()
