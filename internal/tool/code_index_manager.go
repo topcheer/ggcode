@@ -400,11 +400,7 @@ func (m *CodeIndexManager) collectFiles(ctx context.Context) []string {
 		default:
 		}
 		if d.IsDir() {
-			name := d.Name()
-			if name == ".git" || name == "node_modules" || name == "vendor" ||
-				name == "dist" || name == "build" || name == ".next" ||
-				name == "__pycache__" || name == ".cache" || name == "target" ||
-				name == ".venv" || name == ".tox" || name == ".ggcode" {
+			if skipDirs[d.Name()] {
 				return filepath.SkipDir
 			}
 			return nil
@@ -418,6 +414,41 @@ func (m *CodeIndexManager) collectFiles(ctx context.Context) []string {
 		return nil
 	})
 	return files
+}
+
+// isSkipDir returns true for directories that should be excluded from
+// indexing: version control, dependency/vendor dirs, build outputs,
+// temp dirs, and tool-specific caches across all major languages.
+func isSkipDir(name string) bool {
+	switch name {
+	// VCS & meta
+	case ".git", ".svn", ".hg", ".bzr", ".ggcode", ".idea", ".vscode":
+		return true
+	// JS/TS
+	case "node_modules", "bower_components", ".next", ".nuxt", ".svelte-kit",
+		".turbo", ".parcel-cache", "coverage", ".cypress":
+		return true
+	// Python
+	case "__pycache__", ".venv", "venv", ".tox", ".mypy_cache", ".pytest_cache",
+		".ruff_cache", "site-packages", "eggs", ".eggs":
+		return true
+	// Java / JVM / Rust / Go (shared dirs)
+	case "target", ".gradle", ".maven", "build", "out", "vendor":
+		return true
+	// Ruby / PHP / general
+	case ".bundle", "tmp", ".husky", ".pnp", ".yarn":
+		return true
+	// C/C++
+	case "cmake-build-debug", "cmake-build-release":
+		return true
+	// Swift / Xcode
+	case "DerivedData", ".build":
+		return true
+	// General build output & temp
+	case "dist", "bin", "obj", ".cache", "temp", ".tmp":
+		return true
+	}
+	return false
 }
 
 // isCodeFile returns true for common source file extensions.
