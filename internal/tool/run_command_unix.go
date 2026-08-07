@@ -15,7 +15,7 @@ import (
 
 const (
 	commandTerminateGracePeriod = 100 * time.Millisecond
-	commandWaitDelay            = 250 * time.Millisecond
+	commandWaitDelay            = 2 * time.Second
 )
 
 type commandTargets struct {
