@@ -229,6 +229,7 @@ type Agent struct {
 	reversibility              *reversibilityState                   // pre-action reversibility assessment (irreversible action safety check)
 	mindlessAction             *mindlessActionState                  // mindless action detection (rapid-fire tool calls without reasoning)
 	strategyStagnation         *strategyStagnationState              // strategy stagnation detection (same-tool+target retries after failure)
+	iterPressure               *iterPressureState                    // iteration pressure degradation detection (verify/edit ratio drop near budget limit)
 	behaviorPattern            *behaviorPatternState                 // cross-run behavioral anti-pattern detection (systemic issue awareness)
 	perfBaseline               *perfBaselineState                    // cross-session performance regression detection
 	lastRunStats               *RunStats                             // stats from the most recent run (for post-run summary display)
@@ -360,6 +361,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		trajectoryHealth:     newTrajectoryHealthState(),
 		mindlessAction:       newMindlessActionState(),
 		strategyStagnation:   newStrategyStagnationState(),
+		iterPressure:         newIterPressureState(maxIter),
 		reversibility:        newReversibilityState(),
 		errorCascade:         newErrorCascadeState(),
 		crossFileImpact:      newCrossFileImpactState(),
@@ -1084,6 +1086,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	if a.adaptiveSampling != nil {
 		a.adaptiveSampling.reset()
 	}
+	if a.iterPressure != nil {
+		a.iterPressure.reset(a.maxIter)
+	}
 
 	defer func() {
 		// Mark the run as completed in the journal (crash detection cleanup).
@@ -1543,6 +1548,16 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.contextManager.Add(provider.Message{
 				Role:    "user",
 				Content: []provider.ContentBlock{{Type: "text", Text: bgOrphanMsg}},
+			})
+			msgs = a.contextManager.Messages()
+		}
+
+		// Iteration pressure degradation: detect verify/edit ratio drop
+		// near the iteration budget limit (metacognitive monitoring).
+		if ipMsg := a.maybeWarnIterPressure(i + 1); ipMsg != "" {
+			a.contextManager.Add(provider.Message{
+				Role:    "user",
+				Content: []provider.ContentBlock{{Type: "text", Text: ipMsg}},
 			})
 			msgs = a.contextManager.Messages()
 		}
@@ -2247,6 +2262,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			runStats.recordToolCall(tc.Name)
 			a.toolCallBudget.record()
 			a.toolThermal.recordToolCall(tc.Name)
+			a.iterPressure.recordToolCall(tc.Name, i+1)
 			extractPathsFromToolCall(tc.Name, tc.Arguments, runStats)
 			// Check for consecutive duplicate tool calls (loop detection).
 			// If detected, inject a guidance message into the tool result.
