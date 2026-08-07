@@ -239,6 +239,7 @@ type Agent struct {
 	trajectoryHealth           *trajectoryHealthState                // metacognitive trajectory health synthesis (multi-signal composite)
 	reversibility              *reversibilityState                   // pre-action reversibility assessment (irreversible action safety check)
 	mindlessAction             *mindlessActionState                  // mindless action detection (rapid-fire tool calls without reasoning)
+	successDeclare             *successDeclareState                  // premature success declaration detection (calibration gap: done claim + continued work)
 	strategyStagnation         *strategyStagnationState              // strategy stagnation detection (same-tool+target retries after failure)
 	iterPressure               *iterPressureState                    // iteration pressure degradation detection (verify/edit ratio drop near budget limit)
 	momentumLoss               *momentumLossState                    // late-phase productivity collapse detection (last-mile stall)
@@ -393,6 +394,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		crossFileImpact:      newCrossFileImpactState(),
 		diskSpace:            newDiskSpaceState(),
 		envDrift:             newEnvDriftState(),
+		successDeclare:       newSuccessDeclareState(),
 		qualityScorer:        NewResponseQualityScorer(100),
 	}
 	a.syncContextManagerProviderLocked()
@@ -1119,6 +1121,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		a.momentumLoss.reset()
 		a.errorCompound.reset()
 		a.bareEditStreak.reset()
+		a.successDeclare.reset()
 	}
 
 	defer func() {
@@ -1583,6 +1586,18 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			msgs = a.contextManager.Messages()
 		}
 
+		// Premature success declaration: if the agent claimed completion in a
+		// prior iteration but has since continued making tool calls, flag the
+		// metacognitive calibration gap.
+		if sdMsg := a.successDeclare.maybeWarn(i + 1); sdMsg != "" {
+			debug.Log("agent", "Iteration %d: premature success declaration detected", i+1)
+			a.contextManager.Add(provider.Message{
+				Role:    "user",
+				Content: []provider.ContentBlock{{Type: "text", Text: sdMsg}},
+			})
+			msgs = a.contextManager.Messages()
+		}
+
 		// Wasted exploration detection: nudge the agent when previous
 		// search results containing file paths were never acted upon.
 		if wastedExploreMsg := a.maybeWarnWastedExplore(i + 1); wastedExploreMsg != "" {
@@ -1959,6 +1974,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					}},
 				})
 			}
+			a.successDeclare.recordAssistantText(assistantText, i)
 
 			// Selective evidence detector: detect confirmation bias pattern where
 			// the agent emphasizes positive evidence while dismissing negatives.
@@ -3213,6 +3229,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 			// Unverified mutation streak: track consecutive edits without verification.
 			a.bareEditStreak.recordToolCall(tc.Name)
+			a.successDeclare.recordToolCall()
 			if cascadeGuidance := a.fixCascadeCheckCommand(tc.Name, tc.Arguments, result.IsError); cascadeGuidance != "" {
 				if result.Content != "" {
 					result.Content = result.Content + "\n\n" + cascadeGuidance
