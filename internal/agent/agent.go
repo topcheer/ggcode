@@ -228,6 +228,7 @@ type Agent struct {
 	trajectoryHealth           *trajectoryHealthState                // metacognitive trajectory health synthesis (multi-signal composite)
 	reversibility              *reversibilityState                   // pre-action reversibility assessment (irreversible action safety check)
 	mindlessAction             *mindlessActionState                  // mindless action detection (rapid-fire tool calls without reasoning)
+	strategyStagnation         *strategyStagnationState              // strategy stagnation detection (same-tool+target retries after failure)
 	behaviorPattern            *behaviorPatternState                 // cross-run behavioral anti-pattern detection (systemic issue awareness)
 	perfBaseline               *perfBaselineState                    // cross-session performance regression detection
 	lastRunStats               *RunStats                             // stats from the most recent run (for post-run summary display)
@@ -358,6 +359,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		scopeCreep:           newScopeCreepState(),
 		trajectoryHealth:     newTrajectoryHealthState(),
 		mindlessAction:       newMindlessActionState(),
+		strategyStagnation:   newStrategyStagnationState(),
 		reversibility:        newReversibilityState(),
 		errorCascade:         newErrorCascadeState(),
 		crossFileImpact:      newCrossFileImpactState(),
@@ -1323,6 +1325,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.scopeCreep.reset()
 	a.trajectoryHealth.reset()
 	a.mindlessAction.reset()
+	a.strategyStagnation.reset()
 	a.reversibility.reset()
 	a.constraintAmnesia.reset()
 	a.tunnelVision.reset()
@@ -2613,6 +2616,21 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Record tool result for adaptive sampling classification.
 			if a.adaptiveSampling != nil {
 				a.adaptiveSampling.recordToolResult(tc.Name, result.IsError)
+			}
+
+			// Strategy stagnation detector: tracks same-tool+target retries
+			// after failure. When 2+ consecutive failures with identical
+			// approach occur, inject guidance to pivot strategy.
+			if a.strategyStagnation.recordAttempt(tc.Name, string(tc.Arguments), !result.IsError) {
+				debug.Log("agent", "Iteration %d: strategy stagnation detected (tool=%s)", i+1, tc.Name)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: strategyStagnationWarning(tc.Name, extractStagnationTarget(tc.Name, string(tc.Arguments)), stagnationFailureThreshold),
+					}},
+				})
+				msgs = a.contextManager.Messages()
 			}
 
 			// Error classifier: immediate type-specific guidance on the first
