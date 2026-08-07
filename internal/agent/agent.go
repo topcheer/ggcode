@@ -199,6 +199,7 @@ type Agent struct {
 	mcpRuntime                 tool.MCPRuntime                       // MCP runtime for server snapshots (optional)
 	bgOrphan                   *bgOrphanState                        // orphaned background command detection (unchecked start_command jobs)
 	queryConverge              *queryConvergeState                   // query convergence failure detection (repeated similar searches without action)
+	errorCompound              *errorCompoundState                   // error compounding risk detector (systemic trajectory reliability)
 	wastedExplore              *wastedExploreState                   // wasted exploration detection (search results never acted upon)
 	tunnelVision               *tunnelVisionState                    // tunnel vision detection (narrow file scope / under-exploration)
 	prematureCommit            *prematureCommitState                 // premature commitment detection (insufficient evidence before first edit)
@@ -350,6 +351,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		toolRedundancy:       newToolRedundancyAnalyzer(),
 		bgOrphan:             newBgOrphanState(),
 		queryConverge:        newQueryConvergeState(),
+		errorCompound:        newErrorCompoundState(),
 		wastedExplore:        newWastedExploreState(),
 		tunnelVision:         newTunnelVisionState(),
 		prematureCommit:      newPrematureCommitState(),
@@ -1101,6 +1103,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	}
 	if a.momentumLoss != nil {
 		a.momentumLoss.reset()
+		a.errorCompound.reset()
 	}
 
 	defer func() {
@@ -1545,6 +1548,16 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.contextManager.Add(provider.Message{
 				Role:    "user",
 				Content: []provider.ContentBlock{{Type: "text", Text: momentumMsg}},
+			})
+			msgs = a.contextManager.Messages()
+		}
+
+		// Error compounding risk: compute geometric compounding probability
+		// and warn when accumulated errors make the trajectory unreliable.
+		if ecMsg := a.errorCompound.maybeWarn(i + 1); ecMsg != "" {
+			a.contextManager.Add(provider.Message{
+				Role:    "user",
+				Content: []provider.ContentBlock{{Type: "text", Text: ecMsg}},
 			})
 			msgs = a.contextManager.Messages()
 		}
@@ -3071,6 +3084,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				} else {
 					result.Content = regressionGuidance
 				}
+			}
+			// Error compounding risk: track all error signals across the run.
+			// Computes geometric compounding probability to detect systemic risk.
+			if hadError := a.errorCompound.recordResult(tc.Name, result.IsError, i+1); true {
+				a.errorCompound.recordStep(hadError)
 			}
 			if cascadeGuidance := a.fixCascadeCheckCommand(tc.Name, tc.Arguments, result.IsError); cascadeGuidance != "" {
 				if result.Content != "" {
