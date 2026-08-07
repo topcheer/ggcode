@@ -206,6 +206,7 @@ type Agent struct {
 	prematureCommit            *prematureCommitState                 // premature commitment detection (insufficient evidence before first edit)
 	diagnosticDisconnect       *diagnosticDisconnectState            // diagnostic-action disconnect detection (ignored diagnostics from failed tool calls)
 	bareEditStreak             *bareEditStreakState                  // unverified mutation streak detection (consecutive edits without verification)
+	verifyDebt                 *verifyDebtState                      // verification debt accumulator (edits since last green build)
 	errorCascade               *errorCascadeState                    // cascading failure detection (common-root-cause error clustering)
 	delegationOrch             *delegationState                      // delegation orchestration intelligence (orphaned delegations, serial anti-pattern, over-delegation)
 	crossFileImpact            *crossFileImpactState                 // pre-completion cross-file impact analysis (removed symbol breakage detection)
@@ -370,6 +371,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		prematureCommit:      newPrematureCommitState(),
 		diagnosticDisconnect: newDiagnosticDisconnectState(),
 		bareEditStreak:       newBareEditState(),
+		verifyDebt:           newVerifyDebtState(),
 		toolDiversity:        newDiversityState(),
 		fileChurn:            newChurnState(),
 		editOscillation:      newOscillationState(),
@@ -1128,6 +1130,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		a.momentumLoss.reset()
 		a.errorCompound.reset()
 		a.bareEditStreak.reset()
+		a.verifyDebt.reset()
 		a.successDeclare.reset()
 		a.reasonAction.reset()
 	}
@@ -1592,6 +1595,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.contextManager.Add(provider.Message{
 				Role:    "user",
 				Content: []provider.ContentBlock{{Type: "text", Text: ecMsg}},
+			})
+			msgs = a.contextManager.Messages()
+		}
+
+		// Verification debt: warn when source edits accumulate without a
+		// successful build. Prevents last-mile failure from compounding
+		// unverified changes (arXiv:2602.16666).
+		if vdMsg := a.verifyDebt.maybeWarn(i + 1); vdMsg != "" {
+			a.contextManager.Add(provider.Message{
+				Role:    "user",
+				Content: []provider.ContentBlock{{Type: "text", Text: vdMsg}},
 			})
 			msgs = a.contextManager.Messages()
 		}
@@ -3259,6 +3273,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Smart verify hint reset: if the agent ran a build/test/verify command,
 			// reset the edit counter and track the result.
 			a.maybeResetVerifyOnCommand(tc.Name, tc.Arguments, result.IsError)
+			a.verifyDebt.recordVerifyCommand(extractCommandFromArgs(tc.Arguments), result.IsError)
 
 			// Convergence lock: record verification result to detect post-verify
 			// unnecessary edit drift. A successful verify arms the lock; a failed
@@ -3294,6 +3309,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 			// Unverified mutation streak: track consecutive edits without verification.
 			a.bareEditStreak.recordToolCall(tc.Name)
+			if fileEditingTools[tc.Name] && !result.IsError {
+				a.verifyDebt.recordSourceEdit()
+			}
 			a.successDeclare.recordToolCall()
 			// Symbol grounding: record file paths and code identifiers from
 			// tool I/O so we can detect ungrounded references later.
