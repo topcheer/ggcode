@@ -201,6 +201,7 @@ type Agent struct {
 	mcpEcosystem               *mcpEcosystemState                    // MCP server health, conflict, and capability intelligence
 	mcpRuntime                 tool.MCPRuntime                       // MCP runtime for server snapshots (optional)
 	bgOrphan                   *bgOrphanState                        // orphaned background command detection (unchecked start_command jobs)
+	actionAnnihil              *actionAnnihilateState                // action annihilation detection (tool calls that cancel prior side effects)
 	toolStorm                  *toolStormState                       // tool call storm detection (diverse tools fired without reasoning)
 	reasoningRedund            *reasoningRedundancyState             // reasoning redundancy detection (consecutive text-only overthinking)
 	queryConverge              *queryConvergeState                   // query convergence failure detection (repeated similar searches without action)
@@ -383,6 +384,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		searchParamGuard:       newSearchParamGuard(),
 		toolRedundancy:         newToolRedundancyAnalyzer(),
 		bgOrphan:               newBgOrphanState(),
+		actionAnnihil:          newActionAnnihilateState(),
 		toolStorm:              newToolStormState(),
 		reasoningRedund:        newReasoningRedundancyState(),
 		queryConverge:          newQueryConvergeState(),
@@ -1154,6 +1156,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.monorepoScoper.reset()
 	a.mcpEcosystem.reset()
 	a.resetBgOrphan()
+	a.actionAnnihil.reset()
 	a.resetWastedExplore()
 	if a.delegationOrch != nil {
 		a.delegationOrch.resetForNewTurn()
@@ -3073,6 +3076,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Orphaned background command tracking: record start_command jobs
 			// and mark output checks. Detects forgotten background processes.
 			a.recordBgToolCall(tc.Name, tc.Arguments, result.Content, i+1)
+
+			// Action annihilation detection: check if this tool call cancels
+			// a prior tool call's side effects (git_add→git_reset, edit→undo, etc.).
+			if annihilWarn := a.actionAnnihil.recordToolCall(tc.Name, tc.Arguments, i+1); annihilWarn != "" {
+				debug.Log("agent", "Iteration %d: action annihilation detected", i+1)
+				a.contextManager.Add(provider.Message{
+					Role:    "user",
+					Content: []provider.ContentBlock{{Type: "text", Text: annihilWarn}},
+				})
+				msgs = a.contextManager.Messages()
+			}
 
 			// Tool call storm tracking: record each tool call to detect
 			// diverse-tool bursts without interleaved reasoning.
