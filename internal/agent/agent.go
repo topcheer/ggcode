@@ -150,6 +150,7 @@ type Agent struct {
 	planner                    *planState                            // agent-side auto task decomposition (Devin/Claude Code-inspired)
 	todoStaleness              *todoStalenessState                   // mid-run stale todo detection (plan abandonment awareness)
 	recurringError             *recurringErrorState                  // recurring build/test error fingerprint detection across edit cycles
+	errStrategyLoop            *errStrategyState                     // error strategy loop detection (procedural memory failure)
 	fixCascade                 *fixCascadeState                      // failed fix cascade (wrong-hypothesis lock-in) detection
 	errRegression              *errRegressionState                   // error count regression (negative progress) detection
 	stalledConvergence         *stalledConvergenceState              // stalled convergence detection (diminishing returns pattern)
@@ -329,6 +330,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		planner:                newPlanState(),
 		todoStaleness:          newTodoStalenessState(),
 		recurringError:         newRecurringErrorState(),
+		errStrategyLoop:        newErrStrategyState(),
 		fixCascade:             newFixCascadeState(),
 		errRegression:          newErrRegressionState(),
 		stalledConvergence:     newStalledConvergenceState(),
@@ -1390,6 +1392,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.resetDriftRecurrence()
 	a.resetLastGoodCheckpoint()
 	a.recurringError.reset()
+	a.errStrategyLoop.reset()
 	a.fixCascade.reset()
 	a.errRegression.reset()
 	a.stalledConvergence.reset()
@@ -3118,6 +3121,21 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// that get advanced past without resolution.
 			a.verifyDisconnect.recordVerificationResult(tc.Name, string(tc.Arguments), result.Content, i+1)
 			a.verifyDisconnect.recordToolCallForVD(tc.Name)
+
+			// Error strategy loop: track error categories across all tool
+			// calls to detect systemic approach failures (procedural memory
+			// gap from ProcMEM arXiv:2602.01869).
+			a.errStrategyLoop.recordResult(result.Content, result.IsError)
+			if strategyHint := a.errStrategyLoop.checkAndWarn(); strategyHint != "" {
+				debug.Log("agent", "Iteration %d: error strategy loop detector triggered", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: strategyHint,
+					}},
+				})
+			}
 
 			// Temporal blindness: track verification results and mutations
 			// to detect stale verification claims after code changes.
