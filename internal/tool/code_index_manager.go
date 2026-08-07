@@ -404,7 +404,7 @@ func (m *CodeIndexManager) collectFiles(ctx context.Context) []string {
 			if name == ".git" || name == "node_modules" || name == "vendor" ||
 				name == "dist" || name == "build" || name == ".next" ||
 				name == "__pycache__" || name == ".cache" || name == "target" ||
-				name == ".venv" || name == ".tox" {
+				name == ".venv" || name == ".tox" || name == ".ggcode" {
 				return filepath.SkipDir
 			}
 			return nil
