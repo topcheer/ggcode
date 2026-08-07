@@ -242,6 +242,7 @@ type Agent struct {
 	evidenceOverconfidence     *evidenceOverconfidenceState          // evidence-induced overconfidence (tool-type calibration asymmetry)
 	verifyDisconnect           *verifyDisconnectState                // verification outcome disconnect (advancing past failures)
 	selectiveEvidence          *selectiveEvidenceTrackerState        // confirmation bias detection (cherry-picked evidence + dismissed negatives)
+	temporalBlindness          *temporalBlindnessState               // temporal blindness detection (stale verification across mutations)
 	deferredWork               *deferredWorkState                    // deferred work tracking (forgotten follow-up detection)
 	circularReasoning          *circularReasoningState               // circular reasoning detection (tautological justification)
 	contradiction              *contradictionState                   // cross-turn contradiction detection (root-cause reversals)
@@ -413,6 +414,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		evidenceOverconfidence: newEvidenceOverconfidenceState(),
 		verifyDisconnect:       newVerifyDisconnectState(),
 		selectiveEvidence:      newSelectiveEvidenceTrackerState(),
+		temporalBlindness:      newTemporalBlindnessState(),
 		deferredWork:           newDeferredWorkState(),
 		circularReasoning:      newCircularReasoningState(),
 		contradiction:          newContradictionState(),
@@ -1157,6 +1159,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.mcpEcosystem.reset()
 	a.resetBgOrphan()
 	a.actionAnnihil.reset()
+	a.temporalBlindness.reset()
 	a.resetWastedExplore()
 	if a.delegationOrch != nil {
 		a.delegationOrch.resetForNewTurn()
@@ -2209,6 +2212,19 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				})
 			}
 
+			// Temporal blindness: detect when agent claims a verification
+			// result is still valid after mutations invalidated it.
+			if tbHint := a.temporalBlindness.maybeWarnTemporalBlindness(assistantText); tbHint != "" {
+				debug.Log("agent", "Iteration %d: temporal blindness detector triggered (%d mutations since last verification)", i+1, a.temporalBlindness.mutationCount)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: tbHint,
+					}},
+				})
+			}
+
 			// Deferred work tracker: detect when the agent defers work to
 			// "later" or "next" but never circles back. If stale deferrals
 			// accumulate or the agent declares completion with open items,
@@ -3102,6 +3118,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// that get advanced past without resolution.
 			a.verifyDisconnect.recordVerificationResult(tc.Name, string(tc.Arguments), result.Content, i+1)
 			a.verifyDisconnect.recordToolCallForVD(tc.Name)
+
+			// Temporal blindness: track verification results and mutations
+			// to detect stale verification claims after code changes.
+			a.temporalBlindness.recordVerification(tc.Name, string(tc.Arguments), result.Content, i+1)
+			a.temporalBlindness.recordMutation(tc.Name)
 
 			// Wasted exploration tracking: record search tool results and
 			// file path consumption. Detects searches whose results were
