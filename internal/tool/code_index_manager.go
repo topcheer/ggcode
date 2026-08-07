@@ -252,10 +252,19 @@ func (m *CodeIndexManager) doBuild(ctx context.Context) {
 		}
 	}
 
-	// Build a lookup of cached docs by path.
+	// Build a lookup of cached docs by path, filtering out paths that
+	// fall under now-skipped directories (e.g. .ggcode, node_modules).
 	cachedMap := make(map[string]persistedDoc, len(cached))
+	filtered := 0
 	for _, d := range cached {
+		if isInSkipDir(d.Path) {
+			filtered++
+			continue
+		}
 		cachedMap[d.Path] = d
+	}
+	if filtered > 0 {
+		debug.Log("codeindex", "filtered %d cached docs in skip dirs", filtered)
 	}
 
 	// Phase 2: Walk the working directory for current files.
@@ -414,6 +423,19 @@ func (m *CodeIndexManager) collectFiles(ctx context.Context) []string {
 		return nil
 	})
 	return files
+}
+
+// isInSkipDir checks if any path component is a skip directory.
+// Used to purge stale cache entries from directories that were later
+// added to the skip list.
+func isInSkipDir(relPath string) bool {
+	parts := strings.Split(filepath.ToSlash(relPath), "/")
+	for _, p := range parts {
+		if isSkipDir(p) {
+			return true
+		}
+	}
+	return false
 }
 
 // isSkipDir returns true for directories that should be excluded from
