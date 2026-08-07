@@ -237,6 +237,7 @@ type Agent struct {
 	ungroundedReflect          *ungroundedReflectionState            // ungrounded reflection detector (text-only thinking loops)
 	actionHedging              *actionHedgingState                   // action hedging detection (verbalized uncertainty during mutations)
 	scopeCreep                 *scopeCreepState                      // scope creep detection (unsolicited changes beyond request)
+	prematureAbstr             *prematureAbstrState                  // premature abstraction detection (over-engineering within task scope)
 	planAbandon                *planAbandonState                     // plan abandonment detection (declare plan, claim done without executing)
 	toolTargetMismatch         *toolTargetState                      // tool-target mismatch detection (stated intent vs actual tool target)
 	trajectoryHealth           *trajectoryHealthState                // metacognitive trajectory health synthesis (multi-signal composite)
@@ -390,6 +391,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		ungroundedReflect:    newUngroundedReflectionState(),
 		actionHedging:        newActionHedgingState(),
 		scopeCreep:           newScopeCreepState(),
+		prematureAbstr:       newPrematureAbstrState(),
 		planAbandon:          newPlanAbandonState(),
 		trajectoryHealth:     newTrajectoryHealthState(),
 		mindlessAction:       newMindlessActionState(),
@@ -1383,6 +1385,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.contradiction.reset()
 	a.actionHedging.reset()
 	a.scopeCreep.reset()
+	a.prematureAbstr.reset()
 	a.planAbandon.reset()
 	a.trajectoryHealth.reset()
 	a.mindlessAction.reset()
@@ -2095,6 +2098,20 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					Content: []provider.ContentBlock{{
 						Type: "text",
 						Text: scopeHint,
+					}},
+				})
+			}
+
+			// Premature abstraction detector: scan assistant text for language
+			// indicating over-engineering within the task scope (factory patterns,
+			// interface hierarchies with single implementations, config systems).
+			if abstrHint := a.maybeWarnPrematureAbstraction(assistantText); abstrHint != "" {
+				debug.Log("agent", "Iteration %d: premature abstraction detector detected over-engineering", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: abstrHint,
 					}},
 				})
 			}
