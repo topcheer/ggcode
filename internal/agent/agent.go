@@ -208,6 +208,7 @@ type Agent struct {
 	reasoningRedund            *reasoningRedundancyState             // reasoning redundancy detection (consecutive text-only overthinking)
 	queryConverge              *queryConvergeState                   // query convergence failure detection (repeated similar searches without action)
 	strategyFixation           *strategyFixationState                // strategy fixation detection (same file edited N times with failed verifications -- approach-level failure)
+	errorRush                  *errorRushState                       // error rush / panic coding detection (blind-fixing after consecutive errors without diagnosis)
 	errorCompound              *errorCompoundState                   // error compounding risk detector (systemic trajectory reliability)
 	correctionSpiral           *correctionSpiralState                // correction spiral detector (error severity escalation across fixes)
 	wastedExplore              *wastedExploreState                   // wasted exploration detection (search results never acted upon)
@@ -403,6 +404,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		diagnosticDisconnect:   newDiagnosticDisconnectState(),
 		bareEditStreak:         newBareEditState(),
 		strategyFixation:       newStrategyFixationState(),
+		errorRush:              newErrorRushState(),
 		recklessExec:           newRecklessExecState(),
 		irrevGate:              newIrrevGateState(),
 		verifyDebt:             newVerifyDebtState(),
@@ -1186,6 +1188,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		a.correctionSpiral.reset()
 		a.bareEditStreak.reset()
 		a.strategyFixation.reset()
+		a.errorRush.reset()
 		if a.recklessExec != nil {
 			a.recklessExec.reset()
 		}
@@ -1846,6 +1849,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.contextManager.Add(provider.Message{
 				Role:    "user",
 				Content: []provider.ContentBlock{{Type: "text", Text: sfMsg}},
+			})
+			msgs = a.contextManager.Messages()
+		}
+
+		// Error rush: detect panic coding -- blind-fixing after consecutive
+		// errors without diagnostic reads in between (Agentic Overconfidence,
+		// arXiv 2026; AgentDiet, FSE 2026).
+		if erMsg := a.errorRush.check(); erMsg != "" {
+			a.contextManager.Add(provider.Message{
+				Role:    "user",
+				Content: []provider.ContentBlock{{Type: "text", Text: erMsg}},
 			})
 			msgs = a.contextManager.Messages()
 		}
@@ -3654,6 +3668,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			} else if strategyFixationIsVerification(tc.Name) {
 				a.strategyFixation.recordVerification(tc.Name, result.Content, result.IsError)
 			}
+			// Error rush: track error-to-action dynamics for panic coding detection.
+			a.errorRush.recordToolCall(tc.Name, result.Content, result.IsError)
 			// Reckless execution: track exploration vs edit targets.
 			if a.recklessExec != nil {
 				argsStr := string(tc.Arguments)
