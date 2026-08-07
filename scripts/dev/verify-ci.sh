@@ -21,8 +21,14 @@ unset ZAI_API_KEY
 unset GGCODE_ZAI_API_KEY
 unset ZAI_MODEL
 
-# ── Main module ──────────────────────────────────────────────────────────
-echo "[verify-ci] checking gofmt cleanliness (main module)"
+# ── Config ────────────────────────────────────────────────────────────────
+# Default GOMEMLIMIT matches GitHub CI (2GiB). Override via VERIFY_CI_MEMLIMIT.
+GOMEMLIMIT="${VERIFY_CI_MEMLIMIT:-2GiB}"
+# Set VERIFY_CI_FULL=1 to also run cross-compile, desktop, and frontend checks.
+FULL="${VERIFY_CI_FULL:-0}"
+
+# ── Main module (mirrors .github/workflows/ci.yml) ────────────────────────
+echo "[verify-ci] checking gofmt cleanliness"
 if ! test -z "$(gofmt -l ./cmd ./internal)"; then
   echo "[verify-ci] gofmt found unformatted files:"
   gofmt -l ./cmd ./internal
@@ -33,74 +39,67 @@ echo "[verify-ci] downloading modules"
 go mod download
 
 echo "[verify-ci] building ggcode"
-GOMEMLIMIT="${VERIFY_CI_MEMLIMIT:-512MiB}" go build -tags goolm -o /tmp/ggcode ./cmd/ggcode
+GOMEMLIMIT="${GOMEMLIMIT}" go build -tags goolm -o /tmp/ggcode ./cmd/ggcode
 
-echo "[verify-ci] cross-platform compile check (linux + windows)"
-# Catch errors in platform-specific files (*_darwin.go, *_linux.go, *_windows.go)
-# that only surface when building for a different OS than the dev machine.
-for target in "linux/amd64" "windows/amd64"; do
-  os="${target%%/*}"
-  arch="${target##*/}"
-  if ! CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" GOMEMLIMIT="${VERIFY_CI_MEMLIMIT:-512MiB}" go build -tags goolm ./cmd/ggcode 2>/tmp/cross-build.err; then
-    echo "[verify-ci] cross-compile FAILED for ${os}/${arch}:"
-    cat /tmp/cross-build.err
-    exit 1
-  fi
-done
-echo "[verify-ci] cross-platform compile check passed"
-
-echo "[verify-ci] running go vet (main module)"
-GOMEMLIMIT="${VERIFY_CI_MEMLIMIT:-512MiB}" go vet -tags goolm ./cmd/... ./internal/...
+echo "[verify-ci] running go vet"
+GOMEMLIMIT="${GOMEMLIMIT}" go vet -tags goolm ./...
 
 echo "[verify-ci] running tests (main module, unit only)"
-# NOTE: do NOT use the "integration" tag here — integration tests (e.g. browser
-# tests that spawn Chrome) are too heavy for CI and will OOM. Run them
-# separately via: go test -tags "goolm,integration" ./internal/tool/ -run TestBrowserIntegration
-# 2GiB limit + limited parallelism to avoid OOM on resource-constrained machines.
-# Tests run per-package so memory is freed between packages instead of all
-# packages compiling into one huge test binary heap at once.
-test_failed=0
-for pkg in $(go list -tags goolm ./cmd/... ./internal/... 2>/dev/null); do
-  echo "[verify-ci] testing ${pkg}"
-  if ! GOMEMLIMIT="${VERIFY_CI_MEMLIMIT:-512MiB}" go test -tags goolm -timeout 300s -p 1 -parallel 1 "${pkg}"; then
-    test_failed=1
-  fi
-done
-if [ "${test_failed}" -ne 0 ]; then
-  echo "[verify-ci] one or more test packages failed"
-  exit 1
-fi
+# NOTE: do NOT use the "integration" tag here - integration tests (e.g. browser
+# tests that spawn Chrome) are too heavy for CI and will OOM.
+GOMEMLIMIT="${GOMEMLIMIT}" GOGC=50 go test -tags goolm -p 1 -timeout 300s ./cmd/... ./internal/...
 
-# ── Desktop module (CGO required, macOS only) ────────────────────────────
-desktop_dir="${repo_root}/desktop/ggcode-desktop-wails"
-if [ -d "${desktop_dir}" ] && [ -f "${desktop_dir}/go.mod" ]; then
+echo "[verify-ci] core checks passed"
+
+# ── Optional full checks (VERIFY_CI_FULL=1) ───────────────────────────────
+if [ "${FULL}" = "1" ]; then
   echo ""
-  echo "[verify-ci:desktop] checking gofmt cleanliness"
-  if ! test -z "$(gofmt -l "${desktop_dir}")"; then
-    echo "[verify-ci:desktop] gofmt found unformatted files:"
-    gofmt -l "${desktop_dir}"
-    exit 1
+  echo "[verify-ci:full] cross-platform compile check (linux + windows)"
+  for target in "linux/amd64" "windows/amd64"; do
+    os="${target%%/*}"
+    arch="${target##*/}"
+    if ! CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" GOMEMLIMIT="${GOMEMLIMIT}" go build -tags goolm ./cmd/ggcode 2>/tmp/cross-build.err; then
+      echo "[verify-ci:full] cross-compile FAILED for ${os}/${arch}:"
+      cat /tmp/cross-build.err
+      exit 1
+    fi
+  done
+  echo "[verify-ci:full] cross-platform compile check passed"
+
+  # ── Desktop module (CGO required, macOS only) ────────────────────────────
+  desktop_dir="${repo_root}/desktop/ggcode-desktop-wails"
+  if [ -d "${desktop_dir}" ] && [ -f "${desktop_dir}/go.mod" ]; then
+    echo ""
+    echo "[verify-ci:desktop] checking gofmt cleanliness"
+    if ! test -z "$(gofmt -l "${desktop_dir}")"; then
+      echo "[verify-ci:desktop] gofmt found unformatted files:"
+      gofmt -l "${desktop_dir}"
+      exit 1
+    fi
+
+    echo "[verify-ci:desktop] downloading modules"
+    (cd "${desktop_dir}" && go mod download)
+
+    echo "[verify-ci:desktop] running go vet"
+    (cd "${desktop_dir}" && CGO_ENABLED=1 go vet -tags goolm ./...)
+
+    echo "[verify-ci:desktop] running tests"
+    (cd "${desktop_dir}" && CGO_ENABLED=1 GOMEMLIMIT="${GOMEMLIMIT}" go test -tags goolm -count=1 -timeout 120s ./...)
   fi
 
-  echo "[verify-ci:desktop] downloading modules"
-  (cd "${desktop_dir}" && go mod download)
+  # ── Frontend Vitest (no CGO needed) ───────────────────────────────────────
+  frontend_dir="${desktop_dir}/frontend"
+  if [ -d "${frontend_dir}" ] && [ -f "${frontend_dir}/package.json" ]; then
+    echo ""
+    echo "[verify-ci:frontend] running Vitest tests"
+    (cd "${frontend_dir}" && npx vitest run --reporter=dot 2>&1)
+    if [ $? -ne 0 ]; then
+      echo "[verify-ci:frontend] Vitest tests FAILED"
+      exit 1
+    fi
+    echo "[verify-ci:frontend] Vitest tests passed"
+  fi
 
-  echo "[verify-ci:desktop] running go vet"
-  (cd "${desktop_dir}" && CGO_ENABLED=1 go vet -tags goolm ./...)
-
-  echo "[verify-ci:desktop] running tests"
-  (cd "${desktop_dir}" && CGO_ENABLED=1 GOMEMLIMIT="${VERIFY_CI_MEMLIMIT:-512MiB}" go test -tags goolm -count=1 -timeout 120s ./...)
-fi
-
-# ── Frontend Vitest (no CGO needed) ───────────────────────────────────────
-frontend_dir="${desktop_dir}/frontend"
-if [ -d "${frontend_dir}" ] && [ -f "${frontend_dir}/package.json" ]; then
   echo ""
-  echo "[verify-ci:frontend] running Vitest tests"
-  (cd "${frontend_dir}" && npx vitest run --reporter=dot 2>&1)
-  if [ $? -ne 0 ]; then
-    echo "[verify-ci:frontend] Vitest tests FAILED"
-    exit 1
-  fi
-  echo "[verify-ci:frontend] Vitest tests passed"
+  echo "[verify-ci:full] all checks passed"
 fi
