@@ -40,6 +40,21 @@ var fileEditingTools = map[string]bool{
 	"multi_file_write": true,
 }
 
+// fileReadingTools is the set of tools that read file contents.
+var fileReadingTools = map[string]bool{
+	"read_file":       true,
+	"multi_file_read": true,
+}
+
+// extractToolFilePath extracts the first file path from tool arguments.
+func extractToolFilePath(toolName string, args json.RawMessage) string {
+	paths := extractFilePathsFromArgs(args, toolName)
+	if len(paths) > 0 {
+		return paths[0]
+	}
+	return ""
+}
+
 // gitFileModifyingTools are git operations that change file contents on
 // disk (checkout, stash pop/apply, etc.). These must invalidate tool caches
 // just like direct file edits, otherwise stale cached results (grep, LSP)

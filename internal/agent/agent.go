@@ -247,6 +247,7 @@ type Agent struct {
 	reasonAction               *reasonActionState                    // reasoning-action alignment verification (cognitive category mismatch)
 	symbolGrounding            *symbolGroundingState                 // symbol grounding verification (ungrounded code symbol reference detection)
 	inputUnderspec             *inputUnderspecState                  // input underspecification detection (vague/underspecified user request)
+	futileCycle                *futileCycleState                     // futile cycle detection (circular exploration without writes)
 	strategyStagnation         *strategyStagnationState              // strategy stagnation detection (same-tool+target retries after failure)
 	iterPressure               *iterPressureState                    // iteration pressure degradation detection (verify/edit ratio drop near budget limit)
 	momentumLoss               *momentumLossState                    // late-phase productivity collapse detection (last-mile stall)
@@ -409,6 +410,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		symbolGrounding:      newSymbolGroundingState(),
 		inputUnderspec:       newInputUnderspecState(),
 		qualityScorer:        NewResponseQualityScorer(100),
+		futileCycle:          newFutileCycleState(),
 	}
 	a.syncContextManagerProviderLocked()
 	a.syncContextManagerUsageHandlerLocked()
@@ -908,6 +910,13 @@ func (a *Agent) SetCodeIndexManager(m *tool.CodeIndexManager) {
 	a.codeIndex = m
 }
 
+// CodeIndexManager returns the code index manager if one is set.
+func (a *Agent) CodeIndexManager() *tool.CodeIndexManager {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.codeIndex
+}
+
 // SetDiffConfirm sets the diff confirmation callback.
 func (a *Agent) SetDiffConfirm(fn DiffConfirmFunc) {
 	a.mu.Lock()
@@ -1134,6 +1143,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		a.momentumLoss.reset()
 		a.errorCompound.reset()
 		a.bareEditStreak.reset()
+		a.futileCycle.reset()
 		a.verifyDebt.reset()
 		a.successDeclare.reset()
 		a.reasonAction.reset()
@@ -1697,6 +1707,16 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.contextManager.Add(provider.Message{
 				Role:    "user",
 				Content: []provider.ContentBlock{{Type: "text", Text: bsMsg}},
+			})
+			msgs = a.contextManager.Messages()
+		}
+
+		// Futile cycle: detect when the agent re-reads the same set of files
+		// that it explored earlier without making any edits in between.
+		if fcMsg := a.futileCycle.maybeWarn(i + 1); fcMsg != "" {
+			a.contextManager.Add(provider.Message{
+				Role:    "user",
+				Content: []provider.ContentBlock{{Type: "text", Text: fcMsg}},
 			})
 			msgs = a.contextManager.Messages()
 		}
@@ -3341,6 +3361,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 			// Unverified mutation streak: track consecutive edits without verification.
 			a.bareEditStreak.recordToolCall(tc.Name)
+			// Futile cycle: track reads vs writes to detect circular exploration.
+			if fileEditingTools[tc.Name] {
+				a.futileCycle.recordWrite()
+			} else if filePath := extractToolFilePath(tc.Name, tc.Arguments); filePath != "" {
+				a.futileCycle.recordRead(filePath)
+			}
 			if fileEditingTools[tc.Name] && !result.IsError {
 				a.verifyDebt.recordSourceEdit()
 			}
