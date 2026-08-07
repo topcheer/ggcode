@@ -210,22 +210,27 @@ func (r *REPL) SetCore(core *agentruntime.InteractiveRuntimeCore) {
 	if r.agent != nil && core.Registry != nil {
 		if cim := core.Registry.CodeIndex(); cim != nil {
 			r.agent.SetCodeIndexManager(cim)
-			// Start index build after a short delay so it doesn't compete
-			// with startup I/O. Set the onReady callback inside the goroutine
-			// so programSend is initialized by then.
+			debug.Log("codeindex", "SetCore: code index manager found, scheduling delayed start")
 			go func() {
 				time.Sleep(3 * time.Second)
+				debug.Log("codeindex", "delayed start: program=%v, ready=%v", r.program != nil, cim.IsReady())
 				cim.SetOnReady(func(stats tool.CodeIndexStats) {
 					if stats.IndexedFiles > 0 {
+						debug.Log("codeindex", "onReady callback: %d files, sending system msg", stats.IndexedFiles)
 						r.sendTUI(systemMsg{msg: fmt.Sprintf("Code index ready: %d files indexed - @ fuzzy search enabled", stats.IndexedFiles)})
 					}
 				})
 				if !cim.IsReady() {
+					debug.Log("codeindex", "sending 'Building...' system msg")
 					r.sendTUI(systemMsg{msg: "Building code index for @ fuzzy search..."})
 				}
 				cim.StartBackgroundIndex()
 			}()
+		} else {
+			debug.Log("codeindex", "SetCore: CodeIndex() returned nil")
 		}
+	} else {
+		debug.Log("codeindex", "SetCore: agent=%v, registry=%v", r.agent != nil, core.Registry != nil)
 	}
 }
 
