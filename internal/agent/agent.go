@@ -233,6 +233,7 @@ type Agent struct {
 	mindlessAction             *mindlessActionState                  // mindless action detection (rapid-fire tool calls without reasoning)
 	strategyStagnation         *strategyStagnationState              // strategy stagnation detection (same-tool+target retries after failure)
 	iterPressure               *iterPressureState                    // iteration pressure degradation detection (verify/edit ratio drop near budget limit)
+	momentumLoss               *momentumLossState                    // late-phase productivity collapse detection (last-mile stall)
 	infoScent                  *infoScentState                       // information scent decay detection (diminishing novelty across explorations)
 	behaviorPattern            *behaviorPatternState                 // cross-run behavioral anti-pattern detection (systemic issue awareness)
 	perfBaseline               *perfBaselineState                    // cross-session performance regression detection
@@ -369,6 +370,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		mindlessAction:       newMindlessActionState(),
 		strategyStagnation:   newStrategyStagnationState(),
 		iterPressure:         newIterPressureState(maxIter),
+		momentumLoss:         newMomentumLossState(),
 		infoScent:            newInfoScentState(),
 		reversibility:        newReversibilityState(),
 		errorCascade:         newErrorCascadeState(),
@@ -1097,6 +1099,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	if a.iterPressure != nil {
 		a.iterPressure.reset(a.maxIter)
 	}
+	if a.momentumLoss != nil {
+		a.momentumLoss.reset()
+	}
 
 	defer func() {
 		// Mark the run as completed in the journal (crash detection cleanup).
@@ -1529,6 +1534,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.contextManager.Add(provider.Message{
 				Role:    "user",
 				Content: []provider.ContentBlock{{Type: "text", Text: thermalMsg}},
+			})
+			msgs = a.contextManager.Messages()
+		}
+
+		// Momentum loss detection: track per-iteration productivity and
+		// warn when late-phase productivity collapses after early progress.
+		a.momentumLoss.startIteration(i + 1)
+		if momentumMsg := a.momentumLoss.checkMomentumLoss(a.maxIter); momentumMsg != "" {
+			a.contextManager.Add(provider.Message{
+				Role:    "user",
+				Content: []provider.ContentBlock{{Type: "text", Text: momentumMsg}},
 			})
 			msgs = a.contextManager.Messages()
 		}
@@ -2336,6 +2352,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.toolCallBudget.record()
 			a.toolThermal.recordToolCall(tc.Name)
 			a.iterPressure.recordToolCall(tc.Name, i+1)
+			a.momentumLoss.recordToolCall(tc.Name)
 			extractPathsFromToolCall(tc.Name, tc.Arguments, runStats)
 			// Check for consecutive duplicate tool calls (loop detection).
 			// If detected, inject a guidance message into the tool result.
