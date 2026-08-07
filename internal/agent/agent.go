@@ -226,6 +226,7 @@ type Agent struct {
 	verbosityDrift             *verbosityDriftState                  // verbosity drift detection (token-to-productivity ratio degradation)
 	toolOveruse                *toolOveruseState                     // tool overuse / self-awareness detection (unnecessary tool calls for known info)
 	assumptionTracker          *assumptionTrackerState               // implicit assumption detection (unverified guesses in assistant text)
+	selectiveEvidence          *selectiveEvidenceTrackerState        // confirmation bias detection (cherry-picked evidence + dismissed negatives)
 	deferredWork               *deferredWorkState                    // deferred work tracking (forgotten follow-up detection)
 	circularReasoning          *circularReasoningState               // circular reasoning detection (tautological justification)
 	actionHedging              *actionHedgingState                   // action hedging detection (verbalized uncertainty during mutations)
@@ -366,6 +367,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		verbosityDrift:       newVerbosityDriftState(),
 		toolOveruse:          newToolOveruseState(),
 		assumptionTracker:    newAssumptionTrackerState(),
+		selectiveEvidence:    newSelectiveEvidenceTrackerState(),
 		deferredWork:         newDeferredWorkState(),
 		circularReasoning:    newCircularReasoningState(),
 		actionHedging:        newActionHedgingState(),
@@ -1346,6 +1348,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.verbosityDrift.reset()
 	a.toolOveruse.reset()
 	a.assumptionTracker.reset()
+	a.selectiveEvidence.reset()
 	a.deferredWork.reset()
 	a.circularReasoning.reset()
 	a.actionHedging.reset()
@@ -1923,6 +1926,19 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					Content: []provider.ContentBlock{{
 						Type: "text",
 						Text: assumptionHint,
+					}},
+				})
+			}
+
+			// Selective evidence detector: detect confirmation bias pattern where
+			// the agent emphasizes positive evidence while dismissing negatives.
+			if biasHint := a.maybeWarnSelectiveEvidence(assistantText); biasHint != "" {
+				debug.Log("agent", "Iteration %d: selective evidence detector detected confirmation bias", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: biasHint,
 					}},
 				})
 			}
