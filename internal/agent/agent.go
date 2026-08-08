@@ -276,6 +276,7 @@ type Agent struct {
 	reversibility              *reversibilityState                   // pre-action reversibility assessment (irreversible action safety check)
 	mindlessAction             *mindlessActionState                  // mindless action detection (rapid-fire tool calls without reasoning)
 	successDeclare             *successDeclareState                  // premature success declaration detection (calibration gap: done claim + continued work)
+	criteriaDrift              *criteriaDriftState                   // success criteria drift detection (proxy gaming via evaluator weakening)
 	reasonAction               *reasonActionState                    // reasoning-action alignment verification (cognitive category mismatch)
 	symbolGrounding            *symbolGroundingState                 // symbol grounding verification (ungrounded code symbol reference detection)
 	inputUnderspec             *inputUnderspecState                  // input underspecification detection (vague/underspecified user request)
@@ -497,6 +498,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		diskSpace:              newDiskSpaceState(),
 		envDrift:               newEnvDriftState(),
 		successDeclare:         newSuccessDeclareState(),
+		criteriaDrift:          newCriteriaDriftState(),
 		reasonAction:           newReasonActionState(),
 		attemptBrief:           newAttemptBriefState(),
 		symbolGrounding:        newSymbolGroundingState(),
@@ -1267,6 +1269,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		a.verifyDebt.reset()
 		a.editPropagation.reset()
 		a.successDeclare.reset()
+		a.criteriaDrift.reset()
 		a.reasonAction.reset()
 		a.attemptBrief.reset()
 	}
@@ -1858,6 +1861,14 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			})
 			msgs = a.contextManager.Messages()
 		}
+		if cdMsg := a.criteriaDrift.maybeWarn(i + 1); cdMsg != "" {
+			debug.Log("agent", "Iteration %d: success criteria drift detected", i+1)
+			a.contextManager.Add(provider.Message{
+				Role:    "user",
+				Content: []provider.ContentBlock{{Type: "text", Text: cdMsg}},
+			})
+			msgs = a.contextManager.Messages()
+		}
 		// Attempt brief: compact summary of failed approaches to prevent
 		// repeating the same dead-end strategy.
 		if abMsg := a.attemptBrief.maybeBrief(i + 1); abMsg != "" {
@@ -2429,6 +2440,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				})
 			}
 			a.successDeclare.recordAssistantText(assistantText, i)
+			a.criteriaDrift.recordAssistantText(assistantText, i)
 			a.subgoalTrack.recordAssistantText(assistantText, i)
 
 			// Symbol grounding verifier: detect code symbols mentioned in
