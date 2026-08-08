@@ -255,6 +255,7 @@ type Agent struct {
 	assumptionTracker          *assumptionTrackerState               // implicit assumption detection (unverified guesses in assistant text)
 	sycophancyGuard            *sycophancyState                      // user-premise sycophancy detection (agreeing with user premises without verification)
 	unverifiedConfidence       *unverifiedConfidenceState            // unverified confidence detection (overconfident claims without verification)
+	phantomVerify              *phantomVerifyState                   // phantom verification detection (category-specific verification claims without matching commands)
 	evidenceOverconfidence     *evidenceOverconfidenceState          // evidence-induced overconfidence (tool-type calibration asymmetry)
 	verifyDisconnect           *verifyDisconnectState                // verification outcome disconnect (advancing past failures)
 	selectiveEvidence          *selectiveEvidenceTrackerState        // confirmation bias detection (cherry-picked evidence + dismissed negatives)
@@ -461,6 +462,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		assumptionTracker:      newAssumptionTrackerState(),
 		sycophancyGuard:        newSycophancyState(),
 		unverifiedConfidence:   newUnverifiedConfidenceState(),
+		phantomVerify:          newPhantomVerifyState(),
 		evidenceOverconfidence: newEvidenceOverconfidenceState(),
 		verifyDisconnect:       newVerifyDisconnectState(),
 		selectiveEvidence:      newSelectiveEvidenceTrackerState(),
@@ -2412,6 +2414,20 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					}},
 				})
 			}
+
+			// Phantom verification: detect category-specific verification claims
+			// ("tests pass", "build compiles") without a matching verification
+			// command in the trajectory. Process supervision gap (AgentPro, EMNLP 2025).
+			if pvHint := a.maybeWarnPhantomVerify(assistantText); pvHint != "" {
+				debug.Log("agent", "Iteration %d: phantom verification detector found unverified category claims", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: pvHint,
+					}},
+				})
+			}
 			a.successDeclare.recordAssistantText(assistantText, i)
 			a.subgoalTrack.recordAssistantText(assistantText, i)
 
@@ -3469,6 +3485,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// whether verification (build/test/lint) was run after edits.
 			a.unverifiedConfidence.recordToolCall(tc.Name, string(tc.Arguments))
 			a.evidenceOverconfidence.recordToolCall(tc.Name, string(tc.Arguments))
+			a.phantomVerify.recordToolCall(tc.Name, string(tc.Arguments))
 
 			// Outcome misattribution: record tool calls to track corrective
 			// actions between failure and success claim.
