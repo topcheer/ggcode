@@ -278,6 +278,7 @@ type Agent struct {
 	iterPressure               *iterPressureState                    // iteration pressure degradation detection (verify/edit ratio drop near budget limit)
 	momentumLoss               *momentumLossState                    // late-phase productivity collapse detection (last-mile stall)
 	diminishingEdit            *diminishingEditState                 // polish-spiral detection (diminishing edit substance)
+	overcorrection             *overcorrectionState                  // overcorrection cascade detection (disproportionate fix size)
 	prematureSurrender         *surrenderState                       // premature task abandonment detection (metacognitive surrender awareness)
 	prematureRefactor          *prematureRefactorState               // premature refactoring detection (unverified code restructuring awareness)
 	subgoalTrack               *subgoalState                         // subgoal completion integrity (missing-step planning failure awareness)
@@ -462,6 +463,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		iterPressure:           newIterPressureState(maxIter),
 		momentumLoss:           newMomentumLossState(),
 		diminishingEdit:        newDiminishingEditState(),
+		overcorrection:         newOvercorrectionState(),
 		prematureSurrender:     newSurrenderState(),
 		prematureRefactor:      newPrematureRefactorState(),
 		subgoalTrack:           newSubgoalState(),
@@ -1215,6 +1217,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	if a.momentumLoss != nil {
 		a.momentumLoss.reset()
 		a.diminishingEdit.reset()
+		a.overcorrection.reset()
 		a.prematureRefactor.reset()
 		a.errorCompound.reset()
 		a.correctionSpiral.reset()
@@ -3154,6 +3157,14 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					a.convergenceRecordEdit(tc.Name)
 					// Diminishing edit: track edit substance size for polish-spiral detection.
 					a.diminishingRecordEdit(tc.Name, tc.Arguments)
+					// Overcorrection cascade: track edit size vs error severity.
+					if ocHint := a.overcorrectionRecordEdit(tc.Name, tc.Arguments); ocHint != "" {
+						if result.Content != "" {
+							result.Content = result.Content + "\n\n" + ocHint
+						} else {
+							result.Content = ocHint
+						}
+					}
 					a.prematureRefactorRecordEdit(tc.Name, tc.Arguments)
 					// Fix cascade: track edits for wrong-hypothesis lock-in detection.
 					a.fixCascade.recordEdit()
@@ -3269,6 +3280,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// False premise detection: record tool errors for later contradiction
 			// analysis against assistant success claims.
 			a.falsePremise.recordToolResult(tc.Name, result.Content, result.IsError)
+
+			// Overcorrection cascade: record error signals for proportionality analysis.
+			a.overcorrectionRecordError(tc.Name, result.Content, result.IsError)
 
 			// Sycophancy detection: a verification tool was used, so mark
 			// pending user premises as independently verified.
