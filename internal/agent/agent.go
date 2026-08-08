@@ -207,6 +207,7 @@ type Agent struct {
 	toolStorm                  *toolStormState                       // tool call storm detection (diverse tools fired without reasoning)
 	reasoningRedund            *reasoningRedundancyState             // reasoning redundancy detection (consecutive text-only overthinking)
 	queryConverge              *queryConvergeState                   // query convergence failure detection (repeated similar searches without action)
+	serialRead                 *serialReadState                      // sequential read serialization detection (cross-turn single-read batching opportunity)
 	strategyFixation           *strategyFixationState                // strategy fixation detection (same file edited N times with failed verifications -- approach-level failure)
 	errorRush                  *errorRushState                       // error rush / panic coding detection (blind-fixing after consecutive errors without diagnosis)
 	errorCompound              *errorCompoundState                   // error compounding risk detector (systemic trajectory reliability)
@@ -396,6 +397,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		toolRedundancy:         newToolRedundancyAnalyzer(),
 		bgOrphan:               newBgOrphanState(),
 		actionAnnihil:          newActionAnnihilateState(),
+		serialRead:             newSerialReadState(),
 		toolStorm:              newToolStormState(),
 		reasoningRedund:        newReasoningRedundancyState(),
 		queryConverge:          newQueryConvergeState(),
@@ -1482,6 +1484,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.evidenceOverconfidence.reset()
 	a.verifyDisconnect.reset()
 	a.toolStorm.reset()
+	a.serialRead.reset()
 	a.reasoningRedund.reset()
 	a.selectiveEvidence.reset()
 	a.deferredWork.reset()
@@ -3190,6 +3193,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Tool call storm tracking: record each tool call to detect
 			// diverse-tool bursts without interleaved reasoning.
 			a.toolStorm.recordToolCall(tc.Name, i+1)
+			a.serialRead.recordToolCall(tc.Name)
 			a.reasoningRedund.recordReasoning("", true) // tool call breaks text-only streak
 
 			// Unverified confidence tracking: record tool calls to track
@@ -3944,6 +3948,18 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			Role:    "user", // Anthropic uses user role for tool results
 			Content: toolResults,
 		})
+
+		// Serial read serialization detection: check if this turn was a
+		// single read-only call (batching opportunity across turns).
+		if serialWarn := a.serialRead.endTurn(i + 1); serialWarn != "" {
+			a.contextManager.Add(provider.Message{
+				Role: "user",
+				Content: []provider.ContentBlock{{
+					Type: "text",
+					Text: serialWarn,
+				}},
+			})
+		}
 
 		// Speculative tool execution (PASTE-inspired): now that tool results
 		// are sent to the LLM, the LLM will spend 2-5 seconds generating its
