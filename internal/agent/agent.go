@@ -259,6 +259,7 @@ type Agent struct {
 	actionHedging              *actionHedgingState                   // action hedging detection (verbalized uncertainty during mutations)
 	scopeCreep                 *scopeCreepState                      // scope creep detection (unsolicited changes beyond request)
 	prematureAbstr             *prematureAbstrState                  // premature abstraction detection (over-engineering within task scope)
+	capBoundary                *capabilityBoundaryState              // capability boundary detection (stubborn persistence beyond solvability)
 	planAbandon                *planAbandonState                     // plan abandonment detection (declare plan, claim done without executing)
 	toolTargetMismatch         *toolTargetState                      // tool-target mismatch detection (stated intent vs actual tool target)
 	trajectoryHealth           *trajectoryHealthState                // metacognitive trajectory health synthesis (multi-signal composite)
@@ -446,6 +447,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		actionHedging:          newActionHedgingState(),
 		scopeCreep:             newScopeCreepState(),
 		prematureAbstr:         newPrematureAbstrState(),
+		capBoundary:            newCapabilityBoundaryState(),
 		planAbandon:            newPlanAbandonState(),
 		trajectoryHealth:       newTrajectoryHealthState(),
 		mindlessAction:         newMindlessActionState(),
@@ -1508,6 +1510,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.actionHedging.reset()
 	a.scopeCreep.reset()
 	a.prematureAbstr.reset()
+	a.capBoundary.reset()
 	a.planAbandon.reset()
 	a.trajectoryHealth.reset()
 	a.mindlessAction.reset()
@@ -2430,6 +2433,20 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				})
 			}
 
+			// Capability boundary detector: tracks repeated approach pivots
+			// after failures. If the agent has tried 3+ distinct strategies that
+			// all failed, inject guidance to escalate to user or reconsider.
+			if capHint := a.maybeWarnCapabilityBoundary(assistantText); capHint != "" {
+				debug.Log("agent", "Iteration %d: capability boundary detector detected stubborn persistence", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: capHint,
+					}},
+				})
+			}
+
 			// Plan abandonment detector: tracks multi-step plans declared by
 			// the agent across iterations. If a completion claim appears after
 			// 3+ plan steps were declared in a prior turn, inject guidance to
@@ -3204,6 +3221,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// False premise detection: record tool errors for later contradiction
 			// analysis against assistant success claims.
 			a.falsePremise.recordToolResult(tc.Name, result.Content, result.IsError)
+
+			// Capability boundary: track consecutive tool failures for
+			// stubborn-persistence detection.
+			a.capBoundary.recordToolResult(result.IsError)
 
 			// Argument size guard: detect oversized tool arguments (e.g., huge
 			// old_text anchors in edit_file, massive write_file content) and
