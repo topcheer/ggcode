@@ -295,6 +295,7 @@ type Agent struct {
 	taintInfluence             *taintInfluenceState                  // tainted data influence detection (IFC: tracks untrusted content flowing into privileged tool calls)
 	falsePremise               *falsePremiseState                    // false premise detection: ungrounded success claims contradicting tool errors (world-model drift)
 	perfBaseline               *perfBaselineState                    // cross-session performance regression detection
+	guidancePromoter           *GuidancePromoter                     // cross-session guidance tag recurrence → proactive rule promotion (inter-test-time evolution)
 	lastRunStats               *RunStats                             // stats from the most recent run (for post-run summary display)
 	qualityScorer              *ResponseQualityScorer                // per-run response quality scoring for provider/model A/B comparison
 	systemPromptInjector       func() string                         // returns extra system prompt text to inject (e.g. lanchat peer warnings)
@@ -1094,6 +1095,8 @@ func (a *Agent) SetSessionID(id string) {
 	a.sessionID = id
 	a.syncContextManagerTodoPathLocked()
 	a.mu.Unlock()
+	// Initialize guidance promoter now that workingDir and sessionID are both known.
+	a.guidancePromoter = NewGuidancePromoter(a.workingDir, id)
 	// Update the TodoWrite tool's session binding outside agent.mu.
 	// tools.Get acquires registry.mu and tw.SetSessionID acquires TodoWrite.mu;
 	// holding agent.mu during those calls risks deadlock if a registry or
@@ -1399,6 +1402,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			StopReason: stopReason,
 			StopError:  stopError,
 		})
+
+		// Cross-session guidance promotion: persist recurrence data so that
+		// frequently recurring guidance tags can be promoted to proactive
+		// reminders in future sessions (inter-test-time evolution).
+		a.guidancePromoter.RunEndHook()
 	}()
 
 	// Reconcile tool_calls: if the last assistant message has unpaired tool_use
@@ -1656,6 +1664,14 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	// message so the agent's response can be checked for unverified agreement.
 	a.sycophancyGuard.captureUserPremises(userText)
 
+	// Cross-session guidance promotion: inject proactive reminders for tags
+	// that have recurred across 3+ past sessions (inter-test-time evolution).
+	if reminder := a.guidancePromoter.RunStartHook(); reminder != "" {
+		a.contextManager.Add(provider.Message{
+			Role:    "user",
+			Content: []provider.ContentBlock{{Type: "text", Text: reminder}},
+		})
+	}
 	for i := 0; a.maxIter <= 0 || i < a.maxIter; i++ {
 		runStats.Iterations = i + 1
 		if err := ctx.Err(); err != nil {
@@ -4169,6 +4185,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 						hints = append(hints, overuseHint)
 					}
 					hints = coalesceGuidance(hints)
+					for _, h := range hints {
+						if tag := extractHintTag(h); tag != "" {
+							a.guidancePromoter.RecordTag(tag)
+						}
+					}
 					result.Content = result.Content + "\n\n" + strings.Join(hints, "\n\n")
 				}
 				toolResults = append(toolResults, provider.ToolResultWithImages(tc.ID, tc.Name, result.Content, imgs, result.IsError))
@@ -4188,6 +4209,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 						hints = append(hints, overuseHint)
 					}
 					hints = coalesceGuidance(hints)
+					for _, h := range hints {
+						if tag := extractHintTag(h); tag != "" {
+							a.guidancePromoter.RecordTag(tag)
+						}
+					}
 					result.Content = result.Content + "\n\n" + strings.Join(hints, "\n\n")
 				}
 				toolResults = append(toolResults, provider.ToolResultNamedBlock(tc.ID, tc.Name, result.Content, result.IsError))
