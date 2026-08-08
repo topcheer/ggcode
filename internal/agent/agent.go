@@ -248,6 +248,7 @@ type Agent struct {
 	verifyDisconnect           *verifyDisconnectState                // verification outcome disconnect (advancing past failures)
 	selectiveEvidence          *selectiveEvidenceTrackerState        // confirmation bias detection (cherry-picked evidence + dismissed negatives)
 	temporalBlindness          *temporalBlindnessState               // temporal blindness detection (stale verification across mutations)
+	selfDiagState              *selfDiagState                        // unverified self-diagnosis detection (correlated failure after errors)
 	deferredWork               *deferredWorkState                    // deferred work tracking (forgotten follow-up detection)
 	circularReasoning          *circularReasoningState               // circular reasoning detection (tautological justification)
 	contradiction              *contradictionState                   // cross-turn contradiction detection (root-cause reversals)
@@ -427,6 +428,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		verifyDisconnect:       newVerifyDisconnectState(),
 		selectiveEvidence:      newSelectiveEvidenceTrackerState(),
 		temporalBlindness:      newTemporalBlindnessState(),
+		selfDiagState:          newSelfDiagState(),
 		deferredWork:           newDeferredWorkState(),
 		circularReasoning:      newCircularReasoningState(),
 		contradiction:          newContradictionState(),
@@ -1484,6 +1486,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.selectiveEvidence.reset()
 	a.deferredWork.reset()
 	a.circularReasoning.reset()
+	a.selfDiagState.reset()
 	a.contradiction.reset()
 	a.actionHedging.reset()
 	a.scopeCreep.reset()
@@ -2288,6 +2291,19 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					Content: []provider.ContentBlock{{
 						Type: "text",
 						Text: tbHint,
+					}},
+				})
+			}
+
+			// Unverified self-diagnosis: detect definitive diagnosis claims
+			// about recent errors without verification (correlated failure).
+			if diagHint := a.maybeWarnSelfDiagnosis(assistantText, i+1); diagHint != "" {
+				debug.Log("agent", "Iteration %d: unverified self-diagnosis detector found correlated failure risk", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: diagHint,
 					}},
 				})
 			}
@@ -3190,6 +3206,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// calls to detect systemic approach failures (procedural memory
 			// gap from ProcMEM arXiv:2602.01869).
 			a.errStrategyLoop.recordResult(result.Content, result.IsError)
+
+			// Unverified self-diagnosis: record tool results to track errors
+			// and verification calls for correlated failure detection.
+			a.selfDiagState.recordToolCall(i+1, tc.Name, result.IsError)
 			if strategyHint := a.errStrategyLoop.checkAndWarn(); strategyHint != "" {
 				debug.Log("agent", "Iteration %d: error strategy loop detector triggered", i+1)
 				a.contextManager.Add(provider.Message{
