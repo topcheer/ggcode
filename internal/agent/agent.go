@@ -291,6 +291,7 @@ type Agent struct {
 	diminishingEdit            *diminishingEditState                 // polish-spiral detection (diminishing edit substance)
 	overcorrection             *overcorrectionState                  // overcorrection cascade detection (disproportionate fix size)
 	prematureSurrender         *surrenderState                       // premature task abandonment detection (metacognitive surrender awareness)
+	contextAnchor              *anchorState                          // positional attention decay mitigation (lost-in-the-middle re-anchoring, Liu et al. 2024)
 	prematureRefactor          *prematureRefactorState               // premature refactoring detection (unverified code restructuring awareness)
 	subgoalTrack               *subgoalState                         // subgoal completion integrity (missing-step planning failure awareness)
 	infoScent                  *infoScentState                       // information scent decay detection (diminishing novelty across explorations)
@@ -491,6 +492,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		diminishingEdit:        newDiminishingEditState(),
 		overcorrection:         newOvercorrectionState(),
 		prematureSurrender:     newSurrenderState(),
+		contextAnchor:          newAnchorState(),
 		prematureRefactor:      newPrematureRefactorState(),
 		subgoalTrack:           newSubgoalState(),
 		infoScent:              newInfoScentState(),
@@ -1267,6 +1269,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.prematureSurrender.reset()
 			a.subgoalTrack.reset()
 			a.exploreExploit.reset()
+			a.contextAnchor.reset()
 		}
 		a.futileCycle.reset()
 		a.toolResultRedundancy.reset()
@@ -2568,6 +2571,26 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					Content: []provider.ContentBlock{{
 						Type: "text",
 						Text: abstrHint,
+					}},
+				})
+			}
+
+			// Context anchor reinforcement: as the conversation grows, the
+			// original user task drifts into the low-attention middle zone
+			// (U-shaped attention curve, Liu et al. 2024 / Veseli et al. 2025).
+			// Periodically re-inject a concise reminder into the recency peak.
+			if anchorHint := a.contextAnchor.checkAnchorReinforcement(
+				i+1,
+				a.contextManager.TokenCount(),
+				a.contextManager.ContextWindow(),
+				a.contextManager.Messages(),
+			); anchorHint != "" {
+				debug.Log("context-anchor", "Iteration %d: re-anchoring user task against positional attention decay", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: anchorHint,
 					}},
 				})
 			}
