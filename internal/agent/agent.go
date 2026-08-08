@@ -214,6 +214,7 @@ type Agent struct {
 	errorCompound              *errorCompoundState                   // error compounding risk detector (systemic trajectory reliability)
 	correctionSpiral           *correctionSpiralState                // correction spiral detector (error severity escalation across fixes)
 	wastedExplore              *wastedExploreState                   // wasted exploration detection (search results never acted upon)
+	toolResultRedundancy       *toolResultRedundancyState            // tool result redundancy detection (overlapping content across calls)
 	tunnelVision               *tunnelVisionState                    // tunnel vision detection (narrow file scope / under-exploration)
 	prematureCommit            *prematureCommitState                 // premature commitment detection (insufficient evidence before first edit)
 	selfMod                    *selfModState                         // self-modification safety guard (agent editing its own infrastructure)
@@ -417,6 +418,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		errorCompound:          newErrorCompoundState(),
 		correctionSpiral:       newCorrectionSpiralState(),
 		wastedExplore:          newWastedExploreState(),
+		toolResultRedundancy:   newToolResultRedundancyState(),
 		selfMod:                newSelfModState(),
 		tunnelVision:           newTunnelVisionState(),
 		prematureCommit:        newPrematureCommitState(),
@@ -1235,6 +1237,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.subgoalTrack.reset()
 		}
 		a.futileCycle.reset()
+		a.toolResultRedundancy.reset()
 		a.verifyDebt.reset()
 		a.editPropagation.reset()
 		a.successDeclare.reset()
@@ -3941,6 +3944,15 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Symbol grounding: record file paths and code identifiers from
 			// tool I/O so we can detect ungrounded references later.
 			a.symbolGrounding.recordGrounding(string(tc.Arguments), result.Content)
+			// Tool result redundancy: detect when result content substantially
+			// overlaps with a prior result still in context (AgentDiet waste).
+			if trMsg := a.toolResultRedundancy.recordResult(tc.Name, result.Content, i+1); trMsg != "" {
+				if result.Content != "" {
+					result.Content = result.Content + "\n\n" + trMsg
+				} else {
+					result.Content = trMsg
+				}
+			}
 			if cascadeGuidance := a.fixCascadeCheckCommand(tc.Name, tc.Arguments, result.IsError); cascadeGuidance != "" {
 				if result.Content != "" {
 					result.Content = result.Content + "\n\n" + cascadeGuidance
