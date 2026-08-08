@@ -210,6 +210,7 @@ type Agent struct {
 	serialRead                 *serialReadState                      // sequential read serialization detection (cross-turn single-read batching opportunity)
 	strategyFixation           *strategyFixationState                // strategy fixation detection (same file edited N times with failed verifications -- approach-level failure)
 	errorRush                  *errorRushState                       // error rush / panic coding detection (blind-fixing after consecutive errors without diagnosis)
+	targetScatter              *targetScatterState                   // target scatter detection (world model miscalibration - unfocused investigation across many unrelated files)
 	errorCompound              *errorCompoundState                   // error compounding risk detector (systemic trajectory reliability)
 	correctionSpiral           *correctionSpiralState                // correction spiral detector (error severity escalation across fixes)
 	wastedExplore              *wastedExploreState                   // wasted exploration detection (search results never acted upon)
@@ -416,6 +417,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		bareEditStreak:         newBareEditState(),
 		strategyFixation:       newStrategyFixationState(),
 		errorRush:              newErrorRushState(),
+		targetScatter:          newTargetScatterState(),
 		recklessExec:           newRecklessExecState(),
 		irrevGate:              newIrrevGateState(),
 		verifyDebt:             newVerifyDebtState(),
@@ -1903,6 +1905,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.contextManager.Add(provider.Message{
 				Role:    "user",
 				Content: []provider.ContentBlock{{Type: "text", Text: erMsg}},
+			})
+			msgs = a.contextManager.Messages()
+		}
+
+		// Target scatter: detect world model miscalibration -- the agent
+		// examines many unrelated files without converging, indicating it
+		// does not know where to look (Qwen-AgentWorld 2026; SICA NeurIPS 2025).
+		if tsMsg := a.targetScatter.check(); tsMsg != "" {
+			a.contextManager.Add(provider.Message{
+				Role:    "user",
+				Content: []provider.ContentBlock{{Type: "text", Text: tsMsg}},
 			})
 			msgs = a.contextManager.Messages()
 		}
@@ -3772,6 +3785,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 			// Error rush: track error-to-action dynamics for panic coding detection.
 			a.errorRush.recordToolCall(tc.Name, result.Content, result.IsError)
+			// Target scatter: track diagnostic tool targets for world model calibration detection.
+			a.targetScatter.recordToolCall(tc.Name, string(tc.Arguments))
 			// Reckless execution: track exploration vs edit targets.
 			if a.recklessExec != nil {
 				argsStr := string(tc.Arguments)
