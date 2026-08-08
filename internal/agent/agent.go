@@ -277,6 +277,7 @@ type Agent struct {
 	momentumLoss               *momentumLossState                    // late-phase productivity collapse detection (last-mile stall)
 	diminishingEdit            *diminishingEditState                 // polish-spiral detection (diminishing edit substance)
 	prematureSurrender         *surrenderState                       // premature task abandonment detection (metacognitive surrender awareness)
+	prematureRefactor          *prematureRefactorState               // premature refactoring detection (unverified code restructuring awareness)
 	subgoalTrack               *subgoalState                         // subgoal completion integrity (missing-step planning failure awareness)
 	infoScent                  *infoScentState                       // information scent decay detection (diminishing novelty across explorations)
 	causalAttribution          *causalAttributionState               // causal failure attribution (CausalFlow-inspired root-cause step identification)
@@ -458,6 +459,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		momentumLoss:           newMomentumLossState(),
 		diminishingEdit:        newDiminishingEditState(),
 		prematureSurrender:     newSurrenderState(),
+		prematureRefactor:      newPrematureRefactorState(),
 		subgoalTrack:           newSubgoalState(),
 		infoScent:              newInfoScentState(),
 		reversibility:          newReversibilityState(),
@@ -1209,6 +1211,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	if a.momentumLoss != nil {
 		a.momentumLoss.reset()
 		a.diminishingEdit.reset()
+		a.prematureRefactor.reset()
 		a.errorCompound.reset()
 		a.correctionSpiral.reset()
 		a.bareEditStreak.reset()
@@ -3110,6 +3113,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					a.convergenceRecordEdit(tc.Name)
 					// Diminishing edit: track edit substance size for polish-spiral detection.
 					a.diminishingRecordEdit(tc.Name, tc.Arguments)
+					a.prematureRefactorRecordEdit(tc.Name, tc.Arguments)
 					// Fix cascade: track edits for wrong-hypothesis lock-in detection.
 					a.fixCascade.recordEdit()
 					// Error regression: track edits for negative progress detection.
@@ -3757,6 +3761,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// reset the edit counter and track the result.
 			a.maybeResetVerifyOnCommand(tc.Name, tc.Arguments, result.IsError)
 			a.verifyDebt.recordVerifyCommand(extractCommandFromArgs(tc.Arguments), result.IsError)
+			a.prematureRefactorRecordVerify()
 			if !result.IsError {
 				a.editPropagation.recordGreenBuild()
 			}
@@ -3911,6 +3916,15 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					result.Content = result.Content + "\n\n" + diminishingGuidance
 				} else {
 					result.Content = diminishingGuidance
+				}
+			}
+
+			// Premature refactoring: detect unverified code restructuring.
+			if refactorGuidance := a.prematureRefactorCheck(); refactorGuidance != "" {
+				if result.Content != "" {
+					result.Content = result.Content + "\n\n" + refactorGuidance
+				} else {
+					result.Content = refactorGuidance
 				}
 			}
 
