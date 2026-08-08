@@ -151,6 +151,7 @@ type Agent struct {
 	todoStaleness              *todoStalenessState                   // mid-run stale todo detection (plan abandonment awareness)
 	recurringError             *recurringErrorState                  // recurring build/test error fingerprint detection across edit cycles
 	errStrategyLoop            *errStrategyState                     // error strategy loop detection (procedural memory failure)
+	solutionFixation           *solutionFixationState                // solution fixation: diagnosis anchoring on failed edit clusters
 	fixCascade                 *fixCascadeState                      // failed fix cascade (wrong-hypothesis lock-in) detection
 	errRegression              *errRegressionState                   // error count regression (negative progress) detection
 	stalledConvergence         *stalledConvergenceState              // stalled convergence detection (diminishing returns pattern)
@@ -464,6 +465,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		sycophancyGuard:        newSycophancyState(),
 		unverifiedConfidence:   newUnverifiedConfidenceState(),
 		phantomVerify:          newPhantomVerifyState(),
+		solutionFixation:       newSolutionFixationState(),
 		evidenceOverconfidence: newEvidenceOverconfidenceState(),
 		verifyDisconnect:       newVerifyDisconnectState(),
 		selectiveEvidence:      newSelectiveEvidenceTrackerState(),
@@ -3542,6 +3544,20 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// calls to detect systemic approach failures (procedural memory
 			// gap from ProcMEM arXiv:2602.01869).
 			a.errStrategyLoop.recordResult(result.Content, result.IsError)
+
+			// Solution fixation: track failed edit attempts per file to
+			// detect diagnosis anchoring (arXiv:2505.15392, arXiv:2509.25370).
+			a.solutionFixation.recordEdit(tc.Name, string(tc.Arguments), result.IsError)
+			if fixationHint := a.solutionFixation.checkAndWarn(); fixationHint != "" {
+				debug.Log("agent", "Iteration %d: solution fixation detector triggered", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: fixationHint,
+					}},
+				})
+			}
 
 			// Unverified self-diagnosis: record tool results to track errors
 			// and verification calls for correlated failure detection.
