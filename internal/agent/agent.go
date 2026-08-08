@@ -174,6 +174,7 @@ type Agent struct {
 	complexityGate             *complexityGateState                  // post-completion code complexity quality gate
 	changeReconcile            *changeReconcileState                 // pre-completion git diff reconciliation (unexpected side-effect detection)
 	claimVerify                *claimVerifyState                     // tool output misinterpretation detection (AgentRx-inspired)
+	integrationMonitor         *integrationState                     // tool output integration tracking (TRACE-inspired cross-step evidence)
 	diffSummary                *diffSummaryState                     // pre-completion holistic change summary for self-review
 	commitHint                 *commitHintState                      // post-completion commit reminder for uncommitted changes
 	verifyRegression           *verifyRegressionState                // cross-run error diff: detects correction-induced regressions
@@ -401,6 +402,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		complexityGate:         newComplexityGateState(),
 		changeReconcile:        newChangeReconcileState(),
 		claimVerify:            newClaimVerifyState(),
+		integrationMonitor:     newIntegrationState(),
 		diffSummary:            newDiffSummaryState(),
 		commitHint:             newCommitHintState(),
 		verifyRegression:       newVerifyRegressionState(),
@@ -1614,6 +1616,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	// by the agent's tool calls. Also resets the gate for the new run.
 	a.changeReconcile.reset()
 	a.claimVerify.reset()
+	a.integrationMonitor.reset()
 	a.crossFileImpact.reset()
 	a.diffSummary.reset()
 	a.commitHint.reset()
@@ -2337,6 +2340,21 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					}},
 				})
 				continue
+			}
+
+			// Tool output integration monitoring: check if evidence tokens
+			// from the previous tool call appear in this assistant text.
+			// (TRACE-inspired cross-step evidence tracking).
+			if intGuidance := a.integrationMonitor.checkIntegration(assistantText); intGuidance != "" {
+				debug.Log("integration_monitor", "tool output evidence not integrated into reasoning")
+				a.recordUncertainty("integration_gap", 30)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: intGuidance,
+					}},
+				})
 			}
 
 			a.contextManager.Add(resp.Message)
@@ -3806,6 +3824,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// subsequent actions address it. Fires after N disconnected actions.
 			a.diagnosticDisconnect.recordToolResult(tc.Name, extractFilePathFromArgs(tc.Name, tc.Arguments), result.Content, i+1)
 			a.diagnosticDisconnect.recordAction(i + 1)
+
+			// Tool output integration monitoring: extract high-signal tokens
+			// from information-retrieval tool results (file paths, symbols, line
+			// numbers) and check if they appear in the next assistant text.
+			// (TRACE-inspired cross-step evidence tracking).
+			a.integrationMonitor.recordToolEvidence(tc.Name, result.Content)
 
 			// Tool output claim verification: detect commonly misread failure
 			// signals in nominally-successful tool results (AgentRx-inspired).
