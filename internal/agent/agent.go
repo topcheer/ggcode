@@ -294,6 +294,7 @@ type Agent struct {
 	prematureRefactor          *prematureRefactorState               // premature refactoring detection (unverified code restructuring awareness)
 	subgoalTrack               *subgoalState                         // subgoal completion integrity (missing-step planning failure awareness)
 	infoScent                  *infoScentState                       // information scent decay detection (diminishing novelty across explorations)
+	exploreExploit             *exploreExploitState                  // exploration-exploitation imbalance detection (aggregate foraging balance)
 	foresightCalib             *foresightCalibrateState              // foresight calibration (prediction-observation mismatch tracking, WorldEvolver arXiv:2606.30639)
 	causalAttribution          *causalAttributionState               // causal failure attribution (CausalFlow-inspired root-cause step identification)
 	attemptBrief               *attemptBriefState                    // compact attempt summary for knowledge reuse across failed approaches
@@ -493,6 +494,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		prematureRefactor:      newPrematureRefactorState(),
 		subgoalTrack:           newSubgoalState(),
 		infoScent:              newInfoScentState(),
+		exploreExploit:         newExploreExploitState(),
 		foresightCalib:         newForesightCalibrateState(),
 		reversibility:          newReversibilityState(),
 		errorCascade:           newErrorCascadeState(),
@@ -1264,6 +1266,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		if a.prematureSurrender != nil {
 			a.prematureSurrender.reset()
 			a.subgoalTrack.reset()
+			a.exploreExploit.reset()
 		}
 		a.futileCycle.reset()
 		a.toolResultRedundancy.reset()
@@ -4157,6 +4160,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 			a.successDeclare.recordToolCall()
 			a.subgoalTrack.recordToolCall(tc.Name, string(tc.Arguments))
+			if eeMsg := a.exploreExploit.recordToolCall(tc.Name); eeMsg != "" {
+				if result.Content != "" {
+					result.Content = result.Content + "\n\n" + eeMsg
+				} else {
+					result.Content = eeMsg
+				}
+			}
 			// Attempt brief: record outcome for knowledge reuse.
 			a.attemptBrief.recordOutcome(tc.Name, extractToolTarget(tc.Name, string(tc.Arguments)), !result.IsError, i, result.Content)
 			// Symbol grounding: record file paths and code identifiers from
