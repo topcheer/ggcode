@@ -267,6 +267,7 @@ type Agent struct {
 	capBoundary                *capabilityBoundaryState              // capability boundary detection (stubborn persistence beyond solvability)
 	planAbandon                *planAbandonState                     // plan abandonment detection (declare plan, claim done without executing)
 	toolTargetMismatch         *toolTargetState                      // tool-target mismatch detection (stated intent vs actual tool target)
+	outcomeMisattrib           *outcomeMisattribState                // outcome misattribution detection (success claim despite failure result)
 	trajectoryHealth           *trajectoryHealthState                // metacognitive trajectory health synthesis (multi-signal composite)
 	reversibility              *reversibilityState                   // pre-action reversibility assessment (irreversible action safety check)
 	mindlessAction             *mindlessActionState                  // mindless action detection (rapid-fire tool calls without reasoning)
@@ -417,6 +418,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		actionAnnihil:          newActionAnnihilateState(),
 		serialRead:             newSerialReadState(),
 		toolStorm:              newToolStormState(),
+		outcomeMisattrib:       newOutcomeMisattribState(),
 		reasoningRedund:        newReasoningRedundancyState(),
 		queryConverge:          newQueryConvergeState(),
 		causalAttribution:      newCausalAttributionState(),
@@ -2525,6 +2527,20 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				})
 			}
 
+			// Outcome misattribution detector: checks whether the agent
+			// claims success ("done", "fixed", "works") in its narrative
+			// despite a failure indicator in the preceding tool result.
+			if omHint := a.outcomeMisattrib.checkMisattribution(assistantText, i+1); omHint != "" {
+				debug.Log("agent", "Iteration %d: outcome misattribution detector triggered", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: omHint,
+					}},
+				})
+			}
+
 			// Reasoning-action alignment verifier: checks whether the cognitive
 			// category of the agent's stated reasoning matches the cognitive
 			// category of its actual tool calls. Metacognition-driven LLM
@@ -3377,10 +3393,18 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.unverifiedConfidence.recordToolCall(tc.Name, string(tc.Arguments))
 			a.evidenceOverconfidence.recordToolCall(tc.Name, string(tc.Arguments))
 
+			// Outcome misattribution: record tool calls to track corrective
+			// actions between failure and success claim.
+			a.outcomeMisattrib.recordToolCallForOM(tc.Name)
+
 			// Verification disconnect: record result to detect failures
 			// that get advanced past without resolution.
 			a.verifyDisconnect.recordVerificationResult(tc.Name, string(tc.Arguments), result.Content, i+1)
 			a.verifyDisconnect.recordToolCallForVD(tc.Name)
+
+			// Outcome misattribution: record failure indicators in tool
+			// results to detect success claims that follow failures.
+			a.outcomeMisattrib.recordResult(tc.Name, result.Content, result.IsError, i+1)
 
 			// Error strategy loop: track error categories across all tool
 			// calls to detect systemic approach failures (procedural memory
