@@ -239,6 +239,7 @@ type Agent struct {
 	redundantRead              *redundantReadState                   // redundant re-read detection (context waste prevention)
 	searchParamGuard           *searchParamGuardState                // search parameter quality guard (vague/broad pattern detection)
 	toolRedundancy             *toolRedundancyState                  // scattered duplicate tool call detection (non-consecutive redundancy)
+	toolEquivDetect            *toolEquivDetectState                 // semantic-equivalent tool call detection (reordered keys, volatile fields)
 	ruleStore                  *RuleStore                            // cached rule store for hot-path rule injection (avoids per-tool disk I/O)
 	ruleInjectCount            map[string]int                        // per-rule injection counter for dedup (caps repetitive hints)
 	approvalMemory             *permission.ApprovalMemory            // session-level learned approval patterns (auto-approve after N repeats)
@@ -426,6 +427,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		redundantRead:          newRedundantReadState(),
 		searchParamGuard:       newSearchParamGuard(),
 		toolRedundancy:         newToolRedundancyAnalyzer(),
+		toolEquivDetect:        newToolEquivDetectState(),
 		bgOrphan:               newBgOrphanState(),
 		actionAnnihil:          newActionAnnihilateState(),
 		serialRead:             newSerialReadState(),
@@ -1228,6 +1230,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.redundantRead.reset()
 	a.searchParamGuard.reset()
 	a.toolRedundancy.reset()
+	a.toolEquivDetect.reset()
 	a.toolSequence.reset()
 	a.shellNativeHint.reset()
 	a.monorepoScoper.reset()
@@ -3163,6 +3166,14 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			if hint := a.toolRedundancy.recordCall(tc.Name, tc.Arguments); hint != "" {
 				redundancyHint = hint
 			}
+			// Semantic-equivalent duplicate detection: catches calls with
+			// reordered JSON keys or volatile metadata fields (trace_id,
+			// timestamp) that evade the exact-match redundancy detector.
+			var equivHint string
+			rawFp := fingerprintToolCall(tc.Name, tc.Arguments)
+			if hint := a.toolEquivDetect.recordCall(tc.Name, tc.Arguments, rawFp); hint != "" {
+				equivHint = hint
+			}
 			// Tool overuse / self-awareness detection: warn when the agent
 			// calls tools to retrieve information it already has (read-after-
 			// write, unchanged dir re-list, trivial env commands).
@@ -4324,7 +4335,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				for i, ri := range result.Images {
 					imgs[i] = provider.ContentImage{MIME: ri.MIME, Base64: ri.Base64}
 				}
-				if loopGuidance != "" || searchParamHint != "" || redundancyHint != "" || overuseHint != "" {
+				if loopGuidance != "" || searchParamHint != "" || redundancyHint != "" || equivHint != "" || overuseHint != "" {
 					var hints []string
 					if searchParamHint != "" {
 						hints = append(hints, searchParamHint)
@@ -4334,6 +4345,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					}
 					if redundancyHint != "" {
 						hints = append(hints, redundancyHint)
+					}
+					if equivHint != "" {
+						hints = append(hints, equivHint)
 					}
 					if overuseHint != "" {
 						hints = append(hints, overuseHint)
@@ -4351,7 +4365,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				}
 				toolResults = append(toolResults, provider.ToolResultWithImages(tc.ID, tc.Name, result.Content, imgs, result.IsError))
 			} else {
-				if loopGuidance != "" || searchParamHint != "" || redundancyHint != "" || overuseHint != "" {
+				if loopGuidance != "" || searchParamHint != "" || redundancyHint != "" || equivHint != "" || overuseHint != "" {
 					var hints []string
 					if searchParamHint != "" {
 						hints = append(hints, searchParamHint)
@@ -4361,6 +4375,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					}
 					if redundancyHint != "" {
 						hints = append(hints, redundancyHint)
+					}
+					if equivHint != "" {
+						hints = append(hints, equivHint)
 					}
 					if overuseHint != "" {
 						hints = append(hints, overuseHint)
