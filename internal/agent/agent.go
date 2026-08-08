@@ -245,6 +245,7 @@ type Agent struct {
 	fileChurn                  *churnState                           // file churn detection (invalidated assumption awareness)
 	editOscillation            *oscillationState                     // edit oscillation detection (semantic back-and-forth awareness)
 	analysisParalysis          *analysisParalysisState               // analysis paralysis detection (exploration-heavy / action-starved loops)
+	overReflection             *overReflectionDetector               // over-reflection detection (text-heavy no-action turns, arXiv:2506.12928)
 	toolCallEconomy            *toolCallEconomyState                 // tool call economy detection (batchable individual calls)
 	silentError                *silentErrorState                     // silent error advancement detection (unaddressed error proceeding)
 	verifySuppress             *verifySuppressState                  // verification suppression detection (reward hacking via error masking)
@@ -448,6 +449,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		fileChurn:              newChurnState(),
 		editOscillation:        newOscillationState(),
 		analysisParalysis:      newAnalysisParalysisState(),
+		overReflection:         newOverReflectionDetector(),
 		toolCallEconomy:        newToolCallEconomyState(),
 		silentError:            newSilentErrorState(),
 		verifySuppress:         newVerifySuppressState(),
@@ -1529,6 +1531,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.fileChurn.reset()
 	a.editOscillation.reset()
 	a.analysisParalysis.reset()
+	a.overReflection.reset()
 	a.toolCallEconomy.reset()
 	a.silentError.reset()
 	a.verifySuppress.reset()
@@ -2274,6 +2277,21 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.toolStorm.recordReasoning(assistantText)
 			a.constraintViolation.recordReasoning(assistantText, i+1)
 			a.reasoningRedund.recordReasoning(assistantText, false)
+
+			// Over-reflection detection: check if the agent is producing
+			// text-heavy turns without tool calls (wasted test-time compute).
+			// arXiv:2506.12928 -- "Knowing when to reflect is important".
+			if orHint := a.maybeWarnOverReflection(assistantText, len(toolCalls) > 0, i+1); orHint != "" {
+				debug.Log("over-reflection", "Iteration %d: over-reflection detected", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: orHint,
+					}},
+				})
+			}
+
 			if hasInlineToolCall(assistantText) && inlineToolCallNudges < 2 {
 				inlineToolCallNudges++
 				debug.Log("agent", "Iteration %d: inline tool call detected in text, nudging model (attempt %d/2)", i+1, inlineToolCallNudges)
