@@ -291,6 +291,7 @@ type Agent struct {
 	prematureRefactor          *prematureRefactorState               // premature refactoring detection (unverified code restructuring awareness)
 	subgoalTrack               *subgoalState                         // subgoal completion integrity (missing-step planning failure awareness)
 	infoScent                  *infoScentState                       // information scent decay detection (diminishing novelty across explorations)
+	foresightCalib             *foresightCalibrateState              // foresight calibration (prediction-observation mismatch tracking, WorldEvolver arXiv:2606.30639)
 	causalAttribution          *causalAttributionState               // causal failure attribution (CausalFlow-inspired root-cause step identification)
 	attemptBrief               *attemptBriefState                    // compact attempt summary for knowledge reuse across failed approaches
 	behaviorPattern            *behaviorPatternState                 // cross-run behavioral anti-pattern detection (systemic issue awareness)
@@ -487,6 +488,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		prematureRefactor:      newPrematureRefactorState(),
 		subgoalTrack:           newSubgoalState(),
 		infoScent:              newInfoScentState(),
+		foresightCalib:         newForesightCalibrateState(),
 		reversibility:          newReversibilityState(),
 		errorCascade:           newErrorCascadeState(),
 		crossFileImpact:        newCrossFileImpactState(),
@@ -2661,6 +2663,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				})
 			}
 
+			// Foresight calibration (WorldEvolver arXiv:2606.30639): record
+			// the agent's predictions about upcoming tool outcomes BEFORE
+			// execution. After execution, checkCalibration compares them
+			// against actual results to detect prediction-observation gaps.
+			a.foresightCalib.recordPrediction(assistantText, toolCalls, i+1)
+
 			if a.injectPendingInterruptions() {
 				continue
 			}
@@ -3474,6 +3482,19 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Outcome misattribution: record failure indicators in tool
 			// results to detect success claims that follow failures.
 			a.outcomeMisattrib.recordResult(tc.Name, result.Content, result.IsError, i+1)
+
+			// Foresight calibration: compare predicted outcome against
+			// actual result to detect prediction-observation mismatches.
+			if fcHint := a.foresightCalib.checkCalibration(tc.Name, result.Content, result.IsError, i+1); fcHint != "" {
+				debug.Log("agent", "Iteration %d: foresight calibration detector triggered", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: fcHint,
+					}},
+				})
+			}
 
 			// Self-declared constraint violation: check if this tool call
 			// violates constraints the agent declared in its own reasoning.
