@@ -127,6 +127,7 @@ func registerAllChecks() {
 		{Name: "duplicate-decls", Langs: []Language{LangGo}, Run: stringCheck(checkDuplicateDeclarations)},
 		{Name: "context-leak", Langs: []Language{LangGo}, Run: stringCheck(checkContextLeak)},
 		{Name: "test-gaming", Langs: []Language{LangGo}, Run: stringCheck(checkTestGaming)},
+		{Name: "assertion-weakening", Run: stringCheck(checkAssertionWeakening)},
 		{Name: "hardcoded-output", Langs: []Language{LangGo, LangPython, LangJSTS}, Run: sliceCheck(checkHardcodedOutput)},
 		{Name: "resource-leak", Langs: []Language{LangGo}, Run: sliceCheck(func(fp, _, nc string) []string {
 			return checkResourceLeaks(fp, nc)
