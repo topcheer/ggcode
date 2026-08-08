@@ -242,6 +242,7 @@ type Agent struct {
 	silentError                *silentErrorState                     // silent error advancement detection (unaddressed error proceeding)
 	verifySuppress             *verifySuppressState                  // verification suppression detection (reward hacking via error masking)
 	verbosityDrift             *verbosityDriftState                  // verbosity drift detection (token-to-productivity ratio degradation)
+	cusumDrift                 *cusumDriftState                      // CUSUM statistical drift detection (cumulative behavioral deviation)
 	toolOveruse                *toolOveruseState                     // tool overuse / self-awareness detection (unnecessary tool calls for known info)
 	assumptionTracker          *assumptionTrackerState               // implicit assumption detection (unverified guesses in assistant text)
 	unverifiedConfidence       *unverifiedConfidenceState            // unverified confidence detection (overconfident claims without verification)
@@ -424,6 +425,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		silentError:            newSilentErrorState(),
 		verifySuppress:         newVerifySuppressState(),
 		verbosityDrift:         newVerbosityDriftState(),
+		cusumDrift:             newCusumDriftState(),
 		toolOveruse:            newToolOveruseState(),
 		assumptionTracker:      newAssumptionTrackerState(),
 		unverifiedConfidence:   newUnverifiedConfidenceState(),
@@ -1481,6 +1483,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.silentError.reset()
 	a.verifySuppress.reset()
 	a.verbosityDrift.reset()
+	a.cusumDrift.reset()
 	a.toolOveruse.reset()
 	a.assumptionTracker.reset()
 	a.unverifiedConfidence.reset()
@@ -3609,6 +3612,24 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					result.Content = result.Content + "\n\n" + vdMsg
 				} else {
 					result.Content = vdMsg
+				}
+			}
+
+			// CUSUM drift: cumulative behavioral drift detection across
+			// error-rate, read-write ratio, and token velocity signals.
+			// Uses CUSUM (Page 1954) to detect gradual directional shifts
+			// that no single tool call would flag.
+			cdMsg := a.cusumDrift.record(cusumRecord{
+				failed:     result.IsError,
+				isRead:     isReadTool(tc.Name),
+				isWrite:    isEditTool(tc.Name),
+				tokenDelta: a.contextManager.TokenCount(),
+			})
+			if cdMsg != "" {
+				if result.Content != "" {
+					result.Content = result.Content + "\n\n" + cdMsg
+				} else {
+					result.Content = cdMsg
 				}
 			}
 			if apGuidance := a.analysisParalysis.check(); apGuidance != "" {
