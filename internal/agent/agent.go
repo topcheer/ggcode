@@ -258,6 +258,7 @@ type Agent struct {
 	cusumDrift                 *cusumDriftState                      // CUSUM statistical drift detection (cumulative behavioral deviation)
 	toolOveruse                *toolOveruseState                     // tool overuse / self-awareness detection (unnecessary tool calls for known info)
 	assumptionTracker          *assumptionTrackerState               // implicit assumption detection (unverified guesses in assistant text)
+	satisficingSettle          *satisficingSettleState               // satisficing settling detection (knowingly suboptimal solution delivery)
 	diagnosticFixation         *diagnosticFixationState              // diagnostic fixation detection (stale hypothesis persistence across turns)
 	sycophancyGuard            *sycophancyState                      // user-premise sycophancy detection (agreeing with user premises without verification)
 	unverifiedConfidence       *unverifiedConfidenceState            // unverified confidence detection (overconfident claims without verification)
@@ -474,6 +475,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		cusumDrift:             newCusumDriftState(),
 		toolOveruse:            newToolOveruseState(),
 		assumptionTracker:      newAssumptionTrackerState(),
+		satisficingSettle:      newSatisficingSettleState(),
 		diagnosticFixation:     newDiagnosticFixationState(),
 		sycophancyGuard:        newSycophancyState(),
 		unverifiedConfidence:   newUnverifiedConfidenceState(),
@@ -1573,6 +1575,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.cusumDrift.reset()
 	a.toolOveruse.reset()
 	a.assumptionTracker.reset()
+	a.satisficingSettle.reset()
 	a.diagnosticFixation.reset()
 	a.sycophancyGuard.reset()
 	a.unverifiedConfidence.reset()
@@ -2400,6 +2403,20 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					Content: []provider.ContentBlock{{
 						Type: "text",
 						Text: fixHint,
+					}},
+				})
+			}
+
+			// Satisficing settling detector: detect when the agent
+			// knowingly delivers a suboptimal/temporary/incomplete solution
+			// (arXiv:2505.23729, ICML 2025 -- bounded rationality satisficing).
+			if settleHint := a.maybeWarnSatisficing(assistantText); settleHint != "" {
+				debug.Log("agent", "Iteration %d: satisficing settling detected (knowingly suboptimal solution)", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: settleHint,
 					}},
 				})
 			}
