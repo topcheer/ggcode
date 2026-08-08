@@ -288,6 +288,7 @@ type Agent struct {
 	attemptBrief               *attemptBriefState                    // compact attempt summary for knowledge reuse across failed approaches
 	behaviorPattern            *behaviorPatternState                 // cross-run behavioral anti-pattern detection (systemic issue awareness)
 	crossDetectorConsensus     *consensusState                       // cross-detector consensus (systemic failure from simultaneous detector firings)
+	taintInfluence             *taintInfluenceState                  // tainted data influence detection (IFC: tracks untrusted content flowing into privileged tool calls)
 	falsePremise               *falsePremiseState                    // false premise detection: ungrounded success claims contradicting tool errors (world-model drift)
 	perfBaseline               *perfBaselineState                    // cross-session performance regression detection
 	lastRunStats               *RunStats                             // stats from the most recent run (for post-run summary display)
@@ -371,6 +372,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		approvalMemory:         permission.NewApprovalMemory(),
 		behaviorPattern:        newBehaviorPatternState(),
 		crossDetectorConsensus: newConsensusState(),
+		taintInfluence:         newTaintInfluenceState(),
 		perfBaseline:           newPerfBaselineState(),
 		fulfillmentGate:        newFulfillmentGateState(),
 		ambiguityPoint:         newAmbiguityPointState(),
@@ -1190,6 +1192,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.complexityGate.reset()
 	a.behaviorPattern.reset()
 	a.crossDetectorConsensus.reset()
+	a.taintInfluence.reset()
 	a.perfBaseline.reset()
 	a.argSizeGuardFires = 0
 	a.redundantRead.reset()
@@ -3335,6 +3338,19 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				msgs = a.contextManager.Messages()
 			}
 
+			// Tainted data influence detection (IFC): check if untrusted content
+			// from prior tool outputs has flowed into the arguments of this
+			// privileged tool call. Warns when tainted content influences
+			// write/exec operations. Research: Microsoft IFC (arXiv:2505.23643).
+			if taintWarn := a.taintInfluence.checkInfluence(tc.Name, string(tc.Arguments)); taintWarn != "" {
+				debug.Log("agent", "Iteration %d: tainted data influence detected on %s", i+1, tc.Name)
+				a.contextManager.Add(provider.Message{
+					Role:    "user",
+					Content: []provider.ContentBlock{{Type: "text", Text: taintWarn}},
+				})
+				msgs = a.contextManager.Messages()
+			}
+
 			// Tool call storm tracking: record each tool call to detect
 			// diverse-tool bursts without interleaved reasoning.
 			a.toolStorm.recordToolCall(tc.Name, i+1)
@@ -4030,6 +4046,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// adversarial injection patterns and wrap them with a security
 			// notice so the model treats them as untrusted data.
 			result.Content = guardPromptInjection(tc.Name, result.Content)
+
+			// Tainted data influence tracking (IFC): when the injection guard
+			// flags tool output, record distinctive fingerprints so we can
+			// later detect if that tainted content flows into privileged
+			// tool calls (edit_file, write_file, run_command, etc.).
+			// Research: Microsoft IFC (arXiv:2505.23643), OWASP ATR-2026-00032.
+			a.taintInfluence.recordIfTainted(tc.Name, result.Content)
 
 			// Secret redaction: mask API keys, tokens, private keys, and other
 			// credentials in tool outputs before they enter context. Prevents
