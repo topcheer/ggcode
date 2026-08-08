@@ -272,6 +272,7 @@ type Agent struct {
 	iterPressure               *iterPressureState                    // iteration pressure degradation detection (verify/edit ratio drop near budget limit)
 	momentumLoss               *momentumLossState                    // late-phase productivity collapse detection (last-mile stall)
 	prematureSurrender         *surrenderState                       // premature task abandonment detection (metacognitive surrender awareness)
+	subgoalTrack               *subgoalState                         // subgoal completion integrity (missing-step planning failure awareness)
 	infoScent                  *infoScentState                       // information scent decay detection (diminishing novelty across explorations)
 	causalAttribution          *causalAttributionState               // causal failure attribution (CausalFlow-inspired root-cause step identification)
 	attemptBrief               *attemptBriefState                    // compact attempt summary for knowledge reuse across failed approaches
@@ -445,6 +446,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		iterPressure:           newIterPressureState(maxIter),
 		momentumLoss:           newMomentumLossState(),
 		prematureSurrender:     newSurrenderState(),
+		subgoalTrack:           newSubgoalState(),
 		infoScent:              newInfoScentState(),
 		reversibility:          newReversibilityState(),
 		errorCascade:           newErrorCascadeState(),
@@ -1206,6 +1208,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		}
 		if a.prematureSurrender != nil {
 			a.prematureSurrender.reset()
+			a.subgoalTrack.reset()
 		}
 		a.futileCycle.reset()
 		a.verifyDebt.reset()
@@ -1761,6 +1764,14 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// Premature success declaration: if the agent claimed completion in a
 		// prior iteration but has since continued making tool calls, flag the
 		// metacognitive calibration gap.
+		if sgMsg := a.subgoalTrack.maybeWarn(i + 1); sgMsg != "" {
+			debug.Log("agent", "Iteration %d: subgoal completion gap detected", i+1)
+			a.contextManager.Add(provider.Message{
+				Role:    "user",
+				Content: []provider.ContentBlock{{Type: "text", Text: sgMsg}},
+			})
+			msgs = a.contextManager.Messages()
+		}
 		if sdMsg := a.successDeclare.maybeWarn(i + 1); sdMsg != "" {
 			debug.Log("agent", "Iteration %d: premature success declaration detected", i+1)
 			a.contextManager.Add(provider.Message{
@@ -2258,6 +2269,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				})
 			}
 			a.successDeclare.recordAssistantText(assistantText, i)
+			a.subgoalTrack.recordAssistantText(assistantText, i)
 
 			// Symbol grounding verifier: detect code symbols mentioned in
 			// assistant text that were never found via tool calls.
@@ -3761,6 +3773,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				a.editPropagation.recordEdit(tc.Name, string(tc.Arguments))
 			}
 			a.successDeclare.recordToolCall()
+			a.subgoalTrack.recordToolCall(tc.Name, string(tc.Arguments))
 			// Attempt brief: record outcome for knowledge reuse.
 			a.attemptBrief.recordOutcome(tc.Name, extractToolTarget(tc.Name, string(tc.Arguments)), !result.IsError, i, result.Content)
 			// Symbol grounding: record file paths and code identifiers from
