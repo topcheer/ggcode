@@ -216,6 +216,7 @@ type Agent struct {
 	wastedExplore              *wastedExploreState                   // wasted exploration detection (search results never acted upon)
 	tunnelVision               *tunnelVisionState                    // tunnel vision detection (narrow file scope / under-exploration)
 	prematureCommit            *prematureCommitState                 // premature commitment detection (insufficient evidence before first edit)
+	selfMod                    *selfModState                         // self-modification safety guard (agent editing its own infrastructure)
 	diagnosticDisconnect       *diagnosticDisconnectState            // diagnostic-action disconnect detection (ignored diagnostics from failed tool calls)
 	bareEditStreak             *bareEditStreakState                  // unverified mutation streak detection (consecutive edits without verification)
 	recklessExec               *recklessExecState                    // reckless execution detection (edits to unexplored files in early iterations)
@@ -412,6 +413,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		errorCompound:          newErrorCompoundState(),
 		correctionSpiral:       newCorrectionSpiralState(),
 		wastedExplore:          newWastedExploreState(),
+		selfMod:                newSelfModState(),
 		tunnelVision:           newTunnelVisionState(),
 		prematureCommit:        newPrematureCommitState(),
 		diagnosticDisconnect:   newDiagnosticDisconnectState(),
@@ -1191,6 +1193,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.actionAnnihil.reset()
 	a.temporalBlindness.reset()
 	a.resetWastedExplore()
+	a.resetSelfMod()
 	if a.delegationOrch != nil {
 		a.delegationOrch.resetForNewTurn()
 	}
@@ -3308,6 +3311,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// file path consumption. Detects searches whose results were
 			// never acted upon.
 			a.recordWastedExploreToolCall(tc.Name, tc.Arguments, result.Content, i+1)
+
+			// Self-modification safety: check write tool calls for targets
+			// that modify the agent's own infrastructure (config, memory,
+			// hooks, permissions, system prompts).
+			if selfModMsg := a.checkSelfModification(tc.Name, tc.Arguments); selfModMsg != "" {
+				a.contextManager.Add(provider.Message{
+					Role:    "user",
+					Content: []provider.ContentBlock{{Type: "text", Text: selfModMsg}},
+				})
+				msgs = a.contextManager.Messages()
+			}
 
 			// Information scent tracking: record exploration calls and their
 			// path novelty to detect depleted information patches.
