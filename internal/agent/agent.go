@@ -272,6 +272,7 @@ type Agent struct {
 	strategyStagnation         *strategyStagnationState              // strategy stagnation detection (same-tool+target retries after failure)
 	iterPressure               *iterPressureState                    // iteration pressure degradation detection (verify/edit ratio drop near budget limit)
 	momentumLoss               *momentumLossState                    // late-phase productivity collapse detection (last-mile stall)
+	diminishingEdit            *diminishingEditState                 // polish-spiral detection (diminishing edit substance)
 	prematureSurrender         *surrenderState                       // premature task abandonment detection (metacognitive surrender awareness)
 	subgoalTrack               *subgoalState                         // subgoal completion integrity (missing-step planning failure awareness)
 	infoScent                  *infoScentState                       // information scent decay detection (diminishing novelty across explorations)
@@ -449,6 +450,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		strategyStagnation:     newStrategyStagnationState(),
 		iterPressure:           newIterPressureState(maxIter),
 		momentumLoss:           newMomentumLossState(),
+		diminishingEdit:        newDiminishingEditState(),
 		prematureSurrender:     newSurrenderState(),
 		subgoalTrack:           newSubgoalState(),
 		infoScent:              newInfoScentState(),
@@ -1199,6 +1201,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	}
 	if a.momentumLoss != nil {
 		a.momentumLoss.reset()
+		a.diminishingEdit.reset()
 		a.errorCompound.reset()
 		a.correctionSpiral.reset()
 		a.bareEditStreak.reset()
@@ -3072,6 +3075,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					a.redundantRead.recordWrite(p)
 					// Convergence lock: track post-verification edits.
 					a.convergenceRecordEdit(tc.Name)
+					// Diminishing edit: track edit substance size for polish-spiral detection.
+					a.diminishingRecordEdit(tc.Name, tc.Arguments)
 					// Fix cascade: track edits for wrong-hypothesis lock-in detection.
 					a.fixCascade.recordEdit()
 					// Error regression: track edits for negative progress detection.
@@ -3847,6 +3852,15 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					result.Content = result.Content + "\n\n" + convergenceGuidance
 				} else {
 					result.Content = convergenceGuidance
+				}
+			}
+
+			// Diminishing edit: detect polish-spiral (progressively smaller edits).
+			if diminishingGuidance := a.diminishingCheck(); diminishingGuidance != "" {
+				if result.Content != "" {
+					result.Content = result.Content + "\n\n" + diminishingGuidance
+				} else {
+					result.Content = diminishingGuidance
 				}
 			}
 
