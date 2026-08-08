@@ -219,6 +219,7 @@ type Agent struct {
 	recklessExec               *recklessExecState                    // reckless execution detection (edits to unexplored files in early iterations)
 	irrevGate                  *irrevGateState                       // irreversibility-weighted calibration gate (caution scales with action reversibility)
 	verifyDebt                 *verifyDebtState                      // verification debt accumulator (edits since last green build)
+	editPropagation            *editPropagationState                 // cross-file edit propagation risk (distinct files since green build)
 	errorCascade               *errorCascadeState                    // cascading failure detection (common-root-cause error clustering)
 	delegationOrch             *delegationState                      // delegation orchestration intelligence (orphaned delegations, serial anti-pattern, over-delegation)
 	crossFileImpact            *crossFileImpactState                 // pre-completion cross-file impact analysis (removed symbol breakage detection)
@@ -410,6 +411,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		recklessExec:           newRecklessExecState(),
 		irrevGate:              newIrrevGateState(),
 		verifyDebt:             newVerifyDebtState(),
+		editPropagation:        newEditPropagationState(),
 		toolDiversity:          newDiversityState(),
 		fileChurn:              newChurnState(),
 		editOscillation:        newOscillationState(),
@@ -1203,6 +1205,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		}
 		a.futileCycle.reset()
 		a.verifyDebt.reset()
+		a.editPropagation.reset()
 		a.successDeclare.reset()
 		a.reasonAction.reset()
 		a.attemptBrief.reset()
@@ -1734,6 +1737,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.contextManager.Add(provider.Message{
 				Role:    "user",
 				Content: []provider.ContentBlock{{Type: "text", Text: vdMsg}},
+			})
+			msgs = a.contextManager.Messages()
+		}
+
+		// Cross-file edit propagation risk: warn when many DISTINCT files
+		// are edited without verification. Cross-file dependency chains
+		// create error propagation paths (MAST taxonomy, Cemri et al. 2025).
+		if epMsg := a.editPropagation.maybeWarn(i + 1); epMsg != "" {
+			a.contextManager.Add(provider.Message{
+				Role:    "user",
+				Content: []provider.ContentBlock{{Type: "text", Text: epMsg}},
 			})
 			msgs = a.contextManager.Messages()
 		}
@@ -3613,6 +3627,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// reset the edit counter and track the result.
 			a.maybeResetVerifyOnCommand(tc.Name, tc.Arguments, result.IsError)
 			a.verifyDebt.recordVerifyCommand(extractCommandFromArgs(tc.Arguments), result.IsError)
+			if !result.IsError {
+				a.editPropagation.recordGreenBuild()
+			}
 
 			// Convergence lock: record verification result to detect post-verify
 			// unnecessary edit drift. A successful verify arms the lock; a failed
@@ -3717,6 +3734,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			if fileEditingTools[tc.Name] && !result.IsError {
 				a.verifyDebt.recordSourceEdit()
 				a.stalledConvergence.recordEdit()
+				a.editPropagation.recordEdit(tc.Name, string(tc.Arguments))
 			}
 			a.successDeclare.recordToolCall()
 			// Attempt brief: record outcome for knowledge reuse.
