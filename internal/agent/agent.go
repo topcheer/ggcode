@@ -216,6 +216,7 @@ type Agent struct {
 	correctionSpiral           *correctionSpiralState                // correction spiral detector (error severity escalation across fixes)
 	wastedExplore              *wastedExploreState                   // wasted exploration detection (search results never acted upon)
 	toolResultRedundancy       *toolResultRedundancyState            // tool result redundancy detection (overlapping content across calls)
+	anchorErosion              *anchorErosionState                   // anchor precision decay detection (edit argument quality degradation over run lifecycle)
 	tunnelVision               *tunnelVisionState                    // tunnel vision detection (narrow file scope / under-exploration)
 	prematureCommit            *prematureCommitState                 // premature commitment detection (insufficient evidence before first edit)
 	selfMod                    *selfModState                         // self-modification safety guard (agent editing its own infrastructure)
@@ -423,6 +424,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		correctionSpiral:       newCorrectionSpiralState(),
 		wastedExplore:          newWastedExploreState(),
 		toolResultRedundancy:   newToolResultRedundancyState(),
+		anchorErosion:          newAnchorErosionState(),
 		selfMod:                newSelfModState(),
 		tunnelVision:           newTunnelVisionState(),
 		prematureCommit:        newPrematureCommitState(),
@@ -1244,6 +1246,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		}
 		a.futileCycle.reset()
 		a.toolResultRedundancy.reset()
+		a.anchorErosion.reset()
 		a.verifyDebt.reset()
 		a.editPropagation.reset()
 		a.successDeclare.reset()
@@ -3176,6 +3179,14 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 						}
 					}
 					a.prematureRefactorRecordEdit(tc.Name, tc.Arguments)
+					// Anchor erosion: track edit precision decay over run lifecycle.
+					if aeHint := a.anchorErosion.recordEditAnchor(tc.Name, string(tc.Arguments)); aeHint != "" {
+						if result.Content != "" {
+							result.Content = result.Content + "\n\n" + aeHint
+						} else {
+							result.Content = aeHint
+						}
+					}
 					// Fix cascade: track edits for wrong-hypothesis lock-in detection.
 					a.fixCascade.recordEdit()
 					// Error regression: track edits for negative progress detection.
