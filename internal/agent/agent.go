@@ -271,6 +271,7 @@ type Agent struct {
 	symbolGrounding            *symbolGroundingState                 // symbol grounding verification (ungrounded code symbol reference detection)
 	inputUnderspec             *inputUnderspecState                  // input underspecification detection (vague/underspecified user request)
 	futileCycle                *futileCycleState                     // futile cycle detection (circular exploration without writes)
+	compoundedUncert           *compoundedUncertaintyState           // compounded trajectory uncertainty (multiplicative epistemic risk accumulation)
 	trajIntel                  *trajIntelState                       // post-run trajectory intelligence extraction
 	strategyStagnation         *strategyStagnationState              // strategy stagnation detection (same-tool+target retries after failure)
 	iterPressure               *iterPressureState                    // iteration pressure degradation detection (verify/edit ratio drop near budget limit)
@@ -452,6 +453,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		prematureAbstr:         newPrematureAbstrState(),
 		capBoundary:            newCapabilityBoundaryState(),
 		planAbandon:            newPlanAbandonState(),
+		compoundedUncert:       newCompoundedUncertaintyState(),
 		trajectoryHealth:       newTrajectoryHealthState(),
 		mindlessAction:         newMindlessActionState(),
 		strategyStagnation:     newStrategyStagnationState(),
@@ -1518,6 +1520,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.prematureAbstr.reset()
 	a.capBoundary.reset()
 	a.planAbandon.reset()
+	a.compoundedUncert.reset()
 	a.trajectoryHealth.reset()
 	a.mindlessAction.reset()
 	a.ungroundedReflect.reset()
@@ -2233,6 +2236,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// is exceeded, inject guidance to verify before proceeding.
 			if assumptionHint := a.maybeWarnAssumptions(assistantText); assumptionHint != "" {
 				debug.Log("agent", "Iteration %d: assumption tracker detected implicit assumptions", i+1)
+				a.recordUncertainty("assumption", weightAssumption)
 				a.contextManager.Add(provider.Message{
 					Role: "user",
 					Content: []provider.ContentBlock{{
@@ -2261,6 +2265,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// that contradict recent tool error results (world-model drift).
 			if fpMsg := a.falsePremise.checkFalsePremise(assistantText); fpMsg != "" {
 				debug.Log("agent", "Iteration %d: false premise detected (ungrounded success claim)", i+1)
+				a.recordUncertainty("false_premise", weightFalsePremise)
 				a.contextManager.Add(provider.Message{
 					Role: "user",
 					Content: []provider.ContentBlock{{
@@ -2865,11 +2870,26 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		}
 		if hedgingHint := a.maybeWarnActionHedging(textBuf, hedgingHasMutation); hedgingHint != "" {
 			debug.Log("agent", "Iteration %d: action hedging detector detected verbalized uncertainty during mutation", i+1)
+			a.recordUncertainty("hedging", weightHedging)
 			a.contextManager.Add(provider.Message{
 				Role: "user",
 				Content: []provider.ContentBlock{{
 					Type: "text",
 					Text: hedgingHint,
+				}},
+			})
+		}
+
+		// Compounded trajectory uncertainty check: after all per-turn epistemic
+		// detectors have run, check if the accumulated trajectory-level
+		// uncertainty has crossed the reliability threshold.
+		if compHint := a.maybeWarnCompoundedUncertainty(); compHint != "" {
+			debug.Log("agent", "Iteration %d: compounded trajectory uncertainty threshold crossed", i+1)
+			a.contextManager.Add(provider.Message{
+				Role: "user",
+				Content: []provider.ContentBlock{{
+					Type: "text",
+					Text: compHint,
 				}},
 			})
 		}
