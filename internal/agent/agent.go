@@ -239,6 +239,7 @@ type Agent struct {
 	cacheEffMonitor            *cacheEffMonitor                      // prompt cache efficiency monitoring (cache bust storm detection)
 	pressureForecaster         *pressureForecaster                   // context window pressure forecasting (predictive compaction warning)
 	redundantRead              *redundantReadState                   // redundant re-read detection (context waste prevention)
+	patchExhaust               *patchExhaustState                    // IFT patch exhaustion detection (give-up rule for over-mined directories)
 	searchParamGuard           *searchParamGuardState                // search parameter quality guard (vague/broad pattern detection)
 	toolRedundancy             *toolRedundancyState                  // scattered duplicate tool call detection (non-consecutive redundancy)
 	toolEquivDetect            *toolEquivDetectState                 // semantic-equivalent tool call detection (reordered keys, volatile fields)
@@ -431,6 +432,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		cacheEffMonitor:        newCacheEffMonitor(),
 		pressureForecaster:     newPressureForecaster(),
 		redundantRead:          newRedundantReadState(),
+		patchExhaust:           newPatchExhaustState(),
 		searchParamGuard:       newSearchParamGuard(),
 		toolRedundancy:         newToolRedundancyAnalyzer(),
 		toolEquivDetect:        newToolEquivDetectState(),
@@ -1238,6 +1240,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.perfBaseline.reset()
 	a.argSizeGuardFires = 0
 	a.redundantRead.reset()
+	a.patchExhaust.reset()
 	a.searchParamGuard.reset()
 	a.toolRedundancy.reset()
 	a.toolEquivDetect.reset()
@@ -1550,6 +1553,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 
 	a.argSizeGuardFires = 0
 	a.redundantRead.reset()
+	a.patchExhaust.reset()
 	a.searchParamGuard.reset()
 	a.toolRedundancy.reset()
 	a.toolSequence.reset()
@@ -3394,6 +3398,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 							result.Content = hint
 						}
 					}
+					if hint := a.patchExhaust.recordRead(p); hint != "" {
+						if result.Content != "" {
+							result.Content = result.Content + "\n\n" + hint
+						} else {
+							result.Content = hint
+						}
+					}
 				}
 			}
 			// Unread-file edit guard: warn when editing a file not read in
@@ -3408,6 +3419,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					if a.tokenWasteBudget != nil {
 						a.tokenWasteBudget.markFileEdited(p)
 					}
+					a.patchExhaust.recordEdit(p)
 					// Convergence lock: track post-verification edits.
 					a.convergenceRecordEdit(tc.Name)
 					// Diminishing edit: track edit substance size for polish-spiral detection.
