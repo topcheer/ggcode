@@ -440,6 +440,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		toolEquivDetect:        newToolEquivDetectState(),
 		bgOrphan:               newBgOrphanState(),
 		actionAnnihil:          newActionAnnihilateState(),
+		abstainDetect:          newAbstainState(),
 		serialRead:             newSerialReadState(),
 		toolStorm:              newToolStormState(),
 		outcomeMisattrib:       newOutcomeMisattribState(),
@@ -1286,7 +1287,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		}
 		if a.prematureSurrender != nil {
 			a.prematureSurrender.reset()
-			a.abstainDetect.reset()
+			if a.abstainDetect != nil {
+				a.abstainDetect.reset()
+			}
 			a.subgoalTrack.reset()
 			a.exploreExploit.reset()
 			a.contextAnchor.reset()
