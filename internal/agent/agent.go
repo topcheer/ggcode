@@ -168,6 +168,7 @@ type Agent struct {
 	ambiguityPoint             *ambiguityPointState                  // pre-run intent disambiguation (ambiguity detection in user request)
 	companionGuard             *companionGuardState                  // companion test file coverage check (unedited paired tests)
 	specGaming                 *specGamingState                      // specification gaming detection (reward hacking / verification tampering)
+	scopeNarrow                *scopeNarrowState                     // verification scope narrowing detection (command-level spec gaming)
 	complexityGate             *complexityGateState                  // post-completion code complexity quality gate
 	changeReconcile            *changeReconcileState                 // pre-completion git diff reconciliation (unexpected side-effect detection)
 	claimVerify                *claimVerifyState                     // tool output misinterpretation detection (AgentRx-inspired)
@@ -380,6 +381,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		unverifiedClaim:        newUnverifiedClaimState(),
 		companionGuard:         newCompanionGuardState(),
 		specGaming:             newSpecGamingState(),
+		scopeNarrow:            newScopeNarrowState(),
 		complexityGate:         newComplexityGateState(),
 		changeReconcile:        newChangeReconcileState(),
 		claimVerify:            newClaimVerifyState(),
@@ -1189,6 +1191,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.unverifiedClaim.reset()
 	a.companionGuard.reset()
 	a.specGaming.reset()
+	a.scopeNarrow.reset()
 	a.complexityGate.reset()
 	a.behaviorPattern.reset()
 	a.crossDetectorConsensus.reset()
@@ -1491,6 +1494,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.unverifiedClaim.reset()
 	a.companionGuard.reset()
 	a.specGaming.reset()
+	a.scopeNarrow.reset()
 	a.complexityGate.reset()
 	a.verifyRegression.reset()
 	a.resetSelfCorrectionGate()
@@ -3460,6 +3464,15 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 						} else {
 							result.Content = suppressMsg
 						}
+					}
+					// Verification scope narrowing: detect progressively narrowing
+					// test/build commands that mask failures (command-level spec gaming).
+					if narrowMsg := a.scopeNarrow.recordVerificationCommand(tc.Name, cmd, result.Content, result.IsError); narrowMsg != "" {
+						a.contextManager.Add(provider.Message{
+							Role:    "user",
+							Content: []provider.ContentBlock{{Type: "text", Text: narrowMsg}},
+						})
+						msgs = a.contextManager.Messages()
 					}
 				}
 			}
