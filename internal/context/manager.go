@@ -2027,6 +2027,9 @@ File paths that were read, created, or modified, with a 1-3 word note on what ea
 ## Decisions & Constraints
 Architecture decisions, trade-offs, and USER CONSTRAINTS (e.g. "don't modify tests", "use library X", "follow pattern Y"). These MUST be preserved — losing a user constraint causes wrong behavior.
 
+## Dead Ends
+Approaches that were TRIED AND FAILED or ruled out, with the reason. Example: "tried using sync.Pool for buffers - caused data races on concurrent map access". This is critical negative knowledge: without it, the agent will repeat the same failed attempts after compaction, wasting iterations.
+
 ## Errors Resolved
 Bugs found and fixed, with root cause (1 line each). Example: "nil pointer in swarm ReplyTo — added nil check".
 
