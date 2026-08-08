@@ -257,6 +257,7 @@ type Agent struct {
 	cusumDrift                 *cusumDriftState                      // CUSUM statistical drift detection (cumulative behavioral deviation)
 	toolOveruse                *toolOveruseState                     // tool overuse / self-awareness detection (unnecessary tool calls for known info)
 	assumptionTracker          *assumptionTrackerState               // implicit assumption detection (unverified guesses in assistant text)
+	diagnosticFixation         *diagnosticFixationState              // diagnostic fixation detection (stale hypothesis persistence across turns)
 	sycophancyGuard            *sycophancyState                      // user-premise sycophancy detection (agreeing with user premises without verification)
 	unverifiedConfidence       *unverifiedConfidenceState            // unverified confidence detection (overconfident claims without verification)
 	phantomVerify              *phantomVerifyState                   // phantom verification detection (category-specific verification claims without matching commands)
@@ -471,6 +472,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		cusumDrift:             newCusumDriftState(),
 		toolOveruse:            newToolOveruseState(),
 		assumptionTracker:      newAssumptionTrackerState(),
+		diagnosticFixation:     newDiagnosticFixationState(),
 		sycophancyGuard:        newSycophancyState(),
 		unverifiedConfidence:   newUnverifiedConfidenceState(),
 		phantomVerify:          newPhantomVerifyState(),
@@ -1567,6 +1569,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.cusumDrift.reset()
 	a.toolOveruse.reset()
 	a.assumptionTracker.reset()
+	a.diagnosticFixation.reset()
 	a.sycophancyGuard.reset()
 	a.unverifiedConfidence.reset()
 	a.evidenceOverconfidence.reset()
@@ -2376,6 +2379,23 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					Content: []provider.ContentBlock{{
 						Type: "text",
 						Text: assumptionHint,
+					}},
+				})
+			}
+
+			// Diagnostic fixation detector: detect when the agent restates the
+			// same diagnostic hypothesis (root-cause claim about a specific
+			// entity) across multiple turns without evolving it. This is belief
+			// perseverance -- the agent keeps blaming the same file/function
+			// even as evidence accumulates.
+			if fixHint := a.maybeWarnDiagnosticFixation(assistantText); fixHint != "" {
+				debug.Log("agent", "Iteration %d: diagnostic fixation detector found stale hypothesis", i+1)
+				a.recordUncertainty("diagnostic_fixation", weightAssumption)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: fixHint,
 					}},
 				})
 			}
