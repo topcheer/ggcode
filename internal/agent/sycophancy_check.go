@@ -109,55 +109,69 @@ func extractPremises(userText string) []userPremise {
 	seen := make(map[string]bool)
 
 	for _, line := range strings.Split(userText, "\n") {
-		line = strings.TrimSpace(line)
-		if len(line) < 15 || len(line) > 200 {
+		excerpt := extractPremiseFromLine(line)
+		if excerpt == "" {
 			continue
 		}
-		// Skip questions.
-		if strings.HasSuffix(line, "?") {
+		key := strings.ToLower(excerpt)
+		if seen[key] {
 			continue
 		}
-		// Skip commands/requests.
-		if premiseNegationRe.MatchString(line) {
-			continue
-		}
-		for _, p := range premisePatterns {
-			loc := p.FindStringIndex(line)
-			if loc == nil {
-				continue
-			}
-			excerpt := line
-			if len(excerpt) > 90 {
-				// Center excerpt on the match.
-				start := loc[0]
-				if start > 30 {
-					start -= 30
-				}
-				end := loc[1] + 40
-				if end > len(line) {
-					end = len(line)
-				}
-				if start < 0 {
-					start = 0
-				}
-				excerpt = line[start:end]
-				if start > 0 {
-					excerpt = "..." + excerpt
-				}
-				if end < len(line) {
-					excerpt = excerpt + "..."
-				}
-			}
-			key := strings.ToLower(excerpt)
-			if seen[key] {
-				break
-			}
-			seen[key] = true
-			out = append(out, userPremise{excerpt: excerpt})
-			break
-		}
+		seen[key] = true
+		out = append(out, userPremise{excerpt: excerpt})
 	}
 	return out
+}
+
+// extractPremiseFromLine checks a single line for a candidate premise and
+// returns a trimmed excerpt (possibly centered on the match), or "" if the
+// line should be skipped.
+func extractPremiseFromLine(rawLine string) string {
+	line := strings.TrimSpace(rawLine)
+	if len(line) < 15 || len(line) > 200 {
+		return ""
+	}
+	if strings.HasSuffix(line, "?") {
+		return ""
+	}
+	if premiseNegationRe.MatchString(line) {
+		return ""
+	}
+	for _, p := range premisePatterns {
+		loc := p.FindStringIndex(line)
+		if loc == nil {
+			continue
+		}
+		return centerExcerpt(line, loc)
+	}
+	return ""
+}
+
+// centerExcerpt returns the line if short, or a match-centered excerpt with
+// ellipses if the line exceeds the max excerpt length.
+func centerExcerpt(line string, loc []int) string {
+	if len(line) <= 90 {
+		return line
+	}
+	start := loc[0]
+	if start > 30 {
+		start -= 30
+	}
+	end := loc[1] + 40
+	if end > len(line) {
+		end = len(line)
+	}
+	if start < 0 {
+		start = 0
+	}
+	excerpt := line[start:end]
+	if start > 0 {
+		excerpt = "..." + excerpt
+	}
+	if end < len(line) {
+		excerpt = excerpt + "..."
+	}
+	return excerpt
 }
 
 // --- Verification tracking ---
