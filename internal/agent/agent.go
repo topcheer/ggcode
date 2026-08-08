@@ -264,6 +264,7 @@ type Agent struct {
 	sycophancyGuard            *sycophancyState                      // user-premise sycophancy detection (agreeing with user premises without verification)
 	unverifiedConfidence       *unverifiedConfidenceState            // unverified confidence detection (overconfident claims without verification)
 	phantomVerify              *phantomVerifyState                   // phantom verification detection (category-specific verification claims without matching commands)
+	narrativeEvidence          *narrativeEvidenceState               // narrative-evidence decoupling detection (text contradicts tool output)
 	evidenceOverconfidence     *evidenceOverconfidenceState          // evidence-induced overconfidence (tool-type calibration asymmetry)
 	verifyDisconnect           *verifyDisconnectState                // verification outcome disconnect (advancing past failures)
 	selectiveEvidence          *selectiveEvidenceTrackerState        // confirmation bias detection (cherry-picked evidence + dismissed negatives)
@@ -482,6 +483,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		sycophancyGuard:        newSycophancyState(),
 		unverifiedConfidence:   newUnverifiedConfidenceState(),
 		phantomVerify:          newPhantomVerifyState(),
+		narrativeEvidence:      newNarrativeEvidenceState(),
 		solutionFixation:       newSolutionFixationState(),
 		evidenceOverconfidence: newEvidenceOverconfidenceState(),
 		verifyDisconnect:       newVerifyDisconnectState(),
@@ -1586,6 +1588,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.unverifiedConfidence.reset()
 	a.evidenceOverconfidence.reset()
 	a.verifyDisconnect.reset()
+	a.narrativeEvidence.reset()
 	a.toolStorm.reset()
 	a.serialRead.reset()
 	a.reasoningRedund.reset()
@@ -2537,6 +2540,20 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					Content: []provider.ContentBlock{{
 						Type: "text",
 						Text: pvHint,
+					}},
+				})
+			}
+
+			// Narrative-evidence decoupling: detect when the agent's text claims
+			// directly contradict the actual content of recent tool outputs
+			// (arXiv:2605.01604 - Explanation-Decision Decoupling).
+			if neHint := a.maybeWarnNarrativeEvidence(assistantText, i+1); neHint != "" {
+				debug.Log("agent", "Iteration %d: narrative-evidence decoupling detected (text contradicts tool output)", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: neHint,
 					}},
 				})
 			}
@@ -3677,6 +3694,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// that get advanced past without resolution.
 			a.verifyDisconnect.recordVerificationResult(tc.Name, string(tc.Arguments), result.Content, i+1)
 			a.verifyDisconnect.recordToolCallForVD(tc.Name)
+
+			// Narrative-evidence decoupling: record tool results to detect
+			// contradictions between agent text claims and actual outputs.
+			a.narrativeEvidence.recordToolResult(tc.Name, result.Content, i+1, result.IsError)
 
 			// Outcome misattribution: record failure indicators in tool
 			// results to detect success claims that follow failures.
