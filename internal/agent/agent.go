@@ -279,6 +279,7 @@ type Agent struct {
 	attemptBrief               *attemptBriefState                    // compact attempt summary for knowledge reuse across failed approaches
 	behaviorPattern            *behaviorPatternState                 // cross-run behavioral anti-pattern detection (systemic issue awareness)
 	crossDetectorConsensus     *consensusState                       // cross-detector consensus (systemic failure from simultaneous detector firings)
+	falsePremise               *falsePremiseState                    // false premise detection: ungrounded success claims contradicting tool errors (world-model drift)
 	perfBaseline               *perfBaselineState                    // cross-session performance regression detection
 	lastRunStats               *RunStats                             // stats from the most recent run (for post-run summary display)
 	qualityScorer              *ResponseQualityScorer                // per-run response quality scoring for provider/model A/B comparison
@@ -345,6 +346,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		stalledConvergence:     newStalledConvergenceState(),
 		unreadEdit:             newUnreadEditState(),
 		expiredRead:            newExpiredReadState(),
+		falsePremise:           newFalsePremiseState(),
 		editFailRecovery:       newEditFailState(),
 		scopeDrift:             newScopeDriftState(),
 		driftRecurrence:        newDriftRecurrenceState(),
@@ -1448,6 +1450,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	// Reset the unread-file edit tracker so each run starts fresh.
 	a.unreadEdit.reset()
 	a.expiredRead.reset()
+	a.falsePremise.reset()
 	// Reset the edit failure recovery tracker.
 	a.editFailRecovery.reset()
 	// Reset the export guard so each run starts with a clean checked set.
@@ -2225,6 +2228,19 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					Content: []provider.ContentBlock{{
 						Type: "text",
 						Text: surrenderMsg,
+					}},
+				})
+			}
+
+			// False premise detection: scan assistant text for success claims
+			// that contradict recent tool error results (world-model drift).
+			if fpMsg := a.falsePremise.checkFalsePremise(assistantText); fpMsg != "" {
+				debug.Log("agent", "Iteration %d: false premise detected (ungrounded success claim)", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: fpMsg,
 					}},
 				})
 			}
@@ -3166,6 +3182,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			if result.IsError {
 				debug.Log("agent", "tool result ERROR: tool=%s output=%s", tc.Name, util.Truncate(result.Content, 200))
 			}
+
+			// False premise detection: record tool errors for later contradiction
+			// analysis against assistant success claims.
+			a.falsePremise.recordToolResult(tc.Name, result.Content, result.IsError)
 
 			// Argument size guard: detect oversized tool arguments (e.g., huge
 			// old_text anchors in edit_file, massive write_file content) and
