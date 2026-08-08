@@ -247,6 +247,7 @@ type Agent struct {
 	cusumDrift                 *cusumDriftState                      // CUSUM statistical drift detection (cumulative behavioral deviation)
 	toolOveruse                *toolOveruseState                     // tool overuse / self-awareness detection (unnecessary tool calls for known info)
 	assumptionTracker          *assumptionTrackerState               // implicit assumption detection (unverified guesses in assistant text)
+	sycophancyGuard            *sycophancyState                      // user-premise sycophancy detection (agreeing with user premises without verification)
 	unverifiedConfidence       *unverifiedConfidenceState            // unverified confidence detection (overconfident claims without verification)
 	evidenceOverconfidence     *evidenceOverconfidenceState          // evidence-induced overconfidence (tool-type calibration asymmetry)
 	verifyDisconnect           *verifyDisconnectState                // verification outcome disconnect (advancing past failures)
@@ -438,6 +439,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		cusumDrift:             newCusumDriftState(),
 		toolOveruse:            newToolOveruseState(),
 		assumptionTracker:      newAssumptionTrackerState(),
+		sycophancyGuard:        newSycophancyState(),
 		unverifiedConfidence:   newUnverifiedConfidenceState(),
 		evidenceOverconfidence: newEvidenceOverconfidenceState(),
 		verifyDisconnect:       newVerifyDisconnectState(),
@@ -1504,6 +1506,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.cusumDrift.reset()
 	a.toolOveruse.reset()
 	a.assumptionTracker.reset()
+	a.sycophancyGuard.reset()
 	a.unverifiedConfidence.reset()
 	a.evidenceOverconfidence.reset()
 	a.verifyDisconnect.reset()
@@ -1627,6 +1630,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			Content: []provider.ContentBlock{{Type: "text", Text: underspecHint}},
 		})
 	}
+
+	// Sycophancy detection: capture candidate factual premises from the user
+	// message so the agent's response can be checked for unverified agreement.
+	a.sycophancyGuard.captureUserPremises(userText)
 
 	for i := 0; a.maxIter <= 0 || i < a.maxIter; i++ {
 		runStats.Iterations = i + 1
@@ -2242,6 +2249,20 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					Content: []provider.ContentBlock{{
 						Type: "text",
 						Text: assumptionHint,
+					}},
+				})
+			}
+
+			// Sycophancy detector: detect when the agent agrees with a
+			// user-stated premise without independent verification.
+			if syncHint := a.sycophancyGuard.checkSycophancy(assistantText); syncHint != "" {
+				debug.Log("agent", "Iteration %d: sycophancy guard detected unverified agreement with user premise", i+1)
+				a.recordUncertainty("sycophancy", weightAssumption)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: syncHint,
 					}},
 				})
 			}
@@ -3248,6 +3269,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// False premise detection: record tool errors for later contradiction
 			// analysis against assistant success claims.
 			a.falsePremise.recordToolResult(tc.Name, result.Content, result.IsError)
+
+			// Sycophancy detection: a verification tool was used, so mark
+			// pending user premises as independently verified.
+			if isPremiseVerificationTool(tc.Name) {
+				a.sycophancyGuard.markVerified()
+			}
 
 			// Capability boundary: track consecutive tool failures for
 			// stubborn-persistence detection.
