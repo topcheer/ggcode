@@ -3875,6 +3875,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					if overuseHint != "" {
 						hints = append(hints, overuseHint)
 					}
+					hints = coalesceGuidance(hints)
 					result.Content = result.Content + "\n\n" + strings.Join(hints, "\n\n")
 				}
 				toolResults = append(toolResults, provider.ToolResultWithImages(tc.ID, tc.Name, result.Content, imgs, result.IsError))
@@ -3893,6 +3894,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					if overuseHint != "" {
 						hints = append(hints, overuseHint)
 					}
+					hints = coalesceGuidance(hints)
 					result.Content = result.Content + "\n\n" + strings.Join(hints, "\n\n")
 				}
 				toolResults = append(toolResults, provider.ToolResultNamedBlock(tc.ID, tc.Name, result.Content, result.IsError))
