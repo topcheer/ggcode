@@ -280,6 +280,7 @@ type Agent struct {
 	inputUnderspec             *inputUnderspecState                  // input underspecification detection (vague/underspecified user request)
 	futileCycle                *futileCycleState                     // futile cycle detection (circular exploration without writes)
 	compoundedUncert           *compoundedUncertaintyState           // compounded trajectory uncertainty (multiplicative epistemic risk accumulation)
+	spiralState                *spiralHallucinationState             // cross-turn epistemic error propagation (Spiral of Hallucination)
 	trajIntel                  *trajIntelState                       // post-run trajectory intelligence extraction
 	strategyStagnation         *strategyStagnationState              // strategy stagnation detection (same-tool+target retries after failure)
 	iterPressure               *iterPressureState                    // iteration pressure degradation detection (verify/edit ratio drop near budget limit)
@@ -474,6 +475,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		capBoundary:            newCapabilityBoundaryState(),
 		planAbandon:            newPlanAbandonState(),
 		compoundedUncert:       newCompoundedUncertaintyState(),
+		spiralState:            newSpiralHallucinationState(),
 		trajectoryHealth:       newTrajectoryHealthState(),
 		mindlessAction:         newMindlessActionState(),
 		strategyStagnation:     newStrategyStagnationState(),
@@ -2995,6 +2997,21 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				Content: []provider.ContentBlock{{
 					Type: "text",
 					Text: compHint,
+				}},
+			})
+		}
+
+		// Spiral of Hallucination detection: track cross-turn epistemic
+		// error propagation. Record this turn's uncertainty topics and
+		// check for committed assertions on previously uncertain foundations.
+		a.recordSpiralTurn(textBuf)
+		if spiralHint := a.maybeWarnSpiralHallucination(); spiralHint != "" {
+			debug.Log("agent", "Iteration %d: spiral of hallucination pattern detected", i+1)
+			a.contextManager.Add(provider.Message{
+				Role: "user",
+				Content: []provider.ContentBlock{{
+					Type: "text",
+					Text: spiralHint,
 				}},
 			})
 		}
