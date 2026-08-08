@@ -100,7 +100,6 @@ func (a *anchorErosionState) reset() {
 // countAnchorLines extracts and counts lines in old_text from edit tool args.
 // Returns 0 if no old_text found or args can't be parsed.
 func countAnchorLines(args string) float64 {
-	// Try JSON parse for structured args
 	var fields map[string]interface{}
 	if err := json.Unmarshal([]byte(args), &fields); err != nil {
 		return 0
@@ -112,33 +111,50 @@ func countAnchorLines(args string) float64 {
 	}
 
 	// multi_edit_file / multi_file_edit: array of edits
-	totalLines := 0.0
 	for _, key := range []string{"edits", "files"} {
-		if arr, ok := fields[key].([]interface{}); ok {
-			for _, item := range arr {
-				if m, ok := item.(map[string]interface{}); ok {
-					if ot, ok := m["old_text"].(string); ok && ot != "" {
-						totalLines += float64(strings.Count(ot, "\n") + 1)
-					}
-					// multi_file_edit nests edits inside file entries
-					if nestedEdits, ok := m["edits"].([]interface{}); ok {
-						for _, ne := range nestedEdits {
-							if nm, ok := ne.(map[string]interface{}); ok {
-								if ot, ok := nm["old_text"].(string); ok && ot != "" {
-									totalLines += float64(strings.Count(ot, "\n") + 1)
-								}
-							}
-						}
-					}
+		if total := countEditArrayLines(fields, key); total > 0 {
+			return total
+		}
+	}
+	return 0
+}
+
+// countEditArrayLines sums old_text line counts across a JSON array of edit
+// objects. Handles both flat edits (multi_edit_file) and nested edits inside
+// file entries (multi_file_edit). Returns 0 if the key is absent or has no
+// old_text fields.
+func countEditArrayLines(fields map[string]interface{}, key string) float64 {
+	arr, ok := fields[key].([]interface{})
+	if !ok {
+		return 0
+	}
+	total := 0.0
+	for _, item := range arr {
+		m, isMap := item.(map[string]interface{})
+		if !isMap {
+			continue
+		}
+		total += oldTextLineCount(m["old_text"])
+		// multi_file_edit nests edits inside file entries
+		if nested, ok := m["edits"].([]interface{}); ok {
+			for _, ne := range nested {
+				if nm, ok := ne.(map[string]interface{}); ok {
+					total += oldTextLineCount(nm["old_text"])
 				}
-			}
-			if totalLines > 0 {
-				return totalLines
 			}
 		}
 	}
+	return total
+}
 
-	return 0
+// oldTextLineCount returns the line count for an old_text value, or 0 if
+// the value is not a non-empty string.
+func oldTextLineCount(val interface{}) float64 {
+	s, ok := val.(string)
+	if !ok || s == "" {
+		return 0
+	}
+	return float64(strings.Count(s, "\n") + 1)
 }
 
 // recordEditAnchor tracks an edit's anchor precision. Returns a non-empty
