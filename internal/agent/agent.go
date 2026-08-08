@@ -213,6 +213,7 @@ type Agent struct {
 	strategyFixation           *strategyFixationState                // strategy fixation detection (same file edited N times with failed verifications -- approach-level failure)
 	errorRush                  *errorRushState                       // error rush / panic coding detection (blind-fixing after consecutive errors without diagnosis)
 	targetScatter              *targetScatterState                   // target scatter detection (world model miscalibration - unfocused investigation across many unrelated files)
+	attentionFragment          *attentionFragmentState               // attention fragmentation detection (CLT extraneous load from rapid directory context-switching)
 	errorCompound              *errorCompoundState                   // error compounding risk detector (systemic trajectory reliability)
 	correctionSpiral           *correctionSpiralState                // correction spiral detector (error severity escalation across fixes)
 	wastedExplore              *wastedExploreState                   // wasted exploration detection (search results never acted upon)
@@ -438,6 +439,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		strategyFixation:       newStrategyFixationState(),
 		errorRush:              newErrorRushState(),
 		targetScatter:          newTargetScatterState(),
+		attentionFragment:      newAttentionFragmentState(),
 		recklessExec:           newRecklessExecState(),
 		irrevGate:              newIrrevGateState(),
 		verifyDebt:             newVerifyDebtState(),
@@ -1972,6 +1974,18 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.contextManager.Add(provider.Message{
 				Role:    "user",
 				Content: []provider.ContentBlock{{Type: "text", Text: tsMsg}},
+			})
+			msgs = a.contextManager.Messages()
+		}
+
+		// Attention fragmentation: detect rapid directory context-switching
+		// that creates extraneous cognitive load (CLT for LLM agents,
+		// arXiv:2506.06843). High switch density means the model is thrashing
+		// between unrelated concerns instead of maintaining coherent focus.
+		if afMsg := a.attentionFragment.analyze(); afMsg != "" {
+			a.contextManager.Add(provider.Message{
+				Role:    "user",
+				Content: []provider.ContentBlock{{Type: "text", Text: afMsg}},
 			})
 			msgs = a.contextManager.Messages()
 		}
@@ -3988,6 +4002,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.errorRush.recordToolCall(tc.Name, result.Content, result.IsError)
 			// Target scatter: track diagnostic tool targets for world model calibration detection.
 			a.targetScatter.recordToolCall(tc.Name, string(tc.Arguments))
+			// Attention fragmentation: track directory switches for CLT extraneous load detection.
+			var afArgs map[string]interface{}
+			if len(tc.Arguments) > 0 {
+				_ = json.Unmarshal(tc.Arguments, &afArgs)
+			}
+			a.attentionFragment.recordToolCall(tc.Name, afArgs)
 			// Reckless execution: track exploration vs edit targets.
 			if a.recklessExec != nil {
 				argsStr := string(tc.Arguments)
