@@ -160,6 +160,7 @@ type Agent struct {
 	scopeDrift                 *scopeDriftState                      // semantic scope creep detection (file-diversity tracking)
 	driftRecurrence            *driftRecurrenceState                 // drift recurrence detection (post-warning behavioral persistence)
 	constraintAmnesia          *constraintAmnesiaState               // constraint amnesia detection (early constraint forgetting)
+	constraintViolation        *constraintViolationState             // self-declared constraint violation detection (AgentRx step-level tracking)
 	exportGuard                *exportGuardState                     // breaking change detection for exported Go symbols (regression guard)
 	hubPackageGuard            *hubPackageState                      // per-edit blast-radius awareness for high fan-in packages
 	artifactGuard              *generatedArtifactState               // generated artifact / lock file edit warning
@@ -364,6 +365,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		scopeDrift:             newScopeDriftState(),
 		driftRecurrence:        newDriftRecurrenceState(),
 		constraintAmnesia:      newConstraintAmnesiaState(),
+		constraintViolation:    newConstraintViolationState(),
 		exportGuard:            newExportGuardState(),
 		hubPackageGuard:        newHubPackageState(),
 		artifactGuard:          newGeneratedArtifactState(),
@@ -1550,6 +1552,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.causalAttribution.reset()
 	a.reversibility.reset()
 	a.constraintAmnesia.reset()
+	a.constraintViolation.reset()
 	a.symbolGrounding.reset()
 	a.inputUnderspec.reset()
 	a.tunnelVision.reset()
@@ -2239,6 +2242,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Nudge the model to use proper tool call format and retry.
 			assistantText := textBuf
 			a.toolStorm.recordReasoning(assistantText)
+			a.constraintViolation.recordReasoning(assistantText, i+1)
 			a.reasoningRedund.recordReasoning(assistantText, false)
 			if hasInlineToolCall(assistantText) && inlineToolCallNudges < 2 {
 				inlineToolCallNudges++
@@ -3405,6 +3409,19 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Outcome misattribution: record failure indicators in tool
 			// results to detect success claims that follow failures.
 			a.outcomeMisattrib.recordResult(tc.Name, result.Content, result.IsError, i+1)
+
+			// Self-declared constraint violation: check if this tool call
+			// violates constraints the agent declared in its own reasoning.
+			if cvMsg := a.constraintViolation.checkToolCall(tc.Name, parseToolArgs(tc.Arguments), i+1); cvMsg != "" {
+				debug.Log("agent", "Iteration %d: constraint violation detector triggered", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: cvMsg,
+					}},
+				})
+			}
 
 			// Error strategy loop: track error categories across all tool
 			// calls to detect systemic approach failures (procedural memory
