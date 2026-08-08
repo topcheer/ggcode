@@ -279,6 +279,7 @@ type Agent struct {
 	tokenWasteBudget           *tokenWasteBudgetState                // aggregate token waste ratio tracker (AgentDiet arXiv:2509.23586)
 	reversibility              *reversibilityState                   // pre-action reversibility assessment (irreversible action safety check)
 	mindlessAction             *mindlessActionState                  // mindless action detection (rapid-fire tool calls without reasoning)
+	reproducerLifecycle        *reproducerLifecycleState             // reproducer lifecycle tracker (reproduce->edit->rerun gap)
 	successDeclare             *successDeclareState                  // premature success declaration detection (calibration gap: done claim + continued work)
 	criteriaDrift              *criteriaDriftState                   // success criteria drift detection (proxy gaming via evaluator weakening)
 	reasonAction               *reasonActionState                    // reasoning-action alignment verification (cognitive category mismatch)
@@ -476,6 +477,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		evidenceOverconfidence: newEvidenceOverconfidenceState(),
 		verifyDisconnect:       newVerifyDisconnectState(),
 		selectiveEvidence:      newSelectiveEvidenceTrackerState(),
+		reproducerLifecycle:    newReproducerLifecycleState(),
 		temporalBlindness:      newTemporalBlindnessState(),
 		selfDiagState:          newSelfDiagState(),
 		deferredWork:           newDeferredWorkState(),
@@ -1571,6 +1573,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.serialRead.reset()
 	a.reasoningRedund.reset()
 	a.selectiveEvidence.reset()
+	a.reproducerLifecycle.reset()
 	a.deferredWork.reset()
 	a.circularReasoning.reset()
 	a.selfDiagState.reset()
@@ -2647,6 +2650,23 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					Content: []provider.ContentBlock{{
 						Type: "text",
 						Text: planHint,
+					}},
+				})
+			}
+
+			// Reproducer lifecycle tracker: observes reproduce->edit->rerun
+			// lifecycle. If the agent edits after running a reproducer but
+			// never re-runs it, inject guidance to verify the fix.
+			reproToolNames, reproToolInputs := extractToolNamesAndInputs(toolCalls)
+			a.reproducerLifecycle.observeText(i+1, assistantText, len(reproToolNames) > 0)
+			a.reproducerLifecycle.observeToolCalls(i+1, reproToolNames, reproToolInputs)
+			if rlHint := a.reproducerLifecycle.checkIncomplete(i + 1); rlHint != "" {
+				debug.Log("agent", "Iteration %d: reproducer lifecycle detector triggered", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: rlHint,
 					}},
 				})
 			}
