@@ -275,6 +275,7 @@ type Agent struct {
 	toolTargetMismatch         *toolTargetState                      // tool-target mismatch detection (stated intent vs actual tool target)
 	outcomeMisattrib           *outcomeMisattribState                // outcome misattribution detection (success claim despite failure result)
 	trajectoryHealth           *trajectoryHealthState                // metacognitive trajectory health synthesis (multi-signal composite)
+	tokenWasteBudget           *tokenWasteBudgetState                // aggregate token waste ratio tracker (AgentDiet arXiv:2509.23586)
 	reversibility              *reversibilityState                   // pre-action reversibility assessment (irreversible action safety check)
 	mindlessAction             *mindlessActionState                  // mindless action detection (rapid-fire tool calls without reasoning)
 	successDeclare             *successDeclareState                  // premature success declaration detection (calibration gap: done claim + continued work)
@@ -487,6 +488,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		compoundedUncert:       newCompoundedUncertaintyState(),
 		spiralState:            newSpiralHallucinationState(),
 		trajectoryHealth:       newTrajectoryHealthState(),
+		tokenWasteBudget:       newTokenWasteBudgetState(),
 		mindlessAction:         newMindlessActionState(),
 		strategyStagnation:     newStrategyStagnationState(),
 		iterPressure:           newIterPressureState(maxIter),
@@ -1578,6 +1580,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.planAbandon.reset()
 	a.compoundedUncert.reset()
 	a.trajectoryHealth.reset()
+	if a.tokenWasteBudget != nil {
+		a.tokenWasteBudget.reset()
+	}
 	a.mindlessAction.reset()
 	a.ungroundedReflect.reset()
 	a.strategyStagnation.reset()
@@ -2722,6 +2727,19 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				})
 			}
 
+			// Token waste budget warning (AgentDiet arXiv:2509.23586):
+			// when aggregate waste ratio exceeds 40%, inject guidance.
+			if wasteHint := a.maybeWarnTokenWaste(); wasteHint != "" {
+				debug.Log("agent", "Iteration %d: token waste budget exceeded 40%% threshold", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: wasteHint,
+					}},
+				})
+			}
+
 			// Foresight calibration (WorldEvolver arXiv:2606.30639): record
 			// the agent's predictions about upcoming tool outcomes BEFORE
 			// execution. After execution, checkCalibration compares them
@@ -3326,6 +3344,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					a.fileFreshness.recordWrite(p)
 					a.readHash.recordWriteHash(p)
 					a.redundantRead.recordWrite(p)
+					if a.tokenWasteBudget != nil {
+						a.tokenWasteBudget.markFileEdited(p)
+					}
 					// Convergence lock: track post-verification edits.
 					a.convergenceRecordEdit(tc.Name)
 					// Diminishing edit: track edit substance size for polish-spiral detection.
@@ -4406,6 +4427,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Register read-only tool results for in-turn deduplication.
 			if speculativeSafeTools[tc.Name] && !result.IsError {
 				seenReadOnly[dedupK] = len(toolResults) - 1
+			}
+
+			// Token waste budget tracking (AgentDiet arXiv:2509.23586):
+			// record each tool result's estimated token cost and waste category.
+			var pathsRead []string
+			if tc.Name == "read_file" || tc.Name == "multi_file_read" {
+				pathsRead = extractReadFilePaths(tc.Name, tc.Arguments)
+			}
+			isRedundant := redundancyHint != "" || overuseHint != ""
+			if a.tokenWasteBudget != nil {
+				a.tokenWasteBudget.recordToolResult(tc.Name, result.Content, result.IsError, isRedundant, pathsRead)
 			}
 
 			if err := ctx.Err(); err != nil {
