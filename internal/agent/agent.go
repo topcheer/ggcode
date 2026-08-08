@@ -208,6 +208,7 @@ type Agent struct {
 	mcpRuntime                 tool.MCPRuntime                       // MCP runtime for server snapshots (optional)
 	bgOrphan                   *bgOrphanState                        // orphaned background command detection (unchecked start_command jobs)
 	actionAnnihil              *actionAnnihilateState                // action annihilation detection (tool calls that cancel prior side effects)
+	abstainDetect              *abstainState                         // agentic abstention detection (untimely continuation after negative signals)
 	toolStorm                  *toolStormState                       // tool call storm detection (diverse tools fired without reasoning)
 	reasoningRedund            *reasoningRedundancyState             // reasoning redundancy detection (consecutive text-only overthinking)
 	queryConverge              *queryConvergeState                   // query convergence failure detection (repeated similar searches without action)
@@ -1285,6 +1286,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		}
 		if a.prematureSurrender != nil {
 			a.prematureSurrender.reset()
+			a.abstainDetect.reset()
 			a.subgoalTrack.reset()
 			a.exploreExploit.reset()
 			a.contextAnchor.reset()
@@ -2446,6 +2448,21 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					Content: []provider.ContentBlock{{
 						Type: "text",
 						Text: surrenderMsg,
+					}},
+				})
+			}
+
+			// Agentic abstention detection: track whether the assistant text
+			// acknowledges negative environment signals, and inject guidance
+			// if unacknowledged negatives accumulate. arXiv:2606.28733.
+			a.abstainDetect.recordAcknowledgment(assistantText)
+			if abstainMsg := a.abstainDetect.checkAbstention(i+1, a.maxIter); abstainMsg != "" {
+				debug.Log("abstain-detect", "Iteration %d: untimely continuation detected", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: abstainMsg,
 					}},
 				})
 			}
@@ -4197,6 +4214,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					result.Content = emptyGuidance
 				}
 			}
+
+			// Agentic abstention detection: track negative environment signals
+			// (not found, unavailable) to detect untimely continuation.
+			a.abstainDetect.recordResult(result.Content, result.IsError)
 
 			// Smart verify hint reset: if the agent ran a build/test/verify command,
 			// reset the edit counter and track the result.
