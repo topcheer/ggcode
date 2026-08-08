@@ -114,6 +114,12 @@ func (t *SaveMemoryTool) Execute(ctx context.Context, input json.RawMessage) (Re
 		dupWarning = dc.FormatDuplicateWarning(params.Key)
 	}
 
+	// Check for semantic contradictions with existing memories.
+	var contraWarning string
+	if cc := target.CheckContradiction(params.Key, params.Content); cc.HasConflict() {
+		contraWarning = cc.FormatContradictionWarning(params.Key)
+	}
+
 	if err := target.SaveMemory(params.Key, params.Content); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("failed to save %s memory: %v", scopeLabel, err)}, nil
 	}
@@ -124,6 +130,9 @@ func (t *SaveMemoryTool) Execute(ctx context.Context, input json.RawMessage) (Re
 	msg := fmt.Sprintf("%s memory saved: %s", scopeLabel, params.Key)
 	if dupWarning != "" {
 		msg += "\n\n" + dupWarning
+	}
+	if contraWarning != "" {
+		msg += "\n\n" + contraWarning
 	}
 	return Result{Content: msg}, nil
 }
