@@ -209,6 +209,7 @@ type Agent struct {
 	bgOrphan                   *bgOrphanState                        // orphaned background command detection (unchecked start_command jobs)
 	actionAnnihil              *actionAnnihilateState                // action annihilation detection (tool calls that cancel prior side effects)
 	abstainDetect              *abstainState                         // agentic abstention detection (untimely continuation after negative signals)
+	phantomOutput              *phantomState                         // phantom output inheritance detection (building on failed tool results)
 	toolStorm                  *toolStormState                       // tool call storm detection (diverse tools fired without reasoning)
 	reasoningRedund            *reasoningRedundancyState             // reasoning redundancy detection (consecutive text-only overthinking)
 	queryConverge              *queryConvergeState                   // query convergence failure detection (repeated similar searches without action)
@@ -442,6 +443,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		bgOrphan:               newBgOrphanState(),
 		actionAnnihil:          newActionAnnihilateState(),
 		abstainDetect:          newAbstainState(),
+		phantomOutput:          newPhantomState(),
 		serialRead:             newSerialReadState(),
 		toolStorm:              newToolStormState(),
 		outcomeMisattrib:       newOutcomeMisattribState(),
@@ -2473,6 +2475,19 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				})
 			}
 
+			// Phantom output inheritance detection: check if subsequent tool calls
+			// are referencing identifiers from previously failed tool calls.
+			if phantomMsg := a.phantomOutput.checkPhantomInheritance(i + 1); phantomMsg != "" {
+				debug.Log("phantom-output", "Iteration %d: phantom output inheritance detected", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: phantomMsg,
+					}},
+				})
+			}
+
 			// False premise detection: scan assistant text for success claims
 			// that contradict recent tool error results (world-model drift).
 			if fpMsg := a.falsePremise.checkFalsePremise(assistantText); fpMsg != "" {
@@ -4055,6 +4070,14 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.causalAttribution.recordEdit(tc.Name, extractFileHint(tc.Name, tc.Arguments), i)
 
 			a.confidence.recordResult(tc.Name, result.IsError, extractFileHint(tc.Name, tc.Arguments))
+
+			// Phantom output inheritance: track failed tool calls and detect when
+			// subsequent calls reference identifiers from previously failed ones.
+			if isLikelyFailed(result.Content, result.IsError) {
+				a.phantomOutput.recordFailedCall(tc.Name, tc.Arguments, i+1)
+			} else {
+				a.phantomOutput.recordSubsequentCall(tc.Name, tc.Arguments, i+1)
+			}
 			// Causal attribution: on failures, trace backward to the likely causal edit.
 			if result.IsError || looksLikeFailure(result.Content) {
 				if causalHint := a.causalAttribution.attributeFailure(result.Content); causalHint != "" {
