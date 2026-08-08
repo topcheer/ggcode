@@ -181,25 +181,29 @@ func extractClaims(content string) claimMap {
 	// Check negation directives FIRST so they take priority over the
 	// broader polarityDo pattern (which would also match "use" inside
 	// "never use").
-	for _, m := range polarityDont.FindAllStringSubmatch(content, -1) {
-		val := strings.TrimSpace(m[1])
-		if val != "" && !isNoiseSubject(val) {
-			negated := "~" + val
-			if _, ok := claims["use"]; !ok {
-				claims["use"] = negated
-			}
-		}
-	}
-	for _, m := range polarityDo.FindAllStringSubmatch(content, -1) {
-		val := strings.TrimSpace(m[1])
-		if val != "" && !isNoiseSubject(val) {
-			if _, ok := claims["use"]; !ok {
-				claims["use"] = val
-			}
-		}
-	}
+	extractPolarityClaim(claims, polarityDont, content, true)
+	extractPolarityClaim(claims, polarityDo, content, false)
 
 	return claims
+}
+
+// extractPolarityClaim scans content with the given polarity regex and sets
+// claims["use"] if a directive is found and "use" is not already claimed.
+// When negate is true, the value is prefixed with "~" to mark it as a
+// prohibition.
+func extractPolarityClaim(claims claimMap, re *regexp.Regexp, content string, negate bool) {
+	for _, m := range re.FindAllStringSubmatch(content, -1) {
+		val := strings.TrimSpace(m[1])
+		if val == "" || isNoiseSubject(val) {
+			continue
+		}
+		if negate {
+			val = "~" + val
+		}
+		if _, ok := claims["use"]; !ok {
+			claims["use"] = val
+		}
+	}
 }
 
 // normalizeSubject converts a raw subject string into a canonical key for
