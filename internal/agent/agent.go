@@ -231,6 +231,7 @@ type Agent struct {
 	verifyDebt                 *verifyDebtState                      // verification debt accumulator (edits since last green build)
 	editPropagation            *editPropagationState                 // cross-file edit propagation risk (distinct files since green build)
 	errorCascade               *errorCascadeState                    // cascading failure detection (common-root-cause error clustering)
+	errorPropagate             *errorPropagateState                  // error propagation chain detection (degraded-output contamination tracking)
 	delegationOrch             *delegationState                      // delegation orchestration intelligence (orphaned delegations, serial anti-pattern, over-delegation)
 	crossFileImpact            *crossFileImpactState                 // pre-completion cross-file impact analysis (removed symbol breakage detection)
 	contextFootprint           *contextFootprintState                // per-tool context budget attribution (which tools consume the most context)
@@ -508,6 +509,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		foresightCalib:         newForesightCalibrateState(),
 		reversibility:          newReversibilityState(),
 		errorCascade:           newErrorCascadeState(),
+		errorPropagate:         newErrorPropagateState(),
 		crossFileImpact:        newCrossFileImpactState(),
 		diskSpace:              newDiskSpaceState(),
 		envDrift:               newEnvDriftState(),
@@ -1605,6 +1607,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.failureMode.reset()
 	a.toolFallback.reset()
 	a.errorCascade.reset()
+	a.errorPropagate.reset()
 	a.fileFreshness.reset()
 	a.readHash.reset()
 	a.toolThermal.reset()
@@ -3884,6 +3887,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					} else {
 						result.Content = cascadeGuidance
 					}
+				}
+			}
+
+			// Error propagation chain: detect degraded (non-error but empty/
+			// truncated/null) outputs that subsequent steps build on without
+			// verifying, causing silent compounding failures.
+			if propGuidance := a.errorPropagate.recordResult(tc.Name, result.Content, result.IsError); propGuidance != "" {
+				if result.Content != "" {
+					result.Content = result.Content + "\n\n" + propGuidance
+				} else {
+					result.Content = propGuidance
 				}
 			}
 
