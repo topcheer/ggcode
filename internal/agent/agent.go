@@ -4316,6 +4316,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 						hints = append(hints, overuseHint)
 					}
 					hints = coalesceGuidance(hints)
+					if ch := detectGuidanceConflict(hints); ch != "" {
+						hints = append([]string{ch}, hints...)
+					}
 					for _, h := range hints {
 						if tag := extractHintTag(h); tag != "" {
 							a.guidancePromoter.RecordTag(tag)
@@ -4340,6 +4343,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 						hints = append(hints, overuseHint)
 					}
 					hints = coalesceGuidance(hints)
+					if ch := detectGuidanceConflict(hints); ch != "" {
+						hints = append([]string{ch}, hints...)
+					}
 					for _, h := range hints {
 						if tag := extractHintTag(h); tag != "" {
 							a.guidancePromoter.RecordTag(tag)
