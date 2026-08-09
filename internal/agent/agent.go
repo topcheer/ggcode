@@ -236,6 +236,7 @@ type Agent struct {
 	selfMod                    *selfModState                         // self-modification safety guard (agent editing its own infrastructure)
 	diagnosticDisconnect       *diagnosticDisconnectState            // diagnostic-action disconnect detection (ignored diagnostics from failed tool calls)
 	bareEditStreak             *bareEditStreakState                  // unverified mutation streak detection (consecutive edits without verification)
+	editCoverage               *editCoverageState                    // verification coverage gap detection (edits across packages but partial verification)
 	greenBuildIllusion         *greenBuildIllusionState              // green build illusion: build succeeds without tests before declaring done
 	prematureSuccess           *prematureSuccessState                // premature success claim detection (edits without verification followed by success declaration)
 	recklessExec               *recklessExecState                    // reckless execution detection (edits to unexplored files in early iterations)
@@ -485,6 +486,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		prematureCommit:        newPrematureCommitState(),
 		diagnosticDisconnect:   newDiagnosticDisconnectState(),
 		bareEditStreak:         newBareEditState(),
+		editCoverage:           newEditCoverageState(),
 		greenBuildIllusion:     newGreenBuildIllusionState(),
 		prematureSuccess:       newPrematureSuccessState(),
 		strategyFixation:       newStrategyFixationState(),
@@ -1321,6 +1323,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		a.errorCompound.reset()
 		a.correctionSpiral.reset()
 		a.bareEditStreak.reset()
+		a.editCoverage.reset()
 		a.greenBuildIllusion.reset()
 		a.prematureSuccess.reset()
 		a.strategyFixation.reset()
@@ -2061,6 +2064,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			})
 			msgs = a.contextManager.Messages()
 		}
+
+		// Verification coverage gap: handled in tool-execution loop below.
 
 		// Strategy fixation: detect when the agent has edited the same file
 		// multiple times with intervening failed verifications, suggesting an
@@ -3904,6 +3909,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.evidenceOverconfidence.recordToolCall(tc.Name, string(tc.Arguments))
 			a.scopeOvergeneralize.recordToolCall(tc.Name, string(tc.Arguments))
 			a.phantomVerify.recordToolCall(tc.Name, string(tc.Arguments))
+
+			// Verification coverage gap: detect edits across multiple packages
+			// but verification command only covers a subset.
+			if covWarn := a.editCoverage.recordToolCall(tc.Name, string(tc.Arguments)); covWarn != "" {
+				debug.Log("agent", "Iteration %d: verification coverage gap detected", i+1)
+				a.contextManager.Add(provider.Message{
+					Role:    "user",
+					Content: []provider.ContentBlock{{Type: "text", Text: covWarn}},
+				})
+				msgs = a.contextManager.Messages()
+			}
 
 			// Redundant re-verification: detect same verification command
 			// re-run without intervening file edits (idempotency violation).
