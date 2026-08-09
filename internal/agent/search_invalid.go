@@ -98,43 +98,39 @@ func (s *searchInvalidationState) reset() {
 	s.warningCount = 0
 }
 
+// lspTools lists tools that may output bare paths (no line:col prefix).
+var lspTools = map[string]bool{
+	"lsp_diagnostics":       true,
+	"lsp_symbols":           true,
+	"lsp_workspace_symbols": true,
+	"lsp_references":        true,
+}
+
 // recordSearchResult is called when a search-type tool completes. It extracts
 // file paths from the tool output and tracks them for later invalidation.
 func (s *searchInvalidationState) recordSearchResult(toolName, output string) {
 	if !searchResultTools[toolName] || output == "" {
 		return
 	}
+	s.extractPaths(pathInOutputRe, output, toolName)
+	if lspTools[toolName] {
+		s.extractPaths(pathOnlyRe, output, toolName)
+	}
+}
 
-	// Extract paths with line numbers (grep/search_files format).
-	matches := pathInOutputRe.FindAllStringSubmatch(output, -1)
+// extractPaths runs a regex over output and registers first-seen paths.
+func (s *searchInvalidationState) extractPaths(re *regexp.Regexp, output, toolName string) {
+	matches := re.FindAllStringSubmatch(output, -1)
 	for _, m := range matches {
 		if len(m) < 2 {
 			continue
 		}
-		rawPath := strings.TrimSpace(m[1])
-		n := normalizePath(rawPath)
-		if n != "" && isValidFilePath(n) {
-			if _, exists := s.searchResultFiles[n]; !exists {
-				s.searchResultFiles[n] = toolName
-			}
+		n := normalizePath(strings.TrimSpace(m[1]))
+		if n == "" || !isValidFilePath(n) {
+			continue
 		}
-	}
-
-	// Also extract bare paths (lsp format).
-	if toolName == "lsp_diagnostics" || toolName == "lsp_symbols" ||
-		toolName == "lsp_workspace_symbols" || toolName == "lsp_references" {
-		bareMatches := pathOnlyRe.FindAllStringSubmatch(output, -1)
-		for _, m := range bareMatches {
-			if len(m) < 2 {
-				continue
-			}
-			rawPath := strings.TrimSpace(m[1])
-			n := normalizePath(rawPath)
-			if n != "" && isValidFilePath(n) {
-				if _, exists := s.searchResultFiles[n]; !exists {
-					s.searchResultFiles[n] = toolName
-				}
-			}
+		if _, exists := s.searchResultFiles[n]; !exists {
+			s.searchResultFiles[n] = toolName
 		}
 	}
 }
