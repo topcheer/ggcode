@@ -195,84 +195,69 @@ func (s *scopeOvergeneralizeState) trimWindow() {
 // based on narrow evidence and returns guidance if so.
 func (a *Agent) maybeWarnScopeOvergeneralize(assistantText string) string {
 	s := a.scopeOvergeneralize
-	if s == nil {
+	if s == nil || !s.hasRecentNarrow || s.narrowEvidenceCalls < scopeOvergenMinNarrowEvidence {
 		return ""
 	}
 
-	// Need narrow evidence in the window
-	if !s.hasRecentNarrow || s.narrowEvidenceCalls < scopeOvergenMinNarrowEvidence {
+	// LSP-based evidence makes universal claims legitimate
+	if s.lspEvidenceCalls > 0 || hasBroadEvidenceInWindow(s) {
 		return ""
 	}
 
-	// If LSP-based evidence was also used, the universal claim may be legitimate
-	if s.lspEvidenceCalls > 0 {
-		return ""
-	}
-
-	// Check for universal quantifier claims
-	claims := 0
-	matchedPhrases := make([]string, 0, 2)
-	for _, re := range universalClaimRe {
-		loc := re.FindStringIndex(assistantText)
-		if loc != nil {
-			claims++
-			if len(matchedPhrases) < 2 {
-				// Extract a snippet around the match
-				start := loc[0] - 30
-				if start < 0 {
-					start = 0
-				}
-				end := loc[1] + 30
-				if end > len(assistantText) {
-					end = len(assistantText)
-				}
-				snippet := strings.TrimSpace(assistantText[start:end])
-				matchedPhrases = append(matchedPhrases, snippet)
-			}
-		}
-	}
-
-	if claims == 0 {
-		return ""
-	}
-
-	// Check that no broad evidence was used in the window
-	broadEvidenceInWindow := false
-	for _, e := range s.recentTools {
-		if !e.isNarrow && !e.isLSP && scopeEvidenceToolRe.MatchString(e.name) {
-			broadEvidenceInWindow = true
-			break
-		}
-	}
-
-	if broadEvidenceInWindow {
-		return "" // Agent did a broad search, claim may be justified
-	}
-
-	if s.warnings >= scopeOvergenMaxWarnings {
+	matchedPhrases := findUniversalClaims(assistantText)
+	if len(matchedPhrases) == 0 || s.warnings >= scopeOvergenMaxWarnings {
 		return ""
 	}
 
 	s.warnings++
+	return buildScopeOvergenMessage(s, matchedPhrases[0])
+}
 
-	// Build the guidance message
-	var sb strings.Builder
-	sb.WriteString("[scope-overgeneralization] ")
-	sb.WriteString("Universal scope claim detected after narrow evidence search. ")
-	sb.WriteString("Your search covered a limited scope, but the claim implies codebase-wide certainty. ")
-
-	sb.WriteString(fmt.Sprintf("Evidence used: %d narrow-scope search(es), %d broad-scope search(es). ",
-		s.narrowEvidenceCalls, s.broadEvidenceCalls))
-
-	if len(matchedPhrases) > 0 {
-		sb.WriteString(fmt.Sprintf("Claim: \"%s\". ", matchedPhrases[0]))
+// findUniversalClaims searches text for universal-quantifier phrases,
+// returning up to 2 matched snippets.
+func findUniversalClaims(text string) []string {
+	matched := make([]string, 0, 2)
+	for _, re := range universalClaimRe {
+		loc := re.FindStringIndex(text)
+		if loc == nil {
+			continue
+		}
+		if len(matched) < 2 {
+			start := loc[0] - 30
+			if start < 0 {
+				start = 0
+			}
+			end := loc[1] + 30
+			if end > len(text) {
+				end = len(text)
+			}
+			matched = append(matched, strings.TrimSpace(text[start:end]))
+		}
 	}
+	return matched
+}
 
-	sb.WriteString("Consider: ")
-	sb.WriteString("(1) Use recursive glob (**/*) or lsp_references for exhaustive searches; ")
-	sb.WriteString("(2) Use grep on the repo root or a broader path; ")
-	sb.WriteString("(3) Verify with `git grep` or `rg` across the entire project before claiming \"all\" or \"no other\". ")
-	sb.WriteString("Research: Epistemic calibration failure (arXiv:2605.23414) -- narrow evidence does not support universal quantifiers.")
+// hasBroadEvidenceInWindow checks if any broad-scope evidence tool was used.
+func hasBroadEvidenceInWindow(s *scopeOvergeneralizeState) bool {
+	for _, e := range s.recentTools {
+		if !e.isNarrow && !e.isLSP && scopeEvidenceToolRe.MatchString(e.name) {
+			return true
+		}
+	}
+	return false
+}
 
-	return sb.String()
+// buildScopeOvergenMessage constructs the advisory guidance string.
+func buildScopeOvergenMessage(s *scopeOvergeneralizeState, firstClaim string) string {
+	return fmt.Sprintf(
+		"[scope-overgeneralization] Universal scope claim detected after narrow evidence search. "+
+			"Your search covered a limited scope, but the claim implies codebase-wide certainty. "+
+			"Evidence used: %d narrow-scope search(es), %d broad-scope search(es). "+
+			"Claim: \"%s\". "+
+			"Consider: (1) Use recursive glob (**/*) or lsp_references for exhaustive searches; "+
+			"(2) Use grep on the repo root or a broader path; "+
+			"(3) Verify with `git grep` or `rg` across the entire project before claiming \"all\" or \"no other\". "+
+			"Research: Epistemic calibration failure (arXiv:2605.23414) -- narrow evidence does not support universal quantifiers.",
+		s.narrowEvidenceCalls, s.broadEvidenceCalls, firstClaim,
+	)
 }
