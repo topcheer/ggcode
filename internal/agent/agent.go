@@ -198,6 +198,7 @@ type Agent struct {
 	readHash                   *readHashTracker                      // content-fingerprint read validity (sub-second mtime race detection, false-positive suppression)
 	toolThermal                *thermalState                         // cross-tool usage balance monitor (explore/modify/verify distribution)
 	latencyTracker             *LatencyTracker                       // per-tool latency baseline & slow-tool outlier detection
+	budgetTracker              *BudgetTracker                        // runtime budget awareness for adaptive tool-use planning (BATS)
 	toolSequence               *toolSequenceValidator                // cross-iteration tool call anti-pattern detection
 	planDrift                  *planDriftState                       // plan drift detection (exit_plan_mode item tracking)
 	unverifiedClaim            *unverifiedClaimState                 // unverified success claim detection (text claims vs actual verification)
@@ -450,6 +451,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		lastGoodCheckpoint:     newLastGoodCheckpoint(),
 		toolFilter:             tool.NewRelevanceFilter(),
 		latencyTracker:         NewLatencyTracker(),
+		budgetTracker:          NewBudgetTracker(0), // 0 = unconstrained by default (can be set via config)
 		toolSequence:           newToolSequenceValidator(),
 		taskAnchor:             newTaskAnchorState("", time.Time{}),
 		adaptiveSampling:       newAdaptiveSamplingState(),
