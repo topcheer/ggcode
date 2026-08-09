@@ -291,6 +291,7 @@ type Agent struct {
 	successDeclare             *successDeclareState                  // premature success declaration detection (calibration gap: done claim + continued work)
 	criteriaDrift              *criteriaDriftState                   // success criteria drift detection (proxy gaming via evaluator weakening)
 	reasonAction               *reasonActionState                    // reasoning-action alignment verification (cognitive category mismatch)
+	verifyScopeDecay           *verifyScopeDecayState                // verification scope decay detection (progressive narrowing of test/build scope)
 	symbolGrounding            *symbolGroundingState                 // symbol grounding verification (ungrounded code symbol reference detection)
 	inputUnderspec             *inputUnderspecState                  // input underspecification detection (vague/underspecified user request)
 	futileCycle                *futileCycleState                     // futile cycle detection (circular exploration without writes)
@@ -528,6 +529,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		diskSpace:              newDiskSpaceState(),
 		envDrift:               newEnvDriftState(),
 		successDeclare:         newSuccessDeclareState(),
+		verifyScopeDecay:       newVerifyScopeDecayState(),
 		criteriaDrift:          newCriteriaDriftState(),
 		reasonAction:           newReasonActionState(),
 		attemptBrief:           newAttemptBriefState(),
@@ -1628,6 +1630,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.prematureCommit.reset()
 	a.diagnosticDisconnect.reset()
 	a.failureMode.reset()
+	a.verifyScopeDecay.reset()
 	a.toolFallback.reset()
 	a.errorCascade.reset()
 	a.errorPropagate.reset()
@@ -2578,6 +2581,19 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.successDeclare.recordAssistantText(assistantText, i)
 			a.criteriaDrift.recordAssistantText(assistantText, i)
 			a.subgoalTrack.recordAssistantText(assistantText, i)
+
+			// Verification scope decay: detect progressive narrowing of
+			// test/build scope across the run.
+			if vsdHint := a.verifyScopeDecay.maybeWarnScopeDecay(); vsdHint != "" {
+				debug.Log("agent", "Iteration %d: verification scope decay detected", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: vsdHint,
+					}},
+				})
+			}
 
 			// Symbol grounding verifier: detect code symbols mentioned in
 			// assistant text that were never found via tool calls.
@@ -3728,6 +3744,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Narrative-evidence decoupling: record tool results to detect
 			// contradictions between agent text claims and actual outputs.
 			a.narrativeEvidence.recordToolResult(tc.Name, result.Content, i+1, result.IsError)
+
+			// Verification scope decay: record verification commands to
+			// detect progressive narrowing of test/build scope.
+			a.verifyScopeDecay.recordVerification(tc.Name, string(tc.Arguments), i+1)
 
 			// Outcome misattribution: record failure indicators in tool
 			// results to detect success claims that follow failures.
