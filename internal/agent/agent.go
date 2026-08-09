@@ -159,6 +159,7 @@ type Agent struct {
 	unreadEdit                 *unreadEditState                      // read-before-edit guard: warns when editing unread files
 	expiredRead                *expiredReadState                     // expired-read detection: self-invalidated context awareness (AgentDiet)
 	searchInvalidation         *searchInvalidationState              // search-result invalidation: stale grep/lsp results after edits (AgentDiet)
+	wtInvalidation             *wtInvalidationState                  // working-tree invalidation: cross-file stale reads after git mutation
 	strategyExhaustion         *seStrategyExhaustionState            // strategy exhaustion: diverse recovery strategies failing for same error (EEA robustness entropy)
 	editFailRecovery           *editFailState                        // consecutive edit failure recovery guidance
 	scopeDrift                 *scopeDriftState                      // semantic scope creep detection (file-diversity tracking)
@@ -396,6 +397,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		unreadEdit:             newUnreadEditState(),
 		expiredRead:            newExpiredReadState(),
 		searchInvalidation:     newSearchInvalidationState(),
+		wtInvalidation:         newWTInvalidationState(),
 		strategyExhaustion:     newStrategyExhaustionState(),
 		falsePremise:           newFalsePremiseState(),
 		editFailRecovery:       newEditFailState(),
@@ -1574,6 +1576,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.unreadEdit.reset()
 	a.expiredRead.reset()
 	a.searchInvalidation.reset()
+	a.wtInvalidation.reset()
 	a.strategyExhaustion.reset()
 	a.falsePremise.reset()
 	// Reset the edit failure recovery tracker.
@@ -4587,6 +4590,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				a.futileCycle.recordRead(filePath)
 				// Expired-read: track reads for self-invalidation detection.
 				a.expiredRead.recordRead(filePath)
+				a.wtInvalidation.recordRead(filePath)
 				// Post-edit re-read check: warn if re-reading shortly after edit.
 				if hint := a.expiredRead.checkPostEditReread(filePath); hint != "" {
 					if result.Content != "" {
@@ -4598,6 +4602,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				// Search-result invalidation: record search-type tool results
 				// for later invalidation detection on file edits.
 				a.searchInvalidation.recordSearchResult(tc.Name, result.Content)
+			}
+			// Working-tree invalidation: detect cross-file stale reads after git mutations
+			if isWTMutatingTool(tc.Name) && !result.IsError {
+				if wtMsg := a.wtInvalidation.checkMutation(tc.Name, string(tc.Arguments)); wtMsg != "" {
+					debug.Log("agent", "Iteration %d: working-tree invalidation detector triggered", i+1)
+					if result.Content != "" {
+						result.Content = result.Content + "\n\n" + wtMsg
+					} else {
+						result.Content = wtMsg
+					}
+				}
 			}
 			if fileEditingTools[tc.Name] && !result.IsError {
 				a.verifyDebt.recordSourceEdit()
