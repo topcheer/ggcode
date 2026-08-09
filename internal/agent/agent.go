@@ -270,6 +270,7 @@ type Agent struct {
 	narrativeEvidence          *narrativeEvidenceState               // narrative-evidence decoupling detection (text contradicts tool output)
 	beliefDefense              *beliefDefenseState                   // belief defense escalation detection (re-stated beliefs after contradicting evidence)
 	evidenceOverconfidence     *evidenceOverconfidenceState          // evidence-induced overconfidence (tool-type calibration asymmetry)
+	scopeOvergeneralize        *scopeOvergeneralizeState             // scope overgeneralization (narrow evidence -> universal claim)
 	verifyDisconnect           *verifyDisconnectState                // verification outcome disconnect (advancing past failures)
 	selectiveEvidence          *selectiveEvidenceTrackerState        // confirmation bias detection (cherry-picked evidence + dismissed negatives)
 	historyErrAccum            *historyErrAccumState                 // history error accumulation detection (multi-issue tool output partially addressed)
@@ -496,6 +497,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		beliefDefense:          newBeliefDefenseState(),
 		solutionFixation:       newSolutionFixationState(),
 		evidenceOverconfidence: newEvidenceOverconfidenceState(),
+		scopeOvergeneralize:    newScopeOvergeneralizeState(),
 		verifyDisconnect:       newVerifyDisconnectState(),
 		selectiveEvidence:      newSelectiveEvidenceTrackerState(),
 		historyErrAccum:        newHistoryErrAccumState(),
@@ -1600,6 +1602,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.sycophancyGuard.reset()
 	a.unverifiedConfidence.reset()
 	a.evidenceOverconfidence.reset()
+	a.scopeOvergeneralize.reset()
 	a.verifyDisconnect.reset()
 	a.narrativeEvidence.reset()
 	a.beliefDefense.reset()
@@ -2554,6 +2557,20 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					Content: []provider.ContentBlock{{
 						Type: "text",
 						Text: evidHint,
+					}},
+				})
+			}
+
+			// Scope overgeneralization: detect universal scope claims
+			// ("no other", "all references", "only these files") derived from
+			// narrow evidence searches. Epistemic miscalibration (arXiv:2605.23414).
+			if scopeHint := a.maybeWarnScopeOvergeneralize(assistantText); scopeHint != "" {
+				debug.Log("agent", "Iteration %d: scope overgeneralization detector found narrow-evidence universal claim", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: scopeHint,
 					}},
 				})
 			}
@@ -3764,6 +3781,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// whether verification (build/test/lint) was run after edits.
 			a.unverifiedConfidence.recordToolCall(tc.Name, string(tc.Arguments))
 			a.evidenceOverconfidence.recordToolCall(tc.Name, string(tc.Arguments))
+			a.scopeOvergeneralize.recordToolCall(tc.Name, string(tc.Arguments))
 			a.phantomVerify.recordToolCall(tc.Name, string(tc.Arguments))
 
 			// Redundant re-verification: detect same verification command
