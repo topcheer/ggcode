@@ -37,6 +37,16 @@ func (t WebFetch) Description() string {
 	return "Fetch a URL and return its text content. Strips HTML tags, truncates to 50000 chars. Does not summarize — use the optional prompt to instruct the LLM. For interactive/login pages, use browser automation."
 }
 
+// ToolMeta provides Gen 3 metadata for cost-aware and rate-aware selection.
+func (t WebFetch) ToolMeta() ToolMeta {
+	return ToolMeta{
+		CostEstimate: 0.0001, // ~$0.0001 per fetch (HTTP is free but has rate limits)
+		RateLimitRPS: 5.0,    // Conservative limit to avoid overwhelming servers
+		RetryPolicy:  "exponential",
+		MaxRetries:   2,
+	}
+}
+
 func (t WebFetch) Parameters() json.RawMessage {
 	return json.RawMessage(`{
 	"type": "object",

@@ -20,6 +20,16 @@ func (t WebSearch) Description() string {
 	return "Search the web using DuckDuckGo. Returns search result snippets, not full page contents. Use web_fetch on a selected result URL when you need the page text."
 }
 
+// ToolMeta provides Gen 3 metadata for cost-aware and rate-aware selection.
+func (t WebSearch) ToolMeta() ToolMeta {
+	return ToolMeta{
+		CostEstimate: 0.0001, // ~$0.0001 per search (DuckDuckGo is free but has rate limits)
+		RateLimitRPS: 2.0,    // DuckDuckGo suggests max 2 requests/sec to avoid blocking
+		RetryPolicy:  "exponential",
+		MaxRetries:   3,
+	}
+}
+
 func (t WebSearch) Parameters() json.RawMessage {
 	return json.RawMessage(`{
 	"type": "object",

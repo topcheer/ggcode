@@ -70,6 +70,31 @@ type Closer interface {
 	Close() error
 }
 
+// ToolMeta captures Gen 3 metadata for cost-aware and rate-aware tool selection.
+// Based on 2026 best practices for Autonomous Tool Discovery (Data-Gate, Zylos).
+type ToolMeta struct {
+	// CostEstimate is the approximate cost per call in USD (or 0 if free/cached).
+	// Helps the agent budget-aware tool selection.
+	CostEstimate float64 `json:"cost_estimate,omitempty"`
+
+	// RateLimitRPS is the maximum requests per second allowed by the tool's backend.
+	// 0 means no explicit limit (local tools).
+	RateLimitRPS float64 `json:"rate_limit_rps,omitempty"`
+
+	// RetryPolicy describes retry behavior for transient failures.
+	// "none": no retry, "fixed": fixed backoff, "exponential": exponential backoff.
+	RetryPolicy string `json:"retry_policy,omitempty"`
+
+	// MaxRetries is the maximum number of retry attempts before giving up.
+	MaxRetries int `json:"max_retries,omitempty"`
+}
+
+// MetaProvider is an optional interface for tools that want to provide
+// Gen 3 metadata for cost-aware and rate-aware selection.
+type MetaProvider interface {
+	ToolMeta() ToolMeta
+}
+
 // Registry manages the set of available tools.
 type Registry struct {
 	tools     map[string]Tool
@@ -174,6 +199,17 @@ func (r *Registry) ToolNames() []string {
 		names[i] = t.Name()
 	}
 	return names
+}
+
+// GetMeta returns Gen 3 metadata for a tool if it implements MetaProvider.
+// Returns zero-value ToolMeta and false if the tool doesn't provide metadata.
+func (r *Registry) GetMeta(name string) (ToolMeta, bool) {
+	if t, ok := r.Get(name); ok {
+		if mp, ok := t.(MetaProvider); ok {
+			return mp.ToolMeta(), true
+		}
+	}
+	return ToolMeta{}, false
 }
 
 // Cloner is an optional interface that tools can implement to provide a deep copy.
