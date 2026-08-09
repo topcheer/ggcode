@@ -4373,11 +4373,16 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// recent calls (strategy imbalance). AgentForesight-inspired leading
 			// indicator of trajectory failure.
 			a.toolDiversity.recordCall(tc.Name)
-			if diversityGuidance := a.toolDiversity.check(); diversityGuidance != "" {
+			if dg := func() string {
+				if !shouldRunDetector(detectorTierRoutine, i+1) {
+					return ""
+				}
+				return a.toolDiversity.check()
+			}(); dg != "" {
 				if result.Content != "" {
-					result.Content = result.Content + "\n\n" + diversityGuidance
+					result.Content = result.Content + "\n\n" + dg
 				} else {
-					result.Content = diversityGuidance
+					result.Content = dg
 				}
 			}
 
@@ -4402,11 +4407,16 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					}
 				}
 
-				if churnGuidance := a.fileChurn.check(); churnGuidance != "" {
+				if cg := func() string {
+					if !shouldRunDetector(detectorTierRoutine, i+1) {
+						return ""
+					}
+					return a.fileChurn.check()
+				}(); cg != "" {
 					if result.Content != "" {
-						result.Content = result.Content + "\n\n" + churnGuidance
+						result.Content = result.Content + "\n\n" + cg
 					} else {
-						result.Content = churnGuidance
+						result.Content = cg
 					}
 				}
 
@@ -4415,11 +4425,16 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				// oscillation as a critical failure pattern where the agent
 				// alternates between two versions without resolving trade-offs.
 				a.editOscillation.recordEdit(tc.Name, tc.Arguments, i+1)
-				if oscMsg := a.editOscillation.check(); oscMsg != "" {
+				if om := func() string {
+					if !shouldRunDetector(detectorTierRoutine, i+1) {
+						return ""
+					}
+					return a.editOscillation.check()
+				}(); om != "" {
 					if result.Content != "" {
-						result.Content = result.Content + "\n\n" + oscMsg
+						result.Content = result.Content + "\n\n" + om
 					} else {
-						result.Content = oscMsg
+						result.Content = om
 					}
 				}
 			}
@@ -4477,11 +4492,16 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Tunnel vision detection: warn when the agent has done many
 			// iterations but only touched a few files (under-exploration).
 			// Coppersun.dev 2026: "context window holds 1-2 files; bugs span 3+"
-			if tvMsg := a.tunnelVision.check(runStats.Iterations); tvMsg != "" {
+			if tv := func() string {
+				if !shouldRunDetector(detectorTierRoutine, i+1) {
+					return ""
+				}
+				return a.tunnelVision.check(runStats.Iterations)
+			}(); tv != "" {
 				if result.Content != "" {
-					result.Content = result.Content + "\n\n" + tvMsg
+					result.Content = result.Content + "\n\n" + tv
 				} else {
-					result.Content = tvMsg
+					result.Content = tv
 				}
 			}
 
