@@ -158,6 +158,7 @@ type Agent struct {
 	unreadEdit                 *unreadEditState                      // read-before-edit guard: warns when editing unread files
 	expiredRead                *expiredReadState                     // expired-read detection: self-invalidated context awareness (AgentDiet)
 	searchInvalidation         *searchInvalidationState              // search-result invalidation: stale grep/lsp results after edits (AgentDiet)
+	strategyExhaustion         *seStrategyExhaustionState            // strategy exhaustion: diverse recovery strategies failing for same error (EEA robustness entropy)
 	editFailRecovery           *editFailState                        // consecutive edit failure recovery guidance
 	scopeDrift                 *scopeDriftState                      // semantic scope creep detection (file-diversity tracking)
 	driftRecurrence            *driftRecurrenceState                 // drift recurrence detection (post-warning behavioral persistence)
@@ -390,6 +391,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		unreadEdit:             newUnreadEditState(),
 		expiredRead:            newExpiredReadState(),
 		searchInvalidation:     newSearchInvalidationState(),
+		strategyExhaustion:     newStrategyExhaustionState(),
 		falsePremise:           newFalsePremiseState(),
 		editFailRecovery:       newEditFailState(),
 		scopeDrift:             newScopeDriftState(),
@@ -1560,6 +1562,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.unreadEdit.reset()
 	a.expiredRead.reset()
 	a.searchInvalidation.reset()
+	a.strategyExhaustion.reset()
 	a.falsePremise.reset()
 	// Reset the edit failure recovery tracker.
 	a.editFailRecovery.reset()
@@ -3877,6 +3880,19 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// calls to detect systemic approach failures (procedural memory
 			// gap from ProcMEM arXiv:2602.01869).
 			a.errStrategyLoop.recordResult(result.Content, result.IsError)
+
+			// Strategy exhaustion: track diverse recovery strategies failing
+			// for the same error (EEA robustness entropy, MiRA subgoal decomposition).
+			if seMsg := a.strategyExhaustion.recordToolCall(tc.Name, result.IsError, result.Content, i+1); seMsg != "" {
+				debug.Log("agent", "Iteration %d: strategy exhaustion detector triggered", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: seMsg,
+					}},
+				})
+			}
 
 			// Solution fixation: track failed edit attempts per file to
 			// detect diagnosis anchoring (arXiv:2505.15392, arXiv:2509.25370).
