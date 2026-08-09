@@ -210,6 +210,7 @@ type Agent struct {
 	mcpRuntime                 tool.MCPRuntime                       // MCP runtime for server snapshots (optional)
 	bgOrphan                   *bgOrphanState                        // orphaned background command detection (unchecked start_command jobs)
 	actionAnnihil              *actionAnnihilateState                // action annihilation detection (tool calls that cancel prior side effects)
+	buildIdempot               *buildIdempotencyState                // build/test idempotency detection (re-running deterministic builds without edits)
 	cfDep                      *cfDepState                           // counterfactual dependency detection (dependent tool calls in same batch)
 	abstainDetect              *abstainState                         // agentic abstention detection (untimely continuation after negative signals)
 	phantomOutput              *phantomState                         // phantom output inheritance detection (building on failed tool results)
@@ -453,6 +454,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		toolEquivDetect:        newToolEquivDetectState(),
 		bgOrphan:               newBgOrphanState(),
 		actionAnnihil:          newActionAnnihilateState(),
+		buildIdempot:           newBuildIdempotencyState(),
 		cfDep:                  newCFDepState(),
 		abstainDetect:          newAbstainState(),
 		phantomOutput:          newPhantomState(),
@@ -1276,6 +1278,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.mcpEcosystem.reset()
 	a.resetBgOrphan()
 	a.actionAnnihil.reset()
+	a.buildIdempot.reset()
 	a.cfDep.reset()
 	a.temporalBlindness.reset()
 	a.resetWastedExplore()
@@ -3778,6 +3781,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				a.contextManager.Add(provider.Message{
 					Role:    "user",
 					Content: []provider.ContentBlock{{Type: "text", Text: annihilWarn}},
+				})
+				msgs = a.contextManager.Messages()
+			}
+
+			// Build idempotency detection: check if a deterministic build/test
+			// command is being re-run with 0 source edits since the last build.
+			if idempWarn := a.buildIdempot.recordToolCall(tc.Name, tc.Arguments, i+1); idempWarn != "" {
+				debug.Log("agent", "Iteration %d: build idempotency violation detected", i+1)
+				a.contextManager.Add(provider.Message{
+					Role:    "user",
+					Content: []provider.ContentBlock{{Type: "text", Text: idempWarn}},
 				})
 				msgs = a.contextManager.Messages()
 			}
