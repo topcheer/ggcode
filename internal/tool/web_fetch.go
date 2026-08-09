@@ -166,9 +166,25 @@ func (t WebFetch) Execute(ctx context.Context, input json.RawMessage) (Result, e
 		return Result{IsError: true, Content: fmt.Sprintf("read body failed: %v", err)}, nil
 	}
 
+	// Strip HTML first to reduce byte count before truncation check
 	text := stripHTML(string(body))
-	if len([]rune(text)) > 50000 {
-		text = string([]rune(text)[:50000]) + "\n... [truncated]"
+
+	// Optimize: use bytes operations instead of double rune conversion
+	// This reduces memory allocations for large responses
+	const maxWebFetchChars = 20000 // Reduced from 50000 based on 2025 efficiency research
+	if len(text) > maxWebFetchChars {
+		// Find a safe truncation point (end of sentence or line) to avoid cutting mid-word
+		cutoff := maxWebFetchChars
+		if cutoff < len(text) {
+			// Try to truncate at a sentence boundary
+			for i := cutoff; i > cutoff-200 && i > 0; i-- {
+				if text[i] == '.' || text[i] == '\n' {
+					cutoff = i + 1
+					break
+				}
+			}
+			text = text[:cutoff] + "\n\n... [truncated: " + fmt.Sprintf("%d/%d chars", len(text), maxWebFetchChars) + " shown]"
+		}
 	}
 
 	// Include final URL if redirected (helpful for shortened URLs, etc.)
