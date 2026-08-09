@@ -213,6 +213,7 @@ type Agent struct {
 	mcpRuntime                 tool.MCPRuntime                       // MCP runtime for server snapshots (optional)
 	bgOrphan                   *bgOrphanState                        // orphaned background command detection (unchecked start_command jobs)
 	actionAnnihil              *actionAnnihilateState                // action annihilation detection (tool calls that cancel prior side effects)
+	batchCoupling              *batchCouplingState                   // parallel tool call coupling detection (hidden order dependencies in batches)
 	buildIdempot               *buildIdempotencyState                // build/test idempotency detection (re-running deterministic builds without edits)
 	orphanFile                 *orphanFileState                      // orphaned new file integration detection (new source files never wired into existing code)
 	cfDep                      *cfDepState                           // counterfactual dependency detection (dependent tool calls in same batch)
@@ -469,6 +470,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		toolEquivDetect:        newToolEquivDetectState(),
 		bgOrphan:               newBgOrphanState(),
 		actionAnnihil:          newActionAnnihilateState(),
+		batchCoupling:          newBatchCouplingState(),
 		buildIdempot:           newBuildIdempotencyState(),
 		orphanFile:             newOrphanFileState(),
 		cfDep:                  newCFDepState(),
@@ -1303,6 +1305,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.mcpEcosystem.reset()
 	a.resetBgOrphan()
 	a.actionAnnihil.reset()
+	a.batchCoupling.reset()
 	a.buildIdempot.reset()
 	a.orphanFile.reset()
 	a.cfDep.reset()
@@ -3481,6 +3484,23 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				Content: []provider.ContentBlock{{Type: "text", Text: depWarn}},
 			})
 			msgs = a.contextManager.Messages()
+		}
+
+		// Batch coupling detection: check if this batch of tool calls contains
+		// hidden sequential dependencies (e.g., mkdir + write_file to that dir).
+		if len(toolCalls) > 1 {
+			var batchInfos []couplingToolCall
+			for _, tc := range toolCalls {
+				batchInfos = append(batchInfos, couplingToolCall{name: tc.Name, args: tc.Arguments})
+			}
+			if couplingWarn := a.batchCoupling.checkBatchCoupling(batchInfos); couplingWarn != "" {
+				debug.Log("agent", "Iteration %d: batch tool call coupling detected", i+1)
+				a.contextManager.Add(provider.Message{
+					Role:    "user",
+					Content: []provider.ContentBlock{{Type: "text", Text: couplingWarn}},
+				})
+				msgs = a.contextManager.Messages()
+			}
 		}
 
 		for idx, tc := range toolCalls {
