@@ -232,6 +232,7 @@ type Agent struct {
 	selfMod                    *selfModState                         // self-modification safety guard (agent editing its own infrastructure)
 	diagnosticDisconnect       *diagnosticDisconnectState            // diagnostic-action disconnect detection (ignored diagnostics from failed tool calls)
 	bareEditStreak             *bareEditStreakState                  // unverified mutation streak detection (consecutive edits without verification)
+	greenBuildIllusion         *greenBuildIllusionState              // green build illusion: build succeeds without tests before declaring done
 	recklessExec               *recklessExecState                    // reckless execution detection (edits to unexplored files in early iterations)
 	irrevGate                  *irrevGateState                       // irreversibility-weighted calibration gate (caution scales with action reversibility)
 	verifyDebt                 *verifyDebtState                      // verification debt accumulator (edits since last green build)
@@ -474,6 +475,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		prematureCommit:        newPrematureCommitState(),
 		diagnosticDisconnect:   newDiagnosticDisconnectState(),
 		bareEditStreak:         newBareEditState(),
+		greenBuildIllusion:     newGreenBuildIllusionState(),
 		strategyFixation:       newStrategyFixationState(),
 		errorRush:              newErrorRushState(),
 		targetScatter:          newTargetScatterState(),
@@ -1303,6 +1305,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		a.errorCompound.reset()
 		a.correctionSpiral.reset()
 		a.bareEditStreak.reset()
+		a.greenBuildIllusion.reset()
 		a.strategyFixation.reset()
 		a.errorRush.reset()
 		if a.recklessExec != nil {
@@ -2583,6 +2586,21 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					Content: []provider.ContentBlock{{
 						Type: "text",
 						Text: scopeHint,
+					}},
+				})
+			}
+
+			// Green build illusion: detect when agent declares completion after
+			// a build-only command without running tests. arXiv 2026 studies show
+			// this is a primary cause of AI-generated PR rejection.
+			a.greenBuildIllusion.recordAssistantText(assistantText)
+			if gbiHint := a.greenBuildIllusion.maybeWarn(); gbiHint != "" {
+				debug.Log("agent", "Iteration %d: green build illusion detected (build without tests before completion)", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: gbiHint,
 					}},
 				})
 			}
@@ -4485,6 +4503,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 			// Unverified mutation streak: track consecutive edits without verification.
 			a.bareEditStreak.recordToolCall(tc.Name)
+			// Green build illusion: track source modifications, builds, and tests.
+			a.greenBuildIllusion.recordToolCall(tc.Name, string(tc.Arguments), result.IsError)
 			// Strategy fixation: track per-file edits and verification outcomes.
 			if strategyFixationIsMutation(tc.Name) {
 				fp := extractFilePathFromArgs(tc.Name, tc.Arguments)
