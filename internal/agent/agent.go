@@ -278,6 +278,7 @@ type Agent struct {
 	temporalBlindness          *temporalBlindnessState               // temporal blindness detection (stale verification across mutations)
 	selfDiagState              *selfDiagState                        // unverified self-diagnosis detection (correlated failure after errors)
 	deferredWork               *deferredWorkState                    // deferred work tracking (forgotten follow-up detection)
+	truncClaim                 *truncClaimState                      // truncated output completeness fallacy detection (claims after truncated results)
 	circularReasoning          *circularReasoningState               // circular reasoning detection (tautological justification)
 	contradiction              *contradictionState                   // cross-turn contradiction detection (root-cause reversals)
 	ungroundedReflect          *ungroundedReflectionState            // ungrounded reflection detector (text-only thinking loops)
@@ -507,6 +508,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		temporalBlindness:      newTemporalBlindnessState(),
 		selfDiagState:          newSelfDiagState(),
 		deferredWork:           newDeferredWorkState(),
+		truncClaim:             newTruncClaimState(),
 		circularReasoning:      newCircularReasoningState(),
 		contradiction:          newContradictionState(),
 		ungroundedReflect:      newUngroundedReflectionState(),
@@ -1616,6 +1618,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.historyErrAccum.reset()
 	a.reproducerLifecycle.reset()
 	a.deferredWork.reset()
+	a.truncClaim.reset()
 	a.circularReasoning.reset()
 	a.selfDiagState.reset()
 	a.contradiction.reset()
@@ -2712,6 +2715,21 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					Content: []provider.ContentBlock{{
 						Type: "text",
 						Text: deferredHint,
+					}},
+				})
+			}
+
+			// Truncated output completeness fallacy: detect when the agent
+			// makes exhaustiveness claims after receiving a truncated tool
+			// result. The agent may claim "only N files" or "no other
+			// matches" without realizing data was cut off.
+			if truncHint := a.truncClaim.maybeWarnTruncClaim(assistantText, i); truncHint != "" {
+				debug.Log("agent", "Iteration %d: truncated output completeness fallacy detected", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: truncHint,
 					}},
 				})
 			}
@@ -4649,6 +4667,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					if truncated := guardToolOutput(result.Content, fillRatio); len(truncated) < len(result.Content) {
 						debug.Log("agent", "tool output guarded: tool=%s tokens=%d threshold=%d fill=%.0f%% %d→%d bytes", tc.Name, a.contextManager.TokenCount(), threshold, fillRatio*100, len(result.Content), len(truncated))
 						result.Content = withTruncationAdvisory(truncated, tc.Name, len(result.Content))
+						a.truncClaim.recordTruncation(tc.Name, i)
 					}
 				}
 			}
