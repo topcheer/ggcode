@@ -142,6 +142,7 @@ type Agent struct {
 	verifDebt                  *verificationDebtState                // verification debt tracker (SAUP-inspired uncertainty propagation)
 	undoBlind                  *undoBlindState                       // undo-edit blind continuation detection (AgentDebug-inspired)
 	editAbandon                *editAbandonState                     // edit abandonment detection (PASTE/LLMCompiler-inspired attention-shift tracking)
+	progVerif                  *progVerifTracker                     // progressive verification checkpoints (ReVeal-inspired)
 	costBudget                 *sessionCostBudget                    // absolute session-level token budget enforcement
 	toolCallBudget             *toolCallBudget                       // per-session tool invocation limit (action-level guardrail)
 	cacheKeepalive             *cacheKeepaliveState                  // prompt cache warming pings during idle (Anthropic)
@@ -476,6 +477,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		searchParamGuard:       newSearchParamGuard(),
 		toolRedundancy:         newToolRedundancyAnalyzer(),
 		toolEquivDetect:        newToolEquivDetectState(),
+		progVerif:              &progVerifTracker{},
 		bgOrphan:               newBgOrphanState(),
 		actionAnnihil:          newActionAnnihilateState(),
 		exploreFrag:            newExploreFragState(),
@@ -1314,6 +1316,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.mcpEcosystem.reset()
 	a.resetBgOrphan()
 	a.actionAnnihil.reset()
+	a.progVerif.reset()
 	a.exploreFrag.reset()
 	a.batchCoupling.reset()
 	a.buildIdempot.reset()
@@ -3531,6 +3534,18 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				// for reuse when the same command is called again without file changes.
 				a.storeCommandResult(tc.Name, tc.Arguments, result)
 			}
+
+			// Progressive verification: check for early failure signs after each tool result.
+			// ReVeal-inspired incremental verification to fail fast (SA-109).
+			if pvGuidance := a.progVerif.checkAfterToolResult(tc.Name, result.Content, result.IsError); pvGuidance != "" {
+				debug.Log("prog-verif", "Iteration %d: progressive verification guidance injected for %s", i+1, tc.Name)
+				if result.Content != "" {
+					result.Content = result.Content + "\n\n" + pvGuidance
+				} else {
+					result.Content = pvGuidance
+				}
+			}
+
 			// Record the tool call for speculative pattern learning.
 			a.speculator.recordObservation(tc.Name)
 			// Track todo_write usage for the agent-side planner: once the
