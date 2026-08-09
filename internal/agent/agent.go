@@ -266,6 +266,7 @@ type Agent struct {
 	sycophancyGuard            *sycophancyState                      // user-premise sycophancy detection (agreeing with user premises without verification)
 	unverifiedConfidence       *unverifiedConfidenceState            // unverified confidence detection (overconfident claims without verification)
 	phantomVerify              *phantomVerifyState                   // phantom verification detection (category-specific verification claims without matching commands)
+	redundantReverify          *redundantReverifyState               // redundant re-verification detection (same verification cmd re-run without file edits)
 	narrativeEvidence          *narrativeEvidenceState               // narrative-evidence decoupling detection (text contradicts tool output)
 	beliefDefense              *beliefDefenseState                   // belief defense escalation detection (re-stated beliefs after contradicting evidence)
 	evidenceOverconfidence     *evidenceOverconfidenceState          // evidence-induced overconfidence (tool-type calibration asymmetry)
@@ -489,6 +490,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		sycophancyGuard:        newSycophancyState(),
 		unverifiedConfidence:   newUnverifiedConfidenceState(),
 		phantomVerify:          newPhantomVerifyState(),
+		redundantReverify:      newRedundantReverifyState(),
 		narrativeEvidence:      newNarrativeEvidenceState(),
 		beliefDefense:          newBeliefDefenseState(),
 		solutionFixation:       newSolutionFixationState(),
@@ -3748,6 +3750,19 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.evidenceOverconfidence.recordToolCall(tc.Name, string(tc.Arguments))
 			a.phantomVerify.recordToolCall(tc.Name, string(tc.Arguments))
 
+			// Redundant re-verification: detect same verification command
+			// re-run without intervening file edits (idempotency violation).
+			if rvHint := a.redundantReverify.recordToolCall(tc.Name, string(tc.Arguments), i+1, result.IsError); rvHint != "" {
+				debug.Log("agent", "Iteration %d: redundant re-verification detector triggered", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: rvHint,
+					}},
+				})
+			}
+
 			// Outcome misattribution: record tool calls to track corrective
 			// actions between failure and success claim.
 			a.outcomeMisattrib.recordToolCallForOM(tc.Name)
@@ -3807,6 +3822,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Solution fixation: track failed edit attempts per file to
 			// detect diagnosis anchoring (arXiv:2505.15392, arXiv:2509.25370).
 			a.solutionFixation.recordEdit(tc.Name, string(tc.Arguments), result.IsError)
+			a.redundantReverify.recordEdit(tc.Name)
 			if fixationHint := a.solutionFixation.checkAndWarn(); fixationHint != "" {
 				debug.Log("agent", "Iteration %d: solution fixation detector triggered", i+1)
 				a.contextManager.Add(provider.Message{
