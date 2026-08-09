@@ -214,6 +214,7 @@ type Agent struct {
 	mcpRuntime                 tool.MCPRuntime                       // MCP runtime for server snapshots (optional)
 	bgOrphan                   *bgOrphanState                        // orphaned background command detection (unchecked start_command jobs)
 	actionAnnihil              *actionAnnihilateState                // action annihilation detection (tool calls that cancel prior side effects)
+	exploreFrag                *exploreFragState                     // exploration fragmentation detection (scattered foraging without convergence)
 	batchCoupling              *batchCouplingState                   // parallel tool call coupling detection (hidden order dependencies in batches)
 	buildIdempot               *buildIdempotencyState                // build/test idempotency detection (re-running deterministic builds without edits)
 	orphanFile                 *orphanFileState                      // orphaned new file integration detection (new source files never wired into existing code)
@@ -472,6 +473,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		toolEquivDetect:        newToolEquivDetectState(),
 		bgOrphan:               newBgOrphanState(),
 		actionAnnihil:          newActionAnnihilateState(),
+		exploreFrag:            newExploreFragState(),
 		batchCoupling:          newBatchCouplingState(),
 		buildIdempot:           newBuildIdempotencyState(),
 		orphanFile:             newOrphanFileState(),
@@ -1307,6 +1309,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.mcpEcosystem.reset()
 	a.resetBgOrphan()
 	a.actionAnnihil.reset()
+	a.exploreFrag.reset()
 	a.batchCoupling.reset()
 	a.buildIdempot.reset()
 	a.orphanFile.reset()
@@ -3933,6 +3936,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				a.contextManager.Add(provider.Message{
 					Role:    "user",
 					Content: []provider.ContentBlock{{Type: "text", Text: annihilWarn}},
+				})
+				msgs = a.contextManager.Messages()
+			}
+
+			// Exploration fragmentation detection: check if the agent is
+			// issuing many scattered exploration calls without converging.
+			if fragWarn := a.exploreFrag.recordToolCall(tc.Name, tc.Arguments, i+1); fragWarn != "" {
+				debug.Log("agent", "Iteration %d: exploration fragmentation detected", i+1)
+				a.contextManager.Add(provider.Message{
+					Role:    "user",
+					Content: []provider.ContentBlock{{Type: "text", Text: fragWarn}},
 				})
 				msgs = a.contextManager.Messages()
 			}
