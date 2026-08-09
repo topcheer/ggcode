@@ -149,6 +149,7 @@ type Agent struct {
 	postEditVerify             postEditVerifyState                   // tracks source-code edits to inject periodic verification hints
 	planner                    *planState                            // agent-side auto task decomposition (Devin/Claude Code-inspired)
 	todoStaleness              *todoStalenessState                   // mid-run stale todo detection (plan abandonment awareness)
+	todoDrop                   *todoDropState                        // mid-run todo contract drop detection (silent commitment removal)
 	recurringError             *recurringErrorState                  // recurring build/test error fingerprint detection across edit cycles
 	errStrategyLoop            *errStrategyState                     // error strategy loop detection (procedural memory failure)
 	solutionFixation           *solutionFixationState                // solution fixation: diagnosis anchoring on failed edit clusters
@@ -386,6 +387,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		errorClassifier:        NewErrorClassifier(),
 		planner:                newPlanState(),
 		todoStaleness:          newTodoStalenessState(),
+		todoDrop:               newTodoDropState(),
 		recurringError:         newRecurringErrorState(),
 		errStrategyLoop:        newErrStrategyState(),
 		fixCascade:             newFixCascadeState(),
@@ -1549,6 +1551,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.resetOverseer()
 	a.resetPlanner()
 	a.resetTodoStaleness()
+	a.resetTodoDrop()
 	a.resetScopeDrift()
 	a.resetDriftRecurrence()
 	a.resetLastGoodCheckpoint()
@@ -3548,6 +3551,14 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				// can detect plan abandonment if the agent stops updating.
 				todoCount := parseTodoCount(tc.Arguments)
 				a.recordTodoStalenessUpdate(i+1, todoCount)
+				// Check for silent todo item removal (contract drop).
+				if hint := a.checkTodoDrop(tc.Arguments); hint != "" {
+					if result.Content != "" {
+						result.Content = result.Content + "\n\n" + hint
+					} else {
+						result.Content = hint
+					}
+				}
 			}
 			// File-editing tools invalidate the speculative cache: any
 			// pre-executed read_file/grep results for edited files are now
