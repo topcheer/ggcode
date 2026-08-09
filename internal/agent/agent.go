@@ -140,6 +140,7 @@ type Agent struct {
 	toolMemo                   *toolMemo                             // read-only tool result memoization (ToolCaching-inspired)
 	confidence                 *confidenceState                      // holistic trajectory confidence scoring (HTC-inspired)
 	verifDebt                  *verificationDebtState                // verification debt tracker (SAUP-inspired uncertainty propagation)
+	undoBlind                  *undoBlindState                       // undo-edit blind continuation detection (AgentDebug-inspired)
 	editAbandon                *editAbandonState                     // edit abandonment detection (PASTE/LLMCompiler-inspired attention-shift tracking)
 	costBudget                 *sessionCostBudget                    // absolute session-level token budget enforcement
 	toolCallBudget             *toolCallBudget                       // per-session tool invocation limit (action-level guardrail)
@@ -381,6 +382,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		toolMemo:               newToolMemo(),
 		confidence:             newConfidenceState(),
 		verifDebt:              newVerificationDebtState(),
+		undoBlind:              newUndoBlindState(),
 		editAbandon:            newEditAbandonState(),
 		costBudget:             newSessionCostBudget(),
 		toolCallBudget:         newToolCallBudget(),
@@ -1575,6 +1577,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.commandCache.reset()
 	a.confidence.reset()
 	a.verifDebt.reset()
+	a.undoBlind.reset()
 	a.editAbandon.reset()
 	a.costBudget.reset()
 	a.toolCallBudget.reset()
@@ -4345,9 +4348,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Detects when the agent stacks edits without building/testing.
 			a.verifDebt.recordToolCall(tc.Name, string(tc.Arguments))
 
-			// Edit abandonment: track qualitative attention shift away
-			// from edited files without verification (PASTE-inspired).
-			a.editAbandon.recordToolCall(tc.Name, string(tc.Arguments))
+			// Undo-blind: detect mutations after undo/revert without re-reading.
+			if ubMsg := a.undoBlind.recordToolCall(tc.Name, tc.Arguments); ubMsg != "" {
+				debug.Log("agent", "Iteration %d: undo-blind continuation detected", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: ubMsg,
+					}},
+				})
+			}
 
 			// Premature commitment: record exploratory actions to track
 			// evidence gathering before the first edit.
