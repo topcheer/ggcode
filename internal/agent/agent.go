@@ -279,6 +279,7 @@ type Agent struct {
 	redundantReverify          *redundantReverifyState               // redundant re-verification detection (same verification cmd re-run without file edits)
 	narrativeEvidence          *narrativeEvidenceState               // narrative-evidence decoupling detection (text contradicts tool output)
 	beliefDefense              *beliefDefenseState                   // belief defense escalation detection (re-stated beliefs after contradicting evidence)
+	bridgingRat                *bridgingRatState                     // bridging rationalization detection (RECAP: stale premise propagation)
 	evidenceOverconfidence     *evidenceOverconfidenceState          // evidence-induced overconfidence (tool-type calibration asymmetry)
 	scopeOvergeneralize        *scopeOvergeneralizeState             // scope overgeneralization (narrow evidence -> universal claim)
 	verifyDisconnect           *verifyDisconnectState                // verification outcome disconnect (advancing past failures)
@@ -519,6 +520,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		redundantReverify:      newRedundantReverifyState(),
 		narrativeEvidence:      newNarrativeEvidenceState(),
 		beliefDefense:          newBeliefDefenseState(),
+		bridgingRat:            newBridgingRatState(),
 		solutionFixation:       newSolutionFixationState(),
 		evidenceOverconfidence: newEvidenceOverconfidenceState(),
 		scopeOvergeneralize:    newScopeOvergeneralizeState(),
@@ -1646,6 +1648,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.verifyDisconnect.reset()
 	a.narrativeEvidence.reset()
 	a.beliefDefense.reset()
+	a.bridgingRat.reset()
 	a.toolStorm.reset()
 	a.serialRead.reset()
 	a.reasoningRedund.reset()
@@ -2716,6 +2719,20 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					Content: []provider.ContentBlock{{
 						Type: "text",
 						Text: bdHint,
+					}},
+				})
+			}
+
+			// Bridging rationalization: detect when an agent explains away a
+			// contradiction by attributing it to external/transient causes
+			// instead of re-verifying (RECAP 2026, stale-context benchmark).
+			if brHint := a.bridgingRat.checkRationalization(assistantText, i+1); brHint != "" {
+				debug.Log("agent", "Iteration %d: bridging rationalization detected (stale premise propagation)", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: brHint,
 					}},
 				})
 			}
@@ -3974,6 +3991,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Belief defense escalation: record tool results to detect
 			// contradicting signals against earlier agent beliefs.
 			a.beliefDefense.recordToolResult(tc.Name, result.Content, i+1, result.IsError)
+
+			// Bridging rationalization: record tool results to detect
+			// contradictions that may be explained away in subsequent text.
+			a.bridgingRat.recordToolResult(tc.Name, result.Content, i+1, result.IsError)
 
 			// History error accumulation: track multi-issue tool outputs
 			// to detect partial acknowledgment patterns.
