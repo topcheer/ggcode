@@ -227,6 +227,7 @@ type Agent struct {
 	targetScatter              *targetScatterState                   // target scatter detection (world model miscalibration - unfocused investigation across many unrelated files)
 	attentionFragment          *attentionFragmentState               // attention fragmentation detection (CLT extraneous load from rapid directory context-switching)
 	errorCompound              *errorCompoundState                   // error compounding risk detector (systemic trajectory reliability)
+	fixAmnesia                 *fixAmnesiaState                      // fix amnesia detector (cross-file error pattern recurrence after prior fix)
 	correctionSpiral           *correctionSpiralState                // correction spiral detector (error severity escalation across fixes)
 	wastedExplore              *wastedExploreState                   // wasted exploration detection (search results never acted upon)
 	toolResultRedundancy       *toolResultRedundancyState            // tool result redundancy detection (overlapping content across calls)
@@ -480,6 +481,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		queryConverge:          newQueryConvergeState(),
 		causalAttribution:      newCausalAttributionState(),
 		errorCompound:          newErrorCompoundState(),
+		fixAmnesia:             newFixAmnesiaState(),
 		correctionSpiral:       newCorrectionSpiralState(),
 		wastedExplore:          newWastedExploreState(),
 		toolResultRedundancy:   newToolResultRedundancyState(),
@@ -4631,6 +4633,32 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Computes geometric compounding probability to detect systemic risk.
 			if hadError := a.errorCompound.recordResult(tc.Name, result.IsError, i+1); true {
 				a.errorCompound.recordStep(hadError)
+			}
+			// Fix amnesia: track errors observed and check new content for recurrence.
+			if result.IsError {
+				if cat, file := classifyToolError(tc.Name, result.Content); cat != "" {
+					a.fixAmnesia.recordErrorObserved(cat, file)
+				}
+			}
+			if csIsEditTool(tc.Name) || tc.Name == "write_file" || tc.Name == "multi_edit_file" {
+				fp := extractFilePathFromArgs(tc.Name, tc.Arguments)
+				if result.IsError {
+					// Error observed in this file - track it.
+					if cat, file := classifyToolError(tc.Name, result.Content); cat != "" {
+						if file == "" {
+							file = fp
+						}
+						a.fixAmnesia.recordErrorObserved(cat, file)
+					}
+				}
+				// Check new content for patterns matching previously-fixed errors.
+				if faGuidance := a.fixAmnesia.checkContentAgainstFixed("", fp, result.Content); faGuidance != "" {
+					if result.Content != "" {
+						result.Content = result.Content + "\n\n" + faGuidance
+					} else {
+						result.Content = faGuidance
+					}
+				}
 			}
 			// Correction spiral: track edits and verify results to detect
 			// error severity escalation across fix attempts.
