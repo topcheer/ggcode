@@ -440,7 +440,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 							continue
 						}
 						// Validate arguments look like complete JSON.
-						// If invalid, attempt JSON repair before skipping —
+						// If invalid, attempt JSON repair before skipping -
 						// stream truncation and weak models frequently produce
 						// nearly-valid JSON that can be salvaged.
 						if len(tc.Arguments) > 0 && !json.Valid(tc.Arguments) {
@@ -550,7 +550,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 						for idx, tc := range toolCalls {
 							// Attempt JSON repair for truncated/malformed args.
 							// This is especially important when finish_reason is
-							// "length" (max_tokens truncation) — the args may be
+							// "length" (max_tokens truncation) - the args may be
 							// cut off mid-object.
 							if len(tc.Arguments) > 0 && !json.Valid(tc.Arguments) {
 								if repaired, ok := RepairJSON(tc.Arguments); ok {
@@ -564,7 +564,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 							delete(toolCalls, idx)
 						}
 						if isLengthFinishReason(finishReason) {
-							// Output was truncated by max_tokens limit — this is NOT an
+							// Output was truncated by max_tokens limit - this is NOT an
 							// error. We keep the partial content already streamed.
 							p.cap.OnTruncated()
 							truncated = true
@@ -679,10 +679,168 @@ func finishReasonError(finishReason string) error {
 	}
 }
 
+// mergeInjectedUserMessages folds text-only "user" messages that appear between
+// an assistant tool_use message and the subsequent tool_result message into the
+// tool_result message's content. Many detectors inject guidance as user messages
+// during the tool execution loop. Strict OpenAI-compatible APIs (e.g. Kimi K3)
+// reject requests where a tool_call is not immediately followed by its tool_result.
+//
+// Example transformation:
+//
+//	assistant: [tool_use(id=1)]
+//	user:      [text: "guidance warning"]           ← injected by detector
+//	user:      [tool_result(id=1), text: "result"]  ← actual tool results
+//
+// Becomes:
+//
+//	assistant: [tool_use(id=1)]
+//	user:      [tool_result(id=1), text: "guidance warning\n\nresult"]
+func mergeInjectedUserMessages(messages []Message) []Message {
+	if len(messages) < 3 {
+		return messages
+	}
+
+	// Detect if there are any problematic patterns before copying.
+	hasProblem := false
+	for i := 0; i < len(messages)-2; i++ {
+		if messages[i].Role != "assistant" {
+			continue
+		}
+		hasToolUse := false
+		for _, b := range messages[i].Content {
+			if b.Type == "tool_use" {
+				hasToolUse = true
+				break
+			}
+		}
+		if !hasToolUse {
+			continue
+		}
+		// Scan forward: are there 1+ text-only user messages followed by a tool_result?
+		j := i + 1
+		foundTextOnly := false
+		for j < len(messages) && messages[j].Role == "user" && isTextOnly(messages[j].Content) {
+			foundTextOnly = true
+			j++
+		}
+		if foundTextOnly && j < len(messages) && messages[j].Role == "user" && hasToolResultBlock(messages[j].Content) {
+			hasProblem = true
+			break
+		}
+	}
+	if !hasProblem {
+		return messages
+	}
+
+	debug.Log("openai", "mergeInjectedUserMessages: folding text-only user messages into tool_result messages")
+
+	result := make([]Message, 0, len(messages))
+	i := 0
+	for i < len(messages) {
+		// Check if this is an assistant message with tool_use, followed by text-only user messages
+		if messages[i].Role == "assistant" && hasToolUseBlock(messages[i].Content) &&
+			i+1 < len(messages) && messages[i+1].Role == "user" && isTextOnly(messages[i+1].Content) {
+
+			// Collect all consecutive text-only user messages between assistant and tool_result
+			var guidanceTexts []string
+			j := i + 1
+			for j < len(messages) && messages[j].Role == "user" && isTextOnly(messages[j].Content) {
+				for _, b := range messages[j].Content {
+					if b.Type == "text" && b.Text != "" {
+						guidanceTexts = append(guidanceTexts, b.Text)
+					}
+				}
+				j++
+			}
+
+			// j now points to the tool_result message (or end)
+			result = append(result, messages[i]) // assistant
+
+			if j < len(messages) && messages[j].Role == "user" && hasToolResultBlock(messages[j].Content) {
+				// Merge guidance texts into the tool_result message
+				merged := messages[j]
+				if len(guidanceTexts) > 0 {
+					prefix := strings.Join(guidanceTexts, "\n\n") + "\n\n"
+					merged.Content = prependToToolResultContent(merged.Content, prefix)
+				}
+				result = append(result, merged)
+				i = j + 1
+			} else {
+				// No tool_result found - keep messages as-is
+				result = append(result, messages[i+1])
+				i = i + 2
+			}
+		} else {
+			result = append(result, messages[i])
+			i++
+		}
+	}
+	return result
+}
+
+func hasToolUseBlock(blocks []ContentBlock) bool {
+	for _, b := range blocks {
+		if b.Type == "tool_use" {
+			return true
+		}
+	}
+	return false
+}
+
+func hasToolResultBlock(blocks []ContentBlock) bool {
+	for _, b := range blocks {
+		if b.Type == "tool_result" {
+			return true
+		}
+	}
+	return false
+}
+
+func isTextOnly(blocks []ContentBlock) bool {
+	if len(blocks) == 0 {
+		return false
+	}
+	for _, b := range blocks {
+		if b.Type != "text" {
+			return false
+		}
+	}
+	return true
+}
+
+// prependToToolResultContent adds a text prefix to the first text block in a
+// tool_result message, or inserts a new text block at the beginning if none exists.
+func prependToToolResultContent(blocks []ContentBlock, prefix string) []ContentBlock {
+	result := make([]ContentBlock, 0, len(blocks)+1)
+	inserted := false
+	for _, b := range blocks {
+		if !inserted && b.Type == "text" {
+			result = append(result, ContentBlock{Type: "text", Text: prefix + b.Text})
+			inserted = true
+		} else if !inserted && b.Type == "tool_result" {
+			// Prepend guidance as a separate text block before tool results
+			result = append(result, ContentBlock{Type: "text", Text: prefix})
+			inserted = true
+			result = append(result, b)
+		} else {
+			result = append(result, b)
+		}
+	}
+	if !inserted {
+		result = append(result, ContentBlock{Type: "text", Text: prefix})
+	}
+	return result
+}
+
 func (p *OpenAIProvider) convertMessages(messages []Message) []openai.ChatCompletionMessage {
 	// Merge all system messages into one to avoid interspersed system messages
 	// in the OpenAI messages array.
 	messages = MergeSystemMessages(messages)
+
+	// Fold injected text-only user messages between assistant tool_calls and
+	// tool_result messages to satisfy strict OpenAI-compatible APIs (Kimi K3).
+	messages = mergeInjectedUserMessages(messages)
+
 	result := make([]openai.ChatCompletionMessage, 0, len(messages))
 	for idx, m := range messages {
 		if debug.IsVerbose("openai") {
