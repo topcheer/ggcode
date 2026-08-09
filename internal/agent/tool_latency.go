@@ -61,10 +61,18 @@ type latencySample struct {
 // tool's established baseline. When an outlier is detected, a concise
 // performance hint is generated so the agent can self-optimize (e.g., use
 // offset/limit on reads, narrow search patterns).
+//
+// Research basis (2025-2026): Tool success rate is a critical indicator for
+// tool selection. Studies show that tools with low historical success rates
+// (e.g., unstable MCP servers, flaky web fetches) should be deprioritized
+// or retried with fallback strategies. This extension adds success rate
+// tracking alongside latency tracking.
 type LatencyTracker struct {
 	mu       sync.Mutex
 	samples  map[string][]latencySample // tool name → recent durations
 	lastWarn map[string]time.Time       // tool name → last warning time (cooldown)
+	success  map[string]int             // tool name → successful calls count
+	failure  map[string]int             // tool name → failed calls count
 }
 
 // NewLatencyTracker creates a ready-to-use LatencyTracker.
@@ -72,6 +80,8 @@ func NewLatencyTracker() *LatencyTracker {
 	return &LatencyTracker{
 		samples:  make(map[string][]latencySample),
 		lastWarn: make(map[string]time.Time),
+		success:  make(map[string]int),
+		failure:  make(map[string]int),
 	}
 }
 
@@ -195,4 +205,40 @@ func (lt *LatencyTracker) meanLatency(toolName string) time.Duration {
 		total += s.dur
 	}
 	return total / time.Duration(len(samples))
+}
+
+// RecordSuccess records a successful tool execution for success rate tracking.
+func (lt *LatencyTracker) RecordSuccess(toolName string) {
+	if lt == nil {
+		return
+	}
+	lt.mu.Lock()
+	lt.success[toolName]++
+	lt.mu.Unlock()
+}
+
+// RecordFailure records a failed tool execution for success rate tracking.
+func (lt *LatencyTracker) RecordFailure(toolName string) {
+	if lt == nil {
+		return
+	}
+	lt.mu.Lock()
+	lt.failure[toolName]++
+	lt.mu.Unlock()
+}
+
+// SuccessRate returns the success rate (0.0-1.0) for a tool, or 0 if no data.
+func (lt *LatencyTracker) SuccessRate(toolName string) float64 {
+	if lt == nil {
+		return 0
+	}
+	lt.mu.Lock()
+	defer lt.mu.Unlock()
+	success := lt.success[toolName]
+	failure := lt.failure[toolName]
+	total := success + failure
+	if total == 0 {
+		return 0
+	}
+	return float64(success) / float64(total)
 }
