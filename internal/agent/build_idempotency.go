@@ -97,7 +97,77 @@ var sourceMutatingTools = map[string]bool{
 	"notebook_edit":   true,
 }
 
-// isBuildTestCommand checks whether a command string represents a deterministic
+// buildTestPrefixes lists tool prefixes that skip env-var stripping.
+var buildTestToolPrefixes = []string{
+	"go ", "make ", "npm ", "yarn ", "pnpm ", "cargo ", "python ",
+	"pytest", "mvn ", "gradle ", "rake ", "dotnet ",
+}
+
+// buildTestPatterns maps command prefixes to canonical labels.
+var buildTestPatterns = []struct {
+	prefix string
+	label  string
+}{
+	{"go build", "go build"},
+	{"go test", "go test"},
+	{"go vet", "go vet"},
+	{"go check", "go check"},
+	{"make build", "make build"},
+	{"make test", "make test"},
+	{"make verify", "make verify"},
+	{"make check", "make check"},
+	{"make lint", "make lint"},
+	{"make ci", "make ci"},
+	{"npm test", "npm test"},
+	{"npm run test", "npm test"},
+	{"npm run build", "npm build"},
+	{"npm run lint", "npm lint"},
+	{"npx tsc", "tsc"},
+	{"yarn test", "yarn test"},
+	{"yarn build", "yarn build"},
+	{"pnpm test", "pnpm test"},
+	{"pnpm build", "pnpm build"},
+	{"cargo build", "cargo build"},
+	{"cargo test", "cargo test"},
+	{"cargo check", "cargo check"},
+	{"cargo clippy", "cargo clippy"},
+	{"pytest", "pytest"},
+	{"python -m pytest", "pytest"},
+	{"mvn test", "mvn test"},
+	{"mvn compile", "mvn compile"},
+	{"gradle test", "gradle test"},
+	{"gradle build", "gradle build"},
+	{"rake test", "rake test"},
+	{"dotnet build", "dotnet build"},
+	{"dotnet test", "dotnet test"},
+	{"tsc --noemit", "tsc"},
+	{"eslint", "eslint"},
+	{"golangci-lint", "golangci-lint"},
+}
+
+// hasBuildTestPrefix checks if a trimmed command starts with any known tool prefix.
+func hasBuildTestPrefix(s string) bool {
+	for _, p := range buildTestToolPrefixes {
+		if strings.HasPrefix(s, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// stripEnvVars removes leading FOO=bar assignments from a command line.
+func stripEnvVars(s string) string {
+	for strings.Contains(s, "=") && !hasBuildTestPrefix(s) {
+		idx := strings.Index(s, " ")
+		if idx == -1 {
+			return s
+		}
+		s = strings.TrimSpace(s[idx:])
+	}
+	return s
+}
+
+// detectBuildTestCommand checks whether a command string represents a deterministic
 // build or test operation whose output depends only on source files.
 func detectBuildTestCommand(cmd string) (bool, string) {
 	c := strings.ToLower(strings.TrimSpace(cmd))
@@ -112,66 +182,11 @@ func detectBuildTestCommand(cmd string) (bool, string) {
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			continue
 		}
-		// Skip env var assignments (FOO=bar prefix).
-		for strings.Contains(trimmed, "=") && !strings.HasPrefix(trimmed, "go ") &&
-			!strings.HasPrefix(trimmed, "make ") && !strings.HasPrefix(trimmed, "npm ") &&
-			!strings.HasPrefix(trimmed, "yarn ") && !strings.HasPrefix(trimmed, "pnpm ") &&
-			!strings.HasPrefix(trimmed, "cargo ") && !strings.HasPrefix(trimmed, "python ") &&
-			!strings.HasPrefix(trimmed, "pytest") && !strings.HasPrefix(trimmed, "mvn ") &&
-			!strings.HasPrefix(trimmed, "gradle ") && !strings.HasPrefix(trimmed, "rake ") &&
-			!strings.HasPrefix(trimmed, "dotnet ") {
-			idx := strings.Index(trimmed, " ")
-			if idx == -1 {
-				break
-			}
-			trimmed = strings.TrimSpace(trimmed[idx:])
-		}
-		c = trimmed
+		c = stripEnvVars(trimmed)
 		break
 	}
 
-	patterns := []struct {
-		prefix string
-		label  string
-	}{
-		{"go build", "go build"},
-		{"go test", "go test"},
-		{"go vet", "go vet"},
-		{"go check", "go check"},
-		{"make build", "make build"},
-		{"make test", "make test"},
-		{"make verify", "make verify"},
-		{"make check", "make check"},
-		{"make lint", "make lint"},
-		{"make ci", "make ci"},
-		{"npm test", "npm test"},
-		{"npm run test", "npm test"},
-		{"npm run build", "npm build"},
-		{"npm run lint", "npm lint"},
-		{"npx tsc", "tsc"},
-		{"yarn test", "yarn test"},
-		{"yarn build", "yarn build"},
-		{"pnpm test", "pnpm test"},
-		{"pnpm build", "pnpm build"},
-		{"cargo build", "cargo build"},
-		{"cargo test", "cargo test"},
-		{"cargo check", "cargo check"},
-		{"cargo clippy", "cargo clippy"},
-		{"pytest", "pytest"},
-		{"python -m pytest", "pytest"},
-		{"mvn test", "mvn test"},
-		{"mvn compile", "mvn compile"},
-		{"gradle test", "gradle test"},
-		{"gradle build", "gradle build"},
-		{"rake test", "rake test"},
-		{"dotnet build", "dotnet build"},
-		{"dotnet test", "dotnet test"},
-		{"tsc --noemit", "tsc"},
-		{"eslint", "eslint"},
-		{"golangci-lint", "golangci-lint"},
-	}
-
-	for _, pat := range patterns {
+	for _, pat := range buildTestPatterns {
 		if strings.HasPrefix(c, pat.prefix) {
 			return true, pat.label
 		}
