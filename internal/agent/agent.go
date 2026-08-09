@@ -350,6 +350,7 @@ type Agent struct {
 	onVerifyProgress           func(text string)                     // called during async verification (status updates)
 	onVerifyResult             func(VerifyResult)                    // called when async verification completes
 	onToolProgress             func(toolID, toolName, output string) // called for streaming tool output (e.g. wait_command)
+	riskController             *riskAwareController                  // risk-aware, budgeted controller (arXiv:2601.01743: action reversibility and impact branching)
 	mu                         sync.RWMutex
 }
 
@@ -428,6 +429,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		shellNativeHint:        newShellNativeHintState(),
 		monorepoScoper:         newMonorepoScoperState(),
 		mcpEcosystem:           newMCPEcosystemState(),
+		riskController:         newRiskAwareController(100), // 100 verification steps budget per session
 		approvalMemory:         permission.NewApprovalMemory(),
 		behaviorPattern:        newBehaviorPatternState(),
 		crossDetectorConsensus: newConsensusState(),
