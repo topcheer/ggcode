@@ -3448,6 +3448,19 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				msgs = a.contextManager.Messages()
 			}
 
+			// Pre-write REDACTED guard: prevent agent from writing [REDACTED:...]
+			// markers into files, which would destroy real secret values.
+			if redactedWarn := checkRedactedInWrite(tc.Name, string(tc.Arguments)); redactedWarn != "" {
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: redactedWarn,
+					}},
+				})
+				msgs = a.contextManager.Messages()
+			}
+
 			// Record safety signals for subsequent reversibility checks.
 			a.reversibility.recordSafetySignal(tc.Name, string(tc.Arguments))
 

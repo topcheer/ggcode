@@ -68,6 +68,52 @@ var secretPatterns = []struct {
 	{"jwt", regexp.MustCompile(`\b(eyJ[A-Za-z0-9_\-]{10,}\.eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,})\b`)},
 }
 
+// redactedMarkerRe detects [REDACTED:type] markers that were inserted by
+// redactSecrets into tool outputs. If an agent tries to write these markers
+// back to files (edit_file, write_file, etc.), the real secret value would
+// be destroyed. This check prevents that by warning before the write happens.
+var redactedMarkerRe = regexp.MustCompile(`\[REDACTED:[a-z_]+\]`)
+
+// isFileWriteTool returns true if the tool writes file content where injecting
+// a REDACTED marker would corrupt the file.
+func isFileWriteTool(toolName string) bool {
+	switch toolName {
+	case "edit_file", "write_file", "multi_edit_file", "multi_file_edit", "notebook_edit":
+		return true
+	default:
+		return false
+	}
+}
+
+// checkRedactedInWrite scans tool call arguments for REDACTED markers when the
+// tool writes files. Returns a warning message if markers are found, empty otherwise.
+// This prevents the agent from writing "[REDACTED:stripe_key]" literally into
+// config files, which would destroy the real API key value.
+func checkRedactedInWrite(toolName, args string) string {
+	if !isFileWriteTool(toolName) {
+		return ""
+	}
+	matches := redactedMarkerRe.FindAllString(args, -1)
+	if len(matches) == 0 {
+		return ""
+	}
+	unique := make(map[string]bool)
+	for _, m := range matches {
+		unique[m] = true
+	}
+	warning := fmt.Sprintf("[SECURITY: %d REDACTED marker(s) found in %s arguments. "+
+		"STOP: You are about to write REDACTED placeholder text into a file. "+
+		"The real secret value was masked when you read it earlier and is NOT available in your context. "+
+		"Writing these markers will DESTROY the existing API key/secret in the file. "+
+		"Do NOT proceed with this write. Either: "+
+		"1. Skip this edit entirely (the existing value is correct) "+
+		"2. Ask the user to provide the actual value "+
+		"3. Use a placeholder variable like ${API_KEY} instead of the redacted marker]",
+		len(unique), toolName)
+	debug.Log("secret-redact", "blocked REDACTED marker in %s args, markers=%d", toolName, len(matches))
+	return warning
+}
+
 // redactionNotice is prepended to tool results when secrets are detected.
 const redactionNotice = "[SECURITY: %d potential secret(s) detected and masked in this tool output to prevent leakage to external APIs. " +
 	"The masked values were replaced with [REDACTED:type] markers. " +
