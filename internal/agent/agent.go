@@ -233,6 +233,7 @@ type Agent struct {
 	diagnosticDisconnect       *diagnosticDisconnectState            // diagnostic-action disconnect detection (ignored diagnostics from failed tool calls)
 	bareEditStreak             *bareEditStreakState                  // unverified mutation streak detection (consecutive edits without verification)
 	greenBuildIllusion         *greenBuildIllusionState              // green build illusion: build succeeds without tests before declaring done
+	prematureSuccess           *prematureSuccessState                // premature success claim detection (edits without verification followed by success declaration)
 	recklessExec               *recklessExecState                    // reckless execution detection (edits to unexplored files in early iterations)
 	irrevGate                  *irrevGateState                       // irreversibility-weighted calibration gate (caution scales with action reversibility)
 	verifyDebt                 *verifyDebtState                      // verification debt accumulator (edits since last green build)
@@ -476,6 +477,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		diagnosticDisconnect:   newDiagnosticDisconnectState(),
 		bareEditStreak:         newBareEditState(),
 		greenBuildIllusion:     newGreenBuildIllusionState(),
+		prematureSuccess:       newPrematureSuccessState(),
 		strategyFixation:       newStrategyFixationState(),
 		errorRush:              newErrorRushState(),
 		targetScatter:          newTargetScatterState(),
@@ -1306,6 +1308,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		a.correctionSpiral.reset()
 		a.bareEditStreak.reset()
 		a.greenBuildIllusion.reset()
+		a.prematureSuccess.reset()
 		a.strategyFixation.reset()
 		a.errorRush.reset()
 		if a.recklessExec != nil {
@@ -2601,6 +2604,19 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					Content: []provider.ContentBlock{{
 						Type: "text",
 						Text: gbiHint,
+					}},
+				})
+			}
+
+			// Premature success claim: detect edits without verification
+			// followed by success declaration text.
+			if psHint := a.prematureSuccess.checkSuccessClaim(assistantText); psHint != "" {
+				debug.Log("agent", "Iteration %d: premature success claim detected (edits without verification)", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: psHint,
 					}},
 				})
 			}
@@ -4505,6 +4521,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.bareEditStreak.recordToolCall(tc.Name)
 			// Green build illusion: track source modifications, builds, and tests.
 			a.greenBuildIllusion.recordToolCall(tc.Name, string(tc.Arguments), result.IsError)
+			// Premature success claim: track edits and verification commands.
+			var psArgs map[string]interface{}
+			if len(tc.Arguments) > 0 {
+				_ = json.Unmarshal(tc.Arguments, &psArgs)
+			}
+			a.prematureSuccess.recordToolCall(tc.Name, psArgs)
 			// Strategy fixation: track per-file edits and verification outcomes.
 			if strategyFixationIsMutation(tc.Name) {
 				fp := extractFilePathFromArgs(tc.Name, tc.Arguments)
