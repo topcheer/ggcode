@@ -213,6 +213,7 @@ type Agent struct {
 	bgOrphan                   *bgOrphanState                        // orphaned background command detection (unchecked start_command jobs)
 	actionAnnihil              *actionAnnihilateState                // action annihilation detection (tool calls that cancel prior side effects)
 	buildIdempot               *buildIdempotencyState                // build/test idempotency detection (re-running deterministic builds without edits)
+	orphanFile                 *orphanFileState                      // orphaned new file integration detection (new source files never wired into existing code)
 	cfDep                      *cfDepState                           // counterfactual dependency detection (dependent tool calls in same batch)
 	abstainDetect              *abstainState                         // agentic abstention detection (untimely continuation after negative signals)
 	phantomOutput              *phantomState                         // phantom output inheritance detection (building on failed tool results)
@@ -462,6 +463,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		bgOrphan:               newBgOrphanState(),
 		actionAnnihil:          newActionAnnihilateState(),
 		buildIdempot:           newBuildIdempotencyState(),
+		orphanFile:             newOrphanFileState(),
 		cfDep:                  newCFDepState(),
 		abstainDetect:          newAbstainState(),
 		phantomOutput:          newPhantomState(),
@@ -1292,6 +1294,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.resetBgOrphan()
 	a.actionAnnihil.reset()
 	a.buildIdempot.reset()
+	a.orphanFile.reset()
 	a.cfDep.reset()
 	a.temporalBlindness.reset()
 	a.resetWastedExplore()
@@ -3847,6 +3850,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				a.contextManager.Add(provider.Message{
 					Role:    "user",
 					Content: []provider.ContentBlock{{Type: "text", Text: annihilWarn}},
+				})
+				msgs = a.contextManager.Messages()
+			}
+
+			// Orphaned new file detection: check if new source files were
+			// created but never integrated via edits to existing files.
+			if orphanWarn := a.orphanFile.recordToolCall(tc.Name, string(tc.Arguments), i+1); orphanWarn != "" {
+				debug.Log("agent", "Iteration %d: orphaned file detected", i+1)
+				a.contextManager.Add(provider.Message{
+					Role:    "user",
+					Content: []provider.ContentBlock{{Type: "text", Text: orphanWarn}},
 				})
 				msgs = a.contextManager.Messages()
 			}

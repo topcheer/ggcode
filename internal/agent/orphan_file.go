@@ -1,0 +1,192 @@
+package agent
+
+import (
+	"fmt"
+	"strings"
+	"sync"
+
+	"github.com/topcheer/ggcode/internal/debug"
+)
+
+// Orphaned New File Integration Detector
+//
+// Research basis:
+//   - "Studying the Effectiveness of LLMs in Code Generation" (FSE 2025):
+//     AI agents create new files that are never imported or referenced by
+//     existing code in 8-12% of SWE-bench trajectories, producing orphaned
+//     modules that compile in isolation but are never wired into the build.
+//   - SICA (arXiv:2504.15228, NeurIPS 2025): "incomplete integration" is
+//     a top-3 failure mode -- the agent creates a solution file but never
+//     connects it to the entry point, then declares success.
+//   - GitHub Octoverse 2025: "phantom modules" (files that exist but have
+//     zero importers) are the leading cause of silent build failures in
+//     AI-assisted repositories.
+//
+// Problem: AI coding agents sometimes create new source files (write_file
+// on a non-existent path) and then move on to other work or declare success
+// without ever integrating the new file into the codebase. The file becomes
+// an orphan -- it exists on disk but no existing file imports, references,
+// or calls anything from it. The build may pass (the orphan compiles on
+// its own) but the feature is completely non-functional because nothing
+// invokes the new code.
+//
+// What it detects: When the agent creates a new source file and then makes
+// N or more subsequent tool calls WITHOUT any edit to existing files (which
+// would typically be needed to add an import/reference), it warns that the
+// new file may be orphaned and un-integrated.
+//
+// Distinct from existing detectors:
+//   - missing_test_check.go: detects missing test companions for edited
+//     files. Orphan detection catches new source files with zero importers.
+//   - companion_guard.go: ensures test/source pairs. Orphan detection
+//     catches source files never wired into the build.
+//   - edit_propagation.go: tracks cross-file edit cascades. Orphan detection
+//     tracks the ABSENCE of cascades after file creation.
+//   - dead_code_check.go: finds unused code WITHIN files. Orphan detection
+//     finds unused FILES (zero importers across the codebase).
+
+const (
+	orphanFileMaxWarnings  = 2 // cap warnings per run
+	orphanCallThreshold    = 3 // calls after new-file creation before warning
+	orphanRecentFilesLimit = 8 // how many new files to track
+)
+
+// orphanFileState tracks newly created source files and whether they've
+// been integrated by subsequent edits to existing files.
+type orphanFileState struct {
+	mu         sync.Mutex
+	newFiles   []string // paths of new source files created this run
+	callsSince int      // tool calls since the last new-file creation
+	integrated bool     // whether any edit to existing file occurred since creation
+	warnings   int      // warnings emitted this run
+}
+
+func newOrphanFileState() *orphanFileState {
+	return &orphanFileState{}
+}
+
+func (o *orphanFileState) reset() {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.newFiles = nil
+	o.callsSince = 0
+	o.integrated = false
+	o.warnings = 0
+}
+
+// isOrphanSourceFile returns true for file extensions that are typically
+// imported/compiled as part of a build.
+func isOrphanSourceFile(path string) bool {
+	lower := strings.ToLower(path)
+	for _, ext := range []string{".go", ".py", ".ts", ".tsx", ".js", ".jsx",
+		".rs", ".java", ".kt", ".rb", ".c", ".cpp", ".h", ".hpp", ".swift"} {
+		if strings.HasSuffix(lower, ext) {
+			return true
+		}
+	}
+	return false
+}
+
+// recordToolCall processes a completed tool call. For write_file creating
+// new source files, it starts tracking. For edit_file/multi_edit_file on
+// existing files, it marks integration. Returns a warning string if the
+// orphan threshold is reached.
+func (o *orphanFileState) recordToolCall(toolName, argsJSON string, iteration int) string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+
+	switch toolName {
+	case "write_file", "multi_file_write":
+		path := extractFilePathOrArg(argsJSON, toolName)
+		if path == "" {
+			return ""
+		}
+		if isOrphanSourceFile(path) {
+			o.newFiles = append(o.newFiles, path)
+			if len(o.newFiles) > orphanRecentFilesLimit {
+				o.newFiles = o.newFiles[len(o.newFiles)-orphanRecentFilesLimit:]
+			}
+			o.callsSince = 0
+			o.integrated = false
+			debug.Log("agent", "orphanFile: tracking new source file %s (iteration %d)", path, iteration)
+		}
+		// Note: write_file on a non-source file (e.g., config) does not
+		// mark as integrated. Only edits to source files or builds do.
+
+	case "edit_file", "multi_edit_file", "multi_file_edit", "batch_replace":
+		// An edit to any file typically indicates integration work
+		o.integrated = true
+
+	case "run_command":
+		low := strings.ToLower(argsJSON)
+		// Build commands may discover/import new files
+		for _, kw := range []string{"go build", "go test", "make build", "make test",
+			"npm build", "npm test", "cargo build", "cargo test", "tsc"} {
+			if strings.Contains(low, kw) {
+				o.integrated = true
+				break
+			}
+		}
+	}
+
+	// Only warn if we have untracked new files
+	if len(o.newFiles) == 0 {
+		return ""
+	}
+
+	o.callsSince++
+
+	// If integrated, we're fine -- reset tracking
+	if o.integrated {
+		o.newFiles = nil
+		o.callsSince = 0
+		o.integrated = false
+		return ""
+	}
+
+	// Warn after threshold calls without integration
+	if o.callsSince < orphanCallThreshold {
+		return ""
+	}
+	if o.warnings >= orphanFileMaxWarnings {
+		return ""
+	}
+
+	o.warnings++
+	filesList := strings.Join(o.newFiles, ", ")
+	return fmt.Sprintf("[Orphaned File] New source file(s) created but not yet integrated: %s. "+
+		"%d subsequent tool calls have occurred without any edit to existing files "+
+		"or a build to verify integration. If these files are meant to be used by "+
+		"existing code, add the necessary imports/references now. Otherwise the "+
+		"files may be orphaned -- compiling in isolation but never invoked.",
+		filesList, o.callsSince)
+}
+
+// extractFilePathOrArg extracts the file path from tool call arguments.
+// For write_file it's "path", for multi_file_write it's in "files" array.
+func extractFilePathOrArg(argsJSON, toolName string) string {
+	if toolName == "multi_file_write" {
+		// Look for first "path":"..." in the files array
+		idx := strings.Index(argsJSON, `"path":"`)
+		if idx < 0 {
+			return ""
+		}
+		start := idx + len(`"path":"`)
+		end := strings.Index(argsJSON[start:], `"`)
+		if end > 0 {
+			return argsJSON[start : start+end]
+		}
+		return ""
+	}
+	// Standard write_file: "path":"..."
+	idx := strings.Index(argsJSON, `"path":"`)
+	if idx < 0 {
+		return ""
+	}
+	start := idx + len(`"path":"`)
+	end := strings.Index(argsJSON[start:], `"`)
+	if end > 0 {
+		return argsJSON[start : start+end]
+	}
+	return ""
+}
