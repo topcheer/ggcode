@@ -147,6 +147,7 @@ type Agent struct {
 	cacheKeepalive             *cacheKeepaliveState                  // prompt cache warming pings during idle (Anthropic)
 	commandCache               *commandCache                         // deterministic build/test command result caching
 	emptySearch                *emptySearchState                     // empty search spiral detection (futile search guidance)
+	degradedResult             *degradedResultState                  // silent degradation propagation detection (Galileo error propagation chain)
 	postEditVerify             postEditVerifyState                   // tracks source-code edits to inject periodic verification hints
 	planner                    *planState                            // agent-side auto task decomposition (Devin/Claude Code-inspired)
 	todoStaleness              *todoStalenessState                   // mid-run stale todo detection (plan abandonment awareness)
@@ -394,6 +395,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		cacheKeepalive:         newCacheKeepaliveState(),
 		commandCache:           newCommandCache(),
 		emptySearch:            newEmptySearchState(),
+		degradedResult:         newDegradedResultState(),
 		errorClassifier:        NewErrorClassifier(),
 		planner:                newPlanState(),
 		todoStaleness:          newTodoStalenessState(),
@@ -1595,6 +1597,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.toolCallBudget.reset()
 	a.toolCallBudget.SetDefaultBudget(deriveDefaultBudget(a.maxIter))
 	a.emptySearch.reset()
+	a.degradedResult.reset()
 	// Reset the unread-file edit tracker so each run starts fresh.
 	a.unreadEdit.reset()
 	a.expiredRead.reset()
@@ -2417,6 +2420,20 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					Content: []provider.ContentBlock{{
 						Type: "text",
 						Text: heHint,
+					}},
+				})
+			}
+
+			// Silent degradation propagation: check if the agent acknowledged
+			// a prior degraded tool result in its reasoning text. If not, it is
+			// silently building on corrupted state (Galileo error propagation chain).
+			if drHint := a.degradedResult.checkAcknowledgment(assistantText); drHint != "" {
+				debug.Log("degraded-result", "Iteration %d: silent degradation propagation detected", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: drHint,
 					}},
 				})
 			}
@@ -4603,6 +4620,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Agentic abstention detection: track negative environment signals
 			// (not found, unavailable) to detect untimely continuation.
 			a.abstainDetect.recordResult(result.Content, result.IsError)
+
+			// Silent degradation propagation: record degraded tool results for
+			// later acknowledgment check against assistant text.
+			a.degradedResult.recordDegradedResult(tc.Name, result.Content, result.IsError, runStats.Iterations)
 
 			// Smart verify hint reset: if the agent ran a build/test/verify command,
 			// reset the edit counter and track the result.
