@@ -267,6 +267,7 @@ type Agent struct {
 	unverifiedConfidence       *unverifiedConfidenceState            // unverified confidence detection (overconfident claims without verification)
 	phantomVerify              *phantomVerifyState                   // phantom verification detection (category-specific verification claims without matching commands)
 	narrativeEvidence          *narrativeEvidenceState               // narrative-evidence decoupling detection (text contradicts tool output)
+	beliefDefense              *beliefDefenseState                   // belief defense escalation detection (re-stated beliefs after contradicting evidence)
 	evidenceOverconfidence     *evidenceOverconfidenceState          // evidence-induced overconfidence (tool-type calibration asymmetry)
 	verifyDisconnect           *verifyDisconnectState                // verification outcome disconnect (advancing past failures)
 	selectiveEvidence          *selectiveEvidenceTrackerState        // confirmation bias detection (cherry-picked evidence + dismissed negatives)
@@ -489,6 +490,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		unverifiedConfidence:   newUnverifiedConfidenceState(),
 		phantomVerify:          newPhantomVerifyState(),
 		narrativeEvidence:      newNarrativeEvidenceState(),
+		beliefDefense:          newBeliefDefenseState(),
 		solutionFixation:       newSolutionFixationState(),
 		evidenceOverconfidence: newEvidenceOverconfidenceState(),
 		verifyDisconnect:       newVerifyDisconnectState(),
@@ -1596,6 +1598,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.evidenceOverconfidence.reset()
 	a.verifyDisconnect.reset()
 	a.narrativeEvidence.reset()
+	a.beliefDefense.reset()
 	a.toolStorm.reset()
 	a.serialRead.reset()
 	a.reasoningRedund.reset()
@@ -2581,6 +2584,19 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.successDeclare.recordAssistantText(assistantText, i)
 			a.criteriaDrift.recordAssistantText(assistantText, i)
 			a.subgoalTrack.recordAssistantText(assistantText, i)
+
+			// Belief defense escalation: detect when an agent re-states an earlier
+			// belief after a contradicting tool output (arXiv:2606.22936).
+			if bdHint := a.beliefDefense.recordAssistantText(assistantText, i+1); bdHint != "" {
+				debug.Log("agent", "Iteration %d: belief defense escalation detected", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: bdHint,
+					}},
+				})
+			}
 
 			// Verification scope decay: detect progressive narrowing of
 			// test/build scope across the run.
@@ -3744,6 +3760,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Narrative-evidence decoupling: record tool results to detect
 			// contradictions between agent text claims and actual outputs.
 			a.narrativeEvidence.recordToolResult(tc.Name, result.Content, i+1, result.IsError)
+
+			// Belief defense escalation: record tool results to detect
+			// contradicting signals against earlier agent beliefs.
+			a.beliefDefense.recordToolResult(tc.Name, result.Content, i+1, result.IsError)
 
 			// Verification scope decay: record verification commands to
 			// detect progressive narrowing of test/build scope.
