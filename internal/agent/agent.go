@@ -208,6 +208,7 @@ type Agent struct {
 	mcpRuntime                 tool.MCPRuntime                       // MCP runtime for server snapshots (optional)
 	bgOrphan                   *bgOrphanState                        // orphaned background command detection (unchecked start_command jobs)
 	actionAnnihil              *actionAnnihilateState                // action annihilation detection (tool calls that cancel prior side effects)
+	cfDep                      *cfDepState                           // counterfactual dependency detection (dependent tool calls in same batch)
 	abstainDetect              *abstainState                         // agentic abstention detection (untimely continuation after negative signals)
 	phantomOutput              *phantomState                         // phantom output inheritance detection (building on failed tool results)
 	toolStorm                  *toolStormState                       // tool call storm detection (diverse tools fired without reasoning)
@@ -442,6 +443,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		toolEquivDetect:        newToolEquivDetectState(),
 		bgOrphan:               newBgOrphanState(),
 		actionAnnihil:          newActionAnnihilateState(),
+		cfDep:                  newCFDepState(),
 		abstainDetect:          newAbstainState(),
 		phantomOutput:          newPhantomState(),
 		serialRead:             newSerialReadState(),
@@ -1258,6 +1260,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.mcpEcosystem.reset()
 	a.resetBgOrphan()
 	a.actionAnnihil.reset()
+	a.cfDep.reset()
 	a.temporalBlindness.reset()
 	a.resetWastedExplore()
 	a.resetSelfMod()
@@ -3266,6 +3269,18 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			args string
 		}
 		seenReadOnly := make(map[dedupKey]int) // key → index of first result in toolResults
+
+		// Counterfactual dependency detection: check if this batch of tool calls
+		// contains producer-consumer pairs where the consumer assumes the producer
+		// has completed (e.g., write_file + run_command build in parallel).
+		if depWarn := a.recordToolCallBatch(toolCalls, i+1); depWarn != "" {
+			debug.Log("agent", "Iteration %d: counterfactual dependency assumption detected", i+1)
+			a.contextManager.Add(provider.Message{
+				Role:    "user",
+				Content: []provider.ContentBlock{{Type: "text", Text: depWarn}},
+			})
+			msgs = a.contextManager.Messages()
+		}
 
 		for idx, tc := range toolCalls {
 			if err := ctx.Err(); err != nil {
