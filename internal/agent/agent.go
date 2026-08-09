@@ -219,6 +219,7 @@ type Agent struct {
 	buildIdempot               *buildIdempotencyState                // build/test idempotency detection (re-running deterministic builds without edits)
 	orphanFile                 *orphanFileState                      // orphaned new file integration detection (new source files never wired into existing code)
 	cfDep                      *cfDepState                           // counterfactual dependency detection (dependent tool calls in same batch)
+	guidanceBudget             guidanceBudget                        // per-turn guidance injection limiter (caps context pollution from detector alerts)
 	abstainDetect              *abstainState                         // agentic abstention detection (untimely continuation after negative signals)
 	phantomOutput              *phantomState                         // phantom output inheritance detection (building on failed tool results)
 	toolStorm                  *toolStormState                       // tool call storm detection (diverse tools fired without reasoning)
@@ -1808,6 +1809,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		a.guidanceBudget.reset() // reset per-turn guidance injection budget
 		// Check session wall-clock timeout: emit user-visible notifications or stop.
 		// Timeout messages are infrastructure notifications for the user only;
 		// they are NOT injected into LLM context to avoid distracting the model.
@@ -2492,13 +2494,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			if assumptionHint := a.maybeWarnAssumptions(assistantText); assumptionHint != "" {
 				debug.Log("agent", "Iteration %d: assumption tracker detected implicit assumptions", i+1)
 				a.recordUncertainty("assumption", weightAssumption)
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: assumptionHint,
-					}},
-				})
+				a.injectGuidance(assumptionHint)
 			}
 
 			// Diagnostic fixation detector: detect when the agent restates the
@@ -2509,13 +2505,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			if fixHint := a.maybeWarnDiagnosticFixation(assistantText); fixHint != "" {
 				debug.Log("agent", "Iteration %d: diagnostic fixation detector found stale hypothesis", i+1)
 				a.recordUncertainty("diagnostic_fixation", weightAssumption)
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: fixHint,
-					}},
-				})
+				a.injectGuidance(fixHint)
 			}
 
 			// Satisficing settling detector: detect when the agent
@@ -2523,13 +2513,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// (arXiv:2505.23729, ICML 2025 -- bounded rationality satisficing).
 			if settleHint := a.maybeWarnSatisficing(assistantText); settleHint != "" {
 				debug.Log("agent", "Iteration %d: satisficing settling detected (knowingly suboptimal solution)", i+1)
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: settleHint,
-					}},
-				})
+				a.injectGuidance(settleHint)
 			}
 
 			// Sycophancy detector: detect when the agent agrees with a
@@ -2537,13 +2521,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			if syncHint := a.sycophancyGuard.checkSycophancy(assistantText); syncHint != "" {
 				debug.Log("agent", "Iteration %d: sycophancy guard detected unverified agreement with user premise", i+1)
 				a.recordUncertainty("sycophancy", weightAssumption)
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: syncHint,
-					}},
-				})
+				a.injectGuidance(syncHint)
 			}
 
 			// Premature surrender detection: scan assistant text for give-up
@@ -2552,13 +2530,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// arXiv:2506.05109 -- intrinsic metacognitive awareness.
 			if surrenderMsg := a.prematureSurrender.checkSurrender(assistantText, i+1, a.maxIter); surrenderMsg != "" {
 				debug.Log("surrender-detect", "Iteration %d: premature surrender language detected", i+1)
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: surrenderMsg,
-					}},
-				})
+				a.injectGuidance(surrenderMsg)
 			}
 
 			// Agentic abstention detection: track whether the assistant text
@@ -2567,26 +2539,14 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.abstainDetect.recordAcknowledgment(assistantText)
 			if abstainMsg := a.abstainDetect.checkAbstention(i+1, a.maxIter); abstainMsg != "" {
 				debug.Log("abstain-detect", "Iteration %d: untimely continuation detected", i+1)
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: abstainMsg,
-					}},
-				})
+				a.injectGuidance(abstainMsg)
 			}
 
 			// Phantom output inheritance detection: check if subsequent tool calls
 			// are referencing identifiers from previously failed tool calls.
 			if phantomMsg := a.phantomOutput.checkPhantomInheritance(i + 1); phantomMsg != "" {
 				debug.Log("phantom-output", "Iteration %d: phantom output inheritance detected", i+1)
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: phantomMsg,
-					}},
-				})
+				a.injectGuidance(phantomMsg)
 			}
 
 			// Advance delayed-observation turn counter before checks.
@@ -2596,13 +2556,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			if docMsg := a.delayedObservation.checkDelayedContradiction(assistantText); docMsg != "" {
 				debug.Log("agent", "Iteration %d: delayed observation contradiction detected", i+1)
 				a.recordUncertainty("delayed_obs_contradiction", weightFalsePremise)
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: docMsg,
-					}},
-				})
+				a.injectGuidance(docMsg)
 			}
 
 			// False premise detection: scan assistant text for success claims
@@ -2610,13 +2564,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			if fpMsg := a.falsePremise.checkFalsePremise(assistantText); fpMsg != "" {
 				debug.Log("agent", "Iteration %d: false premise detected (ungrounded success claim)", i+1)
 				a.recordUncertainty("false_premise", weightFalsePremise)
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: fpMsg,
-					}},
-				})
+				a.injectGuidance(fpMsg)
 			}
 
 			// Unverified confidence detector: scan for overconfident completion
@@ -2625,13 +2573,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// calibration gap detection.
 			if confHint := a.maybeWarnUnverifiedConfidence(assistantText); confHint != "" {
 				debug.Log("agent", "Iteration %d: unverified confidence detector found overconfident claims without verification", i+1)
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: confHint,
-					}},
-				})
+				a.injectGuidance(confHint)
 			}
 
 			// Evidence-induced overconfidence: detect definitive claims or code
@@ -2639,13 +2581,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// cross-verification. Tool-type calibration asymmetry (arXiv:2601.15778).
 			if evidHint := a.maybeWarnEvidenceOverconfidence(assistantText); evidHint != "" {
 				debug.Log("agent", "Iteration %d: evidence overconfidence detector found unverified evidence-derived certainty", i+1)
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: evidHint,
-					}},
-				})
+				a.injectGuidance(evidHint)
 			}
 
 			// Scope overgeneralization: detect universal scope claims
@@ -2653,13 +2589,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// narrow evidence searches. Epistemic miscalibration (arXiv:2605.23414).
 			if scopeHint := a.maybeWarnScopeOvergeneralize(assistantText); scopeHint != "" {
 				debug.Log("agent", "Iteration %d: scope overgeneralization detector found narrow-evidence universal claim", i+1)
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: scopeHint,
-					}},
-				})
+				a.injectGuidance(scopeHint)
 			}
 
 			// Green build illusion: detect when agent declares completion after
@@ -2668,26 +2598,14 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.greenBuildIllusion.recordAssistantText(assistantText)
 			if gbiHint := a.greenBuildIllusion.maybeWarn(); gbiHint != "" {
 				debug.Log("agent", "Iteration %d: green build illusion detected (build without tests before completion)", i+1)
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: gbiHint,
-					}},
-				})
+				a.injectGuidance(gbiHint)
 			}
 
 			// Premature success claim: detect edits without verification
 			// followed by success declaration text.
 			if psHint := a.prematureSuccess.checkSuccessClaim(assistantText); psHint != "" {
 				debug.Log("agent", "Iteration %d: premature success claim detected (edits without verification)", i+1)
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: psHint,
-					}},
-				})
+				a.injectGuidance(psHint)
 			}
 
 			// Verification outcome disconnect: detect verification failures
@@ -2695,13 +2613,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// overconfidence gap (arXiv:2508.06225).
 			if vdHint := a.maybeWarnVerifyDisconnect(assistantText, i+1); vdHint != "" {
 				debug.Log("agent", "Iteration %d: verification disconnect detector found unresolved failure", i+1)
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: vdHint,
-					}},
-				})
+				a.injectGuidance(vdHint)
 			}
 
 			// Phantom verification: detect category-specific verification claims
@@ -2709,13 +2621,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// command in the trajectory. Process supervision gap (AgentPro, EMNLP 2025).
 			if pvHint := a.maybeWarnPhantomVerify(assistantText); pvHint != "" {
 				debug.Log("agent", "Iteration %d: phantom verification detector found unverified category claims", i+1)
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: pvHint,
-					}},
-				})
+				a.injectGuidance(pvHint)
 			}
 
 			// Narrative-evidence decoupling: detect when the agent's text claims
@@ -2723,13 +2629,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// (arXiv:2605.01604 - Explanation-Decision Decoupling).
 			if neHint := a.maybeWarnNarrativeEvidence(assistantText, i+1); neHint != "" {
 				debug.Log("agent", "Iteration %d: narrative-evidence decoupling detected (text contradicts tool output)", i+1)
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: neHint,
-					}},
-				})
+				a.injectGuidance(neHint)
 			}
 			a.successDeclare.recordAssistantText(assistantText, i)
 			a.criteriaDrift.recordAssistantText(assistantText, i)
@@ -2739,13 +2639,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// belief after a contradicting tool output (arXiv:2606.22936).
 			if bdHint := a.beliefDefense.recordAssistantText(assistantText, i+1); bdHint != "" {
 				debug.Log("agent", "Iteration %d: belief defense escalation detected", i+1)
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: bdHint,
-					}},
-				})
+				a.injectGuidance(bdHint)
 			}
 
 			// Bridging rationalization: detect when an agent explains away a
@@ -2753,39 +2647,21 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// instead of re-verifying (RECAP 2026, stale-context benchmark).
 			if brHint := a.bridgingRat.checkRationalization(assistantText, i+1); brHint != "" {
 				debug.Log("agent", "Iteration %d: bridging rationalization detected (stale premise propagation)", i+1)
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: brHint,
-					}},
-				})
+				a.injectGuidance(brHint)
 			}
 
 			// Verification scope decay: detect progressive narrowing of
 			// test/build scope across the run.
 			if vsdHint := a.verifyScopeDecay.maybeWarnScopeDecay(); vsdHint != "" {
 				debug.Log("agent", "Iteration %d: verification scope decay detected", i+1)
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: vsdHint,
-					}},
-				})
+				a.injectGuidance(vsdHint)
 			}
 
 			// Symbol grounding verifier: detect code symbols mentioned in
 			// assistant text that were never found via tool calls.
 			if groundingHint := a.maybeWarnGrounding(assistantText, i); groundingHint != "" {
 				debug.Log("agent", "Iteration %d: symbol grounding verifier detected ungrounded symbol references", i+1)
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: groundingHint,
-					}},
-				})
+				a.injectGuidance(groundingHint)
 			}
 
 			// Selective evidence detector: detect confirmation bias pattern where
