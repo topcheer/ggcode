@@ -56,6 +56,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/topcheer/ggcode/internal/tool"
 )
 
 const (
@@ -247,4 +249,54 @@ func appendSuppressedSummary(result, suppressed []string) []string {
 	)
 
 	return append(result, summary)
+}
+
+// applyToolResultGuidance assembles guidance hints from various detectors,
+// coalesces them, records tags for cross-session promotion, and appends the
+// result to the tool output content. Both vision and non-vision tool result
+// paths share this method to avoid divergent hint-assembly logic.
+//
+// Parameters are individual hint strings (empty = not applicable):
+//   - loopGuidance: sequence pattern guidance (e.g., strategy-stagnation)
+//   - searchParamHint: search parameter optimization guidance
+//   - redundancyHint: tool result redundancy guidance
+//   - equivHint: equivalent tool call guidance
+//   - overuseHint: tool overuse guidance
+func (a *Agent) applyToolResultGuidance(
+	result *tool.Result,
+	loopGuidance, searchParamHint, redundancyHint, equivHint, overuseHint string,
+) {
+	if loopGuidance == "" && searchParamHint == "" && redundancyHint == "" && equivHint == "" && overuseHint == "" {
+		return
+	}
+
+	var hints []string
+	if searchParamHint != "" {
+		hints = append(hints, searchParamHint)
+	}
+	if loopGuidance != "" {
+		hints = append(hints, loopGuidance)
+	}
+	if redundancyHint != "" {
+		hints = append(hints, redundancyHint)
+	}
+	if equivHint != "" {
+		hints = append(hints, equivHint)
+	}
+	if overuseHint != "" {
+		hints = append(hints, overuseHint)
+	}
+
+	hints = coalesceGuidance(hints)
+	if ch := detectGuidanceConflict(hints); ch != "" {
+		hints = append([]string{ch}, hints...)
+	}
+
+	for _, h := range hints {
+		if tag := extractHintTag(h); tag != "" {
+			a.guidancePromoter.RecordTag(tag)
+		}
+	}
+
+	result.Content = result.Content + "\n\n" + strings.Join(hints, "\n\n")
 }

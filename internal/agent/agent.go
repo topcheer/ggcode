@@ -4856,69 +4856,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					}
 				}
 			}
+			// Apply coalesced guidance hints to the tool result content.
+			// Both vision and non-vision paths share the same hint assembly logic.
+			a.applyToolResultGuidance(&result, loopGuidance, searchParamHint, redundancyHint, equivHint, overuseHint)
+
 			if len(result.Images) > 0 && a.SupportsVision() {
 				imgs := make([]provider.ContentImage, len(result.Images))
 				for i, ri := range result.Images {
 					imgs[i] = provider.ContentImage{MIME: ri.MIME, Base64: ri.Base64}
 				}
-				if loopGuidance != "" || searchParamHint != "" || redundancyHint != "" || equivHint != "" || overuseHint != "" {
-					var hints []string
-					if searchParamHint != "" {
-						hints = append(hints, searchParamHint)
-					}
-					if loopGuidance != "" {
-						hints = append(hints, loopGuidance)
-					}
-					if redundancyHint != "" {
-						hints = append(hints, redundancyHint)
-					}
-					if equivHint != "" {
-						hints = append(hints, equivHint)
-					}
-					if overuseHint != "" {
-						hints = append(hints, overuseHint)
-					}
-					hints = coalesceGuidance(hints)
-					if ch := detectGuidanceConflict(hints); ch != "" {
-						hints = append([]string{ch}, hints...)
-					}
-					for _, h := range hints {
-						if tag := extractHintTag(h); tag != "" {
-							a.guidancePromoter.RecordTag(tag)
-						}
-					}
-					result.Content = result.Content + "\n\n" + strings.Join(hints, "\n\n")
-				}
 				toolResults = append(toolResults, provider.ToolResultWithImages(tc.ID, tc.Name, result.Content, imgs, result.IsError))
 			} else {
-				if loopGuidance != "" || searchParamHint != "" || redundancyHint != "" || equivHint != "" || overuseHint != "" {
-					var hints []string
-					if searchParamHint != "" {
-						hints = append(hints, searchParamHint)
-					}
-					if loopGuidance != "" {
-						hints = append(hints, loopGuidance)
-					}
-					if redundancyHint != "" {
-						hints = append(hints, redundancyHint)
-					}
-					if equivHint != "" {
-						hints = append(hints, equivHint)
-					}
-					if overuseHint != "" {
-						hints = append(hints, overuseHint)
-					}
-					hints = coalesceGuidance(hints)
-					if ch := detectGuidanceConflict(hints); ch != "" {
-						hints = append([]string{ch}, hints...)
-					}
-					for _, h := range hints {
-						if tag := extractHintTag(h); tag != "" {
-							a.guidancePromoter.RecordTag(tag)
-						}
-					}
-					result.Content = result.Content + "\n\n" + strings.Join(hints, "\n\n")
-				}
 				toolResults = append(toolResults, provider.ToolResultNamedBlock(tc.ID, tc.Name, result.Content, result.IsError))
 			}
 
