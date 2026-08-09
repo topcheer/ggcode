@@ -85,32 +85,30 @@ var greenBuildSourceExts = map[string]bool{
 	".h": true, ".hpp": true, ".rb": true, ".kt": true, ".swift": true,
 }
 
+// gbiTestFileSuffixes lists suffix patterns that identify test files.
+var gbiTestFileSuffixes = []string{
+	"_test.go", ".test.js", ".test.ts", ".spec.js", ".spec.ts",
+	".test.tsx", ".spec.tsx", ".test.jsx", ".spec.jsx",
+	"test.py", "_test.py", "_test.rs", "test_.java", "test.rb", "_test.rb",
+}
+
+// gbiTestFileDirs lists directory markers that identify test file locations.
+var gbiTestFileDirs = []string{
+	"/test/", "/tests/", "/__tests__/", "/spec/",
+}
+
 // Test file detection: files that are themselves tests.
 func gbiIsTestFile(path string) bool {
 	lower := strings.ToLower(path)
-	// Common test file patterns
-	if strings.HasSuffix(lower, "_test.go") ||
-		strings.HasSuffix(lower, ".test.js") ||
-		strings.HasSuffix(lower, ".test.ts") ||
-		strings.HasSuffix(lower, ".spec.js") ||
-		strings.HasSuffix(lower, ".spec.ts") ||
-		strings.HasSuffix(lower, ".test.tsx") ||
-		strings.HasSuffix(lower, ".spec.tsx") ||
-		strings.HasSuffix(lower, ".test.jsx") ||
-		strings.HasSuffix(lower, ".spec.jsx") ||
-		strings.HasSuffix(lower, "test.py") ||
-		strings.HasSuffix(lower, "_test.py") ||
-		strings.HasSuffix(lower, "_test.rs") ||
-		strings.HasSuffix(lower, "test_.java") ||
-		strings.HasSuffix(lower, "_test.py") ||
-		strings.HasSuffix(lower, "test.rb") ||
-		strings.HasSuffix(lower, "_test.rb") {
-		return true
+	for _, sfx := range gbiTestFileSuffixes {
+		if strings.HasSuffix(lower, sfx) {
+			return true
+		}
 	}
-	// Directory-based test detection
-	if strings.Contains(lower, "/test/") || strings.Contains(lower, "/tests/") ||
-		strings.Contains(lower, "/__tests__/") || strings.Contains(lower, "/spec/") {
-		return true
+	for _, dir := range gbiTestFileDirs {
+		if strings.Contains(lower, dir) {
+			return true
+		}
 	}
 	// Python/Javascript test prefix convention: test_foo.py, test_foo.js
 	if strings.HasPrefix(lower, "test_") || strings.Contains(lower, "/test_") {
