@@ -332,6 +332,7 @@ type Agent struct {
 	crossDetectorConsensus     *consensusState                       // cross-detector consensus (systemic failure from simultaneous detector firings)
 	taintInfluence             *taintInfluenceState                  // tainted data influence detection (IFC: tracks untrusted content flowing into privileged tool calls)
 	falsePremise               *falsePremiseState                    // false premise detection: ungrounded success claims contradicting tool errors (world-model drift)
+	delayedObservation         *delayedObservationState              // delayed observation contradiction detection (positive claims contradicting aged negative observations)
 	perfBaseline               *perfBaselineState                    // cross-session performance regression detection
 	guidancePromoter           *GuidancePromoter                     // cross-session guidance tag recurrence → proactive rule promotion (inter-test-time evolution)
 	lastRunStats               *RunStats                             // stats from the most recent run (for post-run summary display)
@@ -405,6 +406,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		wtInvalidation:         newWTInvalidationState(),
 		strategyExhaustion:     newStrategyExhaustionState(),
 		falsePremise:           newFalsePremiseState(),
+		delayedObservation:     newDelayedObservationState(),
 		editFailRecovery:       newEditFailState(),
 		scopeDrift:             newScopeDriftState(),
 		driftRecurrence:        newDriftRecurrenceState(),
@@ -1593,6 +1595,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.wtInvalidation.reset()
 	a.strategyExhaustion.reset()
 	a.falsePremise.reset()
+	a.delayedObservation.reset()
 	// Reset the edit failure recovery tracker.
 	a.editFailRecovery.reset()
 	// Reset the export guard so each run starts with a clean checked set.
@@ -2554,6 +2557,22 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					Content: []provider.ContentBlock{{
 						Type: "text",
 						Text: phantomMsg,
+					}},
+				})
+			}
+
+			// Advance delayed-observation turn counter before checks.
+			a.delayedObservation.advanceTurn()
+			// Delayed observation contradiction: positive claims that contradict
+			// an aged negative observation from a successful tool call.
+			if docMsg := a.delayedObservation.checkDelayedContradiction(assistantText); docMsg != "" {
+				debug.Log("agent", "Iteration %d: delayed observation contradiction detected", i+1)
+				a.recordUncertainty("delayed_obs_contradiction", weightFalsePremise)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: docMsg,
 					}},
 				})
 			}
@@ -3946,6 +3965,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Narrative-evidence decoupling: record tool results to detect
 			// contradictions between agent text claims and actual outputs.
 			a.narrativeEvidence.recordToolResult(tc.Name, result.Content, i+1, result.IsError)
+
+			// Delayed observation contradiction: record negative observations from
+			// *successful* tool calls (no-match, not-found, empty) for later
+			// delayed contradiction analysis.
+			a.delayedObservation.recordToolResult(tc.Name, result.Content, result.IsError)
 
 			// Belief defense escalation: record tool results to detect
 			// contradicting signals against earlier agent beliefs.
