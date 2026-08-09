@@ -157,6 +157,7 @@ type Agent struct {
 	stalledConvergence         *stalledConvergenceState              // stalled convergence detection (diminishing returns pattern)
 	unreadEdit                 *unreadEditState                      // read-before-edit guard: warns when editing unread files
 	expiredRead                *expiredReadState                     // expired-read detection: self-invalidated context awareness (AgentDiet)
+	searchInvalidation         *searchInvalidationState              // search-result invalidation: stale grep/lsp results after edits (AgentDiet)
 	editFailRecovery           *editFailState                        // consecutive edit failure recovery guidance
 	scopeDrift                 *scopeDriftState                      // semantic scope creep detection (file-diversity tracking)
 	driftRecurrence            *driftRecurrenceState                 // drift recurrence detection (post-warning behavioral persistence)
@@ -387,6 +388,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		stalledConvergence:     newStalledConvergenceState(),
 		unreadEdit:             newUnreadEditState(),
 		expiredRead:            newExpiredReadState(),
+		searchInvalidation:     newSearchInvalidationState(),
 		falsePremise:           newFalsePremiseState(),
 		editFailRecovery:       newEditFailState(),
 		scopeDrift:             newScopeDriftState(),
@@ -1555,6 +1557,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	// Reset the unread-file edit tracker so each run starts fresh.
 	a.unreadEdit.reset()
 	a.expiredRead.reset()
+	a.searchInvalidation.reset()
 	a.falsePremise.reset()
 	// Reset the edit failure recovery tracker.
 	a.editFailRecovery.reset()
@@ -4491,10 +4494,24 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 						result.Content = hint
 					}
 				}
+				// Search-result invalidation: record search-type tool results
+				// for later invalidation detection on file edits.
+				a.searchInvalidation.recordSearchResult(tc.Name, result.Content)
 			}
 			if fileEditingTools[tc.Name] && !result.IsError {
 				a.verifyDebt.recordSourceEdit()
 				a.stalledConvergence.recordEdit()
+				// Search-result invalidation: if edited file appeared in prior
+				// search/lsp results, warn that those results are now stale.
+				if editPath := extractFilePathFromArgs(tc.Name, tc.Arguments); editPath != "" {
+					if siMsg := a.searchInvalidation.checkEditInvalidation(editPath); siMsg != "" {
+						if result.Content != "" {
+							result.Content = result.Content + "\n\n" + siMsg
+						} else {
+							result.Content = siMsg
+						}
+					}
+				}
 				a.editPropagation.recordEdit(tc.Name, string(tc.Arguments))
 			}
 			a.successDeclare.recordToolCall()
