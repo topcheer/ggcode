@@ -302,6 +302,7 @@ type Agent struct {
 	reproducerLifecycle        *reproducerLifecycleState             // reproducer lifecycle tracker (reproduce->edit->rerun gap)
 	successDeclare             *successDeclareState                  // premature success declaration detection (calibration gap: done claim + continued work)
 	criteriaDrift              *criteriaDriftState                   // success criteria drift detection (proxy gaming via evaluator weakening)
+	goalDriftCtx               *goalDriftCtxState                    // context-length goal drift detection (arXiv:2505.02709)
 	reasonAction               *reasonActionState                    // reasoning-action alignment verification (cognitive category mismatch)
 	verifyScopeDecay           *verifyScopeDecayState                // verification scope decay detection (progressive narrowing of test/build scope)
 	symbolGrounding            *symbolGroundingState                 // symbol grounding verification (ungrounded code symbol reference detection)
@@ -555,6 +556,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		successDeclare:         newSuccessDeclareState(),
 		verifyScopeDecay:       newVerifyScopeDecayState(),
 		criteriaDrift:          newCriteriaDriftState(),
+		goalDriftCtx:           newGoalDriftCtxState(),
 		reasonAction:           newReasonActionState(),
 		attemptBrief:           newAttemptBriefState(),
 		symbolGrounding:        newSymbolGroundingState(),
@@ -1250,6 +1252,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			userPromptForStats += b.Text
 		}
 	}
+	// Context-length goal drift: extract keywords from the original user
+	// request to detect later drift (arXiv:2505.02709).
+	a.goalDriftCtx.initFromUserMessage(userPromptForStats)
 	runStats := newRunStats(userPromptForStats)
 	// asyncVerifyStats captures run stats for the background verification goroutine.
 	asyncVerifyStats := (*RunStats)(nil)
@@ -3017,6 +3022,19 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// against actual results to detect prediction-observation gaps.
 			a.foresightCalib.recordPrediction(assistantText, toolCalls, i+1)
 
+			// Context-length goal drift: check if recent tool targets have
+			// drifted from the original user request keywords (arXiv:2505.02709).
+			if gdHint := a.goalDriftCtx.checkDrift(i + 1); gdHint != "" {
+				debug.Log("agent", "Iteration %d: context-length goal drift detected", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: gdHint,
+					}},
+				})
+			}
+
 			if a.injectPendingInterruptions() {
 				continue
 			}
@@ -3911,6 +3929,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Outcome misattribution: record failure indicators in tool
 			// results to detect success claims that follow failures.
 			a.outcomeMisattrib.recordResult(tc.Name, result.Content, result.IsError, i+1)
+
+			// Context-length goal drift: record tool call targets to
+			// detect drift from original user request (arXiv:2505.02709).
+			a.goalDriftCtx.recordToolCall(tc.Name, string(tc.Arguments))
 
 			// Foresight calibration: compare predicted outcome against
 			// actual result to detect prediction-observation mismatches.
