@@ -272,6 +272,7 @@ type Agent struct {
 	evidenceOverconfidence     *evidenceOverconfidenceState          // evidence-induced overconfidence (tool-type calibration asymmetry)
 	verifyDisconnect           *verifyDisconnectState                // verification outcome disconnect (advancing past failures)
 	selectiveEvidence          *selectiveEvidenceTrackerState        // confirmation bias detection (cherry-picked evidence + dismissed negatives)
+	historyErrAccum            *historyErrAccumState                 // history error accumulation detection (multi-issue tool output partially addressed)
 	temporalBlindness          *temporalBlindnessState               // temporal blindness detection (stale verification across mutations)
 	selfDiagState              *selfDiagState                        // unverified self-diagnosis detection (correlated failure after errors)
 	deferredWork               *deferredWorkState                    // deferred work tracking (forgotten follow-up detection)
@@ -497,6 +498,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		evidenceOverconfidence: newEvidenceOverconfidenceState(),
 		verifyDisconnect:       newVerifyDisconnectState(),
 		selectiveEvidence:      newSelectiveEvidenceTrackerState(),
+		historyErrAccum:        newHistoryErrAccumState(),
 		reproducerLifecycle:    newReproducerLifecycleState(),
 		temporalBlindness:      newTemporalBlindnessState(),
 		selfDiagState:          newSelfDiagState(),
@@ -1605,6 +1607,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.serialRead.reset()
 	a.reasoningRedund.reset()
 	a.selectiveEvidence.reset()
+	a.historyErrAccum.reset()
 	a.reproducerLifecycle.reset()
 	a.deferredWork.reset()
 	a.circularReasoning.reset()
@@ -2350,6 +2353,19 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.toolStorm.recordReasoning(assistantText)
 			a.constraintViolation.recordReasoning(assistantText, i+1)
 			a.reasoningRedund.recordReasoning(assistantText, false)
+
+			// History error accumulation: check if assistant text addresses
+			// pending issues from a prior multi-issue tool result.
+			if heHint := a.historyErrAccum.recordAssistantText(assistantText, i+1); heHint != "" {
+				debug.Log("agent", "Iteration %d: history error accumulation detector triggered", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: heHint,
+					}},
+				})
+			}
 
 			// Over-reflection detection: check if the agent is producing
 			// text-heavy turns without tool calls (wasted test-time compute).
@@ -3779,6 +3795,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Belief defense escalation: record tool results to detect
 			// contradicting signals against earlier agent beliefs.
 			a.beliefDefense.recordToolResult(tc.Name, result.Content, i+1, result.IsError)
+
+			// History error accumulation: track multi-issue tool outputs
+			// to detect partial acknowledgment patterns.
+			a.historyErrAccum.recordToolResult(tc.Name, result.Content, i+1)
 
 			// Verification scope decay: record verification commands to
 			// detect progressive narrowing of test/build scope.
