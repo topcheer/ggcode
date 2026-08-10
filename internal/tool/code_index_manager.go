@@ -85,8 +85,8 @@ const (
 
 // codeIndexIdleRelease is how long the index sits idle (no Search calls)
 // before being released from memory. The disk cache persists, so the next
-// Search will reload from disk. Set to 10 minutes.
-const codeIndexIdleRelease = 10 * time.Minute
+// Search will reload from disk. Set to 60 minutes.
+const codeIndexIdleRelease = 60 * time.Minute
 
 // NewCodeIndexManager creates a manager for the given working directory.
 // The index path is derived from a hash of the absolute path so that

@@ -117,13 +117,17 @@ func (m *Manager) checkBindingOwnership(store BindingStore, workspace, sessionID
 
 	m.mu.Lock()
 	var toMute []string
+	var toRemove []string
 	for name, binding := range m.currentBindings {
 		if binding.Muted {
 			continue // already muted
 		}
 		persistedSID, exists := persistedSessionIDs[name]
 		if !exists {
-			continue // binding deleted from store, skip
+			// Binding deleted from our store — another workspace took it over.
+			// Must mute AND remove from memory + disconnect adapter.
+			toRemove = append(toRemove, name)
+			continue
 		}
 		// If the persisted LastSessionID is non-empty and differs from our session,
 		// another instance has claimed this binding.
@@ -131,19 +135,30 @@ func (m *Manager) checkBindingOwnership(store BindingStore, workspace, sessionID
 			toMute = append(toMute, name)
 		}
 	}
+	// Remove bindings that were taken over by another workspace.
+	for _, name := range toRemove {
+		binding, ok := m.currentBindings[name]
+		if !ok {
+			continue
+		}
+		debug.Log("im", "binding watcher: removing %s - binding deleted from workspace (taken by another workspace)", name)
+		binding.Muted = true
+		m.stopAdapter(name)
+		delete(m.currentBindings, name)
+	}
 	// Mute the stale bindings while holding the lock.
 	for _, name := range toMute {
 		if binding, ok := m.currentBindings[name]; ok {
 			binding.Muted = true
 			m.stopAdapter(name)
-			debug.Log("im", "binding watcher: auto-muted %s — session ownership changed from %s to %s",
+			debug.Log("im", "binding watcher: auto-muted %s - session ownership changed from %s to %s",
 				name, sessionID, persistedSessionIDs[name])
 		}
 	}
 	snapshot, cb := m.snapshotAndCallbackLocked()
 	m.mu.Unlock()
 
-	if len(toMute) > 0 {
+	if len(toMute) > 0 || len(toRemove) > 0 {
 		if cb != nil {
 			cb(snapshot)
 		}

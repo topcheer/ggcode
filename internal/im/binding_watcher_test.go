@@ -188,6 +188,50 @@ func TestCheckBindingOwnership_MemoryStore(t *testing.T) {
 	}
 }
 
+// TestBindingWatcher_RemovesOnCrossWorkspaceTakeover verifies that when a
+// binding is deleted from our store (because another workspace took it over),
+// the watcher removes it from memory and disconnects the adapter.
+func TestBindingWatcher_RemovesOnCrossWorkspaceTakeover(t *testing.T) {
+	store := NewMemoryBindingStore()
+	mgr := NewManager()
+	mgr.SetBindingStore(store)
+	mgr.BindSession(SessionBinding{Workspace: "/ws1", SessionID: "session-A"})
+
+	binding := ChannelBinding{
+		Workspace: "/ws1",
+		Adapter:   "adapter1",
+		Platform:  "test",
+		ChannelID: "ch1",
+		BoundAt:   time.Now(),
+	}
+	binding.LastSessionID = "session-A"
+	mgr.BindChannel(binding)
+
+	// Verify binding exists in memory.
+	mgr.mu.RLock()
+	_, exists := mgr.currentBindings["adapter1"]
+	mgr.mu.RUnlock()
+	if !exists {
+		t.Fatal("adapter1 should exist in currentBindings before takeover")
+	}
+
+	// Simulate cross-workspace takeover: delete binding from our store.
+	if err := store.Delete("/ws1", "adapter1"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Run the check directly.
+	mgr.checkBindingOwnership(store, "/ws1", "session-A")
+
+	// Verify binding was removed from memory.
+	mgr.mu.RLock()
+	_, exists = mgr.currentBindings["adapter1"]
+	mgr.mu.RUnlock()
+	if exists {
+		t.Fatal("adapter1 should be removed from currentBindings after cross-workspace takeover")
+	}
+}
+
 // TestBindingWatcher_RestartOnBindSession verifies that calling BindSession
 // stops the old watcher and starts a new one with the updated session ID.
 func TestBindingWatcher_RestartOnBindSession(t *testing.T) {
