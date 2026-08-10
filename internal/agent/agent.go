@@ -197,6 +197,7 @@ type Agent struct {
 	metadata                   map[string]string                     // persistent metadata for session persistence
 	compoundingFailure         *compoundingFailureState              // sliding-window cross-tool failure rate (strategy reset detection)
 	failureMode                *failureModeState                     // meta-level failure mode classification (transient/structural/systemic)
+	resourceMonitor            *ResourceMonitor                      // resource-aware orchestration: tracks memory/CPU pressure (sa-125)
 	toolFallback               *toolFallbackState                    // tool error fallback chain (actionable recovery suggestions)
 	replan                     *replanState                          // dynamic replan detector (active path re-evaluation on persistent failures)
 	argSizeGuardFires          int                                   // count of argument size guard injections this run
@@ -478,6 +479,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		transientRetryBudget:   maxTransientRetryBudgetPerRun,
 		compoundingFailure:     newCompoundingFailureState(),
 		failureMode:            newFailureModeState(),
+		resourceMonitor:        NewResourceMonitor(),
 		toolFallback:           newToolFallbackState(),
 		replan:                 newReplanState(),
 		policyVerifier:         NewPolicyVerifierService(),
