@@ -313,23 +313,17 @@ func classifyDiagnosticSeverity(toolName string, content string) errorSeverity {
 func overcorrectionSingleWarning(errSev errorSeverity, editSize int) string {
 	sevName := severityName(errSev)
 	return fmt.Sprintf(
-		"[overcorrection-cascade] The last error was %s but the fix edit was %d bytes -- "+
-			"disproportionately large for the problem. Prefer the smallest targeted change that resolves "+
-			"the error. Large rewrites risk introducing NEW bugs (regression amplification). "+
-			"If a small edit (1-5 lines) suffices, use it instead.",
+		"[overcorrection-cascade] Fix for %s error was %d bytes - too large. Use minimal targeted change.",
 		sevName, editSize,
 	)
 }
 
 func overcorrectionCascadeWarning(errSev errorSeverity, editSize int, consecutive int) string {
-	sevName := severityName(errSev)
+	_ = errSev
+	_ = editSize
 	return fmt.Sprintf(
-		"[overcorrection-cascade] %d consecutive overcorrections detected -- each fix is far larger than "+
-			"the triggering %s error warranted (latest: %d bytes). This cascade pattern introduces new "+
-			"breakage with each rewrite. STOP large refactors. Apply the minimal surgical change for the "+
-			"specific error, then verify before proceeding. Overcorrection cascades are a primary cause of "+
-			"regression amplification in agent-generated patches (MAXS arXiv:2601.09259, APR Survey 2026).",
-		consecutive, sevName, editSize,
+		"[overcorrection-cascade] %d overcorrections - fixes far larger than errors warranted. Apply minimal surgical changes.",
+		consecutive,
 	)
 }
 

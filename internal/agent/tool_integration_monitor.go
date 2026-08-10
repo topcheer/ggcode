@@ -178,8 +178,7 @@ func (s *integrationState) checkIntegration(assistantText string) string {
 	}
 
 	return fmt.Sprintf(
-		"[Evidence] Your previous %s tool returned key information (%s) that does not appear in your reasoning. "+
-			"Re-read the tool output and explicitly integrate its findings before proceeding -- do not act as if you didn't see it.",
+		"[evidence] Previous %s returned key info (%s) not in your reasoning. Integrate findings before proceeding.",
 		toolName, example,
 	)
 }

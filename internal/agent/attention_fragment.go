@@ -222,11 +222,8 @@ func (s *attentionFragmentState) analyze() string {
 	debug.Log("agent", "attention fragmentation detected: density=%.2f, unique_dirs=%d", switchDensity, len(uniqueDirs))
 
 	return fmt.Sprintf(
-		"[attention-fragment] Switch density %.0f%% across %d unique directories in last %d calls - "+
-			"rapid context-switching creates extraneous cognitive load (Cognitive Load Theory for LLM agents, "+
-			"arXiv:2506.06843). Each jump forces context reload. "+
-			"Consider: group related operations (read+edit+test in one area) before switching to the next concern.",
-		switchDensity*100, len(uniqueDirs), len(s.recentDirs),
+		"[attention-fragment] Switching across %d directories in last %d calls. Group related operations before switching.",
+		len(uniqueDirs), len(s.recentDirs),
 	)
 }
 

@@ -169,15 +169,7 @@ func (s *selfCorrectionGateState) recordRound(newErrors, persistentErrors, resol
 // intervention that reduces EIR from 2% to ~0%).
 func selfCorrectionUnstableGuidance(rounds, newErrors, resolvedErrors int, ratio float64) string {
 	return fmt.Sprintf(
-		"[SELF-CORRECTION UNSTABLE] Across %d verification cycles, your edits have introduced %d new error(s) "+
-			"while only resolving %d. The error-correction ratio (%.1f) is below the stability threshold (%.1f) — "+
-			"meaning each fix introduces more errors than it resolves. "+
-			"Your self-correction loop is net-negative and will not converge by continuing.\n"+
-			"STOP making incremental fixes. Instead:\n"+
-			"1. Step back and re-read the original task requirements — you may have drifted from the goal\n"+
-			"2. Review ALL current errors holistically, not one at a time — look for a single root cause\n"+
-			"3. Consider reverting your recent edits (git diff, then undo) and taking a fundamentally different approach\n"+
-			"4. If stuck, ask the user for guidance rather than burning more iterations",
+		"[self-correction-unstable] %d cycles: %d new errors vs %d resolved (ratio %.1f < %.1f). Fixes introduce more errors than they resolve.",
 		rounds, newErrors, resolvedErrors, ratio, scGateStabilityRatio,
 	)
 }
