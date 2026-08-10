@@ -31,6 +31,7 @@ func TestDebriefAnalyzer_ErrorPatterns(t *testing.T) {
 	da.recordToolCall("run_command", map[string]interface{}{"command": "go build"}, `undefined: bar`, true)
 	da.recordToolCall("run_command", map[string]interface{}{"command": "go build"}, `undefined: baz`, true)
 	da.recordToolCall("edit_file", map[string]interface{}{"path": "main.go"}, "success", false)
+	da.recordToolCall("grep", map[string]interface{}{"pattern": "TODO"}, "found 5 matches", false)
 
 	da.startTime = time.Now().Add(-60 * time.Second)
 	points := da.finalize()
@@ -94,6 +95,8 @@ func TestDebriefAnalyzer_SuccessPatterns(t *testing.T) {
 		da.recordToolCall("run_command", map[string]interface{}{"command": "go test ./..."}, "PASS", false)
 	}
 	da.recordToolCall("run_command", map[string]interface{}{"command": "go build"}, "success", false)
+	da.recordToolCall("edit_file", map[string]interface{}{"path": "main.go"}, "success", false)
+	da.recordToolCall("read_file", map[string]interface{}{"path": "README.md"}, "content", false)
 
 	da.startTime = time.Now().Add(-60 * time.Second)
 	points := da.finalize()
@@ -103,16 +106,19 @@ func TestDebriefAnalyzer_SuccessPatterns(t *testing.T) {
 		t.Logf("Point: Category=%s Title=%s", p.Category, p.Title)
 	}
 
-	// Should detect effective go-test strategy
+	// Should detect effective cmd-go strategy (both go test and go build contribute)
 	found := false
 	for _, p := range points {
-		if p.Category == "success" && strings.Contains(p.Title, "go test") {
+		if p.Category == "success" && strings.Contains(p.Title, "cmd-go") {
 			found = true
+			if p.Confidence <= 0 {
+				t.Errorf("Expected positive confidence for success pattern, got %.2f", p.Confidence)
+			}
 			break
 		}
 	}
 	if !found {
-		t.Error("Expected to find success pattern for go-test")
+		t.Error("Expected to find success pattern for cmd-go")
 	}
 }
 
