@@ -225,6 +225,7 @@ type Agent struct {
 	mcpRuntime                 tool.MCPRuntime                       // MCP runtime for server snapshots (optional)
 	bgOrphan                   *bgOrphanState                        // orphaned background command detection (unchecked start_command jobs)
 	actionAnnihil              *actionAnnihilateState                // action annihilation detection (tool calls that cancel prior side effects)
+	oodDetect                  *oodDetector                          // out-of-distribution detection (novel file types/tool combos outside historical experience)
 	exploreFrag                *exploreFragState                     // exploration fragmentation detection (scattered foraging without convergence)
 	batchCoupling              *batchCouplingState                   // parallel tool call coupling detection (hidden order dependencies in batches)
 	buildIdempot               *buildIdempotencyState                // build/test idempotency detection (re-running deterministic builds without edits)
@@ -497,6 +498,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		progVerif:              &progVerifTracker{},
 		bgOrphan:               newBgOrphanState(),
 		actionAnnihil:          newActionAnnihilateState(),
+		oodDetect:              newOODDetector(),
 		exploreFrag:            newExploreFragState(),
 		batchCoupling:          newBatchCouplingState(),
 		buildIdempot:           newBuildIdempotencyState(),
@@ -4115,6 +4117,21 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// actions to detect repeated similar searches without progress.
 			a.queryConverge.recordToolCall(tc.Name, string(tc.Arguments), i+1)
 
+			// Out-of-distribution detection: track file types and tool
+			// combinations to detect novel patterns outside historical experience.
+			// Research basis: arXiv:2510.21254 (2025)
+			targets := extractTargetsFromToolCall(tc.Name, tc.Arguments)
+			a.oodDetect.recordObservation(tc.Name, targets)
+			if oodSignal := a.oodDetect.checkOOD(tc.Name, targets); oodSignal != nil {
+				if guidance := a.injectOODGuidance(oodSignal); guidance != "" {
+					if result.Content != "" {
+						result.Content = result.Content + "\n\n" + guidance
+					} else {
+						result.Content = guidance
+					}
+				}
+			}
+
 			// Plan drift capture: when exit_plan_mode fires, extract plan items
 			// for later drift detection (spec-driven development tracking).
 			if tc.Name == "exit_plan_mode" {
@@ -5424,4 +5441,75 @@ func (a *Agent) fillCancelledToolResults(pending []provider.ToolCallDelta, resul
 			Content: *results,
 		})
 	}
+}
+
+// extractTargetsFromToolCall extracts file paths or target strings from a tool call
+// for OOD detection tracking.
+func extractTargetsFromToolCall(toolName string, args json.RawMessage) []string {
+	var targets []string
+
+	// Parse arguments as JSON map
+	var argMap map[string]any
+	if err := json.Unmarshal(args, &argMap); err != nil {
+		return nil
+	}
+
+	// Extract path-like parameters based on tool name
+	switch toolName {
+	case "read_file", "edit_file", "multi_file_edit", "write_file",
+		"lsp_definition", "lsp_references", "lsp_hover", "lsp_diagnostics",
+		"lsp_symbols", "lsp_rename", "lsp_code_actions", "lsp_document_highlights",
+		"lsp_implementation", "lsp_prepare_call_hierarchy", "lsp_incoming_calls",
+		"lsp_outgoing_calls":
+		if path, ok := argMap["path"].(string); ok {
+			targets = append(targets, path)
+		}
+	case "grep", "search_files", "code_search", "glob":
+		if path, ok := argMap["path"].(string); ok {
+			targets = append(targets, path)
+		}
+		if pattern, ok := argMap["pattern"].(string); ok {
+			targets = append(targets, pattern)
+		}
+	case "multi_file_read":
+		if files, ok := argMap["files"].([]any); ok {
+			for _, f := range files {
+				if fm, ok := f.(map[string]any); ok {
+					if path, ok := fm["path"].(string); ok {
+						targets = append(targets, path)
+					}
+				}
+			}
+		}
+	case "run_command", "start_command":
+		if command, ok := argMap["command"].(string); ok {
+			targets = append(targets, command)
+		}
+	}
+
+	return targets
+}
+
+// injectOODGuidance formats and returns OOD detection guidance for the agent.
+func (a *Agent) injectOODGuidance(signal *oodSignal) string {
+	var guidance strings.Builder
+
+	guidance.WriteString(fmt.Sprintf("[Out-of-Distribution Detection] %s\n", signal.Message))
+	guidance.WriteString(fmt.Sprintf("Certainty: %.0f%%\n", signal.Certainty*100))
+
+	if len(signal.Features) > 0 {
+		guidance.WriteString("Novel features detected:\n")
+		for _, f := range signal.Features {
+			guidance.WriteString(fmt.Sprintf("  • %s\n", f))
+		}
+	}
+
+	guidance.WriteString("\n")
+	if signal.Severity == SeverityHigh {
+		guidance.WriteString("RECOMMENDATION: Pause and verify you understand this novel context before proceeding. Consider asking the user for guidance.")
+	} else {
+		guidance.WriteString("RECOMMENDATION: Exercise caution and verify assumptions before proceeding with unfamiliar patterns.")
+	}
+
+	return guidance.String()
 }
