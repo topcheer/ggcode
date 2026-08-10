@@ -355,6 +355,7 @@ type Agent struct {
 	delayedObservation         *delayedObservationState              // delayed observation contradiction detection (positive claims contradicting aged negative observations)
 	perfBaseline               *perfBaselineState                    // cross-session performance regression detection
 	guidancePromoter           *GuidancePromoter                     // cross-session guidance tag recurrence → proactive rule promotion (inter-test-time evolution)
+	heterogeneousModel         *heterogeneousModelState              // FinOps: heterogeneous model selection guidance (sa-131)
 	lastRunStats               *RunStats                             // stats from the most recent run (for post-run summary display)
 	qualityScorer              *ResponseQualityScorer                // per-run response quality scoring for provider/model A/B comparison
 	systemPromptInjector       func() string                         // returns extra system prompt text to inject (e.g. lanchat peer warnings)
@@ -499,6 +500,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		bgOrphan:               newBgOrphanState(),
 		actionAnnihil:          newActionAnnihilateState(),
 		oodDetect:              newOODDetector(),
+		heterogeneousModel:     newHeterogeneousModelState(),
 		exploreFrag:            newExploreFragState(),
 		batchCoupling:          newBatchCouplingState(),
 		buildIdempot:           newBuildIdempotencyState(),
@@ -4129,6 +4131,18 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					} else {
 						result.Content = guidance
 					}
+				}
+			}
+
+			// Heterogeneous model selection guide: FinOps-aware guidance for
+			// cost-effective model tier selection. Detects execution-heavy
+			// patterns and suggests using cheaper models for routine work.
+			// Research basis: 2025-2026 AI Agent trends (Deloitte, Machine Learning Mastery)
+			if hmGuidance := a.heterogeneousModel.recordToolCall(tc.Name, i+1); hmGuidance != "" {
+				if result.Content != "" {
+					result.Content = result.Content + "\n\n" + hmGuidance
+				} else {
+					result.Content = hmGuidance
 				}
 			}
 
