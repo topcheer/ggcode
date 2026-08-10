@@ -120,6 +120,7 @@ type Agent struct {
 	onInterrupt                interruptionHandler
 	projectMemory              map[string]struct{}
 	supportsVision             bool
+	lastTool                   string // tracks previous tool for execution graph composition patterns (sa-116)
 	precompact                 *precompactState
 	precompactCooldownUntil    time.Time // earliest next precompact; guarded by mu
 	shutdownCtx                context.Context

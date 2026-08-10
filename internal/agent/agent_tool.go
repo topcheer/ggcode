@@ -361,6 +361,12 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 	// Sync working directory for tools that have a WorkingDir field.
 	syncToolWorkingDir(t, workDir)
 
+	// Track previous tool for execution graph composition patterns (sa-116)
+	a.mu.Lock()
+	prevTool := a.lastTool
+	a.lastTool = t.Name() // Update for next tool
+	a.mu.Unlock()
+
 	// Execute the actual tool (with panic recovery + transient retry)
 	if err := ctx.Err(); err != nil {
 		return tool.Result{Content: err.Error(), IsError: true}
@@ -370,6 +376,13 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 		return a.safeExecute(t, execCtx, args)
 	})
 	toolDur := time.Since(toolStart)
+
+	// Record tool execution outcome in dynamic execution graph (sa-116)
+	// Research basis: NaviAgent (arxiv:2506.19500) - execution feedback
+	// continually updates tool composition graphs for adaptive orchestration.
+	if graph := getToolExecutionGraph(); graph != nil {
+		graph.recordToolOutcome(t.Name(), !result.IsError, toolDur, prevTool)
+	}
 
 	// Post-tool-use hooks
 	postEnv := env
