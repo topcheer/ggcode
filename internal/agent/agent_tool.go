@@ -244,6 +244,11 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 		return tool.Result{Content: tool.FormatUnknownToolError(a.tools, tc.Name), IsError: true}
 	}
 
+	// Record tool call for skill discovery pattern detection
+	if a.skillDiscovery != nil {
+		a.skillDiscovery.recordCall(tc.Name)
+	}
+
 	// JSON argument repair: many OpenAI-compatible backends (vLLM, LiteLLM,
 	// goolm) and weaker models produce arguments that are *almost* valid JSON
 	// but fail strict parsing due to stream truncation, trailing commas, smart

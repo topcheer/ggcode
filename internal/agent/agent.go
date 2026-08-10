@@ -202,6 +202,7 @@ type Agent struct {
 	latencyTracker             *LatencyTracker                       // per-tool latency baseline & slow-tool outlier detection
 	toolSelectionScorer        *ToolSelectionScorer                  // cost-aware tool selection guidance (MCTS-inspired dual feedback)
 	budgetTracker              *BudgetTracker                        // runtime budget awareness for adaptive tool-use planning (BATS)
+	skillDiscovery             *skillDiscovery                       // skill discovery: automatic detection of recurring tool patterns (ELL-inspired)
 	toolSequence               *toolSequenceValidator                // cross-iteration tool call anti-pattern detection
 	planDrift                  *planDriftState                       // plan drift detection (exit_plan_mode item tracking)
 	unverifiedClaim            *unverifiedClaimState                 // unverified success claim detection (text claims vs actual verification)
@@ -458,6 +459,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		latencyTracker:         NewLatencyTracker(),
 		toolSelectionScorer:    NewToolSelectionScorer(NewLatencyTracker()), // independent scorer using its own latency data
 		budgetTracker:          NewBudgetTracker(0),                         // 0 = unconstrained by default (can be set via config)
+		skillDiscovery:         newSkillDiscovery(),
 		toolSequence:           newToolSequenceValidator(),
 		taskAnchor:             newTaskAnchorState("", time.Time{}),
 		adaptiveSampling:       newAdaptiveSamplingState(),
@@ -5068,6 +5070,25 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					Text: tcMsg,
 				})
 				return nil
+			}
+		}
+
+		// Skill discovery: check for recurring tool patterns and suggest skills.
+		// Implements ELL framework Skill Learning principle (arXiv:2508.19005).
+		if a.skillDiscovery != nil {
+			if suggestion := a.skillDiscovery.checkForSuggestions(); suggestion != "" {
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: suggestion,
+					}},
+				})
+				msgs = a.contextManager.Messages()
+				onEvent(provider.StreamEvent{
+					Type: provider.StreamEventSystem,
+					Text: suggestion,
+				})
 			}
 		}
 	}
