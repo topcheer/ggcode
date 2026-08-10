@@ -250,14 +250,7 @@ func hasBroadEvidenceInWindow(s *scopeOvergeneralizeState) bool {
 // buildScopeOvergenMessage constructs the advisory guidance string.
 func buildScopeOvergenMessage(s *scopeOvergeneralizeState, firstClaim string) string {
 	return fmt.Sprintf(
-		"[scope-overgeneralization] Universal scope claim detected after narrow evidence search. "+
-			"Your search covered a limited scope, but the claim implies codebase-wide certainty. "+
-			"Evidence used: %d narrow-scope search(es), %d broad-scope search(es). "+
-			"Claim: \"%s\". "+
-			"Consider: (1) Use recursive glob (**/*) or lsp_references for exhaustive searches; "+
-			"(2) Use grep on the repo root or a broader path; "+
-			"(3) Verify with `git grep` or `rg` across the entire project before claiming \"all\" or \"no other\". "+
-			"Research: Epistemic calibration failure (arXiv:2605.23414) -- narrow evidence does not support universal quantifiers.",
+		"[scope-overgeneralization] Universal claim after narrow search (%d narrow, %d broad). Claim: \"%s\". Use recursive glob or lsp_references before claiming codebase-wide.",
 		s.narrowEvidenceCalls, s.broadEvidenceCalls, firstClaim,
 	)
 }

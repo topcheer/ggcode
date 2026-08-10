@@ -210,7 +210,7 @@ func (d *diagnosticDisconnectState) check() string {
 		worst.keyword, worst.disconnectCount, worst.iteration, d.warningCount, ddMaxWarnings)
 
 	return fmt.Sprintf(
-		"[diagnostic disconnect] A diagnostic signal from iteration %d has not been addressed in %d subsequent tool calls:\n"+
+		"[diagnostic] Unaddressed issue from iter %d (%d calls ago):\n"+
 			"  Issue: %s\n"+
 			"  Source: %s\n\n"+
 			"Your recent actions appear productive but are NOT addressing this known issue.\n"+

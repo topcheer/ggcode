@@ -278,7 +278,7 @@ func (d *degradedResultState) checkAcknowledgment(assistantText string) string {
 
 func (d *degradedResultState) buildGuidance(toolName string) string {
 	tips := []string{
-		fmt.Sprintf("[Silent Degradation Propagation] Your %s call returned an empty or no-data result, but you continued reasoning as if it returned valid data.", toolName),
+		fmt.Sprintf("[degraded-result] %s returned empty/no-data result but you continued as if valid.", toolName),
 		"This is a leading cause of error cascades in agent systems (Galileo 2026).",
 		"Before continuing:",
 		"1. Explicitly acknowledge the degraded result in your reasoning",

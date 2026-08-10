@@ -118,10 +118,9 @@ func checkNilMapWrite(filePath, oldContent, newContent string) string {
 	}
 
 	var b strings.Builder
-	b.WriteString("[Nil map write detection] The following map variable(s) are written to without initialization (make/marshal), which causes a runtime panic in Go:\n")
+	b.WriteString("[nil-map-write] Maps written without make() initialization - will panic:\n")
 	for _, inst := range newInstances {
-		b.WriteString(fmt.Sprintf("  - %s: map '%s' is declared but never initialized with make() before write. "+
-			"Add `m = make(map[K]V)` before the first write, or initialize at declaration: `m := make(map[K]V)`.\n",
+		b.WriteString(fmt.Sprintf("  - %s: map '%s' needs `make()` before write.\n",
 			inst.posStr, inst.mapName))
 		// Note: the format string above uses two constant-joined parts as the format.
 		// This is safe because the concatenation result is still a constant string with %s verbs.

@@ -209,7 +209,7 @@ func checkUnsafeNumericConversion(filePath, oldContent, newContent string) strin
 	}
 
 	var b strings.Builder
-	b.WriteString("[Unsafe numeric conversion] The following conversion(s) may silently truncate, overflow, or produce incorrect results:\n")
+	b.WriteString("[unsafe-numeric-conversion] Conversions may truncate/overflow:\n")
 	for _, inst := range newInstances {
 		b.WriteString(fmt.Sprintf("  - %s: %s %s\n", inst.posStr, inst.pattern, inst.suggestion))
 	}

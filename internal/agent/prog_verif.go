@@ -53,7 +53,7 @@ func (t *progVerifTracker) checkAfterToolResult(toolName string, result string, 
 			if t.checkpoint == "edit_no_verify" {
 				t.fires++
 				t.checkpoint = "edit_no_verify"
-				return "[Progressive Verification] Multiple file edits without verification (build/test/lint). Consider running a build or test to catch issues early."
+				return "[progressive-verification] Multiple edits without build/test. Run verification."
 			}
 			t.checkpoint = "edit_no_verify"
 		}

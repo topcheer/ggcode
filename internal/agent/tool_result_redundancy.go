@@ -129,8 +129,8 @@ func (t *toolResultRedundancyState) recordResult(toolName, content string, itera
 				iteration, toolName, entry.toolName, jaccard)
 
 			return fmt.Sprintf(
-				"[tool-result-redundancy] The result of '%s' substantially overlaps (%.0f%%) with a prior '%s' call from iteration %d. You are paying double token cost for nearly identical information. Consider: (1) use the information already in context from the earlier call instead of re-fetching, (2) if you need something new, narrow your query to get only the non-overlapping portion, (3) skip this tool call entirely if the prior result answers your question.",
-				toolName, jaccard*100, entry.toolName, entry.iter,
+				"[tool-result-redundancy] '%s' overlaps (%.0f%%) with prior '%s' call. Use existing context instead of re-fetching.",
+				toolName, jaccard*100, entry.toolName,
 			)
 		}
 	}

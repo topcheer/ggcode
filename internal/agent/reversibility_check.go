@@ -88,9 +88,7 @@ func (r *reversibilityState) checkPreAction(toolName, args string) string {
 		if !r.testsRan && !r.buildRan && !r.stagingSeen {
 			r.warnCount++
 			debug.Log("agent", "reversibility: git_commit without prior verification (run #%d)", r.warnCount)
-			return "[Reversibility Check] You are about to commit without running tests or build verification in this session. " +
-				"A commit with hidden bugs is costly to revert (revert commit, force-push, or history rewrite). " +
-				"Consider running `go build` and `go test` on affected packages before committing to ensure the change set is sound."
+			return "[reversibility] Committing without tests/build. Run verification first."
 		}
 
 	case "run_command":
@@ -98,17 +96,14 @@ func (r *reversibilityState) checkPreAction(toolName, args string) string {
 		if isGitPush(lowerArgs) && !r.testsRan && !r.buildRan {
 			r.warnCount++
 			debug.Log("agent", "reversibility: git push without prior verification (run #%d)", r.warnCount)
-			return "[Reversibility Check] You are about to push to a remote without running tests or build verification. " +
-				"Pushed broken code triggers CI failures and may require force-push to fix, which is destructive. " +
-				"Run `go build` and `go test` locally before pushing to ensure correctness."
+			return "[reversibility] Pushing without local tests/build. Verify first."
 		}
 		// git reset --hard or git clean - these discard uncommitted work
 		// permanently and are not reversible.
 		if isDestructiveGit(lowerArgs) {
 			r.warnCount++
 			debug.Log("agent", "reversibility: destructive git command detected (run #%d)", r.warnCount)
-			return "[Reversibility Check] This git command permanently discards work (reset --hard, clean -f, etc.) and is NOT reversible. " +
-				"Verify you are not discarding uncommitted user changes. Consider `git stash` first as a safety net."
+			return "[reversibility] Destructive git command. Consider `git stash` first."
 		}
 
 	case "file_ops":
@@ -116,8 +111,7 @@ func (r *reversibilityState) checkPreAction(toolName, args string) string {
 		if strings.Contains(lowerArgs, `"action":"delete"`) || strings.Contains(lowerArgs, `"action": "delete"`) {
 			r.warnCount++
 			debug.Log("agent", "reversibility: file_ops delete detected (run #%d)", r.warnCount)
-			return "[Reversibility Check] You are about to delete a file. Deletion is not easily reversible if other files reference it. " +
-				"Verify no imports/references exist (use grep/lsp_references) before deleting."
+			return "[reversibility] Deleting file. Verify no references first."
 		}
 	}
 

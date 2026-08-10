@@ -269,11 +269,7 @@ func (s *toolStormState) maybeWarn() string {
 		lastIter, avgReasoning, len(toolSet), len(s.window))
 
 	return fmt.Sprintf(
-		"[Tool Call Storm] %d consecutive tool calls detected with thin reasoning (avg %d chars/iter, %d distinct tools). "+
-			"You are executing in burst mode without synthesizing results between calls. "+
-			"Pause to review what each tool result revealed before making the next call. "+
-			"Reasoning between tool calls improves grounding, reduces context waste, and prevents compounding errors. "+
-			"(Research: test-time scaling literature shows interleaved reflection improves agent quality -- arXiv:2506.12928)",
+		"[tool-storm] %d consecutive tool calls (avg %d chars/iter, %d tools). Pause and synthesize before next call.",
 		len(s.window), avgReasoning, len(toolSet),
 	)
 }

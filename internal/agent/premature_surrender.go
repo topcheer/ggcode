@@ -125,14 +125,7 @@ func (s *surrenderState) checkSurrender(assistantText string, currentIter, maxIt
 	debug.Log("surrender-detect", "premature surrender language detected at iter %d/%d (recent_errors=%d)", currentIter, maxIter, s.errorCount)
 
 	return fmt.Sprintf(
-		"[Premature Surrender] Your response suggests you're abandoning this goal or sub-task. "+
-			"You still have %d iterations remaining. Before giving up:\n"+
-			"1. Consider whether you've exhausted alternative approaches (different libraries, different algorithms, "+
-			"breaking the problem into smaller steps, or simplifying the solution).\n"+
-			"2. If you've hit a tool error, check whether a different tool or approach could achieve the same goal.\n"+
-			"3. If the task is genuinely blocked by external constraints (missing dependencies, permissions), "+
-			"clearly state what's blocked and what would unblock it.\n"+
-			"Re-engage with the task using a different strategy rather than surrendering.",
+		"[premature-surrender] Abandoning task with %d iterations remaining. Try a different approach or state what's blocking you.",
 		itersRemaining,
 	)
 }

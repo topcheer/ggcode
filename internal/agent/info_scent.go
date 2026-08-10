@@ -211,11 +211,7 @@ func (s *infoScentState) maybeWarn(iteration int) string {
 		iteration, consecutiveLow)
 
 	return fmt.Sprintf(
-		"[info-scent] Information scent has decayed: your last %d exploration calls yielded mostly already-seen paths (%s). "+
-			"You are foraging in a depleted information patch. Consider:\n"+
-			"1. Switch to a different search region (different directory/module/package)\n"+
-			"2. Transition from exploration to action -- you likely have enough context to start editing\n"+
-			"3. If genuinely stuck, ask the user for direction rather than continuing low-yield searches",
+		"[info-scent] Last %d exploration calls mostly revisited known paths (%s). Act on existing info or search new areas.",
 		consecutiveLow, strings.Join(tools, ", "))
 	// Note: tools slice already joined, no format injection risk
 }

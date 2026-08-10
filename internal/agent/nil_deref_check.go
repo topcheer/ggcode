@@ -103,7 +103,7 @@ func checkNilDerefAfterError(filePath, oldContent, newContent string) string {
 
 	newCount := len(instances) - oldCount
 	var b strings.Builder
-	b.WriteString("[Nil dereference after error] The following pointer(s) are dereferenced before checking the error return, which can cause a nil pointer panic:\n")
+	b.WriteString("[nil-deref-after-error] Pointers dereferenced before error check - may panic:\n")
 	flagged := 0
 	for _, inst := range instances {
 		if flagged >= newCount {

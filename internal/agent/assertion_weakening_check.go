@@ -182,7 +182,7 @@ func checkAssertionWeakening(filePath, oldContent, newContent string) string {
 	}
 
 	var sb strings.Builder
-	sb.WriteString("[Assertion Weakening] The following assertion changes may weaken test verification rather than fixing the code under test (specification gaming pattern):\n")
+	sb.WriteString("[assertion-weakening] Assertion changes may weaken test verification:\n")
 	for _, w := range warnings {
 		sb.WriteString("  - ")
 		sb.WriteString(w)

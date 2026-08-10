@@ -269,10 +269,7 @@ func (g *greenBuildIllusionState) maybeWarn() string {
 
 	g.fired = true
 	fileList := formatFileList(g.modifiedFiles, 5)
-	return "[Green Build Illusion] Source files were modified and a build-only command " +
-		"succeeded, but no test command was run before declaring completion. " +
-		"Compile success does not guarantee correctness - existing tests may now fail. " +
-		"Modified files: " + fileList + ". Run the test suite before concluding."
+	return "[green-build-illusion] Build succeeded but no tests run after edits. Modified: " + fileList + ". Run tests before concluding."
 }
 
 // extractGBIFilePath extracts file paths from tool arguments JSON.

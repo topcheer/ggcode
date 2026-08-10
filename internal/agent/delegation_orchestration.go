@@ -214,7 +214,7 @@ func (d *delegationState) maybeWarnOrphanedDelegations(iteration int) string {
 	debug.Log("agent", "Delegation orphan gate: %d unchecked delegations detected", len(orphans))
 
 	var sb strings.Builder
-	sb.WriteString("[Delegation Orchestration] You have delegated tasks but haven't checked their results in several iterations.\n\n")
+	sb.WriteString("[delegation] Delegated tasks not checked in several iterations.\n\n")
 	sb.WriteString("Unchecked delegations:\n")
 	for _, o := range orphans {
 		sb.WriteString("  - ")

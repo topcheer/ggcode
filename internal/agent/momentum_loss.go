@@ -188,10 +188,7 @@ func (m *momentumLossState) checkMomentumLoss(maxIter int) string {
 	debug.Log("momentum-loss", "late-phase productivity collapse detected at iter %d/%d (stall=%d)", m.currentIter, maxIter, stallCount)
 
 	return fmt.Sprintf(
-		"[Last-Mile Stall] You were productive in earlier iterations (edits/commands) but the last %d iterations "+
-			"contain only read-only/exploratory actions. If the task is not yet complete, re-engage with concrete actions "+
-			"(edits, fixes, test runs) to finish the work. If the task IS complete, provide a clear summary of what was accomplished. "+
-			"Avoid drifting into exploratory loops at the end of a run.",
+		"[momentum-loss] Only exploratory actions in last %d iterations after productive edits. Re-engage with concrete actions.",
 		stallCount,
 	)
 }

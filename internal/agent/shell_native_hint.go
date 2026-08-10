@@ -49,47 +49,47 @@ type shellNativePattern struct {
 var shellNativePatterns = []shellNativePattern{
 	{
 		regex:      regexp.MustCompile(`^\s*(cat|head|tail)\s+`),
-		suggestion: "[Hint: Consider using read_file instead of cat/head/tail - it provides line-numbered output essential for edit_file anchors.]",
+		suggestion: "[shell-hint] Use read_file tool instead.",
 	},
 	{
 		regex:      regexp.MustCompile(`^\s*(grep|rg|ack)\s+`),
-		suggestion: "[Hint: Consider using the grep tool instead of shell grep/rg - it provides structured output with file/line metadata, context lines, and glob filtering.]",
+		suggestion: "[shell-hint] Use grep tool instead.",
 	},
 	{
 		regex:      regexp.MustCompile(`^\s*find\s+`),
-		suggestion: "[Hint: Consider using the glob tool instead of find - it provides clean file path results with glob pattern matching.]",
+		suggestion: "[shell-hint] Use glob tool instead.",
 	},
 	{
 		regex:      regexp.MustCompile(`^\s*git\s+log\b`),
-		suggestion: "[Hint: Consider using git_log tool instead of 'git log' - it provides structured output with configurable count.]",
+		suggestion: "[shell-hint] Use built-in tool.",
 	},
 	{
 		regex:      regexp.MustCompile(`^\s*git\s+diff\b`),
-		suggestion: "[Hint: Consider using git_diff tool instead of 'git diff' - it provides structured diff output with cached/staged options.]",
+		suggestion: "[shell-hint] Use built-in tool.",
 	},
 	{
 		regex:      regexp.MustCompile(`^\s*git\s+status\b`),
-		suggestion: "[Hint: Consider using git_status tool instead of 'git status' - it provides clean porcelain output.]",
+		suggestion: "[shell-hint] Use built-in tool.",
 	},
 	{
 		regex:      regexp.MustCompile(`^\s*git\s+show\b`),
-		suggestion: "[Hint: Consider using git_show tool instead of 'git show' - it provides structured commit details with optional diffstat.]",
+		suggestion: "[shell-hint] Use built-in tool.",
 	},
 	{
 		regex:      regexp.MustCompile(`^\s*(ls|lla)\s+`),
-		suggestion: "[Hint: Consider using list_directory tool instead of ls - it provides structured file metadata (names, types, sizes).]",
+		suggestion: "[shell-hint] Use built-in tool.",
 	},
 	{
 		regex:      regexp.MustCompile(`^\s*git\s+branch\b`),
-		suggestion: "[Hint: Consider using git_branch_list tool instead of 'git branch' - it provides clean branch listing with remote option.]",
+		suggestion: "[shell-hint] Use built-in tool.",
 	},
 	{
 		regex:      regexp.MustCompile(`^\s*git\s+add\b`),
-		suggestion: "[Hint: Consider using git_add tool instead of 'git add' - it validates paths and provides clear staging feedback.]",
+		suggestion: "[shell-hint] Use built-in tool.",
 	},
 	{
 		regex:      regexp.MustCompile(`^\s*git\s+commit\b`),
-		suggestion: "[Hint: Consider using git_commit tool instead of 'git commit' - it appends Co-Authored-By trailer and runs pre-commit quality checks.]",
+		suggestion: "[shell-hint] Use built-in tool.",
 	},
 }
 

@@ -124,8 +124,7 @@ func (r *redundantReadState) checkRedundantRead(path string) string {
 
 	sizeKB := info.Size() / 1024
 	return fmt.Sprintf(
-		"[Context hint] You already read %s earlier in this session and it hasn't changed since (%dKB already in context). "+
-			"Re-reading wastes context budget. If you need specific details, reference the earlier read or use grep/search for targeted lookup instead.",
+		"[context-hint] %s already read (%dKB in context). Use earlier read or grep for specific lines.",
 		path, sizeKB,
 	)
 }

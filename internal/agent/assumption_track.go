@@ -206,14 +206,7 @@ func (a *Agent) maybeWarnAssumptions(text string) string {
 	}
 
 	return fmt.Sprintf(
-		"[%s-assumption] Detected %d implicit assumption(s) in your response "+
-			"(%d HIGH confidence, %d MEDIUM confidence). "+
-			"Each unverified assumption is a point where your implementation may "+
-			"diverge from the user's actual requirements. "+
-			"Before proceeding, verify critical assumptions by reading the codebase, "+
-			"checking documentation, or asking the user. "+
-			"Do not proceed on guesses for core architecture, data formats, or API contracts.\n"+
-			"Detected assumptions:\n%s",
+		"[%s-assumption] %d unverified assumption(s) (%d HIGH, %d MEDIUM). Verify before acting.\n%s",
 		severity, len(hits), highCount, len(hits)-highCount,
 		strings.Join(examples, "\n"),
 	)

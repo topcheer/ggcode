@@ -146,7 +146,7 @@ func (f *futileCycleState) maybeWarn(iteration int) string {
 			debug.Log("futile_cycle", "warning at iter %d: Jaccard=%.2f, %d shared files", iteration, jaccard, len(overlapFiles))
 
 			return fmt.Sprintf(
-				"[futile-cycle] You've re-read the same set of files (%s) that you explored earlier without making any edits in between. This circular exploration pattern wastes context tokens without progress. Consider: (1) you already know these files -- act on that knowledge by editing, (2) if you're stuck, try a fundamentally different approach or search strategy, (3) if you need more context, read NEW files you haven't explored yet.",
+				"[futile-cycle] Re-reading same files (%s) without edits. Act on existing knowledge or explore new files.",
 				sample,
 			)
 		}

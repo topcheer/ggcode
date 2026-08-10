@@ -198,10 +198,7 @@ func (s *silentErrorState) buildGuidance() string {
 		examples = append(examples, fmt.Sprintf("  %d. [%s] %s", i+1, ue.toolName, ue.errorSnippet))
 	}
 
-	return fmt.Sprintf("[Silent Error Warning] You have %d unaddressed tool errors but have moved on to new work without fixing them. "+
-		"Research shows silently accepted errors are the #1 predictor of trajectory failure. "+
-		"Please address these errors before proceeding:\n%s\n"+
-		"Fix the root cause of each error first, then continue.",
+	return fmt.Sprintf("[silent-error] %d unaddressed tool error(s) moved past. Fix before continuing:\n%s",
 		len(s.unresolvedErrors), strings.Join(examples, "\n"))
 }
 
