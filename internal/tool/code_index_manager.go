@@ -609,7 +609,102 @@ func (m *CodeIndexManager) periodicCheck() {
 		return
 	}
 
+	// Detect externally-modified files (e.g. via run_command, file_ops,
+	// or external editors) that weren't caught by MarkDirty.
+	m.scanForExternalChanges()
+
 	m.rebuildDirty("periodic")
+}
+
+// scanForExternalChanges walks the working directory and compares current
+// file mtimes against the indexed mtimes. Any file that is new, modified,
+// or deleted since the last index update is added to dirtyFiles so the next
+// rebuildDirty picks it up. This catches changes from run_command, file_ops,
+// or any other source that bypasses MarkDirty.
+func (m *CodeIndexManager) scanForExternalChanges() {
+	m.mu.RLock()
+	idx := m.index
+	m.mu.RUnlock()
+	if idx == nil {
+		return
+	}
+
+	// Build a snapshot of indexed paths → mtime from the persisted cache
+	// to avoid re-reading the disk cache file. We use the in-memory index
+	// plus a disk-cache mtime lookup.
+	indexedPaths := make(map[string]bool, len(idx.docs))
+	for _, doc := range idx.docs {
+		indexedPaths[doc.path] = true
+	}
+
+	// Load mtimes from disk cache for comparison.
+	var cachedMap map[string]int64
+	if data, err := os.ReadFile(m.indexPath); err == nil {
+		var pi persistedIndex
+		if json.Unmarshal(data, &pi) == nil && pi.Version == codeIndexVersion {
+			cachedMap = make(map[string]int64, len(pi.Docs))
+			for _, d := range pi.Docs {
+				cachedMap[d.Path] = d.Mtime
+			}
+		}
+	}
+	if cachedMap == nil {
+		return // no cache to compare against
+	}
+
+	found := make(map[string]bool)
+	newDirty := 0
+
+	_ = filepath.WalkDir(m.workingDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			if isSkipDir(d.Name()) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !isCodeFile(path) {
+			return nil
+		}
+		relPath, _ := filepath.Rel(m.workingDir, path)
+		found[relPath] = true
+
+		info, err := os.Stat(path)
+		if err != nil || info.Size() > codeIndexMaxFileSize {
+			return nil
+		}
+		mtime := info.ModTime().Unix()
+		cachedMtime, wasIndexed := cachedMap[relPath]
+
+		if !wasIndexed || cachedMtime != mtime {
+			// New or modified file not tracked by MarkDirty.
+			m.mu.Lock()
+			m.dirtyFiles[relPath] = mtime
+			m.mu.Unlock()
+			newDirty++
+		}
+		return nil
+	})
+
+	// Check for deleted files (in index but not on disk).
+	for p := range indexedPaths {
+		if !found[p] {
+			m.mu.Lock()
+			m.dirtyFiles[p] = -1 // -1 signals deletion
+			m.mu.Unlock()
+			newDirty++
+		}
+	}
+
+	if newDirty > 0 {
+		debug.Log("codeindex", "periodic scan detected %d externally-changed files", newDirty)
+		// Also update lastActivity since the workspace is being actively modified.
+		m.mu.Lock()
+		m.lastActivity = time.Now()
+		m.mu.Unlock()
+	}
 }
 
 // rebuildDirty performs a true incremental update for dirty files.
