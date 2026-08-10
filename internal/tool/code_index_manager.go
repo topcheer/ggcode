@@ -26,19 +26,19 @@ import (
 // subsequent sessions load the cache and only do incremental mtime-based
 // updates.
 type CodeIndexManager struct {
-	mu         sync.RWMutex
-	index      *bm25Index
-	ready      bool
-	building   bool
-	started    bool             // true after StartBackgroundIndex has been called
-	lastSearch time.Time        // last time Search() was called; used for idle release
-	dirtyFiles map[string]int64 // path → known mtime at last index
-	indexPath  string           // disk cache path
-	workingDir string
-	stopCh     chan struct{}
-	rebuildCh  chan struct{}              // signaled by MarkDirty to trigger immediate debounced rebuild
-	lockFile   *os.File                   // cross-process flock handle
-	onReady    func(stats CodeIndexStats) // optional callback when index build completes
+	mu           sync.RWMutex
+	index        *bm25Index
+	ready        bool
+	building     bool
+	started      bool             // true after StartBackgroundIndex has been called
+	lastActivity time.Time        // last time Search() or MarkDirty() was called; used for idle release
+	dirtyFiles   map[string]int64 // path → known mtime at last index
+	indexPath    string           // disk cache path
+	workingDir   string
+	stopCh       chan struct{}
+	rebuildCh    chan struct{}              // signaled by MarkDirty to trigger immediate debounced rebuild
+	lockFile     *os.File                   // cross-process flock handle
+	onReady      func(stats CodeIndexStats) // optional callback when index build completes
 
 	// indexStats tracks basic stats for debugging/logging.
 	stats CodeIndexStats
@@ -83,9 +83,10 @@ const (
 	codeIndexRebuildDebounce = 3 * time.Second
 )
 
-// codeIndexIdleRelease is how long the index sits idle (no Search calls)
-// before being released from memory. The disk cache persists, so the next
-// Search will reload from disk. Set to 60 minutes.
+// codeIndexIdleRelease is how long the index sits with no activity (no
+// Search or MarkDirty calls) before being released from memory. This ensures
+// active editing sessions keep the index alive, while truly idle sessions
+// eventually free memory. Disk cache persists. Set to 60 minutes.
 const codeIndexIdleRelease = 60 * time.Minute
 
 // NewCodeIndexManager creates a manager for the given working directory.
@@ -128,7 +129,7 @@ func (m *CodeIndexManager) StartBackgroundIndex() {
 	}
 	m.building = true
 	m.started = true
-	m.lastSearch = time.Now()
+	m.lastActivity = time.Now()
 	m.mu.Unlock()
 
 	safego.Go("codeindex.background", func() {
@@ -553,8 +554,9 @@ func (m *CodeIndexManager) persistIndex(ctx context.Context, docs []bm25Doc) {
 // triggered within codeIndexRebuildDebounce (3s), so the index reflects
 // edits promptly instead of waiting up to 5 minutes.
 //
-// Idle release: if the index hasn't been searched in codeIndexIdleRelease
-// (10 min), the in-memory index is freed. Disk cache persists.
+// Idle release: if the index hasn't had any activity (no Search or MarkDirty
+// calls) in codeIndexIdleRelease (60 min), the in-memory index is freed.
+// Disk cache persists.
 func (m *CodeIndexManager) backgroundLoop() {
 	ticker := time.NewTicker(codeIndexRebuildTick)
 	defer ticker.Stop()
@@ -591,7 +593,7 @@ func (m *CodeIndexManager) backgroundLoop() {
 func (m *CodeIndexManager) periodicCheck() {
 	// Check for idle release first.
 	m.mu.RLock()
-	idle := time.Since(m.lastSearch)
+	idle := time.Since(m.lastActivity)
 	ready := m.ready
 	m.mu.RUnlock()
 
@@ -782,6 +784,7 @@ func (m *CodeIndexManager) MarkDirty(paths []string) {
 	for _, p := range paths {
 		m.dirtyFiles[p] = time.Now().Unix()
 	}
+	m.lastActivity = time.Now()
 	ready := m.ready
 	started := m.started
 	m.mu.Unlock()
@@ -906,7 +909,7 @@ func fuzzySubsequenceMatch(s, query string) bool {
 
 func (m *CodeIndexManager) Search(query string, maxResults int) ([]bm25Result, error) {
 	m.mu.Lock()
-	m.lastSearch = time.Now()
+	m.lastActivity = time.Now()
 	ready := m.ready
 	building := m.building
 	m.mu.Unlock()
