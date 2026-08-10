@@ -194,6 +194,7 @@ type Agent struct {
 	compoundingFailure         *compoundingFailureState              // sliding-window cross-tool failure rate (strategy reset detection)
 	failureMode                *failureModeState                     // meta-level failure mode classification (transient/structural/systemic)
 	toolFallback               *toolFallbackState                    // tool error fallback chain (actionable recovery suggestions)
+	replan                     *replanState                          // dynamic replan detector (active path re-evaluation on persistent failures)
 	argSizeGuardFires          int                                   // count of argument size guard injections this run
 	fileFreshness              *fileFreshnessSentinel                // proactive cross-iteration external file change detection
 	readHash                   *readHashTracker                      // content-fingerprint read validity (sub-second mtime race detection, false-positive suppression)
@@ -468,6 +469,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		compoundingFailure:     newCompoundingFailureState(),
 		failureMode:            newFailureModeState(),
 		toolFallback:           newToolFallbackState(),
+		replan:                 newReplanState(),
 		contextFootprint:       newContextFootprintState(),
 		promptOps:              newPromptOpsState(),
 		cacheEffMonitor:        newCacheEffMonitor(),
@@ -1316,6 +1318,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.mcpEcosystem.reset()
 	a.resetBgOrphan()
 	a.actionAnnihil.reset()
+	a.replan.reset()
 	a.progVerif.reset()
 	a.exploreFrag.reset()
 	a.batchCoupling.reset()
@@ -4250,6 +4253,22 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				} else {
 					result.Content = modeGuidance
 				}
+			}
+
+			// Dynamic replan detection: trigger active path re-evaluation when
+			// the same tool fails repeatedly. Goes beyond static fallbacks by
+			// suggesting a complete approach rethink.
+			if result.IsError {
+				if replanGuidance := a.replan.recordResult(tc.Name, false, result.Content); replanGuidance != "" {
+					if result.Content != "" {
+						result.Content = result.Content + "\n\n" + replanGuidance
+					} else {
+						result.Content = replanGuidance
+					}
+				}
+			} else {
+				// Record success to reset failure counters.
+				a.replan.recordResult(tc.Name, true, "")
 			}
 
 			// Error cascade detection: when multiple errors share a common root
