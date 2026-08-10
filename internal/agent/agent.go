@@ -148,6 +148,7 @@ type Agent struct {
 	toolCallBudget             *toolCallBudget                       // per-session tool invocation limit (action-level guardrail)
 	cacheKeepalive             *cacheKeepaliveState                  // prompt cache warming pings during idle (Anthropic)
 	trajectoryEnhance          *trajectoryEnhancer                   // self-improvement via successful pattern learning (sa-120)
+	uProp                      *uPropState                           // uncertainty propagation tracking (UProp: arXiv:2506.17419)
 	commandCache               *commandCache                         // deterministic build/test command result caching
 	emptySearch                *emptySearchState                     // empty search spiral detection (futile search guidance)
 	degradedResult             *degradedResultState                  // silent degradation propagation detection (Galileo error propagation chain)
@@ -405,6 +406,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		speculator:             newSpeculator(),
 		toolMemo:               newToolMemo(),
 		confidence:             newConfidenceState(),
+		uProp:                  newUPropState(),
 		verifDebt:              newVerificationDebtState(),
 		undoBlind:              newUndoBlindState(),
 		editAbandon:            newEditAbandonState(),
