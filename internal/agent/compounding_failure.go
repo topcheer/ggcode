@@ -194,14 +194,7 @@ func (c *compoundingFailureState) check() string {
 		failRate*100, failCount, len(c.window), categoryCount, strings.Join(cats, ", "))
 
 	return fmt.Sprintf(
-		"[strategy reset] %d of your last %d tool calls failed (%.0f%% failure rate) across %d different areas: %s.\n"+
-			"Intermittent successes (e.g., successful file reads) are masking a systemic problem - your overall approach is not working.\n"+
-			"Take a fundamentally different path:\n"+
-			"1. Re-read ALL relevant files from scratch - your mental model of the codebase is likely outdated or incorrect\n"+
-			"2. Identify the ROOT CAUSE common to these failures, not individual symptoms\n"+
-			"3. If the task involves unfamiliar code, explore the architecture first before making changes\n"+
-			"4. Consider using ask_user if you are blocked by ambiguity or missing context\n"+
-			"5. If you have partial work, commit what works and restart the failing parts from a clean state",
+		"[strategy-reset] %d/%d tool calls failed (%.0f%%) across %d areas: %s. Change approach: re-read files, find root cause.",
 		failCount, len(c.window), failRate*100, categoryCount, strings.Join(cats, ", "),
 	)
 }

@@ -154,18 +154,9 @@ func (s *errorRushState) check() string {
 
 	s.warnCount++
 
-	const firstWarnFormat = "[Error Rush / Panic Coding] You are issuing edits immediately after %d consecutive error(s) " +
-		"without reading or analyzing the error output in between. " +
-		"Research (Agentic Overconfidence, arXiv 2026; AgentDiet, FSE 2026) shows this \"blind-fixing\" " +
-		"pattern compounds errors: fixes based on incomplete error understanding rarely succeed. " +
-		"SLOW DOWN. Before your next edit: (1) re-read the error message carefully, " +
-		"(2) read_file the relevant code section to understand the actual state, " +
-		"(3) verify your fix targets the root cause, not the symptom."
+	const firstWarnFormat = "[error-rush] Editing after %d consecutive error(s) without analysis. Re-read error and code before next edit."
 
-	const repeatWarnFormat = "[Error Rush / Panic Coding] This is your %dth+ blind-fix attempt after errors. " +
-		"Repeatedly editing without diagnosis between failures is a known failure mode " +
-		"(Agentic Overconfidence, arXiv 2026). STOP editing. Read the error. " +
-		"Read the file. Understand WHY the previous fix failed before trying another."
+	const repeatWarnFormat = "[error-rush] %dth blind-fix attempt. STOP editing. Read the error and understand why prior fix failed."
 
 	var guidance string
 	if s.rushCount > 1 {

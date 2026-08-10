@@ -244,10 +244,7 @@ func (s *foresightCalibrateState) checkCalibration(toolName string, resultConten
 	if s.mismatches >= 3 && s.warnCount < 2 {
 		s.warnCount++
 		return fmt.Sprintf(
-			"[Foresight Calibration] Your predictions about tool outcomes have been wrong %d times in this run "+
-				"(e.g., \"%s\" -- %s). This suggests your mental model of the codebase/API/system may be incorrect. "+
-				"Before your next action, verify your assumptions by reading the actual state rather than predicting it. "+
-				"Stop assuming -- start observing.",
+			"[foresight] Predictions wrong %d times (e.g., \"%s\" -- %s). Verify assumptions by reading actual state.",
 			s.mismatches, pred.snippet, mismatchDetail,
 		)
 	}

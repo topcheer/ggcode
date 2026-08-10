@@ -121,14 +121,7 @@ func (s *strategyFixationState) check() string {
 		s.warnCount++
 		fname := shortFileName(file)
 		return fmt.Sprintf(
-			"[Strategy Fixation] You have edited %s %d times with %d associated failed verification(s). "+
-				"This pattern suggests the current approach to this file is not converging. "+
-				"PARC research (arXiv:2512.03549) identifies this as an approach-level failure -- "+
-				"incremental tweaks to the same strategy that never succeeds. "+
-				"Consider: (1) re-reading the full file to understand the root cause, "+
-				"(2) reverting your changes to this file and trying a fundamentally different approach, "+
-				"(3) checking whether the error stems from a different file or dependency. "+
-				"Do not continue applying the same strategy.",
+			"[strategy-fixation] Edited %s %d times with %d failures. Approach not converging - re-read file or try different strategy.",
 			fname, editCount, failCount,
 		)
 	}
