@@ -230,6 +230,7 @@ type Agent struct {
 	cfDep                      *cfDepState                           // counterfactual dependency detection (dependent tool calls in same batch)
 	guidanceBudget             guidanceBudget                        // per-turn guidance injection limiter (caps context pollution from detector alerts)
 	abstainDetect              *abstainState                         // agentic abstention detection (untimely continuation after negative signals)
+	policyVerifier             *PolicyVerifierService                // formal policy verification: intercepts and verifies actions before execution (AgentVerify/VeriGuard-inspired)
 	phantomOutput              *phantomState                         // phantom output inheritance detection (building on failed tool results)
 	toolStorm                  *toolStormState                       // tool call storm detection (diverse tools fired without reasoning)
 	reasoningRedund            *reasoningRedundancyState             // reasoning redundancy detection (consecutive text-only overthinking)
@@ -479,6 +480,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		failureMode:            newFailureModeState(),
 		toolFallback:           newToolFallbackState(),
 		replan:                 newReplanState(),
+		policyVerifier:         NewPolicyVerifierService(),
 		contextFootprint:       newContextFootprintState(),
 		promptOps:              newPromptOpsState(),
 		cacheEffMonitor:        newCacheEffMonitor(),
