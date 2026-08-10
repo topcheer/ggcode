@@ -311,6 +311,7 @@ type Agent struct {
 	toolTargetMismatch         *toolTargetState                      // tool-target mismatch detection (stated intent vs actual tool target)
 	outcomeMisattrib           *outcomeMisattribState                // outcome misattribution detection (success claim despite failure result)
 	trajectoryHealth           *trajectoryHealthState                // metacognitive trajectory health synthesis (multi-signal composite)
+	patternLearner             *patternLearner                       // successful trajectory pattern learning (Agent-R self-training)
 	tokenWasteBudget           *tokenWasteBudgetState                // aggregate token waste ratio tracker (AgentDiet arXiv:2509.23586)
 	reversibility              *reversibilityState                   // pre-action reversibility assessment (irreversible action safety check)
 	mindlessAction             *mindlessActionState                  // mindless action detection (rapid-fire tool calls without reasoning)
@@ -565,6 +566,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		compoundedUncert:       newCompoundedUncertaintyState(),
 		spiralState:            newSpiralHallucinationState(),
 		trajectoryHealth:       newTrajectoryHealthState(),
+		patternLearner:         newPatternLearner(),
 		tokenWasteBudget:       newTokenWasteBudgetState(),
 		mindlessAction:         newMindlessActionState(),
 		strategyStagnation:     newStrategyStagnationState(),
@@ -2953,6 +2955,14 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				a.trajectoryHealth.recordIteration(eCnt, 0, len(toolCalls), rCnt, assCnt)
 			}
 
+			// Trajectory pattern learner (Agent-R self-training): record
+			// tool sequences from this iteration for pattern extraction.
+			if a.patternLearner != nil {
+				for _, tc := range toolCalls {
+					a.patternLearner.recordToolCall(tc.Name, false)
+				}
+			}
+
 			// Trajectory health warning: when composite score exceeds threshold,
 			// inject holistic guidance about accumulating risk.
 			if healthHint := a.maybeWarnTrajectoryHealth(); healthHint != "" {
@@ -2962,6 +2972,19 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					Content: []provider.ContentBlock{{
 						Type: "text",
 						Text: healthHint,
+					}},
+				})
+			}
+
+			// Pattern learning suggestion: when recent tools match learned
+			// successful patterns, suggest following the established sequence.
+			if patternHint := a.checkPatternSuggestion(getRecentToolNames(toolCalls)); patternHint != "" {
+				debug.Log("agent", "Iteration %d: pattern learner found matching successful trajectory", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: patternHint,
 					}},
 				})
 			}
