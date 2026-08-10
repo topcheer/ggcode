@@ -138,11 +138,9 @@ func (m *metacognitiveMonitor) detectsContradiction(current, previous cognitiveT
 	return false
 }
 
-// evaluateConsistency analyzes the cognitive state history.
-func (m *metacognitiveMonitor) evaluateConsistency() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
+// evaluateConsistencyLocked analyzes the cognitive state history.
+// Caller must hold m.mu.
+func (m *metacognitiveMonitor) evaluateConsistencyLocked() {
 	if len(m.turns) < 2 {
 		return
 	}
@@ -151,6 +149,22 @@ func (m *metacognitiveMonitor) evaluateConsistency() {
 	interpretationStability := m.calculateInterpretationStability()
 
 	m.consistencyScore = 0.6*actionCoherence + 0.4*interpretationStability
+
+	// Factor in contradiction penalties detected during recordTurn
+	contradictionCount := 0
+	for _, t := range m.turns {
+		if t.hasContradiction {
+			contradictionCount++
+		}
+	}
+	if contradictionCount > 0 {
+		penalty := float64(contradictionCount) * metaContradictionPenalty
+		if penalty > 1.0 {
+			penalty = 1.0
+		}
+		m.consistencyScore *= (1.0 - penalty)
+	}
+
 	m.instabilityIndex = 1.0 - m.consistencyScore
 }
 
@@ -216,7 +230,7 @@ func (m *metacognitiveMonitor) maybeIntervene() string {
 		return ""
 	}
 
-	m.evaluateConsistency()
+	m.evaluateConsistencyLocked()
 
 	if m.consistencyScore >= metaConsistencyThreshold {
 		return ""
@@ -297,7 +311,7 @@ func isMetaOppositeAction(a, b string) bool {
 	opposites := map[string]string{
 		"add":     "delete",
 		"delete":  "add",
-		"create":  "remove",
+		"create":  "delete",
 		"remove":  "create",
 		"enable":  "disable",
 		"disable": "enable",

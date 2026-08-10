@@ -339,7 +339,7 @@ func formatToolResultText(tr *ToolResultInfo) string {
 
 	// Default: prettified tool name
 	pretty := prettifyToolName(tr.ToolName)
-	output := strings.TrimSpace(tr.Result)
+	output := strings.TrimSpace(redactResult(tr.Result))
 	if output != "" {
 		return fmt.Sprintf("🔧 %s\n```\n%s\n```", pretty, output)
 	}

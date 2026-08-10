@@ -10,12 +10,12 @@ func TestMetacognitiveMonitor_Basic(t *testing.T) {
 		t.Fatal("newMetacognitiveMonitor returned nil")
 	}
 
-	// Record some turns
-	m.recordTurn("read_file", "read config file", "this suggests the config is missing")
-	m.recordTurn("edit_file", "edit config file", "I believe this fixes the issue")
-	m.recordTurn("write_file", "write config file", "this means the issue is resolved")
+	// Record consistent turns (same plan, no contradictions)
+	m.recordTurn("read_file", "read config file", "the config needs updating")
+	m.recordTurn("read_file", "read config file", "the config needs updating")
+	m.recordTurn("read_file", "read config file", "the config needs updating")
 
-	// Should not trigger intervention yet (consistency is high)
+	// Should not trigger intervention (consistency is high)
 	if hint := m.maybeIntervene(); hint != "" {
 		t.Errorf("Expected no intervention, got: %s", hint)
 	}
@@ -24,9 +24,11 @@ func TestMetacognitiveMonitor_Basic(t *testing.T) {
 func TestMetacognitiveMonitor_Contradiction(t *testing.T) {
 	m := newMetacognitiveMonitor()
 
-	// Record contradictory turns
-	m.recordTurn("read_file", "delete file X", "this file is broken")
-	m.recordTurn("create_file", "create file X", "this file is necessary")
+	// Record contradictory turns (need metaMinTurns=3 to trigger)
+	// Use add/delete which is an actual opposite pair in isMetaOppositeAction
+	m.recordTurn("read_file", "add file X", "this file is necessary")
+	m.recordTurn("edit_file", "delete file X", "this file is broken")
+	m.recordTurn("delete_file", "add file X again", "this file is necessary again")
 
 	// Should detect contradiction
 	if hint := m.maybeIntervene(); hint == "" {

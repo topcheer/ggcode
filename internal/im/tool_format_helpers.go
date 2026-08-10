@@ -8,8 +8,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/topcheer/ggcode/internal/security"
 	"github.com/topcheer/ggcode/internal/tool"
 )
+
+// redactResult masks secrets in tool result text for safe display in IM.
+func redactResult(s string) string {
+	return security.RedactForDisplay(s)
+}
 
 // imLabel returns a localized label string for IM tool display.
 func imLabel(lang ToolLanguage, key string) string {
@@ -483,13 +489,13 @@ func formatIMAskUserResult(tr *ToolResultInfo) string {
 
 // formatIMStartCommandResult renders start_command result.
 func formatIMStartCommandResult(tr *ToolResultInfo) string {
-	return "⚡ " + tool.StartCommandResultText(tr.Result, tr.IsError)
+	return "⚡ " + tool.StartCommandResultText(redactResult(tr.Result), tr.IsError)
 }
 
 // formatIMStopCommandResult renders stop_command result.
 func formatIMStopCommandResult(tr *ToolResultInfo) string {
 	lang := toolLang(tr.Lang)
-	output := strings.TrimSpace(tr.Result)
+	output := strings.TrimSpace(redactResult(tr.Result))
 	if tr.IsError {
 		return fmt.Sprintf("🛑 %s\n```\n%s\n```", imLabel(lang, "stop_command"), output)
 	}
@@ -502,7 +508,7 @@ func formatIMStopCommandResult(tr *ToolResultInfo) string {
 // formatIMReadCmdOutputResult renders read_command_output result.
 func formatIMReadCmdOutputResult(tr *ToolResultInfo) string {
 	lang := toolLang(tr.Lang)
-	output := strings.TrimSpace(tr.Result)
+	output := strings.TrimSpace(redactResult(tr.Result))
 	if tr.IsError {
 		return fmt.Sprintf("📄 %s\n```\n%s\n```", imLabel(lang, "read_output"), output)
 	}
@@ -515,7 +521,7 @@ func formatIMReadCmdOutputResult(tr *ToolResultInfo) string {
 // formatIMWaitCommandResult renders wait_command result.
 func formatIMWaitCommandResult(tr *ToolResultInfo) string {
 	lang := toolLang(tr.Lang)
-	output := strings.TrimSpace(tr.Result)
+	output := strings.TrimSpace(redactResult(tr.Result))
 	if tr.IsError {
 		return fmt.Sprintf("⏳ %s\n```\n%s\n```", imLabel(lang, "wait_command"), output)
 	}
@@ -528,7 +534,7 @@ func formatIMWaitCommandResult(tr *ToolResultInfo) string {
 // formatIMWriteCmdInputResult renders write_command_input result.
 func formatIMWriteCmdInputResult(tr *ToolResultInfo) string {
 	lang := toolLang(tr.Lang)
-	output := strings.TrimSpace(tr.Result)
+	output := strings.TrimSpace(redactResult(tr.Result))
 	if tr.IsError {
 		return fmt.Sprintf("⌨ %s\n```\n%s\n```", imLabel(lang, "send_input"), output)
 	}
@@ -541,7 +547,7 @@ func formatIMWriteCmdInputResult(tr *ToolResultInfo) string {
 // formatIMListCommandsResult renders list_commands result.
 func formatIMListCommandsResult(tr *ToolResultInfo) string {
 	lang := toolLang(tr.Lang)
-	output := strings.TrimSpace(tr.Result)
+	output := strings.TrimSpace(redactResult(tr.Result))
 	if tr.IsError {
 		return fmt.Sprintf("📋 %s\n```\n%s\n```", imLabel(lang, "active_commands"), output)
 	}
@@ -560,7 +566,7 @@ func formatIMSpawnAgentResult(tr *ToolResultInfo) string {
 		name = "sub-agent"
 	}
 	if tr.IsError {
-		output := strings.TrimSpace(tr.Result)
+		output := strings.TrimSpace(redactResult(tr.Result))
 		return fmt.Sprintf("🤖 %s\n```\n%s\n```", name, output)
 	}
 	return fmt.Sprintf("🤖 %s", name)
@@ -569,7 +575,7 @@ func formatIMSpawnAgentResult(tr *ToolResultInfo) string {
 // formatIMWaitAgentResult renders wait_agent result.
 func formatIMWaitAgentResult(tr *ToolResultInfo) string {
 	lang := toolLang(tr.Lang)
-	output := strings.TrimSpace(tr.Result)
+	output := strings.TrimSpace(redactResult(tr.Result))
 	if tr.IsError {
 		return fmt.Sprintf("🤖 %s\n```\n%s\n```", imLabel(lang, "sub_task"), output)
 	}
@@ -582,7 +588,7 @@ func formatIMWaitAgentResult(tr *ToolResultInfo) string {
 // formatIMListAgentsResult renders list_agents result.
 func formatIMListAgentsResult(tr *ToolResultInfo) string {
 	lang := toolLang(tr.Lang)
-	output := strings.TrimSpace(tr.Result)
+	output := strings.TrimSpace(redactResult(tr.Result))
 	if tr.IsError {
 		return fmt.Sprintf("🤖 %s\n```\n%s\n```", imLabel(lang, "sub_task_list"), output)
 	}
@@ -597,7 +603,7 @@ func formatIMListAgentsResult(tr *ToolResultInfo) string {
 // formatIMMCPCapabilitiesResult renders list_mcp_capabilities result.
 func formatIMMCPCapabilitiesResult(tr *ToolResultInfo) string {
 	lang := toolLang(tr.Lang)
-	output := strings.TrimSpace(tr.Result)
+	output := strings.TrimSpace(redactResult(tr.Result))
 	if tr.IsError {
 		return fmt.Sprintf("🔗 %s\n```\n%s\n```", imLabel(lang, "mcp_service"), output)
 	}
@@ -609,7 +615,7 @@ func formatIMMCPCapabilitiesResult(tr *ToolResultInfo) string {
 
 // formatIMMCPPromptResult renders get_mcp_prompt result.
 func formatIMMCPPromptResult(tr *ToolResultInfo) string {
-	output := strings.TrimSpace(tr.Result)
+	output := strings.TrimSpace(redactResult(tr.Result))
 	if tr.IsError {
 		return fmt.Sprintf("🔗 MCP Prompt\n```\n%s\n```", output)
 	}
@@ -622,7 +628,7 @@ func formatIMMCPPromptResult(tr *ToolResultInfo) string {
 // formatIMMCPResourceResult renders read_mcp_resource result.
 func formatIMMCPResourceResult(tr *ToolResultInfo) string {
 	lang := toolLang(tr.Lang)
-	output := strings.TrimSpace(tr.Result)
+	output := strings.TrimSpace(redactResult(tr.Result))
 	if tr.IsError {
 		return fmt.Sprintf("🔗 %s\n```\n%s\n```", imLabel(lang, "resource_read"), output)
 	}
@@ -637,7 +643,7 @@ func formatIMMCPResourceResult(tr *ToolResultInfo) string {
 // formatIMSkillResult renders skill result.
 func formatIMSkillResult(tr *ToolResultInfo) string {
 	lang := toolLang(tr.Lang)
-	output := strings.TrimSpace(tr.Result)
+	output := strings.TrimSpace(redactResult(tr.Result))
 	if tr.IsError {
 		return fmt.Sprintf("🔧 %s\n```\n%s\n```", imLabel(lang, "skill_load"), output)
 	}
@@ -650,7 +656,7 @@ func formatIMSkillResult(tr *ToolResultInfo) string {
 // formatIMSaveMemoryResult renders save_memory result.
 func formatIMSaveMemoryResult(tr *ToolResultInfo) string {
 	lang := toolLang(tr.Lang)
-	output := strings.TrimSpace(tr.Result)
+	output := strings.TrimSpace(redactResult(tr.Result))
 	if tr.IsError {
 		return fmt.Sprintf("💾 %s\n```\n%s\n```", imLabel(lang, "memory_save"), output)
 	}
@@ -663,7 +669,7 @@ func formatIMSaveMemoryResult(tr *ToolResultInfo) string {
 // formatIMDeleteMemoryResult renders delete_memory result.
 func formatIMDeleteMemoryResult(tr *ToolResultInfo) string {
 	lang := toolLang(tr.Lang)
-	output := strings.TrimSpace(tr.Result)
+	output := strings.TrimSpace(redactResult(tr.Result))
 	if tr.IsError {
 		return fmt.Sprintf("🗑️ %s\n```\n%s\n```", imLabel(lang, "memory_delete"), output)
 	}
@@ -677,7 +683,7 @@ func formatIMDeleteMemoryResult(tr *ToolResultInfo) string {
 // because the user already saw "⏳ Sleep for Xs" at ToolCall time.
 func formatIMSleepResult(tr *ToolResultInfo) string {
 	if tr.IsError {
-		return fmt.Sprintf("⏳ Sleep\n```\n%s\n```", strings.TrimSpace(tr.Result))
+		return fmt.Sprintf("⏳ Sleep\n```\n%s\n```", strings.TrimSpace(redactResult(tr.Result)))
 	}
 	// Suppress successful sleep results — the ToolCall event already
 	// told the user "⏳ Sleep for Xs", no need to repeat.
@@ -687,7 +693,7 @@ func formatIMSleepResult(tr *ToolResultInfo) string {
 // formatIMCronCreateResult renders cron_create result.
 func formatIMCronCreateResult(tr *ToolResultInfo) string {
 	if tr.IsError {
-		return fmt.Sprintf("⏰ Cron\n```\n%s\n```", strings.TrimSpace(tr.Result))
+		return fmt.Sprintf("⏰ Cron\n```\n%s\n```", strings.TrimSpace(redactResult(tr.Result)))
 	}
 	// Result is JSON: {"ID":"cron-1","CronExpr":"*/5 * * * *",...}
 	var job struct {
@@ -696,7 +702,7 @@ func formatIMCronCreateResult(tr *ToolResultInfo) string {
 		Prompt    string `json:"Prompt"`
 		Recurring bool   `json:"Recurring"`
 	}
-	if err := json.Unmarshal([]byte(strings.TrimSpace(tr.Result)), &job); err != nil {
+	if err := json.Unmarshal([]byte(strings.TrimSpace(redactResult(tr.Result))), &job); err != nil {
 		return "⏰ Cron job created"
 	}
 	return fmt.Sprintf("⏰ Cron job created: `%s` → %q", job.CronExpr, truncateStr(job.Prompt, 50))
@@ -705,7 +711,7 @@ func formatIMCronCreateResult(tr *ToolResultInfo) string {
 // formatIMCronDeleteResult renders cron_delete result.
 func formatIMCronDeleteResult(tr *ToolResultInfo) string {
 	if tr.IsError {
-		return fmt.Sprintf("⏰ Cron\n```\n%s\n```", strings.TrimSpace(tr.Result))
+		return fmt.Sprintf("⏰ Cron\n```\n%s\n```", strings.TrimSpace(redactResult(tr.Result)))
 	}
 	return "⏰ Cron job deleted"
 }
@@ -713,9 +719,9 @@ func formatIMCronDeleteResult(tr *ToolResultInfo) string {
 // formatIMCronListResult renders cron_list result.
 func formatIMCronListResult(tr *ToolResultInfo) string {
 	if tr.IsError {
-		return fmt.Sprintf("⏰ Cron\n```\n%s\n```", strings.TrimSpace(tr.Result))
+		return fmt.Sprintf("⏰ Cron\n```\n%s\n```", strings.TrimSpace(redactResult(tr.Result)))
 	}
-	output := strings.TrimSpace(tr.Result)
+	output := strings.TrimSpace(redactResult(tr.Result))
 	if output == "" || strings.Contains(output, "No scheduled jobs") {
 		return "⏰ No scheduled cron jobs"
 	}
@@ -724,7 +730,7 @@ func formatIMCronListResult(tr *ToolResultInfo) string {
 
 // formatIMTeammateResultsResult renders teammate_results result with body markdown.
 func formatIMTeammateResultsResult(tr *ToolResultInfo) string {
-	output := strings.TrimSpace(tr.Result)
+	output := strings.TrimSpace(redactResult(tr.Result))
 	if tr.IsError {
 		return fmt.Sprintf("📋 收集团队结果\n```\n%s\n```", output)
 	}
@@ -737,9 +743,9 @@ func formatIMTeammateResultsResult(tr *ToolResultInfo) string {
 // formatIMWorktreeResult renders enter_worktree/exit_worktree results.
 func formatIMWorktreeResult(icon string, tr *ToolResultInfo) string {
 	if tr.IsError {
-		return fmt.Sprintf("%s Worktree\n```\n%s\n```", icon, strings.TrimSpace(tr.Result))
+		return fmt.Sprintf("%s Worktree\n```\n%s\n```", icon, strings.TrimSpace(redactResult(tr.Result)))
 	}
-	output := strings.TrimSpace(tr.Result)
+	output := strings.TrimSpace(redactResult(tr.Result))
 	if output == "" {
 		return fmt.Sprintf("%s Worktree", icon)
 	}
@@ -766,7 +772,7 @@ func formatSleepDuration(args string) string {
 // formatIMErrorResult formats error results for any tool.
 func formatIMErrorResult(tr *ToolResultInfo) string {
 	pretty := prettifyToolName(tr.ToolName)
-	output := strings.TrimSpace(tr.Result)
+	output := strings.TrimSpace(redactResult(tr.Result))
 	if output != "" {
 		return fmt.Sprintf("🔧 %s\n```\n%s\n```", pretty, output)
 	}
@@ -781,7 +787,7 @@ func formatIMCommandResult(tr *ToolResultInfo) string {
 		cmd = tr.Detail
 	}
 	if tr.IsError {
-		output := strings.TrimSpace(tr.Result)
+		output := strings.TrimSpace(redactResult(tr.Result))
 		if cmd != "" {
 			return fmt.Sprintf("❌\n```\n%s\n```\n```\n%s\n```", cmd, output)
 		}
@@ -830,7 +836,7 @@ func formatIMReadFileResult(tr *ToolResultInfo) string {
 	}
 	baseName := filepath.Base(path)
 	icon := imFileExtIcon(path)
-	output := strings.TrimSpace(tr.Result)
+	output := strings.TrimSpace(redactResult(tr.Result))
 
 	if tr.IsError {
 		if path != "" {
@@ -912,13 +918,13 @@ func formatIMListDirResult(tr *ToolResultInfo) string {
 		path = tr.Detail
 	}
 	if tr.IsError {
-		output := strings.TrimSpace(tr.Result)
+		output := strings.TrimSpace(redactResult(tr.Result))
 		if path != "" {
 			return fmt.Sprintf("📂 %s\n```\n%s\n```", path, output)
 		}
 		return fmt.Sprintf("📂 List\n```\n%s\n```", output)
 	}
-	count := countResultLines(strings.TrimSpace(tr.Result))
+	count := countResultLines(strings.TrimSpace(redactResult(tr.Result)))
 	if path != "" {
 		return fmt.Sprintf("📂 %s (%d items)", path, count)
 	}
@@ -932,7 +938,7 @@ func formatIMGlobResult(tr *ToolResultInfo) string {
 	if pattern == "" {
 		pattern = tr.Detail
 	}
-	output := strings.TrimSpace(tr.Result)
+	output := strings.TrimSpace(redactResult(tr.Result))
 	if tr.IsError {
 		if pattern != "" {
 			return fmt.Sprintf("🔍 `%s`\n```\n%s\n```", pattern, output)
@@ -956,9 +962,9 @@ func formatIMEditResult(tr *ToolResultInfo) string {
 	icon := "✏"
 	if tr.IsError {
 		if path != "" {
-			return fmt.Sprintf("%s %s\n```\n%s\n```", icon, baseName, strings.TrimSpace(tr.Result))
+			return fmt.Sprintf("%s %s\n```\n%s\n```", icon, baseName, strings.TrimSpace(redactResult(tr.Result)))
 		}
-		return fmt.Sprintf("%s Edit\n```\n%s\n```", icon, strings.TrimSpace(tr.Result))
+		return fmt.Sprintf("%s Edit\n```\n%s\n```", icon, strings.TrimSpace(redactResult(tr.Result)))
 	}
 	// Parse added/removed from rawArgs (same logic as TUI renderEditDiff)
 	added, removed := countEditLines(tr.Args)
@@ -979,9 +985,9 @@ func formatIMWriteResult(tr *ToolResultInfo) string {
 	icon := "📝"
 	if tr.IsError {
 		if path != "" {
-			return fmt.Sprintf("%s %s\n```\n%s\n```", icon, baseName, strings.TrimSpace(tr.Result))
+			return fmt.Sprintf("%s %s\n```\n%s\n```", icon, baseName, strings.TrimSpace(redactResult(tr.Result)))
 		}
-		return fmt.Sprintf("%s Write\n```\n%s\n```", icon, strings.TrimSpace(tr.Result))
+		return fmt.Sprintf("%s Write\n```\n%s\n```", icon, strings.TrimSpace(redactResult(tr.Result)))
 	}
 	// Count lines from content arg in rawArgs (same logic as TUI renderFileLineCount)
 	lines := countWriteLines(tr.Args)
@@ -1006,9 +1012,9 @@ func formatIMMultiEditResult(tr *ToolResultInfo) string {
 			AppliedEditCount int    `json:"applied_edit_count"`
 		} `json:"results"`
 	}
-	if err := json.Unmarshal([]byte(strings.TrimSpace(tr.Result)), &raw); err != nil {
+	if err := json.Unmarshal([]byte(strings.TrimSpace(redactResult(tr.Result))), &raw); err != nil {
 		// Non-JSON result — show trimmed output
-		return fmt.Sprintf("✏ %s", strings.TrimSpace(tr.Result))
+		return fmt.Sprintf("✏ %s", strings.TrimSpace(redactResult(tr.Result)))
 	}
 	successCount := 0
 	failedCount := 0
@@ -1041,7 +1047,7 @@ func formatIMMultiWriteResult(tr *ToolResultInfo) string {
 		return formatIMErrorResult(tr)
 	}
 	// multi_file_write returns "Successfully wrote N files" or similar
-	output := strings.TrimSpace(tr.Result)
+	output := strings.TrimSpace(redactResult(tr.Result))
 	if output == "" {
 		return fmt.Sprintf("📝 %s", imLabel(lang, "write_multi"))
 	}
@@ -1083,9 +1089,9 @@ func formatIMNotebookEditResult(tr *ToolResultInfo) string {
 	icon := "📓"
 	if tr.IsError {
 		if path != "" {
-			return fmt.Sprintf("%s %s\n```\n%s\n```", icon, baseName, strings.TrimSpace(tr.Result))
+			return fmt.Sprintf("%s %s\n```\n%s\n```", icon, baseName, strings.TrimSpace(redactResult(tr.Result)))
 		}
-		return fmt.Sprintf("%s Notebook\n```\n%s\n```", icon, strings.TrimSpace(tr.Result))
+		return fmt.Sprintf("%s Notebook\n```\n%s\n```", icon, strings.TrimSpace(redactResult(tr.Result)))
 	}
 	if path == "" {
 		return fmt.Sprintf("%s %s", icon, imLabel(lang, "edit_notebook"))
@@ -1098,7 +1104,7 @@ func formatIMGitShowResult(tr *ToolResultInfo) string {
 	if tr.IsError {
 		return formatIMErrorResult(tr)
 	}
-	output := strings.TrimSpace(tr.Result)
+	output := strings.TrimSpace(redactResult(tr.Result))
 	if output == "" {
 		return "🔍 git show"
 	}
@@ -1125,7 +1131,7 @@ func formatIMSearchResult(tr *ToolResultInfo) string {
 	if pattern == "" {
 		pattern = tr.Detail
 	}
-	output := strings.TrimSpace(tr.Result)
+	output := strings.TrimSpace(redactResult(tr.Result))
 	if tr.IsError {
 		if pattern != "" {
 			return fmt.Sprintf("🔍 `%s`\n```\n%s\n```", pattern, output)
@@ -1146,7 +1152,7 @@ func formatIMWebFetchResult(tr *ToolResultInfo) string {
 		url = tr.Detail
 	}
 	if tr.IsError {
-		return fmt.Sprintf("🌐 %s\n```\n%s\n```", truncate(url, 60), strings.TrimSpace(tr.Result))
+		return fmt.Sprintf("🌐 %s\n```\n%s\n```", truncate(url, 60), strings.TrimSpace(redactResult(tr.Result)))
 	}
 	if url != "" {
 		return fmt.Sprintf("🌐 %s", truncate(url, 60))
@@ -1160,7 +1166,7 @@ func formatIMWebSearchResult(tr *ToolResultInfo) string {
 		query = tr.Detail
 	}
 	if tr.IsError {
-		return fmt.Sprintf("🔍 %s\n```\n%s\n```", truncate(query, 60), strings.TrimSpace(tr.Result))
+		return fmt.Sprintf("🔍 %s\n```\n%s\n```", truncate(query, 60), strings.TrimSpace(redactResult(tr.Result)))
 	}
 	if query != "" {
 		return fmt.Sprintf("🔍 %s", truncate(query, 60))
@@ -1170,7 +1176,7 @@ func formatIMWebSearchResult(tr *ToolResultInfo) string {
 
 // formatIMGitResult renders git tool results with concise summary.
 func formatIMGitResult(tr *ToolResultInfo) string {
-	output := strings.TrimSpace(tr.Result)
+	output := strings.TrimSpace(redactResult(tr.Result))
 	if tr.IsError {
 		pretty := prettifyToolName(tr.ToolName)
 		return fmt.Sprintf("🔧 %s\n```\n%s\n```", pretty, output)

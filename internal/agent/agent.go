@@ -3512,19 +3512,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				msgs = a.contextManager.Messages()
 			}
 
-			// Pre-write REDACTED guard: prevent agent from writing [REDACTED:...]
-			// markers into files, which would destroy real secret values.
-			if redactedWarn := checkRedactedInWrite(tc.Name, string(tc.Arguments)); redactedWarn != "" {
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: redactedWarn,
-					}},
-				})
-				msgs = a.contextManager.Messages()
-			}
-
 			// Record safety signals for subsequent reversibility checks.
 			a.reversibility.recordSafetySignal(tc.Name, string(tc.Arguments))
 
@@ -4963,12 +4950,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// tool calls (edit_file, write_file, run_command, etc.).
 			// Research: Microsoft IFC (arXiv:2505.23643), OWASP ATR-2026-00032.
 			a.taintInfluence.recordIfTainted(tc.Name, result.Content)
-
-			// Secret redaction: mask API keys, tokens, private keys, and other
-			// credentials in tool outputs before they enter context. Prevents
-			// accidental leakage of secrets to external LLM providers and
-			// session history persistence.
-			result.Content = redactSecrets(tc.Name, result.Content)
 
 			// Repetitive-line compression: collapse consecutive identical or
 			// template-similar lines (common in build/test/install output) before

@@ -12,6 +12,7 @@ import (
 	"charm.land/lipgloss/v2/tree"
 
 	"github.com/topcheer/ggcode/internal/markdown"
+	"github.com/topcheer/ggcode/internal/security"
 )
 
 // BaseToolItem provides shared rendering logic for all tool items.
@@ -75,7 +76,7 @@ func (t *BaseToolItem) SetStatus(s ToolStatus) {
 
 // SetResult updates the tool result and invalidates cache.
 func (t *BaseToolItem) SetResult(result string, isError bool) {
-	t.result = result
+	t.result = security.RedactForDisplay(result)
 	t.isError = isError
 	t.Invalidate()
 }
