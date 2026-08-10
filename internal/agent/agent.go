@@ -149,6 +149,7 @@ type Agent struct {
 	cacheKeepalive             *cacheKeepaliveState                  // prompt cache warming pings during idle (Anthropic)
 	trajectoryEnhance          *trajectoryEnhancer                   // self-improvement via successful pattern learning (sa-120)
 	uProp                      *uPropState                           // uncertainty propagation tracking (UProp: arXiv:2506.17419)
+	metacognitive              *metacognitiveMonitor                 // metacognitive state monitoring (Li et al. 2025, Peters 2026)
 	commandCache               *commandCache                         // deterministic build/test command result caching
 	emptySearch                *emptySearchState                     // empty search spiral detection (futile search guidance)
 	paramValidator             *paramValidator                       // tool parameter pre-validation (pre-execution error prevention)
@@ -408,6 +409,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		toolMemo:               newToolMemo(),
 		confidence:             newConfidenceState(),
 		uProp:                  newUPropState(),
+		metacognitive:          newMetacognitiveMonitor(),
 		verifDebt:              newVerificationDebtState(),
 		undoBlind:              newUndoBlindState(),
 		editAbandon:            newEditAbandonState(),
@@ -2549,6 +2551,19 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			if settleHint := a.maybeWarnSatisficing(assistantText); settleHint != "" {
 				debug.Log("agent", "Iteration %d: satisficing settling detected (knowingly suboptimal solution)", i+1)
 				a.injectGuidance(settleHint)
+			}
+
+			// Metacognitive monitor: track cognitive state stability and detect
+			// self-contradiction, plan changes, and interpretive drift.
+			// Records each turn's tools, action summary, and interpretation.
+			// Fires guidance when consistency drops below threshold (Li et al. 2025, Peters 2026).
+			actionSummary := a.extractActionSummary(assistantText)
+			interpretation := a.extractInterpretation(assistantText)
+			a.metacognitive.recordTurn("", actionSummary, interpretation)
+			if metaHint := a.metacognitive.maybeIntervene(); metaHint != "" {
+				debug.Log("agent", "Iteration %d: metacognitive monitor detected cognitive instability", i+1)
+				a.recordUncertainty("metacognitive_instability", weightAssumption)
+				a.injectGuidance(metaHint)
 			}
 
 			// Sycophancy detector: detect when the agent agrees with a
@@ -5531,4 +5546,78 @@ func (a *Agent) injectOODGuidance(signal *oodSignal) string {
 	}
 
 	return guidance.String()
+}
+
+// extractActionSummary extracts a brief action summary from assistant text.
+func (a *Agent) extractActionSummary(assistantText string) string {
+	if assistantText == "" {
+		return ""
+	}
+	// Look for action verbs at the start of sentences
+	// Common patterns: "I will", "Let me", "I'll", "Going to", "Now I'll"
+	actionStarts := []string{
+		"I'll", "I will", "Let me", "Now I'll", "Going to",
+		"I am going to", "I need to", "I should",
+	}
+
+	lower := strings.ToLower(assistantText)
+	for _, prefix := range actionStarts {
+		if idx := strings.Index(lower, strings.ToLower(prefix)); idx >= 0 && idx < 50 {
+			// Extract the action phrase
+			rest := assistantText[idx+len(prefix):]
+			// Find sentence end
+			end := strings.IndexAny(rest, ".!?\n")
+			if end > 0 && end < 100 {
+				return prefix + rest[:end]
+			}
+			break
+		}
+	}
+
+	// Fallback: extract first sentence
+	if end := strings.IndexAny(assistantText, ".!?\n"); end > 0 && end < 100 {
+		return assistantText[:end]
+	}
+
+	if len(assistantText) < 50 {
+		return assistantText
+	}
+	return assistantText[:50]
+}
+
+// extractInterpretation extracts key interpretive statements from assistant text.
+func (a *Agent) extractInterpretation(assistantText string) string {
+	if assistantText == "" {
+		return ""
+	}
+
+	// Look for interpretation markers
+	markers := []string{
+		"this suggests", "this indicates", "this means",
+		"i interpret", "my interpretation", "i believe",
+		"the error suggests", "this is likely", "this appears to be",
+	}
+
+	lower := strings.ToLower(assistantText)
+	for _, marker := range markers {
+		if idx := strings.Index(lower, marker); idx >= 0 {
+			// Extract the interpretation
+			start := idx + len(marker)
+			rest := assistantText[start:]
+			// Find sentence end
+			if end := strings.IndexAny(rest, ".!?\n"); end > 0 && end < 150 {
+				return marker + rest[:end]
+			}
+		}
+	}
+
+	// Look for "because" clauses
+	if idx := strings.Index(lower, "because"); idx > 20 && idx < len(assistantText)-50 {
+		rest := assistantText[idx+7:]
+		if end := strings.IndexAny(rest, ".!?\n"); end > 0 && end < 150 {
+			return "because " + rest[:end]
+		}
+	}
+
+	return ""
 }
