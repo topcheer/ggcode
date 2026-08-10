@@ -192,6 +192,8 @@ type Agent struct {
 	diskSpace                  *diskSpaceState                       // low disk space detection (resource exhaustion awareness)
 	envDrift                   *envDriftState                        // env var drift detection (.env.example vs actual env)
 	transientRetryBudget       int                                   // remaining automatic retries for transient tool failures (per run)
+	acc                        *accState                             // active context compression (ACC): autonomous memory management
+	metadata                   map[string]string                     // persistent metadata for session persistence
 	compoundingFailure         *compoundingFailureState              // sliding-window cross-tool failure rate (strategy reset detection)
 	failureMode                *failureModeState                     // meta-level failure mode classification (transient/structural/systemic)
 	toolFallback               *toolFallbackState                    // tool error fallback chain (actionable recovery suggestions)
