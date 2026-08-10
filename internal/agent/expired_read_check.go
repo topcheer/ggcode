@@ -143,8 +143,7 @@ func (e *expiredReadState) recordEdit(path string) string {
 	debug.Log("agent", "expired-read: %s was read earlier and is now edited (prior read is expired)", n)
 
 	return fmt.Sprintf(
-		"[Context invalidation] Your earlier read of %s is now EXPIRED -- the file content has changed. "+
-			"Do not reference line numbers or content from the prior read; if you need current content, re-read the file.",
+		"[expired-read] %s changed since last read. Re-read for current content.",
 		path,
 	)
 }

@@ -198,10 +198,7 @@ func (s *goalDriftCtxState) checkDrift(iter int) string {
 	if matches <= goalDriftMaxOverlapWarn {
 		s.warned = true
 		debug.Log("agent", "goal drift ctx: drift detected at iter %d (%d/%d recent targets match origin keywords)", iter, matches, len(s.recentTargets))
-		return "[Goal Drift Alert] Recent tool calls target files/concepts unrelated to your original request. " +
-			"As context grows, it's easy to drift from the user's actual goal (arXiv:2505.02709). " +
-			"Re-read the original request and verify your current actions directly serve it. " +
-			"If you've legitimately shifted focus (e.g., fixing a prerequisite), briefly state why this work is needed for the original goal."
+		return "[goal-drift] Recent tool calls target files unrelated to original request. Re-read original request and verify alignment."
 	}
 
 	return ""

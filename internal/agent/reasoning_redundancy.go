@@ -176,11 +176,8 @@ func (s *reasoningRedundancyState) maybeWarn(iter, maxIter int) string {
 	s.totalFire++
 
 	remaining := maxIter - iter
-	return "[Reasoning Redundancy] Detected " + itoaRR(rrWindow) + " consecutive analysis-only turns with high content overlap (" +
-		itoaRR(int(rrSimilarityTh*100)) + "%+ word-set similarity). You are re-deriving the same analysis without taking action. " +
-		"This is an overthinking pattern (arXiv:2503.16419). Stop deliberating and ACT NOW: make the most promising edit or " +
-		"run the next verification step. If truly blocked, state the specific blocker concisely rather than re-analyzing. " +
-		"(" + itoaRR(remaining) + " iterations remaining.)"
+	return "[reasoning-redundancy] " + itoaRR(rrWindow) + " analysis-only turns with " +
+		itoaRR(int(rrSimilarityTh*100)) + "%+ overlap. Stop deliberating and act. (" + itoaRR(remaining) + " iters left)"
 }
 
 // tokenizeForRR splits text into normalized lowercase word tokens for
