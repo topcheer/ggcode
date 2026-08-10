@@ -28,6 +28,26 @@ func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolC
 	if err := ctx.Err(); err != nil {
 		return tool.Result{Content: err.Error(), IsError: true}
 	}
+
+	// Pre-validate tool parameters before permission check or execution.
+	// This catches obvious errors (empty paths, dangerous commands, etc.)
+	// early, preventing wasted iterations.
+	a.mu.RLock()
+	validator := a.paramValidator
+	a.mu.RUnlock()
+	if validator != nil {
+		// Parse tool arguments for validation
+		var args map[string]interface{}
+		if err := json.Unmarshal(tc.Arguments, &args); err == nil {
+			if guidance := validator.validateToolCall(tc.Name, args); guidance != "" {
+				return tool.Result{
+					Content: guidance,
+					IsError: true,
+				}
+			}
+		}
+	}
+
 	// Don't log permission check — permission decision below is sufficient
 	a.mu.RLock()
 	policy := a.policy

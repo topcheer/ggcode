@@ -151,6 +151,7 @@ type Agent struct {
 	uProp                      *uPropState                           // uncertainty propagation tracking (UProp: arXiv:2506.17419)
 	commandCache               *commandCache                         // deterministic build/test command result caching
 	emptySearch                *emptySearchState                     // empty search spiral detection (futile search guidance)
+	paramValidator             *paramValidator                       // tool parameter pre-validation (pre-execution error prevention)
 	degradedResult             *degradedResultState                  // silent degradation propagation detection (Galileo error propagation chain)
 	postEditVerify             postEditVerifyState                   // tracks source-code edits to inject periodic verification hints
 	planner                    *planState                            // agent-side auto task decomposition (Devin/Claude Code-inspired)
@@ -415,6 +416,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		cacheKeepalive:         newCacheKeepaliveState(),
 		commandCache:           newCommandCache(),
 		emptySearch:            newEmptySearchState(),
+		paramValidator:         newParamValidator(),
 		degradedResult:         newDegradedResultState(),
 		errorClassifier:        NewErrorClassifier(),
 		planner:                newPlanState(),
@@ -1633,6 +1635,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.toolCallBudget.reset()
 	a.toolCallBudget.SetDefaultBudget(deriveDefaultBudget(a.maxIter))
 	a.emptySearch.reset()
+	a.paramValidator.reset()
 	a.degradedResult.reset()
 	// Reset the unread-file edit tracker so each run starts fresh.
 	a.unreadEdit.reset()
