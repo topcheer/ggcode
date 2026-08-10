@@ -173,18 +173,28 @@ func extractFileExt(path string) string {
 		path = path[:idx]
 	}
 
+	// Handle common compound extensions before LastIndex
+	if strings.HasSuffix(path, ".tar.gz") {
+		return ".tar.gz"
+	}
+	if strings.HasSuffix(path, ".tar.bz2") {
+		return ".tar.bz2"
+	}
+
 	// Find last dot
 	idx := strings.LastIndex(path, ".")
 	if idx == -1 || idx == len(path)-1 {
 		return ""
 	}
 
-	ext := path[idx:]
-	// Handle common compound extensions
-	if strings.HasSuffix(ext, ".tar.gz") || strings.HasSuffix(ext, ".tar.bz2") {
-		return ext
+	// Reject hidden files (dot at start of filename)
+	// Check if there's a path separator before the dot
+	lastSlash := strings.LastIndexAny(path, "/\\")
+	if idx == 0 || (lastSlash != -1 && idx == lastSlash+1) {
+		return ""
 	}
 
+	ext := path[idx:]
 	// Validate extension (alphanumeric only)
 	for _, ch := range ext[1:] {
 		if !((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9')) {
