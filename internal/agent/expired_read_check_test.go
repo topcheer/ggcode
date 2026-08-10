@@ -15,8 +15,8 @@ func TestExpiredRead_BasicExpiryDetection(t *testing.T) {
 	if hint == "" {
 		t.Fatal("expected expiry hint when editing a previously-read file")
 	}
-	if !strings.Contains(hint, "EXPIRED") {
-		t.Fatalf("hint should mention EXPIRED, got: %s", hint)
+	if !strings.Contains(hint, "changed since") {
+		t.Fatalf("hint should mention changed since, got: %s", hint)
 	}
 }
 

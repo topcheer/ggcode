@@ -29,7 +29,7 @@ func TestReasoningRedundancy_BasicDetection(t *testing.T) {
 	if msg == "" {
 		t.Fatal("should fire after 3 consecutive text-only redundant turns")
 	}
-	if !strings.Contains(msg, "Reasoning Redundancy") {
+	if !strings.Contains(msg, "reasoning-redundancy") {
 		t.Errorf("message should contain detector name, got: %s", msg)
 	}
 }

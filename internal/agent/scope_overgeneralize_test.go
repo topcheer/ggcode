@@ -20,7 +20,7 @@ func TestScopeOvergeneralize_NarrowGrepFollowedByUniversalClaim(t *testing.T) {
 	if !strings.Contains(hint, "scope-overgeneralization") {
 		t.Errorf("hint should contain detector name, got: %s", hint)
 	}
-	if !strings.Contains(hint, "narrow-scope") {
+	if !strings.Contains(hint, "narrow search") {
 		t.Errorf("hint should mention narrow-scope, got: %s", hint)
 	}
 }

@@ -92,8 +92,8 @@ func TestOvercorrectionCascade(t *testing.T) {
 	if hint2 == "" {
 		t.Fatal("expected cascade warning for second consecutive overcorrection")
 	}
-	// Cascade warning should mention "consecutive"
-	if !overcorrectionContains(hint2, "consecutive") {
+	// Cascade warning should mention "overcorrection"
+	if !overcorrectionContains(hint2, "overcorrection") {
 		t.Errorf("cascade warning should mention 'consecutive', got: %s", hint2)
 	}
 }

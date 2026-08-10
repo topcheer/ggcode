@@ -31,7 +31,7 @@ func TestToolStormWarnsOnBurst(t *testing.T) {
 	if msg == "" {
 		t.Fatal("expected storm warning for 4 diverse tools with thin reasoning")
 	}
-	if !strings.Contains(msg, "[Tool Call Storm]") {
+	if !strings.Contains(msg, "[tool-storm]") {
 		t.Errorf("warning should contain tag, got: %s", msg)
 	}
 	if !strings.Contains(msg, "4 consecutive") {

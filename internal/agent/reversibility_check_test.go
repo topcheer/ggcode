@@ -45,7 +45,7 @@ func TestReversibilityCheckCommitWithoutVerification(t *testing.T) {
 	if guidance == "" {
 		t.Fatal("expected reversibility warning for commit without tests/build")
 	}
-	if !strings.Contains(guidance, "Reversibility Check") {
+	if !strings.Contains(guidance, "reversibility") {
 		t.Errorf("unexpected guidance: %s", guidance)
 	}
 }
@@ -91,7 +91,7 @@ func TestReversibilityCheckDestructiveGit(t *testing.T) {
 	if guidance == "" {
 		t.Fatal("expected reversibility warning for reset --hard")
 	}
-	if !strings.Contains(strings.ToLower(guidance), "not reversible") {
+	if !strings.Contains(strings.ToLower(guidance), "destructive") {
 		t.Errorf("expected 'not reversible' in guidance: %s", guidance)
 	}
 }

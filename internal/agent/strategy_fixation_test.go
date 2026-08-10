@@ -50,7 +50,7 @@ func TestStrategyFixation_TriggersOnRepeatedEditsWithFailures(t *testing.T) {
 	if !strings.Contains(msg, "parser.go") {
 		t.Errorf("warning should mention the file name, got: %s", msg)
 	}
-	if !strings.Contains(msg, "Strategy Fixation") {
+	if !strings.Contains(msg, "strategy-fixation") {
 		t.Errorf("warning should have the tag, got: %s", msg)
 	}
 	if !strings.Contains(msg, "3 times") {

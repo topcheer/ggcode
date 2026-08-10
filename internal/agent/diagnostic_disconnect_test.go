@@ -56,8 +56,8 @@ func TestDiagnosticDisconnect_TriggerAfterIgnored(t *testing.T) {
 	if msg == "" {
 		t.Fatal("expected guidance after 4 disconnected actions")
 	}
-	if !strings.Contains(msg, "[diagnostic disconnect]") {
-		t.Fatalf("expected diagnostic disconnect label, got: %s", msg)
+	if !strings.Contains(msg, "[diagnostic]") {
+		t.Fatalf("expected diagnostic label, got: %s", msg)
 	}
 	if !strings.Contains(msg, "undefined: NewWidget") {
 		t.Fatalf("expected diagnostic keyword in message, got: %s", msg)

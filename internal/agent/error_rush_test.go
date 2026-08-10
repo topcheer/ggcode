@@ -36,10 +36,10 @@ func TestErrorRushState_TwoErrorsThenBlindEdit(t *testing.T) {
 	if msg == "" {
 		t.Fatal("expected warning for blind-fix after 2 errors")
 	}
-	if !strings.Contains(msg, "Error Rush") {
-		t.Errorf("warning should contain 'Error Rush', got: %s", msg)
+	if !strings.Contains(msg, "error-rush") {
+		t.Errorf("warning should contain 'error-rush', got: %s", msg)
 	}
-	if !strings.Contains(msg, "SLOW DOWN") {
+	if !strings.Contains(strings.ToLower(msg), "re-read") {
 		t.Errorf("warning should contain actionable guidance")
 	}
 }

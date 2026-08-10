@@ -61,35 +61,35 @@ var shellNativePatterns = []shellNativePattern{
 	},
 	{
 		regex:      regexp.MustCompile(`^\s*git\s+log\b`),
-		suggestion: "[shell-hint] Use built-in tool.",
+		suggestion: "[shell-hint] Use git_log tool instead.",
 	},
 	{
 		regex:      regexp.MustCompile(`^\s*git\s+diff\b`),
-		suggestion: "[shell-hint] Use built-in tool.",
+		suggestion: "[shell-hint] Use git_diff tool instead.",
 	},
 	{
 		regex:      regexp.MustCompile(`^\s*git\s+status\b`),
-		suggestion: "[shell-hint] Use built-in tool.",
+		suggestion: "[shell-hint] Use git_status tool instead.",
 	},
 	{
 		regex:      regexp.MustCompile(`^\s*git\s+show\b`),
-		suggestion: "[shell-hint] Use built-in tool.",
+		suggestion: "[shell-hint] Use git_show tool instead.",
 	},
 	{
 		regex:      regexp.MustCompile(`^\s*(ls|lla)\s+`),
-		suggestion: "[shell-hint] Use built-in tool.",
+		suggestion: "[shell-hint] Use list_directory tool instead.",
 	},
 	{
 		regex:      regexp.MustCompile(`^\s*git\s+branch\b`),
-		suggestion: "[shell-hint] Use built-in tool.",
+		suggestion: "[shell-hint] Use git_branch_list tool instead.",
 	},
 	{
 		regex:      regexp.MustCompile(`^\s*git\s+add\b`),
-		suggestion: "[shell-hint] Use built-in tool.",
+		suggestion: "[shell-hint] Use git_add tool instead.",
 	},
 	{
 		regex:      regexp.MustCompile(`^\s*git\s+commit\b`),
-		suggestion: "[shell-hint] Use built-in tool.",
+		suggestion: "[shell-hint] Use git_commit tool instead.",
 	},
 }
 

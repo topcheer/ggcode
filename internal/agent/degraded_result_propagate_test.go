@@ -53,8 +53,8 @@ func TestDegradedResultSilentPropagation(t *testing.T) {
 	if guidance == "" {
 		t.Error("expected guidance for silent propagation, got empty")
 	}
-	if !strings.Contains(guidance, "Silent Degradation Propagation") {
-		t.Errorf("guidance missing key phrase, got: %s", guidance)
+	if !strings.Contains(guidance, "degraded-result") {
+		t.Errorf("guidance missing degraded-result, got: %s", guidance)
 	}
 	if !strings.Contains(guidance, "grep") {
 		t.Errorf("guidance should mention the tool name, got: %s", guidance)

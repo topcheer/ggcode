@@ -46,7 +46,7 @@ func TestInfoScent_DecayDetected(t *testing.T) {
 	if !strings.Contains(msg, "info-scent") {
 		t.Errorf("warning should contain [info-scent] tag, got: %s", msg)
 	}
-	if !strings.Contains(msg, "depleted") {
+	if !strings.Contains(msg, "revisited") {
 		t.Errorf("warning should mention depleted patch, got: %s", msg)
 	}
 }

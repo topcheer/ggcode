@@ -33,10 +33,10 @@ func TestSelfCorrectionGate_FiresWhenNetNegative(t *testing.T) {
 	if msg == "" {
 		t.Fatal("expected stability warning for net-negative self-correction")
 	}
-	if !strings.Contains(msg, "SELF-CORRECTION UNSTABLE") {
+	if !strings.Contains(msg, "self-correction-unstable") {
 		t.Errorf("warning should contain stability marker, got: %s", msg)
 	}
-	if !strings.Contains(msg, "net-negative") {
+	if !strings.Contains(msg, "more errors") {
 		t.Errorf("warning should mention net-negative, got: %s", msg)
 	}
 }

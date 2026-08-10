@@ -238,7 +238,7 @@ func TestGeneratedArtifactState_GenGoFile(t *testing.T) {
 	if hint == "" {
 		t.Fatal("expected warning for .gen.go file")
 	}
-	if !contains(hint, "code-generated") || !contains(hint, "generator") {
+	if !contains(hint, "generated-artifact") || !contains(hint, "generator") {
 		t.Errorf("expected generator mention, got: %s", hint)
 	}
 }
