@@ -81,8 +81,8 @@ func checkNilDerefAfterError(filePath, oldContent, newContent string) string {
 		return ""
 	}
 
-	// Delta: count instances in old content.
-	oldCount := 0
+	// Delta: count instances in old content and track their positions.
+	oldPositions := make(map[string]bool)
 	if strings.TrimSpace(oldContent) != "" {
 		oldFset := token.NewFileSet()
 		oldFile, oldErr := parser.ParseFile(oldFset, filePath, oldContent, parser.AllErrors)
@@ -92,28 +92,32 @@ func checkNilDerefAfterError(filePath, oldContent, newContent string) string {
 				if !ok || fn.Body == nil {
 					continue
 				}
-				oldCount += len(findNilDerefsInFunc(oldFset, fn.Body))
+				for _, inst := range findNilDerefsInFunc(oldFset, fn.Body) {
+					oldPositions[inst.posStr] = true
+				}
 			}
 		}
 	}
 
-	if len(instances) <= oldCount {
+	// Filter to only NEW instances (not present in old content).
+	var newInstances []nilDerefInstance
+	for _, inst := range instances {
+		if !oldPositions[inst.posStr] {
+			newInstances = append(newInstances, inst)
+		}
+	}
+
+	if len(newInstances) == 0 {
 		return ""
 	}
 
-	newCount := len(instances) - oldCount
 	var b strings.Builder
 	b.WriteString("[nil-deref-after-error] Pointers dereferenced before error check - may panic:\n")
-	flagged := 0
-	for _, inst := range instances {
-		if flagged >= newCount {
-			break
-		}
+	for _, inst := range newInstances {
 		b.WriteString(fmt.Sprintf("  - %s: '%s' is dereferenced before an 'if err != nil' check. "+
 			"When the error is non-nil, functions often return nil for the primary value. "+
 			"Add `if err != nil { return err }` before using '%s'.\n",
 			inst.posStr, inst.varName, inst.varName))
-		flagged++
 	}
 	return b.String()
 }

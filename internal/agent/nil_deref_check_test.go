@@ -152,7 +152,7 @@ func use2() {
 	if result == "" {
 		t.Fatal("expected warning for new function use2")
 	}
-	if !strings.Contains(result, "w") {
+	if !strings.Contains(result, "'w'") {
 		t.Fatalf("expected warning about variable 'w', got: %s", result)
 	}
 	if strings.Contains(result, "v.V") {
