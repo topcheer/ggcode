@@ -75,6 +75,7 @@ type AgentCard struct {
 	Interfaces         []AgentInterface      `json:"interfaces,omitempty"`
 	Extensions         []AgentExtension      `json:"extensions,omitempty"`
 	Metadata           interface{}           `json:"metadata,omitempty"`
+	Lifecycle          *AgentLifecycleInfo   `json:"lifecycle,omitempty"` // AgentHub lifecycle transparency
 }
 
 // AgentInterface describes a protocol binding (JSON-RPC, gRPC, REST).
@@ -98,11 +99,56 @@ type AgentProvider struct {
 	Organization string `json:"organization"`
 }
 
+// AgentLifecycleState represents the lifecycle state of an agent.
+// Following AgentHub (ICSE 2026) lifecycle transparency requirements.
+type AgentLifecycleState string
+
+const (
+	// AgentLifecycleActive is the default state for agents in active development/production use.
+	AgentLifecycleActive AgentLifecycleState = "active"
+	// AgentLifecycleDeprecated indicates the agent is still functional but should not be used for new deployments.
+	AgentLifecycleDeprecated AgentLifecycleState = "deprecated"
+	// AgentLifecycleRetired indicates the agent is no longer maintained and may stop working.
+	AgentLifecycleRetired AgentLifecycleState = "retired"
+	// AgentLifecycleRevoked indicates the agent has been removed due to security or policy violations.
+	AgentLifecycleRevoked AgentLifecycleState = "revoked"
+)
+
+// IsDeprecatedOrWorse returns true for states that should trigger warnings in discovery and selection.
+func (s AgentLifecycleState) IsDeprecatedOrWorse() bool {
+	switch s {
+	case AgentLifecycleDeprecated, AgentLifecycleRetired, AgentLifecycleRevoked:
+		return true
+	}
+	return false
+}
+
+// IsActive returns true only for the active state.
+func (s AgentLifecycleState) IsActive() bool {
+	return s == AgentLifecycleActive
+}
+
+// IsTerminal returns true for states that cannot transition back to active.
+func (s AgentLifecycleState) IsTerminal() bool {
+	switch s {
+	case AgentLifecycleRetired, AgentLifecycleRevoked:
+		return true
+	}
+	return false
+}
+
 // AgentCapabilities declares optional protocol features.
 type AgentCapabilities struct {
 	Streaming         bool `json:"streaming"`
 	PushNotifications bool `json:"pushNotifications"`
 	ExtendedAgentCard bool `json:"extendedAgentCard,omitempty"`
+}
+
+// AgentLifecycleInfo tracks lifecycle state with timestamp and rationale.
+type AgentLifecycleInfo struct {
+	State     AgentLifecycleState `json:"state"`
+	Timestamp time.Time           `json:"timestamp"`
+	Rationale string              `json:"rationale,omitempty"` // human-readable reason for state change
 }
 
 // Skill describes one focused capability of the agent.
