@@ -102,6 +102,18 @@ func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolC
 		}
 	}
 
+	// Tool affinity learning: record outcomes for predictive recommendations (sa-126)
+	// Use a simple context based on tool name and arguments for now
+	// Future enhancement: use richer context (user goal, recent tool history, file type)
+	if a.toolAffinity != nil && len(tc.Arguments) > 0 {
+		// Extract first 100 chars of arguments as context signature
+		contextSig := string(tc.Arguments)
+		if len(contextSig) > 100 {
+			contextSig = contextSig[:100]
+		}
+		a.toolAffinity.RecordOutcome(tc.Name, contextSig, !result.IsError)
+	}
+
 	// Fire tool metric (non-blocking — caller must handle asynchronously).
 	errMsg := ""
 	if result.IsError {

@@ -198,6 +198,7 @@ type Agent struct {
 	compoundingFailure         *compoundingFailureState              // sliding-window cross-tool failure rate (strategy reset detection)
 	failureMode                *failureModeState                     // meta-level failure mode classification (transient/structural/systemic)
 	resourceMonitor            *ResourceMonitor                      // resource-aware orchestration: tracks memory/CPU pressure (sa-125)
+	toolAffinity               *ToolAffinityLearner                  // tool affinity learning: predictive tool recommendations based on historical success (sa-126)
 	toolFallback               *toolFallbackState                    // tool error fallback chain (actionable recovery suggestions)
 	replan                     *replanState                          // dynamic replan detector (active path re-evaluation on persistent failures)
 	argSizeGuardFires          int                                   // count of argument size guard injections this run
@@ -480,6 +481,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		compoundingFailure:     newCompoundingFailureState(),
 		failureMode:            newFailureModeState(),
 		resourceMonitor:        NewResourceMonitor(),
+		toolAffinity:           NewToolAffinityLearner(),
 		toolFallback:           newToolFallbackState(),
 		replan:                 newReplanState(),
 		policyVerifier:         NewPolicyVerifierService(),
