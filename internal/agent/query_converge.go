@@ -173,7 +173,7 @@ func (q *queryConvergeState) maybeWarn(iteration int) string {
 
 	debug.Log("query-converge", "convergence failure detected: avgSim=%.2f, queries=%d, iters=%d", avgSim, len(window), len(iters))
 
-	return "[query-convergence] You've issued " + qcIntToStr(len(window)) + " similar search queries across " + qcIntToStr(len(iters)) + " iterations without progressing to code action (avg similarity: " + qcFloatToStr(avgSim) + "). This suggests your information need may not be satisfiable by further searching.\n\nConsider:\n1. Re-evaluate: is the information you're looking for actually available through search, or do you need to ask the user for clarification?\n2. Try a fundamentally different search strategy (different terms, different tools, or browse the codebase structure directly).\n3. If you have enough context to proceed, make your best attempt and verify it rather than continuing to search."
+	return "[query-convergence] " + qcIntToStr(len(window)) + " similar queries across " + qcIntToStr(len(iters)) + " iterations (avg similarity: " + qcFloatToStr(avgSim) + "). Try different search strategy or proceed with available context."
 }
 
 // qcExtractQuery pulls the query/pattern string from tool arguments JSON.
