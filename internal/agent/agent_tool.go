@@ -18,6 +18,7 @@ import (
 	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
@@ -199,7 +200,7 @@ func (a *Agent) executeToolWithTimeout(ctx context.Context, tc provider.ToolCall
 	}
 	resultCh := make(chan toolResult, 1)
 
-	go func() {
+	safego.Go("agent.executeToolWithTimeout", func() {
 		defer func() {
 			if r := recover(); r != nil {
 				resultCh <- toolResult{tool.Result{
@@ -209,7 +210,7 @@ func (a *Agent) executeToolWithTimeout(ctx context.Context, tc provider.ToolCall
 			}
 		}()
 		resultCh <- toolResult{a.executeTool(toolCtx, tc)}
-	}()
+	})
 
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
@@ -614,7 +615,7 @@ func (a *Agent) safeExecute(t tool.Tool, ctx context.Context, args json.RawMessa
 		err    error
 	}
 	ch := make(chan execResult, 1)
-	go func() {
+	safego.Go("agent.safeExecute", func() {
 		defer func() {
 			if r := recover(); r != nil {
 				debug.Log("agent", "PANIC recovered in tool %s: %v\n%s", t.Name(), r, runtimedebug.Stack())
@@ -626,7 +627,7 @@ func (a *Agent) safeExecute(t tool.Tool, ctx context.Context, args json.RawMessa
 		}()
 		r, e := t.Execute(ctx, args)
 		ch <- execResult{r, e}
-	}()
+	})
 
 	select {
 	case r := <-ch:

@@ -10,6 +10,7 @@ import (
 
 	"github.com/dop251/goja"
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 // readOnlyToolNames is the set of tools that code_execution is allowed to
@@ -270,10 +271,10 @@ func (c CodeExecution) runCode(ctx context.Context, code string) (*execResult, e
 	vm.Set("tools", toolsObj)
 
 	// Set up context cancellation → vm.Interrupt.
-	go func() {
+	safego.Go("code_execution.ctxCancel", func() {
 		<-ctx.Done()
 		vm.Interrupt(context.Cause(ctx))
-	}()
+	})
 
 	// Execute the code. We wrap it in an async IIFE so that top-level
 	// await works (goja is ES5.1 — no top-level await). A try/catch inside

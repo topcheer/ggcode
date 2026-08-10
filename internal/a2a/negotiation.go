@@ -6,6 +6,8 @@ import (
 	"math"
 	"sort"
 	"sync"
+
+	"github.com/topcheer/ggcode/internal/safego"
 	"time"
 )
 
@@ -167,10 +169,10 @@ func (n *Negotiator) Negotiate(ctx context.Context, skill, description string) (
 
 	// Wait for all proposals
 	doneCh := make(chan struct{})
-	go func() {
+	safego.Go("a2a.negotiationWaitGroup", func() {
 		wg.Wait()
 		close(doneCh)
-	}()
+	})
 
 	// Collect proposals with timeout
 	proposalCtx, cancel := context.WithTimeout(ctx, n.timeout)

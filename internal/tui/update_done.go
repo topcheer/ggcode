@@ -13,6 +13,7 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/notify"
+	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/tunnel"
 )
 
@@ -307,9 +308,9 @@ func (m Model) maybeRefineSessionTitle() {
 
 	ses := m.session
 	store := m.sessionStore
-	go func() {
+	safego.Go("tui.appendMetaToDisk", func() {
 		_ = store.AppendMetaToDisk(ses)
-	}()
+	})
 
 	debug.Log("tui", "refined session title: %q -> %q", oldTitle, newTitle)
 }
