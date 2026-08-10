@@ -147,6 +147,7 @@ type Agent struct {
 	costBudget                 *sessionCostBudget                    // absolute session-level token budget enforcement
 	toolCallBudget             *toolCallBudget                       // per-session tool invocation limit (action-level guardrail)
 	cacheKeepalive             *cacheKeepaliveState                  // prompt cache warming pings during idle (Anthropic)
+	trajectoryEnhance          *trajectoryEnhancer                   // self-improvement via successful pattern learning (sa-120)
 	commandCache               *commandCache                         // deterministic build/test command result caching
 	emptySearch                *emptySearchState                     // empty search spiral detection (futile search guidance)
 	degradedResult             *degradedResultState                  // silent degradation propagation detection (Galileo error propagation chain)
