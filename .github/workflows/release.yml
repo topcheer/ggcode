@@ -453,17 +453,21 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - name: Sync winget-pkgs fork
-        continue-on-error: true
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.WINGET_CREATE_GITHUB_TOKEN }}
         run: |
-          gh api repos/topcheer/winget-pkgs/merge-upstream -X POST -f branch=master 2>$null
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "::Warning::Fork sync failed (may already be up to date). Continuing anyway."
-          } else {
-            Write-Host "winget-pkgs fork synced successfully."
+          for ($i = 1; $i -le 3; $i++) {
+            gh api repos/topcheer/winget-pkgs/merge-upstream -X POST -f branch=master 2>&1 | Out-Null
+            if ($LASTEXITCODE -eq 0) {
+              Write-Host "winget-pkgs fork synced successfully (attempt $i)."
+              exit 0
+            }
+            Write-Host "::Warning::Fork sync attempt $i failed (exit $LASTEXITCODE). Retrying in 5s..."
+            Start-Sleep -Seconds 5
           }
+          Write-Host "::Error::Fork sync failed after 3 attempts. Proceeding anyway."
+          exit 0
       - name: Check for existing winget PR
         id: check-pr
         shell: pwsh
@@ -513,17 +517,21 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - name: Sync winget-pkgs fork
-        continue-on-error: true
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.WINGET_CREATE_GITHUB_TOKEN }}
         run: |
-          gh api repos/topcheer/winget-pkgs/merge-upstream -X POST -f branch=master 2>$null
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "::Warning::Fork sync failed (may already be up to date). Continuing anyway."
-          } else {
-            Write-Host "winget-pkgs fork synced successfully."
+          for ($i = 1; $i -le 3; $i++) {
+            gh api repos/topcheer/winget-pkgs/merge-upstream -X POST -f branch=master 2>&1 | Out-Null
+            if ($LASTEXITCODE -eq 0) {
+              Write-Host "winget-pkgs fork synced successfully (attempt $i)."
+              exit 0
+            }
+            Write-Host "::Warning::Fork sync attempt $i failed (exit $LASTEXITCODE). Retrying in 5s..."
+            Start-Sleep -Seconds 5
           }
+          Write-Host "::Error::Fork sync failed after 3 attempts. Proceeding anyway."
+          exit 0
       - name: Check for existing winget PR
         id: check-pr
         shell: pwsh
