@@ -245,10 +245,20 @@ func (m *Manager) UndoRun() ([]Checkpoint, error) {
 	for _, idx := range runIndices {
 		cp := m.checkpoints[idx]
 		if revertedFiles[cp.FilePath] {
-			continue // already reverted this file to baseline
+			continue
 		}
 		baseline := baselines[cp.FilePath]
 		if err := util.AtomicWriteFile(cp.FilePath, []byte(baseline), 0644); err != nil {
+			// Remove already-reverted checkpoints from the list to keep
+			// metadata consistent with disk state.
+			for _, r := range reverted {
+				for j := len(m.checkpoints) - 1; j >= 0; j-- {
+					if m.checkpoints[j].FilePath == r.FilePath && m.checkpoints[j].RunID == runID {
+						m.checkpoints = append(m.checkpoints[:j], m.checkpoints[j+1:]...)
+						break
+					}
+				}
+			}
 			return reverted, fmt.Errorf("failed to revert %s: %w", cp.FilePath, err)
 		}
 		revertedFiles[cp.FilePath] = true

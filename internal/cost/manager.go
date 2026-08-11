@@ -113,7 +113,11 @@ func (m *Manager) Save(sessionID string) error {
 
 // Load restores session cost data from disk.
 func (m *Manager) Load(sessionID, providerName, model string) {
-	path := filepath.Join(m.dataDir, sessionID+".cost.json")
+	cleanID := filepath.Base(sessionID)
+	if cleanID != sessionID || cleanID == "." || cleanID == ".." {
+		return
+	}
+	path := filepath.Join(m.dataDir, cleanID+".cost.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return

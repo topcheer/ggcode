@@ -534,7 +534,7 @@ Respond with JSON only. No markdown, no explanation.`
 
 // ProcessErrorsWithLLM sends unmatched errors to the agent's provider for
 // generalization. Uses the current model. Called asynchronously after a run.
-func (a *Agent) ProcessErrorsWithLLM(errors []string, existingRules []Rule) (*ratchetLLMOutput, error) {
+func (a *Agent) ProcessErrorsWithLLM(parentCtx context.Context, errors []string, existingRules []Rule) (*ratchetLLMOutput, error) {
 	if len(errors) == 0 {
 		return &ratchetLLMOutput{}, nil
 	}
@@ -565,7 +565,7 @@ func (a *Agent) ProcessErrorsWithLLM(errors []string, existingRules []Rule) (*ra
 	userPrompt.WriteString("\nAnalyze each error and respond with JSON:\n")
 	userPrompt.WriteString(`{"results":[{"action":"new","category":"build","rule":"...","match_pattern":"...","tool_pattern":"...","fix_hint":"..."},{"action":"skip","skip_reason":"..."}]}`)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(parentCtx, 30*time.Second)
 	defer cancel()
 
 	resp, err := prov.Chat(ctx, []provider.Message{
@@ -657,7 +657,7 @@ func (a *Agent) generalizeErrorsWithRetry(ctx context.Context, errors []string, 
 
 	var lastErr error
 	for attempt := 0; attempt <= maxRetries; attempt++ {
-		output, err := a.ProcessErrorsWithLLM(errors, existingRules)
+		output, err := a.ProcessErrorsWithLLM(ctx, errors, existingRules)
 		if err == nil && output != nil {
 			var rules []Rule
 			for _, result := range output.Results {

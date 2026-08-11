@@ -64,6 +64,7 @@ func (e *Encoder) Start() error {
 
 	stdout, err := e.cmd.StdoutPipe()
 	if err != nil {
+		stdin.Close()
 		return fmt.Errorf("stream: ffmpeg stdout pipe: %w", err)
 	}
 	e.stdout = stdout
@@ -71,10 +72,15 @@ func (e *Encoder) Start() error {
 	// Capture stderr via pipe for diagnostics
 	stderrPipe, err := e.cmd.StderrPipe()
 	if err != nil {
+		stdin.Close()
+		stdout.Close()
 		return fmt.Errorf("stream: ffmpeg stderr pipe: %w", err)
 	}
 
 	if err := e.cmd.Start(); err != nil {
+		stdin.Close()
+		stdout.Close()
+		stderrPipe.Close()
 		return fmt.Errorf("stream: ffmpeg start: %w", err)
 	}
 

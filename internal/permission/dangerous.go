@@ -173,9 +173,9 @@ func NewDangerousDetector() *DangerousDetector {
 
 		// Medium: output redirection to shell startup files and system config.
 		// These allow code execution on next login/shell start.
-		{DangerMedium, regexp.MustCompile(`(?i)>\s*~//.bashrc`), "writing to .bashrc could execute malicious code on shell startup"},
-		{DangerMedium, regexp.MustCompile(`(?i)>\s*~//.zshrc`), "writing to .zshrc could execute malicious code on shell startup"},
-		{DangerMedium, regexp.MustCompile(`(?i)>\s*~//.profile`), "writing to .profile could execute malicious code on login"},
+		{DangerMedium, regexp.MustCompile(`(?i)>\s*~/\.bashrc`), "writing to .bashrc could execute malicious code on shell startup"},
+		{DangerMedium, regexp.MustCompile(`(?i)>\s*~/\.zshrc`), "writing to .zshrc could execute malicious code on shell startup"},
+		{DangerMedium, regexp.MustCompile(`(?i)>\s*~/\.profile`), "writing to .profile could execute malicious code on login"},
 		{DangerMedium, regexp.MustCompile(`(?i)>\s*/etc/hosts`), "writing to hosts file could hijack DNS resolution"},
 		{DangerMedium, regexp.MustCompile(`(?i)>\s*/etc/environment`), "writing to environment config could inject malicious variables"},
 

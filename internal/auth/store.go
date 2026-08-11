@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/util"
@@ -32,6 +33,7 @@ type Info struct {
 
 type Store struct {
 	path string
+	mu   sync.Mutex
 }
 
 func DefaultPath() string {
@@ -51,6 +53,8 @@ func DefaultStore() *Store {
 }
 
 func (s *Store) Load(providerID string) (*Info, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	all, err := s.loadAll()
 	if err != nil {
 		return nil, err
@@ -64,6 +68,8 @@ func (s *Store) Load(providerID string) (*Info, error) {
 }
 
 func (s *Store) Save(info *Info) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if info == nil {
 		return fmt.Errorf("auth info is nil")
 	}
@@ -87,6 +93,8 @@ func (s *Store) Save(info *Info) error {
 }
 
 func (s *Store) Delete(providerID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	all, err := s.loadAll()
 	if err != nil {
 		return err
@@ -107,6 +115,8 @@ func (i *Info) IsExpired() bool {
 }
 
 func (s *Store) HasUsableToken(providerID string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	info, err := s.Load(providerID)
 	if err != nil || info == nil {
 		return false, err

@@ -125,6 +125,8 @@ func (tc *TokenCache) LoadValid(provider string) *PKCEToken {
 
 // Delete removes a cached token.
 func (tc *TokenCache) Delete(provider string) error {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
 	return os.Remove(tc.path(provider))
 }
 
