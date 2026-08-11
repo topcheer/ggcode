@@ -125,8 +125,8 @@ type FullConfig struct {
 // GetFullConfig returns a complete config snapshot.
 func GetFullConfig() (*FullConfig, error) {
 	globalMu.RLock()
+	defer globalMu.RUnlock()
 	cfg := globalCfg
-	globalMu.RUnlock()
 
 	if cfg == nil {
 		return &FullConfig{NeedsSetup: true}, nil
@@ -191,9 +191,9 @@ func GetFullConfig() (*FullConfig, error) {
 
 // UpdateConfig applies a map of config values and saves.
 func UpdateConfig(values map[string]interface{}) error {
-	globalMu.RLock()
+	globalMu.Lock()
+	defer globalMu.Unlock()
 	cfg := globalCfg
-	globalMu.RUnlock()
 	if cfg == nil {
 		return nil
 	}
@@ -274,9 +274,9 @@ func UpdateConfig(values map[string]interface{}) error {
 
 // SaveAPIKey saves an API key for a vendor/endpoint.
 func SaveAPIKey(vendor, endpoint, apiKey string) error {
-	globalMu.RLock()
+	globalMu.Lock()
+	defer globalMu.Unlock()
 	cfg := globalCfg
-	globalMu.RUnlock()
 	if cfg == nil {
 		return nil
 	}
@@ -294,9 +294,9 @@ func SaveAPIKey(vendor, endpoint, apiKey string) error {
 
 // SaveDefaultMode saves the default permission mode.
 func SaveDefaultMode(mode string) error {
-	globalMu.RLock()
+	globalMu.Lock()
+	defer globalMu.Unlock()
 	cfg := globalCfg
-	globalMu.RUnlock()
 	if cfg == nil {
 		return nil
 	}
@@ -304,9 +304,9 @@ func SaveDefaultMode(mode string) error {
 }
 
 func SaveA2AEnabled(enabled bool) error {
-	globalMu.RLock()
+	globalMu.Lock()
+	defer globalMu.Unlock()
 	cfg := globalCfg
-	globalMu.RUnlock()
 	if cfg == nil {
 		return nil
 	}
@@ -356,8 +356,8 @@ func GetVendorPresets() []VendorPresetInfo {
 // VendorNames returns available vendor names.
 func VendorNames() []string {
 	globalMu.RLock()
+	defer globalMu.RUnlock()
 	cfg := globalCfg
-	globalMu.RUnlock()
 	if cfg == nil {
 		cfg = config.DefaultConfig()
 	}
@@ -378,8 +378,8 @@ type EndpointInfo struct {
 // EndpointsForVendor returns endpoint info for a vendor.
 func EndpointsForVendor(vendor string) []EndpointInfo {
 	globalMu.RLock()
+	defer globalMu.RUnlock()
 	cfg := globalCfg
-	globalMu.RUnlock()
 	if cfg == nil {
 		cfg = config.DefaultConfig()
 	}
@@ -401,8 +401,8 @@ func EndpointsForVendor(vendor string) []EndpointInfo {
 // ModelsForEndpoint returns available model names for a vendor and endpoint key.
 func ModelsForEndpoint(vendor, endpointKey string) []string {
 	globalMu.RLock()
+	defer globalMu.RUnlock()
 	cfg := globalCfg
-	globalMu.RUnlock()
 	if cfg == nil {
 		cfg = config.DefaultConfig()
 	}
@@ -444,9 +444,9 @@ func GetImpersonationPresets() []ImpersonationPresetInfo {
 
 // ApplyImpersonation applies an impersonation preset and persists to config.
 func ApplyImpersonation(presetID, version string, customHeaders map[string]string) error {
-	globalMu.RLock()
+	globalMu.Lock()
+	defer globalMu.Unlock()
 	cfg := globalCfg
-	globalMu.RUnlock()
 	if cfg == nil {
 		return nil
 	}
@@ -552,9 +552,9 @@ func TestEndpointConnection(protocol, baseURL, apiKey string) (*TestEndpointResu
 
 // AddCustomEndpoint adds a new endpoint to a vendor in the config and saves.
 func AddCustomEndpoint(vendor, name, protocol, baseURL, apiKey string) error {
-	globalMu.RLock()
+	globalMu.Lock()
+	defer globalMu.Unlock()
 	cfg := globalCfg
-	globalMu.RUnlock()
 	if cfg == nil {
 		return nil
 	}
@@ -596,8 +596,8 @@ type ResolvedEndpointInfo struct {
 // GetResolvedEndpoint returns the currently resolved active endpoint info.
 func GetResolvedEndpoint() (*ResolvedEndpointInfo, error) {
 	globalMu.RLock()
+	defer globalMu.RUnlock()
 	cfg := globalCfg
-	globalMu.RUnlock()
 	if cfg == nil {
 		return nil, fmt.Errorf("config not loaded")
 	}
@@ -639,8 +639,8 @@ func maskAPIKey(key string) string {
 // within the same vendor. Only reports error if ALL same-domain endpoints fail.
 func FetchModelsForEndpoint(vendor, endpoint, apiKey, baseURL string) ([]string, error) {
 	globalMu.RLock()
+	defer globalMu.RUnlock()
 	cfg := globalCfg
-	globalMu.RUnlock()
 
 	if cfg == nil {
 		return nil, fmt.Errorf("config not loaded")
@@ -750,8 +750,8 @@ type EndpointDetails struct {
 // GetEndpointDetails returns details for a specific vendor endpoint.
 func GetEndpointDetails(vendor, endpoint string) *EndpointDetails {
 	globalMu.RLock()
+	defer globalMu.RUnlock()
 	cfg := globalCfg
-	globalMu.RUnlock()
 	if cfg == nil {
 		return nil
 	}
