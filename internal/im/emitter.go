@@ -49,6 +49,17 @@ func newIMEmitterState() *imEmitterState {
 	return &imEmitterState{ch: make(chan queuedIMEvent, 256)}
 }
 
+// close shuts down the dispatcher goroutine by closing the channel.
+// After close, enqueue calls become no-ops. Safe to call multiple times.
+func (s *imEmitterState) close() {
+	if s == nil {
+		return
+	}
+	s.once.Do(func() {
+		close(s.ch)
+	})
+}
+
 func (s *imEmitterState) enqueue(mgr *Manager, event OutboundEvent, excludeAdapter string) {
 	if s == nil || mgr == nil {
 		return

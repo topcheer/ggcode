@@ -162,12 +162,14 @@ func (c *Client) Start(ctx context.Context) error {
 		return fmt.Errorf("mcp[%s]: starting server: %w", c.name, err)
 	}
 
+	c.mu.Lock()
 	c.cmd = cmd
 	c.procCancel = cancelProc
 	c.stdin = stdin
 	c.stdout = stdout
 	c.reader = bufio.NewReader(stdout)
 	c.processExit = make(chan struct{})
+	c.mu.Unlock()
 
 	// Monitor process exit. When the process dies on its own (not via
 	// Close/Abort), close the processExit channel so watchers can react.
