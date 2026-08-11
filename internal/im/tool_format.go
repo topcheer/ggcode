@@ -450,8 +450,22 @@ func formatSpecialIMToolResult(tr *ToolResultInfo) (bool, string) {
 			subject = tr.Detail
 		}
 		return true, fmt.Sprintf("📋 %s: %s", imLabel(toolLang(tr.Lang), "task_create"), subject)
-	case "task_get", "task_update", "task_list", "task_stop", "task_output":
+	case "task_get", "task_list", "task_output":
 		return true, "" // hidden — internal LLM task tracking
+	case "task_update":
+		// Show completion notification when task is marked completed
+		status := extractArgValue(tr.Args, "status")
+		if status == "completed" {
+			subject := extractArgValue(tr.Args, "subject")
+			if subject == "" {
+				subject = tr.Detail
+			}
+			return true, fmt.Sprintf("✅ %s: %s", imLabel(toolLang(tr.Lang), "task_create"), subject)
+		}
+		return true, "" // hidden — internal status updates
+	case "task_stop":
+		// Show stop notification
+		return true, "⏹ " + imLabel(toolLang(tr.Lang), "task_stopped")
 	case "enter_plan_mode":
 		return true, "" // hidden — shows system message instead
 	case "exit_plan_mode":
