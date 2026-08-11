@@ -11,6 +11,7 @@ func TestSubAgentBlockedTools(t *testing.T) {
 		"spawn_agent":       true,
 		"wait_agent":        true,
 		"list_agents":       true,
+		"cancel_agent":      true,
 		"teammate_spawn":    true,
 		"teammate_shutdown": true,
 		"team_create":       true,

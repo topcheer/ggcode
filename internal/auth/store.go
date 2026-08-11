@@ -55,6 +55,11 @@ func DefaultStore() *Store {
 func (s *Store) Load(providerID string) (*Info, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.loadLocked(providerID)
+}
+
+// loadLocked is the internal unlocked version of Load.
+func (s *Store) loadLocked(providerID string) (*Info, error) {
 	all, err := s.loadAll()
 	if err != nil {
 		return nil, err
@@ -117,7 +122,7 @@ func (i *Info) IsExpired() bool {
 func (s *Store) HasUsableToken(providerID string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	info, err := s.Load(providerID)
+	info, err := s.loadLocked(providerID)
 	if err != nil || info == nil {
 		return false, err
 	}
