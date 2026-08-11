@@ -263,7 +263,6 @@ type Agent struct {
 	crossFileImpact        *crossFileImpactState          // pre-completion cross-file impact analysis (removed symbol breakage detection)
 	promptOps              *promptOpsState                // system prompt redundancy and token efficiency intelligence (PromptOps)
 	cacheEffMonitor        *cacheEffMonitor               // prompt cache efficiency monitoring (cache bust storm detection)
-	pressureForecaster     *pressureForecaster            // context window pressure forecasting (predictive compaction warning)
 	redundantRead          *redundantReadState            // redundant re-read detection (context waste prevention)
 	patchExhaust           *patchExhaustState             // IFT patch exhaustion detection (give-up rule for over-mined directories)
 	searchParamGuard       *searchParamGuardState         // search parameter quality guard (vague/broad pattern detection)
@@ -467,7 +466,6 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		toolFallback:           newToolFallbackState(),
 		promptOps:              newPromptOpsState(),
 		cacheEffMonitor:        newCacheEffMonitor(),
-		pressureForecaster:     newPressureForecaster(),
 		redundantRead:          newRedundantReadState(),
 		patchExhaust:           newPatchExhaustState(),
 		searchParamGuard:       newSearchParamGuard(),
@@ -1688,7 +1686,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.readHash.reset()
 	a.toolThermal.reset()
 	a.cacheEffMonitor.reset()
-	a.pressureForecaster.reset()
 	a.promptOps.reset()
 
 	// Capture the git working tree state BEFORE the agent makes any changes.
@@ -2322,20 +2319,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				}},
 			})
 			debug.Log("cache-efficiency", "injecting cache bust storm guidance at iteration %d", i+1)
-		}
-		// Sync context window size from the context manager for forecasting.
-		if cm, ok := a.contextManager.(*ctxpkg.Manager); ok {
-			a.pressureForecaster.setContextWindow(cm.ContextWindow())
-		}
-		if pressureGuidance := a.pressureForecaster.record(i+1, resp.Usage); pressureGuidance != "" {
-			a.contextManager.Add(provider.Message{
-				Role: "user",
-				Content: []provider.ContentBlock{{
-					Type: "text",
-					Text: pressureGuidance,
-				}},
-			})
-			debug.Log("context-pressure", "injecting pressure forecast guidance at iteration %d", i+1)
 		}
 
 		// Detect empty LLM response: API accepted input but produced no output.
