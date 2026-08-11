@@ -485,9 +485,11 @@ func (m *Manager) Spawn(name, task, displayTask string, tools []string, ctx cont
 	m.mu.Lock()
 	running := 0
 	for _, sa := range m.agents {
+		sa.mu.Lock()
 		if sa.Status == StatusRunning || sa.Status == StatusPending {
 			running++
 		}
+		sa.mu.Unlock()
 	}
 	if running >= maxConcurrentSubAgents {
 		m.mu.Unlock()
