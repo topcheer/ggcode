@@ -164,11 +164,15 @@ func formatWarnings(warnings []string) string {
 	if len(warnings) == 0 {
 		return ""
 	}
+
+	// Log ALL warnings for offline analysis.
+	for _, w := range warnings {
+		debug.Log("integrity", "%s", w)
+	}
+
 	if len(warnings) > maxIntegrityWarnings {
 		warnings = warnings[:maxIntegrityWarnings]
 	}
-
-	debug.Log("integrity", "post-write check found %d issue(s)", len(warnings))
 
 	var b strings.Builder
 	b.WriteString("[Post-write integrity check]\n")

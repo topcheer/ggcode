@@ -150,13 +150,13 @@ func fetch(url string) error {
 `
 	warning := checkWriteIntegrity("fetch.go", "", newGo)
 	if warning == "" {
-		t.Fatal("expected error order warning, got empty string")
+		t.Fatal("expected at least one warning, got empty string")
 	}
-	if !strings.Contains(warning, "resp") {
-		t.Errorf("warning should mention resp, got: %s", warning)
-	}
-	if !strings.Contains(warning, "error") {
-		t.Errorf("warning should mention error, got: %s", warning)
+	// With maxIntegrityWarnings=1, only the first warning surfaces.
+	// The code triggers both http-timeout and error-order warnings;
+	// either one is acceptable.
+	if !strings.Contains(warning, "http") && !strings.Contains(warning, "resp") {
+		t.Errorf("warning should mention http-timeout or resp, got: %s", warning)
 	}
 }
 

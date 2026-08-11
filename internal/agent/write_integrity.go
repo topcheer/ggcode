@@ -23,8 +23,12 @@ import (
 //   - External command safety: checks must handle missing tools gracefully
 
 const (
-	maxIntegrityWarnings = 3
-	maxGoSyntaxErrors    = 2
+	// maxIntegrityWarnings: maximum warnings to inject into the tool result.
+	// Reduced from 3 to 1 - each warning wastes 100-300 tokens of context.
+	// Only the single most critical issue should surface; the rest are
+	// logged via debug.Log for offline analysis.
+	maxIntegrityWarnings = 1
+	maxGoSyntaxErrors    = 1
 )
 
 // checkWriteIntegrity validates the content of a file after a write/edit.
