@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/safego"
@@ -29,7 +30,8 @@ type Client struct {
 	httpClient *http.Client
 	card       *AgentCard // cached agent card (nil until discovered)
 
-	// Negotiated auth state (populated after Discover or explicit config)
+	// mu protects all auth-related fields below from concurrent access.
+	mu            sync.RWMutex
 	authMethod    string // "", "apiKey", "bearer", "mtls"
 	bearerToken   string // cached OAuth2 access token
 	refreshToken  string // for token refresh
@@ -57,6 +59,10 @@ func WithMTLS(tlsConfig *tls.Config) ClientOption {
 			TLSClientConfig:   tlsConfig,
 			ForceAttemptHTTP2: false,
 		})
+		// mTLS explicitly requires full certificate verification for both
+		// directions. Override any InsecureSkipVerify that WrapTransport may
+		// have set from the GGCODE_INSECURE env var (issue #19).
+		transport.TLSClientConfig.InsecureSkipVerify = false
 		c.httpClient = &http.Client{
 			Timeout:   15 * time.Minute,
 			Transport: transport,
@@ -142,7 +148,9 @@ func (c *Client) NegotiateAuth() error {
 
 	// No security requirements → nothing to do
 	if len(c.card.Security) == 0 && len(c.card.SecuritySchemes) == 0 {
+		c.mu.Lock()
 		c.authMethod = ""
+		c.mu.Unlock()
 		return nil
 	}
 
@@ -156,8 +164,13 @@ func (c *Client) NegotiateAuth() error {
 
 			switch scheme.Type {
 			case "apiKey":
-				if c.apiKey != "" {
+				c.mu.RLock()
+				hasKey := c.apiKey != ""
+				c.mu.RUnlock()
+				if hasKey {
+					c.mu.Lock()
 					c.authMethod = "apiKey"
+					c.mu.Unlock()
 					return nil
 				}
 			case "http", "bearer":
@@ -169,7 +182,10 @@ func (c *Client) NegotiateAuth() error {
 					return nil
 				}
 			case "mutualTLS":
-				if c.authMethod == "mtls" {
+				c.mu.RLock()
+				isMTLS := c.authMethod == "mtls"
+				c.mu.RUnlock()
+				if isMTLS {
 					return nil
 				}
 			}
@@ -177,7 +193,10 @@ func (c *Client) NegotiateAuth() error {
 	}
 
 	// Also check if client already has a configured auth that might work
-	if c.authMethod != "" {
+	c.mu.RLock()
+	method := c.authMethod
+	c.mu.RUnlock()
+	if method != "" {
 		return nil
 	}
 
@@ -187,23 +206,35 @@ func (c *Client) NegotiateAuth() error {
 
 // tryBearerToken checks if we have a valid bearer token, or tries to obtain one.
 func (c *Client) tryBearerToken() bool {
-	// Already have a non-expired token
-	if c.bearerToken != "" && (c.tokenExpiry.IsZero() || time.Now().Before(c.tokenExpiry)) {
+	// Check for a non-expired token under read lock
+	c.mu.RLock()
+	token := c.bearerToken
+	expiry := c.tokenExpiry
+	provider := c.tokenProvider
+	c.mu.RUnlock()
+
+	if token != "" && (expiry.IsZero() || time.Now().Before(expiry)) {
+		c.mu.Lock()
 		c.authMethod = "bearer"
+		c.mu.Unlock()
 		return true
 	}
 
-	// Try to obtain a token via the configured provider
-	if c.tokenProvider != nil {
+	// Try to obtain a token via the configured provider.
+	// The GetToken call runs outside the lock to avoid blocking other
+	// readers during interactive OAuth2 flows (can take minutes).
+	if provider != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
 
-		accessToken, refreshToken, expiry, err := c.tokenProvider.GetToken(ctx)
+		accessToken, refreshToken, newExpiry, err := provider.GetToken(ctx)
 		if err == nil && accessToken != "" {
+			c.mu.Lock()
 			c.bearerToken = accessToken
 			c.refreshToken = refreshToken
-			c.tokenExpiry = expiry
+			c.tokenExpiry = newExpiry
 			c.authMethod = "bearer"
+			c.mu.Unlock()
 			return true
 		}
 	}
@@ -213,12 +244,16 @@ func (c *Client) tryBearerToken() bool {
 
 // SetBearerToken updates the bearer token (e.g., after OAuth2 token refresh).
 func (c *Client) SetBearerToken(token string) {
+	c.mu.Lock()
 	c.bearerToken = token
 	c.authMethod = "bearer"
+	c.mu.Unlock()
 }
 
 // SetAPIKey updates the API key.
 func (c *Client) SetAPIKey(key string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.apiKey = key
 	if c.authMethod == "" {
 		c.authMethod = "apiKey"
@@ -226,10 +261,16 @@ func (c *Client) SetAPIKey(key string) {
 }
 
 // AuthMethod returns the negotiated authentication method.
-func (c *Client) AuthMethod() string { return c.authMethod }
+func (c *Client) AuthMethod() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.authMethod
+}
 
 // setAuth applies the negotiated auth to an outgoing HTTP request.
 func (c *Client) setAuth(req *http.Request) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	switch c.authMethod {
 	case "apiKey":
 		req.Header.Set("X-API-Key", c.apiKey)
