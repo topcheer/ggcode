@@ -41,7 +41,7 @@ import (
 )
 
 func newDaemonCmd(cfgFile *string) *cobra.Command {
-	var bypassFlag, followFlag, backgroundFlag, tunnelFlag bool
+	var bypassFlag, followFlag, backgroundFlag, tunnelFlag, fullLoadFlag bool
 	var resumeID string
 
 	cmd := &cobra.Command{
@@ -77,17 +77,17 @@ func newDaemonCmd(cfgFile *string) *cobra.Command {
 			newSession, _ := cmd.Flags().GetBool("new-session")
 			if daemonized, _ := cmd.Flags().GetBool("__daemonized"); daemonized {
 				noIM, _ := cmd.Flags().GetBool("__no-im")
-				return runDaemon(cfg, resolvedCfg, bypassFlag, followFlag, resumeID, true, noIM, tunnelFlag, newSession)
+				return runDaemon(cfg, resolvedCfg, bypassFlag, followFlag, resumeID, true, noIM, tunnelFlag, newSession, fullLoadFlag)
 			}
 
 			// If --background, fork and exit parent
 			if backgroundFlag {
-				return startBackgroundDaemon(cfg, resolvedCfg, bypassFlag, resumeID, newSession)
+				return startBackgroundDaemon(cfg, resolvedCfg, bypassFlag, resumeID, newSession, fullLoadFlag)
 			}
 
 			// Normal foreground start
 			noIM, _ := cmd.Flags().GetBool("__no-im")
-			return runDaemon(cfg, resolvedCfg, bypassFlag, followFlag, resumeID, false, noIM, tunnelFlag, newSession)
+			return runDaemon(cfg, resolvedCfg, bypassFlag, followFlag, resumeID, false, noIM, tunnelFlag, newSession, fullLoadFlag)
 		},
 	}
 
@@ -98,6 +98,7 @@ func newDaemonCmd(cfgFile *string) *cobra.Command {
 	cmd.Flags().StringVar(&resumeID, "resume", "", "resume a previous session by ID; use --resume-picker for interactive selection")
 	cmd.Flags().Bool("resume-picker", false, "interactively select a session to resume")
 	cmd.Flags().Bool("new-session", false, "skip auto-loading the most recent unlocked session; always start fresh")
+	cmd.Flags().BoolVar(&fullLoadFlag, "full", false, "load all messages from the session file (default: only last 24h for rendering)")
 	cmd.Flags().Bool("__daemonized", false, "internal: already daemonized")
 	cmd.Flags().Bool("__no-im", false, "internal: skip IM binding check (A2A-only testing)")
 	_ = cmd.Flags().MarkHidden("__daemonized")
@@ -109,7 +110,7 @@ func newDaemonCmd(cfgFile *string) *cobra.Command {
 }
 
 // startBackgroundDaemon forks the process into background and exits the parent.
-func startBackgroundDaemon(cfg *config.Config, cfgFile string, bypass bool, resumeID string, newSession bool) error {
+func startBackgroundDaemon(cfg *config.Config, cfgFile string, bypass bool, resumeID string, newSession bool, fullLoad bool) error {
 	workingDir, _ := os.Getwd()
 	lang := daemon.ResolveLang(cfg.Language)
 
@@ -120,6 +121,9 @@ func startBackgroundDaemon(cfg *config.Config, cfgFile string, bypass bool, resu
 	if newSession {
 		extraArgs = append(extraArgs, "--new-session")
 	}
+	if fullLoad {
+		extraArgs = append(extraArgs, "--full")
+	}
 	pid, err := daemon.ForkIntoBackground(cfgFile, workingDir, "", extraArgs...)
 	if err != nil {
 		return fmt.Errorf("starting background daemon: %w", err)
@@ -129,7 +133,7 @@ func startBackgroundDaemon(cfg *config.Config, cfgFile string, bypass bool, resu
 	return nil
 }
 
-func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive bool, resumeID string, _ bool, noIM bool, startTunnel bool, newSession bool) error {
+func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive bool, resumeID string, _ bool, noIM bool, startTunnel bool, newSession bool, fullLoad bool) error {
 	// --- Steps 1-8: same as run() in root.go ---
 
 	prov, resolved, err := ResolveProvider(cfg)
@@ -330,6 +334,12 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	store, err := session.NewDefaultStore()
 	if err != nil {
 		return fmt.Errorf("creating session store: %w", err)
+	}
+
+	// Apply --full flag: load all messages from session files for rendering.
+	// Without --full, only messages from the last 24h are loaded (for large sessions).
+	if fullLoad {
+		store.SetFullLoad(true)
 	}
 
 	// Clean up stale lock files from crashed/killed processes.

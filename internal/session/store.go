@@ -181,6 +181,10 @@ type JSONLStore struct {
 	// 10-200ms of blocked I/O per iteration. With debouncing, the index is
 	// updated at most once per 5 seconds per session during active messaging.
 	lastIndexUpdate map[string]time.Time
+	// fullLoad disables time-windowed message loading. When false (default),
+	// only messages within RecentMessageWindow are loaded into ses.Messages
+	// for rendering. ContextMessages (agent LLM context) is always fully loaded.
+	fullLoad bool
 }
 
 // indexUpdateDebounce is the minimum interval between index updates triggered
@@ -207,6 +211,119 @@ const MaxTunnelEvents = 2000
 // is truncated. When the cap is applied, a synthetic system note is prepended
 // to inform the agent that earlier context was truncated.
 const MaxContextMessages = 200
+
+// RecentMessageWindow is the time window of messages loaded for rendering
+// when a session is very large. Only the most recent messages within this
+// duration from the last message are loaded into ses.Messages; older messages
+// remain on disk but are not deserialized. Override with --full.
+const RecentMessageWindow = 24 * time.Hour
+
+// recentMessageThreshold is the minimum number of message records that
+// triggers time-windowed loading. Below this, all messages load normally.
+const recentMessageThreshold = 500
+
+// quickExtractTimestamp does a fast substring search for the JSON
+// "timestamp":"..." field without fully deserializing the record.
+// Returns zero time if not found.
+func quickExtractTimestamp(line []byte) time.Time {
+	// Fast path: find "timestamp":" prefix
+	idx := bytes.Index(line, []byte(`"timestamp":"`))
+	if idx < 0 {
+		return time.Time{}
+	}
+	start := idx + len(`"timestamp":"`)
+	end := bytes.IndexByte(line[start:], '"')
+	if end < 0 || end < 20 {
+		return time.Time{}
+	}
+	// RFC3339 format: 2006-01-02T15:04:05.999999999Z07:00
+	ts, err := time.Parse(time.RFC3339, string(line[start:start+end]))
+	if err != nil {
+		return time.Time{}
+	}
+	return ts
+}
+
+// quickRecordType extracts the "type" field value via fast substring search.
+func quickRecordType(line []byte) string {
+	idx := bytes.Index(line, []byte(`"type":"`))
+	if idx < 0 {
+		return ""
+	}
+	start := idx + len(`"type":"`)
+	end := bytes.IndexByte(line[start:], '"')
+	if end < 0 {
+		return ""
+	}
+	return string(line[start : start+end])
+}
+
+// findMessageCutoff does a fast first-pass scan of the JSONL file to
+// determine the byte offset after which all "message" records fall within
+// the recent time window. Returns (offset, totalMessageCount, lastTimestamp).
+// If the file has fewer than recentMessageThreshold messages or the last
+// message has no timestamp, returns (0, count, zeroTime) meaning "load all".
+func findMessageCutoff(path string) (int64, int, time.Time) {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, 0, time.Time{}
+	}
+	defer f.Close()
+
+	// First: count messages and find last timestamp via fast scan.
+	// We track byte offsets of each message line in a slice.
+	type msgOff struct {
+		offset int64
+		ts     time.Time
+	}
+	var offsets []msgOff
+	var pos int64
+
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+	for sc.Scan() {
+		lineLen := int64(len(sc.Bytes())) + 1 // +1 for newline
+
+		// Fast check: is this a message record?
+		if rt := quickRecordType(sc.Bytes()); rt == "message" {
+			ts := quickExtractTimestamp(sc.Bytes())
+			offsets = append(offsets, msgOff{offset: pos, ts: ts})
+		}
+		pos += lineLen
+	}
+
+	totalMsgs := len(offsets)
+	if totalMsgs < recentMessageThreshold {
+		return 0, totalMsgs, time.Time{}
+	}
+
+	// Find last message timestamp
+	last := offsets[totalMsgs-1].ts
+	if last.IsZero() {
+		// No timestamps — can't filter, load all.
+		return 0, totalMsgs, time.Time{}
+	}
+
+	cutoff := last.Add(-RecentMessageWindow)
+
+	// Binary search for the first message at or after cutoff.
+	// offsets is sorted by time (file order = chronological).
+	lo, hi := 0, totalMsgs
+	for lo < hi {
+		mid := (lo + hi) / 2
+		if offsets[mid].ts.Before(cutoff) {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+
+	if lo == 0 {
+		return 0, totalMsgs, last // all messages are within window
+	}
+
+	return offsets[lo].offset, totalMsgs, last
+}
 
 // messageHasToolResult reports whether msg contains a tool_result block.
 func messageHasToolResult(msg provider.Message) bool {
@@ -263,6 +380,23 @@ func NewDefaultStore() (*JSONLStore, error) {
 		return nil, err
 	}
 	return NewJSONLStore(dir)
+}
+
+// LoadWithOptions loads a session, optionally forcing all messages to be
+// loaded regardless of the time window. Use fullLoad=true for --full.
+func (s *JSONLStore) LoadWithOptions(id string, fullLoad bool) (*Session, error) {
+	s.mu.Lock()
+	prev := s.fullLoad
+	s.fullLoad = fullLoad
+	defer func() { s.fullLoad = prev }()
+	return s.loadSession(id)
+}
+
+// SetFullLoad sets the default loading mode for subsequent Load() calls.
+func (s *JSONLStore) SetFullLoad(full bool) {
+	s.mu.Lock()
+	s.fullLoad = full
+	s.mu.Unlock()
 }
 
 // --- index helpers ---
@@ -555,6 +689,20 @@ type localLightweightEntry struct {
 func (s *JSONLStore) loadSession(id string) (*Session, error) {
 	path := s.sessionPath(id)
 
+	// Determine if we should apply time-windowed loading for rendering.
+	// When fullLoad is false and the session has many messages, only load
+	// the most recent messages (within RecentMessageWindow) for ses.Messages.
+	// ContextMessages (agent LLM context) is unaffected — it has its own
+	// checkpoint-based compaction.
+	var msgCutoff int64 // byte offset: skip message records before this offset
+	var totalMsgCount int
+	if !s.fullLoad {
+		msgCutoff, totalMsgCount, _ = findMessageCutoff(path)
+		if msgCutoff > 0 {
+			debug.Log("session", "loadSession %s: time-windowed load, cutoff at offset %d (%d total messages)", id, msgCutoff, totalMsgCount)
+		}
+	}
+
 	// Migrate legacy JSONL records: backfill missing message IDs and convert
 	// old checkpoint format to new summary_msg_id format. This is a no-op
 	// if the file is already fully migrated.
@@ -598,15 +746,21 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 		haveCheckpoint     bool
 	)
 
+	var byteOffset int64
 	for sc.Scan() {
+		lineLen := int64(len(sc.Bytes())) + 1
 		line := strings.TrimSpace(sc.Text())
 		if line == "" {
+			byteOffset += lineLen
 			continue
 		}
 		var rec jsonlRecord
 		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			byteOffset += lineLen
 			continue // skip malformed lines
 		}
+
+		byteOffset += lineLen
 
 		switch rec.Type {
 		case "meta":
@@ -636,7 +790,16 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 			// Metric records are cumulative performance history — never discard.
 			allMetrics = append(allMetrics, rec)
 		case "message":
-			// ALL message records are kept for full history rendering.
+			// Apply time-windowed loading: skip old messages for rendering.
+			// Still track them for checkpoint context restoration.
+			if msgCutoff > 0 && byteOffset < msgCutoff {
+				// Old message within cutoff — only keep for context restoration,
+				// not for ses.Messages (rendering). postCPEntries needs it for
+				// checkpoint logic, but allMessages (rendering) skips it.
+				postCPEntries = append(postCPEntries, lightweightEntry{recType: rec.Type, record: rec})
+				continue
+			}
+			// Recent message (or fullLoad): keep for full rendering.
 			allMessages = append(allMessages, rec)
 			// Also track for ContextMessages (checkpoint + post-checkpoint).
 			postCPEntries = append(postCPEntries, lightweightEntry{recType: rec.Type, record: rec})
