@@ -244,22 +244,4 @@ func search(n int) int {
 	}
 }
 
-// TestCheckWriteIntegrity_UnboundedRecursion verifies the check is wired into
-// the main pipeline.
-func TestCheckWriteIntegrity_UnboundedRecursion(t *testing.T) {
-	new := `package main
-
-func countdown(n int) {
-	countdown(n - 1)
-}
-`
-	result := checkWriteIntegrity("main.go", "", new)
-	if result == "" {
-		t.Fatal("expected write integrity warning for unbounded recursion")
-	}
-	if !contains(result, "unbounded recursion") {
-		t.Errorf("expected 'unbounded recursion' in warning, got: %s", result)
-	}
-}
-
 // (contains is already defined in reflection_test.go)

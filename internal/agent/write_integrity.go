@@ -110,25 +110,14 @@ func registerAllChecks() {
 		{Name: "resource-leak", Langs: []Language{LangGo}, Run: sliceCheck(func(fp, _, nc string) []string {
 			return checkResourceLeaks(fp, nc)
 		})},
-		{Name: "defer-in-loop", Langs: []Language{LangGo}, Run: sliceCheck(checkDeferInLoop)},
 		{Name: "unchecked-type-assert", Langs: []Language{LangGo}, Run: sliceCheck(checkUncheckedTypeAssert)},
-		{Name: "select-timer-leak", Langs: []Language{LangGo}, Run: sliceCheck(checkSelectTimerLeak)},
-		{Name: "lost-cancel", Langs: []Language{LangGo}, Run: sliceCheck(checkLostCancel)},
 		{Name: "lock-without-unlock", Langs: []Language{LangGo}, Run: sliceCheck(checkLockWithoutUnlock)},
-		{Name: "unbounded-recursion", Langs: []Language{LangGo}, Run: sliceCheck(checkUnboundedRecursion)},
-		{Name: "goroutine-leak", Langs: []Language{LangGo}, Run: sliceCheck(checkGoroutineLeak)},
 		{Name: "waitgroup-misuse", Langs: []Language{LangGo}, Run: sliceCheck(checkWaitGroupMisuse)},
 		{Name: "copylock", Langs: []Language{LangGo}, Run: sliceCheck(checkCopylock)},
-		{Name: "map-iter-write", Langs: []Language{LangGo}, Run: sliceCheck(checkMapIterWrite)},
 		{Name: "channel-safety", Langs: []Language{LangGo}, Run: sliceCheck(checkChannelSafety)},
 		{Name: "slice-bounds-risk", Langs: []Language{LangGo}, Run: sliceCheck(checkSliceBoundsRisk)},
 		{Name: "nil-deref-after-error", Langs: []Language{LangGo}, Run: stringCheck(checkNilDerefAfterError)},
-		{Name: "self-assignment", Langs: []Language{LangGo}, Run: stringCheck(checkSelfAssignment)},
-		{Name: "global-var-race", Langs: []Language{LangGo}, Run: sliceCheck(checkGlobalVarRace)},
-		{Name: "infinite-loop", Langs: []Language{LangGo}, Run: sliceCheck(checkInfiniteLoop)},
 		{Name: "range-nil-ptr", Langs: []Language{LangGo}, Run: stringCheck(checkRangeNilPtr)},
-		{Name: "numeric-conversion", Langs: []Language{LangGo}, Run: stringCheck(checkUnsafeNumericConversion)},
-		{Name: "goroutine-recover", Langs: []Language{LangGo}, Run: sliceCheck(checkGoroutineRecover)},
 		{Name: "panic-safety", Langs: []Language{LangGo}, Run: sliceCheck(checkPanicSafety)},
 
 		// --- Security (OWASP / CVE-class) ---

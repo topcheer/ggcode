@@ -109,33 +109,6 @@ func main() {
 	}
 }
 
-func TestCheckWriteIntegrity_SelectTimerLeak(t *testing.T) {
-	// time.After inside a select inside a for loop should be caught by the
-	// integration checkWriteIntegrity entry point.
-	old := "package main\n\nfunc worker(ch chan int) {}\n"
-	newContent := `package main
-
-import "time"
-
-func worker(ch chan int) {
-	for {
-		select {
-		case <-ch:
-		case <-time.After(100 * time.Millisecond):
-			return
-		}
-	}
-}
-`
-	warning := checkWriteIntegrity("worker.go", old, newContent)
-	if warning == "" {
-		t.Fatal("expected timer leak warning, got empty string")
-	}
-	if !strings.Contains(warning, "time.After timer leak") {
-		t.Errorf("warning should mention time.After timer leak, got: %s", warning)
-	}
-}
-
 func TestCheckWriteIntegrity_ErrorOrder(t *testing.T) {
 	newGo := `package main
 import "net/http"
@@ -174,26 +147,6 @@ func TestCheckWriteIntegrity_WarningCap(t *testing.T) {
 	warningLines := lines[1:] // skip header
 	if len(warningLines) > maxIntegrityWarnings {
 		t.Errorf("expected at most %d warnings, got %d: %v", maxIntegrityWarnings, len(warningLines), warningLines)
-	}
-}
-
-func TestCheckWriteIntegrity_GoroutineLeak(t *testing.T) {
-	// A function with a bare `go` call and no lifecycle management should
-	// trigger the goroutine leak check via the main checkWriteIntegrity entry.
-	src := `package main
-
-func worker() {
-	go doStuff()
-}
-
-func doStuff() {}
-`
-	warning := checkWriteIntegrity("main.go", "", src)
-	if warning == "" {
-		t.Fatal("expected goroutine leak warning from checkWriteIntegrity")
-	}
-	if !strings.Contains(warning, "goroutine leak") {
-		t.Errorf("expected 'goroutine leak' in warning, got: %s", warning)
 	}
 }
 
