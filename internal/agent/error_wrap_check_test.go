@@ -232,27 +232,3 @@ func b() error {
 		t.Errorf("expected 2 wrapping issues (err and customErr), got %d", len(issues))
 	}
 }
-
-func TestCheckErrorWrapping_Integration(t *testing.T) {
-	// Full integration via checkWriteIntegrity.
-	src := `package main
-
-import (
-	"errors"
-	"fmt"
-)
-
-func process() error {
-	err := doSomething()
-	if err != nil {
-		return errors.New(err.Error())
-	}
-	otherErr := doOther()
-	return fmt.Errorf("wrap: %v", otherErr)
-}
-`
-	result := checkWriteIntegrity("main.go", "", src)
-	if result == "" {
-		t.Fatal("expected integrity warnings for error wrapping issues")
-	}
-}

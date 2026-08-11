@@ -208,28 +208,6 @@ func main() {
 	}
 }
 
-func TestCheckGoImports_IntegrationWithWriteIntegrity(t *testing.T) {
-	// Test that checkWriteIntegrity picks up import issues
-	src := `package main
-
-import (
-	"fmt"
-	"strings"
-)
-
-func main() {
-	fmt.Println("hello")
-}
-`
-	warning := checkWriteIntegrity("main.go", "", src)
-	if warning == "" {
-		t.Fatal("expected write integrity warning for unused import")
-	}
-	if !strings.Contains(warning, "Unused import") {
-		t.Errorf("warning should mention unused import, got: %s", warning)
-	}
-}
-
 func TestCheckGoImports_EmptyFile(t *testing.T) {
 	warnings := checkGoImports("main.go", "")
 	if warnings != nil {

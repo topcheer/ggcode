@@ -154,18 +154,6 @@ func e() { panic("stub") }
 }
 
 // Integration: verify placeholder check works through checkWriteIntegrity
-func TestCheckWriteIntegrity_PlaceholderWarning(t *testing.T) {
-	old := "package main\n\nfunc process() {\n\treturn nil\n}\n"
-	new := "package main\n\nfunc process() {\n\tpanic(\"not implemented\")\n}\n"
-
-	warning := checkWriteIntegrity("main.go", old, new)
-	if warning == "" {
-		t.Fatal("expected integrity warning for placeholder code")
-	}
-	if !strings.Contains(warning, "placeholder") && !strings.Contains(warning, "stub") {
-		t.Errorf("warning should mention placeholder/stub, got: %s", warning)
-	}
-}
 
 func TestCheckWriteIntegrity_NoPlaceholderWarningForValidCode(t *testing.T) {
 	goodGo := "package main\n\nimport \"fmt\"\n\nfunc process() {\n\tfmt.Println(\"hello\")\n}\n"

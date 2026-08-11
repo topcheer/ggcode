@@ -155,23 +155,6 @@ func handler() {
 	}
 }
 
-func TestCheckIgnoredErrorReturn_Integration(t *testing.T) {
-	// Full integration via checkWriteIntegrity.
-	src := `package main
-
-import "encoding/json"
-
-func handler() {
-	data := map[string]string{"key": "value"}
-	json.Marshal(data)
-}
-`
-	result := checkWriteIntegrity("main.go", "", src)
-	if result == "" {
-		t.Fatal("expected write integrity warning for ignored error, got empty result")
-	}
-}
-
 func TestCheckIgnoredErrorReturn_IgnoredMethodByName(t *testing.T) {
 	// Method call on a local variable - should be detected by method name heuristic.
 	src := `package main

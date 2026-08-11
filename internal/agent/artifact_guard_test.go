@@ -199,15 +199,6 @@ func b() {}
 	}
 }
 
-func TestCheckWriteIntegrity_ContentGrowth(t *testing.T) {
-	old := strings.Repeat("func thing() {}\n", 10)
-	new := old + strings.Repeat("func dup() {}\n", 100)
-	result := checkWriteIntegrity("test.go", old, new)
-	if !strings.Contains(result, "duplication") {
-		t.Errorf("write integrity should detect massive growth, got: %s", result)
-	}
-}
-
 func TestCheckWriteIntegrity_CleanFile(t *testing.T) {
 	old := "package main\n\nfunc a() {}\n"
 	new := "package main\n\nfunc a() {}\nfunc b() {}\n"

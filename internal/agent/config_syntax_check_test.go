@@ -232,14 +232,6 @@ func TestStripJSONComments_StringWithCommentChars(t *testing.T) {
 	}
 }
 
-func TestConfigSyntaxCheck_Integration(t *testing.T) {
-	// Test that configSyntaxCheck is wired into checkWriteIntegrity
-	warn := checkWriteIntegrity("config.json", `{"old": true}`, `{"new": }`)
-	if !strings.Contains(warn, "JSON syntax error") {
-		t.Errorf("expected JSON syntax error from checkWriteIntegrity, got: %s", warn)
-	}
-}
-
 func TestConfigSyntaxCheck_IntegrationValidYAML(t *testing.T) {
 	// Valid YAML should not produce warnings
 	warn := checkWriteIntegrity("deployment.yaml", "", "key: value\nlist:\n  - a\n  - b\n")

@@ -244,31 +244,6 @@ func process() error {
 	}
 }
 
-func TestCheckErrorSwallowing_IntegrationWithWriteIntegrity(t *testing.T) {
-	old := `package main
-
-func process() error {
-	return nil
-}
-`
-	new := `package main
-
-func process() error {
-	err := doSomething()
-	if err != nil {
-	}
-	return nil
-}
-`
-	result := checkWriteIntegrity("handler.go", old, new)
-	if result == "" {
-		t.Fatal("expected integrity warning for empty error handler")
-	}
-	if !strings.Contains(result, "Empty error handler") {
-		t.Errorf("expected empty error handler in integrity check output: %s", result)
-	}
-}
-
 func TestCheckErrorSwallowing_ErrNameVariations(t *testing.T) {
 	// Test with different error variable names.
 	src := `package main

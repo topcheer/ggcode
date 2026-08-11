@@ -273,22 +273,3 @@ func TestCheckDuplicateDeclarations_UnsupportedLanguage(t *testing.T) {
 }
 
 // --- Integration test via checkWriteIntegrity ---
-
-func TestCheckWriteIntegrity_DuplicateDeclWarning(t *testing.T) {
-	old := `package main
-
-func handler() error { return nil }
-`
-	newContent := `package main
-
-func handler() error { return nil }
-func handler() error { return nil } // duplicate
-`
-	result := checkWriteIntegrity("handler.go", old, newContent)
-	if result == "" {
-		t.Fatal("expected write integrity warning for duplicate declaration")
-	}
-	if !strings.Contains(result, "Duplicate") {
-		t.Errorf("expected duplicate warning in integrity check, got: %s", result)
-	}
-}

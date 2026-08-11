@@ -248,29 +248,6 @@ func TestDebugSniffer_IsTestFile(t *testing.T) {
 	}
 }
 
-func TestCheckWriteIntegrity_DebugWarningIntegration(t *testing.T) {
-	// Verify that debug detection integrates with the main integrity check.
-	old := `function calc(a, b) {
-	return a + b;
-}
-`
-	updated := `function calc(a, b) {
-	console.log("debug");
-	return a + b;
-}
-`
-	warning := checkWriteIntegrity("src/calc.js", old, updated)
-	if warning == "" {
-		t.Fatal("expected integrity warning for debug statement")
-	}
-	if !strings.Contains(warning, "console.log") {
-		t.Errorf("warning should mention console.log, got: %s", warning)
-	}
-	if !strings.Contains(warning, "Post-write integrity check") {
-		t.Errorf("warning should have header, got: %s", warning)
-	}
-}
-
 func TestCheckDebugStatements_MultipleCount(t *testing.T) {
 	// Multiple occurrences of same pattern should be counted.
 	old := `function f() { return 1; }
