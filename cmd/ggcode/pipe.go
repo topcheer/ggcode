@@ -8,13 +8,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/agentruntime"
 	"github.com/topcheer/ggcode/internal/checkpoint"
 	"github.com/topcheer/ggcode/internal/config"
-	"github.com/topcheer/ggcode/internal/harness"
 	"github.com/topcheer/ggcode/internal/image"
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/permission"
@@ -25,7 +23,7 @@ import (
 
 // RunPipe executes the agent in non-interactive pipe mode.
 // Returns the exit code (0=success, 1=failure).
-func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDirs []string, outputPath string, bypass bool, noHarness bool, readOnlyAllowedDirs []string) int {
+func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDirs []string, outputPath string, bypass bool, readOnlyAllowedDirs []string) int {
 	prov, resolved, err := ResolveProvider(cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
@@ -151,22 +149,6 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 		}
 		defer f.Close()
 		w = f
-	}
-
-	// Auto-run routing: if harness.auto_run is enabled and --no-harness is not set,
-	// check whether this prompt should be routed to harness instead of the normal agent.
-	// Use fullPrompt (includes stdin data) for routing and harness goal.
-	// Skip auto-run for image inputs (harness uses text-only goals).
-	if !noHarness && len(imageBlocks) == 0 {
-		if autoRunResult, err := checkPipeAutoRun(cfg, fullPrompt, workingDir, prov); err == nil && autoRunResult != nil {
-			switch autoRunResult.Decision {
-			case harness.RouteHarness:
-				return runPipeHarness(autoRunResult, fullPrompt)
-			case harness.RouteSuggest:
-				fmt.Fprintf(os.Stderr, "harness auto-run: %s\n", autoRunResult.Message)
-				// Fall through to normal agent
-			}
-		}
 	}
 
 	// Run agent non-interactively
@@ -386,65 +368,4 @@ func truncatePipeProgress(text string, maxLen int) string {
 		return text[:maxLen]
 	}
 	return text[:maxLen-3] + "..."
-}
-
-func checkPipeAutoRun(cfg *config.Config, prompt string, workingDir string, prov provider.Provider) (*harness.AutoRunResult, error) {
-	mode := cfg.Harness.AutoRunMode()
-	if mode == "off" {
-		return nil, nil
-	}
-	ctx := harness.RouteContext{
-		Input:                 prompt,
-		WorkingDir:            workingDir,
-		LLMClassifierProvider: prov,
-	}
-	return harness.ShouldAutoRun(cfg, prompt, ctx)
-}
-
-func runPipeHarness(result *harness.AutoRunResult, prompt string) int {
-	if result.Project == nil {
-		fmt.Fprintln(os.Stderr, "harness auto-run: no project available. Run ggcode harness init first.")
-		return 1
-	}
-
-	project := *result.Project
-	cfg := result.Config
-	if cfg == nil {
-		loadedCfg, err := harness.LoadConfig(project.ConfigPath)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "harness auto-run: failed to load config: %v\n", err)
-			return 1
-		}
-		cfg = loadedCfg
-	}
-
-	displayPrompt := prompt
-	if len([]rune(prompt)) > 60 {
-		displayPrompt = string([]rune(prompt)[:57]) + "..."
-	}
-	fmt.Fprintf(os.Stderr, "🔀 Harness auto-run: %s\n", displayPrompt)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-	defer cancel()
-
-	opts := harness.RunTaskOptions{}
-	svc := harness.NewRunService()
-	runResult := svc.Run(ctx, harness.RunServiceInput{
-		Project: project,
-		Config:  cfg,
-		Goal:    prompt,
-		Runner:  harness.BinaryRunner{},
-		Options: opts,
-	})
-	if runResult.Error != nil {
-		fmt.Fprintf(os.Stderr, "harness auto-run failed: %v\n", runResult.Error)
-		if runResult.Summary != nil && runResult.Summary.Result != nil && runResult.Summary.Result.Output != "" {
-			fmt.Fprint(os.Stdout, runResult.Summary.Result.Output)
-		}
-		return 1
-	}
-
-	// Output the result
-	fmt.Fprint(os.Stdout, harness.FormatRunServiceResult(runResult))
-	return 0
 }

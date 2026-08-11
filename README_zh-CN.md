@@ -83,7 +83,6 @@ ggcode
 - **编辑器集成** — JetBrains、Zed 等 ACP 兼容编辑器
 - **WebUI** — 内置 Web 界面，浏览器即可使用
 - **IM 集成** — 从 QQ、Telegram、Discord、Slack、飞书、钉钉 控制
-- **Harness 工作流** — 隔离任务执行 + 代码审查 + 合并
 - **定时任务** — Cron 定时任务、提醒、后台自动化
 - **可恢复会话** — 随时暂停和恢复对话
 - **桌面 + 移动端** — macOS、Windows、Linux、iOS、Android 原生应用
@@ -109,7 +108,6 @@ ggcode
 | [MCP 服务器](docs/guide/mcp.md) | 通过 MCP 连接外部工具 |
 | [gRPC 插件](docs/guide/grpc-plugins.md) | 编写和安装自定义工具插件（Go / Python / Node.js）|
 | [IM 集成](docs/guide/im-integration.md) | QQ / Telegram / Discord / Slack / 飞书 / 钉钉 |
-| [Harness 工作流](docs/guide/harness.md) | 隔离任务 + 审查 + 合并 |
 | [A2A 协议](docs/guide/a2a.md) | 跨实例 Agent 委托 |
 | [ACP / 编辑器](docs/guide/acp.md) | JetBrains、Zed 等 ACP 兼容编辑器 |
 | [任务委托](docs/guide/delegation.md) | 委托任务给 Copilot、Claude、Cursor 等外部 Agent |

@@ -9,7 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/agent"
 )
 
-// handleRulesCommand displays learned harness rules (the "ratchet" rules).
 func (m *Model) handleRulesCommand() tea.Cmd {
 	if m.agent == nil {
 		m.chatWriteSystem(nextSystemID(), "Agent not initialized.")
@@ -31,13 +30,11 @@ func (m *Model) handleRulesCommand() tea.Cmd {
 	rules := rs.Rules()
 	if len(rules) == 0 {
 		m.chatWriteSystem(nextSystemID(),
-			"No harness rules yet. Rules are automatically extracted from build/test errors "+
-				"after each run. They help the agent avoid repeating mistakes.")
+			"after each run. They help the agent avoid repeating mistakes.")
 		return nil
 	}
 
 	var b strings.Builder
-	b.WriteString("## Harness Rules (Learned from Past Errors)\n\n")
 	b.WriteString(fmt.Sprintf("Total: %d rules (limit: %d)\n\n", len(rules), 60))
 
 	categories := map[string][]agent.Rule{}

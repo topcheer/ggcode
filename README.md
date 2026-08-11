@@ -103,7 +103,6 @@ individual A2A auth configuration.
 - **Editor integration** — JetBrains, Zed, and ACP-compatible editors via ACP
 - **WebUI** — built-in web interface accessible from any browser
 - **IM integration** — control from QQ, Telegram, Discord, Slack, Feishu, DingTalk
-- **Harness workflow** — isolated task execution with review and promotion
 - **Scheduled tasks** — cron jobs, reminders, and background automation
 - **Resumable sessions** — pause and resume any conversation
 - **Cross-session search** — `/search <query>` finds messages by content across all saved sessions, with snippet preview and quick-resume
@@ -130,7 +129,6 @@ individual A2A auth configuration.
 | [MCP Servers](docs/guide/mcp.md) | Connect external tools via MCP |
 | [gRPC Plugins](docs/guide/grpc-plugins.md) | Build and install custom tool plugins (Go, Python, Node.js) |
 | [IM Integration](docs/guide/im-integration.md) | QQ, Telegram, Discord, Slack, Feishu, DingTalk |
-| [Harness](docs/guide/harness.md) | Isolated task workflow with review |
 | [A2A Protocol](docs/guide/a2a.md) | Cross-instance agent delegation |
 | [ACP / Editor](docs/guide/acp.md) | JetBrains, Zed, and ACP-compatible editors |
 | [Delegation](docs/guide/delegation.md) | Delegate tasks to Copilot, Claude, Cursor, and other agents |

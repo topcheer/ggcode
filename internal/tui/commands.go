@@ -2,7 +2,6 @@ package tui
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,11 +10,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/topcheer/ggcode/internal/debug"
-	"github.com/topcheer/ggcode/internal/harness"
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/permission"
-	"github.com/topcheer/ggcode/internal/provider"
-	"github.com/topcheer/ggcode/internal/safego"
 	"time"
 )
 
@@ -229,7 +225,7 @@ func (m *Model) submitTextWithDisplay(text string, addToHistory bool, displayInC
 // shouldExecuteWhileBusy returns true for commands that should run immediately
 // even when the agent is loading (instead of being queued as pending submissions).
 // Built-in slash commands that only open panels or change settings are safe;
-// custom commands (which may start a new agent run) and /harness subcommands
+// custom commands (which may start a new agent run) and subcommands
 // (which may start runs) are excluded.
 func shouldExecuteWhileBusy(text string) bool {
 	t := strings.TrimSpace(text)
@@ -253,9 +249,6 @@ func shouldExecuteWhileBusy(text string) bool {
 		"/share", "/tunnel", "/unshare",
 		"/diff", "/hooks", "/cost", "/commit", "/retry", "/edit", "/copy", "/context", "/regenerate", "/regen", "/cron", "/debug", "/title", "/undo-run", "/pin":
 		return true
-	// Harness: only the bare command (opens panel) is safe
-	case "/harness":
-		return len(parts) == 1 || (len(parts) == 2 && strings.EqualFold(parts[1], "panel"))
 	}
 	return false
 }
@@ -462,8 +455,6 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 			return m.handleModeCommand(parts)
 		case "/init":
 			return m.handleInitCommand()
-		case "/harness":
-			return m.handleHarnessCommand(parts)
 		case "/cron":
 			return m.handleCronCommand(parts)
 		case "/lang":
@@ -583,10 +574,6 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 		displayText = strings.TrimSpace(img.placeholder + " " + displayText)
 	}
 
-	if m.shouldCheckAutoRun() {
-		return m.startAutoRunCheck(text, displayText, displayInChat)
-	}
-
 	return m.startNormalTextRun(text, displayText, displayInChat)
 }
 
@@ -659,7 +646,13 @@ func (m *Model) handleInitCommand() tea.Cmd {
 		m.chatWriteSystem(nextSystemID(), m.t("init.generate_failed", err))
 		return nil
 	}
-	prompt := buildInitPrompt(targetPath, existed, content)
+	// Build init prompt directly
+	var prompt string
+	if existed {
+		prompt = fmt.Sprintf("Update project memory file at %s with the following content:\n\n%s", targetPath, content)
+	} else {
+		prompt = fmt.Sprintf("Create project memory file at %s with the following content:\n\n%s", targetPath, content)
+	}
 
 	m.chatWriteUser(nextChatID(), "/init")
 	m.appendUserMessage("/init")
@@ -675,219 +668,6 @@ func (m *Model) handleInitCommand() tea.Cmd {
 
 	return tea.Batch(m.startLoadingSpinner(m.statusActivity), m.startAgent(prompt))
 }
-
-func (m *Model) shouldCheckAutoRun() bool {
-	return m.config != nil && m.config.Harness.AutoRunMode() != "off"
-}
-
-// startAutoRunCheck evaluates harness auto-run routing off the Bubble Tea
-// update path so the optional LLM classifier cannot freeze the TUI.
-func (m *Model) startAutoRunCheck(text string, displayText string, displayInChat bool) tea.Cmd {
-	mode := m.config.Harness.AutoRunMode()
-	// In strict mode, apply write guard immediately regardless of route outcome.
-	// This ensures the main agent cannot write to the project even if the input
-	// is not routed to harness.
-	if mode == "strict" {
-		m.applyStrictWriteGuard()
-	}
-
-	// Show the user's input immediately — don't wait for the async routing check.
-	if displayInChat {
-		m.chatWriteUser(nextChatID(), displayText)
-		m.chatListScrollToBottom()
-		m.appendUserMessage(text)
-	}
-
-	// Store for /retry
-	m.lastUserSubmission = text
-
-	cfg := m.config
-	workDir, _ := os.Getwd()
-	var classifierProvider provider.Provider
-	if m.agent != nil {
-		classifierProvider = m.agent.Provider()
-	}
-
-	m.setLoading(true)
-	m.loopStart = time.Now()
-	m.statusActivity = "Checking harness routing..."
-	m.statusToolName = ""
-	m.statusToolArg = ""
-	m.statusToolCount = 0
-
-	checkCmd := func() tea.Msg {
-		ctx := harness.RouteContext{
-			Input:                 text,
-			WorkingDir:            workDir,
-			LLMClassifierProvider: classifierProvider,
-		}
-		result, err := harness.ShouldAutoRun(cfg, text, ctx)
-		return autoRunCheckResultMsg{Text: text, DisplayText: displayText, Result: result, Err: err}
-	}
-	return tea.Batch(m.startLoadingSpinner(m.statusActivity), checkCmd)
-}
-
-// handleAutoRun processes a harness auto-run decision by directly executing
-// a harness task. This skips the context prompt and goes straight to run.
-func (m *Model) handleAutoRun(text string, result *harness.AutoRunResult) tea.Cmd {
-	if result.Project == nil {
-		m.chatWriteSystem(nextChatID(), "harness auto-run: no project available. Run /harness init first.")
-		m.chatListScrollToBottom()
-		return nil
-	}
-
-	// Use the config from auto-run result (may have strict overrides)
-	// Fall back to loading from disk if not provided
-	project := *result.Project
-	cfg := result.Config
-	if cfg == nil {
-		loadedCfg, err := harness.LoadConfig(project.ConfigPath)
-		if err != nil {
-			m.chatWriteSystem(nextChatID(), fmt.Sprintf("harness auto-run: failed to load config: %v", err))
-			m.chatListScrollToBottom()
-			return nil
-		}
-		cfg = loadedCfg
-	}
-
-	m.chatWriteSystem(nextSystemID(), fmt.Sprintf("🔀 Harness auto-run: %s", text))
-	m.chatListScrollToBottom()
-
-	// Skip context prompt — go directly to harness run execution
-	// with an empty context list (auto-init'd projects have no contexts)
-	return m.executeAutoHarnessRun(text, project, cfg)
-}
-
-// executeAutoHarnessRun runs a harness task directly, skipping the context
-// selection prompt that manual /harness run uses.
-func (m *Model) executeAutoHarnessRun(goal string, project harness.Project, cfg *harness.Config) tea.Cmd {
-	m.harnessRunProject = &project
-	m.harnessRunGoal = strings.TrimSpace(goal)
-	m.harnessRunTaskID = ""
-	m.harnessRunLogPath = ""
-	m.harnessRunLogOffset = 0
-	m.harnessRunLastDetail = ""
-	m.harnessRunRemainder = ""
-	m.harnessRunLiveTail = ""
-
-	ctx, cancel := context.WithCancel(context.Background())
-	m.cancelFunc = cancel
-	m.setLoading(true)
-	m.loopStart = time.Now()
-	m.runCanceled = false
-	m.runFailed = false
-	m.statusActivity = m.t("command.harness_status_starting_run")
-	m.statusToolName = ""
-	m.statusToolArg = ""
-	m.statusToolCount = 0
-	m.streamBuffer = &bytes.Buffer{}
-	m.streamPrefixWritten = false
-
-	opts := harness.RunTaskOptions{
-		ContextName: "",
-		ContextPath: "",
-	}
-
-	if m.program == nil {
-		return func() tea.Msg {
-			svc := harness.NewRunService()
-			result := svc.Run(ctx, harness.RunServiceInput{
-				Project: project,
-				Config:  cfg,
-				Goal:    goal,
-				Runner:  harness.BinaryRunner{},
-				Options: opts,
-			})
-			return harnessRunResultMsg{Summary: result.Summary, Err: result.Error, CTA: result.CTA, CTAMessage: result.CTAMessage}
-		}
-	}
-
-	startSpinner := m.spinner.Start(m.t("command.harness_spinner_running"))
-	safego.Go("tui.commands.autoHarnessRun", func() {
-		svc := harness.NewRunService()
-		result := svc.Run(ctx, harness.RunServiceInput{
-			Project: project,
-			Config:  cfg,
-			Goal:    goal,
-			Runner:  harness.BinaryRunner{},
-			Options: opts,
-		})
-		m.program.Send(harnessRunResultMsg{Summary: result.Summary, Err: result.Error, CTA: result.CTA, CTAMessage: result.CTAMessage})
-	})
-	return tea.Batch(startSpinner, m.pollHarnessRunProgress())
-}
-
-// handleHarnessReviewApprove creates a tea.Cmd that approves a harness task
-// and displays the result. Used by the one-key review CTA.
-func (m *Model) handleHarnessReviewApprove(taskID string) tea.Cmd {
-	return func() tea.Msg {
-		workDir, _ := os.Getwd()
-		project, _, err := loadHarnessForTUI(workDir)
-		if err != nil {
-			return harnessReviewResultMsg{Err: fmt.Errorf("load harness: %w", err), TaskID: taskID}
-		}
-		task, err := harness.ApproveTaskReview(project, taskID, "approved via auto-review CTA")
-		if err != nil {
-			return harnessReviewResultMsg{Err: err, TaskID: taskID}
-		}
-		return harnessReviewResultMsg{Task: task, TaskID: taskID}
-	}
-}
-
-// handleHarnessPromoteApply creates a tea.Cmd that promotes a harness task.
-// Used by the one-key promote CTA after review approval.
-func (m *Model) handleHarnessPromoteApply(taskID string) tea.Cmd {
-	return func() tea.Msg {
-		workDir, _ := os.Getwd()
-		project, _, err := loadHarnessForTUI(workDir)
-		if err != nil {
-			return harnessPromoteResultMsg{Err: fmt.Errorf("load harness: %w", err), TaskID: taskID}
-		}
-		// Promote ONLY the specific task — never batch-promote all approved tasks.
-		task, err := harness.PromoteTask(context.Background(), project, taskID, "promoted via auto-promote CTA")
-		if err != nil {
-			return harnessPromoteResultMsg{Err: err, TaskID: taskID}
-		}
-		return harnessPromoteResultMsg{Task: task, TaskID: taskID}
-	}
-}
-
-// applyStrictWriteGuard adds Deny rules for write tools to the permission
-// policy when strict mode is active. This prevents the main agent from
-// directly modifying project files.
-//
-// Guard exemption: BinaryRunner spawns a subprocess with its own policy,
-// so the worker is NOT affected. If subagent mode (in-process) is used
-// in the future, the worker must use a separate ConfigPolicy or call
-// ClearOverride() for the tools it needs.
-func (m *Model) applyStrictWriteGuard() {
-	cp, ok := m.policy.(*permission.ConfigPolicy)
-	if !ok {
-		return
-	}
-	// Deny all file-writing tools for the main agent in strict mode.
-	// The harness worker agent runs in a worktree and is not affected.
-	// run_command is included because it can be used to bypass file write
-	// restrictions (e.g., `echo > file`, `sed -i`).
-	writeTools := []string{
-		"write_file",
-		"edit_file",
-		"multi_edit_file",
-		"notebook_edit",
-		"run_command",
-		"git_add",
-		"git_commit",
-		"git_stash",
-	}
-	for _, tool := range writeTools {
-		cp.SetOverride(tool, permission.Deny)
-	}
-	debug.Log("auto-run", "strict write guard enabled: denied %v", writeTools)
-}
-
-// handleRetryCommand re-submits the last user prompt. Useful when the agent
-// failed due to a transient error (rate limit, network timeout) and the user
-// wants to try again without retyping.
 func (m *Model) handleRetryCommand() tea.Cmd {
 	if m.lastUserSubmission == "" {
 		m.chatWriteSystem(nextSystemID(), m.t("command.retry_empty"))
@@ -987,6 +767,27 @@ func levenshteinDistance(a, b string) int {
 		prev, curr = curr, prev
 	}
 	return prev[lb]
+}
+
+func buildInitPrompt(targetPath string, existed bool, bootstrap string) string {
+	action := "create"
+	if existed {
+		action = "update"
+	}
+	return fmt.Sprintf(`Analyze the current repository and %s the project memory file at %s.
+
+Before writing anything, inspect the repository with tools so the user can see an explicit knowledge-collection flow. Do not skip straight to writing the file. Read the relevant project files, confirm the architecture, tooling, validation commands, major directories, and durable conventions, then write the final GGCODE.md.
+
+Requirements:
+- The output file must be %s.
+- Collect repository knowledge first with tool calls; do not answer with only prose.
+- The file should contain current project facts and durable guidance, not an empty template.
+- Keep the document concise, practical, and easy for future agents to follow.
+- Overwrite the existing file if it already exists.
+
+Bootstrap snapshot collected locally to help you start, but you must verify and improve it with repo inspection before writing:
+
+%s`, action, targetPath, targetPath, bootstrap)
 }
 
 func min3(a, b, c int) int {

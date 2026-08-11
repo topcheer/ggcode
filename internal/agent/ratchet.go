@@ -20,7 +20,7 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// Rule represents a learned harness rule extracted from agent errors.
+// Rule represents a learned rule extracted from agent errors.
 type Rule struct {
 	ID           string    `json:"id"`
 	Category     string    `json:"category"`               // build | test | git | convention | security

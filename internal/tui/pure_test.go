@@ -4,8 +4,6 @@ import (
 	"testing"
 
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
-
-	"github.com/topcheer/ggcode/internal/harness"
 )
 
 func newTestQS(questions ...toolpkg.AskUserQuestion) *questionnaireState {
@@ -59,39 +57,6 @@ func TestIsSubAgentLifecycleTool(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("isSubAgentLifecycleTool(%q) = %v, want %v", tt.tool, got, tt.want)
 		}
-	}
-}
-
-// ── commands_harness.go ─────────────────────────────────────────────
-
-func TestLocalizeHarnessTaskStatus(t *testing.T) {
-	statuses := []struct {
-		status harness.TaskStatus
-		en     string
-		zh     string
-	}{
-		{harness.TaskQueued, "queued", "排队中"},
-		{harness.TaskRunning, "running", "运行中"},
-		{harness.TaskCompleted, "completed", "已完成"},
-		{harness.TaskFailed, "failed", "失败"},
-		{harness.TaskBlocked, "blocked", "阻塞"},
-	}
-	for _, tt := range statuses {
-		en := localizeHarnessTaskStatus(LangEnglish, tt.status)
-		if en != tt.en {
-			t.Errorf("en %v = %q, want %q", tt.status, en, tt.en)
-		}
-		zh := localizeHarnessTaskStatus(LangZhCN, tt.status)
-		if zh != tt.zh {
-			t.Errorf("zh %v = %q, want %q", tt.status, zh, tt.zh)
-		}
-	}
-}
-
-func TestHumanizeHarnessProgress_Empty(t *testing.T) {
-	got := humanizeHarnessProgress(LangEnglish, harness.Project{}, "")
-	if got != "" {
-		t.Errorf("expected empty, got %q", got)
 	}
 }
 

@@ -93,11 +93,9 @@ Slash commands are typed directly in the chat input within the TUI.
 
 | Command | Description |
 |---------|-------------|
-| `/harness [subcommand]` | Run harness commands |
 | `/knight` | Knight auto-evolution |
 | `/tmux` | Manage tmux session |
 | `/bug` | Report a bug |
-| `/review [file]` | Review code changes (harness review) |
 | `/reflect` | Trigger agent self-reflection on recent runs |
 | `/export-trace` | Export session execution trace as structured JSON (TTFT, tool latency, token usage) |
 | `/doctor` | Run health diagnostics (provider, config, MCP, LSP, permissions) |

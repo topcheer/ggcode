@@ -284,9 +284,6 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		}
 		return m, nil
 
-	case harnessPanelRefreshResultMsg:
-		return m.handleHarnessPanelRefreshResultMsg(msg)
-
 	case shellCommandStreamMsg:
 		return m.handleShellCommandStreamMsg(msg, spinnerCmd)
 
@@ -305,37 +302,11 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 	case agentErrMsg:
 		return m.handleAgentErrMsg(msg)
 
-	case autoRunCheckResultMsg:
-		return m.handleAutoRunCheckResultMsg(msg)
-
-	case harnessRunResultMsg:
-		return m.handleHarnessRunResultMsg(msg)
-
-	case harnessReviewResultMsg:
-		return m.handleHarnessReviewResultMsg(msg)
-
-	case harnessPromoteResultMsg:
-		return m.handleHarnessPromoteResultMsg(msg)
-
 	case knightTaskResultMsg:
-		return m.handleKnightTaskResultMsg(msg)
 
 	case knightProjectProposalResultMsg:
-		return m.handleKnightProjectProposalResultMsg(msg)
 
 	case knightTaskEventMsg:
-		return m.handleKnightTaskEventMsg(msg)
-	case harnessContextSuggestionsMsg:
-		return m.handleHarnessContextSuggestionsMsg(msg)
-
-	case harnessInitResultMsg:
-		return m.handleHarnessInitResultMsg(msg)
-
-	case harnessRunProgressMsg:
-		return m.handleHarnessRunProgressMsg(msg)
-
-	case harnessPanelAutoRefreshMsg:
-		return m.handleHarnessPanelAutoRefreshMsg(msg)
 
 	case initPromptCheckMsg:
 		m.initPromptActive = msg.needsInit
@@ -374,9 +345,6 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 
 	case AskUserMsg:
 		return m.handleAskUserMsg(msg)
-
-	case HarnessCheckpointConfirmMsg:
-		return m.handleHarnessCheckpointConfirmMsg(msg)
 
 	case inputBellMsg:
 		return m.handleInputBellMsg(msg)

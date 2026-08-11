@@ -253,23 +253,6 @@ func TestProviderPanelProtocolStepPasteIgnored(t *testing.T) {
 	}
 }
 
-// --- Harness panel paste (existing path, regression test) ---
-
-func TestHarnessPanelActionInputPaste(t *testing.T) {
-	m := setupModelForPaste()
-	m.harnessPanel = &harnessPanelState{}
-	ti := textinput.New()
-	ti.Focus()
-	m.harnessPanel.actionInput = ti
-
-	updated, _ := m.Update(tea.PasteMsg{Content: "harness-task-description"})
-	m = updated.(Model)
-
-	if !strings.Contains(m.harnessPanel.actionInput.Value(), "harness-task-description") {
-		t.Fatalf("expected actionInput to contain pasted text, got %q", m.harnessPanel.actionInput.Value())
-	}
-}
-
 // --- Impersonate panel paste (existing path, regression test) ---
 
 func TestImpersonatePanelVersionInputPaste(t *testing.T) {
@@ -441,25 +424,6 @@ func TestImpersonatePanelHeaderValueInputPaste(t *testing.T) {
 
 	if !strings.Contains(m.impersonatePanel.headerValueInput.Value(), "Bearer sk-xxx") {
 		t.Fatalf("expected headerValueInput to contain pasted text, got %q", m.impersonatePanel.headerValueInput.Value())
-	}
-}
-
-// --- Harness context prompt input paste ---
-
-func TestHarnessContextPromptInputPaste(t *testing.T) {
-	m := setupModelForPaste()
-	ti := textinput.New()
-	ti.Focus()
-	m.harnessContextPrompt = &harnessContextPromptState{
-		inputFocus: true,
-		input:      ti,
-	}
-
-	updated, _ := m.Update(tea.PasteMsg{Content: "user context data"})
-	m = updated.(Model)
-
-	if !strings.Contains(m.harnessContextPrompt.input.Value(), "user context data") {
-		t.Fatalf("expected harness context prompt input to contain pasted text, got %q", m.harnessContextPrompt.input.Value())
 	}
 }
 

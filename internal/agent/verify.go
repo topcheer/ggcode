@@ -418,7 +418,7 @@ func extractText(msg provider.Message) string {
 // where the same hint (e.g. "use -tags goolm") appears on every go build call.
 const maxRuleInjectPerSession = 2
 
-// injectRulesIntoResult prepends matching harness rules to a tool result.
+// injectRulesIntoResult prepends matching rules to a tool result.
 // Rules are matched via two paths:
 //  1. Preventive: MatchingRulesForTool matches rule patterns against tool ARGS
 //     (warns before the error occurs, e.g. "go build" without -tags goolm).
@@ -464,7 +464,7 @@ func (a *Agent) injectRulesIntoResult(toolName string, args json.RawMessage, res
 	}
 
 	var b strings.Builder
-	b.WriteString("[Harness Rules — learned from past mistakes]\n")
+	b.WriteString("[Rules — learned from past mistakes]\n")
 	for _, r := range filtered {
 		b.WriteString(fmt.Sprintf("\u26a0 %s\n", r.Rule))
 		if r.FixHint != "" {

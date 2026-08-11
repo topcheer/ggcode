@@ -47,7 +47,6 @@ It runs entirely in your terminal with a polished TUI:
 - **LSP integration** — go-to-definition, references, rename, diagnostics, code actions via your language server
 - **MCP tools** — connect external tool servers (browser, databases, APIs) seamlessly
 - **Sub-agents** — spawn parallel workers for research, coding, and testing tasks
-- **Harness workflows** — structured engineering pipelines with git worktrees, review, and promotion
 - **IM gateway** — connect QQ, Telegram, Discord, Slack, DingTalk, or Feishu for remote coding
 - **Bilingual UI** — full English and Chinese support
 - **Session persistence** — resume past sessions with `ggcode --resume`

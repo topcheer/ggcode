@@ -9,7 +9,6 @@ import (
 
 // ConfigAccess provides unified read/write access to ALL ggcode configuration.
 // Implementations route dot-notation keys to the appropriate config file
-// (ggcode.yaml, keys.env, harness.yaml, oauth-tokens, etc.).
 type ConfigAccess interface {
 	// Get reads a config key. Supports dot-notation paths.
 	// Returns the value as a string (complex values are JSON-encoded).
@@ -18,7 +17,7 @@ type ConfigAccess interface {
 	// For provider-affecting keys, probes the target before committing.
 	Set(key, value string) error
 	// List returns all config settings, optionally filtered by section.
-	// Section can be: "", "core", "api_key", "vendors", "mcp", "im", "a2a", "knight", "harness", "oauth", "runtime".
+	// Section can be: "", "core", "api_key", "vendors", "mcp", "im", "a2a", "knight", "oauth", "runtime".
 	List(section string) (string, error)
 	// Delete removes a config key.
 	// Only works for: mcp_servers.<name>, im.adapters.<name>.
@@ -51,7 +50,7 @@ func (t ConfigTool) Parameters() json.RawMessage {
 			},
 			"list": {
 				"type": "boolean",
-				"description": "List all settings. Optionally filter by section: 'core', 'api_key', 'vendors', 'mcp', 'im', 'a2a', 'knight', 'harness', 'oauth', 'runtime'. Empty string or omitted lists everything."
+				"description": "List all settings. Optionally filter by section: 'core', 'api_key', 'vendors', 'mcp', 'im', 'a2a', 'knight' 'oauth', 'runtime'. Empty string or omitted lists everything."
 			},
 			"delete": {
 				"type": "boolean",

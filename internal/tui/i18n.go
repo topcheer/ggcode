@@ -168,9 +168,6 @@ func (m *Model) setLanguage(lang string) {
 			m.modelPanel.filter.Focus()
 		}
 	}
-	if m.harnessPanel != nil {
-		m.harnessPanel.actionInput.Placeholder = placeholderWithPasteShortcutHint(harnessPanelInputPlaceholder(m.harnessPanel.selectedSection, m.currentLanguage()), m.currentLanguage())
-	}
 	m.approvalOptions = defaultApprovalOptionsFor(m.currentLanguage())
 	m.diffOptions = diffConfirmOptionsFor(m.currentLanguage())
 	if len(m.langOptions) > 0 {
@@ -330,8 +327,6 @@ func localizeSlashDescription(lang Language, cmd string) string {
 		return tr(lang, "slash.mode")
 	case "/init":
 		return tr(lang, "slash.init")
-	case "/harness":
-		return tr(lang, "slash.harness")
 	case "/lang":
 		return tr(lang, "slash.lang")
 	case "/skills":

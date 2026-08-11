@@ -201,11 +201,6 @@ var Categories = []Category{
 		Tags:        []string{"swarm"},
 	},
 	{
-		Name: "harness", EnvSuffix: "HARNESS",
-		Description: "Harness workflow engine, tasks, worktrees, review",
-		Tags:        []string{"harness", "auto-run"},
-	},
-	{
 		Name: "mcp", EnvSuffix: "MCP",
 		Description: "MCP client, discovery, connect, HTTP, OAuth",
 		Tags:        []string{"mcp", "mcp-oauth", "mcp-discover", "mcp-connect", "mcp-http"},

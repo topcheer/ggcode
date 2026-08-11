@@ -35,8 +35,6 @@
       "features.modes.title": "Permission modes",
       "features.modes.text":
         "Five trust levels from fully supervised to autopilot. Checkpoints and /undo keep changes reversible.",
-      "features.harness.title": "Harness workflow",
-      "features.harness.text":
         "Isolated task execution in git worktrees with automated checks, code review, and promotion.",
       "features.mobile.title": "Desktop + Mobile",
       "features.mobile.text":
@@ -92,8 +90,6 @@
       "features.modes.title": "权限模式",
       "features.modes.text":
         "五种信任级别，从完全监督到自动驾驶。检查点和 /undo 让变更可逆。",
-      "features.harness.title": "Harness 工作流",
-      "features.harness.text":
         "在 git worktree 中隔离执行任务，自动检查、代码审查、合并推广。",
       "features.mobile.title": "桌面 + 移动端",
       "features.mobile.text":

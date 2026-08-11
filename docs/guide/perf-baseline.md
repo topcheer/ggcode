@@ -33,7 +33,6 @@ ggcode tracks agent performance metrics across sessions and warns when efficienc
 | Claude Code | No (shows /cost per session only) |
 | Cursor | No |
 | Devin | Internal SICA tracking, no user-visible alerts |
-| OpenHands | Eval harnesses for benchmarking, not live detection |
 | Aider | No |
 | **ggcode** | **Yes** |
 

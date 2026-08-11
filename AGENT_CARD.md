@@ -13,7 +13,6 @@
 |-------|-------|
 | **Release Date** | 2023-06-15 (initial), ongoing active development |
 | **Pricing** | Open source (Apache 2.0), self-hosted |
-| **Description** | Terminal-based AI coding agent with multi-provider LLM support, MCP integration, IM adapters, and harness-engineering workflows. Enables autonomous code editing, testing, and refactoring with permission-aware execution. |
 | **Category** | CLI/Developer Tools Agent |
 
 ---
@@ -142,7 +141,6 @@
 | Field | Value |
 |-------|-------|
 | **Internal Safety Results** | Published via code documentation and research notes (docs/research/) |
-| **Capability Benchmarks** | Test suite with `go test` (unit + integration), harness workflow E2E tests |
 | **Agent-Specific System Cards** | ✅ This document (AGENT_CARD.md) |
 | **Third-Party Testing** | ✅ CI/CD pipeline (GitHub Actions), CodeQL security analysis |
 | **Bug Bounty / Vulnerability Disclosure** | GitHub Issues (public vulnerability reporting) |
@@ -209,7 +207,6 @@
 | Metric | Value | Notes |
 |--------|-------|-------|
 | **Lines of Code** | ~101k LOC (non-test) | 43 internal packages |
-| **Test Coverage** | High | Several packages have 140%+ test/code ratio (harness, a2a, webui) |
 | **Built-in Tools** | 52+ | File, search, git, command, browser, memory, MCP, etc. |
 | **IM Adapters** | 17+ | QQ, Telegram, Discord, Slack, Feishu, WeChat, DingTalk, etc. |
 | **Providers Supported** | 10+ | OpenAI, Anthropic, Google, Kimi, Aliyun, Ark, MiniMax, MiMo, Copilot, ZAI |

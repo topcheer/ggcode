@@ -66,10 +66,6 @@ func (m Model) renderContextPanel() string {
 		return m.renderHooksPanel()
 	case m.inspectorPanel != nil:
 		return m.renderInspectorPanel()
-	case m.harnessContextPrompt != nil:
-		return m.renderHarnessContextPrompt()
-	case m.harnessPanel != nil:
-		return m.renderHarnessPanel()
 	case m.impersonatePanel != nil:
 		return m.renderImpersonatePanel()
 	case m.lanChatPanel != nil:
@@ -107,16 +103,6 @@ func (m Model) renderContextPanel() string {
 			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" Tab/j/k move • Enter confirm • y/n shortcuts"),
 		)
 		return m.renderContextBox(m.t("panel.review_file_change"), body, lipgloss.Color("13"))
-	case m.pendingHarnessCheckpointConfirm != nil:
-		checkpoint := m.pendingHarnessCheckpointConfirm.Checkpoint
-		body := fmt.Sprintf(" Dirty workspace\n\n %s\n %s   %s\n\n%s\n%s",
-			truncateLines(strings.TrimSpace(checkpoint.Summary), 6),
-			"commit",
-			checkpoint.CommitMessage,
-			m.renderApprovalOptions(m.diffOptions, m.diffCursor),
-			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" Tab/j/k move • Enter confirm • y/n shortcuts"),
-		)
-		return m.renderContextBox("Confirm harness checkpoint", body, lipgloss.Color("13"))
 	case len(m.langOptions) > 0:
 		title := languageSwitchLabel(m.currentLanguage())
 		bodyLine := m.t("lang.selection.current", m.languageLabel())

@@ -67,7 +67,6 @@ func (m *Model) appendStreamStatusLine(text string) {
 		m.renderStreamBuffer(true)
 		m.streamBuffer.Reset()
 	}
-	m.harnessRunLiveTail = ""
 	m.streamPrefixWritten = false
 	m.reasoningActive = false
 	m.chatFinishAssistant(m.currentAssistantID())
@@ -123,5 +122,4 @@ func (m *Model) renderStreamBuffer(renderMarkdown bool) {
 		return
 	}
 	m.streamBuffer.Reset()
-	m.harnessRunLiveTail = ""
 }

@@ -487,8 +487,6 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	// Bind tunnel host to session for projection recording
 	core.Tunnel.BindSession(ses, store)
 
-	bridge.SetHarnessConfig(cfg.Harness.AutoRunMode(), cfg.Harness.AutoInit, workingDir)
-
 	// Wire checkpoint handler — persist compacted state after summarize
 	ag.SetCheckpointHandler(func(summaryMsgID, lastMsgID string, tokenCount int) {
 		if err := store.AppendCheckpoint(ses, summaryMsgID, lastMsgID, tokenCount); err != nil {

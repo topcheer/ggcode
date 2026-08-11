@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/topcheer/ggcode/internal/config"
-	"github.com/topcheer/ggcode/internal/harness"
 	"github.com/topcheer/ggcode/internal/session"
 )
 
@@ -27,7 +26,6 @@ func TestRootHelpUsesCompactLayout(t *testing.T) {
 	help := out.String()
 	want := []string{
 		"Usage:\nggcode [flags]\nggcode [command]\n",
-		"Available Commands:\n- acp: Start ggcode as an ACP agent (stdio JSON-RPC)\n- completion: Generate shell completion script\n- daemon: Run ggcode in daemon mode, controlled via IM\n- harness: Manage harness-engineering workflows\n- im: Manage IM adapters, bindings, and pairing\n- llm-probe: Test all configured LLM endpoints for connectivity, auth, and usage\n- mcp: Manage MCP server configuration\n",
 		"Flags:\n- --allowedTools stringArray: tools to allow in pipe mode (can be repeated)\n",
 		"- -h, --help: help for ggcode\n",
 	}
@@ -336,50 +334,6 @@ func TestMCPInstallCommandPersistsServerEnv(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected installed z-ai server with env in config, got %+v", cfg.MCPServers)
-	}
-}
-
-func TestHarnessMonitorCommandShowsSnapshotSummary(t *testing.T) {
-	wd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd() error = %v", err)
-	}
-	repoDir := t.TempDir()
-	gitInitForRootTest(t, repoDir)
-	if err := os.Chdir(repoDir); err != nil {
-		t.Fatalf("Chdir() error = %v", err)
-	}
-	defer func() { _ = os.Chdir(wd) }()
-
-	result, err := harness.Init(repoDir, harness.InitOptions{})
-	if err != nil {
-		t.Fatalf("Init() error = %v", err)
-	}
-	task, err := harness.NewTask("Monitor ERP pipeline", "cli")
-	if err != nil {
-		t.Fatalf("NewTask() error = %v", err)
-	}
-	task.Status = harness.TaskRunning
-	task.WorkerID = "worker-1"
-	task.WorkerStatus = "running"
-	task.WorkerPhase = "coding"
-	task.WorkerProgress = "updating aggregate"
-	if err := harness.SaveTask(result.Project, task); err != nil {
-		t.Fatalf("SaveTask() error = %v", err)
-	}
-
-	cmd := NewRootCmd()
-	var out bytes.Buffer
-	cmd.SetOut(&out)
-	cmd.SetErr(&out)
-	cmd.SetArgs([]string{"harness", "monitor", "--events", "4", "--focus-tasks", "3"})
-
-	if err := cmd.Execute(); err != nil {
-		t.Fatalf("Execute() error = %v", err)
-	}
-	output := out.String()
-	if !strings.Contains(output, "Harness monitor") || !strings.Contains(output, task.ID) || !strings.Contains(output, "active_workers=1") {
-		t.Fatalf("unexpected harness monitor output:\n%s", output)
 	}
 }
 

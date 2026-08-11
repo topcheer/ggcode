@@ -45,7 +45,6 @@ const catColors: Record<string, string> = {
   pc: '#9333ea',
   daemon: '#ef4444',
   mcp: '#f472b6',
-  harness: '#fb923c',
   tui: '#34d399',
   permission: '#fbbf24',
 }

@@ -17,7 +17,6 @@ package agent
 //
 // Correct usage of these functions is limited to:
 //   - main() and init() functions (top-level program bootstrap)
-//   - TestMain() in _test.go files (test harness entry point)
 //   - The top level of cmd/ binaries
 //
 // Competitor analysis:

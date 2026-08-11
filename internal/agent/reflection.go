@@ -434,7 +434,7 @@ func (a *Agent) maybeReflect(stats *RunStats) {
 		// Learns from SUCCESSES to complement ratchet's learning from failures.
 		a.recordPlaybook(&s)
 		// Run ratchet: match errors against existing rules, generalize
-		// unmatched ones via LLM. This is the harness ratchet — every
+		// unmatched ones via LLM. This is the learning ratchet — every
 		// error becomes a rule that prevents future mistakes.
 		a.runRatchet(&s)
 	})

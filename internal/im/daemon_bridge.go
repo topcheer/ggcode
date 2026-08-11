@@ -13,9 +13,7 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 
 	"github.com/topcheer/ggcode/internal/agent"
-	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/daemon"
-	"github.com/topcheer/ggcode/internal/harness"
 	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
@@ -45,8 +43,6 @@ type DaemonBridge struct {
 	store           session.Store
 	sess            *session.Session
 	language        string
-	harnessMode     string // "off", "suggest", "on", "strict"
-	harnessAutoInit bool
 	workingDir      string
 	usageTurnIndex  int
 	metricCollector *metrics.Collector
@@ -102,13 +98,6 @@ func NewDaemonBridge(mgr *Manager, ag *agent.Agent, emitter *IMEmitter, store se
 		}
 	}
 	return b
-}
-
-// SetHarnessConfig configures auto-run routing for daemon mode.
-func (b *DaemonBridge) SetHarnessConfig(mode string, autoInit bool, workingDir string) {
-	b.harnessMode = mode
-	b.harnessAutoInit = autoInit
-	b.workingDir = workingDir
 }
 
 // It translates the selected values into a text reply and feeds it through
@@ -428,9 +417,6 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 	}
 	b.notifyRunStateChange(true)
 	b.runQueuedLoop(ctx2, content, "", func(ctx context.Context, text string) bool {
-		if text != "" && b.harnessMode != "" && b.harnessMode != "off" {
-			return b.tryHarnessAutoRun(ctx, text) != nil
-		}
 		return false
 	}, func(err error) {
 		b.emitter.EmitText(provider.UserFacingError(err))
@@ -600,11 +586,6 @@ func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.Co
 	// Save user message to session
 	b.appendUserMessage(content)
 
-	// Auto-run routing check: log suggestion for harness-eligible tasks.
-	// In daemon mode, auto-run is informational only — the agent decides
-	// whether to use harness based on its skill instructions.
-	b.checkAutoRunSuggestion(extractText(content))
-
 	err := b.agent.RunStreamWithContent(ctx, content, func(event provider.StreamEvent) {
 		defer safego.Recover("im.daemonBridge.streamCallback")
 		// Broadcast to webchat subscribers
@@ -719,86 +700,12 @@ func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.Co
 	return err
 }
 
-// checkAutoRunSuggestion logs whether the input should be routed to harness.
-// In daemon mode this is informational — the agent uses skill instructions
-// to decide whether to invoke harness. Future: integrate with harness run API.
-func (b *DaemonBridge) checkAutoRunSuggestion(text string) {
-	if b.harnessMode == "" || b.harnessMode == "off" || text == "" {
-		return
-	}
-	ctx := harness.RouteContext{
-		Input:      text,
-		WorkingDir: b.workingDir,
-	}
-	// Build a minimal config for ShouldAutoRun
-	cfg := &config.Config{Harness: config.HarnessConfig{
-		AutoRun:  b.harnessMode,
-		AutoInit: b.harnessAutoInit,
-	}}
-	result, err := harness.ShouldAutoRun(cfg, text, ctx)
-	if err != nil || result == nil {
-		return
-	}
-	if result.Decision == harness.RouteHarness || result.Decision == harness.RouteSuggest {
-		debug.Log("daemon", "auto-run: %s → %v (project=%v)", truncate(text, 40), result.Decision, result.Project != nil)
-	}
-}
-
 // truncate shortens s to maxLen for logging.
 func truncate(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
 	}
 	return s[:maxLen-3] + "..."
-}
-
-// tryHarnessAutoRun checks whether the input should be routed to harness
-// and executes via RunService if so. Returns non-nil result when harness
-// handled the request. Returns nil to fall through to normal agent run.
-func (b *DaemonBridge) tryHarnessAutoRun(ctx context.Context, text string) *harness.RunServiceResult {
-	routeCtx := harness.RouteContext{
-		Input:                 text,
-		WorkingDir:            b.workingDir,
-		LLMClassifierProvider: b.agent.Provider(),
-	}
-	cfg := &config.Config{Harness: config.HarnessConfig{
-		AutoRun:  b.harnessMode,
-		AutoInit: b.harnessAutoInit,
-	}}
-	result, err := harness.ShouldAutoRun(cfg, text, routeCtx)
-	if err != nil || result == nil {
-		return nil
-	}
-	if result.Decision != harness.RouteHarness {
-		// Suggest mode: let agent handle it (skill instructions guide the model)
-		if result.Decision == harness.RouteSuggest {
-			debug.Log("daemon", "auto-run suggest: %s", truncate(text, 60))
-		}
-		return nil
-	}
-
-	// Route to harness — emit status and run
-	debug.Log("daemon", "auto-run harness: %s", truncate(text, 60))
-	b.emitter.EmitText(fmt.Sprintf("harness auto-run: %s", truncate(text, 60)))
-
-	svc := harness.NewRunService()
-	if result.Project == nil {
-		debug.Log("daemon", "auto-run: RouteHarness but no project — falling through to agent")
-		return nil
-	}
-	project := *result.Project
-	runResult := svc.Run(ctx, harness.RunServiceInput{
-		Project: project,
-		Config:  result.Config,
-		Goal:    text,
-		Runner:  harness.BinaryRunner{},
-		Options: harness.RunTaskOptions{},
-	})
-
-	// Emit the result
-	output := harness.FormatRunServiceResult(runResult)
-	b.emitter.EmitText(output)
-	return runResult
 }
 
 // appendUserMessage adds the user message to the session store.
@@ -1195,9 +1102,6 @@ func (b *DaemonBridge) SendUserMessage(content []provider.ContentBlock) {
 	// Start the run outside the lock
 	safego.Go("im.daemonBridge.run", func() {
 		b.runQueuedLoop(ctx2, content, "webchat: ", func(ctx context.Context, text string) bool {
-			if text != "" && b.harnessMode != "" && b.harnessMode != "off" {
-				return b.tryHarnessAutoRun(ctx, text) != nil
-			}
 			return false
 		}, func(err error) {
 			debug.Log("daemon-bridge", "webchat: agent run error: %v", err)

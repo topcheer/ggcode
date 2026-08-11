@@ -311,24 +311,6 @@ func (m *Model) handleDiffConfirm(approved bool) tea.Cmd {
 	return nil
 }
 
-func (m *Model) handleHarnessCheckpointConfirm(approved bool) tea.Cmd {
-	pc := m.pendingHarnessCheckpointConfirm
-	m.pendingHarnessCheckpointConfirm = nil
-	if pc == nil || pc.Response == nil {
-		return nil
-	}
-	safego.Go("tui.commands.harnessCheckpoint", func() {
-		select {
-		case pc.Response <- approved:
-		default:
-		}
-	})
-	if !approved {
-		m.chatWriteSystem(nextSystemID(), m.t("command.harness_cancelled"))
-	}
-	return nil
-}
-
 func (m Model) handleHistoryUp() (tea.Model, tea.Cmd) {
 	// De-queue feature: when agent is busy, input is empty, and there are
 	// visible pending submissions, press Up to pull the last queued message

@@ -1,6 +1,5 @@
 # ggcode
 
-> AI coding agent for the terminal. Go codebase with Bubble Tea TUI, multi-provider LLM support, MCP integration, IM adapters, and harness-engineering workflows.
 
 ## Quick Reference
 
@@ -48,7 +47,6 @@ CGO_ENABLED=0 go build -tags goolm ./...
 | `internal/tool/` | Built-in tools (file edit, search, run_command, browser, etc.) |
 | `internal/im/` | IM adapters (QQ, Telegram, Discord, Slack, Feishu, WeChat, etc.) |
 | `internal/permission/` | Permission modes, dangerous command detection |
-| `internal/harness/` | Harness task engine, worktrees, review/promotion |
 | `internal/a2a/` | Agent-to-agent protocol, mDNS discovery |
 | `internal/mcp/` | MCP server/client integration |
 | `internal/debug/` | Debug logging system (category-based ring buffer) |
@@ -69,7 +67,6 @@ CGO_ENABLED=0 go build -tags goolm ./...
 - Coding plan providers return 429 for both transient limits AND quota exhaustion — `isQuotaExhaustedError()` distinguishes them
 
 ### TUI Layout
-- Panels (model, provider, inspector, harness, etc.) open in the main content area
 - When any panel is open, conversation is hidden; panel fills full height
 - `renderContextBox` forces full height; `renderContextBoxAuto` for compact elements (status bar)
 - Composer/input position stays fixed regardless of panel content height

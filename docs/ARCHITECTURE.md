@@ -8,11 +8,9 @@
 
 ## Overview
 
-ggcode is a terminal-based AI coding agent written in Go. It provides an interactive REPL where users describe coding tasks in natural language; the agent iteratively plans, calls tools, and refines its work in an agentic loop. The same core engine powers a desktop GUI (Wails/React), a daemon mode with IM gateway, a harness control plane, an A2A (Agent-to-Agent) mesh, and a mobile relay tunnel.
 
 The core agent loop is complemented by several subsystems:
 
-- **Harness control plane** (`ggcode harness ...`): scaffolds repo guidance, generates nested subsystem `AGENTS.md` files, runs invariant checks, tracks orchestrated work items, queues multi-step work with dependency-gated backlogs, binds tasks to bounded contexts, summarizes queue health per context, exposes owner-centric actionable inboxes and batch actions, creates isolated git worktrees, persists delivery evidence, and exposes review/approval, promotion, and release-batch loops — all built around the existing runtime rather than forking a second agent architecture.
 - **A2A mesh**: Multiple ggcode instances discover each other, authenticate via multiple schemes (API key, OAuth2+PKCE, Device Flow, OIDC, mTLS), and call tools across instances transparently via MCP bridge. Optional mDNS LAN discovery.
 - **IM gateway**: Remote coding via 16 IM platforms (QQ, Telegram, Discord, Slack, DingTalk, Feishu, WeCom, WeChat, WhatsApp, Signal, Matrix, Mattermost, IRC, Nostr, Twitch, PC) with slash commands for adapter management.
 - **Mobile relay**: WebSocket tunnel broker that records and replays agent events to mobile clients via a standalone relay server, enabling mobile/remote interaction with running sessions.
@@ -36,7 +34,6 @@ cmd/ggcode/                # CLI entrypoint
   root.go                  # Root command: tool registration, agent wiring, permission modes
   pipe.go                  # Non-interactive pipe mode (-p flag)
   daemon.go                # Daemon mode: headless agent, follow display, tunnel/IM, lanchat Hub, session auto-load
-  harness_cmd.go           # Harness CLI: scaffold, run, queue, review, promote, release
   im_cmd.go                # IM adapter management CLI
   mcp_cmd.go               # MCP server management CLI
   report.go                # Session analytics report generator (HTML output)
@@ -210,7 +207,6 @@ internal/
     provider_picker.go     # Provider/vendor/endpoint selection
     mcp_panel.go           # MCP server management panel
     inspector.go           # Session inspector panel
-    harness_panel.go       # Harness workflow panel
     skills_panel.go        # Skills browser panel
     i18n.go                # i18n catalogs (en / zh-CN)
     ask_user.go            # Interactive ask_user questionnaire
@@ -360,17 +356,12 @@ internal/
     hook.go                # Hook struct, HookConfig, ValidateHooks, TestMatch
     runner.go              # HookRunner: executes pre/post tool hooks, matchAny (glob/regex)
 
-  harness/                 # Harness control plane
-    config.go              # Harness config model and defaults
     project.go             # Project discovery and scaffold creation
     check.go               # Structural checks and validation commands
-    run.go                 # Tracked harness runs / queued execution
     release.go             # Release-batch planning and persisted release reports
     worktree.go            # Git worktree lifecycle for isolated task workspaces
-    gc.go                  # Archive/prune stale harness state
     auto_init.go           # Auto-init: detect projects and scaffold
     auto_run.go            # Auto-run: pollable sub-agent-backed workers
-    templates.go           # Harness prompt templates
     worker.go              # Worker: sub-agent-backed task execution
     context.go             # Bounded context binding
     context_config.go      # Context configuration model

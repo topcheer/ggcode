@@ -17,7 +17,6 @@ import (
 )
 
 // configAccess implements tool.ConfigAccess backed by *config.Config.
-// It manages all configuration files: ggcode.yaml, keys.env, harness.yaml, oauth-tokens.
 // It does NOT depend on any UI layer type.
 type configAccess struct {
 	cfg        *config.Config
@@ -117,12 +116,6 @@ func (a *configAccess) Get(key string) (string, error) {
 		return strconv.Itoa(a.cfg.KnightConfig.DailyTokenBudget), nil
 	case key == "knight.idle_seconds":
 		return strconv.Itoa(a.cfg.KnightConfig.IdleDelaySec), nil
-
-	// --- Harness (runtime) ---
-	case key == "harness.auto_run":
-		return a.cfg.Harness.AutoRun, nil
-	case key == "harness.auto_init":
-		return strconv.FormatBool(a.cfg.Harness.AutoInit), nil
 
 	// --- Runtime ---
 	case key == "allowed_dirs":
@@ -240,18 +233,6 @@ func (a *configAccess) Set(key, value string) error {
 		a.cfg.KnightConfig.IdleDelaySec = n
 		return a.saveAndPatch("knight.idle_delay_sec", value)
 
-	// --- Harness ---
-	case key == "harness.auto_run":
-		a.cfg.Harness.AutoRun = value
-		return a.saveAndPatch("harness.auto_run", value)
-	case key == "harness.auto_init":
-		b, err := strconv.ParseBool(value)
-		if err != nil {
-			return fmt.Errorf("invalid harness.auto_init: %w", err)
-		}
-		a.cfg.Harness.AutoInit = b
-		return a.saveAndPatch("harness.auto_init", value)
-
 	// --- Runtime ---
 	case key == "allowed_dirs":
 		var dirs []string
@@ -288,7 +269,6 @@ func (a *configAccess) List(section string) (string, error) {
 		sb.WriteString(a.listSectionIM())
 		sb.WriteString(a.listSectionA2A())
 		sb.WriteString(a.listSectionKnight())
-		sb.WriteString(a.listSectionHarness())
 		sb.WriteString(a.listSectionRuntime())
 	case "core":
 		sb.WriteString(a.listSectionCore())
@@ -304,12 +284,10 @@ func (a *configAccess) List(section string) (string, error) {
 		sb.WriteString(a.listSectionA2A())
 	case "knight":
 		sb.WriteString(a.listSectionKnight())
-	case "harness":
-		sb.WriteString(a.listSectionHarness())
 	case "runtime":
 		sb.WriteString(a.listSectionRuntime())
 	default:
-		return "", fmt.Errorf("unknown section %q (valid: core, api_key, vendors, mcp, im, a2a, knight, harness, runtime)", section)
+		return "", fmt.Errorf("unknown section %q (valid: core, api_key, vendors, mcp, im, a2a, knight, runtime)", section)
 	}
 
 	return sb.String(), nil
@@ -940,11 +918,6 @@ func (a *configAccess) listSectionKnight() string {
 		a.cfg.KnightConfig.Enabled, a.cfg.KnightConfig.DailyTokenBudget, a.cfg.KnightConfig.IdleDelaySec)
 }
 
-func (a *configAccess) listSectionHarness() string {
-	return fmt.Sprintf("== Harness ==\n  auto_run: %s\n  auto_init: %v\n",
-		a.cfg.Harness.AutoRun, a.cfg.Harness.AutoInit)
-}
-
 func (a *configAccess) listSectionRuntime() string {
 	var sb strings.Builder
 	sb.WriteString("== Runtime ==\n  scope: ")
@@ -1085,7 +1058,6 @@ func truncate(s string, maxLen int) string {
 	return s[:maxLen] + "..."
 }
 
-// getHarnessConfig reads the project-level .ggcode/harness.yaml.
 // ============================================================================
 // Model Discovery
 // ============================================================================

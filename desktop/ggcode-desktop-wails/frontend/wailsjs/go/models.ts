@@ -553,8 +553,6 @@ export namespace wailskit {
 	    a2aDisabled: boolean;
 	    a2aPort: number;
 	    a2aHost: string;
-	    harnessAutoRun: string;
-	    harnessAutoInit: boolean;
 	    streamEncoder: string;
 	    streamFPS: number;
 	    knightEnabled: boolean;
@@ -590,8 +588,6 @@ export namespace wailskit {
 	        this.a2aDisabled = source["a2aDisabled"];
 	        this.a2aPort = source["a2aPort"];
 	        this.a2aHost = source["a2aHost"];
-	        this.harnessAutoRun = source["harnessAutoRun"];
-	        this.harnessAutoInit = source["harnessAutoInit"];
 	        this.streamEncoder = source["streamEncoder"];
 	        this.streamFPS = source["streamFPS"];
 	        this.knightEnabled = source["knightEnabled"];

@@ -6,16 +6,12 @@ ggcode has multiple mechanisms for delegating work to independent agents. Each d
 
 ## Quick Comparison
 
-| | Subagent | Swarm Teammate | Harness Worker |
 |---|---|---|---|
 | **Isolation** | Shared process, independent agent | Shared process, independent agent | **Independent process** |
-| **Entry point** | `spawn_agent` tool | `teammate_spawn` tool | `ggcode harness` CLI |
 | **Agent creation** | `AgentFactory` → `agent.NewAgent()` | `AgentFactory` → `agent.NewAgent()` | `BinaryRunner` → `exec.Command("ggcode", "--bypass")` |
 | **Tool Registry** | Snapshot at spawn time | Shared reference (live) | Fresh instance (all tools) |
 | **Workspace** | Main agent's cwd | Main agent's cwd | Git worktree (isolated) |
 | **WorkingDir** | ✅ Propagated via `RunnerConfig.WorkingDir` | ✅ `SetWorkingDir` in factory | ✅ `cmd.Dir = worktree path` |
-| **Observability** | Follow panel, events stream | Status events (idle/working) | Harness monitor, log files |
-| **Result delivery** | `wait_agent` / `list_agents` | `teammate_results` / inbox | Harness task status + delivery report |
 
 ## Subagent
 
@@ -130,15 +126,10 @@ root.go:
 
 ---
 
-## Harness Worker
 
-**Code**: `internal/harness/` (run.go, worker.go)  
-**Triggered by**: `ggcode harness run`, auto-run, `RunQueuedTasks()`  
-**Wire-up**: `cmd/ggcode/root.go` → harness subcommand setup
 
 ### Tool Access
 
-Harness launches a **completely independent ggcode process**:
 
 ```
 run.go BinaryRunner.Run():
@@ -151,7 +142,6 @@ run.go BinaryRunner.Run():
 | Built-in tools | ✅ | Fresh instance registers all tools |
 | Skill tool | ✅ | Fresh instance loads skills |
 | MCP tools | ✅ | Fresh instance connects MCP servers independently |
-| Harness tools | ❌ | Worker uses restricted tool set via `--allowedDir` |
 
 ### Workspace
 
@@ -164,7 +154,6 @@ run.go ExecuteTask():
   req := RunRequest{
       WorkingDir:          workingDir,
       AllowedDirs:         []string{workingDir},
-      ReadOnlyAllowedDirs: harnessWorkerReadOnlyDirs(project),
   }
 ```
 
@@ -197,9 +186,6 @@ run.go ExecuteTask():
 |---|---|
 | Quick parallel task, shared context | **Subagent** |
 | Long-lived team with multiple tasks, role-based | **Swarm Teammate** |
-| Isolated change with review/promotion, git safety | **Harness Worker** |
-| Need MCP tools that aren't connected yet | **Swarm Teammate** (live registry) or **Harness Worker** (fresh process) |
-| Need git isolation / code review | **Harness Worker** only |
 | Real-time question/coordination with other ggcode instances on LAN | **LAN Chat** (`lanchat` tool) |
 | Fire-and-forget code editing in another workspace | **A2A Remote** (`a2a_remote` tool) |
 | Delegate to external CLI agent (Claude, Codex, Copilot, etc.) | **Delegate** (`delegate` tool) |

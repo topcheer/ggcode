@@ -14,6 +14,8 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 
+	"golang.org/x/term"
+
 	"github.com/topcheer/ggcode/internal/a2a"
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/agentruntime"
@@ -52,7 +54,6 @@ func NewRootCmd() *cobra.Command {
 	var allowedDirs []string
 	var readOnlyAllowedDirs []string
 	var bypassFlag bool
-	var noHarnessFlag bool
 	var outputPath string
 	var helperManifest string
 
@@ -105,7 +106,7 @@ func NewRootCmd() *cobra.Command {
 
 			// Pipe mode: non-interactive single execution
 			if pipePrompt != "" {
-				code := RunPipe(cfg, cfgFile, pipePrompt, allowedTools, allowedDirs, outputPath, bypassFlag, noHarnessFlag, readOnlyAllowedDirs)
+				code := RunPipe(cfg, cfgFile, pipePrompt, allowedTools, allowedDirs, outputPath, bypassFlag, readOnlyAllowedDirs)
 				if code != 0 {
 					debug.Close()
 					os.Exit(code)
@@ -180,7 +181,6 @@ func NewRootCmd() *cobra.Command {
 	cmd.Flags().StringArrayVar(&readOnlyAllowedDirs, "readOnlyAllowedDir", nil, "extra read-only sandbox directory for pipe mode (can be repeated)")
 	_ = cmd.Flags().MarkHidden("readOnlyAllowedDir")
 	cmd.Flags().BoolVar(&bypassFlag, "bypass", false, "start in bypass permission mode (auto-approve safe ops, warn on dangerous)")
-	cmd.Flags().BoolVar(&noHarnessFlag, "no-harness", false, "skip harness auto-run routing in pipe mode (force normal agent)")
 	cmd.Flags().StringVar(&outputPath, "output", "", "output file path (default: stdout)")
 
 	helperCmd := &cobra.Command{
@@ -232,7 +232,6 @@ func NewRootCmd() *cobra.Command {
 		DisableFlagsInUseLine: true,
 	}
 	cmd.AddCommand(completionCmd)
-	cmd.AddCommand(newHarnessCmd(&cfgFile))
 	cmd.AddCommand(newMCPCmd(&cfgFile))
 	cmd.AddCommand(newPluginCmd(&cfgFile))
 	cmd.AddCommand(newIMCmd(&cfgFile))
@@ -1409,4 +1408,20 @@ func toTuiMCPInfos(infos []plugin.MCPServerInfo) []tui.MCPInfo {
 		})
 	}
 	return out
+}
+
+func writerIsTerminal(w io.Writer) bool {
+	fder, ok := w.(interface{ Fd() uintptr })
+	if !ok {
+		return false
+	}
+	return term.IsTerminal(int(fder.Fd()))
+}
+
+func shortCommit(commit string) string {
+	commit = strings.TrimSpace(commit)
+	if len(commit) > 12 {
+		return commit[:12]
+	}
+	return commit
 }

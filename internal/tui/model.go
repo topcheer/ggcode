@@ -26,7 +26,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/cron"
 	"github.com/topcheer/ggcode/internal/debug"
-	"github.com/topcheer/ggcode/internal/harness"
 	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/image"
 	"github.com/topcheer/ggcode/internal/knight"
@@ -87,117 +86,114 @@ const startupInputGateWindow = 500 * time.Millisecond
 
 // Model is the main Bubble Tea model for the REPL.
 type Model struct {
-	input                           textarea.Model
-	chatList                        *chat.List // virtual-scrolling conversation list
-	chatStyles                      chat.Styles
-	cronScheduler                   *cron.Scheduler
-	lastQueuedChatID                string // chat item ID of last visible queued msg (for de-queue removal)
-	shellMode                       bool
-	shellRunning                    bool // true while a $ shell command is executing (independent of agent loading)
-	shellOwnedLoading               bool // true when shell set m.loading (agent wasn't running)
-	chatMode                        bool // LAN Chat quick-send mode (# prefix)
-	lanChatLastSenderNick           string
-	lanChatLastSenderRole           string
-	lanChatLastSenderNodeID         string
-	loading                         bool
-	agentBusy                       *atomic.Bool // shared with REPL for /api/status
-	loopStart                       time.Time    // when current agent loop started (user sent message)
-	streamChars                     int          // characters streamed in current LLM turn
-	streamTextStart                 time.Time    // when first text chunk arrived in current turn
-	quitting                        bool
-	restartRequested                bool
-	restartDebug                    bool
-	updatePrepared                  *update.PreparedUpdate // set by /update before restart
-	tmuxExecRequested               bool
-	tmuxExecSession                 string
-	tmuxExecSetupLayout             string
-	tmuxStartupSetupLayout          string
-	width                           int
-	height                          int
-	styles                          styles
-	agent                           *agent.Agent
-	program                         *tea.Program
-	cancelFunc                      func()
-	policy                          permission.PermissionPolicy
-	spinner                         *ToolSpinner
-	history                         []string
-	historyIdx                      int
-	pendingApproval                 *ApprovalMsg
-	approvalNotifiedIM              bool // true when approval was pushed to IM
-	inputBellFired                  bool // true when delayed input bell already fired
-	session                         *session.Session
-	sessionStore                    session.Store
-	imManager                       *im.Manager
-	streamManager                   *stream.Manager
-	streamPanel                     *streamPanelState
-	knightPanel                     *knightPanelState
-	streamViewState                 *streamViewStateData // shared pointer — survives Model copies
-	imRuntimeState                  *imRuntimeState
-	imEmitter                       *im.IMEmitter
-	instanceDetect                  *im.InstanceDetect
-	mcpServers                      []MCPInfo
-	a2aHandler                      *a2a.TaskHandler
-	a2aEventBuf                     []a2a.TaskEventMessage // cached recent events for display
-	a2aEventState                   *a2aEventBufferState
-	config                          *config.Config
-	language                        Language
-	startupVendor                   string
-	cachedPanelHeight               int // set in View() for renderContextBox
-	startupEndpoint                 string
-	startupModel                    string
-	activeVendor                    string
-	activeEndpoint                  string
-	activeModel                     string
-	terminalTitleWriter             func(string)
-	lastTerminalTitle               string
-	customCmds                      map[string]*commands.Command
-	commandMgr                      *commands.Manager
-	autoMem                         *memory.AutoMemory
-	projMemFiles                    []string
-	autoMemFiles                    []string
-	pluginMgr                       *plugin.Manager
-	subAgentMgr                     *subagent.Manager
-	subAgentFollow                  subAgentFollowState
-	usageTurnIndex                  int
-	lastMetricDigestTurn            int
-	metricCollectorFlush            func()
-	knight                          *knight.Knight
-	mcpManager                      mcpManager
-	mode                            permission.PermissionMode
-	configSaveScope                 string // "global" or "instance" — where config panel saves go
-	pendingDiffConfirm              *DiffConfirmMsg
-	pendingQuestionnaire            *questionnaireState
-	pendingHarnessCheckpointConfirm *HarnessCheckpointConfirmMsg
-	modelPanel                      *modelPanelState
-	providerPanel                   *providerPanelState
-	qqPanel                         *qqPanelState
-	tgPanel                         *tgPanelState
-	pcPanel                         *pcPanelState
-	discordPanel                    *discordPanelState
-	feishuPanel                     *feishuPanelState
-	slackPanel                      *slackPanelState
-	dingtalkPanel                   *dingtalkPanelState
-	wechatPanel                     *wechatPanelState
-	wecomPanel                      *wecomPanelState
-	mattermostPanel                 *mattermostPanelState
-	matrixPanel                     *matrixPanelState
-	signalPanel                     *signalPanelState
-	ircPanel                        *ircPanelState
-	nostrPanel                      *nostrPanelState
-	twitchPanel                     *twitchPanelState
-	whatsappPanel                   *whatsappPanelState
-	imPanel                         *imPanelState
-	mcpPanel                        *mcpPanelState
-	pendingDeviceCodes              []deviceCodeInfo
-	skillsPanel                     *skillsPanelState
-	statsPanel                      *statsPanelState
-	hooksPanel                      *hooksPanelState
-	inspectorPanel                  *inspectorPanelState
-	swarmMgr                        *swarm.Manager
-	acpClientMgr                    *acpclient.ClientManager
+	input                   textarea.Model
+	chatList                *chat.List // virtual-scrolling conversation list
+	chatStyles              chat.Styles
+	cronScheduler           *cron.Scheduler
+	lastQueuedChatID        string // chat item ID of last visible queued msg (for de-queue removal)
+	shellMode               bool
+	shellRunning            bool // true while a $ shell command is executing (independent of agent loading)
+	shellOwnedLoading       bool // true when shell set m.loading (agent wasn't running)
+	chatMode                bool // LAN Chat quick-send mode (# prefix)
+	lanChatLastSenderNick   string
+	lanChatLastSenderRole   string
+	lanChatLastSenderNodeID string
+	loading                 bool
+	agentBusy               *atomic.Bool // shared with REPL for /api/status
+	loopStart               time.Time    // when current agent loop started (user sent message)
+	streamChars             int          // characters streamed in current LLM turn
+	streamTextStart         time.Time    // when first text chunk arrived in current turn
+	quitting                bool
+	restartRequested        bool
+	restartDebug            bool
+	updatePrepared          *update.PreparedUpdate // set by /update before restart
+	tmuxExecRequested       bool
+	tmuxExecSession         string
+	tmuxExecSetupLayout     string
+	tmuxStartupSetupLayout  string
+	width                   int
+	height                  int
+	styles                  styles
+	agent                   *agent.Agent
+	program                 *tea.Program
+	cancelFunc              func()
+	policy                  permission.PermissionPolicy
+	spinner                 *ToolSpinner
+	history                 []string
+	historyIdx              int
+	pendingApproval         *ApprovalMsg
+	approvalNotifiedIM      bool // true when approval was pushed to IM
+	inputBellFired          bool // true when delayed input bell already fired
+	session                 *session.Session
+	sessionStore            session.Store
+	imManager               *im.Manager
+	streamManager           *stream.Manager
+	streamPanel             *streamPanelState
+	knightPanel             *knightPanelState
+	streamViewState         *streamViewStateData // shared pointer — survives Model copies
+	imRuntimeState          *imRuntimeState
+	imEmitter               *im.IMEmitter
+	instanceDetect          *im.InstanceDetect
+	mcpServers              []MCPInfo
+	a2aHandler              *a2a.TaskHandler
+	a2aEventBuf             []a2a.TaskEventMessage // cached recent events for display
+	a2aEventState           *a2aEventBufferState
+	config                  *config.Config
+	language                Language
+	startupVendor           string
+	cachedPanelHeight       int // set in View() for renderContextBox
+	startupEndpoint         string
+	startupModel            string
+	activeVendor            string
+	activeEndpoint          string
+	activeModel             string
+	terminalTitleWriter     func(string)
+	lastTerminalTitle       string
+	customCmds              map[string]*commands.Command
+	commandMgr              *commands.Manager
+	autoMem                 *memory.AutoMemory
+	projMemFiles            []string
+	autoMemFiles            []string
+	pluginMgr               *plugin.Manager
+	subAgentMgr             *subagent.Manager
+	subAgentFollow          subAgentFollowState
+	usageTurnIndex          int
+	lastMetricDigestTurn    int
+	metricCollectorFlush    func()
+	knight                  *knight.Knight
+	mcpManager              mcpManager
+	mode                    permission.PermissionMode
+	configSaveScope         string // "global" or "instance" — where config panel saves go
+	pendingDiffConfirm      *DiffConfirmMsg
+	pendingQuestionnaire    *questionnaireState
+	modelPanel              *modelPanelState
+	providerPanel           *providerPanelState
+	qqPanel                 *qqPanelState
+	tgPanel                 *tgPanelState
+	pcPanel                 *pcPanelState
+	discordPanel            *discordPanelState
+	feishuPanel             *feishuPanelState
+	slackPanel              *slackPanelState
+	dingtalkPanel           *dingtalkPanelState
+	wechatPanel             *wechatPanelState
+	wecomPanel              *wecomPanelState
+	mattermostPanel         *mattermostPanelState
+	matrixPanel             *matrixPanelState
+	signalPanel             *signalPanelState
+	ircPanel                *ircPanelState
+	nostrPanel              *nostrPanelState
+	twitchPanel             *twitchPanelState
+	whatsappPanel           *whatsappPanelState
+	imPanel                 *imPanelState
+	mcpPanel                *mcpPanelState
+	pendingDeviceCodes      []deviceCodeInfo
+	skillsPanel             *skillsPanelState
+	statsPanel              *statsPanelState
+	hooksPanel              *hooksPanelState
+	inspectorPanel          *inspectorPanelState
+	swarmMgr                *swarm.Manager
+	acpClientMgr            *acpclient.ClientManager
 
-	harnessPanel           *harnessPanelState
-	harnessContextPrompt   *harnessContextPromptState
 	impersonatePanel       *impersonatePanelState
 	lanChatPanel           *lanChatPanelState
 	lanChatHub             *lanchat.Hub
@@ -230,24 +226,8 @@ type Model struct {
 	saSysItemIDs        map[string]string // sub-agent system message item ID per agent (for retry grouping)
 	streamPrefixWritten bool
 	reasoningActive     bool // true while reasoning block is expanded in current LLM turn
-	harnessRunRemainder string
-	harnessRunLiveTail  string
 
-	// Auto-run pending suggestion: when harness.auto_run is "suggest" and the
 	// router detects a code-change task, the pending result is saved here.
-	// Enter confirms (routes to harness), Esc dismisses (normal agent).
-	pendingAutoRun     *harness.AutoRunResult
-	pendingAutoRunText string
-
-	// pendingHarnessReview holds a completed task awaiting review approval.
-	// Set after harnessRunResultMsg when task is completed+review pending.
-	// Enter approves, Esc skips. Similar UX to pendingAutoRun suggest mode.
-	pendingHarnessReview *harness.Task
-
-	// pendingHarnessPromote holds an approved task awaiting promotion.
-	// Set after harnessReviewResultMsg when task is ReviewApproved.
-	// Enter promotes (applies changes), Esc skips.
-	pendingHarnessPromote *harness.Task
 
 	// Status bar state
 	statusActivity  string // "Thinking...", "Writing...", "Executing: tool_name"
@@ -311,12 +291,6 @@ type Model struct {
 	// session. The REPL registers this to update its thread-safe currentSession
 	// pointer so persistHandler/checkpointHandler write to the correct JSONL file.
 	sessionUpdateCallback func(ses *session.Session)
-	harnessRunProject     *harness.Project
-	harnessRunGoal        string
-	harnessRunTaskID      string
-	harnessRunLogPath     string
-	harnessRunLogOffset   int64
-	harnessRunLastDetail  string
 	remoteInboundAdapter  string // adapter name that sent the current remote inbound message (for per-channel echo suppression)
 	clipboardLoader       func() (imageAttachedMsg, error)
 	clipboardWriter       func(string) error
@@ -450,11 +424,6 @@ type DiffConfirmMsg struct {
 	FilePath string
 	DiffText string
 	Response chan bool
-}
-
-type HarnessCheckpointConfirmMsg struct {
-	Checkpoint harness.DirtyWorkspaceCheckpoint
-	Response   chan bool
 }
 
 type AskUserMsg struct {
@@ -1199,8 +1168,6 @@ func (m *Model) hasActivePanel() bool {
 		m.mcpPanel != nil ||
 		m.imPanel != nil ||
 		m.inspectorPanel != nil ||
-		m.harnessContextPrompt != nil ||
-		m.harnessPanel != nil ||
 		m.impersonatePanel != nil ||
 		m.lanChatPanel != nil ||
 		m.skillsPanel != nil ||
@@ -1264,10 +1231,6 @@ func (m *Model) closeActivePanel() bool {
 		m.closeStreamPanel()
 	case m.knightPanel != nil:
 		m.closeKnightPanel()
-	case m.harnessContextPrompt != nil:
-		m.harnessContextPrompt = nil
-	case m.harnessPanel != nil:
-		m.closeHarnessPanel()
 	case m.impersonatePanel != nil:
 		m.closeImpersonatePanel()
 	case m.lanChatPanel != nil:

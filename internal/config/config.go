@@ -276,7 +276,6 @@ type Config struct {
 	Swarm              SwarmConfig                `yaml:"swarm,omitempty" json:"swarm,omitempty"`
 	A2A                A2AConfig                  `yaml:"a2a,omitempty" json:"a2a,omitempty"`
 	LanChat            LanChatConfig              `yaml:"lanchat,omitempty" json:"lanchat,omitempty"`
-	Harness            HarnessConfig              `yaml:"harness,omitempty" json:"harness,omitempty"`
 	Stream             stream.StreamConfig        `yaml:"stream,omitempty" json:"stream,omitempty"`
 	LSPServers         map[string]LSPServerConfig `yaml:"lsp_servers,omitempty" json:"lsp_servers,omitempty"`
 	ProbeContext       bool                       `yaml:"probe_context,omitempty" json:"probe_context,omitempty"`
@@ -518,31 +517,6 @@ func (c A2AConfig) EffectiveAPIKey() string {
 		return c.Auth.APIKey
 	}
 	return DefaultA2AAPIKey
-}
-
-// HarnessConfig controls automatic harness routing behavior.
-// AutoRun modes:
-//   - "off":     No automatic routing (default). Users run harness explicitly.
-//   - "suggest": Detect code-change tasks and prompt the user to use harness.
-//   - "on":      Automatically route detected code-change tasks to harness.
-//   - "strict":  Same as "on" but enforces worktree isolation; blocks direct file writes.
-type HarnessConfig struct {
-	AutoRun  string `yaml:"auto_run,omitempty" json:"auto_run,omitempty"`   // "off", "suggest", "on", "strict"
-	AutoInit bool   `yaml:"auto_init,omitempty" json:"auto_init,omitempty"` // auto-create harness.yaml when missing
-}
-
-// AutoRunMode returns the normalized auto_run mode, defaulting to "off".
-func (h HarnessConfig) AutoRunMode() string {
-	switch strings.ToLower(strings.TrimSpace(h.AutoRun)) {
-	case "suggest":
-		return "suggest"
-	case "on":
-		return "on"
-	case "strict":
-		return "strict"
-	default:
-		return "off"
-	}
 }
 
 // A2AAuthConfig configures which authentication mechanisms the A2A server accepts.

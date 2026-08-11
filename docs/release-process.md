@@ -107,7 +107,6 @@ Tier assignment by file:
 - `cmd/e2e_test/worktree_e2e_test.go` — git worktree operations
 - `internal/acp/acp_e2e_test.go` — ACP pipe transport
 - `internal/context/integration_test.go` — context summarization
-- `internal/harness/integration_test.go` — config loading
 - `internal/im/adapter_close_e2e_test.go` — adapter lifecycle
 - `internal/im/pc_e2e_test.go` — PC adapter
 - `internal/knight/knight_e2e_test.go` — knight runtime

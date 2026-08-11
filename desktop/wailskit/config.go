@@ -104,10 +104,6 @@ type FullConfig struct {
 	A2APort     int    `json:"a2aPort"`
 	A2AHost     string `json:"a2aHost"`
 
-	// Harness
-	HarnessAutoRun  string `json:"harnessAutoRun"`
-	HarnessAutoInit bool   `json:"harnessAutoInit"`
-
 	// Stream (video capture)
 	StreamEncoder string `json:"streamEncoder"`
 	StreamFPS     int    `json:"streamFPS"`
@@ -178,9 +174,6 @@ func GetFullConfig() (*FullConfig, error) {
 		A2ADisabled: cfg.A2A.Disabled,
 		A2APort:     cfg.A2A.Port,
 		A2AHost:     cfg.A2A.Host,
-
-		HarnessAutoRun:  cfg.Harness.AutoRun,
-		HarnessAutoInit: cfg.Harness.AutoInit,
 
 		StreamEncoder: cfg.Stream.HardwareEncoder,
 		StreamFPS:     cfg.Stream.FPS,
@@ -274,12 +267,6 @@ func UpdateConfig(values map[string]interface{}) error {
 	}
 	if v, ok := values["a2aPort"].(float64); ok {
 		cfg.A2A.Port = int(v)
-	}
-	if v, ok := values["harnessAutoRun"].(string); ok {
-		cfg.Harness.AutoRun = v
-	}
-	if v, ok := values["harnessAutoInit"].(bool); ok {
-		cfg.Harness.AutoInit = v
 	}
 
 	return cfg.Save()

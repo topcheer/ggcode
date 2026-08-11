@@ -285,8 +285,6 @@ func (m Model) isAnyPanelOpen() bool {
 		m.signalPanel != nil || m.ircPanel != nil ||
 		m.nostrPanel != nil || m.twitchPanel != nil ||
 		m.whatsappPanel != nil || m.streamPanel != nil ||
-		m.inspectorPanel != nil || m.harnessContextPrompt != nil ||
-		m.harnessPanel != nil || m.lanChatPanel != nil ||
 		m.skillsPanel != nil || m.hooksPanel != nil
 }
 

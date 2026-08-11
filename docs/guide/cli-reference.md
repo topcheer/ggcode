@@ -21,7 +21,6 @@ echo "fix typo" | ggcode  # Read from stdin
 
 Additional pipe-mode flags:
 - `--allowedTools <name>` — restrict tools (repeatable)
-- `--no-harness` — skip harness auto-run routing, force normal agent
 - `--output <path>` — write output to file (default: stdout)
 
 ### Resume Session
@@ -50,58 +49,25 @@ The daemon automatically loads the most recent unlocked session on startup. Use 
 
 ## Subcommands
 
-### harness
 
-Harness-engineering workflow for structured multi-step tasks. Tasks run in isolated git worktrees with automated checks, review gates, and progressive release rollouts.
 
-> See [Harness Workflow](harness.md) for the complete guide.
 
 ```bash
-ggcode harness init                    # Initialize harness scaffolding
-ggcode harness queue <goal>            # Queue a task to the backlog
-ggcode harness run [goal]              # Execute a task (or drain queue)
-ggcode harness rerun <task-id>         # Rerun a single failed task
-ggcode harness tasks                   # List all tasks and state
-ggcode harness contexts                # Summarize state by bounded context
-ggcode harness check                   # Run structural validation
-ggcode harness doctor                  # Inspect harness health
-ggcode harness gc                      # Archive stale runs, prune logs
 ```
 
 **Review & Promote:**
 
 ```bash
-ggcode harness review                  # List tasks awaiting review
-ggcode harness review approve <id>     # Approve a completed task
-ggcode harness review reject <id>      # Reject back into retry flow
-ggcode harness inbox                   # Show actionable work for owners
-ggcode harness inbox promote --owner <name>  # Batch-promote approved tasks
-ggcode harness inbox retry --owner <name>    # Batch-retry failed tasks
-ggcode harness promote                 # List promotable tasks
-ggcode harness promote apply <id>      # Promote an approved task to main
-ggcode harness promote apply --all-approved  # Promote all approved
 ```
 
 **Release (progressive delivery):**
 
 ```bash
-ggcode harness release                 # Show release plan
-ggcode harness release apply           # Batch promoted tasks into a release
-ggcode harness release rollouts        # List wave rollouts
-ggcode harness release advance <id>    # Advance a rollout to next wave
-ggcode harness release pause <id>      # Pause active wave
-ggcode harness release resume <id>     # Resume a paused rollout
-ggcode harness release abort <id>      # Abort remaining waves
-ggcode harness release approve <id>    # Approve a planned wave
-ggcode harness release reject <id>     # Reject a planned wave
 ```
 
 **Monitor:**
 
 ```bash
-ggcode harness monitor                 # Show persisted activity
-ggcode harness monitor --watch         # Live refresh until interrupted
-ggcode harness monitor --interval 5s   # Custom refresh interval
 ```
 
 ### mcp
@@ -280,7 +246,6 @@ ggcode version                         # Print version, commit, and build date
 | `--bypass` | Start in bypass permission mode |
 | `-p, --prompt <prompt>` | Non-interactive pipe mode |
 | `--allowedTools <name>` | Restrict tools in pipe mode (repeatable) |
-| `--no-harness` | Skip harness auto-run routing in pipe mode |
 | `--output <path>` | Output file path (default: stdout) |
 | `--resume [id]` | Resume a session |
 | `--resume-picker` | Open session picker |

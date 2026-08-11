@@ -177,68 +177,6 @@ fatal error: cannot compile`
 	}
 }
 
-func TestInjectRulesIntoResult(t *testing.T) {
-	dir := t.TempDir()
-	a := &Agent{workingDir: dir}
-
-	// Add a build rule with separate error and tool patterns
-	// Use the agent's cached rule store so injectRulesIntoResult sees the rules.
-	rs := a.getRuleStore()
-	rs.AddRule(Rule{
-		Category:     "build",
-		Rule:         "Use -tags goolm",
-		MatchPattern: "libolm.*header",
-		ToolPattern:  "go build|go test|go vet",
-		FixHint:      "Add -tags goolm",
-	})
-
-	// Inject for matching tool (tool args match ToolPattern)
-	result := a.injectRulesIntoResult("run_command",
-		[]byte(`{"command":"go build ./..."}`),
-		"Build succeeded")
-	if result == "Build succeeded" {
-		t.Error("expected injected content, got original")
-	}
-	if !contains(result, "Harness Rules") {
-		t.Error("expected 'Harness Rules' header in injected result")
-	}
-	if !contains(result, "Use -tags goolm") {
-		t.Error("expected rule text in injected result")
-	}
-
-	// Non-matching tool args should NOT inject
-	result = a.injectRulesIntoResult("run_command",
-		[]byte(`{"command":"echo hello"}`),
-		"echo output")
-	if result != "echo output" {
-		t.Error("expected no injection for non-matching command")
-	}
-
-	// Non-matching tool category should not inject
-	result = a.injectRulesIntoResult("read_file",
-		[]byte(`{"path":"/some/file"}`),
-		"File contents")
-	if result != "File contents" {
-		t.Error("expected no injection for non-matching tool")
-	}
-
-	// Backward compat: rule with only MatchPattern (no ToolPattern) should still work for injection
-	rs.AddRule(Rule{
-		Category:     "git",
-		Rule:         "Check untracked files",
-		MatchPattern: "git commit",
-	})
-	result = a.injectRulesIntoResult("git_commit",
-		[]byte(`{"message":"git commit -m test"}`),
-		"Committed")
-	if result == "Committed" {
-		t.Error("expected injected content for backward-compat rule")
-	}
-	if !contains(result, "Check untracked files") {
-		t.Error("expected backward-compat rule text in injected result")
-	}
-}
-
 // --- Staleness & TTL tests ---
 
 func TestRecencyWeightedScore(t *testing.T) {

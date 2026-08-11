@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/agent"
-	"github.com/topcheer/ggcode/internal/harness"
 	"github.com/topcheer/ggcode/internal/knight"
 	"github.com/topcheer/ggcode/internal/mcp"
 	"github.com/topcheer/ggcode/internal/metrics"
@@ -80,55 +79,6 @@ type sessionMetricMsg struct {
 type initPromptCheckMsg struct {
 	needsInit bool
 	target    string // path to GGCODE.md that would be created
-}
-
-type autoRunCheckResultMsg struct {
-	Text        string
-	DisplayText string
-	Result      *harness.AutoRunResult
-	Err         error
-}
-
-type harnessRunResultMsg struct {
-	Summary    *harness.RunSummary
-	Err        error
-	CTA        harness.CTAAction
-	CTAMessage string
-}
-
-// harnessReviewResultMsg carries the result of a one-key review approve action.
-type harnessReviewResultMsg struct {
-	Task   *harness.Task
-	TaskID string
-	Err    error
-}
-
-// harnessPromoteResultMsg carries the result of a one-key promote action.
-type harnessPromoteResultMsg struct {
-	Task   *harness.Task
-	TaskID string
-	Err    error
-}
-
-type harnessRunProgressMsg struct {
-	TaskID    string
-	Activity  string
-	Detail    string
-	LogPath   string
-	LogChunk  string
-	LogOffset int64
-}
-
-type harnessPanelAutoRefreshMsg struct{}
-
-type harnessContextSuggestionsMsg struct {
-	Contexts []harness.ContextConfig
-	Err      error
-}
-
-type harnessInitResultMsg struct {
-	Result *harness.InitResult
-	Err    error
 }
 
 type projectMemoryLoadedMsg struct {
@@ -366,23 +316,6 @@ type webchatUserMsg struct {
 type webuiReadyMsg struct {
 	Addr  string
 	Token string
-}
-
-// harnessPanelRefreshResultMsg carries the result of an async harness panel
-// data load. The handler applies the data to the harness panel state.
-type harnessPanelRefreshResultMsg struct {
-	Err      string
-	Project  *harness.Project
-	Cfg      *harness.Config
-	Doctor   *harness.DoctorReport
-	Monitor  *harness.MonitorReport
-	Contexts *harness.ContextReport
-	Tasks    []*harness.Task
-	Inbox    *harness.OwnerInbox
-	Review   []*harness.Task
-	Promote  []*harness.Task
-	Release  *harness.ReleasePlan
-	Rollouts []*harness.ReleaseWavePlan
 }
 
 // knightStartupHintMsg is sent once at startup to show a Knight-related hint

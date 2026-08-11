@@ -20,7 +20,6 @@ func TestRootHelpShowsAllCommands(t *testing.T) {
 		"version",
 		"completion",
 		"daemon",
-		"harness",
 		"im",
 		"mcp",
 		"llm-probe",

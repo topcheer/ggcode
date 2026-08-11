@@ -15,7 +15,7 @@ import (
 // DebugLogTool lets the LLM inspect recent debug log entries from the
 // in-memory ring buffer and optionally export them to a temp file.
 // This is useful for diagnosing issues with internal subsystems (agent loop,
-// provider calls, IM adapters, harness, etc.) without needing to read log
+// provider calls, IM adapters, etc.) without needing to read log
 // files from disk.
 type DebugLogTool struct{}
 
@@ -36,7 +36,7 @@ func (t DebugLogTool) Parameters() json.RawMessage {
 			},
 			"category": {
 				"type": "string",
-				"description": "Optional category filter. Matches against category names (e.g. 'agent', 'provider', 'harness', 'openai', 'anthropic', 'tui', 'im') or tags embedded in log messages. Case-insensitive substring match."
+				"description": "Optional category filter. Matches against category names (e.g. 'agent', 'provider', 'openai', 'anthropic', 'tui', 'im') or tags embedded in log messages. Case-insensitive substring match."
 			},
 			"keyword": {
 				"type": "string",

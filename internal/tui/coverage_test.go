@@ -115,8 +115,3 @@ func TestExtractAgentID(t *testing.T) {
 	// May return empty if format doesn't match, just verify no panic
 	_ = got
 }
-
-func TestTitleizeHarnessText(t *testing.T) {
-	got := titleizeHarnessText("some text here")
-	_ = got // just verify no panic
-}

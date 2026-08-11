@@ -764,44 +764,6 @@ func TestScenario_UserNavigatesDiffOptions(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Scenario: Harness checkpoint confirmation
-// ---------------------------------------------------------------------------
-
-func TestScenario_UserConfirmsHarnessCheckpoint(t *testing.T) {
-	m := newTestModel()
-	ch := make(chan bool, 1)
-	m.pendingHarnessCheckpointConfirm = &HarnessCheckpointConfirmMsg{
-		Response: ch,
-	}
-	m.diffOptions = diffConfirmOptions()
-
-	updated, _ := m.Update(tea.KeyPressMsg{Text: "y"})
-	m = updated.(Model)
-	if m.pendingHarnessCheckpointConfirm != nil {
-		t.Error("expected pendingHarnessCheckpointConfirm=nil after confirm")
-	}
-	approved := <-ch
-	if !approved {
-		t.Error("expected approved=true for 'y'")
-	}
-}
-
-func TestScenario_UserRejectsHarnessCheckpoint(t *testing.T) {
-	m := newTestModel()
-	ch := make(chan bool, 1)
-	m.pendingHarnessCheckpointConfirm = &HarnessCheckpointConfirmMsg{
-		Response: ch,
-	}
-	m.diffOptions = diffConfirmOptions()
-
-	updated, _ := m.Update(tea.KeyPressMsg{Text: "n"})
-	m = updated.(Model)
-	approved := <-ch
-	if approved {
-		t.Error("expected approved=false for 'n'")
-	}
-}
-
 // ---------------------------------------------------------------------------
 // Scenario: Language selector keyboard navigation
 // ---------------------------------------------------------------------------
@@ -1119,7 +1081,7 @@ func TestScenario_BusySafeCommandsExecuteImmediately(t *testing.T) {
 		"/status", "/config", "/memory", "/todo", "/plugins", "/chat",
 		"/checkpoints", "/?", "/impersonate", "/qq", "/telegram",
 		"/tg", "/pc", "/discord", "/feishu", "/slack", "/dingtalk",
-		"/im", "/harness", "/harness panel",
+		"/im",
 		"/share status", "/unshare",
 	}
 	for _, cmd := range safeCommands {
@@ -1132,8 +1094,8 @@ func TestScenario_BusySafeCommandsExecuteImmediately(t *testing.T) {
 func TestScenario_BusyUnsafeCommandsAreQueued(t *testing.T) {
 	unsafeCommands := []string{
 		"/exit", "/quit", "/clear", "/compact", "/undo",
-		"/update", "/knight run", "/init", "/harness run",
-		"/harness check", "hello world", "",
+		"/update", "/knight run", "/init",
+		"hello world", "",
 	}
 	for _, cmd := range unsafeCommands {
 		if shouldExecuteWhileBusy(cmd) {

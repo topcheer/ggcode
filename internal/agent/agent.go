@@ -3733,7 +3733,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					}
 				}
 			}
-			// Inject matching harness rules into the result
 			result.Content = a.injectRulesIntoResult(tc.Name, tc.Arguments, result.Content)
 			// Batch edit conflict warning: if this tool call targets a file that
 			// is also edited by another call in the same batch, inject a warning
