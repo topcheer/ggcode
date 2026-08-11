@@ -199,7 +199,7 @@ func (m Model) renderInspectorPanel() string {
 		height := m.panelAvailableHeight()
 		leftLines := m.renderInspectorPanelListLines(items, 0, leftWidth, height)
 		rightLines := m.renderInspectorPanelDetailLines(items, 0, rightWidth, height)
-		body := joinHarnessPanelColumns(leftLines, rightLines, leftWidth, rightWidth, height)
+		body := joinPanelColumns(leftLines, rightLines, leftWidth, rightWidth, height)
 		footer := m.renderInspectorPanelFooter(width)
 		if footer != "" {
 			body += "\n\n" + footer
@@ -220,7 +220,7 @@ func (m Model) renderInspectorPanel() string {
 	height := m.panelAvailableHeight()
 	leftLines := m.renderInspectorPanelListLines(items, cursor, leftWidth, height)
 	rightLines := m.renderInspectorPanelDetailLines(items, cursor, rightWidth, height)
-	body := joinHarnessPanelColumns(leftLines, rightLines, leftWidth, rightWidth, height)
+	body := joinPanelColumns(leftLines, rightLines, leftWidth, rightWidth, height)
 	footer := m.renderInspectorPanelFooter(width)
 	if footer != "" {
 		body += "\n\n" + footer
@@ -241,7 +241,7 @@ func inspectorPanelLeftWidth(totalWidth int) int {
 
 func (m Model) renderInspectorPanelListLines(items []inspectorPanelItem, cursor, width, height int) []string {
 	if len(items) == 0 {
-		return wrapHarnessPanelText(m.inspectorPanelEmptyState(), width, height)
+		return wrapPanelText(m.inspectorPanelEmptyState(), width, height)
 	}
 	start, end := inspectorPanelWindow(len(items), cursor, max(1, height))
 	lines := make([]string, 0, height)
@@ -269,14 +269,14 @@ func (m Model) renderInspectorPanelListLines(items []inspectorPanelItem, cursor,
 
 func (m Model) renderInspectorPanelDetailLines(items []inspectorPanelItem, cursor, width, height int) []string {
 	if len(items) == 0 || cursor < 0 || cursor >= len(items) {
-		return wrapHarnessPanelText(m.inspectorPanelEmptyState(), width, height)
+		return wrapPanelText(m.inspectorPanelEmptyState(), width, height)
 	}
 	item := items[cursor]
 	detail := strings.TrimSpace(item.Detail)
 	if detail == "" {
 		detail = item.Title
 	}
-	return wrapHarnessPanelText(detail, width, height)
+	return wrapPanelText(detail, width, height)
 }
 
 func (m Model) renderInspectorPanelFooter(width int) string {

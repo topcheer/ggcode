@@ -215,13 +215,6 @@ func TestCompleteSlashCommandOnlyIncludesLegacyCommands(t *testing.T) {
 	}
 }
 
-func TestCompleteSlashCommandIncludesHarness(t *testing.T) {
-	matches := CompleteSlashCommand("/har", nil)
-	if len(matches) != 1 || matches[0] != "/harness" {
-		t.Fatalf("matches = %v, want [/harness]", matches)
-	}
-}
-
 func TestCompleteSlashCommandIncludesTmux(t *testing.T) {
 	matches := CompleteSlashCommand("/tm", nil)
 	if len(matches) != 1 || matches[0] != "/tmux" {

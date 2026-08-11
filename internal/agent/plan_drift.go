@@ -18,7 +18,7 @@ import (
 //
 // ggcode already has:
 //   - enter_plan_mode / exit_plan_mode tools
-//   - harness specparser.go (ParseSpec, ValidateSpec, SpecToTasks)
+//   - spec specparser.go (ParseSpec, ValidateSpec, SpecToTasks)
 //   - task_create / task_update with dependencies
 //   - fulfillment_gate.go (request-vs-work match)
 //

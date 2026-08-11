@@ -3,7 +3,6 @@ package agent
 // Agent Performance Baseline & Regression Detection
 //
 // Trend: Agent performance observability is a hot area in 2025-2026. Devin's
-// SICA tracks task efficiency; OpenHands has eval harnesses; Claude Code
 // released /cost tracking. But NONE detect real-time performance regressions
 // across sessions -- they only show current-run stats.
 //
@@ -26,7 +25,6 @@ package agent
 //   - Claude Code: shows /cost per session, no cross-session comparison
 //   - Cursor: no performance tracking
 //   - Devin: SICA tracks efficiency internally, no user-visible regression alert
-//   - OpenHands: eval harnesses for benchmarking, not live regression detection
 //   - Aider: no tracking
 //
 // Design:

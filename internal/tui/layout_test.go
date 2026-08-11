@@ -19,7 +19,6 @@ import (
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
-	"github.com/topcheer/ggcode/internal/harness"
 	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/markdown"
 	"github.com/topcheer/ggcode/internal/permission"
@@ -2891,23 +2890,6 @@ func TestCancelActiveRunClearsVisibleActivityStateImmediately(t *testing.T) {
 	}
 	if m.spinner.IsActive() {
 		t.Fatal("expected spinner to stop on cancel")
-	}
-}
-
-func TestCancelActiveHarnessRunKeepsCancellingStatus(t *testing.T) {
-	m := newTestModel()
-	m.loading = true
-	m.harnessRunProject = &harness.Project{}
-	m.statusActivity = "Thinking..."
-	m.spinner.Start("running")
-
-	m.cancelActiveRun()
-
-	if !m.loading {
-		t.Fatal("expected harness run cancel to stay loading until tracked result arrives")
-	}
-	if m.statusActivity != m.t("status.cancelling") {
-		t.Fatalf("expected harness cancel status, got %q", m.statusActivity)
 	}
 }
 
