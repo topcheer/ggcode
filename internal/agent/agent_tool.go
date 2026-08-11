@@ -29,25 +29,6 @@ func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolC
 		return tool.Result{Content: err.Error(), IsError: true}
 	}
 
-	// Pre-validate tool parameters before permission check or execution.
-	// This catches obvious errors (empty paths, dangerous commands, etc.)
-	// early, preventing wasted iterations.
-	a.mu.RLock()
-	validator := a.paramValidator
-	a.mu.RUnlock()
-	if validator != nil {
-		// Parse tool arguments for validation
-		var args map[string]interface{}
-		if err := json.Unmarshal(tc.Arguments, &args); err == nil {
-			if guidance := validator.validateToolCall(tc.Name, args); guidance != "" {
-				return tool.Result{
-					Content: guidance,
-					IsError: true,
-				}
-			}
-		}
-	}
-
 	// Don't log permission check — permission decision below is sufficient
 	a.mu.RLock()
 	policy := a.policy
@@ -124,17 +105,6 @@ func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolC
 	}
 
 	// Tool affinity learning: record outcomes for predictive recommendations (sa-126)
-	// Use a simple context based on tool name and arguments for now
-	// Future enhancement: use richer context (user goal, recent tool history, file type)
-	if a.toolAffinity != nil && len(tc.Arguments) > 0 {
-		// Extract first 100 chars of arguments as context signature
-		contextSig := string(tc.Arguments)
-		if len(contextSig) > 100 {
-			contextSig = contextSig[:100]
-		}
-		a.toolAffinity.RecordOutcome(tc.Name, contextSig, !result.IsError)
-	}
-
 	// Fire tool metric (non-blocking — caller must handle asynchronously).
 	errMsg := ""
 	if result.IsError {
@@ -277,11 +247,6 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 		return tool.Result{Content: tool.FormatUnknownToolError(a.tools, tc.Name), IsError: true}
 	}
 
-	// Record tool call for skill discovery pattern detection
-	if a.skillDiscovery != nil {
-		a.skillDiscovery.recordCall(tc.Name)
-	}
-
 	// JSON argument repair: many OpenAI-compatible backends (vLLM, LiteLLM,
 	// goolm) and weaker models produce arguments that are *almost* valid JSON
 	// but fail strict parsing due to stream truncation, trailing commas, smart
@@ -394,9 +359,7 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 	// Sync working directory for tools that have a WorkingDir field.
 	syncToolWorkingDir(t, workDir)
 
-	// Track previous tool for execution graph composition patterns (sa-116)
 	a.mu.Lock()
-	prevTool := a.lastTool
 	a.lastTool = t.Name() // Update for next tool
 	a.mu.Unlock()
 
@@ -409,13 +372,6 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 		return a.safeExecute(t, execCtx, args)
 	})
 	toolDur := time.Since(toolStart)
-
-	// Record tool execution outcome in dynamic execution graph (sa-116)
-	// Research basis: NaviAgent (arxiv:2506.19500) - execution feedback
-	// continually updates tool composition graphs for adaptive orchestration.
-	if graph := getToolExecutionGraph(); graph != nil {
-		graph.recordToolOutcome(t.Name(), !result.IsError, toolDur, prevTool)
-	}
 
 	// Post-tool-use hooks
 	postEnv := env

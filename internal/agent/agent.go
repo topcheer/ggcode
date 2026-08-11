@@ -124,251 +124,243 @@ type Agent struct {
 	precompact                 *precompactState
 	precompactCooldownUntil    time.Time // earliest next precompact; guarded by mu
 	shutdownCtx                context.Context
-	shutdownCancel             context.CancelFunc                    // cancels on Close()
-	probeKey                   string                                // "vendor|baseURL|model" for context window auto-detection
-	autopilotGoal              string                                // current autopilot goal text; empty when no goal is active
-	autopilotGoalAsked         bool                                  // true after the goal-collection instruction has been injected
-	autopilotGoalSet           bool                                  // true after the user has confirmed a goal (goal text is non-empty)
-	autopilotStrategistCount   int                                   // number of strategist calls this run (safety valve)
-	strategistBudgetAnnounced  bool                                  // true once the budget-exhausted message has been injected
-	strategistNoProgressCount  int                                   // consecutive strategist calls where agent made no tool calls
-	reflectionFunc             ReflectionFunc                        // called after each run with accumulated stats
-	loopDetector               loopDetector                          // tracks consecutive identical tool calls to detect stuck loops
-	errorClassifier            *ErrorClassifier                      // immediate type-specific guidance on tool errors (AgentDebug-inspired)
-	overseer                   *overseerState                        // deterministic async-overseer: trajectory analysis for stuck/drift/spam
-	repetition                 *repetitionTracker                    // semantic-level repetition detection for failed edit clusters
-	speculator                 *speculator                           // pattern-aware speculative tool execution (PASTE-inspired)
-	toolMemo                   *toolMemo                             // read-only tool result memoization (ToolCaching-inspired)
-	confidence                 *confidenceState                      // holistic trajectory confidence scoring (HTC-inspired)
-	verifDebt                  *verificationDebtState                // verification debt tracker (SAUP-inspired uncertainty propagation)
-	undoBlind                  *undoBlindState                       // undo-edit blind continuation detection (AgentDebug-inspired)
-	editAbandon                *editAbandonState                     // edit abandonment detection (PASTE/LLMCompiler-inspired attention-shift tracking)
-	progVerif                  *progVerifTracker                     // progressive verification checkpoints (ReVeal-inspired)
-	costBudget                 *sessionCostBudget                    // absolute session-level token budget enforcement
-	toolCallBudget             *toolCallBudget                       // per-session tool invocation limit (action-level guardrail)
-	cacheKeepalive             *cacheKeepaliveState                  // prompt cache warming pings during idle (Anthropic)
-	trajectoryEnhance          *trajectoryEnhancer                   // self-improvement via successful pattern learning (sa-120)
-	uProp                      *uPropState                           // uncertainty propagation tracking (UProp: arXiv:2506.17419)
-	metacognitive              *metacognitiveMonitor                 // metacognitive state monitoring (Li et al. 2025, Peters 2026)
-	commandCache               *commandCache                         // deterministic build/test command result caching
-	emptySearch                *emptySearchState                     // empty search spiral detection (futile search guidance)
-	paramValidator             *paramValidator                       // tool parameter pre-validation (pre-execution error prevention)
-	degradedResult             *degradedResultState                  // silent degradation propagation detection (Galileo error propagation chain)
-	postEditVerify             postEditVerifyState                   // tracks source-code edits to inject periodic verification hints
-	planner                    *planState                            // agent-side auto task decomposition (Devin/Claude Code-inspired)
-	todoStaleness              *todoStalenessState                   // mid-run stale todo detection (plan abandonment awareness)
-	todoDrop                   *todoDropState                        // mid-run todo contract drop detection (silent commitment removal)
-	recurringError             *recurringErrorState                  // recurring build/test error fingerprint detection across edit cycles
-	errStrategyLoop            *errStrategyState                     // error strategy loop detection (procedural memory failure)
-	solutionFixation           *solutionFixationState                // solution fixation: diagnosis anchoring on failed edit clusters
-	fixCascade                 *fixCascadeState                      // failed fix cascade (wrong-hypothesis lock-in) detection
-	errRegression              *errRegressionState                   // error count regression (negative progress) detection
-	stalledConvergence         *stalledConvergenceState              // stalled convergence detection (diminishing returns pattern)
-	unreadEdit                 *unreadEditState                      // read-before-edit guard: warns when editing unread files
-	expiredRead                *expiredReadState                     // expired-read detection: self-invalidated context awareness (AgentDiet)
-	searchInvalidation         *searchInvalidationState              // search-result invalidation: stale grep/lsp results after edits (AgentDiet)
-	wtInvalidation             *wtInvalidationState                  // working-tree invalidation: cross-file stale reads after git mutation
-	strategyExhaustion         *seStrategyExhaustionState            // strategy exhaustion: diverse recovery strategies failing for same error (EEA robustness entropy)
-	editFailRecovery           *editFailState                        // consecutive edit failure recovery guidance
-	scopeDrift                 *scopeDriftState                      // semantic scope creep detection (file-diversity tracking)
-	driftRecurrence            *driftRecurrenceState                 // drift recurrence detection (post-warning behavioral persistence)
-	constraintAmnesia          *constraintAmnesiaState               // constraint amnesia detection (early constraint forgetting)
-	constraintViolation        *constraintViolationState             // self-declared constraint violation detection (AgentRx step-level tracking)
-	exportGuard                *exportGuardState                     // breaking change detection for exported Go symbols (regression guard)
-	hubPackageGuard            *hubPackageState                      // per-edit blast-radius awareness for high fan-in packages
-	artifactGuard              *generatedArtifactState               // generated artifact / lock file edit warning
-	toolFilter                 *tool.RelevanceFilter                 // dynamic MCP tool pruning based on conversation relevance
-	fulfillmentGate            *fulfillmentGateState                 // pre-completion coverage verification (request-vs-work match)
-	ambiguityPoint             *ambiguityPointState                  // pre-run intent disambiguation (ambiguity detection in user request)
-	companionGuard             *companionGuardState                  // companion test file coverage check (unedited paired tests)
-	specGaming                 *specGamingState                      // specification gaming detection (reward hacking / verification tampering)
-	scopeNarrow                *scopeNarrowState                     // verification scope narrowing detection (command-level spec gaming)
-	complexityGate             *complexityGateState                  // post-completion code complexity quality gate
-	changeReconcile            *changeReconcileState                 // pre-completion git diff reconciliation (unexpected side-effect detection)
-	claimVerify                *claimVerifyState                     // tool output misinterpretation detection (AgentRx-inspired)
-	integrationMonitor         *integrationState                     // tool output integration tracking (TRACE-inspired cross-step evidence)
-	diffSummary                *diffSummaryState                     // pre-completion holistic change summary for self-review
-	commitHint                 *commitHintState                      // post-completion commit reminder for uncommitted changes
-	verifyRegression           *verifyRegressionState                // cross-run error diff: detects correction-induced regressions
-	selfCorrectionGate         *selfCorrectionGateState              // EIR/ECR stability gate: detects net-negative self-correction loops
-	lastGoodCheckpoint         *lastGoodCheckpoint                   // last-known-good file snapshot: actionable revert targets for failed self-correction
-	sessionTimeout             *sessionTimeoutState                  // wall-clock timeout for agent runs (autopilot guardrail)
-	diskSpace                  *diskSpaceState                       // low disk space detection (resource exhaustion awareness)
-	envDrift                   *envDriftState                        // env var drift detection (.env.example vs actual env)
-	transientRetryBudget       int                                   // remaining automatic retries for transient tool failures (per run)
-	acc                        *accState                             // active context compression (ACC): autonomous memory management
-	metadata                   map[string]string                     // persistent metadata for session persistence
-	compoundingFailure         *compoundingFailureState              // sliding-window cross-tool failure rate (strategy reset detection)
-	failureMode                *failureModeState                     // meta-level failure mode classification (transient/structural/systemic)
-	resourceMonitor            *ResourceMonitor                      // resource-aware orchestration: tracks memory/CPU pressure (sa-125)
-	toolAffinity               *ToolAffinityLearner                  // tool affinity learning: predictive tool recommendations based on historical success (sa-126)
-	toolFallback               *toolFallbackState                    // tool error fallback chain (actionable recovery suggestions)
-	replan                     *replanState                          // dynamic replan detector (active path re-evaluation on persistent failures)
-	argSizeGuardFires          int                                   // count of argument size guard injections this run
-	fileFreshness              *fileFreshnessSentinel                // proactive cross-iteration external file change detection
-	readHash                   *readHashTracker                      // content-fingerprint read validity (sub-second mtime race detection, false-positive suppression)
-	toolThermal                *thermalState                         // cross-tool usage balance monitor (explore/modify/verify distribution)
-	latencyTracker             *LatencyTracker                       // per-tool latency baseline & slow-tool outlier detection
-	toolSelectionScorer        *ToolSelectionScorer                  // cost-aware tool selection guidance (MCTS-inspired dual feedback)
-	budgetTracker              *BudgetTracker                        // runtime budget awareness for adaptive tool-use planning (BATS)
-	skillDiscovery             *skillDiscovery                       // skill discovery: automatic detection of recurring tool patterns (ELL-inspired)
-	toolSequence               *toolSequenceValidator                // cross-iteration tool call anti-pattern detection
-	planDrift                  *planDriftState                       // plan drift detection (exit_plan_mode item tracking)
-	unverifiedClaim            *unverifiedClaimState                 // unverified success claim detection (text claims vs actual verification)
-	convergenceLock            *convergenceLockState                 // post-verification unnecessary edit drift detection
-	userSentiment              *userSentimentState                   // negative user feedback detection (frustration/rejection course correction)
-	taskAnchor                 *taskAnchorState                      // periodic task re-anchoring for context collapse prevention
-	adaptiveSampling           *adaptiveSamplingState                // per-turn temperature adaptation (phase-aware sampling control)
-	effortAdapter              *adaptiveEffortState                  // per-turn reasoning effort adaptation (Opus 5 effort toggle pattern)
-	branchGuard                *branchGuardState                     // protected branch edit warning (main/master/develop awareness)
-	destructiveGuard           *gitDestructiveState                  // destructive git operation detection (reset --hard, force push, etc.)
-	shellNativeHint            *shellNativeHintState                 // suggests native tools when agent uses shell for equivalent operations
-	monorepoScoper             *monorepoScoperState                  // monorepo package scope sprawl detection
-	mcpEcosystem               *mcpEcosystemState                    // MCP server health, conflict, and capability intelligence
-	mcpRuntime                 tool.MCPRuntime                       // MCP runtime for server snapshots (optional)
-	bgOrphan                   *bgOrphanState                        // orphaned background command detection (unchecked start_command jobs)
-	actionAnnihil              *actionAnnihilateState                // action annihilation detection (tool calls that cancel prior side effects)
-	oodDetect                  *oodDetector                          // out-of-distribution detection (novel file types/tool combos outside historical experience)
-	exploreFrag                *exploreFragState                     // exploration fragmentation detection (scattered foraging without convergence)
-	batchCoupling              *batchCouplingState                   // parallel tool call coupling detection (hidden order dependencies in batches)
-	buildIdempot               *buildIdempotencyState                // build/test idempotency detection (re-running deterministic builds without edits)
-	orphanFile                 *orphanFileState                      // orphaned new file integration detection (new source files never wired into existing code)
-	cfDep                      *cfDepState                           // counterfactual dependency detection (dependent tool calls in same batch)
-	guidanceBudget             guidanceBudget                        // per-turn guidance injection limiter (caps context pollution from detector alerts)
-	abstainDetect              *abstainState                         // agentic abstention detection (untimely continuation after negative signals)
-	policyVerifier             *PolicyVerifierService                // formal policy verification: intercepts and verifies actions before execution (AgentVerify/VeriGuard-inspired)
-	phantomOutput              *phantomState                         // phantom output inheritance detection (building on failed tool results)
-	toolStorm                  *toolStormState                       // tool call storm detection (diverse tools fired without reasoning)
-	reasoningRedund            *reasoningRedundancyState             // reasoning redundancy detection (consecutive text-only overthinking)
-	queryConverge              *queryConvergeState                   // query convergence failure detection (repeated similar searches without action)
-	serialRead                 *serialReadState                      // sequential read serialization detection (cross-turn single-read batching opportunity)
-	strategyFixation           *strategyFixationState                // strategy fixation detection (same file edited N times with failed verifications -- approach-level failure)
-	errorRush                  *errorRushState                       // error rush / panic coding detection (blind-fixing after consecutive errors without diagnosis)
-	targetScatter              *targetScatterState                   // target scatter detection (world model miscalibration - unfocused investigation across many unrelated files)
-	attentionFragment          *attentionFragmentState               // attention fragmentation detection (CLT extraneous load from rapid directory context-switching)
-	errorCompound              *errorCompoundState                   // error compounding risk detector (systemic trajectory reliability)
-	fixAmnesia                 *fixAmnesiaState                      // fix amnesia detector (cross-file error pattern recurrence after prior fix)
-	correctionSpiral           *correctionSpiralState                // correction spiral detector (error severity escalation across fixes)
-	wastedExplore              *wastedExploreState                   // wasted exploration detection (search results never acted upon)
-	toolResultRedundancy       *toolResultRedundancyState            // tool result redundancy detection (overlapping content across calls)
-	anchorErosion              *anchorErosionState                   // anchor precision decay detection (edit argument quality degradation over run lifecycle)
-	tunnelVision               *tunnelVisionState                    // tunnel vision detection (narrow file scope / under-exploration)
-	prematureCommit            *prematureCommitState                 // premature commitment detection (insufficient evidence before first edit)
-	selfMod                    *selfModState                         // self-modification safety guard (agent editing its own infrastructure)
-	diagnosticDisconnect       *diagnosticDisconnectState            // diagnostic-action disconnect detection (ignored diagnostics from failed tool calls)
-	bareEditStreak             *bareEditStreakState                  // unverified mutation streak detection (consecutive edits without verification)
-	editCoverage               *editCoverageState                    // verification coverage gap detection (edits across packages but partial verification)
-	greenBuildIllusion         *greenBuildIllusionState              // green build illusion: build succeeds without tests before declaring done
-	prematureSuccess           *prematureSuccessState                // premature success claim detection (edits without verification followed by success declaration)
-	recklessExec               *recklessExecState                    // reckless execution detection (edits to unexplored files in early iterations)
-	irrevGate                  *irrevGateState                       // irreversibility-weighted calibration gate (caution scales with action reversibility)
-	verifyDebt                 *verifyDebtState                      // verification debt accumulator (edits since last green build)
-	editPropagation            *editPropagationState                 // cross-file edit propagation risk (distinct files since green build)
-	errorCascade               *errorCascadeState                    // cascading failure detection (common-root-cause error clustering)
-	errorPropagate             *errorPropagateState                  // error propagation chain detection (degraded-output contamination tracking)
-	delegationOrch             *delegationState                      // delegation orchestration intelligence (orphaned delegations, serial anti-pattern, over-delegation)
-	crossFileImpact            *crossFileImpactState                 // pre-completion cross-file impact analysis (removed symbol breakage detection)
-	contextFootprint           *contextFootprintState                // per-tool context budget attribution (which tools consume the most context)
-	promptOps                  *promptOpsState                       // system prompt redundancy and token efficiency intelligence (PromptOps)
-	cacheEffMonitor            *cacheEffMonitor                      // prompt cache efficiency monitoring (cache bust storm detection)
-	pressureForecaster         *pressureForecaster                   // context window pressure forecasting (predictive compaction warning)
-	redundantRead              *redundantReadState                   // redundant re-read detection (context waste prevention)
-	patchExhaust               *patchExhaustState                    // IFT patch exhaustion detection (give-up rule for over-mined directories)
-	searchParamGuard           *searchParamGuardState                // search parameter quality guard (vague/broad pattern detection)
-	toolRedundancy             *toolRedundancyState                  // scattered duplicate tool call detection (non-consecutive redundancy)
-	toolEquivDetect            *toolEquivDetectState                 // semantic-equivalent tool call detection (reordered keys, volatile fields)
-	ruleStore                  *RuleStore                            // cached rule store for hot-path rule injection (avoids per-tool disk I/O)
-	ruleInjectCount            map[string]int                        // per-rule injection counter for dedup (caps repetitive hints)
-	approvalMemory             *permission.ApprovalMemory            // session-level learned approval patterns (auto-approve after N repeats)
-	toolDiversity              *diversityState                       // tool diversity stagnation detection (strategy imbalance awareness)
-	fileChurn                  *churnState                           // file churn detection (invalidated assumption awareness)
-	editOscillation            *oscillationState                     // edit oscillation detection (semantic back-and-forth awareness)
-	analysisParalysis          *analysisParalysisState               // analysis paralysis detection (exploration-heavy / action-starved loops)
-	overReflection             *overReflectionDetector               // over-reflection detection (text-heavy no-action turns, arXiv:2506.12928)
-	toolCallEconomy            *toolCallEconomyState                 // tool call economy detection (batchable individual calls)
-	silentError                *silentErrorState                     // silent error advancement detection (unaddressed error proceeding)
-	verifySuppress             *verifySuppressState                  // verification suppression detection (reward hacking via error masking)
-	verbosityDrift             *verbosityDriftState                  // verbosity drift detection (token-to-productivity ratio degradation)
-	cusumDrift                 *cusumDriftState                      // CUSUM statistical drift detection (cumulative behavioral deviation)
-	toolOveruse                *toolOveruseState                     // tool overuse / self-awareness detection (unnecessary tool calls for known info)
-	assumptionTracker          *assumptionTrackerState               // implicit assumption detection (unverified guesses in assistant text)
-	satisficingSettle          *satisficingSettleState               // satisficing settling detection (knowingly suboptimal solution delivery)
-	diagnosticFixation         *diagnosticFixationState              // diagnostic fixation detection (stale hypothesis persistence across turns)
-	sycophancyGuard            *sycophancyState                      // user-premise sycophancy detection (agreeing with user premises without verification)
-	unverifiedConfidence       *unverifiedConfidenceState            // unverified confidence detection (overconfident claims without verification)
-	phantomVerify              *phantomVerifyState                   // phantom verification detection (category-specific verification claims without matching commands)
-	redundantReverify          *redundantReverifyState               // redundant re-verification detection (same verification cmd re-run without file edits)
-	narrativeEvidence          *narrativeEvidenceState               // narrative-evidence decoupling detection (text contradicts tool output)
-	beliefDefense              *beliefDefenseState                   // belief defense escalation detection (re-stated beliefs after contradicting evidence)
-	bridgingRat                *bridgingRatState                     // bridging rationalization detection (RECAP: stale premise propagation)
-	evidenceOverconfidence     *evidenceOverconfidenceState          // evidence-induced overconfidence (tool-type calibration asymmetry)
-	scopeOvergeneralize        *scopeOvergeneralizeState             // scope overgeneralization (narrow evidence -> universal claim)
-	verifyDisconnect           *verifyDisconnectState                // verification outcome disconnect (advancing past failures)
-	selectiveEvidence          *selectiveEvidenceTrackerState        // confirmation bias detection (cherry-picked evidence + dismissed negatives)
-	historyErrAccum            *historyErrAccumState                 // history error accumulation detection (multi-issue tool output partially addressed)
-	temporalBlindness          *temporalBlindnessState               // temporal blindness detection (stale verification across mutations)
-	selfDiagState              *selfDiagState                        // unverified self-diagnosis detection (correlated failure after errors)
-	deferredWork               *deferredWorkState                    // deferred work tracking (forgotten follow-up detection)
-	truncClaim                 *truncClaimState                      // truncated output completeness fallacy detection (claims after truncated results)
-	circularReasoning          *circularReasoningState               // circular reasoning detection (tautological justification)
-	contradiction              *contradictionState                   // cross-turn contradiction detection (root-cause reversals)
-	ungroundedReflect          *ungroundedReflectionState            // ungrounded reflection detector (text-only thinking loops)
-	actionHedging              *actionHedgingState                   // action hedging detection (verbalized uncertainty during mutations)
-	scopeCreep                 *scopeCreepState                      // scope creep detection (unsolicited changes beyond request)
-	prematureAbstr             *prematureAbstrState                  // premature abstraction detection (over-engineering within task scope)
-	capBoundary                *capabilityBoundaryState              // capability boundary detection (stubborn persistence beyond solvability)
-	planAbandon                *planAbandonState                     // plan abandonment detection (declare plan, claim done without executing)
-	toolTargetMismatch         *toolTargetState                      // tool-target mismatch detection (stated intent vs actual tool target)
-	outcomeMisattrib           *outcomeMisattribState                // outcome misattribution detection (success claim despite failure result)
-	trajectoryHealth           *trajectoryHealthState                // metacognitive trajectory health synthesis (multi-signal composite)
-	patternLearner             *patternLearner                       // successful trajectory pattern learning (Agent-R self-training)
-	tokenWasteBudget           *tokenWasteBudgetState                // aggregate token waste ratio tracker (AgentDiet arXiv:2509.23586)
-	reversibility              *reversibilityState                   // pre-action reversibility assessment (irreversible action safety check)
-	mindlessAction             *mindlessActionState                  // mindless action detection (rapid-fire tool calls without reasoning)
-	reproducerLifecycle        *reproducerLifecycleState             // reproducer lifecycle tracker (reproduce->edit->rerun gap)
-	successDeclare             *successDeclareState                  // premature success declaration detection (calibration gap: done claim + continued work)
-	criteriaDrift              *criteriaDriftState                   // success criteria drift detection (proxy gaming via evaluator weakening)
-	goalDriftCtx               *goalDriftCtxState                    // context-length goal drift detection (arXiv:2505.02709)
-	reasonAction               *reasonActionState                    // reasoning-action alignment verification (cognitive category mismatch)
-	verifyScopeDecay           *verifyScopeDecayState                // verification scope decay detection (progressive narrowing of test/build scope)
-	symbolGrounding            *symbolGroundingState                 // symbol grounding verification (ungrounded code symbol reference detection)
-	inputUnderspec             *inputUnderspecState                  // input underspecification detection (vague/underspecified user request)
-	futileCycle                *futileCycleState                     // futile cycle detection (circular exploration without writes)
-	compoundedUncert           *compoundedUncertaintyState           // compounded trajectory uncertainty (multiplicative epistemic risk accumulation)
-	spiralState                *spiralHallucinationState             // cross-turn epistemic error propagation (Spiral of Hallucination)
-	trajIntel                  *trajIntelState                       // post-run trajectory intelligence extraction
-	strategyStagnation         *strategyStagnationState              // strategy stagnation detection (same-tool+target retries after failure)
-	iterPressure               *iterPressureState                    // iteration pressure degradation detection (verify/edit ratio drop near budget limit)
-	momentumLoss               *momentumLossState                    // late-phase productivity collapse detection (last-mile stall)
-	diminishingEdit            *diminishingEditState                 // polish-spiral detection (diminishing edit substance)
-	overcorrection             *overcorrectionState                  // overcorrection cascade detection (disproportionate fix size)
-	prematureSurrender         *surrenderState                       // premature task abandonment detection (metacognitive surrender awareness)
-	contextAnchor              *anchorState                          // positional attention decay mitigation (lost-in-the-middle re-anchoring, Liu et al. 2024)
-	prematureRefactor          *prematureRefactorState               // premature refactoring detection (unverified code restructuring awareness)
-	subgoalTrack               *subgoalState                         // subgoal completion integrity (missing-step planning failure awareness)
-	infoScent                  *infoScentState                       // information scent decay detection (diminishing novelty across explorations)
-	exploreExploit             *exploreExploitState                  // exploration-exploitation imbalance detection (aggregate foraging balance)
-	foresightCalib             *foresightCalibrateState              // foresight calibration (prediction-observation mismatch tracking, WorldEvolver arXiv:2606.30639)
-	causalAttribution          *causalAttributionState               // causal failure attribution (CausalFlow-inspired root-cause step identification)
-	attemptBrief               *attemptBriefState                    // compact attempt summary for knowledge reuse across failed approaches
-	behaviorPattern            *behaviorPatternState                 // cross-run behavioral anti-pattern detection (systemic issue awareness)
-	crossDetectorConsensus     *consensusState                       // cross-detector consensus (systemic failure from simultaneous detector firings)
-	taintInfluence             *taintInfluenceState                  // tainted data influence detection (IFC: tracks untrusted content flowing into privileged tool calls)
-	falsePremise               *falsePremiseState                    // false premise detection: ungrounded success claims contradicting tool errors (world-model drift)
-	delayedObservation         *delayedObservationState              // delayed observation contradiction detection (positive claims contradicting aged negative observations)
-	perfBaseline               *perfBaselineState                    // cross-session performance regression detection
-	guidancePromoter           *GuidancePromoter                     // cross-session guidance tag recurrence → proactive rule promotion (inter-test-time evolution)
-	heterogeneousModel         *heterogeneousModelState              // FinOps: heterogeneous model selection guidance (sa-131)
-	lastRunStats               *RunStats                             // stats from the most recent run (for post-run summary display)
-	qualityScorer              *ResponseQualityScorer                // per-run response quality scoring for provider/model A/B comparison
-	systemPromptInjector       func() string                         // returns extra system prompt text to inject (e.g. lanchat peer warnings)
-	baseSystemPrompt           string                                // the fully built static system prompt; used as reset base for dynamic injection
-	lastInjectedSystemPrompt   string                                // cache of last injected prompt to skip redundant updates
-	onVerifyProgress           func(text string)                     // called during async verification (status updates)
-	onVerifyResult             func(VerifyResult)                    // called when async verification completes
-	onToolProgress             func(toolID, toolName, output string) // called for streaming tool output (e.g. wait_command)
-	riskController             *riskAwareController                  // risk-aware, budgeted controller (arXiv:2601.01743: action reversibility and impact branching)
-	mu                         sync.RWMutex
+	shutdownCancel             context.CancelFunc     // cancels on Close()
+	probeKey                   string                 // "vendor|baseURL|model" for context window auto-detection
+	autopilotGoal              string                 // current autopilot goal text; empty when no goal is active
+	autopilotGoalAsked         bool                   // true after the goal-collection instruction has been injected
+	autopilotGoalSet           bool                   // true after the user has confirmed a goal (goal text is non-empty)
+	autopilotStrategistCount   int                    // number of strategist calls this run (safety valve)
+	strategistBudgetAnnounced  bool                   // true once the budget-exhausted message has been injected
+	strategistNoProgressCount  int                    // consecutive strategist calls where agent made no tool calls
+	reflectionFunc             ReflectionFunc         // called after each run with accumulated stats
+	loopDetector               loopDetector           // tracks consecutive identical tool calls to detect stuck loops
+	errorClassifier            *ErrorClassifier       // immediate type-specific guidance on tool errors (AgentDebug-inspired)
+	overseer                   *overseerState         // deterministic async-overseer: trajectory analysis for stuck/drift/spam
+	repetition                 *repetitionTracker     // semantic-level repetition detection for failed edit clusters
+	speculator                 *speculator            // pattern-aware speculative tool execution (PASTE-inspired)
+	toolMemo                   *toolMemo              // read-only tool result memoization (ToolCaching-inspired)
+	confidence                 *confidenceState       // holistic trajectory confidence scoring (HTC-inspired)
+	verifDebt                  *verificationDebtState // verification debt tracker (SAUP-inspired uncertainty propagation)
+	undoBlind                  *undoBlindState        // undo-edit blind continuation detection (AgentDebug-inspired)
+	editAbandon                *editAbandonState      // edit abandonment detection (PASTE/LLMCompiler-inspired attention-shift tracking)
+
+	toolCallBudget *toolCallBudget      // per-session tool invocation limit (action-level guardrail)
+	cacheKeepalive *cacheKeepaliveState // prompt cache warming pings during idle (Anthropic)
+
+	commandCache *commandCache     // deterministic build/test command result caching
+	emptySearch  *emptySearchState // empty search spiral detection (futile search guidance)
+
+	degradedResult       *degradedResultState       // silent degradation propagation detection (Galileo error propagation chain)
+	postEditVerify       postEditVerifyState        // tracks source-code edits to inject periodic verification hints
+	planner              *planState                 // agent-side auto task decomposition (Devin/Claude Code-inspired)
+	todoStaleness        *todoStalenessState        // mid-run stale todo detection (plan abandonment awareness)
+	todoDrop             *todoDropState             // mid-run todo contract drop detection (silent commitment removal)
+	recurringError       *recurringErrorState       // recurring build/test error fingerprint detection across edit cycles
+	errStrategyLoop      *errStrategyState          // error strategy loop detection (procedural memory failure)
+	solutionFixation     *solutionFixationState     // solution fixation: diagnosis anchoring on failed edit clusters
+	fixCascade           *fixCascadeState           // failed fix cascade (wrong-hypothesis lock-in) detection
+	errRegression        *errRegressionState        // error count regression (negative progress) detection
+	stalledConvergence   *stalledConvergenceState   // stalled convergence detection (diminishing returns pattern)
+	unreadEdit           *unreadEditState           // read-before-edit guard: warns when editing unread files
+	expiredRead          *expiredReadState          // expired-read detection: self-invalidated context awareness (AgentDiet)
+	searchInvalidation   *searchInvalidationState   // search-result invalidation: stale grep/lsp results after edits (AgentDiet)
+	wtInvalidation       *wtInvalidationState       // working-tree invalidation: cross-file stale reads after git mutation
+	strategyExhaustion   *seStrategyExhaustionState // strategy exhaustion: diverse recovery strategies failing for same error (EEA robustness entropy)
+	editFailRecovery     *editFailState             // consecutive edit failure recovery guidance
+	scopeDrift           *scopeDriftState           // semantic scope creep detection (file-diversity tracking)
+	driftRecurrence      *driftRecurrenceState      // drift recurrence detection (post-warning behavioral persistence)
+	constraintAmnesia    *constraintAmnesiaState    // constraint amnesia detection (early constraint forgetting)
+	constraintViolation  *constraintViolationState  // self-declared constraint violation detection (AgentRx step-level tracking)
+	exportGuard          *exportGuardState          // breaking change detection for exported Go symbols (regression guard)
+	hubPackageGuard      *hubPackageState           // per-edit blast-radius awareness for high fan-in packages
+	artifactGuard        *generatedArtifactState    // generated artifact / lock file edit warning
+	toolFilter           *tool.RelevanceFilter      // dynamic MCP tool pruning based on conversation relevance
+	fulfillmentGate      *fulfillmentGateState      // pre-completion coverage verification (request-vs-work match)
+	ambiguityPoint       *ambiguityPointState       // pre-run intent disambiguation (ambiguity detection in user request)
+	companionGuard       *companionGuardState       // companion test file coverage check (unedited paired tests)
+	specGaming           *specGamingState           // specification gaming detection (reward hacking / verification tampering)
+	scopeNarrow          *scopeNarrowState          // verification scope narrowing detection (command-level spec gaming)
+	complexityGate       *complexityGateState       // post-completion code complexity quality gate
+	changeReconcile      *changeReconcileState      // pre-completion git diff reconciliation (unexpected side-effect detection)
+	claimVerify          *claimVerifyState          // tool output misinterpretation detection (AgentRx-inspired)
+	integrationMonitor   *integrationState          // tool output integration tracking (TRACE-inspired cross-step evidence)
+	diffSummary          *diffSummaryState          // pre-completion holistic change summary for self-review
+	commitHint           *commitHintState           // post-completion commit reminder for uncommitted changes
+	verifyRegression     *verifyRegressionState     // cross-run error diff: detects correction-induced regressions
+	selfCorrectionGate   *selfCorrectionGateState   // EIR/ECR stability gate: detects net-negative self-correction loops
+	lastGoodCheckpoint   *lastGoodCheckpoint        // last-known-good file snapshot: actionable revert targets for failed self-correction
+	sessionTimeout       *sessionTimeoutState       // wall-clock timeout for agent runs (autopilot guardrail)
+	diskSpace            *diskSpaceState            // low disk space detection (resource exhaustion awareness)
+	envDrift             *envDriftState             // env var drift detection (.env.example vs actual env)
+	transientRetryBudget int                        // remaining automatic retries for transient tool failures (per run)
+
+	metadata           map[string]string        // persistent metadata for session persistence
+	compoundingFailure *compoundingFailureState // sliding-window cross-tool failure rate (strategy reset detection)
+	failureMode        *failureModeState        // meta-level failure mode classification (transient/structural/systemic)
+
+	toolFallback *toolFallbackState // tool error fallback chain (actionable recovery suggestions)
+
+	argSizeGuardFires int                    // count of argument size guard injections this run
+	fileFreshness     *fileFreshnessSentinel // proactive cross-iteration external file change detection
+	readHash          *readHashTracker       // content-fingerprint read validity (sub-second mtime race detection, false-positive suppression)
+	toolThermal       *thermalState          // cross-tool usage balance monitor (explore/modify/verify distribution)
+	latencyTracker    *LatencyTracker        // per-tool latency baseline & slow-tool outlier detection
+
+	toolSequence     *toolSequenceValidator // cross-iteration tool call anti-pattern detection
+	planDrift        *planDriftState        // plan drift detection (exit_plan_mode item tracking)
+	unverifiedClaim  *unverifiedClaimState  // unverified success claim detection (text claims vs actual verification)
+	convergenceLock  *convergenceLockState  // post-verification unnecessary edit drift detection
+	userSentiment    *userSentimentState    // negative user feedback detection (frustration/rejection course correction)
+	taskAnchor       *taskAnchorState       // periodic task re-anchoring for context collapse prevention
+	adaptiveSampling *adaptiveSamplingState // per-turn temperature adaptation (phase-aware sampling control)
+	effortAdapter    *adaptiveEffortState   // per-turn reasoning effort adaptation (Opus 5 effort toggle pattern)
+	branchGuard      *branchGuardState      // protected branch edit warning (main/master/develop awareness)
+	destructiveGuard *gitDestructiveState   // destructive git operation detection (reset --hard, force push, etc.)
+	shellNativeHint  *shellNativeHintState  // suggests native tools when agent uses shell for equivalent operations
+	monorepoScoper   *monorepoScoperState   // monorepo package scope sprawl detection
+	mcpEcosystem     *mcpEcosystemState     // MCP server health, conflict, and capability intelligence
+	mcpRuntime       tool.MCPRuntime        // MCP runtime for server snapshots (optional)
+	bgOrphan         *bgOrphanState         // orphaned background command detection (unchecked start_command jobs)
+	actionAnnihil    *actionAnnihilateState // action annihilation detection (tool calls that cancel prior side effects)
+
+	exploreFrag            *exploreFragState              // exploration fragmentation detection (scattered foraging without convergence)
+	batchCoupling          *batchCouplingState            // parallel tool call coupling detection (hidden order dependencies in batches)
+	buildIdempot           *buildIdempotencyState         // build/test idempotency detection (re-running deterministic builds without edits)
+	orphanFile             *orphanFileState               // orphaned new file integration detection (new source files never wired into existing code)
+	cfDep                  *cfDepState                    // counterfactual dependency detection (dependent tool calls in same batch)
+	guidanceBudget         guidanceBudget                 // per-turn guidance injection limiter (caps context pollution from detector alerts)
+	abstainDetect          *abstainState                  // agentic abstention detection (untimely continuation after negative signals)
+	phantomOutput          *phantomState                  // phantom output inheritance detection (building on failed tool results)
+	toolStorm              *toolStormState                // tool call storm detection (diverse tools fired without reasoning)
+	reasoningRedund        *reasoningRedundancyState      // reasoning redundancy detection (consecutive text-only overthinking)
+	queryConverge          *queryConvergeState            // query convergence failure detection (repeated similar searches without action)
+	serialRead             *serialReadState               // sequential read serialization detection (cross-turn single-read batching opportunity)
+	strategyFixation       *strategyFixationState         // strategy fixation detection (same file edited N times with failed verifications -- approach-level failure)
+	errorRush              *errorRushState                // error rush / panic coding detection (blind-fixing after consecutive errors without diagnosis)
+	targetScatter          *targetScatterState            // target scatter detection (world model miscalibration - unfocused investigation across many unrelated files)
+	attentionFragment      *attentionFragmentState        // attention fragmentation detection (CLT extraneous load from rapid directory context-switching)
+	errorCompound          *errorCompoundState            // error compounding risk detector (systemic trajectory reliability)
+	fixAmnesia             *fixAmnesiaState               // fix amnesia detector (cross-file error pattern recurrence after prior fix)
+	correctionSpiral       *correctionSpiralState         // correction spiral detector (error severity escalation across fixes)
+	wastedExplore          *wastedExploreState            // wasted exploration detection (search results never acted upon)
+	toolResultRedundancy   *toolResultRedundancyState     // tool result redundancy detection (overlapping content across calls)
+	anchorErosion          *anchorErosionState            // anchor precision decay detection (edit argument quality degradation over run lifecycle)
+	tunnelVision           *tunnelVisionState             // tunnel vision detection (narrow file scope / under-exploration)
+	prematureCommit        *prematureCommitState          // premature commitment detection (insufficient evidence before first edit)
+	selfMod                *selfModState                  // self-modification safety guard (agent editing its own infrastructure)
+	diagnosticDisconnect   *diagnosticDisconnectState     // diagnostic-action disconnect detection (ignored diagnostics from failed tool calls)
+	bareEditStreak         *bareEditStreakState           // unverified mutation streak detection (consecutive edits without verification)
+	editCoverage           *editCoverageState             // verification coverage gap detection (edits across packages but partial verification)
+	greenBuildIllusion     *greenBuildIllusionState       // green build illusion: build succeeds without tests before declaring done
+	prematureSuccess       *prematureSuccessState         // premature success claim detection (edits without verification followed by success declaration)
+	recklessExec           *recklessExecState             // reckless execution detection (edits to unexplored files in early iterations)
+	irrevGate              *irrevGateState                // irreversibility-weighted calibration gate (caution scales with action reversibility)
+	verifyDebt             *verifyDebtState               // verification debt accumulator (edits since last green build)
+	editPropagation        *editPropagationState          // cross-file edit propagation risk (distinct files since green build)
+	errorCascade           *errorCascadeState             // cascading failure detection (common-root-cause error clustering)
+	errorPropagate         *errorPropagateState           // error propagation chain detection (degraded-output contamination tracking)
+	delegationOrch         *delegationState               // delegation orchestration intelligence (orphaned delegations, serial anti-pattern, over-delegation)
+	crossFileImpact        *crossFileImpactState          // pre-completion cross-file impact analysis (removed symbol breakage detection)
+	contextFootprint       *contextFootprintState         // per-tool context budget attribution (which tools consume the most context)
+	promptOps              *promptOpsState                // system prompt redundancy and token efficiency intelligence (PromptOps)
+	cacheEffMonitor        *cacheEffMonitor               // prompt cache efficiency monitoring (cache bust storm detection)
+	pressureForecaster     *pressureForecaster            // context window pressure forecasting (predictive compaction warning)
+	redundantRead          *redundantReadState            // redundant re-read detection (context waste prevention)
+	patchExhaust           *patchExhaustState             // IFT patch exhaustion detection (give-up rule for over-mined directories)
+	searchParamGuard       *searchParamGuardState         // search parameter quality guard (vague/broad pattern detection)
+	toolRedundancy         *toolRedundancyState           // scattered duplicate tool call detection (non-consecutive redundancy)
+	toolEquivDetect        *toolEquivDetectState          // semantic-equivalent tool call detection (reordered keys, volatile fields)
+	ruleStore              *RuleStore                     // cached rule store for hot-path rule injection (avoids per-tool disk I/O)
+	ruleInjectCount        map[string]int                 // per-rule injection counter for dedup (caps repetitive hints)
+	approvalMemory         *permission.ApprovalMemory     // session-level learned approval patterns (auto-approve after N repeats)
+	toolDiversity          *diversityState                // tool diversity stagnation detection (strategy imbalance awareness)
+	fileChurn              *churnState                    // file churn detection (invalidated assumption awareness)
+	editOscillation        *oscillationState              // edit oscillation detection (semantic back-and-forth awareness)
+	analysisParalysis      *analysisParalysisState        // analysis paralysis detection (exploration-heavy / action-starved loops)
+	overReflection         *overReflectionDetector        // over-reflection detection (text-heavy no-action turns, arXiv:2506.12928)
+	toolCallEconomy        *toolCallEconomyState          // tool call economy detection (batchable individual calls)
+	silentError            *silentErrorState              // silent error advancement detection (unaddressed error proceeding)
+	verifySuppress         *verifySuppressState           // verification suppression detection (reward hacking via error masking)
+	verbosityDrift         *verbosityDriftState           // verbosity drift detection (token-to-productivity ratio degradation)
+	cusumDrift             *cusumDriftState               // CUSUM statistical drift detection (cumulative behavioral deviation)
+	toolOveruse            *toolOveruseState              // tool overuse / self-awareness detection (unnecessary tool calls for known info)
+	assumptionTracker      *assumptionTrackerState        // implicit assumption detection (unverified guesses in assistant text)
+	satisficingSettle      *satisficingSettleState        // satisficing settling detection (knowingly suboptimal solution delivery)
+	diagnosticFixation     *diagnosticFixationState       // diagnostic fixation detection (stale hypothesis persistence across turns)
+	sycophancyGuard        *sycophancyState               // user-premise sycophancy detection (agreeing with user premises without verification)
+	unverifiedConfidence   *unverifiedConfidenceState     // unverified confidence detection (overconfident claims without verification)
+	phantomVerify          *phantomVerifyState            // phantom verification detection (category-specific verification claims without matching commands)
+	redundantReverify      *redundantReverifyState        // redundant re-verification detection (same verification cmd re-run without file edits)
+	narrativeEvidence      *narrativeEvidenceState        // narrative-evidence decoupling detection (text contradicts tool output)
+	beliefDefense          *beliefDefenseState            // belief defense escalation detection (re-stated beliefs after contradicting evidence)
+	bridgingRat            *bridgingRatState              // bridging rationalization detection (RECAP: stale premise propagation)
+	evidenceOverconfidence *evidenceOverconfidenceState   // evidence-induced overconfidence (tool-type calibration asymmetry)
+	scopeOvergeneralize    *scopeOvergeneralizeState      // scope overgeneralization (narrow evidence -> universal claim)
+	verifyDisconnect       *verifyDisconnectState         // verification outcome disconnect (advancing past failures)
+	selectiveEvidence      *selectiveEvidenceTrackerState // confirmation bias detection (cherry-picked evidence + dismissed negatives)
+	historyErrAccum        *historyErrAccumState          // history error accumulation detection (multi-issue tool output partially addressed)
+	temporalBlindness      *temporalBlindnessState        // temporal blindness detection (stale verification across mutations)
+	selfDiagState          *selfDiagState                 // unverified self-diagnosis detection (correlated failure after errors)
+	deferredWork           *deferredWorkState             // deferred work tracking (forgotten follow-up detection)
+	truncClaim             *truncClaimState               // truncated output completeness fallacy detection (claims after truncated results)
+	circularReasoning      *circularReasoningState        // circular reasoning detection (tautological justification)
+	contradiction          *contradictionState            // cross-turn contradiction detection (root-cause reversals)
+	ungroundedReflect      *ungroundedReflectionState     // ungrounded reflection detector (text-only thinking loops)
+	actionHedging          *actionHedgingState            // action hedging detection (verbalized uncertainty during mutations)
+	scopeCreep             *scopeCreepState               // scope creep detection (unsolicited changes beyond request)
+	prematureAbstr         *prematureAbstrState           // premature abstraction detection (over-engineering within task scope)
+	capBoundary            *capabilityBoundaryState       // capability boundary detection (stubborn persistence beyond solvability)
+	planAbandon            *planAbandonState              // plan abandonment detection (declare plan, claim done without executing)
+	toolTargetMismatch     *toolTargetState               // tool-target mismatch detection (stated intent vs actual tool target)
+	outcomeMisattrib       *outcomeMisattribState         // outcome misattribution detection (success claim despite failure result)
+	trajectoryHealth       *trajectoryHealthState         // metacognitive trajectory health synthesis (multi-signal composite)
+
+	tokenWasteBudget         *tokenWasteBudgetState                // aggregate token waste ratio tracker (AgentDiet arXiv:2509.23586)
+	reversibility            *reversibilityState                   // pre-action reversibility assessment (irreversible action safety check)
+	mindlessAction           *mindlessActionState                  // mindless action detection (rapid-fire tool calls without reasoning)
+	reproducerLifecycle      *reproducerLifecycleState             // reproducer lifecycle tracker (reproduce->edit->rerun gap)
+	successDeclare           *successDeclareState                  // premature success declaration detection (calibration gap: done claim + continued work)
+	criteriaDrift            *criteriaDriftState                   // success criteria drift detection (proxy gaming via evaluator weakening)
+	goalDriftCtx             *goalDriftCtxState                    // context-length goal drift detection (arXiv:2505.02709)
+	reasonAction             *reasonActionState                    // reasoning-action alignment verification (cognitive category mismatch)
+	verifyScopeDecay         *verifyScopeDecayState                // verification scope decay detection (progressive narrowing of test/build scope)
+	symbolGrounding          *symbolGroundingState                 // symbol grounding verification (ungrounded code symbol reference detection)
+	inputUnderspec           *inputUnderspecState                  // input underspecification detection (vague/underspecified user request)
+	futileCycle              *futileCycleState                     // futile cycle detection (circular exploration without writes)
+	compoundedUncert         *compoundedUncertaintyState           // compounded trajectory uncertainty (multiplicative epistemic risk accumulation)
+	spiralState              *spiralHallucinationState             // cross-turn epistemic error propagation (Spiral of Hallucination)
+	trajIntel                *trajIntelState                       // post-run trajectory intelligence extraction
+	strategyStagnation       *strategyStagnationState              // strategy stagnation detection (same-tool+target retries after failure)
+	iterPressure             *iterPressureState                    // iteration pressure degradation detection (verify/edit ratio drop near budget limit)
+	momentumLoss             *momentumLossState                    // late-phase productivity collapse detection (last-mile stall)
+	diminishingEdit          *diminishingEditState                 // polish-spiral detection (diminishing edit substance)
+	overcorrection           *overcorrectionState                  // overcorrection cascade detection (disproportionate fix size)
+	prematureSurrender       *surrenderState                       // premature task abandonment detection (metacognitive surrender awareness)
+	contextAnchor            *anchorState                          // positional attention decay mitigation (lost-in-the-middle re-anchoring, Liu et al. 2024)
+	prematureRefactor        *prematureRefactorState               // premature refactoring detection (unverified code restructuring awareness)
+	subgoalTrack             *subgoalState                         // subgoal completion integrity (missing-step planning failure awareness)
+	infoScent                *infoScentState                       // information scent decay detection (diminishing novelty across explorations)
+	exploreExploit           *exploreExploitState                  // exploration-exploitation imbalance detection (aggregate foraging balance)
+	foresightCalib           *foresightCalibrateState              // foresight calibration (prediction-observation mismatch tracking, WorldEvolver arXiv:2606.30639)
+	causalAttribution        *causalAttributionState               // causal failure attribution (CausalFlow-inspired root-cause step identification)
+	attemptBrief             *attemptBriefState                    // compact attempt summary for knowledge reuse across failed approaches
+	behaviorPattern          *behaviorPatternState                 // cross-run behavioral anti-pattern detection (systemic issue awareness)
+	crossDetectorConsensus   *consensusState                       // cross-detector consensus (systemic failure from simultaneous detector firings)
+	taintInfluence           *taintInfluenceState                  // tainted data influence detection (IFC: tracks untrusted content flowing into privileged tool calls)
+	falsePremise             *falsePremiseState                    // false premise detection: ungrounded success claims contradicting tool errors (world-model drift)
+	delayedObservation       *delayedObservationState              // delayed observation contradiction detection (positive claims contradicting aged negative observations)
+	perfBaseline             *perfBaselineState                    // cross-session performance regression detection
+	guidancePromoter         *GuidancePromoter                     // cross-session guidance tag recurrence → proactive rule promotion (inter-test-time evolution)
+	heterogeneousModel       *heterogeneousModelState              // FinOps: heterogeneous model selection guidance (sa-131)
+	lastRunStats             *RunStats                             // stats from the most recent run (for post-run summary display)
+	qualityScorer            *ResponseQualityScorer                // per-run response quality scoring for provider/model A/B comparison
+	systemPromptInjector     func() string                         // returns extra system prompt text to inject (e.g. lanchat peer warnings)
+	baseSystemPrompt         string                                // the fully built static system prompt; used as reset base for dynamic injection
+	lastInjectedSystemPrompt string                                // cache of last injected prompt to skip redundant updates
+	onVerifyProgress         func(text string)                     // called during async verification (status updates)
+	onVerifyResult           func(VerifyResult)                    // called when async verification completes
+	onToolProgress           func(toolID, toolName, output string) // called for streaming tool output (e.g. wait_command)
+	mu                       sync.RWMutex
 }
 
 type providerAwareContextManager interface {
@@ -408,17 +400,13 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		speculator:             newSpeculator(),
 		toolMemo:               newToolMemo(),
 		confidence:             newConfidenceState(),
-		uProp:                  newUPropState(),
-		metacognitive:          newMetacognitiveMonitor(),
 		verifDebt:              newVerificationDebtState(),
 		undoBlind:              newUndoBlindState(),
 		editAbandon:            newEditAbandonState(),
-		costBudget:             newSessionCostBudget(),
 		toolCallBudget:         newToolCallBudget(),
 		cacheKeepalive:         newCacheKeepaliveState(),
 		commandCache:           newCommandCache(),
 		emptySearch:            newEmptySearchState(),
-		paramValidator:         newParamValidator(),
 		degradedResult:         newDegradedResultState(),
 		errorClassifier:        NewErrorClassifier(),
 		planner:                newPlanState(),
@@ -449,7 +437,6 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		shellNativeHint:        newShellNativeHintState(),
 		monorepoScoper:         newMonorepoScoperState(),
 		mcpEcosystem:           newMCPEcosystemState(),
-		riskController:         newRiskAwareController(100), // 100 verification steps budget per session
 		approvalMemory:         permission.NewApprovalMemory(),
 		behaviorPattern:        newBehaviorPatternState(),
 		crossDetectorConsensus: newConsensusState(),
@@ -473,9 +460,6 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		lastGoodCheckpoint:     newLastGoodCheckpoint(),
 		toolFilter:             tool.NewRelevanceFilter(),
 		latencyTracker:         NewLatencyTracker(),
-		toolSelectionScorer:    NewToolSelectionScorer(NewLatencyTracker()), // independent scorer using its own latency data
-		budgetTracker:          NewBudgetTracker(0),                         // 0 = unconstrained by default (can be set via config)
-		skillDiscovery:         newSkillDiscovery(),
 		toolSequence:           newToolSequenceValidator(),
 		taskAnchor:             newTaskAnchorState("", time.Time{}),
 		adaptiveSampling:       newAdaptiveSamplingState(),
@@ -488,11 +472,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		transientRetryBudget:   maxTransientRetryBudgetPerRun,
 		compoundingFailure:     newCompoundingFailureState(),
 		failureMode:            newFailureModeState(),
-		resourceMonitor:        NewResourceMonitor(),
-		toolAffinity:           NewToolAffinityLearner(),
 		toolFallback:           newToolFallbackState(),
-		replan:                 newReplanState(),
-		policyVerifier:         NewPolicyVerifierService(),
 		contextFootprint:       newContextFootprintState(),
 		promptOps:              newPromptOpsState(),
 		cacheEffMonitor:        newCacheEffMonitor(),
@@ -502,10 +482,8 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		searchParamGuard:       newSearchParamGuard(),
 		toolRedundancy:         newToolRedundancyAnalyzer(),
 		toolEquivDetect:        newToolEquivDetectState(),
-		progVerif:              &progVerifTracker{},
 		bgOrphan:               newBgOrphanState(),
 		actionAnnihil:          newActionAnnihilateState(),
-		oodDetect:              newOODDetector(),
 		heterogeneousModel:     newHeterogeneousModelState(),
 		exploreFrag:            newExploreFragState(),
 		batchCoupling:          newBatchCouplingState(),
@@ -585,7 +563,6 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		compoundedUncert:       newCompoundedUncertaintyState(),
 		spiralState:            newSpiralHallucinationState(),
 		trajectoryHealth:       newTrajectoryHealthState(),
-		patternLearner:         newPatternLearner(),
 		tokenWasteBudget:       newTokenWasteBudgetState(),
 		mindlessAction:         newMindlessActionState(),
 		strategyStagnation:     newStrategyStagnationState(),
@@ -1142,7 +1119,6 @@ func (a *Agent) SetHookConfig(cfg hooks.HookConfig) {
 func (a *Agent) SetSessionTokenBudget(budget int64) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.costBudget.SetBudget(budget)
 }
 
 // SetToolCallBudget sets the maximum total tool calls allowed for a single
@@ -1344,8 +1320,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.mcpEcosystem.reset()
 	a.resetBgOrphan()
 	a.actionAnnihil.reset()
-	a.replan.reset()
-	a.progVerif.reset()
 	a.exploreFrag.reset()
 	a.batchCoupling.reset()
 	a.buildIdempot.reset()
@@ -1633,11 +1607,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.verifDebt.reset()
 	a.undoBlind.reset()
 	a.editAbandon.reset()
-	a.costBudget.reset()
 	a.toolCallBudget.reset()
 	a.toolCallBudget.SetDefaultBudget(deriveDefaultBudget(a.maxIter))
 	a.emptySearch.reset()
-	a.paramValidator.reset()
 	a.degradedResult.reset()
 	// Reset the unread-file edit tracker so each run starts fresh.
 	a.unreadEdit.reset()
@@ -2557,14 +2529,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// self-contradiction, plan changes, and interpretive drift.
 			// Records each turn's tools, action summary, and interpretation.
 			// Fires guidance when consistency drops below threshold (Li et al. 2025, Peters 2026).
-			actionSummary := a.extractActionSummary(assistantText)
-			interpretation := a.extractInterpretation(assistantText)
-			a.metacognitive.recordTurn("", actionSummary, interpretation)
-			if metaHint := a.metacognitive.maybeIntervene(); metaHint != "" {
-				debug.Log("agent", "Iteration %d: metacognitive monitor detected cognitive instability", i+1)
-				a.recordUncertainty("metacognitive_instability", weightAssumption)
-				a.injectGuidance(metaHint)
-			}
 
 			// Sycophancy detector: detect when the agent agrees with a
 			// user-stated premise without independent verification.
@@ -2988,14 +2952,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				a.trajectoryHealth.recordIteration(eCnt, 0, len(toolCalls), rCnt, assCnt)
 			}
 
-			// Trajectory pattern learner (Agent-R self-training): record
-			// tool sequences from this iteration for pattern extraction.
-			if a.patternLearner != nil {
-				for _, tc := range toolCalls {
-					a.patternLearner.recordToolCall(tc.Name, false)
-				}
-			}
-
 			// Trajectory health warning: when composite score exceeds threshold,
 			// inject holistic guidance about accumulating risk.
 			if healthHint := a.maybeWarnTrajectoryHealth(); healthHint != "" {
@@ -3005,19 +2961,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					Content: []provider.ContentBlock{{
 						Type: "text",
 						Text: healthHint,
-					}},
-				})
-			}
-
-			// Pattern learning suggestion: when recent tools match learned
-			// successful patterns, suggest following the established sequence.
-			if patternHint := a.checkPatternSuggestion(getRecentToolNames(toolCalls)); patternHint != "" {
-				debug.Log("agent", "Iteration %d: pattern learner found matching successful trajectory", i+1)
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: patternHint,
 					}},
 				})
 			}
@@ -3599,17 +3542,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				a.storeCommandResult(tc.Name, tc.Arguments, result)
 			}
 
-			// Progressive verification: check for early failure signs after each tool result.
-			// ReVeal-inspired incremental verification to fail fast (SA-109).
-			if pvGuidance := a.progVerif.checkAfterToolResult(tc.Name, result.Content, result.IsError); pvGuidance != "" {
-				debug.Log("prog-verif", "Iteration %d: progressive verification guidance injected for %s", i+1, tc.Name)
-				if result.Content != "" {
-					result.Content = result.Content + "\n\n" + pvGuidance
-				} else {
-					result.Content = pvGuidance
-				}
-			}
-
 			// Record the tool call for speculative pattern learning.
 			a.speculator.recordObservation(tc.Name)
 			// Track todo_write usage for the agent-side planner: once the
@@ -4126,22 +4058,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// actions to detect repeated similar searches without progress.
 			a.queryConverge.recordToolCall(tc.Name, string(tc.Arguments), i+1)
 
-			// Out-of-distribution detection: track file types and tool
-			// combinations to detect novel patterns outside historical experience.
-			// Research basis: arXiv:2510.21254 (2025)
-			targets := extractTargetsFromToolCall(tc.Name, tc.Arguments)
-			a.oodDetect.recordObservation(tc.Name, targets)
-			if oodSignal := a.oodDetect.checkOOD(tc.Name, targets); oodSignal != nil {
-				if guidance := a.injectOODGuidance(oodSignal); guidance != "" {
-					if result.Content != "" {
-						result.Content = result.Content + "\n\n" + guidance
-					} else {
-						result.Content = guidance
-					}
-				}
-			}
-
-			// Heterogeneous model selection guide: FinOps-aware guidance for
 			// cost-effective model tier selection. Detects execution-heavy
 			// patterns and suggests using cheaper models for routine work.
 			// Research basis: 2025-2026 AI Agent trends (Deloitte, Machine Learning Mastery)
@@ -4328,22 +4244,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				} else {
 					result.Content = modeGuidance
 				}
-			}
-
-			// Dynamic replan detection: trigger active path re-evaluation when
-			// the same tool fails repeatedly. Goes beyond static fallbacks by
-			// suggesting a complete approach rethink.
-			if result.IsError {
-				if replanGuidance := a.replan.recordResult(tc.Name, false, result.Content); replanGuidance != "" {
-					if result.Content != "" {
-						result.Content = result.Content + "\n\n" + replanGuidance
-					} else {
-						result.Content = replanGuidance
-					}
-				}
-			} else {
-				// Record success to reset failure counters.
-				a.replan.recordResult(tc.Name, true, "")
 			}
 
 			// Error cascade detection: when multiple errors share a common root
@@ -5138,24 +5038,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 		}
 
-		// Skill discovery: check for recurring tool patterns and suggest skills.
-		// Implements ELL framework Skill Learning principle (arXiv:2508.19005).
-		if a.skillDiscovery != nil {
-			if suggestion := a.skillDiscovery.checkForSuggestions(); suggestion != "" {
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: suggestion,
-					}},
-				})
-				msgs = a.contextManager.Messages()
-				onEvent(provider.StreamEvent{
-					Type: provider.StreamEventSystem,
-					Text: suggestion,
-				})
-			}
-		}
 	}
 
 	if a.maxIter > 0 {
@@ -5456,77 +5338,6 @@ func (a *Agent) fillCancelledToolResults(pending []provider.ToolCallDelta, resul
 			Content: *results,
 		})
 	}
-}
-
-// extractTargetsFromToolCall extracts file paths or target strings from a tool call
-// for OOD detection tracking.
-func extractTargetsFromToolCall(toolName string, args json.RawMessage) []string {
-	var targets []string
-
-	// Parse arguments as JSON map
-	var argMap map[string]any
-	if err := json.Unmarshal(args, &argMap); err != nil {
-		return nil
-	}
-
-	// Extract path-like parameters based on tool name
-	switch toolName {
-	case "read_file", "edit_file", "multi_file_edit", "write_file",
-		"lsp_definition", "lsp_references", "lsp_hover", "lsp_diagnostics",
-		"lsp_symbols", "lsp_rename", "lsp_code_actions", "lsp_document_highlights",
-		"lsp_implementation", "lsp_prepare_call_hierarchy", "lsp_incoming_calls",
-		"lsp_outgoing_calls":
-		if path, ok := argMap["path"].(string); ok {
-			targets = append(targets, path)
-		}
-	case "grep", "search_files", "code_search", "glob":
-		if path, ok := argMap["path"].(string); ok {
-			targets = append(targets, path)
-		}
-		if pattern, ok := argMap["pattern"].(string); ok {
-			targets = append(targets, pattern)
-		}
-	case "multi_file_read":
-		if files, ok := argMap["files"].([]any); ok {
-			for _, f := range files {
-				if fm, ok := f.(map[string]any); ok {
-					if path, ok := fm["path"].(string); ok {
-						targets = append(targets, path)
-					}
-				}
-			}
-		}
-	case "run_command", "start_command":
-		if command, ok := argMap["command"].(string); ok {
-			targets = append(targets, command)
-		}
-	}
-
-	return targets
-}
-
-// injectOODGuidance formats and returns OOD detection guidance for the agent.
-func (a *Agent) injectOODGuidance(signal *oodSignal) string {
-	var guidance strings.Builder
-
-	guidance.WriteString(fmt.Sprintf("[Out-of-Distribution Detection] %s\n", signal.Message))
-	guidance.WriteString(fmt.Sprintf("Certainty: %.0f%%\n", signal.Certainty*100))
-
-	if len(signal.Features) > 0 {
-		guidance.WriteString("Novel features detected:\n")
-		for _, f := range signal.Features {
-			guidance.WriteString(fmt.Sprintf("  • %s\n", f))
-		}
-	}
-
-	guidance.WriteString("\n")
-	if signal.Severity == SeverityHigh {
-		guidance.WriteString("RECOMMENDATION: Pause and verify you understand this novel context before proceeding. Consider asking the user for guidance.")
-	} else {
-		guidance.WriteString("RECOMMENDATION: Exercise caution and verify assumptions before proceeding with unfamiliar patterns.")
-	}
-
-	return guidance.String()
 }
 
 // extractActionSummary extracts a brief action summary from assistant text.
