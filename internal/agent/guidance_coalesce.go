@@ -62,10 +62,12 @@ import (
 
 const (
 	// coalesceMaxHints: maximum hints to inject per tool result.
-	coalesceMaxHints = 3
+	// Reduced from 3 to 1 - each hint wastes 100-300 tokens of context.
+	// Only the single most critical hint should be surfaced.
+	coalesceMaxHints = 1
 
 	// coalesceMaxSuppressedSummary: max suppressed tag names to list.
-	coalesceMaxSuppressedSummary = 5
+	coalesceMaxSuppressedSummary = 3
 )
 
 // hintTagRe extracts the leading [TAG] from a guidance hint.

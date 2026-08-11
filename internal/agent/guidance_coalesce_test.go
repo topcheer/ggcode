@@ -83,7 +83,7 @@ func TestCoalesceGuidance_CapToMax(t *testing.T) {
 	if !strings.Contains(result[len(result)-1], "[guidance-coalesced]") {
 		t.Errorf("expected last entry to be suppression summary, got: %s", result[len(result)-1])
 	}
-	if !strings.Contains(result[len(result)-1], "3 additional") {
+	if !strings.Contains(result[len(result)-1], "5 additional") {
 		t.Errorf("expected summary to mention 3 suppressed, got: %s", result[len(result)-1])
 	}
 }
@@ -191,10 +191,9 @@ func TestCoalesceGuidance_UnTaggedHints(t *testing.T) {
 
 func TestCoalesceGuidance_ExactAtCap(t *testing.T) {
 	// Exactly coalesceMaxHints should not trigger suppression.
+	// With cap=1, a single hint should pass through cleanly.
 	hints := []string{
 		"[hint-1] one",
-		"[hint-2] two",
-		"[hint-3] three",
 	}
 	result := coalesceGuidance(hints)
 	if len(result) != coalesceMaxHints {
