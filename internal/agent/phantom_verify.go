@@ -228,3 +228,30 @@ Claims like "tests pass" or "the build compiles" are phantom verifications if no
 	debug.Log("phantom-verify", "detected %d unverified claims", len(claims))
 	return hint
 }
+
+// extractSentence extracts the sentence containing the given position in text.
+// Returns the sentence text, or empty string if not found.
+func extractSentence(text string, pos []int) string {
+	if len(pos) < 2 || pos[0] < 0 || pos[1] > len(text) {
+		return ""
+	}
+
+	start := pos[0]
+	end := pos[1]
+
+	// Extend backwards to find sentence start
+	for start > 0 && text[start-1] != '.' && text[start-1] != '!' && text[start-1] != '?' {
+		start--
+	}
+
+	// Extend forwards to find sentence end
+	for end < len(text) && text[end] != '.' && text[end] != '!' && text[end] != '?' {
+		end++
+	}
+
+	if end < len(text) {
+		end++ // Include the terminating punctuation
+	}
+
+	return text[start:end]
+}
