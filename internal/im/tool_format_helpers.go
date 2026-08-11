@@ -254,6 +254,8 @@ func imLabel(lang ToolLanguage, key string) string {
 			return "Cancelling agent"
 		case "task_create":
 			return "Task created"
+		case "task_stopped":
+			return "Task stopped"
 		case "lsp_definition":
 			return "Go to definition"
 		case "lsp_references":
@@ -499,6 +501,8 @@ func imLabel(lang ToolLanguage, key string) string {
 			return "取消子代理"
 		case "task_create":
 			return "任务已创建"
+		case "task_stopped":
+			return "任务已停止"
 		case "lsp_definition":
 			return "跳转定义"
 		case "lsp_references":
