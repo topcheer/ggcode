@@ -29,7 +29,7 @@ func newMCPHTTPTransport() *http.Transport {
 		TLSHandshakeTimeout:   mcpTLSHandshakeTimeout,
 		ResponseHeaderTimeout: mcpResponseHeaderTimeout,
 		Proxy:                 http.ProxyFromEnvironment,
-		ForceAttemptHTTP2:     true,
+		ForceAttemptHTTP2:     false,
 		MaxIdleConns:          10,
 		IdleConnTimeout:       90 * time.Second,
 	}

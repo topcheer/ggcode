@@ -55,7 +55,7 @@ func WithMTLS(tlsConfig *tls.Config) ClientOption {
 		// and insecure-mode handling that the non-mTLS path gets automatically.
 		transport := util.WrapTransport(&http.Transport{
 			TLSClientConfig:   tlsConfig,
-			ForceAttemptHTTP2: true,
+			ForceAttemptHTTP2: false,
 		})
 		c.httpClient = &http.Client{
 			Timeout:   15 * time.Minute,
