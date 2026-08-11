@@ -155,6 +155,22 @@ func (s *toolStormState) recordReasoning(text string) {
 	s.pendingReasoning = strings.TrimSpace(text)
 }
 
+// stormWaitingTools are tools that represent legitimate waiting (sleep, CI
+// polling, background command checks). These should NOT count toward the
+// storm window -- they break the "rapid-fire diverse tools" pattern by
+// definition (the agent is waiting, not storming).
+var stormWaitingTools = map[string]bool{
+	"sleep":               true,
+	"ci_status":           true,
+	"wait_command":        true,
+	"wait_agent":          true,
+	"read_command_output": true,
+	"list_commands":       true,
+	"list_agents":         true,
+	"teammate_results":    true,
+	"task_output":         true,
+}
+
 // recordToolCall registers a tool call for the current iteration and
 // appends the entry to the sliding window. Called after each tool
 // execution. The reasoning text captured via recordReasoning is paired
@@ -162,6 +178,12 @@ func (s *toolStormState) recordReasoning(text string) {
 func (s *toolStormState) recordToolCall(toolName string, iter int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// Waiting/blocking tools break any active storm window.
+	if stormWaitingTools[toolName] {
+		s.window = s.window[:0]
+		return
+	}
 
 	reasoning := s.pendingReasoning
 

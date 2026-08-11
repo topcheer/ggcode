@@ -25,8 +25,28 @@ import (
 // the agent IS calling tools and making edits, but its token-to-output ratio
 // is degrading — each successive iteration consumes more context while
 // producing fewer tangible results.
+// vdWaitingTools are tools that indicate the agent is legitimately blocked
+// waiting for external state (CI, background commands, user input). When
+// the most recent tool call is one of these, verbosity drift should not
+// fire -- zero edits during a wait is expected, not drift.
+var vdWaitingTools = map[string]bool{
+	"sleep":               true,
+	"ci_status":           true,
+	"wait_command":        true,
+	"wait_agent":          true,
+	"read_command_output": true,
+	"list_commands":       true,
+	"list_agents":         true,
+	"teammate_results":    true,
+	"task_output":         true,
+}
+
 type verbosityDriftState struct {
 	mu sync.Mutex
+
+	// lastToolName tracks the most recent tool called, to detect
+	// legitimate waiting/blocking scenarios.
+	lastToolName string
 
 	// Per-iteration records within a sliding window.
 	records []vdRecord
@@ -86,6 +106,15 @@ func (v *verbosityDriftState) recordIteration(tokenCount, editCount int) {
 	}
 	v.mu.Lock()
 	defer v.mu.Unlock()
+
+	// If the agent's last tool was a waiting/blocking tool, skip recording
+	// this iteration. Zero edits during a legitimate wait (CI polling, sleep,
+	// background command) is expected behavior, not verbosity drift.
+	if vdWaitingTools[v.lastToolName] {
+		v.prevTokens = tokenCount
+		v.prevEdits = editCount
+		return
+	}
 
 	if !v.initialized {
 		v.prevTokens = tokenCount
@@ -171,6 +200,7 @@ func (v *verbosityDriftState) maybeWarn(iteration int) string {
 
 	v.warnCount++
 	v.fired = v.warnCount >= v.maxWarnings
+	_ = iteration // tracked for future use
 
 	var sb strings.Builder
 	sb.WriteString("[verbosity-drift] Context consumption is increasing while ")

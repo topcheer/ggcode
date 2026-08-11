@@ -70,6 +70,31 @@ const (
 	trMaxLineLen = 200
 )
 
+// trStatePollingTools are tools whose results legitimately change between
+// calls (CI status, git state, running command output, etc.). Even if their
+// output looks similar, re-querying is intentional — the agent is polling
+// for state changes. These must NOT be flagged as redundant.
+var trStatePollingTools = map[string]bool{
+	"ci_status":           true,  // CI pipeline status changes over time
+	"git_status":          true,  // working tree state changes
+	"git_log":             true,  // new commits may have arrived
+	"git_diff":            true,  // diff changes as files are edited
+	"read_command_output": true,  // background command output grows
+	"wait_command":        true,  // command output evolves
+	"list_commands":       true,  // background jobs change state
+	"task_list":           true,  // tasks change status
+	"task_output":         true,  // task output evolves
+	"list_agents":         true,  // agent status changes
+	"wait_agent":          true,  // agent result appears when done
+	"teammate_list":       true,  // teammate status changes
+	"teammate_results":    true,  // results appear when ready
+	"swarm_task_list":     true,  // task board state changes
+	"debug_log":           true,  // log ring buffer changes
+	"lsp_diagnostics":     true,  // diagnostics change after edits
+	"read_file":           false, // static files CAN be redundant (handled normally)
+	"lanchat":             true,  // chat messages arrive asynchronously
+}
+
 // toolResultEntry stores a normalized line-set from a prior tool result.
 type toolResultEntry struct {
 	toolName string
@@ -97,6 +122,13 @@ func (t *toolResultRedundancyState) reset() {
 // recordResult processes a tool result and checks for redundancy with prior results.
 // Returns a guidance message if significant overlap is detected, "" otherwise.
 func (t *toolResultRedundancyState) recordResult(toolName, content string, iteration int) string {
+	// State-polling tools (ci_status, git_status, wait_command, etc.) query
+	// time-varying state. Their results may look similar but legitimately
+	// need re-querying. Skip redundancy detection for these tools entirely.
+	if trStatePollingTools[toolName] {
+		return ""
+	}
+
 	if t.warningsFired >= trMaxWarnings {
 		t.storeEntry(toolName, content, iteration)
 		return ""

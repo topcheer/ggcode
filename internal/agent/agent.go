@@ -4474,6 +4474,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Verbosity drift: track token-to-productivity ratio degradation.
 			// Agent Drift paper (arXiv:2601.04170) identifies verbosity growth
 			// without productive output as a key drift indicator.
+			a.verbosityDrift.lastToolName = tc.Name
 			a.verbosityDrift.recordIteration(a.contextManager.TokenCount(), len(runStats.FilesEdited))
 			if vdMsg := a.verbosityDrift.maybeWarn(runStats.Iterations); vdMsg != "" {
 				if result.Content != "" {

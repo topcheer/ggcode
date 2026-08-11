@@ -119,23 +119,28 @@ func (s *toolCallEconomyState) check() string {
 		}
 	}
 
-	// Condition 2: Window has 4+ batchable tool calls (even if not all same tool)
-	// indicating heavy individual-call usage that could be consolidated
+	// Condition 2: Window has 4+ batchable tool calls of the SAME tool type
+	// (e.g., 4 grep calls interspersed with other tools). Only same-tool
+	// patterns are truly batchable -- you can't merge a grep + glob + read
+	// into one call. Count per-tool density in the window.
 	if msg == "" {
-		batchableCount := 0
+		toolCounts := make(map[string]int)
 		for _, tc := range s.recentCalls {
 			if _, b := s.batchEquivalents[tc]; b {
-				batchableCount++
+				toolCounts[tc]++
 			}
 		}
-		if batchableCount >= 4 && len(s.recentCalls) >= 5 {
-			msg = fmt.Sprintf(
-				"[Tool Call Economy] %d of last %d calls are individual exploration/modify operations "+
-					"that have multi-target equivalents. Consolidating related calls reduces context growth, "+
-					"latency, and error surface. Use multi_file_read, multi_edit_file, or combined search patterns "+
-					"where possible (arXiv:2601.01743).",
-				batchableCount, len(s.recentCalls),
-			)
+		for toolName, count := range toolCounts {
+			if count >= 3 && len(s.recentCalls) >= 4 {
+				equiv := s.batchEquivalents[toolName]
+				msg = fmt.Sprintf(
+					"[Tool Call Economy] %d '%s' calls in the last %d could be consolidated. "+
+						"Consider using '%s' to reduce round-trips, latency, and error surface "+
+						"(arXiv:2601.01743, arXiv:2602.14798).",
+					count, toolName, len(s.recentCalls), equiv,
+				)
+				break
+			}
 		}
 	}
 

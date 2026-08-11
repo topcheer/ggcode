@@ -53,18 +53,30 @@ func TestToolCallEconomy_DifferentBatchableTools(t *testing.T) {
 	s.recordCall("grep")
 	s.recordCall("glob")
 	s.recordCall("list_directory")
-	// 4 batchable tools in window of 4, but len < 5 so no warning yet
+	// Different batchable tools in window — these CANNOT be merged into
+	// a single call (you can't batch grep + glob + read_file). Should NOT warn.
 	if msg := s.check(); msg != "" {
-		t.Errorf("expected no warning with small window, got: %s", msg)
+		t.Errorf("expected no warning for different tools, got: %s", msg)
 	}
-	// Add one more
-	s.recordCall("read_file")
-	msg := s.check()
+	// Add one more different batchable tool
+	s.recordCall("search_files")
+	if msg := s.check(); msg != "" {
+		t.Errorf("expected no warning for different tools even with 5 calls, got: %s", msg)
+	}
+	// But 3+ of the SAME tool in the window should warn
+	s2 := newToolCallEconomyState()
+	s2.recordCall("read_file")
+	s2.recordCall("grep")
+	s2.recordCall("read_file")
+	s2.recordCall("glob")
+	s2.recordCall("read_file")
+	// read_file appears 3 times in window of 5 — should warn
+	msg := s2.check()
 	if msg == "" {
-		t.Fatal("expected warning for 4+ batchable in window of 5")
+		t.Fatal("expected warning for 3 same-tool calls in window of 5")
 	}
-	if !strings.Contains(msg, "Tool Call Economy") {
-		t.Errorf("warning should contain tag, got: %s", msg)
+	if !strings.Contains(msg, "read_file") {
+		t.Errorf("warning should name the tool, got: %s", msg)
 	}
 }
 
