@@ -370,6 +370,10 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 			if event.Tool.Name == "ask_user" {
 				round.SetAskUser(m.formatIMAskUserPrompt(string(event.Tool.Arguments)))
 			}
+			// Emit tool start notification to IM for long-running tools
+			if m.imEmitter != nil {
+				m.imEmitter.EmitToolStatus(event.Tool.Name, string(event.Tool.Arguments))
+			}
 			if isSubAgentLifecycleTool(event.Tool.Name) {
 				// Sub-agent lifecycle tools are low-frequency; send directly.
 				present := describeTool(m.currentLanguage(), event.Tool.Name, string(event.Tool.Arguments))

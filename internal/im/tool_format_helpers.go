@@ -250,6 +250,26 @@ func imLabel(lang ToolLanguage, key string) string {
 			return "failed"
 		case "errors":
 			return "errors"
+		case "cancel_agent":
+			return "Cancelling agent"
+		case "task_create":
+			return "Task created"
+		case "lsp_definition":
+			return "Go to definition"
+		case "lsp_references":
+			return "Find references"
+		case "lsp_hover":
+			return "Type info"
+		case "lsp_diagnostics":
+			return "Diagnostics"
+		case "lsp_rename":
+			return "Rename symbol"
+		case "lsp_symbols":
+			return "Symbols"
+		case "lsp_implementation":
+			return "Find implementations"
+		case "lsp_code_actions":
+			return "Code actions"
 		}
 	default: // zh-CN
 		switch key {
@@ -475,6 +495,26 @@ func imLabel(lang ToolLanguage, key string) string {
 			return "个失败"
 		case "errors":
 			return "个错误"
+		case "cancel_agent":
+			return "取消子代理"
+		case "task_create":
+			return "任务已创建"
+		case "lsp_definition":
+			return "跳转定义"
+		case "lsp_references":
+			return "查找引用"
+		case "lsp_hover":
+			return "类型信息"
+		case "lsp_diagnostics":
+			return "诊断"
+		case "lsp_rename":
+			return "重命名符号"
+		case "lsp_symbols":
+			return "符号"
+		case "lsp_implementation":
+			return "查找实现"
+		case "lsp_code_actions":
+			return "代码操作"
 		}
 	}
 	return key

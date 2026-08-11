@@ -111,12 +111,40 @@ func formatToolCallText(tc *ToolCallInfo) string {
 		return "⏰ Delete cron job"
 	case "cron_list":
 		return "⏰ List cron jobs"
-	case "task_create", "task_get", "task_update", "task_list", "task_stop", "task_output":
+	case "task_get", "task_update", "task_list", "task_stop", "task_output":
 		return "" // hidden
 	case "enter_plan_mode":
 		return "📝 Planning..."
 	case "exit_plan_mode":
 		return "" // plan content sent as separate text via result
+	// Task lifecycle — show creation/completion, hide internal tracking
+	case "task_create":
+		subject := extractArgValue(args, "subject")
+		if subject == "" {
+			subject = tc.Detail
+		}
+		return fmt.Sprintf("📋 %s: %s", imLabel(lang, "task_create"), subject)
+	// LSP tools — show concise operation type
+	case "lsp_definition":
+		return "🔍 " + imLabel(lang, "lsp_definition")
+	case "lsp_references":
+		return "🔍 " + imLabel(lang, "lsp_references")
+	case "lsp_hover":
+		return "🔍 " + imLabel(lang, "lsp_hover")
+	case "lsp_diagnostics":
+		return "🔍 " + imLabel(lang, "lsp_diagnostics")
+	case "lsp_rename":
+		path := extractFilePathFromArgs(args)
+		if path == "" {
+			path = tc.Detail
+		}
+		return fmt.Sprintf("✏ %s: `%s`", imLabel(lang, "lsp_rename"), path)
+	case "lsp_symbols", "lsp_workspace_symbols":
+		return "🔍 " + imLabel(lang, "lsp_symbols")
+	case "lsp_implementation":
+		return "🔍 " + imLabel(lang, "lsp_implementation")
+	case "lsp_code_actions":
+		return "🔧 " + imLabel(lang, "lsp_code_actions")
 	case "enter_worktree":
 		name := extractArgValue(args, "name")
 		if name == "" {
@@ -302,6 +330,12 @@ func formatToolCallText(tc *ToolCallInfo) string {
 		return fmt.Sprintf("⏹ %s", imLabel(lang, "command_manage"))
 	case "write_command_input":
 		return fmt.Sprintf("⌨ %s", imLabel(lang, "command_input"))
+	case "cancel_agent":
+		agentID := extractArgValue(args, "agent_id")
+		if agentID == "" {
+			agentID = tc.Detail
+		}
+		return fmt.Sprintf("❌ %s: %s", imLabel(lang, "cancel_agent"), agentID)
 	case "lanchat":
 		action := extractArgValue(args, "action")
 		recipient := firstNonEmptyStr(extractArgValue(args, "to"), extractArgValue(args, "team"))
@@ -410,7 +444,13 @@ func formatSpecialIMToolResult(tr *ToolResultInfo) (bool, string) {
 		return true, "⏰ Cron job deleted"
 	case "cron_list":
 		return true, "" // hidden
-	case "task_create", "task_get", "task_update", "task_list", "task_stop", "task_output":
+	case "task_create":
+		subject := extractArgValue(tr.Args, "subject")
+		if subject == "" {
+			subject = tr.Detail
+		}
+		return true, fmt.Sprintf("📋 %s: %s", imLabel(toolLang(tr.Lang), "task_create"), subject)
+	case "task_get", "task_update", "task_list", "task_stop", "task_output":
 		return true, "" // hidden — internal LLM task tracking
 	case "enter_plan_mode":
 		return true, "" // hidden — shows system message instead
@@ -495,15 +535,27 @@ func formatSpecialIMToolResult(tr *ToolResultInfo) (bool, string) {
 		return true, "💾 " + imLabel(toolLang(tr.Lang), "git_committed")
 	case "git_show":
 		return true, formatIMGitShowResult(tr)
-	case "git_blame", "git_branch_list", "git_remote",
-		"git_stash_list", "git_stash":
-		return true, "" // hidden — secondary git tools
+	case "git_blame":
+		return true, "" // hidden — secondary git tool
+	case "git_branch_list":
+		return true, "🌿 " + imLabel(toolLang(tr.Lang), "git_branch_list")
+	case "git_remote":
+		return true, "" // hidden — secondary git tool
+	case "git_stash_list":
+		return true, "📦 " + imLabel(toolLang(tr.Lang), "git_stash_list")
+	case "git_stash":
+		return true, "📦 " + imLabel(toolLang(tr.Lang), "git_stash")
 	// Mode switching
 	case "switch_mode":
 		return true, "🔄 " + imLabel(toolLang(tr.Lang), "mode_switched")
 	// Multi-file operations
 	case "multi_file_read":
-		return true, "" // hidden — large output, not useful in IM
+		// Show a brief summary instead of hiding completely
+		if tr.IsError {
+			return true, formatIMErrorResult(tr)
+		}
+		pretty := prettifyToolName(tr.ToolName)
+		return true, fmt.Sprintf("📖 %s ✓", pretty)
 	case "multi_file_edit":
 		return true, formatIMMultiEditResult(tr)
 	case "multi_file_write":
@@ -537,7 +589,7 @@ func formatSpecialIMToolResult(tr *ToolResultInfo) (bool, string) {
 			return true, formatIMMCPToolResult(tr)
 		}
 	}
-	// LSP tools → hidden
+	// LSP tools → hidden (result is structured data consumed by LLM)
 	if strings.HasPrefix(tr.ToolName, "lsp_") {
 		return true, ""
 	}
