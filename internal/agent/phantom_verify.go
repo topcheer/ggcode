@@ -253,5 +253,5 @@ func extractSentence(text string, pos []int) string {
 		end++ // Include the terminating punctuation
 	}
 
-	return text[start:end]
+	return strings.TrimSpace(text[start:end])
 }
