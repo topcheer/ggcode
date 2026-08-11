@@ -261,7 +261,6 @@ type Agent struct {
 	errorPropagate         *errorPropagateState           // error propagation chain detection (degraded-output contamination tracking)
 	delegationOrch         *delegationState               // delegation orchestration intelligence (orphaned delegations, serial anti-pattern, over-delegation)
 	crossFileImpact        *crossFileImpactState          // pre-completion cross-file impact analysis (removed symbol breakage detection)
-	contextFootprint       *contextFootprintState         // per-tool context budget attribution (which tools consume the most context)
 	promptOps              *promptOpsState                // system prompt redundancy and token efficiency intelligence (PromptOps)
 	cacheEffMonitor        *cacheEffMonitor               // prompt cache efficiency monitoring (cache bust storm detection)
 	pressureForecaster     *pressureForecaster            // context window pressure forecasting (predictive compaction warning)
@@ -276,13 +275,9 @@ type Agent struct {
 	toolDiversity          *diversityState                // tool diversity stagnation detection (strategy imbalance awareness)
 	fileChurn              *churnState                    // file churn detection (invalidated assumption awareness)
 	editOscillation        *oscillationState              // edit oscillation detection (semantic back-and-forth awareness)
-	analysisParalysis      *analysisParalysisState        // analysis paralysis detection (exploration-heavy / action-starved loops)
 	overReflection         *overReflectionDetector        // over-reflection detection (text-heavy no-action turns, arXiv:2506.12928)
-	toolCallEconomy        *toolCallEconomyState          // tool call economy detection (batchable individual calls)
 	silentError            *silentErrorState              // silent error advancement detection (unaddressed error proceeding)
 	verifySuppress         *verifySuppressState           // verification suppression detection (reward hacking via error masking)
-	verbosityDrift         *verbosityDriftState           // verbosity drift detection (token-to-productivity ratio degradation)
-	cusumDrift             *cusumDriftState               // CUSUM statistical drift detection (cumulative behavioral deviation)
 	toolOveruse            *toolOveruseState              // tool overuse / self-awareness detection (unnecessary tool calls for known info)
 	assumptionTracker      *assumptionTrackerState        // implicit assumption detection (unverified guesses in assistant text)
 	satisficingSettle      *satisficingSettleState        // satisficing settling detection (knowingly suboptimal solution delivery)
@@ -340,11 +335,9 @@ type Agent struct {
 	prematureRefactor        *prematureRefactorState               // premature refactoring detection (unverified code restructuring awareness)
 	subgoalTrack             *subgoalState                         // subgoal completion integrity (missing-step planning failure awareness)
 	infoScent                *infoScentState                       // information scent decay detection (diminishing novelty across explorations)
-	exploreExploit           *exploreExploitState                  // exploration-exploitation imbalance detection (aggregate foraging balance)
 	foresightCalib           *foresightCalibrateState              // foresight calibration (prediction-observation mismatch tracking, WorldEvolver arXiv:2606.30639)
 	causalAttribution        *causalAttributionState               // causal failure attribution (CausalFlow-inspired root-cause step identification)
 	attemptBrief             *attemptBriefState                    // compact attempt summary for knowledge reuse across failed approaches
-	behaviorPattern          *behaviorPatternState                 // cross-run behavioral anti-pattern detection (systemic issue awareness)
 	crossDetectorConsensus   *consensusState                       // cross-detector consensus (systemic failure from simultaneous detector firings)
 	taintInfluence           *taintInfluenceState                  // tainted data influence detection (IFC: tracks untrusted content flowing into privileged tool calls)
 	falsePremise             *falsePremiseState                    // false premise detection: ungrounded success claims contradicting tool errors (world-model drift)
@@ -438,7 +431,6 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		monorepoScoper:         newMonorepoScoperState(),
 		mcpEcosystem:           newMCPEcosystemState(),
 		approvalMemory:         permission.NewApprovalMemory(),
-		behaviorPattern:        newBehaviorPatternState(),
 		crossDetectorConsensus: newConsensusState(),
 		taintInfluence:         newTaintInfluenceState(),
 		perfBaseline:           newPerfBaselineState(),
@@ -473,7 +465,6 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		compoundingFailure:     newCompoundingFailureState(),
 		failureMode:            newFailureModeState(),
 		toolFallback:           newToolFallbackState(),
-		contextFootprint:       newContextFootprintState(),
 		promptOps:              newPromptOpsState(),
 		cacheEffMonitor:        newCacheEffMonitor(),
 		pressureForecaster:     newPressureForecaster(),
@@ -523,13 +514,9 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		toolDiversity:          newDiversityState(),
 		fileChurn:              newChurnState(),
 		editOscillation:        newOscillationState(),
-		analysisParalysis:      newAnalysisParalysisState(),
 		overReflection:         newOverReflectionDetector(),
-		toolCallEconomy:        newToolCallEconomyState(),
 		silentError:            newSilentErrorState(),
 		verifySuppress:         newVerifySuppressState(),
-		verbosityDrift:         newVerbosityDriftState(),
-		cusumDrift:             newCusumDriftState(),
 		toolOveruse:            newToolOveruseState(),
 		assumptionTracker:      newAssumptionTrackerState(),
 		satisficingSettle:      newSatisficingSettleState(),
@@ -575,7 +562,6 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		prematureRefactor:      newPrematureRefactorState(),
 		subgoalTrack:           newSubgoalState(),
 		infoScent:              newInfoScentState(),
-		exploreExploit:         newExploreExploitState(),
 		foresightCalib:         newForesightCalibrateState(),
 		reversibility:          newReversibilityState(),
 		errorCascade:           newErrorCascadeState(),
@@ -1304,7 +1290,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.specGaming.reset()
 	a.scopeNarrow.reset()
 	a.complexityGate.reset()
-	a.behaviorPattern.reset()
 	a.crossDetectorConsensus.reset()
 	a.taintInfluence.reset()
 	a.perfBaseline.reset()
@@ -1365,7 +1350,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				a.abstainDetect.reset()
 			}
 			a.subgoalTrack.reset()
-			a.exploreExploit.reset()
 			a.contextAnchor.reset()
 		}
 		a.futileCycle.reset()
@@ -1400,11 +1384,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.maybeReflect(runStats)
 		} else {
 			debug.Log("agent", "skipping reflection/ratchet on cancellation")
-		}
-		// Record completed run stats for cross-run behavioral pattern detection.
-		// Runs even on cancellation since partial work is still observable behavior.
-		if a.behaviorPattern != nil {
-			a.behaviorPattern.recordRun(runStats)
 		}
 		// Post-run trajectory intelligence extraction (arXiv:2603.10600).
 		// Extracts strategy/recovery/optimization learnings from the
@@ -1563,7 +1542,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		})
 	}
 
-	a.maybeInjectBehaviorPattern()
 	a.maybeInjectPerfRegression()
 	a.maybeInjectDynamicSystemPrompt()
 	a.maybeInjectRatchetRules()
@@ -1651,13 +1629,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.toolDiversity.reset()
 	a.fileChurn.reset()
 	a.editOscillation.reset()
-	a.analysisParalysis.reset()
 	a.overReflection.reset()
-	a.toolCallEconomy.reset()
 	a.silentError.reset()
 	a.verifySuppress.reset()
-	a.verbosityDrift.reset()
-	a.cusumDrift.reset()
 	a.toolOveruse.reset()
 	a.assumptionTracker.reset()
 	a.satisficingSettle.reset()
@@ -1713,7 +1687,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.fileFreshness.reset()
 	a.readHash.reset()
 	a.toolThermal.reset()
-	a.contextFootprint.reset()
 	a.cacheEffMonitor.reset()
 	a.pressureForecaster.reset()
 	a.promptOps.reset()
@@ -4465,57 +4438,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				}
 			}
 
-			// Analysis paralysis: detect prolonged exploration without action.
-			// SICA (arXiv:2504.15228) identifies exploration-heavy / action-starved
-			// trajectories as a leading indicator of task failure.
-			a.analysisParalysis.recordCall(tc.Name)
-			a.toolCallEconomy.recordCall(tc.Name)
-
-			// Verbosity drift: track token-to-productivity ratio degradation.
-			// Agent Drift paper (arXiv:2601.04170) identifies verbosity growth
-			// without productive output as a key drift indicator.
-			a.verbosityDrift.lastToolName = tc.Name
-			a.verbosityDrift.recordIteration(a.contextManager.TokenCount(), len(runStats.FilesEdited))
-			if vdMsg := a.verbosityDrift.maybeWarn(runStats.Iterations); vdMsg != "" {
-				if result.Content != "" {
-					result.Content = result.Content + "\n\n" + vdMsg
-				} else {
-					result.Content = vdMsg
-				}
-			}
-
-			// CUSUM drift: cumulative behavioral drift detection across
-			// error-rate, read-write ratio, and token velocity signals.
-			// Uses CUSUM (Page 1954) to detect gradual directional shifts
-			// that no single tool call would flag.
-			cdMsg := a.cusumDrift.record(cusumRecord{
-				failed:     result.IsError,
-				isRead:     isReadTool(tc.Name),
-				isWrite:    isEditTool(tc.Name),
-				tokenDelta: a.contextManager.TokenCount(),
-			})
-			if cdMsg != "" {
-				if result.Content != "" {
-					result.Content = result.Content + "\n\n" + cdMsg
-				} else {
-					result.Content = cdMsg
-				}
-			}
-			if apGuidance := a.analysisParalysis.check(); apGuidance != "" {
-				if result.Content != "" {
-					result.Content = result.Content + "\n\n" + apGuidance
-				} else {
-					result.Content = apGuidance
-				}
-			}
-			if tcEconomy := a.toolCallEconomy.check(); tcEconomy != "" {
-				if result.Content != "" {
-					result.Content = result.Content + "\n\n" + tcEconomy
-				} else {
-					result.Content = tcEconomy
-				}
-			}
-
 			// Tunnel vision detection: warn when the agent has done many
 			// iterations but only touched a few files (under-exploration).
 			// Coppersun.dev 2026: "context window holds 1-2 files; bugs span 3+"
@@ -4532,20 +4454,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				}
 			}
 
-			// Context footprint: track per-tool result size and warn when a
-			// category dominates context consumption (Cost Intelligence).
-			a.contextFootprint.recordResult(tc.Name, result.Content, runStats.Iterations)
-			if footprintGuidance := a.contextFootprint.check(); footprintGuidance != "" {
-				if result.Content != "" {
-					result.Content = result.Content + "\n\n" + footprintGuidance
-				} else {
-					result.Content = footprintGuidance
-				}
-			}
-
-			// Empty search spiral detection: tracks consecutive search tools
-			// returning no results and injects alternative strategy guidance.
-			// Fires before other guards so the guidance is visible early.
+			// Tunnel vision detection: warn when the agent has done many
+			// iterations but only touched a few files (under-exploration).
 			if emptyGuidance := a.emptySearch.recordResult(tc.Name, result.Content, result.IsError, extractFileHint(tc.Name, tc.Arguments)); emptyGuidance != "" {
 				if result.Content != "" {
 					result.Content = result.Content + "\n\n" + emptyGuidance
@@ -4746,13 +4656,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 			a.successDeclare.recordToolCall()
 			a.subgoalTrack.recordToolCall(tc.Name, string(tc.Arguments))
-			if eeMsg := a.exploreExploit.recordToolCall(tc.Name); eeMsg != "" {
-				if result.Content != "" {
-					result.Content = result.Content + "\n\n" + eeMsg
-				} else {
-					result.Content = eeMsg
-				}
-			}
 			// Attempt brief: record outcome for knowledge reuse.
 			a.attemptBrief.recordOutcome(tc.Name, extractToolTarget(tc.Name, string(tc.Arguments)), !result.IsError, i, result.Content)
 			// Symbol grounding: record file paths and code identifiers from

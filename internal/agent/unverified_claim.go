@@ -143,6 +143,29 @@ func detectSuccessClaims(text string) []string {
 	return found
 }
 
+// isBuildTestCommand checks if a command is a build/test/lint command.
+// Extracted from deleted behavior_pattern.go module.
+func isBuildTestCommand(lower string) bool {
+	prefixes := []string{
+		"go build", "go test", "go vet",
+		"make ", "cargo ", "cmake",
+		"npm run", "yarn ", "pnpm ", "npx ",
+		"flutter ", "dart ", "gradle", "mvn ",
+		"pytest", "python -m pytest", "python -m unittest",
+		"./scripts/", "bash scripts/", "sh scripts/",
+	}
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(lower, prefix) {
+			return true
+		}
+	}
+	// Direct binary test runners
+	if strings.Contains(lower, "pytest") || strings.Contains(lower, "jest") || strings.Contains(lower, "vitest") {
+		return true
+	}
+	return false
+}
+
 // hasVerificationCommands checks whether any build/test/lint command was run.
 func hasVerificationCommands(runStats *RunStats) bool {
 	for _, cmd := range runStats.CommandsRun {
