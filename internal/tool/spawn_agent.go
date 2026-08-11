@@ -19,6 +19,7 @@ var subAgentBlockedTools = []string{
 	"spawn_agent",
 	"wait_agent",
 	"list_agents",
+	"cancel_agent",
 	"teammate_spawn",
 	"teammate_shutdown",
 	"team_create",

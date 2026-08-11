@@ -642,6 +642,7 @@ func (r *REPL) SetSubAgentManager(mgr *subagent.Manager, prov provider.Provider,
 	})
 	tools.Register(tool.WaitAgentTool{Manager: mgr})
 	tools.Register(tool.ListAgentsTool{Manager: mgr})
+	tools.Register(tool.CancelAgentTool{Manager: mgr})
 
 	// Named subagent templates (persisted per-workspace)
 	tmplStore := subagent.NewTemplateStore(r.model.agent.WorkingDir())
