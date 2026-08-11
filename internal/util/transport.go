@@ -40,10 +40,16 @@ func WrapTransport(base *http.Transport) *http.Transport {
 			Proxy: http.ProxyFromEnvironment,
 		}
 	}
+	// Disable HTTP/2 globally to prevent a crash in net/http's http2 client
+	// conn readLoop on Windows (Go 1.26.x). The http2Framer.ReadFrameHeader
+	// panics with a nil pointer when the peer resets the connection during
+	// TLS handshake. HTTP/1.1 is universally supported.
+	t.ForceAttemptHTTP2 = false
+	if t.TLSClientConfig == nil {
+		t.TLSClientConfig = &tls.Config{}
+	}
+	t.TLSClientConfig.NextProtos = []string{"http/1.1"}
 	if InsecureMode() {
-		if t.TLSClientConfig == nil {
-			t.TLSClientConfig = &tls.Config{}
-		}
 		t.TLSClientConfig.InsecureSkipVerify = true
 	}
 	return t
