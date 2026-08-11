@@ -54,6 +54,14 @@ var questionIndicators = []string{
 	"where are", "find ", "search for", "describe",
 }
 
+// readOnlyIndicators suggest the request is a read-only/audit task where
+// no file edits are expected, even if the prompt contains action verbs.
+var readOnlyIndicators = []string{
+	"check", "review", "inspect", "audit", "scan", "examine",
+	"verify", "monitor", "query", "lookup", "report", "summarize",
+	"定时审查", "检查", "审查", "查询", "确认", "汇总",
+}
+
 // fulfillmentGateState tracks whether the gate has already fired this run.
 type fulfillmentGateState struct {
 	fired bool
@@ -94,6 +102,13 @@ func (a *Agent) checkFulfillmentGate(userPrompt string, runStats *RunStats, assi
 	// If the request is primarily a question, skip the gate.
 	if isInformationalRequest(prompt) {
 		debug.Log("fulfillment-gate", "request appears informational, skipping")
+		return ""
+	}
+
+	// If the request is a read-only/audit task (check, review, inspect, etc.),
+	// skip the gate — no file edits are expected even if action verbs appear.
+	if isReadOnlyTask(prompt) {
+		debug.Log("fulfillment-gate", "request appears read-only/audit task, skipping")
 		return ""
 	}
 
@@ -195,6 +210,29 @@ func isInformationalRequest(prompt string) bool {
 		}
 	}
 	return actionCount == 0 || questionCount > actionCount
+}
+
+// isReadOnlyTask returns true if the prompt contains read-only/audit task
+// indicators (check, review, inspect, etc.) that suggest no file edits are
+// expected, even if action verbs like "update" appear in embedded instructions.
+func isReadOnlyTask(prompt string) bool {
+	readOnlyCount := 0
+	for _, indicator := range readOnlyIndicators {
+		if strings.Contains(prompt, indicator) {
+			readOnlyCount++
+		}
+	}
+	if readOnlyCount == 0 {
+		return false
+	}
+	// If read-only indicators outnumber action verbs, treat as read-only task.
+	actionCount := 0
+	for _, verb := range actionVerbs {
+		if strings.Contains(prompt, verb) {
+			actionCount++
+		}
+	}
+	return readOnlyCount >= actionCount
 }
 
 // detectActions returns the action verbs found in the prompt.

@@ -1214,6 +1214,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.buildIdempot.reset()
 	a.orphanFile.reset()
 	a.cfDep.reset()
+	a.expiredRead.reset()
 	a.resetWastedExplore()
 	a.resetSelfMod()
 	if a.delegationOrch != nil {
