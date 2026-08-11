@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"crypto/tls"
 	"net"
 	"net/http"
 	"time"
@@ -29,6 +30,19 @@ func newProviderHTTPTransport() *http.Transport {
 		MaxIdleConns:          providerMaxIdleConns,
 		MaxIdleConnsPerHost:   providerMaxIdleConnsPerHost,
 		Proxy:                 http.ProxyFromEnvironment,
+		// Disable HTTP/2 to prevent a crash in net/http's http2 client conn
+		// readLoop on Windows (Go 1.26.x). The http2Framer.ReadFrameHeader
+		// panics with a nil pointer when the connection is reset by the peer
+		// during the TLS handshake. HTTP/1.1 is universally supported by all
+		// LLM API endpoints and avoids this Go runtime bug entirely.
+		ForceAttemptHTTP2: false,
 	}
-	return util.WrapTransport(base)
+	t := util.WrapTransport(base)
+	if t.TLSClientConfig == nil {
+		t.TLSClientConfig = &tls.Config{}
+	}
+	// Restrict ALPN to HTTP/1.1 only — prevents the server from upgrading
+	// to HTTP/2 even if it advertises it.
+	t.TLSClientConfig.NextProtos = []string{"http/1.1"}
+	return t
 }

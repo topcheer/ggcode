@@ -3,7 +3,6 @@ package tui
 import (
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
-	"fmt"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/permission"
 	"strings"
@@ -221,14 +220,6 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 		return m.handleInitPromptKey(msg)
 	}
 
-	if m.harnessContextPrompt != nil {
-		return m.handleHarnessContextPromptKey(msg)
-	}
-
-	if m.harnessPanel != nil {
-		return m.handleHarnessPanelKey(msg)
-	}
-
 	if m.lanChatPanel != nil {
 		return m.handleLanChatKey(msg)
 	}
@@ -366,32 +357,6 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 			return m, m.handleDiffConfirm(false)
 		case "esc", "ctrl+c":
 			return m, m.handleDiffConfirm(false)
-		}
-		return m, nil
-	}
-	if m.pendingHarnessCheckpointConfirm != nil {
-		switch msg.String() {
-		case "up", "k":
-			m.diffCursor = (m.diffCursor - 1 + len(m.diffOptions)) % len(m.diffOptions)
-			return m, nil
-		case "down", "j":
-			m.diffCursor = (m.diffCursor + 1) % len(m.diffOptions)
-			return m, nil
-		case "tab":
-			m.diffCursor = (m.diffCursor + 1) % len(m.diffOptions)
-			return m, nil
-		case "shift+tab":
-			m.diffCursor = (m.diffCursor - 1 + len(m.diffOptions)) % len(m.diffOptions)
-			return m, nil
-		case "enter", "right":
-			opt := m.diffOptions[m.diffCursor]
-			return m, m.handleHarnessCheckpointConfirm(opt.decision == permission.Allow)
-		case "y", "Y":
-			return m, m.handleHarnessCheckpointConfirm(true)
-		case "n", "N":
-			return m, m.handleHarnessCheckpointConfirm(false)
-		case "esc", "ctrl+c":
-			return m, m.handleHarnessCheckpointConfirm(false)
 		}
 		return m, nil
 	}
@@ -576,8 +541,7 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 		// trigger /undo (checkpoint rollback). This matches Claude Code's signature shortcut.
 		now := time.Now()
 		if !m.exitConfirmPending && !m.cancelConfirmPending &&
-			m.pendingAutoRun == nil && m.pendingHarnessReview == nil &&
-			m.pendingHarnessPromote == nil && !m.autoCompleteActive &&
+			!m.autoCompleteActive &&
 			!m.subAgentFollow.isActive() && !m.loading && !m.shellMode && !m.chatMode {
 			if !m.lastEscPress.IsZero() && now.Sub(m.lastEscPress) < 500*time.Millisecond {
 				m.lastEscPress = time.Time{} // reset
@@ -603,31 +567,6 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 			m.resetCancelConfirm()
 			return m, nil
 		}
-		// Handle pending auto-run suggestion: Esc dismisses (before autocomplete)
-		// Handle pending harness review: Esc skips review
-		if m.pendingHarnessReview != nil {
-			taskID := m.pendingHarnessReview.ID
-			m.pendingHarnessReview = nil
-			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Review skipped for task %s. Use /harness review approve %s to approve later.", taskID, taskID))
-			m.chatListScrollToBottom()
-			return m, nil
-		}
-		// Handle pending harness promote: Esc skips promote
-		if m.pendingHarnessPromote != nil {
-			taskID := m.pendingHarnessPromote.ID
-			m.pendingHarnessPromote = nil
-			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Promote skipped for task %s. Use /harness promote apply %s to promote later.", taskID, taskID))
-			m.chatListScrollToBottom()
-			return m, nil
-		}
-		if m.pendingAutoRun != nil {
-			text := m.pendingAutoRunText
-			m.pendingAutoRun = nil
-			m.pendingAutoRunText = ""
-			m.chatWriteSystem(nextSystemID(), "Running normally (harness skipped).")
-			m.chatListScrollToBottom()
-			return m, m.continueDisplayedNormalTextRun(text)
-		}
 		if m.autoCompleteActive {
 			m.autoCompleteActive = false
 			m.autoCompleteItems = nil
@@ -639,52 +578,15 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 			return m, nil
 		}
 	case "enter":
-		// Handle pending auto-run suggestion: Enter confirms harness run (before autocomplete)
-		// Handle pending harness review: Enter approves the task
-		if m.pendingHarnessReview != nil {
-			task := m.pendingHarnessReview
-			m.pendingHarnessReview = nil
-			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Approving task %s...", task.ID))
-			m.chatListScrollToBottom()
-			return m, m.handleHarnessReviewApprove(task.ID)
-		}
-		// Handle pending harness promote: Enter promotes the task
-		if m.pendingHarnessPromote != nil {
-			task := m.pendingHarnessPromote
-			m.pendingHarnessPromote = nil
-			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Promoting task %s...", task.ID))
-			m.chatListScrollToBottom()
-			return m, m.handleHarnessPromoteApply(task.ID)
-		}
-		if m.pendingAutoRun != nil {
-			result := m.pendingAutoRun
-			text := m.pendingAutoRunText
-			m.pendingAutoRun = nil
-			m.pendingAutoRunText = ""
-			m.chatWriteSystem(nextSystemID(), "Running in harness...")
-			m.chatListScrollToBottom()
-			return m, m.handleAutoRun(text, result)
-		}
 		if m.autoCompleteActive && len(m.autoCompleteItems) > 0 {
 			return m, m.applyAutoComplete()
 		}
 		m.resetExitConfirm()
-		// Clear stale auto-run suggestion when user submits new text
-		if m.pendingAutoRun != nil {
-			m.pendingAutoRun = nil
-			m.pendingAutoRunText = ""
-		}
-		if m.pendingHarnessReview != nil {
-			m.pendingHarnessReview = nil
-		}
-		if m.pendingHarnessPromote != nil {
-			m.pendingHarnessPromote = nil
-		}
 		text := strings.TrimSpace(m.input.Value())
 		m.input.Reset()
 		// Clear all autocomplete/hint state so they don't linger after submit.
 		// This fixes the bug where subcommand hints (e.g. "<subcommand>") stay
-		// visible below the input after submitting a command like /harness.
+		// visible below the input after submitting a command.
 		m.autoCompleteActive = false
 		m.autoCompleteItems = nil
 		m.autoCompleteIndex = 0

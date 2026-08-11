@@ -60,16 +60,6 @@ func (m Model) handlePaste(msg tea.PasteMsg, spinnerCmd tea.Cmd) (tea.Model, tea
 			return m, cmd
 		}
 	}
-	if m.harnessContextPrompt != nil && m.harnessContextPrompt.inputFocus {
-		var cmd tea.Cmd
-		m.harnessContextPrompt.input, cmd = m.harnessContextPrompt.input.Update(msg)
-		return m, cmd
-	}
-	if m.harnessPanel != nil && m.harnessPanel.actionInput.Focused() {
-		var cmd tea.Cmd
-		m.harnessPanel.actionInput, cmd = m.harnessPanel.actionInput.Update(msg)
-		return m, cmd
-	}
 	if m.mcpPanel != nil && m.mcpPanel.installMode {
 		m.mcpPanel.installInput += msg.Content
 		return m, nil

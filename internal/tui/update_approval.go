@@ -98,20 +98,6 @@ func (m Model) handleAskUserMsg(msg AskUserMsg) (Model, tea.Cmd) {
 
 }
 
-// handleHarnessCheckpointConfirmMsg handles the corresponding message case.
-func (m Model) handleHarnessCheckpointConfirmMsg(msg HarnessCheckpointConfirmMsg) (Model, tea.Cmd) {
-	if m.mode == permission.AutopilotMode {
-		m.pendingHarnessCheckpointConfirm = &msg
-		return m, m.handleHarnessCheckpointConfirm(true)
-	}
-	m.pendingHarnessCheckpointConfirm = &msg
-	m.diffOptions = diffConfirmOptions()
-	m.diffCursor = 0
-	m.inputBellFired = false
-	return m, m.scheduleInputBell("Harness checkpoint confirmation needed")
-
-}
-
 // scheduleInputBell returns a tea.Cmd that fires an inputBellMsg after the
 // configured delay. If the delay is zero or the feature is disabled, it
 // returns nil (no notification will fire).
@@ -140,7 +126,7 @@ func (m Model) handleInputBellMsg(msg inputBellMsg) (Model, tea.Cmd) {
 		return m, nil
 	}
 	if m.pendingApproval == nil && m.pendingDiffConfirm == nil &&
-		m.pendingQuestionnaire == nil && m.pendingHarnessCheckpointConfirm == nil {
+		m.pendingQuestionnaire == nil {
 		return m, nil
 	}
 	m.inputBellFired = true
