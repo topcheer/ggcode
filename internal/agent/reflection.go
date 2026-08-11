@@ -218,7 +218,12 @@ func extractPathsFromToolCall(toolName string, rawArgs json.RawMessage, s *RunSt
 		return
 	}
 	switch toolName {
-	case "write_file", "edit_file", "multi_edit_file", "read_file":
+	case "write_file", "edit_file", "multi_edit_file":
+		// NOTE: read_file is intentionally excluded — FilesEdited must only
+		// contain files that were actually modified. Including read_file here
+		// caused false-positive warnings from post-completion gates
+		// (complexity_gate, companion_guard, change_reconcile) on turns
+		// where the agent only read files without editing them.
 		if path, ok := args["path"].(string); ok {
 			s.recordFileEdit(path)
 		}

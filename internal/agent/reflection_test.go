@@ -129,6 +129,17 @@ func TestExtractPathsFromToolCall(t *testing.T) {
 	if len(s.CommandsRun) != 1 {
 		t.Errorf("expected 1 command, got %d", len(s.CommandsRun))
 	}
+
+	// Regression: read_file must NOT be recorded as a file edit.
+	// Previously, read_file was in the same case as write/edit tools,
+	// causing false-positive warnings from post-completion gates
+	// (complexity_gate, companion_guard) on read-only turns.
+	readArgs, _ := json.Marshal(map[string]string{"path": "/src/readonly.go"})
+	before := len(s.FilesEdited)
+	extractPathsFromToolCall("read_file", readArgs, s)
+	if len(s.FilesEdited) != before {
+		t.Errorf("read_file must not be recorded as edit: expected %d files, got %d", before, len(s.FilesEdited))
+	}
 }
 
 func TestGenerateInsightsEmpty(t *testing.T) {
