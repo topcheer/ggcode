@@ -162,12 +162,13 @@ type ToolCallInfo struct {
 }
 
 type ToolResultInfo struct {
-	ToolName string
-	Args     string
-	Result   string
-	IsError  bool
-	Detail   string // display text for the tool call (e.g. command line)
-	Lang     string // "zh-CN" or "en", set by emitter
+	ToolName     string
+	Args         string
+	Result       string
+	IsError      bool
+	Detail       string // display text for the tool call (e.g. command line)
+	Lang         string // "zh-CN" or "en", set by emitter
+	CallNotified bool   // true if a tool-call start notification was already sent to IM
 }
 
 type SessionBinding struct {

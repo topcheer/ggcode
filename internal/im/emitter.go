@@ -308,11 +308,42 @@ func (e *IMEmitter) EmitStatus(status string) {
 	})
 }
 
+// imLongRunningTools lists tools that get a start notification via EmitToolStatus.
+// Other tools only get a result notification to avoid duplicate IM messages.
+var imLongRunningTools = map[string]bool{
+	"run_command":      true,
+	"bash":             true,
+	"start_command":    true,
+	"powershell":       true,
+	"web_fetch":        true,
+	"web_search":       true,
+	"browser":          true,
+	"spawn_agent":      true,
+	"edit_file":        true,
+	"write_file":       true,
+	"multi_file_edit":  true,
+	"multi_file_write": true,
+	"sleep":            true,
+	"delegate":         true,
+	"a2a_remote":       true,
+	"a2a_send_task":    true,
+	"skill":            true,
+}
+
+// IsLongRunningTool reports whether the tool gets a start notification.
+func IsLongRunningTool(name string) bool {
+	return imLongRunningTools[name]
+}
+
 // EmitToolStatus formats and sends a tool execution status using the shared
-// DescribeTool pipeline.
+// DescribeTool pipeline. Only long-running tools get a start notification
+// to avoid duplicate IM messages (IM does not support message merging).
 func (e *IMEmitter) EmitToolStatus(toolName, rawArgs string) {
 	if e == nil {
 		return
+	}
+	if !imLongRunningTools[toolName] {
+		return // short tools: only result notification, no start notification
 	}
 	lang := ToolLanguage(e.language)
 	present := DescribeTool(lang, toolName, rawArgs)

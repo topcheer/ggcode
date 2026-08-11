@@ -368,6 +368,11 @@ func formatToolResultText(tr *ToolResultInfo) string {
 	// (including the "suppress" case like read_file success).
 	handled, special := formatSpecialIMToolResult(tr)
 	if handled {
+		// When a tool-call start notification was already sent, strip the
+		// tool name header from the result to avoid duplicate IM messages.
+		if tr.CallNotified && special != "" {
+			special = stripToolHeader(tr.ToolName, special)
+		}
 		return special
 	}
 
@@ -375,9 +380,30 @@ func formatToolResultText(tr *ToolResultInfo) string {
 	pretty := prettifyToolName(tr.ToolName)
 	output := strings.TrimSpace(redactResult(tr.Result))
 	if output != "" {
+		if tr.CallNotified {
+			// Only show the result output, no tool name header
+			return fmt.Sprintf("```\n%s\n```", output)
+		}
 		return fmt.Sprintf("🔧 %s\n```\n%s\n```", pretty, output)
 	}
 	return fmt.Sprintf("🔧 %s", pretty)
+}
+
+// stripToolHeader removes the tool name/icon prefix from a formatted result
+// string when the tool-call start notification was already sent to IM.
+// For example, "⚡ Run command\n```\noutput\n```" becomes "```\noutput\n```".
+func stripToolHeader(toolName, formatted string) string {
+	// If the result starts with an icon + label on the first line,
+	// strip everything up to the first newline (or code block start).
+	lines := strings.SplitN(formatted, "\n", 2)
+	if len(lines) < 2 {
+		return formatted // single-line result, keep as-is
+	}
+	rest := strings.TrimSpace(lines[1])
+	if rest == "" {
+		return formatted
+	}
+	return rest
 }
 
 // formatSpecialIMToolResult returns (handled, formatted) for special tool types.

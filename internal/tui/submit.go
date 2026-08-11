@@ -431,11 +431,12 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 			round.NoteToolResult(event.IsError)
 			// Emit tool result to IM based on output mode.
 			toolInfo := im.ToolResultInfo{
-				ToolName: event.Tool.Name,
-				Args:     string(event.Tool.Arguments),
-				Result:   event.Result,
-				IsError:  event.IsError,
-				Detail:   present.Detail,
+				ToolName:     event.Tool.Name,
+				Args:         string(event.Tool.Arguments),
+				Result:       event.Result,
+				IsError:      event.IsError,
+				Detail:       present.Detail,
+				CallNotified: m.imEmitter != nil && im.IsLongRunningTool(event.Tool.Name),
 			}
 			outputMode := "verbose"
 			if m.imEmitter != nil {
