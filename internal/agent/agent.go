@@ -1217,6 +1217,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.expiredRead.reset()
 	a.resetWastedExplore()
 	a.resetSelfMod()
+	// Goal drift context must reset per user turn to avoid comparing
+	// turn-1 keywords against turn-3 targets (issue #28).
+	if a.goalDriftCtx != nil {
+		a.goalDriftCtx.reset()
+	}
+	a.resetOvercorrection()
 	if a.delegationOrch != nil {
 		a.delegationOrch.resetForNewTurn()
 	}

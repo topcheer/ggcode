@@ -183,7 +183,15 @@ func measureEditSize(toolName string, args json.RawMessage) int {
 		if json.Unmarshal(args, &p) != nil {
 			return 0
 		}
-		return len(p.OldText) + len(p.NewText)
+		// Measure only the delta, not the anchor. The old_text in edit_file is
+		// a context anchor required to locate the edit, not the change itself.
+		// Counting it caused systematic false positives in overcorrection
+		// detection (issue #26).
+		delta := len(p.NewText) - len(p.OldText)
+		if delta < 0 {
+			delta = -delta
+		}
+		return delta
 
 	case "multi_edit_file":
 		var p struct {

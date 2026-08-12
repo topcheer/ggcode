@@ -119,15 +119,19 @@ func TestCriteriaDriftReclassificationCategory(t *testing.T) {
 	c := newCriteriaDriftState()
 	defer c.reset()
 
-	text := "Rate limiting is really a separate concern. It is better addressed separately."
+	// Use indicators from 2 different categories to trigger the category-based
+	// threshold (issue #30: require 2+ distinct categories, not 2+ total patterns).
+	// "is really a separate concern" → reclassification
+	// "a simpler approach" → substitution
+	text := "Rate limiting is really a separate concern. I took a simpler approach."
 	c.recordAssistantText(text, 1)
 
-	if len(c.indicators) < 2 {
-		t.Fatalf("expected 2 indicators from reclassification, got %d", len(c.indicators))
+	if len(c.seenCategories) < 2 {
+		t.Fatalf("expected 2+ categories, got %d: %v", len(c.seenCategories), c.seenCategories)
 	}
 	msg := c.maybeWarn(2)
 	if msg == "" {
-		t.Fatal("expected warning with 2 reclassification indicators")
+		t.Fatal("expected warning with 2+ distinct category indicators")
 	}
 }
 

@@ -66,8 +66,8 @@ func (c *companionGuardState) reset() {
 func isTestFilePath(path string) bool {
 	base := filepath.Base(path)
 	for _, suffix := range []string{
-		"_test.go",        // Go
-		"test_", "_test.", // Python (test_foo.py, foo_test.py)
+		"_test.go",         // Go
+		"_test.",           // Python (foo_test.py)
 		".test.", ".spec.", // JS/TS
 		"Test.java",  // Java
 		"Tests.java", // Java
@@ -76,6 +76,11 @@ func isTestFilePath(path string) bool {
 		if strings.Contains(base, suffix) {
 			return true
 		}
+	}
+	// Python test_ prefix: use HasPrefix to avoid matching files like
+	// latest_news.py, protest_banner.py, contest_rules.py (issue #23).
+	if strings.HasPrefix(base, "test_") {
+		return true
 	}
 	return false
 }

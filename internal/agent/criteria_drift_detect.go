@@ -62,20 +62,22 @@ const (
 
 // criteriaDriftState tracks success criteria drift signals.
 type criteriaDriftState struct {
-	mu         sync.Mutex
-	indicators []string // accumulated distinct drift indicators this run
-	warnCount  int
-	fired      bool
+	mu             sync.Mutex
+	indicators     []string        // accumulated distinct drift indicators this run
+	seenCategories map[string]bool // categories with at least one indicator (issue #30)
+	warnCount      int
+	fired          bool
 }
 
 func newCriteriaDriftState() *criteriaDriftState {
-	return &criteriaDriftState{}
+	return &criteriaDriftState{seenCategories: make(map[string]bool)}
 }
 
 func (c *criteriaDriftState) reset() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.indicators = nil
+	c.seenCategories = make(map[string]bool)
 	c.warnCount = 0
 	c.fired = false
 }
@@ -151,6 +153,17 @@ func (c *criteriaDriftState) recordAssistantText(text string, iter int) {
 	}
 
 	c.indicators = append(c.indicators, newIndicators...)
+	// Track which categories have been seen for category-based dedup (issue #30).
+	for cat := range criteriaDriftPatterns {
+		for _, ind := range newIndicators {
+			for _, pat := range criteriaDriftPatterns[cat] {
+				if ind == pat {
+					c.seenCategories[cat] = true
+					break
+				}
+			}
+		}
+	}
 }
 
 // maybeWarn returns guidance text if enough drift indicators have accumulated.
@@ -161,7 +174,7 @@ func (c *criteriaDriftState) maybeWarn(iter int) string {
 	if c.fired || c.warnCount >= cdMaxWarns {
 		return ""
 	}
-	if len(c.indicators) < cdThreshold {
+	if len(c.seenCategories) < cdThreshold {
 		return ""
 	}
 

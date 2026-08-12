@@ -80,6 +80,11 @@ const (
 	// Minimum edit size to trigger (avoid flagging tiny edits as "overcorrection")
 	overcorrectionMinEditBytes = 500
 
+	// overcorrectionMaxErrorAge is the maximum number of steps an error can
+	// remain pending before it expires. Prevents misattributing old errors
+	// to unrelated edits (issue #27).
+	overcorrectionMaxErrorAge = 10
+
 	// Consecutive overcorrections needed for cascade detection
 	overcorrectionCascadeMin = 2
 )
@@ -104,10 +109,11 @@ type overcorrectionEntry struct {
 
 // overcorrectionState tracks error→fix proportionality for cascade detection.
 type overcorrectionState struct {
-	mu         sync.Mutex
-	entries    []overcorrectionEntry
-	pendingErr errorSeverity // severity of the most recent unaddressed error
-	warnCount  int
+	mu              sync.Mutex
+	entries         []overcorrectionEntry
+	pendingErr      errorSeverity // severity of the most recent unaddressed error
+	stepsSinceError int           // number of non-edit steps since last error (issue #27)
+	warnCount       int
 }
 
 func newOvercorrectionState() *overcorrectionState {
@@ -119,6 +125,7 @@ func (s *overcorrectionState) reset() {
 	defer s.mu.Unlock()
 	s.entries = nil
 	s.pendingErr = severityNone
+	s.stepsSinceError = 0
 	s.warnCount = 0
 }
 
@@ -128,13 +135,20 @@ func (s *overcorrectionState) recordErrorSignal(toolName string, resultContent s
 	defer s.mu.Unlock()
 
 	if isError {
-		s.pendingErr = classifyErrorSeverity(toolName, resultContent)
+		newSev := classifyErrorSeverity(toolName, resultContent)
+		// Preserve max severity: don't let a trivial lint error overwrite a
+		// severe panic error (issue #27).
+		if newSev > s.pendingErr {
+			s.pendingErr = newSev
+		}
+		s.stepsSinceError = 0
 		return
 	}
 
 	// Also detect non-error diagnostic signals (lint warnings in build output)
 	if sev := classifyDiagnosticSeverity(toolName, resultContent); sev > s.pendingErr {
 		s.pendingErr = sev
+		s.stepsSinceError = 0
 	}
 }
 
@@ -149,9 +163,18 @@ func (s *overcorrectionState) recordEdit(size int, filePath string) string {
 		return ""
 	}
 
+	// Expire stale pending errors: if N or more steps have passed since the
+	// error was recorded without any edit, the error is likely unrelated to
+	// this edit (issue #27).
+	if s.stepsSinceError >= overcorrectionMaxErrorAge {
+		s.pendingErr = severityNone
+		return ""
+	}
+
 	// Clear the pending error regardless (this edit addresses it)
 	errSev := s.pendingErr
 	s.pendingErr = severityNone
+	s.stepsSinceError = 0
 
 	// Edits below minimum size are never overcorrections
 	if size < overcorrectionMinEditBytes {

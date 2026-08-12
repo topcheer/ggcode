@@ -218,21 +218,46 @@ func isInformationalRequest(prompt string) bool {
 func isReadOnlyTask(prompt string) bool {
 	readOnlyCount := 0
 	for _, indicator := range readOnlyIndicators {
-		if strings.Contains(prompt, indicator) {
+		if containsWord(prompt, indicator) {
 			readOnlyCount++
 		}
 	}
 	if readOnlyCount == 0 {
 		return false
 	}
-	// If read-only indicators outnumber action verbs, treat as read-only task.
+	// Only classify as read-only when indicators STRICTLY outnumber action verbs.
+	// Using >= causes "fix X and check Y" (1 action + 1 read-only) to bypass the gate.
 	actionCount := 0
 	for _, verb := range actionVerbs {
-		if strings.Contains(prompt, verb) {
+		if containsWord(prompt, verb) {
 			actionCount++
 		}
 	}
-	return readOnlyCount >= actionCount
+	return readOnlyCount > actionCount
+}
+
+// containsWord checks for a word boundary match to avoid substring false positives
+// (e.g. "check" matching "checkpoint", "checksum", "checkout").
+func containsWord(text, word string) bool {
+	idx := strings.Index(strings.ToLower(text), strings.ToLower(word))
+	for idx >= 0 {
+		end := idx + len(word)
+		leftOK := idx == 0 || !isAlphaNum(text[idx-1])
+		rightOK := end >= len(text) || !isAlphaNum(text[end])
+		if leftOK && rightOK {
+			return true
+		}
+		next := strings.Index(strings.ToLower(text[end:]), strings.ToLower(word))
+		if next < 0 {
+			break
+		}
+		idx = end + next
+	}
+	return false
+}
+
+func isAlphaNum(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '_'
 }
 
 // detectActions returns the action verbs found in the prompt.

@@ -80,6 +80,19 @@ const (
 	goalDriftStopWords      = true // Filter common English stop words
 )
 
+// reset clears state for a new user turn (issue #28).
+// Without this, keywords from turn 1 persist and cause false positives
+// when the user starts a new task in a multi-turn session.
+func (s *goalDriftCtxState) reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.initialized = false
+	s.originKeywords = make(map[string]bool)
+	s.recentTargets = nil
+	s.warned = false
+	s.lastCheckIter = 0
+}
+
 func newGoalDriftCtxState() *goalDriftCtxState {
 	return &goalDriftCtxState{
 		originKeywords: make(map[string]bool),
@@ -106,7 +119,7 @@ func (s *goalDriftCtxState) initFromUserMessage(msg string) {
 		if len(word) < goalDriftKeywordMinLen {
 			continue
 		}
-		if isStopWord(word) {
+		if isStopWord(word) || goalDriftIsStopWord(word) {
 			continue
 		}
 		word = strings.ToLower(word)
@@ -122,7 +135,7 @@ func (s *goalDriftCtxState) initFromUserMessage(msg string) {
 			})
 			for _, part := range parts {
 				part = strings.ToLower(part)
-				if len(part) >= goalDriftKeywordMinLen && !isStopWord(part) {
+				if len(part) >= goalDriftKeywordMinLen && !goalDriftIsStopWord(part) {
 					s.originKeywords[part] = true
 				}
 			}

@@ -105,7 +105,10 @@ func TestDiminishingEditState_NoWarningForAllTrivial(t *testing.T) {
 func TestMeasureEditSize_EditFile(t *testing.T) {
 	args := json.RawMessage(`{"old_text":"hello world","new_text":"hello universe"}`)
 	size := measureEditSize("edit_file", args)
-	expected := len("hello world") + len("hello universe")
+	// Issue #26: measureEditSize now returns the delta (absolute change),
+	// not len(old)+len(new). "hello world" (11) -> "hello universe" (14)
+	// delta = |14 - 11| = 3.
+	expected := 3
 	if size != expected {
 		t.Fatalf("expected %d, got %d", expected, size)
 	}

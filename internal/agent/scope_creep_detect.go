@@ -78,13 +78,16 @@ type scopeCreepPattern struct {
 var scopeCreepPatterns = []scopeCreepPattern{
 	// Unsolicited additional actions - "while I'm at it" style
 	{"action", regexp.MustCompile(`(?i)(?:while\s+i(?:'m|\s+am)\s+at\s+it|since\s+i(?:'m|\s+am)\s+(?:already\s+)?here|while\s+i(?:'m|\s+am)\s+in\s+(?:this|the)\s+(?:file|area|section))`)},
-	{"action", regexp.MustCompile(`(?i)(?:i(?:'ll|\s+will)\s+also|let\s+me\s+also|i\s+should\s+also|i\s+also\s+(?:went|fixed|updated|cleaned|refactored))`)},
+	// Constrain "also" pattern to modification verbs to avoid matching
+	// verification activity like "I'll also run the tests" (issue #29).
+	{"action", regexp.MustCompile(`(?i)(?:i(?:'ll|\s+will)\s+also\s+(?:fix|update|clean|refactor|modify|change|add|remove|implement|handle)|let\s+me\s+also\s+(?:fix|update|clean|refactor|modify|change|add|remove)|i\s+should\s+also\s+(?:fix|update|clean|refactor|modify|change|add|remove)|i\s+also\s+(?:went|fixed|updated|cleaned|refactored))`)},
 	{"action", regexp.MustCompile(`(?i)(?:i(?:'ve|\s+have)\s+(?:also\s+)?(?:gone\s+ahead|taken\s+the\s+liberty|decided)\s+(?:and\s+)?(?:to\s+)?(?:fix|update|clean|refactor|modify|change|add|remove))`)},
 	{"action", regexp.MustCompile(`(?i)(?:i\s+(?:also\s+)?(?:cleaned\s+up|tidied\s+up|fixed\s+up)\s+(?:the\s+)?(?:imports?|formatting|whitespace|naming|comments?))`)},
 
 	// Scope expansion justification - rationalizing going beyond request
 	{"justification", regexp.MustCompile(`(?i)(?:to\s+(?:fully|properly|better|completely|thoroughly)\s+(?:fix|handle|address|solve)\s+(?:this|that),?\s+i\s+(?:also\s+)?(?:need\s+to|had\s+to|must)\s+(?:fix|update|change|modify|refactor))`)},
-	{"justification", regexp.MustCompile(`(?i)(?:it\s+(?:would\s+)?(?:also\s+)?be\s+(?:good|helpful|useful|better|wise)\s+to\s+(?:also\s+)?(?:fix|update|clean|refactor|review))`)},
+	// Exclude "review" — self-reviewing changes is standard practice, not scope creep (issue #29).
+	{"justification", regexp.MustCompile(`(?i)(?:it\s+(?:would\s+)?(?:also\s+)?be\s+(?:good|helpful|useful|better|wise)\s+to\s+(?:also\s+)?(?:fix|update|clean|refactor))`)},
 	{"justification", regexp.MustCompile(`(?i)(?:i\s+(?:noticed|found|spotted|saw)\s+(?:some|a\s+few|several)\s+(?:other|additional)\s+(?:issues?|problems?|things)\s+(?:that\s+)?(?:i\s+)?(?:also\s+)?(?:fixed|should|could))`)},
 	{"justification", regexp.MustCompile(`(?i)(?:expanding\s+(?:my|the)\s+(?:scope|changes?|search)\s+to\s+(?:include|cover|also))`)},
 	{"justification", regexp.MustCompile(`(?i)(?:i\s+went\s+(?:ahead\s+)?beyond\s+(?:the\s+)?(?:original|assigned|initial)\s+(?:scope|task|request))`)},

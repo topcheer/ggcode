@@ -171,14 +171,15 @@ func extractGoTestScope(cmd string) string {
 		parts = append(parts, "run:"+m[1])
 	}
 
-	// Check for broad scope first (./... or no package path)
-	if strings.Contains(cmd, "./...") || !strings.Contains(cmd, "./") {
+	// Broad scope: ./... (all packages) or bare 'go test' with no package path.
+	// Explicit package paths (with or without ./) are narrow scope (issue #24).
+	if strings.Contains(cmd, "./...") {
 		parts = append(parts, "scope:broad")
 	} else {
-		// Extract specific package paths
+		// Extract specific package paths (both ./pkg/ and pkg/ forms)
 		pkgs := goTestPkgRe.FindAllStringSubmatch(cmd, -1)
 		for _, m := range pkgs {
-			if m[1] != "./..." {
+			if len(m) > 1 && m[1] != "./..." {
 				parts = append(parts, "pkg:"+m[1])
 			}
 		}
