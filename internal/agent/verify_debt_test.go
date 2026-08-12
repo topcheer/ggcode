@@ -85,14 +85,25 @@ func TestVerifyDebt_MaxWarnings(t *testing.T) {
 		s.recordSourceEdit()
 	}
 
-	for i := 0; i < verifyDebtMax; i++ {
-		if msg := s.maybeWarn(1); msg == "" {
-			t.Fatalf("expected warning #%d", i+1)
-		}
+	// First moderate warning at debt=7
+	if msg := s.maybeWarn(1); msg == "" {
+		t.Fatal("expected moderate warning at debt=7")
 	}
-	// Should be capped.
+	// Repeated call at same debt level should NOT warn again
 	if msg := s.maybeWarn(1); msg != "" {
-		t.Errorf("expected no warning after max, got: %q", msg)
+		t.Fatalf("expected no repeat warning at debt=7, got: %q", msg)
+	}
+	// Increase debt to high-risk threshold
+	for i := 0; i < verifyDebtWarn2-verifyDebtWarn1; i++ {
+		s.recordSourceEdit()
+	}
+	// High-risk warning should fire
+	if msg := s.maybeWarn(2); msg == "" {
+		t.Fatal("expected high-risk warning at debt=12")
+	}
+	// Repeated call at debt=12 should NOT warn again
+	if msg := s.maybeWarn(2); msg != "" {
+		t.Fatalf("expected no repeat warning at debt=12, got: %q", msg)
 	}
 }
 

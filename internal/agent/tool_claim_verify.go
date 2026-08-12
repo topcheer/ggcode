@@ -85,8 +85,8 @@ var claimVerifyPatterns = []claimVerifyPattern{
 	// Build/test failures
 	{"build failed", "Build failed. Do not claim the build passed."},
 	{"compilation failed", "Compilation failed. Do not claim compilation succeeded."},
-	{"FAIL:", "Test output contains FAIL. Do not claim all tests passed."},
-	{"FAIL\t", "Test output contains FAIL. Do not claim all tests passed."},
+	{"fail:", "Test output contains FAIL. Do not claim all tests passed."},
+	{"fail\t", "Test output contains FAIL. Do not claim all tests passed."},
 	// File not found
 	{"no such file or directory", "File/path does not exist. Do not claim you accessed it."},
 	{"does not exist", "Path does not exist. Do not claim you found it."},

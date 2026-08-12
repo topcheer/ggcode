@@ -33,6 +33,7 @@ type verifyDebtState struct {
 	totalGreenBuilds  int    // total successful verification commands this run
 	lastGreenBuildCmd string // last successful verify command
 	warningsIssued    int    // warnings issued this run (cap at 3)
+	lastWarnDebt      int    // debt level at last warning (to avoid repeated moderate warnings)
 }
 
 // verifyDebt thresholds for escalating warnings.
@@ -91,7 +92,24 @@ func (s *verifyDebtState) maybeWarn(iteration int) string {
 		return ""
 	}
 
+	// Only increment warning counter when debt crosses a new threshold,
+	// not on every call with the same debt level. This prevents moderate
+	// warnings at debt=7 from consuming the entire cap before the
+	// high-risk warning at debt=12 can fire.
+	if debt >= verifyDebtWarn2 {
+		// High-risk threshold: only fire if we haven't already warned at this level
+		if s.lastWarnDebt >= verifyDebtWarn2 {
+			return ""
+		}
+	} else {
+		// Moderate threshold: only fire if we haven't already warned at moderate
+		if s.lastWarnDebt >= verifyDebtWarn1 {
+			return ""
+		}
+	}
+
 	s.warningsIssued++
+	s.lastWarnDebt = debt
 
 	var msg string
 	if debt >= verifyDebtWarn2 {

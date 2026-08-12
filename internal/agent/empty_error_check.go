@@ -135,7 +135,7 @@ func eeIsErrorNilCheck(expr ast.Expr) bool {
 		return false
 	}
 
-	if binExpr.Op != token.NEQ && binExpr.Op != token.EQL {
+	if binExpr.Op != token.NEQ {
 		return false
 	}
 

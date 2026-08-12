@@ -163,17 +163,26 @@ func findPanicsInBody(body *ast.BlockStmt, fset *token.FileSet) []panicInstance 
 		return nil
 	}
 
-	// Check if this function has a recover() call anywhere. If it does,
-	// panics within it are considered handled (the recover will catch them).
+	// Check if this function has a recover() call inside a defer.
+	// Only recover() directly inside a deferred function catches panics;
+	// a bare recover() outside defer is a no-op.
 	hasRecover := false
 	ast.Inspect(body, func(n ast.Node) bool {
-		if call, ok := n.(*ast.CallExpr); ok {
-			if ident, ok := call.Fun.(*ast.Ident); ok && ident.Name == "recover" {
-				hasRecover = true
-				return false
-			}
+		deferStmt, ok := n.(*ast.DeferStmt)
+		if !ok {
+			return true
 		}
-		return true
+		// Check if the deferred function contains a recover() call.
+		ast.Inspect(deferStmt.Call, func(dn ast.Node) bool {
+			if call, ok := dn.(*ast.CallExpr); ok {
+				if ident, ok := call.Fun.(*ast.Ident); ok && ident.Name == "recover" {
+					hasRecover = true
+					return false
+				}
+			}
+			return true
+		})
+		return !hasRecover
 	})
 
 	if hasRecover {

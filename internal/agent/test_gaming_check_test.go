@@ -214,7 +214,7 @@ func TestA(t *testing.T) {
 	t.Skipf("skip %s", "fmt")
 }
 `
-	count := countSkipDirectives(content)
+	count := countSkipDirectives("foo_test.go", content)
 	if count != 2 {
 		t.Errorf("expected 2 skip directives, got %d", count)
 	}

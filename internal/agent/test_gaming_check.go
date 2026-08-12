@@ -192,8 +192,8 @@ func goTestFuncNames(filename, src string) map[string]bool {
 // checkSkipDirectives detects newly added skip/ignore directives in test files.
 // Delta-based: only flags skips that were NOT in the old content.
 func checkSkipDirectives(filePath, oldContent, newContent string) []string {
-	oldSkips := countSkipDirectives(oldContent)
-	newSkips := countSkipDirectives(newContent)
+	oldSkips := countSkipDirectives(filePath, oldContent)
+	newSkips := countSkipDirectives(filePath, newContent)
 
 	if newSkips <= oldSkips {
 		return nil
@@ -208,10 +208,18 @@ func checkSkipDirectives(filePath, oldContent, newContent string) []string {
 }
 
 // countSkipDirectives counts lines matching any skip directive pattern.
-func countSkipDirectives(content string) int {
+// Ruby-specific patterns are only applied to .rb files to avoid false positives
+// in Go/other languages (e.g. "skip := true" in Go matching Ruby's `skip`).
+func countSkipDirectives(filePath, content string) int {
+	ext := filepath.Ext(filePath)
 	count := 0
 	for _, line := range strings.Split(content, "\n") {
-		for _, re := range skipDirectiveRegexes {
+		for i, re := range skipDirectiveRegexes {
+			// skipDirectiveRegexes index 11 is the Ruby `^\s*skip\b` pattern.
+			// Only apply it to .rb files.
+			if i == 11 && ext != ".rb" {
+				continue
+			}
 			if re.MatchString(line) {
 				count++
 				break // one skip per line

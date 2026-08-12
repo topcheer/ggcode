@@ -147,7 +147,7 @@ func findTerminatingStmt(stmts []ast.Stmt) int {
 			break
 		}
 		switch s.(type) {
-		case *ast.ReturnStmt, *ast.BranchStmt, *ast.GoStmt:
+		case *ast.ReturnStmt, *ast.BranchStmt:
 			return i
 		case *ast.ExprStmt:
 			if isTerminatingCall(s) {

@@ -212,35 +212,27 @@ func (o *oscillationState) addSignature(path, oldText, newText string, iter int)
 	o.signatures[path] = sigs
 }
 
-// countReversals counts how many times a new_text signature matches a prior
-// old_text signature (or vice versa) - indicating the agent reverted its change.
+// countReversals counts how many times the agent reverts to a previous state.
+// A reversal occurs when a content signature appears 3+ times in the edit
+// history for this file. In progressive editing (A->B->C->D), each signature
+// appears exactly twice (once as old, once as new). In oscillation (A->B->A->B),
+// signatures A and B each appear 3+ times, indicating back-and-forth.
 func (o *oscillationState) countReversals(path string) int {
 	sigs := o.signatures[path]
 	if len(sigs) < 3 {
 		return 0
 	}
 
-	reversals := 0
-	// Track new_text sigs we've seen
-	seenNewSigs := make(map[string]bool)
-	// Track old_text sigs we've seen
-	seenOldSigs := make(map[string]bool)
-
+	// Count total occurrences of each signature (both old and new).
+	sigCounts := make(map[string]int)
 	for _, s := range sigs {
-		if s.isNew {
-			// If this new_text sig was previously seen as an old_text sig,
-			// the agent is re-adding something it previously removed
-			if seenOldSigs[s.sig] {
-				reversals++
-			}
-			seenNewSigs[s.sig] = true
-		} else {
-			// If this old_text sig was previously seen as a new_text sig,
-			// the agent is removing something it previously added
-			if seenNewSigs[s.sig] {
-				reversals++
-			}
-			seenOldSigs[s.sig] = true
+		sigCounts[s.sig]++
+	}
+
+	reversals := 0
+	for _, count := range sigCounts {
+		if count >= 3 {
+			reversals += count - 2 // 3 occurrences = 1 reversal, 4 = 2, etc.
 		}
 	}
 

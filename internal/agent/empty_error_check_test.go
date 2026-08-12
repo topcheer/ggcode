@@ -144,7 +144,8 @@ func bar() error {
 }
 
 func TestCheckEmptyErrorBody_EqNilCheck(t *testing.T) {
-	// `if err == nil {}` with empty body is also suspicious.
+	// `if err == nil {}` with empty body is NOT error swallowing —
+	// it's a valid happy-path no-op. Should NOT be flagged.
 	old := ""
 	new := `package main
 
@@ -155,8 +156,8 @@ func bar() {
 }
 `
 	warnings := checkEmptyErrorBody("test.go", old, new)
-	if len(warnings) == 0 {
-		t.Fatal("expected warning for 'if err == nil {}' empty body")
+	if len(warnings) > 0 {
+		t.Fatalf("expected no warning for 'if err == nil {}' empty body, got: %v", warnings)
 	}
 }
 
@@ -244,7 +245,7 @@ func TestIsErrorNilCheck(t *testing.T) {
 		want bool
 	}{
 		{"err neq nil", "package x\nfunc f() {\n if err != nil {}\n}", true},
-		{"err eq nil", "package x\nfunc f() {\n if err == nil {}\n}", true},
+		{"err eq nil", "package x\nfunc f() {\n if err == nil {}\n}", false},
 		{"non-error", "package x\nfunc f() {\n if x != nil {}\n}", false},
 	}
 	for _, tt := range tests {

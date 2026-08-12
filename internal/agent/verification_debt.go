@@ -116,20 +116,38 @@ func classifyDebtAction(toolName, args string) debtAction {
 
 // isVerificationCommand checks if a run_command argument string represents
 // a verification action (build, test, vet, lint, typecheck).
+// Uses token-based matching for single-word patterns to avoid false matches
+// like "check" matching "checkout" or "test" matching "testfile".
 func isVerificationCommand(args string) bool {
 	lower := strings.ToLower(args)
-	verificationMarkers := []string{
-		"build", "test", "vet", "lint", "typecheck", "tsc",
-		"check", "compile", "make ", "cargo ", "npm run", "yarn ",
-		"pnpm ", "go test", "go build", "go vet", "pytest", "jest",
-		"mypy", "flake8", "eslint", "prettier", "cargo build", "cargo test",
-		"gradle", "mvn ", "sbt ",
+	tokens := strings.Fields(lower)
+	singleWordMarkers := []string{"build", "test", "vet", "lint", "typecheck", "tsc", "check", "compile", "pytest", "jest", "mypy", "flake8", "eslint", "prettier", "gradle"}
+	multiWordMarkers := []string{"go test", "go build", "go vet", "cargo build", "cargo test", "npm run", "dotnet test", "dotnet build"}
+	prefixMarkers := []string{"make ", "cargo ", "yarn ", "pnpm ", "mvn ", "sbt "}
+
+	// Check single-word markers as complete tokens
+	for _, t := range tokens {
+		for _, m := range singleWordMarkers {
+			if t == m {
+				return true
+			}
+		}
 	}
-	for _, vmarker := range verificationMarkers {
-		if strings.Contains(lower, vmarker) {
+
+	// Check multi-word markers as substrings (specific enough)
+	for _, m := range multiWordMarkers {
+		if strings.Contains(lower, m) {
 			return true
 		}
 	}
+
+	// Check prefix markers (make/cargo/yarn/etc followed by any subcommand)
+	for _, m := range prefixMarkers {
+		if strings.HasPrefix(lower, strings.TrimSpace(m)) { // changed to trimmed prefix
+			return true
+		}
+	}
+
 	return false
 }
 

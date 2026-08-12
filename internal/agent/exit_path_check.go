@@ -272,18 +272,23 @@ func selectTerminates(sel *ast.SelectStmt) bool {
 	return true
 }
 
-// switchTerminates returns true if all switch cases end with terminating stmt.
+// switchTerminates returns true if all switch cases end with terminating stmt
+// AND a default case exists (without default, the switch may fall through).
 func switchTerminates(sw *ast.SwitchStmt) bool {
 	if sw.Body == nil || len(sw.Body.List) == 0 {
 		return false
 	}
+	hasDefault := false
 	for _, cc := range sw.Body.List {
 		clause, ok := cc.(*ast.CaseClause)
 		if !ok || !caseClauseTerminates(clause) {
 			return false
 		}
+		if clause.List == nil {
+			hasDefault = true
+		}
 	}
-	return true
+	return hasDefault
 }
 
 // commClauseTerminates checks if a select CommClause ends terminating.

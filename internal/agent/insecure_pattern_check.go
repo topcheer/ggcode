@@ -70,12 +70,6 @@ func checkInsecurePatternsGo(filePath, oldContent, newContent string) []string {
 	oldIssues := findInsecurePatternsGo(oldContent)
 	newIssues := findInsecurePatternsGo(newContent)
 
-	// Delta: count how many new issues exist beyond what was already there.
-	newCount := len(newIssues) - len(oldIssues)
-	if newCount <= 0 {
-		return nil
-	}
-
 	// Only report issues that are genuinely new (by category+detail signature).
 	oldSet := make(map[string]bool, len(oldIssues))
 	for _, oi := range oldIssues {
