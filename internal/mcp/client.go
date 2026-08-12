@@ -325,10 +325,10 @@ func (c *Client) CallTool(ctx context.Context, name string, args map[string]inte
 
 // Close terminates the server process.
 func (c *Client) Close() error {
-	// Abort transports first (without holding c.mu) so any in-flight
-	// sendRequest/sendNotification holding the lock can unwind quickly.
-	c.Abort()
-
+	// Capture cleanup targets BEFORE calling Abort(), because Abort()
+	// unconditionally sets c.closed=true via abortOnce.Do — if we check
+	// c.closed after Abort(), the cleanup block would always be skipped
+	// (the original bug from issue #39).
 	c.mu.Lock()
 	if c.closed.Load() {
 		c.mu.Unlock()
@@ -343,6 +343,10 @@ func (c *Client) Close() error {
 	oauthHandler := c.oauthHandler
 	c.oauthHandler = nil
 	c.mu.Unlock()
+
+	// Abort transports (without holding c.mu) so any in-flight
+	// sendRequest/sendNotification holding the lock can unwind quickly.
+	c.Abort()
 
 	if oauthHandler != nil {
 		oauthHandler.Close()
