@@ -1099,8 +1099,8 @@ func (h *Hub) recordTransportResult(nodeID, transport string, success bool) {
 	case "tcp":
 		ph.lastTCP = time.Now()
 		if success {
-			if !ph.tcpOK {
-				downDur := time.Since(ph.tcpRetryAt.Add(-tcpRetryInterval))
+			if !ph.tcpOK && !ph.tcpRetryAt.IsZero() {
+				downDur := time.Since(ph.tcpRetryAt)
 				if downDur >= 2*tcpRetryInterval {
 					debug.Log("lanchat", "TCP recovered for %s (was down %v)", nodeID, downDur.Round(time.Second))
 				}

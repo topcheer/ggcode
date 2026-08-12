@@ -2,7 +2,8 @@ package agentruntime
 
 import (
 	"context"
-	"fmt"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"sort"
@@ -33,10 +34,11 @@ type fileEntry struct {
 //     applies the update (manager.Reload already has its own content signature
 //     to avoid redundant map swaps).
 type SkillHotReload struct {
-	manager  *commands.Manager
-	dirs     []string
-	lastSig  string
-	interval time.Duration
+	manager         *commands.Manager
+	dirs            []string
+	lastSig         string
+	lastContentHash string
+	interval        time.Duration
 }
 
 // NewSkillHotReload creates a watcher for the given command directories.
@@ -88,7 +90,16 @@ func (w *SkillHotReload) checkAndReload(ctx context.Context) {
 		return
 	}
 
+	// Content hash check: mtime can change without content changes
+	// (e.g. git checkout, Spotlight indexing, xattr writes).
+	contentHash := w.computeContentHash()
+	if contentHash == w.lastContentHash {
+		w.lastSig = w.computeSignature()
+		return
+	}
+
 	w.lastSig = w.computeSignature()
+	w.lastContentHash = contentHash
 
 	if w.manager.Reload() {
 		debug.Log("skill-hotreload", "skill change detected, reloaded")
@@ -100,53 +111,70 @@ func (w *SkillHotReload) checkAndReload(ctx context.Context) {
 // addition/removal of a file, or a directory mtime change produces a different
 // signature, triggering a reload. It does NOT read file bodies.
 func (w *SkillHotReload) computeSignature() string {
-	var entries []fileEntry
+	var paths []string
 	for _, dir := range w.dirs {
-		// Skip directory mtime — only watch file-level mtimes to avoid
-		// false positives from OS-level directory metadata changes.
-		collectFileEntries(dir, &entries)
+		collectFilePaths(dir, &paths)
 	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].path < entries[j].path })
+	sort.Strings(paths)
 
 	var b []byte
-	for _, e := range entries {
-		b = append(b, e.path...)
+	for _, p := range paths {
+		info, err := os.Stat(p)
+		if err != nil {
+			continue
+		}
+		b = append(b, p...)
 		b = append(b, '|')
-		b = append(b, strconv.FormatInt(e.mtime, 10)...)
+		b = append(b, strconv.FormatInt(info.ModTime().UnixNano(), 10)...)
 		b = append(b, '\n')
 	}
 	return string(b)
 }
 
-// collectFileEntries scans dir for skill subdirectories (SKILL.md) and legacy
-// command files (*.md directly in the dir), appending their mtimes.
-// Directory mtimes are excluded from the signature because macOS can update
-// them for reasons unrelated to content (Spotlight indexing, attribute writes).
-func collectFileEntries(dir string, entries *[]fileEntry) {
-	dirEntries, err := os.ReadDir(dir)
-	if err != nil {
-		return
-	}
-	for _, de := range dirEntries {
+// collectFilePaths gathers all watched file paths (SKILL.md and legacy *.md).
+func collectFilePaths(dir string, paths *[]string) {
+	for _, de := range dirEntries(dir) {
 		full := filepath.Join(dir, de.Name())
 		if de.IsDir() {
-			// Skill directory: watch the SKILL.md inside it.
 			skillFile := filepath.Join(full, "SKILL.md")
-			if info, statErr := os.Stat(skillFile); statErr == nil {
-				*entries = append(*entries, fileEntry{path: skillFile, mtime: info.ModTime().UnixNano()})
+			if _, err := os.Stat(skillFile); err == nil {
+				*paths = append(*paths, skillFile)
 			}
 			continue
 		}
-		// Legacy command file (*.md directly in a commands dir).
 		if filepath.Ext(de.Name()) == ".md" {
-			if info, statErr := os.Stat(full); statErr == nil {
-				*entries = append(*entries, fileEntry{path: full, mtime: info.ModTime().UnixNano()})
-			}
+			*paths = append(*paths, full)
 		}
 	}
 }
 
-// formatSigLine is a small helper used by tests to inspect the signature format.
-func formatSigLine(path string, mtime int64) string {
-	return fmt.Sprintf("%s|%d\n", path, mtime)
+func dirEntries(dir string) []os.DirEntry {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	return entries
+}
+
+// computeContentHash reads all watched skill files and produces a SHA-256
+// hash of their concatenated content. This is used as a secondary check:
+// only trigger a reload when file contents actually change, not just mtimes.
+func (w *SkillHotReload) computeContentHash() string {
+	var paths []string
+	for _, dir := range w.dirs {
+		collectFilePaths(dir, &paths)
+	}
+	if len(paths) == 0 {
+		return ""
+	}
+	sort.Strings(paths)
+	h := sha256.New()
+	for _, p := range paths {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		h.Write(data)
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }

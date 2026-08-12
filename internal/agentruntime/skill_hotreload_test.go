@@ -146,11 +146,3 @@ func TestSkillHotReloadStartEmptyDirs(t *testing.T) {
 	w := NewSkillHotReload(mgr, nil)
 	w.Start(context.Background()) // should be a no-op
 }
-
-func TestFormatSigLine(t *testing.T) {
-	got := formatSigLine("/path/to/skill.md", 123456789)
-	want := "/path/to/skill.md|123456789\n"
-	if got != want {
-		t.Fatalf("got %q, want %q", got, want)
-	}
-}
