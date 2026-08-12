@@ -86,7 +86,7 @@ var (
 	// git filter-branch / git filter-repo (rewrites history)
 	reGitFilterBranch = regexp.MustCompile(`\bgit\s+(filter-branch|filter-repo)\b`)
 	// rm -rf (not git-specific but extremely destructive)
-	reRmRf = regexp.MustCompile(`\brm\s+-rf?\b`)
+	reRmRf = regexp.MustCompile(`\brm\s+-[a-zA-Z]*r[a-zA-Z]*f\b|\brm\s+-[a-zA-Z]*f[a-zA-Z]*r\b`)
 )
 
 // detectDestructiveInShellCommand analyzes a shell command string for destructive

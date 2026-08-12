@@ -176,7 +176,10 @@ func extractExportedSymbols(file *ast.File) []exportSymbol {
 				continue
 			}
 			name := d.Name.Name
-			if strings.HasPrefix(name, "Test") {
+			if strings.HasPrefix(name, "Test") ||
+				strings.HasPrefix(name, "Benchmark") ||
+				strings.HasPrefix(name, "Example") ||
+				strings.HasPrefix(name, "Fuzz") {
 				continue // test helpers
 			}
 			sig := normalizeFuncSignature(d.Type)

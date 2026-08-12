@@ -488,9 +488,7 @@ func (m *Manager) removeOrphanToolResults() {
 				}
 			} else {
 				kept = append(kept, b)
-				if b.Type == "tool_use" {
-					allOrphan = false
-				}
+				allOrphan = false // any non-tool_result block has content
 			}
 		}
 

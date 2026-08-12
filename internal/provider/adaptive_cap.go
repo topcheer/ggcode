@@ -103,6 +103,9 @@ func (c *adaptiveCap) OnRejected(parsedLimit int) {
 		newHi = cur
 	}
 	if c.hi == 0 || newHi < c.hi {
+		if newHi < c.lo {
+			newHi = c.lo
+		}
 		c.hi = newHi
 	}
 	// Step the cap down. Prefer the parsed server limit when known.
