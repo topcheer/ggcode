@@ -91,8 +91,9 @@ func checkBreakingChanges(filePath, oldContent, newContent string) string {
 
 	// Limit output.
 	if len(warnings) > 2 {
+		moreCount := len(warnings) - 2 // compute before truncation
 		warnings = warnings[:2]
-		warnings = append(warnings, fmt.Sprintf("...and %d more breaking change(s)", len(warnings)-2))
+		warnings = append(warnings, fmt.Sprintf("...and %d more breaking change(s)", moreCount))
 	}
 
 	var b strings.Builder
