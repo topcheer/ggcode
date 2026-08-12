@@ -185,6 +185,28 @@ func Foo() {`
 	}
 }
 
+func TestBreakingChanges_TruncationCount(t *testing.T) {
+	// 5 exported functions with signature changes → should report "...and 3 more"
+	old := `package foo
+func FuncA(x int) {}
+func FuncB(x int) {}
+func FuncC(x int) {}
+func FuncD(x int) {}
+func FuncE(x int) {}
+`
+	new := `package foo
+func FuncA(x int, y string) {}
+func FuncB(x int, y string) {}
+func FuncC(x int, y string) {}
+func FuncD(x int, y string) {}
+func FuncE(x int, y string) {}
+`
+	warn := checkBreakingChanges("test.go", old, new)
+	if !strings.Contains(warn, "...and 3 more breaking change(s)") {
+		t.Errorf("expected '...and 3 more breaking change(s)', got: %s", warn)
+	}
+}
+
 func TestBreakingChanges_MethodOnNonExportedType(t *testing.T) {
 	old := `package foo
 type internal struct{}
