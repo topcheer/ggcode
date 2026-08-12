@@ -125,5 +125,5 @@ func isGitPush(s string) bool {
 func isDestructiveGit(s string) bool {
 	return strings.Contains(s, "reset --hard") ||
 		strings.Contains(s, "clean -f") ||
-		strings.Contains(s, "checkout -- ") && strings.Contains(s, " .")
+		strings.Contains(s, "checkout -- ")
 }

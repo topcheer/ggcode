@@ -147,6 +147,23 @@ func TestReversibilityMaxWarnings(t *testing.T) {
 	}
 }
 
+func TestReversibilityCheckCheckoutSpecificFile(t *testing.T) {
+	r := newReversibilityState()
+	guidance := r.checkPreAction("run_command", `{"command":"git checkout -- src/foo.go"}`)
+	if guidance == "" {
+		t.Fatal("expected reversibility warning for checkout -- specific file")
+	}
+}
+
+func TestReversibilityCheckoutBranchNotDestructive(t *testing.T) {
+	if isDestructiveGit("git checkout main") {
+		t.Error("git checkout <branch> should not be destructive")
+	}
+	if isDestructiveGit("git checkout -b feature") {
+		t.Error("git checkout -b should not be destructive")
+	}
+}
+
 func TestReversibilityCommitAfterStagingNoWarn(t *testing.T) {
 	r := newReversibilityState()
 	r.recordSafetySignal("git_add", `{"files":["a.go"]}`)

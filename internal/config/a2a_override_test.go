@@ -117,6 +117,30 @@ func TestMergeA2AConfigAuth(t *testing.T) {
 	}
 }
 
+func TestMergeA2AConfigAPIKeys(t *testing.T) {
+	base := &A2AConfig{
+		Auth: A2AAuthConfig{
+			APIKey:  "global-key",
+			APIKeys: []string{"global-arr-1", "global-arr-2"},
+		},
+	}
+	override := &A2AConfig{
+		Auth: A2AAuthConfig{
+			APIKeys: []string{"instance-key-1", "instance-key-2"},
+		},
+	}
+
+	MergeA2AConfig(base, override)
+
+	if len(base.Auth.APIKeys) != 4 {
+		t.Fatalf("expected 4 merged APIKeys, got %d: %v", len(base.Auth.APIKeys), base.Auth.APIKeys)
+	}
+	// Verify instance keys were appended
+	if base.Auth.APIKeys[2] != "instance-key-1" || base.Auth.APIKeys[3] != "instance-key-2" {
+		t.Errorf("instance keys not appended correctly: %v", base.Auth.APIKeys)
+	}
+}
+
 func TestLoadA2AOverrideInvalidYAML(t *testing.T) {
 	dir := t.TempDir()
 	ggcodeDir := filepath.Join(dir, ".ggcode")
