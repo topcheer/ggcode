@@ -62,9 +62,17 @@ func TestCriteriaDriftFiresOnce(t *testing.T) {
 		t.Fatal("expected first warning")
 	}
 
+	// Same indicators without new categories — warnCount already 1,
+	// but threshold is still met so a second warning fires (warnCount < cdMaxWarns=2).
 	second := c.maybeWarn(3)
-	if second != "" {
-		t.Fatal("expected no second warning (fired flag)")
+	if second == "" {
+		t.Fatal("expected second warning (warnCount=1 < cdMaxWarns=2)")
+	}
+
+	// Third call should be blocked by warnCount >= cdMaxWarns
+	third := c.maybeWarn(4)
+	if third != "" {
+		t.Fatal("expected no third warning (warnCount >= cdMaxWarns)")
 	}
 }
 
@@ -76,13 +84,11 @@ func TestCriteriaDriftMaxWarns(t *testing.T) {
 	c.recordAssistantText(text1, 1)
 	_ = c.maybeWarn(2)
 
-	// Reset fired to simulate a second trigger path
-	c.fired = false
+	// Add new drift categories to trigger a second warning
 	c.recordAssistantText("Is really a separate concern. Good enough for now.", 3)
 	_ = c.maybeWarn(4)
 
-	// Third attempt should be blocked by maxWarns
-	c.fired = false
+	// Third attempt should be blocked by maxWarns (warnCount >= cdMaxWarns=2)
 	c.recordAssistantText("A simpler solution. Out of scope.", 5)
 	msg := c.maybeWarn(6)
 	if msg != "" {

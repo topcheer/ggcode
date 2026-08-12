@@ -50,9 +50,19 @@ var isePackagePrefixes = map[string]string{
 	"os":     "file/env I/O",
 	"http":   "network I/O",
 	"ioutil": "file I/O",
-	"fmt":    "I/O or panic",
 	"log":    "logging I/O",
 	"time":   "timer/sleep",
+}
+
+// iseFmtIOFuncs lists fmt functions that actually perform I/O.
+// Pure fmt functions (Sprintf, Errorf, Sprint) do NOT perform I/O
+// and should not be flagged as side effects in init().
+var iseFmtIOFuncs = map[string]bool{
+	"Print": true, "Printf": true, "Println": true,
+	"Fprint": true, "Fprintf": true, "Fprintln": true,
+	"Scan": true, "Scanf": true, "Scanln": true,
+	"Fscan": true, "Fscanf": true, "Fscanln": true,
+	"Sscan": true, "Sscanf": true, "Sscanln": true,
 }
 
 // iseFuncNames lists specific function calls that are definite side effects
@@ -149,6 +159,15 @@ func iseCheckSelectorCall(se *ast.SelectorExpr, fset *token.FileSet, warnings *[
 
 	// Check package-prefix patterns
 	if pkgName != "" {
+		// fmt package: only flag actual I/O functions, not pure functions
+		// like Sprintf, Errorf, Sprint that return values without side effects.
+		if pkgName == "fmt" {
+			if iseFmtIOFuncs[funcName] {
+				iseEmitPkgWarning(pkgName+"."+funcName, "I/O or panic", se, fset, warnings)
+				return
+			}
+			return // pure fmt function — no side effect
+		}
 		if desc, found := isePackagePrefixes[pkgName]; found {
 			iseEmitPkgWarning(pkgName+"."+funcName, desc, se, fset, warnings)
 			return

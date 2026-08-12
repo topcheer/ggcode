@@ -134,9 +134,10 @@ func findChannelSafetyIssues(src string) []channelSafetyInstance {
 
 // chanOp represents a single channel operation (close or send) found in source.
 type chanOp struct {
-	op   string // "close" or "send"
-	name string
-	pos  token.Pos
+	op       string // "close" or "send"
+	name     string
+	pos      token.Pos
+	deferred bool // true if inside a defer statement
 }
 
 // analyzeChannelOpsInFunc inspects a function body for channel safety issues.
@@ -148,6 +149,18 @@ func analyzeChannelOpsInFunc(fset *token.FileSet, body *ast.BlockStmt) []channel
 
 	ast.Inspect(body, func(node ast.Node) bool {
 		switch n := node.(type) {
+		case *ast.DeferStmt:
+			// Visit children of defer with a deferred flag.
+			ast.Inspect(n.Call, func(inner ast.Node) bool {
+				if ce, ok := inner.(*ast.CallExpr); ok && isCloseCall(ce) {
+					chName := channelNameFromArg(ce.Args[0])
+					if chName != "" {
+						ops = append(ops, chanOp{op: "close", name: chName, pos: ce.Pos(), deferred: true})
+					}
+				}
+				return true
+			})
+			return false // already handled children
 		case *ast.CallExpr:
 			if isCloseCall(n) {
 				chName := channelNameFromArg(n.Args[0])
@@ -239,6 +252,11 @@ func detectSendAfterClose(fset *token.FileSet, chName string, ops []chanOp) []ch
 	closed := false
 	for _, op := range ops {
 		if op.op == "close" {
+			// Deferred closes execute at function return — AFTER all sends.
+			// They cannot cause send-after-close panics.
+			if op.deferred {
+				continue
+			}
 			closed = true
 			continue
 		}

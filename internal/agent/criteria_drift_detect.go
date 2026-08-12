@@ -171,14 +171,13 @@ func (c *criteriaDriftState) maybeWarn(iter int) string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if c.fired || c.warnCount >= cdMaxWarns {
+	if c.warnCount >= cdMaxWarns {
 		return ""
 	}
 	if len(c.seenCategories) < cdThreshold {
 		return ""
 	}
 
-	c.fired = true
 	c.warnCount++
 
 	n := len(c.indicators)
