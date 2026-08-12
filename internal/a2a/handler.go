@@ -232,6 +232,14 @@ func (h *TaskHandler) continueTask(ctx context.Context, taskID string, input Mes
 	// execution reached input-required (a pseudo-terminal state).
 	task.done = make(chan struct{})
 
+	// Cancel the old context before creating a new one.
+	// The original execute() goroutine may still reach cleanupCancel,
+	// which would otherwise cancel this new context.
+	if oldCancel, ok := h.cancels[taskID]; ok {
+		oldCancel()
+		delete(h.cancels, taskID)
+	}
+
 	// Re-create the cancel context for the resumed execution.
 	taskCtx, cancel := context.WithTimeout(context.Background(), h.timeout)
 	h.cancels[taskID] = cancel

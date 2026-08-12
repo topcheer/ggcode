@@ -282,6 +282,7 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 				text = subagentRedactedReasoningPlaceholder
 			}
 			if sa, ok := cfg.Manager.Get(cfg.SubAgentID); ok {
+				sa.setActivity("reasoning", "", "")
 				sa.appendEvent(AgentEvent{
 					Type: AgentEventReasoning,
 					Text: text,

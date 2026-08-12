@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os/exec"
 	"runtime"
 	"strconv"
@@ -8,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // NotificationManager handles OS-level desktop notifications.
@@ -93,8 +95,11 @@ func (nm *NotificationManager) Notify(title, body string) {
 
 	// Also emit to frontend for in-app notification center
 	if ctx != nil {
-		if c, ok := ctx.(interface{}); ok {
-			_ = c // ctx is used by runtime.EventsEmit below
+		if wctx, ok := ctx.(context.Context); ok {
+			wailsruntime.EventsEmit(wctx, "notification", map[string]string{
+				"title": title,
+				"body":  body,
+			})
 		}
 	}
 }
