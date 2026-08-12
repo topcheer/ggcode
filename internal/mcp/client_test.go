@@ -163,6 +163,35 @@ func TestClientCloseIdempotent(t *testing.T) {
 	}
 }
 
+// TestClientCloseOAuthCleanup verifies that Close() actually invokes
+// oauthHandler.Close() on the first close call. This is a regression test
+// for issue #39 where Abort() was called before the c.closed check,
+// making the cleanup block dead code.
+func TestClientCloseOAuthCleanup(t *testing.T) {
+	c := NewClient("test", "echo", nil)
+
+	// Install an OAuthHandler so we can verify it gets closed.
+	h := NewOAuthHandler("test", "https://example.com", nil)
+	c.mu.Lock()
+	c.oauthHandler = h
+	c.mu.Unlock()
+
+	// Close should invoke oauthHandler.Close() and clear the field.
+	if err := c.Close(); err != nil {
+		t.Fatalf("Close() error: %v", err)
+	}
+
+	// After Close, oauthHandler should be nil (cleared in cleanup block).
+	// If Abort() is called before the c.closed check (the bug from #39),
+	// the cleanup block is skipped and oauthHandler remains set.
+	c.mu.Lock()
+	cleared := c.oauthHandler == nil
+	c.mu.Unlock()
+	if !cleared {
+		t.Error("oauthHandler was not cleared by Close() — cleanup block did not execute")
+	}
+}
+
 func TestClientName(t *testing.T) {
 	c := NewClient("myserver", "cmd", nil)
 	if c.Name() != "myserver" {
