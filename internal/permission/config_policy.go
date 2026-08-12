@@ -178,8 +178,9 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 				}
 			}
 		}
-		// Check sandbox for file tools
-		if isFileTool(toolName) {
+		// Check sandbox for file tools (including write-only tools like
+		// file_ops and batch_replace that mutate disk but aren't in isFileTool).
+		if isFileTool(toolName) || isWriteFileTool(toolName) {
 			for _, path := range extractFilePaths(input) {
 				if path != "" && !p.sandbox.Allowed(path) {
 					return Deny, nil
@@ -434,6 +435,12 @@ func extractFilePaths(input json.RawMessage) []string {
 					var s string
 					if err := json.Unmarshal(rawSrc, &s); err == nil && s != "" {
 						paths = append(paths, s)
+					}
+				}
+				if rawDst, ok := op["destination"]; ok {
+					var d string
+					if err := json.Unmarshal(rawDst, &d); err == nil && d != "" {
+						paths = append(paths, d)
 					}
 				}
 			}

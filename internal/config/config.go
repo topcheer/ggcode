@@ -1208,6 +1208,7 @@ func (c *Config) expandEnvWithLookup(lookup envLookupFunc) {
 	c.IM.STT.BaseURL = ExpandEnvWithLookup(c.IM.STT.BaseURL, lookup)
 	c.IM.STT.Model = ExpandEnvWithLookup(c.IM.STT.Model, lookup)
 	// A2A env expansion.
+	c.A2A.Auth.APIKey = ExpandEnvWithLookup(c.A2A.Auth.APIKey, lookup)
 
 	for i, k := range c.A2A.Auth.APIKeys {
 		c.A2A.Auth.APIKeys[i] = ExpandEnvWithLookup(k, lookup)

@@ -547,7 +547,7 @@ func TestIsReadOnlyTool_AllTools(t *testing.T) {
 		"lsp_incoming_calls", "lsp_outgoing_calls", "lsp_document_highlights",
 		"sleep", "git_status", "git_diff", "git_log", "git_show",
 		"git_blame", "git_branch_list", "git_remote", "git_stash_list",
-		"web_fetch", "web_search", "browser", "mobile_device",
+		"web_fetch", "web_search",
 		"task_list", "task_get", "plan_status",
 		"cron_list", "cron_get", "list_commands", "read_command_output",
 		"wait_command", "get_config", "runtime",
