@@ -54,6 +54,15 @@ func runOnboardAndRestart(cfg *config.Config) error {
 		cfg.Vendor = result.VendorID
 		cfg.Endpoint = result.EndpointID
 
+		// Sync preset vendor from DefaultConfig() if not already present.
+		// This handles fresh/minimal configs that don't have built-in presets.
+		if _, ok := cfg.Vendors[result.VendorID]; !ok {
+			dc := config.DefaultConfig()
+			if vc, ok := dc.Vendors[result.VendorID]; ok {
+				cfg.Vendors[result.VendorID] = vc
+			}
+		}
+
 		// Apply API key: set at vendor level.
 		if result.APIKey != "" {
 			vc, ok := cfg.Vendors[result.VendorID]
@@ -65,10 +74,13 @@ func runOnboardAndRestart(cfg *config.Config) error {
 
 		// Apply model.
 		cfg.Model = result.Model
-		ep, ok := cfg.Vendors[result.VendorID].Endpoints[result.EndpointID]
+		vc, ok := cfg.Vendors[result.VendorID]
 		if ok {
-			ep.SelectedModel = result.Model
-			cfg.Vendors[result.VendorID].Endpoints[result.EndpointID] = ep
+			if ep, ok := vc.Endpoints[result.EndpointID]; ok {
+				ep.SelectedModel = result.Model
+				vc.Endpoints[result.EndpointID] = ep
+				cfg.Vendors[result.VendorID] = vc
+			}
 		}
 	}
 
