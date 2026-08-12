@@ -86,6 +86,15 @@ func checkCopylock(filePath, oldContent, newContent string) []string {
 	// Delta-aware: only flag issues at positions not present in old content.
 	oldPositions := collectOldCopylockPositions(filePath, oldContent)
 
+	// First pass: count total new issues (excluding pre-existing ones)
+	var totalNewIssues int
+	for _, issue := range issues {
+		if !oldPositions[issue.pos.Line] {
+			totalNewIssues++
+		}
+	}
+
+	// Second pass: build warnings list with truncation
 	var warnings []string
 	for _, issue := range issues {
 		if oldPositions[issue.pos.Line] {
@@ -97,7 +106,7 @@ func checkCopylock(filePath, oldContent, newContent string) []string {
 		msg += "Pass/return it by pointer (*sync.Type) instead."
 		warnings = append(warnings, msg)
 		if len(warnings) >= maxCopylockWarnings {
-			warnings = append(warnings, fmt.Sprintf("...and %d more copylock issue(s)", len(issues)-len(warnings)))
+			warnings = append(warnings, fmt.Sprintf("...and %d more copylock issue(s)", totalNewIssues-len(warnings)))
 			break
 		}
 	}
