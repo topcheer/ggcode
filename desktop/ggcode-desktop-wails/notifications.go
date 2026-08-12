@@ -153,9 +153,11 @@ func (nm *NotificationManager) showOSNotification(title, body string) {
 
 func (nm *NotificationManager) notifyMacOS(title, body string) {
 	// Use osascript to display a native notification.
-	// Escape double quotes in the body to prevent script injection.
-	escapedTitle := strings.ReplaceAll(title, `"`, `\"`)
-	escapedBody := strings.ReplaceAll(body, `"`, `\"`)
+	// Escape backslashes first, then double quotes to prevent script injection.
+	escapedTitle := strings.ReplaceAll(title, `\`, `\\`)
+	escapedBody := strings.ReplaceAll(body, `\`, `\\`)
+	escapedTitle = strings.ReplaceAll(escapedTitle, `"`, `\"`)
+	escapedBody = strings.ReplaceAll(escapedBody, `"`, `\"`)
 	script := "display notification \"" + escapedBody + "\" with title \"" + escapedTitle + "\" sound name \"Glass\""
 	cmd := exec.Command("osascript", "-e", script)
 	if err := cmd.Run(); err != nil {

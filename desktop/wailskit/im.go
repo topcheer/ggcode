@@ -127,8 +127,11 @@ func SaveIMAdapter(name string, values map[string]string) error {
 		return fmt.Errorf("platform is required")
 	}
 
+	// Read enabled value from values map, default to true if not set
+	enabled := values["enabled"] != "false"
+
 	adapterCfg := config.IMAdapterConfig{
-		Enabled:   true,
+		Enabled:   enabled,
 		Platform:  platform,
 		Transport: values["transport"],
 		Command:   values["command"],

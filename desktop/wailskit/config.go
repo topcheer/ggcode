@@ -268,6 +268,28 @@ func UpdateConfig(values map[string]interface{}) error {
 	if v, ok := values["a2aPort"].(float64); ok {
 		cfg.A2A.Port = int(v)
 	}
+	if v, ok := values["subAgentTimeout"].(string); ok {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.SubAgents.Timeout = d
+		}
+	}
+	if v, ok := values["swarmTimeout"].(string); ok {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.Swarm.TeammateTimeout = d
+		}
+	}
+	if v, ok := values["a2aHost"].(string); ok {
+		cfg.A2A.Host = v
+	}
+	if v, ok := values["knightEnabled"].(bool); ok {
+		cfg.KnightConfig.Enabled = v
+	}
+	if v, ok := values["knightTrustLevel"].(string); ok {
+		cfg.KnightConfig.TrustLevel = v
+	}
+	if v, ok := values["sidebarVisible"].(bool); ok {
+		cfg.UI.SidebarVisible = &v
+	}
 
 	return cfg.Save()
 }
@@ -551,6 +573,7 @@ func TestEndpointConnection(protocol, baseURL, apiKey string) (*TestEndpointResu
 }
 
 // AddCustomEndpoint adds a new endpoint to a vendor in the config and saves.
+// If an endpoint with the same name already exists, only the provided fields are updated.
 func AddCustomEndpoint(vendor, name, protocol, baseURL, apiKey string) error {
 	globalMu.Lock()
 	defer globalMu.Unlock()
@@ -565,12 +588,21 @@ func AddCustomEndpoint(vendor, name, protocol, baseURL, apiKey string) error {
 		cfg.Vendors[vendor] = vc
 	}
 
-	vc.Endpoints[name] = config.EndpointConfig{
-		DisplayName: name,
-		Protocol:    protocol,
-		BaseURL:     baseURL,
-		APIKey:      apiKey,
+	// Load existing config and patch only provided fields
+	ep := vc.Endpoints[name]
+	if protocol != "" {
+		ep.Protocol = protocol
 	}
+	if baseURL != "" {
+		ep.BaseURL = baseURL
+	}
+	if apiKey != "" {
+		ep.APIKey = apiKey
+	}
+	if name != "" {
+		ep.DisplayName = name
+	}
+	vc.Endpoints[name] = ep
 	cfg.Vendors[vendor] = vc
 	return cfg.Save()
 }

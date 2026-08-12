@@ -72,6 +72,9 @@ func checkValueRecvMutation(filePath, oldContent, newContent string) []string {
 		return nil
 	}
 
+	// Collect existing mutations from oldContent for delta-aware filtering
+	oldMutations := vrmCollectMutations(oldContent)
+
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, filePath, newContent, 0)
 	if err != nil || file == nil {
@@ -87,7 +90,7 @@ func checkValueRecvMutation(filePath, oldContent, newContent string) []string {
 		if !ok {
 			continue
 		}
-		vrmCheckFunc(fn, fset, filePath, &issues)
+		vrmCheckFunc(fn, fset, filePath, &issues, oldMutations)
 	}
 
 	if len(issues) >= maxValueRecvMutationWarnings {
@@ -98,8 +101,9 @@ func checkValueRecvMutation(filePath, oldContent, newContent string) []string {
 }
 
 // vrmCheckFunc checks a single function declaration for value-receiver
-// mutations and appends any warnings to issues.
-func vrmCheckFunc(fn *ast.FuncDecl, fset *token.FileSet, filePath string, issues *[]string) {
+// mutations and appends any warnings to issues. Delta-aware: skips functions
+// that already had mutations in oldContent.
+func vrmCheckFunc(fn *ast.FuncDecl, fset *token.FileSet, filePath string, issues *[]string, oldMutations map[string]bool) {
 	if fn.Recv == nil || len(fn.Recv.List) == 0 || fn.Body == nil {
 		return
 	}
@@ -107,7 +111,14 @@ func vrmCheckFunc(fn *ast.FuncDecl, fset *token.FileSet, filePath string, issues
 	if !isValueReceiver || recvName == "" || recvName == "_" {
 		return
 	}
+
+	// Check if this function already had mutations in oldContent
 	typeName := vrmReceiverTypeShort(fn.Recv.List[0].Type)
+	sig := typeName + "." + fn.Name.Name
+	if oldMutations != nil && oldMutations[sig] {
+		return // Skip - this mutation already existed
+	}
+
 	for _, msg := range vrmFindReceiverMutations(fn.Body, recvName) {
 		if len(*issues) >= maxValueRecvMutationWarnings {
 			return
@@ -120,6 +131,35 @@ func vrmCheckFunc(fn *ast.FuncDecl, fset *token.FileSet, filePath string, issues
 			fn.Name.Name, recvName, msg.field, typeName,
 		))
 	}
+}
+
+// vrmCollectMutations parses source and returns a set of "TypeName.FuncName"
+// signatures that already have value-receiver mutations (for delta-aware suppression).
+func vrmCollectMutations(src string) map[string]bool {
+	if strings.TrimSpace(src) == "" {
+		return nil
+	}
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "", src, 0)
+	if err != nil || file == nil {
+		return nil
+	}
+	result := make(map[string]bool)
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Recv == nil || len(fn.Recv.List) == 0 || fn.Body == nil {
+			continue
+		}
+		recvName, isValueReceiver := vrmExtractReceiverName(fn.Recv.List[0])
+		if !isValueReceiver || recvName == "" || recvName == "_" {
+			continue
+		}
+		if len(vrmFindReceiverMutations(fn.Body, recvName)) > 0 {
+			typeName := vrmReceiverTypeShort(fn.Recv.List[0].Type)
+			result[typeName+"."+fn.Name.Name] = true
+		}
+	}
+	return result
 }
 
 // vrmMutation records where a receiver field was mutated.

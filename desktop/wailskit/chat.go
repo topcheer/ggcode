@@ -112,6 +112,9 @@ type ChatBridge struct {
 	// IM outbound push — same as Fyne agentBridge.Emitter
 	Emitter *im.IMEmitter
 
+	// Idempotency guard for finishRun
+	finished bool
+
 	// IM round accumulator for emitter (mirrors Fyne agentBridge.imRound)
 	imRound agentruntime.IMRoundState
 
@@ -546,6 +549,15 @@ func (b *ChatBridge) Cancel() {
 // status to mobile, emit run_done to frontend, and notify LAN Chat peers.
 // err is the agent run result (may be nil for success or context.Canceled).
 func (b *ChatBridge) finishRun(err error) {
+	// Idempotency guard: prevent duplicate cleanup if finishRun is called multiple times
+	b.mu.Lock()
+	if b.finished {
+		b.mu.Unlock()
+		return
+	}
+	b.finished = true
+	b.mu.Unlock()
+
 	b.persistRunMessages()
 
 	// Flush tunnel state
