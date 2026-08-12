@@ -299,14 +299,42 @@ func targetsMatch(stated, actual string) bool {
 	if statedBase != "" && statedBase == actualBase {
 		return true
 	}
-	// Substring containment
-	if len(stated) >= 4 && strings.Contains(actual, stated) {
+	// Substring containment with path-component boundary check.
+	// The match must occur at a path separator (/, _, ., -) or string
+	// boundary to avoid false matches like "log.go" matching "dialog.go".
+	if len(stated) >= 4 && boundaryContains(actual, stated) {
 		return true
 	}
-	if len(actual) >= 4 && strings.Contains(stated, actual) {
+	if len(actual) >= 4 && boundaryContains(stated, actual) {
 		return true
 	}
 	return false
+}
+
+// boundaryContains checks if needle appears in haystack at a word/path boundary.
+// A valid match must be preceded by start-of-string or a delimiter (/, _, ., -)
+// and followed by end-of-string or a delimiter. This prevents "log.go" matching
+// "dialog.go" while still allowing "agent" to match "internal/agent/agent.go".
+func boundaryContains(haystack, needle string) bool {
+	searchStart := 0
+	for {
+		idx := strings.Index(haystack[searchStart:], needle)
+		if idx < 0 {
+			return false
+		}
+		idx += searchStart
+		beforeOK := idx == 0 || isPathDelimiter(haystack[idx-1])
+		afterIdx := idx + len(needle)
+		afterOK := afterIdx >= len(haystack) || isPathDelimiter(haystack[afterIdx])
+		if beforeOK && afterOK {
+			return true
+		}
+		searchStart = idx + 1
+	}
+}
+
+func isPathDelimiter(ch byte) bool {
+	return ch == '/' || ch == '_' || ch == '.' || ch == '-'
 }
 
 // maybeWarnToolTargetMismatch is the entry point called from the agent loop.

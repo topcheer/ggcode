@@ -135,14 +135,33 @@ func (p *prematureSuccessState) recordToolCall(toolName string, args map[string]
 }
 
 // psIsVerifyCommand checks if a command string contains verification patterns.
+// Uses token-based matching for single-word patterns to avoid false matches
+// like "check" matching "checkout" or "verify" matching "verify-pack".
 func psIsVerifyCommand(cmd string) bool {
 	if cmd == "" {
 		return false
 	}
 	lower := strings.ToLower(cmd)
+	tokens := strings.Fields(lower)
 	for _, pat := range verifyCmdPatterns {
-		if strings.Contains(lower, pat) {
-			return true
+		// Multi-word patterns (with space) use substring match — they're
+		// specific enough already (e.g. "go test", "npm run").
+		if strings.Contains(pat, " ") {
+			if strings.Contains(lower, pat) {
+				return true
+			}
+			continue
+		}
+		// Single-word patterns: check as complete token to avoid
+		// false positives like "check" matching "checkout".
+		for _, t := range tokens {
+			if t == pat {
+				return true
+			}
+			// Allow patterns followed by - or _ (e.g. "build-all", "check_ci")
+			if strings.HasPrefix(t, pat+"-") || strings.HasPrefix(t, pat+"_") {
+				return true
+			}
 		}
 	}
 	return false
