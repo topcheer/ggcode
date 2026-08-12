@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/commands"
@@ -157,8 +158,9 @@ func dirEntries(dir string) []os.DirEntry {
 }
 
 // computeContentHash reads all watched skill files and produces a SHA-256
-// hash of their concatenated content. This is used as a secondary check:
-// only trigger a reload when file contents actually change, not just mtimes.
+// hash of their concatenated body (frontmatter stripped). This avoids
+// detecting volatile frontmatter fields like last_prompt_exposure or
+// prompt_exposure_count that change on every prompt injection.
 func (w *SkillHotReload) computeContentHash() string {
 	var paths []string
 	for _, dir := range w.dirs {
@@ -174,7 +176,22 @@ func (w *SkillHotReload) computeContentHash() string {
 		if err != nil {
 			continue
 		}
-		h.Write(data)
+		h.Write([]byte(stripFrontmatter(string(data))))
+		h.Write([]byte{0})
 	}
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+// stripFrontmatter removes YAML frontmatter (--- ... ---) from markdown content.
+// This is used by computeContentHash to ignore volatile frontmatter fields.
+func stripFrontmatter(content string) string {
+	if !strings.HasPrefix(content, "---\n") {
+		return content
+	}
+	rest := content[4:]
+	idx := strings.Index(rest, "\n---\n")
+	if idx < 0 {
+		return content
+	}
+	return rest[idx+5:]
 }
