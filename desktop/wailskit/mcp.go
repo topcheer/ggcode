@@ -140,9 +140,11 @@ func AddMCPServer(values map[string]string) error {
 		URL:     values["url"],
 	}
 
-	// Parse args from space-separated string
+	// Parse args from space-separated string with quote awareness.
+	// strings.Fields splits quoted paths containing spaces (e.g. "/Users/John Doe/").
+	// parseShellArgs handles " and ' quoting correctly.
 	if argsStr := values["args"]; argsStr != "" {
-		serverCfg.Args = strings.Fields(argsStr)
+		serverCfg.Args = parseShellArgs(argsStr)
 	}
 
 	// Parse env_ prefixed keys into env map
@@ -181,4 +183,44 @@ func RemoveMCPServer(name string) error {
 		return fmt.Errorf("MCP server %q not found", name)
 	}
 	return cfg.SaveMCPServers()
+}
+
+// parseShellArgs splits a command-line argument string with quote awareness.
+// Unlike strings.Fields, it respects double and single quotes so arguments
+// containing spaces (e.g. "/Users/John Doe/config.json") are kept intact.
+func parseShellArgs(s string) []string {
+	var args []string
+	var current strings.Builder
+	var inQuote byte // 0 = no quote, '"' or '\'' = inside quote
+
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+
+		if inQuote != 0 {
+			if ch == inQuote {
+				inQuote = 0
+			} else {
+				current.WriteByte(ch)
+			}
+			continue
+		}
+
+		switch ch {
+		case '"', '\'':
+			inQuote = ch
+		case ' ', '\t', '\n', '\r':
+			if current.Len() > 0 {
+				args = append(args, current.String())
+				current.Reset()
+			}
+		default:
+			current.WriteByte(ch)
+		}
+	}
+
+	if current.Len() > 0 {
+		args = append(args, current.String())
+	}
+
+	return args
 }

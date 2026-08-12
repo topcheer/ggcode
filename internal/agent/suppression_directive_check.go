@@ -109,7 +109,7 @@ func checkSuppressionDirectives(fp, oldContent, newContent string) []string {
 		))
 
 		if len(warnings) >= maxSuppressWarnings {
-			warnings = append(warnings, fmt.Sprintf("[... %d more suppression directives found]", added))
+			warnings = append(warnings, fmt.Sprintf("[... more suppression directives found (showing first %d)]", maxSuppressWarnings))
 			break
 		}
 	}

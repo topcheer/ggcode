@@ -215,9 +215,9 @@ func countSkipDirectives(filePath, content string) int {
 	count := 0
 	for _, line := range strings.Split(content, "\n") {
 		for i, re := range skipDirectiveRegexes {
-			// skipDirectiveRegexes index 11 is the Ruby `^\s*skip\b` pattern.
-			// Only apply it to .rb files.
-			if i == 11 && ext != ".rb" {
+			// The Ruby `^\s*skip\b` pattern is at the end of the array.
+			// Only apply it to .rb files to avoid false positives (e.g. "skip := true" in Go).
+			if i == len(skipDirectiveRegexes)-1 && ext != ".rb" {
 				continue
 			}
 			if re.MatchString(line) {

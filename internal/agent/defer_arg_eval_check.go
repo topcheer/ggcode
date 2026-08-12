@@ -102,9 +102,9 @@ func daeShouldWarn(ds *ast.DeferStmt, fset *token.FileSet, warnings *[]string) b
 }
 
 // daeAppendTruncation adds truncation notice if warnings were capped.
-func daeAppendTruncation(_ []string, warnings *[]string) {
-	if len(*warnings) >= maxDeferArgWarnings {
-		*warnings = append(*warnings, fmt.Sprintf("... (%d defer argument warnings truncated)", maxDeferArgWarnings))
+func daeAppendTruncation(allFound []string, warnings *[]string) {
+	if len(allFound) >= maxDeferArgWarnings {
+		*warnings = append(*warnings, fmt.Sprintf("... (%d defer argument warnings truncated)", len(allFound)-maxDeferArgWarnings+1))
 	}
 }
 

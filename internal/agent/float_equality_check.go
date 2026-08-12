@@ -63,6 +63,7 @@ func checkFloatEquality(filePath, _, newContent string) []string {
 	floatVars := feqCollectFloatVars(file)
 
 	var warnings []string
+	totalFound := 0
 	for _, decl := range file.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
 		if !ok || fn.Body == nil {
@@ -77,6 +78,7 @@ func checkFloatEquality(filePath, _, newContent string) []string {
 				return true
 			}
 			if feqIsFloatOperand(bin.X, floatVars) || feqIsFloatOperand(bin.Y, floatVars) {
+				totalFound++
 				if len(warnings) < maxFloatEqWarnings {
 					pos := fset.Position(bin.Pos())
 					warnings = append(warnings, fmt.Sprintf(
@@ -89,8 +91,8 @@ func checkFloatEquality(filePath, _, newContent string) []string {
 		})
 	}
 
-	if len(warnings) >= maxFloatEqWarnings {
-		warnings = append(warnings, fmt.Sprintf("... (%d float comparison warnings truncated)", maxFloatEqWarnings))
+	if totalFound > maxFloatEqWarnings {
+		warnings = append(warnings, fmt.Sprintf("... (%d float comparison warnings truncated)", totalFound-maxFloatEqWarnings))
 	}
 	return warnings
 }

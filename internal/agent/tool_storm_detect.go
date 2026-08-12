@@ -66,6 +66,7 @@ package agent
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"sync"
 
@@ -260,7 +261,7 @@ func (s *toolStormState) maybeWarn() string {
 	for _, e := range s.window {
 		toolSet[e.ToolName] = true
 	}
-	minDistinct := int(float64(len(s.window)) * stormMinDiversityRatio)
+	minDistinct := int(math.Ceil(float64(len(s.window)) * stormMinDiversityRatio))
 	if minDistinct < 1 {
 		minDistinct = 1
 	}
