@@ -96,39 +96,51 @@ var ambiguityPatterns = []struct {
 	{"sorted list", ambSortOrder, "ascending or descending order"},
 
 	// Edge case behavior
-	{"empty", ambEdgeCase, "expected behavior for empty input/collection"},
+	{"empty input", ambEdgeCase, "expected behavior for empty input/collection"},
+	{"empty list", ambEdgeCase, "expected behavior for an empty list"},
+	{"empty array", ambEdgeCase, "expected behavior for an empty array"},
+	{"empty string", ambEdgeCase, "expected behavior for an empty string"},
 	{"nil case", ambEdgeCase, "whether nil should return error, empty result, or zero value"},
 	{"zero value", ambEdgeCase, "whether zero-value means absence or a valid input"},
-	{"negative", ambEdgeCase, "whether negative values are valid or should be rejected"},
+	{"negative numbers", ambEdgeCase, "whether negative values are valid or should be rejected"},
+	{"negative values", ambEdgeCase, "whether negative values are valid or should be rejected"},
 
 	// Error handling mode
 	{"error handling", ambErrorMode, "whether to return error, panic, or use default values on failure"},
 	{"handle error", ambErrorMode, "whether to retry, return error, or fail fast"},
 	{"on failure", ambErrorMode, "whether to retry, rollback, or propagate the error"},
-	{"fallback", ambErrorMode, "what the fallback value/behavior should be"},
+	{"fallback when", ambErrorMode, "what the fallback value/behavior should be"},
+	{"fallback if", ambErrorMode, "what the fallback value/behavior should be"},
+	{"fallback value", ambErrorMode, "what the fallback value/behavior should be"},
+	{"fallback mechanism", ambErrorMode, "what the fallback behavior should be"},
+	{"fallback to", ambErrorMode, "what the fallback value/behavior should be"},
+	{"add a fallback", ambErrorMode, "what the fallback value/behavior should be"},
 
 	// Vague scope
 	{"all occurrences", ambScopeVague, "whether this includes nested/overlapping matches"},
 	{"everything that", ambScopeVague, "the precise set of items to include"},
 	{"cleanup", ambScopeVague, "which specific files/patterns to clean"},
 	{"refactor", ambScopeVague, "the scope -- which files, how aggressive, preserving API or not"},
-	{"optimize", ambScopeVague, "the target metric: speed, memory, readability, or binary size"},
+	{"optimize for", ambScopeVague, "the target metric: speed, memory, readability, or binary size"},
 
 	// Vague quantity
-	{"some", ambQuantityVague, "how many items, and by what criteria"},
+	{"some of the", ambQuantityVague, "how many items, and by what criteria"},
 	{"a few", ambQuantityVague, "the exact count or selection criteria"},
 	{"recent", ambQuantityVague, "the time window or count for 'recent'"},
 	{"latest", ambQuantityVague, "how many of the latest items"},
 	{"oldest", ambQuantityVague, "how many of the oldest items"},
 
 	// Vague direction (for modifications)
-	{"improve", ambDirectionVague, "improve toward what goal -- performance, readability, security?"},
+	{"improve the", ambDirectionVague, "improve toward what goal -- performance, readability, security?"},
+	{"improve its", ambDirectionVague, "improve toward what goal -- performance, readability, security?"},
 	{"enhance", ambDirectionVague, "enhance in what way specifically"},
 	{"better", ambDirectionVague, "better by what metric"},
-	{"simplify", ambDirectionVague, "simplify toward what end -- fewer lines, fewer dependencies, clearer logic?"},
+	{"simplify the", ambDirectionVague, "simplify toward what end -- fewer lines, fewer dependencies, clearer logic?"},
+	{"simplify it", ambDirectionVague, "simplify toward what end -- fewer lines, fewer dependencies, clearer logic?"},
 
 	// Vague naming
-	{"rename", ambNamingVague, "the new name convention and whether to update all references"},
+	{"rename the", ambNamingVague, "the new name convention and whether to update all references"},
+	{"rename it", ambNamingVague, "the new name convention and whether to update all references"},
 	{"rename to something", ambNamingVague, "the specific target name"},
 }
 

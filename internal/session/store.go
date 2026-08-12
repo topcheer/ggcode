@@ -1189,15 +1189,32 @@ func (s *JSONLStore) runMaintenance() {
 		s.indexDirty = true
 		return
 	}
-	// Merge: keep entries from currentIdx that are still valid, add entries
-	// from validIdx that are missing from currentIdx.
+	// Merge: keep entries that survived pruning (validIdx) plus entries
+	// added by other processes after our initial load (in currentIdx but
+	// not in our original idx). Drop entries we pruned (in original idx
+	// but not in validIdx).
+	originalSet := make(map[string]bool, len(idx))
+	for _, e := range idx {
+		originalSet[e.ID] = true
+	}
 	validSet := make(map[string]bool, len(validIdx))
 	for _, e := range validIdx {
 		validSet[e.ID] = true
 	}
-	merged := make([]indexEntry, 0, len(currentIdx))
+	currentSet := make(map[string]bool, len(currentIdx))
 	for _, e := range currentIdx {
-		if validSet[e.ID] {
+		currentSet[e.ID] = true
+	}
+	merged := make([]indexEntry, 0, len(currentIdx))
+	// From currentIdx: keep if it survived pruning OR was added by another process.
+	for _, e := range currentIdx {
+		if validSet[e.ID] || !originalSet[e.ID] {
+			merged = append(merged, e)
+		}
+	}
+	// From validIdx: add any not already in currentIdx (deleted by other process).
+	for _, e := range validIdx {
+		if !currentSet[e.ID] {
 			merged = append(merged, e)
 		}
 	}
@@ -1212,7 +1229,7 @@ func (s *JSONLStore) pruneInvalidIndexEntries(idx []indexEntry) ([]indexEntry, b
 	cleaned := false
 	validIdx := make([]indexEntry, 0, len(idx))
 	for _, e := range idx {
-		ses, loadErr := s.loadSession(e.ID)
+		ses, loadErr := s.loadSessionFull(e.ID)
 		if loadErr != nil {
 			_ = os.Remove(s.sessionPath(e.ID))
 			cleaned = true
@@ -1226,6 +1243,16 @@ func (s *JSONLStore) pruneInvalidIndexEntries(idx []indexEntry) ([]indexEntry, b
 		validIdx = append(validIdx, e)
 	}
 	return validIdx, cleaned
+}
+
+// loadSessionFull loads a session with fullLoad=true, bypassing time-windowed
+// message loading. This is used for validation before deletion (e.g., in
+// pruneInvalidIndexEntries) to ensure we don't delete sessions that have user
+// interaction merely because their tail messages don't include a user message.
+// Uses a lightweight clone to avoid racing on s.fullLoad.
+func (s *JSONLStore) loadSessionFull(id string) (*Session, error) {
+	clone := &JSONLStore{dir: s.dir, fullLoad: true}
+	return clone.loadSession(id)
 }
 
 // RepairIndex scans the sessions directory and reconciles with the index.

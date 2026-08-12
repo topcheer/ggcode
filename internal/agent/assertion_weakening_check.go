@@ -261,8 +261,14 @@ func detectPolarityFlip(oldLine, newLine string) string {
 // (e.g., == to !=, > to <=).
 func detectComparisonFlip(oldLine, newLine string) string {
 	for _, pair := range comparisonFlips {
-		// Check if old has "from" operator and new has "to" operator.
-		if findOperatorNotInAssert(oldLine, pair.from) >= 0 && findOperatorNotInAssert(newLine, pair.to) >= 0 {
+		// Strict A->B flip: old has "from" but NOT "to", new has "to" but NOT "from".
+		// This prevents false positives on multi-condition lines where one
+		// operator is retained and a different one changes.
+		oldHasFrom := findOperatorNotInAssert(oldLine, pair.from) >= 0
+		oldHasTo := findOperatorNotInAssert(oldLine, pair.to) >= 0
+		newHasTo := findOperatorNotInAssert(newLine, pair.to) >= 0
+		newHasFrom := findOperatorNotInAssert(newLine, pair.from) >= 0
+		if oldHasFrom && !oldHasTo && newHasTo && !newHasFrom {
 			return fmt.Sprintf("Comparison operator flipped: %q -> %q. This inverts the assertion's direction.", pair.from, pair.to)
 		}
 	}

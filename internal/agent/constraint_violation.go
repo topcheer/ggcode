@@ -220,24 +220,39 @@ func cvPathMatchesPattern(path, pattern string) bool {
 	if pattern == "" {
 		return false
 	}
-	// Normalize: strip leading slashes for flexible matching.
+	// Normalize: strip leading/trailing slashes for flexible matching.
 	p := strings.TrimPrefix(path, "/")
 	pat := strings.TrimPrefix(pattern, "/")
+	pat = strings.TrimSuffix(pat, "/")
 
 	// Direct prefix match.
 	if strings.HasPrefix(p, pat) {
 		return true
 	}
-	// Path component match: the pattern is a directory/module name
-	// that appears as a path component.
+	// Path component match: pattern is a directory/module name.
+	// Matches as a complete path segment (e.g., "auth" matches
+	// "internal/auth/handler.go" but NOT "internal/authorization/handler.go").
+	// Also matches compound path segments at word boundaries using
+	// delimiters _, -, . (e.g., "test" matches "foo_test" or "test_bar"
+	// but not "testing" or "latest").
 	parts := strings.Split(p, "/")
 	for _, part := range parts {
 		if part == pat {
 			return true
 		}
+		if len(pat) >= 3 {
+			tokens := strings.FieldsFunc(part, func(r rune) bool {
+				return r == '_' || r == '-' || r == '.'
+			})
+			for _, tok := range tokens {
+				if tok == pat {
+					return true
+				}
+			}
+		}
 	}
-	// Substring match for module names (e.g., "auth" matching "internal/auth/").
-	if strings.Contains(p, pat) && len(pat) >= 3 {
+	// Also check if pattern is a directory prefix.
+	if strings.HasPrefix(p, pat+"/") || strings.HasPrefix(pat, p+"/") {
 		return true
 	}
 	return false
