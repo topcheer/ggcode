@@ -32,13 +32,13 @@ export function DeleteCronJob(arg1:string):Promise<void>;
 
 export function DeleteSession(arg1:string):Promise<void>;
 
-export function ExportSessionAsJSON(arg1:string):Promise<string>;
-
-export function ExportSessionAsMarkdown(arg1:string):Promise<string>;
-
 export function DrainLogStream():Promise<string>;
 
 export function DrainStreamEvents():Promise<Array<main.StreamEventEnvelope>>;
+
+export function ExportSessionAsJSON(arg1:string):Promise<string>;
+
+export function ExportSessionAsMarkdown(arg1:string):Promise<string>;
 
 export function FetchModels(arg1:string,arg2:string,arg3:string,arg4:string):Promise<Array<string>>;
 
@@ -58,9 +58,9 @@ export function GetCurrentSessionID():Promise<string>;
 
 export function GetEndpointDetails(arg1:string,arg2:string):Promise<wailskit.EndpointDetails>;
 
-export function GetFontZoom():Promise<number>;
-
 export function GetEndpoints(arg1:string):Promise<Array<wailskit.EndpointInfo>>;
+
+export function GetFontZoom():Promise<number>;
 
 export function GetHooks():Promise<hooks.HookConfig>;
 
@@ -86,6 +86,8 @@ export function GetSessionLimits():Promise<wailskit.SessionLimitInfo>;
 
 export function GetTeamBoard():Promise<Array<swarm.TeamBoardSnapshot>>;
 
+export function GetUnreadNotifications():Promise<number>;
+
 export function GetVendorPresets():Promise<Array<wailskit.VendorPresetInfo>>;
 
 export function GetVendors():Promise<Array<string>>;
@@ -94,13 +96,13 @@ export function GetVersion():Promise<string>;
 
 export function GetWorkDir():Promise<string>;
 
-export function SetFontZoom(arg1:number):Promise<number>;
-
-export function SetGlobalHotkeyEnabled(arg1:boolean):Promise<void>;
-
 export function InitWorkspace(arg1:string):Promise<void>;
 
 export function InstallLSPServer(arg1:string,arg2:string):Promise<wailskit.LSPInstallResult>;
+
+export function IsAlwaysOnTop():Promise<boolean>;
+
+export function IsGlobalHotkeyEnabled():Promise<boolean>;
 
 export function IsSharing():Promise<boolean>;
 
@@ -125,10 +127,6 @@ export function LanChatSend(arg1:string,arg2:string,arg3:string,arg4:boolean):Pr
 export function LanChatSetApprovalPolicy(arg1:string,arg2:string):Promise<void>;
 
 export function LanChatSetNick(arg1:string):Promise<void>;
-
-export function IsAlwaysOnTop():Promise<boolean>;
-
-export function IsGlobalHotkeyEnabled():Promise<boolean>;
 
 export function ListCronJobs():Promise<Array<wailskit.CronJobInfo>>;
 
@@ -182,11 +180,11 @@ export function SaveAPIKey(arg1:string,arg2:string,arg3:string):Promise<void>;
 
 export function SaveDefaultMode(arg1:string):Promise<void>;
 
+export function SaveExportedFile(arg1:string,arg2:string):Promise<string>;
+
 export function SaveHooks(arg1:hooks.HookConfig):Promise<void>;
 
 export function SaveIMAdapter(arg1:string,arg2:Record<string, string>):Promise<void>;
-
-export function SaveExportedFile(arg1:string,arg2:string):Promise<string>;
 
 export function SelectDirectory():Promise<string>;
 
@@ -198,11 +196,17 @@ export function SendMessageWithImages(arg1:string,arg2:Array<main.PastedImage>):
 
 export function SetEndpointLimits(arg1:string,arg2:string,arg3:number,arg4:number):Promise<void>;
 
+export function SetFontZoom(arg1:number):Promise<number>;
+
+export function SetGlobalHotkeyEnabled(arg1:boolean):Promise<void>;
+
 export function SetIMAdapterEnabled(arg1:string,arg2:boolean):Promise<void>;
 
 export function SetMCPServerEnabled(arg1:string,arg2:boolean):Promise<boolean>;
 
 export function SetModelLimits(arg1:string,arg2:string,arg3:string,arg4:number,arg5:number):Promise<void>;
+
+export function SetNotificationsEnabled(arg1:boolean):Promise<void>;
 
 export function SetPermissionMode(arg1:string):Promise<void>;
 
@@ -220,15 +224,17 @@ export function StopShare():Promise<void>;
 
 export function SwitchModel(arg1:string):Promise<void>;
 
+export function SystemAppearance():Promise<string>;
+
 export function TestEndpointConnection(arg1:string,arg2:string,arg3:string):Promise<wailskit.TestEndpointResult>;
 
 export function TestHookMatch(arg1:string,arg2:string,arg3:string,arg4:string):Promise<wailskit.TestHookMatchResult>;
 
 export function TestIMConnection(arg1:string):Promise<void>;
 
-export function ToggleLogStream(arg1:boolean):Promise<void>;
-
 export function ToggleAlwaysOnTop():Promise<boolean>;
+
+export function ToggleLogStream(arg1:boolean):Promise<void>;
 
 export function UnbindIMAdapter(arg1:string):Promise<void>;
 

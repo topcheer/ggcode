@@ -54,20 +54,20 @@ export function DeleteSession(arg1) {
   return window['go']['main']['App']['DeleteSession'](arg1);
 }
 
-export function ExportSessionAsJSON(arg1) {
-  return window['go']['main']['App']['ExportSessionAsJSON'](arg1);
-}
-
-export function ExportSessionAsMarkdown(arg1) {
-  return window['go']['main']['App']['ExportSessionAsMarkdown'](arg1);
-}
-
 export function DrainLogStream() {
   return window['go']['main']['App']['DrainLogStream']();
 }
 
 export function DrainStreamEvents() {
   return window['go']['main']['App']['DrainStreamEvents']();
+}
+
+export function ExportSessionAsJSON(arg1) {
+  return window['go']['main']['App']['ExportSessionAsJSON'](arg1);
+}
+
+export function ExportSessionAsMarkdown(arg1) {
+  return window['go']['main']['App']['ExportSessionAsMarkdown'](arg1);
 }
 
 export function FetchModels(arg1, arg2, arg3, arg4) {
@@ -162,6 +162,10 @@ export function GetTeamBoard() {
   return window['go']['main']['App']['GetTeamBoard']();
 }
 
+export function GetUnreadNotifications() {
+  return window['go']['main']['App']['GetUnreadNotifications']();
+}
+
 export function GetVendorPresets() {
   return window['go']['main']['App']['GetVendorPresets']();
 }
@@ -184,6 +188,14 @@ export function InitWorkspace(arg1) {
 
 export function InstallLSPServer(arg1, arg2) {
   return window['go']['main']['App']['InstallLSPServer'](arg1, arg2);
+}
+
+export function IsAlwaysOnTop() {
+  return window['go']['main']['App']['IsAlwaysOnTop']();
+}
+
+export function IsGlobalHotkeyEnabled() {
+  return window['go']['main']['App']['IsGlobalHotkeyEnabled']();
 }
 
 export function IsSharing() {
@@ -232,14 +244,6 @@ export function LanChatSetApprovalPolicy(arg1, arg2) {
 
 export function LanChatSetNick(arg1) {
   return window['go']['main']['App']['LanChatSetNick'](arg1);
-}
-
-export function IsAlwaysOnTop() {
-  return window['go']['main']['App']['IsAlwaysOnTop']();
-}
-
-export function IsGlobalHotkeyEnabled() {
-  return window['go']['main']['App']['IsGlobalHotkeyEnabled']();
 }
 
 export function ListCronJobs() {
@@ -346,16 +350,16 @@ export function SaveDefaultMode(arg1) {
   return window['go']['main']['App']['SaveDefaultMode'](arg1);
 }
 
+export function SaveExportedFile(arg1, arg2) {
+  return window['go']['main']['App']['SaveExportedFile'](arg1, arg2);
+}
+
 export function SaveHooks(arg1) {
   return window['go']['main']['App']['SaveHooks'](arg1);
 }
 
 export function SaveIMAdapter(arg1, arg2) {
   return window['go']['main']['App']['SaveIMAdapter'](arg1, arg2);
-}
-
-export function SaveExportedFile(arg1, arg2) {
-  return window['go']['main']['App']['SaveExportedFile'](arg1, arg2);
 }
 
 export function SelectDirectory() {
@@ -398,6 +402,10 @@ export function SetModelLimits(arg1, arg2, arg3, arg4, arg5) {
   return window['go']['main']['App']['SetModelLimits'](arg1, arg2, arg3, arg4, arg5);
 }
 
+export function SetNotificationsEnabled(arg1) {
+  return window['go']['main']['App']['SetNotificationsEnabled'](arg1);
+}
+
 export function SetPermissionMode(arg1) {
   return window['go']['main']['App']['SetPermissionMode'](arg1);
 }
@@ -430,6 +438,10 @@ export function SwitchModel(arg1) {
   return window['go']['main']['App']['SwitchModel'](arg1);
 }
 
+export function SystemAppearance() {
+  return window['go']['main']['App']['SystemAppearance']();
+}
+
 export function TestEndpointConnection(arg1, arg2, arg3) {
   return window['go']['main']['App']['TestEndpointConnection'](arg1, arg2, arg3);
 }
@@ -442,12 +454,12 @@ export function TestIMConnection(arg1) {
   return window['go']['main']['App']['TestIMConnection'](arg1);
 }
 
-export function ToggleLogStream(arg1) {
-  return window['go']['main']['App']['ToggleLogStream'](arg1);
-}
-
 export function ToggleAlwaysOnTop() {
   return window['go']['main']['App']['ToggleAlwaysOnTop']();
+}
+
+export function ToggleLogStream(arg1) {
+  return window['go']['main']['App']['ToggleLogStream'](arg1);
 }
 
 export function UnbindIMAdapter(arg1) {

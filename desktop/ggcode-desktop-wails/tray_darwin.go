@@ -8,6 +8,7 @@ package main
 
 #import <Cocoa/Cocoa.h>
 #import <objc/runtime.h>
+#import <dispatch/dispatch.h>
 
 // We use a global int that Obj-C writes and Go polls via a timer.
 // This avoids the complexity of //export with Obj-C classes.
@@ -24,7 +25,8 @@ static volatile int gcTrayAction = 0; // 0=none, 1=show, 2=newsession, 3=quit
 
 static NSStatusItem *gcStatusItem = nil;
 
-static void gcCreateTray() {
+// gcCreateTrayBody does the actual tray setup; must run on the main thread.
+static void gcCreateTrayBody() {
     @autoreleasepool {
         GCTrayDelegate *delegate = [[GCTrayDelegate alloc] init];
         gcStatusItem = [[NSStatusBar systemStatusBar] statusItemWithLength:NSVariableStatusItemLength];
@@ -68,12 +70,37 @@ static void gcCreateTray() {
     }
 }
 
-static void gcRemoveTray() {
+// gcCreateTray dispatches tray creation to the main thread.
+// NSStatusItem must be created on the main thread, but this function
+// may be called from a Go goroutine.
+static void gcCreateTray() {
+    if ([NSThread isMainThread]) {
+        gcCreateTrayBody();
+    } else {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            gcCreateTrayBody();
+        });
+    }
+}
+
+// gcRemoveTrayBody does the actual tray cleanup; must run on the main thread.
+static void gcRemoveTrayBody() {
     if (gcStatusItem) {
         [[NSStatusBar systemStatusBar] removeStatusItem:gcStatusItem];
         gcStatusItem = nil;
     }
     gcTrayAction = 0;
+}
+
+// gcRemoveTray dispatches tray removal to the main thread.
+static void gcRemoveTray() {
+    if ([NSThread isMainThread]) {
+        gcRemoveTrayBody();
+    } else {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            gcRemoveTrayBody();
+        });
+    }
 }
 
 static int gcPollTrayAction() {
