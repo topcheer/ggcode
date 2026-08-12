@@ -58,84 +58,34 @@ func (m *Model) restoreHistoryFromMessages(messages []provider.Message) {
 // auto-injected message rather than genuine user input. These are messages
 // injected by the agent loop as user-role messages:
 //   - Post-completion gate advisories (Code quality advisory, etc.)
-//   - Detector warnings ([Context Anchor], [Task Anchor], [Companion File
-//     Check], [Verify], [Rules — learned from past mistakes], etc.)
-//   - Prompt engineering hints ([prompt-ops], [MCP Ecosystem Intelligence], etc.)
-//   - Cron-triggered prompts
-//   - IM/chat relay messages
+//   - Detector warnings ([Context Anchor], [Task Anchor], etc.)
+//   - Prompt engineering hints ([prompt-ops], [MCP Ecosystem], etc.)
+//   - Cron-triggered prompts, IM relay messages
 //
-// The heuristic uses bracket-prefix detection and known opening phrases.
+// Strategy: Any message starting with "[" and containing a "]" within the
+// first 50 characters is treated as auto-injected. Genuine user input
+// almost never starts with a bracket prefix. This is intentionally
+// generic so new detector names are automatically covered.
 func isAutoInjectedUserMessage(text string) bool {
-	// Short texts (under ~30 chars) are almost certainly user input.
-	if len(text) < 30 {
+	// Short texts (under ~20 chars) are almost certainly user input.
+	if len(text) < 20 {
 		return false
 	}
 
-	// Check for common auto-injected bracket prefixes.
-	autoPrefixes := []string{
-		"[Context Anchor",
-		"[Task Anchor",
-		"[Companion File",
-		"[Rules —",
-		"[Rules -",
-		"[Verify]",
-		"[prompt-ops]",
-		"[MCP Ecosystem",
-		"[Performance regression",
-		"[error-compounding",
-		"[tool-storm]",
-		"[tool balance]",
-		"[Target Scatter",
-		"[Batch Opportunity",
-		"[Batch Coupling",
-		"[Foraging hint]",
-		"[context-hint]",
-		"[expired-read]",
-		"[causal-attribution]",
-		"[Feedback",
-		"[Assumption",
-		"[Anchor precision",
-		"[Failure Mode",
-		"[Attempt Brief",
-		"[Search result",
-		"[Post-write",
-		"[Cross-file",
-		"[Verification",
-		"[Test coverage",
-		"[Scope narrowness",
-		"[Pre-run",
-		"[Pre-commit",
-		"[Self-Correction",
-		"[Guidance",
-		"[Shell hint",
-		"[FinOps",
-		"[Stale context",
-		"[Silent",
-		"[Ungrounded",
-		"[False Premise",
-		"[Fulfillment",
-		"[Edit blocked",
-		"[Error guidance",
-		"[Changes",
-		"[shell-hint]",
-		"[Debug",
-		"[file-watch]",
-		"[query-convergence]",
-		"[Detector",
-		"[Trajectory",
-		"[Premature",
-		"[Context efficiency",
-		"[Reminder]",
-		"[Info-",
-	}
-	lower := text
-	for _, prefix := range autoPrefixes {
-		if strings.HasPrefix(lower, prefix) {
+	// Generic bracket-prefix filter: messages like "[Context Anchor] ...",
+	// "[prompt-ops] ...", "[Rules — ...]" are always auto-injected.
+	if text[0] == '[' {
+		// Check if there's a closing bracket within the first 50 chars.
+		head := text
+		if len(head) > 50 {
+			head = head[:50]
+		}
+		if strings.Contains(head, "]") {
 			return true
 		}
 	}
 
-	// Check for known opening phrases of injected advisories.
+	// Known opening phrases of injected advisories without bracket prefix.
 	knownPhrases := []string{
 		"Code quality advisory:",
 		"Before finishing:",
