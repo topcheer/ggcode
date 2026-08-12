@@ -448,9 +448,7 @@ func (s *Server) handleMessageStream(w http.ResponseWriter, r *http.Request, req
 		t, _ := s.handler.GetTask(task.ID)
 		s.sendSSE(w, flusher, req.ID, TaskStatusUpdateEvent{TaskID: t.ID, Status: t.Status, Final: t.Status.State.IsTerminal()})
 	case <-timer.C:
-		s.sendSSE(w, flusher, req.ID, map[string]interface{}{
-			"error": "task timed out",
-		})
+		s.sendSSEError(w, flusher, req.ID, -32001, "task timed out")
 	case <-r.Context().Done():
 		// Client disconnected.
 	}
@@ -583,9 +581,7 @@ func (s *Server) handleTaskResubscribe(w http.ResponseWriter, r *http.Request, r
 		t, _ := s.handler.GetTask(params.ID)
 		s.sendSSE(w, flusher, req.ID, TaskStatusUpdateEvent{TaskID: t.ID, Status: t.Status, Final: t.Status.State.IsTerminal()})
 	case <-timer.C:
-		s.sendSSE(w, flusher, req.ID, map[string]interface{}{
-			"error": "task timed out",
-		})
+		s.sendSSEError(w, flusher, req.ID, -32001, "task timed out")
 	case <-r.Context().Done():
 		// Client disconnected.
 	}
@@ -600,6 +596,18 @@ func (s *Server) sendSSE(w io.Writer, flusher http.Flusher, id json.RawMessage, 
 		JSONRPC: "2.0",
 		ID:      id,
 		Result:  data,
+	})
+	fmt.Fprintf(w, "data: %s\n\n", payload)
+	flusher.Flush()
+}
+
+// sendSSEError sends a JSON-RPC 2.0 error response via SSE. Per the spec,
+// errors must use the "error" member, not be nested inside "result".
+func (s *Server) sendSSEError(w io.Writer, flusher http.Flusher, id json.RawMessage, code int, message string) {
+	payload, _ := json.Marshal(JSONRPCResponse{
+		JSONRPC: "2.0",
+		ID:      id,
+		Error:   &JSONRPCError{Code: code, Message: message},
 	})
 	fmt.Fprintf(w, "data: %s\n\n", payload)
 	flusher.Flush()

@@ -74,6 +74,10 @@ func (t MultiEditFile) Execute(ctx context.Context, input json.RawMessage) (Resu
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
 	}
 
+	if args.FilePath == "" {
+		return Result{IsError: true, Content: "missing required parameter: file_path"}, nil
+	}
+
 	if len(args.Edits) == 0 {
 		return Result{IsError: true, Content: "edits array must not be empty"}, nil
 	}

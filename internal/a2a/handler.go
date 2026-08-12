@@ -755,12 +755,25 @@ func buildAgentPrompt(skill string, text string) string {
 // maxCompletedAge is the maximum time to keep terminal tasks in memory.
 const maxCompletedAge = 30 * time.Minute
 
+// maxInputRequiredAge is the maximum time to keep abandoned input-required tasks.
+// These are not terminal (the client may still send follow-up input), but if
+// left unattended they leak memory and cancel funcs indefinitely.
+const maxInputRequiredAge = 2 * time.Hour
+
 // cleanupExpiredTasksLocked removes terminal tasks older than maxCompletedAge.
+// Also removes abandoned input-required tasks older than maxInputRequiredAge.
 // Must be called with h.mu held.
 func (h *TaskHandler) cleanupExpiredTasksLocked() {
 	now := time.Now()
 	for id, t := range h.tasks {
 		if t.Status.IsTerminal() && now.Sub(t.UpdatedAt) > maxCompletedAge {
+			delete(h.tasks, id)
+			delete(h.cancels, id)
+		}
+		// Clean up abandoned input-required tasks that haven't been updated
+		// within maxInputRequiredAge. These are not terminal but if the client
+		// disconnected without follow-up, they leak memory forever.
+		if t.Status.State == TaskStateInputRequired && now.Sub(t.UpdatedAt) > maxInputRequiredAge {
 			delete(h.tasks, id)
 			delete(h.cancels, id)
 		}

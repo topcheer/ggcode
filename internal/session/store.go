@@ -902,16 +902,22 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 		// The summary message may appear anywhere in JSONL (async pre-compact timing).
 		// The extra messages (post-compaction) are identified by lastCpLastMsgID:
 		// everything AFTER that ID in the file is an "extra" message.
-		summaryIdx := -1
-		for i, mr := range allMessages {
-			if mr.Message != nil && mr.Message.ID == lastCpSummaryMsgID {
-				summaryIdx = i
+		//
+		// Search postCPEntries (which includes all messages regardless of the
+		// 24h time-window cutoff) so that checkpoint summaries written >24h ago
+		// are still found and used for context restoration.
+		var summaryMsg *provider.Message
+		var summaryMsgIdx int = -1
+		for i, entry := range postCPEntries {
+			if entry.recType == "message" && entry.record.Message != nil && entry.record.Message.ID == lastCpSummaryMsgID {
+				summaryMsg = entry.record.Message
+				summaryMsgIdx = i
 				break
 			}
 		}
-		if summaryIdx >= 0 {
+		if summaryMsg != nil && summaryMsgIdx >= 0 {
 			// Start with the summary message itself.
-			ses.ContextMessages = append(ses.ContextMessages, *allMessages[summaryIdx].Message)
+			ses.ContextMessages = append(ses.ContextMessages, *summaryMsg)
 			if lastCpLastMsgID != "" {
 				// Find extra messages: everything after lastCpLastMsgID.
 				extraStart := -1
@@ -935,20 +941,20 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 					// lost and the agent sees only the summary on reload.
 					// Load all messages after the summary as extra messages,
 					// same as the no-last_msg_id path below.
-					afterSummary := len(allMessages) - summaryIdx - 1
-					debug.Log("session", "loadSession %s: checkpoint last_msg_id %q not found in allMessages, using post-summary fallback (%d messages after summary)", id, lastCpLastMsgID, afterSummary)
-					for _, mr := range allMessages[summaryIdx+1:] {
-						if mr.Message != nil {
-							ses.ContextMessages = append(ses.ContextMessages, *mr.Message)
+					afterSummary := len(postCPEntries) - summaryMsgIdx - 1
+					debug.Log("session", "loadSession %s: checkpoint last_msg_id %q not found in postCPEntries, using post-summary fallback (%d entries after summary)", id, lastCpLastMsgID, afterSummary)
+					for _, entry := range postCPEntries[summaryMsgIdx+1:] {
+						if entry.recType == "message" && entry.record.Message != nil {
+							ses.ContextMessages = append(ses.ContextMessages, *entry.record.Message)
 						}
 					}
 				}
 			} else {
 				// No last_msg_id (migrated checkpoint): load all messages
 				// after the summary as extra messages.
-				for _, mr := range allMessages[summaryIdx+1:] {
-					if mr.Message != nil {
-						ses.ContextMessages = append(ses.ContextMessages, *mr.Message)
+				for _, entry := range postCPEntries[summaryMsgIdx+1:] {
+					if entry.recType == "message" && entry.record.Message != nil {
+						ses.ContextMessages = append(ses.ContextMessages, *entry.record.Message)
 					}
 				}
 			}
@@ -1231,8 +1237,10 @@ func (s *JSONLStore) pruneInvalidIndexEntries(idx []indexEntry) ([]indexEntry, b
 	for _, e := range idx {
 		ses, loadErr := s.loadSessionFull(e.ID)
 		if loadErr != nil {
-			_ = os.Remove(s.sessionPath(e.ID))
-			cleaned = true
+			// Transient I/O errors (network filesystem, permission, lock) must
+			// NOT cause permanent file deletion. Skip the index entry but keep
+			// the file on disk so it can be loaded on a subsequent attempt.
+			debug.Log("session", "pruneInvalidIndexEntries: skipping %s due to load error: %v", e.ID, loadErr)
 			continue
 		}
 		if !ses.HasUserInteraction() {

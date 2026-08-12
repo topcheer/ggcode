@@ -183,7 +183,10 @@ func (t *KnowledgeGraphTool) doAdd(s *kgStore, p *kgParams) (Result, error) {
 
 	now := time.Now()
 	if ex, ok := s.Nodes[id]; ok {
-		ex.Type, ex.Title, ex.Content, ex.Tags = nt, p.Title, p.Content, p.Tags
+		ex.Type, ex.Title, ex.Content = nt, p.Title, p.Content
+		if p.Tags != nil {
+			ex.Tags = p.Tags
+		}
 		if p.Status != "" {
 			ex.Status = p.Status
 		}
