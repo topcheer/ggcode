@@ -1100,7 +1100,10 @@ func (h *Hub) recordTransportResult(nodeID, transport string, success bool) {
 		ph.lastTCP = time.Now()
 		if success {
 			if !ph.tcpOK {
-				debug.Log("lanchat", "TCP recovered for %s", nodeID)
+				downDur := time.Since(ph.tcpRetryAt.Add(-tcpRetryInterval))
+				if downDur >= 2*tcpRetryInterval {
+					debug.Log("lanchat", "TCP recovered for %s (was down %v)", nodeID, downDur.Round(time.Second))
+				}
 			}
 			ph.tcpOK = true
 			ph.tcpFail = 0
@@ -1109,7 +1112,10 @@ func (h *Hub) recordTransportResult(nodeID, transport string, success bool) {
 			if ph.tcpOK {
 				ph.tcpOK = false
 				ph.tcpRetryAt = time.Now().Add(tcpRetryInterval)
-				debug.Log("lanchat", "TCP marked down for %s (retry in %v)", nodeID, tcpRetryInterval)
+				upDur := time.Since(ph.lastTCP)
+				if upDur >= 2*tcpRetryInterval {
+					debug.Log("lanchat", "TCP marked down for %s (up %v, retry in %v)", nodeID, upDur.Round(time.Second), tcpRetryInterval)
+				}
 			}
 		}
 	case "udp":

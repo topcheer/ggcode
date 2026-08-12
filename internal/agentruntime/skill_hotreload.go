@@ -102,11 +102,8 @@ func (w *SkillHotReload) checkAndReload(ctx context.Context) {
 func (w *SkillHotReload) computeSignature() string {
 	var entries []fileEntry
 	for _, dir := range w.dirs {
-		info, err := os.Stat(dir)
-		if err != nil {
-			continue
-		}
-		entries = append(entries, fileEntry{path: dir, mtime: info.ModTime().UnixNano()})
+		// Skip directory mtime — only watch file-level mtimes to avoid
+		// false positives from OS-level directory metadata changes.
 		collectFileEntries(dir, &entries)
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].path < entries[j].path })
@@ -123,6 +120,8 @@ func (w *SkillHotReload) computeSignature() string {
 
 // collectFileEntries scans dir for skill subdirectories (SKILL.md) and legacy
 // command files (*.md directly in the dir), appending their mtimes.
+// Directory mtimes are excluded from the signature because macOS can update
+// them for reasons unrelated to content (Spotlight indexing, attribute writes).
 func collectFileEntries(dir string, entries *[]fileEntry) {
 	dirEntries, err := os.ReadDir(dir)
 	if err != nil {

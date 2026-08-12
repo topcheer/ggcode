@@ -2,6 +2,8 @@ package agentruntime
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"time"
 
@@ -21,6 +23,7 @@ type MCPHotReload struct {
 	workingDir string // for MergeStartupServers
 	manager    *plugin.MCPManager
 	lastMod    time.Time
+	lastHash   string // content hash to detect real changes
 	interval   time.Duration
 }
 
@@ -67,6 +70,19 @@ func (w *MCPHotReload) checkAndReload(ctx context.Context) {
 		return
 	}
 
+	// Read content hash to avoid spurious reloads when mtime changes
+	// but the file content is identical (common with some editors/tools).
+	data, err := os.ReadFile(w.mcpPath)
+	if err != nil {
+		return
+	}
+	sum := sha256.Sum256(data)
+	hash := hex.EncodeToString(sum[:])
+	if hash == w.lastHash {
+		w.lastMod = info.ModTime()
+		return // content unchanged, just mtime bumped
+	}
+
 	// Debounce: wait a short window to let multi-write operations settle.
 	time.Sleep(500 * time.Millisecond)
 
@@ -75,6 +91,7 @@ func (w *MCPHotReload) checkAndReload(ctx context.Context) {
 		return
 	}
 	w.lastMod = info.ModTime()
+	w.lastHash = hash
 
 	debug.Log("mcp-hotreload", "change detected, reloading MCP servers")
 

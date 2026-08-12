@@ -27,6 +27,10 @@ const (
 	// re-reads git status, project files, etc. Short enough to stay fresh,
 	// long enough to avoid wasting CPU on busy repos.
 	sectionRefreshInterval = 10 * time.Second
+
+	// sectionIdleInterval is used when the last refresh produced no changes.
+	// This reduces idle-time I/O (git status, git log, etc.) by 3x.
+	sectionIdleInterval = 30 * time.Second
 )
 
 // SectionCollector holds cached prompt sections refreshed by a background goroutine.
@@ -41,6 +45,10 @@ type SectionCollector struct {
 	symbols       string
 	recentCommits string
 	deps          string
+
+	// idle tracking: if snapshot unchanged, use longer interval
+	lastSnapshot string
+	idle         bool
 
 	stop chan struct{}
 	done chan struct{}
@@ -105,9 +113,12 @@ func (sc *SectionCollector) Stop() {
 }
 
 // loop runs the periodic refresh until Stop is called.
+// When consecutive refreshes produce no changes, it backs off to
+// sectionIdleInterval to reduce idle-time I/O.
 func (sc *SectionCollector) loop() {
 	defer close(sc.done)
-	ticker := time.NewTicker(sectionRefreshInterval)
+	interval := sectionRefreshInterval
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -115,6 +126,14 @@ func (sc *SectionCollector) loop() {
 			return
 		case <-ticker.C:
 			sc.refresh()
+			newInterval := sectionRefreshInterval
+			if sc.idle {
+				newInterval = sectionIdleInterval
+			}
+			if newInterval != interval {
+				ticker.Reset(newInterval)
+				interval = newInterval
+			}
 		}
 	}
 }
@@ -167,7 +186,27 @@ func (sc *SectionCollector) refresh() {
 	sc.recentCommits = recentCommits
 	sc.mu.Unlock()
 
-	debug.Log("agentruntime", "section collector refreshed in %s", time.Since(start).Round(time.Millisecond))
+	// Check if anything actually changed
+	currentSig := overview + "\x00" + modified + "\x00" + commands + "\x00" +
+		toolchain + "\x00" + symbols + "\x00" + deps + "\x00" + recentCommits
+
+	sc.mu.Lock()
+	sc.overview = overview
+	sc.modified = modified
+	sc.commands = commands
+	sc.toolchain = toolchain
+	sc.symbols = symbols
+	sc.deps = deps
+	sc.recentCommits = recentCommits
+
+	if currentSig == sc.lastSnapshot {
+		sc.idle = true
+	} else {
+		sc.idle = false
+		sc.lastSnapshot = currentSig
+		debug.Log("agentruntime", "section collector refreshed in %s", time.Since(start).Round(time.Millisecond))
+	}
+	sc.mu.Unlock()
 }
 
 // GlobalSectionSnapshot returns the cached sections from the global collector.

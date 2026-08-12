@@ -112,6 +112,8 @@ type Manager struct {
 	onPersist                func(msg provider.Message) // called on every Add() for real-time JSONL persistence
 	toolDefinitionOverhead   int                        // tokens reserved for tool definitions (set by Agent)
 	pinned                   *PinnedContext             // user-pinned context that survives compaction
+	lastLoggedReserve        int                        // last logged effectiveOutputReserve value (suppress duplicate logs)
+	lastLoggedThreshold      int                        // last logged autoCompactThreshold value (suppress duplicate logs)
 }
 
 // NewManager creates a ContextManager with the given context window limit.
@@ -2127,8 +2129,11 @@ func (m *Manager) autoCompactThresholdLocked() int {
 	if threshold < minSummaryReserve {
 		result = minSummaryReserve
 	}
-	debug.Log("ctx", "autoCompactThreshold: contextWindow=%d outputReserve=%d rawThreshold=%d finalThreshold=%d",
-		m.contextWindow, reserve, threshold, result)
+	if m.lastLoggedThreshold != result {
+		debug.Log("ctx", "autoCompactThreshold: contextWindow=%d outputReserve=%d rawThreshold=%d finalThreshold=%d",
+			m.contextWindow, reserve, threshold, result)
+		m.lastLoggedThreshold = result
+	}
 	return result
 }
 
@@ -2163,8 +2168,11 @@ func (m *Manager) effectiveOutputReserveLocked() int {
 	if reserve > ceiling {
 		reserve = ceiling
 	}
-	debug.Log("ctx", "effectiveOutputReserve: contextWindow=%d userReserve=%d floor=%d ceiling=%d effective=%d",
-		m.contextWindow, m.outputReserve, floor, ceiling, reserve)
+	if m.lastLoggedReserve != reserve {
+		debug.Log("ctx", "effectiveOutputReserve: contextWindow=%d userReserve=%d floor=%d ceiling=%d effective=%d",
+			m.contextWindow, m.outputReserve, floor, ceiling, reserve)
+		m.lastLoggedReserve = reserve
+	}
 	return reserve
 }
 
