@@ -28,6 +28,11 @@ func (m *Model) rebuildConversationFromMessages(messages []provider.Message) {
 // restoreHistoryFromMessages extracts user text messages from a session
 // and populates the input history so the user can recall previous prompts
 // with ↑/↓ arrows after resuming a session.
+//
+// Only genuine user-typed messages are included. Auto-injected user-role
+// messages (from post-completion gates, detector warnings, cron prompts,
+// etc.) are filtered out via isAutoInjectedUserMessage() to avoid polluting
+// the input history navigation.
 func (m *Model) restoreHistoryFromMessages(messages []provider.Message) {
 	m.history = m.history[:0]
 	for _, msg := range messages {
@@ -42,11 +47,109 @@ func (m *Model) restoreHistoryFromMessages(messages []provider.Message) {
 				}
 			}
 		}
-		if text := strings.Join(parts, "\n\n"); text != "" {
+		if text := strings.Join(parts, "\n\n"); text != "" && !isAutoInjectedUserMessage(text) {
 			m.history = append(m.history, text)
 		}
 	}
 	m.historyIdx = len(m.history)
+}
+
+// isAutoInjectedUserMessage returns true if the text appears to be an
+// auto-injected message rather than genuine user input. These are messages
+// injected by the agent loop as user-role messages:
+//   - Post-completion gate advisories (Code quality advisory, etc.)
+//   - Detector warnings ([Context Anchor], [Task Anchor], [Companion File
+//     Check], [Verify], [Rules — learned from past mistakes], etc.)
+//   - Prompt engineering hints ([prompt-ops], [MCP Ecosystem Intelligence], etc.)
+//   - Cron-triggered prompts
+//   - IM/chat relay messages
+//
+// The heuristic uses bracket-prefix detection and known opening phrases.
+func isAutoInjectedUserMessage(text string) bool {
+	// Short texts (under ~30 chars) are almost certainly user input.
+	if len(text) < 30 {
+		return false
+	}
+
+	// Check for common auto-injected bracket prefixes.
+	autoPrefixes := []string{
+		"[Context Anchor",
+		"[Task Anchor",
+		"[Companion File",
+		"[Rules —",
+		"[Rules -",
+		"[Verify]",
+		"[prompt-ops]",
+		"[MCP Ecosystem",
+		"[Performance regression",
+		"[error-compounding",
+		"[tool-storm]",
+		"[tool balance]",
+		"[Target Scatter",
+		"[Batch Opportunity",
+		"[Batch Coupling",
+		"[Foraging hint]",
+		"[context-hint]",
+		"[expired-read]",
+		"[causal-attribution]",
+		"[Feedback",
+		"[Assumption",
+		"[Anchor precision",
+		"[Failure Mode",
+		"[Attempt Brief",
+		"[Search result",
+		"[Post-write",
+		"[Cross-file",
+		"[Verification",
+		"[Test coverage",
+		"[Scope narrowness",
+		"[Pre-run",
+		"[Pre-commit",
+		"[Self-Correction",
+		"[Guidance",
+		"[Shell hint",
+		"[FinOps",
+		"[Stale context",
+		"[Silent",
+		"[Ungrounded",
+		"[False Premise",
+		"[Fulfillment",
+		"[Edit blocked",
+		"[Error guidance",
+		"[Changes",
+		"[shell-hint]",
+		"[Debug",
+		"[file-watch]",
+		"[query-convergence]",
+		"[Detector",
+		"[Trajectory",
+		"[Premature",
+		"[Context efficiency",
+		"[Reminder]",
+		"[Info-",
+	}
+	lower := text
+	for _, prefix := range autoPrefixes {
+		if strings.HasPrefix(lower, prefix) {
+			return true
+		}
+	}
+
+	// Check for known opening phrases of injected advisories.
+	knownPhrases := []string{
+		"Code quality advisory:",
+		"Before finishing:",
+		"Before finishing your request",
+		"You are entering autopilot mode",
+		"You are in autopilot mode",
+	}
+	for _, phrase := range knownPhrases {
+		if strings.HasPrefix(text, phrase) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func (m *Model) renderConversationMessage(msg provider.Message, toolCalls map[string]resumedToolCall) {
