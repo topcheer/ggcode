@@ -90,18 +90,25 @@ func pathSignature(path string) string {
 }
 
 // commandSignature generalizes a command string for approval matching.
-// Extracts the first token (the binary name) as the key.
+// Uses the first two tokens (binary + first argument) as the key to prevent
+// over-broad auto-approval (e.g., "git status" must not auto-approve
+// "git push --force"). Rejects command chaining entirely.
 func commandSignature(cmd string) string {
 	cmd = strings.TrimSpace(cmd)
 	if cmd == "" {
 		return ""
 	}
-	// Use the first word as the command signature.
-	idx := strings.IndexAny(cmd, " \t|;&")
-	if idx > 0 {
-		return cmd[:idx]
+	if strings.ContainsAny(cmd, ";|&") {
+		return cmd + ":no-auto-approve:chained"
 	}
-	return cmd
+	tokens := strings.Fields(cmd)
+	if len(tokens) == 0 {
+		return ""
+	}
+	if len(tokens) >= 2 {
+		return tokens[0] + " " + tokens[1]
+	}
+	return tokens[0]
 }
 
 // MakeKey creates the tracking key from a tool name and its input arguments.

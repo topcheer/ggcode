@@ -379,7 +379,7 @@ func isReadOnlyFileTool(name string) bool {
 // extra sandbox enforcement in bypass/autopilot modes).
 func isWriteFileTool(name string) bool {
 	switch name {
-	case "write_file", "edit_file", "multi_edit_file", "multi_file_edit", "multi_file_write", "notebook_edit":
+	case "write_file", "edit_file", "multi_edit_file", "multi_file_edit", "multi_file_write", "notebook_edit", "file_ops", "batch_replace":
 		return true
 	}
 	return false
@@ -415,6 +415,24 @@ func extractFilePaths(input json.RawMessage) []string {
 				if rawPath, ok := file["path"]; ok {
 					var s string
 					if err := json.Unmarshal(rawPath, &s); err == nil && s != "" {
+						paths = append(paths, s)
+					}
+				}
+			}
+		} else {
+			var strFiles []string
+			if err := json.Unmarshal(v, &strFiles); err == nil {
+				paths = append(paths, strFiles...)
+			}
+		}
+	}
+	if v, ok := m["operations"]; ok {
+		var ops []map[string]json.RawMessage
+		if err := json.Unmarshal(v, &ops); err == nil {
+			for _, op := range ops {
+				if rawSrc, ok := op["source"]; ok {
+					var s string
+					if err := json.Unmarshal(rawSrc, &s); err == nil && s != "" {
 						paths = append(paths, s)
 					}
 				}

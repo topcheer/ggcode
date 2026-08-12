@@ -642,6 +642,11 @@ func (c *Client) sendWS(ctx context.Context, msg interface{}) (*Response, error)
 	case Notification:
 		return &Response{JSONRPC: "2.0"}, nil
 	}
+	// Extract request ID for response matching.
+	var reqID *ID
+	if req, ok := msg.(Request); ok {
+		reqID = req.ID
+	}
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil, fmt.Errorf("mcp[%s]: context cancelled: %w", c.name, err)
@@ -654,8 +659,23 @@ func (c *Client) sendWS(ctx context.Context, msg interface{}) (*Response, error)
 		if err != nil {
 			return nil, fmt.Errorf("mcp[%s]: parse ws message: %w", c.name, err)
 		}
-		if resp, ok := parsed.(*Response); ok {
-			return resp, nil
+		switch typed := parsed.(type) {
+		case *Response:
+			// Match response ID to request ID to avoid misattribution.
+			if reqID != nil {
+				reqIDJSON, _ := json.Marshal(reqID)
+				if len(typed.ID) > 0 && string(typed.ID) != string(reqIDJSON) {
+					debug.Log("mcp-ws", "server=%s dropping mismatched response ID", c.name)
+					continue
+				}
+			}
+			return typed, nil
+		case *Notification:
+			c.processNotification(typed)
+			continue
+		case *Request:
+			_ = c.respondToServerRequestWS(typed)
+			continue
 		}
 	}
 }
@@ -761,6 +781,28 @@ func flattenEnvMap(values map[string]string) []string {
 		flat = append(flat, key+"="+value)
 	}
 	return flat
+}
+
+// respondToServerRequestWS handles server-initiated requests received over
+// WebSocket transport. Sends an error response since the agent doesn't support
+// sampling/elicitation over WS (keeps the server from blocking indefinitely).
+func (c *Client) respondToServerRequestWS(req *Request) error {
+	if req == nil || req.ID == nil {
+		return nil
+	}
+	errResp := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      req.ID,
+		"error": map[string]interface{}{
+			"code":    -32601,
+			"message": fmt.Sprintf("method not supported over WebSocket: %s", req.Method),
+		},
+	}
+	data, err := json.Marshal(errResp)
+	if err != nil {
+		return err
+	}
+	return c.wsConn.WriteMessage(websocket.TextMessage, data)
 }
 
 func (c *Client) readResponse(ctx context.Context) (*Response, error) {

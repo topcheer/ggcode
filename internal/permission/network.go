@@ -78,9 +78,9 @@ var networkPatterns = []networkPattern{
 	// --- Exfiltration: file contents sent externally ---
 
 	// curl/wget with file-based POST/upload
-	{NetworkExfiltrate, regexp.MustCompile(`(?i)\bcurl\b.*(--data[- ]binary|-d)\s+@`), "curl sending local file contents via POST data"},
-	{NetworkExfiltrate, regexp.MustCompile(`(?i)\bcurl\b.*(--upload-file|-T)\s`), "curl uploading a local file to a remote server"},
-	{NetworkExfiltrate, regexp.MustCompile(`(?i)\bcurl\b.*--post-file`), "curl posting a local file to a URL"},
+	{NetworkExfiltrate, regexp.MustCompile(`(?i)\bcurl\b.*(--data[- ]binary|-d|--data)[=\s]*@`), "curl sending local file contents via POST data"},
+	{NetworkExfiltrate, regexp.MustCompile(`(?i)\bcurl\b.*(--upload-file|-T)[=\s]`), "curl uploading a local file to a remote server"},
+	{NetworkExfiltrate, regexp.MustCompile(`(?i)\bcurl\b.*--post-file[=\s]`), "curl posting a local file to a URL"},
 	{NetworkExfiltrate, regexp.MustCompile(`(?i)\bcurl\b.*-F\s+.*=@`), "curl uploading a local file as form data"},
 	{NetworkExfiltrate, regexp.MustCompile(`(?i)\bwget\b.*--post-file`), "wget posting a local file to a URL"},
 

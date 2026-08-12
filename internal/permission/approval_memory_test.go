@@ -39,9 +39,9 @@ func TestCommandSignature(t *testing.T) {
 		input string
 		want  string
 	}{
-		{"go build ./...", "go"},
-		{"git status", "git"},
-		{"ls -la", "ls"},
+		{"go build ./...", "go build"},
+		{"git status", "git status"},
+		{"ls -la", "ls -la"},
 		{"npm", "npm"},
 		{"", ""},
 	}
@@ -71,7 +71,7 @@ func TestMakeKey_CommandTool(t *testing.T) {
 	if !ok {
 		t.Fatal("expected ok=true")
 	}
-	want := "run_command:go"
+	want := "run_command:go test"
 	if key != want {
 		t.Errorf("MakeKey = %q, want %q", key, want)
 	}
