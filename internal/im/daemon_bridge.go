@@ -158,6 +158,12 @@ func (b *DaemonBridge) handleInteractiveCallback(cb InteractiveCallback) {
 	case pending.response <- resp:
 	default:
 	}
+	// Clear pendingAsk to match the text reply path — otherwise a subsequent
+	// text message can route to the same (already consumed) response channel
+	// and block forever (deadlock).
+	b.mu.Lock()
+	b.pendingAsk = nil
+	b.mu.Unlock()
 }
 
 // SetFollowSink sets or clears the follow-mode display sink.
