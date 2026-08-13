@@ -123,18 +123,12 @@ var errorReturningFuncs = map[string]bool{
 	// http.Response
 	"http.Response.Write": true, // uncommon but exists in some patterns
 
-	// bytes.Buffer methods (Write returns error for interface satisfaction)
-	"bytes.Buffer.Write":       true,
-	"bytes.Buffer.WriteString": true,
-	"bytes.Buffer.WriteByte":   true,
-	"bytes.Buffer.ReadFrom":    true,
-	"bytes.Buffer.WriteRune":   true,
-
-	// strings.Builder (Write methods satisfy io.Writer)
-	"strings.Builder.Write":       true,
-	"strings.Builder.WriteByte":   true,
-	"strings.Builder.WriteRune":   true,
-	"strings.Builder.WriteString": true,
+	// NOTE: bytes.Buffer and strings.Builder Write methods are intentionally
+	// NOT included here. They always return nil (the error return exists only
+	// to satisfy io.Writer). Including them causes false positives (#111).
+	// bytes.Buffer.ReadFrom IS included because it can return an error from
+	// the source reader.
+	"bytes.Buffer.ReadFrom": true,
 
 	// net package
 	"net.Listen":  true,
@@ -370,6 +364,12 @@ func resolveCallName(call *ast.CallExpr) string {
 		// (method name) matches a known error-returning method.
 		methodName := fun.Sel.Name
 		if isKnownErrorMethod(methodName) {
+			// Exclude bare-receiver calls on variables likely to be
+			// bytes.Buffer or strings.Builder, whose Write/WriteString/
+			// WriteByte/WriteRune methods always return nil (#111).
+			if ident, ok := fun.X.(*ast.Ident); ok && isNeverErrorVar(ident.Name, methodName) {
+				return ""
+			}
 			return methodName
 		}
 	case *ast.Ident:
@@ -475,6 +475,35 @@ func isKnownErrorMethod(methodName string) bool {
 		"Output":            true,
 	}
 	return knownErrorMethods[methodName]
+}
+
+// bufferBuilderMethods are methods on bytes.Buffer and strings.Builder that
+// always return nil error (they satisfy io.Writer but never fail).
+var bufferBuilderMethods = map[string]bool{
+	"Write":       true,
+	"WriteString": true,
+	"WriteByte":   true,
+	"WriteRune":   true,
+}
+
+// bufferBuilderVarNames are common variable names for bytes.Buffer and
+// strings.Builder instances. When these names are used as bare receivers
+// with Write/WriteString/etc methods, we skip the ignored-error check
+// because these methods never actually return an error.
+var bufferBuilderVarNames = map[string]bool{
+	"buf":     true,
+	"buffer":  true,
+	"b":       true, // ambiguous, but most commonly bytes.Buffer in Write context
+	"builder": true,
+	"sb":      true, // strings.Builder
+	"bld":     true,
+}
+
+// isNeverErrorVar returns true if the variable name is commonly a
+// bytes.Buffer or strings.Builder instance AND the method is one that
+// always returns nil on those types.
+func isNeverErrorVar(varName, methodName string) bool {
+	return bufferBuilderVarNames[varName] && bufferBuilderMethods[methodName]
 }
 
 // isErrorReturningName returns true if the resolved call name is known to
