@@ -136,7 +136,9 @@ func GetFullConfig() (*FullConfig, error) {
 	apiKeySet := false
 	if vc, ok := cfg.Vendors[cfg.Vendor]; ok {
 		if ep, ok := vc.Endpoints[cfg.Endpoint]; ok {
-			apiKeySet = ep.APIKey != ""
+			apiKeySet = ep.APIKey != "" || vc.APIKey != ""
+		} else {
+			apiKeySet = vc.APIKey != ""
 		}
 	}
 
@@ -310,7 +312,9 @@ func SaveAPIKey(vendor, endpoint, apiKey string) error {
 		vendorScoped = false
 	}
 
-	cfg.SetEndpointAPIKey(vendor, endpoint, apiKey, vendorScoped)
+	if err := cfg.SetEndpointAPIKey(vendor, endpoint, apiKey, vendorScoped); err != nil {
+		return err
+	}
 	return cfg.Save()
 }
 
