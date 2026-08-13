@@ -1088,15 +1088,36 @@ func (a *App) resumeLatestSession() string {
 		debug.Log("app", "resumeLatestSession: failed to open session store: %v", err)
 		return ""
 	}
-	ses, err := store.LatestForWorkspace(wd)
-	if err != nil || ses == nil {
+
+	// Try the latest session first (fast path).
+	latest, err := store.LatestForWorkspace(wd)
+	if err == nil && latest != nil {
+		if loadErr := chat.LoadSession(latest.ID); loadErr == nil {
+			debug.Log("app", "resumed latest session: %s", latest.ID)
+			return latest.ID
+		}
+		// Latest is locked or load failed — fall through to iterate.
+		debug.Log("app", "resumeLatestSession: latest session %s unavailable, trying others", latest.ID)
+	}
+
+	// Fall back: iterate all sessions for this workspace, try each until
+	// one loads successfully (i.e. is not locked by another instance).
+	sessions, err := store.ListForWorkspace(wd)
+	if err != nil || len(sessions) == 0 {
 		return ""
 	}
-	if err := chat.LoadSession(ses.ID); err != nil {
-		debug.Log("app", "resumeLatestSession: LoadSession failed: %v", err)
-		return ""
+	for _, ses := range sessions {
+		// Skip the one we already tried.
+		if latest != nil && ses.ID == latest.ID {
+			continue
+		}
+		if err := chat.LoadSession(ses.ID); err == nil {
+			debug.Log("app", "resumed session: %s (latest was locked)", ses.ID)
+			return ses.ID
+		}
 	}
-	return ses.ID
+	debug.Log("app", "resumeLatestSession: no unlocked sessions found for %s", wd)
+	return ""
 }
 
 // LoadSession loads an existing session by ID.
