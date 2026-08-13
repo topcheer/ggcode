@@ -310,6 +310,11 @@ func cvExtractConstraints(text string, iter int) []cvConstraint {
 	// keywords), so handle it with a regex before the literal-pattern loop.
 	if m := cvLeaveAloneRe.FindStringSubmatch(lower); len(m) > 1 {
 		path := strings.TrimSpace(m[1])
+		// Strip common articles/connectors so the pattern matches file paths.
+		for _, prefix := range []string{"the ", "any ", "all ", "files in ", "files "} {
+			path = strings.TrimPrefix(path, prefix)
+		}
+		path = strings.TrimSpace(path)
 		if path != "" && len(path) <= 80 {
 			idx := strings.Index(lower, m[0])
 			if idx >= 0 {
