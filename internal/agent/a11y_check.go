@@ -246,13 +246,15 @@ func checkInvalidAria(content string) []string {
 
 // a11yHasAttr checks if an attribute name exists in the attribute string.
 func a11yHasAttr(attrs, name string) bool {
-	re := regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(name) + `\s*=`)
+	// Use (?:^|\s) instead of \b to avoid matching data-alt as alt
+	re := regexp.MustCompile(`(?i)(?:^|\s)` + regexp.QuoteMeta(name) + `\s*=`)
 	return re.MatchString(attrs)
 }
 
 // a11yGetAttr extracts the value of an attribute.
 func a11yGetAttr(attrs, name string) string {
-	re := regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(name) + `\s*=\s*["']([^"']*)["']`)
+	// Use (?:^|\s) instead of \b to avoid matching data-alt as alt
+	re := regexp.MustCompile(`(?i)(?:^|\s)` + regexp.QuoteMeta(name) + `\s*=\s*["']([^"']*)["']`)
 	m := re.FindStringSubmatch(attrs)
 	if m != nil {
 		return m[1]
