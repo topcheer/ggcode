@@ -254,8 +254,8 @@ func (b *Broker) sendViaTransport(msg GatewayMessage) bool {
 	}
 	data, err := json.Marshal(msg)
 	if err != nil {
-		debug.Log("tunnel", "broker: marshal for p2p: %v", err)
-		return true // don't fall back to relay for marshal errors
+		debug.Log("tunnel", "broker: marshal for p2p, falling back to relay: %v", err)
+		return false // fall back to relay — never drop messages
 	}
 	if err := t.Send(data); err != nil {
 		debug.Log("tunnel", "broker: p2p send %s event=%s failed, falling back to relay: %v", msg.Type, msg.EventID, err)
