@@ -60,8 +60,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
+
+// cvLeaveAloneRe matches "leave X alone" / "leaving X alone" phrasing where
+// X is the path/module the agent promises not to touch. The captured group
+// extracts the constraint target.
+var cvLeaveAloneRe = regexp.MustCompile(`(?i)leav\w+ (.+?) alone`)
 
 // parseToolArgs unmarshals raw JSON tool arguments into a map.
 func parseToolArgs(raw json.RawMessage) map[string]any {
@@ -299,6 +305,24 @@ func cvExtractConstraints(text string, iter int) []cvConstraint {
 	// --- Avoidance constraints ---
 	// Patterns: "should not touch X", "must avoid X", "won't modify X",
 	// "not changing X", "leave X alone", "don't edit X"
+
+	// "leave/leaving X alone" has a different structure (path between two
+	// keywords), so handle it with a regex before the literal-pattern loop.
+	if m := cvLeaveAloneRe.FindStringSubmatch(lower); len(m) > 1 {
+		path := strings.TrimSpace(m[1])
+		if path != "" && len(path) <= 80 {
+			idx := strings.Index(lower, m[0])
+			if idx >= 0 {
+				result = append(result, cvConstraint{
+					excerpt:     cvExtractExcerpt(text, idx, 60),
+					iter:        iter,
+					constraintT: "avoid",
+					pattern:     path,
+				})
+			}
+		}
+	}
+
 	avoidPatterns := []string{
 		"should not touch",
 		"shouldn't touch",
@@ -321,8 +345,6 @@ func cvExtractConstraints(text string, iter int) []cvConstraint {
 		"not changing",
 		"not modifying",
 		"not editing",
-		"leaving .* alone",
-		"leave .* alone",
 		"don't edit",
 		"don't modify",
 		"don't change",

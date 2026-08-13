@@ -158,6 +158,47 @@ func TestConstraintViolation_Reset(t *testing.T) {
 	}
 }
 
+func TestCVExtractConstraints_LeaveAlone(t *testing.T) {
+	// "leaving X alone" should be detected as an avoid constraint
+	text := "I'll focus on the auth handler, leaving the config module alone."
+	constraints := cvExtractConstraints(text, 1)
+	found := false
+	for _, c := range constraints {
+		if c.constraintT == "avoid" && c.pattern == "config module" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected avoid constraint for 'config module', got: %+v", constraints)
+	}
+}
+
+func TestCVExtractConstraints_LeaveAloneVariant(t *testing.T) {
+	// "leave X alone" (without -ing) should also work
+	text := "Please leave the test suite alone for now."
+	constraints := cvExtractConstraints(text, 1)
+	found := false
+	for _, c := range constraints {
+		if c.constraintT == "avoid" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected avoid constraint from 'leave X alone', got: %+v", constraints)
+	}
+}
+
+func TestCVExtractConstraints_LeaveAloneViolation(t *testing.T) {
+	s := newConstraintViolationState()
+	s.recordReasoning("I'm leaving the database alone.", 1)
+
+	args := map[string]any{"file_path": "internal/database/settings.go"}
+	msg := s.checkToolCall("edit_file", args, 2)
+	if msg == "" {
+		t.Error("expected warning for editing file that was promised to be left alone")
+	}
+}
+
 func TestConstraintViolation_NoConstraintsNoWarning(t *testing.T) {
 	s := newConstraintViolationState()
 	args := map[string]any{"file_path": "any/path.go"}
