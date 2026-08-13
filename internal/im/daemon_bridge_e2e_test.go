@@ -561,3 +561,54 @@ func TestE2EBridge_Subscribe(t *testing.T) {
 
 	unsub()
 }
+
+// TestE2EMultiSelectClearsPendingAsk verifies #122: after a multi-select __done__
+// submission, pendingAsk is cleared so a subsequent text message doesn't deadlock.
+func TestE2EMultiSelectClearsPendingAsk(t *testing.T) {
+	mgr := NewManager()
+	tg := &mockInteractiveAdapter{testSink: testSink{name: "tg"}}
+	mgr.sinks["tg"] = tg
+	mgr.currentBindings["tg"] = &ChannelBinding{Adapter: "tg", ChannelID: "c1"}
+
+	emitter := NewIMEmitter(mgr, "en", "/ws")
+	bridge := NewDaemonBridge(mgr, nil, emitter, nil, nil)
+
+	mgr.SetInteractiveCallback(func(cb InteractiveCallback) {
+		bridge.handleInteractiveCallback(cb)
+	})
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	go func() {
+		defer wg.Done()
+		_, _ = bridge.HandleAskUser(context.Background(), toolpkg.AskUserRequest{
+			Title: "Pick",
+			Questions: []toolpkg.AskUserQuestion{
+				{
+					ID:      "q1",
+					Title:   "Choose several",
+					Kind:    toolpkg.AskUserKindMulti,
+					Choices: []toolpkg.AskUserChoice{{ID: "a", Label: "A"}, {ID: "b", Label: "B"}},
+				},
+			},
+		})
+	}()
+
+	time.Sleep(200 * time.Millisecond)
+
+	// Select A and submit
+	mgr.HandleInteractiveCallback(InteractiveCallback{Values: []string{"a"}})
+	time.Sleep(100 * time.Millisecond)
+	mgr.HandleInteractiveCallback(InteractiveCallback{Values: []string{"__done__"}})
+
+	wg.Wait()
+
+	// After submission, pendingAsk should be nil
+	bridge.mu.Lock()
+	stillPending := bridge.pendingAsk
+	bridge.mu.Unlock()
+	if stillPending != nil {
+		t.Fatal("pendingAsk should be nil after multi-select submission (deadlock risk)")
+	}
+}
