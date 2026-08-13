@@ -1,8 +1,10 @@
 package hooks
 
 import (
+	"context"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestMatchTool_SimpleName(t *testing.T) {
@@ -195,5 +197,53 @@ func TestRunPostHooks_MultipleInject(t *testing.T) {
 	}
 	if strings.Contains(result.Output, "no-inject") {
 		t.Errorf("expected 'no-inject' to NOT be in output, got %q", result.Output)
+	}
+}
+
+// TestHookContextCancellation verifies that when a cancelled context is passed
+// via HookEnv.Ctx, hook execution respects the cancellation promptly.
+// Regression test for issue #102.
+func TestHookContextCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // pre-cancel so the hook should abort immediately
+
+	h := Hook{
+		Match:   "*",
+		Command: "sleep 30 && echo done",
+	}
+	env := HookEnv{
+		ToolName: "run_command",
+		RawInput: `{}`,
+		Ctx:      ctx,
+	}
+	start := time.Now()
+	result := RunPreHooks([]Hook{h}, env)
+	elapsed := time.Since(start)
+
+	// Should return well before the 30s sleep completes.
+	if elapsed > 5*time.Second {
+		t.Errorf("hook took %v to return with cancelled context; expected <5s", elapsed)
+	}
+
+	// Cancelled context causes command failure, but hook should still allow
+	// (non-blocking semantics — hook errors don't block by default).
+	_ = result // result.Allowed may be true or false; the key assertion is timing
+}
+
+// TestHookNilContextBackwardCompat verifies that omitting Ctx (nil) still
+// works — hooks fall back to context.Background(), preserving backward compat.
+func TestHookNilContextBackwardCompat(t *testing.T) {
+	h := Hook{
+		Match:   "write_file",
+		Command: "echo ok",
+	}
+	env := HookEnv{
+		ToolName: "write_file",
+		RawInput: `{}`,
+		// Ctx intentionally left nil
+	}
+	result := RunPreHooks([]Hook{h}, env)
+	if !result.Allowed {
+		t.Error("expected hook to allow with nil Ctx (backward compat)")
 	}
 }
