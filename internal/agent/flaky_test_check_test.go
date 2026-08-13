@@ -247,3 +247,52 @@ func TestClean(t *testing.T) {
 		t.Errorf("clean deterministic test should not trigger, got: %s", result)
 	}
 }
+
+func TestCheckFlakyTestPatterns_MapRangeEqualNotFlagged(t *testing.T) {
+	// #119: assert.Equal in a map range loop should NOT be flagged as flaky
+	// because Equal matches any equality assertion regardless of iteration order.
+	old := "package foo_test\n\nfunc init() {}\n"
+	new := `package foo_test
+
+import (
+	"testing"
+)
+
+func TestConfigProcessing(t *testing.T) {
+	configs := map[string]int{
+		"default": 30,
+		"fast":    5,
+	}
+	for name, cfg := range configs {
+		result := processConfig(cfg)
+		if result != cfg {
+			t.Fatalf("%s: expected %d, got %d", name, cfg, result)
+		}
+	}
+}`
+	result := checkFlakyTestPatterns("config_test.go", old, new)
+	if result != "" {
+		t.Errorf("map range with order-independent assertion should not trigger, got: %s", result)
+	}
+}
+
+func TestCheckFlakyTestPatterns_SliceRangeNotFlagged(t *testing.T) {
+	// #119: range over slice should NOT be flagged (deterministic order in Go)
+	old := "package foo_test\n\nfunc init() {}\n"
+	new := `package foo_test
+
+import "testing"
+
+func TestSliceOrder(t *testing.T) {
+	items := []string{"a", "b", "c"}
+	for i, v := range items {
+		if items[i] != v {
+			t.Fatalf("mismatch at %d", i)
+		}
+	}
+}`
+	result := checkFlakyTestPatterns("slice_test.go", old, new)
+	if result != "" {
+		t.Errorf("range over slice should not be flagged as flaky, got: %s", result)
+	}
+}

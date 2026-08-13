@@ -48,6 +48,12 @@ func TestExtractFilePath(t *testing.T) {
 		{"read_file", `{"path":"src/main.go"}`, "src/main.go"},
 		{"edit_file", `{"file":"/etc/config.yaml"}`, "/etc/config.yaml"},
 		{"run_command", `{"command":"ls -la"}`, ""},
+		// #121: non-string JSON values should return empty, not garbage
+		{"write_file", `{"file_path":null,"content":"hello"}`, ""},
+		{"write_file", `{"file_path":42,"content":"hello"}`, ""},
+		{"write_file", `{"file_path":true,"content":"hello"}`, ""},
+		// Multiple keys: null before a valid string key should skip null
+		{"write_file", `{"file_path":null,"path":"/real/path"}`, "/real/path"},
 	}
 
 	for _, tt := range tests {
