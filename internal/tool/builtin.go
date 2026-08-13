@@ -115,6 +115,9 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 		// Screenshot
 		ScreenshotTool{},
 
+		// Desktop control (OS-level mouse, keyboard, window, app management)
+		DesktopControlTool{WorkingDir: workingDir},
+
 		// Clipboard (read/write system clipboard)
 		ClipboardTool{},
 

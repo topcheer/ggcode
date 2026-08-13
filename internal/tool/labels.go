@@ -144,6 +144,8 @@ func DescribeTool(toolName, rawArgs string) ToolPresentation {
 		return browserLabel(args)
 	case "screenshot":
 		return screenshotLabel(args)
+	case "desktop_control":
+		return desktopControlLabel(args)
 	case "clipboard":
 		action := argStr(args, "action")
 		if action == "write" {
@@ -1716,6 +1718,56 @@ func screenshotLabel(args map[string]any) ToolPresentation {
 }
 
 // mobileDeviceLabel renders a human-readable label for the mobile_device tool.
+func desktopControlLabel(args map[string]any) ToolPresentation {
+	action := argStr(args, "action")
+	x := argStr(args, "x")
+	y := argStr(args, "y")
+	coord := ""
+	if x != "" && y != "" {
+		coord = fmt.Sprintf(" (%s,%s)", x, y)
+	}
+	text := argStr(args, "text")
+
+	switch action {
+	case "click":
+		return toolPres("Desktop Click", coord)
+	case "double_click":
+		return toolPres("Desktop Double-Click", coord)
+	case "right_click":
+		return toolPres("Desktop Right-Click", coord)
+	case "move":
+		return toolPres("Desktop Move", coord)
+	case "drag":
+		return toolPres("Desktop Drag", coord)
+	case "scroll":
+		return toolPres("Desktop Scroll", fmt.Sprintf("%s %s", argStr(args, "direction"), coord))
+	case "type":
+		return toolPres("Desktop Type", compactPreview(text))
+	case "key_press", "key_combo":
+		return toolPres("Desktop Key", text)
+	case "list_windows":
+		return toolPres("Desktop", "list windows")
+	case "focus_window":
+		return toolPres("Desktop Focus", displayTarget(text))
+	case "close_window":
+		return toolPres("Desktop Close Window", displayTarget(text))
+	case "minimize_window":
+		return toolPres("Desktop Minimize", displayTarget(text))
+	case "maximize_window":
+		return toolPres("Desktop Maximize", displayTarget(text))
+	case "launch_app":
+		return toolPres("Desktop Launch", displayTarget(text))
+	case "quit_app":
+		return toolPres("Desktop Quit", displayTarget(text))
+	case "list_apps":
+		return toolPres("Desktop", "list apps")
+	case "active_app":
+		return toolPres("Desktop", "active app")
+	default:
+		return toolPres("Desktop", action)
+	}
+}
+
 func mobileDeviceLabel(args map[string]any) ToolPresentation {
 	action := argStr(args, "action")
 	device := argStr(args, "device")
