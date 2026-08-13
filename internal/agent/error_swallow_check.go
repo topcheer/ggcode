@@ -46,8 +46,9 @@ import (
 
 // errorSwallowInstance represents a detected error-swallowing pattern.
 type errorSwallowInstance struct {
-	pattern string // human-readable pattern description
-	pos     token.Pos
+	pattern     string // human-readable pattern description
+	pos         token.Pos
+	fingerprint string // stable content key (funcName:errName:patternType) for delta matching
 }
 
 // checkErrorSwallowing performs AST-based error swallowing detection on Go
@@ -66,30 +67,26 @@ func checkErrorSwallowing(filePath, oldContent, newContent string) []string {
 		return nil
 	}
 
-	// Count patterns in old content to enable delta-based detection.
-	oldCount := countErrorSwallows(oldContent)
+	// Use content fingerprint matching for robust delta detection.
+	// A count-based offset (oldCount+i) is incorrect when new code is prepended
+	// because old instances shift to higher indices. token.Pos matching also
+	// fails because positions change when code is inserted before existing code.
+	// Fingerprint keys (funcName:errName:patternType) are stable regardless of
+	// insertion position.
 
-	newInstances := findErrorSwallows(newContent)
-	if len(newInstances) <= oldCount {
-		return nil // no new instances introduced
+	oldFingerprints := make(map[string]bool)
+	for _, inst := range findErrorSwallows(oldContent) {
+		oldFingerprints[inst.fingerprint] = true
 	}
 
-	// Flag only the newly introduced instances (excess over old count).
-	newCount := len(newInstances) - oldCount
 	var warnings []string
-	for i := 0; i < newCount && i+oldCount < len(newInstances); i++ {
-		inst := newInstances[oldCount+i]
-		warnings = append(warnings, inst.pattern)
+	for _, inst := range findErrorSwallows(newContent) {
+		if !oldFingerprints[inst.fingerprint] {
+			warnings = append(warnings, inst.pattern)
+		}
 	}
 
 	return warnings
-}
-
-// countErrorSwallows parses Go source and returns the number of error-swallowing
-// patterns found. Uses position-ordered scanning for consistency.
-func countErrorSwallows(src string) int {
-	instances := findErrorSwallows(src)
-	return len(instances)
 }
 
 // findErrorSwallows parses Go source and returns all error-swallowing instances
@@ -128,6 +125,11 @@ func findErrorSwallows(src string) []errorSwallowInstance {
 
 			pos := fset.Position(ifStmt.Pos())
 
+			funcName := ""
+			if fn.Name != nil {
+				funcName = fn.Name.Name
+			}
+
 			// Pattern 1: Empty or comment-only body.
 			if isEmptyBody(ifStmt.Body) {
 				instances = append(instances, errorSwallowInstance{
@@ -136,7 +138,8 @@ func findErrorSwallows(src string) []errorSwallowInstance {
 							"The error is silently ignored. Add error handling (return %s, "+
 							"log it, or handle it appropriately).",
 						errName, pos, errName),
-					pos: ifStmt.Pos(),
+					pos:         ifStmt.Pos(),
+					fingerprint: funcName + ":" + errName + ":empty",
 				})
 				return true
 			}
@@ -149,7 +152,8 @@ func findErrorSwallows(src string) []errorSwallowInstance {
 							"function that returns error. Use `return %s` to propagate the error "+
 							"to the caller instead of returning nil.",
 						errName, pos, errName),
-					pos: ifStmt.Pos(),
+					pos:         ifStmt.Pos(),
+					fingerprint: funcName + ":" + errName + ":bare-return",
 				})
 			}
 

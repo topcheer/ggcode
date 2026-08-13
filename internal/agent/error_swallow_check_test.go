@@ -264,3 +264,52 @@ func process() error {
 		t.Errorf("expected warning to mention parseErr, got: %s", warnings[0])
 	}
 }
+
+func TestCheckErrorSwallowing_DeltaPrependedNewInstance(t *testing.T) {
+	// Regression test for #98: when a new function with error swallowing is
+	// PREPENDED before existing functions, the count-based offset logic
+	// incorrectly flagged old instances as new and missed the actual new one.
+	old := `package main
+
+func oldFunc1() error {
+	err := doSomething()
+	if err != nil {
+	}
+	return nil
+}
+func oldFunc2() error {
+	err := doSomething()
+	if err != nil {
+	}
+	return nil
+}
+`
+	new := `package main
+
+func newFunc() error {
+	err := doSomething()
+	if err != nil {
+	}
+	return nil
+}
+func oldFunc1() error {
+	err := doSomething()
+	if err != nil {
+	}
+	return nil
+}
+func oldFunc2() error {
+	err := doSomething()
+	if err != nil {
+	}
+	return nil
+}
+`
+	warnings := checkErrorSwallowing("test.go", old, new)
+	if len(warnings) != 1 {
+		t.Fatalf("expected exactly 1 warning (the prepended new instance), got %d: %v", len(warnings), warnings)
+	}
+	if !strings.Contains(warnings[0], "Empty error handler") {
+		t.Errorf("expected empty handler warning, got: %s", warnings[0])
+	}
+}

@@ -266,3 +266,41 @@ func use() {
 		t.Fatalf("expected 1 warning for v, got %d in: %s", count, result)
 	}
 }
+
+func TestCheckNilDerefAfterError_MultiErrorVariables(t *testing.T) {
+	// Regression test for #97: when multiple error variables exist, checking
+	// one should NOT clear nil-risk for variables associated with the other.
+	code := `package main
+
+import "fmt"
+
+type T struct{ V int }
+
+func getA() (*T, error) { return nil, nil }
+func getB() (*T, error) { return nil, nil }
+
+func use() {
+	a, err1 := getA()
+	b, err2 := getB()
+
+	if err1 != nil {
+		return
+	}
+
+	// err2 was NEVER checked, so b could still be nil.
+	fmt.Println(b.V) // BUG: should be flagged — err2 not checked
+	_ = a.V
+}
+`
+	result := checkNilDerefAfterError("test.go", "", code)
+	if result == "" {
+		t.Fatal("expected nil deref warning for 'b' (err2 never checked), got empty")
+	}
+	if !strings.Contains(result, "'b'") {
+		t.Fatalf("expected warning about variable 'b', got: %s", result)
+	}
+	// 'a' should NOT be flagged since err1 was checked.
+	if strings.Contains(result, "'a'") {
+		t.Fatalf("should not flag 'a' (err1 was checked), got: %s", result)
+	}
+}

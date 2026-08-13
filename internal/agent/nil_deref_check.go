@@ -122,12 +122,18 @@ func checkNilDerefAfterError(filePath, oldContent, newContent string) string {
 	return b.String()
 }
 
+// nilRiskEntry tracks a nil-risk variable and its associated error variable.
+type nilRiskEntry struct {
+	pos     int    // assignment position
+	errName string // associated error variable name
+}
+
 // findNilDerefsInFunc analyzes a function body for nil-deref-after-error patterns.
 // It processes statements in source order, tracking which variables are nil-risk
 // (from multi-return assignments) and clearing them when error checks appear.
 func findNilDerefsInFunc(fset *token.FileSet, body *ast.BlockStmt) []nilDerefInstance {
-	// nilRisk maps variable name to the line where it was assigned without error check.
-	nilRisk := make(map[string]int)
+	// nilRisk maps variable name to its risk entry (position + associated error var).
+	nilRisk := make(map[string]nilRiskEntry)
 	var instances []nilDerefInstance
 
 	ast.Inspect(body, func(n ast.Node) bool {
@@ -156,7 +162,7 @@ func findNilDerefsInFunc(fset *token.FileSet, body *ast.BlockStmt) []nilDerefIns
 
 // processAssignment marks variables as nil-risk when they come from multi-return
 // assignments where the last value is likely an error.
-func processAssignment(assign *ast.AssignStmt, nilRisk map[string]int) {
+func processAssignment(assign *ast.AssignStmt, nilRisk map[string]nilRiskEntry) {
 	// Only consider multi-value assignments with at least 2 LHS.
 	if len(assign.Lhs) < 2 {
 		return
@@ -169,20 +175,24 @@ func processAssignment(assign *ast.AssignStmt, nilRisk map[string]int) {
 		return
 	}
 
-	// The non-error LHS values are nil-risk.
+	// The non-error LHS values are nil-risk, associated with this error variable.
 	for i := 0; i < len(assign.Lhs)-1; i++ {
 		ident, ok := assign.Lhs[i].(*ast.Ident)
 		if !ok || ident.Name == "_" {
 			continue
 		}
-		// Mark this variable as nil-risk at its assignment line.
-		nilRisk[ident.Name] = int(assign.Pos())
+		// Mark this variable as nil-risk, linked to the specific error variable.
+		nilRisk[ident.Name] = nilRiskEntry{
+			pos:     int(assign.Pos()),
+			errName: errName.Name,
+		}
 	}
 }
 
 // clearNilRiskOnErrorCheck checks if an IfStmt is an error check (if err != nil)
-// and if so, clears all nil-risk variables (since the error has been handled).
-func clearNilRiskOnErrorCheck(is *ast.IfStmt, nilRisk map[string]int) {
+// and if so, clears nil-risk variables associated with that specific error
+// variable. Other error variables' nil-risk entries are preserved.
+func clearNilRiskOnErrorCheck(is *ast.IfStmt, nilRisk map[string]nilRiskEntry) {
 	// Check for: if err != nil { ... }
 	bin, ok := is.Cond.(*ast.BinaryExpr)
 	if !ok {
@@ -193,13 +203,20 @@ func clearNilRiskOnErrorCheck(is *ast.IfStmt, nilRisk map[string]int) {
 		return
 	}
 
-	// Left should be an ident that looks like error, right should be nil
-	// (or vice versa).
-	if isErrorNilCheck(bin) {
-		// Clear all nil-risk variables - error has been checked.
-		// Note: we only clear those whose position is before this if-statement,
-		// but since ast.Inspect visits in order, all existing entries qualify.
-		for k := range nilRisk {
+	// Extract the error variable name being checked.
+	checkedErrName := ""
+	if ident, ok := bin.X.(*ast.Ident); ok && isNilIdent(bin.Y) && looksLikeError(ident.Name) {
+		checkedErrName = ident.Name
+	} else if ident, ok := bin.Y.(*ast.Ident); ok && isNilIdent(bin.X) && looksLikeError(ident.Name) {
+		checkedErrName = ident.Name
+	}
+	if checkedErrName == "" {
+		return
+	}
+
+	// Only clear nil-risk entries associated with this specific error variable.
+	for k, entry := range nilRisk {
+		if entry.errName == checkedErrName {
 			delete(nilRisk, k)
 		}
 	}
@@ -221,19 +238,20 @@ func isErrIdent(e ast.Expr) bool {
 }
 
 // detectNilDeref checks if a node dereferences a nil-risk variable.
-func detectNilDeref(fset *token.FileSet, n ast.Node, nilRisk map[string]int) []nilDerefInstance {
+func detectNilDeref(fset *token.FileSet, n ast.Node, nilRisk map[string]nilRiskEntry) []nilDerefInstance {
 	var instances []nilDerefInstance
 
 	switch node := n.(type) {
 	case *ast.SelectorExpr:
 		// x.Field or x.Method()
 		if x, ok := node.X.(*ast.Ident); ok {
-			if _, risk := nilRisk[x.Name]; risk {
+			if entry, risk := nilRisk[x.Name]; risk {
 				pos := fset.Position(node.Pos())
 				instances = append(instances, nilDerefInstance{
 					posStr:  fmt.Sprintf("%s:%d", filepath.Base(pos.Filename), pos.Line),
 					varName: x.Name,
 				})
+				_ = entry
 				delete(nilRisk, x.Name) // report once
 			}
 		}
@@ -241,12 +259,13 @@ func detectNilDeref(fset *token.FileSet, n ast.Node, nilRisk map[string]int) []n
 	case *ast.IndexExpr:
 		// x[idx] on a pointer to array/slice/map
 		if x, ok := node.X.(*ast.Ident); ok {
-			if _, risk := nilRisk[x.Name]; risk {
+			if entry, risk := nilRisk[x.Name]; risk {
 				pos := fset.Position(node.Pos())
 				instances = append(instances, nilDerefInstance{
 					posStr:  fmt.Sprintf("%s:%d", filepath.Base(pos.Filename), pos.Line),
 					varName: x.Name,
 				})
+				_ = entry
 				delete(nilRisk, x.Name)
 			}
 		}
@@ -254,12 +273,13 @@ func detectNilDeref(fset *token.FileSet, n ast.Node, nilRisk map[string]int) []n
 	case *ast.StarExpr:
 		// *x
 		if x, ok := node.X.(*ast.Ident); ok {
-			if _, risk := nilRisk[x.Name]; risk {
+			if entry, risk := nilRisk[x.Name]; risk {
 				pos := fset.Position(node.Pos())
 				instances = append(instances, nilDerefInstance{
 					posStr:  fmt.Sprintf("%s:%d", filepath.Base(pos.Filename), pos.Line),
 					varName: x.Name,
 				})
+				_ = entry
 				delete(nilRisk, x.Name)
 			}
 		}
