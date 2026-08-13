@@ -608,6 +608,22 @@ func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.Co
 			if !isDaemonSkippedTool(toolName) {
 				round.NoteToolCall()
 			}
+			// enter_plan_mode: emit description text to IM so users know
+			// planning has started (the result is hidden, so without this
+			// IM users see nothing until exit_plan_mode).
+			if toolName == "enter_plan_mode" {
+				label := "📝 Planning..."
+				if toolLang(b.language) == ToolLangZhCN {
+					label = "📝 正在规划..."
+				}
+				var args struct {
+					Description string `json:"description"`
+				}
+				if json.Unmarshal([]byte(event.Tool.Arguments), &args) == nil && args.Description != "" {
+					label = "📝 " + args.Description
+				}
+				b.emitter.EmitText(label)
+			}
 			// Sleep tool is special: emit the duration immediately
 			// so the user sees it before the tool blocks.
 			// Only emit in verbose mode — quiet/summary aggregate it.
