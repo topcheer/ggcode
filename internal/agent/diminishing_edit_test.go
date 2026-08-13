@@ -116,9 +116,10 @@ func TestMeasureEditSize_EditFile(t *testing.T) {
 }
 
 func TestMeasureEditSize_MultiEditFile(t *testing.T) {
+	// Delta-only: edit1 = |1-1|=0, edit2 = |3-2|=1, total = 1.
 	args := json.RawMessage(`{"edits":[{"old_text":"a","new_text":"b"},{"old_text":"cc","new_text":"ddd"}]}`)
 	size := measureEditSize("multi_edit_file", args)
-	expected := 1 + 1 + 2 + 3
+	expected := 0 + 1
 	if size != expected {
 		t.Fatalf("expected %d, got %d", expected, size)
 	}
