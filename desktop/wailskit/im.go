@@ -152,13 +152,19 @@ func SaveIMAdapter(name string, values map[string]string) error {
 	}
 
 	// Check if updating an existing adapter
-	if _, exists := cfg.IM.Adapters[name]; exists {
+	if existing, exists := cfg.IM.Adapters[name]; exists {
+		// Preserve fields not explicitly set via the UI update (#107)
+		adapterCfg.Args = existing.Args
+		adapterCfg.Env = existing.Env
+		adapterCfg.AllowFrom = existing.AllowFrom
+		adapterCfg.OutputMode = existing.OutputMode
+		adapterCfg.Targets = existing.Targets
 		// Preserve existing Extra fields not in the update, then overwrite
-		if cfg.IM.Adapters[name].Extra != nil {
+		if existing.Extra != nil {
 			if adapterCfg.Extra == nil {
 				adapterCfg.Extra = make(map[string]interface{})
 			}
-			for k, v := range cfg.IM.Adapters[name].Extra {
+			for k, v := range existing.Extra {
 				if _, inUpdate := extra[k]; !inUpdate {
 					adapterCfg.Extra[k] = v
 				}

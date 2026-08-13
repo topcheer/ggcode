@@ -3299,6 +3299,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.falsePremise.recordToolResult(tc.Name, result.Content, result.IsError)
 			// Overcorrection cascade: record error signals for proportionality analysis.
 			a.overcorrectionRecordError(tc.Name, result.Content, result.IsError)
+			// Overcorrection cascade: increment step counter for non-edit tools
+			// so stale errors expire (#104).
+			if !isEditTool(tc.Name) {
+				a.overcorrection.recordNonEditStep()
+			}
 			// Capability boundary: track consecutive tool failures for
 			// stubborn-persistence detection.
 			a.capBoundary.recordToolResult(result.IsError)

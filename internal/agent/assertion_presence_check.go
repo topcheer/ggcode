@@ -171,7 +171,14 @@ func countAssertionsPerTest(fset *token.FileSet, file *ast.File) map[string]int 
 			continue
 		}
 
-		count := countAssertionCalls(fn.Body)
+		// Extract the actual testing.T parameter name (default "t").
+		// Table-driven tests often use "tt" or other names.
+		testingTName := "t"
+		if len(fn.Type.Params.List[0].Names) > 0 {
+			testingTName = fn.Type.Params.List[0].Names[0].Name
+		}
+
+		count := countAssertionCalls(fn.Body, testingTName)
 		result[name] = count
 	}
 
@@ -179,8 +186,8 @@ func countAssertionsPerTest(fset *token.FileSet, file *ast.File) map[string]int 
 }
 
 // countAssertionCalls recursively walks the function body and counts calls that
-// look like test assertions.
-func countAssertionCalls(body *ast.BlockStmt) int {
+// look like test assertions. testingTName is the name of the *testing.T parameter.
+func countAssertionCalls(body *ast.BlockStmt, testingTName string) int {
 	count := 0
 	ast.Inspect(body, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
@@ -193,7 +200,7 @@ func countAssertionCalls(body *ast.BlockStmt) int {
 			method := sel.Sel.Name
 			if goAssertionCalls[method] {
 				// Verify receiver looks like testing.T (single ident, typically "t").
-				if ident, ok := sel.X.(*ast.Ident); ok && ident.Name == "t" {
+				if ident, ok := sel.X.(*ast.Ident); ok && ident.Name == testingTName {
 					count++
 					return true
 				}

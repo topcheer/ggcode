@@ -374,6 +374,16 @@ func (a *Agent) overcorrectionRecordError(toolName string, resultContent string,
 }
 
 // overcorrectionRecordEdit records a successful edit and returns guidance if overcorrection detected.
+// recordNonEditStep increments stepsSinceError when a non-edit tool completes.
+// Called from the agent loop for all tool calls that are not edits.
+func (s *overcorrectionState) recordNonEditStep() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.pendingErr != severityNone {
+		s.stepsSinceError++
+	}
+}
+
 func (a *Agent) overcorrectionRecordEdit(toolName string, args json.RawMessage) string {
 	if a.overcorrection == nil {
 		return ""

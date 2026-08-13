@@ -39,6 +39,7 @@ package agent
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -210,12 +211,21 @@ func isConfigOrLockFile(path string) bool {
 // isCIConfigPath returns true if the path is a CI/verification config file.
 func isCIConfigPath(path string) bool {
 	lower := strings.ToLower(path)
+	base := strings.ToLower(filepath.Base(path))
 	for pattern, enabled := range ciConfigFiles {
 		if !enabled {
 			continue
 		}
-		if strings.Contains(lower, pattern) {
-			return true
+		if strings.Contains(pattern, "/") {
+			// Directory pattern: use prefix match
+			if strings.HasPrefix(lower, pattern+"/") || lower == pattern {
+				return true
+			}
+		} else {
+			// Filename pattern: exact basename match only
+			if base == pattern {
+				return true
+			}
 		}
 	}
 	return false
