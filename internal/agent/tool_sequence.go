@@ -273,9 +273,11 @@ func (v *toolSequenceValidator) checkBroadThenNarrowSearch(curr seqEntry) string
 	if curr.tool != "search_files" && curr.tool != "grep" {
 		return ""
 	}
-	currDir, _ := curr.args["directory"].(string)
-	if curr.tool == "grep" || curr.tool == "search_files" {
+	var currDir string
+	if curr.tool == "grep" {
 		currDir, _ = curr.args["path"].(string)
+	} else {
+		currDir, _ = curr.args["directory"].(string)
 	}
 	if currDir == "" {
 		return ""
@@ -287,9 +289,11 @@ func (v *toolSequenceValidator) checkBroadThenNarrowSearch(curr seqEntry) string
 	for i := len(v.history) - 1; i >= 0; i-- {
 		e := v.history[i]
 		if (e.tool == "search_files" || e.tool == "grep") && e.tool == curr.tool {
-			eDir, _ := e.args["directory"].(string)
-			if e.tool == "grep" || e.tool == "search_files" {
+			var eDir string
+			if e.tool == "grep" {
 				eDir, _ = e.args["path"].(string)
+			} else {
+				eDir, _ = e.args["directory"].(string)
 			}
 			ePattern, _ := e.args["pattern"].(string)
 			// Same pattern, but previous call had no directory (broad search)

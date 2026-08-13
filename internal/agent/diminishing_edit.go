@@ -205,7 +205,11 @@ func measureEditSize(toolName string, args json.RawMessage) int {
 		}
 		total := 0
 		for _, e := range p.Edits {
-			total += len(e.OldText) + len(e.NewText)
+			delta := len(e.NewText) - len(e.OldText)
+			if delta < 0 {
+				delta = -delta
+			}
+			total += delta
 		}
 		return total
 
@@ -224,7 +228,11 @@ func measureEditSize(toolName string, args json.RawMessage) int {
 		total := 0
 		for _, f := range p.Files {
 			for _, e := range f.Edits {
-				total += len(e.OldText) + len(e.NewText)
+				delta := len(e.NewText) - len(e.OldText)
+				if delta < 0 {
+					delta = -delta
+				}
+				total += delta
 			}
 		}
 		return total

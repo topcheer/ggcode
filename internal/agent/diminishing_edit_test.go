@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -192,4 +193,47 @@ func TestDiminishingCheck_NilSafe(t *testing.T) {
 func TestResetDiminishingEdit_NilSafe(t *testing.T) {
 	a := &Agent{}
 	a.resetDiminishingEdit() // should not panic
+}
+
+func TestEditSize_DeltaConsistencyAcrossTools(t *testing.T) {
+	// Regression test for #100: multi_edit_file and multi_file_edit should
+	// use delta-only measurement like edit_file, not len(old)+len(new).
+	oldText := strings.Repeat("a", 100)
+	newText := strings.Repeat("b", 103)
+
+	// edit_file: delta = |103 - 100| = 3
+	editFileArgs, _ := json.Marshal(map[string]interface{}{
+		"old_text": oldText,
+		"new_text": newText,
+	})
+	editFileSize := measureEditSize("edit_file", editFileArgs)
+
+	// multi_edit_file: should also be delta = 3 (not 100+103=203)
+	multiEditArgs, _ := json.Marshal(map[string]interface{}{
+		"edits": []map[string]interface{}{
+			{"old_text": oldText, "new_text": newText},
+		},
+	})
+	multiEditSize := measureEditSize("multi_edit_file", multiEditArgs)
+
+	if editFileSize != 3 {
+		t.Fatalf("edit_file size = %d, want 3", editFileSize)
+	}
+	if multiEditSize != 3 {
+		t.Fatalf("multi_edit_file size = %d, want 3 (delta-only like edit_file)", multiEditSize)
+	}
+
+	// multi_file_edit: should also be delta = 3
+	multiFileArgs, _ := json.Marshal(map[string]interface{}{
+		"files": []map[string]interface{}{
+			{"path": "/x.go", "edits": []map[string]interface{}{
+				{"old_text": oldText, "new_text": newText},
+			}},
+		},
+	})
+	multiFileSize := measureEditSize("multi_file_edit", multiFileArgs)
+
+	if multiFileSize != 3 {
+		t.Fatalf("multi_file_edit size = %d, want 3 (delta-only like edit_file)", multiFileSize)
+	}
 }

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/topcheer/ggcode/internal/provider"
@@ -216,5 +217,47 @@ func TestToolSequence_BoundaryNoHint(t *testing.T) {
 	g = v.record(mkToolCall("read_file", map[string]interface{}{"path": "/c.go"}), 4)
 	if g != "" {
 		t.Fatalf("read after edit should not trigger sequential hint: got %q", g)
+	}
+}
+
+func TestBroadThenNarrowSearch_SearchFiles(t *testing.T) {
+	// Regression test for #99: search_files uses "directory" param, not "path".
+	// The broad-then-narrow detector should fire for search_files.
+	v := &toolSequenceValidator{history: []seqEntry{}, hintsGiven: map[string]bool{}}
+
+	// Step 1: Broad search_files with no directory
+	v.record(mkToolCall("search_files", map[string]interface{}{
+		"pattern": "TODO",
+	}), 1)
+
+	// Step 2: Narrow search_files with directory
+	g := v.record(mkToolCall("search_files", map[string]interface{}{
+		"pattern":   "TODO",
+		"directory": "/foo",
+	}), 2)
+
+	if g == "" {
+		t.Fatal("expected broad-then-narrow hint for search_files, got empty")
+	}
+	if !strings.Contains(g, "TODO") || !strings.Contains(g, "/foo") {
+		t.Fatalf("hint should mention pattern and dir, got: %s", g)
+	}
+}
+
+func TestBroadThenNarrowSearch_GrepPath(t *testing.T) {
+	// Ensure grep still works with "path" param after the fix.
+	v := &toolSequenceValidator{history: []seqEntry{}, hintsGiven: map[string]bool{}}
+
+	v.record(mkToolCall("grep", map[string]interface{}{
+		"pattern": "FIXME",
+	}), 1)
+
+	g := v.record(mkToolCall("grep", map[string]interface{}{
+		"pattern": "FIXME",
+		"path":    "/bar",
+	}), 2)
+
+	if g == "" {
+		t.Fatal("expected broad-then-narrow hint for grep, got empty")
 	}
 }
