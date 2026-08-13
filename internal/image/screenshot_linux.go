@@ -209,7 +209,7 @@ func buildGrimCommand(outPath string, opts ScreenshotOptions) *exec.Cmd {
 	args := []string{}
 	if opts.Region != nil {
 		r := opts.Region
-		args = append(args, "-g", fmt.Sprintf("%d,%d,%d,%d", r.Width, r.Height, r.X, r.Y))
+		args = append(args, "-g", fmt.Sprintf("%d,%d,%dx%d", r.X, r.Y, r.Width, r.Height))
 	}
 	args = append(args, outPath)
 	return exec.Command("grim", args...)
