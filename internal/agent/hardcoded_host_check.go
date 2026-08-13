@@ -180,12 +180,11 @@ func matchGoListenCall(fset *token.FileSet, call *ast.CallExpr) string {
 		return ""
 	}
 
-	posStr := fset.Position(call.Pos()).String()
 	return fmt.Sprintf(
-		"%s(%q, ...) at %s uses a hardcoded bind address -- "+
+		"%s(%q, ...) uses a hardcoded bind address -- "+
 			"this makes port/host configuration inflexible across environments. "+
 			"Consider reading from an env var: os.Getenv(\"PORT\") or os.Getenv(\"ADDR\").",
-		fnName, addr, posStr)
+		fnName, addr)
 }
 
 // extractCallName extracts the fully qualified function name from a CallExpr.

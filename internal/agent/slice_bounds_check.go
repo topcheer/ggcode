@@ -75,10 +75,11 @@ var riskySliceByMethod = map[string]int{
 
 // sliceBoundsRisk represents a detected unguarded slice index access.
 type sliceBoundsRisk struct {
-	line     int
-	varName  string
-	index    int
-	funcName string
+	line        int
+	varName     string
+	index       int
+	funcName    string
+	fingerprint string // content-based delta key: enclosingFunc + ":" + varName + "[index]"
 }
 
 // checkSliceBoundsRisk detects indexing of slices returned by risky functions
@@ -102,16 +103,16 @@ func checkSliceBoundsRisk(filePath, oldContent, newContent string) []string {
 		return nil
 	}
 
-	var oldLines map[int]bool
+	var oldFPs map[string]bool
 	if strings.TrimSpace(oldContent) != "" {
 		oldFset := token.NewFileSet()
 		oldAST, oldErr := parser.ParseFile(oldFset, filePath, oldContent, 0)
 		if oldErr == nil {
 			oldRisks := findSliceBoundsRisks(oldFset, oldAST, strings.Split(oldContent, "\n"))
 			if len(oldRisks) > 0 {
-				oldLines = make(map[int]bool, len(oldRisks))
+				oldFPs = make(map[string]bool, len(oldRisks))
 				for _, r := range oldRisks {
-					oldLines[r.line] = true
+					oldFPs[r.fingerprint] = true
 				}
 			}
 		}
@@ -119,7 +120,7 @@ func checkSliceBoundsRisk(filePath, oldContent, newContent string) []string {
 
 	var warnings []string
 	for _, r := range newRisks {
-		if oldLines != nil && oldLines[r.line] {
+		if oldFPs != nil && oldFPs[r.fingerprint] {
 			continue
 		}
 		warnings = append(warnings, fmt.Sprintf(
@@ -152,10 +153,14 @@ func findSliceBoundsRisks(fset *token.FileSet, file *ast.File, srcLines []string
 			continue
 		}
 
+		enclosingFunc := ""
+		if fn.Name != nil {
+			enclosingFunc = fn.Name.Name
+		}
 		tracked := make(map[string]riskyAssign)
 
 		ast.Inspect(fn.Body, func(n ast.Node) bool {
-			handleSliceBoundsNode(n, fset, srcLines, tracked, &risks)
+			handleSliceBoundsNode(n, fset, srcLines, tracked, &risks, enclosingFunc)
 			return true
 		})
 	}
@@ -166,7 +171,7 @@ func findSliceBoundsRisks(fset *token.FileSet, file *ast.File, srcLines []string
 // handleSliceBoundsNode processes a single AST node for slice bounds risks.
 // It tracks risky assignments and checks for unguarded index access.
 func handleSliceBoundsNode(n ast.Node, fset *token.FileSet, srcLines []string,
-	tracked map[string]riskyAssign, risks *[]sliceBoundsRisk) {
+	tracked map[string]riskyAssign, risks *[]sliceBoundsRisk, enclosingFunc string) {
 
 	if assign, ok := n.(*ast.AssignStmt); ok {
 		funcName, minIdx := extractRiskySliceFunc(assign.Rhs)
@@ -215,10 +220,11 @@ func handleSliceBoundsNode(n ast.Node, fset *token.FileSet, srcLines []string,
 	}
 
 	*risks = append(*risks, sliceBoundsRisk{
-		line:     line,
-		varName:  ident.Name,
-		index:    indexVal,
-		funcName: ra.funcName,
+		line:        line,
+		varName:     ident.Name,
+		index:       indexVal,
+		funcName:    ra.funcName,
+		fingerprint: enclosingFunc + ":" + ident.Name + "[" + fmt.Sprintf("%d", indexVal) + "]",
 	})
 }
 

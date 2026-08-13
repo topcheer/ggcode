@@ -65,16 +65,18 @@ func checkContextLeak(filePath, oldContent, newContent string) string {
 	}
 
 	// Delta check: find context.TODO/Background calls in the old content.
-	var oldLines map[int]bool
+	// Use content-based fingerprints instead of line numbers to avoid
+	// false positives when lines shift due to edits above the call site.
+	var oldFPs map[string]bool
 	if strings.TrimSpace(oldContent) != "" {
 		oldFset := token.NewFileSet()
 		oldAST, oldErr := parser.ParseFile(oldFset, filePath, oldContent, 0)
 		if oldErr == nil {
 			oldLeaks := findContextLeaks(oldFset, oldAST)
 			if len(oldLeaks) > 0 {
-				oldLines = make(map[int]bool, len(oldLeaks))
+				oldFPs = make(map[string]bool, len(oldLeaks))
 				for _, leak := range oldLeaks {
-					oldLines[leak.line] = true
+					oldFPs[leak.fingerprint] = true
 				}
 			}
 		}
@@ -82,7 +84,7 @@ func checkContextLeak(filePath, oldContent, newContent string) string {
 
 	var warnings []string
 	for _, leak := range newLeaks {
-		if oldLines != nil && oldLines[leak.line] {
+		if oldFPs != nil && oldFPs[leak.fingerprint] {
 			continue
 		}
 		warnings = append(warnings, leak.message)
@@ -107,8 +109,8 @@ func checkContextLeak(filePath, oldContent, newContent string) string {
 
 // contextLeak represents a detected context propagation issue.
 type contextLeak struct {
-	line    int    // 1-based line number
-	message string // human-readable warning
+	fingerprint string // content-based delta key: enclosingFunc + ":" + contextMethod
+	message     string // human-readable warning
 }
 
 // findContextLeaks walks the AST and finds context.TODO()/context.Background()
@@ -162,8 +164,12 @@ func findContextLeaks(fset *token.FileSet, file *ast.File) []contextLeak {
 			}
 
 			line := fset.Position(call.Pos()).Line
+			funcName := ""
+			if fn.Name != nil {
+				funcName = fn.Name.Name
+			}
 			leaks = append(leaks, contextLeak{
-				line: line,
+				fingerprint: funcName + ":" + fnName,
 				message: fmt.Sprintf(
 					"L%d: context.%s() used in function that receives %s context.Context. "+
 						"Use the passed %s instead to propagate cancellation, deadlines, and trace context.",
