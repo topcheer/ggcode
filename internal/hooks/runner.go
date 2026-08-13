@@ -118,7 +118,11 @@ func executeCommandHook(h Hook, env HookEnv, payload HookPayload) HookResult {
 			timeout = d
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	baseCtx := env.Ctx
+	if baseCtx == nil {
+		baseCtx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(baseCtx, timeout)
 	defer cancel()
 
 	// Template expansion — only known vars, preserve unknown for shell.
@@ -209,7 +213,11 @@ func executeHTTPHook(h Hook, env HookEnv, payload HookPayload) HookResult {
 		method = "POST"
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	baseCtx := env.Ctx
+	if baseCtx == nil {
+		baseCtx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(baseCtx, timeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, method, h.URL, bytes.NewReader(payloadJSON))

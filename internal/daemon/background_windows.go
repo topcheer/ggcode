@@ -3,8 +3,11 @@
 package daemon
 
 import (
+	"fmt"
 	"os"
 	"syscall"
+
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 func newBackgroundSysProcAttr() *syscall.SysProcAttr {
@@ -12,7 +15,13 @@ func newBackgroundSysProcAttr() *syscall.SysProcAttr {
 }
 
 func checkProcessAlive(proc *os.Process) error {
-	// On Windows, os.FindProcess already checks if the process exists.
-	// Wait with non-blocking approach: try to wait with WaitOption.
+	if proc == nil || proc.Pid <= 0 {
+		return fmt.Errorf("invalid process")
+	}
+	// os.FindProcess on Windows always succeeds even for dead PIDs,
+	// so we must actively check liveness via OpenProcess.
+	if !util.IsProcessAlive(proc.Pid) {
+		return fmt.Errorf("process %d is not running", proc.Pid)
+	}
 	return nil
 }

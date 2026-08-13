@@ -166,10 +166,25 @@ func (t MultiFileWrite) Execute(ctx context.Context, input json.RawMessage) (Res
 	failed := 0
 	skipped := 0
 
+	// In atomic mode, capture original content of existing files so we can
+	// roll back on mid-batch failure (matching multi_edit's applyAtomicPlans).
+	type originalState struct {
+		existed bool
+		content []byte
+	}
+	snapshots := make(map[string]originalState, len(args.Files))
+
 	// Capture diagnostic baselines BEFORE any writes so post-edit
 	// diagnostics can diff and show only newly introduced issues.
 	for _, f := range args.Files {
 		CaptureDiagnosticBaseline(t.WorkingDir, f.Path)
+		if mode == "atomic" {
+			if oldData, rErr := os.ReadFile(f.Path); rErr == nil {
+				snapshots[f.Path] = originalState{existed: true, content: oldData}
+			} else {
+				snapshots[f.Path] = originalState{existed: false}
+			}
+		}
 	}
 
 	// Capture blind-write warnings BEFORE any writes or RecordWrite calls,
@@ -265,6 +280,33 @@ func (t MultiFileWrite) Execute(ctx context.Context, input json.RawMessage) (Res
 			Status: "written",
 			Bytes:  len(writeData),
 		})
+	}
+
+	// Atomic mode rollback: if any write failed, restore all previously
+	// written files to their original content to honor the all-or-nothing
+	// contract. This prevents partial state from leaking to disk.
+	if mode == "atomic" && failed > 0 && written > 0 {
+		restored := 0
+		for _, r := range results {
+			if r.Status != "written" {
+				continue
+			}
+			snap, ok := snapshots[r.Path]
+			if !ok {
+				continue
+			}
+			if snap.existed {
+				_ = atomicWriteFile(r.Path, snap.content, 0o644)
+				restored++
+			} else {
+				_ = os.Remove(r.Path)
+				restored++
+			}
+			defaultFileTracker.RecordWrite(r.Path)
+		}
+		written = 0 // all rolled back
+		// Recount failed: all non-skipped files are effectively failed.
+		failed = len(args.Files) - skipped
 	}
 
 	// Build summary.

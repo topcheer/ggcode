@@ -1,6 +1,7 @@
 package hooks
 
 import (
+	"context"
 	"fmt"
 	"regexp"
 	"time"
@@ -94,6 +95,10 @@ type HookEnv struct {
 	// Compaction context (on_compaction only)
 	TokenBefore int // token count before compaction
 	TokenAfter  int // token count after compaction
+
+	// Ctx allows callers to propagate cancellation (e.g., session cancellation)
+	// to hook execution. If nil, context.Background() is used.
+	Ctx context.Context
 }
 
 // ValidateHooks checks a HookConfig for common misconfigurations.
