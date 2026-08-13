@@ -106,9 +106,12 @@ var leftoverDebugPatterns = []leftoverDebugPattern{
 	},
 
 	// --- Ruby ---
+	// Note: bare `p` is an extremely common Ruby variable name (Proc, person,
+	// point). Only match actual debug calls: p(obj), puts(x), pp(x), warn(msg),
+	// or string-argument forms like puts "text" / p "text" (#112).
 	{
 		name:    "puts/p/pp (Ruby)",
-		pattern: regexp.MustCompile(`\b(puts|pp|p|warn)\s+`),
+		pattern: regexp.MustCompile(`\b(puts|pp|p|warn)\s*[\({]|\b(puts|pp|p|warn)\s+"`),
 		exts:    map[string]bool{".rb": true},
 	},
 
