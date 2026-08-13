@@ -312,8 +312,11 @@ func TestOpenAIReasoningEffortRetriesWithoutUnsupportedParam(t *testing.T) {
 	if _, ok := bodies[1]["reasoning_effort"]; ok {
 		t.Fatalf("expected fallback request to omit reasoning_effort, got %#v", bodies[1]["reasoning_effort"])
 	}
-	if got := p.ReasoningEffort(); got != "" {
-		t.Fatalf("expected unsupported reasoning_effort to switch to auto, got %q", got)
+	// #110: Reasoning effort preference should persist after a model that
+	// doesn't support it is used. The retry only clears req-level field,
+	// not the provider state, so switching back to a supporting model works.
+	if got := p.ReasoningEffort(); got != "high" {
+		t.Fatalf("expected reasoning_effort to persist as \"high\" after unsupported-model retry (issue #110), got %q", got)
 	}
 }
 

@@ -492,7 +492,6 @@ func (m *Manager) Spawn(name, task, displayTask string, tools []string, ctx cont
 		sa.mu.Unlock()
 	}
 	if running >= maxConcurrentSubAgents {
-		m.mu.Unlock()
 		// Return a synthetic error ID that wait_agent will report as failed.
 		errID := fmt.Sprintf("sa-limit-%d", time.Now().UnixNano())
 		sa := &SubAgent{
@@ -508,6 +507,7 @@ func (m *Manager) Spawn(name, task, displayTask string, tools []string, ctx cont
 		}
 		close(sa.done)
 		m.agents[errID] = sa
+		m.mu.Unlock()
 		return errID
 	}
 	m.nextID++

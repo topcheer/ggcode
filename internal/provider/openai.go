@@ -151,7 +151,6 @@ func (p *OpenAIProvider) createChatCompletion(ctx context.Context, req openai.Ch
 	resp, err := p.client.CreateChatCompletion(ctx, req)
 	if err != nil && hasReasoningEffort && retryWithoutReasoningEffort(err) {
 		req.ReasoningEffort = ""
-		p.SetReasoningEffort("")
 		resp, err = p.client.CreateChatCompletion(ctx, req)
 	}
 	return resp, err
@@ -161,7 +160,6 @@ func (p *OpenAIProvider) createChatCompletionStream(ctx context.Context, req ope
 	stream, err := p.client.CreateChatCompletionStream(ctx, req)
 	if err != nil && hasReasoningEffort && retryWithoutReasoningEffort(err) {
 		req.ReasoningEffort = ""
-		p.SetReasoningEffort("")
 		stream, err = p.client.CreateChatCompletionStream(ctx, req)
 	}
 	return stream, err
@@ -328,7 +326,7 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 		return callErr
 	}, providerRetryAttempts)
 	if err != nil {
-		if rejected, parsed := maxTokensRejection(err); rejected {
+		if rejected, parsed := maxTokensRejection(err); rejected && p.cap != nil {
 			p.cap.OnRejected(parsed)
 		}
 		debug.Log("openai", "Chat FATAL model=%s baseURL=%s: %T: %v", p.model, p.baseURL, err, err)
@@ -392,7 +390,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 			var localStreamer *openai.ChatCompletionStream
 			localStreamer, err = p.createChatCompletionStream(ctx, req, hasReasoningEffort)
 			if err != nil {
-				if rejected, parsed := maxTokensRejection(err); rejected {
+				if rejected, parsed := maxTokensRejection(err); rejected && p.cap != nil {
 					p.cap.OnRejected(parsed)
 				}
 				if isRetryableForContext(ctx, err) && attempt < providerRetryAttempts-1 {
@@ -566,7 +564,9 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 						if isLengthFinishReason(finishReason) {
 							// Output was truncated by max_tokens limit - this is NOT an
 							// error. We keep the partial content already streamed.
-							p.cap.OnTruncated()
+							if p.cap != nil {
+								p.cap.OnTruncated()
+							}
 							truncated = true
 						} else if finishErr := finishReasonError(finishReason); finishErr != nil {
 							ch <- StreamEvent{Type: StreamEventError, Error: finishErr}
