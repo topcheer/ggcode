@@ -207,6 +207,7 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 			if sa, ok := cfg.Manager.Get(cfg.SubAgentID); ok {
 				sa.IncrementToolCalls()
 				sa.setActivity("tool", meta.Name, meta.RawArgs)
+				sa.setToolExecuting(true)
 				sa.appendEvent(AgentEvent{
 					Type:     AgentEventToolCall,
 					ToolName: meta.Name,
@@ -237,6 +238,7 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 				cfg.Manager.Notify(cfg.SubAgentID)
 			}
 			if sa, ok := cfg.Manager.Get(cfg.SubAgentID); ok {
+				sa.setToolExecuting(false)
 				sa.appendEvent(AgentEvent{
 					Type:     AgentEventToolResult,
 					ToolName: meta.Name,

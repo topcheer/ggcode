@@ -101,6 +101,7 @@ type SubAgent struct {
 	done             chan struct{} // closed when the sub-agent reaches any terminal state
 	goroutineStarted bool          // true once Run() has started the goroutine (SetCancel alone doesn't set this)
 	lastActivity     time.Time     // updated on every LLM chunk / tool call; used by watchdog
+	toolExecuting    bool          // true while a tool is running; watchdog skips reap
 	mu               sync.Mutex
 }
 
@@ -283,6 +284,16 @@ func (s *SubAgent) setActivity(phase, toolName, args string) {
 	s.lastActivity = time.Now()
 }
 
+func (s *SubAgent) setToolExecuting(executing bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.toolExecuting = executing
+	// Refresh activity when tool starts so watchdog timer resets
+	if executing {
+		s.lastActivity = time.Now()
+	}
+}
+
 func (s *SubAgent) setProgressSummary(summary string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -441,8 +452,9 @@ func (m *Manager) reapInactiveAgents() {
 		sa.mu.Lock()
 		isRunning := sa.Status == StatusRunning && sa.goroutineStarted
 		isStale := !sa.lastActivity.IsZero() && sa.lastActivity.Before(threshold)
+		toolRunning := sa.toolExecuting
 		sa.mu.Unlock()
-		if isRunning && isStale {
+		if isRunning && isStale && !toolRunning {
 			stale = append(stale, id)
 		}
 	}
