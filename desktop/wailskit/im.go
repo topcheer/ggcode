@@ -170,11 +170,15 @@ func SaveIMAdapter(name string, values map[string]string) error {
 				}
 			}
 		}
-		// Remove old adapter and re-add (AddIMAdapter rejects existing names)
-		delete(cfg.IM.Adapters, name)
-		_ = cfg.Save()
+		// Update the adapter in-place and save once (avoid delete→save→re-add data loss).
+		cfg.IM.Adapters[name] = adapterCfg
 	}
 
+	// If the adapter didn't exist above, AddIMAdapter creates it. If it did,
+	// we already updated it in-memory — just persist.
+	if _, exists := cfg.IM.Adapters[name]; exists {
+		return cfg.Save()
+	}
 	return cfg.AddIMAdapter(name, adapterCfg)
 }
 

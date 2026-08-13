@@ -164,6 +164,21 @@ func checkFlakyGoroutine(goStmt *ast.GoStmt, fset *token.FileSet, src string) []
 // checkFlakyMapRange detects range over map with order-dependent logic.
 // Go randomizes map iteration order, so tests relying on iteration order are flaky.
 func checkFlakyMapRange(rangeStmt *ast.RangeStmt, fset *token.FileSet, src string) []string {
+	// Only flag range over maps, not slices/arrays (which have deterministic order).
+	if rangeStmt.X == nil {
+		return nil
+	}
+	// Check the type of the ranged expression — only maps have randomized iteration.
+	if bt, ok := rangeStmt.X.(*ast.MapType); !ok {
+		_ = bt // not a map literal type; could still be a map variable
+		// We can't determine the type for variables without type info, so
+		// we only skip when we can positively identify it as a non-map type
+		// (e.g., a slice/array composite literal with []T but not map[K]V).
+		if !isMapTypeExpr(rangeStmt.X) {
+			return nil
+		}
+	}
+
 	// Only flag if the range body likely depends on iteration order.
 	// We check if the body contains index-based access or comparison with a
 	// position-dependent value (e.g., [0], [1], first/last element).
@@ -196,9 +211,7 @@ func checkFlakyMapRange(rangeStmt *ast.RangeStmt, fset *token.FileSet, src strin
 	// using index [0], or asserting a specific sequence.
 	if strings.Contains(body, "[0]") ||
 		strings.Contains(body, "[1]") ||
-		strings.Contains(body, ".First()") ||
-		strings.Contains(body, "Equal(") ||
-		strings.Contains(body, "DeepEqual(") {
+		strings.Contains(body, ".First()") {
 		// Only flag if the ranged variable is used in the assertion.
 		// This is a heuristic - we check if the value variable name appears.
 		valName := ""
@@ -218,6 +231,38 @@ func checkFlakyMapRange(rangeStmt *ast.RangeStmt, fset *token.FileSet, src strin
 	}
 
 	return nil
+}
+
+// isMapTypeExpr checks if the AST expression looks like a map type.
+// We check for *ast.MapType or *ast.CompositeLit with map elements.
+func isMapTypeExpr(expr ast.Expr) bool {
+	switch e := expr.(type) {
+	case *ast.MapType:
+		return true
+	case *ast.CompositeLit:
+		// Check if the composite literal's type is a map
+		if _, ok := e.Type.(*ast.MapType); ok {
+			return true
+		}
+	case *ast.Ident:
+		// Can't determine type from variable name alone without type info.
+		// Be conservative: assume it could be a map.
+		return true
+	case *ast.CallExpr:
+		// make(map[...]) or function returning a map — assume could be map
+		if fun, ok := e.Fun.(*ast.Ident); ok && fun.Name == "make" {
+			if len(e.Args) > 0 {
+				if _, isMap := e.Args[0].(*ast.MapType); isMap {
+					return true
+				}
+				// make(someVar) — can't tell, be conservative
+				return true
+			}
+		}
+		return true // function call result, be conservative
+	}
+	// For slice/array types ([]T), this won't match MapType, so we skip.
+	return false
 }
 
 // --- Multi-language regex patterns ---

@@ -384,6 +384,10 @@ func ExtractFilePath(toolName string, rawInput string) string {
 			continue
 		}
 		val := strings.TrimSpace(rest[colonIdx+1:])
+		// Only process string values — skip null, numbers, booleans, etc.
+		if len(val) == 0 || val[0] != '"' {
+			continue // non-string JSON value, skip to next key
+		}
 		val = strings.TrimPrefix(val, `"`)
 		val = strings.TrimSuffix(val, `"`)
 		if i := strings.Index(val, `"`); i > 0 {
