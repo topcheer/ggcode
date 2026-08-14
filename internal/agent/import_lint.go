@@ -343,7 +343,7 @@ func checkGoImportsASTWithDir(filePath string, f *ast.File, workingDir string) [
 		} else {
 			parts := strings.Split(rawPath, "/")
 			last := parts[len(parts)-1]
-			// For versioned paths like "charm.land/lipgloss/v2", the last
+			// For versioned paths like "github.com/topcheer/fluui/compat/lipgloss", the last
 			// segment "v2" is not the package name - use the segment before it.
 			if isVersionSegment(last) && len(parts) >= 2 {
 				name = parts[len(parts)-2]

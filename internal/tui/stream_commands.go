@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"charm.land/lipgloss/v2"
+	"github.com/topcheer/fluui/compat/lipgloss"
 	"github.com/topcheer/ggcode/internal/stream"
 )
 

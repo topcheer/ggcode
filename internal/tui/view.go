@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
-	"charm.land/lipgloss/v2/compat"
+	tea "github.com/topcheer/fluui/compat/bubbletea"
+	"github.com/topcheer/fluui/compat/lipgloss"
+	"github.com/topcheer/fluui/compat/lipgloss/compat"
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/permission"

@@ -4,8 +4,8 @@ import (
 	"math/rand/v2"
 	"time"
 
-	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
+	tea "github.com/topcheer/fluui/compat/bubbletea"
+	"github.com/topcheer/fluui/compat/lipgloss"
 )
 
 // petAnimMsg is sent periodically by the pet timer to trigger a blink frame.

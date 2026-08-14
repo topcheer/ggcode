@@ -4,7 +4,7 @@ import (
 	"strings"
 	"time"
 
-	"charm.land/bubbles/v2/textarea"
+	"github.com/topcheer/fluui/compat/bubbles/textarea"
 )
 
 // handleResize updates viewport and input dimensions on window size changes.

@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	tea "charm.land/bubbletea/v2"
+	tea "github.com/topcheer/fluui/compat/bubbletea"
 )
 
 // ============================================================

@@ -15,8 +15,8 @@ import (
 	"github.com/makiuchi-d/gozxing"
 	"github.com/makiuchi-d/gozxing/qrcode"
 
-	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
+	tea "github.com/topcheer/fluui/compat/bubbletea"
+	"github.com/topcheer/fluui/compat/lipgloss"
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/im"

@@ -7,8 +7,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	tea "charm.land/bubbletea/v2"
 	qrcode "github.com/skip2/go-qrcode"
+	tea "github.com/topcheer/fluui/compat/bubbletea"
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/im"

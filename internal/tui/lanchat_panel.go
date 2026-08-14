@@ -8,8 +8,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
+	tea "github.com/topcheer/fluui/compat/bubbletea"
+	"github.com/topcheer/fluui/compat/lipgloss"
 
 	"github.com/topcheer/ggcode/internal/lanchat"
 	"github.com/topcheer/ggcode/internal/provider"

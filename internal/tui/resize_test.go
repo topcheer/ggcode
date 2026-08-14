@@ -3,7 +3,7 @@ package tui
 import (
 	"testing"
 
-	"charm.land/bubbles/v2/textarea"
+	"github.com/topcheer/fluui/compat/bubbles/textarea"
 )
 
 func TestComposerHeight(t *testing.T) {

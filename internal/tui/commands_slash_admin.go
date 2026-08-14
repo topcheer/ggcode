@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	tea "charm.land/bubbletea/v2"
 	"github.com/atotto/clipboard"
+	tea "github.com/topcheer/fluui/compat/bubbletea"
 	"github.com/topcheer/ggcode/internal/agentruntime"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"

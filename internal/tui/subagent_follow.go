@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"charm.land/lipgloss/v2"
+	"github.com/topcheer/fluui/compat/lipgloss"
 	"github.com/topcheer/ggcode/internal/chat"
 	"github.com/topcheer/ggcode/internal/subagent"
 	"github.com/topcheer/ggcode/internal/swarm"

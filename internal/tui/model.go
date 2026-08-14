@@ -12,9 +12,9 @@ import (
 	"time"
 	"unicode"
 
-	"charm.land/bubbles/v2/textarea"
-	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
+	"github.com/topcheer/fluui/compat/bubbles/textarea"
+	tea "github.com/topcheer/fluui/compat/bubbletea"
+	"github.com/topcheer/fluui/compat/lipgloss"
 	"golang.org/x/term"
 
 	"github.com/topcheer/ggcode/internal/a2a"

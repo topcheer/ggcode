@@ -5,8 +5,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"charm.land/lipgloss/v2"
 	"github.com/mattn/go-runewidth"
+	"github.com/topcheer/fluui/compat/lipgloss"
 )
 
 // ToolStatus represents the current state of a tool call.

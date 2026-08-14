@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"charm.land/bubbles/v2/textinput"
-	tea "charm.land/bubbletea/v2"
+	"github.com/topcheer/fluui/compat/bubbles/textinput"
+	tea "github.com/topcheer/fluui/compat/bubbletea"
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/im"

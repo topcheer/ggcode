@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"charm.land/lipgloss/v2"
+	"github.com/topcheer/fluui/compat/lipgloss"
 	"time"
 )
 

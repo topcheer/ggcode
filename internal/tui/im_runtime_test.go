@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	tea "charm.land/bubbletea/v2"
+	tea "github.com/topcheer/fluui/compat/bubbletea"
 
 	"github.com/topcheer/ggcode/internal/a2a"
 	"github.com/topcheer/ggcode/internal/agentruntime"

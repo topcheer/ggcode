@@ -14,7 +14,7 @@ import (
 	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/util"
 
-	tea "charm.land/bubbletea/v2"
+	tea "github.com/topcheer/fluui/compat/bubbletea"
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/im"

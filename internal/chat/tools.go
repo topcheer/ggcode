@@ -8,8 +8,8 @@ import (
 	"time"
 	"unicode"
 
-	"charm.land/lipgloss/v2"
-	"charm.land/lipgloss/v2/tree"
+	"github.com/topcheer/fluui/compat/lipgloss"
+	"github.com/topcheer/fluui/compat/lipgloss/tree"
 
 	"github.com/topcheer/ggcode/internal/markdown"
 	"github.com/topcheer/ggcode/internal/security"

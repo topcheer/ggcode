@@ -139,7 +139,7 @@ func detectTechStack(root string) []string {
 	if fileExists(filepath.Join(root, "go.mod")) {
 		stack = append(stack, "Go codebase")
 	}
-	if fileContains(filepath.Join(root, "go.mod"), "charm.land/bubbletea/v2") {
+	if fileContains(filepath.Join(root, "go.mod"), "github.com/topcheer/fluui/compat/bubbletea") {
 		stack = append(stack, "Bubble Tea / Lip Gloss TUI")
 	}
 	if fileContains(filepath.Join(root, "README.md"), "MCP") {

@@ -3,7 +3,7 @@ package tui
 import (
 	"time"
 
-	tea "charm.land/bubbletea/v2"
+	tea "github.com/topcheer/fluui/compat/bubbletea"
 )
 
 func combineCmds(cmds ...tea.Cmd) tea.Cmd {

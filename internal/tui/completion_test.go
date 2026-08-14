@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"charm.land/bubbles/v2/textinput"
+	"github.com/topcheer/fluui/compat/bubbles/textinput"
 	"github.com/topcheer/ggcode/internal/commands"
 )
 

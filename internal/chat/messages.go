@@ -4,7 +4,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"charm.land/lipgloss/v2"
+	"github.com/topcheer/fluui/compat/lipgloss"
 
 	"github.com/topcheer/ggcode/internal/markdown"
 )

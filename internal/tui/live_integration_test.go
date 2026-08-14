@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	tea "charm.land/bubbletea/v2"
+	tea "github.com/topcheer/fluui/compat/bubbletea"
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/image"

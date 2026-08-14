@@ -1,6 +1,6 @@
 package tui
 
-import tea "charm.land/bubbletea/v2"
+import tea "github.com/topcheer/fluui/compat/bubbletea"
 
 // IM-related slash command handlers.
 // The core IM slash commands (/listim, /muteim, /muteall, /muteself, /restart)

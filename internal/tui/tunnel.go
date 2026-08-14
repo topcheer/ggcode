@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	tea "charm.land/bubbletea/v2"
+	tea "github.com/topcheer/fluui/compat/bubbletea"
 
 	"github.com/atotto/clipboard"
 	"github.com/topcheer/ggcode/internal/agentruntime"

@@ -3,10 +3,8 @@ module github.com/topcheer/ggcode
 go 1.26.2
 
 require (
-	charm.land/bubbles/v2 v2.1.0
 	charm.land/bubbletea/v2 v2.0.6
 	charm.land/glamour/v2 v2.0.0
-	charm.land/lipgloss/v2 v2.0.3
 	github.com/BurntSushi/toml v1.5.0
 	github.com/anthropics/anthropic-sdk-go v1.29.0
 	github.com/atotto/clipboard v0.1.4
@@ -42,7 +40,7 @@ require (
 	golang.org/x/image v0.24.0
 	golang.org/x/mod v0.35.0
 	golang.org/x/net v0.53.0
-	golang.org/x/sys v0.43.0
+	golang.org/x/sys v0.46.0
 	golang.org/x/term v0.42.0
 	google.golang.org/genai v1.52.1
 	google.golang.org/grpc v1.81.1
@@ -50,6 +48,11 @@ require (
 	gopkg.in/yaml.v3 v3.0.1
 	maunium.net/go/mautrix v0.27.0
 	modernc.org/sqlite v1.50.0
+)
+
+require (
+	charm.land/lipgloss/v2 v2.0.3 // indirect
+	github.com/alecthomas/chroma v0.10.0 // indirect
 )
 
 require (
@@ -141,6 +144,7 @@ require (
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
+	github.com/topcheer/fluui v0.0.0
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasthttp v1.59.0 // indirect
@@ -165,3 +169,5 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
+
+replace github.com/topcheer/fluui => /Volumes/new/ggai/fluui

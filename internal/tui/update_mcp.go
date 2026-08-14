@@ -1,8 +1,8 @@
 package tui
 
 import (
-	tea "charm.land/bubbletea/v2"
 	"fmt"
+	tea "github.com/topcheer/fluui/compat/bubbletea"
 	"strings"
 	"time"
 

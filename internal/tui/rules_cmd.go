@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	tea "charm.land/bubbletea/v2"
+	tea "github.com/topcheer/fluui/compat/bubbletea"
 
 	"github.com/topcheer/ggcode/internal/agent"
 )

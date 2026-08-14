@@ -3,8 +3,8 @@ package tui
 import (
 	"fmt"
 
-	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
+	tea "github.com/topcheer/fluui/compat/bubbletea"
+	"github.com/topcheer/fluui/compat/lipgloss"
 )
 
 // homeWarnModel is a full-screen Bubble Tea program that warns the user

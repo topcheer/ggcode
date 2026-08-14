@@ -1,8 +1,8 @@
 package tui
 
 import (
-	"charm.land/bubbles/v2/textarea"
-	tea "charm.land/bubbletea/v2"
+	"github.com/topcheer/fluui/compat/bubbles/textarea"
+	tea "github.com/topcheer/fluui/compat/bubbletea"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/permission"
 	"strings"

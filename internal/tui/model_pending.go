@@ -1,7 +1,7 @@
 package tui
 
 import (
-	tea "charm.land/bubbletea/v2"
+	tea "github.com/topcheer/fluui/compat/bubbletea"
 	"github.com/topcheer/ggcode/internal/agentruntime"
 	"github.com/topcheer/ggcode/internal/util"
 	"strings"

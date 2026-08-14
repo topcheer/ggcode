@@ -243,13 +243,13 @@ func TestIsVersionSegment(t *testing.T) {
 }
 
 func TestCheckGoImports_VersionedPathNoFalsePositive(t *testing.T) {
-	// "charm.land/lipgloss/v2" has path segment "v2" which is NOT the package name.
+	// "github.com/topcheer/fluui/compat/lipgloss" has path segment "v2" which is NOT the package name.
 	// The code uses "lipgloss.Width()" but the analyzer would see "v2" as the name
 	// and incorrectly report it as unused. This test verifies the fix.
 	src := `package main
 
 import (
-	"charm.land/lipgloss/v2"
+	"github.com/topcheer/fluui/compat/lipgloss"
 )
 
 func main() {

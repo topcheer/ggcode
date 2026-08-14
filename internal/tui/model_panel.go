@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"charm.land/bubbles/v2/textinput"
-	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
+	"github.com/topcheer/fluui/compat/bubbles/textinput"
+	tea "github.com/topcheer/fluui/compat/bubbletea"
+	"github.com/topcheer/fluui/compat/lipgloss"
 
 	"github.com/topcheer/ggcode/internal/agentruntime"
 	"github.com/topcheer/ggcode/internal/provider"

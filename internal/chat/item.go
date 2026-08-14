@@ -3,7 +3,7 @@ package chat
 import (
 	"strings"
 
-	"charm.land/lipgloss/v2"
+	"github.com/topcheer/fluui/compat/lipgloss"
 )
 
 // Item is the core interface for any renderable element in the conversation.

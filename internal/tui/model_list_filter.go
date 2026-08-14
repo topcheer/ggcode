@@ -3,7 +3,7 @@ package tui
 import (
 	"strings"
 
-	"charm.land/bubbles/v2/textinput"
+	"github.com/topcheer/fluui/compat/bubbles/textinput"
 )
 
 // maxVisibleModelRows controls how many model rows are shown in the model

@@ -5,7 +5,7 @@ import (
 	"runtime"
 	"strings"
 
-	"charm.land/lipgloss/v2"
+	"github.com/topcheer/fluui/compat/lipgloss"
 )
 
 func defaultPasteShortcut() string {

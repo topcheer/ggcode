@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	tea "charm.land/bubbletea/v2"
+	tea "github.com/topcheer/fluui/compat/bubbletea"
 )
 
 // handleCronCommand handles /cron subcommands: list, pause, resume, pauseall, resumeall, get

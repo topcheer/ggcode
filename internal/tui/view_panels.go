@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"charm.land/lipgloss/v2"
+	"github.com/topcheer/fluui/compat/lipgloss"
 
 	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/permission"

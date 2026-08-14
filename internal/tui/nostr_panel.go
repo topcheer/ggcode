@@ -9,8 +9,8 @@ import (
 	"sort"
 	"strings"
 
-	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
+	tea "github.com/topcheer/fluui/compat/bubbletea"
+	"github.com/topcheer/fluui/compat/lipgloss"
 
 	"github.com/nbd-wtf/go-nostr"
 	"github.com/nbd-wtf/go-nostr/nip19"

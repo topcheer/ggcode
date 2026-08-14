@@ -3,8 +3,8 @@ package tui
 import (
 	"strings"
 
-	"charm.land/lipgloss/v2"
 	"github.com/muesli/reflow/wordwrap"
+	"github.com/topcheer/fluui/compat/lipgloss"
 )
 
 func joinPanelColumns(leftLines, rightLines []string, leftWidth, rightWidth, height int) string {

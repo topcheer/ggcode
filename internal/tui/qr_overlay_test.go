@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "charm.land/bubbletea/v2"
+	tea "github.com/topcheer/fluui/compat/bubbletea"
 )
 
 // TestQROverlay_Esc_ReturnsToQQPanel verifies that pressing Esc in the QR overlay

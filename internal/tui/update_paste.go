@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"runtime"
 
-	tea "charm.land/bubbletea/v2"
+	tea "github.com/topcheer/fluui/compat/bubbletea"
 )
 
 type textPasteMsg struct {

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"sync"
 
-	"charm.land/lipgloss/v2"
 	"github.com/muesli/reflow/wordwrap"
+	"github.com/topcheer/fluui/compat/lipgloss"
 
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
