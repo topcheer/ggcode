@@ -15,30 +15,21 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 	switch p.Action {
 	// ── Mouse ──
 	case "click":
-		return cliclickResult(ctx, fmt.Sprintf("c:%d,%d", p.X, p.Y))
+		return mouseClick(ctx, p.X, p.Y, "left", 1)
 	case "double_click":
-		return cliclickResult(ctx, fmt.Sprintf("dc:%d,%d", p.X, p.Y))
+		return mouseClick(ctx, p.X, p.Y, "left", 2)
 	case "right_click":
-		return cliclickResult(ctx, fmt.Sprintf("rc:%d,%d", p.X, p.Y))
+		return mouseClick(ctx, p.X, p.Y, "right", 1)
 	case "move":
-		return cliclickResult(ctx, fmt.Sprintf("m:%d,%d", p.X, p.Y))
+		return mouseMove(ctx, p.X, p.Y)
 	case "drag":
-		// dd: mouse down at start, dm: move to target, du: mouse up at target
-		return cliclickResult(ctx, fmt.Sprintf("dd:%d,%d dm:%d,%d du:%d,%d", p.X, p.Y, p.ToX, p.ToY, p.ToX, p.ToY))
+		return mouseDrag(ctx, p.X, p.Y, p.ToX, p.ToY)
 	case "scroll":
-		// cliclick uses negative for down, positive for up
-		amt := p.Amount
-		if p.Direction == "down" {
-			amt = -amt
-		}
-		return cliclickResult(ctx, fmt.Sprintf("scroll:%d,%d,%d", p.X, p.Y, amt))
+		return mouseScroll(ctx, p.X, p.Y, p.Direction, p.Amount)
 
 	// ── Keyboard ──
 	case "type":
-		// Escape double quotes in the text for cliclick
-		escaped := strings.ReplaceAll(p.Text, "\\", "\\\\")
-		escaped = strings.ReplaceAll(escaped, "\"", "\\\"")
-		return cliclickResult(ctx, fmt.Sprintf("t:\"%s\"", escaped))
+		return typeText(ctx, p.Text)
 	case "key_press", "key_combo":
 		return keyComboResult(ctx, p.Text)
 
@@ -122,16 +113,99 @@ end tell`)
 	}
 }
 
+// mouseClick moves to (x,y) then performs N clicks via Swift CGEvent.
+// Zero external dependencies — uses system swift + CoreGraphics.
+func mouseClick(ctx context.Context, x, y int, button string, count int) (Result, error) {
+	eventType := "kCGEventLeftMouseDown"
+	eventTypeUp := "kCGEventLeftMouseUp"
+	if button == "right" {
+		eventType = "kCGEventRightMouseDown"
+		eventTypeUp = "kCGEventRightMouseUp"
+	}
+	return runSwiftCGEvent(ctx, fmt.Sprintf(`
+import CoreGraphics
+let point = CGPoint(x: %d, y: %d)
+for _ in 0..<%d {
+    let eDown = CGEvent(mouseEventSource: nil, mouseType: CGEventType(rawValue: %s)!,
+                        mouseCursorPosition: point, mouseButton: .left)
+    eDown?.post(tap: .cghidEventTap)
+    let eUp = CGEvent(mouseEventSource: nil, mouseType: CGEventType(rawValue: %s)!,
+                      mouseCursorPosition: point, mouseButton: .left)
+    eUp?.post(tap: .cghidEventTap)
+}
+`, x, y, count, eventType, eventTypeUp))
+}
+
+// mouseMove moves the cursor to (x,y) via Swift CGEvent.
+func mouseMove(ctx context.Context, x, y int) (Result, error) {
+	return runSwiftCGEvent(ctx, fmt.Sprintf(`
+import CoreGraphics
+let point = CGPoint(x: %d, y: %d)
+let e = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved,
+                mouseCursorPosition: point, mouseButton: .left)
+e?.post(tap: .cghidEventTap)
+`, x, y))
+}
+
+// mouseDrag drags from (x,y) to (toX,toY) via Swift CGEvent.
+func mouseDrag(ctx context.Context, x, y, toX, toY int) (Result, error) {
+	return runSwiftCGEvent(ctx, fmt.Sprintf(`
+import CoreGraphics
+let start = CGPoint(x: %d, y: %d)
+let end = CGPoint(x: %d, y: %d)
+let eDown = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown,
+                    mouseCursorPosition: start, mouseButton: .left)
+eDown?.post(tap: .cghidEventTap)
+let eDrag = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDragged,
+                     mouseCursorPosition: end, mouseButton: .left)
+eDrag?.post(tap: .cghidEventTap)
+let eUp = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp,
+                  mouseCursorPosition: end, mouseButton: .left)
+eUp?.post(tap: .cghidEventTap)
+`, x, y, toX, toY))
+}
+
+// mouseScroll scrolls at (x,y) in the given direction via Swift CGEvent.
+func mouseScroll(ctx context.Context, x, y int, direction string, amount int) (Result, error) {
+	yDelta := amount
+	if direction == "down" {
+		yDelta = -yDelta
+	}
+	return runSwiftCGEvent(ctx, fmt.Sprintf(`
+import CoreGraphics
+let point = CGPoint(x: %d, y: %d)
+let e = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: %d, wheel2: 0, wheel3: 0)
+e?.location = point
+e?.post(tap: .cghidEventTap)
+`, x, y, yDelta))
+}
+
+// typeText types a string via AppleScript keystroke.
+func typeText(ctx context.Context, text string) (Result, error) {
+	escaped := strings.ReplaceAll(text, "\\", "\\\\")
+	escaped = strings.ReplaceAll(escaped, "\"", "\\\"")
+	script := fmt.Sprintf(`tell application "System Events" to keystroke "%s"`, escaped)
+	return appleScriptResult(ctx, script)
+}
+
+// runSwiftCGEvent runs an inline Swift script that uses CoreGraphics
+// CGEvent API for mouse events. Zero external dependencies — swift
+// and CoreGraphics are pre-installed on every macOS system.
+func runSwiftCGEvent(ctx context.Context, code string) (Result, error) {
+	cmd := exec.CommandContext(ctx, "swift", "-e", code)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return Result{}, fmt.Errorf("Swift CGEvent failed: %w\n%s (ensure app has Accessibility permission)", err, string(out))
+	}
+	return Result{Content: "OK"}, nil
+}
+
 // snapshotUI returns the accessibility tree of the frontmost application
 // as a JSON array of elements with role, label, frame (x,y,w,h), and enabled.
-// Uses AppleScript + System Events to traverse the accessibility tree.
 func snapshotUI(ctx context.Context, maxDepth int) (Result, error) {
 	if maxDepth <= 0 {
 		maxDepth = 8
 	}
-	// Build a JXA (JavaScript for Automation) script that walks the
-	// accessibility tree and returns JSON. JXA is more practical for
-	// recursive tree traversal than AppleScript.
 	script := fmt.Sprintf(`
 ObjC.import('AppKit');
 (function() {
@@ -150,7 +224,6 @@ ObjC.import('AppKit');
       var desc = "";
       try { desc = elem.description(); } catch(e) {}
 
-      // Get position and size
       var frame = null;
       try {
         var pos = elem.position();
@@ -166,7 +239,6 @@ ObjC.import('AppKit');
       var path = parentPath + "/" + (role || "?");
       var label = name || desc || "";
 
-      // Only include elements with meaningful data
       if (frame || label) {
         results.push({
           role: role || "",
@@ -178,7 +250,6 @@ ObjC.import('AppKit');
         });
       }
 
-      // Recurse into children
       try {
         var children = elem.uiElements();
         for (var i = 0; i < children.length && i < 200; i++) {
@@ -256,14 +327,12 @@ ObjC.import('AppKit');
 }
 
 // findAndClick finds a UI element by text and clicks its center.
-// This is a composite action that reduces LLM coordinate reasoning.
 func findAndClick(ctx context.Context, searchText string, maxDepth int) (Result, error) {
 	findRes, err := findElement(ctx, searchText, maxDepth)
 	if err != nil {
 		return Result{}, fmt.Errorf("find_element failed: %w", err)
 	}
 
-	// Parse the JSON to extract the first match's frame center
 	type elemInfo struct {
 		Role  string `json:"role"`
 		Label string `json:"label"`
@@ -279,16 +348,14 @@ func findAndClick(ctx context.Context, searchText string, maxDepth int) (Result,
 		return Result{Content: fmt.Sprintf("No UI element found matching %q", searchText)}, nil
 	}
 
-	// Find first match with a valid frame
 	for _, m := range matches {
 		if m.Frame != nil && m.Frame.W > 0 && m.Frame.H > 0 {
 			cx := int(m.Frame.X + m.Frame.W/2)
 			cy := int(m.Frame.Y + m.Frame.H/2)
-			clickRes, err := cliclickResult(ctx, fmt.Sprintf("c:%d,%d", cx, cy))
+			_, err := mouseClick(ctx, cx, cy, "left", 1)
 			if err != nil {
 				return Result{}, fmt.Errorf("click at (%d,%d) failed: %w", cx, cy, err)
 			}
-			_ = clickRes
 			return Result{Content: fmt.Sprintf("Found %q at (%d,%d) size %.0fx%.0f, clicked center (%d,%d)",
 				matches[0].Label, int(m.Frame.X), int(m.Frame.Y), m.Frame.W, m.Frame.H, cx, cy)}, nil
 		}
@@ -328,10 +395,7 @@ func runJXA(ctx context.Context, script string) (Result, error) {
 	return Result{Content: result}, nil
 }
 
-// displayInfo returns logical and physical display dimensions and the
-// scale factor. This is critical for Retina/HiDPI: screenshots are in
-// physical pixels but cliclick coordinates are in logical points.
-// Example: a 2x Retina display has logical 1728x1117 but physical 3456x2234.
+// displayInfo returns logical and physical display dimensions and the scale factor.
 func displayInfo(ctx context.Context) (Result, error) {
 	script := `
 ObjC.import('AppKit');
@@ -358,43 +422,14 @@ ObjC.import('AppKit');
 	return runJXA(ctx, script)
 }
 
-// cliclickResult runs a cliclick command. cliclick is a macOS utility
-// for sending mouse/keyboard events. If not installed, it tries to
-// install via Homebrew.
-func cliclickResult(ctx context.Context, args ...string) (Result, error) {
-	cmd := exec.CommandContext(ctx, "cliclick", args...)
-	out, err := cmd.Output()
-	if err != nil {
-		// Check if cliclick is missing
-		if isCommandNotFound(err) {
-			// Try to install via brew
-			installOut, installErr := exec.CommandContext(ctx, "brew", "install", "cliclick").CombinedOutput()
-			if installErr != nil {
-				return Result{}, fmt.Errorf("cliclick is not installed and brew install failed: %w\n%s", installErr, string(installOut))
-			}
-			// Retry
-			out, err = exec.CommandContext(ctx, "cliclick", args...).Output()
-			if err != nil {
-				return Result{}, fmt.Errorf("cliclick failed after install: %w", err)
-			}
-		} else {
-			return Result{}, fmt.Errorf("cliclick failed: %w", err)
-		}
-	}
-	result := fmt.Sprintf("OK: cliclick %s", strings.Join(args, " "))
-	if len(out) > 0 {
-		result += "\n" + strings.TrimSpace(string(out))
-	}
-	return Result{Content: result}, nil
-}
-
+// keyComboResult translates key combo strings (e.g. "cmd+c", "ctrl+shift+tab")
+// to AppleScript System Events key code commands.
 func keyComboResult(ctx context.Context, combo string) (Result, error) {
 	parts := strings.Split(combo, "+")
 	if len(parts) == 0 {
 		return Result{}, fmt.Errorf("empty key combo")
 	}
 
-	// Parse modifiers (all parts except the last)
 	modifiers := []string{}
 	for _, mod := range parts[:len(parts)-1] {
 		mod = strings.TrimSpace(strings.ToLower(mod))
@@ -461,22 +496,9 @@ func appleScriptResult(ctx context.Context, script string) (Result, error) {
 	return Result{Content: result}, nil
 }
 
-func isCommandNotFound(err error) bool {
-	if exitErr, ok := err.(*exec.ExitError); ok {
-		// On macOS, command not found gives exit status 127
-		return exitErr.ExitCode() == 127
-	}
-	return strings.Contains(err.Error(), "executable file not found") ||
-		strings.Contains(err.Error(), "no such file or directory")
-}
-
-// Ensure desktopControlResult is used (placeholder for JSON marshaling consistency)
-var _ = json.Marshal
-
 // applescriptQuote escapes a user-supplied string for safe embedding inside
-// AppleScript double-quoted strings. It wraps the value in escaped quotes.
+// AppleScript double-quoted strings.
 func applescriptQuote(s string) string {
-	// Escape backslashes first, then double quotes
 	s = strings.ReplaceAll(s, "\\", "\\\\")
 	s = strings.ReplaceAll(s, "\"", "\\\"")
 	return "\"" + s + "\""
