@@ -47,19 +47,7 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 	case "set_window_bounds":
 		return setWindowBounds(ctx, p)
 	case "list_windows":
-		return appleScriptResult(ctx, `
-tell application "System Events"
-  set output to ""
-  repeat with proc in (every process whose background only is false)
-    set output to output & (name of proc) & "\n"
-    repeat with w in windows of proc
-      try
-        set output to output & "  " & (name of w) & "\n"
-      end try
-    end repeat
-  end repeat
-  return output
-end tell`)
+		return listWindowsAppleScript(ctx)
 	case "focus_window":
 		return appleScriptResult(ctx, fmt.Sprintf(`
 tell application %s
@@ -332,6 +320,24 @@ e?.post(tap: .cghidEventTap)
 // Uses CGEventCreateKeyboardEvent at HID level for maximum compatibility,
 // including Electron-based editors (VS Code, Cursor) where AppleScript
 // keystroke is unreliable.
+// listWindowsAppleScript enumerates every foreground app process and its
+// windows via System Events.
+func listWindowsAppleScript(ctx context.Context) (Result, error) {
+	return appleScriptResult(ctx, `
+tell application "System Events"
+  set output to ""
+  repeat with proc in (every process whose background only is false)
+    set output to output & (name of proc) & "\n"
+    repeat with w in windows of proc
+      try
+        set output to output & "  " & (name of w) & "\n"
+      end try
+    end repeat
+  end repeat
+  return output
+end tell`)
+}
+
 func typeText(ctx context.Context, text string) (Result, error) {
 	// Build a Swift script that types each character via CGEvent.
 	// CGEventCreateKeyboardEvent with keyCode 0 + unicode payload works
