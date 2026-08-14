@@ -1087,15 +1087,20 @@ func (m *Manager) notifyUpdate(sa *SubAgent) {
 	fn := m.onUpdate
 	now := time.Now()
 	lastNotify := m.lastNotify
-	m.lastNotify = now
 	m.mu.Unlock()
 	if fn == nil {
 		return
 	}
 	// Throttle: skip if we notified less than 100ms ago.
+	// Do NOT update m.lastNotify on skipped calls — that would advance the
+	// watermark unconditionally and permanently suppress updates during
+	// continuous streaming (events arriving <100ms apart).
 	if !lastNotify.IsZero() && now.Sub(lastNotify) < 100*time.Millisecond {
 		return
 	}
+	m.mu.Lock()
+	m.lastNotify = time.Now()
+	m.mu.Unlock()
 	fn(sa)
 }
 
