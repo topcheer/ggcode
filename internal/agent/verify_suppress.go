@@ -136,13 +136,13 @@ func (s *verifySuppressState) checkVerificationSuppression(toolName, command str
 			shouldFire = true
 		}
 	} else {
-		maskCount := 0
-		for _, c := range s.suppressedCmds {
-			if c.category == "error-masking" {
-				maskCount++
-			}
-		}
-		if maskCount >= 2 {
+		// Count ALL suppression categories, not just error-masking: the
+		// documented contract is "any suppression on non-verification
+		// commands = warn after 2 occurrences". Only counting error-masking
+		// let output-hiding (e.g. systematic 2>/dev/null) accumulate
+		// forever without feedback (#160).
+		suppressCount := len(s.suppressedCmds)
+		if suppressCount >= 2 {
 			shouldFire = true
 		}
 	}

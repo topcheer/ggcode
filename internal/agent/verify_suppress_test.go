@@ -162,3 +162,18 @@ func TestBuildGuidance_ContainsExamples(t *testing.T) {
 		t.Fatal("expected fired=true after guidance triggered")
 	}
 }
+
+func TestCheckVerificationSuppression_NonVerifyOutputHidingCounts(t *testing.T) {
+	s := newVerifySuppressState()
+	// Two output-hiding (2>/dev/null) occurrences on non-verification
+	// commands must fire — per the documented "any suppression ×2" contract,
+	// not just error-masking (#160).
+	g1 := s.checkVerificationSuppression("run_command", "echo step1 2>/dev/null")
+	if g1 != "" {
+		t.Fatalf("first occurrence should not fire, got: %s", g1)
+	}
+	g2 := s.checkVerificationSuppression("run_command", "ls -la 2>/dev/null")
+	if g2 == "" {
+		t.Fatal("#160 regression: second output-hiding on non-verification command should fire")
+	}
+}
