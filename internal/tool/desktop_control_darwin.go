@@ -342,8 +342,9 @@ func typeText(ctx context.Context, text string) (Result, error) {
 	// Build a Swift script that types each character via CGEvent.
 	// CGEventCreateKeyboardEvent with keyCode 0 + unicode payload works
 	// for arbitrary Unicode characters without needing key code mapping.
-	escaped := strings.ReplaceAll(text, "\\", "\\\\")
-	escaped = strings.ReplaceAll(escaped, "\"", "\\\"")
+	// Control characters MUST be escaped: a raw newline/tab inside the
+	// double-quoted Swift literal is a compile error ("unterminated string
+	// literal" / "unprintable ASCII character found in source file").
 	return runSwiftCGEvent(ctx, fmt.Sprintf(`
 import CoreGraphics
 let text = "%s"
@@ -359,7 +360,37 @@ for char in text {
     eUp?.keyboardSetUnicodeString(stringLength: chars.count, unicodeString: chars)
     eUp?.post(tap: .cghidEventTap)
 }
-`, escaped))
+`, swiftStringLiteral(text)))
+}
+
+// swiftStringLiteral escapes a Go string for safe embedding inside a
+// Swift double-quoted string literal. Backslash and quote are escaped, and
+// every control character (< 0x20) becomes a \n/\r/\t or \u{XX} escape so
+// multi-line input compiles instead of failing with a Swift syntax error.
+// The same escaping applies to AppleScript double-quoted strings.
+func swiftStringLiteral(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch r {
+		case '\\':
+			b.WriteString(`\\`)
+		case '"':
+			b.WriteString(`\"`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\r':
+			b.WriteString(`\r`)
+		case '\t':
+			b.WriteString(`\t`)
+		default:
+			if r < 0x20 {
+				fmt.Fprintf(&b, `\u{%X}`, r)
+			} else {
+				b.WriteRune(r)
+			}
+		}
+	}
+	return b.String()
 }
 
 // runSwiftCGEvent runs an inline Swift script that uses CoreGraphics
@@ -655,7 +686,7 @@ func findAndClick(ctx context.Context, searchText string, maxDepth int) (Result,
 				return Result{}, fmt.Errorf("click at (%d,%d) failed: %w", cx, cy, err)
 			}
 			return Result{Content: fmt.Sprintf("Found %q at (%d,%d) size %.0fx%.0f, clicked center (%d,%d)",
-				matches[0].Label, int(m.Frame.X), int(m.Frame.Y), m.Frame.W, m.Frame.H, cx, cy)}, nil
+				m.Label, int(m.Frame.X), int(m.Frame.Y), m.Frame.W, m.Frame.H, cx, cy)}, nil
 		}
 	}
 	return Result{Content: fmt.Sprintf("Found %d matches for %q but none had clickable coordinates", len(matches), searchText)}, nil
@@ -773,9 +804,9 @@ func keyComboResult(ctx context.Context, combo string) (Result, error) {
 	} else {
 		// Escape the key for embedding in an AppleScript double-quoted
 		// string; applies to the single-char branch too (a literal " would
-		// otherwise break the script).
-		escaped := strings.ReplaceAll(key, "\\", "\\\\")
-		escaped = strings.ReplaceAll(escaped, "\"", "\\\"")
+		// otherwise break the script). Control characters are escaped too —
+		// a raw newline breaks osascript compilation.
+		escaped := swiftStringLiteral(key)
 		script = fmt.Sprintf(`tell application "System Events" to keystroke "%s"%s`, escaped, modList)
 	}
 

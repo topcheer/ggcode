@@ -436,6 +436,12 @@ func (c *Client) nextRequestID() *ID {
 // accepts the connection but never responds.
 const mcpRequestTimeout = 120 * time.Second
 
+// maxHeaderContentLength bounds the body allocation in
+// readHeaderFramedMessage. A crashed or malicious stdio server can emit an
+// arbitrary Content-Length header; without a cap, make() either OOMs the
+// process or panics (makeslice), leaving sendRequest dead-locked (#182).
+const maxHeaderContentLength = 16 << 20 // 16MB
+
 func (c *Client) sendRequest(ctx context.Context, method string, params interface{}, result interface{}) error {
 	if c.closed.Load() {
 		return fmt.Errorf("mcp[%s]: connection closed", c.name)
@@ -582,11 +588,19 @@ func (c *Client) readResponseWithCancel(ctx context.Context, reqID *ID) (*Respon
 		return res.resp, res.err
 	case <-ctx.Done():
 		c.Abort()
-		res := <-done
-		if err := ctx.Err(); err != nil {
-			return nil, c.withStderr(err)
+		// The read goroutine normally delivers on done right after Abort,
+		// but if it panicked before reaching done <- result (recovered by
+		// safego.Go), a bare <-done would block forever (#182). Bound the
+		// wait so the caller gets the ctx error instead of hanging.
+		select {
+		case res := <-done:
+			if err := ctx.Err(); err != nil {
+				return nil, c.withStderr(err)
+			}
+			return res.resp, res.err
+		case <-time.After(5 * time.Second):
+			return nil, c.withStderr(fmt.Errorf("mcp[%s]: read goroutine did not return after abort: %w", c.name, ctx.Err()))
 		}
-		return res.resp, res.err
 	}
 }
 
@@ -1051,6 +1065,15 @@ func (c *Client) readHeaderFramedMessage(ctx context.Context) (interface{}, erro
 		if _, err := fmt.Sscanf(strings.TrimSpace(parts[1]), "%d", &contentLength); err != nil {
 			return nil, c.withStderr(fmt.Errorf("parsing Content-Length: %w", err))
 		}
+	}
+
+	// Sanity bound before allocating (#182): a malicious or crashed server
+	// can declare an absurd Content-Length. make() with a huge value either
+	// OOMs the process (multi-GB allocation) or panics with makeslice — and
+	// the panic leaves sendRequest blocked on a bare <-done forever. 16MB
+	// is far above any legitimate MCP message.
+	if contentLength < 0 || contentLength > maxHeaderContentLength {
+		return nil, c.withStderr(fmt.Errorf("invalid Content-Length %d (max %d)", contentLength, maxHeaderContentLength))
 	}
 
 	body := make([]byte, contentLength)

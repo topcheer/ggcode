@@ -31,10 +31,16 @@ type streamRenderCache struct {
 }
 
 func renderStreamingMarkdown(text string, width int, cache *streamRenderCache) (string, streamRenderCache) {
-	normalized := normalizeStreamingMarkdown(text)
+	// normalized adds a closing fence to unclosed code blocks so the tail
+	// renders correctly. The PREFIX COMPARISON below must use the raw
+	// (fence-unclosed) source: the appended fence breaks HasPrefix for the
+	// next chunk, so during code-block streaming every chunk missed the
+	// cache and re-rendered every block (#184).
+	rawSource := mdpkg.Normalize(text)
+	normalized := mdpkg.Normalize(closeOpenFences(text))
 	blocks := splitMarkdownBlocks(normalized)
 	if len(blocks) == 0 {
-		return "", streamRenderCache{width: width, source: normalized}
+		return "", streamRenderCache{width: width, source: rawSource}
 	}
 
 	// Cap the growing tail block: only the last block changes between
@@ -45,13 +51,13 @@ func renderStreamingMarkdown(text string, width int, cache *streamRenderCache) (
 
 	next := streamRenderCache{
 		width:    width,
-		source:   normalized,
+		source:   rawSource,
 		blocks:   append([]string(nil), blocks...),
 		rendered: make([]string, len(blocks)),
 	}
 
 	reuse := 0
-	if cache != nil && cache.width == width && strings.HasPrefix(normalized, cache.source) {
+	if cache != nil && cache.width == width && strings.HasPrefix(rawSource, cache.source) {
 		for reuse < len(cache.blocks) && reuse < len(blocks) {
 			if cache.blocks[reuse] != blocks[reuse] {
 				break

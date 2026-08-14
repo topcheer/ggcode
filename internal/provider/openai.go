@@ -484,6 +484,11 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 							ch <- StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Retry %d/%d, waiting %v...] ", attempt+1, providerRetryAttempts, delay)}
 							if sleepErr := retrySleep(ctx, delay); sleepErr != nil {
 								ch <- StreamEvent{Type: StreamEventError, Error: sleepErr}
+								// Mark the stream as errored so the tail does
+								// not emit a usage-bearing Done after the
+								// terminal Error (mirrors the connect-phase
+								// branch above and anthropic.go).
+								streamError = true
 								return
 							}
 							retry = true

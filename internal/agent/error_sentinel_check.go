@@ -135,8 +135,13 @@ func findErrorSentinelCmpIssues(file *ast.File, fset *token.FileSet) []errorSent
 			return true
 		}
 		pos := fset.Position(bin.Pos())
+		// Content fingerprint (not position): any edit above a pre-existing
+		// sentinel comparison shifts its line and would otherwise make the
+		// old/new keys mismatch, re-reporting pre-existing code as new (#185,
+		// same pattern as the #157 fix in unchecked_assert_check.go).
+		fp := "sentinel-cmp:" + exprText(bin.X) + " " + bin.Op.String() + " " + exprText(bin.Y)
 		issues = append(issues, errorSentinelIssue{
-			key:     "sentinel-cmp:" + pos.String(),
+			key:     fp,
 			message: fmt.Sprintf(`Error sentinel comparison at %s: direct == or != on errors breaks when errors are wrapped (%%w). Use errors.Is(err, sentinel) instead to traverse the error chain, e.g. errors.Is(err, sql.ErrNoRows).`, pos.String()),
 		})
 		return true

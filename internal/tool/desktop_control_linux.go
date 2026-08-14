@@ -97,8 +97,19 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 		if err != nil {
 			return Result{}, err
 		}
+		// xdotool accepts ctrl/alt/shift/meta/super — not the macOS "cmd"
+		// that normalizeModifiers folds super/win/meta/cmd into. Map cmd
+		// back to super so "super"/"win" keep working on X11.
+		xdMods := make([]string, len(mods))
+		for i, m := range mods {
+			if m == "cmd" {
+				xdMods[i] = "super"
+			} else {
+				xdMods[i] = m
+			}
+		}
 		// xdotool supports "ctrl+shift+1" style click args.
-		clickSpec := strings.Join(mods, "+") + "+1"
+		clickSpec := strings.Join(xdMods, "+") + "+1"
 		return xdotoolResult(ctx, "mousemove", "--sync", fmt.Sprintf("%d", p.X), fmt.Sprintf("%d", p.Y), "click", clickSpec)
 	case "mouse_position":
 		return xdotoolResult(ctx, "getmouselocation")
@@ -151,11 +162,15 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 			return Result{}, fmt.Errorf("open requires 'text' (URL or file path)")
 		}
 		if app := strings.TrimSpace(p.App); app != "" {
-			return runAppResult(ctx, app+" "+target)
+			return runAppResult(ctx, app, target)
 		}
-		return runAppResult(ctx, "xdg-open "+target)
+		return runAppResult(ctx, "xdg-open", target)
 	case "launch_app":
-		return runAppResult(ctx, p.Text)
+		fields := strings.Fields(p.Text)
+		if len(fields) == 0 {
+			return Result{}, fmt.Errorf("launch_app requires 'text' (command to launch)")
+		}
+		return runAppResult(ctx, fields[0], fields[1:]...)
 	case "quit_app":
 		return xdotoolResult(ctx, "search", "--class", p.Text, "windowclose", "%@")
 	case "list_apps":
@@ -317,11 +332,15 @@ func executeDesktopControlWayland(ctx context.Context, p desktopParams) (Result,
 			return Result{}, fmt.Errorf("open requires 'text' (URL or file path)")
 		}
 		if app := strings.TrimSpace(p.App); app != "" {
-			return runAppResult(ctx, app+" "+target)
+			return runAppResult(ctx, app, target)
 		}
-		return runAppResult(ctx, "xdg-open "+target)
+		return runAppResult(ctx, "xdg-open", target)
 	case "launch_app":
-		return runAppResult(ctx, p.Text)
+		fields := strings.Fields(p.Text)
+		if len(fields) == 0 {
+			return Result{}, fmt.Errorf("launch_app requires 'text' (command to launch)")
+		}
+		return runAppResult(ctx, fields[0], fields[1:]...)
 	default:
 		return Result{}, fmt.Errorf("unknown action: %s", p.Action)
 	}
@@ -349,15 +368,21 @@ func wmctrlResult(ctx context.Context, args ...string) (Result, error) {
 	return Result{Content: strings.TrimSpace(string(out))}, nil
 }
 
-func runAppResult(ctx context.Context, app string) (Result, error) {
-	cmd := exec.CommandContext(ctx, app)
+func runAppResult(ctx context.Context, name string, args ...string) (Result, error) {
+	// exec does not go through a shell: name must be the bare executable
+	// and every argument a separate argv entry. Concatenating them into one
+	// string makes exec look for a file literally named "xdg-open <url>".
+	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Stdin = nil
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 	if err := cmd.Start(); err != nil {
-		return Result{}, fmt.Errorf("failed to launch %s: %w", app, err)
+		return Result{}, fmt.Errorf("failed to launch %s: %w", name, err)
 	}
-	return Result{Content: fmt.Sprintf("OK: launched %s (PID %d)", app, cmd.Process.Pid)}, nil
+	// Reap the child in the background so repeated launches don't
+	// accumulate zombies.
+	go func() { _ = cmd.Wait() }()
+	return Result{Content: fmt.Sprintf("OK: launched %s %s (PID %d)", name, strings.Join(args, " "), cmd.Process.Pid)}, nil
 }
 
 // holdKeyX11 implements hold_key via xdotool keydown/sleep/keyup with

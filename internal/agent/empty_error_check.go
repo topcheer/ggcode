@@ -39,37 +39,54 @@ func checkEmptyErrorBody(_ string, oldContent, newContent string) []string {
 		return nil
 	}
 
-	oldCount := countEmptyErrorBodies(oldContent)
+	oldIssues := findEmptyErrorBodies(oldContent)
 	newIssues := findEmptyErrorBodies(newContent)
 
-	// Delta: allow as many as already existed.
-	if len(newIssues) <= oldCount {
+	// Delta via content-fingerprint multiset (#186): a plain count compare
+	// (len(new) <= len(old)) silently misses "fixed one old + introduced one
+	// new" — exactly the refactor pattern this detector targets. Match each
+	// old instance by condition fingerprint and subtract; report what's left.
+	if strings.TrimSpace(oldContent) != "" && len(oldIssues) > 0 {
+		oldSet := make(map[string]int, len(oldIssues))
+		for _, oi := range oldIssues {
+			oldSet[oi.fp]++
+		}
+		remaining := make([]emptyErrorInfo, 0, len(newIssues))
+		for _, ni := range newIssues {
+			if oldSet[ni.fp] > 0 {
+				oldSet[ni.fp]--
+			} else {
+				remaining = append(remaining, ni)
+			}
+		}
+		newIssues = remaining
+	}
+	if len(newIssues) == 0 {
 		return nil
 	}
 
-	// Only report the surplus (newly introduced) instances, up to max.
+	// Only report newly introduced instances, up to max.
 	maxReport := 3
-	reported := 0
-	startIdx := oldCount // skip pre-existing
-	if startIdx < 0 {
-		startIdx = 0
+	if len(newIssues) > maxReport {
+		newIssues = newIssues[:maxReport]
 	}
 
 	var warnings []string
-	for i := startIdx; i < len(newIssues) && reported < maxReport; i++ {
+	for _, ni := range newIssues {
 		warnings = append(warnings, fmt.Sprintf(
 			"[Empty Error Check] if err != nil with empty body at line %d: "+
 				"error is checked but nothing is done about it. "+
 				"Either handle the error (return/log/panic) or explicitly suppress with a comment explaining why.",
-			newIssues[i].line))
-		reported++
+			ni.line))
 	}
 	return warnings
 }
 
-// emptyErrorInfo records the location of an empty error check.
+// emptyErrorInfo records the location and condition fingerprint of an
+// empty error check.
 type emptyErrorInfo struct {
 	line int
+	fp   string // condition expression text — stable across line shifts
 }
 
 // findEmptyErrorBodies parses Go source and returns all instances of
@@ -97,6 +114,7 @@ func findEmptyErrorBodies(content string) []emptyErrorInfo {
 		if ifStmt.Body == nil || len(ifStmt.Body.List) == 0 {
 			result = append(result, emptyErrorInfo{
 				line: fset.Position(ifStmt.Pos()).Line,
+				fp:   exprText(ifStmt.Cond),
 			})
 			return true
 		}
@@ -112,6 +130,7 @@ func findEmptyErrorBodies(content string) []emptyErrorInfo {
 		if allEmpty {
 			result = append(result, emptyErrorInfo{
 				line: fset.Position(ifStmt.Pos()).Line,
+				fp:   exprText(ifStmt.Cond),
 			})
 		}
 
@@ -119,12 +138,6 @@ func findEmptyErrorBodies(content string) []emptyErrorInfo {
 	})
 
 	return result
-}
-
-// countEmptyErrorBodies returns the count of empty error check bodies
-// in the given content. Used for delta comparison.
-func countEmptyErrorBodies(content string) int {
-	return len(findEmptyErrorBodies(content))
 }
 
 // eeIsErrorNilCheck returns true if the expression is an error-vs-nil comparison.

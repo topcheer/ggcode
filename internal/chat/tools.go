@@ -204,9 +204,9 @@ func (t *BaseToolItem) RenderBody(width int) string {
 	case "gitdiff":
 		return t.renderGitDiff()
 	case "gitlog":
-		return t.renderGitLog()
+		return t.renderGitLog(width)
 	case "cronbody":
-		return t.renderCronBody()
+		return t.renderCronBody(width)
 	}
 
 	if t.markdownBody {
@@ -466,12 +466,15 @@ func (t *BaseToolItem) renderGitDiff() string {
 	return "    " + green.Render(fmt.Sprintf("+%d", added)) + " " + red.Render(fmt.Sprintf("-%d", removed))
 }
 
-func (t *BaseToolItem) renderGitLog() string {
+func (t *BaseToolItem) renderGitLog(width int) string {
 	if t.result == "" {
 		return ""
 	}
 	green := lipgloss.NewStyle().Foreground(lipgloss.Color("82"))
-	// Show first 3 commit lines (one-line format)
+	// Show first 3 commit lines (one-line format). Each line is wrapped to
+	// the body width so Height() (measureHeightWidth) and Render
+	// (splitVisualLines, physical \n) agree — unwrapped long commit
+	// subjects made scrolling skip/repeat lines (#183).
 	lines := []string{}
 	for _, line := range strings.Split(t.result, "\n") {
 		line = strings.TrimSpace(line)
@@ -486,10 +489,16 @@ func (t *BaseToolItem) renderGitLog() string {
 	if len(lines) == 0 {
 		return ""
 	}
-	return "    " + green.Render(strings.Join(lines, "\n    "))
+	var out []string
+	for _, line := range lines {
+		for _, wl := range wrapLines(line, width-4) {
+			out = append(out, "    "+wl)
+		}
+	}
+	return green.Render(strings.Join(out, "\n"))
 }
 
-func (t *BaseToolItem) renderCronBody() string {
+func (t *BaseToolItem) renderCronBody(width int) string {
 	var data map[string]any
 	if err := json.Unmarshal([]byte(strings.TrimSpace(t.result)), &data); err != nil {
 		return ""
@@ -532,7 +541,15 @@ func (t *BaseToolItem) renderCronBody() string {
 	if len(parts) == 0 {
 		return ""
 	}
-	return "    " + strings.Join(parts, "\n    ")
+	// Wrap each field to the body width so Height and Render agree on
+	// line counts — long Prompt values otherwise break scrolling (#183).
+	var out []string
+	for _, part := range parts {
+		for _, wl := range wrapLines(part, width-4) {
+			out = append(out, "    "+wl)
+		}
+	}
+	return strings.Join(out, "\n")
 }
 
 // Render produces the full tool output: header + optional body.
