@@ -116,6 +116,8 @@ end tell`)
 		return findAndClick(ctx, p.Text, p.MaxDepth)
 	case "wait_and_click":
 		return waitAndClick(ctx, p.Text, p.MaxDepth, p.TimeoutMs)
+	case "display_info":
+		return displayInfo(ctx)
 
 	default:
 		return Result{}, fmt.Errorf("unknown action: %s", p.Action)
@@ -324,6 +326,36 @@ func runJXA(ctx context.Context, script string) (Result, error) {
 		result = "[]"
 	}
 	return Result{Content: result}, nil
+}
+
+// displayInfo returns logical and physical display dimensions and the
+// scale factor. This is critical for Retina/HiDPI: screenshots are in
+// physical pixels but cliclick coordinates are in logical points.
+// Example: a 2x Retina display has logical 1728x1117 but physical 3456x2234.
+func displayInfo(ctx context.Context) (Result, error) {
+	script := `
+(function() {
+  var results = [];
+  var spa = ObjC.import('AppKit');
+  var screens = $.NSScreen.screens;
+  for (var i = 0; i < screens.count; i++) {
+    var screen = screens.objectAtIndex(i);
+    var frame = screen.frame;
+    var bscale = screen.backingScaleFactor;
+    var logicalW = frame.size.width;
+    var logicalH = frame.size.height;
+    results.push({
+      index: i,
+      logical: {width: logicalW, height: logicalH},
+      physical: {width: Math.round(logicalW * bscale), height: Math.round(logicalH * bscale)},
+      scale: bscale,
+      isRetina: bscale > 1
+    });
+  }
+  return JSON.stringify(results, null, 2);
+})();
+`
+	return runJXA(ctx, script)
 }
 
 // cliclickResult runs a cliclick command. cliclick is a macOS utility

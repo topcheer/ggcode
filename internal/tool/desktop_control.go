@@ -28,9 +28,12 @@ Actions:
   App:     launch_app, quit_app, list_apps, active_app
   UI Tree: snapshot_ui (get accessibility tree of frontmost app), find_element (locate UI element by text)
   Combo:   find_and_click (find element by text and click it), wait_and_click (wait for element then click)
+  Display: display_info (get logical/physical resolution and scale factor for HiDPI/Retina)
 
 For mouse actions, coordinates are in logical pixels (points) from top-left of the primary display.
 For key_combo, use + to chain modifiers: "cmd+c", "ctrl+shift+tab", "cmd+shift+4".
+Note: On Retina/HiDPI displays, screenshots are in physical pixels (2x). Use display_info to
+get the scale factor and convert: logical = physical / scale.
 snapshot_ui returns a JSON tree of UI elements (role, label, frame, enabled).
 find_element searches the accessibility tree for elements matching the given text, returns coordinates.
 find_and_click combines find_element + click in one step (reduces LLM coordinate reasoning).`
@@ -46,7 +49,8 @@ func (DesktopControlTool) Parameters() json.RawMessage {
                "type", "key_press", "key_combo",
                "list_windows", "focus_window", "close_window", "minimize_window", "maximize_window",
                "launch_app", "quit_app", "list_apps", "active_app",
-               "snapshot_ui", "find_element", "find_and_click", "wait_and_click"],
+               "snapshot_ui", "find_element", "find_and_click", "wait_and_click",
+               "display_info"],
       "description": "The desktop action to perform."
     },
     "x": {"type": "integer", "description": "X coordinate (logical pixels from left). Required for mouse position actions."},

@@ -1771,6 +1771,8 @@ func desktopControlLabel(args map[string]any) ToolPresentation {
 		return toolPres("Desktop Find+Click", displayTarget(text))
 	case "wait_and_click":
 		return toolPres("Desktop Wait+Click", displayTarget(text))
+	case "display_info":
+		return toolPres("Desktop", "display info")
 	default:
 		return toolPres("Desktop", action)
 	}
