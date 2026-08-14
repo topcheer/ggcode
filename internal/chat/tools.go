@@ -169,9 +169,17 @@ func (t *BaseToolItem) setToolMeta(rawToolName, rawArgs string) {
 // RenderBody renders the tool output body.
 // Override in concrete types for specialized body rendering.
 func (t *BaseToolItem) RenderBody(width int) string {
-	// While running, show live streaming output if available.
+	// While running, show live streaming output if available. It MUST go
+	// through the same width-aware wrapping + line cap as the final result:
+	// Height() counts width-wrapped lines via measureHeightWidth, while
+	// List.Render slices physical lines via splitVisualLines. Unwrapped long
+	// lines (build logs, compiler errors) made the two disagree, causing
+	// blank-line artifacts and skipped/repeated lines while scrolling during
+	// streaming. FormatBody keeps the last lines and marks truncation, which
+	// is exactly right for a live tail.
 	if t.status == StatusRunning && t.streamingBody != "" {
-		return t.styles.ToolBody.Render(t.streamingBody)
+		body, _ := FormatBody(t.streamingBody, width, ToolBodyMaxLines)
+		return t.styles.ToolBody.Render(body)
 	}
 	if t.result == "" || t.suppressBody {
 		return ""
