@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/topcheer/ggcode/internal/agentruntime"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/tool"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // SessionInfo is a lightweight session record for the frontend.
@@ -369,10 +369,7 @@ func formatMessagesAsMarkdown(msgs []SessionMessage, title string) string {
 				if len(msg.Content) > 2000 {
 					// #301: truncate on a rune boundary — byte slicing can split a
 					// multi-byte UTF-8 char and corrupt the exported .md file.
-					cut := msg.Content[:2000]
-					for len(cut) > 0 && !utf8.RuneStart(cut[len(cut)-1]) {
-						cut = cut[:len(cut)-1]
-					}
+					cut := msg.Content[:util.SnapToRuneStart(msg.Content, 2000)]
 					b.WriteString(cut)
 					b.WriteString("\n... (truncated)\n")
 				} else {

@@ -3,6 +3,7 @@ package wailskit
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestExportSessionToMarkdown_NoSession(t *testing.T) {
@@ -68,5 +69,22 @@ func TestExportSessionToMarkdown_Format(t *testing.T) {
 	}
 	if !strings.Contains(result, "Hello, how are you?") {
 		t.Error("markdown should contain user content")
+	}
+}
+
+// TestFormatMessagesAsMarkdown_RuneBoundaryTruncation verifies tool message
+// truncation lands on a UTF-8 rune boundary (#301): byte-slicing at 2000
+// would split multi-byte chars and corrupt the exported .md.
+func TestFormatMessagesAsMarkdown_RuneBoundaryTruncation(t *testing.T) {
+	// 700 CJK chars = 2100 bytes; byte cut at 2000 lands mid-rune.
+	content := strings.Repeat("好", 700)
+	out := formatMessagesAsMarkdown([]SessionMessage{
+		{Role: "tool", ToolDisplay: "Read File", Content: content},
+	}, "T")
+	if !utf8.ValidString(out) {
+		t.Fatal("exported markdown contains invalid UTF-8 (mid-rune truncation)")
+	}
+	if !strings.Contains(out, "(truncated)") {
+		t.Error("truncation notice missing")
 	}
 }
