@@ -74,6 +74,31 @@ func TestRenderStreamingMarkdownCappedTailStillReusesEarlierBlocks(t *testing.T)
 	_ = next
 }
 
+func TestCapStreamingBlockFourBacktickFence(t *testing.T) {
+	// 4-backtick fence (used to embed ``` examples inside code blocks).
+	// capStreamingBlock/missingOpenFence deliberately share closeOpenFences'
+	// prefix-parity counting (not full CommonMark), so the 4-tick closer
+	// toggles the same ``` state. This test pins that behavior: the capped
+	// output must be fence-balanced per the same parity rule.
+	var sb strings.Builder
+	sb.WriteString("````go\n")
+	for i := 0; i < maxStreamingBlockLines+100; i++ {
+		sb.WriteString("code()\n")
+	}
+	sb.WriteString("````")
+	got := capStreamingBlock(sb.String())
+
+	if missingOpenFence(strings.Split(got, "\n")) != "" {
+		t.Fatal("capped 4-tick fenced block must be parity-balanced")
+	}
+	// A ``` prepend is valid here: CommonMark allows a longer fence to close
+	// a shorter opener, so ```...```` still renders as one code block.
+	markerEnd := strings.Index(got, "\n\n")
+	if markerEnd < 0 || !strings.HasPrefix(got[markerEnd+2:], "```") {
+		t.Fatal("expected a reopened fence after the truncation marker")
+	}
+}
+
 func firstLine(s string) string {
 	if i := strings.IndexByte(s, '\n'); i >= 0 {
 		return s[:i]

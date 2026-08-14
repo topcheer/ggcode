@@ -101,6 +101,13 @@ func capStreamingBlock(block string) string {
 // document was fence-balanced before truncation, an odd number of fence
 // lines in the kept tail means its opening partner was dropped. Returns
 // the fence style to prepend, or "" when balanced.
+//
+// Deliberately NOT full CommonMark: like closeOpenFences, it counts any
+// ``` / ~~~ prefix line as a toggle (ignoring the "closing fence must be
+// >= opener length" rule). The two functions MUST stay mirror-identical —
+// a divergence here would desync truncation from fence-closing. Misfires
+// are benign: a longer fence closes a shorter opener per CommonMark, so a
+// spurious ``` prepend still yields balanced, valid markdown.
 func missingOpenFence(kept []string) string {
 	fence := ""
 	for _, line := range kept {
