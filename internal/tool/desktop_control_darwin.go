@@ -135,6 +135,7 @@ func snapshotUI(ctx context.Context, maxDepth int) (Result, error) {
 	// accessibility tree and returns JSON. JXA is more practical for
 	// recursive tree traversal than AppleScript.
 	script := fmt.Sprintf(`
+ObjC.import('AppKit');
 (function() {
   var se = Application('System Events');
   var proc = se.processes.whose({frontmost: true})[0];
@@ -204,6 +205,7 @@ func findElement(ctx context.Context, searchText string, maxDepth int) (Result, 
 		maxDepth = 8
 	}
 	script := fmt.Sprintf(`
+ObjC.import('AppKit');
 (function() {
   var se = Application('System Events');
   var proc = se.processes.whose({frontmost: true})[0];
@@ -334,9 +336,9 @@ func runJXA(ctx context.Context, script string) (Result, error) {
 // Example: a 2x Retina display has logical 1728x1117 but physical 3456x2234.
 func displayInfo(ctx context.Context) (Result, error) {
 	script := `
+ObjC.import('AppKit');
 (function() {
   var results = [];
-  var spa = ObjC.import('AppKit');
   var screens = $.NSScreen.screens;
   for (var i = 0; i < screens.count; i++) {
     var screen = screens.objectAtIndex(i);
