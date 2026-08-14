@@ -1088,16 +1088,28 @@ func mcpServerConfigEqual(a, b config.MCPServerConfig) bool {
 }
 
 func (m *MCPManager) Close() error {
-	var firstErr error
 	m.mu.RLock()
 	plugins := append([]*MCPPlugin(nil), m.plugins...)
 	m.mu.RUnlock()
-	for _, plugin := range plugins {
-		if err := plugin.Close(); err != nil && firstErr == nil {
-			firstErr = err
+	// Close all plugins CONCURRENTLY: each stdio client waits up to 3s for
+	// its process to exit, so serial close made shutdown take N*3s (or hang
+	// forever on a single stuck server).
+	var wg sync.WaitGroup
+	errs := make([]error, len(plugins))
+	for i, plugin := range plugins {
+		wg.Add(1)
+		go func(i int, p *MCPPlugin) {
+			defer wg.Done()
+			errs[i] = p.Close()
+		}(i, plugin)
+	}
+	wg.Wait()
+	for _, err := range errs {
+		if err != nil {
+			return err
 		}
 	}
-	return firstErr
+	return nil
 }
 
 func firstNonEmpty(values ...string) string {
