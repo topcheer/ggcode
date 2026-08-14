@@ -1276,3 +1276,41 @@ func TestManagerNotifyNonexistent(t *testing.T) {
 	mgr := NewManager(config.SubAgentConfig{})
 	mgr.Notify("nonexistent") // should not panic
 }
+
+// ---------------------------------------------------------------------------
+// Manager: notifyUpdate throttle delivers during continuous streaming (#136)
+// ---------------------------------------------------------------------------
+
+// TestNotifyUpdateThrottleDeliversDuringStreaming verifies that during
+// continuous streaming (events every <100ms for >100ms total), the onUpdate
+// callback fires more than once. Before fix #136, lastNotify was advanced on
+// every call (including throttled ones), permanently suppressing updates.
+func TestNotifyUpdateThrottleDeliversDuringStreaming(t *testing.T) {
+	mgr := NewManager(config.SubAgentConfig{MaxConcurrent: 5})
+
+	var delivered int
+	var mu sync.Mutex
+	mgr.SetOnUpdate(func(sa *SubAgent) {
+		mu.Lock()
+		delivered++
+		mu.Unlock()
+	})
+
+	id := mgr.Spawn("test", "task", "display", nil, context.Background())
+
+	// Fire notifications every 15ms for ~300ms — simulates streaming at ~66/s.
+	// With the fix: deliveries at ~0ms, ~105ms, ~210ms → 3+
+	// With the bug: lastNotify advances on every call → only 1 delivery
+	for i := 0; i < 20; i++ {
+		mgr.Notify(id)
+		time.Sleep(15 * time.Millisecond)
+	}
+
+	mu.Lock()
+	count := delivered
+	mu.Unlock()
+
+	if count < 2 {
+		t.Errorf("expected at least 2 deliveries during ~300ms streaming, got %d (throttle bug: lastNotify advanced on skipped calls)", count)
+	}
+}
