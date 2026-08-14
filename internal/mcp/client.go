@@ -822,7 +822,41 @@ func parseHTTPResponse(body []byte, contentType string) (*Response, error) {
 		debug.Log("mcp-http", "parseHTTPResponse: recovered Response via NDJSON fallback")
 		return r, nil
 	}
+	// Non-JSON-RPC body (e.g. API gateway errors like {"code":1000,"msg":"..."})
+	// parses as a Notification because it has no id/result fields. Surface the
+	// original body instead of a misleading type error so auth failures are
+	// immediately visible.
+	if !isJSONRPCMessage(body) {
+		return nil, fmt.Errorf("non-JSON-RPC response (content-type %s): %s", contentType, previewBody(body))
+	}
 	return nil, fmt.Errorf("expected response, got %T", msg)
+}
+
+// isJSONRPCMessage reports whether the body carries any JSON-RPC structure
+// (jsonrpc, id, result, or error fields). Gateway error bodies have none.
+func isJSONRPCMessage(body []byte) bool {
+	var probe struct {
+		JSONRPC any `json:"jsonrpc"`
+		ID      any `json:"id"`
+		Result  any `json:"result"`
+		Error   any `json:"error"`
+		Method  any `json:"method"`
+	}
+	if err := json.Unmarshal(body, &probe); err != nil {
+		return false
+	}
+	return probe.JSONRPC != nil || probe.ID != nil || probe.Result != nil ||
+		probe.Error != nil || probe.Method != nil
+}
+
+// previewBody returns a trimmed, length-capped preview of a response body for
+// inclusion in error messages.
+func previewBody(body []byte) string {
+	s := strings.TrimSpace(string(body))
+	if len(s) > 300 {
+		s = s[:300] + "..."
+	}
+	return s
 }
 
 // extractSSEResponse parses ALL SSE events from the body and returns the first

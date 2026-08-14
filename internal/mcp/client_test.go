@@ -1058,3 +1058,21 @@ func TestParseHTTPResponseNDJSONOnlyNotifications(t *testing.T) {
 		t.Fatal("expected error when body contains only notifications")
 	}
 }
+
+// TestParseHTTPResponseGatewayError: API gateway error bodies (e.g. bigmodel
+// auth failures like {"code":1000,"msg":"身份验证失败。"}) parse as Notifications
+// because they lack id/result. The error must surface the original body, not
+// a misleading "got *mcp.Notification".
+func TestParseHTTPResponseGatewayError(t *testing.T) {
+	body := []byte(`{"code":1000,"msg":"身份验证失败。","success":false}`)
+	_, err := parseHTTPResponse(body, "application/json")
+	if err == nil {
+		t.Fatal("expected error for gateway error body")
+	}
+	if !strings.Contains(err.Error(), "身份验证失败") {
+		t.Errorf("error should include original body, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "*mcp.Notification") {
+		t.Errorf("error should not mention Notification type, got: %v", err)
+	}
+}
