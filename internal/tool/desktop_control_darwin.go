@@ -180,12 +180,32 @@ e?.post(tap: .cghidEventTap)
 `, x, y, yDelta))
 }
 
-// typeText types a string via AppleScript keystroke.
+// typeText types a string via Swift CGEvent keyboard events.
+// Uses CGEventCreateKeyboardEvent at HID level for maximum compatibility,
+// including Electron-based editors (VS Code, Cursor) where AppleScript
+// keystroke is unreliable.
 func typeText(ctx context.Context, text string) (Result, error) {
+	// Build a Swift script that types each character via CGEvent.
+	// CGEventCreateKeyboardEvent with keyCode 0 + unicode payload works
+	// for arbitrary Unicode characters without needing key code mapping.
 	escaped := strings.ReplaceAll(text, "\\", "\\\\")
 	escaped = strings.ReplaceAll(escaped, "\"", "\\\"")
-	script := fmt.Sprintf(`tell application "System Events" to keystroke "%s"`, escaped)
-	return appleScriptResult(ctx, script)
+	return runSwiftCGEvent(ctx, fmt.Sprintf(`
+import CoreGraphics
+let text = "%s"
+for char in text {
+    let keyCode: CGKeyCode = 0
+    let chars = Array(String(char).utf16)
+    // Key down
+    let eDown = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: true)
+    eDown?.keyboardSetUnicodeString(stringLength: chars.count, unicodeString: chars)
+    eDown?.post(tap: .cghidEventTap)
+    // Key up
+    let eUp = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: false)
+    eUp?.keyboardSetUnicodeString(stringLength: chars.count, unicodeString: chars)
+    eUp?.post(tap: .cghidEventTap)
+}
+`, escaped))
 }
 
 // runSwiftCGEvent runs an inline Swift script that uses CoreGraphics

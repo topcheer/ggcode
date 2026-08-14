@@ -53,7 +53,55 @@
 | `maximize_window` | AppleScript fullscreen toggle, not tested |
 | `close_window` | AppleScript, not tested |
 
-## Gap Assessment: Distance to Self-Operation
+## GUI Code Editing Test (the real question: can it self-operate?)
+
+### Attempt 1: VS Code/Cursor via desktop_control
+- **Target**: Open `desktop_control_darwin.go` in Cursor IDE, navigate to a function, add a doc comment
+- **Steps executed via desktop_control primitives**:
+  1. `launch_app` ("Visual Studio Code") → Cursor opened ✅
+  2. `screenshot` → confirmed app visible ✅
+  3. `snapshot_ui` → confirmed window title "desktop_control_darwin.go" ✅
+  4. `key_combo` (cmd+o) → open folder dialog appeared ✅
+  5. `key_combo` (cmd+shift+g) + `type` (path) → folder dialog navigation ❌ **unreliable**
+  6. `key_combo` (cmd+g) + `type` (line number) → Cursor navigation ❌ **unreliable**
+  7. `type` (comment text) → text NOT written to file ❌
+
+### Attempt 2: TextEdit simple typing
+- `launch_app` ("TextEdit") + `type` ("hello")
+- AppleScript `keystroke` did not reliably reach TextEdit text buffer
+
+### Root Cause Analysis
+
+**The tool can SEE and NAVIGATE the desktop, but cannot reliably TYPE into editors.**
+
+1. **Electron-based editors (Cursor, VS Code) have poor AppleScript keystroke support**:
+   - `keystroke` commands from System Events often get swallowed by the Electron event loop
+   - The text doesn't reach the Monaco editor's input handler
+   - This is a well-known macOS limitation with Electron apps
+
+2. **CGEvent keyboard events would be more reliable**:
+   - CGEvent posts at the HID level (below System Events)
+   - But we currently only use CGEvent for MOUSE, not keyboard
+   - Adding CGEvent keyboard support would fix this
+
+3. **Coordinate-based clicking works but coordinate READING is limited**:
+   - `snapshot_ui` returns element frames, but Electron's AX tree is sparse
+   - The editor text area is just one big `AXGroup` with no line/character positions
+   - Can't click "at the end of line 480" — only know the editor region
+
+### Verdict: Distance to self-operation
+
+| Capability | Status | Blocker |
+|-----------|--------|---------|
+| See screen (screenshot + Retina) | ✅ Ready | — |
+| Understand UI (snapshot_ui) | ✅ Ready | Electron AX tree is sparse |
+| Find elements (find_element) | ✅ Ready | Limited for Electron |
+| Navigate (key_combo shortcuts) | ⚠️ Partial | Some shortcuts swallowed |
+| Click precisely (Swift CGEvent) | ✅ Ready | — |
+| Type text into editors | ❌ Blocked | AppleScript keystroke doesn't reach Electron editors |
+| Save file (cmd+s) | ⚠️ Untested | Depends on editor having focus |
+
+**Bottom line**: The tool is 70% there. It can control native macOS apps (Finder, System Settings, Terminal) but cannot reliably type into Electron-based editors (VS Code, Cursor). The fix is to add **CGEvent keyboard input** (same CGEvent API used for mouse, but `CGEventCreateKeyboardEvent`) which posts at the HID level and bypasses the System Events → Electron event gap.
 
 ### What works now (can the tool operate GUI apps?)
 **Yes, with caveats.** The tool can:
