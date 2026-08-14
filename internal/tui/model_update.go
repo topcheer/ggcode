@@ -374,7 +374,7 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			if item := m.chatList.FindByID(itemID); item != nil {
 				if sys, ok := item.(*chat.SystemItem); ok {
 					sys.SetText(msg.Text)
-					m.chatListScrollToBottom()
+					m.chatListFollowOutput()
 				} else {
 					m.chatWriteSystem(itemID, msg.Text)
 				}
@@ -713,7 +713,7 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 	// ---- Async verification messages ----
 	case verifyProgressMsg:
 		m.chatWriteSystem(nextSystemID(), msg.text)
-		m.chatListScrollToBottom()
+		m.chatListFollowOutput()
 		return m, nil
 
 	case toolProgressMsg:
@@ -721,7 +721,7 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		if msg.toolID != "" {
 			m.chatUpdateToolOutput(msg.toolID, msg.output)
 		}
-		m.chatListScrollToBottom()
+		m.chatListFollowOutput()
 		return m, nil
 
 	case verifyResultMsg:
@@ -734,7 +734,7 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			}
 			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("❌ [Verification failed: `%s`]\n```\n%s\n```", msg.result.Command, output))
 		}
-		m.chatListScrollToBottom()
+		m.chatListFollowOutput()
 		return m, nil
 
 	// ---- LAN chat messages ----

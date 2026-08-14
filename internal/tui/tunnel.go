@@ -346,7 +346,7 @@ func (m *Model) handleTunnelStartMsg(msg tunnelStartMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
 		debug.Log("tunnel", "tunnel start failed (gen=%d): %v", msg.generation, msg.err)
 		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Tunnel failed: %v", msg.err))
-		m.chatListScrollToBottom()
+		m.chatListFollowOutput()
 		return m, nil
 	}
 
@@ -381,12 +381,12 @@ func (m *Model) handleTunnelRefreshMsg(msg tunnelRefreshMsg) (tea.Model, tea.Cmd
 	}
 	if msg.err != nil {
 		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Tunnel share refresh failed: %v", msg.err))
-		m.chatListScrollToBottom()
+		m.chatListFollowOutput()
 		return m, nil
 	}
 	if msg.info == nil {
 		m.chatWriteSystem(nextSystemID(), "Tunnel share refresh failed: missing refreshed invite")
-		m.chatListScrollToBottom()
+		m.chatListFollowOutput()
 		return m, nil
 	}
 	subtitle := "Scan with GGCode Mobile to connect"
@@ -423,7 +423,7 @@ func (m *Model) handleTunnelClientConnectedMsgForGeneration(generation uint64) (
 	sysMsg := m.t("tunnel.mobile_connected")
 	m.suppressNextTunnelSystem = sysMsg
 	m.chatWriteSystem(nextSystemID(), sysMsg)
-	m.chatListScrollToBottom()
+	m.chatListFollowOutput()
 	return m, nil
 }
 
@@ -1055,7 +1055,7 @@ func (m *Model) handleTunnelModeChangeMsg(msg tunnelModeChangeMsg) (tea.Model, t
 	}
 	m.persistModePreference()
 	m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Mode changed to %s (from mobile)", newMode))
-	m.chatListScrollToBottom()
+	m.chatListFollowOutput()
 	return m, nil
 }
 
@@ -1074,7 +1074,7 @@ func (m *Model) handleTunnelLanguageChangeMsg(msg tunnelLanguageChangeMsg) (tea.
 		m.tunnelBroker.SendLanguageChange(msg.language)
 	}
 	m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Language changed to %s (from mobile)", lang))
-	m.chatListScrollToBottom()
+	m.chatListFollowOutput()
 	return m, nil
 }
 
