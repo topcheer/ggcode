@@ -109,3 +109,30 @@ func TestYdoDragArgsSequence(t *testing.T) {
 		t.Errorf("fourth command should be button-up (click 0x80): %v", cmds[3])
 	}
 }
+
+// TestXdModifierName covers the X11 modifier mapping used by the
+// keydown/click/keyup chain in modifier_click (#216: xdotool click has
+// no modifier syntax, so "ctrl+1" parsed as button 0 and every combo
+// failed).
+func TestXdModifierName(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+		ok   bool
+	}{
+		{"cmd", "super", true},
+		{"ctrl", "ctrl", true},
+		{"alt", "alt", true},
+		{"shift", "shift", true},
+		{"super", "super", true},
+		{"fn", "", false}, // no X mapping — must error, not silently mis-click
+		{"meta", "", false},
+		{"", "", false},
+	}
+	for _, c := range cases {
+		got, ok := xdModifierName(c.in)
+		if got != c.want || ok != c.ok {
+			t.Errorf("xdModifierName(%q) = (%q, %v), want (%q, %v)", c.in, got, ok, c.want, c.ok)
+		}
+	}
+}

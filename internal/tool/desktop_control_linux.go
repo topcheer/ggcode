@@ -97,20 +97,24 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 		if err != nil {
 			return Result{}, err
 		}
-		// xdotool accepts ctrl/alt/shift/meta/super — not the macOS "cmd"
-		// that normalizeModifiers folds super/win/meta/cmd into. Map cmd
-		// back to super so "super"/"win" keep working on X11.
-		xdMods := make([]string, len(mods))
-		for i, m := range mods {
-			if m == "cmd" {
-				xdMods[i] = "super"
-			} else {
-				xdMods[i] = m
+		// xdotool click takes no modifier syntax (atoi(argv[0]) only —
+		// "ctrl+1" parses as button 0). Chain keydown/click/keyup in a
+		// single xdotool invocation instead (#216). fn has no X mapping;
+		// error explicitly like the Wayland path does.
+		args := []string{"mousemove", "--sync", fmt.Sprintf("%d", p.X), fmt.Sprintf("%d", p.Y)}
+		for _, m := range mods {
+			xd, ok := xdModifierName(m)
+			if !ok {
+				return Result{}, fmt.Errorf("modifier %q has no xdotool mapping (X11); supported: cmd, ctrl, alt, shift", m)
 			}
+			args = append(args, "keydown", xd)
 		}
-		// xdotool supports "ctrl+shift+1" style click args.
-		clickSpec := strings.Join(xdMods, "+") + "+1"
-		return xdotoolResult(ctx, "mousemove", "--sync", fmt.Sprintf("%d", p.X), fmt.Sprintf("%d", p.Y), "click", clickSpec)
+		args = append(args, "click", "1")
+		for i := len(mods) - 1; i >= 0; i-- {
+			xd, _ := xdModifierName(mods[i])
+			args = append(args, "keyup", xd)
+		}
+		return xdotoolResult(ctx, args...)
 	case "mouse_position":
 		return xdotoolResult(ctx, "getmouselocation")
 

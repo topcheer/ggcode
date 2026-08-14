@@ -285,3 +285,18 @@ func (t DesktopControlTool) Execute(ctx context.Context, input json.RawMessage) 
 	}
 	return executeDesktopControl(ctx, params)
 }
+
+// xdModifierName maps a normalized modifier (as produced by
+// normalizeModifiers) to the xdotool key name used with keydown/keyup.
+// "cmd" (which normalizeModifiers folds super/win/meta into) maps to
+// "super", xdotool's name. fn has no X mapping and is rejected (#216).
+func xdModifierName(m string) (string, bool) {
+	switch m {
+	case "cmd":
+		return "super", true
+	case "ctrl", "alt", "shift", "super":
+		return m, true
+	default:
+		return "", false
+	}
+}
