@@ -52,6 +52,7 @@ func IsContextOverflowError(err error) bool {
 	keywords := []string{
 		"context_length_exceeded",
 		"maximum context",
+		"maximum is", // e.g. "requested 40123 tokens, maximum is 131072" (#303)
 		"context length",
 		"prompt is too long",
 		"prompt too long",
@@ -152,19 +153,20 @@ func isRetryable(err error) bool {
 
 	// Fallback: check error message for known non-retryable status codes.
 	msg := err.Error()
-	if strings.Contains(msg, " 401 ") || strings.Contains(msg, "status\":401") || strings.Contains(msg, "statusCode:401") {
+	if containsHTTPStatus(msg, "401") || containsHTTPStatus(msg, "403") || containsHTTPStatus(msg, "404") {
 		return false
 	}
-	if strings.Contains(msg, " 403 ") || strings.Contains(msg, "status\":403") || strings.Contains(msg, "statusCode:403") {
-		return false
-	}
-	if strings.Contains(msg, " 404 ") || strings.Contains(msg, "status\":404") || strings.Contains(msg, "statusCode:404") {
+	// #306: 400 must be excluded in the string-fallback path too — Bad Request
+	// is always permanent (malformed request body, invalid tool_use/tool_result
+	// pairing, bad parameters). Without this, a non-typed "status code: 400"
+	// from an OpenAI-compatible relay was retried 20 times with exponential
+	// backoff (~6-7 minutes) before surfacing.
+	if containsHTTPStatus(msg, "400") {
 		return false
 	}
 
 	// Any other error with a recognizable HTTP status code is retryable.
-	// 400 is excluded — Bad Request is always permanent (malformed request body,
-	// invalid tool_use/tool_result pairing, bad parameters).
+	// (400 is permanently excluded above — see #306.)
 	for _, code := range []string{
 		"408", "409", "422", "429",
 		"500", "502", "503", "504", "520", "521", "522", "523", "524", "529",
@@ -182,6 +184,22 @@ func isRetryable(err error) bool {
 	// Default: retry unknown errors. It's better to retry once too many
 	// than to fail permanently on a transient issue.
 	return true
+}
+
+// containsHTTPStatus reports whether msg contains the given HTTP status code
+// in a context-anchored position. Bare substring matching ("401") would hit
+// digit coincidences like "requested 40123 tokens" (#303/#306); the patterns
+// below require the code to be delimited by spacing/punctuation or to follow
+// a status label, matching the formats emitted by go-openai ("status code:
+// 401, message: ..."), JSON relays (`status":401`), and plain wrappers
+// ("statusCode:401").
+func containsHTTPStatus(msg, code string) bool {
+	return strings.Contains(msg, " "+code+" ") ||
+		strings.Contains(msg, " "+code+",") ||
+		strings.Contains(msg, " "+code+"\n") ||
+		strings.Contains(msg, "code: "+code) ||
+		strings.Contains(msg, `status":`+code) ||
+		strings.Contains(msg, "statusCode:"+code)
 }
 
 func isRetryableForContext(ctx context.Context, err error) bool {

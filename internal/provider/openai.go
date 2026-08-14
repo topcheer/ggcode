@@ -420,7 +420,6 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 			emitted := false
 			retry := false
 			normalEnd := false
-			cancelledCleanly := false
 
 			func() {
 				defer localStreamer.Close()
@@ -435,7 +434,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 					// may carry complete tool call data from a prior stream).
 					// Never flush on retry (would double-execute) or hard
 					// error (broken conversation, can't trust partial args).
-					shouldFlush := (normalEnd || cancelledCleanly) && !retry
+					shouldFlush := normalEnd && !retry // #302: cancel no longer flushes half-made tool calls
 					if !shouldFlush {
 						return
 					}
@@ -466,15 +465,20 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 				for {
 					resp, recvErr := localStreamer.Recv()
 					if recvErr != nil {
+						// #302: context cancellation must surface as an error event
+						// (anthropic.go parity), NOT as a normal end — treating it as
+						// "ended normally" finalized partial output as a complete
+						// assistant message and repaired+flushed unfinished tool calls.
+						if errors.Is(recvErr, context.Canceled) {
+							debug.Log("openai", "stream cancelled: %v emitted=%v", recvErr, emitted)
+							ch <- StreamEvent{Type: StreamEventError, Error: recvErr}
+							streamError = true
+							return
+						}
 						// Stream ended normally
-						if errors.Is(recvErr, io.EOF) || errors.Is(recvErr, context.Canceled) {
+						if errors.Is(recvErr, io.EOF) {
 							debug.Log("openai", "Stream ended normally: %v reasoning_total=%d emitted=%v", recvErr, reasoningBuf.Len(), emitted)
-							if errors.Is(recvErr, io.EOF) {
-								normalEnd = true
-							}
-							if errors.Is(recvErr, context.Canceled) {
-								cancelledCleanly = true
-							}
+							normalEnd = true
 							return
 						}
 						debug.Log("openai", "STREAM ERROR model=%s baseURL=%s attempt=%d/%d emitted=%v reasoning=%d output=%d: %T: %v", p.model, p.baseURL, attempt+1, providerRetryAttempts, emitted, reasoningBuf.Len(), outputChars, recvErr, recvErr)

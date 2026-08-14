@@ -142,6 +142,11 @@ type ChatBridge struct {
 	// Session lock for preventing concurrent access to the same session.
 	sessionLock      *session.SessionLock
 	sessionEphemeral bool // true if this session should be deleted when empty
+	// deletedSessions is a tombstone set (#305): session IDs deleted via
+	// DeleteSession while a run goroutine may still be draining. Late
+	// persists targeting a tombstoned ID are refused instead of
+	// O_CREATE-resurrecting the deleted JSONL on disk.
+	deletedSessions map[string]struct{}
 
 	// runSes is the session snapshot taken at run start, inside the same
 	// b.mu critical section that installs b.cancel (#270). Persist paths
@@ -617,6 +622,10 @@ func (b *ChatBridge) ClearCurrentSession() {
 	state := agentruntime.ClearSession()
 	b.ResetAgent()
 	b.mu.Lock()
+	// #305: drop the run-start snapshot too — a late persist from the
+	// still-draining run goroutine must not O_CREATE-resurrect a deleted
+	// session (runSes is checked before currentSes in the persist handler).
+	b.runSes = nil
 	b.currentSes = state.Session
 	b.usageTurnIndex = state.UsageTurnIndex
 	b.lastMetricDigestTurn = state.LastMetricDigestTurn
@@ -778,19 +787,50 @@ func (b *ChatBridge) sessionLockMismatchLocked(ses *session.Session) bool {
 	return b.sessionLock.SessionID() != ses.ID
 }
 
+// MarkSessionDeleted records id in the bridge's tombstone set so that late
+// persist attempts from a draining run goroutine are refused instead of
+// O_CREATE-resurrecting the just-deleted session on disk (#305).
+func (b *ChatBridge) MarkSessionDeleted(id string) {
+	if id == "" {
+		return
+	}
+	b.mu.Lock()
+	if b.deletedSessions == nil {
+		b.deletedSessions = make(map[string]struct{})
+	}
+	b.deletedSessions[id] = struct{}{}
+	b.mu.Unlock()
+}
+
+// clearSessionDeletedLocked removes id from the tombstone set; the session is
+// being (re)created or loaded, so future persists are legitimate again.
+// Callers must hold b.mu.
+func (b *ChatBridge) clearSessionDeletedLocked(id string) {
+	delete(b.deletedSessions, id)
+}
+
 // appendPersistMessage appends msg to ses's JSONL under the session-lock
 // guard (#269): when the bridge holds a lock for a different session, ses is
 // no longer ours to write (e.g. its lock was released after a failed load) —
 // refuse the append rather than risk cross-process double-writes to the
-// same JSONL.
+// same JSONL. Deleted sessions (tombstoned via MarkSessionDeleted) are also
+// refused so a draining run goroutine cannot resurrect them (#305).
 func (b *ChatBridge) appendPersistMessage(store *session.JSONLStore, ses *session.Session, msg provider.Message) {
+	if ses == nil {
+		return
+	}
 	b.mu.Lock()
 	mismatch := b.sessionLockMismatchLocked(ses)
+	_, tombstoned := b.deletedSessions[ses.ID]
 	lockID := ""
 	if b.sessionLock != nil {
 		lockID = b.sessionLock.SessionID()
 	}
 	b.mu.Unlock()
+	if tombstoned {
+		log.Printf("[chat] persist: refusing write to deleted session %s (#305)", ses.ID)
+		return
+	}
 	if mismatch {
 		log.Printf("[chat] persist: refusing write to session %s while lock held for %s (#269)", ses.ID, lockID)
 		return
@@ -802,6 +842,11 @@ func (b *ChatBridge) appendPersistMessage(store *session.JSONLStore, ses *sessio
 
 func (b *ChatBridge) setSessionState(state agentruntime.SessionState) {
 	b.mu.Lock()
+	// The session is being (re)loaded/created — future persists targeting it
+	// are legitimate again; drop any tombstone from a prior delete (#305).
+	if state.Session != nil {
+		delete(b.deletedSessions, state.Session.ID)
+	}
 	b.currentSes = state.Session
 	b.usageTurnIndex = state.UsageTurnIndex
 	b.lastMetricDigestTurn = state.LastMetricDigestTurn

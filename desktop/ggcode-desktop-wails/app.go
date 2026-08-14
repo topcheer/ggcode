@@ -1090,6 +1090,10 @@ func (a *App) DeleteSession(id string) error {
 		// forcing ensureSession to start a fresh session.
 		a.chat.ClearCurrentSession()
 	}
+	// #305: tombstone the ID before the on-disk delete — the run goroutine
+	// cancelled above may still be draining and its late persists must not
+	// O_CREATE-resurrect the deleted session.
+	a.chat.MarkSessionDeleted(id)
 	return wailskit.DeleteSession(id)
 }
 

@@ -92,8 +92,14 @@ var quotaKeywords = []string{
 }
 
 // authKeywords are lowercased substrings indicating auth failure.
+//
+// Bare numeric status substrings ("401") are deliberately excluded (#303):
+// they match unrelated numbers in error text (token counts like "requested
+// 40123 tokens", request IDs, timestamps) and misroute to FailureAuth, which
+// both abandons retry and triggers immediate sticky failover. Status codes
+// are matched via context-anchored patterns in authStatusPatterns instead,
+// mirroring retry.go's string-fallback checks.
 var authKeywords = []string{
-	"401",
 	"unauthorized",
 	"forbidden",
 	"invalid api key",
@@ -105,6 +111,18 @@ var authKeywords = []string{
 	"access denied",
 	"api key is invalid",
 	"no auth credentials",
+}
+
+// authStatusPatterns are context-anchored "401" matchers so digit
+// coincidences ("40123") no longer classify as auth failures (#303).
+var authStatusPatterns = []string{
+	" 401 ",
+	`status":401`,
+	"statuscode:401",
+	"http 401",
+	"error 401",
+	"401 unauthorized",
+	"code 401",
 }
 
 // rateLimitKeywords are lowercased substrings indicating transient rate
@@ -181,10 +199,16 @@ func ClassifyLLMError(err error) FailureClass {
 		return err.Error()
 	}())
 
+	// #303: check context overflow BEFORE keyword matching — token-count
+	// messages ("requested 40123 tokens, maximum is 131072") must reach the
+	// compaction path, not FailureAuth/sticky failover.
+	if IsContextOverflowError(err) {
+		return FailureTransient
+	}
 	if containsAny(s, quotaKeywords) {
 		return FailureQuota
 	}
-	if containsAny(s, authKeywords) {
+	if containsAny(s, authKeywords) || containsAny(s, authStatusPatterns) {
 		return FailureAuth
 	}
 	if containsAny(s, rateLimitKeywords) {

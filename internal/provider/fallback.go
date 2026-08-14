@@ -125,6 +125,20 @@ func (f *FallbackProvider) maybeFailover(err error, failed Provider) (error, boo
 		return nil, false
 	}
 
+	// #304: user cancellation is not a provider failure. ClassifyLLMError
+	// already returns FailureNone for context.Canceled ("non-model failure"),
+	// but the counter below consumed every non-quota/auth error — 3
+	// consecutive cancels on the non-streaming path would sticky-failover a
+	// healthy primary for the rest of the session.
+	if ClassifyLLMError(err) == FailureNone {
+		return err, false
+	}
+	// #303: context overflow is a request-size problem handled by agent-side
+	// compaction, not provider health — don't count it toward failover either.
+	if IsContextOverflowError(err) {
+		return err, false
+	}
+
 	immediate, trigger := shouldFailover(err)
 
 	if !immediate {
