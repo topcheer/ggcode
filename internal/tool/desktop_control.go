@@ -47,7 +47,7 @@ mouse_position returns the current cursor location in logical pixels.
 set_window_bounds positions and sizes a window: x,y = top-left; to_x,to_y = width,height.
 open launches a URL or file path with the default handler app (use "app" to force a specific app).
 
-Platform support: all actions on macOS; on Linux both X11 (xdotool/wmctrl required; UI-tree/display_info actions unsupported) and Wayland (ydotool + ydotoold required; move/click/drag/modifier_click/type/open/launch_app supported — scroll has no ydotool equivalent and window management has no Wayland protocol for external clients); core mouse/keyboard/app actions on Windows via SendInput.`
+Platform support: all actions on macOS; on Linux both X11 (xdotool/wmctrl required; UI-tree/display_info actions unsupported) and Wayland (ydotool + ydotoold required; move/click/drag/modifier_click/type/open/launch_app supported — scroll has no ydotool equivalent and window management has no Wayland protocol for external clients); on Windows mouse/keyboard/app plus window management (Win32: list/focus/close/minimize/maximize/set_window_bounds, display_info) via SendInput and EnumWindows — UI-tree and menu actions pending UI Automation.`
 }
 
 func (DesktopControlTool) Parameters() json.RawMessage {
@@ -227,6 +227,17 @@ func ydoDragArgs(x, y, toX, toY int) [][]string {
 // ydoTypeArgs returns the argv to type text (ydotool type).
 func ydoTypeArgs(text string) []string {
 	return []string{"ydotool", "type", text}
+}
+
+// windowTitleMatches reports whether a window title matches a target spec
+// using the shared desktop_control semantics: case-insensitive substring.
+// Pure and platform-untagged so every backend's matching can be tested from
+// any CI runner.
+func windowTitleMatches(title, needle string) bool {
+	if strings.TrimSpace(needle) == "" {
+		return false // empty target never matches — prevents acting on ALL windows
+	}
+	return strings.Contains(strings.ToLower(title), strings.ToLower(needle))
 }
 
 func (t DesktopControlTool) Execute(ctx context.Context, input json.RawMessage) (Result, error) {

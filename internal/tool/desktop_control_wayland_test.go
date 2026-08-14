@@ -8,6 +8,25 @@ import (
 // The Wayland argv builders are pure and untagged so the Linux path is
 // unit-testable on every platform (CI runs on darwin).
 
+func TestWindowTitleMatches(t *testing.T) {
+	cases := []struct {
+		title, needle string
+		want          bool
+	}{
+		{"Visual Studio Code — main.go", "code", true}, // case-insensitive substring
+		{"Terminal — zsh", "ZSH", true},                // case-insensitive
+		{"Safari", "saf", true},                        // prefix substring
+		{"Safari", "firefox", false},                   // no match
+		{"Anything", "", false},                        // empty target NEVER matches
+		{"Anything", "   ", false},                     // whitespace-only never matches
+	}
+	for _, c := range cases {
+		if got := windowTitleMatches(c.title, c.needle); got != c.want {
+			t.Errorf("windowTitleMatches(%q, %q) = %v, want %v", c.title, c.needle, got, c.want)
+		}
+	}
+}
+
 func TestYdoMoveArgs(t *testing.T) {
 	got := ydoMoveArgs(100, 200)
 	want := []string{"ydotool", "move", "-a", "100", "200"}

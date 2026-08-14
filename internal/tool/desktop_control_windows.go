@@ -17,9 +17,27 @@ import (
 // now so the agent gets a clear message instead of "unknown action".
 
 var (
-	user32        = syscall.NewLazyDLL("user32.dll")
-	pSendInput    = user32.NewProc("SendInput")
-	pGetCursorPos = user32.NewProc("GetCursorPos")
+	user32                    = syscall.NewLazyDLL("user32.dll")
+	pSendInput                = user32.NewProc("SendInput")
+	pGetCursorPos             = user32.NewProc("GetCursorPos")
+	pEnumWindows              = user32.NewProc("EnumWindows")
+	pGetWindowTextW           = user32.NewProc("GetWindowTextW")
+	pGetClassNameW            = user32.NewProc("GetClassNameW")
+	pIsWindowVisible          = user32.NewProc("IsWindowVisible")
+	pGetWindowThreadProcessId = user32.NewProc("GetWindowThreadProcessId")
+	pSetForegroundWindow      = user32.NewProc("SetForegroundWindow")
+	pPostMessageW             = user32.NewProc("PostMessageW")
+	pShowWindow               = user32.NewProc("ShowWindow")
+	pIsIconic                 = user32.NewProc("IsIconic")
+	pGetWindowRect            = user32.NewProc("GetWindowRect")
+	pMoveWindow               = user32.NewProc("MoveWindow")
+)
+
+const (
+	wmClose    = 0x0010
+	swMinimize = 6
+	swMaximize = 3
+	swRestore  = 9
 )
 
 // Virtual key codes for the modifiers and special keys we map.
@@ -312,15 +330,180 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 		}
 		return Result{Content: "OK: " + cmdline}, nil
 
-	case "list_windows", "focus_window", "close_window", "minimize_window",
-		"maximize_window", "set_window_bounds", "quit_app", "list_apps",
-		"active_app", "snapshot_ui", "find_element", "find_and_click",
-		"wait_and_click", "display_info", "menu_select":
-		return Result{}, fmt.Errorf("desktop_control: action %q is not yet supported on Windows (requires Win32/UI Automation integration)", p.Action)
+	case "list_windows", "list_apps":
+		windows, err := enumVisibleWindows()
+		if err != nil {
+			return Result{}, err
+		}
+		if len(windows) == 0 {
+			return Result{Content: "no visible windows"}, nil
+		}
+		var sb strings.Builder
+		for _, w := range windows {
+			fmt.Fprintf(&sb, "%s [%s] pid=%d\n", w.title, w.class, w.pid)
+		}
+		return Result{Content: strings.TrimRight(sb.String(), "\n")}, nil
+
+	case "active_app":
+		h := getForegroundWindow()
+		if h == 0 {
+			return Result{Content: "unknown (no foreground window)"}, nil
+		}
+		title := windowText(h)
+		return Result{Content: title}, nil
+
+	case "focus_window":
+		h, err := findWindowByTitle(p.Text)
+		if err != nil {
+			return Result{}, err
+		}
+		r, _, _ := pSetForegroundWindow.Call(uintptr(h))
+		if r == 0 {
+			return Result{}, fmt.Errorf("SetForegroundWindow failed (foreground lock may prevent stealing focus)")
+		}
+		return Result{Content: "OK: focused " + windowText(h)}, nil
+
+	case "close_window":
+		h, err := findWindowByTitle(p.Text)
+		if err != nil {
+			return Result{}, err
+		}
+		pPostMessageW.Call(uintptr(h), wmClose, 0, 0)
+		return Result{Content: "OK: close requested for " + windowText(h)}, nil
+
+	case "minimize_window":
+		h, err := findWindowByTitle(p.Text)
+		if err != nil {
+			return Result{}, err
+		}
+		pShowWindow.Call(uintptr(h), swMinimize)
+		return Result{Content: "OK: minimized " + windowText(h)}, nil
+
+	case "maximize_window":
+		h, err := findWindowByTitle(p.Text)
+		if err != nil {
+			return Result{}, err
+		}
+		state := swMaximize
+		if r, _, _ := pIsIconic.Call(uintptr(h)); r != 0 {
+			// Already maximized means iconic-restore cycle is handled by the
+			// app; simplest deterministic behavior is maximize (idempotent).
+			state = swMaximize
+		}
+		pShowWindow.Call(uintptr(h), uintptr(state))
+		return Result{Content: "OK: maximized " + windowText(h)}, nil
+
+	case "set_window_bounds":
+		if p.ToX <= 0 || p.ToY <= 0 {
+			return Result{}, fmt.Errorf("set_window_bounds requires positive to_x (width) and to_y (height)")
+		}
+		h, err := findWindowByTitle(p.Text)
+		if err != nil {
+			return Result{}, err
+		}
+		r, _, _ := pMoveWindow.Call(uintptr(h), uintptr(int32(p.X)), uintptr(int32(p.Y)),
+			uintptr(int32(p.ToX)), uintptr(int32(p.ToY)), 1)
+		if r == 0 {
+			return Result{}, fmt.Errorf("MoveWindow failed")
+		}
+		return Result{Content: fmt.Sprintf("OK: window at (%d,%d) size %dx%d", p.X, p.Y, p.ToX, p.ToY)}, nil
+
+	case "quit_app":
+		// Best-effort without process enumeration: close all windows whose
+		// class matches — or by title substring as with other window actions.
+		h, err := findWindowByTitle(p.Text)
+		if err != nil {
+			return Result{}, err
+		}
+		pPostMessageW.Call(uintptr(h), wmClose, 0, 0)
+		return Result{Content: "OK: close requested for " + windowText(h)}, nil
+
+	case "display_info":
+		// Virtual screen span via GetSystemMetrics (76/79); origin via 76/77
+		// is the primary origin — report span as the multi-monitor extent.
+		p := user32.NewProc("GetSystemMetrics")
+		cx, _, _ := p.Call(76)
+		cy, _, _ := p.Call(79)
+		return Result{Content: fmt.Sprintf("virtual screen: %dx%d logical pixels (multi-monitor extent)", int32(cx), int32(cy))}, nil
+
+	case "snapshot_ui", "find_element", "find_and_click", "wait_and_click", "menu_select":
+		return Result{}, fmt.Errorf("desktop_control: action %q is not yet supported on Windows (requires UI Automation integration)", p.Action)
 
 	default:
 		return Result{}, fmt.Errorf("unknown action: %s", p.Action)
 	}
+}
+
+type winWindowInfo struct {
+	handle uintptr
+	title  string
+	class  string
+	pid    int
+}
+
+// enumVisibleWindows lists top-level visible windows with non-empty titles.
+func enumVisibleWindows() ([]winWindowInfo, error) {
+	var out []winWindowInfo
+	cb := syscall.NewCallback(func(hwnd uintptr, lparam uintptr) uintptr {
+		vis, _, _ := pIsWindowVisible.Call(hwnd)
+		if vis == 0 {
+			return 1 // continue
+		}
+		title := windowText(hwnd)
+		if strings.TrimSpace(title) == "" {
+			return 1
+		}
+		var pid uint32
+		pGetWindowThreadProcessId.Call(hwnd, uintptr(unsafe.Pointer(&pid)))
+		out = append(out, winWindowInfo{
+			handle: hwnd,
+			title:  title,
+			class:  className(hwnd),
+			pid:    int(pid),
+		})
+		return 1
+	})
+	r, _, err := pEnumWindows.Call(uintptr(cb), 0)
+	if r == 0 {
+		return nil, fmt.Errorf("EnumWindows failed: %v", err)
+	}
+	return out, nil
+}
+
+func windowText(hwnd uintptr) string {
+	buf := make([]uint16, 512)
+	n, _, _ := pGetWindowTextW.Call(hwnd, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
+	return syscall.UTF16ToString(buf[:n])
+}
+
+func className(hwnd uintptr) string {
+	buf := make([]uint16, 256)
+	n, _, _ := pGetClassNameW.Call(hwnd, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
+	return syscall.UTF16ToString(buf[:n])
+}
+
+// findWindowByTitle finds the first visible top-level window whose title
+// contains the given text, using the shared windowTitleMatches semantics.
+func findWindowByTitle(needle string) (uintptr, error) {
+	if strings.TrimSpace(needle) == "" {
+		return 0, fmt.Errorf("window target text is required")
+	}
+	windows, err := enumVisibleWindows()
+	if err != nil {
+		return 0, err
+	}
+	for _, w := range windows {
+		if windowTitleMatches(w.title, needle) {
+			return w.handle, nil
+		}
+	}
+	return 0, fmt.Errorf("no window with title containing %q", needle)
+}
+
+func getForegroundWindow() uintptr {
+	p := user32.NewProc("GetForegroundWindow")
+	h, _, _ := p.Call()
+	return h
 }
 
 func keyEventInputWithScan(scan uint16, flags uint32) winINPUT {
