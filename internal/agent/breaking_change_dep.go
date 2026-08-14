@@ -99,7 +99,25 @@ func checkBreakingChangeDep(filePath, oldContent, newContent string) []string {
 	for depName, depVer := range newDeps {
 		oldVer, existed := oldDeps[depName]
 		if !existed {
-			continue // newly added deps handled by vuln check
+			// #148: Go modules require the import path to change for major
+			// version v2+ (e.g. github.com/foo/bar -> github.com/foo/bar/v2),
+			// so the upgraded dep appears as a NEW key. Strip a trailing /vN
+			// (N>=2) suffix and re-check oldDeps against the base path to
+			// detect the major bump across the pair.
+			if base, suffix := goModuleBase(depName); suffix {
+				if prevVer, was := oldDeps[base]; was {
+					oldMajor := extractMajorVersion(prevVer)
+					newMajor := extractMajorVersion(depVer)
+					if oldMajor >= 0 && newMajor > oldMajor {
+						warnings = append(warnings, fmt.Sprintf(
+							"[Major Version Bump] %s upgraded v%d -> v%d (module path changed to %s) in %s. "+
+								"Breaking changes likely under SemVer. Update all import paths from %s to %s.",
+							depName, oldMajor, newMajor, depName, base, base, depName,
+						))
+					}
+				}
+			}
+			continue // other newly added deps handled by vuln check
 		}
 
 		oldMajor := extractMajorVersion(oldVer)
@@ -126,6 +144,38 @@ func checkBreakingChangeDep(filePath, oldContent, newContent string) []string {
 	}
 
 	return warnings
+}
+
+// goModuleBase strips a trailing Go major-version path suffix (/v2, /v3, ...)
+// from a module path. Returns the base path and whether a /vN (N>=2) suffix
+// was present. v0/v1 never appear as path suffixes per the Go module spec.
+func goModuleBase(modulePath string) (string, bool) {
+	i := strings.LastIndex(modulePath, "/")
+	if i < 0 {
+		return modulePath, false
+	}
+	suffix := modulePath[i+1:]
+	// Suffix must be "v" followed by a number >= 2 (v2..v9, v10, ...).
+	// v0/v1 never appear as path suffixes per the Go module spec, and
+	// non-numeric segments (like "v2rest") are not version suffixes.
+	if len(suffix) < 2 || suffix[0] != 'v' {
+		return modulePath, false
+	}
+	num := suffix[1:]
+	for _, c := range num {
+		if c < '0' || c > '9' {
+			return modulePath, false
+		}
+	}
+	// Parse the major number; reject leading-zero forms and majors < 2.
+	major := 0
+	for _, c := range num {
+		major = major*10 + int(c-'0')
+	}
+	if num[0] == '0' || major < 2 {
+		return modulePath, false
+	}
+	return modulePath[:i], true
 }
 
 // extractMajorVersion extracts the major version number from a version string.

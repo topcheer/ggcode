@@ -31,13 +31,33 @@ type postEditVerifyState struct {
 // postEditVerifyInterval is how many source-code edits between hints.
 const postEditVerifyInterval = 3
 
-// fileEditingTools is the set of tool names that modify files on disk.
-var fileEditingTools = map[string]bool{
+// sourceMutatingTools is the CANONICAL set of tools that write to disk and
+// change source files (#153/#154). All per-purpose gates (fileEditingTools,
+// reverifyEditTools, build idempotency) must be derived from or kept in sync
+// with this superset. Includes every registered tool that persists edits:
+// edit_file, write_file, multi_edit_file, multi_file_edit, multi_file_write,
+// batch_replace, lsp_rename (applies LSP workspace edits), file_ops, notebook_edit.
+var sourceMutatingTools = map[string]bool{
 	"edit_file":        true,
 	"write_file":       true,
 	"multi_edit_file":  true,
 	"multi_file_edit":  true,
 	"multi_file_write": true,
+	"batch_replace":    true,
+	"lsp_rename":       true,
+	"file_ops":         true,
+	"notebook_edit":    true,
+}
+
+// fileEditingTools is the set of tool names that modify files on disk.
+// Derived from the canonical sourceMutatingTools superset (#154) so it can
+// never drift out of sync.
+var fileEditingTools = sourceMutatingTools
+
+// assertEditToolMapsInSync is referenced by TestSourceMutatingToolsSuperset
+// to guarantee the canonical map stays complete.
+func assertEditToolMapsInSync() bool {
+	return len(sourceMutatingTools) == 9 && fileEditingTools["batch_replace"] && reverifyEditTools["lsp_rename"]
 }
 
 // fileReadingTools is the set of tools that read file contents.

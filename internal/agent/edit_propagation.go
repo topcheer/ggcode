@@ -40,6 +40,7 @@ package agent
 //   - Non-blocking advisory, max 2 warnings per run.
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -174,7 +175,7 @@ func (s *editPropagationState) reset() {
 
 // propagationExtractPaths extracts file paths from edit tool arguments.
 // Handles edit_file, multi_edit_file, write_file, multi_file_edit,
-// batch_replace argument formats.
+// multi_file_write, and batch_replace argument formats.
 func propagationExtractPaths(args string) []string {
 	var paths []string
 
@@ -184,16 +185,27 @@ func propagationExtractPaths(args string) []string {
 	// multi_edit_file: same file_path
 	// (already captured above)
 
-	// multi_file_edit: "path":"..." in files array
+	// multi_file_edit / multi_file_write: "path":"..." in files array
 	paths = append(paths, propagationExtractField(args, "path")...)
 
-	// batch_replace: "files":["...","..."]
-	// propagationExtractField handles this too since values are strings
-
-	// multi_file_write: same "path":"..." in files array
-	// (already captured above)
+	// batch_replace (#153): top-level "files": ["path1","path2",...] is a
+	// string ARRAY, which propagationExtractField cannot extract (it only
+	// handles "key":"value" string pairs). Parse it structurally.
+	paths = append(paths, propagationExtractFilesArray(args)...)
 
 	return paths
+}
+
+// propagationExtractFilesArray extracts the top-level "files" string array
+// from tool arguments (batch_replace schema). Returns nil on parse failure.
+func propagationExtractFilesArray(args string) []string {
+	var parsed struct {
+		Files []string `json:"files"`
+	}
+	if err := json.Unmarshal([]byte(args), &parsed); err != nil {
+		return nil
+	}
+	return parsed.Files
 }
 
 // propagationExtractField extracts values for a given JSON key from a

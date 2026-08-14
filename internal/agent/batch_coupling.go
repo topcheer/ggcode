@@ -163,12 +163,13 @@ func (s *batchCouplingState) checkBatchCoupling(toolCalls []couplingToolCall) st
 			if i == j {
 				continue
 			}
-			// Only flag when prereq appears before dep in the batch.
-			// Both orderings within a batch are problematic for parallel exec.
-			if i > j {
-				continue
-			}
-
+			// #150: flag BOTH orderings. Parallel execution of the pair is
+			// hazardous regardless of LLM listing order — if the dependent
+			// call runs before the prerequisite completes, it operates on
+			// stale/pre-change state (e.g. read_file placed before edit_file
+			// still returns pre-edit content if the executor runs them
+			// out of order). LLM emission order does not guarantee execution
+			// order in parallel batches.
 			for _, rule := range couplingRules {
 				if rule.prereqTool != prereq.name || rule.dependentTool != dep.name {
 					continue
@@ -198,7 +199,8 @@ func (s *batchCouplingState) checkBatchCoupling(toolCalls []couplingToolCall) st
 	var sb strings.Builder
 	sb.WriteString("## Parallel Tool Call Coupling Warning\n\n")
 	sb.WriteString("Your current batch of tool calls contains hidden sequential dependencies.\n")
-	sb.WriteString("These calls may fail or produce stale results if executed in parallel:\n\n")
+	sb.WriteString("These calls may fail or produce stale results if executed in parallel\n")
+	sb.WriteString("(regardless of the order you listed them in — sequence them explicitly):\n\n")
 	for _, f := range findings {
 		sb.WriteString(fmt.Sprintf("  - %s\n", f))
 	}

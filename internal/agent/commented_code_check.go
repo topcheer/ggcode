@@ -209,36 +209,85 @@ func findCommentedCodeBlocks(content string, cs *commentSyntaxInfo) []string {
 	lines := strings.Split(content, "\n")
 
 	var currentBlock []string
+	// codeLike counts lines in currentBlock that look like code (neutral
+	// empty-comment separators don't count toward the threshold — #152:
+	// otherwise godoc example blocks separated by a bare // line get
+	// flagged as dead code).
+	codeLike := 0
 
 	flush := func() {
-		if len(currentBlock) >= commentedBlockThreshold {
+		if len(currentBlock) >= commentedBlockThreshold && codeLike >= commentedBlockThreshold {
 			blocks = append(blocks, strings.Join(currentBlock, "\n"))
 		}
 		currentBlock = nil
+		codeLike = 0
+	}
+
+	// #152: track multi-line /* ... */ spans across lines. Previous
+	// extractBlockCommentCode could never return non-empty (dead code).
+	inBlockComment := false
+	var blockLines []string
+	blockCodeLike := 0
+	flushBlockComment := func() {
+		if len(blockLines) >= commentedBlockThreshold && blockCodeLike >= commentedBlockThreshold {
+			blocks = append(blocks, strings.Join(blockLines, "\n"))
+		}
+		blockLines = nil
+		blockCodeLike = 0
 	}
 
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 
+		if inBlockComment {
+			// Strip a trailing */ if present; content between is candidate code.
+			inner := trimmed
+			if idx := strings.Index(inner, cs.blockClose); idx >= 0 {
+				inner = inner[:idx]
+				inBlockComment = false
+			}
+			inner = strings.TrimSpace(inner)
+			blockLines = append(blockLines, line)
+			if inner != "" && looksLikeCode(inner) {
+				blockCodeLike++
+			}
+			if !inBlockComment {
+				flushBlockComment()
+			}
+			continue
+		}
+
 		// Check if this line is a line-comment with code-like content
 		if isCommentedCodeLine(trimmed, cs.lineComment) {
 			currentBlock = append(currentBlock, line)
+			if blockContent := strings.TrimSpace(strings.TrimPrefix(trimmed, cs.lineComment)); blockContent != "" && looksLikeCode(blockContent) {
+				codeLike++
+			}
 			continue
 		}
 
 		// Non-comment line — flush any accumulated block
 		flush()
 
-		// Check for block comments with code-like content
-		// We look for /* ... */ blocks that span multiple lines and contain
-		// code-like indicators
+		// #152: enter a multi-line /* ... */ span when the opener is not
+		// closed on the same line.
 		if cs.hasBlockComm && strings.Contains(trimmed, cs.blockOpen) {
-			if blockText := extractBlockCommentCode(line, cs); blockText != "" {
-				blocks = append(blocks, blockText)
+			rest := trimmed[strings.Index(trimmed, cs.blockOpen)+len(cs.blockOpen):]
+			if !strings.Contains(rest, cs.blockClose) {
+				inBlockComment = true
+				blockLines = append(blockLines, line)
+				rest = strings.TrimSpace(rest)
+				if rest != "" && looksLikeCode(rest) {
+					blockCodeLike++
+				}
+				continue
 			}
 		}
 	}
 	flush()
+	if inBlockComment {
+		flushBlockComment()
+	}
 
 	return blocks
 }
@@ -258,6 +307,14 @@ func isCommentedCodeLine(trimmed, commentPrefix string) bool {
 	// — they're allowed as separators within a block.
 	if content == "" {
 		return true // neutral: extends the block without adding code signal
+	}
+
+	// #152: godoc/go-doc example convention — code in documentation is
+	// indented after the comment marker ("//\tvals := ..."). Such lines
+	// are documentation examples, not commented-out dead code. Content
+	// that begins with a tab directly after the marker is doc formatting.
+	if strings.HasPrefix(trimmed[len(commentPrefix):], "\t") {
+		return false
 	}
 
 	// Skip lines that look like documentation, not code:
@@ -306,28 +363,9 @@ func looksLikeCode(content string) bool {
 // the line-scanner indirectly (lines within /* */ that also match line comments
 // are rare and would be caught by the line comment path in languages that
 // support both).
+// extractBlockCommentCode retained for compatibility; multi-line block
+// comments are now handled by the span tracker in findCommentedCodeBlocks
+// (#152 — this function previously could never return non-empty).
 func extractBlockCommentCode(line string, cs *commentSyntaxInfo) string {
-	// Find the content between /* and */
-	idx := strings.Index(line, cs.blockOpen)
-	if idx < 0 {
-		return ""
-	}
-	rest := line[idx+len(cs.blockOpen):]
-	endIdx := strings.Index(rest, cs.blockClose)
-	if endIdx >= 0 {
-		rest = rest[:endIdx]
-	}
-	rest = strings.TrimSpace(rest)
-	if rest == "" {
-		return ""
-	}
-
-	// Only flag if it looks like code and spans multiple lines or is substantial
-	if looksLikeCode(rest) && strings.Count(line, "\n") == 0 {
-		// Single-line block comment with code — less likely to be intentional
-		// dead code; skip to reduce false positives.
-		return ""
-	}
-
 	return ""
 }

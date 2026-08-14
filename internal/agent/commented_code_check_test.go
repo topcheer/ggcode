@@ -182,3 +182,42 @@ package main
 		t.Errorf("expected no warnings for license header, got: %v", warnings)
 	}
 }
+
+// #152: multi-line /* ... */ commented-out code must be detected.
+func TestCheckCommentedCodeBlocks_MultiLineBlockComment(t *testing.T) {
+	newContent := `package main
+
+/*
+fmt.Println("one")
+fmt.Println("two")
+fmt.Println("three")
+*/
+
+func main() {}
+`
+	warnings := checkCommentedCodeBlocks("main.go", "", newContent)
+	if len(warnings) != 1 {
+		t.Fatalf("expected 1 warning for /* */ commented code, got %d: %v", len(warnings), warnings)
+	}
+}
+
+// #152: godoc example blocks (prose + bare // separator + indented code)
+// must NOT be flagged.
+func TestCheckCommentedCodeBlocks_GodocExampleNotFlagged(t *testing.T) {
+	newContent := `package main
+
+// Example:
+//
+//	vals := []int{1, 2, 3}
+//	sum := 0
+//	for _, v := range vals {
+//		sum += v
+//	}
+
+func main() {}
+`
+	warnings := checkCommentedCodeBlocks("main.go", "", newContent)
+	if len(warnings) > 0 {
+		t.Errorf("expected no warnings for godoc example, got: %v", warnings)
+	}
+}

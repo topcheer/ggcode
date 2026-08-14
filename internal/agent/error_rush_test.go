@@ -202,3 +202,19 @@ func TestErrorRushState_SuccessfulBuildResetsStreak(t *testing.T) {
 		t.Errorf("expected no warning after successful tool reset streak, got: %s", msg)
 	}
 }
+
+// #149: the first warning must report the error streak that TRIGGERED the
+// rush (snapshot), not the already-reset zero.
+func TestErrorRushState_FirstWarnReportsStreak(t *testing.T) {
+	s := newErrorRushState()
+	s.recordToolCall("run_command", "exit 1", true)
+	s.recordToolCall("run_command", "exit 1", true)
+	s.recordToolCall("edit_file", "", false) // blind fix: streak resets here
+	g := s.check()
+	if g == "" {
+		t.Fatal("expected guidance")
+	}
+	if !strings.Contains(g, "2 consecutive error(s)") {
+		t.Fatalf("expected '2 consecutive error(s)' in first warning, got: %s", g)
+	}
+}

@@ -70,13 +70,8 @@ var reverifyCmdPatterns = map[string]*regexp.Regexp{
 }
 
 // editToolSet identifies tools that modify files (write operations).
-var reverifyEditTools = map[string]bool{
-	"edit_file":        true,
-	"write_file":       true,
-	"multi_edit_file":  true,
-	"multi_file_edit":  true,
-	"multi_file_write": true,
-}
+// Now an alias of the canonical sourceMutatingTools superset (#154).
+var reverifyEditTools = sourceMutatingTools
 
 func newRedundantReverifyState() *redundantReverifyState {
 	return &redundantReverifyState{

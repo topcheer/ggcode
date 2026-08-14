@@ -106,20 +106,43 @@ func TestDiminishingEditState_NoWarningForAllTrivial(t *testing.T) {
 func TestMeasureEditSize_EditFile(t *testing.T) {
 	args := json.RawMessage(`{"old_text":"hello world","new_text":"hello universe"}`)
 	size := measureEditSize("edit_file", args)
-	// Issue #26: measureEditSize now returns the delta (absolute change),
-	// not len(old)+len(new). "hello world" (11) -> "hello universe" (14)
-	// delta = |14 - 11| = 3.
-	expected := 3
+	// #151: measureEditSize now measures the differing region after common
+	// prefix/suffix trim ("hello " prefix, no common suffix): "world" (5)
+	// vs "universe" (8) -> max = 8. Equal-length rewrites no longer score 0.
+	expected := 8
 	if size != expected {
 		t.Fatalf("expected %d, got %d", expected, size)
 	}
 }
 
+// #151: equal-length substantive rewrites must score non-zero (the old
+// abs(len) metric scored them 0, triggering false polish-spiral warnings).
+func TestMeasureEditSize_EqualLengthRewrite(t *testing.T) {
+	args := json.RawMessage(`{"old_text":"if x > 0 {","new_text":"if y < 9 {"}`)
+	size := measureEditSize("edit_file", args)
+	// Common prefix "if " (3), common suffix " {" (2): differing region
+	// "x > 0" (5) vs "y < 9" (5) -> 5.
+	if size != 5 {
+		t.Fatalf("expected 5 for equal-length rewrite, got %d", size)
+	}
+}
+
+// #26 regression: anchor context must not be counted.
+func TestMeasureEditSize_AnchorNotCounted(t *testing.T) {
+	args := json.RawMessage(`{"old_text":"func longAnchor() { return 42 }","new_text":"func longAnchor() { return 43 }"}`)
+	size := measureEditSize("edit_file", args)
+	// Only the changed byte: 42 -> 43 differing region is "2" vs "3" -> 1.
+	if size != 1 {
+		t.Fatalf("expected 1, got %d", size)
+	}
+}
+
 func TestMeasureEditSize_MultiEditFile(t *testing.T) {
-	// Delta-only: edit1 = |1-1|=0, edit2 = |3-2|=1, total = 1.
+	// #151 metric: edit1 = "a"->"b" (no common affix, max(1,1)=1),
+	// edit2 = "cc"->"ddd" (no common affix, max(2,3)=3), total = 4.
 	args := json.RawMessage(`{"edits":[{"old_text":"a","new_text":"b"},{"old_text":"cc","new_text":"ddd"}]}`)
 	size := measureEditSize("multi_edit_file", args)
-	expected := 0 + 1
+	expected := 1 + 3
 	if size != expected {
 		t.Fatalf("expected %d, got %d", expected, size)
 	}
@@ -198,33 +221,35 @@ func TestResetDiminishingEdit_NilSafe(t *testing.T) {
 
 func TestEditSize_DeltaConsistencyAcrossTools(t *testing.T) {
 	// Regression test for #100: multi_edit_file and multi_file_edit should
-	// use delta-only measurement like edit_file, not len(old)+len(new).
-	oldText := strings.Repeat("a", 100)
-	newText := strings.Repeat("b", 103)
+	// use the same change-distance measurement as edit_file (not
+	// len(old)+len(new)). Updated for #151: the shared metric is
+	// editChangeDistance — differing region after common affix trimming —
+	// so equal-length rewrites score non-zero.
+	oldText := "x" + strings.Repeat("a", 100)
+	newText := "x" + strings.Repeat("b", 103)
+	// Common prefix "x" trimmed: remaining 100 vs 103 -> max = 103.
+	want := 103
 
-	// edit_file: delta = |103 - 100| = 3
+	// edit_file
 	editFileArgs, _ := json.Marshal(map[string]interface{}{
 		"old_text": oldText,
 		"new_text": newText,
 	})
-	editFileSize := measureEditSize("edit_file", editFileArgs)
+	if got := measureEditSize("edit_file", editFileArgs); got != want {
+		t.Fatalf("edit_file size = %d, want %d", got, want)
+	}
 
-	// multi_edit_file: should also be delta = 3 (not 100+103=203)
+	// multi_edit_file: same measurement
 	multiEditArgs, _ := json.Marshal(map[string]interface{}{
 		"edits": []map[string]interface{}{
 			{"old_text": oldText, "new_text": newText},
 		},
 	})
-	multiEditSize := measureEditSize("multi_edit_file", multiEditArgs)
-
-	if editFileSize != 3 {
-		t.Fatalf("edit_file size = %d, want 3", editFileSize)
-	}
-	if multiEditSize != 3 {
-		t.Fatalf("multi_edit_file size = %d, want 3 (delta-only like edit_file)", multiEditSize)
+	if got := measureEditSize("multi_edit_file", multiEditArgs); got != want {
+		t.Fatalf("multi_edit_file size = %d, want %d (same metric as edit_file)", got, want)
 	}
 
-	// multi_file_edit: should also be delta = 3
+	// multi_file_edit: same measurement
 	multiFileArgs, _ := json.Marshal(map[string]interface{}{
 		"files": []map[string]interface{}{
 			{"path": "/x.go", "edits": []map[string]interface{}{
@@ -232,9 +257,7 @@ func TestEditSize_DeltaConsistencyAcrossTools(t *testing.T) {
 			}},
 		},
 	})
-	multiFileSize := measureEditSize("multi_file_edit", multiFileArgs)
-
-	if multiFileSize != 3 {
-		t.Fatalf("multi_file_edit size = %d, want 3 (delta-only like edit_file)", multiFileSize)
+	if got := measureEditSize("multi_file_edit", multiFileArgs); got != want {
+		t.Fatalf("multi_file_edit size = %d, want %d (same metric as edit_file)", got, want)
 	}
 }

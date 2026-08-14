@@ -183,3 +183,33 @@ func TestConsensusState_DeduplicatesSameDetector(t *testing.T) {
 		t.Errorf("expected no alert with single distinct detector, got: %s", msg)
 	}
 }
+
+// #147: raw tool-result content containing detector tag literals (e.g. when
+// the agent READS detector source files) must NOT count as firings. The fix is
+// at the call site (agent.go passes result.Content[consensusBaseline:] — only
+// the guidance appended by detectors). This test simulates that wiring: with
+// baseline slicing, tags in raw file content are excluded; scanning the full
+// content (old behavior) would have fired.
+func TestConsensusState_RawContentNotCounted(t *testing.T) {
+	// Raw file content full of tag literals (detector source code).
+	rawContent := `[Error Rush] foo
+[Strategy Fixation] bar
+[Circular Reasoning] baz
+[Deferred Work] qux`
+	baseline := len(rawContent)
+
+	// New behavior: caller passes only content after the baseline. The one
+	// real detector firing below is below the 3-detector threshold.
+	content := rawContent + "\n\n[Error Rush] Editing after 2 consecutive error(s) without analysis."
+	s := newConsensusState()
+	if got := s.scanAndCheck(content[baseline:]); got != "" {
+		t.Fatalf("expected no consensus alert with baseline slicing, got: %s", got)
+	}
+
+	// Old behavior (scanning full content) would have counted 4+ tags —
+	// confirm the hazard the baseline fix eliminates.
+	s2 := newConsensusState()
+	if got := s2.scanAndCheck(content); got == "" {
+		t.Fatal("sanity check failed: full-content scan should have fired pre-fix behavior")
+	}
+}

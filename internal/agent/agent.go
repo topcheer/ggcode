@@ -4104,6 +4104,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// tool I/O so we can detect ungrounded references later.
 			// Tool result redundancy: detect when result content substantially
 			// overlaps with a prior result still in context (AgentDiet waste).
+			// #147: baseline content length BEFORE any detector guidance is
+			// appended below. The consensus scanner uses this to scan only
+			// injected guidance segments, never raw file content.
+			consensusBaseline := len(result.Content)
 			if trMsg := a.toolResultRedundancy.recordResult(tc.Name, result.Content, i+1); trMsg != "" {
 				if result.Content != "" {
 					result.Content = result.Content + "\n\n" + trMsg
@@ -4154,11 +4158,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					result.Content = refactorGuidance
 				}
 			}
-			// Cross-detector consensus: scan accumulated result content for
-			// detector tag signatures. When 3+ independent detectors fire within
-			// a narrow window, inject a systemic-failure "step back" alert.
-			// Research: Nelson-Narens metacognition; MAPE-K cross-stream anomalies.
-			if consensusGuidance := a.crossDetectorConsensus.scanAndCheck(result.Content); consensusGuidance != "" {
+			// Cross-detector consensus: record detector firings and check for
+			// co-occurrence. IMPORTANT (#147): scan ONLY the guidance appended by
+			// detectors in this block (consensusBaseline marks the content length
+			// before any detector guidance was appended), NOT the raw tool result
+			// content. Scanning raw content caused false consensus alerts whenever
+			// the agent read detector source/test files that contain tag literals.
+			if consensusGuidance := a.crossDetectorConsensus.scanAndCheck(result.Content[consensusBaseline:]); consensusGuidance != "" {
 				if result.Content != "" {
 					result.Content = result.Content + "\n\n" + consensusGuidance
 				} else {

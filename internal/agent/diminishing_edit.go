@@ -165,8 +165,50 @@ func avgEditSize(entries []editSizeEntry) int {
 	return total / len(entries)
 }
 
+// editChangeDistance measures the substance of a single old->new text
+// replacement without counting anchor context (#26) and without scoring
+// equal-length rewrites as zero (#151). It trims the longest common prefix
+// and suffix, then measures the remaining differing region (max of the two
+// remainder lengths, so pure insertions/deletions and equal-length swaps
+// both score proportionally to changed content).
+func editChangeDistance(oldText, newText string) int {
+	// Binary-safe common prefix/suffix trim over bytes.
+	n, m := len(oldText), len(newText)
+	maxLen := n
+	if m > maxLen {
+		maxLen = m
+	}
+	minLen := n
+	if m < minLen {
+		minLen = m
+	}
+	p := 0
+	for p < minLen && oldText[p] == newText[p] {
+		p++
+	}
+	s := 0
+	for s < minLen-p && oldText[n-1-s] == newText[m-1-s] {
+		s++
+	}
+	oldRem := n - p - s
+	newRem := m - p - s
+	if oldRem < 0 {
+		oldRem = 0
+	}
+	if newRem < 0 {
+		newRem = 0
+	}
+	if oldRem > newRem {
+		return oldRem
+	}
+	return newRem
+}
+
 // measureEditSize computes the substance size (total bytes of content being changed)
-// from the tool call arguments. For edit_file, this is len(old_text)+len(new_text).
+// from the tool call arguments. For edit_file, this is editChangeDistance(old,new)
+// — the differing region after common prefix/suffix trimming, so equal-length
+// substantive rewrites (renames, operator fixes, API swaps) score non-zero (#151)
+// while pure anchor context is not counted (#26).
 // For multi_edit_file/multi_file_edit, it sums across all sub-edits.
 // For write_file, it is len(content).
 func measureEditSize(toolName string, args json.RawMessage) int {
@@ -183,15 +225,11 @@ func measureEditSize(toolName string, args json.RawMessage) int {
 		if json.Unmarshal(args, &p) != nil {
 			return 0
 		}
-		// Measure only the delta, not the anchor. The old_text in edit_file is
-		// a context anchor required to locate the edit, not the change itself.
-		// Counting it caused systematic false positives in overcorrection
-		// detection (issue #26).
-		delta := len(p.NewText) - len(p.OldText)
-		if delta < 0 {
-			delta = -delta
-		}
-		return delta
+		// #26: common prefix/suffix trimming keeps anchors out of the metric.
+		// #151: the differing region is measured with max(oldRem,newRem), so
+		// equal-length rewrites (e.g. "if x > 0" -> "if y < 9") score ~ their
+		// changed bytes instead of 0.
+		return editChangeDistance(p.OldText, p.NewText)
 
 	case "multi_edit_file":
 		var p struct {
@@ -205,11 +243,7 @@ func measureEditSize(toolName string, args json.RawMessage) int {
 		}
 		total := 0
 		for _, e := range p.Edits {
-			delta := len(e.NewText) - len(e.OldText)
-			if delta < 0 {
-				delta = -delta
-			}
-			total += delta
+			total += editChangeDistance(e.OldText, e.NewText)
 		}
 		return total
 
@@ -228,11 +262,7 @@ func measureEditSize(toolName string, args json.RawMessage) int {
 		total := 0
 		for _, f := range p.Files {
 			for _, e := range f.Edits {
-				delta := len(e.NewText) - len(e.OldText)
-				if delta < 0 {
-					delta = -delta
-				}
-				total += delta
+				total += editChangeDistance(e.OldText, e.NewText)
 			}
 		}
 		return total

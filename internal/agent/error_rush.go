@@ -47,6 +47,11 @@ type errorRushState struct {
 	lastErrorOutput string
 	// hasInterimRead tracks whether a read/analysis tool was used since the last error.
 	hasInterimRead bool
+	// lastRushStreak snapshots consecutiveErrors at the moment a rush was
+	// detected, before recordToolCall resets the counter on the successful
+	// mutation. check() formats the first warning from this snapshot (#149)
+	// so it doesn't read the already-reset zero.
+	lastRushStreak int
 	// rushCount counts how many times the agent did a blind-fix (edit after errors with no read).
 	rushCount int
 	// warnCount caps total warnings per run.
@@ -112,6 +117,9 @@ func (s *errorRushState) recordToolCall(toolName string, output string, isError 
 	// that's a "blind fix" / panic rush.
 	if errorRushIsMutation(toolName) && s.consecutiveErrors >= errorRushConsecutiveThreshold && !s.hasInterimRead {
 		s.rushCount++
+		// #149: snapshot the streak NOW — the reset below would otherwise
+		// zero it before check() formats the first warning.
+		s.lastRushStreak = s.consecutiveErrors
 	}
 
 	// A successful non-error tool resets the error streak
@@ -162,7 +170,9 @@ func (s *errorRushState) check() string {
 	if s.rushCount > 1 {
 		guidance = fmt.Sprintf(repeatWarnFormat, s.rushCount+1)
 	} else {
-		guidance = fmt.Sprintf(firstWarnFormat, s.consecutiveErrors)
+		// #149: consecutiveErrors was reset by the triggering mutation's
+		// recordToolCall; use the snapshot taken at detection time instead.
+		guidance = fmt.Sprintf(firstWarnFormat, s.lastRushStreak)
 	}
 
 	if errSnippet != "" {

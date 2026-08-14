@@ -146,15 +146,15 @@ func TestBatchCoupling_Reset(t *testing.T) {
 	}
 }
 
-func TestBatchCoupling_ReverseOrderNotFlagged(t *testing.T) {
+func TestBatchCoupling_ReverseOrderFlagged(t *testing.T) {
 	s := newBatchCouplingState()
-	// read_file before edit_file: prereq (edit_file) is at index 1, dep (read_file) at 0.
-	// Since i > j is skipped, this should NOT be flagged.
+	// #150: read_file before edit_file — parallel execution would return
+	// pre-edit content, so the reverse order is ALSO flagged now.
 	calls := []couplingToolCall{
 		{name: "read_file", args: couplingRawJSON(t, map[string]interface{}{"path": "/foo.go"})},
 		{name: "edit_file", args: couplingRawJSON(t, map[string]interface{}{"file_path": "/foo.go"})},
 	}
-	if got := s.checkBatchCoupling(calls); got != "" {
-		t.Fatalf("expected no warning for reverse order, got: %s", got)
+	if got := s.checkBatchCoupling(calls); got == "" {
+		t.Fatal("expected warning for reverse order (read before edit)")
 	}
 }

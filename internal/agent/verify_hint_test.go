@@ -437,3 +437,33 @@ func TestMaybeResetVerifyOnCommand_NonRunCommand(t *testing.T) {
 		t.Error("expected lastBuildFailed=false for non-run_command tool")
 	}
 }
+
+// #154: all editing-tool gates must include the full superset so
+// build_idempotency never claims "guaranteed identical result" after
+// multi_file_edit/batch_replace/lsp_rename edits.
+func TestSourceMutatingToolsSuperset(t *testing.T) {
+	required := []string{
+		"edit_file", "write_file", "multi_edit_file", "multi_file_edit",
+		"multi_file_write", "batch_replace", "lsp_rename", "file_ops", "notebook_edit",
+	}
+	for _, tool := range required {
+		if !sourceMutatingTools[tool] {
+			t.Errorf("sourceMutatingTools missing %q", tool)
+		}
+		if !fileEditingTools[tool] {
+			t.Errorf("fileEditingTools missing %q", tool)
+		}
+		if !reverifyEditTools[tool] {
+			t.Errorf("reverifyEditTools missing %q", tool)
+		}
+	}
+}
+
+// #153: batch_replace files array must be extracted for edit propagation.
+func TestPropagationExtractPaths_BatchReplace(t *testing.T) {
+	args := `{"pattern":"TODO","replacement":"DONE","files":["/a.go","/b.go","/c.go"]}`
+	paths := propagationExtractPaths(args)
+	if len(paths) != 3 {
+		t.Fatalf("expected 3 paths from batch_replace, got %d: %v", len(paths), paths)
+	}
+}
