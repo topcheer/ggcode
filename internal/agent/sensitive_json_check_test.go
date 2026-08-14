@@ -176,3 +176,24 @@ type Foo struct {
 }
 
 // contains and containsStr already defined in reflection_test.go
+
+// TestSensitiveJSON_EmbeddedFieldNoPanic pins fix #173: an embedded field
+// with a sensitive json tag must not panic (recover would kill ALL warnings).
+func TestSensitiveJSON_EmbeddedFieldNoPanic(t *testing.T) {
+	src := "package main\ntype Auth struct{}\ntype User struct {\n\tID int\n\tAuth `json:\"token\"`\n\tPassword string `json:\"password\"`\n}\n"
+	w := checkSensitiveJSONExposure("a.go", "", src) // must not panic
+	if len(w) == 0 {
+		t.Fatal("Password field warning must survive the embedded tagged field")
+	}
+}
+
+// TestSensitiveJSON_DeltaSuppress pins fix #173: pre-existing sensitive
+// fields must not be re-reported on unrelated edits.
+func TestSensitiveJSON_DeltaSuppress(t *testing.T) {
+	old := "package main\ntype User struct {\n\tPassword string `json:\"password\"`\n}\n"
+	newC := "package main\n// comment\n\ntype User struct {\n\tPassword string `json:\"password\"`\n}\n"
+	w := checkSensitiveJSONExposure("a.go", old, newC)
+	if len(w) != 0 {
+		t.Fatalf("pre-existing sensitive field must not re-report on comment edit: %v", w)
+	}
+}

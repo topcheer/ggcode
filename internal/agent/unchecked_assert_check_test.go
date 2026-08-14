@@ -244,3 +244,15 @@ func TestCheckUncheckedTypeAssert_NewDifferentAssertion(t *testing.T) {
 		t.Fatal("new different assertion must be flagged even when an old assertion exists")
 	}
 }
+
+// TestCheckUncheckedTypeAssert_ComplexExprFingerprints pins fix #176:
+// getA().(int) and getB().(int) must produce distinct fingerprints so a
+// swap-in of a different complex-X assertion is still detected.
+func TestCheckUncheckedTypeAssert_ComplexExprFingerprints(t *testing.T) {
+	oldSrc := "package main\nfunc f(getA func() interface{}) { _ = getA().(int) }\n"
+	newSrc := "package main\nfunc f(getA func() interface{}, getB func() interface{}) {\n\t_ = getA().(int)\n\t_ = getB().(int)\n}\n"
+	w := checkUncheckedTypeAssert("t.go", oldSrc, newSrc)
+	if len(w) == 0 {
+		t.Fatal("new getB().(int) must be flagged despite old getA().(int) (fingerprint residue, #176)")
+	}
+}

@@ -262,6 +262,10 @@ func isSimpleIdent(s string) bool {
 }
 
 // exprText converts an AST expression to its source text representation.
+// Extended expression coverage (fix #176): the original 4-case switch folded
+// complex asserted expressions — e.g. getA().(int) and getB().(int) both
+// rendered ".(int)" — leaving the unchecked-assert fingerprint collision
+// class open for method-chain/index/conversion results.
 func exprText(expr ast.Expr) string {
 	switch e := expr.(type) {
 	case *ast.Ident:
@@ -276,6 +280,30 @@ func exprText(expr ast.Expr) string {
 		return exprText(e.X)
 	case *ast.BasicLit:
 		return e.Value
+	case *ast.CallExpr:
+		fn := exprText(e.Fun)
+		if fn == "" {
+			return ""
+		}
+		return fn + "()"
+	case *ast.IndexExpr:
+		x := exprText(e.X)
+		if x == "" {
+			return ""
+		}
+		return x + "[" + exprText(e.Index) + "]"
+	case *ast.StarExpr:
+		return "*" + exprText(e.X)
+	case *ast.UnaryExpr:
+		return e.Op.String() + exprText(e.X)
+	case *ast.BinaryExpr:
+		return exprText(e.X) + " " + e.Op.String() + " " + exprText(e.Y)
+	case *ast.ArrayType:
+		return "[]" + exprText(e.Elt)
+	case *ast.MapType:
+		return "map[" + exprText(e.Key) + "]" + exprText(e.Value)
+	case *ast.ChanType:
+		return "chan " + exprText(e.Value)
 	default:
 		return ""
 	}

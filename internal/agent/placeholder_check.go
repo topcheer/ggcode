@@ -141,21 +141,23 @@ func checkPlaceholderCode(filePath, oldContent, newContent string) []string {
 
 	var warnings []string
 
-	// 1. Language-specific placeholder patterns (substring-based)
-	// Per-instance multiset comparison (fix #171 — count-diff is blind to
-	// remove-N-add-N; see hardcoded_secret_check.go).
+	// 1. Language-specific placeholder patterns (substring-based).
+	// Position-aware comparison (fix #171/#175): fixed substrings like
+	// `panic("TODO")` are identical everywhere, so a text-keyed multiset
+	// cannot distinguish a moved occurrence from a stale one. Compare
+	// line-number multisets instead — removing the pattern in one function
+	// while adding it in another shows as a net-new line and is flagged.
 	for _, p := range patterns {
-		oldCount := strings.Count(oldContent, p.pattern)
-		newCount := strings.Count(newContent, p.pattern)
-		if newCount <= oldCount {
-			continue
+		oldLines := substringLineMultiset(oldContent, p.pattern)
+		newLines := substringLineMultiset(newContent, p.pattern)
+		introduced := 0
+		for line, cnt := range newLines {
+			if old := oldLines[line]; cnt > old {
+				introduced += cnt - old
+			}
 		}
-		// Same count or fewer — still possible the pattern moved sites;
-		// substring occurrences are identical text so a pure count comparison
-		// suffices for exact-identical patterns (no per-instance identity to
-		// compare). Only net-new occurrences can be detected here.
-		if newCount > oldCount {
-			warnings = append(warnings, formatPlaceholderWarning(p.label, newCount-oldCount))
+		if introduced > 0 {
+			warnings = append(warnings, formatPlaceholderWarning(p.label, introduced))
 		}
 	}
 
@@ -167,6 +169,28 @@ func checkPlaceholderCode(filePath, oldContent, newContent string) []string {
 	}
 
 	return warnings
+}
+
+// substringLineMultiset returns a map of line-number → occurrence count of
+// substr in content (fix #175).
+func substringLineMultiset(content, substr string) map[int]int {
+	lines := make(map[int]int)
+	if substr == "" || content == "" {
+		return lines
+	}
+	lineOf := func(idx int) int {
+		return 1 + strings.Count(content[:idx], "\n")
+	}
+	start := 0
+	for {
+		i := strings.Index(content[start:], substr)
+		if i < 0 {
+			return lines
+		}
+		abs := start + i
+		lines[lineOf(abs)]++
+		start = abs + len(substr)
+	}
 }
 
 // checkVagueTodos detects newly-introduced vague TODO/FIXME comments.

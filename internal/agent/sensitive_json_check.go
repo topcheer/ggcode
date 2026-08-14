@@ -119,9 +119,44 @@ func sensitiveFieldWarning(fset *token.FileSet, filePath, structName string, fie
 	)
 }
 
-// checkSensitiveJSONExposure detects Go struct fields with sensitive names
+// sensitiveJSONOldKeys parses oldContent and returns the set of
+// struct.field keys that already carried sensitive warnings (fix #173).
+func sensitiveJSONOldKeys(filePath, oldContent string) map[string]bool {
+	keys := make(map[string]bool)
+	if strings.TrimSpace(oldContent) == "" {
+		return keys
+	}
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, filePath, oldContent, 0)
+	if err != nil {
+		return keys
+	}
+	ast.Inspect(file, func(n ast.Node) bool {
+		ts, ok := n.(*ast.TypeSpec)
+		if !ok {
+			return true
+		}
+		st, ok := ts.Type.(*ast.StructType)
+		if !ok || st.Fields == nil {
+			return true
+		}
+		for _, field := range st.Fields.List {
+			if sensitiveFieldWarning(fset, filePath, ts.Name.Name, field) == "" {
+				continue
+			}
+			if len(field.Names) > 0 {
+				keys[ts.Name.Name+"."+field.Names[0].Name] = true
+			} else if id, ok := field.Type.(*ast.Ident); ok {
+				keys[ts.Name.Name+"."+id.Name] = true
+			}
+		}
+		return true
+	})
+	return keys
+}
+
 // that are not excluded from JSON serialization (missing json:"-").
-func checkSensitiveJSONExposure(filePath, _, newContent string) []string {
+func checkSensitiveJSONExposure(filePath, oldContent, newContent string) []string {
 	if filepath.Ext(filePath) != ".go" {
 		return nil
 	}
@@ -130,6 +165,11 @@ func checkSensitiveJSONExposure(filePath, _, newContent string) []string {
 	if err != nil {
 		return nil
 	}
+
+	// Delta-aware (fix #173): suppress warnings for struct.field pairs that
+	// already existed in the old content — key on names, not positions, so
+	// line shifts don't re-flag legacy fields on every edit.
+	oldSeen := sensitiveJSONOldKeys(filePath, oldContent)
 
 	var warnings []string
 	seen := make(map[string]bool)
@@ -150,8 +190,17 @@ func checkSensitiveJSONExposure(filePath, _, newContent string) []string {
 			if w == "" {
 				continue
 			}
-			key := structName + "." + field.Names[0].Name
-			if seen[key] {
+			// Embedded (anonymous) fields have empty Names — index access would
+			// panic and the check-registry recover would then swallow ALL
+			// sensitive-field warnings for the write (fix #173).
+			fieldName := ""
+			if len(field.Names) > 0 {
+				fieldName = field.Names[0].Name
+			} else if id, ok := field.Type.(*ast.Ident); ok {
+				fieldName = id.Name // embedded type name as fallback key
+			}
+			key := structName + "." + fieldName
+			if seen[key] || oldSeen[key] {
 				continue
 			}
 			seen[key] = true

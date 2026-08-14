@@ -235,3 +235,20 @@ func process(progress string) {
 		t.Errorf("expected 0 warnings for literal percent, got %d: %v", len(warnings), warnings)
 	}
 }
+
+// TestPrintfFormat_ReplacementDetected pins fix #172: fixing one format bug
+// while introducing a different one (net 0) must still report the new one.
+func TestPrintfFormat_ReplacementDetected(t *testing.T) {
+	oldSrc := "package main\nfunc f(u string) { log.Printf(u) }\n"
+	newSrc := "package main\nfunc f(u string) { log.Printf(u); log.Println() }\n"
+	_ = oldSrc
+	_ = newSrc
+	// Real shape: old has nonconstant-format at line 2; new removes it and
+	// adds a different nonconstant-format at line 2 via a different call.
+	old2 := "package main\nimport \"log\"\nfunc f(u string) { log.Printf(u) }\n"
+	new2 := "package main\nimport \"log\"\nfunc f(u string) { log.Print(u) }\nfunc g(v string) { log.Printf(v) }\n"
+	w := checkPrintfFormat("a.go", old2, new2)
+	if len(w) == 0 {
+		t.Fatal("fix-one-add-another printf bug must be detected (net-0 delta, #172)")
+	}
+}

@@ -162,3 +162,20 @@ func TestCheckWriteIntegrity_NoPlaceholderWarningForValidCode(t *testing.T) {
 		t.Errorf("expected no warning for valid code, got: %s", warning)
 	}
 }
+
+// TestPlaceholder_MovedPatternDetected pins fix #175: removing panic("TODO")
+// in one function while adding it in another (net 0) must be reported.
+func TestPlaceholder_MovedPatternDetected(t *testing.T) {
+	old := "package main\nfunc a() { panic(\"TODO\") }\nfunc b() {}\n"
+	newC := "package main\nfunc a() { println(\"done\") }\nfunc b() { panic(\"TODO\") }\n"
+	w := checkPlaceholderCode("a.go", old, newC)
+	found := false
+	for _, s := range w {
+		if strings.Contains(s, "panic") || strings.Contains(s, "placeholder") || strings.Contains(s, "TODO") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("moved panic(TODO) must be flagged: %v", w)
+	}
+}

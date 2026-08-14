@@ -231,3 +231,24 @@ func calculate(input int) int {
 		t.Fatalf("expected no warnings for computed switch, got: %v", warnings)
 	}
 }
+
+// TestHardcodedOutput_DeltaSuppress pins fix #174: a pre-existing large
+// lookup map must not re-report on unrelated edits.
+func TestHardcodedOutput_DeltaSuppress(t *testing.T) {
+	old := "package main\nfunc lookupCode(s string) string {\n\tm := map[string]string{\n\t\t\"a\": \"1\", \"b\": \"2\", \"c\": \"3\", \"d\": \"4\", \"e\": \"5\", \"f\": \"6\",\n\t}\n\treturn m[s]\n}\n"
+	newC := "package main\n// touched\nfunc lookupCode(s string) string {\n\tm := map[string]string{\n\t\t\"a\": \"1\", \"b\": \"2\", \"c\": \"3\", \"d\": \"4\", \"e\": \"5\", \"f\": \"6\",\n\t}\n\treturn m[s]\n}\n"
+	w := checkHardcodedOutput("a.go", old, newC)
+	if len(w) != 0 {
+		t.Fatalf("pre-existing lookup table must not re-report: %v", w)
+	}
+}
+
+// TestHardcodedOutput_PythonEntryCount pins fix #174: a 3-pair dict must NOT
+// fire (threshold is 5) and counts must reflect real pairs, not quote chars.
+func TestHardcodedOutput_PythonEntryCount(t *testing.T) {
+	src := "LOOKUP = {\"a\": \"b\", \"c\": \"d\", \"e\": \"f\"}\n"
+	w := checkHardcodedOutput("a.py", "", src)
+	if len(w) != 0 {
+		t.Fatalf("3-pair dict must not fire with 2x-inflated count: %v", w)
+	}
+}

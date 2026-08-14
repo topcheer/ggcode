@@ -59,7 +59,7 @@ const (
 
 // checkHardcodedOutput detects hardcoded input-to-output memorization patterns.
 // Runs for Go, Python, and JS/TS files. Returns warning strings.
-func checkHardcodedOutput(fp, _, newContent string) []string {
+func checkHardcodedOutput(fp, oldContent, newContent string) []string {
 	if isTestFile(fp) {
 		return nil
 	}
@@ -74,6 +74,33 @@ func checkHardcodedOutput(fp, _, newContent string) []string {
 		warnings = checkHardcodedOutputPython(newContent)
 	case LangJSTS:
 		warnings = checkHardcodedOutputJSTS(newContent)
+	}
+
+	// Delta-aware (fix #174): a file that legitimately contains a large
+	// literal map (not caught by the config-getter allowlist) was re-flagged
+	// on EVERY subsequent edit, even unrelated ones. Compare old vs new
+	// warning sets; only net-new warnings survive.
+	if strings.TrimSpace(oldContent) != "" && len(warnings) > 0 {
+		var oldWarnings []string
+		switch lang {
+		case LangGo:
+			oldWarnings = checkHardcodedOutputGo(fp, oldContent)
+		case LangPython:
+			oldWarnings = checkHardcodedOutputPython(oldContent)
+		case LangJSTS:
+			oldWarnings = checkHardcodedOutputJSTS(oldContent)
+		}
+		oldSet := make(map[string]bool, len(oldWarnings))
+		for _, w := range oldWarnings {
+			oldSet[w] = true
+		}
+		var fresh []string
+		for _, w := range warnings {
+			if !oldSet[w] {
+				fresh = append(fresh, w)
+			}
+		}
+		warnings = fresh
 	}
 
 	if len(warnings) > hardcodedOutputMaxWarnings {
@@ -296,13 +323,18 @@ func checkHardcodedOutputPython(src string) []string {
 		if len(m) < 2 {
 			continue
 		}
-		entries := strings.Count(m[1], `"`)
-		if entries/2 >= minHardcodedEntries {
+		// Count actual "key": "value" pairs, not quote characters (fix #174:
+		// counting `"` chars then dividing by 2 reported 2x the real entry
+		// count — a 3-pair dict fired claiming "6 entries", and the threshold
+		// was effectively >=3 pairs instead of the documented >=5).
+		pairRe := regexp.MustCompile(`"[^"]*"\s*:\s*(?:"[^"]*"|[^,}]+)`)
+		entries := len(pairRe.FindAllString(m[1], -1))
+		if entries >= minHardcodedEntries {
 			if allStringLiterals(m[1]) {
 				warnings = append(warnings, fmt.Sprintf(
 					"large dict literal with %d hardcoded string-to-literal entries - "+
 						"verify this implements real logic, not input memorization",
-					entries/2))
+					entries))
 				break // one warning per file
 			}
 		}

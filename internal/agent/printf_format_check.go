@@ -53,6 +53,7 @@ import (
 	"go/parser"
 	"go/token"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -114,14 +115,23 @@ func checkPrintfFormat(filePath, oldContent, newContent string) []string {
 		return nil
 	}
 
-	// Delta-aware: count old issues and subtract.
+	// Delta-aware via per-instance set comparison keyed by kind+funcName+line
+	// (fix #172: count-diff missed remove-N-add-N — fixing one printf bug
+	// while introducing another passed silently; slicing by count reported
+	// wrong instances on net growth).
 	if strings.TrimSpace(oldContent) != "" {
-		oldCount := len(findPrintfFormatIssues(oldContent))
-		if len(newIssues) <= oldCount {
-			return nil
+		oldIssues := findPrintfFormatIssues(oldContent)
+		oldSet := make(map[string]bool, len(oldIssues))
+		for _, iss := range oldIssues {
+			oldSet[iss.kind+"\x00"+iss.funcName+"\x00"+strconv.Itoa(iss.line)] = true
 		}
-		// Report only the newly-introduced issues (the surplus).
-		newIssues = newIssues[oldCount:]
+		var fresh []printfFormatInfo
+		for _, iss := range newIssues {
+			if !oldSet[iss.kind+"\x00"+iss.funcName+"\x00"+strconv.Itoa(iss.line)] {
+				fresh = append(fresh, iss)
+			}
+		}
+		newIssues = fresh
 	}
 
 	if len(newIssues) == 0 {
