@@ -116,24 +116,24 @@ end tell`)
 // mouseClick moves to (x,y) then performs N clicks via Swift CGEvent.
 // Zero external dependencies — uses system swift + CoreGraphics.
 func mouseClick(ctx context.Context, x, y int, button string, count int) (Result, error) {
-	eventType := "kCGEventLeftMouseDown"
-	eventTypeUp := "kCGEventLeftMouseUp"
+	downType := ".leftMouseDown"
+	upType := ".leftMouseUp"
 	if button == "right" {
-		eventType = "kCGEventRightMouseDown"
-		eventTypeUp = "kCGEventRightMouseUp"
+		downType = ".rightMouseDown"
+		upType = ".rightMouseUp"
 	}
 	return runSwiftCGEvent(ctx, fmt.Sprintf(`
 import CoreGraphics
 let point = CGPoint(x: %d, y: %d)
 for _ in 0..<%d {
-    let eDown = CGEvent(mouseEventSource: nil, mouseType: CGEventType(rawValue: %s)!,
+    let eDown = CGEvent(mouseEventSource: nil, mouseType: CGEventType%s,
                         mouseCursorPosition: point, mouseButton: .left)
     eDown?.post(tap: .cghidEventTap)
-    let eUp = CGEvent(mouseEventSource: nil, mouseType: CGEventType(rawValue: %s)!,
+    let eUp = CGEvent(mouseEventSource: nil, mouseType: CGEventType%s,
                       mouseCursorPosition: point, mouseButton: .left)
     eUp?.post(tap: .cghidEventTap)
 }
-`, x, y, count, eventType, eventTypeUp))
+`, x, y, count, downType, upType))
 }
 
 // mouseMove moves the cursor to (x,y) via Swift CGEvent.
