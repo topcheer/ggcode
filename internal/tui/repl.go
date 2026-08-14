@@ -242,6 +242,7 @@ func (r *REPL) switchSessionLock(newSessionID string) {
 	}
 	if newLock != nil {
 		if r.sessionLock != nil {
+
 			r.sessionLock.Release()
 		}
 		r.sessionLock = newLock
@@ -1149,9 +1150,26 @@ func (r *REPL) Run() error {
 		traceLast = now
 	}
 	debug.Log("repl", "Run() START resumeID=%q", r.resumeID)
+
 	traceMark("start")
 	if r.core != nil {
-		defer r.core.Close()
+		// Close the runtime core with a hard watchdog: background services
+		// (MCP clients, IM adapters, LAN chat) have historically deadlocked
+		// during shutdown (e.g. double cmd.Wait in mcp.Client.Close). The
+		// session is already persisted by the time this defer runs, so a
+		// forced exit loses nothing except logs.
+		defer func() {
+			done := make(chan struct{})
+			go func() {
+				r.core.Close()
+				close(done)
+			}()
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				debug.Log("repl", "core.Close() timed out after 5s; forcing exit (known shutdown deadlock in background services)")
+			}
+		}()
 	}
 	// Initialize session
 	if r.store != nil {
@@ -1425,6 +1443,7 @@ func (r *REPL) Run() error {
 	})
 
 	finalModel, err := r.program.Run()
+
 	traceMark("after bubbletea Run")
 	debug.Log("repl", "program.Run() returned err=%v", err)
 	if errors.Is(err, tea.ErrInterrupted) {
@@ -1432,16 +1451,19 @@ func (r *REPL) Run() error {
 	}
 	// Drain remaining metrics before session save.
 	if r.metricCollector != nil {
+
 		if r.metricCancel != nil {
 			r.metricCancel()
 		}
 		r.metricCollector.Stop()
 	}
 	if r.imManager != nil {
+
 		r.imManager.UnbindSession()
 	}
 	// Broadcast leave to LAN peers so they detect offline immediately.
 	if r.model.lanChatHub != nil {
+
 		r.model.lanChatHub.Close()
 	}
 	// Sync final model state from Bubble Tea so exit cleanup uses the
@@ -1458,12 +1480,14 @@ func (r *REPL) Run() error {
 	}
 
 	if r.model.acpClientMgr != nil {
+
 		r.model.acpClientMgr.CloseAll()
 	}
 	if r.model.instanceDetect != nil {
 		r.model.instanceDetect.Unregister()
 	}
 	if err == nil && r.store != nil && exitSes != nil {
+
 		// Persist new messages on clean exit (incremental, no full rewrite).
 		r.model.persistFullSessionMessages()
 		// Clean up empty session files — sessions without any user interaction

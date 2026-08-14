@@ -176,14 +176,16 @@ func (c *Client) Start(ctx context.Context) error {
 
 	// Monitor process exit. When the process dies on its own (not via
 	// Close/Abort), close the processExit channel so watchers can react.
+	// The channel is ALWAYS closed (even during Close/Abort) so anyone
+	// waiting on it — including Close's shutdown wait — is released.
 	safego.Go("mcp.procWatch", func() {
 		_ = cmd.Wait()
-		// Only signal unexpected exit if we haven't been closed by the user.
 		if !c.closed.Load() {
 			c.closed.Store(true)
-			close(c.processExit)
 			debug.Log("mcp-procwatch", "server=%s process exited unexpectedly", c.name)
 		}
+		// ALWAYS close so waiters (including Close's shutdown wait) release.
+		close(c.processExit)
 	})
 
 	return nil
@@ -355,14 +357,16 @@ func (c *Client) Close() error {
 		oauthHandler.Close()
 	}
 	if (transport == "stdio" || transport == "") && cmd != nil {
-		done := make(chan struct{})
-		safego.Go("mcp.client.waitProcess", func() {
-			_ = cmd.Wait()
-			close(done)
-		})
-		select {
-		case <-done:
-		case <-time.After(3 * time.Second):
+		// Wait for the process to exit via the procWatch channel. NEVER call
+		// cmd.Wait() here: procWatch already waits it at startup, and a second
+		// concurrent Wait blocks forever (os/exec Wait is not reentrant) —
+		// this deadlocked shutdown after ctrl+c.
+		exitCh := c.processExit
+		if exitCh != nil {
+			select {
+			case <-exitCh:
+			case <-time.After(3 * time.Second):
+			}
 		}
 	}
 	return nil
