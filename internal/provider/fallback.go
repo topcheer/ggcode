@@ -118,7 +118,7 @@ func shouldFailover(err error) (bool, FailoverTrigger) {
 // and true if a retry on the fallback is possible.
 //
 // Must NOT be called under f.mu — this function acquires the write lock.
-func (f *FallbackProvider) maybeFailover(err error) (error, bool) {
+func (f *FallbackProvider) maybeFailover(err error, failed Provider) (error, bool) {
 	if err == nil {
 		// Success — reset consecutive failure counter.
 		f.consecutiveFail.Store(0)
@@ -154,7 +154,13 @@ func (f *FallbackProvider) maybeFailover(err error) (error, bool) {
 	}
 	f.mu.Unlock()
 
-	// Already failed over — no further fallback available.
+	// Already failed over. If the caller's failed attempt was against the
+	// PRIMARY (it read active before failover activated), it has never
+	// touched the fallback and still deserves one retry (fix #164). Only
+	// deny the retry when the failed call was already on the fallback.
+	if failed == f.primary {
+		return err, true
+	}
 	return err, false
 }
 
@@ -178,7 +184,7 @@ func (f *FallbackProvider) Chat(ctx context.Context, messages []Message, tools [
 	}
 
 	// Check if we should failover.
-	_, canRetry := f.maybeFailover(err)
+	_, canRetry := f.maybeFailover(err, active)
 	if !canRetry {
 		return nil, err
 	}
@@ -211,7 +217,7 @@ func (f *FallbackProvider) ChatStream(ctx context.Context, messages []Message, t
 	}
 
 	// Check if we should failover.
-	_, canRetry := f.maybeFailover(err)
+	_, canRetry := f.maybeFailover(err, active)
 	if !canRetry {
 		return nil, err
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -197,8 +198,11 @@ func (h *TaskHandler) Handle(ctx context.Context, skill string, input Message, e
 	h.cancels[task.ID] = cancel
 	h.mu.Unlock()
 
-	// Execute asynchronously.
-	safego.Go("a2a.execute", func() { h.execute(taskCtx, task, perm) })
+	// Execute asynchronously. Pass the installed cancel so the goroutine
+	// can later clean up only if the map entry is still its own (fix #166:
+	// continueTask replaces the entry on resume; an ownership-blind cleanup
+	// would kill or zombie the resumed task's context).
+	safego.Go("a2a.execute", func() { h.execute(taskCtx, task, perm, cancel) })
 
 	// Snapshot must be taken under the lock to avoid racing with
 	// updateStatus in the execute goroutine.
@@ -250,8 +254,9 @@ func (h *TaskHandler) continueTask(ctx context.Context, taskID string, input Mes
 		return nil, fmt.Errorf("unknown skill: %s", task.Skill)
 	}
 
-	// Resume execution.
-	safego.Go("a2a.execute", func() { h.execute(taskCtx, task, perm) })
+	// Resume execution. Pass the newly installed cancel (see execute call in
+	// handleSendMessageSend for the ownership rationale).
+	safego.Go("a2a.execute", func() { h.execute(taskCtx, task, perm, cancel) })
 
 	// Snapshot must be taken under the lock to avoid racing with
 	// updateStatus in the execute goroutine.
@@ -261,7 +266,7 @@ func (h *TaskHandler) continueTask(ctx context.Context, taskID string, input Mes
 	return &snap, nil
 }
 
-func (h *TaskHandler) execute(ctx context.Context, t *Task, perm *SkillPermission) {
+func (h *TaskHandler) execute(ctx context.Context, t *Task, perm *SkillPermission, installedCancel context.CancelFunc) {
 	h.updateStatus(t, TaskStateWorking, "")
 
 	var result string
@@ -315,18 +320,18 @@ func (h *TaskHandler) execute(ctx context.Context, t *Task, perm *SkillPermissio
 				return
 			}
 			h.updateStatus(t, TaskStateCanceled, "canceled by client")
-			h.cleanupCancel(t.ID)
+			h.cleanupCancelIf(t.ID, installedCancel)
 		}
 		return
 	}
 
 	if err != nil {
 		h.updateStatus(t, TaskStateFailed, err.Error())
-		h.cleanupCancel(t.ID)
+		h.cleanupCancelIf(t.ID, installedCancel)
 		return
 	}
 
-	h.cleanupCancel(t.ID)
+	h.cleanupCancelIf(t.ID, installedCancel)
 
 	// If RequestInput was called during execution, the task is already in
 	// input-required state. Don't override it with completed — the client
@@ -423,6 +428,23 @@ func (h *TaskHandler) cleanupCancel(taskID string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if c, ok := h.cancels[taskID]; ok {
+		c()
+		delete(h.cancels, taskID)
+	}
+}
+
+// cleanupCancelIf removes and calls the cancel func for a task only when the
+// map entry is still the cancel this run installed (fix #166). If
+// continueTask has already swapped in a new cancel for the resumed run, this
+// is a stale goroutine exiting — touching the new cancel would kill or
+// zombie the resumed task, so we leave it untouched.
+func (h *TaskHandler) cleanupCancelIf(taskID string, installed context.CancelFunc) {
+	if installed == nil {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if c, ok := h.cancels[taskID]; ok && reflect.ValueOf(c).Pointer() == reflect.ValueOf(installed).Pointer() {
 		c()
 		delete(h.cancels, taskID)
 	}

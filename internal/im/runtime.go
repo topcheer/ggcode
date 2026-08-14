@@ -1073,7 +1073,11 @@ func (m *Manager) SendDirect(ctx context.Context, binding ChannelBinding, event 
 		event.CreatedAt = time.Now()
 	}
 	if sink == nil {
-		return nil
+		// A directed send is not a broadcast: dropping it silently would
+		// report success for a message that was never delivered (fix #165 —
+		// SyncSessionHistory would sync nothing while claiming success).
+		// Mirror GenerateShareLink's explicit not-running error.
+		return fmt.Errorf("IM adapter %q is not running", binding.Adapter)
 	}
 	return sink.Send(ctx, binding, event)
 }

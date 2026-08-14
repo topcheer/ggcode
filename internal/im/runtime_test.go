@@ -740,8 +740,13 @@ func TestManager_SendDirect_NoSink(t *testing.T) {
 	m := NewManager()
 	binding := ChannelBinding{Workspace: "/ws1", Adapter: "qq", ChannelID: "ch1"}
 	err := m.SendDirect(context.Background(), binding, OutboundEvent{Kind: OutboundEventText})
-	if err != nil {
-		t.Errorf("expected nil (no sink), got %v", err)
+	// fix #165: a directed send to a missing adapter sink must surface an
+	// error instead of silently reporting success (message drop).
+	if err == nil {
+		t.Fatal("expected error for missing sink, got nil")
+	}
+	if !strings.Contains(err.Error(), "not running") {
+		t.Errorf("expected not-running error, got %v", err)
 	}
 }
 
