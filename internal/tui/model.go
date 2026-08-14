@@ -401,7 +401,7 @@ type mcpManager interface {
 	Reconnect(name string) bool
 	ForceReauth(name string) bool
 	PendingOAuth() *plugin.MCPOAuthRequiredError
-	ClearPendingOAuth()
+	ClearPendingOAuth(name string)
 }
 
 type styles struct {

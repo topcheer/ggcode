@@ -28,8 +28,10 @@ import (
 	"strings"
 )
 
-// mergeConflictMarkers are git conflict marker prefixes that never belong
-// in committed source files.
+// conflictStartEndMarkers are the git conflict block delimiters that never
+// belong in committed source files. The "=======" separator is handled
+// separately (see checkMergeConflictMarkers) because it also appears as a
+// legitimate Markdown setext heading underline and RST section underline.
 var mergeConflictMarkers = []string{
 	"<<<<<<<", // conflict start (e.g. "<<<<<<< HEAD")
 	">>>>>>>", // conflict end   (e.g. ">>>>>>> branch-name")
@@ -49,13 +51,19 @@ func checkMergeConflictMarkers(filePath, newContent string) string {
 	}
 
 	found := 0
-	for _, marker := range mergeConflictMarkers {
+	for _, marker := range []string{"<<<<<<<", ">>>>>>>"} {
 		// Count lines that start with the marker (ignoring leading whitespace
-		// to catch indented copies, but being careful with "=======" which
-		// could appear in legitimate base64 or hex — so we require it to be
-		// on its own line or followed by whitespace/newline).
+		// to catch indented copies).
 		found += countConflictMarkerLines(newContent, marker)
 	}
+	if found == 0 {
+		// No conflict start/end markers: an isolated "=======" line is
+		// legitimate syntax (Markdown setext H1, RST section underline)
+		// and must not trigger a false positive (issue #309). Only count
+		// the separator when a real conflict block is present.
+		return ""
+	}
+	found += countConflictMarkerLines(newContent, "=======")
 
 	if found == 0 {
 		return ""

@@ -11,6 +11,11 @@ func TestDiversityState_Reset(t *testing.T) {
 	d.recordCall("edit_file")
 	d.fired = true
 	d.totalCalls = 5
+	// Simulate a pending dominance flag (issue #312 sticky state).
+	d.pending = true
+	d.pendingCat = "edit"
+	d.pendingCount = 10
+	d.pendingTotal = 10
 
 	d.reset()
 
@@ -22,6 +27,48 @@ func TestDiversityState_Reset(t *testing.T) {
 	}
 	if len(d.window) != 0 {
 		t.Error("window should be empty after reset")
+	}
+	if d.pending != false {
+		t.Error("pending should be false after reset")
+	}
+	if d.pendingCat != "" || d.pendingCount != 0 || d.pendingTotal != 0 {
+		t.Errorf("pending snapshot fields should be zeroed after reset, got cat=%q count=%d total=%d",
+			d.pendingCat, d.pendingCount, d.pendingTotal)
+	}
+}
+
+// TestDiversityState_PendingConsumeOnce (issue #312): a pending dominance set
+// by recordCall must be consumed by exactly one check and not re-fire.
+func TestDiversityState_PendingConsumeOnce(t *testing.T) {
+	d := newDiversityState()
+	for i := 0; i < 10; i++ {
+		d.recordCall("edit_file")
+	}
+	if !d.pending {
+		t.Fatal("expected pending flag set after 10 dominant edit calls")
+	}
+	// Flush the window with diverse calls; pending must survive.
+	for i := 0; i < 10; i++ {
+		if i%2 == 0 {
+			d.recordCall("read_file")
+		} else {
+			d.recordCall("grep")
+		}
+	}
+
+	g1 := d.check()
+	if g1 == "" {
+		t.Fatal("check should consume pending dominance and fire")
+	}
+	if !strings.Contains(g1, "edit") {
+		t.Errorf("guidance should mention edit category: %s", g1)
+	}
+	if d.pending {
+		t.Error("pending should be cleared after consumption")
+	}
+	// Second check must not re-fire (fired latch).
+	if g2 := d.check(); g2 != "" {
+		t.Errorf("second check should not re-fire, got: %s", g2)
 	}
 }
 

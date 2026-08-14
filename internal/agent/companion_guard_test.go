@@ -362,17 +362,71 @@ func TestCompanionGuardReset(t *testing.T) {
 }
 
 func TestNormalizeCompanionPath(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
 	tests := []struct {
 		input, want string
 	}{
-		{"foo.go", "foo.go"},
-		{"./foo.go", "foo.go"},
-		{"dir/../foo.go", "foo.go"},
+		{"foo.go", filepath.Join(wd, "foo.go")},
+		{"./foo.go", filepath.Join(wd, "foo.go")},
+		{"dir/../foo.go", filepath.Join(wd, "foo.go")},
 		{"/abs/path/foo.go", "/abs/path/foo.go"},
 	}
 	for _, tt := range tests {
-		if got := normalizeCompanionPath(tt.input); got != tt.want {
+		if got := normalizeCompanionPath(wd, tt.input); got != tt.want {
 			t.Errorf("normalizePath(%q) = %q, want %q", tt.input, got, tt.want)
 		}
+	}
+	// With empty workDir, behavior degrades to Clean (no resolution possible).
+	if got := normalizeCompanionPath("", "foo.go"); got != "foo.go" {
+		t.Errorf("normalizePath(empty workDir, relative) = %q, want %q", got, "foo.go")
+	}
+}
+
+// TestCheckCompanionFiles_MixedPathForms (issue #310): when the agent edits
+// the source file with a relative path but the test companion with an
+// absolute path (or vice versa), the edited-set lookup must still match and
+// no false "test files were not updated" warning may fire.
+func TestCheckCompanionFiles_MixedPathForms(t *testing.T) {
+	tmpDir := t.TempDir()
+	srcFile := filepath.Join(tmpDir, "mixed.go")
+	testFile := filepath.Join(tmpDir, "mixed_test.go")
+	if err := os.WriteFile(srcFile, []byte("package mixed\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(testFile, []byte("package mixed\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	relSrc := "mixed.go"
+	relTest := "mixed_test.go"
+
+	// Case 1: source relative, test absolute.
+	g := newCompanionGuardState()
+	stats := newRunStats("test")
+	stats.recordFileEdit(relSrc)
+	stats.recordFileEdit(testFile)
+	if msg := g.checkCompanionFiles(stats, tmpDir); msg != "" {
+		t.Errorf("case rel-src/abs-test: expected no warning, got: %s", msg)
+	}
+
+	// Case 2: source absolute, test relative.
+	g2 := newCompanionGuardState()
+	stats2 := newRunStats("test")
+	stats2.recordFileEdit(srcFile)
+	stats2.recordFileEdit(relTest)
+	if msg := g2.checkCompanionFiles(stats2, tmpDir); msg != "" {
+		t.Errorf("case abs-src/rel-test: expected no warning, got: %s", msg)
+	}
+
+	// Control: with the old Clean-only normalization these mixed forms would
+	// miss, but the warning must still fire when the test truly was not edited.
+	g3 := newCompanionGuardState()
+	stats3 := newRunStats("test")
+	stats3.recordFileEdit(relSrc)
+	if msg := g3.checkCompanionFiles(stats3, tmpDir); msg == "" {
+		t.Error("control: expected warning when test companion not edited")
 	}
 }

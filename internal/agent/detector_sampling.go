@@ -23,16 +23,23 @@ package agent
 //
 // Solution: Tiered sampling. Detectors are grouped by urgency:
 //   - Tier 0 (critical): always run - error detection, safety, edit failures
-//   - Tier 1 (high): every 2 iterations - drift, scope, momentum
 //   - Tier 2 (routine): every 3 iterations - diversity, churn, oscillation
+//
+// NOTE (issue #312): currently every gated call site in agent.go uses Tier 2
+// (routine). Tier 0 is reserved for always-on checks. There is no Tier 1 in
+// use; it was removed as dead code — re-add it only when a detector actually
+// needs the every-2-iterations cadence.
 //
 // Record calls (state updates) always execute regardless of tier - only
 // check calls (analysis + guidance generation) are gated. This ensures
 // detector state accuracy while cutting ~40% of analysis overhead.
+// Detectors with short sliding windows MUST NOT rely solely on the gated
+// check: they must set a sticky "pending" flag inside recordCall so that a
+// burst occurring on non-sampled iterations is not permanently missed when
+// the window slides past (see diversityState, issue #312).
 
 const (
 	detectorTierCritical = 0 // always run
-	detectorTierHigh     = 1 // every 2 iterations
 	detectorTierRoutine  = 2 // every 3 iterations
 )
 
@@ -42,8 +49,6 @@ func shouldRunDetector(tier, iteration int) bool {
 	switch tier {
 	case detectorTierCritical:
 		return true
-	case detectorTierHigh:
-		return iteration%2 == 1 // odd iterations: 1, 3, 5, ...
 	case detectorTierRoutine:
 		return iteration%3 == 1 // every 3rd: 1, 4, 7, 10, ...
 	default:

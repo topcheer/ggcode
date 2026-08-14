@@ -1,6 +1,9 @@
 package agent
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestShouldRunDetector(t *testing.T) {
 	tests := []struct {
@@ -13,13 +16,6 @@ func TestShouldRunDetector(t *testing.T) {
 		{"critical iter 1", detectorTierCritical, 1, true},
 		{"critical iter 2", detectorTierCritical, 2, true},
 		{"critical iter 10", detectorTierCritical, 10, true},
-
-		// Tier 1 (high) - every 2 iterations (odd)
-		{"high iter 1", detectorTierHigh, 1, true},
-		{"high iter 2", detectorTierHigh, 2, false},
-		{"high iter 3", detectorTierHigh, 3, true},
-		{"high iter 4", detectorTierHigh, 4, false},
-		{"high iter 5", detectorTierHigh, 5, true},
 
 		// Tier 2 (routine) - every 3 iterations
 		{"routine iter 1", detectorTierRoutine, 1, true},
@@ -50,13 +46,10 @@ func TestSamplingReduction(t *testing.T) {
 	const totalIters = 20
 
 	// Count how many times each tier would execute over 20 iterations
-	var criticalCount, highCount, routineCount int
+	var criticalCount, routineCount int
 	for i := 1; i <= totalIters; i++ {
 		if shouldRunDetector(detectorTierCritical, i) {
 			criticalCount++
-		}
-		if shouldRunDetector(detectorTierHigh, i) {
-			highCount++
 		}
 		if shouldRunDetector(detectorTierRoutine, i) {
 			routineCount++
@@ -68,13 +61,43 @@ func TestSamplingReduction(t *testing.T) {
 		t.Errorf("critical tier: expected %d executions, got %d", totalIters, criticalCount)
 	}
 
-	// High: 50% (10/20)
-	if highCount != totalIters/2 {
-		t.Errorf("high tier: expected %d executions, got %d", totalIters/2, highCount)
-	}
-
 	// Routine: ~33% (7/20 for i%3==1: 1,4,7,10,13,16,19)
 	if routineCount != 7 {
 		t.Errorf("routine tier: expected 7 executions, got %d", routineCount)
+	}
+}
+
+// TestSamplingDoesNotMissWindowedBursts (issue #312): a burst of 10
+// same-category tool calls landing entirely on non-sampled iterations must
+// still trigger guidance at the next sampled check, even after the sliding
+// window has been flushed by subsequent diverse calls.
+func TestSamplingDoesNotMissWindowedBursts(t *testing.T) {
+	d := newDiversityState()
+
+	// Simulate the agent loop: recordCall runs every iteration; check is
+	// gated to sampled iterations (i%3 == 1).
+	var fired string
+	for i := 1; i <= 20 && fired == ""; i++ {
+		if i <= 10 {
+			// Burst of 10 edit_file calls (iterations 1-10).
+			d.recordCall("edit_file")
+		} else {
+			// Window flushed with diverse calls so any non-sticky
+			// implementation would lose the burst.
+			if i%2 == 0 {
+				d.recordCall("read_file")
+			} else {
+				d.recordCall("grep")
+			}
+		}
+		if shouldRunDetector(detectorTierRoutine, i) {
+			fired = d.check()
+		}
+	}
+	if fired == "" {
+		t.Fatal("burst of 10 edit calls on non-sampled phases was never reported")
+	}
+	if !strings.Contains(fired, "edit") {
+		t.Errorf("guidance should mention edit category: %s", fired)
 	}
 }

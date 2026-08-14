@@ -245,7 +245,7 @@ func (a *companionGuardState) checkCompanionFiles(runStats *RunStats, workDir st
 	edited := make(map[string]bool, len(runStats.FilesEdited))
 	for _, f := range runStats.FilesEdited {
 		// Normalize for comparison: use the raw path as given by the tool.
-		edited[normalizeCompanionPath(f)] = true
+		edited[normalizeCompanionPath(workDir, f)] = true
 	}
 
 	// Find source files with existing but unedited companion test files.
@@ -271,7 +271,7 @@ func (a *companionGuardState) checkCompanionFiles(runStats *RunStats, workDir st
 				continue
 			}
 			// Test file exists on disk. Was it edited in this run?
-			if edited[normalizeCompanionPath(candidate)] {
+			if edited[normalizeCompanionPath(workDir, candidate)] {
 				continue // Already updated — good.
 			}
 			missingCompanions = append(missingCompanions, missing{
@@ -310,9 +310,16 @@ func (a *companionGuardState) checkCompanionFiles(runStats *RunStats, workDir st
 	return sb.String()
 }
 
-// normalizeCompanionPath converts a file path to a canonical form for comparison.
-// Handles relative vs absolute paths by using the base + directory structure.
-func normalizeCompanionPath(p string) string {
+// normalizeCompanionPath converts a file path to a canonical absolute form for
+// comparison. Relative paths are resolved against workDir so that a source file
+// edited via a relative path still matches its test companion edited via an
+// absolute path (and vice versa). Issue #310: the old implementation only ran
+// filepath.Clean, so mixed relative/absolute forms caused false "test files
+// were not updated" warnings.
+func normalizeCompanionPath(workDir, p string) string {
+	if !filepath.IsAbs(p) && workDir != "" {
+		p = filepath.Join(workDir, p)
+	}
 	// Clean the path to resolve ./ and ../ components.
 	return filepath.Clean(p)
 }

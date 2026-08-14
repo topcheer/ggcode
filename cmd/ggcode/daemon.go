@@ -738,7 +738,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 			if pending == nil {
 				continue
 			}
-			mcpMgr.ClearPendingOAuth()
+			mcpMgr.ClearPendingOAuth(pending.ServerName)
 			handler := pending.Handler
 			serverName := pending.ServerName
 			safego.Go("daemon.mcpOAuth.handle", func() {

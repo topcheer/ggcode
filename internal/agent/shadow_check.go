@@ -188,18 +188,14 @@ func collectTopLevelNames(stmt ast.Stmt, m map[string]bool) {
 				}
 			}
 		}
-	case *ast.RangeStmt:
-		// Range with := at top level declares loop vars.
-		if s.Key != nil {
-			if ident, ok := s.Key.(*ast.Ident); ok && ident.Name != "_" {
-				m[ident.Name] = true
-			}
-		}
-		if s.Value != nil {
-			if ident, ok := s.Value.(*ast.Ident); ok && ident.Name != "_" {
-				m[ident.Name] = true
-			}
-		}
+	// Note: *ast.RangeStmt key/value names are intentionally NOT collected
+	// here. In Go, range loop variables are scoped to the loop itself (like
+	// ForStmt init variables) and are not visible to sibling statements.
+	// Collecting them here would (a) flag the loop's own key/value as
+	// self-shadowing, and (b) leak them into sibling statements' scope,
+	// causing false positives on subsequent loops reusing the same names.
+	// Names visible INSIDE the loop body are tracked separately via
+	// scopedVars in findShadowInStmt's *ast.RangeStmt branch.
 	case *ast.LabeledStmt:
 		if s.Stmt != nil {
 			collectTopLevelNames(s.Stmt, m)
@@ -363,18 +359,38 @@ func findShadowInStmt(stmt ast.Stmt, outerVars map[string]bool,
 func findShadowInBlock(block *ast.BlockStmt, outerVars map[string]bool,
 	fset *token.FileSet, results *[]shadowInfo, seen map[string]bool) {
 
+	// blockDeclared tracks names declared so far in THIS block (not counting
+	// names inherited from enclosing scopes). Go semantics: a := redeclares
+	// an existing variable (assignment/reuse, not shadowing) only when the
+	// variable was declared earlier in the SAME block and at least one other
+	// LHS name is new. A name merely inherited from an outer scope is always
+	// a fresh, shadowing declaration when used with := in this block.
+	blockDeclared := make(map[string]bool)
 	localVars := copyMap(outerVars)
 	for _, stmt := range block.List {
 		// Check for shadowing in assignments.
 		if assign, ok := stmt.(*ast.AssignStmt); ok && assign.Tok == token.DEFINE {
+			hasNew := false
+			for _, lhs := range assign.Lhs {
+				if ident, ok := lhs.(*ast.Ident); ok && ident.Name != "_" && !blockDeclared[ident.Name] {
+					hasNew = true
+					break
+				}
+			}
 			for _, lhs := range assign.Lhs {
 				ident, ok := lhs.(*ast.Ident)
 				if !ok || ident.Name == "_" {
 					continue
 				}
+				if blockDeclared[ident.Name] && hasNew {
+					// Legal Go redeclaration: at least one new LHS name,
+					// so this name is reused (assigned), not shadowed.
+					continue
+				}
 				if localVars[ident.Name] {
 					recordShadow(ident, fset, results, seen)
 				}
+				blockDeclared[ident.Name] = true
 				localVars[ident.Name] = true
 			}
 		}

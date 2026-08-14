@@ -115,8 +115,16 @@ var authKeywords = []string{
 
 // authStatusPatterns are context-anchored "401" matchers so digit
 // coincidences ("40123") no longer classify as auth failures (#303).
+//
+// #313: kept in sync with retry.go's containsHTTPStatus forms — the
+// go-openai SDK emits "error, status code: 401, message: ..." (code followed
+// by a comma), which the earlier pattern list missed, delaying auth failover
+// from immediate to 3-consecutive-failures.
 var authStatusPatterns = []string{
 	" 401 ",
+	" 401,", // go-openai: "status code: 401, message: ..."
+	" 401\n",
+	"code: 401",
 	`status":401`,
 	"statuscode:401",
 	"http 401",

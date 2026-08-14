@@ -101,10 +101,24 @@ func isVerifyTool(name string) bool {
 }
 
 // diversityState tracks the sliding window of tool categories.
+//
+// Sampling interaction (issue #312): the check method is gated by
+// shouldRunDetector (Tier 2 routine, every 3rd iteration). Because the window
+// is only 10 calls long, a burst of same-category calls could otherwise slide
+// out of the window between two sampled checks and be permanently missed.
+// recordCall therefore inlines the dominance computation and stores a sticky
+// "pending" flag that the next sampled check consumes.
 type diversityState struct {
 	window     []string // recent tool categories
 	fired      bool     // guidance already injected this run
 	totalCalls int
+
+	// pending: dominance detected in recordCall that check() has not yet
+	// consumed. Fields describe the window state at detection time.
+	pending      bool
+	pendingCat   string
+	pendingCount int
+	pendingTotal int
 }
 
 func newDiversityState() *diversityState {
@@ -117,6 +131,10 @@ func (d *diversityState) reset() {
 	d.window = d.window[:0]
 	d.fired = false
 	d.totalCalls = 0
+	d.pending = false
+	d.pendingCat = ""
+	d.pendingCount = 0
+	d.pendingTotal = 0
 }
 
 func (d *diversityState) recordCall(toolName string) {
@@ -126,24 +144,30 @@ func (d *diversityState) recordCall(toolName string) {
 	if len(d.window) > diversityWindowSize {
 		d.window = d.window[1:]
 	}
+
+	// Inline dominance computation (issue #312): recordCall is NOT gated by
+	// detector sampling, so evaluate the window here and leave a sticky
+	// pending flag for the next sampled check to consume. This prevents a
+	// burst of same-category calls from sliding out of the window between
+	// sampled checks and being permanently missed.
+	if d.fired || d.pending || d.totalCalls < diversityMinCalls || len(d.window) < diversityWindowSize {
+		return
+	}
+	if cat, cnt := dominantDiversityCategory(d.window); cat != "" {
+		d.pending = true
+		d.pendingCat = cat
+		d.pendingCount = cnt
+		d.pendingTotal = len(d.window)
+	}
 }
 
-// check returns non-empty guidance if one category dominates the window.
-func (d *diversityState) check() string {
-	if d.fired || d.totalCalls < diversityMinCalls {
-		return ""
-	}
-	if len(d.window) < diversityWindowSize {
-		return ""
-	}
-
-	// Count categories in window.
-	counts := make(map[string]int)
-	for _, cat := range d.window {
+// dominantDiversityCategory returns the dominant category and its count if
+// it exceeds the dominance threshold, otherwise ("", 0).
+func dominantDiversityCategory(window []string) (string, int) {
+	counts := make(map[string]int, 4)
+	for _, cat := range window {
 		counts[cat]++
 	}
-
-	// Find dominant category.
 	var dominantCat string
 	var dominantCount int
 	for cat, cnt := range counts {
@@ -152,14 +176,39 @@ func (d *diversityState) check() string {
 			dominantCount = cnt
 		}
 	}
-
-	fraction := float64(dominantCount) / float64(len(d.window))
+	fraction := float64(dominantCount) / float64(len(window))
 	if fraction < diversityDominanceThreshold || dominantCount < diversityCategoryMin {
+		return "", 0
+	}
+	return dominantCat, dominantCount
+}
+
+// check returns non-empty guidance if one category dominates the window, or
+// if recordCall previously left a sticky pending dominance flag that has not
+// yet been consumed (the check itself is sampling-gated — see issue #312).
+func (d *diversityState) check() string {
+	if d.fired || d.totalCalls < diversityMinCalls {
 		return ""
 	}
 
-	d.fired = true
-	return d.formatGuidance(dominantCat, dominantCount, len(d.window))
+	// Consume a pending dominance detected by recordCall during a
+	// non-sampled iteration. The window may have already slid past the burst,
+	// but the pending fields capture the state at detection time.
+	if d.pending {
+		d.pending = false
+		d.fired = true
+		return d.formatGuidance(d.pendingCat, d.pendingCount, d.pendingTotal)
+	}
+
+	if len(d.window) < diversityWindowSize {
+		return ""
+	}
+
+	if dominantCat, dominantCount := dominantDiversityCategory(d.window); dominantCat != "" {
+		d.fired = true
+		return d.formatGuidance(dominantCat, dominantCount, len(d.window))
+	}
+	return ""
 }
 
 func (d *diversityState) formatGuidance(cat string, count, total int) string {

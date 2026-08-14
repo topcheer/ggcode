@@ -196,11 +196,14 @@ func (o *oscillationState) addSignature(path, oldText, newText string, iter int)
 
 	sigs := o.signatures[path]
 
-	// Track old_text and new_text signatures
-	if oldSig != "" {
+	// Track old_text and new_text signatures. Skip empty sides: pure
+	// insertions (old_text == "") and pure deletions (new_text == "") would
+	// otherwise share the hash("") signature, making any four deletions look
+	// like two reversals (issue #308).
+	if oldText != "" {
 		sigs = append(sigs, sigEntry{sig: oldSig, isNew: false, iterTag: iter})
 	}
-	if newSig != "" {
+	if newText != "" {
 		sigs = append(sigs, sigEntry{sig: newSig, isNew: true, iterTag: iter})
 	}
 
@@ -212,30 +215,41 @@ func (o *oscillationState) addSignature(path, oldText, newText string, iter int)
 	o.signatures[path] = sigs
 }
 
-// countReversals counts how many times the agent reverts to a previous state.
-// A reversal occurs when a content signature appears 3+ times in the edit
-// history for this file. In progressive editing (A->B->C->D), each signature
-// appears exactly twice (once as old, once as new). In oscillation (A->B->A->B),
-// signatures A and B each appear 3+ times, indicating back-and-forth.
+// countReversals counts how many times the agent directionally reverts its
+// own work. A reversal occurs when an edit's new_text signature matches a
+// signature previously recorded as an old_text (isNew=false) — i.e. the agent
+// is re-adding content it previously removed, returning the file to a prior
+// state. This is direction-aware:
+//
+//   - Repeated identical batch replacements (same old->new applied three
+//     times) do NOT count: the new_text sig never appeared as an old_text sig.
+//   - Progressive chained edits (A->B, B->C, C->D) do NOT count: chaining an
+//     edit onto the prior edit's new_text is forward progress, not a revert.
+//   - True oscillation (A->B, B->A, A->B) re-adds A and then B, producing
+//     2 reversals and firing the warning.
+//
+// Each prior old_text sighting is consumed at most once so a single revert
+// that spans multiple edits is not double-counted.
 func (o *oscillationState) countReversals(path string) int {
 	sigs := o.signatures[path]
-	if len(sigs) < 3 {
+	if len(sigs) < 2 {
 		return 0
 	}
 
-	// Count total occurrences of each signature (both old and new).
-	sigCounts := make(map[string]int)
-	for _, s := range sigs {
-		sigCounts[s.sig]++
-	}
-
 	reversals := 0
-	for _, count := range sigCounts {
-		if count >= 3 {
-			reversals += count - 2 // 3 occurrences = 1 reversal, 4 = 2, etc.
+	seenAsOld := make(map[string]int) // sig -> unconsumed old_text sightings
+	for _, s := range sigs {
+		if s.isNew {
+			if seenAsOld[s.sig] > 0 {
+				// This new_text content was previously removed as old_text:
+				// the agent is putting back its own prior removal.
+				reversals++
+				seenAsOld[s.sig]--
+			}
+		} else {
+			seenAsOld[s.sig]++
 		}
 	}
-
 	return reversals
 }
 

@@ -120,9 +120,12 @@ func checkDuplicateCode(filePath, oldContent, newContent string) []string {
 			}
 			seen[pairKey] = true
 
-			cloneType := "exact"
-			if similarity < 1.0 {
-				cloneType = "near"
+			cloneType := "near"
+			if similarity >= 1.0 && tokenSeqEqual(sigA.tokens, sigB.tokens) {
+				// Frequency-multiset similarity can be 1.0 even when token order
+				// differs (e.g., two functions executing the same steps in
+				// reverse). Only same-order sequences are exact clones.
+				cloneType = "exact"
 			}
 
 			warnings = append(warnings, fmt.Sprintf(
@@ -301,33 +304,71 @@ func computeSimilarity(a, b funcSignature) float64 {
 }
 
 // funcDeclName returns a readable name for a function declaration,
-// including receiver type for methods.
+// including receiver type for methods (e.g. "*Server.Close").
 func funcDeclName(fn *ast.FuncDecl) string {
-	if fn.Recv != nil && len(fn.Recv.List) > 0 {
-		recvType := ""
-		switch t := fn.Recv.List[0].Type.(type) {
-		case *ast.Ident:
-			recvType = t.Name
-		case *ast.StarExpr:
-			if id, ok := t.X.(*ast.Ident); ok {
-				recvType = "*" + id.Name
-			}
-		}
-		if recvType != "" {
-			return recvType + "." + fn.Name.Name
-		}
+	if prefix := receiverPrefix(fn.Recv); prefix != "" {
+		return prefix + "." + fn.Name.Name
 	}
 	return fn.Name.Name
 }
 
+// receiverPrefix returns the normalized receiver type prefix for a method
+// ("T" for value receivers, "*T" for pointer receivers), or "" for
+// plain functions.
+func receiverPrefix(recv *ast.FieldList) string {
+	if recv == nil || len(recv.List) == 0 {
+		return ""
+	}
+	switch t := recv.List[0].Type.(type) {
+	case *ast.Ident:
+		return t.Name
+	case *ast.StarExpr:
+		if id, ok := t.X.(*ast.Ident); ok {
+			return "*" + id.Name
+		}
+	}
+	return ""
+}
+
+// tokenSeqEqual reports whether two normalized token sequences are identical
+// position by position.
+func tokenSeqEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // extractFuncNames returns a set of function/method names found in the
-// source text. Uses simple pattern matching rather than full parsing since
-// the old content may not be syntactically valid Go.
+// source text. Names are keyed consistently with funcDeclName: methods are
+// included both with receiver prefix (e.g. "*Server.Close") and bare name
+// ("Close"). This keeps the delta filter effective for pre-existing
+// duplicate methods. Uses AST parsing when possible; falls back to simple
+// pattern matching (bare names) when the old content is not valid Go.
 func extractFuncNames(src string) map[string]bool {
 	names := make(map[string]bool)
 
-	// Match "func " declarations, including methods with receivers.
-	// This is intentionally simple - it's used for delta filtering only.
+	if file, err := parser.ParseFile(token.NewFileSet(), "old.go", src, 0); err == nil && file != nil {
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok {
+				continue
+			}
+			names[fn.Name.Name] = true
+			if prefix := receiverPrefix(fn.Recv); prefix != "" {
+				names[prefix+"."+fn.Name.Name] = true
+			}
+		}
+		return names
+	}
+
+	// Fallback: regex-style extraction for syntactically invalid old content.
+	// Only bare names are extracted here.
 	lines := strings.Split(src, "\n")
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)

@@ -15,7 +15,7 @@ func (m Model) handleMcpServersMsg(msg mcpServersMsg) (Model, tea.Cmd) {
 	m.refreshCommands()
 	if m.mcpManager != nil {
 		if pending := m.mcpManager.PendingOAuth(); pending != nil {
-			m.mcpManager.ClearPendingOAuth()
+			m.mcpManager.ClearPendingOAuth(pending.ServerName)
 			if m.mcpPanel != nil && pending.Handler != nil && pending.Handler.SupportsDCR() {
 				m.mcpPanel.message = fmt.Sprintf("Connecting to %s (verifying OAuth client)...", pending.ServerName)
 			}

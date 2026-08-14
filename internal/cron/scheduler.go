@@ -57,7 +57,22 @@ type Scheduler struct {
 	generations map[string]uint64    // job ID -> generation counter to detect stale timers
 	lastEnqueue map[string]time.Time // job ID -> last enqueue timestamp (dedup guard)
 	storePath   string               // path to this session's JSON file
+
+	// Wall-clock patrol (issue #311): time.AfterFunc timers use the
+	// monotonic clock, which does not advance while the machine sleeps
+	// (Go issue #24595). The patrol goroutine periodically checks the
+	// wall clock and compensates for missed fires after wake-up.
+	patrolInterval time.Duration // 0 → defaultPatrolInterval
+	patrolStop     chan struct{}
 }
+
+const defaultPatrolInterval = 30 * time.Second
+
+// patrolGrace is how far past NextFire the wall clock must be before the
+// patrol considers a fire "missed". It avoids racing a timer callback that
+// is about to run normally (the debounce guard in the callback also protects
+// against a double fire).
+const patrolGrace = 2 * time.Second
 
 // NewScheduler creates a scheduler with the given enqueue callback and
 // optional persistence path. If storePath is empty, no persistence is used
@@ -66,13 +81,106 @@ func NewScheduler(enqueue func(prompt string, queueIfBusy bool), storePath strin
 	if enqueue == nil {
 		enqueue = func(string, bool) {}
 	}
-	return &Scheduler{
+	s := &Scheduler{
 		jobs:        make(map[string]*Job),
 		enqueue:     enqueue,
 		timers:      make(map[string]*time.Timer),
 		generations: make(map[string]uint64),
 		lastEnqueue: make(map[string]time.Time),
 		storePath:   storePath,
+	}
+	s.startPatrol()
+	return s
+}
+
+// startPatrol launches the background wall-clock patrol goroutine. It is
+// idempotent and stopped by Shutdown.
+func (s *Scheduler) startPatrol() {
+	s.mu.Lock()
+	if s.patrolStop != nil {
+		s.mu.Unlock()
+		return // already running
+	}
+	stop := make(chan struct{})
+	s.patrolStop = stop
+	interval := s.patrolInterval
+	s.mu.Unlock()
+	if interval <= 0 {
+		interval = defaultPatrolInterval
+	}
+
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				s.patrolCheck()
+			}
+		}
+	}()
+}
+
+// patrolCheck scans all active jobs against the wall clock. If a job's
+// NextFire is in the past by more than patrolGrace (i.e., the monotonic
+// timer did not fire — typically because the machine slept through it):
+//
+//   - recurring jobs are rescheduled to the next future slot (missed slots
+//     are skipped, not replayed);
+//   - one-shot jobs that are already past due fire immediately, once.
+func (s *Scheduler) patrolCheck() {
+	now := time.Now()
+	removedBroken := false
+
+	s.mu.Lock()
+
+	for id, job := range s.jobs {
+		if job.Paused || job.NextFire.IsZero() {
+			continue
+		}
+		if !now.After(job.NextFire.Add(patrolGrace)) {
+			continue
+		}
+
+		// The fire was missed. Stop the stale monotonic timer and bump the
+		// generation so any in-flight callback aborts. The enqueue debounce
+		// in the timer callback guards against a double fire if the callback
+		// already passed its generation check.
+		if t, ok := s.timers[id]; ok {
+			t.Stop()
+			delete(s.timers, id)
+		}
+		s.generations[id]++
+
+		if job.Recurring {
+			// Recompute to the nearest future slot; missed historical slots
+			// are skipped (no unbounded catch-up replay).
+			next, err := NextTime(job.CronExpr, now)
+			if err != nil {
+				delete(s.jobs, id)
+				removedBroken = true
+				debug.Log("cron", "patrol: removed broken cron job %s (invalid expression: %s)", id, job.CronExpr)
+				continue
+			}
+			debug.Log("cron", "patrol: missed fire detected for %s, rescheduled to %s", id, next.Format(time.RFC3339))
+			job.NextFire = next
+			s.scheduleJobLocked(job)
+		} else {
+			// One-shot past due after sleep: fire immediately, once.
+			debug.Log("cron", "patrol: missed one-shot fire for %s, firing now", id)
+			job.NextFire = now
+			s.scheduleJobLocked(job)
+		}
+	}
+
+	s.mu.Unlock()
+
+	if removedBroken {
+		if err := s.save(); err != nil {
+			debug.Log("cron", "patrol: failed to persist removal of broken job: %v", err)
+		}
 	}
 }
 
@@ -130,8 +238,13 @@ func (s *Scheduler) Load() {
 			Recurring:   jj.Recurring,
 			QueueIfBusy: jj.QueueIfBusy,
 			CreatedAt:   createdAt,
-			NextFire:    next,
 			Paused:      jj.Paused,
+		}
+		// Paused jobs load with a zero NextFire (consistent with Pause(),
+		// which clears it so UIs don't show a stale "next fire" time).
+		// Resume() recomputes it from the cron expression. (issue #311)
+		if !job.Paused {
+			job.NextFire = next
 		}
 		s.jobs[job.ID] = job
 		// Track max ID to avoid collisions with new jobs.
@@ -426,6 +539,11 @@ func (s *Scheduler) Pause(id string) error {
 		return nil // already paused, no-op
 	}
 	job.Paused = true
+	// Clear NextFire so consumers (e.g., the desktop UI) don't keep showing
+	// a stale "next fire" time while the job is suspended. Resume()
+	// recomputes it from the cron expression. (issue #311)
+	origNextFire := job.NextFire
+	job.NextFire = time.Time{}
 	if timer, ok := s.timers[id]; ok {
 		timer.Stop()
 		delete(s.timers, id)
@@ -436,6 +554,7 @@ func (s *Scheduler) Pause(id string) error {
 		// Rollback
 		s.mu.Lock()
 		job.Paused = false
+		job.NextFire = origNextFire
 		s.scheduleJobLocked(job)
 		s.mu.Unlock()
 		return err
@@ -684,6 +803,10 @@ func (s *Scheduler) SwitchSession(storePath, oldStorePath, workspaceDir string) 
 func (s *Scheduler) Shutdown() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.patrolStop != nil {
+		close(s.patrolStop)
+		s.patrolStop = nil
+	}
 	for id, timer := range s.timers {
 		timer.Stop()
 		delete(s.timers, id)

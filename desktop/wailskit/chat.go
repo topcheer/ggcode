@@ -1926,8 +1926,8 @@ func (b *ChatBridge) StartMCPOAuth(ctx context.Context, serverName string, openU
 	if b == nil || b.mcpManager == nil {
 		return nil, fmt.Errorf("MCP manager not initialized")
 	}
-	oauthErr := b.mcpManager.PendingOAuth()
-	if oauthErr == nil || oauthErr.Handler == nil || oauthErr.ServerName != serverName {
+	oauthErr := b.mcpManager.PendingOAuthByName(serverName)
+	if oauthErr == nil || oauthErr.Handler == nil {
 		return nil, fmt.Errorf("MCP server %q is not waiting for OAuth login", serverName)
 	}
 
@@ -1978,8 +1978,8 @@ func (b *ChatBridge) CompleteMCPOAuth(ctx context.Context, serverName string) er
 	if b == nil || b.mcpManager == nil {
 		return fmt.Errorf("MCP manager not initialized")
 	}
-	oauthErr := b.mcpManager.PendingOAuth()
-	if oauthErr == nil || oauthErr.Handler == nil || oauthErr.ServerName != serverName {
+	oauthErr := b.mcpManager.PendingOAuthByName(serverName)
+	if oauthErr == nil || oauthErr.Handler == nil {
 		return fmt.Errorf("MCP server %q is not waiting for OAuth login", serverName)
 	}
 
@@ -2013,7 +2013,7 @@ func (b *ChatBridge) CompleteMCPOAuth(ctx context.Context, serverName string) er
 	}
 
 	handler.ShutdownCallbackServer()
-	b.mcpManager.ClearPendingOAuth()
+	b.mcpManager.ClearPendingOAuth(serverName)
 	if !b.mcpManager.Retry(serverName) {
 		return fmt.Errorf("MCP server %q not found for reconnect", serverName)
 	}

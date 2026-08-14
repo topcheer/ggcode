@@ -23,6 +23,11 @@ func TestClassifyLLMError_Anchored401StillAuth(t *testing.T) {
 		`openai: {"error":{"status":401,"message":"bad key"}}`,
 		"statusCode:401",
 		"invalid api key provided",
+		// #313: go-openai SDK forms previously missed.
+		"error, status code: 401, message: You must be a member of an organization to use the API",
+		"error, status code: 401, status: , message: bad key",
+		"failed with code: 401",
+		"relay said 401,\nbody empty",
 	} {
 		if got := ClassifyLLMError(fmt.Errorf("%s", msg)); got != FailureAuth {
 			t.Errorf("expected FailureAuth for %q, got %v", msg, got)

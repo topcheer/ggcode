@@ -48,7 +48,10 @@ func main() {
 	}
 }
 
-func TestCheckMergeConflictMarkers_OnlySeparator(t *testing.T) {
+func TestCheckMergeConflictMarkers_OnlySeparatorNotFlagged(t *testing.T) {
+	// An isolated "=======" line with no conflict start/end markers is
+	// legitimate syntax (Markdown setext heading underline, RST section
+	// underline) and must not trigger a false positive (issue #309).
 	content := `package main
 
 func main() {}
@@ -56,8 +59,72 @@ func main() {}
 func extra() {}
 `
 	result := checkMergeConflictMarkers("test.go", content)
+	if result != "" {
+		t.Errorf("expected no warning for isolated separator (no conflict block), got: %s", result)
+	}
+}
+
+func TestCheckMergeConflictMarkers_MarkdownSetextH1NotFlagged(t *testing.T) {
+	// Markdown setext H1 uses "Title\n=======" as a legal heading underline.
+	content := `# Project Docs
+
+Title
+=======
+
+Subsection
+----------
+
+Some body text.
+`
+	result := checkMergeConflictMarkers("README.md", content)
+	if result != "" {
+		t.Errorf("expected no warning for Markdown setext H1, got: %s", result)
+	}
+}
+
+func TestCheckMergeConflictMarkers_RstSectionUnderlineNotFlagged(t *testing.T) {
+	// RST uses "=======" (or longer) lines as section underlines.
+	content := `Introduction
+============
+
+This is valid reStructuredText.
+`
+	result := checkMergeConflictMarkers("docs.rst", content)
+	if result != "" {
+		t.Errorf("expected no warning for RST section underline, got: %s", result)
+	}
+}
+
+func TestCheckMergeConflictMarkers_FullBlockStillDetected(t *testing.T) {
+	// A complete conflict block (start + separator + end) must still fire.
+	content := `package main
+
+<<<<<<< HEAD
+func a() {}
+=======
+func b() {}
+>>>>>>> dev
+`
+	result := checkMergeConflictMarkers("test.go", content)
 	if result == "" {
-		t.Fatal("expected warning for separator-only conflict marker")
+		t.Fatal("expected warning for complete conflict block")
+	}
+	if !strings.Contains(result, "3") {
+		t.Errorf("warning should count all 3 markers, got: %s", result)
+	}
+}
+
+func TestCheckMergeConflictMarkers_PartialBlockStillDetected(t *testing.T) {
+	// Start/end markers present even without a separator: still a conflict.
+	content := `package main
+
+<<<<<<< HEAD
+func a() {}
+>>>>>>> dev
+`
+	result := checkMergeConflictMarkers("test.go", content)
+	if result == "" {
+		t.Fatal("expected warning for conflict start+end without separator")
 	}
 }
 

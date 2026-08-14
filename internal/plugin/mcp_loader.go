@@ -521,7 +521,7 @@ type MCPManager struct {
 	startOnce          sync.Once
 	timeout            time.Duration
 	stdioTimeout       time.Duration
-	pendingOAuth       *MCPOAuthRequiredError
+	pendingOAuth       map[string]*MCPOAuthRequiredError
 	urlOpener          func(string) error
 	samplingHandler    mcp.SamplingHandler
 	elicitationHandler mcp.ElicitationHandler
@@ -580,31 +580,56 @@ func (m *MCPManager) SetElicitationHandler(h mcp.ElicitationHandler) {
 	}
 }
 
+// PendingOAuthByName returns the pending OAuth error for a specific server,
+// or nil if that server is not waiting for OAuth login. With multiple OAuth
+// MCP servers pending simultaneously, each server keeps its own entry.
+func (m *MCPManager) PendingOAuthByName(name string) *MCPOAuthRequiredError {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.pendingOAuth[name]
+}
+
+// PendingOAuth returns one pending OAuth error (alphabetically first server
+// name) for legacy single-value consumers, or nil when none are pending.
 func (m *MCPManager) PendingOAuth() *MCPOAuthRequiredError {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.pendingOAuth
+	var first string
+	for name := range m.pendingOAuth {
+		if first == "" || name < first {
+			first = name
+		}
+	}
+	if first == "" {
+		return nil
+	}
+	return m.pendingOAuth[first]
 }
 
-func (m *MCPManager) ClearPendingOAuth() {
+// ClearPendingOAuth clears the pending OAuth entry for the named server.
+// An empty name clears nothing.
+func (m *MCPManager) ClearPendingOAuth(name string) {
+	if name == "" {
+		return
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.pendingOAuth = nil
+	delete(m.pendingOAuth, name)
 }
 
 func (m *MCPManager) Snapshot() []MCPServerInfo {
 	m.mu.RLock()
 	plugins := append([]*MCPPlugin(nil), m.plugins...)
-	pendingOAuthName := ""
-	if m.pendingOAuth != nil {
-		pendingOAuthName = m.pendingOAuth.ServerName
+	pendingOAuthNames := make(map[string]bool, len(m.pendingOAuth))
+	for name := range m.pendingOAuth {
+		pendingOAuthNames[name] = true
 	}
 	m.mu.RUnlock()
 	out := make([]MCPServerInfo, 0, len(plugins))
 	for _, plugin := range plugins {
 		info := plugin.Info()
 		info.Disabled = MCPDisabled(plugin.Name())
-		info.OAuthRequired = info.Name == pendingOAuthName
+		info.OAuthRequired = pendingOAuthNames[info.Name]
 		out = append(out, info)
 	}
 	return out
@@ -651,7 +676,10 @@ func (m *MCPManager) connectOne(ctx context.Context, p *MCPPlugin) {
 			p.awaitingOAuth = true
 			p.mu.Unlock()
 			m.mu.Lock()
-			m.pendingOAuth = oauthErr
+			if m.pendingOAuth == nil {
+				m.pendingOAuth = make(map[string]*MCPOAuthRequiredError)
+			}
+			m.pendingOAuth[p.Name()] = oauthErr
 			m.mu.Unlock()
 			m.emitUpdate()
 			return
@@ -662,6 +690,11 @@ func (m *MCPManager) connectOne(ctx context.Context, p *MCPPlugin) {
 		m.mu.Unlock()
 	} else {
 		debug.Log("mcp-connect", "connected server=%s tools=%d", p.Name(), len(p.Info().ToolNames))
+		// Stale pending-OAuth entry (e.g. server connected after auth completed
+		// by another path) must not linger.
+		m.mu.Lock()
+		delete(m.pendingOAuth, p.Name())
+		m.mu.Unlock()
 	}
 	m.emitUpdate()
 }
@@ -969,10 +1002,12 @@ func (m *MCPManager) Reload(ctx context.Context, servers []config.MCPServerConfi
 		newCfg, exists := newByName[p.Name()]
 		if !exists {
 			removed = append(removed, p)
+			delete(m.pendingOAuth, p.Name()) // #314: no OAuth flow for removed servers
 			continue
 		}
 		if !mcpServerConfigEqual(p.cfg, newCfg) {
 			changed = append(changed, p)
+			delete(m.pendingOAuth, p.Name()) // config replaced: stale handler
 			continue
 		}
 		finalPlugins = append(finalPlugins, p)
