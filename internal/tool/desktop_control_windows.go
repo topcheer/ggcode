@@ -184,79 +184,15 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 		} else if p.Action == "triple_click" {
 			count = 3
 		}
-		sw, sh := screenSpan()
-		var inputs []winINPUT
-		inputs = append(inputs, mouseEventInput(mouseAbsolute|mouseVirtualDesk|mouseMove,
-			absCoord(int32(p.X), sw), absCoord(int32(p.Y), sh)))
-		btn := uint32(mouseLeftDown)
-		btnUp := uint32(mouseLeftUp)
-		if p.Button == "right" {
-			btn = mouseRightDown
-			btnUp = mouseRightUp
-		}
-		for i := 0; i < count; i++ {
-			inputs = append(inputs, mouseEventInput(btn, 0, 0))
-			inputs = append(inputs, mouseEventInput(btnUp, 0, 0))
-		}
-		if err := sendInput(inputs); err != nil {
-			return Result{}, err
-		}
-		return Result{Content: "OK"}, nil
+		return winClick(ctx, p.X, p.Y, p.Button, count)
 	case "move":
-		sw, sh := screenSpan()
-		inputs := []winINPUT{mouseEventInput(mouseAbsolute|mouseVirtualDesk|mouseMove,
-			absCoord(int32(p.X), sw), absCoord(int32(p.Y), sh))}
-		if err := sendInput(inputs); err != nil {
-			return Result{}, err
-		}
-		return Result{Content: "OK"}, nil
+		return winMove(ctx, p.X, p.Y)
 	case "drag":
-		sw, sh := screenSpan()
-		var inputs []winINPUT
-		inputs = append(inputs, mouseEventInput(mouseAbsolute|mouseVirtualDesk|mouseMove,
-			absCoord(int32(p.X), sw), absCoord(int32(p.Y), sh)))
-		inputs = append(inputs, mouseEventInput(mouseLeftDown, 0, 0))
-		inputs = append(inputs, mouseEventInput(mouseAbsolute|mouseVirtualDesk|mouseMove,
-			absCoord(int32(p.ToX), sw), absCoord(int32(p.ToY), sh)))
-		inputs = append(inputs, mouseEventInput(mouseLeftUp, 0, 0))
-		if err := sendInput(inputs); err != nil {
-			return Result{}, err
-		}
-		return Result{Content: "OK"}, nil
+		return winDrag(ctx, p.X, p.Y, p.ToX, p.ToY)
 	case "scroll":
-		d := int32(120) // WHEEL_DELTA per step
-		if p.Direction == "up" {
-			d = -120
-		}
-		var inputs []winINPUT
-		for i := 0; i < p.Amount; i++ {
-			inputs = append(inputs, mouseEventInput(mouseWheel, 0, d))
-		}
-		if err := sendInput(inputs); err != nil {
-			return Result{}, err
-		}
-		return Result{Content: "OK"}, nil
+		return winScroll(ctx, p.Direction, p.Amount)
 	case "modifier_click":
-		mods, err := normalizeModifiers(p.Text)
-		if err != nil {
-			return Result{}, err
-		}
-		sw, sh := screenSpan()
-		var inputs []winINPUT
-		inputs = append(inputs, mouseEventInput(mouseAbsolute|mouseVirtualDesk|mouseMove,
-			absCoord(int32(p.X), sw), absCoord(int32(p.Y), sh)))
-		for _, m := range mods {
-			inputs = append(inputs, keyEventInput(winVK[m], 0))
-		}
-		inputs = append(inputs, mouseEventInput(mouseLeftDown, 0, 0))
-		inputs = append(inputs, mouseEventInput(mouseLeftUp, 0, 0))
-		for i := len(mods) - 1; i >= 0; i-- {
-			inputs = append(inputs, keyEventInput(winVK[mods[i]], keyUp))
-		}
-		if err := sendInput(inputs); err != nil {
-			return Result{}, err
-		}
-		return Result{Content: "OK"}, nil
+		return winModifierClick(ctx, p.X, p.Y, p.Text)
 	case "mouse_position":
 		var pt struct{ X, Y int32 }
 		r, _, err := pGetCursorPos.Call(uintptr(unsafe.Pointer(&pt)))
@@ -267,82 +203,16 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 
 	// ── Keyboard ──
 	case "type":
-		// Per-character: modifier-free chars via shifted VK when possible,
-		// otherwise unicode via KEYEVENTF_UNICODE (0x0004).
-		const keyUnicode = 0x0004
-		var inputs []winINPUT
-		for _, r := range p.Text {
-			inputs = append(inputs, keyEventInputWithScan(uint16(r), keyUnicode))
-			inputs = append(inputs, keyEventInputWithScan(uint16(r), keyUnicode|keyUp))
-		}
-		if err := sendInput(inputs); err != nil {
-			return Result{}, err
-		}
-		return Result{Content: "OK"}, nil
+		return winType(ctx, p.Text)
 	case "key_press", "key_combo":
-		parts := strings.Split(p.Text, "+")
-		var inputs []winINPUT
-		var vks []uint16
-		for _, part := range parts {
-			name := strings.ToLower(strings.TrimSpace(part))
-			vk, ok := winVK[name]
-			if !ok {
-				if len(name) == 1 && name[0] >= 'a' && name[0] <= 'z' {
-					vk = uint16(name[0] - 'a' + 'A')
-				} else if len(name) == 1 && name[0] >= '0' && name[0] <= '9' {
-					vk = uint16(name[0])
-				} else {
-					return Result{}, fmt.Errorf("unknown key %q on Windows", part)
-				}
-			}
-			vks = append(vks, vk)
-		}
-		for _, vk := range vks {
-			inputs = append(inputs, keyEventInput(vk, 0))
-		}
-		for i := len(vks) - 1; i >= 0; i-- {
-			inputs = append(inputs, keyEventInput(vks[i], keyUp))
-		}
-		if err := sendInput(inputs); err != nil {
-			return Result{}, err
-		}
-		return Result{Content: "OK"}, nil
+		return winKeyCombo(ctx, p.Text)
 
 	// ── Application ──
 	case "launch_app", "open":
-		target := strings.TrimSpace(p.Text)
-		if p.Action == "open" && target == "" {
-			return Result{}, fmt.Errorf("open requires 'text' (URL or file path)")
-		}
-		if target == "" {
-			return Result{}, fmt.Errorf("%s requires 'text'", p.Action)
-		}
-		app := ""
-		if a := strings.TrimSpace(p.App); a != "" {
-			app = a
-		}
-		cmdline := target
-		if app != "" {
-			cmdline = app + " " + target
-		}
-		if err := runWindowsCommand(ctx, cmdline); err != nil {
-			return Result{}, err
-		}
-		return Result{Content: "OK: " + cmdline}, nil
+		return winOpenApp(ctx, p)
 
 	case "list_windows", "list_apps":
-		windows, err := enumVisibleWindows()
-		if err != nil {
-			return Result{}, err
-		}
-		if len(windows) == 0 {
-			return Result{Content: "no visible windows"}, nil
-		}
-		var sb strings.Builder
-		for _, w := range windows {
-			fmt.Fprintf(&sb, "%s [%s] pid=%d\n", w.title, w.class, w.pid)
-		}
-		return Result{Content: strings.TrimRight(sb.String(), "\n")}, nil
+		return winListWindows()
 
 	case "active_app":
 		h := getForegroundWindow()
@@ -504,6 +374,172 @@ func getForegroundWindow() uintptr {
 	p := user32.NewProc("GetForegroundWindow")
 	h, _, _ := p.Call()
 	return h
+}
+
+// ── Extracted action helpers (thin dispatch, fat helpers — same shape as
+// the darwin backend) ──
+
+func winClick(ctx context.Context, x, y int, button string, count int) (Result, error) {
+	sw, sh := screenSpan()
+	var inputs []winINPUT
+	inputs = append(inputs, mouseEventInput(mouseAbsolute|mouseVirtualDesk|mouseMove,
+		absCoord(int32(x), sw), absCoord(int32(y), sh)))
+	btn := uint32(mouseLeftDown)
+	btnUp := uint32(mouseLeftUp)
+	if button == "right" {
+		btn = mouseRightDown
+		btnUp = mouseRightUp
+	}
+	for i := 0; i < count; i++ {
+		inputs = append(inputs, mouseEventInput(btn, 0, 0))
+		inputs = append(inputs, mouseEventInput(btnUp, 0, 0))
+	}
+	if err := sendInput(inputs); err != nil {
+		return Result{}, err
+	}
+	return Result{Content: "OK"}, nil
+}
+
+func winMove(ctx context.Context, x, y int) (Result, error) {
+	sw, sh := screenSpan()
+	inputs := []winINPUT{mouseEventInput(mouseAbsolute|mouseVirtualDesk|mouseMove,
+		absCoord(int32(x), sw), absCoord(int32(y), sh))}
+	if err := sendInput(inputs); err != nil {
+		return Result{}, err
+	}
+	return Result{Content: "OK"}, nil
+}
+
+func winDrag(ctx context.Context, x, y, toX, toY int) (Result, error) {
+	sw, sh := screenSpan()
+	inputs := []winINPUT{
+		mouseEventInput(mouseAbsolute|mouseVirtualDesk|mouseMove,
+			absCoord(int32(x), sw), absCoord(int32(y), sh)),
+		mouseEventInput(mouseLeftDown, 0, 0),
+		mouseEventInput(mouseAbsolute|mouseVirtualDesk|mouseMove,
+			absCoord(int32(toX), sw), absCoord(int32(toY), sh)),
+		mouseEventInput(mouseLeftUp, 0, 0),
+	}
+	if err := sendInput(inputs); err != nil {
+		return Result{}, err
+	}
+	return Result{Content: "OK"}, nil
+}
+
+func winScroll(ctx context.Context, direction string, amount int) (Result, error) {
+	d := int32(120) // WHEEL_DELTA per step
+	if direction == "up" {
+		d = -120
+	}
+	var inputs []winINPUT
+	for i := 0; i < amount; i++ {
+		inputs = append(inputs, mouseEventInput(mouseWheel, 0, d))
+	}
+	if err := sendInput(inputs); err != nil {
+		return Result{}, err
+	}
+	return Result{Content: "OK"}, nil
+}
+
+func winModifierClick(ctx context.Context, x, y int, modifierSpec string) (Result, error) {
+	mods, err := normalizeModifiers(modifierSpec)
+	if err != nil {
+		return Result{}, err
+	}
+	sw, sh := screenSpan()
+	var inputs []winINPUT
+	inputs = append(inputs, mouseEventInput(mouseAbsolute|mouseVirtualDesk|mouseMove,
+		absCoord(int32(x), sw), absCoord(int32(y), sh)))
+	for _, m := range mods {
+		inputs = append(inputs, keyEventInput(winVK[m], 0))
+	}
+	inputs = append(inputs, mouseEventInput(mouseLeftDown, 0, 0))
+	inputs = append(inputs, mouseEventInput(mouseLeftUp, 0, 0))
+	for i := len(mods) - 1; i >= 0; i-- {
+		inputs = append(inputs, keyEventInput(winVK[mods[i]], keyUp))
+	}
+	if err := sendInput(inputs); err != nil {
+		return Result{}, err
+	}
+	return Result{Content: "OK"}, nil
+}
+
+func winType(ctx context.Context, text string) (Result, error) {
+	// Unicode via KEYEVENTF_UNICODE (0x0004) per code unit — no keyboard
+	// layout dependence.
+	const keyUnicode = 0x0004
+	var inputs []winINPUT
+	for _, r := range text {
+		inputs = append(inputs, keyEventInputWithScan(uint16(r), keyUnicode))
+		inputs = append(inputs, keyEventInputWithScan(uint16(r), keyUnicode|keyUp))
+	}
+	if err := sendInput(inputs); err != nil {
+		return Result{}, err
+	}
+	return Result{Content: "OK"}, nil
+}
+
+func winKeyCombo(ctx context.Context, combo string) (Result, error) {
+	parts := strings.Split(combo, "+")
+	var inputs []winINPUT
+	var vks []uint16
+	for _, part := range parts {
+		name := strings.ToLower(strings.TrimSpace(part))
+		vk, ok := winVK[name]
+		if !ok {
+			if len(name) == 1 && name[0] >= 'a' && name[0] <= 'z' {
+				vk = uint16(name[0] - 'a' + 'A')
+			} else if len(name) == 1 && name[0] >= '0' && name[0] <= '9' {
+				vk = uint16(name[0])
+			} else {
+				return Result{}, fmt.Errorf("unknown key %q on Windows", part)
+			}
+		}
+		vks = append(vks, vk)
+	}
+	for _, vk := range vks {
+		inputs = append(inputs, keyEventInput(vk, 0))
+	}
+	for i := len(vks) - 1; i >= 0; i-- {
+		inputs = append(inputs, keyEventInput(vks[i], keyUp))
+	}
+	if err := sendInput(inputs); err != nil {
+		return Result{}, err
+	}
+	return Result{Content: "OK"}, nil
+}
+
+func winOpenApp(ctx context.Context, p desktopParams) (Result, error) {
+	target := strings.TrimSpace(p.Text)
+	if p.Action == "open" && target == "" {
+		return Result{}, fmt.Errorf("open requires 'text' (URL or file path)")
+	}
+	if target == "" {
+		return Result{}, fmt.Errorf("%s requires 'text'", p.Action)
+	}
+	cmdline := target
+	if app := strings.TrimSpace(p.App); app != "" {
+		cmdline = app + " " + target
+	}
+	if err := runWindowsCommand(ctx, cmdline); err != nil {
+		return Result{}, err
+	}
+	return Result{Content: "OK: " + cmdline}, nil
+}
+
+func winListWindows() (Result, error) {
+	windows, err := enumVisibleWindows()
+	if err != nil {
+		return Result{}, err
+	}
+	if len(windows) == 0 {
+		return Result{Content: "no visible windows"}, nil
+	}
+	var sb strings.Builder
+	for _, w := range windows {
+		fmt.Fprintf(&sb, "%s [%s] pid=%d\n", w.title, w.class, w.pid)
+	}
+	return Result{Content: strings.TrimRight(sb.String(), "\n")}, nil
 }
 
 func keyEventInputWithScan(scan uint16, flags uint32) winINPUT {
