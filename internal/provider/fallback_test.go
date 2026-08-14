@@ -231,3 +231,31 @@ func TestFallbackConfig_IsConfigured(t *testing.T) {
 		}
 	}
 }
+
+// TestFallback_StalePrimaryRetriesOnFallbackAfterConcurrentFailover verifies
+// fix #164: a request that read active=primary *before* failover was activated
+// (e.g., by a concurrent goroutine) still gets exactly one retry on the
+// fallback instead of failing outright.
+func TestFallback_StalePrimaryRetriesOnFallbackAfterConcurrentFailover(t *testing.T) {
+	primary := &mockProvider{name: "primary", chatErr: errors.New("insufficient_quota: quota exceeded")}
+	fallback := &mockProvider{name: "fallback"}
+	fp := NewFallbackProvider(primary, fallback, "primary -> fallback")
+
+	// Reproduce the exact interleaving from #164: the caller already read
+	// active=primary and its Chat call failed; only afterwards does another
+	// goroutine activate failover. Test maybeFailover directly with the
+	// provider the caller actually called (the primary).
+	fp.failedOver.Store(true)
+	err := errors.New("insufficient_quota: quota exceeded")
+	_, canRetry := fp.maybeFailover(err, primary)
+	if !canRetry {
+		t.Fatal("stale-primary caller (failed call was against primary) must be granted a fallback retry")
+	}
+
+	// Conversely, a request that failed against the fallback itself (read
+	// active after failover) must NOT be granted another retry.
+	_, canRetry = fp.maybeFailover(err, fallback)
+	if canRetry {
+		t.Fatal("failed call against fallback must not be retried again")
+	}
+}
