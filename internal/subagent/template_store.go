@@ -56,7 +56,11 @@ func (s *TemplateStore) Save(t NamedAgentTemplate) error {
 		return fmt.Errorf("create subagent dir: %w", err)
 	}
 	now := time.Now()
-	// Preserve CreatedAt from existing template on updates
+	// Preserve CreatedAt from existing template on updates — but only when
+	// the existing file really is this template. sanitizeName collides across
+	// names like "Code Reviewer" and "code_reviewer"; Load now enforces the
+	// name match, so a colliding different-name file returns ErrNotFound and
+	// we refuse to overwrite it below (#230).
 	if existing, err := s.Load(t.Name); err == nil && !existing.CreatedAt.IsZero() {
 		t.CreatedAt = existing.CreatedAt
 	} else if t.CreatedAt.IsZero() {
@@ -68,6 +72,15 @@ func (s *TemplateStore) Save(t NamedAgentTemplate) error {
 		return fmt.Errorf("marshal template: %w", err)
 	}
 	path := filepath.Join(s.dir, sanitizeName(t.Name)+".json")
+	// Refuse to silently overwrite a different template whose name sanitizes
+	// to the same filename — that destroyed the other template's prompt and
+	// inherited its CreatedAt (#230).
+	if raw, rerr := os.ReadFile(path); rerr == nil {
+		var onDisk NamedAgentTemplate
+		if jerr := json.Unmarshal(raw, &onDisk); jerr == nil && onDisk.Name != "" && onDisk.Name != t.Name {
+			return fmt.Errorf("template name %q collides with existing %q (same sanitized filename); choose a different name", t.Name, onDisk.Name)
+		}
+	}
 	return os.WriteFile(path, data, 0644)
 }
 
@@ -91,6 +104,12 @@ func (s *TemplateStore) Load(name string) (NamedAgentTemplate, error) {
 	var t NamedAgentTemplate
 	if err := json.Unmarshal(data, &t); err != nil {
 		return NamedAgentTemplate{}, fmt.Errorf("unmarshal template %q: %w", name, err)
+	}
+	// sanitizeName collides across names ("Code Reviewer" vs "code_reviewer").
+	// If the file on disk holds a different template's name, treat it as not
+	// found rather than returning the wrong template (#230).
+	if t.Name != "" && strings.TrimSpace(strings.ToLower(t.Name)) != strings.TrimSpace(strings.ToLower(name)) {
+		return NamedAgentTemplate{}, fmt.Errorf("load template %q: filename collision with %q", name, t.Name)
 	}
 	return t, nil
 }

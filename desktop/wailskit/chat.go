@@ -2696,16 +2696,13 @@ func (b *ChatBridge) drainPendingInterrupt() string {
 		b.OnStreamEvent("pending_consumed", nil)
 	}
 	if !pending.Hidden {
-		// Persist visible user message
-		b.mu.Lock()
-		if b.currentSes != nil {
-			msg := provider.Message{Role: "user", Content: []provider.ContentBlock{provider.TextBlock(pending.Text)}}
-			b.currentSes.Messages = append(b.currentSes.Messages, msg)
-			b.currentSes.UpdatedAt = time.Now()
-			// Disk persistence handled by onPersist (SetPersistHandler)
-			// when the agent run adds this message via Add().
-		}
-		b.mu.Unlock()
+		// Do NOT append to b.currentSes.Messages here. The agent adds this
+		// message via contextManager.Add() (injectPendingInterruptions),
+		// which persists it to disk, and persistRunMessages later appends
+		// everything from AddedSinceRunStart() to the session. A direct
+		// append here produced a second in-memory copy with different
+		// content (bare text vs guidance-wrapped), diverging from the
+		// on-disk JSONL (#231).
 	}
 	return strings.TrimSpace(pending.Text)
 }
@@ -3511,6 +3508,15 @@ func (b *ChatBridge) SendContent(content []provider.ContentBlock) error {
 			b.finishRun(err)
 			return fmt.Errorf("init agent: %w", err)
 		}
+	}
+
+	// Ensure we have a session before the first message (mirrors the text
+	// path's sendMessageData): without it, a pasted image as the first
+	// message after startup/clear is silently dropped from history and
+	// disk (#229).
+	if err := b.ensureSession(); err != nil {
+		b.finishRun(err)
+		return fmt.Errorf("ensure session: %w", err)
 	}
 
 	if b.currentSes != nil {

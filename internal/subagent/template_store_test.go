@@ -122,3 +122,46 @@ func TestSha256Hash(t *testing.T) {
 		t.Errorf("sha256Hash = %q, want %q", got, want)
 	}
 }
+
+// TestTemplateStore_NameCollision verifies that saving a template whose
+// name sanitizes to an existing different template's filename is refused
+// instead of silently overwriting it (#230).
+func TestTemplateStore_NameCollision(t *testing.T) {
+	dir := t.TempDir()
+	store := NewTemplateStore(dir)
+
+	a := NamedAgentTemplate{Name: "Code Reviewer", Description: "first", SystemPrompt: "p1"}
+	if err := store.Save(a); err != nil {
+		t.Fatalf("save first: %v", err)
+	}
+
+	// "code_reviewer" sanitizes to the same file as "Code Reviewer".
+	b := NamedAgentTemplate{Name: "code_reviewer", Description: "second", SystemPrompt: "p2"}
+	if err := store.Save(b); err == nil {
+		t.Fatal("expected collision error, got nil (silent overwrite)")
+	}
+
+	// Original must be intact.
+	got, err := store.Load("Code Reviewer")
+	if err != nil {
+		t.Fatalf("load original: %v", err)
+	}
+	if got.SystemPrompt != "p1" {
+		t.Errorf("original overwritten: prompt=%q", got.SystemPrompt)
+	}
+
+	// Load of the colliding name must not return the other template.
+	if _, err := store.Load("code_reviewer"); err == nil {
+		t.Error("loading colliding name should error, not return the wrong template")
+	}
+
+	// Same-name update still works and preserves CreatedAt.
+	a.SystemPrompt = "p1-updated"
+	if err := store.Save(a); err != nil {
+		t.Fatalf("legit update: %v", err)
+	}
+	got2, _ := store.Load("Code Reviewer")
+	if got2.SystemPrompt != "p1-updated" || !got2.CreatedAt.Equal(got.CreatedAt) {
+		t.Errorf("update broken: prompt=%q created=%v", got2.SystemPrompt, got2.CreatedAt)
+	}
+}

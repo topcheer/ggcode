@@ -4456,7 +4456,14 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 		textBuf.Reset()
 	}
 	var reasoningBuf strings.Builder
-	var thinkingSignature string
+	// thinkingBlocks accumulates interleaved-thinking blocks. Anthropic
+	// emits one signature per thinking block at content_block_start, before
+	// that block's text deltas. Each signature event therefore opens a new
+	// block; a scalar "last signature wins" overwrite paired N blocks into 1
+	// with mismatched (content, signature) pairs, and the next request 400'd
+	// on signature verification (#228).
+	var thinkingBlocks []provider.ContentBlock
+	currentThinking := -1 // index into thinkingBlocks; -1 = none open
 	// Metric tracking — records timestamps during streaming, fires onMetric on Done.
 	llmStartTime := time.Now()
 	var firstTokenTime time.Time
@@ -4485,11 +4492,19 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 			// Forward to UI for streaming display (GUI uses it for collapsible reasoning panel).
 			onEvent(event)
 			if event.Text != "" {
+				// Opening text without a preceding signature (non-Anthropic or
+				// missing signature): ensure a block is open so text is kept.
+				if currentThinking == -1 {
+					thinkingBlocks = append(thinkingBlocks, provider.ContentBlock{Type: "text"})
+					currentThinking = len(thinkingBlocks) - 1
+				}
 				reasoningBuf.WriteString(event.Text)
 			}
 			// Anthropic sends signature at block_start, before any text deltas.
 			if event.ThinkingSignature != "" {
-				thinkingSignature = event.ThinkingSignature
+				tb := provider.ContentBlock{Type: "thinking", ThinkingSignature: event.ThinkingSignature}
+				thinkingBlocks = append(thinkingBlocks, tb)
+				currentThinking = len(thinkingBlocks) - 1
 			}
 		case provider.StreamEventToolCallChunk:
 			onEvent(event)
@@ -4568,23 +4583,27 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 		Content: content,
 	}
 	// Store reasoning/thinking content for echo-back to reasoning models.
-	// - DeepSeek: reasoning_content (plain text)
-	// - Anthropic: thinking block with signature
-	if reasoningBuf.Len() > 0 || thinkingSignature != "" {
-		rc := reasoningBuf.String()
-		block := provider.ContentBlock{
-			ReasoningContent:  rc,
-			ThinkingSignature: thinkingSignature,
+	// - DeepSeek: reasoning_content (plain text, single block)
+	// - Anthropic: one thinking ContentBlock per streamed block, each with
+	//   its own signature — preserved as separate blocks, prepended before
+	//   tool_use blocks (#228).
+	if len(thinkingBlocks) > 0 {
+		// Backfill any text accumulated into the open block (agent loop only
+		// reaches here after the stream ends, so no block can still be open).
+		for i := range thinkingBlocks {
+			if thinkingBlocks[i].ReasoningContent == "" && thinkingBlocks[i].Type == "text" {
+				thinkingBlocks[i].ReasoningContent = reasoningBuf.String()
+			}
 		}
-		if thinkingSignature != "" {
-			// Anthropic extended thinking
-			block.Type = "thinking"
-		} else {
-			// DeepSeek reasoning
-			block.Type = "text"
+		// Non-Anthropic path: a single unsigned text block with all reasoning.
+		if len(thinkingBlocks) == 1 && thinkingBlocks[0].ThinkingSignature == "" {
+			thinkingBlocks[0].ReasoningContent = reasoningBuf.String()
 		}
-		// Prepend thinking block so it appears before tool_use blocks
-		respMsg.Content = append([]provider.ContentBlock{block}, respMsg.Content...)
+		respMsg.Content = append(thinkingBlocks, respMsg.Content...)
+	} else if reasoningBuf.Len() > 0 {
+		// Reasoning text with no signature events at all (providers that emit
+		// reasoning without block metadata).
+		respMsg.Content = append([]provider.ContentBlock{{Type: "text", ReasoningContent: reasoningBuf.String()}}, respMsg.Content...)
 	}
 	return &provider.ChatResponse{
 		Message: respMsg,
