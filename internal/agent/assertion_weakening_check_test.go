@@ -116,6 +116,69 @@ func TestCheckAssertionWeakening_ValueChangeOnly(t *testing.T) {
 	}
 }
 
+// --- #319 regression: bare-substring regex false positives ---
+
+func TestCheckAssertionWeakening_NoFalsePositiveOnUnexpectedString(t *testing.T) {
+	// "unexpected" contains bare "expect" substring; a plain message tweak
+	// must not be treated as an assertion expected-value change (#319).
+	old := "package foo\n\nfunc TestMsg(t *testing.T) {\n\t_ = fmt.Sprintf(\"unexpected failure\")\n}"
+	new := "package foo\n\nfunc TestMsg(t *testing.T) {\n\t_ = fmt.Sprintf(\"unexpected failures\")\n}"
+	result := checkAssertionWeakening("calc_test.go", old, new)
+	if result != "" {
+		t.Errorf("expected no warning for plain message change, got: %s", result)
+	}
+}
+
+func TestCheckAssertionWeakening_NoFalsePositiveOnExpectedVarName(t *testing.T) {
+	// retriesExpected contains bare "expect" substring (#319).
+	old := "package foo\n\nfunc TestRetries(t *testing.T) {\n\tretriesExpected := 3\n\t_ = retriesExpected\n}"
+	new := "package foo\n\nfunc TestRetries(t *testing.T) {\n\tretriesExpected := 5\n\t_ = retriesExpected\n}"
+	result := checkAssertionWeakening("calc_test.go", old, new)
+	if result != "" {
+		t.Errorf("expected no warning for retriesExpected var change, got: %s", result)
+	}
+}
+
+func TestCheckAssertionWeakening_NoFalsePositiveOnNonTestingErrorCall(t *testing.T) {
+	// count.Error(...) matched bare t.Error substring before word-boundary fix (#319).
+	old := "package foo\n\nfunc TestCount(t *testing.T) {\n\tcount.Error(\"boom\")\n}"
+	new := "package foo\n\nfunc TestCount(t *testing.T) {\n\tcount.Error(\"kaput\")\n}"
+	result := checkAssertionWeakening("calc_test.go", old, new)
+	if result != "" {
+		t.Errorf("expected no warning for count.Error message change, got: %s", result)
+	}
+}
+
+func TestCheckAssertionWeakening_RealExpectedValueChangeStillTriggers(t *testing.T) {
+	// Positive control: a genuine require.Equal expected-value tweak must still warn.
+	old := "package foo\n\nfunc TestAdd(t *testing.T) {\n\trequire.Equal(t, 42, Add(40, 2))\n}"
+	new := "package foo\n\nfunc TestAdd(t *testing.T) {\n\trequire.Equal(t, 41, Add(40, 2))\n}"
+	result := checkAssertionWeakening("calc_test.go", old, new)
+	if !strings.Contains(result, "expected value changed") {
+		t.Errorf("expected 'expected value changed' warning, got: %q", result)
+	}
+}
+
+func TestCheckAssertionWeakening_ExpectCallStillTriggers(t *testing.T) {
+	// Positive control: expect(...) call form still matches (JS/pytest style).
+	old := "package foo\n\nfunc TestX(t *testing.T) {\n\texpect(3)\n}"
+	new := "package foo\n\nfunc TestX(t *testing.T) {\n\texpect(4)\n}"
+	result := checkAssertionWeakening("calc_test.go", old, new)
+	if !strings.Contains(result, "expected value changed") {
+		t.Errorf("expected 'expected value changed' warning for expect(), got: %q", result)
+	}
+}
+
+func TestCheckAssertionWeakening_TErrorStillTriggers(t *testing.T) {
+	// Positive control: genuine t.Error still matches after \b boundary fix (#319).
+	old := "package foo\n\nfunc TestT(t *testing.T) {\n\tif x != 1 {\n\t\tt.Error(\"bad\")\n\t}\n}"
+	new := "package foo\n\nfunc TestT(t *testing.T) {\n\tif x == 1 {\n\t\tt.Error(\"bad\")\n\t}\n}"
+	result := checkAssertionWeakening("calc_test.go", old, new)
+	if !strings.Contains(result, "operator flipped") {
+		t.Errorf("expected operator flip warning for t.Error line, got: %q", result)
+	}
+}
+
 func TestCheckAssertionWeakening_PythonTestFile(t *testing.T) {
 	old := `def test_calc():
     assertEqual(42, calc())`

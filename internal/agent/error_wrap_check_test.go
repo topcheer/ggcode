@@ -211,6 +211,115 @@ func TestExtractFormatVerbs(t *testing.T) {
 	}
 }
 
+// TestCheckErrorWrapping_LineShiftNoDuplicate is a regression test for #318:
+// a pre-existing %v+err issue must not be re-reported as new when an
+// unrelated edit (comment added at top) shifts the call to a different line.
+func TestCheckErrorWrapping_LineShiftNoDuplicate(t *testing.T) {
+	old := `package main
+
+import "fmt"
+
+func process() error {
+	err := doSomething()
+	if err != nil {
+		return fmt.Errorf("failed: %v", err)
+	}
+	return nil
+}
+`
+	// Only difference: a comment line added at the top shifts every position.
+	new := `// an unrelated comment that shifts line numbers below
+
+package main
+
+import "fmt"
+
+func process() error {
+	err := doSomething()
+	if err != nil {
+		return fmt.Errorf("failed: %v", err)
+	}
+	return nil
+}
+`
+	warnings := checkErrorWrapping("main.go", old, new)
+	if len(warnings) != 0 {
+		t.Errorf("pre-existing issue shifted by line movement should not be re-reported, got: %v", warnings)
+	}
+}
+
+// TestCheckErrorWrapping_ConcatLineShiftNoDuplicate is the same regression
+// for the string-concatenation pattern (key is position-independent).
+func TestCheckErrorWrapping_ConcatLineShiftNoDuplicate(t *testing.T) {
+	old := `package main
+
+import "fmt"
+
+func process() error {
+	err := doSomething()
+	if err != nil {
+		return fmt.Errorf("failed: " + err.Error())
+	}
+	return nil
+}
+`
+	new := `package main
+
+import "fmt"
+
+// new comment shifts lines
+
+func process() error {
+	err := doSomething()
+	if err != nil {
+		return fmt.Errorf("failed: " + err.Error())
+	}
+	return nil
+}
+`
+	warnings := checkErrorWrapping("main.go", old, new)
+	if len(warnings) != 0 {
+		t.Errorf("pre-existing concat issue shifted by line movement should not be re-reported, got: %v", warnings)
+	}
+}
+
+// TestCheckErrorWrapping_DynamicWidthStarVerb is a regression test for #318:
+// %*d consumes an argument for the dynamic width, so the following %v must
+// align with the actual error argument and still be flagged.
+func TestCheckErrorWrapping_DynamicWidthStarVerb(t *testing.T) {
+	old := `package main
+
+import "fmt"
+
+func render(w int, val int) error {
+	err := doSomething()
+	if err != nil {
+		return fmt.Errorf("bad: %s", err)
+	}
+	return nil
+}
+`
+	new := `package main
+
+import "fmt"
+
+func render(w int, val int) error {
+	err := doSomething()
+	if err != nil {
+		return fmt.Errorf("%*d: %v", w, val, err)
+	}
+	return nil
+}
+`
+	warnings := checkErrorWrapping("main.go", old, new)
+	if len(warnings) == 0 {
+		t.Fatal("expected warning for percent-v with error arg after dynamic-width verb, got none")
+	}
+	if !strings.Contains(warnings[0], "%w") {
+		t.Errorf("warning should mention wrapping verb, got: %s", warnings[0])
+	}
+}
+
 func TestLooksLikeErrorArg(t *testing.T) {
 	// Handled via AST, so we test indirectly through findErrorWrapIssues.
 	src := `package main

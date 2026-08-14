@@ -49,8 +49,12 @@ import (
 
 // errorWrapInstance represents a detected error wrapping issue.
 type errorWrapInstance struct {
-	pattern string // human-readable pattern description
-	pos     token.Pos
+	pattern string // human-readable pattern description (includes position, for display)
+	// key is a position-independent identity used for delta deduplication
+	// (fix #318): unrelated edits that shift line numbers must not cause
+	// pre-existing issues to be re-reported as new.
+	key string
+	pos token.Pos
 }
 
 // checkErrorWrapping performs AST-based error wrapping detection on Go source.
@@ -83,13 +87,13 @@ func checkErrorWrapping(filePath, oldContent, newContent string) []string {
 			if oldPat == nil {
 				oldPat = make(map[string]bool)
 			}
-			oldPat[iss.pattern] = true
+			oldPat[iss.key] = true
 		}
 	}
 
 	var warnings []string
 	for _, inst := range newInstances {
-		if oldPat != nil && oldPat[inst.pattern] {
+		if oldPat != nil && oldPat[inst.key] {
 			continue
 		}
 		warnings = append(warnings, inst.pattern)
@@ -136,6 +140,7 @@ func findErrorWrapIssues(src string) []errorWrapInstance {
 							"inside a format string concatenation loses the error chain. "+
 							"Use `fmt.Errorf(\"...: %%w\", err)` instead so errors.Is/As work.",
 						fnName, fset.Position(pos)),
+					key: "errorf-concat",
 					pos: pos,
 				})
 				return true
@@ -155,6 +160,7 @@ func findErrorWrapIssues(src string) []errorWrapInstance {
 							"string loses the original error type and chain. Use "+
 							"fmt.Errorf(\"%%w\", err) to preserve the chain for errors.Is/As.",
 						fset.Position(pos)),
+					key: "errors-new-ererror",
 					pos: pos,
 				})
 			}
@@ -248,18 +254,27 @@ func checkErrorfVerb(ce *ast.CallExpr, fset *token.FileSet, pos token.Pos) []err
 		return nil
 	}
 
-	// The args after the format string correspond to verbs positionally.
+	// The args after the format string correspond to verbs positionally, but
+	// a %* sentinel verb (dynamic width) consumes an extra argument, so we
+	// track the argument index explicitly (fix #318).
 	formatArgs := ce.Args[1:]
 	if len(verbs) > len(formatArgs) {
 		return nil // mismatched, let printf_format_check handle it
 	}
 
 	var issues []errorWrapInstance
-	for i, verb := range verbs {
-		if i >= len(formatArgs) {
+	argIdx := 0
+	for _, verb := range verbs {
+		if argIdx >= len(formatArgs) {
 			break
 		}
-		arg := formatArgs[i]
+		arg := formatArgs[argIdx]
+		argIdx++
+		if verb == "%*" {
+			// Dynamic width consumed an argument; the next verb takes the one after.
+			argIdx++
+			continue
+		}
 
 		// %v with an error-typed argument is a wrapping anti-pattern.
 		if verb == "%v" && looksLikeErrorArg(arg) {
@@ -272,6 +287,7 @@ func checkErrorfVerb(ce *ast.CallExpr, fset *token.FileSet, pos token.Pos) []err
 							"used. With %%v, errors.Is() and errors.As() cannot unwrap the "+
 							"causal error. Change to: fmt.Errorf(\"...: %%w\", err).",
 						fset.Position(pos)),
+					key: "errorf-verb-v:" + formatStr,
 					pos: pos,
 				})
 				break // one warning per Errorf call
@@ -326,6 +342,14 @@ func extractFormatVerbs(format string) []string {
 			continue
 		}
 		// Skip flags and width.
+		// '*' denotes a dynamic width/precision that consumes an argument —
+		// emit a sentinel verb ("%*") so positional alignment of later verbs
+		// stays correct (fix #318).
+		if i < len(format) && format[i] == '*' {
+			verbs = append(verbs, "%*")
+			i++
+			continue
+		}
 		for i < len(format) && (format[i] == '+' || format[i] == '-' || format[i] == '#' ||
 			format[i] == ' ' || format[i] == '0' || (format[i] >= '0' && format[i] <= '9') ||
 			format[i] == '.') {

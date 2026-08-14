@@ -42,7 +42,7 @@ const assertionWeakeningMaxWarnings = 4
 // assertionLineRe matches lines containing assertion/comparison keywords.
 // We extract the full line text to compare old vs new versions.
 var assertionWeakeningLineRe = regexp.MustCompile(
-	`(?i)(?:require\.|assert\.|expect|assertEqual|assertTrue|assertFalse|assertNotNull|assertNull|assertSame|assertNotSame|assertNotEqual|\.should\(|\.to\(|t\.Error|t\.Fatal|if\s+.*[=!<>])`,
+	`(?i)(?:require\.|assert\.|expect\(|assertEqual|assertTrue|assertFalse|assertNotNull|assertNull|assertSame|assertNotSame|assertNotEqual|\.should\(|\.to\(|\bt\.(?:Error|Fatal)|if\s+.*[=!<>])`,
 )
 
 // polarityPairs defines assertion functions whose meaning is inverted.

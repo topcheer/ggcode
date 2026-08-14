@@ -187,36 +187,89 @@ func countAssertionsPerTest(fset *token.FileSet, file *ast.File) map[string]int 
 
 // countAssertionCalls recursively walks the function body and counts calls that
 // look like test assertions. testingTName is the name of the *testing.T parameter.
+//
+// Delegation (#320): a call that passes a testing.T identifier as an argument
+// (e.g. runFooCases(t), t.Run(...)) delegates assertions elsewhere, so it counts
+// as non-hollow.
+//
+// Closure rebinding (#320): sub-test closures like func(t *testing.T) { ... }
+// re-bind the testing.T name; their parameter names are added to the active set
+// so inner assertions (t.Error inside a closure defined in a function whose
+// outer parameter is "tt") are counted.
 func countAssertionCalls(body *ast.BlockStmt, testingTName string) int {
 	count := 0
+	names := map[string]bool{testingTName: true}
 	ast.Inspect(body, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
+		switch node := n.(type) {
+		case *ast.FuncLit:
+			// Re-bind: closures taking *testing.T introduce a new valid receiver name.
+			for _, name := range testingTParamNames(node.Type) {
+				names[name] = true
+			}
 			return true
-		}
-
-		// Check for t.Error, t.Fatal, etc. (selector expression: t.Errorf)
-		if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
-			method := sel.Sel.Name
-			if goAssertionCalls[method] {
-				// Verify receiver looks like testing.T (single ident, typically "t").
-				if ident, ok := sel.X.(*ast.Ident); ok && ident.Name == testingTName {
+		case *ast.CallExpr:
+			// Delegation: passing a testing.T identifier as an argument means
+			// assertions may live in the callee — count as non-hollow.
+			for _, arg := range node.Args {
+				if id, ok := arg.(*ast.Ident); ok && names[id.Name] {
 					count++
 					return true
 				}
 			}
-			// Check for require.X, assert.X, etc.
-			if pkgIdent, ok := sel.X.(*ast.Ident); ok {
-				if goAssertionPkgs[pkgIdent.Name] {
-					count++
-					return true
+			// Check for t.Error, t.Fatal, etc. (selector expression: t.Errorf)
+			if sel, ok := node.Fun.(*ast.SelectorExpr); ok {
+				method := sel.Sel.Name
+				if goAssertionCalls[method] {
+					// Verify receiver looks like testing.T (any active name).
+					if ident, ok := sel.X.(*ast.Ident); ok && names[ident.Name] {
+						count++
+						return true
+					}
+				}
+				// Check for require.X, assert.X, etc.
+				if pkgIdent, ok := sel.X.(*ast.Ident); ok {
+					if goAssertionPkgs[pkgIdent.Name] {
+						count++
+						return true
+					}
 				}
 			}
 		}
-
 		return true
 	})
 	return count
+}
+
+// testingTParamNames returns the parameter names of type *testing.T declared by
+// the given function type (used for FuncLit rebinding).
+func testingTParamNames(ftype *ast.FuncType) []string {
+	var result []string
+	if ftype == nil || ftype.Params == nil {
+		return nil
+	}
+	for _, field := range ftype.Params.List {
+		if !isTestingTPtrType(field.Type) {
+			continue
+		}
+		for _, name := range field.Names {
+			result = append(result, name.Name)
+		}
+	}
+	return result
+}
+
+// isTestingTPtrType reports whether the expression is *testing.T.
+func isTestingTPtrType(expr ast.Expr) bool {
+	star, ok := expr.(*ast.StarExpr)
+	if !ok {
+		return false
+	}
+	sel, ok := star.X.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != "T" {
+		return false
+	}
+	pkg, ok := sel.X.(*ast.Ident)
+	return ok && pkg.Name == "testing"
 }
 
 // sortStrings is a simple sort to avoid importing sort for one call.

@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -113,6 +114,71 @@ func TestMain(m *testing.M) {
 	result := checkAssertionPresence("foo_test.go", "", newContent)
 	if result != "" {
 		t.Errorf("expected no warning for TestMain (excluded), got: %s", result)
+	}
+}
+
+// --- #320 regression: delegation and closure parameter rebinding ---
+
+func TestCheckAssertionPresence_DelegatedHelperNotHollow(t *testing.T) {
+	// Table-driven delegation: assertions live in runFooCases(t) (#320a).
+	newContent := `package agent
+
+import "testing"
+
+func TestFoo(t *testing.T) {
+	t.Parallel()
+	runFooCases(t)
+}
+
+func runFooCases(t *testing.T) {
+	for _, tc := range cases {
+		if got := Foo(tc.in); got != tc.want {
+			t.Errorf("got %v, want %v", got, tc.want)
+		}
+	}
+}
+`
+	result := checkAssertionPresence("foo_test.go", "", newContent)
+	if strings.Contains(result, "TestFoo") {
+		t.Errorf("delegating TestFoo must not be flagged hollow, got: %s", result)
+	}
+}
+
+func TestCheckAssertionPresence_SubTestClosureRebinding(t *testing.T) {
+	// Outer param "tt", inner closure func(t *testing.T) with t.Error (#320b).
+	newContent := `package agent
+
+import "testing"
+
+func TestOuter(tt *testing.T) {
+	tt.Run("sub", func(t *testing.T) {
+		got := Do()
+		if got != 42 {
+			t.Error("bad")
+		}
+	})
+}
+`
+	result := checkAssertionPresence("foo_test.go", "", newContent)
+	if result != "" {
+		t.Errorf("expected no warning for closure using rebound t, got: %s", result)
+	}
+}
+
+func TestCheckAssertionPresence_TrulyHollowStillFlagged(t *testing.T) {
+	// Positive control: genuinely hollow test is still flagged.
+	newContent := `package agent
+
+import "testing"
+
+func TestNoAssert(t *testing.T) {
+	x := Compute(1)
+	_ = x
+}
+`
+	result := checkAssertionPresence("foo_test.go", "", newContent)
+	if !contains(result, "TestNoAssert") {
+		t.Errorf("expected hollow warning for TestNoAssert, got: %s", result)
 	}
 }
 
