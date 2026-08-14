@@ -154,3 +154,37 @@ func f5(x int) int { if x > 0 { return 1 }; if x > 1 { return 2 }; if x > 2 { re
 		t.Errorf("expected at most %d warnings, got %d", maxReturnCountWarnings+1, len(warnings))
 	}
 }
+
+func TestCheckExcessiveReturns_LineShiftNotReflagged(t *testing.T) {
+	old := `package main
+func complex(x int) int {
+	if x == 1 { return 1 }
+	if x == 2 { return 2 }
+	if x == 3 { return 3 }
+	if x == 4 { return 4 }
+	if x == 5 { return 5 }
+	return 0
+}
+`
+	// Same function, 5 unrelated lines inserted above it (#157).
+	shifted := `package main
+
+// unrelated comment 1
+// unrelated comment 2
+// unrelated comment 3
+// unrelated comment 4
+// unrelated comment 5
+func complex(x int) int {
+	if x == 1 { return 1 }
+	if x == 2 { return 2 }
+	if x == 3 { return 3 }
+	if x == 4 { return 4 }
+	if x == 5 { return 5 }
+	return 0
+}
+`
+	warnings := checkExcessiveReturns("test.go", old, shifted)
+	if len(warnings) != 0 {
+		t.Errorf("#157 regression: line shift re-flagged pre-existing issue: %v", warnings)
+	}
+}

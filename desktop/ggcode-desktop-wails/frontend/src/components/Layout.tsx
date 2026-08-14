@@ -38,9 +38,12 @@ function LayoutInner() {
   // --- Zoom controls (Cmd+/Cmd-/Cmd+0) ---
   const { zoom, zoomIn, zoomOut, resetZoom } = useZoom()
 
-  // Persist zoom to Go backend config on change
+  // Persist zoom to Go backend config on change; surface persistence
+  // failures instead of silently losing the preference (#159).
   useEffect(() => {
-    App.SetFontZoom(zoom).catch(() => {})
+    App.SetFontZoom(zoom).catch((err) => {
+      console.error('failed to persist font zoom:', err)
+    })
   }, [zoom])
 
   // --- Window focus tracking for desktop notifications ---

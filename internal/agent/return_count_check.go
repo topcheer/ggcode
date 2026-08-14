@@ -63,14 +63,16 @@ func checkExcessiveReturns(filePath, oldContent, newContent string) []string {
 			if oldPos == nil {
 				oldPos = make(map[string]bool)
 			}
-			oldPos[iss.pos.String()] = true
+			// Fingerprint on function name, not position: line shifts above a
+			// function must not re-flag pre-existing issues (fix #157).
+			oldPos[iss.funcName] = true
 		}
 	}
 
 	var warnings []string
 	newCount := 0
 	for _, inst := range newInstances {
-		if oldPos != nil && oldPos[inst.pos.String()] {
+		if oldPos != nil && oldPos[inst.funcName] {
 			continue
 		}
 		newCount++

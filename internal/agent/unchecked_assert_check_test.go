@@ -202,3 +202,33 @@ func process(v interface{}) {
 		t.Fatalf("expected 0 warnings for type switch, got %d: %v", len(warnings), warnings)
 	}
 }
+
+func TestCheckUncheckedTypeAssert_LineShiftNotReflagged(t *testing.T) {
+	old := `package main
+func work(v interface{}) {
+	x := v.(int)
+	_ = x
+	y := v.(string)
+	_ = y
+}
+`
+	// Same assertions, 5 unrelated lines inserted above them (#157).
+	shifted := `package main
+
+// unrelated comment 1
+// unrelated comment 2
+// unrelated comment 3
+// unrelated comment 4
+// unrelated comment 5
+func work(v interface{}) {
+	x := v.(int)
+	_ = x
+	y := v.(string)
+	_ = y
+}
+`
+	warnings := checkUncheckedTypeAssert("test.go", old, shifted)
+	if len(warnings) != 0 {
+		t.Errorf("#157 regression: line shift re-flagged pre-existing assertions: %v", warnings)
+	}
+}

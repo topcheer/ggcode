@@ -171,10 +171,32 @@ func findUncheckedAsserts(filename, src string) []uncheckedAssertInfo {
 			continue
 		}
 		p := fset.Position(pos)
-		results = append(results, uncheckedAssertInfo{line: p.Line, expr: p.String()})
+		results = append(results, uncheckedAssertInfo{line: p.Line, expr: assertExprAt(file, pos)})
 	}
 
 	return results
+}
+
+// assertExprAt finds the TypeAssertExpr starting at pos and renders it with
+// the package-level exprText helper, independent of line numbers (fix #157:
+// position strings change when lines shift above the assertion, re-flagging
+// pre-existing issues).
+func assertExprAt(file *ast.File, pos token.Pos) string {
+	var target ast.Expr
+	ast.Inspect(file, func(n ast.Node) bool {
+		if target != nil {
+			return false
+		}
+		if ta, ok := n.(*ast.TypeAssertExpr); ok && ta.Pos() == pos {
+			target = ta
+			return false
+		}
+		return true
+	})
+	if target == nil {
+		return fmt.Sprintf("pos:%d", pos)
+	}
+	return exprText(target)
 }
 
 // assertFingerprint returns a content-based key for delta comparison.

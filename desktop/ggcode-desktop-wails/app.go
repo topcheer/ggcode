@@ -216,7 +216,9 @@ func (a *App) initWorkspace(dir string) {
 
 	// Save workdir to shared desktop config (mirrors Fyne dc.Save)
 	a.dc.SetWorkDir(dir)
-	_ = a.dc.Save()
+	if err := a.dc.Save(); err != nil {
+		debug.Log("desktop", "persist workdir failed: %v", err)
+	}
 
 	// Initialize chat bridge with loaded config
 	chat, err := wailskit.NewChatBridge()
@@ -379,7 +381,9 @@ func (a *App) shutdown(_ context.Context) {
 			x, y := runtime.WindowGetPosition(a.ctx)
 			maximized := runtime.WindowIsMaximised(a.ctx)
 			a.dc.SetWindowState(w, h, x, y, maximized)
-			_ = a.dc.Save()
+			if err := a.dc.Save(); err != nil {
+				debug.Log("desktop", "persist window-state on shutdown failed: %v", err)
+			}
 		}
 		a.stopShare()
 		a.stopIMAdapters()
@@ -796,17 +800,28 @@ func (a *App) SetWindowFocused(focused bool) {
 	if a.notifications != nil {
 		a.notifications.SetFocused(focused)
 	}
+	if focused && a.lastCloseAttempt != nil {
+		// The window is visible and focused again (e.g. restored via Dock
+		// icon click, which Wails handles natively without notifying Go).
+		// Clear the close-to-tray flag so the global hotkey toggle reflects
+		// actual visibility instead of a stale hidden-state heuristic (#158).
+		a.lastCloseAttempt = nil
+	}
 }
 
 // SetNotificationsEnabled toggles the master notification switch and persists to config.
-func (a *App) SetNotificationsEnabled(enabled bool) {
+func (a *App) SetNotificationsEnabled(enabled bool) error {
 	if a.notifications != nil {
 		a.notifications.SetEnabled(enabled)
 	}
 	if a.dc != nil {
 		a.dc.SetNotificationsEnabled(enabled)
-		_ = a.dc.Save()
+		if err := a.dc.Save(); err != nil {
+			debug.Log("desktop", "persist notifications-enabled failed: %v", err)
+			return fmt.Errorf("persist notification setting: %w", err)
+		}
 	}
+	return nil
 }
 
 // GetUnreadNotifications returns the current unread notification count.
@@ -826,7 +841,7 @@ func (a *App) GetFontZoom() float64 {
 }
 
 // SetFontZoom persists the font zoom level and returns the clamped value.
-func (a *App) SetFontZoom(zoom float64) float64 {
+func (a *App) SetFontZoom(zoom float64) (float64, error) {
 	if zoom < 0.7 {
 		zoom = 0.7
 	}
@@ -835,9 +850,12 @@ func (a *App) SetFontZoom(zoom float64) float64 {
 	}
 	if a.dc != nil {
 		a.dc.SetFontZoom(zoom)
-		_ = a.dc.Save()
+		if err := a.dc.Save(); err != nil {
+			debug.Log("desktop", "persist font-zoom failed: %v", err)
+			return zoom, fmt.Errorf("persist font zoom: %w", err)
+		}
 	}
-	return zoom
+	return zoom, nil
 }
 
 // SwitchModel changes the active model at runtime.
@@ -1349,7 +1367,10 @@ func (a *App) ToggleAlwaysOnTop() (bool, error) {
 	newState := !a.dc.IsAlwaysOnTop()
 	runtime.WindowSetAlwaysOnTop(a.ctx, newState)
 	a.dc.SetAlwaysOnTop(newState)
-	_ = a.dc.Save()
+	if err := a.dc.Save(); err != nil {
+		debug.Log("desktop", "persist always-on-top failed: %v", err)
+		return newState, fmt.Errorf("persist always-on-top: %w", err)
+	}
 	debug.Log("desktop", "always-on-top toggled to %v", newState)
 	return newState, nil
 }
@@ -1369,7 +1390,10 @@ func (a *App) SetGlobalHotkeyEnabled(enabled bool) error {
 		return fmt.Errorf("app not initialized")
 	}
 	a.dc.SetGlobalHotkey(enabled)
-	_ = a.dc.Save()
+	if err := a.dc.Save(); err != nil {
+		debug.Log("desktop", "persist global-hotkey failed: %v", err)
+		return fmt.Errorf("persist global hotkey setting: %w", err)
+	}
 	if enabled {
 		a.initGlobalHotkey()
 	} else {
