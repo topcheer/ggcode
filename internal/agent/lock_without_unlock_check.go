@@ -76,19 +76,27 @@ func checkLockWithoutUnlock(filePath, oldContent, newContent string) []string {
 		return nil
 	}
 
-	// Delta-aware: count patterns in old content.
-	oldCount := countLocksWithoutUnlock(oldContent)
-
 	newInstances := findLocksWithoutUnlock(newContent)
-	if len(newInstances) <= oldCount {
-		return nil // no new instances introduced
+	if len(newInstances) == 0 {
+		return nil
 	}
 
-	// Flag only newly introduced instances.
-	newCount := len(newInstances) - oldCount
+	// Delta check: compare against old content positions (fix #142).
+	var oldPos map[string]bool
+	if strings.TrimSpace(oldContent) != "" {
+		for _, iss := range findLocksWithoutUnlock(oldContent) {
+			if oldPos == nil {
+				oldPos = make(map[string]bool)
+			}
+			oldPos[iss.posStr] = true
+		}
+	}
+
 	var warnings []string
-	for i := 0; i < newCount && i+oldCount < len(newInstances); i++ {
-		inst := newInstances[oldCount+i]
+	for _, inst := range newInstances {
+		if oldPos != nil && oldPos[inst.posStr] {
+			continue
+		}
 		unlockMethod := lockMethodNames[inst.method]
 		warnings = append(warnings, fmt.Sprintf(
 			"Possible deadlock: `%s.%s()` at %s has no corresponding `%s.%s()` "+

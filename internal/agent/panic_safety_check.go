@@ -86,19 +86,27 @@ func checkPanicSafety(filePath, oldContent, newContent string) []string {
 		return nil
 	}
 
-	// Delta-aware: count patterns in old content.
-	oldCount := countBarePanics(oldContent)
-
 	newInstances := findBarePanics(newContent)
-	if len(newInstances) <= oldCount {
-		return nil // no new instances introduced
+	if len(newInstances) == 0 {
+		return nil
 	}
 
-	// Flag only newly introduced instances.
-	newPanicCount := len(newInstances) - oldCount
+	// Delta check: compare against old content positions (fix #142).
+	var oldPos map[string]bool
+	if strings.TrimSpace(oldContent) != "" {
+		for _, iss := range findBarePanics(oldContent) {
+			if oldPos == nil {
+				oldPos = make(map[string]bool)
+			}
+			oldPos[iss.posStr] = true
+		}
+	}
+
 	var warnings []string
-	for i := 0; i < newPanicCount && i+oldCount < len(newInstances); i++ {
-		inst := newInstances[oldCount+i]
+	for _, inst := range newInstances {
+		if oldPos != nil && oldPos[inst.posStr] {
+			continue
+		}
 		msg := "Bare `panic()` at " + inst.posStr + " in library code. " +
 			"panic() crashes the entire process if unrecovered (especially " +
 			"dangerous in goroutines where there is no caller to recover), " +

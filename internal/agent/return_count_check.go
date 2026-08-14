@@ -51,29 +51,45 @@ func checkExcessiveReturns(filePath, oldContent, newContent string) []string {
 		return nil
 	}
 
-	oldCount := countExcessiveReturns(oldContent)
+	// Delta-aware: only flag newly introduced instances (fix #142).
 	newInstances := findExcessiveReturns(newContent)
-	if len(newInstances) <= oldCount {
+	if len(newInstances) == 0 {
 		return nil
 	}
 
-	var warnings []string
-	for i := oldCount; i < len(newInstances) && len(warnings) < maxReturnCountWarnings; i++ {
-		inst := newInstances[i]
-		warnings = append(warnings, fmt.Sprintf(
-			"Too many return statements: function `%s` at %s has %d return statements. "+
-				"Functions with %d+ returns are harder to maintain and reason about - "+
-				"consider extracting helper functions or restructuring control flow. "+
-				"(SonarQube S114, Structured Programming)",
-			inst.funcName, inst.pos.String(), inst.count,
-			returnCountThreshold,
-		))
+	var oldPos map[string]bool
+	if strings.TrimSpace(oldContent) != "" {
+		for _, iss := range findExcessiveReturns(oldContent) {
+			if oldPos == nil {
+				oldPos = make(map[string]bool)
+			}
+			oldPos[iss.pos.String()] = true
+		}
 	}
 
-	if len(newInstances) > oldCount+maxReturnCountWarnings {
+	var warnings []string
+	newCount := 0
+	for _, inst := range newInstances {
+		if oldPos != nil && oldPos[inst.pos.String()] {
+			continue
+		}
+		newCount++
+		if len(warnings) < maxReturnCountWarnings {
+			warnings = append(warnings, fmt.Sprintf(
+				"Too many return statements: function `%s` at %s has %d return statements. "+
+					"Functions with %d+ returns are harder to maintain and reason about - "+
+					"consider extracting helper functions or restructuring control flow. "+
+					"(SonarQube S114, Structured Programming)",
+				inst.funcName, inst.pos.String(), inst.count,
+				returnCountThreshold,
+			))
+		}
+	}
+
+	if newCount > maxReturnCountWarnings {
 		warnings = append(warnings, fmt.Sprintf(
 			"...and %d more function(s) with %d+ return statements",
-			len(newInstances)-oldCount-maxReturnCountWarnings, returnCountThreshold,
+			newCount-maxReturnCountWarnings, returnCountThreshold,
 		))
 	}
 

@@ -71,17 +71,28 @@ func checkErrorWrapping(filePath, oldContent, newContent string) []string {
 		return nil
 	}
 
-	oldCount := len(findErrorWrapIssues(oldContent))
 	newInstances := findErrorWrapIssues(newContent)
-	if len(newInstances) <= oldCount {
-		return nil // no new instances introduced
+	if len(newInstances) == 0 {
+		return nil
 	}
 
-	// Flag only newly introduced instances.
-	newCount := len(newInstances) - oldCount
+	// Delta check: compare against old content positions (fix #142).
+	var oldPat map[string]bool
+	if strings.TrimSpace(oldContent) != "" {
+		for _, iss := range findErrorWrapIssues(oldContent) {
+			if oldPat == nil {
+				oldPat = make(map[string]bool)
+			}
+			oldPat[iss.pattern] = true
+		}
+	}
+
 	var warnings []string
-	for i := 0; i < newCount && i+oldCount < len(newInstances); i++ {
-		warnings = append(warnings, newInstances[oldCount+i].pattern)
+	for _, inst := range newInstances {
+		if oldPat != nil && oldPat[inst.pattern] {
+			continue
+		}
+		warnings = append(warnings, inst.pattern)
 	}
 
 	if len(warnings) > 2 {

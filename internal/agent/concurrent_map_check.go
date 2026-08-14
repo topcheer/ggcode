@@ -82,19 +82,27 @@ func checkConcurrentMapAccess(filePath, oldContent, newContent string) string {
 		return ""
 	}
 
-	// Delta check: count patterns in old content.
-	oldCount := countConcurrentMapIssues(oldContent)
-	if len(instances) <= oldCount {
-		return ""
+	// Delta check: compare against old content positions (fix #140/#142).
+	var oldLines map[string]bool
+	if strings.TrimSpace(oldContent) != "" {
+		for _, iss := range findConcurrentMapAccess(token.NewFileSet(), func() *ast.File {
+			f, _ := parser.ParseFile(token.NewFileSet(), "", oldContent, 0)
+			return f
+		}()) {
+			if oldLines == nil {
+				oldLines = make(map[string]bool)
+			}
+			oldLines[iss.posStr] = true
+		}
 	}
 
-	// Only flag newly introduced instances.
-	newCount := len(instances) - oldCount
 	var b strings.Builder
 	b.WriteString("[Concurrent map access detection] Potential unsynchronized concurrent map access detected.\n")
 	b.WriteString("Go maps are NOT safe for concurrent use - the runtime will fatally crash with 'concurrent map read/write'.\n")
-	for i := 0; i < newCount && i+oldCount < len(instances); i++ {
-		inst := instances[oldCount+i]
+	for _, inst := range instances {
+		if oldLines != nil && oldLines[inst.posStr] {
+			continue
+		}
 		b.WriteString(fmt.Sprintf("  - %s: map '%s' is accessed in a function that spawns goroutines without sync (Mutex/RWMutex/sync.Map). ",
 			inst.posStr, inst.mapName))
 		b.WriteString("Protect with sync.RWMutex, or use sync.Map for concurrent access patterns.\n")

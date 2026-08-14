@@ -52,30 +52,45 @@ func checkExcessiveParams(filePath, oldContent, newContent string) []string {
 		return nil
 	}
 
-	// Delta-aware: only flag newly introduced instances.
-	oldCount := countExcessiveParams(oldContent)
+	// Delta-aware: only flag newly introduced instances (fix #142).
 	newInstances := findExcessiveParams(newContent)
-	if len(newInstances) <= oldCount {
+	if len(newInstances) == 0 {
 		return nil
 	}
 
-	var warnings []string
-	for i := oldCount; i < len(newInstances) && len(warnings) < maxParamCountWarnings; i++ {
-		inst := newInstances[i]
-		warnings = append(warnings, fmt.Sprintf(
-			"Too many parameters: function `%s` at %s has %d parameters (%s). "+
-				"Functions with %d+ parameters are hard to maintain and call correctly — "+
-				"consider grouping related parameters into a struct or using a builder/options pattern. "+
-				"(SonarQube S107, Clean Code)",
-			inst.funcName, inst.pos.String(), inst.count, strings.Join(inst.params, ", "),
-			paramCountThreshold,
-		))
+	var oldPos map[string]bool
+	if strings.TrimSpace(oldContent) != "" {
+		for _, iss := range findExcessiveParams(oldContent) {
+			if oldPos == nil {
+				oldPos = make(map[string]bool)
+			}
+			oldPos[iss.pos.String()] = true
+		}
 	}
 
-	if len(newInstances) > oldCount+maxParamCountWarnings {
+	var warnings []string
+	newCount := 0
+	for _, inst := range newInstances {
+		if oldPos != nil && oldPos[inst.pos.String()] {
+			continue
+		}
+		newCount++
+		if len(warnings) < maxParamCountWarnings {
+			warnings = append(warnings, fmt.Sprintf(
+				"Too many parameters: function `%s` at %s has %d parameters (%s). "+
+					"Functions with %d+ parameters are hard to maintain and call correctly — "+
+					"consider grouping related parameters into a struct or using a builder/options pattern. "+
+					"(SonarQube S107, Clean Code)",
+				inst.funcName, inst.pos.String(), inst.count, strings.Join(inst.params, ", "),
+				paramCountThreshold,
+			))
+		}
+	}
+
+	if newCount > maxParamCountWarnings {
 		warnings = append(warnings, fmt.Sprintf(
 			"...and %d more function(s) with %d+ parameters",
-			len(newInstances)-oldCount-maxParamCountWarnings, paramCountThreshold,
+			newCount-maxParamCountWarnings, paramCountThreshold,
 		))
 	}
 

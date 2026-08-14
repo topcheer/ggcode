@@ -3999,7 +3999,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				a.correctionSpiral.recordVerifyResult(tc.Name, result.Content, result.IsError, i+1)
 			}
 			// Unverified mutation streak: track consecutive edits without verification.
-			a.bareEditStreak.recordToolCall(tc.Name)
+			a.bareEditStreak.recordToolCall(tc.Name, string(tc.Arguments))
 			// Green build illusion: track source modifications, builds, and tests.
 			// Premature success claim: track edits and verification commands.
 			var psArgs map[string]interface{}

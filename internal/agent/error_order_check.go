@@ -63,17 +63,27 @@ func checkErrorOrder(filePath, oldContent, newContent string) []string {
 		return nil
 	}
 
-	oldCount := countErrorOrderIssues(oldContent)
-
 	newInstances := findErrorOrderIssues(newContent)
-	if len(newInstances) <= oldCount {
+	if len(newInstances) == 0 {
 		return nil
 	}
 
-	newCount := len(newInstances) - oldCount
+	// Delta check: compare against old content line numbers (fix #140/#142).
+	var oldLines map[int]bool
+	if strings.TrimSpace(oldContent) != "" {
+		for _, iss := range findErrorOrderIssues(oldContent) {
+			if oldLines == nil {
+				oldLines = make(map[int]bool)
+			}
+			oldLines[iss.line] = true
+		}
+	}
+
 	var warnings []string
-	for i := 0; i < newCount && i+oldCount < len(newInstances); i++ {
-		inst := newInstances[oldCount+i]
+	for _, inst := range newInstances {
+		if oldLines != nil && oldLines[inst.line] {
+			continue
+		}
 		warnings = append(warnings, fmt.Sprintf(
 			"`%s` may be used before its error `%s` is checked (line %d). "+
 				"If %s is non-nil, %s is typically nil/invalid and using it causes a panic. "+

@@ -86,10 +86,20 @@ func checkErrorNoPropagate(filePath, oldContent, newContent string) []string {
 		return nil
 	}
 
-	oldCount := countErrorNoPropagate(oldContent)
 	newInstances := findErrorNoPropagateInstances(newContent)
-	if len(newInstances) <= oldCount {
+	if len(newInstances) == 0 {
 		return nil
+	}
+
+	// Delta check: compare against old content line numbers (fix #142).
+	var oldLines map[int]bool
+	if strings.TrimSpace(oldContent) != "" {
+		for _, iss := range findErrorNoPropagateInstances(oldContent) {
+			if oldLines == nil {
+				oldLines = make(map[int]bool)
+			}
+			oldLines[iss.line] = true
+		}
 	}
 
 	const noPropagateFmt = "Error not propagated: `if %s != nil` at line %d has a non-empty body " +
@@ -97,10 +107,11 @@ func checkErrorNoPropagate(filePath, oldContent, newContent string) []string {
 		"returns error. The error is acknowledged but not returned to the caller. " +
 		"Add `return %s` (or `return fmt.Errorf(\"...: %%w\", %s)`) to propagate it."
 
-	newCount := len(newInstances) - oldCount
 	var warnings []string
-	for i := 0; i < newCount && i+oldCount < len(newInstances); i++ {
-		inst := newInstances[oldCount+i]
+	for _, inst := range newInstances {
+		if oldLines != nil && oldLines[inst.line] {
+			continue
+		}
 		warnings = append(warnings, fmt.Sprintf(noPropagateFmt,
 			inst.errName, inst.line, inst.errName, inst.errName))
 	}

@@ -16,6 +16,7 @@ package agent
 // diversity, oscillation, debt, or claim verification.
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -45,11 +46,11 @@ func (s *bareEditStreakState) reset() {
 
 // recordToolCall classifies a tool call as mutation, verification, or other.
 // Mutations increment the streak; verifications reset it; other tools are neutral.
-func (s *bareEditStreakState) recordToolCall(toolName string) {
+func (s *bareEditStreakState) recordToolCall(toolName string, toolInput string) {
 	switch {
 	case bareStreakIsMutation(toolName):
 		s.streak++
-	case bareStreakIsVerification(toolName):
+	case bareStreakIsVerification(toolName, toolInput):
 		s.streak = 0
 	}
 }
@@ -89,19 +90,61 @@ func bareStreakIsMutation(toolName string) bool {
 }
 
 // bareStreakIsVerification returns true for tools that verify correctness.
-func bareStreakIsVerification(toolName string) bool {
+// toolInput is the raw JSON arguments (fix #141: check command content, not just name).
+func bareStreakIsVerification(toolName string, toolInput string) bool {
 	switch {
-	case toolName == "run_command",
-		toolName == "start_command",
-		toolName == "lsp_diagnostics",
+	case toolName == "run_command", toolName == "start_command":
+		// Only reset streak if the command actually verifies code
+		// (fix #141 bug 1: "echo done" or "ls" should not reset streak).
+		return commandIsVerification(toolInput)
+	case toolName == "lsp_diagnostics",
 		toolName == "lsp_references",
 		toolName == "lsp_definition",
 		toolName == "code_health",
 		toolName == "review_changes",
-		toolName == "verify",
-		strings.HasPrefix(toolName, "git_"):
+		toolName == "verify":
+		return true
+	// fix #141 bug 2: git_add, git_commit, git_checkout, git_reset, git_revert,
+	// git_stash are mutations, NOT verification. Only git_diff and git_status
+	// are truly read-only verification tools.
+	case toolName == "git_diff", toolName == "git_status":
 		return true
 	default:
 		return false
 	}
+}
+
+// commandIsVerification checks if a run_command/start_command input actually
+// verifies code correctness (fix #141). Commands like "echo", "ls", "pwd",
+// "cat", "git add", "git commit" are NOT verification.
+func commandIsVerification(toolInput string) bool {
+	if toolInput == "" {
+		return false // no command info → don't assume verification
+	}
+	var args struct {
+		Command string `json:"command"`
+	}
+	if err := json.Unmarshal([]byte(toolInput), &args); err != nil {
+		return false
+	}
+	cmd := strings.ToLower(strings.TrimSpace(args.Command))
+	if cmd == "" {
+		return false
+	}
+	// Known verification command prefixes.
+	verificationPrefixes := []string{
+		"go test", "go build", "go vet", "go check",
+		"make ", "npm test", "npm run", "yarn test", "cargo test", "pytest",
+		"python -m pytest", "jest", "vitest", "deno test",
+		"go run", // running a test binary or quick check
+		"clang", "gcc", "rustc",
+		"shellcheck", "golangci-lint", "eslint", "tsc",
+		"sqlc verify", "protoc",
+	}
+	for _, prefix := range verificationPrefixes {
+		if strings.HasPrefix(cmd, prefix) {
+			return true
+		}
+	}
+	return false
 }

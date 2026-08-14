@@ -106,16 +106,28 @@ func checkErrorMsgQuality(filePath, oldContent, newContent string) []string {
 		return nil
 	}
 
-	oldCount := len(findErrMsgQualityIssues(oldContent))
 	newInstances := findErrMsgQualityIssues(newContent)
-	if len(newInstances) <= oldCount {
+	if len(newInstances) == 0 {
 		return nil
 	}
 
-	newCount := len(newInstances) - oldCount
+	// Delta check: compare against old content positions (fix #142).
+	var oldPat map[string]bool
+	if strings.TrimSpace(oldContent) != "" {
+		for _, iss := range findErrMsgQualityIssues(oldContent) {
+			if oldPat == nil {
+				oldPat = make(map[string]bool)
+			}
+			oldPat[iss.pattern] = true
+		}
+	}
+
 	var warnings []string
-	for i := 0; i < newCount && i+oldCount < len(newInstances); i++ {
-		warnings = append(warnings, newInstances[oldCount+i].pattern)
+	for _, inst := range newInstances {
+		if oldPat != nil && oldPat[inst.pattern] {
+			continue
+		}
+		warnings = append(warnings, inst.pattern)
 	}
 
 	if len(warnings) > 3 {
