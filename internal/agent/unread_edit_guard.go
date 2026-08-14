@@ -94,6 +94,11 @@ func (s *unreadEditState) recordRead(path string) {
 	}
 	n := normalizePath(path)
 	s.filesRead[n] = true
+	// Re-reading the file refreshes the staleness baseline: any future
+	// external modification after this read must be able to re-warn, so
+	// clear the stale warning key (fix #162 — the key was never cleared,
+	// making the stale warning once-per-run regardless of later changes).
+	delete(s.warnedFiles, n+"\x00stale")
 	// Capture mtime for stale-read detection. If the stat fails (e.g., file
 	// was deleted between read and this call), skip — the edit guard will
 	// catch it via the unread check or the tool itself will error.

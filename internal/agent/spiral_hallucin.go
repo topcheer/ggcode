@@ -100,10 +100,23 @@ var spiralUncertaintyRe = regexp.MustCompile(`(?i)(?:I assume|assuming|I'm assum
 // established fact (no hedging, asserting certainty).
 var spiralCommittedRe = regexp.MustCompile(`(?i)(?:since we(?:'re| are)|because (?:the|this|we)|given that|now that|as (?:we|the)|so (?:the|this|we)|therefore|this means|which means|the \w+ (?:is|was|has|uses|requires|needs))\b`)
 
-// spiralVerificationRe detects that a verification step occurred
-// (test, build, check, diagnostic) -- this breaks the spiral.
-var spiralVerificationRe = regexp.MustCompile(`(?i)(?:test|build|verify|verified|confirmed|diagnostic|lint|compile|ran|passed|failed|error|result|output)`)
-var spiralVerificationToolRe = regexp.MustCompile(`(?i)(?:run_command|edit_file|test|build|grep|search|read_file|lsp_)`)
+// spiralVerificationRe detects that a verification step occurred. Kept
+// tightly scoped to explicit first-person assertion phrases ONLY as a
+// fallback — generic words like test/build/error/result appear in nearly
+// every assistant narrative and previously disabled the detector on any
+// match (#161). The primary signal is the real tool-call event recorded
+// by recordSpiralVerification from the tool execution loop.
+var spiralVerificationRe = regexp.MustCompile(`(?i)(?:i (?:have |'ve )?(?:verified|confirmed|validated)\b|i ran (?:the )?(?:test|build|lint|check)s?\b)`)
+
+// recordSpiralVerification marks that a real tool call with observable
+// results occurred this turn (fix #161: prose keyword matching silently
+// disabled the detector in most runs).
+func (a *Agent) recordSpiralVerification() {
+	if a == nil || a.spiralState == nil {
+		return
+	}
+	a.spiralState.verified = true
+}
 
 // spiralTopicWordRe extracts candidate topic keywords from text near
 // uncertainty markers. Looks for nouns/technical terms.
@@ -257,8 +270,11 @@ func (a *Agent) recordSpiralTurn(text string) {
 	s := a.spiralState
 	s.turn++
 
-	// Check if a verification step occurred (tool calls that produce
-	// observable results break the spiral chain)
+	// Check if a verification step occurred — either a real tool call with
+	// observable results (recorded by recordSpiralVerification from the tool
+	// loop) or an explicit first-person verification assertion (#161:
+	// generic keyword matching on prose disabled the detector far too
+	// easily).
 	if spiralVerificationRe.MatchString(text) {
 		s.verified = true
 	}

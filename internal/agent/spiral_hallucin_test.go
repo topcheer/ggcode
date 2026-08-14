@@ -278,16 +278,23 @@ func TestRecordSpiralTurn_NilState(t *testing.T) {
 }
 
 func TestSpiralVerificationRegex(t *testing.T) {
+	// #161: generic narrative mentions of test/build/error/result must NOT
+	// disable the detector — only explicit first-person verification
+	// assertions count (real tool calls are the primary signal, recorded
+	// via recordSpiralVerification from the tool execution loop).
 	tests := []struct {
 		text    string
 		matches bool
 	}{
 		{"I ran the test and it passed", true},
-		{"The build failed with an error", true},
-		{"Let me verify this assumption", true},
-		{"The diagnostic output shows the issue", true},
-		{"I compiled the code successfully", true},
-		{"The result confirms our hypothesis", true},
+		{"I have verified the fix works", true},
+		{"I ran the build to check", true},
+		{"The build failed with an error", false},
+		{"Let me verify this assumption", false},
+		{"The diagnostic output shows the issue", false},
+		{"I compiled the code successfully", false},
+		{"The result confirms our hypothesis", false},
+		{"Tests passed for the new module", false},
 		{"Let's proceed with the implementation", false},
 		{"Since we're using PostgreSQL", false},
 	}

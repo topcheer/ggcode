@@ -79,32 +79,41 @@ var selfModPatterns = []selfModTarget{
 		reason:   "This is the agent's own configuration. Changes here can alter permissions, tool availability, and safety settings.",
 	},
 	{
-		name:     "memory store",
-		patterns: []string{".ggcode/memory/", "/memory/", "AGENTS.md", "GGCODE.md", "CLAUDE.md", "COPILOT.md"},
+		name: "memory store",
+		// Anchored to agent-infrastructure roots only (fix #163: a bare
+		// "/memory/" collided with ordinary paths like internal/memory/cache.go).
+		patterns: []string{".ggcode/memory/", "agents.md", "ggcode.md", "claude.md", "copilot.md"},
 		severity: "high",
 		reason:   "This is the agent's persistent memory. Content written here persists across sessions and influences future behavior.",
 	},
 	{
-		name:     "system prompt",
-		patterns: []string{"system_prompt", "systemprompt", "/prompts/system"},
+		name: "system prompt",
+		// Anchored: require an infra-root or file extension so ordinary
+		// files like tests/system_prompt_test.go don't collide.
+		patterns: []string{".ggcode/system_prompt", ".ggcode/systemprompt", "/prompts/system", "system_prompt.json", "systemprompt.json"},
 		severity: "critical",
 		reason:   "This is the agent's system prompt or instruction layer. Modifying it can weaken or override core guardrails.",
 	},
 	{
 		name:     "hooks/lifecycle",
-		patterns: []string{".ggcode/hooks/", "/hooks/", "hook_config"},
+		patterns: []string{".ggcode/hooks/", "hook_config"},
 		severity: "high",
 		reason:   "Hooks control lifecycle events and safety checkpoints. Modifying hooks can bypass verification gates.",
 	},
 	{
-		name:     "permission rules",
-		patterns: []string{".ggcode/permissions", "permission_config", "allowlist", "denylist"},
+		name: "permission rules",
+		// Bare allowlist/denylist removed (fix #163: collided with ordinary
+		// security/allowlist_util.py etc.). Anchored to infra roots and
+		// exact config filenames.
+		patterns: []string{".ggcode/permissions", "permission_config", "allowlist.json", "denylist.json"},
 		severity: "critical",
 		reason:   "Permission rules control what the agent is allowed to do. Modifying them can grant unauthorized capabilities.",
 	},
 	{
-		name:     "MCP server config",
-		patterns: []string{"mcp_server", ".ggcode/mcp", "mcp_servers.json"},
+		name: "MCP server config",
+		// Anchored: require a config extension or infra root (bare mcp_server
+		// collided with api/mcp_server.go).
+		patterns: []string{".ggcode/mcp", "mcp_servers.json", "mcp_server.json", "mcp_server.yaml", "mcp_server.yml"},
 		severity: "medium",
 		reason:   "MCP server configuration controls external tool integrations. Changes can introduce new attack surfaces.",
 	},
@@ -143,18 +152,10 @@ func (s *selfModState) checkSelfModification(toolName string, args json.RawMessa
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Only check write-type tools
-	writeTools := map[string]bool{
-		"write_file":      true,
-		"edit_file":       true,
-		"multi_edit_file": true,
-		"multi_file_edit": true,
-		"batch_replace":   true,
-		"file_ops":        true,
-		"git_commit":      false, // committing is not self-modification
-		"delete_file":     false,
-	}
-	if !writeTools[toolName] {
+	// Only check write-type tools. Use the canonical sourceMutatingTools map
+	// (#163: the previous local map missed multi_file_write, notebook_edit,
+	// and lsp_rename, letting self-modification bypass the advisory).
+	if !sourceMutatingTools[toolName] {
 		return ""
 	}
 
@@ -241,7 +242,7 @@ func extractSelfModPaths(args json.RawMessage, _ string) []string {
 	}
 
 	// Single file path fields
-	for _, key := range []string{"path", "file_path", "source"} {
+	for _, key := range []string{"path", "file_path", "source", "notebook_path"} {
 		if s, ok := raw[key].(string); ok {
 			add(s)
 		}

@@ -379,3 +379,39 @@ func TestStaleRead_ReReadClearsStaleState(t *testing.T) {
 		t.Fatalf("expected no warning after re-read, got: %s", hint)
 	}
 }
+
+// Test #162: after re-reading a file, a SECOND external modification must be
+// able to warn again (the stale key is cleared on recordRead).
+func TestStaleRead_RewarnAfterReread(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "main.go")
+
+	if err := os.WriteFile(path, []byte("package main\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := newUnreadEditState()
+	s.recordRead(path)
+
+	// First external modification → warn.
+	t1 := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(path, t1, t1); err != nil {
+		t.Fatal(err)
+	}
+	if hint := s.checkStaleRead(path); hint == "" {
+		t.Fatal("expected first stale-read warning")
+	}
+
+	// Agent re-reads the file → staleness baseline refreshed.
+	s.recordRead(path)
+
+	// Second external modification → must warn again (#162: previously the
+	// stale key was never cleared, so this stayed silent forever).
+	t2 := t1.Add(2 * time.Second)
+	if err := os.Chtimes(path, t2, t2); err != nil {
+		t.Fatal(err)
+	}
+	if hint := s.checkStaleRead(path); hint == "" {
+		t.Fatal("#162 regression: second external modification after re-read never re-warned")
+	}
+}

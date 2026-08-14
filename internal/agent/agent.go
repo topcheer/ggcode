@@ -4193,6 +4193,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// tool calls (edit_file, write_file, run_command, etc.).
 			// Research: Microsoft IFC (arXiv:2505.23643), OWASP ATR-2026-00032.
 			a.taintInfluence.recordIfTainted(tc.Name, result.Content)
+			// Spiral-of-hallucination: a real tool call with observable
+			// results breaks the spiral chain. Record it as a verification
+			// event (#161 — previously detected by prose keyword matching,
+			// which fired on nearly every narrative turn).
+			if !result.IsError {
+				a.recordSpiralVerification()
+			}
 			// Repetitive-line compression: collapse consecutive identical or
 			// template-similar lines (common in build/test/install output) before
 			// the size-based guard. This may prevent truncation entirely for

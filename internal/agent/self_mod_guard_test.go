@@ -205,3 +205,55 @@ func TestSelfMod_BenignPathsWithSimilarNames(t *testing.T) {
 		}
 	}
 }
+
+// Test #163: ordinary project paths that merely contain pattern substrings
+// (src/hooks/, internal/memory/, allowlist_util.py, system_prompt_test.go,
+// api/mcp_server.go) must NOT trigger self-modification advisories.
+func TestSelfMod_OrdinaryProjectPathsNotFlagged(t *testing.T) {
+	s := newSelfModState()
+	for _, path := range []string{
+		"src/hooks/useAuth.ts",
+		"internal/memory/cache.go",
+		"security/allowlist_util.py",
+		"config/allowlist.yaml",
+		"tests/system_prompt_test.go",
+		"api/mcp_server.go",
+		"docs/mcp_server_setup.md",
+	} {
+		args, _ := json.Marshal(map[string]string{"path": path})
+		if got := s.checkSelfModification("edit_file", args); got != "" {
+			t.Errorf("#163 false positive for %q: got advisory %v", path, got)
+		}
+	}
+}
+
+// Test #163: the gate must cover ALL registered write tools, including the
+// previously-missing multi_file_write, notebook_edit, and lsp_rename.
+func TestSelfMod_GateCoversAllWriteTools(t *testing.T) {
+	for _, tool := range []string{
+		"write_file", "edit_file", "multi_edit_file", "multi_file_edit",
+		"multi_file_write", "batch_replace", "lsp_rename", "notebook_edit",
+	} {
+		var args json.RawMessage
+		switch tool {
+		case "notebook_edit":
+			args, _ = json.Marshal(map[string]string{"notebook_path": ".ggcode/memory/note.ipynb"})
+		case "multi_file_edit", "multi_file_write":
+			args, _ = json.Marshal(map[string][]map[string]string{
+				"files": {{"path": ".ggcode/memory/x.md"}},
+			})
+		case "batch_replace":
+			args, _ = json.Marshal(map[string][]string{
+				"files": {".ggcode/memory/x.md"},
+			})
+		default: // write_file, edit_file, multi_edit_file, lsp_rename
+			args, _ = json.Marshal(map[string]string{"path": ".ggcode/memory/x.md"})
+		}
+		// Fresh state per tool: warnedPaths dedup would otherwise swallow
+		// repeats of the same target path across iterations.
+		s := newSelfModState()
+		if got := s.checkSelfModification(tool, args); got == "" {
+			t.Errorf("#163 false negative: %s writing to .ggcode/memory/ must trigger the advisory", tool)
+		}
+	}
+}
