@@ -218,19 +218,6 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 					return
 				}
 
-				// Check finish reason for truncation / policy errors.
-				if len(resp.Candidates) > 0 {
-					fr := resp.Candidates[0].FinishReason
-					if fr == genai.FinishReasonMaxTokens {
-						// Output was truncated — NOT an error. Keep partial content.
-						p.cap.OnTruncated()
-						truncated = true
-					} else if finishErr := geminiFinishReasonError(fr); finishErr != nil {
-						ch <- StreamEvent{Type: StreamEventError, Error: finishErr}
-						return
-					}
-				}
-
 				// Extract usage metadata
 				if resp.UsageMetadata != nil {
 					usage.InputTokens = int(resp.UsageMetadata.PromptTokenCount)
@@ -265,6 +252,26 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 								Arguments: args,
 							},
 						}
+					}
+				}
+
+				// Check finish reason for truncation / policy errors AFTER processing
+				// this chunk's parts (#232): SAFETY/RECITATION/etc. chunks can carry
+				// final partial text that must not be dropped.
+				if len(resp.Candidates) > 0 {
+					fr := resp.Candidates[0].FinishReason
+					if fr == genai.FinishReasonMaxTokens {
+						// Output was truncated — NOT an error. Keep partial content.
+						p.cap.OnTruncated()
+						truncated = true
+					} else if finishErr := geminiFinishReasonError(fr); finishErr != nil {
+						// Fatal finish reason, but any text already streamed above is
+						// preserved. Surface the reason as a system notice, mark the
+						// response truncated, and close the stream normally (Done)
+						// instead of erroring out so partial content reaches history.
+						debug.Log("provider", "gemini stream fatal finish reason: %v", finishErr)
+						ch <- StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Warning: %v] ", finishErr)}
+						truncated = true
 					}
 				}
 			}

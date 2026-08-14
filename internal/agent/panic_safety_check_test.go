@@ -178,3 +178,38 @@ func c() { panic("c") }
 		t.Fatalf("expected 3 warnings for 3 new panics, got %d", len(warnings))
 	}
 }
+
+// fix #239: recover only works within the function frame it is deferred in.
+// A panic inside a goroutine is NOT protected by the outer function's recover.
+func TestCheckPanicSafety_GoroutinePanicNotCoveredByOuterRecover(t *testing.T) {
+	newContent := `package mypkg
+
+func worker() {
+	defer func() { recover() }()
+	go func() {
+		panic("x") // BUG: outer recover does not protect this goroutine
+	}()
+}
+`
+	warnings := checkPanicSafety("src/mypkg/worker.go", "", newContent)
+	if len(warnings) == 0 {
+		t.Fatal("expected warning for panic in goroutine not protected by outer recover")
+	}
+}
+
+// fix #239: a recover inside a goroutine does not protect the outer frame.
+func TestCheckPanicSafety_OuterPanicNotCoveredByGoroutineRecover(t *testing.T) {
+	newContent := `package mypkg
+
+func worker() {
+	go func() {
+		defer func() { recover() }()
+	}()
+	panic("naked") // BUG: goroutine's recover does not protect this frame
+}
+`
+	warnings := checkPanicSafety("src/mypkg/worker.go", "", newContent)
+	if len(warnings) == 0 {
+		t.Fatal("expected warning for outer panic not protected by goroutine recover")
+	}
+}

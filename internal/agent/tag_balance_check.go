@@ -48,6 +48,15 @@ var tagBalanceFileExts = map[string]bool{
 	".svelte": true,
 }
 
+// voidElementsFileExts are extensions of the HTML language family, where
+// void elements (link/meta/br/...) legally omit closing tags. XML-family
+// files (.xml/.svg) require strict pairing — e.g. RSS `<link>text</link>`
+// is a container, not a void element (fix #236).
+var voidElementsFileExts = map[string]bool{
+	".html": true, ".htm": true, ".xhtml": true,
+	".jsx": true, ".tsx": true, ".vue": true, ".svelte": true,
+}
+
 // voidElements are HTML elements that don't need closing tags.
 // Source: https://html.spec.whatwg.org/multipage/syntax.html#void-elements
 var voidElements = map[string]bool{
@@ -63,7 +72,8 @@ const maxTagScanSize = 512 * 1024 // 512KB
 // checkTagBalance validates that HTML/XML tags are properly balanced in
 // markup files. Returns a non-empty warning string if imbalance is detected.
 func checkTagBalance(filePath, content string) string {
-	if !tagBalanceFileExts[strings.ToLower(filepath.Ext(filePath))] {
+	ext := strings.ToLower(filepath.Ext(filePath))
+	if !tagBalanceFileExts[ext] {
 		return ""
 	}
 	if strings.TrimSpace(content) == "" {
@@ -74,7 +84,7 @@ func checkTagBalance(filePath, content string) string {
 		return ""
 	}
 
-	msg := scanTagBalance(content)
+	msg := scanTagBalance(content, voidElementsFileExts[ext])
 	if msg == "" {
 		return ""
 	}
@@ -100,12 +110,35 @@ var tagRe = regexp.MustCompile(
 		`|<\/>`, // JSX fragment close
 )
 
+// attrValueRe matches quoted attribute values (="..." / ='...') so their
+// contents can be blanked before tag matching — a `</div>` inside an
+// attribute string must not be treated as a real closing tag (fix #236).
+var attrValueRe = regexp.MustCompile(`=\s*("[^"]*"|'[^']*')`)
+
+// blankQuotedAttrValues replaces the inner characters of quoted attribute
+// values with spaces, preserving offsets so line numbers stay accurate.
+func blankQuotedAttrValues(content string) string {
+	return attrValueRe.ReplaceAllStringFunc(content, func(m string) string {
+		b := []byte(m)
+		for i := 2; i < len(b)-1; i++ { // keep '=' and the surrounding quotes
+			b[i] = ' '
+		}
+		return string(b)
+	})
+}
+
 // scanTagBalance walks the content looking for tags and validates balance.
-func scanTagBalance(content string) string {
+// allowVoid enables HTML void-element semantics; XML-family callers must
+// pass false for strict pairing.
+func scanTagBalance(content string, allowVoid bool) string {
 	var stack []tagStackEntry
 
-	for _, m := range tagRe.FindAllStringSubmatchIndex(content, -1) {
-		fullMatch := content[m[0]:m[1]]
+	// Blank quoted attribute values first so closing-tag-looking text inside
+	// attribute strings (e.g. <div data-template="</div>">) is not matched.
+	scanned := blankQuotedAttrValues(content)
+
+	for _, m := range tagRe.FindAllStringSubmatchIndex(scanned, -1) {
+		fullMatch := scanned[m[0]:m[1]]
 
 		// Calculate line number for this match.
 		line := 1 + strings.Count(content[:m[0]], "\n")
@@ -136,7 +169,7 @@ func scanTagBalance(content string) string {
 
 		// Closing tag: </div>
 		if m[2] >= 0 {
-			tagName := strings.ToLower(content[m[2]:m[3]])
+			tagName := strings.ToLower(scanned[m[2]:m[3]])
 			if len(stack) == 0 {
 				return fmt.Sprintf("line %d: closing tag </%s> with no matching opening tag", line, tagName)
 			}
@@ -150,15 +183,15 @@ func scanTagBalance(content string) string {
 
 		// Opening or self-closing tag: <div>, <br/>
 		if m[4] >= 0 {
-			tagName := strings.ToLower(content[m[4]:m[5]])
+			tagName := strings.ToLower(scanned[m[4]:m[5]])
 
 			// Self-closing: ends with />
 			if strings.HasSuffix(fullMatch, "/>") {
 				continue // self-closing, no stack push
 			}
 
-			// Void element: doesn't need closing tag
-			if voidElements[tagName] {
+			// Void element: doesn't need closing tag (HTML family only).
+			if allowVoid && voidElements[tagName] {
 				continue
 			}
 

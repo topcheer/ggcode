@@ -45,7 +45,10 @@ import (
 const maxSQLInjectionWarnings = 4
 
 // sqlInjMethods are database/sql and sqlx methods that take a SQL query
-// string as their first or second (after context) argument.
+// string as their first or second (after context) argument. Get and Select
+// (sqlx) and MustExec are deliberately EXCLUDED: without receiver checking,
+// they fire on common redis/cache/map idioms like cache.Get(fmt.Sprintf(...))
+// or m.Select("prefix-"+key).
 var sqlInjMethods = map[string]bool{
 	"Query":           true,
 	"QueryContext":    true,
@@ -57,9 +60,6 @@ var sqlInjMethods = map[string]bool{
 	"PrepareContext":  true,
 	"NamedExec":       true,
 	"NamedQuery":      true,
-	"MustExec":        true,
-	"Get":             true,
-	"Select":          true,
 }
 
 // sqlInjContextMethods require a context.Context as the first argument,
@@ -72,8 +72,11 @@ var sqlInjContextMethods = map[string]bool{
 }
 
 // checkSQLInjection detects SQL queries built via string concatenation or
-// fmt.Sprintf, flagging potential SQL injection vulnerabilities.
-func checkSQLInjection(filePath, _, newContent string) []string {
+// fmt.Sprintf, flagging potential SQL injection vulnerabilities. Delta-aware:
+// instances whose fingerprint (method + trimmed line text) already exists in
+// oldContent are suppressed, so pre-existing risky queries are not re-reported
+// on every edit.
+func checkSQLInjection(filePath, oldContent, newContent string) []string {
 	if filepath.Ext(filePath) != ".go" {
 		return nil
 	}
@@ -81,16 +84,52 @@ func checkSQLInjection(filePath, _, newContent string) []string {
 		return nil
 	}
 
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, filePath, newContent, 0)
-	if err != nil || file == nil {
+	newIssues := sqlInjScan(filePath, newContent)
+	if newIssues == nil {
 		return nil
 	}
 
-	var warnings []string
+	// Delta suppression: drop instances that already existed in old content.
+	if strings.TrimSpace(oldContent) != "" {
+		oldSet := sqlInjScanFingerprints(filePath, oldContent)
+		kept := newIssues[:0]
+		for _, ni := range newIssues {
+			if !oldSet[ni.fingerprint] {
+				kept = append(kept, ni)
+			}
+		}
+		newIssues = kept
+	}
 
-	ast.Inspect(file, func(node ast.Node) bool {
+	var warnings []string
+	for _, ni := range newIssues {
 		if len(warnings) >= maxSQLInjectionWarnings {
+			warnings = append(warnings, "...and possibly more SQL injection risks (capped)")
+			break
+		}
+		warnings = append(warnings, ni.text)
+	}
+	return warnings
+}
+
+// sqlInjIssue is one SQL injection finding with its delta fingerprint.
+type sqlInjIssue struct {
+	text        string
+	fingerprint string
+}
+
+// sqlInjScan parses the content and returns all unsafe-query findings.
+func sqlInjScan(filePath, content string) []sqlInjIssue {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, filePath, content, 0)
+	if err != nil || file == nil {
+		return nil
+	}
+	lines := strings.Split(content, "\n")
+
+	var issues []sqlInjIssue
+	ast.Inspect(file, func(node ast.Node) bool {
+		if len(issues) >= maxSQLInjectionWarnings+1 {
 			return false
 		}
 
@@ -114,18 +153,31 @@ func checkSQLInjection(filePath, _, newContent string) []string {
 			return true
 		}
 
-		warnings = append(warnings, fmt.Sprintf(
-			"SQL injection risk at %s: %s Use parameterized query with placeholders "+
-				"(e.g., db.Query(\"SELECT ... WHERE col = ?\", value)).",
-			fset.Position(call.Pos()), reason))
+		lineNum := fset.Position(call.Pos()).Line
+		lineText := ""
+		if lineNum >= 1 && lineNum <= len(lines) {
+			lineText = strings.TrimSpace(lines[lineNum-1])
+		}
+		issues = append(issues, sqlInjIssue{
+			text: fmt.Sprintf(
+				"SQL injection risk at %s: %s Use parameterized query with placeholders "+
+					"(e.g., db.Query(\"SELECT ... WHERE col = ?\", value)).",
+				fset.Position(call.Pos()), reason),
+			fingerprint: methodName + "|" + lineText,
+		})
 		return true
 	})
+	return issues
+}
 
-	if len(warnings) >= maxSQLInjectionWarnings {
-		warnings = append(warnings, "...and possibly more SQL injection risks (capped)")
+// sqlInjScanFingerprints returns the set of delta fingerprints for a content.
+func sqlInjScanFingerprints(filePath, content string) map[string]bool {
+	issues := sqlInjScan(filePath, content)
+	set := make(map[string]bool, len(issues))
+	for _, i := range issues {
+		set[i.fingerprint] = true
 	}
-
-	return warnings
+	return set
 }
 
 // sqlInjExtractMethodName returns the method name from a call expression

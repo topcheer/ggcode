@@ -9,6 +9,42 @@ import (
 	"github.com/topcheer/ggcode/internal/session"
 )
 
+// TestMergeTunnelUserMessages verifies tunnel-recorded user messages are
+// merged into session history with exact-content dedup (#242).
+func TestMergeTunnelUserMessages(t *testing.T) {
+	mkEvent := func(text string) session.TunnelEvent {
+		data, _ := json.Marshal(map[string]string{"text": text, "message_id": "tm-" + text})
+		return session.TunnelEvent{Type: "user_message", Data: data}
+	}
+	msgs := []SessionMessage{
+		{Role: "user", Content: "hello"},
+		{Role: "assistant", Content: "hi"},
+	}
+	events := []session.TunnelEvent{
+		mkEvent("hello"),                                 // duplicate of existing user msg -> skipped
+		mkEvent("from mobile"),                           // new -> appended
+		{Type: "other", Data: nil},                       // non user_message -> skipped
+		{Type: "user_message", Data: []byte("not-json")}, // unparseable -> skipped
+	}
+
+	out := mergeTunnelUserMessages(msgs, events)
+	if len(out) != 3 {
+		t.Fatalf("expected 3 messages, got %d: %+v", len(out), out)
+	}
+	if out[2].Content != "from mobile" {
+		t.Fatalf("expected tunnel message appended, got %+v", out[2])
+	}
+	if out[2].ID != "tm-from mobile" {
+		t.Fatalf("expected message_id preserved, got %q", out[2].ID)
+	}
+
+	// Empty events must not alter input.
+	same := mergeTunnelUserMessages(msgs, nil)
+	if len(same) != len(msgs) {
+		t.Fatalf("expected %d messages with no tunnel events, got %d", len(msgs), len(same))
+	}
+}
+
 func TestEmitNormalizesReasoningForFrontend(t *testing.T) {
 	var (
 		eventType string

@@ -406,3 +406,39 @@ func TestUnclosedStringLine(t *testing.T) {
 		t.Errorf("expected line 3, got %d", line)
 	}
 }
+
+// fix #237: Rust lifetimes ('a) must not be treated as string starts.
+func TestCheckDelimiterBalance_RustLifetimeNoFalsePositive(t *testing.T) {
+	content := `fn longest<'a>(x: &'a str, y: &'a str) -> &'a str {
+	if x.len() > y.len() { x } else { y }
+}
+`
+	if got := checkDelimiterBalance("lib.rs", content); got != "" {
+		t.Errorf("expected no warning for Rust lifetimes, got: %s", got)
+	}
+}
+
+func TestCheckDelimiterBalance_RustRawString(t *testing.T) {
+	content := "fn f() -> &'static str {\n\tr#\"raw { \"string\" here }\"#\n}\n"
+	if got := checkDelimiterBalance("lib.rs", content); got != "" {
+		t.Errorf("expected no warning for Rust raw string with braces, got: %s", got)
+	}
+}
+
+func TestCheckDelimiterBalance_RustCharLiterals(t *testing.T) {
+	content := "fn f(c: char) -> char {\n\tlet nl = '\\n';\n\tlet a = 'a';\n\tlet heart = '\\u{2764}';\n\tc\n}\n"
+	if got := checkDelimiterBalance("lib.rs", content); got != "" {
+		t.Errorf("expected no warning for Rust char literals, got: %s", got)
+	}
+}
+
+func TestCheckDelimiterBalance_RustUnterminatedRawString(t *testing.T) {
+	content := "fn f() {\n\tlet s = r#\"never closed\n}\n"
+	got := checkDelimiterBalance("lib.rs", content)
+	if got == "" {
+		t.Fatal("expected warning for unterminated Rust raw string")
+	}
+	if !strings.Contains(got, "unterminated raw string") {
+		t.Errorf("warning should mention unterminated raw string, got: %s", got)
+	}
+}

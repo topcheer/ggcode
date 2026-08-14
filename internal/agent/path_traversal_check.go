@@ -29,6 +29,7 @@ package agent
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -37,6 +38,15 @@ type pathTraversalInstance struct {
 	category string // "path traversal", "explicit traversal"
 	detail   string
 	line     int
+	lineText string // trimmed source line text, used as the delta fingerprint
+}
+
+// ptFingerprint keys an instance for delta suppression. The line TEXT (not
+// the fixed detail constant) distinguishes multiple instances of the same
+// category, so a newly added instance of an already-present category is
+// still reported, and identical pre-existing lines are suppressed.
+func (i pathTraversalInstance) ptFingerprint() string {
+	return i.category + "|" + i.lineText
 }
 
 // checkPathTraversal detects path traversal vulnerabilities introduced by
@@ -67,12 +77,12 @@ func checkPathTraversal(filePath, oldContent, newContent string) []string {
 func ptDeltaWarnings(oldIssues, newIssues []pathTraversalInstance) []string {
 	oldSet := make(map[string]bool, len(oldIssues))
 	for _, oi := range oldIssues {
-		oldSet[oi.category+"|"+oi.detail] = true
+		oldSet[oi.ptFingerprint()] = true
 	}
 	var warnings []string
 	reported := 0
 	for _, ni := range newIssues {
-		key := ni.category + "|" + ni.detail
+		key := ni.ptFingerprint()
 		if oldSet[key] {
 			continue
 		}
@@ -116,6 +126,7 @@ func findPathTraversalGo(content string) []pathTraversalInstance {
 		issue := ptScanGoLine(line)
 		if issue != nil {
 			issue.line = i + 1
+			issue.lineText = strings.TrimSpace(line)
 			issues = append(issues, *issue)
 		}
 	}
@@ -168,6 +179,12 @@ var ptJSFileFuncs = []string{
 	"writeFile", "readdir", "stat", "access",
 }
 
+// ptJSFileFuncRe matches any ptJSFileFuncs entry as a function call with a
+// word boundary, so substrings like `req.query.status` (contains "stat") or
+// `accessibility` do not trigger false positives.
+var ptJSFileFuncRe = regexp.MustCompile(
+	`(?i)\b(` + strings.Join(ptJSFileFuncs, "|") + `)\s*\(`)
+
 var ptJSPathFuncs = []string{
 	"path.join", "path.resolve", "path.normalize",
 }
@@ -185,6 +202,7 @@ func findPathTraversalJS(content string) []pathTraversalInstance {
 		issue := ptScanJSLine(line)
 		if issue != nil {
 			issue.line = i + 1
+			issue.lineText = strings.TrimSpace(line)
 			issues = append(issues, *issue)
 		}
 	}
@@ -211,8 +229,9 @@ func ptScanJSLine(line string) *pathTraversalInstance {
 		}
 	}
 
-	// fs operation + concatenation + user input.
-	if ptHasAny(trimmed, ptJSFileFuncs) && ptHasAny(trimmed, ptJSUserInput) {
+	// fs operation + concatenation + user input. Word-boundary regex avoids
+	// false positives like `req.query.status` matching "stat".
+	if ptJSFileFuncRe.MatchString(trimmed) && ptHasAny(trimmed, ptJSUserInput) {
 		if strings.Contains(trimmed, "+") || strings.Contains(trimmed, "${") {
 			return &pathTraversalInstance{
 				category: "path traversal",
@@ -238,6 +257,7 @@ func findPathTraversalPython(content string) []pathTraversalInstance {
 		issue := ptScanPythonLine(line)
 		if issue != nil {
 			issue.line = i + 1
+			issue.lineText = strings.TrimSpace(line)
 			issues = append(issues, *issue)
 		}
 	}

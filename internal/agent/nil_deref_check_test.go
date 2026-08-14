@@ -192,6 +192,85 @@ func TestCheckNilDerefAfterError_NonGoFile(t *testing.T) {
 	}
 }
 
+// fix #238: `if err == nil` guard makes the dereference safe inside the body.
+func TestCheckNilDerefAfterError_ErrNilCheckSafe(t *testing.T) {
+	code := `package main
+
+type Result struct {
+	Field string
+}
+
+func process() (*Result, error) {
+	return &Result{}, nil
+}
+
+func use() {
+	v, err := process()
+	if err == nil {
+		_ = v.Field // safe: err verified nil in this branch
+	}
+}
+`
+	result := checkNilDerefAfterError("test.go", "", code)
+	if result != "" {
+		t.Fatalf("expected no warning for deref inside err==nil branch, got: %s", result)
+	}
+}
+
+// fix #238: deref inside `if err != nil` body is genuinely dangerous.
+func TestCheckNilDerefAfterError_DerefInsideErrNotNilBranch(t *testing.T) {
+	code := `package main
+
+type Result struct {
+	Field string
+}
+
+func process() (*Result, error) {
+	return nil, nil
+}
+
+func use() {
+	v, err := process()
+	if err != nil {
+		_ = v.Field // BUG: v is likely nil when err != nil
+	}
+}
+`
+	result := checkNilDerefAfterError("test.go", "", code)
+	if result == "" {
+		t.Fatal("expected warning for deref inside err!=nil branch")
+	}
+	if !strings.Contains(result, "'v'") {
+		t.Fatalf("expected warning about variable 'v', got: %s", result)
+	}
+}
+
+// fix #238: test files are skipped (doc already claimed this).
+func TestCheckNilDerefAfterError_SkipsTestFiles(t *testing.T) {
+	code := `package main
+
+import "fmt"
+
+type Result struct {
+	Field string
+}
+
+func process() (*Result, error) {
+	return nil, fmt.Errorf("fail")
+}
+
+func use() {
+	r, err := process()
+	fmt.Println(r.Field) // would be flagged in non-test code
+	_ = err
+}
+`
+	result := checkNilDerefAfterError("foo_test.go", "", code)
+	if result != "" {
+		t.Fatalf("expected empty for test file, got: %s", result)
+	}
+}
+
 func TestCheckNilDerefAfterError_EmptyContent(t *testing.T) {
 	result := checkNilDerefAfterError("test.go", "", "")
 	if result != "" {

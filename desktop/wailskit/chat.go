@@ -628,6 +628,7 @@ func (b *ChatBridge) cleanupEphemeralSession() {
 	ses := b.currentSes
 	ephemeral := b.sessionEphemeral
 	store := b.sessionStore
+	lock := b.sessionLock
 	b.mu.Unlock()
 
 	if ephemeral && ses != nil && store != nil {
@@ -638,12 +639,21 @@ func (b *ChatBridge) cleanupEphemeralSession() {
 			im.ClearSessionBindingsGlobal(ses.ID)
 		}
 	}
-	// Release lock.
-	if b.sessionLock != nil {
-		b.sessionLock.Release()
+	// Release the lock OUTSIDE b.mu: the agentruntime lock's Release may
+	// block, and b.mu must not be held across potentially blocking calls
+	// (lock-order discipline, #233).
+	if lock != nil {
+		lock.Release()
+	}
+	// Clear the fields under b.mu so concurrent locked readers (ensureSession,
+	// persistRunMessages) never observe a half-updated state. Only clear the
+	// lock if another goroutine has not already installed a new one.
+	b.mu.Lock()
+	if b.sessionLock == lock {
 		b.sessionLock = nil
 	}
 	b.sessionEphemeral = false
+	b.mu.Unlock()
 }
 
 func (b *ChatBridge) setSessionState(state agentruntime.SessionState) {
@@ -655,7 +665,14 @@ func (b *ChatBridge) setSessionState(state agentruntime.SessionState) {
 	b.metricEvents = nil
 	b.pendingDigests = nil
 	if b.currentSes != nil {
-		b.liveHistory = buildSessionHistoryFromMessages(b.currentSes.Messages)
+		// Merge tunnel-recorded user messages at rebuild time so they are
+		// visible in liveHistory too (#242) — previously the merge only ran
+		// in the empty-history fallback of CurrentSessionHistory, which was
+		// unreachable for any session with renderable messages.
+		b.liveHistory = mergeTunnelUserMessages(
+			buildSessionHistoryFromMessages(b.currentSes.Messages),
+			b.currentSes.TunnelEvents,
+		)
 	}
 	if b.tunnelHost != nil {
 		b.tunnelHost.ResetStreamState()
@@ -709,37 +726,45 @@ func (b *ChatBridge) LoadSession(id string) error {
 		b.sessionStore = store
 	}
 
-	// Release old session's lock + clean up ephemeral empty session.
-	// This mirrors ClearCurrentSession but without resetting currentSes
-	// to nil first (we want a smooth transition).
+	// Busy guard (#233): refuse to switch sessions while an agent run is in
+	// progress — the running agent holds references to the old session state
+	// and its messages would be persisted into a session we are abandoning.
 	b.mu.Lock()
-	oldEphemeral := b.sessionEphemeral
-	oldSes := b.currentSes
-	store := b.sessionStore
+	busy := b.cancel != nil
 	b.mu.Unlock()
-
-	if oldEphemeral && oldSes != nil && store != nil {
-		_ = agentruntime.DeleteSessionIfEmpty(store, oldSes)
-	}
-	b.sessionEphemeral = false
-	if b.sessionLock != nil {
-		b.sessionLock.Release()
-		b.sessionLock = nil
+	if busy {
+		return fmt.Errorf("session switch while agent is running")
 	}
 
-	// Acquire lock on the target session.
+	// Release old session's lock + clean up the ephemeral empty session.
+	// cleanupEphemeralSession has the full semantics (logging + orphaned IM
+	// binding cleanup) that the previous inline block lacked (#241).
+	b.cleanupEphemeralSession()
+
+	// Acquire lock on the target session (outside b.mu: disk IO).
 	storeDir, _ := session.DefaultDir()
 	lock, lockErr := session.TryAcquireSessionLock(storeDir, id)
 	if lockErr != nil || lock == nil || !lock.Acquired() {
 		return fmt.Errorf("session is locked by another instance: %s", id)
 	}
+	b.mu.Lock()
 	b.sessionLock = lock
+	store := b.sessionStore
+	b.mu.Unlock()
 
-	state, err := agentruntime.LoadSession(b.sessionStore, id)
+	state, err := agentruntime.LoadSession(store, id)
 	if err != nil {
-		// Release the lock since we failed to load.
-		b.sessionLock.Release()
-		b.sessionLock = nil
+		// Release the lock since we failed to load. Release outside b.mu
+		// (may block); only clear the field if it is still ours (#233).
+		b.mu.Lock()
+		ours := b.sessionLock == lock
+		if ours {
+			b.sessionLock = nil
+		}
+		b.mu.Unlock()
+		if ours {
+			lock.Release()
+		}
 		return fmt.Errorf("load session: %w", err)
 	}
 	b.ResetAgent()
@@ -1844,11 +1869,30 @@ func (b *ChatBridge) CurrentSessionHistory() []SessionMessage {
 	if b.currentSes == nil {
 		return nil
 	}
-	msgs := buildSessionHistoryFromMessages(b.currentSes.Messages)
-	// Merge tunnel_event user_message entries — these are messages sent from
-	// mobile/tunnel that were recorded as tunnel events, not session messages.
-	// Without this, they'd be invisible when loading a saved session.
-	for _, te := range b.currentSes.TunnelEvents {
+	msgs := mergeTunnelUserMessages(
+		buildSessionHistoryFromMessages(b.currentSes.Messages),
+		b.currentSes.TunnelEvents,
+	)
+	return msgs
+}
+
+// mergeTunnelUserMessages appends tunnel-recorded user messages that are not
+// already present in the rendered history. Tunnel events record messages sent
+// from mobile/tunnel; without merging they are invisible when a saved session
+// is reloaded (#242). Dedup is by exact (whitespace-trimmed) content match
+// against existing user messages — conservative: prefer a rare duplicate
+// over losing a message.
+func mergeTunnelUserMessages(msgs []SessionMessage, tunnelEvents []session.TunnelEvent) []SessionMessage {
+	seen := make(map[string]struct{}, len(msgs))
+	for _, m := range msgs {
+		if m.Role != "user" {
+			continue
+		}
+		if key := strings.TrimSpace(m.Content); key != "" {
+			seen[key] = struct{}{}
+		}
+	}
+	for _, te := range tunnelEvents {
 		if te.Type != "user_message" {
 			continue
 		}
@@ -1859,10 +1903,18 @@ func (b *ChatBridge) CurrentSessionHistory() []SessionMessage {
 		if json.Unmarshal(te.Data, &data) != nil || data.Text == "" {
 			continue
 		}
-		msgs = append(msgs, SessionMessage{
+		if _, dup := seen[strings.TrimSpace(data.Text)]; dup {
+			continue
+		}
+		msg := SessionMessage{
+			ID:      data.MessageID,
 			Role:    "user",
 			Content: data.Text,
-		})
+		}
+		if key := strings.TrimSpace(data.Text); key != "" {
+			seen[key] = struct{}{}
+		}
+		msgs = append(msgs, msg)
 	}
 	return msgs
 }

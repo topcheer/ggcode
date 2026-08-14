@@ -162,8 +162,27 @@ func findInsecurePatternsGo(content string) []insecurePatternInstance {
 	fset := token.NewFileSet()
 	tree, err := parser.ParseFile(fset, "", content, 0)
 	if err == nil {
+		// Build import alias -> package path map (fix #243). The previous
+		// text matching (`strings.Contains(fnName, "rand.Read")` plus a
+		// `!strings.Contains(fnName, "crypto")` exclusion) misclassified
+		// aliased imports: `import crand "crypto/rand"` yields the selector
+		// "crand.Read", which contains "rand.Read" but not "crypto". We now
+		// resolve the selector's package identifier against the file's
+		// imports and match exact package paths. When the import cannot be
+		// resolved we skip — prefer a false negative over flagging secure
+		// code in a security review warning.
+		imports := make(map[string]string)
+		for _, imp := range tree.Imports {
+			path := strings.Trim(imp.Path.Value, `"`)
+			name := path[strings.LastIndex(path, "/")+1:]
+			if imp.Name != nil {
+				name = imp.Name.Name
+			}
+			imports[name] = path
+		}
+
 		ast.Inspect(tree, func(n ast.Node) bool {
-			// Detect math/rand.Read or rand.Intn assigned to token/key/secret/password variables.
+			// Detect math/rand calls assigned to token/key/secret/password variables.
 			assign, ok := n.(*ast.AssignStmt)
 			if !ok {
 				return true
@@ -173,18 +192,23 @@ func findInsecurePatternsGo(content string) []insecurePatternInstance {
 				if !ok {
 					continue
 				}
-				fnName := exprToString(call.Fun)
-				// math/rand.Read, rand.Read, rand.Intn, rand.Int63, rand.Float64
-				isMathRand := false
-				if strings.Contains(fnName, "rand.Read") || strings.Contains(fnName, "rand.Intn") ||
-					strings.Contains(fnName, "rand.Int63") || strings.Contains(fnName, "rand.Float64") ||
-					strings.Contains(fnName, "rand.Int31") {
-					// Exclude crypto/rand (handled by package prefix check below)
-					if !strings.Contains(fnName, "crypto") {
-						isMathRand = true
-					}
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok {
+					continue
 				}
-				if !isMathRand {
+				// math/rand functions of interest: Read, Intn, Int63, Int31, Float64.
+				switch sel.Sel.Name {
+				case "Read", "Intn", "Int63", "Int31", "Float64":
+				default:
+					continue
+				}
+				pkgIdent, ok := sel.X.(*ast.Ident)
+				if !ok {
+					continue
+				}
+				pkgPath, known := imports[pkgIdent.Name]
+				if !known || pkgPath != "math/rand" {
+					// Unresolvable import, or crypto/rand (secure): skip.
 					continue
 				}
 

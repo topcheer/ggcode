@@ -34,7 +34,10 @@ package agent
 // False positive mitigation:
 //   - Only tracks variables from multi-return assignments where error is the
 //     last return value (detected via naming heuristic)
-//   - Clears the nil-risk flag when an `if err != nil` block is encountered
+//   - Error checks apply scoped semantics (fix #238): inside `if err == nil`
+//     bodies the risk is cleared, inside `if err != nil` bodies it remains;
+//     a terminating `if err != nil` body (return/panic) clears the risk for
+//     the code that follows the guard
 //   - Only flags dereference via selector (x.Field), index (x[idx]), star (*x),
 //     or method call (x.Method()) - not simple variable reads
 //   - Skips test files (panics in tests are less critical)
@@ -58,6 +61,10 @@ type nilDerefInstance struct {
 // in Go code. Delta-aware: only flags NEW instances introduced by this edit.
 func checkNilDerefAfterError(filePath, oldContent, newContent string) string {
 	if filepath.Ext(filePath) != ".go" || strings.TrimSpace(newContent) == "" {
+		return ""
+	}
+	// Skip test files (fix #238): panics in tests are less critical.
+	if isTestFile(filePath) {
 		return ""
 	}
 
@@ -130,32 +137,45 @@ type nilRiskEntry struct {
 
 // findNilDerefsInFunc analyzes a function body for nil-deref-after-error patterns.
 // It processes statements in source order, tracking which variables are nil-risk
-// (from multi-return assignments) and clearing them when error checks appear.
+// (from multi-return assignments). Error-check `if` statements are handled with
+// scope-transfer semantics (fix #238): inside an `if err == nil` body the risk
+// is treated as cleared (the safe idiom `v, err := f(); if err == nil { v.Field }`
+// must not warn), while inside an `if err != nil` body the risk remains (a
+// dereference there is genuinely dangerous). After the statement the prior
+// risk state is restored — except when the err != nil body terminates
+// (returns or panics), in which case code past the guard implies err == nil.
 func findNilDerefsInFunc(fset *token.FileSet, body *ast.BlockStmt) []nilDerefInstance {
 	// nilRisk maps variable name to its risk entry (position + associated error var).
 	nilRisk := make(map[string]nilRiskEntry)
 	var instances []nilDerefInstance
 
-	ast.Inspect(body, func(n ast.Node) bool {
-		// Track assignments: v, err := f() or v, err := f()
-		if assign, ok := n.(*ast.AssignStmt); ok {
-			processAssignment(assign, nilRisk)
+	var walk func(n ast.Node)
+	walk = func(n ast.Node) {
+		if n == nil {
+			return
+		}
+		ast.Inspect(n, func(node ast.Node) bool {
+			// Error-check if statements get scoped handling (#238).
+			if is, ok := node.(*ast.IfStmt); ok {
+				walkErrorCheckIf(is, nilRisk, walk)
+				return false // handled; do not descend generically
+			}
+
+			// Track assignments: v, err := f()
+			if assign, ok := node.(*ast.AssignStmt); ok {
+				processAssignment(assign, nilRisk)
+				return true
+			}
+
+			// Detect dereferences of nil-risk variables
+			if inst := detectNilDeref(fset, node, nilRisk); inst != nil {
+				instances = append(instances, inst...)
+			}
+
 			return true
-		}
-
-		// Track if err != nil blocks - clear nil-risk variables
-		if is, ok := n.(*ast.IfStmt); ok {
-			clearNilRiskOnErrorCheck(is, nilRisk)
-			return true
-		}
-
-		// Detect dereferences of nil-risk variables
-		if inst := detectNilDeref(fset, n, nilRisk); inst != nil {
-			instances = append(instances, inst...)
-		}
-
-		return true
-	})
+		})
+	}
+	walk(body)
 
 	return instances
 }
@@ -189,37 +209,82 @@ func processAssignment(assign *ast.AssignStmt, nilRisk map[string]nilRiskEntry) 
 	}
 }
 
-// clearNilRiskOnErrorCheck checks if an IfStmt is an error check (if err != nil)
-// and if so, clears nil-risk variables associated with that specific error
-// variable. Other error variables' nil-risk entries are preserved.
-func clearNilRiskOnErrorCheck(is *ast.IfStmt, nilRisk map[string]nilRiskEntry) {
-	// Check for: if err != nil { ... }
+// walkErrorCheckIf handles an if statement whose condition compares an error
+// variable against nil, applying the scope-transfer semantics of fix #238.
+// Non-error-check if statements are walked with unchanged risk state.
+func walkErrorCheckIf(is *ast.IfStmt, nilRisk map[string]nilRiskEntry, walk func(ast.Node)) {
 	bin, ok := is.Cond.(*ast.BinaryExpr)
-	if !ok {
-		return
-	}
-	// Must be !=
-	if bin.Op != token.NEQ {
-		return
-	}
-
-	// Extract the error variable name being checked.
-	checkedErrName := ""
-	if ident, ok := bin.X.(*ast.Ident); ok && isNilIdent(bin.Y) && looksLikeError(ident.Name) {
-		checkedErrName = ident.Name
-	} else if ident, ok := bin.Y.(*ast.Ident); ok && isNilIdent(bin.X) && looksLikeError(ident.Name) {
-		checkedErrName = ident.Name
-	}
-	if checkedErrName == "" {
+	if !ok || !isErrorNilCheck(bin) {
+		walk(is.Body)
+		walk(is.Else)
 		return
 	}
 
-	// Only clear nil-risk entries associated with this specific error variable.
-	for k, entry := range nilRisk {
-		if entry.errName == checkedErrName {
+	// Extract the error variable name being checked (either operand side).
+	errName := ""
+	if ident, ok := bin.X.(*ast.Ident); ok && isErrIdent(ident) {
+		errName = ident.Name
+	} else if ident, ok := bin.Y.(*ast.Ident); ok && isErrIdent(ident) {
+		errName = ident.Name
+	}
+
+	// Snapshot nil-risk entries linked to this specific error variable.
+	saved := make(map[string]nilRiskEntry)
+	for k, e := range nilRisk {
+		if e.errName == errName {
+			saved[k] = e
+		}
+	}
+	clearSaved := func() {
+		for k := range saved {
 			delete(nilRisk, k)
 		}
 	}
+	restoreSaved := func() {
+		for k, v := range saved {
+			nilRisk[k] = v
+		}
+	}
+
+	switch bin.Op {
+	case token.EQL: // if err == nil { ... } — value is safe inside the body
+		clearSaved()
+		walk(is.Body)
+		restoreSaved()
+		if is.Else != nil { // else implies err != nil: risk applies
+			walk(is.Else)
+		}
+	case token.NEQ: // if err != nil { ... } — value is still at risk inside
+		walk(is.Body)
+		if ifBodyTerminates(is.Body) {
+			clearSaved() // guard exits: code past the if implies err == nil
+		}
+		if is.Else != nil { // else implies err == nil: safe
+			clearSaved()
+			walk(is.Else)
+			restoreSaved()
+		}
+	}
+}
+
+// ifBodyTerminates reports whether an if-body always exits (return or panic),
+// meaning control flow past the if statement implies the condition was false.
+func ifBodyTerminates(body *ast.BlockStmt) bool {
+	if body == nil || len(body.List) == 0 {
+		return false
+	}
+	last := body.List[len(body.List)-1]
+	switch st := last.(type) {
+	case *ast.ReturnStmt:
+		return true
+	case *ast.ExprStmt:
+		if call, ok := st.X.(*ast.CallExpr); ok {
+			if ident, ok := call.Fun.(*ast.Ident); ok && ident.Name == "panic" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // isErrorNilCheck returns true if the binary expression matches err != nil.

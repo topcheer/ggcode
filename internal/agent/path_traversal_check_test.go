@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -214,6 +215,81 @@ func d(w http.ResponseWriter, r *http.Request) {
 	warnings := checkPathTraversal("/tmp/main.go", old, new)
 	if len(warnings) > 3 {
 		t.Fatalf("expected at most 3 warnings, got %d: %v", len(warnings), warnings)
+	}
+}
+
+func TestCheckPathTraversal_DeltaNewSameCategoryReported(t *testing.T) {
+	// Old content already has one filepath.Join vulnerability. The edit adds
+	// ANOTHER filepath.Join instance (same category + detail) -- it must NOT be
+	// suppressed by the delta, since only identical line text is suppressed.
+	old := `package main
+import (
+	"net/http"
+	"path/filepath"
+)
+func handler(w http.ResponseWriter, r *http.Request) {
+	p := filepath.Join("/data", r.URL.Query().Get("file"))
+	_ = p
+}`
+	new := old + `
+func handler2(w http.ResponseWriter, r *http.Request) {
+	q := filepath.Join("/data", r.URL.Query().Get("name"))
+	_ = q
+}`
+	warnings := checkPathTraversal("/tmp/main.go", old, new)
+	if len(warnings) == 0 {
+		t.Fatal("expected warning for newly added same-category instance")
+	}
+}
+
+func TestCheckPathTraversal_DeltaIdenticalLineSuppressed(t *testing.T) {
+	// Two handlers with the IDENTICAL vulnerable line: only one is new
+	// relative to old content.
+	old := `package main
+import (
+	"net/http"
+	"path/filepath"
+)
+func handler(w http.ResponseWriter, r *http.Request) {
+	p := filepath.Join("/data", r.URL.Query().Get("file"))
+	_ = p
+}`
+	new := old + `
+func handler2(w http.ResponseWriter, r *http.Request) {
+	p := filepath.Join("/data", r.URL.Query().Get("file"))
+	_ = p
+}`
+	warnings := checkPathTraversal("/tmp/main.go", old, new)
+	if len(warnings) != 0 {
+		t.Fatalf("expected identical pre-existing line to be suppressed, got: %v", warnings)
+	}
+}
+
+func TestCheckPathTraversal_JSStatusQueryNoFalsePositive(t *testing.T) {
+	// `req.query.status` contains "stat" -- must NOT match the stat() fs call
+	// thanks to word-boundary matching.
+	old := ""
+	new := "router.get('/x', (req, res) => {\n" +
+		"\tres.send('ok: ' + req.query.status);\n" +
+		"});"
+	warnings := checkPathTraversal("/tmp/app.js", old, new)
+	for _, w := range warnings {
+		if strings.Contains(w, "file operation") {
+			t.Errorf("false positive: req.query.status must not match stat(), got: %s", w)
+		}
+	}
+}
+
+func TestCheckPathTraversal_JSStatCallStillDetected(t *testing.T) {
+	// Real stat() call with concatenated user input is still detected.
+	old := ""
+	new := "const fs = require('fs');\n" +
+		"function check(req, res) {\n" +
+		"\tfs.stat('/data/' + req.query.file);\n" +
+		"}"
+	warnings := checkPathTraversal("/tmp/app.js", old, new)
+	if len(warnings) == 0 {
+		t.Fatal("expected warning for fs.stat with concatenated user input")
 	}
 }
 

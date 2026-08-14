@@ -101,6 +101,67 @@ func TestCheckInsecurePatterns_GoMathRandForToken(t *testing.T) {
 	}
 }
 
+// fix #243: aliased crypto/rand import must not be misclassified as math/rand.
+func TestCheckInsecurePatterns_CryptoRandAliasNotFlagged(t *testing.T) {
+	old := "package main\n"
+	new := "package main\n" +
+		"import crand \"crypto/rand\"\n" +
+		"func genToken() ([]byte, error) {\n" +
+		"\ttoken := make([]byte, 16)\n" +
+		"\t_, err := crand.Read(token)\n" +
+		"\treturn token, err\n" +
+		"}\n"
+
+	warnings := checkInsecurePatterns("test.go", old, new)
+	for _, w := range warnings {
+		if strings.Contains(w, "weak crypto") {
+			t.Fatalf("expected no weak crypto warning for aliased crypto/rand, got: %s", w)
+		}
+	}
+}
+
+// fix #243: plain crypto/rand import is also secure and must not be flagged.
+func TestCheckInsecurePatterns_CryptoRandDefaultImportNotFlagged(t *testing.T) {
+	old := "package main\n"
+	new := "package main\n" +
+		"import \"crypto/rand\"\n" +
+		"func genKey() ([]byte, error) {\n" +
+		"\tkey := make([]byte, 32)\n" +
+		"\t_, err := rand.Read(key)\n" +
+		"\treturn key, err\n" +
+		"}\n"
+
+	warnings := checkInsecurePatterns("test.go", old, new)
+	for _, w := range warnings {
+		if strings.Contains(w, "weak crypto") {
+			t.Fatalf("expected no weak crypto warning for crypto/rand, got: %s", w)
+		}
+	}
+}
+
+// fix #243: aliased math/rand must still be flagged (regression guard).
+func TestCheckInsecurePatterns_MathRandAliasStillFlagged(t *testing.T) {
+	old := "package main\n"
+	new := "package main\n" +
+		"import mrand \"math/rand\"\n" +
+		"func gen() int {\n" +
+		"\ttoken := mrand.Intn(999999)\n" +
+		"\treturn token\n" +
+		"}\n"
+
+	warnings := checkInsecurePatterns("test.go", old, new)
+	found := false
+	for _, w := range warnings {
+		if strings.Contains(w, "weak crypto") && strings.Contains(w, "token") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected weak crypto warning for aliased math/rand with token, got: %v", warnings)
+	}
+}
+
 func TestCheckInsecurePatterns_JSRejectUnauthorized(t *testing.T) {
 	old := "// old code\n"
 	new := "const agent = new https.Agent({\n" +

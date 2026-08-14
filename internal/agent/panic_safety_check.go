@@ -166,6 +166,12 @@ func findBarePanics(src string) []panicInstance {
 
 // findPanicsInBody walks a function body and returns all bare panic() calls
 // that are NOT guarded by a recover() in the same function scope.
+//
+// Frame semantics (fix #239): recover() only takes effect in the function
+// frame where it is deferred. Nested FuncLits (closures, goroutine bodies)
+// constitute separate frames and are analyzed recursively — a recover inside
+// a closure must not silence panics in this frame, and this frame's recover
+// must not silence panics inside closures/goroutines.
 func findPanicsInBody(body *ast.BlockStmt, fset *token.FileSet) []panicInstance {
 	if body == nil {
 		return nil
@@ -175,7 +181,13 @@ func findPanicsInBody(body *ast.BlockStmt, fset *token.FileSet) []panicInstance 
 	// Only recover() directly inside a deferred function catches panics;
 	// a bare recover() outside defer is a no-op.
 	hasRecover := false
+	var nested []panicInstance // panics found in separate (closure) frames
 	ast.Inspect(body, func(n ast.Node) bool {
+		// Separate function frame: analyze independently, do not descend.
+		if fl, ok := n.(*ast.FuncLit); ok {
+			nested = append(nested, findPanicsInBody(fl.Body, fset)...)
+			return false
+		}
 		deferStmt, ok := n.(*ast.DeferStmt)
 		if !ok {
 			return true
@@ -194,12 +206,18 @@ func findPanicsInBody(body *ast.BlockStmt, fset *token.FileSet) []panicInstance 
 	})
 
 	if hasRecover {
-		return nil // function handles its own panics
+		// This frame handles its own panics; closure frames were analyzed
+		// independently above and may still contain unguarded panics.
+		return nested
 	}
 
 	var instances []panicInstance
 
 	ast.Inspect(body, func(n ast.Node) bool {
+		// Separate frame — already analyzed during the recover pass above.
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
 			return true
@@ -227,5 +245,5 @@ func findPanicsInBody(body *ast.BlockStmt, fset *token.FileSet) []panicInstance 
 		return true
 	})
 
-	return instances
+	return append(instances, nested...)
 }

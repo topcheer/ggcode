@@ -197,4 +197,46 @@ func TestCheckTagBalance_SkipsLarge(t *testing.T) {
 	}
 }
 
+// fix #236: void elements are an HTML-family concept. XML files (.xml/.svg)
+// must pair every element strictly — RSS <link> is a container, not a void.
+func TestCheckTagBalance_XMLStrictPairing(t *testing.T) {
+	content := `<?xml version="1.0"?>
+<rss version="2.0">
+<channel>
+<title>Feed</title>
+<link>https://example.com</link>
+<description>example feed</description>
+</channel>
+</rss>`
+	if got := checkTagBalance("feed.xml", content); got != "" {
+		t.Errorf("expected no warning for balanced RSS feed (link is a container in XML), got: %s", got)
+	}
+}
+
+func TestCheckTagBalance_SVGSourceElementPaired(t *testing.T) {
+	content := `<svg xmlns="http://www.w3.org/2000/svg">
+<source>media</source>
+<meta>meta</meta>
+</svg>`
+	if got := checkTagBalance("icon.svg", content); got != "" {
+		t.Errorf("expected no warning for paired <source>/<meta> in SVG, got: %s", got)
+	}
+}
+
+func TestCheckTagBalance_HTMLVoidElementsStillSkipped(t *testing.T) {
+	content := "<html><head><meta charset=\"utf-8\"><link rel=\"stylesheet\" href=\"a.css\"></head>" +
+		"<body><br><img src=\"a.png\"><input type=\"text\"></body></html>"
+	if got := checkTagBalance("page.html", content); got != "" {
+		t.Errorf("expected no warning for HTML void elements, got: %s", got)
+	}
+}
+
+func TestCheckTagBalance_ClosingTagInsideAttributeValue(t *testing.T) {
+	// fix #236: a </div> inside a quoted attribute value is not a real tag.
+	content := `<div data-template="</div>"><span>ok</span></div>`
+	if got := checkTagBalance("page.html", content); got != "" {
+		t.Errorf("expected no warning for closing tag inside attribute value, got: %s", got)
+	}
+}
+
 // (duplicate contains function removed - using strings.Contains instead)

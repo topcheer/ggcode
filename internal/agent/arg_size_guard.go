@@ -51,12 +51,14 @@ const (
 
 // argSizeFields maps tool names to fields that are commonly oversized.
 var argSizeFields = map[string][]string{
-	"edit_file":       {"old_text", "new_text"},
-	"multi_edit_file": {"old_text", "new_text"},
-	"multi_file_edit": {}, // nested structure, handled separately
-	"write_file":      {"content"},
-	"grep":            {"pattern"},
-	"search_files":    {"pattern"},
+	"edit_file":    {"old_text", "new_text"},
+	"write_file":   {"content"},
+	"grep":         {"pattern"},
+	"search_files": {"pattern"},
+	// multi_edit_file and multi_file_edit have nested edits[] structures,
+	// handled separately below.
+	"multi_edit_file": {},
+	"multi_file_edit": {},
 }
 
 // checkArgSizeGuard inspects tool arguments for excessive size and returns
@@ -116,20 +118,9 @@ func analyzeArgSize(toolName string, args []byte) string {
 			}
 
 			switch toolName {
-			case "edit_file", "multi_edit_file":
+			case "edit_file":
 				if field == "old_text" || field == "new_text" {
-					if fieldLen >= argSizeSevereField {
-						hints = append(hints, fmt.Sprintf(
-							"%s is %s — use concise line-number anchors from read_file instead of pasting large code blocks. "+
-								"Copy only the specific lines you need to change (e.g., 5-10 lines around the edit target).",
-							field, formatArgBytes(fieldLen),
-						))
-					} else {
-						hints = append(hints, fmt.Sprintf(
-							"%s is %s — consider using shorter line-number anchors from read_file to reduce context usage",
-							field, formatArgBytes(fieldLen),
-						))
-					}
+					hints = append(hints, argSizeEditFieldHint(field, fieldLen)...)
 				}
 			case "write_file":
 				hints = append(hints, fmt.Sprintf(
@@ -145,9 +136,17 @@ func analyzeArgSize(toolName string, args []byte) string {
 		}
 	}
 
-	// Handle multi_file_edit with nested edits array.
+	// Handle multi_file_edit with nested files[].edits[] structure.
 	if toolName == "multi_file_edit" {
 		if editsHint := analyzeMultiFileEditSize(argMap); editsHint != "" {
+			hints = append(hints, editsHint)
+		}
+	}
+
+	// Handle multi_edit_file with nested edits[] array: apply the same
+	// per-field logic as edit_file to each edit's old_text/new_text.
+	if toolName == "multi_edit_file" {
+		if editsHint := analyzeMultiEditFileSize(argMap); editsHint != "" {
 			hints = append(hints, editsHint)
 		}
 	}
@@ -208,6 +207,56 @@ func analyzeMultiFileEditSize(argMap map[string]json.RawMessage) string {
 		"%s in a file edit is %s — use concise line-number anchors from read_file instead of pasting large code blocks",
 		maxFieldName, formatArgBytes(maxFieldLen),
 	)
+}
+
+// analyzeMultiEditFileSize checks the edits[] structure of multi_edit_file
+// for oversized old_text or new_text values, applying the same per-field
+// thresholds as edit_file (argSizeWarnField / argSizeSevereField).
+func analyzeMultiEditFileSize(argMap map[string]json.RawMessage) string {
+	editsRaw, ok := argMap["edits"]
+	if !ok {
+		return ""
+	}
+
+	var edits []struct {
+		OldText string `json:"old_text"`
+		NewText string `json:"new_text"`
+	}
+	if err := json.Unmarshal(editsRaw, &edits); err != nil {
+		return ""
+	}
+
+	maxWarn := ""
+	var maxWarnLen int
+	for _, e := range edits {
+		for _, f := range []struct {
+			name string
+			val  string
+		}{{"old_text", e.OldText}, {"new_text", e.NewText}} {
+			if len(f.val) < argSizeWarnField || len(f.val) <= maxWarnLen {
+				continue
+			}
+			maxWarnLen = len(f.val)
+			maxWarn = strings.Join(argSizeEditFieldHint(f.name, len(f.val)), "")
+		}
+	}
+	return maxWarn
+}
+
+// argSizeEditFieldHint returns the hint message(s) for an oversized edit
+// text field, mirroring edit_file's warn/severe tiers.
+func argSizeEditFieldHint(field string, fieldLen int) []string {
+	if fieldLen >= argSizeSevereField {
+		return []string{fmt.Sprintf(
+			"%s is %s — use concise line-number anchors from read_file instead of pasting large code blocks. "+
+				"Copy only the specific lines you need to change (e.g., 5-10 lines around the edit target).",
+			field, formatArgBytes(fieldLen),
+		)}
+	}
+	return []string{fmt.Sprintf(
+		"%s is %s — consider using shorter line-number anchors from read_file to reduce context usage",
+		field, formatArgBytes(fieldLen),
+	)}
 }
 
 func formatArgBytes(n int) string {

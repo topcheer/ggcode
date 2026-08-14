@@ -214,6 +214,161 @@ func TestRnpExprName_NonIdent(t *testing.T) {
 	}
 }
 
+func TestCheckRangeNilPtr_NilGuardEarlyReturn(t *testing.T) {
+	src := `package main
+
+type Item struct{ Name string }
+
+func process(items *[]Item) {
+	if items == nil {
+		return
+	}
+	for _, item := range *items {
+		_ = item
+	}
+}
+`
+	w := checkRangeNilPtr("test.go", "", src)
+	if w != "" {
+		t.Errorf("expected no warning for nil-guarded range, got: %s", w)
+	}
+}
+
+func TestCheckRangeNilPtr_NilGuardWrappedBlock(t *testing.T) {
+	src := `package main
+
+type Item struct{ Name string }
+
+func process(items *[]Item) {
+	if items != nil {
+		for _, item := range *items {
+			_ = item
+		}
+	}
+}
+`
+	w := checkRangeNilPtr("test.go", "", src)
+	if w != "" {
+		t.Errorf("expected no warning for range inside if x != nil block, got: %s", w)
+	}
+}
+
+func TestCheckRangeNilPtr_NilGuardReversedOrder(t *testing.T) {
+	// `if nil == items` (reversed operand order) also counts as a guard.
+	src := `package main
+
+func process(items *[]int) {
+	if nil == items {
+		return
+	}
+	for _, v := range *items {
+		_ = v
+	}
+}
+`
+	w := checkRangeNilPtr("test.go", "", src)
+	if w != "" {
+		t.Errorf("expected no warning for reversed nil guard, got: %s", w)
+	}
+}
+
+func TestCheckRangeNilPtr_GuardDifferentVarStillWarns(t *testing.T) {
+	// A guard on a different variable does not protect the range.
+	src := `package main
+
+func process(a *[]int, b *[]int) {
+	if a == nil {
+		return
+	}
+	for _, v := range *b {
+		_ = v
+	}
+}
+`
+	w := checkRangeNilPtr("test.go", "", src)
+	if w == "" {
+		t.Fatal("expected warning when guard is on a different variable")
+	}
+}
+
+func TestCheckRangeNilPtr_NilCheckAfterRangeStillWarns(t *testing.T) {
+	// A nil check appearing AFTER the range statement does not guard it.
+	src := `package main
+
+func process(items *[]int) {
+	for _, v := range *items {
+		_ = v
+	}
+	if items == nil {
+		return
+	}
+}
+`
+	w := checkRangeNilPtr("test.go", "", src)
+	if w == "" {
+		t.Fatal("expected warning when nil check comes after the range")
+	}
+}
+
+func TestCheckRangeNilPtr_EqNilBlockWrappingStillWarns(t *testing.T) {
+	// Range inside `if items == nil` block is NOT guarded (inverted logic).
+	src := `package main
+
+func process(items *[]int) {
+	if items == nil {
+		for _, v := range *items {
+			_ = v
+		}
+	}
+}
+`
+	w := checkRangeNilPtr("test.go", "", src)
+	if w == "" {
+		t.Fatal("expected warning for range inside if x == nil block")
+	}
+}
+
+func TestCheckRangeNilPtr_DeltaSuppressesPreexisting(t *testing.T) {
+	// The identical unguarded range already exists in old content -- no warning.
+	src := `package main
+
+func process(items *[]int) {
+	for _, v := range *items {
+		_ = v
+	}
+}
+`
+	w := checkRangeNilPtr("test.go", src, src)
+	if w != "" {
+		t.Fatalf("expected no warning for pre-existing unguarded range, got: %s", w)
+	}
+}
+
+func TestCheckRangeNilPtr_DeltaNewInstanceReported(t *testing.T) {
+	old := `package main
+
+func process(items *[]int) {
+	for _, v := range *items {
+		_ = v
+	}
+}
+`
+	// A new unguarded range on a different variable is introduced.
+	newContent := old[:len(old)-2] + `
+	for _, v := range *other {
+		_ = v
+	}
+}
+`
+	w := checkRangeNilPtr("test.go", old, newContent)
+	if w == "" {
+		t.Fatal("expected warning for newly introduced unguarded range")
+	}
+	if !strings.Contains(w, "other") {
+		t.Errorf("warning should mention 'other', got: %s", w)
+	}
+}
+
 func TestRnpFormatPos(t *testing.T) {
 	pos := token.Position{Filename: "file.go", Line: 42}
 	result := rnpFormatPos(pos)

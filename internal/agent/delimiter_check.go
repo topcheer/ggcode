@@ -94,6 +94,7 @@ type commentStyle struct {
 	blockOpen    string   // block comment open, e.g. "/*"
 	blockClose   string   // block comment close, e.g. "*/"
 	tripleQuotes bool     // Python-style """ or ''' multi-line strings
+	rust         bool     // Rust-specific handling: lifetimes and r#"..."# raw strings
 }
 
 // getCommentStyle returns the comment and string syntax for a given file type.
@@ -108,6 +109,13 @@ func getCommentStyle(filePath string) commentStyle {
 	case ".rb":
 		return commentStyle{
 			lineComments: []string{"#"},
+		}
+	case ".rs":
+		return commentStyle{
+			lineComments: []string{"//"},
+			blockOpen:    "/*",
+			blockClose:   "*/",
+			rust:         true,
 		}
 	case ".yaml", ".yml":
 		return commentStyle{
@@ -207,8 +215,28 @@ func scanDelimiters(content string, style commentStyle) string {
 				continue
 			}
 
+			// --- Rust raw strings r#"..."# (fix #237) ---
+			if style.rust && c == 'r' && i+2 < n && content[i+1] == '#' && content[i+2] == '"' {
+				if end := strings.Index(content[i+3:], `"#`); end >= 0 {
+					line += strings.Count(content[i:i+3+end+2], "\n")
+					i += 3 + end + 2
+					continue
+				}
+				return fmt.Sprintf("line %d: unterminated raw string literal - missing closing \"#", line)
+			}
+
 			// --- String starts ---
 			if c == '\'' {
+				// Rust lifetime vs char literal (fix #237): lifetimes ('a,
+				// 'static) never close and must not enter the string state;
+				// char literals ('x', '\n') close compactly and contain no
+				// brackets, so consuming them as code is safe.
+				if style.rust {
+					if next, handled := rustSingleQuoteSpan(content, i); handled {
+						i = next
+						continue
+					}
+				}
 				state = dsStringSingle
 				i++
 				continue
@@ -357,6 +385,60 @@ func unclosedStringLine(content string, pos int) int {
 		}
 	}
 	return line
+}
+
+// rustSingleQuoteSpan disambiguates Rust constructs beginning with an
+// apostrophe (fix #237):
+//
+//   - char literals like 'x' or '\n' close compactly right after one
+//     (possibly escaped) character; they contain no brackets, so we consume
+//     them here as plain code.
+//   - lifetimes like 'a or 'static are followed by identifier characters
+//     and never have a closing apostrophe in the same word; the apostrophe
+//     plus identifier is consumed so it does not enter the string state
+//     (which previously caused a 100% false "unterminated string" rate on
+//     any .rs file using lifetimes).
+//
+// handled=false means the caller should fall back to normal string-state
+// scanning (e.g. 'abc' — not valid Rust, but treated as a quoted string).
+func rustSingleQuoteSpan(content string, i int) (next int, handled bool) {
+	n := len(content)
+	j := i + 1
+	if j >= n {
+		return 0, false
+	}
+	if content[j] == '\\' {
+		// Escaped char literal: '\n', '\t', '\u{1F600}'...
+		k := j + 1 // past the backslash, at the escape body
+		if k < n && content[k] == 'u' && k+1 < n && content[k+1] == '{' {
+			for k < n && content[k] != '}' {
+				k++
+			}
+			k++ // past '}'
+		} else {
+			k++ // past the single escaped character
+		}
+		if k < n && content[k] == '\'' {
+			return k + 1, true // compact close: char literal
+		}
+		return 0, false
+	}
+	if isRustIdentChar(content[j]) {
+		k := j
+		for k < n && isRustIdentChar(content[k]) {
+			k++
+		}
+		if k < n && content[k] == '\'' {
+			return 0, false // 'abc' — quoted string, not a lifetime
+		}
+		return k, true // lifetime 'a / 'static: no closing apostrophe
+	}
+	return 0, false
+}
+
+// isRustIdentChar reports whether c can appear in a Rust identifier/lifetime.
+func isRustIdentChar(c byte) bool {
+	return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
 }
 
 // isMatchingBracket returns true if open and close form a matching pair.

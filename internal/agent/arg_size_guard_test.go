@@ -116,6 +116,58 @@ func TestAnalyzeArgSize_MultiFileEditOversized(t *testing.T) {
 	}
 }
 
+func TestAnalyzeArgSize_MultiEditFileOversizedOldText(t *testing.T) {
+	// 3KB old_text nested in edits[] -- below severe (16KB) but above warn
+	// (4KB is the edit_file warn threshold; use 5KB to stay consistent with
+	// the edit_file tests) triggers the warn tier for multi_edit_file.
+	big := strings.Repeat("m", 5*1024)
+	args, _ := json.Marshal(map[string]interface{}{
+		"file_path": "/tmp/test.go",
+		"edits": []map[string]interface{}{
+			{"old_text": big, "new_text": "world"},
+			{"old_text": "a", "new_text": "b"},
+		},
+	})
+	hint := analyzeArgSize("multi_edit_file", args)
+	if hint == "" {
+		t.Fatal("expected hint for oversized old_text in multi_edit_file edits[]")
+	}
+	if !strings.Contains(hint, "old_text") {
+		t.Errorf("hint should mention old_text, got %q", hint)
+	}
+	if !strings.Contains(hint, "line-number anchors") {
+		t.Errorf("hint should recommend line-number anchors, got %q", hint)
+	}
+}
+
+func TestAnalyzeArgSize_MultiEditFileSevereOldText(t *testing.T) {
+	big := strings.Repeat("n", 20*1024)
+	args, _ := json.Marshal(map[string]interface{}{
+		"edits": []map[string]interface{}{
+			{"old_text": big, "new_text": "x"},
+		},
+	})
+	hint := analyzeArgSize("multi_edit_file", args)
+	if hint == "" {
+		t.Fatal("expected hint for severely oversized old_text in multi_edit_file")
+	}
+	if !strings.Contains(hint, "concise line-number anchors") {
+		t.Errorf("severe hint should strongly recommend line-number anchors, got %q", hint)
+	}
+}
+
+func TestAnalyzeArgSize_MultiEditFileSmallArgs(t *testing.T) {
+	args, _ := json.Marshal(map[string]interface{}{
+		"edits": []map[string]interface{}{
+			{"old_text": "hello", "new_text": "world"},
+		},
+	})
+	hint := analyzeArgSize("multi_edit_file", args)
+	if hint != "" {
+		t.Errorf("expected empty hint for small multi_edit_file args, got %q", hint)
+	}
+}
+
 func TestAnalyzeArgSize_InvalidJSON(t *testing.T) {
 	hint := analyzeArgSize("edit_file", []byte(`{invalid`))
 	if hint != "" {
