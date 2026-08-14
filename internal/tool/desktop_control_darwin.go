@@ -18,6 +18,8 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 		return mouseClick(ctx, p.X, p.Y, "left", 1)
 	case "double_click":
 		return mouseClick(ctx, p.X, p.Y, "left", 2)
+	case "triple_click":
+		return mouseClick(ctx, p.X, p.Y, "left", 3)
 	case "right_click":
 		return mouseClick(ctx, p.X, p.Y, "right", 1)
 	case "move":
@@ -26,6 +28,8 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 		return mouseDrag(ctx, p.X, p.Y, p.ToX, p.ToY)
 	case "scroll":
 		return mouseScroll(ctx, p.X, p.Y, p.Direction, p.Amount)
+	case "modifier_click":
+		return modifierClick(ctx, p.X, p.Y, p.Text)
 
 	// ── Keyboard ──
 	case "type":
@@ -34,6 +38,8 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 		return keyComboResult(ctx, p.Text)
 
 	// ── Window management ──
+	case "set_window_bounds":
+		return setWindowBounds(ctx, p)
 	case "list_windows":
 		return appleScriptResult(ctx, `
 tell application "System Events"
@@ -71,6 +77,8 @@ tell application %s
 end tell`, applescriptQuote(p.Text)))
 
 	// ── Application ──
+	case "open":
+		return openTarget(ctx, p)
 	case "launch_app":
 		return appleScriptResult(ctx, fmt.Sprintf(`
 tell application %s
@@ -97,6 +105,8 @@ tell application "System Events"
 end tell`)
 
 	// ── Accessibility tree / composite ──
+	case "menu_select":
+		return menuSelect(ctx, p)
 	case "snapshot_ui":
 		return snapshotUI(ctx, p.MaxDepth)
 	case "find_element":
@@ -107,6 +117,8 @@ end tell`)
 		return waitAndClick(ctx, p.Text, p.MaxDepth, p.TimeoutMs)
 	case "display_info":
 		return displayInfo(ctx)
+	case "mouse_position":
+		return mousePosition(ctx)
 
 	default:
 		return Result{}, fmt.Errorf("unknown action: %s", p.Action)
@@ -218,6 +230,130 @@ func runSwiftCGEvent(ctx context.Context, code string) (Result, error) {
 		return Result{}, fmt.Errorf("Swift CGEvent failed: %w\n%s (ensure app has Accessibility permission)", err, string(out))
 	}
 	return Result{Content: "OK"}, nil
+}
+
+// modifierClick holds modifier keys down while clicking (multi-select,
+// force-open-in-new-tab, etc.). modifiers is a normalized spec like
+// "cmd+shift".
+func modifierClick(ctx context.Context, x, y int, modifiers string) (Result, error) {
+	mods, err := normalizeModifiers(modifiers)
+	if err != nil {
+		return Result{}, err
+	}
+	// Map to CGEventFlags raw values: these overlap-free masks can be OR-ed.
+	var flags uint64
+	for _, m := range mods {
+		switch m {
+		case "cmd":
+			flags |= 1 << 20 // kCGEventFlagMaskCommand
+		case "ctrl":
+			flags |= 1 << 18 // kCGEventFlagMaskControl
+		case "alt":
+			flags |= 1 << 19 // kCGEventFlagMaskAlternate
+		case "shift":
+			flags |= 1 << 17 // kCGEventFlagMaskShift
+		case "fn":
+			flags |= 1 << 23 // kCGEventFlagMaskSecondaryFn
+		}
+	}
+	return runSwiftCGEvent(ctx, fmt.Sprintf(`
+import CoreGraphics
+let point = CGPoint(x: %d, y: %d)
+let flags = CGEventFlags(rawValue: %d)
+let eDown = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown,
+                    mouseCursorPosition: point, mouseButton: .left)
+eDown?.flags = flags
+eDown?.post(tap: .cghidEventTap)
+let eUp = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp,
+                  mouseCursorPosition: point, mouseButton: .left)
+eUp?.flags = flags
+eUp?.post(tap: .cghidEventTap)
+`, x, y, flags))
+}
+
+// mousePosition returns the current cursor position in logical pixels.
+func mousePosition(ctx context.Context) (Result, error) {
+	// Cannot reuse runSwiftCGEvent here: it discards stdout. This action
+	// must return the printed coordinates.
+	cmd := exec.CommandContext(ctx, "swift", "-e", `
+import CoreGraphics
+import Foundation
+let loc = CGEvent(source: nil)?.location ?? CGPoint(x: 0, y: 0)
+// CGEvent.location is in global display (top-left origin) coordinates —
+// the same logical-pixel space the click/move actions use.
+print(Int(loc.x), Int(loc.y))
+`)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return Result{}, fmt.Errorf("Swift CGEvent failed: %w\n%s (ensure app has Accessibility permission)", err, string(out))
+	}
+	return Result{Content: strings.TrimSpace(string(out))}, nil
+}
+
+// openTarget opens a URL or file path with the default handler, or a
+// specific app when p.App is set.
+func openTarget(ctx context.Context, p desktopParams) (Result, error) {
+	target := strings.TrimSpace(p.Text)
+	if target == "" {
+		return Result{}, fmt.Errorf("open requires 'text' (URL or file path)")
+	}
+	args := []string{target}
+	if app := strings.TrimSpace(p.App); app != "" {
+		args = append([]string{"-a", app}, args...)
+	}
+	cmd := exec.CommandContext(ctx, "open", args...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return Result{}, fmt.Errorf("open failed: %w\n%s", err, string(out))
+	}
+	return Result{Content: "OK: opened " + target}, nil
+}
+
+// setWindowBounds positions and sizes the frontmost window of the given
+// app (or the frontmost app when p.App is empty).
+func setWindowBounds(ctx context.Context, p desktopParams) (Result, error) {
+	if p.ToX <= 0 || p.ToY <= 0 {
+		return Result{}, fmt.Errorf("set_window_bounds requires positive to_x (width) and to_y (height)")
+	}
+	return appleScriptResult(ctx, fmt.Sprintf(`
+tell application "System Events"
+  tell (first process whose frontmost is true)
+    set position of front window to {%d, %d}
+    set size of front window to {%d, %d}
+  end tell
+end tell`, p.X, p.Y, p.ToX, p.ToY))
+}
+
+// menuSelect clicks a menu bar item by path, e.g. "File > Export…".
+// Uses System Events UI scripting; works even when the app does not
+// expose standard AppleScript menus.
+func menuSelect(ctx context.Context, p desktopParams) (Result, error) {
+	parts, err := parseMenuPath(p.Text)
+	if err != nil {
+		return Result{}, err
+	}
+	var sb strings.Builder
+	sb.WriteString(`
+tell application "System Events"
+  tell (first process whose frontmost is true)
+    tell menu bar 1
+`)
+	// Click the top-level menu bar item to open its menu.
+	sb.WriteString(fmt.Sprintf("      click menu bar item %s\n", applescriptQuote(parts[0])))
+	// Walk down: each level is "menu item X of menu X of <parent chain> of menu bar item P1".
+	// Clicking an intermediate menu item opens its submenu; the final click selects.
+	for depth := 1; depth < len(parts); depth++ {
+		var chain strings.Builder
+		chain.WriteString(fmt.Sprintf("menu item %s of menu %s",
+			applescriptQuote(parts[depth]), applescriptQuote(parts[depth])))
+		for j := depth - 1; j >= 1; j-- {
+			chain.WriteString(fmt.Sprintf(" of menu item %s of menu %s",
+				applescriptQuote(parts[j]), applescriptQuote(parts[j])))
+		}
+		chain.WriteString(fmt.Sprintf(" of menu bar item %s", applescriptQuote(parts[0])))
+		sb.WriteString(fmt.Sprintf("      click %s\n", chain.String()))
+	}
+	sb.WriteString("    end tell\n  end tell\nend tell")
+	return appleScriptResult(ctx, sb.String())
 }
 
 // snapshotUI returns the accessibility tree of the frontmost application

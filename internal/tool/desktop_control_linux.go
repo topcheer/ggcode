@@ -17,6 +17,8 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 		return xdotoolResult(ctx, "mousemove", "--sync", fmt.Sprintf("%d", p.X), fmt.Sprintf("%d", p.Y), "click", "1")
 	case "double_click":
 		return xdotoolResult(ctx, "mousemove", "--sync", fmt.Sprintf("%d", p.X), fmt.Sprintf("%d", p.Y), "click", "--repeat", "2", "1")
+	case "triple_click":
+		return xdotoolResult(ctx, "mousemove", "--sync", fmt.Sprintf("%d", p.X), fmt.Sprintf("%d", p.Y), "click", "--repeat", "3", "1")
 	case "right_click":
 		return xdotoolResult(ctx, "mousemove", "--sync", fmt.Sprintf("%d", p.X), fmt.Sprintf("%d", p.Y), "click", "3")
 	case "move":
@@ -34,6 +36,18 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 		}
 		args := []string{"click", "--repeat", fmt.Sprintf("%d", p.Amount), btn}
 		return xdotoolResult(ctx, args...)
+	case "modifier_click":
+		// Validate and normalize the modifier spec first so typos fail
+		// before anything is clicked.
+		mods, err := normalizeModifiers(p.Text)
+		if err != nil {
+			return Result{}, err
+		}
+		// xdotool supports "ctrl+shift+1" style click args.
+		clickSpec := strings.Join(mods, "+") + "+1"
+		return xdotoolResult(ctx, "mousemove", "--sync", fmt.Sprintf("%d", p.X), fmt.Sprintf("%d", p.Y), "click", clickSpec)
+	case "mouse_position":
+		return xdotoolResult(ctx, "getmouselocation")
 
 	// ── Keyboard ──
 	case "type":
@@ -43,6 +57,18 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 		return xdotoolResult(ctx, "key", p.Text)
 
 	// ── Window management ──
+	case "set_window_bounds":
+		if p.ToX <= 0 || p.ToY <= 0 {
+			return Result{}, fmt.Errorf("set_window_bounds requires positive to_x (width) and to_y (height)")
+		}
+		// Target the named window when given; otherwise the active window.
+		base := []string{"getactivewindow"}
+		if strings.TrimSpace(p.Text) != "" {
+			base = []string{"search", "--name", p.Text}
+		}
+		args := append(base, "windowmove", fmt.Sprintf("%d", p.X), fmt.Sprintf("%d", p.Y),
+			"windowsize", fmt.Sprintf("%d", p.ToX), fmt.Sprintf("%d", p.ToY))
+		return xdotoolResult(ctx, args...)
 	case "list_windows":
 		// "." matches any non-empty window name; an empty pattern is an error
 		// in some xdotool versions.
@@ -63,6 +89,15 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 		return xdotoolResult(ctx, "getactivewindow", "windowstate", "--toggle", "--maximized")
 
 	// ── Application ──
+	case "open":
+		target := strings.TrimSpace(p.Text)
+		if target == "" {
+			return Result{}, fmt.Errorf("open requires 'text' (URL or file path)")
+		}
+		if app := strings.TrimSpace(p.App); app != "" {
+			return runAppResult(ctx, app+" "+target)
+		}
+		return runAppResult(ctx, "xdg-open "+target)
 	case "launch_app":
 		return runAppResult(ctx, p.Text)
 	case "quit_app":
@@ -72,10 +107,11 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 	case "active_app":
 		return xdotoolResult(ctx, "getactivewindow", "getwindowname")
 
-	// UI-tree actions require an accessibility API; xdotool has none.
-	// Report a clear platform message instead of "unknown action" so the
-	// agent does not retry with different parameters.
-	case "snapshot_ui", "find_element", "find_and_click", "wait_and_click", "display_info":
+	// UI-tree and menu actions require a platform accessibility API;
+	// xdotool has none. Report a clear platform message instead of
+	// "unknown action" so the agent does not retry with different
+	// parameters.
+	case "snapshot_ui", "find_element", "find_and_click", "wait_and_click", "display_info", "menu_select":
 		return Result{}, fmt.Errorf("desktop_control: action %q is not supported on Linux (requires a platform accessibility API; xdotool has none)", p.Action)
 
 	default:

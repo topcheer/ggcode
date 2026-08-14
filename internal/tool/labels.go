@@ -1733,6 +1733,8 @@ func desktopControlLabel(args map[string]any) ToolPresentation {
 		return toolPres("Desktop Click", coord)
 	case "double_click":
 		return toolPres("Desktop Double-Click", coord)
+	case "triple_click":
+		return toolPres("Desktop Triple-Click", coord)
 	case "right_click":
 		return toolPres("Desktop Right-Click", coord)
 	case "move":
@@ -1741,6 +1743,10 @@ func desktopControlLabel(args map[string]any) ToolPresentation {
 		return toolPres("Desktop Drag", coord)
 	case "scroll":
 		return toolPres("Desktop Scroll", fmt.Sprintf("%s %s", argStr(args, "direction"), coord))
+	case "modifier_click":
+		return toolPres("Desktop Mod+Click", fmt.Sprintf("%s %s", text, coord))
+	case "mouse_position":
+		return toolPres("Desktop", "mouse position")
 	case "type":
 		return toolPres("Desktop Type", compactPreview(text))
 	case "key_press", "key_combo":
@@ -1755,6 +1761,16 @@ func desktopControlLabel(args map[string]any) ToolPresentation {
 		return toolPres("Desktop Minimize", displayTarget(text))
 	case "maximize_window":
 		return toolPres("Desktop Maximize", displayTarget(text))
+	case "set_window_bounds":
+		return toolPres("Desktop Window Bounds", fmt.Sprintf("(%s,%s) %sx%s", x, y, argStr(args, "to_x"), argStr(args, "to_y")))
+	case "open":
+		app := argStr(args, "app")
+		if app != "" {
+			return toolPres("Desktop Open", fmt.Sprintf("%s in %s", displayTarget(text), app))
+		}
+		return toolPres("Desktop Open", displayTarget(text))
+	case "menu_select":
+		return toolPres("Desktop Menu", displayTarget(text))
 	case "launch_app":
 		return toolPres("Desktop Launch", displayTarget(text))
 	case "quit_app":
