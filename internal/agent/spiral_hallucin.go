@@ -108,11 +108,32 @@ var spiralCommittedRe = regexp.MustCompile(`(?i)(?:since we(?:'re| are)|because 
 // by recordSpiralVerification from the tool execution loop.
 var spiralVerificationRe = regexp.MustCompile(`(?i)(?:i (?:have |'ve )?(?:verified|confirmed|validated)\b|i ran (?:the )?(?:test|build|lint|check)s?\b)`)
 
-// recordSpiralVerification marks that a real tool call with observable
-// results occurred this turn (fix #161: prose keyword matching silently
-// disabled the detector in most runs).
-func (a *Agent) recordSpiralVerification() {
+// spiralExecutionTools are tools whose results can actually validate or
+// refute a hypothesis (fix #167: counting ANY successful tool — incl.
+// read_file/grep — as verification re-silenced the detector, because real
+// agent turns almost always contain successful read-only calls while an
+// agent in a hallucination spiral characteristically keeps running them).
+var spiralExecutionTools = map[string]bool{
+	"run_command":         true,
+	"start_command":       true,
+	"wait_command":        true,
+	"write_command_input": true,
+	"stop_command":        true,
+	"browser":             true,
+	"desktop_control":     true,
+	"mobile_device":       true,
+}
+
+// recordSpiralVerification marks that an execution-type tool call with
+// observable side effects succeeded this turn (fix #161: prose keyword
+// matching silently disabled the detector; #167: read-only tools must NOT
+// count — only tools that can validate/refute an assumption break the
+// spiral chain).
+func (a *Agent) recordSpiralVerification(toolName string) {
 	if a == nil || a.spiralState == nil {
+		return
+	}
+	if !spiralExecutionTools[toolName] {
 		return
 	}
 	a.spiralState.verified = true

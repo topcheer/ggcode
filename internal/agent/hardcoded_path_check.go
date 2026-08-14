@@ -161,10 +161,19 @@ func checkHardcodedPaths(filePath, oldContent, newContent string) []string {
 		oldMatches := pp.re.FindAllString(oldContent, -1)
 		newMatches := pp.re.FindAllString(newContent, -1)
 
-		oldCount := len(oldMatches)
-		newCount := len(newMatches)
-
-		introduced := newCount - oldCount
+		// Per-instance set comparison (fix #171 — count-diff is blind to
+		// remove-N-add-N; see hardcoded_secret_check.go).
+		oldSet := make(map[string]int)
+		for _, m := range oldMatches {
+			oldSet[m]++
+		}
+		introduced := 0
+		for _, m := range newMatches {
+			oldSet[m]--
+			if oldSet[m] < 0 {
+				introduced++
+			}
+		}
 		if introduced > 0 {
 			warnings = append(warnings, formatPathWarning(pp.label, introduced))
 		}

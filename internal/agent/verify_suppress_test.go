@@ -177,3 +177,21 @@ func TestCheckVerificationSuppression_NonVerifyOutputHidingCounts(t *testing.T) 
 		t.Fatal("#160 regression: second output-hiding on non-verification command should fire")
 	}
 }
+
+// TestCheckVerificationSuppression_MixedBranchNoPollution pins fix #170: a
+// verify-branch entry must not count toward the non-verify threshold.
+func TestCheckVerificationSuppression_MixedBranchNoPollution(t *testing.T) {
+	s := newVerifySuppressState()
+	// 1) verification command with output-hiding (verify branch, count 1 < 2)
+	if out := s.checkVerificationSuppression("run_command", "go test 2>/dev/null"); out != "" {
+		t.Fatalf("first verify-branch suppression must not fire: %q", out)
+	}
+	// 2) single non-verify suppression — must NOT fire (verify entry must not pollute)
+	if out := s.checkVerificationSuppression("run_command", "ls /tmp/nope 2>/dev/null"); out != "" {
+		t.Fatalf("mixed-sequence single non-verify suppression must not fire: %q", out)
+	}
+	// 3) second non-verify suppression — now fires (2 same-branch occurrences)
+	if out := s.checkVerificationSuppression("run_command", "cat /tmp/nope2 2>/dev/null"); out == "" {
+		t.Fatal("second non-verify suppression must fire")
+	}
+}

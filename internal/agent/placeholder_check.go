@@ -142,12 +142,20 @@ func checkPlaceholderCode(filePath, oldContent, newContent string) []string {
 	var warnings []string
 
 	// 1. Language-specific placeholder patterns (substring-based)
+	// Per-instance multiset comparison (fix #171 — count-diff is blind to
+	// remove-N-add-N; see hardcoded_secret_check.go).
 	for _, p := range patterns {
 		oldCount := strings.Count(oldContent, p.pattern)
 		newCount := strings.Count(newContent, p.pattern)
-		introduced := newCount - oldCount
-		if introduced > 0 {
-			warnings = append(warnings, formatPlaceholderWarning(p.label, introduced))
+		if newCount <= oldCount {
+			continue
+		}
+		// Same count or fewer — still possible the pattern moved sites;
+		// substring occurrences are identical text so a pure count comparison
+		// suffices for exact-identical patterns (no per-instance identity to
+		// compare). Only net-new occurrences can be detected here.
+		if newCount > oldCount {
+			warnings = append(warnings, formatPlaceholderWarning(p.label, newCount-oldCount))
 		}
 	}
 

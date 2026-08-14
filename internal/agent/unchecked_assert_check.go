@@ -196,7 +196,17 @@ func assertExprAt(file *ast.File, pos token.Pos) string {
 	if target == nil {
 		return fmt.Sprintf("pos:%d", pos)
 	}
-	return exprText(target)
+	ta, ok := target.(*ast.TypeAssertExpr)
+	if !ok {
+		return fmt.Sprintf("pos:%d", pos)
+	}
+	// Render the full assertion shape — both the asserted expression and the
+	// target type. exprText alone has no *ast.TypeAssertExpr case (its switch
+	// covers Ident/SelectorExpr/ParenExpr/BasicLit only) and returned "" for
+	// EVERY assertion, collapsing all fingerprints to the empty string and
+	// permanently silencing the detector on files with any pre-existing
+	// assertion (#169).
+	return exprText(ta.X) + ".(" + exprText(ta.Type) + ")"
 }
 
 // assertFingerprint returns a content-based key for delta comparison.

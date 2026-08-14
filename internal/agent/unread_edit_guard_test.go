@@ -415,3 +415,19 @@ func TestStaleRead_RewarnAfterReread(t *testing.T) {
 		t.Fatal("#162 regression: second external modification after re-read never re-warned")
 	}
 }
+
+// TestStaleRead_OwnEditNotFlagged pins fix #168: after the agent's own
+// successful edit (recordWrite), the bumped mtime must NOT warn as stale.
+func TestStaleRead_OwnEditNotFlagged(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "f.go")
+	if err := os.WriteFile(p, []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := newUnreadEditState()
+	s.recordRead(p)
+	s.recordWrite(p) // agent's own edit — refreshes baseline to now
+	if hint := s.checkStaleRead(p); hint != "" {
+		t.Fatalf("own-edit refresh must not warn: %q", hint)
+	}
+}

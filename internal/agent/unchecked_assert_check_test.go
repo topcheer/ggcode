@@ -232,3 +232,15 @@ func work(v interface{}) {
 		t.Errorf("#157 regression: line shift re-flagged pre-existing assertions: %v", warnings)
 	}
 }
+
+// TestCheckUncheckedTypeAssert_NewDifferentAssertion pins fix #169: with a
+// pre-existing assertion, adding a DIFFERENT one must be reported. (The
+// broken empty-string fingerprint made every assertion collide to 0 warnings.)
+func TestCheckUncheckedTypeAssert_NewDifferentAssertion(t *testing.T) {
+	oldSrc := "package main\nfunc f(a interface{}) { _ = a.([]byte) }\n"
+	newSrc := "package main\nfunc f(a interface{}) {\n\t_ = a.([]byte)\n\t_ = a.(string)\n}\n"
+	w := checkUncheckedTypeAssert("t.go", oldSrc, newSrc)
+	if len(w) == 0 {
+		t.Fatal("new different assertion must be flagged even when an old assertion exists")
+	}
+}

@@ -319,3 +319,19 @@ func TestSpiralMaxTopicsEnforced(t *testing.T) {
 		t.Fatalf("expected at most %d topics, got %d", spiralMaxTopics, len(topics))
 	}
 }
+
+// TestSpiralVerification_ReadOnlyToolsNotCounted pins fix #167: only
+// execution-type tools count as verification; read-only tools must not
+// re-silence the detector.
+func TestSpiralVerification_ReadOnlyToolsNotCounted(t *testing.T) {
+	for _, ro := range []string{"read_file", "grep", "glob", "list_directory"} {
+		if spiralExecutionTools[ro] {
+			t.Fatalf("read-only tool %q must not be in spiralExecutionTools", ro)
+		}
+	}
+	for _, ex := range []string{"run_command", "start_command", "browser"} {
+		if !spiralExecutionTools[ex] {
+			t.Fatalf("execution tool %q must be in spiralExecutionTools", ex)
+		}
+	}
+}

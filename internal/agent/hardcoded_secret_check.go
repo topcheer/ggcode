@@ -129,10 +129,22 @@ func checkHardcodedSecrets(filePath, oldContent, newContent string) []string {
 		oldMatches := sp.pattern.FindAllString(scanOld, -1)
 		newMatches := sp.pattern.FindAllString(scanNew, -1)
 
-		oldCount := len(oldMatches)
-		newCount := len(newMatches)
-
-		introduced := newCount - oldCount
+		// Per-instance set comparison (fix #171): count-diff (newCount-oldCount)
+		// is blind to remove-N-add-N edits — swapping a placeholder key for a
+		// REAL credential of the same pattern family keeps the count unchanged
+		// and passes silently. Count only new matches whose exact text is absent
+		// from the old multiset.
+		oldSet := make(map[string]int)
+		for _, m := range oldMatches {
+			oldSet[m]++
+		}
+		introduced := 0
+		for _, m := range newMatches {
+			oldSet[m]--
+			if oldSet[m] < 0 {
+				introduced++
+			}
+		}
 		if introduced > 0 {
 			warnings = append(warnings, formatSecretWarning(sp.name, introduced))
 		}

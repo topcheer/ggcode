@@ -206,7 +206,19 @@ func checkDebugStmts(filePath, oldContent, newContent string) string {
 		oldMatches := dp.pattern.FindAllString(scanOld, -1)
 		newMatches := dp.pattern.FindAllString(scanNew, -1)
 
-		introduced := len(newMatches) - len(oldMatches)
+		// Per-instance set comparison (fix #171 — count-diff is blind to
+		// remove-N-add-N; see hardcoded_secret_check.go).
+		oldSet := make(map[string]int)
+		for _, m := range oldMatches {
+			oldSet[m]++
+		}
+		introduced := 0
+		for _, m := range newMatches {
+			oldSet[m]--
+			if oldSet[m] < 0 {
+				introduced++
+			}
+		}
 		if introduced > 0 {
 			flagged = append(flagged, fmt.Sprintf("%d x %s", introduced, dp.name))
 		}

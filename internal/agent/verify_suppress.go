@@ -58,9 +58,10 @@ type verifySuppressState struct {
 }
 
 type suppressedCommand struct {
-	command  string
-	pattern  string
-	category string
+	command        string
+	pattern        string
+	category       string
+	isVerification bool
 }
 
 func newVerifySuppressState() *verifySuppressState {
@@ -121,28 +122,41 @@ func (s *verifySuppressState) checkVerificationSuppression(toolName, command str
 		command:  truncateCmd(command),
 		category: category,
 	}
-	s.suppressedCmds = append(s.suppressedCmds, entry)
 
 	isVerification := verificationCmdRe.MatchString(command)
+	entry.isVerification = isVerification
+	s.suppressedCmds = append(s.suppressedCmds, entry)
 
 	// Error masking on verification commands = immediate fire (critical).
-	// Output hiding on verification = warn after 1 occurrence.
-	// Any suppression on non-verification commands = warn after 2 occurrences.
+	// Output hiding on verification = warn after 2 same-branch occurrences.
+	// Any suppression on non-verification commands = warn after 2 same-branch
+	// occurrences.
+	// #170: suppressedCmds mixes both branches — each threshold must count
+	// only its own branch's entries, otherwise a single non-verify
+	// suppression after one verify entry fires the reward-hacking warning.
 	shouldFire := false
 	if isVerification {
 		if category == "error-masking" {
 			shouldFire = true
-		} else if len(s.suppressedCmds) >= 2 {
-			shouldFire = true
+		} else {
+			verifyCount := 0
+			for _, c := range s.suppressedCmds {
+				if c.isVerification {
+					verifyCount++
+				}
+			}
+			if verifyCount >= 2 {
+				shouldFire = true
+			}
 		}
 	} else {
-		// Count ALL suppression categories, not just error-masking: the
-		// documented contract is "any suppression on non-verification
-		// commands = warn after 2 occurrences". Only counting error-masking
-		// let output-hiding (e.g. systematic 2>/dev/null) accumulate
-		// forever without feedback (#160).
-		suppressCount := len(s.suppressedCmds)
-		if suppressCount >= 2 {
+		nonVerifyCount := 0
+		for _, c := range s.suppressedCmds {
+			if !c.isVerification {
+				nonVerifyCount++
+			}
+		}
+		if nonVerifyCount >= 2 {
 			shouldFire = true
 		}
 	}

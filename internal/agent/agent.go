@@ -3160,6 +3160,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					a.fileFreshness.recordWrite(p)
 					a.readHash.recordWriteHash(p)
 					a.redundantRead.recordWrite(p)
+					// Refresh the stale-read baseline: the agent's own edit just
+					// bumped the mtime — without this, checkStaleRead would flag
+					// our own edit as an external modification (#168).
+					a.unreadEdit.recordWrite(p)
 					if a.tokenWasteBudget != nil {
 						a.tokenWasteBudget.markFileEdited(p)
 					}
@@ -4193,12 +4197,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// tool calls (edit_file, write_file, run_command, etc.).
 			// Research: Microsoft IFC (arXiv:2505.23643), OWASP ATR-2026-00032.
 			a.taintInfluence.recordIfTainted(tc.Name, result.Content)
-			// Spiral-of-hallucination: a real tool call with observable
-			// results breaks the spiral chain. Record it as a verification
-			// event (#161 — previously detected by prose keyword matching,
-			// which fired on nearly every narrative turn).
+			// Spiral-of-hallucination: an execution-type tool call with
+			// observable side effects breaks the spiral chain (#161 — prose
+			// keyword matching fired on nearly every turn; #167 — read-only
+			// tools must not count as verification).
 			if !result.IsError {
-				a.recordSpiralVerification()
+				a.recordSpiralVerification(tc.Name)
 			}
 			// Repetitive-line compression: collapse consecutive identical or
 			// template-similar lines (common in build/test/install output) before

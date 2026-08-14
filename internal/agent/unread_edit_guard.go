@@ -107,6 +107,19 @@ func (s *unreadEditState) recordRead(path string) {
 	}
 }
 
+// recordWrite refreshes the staleness baseline after the agent's own
+// successful edit (fix #168: the edit itself bumps mtime, so without a
+// refresh every normal read→edit cycle false-positived as "modified on
+// disk" — amplified by the #162 re-warn fix into every edit iteration).
+func (s *unreadEditState) recordWrite(path string) {
+	if path == "" {
+		return
+	}
+	n := normalizePath(path)
+	s.readMtime[n] = time.Now()
+	delete(s.warnedFiles, n+"\x00stale")
+}
+
 // recordCreated marks a file as created via write_file. These are exempt
 // from the unread-edit check since the agent authored their content.
 func (s *unreadEditState) recordCreated(path string) {

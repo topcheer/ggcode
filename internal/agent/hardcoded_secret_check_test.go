@@ -156,3 +156,15 @@ func TestFormatSecretWarning(t *testing.T) {
 		t.Errorf("plural form should use 'instances'")
 	}
 }
+
+// TestHardcodedSecret_ReplacementDetected pins fix #171: swapping a fake key
+// for a REAL credential of the same pattern family (remove-1-add-1, net 0)
+// must still warn.
+func TestHardcodedSecret_ReplacementDetected(t *testing.T) {
+	oldSrc := "package main\nvar k = \"AKIAIOSFODNN7EXAMPLE\"\n"
+	newSrc := "package main\nvar k = \"AKIAIOSFODNN7REALKEY\"\n"
+	w := checkHardcodedSecrets("a.go", oldSrc, newSrc)
+	if len(w) == 0 {
+		t.Fatal("fake-to-real key replacement must be detected (remove-N-add-N blindness, #171)")
+	}
+}
