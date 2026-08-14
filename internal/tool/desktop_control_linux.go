@@ -44,7 +44,9 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 
 	// ── Window management ──
 	case "list_windows":
-		return xdotoolResult(ctx, "search", "", "--name")
+		// "." matches any non-empty window name; an empty pattern is an error
+		// in some xdotool versions.
+		return xdotoolResult(ctx, "search", "--onlyvisible", "--name", ".")
 	case "focus_window":
 		return xdotoolResult(ctx, "search", "--name", p.Text, "windowactivate", "%@")
 	case "close_window":
@@ -52,7 +54,13 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 	case "minimize_window":
 		return xdotoolResult(ctx, "search", "--name", p.Text, "windowminimize", "%@")
 	case "maximize_window":
-		return xdotoolResult(ctx, "search", "--onlyvisible", "--class", "", "windowstate", "--toggle", "--maximized", "%@")
+		// Use the target window name when provided; fall back to the active
+		// window so we never maximize every visible window (empty pattern
+		// matches all).
+		if strings.TrimSpace(p.Text) != "" {
+			return xdotoolResult(ctx, "search", "--name", p.Text, "windowstate", "--toggle", "--maximized", "%@")
+		}
+		return xdotoolResult(ctx, "getactivewindow", "windowstate", "--toggle", "--maximized")
 
 	// ── Application ──
 	case "launch_app":
@@ -63,6 +71,12 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 		return wmctrlResult(ctx, "-l")
 	case "active_app":
 		return xdotoolResult(ctx, "getactivewindow", "getwindowname")
+
+	// UI-tree actions require an accessibility API; xdotool has none.
+	// Report a clear platform message instead of "unknown action" so the
+	// agent does not retry with different parameters.
+	case "snapshot_ui", "find_element", "find_and_click", "wait_and_click", "display_info":
+		return Result{}, fmt.Errorf("desktop_control: action %q is not supported on Linux (requires a platform accessibility API; xdotool has none)", p.Action)
 
 	default:
 		return Result{}, fmt.Errorf("unknown action: %s", p.Action)

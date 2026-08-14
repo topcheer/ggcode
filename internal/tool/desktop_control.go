@@ -7,9 +7,10 @@ import (
 )
 
 // DesktopControlTool provides OS-level mouse, keyboard, window, and
-// application control. On macOS it uses AppleScript + Quartz events
-// via cliclick (auto-installed if missing). On Linux it uses xdotool.
-// On Windows it uses PowerShell + SendInput.
+// application control. On macOS it uses Swift CGEvent (mouse), AppleScript
+// (keyboard/windows/apps) and the Accessibility API (UI tree). On Linux it
+// uses xdotool/wmctrl (X11 only; UI-tree actions unsupported). On Windows
+// it is not yet implemented.
 type DesktopControlTool struct {
 	WorkingDir string
 }
@@ -36,7 +37,9 @@ Note: On Retina/HiDPI displays, screenshots are in physical pixels (2x). Use dis
 get the scale factor and convert: logical = physical / scale.
 snapshot_ui returns a JSON tree of UI elements (role, label, frame, enabled).
 find_element searches the accessibility tree for elements matching the given text, returns coordinates.
-find_and_click combines find_element + click in one step (reduces LLM coordinate reasoning).`
+find_and_click combines find_element + click in one step (reduces LLM coordinate reasoning).
+
+Platform support: all actions on macOS; core mouse/keyboard/window/app actions on Linux (X11, requires xdotool and wmctrl; UI-tree and display_info actions are macOS-only); not yet implemented on Windows.`
 }
 
 func (DesktopControlTool) Parameters() json.RawMessage {
