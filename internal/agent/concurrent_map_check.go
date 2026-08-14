@@ -59,6 +59,7 @@ import (
 // concurrentMapInstance represents a potential concurrent map access.
 type concurrentMapInstance struct {
 	posStr   string // human-readable position
+	fp       string // content fingerprint: funcName|mapName (delta key)
 	mapName  string // the map variable name
 	goCalled bool   // whether this is in a goroutine context
 }
@@ -86,26 +87,37 @@ func checkConcurrentMapAccess(filePath, oldContent, newContent string) string {
 	var oldLines map[string]bool
 	if strings.TrimSpace(oldContent) != "" {
 		for _, iss := range findConcurrentMapAccess(token.NewFileSet(), func() *ast.File {
-			f, _ := parser.ParseFile(token.NewFileSet(), "", oldContent, 0)
+			// Parse with the SAME filePath as the new content (#220): parsing
+			// with "" made posStr keys "file.go:N" vs ".:N" — never equal,
+			// so the skip below was dead code and every edit re-reported
+			// pre-existing patterns.
+			f, _ := parser.ParseFile(token.NewFileSet(), filePath, oldContent, 0)
 			return f
 		}()) {
 			if oldLines == nil {
 				oldLines = make(map[string]bool)
 			}
-			oldLines[iss.posStr] = true
+			oldLines[iss.fp] = true
 		}
 	}
 
 	var b strings.Builder
 	b.WriteString("[Concurrent map access detection] Potential unsynchronized concurrent map access detected.\n")
 	b.WriteString("Go maps are NOT safe for concurrent use - the runtime will fatally crash with 'concurrent map read/write'.\n")
+	reported := 0
 	for _, inst := range instances {
-		if oldLines != nil && oldLines[inst.posStr] {
+		if oldLines != nil && oldLines[inst.fp] {
 			continue
 		}
 		b.WriteString(fmt.Sprintf("  - %s: map '%s' is accessed in a function that spawns goroutines without sync (Mutex/RWMutex/sync.Map). ",
 			inst.posStr, inst.mapName))
 		b.WriteString("Protect with sync.RWMutex, or use sync.Map for concurrent access patterns.\n")
+		reported++
+	}
+	if reported == 0 {
+		// Everything was pre-existing: emit nothing rather than a bare
+		// header — callers treat any non-empty string as a warning.
+		return ""
 	}
 	return b.String()
 }
@@ -152,6 +164,7 @@ func findConcurrentMapAccess(fset *token.FileSet, file *ast.File) []concurrentMa
 			p := fset.Position(pos)
 			instances = append(instances, concurrentMapInstance{
 				posStr:   fmt.Sprintf("%s:%d", filepath.Base(p.Filename), p.Line),
+				fp:       fn.Name.Name + "|" + mapName,
 				mapName:  mapName,
 				goCalled: true,
 			})
@@ -183,10 +196,14 @@ func analyzeFuncForMapConcurrency(body *ast.BlockStmt) mapConcurrencyInfo {
 		case *ast.SelectorExpr:
 			// Detect sync.Map usage: sync.Map or field of type accessed via
 			// sync.Map methods (Store, Load, LoadOrStore, Delete, Range).
+			// Only MUTUAL-EXCLUSION or concurrent-safe-map types count (#218):
+			// WaitGroup/Once/Pool provide no map protection — counting them
+			// cleared all warnings for the most common fan-out crash pattern
+			// (goroutines writing a map under wg.Add/Done).
 			if ident, ok := node.X.(*ast.Ident); ok {
 				if ident.Name == "sync" && node.Sel != nil {
 					switch node.Sel.Name {
-					case "Map", "Mutex", "RWMutex", "WaitGroup", "Once", "Pool", "Locker":
+					case "Map", "Mutex", "RWMutex", "Locker":
 						info.hasSync = true
 					}
 				}
