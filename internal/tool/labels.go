@@ -1763,6 +1763,14 @@ func desktopControlLabel(args map[string]any) ToolPresentation {
 		return toolPres("Desktop", "list apps")
 	case "active_app":
 		return toolPres("Desktop", "active app")
+	case "snapshot_ui":
+		return toolPres("Desktop", "snapshot UI tree")
+	case "find_element":
+		return toolPres("Desktop Find", displayTarget(text))
+	case "find_and_click":
+		return toolPres("Desktop Find+Click", displayTarget(text))
+	case "wait_and_click":
+		return toolPres("Desktop Wait+Click", displayTarget(text))
 	default:
 		return toolPres("Desktop", action)
 	}

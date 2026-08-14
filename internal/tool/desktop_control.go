@@ -26,9 +26,14 @@ Actions:
   Keyboard: type, key_press, key_combo
   Window:  list_windows, focus_window, close_window, minimize_window, maximize_window
   App:     launch_app, quit_app, list_apps, active_app
+  UI Tree: snapshot_ui (get accessibility tree of frontmost app), find_element (locate UI element by text)
+  Combo:   find_and_click (find element by text and click it), wait_and_click (wait for element then click)
 
 For mouse actions, coordinates are in logical pixels (points) from top-left of the primary display.
-For key_combo, use + to chain modifiers: "cmd+c", "ctrl+shift+tab", "cmd+shift+4".`
+For key_combo, use + to chain modifiers: "cmd+c", "ctrl+shift+tab", "cmd+shift+4".
+snapshot_ui returns a JSON tree of UI elements (role, label, frame, enabled).
+find_element searches the accessibility tree for elements matching the given text, returns coordinates.
+find_and_click combines find_element + click in one step (reduces LLM coordinate reasoning).`
 }
 
 func (DesktopControlTool) Parameters() json.RawMessage {
@@ -40,7 +45,8 @@ func (DesktopControlTool) Parameters() json.RawMessage {
       "enum": ["click", "double_click", "right_click", "move", "drag", "scroll",
                "type", "key_press", "key_combo",
                "list_windows", "focus_window", "close_window", "minimize_window", "maximize_window",
-               "launch_app", "quit_app", "list_apps", "active_app"],
+               "launch_app", "quit_app", "list_apps", "active_app",
+               "snapshot_ui", "find_element", "find_and_click", "wait_and_click"],
       "description": "The desktop action to perform."
     },
     "x": {"type": "integer", "description": "X coordinate (logical pixels from left). Required for mouse position actions."},
@@ -51,7 +57,9 @@ func (DesktopControlTool) Parameters() json.RawMessage {
     "amount": {"type": "integer", "default": 1, "description": "Scroll amount (number of steps)."},
     "to_x": {"type": "integer", "description": "Destination X for drag."},
     "to_y": {"type": "integer", "description": "Destination Y for drag."},
-    "duration": {"type": "integer", "default": 0, "description": "Duration in milliseconds for drag animation."}
+    "duration": {"type": "integer", "default": 0, "description": "Duration in milliseconds for drag animation."},
+    "max_depth": {"type": "integer", "default": 8, "description": "Max depth for snapshot_ui accessibility tree traversal."},
+    "timeout_ms": {"type": "integer", "default": 5000, "description": "Timeout for wait_and_click (polls for element)."}
   },
   "required": ["action"]
 }`)
@@ -69,6 +77,8 @@ type desktopParams struct {
 	ToX       int    `json:"to_x"`
 	ToY       int    `json:"to_y"`
 	Duration  int    `json:"duration"`
+	MaxDepth  int    `json:"max_depth"`
+	TimeoutMs int    `json:"timeout_ms"`
 }
 
 func (t DesktopControlTool) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
@@ -84,6 +94,12 @@ func (t DesktopControlTool) Execute(ctx context.Context, input json.RawMessage) 
 	}
 	if params.Amount == 0 {
 		params.Amount = 1
+	}
+	if params.MaxDepth == 0 {
+		params.MaxDepth = 8
+	}
+	if params.TimeoutMs == 0 {
+		params.TimeoutMs = 5000
 	}
 	return executeDesktopControl(ctx, params)
 }
