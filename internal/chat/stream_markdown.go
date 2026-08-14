@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/yuin/goldmark"
@@ -13,6 +14,14 @@ import (
 )
 
 var streamMarkdown = goldmark.New(goldmark.WithExtensions(extension.GFM))
+
+// maxStreamingBlockLines caps how much of the actively-growing last block
+// is rendered while streaming. The viewport shows at most ~60 lines, but
+// without this cap every chunk re-renders the ENTIRE growing block (a long
+// code fence or list can reach hundreds of lines), saturating the UI event
+// loop and making scrolling sluggish during long replies. Finished items
+// always render in full (streaming=false path).
+const maxStreamingBlockLines = 400
 
 type streamRenderCache struct {
 	width    int
@@ -27,6 +36,12 @@ func renderStreamingMarkdown(text string, width int, cache *streamRenderCache) (
 	if len(blocks) == 0 {
 		return "", streamRenderCache{width: width, source: normalized}
 	}
+
+	// Cap the growing tail block: only the last block changes between
+	// chunks, and only its visible tail matters during streaming. Truncate
+	// from the top so recent content stays intact. The stored block keeps
+	// the truncated form so the cache comparison below stays consistent.
+	blocks[len(blocks)-1] = capStreamingBlock(blocks[len(blocks)-1])
 
 	next := streamRenderCache{
 		width:    width,
@@ -55,6 +70,21 @@ func renderStreamingMarkdown(text string, width int, cache *streamRenderCache) (
 
 func normalizeStreamingMarkdown(text string) string {
 	return mdpkg.Normalize(closeOpenFences(text))
+}
+
+// capStreamingBlock truncates an oversized growing block to its last
+// maxStreamingBlockLines lines, prefixed with a dimmed ellipsis marker so
+// the truncation is visible. Small blocks pass through unchanged.
+func capStreamingBlock(block string) string {
+	if block == "" {
+		return block
+	}
+	lines := strings.Split(block, "\n")
+	if len(lines) <= maxStreamingBlockLines {
+		return block
+	}
+	kept := lines[len(lines)-maxStreamingBlockLines:]
+	return fmt.Sprintf("… (%d earlier lines hidden while streaming)\n%s", len(lines)-maxStreamingBlockLines, strings.Join(kept, "\n"))
 }
 
 func splitMarkdownBlocks(src string) []string {
