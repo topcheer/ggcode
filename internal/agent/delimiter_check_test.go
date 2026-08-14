@@ -442,3 +442,35 @@ func TestCheckDelimiterBalance_RustUnterminatedRawString(t *testing.T) {
 		t.Errorf("warning should mention unterminated raw string, got: %s", got)
 	}
 }
+
+// fix #276: Rust allows any number of hashes in raw strings (r##"..."##).
+// Content containing "# requires multi-hash delimiters; the old scanner only
+// recognized r#"..."# and misparsed r## content as a plain double-quoted
+// string, shifting tokens and causing false "unterminated string" reports.
+func TestCheckDelimiterBalance_RustMultiHashRawString(t *testing.T) {
+	content := "fn f() {\n\tlet s = r##\"text with \"# inside\"##;\n\tlet t = \"ok\";\n}\n"
+	if got := checkDelimiterBalance("lib.rs", content); got != "" {
+		t.Errorf("expected no warning for multi-hash raw string, got: %s", got)
+	}
+}
+
+// fix #276: single-hash raw strings (r#"..."#) must keep working, including
+// content with plain quotes.
+func TestCheckDelimiterBalance_RustSingleHashRawStringStillWorks(t *testing.T) {
+	content := "fn f() {\n\tlet s = r#\"quote \" and { brace\"#;\n\tlet t = \"ok\";\n}\n"
+	if got := checkDelimiterBalance("lib.rs", content); got != "" {
+		t.Errorf("expected no warning for single-hash raw string, got: %s", got)
+	}
+}
+
+// fix #276: an unterminated multi-hash raw string must be reported.
+func TestCheckDelimiterBalance_RustUnterminatedMultiHashRawString(t *testing.T) {
+	content := "fn f() {\n\tlet s = r##\"never closed\n}\n"
+	got := checkDelimiterBalance("lib.rs", content)
+	if got == "" {
+		t.Fatal("expected warning for unterminated multi-hash raw string")
+	}
+	if !strings.Contains(got, "unterminated raw string") {
+		t.Errorf("warning should mention unterminated raw string, got: %s", got)
+	}
+}

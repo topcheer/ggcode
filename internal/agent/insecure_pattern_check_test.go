@@ -438,3 +438,114 @@ func TestCheckInsecurePatterns_JSRejectUnauthorizedZero(t *testing.T) {
 		t.Fatal("expected TLS bypass warning for rejectUnauthorized: 0")
 	}
 }
+
+func TestCheckInsecurePatterns_PythonVerifyFalseInCommentNotFlagged(t *testing.T) {
+	new := "# TODO: never set verify=False\n"
+	for _, w := range checkInsecurePatterns("t.py", "", new) {
+		if strings.Contains(w, "TLS bypass") {
+			t.Fatalf("comment mention should not be flagged, got: %s", w)
+		}
+	}
+}
+
+func TestCheckInsecurePatterns_PythonVerifyFalseInDocstringNotFlagged(t *testing.T) {
+	new := "\"\"\"ssl=False must never be used here\"\"\"\n"
+	for _, w := range checkInsecurePatterns("t.py", "", new) {
+		if strings.Contains(w, "TLS bypass") {
+			t.Fatalf("docstring mention should not be flagged, got: %s", w)
+		}
+	}
+}
+
+func TestCheckInsecurePatterns_PythonVerifyFalseInStringLiteralNotFlagged(t *testing.T) {
+	new := "raise ValueError(\"verify=0 is not allowed\")\n"
+	for _, w := range checkInsecurePatterns("t.py", "", new) {
+		if strings.Contains(w, "TLS bypass") {
+			t.Fatalf("string literal mention should not be flagged, got: %s", w)
+		}
+	}
+}
+
+func TestCheckInsecurePatterns_PythonVerifyFalseInURLParamNotFlagged(t *testing.T) {
+	new := "url = base + \"?verify=0\"\n"
+	for _, w := range checkInsecurePatterns("t.py", "", new) {
+		if strings.Contains(w, "TLS bypass") {
+			t.Fatalf("URL parameter mention should not be flagged, got: %s", w)
+		}
+	}
+}
+
+func TestCheckInsecurePatterns_PythonVerifyFalseRealCallStillFlagged(t *testing.T) {
+	new := "import httpx\nresp = httpx.get(url, verify=False)\n"
+	found := false
+	for _, w := range checkInsecurePatterns("t.py", "", new) {
+		if strings.Contains(w, "TLS bypass") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected TLS bypass warning for real httpx verify=False call")
+	}
+}
+
+func TestCheckInsecurePatterns_GoSQLInTrailingLineCommentNotFlagged(t *testing.T) {
+	new := "total := a + b // SELECT count FROM users\n"
+	for _, w := range checkInsecurePatterns("test.go", "package main\n", new) {
+		if strings.Contains(w, "SQL injection") {
+			t.Fatalf("trailing // comment SQL keywords should not be flagged, got: %s", w)
+		}
+	}
+}
+
+func TestCheckInsecurePatterns_GoSQLInTrailingBlockCommentNotFlagged(t *testing.T) {
+	new := "inserted := n + m /* insert into log */\n"
+	for _, w := range checkInsecurePatterns("test.go", "package main\n", new) {
+		if strings.Contains(w, "SQL injection") {
+			t.Fatalf("trailing /* */ comment SQL keywords should not be flagged, got: %s", w)
+		}
+	}
+}
+
+func TestCheckInsecurePatterns_GoSQLConcatRealQueryStillFlagged(t *testing.T) {
+	new := "db.Query(\"SELECT * FROM t WHERE id=\" + id)\n"
+	found := false
+	for _, w := range checkInsecurePatterns("test.go", "package main\n", new) {
+		if strings.Contains(w, "SQL injection") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected SQL injection warning for real concatenated query")
+	}
+}
+
+func TestPyStripCommentsAndStrings(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"# TODO: never set verify=False", ""},
+		{"x = 1 # verify=False", "x = 1 "},
+		{`raise ValueError("verify=0 is not allowed")`, "raise ValueError()"},
+		{`url = base + "?verify=0"`, "url = base + "},
+		{`"""ssl=False doc"""`, ""},
+		{`r = httpx.get(url, verify=False)`, "r = httpx.get(url, verify=False)"},
+		{"'don#t' # comment", " "}, // # inside string is protected; trailing comment stripped
+	}
+	for _, c := range cases {
+		if got := pyStripCommentsAndStrings(c.in); got != c.want {
+			t.Errorf("pyStripCommentsAndStrings(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestGoStripTrailingComment(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"total := a + b // SELECT count FROM users", "total := a + b"},
+		{"inserted := n + m /* insert into log */", "inserted := n + m"},
+		{`u := "http://example.com/?q=SELECT"`, `u := "http://example.com/?q=SELECT"`},
+		{`db.Query("SELECT * FROM t WHERE id=" + id)`, `db.Query("SELECT * FROM t WHERE id=" + id)`},
+	}
+	for _, c := range cases {
+		if got := goStripTrailingComment(c.in); got != c.want {
+			t.Errorf("goStripTrailingComment(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}

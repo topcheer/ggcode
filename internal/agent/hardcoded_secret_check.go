@@ -129,15 +129,21 @@ func checkHardcodedSecrets(filePath, oldContent, newContent string) []string {
 	// extension — so a secret straddling the 256KB cut is not silently halved
 	// on one side only, which made the old/new multiset diff unreliable.
 	const scanOverlap = 64
+	// #264: both windows take the HEAD (same direction) so the multiset
+	// diff compares the same region — head-to-head. The #247 tail-keep for
+	// old made the windows disjoint (new=head, old=tail), so head-seated
+	// secrets in large files were reported as newly introduced on every
+	// tail edit.
 	scanNew := newContent
-	if len(scanNew) > maxSecretScanLen {
+	if len(scanNew) > maxSecretScanLen+scanOverlap {
+		// #263: guard must match the slice target, or a 64-byte length
+		// window panics on slice bounds out of range (silently disabling
+		// the check via the per-check recover).
 		scanNew = scanNew[:maxSecretScanLen+scanOverlap]
 	}
 	scanOld := oldContent
-	if len(scanOld) > maxSecretScanLen {
-		// Keep the TAIL of oldContent so a secret near the end of the old
-		// file is still visible to the diff even after truncation.
-		scanOld = oldContent[len(oldContent)-(maxSecretScanLen+scanOverlap):]
+	if len(scanOld) > maxSecretScanLen+scanOverlap {
+		scanOld = scanOld[:maxSecretScanLen+scanOverlap]
 	}
 
 	// Determine if this is a source code file (vs config/docs).

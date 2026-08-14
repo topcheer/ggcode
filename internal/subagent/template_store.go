@@ -77,7 +77,11 @@ func (s *TemplateStore) Save(t NamedAgentTemplate) error {
 	// inherited its CreatedAt (#230).
 	if raw, rerr := os.ReadFile(path); rerr == nil {
 		var onDisk NamedAgentTemplate
-		if jerr := json.Unmarshal(raw, &onDisk); jerr == nil && onDisk.Name != "" && onDisk.Name != t.Name {
+		// #280: use the same normalized comparison as Load (below) —
+		// case/whitespace-only renames of the same template must be
+		// allowed as updates, not rejected as collisions.
+		if jerr := json.Unmarshal(raw, &onDisk); jerr == nil && onDisk.Name != "" &&
+			strings.TrimSpace(strings.ToLower(onDisk.Name)) != strings.TrimSpace(strings.ToLower(t.Name)) {
 			return fmt.Errorf("template name %q collides with existing %q (same sanitized filename); choose a different name", t.Name, onDisk.Name)
 		}
 	}

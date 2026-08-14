@@ -256,19 +256,44 @@ func walkErrorCheckIf(is *ast.IfStmt, nilRisk map[string]nilRiskEntry, walk func
 		}
 	case token.NEQ: // if err != nil { ... } — value is still at risk inside
 		walk(is.Body)
-		if ifBodyTerminates(is.Body) {
+		thenTerminates := ifBodyTerminates(is.Body)
+		if thenTerminates {
 			clearSaved() // guard exits: code past the if implies err == nil
 		}
 		if is.Else != nil { // else implies err == nil: safe
 			clearSaved()
 			walk(is.Else)
-			restoreSaved()
+			if !thenTerminates {
+				// Restore the risk after the else only when the then branch can
+				// fall through (#281). When the then branch terminates, code after
+				// the if is only reachable via the else (err == nil), so the risk
+				// stays permanently cleared.
+				restoreSaved()
+			}
 		}
 	}
 }
 
-// ifBodyTerminates reports whether an if-body always exits (return or panic),
-// meaning control flow past the if statement implies the condition was false.
+// noReturnSelectorCalls lists `pkg.Ident` call forms that never return
+// (log.Fatal* calls os.Exit(1); os.Exit and runtime.Goexit terminate).
+// t.Fatal/t.Fatalf also never return, but only inside test files -- for
+// simplicity we include them conservatively: recognizing a *few extra*
+// terminating bodies only suppresses warnings in test-style guard code,
+// which is the intended low-noise direction (#273).
+var noReturnSelectorCalls = map[string]bool{
+	"log.Fatal":      true,
+	"log.Fatalf":     true,
+	"log.Fatalln":    true,
+	"os.Exit":        true,
+	"runtime.Goexit": true,
+	"t.Fatal":        true,
+	"t.Fatalf":       true,
+	"t.Fatalln":      true,
+}
+
+// ifBodyTerminates reports whether an if-body always exits (return, panic,
+// or a known noreturn call such as log.Fatal / os.Exit), meaning control flow
+// past the if statement implies the condition was false.
 func ifBodyTerminates(body *ast.BlockStmt) bool {
 	if body == nil || len(body.List) == 0 {
 		return false
@@ -281,6 +306,14 @@ func ifBodyTerminates(body *ast.BlockStmt) bool {
 		if call, ok := st.X.(*ast.CallExpr); ok {
 			if ident, ok := call.Fun.(*ast.Ident); ok && ident.Name == "panic" {
 				return true
+			}
+			// Noreturn selector calls: log.Fatal, os.Exit, runtime.Goexit, ... (#273)
+			if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+				if pkg, ok := sel.X.(*ast.Ident); ok {
+					if noReturnSelectorCalls[pkg.Name+"."+sel.Sel.Name] {
+						return true
+					}
+				}
 			}
 		}
 	}

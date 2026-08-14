@@ -153,7 +153,14 @@ func sqlInjScan(filePath, content string) []sqlInjIssue {
 			return true
 		}
 
-		lineNum := fset.Position(call.Pos()).Line
+		// Fix #272: use the line where the query ARGUMENT starts, not the call
+		// start. For multi-line calls the first line is just the generic
+		// `rows, err := db.Query(` prefix, so a new vuln that changes the query
+		// (SELECT -> DELETE) on a later line produced the same fingerprint as
+		// the old one and was silently suppressed by the delta check. BinExpr
+		// operands already start at the leftmost operand, so Pos() is the
+		// start of the concatenation either way.
+		lineNum := fset.Position(queryArg.Pos()).Line
 		lineText := ""
 		if lineNum >= 1 && lineNum <= len(lines) {
 			lineText = strings.TrimSpace(lines[lineNum-1])

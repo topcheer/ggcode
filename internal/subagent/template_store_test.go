@@ -165,3 +165,24 @@ func TestTemplateStore_NameCollision(t *testing.T) {
 		t.Errorf("update broken: prompt=%q created=%v", got2.SystemPrompt, got2.CreatedAt)
 	}
 }
+
+// TestSaveCaseRenameNotCollision verifies that renaming a template with only
+// case/whitespace differences is treated as an update, not a collision (#280).
+func TestSaveCaseRenameNotCollision(t *testing.T) {
+	dir := t.TempDir()
+	ts := &TemplateStore{dir: dir}
+	orig := &NamedAgentTemplate{Name: "code reviewer", Description: "d"}
+	if err := ts.Save(*orig); err != nil {
+		t.Fatal(err)
+	}
+	// Same template, case-renamed: must succeed (previously a collision error).
+	renamed := &NamedAgentTemplate{Name: "  Code Reviewer  ", Description: "d2"}
+	if err := ts.Save(*renamed); err != nil {
+		t.Fatalf("case-only rename should update, got: %v", err)
+	}
+	// A genuinely different name mapping to the same file must still collide.
+	other := &NamedAgentTemplate{Name: "code/reviewer", Description: "x"}
+	if err := ts.Save(*other); err == nil {
+		t.Fatal("different name with same sanitized filename must collide")
+	}
+}

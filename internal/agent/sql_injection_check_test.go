@@ -242,3 +242,64 @@ func f(tx *Tx, table string) {
 }
 
 // Note: `contains` helper is defined in reflection_test.go
+
+func TestSQLInjection_MultilineDeltaNotSuppressed(t *testing.T) {
+	oldSrc := "package main\n" +
+		"import \"database/sql\"\n" +
+		"func f(db *sql.DB, id string) {\n" +
+		"	rows, err := db.Query(\n" +
+		"		\"SELECT * FROM users WHERE id = \" + id)\n" +
+		"	_ = rows\n" +
+		"	_ = err\n" +
+		"}\n"
+	// Same first line, but query changed SELECT -> DELETE on the arg line.
+	newSrc := "package main\n" +
+		"import \"database/sql\"\n" +
+		"func f(db *sql.DB, id string) {\n" +
+		"	rows, err := db.Query(\n" +
+		"		\"DELETE FROM users WHERE id = \" + id)\n" +
+		"	_ = rows\n" +
+		"	_ = err\n" +
+		"}\n"
+	warnings := checkSQLInjection("test.go", oldSrc, newSrc)
+	if len(warnings) != 1 {
+		t.Fatalf("expected 1 warning (new vuln must not be delta-suppressed), got %d: %v", len(warnings), warnings)
+	}
+	if !contains(warnings[0], "DELETE") && !contains(warnings[0], "concatenation") {
+		t.Logf("warning: %s", warnings[0])
+	}
+}
+
+func TestSQLInjection_MultilineDeltaSameQuerySuppressed(t *testing.T) {
+	src := "package main\n" +
+		"import \"database/sql\"\n" +
+		"func f(db *sql.DB, id string) {\n" +
+		"	rows, err := db.Query(\n" +
+		"		\"SELECT * FROM users WHERE id = \" + id)\n" +
+		"	_ = rows\n" +
+		"	_ = err\n" +
+		"}\n"
+	warnings := checkSQLInjection("test.go", src, src)
+	if len(warnings) != 0 {
+		t.Fatalf("expected 0 warnings for identical content (delta suppress), got %d: %v", len(warnings), warnings)
+	}
+}
+
+func TestSQLInjection_SingleLineDeltaStillSuppressed(t *testing.T) {
+	oldSrc := "package main\n" +
+		"import \"database/sql\"\n" +
+		"func f(db *sql.DB, id string) {\n" +
+		"	db.Query(\"SELECT * FROM t WHERE id = \" + id)\n" +
+		"}\n"
+	// Same single-line call with an unrelated edit elsewhere.
+	newSrc := "package main\n" +
+		"import \"database/sql\"\n" +
+		"func f(db *sql.DB, id string) {\n" +
+		"	db.Query(\"SELECT * FROM t WHERE id = \" + id)\n" +
+		"	_ = id\n" +
+		"}\n"
+	warnings := checkSQLInjection("test.go", oldSrc, newSrc)
+	if len(warnings) != 0 {
+		t.Fatalf("expected 0 warnings for unchanged single-line call, got %d: %v", len(warnings), warnings)
+	}
+}

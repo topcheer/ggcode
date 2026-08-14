@@ -10,18 +10,18 @@ import (
 )
 
 // TestMergeTunnelUserMessages verifies tunnel-recorded user messages are
-// merged into session history with exact-content dedup (#242).
+// merged into session history (#242), with ID-based dedup (#268).
 func TestMergeTunnelUserMessages(t *testing.T) {
 	mkEvent := func(text string) session.TunnelEvent {
 		data, _ := json.Marshal(map[string]string{"text": text, "message_id": "tm-" + text})
 		return session.TunnelEvent{Type: "user_message", Data: data}
 	}
 	msgs := []SessionMessage{
-		{Role: "user", Content: "hello"},
+		{ID: "tm-hello", Role: "user", Content: "hello"},
 		{Role: "assistant", Content: "hi"},
 	}
 	events := []session.TunnelEvent{
-		mkEvent("hello"),                                 // duplicate of existing user msg -> skipped
+		mkEvent("hello"),                                 // same message_id as persisted msg -> skipped
 		mkEvent("from mobile"),                           // new -> appended
 		{Type: "other", Data: nil},                       // non user_message -> skipped
 		{Type: "user_message", Data: []byte("not-json")}, // unparseable -> skipped
@@ -42,6 +42,60 @@ func TestMergeTunnelUserMessages(t *testing.T) {
 	same := mergeTunnelUserMessages(msgs, nil)
 	if len(same) != len(msgs) {
 		t.Fatalf("expected %d messages with no tunnel events, got %d", len(msgs), len(same))
+	}
+}
+
+// TestMergeTunnelUserMessages_SameTextDistinctIDsKept verifies that tunnel
+// events with identical text but distinct message IDs are all preserved —
+// the user may legitimately send "yes" twice (#268).
+func TestMergeTunnelUserMessages_SameTextDistinctIDsKept(t *testing.T) {
+	mkEvent := func(text, id string) session.TunnelEvent {
+		data, _ := json.Marshal(map[string]string{"text": text, "message_id": id})
+		return session.TunnelEvent{Type: "user_message", Data: data}
+	}
+	msgs := []SessionMessage{
+		{ID: "msg-1", Role: "user", Content: "what do you think?"},
+		{Role: "assistant", Content: "do you want to proceed?"},
+	}
+	events := []session.TunnelEvent{
+		mkEvent("yes", "tm-1"),
+		mkEvent("yes", "tm-2"), // same text, different message — must be kept
+		mkEvent("yes", "tm-1"), // exact replay of the first event — deduped
+	}
+
+	out := mergeTunnelUserMessages(msgs, events)
+	if len(out) != 4 {
+		t.Fatalf("expected 4 messages (2 persisted + 2 distinct tunnel), got %d: %+v", len(out), out)
+	}
+	if out[2].ID != "tm-1" || out[3].ID != "tm-2" {
+		t.Fatalf("expected both tunnel messages kept in order, got %+v", out[2:])
+	}
+}
+
+// TestMergeTunnelUserMessages_NoIDFallsBackToTextDedup verifies the text
+// fallback when a tunnel event carries no message_id (#268): such an event
+// matching a persisted user message is deduped, while new text is kept.
+func TestMergeTunnelUserMessages_NoIDFallsBackToTextDedup(t *testing.T) {
+	mkNoIDEvent := func(text string) session.TunnelEvent {
+		data, _ := json.Marshal(map[string]string{"text": text})
+		return session.TunnelEvent{Type: "user_message", Data: data}
+	}
+	msgs := []SessionMessage{
+		{ID: "msg-1", Role: "user", Content: "hello"},
+		{Role: "assistant", Content: "hi"},
+	}
+	events := []session.TunnelEvent{
+		mkNoIDEvent("hello"), // no ID, same text as persisted -> deduped
+		mkNoIDEvent("hello"), // second ID-less event with same text -> also deduped
+		mkNoIDEvent("fresh"), // no ID, new text -> kept
+	}
+
+	out := mergeTunnelUserMessages(msgs, events)
+	if len(out) != 3 {
+		t.Fatalf("expected 3 messages, got %d: %+v", len(out), out)
+	}
+	if out[2].Content != "fresh" || out[2].ID != "" {
+		t.Fatalf("expected fresh ID-less tunnel message appended, got %+v", out[2])
 	}
 }
 

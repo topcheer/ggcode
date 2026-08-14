@@ -199,11 +199,15 @@ func isRetryableForContext(ctx context.Context, err error) bool {
 }
 
 // isRetryableHTTPStatus returns true unless the status code is a permanent
-// client error (400, 401, 403, 404). All other codes — including 429, 5xx, and
-// unexpected 4xx — are retried.
+// client error. 400/401/403/404 plus 402 (payment required — FriendlyError
+// already treats billing exhaustion as needing user action), 413 (payload
+// too large — the request will not shrink by retrying), and 422
+// (unprocessable entity — schema/semantic rejection) are permanent (#267).
 func isRetryableHTTPStatus(status int) bool {
 	switch status {
-	case http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound:
+	case http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden,
+		http.StatusNotFound, http.StatusPaymentRequired,
+		http.StatusRequestEntityTooLarge, http.StatusUnprocessableEntity:
 		return false
 	default:
 		return true

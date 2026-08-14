@@ -305,6 +305,13 @@ func (m *mockProvider) CountTokens(ctx context.Context, messages []provider.Mess
 
 func (m *mockProvider) Name() string { return "mock" }
 
+// streamCallCount reports how many ChatStream calls were made.
+func (m *mockProvider) streamCallCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.streamCalls
+}
+
 func streamEventsFromResponse(resp *provider.ChatResponse) []provider.StreamEvent {
 	if resp == nil {
 		return nil
@@ -2159,5 +2166,126 @@ func TestIsAgentRetryableLLMError(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("isAgentRetryableLLMError(%v) = %v, want %v", tt.err, got, tt.want)
 		}
+	}
+}
+
+// TestRunStreamPolicyBlockedPartialDoesNotContinue verifies that a response
+// truncated by a provider policy filter (SAFETY/etc.) does NOT trigger the
+// automatic "continue from where you left off" retry loop — the partial text
+// is kept and the run ends after a single stream call (#266).
+func TestRunStreamPolicyBlockedPartialDoesNotContinue(t *testing.T) {
+	mp := &mockProvider{
+		streamEvents: [][]provider.StreamEvent{{
+			{Type: provider.StreamEventText, Text: "partial"},
+			{Type: provider.StreamEventDone, Usage: &provider.TokenUsage{InputTokens: 10, OutputTokens: 2}, Truncated: true, PolicyBlocked: true},
+		}},
+	}
+	a := NewAgent(mp, tool.NewRegistry(), "", 5)
+	defer a.Close()
+
+	var systemTexts []string
+	err := a.RunStream(context.Background(), "risky question", func(event provider.StreamEvent) {
+		if event.Type == provider.StreamEventSystem {
+			systemTexts = append(systemTexts, event.Text)
+		}
+	})
+	if err != nil {
+		t.Fatalf("RunStream() error = %v", err)
+	}
+	if got := mp.streamCallCount(); got != 1 {
+		t.Fatalf("expected exactly 1 stream call (no continuation), got %d", got)
+	}
+	joined := strings.Join(systemTexts, "\n")
+	if !strings.Contains(joined, "safety policy") {
+		t.Fatalf("expected policy-block notice in system events, got %q", joined)
+	}
+	if strings.Contains(joined, "truncated by output length limit") {
+		t.Fatalf("misleading length-limit continuation notice present: %q", joined)
+	}
+	// Partial text must land in history.
+	var lastAssistant string
+	for _, m := range a.ContextManager().Messages() {
+		if m.Role == "assistant" {
+			for _, b := range m.Content {
+				if b.Type == "text" {
+					lastAssistant = b.Text
+				}
+			}
+		}
+	}
+	if !strings.Contains(lastAssistant, "partial") {
+		t.Fatalf("expected partial text preserved in history, got %q", lastAssistant)
+	}
+}
+
+// TestRunStreamPolicyBlockedEmptyReportsOnce verifies that a fully blocked
+// response (no output tokens, no text) does not inject empty-response nudges
+// or report a context-overflow reset — it reports the policy block and stops (#266).
+func TestRunStreamPolicyBlockedEmptyReportsOnce(t *testing.T) {
+	mp := &mockProvider{
+		streamEvents: [][]provider.StreamEvent{{
+			{Type: provider.StreamEventDone, Usage: &provider.TokenUsage{InputTokens: 10, OutputTokens: 0}, Truncated: true, PolicyBlocked: true},
+		}},
+	}
+	a := NewAgent(mp, tool.NewRegistry(), "", 5)
+	defer a.Close()
+
+	var allTexts []string
+	err := a.RunStream(context.Background(), "risky question", func(event provider.StreamEvent) {
+		if event.Type == provider.StreamEventSystem || event.Type == provider.StreamEventText {
+			allTexts = append(allTexts, event.Text)
+		}
+	})
+	if err != nil {
+		t.Fatalf("RunStream() error = %v", err)
+	}
+	if got := mp.streamCallCount(); got != 1 {
+		t.Fatalf("expected exactly 1 stream call (no empty nudges), got %d", got)
+	}
+	joined := strings.Join(allTexts, "\n")
+	if !strings.Contains(joined, "safety policy") {
+		t.Fatalf("expected policy-block report, got %q", joined)
+	}
+	if strings.Contains(joined, "context overflow") {
+		t.Fatalf("misleading context-overflow reset reported: %q", joined)
+	}
+	if strings.Contains(joined, "previous response was empty") {
+		t.Fatalf("empty-response nudge injected for policy block: %q", joined)
+	}
+}
+
+// TestRunStreamTruncatedStillContinues verifies the length-truncation
+// auto-continuation path still fires when PolicyBlocked is false (#266 regression guard).
+func TestRunStreamTruncatedStillContinues(t *testing.T) {
+	mp := &mockProvider{
+		streamEvents: [][]provider.StreamEvent{
+			{
+				{Type: provider.StreamEventText, Text: "cut off mid"},
+				{Type: provider.StreamEventDone, Usage: &provider.TokenUsage{InputTokens: 10, OutputTokens: 100}, Truncated: true},
+			},
+			{
+				{Type: provider.StreamEventText, Text: " sentence done"},
+				{Type: provider.StreamEventDone, Usage: &provider.TokenUsage{InputTokens: 10, OutputTokens: 5}},
+			},
+		},
+	}
+	a := NewAgent(mp, tool.NewRegistry(), "", 5)
+	defer a.Close()
+
+	var systemTexts []string
+	err := a.RunStream(context.Background(), "write something long", func(event provider.StreamEvent) {
+		if event.Type == provider.StreamEventSystem {
+			systemTexts = append(systemTexts, event.Text)
+		}
+	})
+	if err != nil {
+		t.Fatalf("RunStream() error = %v", err)
+	}
+	if got := mp.streamCallCount(); got != 2 {
+		t.Fatalf("expected 2 stream calls (truncation continuation), got %d", got)
+	}
+	joined := strings.Join(systemTexts, "\n")
+	if !strings.Contains(joined, "truncated by output length limit") {
+		t.Fatalf("expected continuation notice, got %q", joined)
 	}
 }

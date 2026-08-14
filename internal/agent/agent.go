@@ -2055,7 +2055,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			ctxPressure = float64(a.contextManager.TokenCount()) / float64(cw)
 		}
 		activeToolDefs := a.toolFilter.FilterWithPressure(toolDefs, tool.ExtractContextFromMessages(msgs, 6), ctxPressure)
-		resp, textBuf, toolCalls, truncated, err := a.streamChatResponse(ctx, a.ensureMessagesSendable(msgs), activeToolDefs, onEvent)
+		resp, textBuf, toolCalls, truncated, policyBlocked, err := a.streamChatResponse(ctx, a.ensureMessagesSendable(msgs), activeToolDefs, onEvent)
 		if samplingApplied >= 0 {
 			a.restoreSampling(samplingPrev)
 		}
@@ -2136,6 +2136,20 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// Only trigger when InputTokens > 0 (real API call) to avoid false positives
 		// in tests or scenarios where usage stats are unavailable.
 		if resp.Usage.OutputTokens == 0 && resp.Usage.InputTokens > 0 && len(toolCalls) == 0 {
+			// Complete policy block (no partial text, no output tokens): the
+			// request was rejected by a provider safety filter. An empty-response
+			// nudge would just re-trigger the same filter — report and stop (#266).
+			if policyBlocked {
+				debug.Log("agent", "Iteration %d: response fully blocked by provider policy, not retrying", i+1)
+				onEvent(provider.StreamEvent{
+					Type: provider.StreamEventSystem,
+					Text: "[Response blocked by provider safety policy — not retrying. Try rephrasing the request.] ",
+				})
+				if len(resp.Message.Content) > 0 {
+					a.contextManager.Add(resp.Message)
+				}
+				return nil
+			}
 			consecutiveEmptyResponses++
 			debug.Log("agent", "Iteration %d: empty response detected (consecutive=%d, input_tokens=%d)",
 				i+1, consecutiveEmptyResponses, resp.Usage.InputTokens)
@@ -2165,7 +2179,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// prompt so the model picks up where it left off. This prevents
 			// silent loss of partial content (the old behavior sent a hard error
 			// and discarded everything already streamed).
-			if truncated && truncationContinues < 3 {
+			if truncated && !policyBlocked && truncationContinues < 3 {
 				truncationContinues++
 				debug.Log("agent", "Iteration %d: response truncated by output limit, auto-continuing (attempt %d/3)", i+1, truncationContinues)
 				a.contextManager.Add(resp.Message)
@@ -2181,6 +2195,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					}},
 				})
 				continue
+			}
+			if truncated && policyBlocked {
+				// Truncated by a provider policy filter (SAFETY/RECITATION/etc.),
+				// not by the output token limit. Auto-continuation would resend
+				// the full context and hit the same filter again. Keep the partial
+				// output in history and stop (#266).
+				debug.Log("agent", "Iteration %d: response blocked by provider policy, skipping auto-continuation", i+1)
+				onEvent(provider.StreamEvent{
+					Type: provider.StreamEventSystem,
+					Text: "[Response blocked by provider safety policy — partial output kept, not retrying.] ",
+				})
 			}
 			// Detect inline tool calls in text/reasoning (common with lower-reasoning
 			// models that write tool calls in prose instead of structured tool_use blocks).
@@ -4423,15 +4448,16 @@ func (a *Agent) injectPendingInterruptions() bool {
 
 // --- Stream response parsing ---
 // streamChatResponse opens a streaming chat, collects text/tool-call events,
-// and returns the assembled response, the raw assistant text buffer, and any
-// completed tool calls.
-func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message, toolDefs []provider.ToolDefinition, onEvent func(provider.StreamEvent)) (*provider.ChatResponse, string, []provider.ToolCallDelta, bool, error) {
+// and returns the assembled response, the raw assistant text buffer, any
+// completed tool calls, and whether the stream ended truncated and/or blocked
+// by a provider policy filter.
+func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message, toolDefs []provider.ToolDefinition, onEvent func(provider.StreamEvent)) (*provider.ChatResponse, string, []provider.ToolCallDelta, bool, bool, error) {
 	streamCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	rawStream, err := a.provider.ChatStream(streamCtx, msgs, toolDefs)
 	if err != nil {
 		debug.Log("agent", "ChatStream error: %v", err)
-		return nil, "", nil, false, fmt.Errorf("chat error: %w", err)
+		return nil, "", nil, false, false, fmt.Errorf("chat error: %w", err)
 	}
 	stream := streamWithStallDetection(rawStream, streamStallThreshold)
 	var (
@@ -4441,6 +4467,7 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 		toolCalls        []provider.ToolCallDelta
 		usage            provider.TokenUsage
 		truncated        bool
+		policyBlocked    bool
 	)
 	flushText := func() {
 		if textBuf.Len() == 0 {
@@ -4507,6 +4534,7 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 				usage = *event.Usage
 			}
 			truncated = event.Truncated
+			policyBlocked = event.PolicyBlocked
 			// Close thinking window if open
 			if !thinkStartTime.IsZero() {
 				thinkDuration += time.Since(thinkStartTime)
@@ -4557,7 +4585,7 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 			onEvent(event)
 		case provider.StreamEventError:
 			debug.Log("agent", "ChatStream event error: %v", event.Error)
-			return nil, assistantTextBuf.String(), nil, false, fmt.Errorf("chat error: %w", event.Error)
+			return nil, assistantTextBuf.String(), nil, false, false, fmt.Errorf("chat error: %w", event.Error)
 		}
 	}
 	flushText()
@@ -4577,7 +4605,7 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 	return &provider.ChatResponse{
 		Message: respMsg,
 		Usage:   usage,
-	}, assistantTextBuf.String(), toolCalls, truncated, nil
+	}, assistantTextBuf.String(), toolCalls, truncated, policyBlocked, nil
 }
 
 // --- Internal helpers ---

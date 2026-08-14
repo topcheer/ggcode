@@ -383,3 +383,143 @@ func use() {
 		t.Fatalf("should not flag 'a' (err1 was checked), got: %s", result)
 	}
 }
+
+// TestCheckNilDerefAfterError_LogFatalGuardNoWarn verifies #273: a
+// `if err != nil { log.Fatal(err) }` guard is noreturn, so the dereference
+// after it must not be flagged.
+func TestCheckNilDerefAfterError_LogFatalGuardNoWarn(t *testing.T) {
+	code := `package main
+
+import (
+	"fmt"
+	"log"
+)
+
+type T struct{ Field string }
+
+func get() (*T, error) { return nil, nil }
+
+func use() {
+	v, err := get()
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(v.Field) // safe: log.Fatal never returns
+}
+`
+	result := checkNilDerefAfterError("test.go", "", code)
+	if result != "" {
+		t.Fatalf("expected no warning after log.Fatal guard, got: %s", result)
+	}
+}
+
+// TestCheckNilDerefAfterError_LogFatalfGuardNoWarn verifies #273 for
+// log.Fatalf and os.Exit variants.
+func TestCheckNilDerefAfterError_NoreturnSelectorVariants(t *testing.T) {
+	cases := []struct {
+		name  string
+		guard string
+	}{
+		{"log.Fatalf", `log.Fatalf("bad: %v", err)`},
+		{"log.Fatalln", `log.Fatalln(err)`},
+		{"os.Exit", `os.Exit(1)`},
+		{"runtime.Goexit", `runtime.Goexit()`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			code := "package main\n\nimport (\n\t\"fmt\"\n\t\"log\"\n\t\"os\"\n\t\"runtime\"\n)\n\ntype T struct{ Field string }\n\nfunc get() (*T, error) { return nil, nil }\n\nfunc use() {\n\tv, err := get()\n\tif err != nil {\n\t\t" + tc.guard + "\n\t}\n\tfmt.Println(v.Field)\n}\n"
+			result := checkNilDerefAfterError("test.go", "", code)
+			if result != "" {
+				t.Fatalf("expected no warning after %s guard, got: %s", tc.name, result)
+			}
+		})
+	}
+}
+
+// TestCheckNilDerefAfterError_OrdinaryCallGuardStillWarns verifies #273 does
+// not over-generalize: a plain fmt.Println guard falls through, so the
+// subsequent dereference is still flagged.
+func TestCheckNilDerefAfterError_OrdinaryCallGuardStillWarns(t *testing.T) {
+	code := `package main
+
+import "fmt"
+
+type T struct{ Field string }
+
+func get() (*T, error) { return nil, nil }
+
+func use() {
+	v, err := get()
+	if err != nil {
+		fmt.Println(err)
+	}
+	fmt.Println(v.Field) // BUG: guard does not exit; v may be nil
+}
+`
+	result := checkNilDerefAfterError("test.go", "", code)
+	if result == "" {
+		t.Fatal("expected warning after non-terminating fmt.Println guard")
+	}
+	if !strings.Contains(result, "'v'") {
+		t.Fatalf("expected warning about variable 'v', got: %s", result)
+	}
+}
+
+// TestCheckNilDerefAfterError_NEQReturnElseNoWarn verifies #281: when the
+// then branch of `if err != nil` terminates, the risk must stay permanently
+// cleared after the else block -- restoreSaved must be skipped.
+func TestCheckNilDerefAfterError_NEQReturnElseNoWarn(t *testing.T) {
+	code := `package main
+
+import "fmt"
+
+type T struct{ Field string }
+
+func get() (*T, error) { return nil, nil }
+
+func use() {
+	v, err := get()
+	if err != nil {
+		return
+	} else {
+		_ = v
+	}
+	fmt.Println(v.Field) // safe: only reachable when err == nil
+}
+`
+	result := checkNilDerefAfterError("test.go", "", code)
+	if result != "" {
+		t.Fatalf("expected no warning when then branch returns and else exists (#281), got: %s", result)
+	}
+}
+
+// TestCheckNilDerefAfterError_NEQNonTerminatingElseRestores verifies #281 keeps
+// the restore semantics when the then branch does NOT terminate: risk must be
+// restored after walking the else block.
+func TestCheckNilDerefAfterError_NEQNonTerminatingElseRestores(t *testing.T) {
+	code := `package main
+
+import "fmt"
+
+type T struct{ Field string }
+
+func get() (*T, error) { return nil, nil }
+
+func use() {
+	v, err := get()
+	if err != nil {
+		fmt.Println(err)
+	} else {
+		_ = v
+	}
+	fmt.Println(v.Field) // BUG: then branch falls through; v may still be nil
+}
+`
+	result := checkNilDerefAfterError("test.go", "", code)
+	if result == "" {
+		t.Fatal("expected warning when then branch does not terminate (#281 restore kept)")
+	}
+	if !strings.Contains(result, "'v'") {
+		t.Fatalf("expected warning about variable 'v', got: %s", result)
+	}
+}

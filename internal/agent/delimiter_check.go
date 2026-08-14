@@ -215,14 +215,36 @@ func scanDelimiters(content string, style commentStyle) string {
 				continue
 			}
 
-			// --- Rust raw strings r#"..."# (fix #237) ---
-			if style.rust && c == 'r' && i+2 < n && content[i+1] == '#' && content[i+2] == '"' {
-				if end := strings.Index(content[i+3:], `"#`); end >= 0 {
-					line += strings.Count(content[i:i+3+end+2], "\n")
-					i += 3 + end + 2
+			// --- Rust raw strings r"...", r#"..."#, r##"..."## ... (fix #237, #276) ---
+			// Rust allows an arbitrary number of hashes; the string closes only
+			// at a '"' followed by the same number of hashes. Content may itself
+			// contain "#, which is why counting k is required.
+			if style.rust && c == 'r' && i+2 < n && content[i+1] == '"' {
+				if end := strings.IndexByte(content[i+2:], '"'); end >= 0 {
+					line += strings.Count(content[i:i+2+end+1], "\n")
+					i += 2 + end + 1
 					continue
 				}
-				return fmt.Sprintf("line %d: unterminated raw string literal - missing closing \"#", line)
+				return fmt.Sprintf("line %d: unterminated raw string literal - missing closing \"", line)
+			}
+			if style.rust && c == 'r' && i+1 < n && content[i+1] == '#' {
+				// Count consecutive hashes after 'r'.
+				k := 1
+				for i+1+k < n && content[i+1+k] == '#' {
+					k++
+				}
+				if i+1+k < n && content[i+1+k] == '"' {
+					start := i + 1 + k // index of opening '"'
+					if end, ok := indexRawStringClose(content[start+1:], k); ok {
+						closed := start + 1 + end + 1 + k // past '"' and k hashes
+						line += strings.Count(content[i:closed], "\n")
+						i = closed
+						continue
+					}
+					return fmt.Sprintf("line %d: unterminated raw string literal - missing closing quote followed by %d '#'", line, k)
+				}
+				// 'r' followed by hashes but no quote: not a raw string (e.g.
+				// an identifier); fall through to normal handling.
 			}
 
 			// --- String starts ---
@@ -367,6 +389,29 @@ func scanDelimiters(content string, style commentStyle) string {
 	}
 
 	return ""
+}
+
+// indexRawStringClose returns the index (relative to s) of the '"' that begins
+// the closing delimiter of a k-hash Rust raw string — i.e. the first '"'
+// followed by exactly k '#' characters (fix #276). ok=false if not found,
+// meaning the raw string literal is unterminated.
+func indexRawStringClose(s string, k int) (int, bool) {
+	for i := 0; i+1+k <= len(s); i++ {
+		if s[i] != '"' {
+			continue
+		}
+		closed := true
+		for j := 1; j <= k; j++ {
+			if s[i+j] != '#' {
+				closed = false
+				break
+			}
+		}
+		if closed {
+			return i, true
+		}
+	}
+	return 0, false
 }
 
 // unclosedStringLine returns the line number where the unclosed construct

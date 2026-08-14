@@ -262,3 +262,127 @@ func TestGeminiCloneWithModel_PreservesSettings(t *testing.T) {
 		t.Fatalf("expected toolChoice preserved as required, got %s", clone.toolChoice)
 	}
 }
+
+// TestGeminiChatStream_PolicyBlockedDoneEvent verifies that a fatal finish
+// reason (SAFETY/RECITATION/etc.) produces a Done event with both Truncated
+// and PolicyBlocked set, so the agent does not burn continuation rounds
+// resending the full context into the same filter (#266).
+func TestGeminiChatStream_PolicyBlockedDoneEvent(t *testing.T) {
+	cases := []struct {
+		name   string
+		stream string
+	}{
+		{
+			name: "safety with partial text",
+			stream: `data: {"candidates":[{"content":{"role":"model","parts":[{"text":"partial answer"}]},"finishReason":"SAFETY"}],"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":2}}
+
+data: {"candidates":[{"finishReason":"SAFETY"}],"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":2}}
+
+`,
+		},
+		{
+			name: "recitation fully blocked",
+			stream: `data: {"candidates":[{"finishReason":"RECITATION"}],"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":0}}
+
+`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = w.Write([]byte(tc.stream))
+			}))
+			defer server.Close()
+
+			prov, err := NewProvider(&config.ResolvedEndpoint{
+				Protocol:  "gemini",
+				BaseURL:   server.URL,
+				APIKey:    "dummy",
+				Model:     "gemini-2.5-flash",
+				MaxTokens: 128,
+			})
+			if err != nil {
+				t.Fatalf("expected Gemini provider, got error: %v", err)
+			}
+
+			ch, err := prov.ChatStream(context.Background(), []Message{
+				{Role: "user", Content: []ContentBlock{TextBlock("hello")}},
+			}, nil)
+			if err != nil {
+				t.Fatalf("ChatStream error: %v", err)
+			}
+
+			var gotText string
+			var doneEvent *StreamEvent
+			for ev := range ch {
+				switch ev.Type {
+				case StreamEventText:
+					gotText += ev.Text
+				case StreamEventDone:
+					e := ev
+					doneEvent = &e
+				case StreamEventError:
+					t.Fatalf("unexpected error event: %v", ev.Error)
+				}
+			}
+			if doneEvent == nil {
+				t.Fatal("expected Done event, stream ended without one")
+			}
+			if !doneEvent.Truncated {
+				t.Error("expected Truncated=true on policy-blocked Done event")
+			}
+			if !doneEvent.PolicyBlocked {
+				t.Error("expected PolicyBlocked=true on policy-blocked Done event")
+			}
+		})
+	}
+}
+
+// TestGeminiChatStream_MaxTokensNotPolicyBlocked verifies the MAX_TOKENS path
+// still sets Truncated without PolicyBlocked, so auto-continuation keeps
+// working for genuine output-length truncation (#266).
+func TestGeminiChatStream_MaxTokensNotPolicyBlocked(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(`data: {"candidates":[{"content":{"role":"model","parts":[{"text":"long answer cut off"}]},"finishReason":"MAX_TOKENS"}],"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":128}}
+
+`))
+	}))
+	defer server.Close()
+
+	prov, err := NewProvider(&config.ResolvedEndpoint{
+		Protocol:  "gemini",
+		BaseURL:   server.URL,
+		APIKey:    "dummy",
+		Model:     "gemini-2.5-flash",
+		MaxTokens: 128,
+	})
+	if err != nil {
+		t.Fatalf("expected Gemini provider, got error: %v", err)
+	}
+
+	ch, err := prov.ChatStream(context.Background(), []Message{
+		{Role: "user", Content: []ContentBlock{TextBlock("hello")}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("ChatStream error: %v", err)
+	}
+
+	var doneEvent *StreamEvent
+	for ev := range ch {
+		if ev.Type == StreamEventDone {
+			e := ev
+			doneEvent = &e
+		}
+	}
+	if doneEvent == nil {
+		t.Fatal("expected Done event, stream ended without one")
+	}
+	if !doneEvent.Truncated {
+		t.Error("expected Truncated=true on MAX_TOKENS Done event")
+	}
+	if doneEvent.PolicyBlocked {
+		t.Error("expected PolicyBlocked=false on MAX_TOKENS Done event")
+	}
+}

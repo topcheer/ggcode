@@ -18,6 +18,15 @@ type SessionLock struct {
 	file      *os.File // kept open to hold the flock (unix) or lock (windows)
 }
 
+// SessionID returns the ID of the session this lock was attempted on.
+// The same value is returned whether or not the lock was acquired.
+func (l *SessionLock) SessionID() string {
+	if l == nil {
+		return ""
+	}
+	return l.sessionID
+}
+
 // LockFilePath returns the path to the lock file for a session.
 func LockFilePath(storeDir, sessionID string) string {
 	return filepath.Join(storeDir, sessionID+".lock")

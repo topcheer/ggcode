@@ -142,6 +142,15 @@ type ChatBridge struct {
 	// Session lock for preventing concurrent access to the same session.
 	sessionLock      *session.SessionLock
 	sessionEphemeral bool // true if this session should be deleted when empty
+
+	// runSes is the session snapshot taken at run start, inside the same
+	// b.mu critical section that installs b.cancel (#270). Persist paths
+	// (persist handler, checkpoint handler, persistRunMessages) must target
+	// this snapshot rather than the write-time b.currentSes — a session
+	// switch between run start and a late persist would otherwise append
+	// the old run's messages to the new session's JSONL (cross-session
+	// pollution via SendHiddenText's LAN channel included).
+	runSes *session.Session
 }
 
 // NewChatBridge creates a new chat bridge using the global config.
@@ -414,6 +423,7 @@ func (b *ChatBridge) sendMessageData(data tunnel.MessageData, source string, exc
 	b.finished = false // reset per-run finish guard (#223)
 	b.usageTurnIndex++
 	turnID, _ := b.startDesktopTurnLocked()
+	b.runSes = b.currentSes // #270: persist-path snapshot, same critical section as b.cancel
 	b.mu.Unlock()
 
 	// Emit user_message event outside the lock to avoid holding b.mu during
@@ -645,15 +655,149 @@ func (b *ChatBridge) cleanupEphemeralSession() {
 	if lock != nil {
 		lock.Release()
 	}
-	// Clear the fields under b.mu so concurrent locked readers (ensureSession,
-	// persistRunMessages) never observe a half-updated state. Only clear the
-	// lock if another goroutine has not already installed a new one.
+	b.cleanupEphemeralFinalize(ses, lock)
+}
+
+// cleanupEphemeralFinalize is the post-release critical section of
+// cleanupEphemeralSession, split out so its ownership re-checks are directly
+// testable. Both re-checks are required: while lock.Release() was blocked
+// outside b.mu, a concurrent EnsureSession may have installed a new session
+// and/or lock — clearing unconditionally would clobber that new state (#279).
+func (b *ChatBridge) cleanupEphemeralFinalize(ses *session.Session, lock *session.SessionLock) {
 	b.mu.Lock()
+	defer b.mu.Unlock()
 	if b.sessionLock == lock {
 		b.sessionLock = nil
+		// #279: the ephemeral flag describes *ses*, not the lock slot. Only
+		// clear it when ses is still the current session — otherwise we would
+		// wipe the flag a concurrent creator just set for its own new
+		// ephemeral session, leaving that session's empty JSONL orphaned on
+		// disk (never cleaned up by a later switch).
+		if b.currentSes == ses {
+			b.sessionEphemeral = false
+		}
 	}
+}
+
+// prevSessionState is a snapshot of the bridge's session fields taken before
+// a LoadSession switch attempt, used to roll back if the switch fails (#269).
+type prevSessionState struct {
+	ses              *session.Session
+	ephemeral        bool
+	usageTurnIndex   int
+	lastMetricDigest int
+	// deletedByCleanup is true when cleanupEphemeralSession removed ses from
+	// the store (ephemeral + no messages) before the switch attempt — such a
+	// session cannot be rolled back to.
+	deletedByCleanup bool
+}
+
+// snapshotSessionState captures the current session state for a possible
+// rollback in LoadSession (#269). Must be called before cleanupEphemeralSession.
+func (b *ChatBridge) snapshotSessionState() prevSessionState {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	ses := b.currentSes
+	eph := b.sessionEphemeral
+	// Mirror agentruntime.DeleteSessionIfEmpty's predicate exactly: the
+	// cleanup that follows this snapshot deletes ses iff it is ephemeral
+	// and has no messages.
+	deleted := eph && ses != nil && len(ses.Messages) == 0
+	return prevSessionState{
+		ses:              ses,
+		ephemeral:        eph,
+		usageTurnIndex:   b.usageTurnIndex,
+		lastMetricDigest: b.lastMetricDigestTurn,
+		deletedByCleanup: deleted,
+	}
+}
+
+// rollbackSessionLoad restores the bridge to the session state captured by
+// snapshotSessionState after a failed LoadSession switch (#269). Without the
+// rollback, b.currentSes keeps pointing at the failed session whose lock was
+// just released, so CurrentSessionID() lies and the SendContent auto-rebuild
+// path would cross-append to a JSONL another instance may now own.
+//
+// If the previous session no longer exists on disk (ephemeral cleanup) or its
+// lock cannot be re-acquired, the current session is cleared instead — b.currentSes
+// must never point at a session whose lock we do not hold.
+func (b *ChatBridge) rollbackSessionLoad(from *session.Session, prev prevSessionState) {
+	// Only roll back if we still own the failed switch — another path may
+	// have switched sessions concurrently.
+	b.mu.Lock()
+	cur := b.currentSes
+	b.mu.Unlock()
+	if cur != from {
+		return
+	}
+	if prev.ses != nil && !prev.deletedByCleanup {
+		// Re-acquire the old session's lock (outside b.mu: disk IO). It was
+		// released by cleanupEphemeralSession before the switch attempt.
+		storeDir, _ := session.DefaultDir()
+		lock, lockErr := session.TryAcquireSessionLock(storeDir, prev.ses.ID)
+		if lockErr == nil && lock.Acquired() {
+			b.mu.Lock()
+			if b.sessionLock == nil {
+				b.sessionLock = lock
+				b.sessionEphemeral = prev.ephemeral
+				b.mu.Unlock()
+			} else {
+				b.mu.Unlock()
+				lock.Release() // a newer lock is installed; not ours to keep
+				b.setSessionState(agentruntime.ClearSession())
+				log.Printf("[chat] LoadSession: rollback skipped, new lock installed; current session cleared")
+				return
+			}
+			b.setSessionState(agentruntime.SessionState{
+				Session:              prev.ses,
+				UsageTurnIndex:       prev.usageTurnIndex,
+				LastMetricDigestTurn: prev.lastMetricDigest,
+			})
+			log.Printf("[chat] LoadSession: rolled back to previous session %s after init failure", prev.ses.ID)
+			return
+		}
+		log.Printf("[chat] LoadSession: previous session %s is locked elsewhere; clearing current session", prev.ses.ID)
+	}
+	// Rollback target unusable (deleted, or lock lost) — clear the current
+	// session entirely; the next message creates a fresh one.
+	b.mu.Lock()
 	b.sessionEphemeral = false
 	b.mu.Unlock()
+	b.setSessionState(agentruntime.ClearSession())
+}
+
+// sessionLockMismatchLocked reports whether the held session lock (if any)
+// belongs to a session other than ses — positive evidence that ses is no
+// longer ours to write (#269). Callers must hold b.mu. A nil lock is NOT a
+// mismatch: lock acquisition is best-effort on some session creation paths
+// (lowercase ensureSession), and absence of a lock is not evidence of one.
+func (b *ChatBridge) sessionLockMismatchLocked(ses *session.Session) bool {
+	if ses == nil || b.sessionLock == nil {
+		return false
+	}
+	return b.sessionLock.SessionID() != ses.ID
+}
+
+// appendPersistMessage appends msg to ses's JSONL under the session-lock
+// guard (#269): when the bridge holds a lock for a different session, ses is
+// no longer ours to write (e.g. its lock was released after a failed load) —
+// refuse the append rather than risk cross-process double-writes to the
+// same JSONL.
+func (b *ChatBridge) appendPersistMessage(store *session.JSONLStore, ses *session.Session, msg provider.Message) {
+	b.mu.Lock()
+	mismatch := b.sessionLockMismatchLocked(ses)
+	lockID := ""
+	if b.sessionLock != nil {
+		lockID = b.sessionLock.SessionID()
+	}
+	b.mu.Unlock()
+	if mismatch {
+		log.Printf("[chat] persist: refusing write to session %s while lock held for %s (#269)", ses.ID, lockID)
+		return
+	}
+	if err := store.AppendMessageToDisk(ses, msg); err != nil {
+		log.Printf("[chat] persist handler: AppendMessageToDisk failed: %v", err)
+	}
 }
 
 func (b *ChatBridge) setSessionState(state agentruntime.SessionState) {
@@ -736,6 +880,10 @@ func (b *ChatBridge) LoadSession(id string) error {
 		return fmt.Errorf("session switch while agent is running")
 	}
 
+	// Snapshot the pre-switch session state so an InitAgent failure after
+	// the switch can roll back (#269).
+	prev := b.snapshotSessionState()
+
 	// Release old session's lock + clean up the ephemeral empty session.
 	// cleanupEphemeralSession has the full semantics (logging + orphaned IM
 	// binding cleanup) that the previous inline block lacked (#241).
@@ -787,6 +935,13 @@ func (b *ChatBridge) LoadSession(id string) error {
 		if ours {
 			lock.Release()
 		}
+		// #269: setSessionState already switched currentSes to the failed
+		// session. Roll back to the pre-switch state; otherwise
+		// CurrentSessionID() keeps reporting the failed session while its
+		// lock is released, and a later SendContent auto-rebuild would
+		// cross-append to a JSONL another instance may now own.
+		b.ResetAgent()
+		b.rollbackSessionLoad(state.Session, prev)
 		if onSessionChanged != nil {
 			onSessionChanged()
 		}
@@ -847,20 +1002,30 @@ func (b *ChatBridge) LoadSession(id string) error {
 // EnsureSession creates a new session if one doesn't already exist.
 // Called on startup and before sending messages.
 func (b *ChatBridge) ensureSession() error {
+	// Shared-field reads/writes under b.mu; NewDefaultStore is IO and stays
+	// outside the lock (#279 lock-order discipline).
+	b.mu.Lock()
 	if b.sessionStore == nil {
+		b.mu.Unlock()
 		store, err := session.NewDefaultStore()
 		if err != nil {
 			return fmt.Errorf("create session store: %w", err)
 		}
+		b.mu.Lock()
 		b.sessionStore = store
 	}
+	store := b.sessionStore
+	current := b.currentSes
+	cfg := b.cfg
+	workingDir := b.workingDir
+	b.mu.Unlock()
 	vendor, endpoint, model := "", "", ""
-	if b.cfg != nil {
-		vendor = b.cfg.Vendor
-		endpoint = b.cfg.Endpoint
-		model = b.cfg.Model
+	if cfg != nil {
+		vendor = cfg.Vendor
+		endpoint = cfg.Endpoint
+		model = cfg.Model
 	}
-	state, created, err := agentruntime.EnsureSession(b.sessionStore, b.currentSes, vendor, endpoint, model, b.workingDir)
+	state, created, err := agentruntime.EnsureSession(store, current, vendor, endpoint, model, workingDir)
 	if err != nil {
 		return fmt.Errorf("save new session: %w", err)
 	}
@@ -875,12 +1040,23 @@ func (b *ChatBridge) ensureSession() error {
 // written to JSONL at Add() time. This only updates ses.Messages for rendering.
 func (b *ChatBridge) persistRunMessages() {
 	b.mu.Lock()
-	ses := b.currentSes
+	// #270: append to the run-start session snapshot, not the write-time
+	// b.currentSes — a mid-run session switch must not pull this run's
+	// messages into the new session (the disk appends already targeted the
+	// snapshot via the persist handler).
+	ses := b.runSes
+	if ses == nil {
+		ses = b.currentSes
+	}
+	cur := b.currentSes
 	ag := b.agent
 	b.mu.Unlock()
 
 	if ses == nil || ag == nil {
 		return
+	}
+	if cur != nil && cur != ses {
+		log.Printf("[chat] persistRunMessages: session switched mid-run (run session=%s, current=%s); run messages kept in the run's session only (#270)", ses.ID, cur.ID)
 	}
 
 	runAdded := ag.AddedSinceRunStart()
@@ -980,27 +1156,36 @@ func (b *ChatBridge) CurrentSessionID() string {
 // workspace session. If that session is locked by another instance, creates
 // a new ephemeral session (auto-deleted if empty on close/switch).
 func (b *ChatBridge) EnsureSession() {
-	// Ensure session store is initialized
+	// Ensure session store is initialized (NewDefaultStore is IO — outside b.mu).
+	b.mu.Lock()
 	if b.sessionStore == nil {
+		b.mu.Unlock()
 		store, err := session.NewDefaultStore()
 		if err != nil {
 			return
 		}
+		b.mu.Lock()
 		b.sessionStore = store
 	}
 	if b.currentSes != nil {
+		b.mu.Unlock()
 		return // already have a session
 	}
+	store := b.sessionStore
+	workingDir := b.workingDir
+	cfg := b.cfg
+	b.mu.Unlock()
 
 	// Try to auto-load the most recent unlocked workspace session.
 	// Iterate all workspace sessions (newest-first) and load the first one
 	// that has actual messages and isn't locked by another instance.
-	if sessions, err := b.sessionStore.ListForWorkspace(b.workingDir); err == nil && len(sessions) > 0 {
+	// All IO below stays outside b.mu (#279 lock-order discipline).
+	if sessions, err := store.ListForWorkspace(workingDir); err == nil && len(sessions) > 0 {
 		storeDir, _ := session.DefaultDir()
 		for _, s := range sessions {
 			// Skip empty sessions — they are stale auto-created sessions
 			// that should not take priority over real conversations.
-			full, loadErr := b.sessionStore.Load(s.ID)
+			full, loadErr := store.Load(s.ID)
 			if loadErr != nil || full == nil {
 				continue
 			}
@@ -1011,35 +1196,70 @@ func (b *ChatBridge) EnsureSession() {
 			if lockErr != nil || lock == nil || !lock.Acquired() {
 				continue // locked by another instance, try next
 			}
+			// Install under b.mu with a post-IO re-check (#279): shared
+			// fields (sessionLock, sessionEphemeral) must only be written
+			// while holding the mutex, and another goroutine may have won
+			// the session race while we were doing IO above.
+			b.mu.Lock()
+			if b.currentSes != nil {
+				b.mu.Unlock()
+				lock.Release() // not ours to keep — the winner owns the state
+				return
+			}
 			b.sessionLock = lock
 			b.sessionEphemeral = false
+			b.mu.Unlock()
 			b.setSessionState(agentruntime.AdoptSession(full))
 			return
 		}
 	}
 
 	// Fallback: create a new ephemeral session.
-	b.sessionEphemeral = true
 	vendor, endpoint, model := "", "", ""
-	if b.cfg != nil {
-		vendor = b.cfg.Vendor
-		endpoint = b.cfg.Endpoint
-		model = b.cfg.Model
+	if cfg != nil {
+		vendor = cfg.Vendor
+		endpoint = cfg.Endpoint
+		model = cfg.Model
 	}
-	state, created, err := agentruntime.EnsureSession(b.sessionStore, b.currentSes, vendor, endpoint, model, b.workingDir)
+	b.mu.Lock()
+	current := b.currentSes
+	b.mu.Unlock()
+	state, created, err := agentruntime.EnsureSession(store, current, vendor, endpoint, model, workingDir)
 	if err != nil || !created {
 		log.Printf("[chat] EnsureSession: FAILED to create new session: err=%v created=%v", err, created)
 		return
 	}
+	// Install under b.mu with a post-IO re-check (#279): a concurrent
+	// EnsureSession may have created/adopted a session while we were saving.
+	b.mu.Lock()
+	if b.currentSes != nil && b.currentSes != state.Session {
+		b.mu.Unlock()
+		// Lost the race — remove the orphan we just created so its empty
+		// JSONL is not left behind on disk.
+		_ = agentruntime.DeleteSessionIfEmpty(store, state.Session)
+		return
+	}
+	b.sessionEphemeral = true
+	b.mu.Unlock()
 	log.Printf("[chat] EnsureSession: created new session %s", state.Session.ID)
 	b.setSessionState(state)
 
-	// Acquire lock on the new session too.
+	// Acquire lock on the new session too (IO — outside b.mu).
 	storeDir, _ := session.DefaultDir()
-	if b.currentSes != nil {
-		lock, _ := session.TryAcquireSessionLock(storeDir, b.currentSes.ID)
+	b.mu.Lock()
+	ses := b.currentSes
+	b.mu.Unlock()
+	if ses != nil {
+		lock, _ := session.TryAcquireSessionLock(storeDir, ses.ID)
 		if lock != nil && lock.Acquired() {
-			b.sessionLock = lock
+			b.mu.Lock()
+			if b.sessionLock == nil {
+				b.sessionLock = lock
+				b.mu.Unlock()
+			} else {
+				b.mu.Unlock()
+				lock.Release() // a lock is already installed; not ours to keep
+			}
 		}
 	}
 }
@@ -1479,12 +1699,19 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 	if jsonlStore, ok := store.(*session.JSONLStore); ok {
 		ag.SetCheckpointHandler(func(summaryMsgID, lastMsgID string, tokenCount int) {
 			b.mu.Lock()
-			currentSes := b.currentSes
+			// #270: target the run-start snapshot, not the write-time
+			// currentSes — a mid-run session switch must not receive this
+			// run's checkpoint record.
+			ses := b.runSes
+			if ses == nil {
+				ses = b.currentSes
+			}
+			mismatch := b.sessionLockMismatchLocked(ses)
 			b.mu.Unlock()
-			if currentSes == nil {
+			if ses == nil || mismatch {
 				return
 			}
-			if err := jsonlStore.AppendCheckpointToDisk(currentSes, summaryMsgID, lastMsgID, tokenCount); err != nil {
+			if err := jsonlStore.AppendCheckpointToDisk(ses, summaryMsgID, lastMsgID, tokenCount); err != nil {
 				log.Printf("[chat] checkpoint save failed: %v", err)
 			} else {
 				log.Printf("[chat] checkpoint saved: summary_msg_id=%s last_msg_id=%s tokens=%d", summaryMsgID, lastMsgID, tokenCount)
@@ -1492,18 +1719,22 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 		})
 
 		// Per-message persistence: every Add() triggers async JSONL append.
+		// Targets the run-start session snapshot (b.runSes) instead of the
+		// write-time b.currentSes: a session switch between run start and a
+		// late append would cross-write the old run's messages into the new
+		// session's JSONL (#270). appendPersistMessage additionally refuses
+		// writes when the bridge holds a lock for a different session (#269).
 		ag.SetPersistHandler(func(msg provider.Message) {
 			b.mu.Lock()
-			ses := b.currentSes
+			ses := b.runSes
+			if ses == nil {
+				ses = b.currentSes // no active-run snapshot — legacy behavior
+			}
 			b.mu.Unlock()
 			if ses == nil {
 				return
 			}
-			if jsonlStore, ok := store.(*session.JSONLStore); ok {
-				if err := jsonlStore.AppendMessageToDisk(ses, msg); err != nil {
-					log.Printf("[chat] persist handler: AppendMessageToDisk failed: %v", err)
-				}
-			}
+			b.appendPersistMessage(jsonlStore, ses, msg)
 		})
 	}
 
@@ -1899,17 +2130,25 @@ func (b *ChatBridge) CurrentSessionHistory() []SessionMessage {
 // mergeTunnelUserMessages appends tunnel-recorded user messages that are not
 // already present in the rendered history. Tunnel events record messages sent
 // from mobile/tunnel; without merging they are invisible when a saved session
-// is reloaded (#242). Dedup is by exact (whitespace-trimmed) content match
-// against existing user messages — conservative: prefer a rare duplicate
-// over losing a message.
+// is reloaded (#242). Dedup: when a tunnel event carries a message_id, it is
+// deduplicated by ID only — multiple distinct tunnel events with the same text
+// (e.g. the user sending "yes" twice) are each kept (#268). Exact
+// (whitespace-trimmed) text matching is only a fallback for events without an
+// ID, guarding against the same tunnel message being replayed after it has
+// already been persisted as a session message — conservative: prefer a rare
+// duplicate over losing a message.
 func mergeTunnelUserMessages(msgs []SessionMessage, tunnelEvents []session.TunnelEvent) []SessionMessage {
-	seen := make(map[string]struct{}, len(msgs))
+	seenIDs := make(map[string]struct{}, len(msgs))
+	seenText := make(map[string]struct{}, len(msgs))
 	for _, m := range msgs {
 		if m.Role != "user" {
 			continue
 		}
+		if m.ID != "" {
+			seenIDs[m.ID] = struct{}{}
+		}
 		if key := strings.TrimSpace(m.Content); key != "" {
-			seen[key] = struct{}{}
+			seenText[key] = struct{}{}
 		}
 	}
 	for _, te := range tunnelEvents {
@@ -1923,18 +2162,29 @@ func mergeTunnelUserMessages(msgs []SessionMessage, tunnelEvents []session.Tunne
 		if json.Unmarshal(te.Data, &data) != nil || data.Text == "" {
 			continue
 		}
-		if _, dup := seen[strings.TrimSpace(data.Text)]; dup {
-			continue
+		if data.MessageID != "" {
+			// ID-based dedup: skip only the exact same message (already
+			// persisted or already merged). Same-text events with distinct
+			// IDs are separate messages and must all be kept (#268).
+			if _, dup := seenIDs[data.MessageID]; dup {
+				continue
+			}
+			seenIDs[data.MessageID] = struct{}{}
+		} else {
+			// No ID to compare: fall back to exact-text matching so a tunnel
+			// replay of an already-persisted message is not duplicated.
+			if _, dup := seenText[strings.TrimSpace(data.Text)]; dup {
+				continue
+			}
+			if key := strings.TrimSpace(data.Text); key != "" {
+				seenText[key] = struct{}{}
+			}
 		}
-		msg := SessionMessage{
+		msgs = append(msgs, SessionMessage{
 			ID:      data.MessageID,
 			Role:    "user",
 			Content: data.Text,
-		}
-		if key := strings.TrimSpace(data.Text); key != "" {
-			seen[key] = struct{}{}
-		}
-		msgs = append(msgs, msg)
+		})
 	}
 	return msgs
 }
@@ -2795,6 +3045,7 @@ func (b *ChatBridge) SendHiddenText(text string) error {
 	b.cancelled = false
 	b.finished = false // reset per-run finish guard (#223)
 	b.usageTurnIndex++
+	b.runSes = b.currentSes // #270: persist-path snapshot, same critical section as b.cancel
 	b.mu.Unlock()
 
 	// Notify LAN Chat peers that our agent is now busy
@@ -2809,6 +3060,18 @@ func (b *ChatBridge) SendHiddenText(text string) error {
 	}()
 
 	if b.agent == nil {
+		// #269: never auto-rebuild against a session whose lock we do not
+		// hold — the auto-rebuild bypasses the session lock and would
+		// cross-append to a JSONL another instance may now own.
+		b.mu.Lock()
+		ses := b.currentSes
+		mismatch := b.sessionLockMismatchLocked(ses)
+		b.mu.Unlock()
+		if mismatch {
+			err := fmt.Errorf("session %s lock mismatch; refusing agent auto-rebuild", ses.ID)
+			b.finishRun(err)
+			return err
+		}
 		if err := b.InitAgent(ctx); err != nil {
 			b.finishRun(err)
 			return fmt.Errorf("init agent: %w", err)
@@ -3551,6 +3814,7 @@ func (b *ChatBridge) SendContent(content []provider.ContentBlock) error {
 	b.finished = false // reset per-run finish guard (#223)
 	b.usageTurnIndex++
 	b.startTime = time.Now()
+	b.runSes = b.currentSes // #270: persist-path snapshot, same critical section as b.cancel
 	b.mu.Unlock()
 
 	// Notify LAN Chat peers that our agent is now busy
@@ -3576,6 +3840,18 @@ func (b *ChatBridge) SendContent(content []provider.ContentBlock) error {
 	}()
 
 	if b.agent == nil {
+		// #269: never auto-rebuild against a session whose lock we do not
+		// hold — the auto-rebuild bypasses the session lock and would
+		// cross-append to a JSONL another instance may now own.
+		b.mu.Lock()
+		ses := b.currentSes
+		mismatch := b.sessionLockMismatchLocked(ses)
+		b.mu.Unlock()
+		if mismatch {
+			err := fmt.Errorf("session %s lock mismatch; refusing agent auto-rebuild", ses.ID)
+			b.finishRun(err)
+			return err
+		}
 		if err := b.InitAgent(ctx); err != nil {
 			b.finishRun(err)
 			return fmt.Errorf("init agent: %w", err)
@@ -3590,6 +3866,12 @@ func (b *ChatBridge) SendContent(content []provider.ContentBlock) error {
 		b.finishRun(err)
 		return fmt.Errorf("ensure session: %w", err)
 	}
+
+	// The session may have just been created by ensureSession — refresh the
+	// run snapshot so persist paths target it (#270).
+	b.mu.Lock()
+	b.runSes = b.currentSes
+	b.mu.Unlock()
 
 	if b.currentSes != nil {
 		msg := provider.Message{Role: "user", Content: content}

@@ -239,4 +239,47 @@ func TestCheckTagBalance_ClosingTagInsideAttributeValue(t *testing.T) {
 	}
 }
 
+// fix #275: the old whole-file attrValueRe pass paired quotes across the
+// document. An orphan `= "` in body text chained into a later tag's attribute
+// quotes and blanked real markup (</p>, <div) — producing a false "closing
+// tag no match" warning (and masking real imbalance). Attribute blanking is
+// now scoped to opening tags only, so body-text quotes are harmless.
+func TestCheckTagBalance_OrphanQuoteInBodyText(t *testing.T) {
+	content := `<p>result = "pending</p><div class="x"></div>`
+	if got := checkTagBalance("page.html", content); got != "" {
+		t.Errorf("expected no warning for orphan quote in body text, got: %s", got)
+	}
+}
+
+// fix #275 companion: real imbalance must still be reported when unrelated
+// quotes appear in body text.
+func TestCheckTagBalance_OrphanQuotePlusRealImbalance(t *testing.T) {
+	content := `<div><p>result = "pending</div>`
+	got := checkTagBalance("page.html", content)
+	if got == "" {
+		t.Fatal("expected warning for unclosed <p>, got empty")
+	}
+	if !strings.Contains(got, "does not match opening <p>") {
+		t.Errorf("expected mismatch warning about <p>, got: %s", got)
+	}
+}
+
+// fix #277: a closing-tag-looking string inside a JSX text-level expression
+// container is not a real closing tag.
+func TestCheckTagBalance_JSXTextExpressionString(t *testing.T) {
+	content := `<div>{"</div>"}</div>`
+	if got := checkTagBalance("App.jsx", content); got != "" {
+		t.Errorf("expected no warning for JSX text expression string, got: %s", got)
+	}
+}
+
+// fix #277: JSX attribute expression containers (attr={"</div>"}) must also
+// be blanked — the old attrValueRe only matched ="..." / ='...'.
+func TestCheckTagBalance_JSXAttributeExpressionContainer(t *testing.T) {
+	content := `<div attr={"</div>"}><span>ok</span></div>`
+	if got := checkTagBalance("App.jsx", content); got != "" {
+		t.Errorf("expected no warning for JSX attribute expression container, got: %s", got)
+	}
+}
+
 // (duplicate contains function removed - using strings.Contains instead)

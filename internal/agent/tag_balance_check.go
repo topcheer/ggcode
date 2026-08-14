@@ -26,6 +26,7 @@ package agent
 // nested). Handles self-closing tags, void elements, and JSX fragments.
 
 import (
+	"bytes"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -110,21 +111,163 @@ var tagRe = regexp.MustCompile(
 		`|<\/>`, // JSX fragment close
 )
 
-// attrValueRe matches quoted attribute values (="..." / ='...') so their
-// contents can be blanked before tag matching — a `</div>` inside an
-// attribute string must not be treated as a real closing tag (fix #236).
-var attrValueRe = regexp.MustCompile(`=\s*("[^"]*"|'[^']*')`)
+// jsxTextExprStrRes match JSX text-level expression containers holding a
+// single string literal, e.g. {"</div>"} (fix #277). The string content is
+// blanked so a closing-tag-looking sequence inside the expression is not
+// treated as a real closing tag. These short anchored patterns cannot chain
+// across tags, so a whole-file pass is safe here (unlike attribute values,
+// see preprocessTags).
+var jsxTextExprStrRes = []*regexp.Regexp{
+	regexp.MustCompile(`\{"[^"]*"\}`),
+	regexp.MustCompile(`\{'[^']*'\}`),
+}
 
-// blankQuotedAttrValues replaces the inner characters of quoted attribute
-// values with spaces, preserving offsets so line numbers stay accurate.
-func blankQuotedAttrValues(content string) string {
-	return attrValueRe.ReplaceAllStringFunc(content, func(m string) string {
-		b := []byte(m)
-		for i := 2; i < len(b)-1; i++ { // keep '=' and the surrounding quotes
-			b[i] = ' '
+// blankStrLiteralsInJSXTextExpressions blanks string-literal contents inside
+// JSX text-level expression containers, preserving offsets so line numbers
+// stay accurate.
+func blankStrLiteralsInJSXTextExpressions(content string) string {
+	out := content
+	for _, re := range jsxTextExprStrRes {
+		out = re.ReplaceAllStringFunc(out, func(m string) string {
+			b := []byte(m)
+			for i := 2; i < len(b)-2; i++ { // keep {, quotes and }
+				b[i] = ' '
+			}
+			return string(b)
+		})
+	}
+	return out
+}
+
+// isTagNameByte reports whether c can appear in a tag name (per tagRe).
+func isTagNameByte(c byte) bool {
+	return c == '.' || c == '-' ||
+		(c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+		(c >= '0' && c <= '9')
+}
+
+// preprocessTags blanks quoted attribute-value interiors and ={...} JSX
+// expression containers inside OPENING TAGS only, preserving offsets so line
+// numbers stay accurate (fixes #275 and #277).
+//
+// This replaces the old whole-file attrValueRe pass, which paired quotes
+// across the entire document: an orphan `= "` in body text (e.g.
+// `<p>result = "pending</p><div class="x"></div>`) chained into a later
+// tag's attribute quotes and blanked real markup, producing both false
+// positives ("closing tag no match") and false negatives. Because this pass
+// is scoped inside a single tag's angle brackets, no cross-tag chaining is
+// possible. It is also quote-aware, so '>' characters inside quoted values
+// or expression containers (attr={"</div>"}) no longer terminate the tag
+// scan early.
+func preprocessTags(content string) string {
+	b := []byte(content)
+	n := len(b)
+	i := 0
+	for i < n {
+		if b[i] != '<' {
+			i++
+			continue
 		}
-		return string(b)
-	})
+		rest := b[i:]
+		switch {
+		case bytes.HasPrefix(rest, []byte("<!--")):
+			if end := bytes.Index(rest, []byte("-->")); end >= 0 {
+				i += end + 3
+			} else {
+				i = n
+			}
+		case bytes.HasPrefix(rest, []byte("<![CDATA[")):
+			if end := bytes.Index(rest, []byte("]]>")); end >= 0 {
+				i += end + 3
+			} else {
+				i = n
+			}
+		case len(rest) >= 2 && (rest[1] == '/' || rest[1] == '>'):
+			// Closing tag or JSX fragment: no attributes to blank.
+			i += 2
+		case len(rest) >= 2 && isTagNameByte(rest[1]):
+			i = blankOpeningTag(b, i)
+		default:
+			i++ // '<' not starting a tag (e.g. "a < b")
+		}
+	}
+	return string(b)
+}
+
+// blankOpeningTag blanks quoted attribute-value interiors and brace
+// expression containers within the opening tag starting at b[start] ('<'),
+// returning the index just past the tag's closing '>'. Quotes and brace
+// nesting are tracked so '>' characters inside them do not terminate the
+// tag scan. Offsets are preserved (blanks replace content one-for-one).
+func blankOpeningTag(b []byte, start int) int {
+	n := len(b)
+	i := start + 1
+	for i < n && isTagNameByte(b[i]) {
+		i++
+	}
+	for i < n {
+		switch b[i] {
+		case '>':
+			return i + 1
+		case '"', '\'':
+			quote := b[i]
+			j := i + 1
+			for j < n && b[j] != quote {
+				j++
+			}
+			if j >= n {
+				return n // unterminated tag; nothing more to blank
+			}
+			for k := i + 1; k < j; k++ {
+				b[k] = ' ' // keep surrounding quotes
+			}
+			i = j + 1
+		case '{':
+			// Expression container (attribute value or in-tag expression):
+			// skip to the matching '}' honoring nesting and nested string
+			// literals, then blank the interior so any '<'/'>'/tags inside
+			// cannot confuse the subsequent tagRe pass (fix #277).
+			j, ok := matchBraceContainer(b, i)
+			if !ok {
+				return n
+			}
+			for k := i + 1; k < j; k++ {
+				b[k] = ' ' // keep '{' and '}'
+			}
+			i = j + 1
+		default:
+			i++
+		}
+	}
+	return n
+}
+
+// matchBraceContainer returns the index of the '}' matching the '{' at
+// b[start], honoring nested braces and quoted string literals inside the
+// container. ok=false if unmatched before EOF.
+func matchBraceContainer(b []byte, start int) (end int, ok bool) {
+	n := len(b)
+	depth := 0
+	j := start
+	for j < n {
+		switch b[j] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return j, true
+			}
+		case '"', '\'':
+			quote := b[j]
+			j++
+			for j < n && b[j] != quote {
+				j++
+			}
+		}
+		j++
+	}
+	return 0, false
 }
 
 // scanTagBalance walks the content looking for tags and validates balance.
@@ -133,9 +276,14 @@ func blankQuotedAttrValues(content string) string {
 func scanTagBalance(content string, allowVoid bool) string {
 	var stack []tagStackEntry
 
-	// Blank quoted attribute values first so closing-tag-looking text inside
-	// attribute strings (e.g. <div data-template="</div>">) is not matched.
-	scanned := blankQuotedAttrValues(content)
+	// Blank string literals inside JSX text-level expression containers
+	// ({"</div>"}) first (fix #277). These anchored patterns cannot chain
+	// across tags, so a whole-file pass is safe.
+	scanned := blankStrLiteralsInJSXTextExpressions(content)
+	// Blank quoted attribute values and expression containers inside opening
+	// tags only (fixes #275/#277): an orphan `= "` in body text can no longer
+	// pair with a later tag's quotes and blank real markup.
+	scanned = preprocessTags(scanned)
 
 	for _, m := range tagRe.FindAllStringSubmatchIndex(scanned, -1) {
 		fullMatch := scanned[m[0]:m[1]]

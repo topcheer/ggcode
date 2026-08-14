@@ -195,6 +195,7 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 		for attempt := 0; attempt < providerRetryAttempts; attempt++ {
 			var usage TokenUsage // reset per attempt to avoid leaking failed-attempt usage
 			var truncated bool
+			var policyBlocked bool
 			iter := p.client.Models.GenerateContentStream(ctx, p.model, contents, config)
 			emitted := false
 			retry := false
@@ -227,7 +228,39 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 					usage.PromptTokensTotal = int(resp.UsageMetadata.PromptTokenCount)
 				}
 
+				// Check finish reason for truncation / policy errors (#232).
+				// This must run BEFORE the no-content skip below: fully blocked
+				// responses (e.g. RECITATION with no partial text) have nil
+				// Content but still carry the fatal finish reason — skipping
+				// first would drop the Truncated/PolicyBlocked flags (#266).
+				var finishNotice string
+				if len(resp.Candidates) > 0 {
+					fr := resp.Candidates[0].FinishReason
+					if fr == genai.FinishReasonMaxTokens {
+						// Output was truncated — NOT an error. Keep partial content.
+						p.cap.OnTruncated()
+						truncated = true
+					} else if finishErr := geminiFinishReasonError(fr); finishErr != nil {
+						// Fatal finish reason, but any text already streamed is
+						// preserved. Surface the reason as a system notice, mark the
+						// response truncated, and close the stream normally (Done)
+						// instead of erroring out so partial content reaches history.
+						debug.Log("provider", "gemini stream fatal finish reason: %v", finishErr)
+						finishNotice = fmt.Sprintf("[Warning: %v] ", finishErr)
+						truncated = true
+						// These finish reasons are provider policy filters, not
+						// output-length truncation: auto-continuation would resend
+						// the full context just to hit the same filter again (#266).
+						policyBlocked = true
+					}
+				}
+
 				if len(resp.Candidates) == 0 || resp.Candidates[0].Content == nil {
+					// Nothing to stream from this chunk; emit the finish notice
+					// (if any) so fully blocked responses still surface the reason.
+					if finishNotice != "" {
+						ch <- StreamEvent{Type: StreamEventSystem, Text: finishNotice}
+					}
 					continue
 				}
 
@@ -255,30 +288,16 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 					}
 				}
 
-				// Check finish reason for truncation / policy errors AFTER processing
-				// this chunk's parts (#232): SAFETY/RECITATION/etc. chunks can carry
-				// final partial text that must not be dropped.
-				if len(resp.Candidates) > 0 {
-					fr := resp.Candidates[0].FinishReason
-					if fr == genai.FinishReasonMaxTokens {
-						// Output was truncated — NOT an error. Keep partial content.
-						p.cap.OnTruncated()
-						truncated = true
-					} else if finishErr := geminiFinishReasonError(fr); finishErr != nil {
-						// Fatal finish reason, but any text already streamed above is
-						// preserved. Surface the reason as a system notice, mark the
-						// response truncated, and close the stream normally (Done)
-						// instead of erroring out so partial content reaches history.
-						debug.Log("provider", "gemini stream fatal finish reason: %v", finishErr)
-						ch <- StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Warning: %v] ", finishErr)}
-						truncated = true
-					}
+				// Emit the finish notice after the chunk's parts so partial text
+				// is streamed before the warning (#232 ordering).
+				if finishNotice != "" {
+					ch <- StreamEvent{Type: StreamEventSystem, Text: finishNotice}
 				}
 			}
 			if retry {
 				continue
 			}
-			ch <- StreamEvent{Type: StreamEventDone, Usage: &usage, Truncated: truncated}
+			ch <- StreamEvent{Type: StreamEventDone, Usage: &usage, Truncated: truncated, PolicyBlocked: policyBlocked}
 			return
 		}
 		// All retry attempts exhausted without success.

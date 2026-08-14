@@ -69,9 +69,12 @@ type rnpWarning struct {
 // rnpNilGuard records a nil comparison (`x == nil` / `x != nil` / `nil == x`)
 // found in an if statement within the same function.
 type rnpNilGuard struct {
-	negated bool      // true for `!= nil`, false for `== nil`
-	ifPos   token.Pos // position of the enclosing if statement
-	ifEnd   token.Pos // end of the enclosing if statement
+	negated    bool      // true for `!= nil`, false for `== nil`
+	ifPos      token.Pos // position of the enclosing if statement
+	thenEnd    token.Pos // end of the THEN block (excludes else) (#271)
+	ifEnd      token.Pos // end of the enclosing if statement
+	hasElse    bool      // the if has an else block (#271)
+	terminates bool      // body ends in return/panic/continue-style exit (#265)
 }
 
 // checkRangeNilPtr detects range statements that dereference a pointer
@@ -185,10 +188,14 @@ func rnpCollectNilGuards(body *ast.BlockStmt) map[string][]rnpNilGuard {
 		if !found {
 			return true
 		}
+		_, isPlainElse := ifStmt.Else.(*ast.BlockStmt)
 		guards[name] = append(guards[name], rnpNilGuard{
-			negated: negated,
-			ifPos:   ifStmt.Pos(),
-			ifEnd:   ifStmt.End(),
+			negated:    negated,
+			ifPos:      ifStmt.Pos(),
+			thenEnd:    ifStmt.Body.End(),
+			ifEnd:      ifStmt.End(),
+			hasElse:    isPlainElse,
+			terminates: ifBodyTerminates(ifStmt.Body), // reused from nil_deref_check (#265)
 		})
 		return true
 	})
@@ -261,13 +268,31 @@ func rnpCheckStmt(rs *ast.RangeStmt, fset *token.FileSet, guards map[string][]rn
 // `if x != nil {...}` block.
 func rnpHasNilGuard(varName string, rangePos token.Pos, guards map[string][]rnpNilGuard) bool {
 	for _, g := range guards[varName] {
-		if g.ifPos < rangePos && rangePos < g.ifEnd {
-			// Range statement is inside the if block: guarded only when the
+		if g.ifPos < rangePos && rangePos < g.thenEnd {
+			// Range statement is inside the THEN block: guarded only when the
 			// condition is `x != nil` (proves x non-nil in that block).
 			return g.negated
 		}
-		if !g.negated && g.ifEnd < rangePos {
-			// `if x == nil { ... }` block fully BEFORE the range statement.
+		if g.hasElse && g.thenEnd <= rangePos && rangePos < g.ifEnd {
+			// Range statement is inside the ELSE block (#271): the condition is
+			// inverted there. `if x != nil` else proves x IS nil (unguarded);
+			// `if x == nil` else proves x is non-nil (guarded). Only applied when
+			// Else is a plain BlockStmt: for else-if chains the nested if gets its
+			// own guard record via recursive Inspect, so we conservatively fall
+			// through and let that record decide.
+			return !g.negated
+		}
+		if g.ifPos < rangePos && rangePos < g.ifEnd {
+			// Range is inside the if's extent but not in a recognized then/else
+			// plain block (e.g. else-if chain region) -- rely on nested guard
+			// records instead; keep scanning other guards.
+			continue
+		}
+		if !g.negated && g.terminates && g.ifEnd < rangePos {
+			// `if x == nil { return/panic }` block fully BEFORE the range.
+			// Only a TERMINATING body guarantees the range is unreachable
+			// when x is nil (#265): `if x == nil { log }` falls through and
+			// the range still panics.
 			return true
 		}
 	}

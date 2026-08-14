@@ -114,6 +114,38 @@ func TestLockFilePath(t *testing.T) {
 	}
 }
 
+// TestSessionLockSessionID verifies the SessionID accessor (#269): the same
+// ID is reported whether or not the lock was acquired, and a nil lock
+// reports "" (the accessor must be safe on nil receivers because callers
+// like ChatBridge hold it through session switches).
+func TestSessionLockSessionID(t *testing.T) {
+	dir := t.TempDir()
+	sessionID := "test-session-id-1"
+
+	lock1, _ := TryAcquireSessionLock(dir, sessionID)
+	if !lock1.Acquired() {
+		t.Fatal("first lock should be acquired")
+	}
+	defer lock1.Release()
+	if got := lock1.SessionID(); got != sessionID {
+		t.Errorf("acquired lock SessionID = %q, want %q", got, sessionID)
+	}
+
+	// Denied attempt on the same session must still report the same ID.
+	lock2, _ := TryAcquireSessionLock(dir, sessionID)
+	if lock2.Acquired() {
+		t.Fatal("second lock should NOT be acquired")
+	}
+	if got := lock2.SessionID(); got != sessionID {
+		t.Errorf("denied lock SessionID = %q, want %q", got, sessionID)
+	}
+
+	var nilLock *SessionLock
+	if got := nilLock.SessionID(); got != "" {
+		t.Errorf("nil lock SessionID = %q, want %q", got, "")
+	}
+}
+
 func TestLatestForWorkspace(t *testing.T) {
 	dir := t.TempDir()
 	store, err := NewJSONLStore(dir)

@@ -147,6 +147,7 @@ type StreamEvent struct {
 	Usage             *TokenUsage   // for Done (nil if not final)
 	Error             error         // for Error
 	Truncated         bool          // for Done: true if output was cut off by length/max_tokens limit
+	PolicyBlocked     bool          // for Done: true if the stream was cut by a provider policy filter (safety/recitation/blocklist/etc.) — not recoverable by continuation (#266)
 }
 
 type StreamEventType int
