@@ -144,8 +144,9 @@ func (s *bgOrphanState) recordStartCommand(args json.RawMessage, result string, 
 }
 
 // recordOutputCheck is called when the agent reads output from a background
-// command (read_command_output, wait_command, write_command_input). It marks
-// the job as checked.
+// command (read_command_output, wait_command). It marks the job as checked.
+// Note: write_command_input is NOT an output check — it only writes stdin
+// (#200).
 func (s *bgOrphanState) recordOutputCheck(args json.RawMessage, iteration int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -360,7 +361,10 @@ func (a *Agent) recordBgToolCall(toolName string, args json.RawMessage, result s
 	switch toolName {
 	case "start_command":
 		a.bgOrphan.recordStartCommand(args, result, iteration)
-	case "read_command_output", "wait_command", "write_command_input":
+	case "read_command_output", "wait_command":
+		// write_command_input removed (#200): it writes stdin, it does not
+		// check output — treating it as an output check let a REPL job that
+		// only ever receives input suppress orphan warnings forever.
 		a.bgOrphan.recordOutputCheck(args, iteration)
 	case "stop_command":
 		a.bgOrphan.recordStopCommand(args)

@@ -191,7 +191,8 @@ func RemoveMCPServer(name string) error {
 func parseShellArgs(s string) []string {
 	var args []string
 	var current strings.Builder
-	var inQuote byte // 0 = no quote, '"' or '\'' = inside quote
+	var inQuote byte  // 0 = no quote, '"' or '\'' = inside quote
+	seenChar := false // any char (incl. quotes) seen since last separator
 
 	for i := 0; i < len(s); i++ {
 		ch := s[i]
@@ -202,23 +203,30 @@ func parseShellArgs(s string) []string {
 			} else {
 				current.WriteByte(ch)
 			}
+			seenChar = true
 			continue
 		}
 
 		switch ch {
 		case '"', '\'':
 			inQuote = ch
+			seenChar = true
 		case ' ', '\t', '\n', '\r':
-			if current.Len() > 0 {
+			// Explicit empty args ("") are meaningful CLI values — the old
+			// current.Len()>0 guard dropped them, shifting every later arg
+			// (#203).
+			if seenChar {
 				args = append(args, current.String())
 				current.Reset()
+				seenChar = false
 			}
 		default:
 			current.WriteByte(ch)
+			seenChar = true
 		}
 	}
 
-	if current.Len() > 0 {
+	if seenChar {
 		args = append(args, current.String())
 	}
 

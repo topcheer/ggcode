@@ -169,9 +169,11 @@ func TestAutoModeDeniesDangerous(t *testing.T) {
 	if err != nil || d != Deny {
 		t.Errorf("AutoMode: dangerous start_command should be Deny, got %v err=%v", d, err)
 	}
+	// #197: write_command_input's input field is arbitrary stdin data, not a
+	// command — no longer command-screened (the job was screened when started).
 	d, err = policy.Check("write_command_input", json.RawMessage(`{"job_id":"cmd-1","input":"rm -rf /"}`))
-	if err != nil || d != Deny {
-		t.Errorf("AutoMode: dangerous write_command_input should be Deny, got %v err=%v", d, err)
+	if err != nil || d != Allow {
+		t.Errorf("AutoMode: write_command_input should not be command-screened (#197), got %v err=%v", d, err)
 	}
 }
 
@@ -194,9 +196,10 @@ func TestAutopilotModeMatchesBypassPermissions(t *testing.T) {
 	if err != nil || d != Ask {
 		t.Errorf("AutopilotMode: extremely dangerous start_command should be Ask, got %v err=%v", d, err)
 	}
+	// #197: write_command_input is not command-screened anymore (stdin data).
 	d, err = policy.Check("write_command_input", json.RawMessage(`{"job_id":"cmd-1","input":"sudo rm -rf /"}`))
-	if err != nil || d != Ask {
-		t.Errorf("AutopilotMode: extremely dangerous write_command_input should be Ask, got %v err=%v", d, err)
+	if err != nil || d != Allow {
+		t.Errorf("AutopilotMode: write_command_input should not be command-screened (#197), got %v err=%v", d, err)
 	}
 }
 

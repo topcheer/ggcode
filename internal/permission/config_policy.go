@@ -216,6 +216,14 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 					if p.detector.IsDangerous(cmd) {
 						return Ask, nil
 					}
+					// Data egress always requires human gating, even when a
+					// saved allow rule matched (#194): a wildcard allow can
+					// cover the command word while the payload exfiltrates
+					// credentials (curl -d @~/.ssh/id_rsa ...). Mirrors the
+					// bypass/auto branches' IsNetworkExfiltrate calls.
+					if IsNetworkExfiltrate(cmd) {
+						return Ask, nil
+					}
 					return Allow, nil
 				}
 			}
@@ -388,7 +396,10 @@ func isWriteFileTool(name string) bool {
 
 func isCommandTool(name string) bool {
 	switch name {
-	case "run_command", "start_command", "write_command_input", "tmux", "ghostty", "warp", "kitty", "iterm2":
+	// write_command_input removed (#197): its `input` field is arbitrary data
+	// written to a job's stdin (script bodies, docs, logs), not a shell
+	// command — pattern-matching it caused false Deny on normal content.
+	case "run_command", "start_command", "tmux", "ghostty", "warp", "kitty", "iterm2":
 		return true
 	}
 	return false

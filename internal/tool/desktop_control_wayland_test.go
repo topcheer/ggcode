@@ -100,14 +100,12 @@ func TestYdoDragArgsSequence(t *testing.T) {
 	if !strings.HasSuffix(strings.Join(cmds[2], " "), "30 40") {
 		t.Errorf("second move should target destination (30,40): %v", cmds[2])
 	}
-	// Down before up.
-	downHasD := false
-	for _, c := range cmds {
-		if c[0] == "ydotool" && len(c) > 2 && c[2] == "-d" {
-			downHasD = true
-		}
+	// Down before up, via ydotool click bitmask (0x40 = down-only,
+	// 0x80 = up-only — the -d/-u flags are silently ignored upstream, #191).
+	if !(len(cmds[1]) > 2 && cmds[1][2] == "0x40") {
+		t.Errorf("second command should be button-down (click 0x40): %v", cmds[1])
 	}
-	if !downHasD {
-		t.Error("drag down command should use -d (hold) flag")
+	if !(len(cmds[3]) > 2 && cmds[3][2] == "0x80") {
+		t.Errorf("fourth command should be button-up (click 0x80): %v", cmds[3])
 	}
 }

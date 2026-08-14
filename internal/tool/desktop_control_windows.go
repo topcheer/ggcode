@@ -9,6 +9,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode/utf16"
 	"unsafe"
 )
 
@@ -74,31 +75,37 @@ var winVK = map[string]uint16{
 	"pagedown":  0x22, // VK_NEXT
 }
 
-// INPUT struct layout for SendInput (winuser.h). The union must be the
-// size of the largest member; MOUSEINPUT is the largest at 28 bytes on
-// x64 (padding included via uint32 fields).
+// INPUT struct layout for SendInput (winuser.h). On x64 the Win32 INPUT
+// is 40 bytes: DWORD type (4) + 4 padding + 32-byte union (the largest
+// member, MOUSEINPUT, contains ULONG_PTR ExtraInfo requiring 8-alignment).
+// The union itself must be 32 bytes — a smaller byte array made
+// unsafe.Sizeof(winINPUT{}) = 32 ≠ 40, so SendInput rejected every event
+// (#188).
 type winINPUT struct {
 	Type uint32
-	// Union: KEYBDINPUT or MOUSEINPUT. We use a byte array sized to the
-	// largest member and fill it per type.
-	U [28]byte
+	_    uint32 // alignment padding before the 8-aligned union
+	U    [32]byte
 }
 
+// winMOUSEINPUT / winKEYBDINPUT mirror the UNION members only (no leading
+// Type field — that belongs to the enclosing INPUT). Fields are ordered
+// exactly as in winuser.h so the byte copy below lays out the union
+// correctly. ExtraInfo is uintptr (8 bytes on x64) matching ULONG_PTR.
 type winMOUSEINPUT struct {
-	Type      uint32
 	Dx, Dy    int32
 	MouseData uint32
 	DwFlags   uint32
 	Time      uint32
+	_         uint32 // padding to 8-align ExtraInfo
 	ExtraInfo uintptr
 }
 
 type winKEYBDINPUT struct {
-	Type      uint32
 	Vk        uint16
 	Scan      uint16
 	Flags     uint32
 	Time      uint32
+	_         uint32 // padding to 8-align ExtraInfo
 	ExtraInfo uintptr
 }
 
@@ -137,26 +144,25 @@ func sendInput(inputs []winINPUT) error {
 
 func mouseEventInput(flags uint32, dx, dy int32) winINPUT {
 	mi := winMOUSEINPUT{
-		Type:    inputMouse,
 		Dx:      dx,
 		Dy:      dy,
 		DwFlags: flags,
 	}
 	var in winINPUT
 	in.Type = inputMouse
-	copy(in.U[:], (*[28]byte)(unsafe.Pointer(&mi))[:])
+	// mi has no Type field; its first byte is dx — exactly union offset 0.
+	copy(in.U[:], (*[32]byte)(unsafe.Pointer(&mi))[:])
 	return in
 }
 
 func keyEventInput(vk uint16, flags uint32) winINPUT {
 	ki := winKEYBDINPUT{
-		Type:  inputKeyboard,
 		Vk:    vk,
 		Flags: flags,
 	}
 	var in winINPUT
 	in.Type = inputKeyboard
-	copy(in.U[:], (*[28]byte)(unsafe.Pointer(&ki))[:])
+	copy(in.U[:], (*[32]byte)(unsafe.Pointer(&ki))[:])
 	return in
 }
 
@@ -522,9 +528,12 @@ func winDrag(ctx context.Context, x, y, toX, toY int) (Result, error) {
 }
 
 func winScroll(ctx context.Context, direction string, amount int) (Result, error) {
-	d := int32(120) // WHEEL_DELTA per step
+	// Win32: positive mouseData with MOUSEEVENTF_WHEEL scrolls FORWARD,
+	// i.e. content moves UP — matching the darwin backend. The old code
+	// mapped "up" to -120, inverting the requested direction (#189).
+	d := int32(-120) // down
 	if direction == "up" {
-		d = -120
+		d = 120
 	}
 	var inputs []winINPUT
 	for i := 0; i < amount; i++ {
@@ -560,13 +569,16 @@ func winModifierClick(ctx context.Context, x, y int, modifierSpec string) (Resul
 }
 
 func winType(ctx context.Context, text string) (Result, error) {
-	// Unicode via KEYEVENTF_UNICODE (0x0004) per code unit — no keyboard
-	// layout dependence.
+	// Unicode via KEYEVENTF_UNICODE (0x0004) per UTF-16 code unit — no
+	// keyboard layout dependence. KEYEVENTF_UNICODE injects one code unit
+	// per event, so astral-plane runes (emoji, CJK ext B-F) must be split
+	// into surrogate pairs; casting the rune directly to uint16 truncated
+	// them into PUA garbage (#190).
 	const keyUnicode = 0x0004
 	var inputs []winINPUT
-	for _, r := range text {
-		inputs = append(inputs, keyEventInputWithScan(uint16(r), keyUnicode))
-		inputs = append(inputs, keyEventInputWithScan(uint16(r), keyUnicode|keyUp))
+	for _, u := range utf16.Encode([]rune(text)) {
+		inputs = append(inputs, keyEventInputWithScan(u, keyUnicode))
+		inputs = append(inputs, keyEventInputWithScan(u, keyUnicode|keyUp))
 	}
 	if err := sendInput(inputs); err != nil {
 		return Result{}, err
@@ -640,14 +652,13 @@ func winListWindows() (Result, error) {
 func keyEventInputWithScan(scan uint16, flags uint32) winINPUT {
 	// KEYEVENTF_UNICODE path: vk stays 0, scan carries the UTF-16 code unit.
 	ki := winKEYBDINPUT{
-		Type:  inputKeyboard,
 		Vk:    0,
 		Scan:  scan,
 		Flags: flags,
 	}
 	var in winINPUT
 	in.Type = inputKeyboard
-	copy(in.U[:], (*[28]byte)(unsafe.Pointer(&ki))[:])
+	copy(in.U[:], (*[32]byte)(unsafe.Pointer(&ki))[:])
 	return in
 }
 

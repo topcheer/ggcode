@@ -367,7 +367,8 @@ for char in text {
 // Swift double-quoted string literal. Backslash and quote are escaped, and
 // every control character (< 0x20) becomes a \n/\r/\t or \u{XX} escape so
 // multi-line input compiles instead of failing with a Swift syntax error.
-// The same escaping applies to AppleScript double-quoted strings.
+// NOTE: \u{XX} is Swift-only syntax — do NOT reuse this for AppleScript
+// (osascript rejects it with -2741); use appleScriptStringLiteral there.
 func swiftStringLiteral(s string) string {
 	var b strings.Builder
 	for _, r := range s {
@@ -804,13 +805,67 @@ func keyComboResult(ctx context.Context, combo string) (Result, error) {
 	} else {
 		// Escape the key for embedding in an AppleScript double-quoted
 		// string; applies to the single-char branch too (a literal " would
-		// otherwise break the script). Control characters are escaped too —
-		// a raw newline breaks osascript compilation.
-		escaped := swiftStringLiteral(key)
+		// otherwise break the script). Control characters must NOT use the
+		// Swift \u{XX} form — osascript rejects it with -2741 (#217); emit
+		// them via `character id N` instead.
+		if containsControlChar(key) {
+			script = fmt.Sprintf(`tell application "System Events" to keystroke (character id %d)%s`, firstControlChar(key), modList)
+			return appleScriptResult(ctx, script)
+		}
+		escaped := appleScriptStringLiteral(key)
 		script = fmt.Sprintf(`tell application "System Events" to keystroke "%s"%s`, escaped, modList)
 	}
 
 	return appleScriptResult(ctx, script)
+}
+
+// appleScriptStringLiteral escapes for AppleScript double-quoted strings.
+// AppleScript recognizes \\ \" \n \r \t but NOT Swift's \u{XX} — control
+// characters other than those five are not embeddable at all; callers
+// route them through `character id N` (#217).
+func appleScriptStringLiteral(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch r {
+		case '\\':
+			b.WriteString(`\\`)
+		case '"':
+			b.WriteString(`\"`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\r':
+			b.WriteString(`\r`)
+		case '\t':
+			b.WriteString(`\t`)
+		default:
+			if r >= 0x20 {
+				b.WriteRune(r)
+			}
+		}
+	}
+	return b.String()
+}
+
+// containsControlChar reports whether s has any C0 control character that
+// AppleScript literals cannot represent (#217).
+func containsControlChar(s string) bool {
+	for _, r := range s {
+		if r < 0x20 {
+			return true
+		}
+	}
+	return false
+}
+
+// firstControlChar returns the first C0 control code in s (callers only use
+// it after containsControlChar).
+func firstControlChar(s string) int {
+	for _, r := range s {
+		if r < 0x20 {
+			return int(r)
+		}
+	}
+	return 0
 }
 
 func appleScriptResult(ctx context.Context, script string) (Result, error) {

@@ -63,9 +63,7 @@ type App struct {
 	shutdownOnce sync.Once
 
 	// Runtime debug log stream
-	logStream   *wailskit.LogStream
-	streamMu    sync.Mutex
-	streamQueue []StreamEventEnvelope
+	logStream *wailskit.LogStream
 }
 
 type uiEvent struct {
@@ -275,18 +273,6 @@ func (a *App) initWorkspace(dir string) {
 	}
 }
 
-func (a *App) DrainStreamEvents() []StreamEventEnvelope {
-	a.streamMu.Lock()
-	defer a.streamMu.Unlock()
-	if len(a.streamQueue) == 0 {
-		return nil
-	}
-	out := make([]StreamEventEnvelope, len(a.streamQueue))
-	copy(out, a.streamQueue)
-	a.streamQueue = a.streamQueue[:0]
-	return out
-}
-
 // ToggleLogStream enables or disables the runtime debug log stream.
 func (a *App) ToggleLogStream(enabled bool) {
 	if a.logStream != nil {
@@ -310,9 +296,9 @@ func (a *App) emitStreamEvent(eventType string, data json.RawMessage) {
 		Type: eventType,
 		Data: string(data),
 	}
-	a.streamMu.Lock()
-	a.streamQueue = append(a.streamQueue, envelope)
-	a.streamMu.Unlock()
+	// The streamQueue/DrainStreamEvents channel is dead code — no frontend
+	// caller ever drains it — and appending every token delta leaked memory
+	// for the app's lifetime (#208). Events go out via chat:stream only.
 	a.enqueueUIEvent("chat:stream", map[string]interface{}{
 		"type": envelope.Type,
 		"data": envelope.Data,
@@ -617,12 +603,17 @@ func looksLikeText(data []byte) bool {
 
 // SendMessage sends a user message to the agent.
 func (a *App) SendMessage(userMsg string) error {
-	if a.chat == nil {
-		return nil
+	// Snapshot under the nil check and use the local inside the goroutine:
+	// re-reading a.chat after the check was a TOCTOU race with
+	// switchWorkspace, and returning nil silently swallowed the message
+	// (#210). Same error convention as the other chat methods.
+	chat := a.chat
+	if chat == nil {
+		return fmt.Errorf("chat not available")
 	}
 	text := userMsg
 	safego.Go("wails-send-message", func() {
-		if err := a.chat.SendMessage(text); err != nil {
+		if err := chat.SendMessage(text); err != nil {
 			raw, _ := json.Marshal(map[string]string{"message": err.Error()})
 			a.emitStreamEvent("error", raw)
 		}
@@ -712,8 +703,10 @@ func (a *App) LanChatApprovalPolicies() (map[string]string, error) {
 }
 
 func (a *App) SendMessageWithImages(userMsg string, images []PastedImage) error {
-	if a.chat == nil {
-		return nil
+	// Snapshot + error convention: see SendMessage (#210).
+	chat := a.chat
+	if chat == nil {
+		return fmt.Errorf("chat not available")
 	}
 	text := strings.TrimSpace(userMsg)
 	imgs := append([]PastedImage(nil), images...)
@@ -737,9 +730,14 @@ func (a *App) SendMessageWithImages(userMsg string, images []PastedImage) error 
 			content = append(content, provider.ImageBlock(mime, data))
 		}
 		if len(content) == 0 {
+			// Silent returns make image-only sends vanish without feedback —
+			// emit the same error event the SendContent failure path uses
+			// so the user can tell the image never reached the agent (#211).
+			raw, _ := json.Marshal(map[string]string{"message": "image data was empty; nothing was sent"})
+			a.emitStreamEvent("error", raw)
 			return
 		}
-		if err := a.chat.SendContent(content); err != nil {
+		if err := chat.SendContent(content); err != nil {
 			raw, _ := json.Marshal(map[string]string{"message": err.Error()})
 			a.emitStreamEvent("error", raw)
 		}
@@ -1072,6 +1070,14 @@ func (a *App) GetCurrentSessionID() (string, error) {
 
 // DeleteSession removes a session by ID.
 func (a *App) DeleteSession(id string) error {
+	// Maintain the session-switch cleanup invariant that NewSession and
+	// LoadSession already follow: deleting the CURRENT session must also
+	// cancel the running agent and stop tunnel sharing, or later messages
+	// resurrect the deleted session (#209).
+	if a.chat != nil && a.chat.CurrentSessionID() == id {
+		a.chat.Cancel()
+		a.stopShareForSessionChange()
+	}
 	return wailskit.DeleteSession(id)
 }
 

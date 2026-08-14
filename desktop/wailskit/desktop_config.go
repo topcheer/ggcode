@@ -55,7 +55,13 @@ func LoadDesktopConfig() *DesktopConfig {
 	if err != nil {
 		return dc
 	}
-	_ = json.Unmarshal(data, dc)
+	if uerr := json.Unmarshal(data, dc); uerr != nil {
+		// Corrupt/truncated config: return defaults but DO NOT let the
+		// unconditional shutdown Save() overwrite the file — preserve the
+		// original as .bak so the damage stays recoverable (#207).
+		_ = os.Rename(desktopConfigPath(), desktopConfigPath()+".bak")
+		return &DesktopConfig{WindowW: 1280, WindowH: 860}
+	}
 	return dc
 }
 

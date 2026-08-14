@@ -260,17 +260,20 @@ func executeDesktopControlWayland(ctx context.Context, p desktopParams) (Result,
 		return Result{}, fmt.Errorf("desktop_control: scroll is not supported on Wayland via ydotool (no REL_WHEEL event in the click API)")
 
 	case "mouse_down", "mouse_up":
-		code := "0xC0" // BTN_LEFT
+		// ydotool click bitmask: low bits = button (0 left, 1 right, 2
+		// middle); 0x40 = down-only, 0x80 = up-only. The old -d/-u flags do
+		// not exist upstream and 0xC0 always performs a full click (#191).
+		button := 0x0
 		if p.Button == "right" {
-			code = "0xC1"
+			button = 0x1
 		} else if p.Button == "middle" {
-			code = "0xC2"
+			button = 0x2
 		}
-		flag := "-d"
+		mode := 0x40
 		if p.Action == "mouse_up" {
-			flag = "-u"
+			mode = 0x80
 		}
-		cmds := [][]string{ydoMoveArgs(p.X, p.Y), {"ydotool", "click", flag, code}}
+		cmds := [][]string{ydoMoveArgs(p.X, p.Y), {"ydotool", "click", fmt.Sprintf("0x%X", button|mode)}}
 		if err := runArgvSeq(ctx, cmds); err != nil {
 			return Result{}, err
 		}
@@ -305,9 +308,16 @@ func executeDesktopControlWayland(ctx context.Context, p desktopParams) (Result,
 			return Result{}, fmt.Errorf("hold_key requires at least one key")
 		}
 		all := append([][]string{}, pressCmds...)
-		all = append(all, []string{"sleep", fmt.Sprintf("%d", duration/1000)}) // coarse seconds; ydotool has no sub-second sleep
+		// coreutils sleep accepts fractional seconds — integer division
+		// turned 500ms into an instant tap (#192).
+		all = append(all, []string{"sleep", fmt.Sprintf("%.3f", float64(duration)/1000)})
 		all = append(all, releaseCmds...)
 		if err := runArgvSeq(ctx, all); err != nil {
+			// runArgvSeq stops at the first failure (ctx cancel kills the
+			// sleep); re-issue the release sequence on a background context
+			// so modifiers do not stay pressed at the compositor level. Mirrors
+			// holdKeyX11's ctx.Done() protection (#192).
+			_ = runArgvSeq(context.Background(), releaseCmds)
 			return Result{}, err
 		}
 		return Result{Content: "OK"}, nil
@@ -318,6 +328,13 @@ func executeDesktopControlWayland(ctx context.Context, p desktopParams) (Result,
 		"maximize_window", "set_window_bounds", "quit_app", "list_apps", "active_app",
 		"snapshot_ui", "find_element", "find_and_click", "wait_and_click", "display_info", "menu_select":
 		return Result{}, fmt.Errorf("desktop_control: action %q is not supported on Wayland (no protocol for external clients; run the target under XWayland for X11 tooling)", p.Action)
+
+	// key_press/key_combo are supported on the X11 backend but not wired
+	// through the ydotool key path here. Report the platform limitation
+	// explicitly instead of falling through to a misleading "unknown
+	// action" that makes the agent retry with different action names (#193).
+	case "key_press", "key_combo":
+		return Result{}, fmt.Errorf("desktop_control: action %q is not yet supported on Wayland (only modifier-based actions are wired to ydotool); run the target under XWayland for X11 key injection", p.Action)
 
 	default:
 		// App launching is display-server independent — delegate to the

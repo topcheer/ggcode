@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"github.com/topcheer/ggcode/internal/safego"
 	"os/exec"
 	"runtime"
 	"strconv"
@@ -190,13 +191,23 @@ func (nm *NotificationManager) notifyWindows(title, body string) {
 		"$balloon.ShowBalloonTip(5000); " +
 		"Start-Sleep -Seconds 6; " +
 		"$balloon.Dispose()"
-	cmd := exec.Command("powershell", "-NoProfile", "-Command", script)
-	if err := cmd.Run(); err != nil {
-		debug.Log("desktop", "Windows notification failed: %v", err)
-	}
+	// Run asynchronously: this fires inline on the approval/complete/error
+	// agent paths — the synchronous cmd.Run() blocked them 7-8s while the
+	// script slept (#202).
+	safego.Go("notify-windows", func() {
+		cmd := exec.Command("powershell", "-NoProfile", "-Command", script)
+		if err := cmd.Run(); err != nil {
+			debug.Log("desktop", "Windows notification failed: %v", err)
+		}
+	})
 }
 
 // --- Dock badge management ---
+// NOTE (#201): the unread state machine (Notify increment, SetFocused/
+// SetEnabled/ClearUnread reset, GetUnread read) is kept because the bound
+// APIs are used by the frontend, but setBadge/clearBadge are intentionally
+// no-ops pending a frontend document.title listener. Emitting a "notification"
+// event with an unread count is the integration point when that lands.
 
 func (nm *NotificationManager) setBadge(count int) {
 	if count <= 0 {

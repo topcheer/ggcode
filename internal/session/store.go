@@ -2440,8 +2440,13 @@ func (s *JSONLStore) backfillTimestamps(sessionID string) {
 		return
 	}
 
+	// Assign strictly increasing timestamps (+1ms per backfilled line) so
+	// mixed sessions (backfilled prefix + real-timestamped suffix) stay
+	// monotonic: a single shared timestamp broke findMessageCutoff's
+	// binary search, which assumes file order == chronological order (#198).
 	backfillTime := time.Now().Add(-6 * time.Hour)
 	changed := false
+	n := 0
 	for i, line := range lines {
 		var rec jsonlRecord
 		if json.Unmarshal([]byte(line), &rec) != nil {
@@ -2450,7 +2455,8 @@ func (s *JSONLStore) backfillTimestamps(sessionID string) {
 		if rec.Type != "message" || !rec.Timestamp.IsZero() {
 			continue
 		}
-		rec.Timestamp = backfillTime
+		rec.Timestamp = backfillTime.Add(time.Duration(n) * time.Millisecond)
+		n++
 		if data, err := json.Marshal(rec); err == nil {
 			lines[i] = string(data)
 			changed = true

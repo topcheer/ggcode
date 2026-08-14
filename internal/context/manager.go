@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -1806,7 +1807,11 @@ func extractReadPaths(toolName string, input json.RawMessage) []string {
 
 // normalizeFilePath normalizes a file path for comparison purposes.
 // Strips "./" prefix, converts backslashes to forward slashes, and lowercases
-// for case-insensitive filesystems (macOS, Windows).
+// only on case-insensitive filesystems (macOS, Windows). Linux filesystems
+// are case-sensitive — unconditional lowercasing made src/Foo.go and
+// src/foo.go (different files) collide in CompactSupersededReads, silently
+// replacing one file's content with a factually-wrong superseded marker
+// (#195).
 func normalizeFilePath(p string) string {
 	p = strings.TrimSpace(p)
 	p = strings.ReplaceAll(p, "\\", "/")
@@ -1818,7 +1823,10 @@ func normalizeFilePath(p string) string {
 	for strings.Contains(p, "//") {
 		p = strings.ReplaceAll(p, "//", "/")
 	}
-	return strings.ToLower(p)
+	if runtime.GOOS != "linux" {
+		return strings.ToLower(p)
+	}
+	return p
 }
 
 // countTokens uses the provider's token counting API when available,
@@ -1850,13 +1858,12 @@ func (m *Manager) countTokens(msg provider.Message) int {
 			}
 			return n
 		} else if err != nil {
-			// Provider returned error — likely doesn't support CountTokens RPC.
-			// Cache this to avoid retrying on every Add().
-			if !m.providerCountChecked {
-				m.providerCountChecked = true
-				m.providerCountSupportsRPC = false
-			}
-			debug.Log("ctx", "countTokens: provider.CountTokens failed (%v), falling back to heuristic", err)
+			// Provider returned an error. Transient failures (timeout, 429,
+			// network) are NOT evidence the provider lacks the RPC — caching
+			// "not supported" on the first error degraded every later count to
+			// the heuristic for the whole session (#196). Only classify as
+			// unsupported when the call completed but returned nothing.
+			debug.Log("ctx", "countTokens: provider.CountTokens failed (%v), falling back to heuristic (will retry)", err)
 		}
 	}
 	return m.estimateTokens(msg)

@@ -43,9 +43,10 @@ import (
 
 // channelSafetyInstance represents a detected channel safety issue.
 type channelSafetyInstance struct {
-	posStr  string // position of the offending statement
-	channel string // channel variable name
-	kind    string // "double-close", "send-after-close", "close-in-loop"
+	posStr   string // position of the offending statement
+	funcName string // enclosing function (delta key component, #214)
+	channel  string // channel variable name
+	kind     string // "double-close", "send-after-close", "close-in-loop"
 }
 
 // checkChannelSafety performs AST-based channel close safety detection on Go
@@ -66,8 +67,13 @@ func checkChannelSafety(filePath, oldContent, newContent string) []string {
 
 	var warnings []string
 	for _, inst := range newInstances {
-		key := inst.channel + inst.kind
-		if oldSet[key] {
+		// Key must include the enclosing function and count each instance:
+		// a bare channel+kind key made all same-channel instances in the
+		// file collapse together, so fixing one function while copying the
+		// bad pattern into another was silently suppressed (#214).
+		key := inst.funcName + "|" + inst.channel + "|" + inst.kind
+		if oldSet[key] > 0 {
+			oldSet[key]--
 			continue
 		}
 		msg := formatChannelSafetyWarning(inst)
@@ -126,7 +132,10 @@ func findChannelSafetyIssues(src string) []channelSafetyInstance {
 		if !ok || fn.Body == nil {
 			continue
 		}
-		instances = append(instances, analyzeChannelOpsInFunc(fset, fn.Body)...)
+		for _, inst := range analyzeChannelOpsInFunc(fset, fn.Body) {
+			inst.funcName = fn.Name.Name // delta key component (#214)
+			instances = append(instances, inst)
+		}
 	}
 
 	return instances
@@ -358,14 +367,14 @@ func isMakeChanCall(expr ast.Expr) bool {
 
 // collectChannelSafetyIssues parses old content and returns a set of existing
 // channel safety issue signatures for delta-aware suppression.
-func collectChannelSafetyIssues(src string) map[string]bool {
+func collectChannelSafetyIssues(src string) map[string]int {
 	if strings.TrimSpace(src) == "" {
 		return nil
 	}
 	instances := findChannelSafetyIssues(src)
-	result := make(map[string]bool, len(instances))
+	result := make(map[string]int, len(instances))
 	for _, inst := range instances {
-		result[inst.channel+inst.kind] = true
+		result[inst.funcName+"|"+inst.channel+"|"+inst.kind]++
 	}
 	return result
 }

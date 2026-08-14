@@ -117,6 +117,8 @@ type contextLeak struct {
 // calls inside functions that have a ctx context.Context parameter (where the
 // ctx parameter is NOT used in the same call expression).
 func findContextLeaks(fset *token.FileSet, file *ast.File) []contextLeak {
+	// Per-function-method occurrence counter for stable fingerprints (#215).
+	occurrence := map[string]int{}
 	var leaks []contextLeak
 
 	for _, decl := range file.Decls {
@@ -168,8 +170,24 @@ func findContextLeaks(fset *token.FileSet, file *ast.File) []contextLeak {
 			if fn.Name != nil {
 				funcName = fn.Name.Name
 			}
+			// Fingerprint must include the receiver type and an occurrence
+			// counter: methods with the same name on different types (the
+			// Handler.ServeHTTP pattern) collapsed to one key, letting an
+			// old leak on type A suppress a NEW leak on type B; multiple
+			// leaks inside one function also cancelled pairwise (#215).
+			recvType := ""
+			if fn.Recv != nil && len(fn.Recv.List) > 0 {
+				if ft, ok := fn.Recv.List[0].Type.(*ast.StarExpr); ok {
+					if id, ok := ft.X.(*ast.Ident); ok {
+						recvType = id.Name + "."
+					}
+				} else if id, ok := fn.Recv.List[0].Type.(*ast.Ident); ok {
+					recvType = id.Name + "."
+				}
+			}
+			occurrence[recvType+funcName]++
 			leaks = append(leaks, contextLeak{
-				fingerprint: funcName + ":" + fnName,
+				fingerprint: fmt.Sprintf("%s%s:%s#%d", recvType, funcName, fnName, occurrence[recvType+funcName]),
 				message: fmt.Sprintf(
 					"L%d: context.%s() used in function that receives %s context.Context. "+
 						"Use the passed %s instead to propagate cancellation, deadlines, and trace context.",

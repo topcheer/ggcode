@@ -169,6 +169,15 @@ func checkAssertionWeakening(filePath, oldContent, newContent string) string {
 				warnings = append(warnings, msg)
 				break
 			}
+			// Check for expected-value weakening: the same assertion with a
+			// changed literal (42 → 41) is the headline scenario in this
+			// file's header comment, but value info is destroyed by
+			// normalizeAssertionStructure — nothing fired for pure value
+			// changes (#199).
+			if msg := detectExpectedValueChange(oldLine.text, newLine.text); msg != "" {
+				warnings = append(warnings, msg)
+				break
+			}
 		}
 		if len(warnings) >= assertionWeakeningMaxWarnings {
 			warnings = warnings[:assertionWeakeningMaxWarnings]
@@ -238,6 +247,33 @@ func normalizeAssertionStructure(line string) string {
 	}
 
 	return strings.TrimSpace(norm)
+}
+
+// detectExpectedValueChange reports when the same assertion's expected
+// literal changed (e.g. require.Equal(t, 42, x) → require.Equal(t, 41, x)).
+// The structural normalizer erases literals, so without this check a pure
+// value tweak — the classic "make the failing test pass" edit — is invisible
+// (#199). Only literals are compared; operators/polarity are handled above.
+func detectExpectedValueChange(oldLine, newLine string) string {
+	oldLits := assertionLiterals(oldLine)
+	newLits := assertionLiterals(newLine)
+	if len(oldLits) == 0 || len(oldLits) != len(newLits) {
+		return ""
+	}
+	for i := range oldLits {
+		if oldLits[i] != newLits[i] {
+			return fmt.Sprintf("[Assertion Weakening] expected value changed: %q -> %q (%s → %s). Weakening an expected value to make a failing test pass hides real bugs — verify the new value is genuinely correct before keeping it.", oldLits[i], newLits[i], oldLine, newLine)
+		}
+	}
+	return ""
+}
+
+// assertionLiterals extracts the numeric and quoted-string literals from an
+// assertion line in order.
+var assertionLitRe = regexp.MustCompile(`\b\d+\.?\d*\b|"[^"]*"`)
+
+func assertionLiterals(line string) []string {
+	return assertionLitRe.FindAllString(line, -1)
 }
 
 // detectPolarityFlip checks if an assertion function was inverted (e.g.,

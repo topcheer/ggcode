@@ -197,7 +197,7 @@ func UpdateConfig(values map[string]interface{}) error {
 	defer globalMu.Unlock()
 	cfg := globalCfg
 	if cfg == nil {
-		return nil
+		return fmt.Errorf("config not initialized")
 	}
 
 	if v, ok := values["vendor"].(string); ok {
@@ -271,14 +271,19 @@ func UpdateConfig(values map[string]interface{}) error {
 		cfg.A2A.Port = int(v)
 	}
 	if v, ok := values["subAgentTimeout"].(string); ok {
-		if d, err := time.ParseDuration(v); err == nil {
-			cfg.SubAgents.Timeout = d
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			// Silent success on a typo'd duration hid the failure (#206).
+			return fmt.Errorf("invalid subAgentTimeout %q (use e.g. \"45s\"): %w", v, err)
 		}
+		cfg.SubAgents.Timeout = d
 	}
 	if v, ok := values["swarmTimeout"].(string); ok {
-		if d, err := time.ParseDuration(v); err == nil {
-			cfg.Swarm.TeammateTimeout = d
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return fmt.Errorf("invalid swarmTimeout %q (use e.g. \"45s\"): %w", v, err)
 		}
+		cfg.Swarm.TeammateTimeout = d
 	}
 	if v, ok := values["a2aHost"].(string); ok {
 		cfg.A2A.Host = v
@@ -302,7 +307,7 @@ func SaveAPIKey(vendor, endpoint, apiKey string) error {
 	defer globalMu.Unlock()
 	cfg := globalCfg
 	if cfg == nil {
-		return nil
+		return fmt.Errorf("config not initialized")
 	}
 
 	// Determine scope: if the vendor has multiple endpoints (gateway type),
@@ -324,7 +329,7 @@ func SaveDefaultMode(mode string) error {
 	defer globalMu.Unlock()
 	cfg := globalCfg
 	if cfg == nil {
-		return nil
+		return fmt.Errorf("config not initialized")
 	}
 	return cfg.SaveDefaultModePreference(mode)
 }
@@ -334,7 +339,7 @@ func SaveA2AEnabled(enabled bool) error {
 	defer globalMu.Unlock()
 	cfg := globalCfg
 	if cfg == nil {
-		return nil
+		return fmt.Errorf("config not initialized")
 	}
 	return cfg.SaveA2AEnabled(enabled)
 }
@@ -474,7 +479,7 @@ func ApplyImpersonation(presetID, version string, customHeaders map[string]strin
 	defer globalMu.Unlock()
 	cfg := globalCfg
 	if cfg == nil {
-		return nil
+		return fmt.Errorf("config not initialized")
 	}
 
 	var preset *provider.ImpersonationPreset
@@ -508,8 +513,12 @@ type HookConfigJSON = hooks.HookConfig
 
 // GetHooks returns the current hooks configuration.
 func (b *ChatBridge) GetHooks() hooks.HookConfig {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	// globalMu, not b.mu: the same *config.Config is guarded by globalMu in
+	// UpdateConfig & co. — two unrelated locks on one pointer allowed
+	// concurrent map read/write (fatal, unrecoverable) between cfg.Save()
+	// marshaling and cfg.Vendors writes (#205).
+	globalMu.RLock()
+	defer globalMu.RUnlock()
 	if b.cfg == nil {
 		return hooks.HookConfig{}
 	}
@@ -518,8 +527,9 @@ func (b *ChatBridge) GetHooks() hooks.HookConfig {
 
 // SaveHooks saves the hooks configuration.
 func (b *ChatBridge) SaveHooks(cfg hooks.HookConfig) error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	// globalMu — see GetHooks (#205).
+	globalMu.Lock()
+	defer globalMu.Unlock()
 	if b.cfg == nil {
 		return fmt.Errorf("config not loaded")
 	}
@@ -583,7 +593,7 @@ func AddCustomEndpoint(vendor, name, protocol, baseURL, apiKey string) error {
 	defer globalMu.Unlock()
 	cfg := globalCfg
 	if cfg == nil {
-		return nil
+		return fmt.Errorf("config not initialized")
 	}
 
 	vc, ok := cfg.Vendors[vendor]
@@ -674,20 +684,26 @@ func maskAPIKey(key string) string {
 // If the target endpoint fails, tries other endpoints with the same BaseURL
 // within the same vendor. Only reports error if ALL same-domain endpoints fail.
 func FetchModelsForEndpoint(vendor, endpoint, apiKey, baseURL string) ([]string, error) {
+	// Snapshot everything needed under RLock, then release BEFORE any
+	// network I/O: holding globalMu.RLock across 30s DiscoverModels calls
+	// let one queued writer block every later reader — settings page
+	// freeze up to 30s (#204).
 	globalMu.RLock()
-	defer globalMu.RUnlock()
 	cfg := globalCfg
 
 	if cfg == nil {
+		globalMu.RUnlock()
 		return nil, fmt.Errorf("config not loaded")
 	}
 
 	vc, ok := cfg.Vendors[vendor]
 	if !ok {
+		globalMu.RUnlock()
 		return nil, fmt.Errorf("vendor %q not found", vendor)
 	}
 	ep, ok := vc.Endpoints[endpoint]
 	if !ok {
+		globalMu.RUnlock()
 		return nil, fmt.Errorf("endpoint %q not found", endpoint)
 	}
 
@@ -700,6 +716,23 @@ func FetchModelsForEndpoint(vendor, endpoint, apiKey, baseURL string) ([]string,
 	if apiKey == "" {
 		apiKey = resolveAPIKey(cfg, vendor, endpoint)
 	}
+
+	// Pre-resolve same-domain fallback endpoints while still locked.
+	type fallbackEP struct {
+		name, protocol, baseURL, apiKey string
+	}
+	var fallbacks []fallbackEP
+	for epName, epCfg := range vc.Endpoints {
+		if epName == endpoint || epCfg.BaseURL != baseURL {
+			continue
+		}
+		epKey := resolveAPIKey(cfg, vendor, epName)
+		if epKey == "" {
+			continue
+		}
+		fallbacks = append(fallbacks, fallbackEP{epName, epCfg.Protocol, epCfg.BaseURL, epKey})
+	}
+	globalMu.RUnlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -719,27 +752,17 @@ func FetchModelsForEndpoint(vendor, endpoint, apiKey, baseURL string) ([]string,
 	if err != nil {
 		errs = append(errs, fmt.Sprintf("%s: %v", endpoint, err))
 	}
-	for epName, epCfg := range vc.Endpoints {
-		if epName == endpoint {
-			continue
-		}
-		if epCfg.BaseURL != baseURL {
-			continue
-		}
-		epKey := resolveAPIKey(cfg, vendor, epName)
-		if epKey == "" {
-			continue
-		}
+	for _, fb := range fallbacks {
 		epResolved := &config.ResolvedEndpoint{
-			VendorID: vendor, EndpointID: epName,
-			Protocol: epCfg.Protocol, BaseURL: epCfg.BaseURL, APIKey: epKey,
+			VendorID: vendor, EndpointID: fb.name,
+			Protocol: fb.protocol, BaseURL: fb.baseURL, APIKey: fb.apiKey,
 		}
 		epModels, epErr := provider.DiscoverModels(ctx, epResolved)
 		if epErr == nil && len(epModels) > 0 {
 			return epModels, nil
 		}
 		if epErr != nil {
-			errs = append(errs, fmt.Sprintf("%s: %v", epName, epErr))
+			errs = append(errs, fmt.Sprintf("%s: %v", fb.name, epErr))
 		}
 	}
 
@@ -789,7 +812,7 @@ func GetEndpointDetails(vendor, endpoint string) *EndpointDetails {
 	defer globalMu.RUnlock()
 	cfg := globalCfg
 	if cfg == nil {
-		return nil
+		return nil // read op — empty value is the established convention
 	}
 	vc, ok := cfg.Vendors[vendor]
 	if !ok {

@@ -234,13 +234,16 @@ func ydoModifierKeyArgs(mod string) (press []string, release []string, ok bool) 
 }
 
 // ydoDragArgs returns the argv sequence for a drag: move to start, button
-// down, move to end, button up.
+// down, move to end, button up. ydotool click uses a bitmask: low bits =
+// button number, 0x40 = down-only, 0x80 = up-only, 0xC0 = down+up. There
+// are no -d/-u options (silently ignored upstream), and 0xC0 performs a
+// FULL click — the old args degraded drag into two clicks (#191).
 func ydoDragArgs(x, y, toX, toY int) [][]string {
 	return [][]string{
 		ydoMoveArgs(x, y),
-		{"ydotool", "click", "-d", "100", "0xC0"}, // down, 100ms hold
+		{"ydotool", "click", "0x40"}, // BTN_LEFT down only
 		ydoMoveArgs(toX, toY),
-		{"ydotool", "click", "-u", "0xC0"}, // up
+		{"ydotool", "click", "0x80"}, // BTN_LEFT up only
 	}
 }
 

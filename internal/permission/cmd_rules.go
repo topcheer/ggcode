@@ -205,7 +205,11 @@ func compileCommandPattern(pattern string) (*regexp.Regexp, error) {
 	sb.WriteString("(?i)^") // anchor at start
 	for _, ch := range pattern {
 		if ch == '*' {
-			sb.WriteString(".*")
+			// A trailing wildcard must not swallow command chaining:
+			// "git diff*" matching "git diff; curl ..." lets anything ride
+			// in past the semicolon. Restrict the wildcard to a single
+			// command: no shell control characters (; | & ` $( ) newline).
+			sb.WriteString(`[^;|&` + "`" + `$()\n\r]*`)
 		} else {
 			// Escape regex metacharacters
 			if strings.ContainsRune(`\.+?()|[]{}^$`, ch) {
@@ -214,7 +218,6 @@ func compileCommandPattern(pattern string) (*regexp.Regexp, error) {
 			sb.WriteRune(ch)
 		}
 	}
-	sb.WriteString("$")
 	sb.WriteString("$") // anchor at end — without this, 'git status' would
 	// match 'git status; rm -rf /' (command chaining injection)
 	return regexp.Compile(sb.String())

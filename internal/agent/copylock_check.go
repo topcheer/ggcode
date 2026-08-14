@@ -58,8 +58,9 @@ var syncTypes = map[string]bool{
 
 // copylockIssue represents a detected copylock violation.
 type copylockIssue struct {
-	pos     token.Position
-	message string
+	pos      token.Position
+	message  string
+	funcName string // enclosing function — content-fingerprint delta key (#213)
 }
 
 // checkCopylock detects sync types passed/returned by value in Go source.
@@ -89,7 +90,7 @@ func checkCopylock(filePath, oldContent, newContent string) []string {
 	// First pass: count total new issues (excluding pre-existing ones)
 	var totalNewIssues int
 	for _, issue := range issues {
-		if !oldPositions[issue.pos.Line] {
+		if !oldPositions[issue.funcName+"|"+issue.message] {
 			totalNewIssues++
 		}
 	}
@@ -97,7 +98,7 @@ func checkCopylock(filePath, oldContent, newContent string) []string {
 	// Second pass: build warnings list with truncation
 	var warnings []string
 	for _, issue := range issues {
-		if oldPositions[issue.pos.Line] {
+		if oldPositions[issue.funcName+"|"+issue.message] {
 			continue
 		}
 		msg := fmt.Sprintf("Copylock: %s at %s. ", issue.message, issue.pos)
@@ -116,7 +117,7 @@ func checkCopylock(filePath, oldContent, newContent string) []string {
 
 // collectOldCopylockPositions parses old content and returns a set of line
 // numbers where copylock issues existed. Used for delta-aware filtering.
-func collectOldCopylockPositions(filePath, oldContent string) map[int]bool {
+func collectOldCopylockPositions(filePath, oldContent string) map[string]bool {
 	if strings.TrimSpace(oldContent) == "" {
 		return nil
 	}
@@ -129,9 +130,12 @@ func collectOldCopylockPositions(filePath, oldContent string) map[int]bool {
 	if len(oldIssues) == 0 {
 		return nil
 	}
-	result := make(map[int]bool, len(oldIssues))
+	// Content fingerprint, not line numbers (#213): line keys both
+	// re-reported pre-existing issues after edits above them AND silently
+	// suppressed new violations that happened to land on an old line.
+	result := make(map[string]bool, len(oldIssues))
 	for _, issue := range oldIssues {
-		result[issue.pos.Line] = true
+		result[issue.funcName+"|"+issue.message] = true
 	}
 	return result
 }
@@ -145,7 +149,10 @@ func findCopylockIssues(fset *token.FileSet, file *ast.File) []copylockIssue {
 
 	for _, decl := range file.Decls {
 		if fn, ok := decl.(*ast.FuncDecl); ok {
-			issues = append(issues, checkFuncDeclCopylocks(fset, fn, lockStructs)...)
+			for _, issue := range checkFuncDeclCopylocks(fset, fn, lockStructs) {
+				issue.funcName = fn.Name.Name // delta key component (#213)
+				issues = append(issues, issue)
+			}
 		}
 	}
 
