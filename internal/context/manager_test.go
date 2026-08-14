@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -2305,8 +2306,17 @@ func TestNormalizeFilePath(t *testing.T) {
 		{"foo//bar.go", "foo/bar.go"},
 		{"/foo/./bar.go", "/foo/./bar.go"}, // we only strip leading ./
 		{"", ""},
-		{"UPPER.CASE", "upper.case"},
 	}
+	// Case folding only applies on case-insensitive platforms (#195);
+	// Linux paths are case-sensitive and keep their original case.
+	wantUpper := "upper.case"
+	if runtime.GOOS == "linux" {
+		wantUpper = "UPPER.CASE"
+	}
+	tests = append(tests, struct {
+		input    string
+		expected string
+	}{"UPPER.CASE", wantUpper})
 	for _, tc := range tests {
 		got := normalizeFilePath(tc.input)
 		if got != tc.expected {
