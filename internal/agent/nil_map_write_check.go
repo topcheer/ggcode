@@ -47,8 +47,11 @@ import (
 
 // nilMapWriteInstance represents a detected nil map write.
 type nilMapWriteInstance struct {
-	posStr  string // human-readable position
-	mapName string // variable name of the nil map
+	posStr   string // human-readable position
+	mapName  string // variable name of the nil map
+	funcName string // enclosing function — map variable names are function-scoped,
+	// so the delta key must include it to distinguish same-named maps in
+	// different functions (#222)
 }
 
 // checkNilMapWrite detects writes to nil (uninitialized) map variables in Go code.
@@ -100,15 +103,18 @@ func checkNilMapWrite(filePath, oldContent, newContent string) string {
 		}
 	}
 
-	// Build a set of old signatures for dedup.
+	// Build a set of old fingerprints for dedup: funcName + mapName. A bare
+	// mapName key suppresses same-named maps across different functions —
+	// they are independent variables, so a newly introduced nil-map write
+	// in a new function must still be flagged (#222).
 	oldSet := make(map[string]bool, len(oldInstances))
 	for _, oi := range oldInstances {
-		oldSet[oi.mapName] = true
+		oldSet[oi.funcName+"|"+oi.mapName] = true
 	}
 
 	var newInstances []nilMapWriteInstance
 	for _, inst := range instances {
-		if !oldSet[inst.mapName] {
+		if !oldSet[inst.funcName+"|"+inst.mapName] {
 			newInstances = append(newInstances, inst)
 		}
 	}
@@ -136,7 +142,15 @@ func findNilMapWritesInFunc(fset *token.FileSet, fn *ast.FuncDecl) []nilMapWrite
 		return nil
 	}
 	instances := findUninitializedMapWrites(fset, fn.Body, nilMaps)
-	return deduplicateByMapName(instances)
+	instances = deduplicateByMapName(instances)
+	fnName := "<anonymous>"
+	if fn.Name != nil {
+		fnName = fn.Name.Name
+	}
+	for i := range instances {
+		instances[i].funcName = fnName
+	}
+	return instances
 }
 
 // collectNilRiskMaps finds var m map[K]V declarations (without initializer)

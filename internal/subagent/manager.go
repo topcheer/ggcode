@@ -40,11 +40,11 @@ type AgentEvent struct {
 
 const maxAgentEvents = 400
 
-// maxConcurrentSubAgents limits how many sub-agents can run simultaneously.
-// Each sub-agent consumes a goroutine, an LLM API connection, and context
-// window tokens. Without a limit, an agent can spawn dozens of sub-agents
-// in parallel, exhausting API rate limits and memory.
-const maxConcurrentSubAgents = 5
+// Sub-agent concurrency is limited by Manager.maxConcurrent (from
+// cfg.MaxConcurrent, default 5). Each sub-agent consumes a goroutine, an LLM
+// API connection, and context window tokens; the limit prevents an agent
+// from spawning dozens of sub-agents in parallel, exhausting API rate
+// limits and memory.
 
 // maxSubAgentResultBytes caps the result text stored and returned by a
 // sub-agent. Without this, a sub-agent that reads large files can produce
@@ -372,6 +372,11 @@ type Manager struct {
 	onSystem     func(agentID, text string)                                                        // called on system events (retry, compaction)
 	lastNotify   time.Time                                                                         // throttle: last time onUpdate was called
 	nextID       int
+	// maxConcurrent is the configured concurrency limit (cfg.MaxConcurrent,
+	// default 5). Spawn's early-reject check uses this instead of a hardcoded
+	// constant so the semaphore capacity and the Spawn check never diverge
+	// when the user configures max_concurrent > 5 (#226).
+	maxConcurrent int
 	// cancelAllTimeout is the max time CancelAll waits for each Running sub-agent's
 	// goroutine to actually terminate after context cancellation. Default: 5s.
 	// Overridable for tests.
@@ -418,6 +423,7 @@ func NewManager(cfg config.SubAgentConfig) *Manager {
 		streamBatchDone:   make(chan struct{}),
 		watchdogDone:      make(chan struct{}),
 		inactivityTimeout: 5 * time.Minute,
+		maxConcurrent:     max,
 	}
 	m.startWatchdog()
 	return m
@@ -503,7 +509,7 @@ func (m *Manager) Spawn(name, task, displayTask string, tools []string, ctx cont
 		}
 		sa.mu.Unlock()
 	}
-	if running >= maxConcurrentSubAgents {
+	if running >= m.maxConcurrent {
 		// Return a synthetic error ID that wait_agent will report as failed.
 		errID := fmt.Sprintf("sa-limit-%d", time.Now().UnixNano())
 		sa := &SubAgent{
@@ -514,7 +520,7 @@ func (m *Manager) Spawn(name, task, displayTask string, tools []string, ctx cont
 			Status:       StatusFailed,
 			CurrentPhase: "rejected",
 			CreatedAt:    time.Now(),
-			Error:        fmt.Errorf("concurrent sub-agent limit reached (%d). Wait for existing sub-agents to finish before spawning new ones.", maxConcurrentSubAgents),
+			Error:        fmt.Errorf("concurrent sub-agent limit reached (%d). Wait for existing sub-agents to finish before spawning new ones.", m.maxConcurrent),
 			done:         make(chan struct{}),
 		}
 		close(sa.done)
@@ -524,8 +530,11 @@ func (m *Manager) Spawn(name, task, displayTask string, tools []string, ctx cont
 	}
 	m.nextID++
 	id := fmt.Sprintf("sa-%d", m.nextID)
-	m.mu.Unlock()
 
+	// Construct outside the lock, then insert in the SAME critical section as
+	// the limit check above (the unlock/relock window between check and insert
+	// allowed two parallel spawns to both pass the check, transiently
+	// exceeding the limit). The semaphore still backstops true concurrency.
 	sa := &SubAgent{
 		ID:           id,
 		Name:         name,
@@ -539,7 +548,6 @@ func (m *Manager) Spawn(name, task, displayTask string, tools []string, ctx cont
 		done:         make(chan struct{}),
 	}
 
-	m.mu.Lock()
 	m.agents[id] = sa
 	m.mu.Unlock()
 

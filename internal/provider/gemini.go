@@ -234,7 +234,9 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 				// Extract usage metadata
 				if resp.UsageMetadata != nil {
 					usage.InputTokens = int(resp.UsageMetadata.PromptTokenCount)
-					usage.OutputTokens = int(resp.UsageMetadata.CandidatesTokenCount)
+					// Gemini bills thinking tokens at output rates (#225).
+					usage.OutputTokens = int(resp.UsageMetadata.CandidatesTokenCount) + int(resp.UsageMetadata.ThoughtsTokenCount)
+					usage.CacheRead = int(resp.UsageMetadata.CachedContentTokenCount)
 					usage.PromptTokensTotal = int(resp.UsageMetadata.PromptTokenCount)
 				}
 
@@ -495,7 +497,10 @@ func (p *GeminiProvider) convertResponse(resp *genai.GenerateContentResponse) ([
 
 	if resp.UsageMetadata != nil {
 		usage.InputTokens = int(resp.UsageMetadata.PromptTokenCount)
-		usage.OutputTokens = int(resp.UsageMetadata.CandidatesTokenCount)
+		// Gemini bills thinking tokens at output rates (#225).
+		usage.OutputTokens = int(resp.UsageMetadata.CandidatesTokenCount) + int(resp.UsageMetadata.ThoughtsTokenCount)
+		usage.CacheRead = int(resp.UsageMetadata.CachedContentTokenCount)
+		usage.PromptTokensTotal = int(resp.UsageMetadata.PromptTokenCount)
 	}
 
 	if len(resp.Candidates) > 0 && resp.Candidates[0].Content != nil {

@@ -84,11 +84,15 @@ type resourceLeak struct {
 
 // checkResourceLeaks performs AST-based resource leak detection on Go source.
 // Returns warnings for resources acquired without corresponding cleanup calls.
+// Delta-aware: parses oldContent and suppresses pre-existing (unchanged)
+// acquisitions so unrelated edits do not re-warn and squeeze out the single
+// maxIntegrityWarnings slot (#221).
 //
 // Parameters:
 //   - filePath: path of the written file (used for language detection)
+//   - oldContent: the file content before the write ("" for new files)
 //   - src: the file content after the write
-func checkResourceLeaks(filePath, src string) []string {
+func checkResourceLeaks(filePath, oldContent, src string) []string {
 	if filepath.Ext(filePath) != ".go" {
 		return nil
 	}
@@ -100,6 +104,35 @@ func checkResourceLeaks(filePath, src string) []string {
 	file, err := parser.ParseFile(fset, filePath, src, 0)
 	if err != nil || file == nil {
 		return nil
+	}
+
+	// Delta: collect fingerprints of pre-existing leaks (funcName|varName).
+	oldFPs := map[string]bool{}
+	if strings.TrimSpace(oldContent) != "" {
+		oldFset := token.NewFileSet()
+		oldFile, oldErr := parser.ParseFile(oldFset, filePath, oldContent, 0)
+		if oldErr == nil && oldFile != nil {
+			for _, decl := range oldFile.Decls {
+				fn, ok := decl.(*ast.FuncDecl)
+				if !ok || fn.Body == nil {
+					continue
+				}
+				acquired := findResourceAcquisitions(fn)
+				if len(acquired) == 0 {
+					continue
+				}
+				cleanedVars := findCleanupCalls(fn)
+				for _, acq := range acquired {
+					if _, cleaned := cleanedVars[acq.varName]; !cleaned {
+						fnName := "<anonymous>"
+						if fn.Name != nil {
+							fnName = fn.Name.Name
+						}
+						oldFPs[fnName+"|"+acq.varName] = true
+					}
+				}
+			}
+		}
 	}
 
 	var warnings []string
@@ -115,10 +148,18 @@ func checkResourceLeaks(filePath, src string) []string {
 			continue
 		}
 
+		fnName := "<anonymous>"
+		if fn.Name != nil {
+			fnName = fn.Name.Name
+		}
+
 		cleanedVars := findCleanupCalls(fn)
 		for _, acq := range acquired {
 			if _, cleaned := cleanedVars[acq.varName]; cleaned {
 				continue
+			}
+			if oldFPs[fnName+"|"+acq.varName] {
+				continue // pre-existing leak, already warned before this edit
 			}
 			warnings = append(warnings, fmt.Sprintf(
 				"Possible resource leak: %s acquired (variable %s at %s) but no defer .Close() "+

@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -185,5 +186,34 @@ func foo() {
 	result := checkNilMapWrite("test.go", "", src)
 	if result != "" {
 		t.Errorf("expected no warning for syntactically invalid code, got: %s", result)
+	}
+}
+
+// TestNilMapWriteCrossFunctionDelta verifies that a nil-map write on a
+// variable with the same name as one in another (pre-existing) function is
+// NOT suppressed by the delta filter — map names are function-scoped (#222).
+func TestNilMapWriteCrossFunctionDelta(t *testing.T) {
+	old := `package p
+func a() {
+	var m map[string]int
+	m["k"] = 1
+}
+`
+	edited := old + `
+func b() {
+	var m map[string]int
+	m["x"] = 2
+}
+`
+	out := checkNilMapWrite("test.go", old, edited)
+	// The func-b write lands on line 9 (old content is 5 lines + 2 new decl
+	// lines + blank). Line-based check proves it is the NEW instance that
+	// survived the delta filter, not the pre-existing func-a one (line 3).
+	if !strings.Contains(out, "test.go:9") {
+		t.Errorf("new same-named nil-map write in func b must be flagged, got: %q", out)
+	}
+	// Unrelated edit to the pre-existing pattern must not re-warn.
+	if out2 := checkNilMapWrite("test.go", old, "// note\n"+old); out2 != "" {
+		t.Errorf("pre-existing nil-map write re-reported on unrelated edit: %q", out2)
 	}
 }

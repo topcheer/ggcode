@@ -334,10 +334,14 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 							ch <- StreamEvent{Type: StreamEventReasoning, ThinkingSignature: cb.Signature}
 						case "redacted_thinking":
 							debug.Log("anthropic", "content_block_start redacted_thinking idx=%d data_len=%d", event.Index, len(cb.Data))
+							// Register with empty Name (like the thinking branch)
+							// so content_block_stop's `tc.Name != ""` check skips
+							// it — redacted thinking is reasoning data, not a
+							// tool call. Echo-back happens via the reasoning
+							// event below (#224).
 							toolCalls[int(event.Index)] = &ToolCallDelta{
 								Index: int(event.Index),
-								Name:  "__redacted_thinking__", // sentinel
-								ID:    cb.Data,                 // carries redacted data for echo-back
+								ID:    cb.Data, // carries redacted data for echo-back
 							}
 							// Emit reasoning event with redacted data for echo-back
 							emitted = true

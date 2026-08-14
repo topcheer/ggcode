@@ -76,6 +76,12 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 	subCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	if !cfg.Manager.SetCancel(cfg.SubAgentID, cancel) {
+		// SetCancel returned false: the sub-agent was cancelled while it
+		// was Pending (before this goroutine reached SetCancel). That path
+		// leaves done unclosed — Complete's terminal branch closes done
+		// without overwriting the Cancelled status, which unblocks
+		// purgeTerminalAgents so the map entry can be reclaimed (#227).
+		cfg.Manager.Complete(cfg.SubAgentID, "", context.Canceled)
 		return
 	}
 

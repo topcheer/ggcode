@@ -411,6 +411,7 @@ func (b *ChatBridge) sendMessageData(data tunnel.MessageData, source string, exc
 	ctx, cancel := context.WithCancel(context.Background())
 	b.cancel = cancel
 	b.cancelled = false
+	b.finished = false // reset per-run finish guard (#223)
 	b.usageTurnIndex++
 	turnID, _ := b.startDesktopTurnLocked()
 	b.mu.Unlock()
@@ -2723,6 +2724,7 @@ func (b *ChatBridge) SendHiddenText(text string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	b.cancel = cancel
 	b.cancelled = false
+	b.finished = false // reset per-run finish guard (#223)
 	b.usageTurnIndex++
 	b.mu.Unlock()
 
@@ -3477,6 +3479,7 @@ func (b *ChatBridge) SendContent(content []provider.ContentBlock) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	b.cancel = cancel
 	b.cancelled = false
+	b.finished = false // reset per-run finish guard (#223)
 	b.usageTurnIndex++
 	b.startTime = time.Now()
 	b.mu.Unlock()

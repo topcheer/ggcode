@@ -20,7 +20,7 @@ func readFile(path string) error {
 	return err
 }
 `
-	warnings := checkResourceLeaks("test.go", src)
+	warnings := checkResourceLeaks("test.go", "", src)
 	if len(warnings) != 0 {
 		t.Errorf("expected no warnings, got %d: %v", len(warnings), warnings)
 	}
@@ -40,7 +40,7 @@ func readFile(path string) error {
 	return err
 }
 `
-	warnings := checkResourceLeaks("test.go", src)
+	warnings := checkResourceLeaks("test.go", "", src)
 	if len(warnings) == 0 {
 		t.Fatal("expected a resource leak warning, got none")
 	}
@@ -69,7 +69,7 @@ func fetchURL(url string) error {
 	return nil
 }
 `
-	warnings := checkResourceLeaks("test.go", src)
+	warnings := checkResourceLeaks("test.go", "", src)
 	if len(warnings) == 0 {
 		t.Fatal("expected a resource leak warning for HTTP body, got none")
 	}
@@ -103,7 +103,7 @@ func fetchURL(url string) error {
 	return err
 }
 `
-	warnings := checkResourceLeaks("test.go", src)
+	warnings := checkResourceLeaks("test.go", "", src)
 	if len(warnings) != 0 {
 		t.Errorf("expected no warnings when body is closed, got %d: %v", len(warnings), warnings)
 	}
@@ -121,7 +121,7 @@ func startServer() {
 	}
 }
 `
-	warnings := checkResourceLeaks("test.go", src)
+	warnings := checkResourceLeaks("test.go", "", src)
 	if len(warnings) == 0 {
 		t.Fatal("expected a resource leak warning for net.Listen, got none")
 	}
@@ -140,7 +140,7 @@ func startServer() {
 	defer l.Close()
 }
 `
-	warnings := checkResourceLeaks("test.go", src)
+	warnings := checkResourceLeaks("test.go", "", src)
 	if len(warnings) != 0 {
 		t.Errorf("expected no warnings when listener is closed, got %d: %v", len(warnings), warnings)
 	}
@@ -153,14 +153,14 @@ function read(p) {
 	return f;
 }
 `
-	warnings := checkResourceLeaks("test.js", src)
+	warnings := checkResourceLeaks("test.js", "", src)
 	if len(warnings) != 0 {
 		t.Errorf("expected no warnings for non-Go file, got %d", len(warnings))
 	}
 }
 
 func TestCheckResourceLeaks_EmptyFile(t *testing.T) {
-	warnings := checkResourceLeaks("test.go", "")
+	warnings := checkResourceLeaks("test.go", "", "")
 	if len(warnings) != 0 {
 		t.Errorf("expected no warnings for empty file, got %d", len(warnings))
 	}
@@ -180,7 +180,7 @@ func writeFile(path string) error {
 	return err
 }
 `
-	warnings := checkResourceLeaks("test.go", src)
+	warnings := checkResourceLeaks("test.go", "", src)
 	if len(warnings) == 0 {
 		t.Fatal("expected a resource leak warning for os.Create, got none")
 	}
@@ -206,7 +206,7 @@ func process(path, url string) error {
 	return nil
 }
 `
-	warnings := checkResourceLeaks("test.go", src)
+	warnings := checkResourceLeaks("test.go", "", src)
 	// We expect at least 2 warnings (both leaks detected).
 	// However, maxIntegrityWarnings caps at 3, but checkResourceLeaks
 	// itself does not cap -- the capping happens in checkWriteIntegrity.
@@ -228,7 +228,7 @@ func readFile(path string {
 `
 	// Syntax errors should cause the check to return no warnings
 	// (syntax errors are already caught by the syntax check).
-	warnings := checkResourceLeaks("test.go", src)
+	warnings := checkResourceLeaks("test.go", "", src)
 	if len(warnings) != 0 {
 		t.Errorf("expected no warnings for file with syntax errors, got %d", len(warnings))
 	}
@@ -255,7 +255,7 @@ func readFile(path string) error {
 	return nil
 }
 `
-	warnings := checkResourceLeaks("test.go", src)
+	warnings := checkResourceLeaks("test.go", "", src)
 	if len(warnings) != 0 {
 		t.Errorf("expected no warnings when both files are closed, got %d: %v", len(warnings), warnings)
 	}
@@ -277,8 +277,41 @@ func readFile(path string) error {
 	return err
 }
 `
-	warnings := checkResourceLeaks("test.go", src)
+	warnings := checkResourceLeaks("test.go", "", src)
 	if len(warnings) != 0 {
 		t.Errorf("expected no warnings when Close() is called (even without defer), got %d: %v", len(warnings), warnings)
+	}
+}
+
+// TestResourceLeakDeltaSuppressesPreexisting verifies that a pre-existing
+// (already-warned) leak is not re-reported on an unrelated edit, and no
+// longer squeezes out the single maxIntegrityWarnings slot (#221).
+func TestResourceLeakDeltaSuppressesPreexisting(t *testing.T) {
+	old := `package p
+import "os"
+func load() {
+	f, _ := os.Open("x")
+	_ = f
+}
+`
+	// Unrelated edit: add a comment line above the leak.
+	edited := "// unrelated note\n" + old
+	if w := checkResourceLeaks("test.go", old, edited); len(w) != 0 {
+		t.Errorf("pre-existing leak re-reported on unrelated edit: %v", w)
+	}
+
+	// A newly introduced leak in a different function must still be flagged.
+	edited2 := old + `
+func load2() {
+	g, _ := os.Open("y")
+	_ = g
+}
+`
+	w := checkResourceLeaks("test.go", old, edited2)
+	if len(w) != 1 {
+		t.Fatalf("expected 1 new-leak warning, got %d: %v", len(w), w)
+	}
+	if !strings.Contains(w[0], "load2") && !strings.Contains(w[0], "g ") {
+		t.Errorf("warning should name the new leak, got: %s", w[0])
 	}
 }
