@@ -41,7 +41,9 @@ type Client struct {
 	stdout            io.Reader
 	reader            *bufio.Reader // reused stdout reader
 	httpClient        *http.Client
-	wsMu              sync.Mutex // serializes ReadMessage on wsConn (fix #138)
+	wsMu              sync.Mutex                // serializes ReadMessage on wsConn (fix #138)
+	readMu            sync.Mutex                // serializes reads on the shared stdio bufio.Reader and response matching (fix #156)
+	waiters           map[string]chan *Response // stdio response waiters keyed by request ID JSON (guarded by mu)
 	wsConn            *websocket.Conn
 	sessionID         string
 	negotiatedVersion string // protocol version agreed upon during initialize
@@ -480,7 +482,10 @@ func (c *Client) sendRequest(ctx context.Context, method string, params interfac
 }
 
 // sendRequestUnlocked sends a request and reads the response. c.mu is held
-// only during the write phase, not the read phase (fix #138).
+// only during the write phase, not the read phase (fix #138). The stdio read
+// path is serialized by readMu in readResponseWithCancel (fix #156) so that
+// concurrent sendRequest calls cannot interleave reads on the shared
+// bufio.Reader.
 func (c *Client) sendRequestUnlocked(req Request, ctx context.Context) (*Response, error) {
 	switch c.transport {
 	case "ws", "websocket":
@@ -496,7 +501,7 @@ func (c *Client) sendRequestUnlocked(req Request, ctx context.Context) (*Respons
 			return nil, fmt.Errorf("mcp[%s]: write message: %w", c.name, err)
 		}
 		c.mu.Unlock()
-		return c.readResponseWithCancel(ctx)
+		return c.readResponseWithCancel(ctx, req.ID)
 	}
 }
 
@@ -531,21 +536,42 @@ func (c *Client) send(msg interface{}, ctx context.Context) (*Response, error) {
 		case Notification:
 			return &Response{JSONRPC: "2.0"}, nil
 		default:
-			return c.readResponseWithCancel(ctx)
+			var reqID *ID
+			if r, ok := msg.(Request); ok {
+				reqID = r.ID
+			}
+			return c.readResponseWithCancel(ctx, reqID)
 		}
 	default:
 		return nil, fmt.Errorf("mcp[%s]: unsupported transport %q", c.name, c.transport)
 	}
 }
 
-func (c *Client) readResponseWithCancel(ctx context.Context) (*Response, error) {
+func (c *Client) readResponseWithCancel(ctx context.Context, reqID *ID) (*Response, error) {
 	type result struct {
 		resp *Response
 		err  error
 	}
+	// Register the waiter SYNCHRONOUSLY, before the read goroutine starts
+	// (fix #156): another caller holding readMu may read our response as
+	// soon as our request hits the wire, so the waiter must already be
+	// registered by the time this function is entered post-write.
+	var waiter chan *Response
+	if reqID != nil {
+		waiter = make(chan *Response, 1)
+		c.registerWaiter(reqID, waiter)
+	}
 	done := make(chan result, 1)
 	safego.Go("mcp.client.readResponse", func() {
-		resp, err := c.readResponse(ctx)
+		if waiter != nil {
+			defer c.unregisterWaiter(reqID, waiter)
+		}
+		// Serialize the whole read loop (fix #156): concurrent sendRequest
+		// calls on the same stdio client must not interleave Peek/ReadBytes/
+		// ReadString calls on the shared bufio.Reader (not concurrency-safe).
+		c.readMu.Lock()
+		defer c.readMu.Unlock()
+		resp, err := c.readResponse(ctx, reqID, waiter)
 		done <- result{resp: resp, err: err}
 	})
 	select {
@@ -864,14 +890,28 @@ func (c *Client) respondToServerRequestWS(req *Request) error {
 	return c.wsConn.WriteMessage(websocket.TextMessage, data)
 }
 
-func (c *Client) readResponse(ctx context.Context) (*Response, error) {
+func (c *Client) readResponse(ctx context.Context, reqID *ID, waiter chan *Response) (*Response, error) {
 	for {
+		if waiter != nil {
+			select {
+			case resp := <-waiter:
+				return resp, nil
+			default:
+			}
+		}
 		msg, err := c.readMessage(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("mcp[%s]: read message: %w", c.name, err)
 		}
 		switch typed := msg.(type) {
 		case *Response:
+			// Under concurrent requests a response may belong to a different
+			// caller. Forward foreign responses to their waiter instead of
+			// misattributing them (fix #156).
+			if reqID != nil && len(typed.ID) > 0 && !responseIDMatches(typed.ID, reqID) {
+				c.deliverResponse(typed)
+				continue
+			}
 			return typed, nil
 		case *Notification:
 			c.processNotification(typed)
@@ -884,6 +924,64 @@ func (c *Client) readResponse(ctx context.Context) (*Response, error) {
 			return nil, c.withStderr(fmt.Errorf("unexpected MCP message type %T", msg))
 		}
 	}
+}
+
+// responseIDMatches reports whether a raw JSON-RPC response ID equals the
+// given request ID (fix #156).
+func responseIDMatches(raw json.RawMessage, reqID *ID) bool {
+	if reqID == nil || len(raw) == 0 {
+		return true
+	}
+	reqJSON, err := json.Marshal(reqID)
+	if err != nil {
+		return false
+	}
+	return bytes.Equal(bytes.TrimSpace(raw), bytes.TrimSpace(reqJSON))
+}
+
+func (c *Client) registerWaiter(reqID *ID, ch chan *Response) {
+	key, err := json.Marshal(reqID)
+	if err != nil {
+		return
+	}
+	c.mu.Lock()
+	if c.waiters == nil {
+		c.waiters = make(map[string]chan *Response)
+	}
+	c.waiters[string(key)] = ch
+	c.mu.Unlock()
+}
+
+func (c *Client) unregisterWaiter(reqID *ID, ch chan *Response) {
+	key, err := json.Marshal(reqID)
+	if err != nil {
+		return
+	}
+	c.mu.Lock()
+	if cur, ok := c.waiters[string(key)]; ok && cur == ch {
+		delete(c.waiters, string(key))
+	}
+	c.mu.Unlock()
+}
+
+// deliverResponse hands a response belonging to another concurrent caller to
+// that caller's waiter channel (fix #156).
+func (c *Client) deliverResponse(resp *Response) {
+	if len(resp.ID) == 0 {
+		return
+	}
+	key := string(bytes.TrimSpace(resp.ID))
+	c.mu.Lock()
+	ch, ok := c.waiters[key]
+	c.mu.Unlock()
+	if ok {
+		select {
+		case ch <- resp:
+		default:
+		}
+		return
+	}
+	debug.Log("mcp-stdio", "server=%s dropping response with unknown ID %s", c.name, key)
 }
 
 func (c *Client) readMessage(ctx context.Context) (interface{}, error) {

@@ -127,8 +127,20 @@ func SaveIMAdapter(name string, values map[string]string) error {
 		return fmt.Errorf("platform is required")
 	}
 
-	// Read enabled value from values map, default to true if not set
-	enabled := values["enabled"] != "false"
+	// Read enabled value from values map. If the caller did not send an
+	// explicit enabled value, preserve the existing adapter's Enabled state
+	// (fix #155: editing other fields must not silently re-enable a
+	// disabled adapter).
+	enabled := true
+	if existing, exists := cfg.IM.Adapters[name]; exists {
+		enabled = existing.Enabled
+	}
+	switch values["enabled"] {
+	case "true":
+		enabled = true
+	case "false":
+		enabled = false
+	}
 
 	adapterCfg := config.IMAdapterConfig{
 		Enabled:   enabled,

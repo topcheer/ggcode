@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -388,7 +389,7 @@ func TestReadResponseSkipsNotifications(t *testing.T) {
 		reader: bufio.NewReader(bytes.NewReader(stream)),
 	}
 
-	resp, err := client.readResponse(context.Background())
+	resp, err := client.readResponse(context.Background(), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -415,7 +416,7 @@ func TestReadResponseHandlesRootsListRequest(t *testing.T) {
 		stdin:  nopWriteCloser{Writer: &writes},
 	}
 
-	resp, err := client.readResponse(context.Background())
+	resp, err := client.readResponse(context.Background(), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -737,7 +738,7 @@ func TestClientErrorContext_ReadResponseError(t *testing.T) {
 		name:   "read-resp-srv",
 		reader: bufio.NewReader(bytes.NewReader(nil)),
 	}
-	_, err := client.readResponse(context.Background())
+	_, err := client.readResponse(context.Background(), nil, nil)
 	if err == nil {
 		t.Fatal("expected error from readResponse with empty reader")
 	}
@@ -809,7 +810,7 @@ func TestNotificationHandlerInvoked(t *testing.T) {
 		receivedMethods = append(receivedMethods, method)
 	})
 
-	resp, err := client.readResponse(context.Background())
+	resp, err := client.readResponse(context.Background(), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -838,7 +839,7 @@ func TestNoNotificationHandlerStillWorks(t *testing.T) {
 		reader: bufio.NewReader(bytes.NewReader(stream)),
 	}
 	// No handler set — notifications should be silently skipped
-	resp, err := client.readResponse(context.Background())
+	resp, err := client.readResponse(context.Background(), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -944,5 +945,83 @@ func TestClientProcessNotificationNoLock(t *testing.T) {
 	c.mu.Unlock()
 	if !called {
 		t.Error("expected notification handler to be called")
+	}
+}
+
+// Test #156: concurrent stdio readResponse calls must serialize reads on the
+// shared bufio.Reader and correctly route responses to their requesters by ID.
+func TestStdioConcurrentReadsSerialized(t *testing.T) {
+	// Two interleaved responses: the ID=2 response arrives first.
+	stream := encodeStdioMessages(
+		t,
+		Response{JSONRPC: "2.0", ID: json.RawMessage(`2`), Result: json.RawMessage(`{"who":"two"}`)},
+		Response{JSONRPC: "2.0", ID: json.RawMessage(`1`), Result: json.RawMessage(`{"who":"one"}`)},
+	)
+	client := &Client{
+		name:   "stdio-test",
+		reader: bufio.NewReader(bytes.NewReader(stream)),
+	}
+
+	id1 := NewIntID(1)
+	id2 := NewIntID(2)
+
+	var wg sync.WaitGroup
+	results := make(map[int64]string)
+	var mu sync.Mutex
+	for _, tc := range []struct {
+		id  ID
+		key int64
+	}{
+		{id: id1, key: 1},
+		{id: id2, key: 2},
+	} {
+		wg.Add(1)
+		go func(id ID, key int64) {
+			defer wg.Done()
+			resp, err := client.readResponseWithCancel(context.Background(), &id)
+			if err != nil {
+				t.Errorf("readResponse id %d: %v", key, err)
+				return
+			}
+			var payload struct {
+				Who string `json:"who"`
+			}
+			if err := json.Unmarshal(resp.Result, &payload); err != nil {
+				t.Errorf("unmarshal id %d: %v", key, err)
+				return
+			}
+			mu.Lock()
+			results[key] = payload.Who
+			mu.Unlock()
+		}(tc.id, tc.key)
+	}
+	wg.Wait()
+
+	if results[1] != "one" || results[2] != "two" {
+		t.Fatalf("responses misrouted: got %v, want {1:one 2:two}", results)
+	}
+}
+
+// Test #156: responseIDMatches compares raw JSON IDs against request IDs.
+func TestResponseIDMatches(t *testing.T) {
+	intID := NewIntID(5)
+	strID := NewStringID("abc")
+	if !responseIDMatches(json.RawMessage(`5`), &intID) {
+		t.Error("int ID 5 should match")
+	}
+	if responseIDMatches(json.RawMessage(`6`), &intID) {
+		t.Error("int ID 6 should not match 5")
+	}
+	if !responseIDMatches(json.RawMessage(`"abc"`), &strID) {
+		t.Error("string ID abc should match")
+	}
+	if responseIDMatches(json.RawMessage(`"xyz"`), &strID) {
+		t.Error("string ID xyz should not match abc")
+	}
+	if !responseIDMatches(json.RawMessage(``), &intID) {
+		t.Error("empty response ID should match (legacy)")
+	}
+	if !responseIDMatches(json.RawMessage(`5`), nil) {
+		t.Error("nil reqID should match")
 	}
 }
