@@ -798,6 +798,12 @@ func parseHTTPResponse(body []byte, contentType string) (*Response, error) {
 	// extracting all SSE-style events to find the Response.
 	msg, err := ParseMessage(payload)
 	if err != nil {
+		// Multi-message body (NDJSON) fails whole-body parsing — try fallbacks
+		// before giving up, since the first line may parse fine.
+		if r := extractNDJSONResponse(body); r != nil {
+			debug.Log("mcp-http", "parseHTTPResponse: whole-body parse failed, recovered Response via NDJSON fallback")
+			return r, nil
+		}
 		return nil, fmt.Errorf("parse message: %w", err)
 	}
 	resp, ok := msg.(*Response)
@@ -807,6 +813,13 @@ func parseHTTPResponse(body []byte, contentType string) (*Response, error) {
 	// First message was a Notification — try SSE extraction as fallback.
 	debug.Log("mcp-http", "parseHTTPResponse: first message was %T, trying SSE fallback", msg)
 	if r, err := extractSSEResponse(body); err == nil {
+		return r, nil
+	}
+	// NDJSON fallback: some servers (or gateways in front of them) return
+	// newline-delimited JSON messages — Notification first, then the Response.
+	// SSE extraction finds nothing because there is no "data:" prefix.
+	if r := extractNDJSONResponse(body); r != nil {
+		debug.Log("mcp-http", "parseHTTPResponse: recovered Response via NDJSON fallback")
 		return r, nil
 	}
 	return nil, fmt.Errorf("expected response, got %T", msg)
@@ -858,6 +871,29 @@ func extractAllSSEData(body []byte) [][]byte {
 		events = append(events, []byte(strings.Join(dataLines, "\n")))
 	}
 	return events
+}
+
+// extractNDJSONResponse parses newline-delimited JSON bodies and returns the
+// first message that parses as a JSON-RPC Response. Handles servers that send
+// a Notification (e.g. logging) before the actual Response, without SSE framing.
+func extractNDJSONResponse(body []byte) *Response {
+	scanner := bufio.NewScanner(bytes.NewReader(body))
+	scanner.Buffer(make([]byte, 0, 256*1024), 1024*1024)
+	for scanner.Scan() {
+		line := bytes.TrimSpace(scanner.Bytes())
+		if len(line) == 0 || line[0] != '{' {
+			continue
+		}
+		msg, err := ParseMessage(line)
+		if err != nil {
+			continue
+		}
+		if resp, ok := msg.(*Response); ok {
+			return resp
+		}
+		debug.Log("mcp-http", "extractNDJSONResponse: skipping non-response message %T", msg)
+	}
+	return nil
 }
 
 func cloneStringMap(values map[string]string) map[string]string {

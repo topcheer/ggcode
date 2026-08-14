@@ -1025,3 +1025,36 @@ func TestResponseIDMatches(t *testing.T) {
 		t.Error("nil reqID should match")
 	}
 }
+
+// TestParseHTTPResponseNDJSON: HTTP MCP servers (or gateways) may return
+// newline-delimited JSON — a Notification line followed by the Response line,
+// without SSE framing. parseHTTPResponse must recover the Response.
+func TestParseHTTPResponseNDJSON(t *testing.T) {
+	body := []byte("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/message\",\"params\":{\"level\":\"info\",\"data\":\"hello\"}}\n" +
+		"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2025-03-26\",\"capabilities\":{},\"serverInfo\":{\"name\":\"srv\",\"version\":\"1\"}}}\n")
+	resp, err := parseHTTPResponse(body, "application/json")
+	if err != nil {
+		t.Fatalf("parseHTTPResponse NDJSON: %v", err)
+	}
+	var info struct {
+		ServerInfo struct {
+			Name string `json:"name"`
+		} `json:"serverInfo"`
+	}
+	if err := json.Unmarshal(resp.Result, &info); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	if info.ServerInfo.Name != "srv" {
+		t.Errorf("serverInfo.name = %q, want %q", info.ServerInfo.Name, "srv")
+	}
+}
+
+// TestParseHTTPResponseNDJSONOnlyNotifications: if every line is a
+// Notification, parsing must fail with the original error, not panic.
+func TestParseHTTPResponseNDJSONOnlyNotifications(t *testing.T) {
+	body := []byte("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/message\"}\n{\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\"}\n")
+	_, err := parseHTTPResponse(body, "application/json")
+	if err == nil {
+		t.Fatal("expected error when body contains only notifications")
+	}
+}
