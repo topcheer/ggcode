@@ -35,7 +35,7 @@ func (m Model) handleToolStatusMsg(msg toolStatusMsg, spinnerCmd tea.Cmd) (Model
 		// streamPrefixWritten is properly reset by chatFinishReasoning()
 		// at the end of each LLM turn (agentTurnDoneMsg).
 	}
-	m.chatListScrollToBottom()
+	m.chatListFollowOutput()
 	return m, spinnerCmd
 
 }
@@ -80,7 +80,7 @@ func (m Model) handleAgentToolBatchMsg(msg agentToolBatchMsg, spinnerCmd tea.Cmd
 			// stay streaming so text from later turns continues on the same item.
 		}
 	}
-	m.chatListScrollToBottom()
+	m.chatListFollowOutput()
 	return m, spinnerCmd
 
 }
@@ -110,7 +110,7 @@ func (m Model) handleAgentToolStatusMsg(msg agentToolStatusMsg, spinnerCmd tea.C
 		spinnerCmd = combineCmds(spinnerCmd, m.ensureLoadingSpinner(m.statusActivity))
 		// Do NOT reset streamPrefixWritten (see handleToolStatusMsg).
 	}
-	m.chatListScrollToBottom()
+	m.chatListFollowOutput()
 	return m, spinnerCmd
 
 }

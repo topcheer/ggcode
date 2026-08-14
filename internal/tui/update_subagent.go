@@ -46,7 +46,7 @@ func (m Model) handleSubAgentUpdateMsg(msg subAgentUpdateMsg) (Model, tea.Cmd) {
 		// Strip is refreshed less frequently (on spawn/complete via other paths).
 		if msg.AgentID == m.subAgentFollow.activeID && m.subAgentFollow.shouldRebuild(m.subAgentFollow.activeID) {
 			m.subAgentFollow.rebuildActiveView(m.subAgentMgr, m.swarmMgr, m.chatStyles)
-			m.chatListScrollToBottom()
+			m.chatListFollowOutput()
 		} else if msg.AgentID == m.subAgentFollow.activeID {
 			// Throttled — schedule delayed retry to ensure eventual render.
 			return m, tea.Tick(150*time.Millisecond, func(t time.Time) tea.Msg {
@@ -139,7 +139,7 @@ func (m Model) handleSubAgentDoneMsg(msg subAgentDoneMsg) (Model, tea.Cmd) {
 	// A sub-agent or swarm teammate finished its task.
 	// Show a human-readable system message and wake the main agent.
 	m.chatWriteSystem(nextSystemID(), m.formatSubAgentDoneNotice(msg))
-	m.chatListScrollToBottom()
+	m.chatListFollowOutput()
 	m.extPaneHandleDone(msg)
 
 	// Force immediate strip refresh on completion (status changed).

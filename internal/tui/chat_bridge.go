@@ -101,10 +101,22 @@ func (m *Model) chatReset() {
 	}
 }
 
-// chatListScrollToBottom scrolls conversation to bottom.
+// chatListScrollToBottom scrolls conversation to bottom and re-enables
+// output following. Use this for user-initiated actions (sending a message,
+// running a command) where jumping to the latest content is expected.
 func (m *Model) chatListScrollToBottom() {
 	if m.chatList != nil {
 		m.chatList.ScrollToEnd()
+	}
+}
+
+// chatListFollowOutput keeps the conversation pinned to the bottom only
+// while the user is already following the output. If the user scrolled up
+// to read earlier content, this is a no-op — streaming output must not
+// yank their viewport away. Use this for streaming/agent-driven updates.
+func (m *Model) chatListFollowOutput() {
+	if m.chatList != nil {
+		m.chatList.FollowOutput()
 	}
 }
 

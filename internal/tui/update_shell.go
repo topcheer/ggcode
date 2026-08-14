@@ -58,6 +58,6 @@ func (m Model) handleShellCommandDoneMsg(msg shellCommandDoneMsg) (Model, tea.Cm
 	if msg.Status == toolpkg.CommandJobCompleted && m.pendingSubmissionCount() > 0 && !wasCanceled && !wasFailed {
 		return m, m.submitShellCommand(m.consumePendingSubmission(), false)
 	}
-	m.chatListScrollToBottom()
+	m.chatListFollowOutput()
 	return m, nil
 }

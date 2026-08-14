@@ -14,7 +14,7 @@ func (m Model) handleCompactResultMsg(msg compactResultMsg) (Model, tea.Cmd) {
 	m.setLoading(false)
 	m.spinner.Stop()
 	m.statusActivity = ""
-	m.chatListScrollToBottom()
+	m.chatListFollowOutput()
 	return m, nil
 
 }

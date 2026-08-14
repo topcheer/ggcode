@@ -59,7 +59,7 @@ func (m Model) handleDoneMsg(msg doneMsg) (Model, tea.Cmd) {
 	if finalIMText != "" {
 		m.emitIMText(finalIMText)
 	}
-	m.chatListScrollToBottom()
+	m.chatListFollowOutput()
 	// Only persist here for normal completion. For cancel/error paths,
 	// persistFullSessionMessages was already called by handleErrMsg or
 	// handleAgentErrMsg. Calling it again would duplicate all records.
@@ -115,7 +115,7 @@ func (m Model) handleAgentDoneMsg(msg agentDoneMsg) (Model, tea.Cmd) {
 		m.appendTurnMetricsDigest(m.usageTurnIndex)
 		m.appendRunChangeSummary()
 	}
-	m.chatListScrollToBottom()
+	m.chatListFollowOutput()
 	// Fire configurable notification (bell and/or desktop) based on user
 	// preferences. Replaces the previously hardcoded bell-only approach.
 	notifCfg := config.NotificationConfig{}
@@ -161,7 +161,7 @@ func (m Model) handleErrMsg(msg errMsg) (Model, tea.Cmd) {
 		}
 		m.pushTunnelStatus(tunnel.StatusIdle, "")
 		m.pushTunnelCurrentActivity()
-		m.chatListScrollToBottom()
+		m.chatListFollowOutput()
 		return m, nil
 	}
 	m.runFailed = true
@@ -180,7 +180,7 @@ func (m Model) handleErrMsg(msg errMsg) (Model, tea.Cmd) {
 	m.pushTunnelStatus(tunnel.StatusIdle, "")
 	m.pushTunnelCurrentActivity()
 	m.chatWriteSystem(nextSystemID(), formatUserFacingError(m.currentLanguage(), msg.err))
-	m.chatListScrollToBottom()
+	m.chatListFollowOutput()
 	// Fire notification for error completion.
 	notifCfg := config.NotificationConfig{}
 	if m.config != nil {
@@ -219,7 +219,7 @@ func (m Model) handleAgentErrMsg(msg agentErrMsg) (Model, tea.Cmd) {
 		}
 		m.pushTunnelStatus(tunnel.StatusIdle, "")
 		m.pushTunnelCurrentActivity()
-		m.chatListScrollToBottom()
+		m.chatListFollowOutput()
 		return m, nil
 	}
 	m.runFailed = true
@@ -239,7 +239,7 @@ func (m Model) handleAgentErrMsg(msg agentErrMsg) (Model, tea.Cmd) {
 	m.pushTunnelCurrentActivity()
 	m.chatWriteSystem(nextSystemID(), formatUserFacingError(m.currentLanguage(), msg.Err))
 	m.emitIMText(formatUserFacingError(m.currentLanguage(), msg.Err))
-	m.chatListScrollToBottom()
+	m.chatListFollowOutput()
 	// Fire notification for agent error completion.
 	notifCfg := config.NotificationConfig{}
 	if m.config != nil {

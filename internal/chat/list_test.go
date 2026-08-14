@@ -349,3 +349,52 @@ func TestTruncateAfterLastUser_LastIsUser(t *testing.T) {
 		t.Error("expected removed=false when last item is already user")
 	}
 }
+
+func TestFollowPausedWhenScrolledUp(t *testing.T) {
+	styles := DefaultStyles()
+	l := NewList(80, 10)
+	// Fill beyond one viewport so scrolling up is meaningful.
+	for i := 0; i < 5; i++ {
+		l.Append(NewSystemItem(fmt.Sprintf("s%d", i), strings.Repeat("line\n", 6), styles))
+	}
+	l.ScrollToEnd()
+	if !l.Follow() {
+		t.Fatal("expected follow=true after ScrollToEnd")
+	}
+
+	// User scrolls up: follow must pause.
+	l.ScrollUp(5)
+	if l.Follow() {
+		t.Fatal("expected follow=false after ScrollUp")
+	}
+	yBefore := l.YOffset()
+
+	// Streaming output arrives while paused: viewport must not move.
+	l.Append(NewSystemItem("s-new", "new streamed content", styles))
+	l.FollowOutput()
+	if y := l.YOffset(); y != yBefore {
+		t.Fatalf("expected YOffset unchanged while follow paused (before=%d after=%d)", yBefore, y)
+	}
+
+	// Scroll back down to the end: follow resumes.
+	l.ScrollDown(1000)
+	if !l.Follow() {
+		t.Fatal("expected follow=true after scrolling back to bottom")
+	}
+	// Subsequent output follows again.
+	l.Append(NewSystemItem("s-new2", "more content", styles))
+	l.FollowOutput()
+	if !l.AtBottom() {
+		t.Fatal("expected AtBottom=true after FollowOutput with follow active")
+	}
+
+	// Empty-Enter semantics: ScrollToEnd re-enables follow directly.
+	l.ScrollUp(3)
+	if l.Follow() {
+		t.Fatal("expected follow=false after ScrollUp")
+	}
+	l.ScrollToEnd()
+	if !l.Follow() || !l.AtBottom() {
+		t.Fatal("expected follow=true and AtBottom=true after ScrollToEnd")
+	}
+}

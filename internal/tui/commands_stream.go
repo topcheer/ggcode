@@ -41,7 +41,7 @@ func (m *Model) appendStreamChunk(chunk string) {
 		m.streamBuffer.WriteString(chunk)
 	}
 	m.chatUpdateAssistantText(m.currentAssistantID(), m.streamBuffer.String())
-	m.chatListScrollToBottom()
+	m.chatListFollowOutput()
 }
 
 func (m *Model) localizedStreamStatus(chunk string) (string, bool) {
@@ -71,7 +71,7 @@ func (m *Model) appendStreamStatusLine(text string) {
 	m.reasoningActive = false
 	m.chatFinishAssistant(m.currentAssistantID())
 	m.chatWriteSystem(nextChatID(), strings.TrimSuffix(text, "\n"))
-	m.chatListScrollToBottom()
+	m.chatListFollowOutput()
 }
 
 func (m *Model) appendReasoningChunk(chunk string) {
@@ -95,7 +95,7 @@ func (m *Model) appendReasoningChunk(chunk string) {
 			}
 		}
 	}
-	m.chatListScrollToBottom()
+	m.chatListFollowOutput()
 }
 
 // chatFinishReasoning collapses the reasoning block in the current assistant item

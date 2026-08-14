@@ -190,15 +190,24 @@ func (l *List) Follow() bool {
 	return l.follow
 }
 
-// ScrollDown scrolls the viewport by n lines.
+// ScrollDown scrolls the viewport by n lines. Scrolling down past the end
+// position re-enables follow, so wheeling back to the bottom naturally
+// resumes following new output.
 func (l *List) ScrollDown(n int) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.follow = false
 	l.scrollByLocked(n)
+	// Re-enable follow when the viewport lands on the end position.
+	endIdx, endLine := l.calcEndPositionLocked()
+	if l.offsetIdx >= endIdx && l.offsetLine >= endLine {
+		l.follow = true
+	}
 }
 
-// ScrollUp scrolls the viewport up by n lines.
+// ScrollUp scrolls the viewport up by n lines. This pauses follow: new
+// output no longer yanks the viewport back to the bottom until the user
+// returns to the bottom (or sends an empty Enter).
 func (l *List) ScrollUp(n int) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -211,6 +220,18 @@ func (l *List) ScrollToEnd() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.follow = true
+	l.scrollToEndLocked()
+}
+
+// FollowOutput keeps the viewport pinned to the bottom while follow is
+// active. When the user has scrolled away (follow paused), it is a no-op,
+// so streaming output does not yank their reading position.
+func (l *List) FollowOutput() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if !l.follow {
+		return
+	}
 	l.scrollToEndLocked()
 }
 
