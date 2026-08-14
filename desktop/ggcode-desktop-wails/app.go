@@ -1084,6 +1084,11 @@ func (a *App) DeleteSession(id string) error {
 	if a.chat != nil && a.chat.CurrentSessionID() == id {
 		a.chat.Cancel()
 		a.stopShareForSessionChange()
+		// #297: Cancel alone keeps currentSes/sessionLock alive, so the next
+		// SendContent reuses the deleted session and O_CREATE-resurrects the
+		// JSONL. ClearCurrentSession releases the lock and nils the pointer,
+		// forcing ensureSession to start a fresh session.
+		a.chat.ClearCurrentSession()
 	}
 	return wailskit.DeleteSession(id)
 }
@@ -1765,8 +1770,17 @@ func (a *App) RemoveIMAdapter(name string) error {
 	err := wailskit.RemoveIMAdapter(name)
 	if err != nil {
 		debug.Log("desktop", "IM RemoveAdapter failed: %v", err)
+		return err
 	}
-	return err
+	// #299: cascade-unbind the adapter's persisted bindings, or a ghost
+	// binding survives deletion and a same-name rebuild inherits the old
+	// channel access / auto-mute / LastSessionID state.
+	if a.imManager != nil {
+		if uerr := a.imManager.UnbindAdapter(name); uerr != nil {
+			debug.Log("desktop", "IM RemoveAdapter unbind: %v", uerr)
+		}
+	}
+	return nil
 }
 
 // bindCurrentIMSession binds the current session to the IM manager and

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/topcheer/ggcode/internal/agentruntime"
 	"github.com/topcheer/ggcode/internal/provider"
@@ -80,6 +81,20 @@ func DeleteSession(id string) error {
 	store, err := session.NewDefaultStore()
 	if err != nil {
 		return fmt.Errorf("open session store: %w", err)
+	}
+	// #298: refuse to delete a session another process is running — its
+	// persist handler would O_CREATE-resurrect the JSONL and re-add the
+	// index entry, silently undoing the deletion with a partial history.
+	storeDir, _ := session.DefaultDir()
+	if bridge := GetChatBridge(); bridge != nil && bridge.CurrentSessionID() == id {
+		// Our own current session: allowed (the caller clears bridge state
+		// before/after deletion); the lock is ours.
+	} else if lock, lerr := session.TryAcquireSessionLock(storeDir, id); lerr == nil && lock != nil {
+		if !lock.Acquired() {
+			lock.Release()
+			return fmt.Errorf("session %s is locked by another instance", id)
+		}
+		lock.Release()
 	}
 	return store.Delete(id)
 }
@@ -352,7 +367,13 @@ func formatMessagesAsMarkdown(msgs []SessionMessage, title string) string {
 			}
 			if msg.Content != "" {
 				if len(msg.Content) > 2000 {
-					b.WriteString(msg.Content[:2000])
+					// #301: truncate on a rune boundary — byte slicing can split a
+					// multi-byte UTF-8 char and corrupt the exported .md file.
+					cut := msg.Content[:2000]
+					for len(cut) > 0 && !utf8.RuneStart(cut[len(cut)-1]) {
+						cut = cut[:len(cut)-1]
+					}
+					b.WriteString(cut)
 					b.WriteString("\n... (truncated)\n")
 				} else {
 					b.WriteString(msg.Content)

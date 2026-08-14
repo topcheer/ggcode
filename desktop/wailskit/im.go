@@ -169,6 +169,15 @@ func SaveIMAdapter(name string, values map[string]string) error {
 		adapterCfg.Args = existing.Args
 		adapterCfg.Env = existing.Env
 		adapterCfg.AllowFrom = existing.AllowFrom
+		// #300: the desktop update payload never carries transport/command
+		// (CLI-only fields) — preserve them like the others, or any desktop
+		// save silently wipes them.
+		if adapterCfg.Transport == "" {
+			adapterCfg.Transport = existing.Transport
+		}
+		if adapterCfg.Command == "" {
+			adapterCfg.Command = existing.Command
+		}
 		adapterCfg.OutputMode = existing.OutputMode
 		adapterCfg.Targets = existing.Targets
 		// Preserve existing Extra fields not in the update, then overwrite
