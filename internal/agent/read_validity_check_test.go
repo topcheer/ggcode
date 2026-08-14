@@ -4,9 +4,151 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
+
+// TestReadHashTracker_AssemblyOrder_ValidateBeforeRecordWrite is a regression
+// test for #283: in the agent loop (agent.go), validateContentAtEdit must run
+// BEFORE recordWriteHash within the same edit iteration. recordWriteHash
+// deletes the stored hash, so validating after it always misses and the
+// detector is dead in production. Unit tests calling tracker methods directly
+// bypassed this wiring and stayed green.
+func TestReadHashTracker_AssemblyOrder_ValidateBeforeRecordWrite(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "wire.go")
+	if err := os.WriteFile(f, []byte("package main\n\nfunc A() {}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	tr := newReadHashTracker()
+
+	// 1. Agent reads the file.
+	tr.recordReadHash(f)
+
+	// 2. External modification in the same second (mtime-blind change).
+	if err := os.WriteFile(f, []byte("package main\n\nfunc B() {}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// 3. Correct agent-loop order: validate FIRST, then record the write.
+	// This mirrors the wiring in agent.go post-#283.
+	hint := tr.validateContentAtEdit(f, 100)
+	if hint == "" {
+		t.Fatal("expected content mismatch warning when validate runs before recordWriteHash — detector is mis-wired again")
+	}
+	tr.recordWriteHash(f)
+	if len(tr.hashes) != 0 {
+		t.Fatalf("expected hash cleared after recordWriteHash, got %d remaining", len(tr.hashes))
+	}
+}
+
+// TestReadHashTracker_AssemblyOrder_WrongOrderDocumentsBug documents the
+// pre-#283 bug: validating after recordWriteHash silently suppresses the
+// warning. If this test ever fails, it means the wiring got "fixed" in a way
+// that makes this order detectable — re-check the agent loop ordering.
+func TestReadHashTracker_AssemblyOrder_WrongOrderDocumentsBug(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "wire2.go")
+	if err := os.WriteFile(f, []byte("package main\n\nfunc A() {}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	tr := newReadHashTracker()
+	tr.recordReadHash(f)
+	if err := os.WriteFile(f, []byte("package main\n\nfunc B() {}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Buggy order: record write first (hash deleted), then validate.
+	tr.recordWriteHash(f)
+	hint := tr.validateContentAtEdit(f, 100)
+	if hint != "" {
+		t.Fatalf("recordWriteHash no longer clears hashes — validateContentAtEdit after it produced %q", hint)
+	}
+}
+
+// TestExtractOldTextLen verifies old_text length extraction from edit tool
+// arguments (#283): previously hardcoded 0, making the small-edit soft-hint
+// branch (0 < oldTextLen < 50) unreachable in production.
+func TestExtractOldTextLen(t *testing.T) {
+	cases := []struct {
+		name    string
+		tool    string
+		args    string
+		wantLen int
+	}{
+		{
+			name:    "edit_file with short old_text",
+			tool:    "edit_file",
+			args:    `{"file_path":"/x.go","old_text":"abc","new_text":"abd"}`,
+			wantLen: 3,
+		},
+		{
+			name:    "edit_file with long old_text",
+			tool:    "edit_file",
+			args:    `{"file_path":"/x.go","old_text":"` + strings.Repeat("x", 80) + `","new_text":"y"}`,
+			wantLen: 80,
+		},
+		{
+			name:    "edit_file missing old_text",
+			tool:    "edit_file",
+			args:    `{"file_path":"/x.go"}`,
+			wantLen: 0,
+		},
+		{
+			name:    "multi_edit_file sums edits",
+			tool:    "multi_edit_file",
+			args:    `{"file_path":"/x.go","edits":[{"old_text":"aa","new_text":"bb"},{"old_text":"cccc","new_text":"dd"}]}`,
+			wantLen: 6,
+		},
+		{
+			name:    "invalid json",
+			tool:    "edit_file",
+			args:    `{not-json`,
+			wantLen: 0,
+		},
+		{
+			name:    "unknown tool",
+			tool:    "write_file",
+			args:    `{"path":"/x.go","old_text":"abc"}`,
+			wantLen: 0,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := extractOldTextLen(tc.tool, json.RawMessage(tc.args))
+			if got != tc.wantLen {
+				t.Fatalf("extractOldTextLen(%s) = %d, want %d", tc.tool, got, tc.wantLen)
+			}
+		})
+	}
+}
+
+// TestReadHashTracker_SmallEditSoftHint verifies the soft-hint branch that
+// was unreachable before #283 (oldTextLen between 1 and staleHashThreshold-1).
+func TestReadHashTracker_SmallEditSoftHint(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "small.go")
+	if err := os.WriteFile(f, []byte("package main\n\nfunc A() {}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	tr := newReadHashTracker()
+	tr.recordReadHash(f)
+	if err := os.WriteFile(f, []byte("package main\n\nfunc B() {}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	small := tr.validateContentAtEdit(f, 10)
+	if small == "" {
+		t.Fatal("expected soft hint for small edit")
+	}
+	if !strings.Contains(small, "For this small edit") {
+		t.Fatalf("expected small-edit soft hint, got: %s", small)
+	}
+}
 
 func TestReadHashTracker_BasicFlow(t *testing.T) {
 	dir := t.TempDir()

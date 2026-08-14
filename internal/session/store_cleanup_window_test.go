@@ -101,7 +101,11 @@ func TestCleanupIfEmpty_WindowedLoadKeepsOldUserMessages(t *testing.T) {
 	}
 
 	// The fix: file-level checks must see the historical user interaction.
-	if !store.HasUserInteractionOnDisk(id) {
+	interacted, err := store.HasUserInteractionOnDisk(id)
+	if err != nil {
+		t.Fatalf("HasUserInteractionOnDisk: %v", err)
+	}
+	if !interacted {
 		t.Error("HasUserInteractionOnDisk should find user messages older than the load window")
 	}
 	if store.WillCleanupIfEmpty(loaded) {
@@ -115,27 +119,122 @@ func TestCleanupIfEmpty_WindowedLoadKeepsOldUserMessages(t *testing.T) {
 	}
 }
 
-// TestHasUserInteractionOnDisk_EmptyFile ensures empty sessions (no user
-// messages) are still cleaned up after the #254 fix.
-func TestHasUserInteractionOnDisk_EmptyFile(t *testing.T) {
-	dir, _ := os.MkdirTemp("", "ggcode_test_*")
+// TestHasUserInteractionOnDisk_UnreadableFileNotDeleted is the regression test
+// for #291: when the session file cannot be opened (EACCES, or a write gap
+// from another ggcode instance), the check must report unknown (non-nil
+// error) and callers must keep the session instead of deleting it.
+func TestHasUserInteractionOnDisk_UnreadableFileNotDeleted(t *testing.T) {
+	dir, err := os.MkdirTemp("", "ggcode_test_*")
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer os.RemoveAll(dir)
 
 	store, _ := NewJSONLStore(dir)
-	ses := NewSession("zai", "default", "model")
-	if err := store.Save(ses); err != nil {
+	id := "unreadable-session"
+	writeOldUserMessageJSONL(t, dir, id)
+
+	// Make the file unreadable (chmod 0000). Running as root would defeat
+	// this; skip in that case.
+	if err := os.Chmod(filepath.Join(dir, id+".jsonl"), 0o000); err != nil {
+		t.Skipf("cannot chmod: %v", err)
+	}
+	defer func() { _ = os.Chmod(filepath.Join(dir, id+".jsonl"), 0o600) }()
+
+	interacted, herr := store.HasUserInteractionOnDisk(id)
+	if herr == nil {
+		// Root (or equivalent) can still read 0000 files — the error path is
+		// not reachable in this environment.
+		t.Skip("open unexpectedly succeeded (running as root?) — error path not reachable")
+	}
+	if interacted {
+		t.Error("on open failure the check must report false + error, not true")
+	}
+
+	// Unknown state must keep the session.
+	if store.WillCleanupIfEmpty(&Session{ID: id}) {
+		t.Error("WillCleanupIfEmpty must be false when on-disk state is unknown (#291)")
+	}
+}
+
+// TestHasUserInteractionOnDisk_OversizedLineConservativelyKept reproduces the
+// #291 scenario where a user pastes a huge blob (>10MB) into a single JSONL
+// message: bufio.Scanner hits ErrTooLong and previously Scan() returned false
+// early, collapsing to "no user interaction" and deleting the session.
+func TestHasUserInteractionOnDisk_OversizedLineConservativelyKept(t *testing.T) {
+	dir, err := os.MkdirTemp("", "ggcode_test_*")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if store.HasUserInteractionOnDisk(ses.ID) {
-		t.Error("empty session file should have no user interaction on disk")
+	defer os.RemoveAll(dir)
+
+	store, _ := NewJSONLStore(dir)
+	id := "oversized-line-session"
+	path := filepath.Join(dir, id+".jsonl")
+
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !store.WillCleanupIfEmpty(ses) {
-		t.Error("WillCleanupIfEmpty should be true for an empty session")
+	enc := json.NewEncoder(f)
+	now := time.Now()
+
+	// 1. Normal user message BEFORE the oversized line.
+	if err := enc.Encode(jsonlRecord{
+		Type: "message",
+		Message: &provider.Message{
+			ID:   "small-user",
+			Role: "user",
+			Content: []provider.ContentBlock{{
+				Type: "text",
+				Text: "hello before the paste",
+			}},
+		},
+		Timestamp: now.Add(-2 * time.Hour),
+	}); err != nil {
+		t.Fatal(err)
 	}
-	if err := store.CleanupIfEmpty(ses); err != nil {
+
+	// 2. A single message whose text exceeds the 10MB scanner buffer.
+	huge := make([]byte, 10*1024*1024+1024)
+	for i := range huge {
+		huge[i] = 'a'
+	}
+	if err := enc.Encode(jsonlRecord{
+		Type: "message",
+		Message: &provider.Message{
+			ID:   "huge-user",
+			Role: "user",
+			Content: []provider.ContentBlock{{
+				Type: "text",
+				Text: string(huge),
+			}},
+		},
+		Timestamp: now.Add(-1 * time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// ErrTooLong must be treated conservatively: keep the session.
+	interacted, herr := store.HasUserInteractionOnDisk(id)
+	if herr != nil {
+		t.Fatalf("oversized line should be handled without surfacing an error: %v", herr)
+	}
+	if !interacted {
+		t.Error("oversized line must be conservatively reported as user interaction (#291)")
+	}
+
+	// And the session must not be marked for cleanup.
+	if store.WillCleanupIfEmpty(&Session{ID: id}) {
+		t.Error("WillCleanupIfEmpty must be false for a session with an oversized line (#291)")
+	}
+	if err := store.CleanupIfEmpty(&Session{ID: id}); err != nil {
 		t.Fatalf("CleanupIfEmpty: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, ses.ID+".jsonl")); !os.IsNotExist(err) {
-		t.Error("empty session file should be deleted by CleanupIfEmpty")
+	if _, serr := os.Stat(path); serr != nil {
+		t.Errorf("session file with oversized line must NOT be deleted: %v", serr)
 	}
 }

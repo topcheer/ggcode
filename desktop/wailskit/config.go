@@ -15,6 +15,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/auth"
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/hooks"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/stream"
@@ -200,10 +201,10 @@ func UpdateConfig(values map[string]interface{}) error {
 		return fmt.Errorf("config not initialized")
 	}
 
-	if v, ok := values["vendor"].(string); ok {
+	if v, ok := values["vendor"].(string); ok && v != "" {
 		cfg.Vendor = v
 	}
-	if v, ok := values["endpoint"].(string); ok {
+	if v, ok := values["endpoint"].(string); ok && v != "" {
 		cfg.Endpoint = v
 	}
 	if v, ok := values["model"].(string); ok && v != "" {
@@ -298,7 +299,70 @@ func UpdateConfig(values map[string]interface{}) error {
 		cfg.UI.SidebarVisible = &v
 	}
 
-	return cfg.Save()
+	if err := cfg.Save(); err != nil {
+		return err
+	}
+	// Save() strips instance-sourced keys from the global file write; persist
+	// any such field touched by this update to the instance file too, or the
+	// change would be silently lost on restart (#282).
+	return persistTouchedInstanceFields(cfg, values)
+}
+
+// updateConfigInstanceKeys maps UpdateConfig value keys to the top-level YAML
+// config keys they write. Used to detect when an update touches a field that
+// Save() would strip from the global file because it originated from the
+// instance config.
+var updateConfigInstanceKeys = map[string]string{
+	"vendor":                   "vendor",
+	"endpoint":                 "endpoint",
+	"model":                    "model",
+	"language":                 "language",
+	"extraPrompt":              "system_prompt",
+	"defaultMode":              "default_mode",
+	"maxIterations":            "max_iterations",
+	"probeContext":             "probe_context",
+	"impersonatePreset":        "impersonation",
+	"impersonateCustomVersion": "impersonation",
+	"streamEncoder":            "stream",
+	"streamFPS":                "stream",
+	"subAgentMaxConcurrent":    "subagents",
+	"subAgentShowOutput":       "subagents",
+	"subAgentTimeout":          "subagents",
+	"swarmMaxTeammates":        "swarm",
+	"swarmInboxSize":           "swarm",
+	"swarmTimeout":             "swarm",
+	"a2aDisabled":              "a2a",
+	"a2aPort":                  "a2a",
+	"a2aHost":                  "a2a",
+	"knightEnabled":            "knight",
+	"knightTrustLevel":         "knight",
+	"sidebarVisible":           "ui",
+}
+
+// persistTouchedInstanceFields re-persists instance-sourced fields that the
+// current UpdateConfig call modified. cfg.Save() excludes those keys from the
+// global file; without this write-back the in-memory change would only survive
+// until restart (#282). It uses SaveInstanceScoped so the sticky save scope is
+// left untouched (see SetEndpointLimits).
+func persistTouchedInstanceFields(cfg *config.Config, values map[string]interface{}) error {
+	if !cfg.HasInstanceConfigAttached() {
+		return nil
+	}
+	touched := make(map[string]bool)
+	for key := range values {
+		if yk, ok := updateConfigInstanceKeys[key]; ok {
+			touched[yk] = true
+		}
+	}
+	if len(touched) == 0 {
+		return nil
+	}
+	for _, yk := range cfg.InstanceFields() {
+		if touched[yk] {
+			return cfg.SaveInstanceScoped(cfg.InstanceWorkspace())
+		}
+	}
+	return nil
 }
 
 // SaveAPIKey saves an API key for a vendor/endpoint.
@@ -621,7 +685,18 @@ func AddCustomEndpoint(vendor, name, protocol, baseURL, apiKey string) error {
 		if err := config.WriteKeysEnv(map[string]string{envVar: apiKey}); err != nil {
 			return fmt.Errorf("saving API key: %w", err)
 		}
-		os.Setenv(envVar, apiKey)
+		// #294: the load path (loadKeysEnvInto / loadRuntimeEnv) deliberately
+		// does NOT override existing process env — "shell env takes
+		// precedence". Unconditionally Setenv here would flip that precedence
+		// for this process only, so after a restart the endpoint silently
+		// resolves back to the shell-exported (stale) key. Instead, only
+		// seed the env when the variable is not already shell-exported; if it
+		// is, warn so the user knows the shell export shadows the saved key.
+		if existing, ok := os.LookupEnv(envVar); ok && existing != apiKey {
+			debug.Log("config", "env %s is shell-exported with a different value; the saved key will not take effect until the shell export is removed (#294)", envVar)
+		} else if !ok {
+			os.Setenv(envVar, apiKey)
+		}
 		ep.APIKey = "${" + envVar + "}"
 	}
 	// An empty apiKey leaves the stored value untouched: the frontend's add/
@@ -877,10 +952,13 @@ func SetEndpointLimits(vendor, endpoint string, contextWindow, maxTokens int) er
 	ep.MaxTokens = maxTokens
 	vc.Endpoints[endpoint] = ep
 	globalCfg.Vendors[vendor] = vc
-	// Use SaveScoped("instance") to avoid triggering full Validate() which
-	// requires a non-empty model. Endpoint limit changes don't affect model
-	// validity, so we skip the model check.
-	return globalCfg.SaveScoped("instance")
+	// Save to the instance override file WITHOUT changing the sticky save
+	// scope: using SaveScoped("instance") here would redirect all subsequent
+	// scope-aware saves (Save*Preference, PatchIMAdapter) to the instance file
+	// for the lifetime of this long-held shared config (#282).
+	// This path also avoids the full Validate() which requires a non-empty
+	// model — endpoint limit changes don't affect model validity.
+	return globalCfg.SaveInstanceScoped(globalCfg.InstanceWorkspace())
 }
 
 // SetModelLimits updates per-model context_window and max_tokens overrides
@@ -913,7 +991,8 @@ func SetModelLimits(vendor, endpoint, model string, contextWindow, maxTokens int
 	}
 	vc.Endpoints[endpoint] = ep
 	globalCfg.Vendors[vendor] = vc
-	return globalCfg.SaveScoped("instance")
+	// Non-sticky instance save — see SetEndpointLimits (#282).
+	return globalCfg.SaveInstanceScoped(globalCfg.InstanceWorkspace())
 }
 
 // ModelLimitInfo represents per-model limit overrides for the frontend.
@@ -988,7 +1067,12 @@ func CompleteAnthropicOAuth() error {
 	defer func() {
 		oauthMu.Lock()
 		flow.Close()
-		currentOAuthFlow = nil
+		// Only clear the current flow if it is still THIS flow (#295): a
+		// newer login may have replaced it while we were waiting, and
+		// clearing unconditionally would kill the new flow's login path.
+		if currentOAuthFlow == flow {
+			currentOAuthFlow = nil
+		}
 		oauthMu.Unlock()
 	}()
 

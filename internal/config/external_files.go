@@ -75,13 +75,11 @@ func loadExternalSections(cfg *Config, mainConfigPath string) {
 
 // saveExternalSections writes vendors, im, and mcp_servers to their respective
 // standalone files. Called by Save() to keep external files in sync.
-func saveExternalSections(cfg *Config) {
-	configDir := filepath.Dir(cfg.FilePath)
-	if configDir == "." {
-		configDir = ConfigDir()
-	}
-
-	if err := SaveVendors(configDir, cfg.Vendors); err != nil {
+// configDir is the resolved external-files directory (unified with the
+// vendors.yaml key migration in Save, fix #293); vendors is the vendor set to
+// persist (Save passes the instance-only-filtered set).
+func saveExternalSections(cfg *Config, configDir string, vendors map[string]VendorConfig) {
+	if err := SaveVendors(configDir, vendors); err != nil {
 		debug.Log("config", "failed to save vendors.yaml: %v", err)
 	}
 	if err := SaveIMConfig(configDir, &cfg.IM); err != nil {

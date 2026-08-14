@@ -2,6 +2,7 @@ package tool
 
 import (
 	"encoding/json"
+	"strconv"
 	"testing"
 )
 
@@ -33,5 +34,28 @@ func TestCoerceIntegerFloatOverflow(t *testing.T) {
 				t.Fatalf("coerceInteger(%s) should return input unchanged, got %s", tt.input, got)
 			}
 		})
+	}
+}
+
+// TestCoerceIntegerNanAndBoundary verifies NaN and 2^63 are rejected (#296):
+// math.MaxInt64 converts to float64 as exactly 2^63, so `>` let it through,
+// and NaN compares false with everything.
+func TestCoerceIntegerNanAndBoundary(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool // whether coercion succeeds
+	}{
+		{"9223372036854775808", false}, // 2^63 exactly
+		{"NaN", false},
+		{"nan", false},
+		{"-9223372036854775808", true}, // MinInt64 is a legal int64 (ParseInt path)
+		{"123", true},
+		{"42.0", true},
+	}
+	for _, c := range cases {
+		got, ok := coerceInteger(json.RawMessage(strconv.Quote(c.in)))
+		if ok != c.want {
+			t.Errorf("coerceInteger(%q): ok=%v, want %v (got %s)", c.in, ok, c.want, got)
+		}
 	}
 }

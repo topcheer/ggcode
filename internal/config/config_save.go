@@ -43,7 +43,22 @@ func (c *Config) Save() error {
 	}
 
 	// 0. Save external sections (vendors, im, mcp_servers) to standalone files.
-	saveExternalSections(c)
+	// The directory resolution is unified with the vendors.yaml migration below
+	// (both use Dir(FilePath) with the ConfigDir fallback) (#293).
+	extDir := filepath.Dir(c.FilePath)
+	if extDir == "." {
+		extDir = ConfigDir()
+	}
+	// Instance-only vendors (added by MergeInstance but absent from the global
+	// vendors.yaml snapshot) must NOT be persisted to the global external
+	// files — otherwise a workspace-private plaintext API key leaks into the
+	// shared ~/.ggcode/vendors.yaml and keys.env where other workspaces pick
+	// it up (#293).
+	vendorsToSave := c.Vendors
+	if c.globalSnap != nil {
+		vendorsToSave = globalOnlyVendors(c.Vendors, c.globalSnap.Vendors)
+	}
+	saveExternalSections(c, extDir, vendorsToSave)
 
 	// 1. Marshal current config into a raw map.
 	currentData, err := yaml.Marshal(c)
@@ -115,12 +130,31 @@ func (c *Config) Save() error {
 	}
 	// Also migrate plaintext keys in the external vendors.yaml — it was split
 	// out of the main config file, so the main-file migration never sees it (#250).
-	if migrated, migrateErr := MigrateVendorsFilePlaintextAPIKeys(VendorsPath(c.externalConfigDir()), ""); migrateErr != nil {
+	// Uses the same directory as saveExternalSections above; since instance-only
+	// vendors were excluded from the file, any plaintext key found here is
+	// global-sourced and belongs in the global keys.env (#293).
+	if migrated, migrateErr := MigrateVendorsFilePlaintextAPIKeys(VendorsPath(extDir), ""); migrateErr != nil {
 		debug.Log("config", "Save: vendors.yaml migration error: %v", migrateErr)
 	} else if len(migrated) > 0 {
 		debug.Log("config", "Save: migrated %d plaintext API keys out of vendors.yaml", len(migrated))
 	}
 	return nil
+}
+
+// globalOnlyVendors returns the subset of merged vendors that existed in the
+// global snapshot — i.e. excluding vendors that came from the instance config
+// merge. If globalSnap is unavailable the merged set is returned unchanged.
+func globalOnlyVendors(merged, globalSnapVendors map[string]VendorConfig) map[string]VendorConfig {
+	if globalSnapVendors == nil {
+		return merged
+	}
+	out := make(map[string]VendorConfig, len(merged))
+	for name, vc := range merged {
+		if _, isGlobal := globalSnapVendors[name]; isGlobal {
+			out[name] = vc
+		}
+	}
+	return out
 }
 
 // deepMergeYAMLMaps merges src onto dst in-place. For each key:

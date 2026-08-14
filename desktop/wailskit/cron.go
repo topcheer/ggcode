@@ -78,11 +78,30 @@ func (b *ChatBridge) CreateCronJob(cronExpr, prompt string, recurring, queueIfBu
 }
 
 // UpdateCronJob updates an existing cron job's cron expression, prompt, and queueIfBusy.
+// Empty strings map to nil (field unchanged), preserving scheduler.Update's
+// partial-update semantics. For queueIfBusy, a bool cannot distinguish false
+// from unset, so this bridge uses "true updates, false leaves unchanged"
+// semantics: submitting false never overwrites a stored true. This prevents a
+// frontend edit that only changes the prompt from silently disabling
+// queue_if_busy (and thus skipping the job when the agent is busy) (#288).
+// Consequence: turning QueueIfBusy off is not expressible through this bridge;
+// the frontend would need a tri-state (e.g. *bool) to support that.
 func (b *ChatBridge) UpdateCronJob(id, cronExpr, prompt string, queueIfBusy bool) (CronJobInfo, error) {
 	if b.cronScheduler == nil {
 		return CronJobInfo{}, fmt.Errorf("cron scheduler not available")
 	}
-	job, err := b.cronScheduler.Update(id, &cronExpr, &prompt, &queueIfBusy)
+	var cronPtr, promptPtr *string
+	if cronExpr != "" {
+		cronPtr = &cronExpr
+	}
+	if prompt != "" {
+		promptPtr = &prompt
+	}
+	var qb *bool
+	if queueIfBusy {
+		qb = &queueIfBusy
+	}
+	job, err := b.cronScheduler.Update(id, cronPtr, promptPtr, qb)
 	if err != nil {
 		return CronJobInfo{}, err
 	}

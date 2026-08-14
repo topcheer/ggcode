@@ -5,6 +5,7 @@ package wailskit
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -220,5 +221,103 @@ func TestGetWorkingDir(t *testing.T) {
 	wd := GetWorkingDir()
 	if wd == "" {
 		t.Fatal("expected non-empty working directory")
+	}
+}
+
+// #285: directories whose name merely starts with ".." (e.g. "..cfg") are
+// ordinary path elements, not parent references. The old
+// strings.HasPrefix(rel, "..") check wrongly denied them.
+func TestListDirectory_DotDotPrefixedDirAllowed(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "..cfg"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "..cfg", "settings.toml"), []byte("k=1"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	chdir(t, dir)
+
+	// Listing the ..-prefixed directory itself must succeed.
+	entries, err := ListDirectory("..cfg", false)
+	if err != nil {
+		t.Fatalf("expected ..cfg to be listable, got error: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Name != "settings.toml" {
+		t.Fatalf("expected settings.toml inside ..cfg, got %+v", entries)
+	}
+}
+
+// #285: a genuine parent-directory escape must still be denied.
+func TestListDirectory_RealParentStillDenied(t *testing.T) {
+	dir := t.TempDir()
+	outside := filepath.Join(dir, "..")
+	chdir(t, dir)
+	_, err := ListDirectory(outside, false)
+	if err == nil {
+		t.Fatal("expected access denied for parent directory")
+	}
+}
+
+func TestReadFileContent_DotDotPrefixedDirAllowed(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "..hidden"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "..hidden", "note.txt"), []byte("secret"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	chdir(t, dir)
+
+	content, err := ReadFileContent(filepath.Join("..hidden", "note.txt"))
+	if err != nil {
+		t.Fatalf("expected file inside ..hidden to be readable, got error: %v", err)
+	}
+	if content != "secret" {
+		t.Fatalf("expected 'secret', got %q", content)
+	}
+}
+
+// #287: ReadFileContent must refuse oversized files before reading.
+func TestReadFileContent_TooLarge(t *testing.T) {
+	if maxReadFileTextBytes <= 4096 {
+		t.Skip("cannot test size cap without writing a huge file")
+	}
+	dir := t.TempDir()
+	big := filepath.Join(dir, "big.log")
+	// Sparse file: declare size beyond the cap without writing 20MB+1 bytes.
+	f, err := os.Create(big)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Truncate(maxReadFileTextBytes + 1); err != nil {
+		f.Close()
+		t.Fatal(err)
+	}
+	f.Close()
+	chdir(t, dir)
+
+	_, err = ReadFileContent("big.log")
+	if err == nil {
+		t.Fatal("expected error for oversized file")
+	}
+	if !strings.Contains(err.Error(), "20MB") {
+		t.Fatalf("expected error to mention 20MB limit, got: %v", err)
+	}
+}
+
+// #287: small files remain fully readable.
+func TestReadFileContent_SmallFileStillRead(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "small.txt"), []byte("ok"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	chdir(t, dir)
+
+	content, err := ReadFileContent("small.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if content != "ok" {
+		t.Fatalf("expected 'ok', got %q", content)
 	}
 }

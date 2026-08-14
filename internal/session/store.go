@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -1334,10 +1335,15 @@ func (s *JSONLStore) repairIndex(idx []indexEntry) (bool, error) {
 		if !found {
 			ses, loadErr := s.loadSession(id)
 			if loadErr == nil {
-				if !s.HasUserInteractionOnDisk(id) {
-					// Same full-file check as CleanupIfEmpty: time-windowed loading must
-					// not cause deletion of sessions whose user messages are all older
-					// than RecentMessageWindow (#254).
+				// Same full-file check as CleanupIfEmpty: time-windowed loading must
+				// not cause deletion of sessions whose user messages are all older
+				// than RecentMessageWindow (#254). Unknown on-disk state keeps the
+				// session (#291).
+				interacted, hasErr := s.HasUserInteractionOnDisk(id)
+				if hasErr != nil {
+					debug.Log("session", "repairIndex: keeping orphan session %s — on-disk check unknown: %v", id, hasErr)
+					newIdx = append(newIdx, sessionToIndexEntry(ses))
+				} else if !interacted {
 					_ = os.Remove(s.sessionPath(id))
 				} else {
 					newIdx = append(newIdx, sessionToIndexEntry(ses))
@@ -1372,13 +1378,19 @@ func (s *JSONLStore) Delete(id string) error {
 // Unlike Session.HasUserInteraction, this is NOT affected by time-windowed
 // loading — it always reflects the full file on disk.
 //
-// Returns false if the file cannot be read (callers must treat this as
-// "unknown" and avoid destructive actions based on it).
-func (s *JSONLStore) HasUserInteractionOnDisk(id string) bool {
+// This is a three-state check (fix #291): (false, nil) means the file was
+// fully scanned and definitely has no user interaction; (false, err) means
+// the answer is UNKNOWN (file unreadable, or a line exceeded the scanner
+// buffer) — callers MUST treat that as "keep" and avoid destructive actions.
+func (s *JSONLStore) HasUserInteractionOnDisk(id string) (bool, error) {
 	path := s.sessionPath(id)
 	f, err := os.Open(path)
 	if err != nil {
-		return false
+		if os.IsNotExist(err) {
+			// File already gone — nothing to protect.
+			return false, nil
+		}
+		return false, fmt.Errorf("opening session file %s: %w", path, err)
 	}
 	defer f.Close()
 
@@ -1398,11 +1410,22 @@ func (s *JSONLStore) HasUserInteractionOnDisk(id string) bool {
 		}
 		for _, b := range rec.Message.Content {
 			if b.Type == "text" && strings.TrimSpace(b.Text) != "" {
-				return true
+				return true, nil
 			}
 		}
 	}
-	return false
+	if scanErr := sc.Err(); scanErr != nil {
+		// A line exceeded the 10MB scanner buffer (e.g. the user pasted a huge
+		// blob into a single JSONL message). Scan() stops early even though
+		// user messages may already have been seen — be conservative and keep
+		// the session (fix #291: never delete on uncertain input).
+		if errors.Is(scanErr, bufio.ErrTooLong) {
+			debug.Log("session", "HasUserInteractionOnDisk %s: line exceeds scanner buffer, conservatively keeping", id)
+			return true, nil
+		}
+		return false, fmt.Errorf("scanning session file %s: %w", path, scanErr)
+	}
+	return false, nil
 }
 
 // CleanupIfEmpty deletes the session file if it has no user interaction.
@@ -1434,7 +1457,13 @@ func (s *JSONLStore) WillCleanupIfEmpty(ses *Session) bool {
 		return false
 	}
 	// Windowed load may have dropped user messages — verify against the file.
-	return !s.HasUserInteractionOnDisk(ses.ID)
+	// Unknown (read error / oversized line) keeps the session (#291).
+	interacted, err := s.HasUserInteractionOnDisk(ses.ID)
+	if err != nil {
+		debug.Log("session", "WillCleanupIfEmpty: keeping session %s — on-disk check unknown: %v", ses.ID, err)
+		return false
+	}
+	return !interacted
 }
 
 // LatestForWorkspace returns the most recently updated session for the

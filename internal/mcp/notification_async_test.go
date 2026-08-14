@@ -30,6 +30,10 @@ func TestNotificationHandlerNotDeadlockedOnReadMu(t *testing.T) {
 	client := &Client{
 		name:   "notif-deadlock-test",
 		reader: bufio.NewReader(bytes.NewReader(stream)),
+		// Channels must be initialized when bypassing the constructors (fix #292
+		// moved channel creation from lazy init into NewClient/NewClientFromConfig).
+		notificationCh:   make(chan *Notification, notificationChanSize),
+		notificationDone: make(chan struct{}),
 	}
 
 	// Handler simulates the mcp_loader refresh path: it issues a follow-up
@@ -78,6 +82,10 @@ func TestNotificationOrderPreservedAsyncDispatch(t *testing.T) {
 	client := &Client{
 		name:   "notif-order-test",
 		reader: bufio.NewReader(bytes.NewReader(stream)),
+		// Channels must be initialized when bypassing the constructors (fix #292
+		// moved channel creation from lazy init into NewClient/NewClientFromConfig).
+		notificationCh:   make(chan *Notification, notificationChanSize),
+		notificationDone: make(chan struct{}),
 	}
 
 	received := make(chan string, 3)

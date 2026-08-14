@@ -58,7 +58,8 @@ type Client struct {
 	// processExit is closed when the stdio server process exits unexpectedly
 	// (i.e., not via Close/Abort). Consumers can use this for auto-reconnect.
 	// It is closed at most once; nil for non-stdio transports.
-	processExit chan struct{}
+	processExit  chan struct{}
+	procWaitDone chan struct{} // closed when the procWatch goroutine's cmd.Wait returns (#292 race fix)
 
 	// notificationHandler is called for every server-initiated notification
 	// (e.g., notifications/tools/list_changed, notifications/message).
@@ -90,10 +91,12 @@ type Client struct {
 // NewClient creates a new MCP client for the given server config.
 func NewClient(name, command string, args []string) *Client {
 	return &Client{
-		name:      name,
-		transport: "stdio",
-		command:   command,
-		args:      args,
+		name:             name,
+		transport:        "stdio",
+		command:          command,
+		args:             args,
+		notificationCh:   make(chan *Notification, notificationChanSize),
+		notificationDone: make(chan struct{}),
 	}
 }
 
@@ -103,13 +106,15 @@ func NewClientFromConfig(cfg config.MCPServerConfig) *Client {
 		transport = "stdio"
 	}
 	client := &Client{
-		name:      cfg.Name,
-		transport: transport,
-		command:   cfg.Command,
-		args:      append([]string(nil), cfg.Args...),
-		env:       cloneStringMap(cfg.Env),
-		url:       cfg.URL,
-		headers:   cloneStringMap(cfg.Headers),
+		name:             cfg.Name,
+		transport:        transport,
+		command:          cfg.Command,
+		args:             append([]string(nil), cfg.Args...),
+		env:              cloneStringMap(cfg.Env),
+		url:              cfg.URL,
+		headers:          cloneStringMap(cfg.Headers),
+		notificationCh:   make(chan *Notification, notificationChanSize),
+		notificationDone: make(chan struct{}),
 	}
 	if transport == "http" {
 		client.oauthHandler = NewOAuthHandler(cfg.Name, cfg.URL, auth.DefaultStore())
@@ -180,12 +185,17 @@ func (c *Client) Start(ctx context.Context) error {
 	c.stdout = stdout
 	c.reader = bufio.NewReader(stdout)
 	c.processExit = make(chan struct{})
+	c.procWaitDone = make(chan struct{})
 	c.mu.Unlock()
 
 	// Monitor process exit. When the process dies on its own (not via
 	// Close/Abort), close the processExit channel so watchers can react.
 	safego.Go("mcp.procWatch", func() {
 		_ = cmd.Wait()
+		// Always signal that the single legal Wait() has returned so Close can
+		// observe process teardown without calling Wait() again (concurrent
+		// exec.Cmd.Wait is a data race — #292).
+		close(c.procWaitDone)
 		// Only signal unexpected exit if we haven't been closed by the user.
 		if !c.closed.Load() {
 			c.closed.Store(true)
@@ -363,14 +373,17 @@ func (c *Client) Close() error {
 		oauthHandler.Close()
 	}
 	if (transport == "stdio" || transport == "") && cmd != nil {
-		done := make(chan struct{})
-		safego.Go("mcp.client.waitProcess", func() {
-			_ = cmd.Wait()
-			close(done)
-		})
-		select {
-		case <-done:
-		case <-time.After(3 * time.Second):
+		// Wait for the process to exit WITHOUT calling cmd.Wait() again — the
+		// procWatch goroutine owns the single legal Wait() call, and concurrent
+		// exec.Cmd.Wait invocations race on the Cmd's internal state (#292).
+		c.mu.Lock()
+		waitDone := c.procWaitDone
+		c.mu.Unlock()
+		if waitDone != nil {
+			select {
+			case <-waitDone:
+			case <-time.After(3 * time.Second):
+			}
 		}
 	}
 	return nil
@@ -417,7 +430,8 @@ func (c *Client) Abort() {
 
 		// Stop the notification dispatch worker (fix #255). The read loop is
 		// gone once the transport/process is torn down, so no new
-		// notifications can be queued after this point.
+		// notifications can be queued after this point. notificationDone is
+		// initialized in the constructors, so this read is race-free (#292).
 		if c.notificationDone != nil {
 			close(c.notificationDone)
 		}
@@ -1398,11 +1412,25 @@ func (c *Client) processNotification(notif *Notification) {
 	if c.notificationHandler == nil {
 		return
 	}
+	// notificationCh/notificationDone are created in the constructors (NewClient/
+	// NewClientFromConfig) before the Client is shared across goroutines, so
+	// this unsynchronized read is race-free (fix #292: previously they were
+	// lazily assigned inside this Once closure, which Abort() — never a Once
+	// participant — could read concurrently without any happens-before edge).
+	// Safety net: clients built via struct literals (tests, internal use) skip
+	// the constructors; create their channels here under the Once so the
+	// dispatch worker does not block on nil channels forever. Production code
+	// only uses the constructors, so this fallback is never taken there and
+	// the #292 race fix is preserved.
 	c.notificationOnce.Do(func() {
-		ch := make(chan *Notification, notificationChanSize)
-		done := make(chan struct{})
-		c.notificationCh = ch
-		c.notificationDone = done
+		if c.notificationCh == nil {
+			c.notificationCh = make(chan *Notification, notificationChanSize)
+		}
+		if c.notificationDone == nil {
+			c.notificationDone = make(chan struct{})
+		}
+		ch := c.notificationCh
+		done := c.notificationDone
 		safego.Go("mcp.client.notifications", func() {
 			for {
 				select {

@@ -37,6 +37,7 @@ package agent
 //   - Non-blocking: advice is appended to tool result, execution proceeds
 
 import (
+	"encoding/json"
 	"hash/fnv"
 	"os"
 
@@ -168,6 +169,72 @@ func hashFilePrefix(path string) uint64 {
 		return 0 // Should never fail for FNV, but satisfy error checking.
 	}
 	return h.Sum64()
+}
+
+// extractOldTextLen returns the length of the old_text argument for edit
+// tools, used by validateContentAtEdit to soften the warning for small edits.
+// For multi-edit tools it returns the total across all edits. Returns 0 when
+// no old_text is present or the arguments can't be parsed.
+func extractOldTextLen(toolName string, args json.RawMessage) int {
+	if len(args) == 0 {
+		return 0
+	}
+	var m map[string]any
+	if json.Unmarshal(args, &m) != nil {
+		return 0
+	}
+	switch toolName {
+	case "edit_file":
+		if s, ok := m["old_text"].(string); ok {
+			return len(s)
+		}
+		return 0
+	case "multi_edit_file":
+		editList, ok := m["edits"].([]any)
+		if !ok {
+			return 0
+		}
+		total := 0
+		for _, e := range editList {
+			em, ok := e.(map[string]any)
+			if !ok {
+				continue
+			}
+			if s, ok := em["old_text"].(string); ok {
+				total += len(s)
+			}
+		}
+		return total
+	case "multi_file_edit":
+		files, ok := m["files"].([]any)
+		if !ok {
+			return 0
+		}
+		total := 0
+		for _, f := range files {
+			fm, ok := f.(map[string]any)
+			if !ok {
+				continue
+			}
+			for _, edits := range fm {
+				editList, ok := edits.([]any)
+				if !ok {
+					continue
+				}
+				for _, e := range editList {
+					em, ok := e.(map[string]any)
+					if !ok {
+						continue
+					}
+					if s, ok := em["old_text"].(string); ok {
+						total += len(s)
+					}
+				}
+			}
+		}
+		return total
+	}
+	return 0
 }
 
 // (formatHashShort removed -- debug logging uses the raw uint64 value directly.)

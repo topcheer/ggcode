@@ -112,7 +112,10 @@ func coerceInteger(val json.RawMessage) (json.RawMessage, bool) {
 		// Guard against overflow: converting out-of-range floats (e.g. "1e300")
 		// to int64 is undefined in Go and would silently produce garbage.
 		// Reject the coercion so downstream reports a type error (#261).
-		if f < math.MinInt64 || f > math.MaxInt64 {
+		// #296: math.MaxInt64 (2^63-1) converts to float64 as exactly 2^63,
+		// so `>` let 2^63 through — use >= to reject it too. NaN compares
+		// false with everything and must be rejected explicitly.
+		if math.IsNaN(f) || f < math.MinInt64 || f >= math.MaxInt64 {
 			return val, false
 		}
 		return json.RawMessage(strconv.FormatInt(int64(f), 10)), true

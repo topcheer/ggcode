@@ -3182,6 +3182,18 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			if !result.IsError && (tc.Name == "edit_file" || tc.Name == "multi_edit_file" || tc.Name == "multi_file_edit") {
 				for _, p := range extractEditFilePaths(tc.Name, tc.Arguments) {
 					a.editFailRecovery.recordEditSuccess(p)
+					// Content-fingerprint validation MUST run before readHash.recordWriteHash
+					// below: recordWriteHash deletes the stored hash, so validating after
+					// it always misses and the detector is dead in production (#283).
+					// Catches sub-second edits that mtime misses and suppresses false
+					// positives from touch/NFS. Mirrors the #168 ordering precedent.
+					if hint := a.readHash.validateContentAtEdit(p, extractOldTextLen(tc.Name, tc.Arguments)); hint != "" {
+						if result.Content != "" {
+							result.Content = result.Content + "\n\n" + hint
+						} else {
+							result.Content = hint
+						}
+					}
 					a.fileFreshness.recordWrite(p)
 					a.readHash.recordWriteHash(p)
 					a.redundantRead.recordWrite(p)
@@ -3237,15 +3249,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					// Expired-read detection: warn when the agent edits a file
 					// it previously read, marking the prior read as expired.
 					if hint := a.expiredRead.recordEdit(p); hint != "" {
-						if result.Content != "" {
-							result.Content = result.Content + "\n\n" + hint
-						} else {
-							result.Content = hint
-						}
-					}
-					// Content-fingerprint validation: catches sub-second edits that
-					// mtime misses, suppresses false positives from touch/NFS.
-					if hint := a.readHash.validateContentAtEdit(p, 0); hint != "" {
 						if result.Content != "" {
 							result.Content = result.Content + "\n\n" + hint
 						} else {

@@ -425,9 +425,24 @@ func FetchClaudeProfile(ctx context.Context, accessToken string) (*ClaudeProfile
 	return profile, nil
 }
 
-// Close shuts down the callback HTTP server.
+// Close shuts down the callback HTTP server. If another goroutine is
+// blocked in WaitForClaudeAuthCode on this flow, a cancellation result is
+// sent to the callback channel so the waiter returns immediately instead
+// of hanging until its context timeout (#295).
 func (f *ClaudeOAuthFlow) Close() {
-	if f != nil && f.server != nil {
+	if f == nil {
+		return
+	}
+	if f.callbackCh != nil {
+		// Non-blocking cancel signal: buffered channel with capacity 1; if a
+		// real callback result is already pending it wins, otherwise the
+		// waiter observes the cancellation and exits promptly.
+		select {
+		case f.callbackCh <- claudeCallbackResult{Error: fmt.Errorf("oauth flow closed")}:
+		default:
+		}
+	}
+	if f.server != nil {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		_ = f.server.Shutdown(shutdownCtx)

@@ -2,6 +2,7 @@ package wailskit
 
 import (
 	"encoding/json"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -18,15 +19,23 @@ type LogEntry struct {
 // LogStream is a ring-buffer of recent log entries that can be
 // toggled on/off from the frontend and drained via polling.
 type LogStream struct {
-	mu      sync.Mutex
-	enabled atomic.Bool
-	buf     []LogEntry
-	cap     int
-	head    int // next write position
-	count   int // number of valid entries
-	seq     int64
-	pending []LogEntry // entries since last Drain
+	mu       sync.Mutex
+	enabled  atomic.Bool
+	buf      []LogEntry
+	cap      int
+	head     int // next write position
+	count    int // number of valid entries
+	seq      int64
+	pending  []LogEntry // entries since last Drain
+	maxPend  int        // pending queue capacity (#286)
+	overflow uint64     // entries dropped from pending since last Drain (#286)
 }
+
+// maxPendingEntries caps the pending queue. Without a cap, a poller (the
+// desktop debug panel) that disappears while the stream stays enabled causes
+// unbounded memory growth: every debug.Log entry is appended to pending and
+// never freed until the next Drain (#286).
+const maxPendingEntries = 5000
 
 // NewLogStream creates a LogStream with the given ring-buffer capacity.
 func NewLogStream(capacity int) *LogStream {
@@ -37,6 +46,7 @@ func NewLogStream(capacity int) *LogStream {
 		buf:     make([]LogEntry, capacity),
 		cap:     capacity,
 		pending: make([]LogEntry, 0, 128),
+		maxPend: maxPendingEntries,
 	}
 }
 
@@ -73,21 +83,50 @@ func (s *LogStream) Write(category, message string) {
 	if s.count < s.cap {
 		s.count++
 	}
-	// Pending queue for drain
-	s.pending = append(s.pending, entry)
+	// Pending queue for drain, capped at maxPend. When full, drop the oldest
+	// and count the overflow so Drain can report it (#286).
+	if len(s.pending) >= s.maxPend {
+		copy(s.pending, s.pending[1:])
+		s.pending[len(s.pending)-1] = entry
+		s.overflow++
+	} else {
+		s.pending = append(s.pending, entry)
+	}
 	s.mu.Unlock()
 }
 
 // Drain returns all entries accumulated since the last Drain call,
 // then clears the pending list. Returns empty slice if nothing new.
+// If entries were dropped from the capped pending queue since the last
+// Drain, a synthetic overflow notice is prepended (#286).
 func (s *LogStream) Drain() []LogEntry {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(s.pending) == 0 {
+		if s.overflow > 0 {
+			// Nothing left pending but drops happened (e.g. the poller was
+			// gone long enough that even capped entries were consumed or the
+			// stream was toggled off); still surface the overflow notice.
+			notice := LogEntry{
+				Category: "logstream",
+				Message:  fmt.Sprintf("log stream overflow: %d entries dropped (pending queue capped at %d)", s.overflow, s.maxPend),
+				Time:     time.Now().Format("15:04:05.000"),
+			}
+			s.overflow = 0
+			return []LogEntry{notice}
+		}
 		return nil
 	}
-	out := make([]LogEntry, len(s.pending))
-	copy(out, s.pending)
+	out := make([]LogEntry, 0, len(s.pending)+1)
+	if s.overflow > 0 {
+		out = append(out, LogEntry{
+			Category: "logstream",
+			Message:  fmt.Sprintf("log stream overflow: %d entries dropped (pending queue capped at %d)", s.overflow, s.maxPend),
+			Time:     time.Now().Format("15:04:05.000"),
+		})
+		s.overflow = 0
+	}
+	out = append(out, s.pending...)
 	s.pending = s.pending[:0]
 	return out
 }

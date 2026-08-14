@@ -4,6 +4,7 @@ package wailskit
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -182,3 +183,84 @@ func TestLogStream_SequenceIncrements(t *testing.T) {
 
 // Verify _ = strings is used (import guard for potential future use)
 var _ = strings.TrimSpace
+
+// TestLogStream_PendingCapped verifies the pending queue is capped at maxPend
+// entries: beyond the cap, the oldest entries are dropped and the overflow is
+// counted (#286).
+func TestLogStream_PendingCapped(t *testing.T) {
+	s := NewLogStream(10000) // ring cap larger than pending cap
+	s.Enable(true)
+	for i := 0; i < s.maxPend+500; i++ {
+		s.Write("cat", fmt.Sprintf("msg-%d", i))
+	}
+	s.mu.Lock()
+	plen := len(s.pending)
+	over := s.overflow
+	s.mu.Unlock()
+	if plen != s.maxPend {
+		t.Fatalf("expected pending capped at %d, got %d", s.maxPend, plen)
+	}
+	if over != 500 {
+		t.Fatalf("expected 500 overflow drops, got %d", over)
+	}
+}
+
+// TestLogStream_PendingDropsOldest verifies that overflow drops the OLDEST
+// pending entries, keeping the newest (#286).
+func TestLogStream_PendingDropsOldest(t *testing.T) {
+	s := NewLogStream(10000)
+	s.Enable(true)
+	for i := 0; i < s.maxPend+10; i++ {
+		s.Write("cat", fmt.Sprintf("msg-%d", i))
+	}
+	entries := s.Drain()
+	// First entry is the overflow notice when overflow > 0.
+	if len(entries) != s.maxPend+1 {
+		t.Fatalf("expected %d entries (cap + overflow notice), got %d", s.maxPend+1, len(entries))
+	}
+	if entries[0].Category != "logstream" || !strings.Contains(entries[0].Message, "10 entries dropped") {
+		t.Fatalf("expected overflow notice first, got: %+v", entries[0])
+	}
+	// Oldest 10 messages must have been dropped; first data entry is msg-10.
+	if entries[1].Message != "msg-10" {
+		t.Fatalf("expected oldest dropped (first data entry msg-10), got %s", entries[1].Message)
+	}
+	if entries[len(entries)-1].Message != fmt.Sprintf("msg-%d", s.maxPend+9) {
+		t.Fatalf("expected newest entry kept, got %s", entries[len(entries)-1].Message)
+	}
+}
+
+// TestLogStream_DrainOverflowNoticeOnly verifies the overflow notice is still
+// surfaced when nothing remains pending (#286).
+func TestLogStream_DrainOverflowNoticeOnly(t *testing.T) {
+	s := NewLogStream(10)
+	s.Enable(true)
+	s.Write("cat", "a")
+	// Simulate overflow without pending content by manipulating state directly
+	// (same-package test): drop everything from pending while keeping overflow.
+	s.mu.Lock()
+	s.pending = s.pending[:0]
+	s.overflow = 42
+	s.mu.Unlock()
+
+	entries := s.Drain()
+	if len(entries) != 1 || !strings.Contains(entries[0].Message, "42 entries dropped") {
+		t.Fatalf("expected overflow-only notice, got: %+v", entries)
+	}
+	// Overflow counter resets after drain.
+	if s.overflow != 0 {
+		t.Fatalf("expected overflow reset, got %d", s.overflow)
+	}
+}
+
+// TestLogStream_DrainNoSpuriousNotice verifies no overflow notice when the
+// cap was never hit (#286).
+func TestLogStream_DrainNoSpuriousNotice(t *testing.T) {
+	s := NewLogStream(10)
+	s.Enable(true)
+	s.Write("cat", "a")
+	entries := s.Drain()
+	if len(entries) != 1 || entries[0].Category != "cat" {
+		t.Fatalf("expected exactly one cat entry, got: %+v", entries)
+	}
+}

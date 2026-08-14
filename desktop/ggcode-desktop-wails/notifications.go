@@ -159,24 +159,54 @@ func (nm *NotificationManager) showOSNotification(title, body string) {
 
 func (nm *NotificationManager) notifyMacOS(title, body string) {
 	// Use osascript to display a native notification.
-	// Escape backslashes first, then double quotes to prevent script injection.
-	escapedTitle := strings.ReplaceAll(title, `\`, `\\`)
-	escapedBody := strings.ReplaceAll(body, `\`, `\\`)
-	escapedTitle = strings.ReplaceAll(escapedTitle, `"`, `\"`)
-	escapedBody = strings.ReplaceAll(escapedBody, `"`, `\"`)
-	script := "display notification \"" + escapedBody + "\" with title \"" + escapedTitle + "\" sound name \"Glass\""
-	cmd := exec.Command("osascript", "-e", script)
-	if err := cmd.Run(); err != nil {
-		debug.Log("desktop", "macOS notification failed: %v", err)
-	}
+	// Run asynchronously: osascript cold-start takes 0.3-1.5s and this fires
+	// inline on the approval/complete/error agent paths (#290, mirrors the
+	// #202 Windows fix). Failures are best-effort and only logged.
+	safego.Go("notify-macos", func() {
+		script := "display notification \"" + escapeAppleScriptText(body) +
+			"\" with title \"" + escapeAppleScriptText(title) +
+			"\" sound name \"Glass\""
+		cmd := exec.Command("osascript", "-e", script)
+		if err := cmd.Run(); err != nil {
+			debug.Log("desktop", "macOS notification failed: %v", err)
+		}
+	})
+}
+
+// escapeAppleScriptText makes a string safe to embed in an AppleScript
+// double-quoted string literal (#289).
+//
+// Order matters: backslashes first, then double quotes, to prevent script
+// injection via premature quote termination.
+//
+// Newlines/tabs/CRs are NOT valid inside AppleScript string literals — the
+// osascript compiler rejects them ("Expected end of line..."), so a
+// multi-line body would fail to compile at runtime. The issue allows either
+// AppleScript escaping (`" & linefeed & "` concatenation) or plain spaces;
+// we chose single-lining: tab→space, \n→space, \r removed. Notifications
+// render one or two lines in the OS banner anyway, so collapsing whitespace
+// is visually equivalent and keeps the script simple.
+func escapeAppleScriptText(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `"`, `\"`)
+	s = strings.ReplaceAll(s, "\r", "")
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.ReplaceAll(s, "\t", " ")
+	s = strings.ReplaceAll(s, "\x00", "")
+	return s
 }
 
 func (nm *NotificationManager) notifyLinux(title, body string) {
 	// Try notify-send (libnotify) — available on most Linux desktops.
-	cmd := exec.Command("notify-send", "--app-name=GGCode", "--icon=dialog-information", title, body)
-	if err := cmd.Run(); err != nil {
-		debug.Log("desktop", "Linux notification failed: %v", err)
-	}
+	// Run asynchronously (#290): notify-send forks a process on the
+	// stream-event dispatch path; keep it off the caller like the #202
+	// Windows fix. Failures are best-effort and only logged.
+	safego.Go("notify-linux", func() {
+		cmd := exec.Command("notify-send", "--app-name=GGCode", "--icon=dialog-information", title, body)
+		if err := cmd.Run(); err != nil {
+			debug.Log("desktop", "Linux notification failed: %v", err)
+		}
+	})
 }
 
 func (nm *NotificationManager) notifyWindows(title, body string) {

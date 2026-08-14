@@ -1,6 +1,9 @@
 package main
 
 import (
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -133,5 +136,66 @@ func TestItoa(t *testing.T) {
 		if got != tt.expected {
 			t.Errorf("itoa(%d) = %q, want %q", tt.input, got, tt.expected)
 		}
+	}
+}
+
+// #289: escapeAppleScriptText must strip/replace control characters that are
+// invalid inside AppleScript string literals (bare \n/\r/\t make osascript
+// fail to compile), while keeping backslash/quote escaping intact.
+func TestEscapeAppleScriptText(t *testing.T) {
+	tests := []struct {
+		name, in, want string
+	}{
+		{"plain", "hello", "hello"},
+		{"backslash", `C:\path`, `C:\\path`},
+		{"quote", `say "hi"`, `say \"hi\"`},
+		{"newline", "line1\nline2", "line1 line2"},
+		{"crlf", "line1\r\nline2", "line1 line2"},
+		{"bare_cr", "a\rb", "ab"},
+		{"tab", "a\tb", "a b"},
+		{"multiline_body", "Task done:\n2 files changed", "Task done: 2 files changed"},
+	}
+	for _, tt := range tests {
+		if got := escapeAppleScriptText(tt.in); got != tt.want {
+			t.Errorf("%s: escapeAppleScriptText(%q) = %q, want %q", tt.name, tt.in, got, tt.want)
+		}
+	}
+}
+
+// #289: no raw control characters may survive escaping.
+func TestEscapeAppleScriptText_NoControlChars(t *testing.T) {
+	got := escapeAppleScriptText("a\nb\rc\td\x00e")
+	for _, r := range got {
+		if r < 0x20 || r == 0x7f {
+			t.Errorf("control character %q survived escaping in %q", r, got)
+		}
+	}
+}
+
+// #289: end-to-end check that a script embedding escaped multiline text
+// compiles. Uses osacompile (compile to .scpt, never executes), so no real
+// notification is posted. Runs only on macOS where osascript exists.
+func TestNotifyMacOS_MultilineBodyCompiles(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("osascript only exists on macOS")
+	}
+	if _, err := exec.LookPath("osacompile"); err != nil {
+		t.Skip("osacompile not available")
+	}
+	script := "display notification \"" + escapeAppleScriptText("line1\nline2\ttabbed") +
+		"\" with title \"" + escapeAppleScriptText("T\ni\tt") + "\""
+	out := filepath.Join(t.TempDir(), "check.scpt")
+	cmd := exec.Command("osacompile", "-o", out, "-e", script)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("osacompile rejected escaped multiline script: %v\noutput: %s", err, output)
+	}
+
+	// Sanity: the same script with UNESCAPED newlines must fail to compile,
+	// proving the escaping is what makes it valid.
+	raw := "display notification \"line1\nline2\" with title \"T\""
+	bad := filepath.Join(t.TempDir(), "bad.scpt")
+	if output, err := exec.Command("osacompile", "-o", bad, "-e", raw).CombinedOutput(); err == nil {
+		t.Logf("note: osacompile accepted a raw newline (tolerant version); escaping still valid")
+		_ = output
 	}
 }

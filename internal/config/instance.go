@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -472,6 +473,32 @@ func (c *Config) SaveScoped(scope string) error {
 	default:
 		return c.Save()
 	}
+}
+
+// SaveInstanceScoped persists the current config to the instance-level override
+// file WITHOUT changing the sticky save scope. Long-lived holders of a shared
+// *Config (e.g. the desktop app's global config) should prefer this when a
+// one-off feature needs instance persistence (endpoint/model limits): calling
+// SaveScoped("instance") instead would silently redirect all subsequent
+// scope-aware saves (Save*Preference, PatchIMAdapter) to the instance file (#282).
+func (c *Config) SaveInstanceScoped(workspace string) error {
+	return c.SaveInstance(workspace)
+}
+
+// InstanceFields returns the sorted top-level YAML keys that were sourced from
+// the instance config at load time. Save() strips these keys from the global
+// file write, so callers mutating those fields must also persist them to the
+// instance file (e.g. via SaveInstanceScoped) or the changes are lost on restart.
+func (c *Config) InstanceFields() []string {
+	if c == nil || len(c.instanceFields) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(c.instanceFields))
+	for k := range c.instanceFields {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // SetSaveScope records which config target future save helpers should write to.

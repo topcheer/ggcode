@@ -806,6 +806,10 @@ func TestNotificationHandlerInvoked(t *testing.T) {
 	client := &Client{
 		name:   "notif-test",
 		reader: bufio.NewReader(bytes.NewReader(stream)),
+		// Channels must be initialized when bypassing the constructors (fix #292
+		// moved channel creation from lazy init into NewClient/NewClientFromConfig).
+		notificationCh:   make(chan *Notification, notificationChanSize),
+		notificationDone: make(chan struct{}),
 	}
 	client.SetNotificationHandler(func(method string, params json.RawMessage) {
 		mu.Lock()
