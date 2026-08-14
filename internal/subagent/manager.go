@@ -1118,10 +1118,22 @@ func (m *Manager) purgeTerminalAgents() {
 		sa.mu.Lock()
 		isTerminal := sa.Status == StatusCompleted || sa.Status == StatusFailed || sa.Status == StatusCancelled
 		ended := sa.EndedAt
+		doneCh := sa.done
 		sa.mu.Unlock()
-		if isTerminal {
-			terminals = append(terminals, terminalEntry{id: id, endedAt: ended})
+		if !isTerminal {
+			continue
 		}
+		// Skip agents whose goroutine hasn't finished yet — purging them
+		// before Complete() runs leaves the done channel open forever.
+		if doneCh != nil {
+			select {
+			case <-doneCh:
+				// goroutine confirmed exited — safe to purge
+			default:
+				continue // goroutine still running — skip
+			}
+		}
+		terminals = append(terminals, terminalEntry{id: id, endedAt: ended})
 	}
 	if len(terminals) <= maxTerminalAgents {
 		m.mu.Unlock()

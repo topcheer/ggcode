@@ -571,6 +571,7 @@ func TestPurgeTerminalAgents_BoundsMemoryGrowth(t *testing.T) {
 		sa.mu.Lock()
 		sa.Status = StatusCompleted
 		sa.EndedAt = time.Now().Add(-time.Duration(25-i) * time.Minute) // older = lower i
+		close(sa.done)
 		sa.mu.Unlock()
 	}
 
