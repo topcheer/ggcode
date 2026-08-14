@@ -39,10 +39,8 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 		escaped := strings.ReplaceAll(p.Text, "\\", "\\\\")
 		escaped = strings.ReplaceAll(escaped, "\"", "\\\"")
 		return cliclickResult(ctx, fmt.Sprintf("t:\"%s\"", escaped))
-	case "key_press":
-		return cliclickResult(ctx, fmt.Sprintf("kp:%s", p.Text))
-	case "key_combo":
-		return cliclickResult(ctx, fmt.Sprintf("kp:%s", p.Text))
+	case "key_press", "key_combo":
+		return keyComboResult(ctx, p.Text)
 
 	// ── Window management ──
 	case "list_windows":
@@ -388,6 +386,66 @@ func cliclickResult(ctx context.Context, args ...string) (Result, error) {
 		result += "\n" + strings.TrimSpace(string(out))
 	}
 	return Result{Content: result}, nil
+}
+
+func keyComboResult(ctx context.Context, combo string) (Result, error) {
+	parts := strings.Split(combo, "+")
+	if len(parts) == 0 {
+		return Result{}, fmt.Errorf("empty key combo")
+	}
+
+	// Parse modifiers (all parts except the last)
+	modifiers := []string{}
+	for _, mod := range parts[:len(parts)-1] {
+		mod = strings.TrimSpace(strings.ToLower(mod))
+		switch mod {
+		case "cmd", "command":
+			modifiers = append(modifiers, "command down")
+		case "ctrl", "control":
+			modifiers = append(modifiers, "control down")
+		case "alt", "option":
+			modifiers = append(modifiers, "option down")
+		case "shift":
+			modifiers = append(modifiers, "shift down")
+		case "fn":
+			modifiers = append(modifiers, "fn down")
+		default:
+			return Result{}, fmt.Errorf("unknown modifier: %s", mod)
+		}
+	}
+
+	key := strings.TrimSpace(parts[len(parts)-1])
+	keyLower := strings.ToLower(key)
+
+	keyCodeMap := map[string]int{
+		"return": 36, "enter": 76, "tab": 48, "space": 49,
+		"delete": 51, "esc": 53, "escape": 53,
+		"home": 115, "end": 119,
+		"pageup": 116, "page-up": 116, "pagedown": 121, "page-down": 121,
+		"arrowleft": 123, "arrow-left": 123, "arrowright": 124, "arrow-right": 124,
+		"arrowdown": 125, "arrow-down": 125, "arrowup": 126, "arrow-up": 126,
+		"f1": 122, "f2": 120, "f3": 99, "f4": 118,
+		"f5": 96, "f6": 97, "f7": 98, "f8": 100,
+		"f9": 101, "f10": 109, "f11": 103, "f12": 111,
+	}
+
+	modList := ""
+	if len(modifiers) > 0 {
+		modList = " using {" + strings.Join(modifiers, ", ") + "}"
+	}
+
+	var script string
+	if code, ok := keyCodeMap[keyLower]; ok {
+		script = fmt.Sprintf(`tell application "System Events" to key code %d%s`, code, modList)
+	} else if len(key) == 1 {
+		script = fmt.Sprintf(`tell application "System Events" to keystroke "%s"%s`, key, modList)
+	} else {
+		escaped := strings.ReplaceAll(key, "\\", "\\\\")
+		escaped = strings.ReplaceAll(escaped, "\"", "\\\"")
+		script = fmt.Sprintf(`tell application "System Events" to keystroke "%s"%s`, escaped, modList)
+	}
+
+	return appleScriptResult(ctx, script)
 }
 
 func appleScriptResult(ctx context.Context, script string) (Result, error) {
