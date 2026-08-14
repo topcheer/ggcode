@@ -13,11 +13,12 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 	switch p.Action {
 	// ── Mouse ──
 	case "click":
-		return xdotoolResult(ctx, "click", "1") // left=1, right=3
+		// Move to coordinates first, then click — matching macOS behavior.
+		return xdotoolResult(ctx, "mousemove", "--sync", fmt.Sprintf("%d", p.X), fmt.Sprintf("%d", p.Y), "click", "1")
 	case "double_click":
-		return xdotoolResult(ctx, "click", "--repeat", "2", "1")
+		return xdotoolResult(ctx, "mousemove", "--sync", fmt.Sprintf("%d", p.X), fmt.Sprintf("%d", p.Y), "click", "--repeat", "2", "1")
 	case "right_click":
-		return xdotoolResult(ctx, "click", "3")
+		return xdotoolResult(ctx, "mousemove", "--sync", fmt.Sprintf("%d", p.X), fmt.Sprintf("%d", p.Y), "click", "3")
 	case "move":
 		return xdotoolResult(ctx, "mousemove", fmt.Sprintf("%d", p.X), fmt.Sprintf("%d", p.Y))
 	case "drag":

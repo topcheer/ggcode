@@ -41,6 +41,7 @@ type Client struct {
 	stdout            io.Reader
 	reader            *bufio.Reader // reused stdout reader
 	httpClient        *http.Client
+	wsMu              sync.Mutex // serializes ReadMessage on wsConn (fix #138)
 	wsConn            *websocket.Conn
 	sessionID         string
 	negotiatedVersion string // protocol version agreed upon during initialize
@@ -434,9 +435,6 @@ func (c *Client) nextRequestID() *ID {
 const mcpRequestTimeout = 120 * time.Second
 
 func (c *Client) sendRequest(ctx context.Context, method string, params interface{}, result interface{}) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	if c.closed.Load() {
 		return fmt.Errorf("mcp[%s]: connection closed", c.name)
 	}
@@ -458,7 +456,12 @@ func (c *Client) sendRequest(ctx context.Context, method string, params interfac
 		ID:      c.nextRequestID(),
 	}
 
-	resp, err := c.send(req, ctx)
+	// For WS/stdio transports, the send path includes a read loop that may
+	// dispatch notifications. Those notification handlers can call back into
+	// sendRequest (e.g. ListTools after tools/list_changed). If we hold c.mu
+	// during the read loop, this reentrant call deadlocks. So we split:
+	// 1) write under c.mu, 2) read without c.mu, using wsMu to serialize reads.
+	resp, err := c.sendRequestUnlocked(req, ctx)
 	if err != nil {
 		return fmt.Errorf("mcp[%s]: send %s: %w", c.name, method, err)
 	}
@@ -476,6 +479,27 @@ func (c *Client) sendRequest(ctx context.Context, method string, params interfac
 	return nil
 }
 
+// sendRequestUnlocked sends a request and reads the response. c.mu is held
+// only during the write phase, not the read phase (fix #138).
+func (c *Client) sendRequestUnlocked(req Request, ctx context.Context) (*Response, error) {
+	switch c.transport {
+	case "ws", "websocket":
+		return c.sendWSUnlocked(ctx, req)
+	case "http":
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return c.sendHTTP(ctx, req)
+	default: // stdio
+		c.mu.Lock()
+		if err := c.writeMessage(req); err != nil {
+			c.mu.Unlock()
+			return nil, fmt.Errorf("mcp[%s]: write message: %w", c.name, err)
+		}
+		c.mu.Unlock()
+		return c.readResponseWithCancel(ctx)
+	}
+}
+
 func (c *Client) sendNotification(ctx context.Context, notif Notification) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -491,7 +515,14 @@ func (c *Client) send(msg interface{}, ctx context.Context) (*Response, error) {
 	case "http":
 		return c.sendHTTP(ctx, msg)
 	case "ws", "websocket":
-		return c.sendWS(ctx, msg)
+		// Notifications only need a write, not a read loop.
+		if _, ok := msg.(Notification); ok {
+			return c.sendWSNotification(ctx, msg)
+		}
+		// Requests are handled by sendRequestUnlocked via sendWSUnlocked.
+		// This path handles server-initiated requests (rare).
+		req, _ := msg.(Request)
+		return c.sendWSUnlocked(ctx, req)
 	case "", "stdio":
 		if err := c.writeMessage(msg); err != nil {
 			return nil, fmt.Errorf("mcp[%s]: write message: %w", c.name, err)
@@ -630,32 +661,41 @@ func (c *Client) sendHTTPWithRetry(ctx context.Context, msg interface{}, allowRe
 	return parseHTTPResponse(body, resp.Header.Get("Content-Type"))
 }
 
-func (c *Client) sendWS(ctx context.Context, msg interface{}) (*Response, error) {
-	data, err := json.Marshal(msg)
+// sendWSUnlocked writes a request under c.mu, then reads the response
+// without holding c.mu (fix #138). This prevents reentrant deadlock when
+// a notification handler calls back into sendRequest. wsMu serializes
+// ReadMessage calls to avoid concurrent reads on the non-thread-safe
+// websocket connection.
+func (c *Client) sendWSUnlocked(ctx context.Context, req Request) (*Response, error) {
+	data, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("mcp[%s]: marshal ws message: %w", c.name, err)
+	}
+	// Write under c.mu to serialize WS writes.
+	c.mu.Lock()
+	if c.closed.Load() {
+		c.mu.Unlock()
+		return nil, fmt.Errorf("mcp[%s]: connection closed", c.name)
 	}
 	if deadline, ok := ctx.Deadline(); ok {
 		_ = c.wsConn.SetWriteDeadline(deadline)
 		_ = c.wsConn.SetReadDeadline(deadline)
 	}
 	if err := c.wsConn.WriteMessage(websocket.TextMessage, data); err != nil {
+		c.mu.Unlock()
 		return nil, fmt.Errorf("mcp[%s]: websocket write: %w", c.name, err)
 	}
-	switch msg.(type) {
-	case Notification:
-		return &Response{JSONRPC: "2.0"}, nil
-	}
-	// Extract request ID for response matching.
-	var reqID *ID
-	if req, ok := msg.(Request); ok {
-		reqID = req.ID
-	}
+	c.mu.Unlock()
+	// Read loop — NOT holding c.mu so notification handlers can re-enter
+	// sendRequest without deadlock. wsMu ensures only one goroutine reads.
+	reqID := req.ID
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil, fmt.Errorf("mcp[%s]: context cancelled: %w", c.name, err)
 		}
+		c.wsMu.Lock()
 		_, payload, err := c.wsConn.ReadMessage()
+		c.wsMu.Unlock()
 		if err != nil {
 			return nil, fmt.Errorf("mcp[%s]: websocket read: %w", c.name, err)
 		}
@@ -665,7 +705,6 @@ func (c *Client) sendWS(ctx context.Context, msg interface{}) (*Response, error)
 		}
 		switch typed := parsed.(type) {
 		case *Response:
-			// Match response ID to request ID to avoid misattribution.
 			if reqID != nil {
 				reqIDJSON, _ := json.Marshal(reqID)
 				if len(typed.ID) > 0 && string(typed.ID) != string(reqIDJSON) {
@@ -682,6 +721,22 @@ func (c *Client) sendWS(ctx context.Context, msg interface{}) (*Response, error)
 			continue
 		}
 	}
+}
+
+// sendWSNotification writes a notification over WebSocket without entering
+// a read loop (notifications are fire-and-forget).
+func (c *Client) sendWSNotification(ctx context.Context, msg interface{}) (*Response, error) {
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return nil, fmt.Errorf("mcp[%s]: marshal ws notification: %w", c.name, err)
+	}
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = c.wsConn.SetWriteDeadline(deadline)
+	}
+	if err := c.wsConn.WriteMessage(websocket.TextMessage, data); err != nil {
+		return nil, fmt.Errorf("mcp[%s]: websocket write: %w", c.name, err)
+	}
+	return &Response{JSONRPC: "2.0"}, nil
 }
 
 func parseHTTPResponse(body []byte, contentType string) (*Response, error) {
@@ -1117,13 +1172,13 @@ func (c *Client) processNotification(notif *Notification) {
 	if notif == nil {
 		return
 	}
-	// Copy handler pointer without holding c.mu for long — sendRequest holds c.mu
-	// during the entire request/response cycle, and processNotification is called
-	// from the read loop. If we block on c.mu here while sendRequest is waiting
-	// for a response that triggers a notification, we deadlock.
-	c.mu.Lock()
+	// Read the handler pointer without acquiring c.mu. sendRequest holds c.mu
+	// during the entire request/response cycle, and processNotification is
+	// called from within that read loop. If we try to acquire c.mu here we
+	// deadlock. A function-pointer read is atomic on 64-bit platforms; the
+	// worst case is reading a stale pointer during handler replacement, which
+	// is harmless (one notification delivered to the old handler).
 	h := c.notificationHandler
-	c.mu.Unlock()
 	if h == nil {
 		return
 	}

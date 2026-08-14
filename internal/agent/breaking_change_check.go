@@ -30,6 +30,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"sort"
 	"strings"
 )
 
@@ -241,10 +242,15 @@ func breakingTypeFP(expr ast.Expr) string {
 				methods = append(methods, "embed:"+breakingExprStr(method.Type))
 			} else {
 				for _, name := range method.Names {
-					methods = append(methods, name.Name)
+					// Include the method signature, not just the name, so that
+					// parameter/type changes are detected (fix #139 bug 1).
+					methods = append(methods, name.Name+":"+breakingExprStr(method.Type))
 				}
 			}
 		}
+		// Sort methods so reordering doesn't trigger a false positive
+		// (fix #139 bug 2 — method order is not significant in Go).
+		sort.Strings(methods)
 		return "interface{" + strings.Join(methods, "; ") + "}"
 
 	case *ast.Ident:
