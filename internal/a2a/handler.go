@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -46,8 +45,14 @@ type TaskHandler struct {
 	workspace string
 	agent     *agent.Agent
 	registry  *tool.Registry
-	tasks     map[string]*Task              // active tasks by ID
-	cancels   map[string]context.CancelFunc // per-task cancel functions
+	tasks     map[string]*Task // active tasks by ID
+	// cancels maps task ID to the installed cancel entry. The generation
+	// number uniquely identifies the goroutine that installed the entry so a
+	// stale execute goroutine can detect that its entry has been replaced by
+	// continueTask (fix #327: reflect pointer comparison of CancelFuncs is
+	// meaningless — WithTimeout closures share the same code pointer).
+	cancels   map[string]cancelEntry
+	cancelGen uint64 // incremented per install; guarded by mu
 	meta      WorkspaceMeta
 	maxTasks  int
 	timeout   time.Duration
@@ -119,7 +124,7 @@ func NewTaskHandler(workspace string, a *agent.Agent, reg *tool.Registry, opts .
 		agent:     a,
 		registry:  reg,
 		tasks:     make(map[string]*Task),
-		cancels:   make(map[string]context.CancelFunc),
+		cancels:   make(map[string]cancelEntry),
 		meta:      detectWorkspaceMeta(workspace),
 		maxTasks:  5,
 		timeout:   5 * time.Minute,
@@ -195,14 +200,14 @@ func (h *TaskHandler) Handle(ctx context.Context, skill string, input Message, e
 	// Create cancellable context for this task.
 	taskCtx, cancel := context.WithTimeout(context.Background(), h.timeout)
 	h.mu.Lock()
-	h.cancels[task.ID] = cancel
+	gen := h.installCancelLocked(task.ID, cancel)
 	h.mu.Unlock()
 
-	// Execute asynchronously. Pass the installed cancel so the goroutine
-	// can later clean up only if the map entry is still its own (fix #166:
+	// Execute asynchronously. Pass the installed generation so the goroutine
+	// can later clean up only if the map entry is still its own (fix #166/#327:
 	// continueTask replaces the entry on resume; an ownership-blind cleanup
 	// would kill or zombie the resumed task's context).
-	safego.Go("a2a.execute", func() { h.execute(taskCtx, task, perm, cancel) })
+	safego.Go("a2a.execute", func() { h.execute(taskCtx, task, perm, gen) })
 
 	// Snapshot must be taken under the lock to avoid racing with
 	// updateStatus in the execute goroutine.
@@ -239,14 +244,14 @@ func (h *TaskHandler) continueTask(ctx context.Context, taskID string, input Mes
 	// Cancel the old context before creating a new one.
 	// The original execute() goroutine may still reach cleanupCancel,
 	// which would otherwise cancel this new context.
-	if oldCancel, ok := h.cancels[taskID]; ok {
-		oldCancel()
+	if old, ok := h.cancels[taskID]; ok {
+		old.cancel()
 		delete(h.cancels, taskID)
 	}
 
 	// Re-create the cancel context for the resumed execution.
 	taskCtx, cancel := context.WithTimeout(context.Background(), h.timeout)
-	h.cancels[taskID] = cancel
+	gen := h.installCancelLocked(taskID, cancel)
 	h.mu.Unlock()
 
 	perm, ok := skillPermissions[task.Skill]
@@ -254,9 +259,9 @@ func (h *TaskHandler) continueTask(ctx context.Context, taskID string, input Mes
 		return nil, fmt.Errorf("unknown skill: %s", task.Skill)
 	}
 
-	// Resume execution. Pass the newly installed cancel (see execute call in
-	// handleSendMessageSend for the ownership rationale).
-	safego.Go("a2a.execute", func() { h.execute(taskCtx, task, perm, cancel) })
+	// Resume execution. Pass the newly installed generation (see execute call
+	// in handleSendMessageSend for the ownership rationale).
+	safego.Go("a2a.execute", func() { h.execute(taskCtx, task, perm, gen) })
 
 	// Snapshot must be taken under the lock to avoid racing with
 	// updateStatus in the execute goroutine.
@@ -266,7 +271,7 @@ func (h *TaskHandler) continueTask(ctx context.Context, taskID string, input Mes
 	return &snap, nil
 }
 
-func (h *TaskHandler) execute(ctx context.Context, t *Task, perm *SkillPermission, installedCancel context.CancelFunc) {
+func (h *TaskHandler) execute(ctx context.Context, t *Task, perm *SkillPermission, installedGen uint64) {
 	h.updateStatus(t, TaskStateWorking, "")
 
 	var result string
@@ -320,18 +325,18 @@ func (h *TaskHandler) execute(ctx context.Context, t *Task, perm *SkillPermissio
 				return
 			}
 			h.updateStatus(t, TaskStateCanceled, "canceled by client")
-			h.cleanupCancelIf(t.ID, installedCancel)
+			h.cleanupCancelIf(t.ID, installedGen)
 		}
 		return
 	}
 
 	if err != nil {
 		h.updateStatus(t, TaskStateFailed, err.Error())
-		h.cleanupCancelIf(t.ID, installedCancel)
+		h.cleanupCancelIf(t.ID, installedGen)
 		return
 	}
 
-	h.cleanupCancelIf(t.ID, installedCancel)
+	h.cleanupCancelIf(t.ID, installedGen)
 
 	// If RequestInput was called during execution, the task is already in
 	// input-required state. Don't override it with completed — the client
@@ -423,29 +428,34 @@ func (h *TaskHandler) executeAgent(ctx context.Context, perm *SkillPermission, s
 	return buf.String(), nil
 }
 
-// cleanupCancel removes and calls the cancel func for a task.
-func (h *TaskHandler) cleanupCancel(taskID string) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if c, ok := h.cancels[taskID]; ok {
-		c()
-		delete(h.cancels, taskID)
-	}
+// cancelEntry pairs a cancel func with the generation that installed it.
+type cancelEntry struct {
+	gen    uint64
+	cancel context.CancelFunc
+}
+
+// installCancelLocked installs a cancel for a task and returns its unique
+// generation number. Must be called with h.mu held.
+func (h *TaskHandler) installCancelLocked(taskID string, cancel context.CancelFunc) uint64 {
+	h.cancelGen++
+	gen := h.cancelGen
+	h.cancels[taskID] = cancelEntry{gen: gen, cancel: cancel}
+	return gen
 }
 
 // cleanupCancelIf removes and calls the cancel func for a task only when the
-// map entry is still the cancel this run installed (fix #166). If
-// continueTask has already swapped in a new cancel for the resumed run, this
-// is a stale goroutine exiting — touching the new cancel would kill or
-// zombie the resumed task, so we leave it untouched.
-func (h *TaskHandler) cleanupCancelIf(taskID string, installed context.CancelFunc) {
-	if installed == nil {
-		return
-	}
+// map entry is still the one this run installed (identified by generation
+// number, fix #166/#327). If continueTask has already swapped in a new cancel
+// for the resumed run, this is a stale goroutine exiting — touching the new
+// cancel would kill or zombie the resumed task, so we leave it untouched.
+// Generation numbers are used instead of reflect pointer comparison because
+// context.WithTimeout cancels are closures sharing the same code pointer,
+// making reflect.ValueOf(fn).Pointer() comparison always-true (issue #327).
+func (h *TaskHandler) cleanupCancelIf(taskID string, installedGen uint64) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if c, ok := h.cancels[taskID]; ok && reflect.ValueOf(c).Pointer() == reflect.ValueOf(installed).Pointer() {
-		c()
+	if entry, ok := h.cancels[taskID]; ok && entry.gen == installedGen {
+		entry.cancel()
 		delete(h.cancels, taskID)
 	}
 }
@@ -636,8 +646,8 @@ func (h *TaskHandler) CancelTask(id string) error {
 		t.done = nil
 	}
 	// Cancel the underlying context to stop tool/agent execution.
-	if cancel, ok := h.cancels[id]; ok {
-		cancel()
+	if entry, ok := h.cancels[id]; ok {
+		entry.cancel()
 		delete(h.cancels, id)
 	}
 	return nil

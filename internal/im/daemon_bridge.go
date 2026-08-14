@@ -110,6 +110,23 @@ func (b *DaemonBridge) handleInteractiveCallback(cb InteractiveCallback) {
 		return
 	}
 
+	// Correlate the callback with the interactive message that carries the
+	// current question: when the pending question was sent via interactive
+	// buttons on this adapter, only accept callbacks originating from that
+	// exact platform message. Stale cards (an already-answered question's
+	// buttons, or a previous question in a multi-question sequence) must be
+	// dropped instead of silently submitted as the current answer.
+	// When there is no recorded message ID for the adapter (text-only pending,
+	// or adapter that returned no ID), there is nothing to compare — allow.
+	b.mu.Lock()
+	expectedMsgID := b.interactiveMsgIDs[cb.Adapter]
+	b.mu.Unlock()
+	if expectedMsgID != "" && cb.MessageID != expectedMsgID {
+		debug.Log("im", "dropping stale interactive callback: adapter=%s messageID=%q expected=%q",
+			cb.Adapter, cb.MessageID, expectedMsgID)
+		return
+	}
+
 	// Determine the choice value from the callback.
 	// For multi-select, each click toggles a selection; __done__ submits.
 	choice := ""
@@ -163,6 +180,7 @@ func (b *DaemonBridge) handleInteractiveCallback(cb InteractiveCallback) {
 	// and block forever (deadlock).
 	b.mu.Lock()
 	b.pendingAsk = nil
+	b.interactiveMsgIDs = nil
 	b.mu.Unlock()
 }
 

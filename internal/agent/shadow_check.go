@@ -406,6 +406,11 @@ func findShadowInBlock(block *ast.BlockStmt, outerVars map[string]bool,
 							if localVars[name.Name] {
 								recordShadow(name, fset, results, seen)
 							}
+							// #325: var/const declarations count as "declared in
+							// this block" for := reuse semantics, so a later
+							// `buf, err := f()` after `var buf []byte` reuses
+							// buf instead of shadowing it.
+							blockDeclared[name.Name] = true
 							localVars[name.Name] = true
 						}
 					}

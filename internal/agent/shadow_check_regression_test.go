@@ -1,6 +1,9 @@
 package agent
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // Regression tests for issue #316: shadow_check false positives.
 
@@ -114,5 +117,59 @@ func process() error {
 	warnings := checkVarShadowing("main.go", old, new)
 	if len(warnings) == 0 {
 		t.Fatal("expected shadowing warning for err shadowing outer scope err")
+	}
+}
+
+// #325: a var declaration in the same block counts as an existing
+// declaration for := reuse — `var n int; ...; n, err := g()` must not warn.
+func TestCheckVarShadowing_NoFP_VarDeclThenDefineReuse(t *testing.T) {
+	newSrc := `package main
+
+func f(cond bool) error {
+	if cond {
+		var buf []byte
+		buf, err := readAll()
+		if err != nil {
+			return err
+		}
+		_ = buf
+	}
+	return nil
+}
+
+func readAll() ([]byte, error) { return nil, nil }
+`
+	warnings := checkVarShadowing("main.go", "", newSrc)
+	for _, w := range warnings {
+		if strings.Contains(w, "buf") {
+			t.Errorf("false positive: buf reuse after var decl reported: %v", w)
+		}
+	}
+}
+
+// Control: var in outer scope + := inside a *nested* block still reports.
+func TestCheckVarShadowing_StillDetects_VarOuterShadow(t *testing.T) {
+	newSrc := `package main
+
+func f(cond bool) {
+	var n int = 1
+	if cond {
+		n, err := g()
+		_ = n
+		_ = err
+	}
+}
+
+func g() (int, error) { return 0, nil }
+`
+	warnings := checkVarShadowing("main.go", "", newSrc)
+	found := false
+	for _, w := range warnings {
+		if strings.Contains(w, "n") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected real shadowing of n to still be reported, got: %v", warnings)
 	}
 }
