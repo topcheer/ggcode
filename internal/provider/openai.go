@@ -403,6 +403,12 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 						streamError = true
 						return
 					}
+					// Retry the connection on the next attempt instead of
+					// falling through to the CONNECT FATAL path. Without
+					// this, the sleep above runs but the goroutine then
+					// returns a fatal error — the retry loop is dead code
+					// and every transient 502/503/504/429 kills the run.
+					continue
 				}
 				debug.Log("openai", "CONNECT FATAL model=%s baseURL=%s attempt=%d/%d: %T: %v", p.model, p.baseURL, attempt+1, providerRetryAttempts, err, err)
 				ch <- StreamEvent{Type: StreamEventError, Error: fmt.Errorf("openai stream: %w", err)}

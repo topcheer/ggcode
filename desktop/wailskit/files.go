@@ -27,6 +27,25 @@ func ListDirectory(dir string, recursive bool) ([]FileInfo, error) {
 		return nil, fmt.Errorf("resolve path: %w", err)
 	}
 
+	// Security: resolve symlinks so a link inside the working directory
+	// cannot point outside it, then verify containment (mirrors
+	// ReadFileContent's boundary check).
+	wd, err := os.Getwd()
+	if err != nil {
+		return nil, fmt.Errorf("get working directory: %w", err)
+	}
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return nil, fmt.Errorf("resolve path: %w", err)
+	}
+	rel, err := filepath.Rel(wd, resolved)
+	if err != nil {
+		return nil, fmt.Errorf("resolve relative path: %w", err)
+	}
+	if strings.HasPrefix(rel, "..") {
+		return nil, fmt.Errorf("access denied: path outside working directory")
+	}
+
 	// Security: verify the path exists and is a directory
 	info, err := os.Stat(abs)
 	if err != nil {
@@ -99,11 +118,18 @@ func ReadFileContent(path string) (string, error) {
 		return "", fmt.Errorf("resolve path: %w", err)
 	}
 
+	// Security: filepath.Abs only lexically cleans the path — it does NOT
+	// resolve symlinks. A symlink located inside the working directory but
+	// pointing outside would pass the containment check below while
+	// os.ReadFile follows it to an arbitrary target. Resolve symlinks
+	// FIRST, then verify containment against the resolved path.
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", fmt.Errorf("resolve path: %w", err)
+	}
+
 	// Security: verify the resolved path is within the working directory.
-	// filepath.Clean + Abs already resolved all ".." sequences, so checking
-	// for ".." after Clean is useless. Instead, check that the resolved
-	// path is within the working directory.
-	rel, err := filepath.Rel(wd, abs)
+	rel, err := filepath.Rel(wd, resolved)
 	if err != nil {
 		return "", fmt.Errorf("resolve relative path: %w", err)
 	}
@@ -111,7 +137,7 @@ func ReadFileContent(path string) (string, error) {
 		return "", fmt.Errorf("access denied: path outside working directory")
 	}
 
-	data, err := os.ReadFile(abs)
+	data, err := os.ReadFile(resolved)
 	if err != nil {
 		return "", fmt.Errorf("read file: %w", err)
 	}

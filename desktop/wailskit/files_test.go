@@ -8,12 +8,29 @@ import (
 	"testing"
 )
 
+// chdir changes the working directory for the duration of the test and
+// restores it afterward. The ListDirectory containment check (#146) now
+// restricts access to the working directory, so tests that list temp
+// directories must run from inside them.
+func chdir(t *testing.T, dir string) {
+	t.Helper()
+	old, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chdir(old) })
+}
+
 func TestListDirectory_NonRecursive(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hello"), 0644)
 	os.Mkdir(filepath.Join(dir, "sub"), 0755)
+	chdir(t, dir)
 
-	entries, err := ListDirectory(dir, false)
+	entries, err := ListDirectory("", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,8 +59,9 @@ func TestListDirectory_Recursive(t *testing.T) {
 	dir := t.TempDir()
 	os.MkdirAll(filepath.Join(dir, "sub", "deep"), 0755)
 	os.WriteFile(filepath.Join(dir, "sub", "deep", "c.txt"), []byte("x"), 0644)
+	chdir(t, dir)
 
-	entries, err := ListDirectory(dir, true)
+	entries, err := ListDirectory("", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +95,8 @@ func TestListDirectory_NonExistent(t *testing.T) {
 
 func TestListDirectory_EmptyDir(t *testing.T) {
 	dir := t.TempDir()
-	entries, err := ListDirectory(dir, false)
+	chdir(t, dir)
+	entries, err := ListDirectory("", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,11 +106,68 @@ func TestListDirectory_EmptyDir(t *testing.T) {
 }
 
 func TestListDirectory_NotADirectory(t *testing.T) {
-	f := filepath.Join(t.TempDir(), "file.txt")
+	dir := t.TempDir()
+	f := filepath.Join(dir, "file.txt")
 	os.WriteFile(f, []byte("x"), 0644)
-	_, err := ListDirectory(f, false)
+	chdir(t, dir)
+	_, err := ListDirectory("file.txt", false)
 	if err == nil {
 		t.Fatal("expected error when path is not a directory")
+	}
+}
+
+func TestListDirectory_OutsideWorkingDir(t *testing.T) {
+	// #146: listing a directory outside the working directory must be denied.
+	dir := t.TempDir()
+	chdir(t, dir)
+	_, err := ListDirectory(os.TempDir(), false)
+	if err == nil {
+		t.Fatal("expected access denied for directory outside working directory")
+	}
+}
+
+// #146: a symlink inside the working directory that points outside must be
+// rejected — filepath.Abs alone does not resolve symlinks.
+func TestReadFileContent_SymlinkBypass(t *testing.T) {
+	dir := t.TempDir()
+	chdir(t, dir)
+
+	outside := filepath.Join(dir, "..", "secret_target.txt")
+	if err := os.WriteFile(outside, []byte("password"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(outside)
+
+	link := filepath.Join(dir, "leaky_link")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlink creation failed: %v", err)
+	}
+
+	_, err := ReadFileContent("leaky_link")
+	if err == nil {
+		t.Fatal("expected access denied for symlink pointing outside working directory")
+	}
+}
+
+// #146: ListDirectory must also resolve symlinks before containment check.
+func TestListDirectory_SymlinkBypass(t *testing.T) {
+	dir := t.TempDir()
+	chdir(t, dir)
+
+	outside := filepath.Join(dir, "..", "secret_dir")
+	if err := os.Mkdir(outside, 0755); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(outside)
+
+	link := filepath.Join(dir, "leaky_dir")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlink creation failed: %v", err)
+	}
+
+	_, err := ListDirectory("leaky_dir", false)
+	if err == nil {
+		t.Fatal("expected access denied for symlinked directory outside working directory")
 	}
 }
 

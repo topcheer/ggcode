@@ -302,14 +302,16 @@ func (h *TaskHandler) execute(ctx context.Context, t *Task, perm *SkillPermissio
 		// this old goroutine should silently exit without overriding the state.
 		h.mu.Lock()
 		currentState := t.Status.State
+		_, hasActiveCancel := h.cancels[t.ID]
 		h.mu.Unlock()
 		if currentState == TaskStateWorking {
-			// Verify OUR context is still the active one — if continueTask
-			// replaced it, we're a stale goroutine and should exit silently.
-			if activeCancel, ok := h.cancels[t.ID]; ok {
-				_ = activeCancel
-				// Our context was cancelled but a new one exists — stale goroutine.
-				h.cleanupCancel(t.ID)
+			// If OUR context was cancelled but another cancel exists in the
+			// map, continueTask installed a NEW context for the resumed task
+			// and we are the stale goroutine. Exit WITHOUT calling
+			// cleanupCancel — that would call the NEW cancel (destroying the
+			// resumed task's context) and delete it from the map (leaving the
+			// resumed task uncancelable). Just return and let G2 proceed.
+			if hasActiveCancel {
 				return
 			}
 			h.updateStatus(t, TaskStateCanceled, "canceled by client")
