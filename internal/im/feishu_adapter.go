@@ -389,6 +389,13 @@ func (a *feishuAdapter) handleLarkMessageEvent(ctx context.Context, event *larki
 			debug.Log("feishu", "adapter=%s unauthorized inbound chat=%s", a.name, chatID)
 			return
 		}
+		// Processing failed — the message would otherwise be silently dropped
+		// (the webhook already replied 200, so Feishu will not retry). Acknowledge
+		// the failure back to the sender via the chat so they know to retry (#260).
+		// Reply failure is only logged, never recursed.
+		if _, sendErr := a.sendTextMessage(ctx, chatID, "message could not be delivered (session not ready), please retry"); sendErr != nil {
+			debug.Log("feishu", "adapter=%s failed to notify sender of delivery error: %v", a.name, sendErr)
+		}
 		if err != ErrNoChannelBound {
 			a.publishState(false, "warning", err.Error())
 		}
@@ -777,6 +784,13 @@ func (a *feishuAdapter) handleMessageEvent(ctx context.Context, event map[string
 		if err == ErrInboundChannelDenied {
 			debug.Log("feishu", "adapter=%s unauthorized inbound chat=%s", a.name, chatID)
 			return
+		}
+		// Processing failed — the message would otherwise be silently dropped
+		// (the webhook already replied 200, so Feishu will not retry). Acknowledge
+		// the failure back to the sender via the chat so they know to retry (#260).
+		// Reply failure is only logged, never recursed.
+		if _, sendErr := a.sendTextMessage(ctx, chatID, "message could not be delivered (session not ready), please retry"); sendErr != nil {
+			debug.Log("feishu", "adapter=%s failed to notify sender of delivery error: %v", a.name, sendErr)
 		}
 		if err != ErrNoChannelBound {
 			a.publishState(false, "warning", err.Error())

@@ -3113,7 +3113,7 @@ func (b *ChatBridge) Close() {
 	b.mu.Unlock()
 	if ses != nil && store != nil {
 		if jsonlStore, ok := store.(*session.JSONLStore); ok {
-			wasDeleted := !ses.HasUserInteraction()
+			wasDeleted := jsonlStore.WillCleanupIfEmpty(ses)
 			if err := jsonlStore.CleanupIfEmpty(ses); err != nil {
 				log.Printf("[chat] Close: cleanup empty session failed: %v", err)
 			} else if wasDeleted {

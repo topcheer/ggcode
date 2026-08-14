@@ -24,9 +24,33 @@ type MCPServerInfo struct {
 	OAuthRequired bool              `json:"oauthRequired,omitempty"`
 }
 
-// ListMCPServers returns all configured MCP servers.
+// loadSessionScopedConfig loads the config matching the active chat session's
+// scope (#248). When a session is bound to a workspace that has its own
+// ggcode.yaml, MCP servers live in that workspace's mcp_servers.yaml — the
+// same file the session's mcpManager reads. Otherwise the global config is
+// used. Without this, Add/Remove/List would touch the global file while the
+// session runs workspace servers, so changes never took effect (and removals
+// resurrected on reload).
+func loadSessionScopedConfig() (*config.Config, error) {
+	globalMu.RLock()
+	chat := activeChatBridge
+	globalMu.RUnlock()
+	workDir := ""
+	if chat != nil {
+		workDir = chat.WorkingDir()
+	}
+	if workDir == "" {
+		return config.Load(config.ConfigPath())
+	}
+	// Same loader the session uses (config.go LoadConfigForWorkspace), so the
+	// MCP list and save target match what the session's mcpManager reads.
+	return LoadConfigForWorkspace(workDir)
+}
+
+// ListMCPServers returns all configured MCP servers for the active session's
+// scope (workspace config when bound to a workspace, global otherwise).
 func ListMCPServers() ([]MCPServerInfo, error) {
-	cfg, err := config.Load(config.ConfigPath())
+	cfg, err := loadSessionScopedConfig()
 	if err != nil {
 		return nil, fmt.Errorf("load config: %w", err)
 	}
@@ -118,7 +142,7 @@ func ForceReauthMCPServer(name string) bool {
 //   - "headers_*": HTTP headers (keys like "headers_Authorization")
 //   - "env_*": environment variables (keys like "env_KEY")
 func AddMCPServer(values map[string]string) error {
-	cfg, err := config.Load(config.ConfigPath())
+	cfg, err := loadSessionScopedConfig()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
@@ -128,9 +152,25 @@ func AddMCPServer(values map[string]string) error {
 		return fmt.Errorf("name is required")
 	}
 
+	// Preserve the existing server's type when the form omits it (#249):
+	// a form defaulting to "stdio" must not silently flip an http/ws server.
+	// UpsertMCPServer patches only non-zero fields, so an explicit empty type
+	// keeps the stored value; new servers still default to stdio.
+	var existing *config.MCPServerConfig
+	for i := range cfg.MCPServers {
+		if cfg.MCPServers[i].Name == name {
+			existing = &cfg.MCPServers[i]
+			break
+		}
+	}
+
 	serverType := values["type"]
 	if serverType == "" {
-		serverType = "stdio"
+		if existing != nil && existing.Type != "" {
+			serverType = existing.Type
+		} else {
+			serverType = "stdio"
+		}
 	}
 
 	serverCfg := config.MCPServerConfig{
@@ -170,12 +210,15 @@ func AddMCPServer(values map[string]string) error {
 	}
 
 	cfg.UpsertMCPServer(serverCfg)
-	return cfg.Save()
+	// SaveMCPServers writes only the scope's mcp_servers.yaml. A full cfg.Save()
+	// would also rewrite the main config file for what is an MCP-only change.
+	return cfg.SaveMCPServers()
 }
 
-// RemoveMCPServer removes an MCP server by name.
+// RemoveMCPServer removes an MCP server by name from the active session's
+// scope (workspace mcp_servers.yaml when bound to a workspace, else global).
 func RemoveMCPServer(name string) error {
-	cfg, err := config.Load(config.ConfigPath())
+	cfg, err := loadSessionScopedConfig()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}

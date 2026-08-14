@@ -494,7 +494,13 @@ func (s *Server) handleTaskList(w http.ResponseWriter, req *JSONRPCRequest) {
 		params.PageSize = 100
 	}
 
-	tasks, nextToken := s.handler.ListTasks(params.PageToken, params.PageSize)
+	tasks, nextToken, err := s.handler.ListTasks(params.PageToken, params.PageSize)
+	if err != nil {
+		// Stale pageToken (task deleted by cleanup) — surface as invalid
+		// params instead of silently restarting pagination (fix #258).
+		writeRPCError(w, req.ID, ErrInvalidParams)
+		return
+	}
 	writeRPCResult(w, req.ID, map[string]interface{}{
 		"tasks":     tasks,
 		"nextToken": nextToken,

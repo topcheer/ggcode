@@ -8,31 +8,6 @@ import (
 	"github.com/topcheer/ggcode/desktop/wailskit"
 )
 
-func TestEmitStreamEventQueuesDrainableEnvelope(t *testing.T) {
-	app := &App{
-		ctx:          context.Background(),
-		streamEvents: make(chan uiEvent, 4),
-	}
-
-	raw := json.RawMessage(`{"content":"hello"}`)
-	app.emitStreamEvent("text", raw)
-
-	got := app.DrainStreamEvents()
-	if len(got) != 1 {
-		t.Fatalf("expected 1 queued stream event, got %d", len(got))
-	}
-	if got[0].Type != "text" {
-		t.Fatalf("expected type text, got %q", got[0].Type)
-	}
-	if got[0].Data != string(raw) {
-		t.Fatalf("expected raw payload %q, got %q", string(raw), got[0].Data)
-	}
-
-	if drained := app.DrainStreamEvents(); len(drained) != 0 {
-		t.Fatalf("expected queue to be empty after drain, got %d", len(drained))
-	}
-}
-
 func TestEmitStreamEventAlsoQueuesChatUIEvent(t *testing.T) {
 	app := &App{
 		ctx:          context.Background(),

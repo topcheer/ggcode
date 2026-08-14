@@ -872,13 +872,17 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 	allMessages = dedupMessageRecords(allMessages)
 	postCPEntries = dedupLightweightEntries(postCPEntries)
 
-	// ── ses.Messages: ALL message records from the file (for rendering) ──
-	// This is the FULL conversation history. Every message record ever
-	// appended to the JSONL file is loaded here, regardless of checkpoints.
-	// The TUI uses this to render the complete conversation on reload.
+	// ── ses.Messages: message records from the file (for rendering) ──
+	// Under time-windowed loading (fullLoad=false, >recentMessageThreshold
+	// messages), only messages within RecentMessageWindow of the last message
+	// are kept here; older records are skipped above. With fullLoad=true this
+	// is the full conversation history. The TUI renders from this slice on
+	// reload.
 	//
 	// ⚠️ Never filter or truncate this by checkpoint — that would silently
-	// destroy conversation history the user expects to see.
+	// destroy conversation history the user expects to see. Note that the
+	// time-window filter above means ses.Messages is NOT reliable for
+	// deletion decisions; use HasUserInteractionOnDisk for those.
 	for _, rec := range allMessages {
 		if rec.Message != nil {
 			ses.Messages = append(ses.Messages, *rec.Message)
@@ -1330,10 +1334,13 @@ func (s *JSONLStore) repairIndex(idx []indexEntry) (bool, error) {
 		if !found {
 			ses, loadErr := s.loadSession(id)
 			if loadErr == nil {
-				if ses.HasUserInteraction() {
-					newIdx = append(newIdx, sessionToIndexEntry(ses))
-				} else {
+				if !s.HasUserInteractionOnDisk(id) {
+					// Same full-file check as CleanupIfEmpty: time-windowed loading must
+					// not cause deletion of sessions whose user messages are all older
+					// than RecentMessageWindow (#254).
 					_ = os.Remove(s.sessionPath(id))
+				} else {
+					newIdx = append(newIdx, sessionToIndexEntry(ses))
 				}
 				changed = true
 			}
@@ -1360,13 +1367,74 @@ func (s *JSONLStore) Delete(id string) error {
 	return s.removeFromIndex(id)
 }
 
+// HasUserInteractionOnDisk streams the session's JSONL file and reports
+// whether it contains at least one user message with actual text content.
+// Unlike Session.HasUserInteraction, this is NOT affected by time-windowed
+// loading — it always reflects the full file on disk.
+//
+// Returns false if the file cannot be read (callers must treat this as
+// "unknown" and avoid destructive actions based on it).
+func (s *JSONLStore) HasUserInteractionOnDisk(id string) bool {
+	path := s.sessionPath(id)
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" {
+			continue
+		}
+		var rec jsonlRecord
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			continue
+		}
+		if rec.Type != "message" || rec.Message == nil || rec.Message.Role != "user" {
+			continue
+		}
+		for _, b := range rec.Message.Content {
+			if b.Type == "text" && strings.TrimSpace(b.Text) != "" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // CleanupIfEmpty deletes the session file if it has no user interaction.
 // Called on exit to avoid leaving empty session files on disk.
+//
+// The check uses HasUserInteractionOnDisk (full-file scan), NOT the
+// in-memory ses.Messages: time-windowed loading drops messages older than
+// RecentMessageWindow from ses.Messages, which previously caused this
+// method to silently delete sessions whose user messages were all >24h old
+// (#254). The full scan is acceptable here because this is a low-frequency
+// exit-path call.
 func (s *JSONLStore) CleanupIfEmpty(ses *Session) error {
-	if ses.HasUserInteraction() {
+	if !s.WillCleanupIfEmpty(ses) {
+		if !ses.HasUserInteraction() {
+			debug.Log("session", "CleanupIfEmpty: keeping session %s — user messages found on disk outside load window", ses.ID)
+		}
 		return nil
 	}
 	return s.Delete(ses.ID)
+}
+
+// WillCleanupIfEmpty reports whether CleanupIfEmpty would delete this session,
+// using the same decision logic (in-memory check first, then full-file scan).
+// Callers that react to the deletion (e.g. clearing IM bindings) should use
+// this instead of !ses.HasUserInteraction(), which can disagree with
+// CleanupIfEmpty under time-windowed loading (#254).
+func (s *JSONLStore) WillCleanupIfEmpty(ses *Session) bool {
+	if ses.HasUserInteraction() {
+		return false
+	}
+	// Windowed load may have dropped user messages — verify against the file.
+	return !s.HasUserInteractionOnDisk(ses.ID)
 }
 
 // LatestForWorkspace returns the most recently updated session for the

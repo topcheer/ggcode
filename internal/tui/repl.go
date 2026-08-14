@@ -1469,7 +1469,7 @@ func (r *REPL) Run() error {
 		// Clean up empty session files — sessions without any user interaction
 		// are deleted to avoid cluttering the sessions directory.
 		if jsonlStore, ok := r.store.(*session.JSONLStore); ok {
-			wasDeleted := !exitSes.HasUserInteraction()
+			wasDeleted := jsonlStore.WillCleanupIfEmpty(exitSes)
 			if err := jsonlStore.CleanupIfEmpty(exitSes); err != nil {
 				debug.Log("repl", "exit cleanup: failed to delete empty session: %v", err)
 			} else if wasDeleted && r.imManager != nil {

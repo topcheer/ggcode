@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/tool"
@@ -160,11 +161,19 @@ func (t *mcpTool) Execute(ctx context.Context, input json.RawMessage) (tool.Resu
 	// API responses) that could flood the context. 50KB matches web_fetch.
 	const maxMCPResultBytes = 50 * 1024
 	if len(content) > maxMCPResultBytes {
-		content = content[:maxMCPResultBytes] +
+		// Byte-slicing can split a multi-byte UTF-8 rune (Chinese text hits
+		// this often at 50KB), producing invalid UTF-8 downstream. Back up to
+		// the nearest rune boundary before truncating (same pattern as
+		// internal/util/truncate.go, fix #262).
+		end := maxMCPResultBytes
+		for end > 0 && !utf8.RuneStart(content[end]) {
+			end--
+		}
+		content = content[:end] +
 			fmt.Sprintf("\n\n[... MCP result truncated: %d bytes total, showing first %d ...]",
-				len(content), maxMCPResultBytes)
+				len(content), end)
 		debug.Log("mcp", "result truncated: server=%s tool=%s total=%d cap=%d",
-			t.srvName, t.toolName, len(content), maxMCPResultBytes)
+			t.srvName, t.toolName, len(content), end)
 	}
 
 	return tool.Result{

@@ -267,11 +267,38 @@ func (c *Config) UpsertMCPServer(server MCPServerConfig) (replaced bool) {
 		if existing.Name != server.Name {
 			continue
 		}
-		c.MCPServers[i] = server
+		c.MCPServers[i] = patchMCPServerConfig(existing, server)
 		return true
 	}
 	c.MCPServers = append(c.MCPServers, server)
 	return false
+}
+
+// patchMCPServerConfig overlays the non-zero fields of patch onto base and
+// returns the merged config. Zero values (empty string, nil map/slice) mean
+// "not provided" and keep the existing value, so editing a single field does
+// not silently clear env/args/headers on an already-configured server (#249).
+func patchMCPServerConfig(base, patch MCPServerConfig) MCPServerConfig {
+	merged := base
+	if patch.Type != "" {
+		merged.Type = patch.Type
+	}
+	if patch.Command != "" {
+		merged.Command = patch.Command
+	}
+	if patch.URL != "" {
+		merged.URL = patch.URL
+	}
+	if len(patch.Args) > 0 {
+		merged.Args = patch.Args
+	}
+	if len(patch.Env) > 0 {
+		merged.Env = patch.Env
+	}
+	if len(patch.Headers) > 0 {
+		merged.Headers = patch.Headers
+	}
+	return merged
 }
 
 func (c *Config) RemoveMCPServer(name string) bool {

@@ -505,7 +505,13 @@ if urls is not missing value then
 		if p is not missing value then set end of out to p
 	end repeat
 end if
-return out as text`
+-- Join with linefeed instead of AppleScript's default ", " so file names
+-- containing commas are not split. Save and restore original delimiters.
+set savedDelimiters to AppleScript's text item delimiters
+set AppleScript's text item delimiters to {linefeed}
+set result to out as text
+set AppleScript's text item delimiters to savedDelimiters
+return result`
 	cmd := exec.Command("osascript", "-e", script)
 	output, err := cmd.Output()
 	if err != nil {
@@ -516,19 +522,20 @@ return out as text`
 
 func parseClipboardPathOutput(output string) []string {
 	var paths []string
-	for _, part := range strings.Split(strings.ReplaceAll(output, "\r", "\n"), "\n") {
-		for _, item := range strings.Split(part, ", ") {
-			item = strings.TrimSpace(item)
-			if item == "" {
-				continue
-			}
-			if strings.HasPrefix(item, "file://") {
-				if u, err := url.Parse(item); err == nil {
-					item = u.Path
-				}
-			}
-			paths = append(paths, item)
+	// Split only by newlines. The AppleScript above joins the path list with
+	// linefeed, so no ", " secondary split is needed (and it would corrupt
+	// file names containing ", ").
+	for _, item := range strings.Split(strings.ReplaceAll(output, "\r", "\n"), "\n") {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
 		}
+		if strings.HasPrefix(item, "file://") {
+			if u, err := url.Parse(item); err == nil {
+				item = u.Path
+			}
+		}
+		paths = append(paths, item)
 	}
 	return paths
 }
@@ -1458,11 +1465,25 @@ type FileBinaryData struct {
 	Data     string `json:"data"` // base64 encoded
 }
 
+// maxReadFileBase64Bytes caps files returned by ReadFileAsBase64 (FileBrowser
+// PDF/media preview). Rationale: Wails bridge memory peak is roughly
+// size*1.33 (base64) plus the JS string copy; 150MB (~200MB after base64)
+// balances protection against legitimate large media previews.
+const maxReadFileBase64Bytes = 150 << 20
+
 // ReadFileAsBase64 reads a binary file (image, PDF, etc.) and returns base64 data.
 func (a *App) ReadFileAsBase64(path string) (*FileBinaryData, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return nil, err
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		return nil, err
+	}
+	if info.Size() > maxReadFileBase64Bytes {
+		return nil, fmt.Errorf("file is %.1fMB, exceeding the %dMB preview limit; please open it in an external application instead",
+			float64(info.Size())/(1<<20), maxReadFileBase64Bytes/(1<<20))
 	}
 	data, err := os.ReadFile(abs)
 	if err != nil {

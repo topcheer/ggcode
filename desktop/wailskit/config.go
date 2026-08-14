@@ -611,8 +611,24 @@ func AddCustomEndpoint(vendor, name, protocol, baseURL, apiKey string) error {
 		ep.BaseURL = baseURL
 	}
 	if apiKey != "" {
-		ep.APIKey = apiKey
+		// Secrets never go to vendors.yaml in plaintext (#250): persist the
+		// key to keys.env (0600, managed) and store a ${VAR} reference in the
+		// endpoint config. Resolution: config.Load seeds keys.env vars into
+		// the process env (env.go loadRuntimeEnv) and ResolveActiveEndpoint
+		// expands ${VAR} via ExpandEnv, so the reference resolves at startup.
+		// Setenv here makes the key usable immediately in this process too.
+		envVar := config.PreferredEndpointAPIKeyEnvVar(vendor, name)
+		if err := config.WriteKeysEnv(map[string]string{envVar: apiKey}); err != nil {
+			return fmt.Errorf("saving API key: %w", err)
+		}
+		os.Setenv(envVar, apiKey)
+		ep.APIKey = "${" + envVar + "}"
 	}
+	// An empty apiKey leaves the stored value untouched: the frontend's add/
+	// edit form submits an empty key when the user did not (re)enter one, so
+	// clearing here would wipe keys on unrelated edits. Legacy plaintext keys
+	// already on disk are migrated to keys.env by Save() via
+	// MigrateVendorsFilePlaintextAPIKeys.
 	if name != "" {
 		ep.DisplayName = name
 	}
@@ -949,8 +965,12 @@ func StartAnthropicOAuth() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("starting OAuth flow: %w", err)
 	}
-	// Store flow for completion
+	// Store flow for completion, closing any previous unfinished flow to
+	// avoid leaking its callback HTTP listener and receiver goroutine.
 	oauthMu.Lock()
+	if currentOAuthFlow != nil {
+		currentOAuthFlow.Close()
+	}
 	currentOAuthFlow = flow
 	oauthMu.Unlock()
 	return flow.AutoURL, nil

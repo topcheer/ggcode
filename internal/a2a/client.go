@@ -192,16 +192,36 @@ func (c *Client) NegotiateAuth() error {
 		}
 	}
 
-	// Also check if client already has a configured auth that might work
+	// Also check if client already has a configured auth that might work.
+	// The apiKey fallback is only allowed when the server actually declares
+	// an apiKey security scheme — otherwise a client constructed with
+	// NewClient(url, "some-key") would silently "succeed" against a server
+	// that only accepts bearer/oauth2 and fail later with 401 on the first
+	// real request (fix #257).
 	c.mu.RLock()
 	method := c.authMethod
 	c.mu.RUnlock()
 	if method != "" {
-		return nil
+		if method != "apiKey" || c.cardDeclaresAPIKey() {
+			return nil
+		}
+		return fmt.Errorf("a2a: server requires bearer/oauth2 but client only has an apiKey (server schemes: %v); use WithBearerToken or WithTokenProvider",
+			schemeNames(c.card.SecuritySchemes))
 	}
 
 	return fmt.Errorf("a2a: server requires authentication but client has no matching credential (schemes: %v)",
 		schemeNames(c.card.SecuritySchemes))
+}
+
+// cardDeclaresAPIKey reports whether the discovered AgentCard declares any
+// apiKey security scheme (fix #257).
+func (c *Client) cardDeclaresAPIKey() bool {
+	for _, scheme := range c.card.SecuritySchemes {
+		if scheme.Type == "apiKey" {
+			return true
+		}
+	}
+	return false
 }
 
 // tryBearerToken checks if we have a valid bearer token, or tries to obtain one.

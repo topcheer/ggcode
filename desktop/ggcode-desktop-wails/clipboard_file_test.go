@@ -1,0 +1,81 @@
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestParseClipboardPathOutputSplitsOnlyByLines(t *testing.T) {
+	output := "/tmp/report, final.txt\n/tmp/other.txt\n"
+	paths := parseClipboardPathOutput(output)
+	if len(paths) != 2 {
+		t.Fatalf("expected 2 paths, got %d: %v", len(paths), paths)
+	}
+	if paths[0] != "/tmp/report, final.txt" {
+		t.Fatalf("expected comma-containing file name preserved, got %q", paths[0])
+	}
+	if paths[1] != "/tmp/other.txt" {
+		t.Fatalf("expected %q, got %q", "/tmp/other.txt", paths[1])
+	}
+}
+
+func TestParseClipboardPathOutputFileURLAndCR(t *testing.T) {
+	output := "file:///tmp/a%20b.txt\r\n/tmp/c.txt"
+	paths := parseClipboardPathOutput(output)
+	if len(paths) != 2 {
+		t.Fatalf("expected 2 paths, got %d: %v", len(paths), paths)
+	}
+	if paths[0] != "/tmp/a b.txt" {
+		t.Fatalf("expected decoded file URL path, got %q", paths[0])
+	}
+}
+
+func TestReadFileAsBase64SizeLimit(t *testing.T) {
+	dir := t.TempDir()
+	big := filepath.Join(dir, "big.bin")
+	// 150MB would be too slow to write fully; create a sparse file instead
+	// by seeking past the limit and writing one byte.
+	f, err := os.OpenFile(big, os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Seek(maxReadFileBase64Bytes+1, 0); err != nil {
+		f.Close()
+		t.Fatal(err)
+	}
+	if _, err := f.Write([]byte("x")); err != nil {
+		f.Close()
+		t.Fatal(err)
+	}
+	f.Close()
+
+	app := &App{}
+	_, err = app.ReadFileAsBase64(big)
+	if err == nil {
+		t.Fatal("expected size-limit error for oversized file")
+	}
+	if !strings.Contains(err.Error(), "150MB") {
+		t.Fatalf("expected error to mention 150MB limit, got %q", err.Error())
+	}
+}
+
+func TestReadFileAsBase64SmallFileOK(t *testing.T) {
+	dir := t.TempDir()
+	small := filepath.Join(dir, "small.txt")
+	if err := os.WriteFile(small, []byte("hello"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	app := &App{}
+	data, err := app.ReadFileAsBase64(small)
+	if err != nil {
+		t.Fatalf("expected success, got %v", err)
+	}
+	if data.MimeType != "application/octet-stream" {
+		t.Fatalf("unexpected mime %q", data.MimeType)
+	}
+	if data.Data != "aGVsbG8=" {
+		t.Fatalf("expected base64 'aGVsbG8=', got %q", data.Data)
+	}
+}

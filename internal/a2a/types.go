@@ -222,7 +222,8 @@ type OAuthFlowDeviceCode struct {
 // Security describes a security scheme (API Key only for now).
 // Deprecated: Use SecurityScheme instead. Kept for backward compat.
 type Security struct {
-	Type        string `json:"type"`               // "apiKey"
+	Type        string `json:"type"`               // "apiKey" or "http"
+	Scheme      string `json:"scheme,omitempty"`   // "bearer" when Type == "http" (A2A spec 4.5)
 	Location    string `json:"location,omitempty"` // "header"
 	Name        string `json:"name,omitempty"`     // "X-API-Key"
 	Description string `json:"description,omitempty"`

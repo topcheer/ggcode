@@ -314,6 +314,12 @@ func (a *tgAdapter) handleUpdate(ctx context.Context, update map[string]any) {
 			_ = a.sendUnauthorized(ctx, chatID, msgID)
 			return
 		}
+		// Processing failed — the message would otherwise be silently dropped.
+		// Acknowledge the failure back to the sender so they know to retry (#260).
+		// Reply failure is only logged, never recursed.
+		if sendErr := a.sendReplyText(ctx, chatID, msgID, "message could not be delivered (session not ready), please retry"); sendErr != nil {
+			debug.Log("tg", "adapter=%s failed to notify sender of delivery error: %v", a.name, sendErr)
+		}
 		if err != ErrNoChannelBound {
 			a.publishState(false, "warning", err.Error())
 		}

@@ -3,6 +3,7 @@ package tool
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 )
@@ -108,6 +109,12 @@ func coerceInteger(val json.RawMessage) (json.RawMessage, bool) {
 	}
 	// Tolerate "42.0" — models sometimes send floats for integer fields.
 	if f, err := strconv.ParseFloat(s, 64); err == nil {
+		// Guard against overflow: converting out-of-range floats (e.g. "1e300")
+		// to int64 is undefined in Go and would silently produce garbage.
+		// Reject the coercion so downstream reports a type error (#261).
+		if f < math.MinInt64 || f > math.MaxInt64 {
+			return val, false
+		}
 		return json.RawMessage(strconv.FormatInt(int64(f), 10)), true
 	}
 	return val, false

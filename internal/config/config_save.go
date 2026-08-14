@@ -113,6 +113,13 @@ func (c *Config) Save() error {
 			debug.Log("config", "Save: recompact error: %v", err)
 		}
 	}
+	// Also migrate plaintext keys in the external vendors.yaml — it was split
+	// out of the main config file, so the main-file migration never sees it (#250).
+	if migrated, migrateErr := MigrateVendorsFilePlaintextAPIKeys(VendorsPath(c.externalConfigDir()), ""); migrateErr != nil {
+		debug.Log("config", "Save: vendors.yaml migration error: %v", migrateErr)
+	} else if len(migrated) > 0 {
+		debug.Log("config", "Save: migrated %d plaintext API keys out of vendors.yaml", len(migrated))
+	}
 	return nil
 }
 

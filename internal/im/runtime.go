@@ -1276,7 +1276,12 @@ func (m *Manager) pruneApprovalsLocked() {
 		if ap.state.Resolved {
 			delete(m.approvals, id)
 		} else if now.Sub(ap.state.Request.RequestedAt) > time.Hour {
-			// Abandoned approval — close the channel and remove.
+			// Abandoned approval — send Deny before closing so any consumer
+			// blocked on `decision := <-ch` reads an explicit denial instead
+			// of the zero value (permission.Allow), which would fail open
+			// (#259). The channel is buffered with capacity 1, so this send
+			// never blocks.
+			ap.response <- permission.Deny
 			close(ap.response)
 			delete(m.approvals, id)
 		}

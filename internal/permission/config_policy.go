@@ -242,6 +242,14 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 			if cmd != "" && p.detector.IsDangerous(cmd) {
 				return Deny, nil
 			}
+			// Data egress always requires human gating, even when a static
+			// config allow rule matched (#256): a tools.run_command: allow
+			// setting covers the command word while the payload can still
+			// exfiltrate credentials (curl -d @~/.ssh/id_rsa ...). Mirrors
+			// the cmdRules branch above and the bypass/auto branches.
+			if cmd != "" && IsNetworkExfiltrate(cmd) {
+				return Ask, nil
+			}
 		}
 		return d, nil
 	}

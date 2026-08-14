@@ -552,6 +552,61 @@ func writeKeysEnvTo(newEntries map[string]string, path string) error {
 	return nil
 }
 
+// MigrateVendorsFilePlaintextAPIKeys detects plaintext API keys in a
+// standalone vendors.yaml (external section file), persists them to keys.env,
+// and rewrites the YAML to use ${VAR} references. Vendors.yaml has vendor IDs
+// as top-level keys (no "vendors:" wrapper), so the raw map is wrapped before
+// reuse of the vendor detection/migration helpers and unwrapped before the
+// file is rewritten. Returns findings so callers can log the migration; when
+// no plaintext keys are found no file is touched.
+func MigrateVendorsFilePlaintextAPIKeys(vendorsPath, keysPath string) ([]APIKeyFinding, error) {
+	raw, err := loadRawConfigMap(vendorsPath)
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) == 0 {
+		return nil, nil
+	}
+
+	// Wrap under "vendors" so the shared detection/migration helpers apply.
+	wrapped := map[string]interface{}{"vendors": raw}
+	findings := detectPlaintextAPIKeysFromRaw(wrapped)
+	if len(findings) == 0 {
+		return nil, nil
+	}
+
+	envEntries := make(map[string]string)
+	for _, f := range findings {
+		if f.Section != "vendor" {
+			continue
+		}
+		migrateVendorFinding(wrapped, f, envEntries)
+	}
+	if len(envEntries) == 0 {
+		return nil, nil
+	}
+
+	if keysPath == "" {
+		keysPath = KeysEnvPath()
+	}
+	if err := writeKeysEnvTo(envEntries, keysPath); err != nil {
+		return nil, fmt.Errorf("writing keys.env: %w", err)
+	}
+
+	migrated, ok := wrapped["vendors"].(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("vendors section missing after migration: %s", vendorsPath)
+	}
+	updated, err := yaml.Marshal(migrated)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling migrated vendors.yaml: %w", err)
+	}
+	if err := writeSecureConfigFile(vendorsPath, updated); err != nil {
+		return nil, fmt.Errorf("writing migrated vendors.yaml %s: %w", vendorsPath, err)
+	}
+	return findings, nil
+}
+
 // migrateVendorFinding handles migration for vendors.{name}.api_key and
 // vendors.{name}.endpoints.{ep}.api_key.
 func migrateVendorFinding(raw map[string]interface{}, f APIKeyFinding, envEntries map[string]string) {

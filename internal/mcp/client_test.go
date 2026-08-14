@@ -801,13 +801,16 @@ func TestNotificationHandlerInvoked(t *testing.T) {
 		Response{JSONRPC: "2.0", ID: json.RawMessage(`1`), Result: json.RawMessage(`{"ok":true}`)},
 	)
 
+	var mu sync.Mutex
 	var receivedMethods []string
 	client := &Client{
 		name:   "notif-test",
 		reader: bufio.NewReader(bytes.NewReader(stream)),
 	}
 	client.SetNotificationHandler(func(method string, params json.RawMessage) {
+		mu.Lock()
 		receivedMethods = append(receivedMethods, method)
+		mu.Unlock()
 	})
 
 	resp, err := client.readResponse(context.Background(), nil, nil)
@@ -817,6 +820,19 @@ func TestNotificationHandlerInvoked(t *testing.T) {
 	if string(resp.Result) != `{"ok":true}` {
 		t.Fatalf("unexpected response: %s", string(resp.Result))
 	}
+	// Handlers are dispatched asynchronously (fix #255); poll briefly.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		n := len(receivedMethods)
+		mu.Unlock()
+		if n == 2 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	mu.Lock()
+	defer mu.Unlock()
 	if len(receivedMethods) != 2 {
 		t.Fatalf("expected 2 notifications, got %d: %v", len(receivedMethods), receivedMethods)
 	}
@@ -932,18 +948,26 @@ func TestClientWSMuFieldExists(t *testing.T) {
 }
 
 // Test #138: notification handler can re-enter sendRequest without deadlock.
+// Since fix #255 the handler is dispatched asynchronously, so this test
+// verifies that processNotification returns promptly (while c.mu and even
+// readMu are held by the caller) and that the handler still runs afterwards.
 func TestClientProcessNotificationNoLock(t *testing.T) {
 	c := NewClient("test", "ws", nil)
-	called := false
+	called := make(chan struct{}, 1)
 	c.SetNotificationHandler(func(method string, params json.RawMessage) {
-		called = true
+		called <- struct{}{}
 	})
-	// Simulate a notification arriving during a sendRequest read loop.
-	// c.mu is "held" by the outer sendRequest (we simulate by locking it).
+	// Simulate a notification arriving during a sendRequest read loop:
+	// both c.mu and readMu are held by the "outer" caller. Dispatch must
+	// not block on either lock.
 	c.mu.Lock()
+	c.readMu.Lock()
 	c.processNotification(&Notification{Method: "test/notify"})
+	c.readMu.Unlock()
 	c.mu.Unlock()
-	if !called {
+	select {
+	case <-called:
+	case <-time.After(5 * time.Second):
 		t.Error("expected notification handler to be called")
 	}
 }

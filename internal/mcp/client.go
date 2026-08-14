@@ -65,6 +65,14 @@ type Client struct {
 	// If nil, notifications are silently dropped (legacy behavior).
 	notificationHandler func(method string, params json.RawMessage)
 
+	// Notification dispatch (fix #255): handlers are invoked asynchronously
+	// from a dedicated goroutine so they can safely call back into the client
+	// (e.g. refreshTools → ListTools → sendRequest) even while the stdio read
+	// loop holds readMu. The channel is FIFO, preserving notification order.
+	notificationCh   chan *Notification
+	notificationOnce sync.Once
+	notificationDone chan struct{}
+
 	// samplingHandler processes sampling/createMessage requests from the
 	// server. If nil, sampling requests are rejected with an error.
 	samplingHandler SamplingHandler
@@ -405,6 +413,13 @@ func (c *Client) Abort() {
 		if cmd != nil && cmd.Process != nil {
 			// Kill the entire process group to prevent orphaned child processes.
 			killProcessGroup(cmd)
+		}
+
+		// Stop the notification dispatch worker (fix #255). The read loop is
+		// gone once the transport/process is torn down, so no new
+		// notifications can be queued after this point.
+		if c.notificationDone != nil {
+			close(c.notificationDone)
 		}
 	})
 }
@@ -1350,7 +1365,10 @@ func (c *Client) withStderr(err error) error {
 
 // SetNotificationHandler registers a callback for server-initiated notifications.
 // The handler receives the notification method (e.g., "notifications/tools/list_changed")
-// and raw params. It is called from the read loop; handlers must not block.
+// and raw params. Handlers are dispatched asynchronously from a dedicated
+// goroutine (fix #255), so a handler MAY call back into the client (e.g.
+// ListTools for a hot tool refresh) without deadlocking the read loop;
+// long-running work should still be handed off to its own goroutine.
 // Pass nil to disable notification processing (notifications are silently dropped).
 func (c *Client) SetNotificationHandler(h func(method string, params json.RawMessage)) {
 	c.mu.Lock()
@@ -1358,25 +1376,58 @@ func (c *Client) SetNotificationHandler(h func(method string, params json.RawMes
 	c.notificationHandler = h
 }
 
-// processNotification dispatches a server notification to the registered handler.
+// notificationChanSize bounds the pending notification queue. If a handler is
+// slower than the server emits notifications, excess ones are dropped rather
+// than blocking the read loop (which would stall every in-flight request).
+const notificationChanSize = 64
+
+// processNotification queues a server notification for asynchronous handler
+// dispatch (fix #255). It is called from inside the stdio read loop while
+// readMu is held; it must never call the handler synchronously — a handler
+// that re-enters sendRequest would block on the readMu held by this very
+// call stack, deadlocking until the request timeout aborts the connection.
 func (c *Client) processNotification(notif *Notification) {
 	if notif == nil {
 		return
 	}
 	// Read the handler pointer without acquiring c.mu. sendRequest holds c.mu
-	// during the entire request/response cycle, and processNotification is
-	// called from within that read loop. If we try to acquire c.mu here we
-	// deadlock. A function-pointer read is atomic on 64-bit platforms; the
-	// worst case is reading a stale pointer during handler replacement, which
-	// is harmless (one notification delivered to the old handler).
-	h := c.notificationHandler
-	if h == nil {
+	// during the write phase, and processNotification is called from within
+	// the read loop. A function-pointer read is atomic on 64-bit platforms;
+	// the worst case is reading a stale pointer during handler replacement,
+	// which is harmless (one notification delivered to the old handler).
+	if c.notificationHandler == nil {
 		return
 	}
-	debug.Log("mcp-notif", "server=%s method=%s", c.name, notif.Method)
-	// Call handler outside the lock to avoid deadlock if the handler
-	// calls back into the client (e.g. sendRequest for resources).
-	h(notif.Method, notif.Params)
+	c.notificationOnce.Do(func() {
+		ch := make(chan *Notification, notificationChanSize)
+		done := make(chan struct{})
+		c.notificationCh = ch
+		c.notificationDone = done
+		safego.Go("mcp.client.notifications", func() {
+			for {
+				select {
+				case n := <-ch:
+					handler := c.notificationHandler
+					if handler == nil {
+						continue
+					}
+					debug.Log("mcp-notif", "server=%s method=%s", c.name, n.Method)
+					// Handler runs on this worker goroutine, outside both readMu
+					// and c.mu, so it may call sendRequest/ListTools freely.
+					handler(n.Method, n.Params)
+				case <-done:
+					return
+				}
+			}
+		})
+	})
+	debug.Log("mcp-notif", "queued server=%s method=%s", c.name, notif.Method)
+	select {
+	case c.notificationCh <- notif:
+	default:
+		debug.Log("mcp-notif", "notification queue full, dropping server=%s method=%s",
+			c.name, notif.Method)
+	}
 }
 
 // SetLevel requests the server to set its minimum logging level.

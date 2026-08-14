@@ -549,7 +549,12 @@ func (h *TaskHandler) GetTask(id string) (*Task, bool) {
 }
 
 // ListTasks returns a page of tasks and a next-page token (cursor pagination).
-func (h *TaskHandler) ListTasks(pageToken string, pageSize int) ([]Task, string) {
+// A stale/invalid pageToken (e.g. the task it pointed at was cleaned up by
+// cleanupExpiredTasksLocked) returns an error instead of silently restarting
+// from the first page — which previously produced a nextToken identical to
+// the stale one and looped forever in nextToken==""-terminated pagination
+// clients (fix #258).
+func (h *TaskHandler) ListTasks(pageToken string, pageSize int) ([]Task, string, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
@@ -562,11 +567,16 @@ func (h *TaskHandler) ListTasks(pageToken string, pageSize int) ([]Task, string)
 
 	start := 0
 	if pageToken != "" {
+		found := false
 		for i, id := range ids {
 			if id == pageToken {
 				start = i
+				found = true
 				break
 			}
+		}
+		if !found {
+			return nil, "", fmt.Errorf("invalid page token %q: task no longer exists", pageToken)
 		}
 	}
 
@@ -585,7 +595,7 @@ func (h *TaskHandler) ListTasks(pageToken string, pageSize int) ([]Task, string)
 	if end < len(ids) {
 		nextToken = ids[end]
 	}
-	return result, nextToken
+	return result, nextToken, nil
 }
 
 // GetTaskDone returns the notification channel for a task.
