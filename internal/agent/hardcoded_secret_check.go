@@ -58,10 +58,31 @@ var secretExemptExts = map[string]bool{
 	".keystore": true,
 }
 
-// secretExemptDirs lists directory name patterns where secrets are expected.
+// secretExemptDirs lists directory-name segments where mock credentials
+// are intentional (test fixtures, mocks). Fix #247: the previous list also
+// exempted `secrets/`, `credentials/` and `.secrets/` — PRODUCTION directory
+// names — silently hiding real AWS keys written to internal/credentials/.
+// Only test-semantics directory names belong here.
 var secretExemptDirs = []string{
-	"testdata/", "fixtures/", "mocks/", "__mocks__/",
-	".secrets/", "secrets/", "credentials/",
+	"testdata", "fixtures", "test-fixtures", "mocks", "__mocks__",
+}
+
+// pathHasSegment reports whether any path segment (or a *_test/fixtures-style
+// suffixed segment like "foo_testdata") equals name. Fix #247: the previous
+// substring match (`strings.Contains(lowerPath, "fixtures/")`) both missed
+// trailing segments without a slash and matched unrelated paths like
+// `myfixturesnote/`. Segment-exact comparison fixes both.
+func pathHasSegment(path, name string) bool {
+	for _, seg := range strings.Split(path, "/") {
+		if seg == name {
+			return true
+		}
+		// Suffix forms: "config_testdata" / "api_fixtures".
+		if strings.HasSuffix(seg, "_"+name) {
+			return true
+		}
+	}
+	return false
 }
 
 // checkHardcodedSecrets detects credential/secret values that were INTRODUCED
@@ -88,10 +109,10 @@ func checkHardcodedSecrets(filePath, oldContent, newContent string) []string {
 		return nil
 	}
 
-	// Skip test fixture directories
+	// Skip test fixture directories (segment-exact, fix #247)
 	lowerPath := strings.ToLower(filePath)
 	for _, dir := range secretExemptDirs {
-		if strings.Contains(lowerPath, dir) {
+		if pathHasSegment(lowerPath, dir) {
 			return nil
 		}
 	}
@@ -102,14 +123,21 @@ func checkHardcodedSecrets(filePath, oldContent, newContent string) []string {
 		return nil
 	}
 
-	// Cap scan length for CPU protection
+	// Cap scan length for CPU protection. Fix #247: keep a 64-byte overlap
+	// (>= the longest secret pattern length) across the truncation boundary on
+	// both sides — old keeps the tail end of its prefix, new keeps a head
+	// extension — so a secret straddling the 256KB cut is not silently halved
+	// on one side only, which made the old/new multiset diff unreliable.
+	const scanOverlap = 64
 	scanNew := newContent
 	if len(scanNew) > maxSecretScanLen {
-		scanNew = scanNew[:maxSecretScanLen]
+		scanNew = scanNew[:maxSecretScanLen+scanOverlap]
 	}
 	scanOld := oldContent
 	if len(scanOld) > maxSecretScanLen {
-		scanOld = scanOld[:maxSecretScanLen]
+		// Keep the TAIL of oldContent so a secret near the end of the old
+		// file is still visible to the diff even after truncation.
+		scanOld = oldContent[len(oldContent)-(maxSecretScanLen+scanOverlap):]
 	}
 
 	// Determine if this is a source code file (vs config/docs).

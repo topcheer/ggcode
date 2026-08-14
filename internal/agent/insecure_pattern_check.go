@@ -34,8 +34,30 @@ import (
 	"go/parser"
 	"go/token"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
+
+// insecureVerifyDisabledRe matches TLS verification being disabled in Python
+// code: verify=False / verify=0 (requests, httpx) and ssl=False / ssl_verify
+// variants (aiohttp TCPConnector, urllib3). Fix #245: the previous
+// three-condition substring AND missed httpx/aiohttp calls without a
+// "requests"/"ssl"/"session" context word, and `verify=0` without spaces.
+// The assignment itself is a strong enough signal for a security detector —
+// prefer a false positive over a missed TLS bypass.
+var insecureVerifyDisabledRe = regexp.MustCompile(`(?i)\b(?:ssl_verify|verify|ssl)\s*=\s*(?:false|0)\b`)
+
+// insecureRejectUnauthorizedRe matches the Node.js TLS bypass assignment
+// `rejectUnauthorized: false` (or `: 0`). Fix #245: a loose
+// `Contains(lower, "0")` matched any zero on the line (e.g. `timeout: 0`).
+var insecureRejectUnauthorizedRe = regexp.MustCompile(`(?i)rejectUnauthorized\s*:\s*(?:false|0)\b`)
+
+// insecureNodeTLSDisabledRe matches the global Node.js TLS kill switch being
+// ASSIGNED a disabling value. Comparisons (`=== '0'`, `!== '0'`) cannot match
+// here: after NODE_TLS_REJECT_UNAUTHORIZED the regex requires `=` immediately
+// (modulo whitespace) followed by 0/false, so `===` and `!==` fail to match.
+// Fix #245: the substring check flagged legitimate comparison guards.
+var insecureNodeTLSDisabledRe = regexp.MustCompile(`(?i)NODE_TLS_REJECT_UNAUTHORIZED\s*=\s*['"]?(?:0|false)['"]?`)
 
 // insecurePatternInstance represents a detected insecure pattern.
 type insecurePatternInstance struct {
@@ -129,17 +151,20 @@ func findInsecurePatternsGo(content string) []insecurePatternInstance {
 			})
 		}
 
-		// 3. SQL injection via string concatenation: "SELECT" + variable or fmt.Sprintf with SELECT
-		upperLine := strings.ToUpper(trimmed)
-		if isSQLKeywordLine(upperLine) {
-			// Check for concatenation or Sprintf in the same line
-			if strings.Contains(trimmed, "+") || strings.Contains(trimmed, "Sprintf") ||
-				strings.Contains(trimmed, "fmt.Sprintf") {
-				issues = append(issues, insecurePatternInstance{
-					category: "SQL injection",
-					detail:   "SQL query built with string concatenation/Sprintf - use parameterized queries (? placeholders)",
-					line:     i + 1,
-				})
+		// 3. SQL injection via string concatenation: "SELECT" + variable or fmt.Sprintf with SELECT.
+		// Comment lines are skipped (conservative: full-line comments only).
+		// Fix #245: `i++` and `x += y` are not concatenation and must not count.
+		if !strings.HasPrefix(trimmed, "//") && !strings.HasPrefix(trimmed, "/*") {
+			upperLine := strings.ToUpper(trimmed)
+			if isSQLKeywordLine(upperLine) {
+				// Check for concatenation or Sprintf in the same line
+				if lineHasConcatPlus(trimmed) || strings.Contains(trimmed, "Sprintf") {
+					issues = append(issues, insecurePatternInstance{
+						category: "SQL injection",
+						detail:   "SQL query built with string concatenation/Sprintf - use parameterized queries (? placeholders)",
+						line:     i + 1,
+					})
+				}
 			}
 		}
 
@@ -277,9 +302,9 @@ func findInsecurePatternsJS(content string) []insecurePatternInstance {
 		trimmed := strings.TrimSpace(line)
 		lower := strings.ToLower(trimmed)
 
-		// rejectUnauthorized: false (Node.js TLS bypass)
-		if strings.Contains(lower, "rejectunauthorized") &&
-			(strings.Contains(lower, "false") || strings.Contains(lower, "0")) {
+		// rejectUnauthorized: false / 0 (Node.js TLS bypass). Fix #245: match the
+		// actual assignment shape so `timeout: 0` on the same line no longer trips it.
+		if insecureRejectUnauthorizedRe.MatchString(trimmed) {
 			issues = append(issues, insecurePatternInstance{
 				category: "TLS bypass",
 				detail:   "rejectUnauthorized: false disables TLS certificate verification",
@@ -287,10 +312,9 @@ func findInsecurePatternsJS(content string) []insecurePatternInstance {
 			})
 		}
 
-		// process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'
-		if strings.Contains(lower, "node_tls_reject_unauthorized") &&
-			(strings.Contains(lower, "'0'") || strings.Contains(lower, "\"0\"") ||
-				strings.Contains(lower, "false")) {
+		// process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0' (assignment only;
+		// comparison guards like `=== '0'` must not warn — fix #245)
+		if insecureNodeTLSDisabledRe.MatchString(trimmed) {
 			issues = append(issues, insecurePatternInstance{
 				category: "TLS bypass",
 				detail:   "NODE_TLS_REJECT_UNAUTHORIZED=0 disables all TLS verification globally",
@@ -375,14 +399,14 @@ func findInsecurePatternsPython(content string) []insecurePatternInstance {
 		trimmed := strings.TrimSpace(line)
 		lower := strings.ToLower(trimmed)
 
-		// verify=False in requests
-		if strings.Contains(lower, "verify") &&
-			(strings.Contains(lower, "false") || strings.Contains(lower, "= 0")) &&
-			(strings.Contains(lower, "request") || strings.Contains(lower, "ssl") ||
-				strings.Contains(lower, "session")) {
+		// verify=False / verify=0 / ssl=False (requests, httpx, aiohttp,
+		// urllib3). Fix #245: previous three-condition substring AND missed
+		// httpx/aiohttp calls with no context word and `verify=0` without spaces;
+		// the assignment alone is now treated as a strong enough signal.
+		if insecureVerifyDisabledRe.MatchString(trimmed) {
 			issues = append(issues, insecurePatternInstance{
 				category: "TLS bypass",
-				detail:   "SSL verification disabled (verify=False) - removes MITM protection",
+				detail:   "SSL verification disabled (verify=False/ssl=False) - removes MITM protection",
 				line:     i + 1,
 			})
 		}
@@ -450,9 +474,26 @@ func isLineSecuritySensitive(line string) bool {
 	return isSecuritySensitiveName(line)
 }
 
-// isSQLKeywordLine checks if a line contains SQL DML keywords combined with FROM.
+// isSQLKeywordLine checks if a line contains a SQL DML keyword (SELECT/
+// INSERT/UPDATE/DELETE) combined with a clause keyword (FROM/INTO/VALUES).
+// Fix #245: requiring FROM caused false negatives for INSERT ... VALUES and
+// DELETE ... INTO-shaped statements, which have no FROM clause.
 func isSQLKeywordLine(upperLine string) bool {
-	return (strings.Contains(upperLine, "SELECT ") || strings.Contains(upperLine, "INSERT ") ||
-		strings.Contains(upperLine, "UPDATE ") || strings.Contains(upperLine, "DELETE ")) &&
-		strings.Contains(upperLine, "FROM ")
+	dml := strings.Contains(upperLine, "SELECT ") || strings.Contains(upperLine, "INSERT ") ||
+		strings.Contains(upperLine, "UPDATE ") || strings.Contains(upperLine, "DELETE ")
+	if !dml {
+		return false
+	}
+	return strings.Contains(upperLine, "FROM ") || strings.Contains(upperLine, "INTO ") ||
+		strings.Contains(upperLine, "VALUES ")
+}
+
+// lineHasConcatPlus reports whether the line contains a "+" usable for string
+// concatenation. Increments (`i++`) and compound assignments (`+=`) are
+// stripped first so they do not count (fix #245: `i++` inside a query loop
+// was misreported as SQL injection).
+func lineHasConcatPlus(line string) bool {
+	s := strings.ReplaceAll(line, "++", "")
+	s = strings.ReplaceAll(s, "+=", "")
+	return strings.Contains(s, "+")
 }

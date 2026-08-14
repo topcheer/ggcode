@@ -770,6 +770,26 @@ func (b *ChatBridge) LoadSession(id string) error {
 	b.ResetAgent()
 	b.setSessionState(state)
 	if err := b.InitAgent(context.Background()); err != nil {
+		// Release the lock we hold on this session and re-notify the
+		// frontend: setSessionState already switched currentSes and fired
+		// OnSessionChanged, so the UI shows the new session while the agent
+		// failed to initialize. Re-notify so the front end re-reads the
+		// (nil-agent) state instead of silently diverging; without the
+		// release, retrying the same session reports "locked by another
+		// instance" (#246).
+		b.mu.Lock()
+		ours := b.sessionLock == lock
+		if ours {
+			b.sessionLock = nil
+		}
+		onSessionChanged := b.OnSessionChanged
+		b.mu.Unlock()
+		if ours {
+			lock.Release()
+		}
+		if onSessionChanged != nil {
+			onSessionChanged()
+		}
 		return fmt.Errorf("init agent for session load: %w", err)
 	}
 	_, _, _ = agentruntime.RestoreSessionIntoAgent(b.agent, state.Session)

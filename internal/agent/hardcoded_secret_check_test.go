@@ -99,14 +99,79 @@ func TestCheckHardcodedSecrets_AssignmentInConfigNotFlagged(t *testing.T) {
 }
 
 func TestCheckHardcodedSecrets_AssignmentInSourceCode(t *testing.T) {
-	// assignment_secret SHOULD be flagged in Go source code
-	new := `apiKey := "AKIAIOSFODNN7EXAMPLE1234567"`
+	// assignment_secret SHOULD be flagged in Go source code. Fix #247: the
+	// previous test only t.Logf'd on zero warnings (never failed) and used a
+	// 24-char sample (AKIA + 20) that missed the \b(AKIA[0-9A-Z]{16})\b pattern.
+	// Use an exact AKIA + 16-char key so the aws_access_key pattern must match.
+	new := `apiKey := "AKIAIOSFODNN7EXAMPLE"`
 	warnings := checkHardcodedSecrets("main.go", "", new)
-	// Should detect at least something (AWS key or assignment pattern)
 	if len(warnings) == 0 {
-		// The assignment pattern requires 20+ chars and specific key names
-		// AKIA prefix is 4 chars + 16 = 20 chars total which matches aws_access_key
-		t.Logf("warnings: %v", warnings)
+		t.Fatal("expected at least one hardcoded secret warning for AKIA key in source code")
+	}
+	found := false
+	for _, w := range warnings {
+		if strings.Contains(w, "aws_access_key") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected aws_access_key warning, got: %v", warnings)
+	}
+}
+
+// TestHardcodedSecret_CredentialsDirNotExempt pins fix #247: production
+// directory names (`credentials/`, `secrets/`, `.secrets/`) must NOT be
+// exempt — a real AWS key written into internal/credentials/store.go must
+// still warn.
+func TestHardcodedSecret_CredentialsDirNotExempt(t *testing.T) {
+	new := `var accessKey = "AKIAIOSFODNN7EXAMPLE"`
+	w := checkHardcodedSecrets("internal/credentials/store.go", "", new)
+	if len(w) == 0 {
+		t.Fatal("real AKIA key under internal/credentials/ must not be exempt (#247)")
+	}
+}
+
+func TestHardcodedSecret_SecretsDirNotExempt(t *testing.T) {
+	new := `var accessKey = "AKIAIOSFODNN7EXAMPLE"`
+	w := checkHardcodedSecrets("pkg/secrets/vault.go", "", new)
+	if len(w) == 0 {
+		t.Fatal("real AKIA key under pkg/secrets/ must not be exempt (#247)")
+	}
+}
+
+// TestHardcodedSecret_TestDataStillExempt: test-semantics directory segments
+// remain exempt, including segment-exact forms without trailing slash.
+func TestHardcodedSecret_TestDataStillExempt(t *testing.T) {
+	new := `const token = "ghp_1234567890abcdefghijklmnopqrstuvwxyz"`
+	for _, p := range []string{
+		"testdata/fixtures/config.go",
+		"src/testdata/config.go",   // segment without trailing content
+		"internal/mocks/client.go", // bare mocks segment
+		"api_testdata/handlers.go", // suffixed segment
+	} {
+		if w := checkHardcodedSecrets(p, "", new); len(w) != 0 {
+			t.Errorf("expected %s to be exempt, got %d warnings", p, len(w))
+		}
+	}
+}
+
+// TestPathHasSegment covers the segment-boundary helper (#247): substring
+// similarity must not exempt unrelated paths.
+func TestPathHasSegment(t *testing.T) {
+	if !pathHasSegment("a/testdata/b.go", "testdata") {
+		t.Error("testdata segment should match")
+	}
+	if pathHasSegment("x/fixtures.go", "fixtures") {
+		t.Error("a source FILE named fixtures.go is not a fixture directory and must NOT be exempt")
+	}
+	if !pathHasSegment("x/fixtures/y.go", "fixtures") {
+		t.Error("fixtures directory segment should match")
+	}
+	if pathHasSegment("x/myfixturesnote/b.go", "fixtures") {
+		t.Error("substring inside a segment must NOT match")
+	}
+	if pathHasSegment("internal/credentials/store.go", "testdata") {
+		t.Error("unrelated path must not match")
 	}
 }
 

@@ -258,3 +258,183 @@ func TestCheckInsecurePatterns_EmptyContent(t *testing.T) {
 		t.Fatalf("expected no warnings for empty content, got: %v", warnings)
 	}
 }
+
+// ---- fix #245: Python verify=False false negatives ----
+
+// httpx calls carry no "requests"/"ssl"/"session" context word; the old
+// three-condition AND silently missed them.
+func TestCheckInsecurePatterns_PythonHttpxVerifyFalse(t *testing.T) {
+	old := "# old code\n"
+	new := "import httpx\n" +
+		"resp = httpx.get(url, verify=False)\n"
+
+	warnings := checkInsecurePatterns("app.py", old, new)
+	found := false
+	for _, w := range warnings {
+		if strings.Contains(w, "TLS bypass") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected TLS bypass warning for httpx verify=False")
+	}
+}
+
+// aiohttp TCPConnector(ssl=False) must be caught by the ssl= form.
+func TestCheckInsecurePatterns_PythonAiohttpSSLFalse(t *testing.T) {
+	old := "# old code\n"
+	new := "connector = aiohttp.TCPConnector(ssl=False)\n"
+
+	warnings := checkInsecurePatterns("app.py", old, new)
+	found := false
+	for _, w := range warnings {
+		if strings.Contains(w, "TLS bypass") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected TLS bypass warning for TCPConnector(ssl=False)")
+	}
+}
+
+// verify=0 without spaces was missed by the old "= 0" substring check.
+func TestCheckInsecurePatterns_PythonVerifyZero(t *testing.T) {
+	old := "# old code\n"
+	new := "resp = httpx.get(url, verify=0)\n"
+
+	warnings := checkInsecurePatterns("app.py", old, new)
+	found := false
+	for _, w := range warnings {
+		if strings.Contains(w, "TLS bypass") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected TLS bypass warning for verify=0")
+	}
+}
+
+// ---- fix #245: Go SQL false positives ----
+
+// `i++` on a line containing SQL keywords is not concatenation.
+func TestCheckInsecurePatterns_GoSQLIncrementNotConcat(t *testing.T) {
+	old := "package main\n"
+	new := "package main\n" +
+		"for i := 0; i < n; i++ {\n" +
+		"\tq := \"SELECT * FROM users\"; db.Query(q); i++\n" +
+		"\ttotal += count\n" +
+		"}\n"
+
+	warnings := checkInsecurePatterns("test.go", old, new)
+	for _, w := range warnings {
+		if strings.Contains(w, "SQL injection") {
+			t.Fatalf("i++/+= must not count as concatenation, got: %s", w)
+		}
+	}
+}
+
+// Full-line comments containing SQL keywords must be skipped.
+func TestCheckInsecurePatterns_GoSQLCommentNotFlagged(t *testing.T) {
+	old := "package main\n"
+	new := "package main\n" +
+		"// q := \"SELECT * FROM users\" + name\n" +
+		"/* INSERT INTO logs VALUES (\" + x) */\n"
+
+	warnings := checkInsecurePatterns("test.go", old, new)
+	for _, w := range warnings {
+		if strings.Contains(w, "SQL injection") {
+			t.Fatalf("comment lines must not be flagged, got: %s", w)
+		}
+	}
+}
+
+// INSERT ... VALUES has no FROM clause and must still be recognized.
+func TestCheckInsecurePatterns_GoSQLInsertValues(t *testing.T) {
+	old := "package main\n"
+	new := "package main\n" +
+		"q := \"INSERT INTO users VALUES ('\" + name + \"')\"\n"
+
+	warnings := checkInsecurePatterns("test.go", old, new)
+	found := false
+	for _, w := range warnings {
+		if strings.Contains(w, "SQL injection") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected SQL injection warning for INSERT ... VALUES concatenation")
+	}
+}
+
+// ---- fix #245: JS rejectUnauthorized / NODE_TLS false positives ----
+
+// `timeout: 0` on a rejectUnauthorized line must not trigger the "0" check.
+func TestCheckInsecurePatterns_JSTimeoutZeroNotFlagged(t *testing.T) {
+	old := "// old\n"
+	new := "const agent = new https.Agent({ rejectUnauthorized: true, timeout: 0 });\n"
+
+	warnings := checkInsecurePatterns("app.js", old, new)
+	for _, w := range warnings {
+		if strings.Contains(w, "TLS bypass") {
+			t.Fatalf("timeout: 0 must not trigger TLS bypass warning, got: %s", w)
+		}
+	}
+}
+
+// Comparison guards (=== / !==) against NODE_TLS_REJECT_UNAUTHORIZED='0'
+// are legitimate code and must not warn.
+func TestCheckInsecurePatterns_JSNodeTLSComparisonNotFlagged(t *testing.T) {
+	old := "// old\n"
+	new := "if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === '0') {\n" +
+		"  warnInsecureMode();\n" +
+		"} else if (process.env.NODE_TLS_REJECT_UNAUTHORIZED !== '0') {\n" +
+		"  ok();\n" +
+		"}\n"
+
+	warnings := checkInsecurePatterns("app.js", old, new)
+	for _, w := range warnings {
+		if strings.Contains(w, "TLS bypass") {
+			t.Fatalf("NODE_TLS === '0' comparison must not warn, got: %s", w)
+		}
+	}
+}
+
+// Assigning the disabling value (with or without quotes) must warn.
+func TestCheckInsecurePatterns_JSNodeTLSAssignmentFlagged(t *testing.T) {
+	old := "// old\n"
+	new := "process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';\n"
+
+	warnings := checkInsecurePatterns("app.js", old, new)
+	found := false
+	for _, w := range warnings {
+		if strings.Contains(w, "TLS bypass") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected TLS bypass warning for NODE_TLS_REJECT_UNAUTHORIZED = '0'")
+	}
+}
+
+// rejectUnauthorized: 0 (numeric form) must warn via the tightened regex.
+func TestCheckInsecurePatterns_JSRejectUnauthorizedZero(t *testing.T) {
+	old := "// old\n"
+	new := "const agent = new https.Agent({ rejectUnauthorized: 0 });\n"
+
+	warnings := checkInsecurePatterns("app.js", old, new)
+	found := false
+	for _, w := range warnings {
+		if strings.Contains(w, "TLS bypass") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected TLS bypass warning for rejectUnauthorized: 0")
+	}
+}
