@@ -5,11 +5,49 @@ package tool
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 )
 
+// linuxDisplayBackend selects the automation backend at runtime.
+// Wayland sessions (WAYLAND_DISPLAY set) need ydotool (uinput); X11 keeps
+// xdotool. Cached after first resolution since session type cannot change
+// within a process lifetime.
+var (
+	linuxBackendWayland  bool
+	linuxBackendResolved bool
+)
+
+func isWaylandSession() bool {
+	if !linuxBackendResolved {
+		// XDG_SESSION_TYPE=wayland without WAYLAND_DISPLAY still has no
+		// wayland socket to talk over; require the socket variable.
+		linuxBackendWayland = os.Getenv("WAYLAND_DISPLAY") != ""
+		linuxBackendResolved = true
+	}
+	return linuxBackendWayland
+}
+
+// runArgvSeq executes a sequence of full argv commands, stopping at the
+// first failure.
+func runArgvSeq(ctx context.Context, cmds [][]string) error {
+	for _, argv := range cmds {
+		if len(argv) == 0 {
+			continue
+		}
+		if out, err := exec.CommandContext(ctx, argv[0], argv[1:]...).CombinedOutput(); err != nil {
+			return fmt.Errorf("%s failed: %w\n%s (is %s installed and the ydotoold daemon running?)",
+				argv[0], err, string(out), argv[0])
+		}
+	}
+	return nil
+}
+
 func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error) {
+	if isWaylandSession() {
+		return executeDesktopControlWayland(ctx, p)
+	}
 	switch p.Action {
 	// ── Mouse ──
 	case "click":
@@ -114,6 +152,99 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 	case "snapshot_ui", "find_element", "find_and_click", "wait_and_click", "display_info", "menu_select":
 		return Result{}, fmt.Errorf("desktop_control: action %q is not supported on Linux (requires a platform accessibility API; xdotool has none)", p.Action)
 
+	default:
+		return Result{}, fmt.Errorf("unknown action: %s", p.Action)
+	}
+}
+
+// executeDesktopControlWayland implements the ydotool-backed subset for
+// Wayland sessions. Mouse move/click/drag, typing, and key combos work;
+// scroll has no ydotool equivalent (REL_WHEEL is not a BTN event, so the
+// click subcommand cannot send it) and window management has no protocol
+// for external clients — both report clear messages instead of failing
+// cryptically.
+func executeDesktopControlWayland(ctx context.Context, p desktopParams) (Result, error) {
+	switch p.Action {
+	case "move":
+		if err := runArgvSeq(ctx, [][]string{ydoMoveArgs(p.X, p.Y)}); err != nil {
+			return Result{}, err
+		}
+		return Result{Content: "OK"}, nil
+	case "click", "double_click", "triple_click", "right_click":
+		clicks := 1
+		switch p.Action {
+		case "double_click":
+			clicks = 2
+		case "triple_click":
+			clicks = 3
+		}
+		cmds := [][]string{ydoMoveArgs(p.X, p.Y)}
+		cmds = append(cmds, ydoClickArgs(p.Button, clicks)...)
+		if err := runArgvSeq(ctx, cmds); err != nil {
+			return Result{}, err
+		}
+		return Result{Content: "OK"}, nil
+	case "modifier_click":
+		mods, err := normalizeModifiers(p.Text)
+		if err != nil {
+			return Result{}, err
+		}
+		cmds := [][]string{ydoMoveArgs(p.X, p.Y)}
+		for _, m := range mods {
+			press, _, ok := ydoModifierKeyArgs(m)
+			if !ok {
+				return Result{}, fmt.Errorf("modifier %q has no ydotool mapping", m)
+			}
+			cmds = append(cmds, press)
+		}
+		cmds = append(cmds, []string{"ydotool", "click", "0xC0"})
+		for i := len(mods) - 1; i >= 0; i-- {
+			_, release, _ := ydoModifierKeyArgs(mods[i])
+			cmds = append(cmds, release)
+		}
+		if err := runArgvSeq(ctx, cmds); err != nil {
+			return Result{}, err
+		}
+		return Result{Content: "OK"}, nil
+	case "drag":
+		if err := runArgvSeq(ctx, ydoDragArgs(p.X, p.Y, p.ToX, p.ToY)); err != nil {
+			return Result{}, err
+		}
+		return Result{Content: "OK"}, nil
+	case "type":
+		if err := runArgvSeq(ctx, [][]string{ydoTypeArgs(p.Text)}); err != nil {
+			return Result{}, err
+		}
+		return Result{Content: "OK"}, nil
+
+	case "scroll":
+		return Result{}, fmt.Errorf("desktop_control: scroll is not supported on Wayland via ydotool (no REL_WHEEL event in the click API)")
+
+	// Window management has no Wayland protocol for external clients, and
+	// ydotool exposes no position read or accessibility tree.
+	case "mouse_position", "list_windows", "focus_window", "close_window", "minimize_window",
+		"maximize_window", "set_window_bounds", "quit_app", "list_apps", "active_app",
+		"snapshot_ui", "find_element", "find_and_click", "wait_and_click", "display_info", "menu_select":
+		return Result{}, fmt.Errorf("desktop_control: action %q is not supported on Wayland (no protocol for external clients; run the target under XWayland for X11 tooling)", p.Action)
+
+	default:
+		// App launching is display-server independent — delegate to the
+		// shared path below.
+		break
+	}
+	// Shared, display-server-independent actions.
+	switch p.Action {
+	case "open":
+		target := strings.TrimSpace(p.Text)
+		if target == "" {
+			return Result{}, fmt.Errorf("open requires 'text' (URL or file path)")
+		}
+		if app := strings.TrimSpace(p.App); app != "" {
+			return runAppResult(ctx, app+" "+target)
+		}
+		return runAppResult(ctx, "xdg-open "+target)
+	case "launch_app":
+		return runAppResult(ctx, p.Text)
 	default:
 		return Result{}, fmt.Errorf("unknown action: %s", p.Action)
 	}

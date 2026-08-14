@@ -47,7 +47,7 @@ mouse_position returns the current cursor location in logical pixels.
 set_window_bounds positions and sizes a window: x,y = top-left; to_x,to_y = width,height.
 open launches a URL or file path with the default handler app (use "app" to force a specific app).
 
-Platform support: all actions on macOS; core mouse/keyboard/window/app actions on Linux (X11, requires xdotool and wmctrl; UI-tree and display_info actions are macOS-only); not yet implemented on Windows.`
+Platform support: all actions on macOS; on Linux both X11 (xdotool/wmctrl required; UI-tree/display_info actions unsupported) and Wayland (ydotool + ydotoold required; move/click/drag/modifier_click/type/open/launch_app supported — scroll has no ydotool equivalent and window management has no Wayland protocol for external clients); core mouse/keyboard/app actions on Windows via SendInput.`
 }
 
 func (DesktopControlTool) Parameters() json.RawMessage {
@@ -161,6 +161,72 @@ func parseMenuPath(path string) ([]string, error) {
 		return nil, fmt.Errorf("menu path %q must have at least 'Menu > Item'", path)
 	}
 	return out, nil
+}
+
+// ─── Linux Wayland backend (ydotool) argv builders ───
+// These are pure functions with no build tag so they can be unit-tested on
+// any platform. The linux-only executor (desktop_control_linux.go) consumes
+// them. ydotool event codes follow linux/input-event-codes.h as used by the
+// ydotool README: BTN_LEFT=0xC0, BTN_RIGHT=0xC1.
+
+// ydoMoveArgs returns the argv to move the cursor absolutely.
+func ydoMoveArgs(x, y int) []string {
+	return []string{"ydotool", "move", "-a", fmt.Sprintf("%d", x), fmt.Sprintf("%d", y)}
+}
+
+// ydoClickArgs returns the argv to click `clicks` times. ydotool click takes
+// a single event code, so multiple clicks need repeated invocations.
+func ydoClickArgs(button string, clicks int) [][]string {
+	code := "0xC0" // BTN_LEFT
+	if button == "right" {
+		code = "0xC1" // BTN_RIGHT
+	}
+	if clicks < 1 {
+		clicks = 1
+	}
+	cmds := make([][]string, clicks)
+	for i := range cmds {
+		cmds[i] = []string{"ydotool", "click", code}
+	}
+	return cmds
+}
+
+// ydoKeyArgs converts a modifier token to ydotool press/release argv pairs
+// using evdev key codes: KEY_LEFTCTRL=29, KEY_LEFTALT=56, KEY_LEFTSHIFT=42,
+// KEY_LEFTMETA=125.
+func ydoModifierKeyArgs(mod string) (press []string, release []string, ok bool) {
+	var code int
+	switch mod {
+	case "ctrl":
+		code = 29
+	case "alt":
+		code = 56
+	case "shift":
+		code = 42
+	case "cmd":
+		code = 125
+	default:
+		return nil, nil, false
+	}
+	p := fmt.Sprintf("%d:1", code)
+	r := fmt.Sprintf("%d:0", code)
+	return []string{"ydotool", "key", p}, []string{"ydotool", "key", r}, true
+}
+
+// ydoDragArgs returns the argv sequence for a drag: move to start, button
+// down, move to end, button up.
+func ydoDragArgs(x, y, toX, toY int) [][]string {
+	return [][]string{
+		ydoMoveArgs(x, y),
+		{"ydotool", "click", "-d", "100", "0xC0"}, // down, 100ms hold
+		ydoMoveArgs(toX, toY),
+		{"ydotool", "click", "-u", "0xC0"}, // up
+	}
+}
+
+// ydoTypeArgs returns the argv to type text (ydotool type).
+func ydoTypeArgs(text string) []string {
+	return []string{"ydotool", "type", text}
 }
 
 func (t DesktopControlTool) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
