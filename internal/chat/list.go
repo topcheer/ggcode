@@ -5,6 +5,11 @@ import (
 	"sync"
 )
 
+// DefaultMaxItems bounds the display cache. The full history always
+// lives in the session JSONL on disk; the in-memory list is a rendering
+// cache only, so dropping ancient items loses nothing persistent.
+const DefaultMaxItems = 2000
+
 // List is a virtual-scrolling list of Items.
 // Only items visible in the current viewport are rendered.
 type List struct {
@@ -16,14 +21,16 @@ type List struct {
 	height     int
 	follow     bool // auto-scroll to bottom
 	dirty      bool
+	maxItems   int // display-cache cap; 0 = unlimited
 }
 
 // NewList creates a new virtual list with the given dimensions.
 func NewList(width, height int) *List {
 	return &List{
-		width:  width,
-		height: height,
-		follow: true,
+		width:    width,
+		height:   height,
+		follow:   true,
+		maxItems: DefaultMaxItems,
 	}
 }
 
@@ -31,11 +38,50 @@ func NewList(width, height int) *List {
 func (l *List) Append(items ...Item) {
 	l.mu.Lock()
 	l.items = append(l.items, items...)
+	l.trimLocked()
 	l.dirty = true
 	if l.follow {
 		l.scrollToEndLocked()
 	}
 	l.mu.Unlock()
+}
+
+// SetMaxItems changes the display-cache cap (0 = unlimited) and trims
+// immediately if the current list exceeds it.
+func (l *List) SetMaxItems(n int) {
+	l.mu.Lock()
+	l.maxItems = n
+	l.trimLocked()
+	l.mu.Unlock()
+}
+
+// MaxItems returns the display-cache cap (0 = unlimited).
+func (l *List) MaxItems() int {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.maxItems
+}
+
+// trimLocked drops the oldest items when the cache exceeds maxItems.
+// It trims down to 75% of the cap (hysteresis) so the O(n) copy happens
+// only once every cap/4 appends instead of on every append. The viewport
+// is shifted by the dropped count, keeping what the user sees in place.
+// Caller must hold the lock.
+func (l *List) trimLocked() {
+	if l.maxItems <= 0 || len(l.items) <= l.maxItems {
+		return
+	}
+	target := l.maxItems * 3 / 4
+	drop := len(l.items) - target
+	kept := make([]Item, target)
+	copy(kept, l.items[drop:]) // copy: don't pin dropped items via the backing array
+	l.items = kept
+	l.offsetIdx -= drop
+	if l.offsetIdx < 0 {
+		l.offsetIdx = 0
+		l.offsetLine = 0
+	}
+	l.dirty = true
 }
 
 // RemoveByID removes an item by ID. No-op if not found.
@@ -71,6 +117,7 @@ func (l *List) SetItems(items []Item) {
 	l.items = items
 	l.offsetIdx = 0
 	l.offsetLine = 0
+	l.trimLocked()
 	l.dirty = true
 	if l.follow && len(items) > 0 {
 		l.scrollToEndLocked()

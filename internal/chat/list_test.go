@@ -398,3 +398,75 @@ func TestFollowPausedWhenScrolledUp(t *testing.T) {
 		t.Fatal("expected follow=true and AtBottom=true after ScrollToEnd")
 	}
 }
+
+func TestListTrimBounded(t *testing.T) {
+	styles := DefaultStyles()
+	l := NewList(80, 10)
+	l.SetMaxItems(100)
+	for i := 0; i < 130; i++ {
+		l.Append(NewSystemItem(fmt.Sprintf("s%d", i), "line", styles))
+	}
+	n := l.Len()
+	if n > 100 {
+		t.Fatalf("expected <= 100 items after trim, got %d", n)
+	}
+	// Oldest dropped, newest kept: first ID derives from final length.
+	firstWant := fmt.Sprintf("s%d", 130-n)
+	if it := l.ItemAt(0); it == nil || it.ID() != firstWant {
+		t.Fatalf("expected first item %s, got %v", firstWant, it)
+	}
+	if it := l.ItemAt(n - 1); it == nil || it.ID() != "s129" {
+		t.Fatalf("expected last item s129, got %v", it)
+	}
+	// follow was active: still pinned to end.
+	if !l.Follow() || !l.AtBottom() {
+		t.Fatal("expected follow and AtBottom after trim")
+	}
+}
+
+func TestListTrimPreservesViewport(t *testing.T) {
+	styles := DefaultStyles()
+	l := NewList(80, 10)
+	l.SetMaxItems(100)
+	for i := 0; i < 100; i++ {
+		l.Append(NewSystemItem(fmt.Sprintf("s%d", i), "line", styles))
+	}
+	// User scrolled up to read item ~s40; follow paused.
+	l.ScrollUp(60)
+	firstBefore := l.ItemAt(0).ID()
+
+	// Appends push past cap: viewport must stay on the same content.
+	for i := 100; i < 125; i++ {
+		l.Append(NewSystemItem(fmt.Sprintf("s%d", i), "line", styles))
+	}
+	firstAfter := l.ItemAt(0).ID()
+	if firstBefore == firstAfter {
+		t.Fatalf("expected head to advance past %s after trim, still at %s", firstBefore, firstAfter)
+	}
+	// The visible content (what the user was reading) must still be present.
+	found := false
+	for i := 0; i < l.Len(); i++ {
+		if l.ItemAt(i).ID() == "s40" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected s40 (user's reading position) to survive the trim")
+	}
+	if l.Follow() {
+		t.Fatal("follow must remain paused after trim")
+	}
+}
+
+func TestListUnlimited(t *testing.T) {
+	styles := DefaultStyles()
+	l := NewList(80, 10)
+	l.SetMaxItems(0)
+	for i := 0; i < 5000; i++ {
+		l.Append(NewSystemItem("s", "line", styles))
+	}
+	if l.Len() != 5000 {
+		t.Fatalf("expected unlimited growth retained 5000, got %d", l.Len())
+	}
+}
