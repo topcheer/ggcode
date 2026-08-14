@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // linuxDisplayBackend selects the automation backend at runtime.
@@ -59,6 +60,21 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 		return xdotoolResult(ctx, "mousemove", "--sync", fmt.Sprintf("%d", p.X), fmt.Sprintf("%d", p.Y), "click", "--repeat", "3", "1")
 	case "right_click":
 		return xdotoolResult(ctx, "mousemove", "--sync", fmt.Sprintf("%d", p.X), fmt.Sprintf("%d", p.Y), "click", "3")
+	case "middle_click":
+		return xdotoolResult(ctx, "mousemove", "--sync", fmt.Sprintf("%d", p.X), fmt.Sprintf("%d", p.Y), "click", "2")
+	case "mouse_down", "mouse_up":
+		// xdotool button codes: 1=left, 2=middle, 3=right.
+		btn := "1"
+		if p.Button == "right" {
+			btn = "3"
+		} else if p.Button == "middle" {
+			btn = "2"
+		}
+		sub := "mousedown"
+		if p.Action == "mouse_up" {
+			sub = "mouseup"
+		}
+		return xdotoolResult(ctx, "mousemove", "--sync", fmt.Sprintf("%d", p.X), fmt.Sprintf("%d", p.Y), sub, btn)
 	case "move":
 		return xdotoolResult(ctx, "mousemove", fmt.Sprintf("%d", p.X), fmt.Sprintf("%d", p.Y))
 	case "drag":
@@ -93,6 +109,8 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 	case "key_press", "key_combo":
 		// xdotool uses + for combos: ctrl+c, alt+Tab
 		return xdotoolResult(ctx, "key", p.Text)
+	case "hold_key":
+		return holdKeyX11(ctx, p)
 
 	// ── Window management ──
 	case "set_window_bounds":
@@ -170,7 +188,7 @@ func executeDesktopControlWayland(ctx context.Context, p desktopParams) (Result,
 			return Result{}, err
 		}
 		return Result{Content: "OK"}, nil
-	case "click", "double_click", "triple_click", "right_click":
+	case "click", "double_click", "triple_click", "right_click", "middle_click":
 		clicks := 1
 		switch p.Action {
 		case "double_click":
@@ -178,8 +196,14 @@ func executeDesktopControlWayland(ctx context.Context, p desktopParams) (Result,
 		case "triple_click":
 			clicks = 3
 		}
+		button := p.Button
+		if p.Action == "right_click" {
+			button = "right"
+		} else if p.Action == "middle_click" {
+			button = "middle"
+		}
 		cmds := [][]string{ydoMoveArgs(p.X, p.Y)}
-		cmds = append(cmds, ydoClickArgs(p.Button, clicks)...)
+		cmds = append(cmds, ydoClickArgs(button, clicks)...)
 		if err := runArgvSeq(ctx, cmds); err != nil {
 			return Result{}, err
 		}
@@ -219,6 +243,59 @@ func executeDesktopControlWayland(ctx context.Context, p desktopParams) (Result,
 
 	case "scroll":
 		return Result{}, fmt.Errorf("desktop_control: scroll is not supported on Wayland via ydotool (no REL_WHEEL event in the click API)")
+
+	case "mouse_down", "mouse_up":
+		code := "0xC0" // BTN_LEFT
+		if p.Button == "right" {
+			code = "0xC1"
+		} else if p.Button == "middle" {
+			code = "0xC2"
+		}
+		flag := "-d"
+		if p.Action == "mouse_up" {
+			flag = "-u"
+		}
+		cmds := [][]string{ydoMoveArgs(p.X, p.Y), {"ydotool", "click", flag, code}}
+		if err := runArgvSeq(ctx, cmds); err != nil {
+			return Result{}, err
+		}
+		return Result{Content: "OK"}, nil
+
+	case "hold_key":
+		duration, err := holdKeyDurationClamp(p.Duration)
+		if err != nil {
+			return Result{}, err
+		}
+		if strings.TrimSpace(p.Text) == "" {
+			return Result{}, fmt.Errorf("hold_key requires 'text' (key or combo)")
+		}
+		// Build press list from modifier tokens; sleeps go between press and
+		// release. Non-modifier keys have no evdev mapping here — rejected
+		// explicitly (see ydoModifierKeyArgs).
+		var pressCmds [][]string
+		var releaseCmds [][]string
+		for _, part := range strings.Split(p.Text, "+") {
+			part = strings.ToLower(strings.TrimSpace(part))
+			if part == "" {
+				continue
+			}
+			press, release, ok := ydoModifierKeyArgs(part)
+			if !ok {
+				return Result{}, fmt.Errorf("hold_key on Wayland supports modifier combos only (no evdev mapping for %q)", part)
+			}
+			pressCmds = append(pressCmds, press)
+			releaseCmds = append(releaseCmds, release)
+		}
+		if len(pressCmds) == 0 {
+			return Result{}, fmt.Errorf("hold_key requires at least one key")
+		}
+		all := append([][]string{}, pressCmds...)
+		all = append(all, []string{"sleep", fmt.Sprintf("%d", duration/1000)}) // coarse seconds; ydotool has no sub-second sleep
+		all = append(all, releaseCmds...)
+		if err := runArgvSeq(ctx, all); err != nil {
+			return Result{}, err
+		}
+		return Result{Content: "OK"}, nil
 
 	// Window management has no Wayland protocol for external clients, and
 	// ydotool exposes no position read or accessibility tree.
@@ -281,4 +358,28 @@ func runAppResult(ctx context.Context, app string) (Result, error) {
 		return Result{}, fmt.Errorf("failed to launch %s: %w", app, err)
 	}
 	return Result{Content: fmt.Sprintf("OK: launched %s (PID %d)", app, cmd.Process.Pid)}, nil
+}
+
+// holdKeyX11 implements hold_key via xdotool keydown/sleep/keyup with
+// context-cancellation-safe release.
+func holdKeyX11(ctx context.Context, p desktopParams) (Result, error) {
+	duration, err := holdKeyDurationClamp(p.Duration)
+	if err != nil {
+		return Result{}, err
+	}
+	if strings.TrimSpace(p.Text) == "" {
+		return Result{}, fmt.Errorf("hold_key requires 'text' (key or combo)")
+	}
+	if _, err := exec.CommandContext(ctx, "xdotool", "keydown", p.Text).Output(); err != nil {
+		return Result{}, fmt.Errorf("xdotool keydown failed: %w", err)
+	}
+	select {
+	case <-ctx.Done():
+		// Always attempt release so a cancelled context doesn't leave the
+		// key stuck down.
+		_, _ = exec.CommandContext(context.Background(), "xdotool", "keyup", p.Text).Output()
+		return Result{}, ctx.Err()
+	case <-time.After(time.Duration(duration) * time.Millisecond):
+	}
+	return xdotoolResult(ctx, "keyup", p.Text)
 }

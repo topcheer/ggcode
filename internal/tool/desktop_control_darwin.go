@@ -22,6 +22,10 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 		return mouseClick(ctx, p.X, p.Y, "left", 3)
 	case "right_click":
 		return mouseClick(ctx, p.X, p.Y, "right", 1)
+	case "middle_click":
+		return mouseClick(ctx, p.X, p.Y, "middle", 1)
+	case "mouse_down", "mouse_up":
+		return mouseButtonEvent(ctx, p.X, p.Y, p.Button, p.Action == "mouse_down")
 	case "move":
 		return mouseMove(ctx, p.X, p.Y)
 	case "drag":
@@ -36,6 +40,8 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 		return typeText(ctx, p.Text)
 	case "key_press", "key_combo":
 		return keyComboResult(ctx, p.Text)
+	case "hold_key":
+		return holdKey(ctx, p.Text, p.Duration)
 
 	// ── Window management ──
 	case "set_window_bounds":
@@ -133,19 +139,117 @@ func mouseClick(ctx context.Context, x, y int, button string, count int) (Result
 	if button == "right" {
 		downType = ".rightMouseDown"
 		upType = ".rightMouseUp"
+	} else if button == "middle" {
+		downType = ".otherMouseDown"
+		upType = ".otherMouseUp"
+	}
+	// For the middle button, CGEvent needs mouseButton .center (button 2);
+	// left/right both use .left because the event type encodes the button.
+	swiftButton := ".left"
+	if button == "middle" {
+		swiftButton = ".center"
 	}
 	return runSwiftCGEvent(ctx, fmt.Sprintf(`
 import CoreGraphics
 let point = CGPoint(x: %d, y: %d)
 for _ in 0..<%d {
     let eDown = CGEvent(mouseEventSource: nil, mouseType: CGEventType%s,
-                        mouseCursorPosition: point, mouseButton: .left)
+                        mouseCursorPosition: point, mouseButton: CGMouseButton%s)
     eDown?.post(tap: .cghidEventTap)
     let eUp = CGEvent(mouseEventSource: nil, mouseType: CGEventType%s,
-                      mouseCursorPosition: point, mouseButton: .left)
+                      mouseCursorPosition: point, mouseButton: CGMouseButton%s)
     eUp?.post(tap: .cghidEventTap)
 }
-`, x, y, count, downType, upType))
+`, x, y, count, downType, swiftButton, upType, swiftButton))
+}
+
+// mouseButtonEvent posts a single button-down or button-up event at
+// (x,y). Splitting press/release lets agents build long-press and
+// cross-call drag interactions (down ... move ... up) that a one-shot
+// click cannot express.
+func mouseButtonEvent(ctx context.Context, x, y int, button string, down bool) (Result, error) {
+	typeStr := "Up"
+	if down {
+		typeStr = "Down"
+	}
+	switch button {
+	case "", "left":
+		button = "left"
+	case "right", "middle":
+	default:
+		return Result{}, fmt.Errorf("unknown button %q (left, right, middle)", button)
+	}
+	var swiftType, swiftBtn string
+	switch button {
+	case "left":
+		swiftType = ".leftMouse" + typeStr
+		swiftBtn = ".left"
+	case "right":
+		swiftType = ".rightMouse" + typeStr
+		swiftBtn = ".left"
+	case "middle":
+		swiftType = ".otherMouse" + typeStr
+		swiftBtn = ".center"
+	}
+	return runSwiftCGEvent(ctx, fmt.Sprintf(`
+import CoreGraphics
+let point = CGPoint(x: %d, y: %d)
+let e = CGEvent(mouseEventSource: nil, mouseType: CGEventType%s,
+                mouseCursorPosition: point, mouseButton: CGMouseButton%s)
+e?.post(tap: .cghidEventTap)
+`, x, y, swiftType, swiftBtn))
+}
+
+// holdKey presses a key/combo, holds it for durationMs, then releases.
+// Uses AppleScript for the press/hold/release since CGEvent key events
+// require virtual-key code mapping that AppleSystemEvents gets right for
+// named keys.
+func holdKey(ctx context.Context, keys string, durationMs int) (Result, error) {
+	duration, err := holdKeyDurationClamp(durationMs)
+	if err != nil {
+		return Result{}, err
+	}
+	if strings.TrimSpace(keys) == "" {
+		return Result{}, fmt.Errorf("hold_key requires 'text' (key or combo like 'shift' or 'cmd+tab')")
+	}
+	// AppleScript: key down, delay, key up.
+	script := fmt.Sprintf(`
+tell application "System Events"
+  key down %s
+  delay %f
+  key up %s
+end tell`, applescriptKeyLiteral(keys), float64(duration)/1000.0, applescriptKeyLiteral(keys))
+	return appleScriptResult(ctx, script)
+}
+
+// applescriptKeyLiteral converts "cmd+tab" to AppleScript key down syntax:
+// key down {command down, tab}. System Events accepts both key names and
+// modifier-down tokens in the list.
+func applescriptKeyLiteral(keys string) string {
+	parts := strings.Split(keys, "+")
+	var tokens []string
+	for _, p := range parts {
+		p = strings.ToLower(strings.TrimSpace(p))
+		if p == "" {
+			continue
+		}
+		switch p {
+		case "cmd", "command", "meta", "super":
+			tokens = append(tokens, "command down")
+		case "ctrl", "control":
+			tokens = append(tokens, "control down")
+		case "alt", "option", "opt":
+			tokens = append(tokens, "option down")
+		case "shift":
+			tokens = append(tokens, "shift down")
+		default:
+			tokens = append(tokens, p)
+		}
+	}
+	if len(tokens) == 1 {
+		return tokens[0]
+	}
+	return "{" + strings.Join(tokens, ", ") + "}"
 }
 
 // mouseMove moves the cursor to (x,y) via Swift CGEvent.

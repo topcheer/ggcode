@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"strings"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -112,6 +113,8 @@ const (
 	mouseLeftUp      = 0x0004
 	mouseRightDown   = 0x0008
 	mouseRightUp     = 0x0010
+	mouseMiddleDown  = 0x0020 // MOUSEEVENTF_MIDDLEDOWN
+	mouseMiddleUp    = 0x0040 // MOUSEEVENTF_MIDDLEUP
 	mouseWheel       = 0x0800
 
 	keyUp = 0x0002 // KEYEVENTF_KEYUP
@@ -185,6 +188,10 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 			count = 3
 		}
 		return winClick(ctx, p.X, p.Y, p.Button, count)
+	case "middle_click":
+		return winClick(ctx, p.X, p.Y, "middle", 1)
+	case "mouse_down", "mouse_up":
+		return winMouseButtonEvent(ctx, p.X, p.Y, p.Button, p.Action == "mouse_down")
 	case "move":
 		return winMove(ctx, p.X, p.Y)
 	case "drag":
@@ -206,6 +213,8 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 		return winType(ctx, p.Text)
 	case "key_press", "key_combo":
 		return winKeyCombo(ctx, p.Text)
+	case "hold_key":
+		return winHoldKey(ctx, p)
 
 	// ── Application ──
 	case "launch_app", "open":
@@ -389,12 +398,98 @@ func winClick(ctx context.Context, x, y int, button string, count int) (Result, 
 	if button == "right" {
 		btn = mouseRightDown
 		btnUp = mouseRightUp
+	} else if button == "middle" {
+		btn = mouseMiddleDown
+		btnUp = mouseMiddleUp
 	}
 	for i := 0; i < count; i++ {
 		inputs = append(inputs, mouseEventInput(btn, 0, 0))
 		inputs = append(inputs, mouseEventInput(btnUp, 0, 0))
 	}
 	if err := sendInput(inputs); err != nil {
+		return Result{}, err
+	}
+	return Result{Content: "OK"}, nil
+}
+
+// winMouseButtonEvent posts a single button-down or -up event at (x,y).
+func winMouseButtonEvent(ctx context.Context, x, y int, button string, down bool) (Result, error) {
+	sw, sh := screenSpan()
+	btn := uint32(mouseLeftDown)
+	btnUp := uint32(mouseLeftUp)
+	switch button {
+	case "", "left":
+	case "right":
+		btn = mouseRightDown
+		btnUp = mouseRightUp
+	case "middle":
+		btn = mouseMiddleDown
+		btnUp = mouseMiddleUp
+	default:
+		return Result{}, fmt.Errorf("unknown button %q (left, right, middle)", button)
+	}
+	event := btn
+	if !down {
+		event = btnUp
+	}
+	inputs := []winINPUT{
+		mouseEventInput(mouseAbsolute|mouseVirtualDesk|mouseMove,
+			absCoord(int32(x), sw), absCoord(int32(y), sh)),
+		mouseEventInput(event, 0, 0),
+	}
+	if err := sendInput(inputs); err != nil {
+		return Result{}, err
+	}
+	return Result{Content: "OK"}, nil
+}
+
+// winHoldKey presses a key/combo, sleeps durationMs, releases.
+func winHoldKey(ctx context.Context, p desktopParams) (Result, error) {
+	duration, err := holdKeyDurationClamp(p.Duration)
+	if err != nil {
+		return Result{}, err
+	}
+	if strings.TrimSpace(p.Text) == "" {
+		return Result{}, fmt.Errorf("hold_key requires 'text' (key or combo)")
+	}
+	parts := strings.Split(p.Text, "+")
+	var vks []uint16
+	for _, part := range parts {
+		name := strings.ToLower(strings.TrimSpace(part))
+		vk, ok := winVK[name]
+		if !ok {
+			if len(name) == 1 && name[0] >= 'a' && name[0] <= 'z' {
+				vk = uint16(name[0] - 'a' + 'A')
+			} else if len(name) == 1 && name[0] >= '0' && name[0] <= '9' {
+				vk = uint16(name[0])
+			} else {
+				return Result{}, fmt.Errorf("unknown key %q on Windows", part)
+			}
+		}
+		vks = append(vks, vk)
+	}
+	var inputs []winINPUT
+	for _, vk := range vks {
+		inputs = append(inputs, keyEventInput(vk, 0))
+	}
+	if err := sendInput(inputs); err != nil {
+		return Result{}, err
+	}
+	release := func() error {
+		var rel []winINPUT
+		for i := len(vks) - 1; i >= 0; i-- {
+			rel = append(rel, keyEventInput(vks[i], keyUp))
+		}
+		return sendInput(rel)
+	}
+	select {
+	case <-ctx.Done():
+		// Release even on cancellation so the key doesn't stick.
+		_ = release()
+		return Result{}, ctx.Err()
+	case <-time.After(time.Duration(duration) * time.Millisecond):
+	}
+	if err := release(); err != nil {
 		return Result{}, err
 	}
 	return Result{Content: "OK"}, nil

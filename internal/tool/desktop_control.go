@@ -24,8 +24,8 @@ func (DesktopControlTool) Description() string {
 Use when you need to interact with native desktop applications outside the browser (e.g. Finder, System Settings, Xcode, terminal windows).
 
 Actions:
-  Mouse:   click, double_click, triple_click, right_click, move, drag, scroll, modifier_click, mouse_position
-  Keyboard: type, key_press, key_combo
+  Mouse:   click, double_click, triple_click, right_click, middle_click, move, drag, scroll, modifier_click, mouse_position, mouse_down, mouse_up
+  Keyboard: type, key_press, key_combo, hold_key
   Window:  list_windows, focus_window, close_window, minimize_window, maximize_window, set_window_bounds
   App:     launch_app, quit_app, list_apps, active_app, open (open URL/file with default or specified app)
   UI Tree: snapshot_ui (get accessibility tree of frontmost app), find_element (locate UI element by text)
@@ -44,6 +44,10 @@ menu_select clicks a menu bar item path like "File > Save" or "View > Sort By > 
 modifier_click holds modifiers (e.g. "cmd", "shift", "cmd+shift") while clicking — for multi-select.
 triple_click triple-clicks to select a paragraph/line.
 mouse_position returns the current cursor location in logical pixels.
+mouse_down/mouse_up split a click into separate press and release calls — for
+  long-press interactions and cross-call timing (e.g. press, drag via move, release).
+hold_key presses a key/combo, holds it for duration_ms, then releases — e.g.
+  hold_key "w" 1500ms in a game, or holding arrows for continuous scroll.
 set_window_bounds positions and sizes a window: x,y = top-left; to_x,to_y = width,height.
 open launches a URL or file path with the default handler app (use "app" to force a specific app).
 
@@ -56,8 +60,8 @@ func (DesktopControlTool) Parameters() json.RawMessage {
   "properties": {
     "action": {
       "type": "string",
-      "enum": ["click", "double_click", "triple_click", "right_click", "move", "drag", "scroll", "modifier_click", "mouse_position",
-               "type", "key_press", "key_combo",
+      "enum": ["click", "double_click", "triple_click", "right_click", "middle_click", "move", "drag", "scroll", "modifier_click", "mouse_position", "mouse_down", "mouse_up",
+               "type", "key_press", "key_combo", "hold_key",
                "list_windows", "focus_window", "close_window", "minimize_window", "maximize_window", "set_window_bounds",
                "launch_app", "quit_app", "list_apps", "active_app", "open",
                "snapshot_ui", "find_element", "find_and_click", "wait_and_click",
@@ -73,7 +77,7 @@ func (DesktopControlTool) Parameters() json.RawMessage {
     "amount": {"type": "integer", "default": 1, "description": "Scroll amount (number of steps)."},
     "to_x": {"type": "integer", "description": "Destination X for drag."},
     "to_y": {"type": "integer", "description": "Destination Y for drag."},
-    "duration": {"type": "integer", "default": 0, "description": "Duration in milliseconds for drag animation."},
+    "duration": {"type": "integer", "default": 0, "description": "Duration in milliseconds: drag animation time, or hold_key hold time."},
     "max_depth": {"type": "integer", "default": 8, "description": "Max depth for snapshot_ui accessibility tree traversal."},
     "timeout_ms": {"type": "integer", "default": 5000, "description": "Timeout for wait_and_click (polls for element)."}
   },
@@ -163,6 +167,19 @@ func parseMenuPath(path string) ([]string, error) {
 	return out, nil
 }
 
+// holdKeyDurationClamp bounds the hold_key duration. Anthropic caps wait at
+// 30s; holds longer than that in one call are better expressed as separate
+// mouse_down/key press + sleep + release for observability.
+func holdKeyDurationClamp(ms int) (int, error) {
+	if ms <= 0 {
+		return 0, fmt.Errorf("hold_key requires positive duration (ms)")
+	}
+	if ms > 30000 {
+		return 0, fmt.Errorf("hold_key duration %dms exceeds the 30s cap (use separate press/sleep/release for longer holds)", ms)
+	}
+	return ms, nil
+}
+
 // ─── Linux Wayland backend (ydotool) argv builders ───
 // These are pure functions with no build tag so they can be unit-tested on
 // any platform. The linux-only executor (desktop_control_linux.go) consumes
@@ -180,6 +197,9 @@ func ydoClickArgs(button string, clicks int) [][]string {
 	code := "0xC0" // BTN_LEFT
 	if button == "right" {
 		code = "0xC1" // BTN_RIGHT
+	}
+	if button == "middle" {
+		code = "0xC2" // BTN_MIDDLE
 	}
 	if clicks < 1 {
 		clicks = 1

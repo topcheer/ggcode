@@ -85,11 +85,29 @@ func TestParseMenuPath(t *testing.T) {
 func TestDesktopControlNewActionValidation(t *testing.T) {
 	tool := DesktopControlTool{}
 
-	// modifier_click with a bogus modifier must error, not click.
+	// hold_key without duration must error before anything is held.
 	input, _ := json.Marshal(map[string]any{
-		"action": "modifier_click", "x": 10, "y": 10, "text": "cmd+junk",
+		"action": "hold_key", "text": "shift", "duration": 0,
 	})
 	_, err := tool.Execute(context.Background(), input)
+	if err == nil {
+		t.Fatal("expected error for hold_key with zero duration")
+	}
+
+	// hold_key over the cap must error.
+	input, _ = json.Marshal(map[string]any{
+		"action": "hold_key", "text": "shift", "duration": 60000,
+	})
+	_, err = tool.Execute(context.Background(), input)
+	if err == nil {
+		t.Fatal("expected error for hold_key over 30s cap")
+	}
+
+	// modifier_click with a bogus modifier must error, not click.
+	input, _ = json.Marshal(map[string]any{
+		"action": "modifier_click", "x": 10, "y": 10, "text": "cmd+junk",
+	})
+	_, err = tool.Execute(context.Background(), input)
 	if err == nil {
 		t.Fatal("expected error for invalid modifier in modifier_click")
 	}
@@ -130,6 +148,7 @@ func TestDesktopControlSchemaCoversNewActions(t *testing.T) {
 	for _, a := range []string{
 		"triple_click", "modifier_click", "mouse_position",
 		"set_window_bounds", "open", "menu_select",
+		"middle_click", "mouse_down", "mouse_up", "hold_key",
 	} {
 		if !have[a] {
 			t.Errorf("action %q missing from schema enum", a)

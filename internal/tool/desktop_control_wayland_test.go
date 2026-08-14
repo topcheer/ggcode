@@ -46,6 +46,10 @@ func TestYdoClickArgs(t *testing.T) {
 	if len(got) != 1 || strings.Join(got[0], " ") != "ydotool click 0xC1" {
 		t.Fatalf("right single = %v", got)
 	}
+	// Middle button uses BTN_MIDDLE.
+	if got := ydoClickArgs("middle", 1); strings.Join(got[0], " ") != "ydotool click 0xC2" {
+		t.Fatalf("middle single = %v", got)
+	}
 	// Triple click repeats three times.
 	got = ydoClickArgs("left", 3)
 	if len(got) != 3 {
