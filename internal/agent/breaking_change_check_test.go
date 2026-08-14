@@ -222,3 +222,41 @@ func (i *internal) DoSomething(ctx context.Context) error { return nil }
 		t.Errorf("expected no warning for method on non-exported type, got: %s", warn)
 	}
 }
+
+// Test #139 bug 1: interface method signature change must be detected.
+func TestBreakingChanges_InterfaceSignatureChange(t *testing.T) {
+	old := `package foo
+type Handler interface {
+	Handle(id string) error
+}
+`
+	new := `package foo
+type Handler interface {
+	Handle(id int) error
+}
+`
+	warn := checkBreakingChanges("test.go", old, new)
+	if warn == "" {
+		t.Error("expected warning for interface method signature change, got none")
+	}
+}
+
+// Test #139 bug 2: interface method reordering must NOT trigger a warning.
+func TestBreakingChanges_InterfaceMethodReorder(t *testing.T) {
+	old := `package foo
+type Service interface {
+	A() error
+	B() error
+}
+`
+	new := `package foo
+type Service interface {
+	B() error
+	A() error
+}
+`
+	warn := checkBreakingChanges("test.go", old, new)
+	if warn != "" {
+		t.Errorf("expected no warning for interface method reorder, got: %s", warn)
+	}
+}
