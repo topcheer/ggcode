@@ -99,7 +99,14 @@ func findEmptyErrorBodies(content string) []emptyErrorInfo {
 	}
 
 	var result []emptyErrorInfo
+	// Track the enclosing function so the fingerprint (funcName|condition)
+	// distinguishes instances in different functions — two `if err != nil {}`
+	// blocks in different functions must not cancel each other out (#186).
+	var curFunc string
 	ast.Inspect(tree, func(n ast.Node) bool {
+		if fd, ok := n.(*ast.FuncDecl); ok {
+			curFunc = fd.Name.Name
+		}
 		ifStmt, ok := n.(*ast.IfStmt)
 		if !ok {
 			return true
@@ -114,7 +121,7 @@ func findEmptyErrorBodies(content string) []emptyErrorInfo {
 		if ifStmt.Body == nil || len(ifStmt.Body.List) == 0 {
 			result = append(result, emptyErrorInfo{
 				line: fset.Position(ifStmt.Pos()).Line,
-				fp:   exprText(ifStmt.Cond),
+				fp:   curFunc + "|" + exprText(ifStmt.Cond),
 			})
 			return true
 		}
@@ -130,7 +137,7 @@ func findEmptyErrorBodies(content string) []emptyErrorInfo {
 		if allEmpty {
 			result = append(result, emptyErrorInfo{
 				line: fset.Position(ifStmt.Pos()).Line,
-				fp:   exprText(ifStmt.Cond),
+				fp:   curFunc + "|" + exprText(ifStmt.Cond),
 			})
 		}
 
