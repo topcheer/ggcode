@@ -288,6 +288,7 @@ func (t BatchReplace) Execute(ctx context.Context, input json.RawMessage) (Resul
 			out.FilesChanged--
 			continue
 		}
+		CaptureDiagnosticBaseline(t.WorkingDir, pr.path)
 		writeData, _ := formatGoBytes(pr.path, []byte(pr.newContent))
 		if err := atomicWriteFile(pr.path, writeData, 0644); err != nil {
 			out.Results[i].Status = "error"

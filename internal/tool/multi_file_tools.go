@@ -153,6 +153,7 @@ func (t MultiFileRead) Execute(ctx context.Context, input json.RawMessage) (Resu
 	succeeded, failed, skipped := 0, 0, 0
 	currentLines, currentBytes := 0, 0
 	limitReached := false
+	seenContent := make([]bool, len(reqs)) // whether the agent actually saw this file's content
 	for i := range reqs {
 		if limitReached {
 			body.WriteString(formatMultiFileReadSkippedBlock(reqs[i].Path))
@@ -178,6 +179,7 @@ func (t MultiFileRead) Execute(ctx context.Context, input json.RawMessage) (Resu
 			failed++
 		} else {
 			succeeded++
+			seenContent[i] = true
 		}
 	}
 
@@ -190,9 +192,15 @@ func (t MultiFileRead) Execute(ctx context.Context, input json.RawMessage) (Resu
 		content += "\n\n" + strings.TrimSuffix(body.String(), "\n")
 	}
 
-	// Record mtimes for all successfully read files.
-	for _, req := range reqs {
-		defaultFileTracker.RecordRead(req.Path)
+	// Record mtimes only for files whose content the agent actually saw.
+	// ERROR blocks (sandbox denial / read failure) and skipped files must not
+	// be recorded: HasBeenSeen must imply the agent saw the content, otherwise
+	// write_file's blind-overwrite warning is silently suppressed for files
+	// the agent never saw.
+	for i := range reqs {
+		if seenContent[i] {
+			defaultFileTracker.RecordRead(reqs[i].Path)
+		}
 	}
 
 	return Result{Content: content, IsError: false}, nil
@@ -310,7 +318,17 @@ func (t MultiFileEdit) Execute(ctx context.Context, input json.RawMessage) (Resu
 	}
 
 	if mode == "atomic" {
+		// Capture diagnostic baselines BEFORE any writes so post-edit
+		// diagnostics only report newly introduced issues.
+		for _, plan := range plans {
+			CaptureDiagnosticBaseline(t.WorkingDir, plan.Path)
+		}
 		if failedPath, writeErr := applyAtomicPlans(ctx, plans); writeErr != nil {
+			// Writes were rolled back: drop the stale baselines so a later
+			// edit doesn't diff against a snapshot that no longer matches.
+			for _, plan := range plans {
+				ClearDiagnosticBaseline(plan.Path)
+			}
 			for _, plan := range plans {
 				idx := byPath[plan.Path]
 				if plan.Path == failedPath {
@@ -345,6 +363,8 @@ func (t MultiFileEdit) Execute(ctx context.Context, input json.RawMessage) (Resu
 			out.SecretWarnings += scanAndWarn(plan.Path, plan.NewContent)
 			out.DiagnosticWarnings += postEditDiagnostics(t.WorkingDir, plan.Path)
 			out.DiagnosticWarnings += syntaxCheck(plan.Path, []byte(plan.NewContent))
+			// Record the file's new mtime for stale-read detection.
+			defaultFileTracker.RecordWrite(plan.Path)
 		}
 		content, err := json.Marshal(out)
 		if err != nil {
@@ -377,6 +397,7 @@ func (t MultiFileEdit) Execute(ctx context.Context, input json.RawMessage) (Resu
 			continue
 		}
 
+		CaptureDiagnosticBaseline(t.WorkingDir, plan.Path)
 		if err := atomicWriteFile(plan.Path, writeData, 0644); err != nil {
 			idx := byPath[plan.Path]
 			out.Results[idx].Status = "error"
@@ -583,6 +604,8 @@ func applyAtomicPlans(ctx context.Context, plans []PlannedFileEdit) (string, err
 		if ctx.Err() != nil {
 			for i := len(written) - 1; i >= 0; i-- {
 				_ = atomicWriteFile(written[i].Path, []byte(written[i].OldContent), 0644)
+				// Rollback rewrote the file; its mtime changed again.
+				defaultFileTracker.RecordWrite(written[i].Path)
 			}
 			return plan.Path, fmt.Errorf("cancelled")
 		}
@@ -590,6 +613,7 @@ func applyAtomicPlans(ctx context.Context, plans []PlannedFileEdit) (string, err
 		if err := atomicWriteFile(plan.Path, writeData, 0644); err != nil {
 			for i := len(written) - 1; i >= 0; i-- {
 				_ = atomicWriteFile(written[i].Path, []byte(written[i].OldContent), 0644)
+				defaultFileTracker.RecordWrite(written[i].Path)
 			}
 			return plan.Path, fmt.Errorf("error writing file: %v", err)
 		}

@@ -53,9 +53,13 @@ func TestCompactOldReasoningBlocks(t *testing.T) {
 	if !strings.HasPrefix(oldBlock.ReasoningContent, "[compacted:") {
 		t.Fatalf("expected old reasoning compacted, got %q", oldBlock.ReasoningContent)
 	}
-	// ThinkingSignature must be preserved
-	if oldBlock.ThinkingSignature != "sig-abc" {
-		t.Fatalf("expected ThinkingSignature preserved, got %q", oldBlock.ThinkingSignature)
+	// ThinkingSignature must be cleared: the signature is a cryptographic
+	// binding to the original reasoning text; keeping it alongside the
+	// placeholder would cause Anthropic 400 "invalid signature in thinking
+	// block" on every subsequent request (issue #323). With the signature
+	// empty, buildParams skips the block entirely on echo-back.
+	if oldBlock.ThinkingSignature != "" {
+		t.Fatalf("expected ThinkingSignature cleared on compaction, got %q", oldBlock.ThinkingSignature)
 	}
 	// Most recent reasoning should NOT be compacted
 	recentBlock := msgs[2].Content[0]

@@ -1585,12 +1585,17 @@ func (m *Manager) ClearOldToolUseInputs() int {
 // its response or tool calls.
 //
 // Both Anthropic extended thinking (ThinkingSignature) and DeepSeek reasoning
-// (plain text) are handled. ThinkingSignature and ThinkingData are preserved
-// intact for provider echo-back requirements — only the verbose reasoning text
-// is replaced with a compact placeholder.
+// (plain text) are handled. When a thinking block has a ThinkingSignature, the
+// signature is cleared along with the content: the signature is a cryptographic
+// binding to the exact reasoning text, so a tampered placeholder + stale
+// signature would be rejected by Anthropic with 400 "invalid signature in
+// thinking block". Clearing the signature makes buildParams skip the block
+// entirely on echo-back. Blocks without a signature (DeepSeek reasoning_content)
+// keep the placeholder behavior.
 //
 // This is a purely mechanical operation (no LLM call needed) and is safe because:
-//  1. Anthropic's API verifies thinking blocks by signature, not by text content
+//  1. Anthropic's API verifies the thinking signature against the thinking text;
+//     clearing both removes the block from the request entirely
 //  2. DeepSeek reasoning_content is advisory — an empty/short string is accepted
 //
 // Returns the estimated number of tokens freed.
@@ -1648,6 +1653,14 @@ func (m *Manager) CompactOldReasoningBlocks() int {
 	for _, t := range targets {
 		block := &m.messages[t.msgIdx].Content[t.blkIdx]
 		block.ReasoningContent = fmt.Sprintf("[compacted: original %d chars]", t.origLen)
+		// The signature is a cryptographic binding to the original reasoning
+		// text. Keeping it alongside a placeholder would be rejected by
+		// Anthropic with 400 "invalid signature in thinking block" on every
+		// subsequent request. Clear it so buildParams skips the block on
+		// echo-back. Harmless for unsigned reasoning (DeepSeek).
+		if block.ThinkingSignature != "" {
+			block.ThinkingSignature = ""
+		}
 	}
 
 	before := m.tokens
@@ -1956,6 +1969,14 @@ func (m *Manager) buildSummaryPlan() (summaryPlan, bool) {
 			}
 			accumulatedTokens += groupTokens
 			recentCount++
+		}
+		// Guarantee: never let budget checks violate minRecentGroups — the
+		// last interaction group (which triggered compaction, i.e. the current
+		// user request) is kept verbatim even if it exceeds the budget. Going
+		// over budget only means compaction triggers sooner next round, and
+		// TruncateOldestGroupForRetry can trim oversized groups downstream.
+		if recentCount == 0 {
+			recentCount = 1
 		}
 	}
 

@@ -2352,9 +2352,9 @@ func TestExtractReadPaths(t *testing.T) {
 }
 
 func TestContextManager_Summarize_RecentGroupBudgetExceeded(t *testing.T) {
-	// When the most recent group exceeds the token budget (15% of context
-	// window), it should be summarized along with everything else (fallback
-	// to rolling compaction).
+	// Issue #324 fix: even when the most recent group exceeds the token
+	// budget (15% of context window), the last group is still kept verbatim
+	// so the current user request is never folded into the lossy summary.
 	ctx := context.Background()
 	prov := &mockProvider{}
 
@@ -2371,11 +2371,14 @@ func TestContextManager_Summarize_RecentGroupBudgetExceeded(t *testing.T) {
 	}
 
 	msgs := cm.Messages()
-	// Budget exceeded → all summarized: [system, summary]
-	if len(msgs) != 2 {
-		t.Fatalf("expected system + summary = 2 messages (budget exceeded), got %d", len(msgs))
+	// Budget exceeded but last group guaranteed kept: [system, summary, user, assistant]
+	if len(msgs) != 4 {
+		t.Fatalf("expected system + summary + kept last group = 4 messages, got %d", len(msgs))
 	}
 	if !containsSummaryMarker(msgs[1]) {
 		t.Fatal("expected summary marker")
+	}
+	if msgs[2].Role != "user" || !strings.Contains(msgs[2].Content[0].Text, strings.Repeat("x", 50)) {
+		t.Fatal("expected last user message kept verbatim after summary")
 	}
 }
