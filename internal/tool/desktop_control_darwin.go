@@ -25,7 +25,7 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 	case "move":
 		return mouseMove(ctx, p.X, p.Y)
 	case "drag":
-		return mouseDrag(ctx, p.X, p.Y, p.ToX, p.ToY)
+		return mouseDrag(ctx, p.X, p.Y, p.ToX, p.ToY, p.Duration)
 	case "scroll":
 		return mouseScroll(ctx, p.X, p.Y, p.Direction, p.Amount)
 	case "modifier_click":
@@ -159,22 +159,54 @@ e?.post(tap: .cghidEventTap)
 `, x, y))
 }
 
-// mouseDrag drags from (x,y) to (toX,toY) via Swift CGEvent.
-func mouseDrag(ctx context.Context, x, y, toX, toY int) (Result, error) {
+// mouseDrag drags from (x,y) to (toX,toY) via Swift CGEvent. When durationMs
+// > 0 the move is interpolated into intermediate mouseDragged events so
+// trajectory-sensitive targets (sliders, Dock tear-offs, drag-and-drop with
+// spring loading) register a real drag path instead of a teleport.
+func mouseDrag(ctx context.Context, x, y, toX, toY, durationMs int) (Result, error) {
+	steps := 0
+	intervalMs := 8 // ~125 events/sec — enough for targets to track motion
+	if durationMs > 0 {
+		steps = durationMs / intervalMs
+		if steps < 2 {
+			steps = 2
+		}
+		if steps > 250 {
+			steps = 250 // cap event count; 250 events over >=2s is still smooth
+		}
+	}
 	return runSwiftCGEvent(ctx, fmt.Sprintf(`
 import CoreGraphics
+import Foundation
 let start = CGPoint(x: %d, y: %d)
 let end = CGPoint(x: %d, y: %d)
 let eDown = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown,
                     mouseCursorPosition: start, mouseButton: .left)
 eDown?.post(tap: .cghidEventTap)
-let eDrag = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDragged,
-                     mouseCursorPosition: end, mouseButton: .left)
-eDrag?.post(tap: .cghidEventTap)
+let steps = %d
+let intervalMs = %d.0
+if steps < 1 {
+    // Instant drag: single move to the end point (legacy behavior).
+    let eDrag = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDragged,
+                        mouseCursorPosition: end, mouseButton: .left)
+    eDrag?.post(tap: .cghidEventTap)
+} else {
+    for i in 1...steps {
+        let t = Double(i) / Double(steps)
+        let p = CGPoint(x: start.x + (end.x - start.x) * t,
+                        y: start.y + (end.y - start.y) * t)
+        let eDrag = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDragged,
+                             mouseCursorPosition: p, mouseButton: .left)
+        eDrag?.post(tap: .cghidEventTap)
+        if i < steps {
+            usleep(useconds_t(intervalMs * 1000))
+        }
+    }
+}
 let eUp = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp,
                   mouseCursorPosition: end, mouseButton: .left)
 eUp?.post(tap: .cghidEventTap)
-`, x, y, toX, toY))
+`, x, y, toX, toY, steps, intervalMs))
 }
 
 // mouseScroll scrolls at (x,y) in the given direction via Swift CGEvent.
