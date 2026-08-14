@@ -1117,6 +1117,10 @@ func (c *Client) processNotification(notif *Notification) {
 	if notif == nil {
 		return
 	}
+	// Copy handler pointer without holding c.mu for long — sendRequest holds c.mu
+	// during the entire request/response cycle, and processNotification is called
+	// from the read loop. If we block on c.mu here while sendRequest is waiting
+	// for a response that triggers a notification, we deadlock.
 	c.mu.Lock()
 	h := c.notificationHandler
 	c.mu.Unlock()
@@ -1124,6 +1128,8 @@ func (c *Client) processNotification(notif *Notification) {
 		return
 	}
 	debug.Log("mcp-notif", "server=%s method=%s", c.name, notif.Method)
+	// Call handler outside the lock to avoid deadlock if the handler
+	// calls back into the client (e.g. sendRequest for resources).
 	h(notif.Method, notif.Params)
 }
 

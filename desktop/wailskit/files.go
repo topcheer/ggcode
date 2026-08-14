@@ -87,21 +87,31 @@ func ListDirectory(dir string, recursive bool) ([]FileInfo, error) {
 }
 
 // ReadFileContent reads a text file and returns its content.
-// For security, it rejects paths outside the working directory
-// when the path is not absolute.
+// For security, it restricts file access to the working directory.
 func ReadFileContent(path string) (string, error) {
+	wd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("get working directory: %w", err)
+	}
+
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return "", fmt.Errorf("resolve path: %w", err)
 	}
 
-	// Basic path traversal check
-	clean := filepath.Clean(abs)
-	if strings.Contains(clean, "..") {
-		return "", fmt.Errorf("invalid path: path traversal detected")
+	// Security: verify the resolved path is within the working directory.
+	// filepath.Clean + Abs already resolved all ".." sequences, so checking
+	// for ".." after Clean is useless. Instead, check that the resolved
+	// path is within the working directory.
+	rel, err := filepath.Rel(wd, abs)
+	if err != nil {
+		return "", fmt.Errorf("resolve relative path: %w", err)
+	}
+	if strings.HasPrefix(rel, "..") {
+		return "", fmt.Errorf("access denied: path outside working directory")
 	}
 
-	data, err := os.ReadFile(clean)
+	data, err := os.ReadFile(abs)
 	if err != nil {
 		return "", fmt.Errorf("read file: %w", err)
 	}

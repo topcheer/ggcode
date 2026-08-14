@@ -1267,6 +1267,8 @@ func (s *JSONLStore) loadSessionFull(id string) (*Session, error) {
 // It is safe to call from a goroutine (fire-and-forget). The caller must
 // NOT hold the index flock — this function acquires it.
 func (s *JSONLStore) RepairIndex() (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	// Load current index so repairIndex only loads files NOT already in it.
 	// Passing nil would treat ALL disk files as orphans and reload every one.
 	idx, err := s.loadIndexFromDisk()

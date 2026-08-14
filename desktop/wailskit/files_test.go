@@ -96,9 +96,11 @@ func TestListDirectory_NotADirectory(t *testing.T) {
 }
 
 func TestReadFileContent_Normal(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "test.txt")
+	// Create file within working directory so the security check passes
+	wd, _ := os.Getwd()
+	path := filepath.Join(wd, ".test_read_content.txt")
 	os.WriteFile(path, []byte("hello world"), 0644)
+	defer os.Remove(path)
 
 	content, err := ReadFileContent(path)
 	if err != nil {
@@ -110,13 +112,15 @@ func TestReadFileContent_Normal(t *testing.T) {
 }
 
 func TestReadFileContent_PathTraversal(t *testing.T) {
-	dir := t.TempDir()
-	target := filepath.Join(dir, "secret.txt")
+	// The security check rejects paths that resolve outside the working directory.
+	wd, _ := os.Getwd()
+	parent := filepath.Dir(wd)
+	target := filepath.Join(parent, ".test_secret.txt")
 	os.WriteFile(target, []byte("password"), 0644)
+	defer os.Remove(target)
 
-	// After Clean, the traversal stays within dir/../secret.txt which is parent
-	// The check rejects paths containing ".."
-	path := filepath.Join(dir, "..", "secret.txt")
+	// Construct a path that uses .. to reach the parent directory
+	path := filepath.Join(wd, "..", ".test_secret.txt")
 	_, err := ReadFileContent(path)
 	if err == nil {
 		t.Fatal("expected path traversal error")
@@ -124,8 +128,13 @@ func TestReadFileContent_PathTraversal(t *testing.T) {
 }
 
 func TestReadFileContent_Directory(t *testing.T) {
-	dir := t.TempDir()
-	_, err := ReadFileContent(dir)
+	// Create a directory within working directory
+	wd, _ := os.Getwd()
+	subdir := filepath.Join(wd, ".test_subdir")
+	os.Mkdir(subdir, 0755)
+	defer os.Remove(subdir)
+
+	_, err := ReadFileContent(subdir)
 	if err == nil {
 		t.Fatal("expected error when reading a directory")
 	}

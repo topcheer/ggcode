@@ -435,6 +435,7 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 						ch <- StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Retry %d/%d, waiting %v...] ", attempt+1, providerRetryAttempts, delay)}
 						if sleepErr := retrySleep(ctx, delay); sleepErr != nil {
 							ch <- StreamEvent{Type: StreamEventError, Error: sleepErr}
+							streamError = true
 							return
 						}
 						retry = true

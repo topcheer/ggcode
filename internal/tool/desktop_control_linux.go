@@ -21,9 +21,11 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 	case "move":
 		return xdotoolResult(ctx, "mousemove", fmt.Sprintf("%d", p.X), fmt.Sprintf("%d", p.Y))
 	case "drag":
-		// Move then click-drag
+		// Move to start position, mouse down, move to target, mouse up
 		_, _ = exec.CommandContext(ctx, "xdotool", "mousemove", fmt.Sprintf("%d", p.X), fmt.Sprintf("%d", p.Y)).Output()
-		return xdotoolResult(ctx, "mousemove", "--window", "%1", fmt.Sprintf("%d", p.ToX), fmt.Sprintf("%d", p.ToY))
+		_, _ = exec.CommandContext(ctx, "xdotool", "mousedown", "1").Output()
+		_, _ = exec.CommandContext(ctx, "xdotool", "mousemove", fmt.Sprintf("%d", p.ToX), fmt.Sprintf("%d", p.ToY)).Output()
+		return xdotoolResult(ctx, "mouseup", "1")
 	case "scroll":
 		btn := "4" // up
 		if p.Direction == "down" {
@@ -49,7 +51,7 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 	case "minimize_window":
 		return xdotoolResult(ctx, "search", "--name", p.Text, "windowminimize", "%@")
 	case "maximize_window":
-		return xdotoolResult(ctx, "search", "--onlyvisible", "--class", "", "windowstate", "--toggle", "--maximized")
+		return xdotoolResult(ctx, "search", "--onlyvisible", "--class", "", "windowstate", "--toggle", "--maximized", "%@")
 
 	// ── Application ──
 	case "launch_app":

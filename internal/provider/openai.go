@@ -400,9 +400,9 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 					ch <- StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Retry %d/%d, waiting %v...] ", attempt+1, providerRetryAttempts, delay)}
 					if sleepErr := retrySleep(ctx, delay); sleepErr != nil {
 						ch <- StreamEvent{Type: StreamEventError, Error: sleepErr}
+						streamError = true
 						return
 					}
-					continue
 				}
 				debug.Log("openai", "CONNECT FATAL model=%s baseURL=%s attempt=%d/%d: %T: %v", p.model, p.baseURL, attempt+1, providerRetryAttempts, err, err)
 				ch <- StreamEvent{Type: StreamEventError, Error: fmt.Errorf("openai stream: %w", err)}

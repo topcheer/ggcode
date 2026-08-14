@@ -292,11 +292,29 @@ func (h *TaskHandler) execute(ctx context.Context, t *Task, perm *SkillPermissio
 	}
 
 	// Check if task was canceled *before* execution completed.
+	// When continueTask cancels this context to resume the task, we must NOT
+	// mark it as Canceled — the task was resumed, not cancelled by the client.
 	canceled := ctx.Err() == context.Canceled
 
 	if canceled {
-		h.updateStatus(t, TaskStateCanceled, "canceled by client")
-		h.cleanupCancel(t.ID)
+		// Only mark as Canceled if the task is still in Working state.
+		// If continueTask already moved it to Working with a new context,
+		// this old goroutine should silently exit without overriding the state.
+		h.mu.Lock()
+		currentState := t.Status.State
+		h.mu.Unlock()
+		if currentState == TaskStateWorking {
+			// Verify OUR context is still the active one — if continueTask
+			// replaced it, we're a stale goroutine and should exit silently.
+			if activeCancel, ok := h.cancels[t.ID]; ok {
+				_ = activeCancel
+				// Our context was cancelled but a new one exists — stale goroutine.
+				h.cleanupCancel(t.ID)
+				return
+			}
+			h.updateStatus(t, TaskStateCanceled, "canceled by client")
+			h.cleanupCancel(t.ID)
+		}
 		return
 	}
 

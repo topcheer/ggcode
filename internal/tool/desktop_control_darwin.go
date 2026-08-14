@@ -22,7 +22,8 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 	case "move":
 		return cliclickResult(ctx, fmt.Sprintf("m:%d,%d", p.X, p.Y))
 	case "drag":
-		return cliclickResult(ctx, fmt.Sprintf("dd:%d,%d", p.ToX, p.ToY))
+		// dd: mouse down at start, dm: move to target, du: mouse up at target
+		return cliclickResult(ctx, fmt.Sprintf("dd:%d,%d dm:%d,%d du:%d,%d", p.X, p.Y, p.ToX, p.ToY, p.ToX, p.ToY))
 	case "scroll":
 		// cliclick uses negative for down, positive for up
 		amt := p.Amount
@@ -59,37 +60,37 @@ tell application "System Events"
 end tell`)
 	case "focus_window":
 		return appleScriptResult(ctx, fmt.Sprintf(`
-tell application "%s"
+tell application %s
   activate
-end tell`, p.Text))
+end tell`, applescriptQuote(p.Text)))
 	case "close_window":
 		return appleScriptResult(ctx, fmt.Sprintf(`
-tell application "%s"
+tell application %s
   close front window
-end tell`, p.Text))
+end tell`, applescriptQuote(p.Text)))
 	case "minimize_window":
 		return appleScriptResult(ctx, fmt.Sprintf(`
-tell application "%s"
+tell application %s
   set miniaturized of front window to true
-end tell`, p.Text))
+end tell`, applescriptQuote(p.Text)))
 	case "maximize_window":
 		// macOS doesn't have true maximize; use fullscreen toggle
 		return appleScriptResult(ctx, fmt.Sprintf(`
-tell application "%s"
+tell application %s
   set fullscreen of front window to not fullscreen of front window
-end tell`, p.Text))
+end tell`, applescriptQuote(p.Text)))
 
 	// ── Application ──
 	case "launch_app":
 		return appleScriptResult(ctx, fmt.Sprintf(`
-tell application "%s"
+tell application %s
   activate
-end tell`, p.Text))
+end tell`, applescriptQuote(p.Text)))
 	case "quit_app":
 		return appleScriptResult(ctx, fmt.Sprintf(`
-tell application "%s"
+tell application %s
   quit
-end tell`, p.Text))
+end tell`, applescriptQuote(p.Text)))
 	case "list_apps":
 		return appleScriptResult(ctx, `
 tell application "System Events"
@@ -164,3 +165,12 @@ func isCommandNotFound(err error) bool {
 
 // Ensure desktopControlResult is used (placeholder for JSON marshaling consistency)
 var _ = json.Marshal
+
+// applescriptQuote escapes a user-supplied string for safe embedding inside
+// AppleScript double-quoted strings. It wraps the value in escaped quotes.
+func applescriptQuote(s string) string {
+	// Escape backslashes first, then double quotes
+	s = strings.ReplaceAll(s, "\\", "\\\\")
+	s = strings.ReplaceAll(s, "\"", "\\\"")
+	return "\"" + s + "\""
+}

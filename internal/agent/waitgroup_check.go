@@ -77,13 +77,26 @@ func checkWaitGroupMisuse(filePath, oldContent, newContent string) []string {
 	oldIssues := findWaitGroupMisuse(oldContent)
 	newIssues := findWaitGroupMisuse(newContent)
 
-	if len(newIssues) <= len(oldIssues) {
+	// Delta: use content fingerprints, not count comparison.
+	// An agent can fix one WG misuse and introduce another — count stays the same
+	// but the new misuse is still a problem.
+	oldSet := make(map[string]bool)
+	for _, iss := range oldIssues {
+		oldSet[iss.pattern] = true
+	}
+	var newOnly []wgMisuseInfo
+	for _, iss := range newIssues {
+		if !oldSet[iss.pattern] {
+			newOnly = append(newOnly, iss)
+		}
+	}
+	if len(newOnly) == 0 {
 		return nil
 	}
 
 	var warnings []string
 	seen := make(map[string]bool)
-	for _, issue := range newIssues {
+	for _, issue := range newOnly {
 		if seen[issue.pattern] {
 			continue
 		}

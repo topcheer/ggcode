@@ -40,9 +40,10 @@ import (
 	"strings"
 )
 
-// uncheckedAssertInfo records a single unchecked type assertion with its line.
+// uncheckedAssertInfo records a single unchecked type assertion with its line and expression text.
 type uncheckedAssertInfo struct {
 	line int
+	expr string // the assertion expression text for fingerprinting
 }
 
 // checkUncheckedTypeAssert detects unchecked type assertions in Go code.
@@ -59,12 +60,24 @@ func checkUncheckedTypeAssert(filePath, oldContent, newContent string) []string 
 	oldAsserts := findUncheckedAsserts(filePath, oldContent)
 	newAsserts := findUncheckedAsserts(filePath, newContent)
 
-	// Delta: only flag if NEW has more unchecked assertions than OLD.
-	if len(newAsserts) <= len(oldAsserts) {
+	// Delta: use content fingerprints, not count comparison.
+	// An agent can fix one assert and introduce another — count stays the same
+	// but the new assert is still a problem. Compare actual content.
+	oldSet := make(map[string]bool)
+	for _, a := range oldAsserts {
+		oldSet[assertFingerprint(a)] = true
+	}
+	var newOnly []uncheckedAssertInfo
+	for _, a := range newAsserts {
+		if !oldSet[assertFingerprint(a)] {
+			newOnly = append(newOnly, a)
+		}
+	}
+	if len(newOnly) == 0 {
 		return nil
 	}
 
-	introduced := len(newAsserts) - len(oldAsserts)
+	introduced := len(newOnly)
 	noun := "unchecked type assertion"
 	if introduced > 1 {
 		noun = "unchecked type assertions"
@@ -158,8 +171,15 @@ func findUncheckedAsserts(filename, src string) []uncheckedAssertInfo {
 			continue
 		}
 		p := fset.Position(pos)
-		results = append(results, uncheckedAssertInfo{line: p.Line})
+		results = append(results, uncheckedAssertInfo{line: p.Line, expr: p.String()})
 	}
 
 	return results
+}
+
+// assertFingerprint returns a content-based key for delta comparison.
+// Uses the expression text so the same assertion at different line numbers
+// is recognized as the same issue.
+func assertFingerprint(a uncheckedAssertInfo) string {
+	return a.expr
 }
