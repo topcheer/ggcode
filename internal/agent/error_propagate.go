@@ -70,6 +70,13 @@ const (
 	// that claim success are suspicious.
 	degradedMinContentLen = 15
 
+	// degradedPatternMaxLen: "no result" substring patterns are only
+	// checked on outputs at most this long (after trimming). This
+	// prevents false positives where legitimate code content returned
+	// by grep/read_file contains phrases like "not found" in error-
+	// handling code (e.g., fmt.Errorf("record not found")).
+	degradedPatternMaxLen = 50
+
 	// degradedMaxChainsWarn: maximum propagation warnings per run.
 	degradedMaxChainsWarn = 2
 )
@@ -189,10 +196,14 @@ func classifyDegraded(toolName, content string) degradedKind {
 		}
 	}
 
-	// "No result" patterns for search/read tools.
-	for _, p := range degradedPatterns {
-		if strings.Contains(lower, p) {
-			return degradedNoResult
+	// "No result" patterns — only check on SHORT outputs to avoid
+	// false positives where legitimate code content contains these
+	// phrases (e.g., error-handling code with "not found").
+	if len(trimmed) <= degradedPatternMaxLen {
+		for _, p := range degradedPatterns {
+			if strings.Contains(lower, p) {
+				return degradedNoResult
+			}
 		}
 	}
 

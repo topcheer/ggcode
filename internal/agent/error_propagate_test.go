@@ -32,6 +32,11 @@ func TestClassifyDegraded(t *testing.T) {
 		{"valid content - normal short non-content tool", "run_command", "ok", degradedNone},
 		{"valid content - substantial", "grep", "found 5 matches in 3 files:\nfile1.go:10:match1\nfile1.go:25:match2", degradedNone},
 		{"nullish not exact - longer text", "read_file", "null pointer dereference occurred at runtime", degradedNone},
+		// #143: "not found" in legitimate code content must NOT be degradedNoResult.
+		{"#143 grep returns error-handling code with 'not found'", "grep", "main.go:42:  return fmt.Errorf(\"record not found: %w\", err)", degradedNone},
+		{"#143 read_file reads file with error definitions", "read_file", "// ErrNotFound is returned when key not found in cache\nvar ErrNotFound = errors.New(\"not found\")", degradedNone},
+		{"#143 run_command output mentions 'not found' in test", "run_command", "PASS (ok: github.com/pkg/errors)\nok github.com/myproject/handler 0.123s\n  handler.go: \"not found\" error path tested", degradedNone},
+		{"#143 grep returns 'file not found' in code", "grep", "config.go:15:  return errors.New(\"file not found: \" + path)", degradedNone},
 	}
 
 	for _, tt := range tests {
