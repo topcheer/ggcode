@@ -73,8 +73,8 @@ func normalizeStreamingMarkdown(text string) string {
 }
 
 // capStreamingBlock truncates an oversized growing block to its last
-// maxStreamingBlockLines lines, prefixed with a dimmed ellipsis marker so
-// the truncation is visible. Small blocks pass through unchanged.
+// maxStreamingBlockLines lines, prefixed with a visible ellipsis marker.
+// Small blocks pass through unchanged.
 func capStreamingBlock(block string) string {
 	if block == "" {
 		return block
@@ -83,8 +83,44 @@ func capStreamingBlock(block string) string {
 	if len(lines) <= maxStreamingBlockLines {
 		return block
 	}
-	kept := lines[len(lines)-maxStreamingBlockLines:]
-	return fmt.Sprintf("… (%d earlier lines hidden while streaming)\n%s", len(lines)-maxStreamingBlockLines, strings.Join(kept, "\n"))
+	drop := len(lines) - maxStreamingBlockLines
+	kept := lines[drop:]
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "… (%d earlier lines hidden while streaming)\n\n", drop)
+	// If truncation removed the opening fence of a code block, the kept
+	// closing fence would instead OPEN a new never-closed block and mangle
+	// the streaming display. Re-open the fence to keep markdown valid.
+	if fence := missingOpenFence(kept); fence != "" {
+		sb.WriteString(fence + "\n")
+	}
+	sb.WriteString(strings.Join(kept, "\n"))
+	return sb.String()
+}
+
+// missingOpenFence mirrors closeOpenFences' parity logic: because the
+// document was fence-balanced before truncation, an odd number of fence
+// lines in the kept tail means its opening partner was dropped. Returns
+// the fence style to prepend, or "" when balanced.
+func missingOpenFence(kept []string) string {
+	fence := ""
+	for _, line := range kept {
+		trimmed := strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(trimmed, "```"):
+			if fence == "" {
+				fence = "```"
+			} else if fence == "```" {
+				fence = ""
+			}
+		case strings.HasPrefix(trimmed, "~~~"):
+			if fence == "" {
+				fence = "~~~"
+			} else if fence == "~~~" {
+				fence = ""
+			}
+		}
+	}
+	return fence
 }
 
 func splitMarkdownBlocks(src string) []string {
