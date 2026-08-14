@@ -492,9 +492,10 @@ func keyComboResult(ctx context.Context, combo string) (Result, error) {
 	var script string
 	if code, ok := keyCodeMap[keyLower]; ok {
 		script = fmt.Sprintf(`tell application "System Events" to key code %d%s`, code, modList)
-	} else if len(key) == 1 {
-		script = fmt.Sprintf(`tell application "System Events" to keystroke "%s"%s`, key, modList)
 	} else {
+		// Escape the key for embedding in an AppleScript double-quoted
+		// string; applies to the single-char branch too (a literal " would
+		// otherwise break the script).
 		escaped := strings.ReplaceAll(key, "\\", "\\\\")
 		escaped = strings.ReplaceAll(escaped, "\"", "\\\"")
 		script = fmt.Sprintf(`tell application "System Events" to keystroke "%s"%s`, escaped, modList)
