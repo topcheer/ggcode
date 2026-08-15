@@ -290,6 +290,16 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 	case doneMsg:
 		return m.handleDoneMsg(msg)
 
+	case agentRestartArmedMsg:
+		// LLM restart tool armed a restart from the tool goroutine; set the
+		// flag on the CANONICAL Model copy inside the event loop. Fired by
+		// handleDoneMsg after persistFullSessionMessages.
+		if msg.debugMode {
+			m.restartDebug = true
+		}
+		m.restartPending = true
+		return m, nil
+
 	case agentDoneMsg:
 		return m.handleAgentDoneMsg(msg)
 

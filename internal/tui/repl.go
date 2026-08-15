@@ -852,13 +852,13 @@ func (r *REPL) SetPlanModeTools(tools *tool.Registry) {
 
 	// Inject the restart requester so the LLM restart tool reuses the
 	// /restart machinery (session-preserving exec restart). The requester
-	// only ARMS a pending restart; handleDoneMsg fires it after the turn's
-	// tool results are persisted to the session — quitting earlier would
-	// leave a dangling tool_use with no tool_result and break the resumed
-	// agent loop.
+	// only ARMS a pending restart via program.Send (never mutates Model
+	// directly — Bubble Tea models are value-copied, a direct write from
+	// the tool goroutine lands on a stale copy). firePendingRestart in
+	// handleDoneMsg fires after the turn's tool results are persisted.
 	if rt, ok := tools.Get("restart"); ok {
 		if rtt, ok := rt.(*tool.RestartTool); ok {
-			rtt.Requester = &replRestartRequester{model: &r.model}
+			rtt.Requester = &replRestartRequester{repl: r}
 		}
 	}
 }
@@ -866,25 +866,27 @@ func (r *REPL) SetPlanModeTools(tools *tool.Registry) {
 // replRestartRequester adapts the restart tool to the TUI /restart flow in
 // TWO phases:
 //
-// Phase 1 (RequestRestart, called from the tool goroutine mid-turn): only
-// arm m.restartPending. The current turn must finish so its tool_result is
-// persisted to the session — if we quit immediately, the resumed session
-// would contain a tool_use without its tool_result and the agent loop
-// would stall on startup.
+// Phase 1 (RequestRestart, called from the tool goroutine mid-turn): send
+// an agentRestartArmedMsg into the Bubble Tea event loop. NEVER mutate
+// Model fields directly here — Update receives Model by value, so a direct
+// write from this goroutine lands on a stale copy and the arming is lost
+// (exactly the bug observed live: tool returned OK but no restart fired).
+// The current turn must also finish so its tool_result is persisted.
 //
 // Phase 2 (firePendingRestart, called from handleDoneMsg AFTER
-// persistFullSessionMessages): replicate handleRestartCommand exactly —
-// same system messages, same flags — so the UX matches /restart.
+// persistFullSessionMessages): runs beginRestart — the single shared core
+// also used by /restart — so output is identical by construction.
+type agentRestartArmedMsg struct {
+	debugMode bool
+}
+
 type replRestartRequester struct {
-	model *Model
+	repl *REPL
 }
 
 func (rr *replRestartRequester) RequestRestart(debugMode bool) {
-	if debugMode {
-		rr.model.restartDebug = true
-	}
-	rr.model.restartPending = true
 	debug.Log("restart", "agent-requested restart armed; will fire after turn completion")
+	rr.repl.sendProgramMsgs(agentRestartArmedMsg{debugMode: debugMode})
 }
 
 // firePendingRestart triggers the actual restart flow via the shared
