@@ -40,21 +40,45 @@ var delegationToolNames = map[string]bool{
 	"spawn_agent":       true, // one-shot sub-agent
 	"use_namedagent":    true, // named sub-agent template invocation
 	"delegate":          true, // external CLI agent delegation
+	"send_message":      true, // async message/task delivery to teammates
 	"teammate_spawn":    true, // persistent swarm teammate
 	"swarm_task_create": true, // task board assignment
 	"a2a_remote":        true, // cross-project delegation
 	"a2a_send_task":     true, // A2A protocol task send
 }
 
+// fireAndForgetDelegationTools are delegation tools whose results are
+// consumed asynchronously, often across sessions, by design. swarm_task_create
+// and a2a_send_task post work to a task board / remote queue; polling the
+// result later (or never, within this run) is the intended usage pattern, not
+// an orphaned delegation. They still count toward over-delegation and serial
+// detection, but are never tracked as orphans.
+var fireAndForgetDelegationTools = map[string]bool{
+	"swarm_task_create": true,
+	"a2a_send_task":     true,
+}
+
 // delegationResultTools identifies tools that consume delegation results.
 var delegationResultTools = map[string]bool{
-	"wait_agent":       true,
-	"list_agents":      true,
-	"task_output":      true,
-	"teammate_results": true,
-	"swarm_task_list":  true,
-	"a2a_get_task":     true,
-	"a2a_list_tasks":   true,
+	"wait_agent":          true,
+	"list_agents":         true,
+	"task_output":         true,
+	"teammate_results":    true,
+	"swarm_task_list":     true,
+	"a2a_get_task":        true,
+	"a2a_list_tasks":      true,
+	"read_command_output": true, // background job output (job_id-addressed)
+}
+
+// delegationSurveyResultTools are result tools that report on ALL active
+// delegations at once (status listings). Successfully consuming one of these
+// legitimately checks every tracked delegation, so they mark all entries as
+// checked. Targeted tools (wait_agent, task_output, ...) only check the
+// delegation they actually address.
+var delegationSurveyResultTools = map[string]bool{
+	"list_agents":     true,
+	"swarm_task_list": true,
+	"a2a_list_tasks":  true,
 }
 
 // delegationState tracks delegation orchestration metrics within a single run.
@@ -92,7 +116,11 @@ type delegationEntry struct {
 
 const (
 	// orphanDelegationThreshold: warn after this many unchecked iterations.
-	orphanDelegationThreshold = 3
+	// Iterations, not wall-clock: sub-agents routinely run long, and a fixed
+	// 30s time fallback fired false orphans during legitimately long waits.
+	// Raised from 3 to 8 — 3 false-positived on normal spawn → work → check
+	// rhythms where the agent does a few iterations of its own work first.
+	orphanDelegationThreshold = 8
 	// orphanDelegationMaxWarnings caps orphan warnings per run to avoid noise.
 	orphanDelegationMaxWarnings = 3
 	// serialDelegationThreshold: warn after this many sequential independent delegations.
@@ -121,9 +149,11 @@ func (d *delegationState) recordDelegationCall(toolID, toolName, taskSummary str
 
 	d.totalDelegations++
 
-	// Track for orphan detection — only track delegations that return an
-	// agent_id or create an async task (not fire-and-forget like send_message).
-	if delegationToolNames[toolName] {
+	// Track for orphan detection — only delegations that return an
+	// agent_id or create an async task the caller must consume. Fire-and-forget
+	// tools (swarm_task_create, a2a_send_task) post work that is polled
+	// asynchronously, often across sessions, so they are exempt.
+	if delegationToolNames[toolName] && !fireAndForgetDelegationTools[toolName] {
 		synID := toolID
 		if synID == "" {
 			d.delegationSeq++
@@ -146,17 +176,74 @@ func (d *delegationState) recordDelegationCall(toolID, toolName, taskSummary str
 	}
 }
 
-// recordResultCheck marks that a delegation result was consumed.
-func (d *delegationState) recordResultCheck(toolName string, iteration int) {
+// recordResultCheck marks that a delegation result was consumed. Only the
+// delegation(s) actually addressed by this check are marked: survey tools
+// (list_agents, ...) mark all; targeted tools (wait_agent, task_output, ...)
+// mark only the delegation whose id/target matches the tool arguments or is
+// mentioned in the result content. If the target cannot be resolved, nothing
+// is marked (conservative — an unrelated wait must not reset another
+// delegation's orphan timer).
+func (d *delegationState) recordResultCheck(toolName string, args json.RawMessage, resultContent string, iteration int) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	// Mark all active delegations as checked — we can't know which specific
-	// delegation a result tool consumed, but any result check resets the
-	// orphan timer for all tracked delegations.
-	for _, del := range d.activeDelegations {
-		del.lastChecked = iteration
+	if len(d.activeDelegations) == 0 {
+		return
 	}
+
+	// Survey tools report the status of every tracked delegation at once.
+	if delegationSurveyResultTools[toolName] {
+		for _, del := range d.activeDelegations {
+			del.lastChecked = iteration
+		}
+		return
+	}
+
+	target := extractDelegationTarget(args)
+	for _, del := range d.activeDelegations {
+		if target != "" && delegationTargetMatches(del, target) {
+			del.lastChecked = iteration
+			continue
+		}
+		// Fall back to the result content: a wait that returns output naming a
+		// delegation id counts as having consumed that delegation's result.
+		if resultContent != "" && strings.Contains(resultContent, del.id) {
+			del.lastChecked = iteration
+		}
+	}
+}
+
+// extractDelegationTarget pulls the addressee identifier out of a result-check
+// tool's arguments (agent_id, task_id, teammate_id, to, target, ...).
+func extractDelegationTarget(args json.RawMessage) string {
+	if len(args) == 0 {
+		return ""
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal(args, &m); err != nil {
+		return ""
+	}
+	for _, field := range []string{"agent_id", "task_id", "teammate_id", "job_id", "id", "to", "target", "agent", "name"} {
+		if v, ok := m[field]; ok {
+			if s, ok := v.(string); ok && s != "" {
+				return s
+			}
+		}
+	}
+	return ""
+}
+
+// delegationTargetMatches reports whether a delegation entry is the one
+// addressed by the given target identifier (exact id, id substring overlap,
+// or the target appearing in the task summary).
+func delegationTargetMatches(del *delegationEntry, target string) bool {
+	if del.id == target {
+		return true
+	}
+	if strings.Contains(del.id, target) || strings.Contains(target, del.id) {
+		return true
+	}
+	return target != "" && strings.Contains(del.taskSummary, target)
 }
 
 // recordToolCallCount increments the total tool call counter for ratio tracking.
@@ -196,13 +283,12 @@ func (d *delegationState) maybeWarnOrphanedDelegations(iteration int) string {
 		if d.orphansWarned[delID] {
 			continue
 		}
-		elapsed := iteration - del.lastChecked
-		if elapsed >= orphanDelegationThreshold {
-			timeElapsed := time.Since(del.creationTime)
-			if elapsed >= orphanDelegationThreshold || timeElapsed >= 30*time.Second {
-				orphans = append(orphans, del.toolName+": "+del.taskSummary)
-				d.orphansWarned[delID] = true
-			}
+		// Purely iteration-based: no wall-clock fallback. Long-running
+		// sub-agents are normal; only sustained disinterest (many iterations
+		// with no result check) marks an orphan.
+		if iteration-del.lastChecked >= orphanDelegationThreshold {
+			orphans = append(orphans, del.toolName+": "+del.taskSummary)
+			d.orphansWarned[delID] = true
 		}
 	}
 

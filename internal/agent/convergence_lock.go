@@ -46,9 +46,11 @@ import (
 )
 
 const (
-	// convergenceEditThreshold: max edits allowed after successful verification
-	// before the first convergence warning fires. Allows for minor fixes
-	// discovered during verification review without triggering.
+	// convergenceEditThreshold: number of edits ALLOWED after successful
+	// verification. The first convergence warning fires on the NEXT edit after
+	// this many (i.e. > threshold). The common "verify → review finds a few
+	// small issues → fix them" loop involves ~3 minor fixes, which must not
+	// trigger a warning; the 4th post-verify edit does.
 	convergenceEditThreshold = 3
 
 	// convergenceEscalationThreshold: a second, stronger warning fires at this
@@ -171,8 +173,10 @@ func (s *convergenceLockState) check() string {
 		return msg
 	}
 
-	// First warning at convergenceEditThreshold
-	if s.postVerifyEdits >= convergenceEditThreshold && !s.warned {
+	// First warning on the edit AFTER convergenceEditThreshold allowed edits.
+	// With threshold 3: fixing up to 3 minor issues found during verification
+	// review is fine; the 4th post-verification edit triggers this warning.
+	if s.postVerifyEdits > convergenceEditThreshold && !s.warned {
 		s.warned = true
 		debug.Log("convergence_lock", "post-verification drift detected: %d edits after verify (%q)",
 			s.postVerifyEdits, truncateCmd(s.verifiedCommand))
@@ -209,10 +213,53 @@ func (a *Agent) convergenceRecordVerify(toolName string, args []byte, resultErr 
 		return
 	}
 	cmd := extractCommandFromArgs(args)
-	if cmd == "" || !isVerifyCommand(cmd) {
+	if cmd == "" || !isConvergenceVerifyCommand(cmd) {
 		return
 	}
 	a.convergenceLock.recordVerifyResult(cmd, resultErr)
+}
+
+// convergenceVerifyMakeTargets is a whitelist of make/just/task targets that
+// count as verification for convergence-lock ARMING. Task-runner targets are
+// ambiguous (make clean, make fmt, make help, make tidy are NOT verification)
+// so only build/test/verify/lint/check-family targets qualify. Compound
+// targets sharing the prefix (verify-ci, test-unit, check-all) also qualify.
+var convergenceVerifyMakeTargets = map[string]bool{
+	"test":   true,
+	"ci":     true,
+	"build":  true,
+	"lint":   true,
+	"check":  true,
+	"verify": true,
+}
+
+// isConvergenceVerifyCommand reports whether a command counts as successful
+// verification for convergence-lock purposes. Stricter than the verify-hint
+// isVerifyCommand: a bare `make <anything>` does NOT arm the lock — only
+// whitelisted make/just/task targets do. Non-task-runner commands (go test,
+// cargo build, npm test, ...) defer to isVerifyCommand unchanged.
+func isConvergenceVerifyCommand(cmd string) bool {
+	cmdLower := strings.ToLower(strings.TrimSpace(cmd))
+	if cmdLower == "" {
+		return false
+	}
+	words := strings.Fields(cmdLower)
+	if len(words) > 0 {
+		switch words[0] {
+		case "make", "just", "task":
+			if len(words) < 2 {
+				return false // bare `make` — no target, not a verification
+			}
+			target := words[1]
+			for prefix := range convergenceVerifyMakeTargets {
+				if target == prefix || strings.HasPrefix(target, prefix+"-") || strings.HasPrefix(target, prefix+"_") {
+					return true
+				}
+			}
+			return false // make clean / make fmt / make help / make tidy / ...
+		}
+	}
+	return isVerifyCommand(cmd)
 }
 
 // convergenceRecordEdit tracks a file edit for convergence drift detection.

@@ -3609,8 +3609,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				if delegationToolNames[tc.Name] {
 					taskSum := extractDelegationTaskSummary(tc.Name, tc.Arguments)
 					a.delegationOrch.recordDelegationCall(tc.ID, tc.Name, taskSum, i+1)
-				} else if delegationResultTools[tc.Name] {
-					a.delegationOrch.recordResultCheck(tc.Name, i+1)
+				} else if delegationResultTools[tc.Name] && !result.IsError {
+					// Only successful result checks count as consumption; a failed
+					// wait/task_output did not actually retrieve anything.
+					a.delegationOrch.recordResultCheck(tc.Name, tc.Arguments, result.Content, i+1)
 				}
 				a.delegationOrch.recordToolCallCount()
 			}
