@@ -29,10 +29,10 @@ func TestScanActionHedging(t *testing.T) {
 			wantHigh: 1,
 		},
 		{
-			name:     "let's try",
+			name:     "let's try (MEDIUM since #359)",
 			text:     "Let's try this approach and see if it works.",
 			wantMin:  1,
-			wantHigh: 1,
+			wantHigh: 0,
 		},
 		{
 			name:     "best guess",
@@ -44,7 +44,13 @@ func TestScanActionHedging(t *testing.T) {
 			name:     "multiple hedging signals",
 			text:     "This should hopefully fix the bug. Let's try it. If this doesn't work, we can try something else.",
 			wantMin:  3,
-			wantHigh: 3,
+			wantHigh: 2, // "let's try it" downgraded to MEDIUM (#359)
+		},
+		{
+			name:     "fallback narration is not hedging (#359)",
+			text:     "The retry layer now uses the exponential fallback if all brokers are down.",
+			wantMin:  0,
+			wantHigh: 0,
 		},
 		{
 			name:     "not sure but proceeding",
