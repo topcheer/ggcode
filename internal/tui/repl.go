@@ -851,7 +851,11 @@ func (r *REPL) SetPlanModeTools(tools *tool.Registry) {
 	}
 
 	// Inject the restart requester so the LLM restart tool reuses the
-	// /restart machinery (session-preserving exec restart).
+	// /restart machinery (session-preserving exec restart). The requester
+	// only ARMS a pending restart; handleDoneMsg fires it after the turn's
+	// tool results are persisted to the session — quitting earlier would
+	// leave a dangling tool_use with no tool_result and break the resumed
+	// agent loop.
 	if rt, ok := tools.Get("restart"); ok {
 		if rtt, ok := rt.(*tool.RestartTool); ok {
 			rtt.Requester = &replRestartRequester{model: &r.model}
@@ -859,9 +863,18 @@ func (r *REPL) SetPlanModeTools(tools *tool.Registry) {
 	}
 }
 
-// replRestartRequester adapts the restart tool to the TUI /restart flow:
-// set the same flags handleRestartCommand sets, then the main loop's
-// tea.Quit path runs execRestart with --resume <session-id>.
+// replRestartRequester adapts the restart tool to the TUI /restart flow in
+// TWO phases:
+//
+// Phase 1 (RequestRestart, called from the tool goroutine mid-turn): only
+// arm m.restartPending. The current turn must finish so its tool_result is
+// persisted to the session — if we quit immediately, the resumed session
+// would contain a tool_use without its tool_result and the agent loop
+// would stall on startup.
+//
+// Phase 2 (firePendingRestart, called from handleDoneMsg AFTER
+// persistFullSessionMessages): replicate handleRestartCommand exactly —
+// same system messages, same flags — so the UX matches /restart.
 type replRestartRequester struct {
 	model *Model
 }
@@ -870,9 +883,25 @@ func (rr *replRestartRequester) RequestRestart(debugMode bool) {
 	if debugMode {
 		rr.model.restartDebug = true
 	}
-	rr.model.chatWriteSystem(nextSystemID(), "Restart requested by agent — restarting ggcode (session will resume)...")
-	rr.model.quitting = true
-	rr.model.restartRequested = true
+	rr.model.restartPending = true
+	debug.Log("restart", "agent-requested restart armed; will fire after turn completion")
+}
+
+// firePendingRestart triggers the actual /restart flow. Called from
+// handleDoneMsg after session persistence.
+func (m *Model) firePendingRestart() tea.Cmd {
+	if !m.restartPending {
+		return nil
+	}
+	m.restartPending = false
+	m.chatWriteSystem(nextSystemID(), "Restarting ggcode...")
+	if m.restartDebug {
+		m.chatWriteSystem(nextSystemID(), "  (debug mode enabled: GGCODE_DEBUG=1)")
+	}
+	m.quitting = true
+	m.restartRequested = true
+	m.shutdownAll()
+	return tea.Quit
 }
 
 // SetSendMessageTool registers the send_message tool for agent communication.

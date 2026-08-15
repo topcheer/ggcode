@@ -66,6 +66,12 @@ func (m Model) handleDoneMsg(msg doneMsg) (Model, tea.Cmd) {
 	if !wasCanceled && !wasFailed {
 		m.persistFullSessionMessages()
 	}
+	// Fire an agent-requested restart AFTER persistence: the session now
+	// contains this turn's tool results, so the resumed agent loop won't
+	// hit a dangling tool_use.
+	if cmd := m.firePendingRestart(); cmd != nil {
+		return m, cmd
+	}
 	if !wasCanceled && !wasFailed && m.pendingSubmissionCount() > 0 {
 		return m, m.submitPendingSubmissionCmd()
 	}

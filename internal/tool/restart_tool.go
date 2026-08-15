@@ -67,5 +67,5 @@ func (t *RestartTool) Execute(ctx context.Context, input json.RawMessage) (Resul
 	// Signal the host UI. The actual exec happens after the TUI releases the
 	// terminal; the process continues serving this tool result until then.
 	t.Requester.RequestRestart(args.Debug)
-	return Result{Content: fmt.Sprintf("OK: restart requested (%s). The process will restart and resume this session once the current turn finishes.", args.Reason)}, nil
+	return Result{Content: fmt.Sprintf("OK: restart requested (%s). The restart fires after this turn completes and its results are persisted; the process will then restart and resume this session automatically.", args.Reason)}, nil
 }

@@ -48,8 +48,8 @@ func TestRestartToolRequestsRestart(t *testing.T) {
 	if !req.debugMode {
 		t.Error("debug flag was not propagated")
 	}
-	if !strings.Contains(res.Content, "resume this session") {
-		t.Errorf("result should tell the model the session is preserved: %s", res.Content)
+	if !strings.Contains(res.Content, "restart requested") {
+		t.Errorf("result should describe the pending restart: %s", res.Content)
 	}
 }
 
