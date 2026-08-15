@@ -515,6 +515,15 @@ func (m *Model) handleRestartCommand(text string) tea.Cmd {
 			debugMode = true
 		}
 	}
+	return m.beginRestart(debugMode)
+}
+
+// beginRestart is the single shared core for ALL restart entry points
+// (/restart slash command and the LLM restart tool via
+// firePendingRestart): identical system messages, identical flags,
+// identical quit sequence. Keep the two entry points thin wrappers —
+// never duplicate this logic again.
+func (m *Model) beginRestart(debugMode bool) tea.Cmd {
 	if debugMode {
 		m.restartDebug = true
 	}

@@ -887,21 +887,15 @@ func (rr *replRestartRequester) RequestRestart(debugMode bool) {
 	debug.Log("restart", "agent-requested restart armed; will fire after turn completion")
 }
 
-// firePendingRestart triggers the actual /restart flow. Called from
-// handleDoneMsg after session persistence.
+// firePendingRestart triggers the actual restart flow via the shared
+// beginRestart core (same as /restart). Called from handleDoneMsg after
+// session persistence.
 func (m *Model) firePendingRestart() tea.Cmd {
 	if !m.restartPending {
 		return nil
 	}
 	m.restartPending = false
-	m.chatWriteSystem(nextSystemID(), "Restarting ggcode...")
-	if m.restartDebug {
-		m.chatWriteSystem(nextSystemID(), "  (debug mode enabled: GGCODE_DEBUG=1)")
-	}
-	m.quitting = true
-	m.restartRequested = true
-	m.shutdownAll()
-	return tea.Quit
+	return m.beginRestart(m.restartDebug)
 }
 
 // SetSendMessageTool registers the send_message tool for agent communication.
