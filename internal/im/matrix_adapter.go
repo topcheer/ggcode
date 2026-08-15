@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"regexp"
@@ -674,7 +673,7 @@ func (a *matrixAdapter) resolveImageToBytes(ctx context.Context, img ExtractedIm
 		if resp.StatusCode != 200 {
 			return nil, "", fmt.Errorf("download image: HTTP %d", resp.StatusCode)
 		}
-		data, err := io.ReadAll(io.LimitReader(resp.Body, imagepkg.MaxSize))
+		data, err := imagepkg.ReadLimited(resp.Body, imagepkg.MaxSize)
 		if err != nil {
 			return nil, "", fmt.Errorf("read image response: %w", err)
 		}

@@ -280,7 +280,13 @@ func (f *FallbackProvider) watchStreamForFailover(ctx context.Context, failed Pr
 		for ev := range stream {
 			if !sawOutput && ev.Type == StreamEventError && ev.Error != nil {
 				_, canRetry := f.maybeFailover(ev.Error, failed)
-				if canRetry && !f.failedOver.Load() {
+				// canRetry alone decides, matching the sync Chat/ChatStream
+				// paths: maybeFailover returns true both when it JUST
+				// activated failover and when the failed call hit the primary
+				// after an earlier activation (#164 retry-once). The old
+				// `&& !f.failedOver.Load()` gate made this branch dead code —
+				// canRetry=true always co-occurs with failedOver=true (#390).
+				if canRetry {
 					f.mu.RLock()
 					fallback := f.fallback
 					f.mu.RUnlock()
@@ -474,17 +480,19 @@ func (f *FallbackProvider) CloneWithModel(model string) Provider {
 	fallback := f.fallback
 	f.mu.RUnlock()
 
-	primaryClone := primary
-	if c, ok := primary.(ClonableWithModel); ok {
-		primaryClone = c.CloneWithModel(model)
+	// Require BOTH providers to support cloning. Half-support (one implements
+	// ClonableWithModel, the other doesn't) used to build a wrapper that
+	// SHARED the un-cloned instance — the clone's forwarded setters
+	// (SetSessionID/SetTemperature/...) then mutated the parent's provider
+	// state (#391). Silently keeping the parent (no model override) is the
+	// safer degradation.
+	pc, pok := primary.(ClonableWithModel)
+	fc, fok := fallback.(ClonableWithModel)
+	if !pok || !fok {
+		return f // cannot clone both sides — keep the wrapper as-is
 	}
-	fallbackClone := fallback
-	if c, ok := fallback.(ClonableWithModel); ok {
-		fallbackClone = c.CloneWithModel(model)
-	}
-	if primaryClone == primary && fallbackClone == fallback {
-		return f // neither supports cloning — keep the wrapper as-is
-	}
+	primaryClone := pc.CloneWithModel(model)
+	fallbackClone := fc.CloneWithModel(model)
 	clone := NewFallbackProvider(primaryClone, fallbackClone, f.description)
 	clone.SetFailoverNotify(f.notifySnapshot())
 	if f.failedOver.Load() {

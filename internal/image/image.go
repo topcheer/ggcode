@@ -8,6 +8,7 @@ import (
 	_ "image/gif"
 	_ "image/jpeg"
 	_ "image/png"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,20 @@ import (
 
 // MaxSize is the maximum allowed image size (20MB).
 const MaxSize = 20 * 1024 * 1024
+
+// ReadLimited reads r fully but fails with a clear error when the data
+// exceeds limit. A bare io.LimitReader silently truncates at limit — the
+// truncated bytes then flow downstream as a corrupt half-image (#388).
+func ReadLimited(r io.Reader, limit int64) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(r, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("data exceeds size limit (%d bytes)", limit)
+	}
+	return data, nil
+}
 
 // Supported MIME types.
 var (

@@ -145,8 +145,15 @@ func (a *qqAdapter) run(ctx context.Context) {
 			return
 		}
 		debug.Log("qq", "adapter=%s run loop attempt=%d connecting", a.name, attempt)
-		if err := a.connectAndServe(ctx); err != nil {
+		err := a.connectAndServe(ctx)
+		if err != nil {
 			a.publishState(false, "error", err.Error())
+		}
+		// Successful return (nil error) means the connection served until a
+		// clean disconnect — reset the backoff counter so the NEXT first retry
+		// uses the short delay instead of the capped 60s (#389).
+		if err == nil {
+			attempt = 0
 		}
 		delay := backoffs[min(attempt, len(backoffs)-1)]
 		attempt++
@@ -1295,7 +1302,7 @@ func (a *qqAdapter) downloadImageURL(ctx context.Context, imageURL string) ([]by
 	if resp.StatusCode >= 400 {
 		return nil, "", fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, imagepkg.MaxSize))
+	data, err := imagepkg.ReadLimited(resp.Body, imagepkg.MaxSize)
 	if err != nil {
 		return nil, "", err
 	}

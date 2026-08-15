@@ -147,9 +147,16 @@ func (a *mattermostAdapter) run(ctx context.Context) {
 			a.publishState(false, "stopped", "")
 			return
 		}
-		if err := a.connectAndServe(ctx); err != nil {
+		err := a.connectAndServe(ctx)
+		if err != nil {
 			a.publishState(false, "error", err.Error())
 			debug.Log("mattermost", "adapter=%s error: %v", a.name, err)
+		}
+		// Successful return (nil error) means the connection served until a
+		// clean disconnect — reset the backoff counter so the NEXT first retry
+		// uses the short delay instead of the capped 60s (#389).
+		if err == nil {
+			attempt = 0
 		}
 		a.mu.RLock()
 		isClosed := a.closed
@@ -772,7 +779,7 @@ func (a *mattermostAdapter) resolveImageToBytes(ctx context.Context, img Extract
 		if resp.StatusCode != 200 {
 			return nil, "", fmt.Errorf("download image: HTTP %d", resp.StatusCode)
 		}
-		data, err := io.ReadAll(io.LimitReader(resp.Body, imagepkg.MaxSize))
+		data, err := imagepkg.ReadLimited(resp.Body, imagepkg.MaxSize)
 		if err != nil {
 			return nil, "", fmt.Errorf("read image response: %w", err)
 		}

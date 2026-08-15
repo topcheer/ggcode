@@ -77,8 +77,12 @@ func summarizeCommandOutput(command, output string) string {
 // Uses word-boundary check to avoid false positives like "cargo test"
 // which contains "go test" as a substring.
 func isGoTestCommand(cmd string) bool {
-	return strings.HasPrefix(cmd, "go test") ||
-		strings.Contains(cmd, " go test ") ||
+	// Word boundary: "go test" must end the command or be followed by
+	// whitespace — "go testdata" must NOT hit this branch (#387).
+	if cmd == "go test" || strings.HasPrefix(cmd, "go test ") {
+		return true
+	}
+	return strings.Contains(cmd, " go test ") ||
 		strings.Contains(cmd, " go test\n") ||
 		strings.Contains(cmd, " go test\t") ||
 		strings.Contains(cmd, "gotest")
@@ -87,8 +91,10 @@ func isGoTestCommand(cmd string) bool {
 // isGoBuildCommand returns true if the command compiles Go code.
 // Uses prefix check to avoid false positives (e.g. "cargo build" should not match).
 func isGoBuildCommand(cmd string) bool {
+	// Same word-boundary requirement as isGoTestCommand (#387): the sub
+	// command must end the string or be followed by whitespace.
 	for _, sub := range []string{"go build", "go vet", "go install", "go generate", "go check"} {
-		if strings.HasPrefix(cmd, sub) ||
+		if cmd == sub || strings.HasPrefix(cmd, sub+" ") ||
 			strings.Contains(cmd, " "+sub+" ") ||
 			strings.Contains(cmd, " "+sub+"\n") ||
 			strings.Contains(cmd, " "+sub+"\t") {

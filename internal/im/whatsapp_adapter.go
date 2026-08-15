@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -30,6 +29,8 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/safego"
+
+	imagepkg "github.com/topcheer/ggcode/internal/image"
 )
 
 func init() {
@@ -206,7 +207,7 @@ func (a *whatsappAdapter) sendExtractedImage(ctx context.Context, jid types.JID,
 		if resp.StatusCode != 200 {
 			return fmt.Errorf("download image: HTTP %d", resp.StatusCode)
 		}
-		data, err := io.ReadAll(io.LimitReader(resp.Body, 20<<20)) // 20MB max
+		data, err := imagepkg.ReadLimited(resp.Body, imagepkg.MaxSize) // shared 20MB limit (#388)
 		if err != nil {
 			return fmt.Errorf("read image data: %w", err)
 		}
