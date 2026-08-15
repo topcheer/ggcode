@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -31,7 +32,7 @@ import (
 	"github.com/topcheer/ggcode/internal/tunnel"
 	"github.com/topcheer/ggcode/internal/update"
 	"github.com/topcheer/ggcode/internal/version"
-	"github.com/wailsapp/wails/v2/pkg/runtime"
+	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // App is the main application struct for the Wails desktop app.
@@ -99,7 +100,7 @@ func (a *App) startup(ctx context.Context) {
 	// When the user drags files from the OS file manager into the window,
 	// Wails provides the absolute file paths. We emit them as a frontend
 	// event so ChatView can insert file references into the input.
-	runtime.OnFileDrop(ctx, func(x, y int, paths []string) {
+	wailsruntime.OnFileDrop(ctx, func(x, y int, paths []string) {
 		if len(paths) == 0 {
 			return
 		}
@@ -129,18 +130,18 @@ func (a *App) startup(ctx context.Context) {
 	// Restore window position and size from the saved desktop config.
 	// This makes the window reopen at the same location/size as last session.
 	if a.dc.WindowW > 0 && a.dc.WindowH > 0 {
-		runtime.WindowSetSize(ctx, a.dc.WindowW, a.dc.WindowH)
+		wailsruntime.WindowSetSize(ctx, a.dc.WindowW, a.dc.WindowH)
 	}
 	if a.dc.WindowX != 0 || a.dc.WindowY != 0 {
-		runtime.WindowSetPosition(ctx, a.dc.WindowX, a.dc.WindowY)
+		wailsruntime.WindowSetPosition(ctx, a.dc.WindowX, a.dc.WindowY)
 	}
 	if a.dc.WindowMax {
-		runtime.WindowMaximise(ctx)
+		wailsruntime.WindowMaximise(ctx)
 	}
 
 	// Restore always-on-top state from saved config.
 	if a.dc.IsAlwaysOnTop() {
-		runtime.WindowSetAlwaysOnTop(ctx, true)
+		wailsruntime.WindowSetAlwaysOnTop(ctx, true)
 	}
 
 	// Restore last workspace — but verify it still exists.
@@ -194,7 +195,7 @@ func (a *App) startEventLoop() {
 				if a.ctx == nil {
 					continue
 				}
-				runtime.EventsEmit(a.ctx, ev.name, ev.payload)
+				wailsruntime.EventsEmit(a.ctx, ev.name, ev.payload)
 			}
 		})
 	})
@@ -203,7 +204,7 @@ func (a *App) startEventLoop() {
 func (a *App) enqueueUIEvent(name string, payload interface{}) {
 	if a.streamEvents == nil {
 		if a.ctx != nil {
-			runtime.EventsEmit(a.ctx, name, payload)
+			wailsruntime.EventsEmit(a.ctx, name, payload)
 		}
 		return
 	}
@@ -237,14 +238,14 @@ func (a *App) initWorkspace(dir string) {
 	chat.OnSessionChanged = func() {
 		a.bindCurrentIMSession()
 		if a.ctx != nil && chat != nil {
-			runtime.EventsEmit(a.ctx, "session:changed", map[string]string{
+			wailsruntime.EventsEmit(a.ctx, "session:changed", map[string]string{
 				"sessionId": chat.CurrentSessionID(),
 			})
 		}
 	}
 	chat.EmitEvent = func(name string, payload ...interface{}) {
 		if a.ctx != nil {
-			runtime.EventsEmit(a.ctx, name, payload...)
+			wailsruntime.EventsEmit(a.ctx, name, payload...)
 		}
 	}
 	a.chat = chat
@@ -274,10 +275,10 @@ func (a *App) initWorkspace(dir string) {
 	a.startIMAdapters()
 
 	if a.ctx != nil {
-		runtime.EventsEmit(a.ctx, "workspace:changed", map[string]interface{}{
+		wailsruntime.EventsEmit(a.ctx, "workspace:changed", map[string]interface{}{
 			"workDir": dir,
 		})
-		runtime.EventsEmit(a.ctx, "config:updated", nil)
+		wailsruntime.EventsEmit(a.ctx, "config:updated", nil)
 	}
 }
 
@@ -371,9 +372,9 @@ func (a *App) shutdown(_ context.Context) {
 	a.shutdownOnce.Do(func() {
 		// Persist window position/size so it can be restored on next launch.
 		if a.ctx != nil {
-			w, h := runtime.WindowGetSize(a.ctx)
-			x, y := runtime.WindowGetPosition(a.ctx)
-			maximized := runtime.WindowIsMaximised(a.ctx)
+			w, h := wailsruntime.WindowGetSize(a.ctx)
+			x, y := wailsruntime.WindowGetPosition(a.ctx)
+			maximized := wailsruntime.WindowIsMaximised(a.ctx)
 			a.dc.SetWindowState(w, h, x, y, maximized)
 			if err := a.dc.Save(); err != nil {
 				debug.Log("desktop", "persist window-state on shutdown failed: %v", err)
@@ -398,7 +399,7 @@ func (a *App) NeedsOnboard() bool {
 
 // SelectWorkspace opens a native directory picker and initializes the workspace.
 func (a *App) SelectWorkspace() (string, error) {
-	dir, err := runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
+	dir, err := wailsruntime.OpenDirectoryDialog(a.ctx, wailsruntime.OpenDialogOptions{
 		Title: "Select Project Directory",
 	})
 	if err != nil || dir == "" {
@@ -502,6 +503,14 @@ func (a *App) ReadClipboardAttachments() ([]ClipboardAttachment, error) {
 }
 
 func clipboardFilePaths() ([]string, error) {
+	if runtime.GOOS != "darwin" {
+		// #425: the AppKit osascript path is macOS-only. Previously this ran
+		// on every platform, where osascript doesn't exist and the error was
+		// swallowed (nil, nil) — pasting files silently did nothing on
+		// Windows/Linux. Return an explicit unsupported error instead of
+		// masquerading as "clipboard has no files".
+		return nil, fmt.Errorf("clipboard file reading is not supported on %s", runtime.GOOS)
+	}
 	script := `use framework "AppKit"
 use scripting additions
 set pb to current application's NSPasteboard's generalPasteboard()
@@ -523,7 +532,10 @@ return result`
 	cmd := exec.Command("osascript", "-e", script)
 	output, err := cmd.Output()
 	if err != nil {
-		return nil, nil
+		// #425: surface the failure (e.g. TCC automation-permission denial)
+		// instead of swallowing it — callers could not distinguish "clipboard
+		// empty" from "osascript failed".
+		return nil, fmt.Errorf("reading clipboard file paths via osascript: %w", err)
 	}
 	return parseClipboardPathOutput(string(output)), nil
 }
@@ -717,6 +729,20 @@ func (a *App) LanChatApprovalPolicies() (map[string]string, error) {
 	return a.chat.LanChatApprovalPolicies()
 }
 
+// dataURIMIME extracts the declared MIME type from a data URI meta section
+// (the part between "data:" and ","), e.g. "image/jpeg;base64" →
+// "image/jpeg". Returns "" when no MIME is declared ("data:,..." or
+// "data:;base64,..." payloads).
+func dataURIMIME(meta string) string {
+	if i := strings.IndexByte(meta, ';'); i >= 0 {
+		meta = meta[:i]
+	}
+	if meta == "" || !strings.Contains(meta, "/") {
+		return "" // not a MIME type (e.g. "base64" alone)
+	}
+	return meta
+}
+
 func (a *App) SendMessageWithImages(userMsg string, images []PastedImage) error {
 	// Snapshot + error convention: see SendMessage (#210).
 	chat := a.chat
@@ -732,12 +758,32 @@ func (a *App) SendMessageWithImages(userMsg string, images []PastedImage) error 
 		}
 		for _, img := range imgs {
 			mime := strings.TrimSpace(img.MimeType)
+			data := strings.TrimSpace(img.Data)
+			// #426: when the data is a data URI, its declared MIME and
+			// ;base64 marker are authoritative — the caller-provided MimeType
+			// may be empty (defaulting every image to image/png, mislabeling
+			// JPEGs) and non-base64 (URL-encoded) URIs must not be shipped
+			// as if they were base64 bytes.
+			if strings.HasPrefix(data, "data:") {
+				if idx := strings.Index(data, ","); idx >= 0 {
+					meta := data[5:idx] // between "data:" and ","
+					if uriMime := dataURIMIME(meta); uriMime != "" {
+						mime = uriMime // data URI MIME overrides caller hint
+					}
+					if !strings.Contains(meta, ";base64") && !strings.HasPrefix(meta, "base64") {
+						// URL-encoded (percent-encoded) payload, not base64.
+						raw, _ := url.QueryUnescape(data[idx+1:])
+						if raw == "" {
+							continue
+						}
+						data = base64.StdEncoding.EncodeToString([]byte(raw))
+					} else {
+						data = data[idx+1:]
+					}
+				}
+			}
 			if mime == "" {
 				mime = "image/png"
-			}
-			data := strings.TrimSpace(img.Data)
-			if idx := strings.Index(data, ","); strings.HasPrefix(data, "data:") && idx >= 0 {
-				data = data[idx+1:]
 			}
 			if data == "" {
 				continue
@@ -798,7 +844,7 @@ func (a *App) IsWorking() bool {
 	return a.chat.IsWorking()
 }
 
-// SetPermissionMode changes the agent permission mode at runtime.
+// SetPermissionMode changes the agent permission mode at wailsruntime.
 func (a *App) SetPermissionMode(mode string) {
 	if a.chat != nil {
 		a.chat.SetPermissionMode(mode)
@@ -871,7 +917,7 @@ func (a *App) SetFontZoom(zoom float64) (float64, error) {
 	return zoom, nil
 }
 
-// SwitchModel changes the active model at runtime.
+// SwitchModel changes the active model at wailsruntime.
 func (a *App) SwitchModel(model string) error {
 	if a.chat != nil {
 		return a.chat.SwitchModel(model)
@@ -1049,7 +1095,7 @@ func (a *App) StartAnthropicOAuth() (string, error) {
 		return "", err
 	}
 	if a.ctx != nil && url != "" {
-		runtime.BrowserOpenURL(a.ctx, url)
+		wailsruntime.BrowserOpenURL(a.ctx, url)
 	}
 	return url, nil
 }
@@ -1200,7 +1246,7 @@ func (a *App) ExportSessionAsJSON(sessionID string) (string, error) {
 
 // SaveExportedFile shows a native save dialog and writes content to the chosen path.
 func (a *App) SaveExportedFile(defaultName string, content string) (string, error) {
-	path, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
+	path, err := wailsruntime.SaveFileDialog(a.ctx, wailsruntime.SaveDialogOptions{
 		Title:           "Export Session",
 		DefaultFilename: defaultName,
 	})
@@ -1234,7 +1280,7 @@ func (a *App) SaveA2AEnabled(enabled bool) error {
 
 // SelectDirectory opens a native directory picker.
 func (a *App) SelectDirectory() (string, error) {
-	return runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
+	return wailsruntime.OpenDirectoryDialog(a.ctx, wailsruntime.OpenDialogOptions{
 		Title: "Select Directory",
 	})
 }
@@ -1270,7 +1316,7 @@ func (a *App) StartMCPOAuth(name string) (*wailskit.MCPOAuthStartResult, error) 
 		return nil, fmt.Errorf("chat not initialized")
 	}
 	return a.chat.StartMCPOAuth(a.ctx, name, func(url string) error {
-		runtime.BrowserOpenURL(a.ctx, url)
+		wailsruntime.BrowserOpenURL(a.ctx, url)
 		return nil
 	})
 }
@@ -1385,7 +1431,7 @@ func (a *App) CheckForUpdates() (map[string]interface{}, error) {
 
 // GetPlatform returns the current platform.
 func (a *App) GetPlatform() string {
-	return runtime.Environment(a.ctx).Platform
+	return wailsruntime.Environment(a.ctx).Platform
 }
 
 // ToggleAlwaysOnTop toggles the window's always-on-top state.
@@ -1395,7 +1441,7 @@ func (a *App) ToggleAlwaysOnTop() (bool, error) {
 		return false, fmt.Errorf("app not initialized")
 	}
 	newState := !a.dc.IsAlwaysOnTop()
-	runtime.WindowSetAlwaysOnTop(a.ctx, newState)
+	wailsruntime.WindowSetAlwaysOnTop(a.ctx, newState)
 	a.dc.SetAlwaysOnTop(newState)
 	if err := a.dc.Save(); err != nil {
 		debug.Log("desktop", "persist always-on-top failed: %v", err)
@@ -1658,19 +1704,19 @@ func (a *App) initIMRuntime() {
 			// Pairing code dialog
 			if snap.PendingPairing != nil {
 				ch := snap.PendingPairing
-				runtime.EventsEmit(a.ctx, "im:pairing", map[string]string{
+				wailsruntime.EventsEmit(a.ctx, "im:pairing", map[string]string{
 					"adapter": ch.Adapter, "platform": string(ch.Platform), "code": ch.Code, "kind": string(ch.Kind),
 				})
 			} else {
 				// Pairing complete — dismiss dialog
-				runtime.EventsEmit(a.ctx, "im:pairing_done", map[string]string{})
+				wailsruntime.EventsEmit(a.ctx, "im:pairing_done", map[string]string{})
 			}
 			// Push status to frontend via both Wails events and stream events
 			raw, _ := json.Marshal(snap)
 			if a.chat != nil && a.chat.OnStreamEvent != nil {
 				a.chat.OnStreamEvent("im:status", raw)
 			}
-			runtime.EventsEmit(a.ctx, "im:status", map[string]interface{}{
+			wailsruntime.EventsEmit(a.ctx, "im:status", map[string]interface{}{
 				"adapters": len(snap.Adapters),
 			})
 		},
@@ -2013,8 +2059,8 @@ func (a *App) stopShareForSessionChange() {
 	}
 	a.stopShare()
 	if a.ctx != nil {
-		runtime.EventsEmit(a.ctx, "tunnel:disconnected", nil)
-		runtime.EventsEmit(a.ctx, "tunnel:session_changed", map[string]string{
+		wailsruntime.EventsEmit(a.ctx, "tunnel:disconnected", nil)
+		wailsruntime.EventsEmit(a.ctx, "tunnel:session_changed", map[string]string{
 			"message": "Mobile sharing was stopped because the session changed. Scan again to reconnect.",
 		})
 	}
@@ -2097,7 +2143,7 @@ func (a *App) StartShare() (*ShareInfo, error) {
 		},
 		OnConnected: func(info tunnel.RelayConnectedState) {
 			if info.Role == "client" {
-				runtime.EventsEmit(a.ctx, "tunnel:connected", map[string]interface{}{
+				wailsruntime.EventsEmit(a.ctx, "tunnel:connected", map[string]interface{}{
 					"role": info.Role, "sessionID": info.SessionID, "generation": info.Generation,
 				})
 			}
@@ -2128,7 +2174,7 @@ func (a *App) StartShare() (*ShareInfo, error) {
 // StopShare stops the active tunnel session.
 func (a *App) StopShare() {
 	a.stopShare()
-	runtime.EventsEmit(a.ctx, "tunnel:disconnected", nil)
+	wailsruntime.EventsEmit(a.ctx, "tunnel:disconnected", nil)
 }
 
 func (a *App) stopShare() {

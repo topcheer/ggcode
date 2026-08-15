@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/debug"
 )
 
 // DesktopConfig stores window state and preferences, shared with the Fyne desktop.
@@ -56,10 +57,27 @@ func LoadDesktopConfig() *DesktopConfig {
 		return dc
 	}
 	if uerr := json.Unmarshal(data, dc); uerr != nil {
-		// Corrupt/truncated config: return defaults but DO NOT let the
-		// unconditional shutdown Save() overwrite the file — preserve the
-		// original as .bak so the damage stays recoverable (#207).
-		_ = os.Rename(desktopConfigPath(), desktopConfigPath()+".bak")
+		// Corrupt/truncated config (e.g. crash mid-write). Try the .bak copy
+		// BEFORE resetting to defaults (#428): a partial write used to wipe
+		// WorkDir/LastSession/Language/AlwaysOnTop/notification prefs, and
+		// the shutdown Save() then persisted the defaults — silent total
+		// loss of user preferences.
+		if bak, berr := os.ReadFile(desktopConfigPath() + ".bak"); berr == nil {
+			bdc := &DesktopConfig{WindowW: 1280, WindowH: 860}
+			if json.Unmarshal(bak, bdc) == nil {
+				debug.Log("wailskit", "desktop config corrupted; recovered from .bak")
+				return bdc
+			}
+		}
+		// No usable backup: return defaults but DO NOT let the unconditional
+		// shutdown Save() overwrite the file — preserve the original as .bak
+		// so the damage stays recoverable (#207). Rename errors are logged
+		// (#428): overwriting a previous .bak silently destroyed the only
+		// forensic sample of the earlier corruption.
+		if rerr := os.Rename(desktopConfigPath(), desktopConfigPath()+".bak"); rerr != nil {
+			debug.Log("wailskit", "failed to preserve corrupt desktop config as .bak: %v", rerr)
+		}
+		debug.Log("wailskit", "desktop config corrupted and no .bak available; using defaults")
 		return &DesktopConfig{WindowW: 1280, WindowH: 860}
 	}
 	return dc

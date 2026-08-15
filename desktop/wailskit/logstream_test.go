@@ -236,20 +236,18 @@ func TestLogStream_DrainOverflowNoticeOnly(t *testing.T) {
 	s := NewLogStream(10)
 	s.Enable(true)
 	s.Write("cat", "a")
-	// Simulate overflow without pending content by manipulating state directly
-	// (same-package test): drop everything from pending while keeping overflow.
+	// #428: overflow>0 with an empty pending list is unreachable in real
+	// operation (overflow only increments while pending is FULL, and Drain
+	// resets both together under the lock), so the old "overflow-only
+	// notice" branch was dead code and was removed. Manipulating the state
+	// directly to force it must now simply drain to nothing.
 	s.mu.Lock()
 	s.pending = s.pending[:0]
 	s.overflow = 42
 	s.mu.Unlock()
 
-	entries := s.Drain()
-	if len(entries) != 1 || !strings.Contains(entries[0].Message, "42 entries dropped") {
-		t.Fatalf("expected overflow-only notice, got: %+v", entries)
-	}
-	// Overflow counter resets after drain.
-	if s.overflow != 0 {
-		t.Fatalf("expected overflow reset, got %d", s.overflow)
+	if entries := s.Drain(); entries != nil {
+		t.Fatalf("expected nil drain from unreachable overflow-only state, got: %+v", entries)
 	}
 }
 

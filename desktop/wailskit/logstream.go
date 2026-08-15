@@ -103,23 +103,19 @@ func (s *LogStream) Drain() []LogEntry {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(s.pending) == 0 {
-		if s.overflow > 0 {
-			// Nothing left pending but drops happened (e.g. the poller was
-			// gone long enough that even capped entries were consumed or the
-			// stream was toggled off); still surface the overflow notice.
-			notice := LogEntry{
-				Category: "logstream",
-				Message:  fmt.Sprintf("log stream overflow: %d entries dropped (pending queue capped at %d)", s.overflow, s.maxPend),
-				Time:     time.Now().Format("15:04:05.000"),
-			}
-			s.overflow = 0
-			return []LogEntry{notice}
-		}
+		// #428: overflow>0 with an empty pending list is unreachable — overflow
+		// only increments when pending is FULL, and both are reset together
+		// under this lock in the non-empty path below. The old dead branch
+		// (and its wrong "stream was toggled off" comment) is removed.
 		return nil
 	}
 	out := make([]LogEntry, 0, len(s.pending)+1)
 	if s.overflow > 0 {
 		out = append(out, LogEntry{
+			// #428: a real Seq, not the zero default — two overflow notices in
+			// one session previously collided on Seq=0, producing React
+			// duplicate keys in the frontend.
+			Seq:      atomic.AddInt64(&s.seq, 1),
 			Category: "logstream",
 			Message:  fmt.Sprintf("log stream overflow: %d entries dropped (pending queue capped at %d)", s.overflow, s.maxPend),
 			Time:     time.Now().Format("15:04:05.000"),

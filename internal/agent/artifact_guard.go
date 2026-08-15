@@ -63,7 +63,12 @@ func checkMergeConflictMarkers(filePath, newContent string) string {
 		// the separator when a real conflict block is present.
 		return ""
 	}
-	found += countConflictMarkerLines(newContent, "=======")
+	// #424: a single conflict block in documentation examples or test
+	// fixtures used to drag ALL exact "=======" lines (setext headings, RST
+	// underlines) into the count. Only separators INSIDE a conflict block —
+	// between a "<<<<<<<" and its paired ">>>>>>>" — are real conflict
+	// separators; everything outside is legitimate syntax.
+	found += countSeparatorsInsideConflictBlocks(newContent)
 
 	if found == 0 {
 		return ""
@@ -107,6 +112,36 @@ func countConflictMarkerLines(content, marker string) int {
 	return count
 }
 
+// countSeparatorsInsideConflictBlocks counts exact "=======" lines that
+// sit between a "<<<<<<<" start marker and the next ">>>>>>>" end marker.
+// Separators outside any conflict block are legitimate syntax (setext
+// headings, RST underlines) and must not be counted (#424).
+func countSeparatorsInsideConflictBlocks(content string) int {
+	count := 0
+	inBlock := false
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimLeft(line, " \t")
+		if strings.HasPrefix(trimmed, "<<<<<<<") {
+			rest := trimmed[len("<<<<<<<"):]
+			if rest == "" || rest[0] == ' ' || rest[0] == '\t' || rest[0] == '\r' {
+				inBlock = true
+				continue
+			}
+		}
+		if strings.HasPrefix(trimmed, ">>>>>>>") {
+			rest := trimmed[len(">>>>>>>"):]
+			if rest == "" || rest[0] == ' ' || rest[0] == '\t' || rest[0] == '\r' {
+				inBlock = false
+				continue
+			}
+		}
+		if inBlock && strings.TrimRight(trimmed, " \t\r") == "=======" {
+			count++
+		}
+	}
+	return count
+}
+
 // checkContentGrowth detects when an edit causes the file to grow
 // dramatically relative to its original size, which often indicates
 // accidental content duplication.
@@ -126,9 +161,12 @@ func checkContentGrowth(filePath, oldContent, newContent string) string {
 		return ""
 	}
 
-	// Count non-empty lines to avoid trailing-newline +1 off-by-one.
-	oldLines := strings.Count(strings.TrimRight(oldContent, "\n"), "\n") + 1
-	newLines := strings.Count(strings.TrimRight(newContent, "\n"), "\n") + 1
+	// Count non-empty lines (#424): counting ALL lines made the ratio drift
+	// both ways — blank lines in the new content pushed it over threshold,
+	// blank lines in the old content inflated the denominator and hid real
+	// duplication. Only substantive lines carry signal about duplication.
+	oldLines := countNonEmptyLines(oldContent)
+	newLines := countNonEmptyLines(newContent)
 
 	// Skip tiny files — ratio is meaningless.
 	if oldLines < 10 {
@@ -147,4 +185,16 @@ func checkContentGrowth(filePath, oldContent, newContent string) string {
 	}
 
 	return ""
+}
+
+// countNonEmptyLines counts lines with at least one non-whitespace
+// character (#424).
+func countNonEmptyLines(content string) int {
+	count := 0
+	for _, line := range strings.Split(content, "\n") {
+		if strings.TrimSpace(line) != "" {
+			count++
+		}
+	}
+	return count
 }

@@ -128,11 +128,21 @@ func (nm *NotificationManager) Notify(title, body string) {
 				})
 			}
 		}
+		// #427: the dedup branch bumps unread but skipped setBadge — once the
+		// frontend title listener lands (#201), deduped notifications would
+		// leave a stale badge count.
+		nm.setBadge(count)
 		debug.Log("desktop", "notification deduped: %s (unread=%d)", title, count)
 		return
 	}
 	if nm.lastShown == nil {
 		nm.lastShown = make(map[string]time.Time)
+	}
+	// #427: bound lastShown — dynamic-body notifications (job titles with
+	// timestamps, error text) used to accumulate one map entry per distinct
+	// title+body forever. Keep recent keys only.
+	if len(nm.lastShown) >= maxLastShownEntries {
+		nm.pruneLastShown()
 	}
 	nm.lastShown[key] = time.Now()
 	nm.unread++
@@ -181,6 +191,46 @@ func (nm *NotificationManager) NotifyApprovalNeeded(title, body string) {
 		nm.setBadge(count)
 	}
 	nm.showOSNotification(title, body)
+
+	// #427: approval notifications must also reach the in-app notification
+	// center — Notify() emits "notification" on both paths, but this path
+	// never did, so approvals silently bypassed the frontend center.
+	if ctx := nm.ctx; ctx != nil {
+		if wctx, ok := ctx.(context.Context); ok {
+			wailsruntime.EventsEmit(wctx, "notification", map[string]string{
+				"title": title,
+				"body":  body,
+			})
+		}
+	}
+}
+
+// maxLastShownEntries bounds the dedup map (#427).
+const maxLastShownEntries = 256
+
+// pruneLastShown drops entries older than the dedup window (callers hold
+// nm.mu). If everything is somehow still fresh, evict the oldest entry.
+func (nm *NotificationManager) pruneLastShown() {
+	cutoff := time.Now().Add(-5 * time.Second)
+	for k, t := range nm.lastShown {
+		if t.Before(cutoff) {
+			delete(nm.lastShown, k)
+		}
+	}
+	if len(nm.lastShown) < maxLastShownEntries {
+		return
+	}
+	var oldestKey string
+	var oldestT time.Time
+	first := true
+	for k, t := range nm.lastShown {
+		if first || t.Before(oldestT) {
+			oldestKey, oldestT, first = k, t, false
+		}
+	}
+	if oldestKey != "" {
+		delete(nm.lastShown, oldestKey)
+	}
 }
 
 // ClearUnread resets the unread counter and clears the badge.
