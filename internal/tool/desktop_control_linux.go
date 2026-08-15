@@ -4,6 +4,7 @@ package tool
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -182,16 +183,164 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 	case "active_app":
 		return xdotoolResult(ctx, "getactivewindow", "getwindowname")
 
-	// UI-tree and menu actions require a platform accessibility API;
-	// xdotool has none. Report a clear platform message instead of
-	// "unknown action" so the agent does not retry with different
-	// parameters.
-	case "snapshot_ui", "find_element", "find_and_click", "wait_and_click", "display_info", "menu_select":
-		return Result{}, fmt.Errorf("desktop_control: action %q is not supported on Linux (requires a platform accessibility API; xdotool has none)", p.Action)
+	// UI-tree actions use AT-SPI (the Linux desktop accessibility API) via
+	// python3-gi — works on both X11 and Wayland. display_info has no
+	// xdotool equivalent; menu_select needs a menu-bar accessibility walk
+	// (deferred).
+	case "snapshot_ui":
+		return atspiSnapshot(ctx, p.MaxDepth)
+	case "find_element", "find_and_click", "wait_and_click":
+		return atspiLocate(ctx, p)
+	case "display_info":
+		return Result{}, fmt.Errorf("desktop_control: action %q is not supported on Linux X11 (no xdotool equivalent; try Wayland compositors' wlr-output-management or the XRandR CLI)", p.Action)
+	case "menu_select":
+		return Result{}, fmt.Errorf("desktop_control: action %q is not supported on Linux yet (menu-bar accessibility walk pending)", p.Action)
 
 	default:
 		return Result{}, fmt.Errorf("unknown action: %s", p.Action)
 	}
+}
+
+// atspiScript is the python3-gi AT-SPI probe: dumps the flattened
+// accessibility tree of the currently focused application as JSON lines.
+// Requires gir1.2-atspi-2.0 (preinstalled on GNOME/KDE systems). Shared by
+// the X11 and Wayland backends.
+const atspiScript = `#!/usr/bin/env python3
+import json, sys
+import gi
+gi.require_version('Atspi', '2.0')
+from gi.repository import Atspi
+
+max_depth = int(sys.argv[1]) if len(sys.argv) > 1 else 8
+
+def walk(node, depth):
+    if node is None or depth > max_depth:
+        return
+    try:
+        ext = node.get_extents(Atspi.CoordType.SCREEN)
+        if ext and (ext.width > 0 or ext.height > 0 or node.get_name()):
+            print(json.dumps({
+                "role": node.get_role_name(),
+                "name": node.get_name() or "",
+                "x": ext.x, "y": ext.y, "w": ext.width, "h": ext.height,
+            }), flush=True)
+    except Exception:
+        pass
+    for i in range(node.get_child_count()):
+        walk(node.get_child_at_index(i), depth + 1)
+
+desk = Atspi.get_desktop(0)
+active = None
+for a in range(desk.get_child_count()):
+    app = desk.get_child_at_index(a)
+    for w in range(app.get_child_count()):
+        win = app.get_child_at_index(w)
+        st = win.get_state_set()
+        if st.contains(Atspi.StateType.ACTIVE):
+            active = win
+            break
+    if active:
+        break
+if active is None:
+    sys.stderr.write("no active window found via AT-SPI")
+    sys.exit(1)
+walk(active, 0)
+`
+
+// atspiRun executes the probe and returns the flattened elements.
+func atspiRun(ctx context.Context, maxDepth int) ([]ATSPIElement, error) {
+	if maxDepth <= 0 {
+		maxDepth = 8
+	}
+	tmp, err := os.CreateTemp("", "ggcode-atspi-*.py")
+	if err != nil {
+		return nil, fmt.Errorf("temp script: %w", err)
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.WriteString(atspiScript); err != nil {
+		tmp.Close()
+		return nil, fmt.Errorf("write script: %w", err)
+	}
+	tmp.Close()
+
+	out, err := exec.CommandContext(ctx, "python3", tmp.Name(), fmt.Sprintf("%d", maxDepth)).Output()
+	if err != nil {
+		return nil, fmt.Errorf("AT-SPI probe failed: %w (requires python3-gi with gir1.2-atspi-2.0; on headless Xvfb there is no a11y bridge)", err)
+	}
+	var els []ATSPIElement
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line == "" {
+			continue
+		}
+		var e ATSPIElement
+		if json.Unmarshal([]byte(line), &e) == nil && (e.Role != "" || e.Name != "") {
+			els = append(els, e)
+		}
+	}
+	return els, nil
+}
+
+func atspiSnapshot(ctx context.Context, maxDepth int) (Result, error) {
+	els, err := atspiRun(ctx, maxDepth)
+	if err != nil {
+		return Result{}, err
+	}
+	return Result{Content: atspiFormat(els)}, nil
+}
+
+// atspiLocate implements find_element / find_and_click / wait_and_click on
+// top of the shared snapshot+match helpers.
+func atspiLocate(ctx context.Context, p desktopParams) (Result, error) {
+	deadline := time.Now().Add(500 * time.Millisecond)
+	if p.Action == "wait_and_click" {
+		d := time.Duration(p.TimeoutMs) * time.Millisecond
+		if d <= 0 {
+			d = 5 * time.Second
+		}
+		deadline = time.Now().Add(d)
+	}
+	for {
+		els, err := atspiRun(ctx, p.MaxDepth)
+		if err != nil {
+			return Result{}, err
+		}
+		matches := atspiFind(els, p.Text)
+		if len(matches) > 0 {
+			first := matches[0]
+			cx, cy := atspiCenter(first)
+			if p.Action == "find_element" {
+				return Result{Content: fmt.Sprintf("found %d matches:\n%s", len(matches), atspiFormat(matches))}, nil
+			}
+			// Click via the session's own backend: X11 xdotool, Wayland ydotool.
+			var clickErr error
+			if isWaylandSession() {
+				cmds := [][]string{ydoMoveArgs(cx, cy), {"ydotool", "click", "0xC0"}}
+				clickErr = runArgvSeq(ctx, cmds)
+			} else {
+				_, clickErr = exec.CommandContext(ctx, "xdotool", "mousemove", "--sync",
+					fmt.Sprintf("%d", cx), fmt.Sprintf("%d", cy), "click", "1").Output()
+			}
+			if clickErr != nil {
+				return Result{}, fmt.Errorf("found element at (%d,%d) but click failed: %w", cx, cy, clickErr)
+			}
+			return Result{Content: fmt.Sprintf("OK: clicked %q %s at (%d,%d)", first.Name, first.Role, cx, cy)}, nil
+		}
+		if p.Action != "wait_and_click" || time.Now().After(deadline) {
+			return Result{}, fmt.Errorf("no element matching %q found%s", p.Text, retrySuffix(p.Action))
+		}
+		select {
+		case <-ctx.Done():
+			return Result{}, ctx.Err()
+		case <-time.After(300 * time.Millisecond):
+		}
+	}
+}
+
+func retrySuffix(action string) string {
+	if action == "wait_and_click" {
+		return " before timeout"
+	}
+	return ""
 }
 
 // executeDesktopControlWayland implements the ydotool-backed subset for
@@ -326,11 +475,18 @@ func executeDesktopControlWayland(ctx context.Context, p desktopParams) (Result,
 		}
 		return Result{Content: "OK"}, nil
 
+	// UI-tree actions work on Wayland too: AT-SPI is display-server
+	// independent, and atspiLocate clicks via ydotool on this backend.
+	case "snapshot_ui":
+		return atspiSnapshot(ctx, p.MaxDepth)
+	case "find_element", "find_and_click", "wait_and_click":
+		return atspiLocate(ctx, p)
+
 	// Window management has no Wayland protocol for external clients, and
-	// ydotool exposes no position read or accessibility tree.
+	// ydotool exposes no position read.
 	case "mouse_position", "list_windows", "focus_window", "close_window", "minimize_window",
 		"maximize_window", "set_window_bounds", "quit_app", "list_apps", "active_app",
-		"snapshot_ui", "find_element", "find_and_click", "wait_and_click", "display_info", "menu_select":
+		"display_info", "menu_select":
 		return Result{}, fmt.Errorf("desktop_control: action %q is not supported on Wayland (no protocol for external clients; run the target under XWayland for X11 tooling)", p.Action)
 
 	// key_press/key_combo are supported on the X11 backend but not wired

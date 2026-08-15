@@ -27,6 +27,33 @@ func TestWindowTitleMatches(t *testing.T) {
 	}
 }
 
+func TestATSPIFindAndFormat(t *testing.T) {
+	els := []ATSPIElement{
+		{Role: "push button", Name: "Save", X: 10, Y: 20, W: 60, H: 30},
+		{Role: "text", Name: "", X: 0, Y: 0, W: 0, H: 0}, // unnamed: never matches
+		{Role: "label", Name: "AutoSave interval", X: 5, Y: 5, W: 90, H: 12},
+	}
+	// Case-insensitive substring.
+	m := atspiFind(els, "save")
+	if len(m) != 2 {
+		t.Fatalf("expected 2 matches for 'save', got %d", len(m))
+	}
+	// Empty needle matches nothing (windowTitleMatches guard).
+	if m := atspiFind(els, ""); len(m) != 0 {
+		t.Fatalf("empty needle must match nothing, got %d", len(m))
+	}
+	// Center math: 10+60/2, 20+30/2.
+	cx, cy := atspiCenter(m[0])
+	if cx != 40 || cy != 35 {
+		t.Errorf("center = (%d,%d), want (40,35)", cx, cy)
+	}
+	// Format contains role, quoted name, and coords.
+	s := atspiFormat(m)
+	if !strings.Contains(s, `push button "Save" at (40,35)`) {
+		t.Errorf("format missing expected line: %s", s)
+	}
+}
+
 func TestYdoMoveArgs(t *testing.T) {
 	got := ydoMoveArgs(100, 200)
 	want := []string{"ydotool", "move", "-a", "100", "200"}

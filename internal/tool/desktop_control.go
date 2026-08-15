@@ -51,7 +51,7 @@ hold_key presses a key/combo, holds it for duration_ms, then releases — e.g.
 set_window_bounds positions and sizes a window: x,y = top-left; to_x,to_y = width,height.
 open launches a URL or file path with the default handler app (use "app" to force a specific app).
 
-Platform support: all actions on macOS; on Linux both X11 (xdotool/wmctrl required; UI-tree/display_info actions unsupported) and Wayland (ydotool + ydotoold required; move/click/drag/modifier_click/type/open/launch_app supported — scroll has no ydotool equivalent and window management has no Wayland protocol for external clients); on Windows mouse/keyboard/app plus window management (Win32: list/focus/close/minimize/maximize/set_window_bounds, display_info) via SendInput and EnumWindows — UI-tree and menu actions pending UI Automation.`
+Platform support: all actions on macOS; on Linux both X11 (xdotool/wmctrl; UI-tree actions via AT-SPI python3-gi) and Wayland (ydotool + ydotoold for input; UI-tree actions via AT-SPI — display-server independent; scroll has no ydotool equivalent and window management has no Wayland protocol for external clients); on Windows mouse/keyboard/app plus window management (Win32: list/focus/close/minimize/maximize/set_window_bounds, display_info) via SendInput and EnumWindows — UI-tree and menu actions pending UI Automation.`
 }
 
 func (DesktopControlTool) Parameters() json.RawMessage {
@@ -261,6 +261,44 @@ func windowTitleMatches(title, needle string) bool {
 		return false // empty target never matches — prevents acting on ALL windows
 	}
 	return strings.Contains(strings.ToLower(title), strings.ToLower(needle))
+}
+
+// ATSPIElement is one flattened node of the Linux accessibility tree,
+// produced by the embedded AT-SPI python script.
+type ATSPIElement struct {
+	Role string `json:"role"`
+	Name string `json:"name"`
+	X    int    `json:"x"`
+	Y    int    `json:"y"`
+	W    int    `json:"w"`
+	H    int    `json:"h"`
+}
+
+// atspiCenter returns the center point of an element.
+func atspiCenter(e ATSPIElement) (int, int) {
+	return e.X + e.W/2, e.Y + e.H/2
+}
+
+// atspiFind returns all elements whose name matches needle (shared
+// case-insensitive substring semantics). Pure — unit-testable everywhere.
+func atspiFind(els []ATSPIElement, needle string) []ATSPIElement {
+	var out []ATSPIElement
+	for _, e := range els {
+		if e.Name != "" && windowTitleMatches(e.Name, needle) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// atspiFormat renders matched elements as one line each with center coords.
+func atspiFormat(matches []ATSPIElement) string {
+	var sb strings.Builder
+	for _, e := range matches {
+		cx, cy := atspiCenter(e)
+		fmt.Fprintf(&sb, "%s %q at (%d,%d) size %dx%d\n", e.Role, e.Name, cx, cy, e.W, e.H)
+	}
+	return strings.TrimRight(sb.String(), "\n")
 }
 
 func (t DesktopControlTool) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
