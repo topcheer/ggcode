@@ -904,24 +904,24 @@ func (p *OpenAIProvider) convertMessages(messages []Message) []openai.ChatComple
 				}
 			}
 			if hasToolResult {
-				// #453: mergeInjectedUserMessages prepends guidance TEXT
+				// #453/#474: mergeInjectedUserMessages prepends guidance TEXT
 				// blocks into tool_result messages; the old loop emitted only
-				// tool blocks and silently dropped the text — guidance never
-				// reached the model on OpenAI-compatible backends. Emit text
-				// blocks as a user message BEFORE the tool results (Kimi K3
-				// requires tools to directly follow the assistant tool_calls).
-				var textBefore []string
+				// tool blocks and silently dropped the text. Emitting the text
+				// as a separate user message BETWEEN the assistant tool_calls
+				// and the tool messages violates the ordering contract (strict
+				// backends 400) — instead prepend it to the FIRST tool
+				// message's content, which every backend accepts.
+				var guidanceText []string
 				for _, b := range m.Content {
 					if b.Type == "text" && b.Text != "" {
-						textBefore = append(textBefore, b.Text)
+						guidanceText = append(guidanceText, b.Text)
 					}
 				}
-				if len(textBefore) > 0 {
-					result = append(result, openai.ChatCompletionMessage{
-						Role:    openai.ChatMessageRoleUser,
-						Content: strings.Join(textBefore, "\n"),
-					})
+				guidancePrefix := ""
+				if len(guidanceText) > 0 {
+					guidancePrefix = strings.Join(guidanceText, "\n") + "\n\n"
 				}
+				firstTool := true
 				// Convert tool_result blocks to OpenAI tool messages
 				for _, b := range m.Content {
 					if b.Type == "tool_result" {
@@ -943,18 +943,33 @@ func (p *OpenAIProvider) convertMessages(messages []Message) []openai.ChatComple
 									Text: b.Output,
 								})
 							}
+							if firstTool && guidancePrefix != "" {
+								// #474: guidance travels INSIDE the first
+								// tool message — ordering contract intact.
+								parts = append([]openai.ChatMessagePart{{
+									Type: openai.ChatMessagePartTypeText,
+									Text: guidancePrefix,
+								}}, parts...)
+							}
 							result = append(result, openai.ChatCompletionMessage{
 								Role:         openai.ChatMessageRoleTool,
 								ToolCallID:   b.ToolID,
 								MultiContent: parts,
 							})
 						} else {
+							content := b.Output
+							if firstTool && guidancePrefix != "" {
+								// #474: guidance travels INSIDE the first
+								// tool message — ordering contract intact.
+								content = guidancePrefix + content
+							}
 							result = append(result, openai.ChatCompletionMessage{
 								Role:       openai.ChatMessageRoleTool,
-								Content:    b.Output,
+								Content:    content,
 								ToolCallID: b.ToolID,
 							})
 						}
+						firstTool = false
 					}
 				}
 				break
