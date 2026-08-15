@@ -3,10 +3,13 @@ package session
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"os"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/topcheer/ggcode/internal/debug"
 )
 
 // SearchResult represents a single message-level hit from a cross-session search.
@@ -72,6 +75,12 @@ func (s *JSONLStore) SearchSessions(query string, maxResults int) ([]SearchResul
 
 // searchInSessionFile scans a single JSONL session file for message records
 // whose text content contains the (already lowercased) needle.
+//
+// #478: uses bufio.Reader (not Scanner) so a single over-long JSONL line
+// (e.g. a multi-MB base64 image blob — same class as #291) only discards
+// THAT line: previously bufio.Scanner's 10MB cap aborted the whole scan,
+// and the caller's error-continue silently dropped every hit already
+// collected plus everything after, with no log.
 func searchInSessionFile(path, title, needle string) ([]SearchResult, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -79,49 +88,92 @@ func searchInSessionFile(path, title, needle string) ([]SearchResult, error) {
 	}
 	defer f.Close()
 
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+	const maxLine = 10 * 1024 * 1024
+	br := bufio.NewReader(f)
 
 	var hits []SearchResult
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" {
-			continue
+	skippedLong := 0
+	for {
+		line, rerr := readLineLimited(br, maxLine)
+		if rerr == errLineTooLong {
+			skippedLong++
+			continue // oversized line consumed; scan resumes at the next one
 		}
-		// Quick reject: skip lines that definitely don't contain the needle.
-		// This avoids a full JSON unmarshal for the vast majority of records.
-		if !strings.Contains(strings.ToLower(line), needle) {
-			continue
-		}
-
-		var rec jsonlRecord
-		if err := json.Unmarshal([]byte(line), &rec); err != nil {
-			continue
-		}
-		if rec.Type != "message" || rec.Message == nil {
-			continue
-		}
-
-		msg := rec.Message
-		for _, block := range msg.Content {
-			if block.Type != "text" {
-				continue
+		trimmed := strings.TrimSpace(string(line))
+		if trimmed != "" && strings.Contains(strings.ToLower(trimmed), needle) {
+			if hit, ok := searchJSONLLine(trimmed, path, title, needle); ok {
+				hits = append(hits, hit)
 			}
-			text := block.Text
-			idx := strings.Index(strings.ToLower(text), needle)
-			if idx < 0 {
-				continue
-			}
-			hits = append(hits, SearchResult{
-				SessionID: extractSessionID(path),
-				Title:     title,
-				Role:      msg.Role,
-				Snippet:   makeSnippet(text, idx, needle),
-				Timestamp: rec.Timestamp,
-			})
+		}
+		if rerr != nil {
+			// io.EOF (or a real I/O error): keep what we have — partial
+			// results beat none (#478).
+			break
 		}
 	}
-	return hits, sc.Err()
+	if skippedLong > 0 {
+		debug.Log("session", "search: skipped %d over-long line(s) >10MB in %s (hits kept: %d)", skippedLong, path, len(hits))
+	}
+	return hits, nil
+}
+
+// errLineTooLong signals readLineLimited consumed and discarded an
+// over-long line; the reader is positioned at the start of the next one.
+var errLineTooLong = errors.New("line exceeds limit")
+
+// readLineLimited reads one line up to limit bytes. If the line is longer,
+// it consumes and discards the remainder (through the newline) and returns
+// (nil, errLineTooLong) so the caller can continue with the next line.
+func readLineLimited(br *bufio.Reader, limit int) ([]byte, error) {
+	var buf []byte
+	for {
+		chunk, err := br.ReadSlice('\n')
+		if err == bufio.ErrBufferFull {
+			if len(buf)+len(chunk) > limit {
+				// Discard this entire line, keep the reader moving.
+				for err == bufio.ErrBufferFull {
+					chunk, err = br.ReadSlice('\n')
+				}
+				return nil, errLineTooLong
+			}
+			buf = append(buf, chunk...)
+			continue
+		}
+		buf = append(buf, chunk...)
+		if len(buf) > limit {
+			return nil, errLineTooLong
+		}
+		return buf, err
+	}
+}
+
+// searchJSONLLine unmarshals one JSONL line and returns a match if any
+// text block contains the needle.
+func searchJSONLLine(line, path, title, needle string) (SearchResult, bool) {
+	var rec jsonlRecord
+	if err := json.Unmarshal([]byte(line), &rec); err != nil {
+		return SearchResult{}, false
+	}
+	if rec.Type != "message" || rec.Message == nil {
+		return SearchResult{}, false
+	}
+	for _, block := range rec.Message.Content {
+		if block.Type != "text" {
+			continue
+		}
+		idx := strings.Index(strings.ToLower(block.Text), needle)
+		if idx < 0 {
+			continue
+		}
+		return SearchResult{
+			SessionID: extractSessionID(path),
+			Title:     title,
+			Role:      rec.Message.Role,
+			Snippet:   makeSnippet(block.Text, idx, needle),
+			Timestamp: rec.Timestamp,
+		}, true
+	}
+	return SearchResult{}, false
 }
 
 // makeSnippet extracts up to 200 characters of context centered on the match.
