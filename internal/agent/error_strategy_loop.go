@@ -77,32 +77,15 @@ func (s *errStrategyState) reset() {
 // classifyErrResult categorizes a tool result into an error category.
 // Returns the category and true if it's an error, false otherwise.
 func classifyErrResult(resultContent string, isError bool) (errCategory, bool) {
-	if !isError && resultContent == "" {
+	if !isError {
+		// #340: only isError=true results count as error evidence. Successful
+		// outputs routinely contain "error"/"not found" substrings (source code,
+		// "0 errors" vet output, other detectors' guidance text), and counting
+		// them turned "3 same-category errors" into "any 3 error-worded results".
 		return errCatGeneric, false
 	}
 	lower := strings.ToLower(resultContent)
-
-	// If isError flag is set, always classify
-	if isError {
-		return classifyByContent(lower), true
-	}
-
-	// Even without isError flag, check for strong error patterns
-	if !looksLikeErr(lower) {
-		return errCatGeneric, false
-	}
 	return classifyByContent(lower), true
-}
-
-func looksLikeErr(lower string) bool {
-	indicators := []string{"error", "failed", "not found", "cannot", "undefined",
-		"panic:", "fatal", "no such", "does not exist", "mismatch", "not unique"}
-	for _, ind := range indicators {
-		if strings.Contains(lower, ind) {
-			return true
-		}
-	}
-	return false
 }
 
 func classifyByContent(lower string) errCategory {
@@ -167,6 +150,12 @@ func (s *errStrategyState) checkAndWarn() string {
 	if dominantCount < errStrategyThreshold || s.firedFor[dominantCat] {
 		return ""
 	}
+	// #340: generic has no semantic identity — "the same error category is
+	// recurring" is not a valid claim for a catch-all bucket of unrelated
+	// one-off errors. Require a stronger threshold for it.
+	if dominantCat == errCatGeneric && dominantCount < 5 {
+		return ""
+	}
 	s.firedFor[dominantCat] = true
 	s.warningCount++
 	return formatErrStrategyWarning(dominantCat, dominantCount)
@@ -189,7 +178,11 @@ func formatErrStrategyWarning(cat errCategory, count int) string {
 		strategy = "Permission errors indicate filesystem or access constraints. Verify the path is writable."
 	default:
 		label = "generic"
-		strategy = "You are hitting the same type of error repeatedly. Change your approach: re-read relevant files, verify assumptions, or try a different tool."
+		strategy = "You are hitting multiple unrelated one-off errors. Slow down: re-read the relevant docs/files before each tool call and verify arguments before executing."
+	}
+	if cat == errCatGeneric {
+		return "[error-strategy-loop] Detected " + errStrategyItoa(count) + " unrelated errors in recent tool calls. " +
+			"Strategy change: " + strategy
 	}
 	return "[error-strategy-loop] Detected " + errStrategyItoa(count) + " '" + label +
 		"' errors in recent tool calls. The same error category is recurring -- " +

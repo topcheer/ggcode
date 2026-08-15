@@ -18,7 +18,7 @@ func TestDetectSuppression_ErrorMasking(t *testing.T) {
 		{"semicolon-true", "go test ./...; true", true, "error-masking"},
 		{"set-plus-e", "set +e && go test ./...", true, "error-masking"},
 		{"stderr-null", "go test 2>/dev/null", true, "output-hiding"},
-		{"stderr-merge-pipe", "go test 2>&1 | cat", true, "output-hiding"},
+		{"stderr-merge-pipe", "go test 2>&1 | cat", false, ""}, // #338: 2>&1 pipe merge keeps errors visible
 		{"all-output-null", "go test >/dev/null 2>&1", true, "output-hiding"},
 		{"bash-all-null", "go test &>/dev/null", true, "output-hiding"},
 		{"clean-command", "go test ./...", false, ""},

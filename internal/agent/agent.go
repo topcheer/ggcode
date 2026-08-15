@@ -233,6 +233,7 @@ type Agent struct {
 	selfMod                    *selfModState                         // self-modification safety guard (agent editing its own infrastructure)
 	bareEditStreak             *bareEditStreakState                  // unverified mutation streak detection (consecutive edits without verification)
 	editCoverage               *editCoverageState                    // verification coverage gap detection (edits across packages but partial verification)
+	toolEff                    *toolEffTracker                       // per-tool effectiveness tracking (success rate + alternative-approach guidance)
 	prematureSuccess           *prematureSuccessState                // premature success claim detection (edits without verification followed by success declaration)
 	recklessExec               *recklessExecState                    // reckless execution detection (edits to unexplored files in early iterations)
 	irrevGate                  *irrevGateState                       // irreversibility-weighted calibration gate (caution scales with action reversibility)
@@ -447,6 +448,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		prematureCommit:        newPrematureCommitState(),
 		bareEditStreak:         newBareEditState(),
 		editCoverage:           newEditCoverageState(),
+		toolEff:                newToolEffTracker(),
 		prematureSuccess:       newPrematureSuccessState(),
 		strategyFixation:       newStrategyFixationState(),
 		errorRush:              newErrorRushState(),
@@ -1518,6 +1520,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.toolOveruse.reset()
 	a.toolStorm.reset()
 	a.serialRead.reset()
+	a.toolEff.reset()
 	a.reasoningRedund.reset()
 	a.reproducerLifecycle.reset()
 	a.truncClaim.reset()
@@ -3430,6 +3433,18 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				a.contextManager.Add(provider.Message{
 					Role:    "user",
 					Content: []provider.ContentBlock{{Type: "text", Text: covWarn}},
+				})
+				msgs = a.contextManager.Messages()
+			}
+			// Tool effectiveness tracking: monitor per-tool success rates.
+			// When a tool repeatedly errors or yields poor results (empty
+			// searches, truncated output, edit rejections), inject guidance
+			// suggesting alternative tools or approaches.
+			if effGuidance := a.toolEff.recordCall(tc.Name, result.Content, result.IsError); effGuidance != "" {
+				debug.Log("agent", "Iteration %d: tool effectiveness guidance for %s", i+1, tc.Name)
+				a.contextManager.Add(provider.Message{
+					Role:    "user",
+					Content: []provider.ContentBlock{{Type: "text", Text: effGuidance}},
 				})
 				msgs = a.contextManager.Messages()
 			}

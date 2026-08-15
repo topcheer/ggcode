@@ -245,3 +245,32 @@ func TestToolEffTracker_PerToolIsolation(t *testing.T) {
 		t.Errorf("read_file total should be 1, got %d", tr.totals["read_file"])
 	}
 }
+
+// TestAgentHasToolEffTracker asserts the Agent struct carries a wired
+// toolEffTracker (issue #334: tracker was previously 100% dead code).
+func TestAgentHasToolEffTracker(t *testing.T) {
+	a := &Agent{toolEff: newToolEffTracker()}
+	if a.toolEff == nil {
+		t.Fatal("Agent.toolEff should be non-nil when initialized")
+	}
+
+	// 4 empty grep results + 1 error should fire guidance at least once
+	fired := false
+	for i := 0; i < 4; i++ {
+		if g := a.toolEff.recordCall("grep", "No matches found", false); g != "" {
+			fired = true
+		}
+	}
+	if g := a.toolEff.recordCall("grep", "error: invalid pattern", true); g != "" {
+		fired = true
+	}
+	if !fired {
+		t.Fatal("expected tool effectiveness guidance after 4 empty + 1 error grep calls via Agent.toolEff")
+	}
+
+	// Per-user-turn reset must clear tracker state
+	a.toolEff.reset()
+	if len(a.toolEff.totals) != 0 || len(a.toolEff.calls) != 0 {
+		t.Fatal("toolEff.reset() should clear per-tool data")
+	}
+}

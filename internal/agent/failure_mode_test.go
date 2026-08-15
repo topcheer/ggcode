@@ -39,6 +39,12 @@ func TestClassifyFailureMode(t *testing.T) {
 		{"no such file (source path)", "read_file", "open /foo/bar.go: no such file or directory", FailureModeStructural},
 		// Edge case: "no such file" for binary is systemic
 		{"no such file (binary)", "run_command", "exec: foo: no such file or directory", FailureModeSystemic},
+		// #335: wrong argument PATH in run_command is structural (self-healable)
+		{"redirect target dir missing", "run_command", "sh: /tmp/nope/x.txt: No such file or directory", FailureModeStructural},
+		{"mv target missing", "run_command", "mv: rename x to /tmp/nope/y.txt: No such file or directory", FailureModeStructural},
+		{"grep input file missing", "run_command", "grep: /tmp/does-not-exist.txt: No such file or directory", FailureModeStructural},
+		// #335: bare 'auth' substring used to match 'Author:' in normal output
+		{"git author line not systemic", "run_command", "commit abc123\nAuthor: Dev <dev@example.com>\nDate: Mon", FailureModeStructural},
 	}
 
 	for _, tt := range tests {
@@ -117,7 +123,7 @@ func TestFailureModeStateReset(t *testing.T) {
 	s.recordResult("run_command", true, "permission denied")
 	s.reset()
 	// After reset, systemic should fire again
-	g := s.recordResult("run_command", true, "auth failure")
+	g := s.recordResult("run_command", true, "authentication failed")
 	if g == "" {
 		t.Fatal("expected guidance after reset")
 	}

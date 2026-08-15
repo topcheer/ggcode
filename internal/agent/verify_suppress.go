@@ -91,8 +91,12 @@ var errorMaskingRe = []*regexp.Regexp{
 var outputHidingRe = []*regexp.Regexp{
 	// `2>/dev/null` discards stderr entirely
 	regexp.MustCompile(`2>/dev/null\b`),
-	// `2>&1 | ...` merges stderr to stdout then pipes (loses error signal)
-	regexp.MustCompile(`2>&1\s*\|`),
+	// #338: `2>&1 | ...` deliberately NOT flagged — it merges stderr into
+	// stdout and hands the merged stream to the pipe consumer, whose output
+	// run_command captures. Error content remains fully visible; flagging it
+	// taught agents to REMOVE the merge, reducing error visibility. The
+	// genuinely hiding variants (`>/dev/null 2>&1`, `&>/dev/null`, `2>/dev/null`)
+	// are covered by the other rules below.
 	// `>/dev/null 2>&1` discards all output
 	regexp.MustCompile(`>/dev/null\s+2>&1`),
 	// `&>/dev/null` discards all output (bash shorthand)

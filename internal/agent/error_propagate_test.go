@@ -19,14 +19,17 @@ func TestClassifyDegraded(t *testing.T) {
 		{"undefined value", "some_tool", "undefined", degradedNullish},
 		{"empty json object", "some_tool", "{}", degradedNullish},
 		{"empty json array", "some_tool", "[]", degradedNullish},
-		{"truncated marker", "grep", "some result... truncated", degradedTruncated},
-		{"explicit truncation", "grep", "data [truncated]", degradedTruncated},
-		{"output too large", "grep", "[output too large, showing first 10]", degradedTruncated},
+		{"tool footer truncation (read_file)", "read_file", "     1\tpackage main\n[File truncated: showing lines 1-1 of 50. Use read_file with offset/limit for more.]", degradedTruncated},
+		{"output too large footer", "grep", "[output too large, showing first 10]", degradedTruncated},
+		{"#339 source containing 'output truncated' literal is NOT truncated", "read_file", "\"\"\"\n     3\ttruncated = truncateUTF8Safe(trimmed, maxOutputSize) + \"\\n... [output truncated]\"\"\n\"\"\"", degradedNone},
+		{"#339 inline 'truncated' in code comment is NOT truncated", "grep", "main.go:42: // handle truncated output gracefully", degradedNone},
 		{"no results found", "search_files", "no results found", degradedNoResult},
 		{"no matches", "grep", "0 matches", degradedNoResult},
 		{"no such file", "read_file", "no such file or directory", degradedNoResult},
 		{"file not found", "read_file", "Error: file not found", degradedNoResult},
 		{"no symbols", "lsp_workspace_symbols", "no symbols found", degradedNoResult},
+		{"#339 glob returning single short filename is NOT degraded", "glob", "a.go", degradedNone},
+		{"#339 grep files_with_matches single short path is NOT degraded", "grep", "a.go", degradedNone},
 		{"short content on content tool", "read_file", "hello", degradedEmpty},
 		{"valid content - normal", "read_file", "package main\n\nfunc main() {\n\tprintln(\"hello\")\n}\n", degradedNone},
 		{"valid content - normal short non-content tool", "run_command", "ok", degradedNone},
@@ -186,15 +189,18 @@ func TestErrorPropagateNullishDegraded(t *testing.T) {
 func TestErrorPropagateTruncatedDegraded(t *testing.T) {
 	s := newErrorPropagateState()
 
-	s.recordResult("grep", "results... truncated", false)
+	s.recordResult("grep", "file1.go\n[File truncated: showing lines 1-1 of 100]", false)
 	s.recordResult("read_file", "valid content", false)
 	g := s.recordResult("read_file", "more valid content", false)
 
 	if g == "" {
 		t.Fatal("should warn after truncated + 2 downstream")
 	}
-	if !contains(g, "truncated") {
-		t.Errorf("should mention truncated kind, got: %s", g)
+	if !contains(g, "may have consumed") {
+		t.Errorf("guidance should use 'may have consumed it' wording, got: %s", g)
+	}
+	if !contains(g, "step 1") {
+		t.Errorf("guidance should include origin.step locator, got: %s", g)
 	}
 }
 

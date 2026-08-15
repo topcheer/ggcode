@@ -120,7 +120,7 @@ func classifyFailureMode(toolName, errorContent string) FailureMode {
 		"no space left",
 		"too many open files",
 		"connection refused", // service not running
-		"auth",
+		"authentication failed",
 		"unauthorized",
 		"forbidden",
 		"api key",
@@ -135,11 +135,17 @@ func classifyFailureMode(toolName, errorContent string) FailureMode {
 			// edited is structural (agent picked wrong path), not systemic.
 			// Only classify as systemic when it's about a binary/command.
 			if p == "no such file or directory" {
-				if strings.Contains(c, "executable") || strings.Contains(c, "command") ||
-					strings.Contains(c, "binary") || toolName == "run_command" {
+				// #335: "no such file or directory" in run_command output is
+				// almost always a wrong argument PATH (self-healable structural:
+				// fix the path or mkdir the target), not a missing environment
+				// binary. Only whole-phrase binary/command-not-found matches are
+				// systemic; the toolName=="run_command" escape hatch is removed.
+				if strings.Contains(c, "executable file not found") || strings.Contains(c, "command not found") ||
+					strings.Contains(c, "exec:") { // Go exec: binary lookup failure
 					return FailureModeSystemic
 				}
-				// For read_file/edit_file, this is structural (wrong path).
+				// For read_file/edit_file and run_command argument paths, this is
+				// structural (wrong path — agent can fix it).
 				continue
 			}
 			return FailureModeSystemic
@@ -210,14 +216,15 @@ func (s *failureModeState) recordResult(toolName string, isError bool, errorCont
 // Must be called with lock held.
 func (s *failureModeState) checkDominantMode() string {
 	// Systemic mode fires immediately (1 occurrence) — these are hard blockers.
+	// #335: wording no longer demands abandonment — verify the environment
+	// first; only escalate to the user if it genuinely persists.
 	if s.systemicCount >= 1 && !s.fired[FailureModeSystemic] {
 		s.fired[FailureModeSystemic] = true
-		return fmt.Sprintf(
-			"%s", "[Failure Mode: SYSTEMIC] An environment-level error is blocking progress "+
-				"(permission denied, missing binary, auth failure, or resource exhaustion). "+
-				"This cannot be fixed by retrying or changing approach. "+
-				"STOP and report the environment issue to the user. "+
-				"Do not waste iterations on workarounds.")
+		return "[Failure Mode: SYSTEMIC] An environment-level error is blocking progress " +
+			"(permission denied, missing binary, auth failure, or resource exhaustion). " +
+			"Verify the environment before retrying (which <cmd>, ls the path, check " +
+			"permissions/disk/api key). If the environment is genuinely broken, report it " +
+			"to the user instead of iterating on workarounds."
 	}
 
 	// Transient mode fires after 3+ transient failures — retry strategy isn't working.
@@ -233,12 +240,11 @@ func (s *failureModeState) checkDominantMode() string {
 	// Structural mode fires after 4+ structural failures — the approach is wrong.
 	if s.structuralCount >= 4 && !s.fired[FailureModeStructural] {
 		s.fired[FailureModeStructural] = true
-		return fmt.Sprintf("%s",
-			"[Failure Mode: STRUCTURAL] "+fmt.Sprintf("%d", s.structuralCount)+
-				" failures suggest the current approach is fundamentally wrong "+
-				"(wrong paths, incorrect parameters, type mismatches). "+
-				"Do NOT retry the same approach. Step back, re-read the relevant code, "+
-				"verify assumptions (file existence, types, import paths), and try a different strategy.")
+		return "[Failure Mode: STRUCTURAL] " + fmt.Sprintf("%d", s.structuralCount) +
+			" failures suggest the current approach is fundamentally wrong " +
+			"(wrong paths, incorrect parameters, type mismatches). " +
+			"Do NOT retry the same approach. Step back, re-read the relevant code, " +
+			"verify assumptions (file existence, types, import paths), and try a different strategy."
 	}
 
 	return ""

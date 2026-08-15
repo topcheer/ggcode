@@ -157,10 +157,30 @@ var degradedPatterns = []string{
 	"no symbols", "no definitions", "no references",
 }
 
-// truncationMarkers indicate the tool output was truncated.
-var truncationMarkers = []string{
-	"... truncated", "[truncated]", "output truncated",
-	"... results omitted", "[output too large",
+// truncationFooterPrefixes are line-anchored prefixes of wrapper/footer
+// lines that tools THEMSELVES append when they truncate their output
+// (e.g. read_file appends "[File truncated: showing lines 1-10 of 50. ...]").
+// Matching is per-line (line-start anchored), NOT a full-content substring
+// match: file content legitimately containing the literal text
+// "output truncated" (e.g. this detector's own source, or truncation code
+// in other tools) must not be classified as a degraded read.
+var truncationFooterPrefixes = []string{
+	"[file truncated:", "[showing lines", "[output too large",
+	"[truncated:", "... [output truncated]", "... results omitted",
+}
+
+// hasTruncationFooter reports whether any line of the output is a
+// tool-appended truncation footer line.
+func hasTruncationFooter(content string) bool {
+	for _, ln := range strings.Split(content, "\n") {
+		t := strings.TrimSpace(strings.ToLower(ln))
+		for _, p := range truncationFooterPrefixes {
+			if strings.HasPrefix(t, p) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // nullishValues are exact-match patterns for null/empty returns.
@@ -189,11 +209,10 @@ func classifyDegraded(toolName, content string) degradedKind {
 		}
 	}
 
-	// Truncation markers.
-	for _, m := range truncationMarkers {
-		if strings.Contains(lower, m) {
-			return degradedTruncated
-		}
+	// Truncation: only tool-appended footer lines (line-anchored), never
+	// a full-content substring match (see truncationFooterPrefixes).
+	if hasTruncationFooter(trimmed) {
+		return degradedTruncated
 	}
 
 	// "No result" patterns — only check on SHORT outputs to avoid
@@ -209,12 +228,26 @@ func classifyDegraded(toolName, content string) degradedKind {
 
 	// Very short non-error output (suspicious for tools expected to
 	// return substantive content). Only applies to read/search tools
-	// that normally return larger outputs.
-	if isContentTool(toolName) && len(trimmed) < degradedMinContentLen {
+	// that normally return larger outputs. Path-list tools (glob, and
+	// grep in files_with_matches mode) are exempt: a single short file
+	// name like "a.go" is a completely successful minimal result.
+	if isContentTool(toolName) && !isPathListTool(toolName) && len(trimmed) < degradedMinContentLen {
 		return degradedEmpty
 	}
 
 	return degradedNone
+}
+
+// isPathListTool returns true for tools whose minimal successful output
+// is naturally short (a list of file paths). These are exempt from the
+// degradedMinContentLen heuristic.
+func isPathListTool(toolName string) bool {
+	switch toolName {
+	case "glob", "grep": // grep defaults to files_with_matches mode (path list)
+		return true
+	default:
+		return false
+	}
 }
 
 // isContentTool returns true for tools that normally return substantial content.
@@ -292,15 +325,17 @@ func (e *errorPropagateState) recordResult(toolName, content string, isError boo
 
 func (e *errorPropagateState) formatPropagationGuidance(c *propagationChain) string {
 	return fmt.Sprintf(
-		"[Error Propagation Chain] A prior tool call (%s) returned a degraded "+
-			"%s result that was NOT flagged as an error, yet %d subsequent tool "+
-			"calls have built on it. Reasoning derived from empty/truncated/null "+
-			"intermediate outputs compounds silently -- each downstream step "+
-			"inherits the corrupted state. Before continuing, verify whether the "+
-			"%s output from %s was actually valid. If it was genuinely empty "+
-			"(e.g., no search results), confirm your approach is still grounded "+
-			"rather than building conclusions on missing data.",
-		c.origin.toolName, c.origin.kind.String(),
-		c.downstream, c.origin.kind.String(), c.origin.toolName,
+		"[Error Propagation Chain] A prior tool call (%s, step %d) returned a "+
+			"degraded %s result that was NOT flagged as an error, yet %d "+
+			"subsequent tool calls may have consumed it. There is no data-flow "+
+			"tracking, so these later calls may be unrelated -- but if any of "+
+			"them built on the %s output, reasoning derived from empty/truncated/null "+
+			"intermediate outputs compounds silently. Before continuing, verify "+
+			"whether the %s output from %s (step %d) was actually valid. If it was "+
+			"genuinely empty (e.g., no search results), confirm your approach is "+
+			"still grounded rather than building conclusions on missing data.",
+		c.origin.toolName, c.origin.step, c.origin.kind.String(),
+		c.downstream, c.origin.kind.String(),
+		c.origin.kind.String(), c.origin.toolName, c.origin.step,
 	)
 }

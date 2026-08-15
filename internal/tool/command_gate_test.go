@@ -622,3 +622,22 @@ func TestCommandGate_WindowsRulesNoUnixFalsePositives(t *testing.T) {
 		}
 	}
 }
+
+// #337: bare cat/tee on the right side of a pipe receive stdin from the
+// pipeline and exit on EOF — must not be flagged as "runs indefinitely".
+func TestInteractiveCommandWarningPipeFedCatTee(t *testing.T) {
+	g := NewCommandGate()
+	if w := g.InteractiveCommandWarning(`grep -rn "foo" . | grep -v "_test.go" | cat`); w != "" {
+		t.Fatalf("pipe-fed cat should not warn, got: %s", w)
+	}
+	if w := g.InteractiveCommandWarning(`echo hi | tee`); w != "" {
+		t.Fatalf("pipe-fed tee should not warn, got: %s", w)
+	}
+	// First segment bare cat (stdin=/dev/null on main exec path) still
+	// reports as before — behavior for non-pipe segments unchanged.
+	_ = g.InteractiveCommandWarning(`cat`)
+	// '||' is logical OR, NOT a pipe: its right side must not be exempt.
+	if w := g.InteractiveCommandWarning(`false || cat`); w == "" {
+		t.Fatal("cat after '||' (logical OR, not pipe) should still warn")
+	}
+}

@@ -5,15 +5,8 @@ package agent
 // Research basis: "Self-Verifying AI: Why 2026 Is the Year AI Checks Its Own Work"
 // (Heimdall Engineering, 2026) and "AI Agent Systems: Architectures, Applications,
 // and Evaluation" (arXiv 2601.01743, 2026) formalize the Error Accumulation Problem:
-//
-//   In a 10-step workflow, even a 95% accuracy rate per step sounds good in
-//   isolation. But 0.95^10 = 0.60. That means 40% of the time, your 10-step
-//   AI process arrives at a wrong or suboptimal result -- with no mechanism
-//   to know it happened.
-//
-// This is why most enterprise AI pilots succeed in demos and fail in production.
-// The demo shows a clean path; production shows the messy reality of compounding
-// errors across steps.
+// errors across MANY steps of an agent trajectory compound, so the trajectory-level
+// reliability is far worse than any single step's success rate suggests.
 //
 // EXISTING GGCODE DETECTORS that address INDIVIDUAL error patterns but NOT the
 // systemic compounding risk:
@@ -26,29 +19,43 @@ package agent
 //
 // NONE of these compute the SYSTEMIC risk that accumulated small failures
 // (across DIFFERENT error types) have made the overall trajectory unreliable.
-// An agent can have 3 tool errors, 2 edit failures, 1 build failure -- each
-// caught by a different detector -- without any single detector recognizing
-// that the COMBINED error density means the trajectory is now high-risk.
+// This detector fills that gap.
 //
-// This detector fills that gap by:
-//   1. Tracking ALL error signals across the run (any IsError result, any
-//      edit failure, any failed verify command)
-//   2. Computing error density = errorSteps / totalSteps
-//   3. Estimating compounding success probability: P(success) ≈ (1-density)^steps
-//   4. Warning when P drops below threshold, recommending holistic verification
+// MATH MODEL (sliding-window density) — issue #336 fix:
 //
-// Competitor analysis:
-//   - Claude Code: no systemic error compounding awareness
-//   - Cursor: no trajectory-level error accumulation tracking
-//   - OpenHands: tracks per-action success but not compounding probability
-//   - Devin: has "confidence scoring" but proprietary, not open
-//   - Aider: no cross-step error aggregation
+// The previous model computed P(success) = (1 - density)^totalSteps where
+// density = errorSteps/totalSteps. That formula is mathematically invalid:
+// density is ALREADY an aggregated ratio over the run; raising (1-density)
+// to the power of totalSteps re-multiplies the run length into an aggregate,
+// double-counting it. Consequence: any run with >=8 steps and >=1 error
+// produced P < 70% and fired a "moderate" warning (e.g. 8 steps with 1 error:
+// density=12.5%, P = 0.875^8 = 34% — a healthy transient error flagged as risk).
+//
+// The correct question is not "what is the probability the whole run is clean"
+// but "is the agent erroring at a high rate RIGHT NOW". We therefore use a
+// plain empirical error density over a SLIDING WINDOW of the most recent
+// ecWindow steps:
+//
+//	windowDensity = windowErrors / windowSteps
+//
+//   - moderate: windowDensity > 0.30 (with >=8 window steps)
+//   - critical: moderate condition AND new errors occurred since the last
+//     warning (a pure recovery period — zero new errors — must never escalate)
+//   - short-circuit: with only >=3 total steps, windowDensity >= 0.75 still
+//     fires, so catastrophic starts (3/3 errors) are caught despite the small n
+//
+// Because the window slides, old errors naturally age out: after 12 clean
+// steps the density drops to 0 and warnings subside without any special
+// decay logic. This directly fixes the second bug in #336, where the
+// whole-run counter kept density high during recovery and escalated severity
+// ("Strongly recommend stopping incremental edits") while the agent was
+// actually succeeding.
 //
 // Design constraints:
 //   - Zero LLM cost (deterministic tracking + formula)
-//   - Fires at most twice per run (at moderate risk, then at critical risk)
+//   - Fires at most twice per run (moderate, then critical)
 //   - Non-blocking: guidance injected, execution proceeds normally
-//   - O(1) space: tracks counts only, not per-step details
+//   - O(window) space: a fixed-size ring, not unbounded per-step history
 //   - Distinguishes error TYPES to avoid double-counting the same failure
 
 import (
@@ -57,17 +64,50 @@ import (
 	"sync"
 )
 
-// errorCompoundState tracks error accumulation across the agent trajectory.
+// ecWindow is the number of most recent steps used for the density estimate.
+const ecWindow = 12
+
+// ecWarnDensity is the window error density above which we warn (moderate).
+const ecWarnDensity = 0.30
+
+// ecCatastrophicDensity, with ecCatastrophicMinSteps, short-circuits the
+// minimum-sample gate so that a near-total failure rate still fires early.
+const (
+	ecCatastrophicDensity  = 0.75
+	ecCatastrophicMinSteps = 3
+)
+
+// ecStep is one recorded tool-call iteration in the sliding window.
+type ecStep struct {
+	hasError    bool
+	verifyFails int
+	editFails   int
+	toolErrors  int
+}
+
+// errorCompoundState tracks error accumulation across the agent trajectory
+// using a sliding window of recent steps.
 type errorCompoundState struct {
 	mu sync.Mutex
 
-	totalSteps   int // total tool-call iterations recorded
-	errorSteps   int // iterations with at least one error signal
-	verifyFails  int // explicit verify command failures (build/test/lint)
-	editFails    int // edit_file/multi_edit_file/write_file failures
-	toolErrors   int // other tool execution errors (IsError=true)
-	warningCount int // how many warnings have been emitted this run
-	lastWarnedAt int // iteration of last warning (to space them out)
+	window       []ecStep // ring of the most recent <= ecWindow steps
+	totalSteps   int      // total tool-call iterations recorded (lifetime)
+	verifyFails  int      // lifetime explicit verify command failures
+	editFails    int      // lifetime edit tool failures
+	toolErrors   int      // lifetime other tool execution errors
+	warningCount int      // how many warnings have been emitted this run
+	lastWarnedAt int      // iteration of last warning (to space them out)
+
+	// pendingVerify/pendingEdit/pendingTool hold error classifications from
+	// recordResult that will be attached to the next recordStep call.
+	pendingVerify int
+	pendingEdit   int
+	pendingTool   int
+
+	// newErrSinceWarn counts error steps recorded after the last warning.
+	// Critical escalation requires this to be > 0: a recovery period with
+	// zero new errors must never escalate severity (#336).
+	newErrSinceWarn int
 }
 
 func newErrorCompoundState() *errorCompoundState {
@@ -77,13 +117,17 @@ func newErrorCompoundState() *errorCompoundState {
 func (s *errorCompoundState) reset() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.window = nil
 	s.totalSteps = 0
-	s.errorSteps = 0
 	s.verifyFails = 0
 	s.editFails = 0
 	s.toolErrors = 0
 	s.warningCount = 0
 	s.lastWarnedAt = 0
+	s.pendingVerify = 0
+	s.pendingEdit = 0
+	s.pendingTool = 0
+	s.newErrSinceWarn = 0
 }
 
 // recordStep records one tool-call iteration. multipleErrors indicates the
@@ -91,14 +135,27 @@ func (s *errorCompoundState) reset() {
 func (s *errorCompoundState) recordStep(hasError bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	step := ecStep{
+		hasError:    hasError,
+		verifyFails: s.pendingVerify,
+		editFails:   s.pendingEdit,
+		toolErrors:  s.pendingTool,
+	}
+	s.pendingVerify, s.pendingEdit, s.pendingTool = 0, 0, 0
+
 	s.totalSteps++
 	if hasError {
-		s.errorSteps++
+		s.newErrSinceWarn++
+	}
+	s.window = append(s.window, step)
+	if len(s.window) > ecWindow {
+		s.window = s.window[len(s.window)-ecWindow:]
 	}
 }
 
-// recordResult classifies a tool result and records error signals.
-// Returns true if this step contributed an error signal.
+// recordResult classifies a tool result and stages error signals for the
+// next recordStep. Returns true if this result contributed an error signal.
 func (s *errorCompoundState) recordResult(toolName string, isError bool, iteration int) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -109,29 +166,45 @@ func (s *errorCompoundState) recordResult(toolName string, isError bool, iterati
 		hadError = true
 		if ecIsVerifyCmd(toolName) {
 			s.verifyFails++
+			s.pendingVerify++
 		} else if ecIsEditTool(toolName) {
 			s.editFails++
+			s.pendingEdit++
 		} else {
 			s.toolErrors++
+			s.pendingTool++
 		}
 	}
 
 	return hadError
 }
 
-// maybeWarn computes the compounding risk and returns guidance if thresholds
-// are crossed. Uses the geometric compounding model from the research:
-//
-//	P(trajectory success) ≈ (1 - errorDensity)^totalSteps
-//
-// where errorDensity = errorSteps / totalSteps. This is conservative:
-// it assumes each error-step independently degrades reliability.
+// windowStats summarizes the sliding window.
+func (s *errorCompoundState) windowStats() (steps, errs, verifyFails, editFails, toolErrors int) {
+	for _, st := range s.window {
+		steps++
+		if st.hasError {
+			errs++
+		}
+		verifyFails += st.verifyFails
+		editFails += st.editFails
+		toolErrors += st.toolErrors
+	}
+	return
+}
+
+// maybeWarn computes the sliding-window error density and returns guidance
+// if thresholds are crossed. See the module comment for the math rationale.
 func (s *errorCompoundState) maybeWarn(iteration int) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Need enough data to be meaningful
-	if s.totalSteps < 8 {
+	// Short-circuit for catastrophic starts: 3+ steps with >=75% error
+	// density is alarming regardless of the small sample size.
+	// Otherwise require a reasonably filled window.
+	catastrophic := s.totalSteps >= ecCatastrophicMinSteps &&
+		float64(s.errorStepsInWindowLocked()) >= ecCatastrophicDensity*float64(len(s.window))
+	if !catastrophic && s.totalSteps < 8 {
 		return ""
 	}
 
@@ -145,44 +218,37 @@ func (s *errorCompoundState) maybeWarn(iteration int) string {
 		return ""
 	}
 
-	errorDensity := float64(s.errorSteps) / float64(s.totalSteps)
+	wSteps, wErrs, wVerify, wEdit, wTool := s.windowStats()
 
-	// No errors at all -- no risk
-	if errorDensity < 0.01 {
+	density := 0.0
+	if wSteps > 0 {
+		density = float64(wErrs) / float64(wSteps)
+	}
+
+	// No meaningful error rate in the window -- no risk. Errors that have
+	// slid out of the window no longer trigger warnings (recovery subside).
+	if density <= ecWarnDensity {
 		return ""
 	}
 
-	// Geometric compounding probability
-	// Using (1 - density) as per-step success probability
-	perStepSuccess := 1.0 - errorDensity
-	successProb := 1.0
-	for i := 0; i < s.totalSteps; i++ {
-		successProb *= perStepSuccess
-	}
-
-	// Convert to percentage
-	successPct := successProb * 100
-
-	// Thresholds:
-	//   First warning: P < 70% (moderate risk) -- nudge holistic verification
-	//   Second warning: P < 40% (critical risk) -- strongly recommend checkpoint
-	var threshold float64
-	if s.warningCount == 0 {
-		threshold = 70.0
-	} else {
-		threshold = 40.0
-	}
-
-	if successPct >= threshold {
+	// Escalation guard (#336): the second (critical) warning requires NEW
+	// errors since the first warning. A pure recovery period (window has
+	// only stale errors, zero new ones) must not escalate severity.
+	if s.warningCount > 0 && s.newErrSinceWarn == 0 {
 		return ""
 	}
 
 	s.warningCount++
 	s.lastWarnedAt = iteration
+	s.newErrSinceWarn = 0
 
-	// Build guidance message
-	var severity string
-	var action string
+	return s.formatWarning(wSteps, wErrs, density, wVerify, wEdit, wTool)
+}
+
+// formatWarning builds the guidance message for a firing warning. Severity
+// escalates from moderate (first warning) to critical (second).
+func (s *errorCompoundState) formatWarning(wSteps, wErrs int, density float64, wVerify, wEdit, wTool int) string {
+	var severity, action string
 	if s.warningCount == 1 {
 		severity = "moderate"
 		action = "Consider pausing to run a holistic verification pass (build + test + lint) before continuing."
@@ -191,27 +257,45 @@ func (s *errorCompoundState) maybeWarn(iteration int) string {
 		action = "Strongly recommend stopping incremental edits and running full verification. The trajectory may be building on compounding errors."
 	}
 
-	// Build error breakdown
-	var breakdown []string
-	if s.verifyFails > 0 {
-		breakdown = append(breakdown, fmt.Sprintf("%d verify failures", s.verifyFails))
-	}
-	if s.editFails > 0 {
-		breakdown = append(breakdown, fmt.Sprintf("%d edit failures", s.editFails))
-	}
-	if s.toolErrors > 0 {
-		breakdown = append(breakdown, fmt.Sprintf("%d tool errors", s.toolErrors))
-	}
-	breakdownStr := strings.Join(breakdown, ", ")
-
-	return fmt.Sprintf(
-		"[error-compounding] %s risk detected: accumulated errors across %d steps "+
-			"(density=%.0f%%, est. trajectory success ~%.0f%%). Error breakdown: %s. "+
-			"Per-step errors compound geometrically -- even small per-step failure rates "+
-			"erode overall reliability over many steps. %s",
-		severity, s.totalSteps, errorDensity*100, successPct,
-		breakdownStr, action,
+	return fmt.Sprintf(`[error-compounding] %s risk detected: %d errors in last %d steps `+
+		`(window density=%.0f%%). Error breakdown (window): %s. `+
+		`Per-step errors compound -- a sustained high error rate erodes overall `+
+		`trajectory reliability. %s`,
+		severity, wErrs, wSteps, density*100,
+		ecWindowBreakdown(wVerify, wEdit, wTool), action,
 	)
+}
+
+// ecWindowBreakdown renders the window-scoped error-type breakdown. Reports
+// WINDOW counts (not lifetime totals) so the report reflects recent reality
+// rather than ancient history (#336).
+func ecWindowBreakdown(wVerify, wEdit, wTool int) string {
+	var parts []string
+	if wVerify > 0 {
+		parts = append(parts, fmt.Sprintf("%d verify failures", wVerify))
+	}
+	if wEdit > 0 {
+		parts = append(parts, fmt.Sprintf("%d edit failures", wEdit))
+	}
+	if wTool > 0 {
+		parts = append(parts, fmt.Sprintf("%d tool errors", wTool))
+	}
+	if s := strings.Join(parts, ", "); s != "" {
+		return s
+	}
+	return "none classified (raw step errors only)"
+}
+
+// errorStepsInWindowLocked returns the number of error steps in the window.
+// Caller must hold s.mu.
+func (s *errorCompoundState) errorStepsInWindowLocked() int {
+	n := 0
+	for _, st := range s.window {
+		if st.hasError {
+			n++
+		}
+	}
+	return n
 }
 
 // ecIsVerifyCmd checks if a tool is a verification command (build/test/lint).

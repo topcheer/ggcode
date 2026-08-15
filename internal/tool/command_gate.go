@@ -385,25 +385,58 @@ func (g *CommandGate) InteractiveCommandWarning(cmd string) string {
 
 	// Handle compound commands: check each sub-command independently.
 	// Split on common separators (|, ;, &&, ||) and check each part.
-	parts := splitCompoundCommand(cmd)
-	for _, part := range parts {
+	// #337: segments on the RIGHT side of a pipe receive stdin from the
+	// upstream segment, which closes on completion — bare cat/tee there read
+	// EOF and exit immediately. The stdin-reader infinite check is skipped
+	// for pipe-fed segments (it stays active for the first segment).
+	parts, pipeFed := splitCompoundCommandWithPipes(cmd)
+	for idx, part := range parts {
 		part = strings.TrimSpace(part)
 		if part == "" {
 			continue
 		}
-		if w := checkInteractivePart(part); w != "" {
+		if w := checkInteractivePartPart(part, idx > 0 && pipeFed[idx]); w != "" {
 			return w
 		}
 	}
 	return ""
 }
 
+// checkInteractivePartPart is checkInteractivePart with pipe-context awareness
+// (#337): pipeFed=true means the segment's stdin comes from the upstream
+// pipeline, so bare stdin-readers (cat/tee/sleep) exit on EOF instead of
+// hanging.
+func checkInteractivePartPart(cmd string, pipeFed bool) string {
+	if pipeFed {
+		fields := strings.Fields(cmd)
+		if len(fields) > 0 {
+			bin := strings.ToLower(filepath.Base(fields[0]))
+			if bin == "cat" || bin == "tee" || bin == "sleep" {
+				return ""
+			}
+		}
+	}
+	return checkInteractivePart(cmd)
+}
+
 // splitCompoundCommand splits on shell separators (|, ;, &&, ||).
+// Each returned part is a pipeline segment. #337: the caller needs to know
+// which segments are pipe-fed (right side of a single '|'), so the splitter
+// records separator kinds alongside parts.
 func splitCompoundCommand(cmd string) []string {
+	segs, _ := splitCompoundCommandWithPipes(cmd)
+	return segs
+}
+
+// splitCompoundCommandWithPipes additionally returns pipeFed, parallel to
+// segs: pipeFed[i] is true when segment i receives stdin from a pipe (the
+// separator before it was a single '|'). The first segment is never pipe-fed.
+func splitCompoundCommandWithPipes(cmd string) (segs []string, pipeFed []bool) {
 	var parts []string
 	var current strings.Builder
 	inSingleQuote := false
 	inDoubleQuote := false
+	lastSepWasPipe := false
 
 	i := 0
 	for i < len(cmd) {
@@ -433,9 +466,11 @@ func splitCompoundCommand(cmd string) []string {
 
 		// Check for top-level separators when not quoted.
 		if !inSingleQuote && !inDoubleQuote {
-			if sep, advance := matchSeparator(cmd, i); sep {
+			if sep, isPipe, advance := matchSeparator(cmd, i); sep {
 				parts = append(parts, current.String())
+				pipeFed = append(pipeFed, lastSepWasPipe)
 				current.Reset()
+				lastSepWasPipe = isPipe
 				i += advance
 				continue
 			}
@@ -447,25 +482,27 @@ func splitCompoundCommand(cmd string) []string {
 
 	if current.Len() > 0 {
 		parts = append(parts, current.String())
+		pipeFed = append(pipeFed, lastSepWasPipe)
 	}
-	return parts
+	return parts, pipeFed
 }
 
 // matchSeparator checks if position i in cmd is a shell separator (|, ;, &&, ||).
-// Returns (true, advance) where advance is how many bytes to skip.
-func matchSeparator(cmd string, i int) (bool, int) {
+// Returns (matched, isPipe, advance): isPipe is true only for a single '|'
+// (a pipeline feeding the next segment's stdin); '||' is a logical OR whose
+// right side does NOT receive a pipe (#337).
+func matchSeparator(cmd string, i int) (matched, isPipe bool, advance int) {
 	ch := cmd[i]
 	if ch == ';' || ch == '|' {
-		// Check for || (but single | is also a pipe separator)
 		if i+1 < len(cmd) && ch == '|' && cmd[i+1] == '|' {
-			return true, 2
+			return true, false, 2
 		}
-		return true, 1
+		return true, ch == '|', 1
 	}
 	if i+1 < len(cmd) && ch == '&' && cmd[i+1] == '&' {
-		return true, 2
+		return true, false, 2
 	}
-	return false, 0
+	return false, false, 0
 }
 
 // checkInteractivePart checks a single command pipeline segment for interactive
