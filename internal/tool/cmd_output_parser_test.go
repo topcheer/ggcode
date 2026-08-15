@@ -261,3 +261,37 @@ func TestSummarizeCommandOutput_LargeTestRunSavesTokens(t *testing.T) {
 		t.Errorf("expected TestBig_FailA, got:\n%s", summary)
 	}
 }
+
+// TestIsGoTestCommandWordBoundary verifies #387: "go test" must end the
+// command or be followed by whitespace — "go testdata" is NOT a go test run.
+func TestIsGoTestCommandWordBoundary(t *testing.T) {
+	positive := []string{"go test ./...", "go test", "cd x && go test ./y", "gotest ./..."}
+	for _, cmd := range positive {
+		if !isGoTestCommand(strings.ToLower(cmd)) {
+			t.Errorf("expected match for %q", cmd)
+		}
+	}
+	negative := []string{"go testdata ./...", "go testdata", "cargo test", "echo go testdata"}
+	for _, cmd := range negative {
+		if isGoTestCommand(strings.ToLower(cmd)) {
+			t.Errorf("expected NO match for %q", cmd)
+		}
+	}
+}
+
+// TestIsGoBuildCommandWordBoundary mirrors the same fix for the build
+// subcommands (#387).
+func TestIsGoBuildCommandWordBoundary(t *testing.T) {
+	positive := []string{"go build ./...", "go vet", "go install ./cmd/x"}
+	for _, cmd := range positive {
+		if !isGoBuildCommand(cmd) {
+			t.Errorf("expected match for %q", cmd)
+		}
+	}
+	negative := []string{"go buildinfo x", "go vetting", "cargo build"}
+	for _, cmd := range negative {
+		if isGoBuildCommand(cmd) {
+			t.Errorf("expected NO match for %q", cmd)
+		}
+	}
+}
