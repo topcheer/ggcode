@@ -94,8 +94,13 @@ var actionHedgingPatterns = []hedgingPattern{
 	{"HIGH", regexp.MustCompile(`(?i)\beducated guess\b`)},
 	{"HIGH", regexp.MustCompile(`(?i)\bif this doesn't work\b`)},
 	{"HIGH", regexp.MustCompile(`(?i)\bif (?:this|that) (?:doesn't|does not|fails?)\b`)},
-	{"HIGH", regexp.MustCompile(`(?i)\bfallback\b.*\bif\b`)},
-	{"HIGH", regexp.MustCompile(`(?i)\blet'?s try\b`)},
+	// #359: distance-capped and first-person scoped — describing a code path
+	// ("uses the exponential fallback if all brokers are down") is technical
+	// narration, not a pre-action hedge.
+	{"HIGH", regexp.MustCompile(`(?i)\b(?:we|i)'?(?:ll| will)? ?(?:use|fall back to|switch to)? ?a? ?fallback\b[^.]{0,40}\bif\b`)},
+	// #359: "let's try X" is confident iteration, not high-uncertainty hedging
+	// (compare MEDIUM "see if this works"); narrowed + downgraded.
+	{"MEDIUM", regexp.MustCompile(`(?i)\blet'?s try (?:this|that|it)\b`)},
 	{"HIGH", regexp.MustCompile(`(?i)\btrial and error\b`)},
 	{"HIGH", regexp.MustCompile(`(?i)\bthis is (?:a )?shot in the dark\b`)},
 

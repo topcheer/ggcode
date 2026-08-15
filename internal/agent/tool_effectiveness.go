@@ -118,17 +118,28 @@ func isPoorResult(toolName, content string) bool {
 	if searchTools[toolName] {
 		return isEmptyResult(content)
 	}
-	// Check for truncation advisory markers in tool output
+	// Check for truncation advisory markers in tool output. Anchored to the
+	// bracketed advisory form or the result-header form so file CONTENT that
+	// merely mentions the phrase (read_file on source containing "output
+	// truncated" in the middle of a line) doesn't self-trip the detector
+	// (#358).
 	lower := strings.ToLower(content)
-	if strings.Contains(lower, "output truncated") ||
-		strings.Contains(lower, "result too large") ||
-		strings.Contains(lower, "max results reached") {
+	if strings.Contains(lower, "[output truncated]") ||
+		strings.Contains(lower, "[result too large]") ||
+		strings.Contains(lower, "[max results reached]") ||
+		strings.HasPrefix(lower, "output truncated") ||
+		strings.HasPrefix(lower, "result too large") ||
+		strings.HasPrefix(lower, "max results reached") {
 		return true
 	}
-	// Edit/write rejections
+	// Edit/write rejections. Anchored to tool-result phrasing: git_status
+	// legitimately reports "No changes." on a clean tree and knowledge_graph
+	// idempotently reports "already exists" — both are successes, not poor
+	// results. Only match the edit-tool rejection forms (#358).
 	if strings.Contains(lower, "old_text not found") ||
-		strings.Contains(lower, "no changes") ||
-		strings.Contains(lower, "already exists") {
+		strings.Contains(lower, "no changes applied") ||
+		strings.Contains(lower, "no modifications were") ||
+		strings.Contains(lower, "file already exists; use edit") {
 		return true
 	}
 	return false

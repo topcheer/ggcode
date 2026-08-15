@@ -629,7 +629,17 @@ func (b *ChatBridge) ClearCurrentSession() {
 	b.currentSes = state.Session
 	b.usageTurnIndex = state.UsageTurnIndex
 	b.lastMetricDigestTurn = state.LastMetricDigestTurn
-	b.liveHistory = nil
+	if b.currentSes != nil {
+		// #357: reseed with tunnel merge, same as the rebuild path — plain nil
+		// here made the next live-event seed (which now merges) the only
+		// recovery point; keeping the merge keeps both paths consistent.
+		b.liveHistory = mergeTunnelUserMessages(
+			buildSessionHistoryFromMessages(b.currentSes.Messages),
+			b.currentSes.TunnelEvents,
+		)
+	} else {
+		b.liveHistory = nil
+	}
 	b.metricEvents = nil
 	b.pendingDigests = nil
 	if b.tunnelHost != nil {
@@ -2241,7 +2251,12 @@ func (b *ChatBridge) appendLiveUserMessage(text string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if len(b.liveHistory) == 0 && b.currentSes != nil {
-		b.liveHistory = buildSessionHistoryFromMessages(b.currentSes.Messages)
+		// Seed with tunnel user messages merged so queued-but-unpersisted
+		// tunnel messages don't vanish once a live event arrives (#357).
+		b.liveHistory = mergeTunnelUserMessages(
+			buildSessionHistoryFromMessages(b.currentSes.Messages),
+			b.currentSes.TunnelEvents,
+		)
 	}
 	b.liveHistory = append(b.liveHistory, SessionMessage{
 		ID:      fmt.Sprintf("user-%s", b.desktopTurnID),
@@ -2258,7 +2273,10 @@ func (b *ChatBridge) appendLiveError(text string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if len(b.liveHistory) == 0 && b.currentSes != nil {
-		b.liveHistory = buildSessionHistoryFromMessages(b.currentSes.Messages)
+		b.liveHistory = mergeTunnelUserMessages(
+			buildSessionHistoryFromMessages(b.currentSes.Messages),
+			b.currentSes.TunnelEvents,
+		)
 	}
 	b.liveHistory = append(b.liveHistory, SessionMessage{
 		Role:    "error",
@@ -2270,7 +2288,10 @@ func (b *ChatBridge) applySemanticToLiveHistory(semantic agentruntime.DesktopStr
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if len(b.liveHistory) == 0 && b.currentSes != nil {
-		b.liveHistory = buildSessionHistoryFromMessages(b.currentSes.Messages)
+		b.liveHistory = mergeTunnelUserMessages(
+			buildSessionHistoryFromMessages(b.currentSes.Messages),
+			b.currentSes.TunnelEvents,
+		)
 	}
 	switch semantic.Type {
 	case provider.StreamEventReasoning:

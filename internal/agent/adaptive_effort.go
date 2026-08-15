@@ -241,7 +241,7 @@ func (a *Agent) applyAdaptiveEffort() (applied string, previous string) {
 		return "", previous
 	}
 
-	if a.SetReasoningEffort(recommended) {
+	if a.setReasoningEffortInternal(recommended) {
 		debug.Log("adaptive-effort", "adjusted effort: %s → %s", previous, recommended)
 		return recommended, previous
 	}
@@ -251,11 +251,12 @@ func (a *Agent) applyAdaptiveEffort() (applied string, previous string) {
 // restoreEffort restores the provider's reasoning effort to a previous value
 // after an adaptive adjustment.
 func (a *Agent) restoreEffort(previous string) {
-	if previous == "" {
-		return
-	}
-	a.SetReasoningEffort(previous)
-	debug.Log("adaptive-effort", "restored effort to: %s", previous)
+	// previous=="" (provider had no explicit effort) is valid: clear back to
+	// "" so the provider returns to its default. The old early-return here
+	// made the restore branch unreachable on the apply path and leaked the
+	// userOverride flag set by the public setter (#356).
+	a.setReasoningEffortInternal(previous)
+	debug.Log("adaptive-effort", "restored effort to: %q", previous)
 }
 
 // effortLevelDisplayName returns a user-friendly name for the current effort.

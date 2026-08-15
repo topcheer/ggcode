@@ -787,18 +787,29 @@ func (a *Agent) Provider() provider.Provider {
 	return a.provider
 }
 func (a *Agent) SetReasoningEffort(effort string) bool {
+	ok := a.setReasoningEffortInternal(effort)
+	if ok {
+		// Mark that the user has explicitly set effort — adaptive effort stays dormant.
+		a.mu.Lock()
+		if a.effortAdapter != nil {
+			a.effortAdapter.setUserOverride(effort != "")
+		}
+		a.mu.Unlock()
+	}
+	return ok
+}
+
+// setReasoningEffortInternal sets the provider effort WITHOUT the userOverride
+// side effect — used by the adaptive-effort apply/restore paths so they do not
+// self-disarm the adapter (#356).
+func (a *Agent) setReasoningEffortInternal(effort string) bool {
 	a.mu.Lock()
+	defer a.mu.Unlock()
 	p, ok := a.provider.(provider.ReasoningEffortProvider)
 	if !ok {
-		a.mu.Unlock()
 		return false
 	}
 	p.SetReasoningEffort(effort)
-	// Mark that the user has explicitly set effort — adaptive effort stays dormant.
-	if a.effortAdapter != nil {
-		a.effortAdapter.setUserOverride(effort != "")
-	}
-	a.mu.Unlock()
 	return true
 }
 func (a *Agent) ReasoningEffort() string {
