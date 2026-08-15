@@ -3093,6 +3093,15 @@ func (d *desktopModeSwitcher) RestoreMode(fallback permission.PermissionMode) pe
 // QueueMessage stores a user message to be sent after the current agent turn.
 func (b *ChatBridge) QueueMessage(msg string) {
 	b.pendingMsgs.Enqueue(msg, false, nil)
+	// #477: VISIBLE entries must append a parallel source/exclude pair —
+	// every visible consume pops one (defer drain AND
+	// drainPendingInterrupt). Skipping the append here desynced the FIFO
+	// alignment: the next drained desktop message inherited a stale
+	// source=im / exclude=<adapter> pair from an already-consumed message.
+	b.mu.Lock()
+	b.pendingSource = append(b.pendingSource, "desktop")
+	b.pendingExclude = append(b.pendingExclude, "")
+	b.mu.Unlock()
 }
 
 // QueueHiddenMessage stores a hidden message (mirrors Fyne).
@@ -3108,6 +3117,22 @@ func (b *ChatBridge) drainPendingInterrupt() string {
 	pending, ok := b.drainPending()
 	if !ok {
 		return ""
+	}
+	// #477: this consume path popped the QUEUE but not the parallel
+	// source/exclude slices, leaving orphan pairs that shifted every later
+	// defer-drain by one (desktop messages misattributed source=im,
+	// Telegram missed echoes, slices grew unboundedly). Visible enqueues
+	// all append a pair (sendMessageData busy branch + QueueMessage);
+	// hidden enqueues never do — so pop only for visible consumption.
+	if !pending.Hidden {
+		b.mu.Lock()
+		if len(b.pendingSource) > 0 {
+			b.pendingSource = b.pendingSource[1:]
+		}
+		if len(b.pendingExclude) > 0 {
+			b.pendingExclude = b.pendingExclude[1:]
+		}
+		b.mu.Unlock()
 	}
 	if b.OnStreamEvent != nil {
 		b.OnStreamEvent("pending_consumed", nil)
