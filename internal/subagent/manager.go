@@ -573,6 +573,10 @@ func (m *Manager) SnapshotByID(id string) (Snapshot, bool) {
 
 // GetOutput returns the result of a completed (or in-progress) sub-agent.
 // Returns (result, true) if the agent exists, ("", false) otherwise.
+// Failed/cancelled/limit-rejected agents surface their error as
+// "[failed] <err>" (#351): previously they returned an empty string with
+// ok=true, making them indistinguishable from "no output yet" and hiding
+// spawn-limit rejections from the calling LLM.
 func (m *Manager) GetTaskOutput(id string) (string, bool) {
 	sa, ok := m.Get(id)
 	if !ok {
@@ -582,10 +586,19 @@ func (m *Manager) GetTaskOutput(id string) (string, bool) {
 	if snap.Result != "" {
 		return snap.Result, true
 	}
+	if snap.Error != "" {
+		// Failed / cancelled / spawn-limit-rejected: the error IS the output.
+		// Written by Complete on failure, Cancel, and the sa-limit-* synthetic
+		// agents created at spawn-limit rejection time.
+		return fmt.Sprintf("[failed] %s", snap.Error), true
+	}
 	if snap.ProgressSummary != "" {
 		return "[in progress] " + snap.ProgressSummary, true
 	}
-	if snap.Status == "running" {
+	if snap.Status == StatusPending {
+		return "[pending, not started yet]", true
+	}
+	if snap.Status == StatusRunning {
 		return "[running, no output yet]", true
 	}
 	return "", true

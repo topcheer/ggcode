@@ -4,6 +4,7 @@ package subagent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -457,8 +458,45 @@ func TestManagerGetTaskOutputPendingNoProgress(t *testing.T) {
 	if !ok {
 		t.Error("expected true")
 	}
-	if output != "" {
-		t.Errorf("expected empty output for pending agent with no progress, got %q", output)
+	// #351: pending agents without progress now return an explicit status
+	// marker instead of an empty string (indistinguishable from failure).
+	if output != "[pending, not started yet]" {
+		t.Errorf("expected pending marker, got %q", output)
+	}
+}
+
+// TestManagerGetTaskOutputFailed (#351): a failed sub-agent must surface its
+// error — previously it returned ("", true), an empty success result that the
+// calling LLM could not distinguish from "no output yet" (and spawn-limit
+// rejections were invisible, inducing retry loops).
+func TestManagerGetTaskOutputFailed(t *testing.T) {
+	mgr := NewManager(config.SubAgentConfig{MaxConcurrent: 5})
+	sa := &SubAgent{ID: "sa-1", Task: "t"}
+	mgr.mu.Lock()
+	mgr.agents["sa-1"] = sa
+	mgr.mu.Unlock()
+
+	// Failure path: Complete with an error and no result.
+	sa.mu.Lock()
+	sa.Status = StatusFailed
+	sa.Error = errors.New("context deadline exceeded")
+	sa.mu.Unlock()
+
+	output, ok := mgr.GetTaskOutput("sa-1")
+	if !ok {
+		t.Fatal("expected true")
+	}
+	if output != "[failed] context deadline exceeded" {
+		t.Fatalf("expected failed marker with error, got %q", output)
+	}
+
+	// Cancel path.
+	sa.mu.Lock()
+	sa.Status = StatusCancelled
+	sa.Error = errors.New("context canceled")
+	sa.mu.Unlock()
+	if output, _ := mgr.GetTaskOutput("sa-1"); output != "[failed] context canceled" {
+		t.Fatalf("expected cancelled error surfaced, got %q", output)
 	}
 }
 
