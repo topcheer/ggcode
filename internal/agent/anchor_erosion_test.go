@@ -56,9 +56,10 @@ func TestCountAnchorLinesMultiEdit(t *testing.T) {
 		},
 	})
 	lines := countAnchorLines(string(b))
-	// 3 + 2 = 5
-	if lines != 5 {
-		t.Fatalf("expected 5 lines for multi_edit, got %v", lines)
+	// Multi-edit calls are normalized to the per-edit average so mixed
+	// multi-file/single-file workflows stay comparable (#380): (3+2)/2.
+	if lines != 2.5 {
+		t.Fatalf("expected 2.5 lines (per-edit average) for multi_edit, got %v", lines)
 	}
 }
 

@@ -267,6 +267,16 @@ func (f *FallbackProvider) watchStreamForFailover(ctx context.Context, failed Pr
 	go func() {
 		defer close(out)
 		sawOutput := false
+		resetOnSuccess := func() {
+			if sawOutput {
+				// A stream that delivered output and ended cleanly proves the
+				// provider works — reset the transient-failure streak, same
+				// semantics the sync path's success return used to carry
+				// (#376). Without this, two stale transient errors plus any
+				// later error would stickily fail over a healthy primary.
+				f.consecutiveFail.Store(0)
+			}
+		}
 		for ev := range stream {
 			if !sawOutput && ev.Type == StreamEventError && ev.Error != nil {
 				_, canRetry := f.maybeFailover(ev.Error, failed)
@@ -292,6 +302,7 @@ func (f *FallbackProvider) watchStreamForFailover(ctx context.Context, failed Pr
 							}
 							out <- ev2
 						}
+						resetOnSuccess()
 						return
 					}
 					// Fallback stream could not even start — surface the
@@ -303,6 +314,7 @@ func (f *FallbackProvider) watchStreamForFailover(ctx context.Context, failed Pr
 			sawOutput = sawOutput || (ev.Type != StreamEventError && ev.Type != StreamEventSystem)
 			out <- ev
 		}
+		resetOnSuccess()
 	}()
 	return out
 }

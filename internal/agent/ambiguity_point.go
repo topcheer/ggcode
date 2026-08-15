@@ -119,7 +119,13 @@ var ambiguityPatterns = []struct {
 	// Vague scope
 	{"all occurrences", ambScopeVague, "whether this includes nested/overlapping matches"},
 	{"everything that", ambScopeVague, "the precise set of items to include"},
-	{"cleanup", ambScopeVague, "which specific files/patterns to clean"},
+	// "cleanup" narrowed to vague-quantifier usage; bare "cleanup"
+	// collided with identifiers like cleanupConn (#381). "refactor" kept as
+	// a word-boundary bare match — "Refactor the authentication module" is
+	// genuinely vague scope, and the boundary check no longer hits
+	// "refactored"/"refactoring" prose.
+	{"clean up some", ambScopeVague, "which specific files/patterns to clean"},
+	{"clean up the", ambScopeVague, "which specific files/patterns to clean"},
 	{"refactor", ambScopeVague, "the scope -- which files, how aggressive, preserving API or not"},
 	{"optimize for", ambScopeVague, "the target metric: speed, memory, readability, or binary size"},
 
@@ -149,6 +155,34 @@ var quickTaskPhrases = []string{
 	"what is", "what are", "how many", "how does", "how do",
 	"help me understand", "explain", "describe",
 	"is there", "are there", "where is", "where are",
+}
+
+// ambContainsPhrase matches phrase in text with word boundaries on both
+// sides. Bare strings.Contains matched "recent" inside "recently" and
+// "cleanup" inside identifier names, firing clarify guidance on ordinary
+// dev prompts (#381).
+func ambContainsPhrase(text, phrase string) bool {
+	for from := 0; ; {
+		idx := strings.Index(text[from:], phrase)
+		if idx < 0 {
+			return false
+		}
+		i := from + idx
+		end := i + len(phrase)
+		beforeOK := i == 0 || !isWordByte(text[i-1])
+		afterOK := end >= len(text) || !isWordByte(text[end])
+		if !afterOK && end < len(text) && text[end] == 's' &&
+			(end+1 >= len(text) || !isWordByte(text[end+1])) {
+			// Tolerate a plural suffix: "remove duplicate" should match
+			// "remove duplicates". Only 's' — "recent" must still NOT match
+			// "recently" (#381).
+			afterOK = true
+		}
+		if beforeOK && afterOK {
+			return true
+		}
+		from = end
+	}
 }
 
 // checkAmbiguityPoints scans the user's initial request for known ambiguity
@@ -184,11 +218,15 @@ func (a *Agent) checkAmbiguityPoints(userPrompt string) string {
 		}
 	}
 
-	// Detect ambiguity signals
+	// Detect ambiguity signals. Bare substring matching used to hit normal
+	// dev prose — "recent" matched "recently", "cleanup" matched function
+	// names like cleanupConn — firing spurious clarify guidance almost every
+	// run (#381). Word-boundary matching plus narrowed phrasing for the
+	// worst offenders.
 	var signals []AmbiguitySignal
 	seen := make(map[string]bool)
 	for _, pat := range ambiguityPatterns {
-		if strings.Contains(lower, pat.phrase) {
+		if ambContainsPhrase(lower, pat.phrase) {
 			key := pat.category
 			if seen[key] {
 				continue // one signal per category

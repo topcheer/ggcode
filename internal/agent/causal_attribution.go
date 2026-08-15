@@ -207,8 +207,22 @@ func (s *causalAttributionState) attributeFailure(output string) string {
 		return ""
 	}
 
-	// Only process if this looks like a build/test failure
-	if !causalVerifyRe.MatchString(output) && !looksLikeFailure(output) {
+	// Only process if this looks like a build/test failure.
+	// The bare looksLikeFailure substring gate used to fire on ANY tool's
+	// output — a successful read_file/grep of source containing
+	// fmt.Errorf("failed to ...") got misattributed as a build failure and
+	// burned the 3-warning budget (#379). Restrict substring heuristics to
+	// outputs that also look like command/verify output; pure source dumps
+	// need the explicit verify-command regex.
+	looksVerify := causalVerifyRe.MatchString(output)
+	looksFail := looksLikeFailure(output)
+	looksLikeCmdOutput := strings.Contains(output, "exit status") ||
+		strings.Contains(output, "exit code") ||
+		strings.Contains(output, "FAIL") ||
+		strings.Contains(output, "--- FAIL") ||
+		strings.Contains(output, "build failed") ||
+		strings.Count(output, "\n") >= 5
+	if !looksVerify && !(looksFail && looksLikeCmdOutput) {
 		return ""
 	}
 

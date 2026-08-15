@@ -1481,6 +1481,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.resetTodoDrop()
 	a.resetScopeDrift()
 	a.resetDriftRecurrence()
+	// Per-user-turn reset of the attention-fragment directory window: the
+	// sliding window is per-turn semantics per its own doc comment — leaving
+	// it across turns let the first analyze of a new turn fire on the last
+	// turn's directory switches (#378).
+	a.attentionFragment.reset()
 	a.resetLastGoodCheckpoint()
 	a.recurringError.reset()
 	a.errStrategyLoop.reset()
@@ -1965,6 +1970,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			})
 			msgs = a.contextManager.Messages()
 		}
+		// Drift-recurrence iteration bookkeeping: check()'s post-warning
+		// window (driftRecurrencePostWarnWindow) compares against the current
+		// iteration — without this call currentIteration stayed 0 and the
+		// window guard was permanently false, letting stale warnings from
+		// dozens of iterations ago fire on a normal edit rhythm (#377).
+		a.driftRecurrence.recordIteration(i + 1)
 		// Futile cycle: detect when the agent re-reads the same set of files
 		// that it explored earlier without making any edits in between.
 		if fcMsg := a.futileCycle.maybeWarn(i + 1); fcMsg != "" {

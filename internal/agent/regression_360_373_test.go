@@ -74,3 +74,66 @@ func TestComputeAdaptiveTimeout_MinSamplesThenTightens(t *testing.T) {
 		t.Errorf("after %d samples expected floor %v, got %v", adaptiveMinSamples, adaptiveTimeoutFloor, got)
 	}
 }
+
+// --- #381: word-boundary ambiguity matching ---
+
+func TestAmbiguityWordBoundary_RecentlyNotRecent(t *testing.T) {
+	if ambContainsPhrase("i recently rebased, now fix the failing tests", "recent") {
+		t.Error("'recent' must not match inside 'recently'")
+	}
+	if !ambContainsPhrase("show me the recent changes", "recent") {
+		t.Error("bare 'recent' should still match")
+	}
+}
+
+func TestAmbiguityWordBoundary_CleanupIdentifierNotPhrase(t *testing.T) {
+	// The bare "cleanup" pattern was removed from the table (it collided
+	// with identifiers like cleanupConn); "clean up some/the" phrasings
+	// carry the vague-scope intent instead (#381).
+	for _, pat := range ambiguityPatterns {
+		if pat.phrase == "cleanup" {
+			t.Error("bare 'cleanup' should no longer be a pattern entry")
+		}
+	}
+	if !ambContainsPhrase("please clean up the old files", "clean up the") {
+		t.Error("'clean up the' should match")
+	}
+}
+
+func TestAmbiguityWordBoundary_PluralTolerated(t *testing.T) {
+	if !ambContainsPhrase("remove duplicates from the list", "remove duplicate") {
+		t.Error("plural 'duplicates' should match 'remove duplicate' pattern")
+	}
+}
+
+// --- #379: causal attribution only for verify-looking output ---
+
+func TestCausalAttribution_SourceReadNotFailure(t *testing.T) {
+	s := newCausalAttributionState()
+	s.recordEdit("edit_file", "internal/x/a.go", 1)
+	// Successful read of source containing an error literal — used to be
+	// misattributed as a build failure (#379).
+	out := s.attributeFailure("func f() error {\n\treturn fmt.Errorf(\"failed to connect\")\n}\n")
+	if out != "" {
+		t.Errorf("source dump must not trigger failure attribution, got: %s", out)
+	}
+}
+
+// --- #380: multi-edit anchor normalization ---
+
+func TestAnchorErosion_MultiFileMixedNoDecay(t *testing.T) {
+	// Issue scenario: 3 multi_file_edit calls (3 files x 5 lines = 15 summed
+	// under the old code) followed by 4 plain edit_file (5 lines each).
+	// Per-edit averaging means the window is [5,5,5,5,5] — zero decay.
+	a := newAnchorErosionState()
+	multiArgs := `{"files":[{"path":"a.go","edits":[{"old_text":"l1\nl2\nl3\nl4\nl5"}]},{"path":"b.go","edits":[{"old_text":"l1\nl2\nl3\nl4\nl5"}]},{"path":"c.go","edits":[{"old_text":"l1\nl2\nl3\nl4\nl5"}]}]}`
+	for i := 0; i < 3; i++ {
+		a.recordEditAnchor("multi_file_edit", multiArgs)
+	}
+	singleArgs := `{"file_path":"d.go","old_text":"l1\nl2\nl3\nl4\nl5"}`
+	for i := 0; i < 4; i++ {
+		if hint := a.recordEditAnchor("edit_file", singleArgs); hint != "" {
+			t.Errorf("uniform 5-line anchors must not trigger decay warning, got: %s", hint)
+		}
+	}
+}

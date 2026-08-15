@@ -219,7 +219,17 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		// submitted in the millisecond window after a turn ended can already
 		// have started a NEW run (m.loading=true, pendingRestart stale).
 		// Quitting then would kill the new turn.
+		// Explicit user requests (IM /restart, desktop InjectRestart) are
+		// exempt: being silently swallowed after the user already received a
+		// "Restarting..." confirmation is worse than deferring. They arm the
+		// restart to fire at turn end instead (#374).
 		if m.loading && !m.pendingRestart {
+			if msg.explicit {
+				debug.Log("restart", "explicit restart during active turn; arming to fire at turn end")
+				m.pendingRestart = true
+				m.noteTurnActivity()
+				return m, armRestartFallbackCmd()
+			}
 			debug.Log("restart", "remoteRestartMsg during a new active turn; ignoring")
 			return m, nil
 		}
@@ -764,6 +774,7 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 
 	case toolProgressMsg:
 		// Update the running tool's output in-place for a streaming effect.
+		m.noteTurnActivity() // streaming tool output is turn activity (#375)
 		if msg.toolID != "" {
 			m.chatUpdateToolOutput(msg.toolID, msg.output)
 		}

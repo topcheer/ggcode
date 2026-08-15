@@ -525,7 +525,8 @@ func (r *REPL) InjectWebchatMessage(text string) {
 // This is the same mechanism used by IM /restart and the TUI /restart slash command.
 func (r *REPL) InjectRestart() {
 	if r.program != nil {
-		r.program.Send(remoteRestartMsg{})
+		// Explicit user/desktop action (#374).
+		r.program.Send(remoteRestartMsg{explicit: true})
 	}
 }
 

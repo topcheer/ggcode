@@ -110,10 +110,14 @@ func countAnchorLines(args string) float64 {
 		return float64(strings.Count(oldText, "\n") + 1)
 	}
 
-	// multi_edit_file / multi_file_edit: array of edits
+	// multi_edit_file / multi_file_edit: array of edits. Multi-file calls
+	// are normalized to the PER-EDIT average — summing all files' lines as
+	// one record made mixed multi-file/single-file workflows show fake
+	// precision decay (a 3-file× 5-line call recorded as 15 vs later 5-line
+	// single edits) (#380).
 	for _, key := range []string{"edits", "files"} {
-		if total := countEditArrayLines(fields, key); total > 0 {
-			return total
+		if total, n := countEditArrayLines(fields, key); n > 0 {
+			return total / float64(n)
 		}
 	}
 	return 0
@@ -121,30 +125,38 @@ func countAnchorLines(args string) float64 {
 
 // countEditArrayLines sums old_text line counts across a JSON array of edit
 // objects. Handles both flat edits (multi_edit_file) and nested edits inside
-// file entries (multi_file_edit). Returns 0 if the key is absent or has no
-// old_text fields.
-func countEditArrayLines(fields map[string]interface{}, key string) float64 {
+// file entries (multi_file_edit). Returns (sum, count) where count is the
+// number of individual edits found; callers normalize to per-edit average
+// (#380). Returns (0, 0) if the key is absent or has no old_text fields.
+func countEditArrayLines(fields map[string]interface{}, key string) (float64, int) {
 	arr, ok := fields[key].([]interface{})
 	if !ok {
-		return 0
+		return 0, 0
 	}
 	total := 0.0
+	count := 0
 	for _, item := range arr {
 		m, isMap := item.(map[string]interface{})
 		if !isMap {
 			continue
 		}
-		total += oldTextLineCount(m["old_text"])
+		if lines := oldTextLineCount(m["old_text"]); lines > 0 {
+			total += lines
+			count++
+		}
 		// multi_file_edit nests edits inside file entries
 		if nested, ok := m["edits"].([]interface{}); ok {
 			for _, ne := range nested {
 				if nm, ok := ne.(map[string]interface{}); ok {
-					total += oldTextLineCount(nm["old_text"])
+					if lines := oldTextLineCount(nm["old_text"]); lines > 0 {
+						total += lines
+						count++
+					}
 				}
 			}
 		}
 	}
-	return total
+	return total, count
 }
 
 // oldTextLineCount returns the line count for an old_text value, or 0 if

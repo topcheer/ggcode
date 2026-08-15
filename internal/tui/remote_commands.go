@@ -204,12 +204,21 @@ func (m *Model) executeRemoteRestartCommand(parts []string) string {
 // confirmation message is delivered) and then triggers the restart.
 func (m *Model) scheduleRemoteRestart() tea.Cmd {
 	return tea.Tick(1*time.Second, func(t time.Time) tea.Msg {
-		return remoteRestartMsg{}
+		// Explicit: the user directly requested /restart (IM/desktop/webui).
+		// Explicit requests are exempt from the armed-restart loading guard —
+		// instead of being silently swallowed mid-turn they queue until the
+		// turn ends (#374).
+		return remoteRestartMsg{explicit: true}
 	})
 }
 
 // remoteRestartMsg triggers a clean restart (quit + execve).
-type remoteRestartMsg struct{}
+type remoteRestartMsg struct {
+	// explicit marks a direct user request (IM /restart, desktop/webui
+	// InjectRestart) as opposed to the agent-armed restart tool's deferred
+	// fire (#374).
+	explicit bool
+}
 
 // ---- IM management (aligned with daemon_bridge.go) ----
 
