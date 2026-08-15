@@ -37,19 +37,15 @@ func TestWastedExploreRepro_GrepDotPrefixVsAbsolutePath(t *testing.T) {
 		wexpArgs(t, map[string]interface{}{"path": "/Volumes/new/ggai/ggcode/internal/agent/wasted_explore.go"}),
 		"", 2)
 	for _, info := range s.pendingSearches {
-		if info.Consumed {
-			t.Errorf("characterization failed: expected the known bug (./-prefixed rg output vs absolute read path never match) — if this now passes, the bug was FIXED")
+		if !info.Consumed {
+			t.Errorf("#482 regression: ./-prefixed rg output must match the absolute read path after normalization")
 		}
 	}
-	// iteration 3: window elapsed → false-positive warning despite the read
+	// iteration 3: window elapsed → NO warning (the read consumed it)
 	msg := s.checkWastedSearches(3)
-	if msg == "" {
-		t.Fatalf("characterization failed: expected the false-positive warning; got none (bug fixed?)")
+	if msg != "" {
+		t.Fatalf("#482 regression: false-positive warning despite the read: %q", msg)
 	}
-	if !wexpContains(msg, "Wasted Exploration") {
-		t.Fatalf("unexpected message: %q", msg)
-	}
-	t.Logf("FALSE POSITIVE CONFIRMED: %s", wexpFirstLine(msg))
 }
 
 // Scenario B: rg path (./-prefix) vs Go-fallback path (no prefix) also mismatch.
@@ -61,8 +57,8 @@ func TestWastedExploreRepro_GrepRgVsGoFallbackFormatMismatch(t *testing.T) {
 	s.recordConsumptionToolCall("grep", wexpArgs(t, map[string]interface{}{"pattern": "y", "path": "."}),
 		"internal/tool/grep.go\n1 file(s) matched", 2)
 	for _, info := range s.pendingSearches {
-		if info.Consumed {
-			t.Errorf("characterization failed: rg ./-prefix vs Go-fallback rel path unexpectedly matched — bug fixed?")
+		if !info.Consumed {
+			t.Errorf("#482 regression: rg ./-prefix must match Go-fallback rel path after normalization")
 		}
 	}
 }
@@ -98,8 +94,8 @@ func TestWastedExploreRepro_LspAbsoluteVsRelativeRead(t *testing.T) {
 		wexpArgs(t, map[string]interface{}{"path": "internal/agent/wasted_explore.go"}), // relative read works
 		"", 2)
 	for _, info := range s.pendingSearches {
-		if info.Consumed {
-			t.Errorf("characterization failed: lsp absolute FoundPath vs relative read arg unexpectedly matched — bug fixed?")
+		if !info.Consumed {
+			t.Errorf("#482 regression: lsp absolute FoundPath must match relative read arg after normalization")
 		}
 	}
 }
@@ -120,10 +116,22 @@ Ranked 3 file(s) by relevance (of 500 searched):
 Use read_file or grep to inspect these files in detail.
 `
 	s.recordSearchToolCall("code_search", wexpArgs(t, map[string]interface{}{"query": "authentication"}), res, 1)
-	if len(s.pendingSearches) != 0 {
-		t.Errorf("FALSE NEGATIVE CONFIRMED: code_search result was parsed into %d pending searches, but no FoundPath can ever be extracted from the 'N. path (relevance: X%%)' format", len(s.pendingSearches))
-		for _, info := range s.pendingSearches {
-			t.Logf("  unexpectedly tracked paths: %v", info.FoundPaths)
+	if len(s.pendingSearches) == 0 {
+		t.Fatalf("#482 regression: code_search 'N. path (relevance: X%%)' results must be tracked")
+	}
+	var tracked []string
+	for _, info := range s.pendingSearches {
+		tracked = append(tracked, info.FoundPaths...)
+	}
+	for _, want := range []string{"internal/auth/oauth.go", "internal/auth/token.go", "internal/middleware/auth.go"} {
+		found := false
+		for _, tp := range tracked {
+			if weNormalizePath(tp) == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("#482 regression: code_search result missing path %s (tracked: %v)", want, tracked)
 		}
 	}
 }

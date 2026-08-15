@@ -260,11 +260,17 @@ func psIsVerifyCommand(cmd string) bool {
 			}
 			continue
 		}
-		for _, t := range tokens {
+		for i, t := range tokens {
 			if t == pat {
 				return true
 			}
-			if strings.HasPrefix(t, pat+"-") || strings.HasPrefix(t, pat+"_") {
+			// #483: hyphen/underscore variants (check-all, test-flight) are
+			// only verification when in COMMAND position (tokens[0]) — e.g.
+			// `ninja check-all`. At argument positions they are file/dir
+			// names (`git add test-utils.go`, `cat verify-config.yaml`,
+			// `gofmt -w test_utils.go`) and must NOT arm everVerified,
+			// which silenced the detector for the entire run.
+			if i == 0 && (strings.HasPrefix(t, pat+"-") || strings.HasPrefix(t, pat+"_")) {
 				return true
 			}
 		}

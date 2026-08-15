@@ -44,6 +44,8 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 
@@ -228,6 +230,7 @@ func (s *wastedExploreState) recordConsumptionToolCall(toolName string, args jso
 	resultPaths := extractFilePathsFromResult(result)
 	for _, p := range resultPaths {
 		s.consumedPaths[p] = true
+		s.consumedPaths[weNormalizePath(p)] = true
 	}
 
 	// Mark any pending searches whose paths are now consumed
@@ -236,7 +239,7 @@ func (s *wastedExploreState) recordConsumptionToolCall(toolName string, args jso
 			continue
 		}
 		for _, foundPath := range info.FoundPaths {
-			if s.consumedPaths[foundPath] {
+			if s.consumedPaths[foundPath] || weMatchAnyConsumed(s, foundPath) {
 				info.Consumed = true
 				debug.Log("wasted-explore", "search id=%d consumed via %s at iteration %d", info.ID, toolName, iteration)
 				break
@@ -365,6 +368,53 @@ func extractFilePathsFromResult(result string) []string {
 }
 
 // extractPathFromLine tries to extract a file path from a single line of output.
+// weNormalizePath canonicalizes a path for cross-tool matching (#482).
+// Search outputs and consumption-tool args use inconsistent formats:
+// grep rg-branch emits "./relative", grep fallback emits "relative",
+// lsp_* emits absolute paths, glob branches differ, read_file takes
+// absolute-or-relative. Byte-equality never matches across those.
+func weNormalizePath(p string) string {
+	if p == "" {
+		return ""
+	}
+	p = strings.TrimPrefix(p, "./")
+	p = filepath.Clean(p)
+	p = filepath.ToSlash(p)
+	return p
+}
+
+// wePathsMatch reports whether a consumption path covers a found path,
+// accepting the full normalized form or the base name when the base is
+// distinctive (has an extension, length > 4) — "/abs/root/internal/agent/
+// a.go" from lsp matches "./internal/agent/a.go" from grep without
+// needing a workspace root.
+func wePathsMatch(consumed, found string) bool {
+	cn, fn := weNormalizePath(consumed), weNormalizePath(found)
+	if cn == fn {
+		return true
+	}
+	cb, fb := filepath.Base(cn), filepath.Base(fn)
+	if cb == fb && cb != "/" && cb != "." && len(cb) > 4 && strings.Contains(cb, ".") {
+		return true
+	}
+	return false
+}
+
+// weMatchAnyConsumed checks a found path against all consumed entries
+// with normalization-aware matching (#482).
+func weMatchAnyConsumed(s *wastedExploreState, found string) bool {
+	for c := range s.consumedPaths {
+		if wePathsMatch(c, found) {
+			return true
+		}
+	}
+	return false
+}
+
+// listNumPrefixRe matches the "N. " enumerator prefix of code_search
+// output lines ("1. internal/agent/foo.go (relevance: 87%)").
+var listNumPrefixRe = regexp.MustCompile(`^\s*\d+\.\s+`)
+
 func extractPathFromLine(line string) string {
 	// Common patterns in search output:
 	// "/path/to/file.go:42: content"
@@ -376,6 +426,9 @@ func extractPathFromLine(line string) string {
 	line = strings.TrimPrefix(line, "File: ")
 	line = strings.TrimPrefix(line, "→ ")
 	line = strings.TrimPrefix(line, "- ")
+	// #482: code_search emits "N. path (relevance: X%)" — strip the
+	// enumerator or extraction truncates to "N."
+	line = listNumPrefixRe.ReplaceAllString(line, "")
 
 	// Extract up to the first space or colon-line-number pattern
 	// Look for the path portion before ":digits:" or end of meaningful content
