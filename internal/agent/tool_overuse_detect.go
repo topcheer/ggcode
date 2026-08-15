@@ -93,10 +93,19 @@ func (s *toolOveruseState) reset() {
 	s.warnings = 0
 }
 
-// recordWrite tracks file write/edit operations.
-func (s *toolOveruseState) recordWrite(path string, iter int) {
+// recordWrite tracks file write/edit operations. success reflects the
+// tool result: only a SUCCESSFUL write makes later reads of the file
+// "suspicious" (the content is in context). A FAILED edit leaves no write
+// result in context — in fact the canonical recovery is to RE-READ the
+// file (edit_fail_recovery recommends exactly that), so a failed write
+// must clear any stale entry (#495).
+func (s *toolOveruseState) recordWrite(path string, iter int, success bool) {
 	path = overuseNormalizePath(path)
 	if path == "" {
+		return
+	}
+	if !success {
+		delete(s.filesWritten, path)
 		return
 	}
 	s.filesWritten[path] = iter
@@ -205,7 +214,10 @@ func (s *toolOveruseState) checkTrivialCommand(cmd string) string {
 	}
 	cmdLower := strings.ToLower(strings.TrimSpace(cmd))
 	for _, pat := range trivialCommandPatterns {
-		if strings.Contains(cmdLower, pat) {
+		// #495: whole-word-sequence match. Bare substring matching fired
+		// on embedded text (cat .pwd_history, ls /tmp/uname-dir,
+		// "which python3-config" style args).
+		if overuseContainsCommand(cmdLower, pat) {
 			s.warnings++
 			return fmt.Sprintf(
 				"[tool-overuse] The command `%s` retrieves information typically available "+
@@ -219,9 +231,38 @@ func (s *toolOveruseState) checkTrivialCommand(cmd string) string {
 	return ""
 }
 
-// maybeWarn checks for tool overuse patterns given a tool call.
-// toolName is the tool being called, argsJSON is the raw JSON arguments,
-// iter is the current 1-based iteration number.
+// overuseContainsCommand reports whether the command contains pat as a
+// whole word sequence: the characters adjacent to the match must not be
+// word characters (#495). "pwd" matches "cd somewhere && pwd" but not
+// "cat .pwd_history"; "uname" matches "uname -a" but not "/tmp/uname-dir".
+func overuseContainsCommand(cmdLower, pat string) bool {
+	for i := 0; i+len(pat) <= len(cmdLower); i++ {
+		if cmdLower[i:i+len(pat)] != pat {
+			continue
+		}
+		if i > 0 && overuseIsWordByte(cmdLower[i-1]) {
+			continue
+		}
+		if i+len(pat) < len(cmdLower) && overuseIsWordByte(cmdLower[i+len(pat)]) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func overuseIsWordByte(c byte) bool {
+	return c == '_' || c == '-' || c == '/' || c == '.' ||
+		(c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
+}
+
+// maybeWarn checks for tool overuse patterns given a tool call. Called
+// PRE-execution, so it performs only the read-only checks (read-after-
+// write, dir re-list, trivial command). Write bookkeeping moved to
+// recordWriteResult, which sees the actual tool outcome (#495): the old
+// pre-execution recordWrite counted FAILED edits as writes, so the
+// recovery read_file after a failed edit got false-premise "trust the
+// content from your edit" guidance contradicting edit_fail_recovery.
 func (s *toolOveruseState) maybeWarn(toolName, argsJSON string, iter int) string {
 	path := extractPathFromArgs(toolName, argsJSON)
 	switch toolName {
@@ -234,11 +275,18 @@ func (s *toolOveruseState) maybeWarn(toolName, argsJSON string, iter int) string
 	case "run_command":
 		cmd := extractCmdFromArgs(argsJSON)
 		return s.checkTrivialCommand(cmd)
-	case "write_file", "edit_file", "multi_edit_file":
-		s.recordWrite(path, iter)
-		return ""
 	default:
 		return ""
+	}
+}
+
+// recordWriteResult performs the post-execution write bookkeeping: a
+// successful edit/write records the file as written (later reads become
+// suspicious); a failed one clears any stale entry (#495).
+func (s *toolOveruseState) recordWriteResult(toolName, argsJSON string, iter int, success bool) {
+	switch toolName {
+	case "write_file", "edit_file", "multi_edit_file", "multi_file_edit":
+		s.recordWrite(extractPathFromArgs(toolName, argsJSON), iter, success)
 	}
 }
 

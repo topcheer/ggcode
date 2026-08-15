@@ -4238,6 +4238,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			if !result.IsError {
 				a.recordSpiralVerification(tc.Name)
 			}
+			// Tool-overuse write bookkeeping is POST-execution (#495): only
+			// a successful edit/write makes later reads suspicious. The old
+			// pre-execution recordWrite counted failed edits too, so the
+			// recovery read_file after a failed edit received false-premise
+			// "trust the content from your edit" guidance that contradicts
+			// edit_fail_recovery's own recommendation.
+			a.toolOveruse.recordWriteResult(tc.Name, string(tc.Arguments), i+1, !result.IsError)
 			// Repetitive-line compression: collapse consecutive identical or
 			// template-similar lines (common in build/test/install output) before
 			// the size-based guard. This may prevent truncation entirely for

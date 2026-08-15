@@ -8,7 +8,7 @@ func TestToolOveruse_ReadAfterWrite(t *testing.T) {
 	s := newToolOveruseState()
 
 	// Simulate writing a file at iteration 3
-	s.recordWrite("src/main.go", 3)
+	s.recordWrite("src/main.go", 3, true)
 
 	// Reading the same file at iteration 4 should trigger warning
 	msg := s.checkReadAfterWrite("src/main.go", 4)
@@ -27,7 +27,7 @@ func TestToolOveruse_ReadAfterWrite_Expired(t *testing.T) {
 	s := newToolOveruseState()
 
 	// Write at iteration 1
-	s.recordWrite("src/main.go", 1)
+	s.recordWrite("src/main.go", 1, true)
 
 	// Read at iteration 10 (beyond window of 3) should NOT trigger
 	msg := s.checkReadAfterWrite("src/main.go", 10)
@@ -39,7 +39,7 @@ func TestToolOveruse_ReadAfterWrite_Expired(t *testing.T) {
 func TestToolOveruse_ReadAfterWrite_DifferentFile(t *testing.T) {
 	s := newToolOveruseState()
 
-	s.recordWrite("src/main.go", 3)
+	s.recordWrite("src/main.go", 3, true)
 
 	// Reading a different file should NOT trigger
 	msg := s.checkReadAfterWrite("src/other.go", 4)
@@ -71,7 +71,7 @@ func TestToolOveruse_DirRelist_AfterWrite(t *testing.T) {
 	s.recordDirList("src/components", 2)
 
 	// Write a file in that directory at iteration 3
-	s.recordWrite("src/components/Button.tsx", 3)
+	s.recordWrite("src/components/Button.tsx", 3, true)
 
 	// Re-list at iteration 4 should NOT trigger (directory was modified)
 	msg := s.checkDirRelist("src/components", 4)
@@ -129,21 +129,21 @@ func TestToolOveruse_MaxWarnings(t *testing.T) {
 	s := newToolOveruseState()
 
 	// First warning
-	s.recordWrite("file1.go", 1)
+	s.recordWrite("file1.go", 1, true)
 	msg1 := s.checkReadAfterWrite("file1.go", 2)
 	if msg1 == "" {
 		t.Fatal("expected first warning")
 	}
 
 	// Second warning (different file)
-	s.recordWrite("file2.go", 2)
+	s.recordWrite("file2.go", 2, true)
 	msg2 := s.checkReadAfterWrite("file2.go", 3)
 	if msg2 == "" {
 		t.Fatal("expected second warning")
 	}
 
 	// Third should be suppressed (max 2 warnings)
-	s.recordWrite("file3.go", 3)
+	s.recordWrite("file3.go", 3, true)
 	msg3 := s.checkReadAfterWrite("file3.go", 4)
 	if msg3 != "" {
 		t.Errorf("expected third warning to be suppressed, got: %s", msg3)
@@ -153,8 +153,8 @@ func TestToolOveruse_MaxWarnings(t *testing.T) {
 func TestToolOveruse_MaybeWarn_ReadFile(t *testing.T) {
 	s := newToolOveruseState()
 
-	// Simulate write
-	s.maybeWarn("edit_file", `{"file_path":"src/main.go","old_text":"a","new_text":"b"}`, 2)
+	// Simulate a SUCCESSFUL write (post-execution bookkeeping, #495).
+	s.recordWriteResult("edit_file", `{"file_path":"src/main.go","old_text":"a","new_text":"b"}`, 2, true)
 
 	// Read the same file should trigger
 	msg := s.maybeWarn("read_file", `{"path":"src/main.go"}`, 3)
@@ -191,7 +191,7 @@ func TestToolOveruse_MaybeWarn_ListDirectory(t *testing.T) {
 func TestToolOveruse_Reset(t *testing.T) {
 	s := newToolOveruseState()
 
-	s.recordWrite("file.go", 1)
+	s.recordWrite("file.go", 1, true)
 	s.recordDirList("src", 1)
 	s.checkReadAfterWrite("file.go", 2) // triggers a warning
 
@@ -206,7 +206,7 @@ func TestToolOveruse_PathNormalization(t *testing.T) {
 	s := newToolOveruseState()
 
 	// Write with trailing slash variant
-	s.recordWrite("src/main.go", 1)
+	s.recordWrite("src/main.go", 1, true)
 
 	// Read without trailing slash should still match
 	msg := s.checkReadAfterWrite("src/main.go", 2)

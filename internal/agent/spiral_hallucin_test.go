@@ -10,9 +10,8 @@ func TestSpiralHallucination_Reset(t *testing.T) {
 	s := newSpiralHallucinationState()
 	s.turn = 5
 	s.warnings = 1
-	s.topics = append(s.topics, spiralTrackedTopic{word: "postgres", sourceTurn: 1})
+	s.topics = append(s.topics, spiralTrackedTopic{word: "postgres", sourceTurn: 1, verified: true})
 	s.committedCounts["postgres"] = 3
-	s.verified = true
 
 	s.reset()
 
@@ -21,9 +20,6 @@ func TestSpiralHallucination_Reset(t *testing.T) {
 	}
 	if len(s.committedCounts) != 0 {
 		t.Fatalf("reset did not clear committedCounts: %+v", s.committedCounts)
-	}
-	if s.verified {
-		t.Fatal("reset did not clear verified")
 	}
 }
 
@@ -141,7 +137,7 @@ func TestDetectCommittedTopics(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			matched := detectCommittedTopics(tt.text, tt.tracked)
+			matched := detectCommittedTopics(tt.text, tt.tracked, 100)
 			matchedMap := make(map[string]bool)
 			for _, m := range matched {
 				matchedMap[m] = true
@@ -168,7 +164,7 @@ func TestRecordSpiralTurn_UncertaintyRecording(t *testing.T) {
 	if len(a.spiralState.topics) == 0 {
 		t.Fatal("expected topics to be recorded after uncertainty turn")
 	}
-	if a.spiralState.verified {
+	if a.spiralState.topicsAreVerified() {
 		t.Fatal("should not be verified after uncertainty turn")
 	}
 }
@@ -178,13 +174,13 @@ func TestRecordSpiralTurn_VerificationBreaksSpiral(t *testing.T) {
 
 	// Turn 1: express uncertainty
 	a.recordSpiralTurn("I assume the database is PostgreSQL")
-	if a.spiralState.verified {
+	if a.spiralState.topicsAreVerified() {
 		t.Fatal("should not be verified yet")
 	}
 
 	// Turn 2: verification occurs (test passed)
 	a.recordSpiralTurn("I ran the test and it passed. The build succeeded.")
-	if !a.spiralState.verified {
+	if !a.spiralState.topicsAreVerified() {
 		t.Fatal("should be verified after test/build turn")
 	}
 }
@@ -195,22 +191,38 @@ func TestMaybeWarnSpiralHallucination_SpiralPattern(t *testing.T) {
 	// Turn 1: express uncertainty about PostgreSQL
 	a.recordSpiralTurn("I assume the database is PostgreSQL with some specific config")
 
-	// Turn 2: start committing (first committed statement)
+	// Turn 2: commitment at gap=1 — below spiralMinGap=2, does NOT count
+	// (#493 A: too close to the uncertainty is ordinary inconsistency,
+	// not a spiral).
 	a.recordSpiralTurn("Since we're using PostgreSQL, the schema needs migration")
-
-	// Should not fire yet (only 1 committed statement)
-	hint := a.maybeWarnSpiralHallucination()
-	if hint != "" {
-		t.Fatal("should not warn after only 1 committed statement")
+	if got := s_counts(a)["postgresql"]; got != 0 {
+		t.Fatalf("gap=1 commitment must not count (#493 A), got %d", got)
 	}
 
-	// Turn 3: more commitment (second committed statement)
-	a.recordSpiralTurn("Given that PostgreSQL is our database, the connection pool needs tuning")
+	hint := a.maybeWarnSpiralHallucination()
+	if hint != "" {
+		t.Fatal("should not warn with zero counted commitments")
+	}
 
-	// Now should fire (2 committed statements)
+	// Turn 3: commitment at gap=2 — first counted statement
+	a.recordSpiralTurn("Given that PostgreSQL is our database, the connection pool needs tuning")
+	if got := s_counts(a)["postgresql"]; got != 1 {
+		t.Fatalf("gap=2 commitment must count, got %d", got)
+	}
+
+	// Should not fire yet (only 1 counted committed statement)
+	hint = a.maybeWarnSpiralHallucination()
+	if hint != "" {
+		t.Fatal("should not warn after only 1 counted committed statement")
+	}
+
+	// Turn 4: more commitment (second counted statement)
+	a.recordSpiralTurn("Therefore the PostgreSQL tuning plan proceeds in this order")
+
+	// Now should fire (2 counted committed statements)
 	hint = a.maybeWarnSpiralHallucination()
 	if hint == "" {
-		t.Fatal("expected spiral warning after 2 committed statements on uncertain topic")
+		t.Fatal("expected spiral warning after 2 counted committed statements on uncertain topic")
 	}
 
 	if !strings.Contains(hint, "spiral-of-hallucination") {

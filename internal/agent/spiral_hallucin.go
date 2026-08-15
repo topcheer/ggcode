@@ -128,7 +128,9 @@ var spiralExecutionTools = map[string]bool{
 // observable side effects succeeded this turn (fix #161: prose keyword
 // matching silently disabled the detector; #167: read-only tools must NOT
 // count — only tools that can validate/refute an assumption break the
-// spiral chain).
+// spiral chain; #493 B: protection is PER-TOPIC — all topics tracked so
+// far are marked verified, and unlike the old global flag this state is
+// never reset by unrelated hedging).
 func (a *Agent) recordSpiralVerification(toolName string) {
 	if a == nil || a.spiralState == nil {
 		return
@@ -136,7 +138,9 @@ func (a *Agent) recordSpiralVerification(toolName string) {
 	if !spiralExecutionTools[toolName] {
 		return
 	}
-	a.spiralState.verified = true
+	for i := range a.spiralState.topics {
+		a.spiralState.topics[i].verified = true
+	}
 }
 
 // spiralTopicWordRe extracts candidate topic keywords from text near
@@ -169,8 +173,18 @@ var spiralStopWords = map[string]bool{
 // spiralTrackedTopic represents a topic from a turn where uncertainty
 // was expressed, tracked for later committed usage.
 type spiralTrackedTopic struct {
-	word       string
+	word string
+	// sourceTurn is the turn where the uncertainty was expressed; used to
+	// enforce spiralMinGap (#493 A): commitment must be ≥spiralMinGap turns
+	// later to count — same-turn/gap-1 commitment is ordinary inconsistency,
+	// not a spiral.
 	sourceTurn int
+	// verified is per-topic (#493 B): once an execution-type verification
+	// succeeds after this topic's uncertainty, the topic is protected — a
+	// later unrelated hedge must NOT strip that protection (the old global
+	// verified bool was reset by ANY new uncertainty, so one "I think" about
+	// anything re-armed warnings on already-verified foundations).
+	verified bool
 }
 
 // spiralHallucinationState tracks the cross-turn spiral pattern.
@@ -179,7 +193,6 @@ type spiralHallucinationState struct {
 	warnings        int
 	topics          []spiralTrackedTopic // topics from prior uncertainty turns
 	committedCounts map[string]int       // topic -> count of committed assertions
-	verified        bool                 // whether a verification step occurred since last uncertainty
 }
 
 func newSpiralHallucinationState() *spiralHallucinationState {
@@ -188,12 +201,26 @@ func newSpiralHallucinationState() *spiralHallucinationState {
 	}
 }
 
+// topicsAreVerified reports whether all currently tracked topics are
+// verified (#493 B). Kept for callers/tests that need the old aggregate
+// "is everything verified" view over the per-topic state.
+func (s *spiralHallucinationState) topicsAreVerified() bool {
+	if len(s.topics) == 0 {
+		return false
+	}
+	for i := range s.topics {
+		if !s.topics[i].verified {
+			return false
+		}
+	}
+	return true
+}
+
 func (s *spiralHallucinationState) reset() {
 	s.turn = 0
 	s.warnings = 0
 	s.topics = nil
 	s.committedCounts = make(map[string]int)
-	s.verified = false
 }
 
 // extractSpiralTopics pulls candidate topic keywords from text segments
@@ -236,14 +263,17 @@ func extractSpiralTopics(text string) []string {
 }
 
 // detectCommittedTopics finds topics from prior uncertainty turns that
-// appear in committed/assertive language in the current text.
-func detectCommittedTopics(text string, tracked []spiralTrackedTopic) []string {
+// appear in committed/assertive language in the current text. Only topics
+// that (a) are still unverified and (b) were expressed at least
+// spiralMinGap turns ago are eligible (#493).
+func detectCommittedTopics(text string, tracked []spiralTrackedTopic, curTurn int) []string {
 	if len(tracked) == 0 {
 		return nil
 	}
 
 	lowerText := strings.ToLower(text)
 	var matched []string
+	seen := make(map[string]bool)
 
 	// Check if any committed language appears in the text
 	hasCommitted := spiralCommittedRe.MatchString(lowerText)
@@ -253,6 +283,15 @@ func detectCommittedTopics(text string, tracked []spiralTrackedTopic) []string {
 
 	// Find which tracked topics appear in the text
 	for _, t := range tracked {
+		if t.verified {
+			continue // verification broke the spiral for this topic (#493 B)
+		}
+		if curTurn-t.sourceTurn < spiralMinGap {
+			continue // too close to the uncertainty — inconsistency, not spiral (#493 A)
+		}
+		if seen[t.word] {
+			continue
+		}
 		if strings.Contains(lowerText, t.word) {
 			// Make sure this isn't itself an uncertainty turn (no hedging
 			// about this topic in the same text)
@@ -276,6 +315,7 @@ func detectCommittedTopics(text string, tracked []spiralTrackedTopic) []string {
 					continue
 				}
 			}
+			seen[t.word] = true
 			matched = append(matched, t.word)
 		}
 	}
@@ -295,9 +335,11 @@ func (a *Agent) recordSpiralTurn(text string) {
 	// observable results (recorded by recordSpiralVerification from the tool
 	// loop) or an explicit first-person verification assertion (#161:
 	// generic keyword matching on prose disabled the detector far too
-	// easily).
+	// easily). Verification protects every topic tracked so far (#493 B).
 	if spiralVerificationRe.MatchString(text) {
-		s.verified = true
+		for i := range s.topics {
+			s.topics[i].verified = true
+		}
 	}
 
 	// Extract topics from any uncertainty expressed in this turn
@@ -309,14 +351,17 @@ func (a *Agent) recordSpiralTurn(text string) {
 				sourceTurn: s.turn,
 			})
 		}
-		// New uncertainty resets the verification flag -- the agent is
-		// expressing new doubts
-		s.verified = false
+		// #493 B: new uncertainty does NOT reset any per-topic verified
+		// state. Fresh topics start unverified; previously-verified topics
+		// keep their protection — the old global reset let any unrelated
+		// "I think" re-arm warnings on already-verified foundations.
 	}
 
-	// Check for committed assertions about previously uncertain topics
-	if len(s.topics) > 0 && !s.verified {
-		committed := detectCommittedTopics(text, s.topics)
+	// Check for committed assertions about previously uncertain topics.
+	// Verified topics and too-recent topics are filtered inside
+	// detectCommittedTopics (#493).
+	if len(s.topics) > 0 {
+		committed := detectCommittedTopics(text, s.topics, s.turn)
 		for _, topic := range committed {
 			s.committedCounts[topic]++
 		}
@@ -344,16 +389,10 @@ func (a *Agent) maybeWarnSpiralHallucination() string {
 		return ""
 	}
 
-	// Filter out topics that were verified since their uncertainty was expressed
-	if s.verified {
-		// Verification happened -- the spiral is broken for topics verified
-		// after their uncertainty turn. But we can't easily distinguish which
-		// topics were verified. Be conservative: only warn if 3+ topics
-		// spiraled AND no verification in the most recent turns.
-		if len(spiraled) < 3 {
-			return ""
-		}
-	}
+	// #493 B: verified topics are already filtered per-topic inside
+	// detectCommittedTopics — every topic reaching committedCounts here is
+	// genuinely unverified, so the old "3+ topics AND no verification"
+	// global mitigation (which any unrelated hedge could wipe) is obsolete.
 
 	s.warnings++
 

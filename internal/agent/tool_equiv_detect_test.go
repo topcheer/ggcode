@@ -68,10 +68,16 @@ func TestToolEquivDetect_ReorderedKeys(t *testing.T) {
 		t.Errorf("first call should not warn, got: %q", hint1)
 	}
 
-	// Second call with reordered keys - should warn
+	// Reordered keys = DIVERGENT raw fingerprints: this is the
+	// semantic-equivalence case. Threshold is 3 (#494) — second call
+	// only counts, third one warns.
 	hint2 := s.recordCall("grep", call2, rawFp("grep", call2))
-	if hint2 == "" {
-		t.Errorf("second call with reordered keys should trigger warning")
+	if hint2 != "" {
+		t.Errorf("second call is below threshold 3, no warning yet, got: %q", hint2)
+	}
+	hint3 := s.recordCall("grep", call1, rawFp("grep", call1))
+	if hint3 == "" {
+		t.Errorf("third semantically-equivalent call (divergent raw) should trigger warning")
 	}
 }
 
@@ -85,9 +91,14 @@ func TestToolEquivDetect_VolatileFields(t *testing.T) {
 		t.Errorf("first call should not warn")
 	}
 
+	// Volatile-only divergence: below threshold 3 no warning yet (#494).
 	hint2 := s.recordCall("search", call2, rawFp("search", call2))
-	if hint2 == "" {
-		t.Errorf("second call with volatile fields should trigger warning")
+	if hint2 != "" {
+		t.Errorf("second call is below threshold 3, no warning yet, got: %q", hint2)
+	}
+	hint3 := s.recordCall("search", call1, rawFp("search", call1))
+	if hint3 == "" {
+		t.Errorf("third semantically-equivalent call should trigger warning")
 	}
 }
 
@@ -95,16 +106,18 @@ func TestToolEquivDetect_ExactMatchNoDoubleWarn(t *testing.T) {
 	s := newToolEquivDetectState()
 	args := []byte(`{"pattern":"foo"}`)
 
-	// Same exact args twice - the raw fingerprints will be identical.
-	// The semantic detector still counts it but should still fire its
-	// own warning (independent from tool_redundancy).
+	// Byte-identical repetition: raw fingerprints are identical, so
+	// tool_redundancy already owns the warning — this detector YIELDS
+	// (#494 implements the documented :32 contract; the old write-only
+	// rawFingerprints map never actually suppressed anything).
 	hint1 := s.recordCall("grep", args, rawFp("grep", args))
 	if hint1 != "" {
 		t.Errorf("first call should not warn")
 	}
-	hint2 := s.recordCall("grep", args, rawFp("grep", args))
-	if hint2 == "" {
-		t.Log("note: exact-match semantic duplicate does fire this detector too")
+	for i := 0; i < 4; i++ {
+		if h := s.recordCall("grep", args, rawFp("grep", args)); h != "" {
+			t.Fatalf("byte-identical repeat %d must NOT double-warn here (tool_redundancy owns it), got: %q", i+2, h)
+		}
 	}
 }
 
