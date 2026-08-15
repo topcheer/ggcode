@@ -207,6 +207,15 @@ func SaveIMAdapter(name string, values map[string]string) error {
 // adapter's persisted bindings are cascade-deleted in the same operation
 // (#396): without the cascade an orphaned binding keyed by adapter NAME is
 // silently re-inherited when an adapter with the same name is rebuilt later.
+//
+// Ordering (#497): the cascade unbind runs BEFORE the config delete.
+// im.Manager.UnbindAdapter is idempotent (no persisted bindings is a
+// successful no-op), so this order keeps BOTH failure paths retryable: if
+// the unbind fails the adapter config is still intact, and if the config
+// delete fails the retry's unbind is a harmless no-op. The previous
+// delete-then-unbind order made the #460 "retry" advice structurally
+// unreachable — config.RemoveIMAdapter rejects the already-deleted adapter
+// with "not found" before a retry ever reaches the unbind step.
 func RemoveIMAdapter(name string, imMgr interface {
 	UnbindAdapter(adapterName string) error
 }) error {
@@ -214,17 +223,18 @@ func RemoveIMAdapter(name string, imMgr interface {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
-	if err := cfg.RemoveIMAdapter(name); err != nil {
-		return err
-	}
 	if imMgr != nil {
 		if uerr := imMgr.UnbindAdapter(name); uerr != nil {
-			// #460: config is already deleted — returning an error here tells
-			// the UI the cascade FAILED so the user can retry; the old code
-			// swallowed this, leaving a ghost binding that a same-named
-			// adapter silently inherits (#396 scenario).
-			return fmt.Errorf("adapter config removed, but unbinding channels failed (retry to clear the leftover binding): %w", uerr)
+			// #460: surface the cascade failure so the user can retry; the
+			// config delete below has NOT run yet, so a retry re-enters the
+			// full chain instead of dying at "adapter not found".
+			return fmt.Errorf("unbinding channels failed (adapter config left intact, safe to retry): %w", uerr)
 		}
+	}
+	if err := cfg.RemoveIMAdapter(name); err != nil {
+		// Bindings are already cleared by the idempotent unbind above, so a
+		// retry that re-runs this function cannot leak a ghost binding (#396).
+		return err
 	}
 	return nil
 }
