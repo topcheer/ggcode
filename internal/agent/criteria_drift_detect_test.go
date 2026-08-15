@@ -7,17 +7,16 @@ import (
 
 func TestCriteriaDriftReset(t *testing.T) {
 	c := newCriteriaDriftState()
-	c.indicators = []string{"a", "b"}
+	c.indicators = []cdIndicator{{pattern: "a", iter: 1}, {pattern: "b", iter: 1}}
 	c.warnCount = 1
-	c.fired = true
 
 	c.reset()
 
 	if len(c.indicators) != 0 {
 		t.Fatalf("expected indicators cleared, got %d", len(c.indicators))
 	}
-	if c.warnCount != 0 || c.fired {
-		t.Fatalf("expected state reset, got warnCount=%d fired=%v", c.warnCount, c.fired)
+	if c.warnCount != 0 {
+		t.Fatalf("expected state reset, got warnCount=%d", c.warnCount)
 	}
 }
 
@@ -62,16 +61,26 @@ func TestCriteriaDriftFiresOnce(t *testing.T) {
 		t.Fatal("expected first warning")
 	}
 
-	// Same indicators without new categories — warnCount already 1,
-	// but threshold is still met so a second warning fires (warnCount < cdMaxWarns=2).
+	// #332: consumed indicators are cleared after a warning — the same batch
+	// cannot immediately re-trigger; a second warning requires fresh
+	// indicators within the turn window.
 	second := c.maybeWarn(3)
-	if second == "" {
-		t.Fatal("expected second warning (warnCount=1 < cdMaxWarns=2)")
+	if second != "" {
+		t.Fatal("expected no second warning from consumed indicators")
 	}
 
-	// Third call should be blocked by warnCount >= cdMaxWarns
+	// New indicators within the window DO allow the second warning.
+	// ("Is really a separate concern" = reclassification, "I took a different
+	// approach" = substitution — 2 distinct categories.)
+	c.recordAssistantText("Is really a separate concern. I took a different approach.", 3)
 	third := c.maybeWarn(4)
-	if third != "" {
+	if third == "" {
+		t.Fatal("expected second warning from fresh indicators (warnCount=1 < cdMaxWarns=2)")
+	}
+
+	// Fourth attempt blocked by warnCount >= cdMaxWarns
+	c.recordAssistantText("A simpler solution. Good enough for now.", 5)
+	if msg := c.maybeWarn(6); msg != "" {
 		t.Fatal("expected no third warning (warnCount >= cdMaxWarns)")
 	}
 }
@@ -84,7 +93,7 @@ func TestCriteriaDriftMaxWarns(t *testing.T) {
 	c.recordAssistantText(text1, 1)
 	_ = c.maybeWarn(2)
 
-	// Add new drift categories to trigger a second warning
+	// Add new drift categories within the window to trigger a second warning
 	c.recordAssistantText("Is really a separate concern. Good enough for now.", 3)
 	_ = c.maybeWarn(4)
 
@@ -93,6 +102,35 @@ func TestCriteriaDriftMaxWarns(t *testing.T) {
 	msg := c.maybeWarn(6)
 	if msg != "" {
 		t.Fatal("expected no third warning (maxWarns)")
+	}
+}
+
+// #332: indicators from distant turns must not be stitched into a warning.
+func TestCriteriaDriftDistantTurnsNoWarn(t *testing.T) {
+	c := newCriteriaDriftState()
+	defer c.reset()
+
+	// iter 3: legitimate root-cause analysis (narrowing category)
+	c.recordAssistantText("The core problem is the nil map at line 42.", 3)
+	// iters 4-8: neutral tool turns
+	// iter 9: legitimate follow-up suggestion (reclassification category)
+	c.recordAssistantText("The flaky test should be a follow-up task.", 9)
+
+	if msg := c.maybeWarn(10); msg != "" {
+		t.Fatalf("expected no warning for distant-turn indicators, got: %s", msg)
+	}
+}
+
+// #332: same-turn (adjacent) multi-category indicators still fire.
+func TestCriteriaDriftAdjacentTurnsWarn(t *testing.T) {
+	c := newCriteriaDriftState()
+	defer c.reset()
+
+	c.recordAssistantText("The core problem is the nil map.", 8)
+	c.recordAssistantText("Rate limiting should be a follow-up.", 9)
+
+	if msg := c.maybeWarn(10); msg == "" {
+		t.Fatal("expected warning for indicators within window")
 	}
 }
 
@@ -200,7 +238,7 @@ func TestCriteriaDriftWarningContent(t *testing.T) {
 }
 
 func TestCdContains(t *testing.T) {
-	s := []string{"a", "b", "c"}
+	s := []cdIndicator{{pattern: "a", iter: 1}, {pattern: "b", iter: 2}, {pattern: "c", iter: 3}}
 	if !cdContains(s, "b") {
 		t.Error("expected cdContains to find 'b'")
 	}

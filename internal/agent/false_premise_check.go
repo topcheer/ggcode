@@ -73,6 +73,17 @@ func (f *falsePremiseState) reset() {
 // recordToolResult is called after each tool execution.
 func (f *falsePremiseState) recordToolResult(toolName string, resultContent string, isError bool) {
 	if !isError {
+		// Same tool succeeded on a later run: the earlier error has been
+		// superseded by newer evidence (#331). "fail → fix → re-run → report"
+		// is the core correct workflow; a stale error record for a tool that
+		// has since succeeded must not poison later success-claim checks.
+		kept := f.recentErrors[:0]
+		for _, e := range f.recentErrors {
+			if e.toolName != toolName {
+				kept = append(kept, e)
+			}
+		}
+		f.recentErrors = kept
 		return
 	}
 	snippet := resultContent
@@ -107,7 +118,9 @@ func (f *falsePremiseState) checkFalsePremise(assistantText string) string {
 			continue
 		}
 
-		if fpIsBuildTestTool(err.toolName) && matchesBuildSuccessClaim(lowered) {
+		// Aligned with branch 4: acknowledging the earlier error means the claim
+		// is grounded, not confabulated (#331).
+		if fpIsBuildTestTool(err.toolName) && matchesBuildSuccessClaim(lowered) && !acknowledgesError(lowered) {
 			err.matched = true
 			found = append(found, buildContradiction(err, "build/test success",
 				"Re-run the build/test command and report the actual result."))
@@ -128,7 +141,11 @@ func (f *falsePremiseState) checkFalsePremise(assistantText string) string {
 			continue
 		}
 
-		if matchesGenericSuccessClaim(lowered) && !acknowledgesError(lowered) {
+		// Search/read tools have dedicated branches above that require
+		// error-snippet indicators ("no matches" / "not found"); a bare syntax
+		// error from grep must not trigger the generic branch (#331).
+		if !fpIsSearchTool(err.toolName) && !fpIsReadTool(err.toolName) &&
+			matchesGenericSuccessClaim(lowered) && !acknowledgesError(lowered) {
 			err.matched = true
 			found = append(found, buildContradiction(err, "generic success",
 				"Address the tool error above before claiming success."))

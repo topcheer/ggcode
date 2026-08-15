@@ -57,9 +57,8 @@ type repetitionTracker struct {
 	// Key: "filepath:level" (e.g., "main.go:soft")
 	firedLevels map[string]bool
 
-	// lastEditFile records the most recent file edit target (any result).
-	// Used for read-edit-read cycle detection.
-	lastEditFile string
+	// lastEditFile removed (#333): dead field — declared for read-edit-read
+	// cycle detection but never read; cycle detection uses failedEditsByFile.
 
 	// readAfterFailedEdit counts read_file calls to a file that had a recent
 	// failed edit, without a successful edit in between.
@@ -92,12 +91,10 @@ func (rt *repetitionTracker) recordEditAttempt(toolName string, args json.RawMes
 
 	if isError {
 		rt.failedEditsByFile[filePath]++
-		rt.lastEditFile = filePath
 	} else {
 		// Successful edit — reset counters for this file.
 		rt.failedEditsByFile[filePath] = 0
 		rt.readAfterFailedEdit[filePath] = 0
-		rt.lastEditFile = filePath
 		return ""
 	}
 
@@ -125,6 +122,9 @@ func (rt *repetitionTracker) recordReadAttempt(filePath string) string {
 	}
 
 	// If we've read the file 3+ times after failed edits, suggest stepping back.
+	// Note: the ":cycle" level is once per run (never cleared on a successful
+	// edit), unlike the soft/hard/escalate counters which reset — intentional,
+	// consistent with "fire at most once per escalation level" in the header.
 	cycleKey := filePath + ":cycle"
 	if rt.readAfterFailedEdit[filePath] >= 3 && !rt.firedLevels[cycleKey] {
 		rt.firedLevels[cycleKey] = true
@@ -206,7 +206,6 @@ func (rt *repetitionTracker) reset() {
 	rt.failedEditsByFile = make(map[string]int)
 	rt.firedLevels = make(map[string]bool)
 	rt.readAfterFailedEdit = make(map[string]int)
-	rt.lastEditFile = ""
 }
 
 // normalizeFilePath canonicalizes a file path for tracking purposes.
@@ -218,9 +217,12 @@ func normalizeFilePath(path string) string {
 		path = path[2:]
 	}
 	// Lowercase for case-insensitive matching (handles case-only differences
-	// that cause false negatives on case-insensitive filesystems like macOS).
-	// Note: we keep the original case in the guidance message via the caller.
-	return path
+	// that cause false negatives on case-insensitive filesystems like macOS)
+	// (#333). Trade-off: on case-sensitive filesystems this merges counters of
+	// two truly distinct files differing only by case — acceptable: worst case
+	// is one premature soft hint at 3 failures, far lighter than the escalate
+	// false-negative this normalization prevents.
+	return strings.ToLower(path)
 }
 
 // --- Agent integration ---

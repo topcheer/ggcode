@@ -58,15 +58,27 @@ const (
 	// required before firing. Single matches are too prone to false positives
 	// on legitimate design discussion or constraint clarification.
 	cdThreshold = 2
+
+	// cdIndicatorWindowTurns limits how far apart two indicators may be to
+	// combine into one warning (#332). Criteria drift is *progressive*;
+	// legitimate phrases from unrelated turns 6+ iterations apart must not be
+	// stitched into a "proxy gaming" accusation. Mirrors drift_recurrence's
+	// post-warn window convention.
+	cdIndicatorWindowTurns = 3
 )
+
+// cdIndicator is a single drift-indicator hit with the iteration it occurred.
+type cdIndicator struct {
+	pattern string
+	iter    int
+}
 
 // criteriaDriftState tracks success criteria drift signals.
 type criteriaDriftState struct {
 	mu             sync.Mutex
-	indicators     []string        // accumulated distinct drift indicators this run
-	seenCategories map[string]bool // categories with at least one indicator (issue #30)
+	indicators     []cdIndicator   // accumulated distinct drift indicators this run (with iter)
+	seenCategories map[string]bool // categories with at least one indicator
 	warnCount      int
-	fired          bool
 }
 
 func newCriteriaDriftState() *criteriaDriftState {
@@ -79,7 +91,6 @@ func (c *criteriaDriftState) reset() {
 	c.indicators = nil
 	c.seenCategories = make(map[string]bool)
 	c.warnCount = 0
-	c.fired = false
 }
 
 // criteriaDriftPatterns defines language patterns signaling the agent is
@@ -144,7 +155,7 @@ func (c *criteriaDriftState) recordAssistantText(text string, iter int) {
 		for _, pat := range pats {
 			if strings.Contains(lower, pat) {
 				// Check if we already have this indicator.
-				if !cdContains(c.indicators, pat) && !cdContains(newIndicators, pat) {
+				if !cdContains(c.indicators, pat) && !cdContainsStr(newIndicators, pat) {
 					newIndicators = append(newIndicators, pat)
 					debug.Log("agent", "Criteria drift indicator (category=%s): %q at iteration %d", cat, pat, iter)
 				}
@@ -152,7 +163,9 @@ func (c *criteriaDriftState) recordAssistantText(text string, iter int) {
 		}
 	}
 
-	c.indicators = append(c.indicators, newIndicators...)
+	for _, pat := range newIndicators {
+		c.indicators = append(c.indicators, cdIndicator{pattern: pat, iter: iter})
+	}
 	// Track which categories have been seen for category-based dedup (issue #30).
 	for cat := range criteriaDriftPatterns {
 		for _, ind := range newIndicators {
@@ -167,6 +180,10 @@ func (c *criteriaDriftState) recordAssistantText(text string, iter int) {
 }
 
 // maybeWarn returns guidance text if enough drift indicators have accumulated.
+// Indicators more than cdIndicatorWindowTurns from the current iteration are
+// pruned and cannot be combined across distant turns (#332). Consumed
+// indicators are cleared after a warning so the same batch cannot immediately
+// re-trigger.
 func (c *criteriaDriftState) maybeWarn(iter int) string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -174,7 +191,32 @@ func (c *criteriaDriftState) maybeWarn(iter int) string {
 	if c.warnCount >= cdMaxWarns {
 		return ""
 	}
-	if len(c.seenCategories) < cdThreshold {
+
+	// Prune indicators older than the window relative to the current iter.
+	fresh := c.indicators[:0]
+	for _, ind := range c.indicators {
+		if iter-ind.iter <= cdIndicatorWindowTurns {
+			fresh = append(fresh, ind)
+		}
+	}
+	c.indicators = fresh
+	if len(c.indicators) == 0 {
+		return ""
+	}
+
+	// Categories computed only over windowed indicators.
+	cats := map[string]bool{}
+	for cat, pats := range criteriaDriftPatterns {
+		for _, ind := range c.indicators {
+			for _, pat := range pats {
+				if ind.pattern == pat {
+					cats[cat] = true
+					break
+				}
+			}
+		}
+	}
+	if len(cats) < cdThreshold {
 		return ""
 	}
 
@@ -184,7 +226,14 @@ func (c *criteriaDriftState) maybeWarn(iter int) string {
 	if n > 5 {
 		n = 5
 	}
-	sample := strings.Join(c.indicators[:n], "; ")
+	sampleParts := make([]string, 0, n)
+	for _, ind := range c.indicators[:n] {
+		sampleParts = append(sampleParts, ind.pattern)
+	}
+	sample := strings.Join(sampleParts, "; ")
+
+	// Consume the used indicators so the same batch cannot fire twice.
+	c.indicators = nil
 
 	return `[Success Criteria Integrity] You have used language that redefines or relaxes ` +
 		`the task's success criteria: "` + sample + `". ` +
@@ -197,7 +246,17 @@ func (c *criteriaDriftState) maybeWarn(iter int) string {
 }
 
 // cdContains checks if a slice contains a string.
-func cdContains(slice []string, s string) bool {
+func cdContains(slice []cdIndicator, s string) bool {
+	for _, v := range slice {
+		if v.pattern == s {
+			return true
+		}
+	}
+	return false
+}
+
+// cdContainsStr is the plain-string variant used for intra-turn dedup.
+func cdContainsStr(slice []string, s string) bool {
 	for _, v := range slice {
 		if v == s {
 			return true
