@@ -101,17 +101,6 @@ var sdCaveatPhrases = []string{
 // 40-char window precedent, slightly widened).
 const sdCaveatWindow = 50
 
-// sdNegations neutralize a caveat hit when it directly negates the hedge:
-// "no remaining issues" / "nothing remaining" are completion-affirming,
-// not hedging (#352).
-var sdNegations = []string{
-	"no remaining",
-	"nothing remaining",
-	"without remaining",
-	"no longer",
-	"none remaining",
-}
-
 // successDeclareState tracks premature success declarations.
 type successDeclareState struct {
 	mu              sync.Mutex
@@ -227,7 +216,13 @@ func sdFindDeclaration(lowerText string) (string, int) {
 		// ("all set" in "wall setup", bare "done" in "download") need word
 		// boundaries (#352).
 		if phrase == "done" || phrase == "all set" {
-			if idx := sdIndexWord(lowerText, phrase); idx >= 0 {
+			var idx int
+			if phrase == "done" {
+				idx = sdIndexDone(lowerText)
+			} else {
+				idx = sdIndexWord(lowerText, phrase)
+			}
+			if idx >= 0 {
 				return phrase, idx
 			}
 			continue
@@ -259,6 +254,32 @@ func sdIndexWord(lowerText, word string) int {
 
 func isWordByte(b byte) bool {
 	return b == '_' || (b >= 'a' && b <= 'z') || (b >= '0' && b <= '9')
+}
+
+// sdIndexDone finds "done" as a standalone word, skipping code-identifier
+// occurrences. isWordByte's boundary check does not exclude '.' and '(', so
+// bare "done" in "I renamed done() to finish()" or "wg.done() missing its
+// defer" previously matched and burned the run-level first-declaration slot
+// on a non-claim (#364).
+func sdIndexDone(lowerText string) int {
+	for from := 0; ; {
+		rel := sdIndexWord(lowerText[from:], "done")
+		if rel < 0 {
+			return -1
+		}
+		i := from + rel
+		end := i + len("done")
+		// "done(" / "wg.done()" — identifier usage, not a completion claim.
+		if end < len(lowerText) && lowerText[end] == '(' {
+			from = end
+			continue
+		}
+		if i > 0 && lowerText[i-1] == '.' {
+			from = end
+			continue
+		}
+		return i
+	}
 }
 
 // sdContainsDeclaration checks if text contains any explicit success phrase.
@@ -296,15 +317,24 @@ func sdHasCaveatWindowed(lowerText string, declStart, declEnd int) bool {
 
 		// Negation directly before the caveat ("no remaining issues",
 		// "nothing remaining") turns the hedge into a completion affirmation.
+		// Only THIS caveat is neutralized — other caveats and the leading-hedge
+		// check below must still run. Returning false here previously skipped
+		// the entire scan, so "no remaining issues, but first we need tests"
+		// was treated as an unhedged declaration (#364).
 		negStart := absIdx - 12
 		if negStart < 0 {
 			negStart = 0
 		}
 		trimmed := strings.TrimSpace(lowerText[negStart:absIdx])
+		negated := false
 		for _, neg := range []string{"no", "not", "nothing", "none", "without", "zero"} {
 			if strings.HasSuffix(trimmed, neg) {
-				return false
+				negated = true
+				break
 			}
+		}
+		if negated {
+			continue
 		}
 
 		if absIdx < declStart {

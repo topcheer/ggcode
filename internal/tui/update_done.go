@@ -68,9 +68,14 @@ func (m Model) handleDoneMsg(msg doneMsg) (Model, tea.Cmd) {
 	}
 	// Fire an armed agent-requested restart now that the turn's tool results
 	// and trailing text are persisted (#347). Fires for canceled/failed runs
-	// too — persistence already happened on those paths.
+	// too — persistence already happened on those paths. Queued user input is
+	// restored first (mirrors the cancel path's restorePendingInput) so it is
+	// not silently dropped by the restart (#362).
 	if m.pendingRestart {
 		debug.Log("restart", "turn finished (doneMsg): firing armed restart")
+		if m.pendingSubmissionCount() > 0 {
+			m.restorePendingInput()
+		}
 		return m, firePendingRestartCmd()
 	}
 	if !wasCanceled && !wasFailed && m.pendingSubmissionCount() > 0 {
@@ -141,9 +146,13 @@ func (m Model) handleAgentDoneMsg(msg agentDoneMsg) (Model, tea.Cmd) {
 	}
 	// Fire an armed agent-requested restart now that the turn's tool results
 	// and trailing text are persisted (#347). Fires for canceled/failed runs
-	// too — persistence already happened on those paths.
+	// too — persistence already happened on those paths. Queued user input is
+	// restored first so it is not silently dropped by the restart (#362).
 	if m.pendingRestart {
 		debug.Log("restart", "turn finished (agentDoneMsg): firing armed restart")
+		if m.pendingSubmissionCount() > 0 {
+			m.restorePendingInput()
+		}
 		return m, firePendingRestartCmd()
 	}
 	if !wasCanceled && !wasFailed && m.pendingSubmissionCount() > 0 {

@@ -167,6 +167,13 @@ func (b *ChatBridge) InstallLSPServer(languageID, optionID string) LSPInstallRes
 		c = exec.CommandContext(ctx, "sh", "-c", cmd)
 	}
 	c.Dir = wd
+	// #360: the 10-min context timeout only kills the direct child ("sh").
+	// Grandchild npm/node processes inherit the stdout pipe write end and
+	// are NOT killed, so CombinedOutput's internal Wait blocks forever waiting
+	// for pipe EOF even after the context fires. WaitDelay forces the pipe
+	// closed (and the call to return) shortly after the kill, bounding the
+	// total wait to ~timeout + WaitDelay.
+	c.WaitDelay = 30 * time.Second
 	output, err := c.CombinedOutput()
 
 	result := LSPInstallResult{

@@ -122,11 +122,22 @@ func isPoorResult(toolName, content string) bool {
 	// bracketed advisory form or the result-header form so file CONTENT that
 	// merely mentions the phrase (read_file on source containing "output
 	// truncated" in the middle of a line) doesn't self-trip the detector
-	// (#358).
+	// (#358). The additional variants below are markers that the TOOL LAYER
+	// itself embeds in result content before recordCall sees it — LSP
+	// (tool/lsp.go), MCP adapters (mcp/adapter.go, tool/mcp_runtime.go),
+	// plugin output (plugin/plugin.go), and sub-agent results
+	// (subagent/runner.go). The output-guard's appended advisory is
+	// intentionally NOT matched here: guardToolOutput runs after recordCall,
+	// and truncClaim tracks that case separately (#363).
 	lower := strings.ToLower(content)
 	if strings.Contains(lower, "[output truncated]") ||
 		strings.Contains(lower, "[result too large]") ||
 		strings.Contains(lower, "[max results reached]") ||
+		strings.Contains(lower, "[lsp output truncated]") ||
+		strings.Contains(lower, "mcp result truncated") ||
+		strings.Contains(lower, "mcp resource truncated") ||
+		strings.Contains(lower, "output truncated at") ||
+		strings.Contains(lower, "[... truncated:") ||
 		strings.HasPrefix(lower, "output truncated") ||
 		strings.HasPrefix(lower, "result too large") ||
 		strings.HasPrefix(lower, "max results reached") {

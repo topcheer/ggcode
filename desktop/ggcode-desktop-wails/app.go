@@ -90,7 +90,10 @@ func (a *App) startup(ctx context.Context) {
 	a.initSystemTray()
 
 	// Register system-wide global hotkey (Option+Cmd+G) to toggle window.
-	a.initGlobalHotkey()
+	// NOTE: must run after a.dc is loaded below — initGlobalHotkey reads
+	// a.dc.IsGlobalHotkeyEnabled() and silently returns when a.dc is nil, so
+	// calling it earlier meant the persisted hotkey preference never took
+	// effect after a restart (#361).
 
 	// Register native file drag-and-drop handler.
 	// When the user drags files from the OS file manager into the window,
@@ -114,6 +117,11 @@ func (a *App) startup(ctx context.Context) {
 
 	// Load shared desktop config (same file as Fyne desktop)
 	a.dc = wailskit.LoadDesktopConfig()
+
+	// Register global hotkey now that the config (and its enabled flag) is
+	// available. This placement is before the onboarding early-return below,
+	// so the hotkey registers on every startup path.
+	a.initGlobalHotkey()
 
 	// Sync notification preference from config
 	a.notifications.SetEnabled(a.dc.IsNotificationsEnabled())

@@ -225,9 +225,11 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		return m, nil
 
 	case agentStreamMsg:
+		m.noteTurnActivity()
 		return m.handleAgentStreamMsg(msg, spinnerCmd)
 
 	case agentReasoningMsg:
+		m.noteTurnActivity()
 		return m.handleAgentReasoningMsg(msg, spinnerCmd)
 
 	case agentTurnDoneMsg:
@@ -523,9 +525,11 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		return m.handleToolStatusMsg(msg, spinnerCmd)
 
 	case agentToolBatchMsg:
+		m.noteTurnActivity()
 		return m.handleAgentToolBatchMsg(msg, spinnerCmd)
 
 	case agentToolStatusMsg:
+		m.noteTurnActivity()
 		return m.handleAgentToolStatusMsg(msg, spinnerCmd)
 
 	case mcpServersMsg:

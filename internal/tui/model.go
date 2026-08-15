@@ -107,6 +107,7 @@ type Model struct {
 	restartRequested        bool
 	restartDebug            bool
 	pendingRestart          bool                   // armed agent-requested restart, fires at turn end (#347)
+	lastTurnActivityAt      time.Time              // last observed turn activity for restart stall detection (#362)
 	updatePrepared          *update.PreparedUpdate // set by /update before restart
 	tmuxExecRequested       bool
 	tmuxExecSession         string

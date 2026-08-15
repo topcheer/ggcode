@@ -29,6 +29,14 @@ type armRestartMsg struct {
 // restart is still waiting for the turn to finish.
 type restartFallbackMsg struct{}
 
+// noteTurnActivity records that the agent turn is making progress (stream
+// chunks, reasoning, tool results). The armed-restart fallback uses this to
+// distinguish a stalled turn (force restart) from a legitimately long-running
+// tool batch (keep waiting, re-arm) (#362).
+func (m *Model) noteTurnActivity() {
+	m.lastTurnActivityAt = time.Now()
+}
+
 // firePendingRestartCmd executes the armed restart via the same proven
 // remoteRestartMsg path (quit flags → shutdownAll → tea.Quit → execRestart).
 func firePendingRestartCmd() tea.Cmd {
