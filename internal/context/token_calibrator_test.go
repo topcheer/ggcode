@@ -1,6 +1,7 @@
 package context
 
 import (
+	"github.com/topcheer/ggcode/internal/provider"
 	"testing"
 )
 
@@ -149,5 +150,26 @@ func TestTokenCalibrator_MixedSampleSplitsFactor(t *testing.T) {
 	// Mixed ASCII adjustment must be weaker than pure (share < 1).
 	if mixedA >= pureA {
 		t.Errorf("mixed ascii adjustment (%v) should be weaker than pure (%v)", mixedA, pureA)
+	}
+}
+
+// TestManagerCompositionLocked (#355): message text composition counting.
+func TestManagerCompositionLocked(t *testing.T) {
+	m := Manager{messages: []provider.Message{
+		{Content: []provider.ContentBlock{{Text: "hello world"}}},          // 11 ASCII
+		{Content: []provider.ContentBlock{{Text: "你好，世界"}}},                // 5 CJK
+		{Content: []provider.ContentBlock{{Text: "mixed 你好 ok"}}},          // 9 ASCII + 2 CJK
+		{Content: []provider.ContentBlock{{Text: "café"}}},                 // non-CJK non-ASCII: ignored
+		{Content: []provider.ContentBlock{{Output: "tool output 12"}}},     // output text counts
+		{Content: []provider.ContentBlock{{ReasoningContent: "think 45"}}}, // reasoning counts
+	}}
+	a, c := m.compositionLocked()
+	// ASCII: 11 (hello world) + 9 (mixed 你好 ok) + 3 (caf; é is non-ASCII non-CJK, ignored) + 14 (tool output 12) + 8 (think 45)
+	if a != 45 {
+		t.Errorf("asciiChars = %d, want %d", a, 45)
+	}
+	// CJK: 你好世界 (4; fullwidth ， U+FF0C not in ranges) + 你好 (2)
+	if c != 6 {
+		t.Errorf("cjkChars = %d, want %d", c, 6)
 	}
 }
