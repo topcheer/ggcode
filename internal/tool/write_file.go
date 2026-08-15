@@ -125,7 +125,9 @@ func (t WriteFile) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	newSize := len(writeData)
 	var msg string
 	if oldSize > 0 {
-		msg = fmt.Sprintf("Overwrote %s: %d bytes → %d bytes (was %d bytes)", args.Path, oldSize, newSize, oldSize)
+		// #442: the old form appended "(was %d bytes)" repeating oldSize —
+		// no new information, just noise on every overwrite.
+		msg = fmt.Sprintf("Overwrote %s: %d bytes → %d bytes", args.Path, oldSize, newSize)
 	} else {
 		msg = fmt.Sprintf("Created %s (%d bytes)", args.Path, newSize)
 	}
