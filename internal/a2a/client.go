@@ -371,16 +371,33 @@ func (c *Client) SendMessageStream(ctx context.Context, skill, text string) (<-c
 		return nil, fmt.Errorf("a2a stream: http request: %w", err)
 	}
 
+	// #446: a 200 response may still carry a sync JSON-RPC error (the
+	// server writes errors as HTTP 200 + application/json before SSE
+	// headers are set) — parse that instead of feeding the JSON body to
+	// the SSE decoder (which would yield a silent empty stream + nil error).
+	if ct := resp.Header.Get("Content-Type"); strings.Contains(ct, "application/json") {
+		respBody, _ := util.ReadAll(resp.Body, util.ReadLimitGeneral)
+		resp.Body.Close()
+		var rpcResp JSONRPCResponse
+		if json.Unmarshal(respBody, &rpcResp) == nil && rpcResp.Error != nil {
+			return nil, rpcResp.Error
+		}
+		return nil, fmt.Errorf("a2a stream: unexpected JSON response")
+	}
+
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
 		return nil, fmt.Errorf("a2a stream: HTTP %d", resp.StatusCode)
 	}
 
 	ch := make(chan JSONRPCResponse, 32)
+	// #448: pass ctx so decodeSSE can abort blocked channel sends when the
+	// consumer is gone — a bare send leaked the goroutine AND the HTTP
+	// connection permanently (buffer 32 only delayed it).
 	safego.Go("a2a.client.streamRead", func() {
 		defer close(ch)
 		defer resp.Body.Close()
-		decodeSSE(resp.Body, ch)
+		decodeSSECtx(ctx, resp.Body, ch)
 	})
 
 	return ch, nil
@@ -518,10 +535,11 @@ func (c *Client) Resubscribe(ctx context.Context, taskID string) (<-chan JSONRPC
 	}
 
 	ch := make(chan JSONRPCResponse, 32)
+	// #448: ctx-guarded decode, same as SendMessageStream.
 	safego.Go("a2a.client.resubscribeRead", func() {
 		defer close(ch)
 		defer resp.Body.Close()
-		decodeSSE(resp.Body, ch)
+		decodeSSECtx(ctx, resp.Body, ch)
 	})
 
 	return ch, nil
@@ -597,6 +615,64 @@ func (c *Client) rpc(ctx context.Context, method string, params interface{}, res
 	}
 
 	return nil
+}
+
+// decodeSSECtx is decodeSSE with ctx-guarded sends (#448): a consumer
+// that stops reading (cancel, timeout, early task-ID pickup) must not
+// leave this goroutine blocked forever on ch <- with the HTTP body
+// unclosed.
+func decodeSSECtx(ctx context.Context, r io.Reader, ch chan<- JSONRPCResponse) {
+	scanner := bufio.NewScanner(r)
+	var dataBuf strings.Builder
+
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		// Blank line = event boundary. Flush accumulated data.
+		if line == "" {
+			if dataBuf.Len() > 0 {
+				data := dataBuf.String()
+				dataBuf.Reset()
+				var resp JSONRPCResponse
+				if json.Unmarshal([]byte(data), &resp) == nil {
+					select {
+					case ch <- resp:
+					case <-ctx.Done():
+						return
+					}
+				}
+			}
+			continue
+		}
+
+		// Comment lines (starting with ":") are ignored per SSE spec.
+		if strings.HasPrefix(line, ":") {
+			continue
+		}
+
+		// Accumulate data lines.
+		if strings.HasPrefix(line, "data: ") {
+			dataBuf.WriteString(strings.TrimPrefix(line, "data: "))
+			dataBuf.WriteByte('\n')
+		} else if strings.HasPrefix(line, "data:") {
+			// "data:" without space (also valid per spec).
+			dataBuf.WriteString(strings.TrimPrefix(line, "data:"))
+			dataBuf.WriteByte('\n')
+		}
+		// Other SSE fields (event:, id:, retry:) are silently ignored.
+	}
+
+	// Flush any remaining data at EOF.
+	if dataBuf.Len() > 0 {
+		data := strings.TrimRight(dataBuf.String(), "\n")
+		var resp JSONRPCResponse
+		if json.Unmarshal([]byte(data), &resp) == nil {
+			select {
+			case ch <- resp:
+			case <-ctx.Done():
+			}
+		}
+	}
 }
 
 // decodeSSE reads Server-Sent Events from a reader and sends them on ch.

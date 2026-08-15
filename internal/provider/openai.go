@@ -338,6 +338,13 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 	}
 
 	choice := resp.Choices[0]
+	// #455: non-streaming path must feed the adaptive cap on truncation —
+	// anthropic/gemini and this file's own streaming path all report
+	// finish_reason=length via OnTruncated; without it the cap never lowers
+	// and requests stay truncated.
+	if string(choice.FinishReason) == "length" && p.cap != nil {
+		p.cap.OnTruncated()
+	}
 	content := p.convertResponseContent(choice.Message)
 
 	usage := openAIUsage(resp.Usage)
@@ -897,6 +904,24 @@ func (p *OpenAIProvider) convertMessages(messages []Message) []openai.ChatComple
 				}
 			}
 			if hasToolResult {
+				// #453: mergeInjectedUserMessages prepends guidance TEXT
+				// blocks into tool_result messages; the old loop emitted only
+				// tool blocks and silently dropped the text — guidance never
+				// reached the model on OpenAI-compatible backends. Emit text
+				// blocks as a user message BEFORE the tool results (Kimi K3
+				// requires tools to directly follow the assistant tool_calls).
+				var textBefore []string
+				for _, b := range m.Content {
+					if b.Type == "text" && b.Text != "" {
+						textBefore = append(textBefore, b.Text)
+					}
+				}
+				if len(textBefore) > 0 {
+					result = append(result, openai.ChatCompletionMessage{
+						Role:    openai.ChatMessageRoleUser,
+						Content: strings.Join(textBefore, "\n"),
+					})
+				}
 				// Convert tool_result blocks to OpenAI tool messages
 				for _, b := range m.Content {
 					if b.Type == "tool_result" {

@@ -470,6 +470,15 @@ func (h *TaskHandler) updateStatus(t *Task, state TaskState, message string) {
 		debug.Log("a2a", "task %s already terminal (%s), not overriding with %s", t.ID, t.Status.State, state)
 		return
 	}
+	// #447: input-required is pseudo-terminal — only continueTask may move
+	// a task out of it. execute()'s check-then-act window (read state under
+	// lock, release, then updateStatus) let Completed/Failed overwrite an
+	// input-required state set by RequestInput in between, breaking the
+	// client's follow-up flow.
+	if t.Status.State == TaskStateInputRequired && state != TaskStateInputRequired {
+		debug.Log("a2a", "task %s is input-required, not overriding with %s", t.ID, state)
+		return
+	}
 	t.Status = TaskStatus{State: state, Timestamp: time.Now()}
 	t.UpdatedAt = time.Now()
 	if message != "" {

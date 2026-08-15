@@ -650,83 +650,93 @@ func (a *App) SendMessage(userMsg string) error {
 
 // LanChatParticipants returns all known LAN chat participants.
 func (a *App) LanChatParticipants() ([]lanchat.Participant, error) {
-	if a.chat == nil {
+	chat := a.chat // #457: single-read snapshot
+	if chat == nil {
 		return nil, fmt.Errorf("chat not available")
 	}
-	return a.chat.LanChatParticipants()
+	return chat.LanChatParticipants()
 }
 
 // LanChatMessages returns recent LAN chat messages.
 func (a *App) LanChatMessages() ([]lanchat.Message, error) {
-	if a.chat == nil {
+	chat := a.chat // #457: single-read snapshot
+	if chat == nil {
 		return nil, fmt.Errorf("chat not available")
 	}
-	return a.chat.LanChatMessages()
+	return chat.LanChatMessages()
 }
 
 // LanChatSend sends a LAN chat message (broadcast if toNodeID is empty).
 func (a *App) LanChatSend(content, toNodeID, toRole string, asAgent bool) error {
-	if a.chat == nil {
+	chat := a.chat // #457: single-read snapshot
+	if chat == nil {
 		return fmt.Errorf("chat not available")
 	}
-	return a.chat.LanChatSend(content, toNodeID, toRole, asAgent)
+	return chat.LanChatSend(content, toNodeID, toRole, asAgent)
 }
 
 // LanChatSetNick changes the user's nickname.
 func (a *App) LanChatSetNick(nick string) error {
-	if a.chat == nil {
+	chat := a.chat // #457: single-read snapshot
+	if chat == nil {
 		return fmt.Errorf("chat not available")
 	}
-	return a.chat.LanChatSetNick(nick)
+	return chat.LanChatSetNick(nick)
 }
 
 // LanChatPendingApprovals returns pending @agent messages.
 func (a *App) LanChatPendingApprovals() ([]lanchat.PendingAgentMsg, error) {
-	if a.chat == nil {
+	chat := a.chat // #457: single-read snapshot
+	if chat == nil {
 		return nil, fmt.Errorf("chat not available")
 	}
-	return a.chat.LanChatPendingApprovals()
+	return chat.LanChatPendingApprovals()
 }
 
 // LanChatApprove approves a pending @agent message.
 func (a *App) LanChatApprove(messageID string) error {
-	if a.chat == nil {
+	chat := a.chat // #457: single-read snapshot
+	if chat == nil {
 		return fmt.Errorf("chat not available")
 	}
-	return a.chat.LanChatApprove(messageID)
+	return chat.LanChatApprove(messageID)
 }
 
 // LanChatReject rejects a pending @agent message.
 func (a *App) LanChatReject(messageID, reason string) error {
-	if a.chat == nil {
+	chat := a.chat // #457: single-read snapshot
+	if chat == nil {
 		return fmt.Errorf("chat not available")
 	}
-	return a.chat.LanChatReject(messageID, reason)
+	return chat.LanChatReject(messageID, reason)
 }
 
 // LanChatSelf returns this node's own participant info.
 func (a *App) LanChatSelf() (lanchat.Participant, error) {
-	if a.chat == nil {
+	chat := a.chat // #457: single-read snapshot
+	if chat == nil {
 		return lanchat.Participant{}, fmt.Errorf("chat not available")
 	}
-	return a.chat.LanChatSelf()
+	return chat.LanChatSelf()
 }
 
 // LanChatSetApprovalPolicy sets the approval policy for a peer by nick.
 // policy: "always" (auto-approve), "never" (auto-reject), "" (ask).
 func (a *App) LanChatSetApprovalPolicy(peerNick string, policy string) error {
-	if a.chat == nil {
+	chat := a.chat // #457: single-read snapshot
+	if chat == nil {
 		return fmt.Errorf("chat not available")
 	}
-	return a.chat.LanChatSetApprovalPolicy(peerNick, policy)
+	return chat.LanChatSetApprovalPolicy(peerNick, policy)
 }
 
 // LanChatApprovalPolicies returns all persisted approval policies.
 func (a *App) LanChatApprovalPolicies() (map[string]string, error) {
-	if a.chat == nil {
+	chat := a.chat // #457: single-read snapshot
+	if chat == nil {
 		return nil, fmt.Errorf("chat not available")
 	}
-	return a.chat.LanChatApprovalPolicies()
+	return chat.LanChatApprovalPolicies()
 }
 
 // dataURIMIME extracts the declared MIME type from a data URI meta section
@@ -815,39 +825,44 @@ func (a *App) CancelMessage() {
 
 // GetModelInfo returns current model info for the status bar.
 func (a *App) GetModelInfo() map[string]interface{} {
-	if a.chat == nil {
+	chat := a.chat // #457: single-read snapshot
+	if chat == nil {
 		return nil
 	}
-	return a.chat.GetModelInfo()
+	return chat.GetModelInfo()
 }
 
 func (a *App) CycleReasoningEffort() (map[string]interface{}, error) {
-	if a.chat == nil {
+	chat := a.chat // #457: single-read snapshot
+	if chat == nil {
 		return map[string]interface{}{"effort": "auto", "supported": false}, nil
 	}
-	effort, supported := a.chat.CycleReasoningEffort()
+	effort, supported := chat.CycleReasoningEffort()
 	return map[string]interface{}{"effort": effort, "supported": supported}, nil
 }
 
 func (a *App) GetTeamBoard() []swarm.TeamBoardSnapshot {
-	if a.chat == nil {
+	chat := a.chat // #457: single-read snapshot
+	if chat == nil {
 		return []swarm.TeamBoardSnapshot{}
 	}
-	return a.chat.GetTeamBoard()
+	return chat.GetTeamBoard()
 }
 
 // IsWorking reports whether the agent loop is currently running.
 func (a *App) IsWorking() bool {
-	if a.chat == nil {
+	chat := a.chat // #457: single-read snapshot
+	if chat == nil {
 		return false
 	}
-	return a.chat.IsWorking()
+	return chat.IsWorking()
 }
 
 // SetPermissionMode changes the agent permission mode at wailsruntime.
 func (a *App) SetPermissionMode(mode string) {
-	if a.chat != nil {
-		a.chat.SetPermissionMode(mode)
+	chat := a.chat // #457: single-read snapshot
+	if chat != nil {
+		chat.SetPermissionMode(mode)
 	}
 }
 
@@ -919,16 +934,18 @@ func (a *App) SetFontZoom(zoom float64) (float64, error) {
 
 // SwitchModel changes the active model at wailsruntime.
 func (a *App) SwitchModel(model string) error {
-	if a.chat != nil {
-		return a.chat.SwitchModel(model)
+	chat := a.chat // #457: single-read snapshot
+	if chat != nil {
+		return chat.SwitchModel(model)
 	}
 	return fmt.Errorf("chat not initialized")
 }
 
 // GetAvailableModels returns models available for current endpoint.
 func (a *App) GetAvailableModels() []string {
-	if a.chat != nil {
-		return a.chat.GetAvailableModels()
+	chat := a.chat // #457: single-read snapshot
+	if chat != nil {
+		return chat.GetAvailableModels()
 	}
 	return nil
 }
@@ -1039,8 +1056,9 @@ func (a *App) SetEndpointLimits(vendor, endpoint string, contextWindow, maxToken
 	}
 	// Refresh the running agent's ContextManager so changes take effect
 	// immediately without requiring a session restart.
-	if a.chat != nil {
-		a.chat.RefreshEndpointLimits()
+	chat := a.chat // #457: single-read snapshot
+	if chat != nil {
+		chat.RefreshEndpointLimits()
 	}
 	return nil
 }
@@ -1052,35 +1070,39 @@ func (a *App) SetModelLimits(vendor, endpoint, model string, contextWindow, maxT
 	if err := wailskit.SetModelLimits(vendor, endpoint, model, contextWindow, maxTokens); err != nil {
 		return err
 	}
-	if a.chat != nil {
-		a.chat.RefreshEndpointLimits()
+	chat := a.chat // #457: single-read snapshot
+	if chat != nil {
+		chat.RefreshEndpointLimits()
 	}
 	return nil
 }
 
 // GetModelLimits returns all per-model limit overrides for the active endpoint.
 func (a *App) GetModelLimits() []wailskit.ModelLimitInfo {
-	if a.chat == nil {
+	chat := a.chat // #457: single-read snapshot
+	if chat == nil {
 		return nil
 	}
-	return a.chat.GetModelLimits()
+	return chat.GetModelLimits()
 }
 
 // GetSessionLimits returns the current session's context_window and max_tokens.
 func (a *App) GetSessionLimits() wailskit.SessionLimitInfo {
-	if a.chat == nil {
+	chat := a.chat // #457: single-read snapshot
+	if chat == nil {
 		return wailskit.SessionLimitInfo{}
 	}
-	return a.chat.GetSessionLimits()
+	return chat.GetSessionLimits()
 }
 
 // SetSessionLimits updates the current session's context_window and max_tokens.
 // A value of 0 means "auto" (falls back to endpoint/per-model config).
 func (a *App) SetSessionLimits(contextWindow, maxTokens int) error {
-	if a.chat == nil {
+	chat := a.chat // #457: single-read snapshot
+	if chat == nil {
 		return fmt.Errorf("chat bridge not initialized")
 	}
-	return a.chat.SetSessionLimits(contextWindow, maxTokens)
+	return chat.SetSessionLimits(contextWindow, maxTokens)
 }
 
 // GetAnthropicOAuthStatus returns whether the user is logged in via Anthropic OAuth.
@@ -1123,10 +1145,11 @@ func (a *App) ListSessions() ([]wailskit.SessionInfo, error) {
 // to sync state (the session:changed event may fire before the listener
 // is registered).
 func (a *App) GetCurrentSessionID() (string, error) {
-	if a.chat == nil {
+	chat := a.chat // #457: single-read snapshot
+	if chat == nil {
 		return "", nil
 	}
-	return a.chat.CurrentSessionID(), nil
+	return chat.CurrentSessionID(), nil
 }
 
 // DeleteSession removes a session by ID.
@@ -1135,19 +1158,20 @@ func (a *App) DeleteSession(id string) error {
 	// LoadSession already follow: deleting the CURRENT session must also
 	// cancel the running agent and stop tunnel sharing, or later messages
 	// resurrect the deleted session (#209).
-	if a.chat != nil && a.chat.CurrentSessionID() == id {
-		a.chat.Cancel()
+	chat := a.chat // #457: single-read snapshot
+	if chat != nil && chat.CurrentSessionID() == id {
+		chat.Cancel()
 		a.stopShareForSessionChange()
 		// #297: Cancel alone keeps currentSes/sessionLock alive, so the next
 		// SendContent reuses the deleted session and O_CREATE-resurrects the
 		// JSONL. ClearCurrentSession releases the lock and nils the pointer,
 		// forcing ensureSession to start a fresh session.
-		a.chat.ClearCurrentSession()
+		chat.ClearCurrentSession()
 	}
 	// #305: tombstone the ID before the on-disk delete — the run goroutine
 	// cancelled above may still be draining and its late persists must not
 	// O_CREATE-resurrect the deleted session.
-	a.chat.MarkSessionDeleted(id)
+	chat.MarkSessionDeleted(id)
 	return wailskit.DeleteSession(id)
 }
 
@@ -1158,12 +1182,13 @@ func (a *App) RenameSession(id string, title string) error {
 
 // NewSession creates a fresh initialized session, cancelling any current work.
 func (a *App) NewSession() (string, error) {
+	chat := a.chat // #457: single-read snapshot
 	if a.chat == nil {
 		return "", nil
 	}
 	a.chat.Cancel()
 	a.stopShareForSessionChange()
-	return a.chat.StartNewSession()
+	return chat.StartNewSession()
 }
 
 // resumeLatestSession loads the most recent session for the current workspace.
@@ -1216,20 +1241,22 @@ func (a *App) resumeLatestSession() string {
 
 // LoadSession loads an existing session by ID.
 func (a *App) LoadSession(id string) error {
-	if a.chat != nil {
-		a.chat.Cancel()
+	chat := a.chat // #457: single-read snapshot
+	if chat != nil {
+		chat.Cancel()
 		a.stopShareForSessionChange()
-		return a.chat.LoadSession(id)
+		return chat.LoadSession(id)
 	}
 	return fmt.Errorf("chat not initialized")
 }
 
 // GetSessionHistory returns messages from the current session.
 func (a *App) GetSessionHistory() ([]wailskit.SessionMessage, error) {
-	if a.chat == nil {
+	chat := a.chat // #457: single-read snapshot
+	if chat == nil {
 		return nil, nil
 	}
-	return a.chat.CurrentSessionHistory(), nil
+	return chat.CurrentSessionHistory(), nil
 }
 
 // ExportSessionAsMarkdown exports a session to Markdown text.
@@ -1312,20 +1339,22 @@ func (a *App) ForceReauthMCPServer(name string) bool {
 }
 
 func (a *App) StartMCPOAuth(name string) (*wailskit.MCPOAuthStartResult, error) {
-	if a.chat == nil {
+	chat := a.chat // #457: single-read snapshot
+	if chat == nil {
 		return nil, fmt.Errorf("chat not initialized")
 	}
-	return a.chat.StartMCPOAuth(a.ctx, name, func(url string) error {
+	return chat.StartMCPOAuth(a.ctx, name, func(url string) error {
 		wailsruntime.BrowserOpenURL(a.ctx, url)
 		return nil
 	})
 }
 
 func (a *App) CompleteMCPOAuth(name string) error {
-	if a.chat == nil {
+	chat := a.chat // #457: single-read snapshot
+	if chat == nil {
 		return fmt.Errorf("chat not initialized")
 	}
-	return a.chat.CompleteMCPOAuth(a.ctx, name)
+	return chat.CompleteMCPOAuth(a.ctx, name)
 }
 
 // AddMCPServer adds a new MCP server.
@@ -1635,8 +1664,9 @@ func mimeTypeFromExt(path string) string {
 
 // RespondApproval is called from the frontend when the user responds to an approval request.
 func (a *App) RespondApproval(requestID string, decision string) {
-	if a.chat != nil {
-		a.chat.RespondApproval(requestID, decision)
+	chat := a.chat // #457: single-read snapshot
+	if chat != nil {
+		chat.RespondApproval(requestID, decision)
 	}
 }
 
@@ -1713,8 +1743,9 @@ func (a *App) initIMRuntime() {
 			}
 			// Push status to frontend via both Wails events and stream events
 			raw, _ := json.Marshal(snap)
-			if a.chat != nil && a.chat.OnStreamEvent != nil {
-				a.chat.OnStreamEvent("im:status", raw)
+			chat := a.chat // #457: single-read snapshot
+			if chat != nil && chat.OnStreamEvent != nil {
+				chat.OnStreamEvent("im:status", raw)
 			}
 			wailsruntime.EventsEmit(a.ctx, "im:status", map[string]interface{}{
 				"adapters": len(snap.Adapters),
@@ -1747,16 +1778,17 @@ func (a *App) startIMAdapters() {
 	debug.Log("desktop", "IM start: initializing adapters for workspace=%s", a.workDir)
 
 	// Bind IM emitter to chat bridge for outbound push
-	if a.chat != nil {
+	chat := a.chat // #457: single-read snapshot
+	if chat != nil {
 		lang := ""
 		if cfg != nil {
 			lang = cfg.Language
 		}
-		a.chat.Emitter = im.NewIMEmitter(a.imManager, lang, a.workDir)
+		chat.Emitter = im.NewIMEmitter(a.imManager, lang, a.workDir)
 		// Wire IM tool to the runtime manager
-		a.chat.SetIMManager(im.NewToolManagerAdapter(a.imManager))
+		chat.SetIMManager(im.NewToolManagerAdapter(a.imManager))
 	}
-	a.chat.SetRuntimeStatusProvider()
+	chat.SetRuntimeStatusProvider()
 
 	a.imManager.SetBridge(&im.InteractiveTextBridge{
 		Submit: func(_ context.Context, text string, adapterName string) error {
@@ -1764,7 +1796,7 @@ func (a *App) startIMAdapters() {
 				return fmt.Errorf("app not available")
 			}
 			safego.Run("im-inbound", func() {
-				_ = a.chat.SendNonUIMessage(text, "im", adapterName)
+				_ = chat.SendNonUIMessage(text, "im", adapterName)
 			})
 			return nil
 		},
@@ -1772,25 +1804,25 @@ func (a *App) startIMAdapters() {
 			if a == nil || a.chat == nil {
 				return "", "", false
 			}
-			return a.chat.PendingApprovalRequest()
+			return chat.PendingApprovalRequest()
 		},
 		ResolveApproval: func(requestID, decision string) {
 			if a == nil || a.chat == nil {
 				return
 			}
-			a.chat.RespondApproval(requestID, decision)
+			chat.RespondApproval(requestID, decision)
 		},
 		CurrentAskUser: func() (string, tool.AskUserRequest, bool) {
 			if a == nil || a.chat == nil {
 				return "", tool.AskUserRequest{}, false
 			}
-			return a.chat.PendingAskUserRequest()
+			return chat.PendingAskUserRequest()
 		},
 		ResolveAskUser: func(requestID string, response tool.AskUserResponse) {
 			if a == nil || a.chat == nil {
 				return
 			}
-			a.chat.RespondAskUser(requestID, response)
+			chat.RespondAskUser(requestID, response)
 		},
 	})
 
@@ -1825,18 +1857,20 @@ func (a *App) GetIMPlatformRegistry() []wailskit.IMPlatformMeta {
 
 // GetLSPStatus returns detected language server status for the current workspace.
 func (a *App) GetLSPStatus() wailskit.LSPStatusResponse {
-	if a.chat == nil {
+	chat := a.chat // #457: single-read snapshot
+	if chat == nil {
 		return wailskit.LSPStatusResponse{}
 	}
-	return a.chat.GetLSPStatus()
+	return chat.GetLSPStatus()
 }
 
 // InstallLSPServer installs a language server for the given language.
 func (a *App) InstallLSPServer(languageID, optionID string) wailskit.LSPInstallResult {
-	if a.chat == nil {
+	chat := a.chat // #457: single-read snapshot
+	if chat == nil {
 		return wailskit.LSPInstallResult{Success: false, Output: "chat bridge not initialized"}
 	}
-	return a.chat.InstallLSPServer(languageID, optionID)
+	return chat.InstallLSPServer(languageID, optionID)
 }
 
 // SaveIMAdapter creates or updates an IM adapter.
@@ -1877,10 +1911,11 @@ func (a *App) RemoveIMAdapter(name string) error {
 // AFTER a session is available so that session-scoped binding ownership
 // (LastSessionID) works correctly.
 func (a *App) bindCurrentIMSession() {
-	if a.imManager == nil || a.chat == nil {
+	chat := a.chat // #457: single-read snapshot
+	if a.imManager == nil || chat == nil {
 		return
 	}
-	if ses := a.chat.CurrentSession(); ses != nil {
+	if ses := chat.CurrentSession(); ses != nil {
 		// Use the session's workspace, not a.workDir, so cross-workspace
 		// session switches correctly rebind IM to the session's workspace.
 		imWorkspace := ses.Workspace
@@ -2123,10 +2158,11 @@ func (a *App) StartShare() (*ShareInfo, error) {
 	// Use unified TunnelHost.StartShare — the single canonical entry point
 	// for all frontends. It handles session creation, broker setup,
 	// SetSessionInfo, PrepareOnlineShare, and AnnounceActiveSession.
+	chat := a.chat // #457: single-read snapshot
 	if a.chat == nil {
 		return nil, fmt.Errorf("chat not initialized")
 	}
-	th := a.chat.GetTunnelHost()
+	th := chat.GetTunnelHost()
 	if th == nil {
 		return nil, fmt.Errorf("tunnel host not initialized")
 	}
@@ -2155,7 +2191,7 @@ func (a *App) StartShare() (*ShareInfo, error) {
 
 	// Wire share commands (OnCommand handler, language switching, ask_user approval)
 	if a.chat != nil && result.Broker != nil {
-		a.chat.BindShareCommands(result.Broker, func(language string) {
+		chat.BindShareCommands(result.Broker, func(language string) {
 			c, _ := wailskit.LoadConfigForWorkspace(a.workDir)
 			if c != nil {
 				_ = c.SaveLanguagePreference(language)
@@ -2180,8 +2216,9 @@ func (a *App) StopShare() {
 func (a *App) stopShare() {
 	broker := a.currentTunnelBroker()
 	sess := a.currentTunnelSession()
-	if a.chat != nil {
-		a.chat.DetachTunnelBroker()
+	chat := a.chat // #457: single-read snapshot
+	if chat != nil {
+		chat.DetachTunnelBroker()
 	}
 	agentruntime.StopSharedTunnelGracefully(sess, broker, 2*time.Second)
 	a.clearTunnelState()
@@ -2205,16 +2242,17 @@ func (a *App) tunnelSnapshot() tunnel.BrokerSnapshot {
 		snapshot.SessionInfo.Mode = cfg.DefaultMode
 	}
 
+	chat := a.chat // #457: single-read snapshot
 	if a.chat == nil {
 		snapshot.Status = tunnel.StatusData{Status: tunnel.StatusIdle}
 		return snapshot
 	}
-	snapshot.Status = a.chat.CurrentTunnelStatus()
+	snapshot.Status = chat.CurrentTunnelStatus()
 
 	// Populate history from agent messages — same as TUI does.
 	// Without this, mobile clients receive an empty snapshot for
 	// sessions whose projection store is empty.
-	msgs := a.chat.Messages()
+	msgs := chat.Messages()
 	if len(msgs) > 0 {
 		snapshot.History = messagesToTunnelHistory(msgs)
 	}

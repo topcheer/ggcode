@@ -83,7 +83,10 @@ func LoadDesktopConfig() *DesktopConfig {
 	return dc
 }
 
-// Save persists the desktop config.
+// Save persists the desktop config atomically and rotates a good copy to
+// .bak (#449). The recovery path in LoadDesktopConfig reads .bak, but Save
+// never produced one — a crash mid-write meant first corruption lost all
+// preferences with no backup to recover from.
 func (dc *DesktopConfig) Save() error {
 	dc.mu.Lock()
 	defer dc.mu.Unlock()
@@ -96,7 +99,19 @@ func (dc *DesktopConfig) Save() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0600)
+	// #449: rotate the current good copy (if any) to .bak BEFORE writing.
+	if old, rerr := os.ReadFile(path); rerr == nil && len(old) > 0 {
+		if werr := os.WriteFile(path+".bak", old, 0600); werr != nil {
+			debug.Log("wailskit", "failed to rotate desktop config .bak: %v", werr)
+		}
+	}
+	// Atomic write: temp file + rename, so a crash mid-write can never
+	// leave a truncated main file.
+	tmp := path + ".tmp"
+	if werr := os.WriteFile(tmp, data, 0600); werr != nil {
+		return werr
+	}
+	return os.Rename(tmp, path)
 }
 
 // SetWorkDir saves the work directory.

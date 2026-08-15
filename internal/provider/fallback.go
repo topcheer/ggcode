@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -212,8 +213,13 @@ func (f *FallbackProvider) Chat(ctx context.Context, messages []Message, tools [
 	resp2, err2 := fallback.Chat(ctx, messages, tools)
 	if err2 == nil {
 		f.consecutiveFail.Store(0)
+		return resp2, nil
 	}
-	return resp2, err2
+	// #454: preserve BOTH root causes. Returning only err2 let the
+	// fallback's network error mask a primary quota/auth failure in
+	// ClassifyLLMError (keyword-ordered: quota hits first when present),
+	// skewing health reporting and retry decisions when both sides fail.
+	return nil, errors.Join(err, err2)
 }
 
 // ChatStream sends a streaming request, failing over on permanent errors
@@ -253,8 +259,11 @@ func (f *FallbackProvider) ChatStream(ctx context.Context, messages []Message, t
 	stream2, err2 := fallback.ChatStream(ctx, messages, tools)
 	if err2 == nil {
 		f.consecutiveFail.Store(0)
+		return stream2, nil
 	}
-	return stream2, err2
+	// #454: same root-cause preservation as Chat — join both errors so the
+	// primary's quota/auth cause is not masked by the fallback's network error.
+	return nil, errors.Join(err, err2)
 }
 
 // watchStreamForFailover relays a provider's stream while watching the first

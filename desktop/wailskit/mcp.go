@@ -35,6 +35,12 @@ func loadSessionScopedConfig() (*config.Config, error) {
 	globalMu.RLock()
 	chat := activeChatBridge
 	globalMu.RUnlock()
+	return loadSessionScopedConfigFor(chat)
+}
+
+// loadSessionScopedConfigFor is loadSessionScopedConfig with a pre-snapped
+// bridge (#458), so config load and status lookup share one bridge view.
+func loadSessionScopedConfigFor(chat *ChatBridge) (*config.Config, error) {
 	workDir := ""
 	if chat != nil {
 		workDir = chat.WorkingDir()
@@ -50,7 +56,15 @@ func loadSessionScopedConfig() (*config.Config, error) {
 // ListMCPServers returns all configured MCP servers for the active session's
 // scope (workspace config when bound to a workspace, global otherwise).
 func ListMCPServers() ([]MCPServerInfo, error) {
-	cfg, err := loadSessionScopedConfig()
+	// #458: snapshot the bridge ONCE and thread it through both the config
+	// load and the status lookup. The old code read activeChatBridge twice
+	// independently — a switchWorkspace in between spliced OLD workspace
+	// yaml config with NEW workspace connection state.
+	globalMu.RLock()
+	chatSnap := activeChatBridge
+	globalMu.RUnlock()
+
+	cfg, err := loadSessionScopedConfigFor(chatSnap)
 	if err != nil {
 		return nil, fmt.Errorf("load config: %w", err)
 	}
@@ -72,9 +86,7 @@ func ListMCPServers() ([]MCPServerInfo, error) {
 			Disabled: plugin.MCPDisabled(s.Name),
 		})
 	}
-	globalMu.RLock()
-	chat := activeChatBridge
-	globalMu.RUnlock()
+	chat := chatSnap
 	if chat == nil || chat.mcpManager == nil {
 		return result, nil
 	}

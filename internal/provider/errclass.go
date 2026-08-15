@@ -145,13 +145,48 @@ var rateLimitKeywords = []string{
 	"rate limit",
 	"rate_limit",
 	"too many requests",
-	"429",
 	"overloaded",
-	"529",                 // Anthropic overloaded (non-standard HTTP status)
 	"resource_exhausted",  // Gemini quota/rate limit error type
 	"engine_overloaded",   // Kimi engine_overloaded_error
 	"rate_limit_exceeded", // OpenAI error type
 	"rate_limit_reached",  // Kimi rate_limit_reached_error
+}
+
+// rateLimitStatusPatterns are context-anchored "429"/"529" matchers (#456,
+// mirroring authStatusPatterns from #303) — bare substrings misclassified
+// digit coincidences like "req_429abc", "1429 tokens", "id=52913" as
+// rate-limited, triggering wrong failover and health downgrades.
+var rateLimitStatusPatterns = []string{
+	" 429 ",
+	" 429,", // go-openai: "status code: 429, message: ..."
+	" 429\n",
+	"code: 429",
+	`status":429`,
+	"statuscode:429",
+	"http 429",
+	"error 429",
+	"429 too many",
+	"code 429",
+	" 529 ",
+	" 529,", // go-openai: "status code: 529, message: ..."
+	" 529\n",
+	"code: 529",
+	`status":529`,
+	"http 529",
+	"error 529",
+	"529 overloaded", // Anthropic overloaded pairs 529 with overloaded_error
+	"code 529",
+}
+
+// isRateLimitStatusHit reports whether the (lowercased) message contains an
+// anchored 429/529 status indicator.
+func isRateLimitStatusHit(lower string) bool {
+	for _, pat := range rateLimitStatusPatterns {
+		if strings.Contains(lower, pat) {
+			return true
+		}
+	}
+	return false
 }
 
 // networkKeywords are lowercased substrings indicating transport-level
@@ -219,7 +254,7 @@ func ClassifyLLMError(err error) FailureClass {
 	if containsAny(s, authKeywords) || containsAny(s, authStatusPatterns) {
 		return FailureAuth
 	}
-	if containsAny(s, rateLimitKeywords) {
+	if containsAny(s, rateLimitKeywords) || isRateLimitStatusHit(s) {
 		return FailureRateLimit
 	}
 	if containsAny(s, networkKeywords) {

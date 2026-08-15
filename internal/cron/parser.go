@@ -150,10 +150,19 @@ func parseFieldPart(part string, minVal, maxVal int, values map[int]bool) error 
 			if err != nil {
 				return fmt.Errorf("invalid range start in %q", part)
 			}
-			rangeEnd, err = strconv.Atoi(rParts[1])
-			if err != nil {
+			// #451: reversed-range validation for the STEP path — #439
+			// fixed the plain N-M branch, but N-M/S silently produced an
+			// empty set inside comma lists (1,5-3/2 accepted, job ran on
+			// the wrong schedule). */N and N/S forms start at minVal and
+			// are naturally valid.
+			endVal, rerr := strconv.Atoi(rParts[1])
+			if rerr != nil {
 				return fmt.Errorf("invalid range end in %q", part)
 			}
+			if endVal < rangeStart {
+				return fmt.Errorf("reversed range %s in %q (start must be <= end)", rangeStr, part)
+			}
+			rangeEnd = endVal
 		} else {
 			rangeStart, err = strconv.Atoi(rangeStr)
 			if err != nil {

@@ -155,6 +155,25 @@ func matchGlob(pattern, name string) (bool, error) {
 	return filepath.Match(pattern, name)
 }
 
+// matchGlobSegments reports whether every path SEGMENT of name matches the
+// corresponding pattern segment via filepath.Match (#445). The old prefix
+// comparison used == / HasPrefix literal matching, so patterns like
+// src/*-gen/** silently failed to protect (protection is fail-open).
+func matchGlobSegments(pattern, name string) bool {
+	pSegs := strings.Split(pattern, "/")
+	nSegs := strings.Split(name, "/")
+	if len(pSegs) != len(nSegs) {
+		return false
+	}
+	for i, p := range pSegs {
+		matched, err := filepath.Match(p, nSegs[i])
+		if err != nil || !matched {
+			return false
+		}
+	}
+	return true
+}
+
 // matchDoubleStar handles glob patterns containing **.
 // "src/**" matches anything under src/.
 // "src/**/test" matches src/a/test, src/a/b/test, etc.
@@ -174,23 +193,37 @@ func matchDoubleStar(pattern, name string) (bool, error) {
 		return filepath.Match(suffix, filepath.Base(name))
 	}
 
-	// Check name starts with prefix
-	if name == prefix || strings.HasPrefix(name, prefix+"/") {
-		if suffix == "" {
+	// #445: the prefix may itself contain glob metacharacters (src/*-gen/**).
+	// Segment-wise matching: name must have at least len(prefix segments)+1
+	// segments, and every prefix segment must glob-match.
+	pSegs := strings.Split(prefix, "/")
+	nSegs := strings.Split(name, "/")
+	if len(nSegs) <= len(pSegs) {
+		// name is not strictly under the prefix — only an exact
+		// segment-wise match can hit (prefix itself matched as a file).
+		if matchGlobSegments(prefix, name) && suffix == "" {
 			return true, nil
 		}
-		// Get the part after prefix
-		rest := strings.TrimPrefix(name, prefix+"/")
-		// Check if rest ends with suffix (can be globbed)
-		matched, err := filepath.Match(suffix, filepath.Base(rest))
-		if err == nil && matched {
-			return true, nil
-		}
-		// Also try matching suffix against the full rest path
-		matched2, err2 := filepath.Match(suffix, rest)
-		return matched2 && err2 == nil, nil
+		return false, nil
 	}
-	return false, nil
+	for i, p := range pSegs {
+		matched, err := filepath.Match(p, nSegs[i])
+		if err != nil || !matched {
+			return false, nil
+		}
+	}
+	rest := strings.Join(nSegs[len(pSegs):], "/")
+	if suffix == "" {
+		return true, nil
+	}
+	// Check if rest ends with suffix (can be globbed)
+	matched, err := filepath.Match(suffix, filepath.Base(rest))
+	if err == nil && matched {
+		return true, nil
+	}
+	// Also try matching suffix against the full rest path
+	matched2, err2 := filepath.Match(suffix, rest)
+	return matched2 && err2 == nil, nil
 }
 
 // CheckWritePath is called by write tools (write_file, edit_file, etc.)

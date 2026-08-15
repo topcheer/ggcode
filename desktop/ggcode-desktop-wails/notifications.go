@@ -183,6 +183,7 @@ func (nm *NotificationManager) NotifyApprovalNeeded(title, body string) {
 		nm.unread++
 	}
 	count := nm.unread
+	ctxSnap := nm.ctx // #450: snapshot under the lock — SetContext writes it concurrently
 	nm.mu.Unlock()
 
 	debug.Log("desktop", "approval notification: %s - %s", title, body)
@@ -195,7 +196,7 @@ func (nm *NotificationManager) NotifyApprovalNeeded(title, body string) {
 	// #427: approval notifications must also reach the in-app notification
 	// center — Notify() emits "notification" on both paths, but this path
 	// never did, so approvals silently bypassed the frontend center.
-	if ctx := nm.ctx; ctx != nil {
+	if ctx := ctxSnap; ctx != nil {
 		if wctx, ok := ctx.(context.Context); ok {
 			wailsruntime.EventsEmit(wctx, "notification", map[string]string{
 				"title": title,

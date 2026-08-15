@@ -948,9 +948,15 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 			ses.ContextMessages = append(ses.ContextMessages, *summaryMsg)
 			if lastCpLastMsgID != "" {
 				// Find extra messages: everything after lastCpLastMsgID.
+				// #452: search the UNWINDOWED postCPEntries (the same list
+				// the summary lookup above uses), not the 24h-window-filtered
+				// allMessages. On long sessions (>500 msgs, >24h span) the
+				// window filtered out last_msg_id itself, silently dropping
+				// the messages between it and the summary via the fallback.
 				extraStart := -1
-				for i, mr := range allMessages {
-					if mr.Message != nil && mr.Message.ID == lastCpLastMsgID {
+				for i := summaryMsgIdx + 1; i < len(postCPEntries); i++ {
+					entry := postCPEntries[i]
+					if entry.recType == "message" && entry.record.Message != nil && entry.record.Message.ID == lastCpLastMsgID {
 						extraStart = i + 1 // start AFTER last_msg_id
 						break
 					}
