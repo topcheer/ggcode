@@ -96,13 +96,17 @@ func (a *Agent) checkExportGuard(filePath string) string {
 	if a.exportGuard.checked[abs] {
 		return ""
 	}
-	a.exportGuard.checked[abs] = true
 
 	oldSyms := gitHeadExportSymbols(a.workingDir, filePath)
 	if oldSyms == nil {
-		// File not tracked in git or parse error in HEAD version — can't compare.
+		// File not tracked in git or parse error in HEAD version — can't
+		// compare. Do NOT burn the once-per-run marker here (#502): a mid-run
+		// commit can make the comparison possible for later edits of this
+		// file, and the burned marker kept the guard silent for exactly the
+		// breaking changes it exists to catch.
 		return ""
 	}
+	a.exportGuard.checked[abs] = true
 
 	newSyms := parseExportedSymbols(abs)
 	if newSyms == nil {

@@ -249,8 +249,21 @@ func hasSkipMarkersInCommands(commands []string) bool {
 // CI/build configuration itself (in which case CI edits are legitimate).
 func isCIRelatedTask(userPrompt string) bool {
 	lower := strings.ToLower(userPrompt)
+	// #501: the "ci" keyword must match as a whole word. As a bare substring
+	// it is contained in everyday English (efficient, special, decide,
+	// precision, pricing, sufficient, crucial...) and empirically matched
+	// 12/12 ordinary prompts — silently disabling the CI-tampering pattern
+	// for a large share of real tasks.
+	words := strings.FieldsFunc(lower, func(r rune) bool {
+		return (r < 'a' || r > 'z') && (r < '0' || r > '9')
+	})
+	for _, w := range words {
+		if w == "ci" {
+			return true
+		}
+	}
 	ciKeywords := []string{
-		"ci", "pipeline", "workflow", "github action", "gitlab ci",
+		"pipeline", "workflow", "github action", "gitlab ci",
 		"jenkins", "circleci", "build config", "makefile", "test config",
 		"pytest.ini", "conftest", "jest.config",
 	}

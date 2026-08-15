@@ -205,40 +205,6 @@ func TestWTInvalidation_ErrorResult(t *testing.T) {
 	}
 }
 
-func TestWTInvalidation_ExtractReadPath(t *testing.T) {
-	// read_file path extraction
-	path := extractWTReadPath("read_file", `{"path":"/foo/bar.go","description":"test"}`)
-	if path != "/foo/bar.go" {
-		t.Errorf("expected /foo/bar.go, got %s", path)
-	}
-
-	// multi_file_read returns empty (handled by extractMultiReadPaths)
-	path = extractWTReadPath("multi_file_read", `{"files":[{"path":"a.go"}]}`)
-	if path != "" {
-		t.Errorf("expected empty for multi_file_read, got %s", path)
-	}
-
-	// search tools return empty
-	path = extractWTReadPath("grep", `{"pattern":"foo"}`)
-	if path != "" {
-		t.Errorf("expected empty for grep, got %s", path)
-	}
-}
-
-func TestWTInvalidation_ExtractMultiReadPaths(t *testing.T) {
-	args := `{"files":[{"path":"a.go"},{"path":"b.go"},{"path":"c.go"}]}`
-	paths := extractMultiReadPaths(args)
-	if len(paths) != 3 {
-		t.Fatalf("expected 3 paths, got %d", len(paths))
-	}
-	if paths[0] != "a.go" || paths[1] != "b.go" || paths[2] != "c.go" {
-		t.Errorf("unexpected paths: %v", paths)
-	}
-}
-
-func TestWTInvalidation_ExtractMultiReadPaths_InvalidJSON(t *testing.T) {
-	paths := extractMultiReadPaths("not json")
-	if paths != nil {
-		t.Errorf("expected nil for invalid JSON, got %v", paths)
-	}
-}
+// TestWTInvalidation_ExtractReadPath / ExtractMultiReadPaths were removed
+// along with the dead helpers (#500): read tracking is batch-aware via
+// extractFilePathsFromArgs and is covered by the agent-loop wiring.

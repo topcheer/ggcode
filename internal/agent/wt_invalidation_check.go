@@ -48,7 +48,6 @@ package agent
 //   - Tracks both read paths and time-sequence to provide specific guidance
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -164,47 +163,9 @@ func (w *wtInvalidationState) checkMutation(toolName string, _ string) string {
 	)
 }
 
-// extractWTReadPath extracts a file path from read-type tool call arguments.
-// Supports read_file, multi_file_read, and search-type tools.
-func extractWTReadPath(toolName, args string) string {
-	switch toolName {
-	case "read_file":
-		var parsed map[string]interface{}
-		if err := json.Unmarshal([]byte(args), &parsed); err != nil {
-			return ""
-		}
-		return extractStringArg(parsed, "path")
-	case "multi_file_read":
-		// multi_file_read has a "files" array -- return a marker to
-		// signal the caller to parse it separately.
-		return ""
-	case "grep", "search_files", "glob", "code_search":
-		// Search tools read directory trees, not individual files.
-		// We don't track these as path-specific reads.
-		return ""
-	default:
-		return ""
-	}
-}
-
-// extractMultiReadPaths extracts file paths from multi_file_read arguments.
-func extractMultiReadPaths(args string) []string {
-	var parsed struct {
-		Files []struct {
-			Path string `json:"path"`
-		} `json:"files"`
-	}
-	if err := json.Unmarshal([]byte(args), &parsed); err != nil {
-		return nil
-	}
-	var result []string
-	for _, item := range parsed.Files {
-		if item.Path != "" {
-			result = append(result, item.Path)
-		}
-	}
-	return result
-}
+// extractWTReadPath and extractMultiReadPaths were removed (#500): the
+// agent loop records reads via extractFilePathsFromArgs (batch-aware),
+// which covers read_file and every file in multi_file_read's files array.
 
 // normalizeWTPath normalizes a file path for deduplication.
 func normalizeWTPath(path string) string {

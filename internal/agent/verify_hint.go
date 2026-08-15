@@ -66,14 +66,9 @@ var fileReadingTools = map[string]bool{
 	"multi_file_read": true,
 }
 
-// extractToolFilePath extracts the first file path from tool arguments.
-func extractToolFilePath(toolName string, args json.RawMessage) string {
-	paths := extractFilePathsFromArgs(args, toolName)
-	if len(paths) > 0 {
-		return paths[0]
-	}
-	return ""
-}
+// extractToolFilePath was removed (#500): the read-tracking path now uses
+// extractFilePathsFromArgs directly (batch-aware, multi_file_read records ALL
+// files instead of files[0]).
 
 // gitFileModifyingTools are git operations that change file contents on
 // disk (checkout, stash pop/apply, etc.). These must invalidate tool caches

@@ -107,6 +107,10 @@ func registerAllChecks() {
 			return goSyntaxWarnings(ctx.FilePath, err)
 		}},
 		{Name: "nil-map-write", Langs: []Language{LangGo}, Run: stringCheck(checkNilMapWrite)},
+		// #499: registered as whole-word slot — was a fully-implemented,
+		// unit-tested detector with zero wiring (third instance of the
+		// #328/#330 dead-detector class).
+		{Name: "append-ignored", Langs: []Language{LangGo}, Run: sliceCheck(checkAppendIgnored)},
 		{Name: "concurrent-map-access", Langs: []Language{LangGo}, Run: stringCheck(checkConcurrentMapAccess)},
 		{Name: "context-leak", Langs: []Language{LangGo}, Run: stringCheck(checkContextLeak)},
 		{Name: "resource-leak", Langs: []Language{LangGo}, Run: sliceCheck(checkResourceLeaks)},

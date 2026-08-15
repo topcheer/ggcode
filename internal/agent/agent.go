@@ -4090,13 +4090,20 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Futile cycle: track reads vs writes to detect circular exploration.
 			if fileEditingTools[tc.Name] {
 				a.futileCycle.recordWrite()
-			} else if filePath := extractToolFilePath(tc.Name, tc.Arguments); filePath != "" {
-				a.futileCycle.recordRead(filePath)
-				// Expired-read: track reads for self-invalidation detection.
-				a.expiredRead.recordRead(filePath)
-				a.wtInvalidation.recordRead(filePath)
+			} else if readPaths := extractFilePathsFromArgs(tc.Arguments, tc.Name); len(readPaths) > 0 {
+				// #500: batch-aware — multi_file_read carries N paths but the
+				// old single-path extraction recorded only files[0], suppressing
+				// the cross-file stale-read warning (minReadsBeforeWarning) and
+				// starving expired-read/futile-cycle for the same reason.
+				for _, p := range readPaths {
+					a.futileCycle.recordRead(p)
+					// Expired-read: track reads for self-invalidation detection.
+					a.expiredRead.recordRead(p)
+					a.wtInvalidation.recordRead(p)
+				}
 				// Post-edit re-read check: warn if re-reading shortly after edit.
-				if hint := a.expiredRead.checkPostEditReread(filePath); hint != "" {
+				// First path only — each hint appends, N hints would spam.
+				if hint := a.expiredRead.checkPostEditReread(readPaths[0]); hint != "" {
 					if result.Content != "" {
 						result.Content = result.Content + "\n\n" + hint
 					} else {

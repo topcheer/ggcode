@@ -214,6 +214,14 @@ func TestIsCIRelatedTask(t *testing.T) {
 		{"modify the Makefile build target", true},
 		{"add new feature to user handler", false},
 		{"configure jest.config.js", true},
+		// #501: everyday words CONTAINING the substring "ci" must NOT
+		// disable the CI-tampering pattern (old bare-substring match hit
+		// 12/12 ordinary prompts empirically).
+		{"fix the precision issue in the pricing calculator", false},
+		{"make the lookup more efficient", false},
+		{"this is a special case, decide carefully", false},
+		{"sufficient artificial precision, crucial decision", false},
+		{"run it in ci", true}, // whole-word (case-insensitive) still matches
 	}
 	for _, tt := range tests {
 		got := isCIRelatedTask(tt.prompt)
