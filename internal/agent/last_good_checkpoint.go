@@ -47,6 +47,7 @@ package agent
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -58,9 +59,11 @@ const (
 	// to avoid context flooding when a large refactor is in progress.
 	checkpointMaxFiles = 10
 
-	// checkpointMinIterations is the minimum number of verification cycles before
-	// the checkpoint starts providing revert guidance. This avoids false positives
-	// during initial exploration before the first build even runs.
+	// checkpointMinVerifyCycles gates revert guidance on having at least one
+	// verification cycle. NOTE (#423): this gate is UNREACHABLE via the public
+	// flow — hasBaseline is only set after verifyCycles++ in
+	// recordVerifyPass/Fail, so reaching this point implies verifyCycles >= 1.
+	// Retained for defensive direct-use; not part of the normal path.
 	checkpointMinVerifyCycles = 1
 )
 
@@ -88,6 +91,15 @@ type lastGoodCheckpoint struct {
 	// filesModifiedSinceLastGood tracks ALL files modified since the last
 	// passing verification. This is the key revert-candidate set.
 	filesModifiedSinceLastGood map[string]bool
+
+	// preExistingFiles records which of the files we touched were already
+	// present on disk BEFORE the first edit of this run (#423). Distinguishing
+	// "new file" from "first edit of a pre-existing file" cannot be done from
+	// lastGoodFiles (which only contains files edited during the previous
+	// green cycle) — a git-tracked existing file edited for the first time
+	// was misclassified as "(new)" and the guidance suggested REMOVING it
+	// instead of the correct `git checkout` rollback.
+	preExistingFiles map[string]bool
 }
 
 func newLastGoodCheckpoint() *lastGoodCheckpoint {
@@ -95,6 +107,7 @@ func newLastGoodCheckpoint() *lastGoodCheckpoint {
 		lastGoodFiles:              make(map[string]bool),
 		currentModifiedFiles:       make(map[string]bool),
 		filesModifiedSinceLastGood: make(map[string]bool),
+		preExistingFiles:           make(map[string]bool),
 	}
 }
 
@@ -108,6 +121,7 @@ func (c *lastGoodCheckpoint) reset() {
 	c.lastVerifyFailed = false
 	c.currentModifiedFiles = make(map[string]bool)
 	c.filesModifiedSinceLastGood = make(map[string]bool)
+	c.preExistingFiles = make(map[string]bool)
 }
 
 // recordFileEdit tracks a file modification during the current edit cycle.
@@ -117,6 +131,13 @@ func (c *lastGoodCheckpoint) recordFileEdit(filePath string) {
 		return
 	}
 	fp := filepath.Clean(filePath)
+	// #423: remember whether the file already existed on disk before we
+	// touched it — the first edit of a PRE-EXISTING file is a modification
+	// (git checkout applies), not a new file (remove advice).
+	if _, tracked := c.preExistingFiles[fp]; !tracked {
+		_, err := os.Stat(fp)
+		c.preExistingFiles[fp] = err == nil
+	}
 	c.currentModifiedFiles[fp] = true
 	c.filesModifiedSinceLastGood[fp] = true
 }
@@ -162,6 +183,8 @@ func (c *lastGoodCheckpoint) revertGuidance() string {
 	if c == nil || !c.hasBaseline || !c.lastVerifyFailed {
 		return ""
 	}
+	// (#423: this check is defensively unreachable — hasBaseline implies
+	// verifyCycles >= 1 — kept only for direct/test use.)
 	if c.verifyCycles < checkpointMinVerifyCycles {
 		return ""
 	}
@@ -169,10 +192,15 @@ func (c *lastGoodCheckpoint) revertGuidance() string {
 		return ""
 	}
 
-	// Categorize files: those that existed at last-good vs newly created.
+	// Categorize files (#423): "modified" = edited since last good AND the
+	// file existed before we first touched it (git checkout applies);
+	// "new" = created by this run (never existed on disk before our edit).
+	// The old check (lastGoodFiles membership) conflated "first edit of a
+	// pre-existing git-tracked file" with "newly created", advising the
+	// destructive removal of repository files.
 	var modifiedSinceGood, newFiles []string
 	for f := range c.filesModifiedSinceLastGood {
-		if c.lastGoodFiles[f] {
+		if c.preExistingFiles[f] || c.lastGoodFiles[f] {
 			modifiedSinceGood = append(modifiedSinceGood, f)
 		} else {
 			newFiles = append(newFiles, f)

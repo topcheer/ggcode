@@ -93,7 +93,6 @@ func (s *ResponseQualityScorer) computeScore(stats *RunStats, providerName, mode
 	} else if stats.Success {
 		signals.ToolEfficiency = 1.0 // no tools needed, answered directly
 	}
-
 	// Error rate: errors per iteration.
 	if stats.Iterations > 0 {
 		signals.ErrorRate = float64(errorCount) / float64(stats.Iterations)
@@ -116,7 +115,10 @@ func (s *ResponseQualityScorer) computeScore(stats *RunStats, providerName, mode
 
 	prompt := stats.UserPrompt
 	if len(prompt) > 100 {
-		prompt = prompt[:100]
+		// #420: truncate by RUNE, not bytes — the old prompt[:100] sliced
+		// mid-codepoint for CJK prompts (60 Chinese chars = 180 bytes →
+		// invalid UTF-8 → U+FFFD mojibake after JSON serialization).
+		prompt = truncateRunes(prompt, 100)
 	}
 
 	return QualityEntry{
@@ -180,14 +182,19 @@ func (s *ResponseQualityScorer) Compare() []ProviderComparison {
 		durSum   float64
 		best     float64
 	}
-	aggs := map[string]*agg{}
+	// #420: struct key, not string concat — "openrouter/anthropic"+"claude-3.5"
+	// concatenated to "openrouter/anthropic/claude-3.5" and SplitN("/",2)
+	// then reparsed it as provider="openrouter", model="anthropic/claude-3.5",
+	// mis-attributing A/B comparison stats.
+	type pmKey struct{ provider, model string }
+	aggs := map[pmKey]*agg{}
 
 	for _, r := range s.runs {
-		key := r.Provider + "/" + r.Model
-		a, ok := aggs[key]
+		k := pmKey{r.Provider, r.Model}
+		a, ok := aggs[k]
 		if !ok {
 			a = &agg{best: r.Score}
-			aggs[key] = a
+			aggs[k] = a
 		}
 		a.count++
 		a.scoreSum += r.Score
@@ -201,15 +208,10 @@ func (s *ResponseQualityScorer) Compare() []ProviderComparison {
 	}
 
 	result := make([]ProviderComparison, 0, len(aggs))
-	for key, a := range aggs {
-		parts := strings.SplitN(key, "/", 2)
-		provider, model := parts[0], ""
-		if len(parts) > 1 {
-			model = parts[1]
-		}
+	for k, a := range aggs {
 		comp := ProviderComparison{
-			Provider:    provider,
-			Model:       model,
+			Provider:    k.provider,
+			Model:       k.model,
 			RunCount:    a.count,
 			AvgScore:    math.Round(a.scoreSum/float64(a.count)*1000) / 1000,
 			SuccessRate: math.Round(float64(a.success)/float64(a.count)*1000) / 1000,
@@ -262,6 +264,22 @@ func (s *ResponseQualityScorer) Recent(n int) []QualityEntry {
 	result := make([]QualityEntry, n)
 	copy(result, s.runs[start:])
 	return result
+}
+
+// truncateRunes truncates s to at most n runes without splitting a
+// multi-byte codepoint (#420).
+func truncateRunes(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	count := 0
+	for i := range s {
+		if count == n {
+			return s[:i]
+		}
+		count++
+	}
+	return s
 }
 
 // clamp01 limits a value to the [0, 1] range.

@@ -30,6 +30,7 @@ package agent
 
 import (
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -157,18 +158,25 @@ func (s *ResponseQualityScorer) DetectRegression() RegressionReport {
 	}
 
 	// 3) Error-rate regression.
-	if bs.meanErrRate < regressionErrorFloor {
-		// baseline was clean; any meaningful current error rate is a signal
-		if current.Signals.ErrorRate > regressionErrorFloor {
+	// #422: the old branch switch (baseline < floor → any current > floor
+	// fires vs baseline ≥ floor → needs 1.8x) was DISCONTINUOUS at the
+	// boundary: baseline 0.149 triggered at current 0.151, baseline 0.151
+	// needed current 0.272 — a dirtier baseline was harder to alert on than
+	// a slightly cleaner one. Unified semantics: trigger when current
+	// exceeds BOTH the absolute floor AND 1.8x the baseline mean (max of the
+	// two thresholds), continuous across the boundary.
+	errThreshold := math.Max(regressionErrorFloor, bs.meanErrRate*regressionErrorMultiple)
+	if current.Signals.ErrorRate > errThreshold {
+		if bs.meanErrRate < regressionErrorFloor {
 			signals = append(signals, fmt.Sprintf(
 				"error rate %.2f emerged (baseline %.2f)",
 				current.Signals.ErrorRate, bs.meanErrRate))
+		} else {
+			signals = append(signals, fmt.Sprintf(
+				"error rate %.2f vs baseline %.2f (%.1fx baseline)",
+				current.Signals.ErrorRate, bs.meanErrRate,
+				current.Signals.ErrorRate/bs.meanErrRate))
 		}
-	} else if current.Signals.ErrorRate > bs.meanErrRate*regressionErrorMultiple {
-		signals = append(signals, fmt.Sprintf(
-			"error rate %.2f vs baseline %.2f (%.1fx baseline)",
-			current.Signals.ErrorRate, bs.meanErrRate,
-			current.Signals.ErrorRate/bs.meanErrRate))
 	}
 
 	if len(signals) == 0 {
@@ -219,11 +227,33 @@ func classifyRegression(scoreDrop float64, current QualityEntry, bs baselineStat
 		return SeverityMinor
 	}
 
-	// Even without a large overall drop, if iterations inflated severely OR the
-	// run fell below the historical minimum score, that is at least minor.
-	if bs.meanIter > 0 && current.Signals.IterationRatio >= bs.meanIter*2.0 {
-		return SeverityModerate
+	// #421: iteration-inflation tiers must align with the DETECTION threshold
+	// (regressionIterationMultiple=1.6x). The old 2.0x-only tier left the
+	// 1.6x–2.0x band Detected=true with Severity=none (downstream filters
+	// silently dropped it) and made 2.0x jump straight to Moderate, skipping
+	// Minor.
+	if bs.meanIter > 0 {
+		iterMult := current.Signals.IterationRatio / bs.meanIter
+		switch {
+		case iterMult >= 2.0:
+			return SeverityModerate
+		case iterMult >= regressionIterationMultiple:
+			return SeverityMinor
+		}
 	}
+
+	// #421: error-rate signals must classify too — error-only regressions
+	// previously returned SeverityNone despite Detected=true.
+	if bs.meanErrRate > 0 {
+		if current.Signals.ErrorRate >= bs.meanErrRate*regressionErrorMultiple {
+			return SeverityMinor
+		}
+	} else if current.Signals.ErrorRate >= regressionErrorFloor {
+		return SeverityMinor // emerged above floor from a clean baseline
+	}
+
+	// Even without a large overall drop, if the run fell below the
+	// historical minimum score, that is at least minor.
 	if current.Score < bs.minScore-0.05 {
 		return SeverityMinor
 	}

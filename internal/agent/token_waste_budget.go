@@ -122,12 +122,16 @@ type tokenWasteBudgetState struct {
 	// readPaths tracks file reads for later expiration marking.
 	// path → entry index in entries (to mark as expired when edited).
 	readPaths map[string]int
+
+	// readPathsMulti keeps the FULL read-index history per path (#418).
+	readPathsMulti map[string][]int
 }
 
 func newTokenWasteBudgetState() *tokenWasteBudgetState {
 	return &tokenWasteBudgetState{
-		catTotals: make(map[wasteCategory]int),
-		readPaths: make(map[string]int),
+		catTotals:      make(map[wasteCategory]int),
+		readPaths:      make(map[string]int),
+		readPathsMulti: make(map[string][]int),
 	}
 }
 
@@ -140,6 +144,7 @@ func (s *tokenWasteBudgetState) reset() {
 	s.wasteTokens = 0
 	s.catTotals = make(map[wasteCategory]int)
 	s.readPaths = make(map[string]int)
+	s.readPathsMulti = make(map[string][]int)
 }
 
 // estimateTokens approximates the token count of a string.
@@ -174,7 +179,13 @@ func (s *tokenWasteBudgetState) recordToolResult(toolName, content string, isErr
 	case isRedundant:
 		cat = wasteRedundant
 	case len(strings.TrimSpace(content)) < wasteEmptyThreshold:
-		cat = wasteEmpty
+		// #419: short NEGATIVE results ("no matches found", "0 results",
+		// clean-tree git status) are high-value exclusions, not waste — the
+		// whole point of the search was to rule a hypothesis out. Only a
+		// truly empty (or all-whitespace) result counts as wasteEmpty.
+		if !isNegativeResult(content) {
+			cat = wasteEmpty
+		}
 	}
 
 	entry := tokenWasteEntry{
@@ -190,10 +201,35 @@ func (s *tokenWasteBudgetState) recordToolResult(toolName, content string, isErr
 		s.catTotals[cat] += tokens
 	}
 
-	// Track read paths for expiration marking.
+	// Track read paths for expiration marking. Store the FULL index history
+	// per path (#418: the overwrite-style single index kept only the LAST
+	// read — if that one was already redundant, the earlier productive read
+	// was never reclassified as expired, systematically undercounting waste
+	// in exactly the read-then-invalidate loops this detector targets).
 	for _, p := range pathsRead {
-		s.readPaths[p] = idx
+		s.readPathsMulti[p] = append(s.readPathsMulti[p], idx)
 	}
+}
+
+// isNegativeResult reports whether a short tool result is a structured
+// negative/exclusion marker rather than empty output (#419).
+func isNegativeResult(content string) bool {
+	c := strings.ToLower(strings.TrimSpace(content))
+	if c == "" {
+		return false
+	}
+	negativeMarkers := []string{
+		"no match", "no results", "no result", "0 results", "0 matches",
+		"no entries found", "nothing found", "not found", "no changes",
+		"nothing to", "no such", "clean", "up to date", "already up-to-date",
+		"0 findings", "no findings", "no issues",
+	}
+	for _, m := range negativeMarkers {
+		if strings.Contains(c, m) {
+			return true
+		}
+	}
+	return false
 }
 
 // markFileEdited invalidates prior read results for the edited file,
@@ -202,16 +238,28 @@ func (s *tokenWasteBudgetState) markFileEdited(path string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	idx, ok := s.readPaths[path]
-	if !ok || idx >= len(s.entries) {
-		return
+	// #418: reclassify EVERY recorded read of this path, not just the last.
+	for _, idx := range s.readPathsMulti[path] {
+		if idx >= len(s.entries) {
+			continue
+		}
+		entry := &s.entries[idx]
+		switch entry.category {
+		case wasteNone:
+			entry.category = wasteExpired
+			s.wasteTokens += entry.tokens
+			s.catTotals[wasteExpired] += entry.tokens
+		case wasteRedundant:
+			// A redundant read becomes expired after the edit — the tokens
+			// were already counted as waste; just reclassify the category
+			// totals so the breakdown reflects the true end state.
+			entry.category = wasteExpired
+			s.catTotals[wasteRedundant] -= entry.tokens
+			s.catTotals[wasteExpired] += entry.tokens
+		}
 	}
-	entry := &s.entries[idx]
-	if entry.category == wasteNone {
-		entry.category = wasteExpired
-		s.wasteTokens += entry.tokens
-		s.catTotals[wasteExpired] += entry.tokens
-	}
+	delete(s.readPathsMulti, path)
+	// Keep legacy map consistent in case other code reads it.
 	delete(s.readPaths, path)
 }
 

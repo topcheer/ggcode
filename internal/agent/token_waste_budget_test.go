@@ -44,10 +44,19 @@ func TestTokenWasteBudgetState_RecordAndRatio(t *testing.T) {
 		t.Error("expected waste tokens > 0 after error")
 	}
 
-	// Record empty result (waste).
-	s.recordToolResult("grep", "no matches", false, false, nil)
+	// Record empty result (waste). NOTE (#419): "no matches" is now a
+	// high-value NEGATIVE result and is exempt — use a short whitespace-only
+	// result (a truly empty string estimates to 0 tokens and can't register).
+	s.recordToolResult("grep", "  \n  ", false, false, nil)
 	if s.catTotals[wasteEmpty] == 0 {
 		t.Error("expected wasteEmpty category to have tokens")
+	}
+
+	// #419: structured negative results must NOT count as wasteEmpty.
+	before := s.catTotals[wasteEmpty]
+	s.recordToolResult("grep", "no matches found for FooBar", false, false, nil)
+	if s.catTotals[wasteEmpty] != before {
+		t.Error("negative-result search must be exempt from wasteEmpty")
 	}
 
 	// Record redundant result (waste).

@@ -59,6 +59,7 @@ type editCoverageState struct {
 	verifiedPkgs  map[string]bool // set of package dirs covered by verification
 	warnCount     int             // warnings emitted this run
 	lastWarnedCmd string          // dedupe: don't re-warn for same verification command
+	lastEditedPkg string          // package dir of the most recent edit (#417: bare `go test` cwd heuristic)
 }
 
 const (
@@ -79,6 +80,7 @@ func (s *editCoverageState) reset() {
 	s.verifiedPkgs = make(map[string]bool)
 	s.warnCount = 0
 	s.lastWarnedCmd = ""
+	s.lastEditedPkg = ""
 }
 
 // recordToolCall tracks edits and verification calls.
@@ -101,6 +103,9 @@ func (s *editCoverageState) recordEditedFiles(toolName, args string) {
 	for _, p := range paths {
 		if p != "" {
 			s.editedFiles[p] = true
+			if pkg := coverageFileToPackage(p); pkg != "" {
+				s.lastEditedPkg = pkg
+			}
 		}
 	}
 }
@@ -129,9 +134,10 @@ func (s *editCoverageState) checkCoverage(toolName, rawArgs string) string {
 		return ""
 	}
 
-	// Determine verification scope
-	scope := coverageExtractVerifyScope(cmdStr)
-	if scope == "" {
+	// Determine verification scope(s) — multi-path commands cover ALL listed
+	// packages (#417: `go test ./a/ ./b/` previously only extracted ./a/).
+	scopes := coverageExtractVerifyScopes(cmdStr)
+	if len(scopes) == 0 {
 		return ""
 	}
 
@@ -141,11 +147,51 @@ func (s *editCoverageState) checkCoverage(toolName, rawArgs string) string {
 		return ""
 	}
 
+	isAll := false
+	hasDot := false
+	for _, sc := range scopes {
+		if sc == "ALL" {
+			isAll = true
+		}
+		if sc == "." {
+			hasDot = true
+		}
+	}
+	if isAll {
+		// ./... covers every edited package — remember them (#417).
+		for _, pkg := range editedPkgs {
+			s.verifiedPkgs[pkg] = true
+		}
+		return ""
+	}
+	// #417: a bare `go test`/`go build` verifies the current-directory
+	// package. The cwd is unknown to the detector; the best deterministic
+	// proxy is the package of the most recent edit (agents verify right
+	// after editing that package).
+	if hasDot && s.lastEditedPkg != "" {
+		s.verifiedPkgs[s.lastEditedPkg] = true
+	}
+
 	var uncovered []string
 	for _, pkg := range editedPkgs {
-		if !coveragePkgInScope(pkg, scope) {
-			uncovered = append(uncovered, pkg)
+		// Verified by an EARLIER run — cumulative coverage (#417: sequential
+		// per-package verification is a legitimate strategy and must not be
+		// re-warned as UNVERIFIED on every subsequent command).
+		if s.verifiedPkgs[pkg] {
+			continue
 		}
+		covered := false
+		for _, sc := range scopes {
+			if sc != "." && coveragePkgInScope(pkg, sc) {
+				covered = true
+				break
+			}
+		}
+		if covered {
+			s.verifiedPkgs[pkg] = true // remember for subsequent runs (#417)
+			continue
+		}
+		uncovered = append(uncovered, pkg)
 	}
 
 	if len(uncovered) == 0 {
@@ -163,7 +209,7 @@ func (s *editCoverageState) checkCoverage(toolName, rawArgs string) string {
 			"`go build ./...`) to catch cross-package regressions before declaring success. "+
 			"(Research: sub-task verification success does not guarantee end-to-end success -- "+
 			"arXiv:2607.05775)",
-		len(editedPkgs), cmdStr, scope,
+		len(editedPkgs), cmdStr, strings.Join(scopes, ", "),
 		strings.Join(uncovered, "\n  - "),
 	)
 }
@@ -274,69 +320,75 @@ func coverageExtractCommand(args string) string {
 // budget, muting real gaps (#354). Only bare `go test`/`go build`/`go vet`
 // semantically mean "current directory package".
 func coverageExtractVerifyScope(cmd string) string {
+	scopes := coverageExtractVerifyScopes(cmd)
+	if len(scopes) == 0 {
+		return ""
+	}
+	return scopes[0]
+}
+
+// coverageExtractVerifyScopes extracts ALL package scopes from a verify
+// command (#417: `go test ./internal/agent/ ./internal/config/` previously
+// only yielded the first ./path — config was falsely warned UNVERIFIED).
+// Returns "ALL" when ./... (or bare "./") is present, "." for bare go
+// test/build/vet (current-dir package), and nil when no scope is extractable.
+func coverageExtractVerifyScopes(cmd string) []string {
 	lc := strings.ToLower(cmd)
 
 	// Must be a build/test/lint command
 	if !coverageIsVerifyCommand(lc) {
-		return ""
+		return nil
 	}
 
-	// Fully-qualified import paths (github.com/...) cannot be compared to the
-	// relative package dirs we track — previously the first-"/" heuristic
-	// extracted "/topcheer/ggcode/internal/agent" which never matched (#354).
-	// Only relative ./paths are extractable.
-	if idx := strings.Index(lc, "./"); idx >= 0 {
-		if strings.Contains(lc[idx:], "...") {
-			return "ALL"
+	fields := strings.Fields(lc)
+
+	// Collect every ./-prefixed token as a scope.
+	var scopes []string
+	for _, f := range fields {
+		if !strings.HasPrefix(f, "./") {
+			continue
 		}
-		rest := lc[idx:]
-		if sp := strings.IndexByte(rest, ' '); sp >= 0 {
-			rest = rest[:sp]
+		if strings.Contains(f, "...") {
+			return []string{"ALL"}
 		}
-		rest = strings.TrimRight(rest, "/")
-		rest = strings.TrimPrefix(rest, "./")
-		if len(rest) > 2 { // meaningful path
-			return rest
+		r := strings.TrimRight(f, "/")
+		r = strings.TrimPrefix(r, "./")
+		if len(r) > 2 { // meaningful path
+			scopes = append(scopes, r)
+		} else {
+			return []string{"ALL"} // "./" alone
 		}
-		return "ALL" // "./" alone
+	}
+	if len(scopes) > 0 {
+		return scopes
 	}
 
 	// Non-Go runners with file args (pytest tests/unit/test_x.py): the .py
 	// path is a file, not a package scope — skip rather than mis-scope (#354).
-	fields := strings.Fields(lc)
 	for _, f := range fields {
 		if strings.HasSuffix(f, ".py") || strings.HasSuffix(f, ".js") || strings.HasSuffix(f, ".ts") {
-			return ""
+			return nil
 		}
 	}
 
 	// Bare Go commands without a path cover the current directory package only.
 	// Word-lexical match (first token) so "git commit -m 'make test pass'"
 	// does not count as a verification run (#354).
-	if len(fields) > 0 {
-		switch fields[0] {
-		case "go":
-			if len(fields) >= 2 {
-				switch fields[1] {
-				case "test", "build", "vet":
-					// Fully-qualified import path args (github.com/x/y) cannot
-					// be mapped to relative package dirs — skip (#354).
-					for _, f := range fields[2:] {
-						if strings.Contains(f, ".") && strings.Contains(f, "/") {
-							return ""
-						}
-					}
-					return "."
+	if len(fields) >= 2 && fields[0] == "go" {
+		switch fields[1] {
+		case "test", "build", "vet":
+			// Fully-qualified import path args (github.com/x/y) cannot
+			// be mapped to relative package dirs — skip (#354).
+			for _, f := range fields[2:] {
+				if strings.Contains(f, ".") && strings.Contains(f, "/") {
+					return nil
 				}
 			}
-		case "make", "npm", "yarn", "pnpm", "pytest", "python", "python3", "cargo", "mvn", "gradle", "./gradlew", "dotnet":
-			// Opaque project-level runner: target unknown (make target may be
-			// anything; npm script may run a watcher). Skip scope detection (#354).
-			return ""
+			return []string{"."}
 		}
 	}
 
-	return ""
+	return nil
 }
 
 // coverageIsVerifyCommand checks if the command is a build/test/lint command.
@@ -419,7 +471,8 @@ func coveragePkgInScope(pkg, scope string) bool {
 		return true
 	}
 	if scope == "." {
-		// Bare scope -- only covers root package, nothing else matches
+		// Bare scope — handled by the caller via the lastEditedPkg cwd
+		// heuristic (#417); a "." scope never matches a named package here.
 		return false
 	}
 	// Normalize for comparison
@@ -432,5 +485,23 @@ func coveragePkgInScope(pkg, scope string) bool {
 	if pkgNorm == scopeNorm {
 		return true
 	}
-	return strings.HasPrefix(pkgNorm, scopeNorm+"/")
+	if strings.HasPrefix(pkgNorm, scopeNorm+"/") {
+		return true
+	}
+	// #416: absolute-path edits ("/workspace/internal/agent") never matched
+	// relative verify scopes ("internal/agent") — fully verified packages
+	// were warned UNVERIFIED in the most common production workflow. When one
+	// side is absolute and the other relative, compare on directory-segment
+	// containment (scope appears as a complete sub-path of pkg).
+	pkgAbs := strings.HasPrefix(pkgNorm, "/")
+	scopeAbs := strings.HasPrefix(scopeNorm, "/")
+	if pkgAbs != scopeAbs {
+		tail := strings.TrimPrefix(pkgNorm, "/")
+		head := strings.TrimPrefix(scopeNorm, "/")
+		if head == "" || tail == "" {
+			return false
+		}
+		return strings.Contains("/"+tail+"/", "/"+head+"/")
+	}
+	return false
 }
