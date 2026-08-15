@@ -66,12 +66,6 @@ func (m Model) handleDoneMsg(msg doneMsg) (Model, tea.Cmd) {
 	if !wasCanceled && !wasFailed {
 		m.persistFullSessionMessages()
 	}
-	// Fire an agent-requested restart AFTER persistence: the session now
-	// contains this turn's tool results, so the resumed agent loop won't
-	// hit a dangling tool_use.
-	if cmd := m.firePendingRestart(); cmd != nil {
-		return m, cmd
-	}
 	if !wasCanceled && !wasFailed && m.pendingSubmissionCount() > 0 {
 		return m, m.submitPendingSubmissionCmd()
 	}
@@ -82,7 +76,6 @@ func (m Model) handleDoneMsg(msg doneMsg) (Model, tea.Cmd) {
 // handleAgentDoneMsg handles the corresponding message case.
 func (m Model) handleAgentDoneMsg(msg agentDoneMsg) (Model, tea.Cmd) {
 	if msg.RunID != m.activeAgentRunID {
-		debug.Log("restart", "agentDoneMsg DROPPED: runID=%d active=%d pendingRestart=%v", msg.RunID, m.activeAgentRunID, m.restartPending)
 		return m, nil
 	}
 	// Send "completed" receipt for lanchat messages that triggered this agent run
@@ -138,14 +131,6 @@ func (m Model) handleAgentDoneMsg(msg agentDoneMsg) (Model, tea.Cmd) {
 	if !wasCanceled && !wasFailed {
 		m.persistFullSessionMessages()
 		m.maybeRefineSessionTitle()
-	}
-	// Fire an agent-requested restart AFTER persistence: the session now
-	// contains this turn's tool results, so the resumed agent loop won't
-	// hit a dangling tool_use. NOTE: agentDoneMsg (submit.go) is the REAL
-	// turn-completion message for agent runs — handleDoneMsg is a legacy
-	// path with no producers; hooking only there made the arming never fire.
-	if cmd := m.firePendingRestart(); cmd != nil {
-		return m, cmd
 	}
 	if !wasCanceled && !wasFailed && m.pendingSubmissionCount() > 0 {
 		return m, m.submitPendingSubmissionCmd()

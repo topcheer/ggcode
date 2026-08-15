@@ -105,7 +105,6 @@ type Model struct {
 	streamTextStart         time.Time    // when first text chunk arrived in current turn
 	quitting                bool
 	restartRequested        bool
-	restartPending          bool // armed by LLM restart tool; fired in handleDoneMsg after session persistence
 	restartDebug            bool
 	updatePrepared          *update.PreparedUpdate // set by /update before restart
 	tmuxExecRequested       bool

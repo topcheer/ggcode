@@ -863,41 +863,33 @@ func (r *REPL) SetPlanModeTools(tools *tool.Registry) {
 	}
 }
 
-// replRestartRequester adapts the restart tool to the TUI /restart flow in
-// TWO phases:
+// replRestartRequester adapts the restart tool to the SAME proven path used
+// by IM /restart (QQ/Telegram/etc) and the TUI /restart slash command:
+// program.Send(remoteRestartMsg{}) → case remoteRestartMsg → quit flags →
+// tea.Quit → Run() returns → execRestart (session-preserving execve).
 //
-// Phase 1 (RequestRestart, called from the tool goroutine mid-turn): send
-// an agentRestartArmedMsg into the Bubble Tea event loop. NEVER mutate
-// Model fields directly here — Update receives Model by value, so a direct
-// write from this goroutine lands on a stale copy and the arming is lost
-// (exactly the bug observed live: tool returned OK but no restart fired).
-// The current turn must also finish so its tool_result is persisted.
-//
-// Phase 2 (firePendingRestart, called from handleDoneMsg AFTER
-// persistFullSessionMessages): runs beginRestart — the single shared core
-// also used by /restart — so output is identical by construction.
-type agentRestartArmedMsg struct {
-	debugMode bool
-}
-
+// The 1-second delay mirrors scheduleRemoteRestart: the tool result is
+// persisted SYNCHRONOUSLY at Add() time (AppendMessageToDisk) inside the
+// agent loop — before this goroutine even runs — so by the time the quit
+// fires, the session JSONL already contains the tool_use/tool_result pair.
+// No doneMsg/agentDoneMsg hook is needed; this path is immune to RunID
+// guards and turn-completion races, which is exactly why IM /restart has
+// always worked while the earlier two-phase design failed five times.
 type replRestartRequester struct {
 	repl *REPL
 }
 
 func (rr *replRestartRequester) RequestRestart(debugMode bool) {
-	debug.Log("restart", "agent-requested restart armed; will fire after turn completion")
-	rr.repl.sendProgramMsgs(agentRestartArmedMsg{debugMode: debugMode})
-}
-
-// firePendingRestart triggers the actual restart flow via the shared
-// beginRestart core (same as /restart). Called from handleDoneMsg after
-// session persistence.
-func (m *Model) firePendingRestart() tea.Cmd {
-	if !m.restartPending {
-		return nil
+	debug.Log("restart", "agent-requested restart via remoteRestartMsg (IM /restart path), firing in 1s")
+	if debugMode {
+		os.Setenv("GGCODE_DEBUG", "1")
 	}
-	m.restartPending = false
-	return m.beginRestart(m.restartDebug)
+	// Same delay as scheduleRemoteRestart so the tool result reaches the
+	// session and the UI before the process quits.
+	go func() {
+		time.Sleep(1 * time.Second)
+		rr.repl.sendProgramMsgs(remoteRestartMsg{})
+	}()
 }
 
 // SetSendMessageTool registers the send_message tool for agent communication.
