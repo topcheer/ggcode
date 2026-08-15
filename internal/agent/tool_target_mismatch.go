@@ -87,6 +87,13 @@ type toolTargetState struct {
 	curIter  int
 }
 
+// newToolTargetState constructs a fresh tool-target mismatch state (issue #341:
+// previously the Agent field was never initialized, so the nil guard in
+// maybeWarnToolTargetMismatch silently disabled the detector).
+func newToolTargetState() *toolTargetState {
+	return &toolTargetState{}
+}
+
 // extractStatedTargets extracts file paths and search terms from assistant text
 // intent statements. Returns a list of statedTarget pairs.
 func extractStatedTargets(text string) []statedTarget {

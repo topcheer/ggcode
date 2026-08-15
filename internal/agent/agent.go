@@ -242,6 +242,7 @@ type Agent struct {
 	errorCascade               *errorCascadeState                    // cascading failure detection (common-root-cause error clustering)
 	errorPropagate             *errorPropagateState                  // error propagation chain detection (degraded-output contamination tracking)
 	delegationOrch             *delegationState                      // delegation orchestration intelligence (orphaned delegations, serial anti-pattern, over-delegation)
+	integrationMonitor         *integrationState                     // tool output integration monitoring (cross-step evidence accumulation, TRACE)
 	crossFileImpact            *crossFileImpactState                 // pre-completion cross-file impact analysis (removed symbol breakage detection)
 	promptOps                  *promptOpsState                       // system prompt redundancy and token efficiency intelligence (PromptOps)
 	cacheEffMonitor            *cacheEffMonitor                      // prompt cache efficiency monitoring (cache bust storm detection)
@@ -507,6 +508,10 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		qualityScorer:          NewResponseQualityScorer(100),
 		futileCycle:            newFutileCycleState(),
 		trajIntel:              newTrajIntelState(),
+		convergenceLock:        newConvergenceLockState(),
+		delegationOrch:         newDelegationState(),
+		integrationMonitor:     newIntegrationState(),
+		toolTargetMismatch:     newToolTargetState(),
 	}
 	a.syncContextManagerProviderLocked()
 	a.syncContextManagerUsageHandlerLocked()
@@ -1218,6 +1223,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.cfDep.reset()
 	a.expiredRead.reset()
 	a.resetWastedExplore()
+	// Convergence lock must reset per run so post-verification edit drift
+	// counters don't leak across runs (issue #341).
+	a.resetConvergenceLock()
+	a.integrationResetForRun()
 	a.resetSelfMod()
 	// Goal drift context must reset per user turn to avoid comparing
 	// turn-1 keywords against turn-3 targets (issue #28).
@@ -2278,6 +2287,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				a.recordUncertainty("false_premise", weightFalsePremise)
 				a.injectGuidance(fpMsg)
 			}
+			// Tool output integration monitor: check whether the assistant text
+			// references key evidence from the previous information-tool result
+			// (TRACE cross-step evidence, issue #341).
+			a.integrationCheckAndWarn(assistantText)
 			// Unverified confidence detector: scan for overconfident completion
 			// claims ("this definitely works", "fix is complete") that aren't
 			// backed by actual verification (build/test/lint). EpiCaR-inspired
@@ -3332,6 +3345,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// False premise detection: record tool errors for later contradiction
 			// analysis against assistant success claims.
 			a.falsePremise.recordToolResult(tc.Name, result.Content, result.IsError)
+			// Tool output integration monitor: extract high-signal tokens from
+			// information-tool results for integration checking against the next
+			// assistant text (TRACE cross-step evidence, issue #341).
+			a.integrationRecordToolResult(tc.Name, result.Content)
 			// Overcorrection cascade: record error signals for proportionality analysis.
 			a.overcorrectionRecordError(tc.Name, result.Content, result.IsError)
 			// Overcorrection cascade: increment step counter for non-edit tools

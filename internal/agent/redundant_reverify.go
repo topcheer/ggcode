@@ -35,7 +35,9 @@ package agent
 
 import (
 	"fmt"
+	"path/filepath"
 	"regexp"
+	"strings"
 
 	"github.com/topcheer/ggcode/internal/debug"
 )
@@ -86,7 +88,42 @@ func (s *redundantReverifyState) reset() {
 
 // classifyVerificationCommand returns the verification category if the tool
 // name + arguments match a known verification pattern, or "" otherwise.
+// #343: only shell executions can RUN a verification command. Text-manipulation
+// tools (grep/sed/echo) whose ARGUMENTS mention "go test" were previously
+// misclassified as verification runs, so the agent's first REAL `go test` was
+// warned about as a redundant re-run. Beyond the tool-name gate, the first
+// word of the first pipeline segment must not be a text/shell builtin that
+// merely references the command.
+var reverifyTextToolFirstWords = map[string]bool{
+	"grep": true, "rg": true, "sed": true, "awk": true, "echo": true, "cat": true,
+	"printf": true, "tail": true, "head": true, "less": true, "sort": true,
+	"uniq": true, "wc": true, "tr": true, "cut": true, "tee": true, "xargs": true,
+	"man": true, "which": true, "type": true, "find": true, "ls": true,
+}
+
 func (s *redundantReverifyState) classifyVerificationCommand(toolName, args string) string {
+	// #343: only command-executing tools can perform verification.
+	if toolName != "run_command" && toolName != "start_command" {
+		return ""
+	}
+	// Take the first pipeline segment's first word: if the command itself is a
+	// text operation, any "go test" mention is data, not execution.
+	firstSeg := args
+	for _, sep := range []string{"|", ";", "&&", "||"} {
+		if i := strings.Index(firstSeg, sep); i >= 0 {
+			firstSeg = firstSeg[:i]
+		}
+	}
+	fields := strings.Fields(firstSeg)
+	for len(fields) > 0 && strings.HasPrefix(fields[0], "$(") { // skip env prefixes crudely
+		fields = fields[1:]
+	}
+	if len(fields) > 0 {
+		bin := filepath.Base(fields[0])
+		if reverifyTextToolFirstWords[bin] {
+			return ""
+		}
+	}
 	combined := toolName + " " + args
 	for cat, re := range reverifyCmdPatterns {
 		if re.MatchString(combined) {

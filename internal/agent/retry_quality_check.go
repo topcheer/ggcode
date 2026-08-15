@@ -247,32 +247,87 @@ func branchContinuesOnError(body *ast.BlockStmt) bool {
 	return found
 }
 
-// loopBodyHasBackoff returns true if the loop body contains a backoff delay
-// (time.Sleep, time.After, <-time.Tick, or a select with time.After).
+// loopBodyHasBackoff returns true if the loop body contains a backoff delay.
+// Recognized forms (Go standard timer/ticker idioms included):
+//   - time.Sleep / time.After / <-time.Tick calls
+//   - time.NewTimer / time.NewTicker / time.AfterFunc calls in the body
+//   - a receive on a timer/ticker channel: <-x.C (UnaryExpr ARROW over a
+//     SelectorExpr selecting the .C field), whether the timer is created
+//     inside or outside the loop
+//   - a select statement containing a <-ctx.Done() case (context-aware
+//     cancellation provides termination and paced termination)
 func loopBodyHasBackoff(body *ast.BlockStmt) bool {
 	found := false
 	ast.Inspect(body, func(node ast.Node) bool {
 		if found {
 			return false
 		}
-		call, ok := node.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok {
-			return true
-		}
-		pkg, ok := sel.X.(*ast.Ident)
-		if !ok {
-			return true
-		}
-		if pkg.Name == "time" && (sel.Sel.Name == "Sleep" || sel.Sel.Name == "After" || sel.Sel.Name == "Tick") {
-			found = true
+		switch n := node.(type) {
+		case *ast.CallExpr:
+			if isBackoffCall(n) {
+				found = true
+				return false
+			}
+		case *ast.UnaryExpr:
+			// <-x.C receive on a timer/ticker channel.
+			if n.Op == token.ARROW {
+				if sel, ok := n.X.(*ast.SelectorExpr); ok && sel.Sel.Name == "C" {
+					found = true
+					return false
+				}
+			}
+		case *ast.SelectStmt:
+			if selectHasCtxDone(n) {
+				found = true
+				return false
+			}
 		}
 		return true
 	})
 	return found
+}
+
+// isBackoffCall returns true for calls that introduce a delay/backoff.
+func isBackoffCall(call *ast.CallExpr) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	pkg, ok := sel.X.(*ast.Ident)
+	if !ok {
+		return false
+	}
+	if pkg.Name != "time" {
+		return false
+	}
+	switch sel.Sel.Name {
+	case "Sleep", "After", "Tick", "NewTimer", "NewTicker", "AfterFunc":
+		return true
+	}
+	return false
+}
+
+// selectHasCtxDone returns true if a select statement has a <-ctx.Done()
+// (or any .Done()) receive case.
+func selectHasCtxDone(sel *ast.SelectStmt) bool {
+	for _, clause := range sel.Body.List {
+		comm, ok := clause.(*ast.CommClause)
+		if !ok || comm.Comm == nil {
+			continue
+		}
+		es, ok := comm.Comm.(*ast.ExprStmt)
+		if !ok {
+			continue
+		}
+		if unary, ok := es.X.(*ast.UnaryExpr); ok && unary.Op == token.ARROW {
+			if inner, ok := unary.X.(*ast.CallExpr); ok {
+				if cs, ok := inner.Fun.(*ast.SelectorExpr); ok && cs.Sel.Name == "Done" {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // isUnboundedForLoop returns true for `for {}` (no condition, no init/post).
@@ -297,8 +352,73 @@ func loopHasAttemptCap(loop *ast.ForStmt) bool {
 			}
 		}
 	}
+	// A select with a <-ctx.Done() case that exits (return/break) provides
+	// bounded termination for an otherwise unbounded loop.
+	if bodyHasCtxDoneExit(loop.Body) {
+		return true
+	}
 	// Check body for an attempt counter that is compared to a max.
 	return bodyHasCounterCheck(loop.Body)
+}
+
+// bodyHasCtxDoneExit returns true if the body contains a select whose
+// <-ctx.Done() case ends with a return or break (a bounded exit path).
+func bodyHasCtxDoneExit(body *ast.BlockStmt) bool {
+	if body == nil {
+		return false
+	}
+	found := false
+	ast.Inspect(body, func(node ast.Node) bool {
+		if found {
+			return false
+		}
+		sel, ok := node.(*ast.SelectStmt)
+		if !ok {
+			return true
+		}
+		for _, clause := range sel.Body.List {
+			comm, ok := clause.(*ast.CommClause)
+			if !ok || comm.Comm == nil {
+				continue
+			}
+			es, ok := comm.Comm.(*ast.ExprStmt)
+			if !ok {
+				continue
+			}
+			unary, ok := es.X.(*ast.UnaryExpr)
+			if !ok || unary.Op != token.ARROW {
+				continue
+			}
+			call, ok := unary.X.(*ast.CallExpr)
+			if !ok {
+				continue
+			}
+			cs, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || cs.Sel.Name != "Done" {
+				continue
+			}
+			if stmtListExitsLoop(comm.Body) {
+				found = true
+				return false
+			}
+		}
+		return true
+	})
+	return found
+}
+
+// stmtListExitsLoop returns true if the statement list contains a return or
+// a loop-level break at its top level.
+func stmtListExitsLoop(stmts []ast.Stmt) bool {
+	for _, s := range stmts {
+		if bs, ok := s.(*ast.BranchStmt); ok && bs.Tok == token.BREAK && bs.Label == nil {
+			return true
+		}
+		if _, ok := s.(*ast.ReturnStmt); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // isAttemptCounterName returns true for common attempt/retry counter names.

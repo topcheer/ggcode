@@ -178,3 +178,37 @@ func TestDedupBrief(t *testing.T) {
 		t.Fatalf("expected 3 unique, got %d: %v", len(out), out)
 	}
 }
+
+// #342: fail→fix→re-run→pass must clear the failure; an unbroken success
+// streak must never fire a brief; each fire reports only NEW failures.
+func TestAttemptBriefSuccessClearsStaleFailures(t *testing.T) {
+	s := newAttemptBriefState()
+	// Three one-off failures, each immediately corrected by a successful re-run.
+	for i := 0; i < 3; i++ {
+		s.recordOutcome("read_file", "/tmp/a.go", false, i*2, "not found")
+		s.recordOutcome("read_file", "/tmp/a.go", true, i*2+1, "")
+	}
+	// Long unbroken success streak.
+	for i := 8; i < 20; i++ {
+		s.recordOutcome("edit_file", "/tmp/b.go", true, i, "")
+	}
+	if msg := s.maybeBrief(20); msg != "" {
+		t.Fatalf("expected no brief during success streak, got: %s", msg)
+	}
+}
+
+// #342: the same failure batch must not be reused for a second fire.
+func TestAttemptBriefNoBatchReuse(t *testing.T) {
+	s := newAttemptBriefState()
+	s.recordOutcome("read_file", "/tmp/a.go", false, 1, "not found")
+	s.recordOutcome("grep", "pattern-x", false, 2, "no match")
+	s.recordOutcome("edit_file", "/tmp/b.go", false, 3, "not unique")
+	first := s.maybeBrief(7)
+	if first == "" {
+		t.Fatal("expected first brief")
+	}
+	// No new failures since; second fire must not repeat the same batch.
+	if msg := s.maybeBrief(12); msg != "" {
+		t.Fatalf("second fire reused stale batch: %s", msg)
+	}
+}

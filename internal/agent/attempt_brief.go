@@ -62,6 +62,22 @@ func (s *attemptBriefState) recordOutcome(toolName, target string, success bool,
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// #342: a later success on the same tool+target invalidates the earlier
+	// failure (same pattern as #331's false_premise fix). fail→fix→re-run→pass
+	// is the agent's core correct workflow; keeping the failure entry lets
+	// stale failures assemble a "prior approaches did NOT work" narrative
+	// during an unbroken success streak.
+	if success {
+		kept := s.entries[:0]
+		for _, e := range s.entries {
+			if !e.success && e.tool == toolName && e.target == truncateBrief(target, 60) {
+				continue // superseded by this success
+			}
+			kept = append(kept, e)
+		}
+		s.entries = kept
+	}
+
 	if len(s.entries) >= maxAttemptBriefEntries {
 		s.entries = s.entries[1:]
 	}
@@ -92,10 +108,12 @@ func (s *attemptBriefState) maybeBrief(iter int) string {
 		return ""
 	}
 
-	// Collect failures since last fire.
+	// Collect failures since last fire (#342: the "since last fire" filter
+	// the comment always promised but never implemented — each fire reports
+	// only NEW failures, and the same batch is never reused for a second fire).
 	failures := make([]toolOutcome, 0, 10)
 	for _, e := range s.entries {
-		if !e.success {
+		if !e.success && e.iter > s.lastFireIter {
 			failures = append(failures, e)
 		}
 	}

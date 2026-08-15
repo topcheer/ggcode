@@ -215,3 +215,34 @@ func isCommonNoise(tok string) bool {
 	}
 	return noise[tok]
 }
+
+// --- Agent integration ---
+
+// integrationRecordToolResult extracts evidence tokens from an information
+// tool result. Called in the tool result loop after each tool execution.
+func (a *Agent) integrationRecordToolResult(toolName, content string) {
+	if a.integrationMonitor == nil {
+		return
+	}
+	a.integrationMonitor.recordToolEvidence(toolName, content)
+}
+
+// integrationCheckAndWarn checks the assistant text against pending evidence
+// and injects guidance if the evidence was not integrated. Called after the
+// assistant text is captured in the agent loop.
+func (a *Agent) integrationCheckAndWarn(assistantText string) {
+	if a.integrationMonitor == nil {
+		return
+	}
+	if hint := a.integrationMonitor.checkIntegration(assistantText); hint != "" {
+		debug.Log("integration_monitor", "guidance injected: evidence not integrated")
+		a.injectGuidance(hint)
+	}
+}
+
+// integrationResetForRun clears integration state for a new run.
+func (a *Agent) integrationResetForRun() {
+	if a.integrationMonitor != nil {
+		a.integrationMonitor.reset()
+	}
+}

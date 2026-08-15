@@ -194,6 +194,103 @@ func poll(url string) {
 	}
 }
 
+func TestRetryQuality_BackoffViaNewTimerSelect(t *testing.T) {
+	src := `package main
+import ("context"; "net/http"; "time")
+func fetch(ctx context.Context, url string) error {
+	for {
+		resp, err := http.Get(url)
+		if err != nil {
+			timer := time.NewTimer(time.Second)
+			select {
+			case <-timer.C:
+				continue
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		resp.Body.Close()
+		return nil
+	}
+}`
+	w := checkRetryQuality("retry.go", "", src)
+	if hasWarning(w, "no backoff delay") {
+		t.Fatalf("unexpected missing-backoff with NewTimer select: %v", w)
+	}
+}
+
+func TestRetryQuality_BackoffViaOuterNewTicker(t *testing.T) {
+	src := `package main
+import ("context"; "net/http"; "time")
+func worker(ctx context.Context, url string) {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			resp, err := http.Get(url)
+			if err != nil {
+				continue
+			}
+			resp.Body.Close()
+		case <-ctx.Done():
+			return
+		}
+	}
+}`
+	w := checkRetryQuality("retry.go", "", src)
+	if hasWarning(w, "no backoff delay") {
+		t.Fatalf("unexpected missing-backoff with outer NewTicker receive: %v", w)
+	}
+	if hasWarning(w, "no attempt cap") {
+		t.Fatalf("unexpected unbounded-retry with ctx.Done exit: %v", w)
+	}
+}
+
+func TestRetryQuality_CtxDoneSelectIsBoundedExit(t *testing.T) {
+	src := `package main
+import ("context"; "net/http")
+func fetch(ctx context.Context, url string) error {
+	for {
+		resp, err := http.Get(url)
+		if err != nil {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+				continue
+			}
+		}
+		resp.Body.Close()
+		return nil
+	}
+}`
+	w := checkRetryQuality("retry.go", "", src)
+	if hasWarning(w, "no attempt cap") {
+		t.Fatalf("unexpected unbounded-retry despite ctx.Done exit: %v", w)
+	}
+}
+
+func TestRetryQuality_BackoffViaAfterFunc(t *testing.T) {
+	src := `package main
+import ("net/http"; "time")
+func fetch(url string) {
+	for {
+		resp, err := http.Get(url)
+		if err != nil {
+			time.AfterFunc(time.Second, func() {})
+			continue
+		}
+		_ = resp
+		return
+	}
+}`
+	w := checkRetryQuality("retry.go", "", src)
+	if hasWarning(w, "no backoff delay") {
+		t.Fatalf("unexpected missing-backoff with AfterFunc: %v", w)
+	}
+}
+
 // hasWarning checks if any warning contains the given substring.
 func hasWarning(warnings []string, sub string) bool {
 	for _, w := range warnings {

@@ -179,3 +179,26 @@ func TestMaybeWarnRedundantReverifyReturnsEmpty(t *testing.T) {
 		t.Errorf("maybeWarnRedundantReverify should always return empty, got: %s", got)
 	}
 }
+
+// #343: text operations whose arguments mention verification commands are
+// data, not execution — and must not poison the first real verification run.
+func TestReverifyTextOpsNotVerification(t *testing.T) {
+	s := newRedundantReverifyState()
+	if cat := s.classifyVerificationCommand("run_command", `grep -rn "go test" docs/`); cat != "" {
+		t.Fatalf("grep mentioning go test misclassified as %q", cat)
+	}
+	if cat := s.classifyVerificationCommand("run_command", `sed 's/go build/go test/' f.txt`); cat != "" {
+		t.Fatalf("sed misclassified as %q", cat)
+	}
+	if cat := s.classifyVerificationCommand("grep", `"pattern": "go test ./..."`); cat != "" {
+		t.Fatalf("non-shell tool misclassified as %q", cat)
+	}
+	// First real go test after the grep above must NOT be flagged redundant.
+	if hint := s.recordToolCall("run_command", "go test ./...", 1, false); hint != "" {
+		t.Fatalf("first real verification falsely flagged: %s", hint)
+	}
+	// Actual redundant re-run still detected.
+	if hint := s.recordToolCall("run_command", "go test ./...", 2, false); hint == "" {
+		t.Fatal("genuine redundant re-run not flagged")
+	}
+}
