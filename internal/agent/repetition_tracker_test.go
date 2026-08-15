@@ -238,3 +238,29 @@ func TestRepetitionTracker_EscalationLevelsNoDoubleFire(t *testing.T) {
 		}
 	}
 }
+
+// #333: case-variant paths must accumulate into one counter so the
+// hard/escalate intervention ladder is reachable.
+func TestRepetitionTrackerCaseInsensitiveNormalization(t *testing.T) {
+	rt := newRepetitionTracker()
+	args := func(p string) json.RawMessage {
+		return json.RawMessage(`{"file_path": "` + p + `"}`)
+	}
+	var hardFired bool
+	for i := 0; i < 9; i++ {
+		p := "Shadow_Check.go"
+		if i%2 == 0 {
+			p = "shadow_check.go"
+		}
+		msg := rt.recordEditAttempt("edit_file", args(p), true)
+		if strings.Contains(msg, "STOP and reconsider") {
+			hardFired = true
+		}
+	}
+	if !hardFired {
+		t.Fatal("expected hard intervention with mixed-case paths (9 failures)")
+	}
+	if len(rt.failedEditsByFile) != 1 {
+		t.Fatalf("expected single normalized key, got %d: %v", len(rt.failedEditsByFile), rt.failedEditsByFile)
+	}
+}

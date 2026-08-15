@@ -249,3 +249,40 @@ func TestMatchesGenericSuccessClaim(t *testing.T) {
 		}
 	}
 }
+
+// #331: a successful re-run of the same tool must invalidate the earlier
+// error record — the fail→fix→re-run→report workflow is not confabulation.
+func TestFalsePremise_SuccessRerunClearsError(t *testing.T) {
+	f := newFalsePremiseState()
+	f.recordToolResult("run_command", "exit status 1: compilation failed", true)
+	// Same tool succeeds on re-run after the fix.
+	f.recordToolResult("run_command", "build passed, 42 tests ok", false)
+	if len(f.recentErrors) != 0 {
+		t.Fatalf("expected stale error cleared on successful re-run, got %d", len(f.recentErrors))
+	}
+	msg := f.checkFalsePremise("The build passed and all tests pass.")
+	if msg != "" {
+		t.Fatalf("expected no warning after successful re-run, got: %s", msg)
+	}
+}
+
+// #331: branch 1 must honor acknowledgesError like branch 4.
+func TestFalsePremise_BuildBranchAcknowledgesError(t *testing.T) {
+	f := newFalsePremiseState()
+	f.recordToolResult("run_command", "exit status 1: compilation failed", true)
+	msg := f.checkFalsePremise("The earlier build error is fixed; the build passed now.")
+	if msg != "" {
+		t.Fatalf("expected no warning when earlier error acknowledged, got: %s", msg)
+	}
+}
+
+// #331: generic branch must not fire for search tools (they have a
+// dedicated branch gated on error-snippet indicators).
+func TestFalsePremise_GenericBranchExcludesSearchTools(t *testing.T) {
+	f := newFalsePremiseState()
+	f.recordToolResult("grep", "regex error: missing closing paren", true)
+	msg := f.checkFalsePremise("I updated the config file. Done.")
+	if msg != "" {
+		t.Fatalf("expected no warning for search-tool bare syntax error, got: %s", msg)
+	}
+}
