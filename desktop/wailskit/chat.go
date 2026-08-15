@@ -84,9 +84,14 @@ type ChatBridge struct {
 
 	// Pending messages (mirrors Fyne pendingMsgs)
 	pendingMsgs *agentruntime.PendingQueue[*tunnel.MessageData]
-	// pendingExclude is the echo-exclusion adapter of the queued IM message
-	// (#461) — restored when the pending message is drained after the run.
-	pendingExclude string
+	// pendingSource/pendingExclude carry the ORIGIN source and echo-exclusion
+	// adapter PER QUEUED MESSAGE (#461/#475) — restored in order when the
+	// queue drains. The old single pendingExclude field mispaired adapters
+	// under a multi-message backlog, and the drain path's hardcoded
+	// src="mobile" made the exclude value dead code anyway (the consumer
+	// requires source=="im").
+	pendingSource  []string
+	pendingExclude []string
 
 	// Subsystems
 	cronScheduler *cron.Scheduler
@@ -421,12 +426,12 @@ func (b *ChatBridge) sendMessageData(data tunnel.MessageData, source string, exc
 		if source == "desktop" {
 			meta = nil
 		}
-		// #461: pendingMeta must preserve the echo-exclusion info so the
-		// drain path doesn't broadcast the user's own message back to the
-		// adapter they sent it from (immediate path uses EmitUserTextExcept).
-		pendingMeta := meta
-		b.pendingMsgs.Enqueue(userMsg, false, pendingMeta)
-		b.pendingExclude = excludeAdapter
+		// #461/#475: record the origin source and echo-exclusion adapter
+		// alongside the queued message so the drain path can restore them
+		// faithfully (FIFO — index-aligned with the queue).
+		b.pendingMsgs.Enqueue(userMsg, false, meta)
+		b.pendingSource = append(b.pendingSource, source)
+		b.pendingExclude = append(b.pendingExclude, excludeAdapter)
 		b.mu.Unlock()
 		return nil
 	}
@@ -471,12 +476,20 @@ func (b *ChatBridge) sendMessageData(data tunnel.MessageData, source string, exc
 					data = *pending.Meta
 					src = "mobile"
 				}
-				// #461: restore the queued message's echo exclusion — the
-				// IM user must not see their own message echoed back on the
-				// adapter they sent from, same as the immediate path.
+				// #461/#475: restore this queued message's OWN source and
+				// echo-exclusion (FIFO pop, index-aligned with the queue) — an
+				// IM-sourced message keeps source="im" so the exclude adapter
+				// is actually consumed; the user never sees their own message
+				// echoed back on the adapter they sent from.
 				b.mu.Lock()
-				exclude = b.pendingExclude
-				b.pendingExclude = ""
+				if len(b.pendingSource) > 0 {
+					src = b.pendingSource[0]
+					b.pendingSource = b.pendingSource[1:]
+				}
+				if len(b.pendingExclude) > 0 {
+					exclude = b.pendingExclude[0]
+					b.pendingExclude = b.pendingExclude[1:]
+				}
 				b.mu.Unlock()
 				_ = b.sendMessageData(data, src, exclude)
 			}
