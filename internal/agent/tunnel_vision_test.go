@@ -1,6 +1,9 @@
 package agent
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
 
 func TestTunnelVision_NoWarningBeforeMinIterations(t *testing.T) {
 	s := newTunnelVisionState()
@@ -66,15 +69,46 @@ func TestTunnelVision_RatioBelowThreshold(t *testing.T) {
 }
 
 func TestTunnelVision_ExcludesTestAndMdFiles(t *testing.T) {
+	// _test.go / .md files stay excluded from the breadth COUNT (#476
+	// keeps the exclusion), but TOUCHING a _test.go marks this as a
+	// test-fix task — exempt from the ratio warning (scenario B).
 	s := newTunnelVisionState()
 	s.recordFile("/a.go")
 	s.recordFile("/a_test.go")
 	s.recordFile("/README.md")
-	// Only /a.go counts as a real file
-	// 10 iterations, 1 file -> ratio 10.0
-	msg := s.check(10)
-	if msg == "" {
-		t.Fatal("expected warning: test/md files excluded from breadth count")
+	if msg := s.check(10); msg != "" {
+		t.Fatalf("expected NO warning for a test-fix task (test file touched), got: %s", msg)
+	}
+
+	// Without any test file: md-only exclusion still leaves 1 real file,
+	// high ratio fires.
+	s2 := newTunnelVisionState()
+	s2.recordFile("/a.go")
+	s2.recordFile("/README.md")
+	if msg := s2.check(10); msg == "" {
+		t.Fatal("expected warning when md excluded and ratio high")
+	}
+}
+
+func TestTunnelVision_SearchBreadthCounts(t *testing.T) {
+	// #476 scenario A: 2 read files + 12 grep-seen files = broad
+	// exploration — no "broaden exploration" misguidance.
+	s := newTunnelVisionState()
+	s.recordFile("/internal/agent/agent.go")
+	s.recordFile("/internal/tool/cli.go")
+	for i := 0; i < 12; i++ {
+		s.recordSearched(fmt.Sprintf("/internal/pkg%d/file.go", i))
+	}
+	if msg := s.check(10); msg != "" {
+		t.Fatalf("expected no warning for search-broad exploration, got: %s", msg)
+	}
+
+	// Narrow: only 2 files seen, no search breadth — still warns.
+	s2 := newTunnelVisionState()
+	s2.recordFile("/internal/agent/agent.go")
+	s2.recordFile("/internal/tool/cli.go")
+	if msg := s2.check(10); msg == "" {
+		t.Fatal("expected warning for genuinely narrow exploration")
 	}
 }
 

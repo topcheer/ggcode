@@ -3140,6 +3140,16 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					}
 				}
 			}
+			// #476: search-tool output counts toward exploration breadth —
+			// grep/code_search/files_with_matches results name the files the
+			// agent has effectively "looked at". Without this, a 12-file grep
+			// sweep plus 2 read_file's scored as 2 files and triggered a
+			// bogus "broaden exploration" warning.
+			if searchResultTools[tc.Name] && !result.IsError {
+				for _, p := range extractSearchResultPaths(result.Content) {
+					a.tunnelVision.recordSearched(p)
+				}
+			}
 			// Unread-file edit guard: warn when editing a file not read in
 			// this run. Fires before the tool executes so the hint is in the
 			// result alongside any error from the edit attempt.

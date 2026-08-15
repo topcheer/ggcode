@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -59,19 +60,51 @@ type tunnelVisionState struct {
 	// filesTouched tracks unique normalized file paths read or edited.
 	filesTouched map[string]bool
 
+	// searchedFiles tracks files seen via search tools (#476).
+	searchedFiles map[string]bool
+	// testFilesTouched reports whether any _test.go file was touched —
+	// a test-fix task legitimately revolves around test files (#476).
+	testFilesTouched map[bool]bool
+
 	// warned indicates the detector has fired this run.
 	warned bool
 }
 
 func newTunnelVisionState() *tunnelVisionState {
 	return &tunnelVisionState{
-		filesTouched: make(map[string]bool),
+		filesTouched:     make(map[string]bool),
+		searchedFiles:    make(map[string]bool),
+		testFilesTouched: make(map[bool]bool),
 	}
 }
 
 func (s *tunnelVisionState) reset() {
 	s.filesTouched = make(map[string]bool)
+	s.searchedFiles = make(map[string]bool)
+	s.testFilesTouched = make(map[bool]bool)
 	s.warned = false
+}
+
+// searchPathRe extracts file paths from search-tool result text. Tool
+// output formats here all lead lines with a path (grep: "file.go:12:...",
+// LSP: absolute or relative paths in diagnostic lists). The tool set is
+// search_invalid.go's searchResultTools (reused, #476).
+var searchPathRe = regexp.MustCompile(`(?m)^\s*([^\s:]+\.[A-Za-z0-9]+):\d+`)
+
+// extractSearchResultPaths pulls unique file paths from search output.
+func extractSearchResultPaths(content string) []string {
+	if content == "" {
+		return nil
+	}
+	seen := make(map[string]bool)
+	var paths []string
+	for _, m := range searchPathRe.FindAllStringSubmatch(content, 50) {
+		if len(m) >= 2 && !seen[m[1]] {
+			seen[m[1]] = true
+			paths = append(paths, m[1])
+		}
+	}
+	return paths
 }
 
 // recordFile marks a file as touched (read or edited) during this run.
@@ -82,6 +115,27 @@ func (s *tunnelVisionState) recordFile(path string) {
 	n := normalizePath(path)
 	if !strings.HasSuffix(n, "_test.go") && !strings.HasSuffix(n, ".md") {
 		s.filesTouched[n] = true
+	}
+	s.testFilesTouched[strings.HasSuffix(n, "_test.go")] = s.testFilesTouched[strings.HasSuffix(n, "_test.go")] || strings.HasSuffix(n, "_test.go")
+}
+
+// recordSearched marks a file as SEEN via search-tool output (#476) —
+// grep content/files_with_matches, code_search, lsp_references, etc.
+// Search-driven exploration is breadth: a 12-file grep sweep is broad
+// exploration even when the agent only read_file's 2 cores. Counted in a
+// separate set so read/edit weight stays authoritative but breadth
+// blindness is gone.
+func (s *tunnelVisionState) recordSearched(path string) {
+	if path == "" {
+		return
+	}
+	n := normalizePath(path)
+	if strings.HasSuffix(n, ".md") {
+		return // docs never indicate code exploration breadth
+	}
+	s.searchedFiles[n] = true
+	if strings.HasSuffix(n, "_test.go") {
+		s.testFilesTouched[true] = true
 	}
 }
 
@@ -100,8 +154,17 @@ func (s *tunnelVisionState) check(iterations int) string {
 		return ""
 	}
 
-	// Don't fire if the agent has explored enough files.
-	if fileCount >= tvMinFilesForWarning {
+	// #476: search-driven breadth counts toward the exploration ceiling.
+	// If the agent has SEEN enough unique files across read+search, it is
+	// not tunnel-visioned regardless of the read-only ratio.
+	uniqueSeen := fileCount + len(s.searchedFiles)
+	if uniqueSeen >= tvMinFilesForWarning {
+		return ""
+	}
+
+	// #476: a test-fix task (agent actively editing/reading _test.go files)
+	// legitimately revolves around few files — ratio alone must not fire.
+	if s.testFilesTouched[true] && fileCount > 0 && iterations < tvMinIterations*2 {
 		return ""
 	}
 
