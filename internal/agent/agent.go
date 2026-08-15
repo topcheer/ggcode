@@ -4083,7 +4083,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			if len(tc.Arguments) > 0 {
 				_ = json.Unmarshal(tc.Arguments, &psArgs)
 			}
-			a.prematureSuccess.recordToolCall(tc.Name, psArgs)
+			a.prematureSuccess.recordToolCall(tc.Name, psArgs, result.IsError)
 			// Strategy fixation: track per-file edits and verification outcomes.
 			if strategyFixationIsMutation(tc.Name) {
 				fp := extractFilePathFromArgs(tc.Name, tc.Arguments)

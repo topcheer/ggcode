@@ -142,15 +142,24 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 			"windowsize", fmt.Sprintf("%d", p.ToX), fmt.Sprintf("%d", p.ToY))
 		return xdotoolResult(ctx, args...)
 	case "list_windows":
-		// "." matches any non-empty window name; an empty pattern is an error
-		// in some xdotool versions.
+		// "." matches any non-empty window name; an empty regex in xdotool
+		// matches EVERYTHING (every window has a title, even an empty one),
+		// which would make chained %@ tokens target all windows.
 		return xdotoolResult(ctx, "search", "--onlyvisible", "--name", ".")
-	case "focus_window":
-		return xdotoolResult(ctx, "search", "--name", p.Text, "windowactivate", "%@")
-	case "close_window":
-		return xdotoolResult(ctx, "search", "--name", p.Text, "windowclose", "%@")
-	case "minimize_window":
-		return xdotoolResult(ctx, "search", "--name", p.Text, "windowminimize", "%@")
+	case "focus_window", "close_window", "minimize_window":
+		// Guard: an empty pattern matches ALL windows and %@ applies the action
+		// to every search hit — close_window would close the entire desktop.
+		// Erroring is safer than an active-window fallback for destructive ops (#349).
+		if strings.TrimSpace(p.Text) == "" {
+			return Result{}, fmt.Errorf("%s requires 'text' (window title); refusing to run: empty pattern matches ALL windows", p.Action)
+		}
+		verb := "windowactivate"
+		if p.Action == "close_window" {
+			verb = "windowclose"
+		} else if p.Action == "minimize_window" {
+			verb = "windowminimize"
+		}
+		return xdotoolResult(ctx, "search", "--name", p.Text, verb, "%@")
 	case "maximize_window":
 		// Use the target window name when provided; fall back to the active
 		// window so we never maximize every visible window (empty pattern
@@ -177,6 +186,11 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 		}
 		return runAppResult(ctx, fields[0], fields[1:]...)
 	case "quit_app":
+		// Same guard as window ops: empty --class regex matches every window
+		// (all windows have a WM_CLASS) and %@ closes them all (#349).
+		if strings.TrimSpace(p.Text) == "" {
+			return Result{}, fmt.Errorf("quit_app requires 'text' (app name); refusing to run: empty pattern matches ALL windows")
+		}
 		return xdotoolResult(ctx, "search", "--class", p.Text, "windowclose", "%@")
 	case "list_apps":
 		return wmctrlResult(ctx, "-l")
