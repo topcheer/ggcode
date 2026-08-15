@@ -218,17 +218,24 @@ func (s *correctionSpiralState) maybeWarn(iteration int) string {
 func csClassifySeverity(output string) int {
 	low := strings.ToLower(output)
 
-	// Crash / segfault (highest)
-	if strings.Contains(low, "segfault") || strings.Contains(low, "signal") ||
-		strings.Contains(low, "core dumped") || strings.Contains(low, "fatal error") ||
-		strings.Contains(low, "goroutine") && strings.Contains(low, "panic") {
-		return sevCrash
-	}
-
-	// Test failure
+	// Test failure FIRST (#491 C): test-failure output frequently contains
+	// words that overlap crash markers ("--- FAIL: TestSignalHandler"
+	// contains "signal") — the specific fail+test/assert/expect shape is
+	// the stronger signal and must win over the crash heuristic below.
 	if strings.Contains(low, "fail") && (strings.Contains(low, "test") ||
 		strings.Contains(low, "assert") || strings.Contains(low, "expect")) {
 		return sevTest
+	}
+
+	// Crash / segfault (highest). "signal" is matched only in contextual
+	// forms (#491 C): a bare substring turned any output merely MENTIONING
+	// the word (test names, grep matches) into a crash, feeding bogus
+	// sevCrash entries into the escalation sequence.
+	if strings.Contains(low, "segfault") ||
+		strings.Contains(low, "received signal") || strings.Contains(low, "signal:") ||
+		strings.Contains(low, "core dumped") || strings.Contains(low, "fatal error") ||
+		strings.Contains(low, "goroutine") && strings.Contains(low, "panic") {
+		return sevCrash
 	}
 
 	// Runtime error (panic, nil pointer, index out of range)
@@ -292,12 +299,9 @@ func csIsEditTool(toolName string) bool {
 	}
 }
 
-// csIsVerifyTool checks if a tool runs verification commands.
-func csIsVerifyTool(toolName string) bool {
-	switch toolName {
-	case "run_command", "start_command":
-		return true
-	default:
-		return false
-	}
-}
+// csIsVerifyTool was removed (#491): tool-NAME-level verify classification
+// was the exact #350/#483/#485/#488 bug family — run_command carries
+// observational (cat/ls/git diff) and verify (go test) commands alike.
+// The production wiring now gates on command CONTENT via
+// psIsVerifyCommand(sfCommandArg(psArgs)), and start_command is excluded
+// entirely: its result reflects job startup, not the verification outcome.

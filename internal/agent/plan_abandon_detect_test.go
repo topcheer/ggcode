@@ -96,7 +96,7 @@ func TestPlanAbandonDetection(t *testing.T) {
 		"3. Then, I'll update all callers\n" +
 		"4. Finally, I'll run the tests to verify"
 
-	hint := a.maybeWarnPlanAbandon(planText)
+	hint := a.maybeWarnPlanAbandon(planText, nil)
 	if hint != "" {
 		t.Errorf("Expected no warning on plan declaration, got: %s", hint)
 	}
@@ -104,7 +104,7 @@ func TestPlanAbandonDetection(t *testing.T) {
 	// Iteration 2: agent claims completion without evidence of executing all steps.
 	completionText := "The task is now complete. The fix has been applied."
 
-	hint = a.maybeWarnPlanAbandon(completionText)
+	hint = a.maybeWarnPlanAbandon(completionText, nil)
 	if hint == "" {
 		t.Fatal("Expected plan abandonment warning, got empty string")
 	}
@@ -124,11 +124,11 @@ func TestPlanAbandonNoCompletion(t *testing.T) {
 	a := &Agent{planAbandon: newPlanAbandonState()}
 
 	planText := "Plan:\n1. I'll read the file\n2. I'll fix the bug\n3. I'll run tests"
-	a.maybeWarnPlanAbandon(planText)
+	a.maybeWarnPlanAbandon(planText, nil)
 
 	// Next iteration: no completion signal.
 	workText := "I've read the file and I'm working on the fix now."
-	hint := a.maybeWarnPlanAbandon(workText)
+	hint := a.maybeWarnPlanAbandon(workText, nil)
 	if hint != "" {
 		t.Errorf("Expected no warning without completion signal, got: %s", hint)
 	}
@@ -140,7 +140,7 @@ func TestPlanAbandonSameIterationCompletion(t *testing.T) {
 	// Plan and completion in the same text - should not trigger because
 	// the plan hasn't had time to be abandoned yet.
 	text := "Plan:\n1. I'll read the file\n2. I'll fix the bug\n3. I'll run tests\n\nThe task is now complete."
-	hint := a.maybeWarnPlanAbandon(text)
+	hint := a.maybeWarnPlanAbandon(text, nil)
 	if hint != "" {
 		t.Errorf("Expected no warning when plan and completion in same iteration, got: %s", hint)
 	}
@@ -151,10 +151,10 @@ func TestPlanAbandonTooFewSteps(t *testing.T) {
 
 	// Only 2 steps - below threshold of 3.
 	planText := "Plan:\n1. I'll read the file\n2. I'll fix the bug"
-	a.maybeWarnPlanAbandon(planText)
+	a.maybeWarnPlanAbandon(planText, nil)
 
 	completionText := "The task is complete."
-	hint := a.maybeWarnPlanAbandon(completionText)
+	hint := a.maybeWarnPlanAbandon(completionText, nil)
 	if hint != "" {
 		t.Errorf("Expected no warning for <3 plan steps, got: %s", hint)
 	}
@@ -166,11 +166,11 @@ func TestPlanAbandonMaxWarnings(t *testing.T) {
 	for round := 0; round < 3; round++ {
 		// Declare plan.
 		planText := "Plan:\n1. I'll read the file\n2. I'll fix the bug\n3. I'll run tests"
-		a.maybeWarnPlanAbandon(planText)
+		a.maybeWarnPlanAbandon(planText, nil)
 
 		// Claim completion.
 		completionText := "The task is complete."
-		hint := a.maybeWarnPlanAbandon(completionText)
+		hint := a.maybeWarnPlanAbandon(completionText, nil)
 
 		if round < planAbandonMaxWarnings {
 			if hint == "" {
@@ -189,7 +189,7 @@ func TestPlanAbandonReset(t *testing.T) {
 
 	// Set up a plan.
 	planText := "Plan:\n1. I'll read the file\n2. I'll fix the bug\n3. I'll run tests"
-	a.maybeWarnPlanAbandon(planText)
+	a.maybeWarnPlanAbandon(planText, nil)
 
 	if len(a.planAbandon.declaredSteps) != 3 {
 		t.Fatalf("Expected 3 declared steps, got %d", len(a.planAbandon.declaredSteps))

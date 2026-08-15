@@ -190,14 +190,10 @@ func TestCSIsEditTool(t *testing.T) {
 	}
 }
 
-func TestCSIsVerifyTool(t *testing.T) {
-	if !csIsVerifyTool("run_command") {
-		t.Error("run_command should be a verify tool")
-	}
-	if csIsVerifyTool("edit_file") {
-		t.Error("edit_file should not be a verify tool")
-	}
-}
+// TestCSIsVerifyTool was removed with csIsVerifyTool (#491): verify
+// classification now happens on command CONTENT in the agent.go wiring
+// (run_command + psIsVerifyCommand), never on tool name alone. See
+// TestCorrectionSpiral_WiringGateShape in detector_shell_channel_test.go.
 
 func TestCorrectionSpiral_SequenceCapped(t *testing.T) {
 	s := newCorrectionSpiralState()

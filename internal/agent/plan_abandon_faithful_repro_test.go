@@ -21,7 +21,7 @@ func TestPlanAbandonFaithfulExecutionFalsePositive(t *testing.T) {
 		"1. I'll read the auth module\n" +
 		"2. Next, I'll fix the token refresh logic\n" +
 		"3. Finally, I'll run the tests to verify"
-	if hint := a.maybeWarnPlanAbandon(plan); hint != "" {
+	if hint := a.maybeWarnPlanAbandon(plan, nil); hint != "" {
 		t.Fatalf("expected no warning on plan declaration, got: %s", hint)
 	}
 
@@ -33,18 +33,35 @@ func TestPlanAbandonFaithfulExecutionFalsePositive(t *testing.T) {
 		"I ran the test suite: all 12 tests pass.",
 	}
 	for i, txt := range execution {
-		if hint := a.maybeWarnPlanAbandon(txt); hint != "" {
+		if hint := a.maybeWarnPlanAbandon(txt, nil); hint != "" {
 			t.Fatalf("turn %d: unexpected warning during execution: %s", i+2, hint)
 		}
 	}
 
-	// Turn 5: legitimate completion claim AFTER all steps executed.
-	hint := a.maybeWarnPlanAbandon("The task is now complete.")
+	// Turn 5: legitimate completion claim AFTER all steps executed, WITH
+	// matching execution evidence (files edited + commands run). Post-#490
+	// fix: the execution-evidence gate must suppress the warning.
+	evidence := &RunStats{
+		FilesEdited: []string{"internal/auth/token.go", "internal/auth/callers.go"},
+		CommandsRun: []string{"go test ./internal/auth/..."},
+	}
+	hint := a.maybeWarnPlanAbandon("The task is now complete.", evidence)
+	if hint != "" {
+		t.Fatalf("false positive on faithful completion (#490): warning must be suppressed with matching execution evidence, got: %s", hint)
+	}
+
+	// Contrast: the SAME declared plan with ZERO execution evidence (the
+	// declare → claim-done-without-doing shape) must still warn.
+	b := &Agent{planAbandon: newPlanAbandonState()}
+	if h := b.maybeWarnPlanAbandon(plan, nil); h != "" {
+		t.Fatalf("plan declaration must not warn, got: %s", h)
+	}
+	emptyStats := &RunStats{}
+	hint = b.maybeWarnPlanAbandon("The task is now complete.", emptyStats)
 	if hint == "" {
-		t.Fatal("bug not reproduced: expected the false-positive warning on faithful completion, got none")
+		t.Fatal("true abandonment (declared edit+run steps, zero evidence) must still trigger")
 	}
 	if !strings.Contains(hint, "[plan-abandon]") {
 		t.Fatalf("expected [plan-abandon] tag in warning, got: %s", hint)
 	}
-	t.Logf("false positive confirmed on fully-executed plan: %s", hint)
 }

@@ -2399,11 +2399,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				})
 			}
 			// Plan abandonment detector: tracks multi-step plans declared by
-			// the agent across iterations. If a completion claim appears after
-			// 3+ plan steps were declared in a prior turn, inject guidance to
-			// verify all steps were actually executed. Prevents half-finished
-			// work from being shipped as "done".
-			if planHint := a.maybeWarnPlanAbandon(assistantText); planHint != "" {
+			// the agent across iterations. If a completion claim arrives after
+			// 3+ plan steps were declared AND execution evidence is missing
+			// (#490: a declared edit/run step category with zero matching
+			// FilesEdited/CommandsRun evidence), inject guidance.
+			if planHint := a.maybeWarnPlanAbandon(assistantText, runStats); planHint != "" {
 				debug.Log("agent", "Iteration %d: plan abandonment detector triggered (declared %d steps)", i+1, len(a.planAbandon.declaredSteps))
 				a.contextManager.Add(provider.Message{
 					Role: "user",
@@ -2948,7 +2948,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.toolCallBudget.record()
 			a.toolThermal.recordToolCall(tc.Name)
 			a.iterPressure.recordToolCall(tc.Name, i+1)
-			a.momentumLoss.recordToolCall(tc.Name)
+			a.momentumLoss.recordToolCall(tc.Name, tc.Arguments)
 			extractPathsFromToolCall(tc.Name, tc.Arguments, runStats)
 			// Check for consecutive duplicate tool calls (loop detection).
 			// If detected, inject a guidance message into the tool result.
@@ -4012,20 +4012,26 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				}
 			}
 			// Correction spiral: track edits and verify results to detect
-			// error severity escalation across fix attempts.
+			// error severity escalation across fix attempts. Only genuine
+			// verification commands feed the sequence (#491): a successful
+			// cat/ls between edit and build used to break the correction
+			// chain (detector permanently blind) and failed exploratory
+			// commands polluted the severity sequence. start_command is
+			// excluded entirely: its result reflects job startup, not the
+			// verification outcome.
+			var psArgs map[string]interface{}
+			if len(tc.Arguments) > 0 {
+				_ = json.Unmarshal(tc.Arguments, &psArgs)
+			}
 			if csIsEditTool(tc.Name) {
 				a.correctionSpiral.recordEdit(i + 1)
-			} else if csIsVerifyTool(tc.Name) {
+			} else if tc.Name == "run_command" && psIsVerifyCommand(sfCommandArg(psArgs)) {
 				a.correctionSpiral.recordVerifyResult(tc.Name, result.Content, result.IsError, i+1)
 			}
 			// Unverified mutation streak: track consecutive edits without verification.
 			a.bareEditStreak.recordToolCall(tc.Name, string(tc.Arguments))
 			// Green build illusion: track source modifications, builds, and tests.
 			// Premature success claim: track edits and verification commands.
-			var psArgs map[string]interface{}
-			if len(tc.Arguments) > 0 {
-				_ = json.Unmarshal(tc.Arguments, &psArgs)
-			}
 			a.prematureSuccess.recordToolCall(tc.Name, psArgs, result.IsError)
 			// Strategy fixation: track per-file edits and verification outcomes.
 			// Only genuine verification commands count: a successful cat/ls/

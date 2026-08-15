@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -105,15 +106,63 @@ func (m *momentumLossState) startIteration(iter int) {
 	}
 }
 
+// mlObservationalFirstWords: shell commands that only READ/explore. When a
+// run_command/start_command carries one of these, the call is exploration,
+// not productivity (#492) — late-phase shell exploration (cat/ls/git log/rg)
+// must count as consumptive exactly like its tool-channel equivalent
+// (read_file/grep), or the last-mile stall check (productive == 0) can
+// never fire on the shell channel.
+var mlObservationalFirstWords = map[string]bool{
+	"cat": true, "ls": true, "head": true, "tail": true, "pwd": true,
+	"rg": true, "grep": true, "find": true, "ag": true, "ack": true,
+	"bat": true, "less": true, "more": true, "tree": true,
+}
+
+// mlObservationalGitSubs: git subcommands that only read.
+var mlObservationalGitSubs = map[string]bool{
+	"log": true, "diff": true, "show": true, "status": true, "blame": true,
+}
+
+// mlIsObservationalCommand reports whether a shell command is pure
+// read-only exploration (conservative whitelist — demotion only, unknown
+// commands keep their productive classification, so no new false
+// positives can be introduced).
+func mlIsObservationalCommand(cmd string) bool {
+	fields := strings.Fields(cmd)
+	if len(fields) == 0 {
+		return false
+	}
+	first := strings.TrimPrefix(fields[0], "./")
+	if mlObservationalFirstWords[first] {
+		return true
+	}
+	if first == "git" && len(fields) > 1 {
+		return mlObservationalGitSubs[fields[1]]
+	}
+	return false
+}
+
 // recordToolCall classifies a tool call as productive or consumptive.
-func (m *momentumLossState) recordToolCall(toolName string) {
+// args is the raw tool-call arguments (used to classify shell commands by
+// CONTENT, #492).
+func (m *momentumLossState) recordToolCall(toolName string, args json.RawMessage) {
 	if len(m.iterations) == 0 {
 		return
 	}
 	idx := len(m.iterations) - 1
 	r := &m.iterations[idx]
 	r.total++
-	if momentumProductiveTools[toolName] {
+	productive := momentumProductiveTools[toolName]
+	if productive && (toolName == "run_command" || toolName == "start_command") {
+		// #492: shell-channel classification. Known read-only observational
+		// commands are demoted to consumptive; genuine build/test commands and
+		// unknown commands stay productive (same lesson as #350/#483/#485/#488:
+		// classify run_command by its CONTENT, never by tool name alone).
+		if mlIsObservationalCommand(extractCommandFromArgs(args)) {
+			productive = false
+		}
+	}
+	if productive {
 		r.productive++
 	} else {
 		r.consumptive++

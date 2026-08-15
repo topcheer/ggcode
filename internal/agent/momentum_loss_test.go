@@ -7,9 +7,9 @@ import (
 func TestMomentumLoss_NoFire_InsufficientHistory(t *testing.T) {
 	m := newMomentumLossState()
 	m.startIteration(1)
-	m.recordToolCall("edit_file")
+	m.recordToolCall("edit_file", nil)
 	m.startIteration(2)
-	m.recordToolCall("read_file")
+	m.recordToolCall("read_file", nil)
 
 	// Only 2 iterations -- below minimum
 	msg := m.checkMomentumLoss(10)
@@ -21,11 +21,11 @@ func TestMomentumLoss_NoFire_InsufficientHistory(t *testing.T) {
 func TestMomentumLoss_NoFire_NotInTerminalPhase(t *testing.T) {
 	m := newMomentumLossState()
 	m.startIteration(1)
-	m.recordToolCall("edit_file")
+	m.recordToolCall("edit_file", nil)
 	m.startIteration(2)
-	m.recordToolCall("read_file")
+	m.recordToolCall("read_file", nil)
 	m.startIteration(3)
-	m.recordToolCall("read_file")
+	m.recordToolCall("read_file", nil)
 
 	// Terminal phase starts at 60% of 10 = iteration 6
 	// We're at iteration 3
@@ -38,19 +38,19 @@ func TestMomentumLoss_NoFire_NotInTerminalPhase(t *testing.T) {
 func TestMomentumLoss_NoFire_NoPriorProductivity(t *testing.T) {
 	m := newMomentumLossState()
 	m.startIteration(1)
-	m.recordToolCall("read_file")
+	m.recordToolCall("read_file", nil)
 	m.startIteration(2)
-	m.recordToolCall("grep")
+	m.recordToolCall("grep", nil)
 	m.startIteration(3)
-	m.recordToolCall("read_file")
+	m.recordToolCall("read_file", nil)
 	m.startIteration(4)
-	m.recordToolCall("read_file")
+	m.recordToolCall("read_file", nil)
 	m.startIteration(5)
-	m.recordToolCall("read_file")
+	m.recordToolCall("read_file", nil)
 	m.startIteration(6)
-	m.recordToolCall("read_file")
+	m.recordToolCall("read_file", nil)
 	m.startIteration(7)
-	m.recordToolCall("read_file")
+	m.recordToolCall("read_file", nil)
 
 	// In terminal phase (7 >= 6) but no prior productive work
 	msg := m.checkMomentumLoss(10)
@@ -63,18 +63,18 @@ func TestMomentumLoss_Fires_OnStallAfterProductivity(t *testing.T) {
 	m := newMomentumLossState()
 	// Early: productive
 	m.startIteration(1)
-	m.recordToolCall("edit_file")
-	m.recordToolCall("write_file")
+	m.recordToolCall("edit_file", nil)
+	m.recordToolCall("write_file", nil)
 	// Mid: productive
 	m.startIteration(2)
-	m.recordToolCall("run_command")
+	m.recordToolCall("run_command", nil)
 	// Terminal: all read-only
 	m.startIteration(7)
-	m.recordToolCall("read_file")
-	m.recordToolCall("grep")
+	m.recordToolCall("read_file", nil)
+	m.recordToolCall("grep", nil)
 	m.startIteration(8)
-	m.recordToolCall("search_files")
-	m.recordToolCall("read_file")
+	m.recordToolCall("search_files", nil)
+	m.recordToolCall("read_file", nil)
 
 	msg := m.checkMomentumLoss(10)
 	if msg == "" {
@@ -88,11 +88,11 @@ func TestMomentumLoss_Fires_OnStallAfterProductivity(t *testing.T) {
 func TestMomentumLoss_NoFire_ProductivityContinues(t *testing.T) {
 	m := newMomentumLossState()
 	m.startIteration(1)
-	m.recordToolCall("edit_file")
+	m.recordToolCall("edit_file", nil)
 	m.startIteration(7)
-	m.recordToolCall("edit_file")
+	m.recordToolCall("edit_file", nil)
 	m.startIteration(8)
-	m.recordToolCall("read_file")
+	m.recordToolCall("read_file", nil)
 
 	// Only 1 stall iteration (need 2)
 	msg := m.checkMomentumLoss(10)
@@ -104,7 +104,7 @@ func TestMomentumLoss_NoFire_ProductivityContinues(t *testing.T) {
 func TestMomentumLoss_NoFire_NoRecentActivity(t *testing.T) {
 	m := newMomentumLossState()
 	m.startIteration(1)
-	m.recordToolCall("edit_file")
+	m.recordToolCall("edit_file", nil)
 	// Iterations with no tool calls at all -- agent is done
 	m.startIteration(7)
 	m.startIteration(8)
@@ -120,11 +120,11 @@ func TestMomentumLoss_FiresOnce(t *testing.T) {
 	m.fired = true
 
 	m.startIteration(1)
-	m.recordToolCall("edit_file")
+	m.recordToolCall("edit_file", nil)
 	m.startIteration(7)
-	m.recordToolCall("read_file")
+	m.recordToolCall("read_file", nil)
 	m.startIteration(8)
-	m.recordToolCall("read_file")
+	m.recordToolCall("read_file", nil)
 
 	msg := m.checkMomentumLoss(10)
 	if msg != "" {
@@ -162,7 +162,7 @@ func TestMomentumLoss_StartIteration_Idempotent(t *testing.T) {
 func TestMomentumLoss_RecordToolCall_NoIterations(t *testing.T) {
 	m := newMomentumLossState()
 	// Should not panic
-	m.recordToolCall("edit_file")
+	m.recordToolCall("edit_file", nil)
 }
 
 func TestIsMomentumProductiveTool(t *testing.T) {

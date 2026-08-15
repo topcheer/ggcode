@@ -79,6 +79,14 @@ var planFutureVerbRe = regexp.MustCompile(`(?i)(?:i(?:'ll|\s+will|\s+won't)(?:\s
 // its work is finished.
 var planCompletionRe = regexp.MustCompile(`(?i)(?:^|[\n.])\s*(?:the\s+)?(?:task|work|fix|change|update|implementation|feature|bug)\s+(?:(?:is|has\s+been)\s+)?(?:now\s+)?(?:done|complete|finished|ready|applied|implemented|resolved)|^done[.!]|all\s+done|finished\s+(?:the\s+)?(?:task|work|fix|implementation)|that\s+(?:should\s+\w*\s*it|wraps?\s+up|completes?)|this\s+completes`)
 
+// planStepEditVerbRe detects edit-class verbs in a declared step — these
+// steps are verifiable against RunStats.FilesEdited (#490).
+var planStepEditVerbRe = regexp.MustCompile(`(?i)\b(?:fix(?:es|ed)?|updat(?:e|es|ed)|cre(?:ate|ates|ated)|add(?:s|ed)?|remov(?:e|es|ed)|modif(?:y|ies|ied)|writ(?:e|es|ing)|implement(?:s|ed)?|refactor(?:s|ed)?|renam(?:e|es|ed)|delet(?:e|es|ed)|patch(?:es|ed)?)\b`)
+
+// planStepRunVerbRe detects run/verify-class verbs in a declared step —
+// these are verifiable against RunStats.CommandsRun (#490).
+var planStepRunVerbRe = regexp.MustCompile(`(?i)\b(?:run(?:s|ning)?|ra\b|ran\b|test(?:s|ed|ing)?|verif(?:y|ies|ied)|build(?:s|ing)?|built\b|buil[dt]|check(?:s|ed|ing)?|execut(?:e|es|ed))\b`)
+
 // planStepExcerpt extracts a short excerpt from a plan step line.
 func planStepExcerpt(line string) string {
 	line = strings.TrimSpace(line)
@@ -150,12 +158,55 @@ func (s *planAbandonState) reset() {
 	s.curIter = 0
 }
 
+// planHasExecutionGap reports whether the declared steps show a MISSING
+// execution-evidence channel (#490). The completion claim is only suspicious
+// when a declared step CATEGORY has zero matching evidence:
+//   - an edit-class step was declared but no files were ever edited, or
+//   - a run-class step was declared but no commands were ever run.
+//
+// Steps whose category has evidence, and steps with no evidence channel at
+// all (pure read steps), do not contribute a gap — the detector stays
+// conservative in the false-positive direction. Its documented contract is
+// to distinguish abandonment from FAITHFUL completion, which was previously
+// indistinguishable (every multi-step task's completion shape was in the
+// trigger surface).
+//
+// A nil runStats (no evidence available) is treated as a gap: the declare →
+// zero-activity → claim-done shape must still warn.
+func planHasExecutionGap(steps []string, rs *RunStats) bool {
+	if rs == nil {
+		return true
+	}
+	hasEditStep := false
+	hasRunStep := false
+	for _, stp := range steps {
+		if planStepEditVerbRe.MatchString(stp) {
+			hasEditStep = true
+		}
+		if planStepRunVerbRe.MatchString(stp) {
+			hasRunStep = true
+		}
+	}
+	if !hasEditStep && !hasRunStep {
+		// Pure read/inspect steps: no evidence channel exists for them.
+		return false
+	}
+	gap := false
+	if hasEditStep && len(rs.FilesEdited) == 0 {
+		gap = true
+	}
+	if hasRunStep && len(rs.CommandsRun) == 0 {
+		gap = true
+	}
+	return gap
+}
+
 // maybeWarnPlanAbandon checks assistant text for the plan-abandonment pattern:
 // plan steps were declared in a prior iteration, and a completion signal
 // appears without evidence that all steps were executed.
 //
 // Returns a guidance message if the pattern is detected, empty string otherwise.
-func (a *Agent) maybeWarnPlanAbandon(assistantText string) string {
+func (a *Agent) maybeWarnPlanAbandon(assistantText string, runStats *RunStats) string {
 	if a.planAbandon == nil {
 		return ""
 	}
@@ -187,6 +238,16 @@ func (a *Agent) maybeWarnPlanAbandon(assistantText string) string {
 
 	// Check for completion signal.
 	if !hasCompletionSignal(assistantText) {
+		return ""
+	}
+
+	// Execution-evidence gate (#490): a completion claim after a declared
+	// plan is only suspicious when a declared step category (edit / run)
+	// shows zero matching execution evidence. A faithful multi-step run
+	// that edited files and ran commands must NOT trigger — previously the
+	// trigger surface was byte-identical for faithful completion and true
+	// abandonment (≈100% false-positive rate on multi-step tasks).
+	if !planHasExecutionGap(s.declaredSteps, runStats) {
 		return ""
 	}
 
