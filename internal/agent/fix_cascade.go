@@ -38,6 +38,7 @@ package agent
 
 import (
 	"strconv"
+	"strings"
 
 	"github.com/topcheer/ggcode/internal/debug"
 )
@@ -54,9 +55,20 @@ var strictVerifyCommands = map[string]bool{
 	"golangci-lint": true, "eslint": true, "ruff": true,
 }
 
-// isStrictVerifyCommand reports whether cmd is in the strict verify set.
+// isStrictVerifyCommand reports whether cmd starts with one of the strict
+// verify commands (#469) — prefix semantics mirror isVerifyCommand so
+// argument suffixes ("go test ./... -run X") still match.
 func isStrictVerifyCommand(cmd string) bool {
-	return strictVerifyCommands[cmd]
+	cmdLower := strings.ToLower(strings.TrimSpace(cmd))
+	if cmdLower == "" {
+		return false
+	}
+	for prefix := range strictVerifyCommands {
+		if strings.HasPrefix(cmdLower, prefix+" ") || cmdLower == prefix {
+			return true
+		}
+	}
+	return false
 }
 
 // fixCascadeCheckCommand is the Agent-level wrapper that checks whether a
