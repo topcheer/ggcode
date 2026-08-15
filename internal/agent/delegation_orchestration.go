@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -105,14 +106,33 @@ type delegationState struct {
 }
 
 // delegationEntry tracks a single spawned delegation awaiting result consumption.
+// ID namespace note (#348): delegation records are keyed by the provider
+// tool-call ID, but the IDs surfaced in result-check tool arguments/results
+// (agent_id, task_id, ...) live in a DIFFERENT namespace — the ID parsed from
+// the delegation tool's own result content (e.g. "Sub-agent spawned with ID:
+// sa-9"). resultID below bridges the two namespaces. Matching is exact
+// equality only: bidirectional substring matching and task-summary matching
+// false-positived on unrelated tools sharing common words.
 type delegationEntry struct {
-	id           string // tool call ID or synthetic ID
+	id           string // tool call ID or synthetic ID (map key)
+	resultID     string // agent/task ID parsed from the delegation tool's result
 	toolName     string // which delegation tool created it
 	taskSummary  string // truncated task description
 	iteration    int    // iteration when spawned
 	lastChecked  int    // last iteration result was checked
 	creationTime time.Time
 }
+
+// Gate activation flags (#345/#348 decision): only the over-delegation gate
+// is active. The orphan gate depended on cross-namespace ID matching that
+// never fired in production (false-positive noise class), and the serial gate
+// was not part of the activation decision. Both stay dormant — the detection
+// logic is kept (and fixed) behind these flags so it can be re-enabled after
+// production validation, but it no longer injects guidance unconditionally.
+const (
+	delegationOrphanGateEnabled = false
+	delegationSerialGateEnabled = false
+)
 
 const (
 	// orphanDelegationThreshold: warn after this many unchecked iterations.
@@ -143,7 +163,10 @@ func newDelegationState() *delegationState {
 }
 
 // recordDelegationCall tracks a new delegation (spawn_agent, teammate_spawn, etc.).
-func (d *delegationState) recordDelegationCall(toolID, toolName, taskSummary string, iteration int) {
+// toolID is the provider tool-call ID; resultContent is the delegation tool's
+// own result text, from which the returned agent/task ID (e.g. "sa-9") is
+// parsed — that is the namespace result-check tools (wait_agent, ...) address.
+func (d *delegationState) recordDelegationCall(toolID, toolName, taskSummary, resultContent string, iteration int) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -161,6 +184,7 @@ func (d *delegationState) recordDelegationCall(toolID, toolName, taskSummary str
 		}
 		d.activeDelegations[synID] = &delegationEntry{
 			id:           synID,
+			resultID:     parseDelegationResultID(resultContent),
 			toolName:     toolName,
 			taskSummary:  truncateDelSummary(taskSummary),
 			iteration:    iteration,
@@ -205,16 +229,37 @@ func (d *delegationState) recordResultCheck(toolName string, args json.RawMessag
 			del.lastChecked = iteration
 			continue
 		}
-		// Fall back to the result content: a wait that returns output naming a
-		// delegation id counts as having consumed that delegation's result.
-		if resultContent != "" && strings.Contains(resultContent, del.id) {
+		// Fall back to the result content: a wait that returns output naming the
+		// delegation's agent/task ID counts as having consumed its result.
+		if resultContent != "" && ((del.resultID != "" && strings.Contains(resultContent, del.resultID)) || strings.Contains(resultContent, del.id)) {
 			del.lastChecked = iteration
 		}
 	}
 }
 
+// delegationResultIDRe matches the agent/task ID surfaced in delegation tool
+// results, e.g. "Sub-agent spawned with ID: sa-9" (spawn_agent) or
+// "Agent started with ID: agent-3" (use_namedagent).
+var delegationResultIDRe = regexp.MustCompile(`(?i)\bID:\s*([A-Za-z0-9][A-Za-z0-9._-]*)`)
+
+// parseDelegationResultID extracts the returned agent/task ID from a
+// delegation tool's result text. Returns "" when no ID-shaped token is found.
+func parseDelegationResultID(content string) string {
+	if content == "" {
+		return ""
+	}
+	m := delegationResultIDRe.FindStringSubmatch(content)
+	if len(m) < 2 {
+		return ""
+	}
+	return m[1]
+}
+
 // extractDelegationTarget pulls the addressee identifier out of a result-check
-// tool's arguments (agent_id, task_id, teammate_id, to, target, ...).
+// tool's arguments (agent_id, task_id, teammate_id, ...). Only dedicated ID
+// fields are considered — generic keys like "name"/"agent" matched unrelated
+// tools (e.g. read_command_output {"name":"build"}) and reset foreign
+// orphan timers (#348).
 func extractDelegationTarget(args json.RawMessage) string {
 	if len(args) == 0 {
 		return ""
@@ -223,7 +268,7 @@ func extractDelegationTarget(args json.RawMessage) string {
 	if err := json.Unmarshal(args, &m); err != nil {
 		return ""
 	}
-	for _, field := range []string{"agent_id", "task_id", "teammate_id", "job_id", "id", "to", "target", "agent", "name"} {
+	for _, field := range []string{"agent_id", "task_id", "teammate_id", "job_id", "id", "to", "target"} {
 		if v, ok := m[field]; ok {
 			if s, ok := v.(string); ok && s != "" {
 				return s
@@ -234,16 +279,17 @@ func extractDelegationTarget(args json.RawMessage) string {
 }
 
 // delegationTargetMatches reports whether a delegation entry is the one
-// addressed by the given target identifier (exact id, id substring overlap,
-// or the target appearing in the task summary).
+// addressed by the given target identifier. Exact equality on the delegation's
+// IDs only (tool-call ID or parsed result ID) — substring overlap and
+// task-summary matching produced cross-delegation false clears (#348).
 func delegationTargetMatches(del *delegationEntry, target string) bool {
-	if del.id == target {
+	if target == "" {
+		return false
+	}
+	if del.resultID != "" && del.resultID == target {
 		return true
 	}
-	if strings.Contains(del.id, target) || strings.Contains(target, del.id) {
-		return true
-	}
-	return target != "" && strings.Contains(del.taskSummary, target)
+	return del.id == target
 }
 
 // recordToolCallCount increments the total tool call counter for ratio tracking.

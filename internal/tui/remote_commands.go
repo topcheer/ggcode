@@ -11,6 +11,39 @@ import (
 	"github.com/topcheer/ggcode/internal/im"
 )
 
+const (
+	// restartFallbackTimeout bounds how long an armed agent-requested restart
+	// waits for the current turn to finish before force-restarting (#347).
+	restartFallbackTimeout = 30 * time.Second
+)
+
+// armRestartMsg arms a session-preserving restart requested by the LLM
+// restart tool (#347). Unlike remoteRestartMsg (IM /restart), it defers the
+// quit until the agent turn completes so sibling tool results and trailing
+// assistant text are persisted.
+type armRestartMsg struct {
+	debug bool
+}
+
+// restartFallbackMsg fires after restartFallbackTimeout when an armed
+// restart is still waiting for the turn to finish.
+type restartFallbackMsg struct{}
+
+// firePendingRestartCmd executes the armed restart via the same proven
+// remoteRestartMsg path (quit flags → shutdownAll → tea.Quit → execRestart).
+func firePendingRestartCmd() tea.Cmd {
+	return func() tea.Msg {
+		return remoteRestartMsg{}
+	}
+}
+
+// armRestartFallbackCmd schedules the 30s force-restart fallback.
+func armRestartFallbackCmd() tea.Cmd {
+	return tea.Tick(restartFallbackTimeout, func(time.Time) tea.Msg {
+		return restartFallbackMsg{}
+	})
+}
+
 func (m *Model) ExecuteRemoteSlashCommand(text string) (string, bool) {
 	if result := im.ExecuteExtendedIMSlashCommand(im.ExtendedIMSlashOptions{
 		Manager:     m.imManager,

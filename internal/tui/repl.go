@@ -852,10 +852,12 @@ func (r *REPL) SetPlanModeTools(tools *tool.Registry) {
 
 	// Inject the restart requester so the LLM restart tool reuses the
 	// /restart machinery (session-preserving exec restart). The requester
-	// only ARMS a pending restart via program.Send (never mutates Model
-	// directly — Bubble Tea models are value-copied, a direct write from
-	// the tool goroutine lands on a stale copy). firePendingRestart in
-	// handleDoneMsg fires after the turn's tool results are persisted.
+	// ARMS a pending restart via program.Send (never mutates Model directly —
+	// Bubble Tea models are value-copied, a direct write from the tool
+	// goroutine lands on a stale copy). armRestartMsg handling in model_update
+	// defers the quit until the current agent turn finishes (sibling tool
+	// results and trailing assistant text are persisted first), with a timeout
+	// fallback (#347).
 	if rt, ok := tools.Get("restart"); ok {
 		if rtt, ok := rt.(*tool.RestartTool); ok {
 			rtt.Requester = &replRestartRequester{repl: r}
@@ -865,30 +867,28 @@ func (r *REPL) SetPlanModeTools(tools *tool.Registry) {
 
 // replRestartRequester adapts the restart tool to the SAME proven path used
 // by IM /restart (QQ/Telegram/etc) and the TUI /restart slash command:
-// program.Send(remoteRestartMsg{}) → case remoteRestartMsg → quit flags →
-// tea.Quit → Run() returns → execRestart (session-preserving execve).
+// program.Send(...) → quit flags → tea.Quit → Run() returns → execRestart
+// (session-preserving execve).
 //
-// The 1-second delay mirrors scheduleRemoteRestart: the tool result is
-// persisted SYNCHRONOUSLY at Add() time (AppendMessageToDisk) inside the
-// agent loop — before this goroutine even runs — so by the time the quit
-// fires, the session JSONL already contains the tool_use/tool_result pair.
-// No doneMsg/agentDoneMsg hook is needed; this path is immune to RunID
-// guards and turn-completion races, which is exactly why IM /restart has
-// always worked while the earlier two-phase design failed five times.
+// Turn-awareness (#347): instead of a fixed 1s timer that execs mid-turn and
+// loses sibling tool results / trailing assistant text, the requester sends
+// armRestartMsg immediately. The model then defers the actual quit until the
+// agent turn completes (handleAgentDoneMsg / handleDoneMsg fire the pending
+// restart after persistFullSessionMessages), with a 30s fallback timer that
+// force-restarts if the turn hangs.
 type replRestartRequester struct {
 	repl *REPL
 }
 
 func (rr *replRestartRequester) RequestRestart(debugMode bool) {
-	debug.Log("restart", "agent-requested restart via remoteRestartMsg (IM /restart path), firing in 1s")
+	debug.Log("restart", "agent-requested restart armed (turn-aware, fires at turn end or 30s fallback)")
 	if debugMode {
 		os.Setenv("GGCODE_DEBUG", "1")
 	}
-	// Same delay as scheduleRemoteRestart so the tool result reaches the
-	// session and the UI before the process quits.
+	// Arm the restart. The tool result is persisted synchronously in the agent
+	// loop before this goroutine runs, so arming immediately is safe.
 	go func() {
-		time.Sleep(1 * time.Second)
-		rr.repl.sendProgramMsgs(remoteRestartMsg{})
+		rr.repl.sendProgramMsgs(armRestartMsg{debug: debugMode})
 	}()
 }
 

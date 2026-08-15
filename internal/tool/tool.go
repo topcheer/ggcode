@@ -177,18 +177,32 @@ func (r *Registry) CloseAll() []error {
 	return errs
 }
 
-// ToDefinitions converts all tools to provider.ToolDefinition for the LLM.
+// ToDefinitions converts all available tools to provider.ToolDefinition for
+// the LLM. Tools implementing AvailabilityChecker with Available()==false are
+// excluded — e.g. restart before a host injects its requester (#346), so
+// hosts without restart support never advertise a guaranteed-failing tool.
 func (r *Registry) ToDefinitions() []provider.ToolDefinition {
 	tools := r.List()
-	defs := make([]provider.ToolDefinition, len(tools))
-	for i, t := range tools {
-		defs[i] = provider.ToolDefinition{
+	defs := make([]provider.ToolDefinition, 0, len(tools))
+	for _, t := range tools {
+		if ac, ok := t.(AvailabilityChecker); ok && !ac.Available() {
+			continue
+		}
+		defs = append(defs, provider.ToolDefinition{
 			Name:        t.Name(),
 			Description: t.Description(),
 			Parameters:  t.Parameters(),
-		}
+		})
 	}
 	return defs
+}
+
+// AvailabilityChecker is an optional interface a Tool may implement to
+// control whether it is advertised to the LLM. Registered-but-unavailable
+// tools remain callable via Get() (direct invocation still returns a clear
+// error) but are hidden from the tool list sent to the provider.
+type AvailabilityChecker interface {
+	Available() bool
 }
 
 // ToolNames returns the names of all registered tools.

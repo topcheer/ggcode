@@ -1981,21 +1981,32 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// anti-pattern (should batch parallelizable tasks), and over-delegation
 		// (excessive delegation ratio). Zero-LLM-cost deterministic heuristics.
 		if a.delegationOrch != nil {
-			if delOrchMsg := a.delegationOrch.maybeWarnOrphanedDelegations(i + 1); delOrchMsg != "" {
-				debug.Log("agent", "Iteration %d: delegation orphan gate injected guidance", i+1)
-				a.contextManager.Add(provider.Message{
-					Role:    "user",
-					Content: []provider.ContentBlock{{Type: "text", Text: delOrchMsg}},
-				})
-				msgs = a.contextManager.Messages()
+			// Gate activation per #345/#348 decision: only the over-delegation
+			// gate is active. The orphan gate's ID matching never fired in
+			// production (tool-call ID vs agent/task ID namespaces are
+			// disjoint, so legitimate consumption never cleared orphan timers
+			// and the gate false-positived); the serial gate was not part of
+			// the activation decision. Both detection paths are now fixed and
+			// kept dormant behind flags for re-enablement after validation.
+			if delegationOrphanGateEnabled {
+				if delOrchMsg := a.delegationOrch.maybeWarnOrphanedDelegations(i + 1); delOrchMsg != "" {
+					debug.Log("agent", "Iteration %d: delegation orphan gate injected guidance", i+1)
+					a.contextManager.Add(provider.Message{
+						Role:    "user",
+						Content: []provider.ContentBlock{{Type: "text", Text: delOrchMsg}},
+					})
+					msgs = a.contextManager.Messages()
+				}
 			}
-			if serialMsg := a.delegationOrch.maybeWarnSerialDelegation(); serialMsg != "" {
-				debug.Log("agent", "Iteration %d: serial delegation gate injected guidance", i+1)
-				a.contextManager.Add(provider.Message{
-					Role:    "user",
-					Content: []provider.ContentBlock{{Type: "text", Text: serialMsg}},
-				})
-				msgs = a.contextManager.Messages()
+			if delegationSerialGateEnabled {
+				if serialMsg := a.delegationOrch.maybeWarnSerialDelegation(); serialMsg != "" {
+					debug.Log("agent", "Iteration %d: serial delegation gate injected guidance", i+1)
+					a.contextManager.Add(provider.Message{
+						Role:    "user",
+						Content: []provider.ContentBlock{{Type: "text", Text: serialMsg}},
+					})
+					msgs = a.contextManager.Messages()
+				}
 			}
 			if overDelMsg := a.delegationOrch.maybeWarnOverDelegation(); overDelMsg != "" {
 				debug.Log("agent", "Iteration %d: over-delegation gate injected guidance", i+1)
@@ -3608,7 +3619,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			if a.delegationOrch != nil {
 				if delegationToolNames[tc.Name] {
 					taskSum := extractDelegationTaskSummary(tc.Name, tc.Arguments)
-					a.delegationOrch.recordDelegationCall(tc.ID, tc.Name, taskSum, i+1)
+					a.delegationOrch.recordDelegationCall(tc.ID, tc.Name, taskSum, result.Content, i+1)
 				} else if delegationResultTools[tc.Name] && !result.IsError {
 					// Only successful result checks count as consumption; a failed
 					// wait/task_output did not actually retrieve anything.

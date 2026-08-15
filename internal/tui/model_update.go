@@ -180,6 +180,31 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		m.publishTunnelSnapshotForCurrentSession(msg.reset)
 		return m, nil
 
+	case armRestartMsg:
+		// Agent-requested restart armed (#347): defer the quit until the current
+		// agent turn finishes so sibling tool results and trailing assistant
+		// text are persisted first. If the agent is idle (turn already done),
+		// fire immediately. A fallback timer force-restarts if the turn hangs.
+		m.pendingRestart = true
+		if msg.debug {
+			m.restartDebug = true
+		}
+		if !m.loading {
+			debug.Log("restart", "agent-requested restart: agent idle, firing now")
+			return m, tea.Batch(firePendingRestartCmd(), armRestartFallbackCmd())
+		}
+		debug.Log("restart", "agent-requested restart: agent busy, deferring to turn end (30s fallback)")
+		return m, armRestartFallbackCmd()
+
+	case restartFallbackMsg:
+		// 30s fallback: the turn never completed (hung stream, stuck tool).
+		// Force the restart so an armed restart can never wedge the process.
+		if m.pendingRestart {
+			debug.Log("restart", "agent-requested restart: turn did not finish in 30s, forcing restart")
+			return m, firePendingRestartCmd()
+		}
+		return m, nil
+
 	case remoteRestartMsg:
 		m.quitting = true
 		m.restartRequested = true

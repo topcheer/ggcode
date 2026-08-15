@@ -66,6 +66,13 @@ func (m Model) handleDoneMsg(msg doneMsg) (Model, tea.Cmd) {
 	if !wasCanceled && !wasFailed {
 		m.persistFullSessionMessages()
 	}
+	// Fire an armed agent-requested restart now that the turn's tool results
+	// and trailing text are persisted (#347). Fires for canceled/failed runs
+	// too — persistence already happened on those paths.
+	if m.pendingRestart {
+		debug.Log("restart", "turn finished (doneMsg): firing armed restart")
+		return m, firePendingRestartCmd()
+	}
 	if !wasCanceled && !wasFailed && m.pendingSubmissionCount() > 0 {
 		return m, m.submitPendingSubmissionCmd()
 	}
@@ -131,6 +138,13 @@ func (m Model) handleAgentDoneMsg(msg agentDoneMsg) (Model, tea.Cmd) {
 	if !wasCanceled && !wasFailed {
 		m.persistFullSessionMessages()
 		m.maybeRefineSessionTitle()
+	}
+	// Fire an armed agent-requested restart now that the turn's tool results
+	// and trailing text are persisted (#347). Fires for canceled/failed runs
+	// too — persistence already happened on those paths.
+	if m.pendingRestart {
+		debug.Log("restart", "turn finished (agentDoneMsg): firing armed restart")
+		return m, firePendingRestartCmd()
 	}
 	if !wasCanceled && !wasFailed && m.pendingSubmissionCount() > 0 {
 		return m, m.submitPendingSubmissionCmd()

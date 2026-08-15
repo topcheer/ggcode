@@ -51,6 +51,12 @@ func (t *RestartTool) Parameters() json.RawMessage {
 	}`)
 }
 
+// Available implements AvailabilityChecker: the restart tool is only exposed
+// to the LLM when a host has injected a RestartRequester (currently the TUI).
+// Without this, Desktop/daemon/ACP/pipe hosts advertised a tool that can only
+// fail and whose error suggested a slash command those hosts don't have (#346).
+func (t *RestartTool) Available() bool { return t.Requester != nil }
+
 func (t *RestartTool) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
 	var args struct {
 		Reason string `json:"reason"`
@@ -60,12 +66,13 @@ func (t *RestartTool) Execute(ctx context.Context, input json.RawMessage) (Resul
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
 	}
 	if t.Requester == nil {
-		return Result{IsError: true, Content: "restart is not available in this host (no restart requester injected; use the /restart slash command instead)"}, nil
+		return Result{IsError: true, Content: "restart is not available in this host — no restart requester was injected. Ask the user to restart the process manually if a restart is truly required."}, nil
 	}
 
 	debug.Log("restart", "restart tool invoked: reason=%q debug=%v", args.Reason, args.Debug)
-	// Signal the host UI. The actual exec happens after the TUI releases the
-	// terminal; the process continues serving this tool result until then.
+	// Signal the host UI. The restart is deferred until the current agent turn
+	// finishes (sibling tool results and trailing assistant text are persisted
+	// first); a timeout fallback force-restarts if the turn never ends (#347).
 	t.Requester.RequestRestart(args.Debug)
-	return Result{Content: "OK: restart armed. Fires when this turn ends; session resumes automatically."}, nil
+	return Result{Content: "OK: restart armed. The process restarts as soon as this turn finishes (with a short fallback timeout). Do NOT issue any further tool calls — end your turn now. The session resumes automatically after restart."}, nil
 }
