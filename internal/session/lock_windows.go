@@ -106,10 +106,17 @@ func IsSessionLocked(storeDir, sessionID string) bool {
 	}
 
 	// We acquired the lock — the file is stale (no process holds it).
-	// Remove the file WHILE holding the lock, then unlock and close.
-	_ = os.Remove(lockPath)
+	// #481: on Windows, os.Remove under an open handle ALWAYS fails with
+	// ERROR_SHARING_VIOLATION — Go's syscall.Open hardcodes sharemode
+	// FILE_SHARE_READ|WRITE (no DELETE), and os.Remove uses plain
+	// DeleteFileW. The unix-ported order (remove-while-holding) is
+	// impossible here. Match Release()'s proven order instead: unlock,
+	// close, THEN remove — and log failures instead of swallowing them.
 	unlockFileEx(syscall.Handle(f.Fd()), 1, 0)
 	f.Close()
+	if err := os.Remove(lockPath); err != nil {
+		debug.Log("session", "stale-lock cleanup: remove %s failed: %v", lockPath, err)
+	}
 	return false
 }
 

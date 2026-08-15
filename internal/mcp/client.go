@@ -531,7 +531,7 @@ func (c *Client) sendRequestUnlocked(req Request, ctx context.Context) (*Respons
 		return c.sendHTTP(ctx, req)
 	default: // stdio
 		c.mu.Lock()
-		if err := c.writeMessage(req); err != nil {
+		if err := c.writeMessageUnlocked(req); err != nil {
 			c.mu.Unlock()
 			return nil, fmt.Errorf("mcp[%s]: write message: %w", c.name, err)
 		}
@@ -564,7 +564,7 @@ func (c *Client) send(msg interface{}, ctx context.Context) (*Response, error) {
 		req, _ := msg.(Request)
 		return c.sendWSUnlocked(ctx, req)
 	case "", "stdio":
-		if err := c.writeMessage(msg); err != nil {
+		if err := c.writeMessageUnlocked(msg); err != nil {
 			return nil, fmt.Errorf("mcp[%s]: write message: %w", c.name, err)
 		}
 		switch msg.(type) {
@@ -633,7 +633,19 @@ func (c *Client) readResponseWithCancel(ctx context.Context, reqID *ID) (*Respon
 	}
 }
 
+// writeMessage serializes the write under c.mu (#480) — all stdin
+// writers (request sends AND server-request responses from the read
+// loop) must go through this, because POSIX write atomicity stops at
+// PIPE_BUF (512B macOS) and interleaved large frames corrupt NDJSON.
 func (c *Client) writeMessage(msg interface{}) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.writeMessageUnlocked(msg)
+}
+
+// writeMessageUnlocked writes WITHOUT taking c.mu — callers MUST already
+// hold it (sendRequestUnlocked, sendNotification).
+func (c *Client) writeMessageUnlocked(msg interface{}) error {
 	data, err := json.Marshal(msg)
 	if err != nil {
 		return fmt.Errorf("mcp[%s]: marshal message: %w", c.name, err)
@@ -1000,6 +1012,11 @@ func (c *Client) respondToServerRequestWS(req *Request) error {
 	if err != nil {
 		return err
 	}
+	// #480: gorilla/websocket requires a single writer — sendWSUnlocked
+	// already serializes under c.mu ("Write under c.mu to serialize WS
+	// writes"); this server-request response path must not violate it.
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	return c.wsConn.WriteMessage(websocket.TextMessage, data)
 }
 

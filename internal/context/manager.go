@@ -96,6 +96,7 @@ type Manager struct {
 	mu                       sync.Mutex
 	messages                 []provider.Message
 	version                  int64              // incremented on every mutation, enables cheap change detection
+	nonTailMutSeq            int64              // #479: bumped ONLY by non-tail mutations (compaction/clear/truncate/mid-insert) — NOT by Add; Summarize's TOCTOU guard
 	runAdded                 []provider.Message // messages added via Add() since last StartRunTracking()
 	runAddedIDs              map[string]bool    // IDs of messages in runAdded, for dedup
 	tokens                   int
@@ -438,6 +439,7 @@ func (m *Manager) ReconcileToolCalls() bool {
 
 	m.messages = newMsgs
 	m.version++
+	m.nonTailMutSeq++
 	m.tokens = 0
 	for _, msg := range m.messages {
 		m.tokens += m.countTokens(msg)
@@ -509,6 +511,7 @@ func (m *Manager) removeOrphanToolResults() {
 	}
 	if changed {
 		m.version++
+		m.nonTailMutSeq++
 		m.tokens = 0
 		for _, msg := range m.messages {
 			m.tokens += m.countTokens(msg)
@@ -537,6 +540,7 @@ func (m *Manager) UpdateFirstSystemMessage(msg provider.Message) {
 	newTokens := m.countTokens(msg)
 	m.messages = append([]provider.Message{msg}, m.messages...)
 	m.version++
+	m.nonTailMutSeq++
 	m.tokens += newTokens
 }
 
@@ -782,6 +786,7 @@ func (m *Manager) ApplyCompactResult(snapshot CompactSnapshot, result CompactRes
 	m.injectPinnedAfterCompaction()
 
 	m.version++
+	m.nonTailMutSeq++
 	m.recalcTokens()
 	liveTokensAfter := m.tokenCountLocked()
 
@@ -952,10 +957,12 @@ func (m *Manager) Clear() {
 		sys := m.messages[0]
 		m.messages = []provider.Message{sys}
 		m.version++
+		m.nonTailMutSeq++
 		m.tokens = m.countTokens(sys)
 	} else {
 		m.messages = nil
 		m.version++
+		m.nonTailMutSeq++
 		m.tokens = 0
 	}
 	m.invalidateUsageBaselineLocked()
@@ -1018,6 +1025,21 @@ func (m *Manager) Summarize(ctx context.Context, prov provider.Provider) error {
 	stateText := m.buildPostCompactState(plan.allMsgs)
 
 	m.mu.Lock()
+	// #479 TOCTOU guard: if any NON-TAIL mutation happened during the LLM
+	// window (deletes from ReconcileToolCalls, mid-inserts, mechanical
+	// clears like CompactOldReasoningBlocks, compaction replaces — anything
+	// other than a pure tail append, which extraMsgs already rescues), this
+	// snapshot is stale. Replaying it would resurrect deleted messages,
+	// drop inserted tool_results, and undo in-place compaction (which then
+	// re-triggers the threshold — a waste loop). Mirror ApplyCompactResult's
+	// shrink guard: discard and let the next trigger re-plan from CURRENT
+	// state.
+	if m.nonTailMutSeq != plan.origVersion {
+		m.mu.Unlock()
+		debug.Log("ctx", "Summarize: non-tail mutation during LLM window (seq %d→%d), discarding stale snapshot",
+			plan.origVersion, m.nonTailMutSeq)
+		return nil
+	}
 	oldTokens := m.tokenCountLocked()
 	// Collect any messages that arrived during summarization (TOCTOU fix)
 	var extraMsgs []provider.Message
@@ -1071,6 +1093,7 @@ func (m *Manager) Summarize(ctx context.Context, prov provider.Provider) error {
 	// pinned items compressed into the summary were silently lost (#382).
 	m.injectPinnedAfterCompaction()
 	m.version++
+	m.nonTailMutSeq++
 	m.recalcTokens()
 	debug.Log("ctx", "Summarize: msgs=%d→%d oldTokens=%d newTokens=%d summaryChars=%d summaryEstimatedTokens=%d extraMsgs=%d stateTextChars=%d",
 		oldLen, len(newMsgs), oldTokens, m.tokenCountLocked(), len(summaryText), EstimateTokens(summaryText), len(extraMsgs), len(stateText))
@@ -1111,6 +1134,7 @@ func (m *Manager) TruncateOldestGroupForRetry() bool {
 	}
 	m.messages = truncated
 	m.version++
+	m.nonTailMutSeq++
 	m.recalcTokens()
 	return true
 }
@@ -1160,6 +1184,7 @@ func (m *Manager) RemoveLastAssistantGroup() string {
 	// discard the assistant response and any trailing tool messages.
 	m.messages = m.messages[:lastUserIdx+1]
 	m.version++
+	m.nonTailMutSeq++
 	m.recalcTokens()
 	debug.Log("ctx", "RemoveLastAssistantGroup: removed %d messages from index %d, remaining=%d tokens=%d",
 		len(m.messages)-lastUserIdx-1+1, lastAsstIdx, len(m.messages), m.tokenCountLocked())
@@ -1341,6 +1366,7 @@ func (m *Manager) ClearOldToolResults(keepN int) int {
 
 	before := m.tokens
 	m.version++
+	m.nonTailMutSeq++
 	m.recalcTokens()
 	freed := before - m.tokens
 	debug.Log("ctx", "ClearOldToolResults: cleared %d tool results, freed ~%d tokens (keepN=%d, total_clearable=%d, skipped_important=%d)",
@@ -1603,6 +1629,7 @@ func (m *Manager) ClearOldToolUseInputs() int {
 
 	before := m.tokens
 	m.version++
+	m.nonTailMutSeq++
 	m.recalcTokens()
 	freed := before - m.tokens
 	debug.Log("ctx", "ClearOldToolUseInputs: cleared %d tool_use inputs, freed ~%d tokens", len(targets), freed)
@@ -1696,6 +1723,7 @@ func (m *Manager) CompactOldReasoningBlocks() int {
 
 	before := m.tokens
 	m.version++
+	m.nonTailMutSeq++
 	m.recalcTokens()
 	freed := before - m.tokens
 	debug.Log("ctx", "CompactOldReasoningBlocks: compacted %d reasoning blocks, freed ~%d tokens", len(targets), freed)
@@ -1810,6 +1838,7 @@ func (m *Manager) CompactSupersededReads() int {
 
 	before := m.tokens
 	m.version++
+	m.nonTailMutSeq++
 	m.recalcTokens()
 	freed := before - m.tokens
 	debug.Log("ctx", "CompactSupersededReads: compacted %d superseded file reads, freed ~%d tokens", compacted, freed)
@@ -1958,6 +1987,13 @@ type summaryPlan struct {
 	oldMsgs    []provider.Message
 	recentMsgs []provider.Message
 	origLen    int
+	// origVersion is m.nonTailMutSeq at snapshot time (#479) — a counter
+	// bumped ONLY by non-tail mutations (compaction replaces, mechanical
+	// clears, truncations, mid/front inserts, ReconcileToolCalls edits).
+	// Plain Add (tail append) does NOT bump it, so concurrent message
+	// arrivals during the LLM window keep being rescued by extraMsgs while
+	// everything else discards the stale snapshot.
+	origVersion int64
 }
 
 type messageGroup struct {
@@ -1969,7 +2005,7 @@ func (m *Manager) buildSummaryPlan() (summaryPlan, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	plan := summaryPlan{origLen: len(m.messages)}
+	plan := summaryPlan{origLen: len(m.messages), origVersion: m.nonTailMutSeq}
 	start := 0
 	if len(m.messages) > 0 && m.messages[0].Role == "system" {
 		plan.hasSystem = true
