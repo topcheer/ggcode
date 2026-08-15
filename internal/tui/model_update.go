@@ -197,15 +197,32 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		return m, armRestartFallbackCmd()
 
 	case restartFallbackMsg:
-		// 30s fallback: the turn never completed (hung stream, stuck tool).
-		// Force the restart so an armed restart can never wedge the process.
-		if m.pendingRestart {
-			debug.Log("restart", "agent-requested restart: turn did not finish in 30s, forcing restart")
-			return m, firePendingRestartCmd()
+		// 30s stall fallback: force the restart only when the turn is NOT
+		// making progress. A tick landing while tools are legitimately still
+		// running (LLM called restart + a >30s build in the same batch) used to
+		// kill the turn mid-tool and lose unpersisted results — the exact
+		// hazard #347 was meant to prevent (#362). Recent stream/reasoning/tool
+		// activity re-arms the timer; only a genuinely stalled turn (no
+		// activity for the full fallback window) forces the quit.
+		if !m.pendingRestart {
+			return m, nil
 		}
-		return m, nil
+		if m.loading && time.Since(m.lastTurnActivityAt) < restartFallbackTimeout {
+			debug.Log("restart", "restart fallback fired but turn is active; re-arming")
+			return m, armRestartFallbackCmd()
+		}
+		debug.Log("restart", "agent-requested restart: turn stalled or finished, forcing restart")
+		return m, firePendingRestartCmd()
 
 	case remoteRestartMsg:
+		// Guard (#362): firePendingRestartCmd is an async Cmd — a user message
+		// submitted in the millisecond window after a turn ended can already
+		// have started a NEW run (m.loading=true, pendingRestart stale).
+		// Quitting then would kill the new turn.
+		if m.loading && !m.pendingRestart {
+			debug.Log("restart", "remoteRestartMsg during a new active turn; ignoring")
+			return m, nil
+		}
 		m.quitting = true
 		m.restartRequested = true
 		m.shutdownAll()

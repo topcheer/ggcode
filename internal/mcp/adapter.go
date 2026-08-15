@@ -108,12 +108,26 @@ type mcpTool struct {
 	// compaction threshold, 0.0-1.0+). When ≥0.50 the result cap shrinks to
 	// stay under the guard's corresponding limit, avoiding a second
 	// middle-cutting truncation of an already head-only result (#365).
+	// Guarded by fillMu: SetContextFill runs on the agent loop goroutine
+	// while Execute reads it on the safeExecute worker goroutine.
 	ContextFill float64
+	fillMu      sync.Mutex
 }
 
 // maxMCPResultBytes caps MCP tool results at the agent-tool layer (50KB,
 // matching web_fetch).
 const maxMCPResultBytes = 50 * 1024
+
+// SetContextFill receives the agent guard's fill ratio before each
+// execution so the result cap can shrink under context pressure (#365).
+// The agent side injects it via the fillAwareTool interface assertion
+// (agent_tool.go safeExecute) — assigning nothing here would leave the
+// fill-aware cap permanently dead code (#369).
+func (t *mcpTool) SetContextFill(fill float64) {
+	t.fillMu.Lock()
+	t.ContextFill = fill
+	t.fillMu.Unlock()
+}
 
 func (t *mcpTool) Name() string        { return t.name }
 func (t *mcpTool) Description() string { return t.desc }
@@ -177,12 +191,15 @@ func (t *mcpTool) Execute(ctx context.Context, input json.RawMessage) (tool.Resu
 	// (#365). ContextFill is the same ratio the guard uses (current tokens
 	// / compaction threshold); zero means unknown → use the full cap.
 	maxBytes := maxMCPResultBytes
+	t.fillMu.Lock()
+	fill := t.ContextFill
+	t.fillMu.Unlock()
 	switch {
-	case t.ContextFill >= 0.75:
+	case fill >= 0.75:
 		maxBytes = 9 * 1024 // under the guard's 10KB critical limit
-	case t.ContextFill >= 0.65:
+	case fill >= 0.65:
 		maxBytes = 19 * 1024 // under the guard's 20KB high limit
-	case t.ContextFill >= 0.50:
+	case fill >= 0.50:
 		maxBytes = 39 * 1024 // under the guard's 40KB moderate limit
 	}
 	if len(content) > maxBytes {
@@ -198,7 +215,7 @@ func (t *mcpTool) Execute(ctx context.Context, input json.RawMessage) (tool.Resu
 			fmt.Sprintf("\n\n[... MCP result truncated: %d bytes total, showing first %d ...]",
 				len(content), end)
 		debug.Log("mcp", "result truncated: server=%s tool=%s total=%d cap=%d fill=%.2f",
-			t.srvName, t.toolName, len(content), end, t.ContextFill)
+			t.srvName, t.toolName, len(content), end, fill)
 	}
 
 	return tool.Result{

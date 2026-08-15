@@ -586,6 +586,16 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 // forever on a tool that ignores its context parameter. The goroutine may continue
 // running in the background (we can't kill it), but the agent loop is unblocked.
 func (a *Agent) safeExecute(t tool.Tool, ctx context.Context, args json.RawMessage) (result tool.Result, err error) {
+	// Fill-aware tools (MCP adapter) shrink their own result cap to stay
+	// under the context-pressure guard's limits, keeping head-only
+	// truncation the single cut (#365, wiring fixed in #369).
+	if ft, ok := t.(interface{ SetContextFill(float64) }); ok {
+		fill := 0.0
+		if threshold := a.contextManager.AutoCompactThreshold(); threshold > 0 {
+			fill = float64(a.contextManager.TokenCount()) / float64(threshold)
+		}
+		ft.SetContextFill(fill)
+	}
 	type execResult struct {
 		result tool.Result
 		err    error

