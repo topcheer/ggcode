@@ -1,10 +1,12 @@
 package wailskit
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/lsp"
@@ -122,7 +124,17 @@ func (b *ChatBridge) InstallLSPServer(languageID, optionID string) LSPInstallRes
 		}
 	}
 	if selected == nil {
-		// Fall back to first option.
+		if optionID != "" {
+			// User explicitly picked an option that no longer exists (option
+			// list regenerated after a workspace switch, stale frontend state).
+			// Silently installing opts[0] would install the WRONG variant with
+			// Success:true — fail loudly instead (#353).
+			return LSPInstallResult{
+				Success: false,
+				Output:  fmt.Sprintf("Unknown install option %q for language %s; refresh the language list and retry", optionID, languageID),
+			}
+		}
+		// optionID empty and no Recommended flag: first option is a sane default.
 		selected = &opts[0]
 	}
 
@@ -142,11 +154,17 @@ func (b *ChatBridge) InstallLSPServer(languageID, optionID string) LSPInstallRes
 
 	debug.Log("lsp", "installing %s (%s): %s", languageID, selected.ID, cmd)
 
+	// 10-minute timeout: brew/npm/dotnet installs can hang waiting for
+	// interactive input; without a deadline the frontend Promise never
+	// resolves and the button spins forever (#353).
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
 	var c *exec.Cmd
 	if runtime.GOOS == "windows" {
-		c = exec.Command("powershell", "-NoProfile", "-Command", cmd)
+		c = exec.CommandContext(ctx, "powershell", "-NoProfile", "-Command", cmd)
 	} else {
-		c = exec.Command("sh", "-c", cmd)
+		c = exec.CommandContext(ctx, "sh", "-c", cmd)
 	}
 	c.Dir = wd
 	output, err := c.CombinedOutput()

@@ -175,10 +175,19 @@ func TestCoverageExtractVerifyScope(t *testing.T) {
 		{"go test ./internal/agent/", "internal/agent"},
 		{"go build ./internal/config", "internal/config"},
 		{"go test", "."},
-		{"npm test", "."},
+		// Project-wide opaque runners skip scope detection (#354): assuming
+		// zero coverage (".") systematically false-positived and exhausted
+		// the warning budget, muting real gaps.
+		{"npm test", ""},
+		{"make test", ""},
+		{"make verify-ci", ""},
+		{"pytest", ""},
+		{"cargo test", ""},
+		{"pytest tests/unit/test_x.py", ""}, // file arg is not a package scope (#354)
 		{"ls -la", ""},
 		{"go vet ./internal/...", "ALL"},
-		{"go test ./internal/agent/", "internal/agent"},
+		{"go test github.com/topcheer/ggcode/internal/agent", ""}, // fully-qualified path unextractable (#354)
+		{"git commit -m 'make test pass'", ""},                    // commit message is not a verify run (#354)
 	}
 	for _, c := range cases {
 		got := coverageExtractVerifyScope(c.cmd)

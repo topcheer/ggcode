@@ -267,6 +267,12 @@ func coverageExtractCommand(args string) string {
 // coverageExtractVerifyScope determines the package scope from a command string.
 // Returns "" if not a verification command or scope can't be determined.
 // Returns "ALL" for ./... scoped commands.
+//
+// Project-wide opaque runners (make/npm test/pytest/cargo test/...) return ""
+// (skip): their actual coverage is unknowable from the command text — assuming
+// zero coverage (".") systematically false-positived and exhausted the warning
+// budget, muting real gaps (#354). Only bare `go test`/`go build`/`go vet`
+// semantically mean "current directory package".
 func coverageExtractVerifyScope(cmd string) string {
 	lc := strings.ToLower(cmd)
 
@@ -275,53 +281,95 @@ func coverageExtractVerifyScope(cmd string) string {
 		return ""
 	}
 
-	// ./... means ALL packages -- no gap possible
-	if strings.Contains(lc, "./...") || strings.Contains(lc, " ./") {
-		// Check if it's truly "all packages"
-		if strings.Contains(lc, "...") {
+	// Fully-qualified import paths (github.com/...) cannot be compared to the
+	// relative package dirs we track — previously the first-"/" heuristic
+	// extracted "/topcheer/ggcode/internal/agent" which never matched (#354).
+	// Only relative ./paths are extractable.
+	if idx := strings.Index(lc, "./"); idx >= 0 {
+		if strings.Contains(lc[idx:], "...") {
 			return "ALL"
 		}
+		rest := lc[idx:]
+		if sp := strings.IndexByte(rest, ' '); sp >= 0 {
+			rest = rest[:sp]
+		}
+		rest = strings.TrimRight(rest, "/")
+		rest = strings.TrimPrefix(rest, "./")
+		if len(rest) > 2 { // meaningful path
+			return rest
+		}
+		return "ALL" // "./" alone
 	}
 
-	// Extract specific package path like ./internal/agent/ or ./internal/agent
-	for _, marker := range []string{"./", "/"} {
-		if idx := strings.Index(lc, marker); idx >= 0 {
-			rest := lc[idx:]
-			// Trim at first space (end of package path)
-			if sp := strings.IndexByte(rest, ' '); sp >= 0 {
-				rest = rest[:sp]
-			}
-			rest = strings.TrimRight(rest, "/")
-			rest = strings.TrimPrefix(rest, "./")
-			if len(rest) > 2 { // meaningful path
-				return rest
-			}
+	// Non-Go runners with file args (pytest tests/unit/test_x.py): the .py
+	// path is a file, not a package scope — skip rather than mis-scope (#354).
+	fields := strings.Fields(lc)
+	for _, f := range fields {
+		if strings.HasSuffix(f, ".py") || strings.HasSuffix(f, ".js") || strings.HasSuffix(f, ".ts") {
+			return ""
 		}
 	}
 
-	// Bare "go test" or "go build" without path -- covers current dir only
-	if strings.Contains(lc, "go test") || strings.Contains(lc, "go build") ||
-		strings.Contains(lc, "go vet") || strings.Contains(lc, "npm test") ||
-		strings.Contains(lc, "npm run build") || strings.Contains(lc, "make") {
-		return "."
+	// Bare Go commands without a path cover the current directory package only.
+	// Word-lexical match (first token) so "git commit -m 'make test pass'"
+	// does not count as a verification run (#354).
+	if len(fields) > 0 {
+		switch fields[0] {
+		case "go":
+			if len(fields) >= 2 {
+				switch fields[1] {
+				case "test", "build", "vet":
+					// Fully-qualified import path args (github.com/x/y) cannot
+					// be mapped to relative package dirs — skip (#354).
+					for _, f := range fields[2:] {
+						if strings.Contains(f, ".") && strings.Contains(f, "/") {
+							return ""
+						}
+					}
+					return "."
+				}
+			}
+		case "make", "npm", "yarn", "pnpm", "pytest", "python", "python3", "cargo", "mvn", "gradle", "./gradlew", "dotnet":
+			// Opaque project-level runner: target unknown (make target may be
+			// anything; npm script may run a watcher). Skip scope detection (#354).
+			return ""
+		}
 	}
 
 	return ""
 }
 
 // coverageIsVerifyCommand checks if the command is a build/test/lint command.
+// Lexical (token-prefix) matching: substring Contains matched inside commit
+// messages ("git commit -m 'make test pass'") and other noise (#354).
 func coverageIsVerifyCommand(lc string) bool {
-	verifyMarkers := []string{
-		"go test", "go build", "go vet", "go check",
-		"npm test", "npm run test", "npm run build", "npm run lint",
-		"yarn test", "yarn build", "yarn lint",
-		"make test", "make build", "make check", "make verify",
-		"pytest", "cargo test", "cargo build", "cargo clippy",
-		"./gradlew test", "./gradlew build", "mvn test",
+	fields := strings.Fields(lc)
+	if len(fields) == 0 {
+		return false
 	}
-	for _, m := range verifyMarkers {
-		if strings.Contains(lc, m) {
-			return true
+	first := fields[0]
+	isRunner := false
+	switch first {
+	case "go", "make", "npm", "yarn", "pnpm", "pytest", "cargo", "mvn", "gradle", "./gradlew", "dotnet", "tox", "nox":
+		isRunner = true
+	}
+	if !isRunner {
+		return false
+	}
+	// For direct invocations like "go test ..." require a verify subcommand;
+	// for "make" accept any target starting with a verify-ish word (target
+	// itself may be "verify-ci" — the marker list below still applies as a
+	// suffix check on the whole command).
+	verifyMarkers := []string{
+		"test", "build", "vet", "check", "lint", "verify", "clippy", "e2e",
+	}
+	for _, f := range fields[1:] {
+		f = strings.TrimPrefix(f, "run:") // npm/yarn "run:test"
+		f = strings.TrimSuffix(f, ";")
+		for _, m := range verifyMarkers {
+			if f == m || strings.HasPrefix(f, m+"-") || strings.HasPrefix(f, m+"_") {
+				return true
+			}
 		}
 	}
 	return false

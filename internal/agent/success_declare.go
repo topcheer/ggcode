@@ -44,19 +44,23 @@ const (
 	sdMaxWarns = 1
 )
 
-// sdDeclPhrases are explicit success/completion declarations.
+// sdDeclPhrases are explicit success/completion declarations. Word-boundary
+// safe: "all set" must not match "ball setup" / "wall setup" (#352).
 var sdDeclPhrases = []string{
 	"task is complete",
+	"task complete",
 	"task is done",
 	"all done",
 	"all set",
 	"we're done",
 	"i'm done",
 	"i am done",
+	"done",
 	"work is complete",
 	"implementation is complete",
 	"implementation is finished",
 	"the fix is ready",
+	"the fix works",
 	"changes are complete",
 	"changes are ready",
 	"everything is working",
@@ -70,7 +74,13 @@ var sdDeclPhrases = []string{
 }
 
 // sdCaveatPhrases indicate the declaration is hedged/conditional, not a
-// definitive completion claim. We skip these to avoid false positives.
+// definitive completion claim. IMPORTANT (#352): these are matched ONLY
+// within a small window around the declaration phrase — standard wrap-up
+// language elsewhere in the reply ("note that I also refactored X",
+// "however, see the caveats below") must not veto the claim. “remaining”
+// and “note that”/“however”/“next step” were previously matched against
+// the FULL text, discarding 50-80% of legitimate wrap-up declarations
+// ("All done. There are no remaining issues." self-vetoed).
 var sdCaveatPhrases = []string{
 	"once you",
 	"after you",
@@ -84,6 +94,22 @@ var sdCaveatPhrases = []string{
 	"but first",
 	"caveat",
 	"note that",
+}
+
+// sdCaveatWindow is how many characters before/after the declaration
+// phrase to search for hedging caveats (mirrors premature_success.go's
+// 40-char window precedent, slightly widened).
+const sdCaveatWindow = 50
+
+// sdNegations neutralize a caveat hit when it directly negates the hedge:
+// "no remaining issues" / "nothing remaining" are completion-affirming,
+// not hedging (#352).
+var sdNegations = []string{
+	"no remaining",
+	"nothing remaining",
+	"without remaining",
+	"no longer",
+	"none remaining",
 }
 
 // successDeclareState tracks premature success declarations.
@@ -122,12 +148,17 @@ func (s *successDeclareState) recordAssistantText(text string, iter int) {
 	}
 
 	lower := strings.ToLower(text)
-	if !sdContainsDeclaration(lower) {
+	declPhrase, declIdx := sdFindDeclaration(lower)
+	if declIdx < 0 {
 		return
 	}
 
-	// Don't count if the declaration is heavily hedged with caveats.
-	if sdHasCaveat(lower) {
+	// Caveat check is WINDOWED to the declaration phrase (#352): hedging
+	// right around the claim vetoes it; wrap-up language elsewhere in the
+	// reply does not. Full-text matching previously discarded 50-80% of
+	// legitimate declarations and permanently blinded this detector (only
+	// the first declaration is ever tracked).
+	if sdHasCaveatWindowed(lower, declIdx, declIdx+len(declPhrase)) {
 		return
 	}
 
@@ -187,17 +218,110 @@ func (s *successDeclareState) maybeWarn(currentIter int) string {
 		`If additional work was discovered after your declaration, acknowledge the gap explicitly.`
 }
 
+// sdFindDeclaration returns the first declaration phrase found and its
+// byte index in the (lowercased) text, or ("", -1) if none. "done" gets a
+// word-boundary check so "download"/"done_right" style matches are avoided.
+func sdFindDeclaration(lowerText string) (string, int) {
+	for _, phrase := range sdDeclPhrases {
+		// Short phrases that commonly appear as substrings of ordinary words
+		// ("all set" in "wall setup", bare "done" in "download") need word
+		// boundaries (#352).
+		if phrase == "done" || phrase == "all set" {
+			if idx := sdIndexWord(lowerText, phrase); idx >= 0 {
+				return phrase, idx
+			}
+			continue
+		}
+		if idx := strings.Index(lowerText, phrase); idx >= 0 {
+			return phrase, idx
+		}
+	}
+	return "", -1
+}
+
+// sdIndexWord finds word as a standalone token (word boundaries on both
+// sides); returns its index or -1.
+func sdIndexWord(lowerText, word string) int {
+	for from := 0; ; {
+		idx := strings.Index(lowerText[from:], word)
+		if idx < 0 {
+			return -1
+		}
+		i := from + idx
+		beforeOK := i == 0 || !isWordByte(lowerText[i-1])
+		afterOK := i+len(word) >= len(lowerText) || !isWordByte(lowerText[i+len(word)])
+		if beforeOK && afterOK {
+			return i
+		}
+		from = i + len(word)
+	}
+}
+
+func isWordByte(b byte) bool {
+	return b == '_' || (b >= 'a' && b <= 'z') || (b >= '0' && b <= '9')
+}
+
 // sdContainsDeclaration checks if text contains any explicit success phrase.
 func sdContainsDeclaration(lowerText string) bool {
-	for _, phrase := range sdDeclPhrases {
-		if strings.Contains(lowerText, phrase) {
-			return true
+	_, idx := sdFindDeclaration(lowerText)
+	return idx >= 0
+}
+
+// sdHasCaveatWindowed checks for hedging caveats in the local context of the
+// declaration (#352):
+//   - BEFORE the phrase: hedging conventionally precedes the claim ("we still
+//     need to write tests before this is all done") — vetoes.
+//   - AFTER the phrase but in the SAME sentence ("all done, but first we need
+//     tests") — vetoes.
+//   - AFTER a sentence boundary (./;/newline): that is standard wrap-up
+//     commentary ("All done. Note that I also refactored X.", "The task is
+//     complete. However, see the docs.") — does NOT veto.
+//   - Negated hedges ("no remaining issues") never veto.
+func sdHasCaveatWindowed(lowerText string, declStart, declEnd int) bool {
+	start := declStart - sdCaveatWindow
+	if start < 0 {
+		start = 0
+	}
+	end := declEnd + sdCaveatWindow
+	if end > len(lowerText) {
+		end = len(lowerText)
+	}
+	window := lowerText[start:end]
+	for _, caveat := range sdCaveatPhrases {
+		idx := strings.Index(window, caveat)
+		if idx < 0 {
+			continue
 		}
+		absIdx := start + idx // absolute position of the caveat in lowerText
+
+		// Negation directly before the caveat ("no remaining issues",
+		// "nothing remaining") turns the hedge into a completion affirmation.
+		negStart := absIdx - 12
+		if negStart < 0 {
+			negStart = 0
+		}
+		trimmed := strings.TrimSpace(lowerText[negStart:absIdx])
+		for _, neg := range []string{"no", "not", "nothing", "none", "without", "zero"} {
+			if strings.HasSuffix(trimmed, neg) {
+				return false
+			}
+		}
+
+		if absIdx < declStart {
+			return true // leading hedge
+		}
+		// Trailing: veto only if still in the declaration's own sentence.
+		between := lowerText[declEnd:absIdx]
+		if !strings.ContainsAny(between, ".;\n") {
+			return true // same-sentence hedge ("all done, but first ...")
+		}
+		// New-sentence wrap-up commentary: not a hedge against THIS claim.
 	}
 	return false
 }
 
-// sdHasCaveat checks if text contains hedging that makes the declaration conditional.
+// sdHasCaveat checks if the FULL text contains hedging. Retained for the
+// degenerate no-declaration case; windowed matching is what recordAssistantText uses.
 func sdHasCaveat(lowerText string) bool {
 	for _, caveat := range sdCaveatPhrases {
 		if strings.Contains(lowerText, caveat) {

@@ -206,3 +206,55 @@ func toLowerSD(s string) string {
 	}
 	return string(b)
 }
+
+// TestSuccessDeclare_WrapUpPhrasingNotVetoed (#352): standard wrap-up
+// language elsewhere in the reply must not veto a legitimate declaration.
+// Full-text caveat matching previously discarded these and permanently
+// blinded the detector (only the first declaration is tracked).
+func TestSuccessDeclare_WrapUpPhrasingNotVetoed(t *testing.T) {
+	cases := []string{
+		"All done. There are no remaining issues.",                                              // "remaining" self-veto
+		"Everything is working. Note that I also refactored the helper.",                        // "note that"
+		"The task is complete. However, see the docs for details.",                              // "however"
+		"All done. For reference, a sensible next step for you would be deploying it yourself.", // "next step" beyond trailing window
+	}
+	for _, text := range cases {
+		s := newSuccessDeclareState()
+		s.recordAssistantText(text, 0)
+		if s.declarationIter != 0 {
+			t.Errorf("wrap-up phrasing must not veto declaration %q: declarationIter=%d", text, s.declarationIter)
+		}
+	}
+}
+
+// TestSuccessDeclare_NearbyCaveatStillVetoes (#352): hedging immediately
+// adjacent to the claim still vetoes it — the window is local, not removed.
+func TestSuccessDeclare_NearbyCaveatStillVetoes(t *testing.T) {
+	s := newSuccessDeclareState()
+	s.recordAssistantText("All done, but first we need to run the tests.", 0)
+	if s.declarationIter != -1 {
+		t.Errorf("adjacent hedge must still veto: declarationIter=%d", s.declarationIter)
+	}
+}
+
+// TestSuccessDeclare_ExpandedPhrases (#352): common declaration variants
+// previously missed by the phrase table.
+func TestSuccessDeclare_ExpandedPhrases(t *testing.T) {
+	cases := []struct {
+		text    string
+		wantRec bool
+	}{
+		{"Task complete.", true},
+		{"Done!", true},
+		{"The fix works.", true},
+		{"Please review the wall setup drawing.", false}, // "all set" substring must not match
+	}
+	for _, c := range cases {
+		s := newSuccessDeclareState()
+		s.recordAssistantText(c.text, 0)
+		got := s.declarationIter == 0
+		if got != c.wantRec {
+			t.Errorf("recordAssistantText(%q) recorded=%v, want %v", c.text, got, c.wantRec)
+		}
+	}
+}

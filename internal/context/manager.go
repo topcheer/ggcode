@@ -912,9 +912,30 @@ func (m *Manager) RecordUsage(usage provider.TokenUsage) {
 	m.baselineAvailable = true
 	// Feed calibration sample: compare our estimate with actual API input tokens.
 	// Use totalInput (including cache read) for accurate calibration.
-	m.calibrator.RecordSample(m.tokens, totalInput)
+	// Pass the live composition so each ratio is calibrated only by samples
+	// that actually observed that script (#355).
+	asciiChars, cjkChars := m.compositionLocked()
+	m.calibrator.RecordSample(m.tokens, totalInput, asciiChars, cjkChars)
 	debug.Log("ctx", "RecordUsage: input=%d cache_read=%d output=%d old_baseline=%d→new_baseline=%d estimated=%d delta=%d",
 		usage.InputTokens, usage.CacheRead, usage.OutputTokens, oldBaseline, m.baselineTokens, m.tokens, m.baselineTokens-m.tokens)
+}
+
+// compositionLocked returns the ASCII/CJK character counts of all message
+// text, for composition-aware calibration (#355). Caller must hold m.mu.
+func (m *Manager) compositionLocked() (asciiChars, cjkChars int) {
+	for _, msg := range m.messages {
+		for _, b := range msg.Content {
+			for _, r := range b.Text + b.ReasoningContent + b.Output {
+				switch {
+				case r < 0x80:
+					asciiChars++
+				case r >= 0x2E80 && r <= 0x9FFF || r >= 0xAC00 && r <= 0xD7AF || r >= 0xF900 && r <= 0xFAFF || r >= 0x3040 && r <= 0x30FF:
+					cjkChars++
+				}
+			}
+		}
+	}
+	return asciiChars, cjkChars
 }
 
 func (m *Manager) Clear() {
