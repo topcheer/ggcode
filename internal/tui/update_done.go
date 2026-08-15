@@ -138,6 +138,14 @@ func (m Model) handleAgentDoneMsg(msg agentDoneMsg) (Model, tea.Cmd) {
 		m.persistFullSessionMessages()
 		m.maybeRefineSessionTitle()
 	}
+	// Fire an agent-requested restart AFTER persistence: the session now
+	// contains this turn's tool results, so the resumed agent loop won't
+	// hit a dangling tool_use. NOTE: agentDoneMsg (submit.go) is the REAL
+	// turn-completion message for agent runs — handleDoneMsg is a legacy
+	// path with no producers; hooking only there made the arming never fire.
+	if cmd := m.firePendingRestart(); cmd != nil {
+		return m, cmd
+	}
 	if !wasCanceled && !wasFailed && m.pendingSubmissionCount() > 0 {
 		return m, m.submitPendingSubmissionCmd()
 	}
