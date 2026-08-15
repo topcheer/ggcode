@@ -1,10 +1,12 @@
 package wailskit
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/mcp"
 	"github.com/topcheer/ggcode/internal/plugin"
 )
 
@@ -148,6 +150,25 @@ func ForceReauthMCPServer(name string) bool {
 	return chat.mcpManager.ForceReauth(name)
 }
 
+// reloadSessionMCPServers pushes a freshly-loaded server list into the
+// session's MCP manager. The hot-reload watcher only polls the GLOBAL
+// mcp_servers.yaml (interactive_core.go: NewMCPHotReload(config.ConfigDir())),
+// so workspace-scoped writes from AddMCPServer are invisible to it (#498).
+// Without this explicit reload, an edited or newly added workspace server
+// never takes effect in the running session — and even the UI's Reconnect
+// button cannot fix it, because MCPPlugin.Connect short-circuits on the
+// cached adapter while the plugin's own cfg is stale. Reload rebuilds
+// changed/new plugins from the fresh list, computing the same merged server
+// set a watcher-triggered reload would (MergeStartupServers is idempotent
+// for already-persisted Claude-migrated servers).
+func reloadSessionMCPServers(chat *ChatBridge, servers []config.MCPServerConfig) {
+	if chat == nil || chat.mcpManager == nil {
+		return
+	}
+	merged, _ := mcp.MergeStartupServers(chat.WorkingDir(), servers)
+	chat.mcpManager.Reload(context.Background(), merged)
+}
+
 // AddMCPServer adds a new MCP server configuration.
 // The values map may contain:
 //   - "name" (required): server name
@@ -158,7 +179,12 @@ func ForceReauthMCPServer(name string) bool {
 //   - "headers_*": HTTP headers (keys like "headers_Authorization")
 //   - "env_*": environment variables (keys like "env_KEY")
 func AddMCPServer(values map[string]string) error {
-	cfg, err := loadSessionScopedConfig()
+	// #458: snapshot the bridge once so the scope decision and the reload
+	// below see the same session even if a workspace switch interleaves.
+	globalMu.RLock()
+	chatSnap := activeChatBridge
+	globalMu.RUnlock()
+	cfg, err := loadSessionScopedConfigFor(chatSnap)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
@@ -228,7 +254,15 @@ func AddMCPServer(values map[string]string) error {
 	cfg.UpsertMCPServer(serverCfg)
 	// SaveMCPServers writes only the scope's mcp_servers.yaml. A full cfg.Save()
 	// would also rewrite the main config file for what is an MCP-only change.
-	return cfg.SaveMCPServers()
+	if err := cfg.SaveMCPServers(); err != nil {
+		return err
+	}
+	// #498: propagate immediately — for workspace-scoped sessions the global-
+	// file watcher never sees this write, so without an explicit Reload the
+	// running session keeps the old connection (or never learns about a new
+	// server) until restart. Symmetric with RemoveMCPServer's #408 Disconnect.
+	reloadSessionMCPServers(chatSnap, cfg.MCPServers)
+	return nil
 }
 
 // RemoveMCPServer removes an MCP server by name from the active session's
