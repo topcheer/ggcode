@@ -200,8 +200,19 @@ func (d *driftRecurrenceState) check() string {
 		verifyRatio = float64(d.postWarnVerifies) / float64(d.postWarnEdits)
 	}
 
-	if newDirs < driftRecurrenceNewDirThreshold && verifyRatio > 0 {
-		return ""
+	// #473: the verify-ratio branch only fires when there IS directory
+	// expansion — a compliant agent (0 new dirs after the scope warning,
+	// mid-refactor before the build step) must not be accused of
+	// "performative compliance". newDirs==0 is compliance, not recurrence.
+	if newDirs < driftRecurrenceNewDirThreshold {
+		if newDirs == 0 {
+			return ""
+		}
+		// Under threshold but nonzero new dirs: require zero verifies
+		// across the minimum edit count to still call it drift.
+		if !(d.postWarnVerifies == 0) {
+			return ""
+		}
 	}
 
 	d.fired = true

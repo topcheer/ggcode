@@ -557,6 +557,10 @@ func (a *Agent) maybeResetVerifyOnCommand(toolName string, args json.RawMessage,
 }
 
 // extractCommandFromArgs extracts the "command" field from run_command args.
+// #471: the run_command tool schema mandates a leading '# ' comment line
+// (shown as the activity label). Strip it so prefix-anchored matchers
+// (isVerifyCommand / isConvergenceVerifyCommand / isStrictVerifyCommand)
+// see the actual command, not the comment.
 func extractCommandFromArgs(args json.RawMessage) string {
 	if len(args) == 0 {
 		return ""
@@ -568,10 +572,26 @@ func extractCommandFromArgs(args json.RawMessage) string {
 	if v, ok := raw["command"]; ok {
 		var s string
 		if json.Unmarshal(v, &s) == nil {
-			return s
+			return stripLeadingShellComment(s)
 		}
 	}
 	return ""
+}
+
+// stripLeadingShellComment removes leading '#' comment line(s) from a
+// shell command string (#471).
+func stripLeadingShellComment(s string) string {
+	for {
+		trimmed := strings.TrimLeft(s, " \t\n\r")
+		if !strings.HasPrefix(trimmed, "#") {
+			return trimmed
+		}
+		if idx := strings.IndexByte(trimmed, '\n'); idx >= 0 {
+			s = trimmed[idx+1:]
+		} else {
+			return ""
+		}
+	}
 }
 
 // funcLevelCoverageNudge generates a function-level coverage hint showing

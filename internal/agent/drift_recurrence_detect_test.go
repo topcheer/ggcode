@@ -78,6 +78,10 @@ func TestDriftRecurrence_SameDirsNotRecurrence(t *testing.T) {
 }
 
 func TestDriftRecurrence_NoVerificationPostWarn(t *testing.T) {
+	// #473: edits confined to ALREADY-SEEN directories after the warning
+	// (0 new dirs) is COMPLIANCE, not recurrence — even with zero
+	// verifications (the agent may simply be mid-refactor before its
+	// build step). Must NOT fire.
 	d := newDriftRecurrenceState()
 	d.recordIteration(1)
 	d.recordEdit("/project/src/main.go")
@@ -92,8 +96,28 @@ func TestDriftRecurrence_NoVerificationPostWarn(t *testing.T) {
 	d.recordEdit("/project/src/helper.go")
 
 	msg := d.check()
+	if msg != "" {
+		t.Fatalf("expected NO guidance for compliant same-dir edits (0 new dirs), got: %s", msg)
+	}
+}
+
+func TestDriftRecurrence_NewDirsNoVerifyStillDrift(t *testing.T) {
+	// #473: under-threshold (1 < 4) but NONZERO new dirs with zero
+	// verifications is still drift.
+	d := newDriftRecurrenceState()
+	d.recordIteration(1)
+	d.recordEdit("/project/src/main.go")
+
+	d.markWarning(2)
+	d.recordIteration(3)
+
+	d.recordEdit("/project/src/util.go")
+	d.recordEdit("/project/pkgnew/file.go")
+	d.recordEdit("/project/pkgother/file.go")
+
+	msg := d.check()
 	if msg == "" {
-		t.Fatal("expected drift recurrence guidance for zero-verification post-warn")
+		t.Fatal("expected drift guidance for new-dir edits without verification")
 	}
 }
 

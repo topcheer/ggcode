@@ -108,6 +108,13 @@ func (s *scopeDriftState) recordEdit(filePath string) {
 //	"src/components" -> "src/components"
 //	"pkg" -> "pkg"
 func dirSignature(dir string) string {
+	// #473: strip leading separators (and Windows drive letters) so
+	// absolute paths ("/project/pkgA" -> "project/pkgA") keep their two
+	// meaningful segments instead of collapsing every sibling under "/project".
+	dir = strings.TrimLeft(dir, "/\\")
+	if len(dir) >= 2 && dir[1] == ':' {
+		dir = dir[2:]
+	}
 	parts := strings.Split(dir, "/")
 	if len(parts) <= 1 {
 		return dir

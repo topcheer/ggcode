@@ -257,6 +257,16 @@ func isConvergenceVerifyCommand(cmd string) bool {
 				}
 			}
 			return false // make clean / make fmt / make help / make tidy / ...
+		case "gofmt", "goimports", "prettier", "eslint", "ruff", "rustfmt",
+			"flake8", "black", "isort", "rubocop", "stylelint", "clang-format":
+			// #472: pure formatters never verify behavior — a successful
+			// gofmt/prettier run must not arm the convergence lock and later
+			// push the agent to "finalize and summarize" mid-refactor.
+			return false
+		case "cargo":
+			if len(words) > 1 && words[1] == "fmt" {
+				return false // cargo fmt is a formatter, not a verification
+			}
 		}
 	}
 	return isVerifyCommand(cmd)
