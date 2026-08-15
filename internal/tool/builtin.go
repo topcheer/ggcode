@@ -106,6 +106,9 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 		// Permission
 		NewSwitchModeTool(policy),
 
+		// Self-restart (requester injected post-registration by TUI/Desktop)
+		&RestartTool{},
+
 		// IM (manager injected post-registration via SetManager)
 		IMTool{},
 

@@ -849,6 +849,30 @@ func (r *REPL) SetPlanModeTools(tools *tool.Registry) {
 			smt.SetSwitcher(switcher)
 		}
 	}
+
+	// Inject the restart requester so the LLM restart tool reuses the
+	// /restart machinery (session-preserving exec restart).
+	if rt, ok := tools.Get("restart"); ok {
+		if rtt, ok := rt.(*tool.RestartTool); ok {
+			rtt.Requester = &replRestartRequester{model: &r.model}
+		}
+	}
+}
+
+// replRestartRequester adapts the restart tool to the TUI /restart flow:
+// set the same flags handleRestartCommand sets, then the main loop's
+// tea.Quit path runs execRestart with --resume <session-id>.
+type replRestartRequester struct {
+	model *Model
+}
+
+func (rr *replRestartRequester) RequestRestart(debugMode bool) {
+	if debugMode {
+		rr.model.restartDebug = true
+	}
+	rr.model.chatWriteSystem(nextSystemID(), "Restart requested by agent — restarting ggcode (session will resume)...")
+	rr.model.quitting = true
+	rr.model.restartRequested = true
 }
 
 // SetSendMessageTool registers the send_message tool for agent communication.
