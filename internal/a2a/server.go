@@ -44,6 +44,12 @@ type ServerConfig struct {
 	APIKey   string   // single key (legacy, merged into APIKeys)
 	APIKeys  []string // multiple keys (any match authenticates)
 	Instance string   // instance identifier
+
+	// PushNotifications declares push support in the AgentCard (#403). The
+	// push-config CRUD + fire callbacks are ALWAYS implemented; the card
+	// previously hardcoded false, so spec-compliant clients never registered
+	// and the feature was unreachable. Default true.
+	PushNotifications *bool
 }
 
 // NewServer creates a new A2A server.
@@ -77,8 +83,10 @@ func NewServer(cfg ServerConfig, handler *TaskHandler) *Server {
 			Organization: "topcheer",
 		},
 		Capabilities: AgentCapabilities{
-			Streaming:         true,
-			PushNotifications: false,
+			Streaming: true,
+			// Card declaration must match the (always-implemented) push
+			// CRUD + fire path (#403); defaults to true.
+			PushNotifications: cfg.PushNotifications == nil || *cfg.PushNotifications,
 		},
 		DefaultInputModes:  []string{"text/plain"},
 		DefaultOutputModes: []string{"text/plain"},
@@ -240,7 +248,12 @@ func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) authenticate(r *http.Request) bool {
-	// 1) API Key
+	// 1) API Key. A PRESENT-but-wrong key must NOT short-circuit the other
+	// schemes (#404): instances commonly configure apiKeys AND OIDC/mTLS
+	// together, and client SDKs may send both credential kinds at once.
+	// Fall through to the next scheme on mismatch; only when no other
+	// scheme is configured does the mismatch deny (handled by the final
+	// return).
 	if len(s.apiKeys) > 0 {
 		if provided := r.Header.Get("X-API-Key"); provided != "" {
 			for _, key := range s.apiKeys {
@@ -248,7 +261,6 @@ func (s *Server) authenticate(r *http.Request) bool {
 					return true
 				}
 			}
-			return false
 		}
 	}
 

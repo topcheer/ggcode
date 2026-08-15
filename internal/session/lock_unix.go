@@ -33,6 +33,42 @@ func TryAcquireSessionLock(storeDir, sessionID string) (*SessionLock, error) {
 		}, nil
 	}
 
+	// Unlink-race guard (#406): Release() removes the lock file BEFORE
+	// unlocking. If we opened the OLD inode just before a holder's
+	// remove+unlock, our flock above succeeds on a file that no longer
+	// has a directory entry — while a third process creates a fresh lock
+	// file and also succeeds. Two holders, corrupted appends. Verify the
+	// path still resolves to OUR inode (link count > 0); otherwise retry.
+	for attempt := 0; attempt < 3; attempt++ {
+		var fi os.FileInfo
+		if fi, err = f.Stat(); err != nil {
+			f.Close()
+			return nil, err
+		}
+		pathFi, pathErr := os.Stat(lockPath)
+		sameOS := os.SameFile(fi, pathFi)
+		if pathErr == nil && sameOS {
+			break // still linked — safe
+		}
+		// Stale inode: unlock, reopen (creating the current file), relock.
+		syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		f.Close()
+		f, err = os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+		if err != nil {
+			return nil, err
+		}
+		if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+			pid := readLockPIDFromFile(f)
+			f.Close()
+			return &SessionLock{
+				storeDir:  storeDir,
+				sessionID: sessionID,
+				acquired:  false,
+				holderPID: pid,
+			}, nil
+		}
+	}
+
 	// Write our PID.
 	f.Truncate(0)
 	f.Seek(0, 0)

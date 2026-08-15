@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -19,6 +18,8 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/util"
+
+	imagepkg "github.com/topcheer/ggcode/internal/image"
 )
 
 const (
@@ -252,7 +253,10 @@ func (a *signalAdapter) sseLoop(ctx context.Context) error {
 			continue
 		}
 
-		body, err := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024))
+		// #405: migrate to imagepkg.ReadLimited (missed in the #388 sweep) —
+		// bare LimitReader silently truncated >2MB attachments into corrupt
+		// data; the limit is also unified to the shared 20MB.
+		body, err := imagepkg.ReadLimited(resp.Body, imagepkg.MaxSize)
 		resp.Body.Close()
 		if err != nil {
 			debug.Log("signal", "adapter=%s receive read error: %v", a.name, err)
@@ -602,7 +606,10 @@ func (a *signalAdapter) sendText(ctx context.Context, chatID, text string) error
 				break
 			}
 
-			respBody, _ = io.ReadAll(io.LimitReader(resp.Body, 4096))
+			// Error-body probe: bounded read, truncation acceptable here
+			// (only used for diagnostics), but go through ReadLimited for a
+			// consistent pattern (#405).
+			respBody, _ = imagepkg.ReadLimited(resp.Body, 4096)
 			resp.Body.Close()
 
 			if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {

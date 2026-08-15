@@ -131,16 +131,44 @@ func (a *Agent) checkUnverifiedClaim(assistantText string, runStats *RunStats) s
 }
 
 // detectSuccessClaims returns the matching success-claim phrases found in text.
+// Matching is word-bounded (#407): the bare phrase "verified" previously
+// matched inside "unverified" / "not yet verified" / "unvalidated", turning
+// negated contexts into false success claims.
 func detectSuccessClaims(text string) []string {
+	lower := strings.ToLower(text)
 	var found []string
 	seen := make(map[string]bool)
 	for _, phrase := range successClaimPhrases {
-		if strings.Contains(text, phrase) && !seen[phrase] {
+		if !seen[phrase] && containsWordBounded(lower, phrase) {
 			found = append(found, phrase)
 			seen[phrase] = true
 		}
 	}
 	return found
+}
+
+// containsWordBounded reports whether phrase occurs in lower with
+// non-alphanumeric boundaries on both sides. Inputs must be lowercase.
+func containsWordBounded(lower, phrase string) bool {
+	p := strings.ToLower(phrase)
+	for from := 0; ; {
+		idx := strings.Index(lower[from:], p)
+		if idx < 0 {
+			return false
+		}
+		abs := from + idx
+		beforeOK := abs == 0 || !claimIsWordByte(lower[abs-1])
+		after := abs + len(p)
+		afterOK := after >= len(lower) || !claimIsWordByte(lower[after])
+		if beforeOK && afterOK {
+			return true
+		}
+		from = abs + 1
+	}
+}
+
+func claimIsWordByte(b byte) bool {
+	return b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9' || b == '_'
 }
 
 // isBuildTestCommand checks if a command is a build/test/lint command.

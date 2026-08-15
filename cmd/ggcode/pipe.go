@@ -253,8 +253,11 @@ func dedupeStrings(values []string) []string {
 
 // readStdin reads all data from stdin if it's a pipe, otherwise returns "".
 func readStdin() ([]byte, error) {
-	stat, _ := os.Stdin.Stat()
-	if (stat.Mode() & os.ModeCharDevice) != 0 {
+	// #402: a closed stdin fd (parent close(0) before exec — common in
+	// cron/daemon/CI callers) makes Stat return EBADF with a nil stat;
+	// dereferencing it panicked at startup. Treat as "no stdin data".
+	stat, err := os.Stdin.Stat()
+	if err != nil || (stat.Mode()&os.ModeCharDevice) != 0 {
 		return nil, nil
 	}
 	data, err := io.ReadAll(os.Stdin)

@@ -615,7 +615,30 @@ type jsonlRecord struct {
 	CheckpointMessages []provider.Message `json:"checkpoint_messages,omitempty"`
 }
 
+// validSessionID reports whether id is a plain generated identifier.
+// Only [A-Za-z0-9_-] are allowed: an unvalidated id used to flow straight
+// into filepath.Join, so --resume ../../foo escaped the store directory
+// for both reads AND (via empty-session cleanup) deletions (#401).
+func validSessionID(id string) bool {
+	if id == "" || len(id) > 128 {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_') {
+			return false
+		}
+	}
+	return !strings.HasPrefix(id, "-") // no leading dash: not a flag-like path piece
+}
+
+// sessionPath returns the JSONL path for a session ID. Invalid IDs fall back
+// to a safe, non-escaping placeholder so callers that ignore the error still
+// cannot touch files outside s.dir.
 func (s *JSONLStore) sessionPath(id string) string {
+	if !validSessionID(id) {
+		return filepath.Join(s.dir, "_invalid_id_.jsonl")
+	}
 	return filepath.Join(s.dir, id+".jsonl")
 }
 

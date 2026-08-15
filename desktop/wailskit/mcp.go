@@ -97,13 +97,17 @@ func ListMCPServers() ([]MCPServerInfo, error) {
 
 func SetMCPServerEnabled(name string, enabled bool) bool {
 	disabled := !enabled
-	plugin.SetMCPDisabled(name, disabled)
 	globalMu.RLock()
 	chat := activeChatBridge
 	globalMu.RUnlock()
 	if chat == nil || chat.mcpManager == nil {
-		return false
+		// Persist the toggle FIRST so the UI state matches disk (#408):
+		// returning false after writing misled the frontend into showing
+		// "failed" for a change that had already taken effect.
+		plugin.SetMCPDisabled(name, disabled)
+		return true
 	}
+	plugin.SetMCPDisabled(name, disabled)
 	if disabled {
 		return chat.mcpManager.Disconnect(name)
 	}
@@ -225,7 +229,20 @@ func RemoveMCPServer(name string) error {
 	if !cfg.RemoveMCPServer(name) {
 		return fmt.Errorf("MCP server %q not found", name)
 	}
-	return cfg.SaveMCPServers()
+	if err := cfg.SaveMCPServers(); err != nil {
+		return err
+	}
+	// Symmetric with SetMCPServerEnabled(false): disconnect immediately
+	// instead of waiting for the ~2s hot-reload poll (which may also miss
+	// workspace-scoped yaml changes) — without this the removed server's
+	// tools stayed callable during the window (#408).
+	globalMu.RLock()
+	chat := activeChatBridge
+	globalMu.RUnlock()
+	if chat != nil && chat.mcpManager != nil {
+		_ = chat.mcpManager.Disconnect(name)
+	}
+	return nil
 }
 
 // parseShellArgs splits a command-line argument string with quote awareness.

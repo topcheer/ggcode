@@ -1546,3 +1546,27 @@ func TestLoadCheckpointWithMissingLastMsgID(t *testing.T) {
 		t.Fatalf("expected third ContextMessage 'msg_post_2', got '%s'", loaded.ContextMessages[2].ID)
 	}
 }
+
+// TestSessionPathSanitization verifies #401: session IDs containing path
+// traversal sequences must not escape the store directory.
+func TestSessionPathSanitization(t *testing.T) {
+	s, err := NewJSONLStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	evil := []string{"../../etc/passwd", "..\\..\\x", "a/b", "a/b/c", "-", ""}
+	for _, id := range evil {
+		p := s.sessionPath(id)
+		if filepath.Dir(p) != s.dir {
+			t.Errorf("id %q escaped store dir: %q (dir=%q)", id, p, s.dir)
+		}
+		if strings.Contains(p, "passwd") || strings.Contains(p, "..") {
+			t.Errorf("id %q leaked into path: %q", id, p)
+		}
+	}
+	// Valid IDs still resolve normally.
+	good := filepath.Join(s.dir, "abc123-_X.jsonl")
+	if got := s.sessionPath("abc123-_X"); got != good {
+		t.Errorf("valid id resolved to %q, want %q", got, good)
+	}
+}
