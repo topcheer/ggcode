@@ -26,6 +26,7 @@ package agent
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 )
 
@@ -74,32 +75,101 @@ func (s *strategyFixationState) recordEdit(filePath string) {
 	s.lastFile = filePath
 }
 
+// sfCommandArg extracts the "command" string from a run_command args map.
+// A non-string or absent command yields "" (psIsVerifyCommand treats it as
+// non-verifying, which is correct: you cannot verify via a non-command).
+func sfCommandArg(args map[string]interface{}) string {
+	if args == nil {
+		return ""
+	}
+	if s, ok := args["command"].(string); ok {
+		return s
+	}
+	return ""
+}
+
 // recordVerification tracks the outcome of a verification tool call (build/test/run).
 // If the verification failed, the failure is attributed to the most recently edited file.
 func (s *strategyFixationState) recordVerification(toolName string, output string, isError bool) {
 	if !isError {
-		// Successful verification resets the FULL state for the last edited
-		// file (failures AND edit count) — the documented contract is "3+
-		// edits without any successful verification in between", so a green
-		// build proves the approach converged and stale early edits must not
-		// combine with later unrelated regressions to fire a false warning
-		// (#392).
-		if s.lastFile != "" {
-			s.fileFailures[s.lastFile] = 0
-			s.fileEdits[s.lastFile] = 0
-		}
+		// A successful verification (green build/test) is a WHOLE-TREE
+		// validation: it compiles and tests every file touched by the run,
+		// not just the most recently edited one. The documented contract is
+		// "3+ edits without ANY successful verification in between", so the
+		// green result terminates the edit/failure streak for ALL files.
+		// Resetting only lastFile left stale counts on other files able to
+		// fire "approach not converging" right after a green build — the
+		// opposite of the truth at the worst moment (#485, extending #392).
+		// True post-green fixation re-accumulates fresh edits+failures, which
+		// is exactly the contract's literal semantics.
+		s.fileEdits = make(map[string]int)
+		s.fileFailures = make(map[string]int)
+		s.lastFile = ""
 		return
 	}
 	// Failed verification: attribute to last edited file ONLY when the output
-	// actually names that file. The old generic keyword OR-match (build /
-	// compile / FAIL / error / undefined) attributed essentially EVERY failed
-	// verification to lastFile — cross-file errors (edit B, error in A) were
-	// routinely misattributed (#392).
+	// actually names that file. Directory-qualified matching: an occurrence
+	// of the base name that carries a DIFFERENT directory prefix (e.g.
+	// output mentions internal/agent/agent.go while lastFile is
+	// internal/tool/agent.go) is a same-base-name collision, not this file
+	// (#485; same family as #393). Bare base-name occurrences (no directory
+	// prefix) still attribute, preserving the pre-existing sensitivity.
 	if s.lastFile != "" {
-		fname := shortFileName(s.lastFile)
-		if fname != "" && strings.Contains(output, fname) {
+		if sfOutputNamesFile(output, s.lastFile) {
 			s.fileFailures[s.lastFile]++
 		}
+	}
+}
+
+// sfOutputNamesFile reports whether output names the file at filePath.
+// Matching rules per occurrence of the base name:
+//   - occurrence preceded by a directory segment ("d/base.go"): counts only
+//     if that directory's base equals the file's directory base
+//   - bare occurrence (no directory prefix): counts (conservative default)
+func sfOutputNamesFile(output, filePath string) bool {
+	fname := shortFileName(filePath)
+	if fname == "" || output == "" {
+		return false
+	}
+	dirBase := shortFileName(strings.TrimSuffix(filepath.ToSlash(filepath.Dir(filePath)), "/"))
+	if dirBase == "." || dirBase == "/" {
+		dirBase = ""
+	}
+	for idx := 0; ; {
+		i := strings.Index(output[idx:], fname)
+		if i < 0 {
+			return false
+		}
+		i += idx
+		// Determine the path prefix immediately before this occurrence.
+		// Stop only at NON-PATH delimiters (whitespace, parens, quotes):
+		// '/' and '\\' belong to the directory prefix — stopping at them
+		// would misread "internal/agent/agent.go" as a bare occurrence.
+		start := i
+		for start > 0 {
+			c := output[start-1]
+			if c == ' ' || c == '\t' || c == '\n' || c == '(' || c == '"' || c == '\'' || c == '`' {
+				break
+			}
+			start--
+		}
+		seg := output[start:i] // e.g. "internal/agent/" or "" or "foo"
+		if seg == "" || seg == "." || seg == "./" {
+			// Bare occurrence (line start, whitespace, quote): attribute.
+			return true
+		}
+		// The occurrence has a path prefix; its last directory component
+		// must match the file's directory base.
+		trimmed := strings.TrimRight(seg, "/\\")
+		dir := shortFileName(trimmed)
+		if dir == "." || dir == "" {
+			return true
+		}
+		if dirBase != "" && strings.EqualFold(dir, dirBase) {
+			return true
+		}
+		// Different directory — try next occurrence.
+		idx = i + len(fname)
 	}
 }
 
@@ -157,6 +227,11 @@ func strategyFixationIsMutation(toolName string) bool {
 }
 
 // strategyFixationIsVerification returns true for tools that verify correctness.
+// Note: run_command/start_command are verification-shaped but NOT every
+// invocation verifies — `cat`, `ls`, `git status` succeeding is not a green
+// build. The wiring in agent.go filters those through psIsVerifyCommand
+// (the same command-position analysis used by premature_success, #483) so
+// non-verifying commands neither reset streaks nor inject failures (#485).
 func strategyFixationIsVerification(toolName string) bool {
 	switch {
 	case toolName == "run_command",

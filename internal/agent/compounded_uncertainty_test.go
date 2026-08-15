@@ -25,12 +25,13 @@ func TestRecordUncertainty(t *testing.T) {
 		compoundedUncert: newCompoundedUncertaintyState(),
 	}
 
-	// Record multiple uncertainty events.
+	// Record multiple uncertainty events (the three production-wired
+	// categories — the assumptions feed was retired with its detector, #484).
 	a.recordUncertainty("hedging", weightHedging)
-	a.recordUncertainty("assumption", weightAssumption)
+	a.recordUncertainty("unverified_success", weightUnverifiedSucc)
 	a.recordUncertainty("false_premise", weightFalsePremise)
 
-	expected := weightHedging + weightAssumption + weightFalsePremise
+	expected := weightHedging + weightUnverifiedSucc + weightFalsePremise
 	if a.compoundedUncert.totalWeight != expected {
 		t.Errorf("expected totalWeight=%f, got %f", expected, a.compoundedUncert.totalWeight)
 	}
@@ -49,10 +50,10 @@ func TestMaybeWarnCompoundedUncertainty_BelowThreshold(t *testing.T) {
 
 	// Accumulate just below threshold.
 	a.recordUncertainty("hedging", weightHedging)
-	a.recordUncertainty("assumption", weightAssumption)
+	a.recordUncertainty("unverified_success", weightUnverifiedSucc)
 	a.recordUncertainty("hedging", weightHedging)
-	a.recordUncertainty("assumption", weightAssumption)
-	// total = 4.0, below threshold of 5.5
+	a.recordUncertainty("unverified_success", weightUnverifiedSucc)
+	// total = 1.0 + 1.5 + 1.0 + 1.5 = 5.0, below threshold of 5.5
 
 	msg := a.maybeWarnCompoundedUncertainty()
 	if msg != "" {
@@ -69,11 +70,11 @@ func TestMaybeWarnCompoundedUncertainty_AtThreshold(t *testing.T) {
 	}
 
 	// Accumulate above threshold.
-	// 2 hedging (2.0) + 2 assumption (2.0) + 1 false_premise (2.0) = 6.0
+	// 2 hedging (2.0) + 2 unverified_success (3.0) + 1 false_premise (2.0) = 7.0
 	a.recordUncertainty("hedging", weightHedging)
 	a.recordUncertainty("hedging", weightHedging)
-	a.recordUncertainty("assumption", weightAssumption)
-	a.recordUncertainty("assumption", weightAssumption)
+	a.recordUncertainty("unverified_success", weightUnverifiedSucc)
+	a.recordUncertainty("unverified_success", weightUnverifiedSucc)
 	a.recordUncertainty("false_premise", weightFalsePremise)
 
 	msg := a.maybeWarnCompoundedUncertainty()
@@ -155,12 +156,12 @@ func TestMaybeWarnCompoundedUncertainty_MultipleCategories(t *testing.T) {
 		compoundedUncert: newCompoundedUncertaintyState(),
 	}
 
-	// Mix categories: hedging + assumption + false_premise + unverified_success
+	// Mix categories: hedging + unverified_success + false_premise + one more unverified
 	a.recordUncertainty("hedging", weightHedging)
-	a.recordUncertainty("assumption", weightAssumption)
+	a.recordUncertainty("unverified_success", weightUnverifiedSucc)
 	a.recordUncertainty("false_premise", weightFalsePremise)
 	a.recordUncertainty("unverified_success", weightUnverifiedSucc)
-	// total = 1.0 + 1.0 + 2.0 + 1.5 = 5.5
+	// total = 1.0 + 1.5 + 2.0 + 1.5 = 6.0
 
 	msg := a.maybeWarnCompoundedUncertainty()
 	if msg == "" {

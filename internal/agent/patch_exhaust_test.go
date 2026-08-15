@@ -48,20 +48,60 @@ func TestPatchExhaust_EditResets(t *testing.T) {
 	}
 }
 
-func TestPatchExhaust_DifferentPatchResets(t *testing.T) {
+func TestPatchExhaust_SingleExcursionTolerance(t *testing.T) {
 	s := newPatchExhaustState()
 
 	// 3 reads into dir A.
 	for i := 1; i <= 3; i++ {
+		if hint := s.recordRead("dirA/f" + strconv.Itoa(i) + ".go"); hint != "" {
+			t.Fatalf("read %d should not trigger hint, got: %s", i, hint)
+		}
+	}
+	// A SINGLE one-read excursion to dir B must NOT reset A's streak —
+	// returning resumes the stashed count (#486: this tolerance was
+	// documented from inception but never implemented).
+	if hint := s.recordRead("dirB/other.go"); hint != "" {
+		t.Fatalf("excursion read should not trigger, got: %s", hint)
+	}
+	// Returning to A: 3 stashed + 1 = 4 → fires.
+	hint := s.recordRead("dirA/f4.go")
+	if hint == "" {
+		t.Fatal("expected excursion-tolerant hint on returning read (streak resumed)")
+	}
+}
+
+func TestPatchExhaust_PingPongDoesNotAccumulate(t *testing.T) {
+	s := newPatchExhaustState()
+
+	// Alternating reads between two directories must never accumulate:
+	// excursion tolerance is one-shot per streak, so leaving a resumed
+	// streak hard-resets (#486 — reading source dir + test dir in
+	// alternation is a legitimate workflow).
+	for i := 0; i < 12; i++ {
+		p := "dirA/f.go"
+		if i%2 == 1 {
+			p = "dirB/f.go"
+		}
+		if hint := s.recordRead(p); hint != "" {
+			t.Fatalf("ping-pong read %d should not trigger, got: %s", i, hint)
+		}
+	}
+}
+
+func TestPatchExhaust_SecondDepartureAfterResumeResets(t *testing.T) {
+	s := newPatchExhaustState()
+
+	// A,A,B,A → A resumes (count 3). Then B again → resumed streak
+	// hard-resets, so another 3 A reads stay below threshold.
+	for i := 1; i <= 2; i++ {
 		s.recordRead("dirA/f" + strconv.Itoa(i) + ".go")
 	}
-	// Read into dir B resets consecutive counter for A.
-	s.recordRead("dirB/other.go")
-	// Now 3 reads into dir A should not trigger (counter restarted at 1).
+	s.recordRead("dirB/x.go")  // excursion
+	s.recordRead("dirA/f3.go") // resume → count 3, no fire
+	s.recordRead("dirB/y.go")  // second departure → hard reset
 	for i := 4; i <= 6; i++ {
-		hint := s.recordRead("dirA/f" + strconv.Itoa(i) + ".go")
-		if hint != "" {
-			t.Fatalf("read %d after patch switch should not trigger, got: %s", i, hint)
+		if hint := s.recordRead("dirA/f" + strconv.Itoa(i) + ".go"); hint != "" {
+			t.Fatalf("read %d after hard reset should not trigger, got: %s", i, hint)
 		}
 	}
 }
@@ -116,6 +156,7 @@ func TestPatchOf(t *testing.T) {
 		want  string
 	}{
 		{"internal/agent/foo.go", "internal/agent"},
+		{"./internal/agent/foo.go", "internal/agent"}, // "./" prefix normalized away (#486)
 		{"/abs/path/to/file.go", "/abs/path/to"},
 		{"root.go", "."},
 		{"", ""},

@@ -350,6 +350,60 @@ func extractFilePathFromArgs(toolName string, args json.RawMessage) string {
 	return ""
 }
 
+// sfExtractMutationPaths returns EVERY file path referenced by a mutation
+// tool call for strategy-fixation tracking (#485): multi_file_edit's files[]
+// entries must all count as edits, and notebook_edit carries its path in
+// notebook_path (previously never extracted, so notebook edits were silently
+// untracked). Distinct from extractFilePathFromArgs (first path only) and
+// from wasted_explore's extractFilePathsFromArgs (read-tool oriented, would
+// admit url/directory noise).
+func sfExtractMutationPaths(args json.RawMessage) []string {
+	if len(args) == 0 {
+		return nil
+	}
+
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(args, &raw); err != nil {
+		return nil
+	}
+
+	var out []string
+	seen := make(map[string]bool)
+	add := func(s string) {
+		if s != "" && !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+
+	for _, field := range []string{"file_path", "path", "notebook_path"} {
+		if v, ok := raw[field]; ok {
+			var s string
+			if json.Unmarshal(v, &s) == nil {
+				add(s)
+			}
+		}
+	}
+
+	if filesRaw, ok := raw["files"]; ok {
+		var files []map[string]json.RawMessage
+		if json.Unmarshal(filesRaw, &files) == nil {
+			for _, f := range files {
+				for _, field := range []string{"file_path", "path"} {
+					if v, ok := f[field]; ok {
+						var s string
+						if json.Unmarshal(v, &s) == nil {
+							add(s)
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return out
+}
+
 // isSourceCodeFile returns true if the path has a source-code extension.
 func isSourceCodeFile(path string) bool {
 	ext := strings.ToLower(filepath.Ext(path))

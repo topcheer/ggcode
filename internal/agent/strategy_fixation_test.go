@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -67,11 +68,121 @@ func TestStrategyFixation_SuccessResetsFailures(t *testing.T) {
 	s.recordEdit("/path/to/file.go")
 	s.recordEdit("/path/to/file.go")
 
-	// Now a successful verification -- should reset failures for last file
+	// Now a successful verification — should reset failures for last file
 	s.recordVerification("run_command", "all tests passed", false)
 
 	if msg := s.check(); msg != "" {
 		t.Fatalf("expected no warning after successful verification, got: %s", msg)
+	}
+}
+
+func TestStrategyFixation_GreenVerificationResetsAllFiles(t *testing.T) {
+	s := newStrategyFixationState()
+
+	// The #485 scenario: within ONE iteration's parallel tool batch, the
+	// threshold is crossed for a.go, then a whole-tree green build runs,
+	// but the batch also edits b.go afterwards — the old lastFile-only
+	// reset kept a.go's stale counts alive and fired "not converging"
+	// right after the green build.
+	s.recordEdit("a.go")
+	s.recordEdit("a.go")
+	s.recordVerification("run_command", "error in a.go", true) // failures[a.go]=1, lastFile=a.go
+	s.recordVerification("run_command", "error in a.go", true) // failures[a.go]=2
+	s.recordEdit("a.go")                                       // edits[a.go]=3 (threshold crossed)
+	s.recordEdit("b.go")                                       // lastFile=b.go
+
+	// Green whole-tree build: must terminate EVERY file's streak, not just b.go's.
+	s.recordVerification("run_command", "ok", false)
+
+	if msg := s.check(); msg != "" {
+		t.Fatalf("green build must reset all files (#485), got: %s", msg)
+	}
+	if len(s.fileEdits) != 0 || len(s.fileFailures) != 0 {
+		t.Fatalf("green build must clear all maps, edits=%v failures=%v", s.fileEdits, s.fileFailures)
+	}
+}
+
+func TestStrategyFixation_TrueFixationStillDetectedAfterGreenReset(t *testing.T) {
+	s := newStrategyFixationState()
+
+	// A green build resets everything; if the agent then REALLY fixates on
+	// a file, fresh edits + failures re-accumulate and re-fire (contract's
+	// literal semantics — the #485 fix must not over-correct into silence).
+	s.recordEdit("a.go")
+	s.recordVerification("run_command", "error in a.go", true)
+	s.recordVerification("run_command", "error in a.go", true)
+	s.recordEdit("a.go")
+	s.recordEdit("a.go")
+	s.recordVerification("run_command", "ok", false) // green reset
+
+	s.recordEdit("a.go")
+	s.recordVerification("run_command", "error in a.go", true)
+	s.recordEdit("a.go")
+	s.recordEdit("a.go")
+	s.recordVerification("run_command", "error in a.go", true)
+
+	if msg := s.check(); msg == "" {
+		t.Fatal("post-green re-fixation must re-fire")
+	}
+}
+
+func TestSFOutputNamesFile(t *testing.T) {
+	cases := []struct {
+		name     string
+		output   string
+		filePath string
+		want     bool
+	}{
+		// Bare base-name occurrence (line start) → attribute.
+		{"bare", "agent.go:10: undefined: foo", "/w/internal/tool/agent.go", true},
+		// Same-directory qualified mention → attribute.
+		{"dir match", "error in internal/tool/agent.go: missing foo", "/w/internal/tool/agent.go", true},
+		// Different-directory qualified mention (same base name) → do NOT
+		// attribute (#485 same-family as #393).
+		{"dir mismatch", "error in internal/agent/agent.go: missing foo", "/w/internal/tool/agent.go", false},
+		// Mismatched dir first, bare occurrence later → attribute (scan all).
+		{"mismatch then bare", "internal/agent/agent.go bad\nagent.go:5: oops", "/w/internal/tool/agent.go", true},
+		// No mention at all.
+		{"absent", "everything fine", "/w/a.go", false},
+	}
+	for _, c := range cases {
+		if got := sfOutputNamesFile(c.output, c.filePath); got != c.want {
+			t.Errorf("%s: sfOutputNamesFile(%q, %q) = %v, want %v", c.name, c.output, c.filePath, got, c.want)
+		}
+	}
+}
+
+func TestSFExtractMutationPaths(t *testing.T) {
+	// multi_file_edit: EVERY files[] entry must be returned (#485) —
+	// the first-path-only behavior under-tracked edits.
+	args := json.RawMessage(`{"files":[{"path":"a.go","edits":[]},{"path":"sub/b.go"}]}`)
+	paths := sfExtractMutationPaths(args)
+	if len(paths) != 2 || paths[0] != "a.go" || paths[1] != "sub/b.go" {
+		t.Fatalf("multi_file_edit paths = %v, want [a.go sub/b.go]", paths)
+	}
+
+	// notebook_edit: path lives in notebook_path, previously never extracted.
+	nb := sfExtractMutationPaths(json.RawMessage(`{"notebook_path":"nb/ipynb/analysis.ipynb"}`))
+	if len(nb) != 1 || nb[0] != "nb/ipynb/analysis.ipynb" {
+		t.Fatalf("notebook_edit path = %v, want notebook_path value", nb)
+	}
+
+	// edit_file compatibility: single file_path.
+	one := sfExtractMutationPaths(json.RawMessage(`{"file_path":"x.go"}`))
+	if len(one) != 1 || one[0] != "x.go" {
+		t.Fatalf("edit_file path = %v, want [x.go]", one)
+	}
+}
+
+func TestSFCommandArg(t *testing.T) {
+	if got := sfCommandArg(map[string]interface{}{"command": "go test ./..."}); got != "go test ./..." {
+		t.Errorf("string command = %q", got)
+	}
+	if got := sfCommandArg(map[string]interface{}{"command": 42}); got != "" {
+		t.Errorf("non-string command should yield empty, got %q", got)
+	}
+	if got := sfCommandArg(nil); got != "" {
+		t.Errorf("nil map should yield empty, got %q", got)
 	}
 }
 

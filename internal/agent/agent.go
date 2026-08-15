@@ -2276,6 +2276,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			if psHint := a.prematureSuccess.checkSuccessClaim(assistantText); psHint != "" {
 				debug.Log("agent", "Iteration %d: premature success claim detected (edits without verification)", i+1)
 				a.injectGuidance(psHint)
+				// Feed the compounded-uncertainty accumulator: an unverified
+				// success claim is a 1.5-unit epistemic risk event (#484 — this
+				// channel was declared in the accumulator's weights but never
+				// wired, so the documented 4-channel design only ever saw 2).
+				a.recordUncertainty("unverified_success", weightUnverifiedSucc)
 			}
 			// Verification outcome disconnect: detect verification failures
 			// that the agent advances past without addressing. Behavioral
@@ -4016,10 +4021,22 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 			a.prematureSuccess.recordToolCall(tc.Name, psArgs, result.IsError)
 			// Strategy fixation: track per-file edits and verification outcomes.
+			// Only genuine verification commands count: a successful cat/ls/
+			// git status must not reset streaks, and a failed one must not
+			// inject a bogus failure (#485). Filter through the same
+			// command-position analysis as premature_success (#483).
+			sfIsVerify := strategyFixationIsVerification(tc.Name)
+			if sfIsVerify && (tc.Name == "run_command" || tc.Name == "start_command") {
+				sfIsVerify = psIsVerifyCommand(sfCommandArg(psArgs))
+			}
 			if strategyFixationIsMutation(tc.Name) {
-				fp := extractFilePathFromArgs(tc.Name, tc.Arguments)
-				a.strategyFixation.recordEdit(fp)
-			} else if strategyFixationIsVerification(tc.Name) {
+				// Record EVERY referenced file: multi_file_edit edits all
+				// files[] entries and notebook_edit carries notebook_path —
+				// counting only the first path under-tracked edits (#485).
+				for _, fp := range sfExtractMutationPaths(tc.Arguments) {
+					a.strategyFixation.recordEdit(fp)
+				}
+			} else if sfIsVerify {
 				a.strategyFixation.recordVerification(tc.Name, result.Content, result.IsError)
 			}
 			// Error rush: track error-to-action dynamics for panic coding detection.

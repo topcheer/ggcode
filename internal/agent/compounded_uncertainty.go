@@ -30,11 +30,9 @@ package agent
 // ephemerally. No mechanism tracks how epistemic risk ACCUMULATES across a
 // full trajectory:
 //
-//  1. Turn 1: "I assume this is a PostgreSQL database" -> assumption detected
-//     (1 unverified assumption)
-//  2. Turn 3: "hopefully this fixes it" -> hedging detected (1 hedging signal)
-//  3. Turn 5: "I've fixed the issue" -> premature success claim (no verification)
-//  4. Turn 7: "Let's try a different approach" -> hedging again
+//  1. Turn 3: "hopefully this fixes it" -> hedging detected (1 hedging signal)
+//  2. Turn 5: "I've fixed the issue" -> premature success claim (no verification)
+//  3. Turn 7: "Let's try a different approach" -> hedging again
 //
 //  Each signal individually is advisory. But their accumulation means the
 //  entire trajectory's conclusions rest on increasingly uncertain foundations.
@@ -46,12 +44,15 @@ package agent
 //  Existing detectors that are RELATED but do NOT cover this:
 //   - trajectory_health.go: synthesizes OPERATIONAL signals (retries,
 //     failures, verbosity, latency). This detector synthesizes EPISTEMIC
-//     signals (hedging, assumptions, unverified claims) - fundamentally
+//     signals (hedging, unverified claims) - fundamentally
 //     different input dimensions.
 //   - action_hedging.go: single-turn hedging detection. This detector
 //     accumulates hedging across the ENTIRE trajectory.
-//   - assumption_track.go: single-turn assumption detection. This detector
-//     accumulates assumptions across the ENTIRE trajectory.
+//   - premature_success.go: single-claim unverified-success detection. This
+//     detector accumulates those claims across the ENTIRE trajectory.
+//     (The former assumption_track.go detector was removed in 387282a6;
+//     its accumulator feed went with it — the category was retired, not
+//     silently dropped: #484.)
 //
 // Gap: No mechanism accumulates epistemic risk signals across a trajectory
 // and warns when their multiplicative compounding makes the overall
@@ -61,8 +62,9 @@ package agent
 //
 // Design:
 //   - Tracks a running count of epistemic uncertainty events across the run
-//   - Categories: hedging signals, assumptions, unverified success claims,
-//     false premises
+//   - Categories: hedging signals, unverified success claims, false premises
+//     (the assumptions category was retired when the assumption detector
+//     was removed in 387282a6 — see #484)
 //   - Models each event as ~0.85 per-step reliability (85% chance of being
 //     correct given it was flagged)
 //   - Computes compounded trajectory reliability = 0.85^(uncertainty count)
@@ -89,12 +91,13 @@ const (
 	uncertaintyAlertThreshold = 5.5
 
 	// uncertaintyWeight per category - how many "units" of uncertainty each
-	// event type contributes. Hedging and assumptions are 1 unit each;
-	// unverified success claims are 1.5 (higher risk - the agent claims
-	// success without verifying, which is worse than just being uncertain);
-	// false premises are 2 (highest risk - the entire approach may be wrong).
+	// event type contributes. Hedging is 1 unit; unverified success claims
+	// are 1.5 (higher risk - the agent claims success without verifying,
+	// which is worse than just being uncertain); false premises are 2
+	// (highest risk - the entire approach may be wrong).
+	// (No assumptions weight: that category's feed was removed together with
+	// the assumption detector in 387282a6 — #484.)
 	weightHedging        = 1.0
-	weightAssumption     = 1.0
 	weightUnverifiedSucc = 1.5
 	weightFalsePremise   = 2.0
 )
@@ -143,8 +146,8 @@ func (a *Agent) maybeWarnCompoundedUncertainty() string {
 	return fmt.Sprintf(
 		"[compounded-trajectory-uncertainty] Accumulated epistemic risk across "+
 			"this trajectory has crossed the reliability threshold. Your run has "+
-			"accumulated %.1f units of uncertainty (hedging language, unverified "+
-			"assumptions, speculative success claims, or false premises).\n"+
+			"accumulated %.1f units of uncertainty (hedging language, speculative "+
+			"success claims, or false premises).\n"+
 			"Compounded trajectory reliability: ~%d%% (each individual signal may "+
 			"seem minor, but uncertainties compound multiplicatively - a 0.85^N "+
 			"decay).\n"+
