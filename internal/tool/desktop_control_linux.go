@@ -349,6 +349,31 @@ func retrySuffix(action string) string {
 // click subcommand cannot send it) and window management has no protocol
 // for external clients — both report clear messages instead of failing
 // cryptically.
+// ydoModifierClick holds normalized modifiers while clicking via ydotool.
+func ydoModifierClick(ctx context.Context, x, y int, modifierSpec string) (Result, error) {
+	mods, err := normalizeModifiers(modifierSpec)
+	if err != nil {
+		return Result{}, err
+	}
+	cmds := [][]string{ydoMoveArgs(x, y)}
+	for _, m := range mods {
+		press, _, ok := ydoModifierKeyArgs(m)
+		if !ok {
+			return Result{}, fmt.Errorf("modifier %q has no ydotool mapping", m)
+		}
+		cmds = append(cmds, press)
+	}
+	cmds = append(cmds, []string{"ydotool", "click", "0xC0"})
+	for i := len(mods) - 1; i >= 0; i-- {
+		_, release, _ := ydoModifierKeyArgs(mods[i])
+		cmds = append(cmds, release)
+	}
+	if err := runArgvSeq(ctx, cmds); err != nil {
+		return Result{}, err
+	}
+	return Result{Content: "OK"}, nil
+}
+
 func executeDesktopControlWayland(ctx context.Context, p desktopParams) (Result, error) {
 	switch p.Action {
 	case "move":
@@ -377,27 +402,7 @@ func executeDesktopControlWayland(ctx context.Context, p desktopParams) (Result,
 		}
 		return Result{Content: "OK"}, nil
 	case "modifier_click":
-		mods, err := normalizeModifiers(p.Text)
-		if err != nil {
-			return Result{}, err
-		}
-		cmds := [][]string{ydoMoveArgs(p.X, p.Y)}
-		for _, m := range mods {
-			press, _, ok := ydoModifierKeyArgs(m)
-			if !ok {
-				return Result{}, fmt.Errorf("modifier %q has no ydotool mapping", m)
-			}
-			cmds = append(cmds, press)
-		}
-		cmds = append(cmds, []string{"ydotool", "click", "0xC0"})
-		for i := len(mods) - 1; i >= 0; i-- {
-			_, release, _ := ydoModifierKeyArgs(mods[i])
-			cmds = append(cmds, release)
-		}
-		if err := runArgvSeq(ctx, cmds); err != nil {
-			return Result{}, err
-		}
-		return Result{Content: "OK"}, nil
+		return ydoModifierClick(ctx, p.X, p.Y, p.Text)
 	case "drag":
 		if err := runArgvSeq(ctx, ydoDragArgs(p.X, p.Y, p.ToX, p.ToY)); err != nil {
 			return Result{}, err
