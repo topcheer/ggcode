@@ -134,12 +134,10 @@ func GetChatBridge() *ChatBridge {
 	return activeChatBridge
 }
 
-func NewSession() error {
-	if activeChatBridge != nil {
-		activeChatBridge.ClearCurrentSession()
-	}
-	return nil
-}
+// NewSession was removed (#489): it had zero callers repo-wide and its
+// ClearCurrentSession-only semantics skipped the Cancel → StartNewSession
+// flow the production App.NewSession entry implements; a half-version of
+// session switching was a trap for future callers.
 
 func LoadSession(id string) error {
 	if activeChatBridge == nil {

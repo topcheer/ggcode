@@ -40,6 +40,7 @@ package agent
 //     converging. High spread + no mutation = world model scatter.
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -50,8 +51,6 @@ type targetScatterState struct {
 	recentTargets []string
 	// uniqueTargets tracks the set of unique paths in the current window.
 	uniqueTargets map[string]bool
-	// hasMutation tracks whether any mutation occurred in the current window.
-	hasMutation bool
 	// totalCalls counts all diagnostic calls since last reset.
 	totalCalls int
 	// warnCount caps warnings per run.
@@ -80,7 +79,6 @@ func newTargetScatterState() *targetScatterState {
 func (s *targetScatterState) reset() {
 	s.recentTargets = nil
 	s.uniqueTargets = make(map[string]bool)
-	s.hasMutation = false
 	s.totalCalls = 0
 	s.warnCount = 0
 	s.scatterDetectedAt = 0
@@ -101,27 +99,27 @@ func scatterIsDiagnostic(toolName string) bool {
 }
 
 // scatterIsMutation returns true for tools that modify files or state.
+// scatterIsVerification was removed (#488): tool-NAME-level verification
+// classification was the exact #350 bug family — run_command carries
+// observational (ls/cat) and verify (go test) commands alike, so the
+// distinction is now made on command CONTENT in recordToolCall via
+// psIsVerifyCommand.
 func scatterIsMutation(toolName string) bool {
 	switch toolName {
 	case "edit_file", "write_file", "multi_edit_file", "multi_file_write",
-		"notebook_edit", "batch_replace", "lsp_rename":
+		"notebook_edit", "batch_replace", "lsp_rename",
+		// #488: these mutations were unclassified, so a REAL mutation left
+		// the scatter window alive and the detector later fired "without
+		// converging or taking action" — contradicting its own contract.
+		"file_ops", "undo_edit", "write_command_input", "enter_worktree",
+		"git_add", "git_commit", "git_revert", "git_reset", "git_checkout",
+		"git_stash":
 		return true
 	default:
 		return false
 	}
 }
 
-// scatterIsVerification returns true for build/test/verify tools.
-func scatterIsVerification(toolName string) bool {
-	switch toolName {
-	case "run_command", "start_command":
-		return true // commands often include build/test/lint
-	default:
-		return false
-	}
-}
-
-// scatterNormalizePath extracts a comparable key from a file path argument.
 // We keep the last N components to group related files.
 func scatterNormalizePath(raw string) string {
 	raw = strings.TrimSpace(raw)
@@ -169,12 +167,24 @@ func extractTargets(args string) []string {
 func (s *targetScatterState) recordToolCall(toolName, args string) {
 	s.totalCalls++
 
-	if scatterIsMutation(toolName) || scatterIsVerification(toolName) {
-		s.hasMutation = true
-		// Reset scatter tracking after a mutation
+	if scatterIsMutation(toolName) {
+		// A real mutation is a convergence/action signal: reset the window.
 		s.recentTargets = nil
 		s.uniqueTargets = make(map[string]bool)
-		s.hasMutation = false
+		return
+	}
+
+	if toolName == "run_command" || toolName == "start_command" {
+		// Command-content classification (#488, same lesson as #350/#483):
+		// only a genuine build/test/verify command is a convergence signal
+		// that clears the window. Pure observational commands (ls / cat /
+		// pwd / git log / git status) interleave with diagnostics in the most
+		// common investigation flow — clearing on them made the detector
+		// systematically blind (unique targets never reached the threshold).
+		if psIsVerifyCommand(extractCommandFromArgs(json.RawMessage(args))) {
+			s.recentTargets = nil
+			s.uniqueTargets = make(map[string]bool)
+		}
 		return
 	}
 
@@ -217,9 +227,6 @@ func (s *targetScatterState) check() string {
 		return ""
 	}
 	if s.totalCalls < scatterMinTotalCalls {
-		return ""
-	}
-	if s.hasMutation {
 		return ""
 	}
 

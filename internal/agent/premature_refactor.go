@@ -169,12 +169,32 @@ func isRefactoringContent(oldText, newText string) bool {
 		return false
 	}
 
-	// Check for refactoring keywords in the new text.
-	newLower := strings.ToLower(newText)
+	// Check for refactoring keywords in the new text — whole-word only and
+	// comment-line-excluded (#487 F2: bare substring matching fired on
+	// extractTargets / os.Rename / abstractHandler identifiers, and comment
+	// prose like "optimize later" describes intent without restructuring
+	// anything).
+	newLower := strings.ToLower(prStripCommentLines(newText))
 	for _, kw := range refactoringKeywords {
-		if strings.Contains(newLower, kw) {
+		if prContainsWord(newLower, kw) {
 			return true
 		}
+	}
+
+	// Core-delta gate (#487 F1): trim the shared prefix/suffix; what remains
+	// is what actually changed. A localized fix (`>` → `>=`, `,` → `;`)
+	// touches a couple of BYTES even though the byte-level core region can
+	// be large (the suffix match stops at the first differing byte from the
+	// tail, so intermediate unchanged lines land in the core). Compare the
+	// core LINE-wise: if most core lines are identical and the differing
+	// lines differ by only a few bytes each, this is localized bug fixing,
+	// not restructuring — regardless of the size-similarity ratio below.
+	prefix := prCommonPrefixLen(oldText, newText)
+	suffix := prCommonSuffix(oldText[prefix:], newText[prefix:])
+	coreOld := oldText[prefix : len(oldText)-len(suffix)]
+	coreNew := newText[prefix : len(newText)-len(suffix)]
+	if prCoreIsLocalizedFix(coreOld, coreNew) {
+		return false
 	}
 
 	// Size similarity heuristic: if old and new are similar in length,
@@ -190,6 +210,125 @@ func isRefactoringContent(oldText, newText string) bool {
 	ratio := delta / maxLen
 
 	return ratio < prematureRefactorSizeRatio
+}
+
+// prematureRefactorMinCoreDelta: below this many changed bytes per differing
+// core line, the change is a localized fix rather than a restructuring
+// move (#487 F1).
+const prematureRefactorMinCoreDelta = 32
+
+// prCoreIsLocalizedFix reports whether the core (prefix/suffix-trimmed)
+// change region is localized bug fixing / incremental feature work rather
+// than restructuring:
+//   - same line count, all but ≤2 lines byte-identical, small per-line deltas
+//     (e.g. `>`→`>=`, `,`→`;`)
+//   - OR the core is a small APPENDED/DELETED tail block (adding a call, a
+//     guard clause) — similar sizes fooled the ratio heuristic into calling
+//     plain additions "restructuring" (#487 F1 general form).
+//
+// A rename/extract/reorganize rewrites whole lines across the region.
+func prCoreIsLocalizedFix(coreOld, coreNew string) bool {
+	lo := strings.Split(coreOld, "\n")
+	ln := strings.Split(coreNew, "\n")
+	if len(lo) == len(ln) {
+		diffLines, diffBytes := 0, 0
+		for i := range lo {
+			if lo[i] == ln[i] {
+				continue
+			}
+			diffLines++
+			p := prCommonPrefixLen(lo[i], ln[i])
+			s := prCommonSuffix(lo[i][p:], ln[i][p:])
+			diffBytes += (len(lo[i]) - p - len(s)) + (len(ln[i]) - p - len(s))
+		}
+		return diffLines <= 2 && diffBytes < prematureRefactorMinCoreDelta
+	}
+	// Line counts differ: localized iff one side's core is empty (pure tail
+	// append or delete) and the other side is short.
+	if len(coreOld) < 4 && len(coreNew) < 4*prematureRefactorMinCoreDelta {
+		return true
+	}
+	if len(coreNew) < 4 && len(coreOld) < 4*prematureRefactorMinCoreDelta {
+		return true
+	}
+	return false
+}
+
+// prCommonPrefixLen returns the length of the longest common prefix of a and b.
+func prCommonPrefixLen(a, b string) int {
+	n := 0
+	maxN := len(a)
+	if len(b) < maxN {
+		maxN = len(b)
+	}
+	for n < maxN && a[n] == b[n] {
+		n++
+	}
+	return n
+}
+
+// prCommonSuffix returns the longest common suffix of a and b.
+func prCommonSuffix(a, b string) string {
+	n := 0
+	for n < len(a) && n < len(b) && a[len(a)-1-n] == b[len(b)-1-n] {
+		n++
+	}
+	return a[len(a)-n:]
+}
+
+// prStripCommentLines removes // comment lines and /* */ blocks so that
+// intent-describing prose ("optimize later", "TODO: refactor after tests")
+// cannot satisfy the keyword heuristic — only code being written counts.
+func prStripCommentLines(s string) string {
+	lines := strings.Split(s, "\n")
+	var keep []string
+	inBlock := false
+	for _, ln := range lines {
+		trimmed := strings.TrimSpace(ln)
+		if inBlock {
+			if strings.Contains(trimmed, "*/") {
+				inBlock = false
+			}
+			continue
+		}
+		if strings.HasPrefix(trimmed, "//") || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "/*") {
+			if !strings.Contains(trimmed, "*/") {
+				inBlock = true
+			}
+			continue
+		}
+		keep = append(keep, ln)
+	}
+	return strings.Join(keep, "\n")
+}
+
+// prContainsWord reports whether s contains kw as a whole word: the bytes
+// adjacent to an occurrence must not be word characters. "extractTargets"
+// does not contain the word "extract"; "extract the helper" does (#487 F2).
+func prContainsWord(s, kw string) bool {
+	if kw == "" {
+		return false
+	}
+	for i := 0; i+len(kw) <= len(s); i++ {
+		if s[i:i+len(kw)] != kw {
+			continue
+		}
+		if i > 0 && prIsWordByte(s[i-1]) {
+			continue
+		}
+		if i+len(kw) < len(s) && prIsWordByte(s[i+len(kw)]) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func prIsWordByte(c byte) bool {
+	return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
 }
 
 // --- Agent integration ---
@@ -213,8 +352,26 @@ func (a *Agent) prematureRefactorRecordEdit(toolName string, args []byte) {
 }
 
 // prematureRefactorRecordVerify marks that a build/test command was executed.
+// Raw setter — the production entry is the command-gated variant below.
 func (a *Agent) prematureRefactorRecordVerify() {
 	if a.prematureRefactor == nil {
+		return
+	}
+	a.prematureRefactor.hasVerified = true
+}
+
+// prematureRefactorRecordVerifyForTool is the production entry: it marks
+// verification ONLY when the tool call carries a genuine build/test/verify
+// command (#487). The previous wiring called the raw setter unconditionally
+// on every tool result, so the first read_file already set hasVerified and
+// permanently silenced the detector — 100% dead in production despite a
+// green unit suite that never simulated the real wiring order
+// (recordEdit → same-pass recordVerify → check).
+func (a *Agent) prematureRefactorRecordVerifyForTool(args json.RawMessage) {
+	if a.prematureRefactor == nil {
+		return
+	}
+	if !psIsVerifyCommand(extractCommandFromArgs(args)) {
 		return
 	}
 	a.prematureRefactor.hasVerified = true

@@ -1249,6 +1249,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		a.editCoverage.reset()
 		a.prematureSuccess.reset()
 		a.strategyFixation.reset()
+		a.targetScatter.reset()
 		a.errorRush.reset()
 		if a.recklessExec != nil {
 			a.recklessExec.reset()
@@ -3159,6 +3160,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// this run. Fires before the tool executes so the hint is in the
 			// result alongside any error from the edit attempt.
 			if !result.IsError && (tc.Name == "edit_file" || tc.Name == "multi_edit_file" || tc.Name == "multi_file_edit") {
+				// Counted ONCE per tool call: this used to sit inside the per-file
+				// loop below, so one multi_file_edit touching 2 files doubled the
+				// refactor counter and hit the threshold of 2 instantly (#487).
+				a.prematureRefactorRecordEdit(tc.Name, tc.Arguments)
 				for _, p := range extractEditFilePaths(tc.Name, tc.Arguments) {
 					a.editFailRecovery.recordEditSuccess(p)
 					// Content-fingerprint validation MUST run before readHash.recordWriteHash
@@ -3196,7 +3201,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 							result.Content = ocHint
 						}
 					}
-					a.prematureRefactorRecordEdit(tc.Name, tc.Arguments)
 					// Fix cascade: track edits for wrong-hypothesis lock-in detection.
 					a.fixCascade.recordEdit()
 					// Error regression: track edits for negative progress detection.
@@ -3935,7 +3939,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// reset the edit counter and track the result.
 			a.maybeResetVerifyOnCommand(tc.Name, tc.Arguments, result.IsError)
 			a.verifyDebt.recordVerifyCommand(extractCommandFromArgs(tc.Arguments), result.IsError)
-			a.prematureRefactorRecordVerify()
+			// #487: gate on command CONTENT — the unconditional raw setter made
+			// the first read_file count as a build/test and silenced the
+			// detector for the whole run.
+			a.prematureRefactorRecordVerifyForTool(tc.Arguments)
 			if !result.IsError {
 				a.editPropagation.recordGreenBuild()
 			}

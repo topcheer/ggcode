@@ -164,6 +164,18 @@ type ChatBridge struct {
 	// the old run's messages to the new session's JSONL (cross-session
 	// pollution via SendHiddenText's LAN channel included).
 	runSes *session.Session
+	// runGeneration increments on every session switch/clear and run
+	// start/end (#489): late events from a superseded run compare their
+	// captured generation and self-drop instead of leaking into the new
+	// session (persist tail, stream emit).
+	runGeneration uint64
+	// persistSession/persistGeneration are the closure-effective persist
+	// target captured at run start (#489); see setRunPersistSnapshot.
+	persistSession    *session.Session
+	persistGeneration uint64
+	// emitGeneration is the generation of the run whose events emit() is
+	// currently forwarding; 0 = none yet (#489).
+	emitGeneration uint64
 }
 
 // NewChatBridge creates a new chat bridge using the global config.
@@ -546,7 +558,10 @@ func (b *ChatBridge) sendMessageData(data tunnel.MessageData, source string, exc
 		}
 		b.emit(ev)
 	})
-	if err != nil {
+	if err != nil && !errors.Is(err, context.Canceled) {
+		// #489: a cancelled run draining its tail must not inject a
+		// "context canceled" error item into the (possibly NEW) session's
+		// live history — finishRun already handles cancellation semantics.
 		b.appendLiveError(err.Error())
 	}
 	b.finishRun(err)
@@ -644,9 +659,37 @@ func (b *ChatBridge) finishRun(err error) {
 }
 
 // ClearCurrentSession resets the current session so next chat creates a fresh one.
+// setRunPersistSnapshot installs the per-run persist target for THIS run
+// only: a captured session + generation (#489). Replaces read-at-trigger
+// semantics for run-scoped persists; called after runSes is established.
+func (b *ChatBridge) setRunPersistSnapshot() {
+	b.mu.Lock()
+	b.runGeneration++
+	b.persistGeneration = b.runGeneration
+	b.persistSession = b.runSes
+	b.mu.Unlock()
+}
+
+// clearRunPersistSnapshot drops the per-run snapshot (run ended/cancelled).
+// Late persists after this find no snapshot and are dropped (#489).
+func (b *ChatBridge) clearRunPersistSnapshot() {
+	b.mu.Lock()
+	b.runGeneration++
+	b.persistSession = nil
+	b.mu.Unlock()
+}
+
 func (b *ChatBridge) ClearCurrentSession() {
 	// Clean up ephemeral empty session before switching.
 	b.cleanupEphemeralSession()
+
+	// #489: bump the generation FIRST so the still-draining cancelled run's
+	// late persists/emit events self-drop; also drop any persist snapshot so
+	// nothing falls through to the session being installed next.
+	b.mu.Lock()
+	b.runGeneration++
+	b.persistSession = nil
+	b.mu.Unlock()
 
 	state := agentruntime.ClearSession()
 	b.ResetAgent()
@@ -1810,12 +1853,14 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 		// writes when the bridge holds a lock for a different session (#269).
 		ag.SetPersistHandler(func(msg provider.Message) {
 			b.mu.Lock()
-			ses := b.runSes
-			if ses == nil {
-				ses = b.currentSes // no active-run snapshot — legacy behavior
-			}
+			// #489: run-scoped persist uses the closure-captured snapshot — a
+			// nil snapshot (no active run binding) drops the message instead of
+			// falling through to currentSes, which after New-Session is the NEW
+			// session and would re-arm the #270 cross-write.
+			ses := b.persistSession
+			mismatch := b.sessionLockMismatchLocked(ses)
 			b.mu.Unlock()
-			if ses == nil {
+			if ses == nil || mismatch {
 				return
 			}
 			b.appendPersistMessage(jsonlStore, ses, msg)
@@ -3992,6 +4037,8 @@ func (b *ChatBridge) SendContent(content []provider.ContentBlock) error {
 	b.mu.Lock()
 	b.runSes = b.currentSes
 	b.mu.Unlock()
+	// #489: bind THIS run's persist target (snapshot + generation).
+	b.setRunPersistSnapshot()
 
 	if b.currentSes != nil {
 		msg := provider.Message{Role: "user", Content: content}
