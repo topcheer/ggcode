@@ -29,8 +29,6 @@ package agent
 // providing a hard per-turn limit across ALL detectors combined.
 
 import (
-	"strings"
-
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
 )
@@ -42,22 +40,11 @@ const (
 	guidanceBudgetPerTurn = 5
 )
 
-// criticalGuidanceKeywords are substrings that mark a guidance message as
-// critical/safety-relevant. Messages containing these bypass the budget cap.
-var criticalGuidanceKeywords = []string{
-	"[CRITICAL",
-	"[PERMISSION",
-	"[IRREVERSIBLE",
-	"[DESTRUCTIVE",
-	"[SAFETY",
-	"[SECURITY",
-	"[BLOCKED",
-	"[FATAL",
-	"[pre-commit-build-gate",
-	"[hardcoded-secret",
-	"[path-traversal",
-	"[git-destructive",
-}
+// #441: critical classification uses ONLY the head tag (extractHintTag)
+// matched exactly against criticalHintTags — the single keyword source
+// shared with the coalescer. The old full-text substring scan let any
+// advisory guidance that merely QUOTED '[CRITICAL' bypass the 5/turn
+// cap forever.
 
 // guidanceBudget tracks how many guidance messages have been injected
 // in the current agent iteration.
@@ -92,20 +79,12 @@ func (g *guidanceBudget) allow(text string) bool {
 	return false
 }
 
-// isCriticalGuidance returns true if the guidance text contains a
-// critical/safety keyword.
+// isCriticalGuidance returns true if the guidance text's HEAD TAG marks it
+// as critical/safety-relevant (#441: exact tag match only — never a
+// full-text substring scan).
 func isCriticalGuidance(text string) bool {
-	upper := strings.ToUpper(text)
-	for _, kw := range criticalGuidanceKeywords {
-		if strings.Contains(upper, strings.ToUpper(kw)) {
-			return true
-		}
-	}
-	// Also check via the coalescer's tag system for consistency.
-	if tag := extractHintTag(text); tag != "" && isCriticalTag(tag) {
-		return true
-	}
-	return false
+	tag := extractHintTag(text)
+	return isCriticalTag(tag)
 }
 
 // injectGuidance is the budget-aware replacement for direct

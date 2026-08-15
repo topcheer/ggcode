@@ -101,23 +101,17 @@ func extractHintTag(hint string) string {
 }
 
 // isCriticalTag returns true if the tag represents a critical/safety issue
-// that should always be retained.
+// that should always be retained. #441: EXACT match only (case-insensitive)
+// — the old substring fallback let tags like "[SECURITY-TIP]" or
+// "[BLOCKED-FOR-NOW]" inherit permanent budget exemption just by naming.
 func isCriticalTag(tag string) bool {
 	if tag == "" {
 		return false
 	}
-	// Exact match.
 	if criticalHintTags[tag] {
 		return true
 	}
-	// Case-insensitive substring match for critical keywords.
-	upper := strings.ToUpper(tag)
-	for kw := range criticalHintTags {
-		if strings.Contains(upper, strings.ToUpper(kw)) {
-			return true
-		}
-	}
-	return false
+	return criticalHintTags[strings.ToUpper(tag)]
 }
 
 // coalesceGuidance takes a slice of guidance hints for a single tool
