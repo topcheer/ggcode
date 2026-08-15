@@ -849,8 +849,16 @@ func infiniteCommandSuggestion(bin string) string {
 }
 
 // IsDestructive returns true if the command matches any block or ask rule.
+// #444: ask rules are included — the gate classifies 'rm -rf <relative>',
+// 'git reset --hard', 'terraform destroy' etc. as ask-level destructive,
+// and the doc contract (and any danger-assessing caller) must see them.
 func (g *CommandGate) IsDestructive(cmd string) bool {
 	for _, rule := range g.blockRules {
+		if rule.pattern.MatchString(cmd) {
+			return true
+		}
+	}
+	for _, rule := range g.askRules {
 		if rule.pattern.MatchString(cmd) {
 			return true
 		}

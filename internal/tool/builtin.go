@@ -18,6 +18,11 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 	fileGuard := NewFileGuard(protectedPaths)
 	debug.Log("fileguard", "initialized with %d patterns: %v", len(fileGuard.Patterns()), fileGuard.Patterns())
 
+	// #443: FileGuard is write-only protection ("Read tools are never
+	// blocked" per its design). Merging it into READ tools' sandbox check
+	// blocked read_file/grep/glob on .env/.git paths — a functional
+	// regression under the default config. Read tools get the policy
+	// sandbox only; write tools additionally get the file guard.
 	sandboxFor := func(toolName string) AllowedPathChecker {
 		var base AllowedPathChecker
 		if policy != nil {
@@ -27,28 +32,37 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 		}
 		return MergeFileGuards(base, fileGuard, workingDir)
 	}
+	readSandboxFor := func(toolName string) AllowedPathChecker {
+		if policy == nil {
+			return nil
+		}
+		return func(path string) bool {
+			return policy.AllowedPathForTool(toolName, path)
+		}
+	}
 	jobManager := NewCommandJobManager(workingDir)
 	codeIndex := NewCodeIndexManager(workingDir)
 	registry.codeIndex = codeIndex
 	tools := []Tool{
-		// File operations
-		ReadFile{SandboxCheck: sandboxFor("read_file")},
-		MultiFileRead{SandboxCheck: sandboxFor("multi_file_read")},
+		// File operations — read tools use readSandboxFor (#443: FileGuard
+		// is write-only; it must never gate reads).
+		ReadFile{SandboxCheck: readSandboxFor("read_file")},
+		MultiFileRead{SandboxCheck: readSandboxFor("multi_file_read")},
 		WriteFile{SandboxCheck: sandboxFor("write_file"), WorkingDir: workingDir},
 		MultiFileWrite{SandboxCheck: sandboxFor("multi_file_write"), WorkingDir: workingDir},
-		ListDir{SandboxCheck: sandboxFor("list_directory")},
+		ListDir{SandboxCheck: readSandboxFor("list_directory")},
 		EditFile{SandboxCheck: sandboxFor("edit_file"), WorkingDir: workingDir},
 		MultiFileEdit{SandboxCheck: sandboxFor("multi_file_edit"), WorkingDir: workingDir},
 		BatchReplace{SandboxCheck: sandboxFor("batch_replace"), WorkingDir: workingDir},
 		FileOps{SandboxCheck: sandboxFor("file_ops"), WorkingDir: workingDir},
 
 		// Search
-		SearchFiles{SandboxCheck: sandboxFor("search_files")},
-		Grep{SandboxCheck: sandboxFor("grep")},
-		Glob{SandboxCheck: sandboxFor("glob")},
-		CodeSearch{SandboxCheck: sandboxFor("code_search"), Index: codeIndex},
+		SearchFiles{SandboxCheck: readSandboxFor("search_files")},
+		Grep{SandboxCheck: readSandboxFor("grep")},
+		Glob{SandboxCheck: readSandboxFor("glob")},
+		CodeSearch{SandboxCheck: readSandboxFor("code_search"), Index: codeIndex},
 	}
-	tools = append(tools, NewLSPTools(workingDir, sandboxFor("read_file"), sandboxFor("edit_file"))...)
+	tools = append(tools, NewLSPTools(workingDir, readSandboxFor("read_file"), sandboxFor("edit_file"))...)
 	tools = append(tools,
 
 		// Multi-edit and notebook
