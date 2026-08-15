@@ -82,6 +82,7 @@ func (m Model) handleDoneMsg(msg doneMsg) (Model, tea.Cmd) {
 // handleAgentDoneMsg handles the corresponding message case.
 func (m Model) handleAgentDoneMsg(msg agentDoneMsg) (Model, tea.Cmd) {
 	if msg.RunID != m.activeAgentRunID {
+		debug.Log("restart", "agentDoneMsg DROPPED: runID=%d active=%d pendingRestart=%v", msg.RunID, m.activeAgentRunID, m.restartPending)
 		return m, nil
 	}
 	// Send "completed" receipt for lanchat messages that triggered this agent run
