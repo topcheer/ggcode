@@ -139,7 +139,6 @@ type Agent struct {
 	undoBlind                  *undoBlindState                       // undo-edit blind continuation detection (AgentDebug-inspired)
 	editAbandon                *editAbandonState                     // edit abandonment detection (PASTE/LLMCompiler-inspired attention-shift tracking)
 	toolCallBudget             *toolCallBudget                       // per-session tool invocation limit (action-level guardrail)
-	cacheKeepalive             *cacheKeepaliveState                  // prompt cache warming pings during idle (Anthropic)
 	commandCache               *commandCache                         // deterministic build/test command result caching
 	emptySearch                *emptySearchState                     // empty search spiral detection (futile search guidance)
 	postEditVerify             postEditVerifyState                   // tracks source-code edits to inject periodic verification hints
@@ -197,14 +196,12 @@ type Agent struct {
 	unverifiedClaim            *unverifiedClaimState                 // unverified success claim detection (text claims vs actual verification)
 	convergenceLock            *convergenceLockState                 // post-verification unnecessary edit drift detection
 	userSentiment              *userSentimentState                   // negative user feedback detection (frustration/rejection course correction)
-	taskAnchor                 *taskAnchorState                      // periodic task re-anchoring for context collapse prevention
 	adaptiveSampling           *adaptiveSamplingState                // per-turn temperature adaptation (phase-aware sampling control)
 	effortAdapter              *adaptiveEffortState                  // per-turn reasoning effort adaptation (Opus 5 effort toggle pattern)
 	branchGuard                *branchGuardState                     // protected branch edit warning (main/master/develop awareness)
 	destructiveGuard           *gitDestructiveState                  // destructive git operation detection (reset --hard, force push, etc.)
 	shellNativeHint            *shellNativeHintState                 // suggests native tools when agent uses shell for equivalent operations
 	monorepoScoper             *monorepoScoperState                  // monorepo package scope sprawl detection
-	mcpEcosystem               *mcpEcosystemState                    // MCP server health, conflict, and capability intelligence
 	mcpRuntime                 tool.MCPRuntime                       // MCP runtime for server snapshots (optional)
 	bgOrphan                   *bgOrphanState                        // orphaned background command detection (unchecked start_command jobs)
 	actionAnnihil              *actionAnnihilateState                // action annihilation detection (tool calls that cancel prior side effects)
@@ -227,7 +224,6 @@ type Agent struct {
 	correctionSpiral           *correctionSpiralState                // correction spiral detector (error severity escalation across fixes)
 	wastedExplore              *wastedExploreState                   // wasted exploration detection (search results never acted upon)
 	toolResultRedundancy       *toolResultRedundancyState            // tool result redundancy detection (overlapping content across calls)
-	anchorErosion              *anchorErosionState                   // anchor precision decay detection (edit argument quality degradation over run lifecycle)
 	tunnelVision               *tunnelVisionState                    // tunnel vision detection (narrow file scope / under-exploration)
 	prematureCommit            *prematureCommitState                 // premature commitment detection (insufficient evidence before first edit)
 	selfMod                    *selfModState                         // self-modification safety guard (agent editing its own infrastructure)
@@ -244,7 +240,6 @@ type Agent struct {
 	delegationOrch             *delegationState                      // delegation orchestration intelligence (orphaned delegations, serial anti-pattern, over-delegation)
 	integrationMonitor         *integrationState                     // tool output integration monitoring (cross-step evidence accumulation, TRACE)
 	crossFileImpact            *crossFileImpactState                 // pre-completion cross-file impact analysis (removed symbol breakage detection)
-	promptOps                  *promptOpsState                       // system prompt redundancy and token efficiency intelligence (PromptOps)
 	cacheEffMonitor            *cacheEffMonitor                      // prompt cache efficiency monitoring (cache bust storm detection)
 	redundantRead              *redundantReadState                   // redundant re-read detection (context waste prevention)
 	patchExhaust               *patchExhaustState                    // IFT patch exhaustion detection (give-up rule for over-mined directories)
@@ -258,7 +253,6 @@ type Agent struct {
 	fileChurn                  *churnState                           // file churn detection (invalidated assumption awareness)
 	editOscillation            *oscillationState                     // edit oscillation detection (semantic back-and-forth awareness)
 	silentError                *silentErrorState                     // silent error advancement detection (unaddressed error proceeding)
-	verifySuppress             *verifySuppressState                  // verification suppression detection (reward hacking via error masking)
 	toolOveruse                *toolOveruseState                     // tool overuse / self-awareness detection (unnecessary tool calls for known info)
 	phantomVerify              *phantomVerifyState                   // phantom verification detection (category-specific verification claims without matching commands)
 	redundantReverify          *redundantReverifyState               // redundant re-verification detection (same verification cmd re-run without file edits)
@@ -292,7 +286,6 @@ type Agent struct {
 	momentumLoss               *momentumLossState                    // late-phase productivity collapse detection (last-mile stall)
 	diminishingEdit            *diminishingEditState                 // polish-spiral detection (diminishing edit substance)
 	overcorrection             *overcorrectionState                  // overcorrection cascade detection (disproportionate fix size)
-	contextAnchor              *anchorState                          // positional attention decay mitigation (lost-in-the-middle re-anchoring, Liu et al. 2024)
 	prematureRefactor          *prematureRefactorState               // premature refactoring detection (unverified code restructuring awareness)
 	subgoalTrack               *subgoalState                         // subgoal completion integrity (missing-step planning failure awareness)
 	infoScent                  *infoScentState                       // information scent decay detection (diminishing novelty across explorations)
@@ -352,7 +345,6 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		undoBlind:              newUndoBlindState(),
 		editAbandon:            newEditAbandonState(),
 		toolCallBudget:         newToolCallBudget(),
-		cacheKeepalive:         newCacheKeepaliveState(),
 		commandCache:           newCommandCache(),
 		emptySearch:            newEmptySearchState(),
 		errorClassifier:        NewErrorClassifier(),
@@ -382,7 +374,6 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		destructiveGuard:       newGitDestructiveState(),
 		shellNativeHint:        newShellNativeHintState(),
 		monorepoScoper:         newMonorepoScoperState(),
-		mcpEcosystem:           newMCPEcosystemState(),
 		approvalMemory:         permission.NewApprovalMemory(),
 		crossDetectorConsensus: newConsensusState(),
 		taintInfluence:         newTaintInfluenceState(),
@@ -405,7 +396,6 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		toolFilter:             tool.NewRelevanceFilter(),
 		latencyTracker:         NewLatencyTracker(),
 		toolSequence:           newToolSequenceValidator(),
-		taskAnchor:             newTaskAnchorState("", time.Time{}),
 		adaptiveSampling:       newAdaptiveSamplingState(),
 		effortAdapter:          newAdaptiveEffortState(),
 		sessionTimeout:         newSessionTimeoutState(0),
@@ -417,7 +407,6 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		compoundingFailure:     newCompoundingFailureState(),
 		failureMode:            newFailureModeState(),
 		toolFallback:           newToolFallbackState(),
-		promptOps:              newPromptOpsState(),
 		cacheEffMonitor:        newCacheEffMonitor(),
 		redundantRead:          newRedundantReadState(),
 		patchExhaust:           newPatchExhaustState(),
@@ -443,7 +432,6 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		correctionSpiral:       newCorrectionSpiralState(),
 		wastedExplore:          newWastedExploreState(),
 		toolResultRedundancy:   newToolResultRedundancyState(),
-		anchorErosion:          newAnchorErosionState(),
 		selfMod:                newSelfModState(),
 		tunnelVision:           newTunnelVisionState(),
 		prematureCommit:        newPrematureCommitState(),
@@ -463,7 +451,6 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		fileChurn:              newChurnState(),
 		editOscillation:        newOscillationState(),
 		silentError:            newSilentErrorState(),
-		verifySuppress:         newVerifySuppressState(),
 		toolOveruse:            newToolOveruseState(),
 		phantomVerify:          newPhantomVerifyState(),
 		redundantReverify:      newRedundantReverifyState(),
@@ -488,7 +475,6 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		momentumLoss:           newMomentumLossState(),
 		diminishingEdit:        newDiminishingEditState(),
 		overcorrection:         newOvercorrectionState(),
-		contextAnchor:          newAnchorState(),
 		prematureRefactor:      newPrematureRefactorState(),
 		subgoalTrack:           newSubgoalState(),
 		infoScent:              newInfoScentState(),
@@ -686,7 +672,6 @@ func (a *Agent) PermissionPolicy() permission.PermissionPolicy {
 // Close releases resources held by the agent, including cancelling any
 // in-flight pre-compact operations. Should be called on shutdown.
 func (a *Agent) Close() {
-	a.cacheKeepalive.stopIdle()
 	a.CancelPreCompact()
 	if a.shutdownCancel != nil {
 		a.shutdownCancel()
@@ -1169,7 +1154,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	debug.Log("agent", "RunStreamWithContent START content_blocks=%d", len(content))
 	// Stop any background cache-keepalive pings — the user is sending a new
 	// message, so the cache will be refreshed naturally by this request.
-	a.cacheKeepalive.stopIdle()
 	// Write run-start journal entry for crash detection. If the process dies
 	// before the defer below runs, CheckCrashedRun() on next startup will detect
 	// the stale "running" entry and alert the user.
@@ -1224,7 +1208,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.toolSequence.reset()
 	a.shellNativeHint.reset()
 	a.monorepoScoper.reset()
-	a.mcpEcosystem.reset()
 	a.resetBgOrphan()
 	a.actionAnnihil.reset()
 	a.exploreFrag.reset()
@@ -1276,10 +1259,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.irrevGate.reset()
 		}
 		a.subgoalTrack.reset()
-		a.contextAnchor.reset()
 		a.futileCycle.reset()
 		a.toolResultRedundancy.reset()
-		a.anchorErosion.reset()
 		a.verifyDebt.reset()
 		a.editPropagation.reset()
 		a.successDeclare.reset()
@@ -1352,16 +1333,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// This prevents unbounded context growth in autopilot sessions where
 		// the summarization LLM call keeps failing.
 		a.maybeFallbackCheckpoint()
-		// Start background prompt-cache keepalive pings for Anthropic.
-		// Sends a minimal request every 270s to keep the prompt cache warm
-		// during idle, saving ~83K tokens when the user resumes.
-		// Skipped on cancellation or when provider doesn't support caching.
-		if !isCancelled && err == nil {
-			if cm, ok := a.contextManager.(*ctxpkg.Manager); ok {
-				msgs := cm.Messages()
-				a.cacheKeepalive.startIdle(a.provider, msgs, a.tools.ToDefinitions())
-			}
-		}
 	}()
 	a.contextManager.Add(provider.Message{
 		Role:    "user",
@@ -1457,7 +1428,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.maybeInjectPerfRegression()
 	a.maybeInjectDynamicSystemPrompt()
 	a.maybeInjectRatchetRules()
-	a.maybeCheckPromptOps()
 	transientCompactWarned := false
 	toolDefs := a.tools.ToDefinitions()
 	if cm, ok := a.contextManager.(interface{ SetToolDefinitionOverhead(int) }); ok {
@@ -1533,7 +1503,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.searchParamGuard.reset()
 	a.toolRedundancy.reset()
 	a.toolSequence.reset()
-	a.taskAnchor.reset(userPromptForStats, time.Now())
 	a.toolFilter = tool.NewRelevanceFilter()
 	a.resetTransientRetryBudget()
 	a.compoundingFailure.reset()
@@ -1541,7 +1510,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.fileChurn.reset()
 	a.editOscillation.reset()
 	a.silentError.reset()
-	a.verifySuppress.reset()
 	a.toolOveruse.reset()
 	a.toolStorm.reset()
 	a.serialRead.reset()
@@ -1581,7 +1549,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.readHash.reset()
 	a.toolThermal.reset()
 	a.cacheEffMonitor.reset()
-	a.promptOps.reset()
 	// Capture the git working tree state BEFORE the agent makes any changes.
 	// This lets the reconciliation gate distinguish pre-existing dirty files
 	// (user's own uncommitted work) from genuine side-effect changes introduced
@@ -1660,14 +1627,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	}
 	// Sycophancy detection: capture candidate factual premises from the user
 	// message so the agent's response can be checked for unverified agreement.
-	// Cross-session guidance promotion: inject proactive reminders for tags
-	// that have recurred across 3+ past sessions (inter-test-time evolution).
-	if reminder := a.guidancePromoter.RunStartHook(); reminder != "" {
-		a.contextManager.Add(provider.Message{
-			Role:    "user",
-			Content: []provider.ContentBlock{{Type: "text", Text: reminder}},
-		})
-	}
 	for i := 0; a.maxIter <= 0 || i < a.maxIter; i++ {
 		runStats.Iterations = i + 1
 		if err := ctx.Err(); err != nil {
@@ -1732,19 +1691,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			msgs = a.contextManager.Messages()
 		}
 		// Task re-anchoring: prevent context collapse on long repair chains.
-		// After 8-10+ tool calls, models lose track of the original task
-		// (AgentMarketCap 2026 survey, arXiv:2603.07670). Re-inject a compact
-		// reminder periodically based on cumulative tool call count — not
-		// iteration count, since parallel tools accelerate collapse.
-		if anchorMsg := a.taskAnchor.maybeReanchorTask(
-			runStats.totalToolCalls(), i+1, runStats.FilesEdited,
-		); anchorMsg != "" {
-			a.contextManager.Add(provider.Message{
-				Role:    "user",
-				Content: []provider.ContentBlock{{Type: "text", Text: anchorMsg}},
-			})
-			msgs = a.contextManager.Messages()
-		}
 		// File freshness sentinel: proactively detect externally modified files
 		// (IDE save, formatter, git pull, another agent). Injects a notification
 		// BEFORE the agent uses stale content, not reactively at edit time.
@@ -2047,15 +1993,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.contextManager.Add(provider.Message{
 				Role:    "user",
 				Content: []provider.ContentBlock{{Type: "text", Text: monorepoMsg}},
-			})
-			msgs = a.contextManager.Messages()
-		}
-		// MCP ecosystem intelligence: one-time check at session start for
-		// failed servers, tool name conflicts, empty servers, and auth issues.
-		if mcpMsg := a.maybeWarnMCP(i + 1); mcpMsg != "" {
-			a.contextManager.Add(provider.Message{
-				Role:    "user",
-				Content: []provider.ContentBlock{{Type: "text", Text: mcpMsg}},
 			})
 			msgs = a.contextManager.Messages()
 		}
@@ -2442,25 +2379,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					Content: []provider.ContentBlock{{
 						Type: "text",
 						Text: abstrHint,
-					}},
-				})
-			}
-			// Context anchor reinforcement: as the conversation grows, the
-			// original user task drifts into the low-attention middle zone
-			// (U-shaped attention curve, Liu et al. 2024 / Veseli et al. 2025).
-			// Periodically re-inject a concise reminder into the recency peak.
-			if anchorHint := a.contextAnchor.checkAnchorReinforcement(
-				i+1,
-				a.contextManager.TokenCount(),
-				a.contextManager.ContextWindow(),
-				a.contextManager.Messages(),
-			); anchorHint != "" {
-				debug.Log("context-anchor", "Iteration %d: re-anchoring user task against positional attention decay", i+1)
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: anchorHint,
 					}},
 				})
 			}
@@ -3267,14 +3185,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 						}
 					}
 					a.prematureRefactorRecordEdit(tc.Name, tc.Arguments)
-					// Anchor erosion: track edit precision decay over run lifecycle.
-					if aeHint := a.anchorErosion.recordEditAnchor(tc.Name, string(tc.Arguments)); aeHint != "" {
-						if result.Content != "" {
-							result.Content = result.Content + "\n\n" + aeHint
-						} else {
-							result.Content = aeHint
-						}
-					}
 					// Fix cascade: track edits for wrong-hypothesis lock-in detection.
 					a.fixCascade.recordEdit()
 					// Error regression: track edits for negative progress detection.
@@ -3667,17 +3577,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					}
 				}
 			}
-			// Verification suppression detection: check shell commands for error-masking operators.
 			if tc.Name == "run_command" || tc.Name == "start_command" {
 				cmd := extractCommandFromToolCall(tc.Arguments)
 				if cmd != "" {
-					if suppressMsg := a.verifySuppress.checkVerificationSuppression(tc.Name, cmd); suppressMsg != "" {
-						if result.Content != "" {
-							result.Content = result.Content + "\n\n" + suppressMsg
-						} else {
-							result.Content = suppressMsg
-						}
-					}
 					// Verification scope narrowing: detect progressively narrowing
 					// test/build commands that mask failures (command-level spec gaming).
 					if narrowMsg := a.scopeNarrow.recordVerificationCommand(tc.Name, cmd, result.Content, result.IsError); narrowMsg != "" {

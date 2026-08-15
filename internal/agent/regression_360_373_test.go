@@ -119,21 +119,5 @@ func TestCausalAttribution_SourceReadNotFailure(t *testing.T) {
 	}
 }
 
-// --- #380: multi-edit anchor normalization ---
-
-func TestAnchorErosion_MultiFileMixedNoDecay(t *testing.T) {
-	// Issue scenario: 3 multi_file_edit calls (3 files x 5 lines = 15 summed
-	// under the old code) followed by 4 plain edit_file (5 lines each).
-	// Per-edit averaging means the window is [5,5,5,5,5] — zero decay.
-	a := newAnchorErosionState()
-	multiArgs := `{"files":[{"path":"a.go","edits":[{"old_text":"l1\nl2\nl3\nl4\nl5"}]},{"path":"b.go","edits":[{"old_text":"l1\nl2\nl3\nl4\nl5"}]},{"path":"c.go","edits":[{"old_text":"l1\nl2\nl3\nl4\nl5"}]}]}`
-	for i := 0; i < 3; i++ {
-		a.recordEditAnchor("multi_file_edit", multiArgs)
-	}
-	singleArgs := `{"file_path":"d.go","old_text":"l1\nl2\nl3\nl4\nl5"}`
-	for i := 0; i < 4; i++ {
-		if hint := a.recordEditAnchor("edit_file", singleArgs); hint != "" {
-			t.Errorf("uniform 5-line anchors must not trigger decay warning, got: %s", hint)
-		}
-	}
-}
+// Note: the #380 anchor erosion regression test was removed along with the
+// anchor_erosion detector itself (low-certainty monitor purge, 2026-08).
