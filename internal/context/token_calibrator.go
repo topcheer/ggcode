@@ -21,10 +21,11 @@ const (
 // It uses incremental averaging: each new adjustment has decreasing weight,
 // so the ratio converges over time without being dominated by outliers.
 type TokenCalibrator struct {
-	mu         sync.Mutex
-	asciiRatio float64
-	cjkRatio   float64
-	samples    int
+	mu            sync.Mutex
+	lastEstimated int // estimated-token value of the most recent sample (test accessor, #383)
+	asciiRatio    float64
+	cjkRatio      float64
+	samples       int
 }
 
 // NewTokenCalibrator creates a calibrator with default ratios.
@@ -56,6 +57,7 @@ func (c *TokenCalibrator) RecordSample(estimatedTokens, actualTokens, asciiChars
 	defer c.mu.Unlock()
 
 	c.samples++
+	c.lastEstimated = estimatedTokens
 
 	// Warmup: don't adjust during first few samples
 	if c.samples <= calibWarmupSamples {
@@ -131,6 +133,22 @@ func (c *TokenCalibrator) CJKCharsPerToken() float64 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.cjkRatio
+}
+
+// LastEstimated returns the estimated-token value of the most recent
+// calibration sample (test accessor, #383).
+func (c *TokenCalibrator) LastEstimated() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.lastEstimated
+}
+
+// SampleCount returns the number of recorded calibration samples (test
+// accessor).
+func (c *TokenCalibrator) SampleCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.samples
 }
 
 // Reset returns the calibrator to default ratios and clears sample count.

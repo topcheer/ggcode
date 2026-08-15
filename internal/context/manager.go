@@ -912,10 +912,15 @@ func (m *Manager) RecordUsage(usage provider.TokenUsage) {
 	m.baselineAvailable = true
 	// Feed calibration sample: compare our estimate with actual API input tokens.
 	// Use totalInput (including cache read) for accurate calibration.
-	// Pass the live composition so each ratio is calibrated only by samples
-	// that actually observed that script (#355).
+	// The estimated side must include toolDefinitionOverhead to match the
+	// actual side's composition — totalInput necessarily contains tool
+	// schemas + system prompt; a content-only estimate made factor < 1 on
+	// every sample, pushing asciiRatio into its clamp and double-counting
+	// the overhead in tokenCountLocked afterwards (#383). Do NOT use
+	// tokenCountLocked() here: the baseline was just overwritten by this
+	// very usage, which would make the comparison circular.
 	asciiChars, cjkChars := m.compositionLocked()
-	m.calibrator.RecordSample(m.tokens, totalInput, asciiChars, cjkChars)
+	m.calibrator.RecordSample(m.tokens+m.toolDefinitionOverhead, totalInput, asciiChars, cjkChars)
 	debug.Log("ctx", "RecordUsage: input=%d cache_read=%d output=%d old_baseline=%d→new_baseline=%d estimated=%d delta=%d",
 		usage.InputTokens, usage.CacheRead, usage.OutputTokens, oldBaseline, m.baselineTokens, m.tokens, m.baselineTokens-m.tokens)
 }
@@ -1060,6 +1065,11 @@ func (m *Manager) Summarize(ctx context.Context, prov provider.Provider) error {
 
 	oldLen := len(m.messages)
 	m.messages = newMsgs
+	// Re-inject pinned context after compaction — the pinned contract
+	// ("survive compaction") must hold on the direct Summarize path too
+	// (PTL recovery, /compact), not just ApplyCompactResult. Without this,
+	// pinned items compressed into the summary were silently lost (#382).
+	m.injectPinnedAfterCompaction()
 	m.version++
 	m.recalcTokens()
 	debug.Log("ctx", "Summarize: msgs=%d→%d oldTokens=%d newTokens=%d summaryChars=%d summaryEstimatedTokens=%d extraMsgs=%d stateTextChars=%d",
