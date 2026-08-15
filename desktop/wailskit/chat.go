@@ -84,6 +84,9 @@ type ChatBridge struct {
 
 	// Pending messages (mirrors Fyne pendingMsgs)
 	pendingMsgs *agentruntime.PendingQueue[*tunnel.MessageData]
+	// pendingExclude is the echo-exclusion adapter of the queued IM message
+	// (#461) — restored when the pending message is drained after the run.
+	pendingExclude string
 
 	// Subsystems
 	cronScheduler *cron.Scheduler
@@ -418,7 +421,12 @@ func (b *ChatBridge) sendMessageData(data tunnel.MessageData, source string, exc
 		if source == "desktop" {
 			meta = nil
 		}
-		b.pendingMsgs.Enqueue(userMsg, false, meta)
+		// #461: pendingMeta must preserve the echo-exclusion info so the
+		// drain path doesn't broadcast the user's own message back to the
+		// adapter they sent it from (immediate path uses EmitUserTextExcept).
+		pendingMeta := meta
+		b.pendingMsgs.Enqueue(userMsg, false, pendingMeta)
+		b.pendingExclude = excludeAdapter
 		b.mu.Unlock()
 		return nil
 	}
@@ -458,11 +466,19 @@ func (b *ChatBridge) sendMessageData(data tunnel.MessageData, source string, exc
 				}
 				data := tunnel.MessageData{Text: pending.Text}
 				src := "desktop"
+				exclude := ""
 				if pending.Meta != nil {
 					data = *pending.Meta
 					src = "mobile"
 				}
-				_ = b.sendMessageData(data, src, "")
+				// #461: restore the queued message's echo exclusion — the
+				// IM user must not see their own message echoed back on the
+				// adapter they sent from, same as the immediate path.
+				b.mu.Lock()
+				exclude = b.pendingExclude
+				b.pendingExclude = ""
+				b.mu.Unlock()
+				_ = b.sendMessageData(data, src, exclude)
 			}
 		}
 	}()

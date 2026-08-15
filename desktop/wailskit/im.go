@@ -7,8 +7,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/session"
-
-	"github.com/topcheer/ggcode/internal/debug"
 )
 
 // IMAdapterInfo is a frontend-friendly representation of an IM adapter config.
@@ -221,7 +219,11 @@ func RemoveIMAdapter(name string, imMgr interface {
 	}
 	if imMgr != nil {
 		if uerr := imMgr.UnbindAdapter(name); uerr != nil {
-			debug.Log("wailskit", "RemoveIMAdapter cascade unbind %s: %v", name, uerr)
+			// #460: config is already deleted — returning an error here tells
+			// the UI the cascade FAILED so the user can retry; the old code
+			// swallowed this, leaving a ghost binding that a same-named
+			// adapter silently inherits (#396 scenario).
+			return fmt.Errorf("adapter config removed, but unbinding channels failed (retry to clear the leftover binding): %w", uerr)
 		}
 	}
 	return nil

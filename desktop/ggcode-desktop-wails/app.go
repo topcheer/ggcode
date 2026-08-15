@@ -593,6 +593,13 @@ func readClipboardFileAttachment(path string) ClipboardAttachment {
 		att.Error = fmt.Sprintf("read file: %v", err)
 		return att
 	}
+	// #459: post-read length recheck — Stat().Size() is 0 on FIFOs, so the
+	// pre-read check passed deterministically and ReadFile pulled in
+	// unbounded data. The recheck caps actual damage at detection time.
+	if int64(len(data)) > maxClipboardFileBytes {
+		att.Error = "File is larger than 10MB"
+		return att
+	}
 	att.MimeType = mime.TypeByExtension(strings.ToLower(filepath.Ext(path)))
 	if looksLikeText(data) {
 		att.Kind = "text"
