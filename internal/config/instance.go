@@ -461,6 +461,27 @@ func (c *Config) InstanceWorkspace() string {
 	return c.instanceWS
 }
 
+// SyncVendorToGlobalSnapshot records vendor into the global snapshot so that
+// subsequent Save() calls keep writing it to vendors.yaml. globalOnlyVendors
+// (config_save.go) drops every merged vendor absent from globalSnap — a
+// vendor ADDED at runtime on an instance-bound workspace is therefore not
+// global-sourced, yet the user expectation is that it persists globally once
+// saved. Call this after persisting such a vendor change (#368).
+func (c *Config) SyncVendorToGlobalSnapshot(vendor string) {
+	if c == nil || vendor == "" {
+		return
+	}
+	if c.globalSnap == nil {
+		return
+	}
+	if c.globalSnap.Vendors == nil {
+		c.globalSnap.Vendors = make(map[string]VendorConfig)
+	}
+	if vc, ok := c.Vendors[vendor]; ok {
+		c.globalSnap.Vendors[vendor] = vc
+	}
+}
+
 // SaveScoped persists config changes to either global or instance config.
 // scope: "global" saves to the global config file (default behavior).
 // scope: "instance" saves to the instance config directory.

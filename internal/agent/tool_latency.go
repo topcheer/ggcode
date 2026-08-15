@@ -207,6 +207,19 @@ func (lt *LatencyTracker) meanLatency(toolName string) time.Duration {
 	return total / time.Duration(len(samples))
 }
 
+// sampleCount returns the number of latency samples recorded for a tool.
+// Adaptive-timeout tightening is gated on this (#366): a single fast
+// sample (e.g. one cache-hit grep at 50ms) used to clamp the timeout to
+// the 10s floor and kill legitimate 25s searches on the very next call.
+func (lt *LatencyTracker) sampleCount(toolName string) int {
+	if lt == nil {
+		return 0
+	}
+	lt.mu.Lock()
+	defer lt.mu.Unlock()
+	return len(lt.samples[toolName])
+}
+
 // RecordSuccess records a successful tool execution for success rate tracking.
 func (lt *LatencyTracker) RecordSuccess(toolName string) {
 	if lt == nil {

@@ -148,6 +148,14 @@ func (lt *LatencyTracker) computeAdaptiveTimeout(toolName string) time.Duration 
 	cat := classifyTool(toolName)
 	catDefault := categoryDefaultTimeout(cat)
 
+	// Adaptive tightening requires ENOUGH samples, not just any. Previously a
+	// single sample (meanLatency returns it verbatim for len==1) tightened the
+	// timeout immediately — one 50ms cache-hit grep clamped the next grep to
+	// the 10s floor and killed legitimate 25s searches (#366).
+	if lt.sampleCount(toolName) < adaptiveMinSamples {
+		return catDefault
+	}
+
 	// Try to use historical latency data for adaptive computation.
 	mean := lt.meanLatency(toolName)
 	if mean <= 0 {
@@ -171,10 +179,10 @@ func (lt *LatencyTracker) computeAdaptiveTimeout(toolName string) time.Duration 
 	// Also ensure we don't set a timeout LOWER than the category default
 	// unless we have strong evidence (mean is well below category default).
 	// This prevents premature kills on tools that occasionally spike.
-	// Exception: if the adaptive value is at the floor, respect it.
+	// Exception: if the adaptive value is at the floor, respect it — with
+	// adaptiveMinSamples-enforced sample counts this only happens once the
+	// latency history is trustworthy (#366).
 	if adaptive < catDefault && adaptive > adaptiveTimeoutFloor {
-		// Only use the lower adaptive value if we have enough samples
-		// to be confident. meanLatency already returns 0 for insufficient data.
 		adaptive = catDefault
 	}
 

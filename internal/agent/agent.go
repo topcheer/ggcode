@@ -4446,6 +4446,27 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		if tcMsg, stop := a.toolCallBudget.check(); tcMsg != "" {
 			debug.Log("tool-call-budget", "threshold crossed: calls=%d budget=%d stop=%v",
 				a.toolCallBudget.totalCalls, a.toolCallBudget.effectiveBudget(), stop)
+			if stop {
+				// Hard stop mirrors the maxIter path (below): emit a summary
+				// and return a sentinel error so callers (sub-agents, ACP
+				// loops, session resume) can distinguish budget truncation
+				// from normal completion. The old path injected the
+				// "summarize" directive into contextManager and returned nil —
+				// the loop had already ended, so the directive was never
+				// consumed in-run and merely confused the next session turn
+				// (#367).
+				runStats.finalize(nil) // compute Duration for the summary
+				summary := runStats.Summary()
+				onEvent(provider.StreamEvent{
+					Type: provider.StreamEventText,
+					Text: fmt.Sprintf("\nTool call budget exhausted (%d calls). Summary: %s.\nYour task may be partially complete — review the changes above. You can continue by sending a follow-up message.", a.toolCallBudget.totalCalls, summary),
+				})
+				err := fmt.Errorf("tool call budget (%d calls) exhausted", a.toolCallBudget.totalCalls)
+				onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: err})
+				return err
+			}
+			// Soft warning (80% / 95%): inject guidance so the CURRENT run
+			// wraps up — the loop continues and the LLM consumes it.
 			a.contextManager.Add(provider.Message{
 				Role: "user",
 				Content: []provider.ContentBlock{{
@@ -4454,13 +4475,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				}},
 			})
 			msgs = a.contextManager.Messages()
-			if stop {
-				onEvent(provider.StreamEvent{
-					Type: provider.StreamEventSystem,
-					Text: tcMsg,
-				})
-				return nil
-			}
 		}
 	}
 	if a.maxIter > 0 {

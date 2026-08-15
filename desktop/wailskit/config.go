@@ -365,6 +365,36 @@ func persistTouchedInstanceFields(cfg *config.Config, values map[string]interfac
 	return nil
 }
 
+// saveWithInstanceWriteback persists cfg and, when the change touched a
+// vendor that only exists in the merged (instance-bound) view, mirrors it
+// to the instance file and the global snapshot.
+//
+// cfg.Save() funnels vendors through globalOnlyVendors, which drops every
+// vendor absent from globalSnap — so on instance-bound workspaces a NEW
+// vendor/endpoint written by AddCustomEndpoint (or a key binding written by
+// SaveAPIKey) silently vanished on restart (#368). The instance write-back
+// uses marshalInstanceDelta semantics (vendor exists in current but not in
+// globalSnap → included), and the snapshot sync keeps future Save() calls
+// from stripping it from the vendors.yaml write too.
+func saveWithInstanceWriteback(cfg *config.Config, vendor string) error {
+	if err := cfg.Save(); err != nil {
+		return err
+	}
+	if !cfg.HasInstanceConfigAttached() {
+		return nil
+	}
+	for _, yk := range cfg.InstanceFields() {
+		if yk == "vendors" {
+			if err := cfg.SaveInstanceScoped(cfg.InstanceWorkspace()); err != nil {
+				return err
+			}
+			cfg.SyncVendorToGlobalSnapshot(vendor)
+			break
+		}
+	}
+	return nil
+}
+
 // SaveAPIKey saves an API key for a vendor/endpoint.
 func SaveAPIKey(vendor, endpoint, apiKey string) error {
 	globalMu.Lock()
@@ -384,7 +414,7 @@ func SaveAPIKey(vendor, endpoint, apiKey string) error {
 	if err := cfg.SetEndpointAPIKey(vendor, endpoint, apiKey, vendorScoped); err != nil {
 		return err
 	}
-	return cfg.Save()
+	return saveWithInstanceWriteback(cfg, vendor)
 }
 
 // SaveDefaultMode saves the default permission mode.
@@ -709,7 +739,7 @@ func AddCustomEndpoint(vendor, name, protocol, baseURL, apiKey string) error {
 	}
 	vc.Endpoints[name] = ep
 	cfg.Vendors[vendor] = vc
-	return cfg.Save()
+	return saveWithInstanceWriteback(cfg, vendor)
 }
 
 // ─── Resolved Endpoint Info ─────────────────────────────
