@@ -369,8 +369,12 @@ func matchTool(pattern, toolName, rawInput string) bool {
 func matchToolSingle(pattern, toolName, rawInput string) bool {
 	// Function call pattern: tool_name(args...)
 	if parenIdx := strings.Index(pattern, "("); parenIdx > 0 {
-		// Guard against patterns like "edit_file(" — missing closing paren.
-		if parenIdx+1 > len(pattern)-1 {
+		// Guard against malformed patterns (#429): "edit_file(" (no content
+		// after paren) AND "edit_file(x" (missing closing paren) must be
+		// rejected. The old code stripped the last char unconditionally, so
+		// "edit_file(x" became patArgs="" and matched EVERY invocation — a
+		// config typo silently widened the hook to a wildcard.
+		if parenIdx+1 > len(pattern)-1 || !strings.HasSuffix(pattern, ")") {
 			return false
 		}
 		patTool := pattern[:parenIdx]
@@ -379,6 +383,8 @@ func matchToolSingle(pattern, toolName, rawInput string) bool {
 		if patTool != toolName {
 			return false
 		}
+		// patArgs=="" here means the well-formed bare form "tool()" — an
+		// explicit match-all (now guaranteed well-formed by HasSuffix).
 		if patArgs == "*" || patArgs == "" {
 			return true
 		}

@@ -158,6 +158,7 @@ func (a *signalAdapter) run(ctx context.Context) {
 			a.publishState(false, "stopped", "")
 			return
 		}
+		startedAt := time.Now()
 		if err := a.connectAndServe(ctx); err != nil {
 			a.publishState(false, "error", err.Error())
 			debug.Log("signal", "adapter=%s error: %v", a.name, err)
@@ -167,6 +168,12 @@ func (a *signalAdapter) run(ctx context.Context) {
 		a.mu.RUnlock()
 		if isClosed {
 			return
+		}
+		// #432: after a HEALTHY connection (stayed up for a while), the next
+		// failure is a fresh transient — reset backoff (#389 Discord pattern)
+		// instead of resuming the accumulated value after hours of uptime.
+		if time.Since(startedAt) >= 60*time.Second {
+			backoff = signalInitialBackoff
 		}
 		select {
 		case <-ctx.Done():
@@ -259,7 +266,16 @@ func (a *signalAdapter) sseLoop(ctx context.Context) error {
 		body, err := imagepkg.ReadLimited(resp.Body, imagepkg.MaxSize)
 		resp.Body.Close()
 		if err != nil {
+			// #432: oversized-body / read errors must back off like every
+			// other error path in this loop — a bare continue hot-looped the
+			// CPU and the signal-cli/proxy server when the endpoint kept
+			// returning huge bodies.
 			debug.Log("signal", "adapter=%s receive read error: %v", a.name, err)
+			select {
+			case <-time.After(5 * time.Second):
+			case <-ctx.Done():
+				return nil
+			}
 			continue
 		}
 

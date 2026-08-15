@@ -97,7 +97,10 @@ func CheckExistingDaemon(workingDir string) (int, error) {
 	}
 	info, err := ReadPIDFile(pidPath)
 	if err != nil {
-		return 0, nil // no PID file = no daemon
+		// #431: a CORRUPT PID file (partial write, disk fault) would linger
+		// forever; remove it so the next fork starts clean.
+		_ = os.Remove(pidPath)
+		return 0, nil // unreadable PID file = no daemon
 	}
 	// Check if process is still alive
 	proc, err := os.FindProcess(info.PID)
@@ -134,7 +137,18 @@ func daemonIdentityMatches(pid int) bool {
 	if cmdline == "" {
 		return true
 	}
-	return strings.Contains(cmdline, "--__daemonized") || strings.Contains(cmdline, "ggcode[")
+	if strings.Contains(cmdline, "--__daemonized") || strings.Contains(cmdline, "ggcode[") {
+		return true
+	}
+	// #431: on Windows processCmdline returns only the executable IMAGE
+	// NAME (e.g. "ggcode.exe") from a toolhelp32 snapshot — no argv flags.
+	// Accept the daemon binary name so the real daemon is not mistaken for
+	// a recycled PID.
+	base := strings.ToLower(strings.TrimSpace(cmdline))
+	if strings.HasSuffix(base, ".exe") {
+		base = strings.TrimSuffix(base, ".exe")
+	}
+	return base == "ggcode" || strings.HasPrefix(base, "ggcode-")
 }
 
 // ForkIntoBackground re-execs the current binary as a background daemon.

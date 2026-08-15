@@ -26,13 +26,49 @@ func processCmdline(pid int) string {
 		args := strings.Split(strings.TrimRight(string(data), "\x00"), "\x00")
 		return strings.Join(args, " ")
 	}
-	// macOS: sysctl kern.procargs2 returns NUL-separated
-	// argv[0]\0env...\0argv[1]... — plain substring matching against the
-	// whole blob is sufficient for identity checks.
+	// macOS: sysctl kern.procargs2 layout is
+	// int32 argc + argv[0]\0argv[1]\0...\0\0 + FULL ENV REGION.
+	// #431: the old code matched against the whole blob, so an unrelated
+	// process whose ENV contains our marker (e.g. a shell that exported
+	// DAEMON_ARGS="--__daemonized") was misidentified as the daemon after
+	// PID reuse. Truncate at the argv/env boundary: argv is argc NUL-
+	// terminated strings followed by a DOUBLE NUL before the env region.
 	if raw, err := syscall.Sysctl("kern.procargs2." + itoaDaemon(pid)); err == nil {
+		if cmdline := trimProcargsToArgv(raw); cmdline != "" {
+			return cmdline
+		}
+		// Fallback for unexpected layouts: full blob (pre-#431 behavior).
 		return strings.ReplaceAll(raw, "\x00", " ")
 	}
 	return ""
+}
+
+// trimProcargsToArgv extracts the argv region from a kern.procargs2 blob,
+// excluding the environment. Layout: [4-byte argc][argv strings, NUL-
+// separated][NUL padding][env strings]. We scan for the end of argv as the
+// first double-NUL after the argc prefix, or stop after the argc'th string.
+func trimProcargsToArgv(raw string) string {
+	if len(raw) < 4 {
+		return ""
+	}
+	argc := int(uint32(raw[0]) | uint32(raw[1])<<8 | uint32(raw[2])<<16 | uint32(raw[3])<<24)
+	if argc <= 0 || argc > 4096 {
+		return ""
+	}
+	rest := raw[4:]
+	// Walk argc NUL-terminated strings.
+	for i := 0; i < argc; i++ {
+		idx := strings.IndexByte(rest, 0)
+		if idx < 0 {
+			return "" // malformed
+		}
+		rest = rest[idx+1:]
+	}
+	// Trim leading padding NULs before the env region.
+	for len(rest) > 0 && rest[0] == 0 {
+		rest = rest[1:]
+	}
+	return strings.TrimSpace(strings.ReplaceAll(raw[4:len(raw)-len(rest)], "\x00", " "))
 }
 
 func procCmdlinePath(pid int) string {

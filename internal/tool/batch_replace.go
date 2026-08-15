@@ -376,7 +376,15 @@ func invalidGroupRefs(re *regexp.Regexp, replacement string) string {
 		if i+1 < len(replacement) && replacement[i+1] == '{' {
 			if end := indexByteFrom(replacement, i+2, '}'); end > 0 {
 				ref := replacement[i+2 : end]
-				if n, ok := atoiSafe(ref); ok && n > maxGroup {
+				if n, ok := atoiSafe(ref); ok {
+					if n > maxGroup {
+						return ref
+					}
+				} else if !named[ref] {
+					// #435: braced named refs (${name}) are equivalent
+					// syntax to bare $name in Go regexp — the old code only
+					// validated numeric refs here, so an unknown ${c}
+					// silently expanded to an empty string (content loss).
 					return ref
 				}
 				i = end

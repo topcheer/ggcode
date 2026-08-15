@@ -87,6 +87,11 @@ func NewCommandGate() *CommandGate {
 	rmF := `(?:-[a-zA-Z]*f[a-zA-Z]*|--force)`
 	rmR := `(?:-[a-zA-Z]*r[a-zA-Z]*|--recursive)`
 	rmP := `(?:(/|~|/home|/Users|/etc|/var|/usr)\b|/dev/)`
+	// #436: newline is a shell command separator too — the gap class must
+	// not cross it, else a benign multi-line script (`# comment` + `rm -f x`
+	// + `grep -r ... /etc`) let the grep segment contribute -r and /etc to
+	// the rm segment and hard-blocked the whole command.
+	rmGap := `[^;&|\n]*`
 
 	// ================================================================
 	// BLOCK — catastrophic commands with zero legitimate use
@@ -111,12 +116,12 @@ func NewCommandGate() *CommandGate {
 			// hard-block benign commands like `rm -f old.tar && grep -r x /etc`.
 			// The rule therefore only evaluates the single rm sub-command.
 			pattern: regexp.MustCompile(`(?i)\brm\s+(?:` +
-				`[^;&|]*` + rmF + `[^;&|]*` + rmR + `[^;&|]*` + rmP + `|` +
-				`[^;&|]*` + rmF + `[^;&|]*` + rmP + `[^;&|]*` + rmR + `|` +
-				`[^;&|]*` + rmR + `[^;&|]*` + rmF + `[^;&|]*` + rmP + `|` +
-				`[^;&|]*` + rmR + `[^;&|]*` + rmP + `[^;&|]*` + rmF + `|` +
-				`[^;&|]*` + rmP + `[^;&|]*` + rmF + `[^;&|]*` + rmR + `|` +
-				`[^;&|]*` + rmP + `[^;&|]*` + rmR + `[^;&|]*` + rmF +
+				rmGap + rmF + rmGap + rmR + rmGap + rmP + `|` +
+				rmGap + rmF + rmGap + rmP + rmGap + rmR + `|` +
+				rmGap + rmR + rmGap + rmF + rmGap + rmP + `|` +
+				rmGap + rmR + rmGap + rmP + rmGap + rmF + `|` +
+				rmGap + rmP + rmGap + rmF + rmGap + rmR + `|` +
+				rmGap + rmP + rmGap + rmR + rmGap + rmF +
 				`)`)},
 		{kind: "catastrophic", desc: "disk format/erase",
 			pattern: regexp.MustCompile(`(?i)\b(mkfs\.|dd\s+if=.*of=/dev/|diskutil\s+eraseDisk|diskutil\s+partitionDisk)`)},
@@ -254,8 +259,19 @@ func (g *CommandGate) Check(cmd string) GateResult {
 	}
 
 	// ---- Layer 1: Block rules (catastrophic, never execute) ----
+	// #436: shell does NOT treat separators inside quotes as separators,
+	// but our regex gap class consumed them — `rm -f "a;b" -r /etc`
+	// de-blocked to a mere Ask. Match against a normalized view where
+	// quoted segments keep their outer quotes but drop inner separator
+	// noise... simplest correct approach: match BOTH the raw and the
+	// quote-stripped-interior form; if the quote-stripped form blocks, the
+	// user's real intent still contains the destructive combination.
+	matchCmd := cmd
+	if norm := stripQuotedSeparators(cmd); norm != cmd {
+		matchCmd = cmd + "\n" + norm
+	}
 	for _, rule := range g.blockRules {
-		if rule.pattern.MatchString(cmd) {
+		if rule.pattern.MatchString(matchCmd) {
 			return GateResult{
 				Behavior:   Block,
 				CleanedCmd: cmd,
@@ -296,6 +312,38 @@ func (g *CommandGate) Check(cmd string) GateResult {
 	result.CleanedCmd = strings.TrimSpace(cleaned)
 
 	return result
+}
+
+// stripQuotedSeparators removes shell separator characters (; & |) that
+// appear INSIDE quoted segments (#436). The regex gate treats those chars
+// as command separators, but a real shell does not — so `rm -f "a;b" -r /etc`
+// must be evaluated as if the quoted content contained no separator, letting
+// the rule see the true destructive flag combination. Unquoted separators
+// are preserved so segment scoping (#410) still applies.
+func stripQuotedSeparators(cmd string) string {
+	var b strings.Builder
+	b.Grow(len(cmd))
+	var quote byte // 0 = outside quotes
+	for i := 0; i < len(cmd); i++ {
+		c := cmd[i]
+		switch {
+		case quote != 0:
+			if c == quote {
+				quote = 0
+				b.WriteByte(c)
+			} else if c == ';' || c == '&' || c == '|' {
+				// separator inside quotes — drop it
+			} else {
+				b.WriteByte(c)
+			}
+		case c == '"' || c == '\'':
+			quote = c
+			b.WriteByte(c)
+		default:
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
 }
 
 // preChecks runs Claude Code-style pre-validation that catches parser

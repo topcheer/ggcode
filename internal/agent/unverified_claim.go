@@ -176,7 +176,7 @@ func claimIsWordByte(b byte) bool {
 func isBuildTestCommand(lower string) bool {
 	prefixes := []string{
 		"go build", "go test", "go vet",
-		"make ", "cargo ", "cmake",
+		"cargo ", "cmake",
 		"npm run", "yarn ", "pnpm ", "npx ",
 		"flutter ", "dart ", "gradle", "mvn ",
 		"pytest", "python -m pytest", "python -m unittest",
@@ -187,9 +187,41 @@ func isBuildTestCommand(lower string) bool {
 			return true
 		}
 	}
-	// Direct binary test runners
-	if strings.Contains(lower, "pytest") || strings.Contains(lower, "jest") || strings.Contains(lower, "vitest") {
-		return true
+	// #437: "make " matched ANY target (make clean/tidy), letting the agent
+	// claim "tests pass" after a cleanup. Only verify-ish targets count.
+	if strings.HasPrefix(lower, "make") {
+		rest := strings.TrimPrefix(lower, "make")
+		if strings.HasPrefix(rest, " ") || strings.HasPrefix(rest, "\t") {
+			target := strings.TrimSpace(rest)
+			for _, m := range []string{"test", "check", "verify", "lint"} {
+				if target == m || strings.HasPrefix(target, m+"-") || strings.HasPrefix(target, m+"_") {
+					return true
+				}
+			}
+		}
+	}
+	// Direct test runners — #437: word-boundary match so "cat jestfile.txt"
+	// (bare Contains on "jest") no longer suppresses the detector.
+	for _, runner := range []string{"pytest", "jest", "vitest"} {
+		if claimContainsWord(lower, runner) {
+			return true
+		}
+	}
+	return false
+}
+
+// containsWord reports whether s contains w delimited by non-word bytes
+// (alphanumeric/underscore boundaries).
+func claimContainsWord(s, w string) bool {
+	for i := 0; i+len(w) <= len(s); i++ {
+		if s[i:i+len(w)] != w {
+			continue
+		}
+		beforeOK := i == 0 || !claimIsWordByte(s[i-1])
+		afterOK := i+len(w) == len(s) || !claimIsWordByte(s[i+len(w)])
+		if beforeOK && afterOK {
+			return true
+		}
 	}
 	return false
 }

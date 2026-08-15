@@ -3,6 +3,7 @@
 package session
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"syscall"
@@ -66,6 +67,16 @@ func TryAcquireSessionLock(storeDir, sessionID string) (*SessionLock, error) {
 				acquired:  false,
 				holderPID: pid,
 			}, nil
+		}
+	}
+
+	// #430: retries exhausted — the last reopen+relock above may still hold
+	// a racy inode. Perform one final SameFile check and FAIL CLOSED (return
+	// an error) instead of silently falling through as a dual holder.
+	if fi, serr := f.Stat(); serr == nil {
+		if pathFi, perr := os.Stat(lockPath); perr != nil || !os.SameFile(fi, pathFi) {
+			f.Close()
+			return nil, fmt.Errorf("session lock %s: unlink race persisted after retries", lockPath)
 		}
 	}
 

@@ -124,7 +124,17 @@ func MigrateWorkspaceJobs(oldStorePath, newSessionPath, workspaceDir string) {
 			return
 		}
 		if err := util.AtomicWriteFile(oldStorePath, out, 0644); err != nil {
-			debug.Log("cron", "MigrateWorkspaceJobs: failed to write old store back: %v (bucket may be re-migrated)", err)
+			// #440: keeping the bucket here meant a LATER instance with a
+			// different session path would re-migrate the same recurring
+			// jobs into its own store — both sessions then schedule the job
+			// and it fires twice. The jobs are already durably in the new
+			// store above, so invalidate the bucket in the on-disk old store
+			// by force-removing it; an unreadable/partial old store is
+			// preferable to duplicate firing.
+			debug.Log("cron", "MigrateWorkspaceJobs: failed to write old store back: %v (removing old store %s to prevent duplicate migration)", err, oldStorePath)
+			if rmErr := os.Remove(oldStorePath); rmErr != nil && !os.IsNotExist(rmErr) {
+				debug.Log("cron", "MigrateWorkspaceJobs: failed to remove old store %s: %v", oldStorePath, rmErr)
+			}
 		}
 	}
 }

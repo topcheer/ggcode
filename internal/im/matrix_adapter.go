@@ -177,6 +177,7 @@ func (a *matrixAdapter) run(ctx context.Context) {
 			return
 		}
 
+		startedAt := time.Now()
 		err := a.runOnce(ctx)
 		if err == nil {
 			// Clean shutdown
@@ -185,6 +186,14 @@ func (a *matrixAdapter) run(ctx context.Context) {
 
 		if a.isClosed() {
 			return
+		}
+
+		// #432: after a HEALTHY connection (sync stayed up for a while),
+		// the next failure is a fresh transient — reset backoff like the
+		// Discord adapter's #389 fix instead of resuming the accumulated
+		// 60s wait after hours of stable connectivity.
+		if time.Since(startedAt) >= 60*time.Second {
+			backoff = 5 * time.Second
 		}
 
 		debug.Log("matrix", "adapter=%s runOnce failed: %v, retrying in %v", a.name, err, backoff)
@@ -210,17 +219,23 @@ func (a *matrixAdapter) runOnce(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("client init: %w", err)
 	}
+	// #433: a.client/a.userID are read concurrently by Send/sendImage/
+	// TriggerTyping on other goroutines — writes must hold a.mu.
+	a.mu.Lock()
 	a.client = client
+	a.mu.Unlock()
 
 	// 2. Whoami to verify token
 	whoami, err := client.Whoami(ctx)
 	if err != nil {
 		return fmt.Errorf("whoami: %w", err)
 	}
+	a.mu.Lock()
 	a.userID = string(whoami.UserID)
-	a.client.UserID = whoami.UserID
-	a.client.DeviceID = whoami.DeviceID
-	debug.Log("matrix", "adapter=%s authenticated as %s device=%s", a.name, a.userID, a.client.DeviceID)
+	a.mu.Unlock()
+	client.UserID = whoami.UserID
+	client.DeviceID = whoami.DeviceID
+	debug.Log("matrix", "adapter=%s authenticated as %s device=%s", a.name, a.userID, client.DeviceID)
 
 	// 3. Setup E2EE crypto
 	if err := a.setupCrypto(ctx); err != nil {
@@ -693,12 +708,16 @@ func (a *matrixAdapter) resolveImageToBytes(ctx context.Context, img ExtractedIm
 
 // sendImage uploads image data to the Matrix homeserver and sends an m.image event.
 func (a *matrixAdapter) sendImage(ctx context.Context, roomID, threadID string, data []byte, mimeType string) error {
-	if a.client == nil {
+	// #433: snapshot the client under the read lock — reconnect writes it.
+	a.mu.RLock()
+	client := a.client
+	a.mu.RUnlock()
+	if client == nil {
 		return fmt.Errorf("matrix adapter not connected")
 	}
 
 	// Upload to Matrix content repository
-	resp, err := a.client.UploadMedia(ctx, mautrix.ReqUploadMedia{
+	resp, err := client.UploadMedia(ctx, mautrix.ReqUploadMedia{
 		ContentBytes: data,
 		ContentType:  mimeType,
 		FileName:     "image",
@@ -726,7 +745,7 @@ func (a *matrixAdapter) sendImage(ctx context.Context, roomID, threadID string, 
 
 	txnID := fmt.Sprintf("ggcode-img-%d", a.txnID.Add(1))
 	for attempt := 0; attempt <= matrixMaxRetries; attempt++ {
-		_, err = a.client.SendMessageEvent(ctx, id.RoomID(roomID), event.EventMessage, content, mautrix.ReqSendEvent{TransactionID: txnID})
+		_, err = client.SendMessageEvent(ctx, id.RoomID(roomID), event.EventMessage, content, mautrix.ReqSendEvent{TransactionID: txnID})
 		if err == nil {
 			return nil
 		}
@@ -763,14 +782,18 @@ func (a *matrixAdapter) TriggerTyping(ctx context.Context, binding ChannelBindin
 	if roomID == "" || target == "" || !a.reactionAck.NeedsSend(binding, target) {
 		return nil
 	}
-	if a.client == nil {
+	// #433: snapshot the client under the read lock.
+	a.mu.RLock()
+	tClient := a.client
+	a.mu.RUnlock()
+	if tClient == nil {
 		return fmt.Errorf("matrix adapter not connected")
 	}
 	reaction := reactionAckValue(PlatformMatrix, target)
 	if reaction == "" {
 		return nil
 	}
-	if _, err := a.client.SendReaction(ctx, id.RoomID(roomID), id.EventID(target), reaction); err != nil {
+	if _, err := tClient.SendReaction(ctx, id.RoomID(roomID), id.EventID(target), reaction); err != nil {
 		debug.Log("matrix", "adapter=%s typing reaction failed room=%s target=%s: %v", a.name, roomID, target, err)
 		return err
 	}
@@ -779,7 +802,11 @@ func (a *matrixAdapter) TriggerTyping(ctx context.Context, binding ChannelBindin
 }
 
 func (a *matrixAdapter) sendText(ctx context.Context, roomID, threadID, text string) error {
-	if a.client == nil {
+	// #433: snapshot the client under the read lock.
+	a.mu.RLock()
+	client := a.client
+	a.mu.RUnlock()
+	if client == nil {
 		return fmt.Errorf("matrix adapter not connected")
 	}
 
@@ -820,7 +847,7 @@ func (a *matrixAdapter) sendText(ctx context.Context, roomID, threadID, text str
 		txnID := fmt.Sprintf("ggcode-%d", a.txnID.Add(1))
 		var err error
 		for attempt := 0; attempt <= matrixMaxRetries; attempt++ {
-			_, err = a.client.SendMessageEvent(ctx, id.RoomID(roomID), event.EventMessage, content, mautrix.ReqSendEvent{TransactionID: txnID})
+			_, err = client.SendMessageEvent(ctx, id.RoomID(roomID), event.EventMessage, content, mautrix.ReqSendEvent{TransactionID: txnID})
 			if err == nil {
 				break
 			}

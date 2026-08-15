@@ -87,6 +87,14 @@ func (m *Manager) UnbindChannel(workspace string) error {
 			delete(m.currentBindings, name)
 		}
 	}
+	// #434: also purge DISABLED bindings for this workspace — a deleted
+	// binding must not resurrect from disabledBindings via EnableAll/
+	// EnableBinding after the user removed it.
+	for name, b := range m.disabledBindings {
+		if normalizeWorkspace(b.Workspace) == workspace {
+			delete(m.disabledBindings, name)
+		}
+	}
 	snapshot, cb := m.snapshotAndCallbackLocked()
 	m.mu.Unlock()
 	if cb != nil {
@@ -109,11 +117,17 @@ func (m *Manager) DeleteBinding(adapter, workspace string) error {
 		return err
 	}
 	delete(m.currentBindings, adapter)
+	// #434: purge any DISABLED entry for this adapter too, so a deleted
+	// binding cannot resurrect via EnableAll/EnableBinding (ghost binding).
+	delete(m.disabledBindings, adapter)
 	snapshot, cb := m.snapshotAndCallbackLocked()
 	m.mu.Unlock()
 	if cb != nil {
 		cb(snapshot)
 	}
+	// #434: every other binding mutation calls this; DeleteBinding was the
+	// lone omission, leaving other instances' active-channel snapshots stale.
+	m.syncInstanceActiveChannels()
 	return nil
 }
 
@@ -189,6 +203,9 @@ func (m *Manager) UnbindAdapter(adapterName string) error {
 		}
 	}
 	delete(m.currentBindings, adapterName)
+	// #434: purge any DISABLED entry for this adapter too (ghost-binding
+	// prevention, same as DeleteBinding).
+	delete(m.disabledBindings, adapterName)
 	snapshot, cb := m.snapshotAndCallbackLocked()
 	m.mu.Unlock()
 	if cb != nil {

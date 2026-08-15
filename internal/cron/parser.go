@@ -197,6 +197,13 @@ func parseFieldPart(part string, minVal, maxVal int, values map[int]bool) error 
 		if end < minVal || end > maxVal {
 			return fmt.Errorf("value %d out of range [%d-%d] in %q", end, minVal, maxVal, part)
 		}
+		// #439: a REVERSED range (start > end) is a user typo (50-10 vs
+		// 10-50). Standalone it trips the empty-set check, but inside a list
+		// (`5,50-10`) the non-empty rest silently swallowed it — the job ran
+		// on the wrong schedule with no diagnostic. Reject it up front.
+		if end < start {
+			return fmt.Errorf("reversed range %d-%d in %q (start must be <= end)", start, end, part)
+		}
 		for v := start; v <= end; v++ {
 			values[v] = true
 		}

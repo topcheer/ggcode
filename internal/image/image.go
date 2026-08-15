@@ -116,7 +116,22 @@ func DataURI(img Image) string {
 
 // ReadFile reads an image from a file path.
 func ReadFile(path string) (Image, error) {
-	data, err := os.ReadFile(path)
+	// #438: pre-check size BEFORE reading — os.ReadFile loaded the entire
+	// file into memory first, so a 2GB file OOM'd before the 20MB MaxSize
+	// rejection inside Decode. Same pattern as tool/read_file's Stat guard.
+	f, err := os.Open(path)
+	if err != nil {
+		return Image{}, fmt.Errorf("reading image file: %w", err)
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return Image{}, fmt.Errorf("reading image file: %w", err)
+	}
+	if fi.Size() > int64(MaxSize) {
+		return Image{}, fmt.Errorf("image file %s too large: %d bytes (max %d)", path, fi.Size(), MaxSize)
+	}
+	data, err := io.ReadAll(f)
 	if err != nil {
 		return Image{}, fmt.Errorf("reading image file: %w", err)
 	}
