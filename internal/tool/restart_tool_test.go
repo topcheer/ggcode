@@ -48,7 +48,7 @@ func TestRestartToolRequestsRestart(t *testing.T) {
 	if !req.debugMode {
 		t.Error("debug flag was not propagated")
 	}
-	if !strings.Contains(res.Content, "restart requested") {
+	if !strings.Contains(res.Content, "restart armed") {
 		t.Errorf("result should describe the pending restart: %s", res.Content)
 	}
 }
