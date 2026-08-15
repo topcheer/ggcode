@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -95,5 +97,36 @@ func TestRegistryContainsReRegisteredChecks(t *testing.T) {
 		if !got[name] {
 			t.Errorf("check %q missing from registry", name)
 		}
+	}
+}
+
+// #330 gap: interface-compliance and dep-major-bump assembly coverage
+// (verified live via production path; codified here for regression).
+
+func TestAssemblyInterfaceCompliance(t *testing.T) {
+	dir := t.TempDir()
+	// Type in the same package partially implementing the interface.
+	if err := os.WriteFile(filepath.Join(dir, "handler.go"), []byte(
+		"package smoke\n\ntype Handler struct{}\n\nfunc (h *Handler) Foo() error { return nil }\n",
+	), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := "package smoke\n\ntype Handler interface {\n\tFoo() error\n}\n"
+	new := "package smoke\n\ntype Handler interface {\n\tFoo() error\n\tBar() error\n}\n"
+	w := checkWriteIntegrity(filepath.Join(dir, "iface.go"), old, new)
+	if w == "" {
+		t.Fatal("expected interface-compliance warning via checkWriteIntegrity, got none")
+	}
+}
+
+func TestAssemblyDepMajorBump(t *testing.T) {
+	old := "{\n  \"dependencies\": {\n    \"react\": \"^18.2.0\"\n  }\n}\n"
+	new := "{\n  \"dependencies\": {\n    \"react\": \"^19.0.0\"\n  }\n}\n"
+	w := checkWriteIntegrity("package.json", old, new)
+	if w == "" {
+		t.Fatal("expected dep-major-bump warning via checkWriteIntegrity, got none")
+	}
+	if !strings.Contains(w, "react") {
+		t.Fatalf("unexpected warning content: %q", w)
 	}
 }
