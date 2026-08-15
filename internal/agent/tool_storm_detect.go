@@ -249,6 +249,16 @@ func (s *toolStormState) maybeWarn() string {
 		}
 	}
 
+	// #467: iterations must be CONSECUTIVE. Entries only enter the window
+	// via recordToolCall, so gaps between Iters (1,3,5,7) mean no-tool
+	// analysis iterations existed in between — that's the healthy
+	// tool/analysis alternation this detector should encourage, not a storm.
+	for i := 1; i < len(s.window); i++ {
+		if s.window[i].Iter != s.window[i-1].Iter+1 {
+			return ""
+		}
+	}
+
 	// Calculate average reasoning length.
 	totalReasoning := 0
 	for _, e := range s.window {

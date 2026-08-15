@@ -296,7 +296,6 @@ type Agent struct {
 	taintInfluence             *taintInfluenceState                  // tainted data influence detection (IFC: tracks untrusted content flowing into privileged tool calls)
 	falsePremise               *falsePremiseState                    // false premise detection: ungrounded success claims contradicting tool errors (world-model drift)
 	perfBaseline               *perfBaselineState                    // cross-session performance regression detection
-	guidancePromoter           *GuidancePromoter                     // cross-session guidance tag recurrence → proactive rule promotion (inter-test-time evolution)
 	heterogeneousModel         *heterogeneousModelState              // FinOps: heterogeneous model selection guidance (sa-131)
 	lastRunStats               *RunStats                             // stats from the most recent run (for post-run summary display)
 	qualityScorer              *ResponseQualityScorer                // per-run response quality scoring for provider/model A/B comparison
@@ -1095,7 +1094,6 @@ func (a *Agent) SetSessionID(id string) {
 	a.syncContextManagerTodoPathLocked()
 	a.mu.Unlock()
 	// Initialize guidance promoter now that workingDir and sessionID are both known.
-	a.guidancePromoter = NewGuidancePromoter(a.workingDir, id)
 	// Update the TodoWrite tool's session binding outside agent.mu.
 	// tools.Get acquires registry.mu and tw.SetSessionID acquires TodoWrite.mu;
 	// holding agent.mu during those calls risks deadlock if a registry or
@@ -1387,10 +1385,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			StopReason: stopReason,
 			StopError:  stopError,
 		})
-		// Cross-session guidance promotion: persist recurrence data so that
-		// frequently recurring guidance tags can be promoted to proactive
-		// reminders in future sessions (inter-test-time evolution).
-		a.guidancePromoter.RunEndHook()
+		// (#466: guidance promoter removed — its RunStartHook injection was
+		// deleted by the monitoring-trim while the write side kept running;
+		// promoted tags were never injected, so persistence was write-only.)
 	}()
 	// Reconcile tool_calls: if the last assistant message has unpaired tool_use
 	// blocks (no matching tool_result blocks in subsequent messages), add a user
@@ -3127,7 +3124,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					a.editFailRecovery.recordRead(p)
 					a.fileFreshness.recordRead(p)
 					a.readHash.recordReadHash(p)
-					if hint := a.redundantRead.checkRedundantRead(p); hint != "" {
+					if hint := a.redundantRead.checkRedundantRead(p, readArgsHaveWindow(tc.Arguments)); hint != "" {
 						if result.Content != "" {
 							result.Content = result.Content + "\n\n" + hint
 						} else {

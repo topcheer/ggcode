@@ -42,6 +42,23 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
+// strictVerifyCommands is the fix-cascade verification subset (#469):
+// build / test / lint only. Formatters (gofmt/prettier — they fail on
+// unrelated mid-refactor syntax errors) and bare task-runners (make /
+// just / task — "make deploy" is not verification) are excluded.
+var strictVerifyCommands = map[string]bool{
+	"go build": true, "go test": true, "go vet": true,
+	"cargo build": true, "cargo test": true, "cargo clippy": true,
+	"npm run build": true, "npm test": true, "npm run test": true,
+	"pytest": true, "flutter test": true, "ctest": true, "rake test": true,
+	"golangci-lint": true, "eslint": true, "ruff": true,
+}
+
+// isStrictVerifyCommand reports whether cmd is in the strict verify set.
+func isStrictVerifyCommand(cmd string) bool {
+	return strictVerifyCommands[cmd]
+}
+
 // fixCascadeCheckCommand is the Agent-level wrapper that checks whether a
 // tool call result represents a verify command failure, and if so, records
 // it in the fix cascade state machine. Returns guidance if threshold reached.
@@ -54,7 +71,9 @@ func (a *Agent) fixCascadeCheckCommand(toolName string, args []byte, isError boo
 		return ""
 	}
 	cmd := extractCommandFromArgs(args)
-	if cmd == "" || !isVerifyCommand(cmd) {
+	// #469: fix-cascade uses the STRICT verification set; verify_hint's
+	// looser isVerifyCommand stays for its own counter-reset purpose.
+	if cmd == "" || !isStrictVerifyCommand(cmd) {
 		return ""
 	}
 	// Record the verify result. hadEdits is derived from editCount > 0.
@@ -141,7 +160,7 @@ func (f *fixCascadeState) recordVerify(hadEdits bool, failed bool) string {
 func cascadeGuidance(failedCount int) string {
 	return "[HYPOTHESIS LOCK-IN WARNING] " +
 		"You have completed " + strconv.Itoa(failedCount) + " edit->build->fail cycles, " +
-		"each producing DIFFERENT errors. This pattern strongly suggests your underlying " +
+		"each ending in verification failure. This pattern strongly suggests your underlying " +
 		"hypothesis is WRONG -- incremental fixes will continue to produce new errors " +
 		"without solving the problem.\n\n" +
 		"STOP making incremental edits. Instead:\n" +

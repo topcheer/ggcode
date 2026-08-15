@@ -79,8 +79,15 @@ func (r *redundantReadState) reset() {
 
 // Returns "" if the read is not redundant (first read, file changed, already
 // warned, or file too small to matter).
-func (r *redundantReadState) checkRedundantRead(path string) string {
+func (r *redundantReadState) checkRedundantRead(path string, partial bool) string {
 	if path == "" {
+		return ""
+	}
+	// #463: windowed reads (offset/limit) fetch a DIFFERENT chunk of a
+	// large file — path-level "already in context" logic does not apply.
+	// Record the mtime and step aside so chunked reads are never flagged.
+	if partial {
+		r.recordReadMtime(path)
 		return ""
 	}
 	n := normalizePath(path)

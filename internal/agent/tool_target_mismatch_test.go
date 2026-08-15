@@ -128,13 +128,21 @@ func TestCheckMismatch(t *testing.T) {
 		t.Errorf("expected no mismatch for matching targets, got: %s", hint)
 	}
 
-	// Mismatch: stated target differs from actual
-	hint = s.checkMismatch(
+	// Mismatch: stated target differs from actual — #468 raised the
+	// threshold to 2 signals, so a single mismatch no longer fires.
+	single := s.checkMismatch(
 		[]statedTarget{{intentType: "file", value: "internal/agent/agent.go"}},
 		[]toolTarget{{toolName: "read_file", targets: []string{"config.yaml"}}},
 	)
+	if single != "" {
+		t.Errorf("expected no mismatch for a SINGLE signal (#468 threshold=2), got: %s", single)
+	}
+	hint = s.checkMismatch(
+		[]statedTarget{{intentType: "file", value: "internal/agent/agent.go"}, {intentType: "file", value: "internal/tool/cli.go"}},
+		[]toolTarget{{toolName: "read_file", targets: []string{"config.yaml"}}},
+	)
 	if hint == "" {
-		t.Error("expected mismatch for different targets, got empty hint")
+		t.Error("expected mismatch for 2 different targets, got empty hint")
 	}
 
 	// Basename match: "agent.go" matches "internal/agent/agent.go"
@@ -165,9 +173,12 @@ func TestCheckMismatch(t *testing.T) {
 func TestMaybeWarnToolTargetMismatch(t *testing.T) {
 	a := &Agent{toolTargetMismatch: &toolTargetState{}}
 
-	// Mismatch detected
+	// Mismatch detected — #468 raised the threshold to 2 signals, so the
+	// warning needs two stated targets both absent from the actual calls.
+	// Note: each target must follow an intent verb ("I'll read X"), since
+	// toolTargetIntentRe only captures targets adjacent to intent phrases.
 	hint := a.maybeWarnToolTargetMismatch(
-		"I'll read internal/agent/agent.go to understand the structure.",
+		"I'll read internal/agent/agent.go first. Then I'll read internal/tool/cli.go to understand the structure.",
 		[]provider.ToolCallDelta{
 			{Name: "read_file", Arguments: json.RawMessage(`{"path":"config.yaml"}`)},
 		},

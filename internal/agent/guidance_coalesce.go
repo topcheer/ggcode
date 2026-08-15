@@ -288,11 +288,8 @@ func (a *Agent) applyToolResultGuidance(
 		hints = append([]string{ch}, hints...)
 	}
 
-	for _, h := range hints {
-		if tag := extractHintTag(h); tag != "" {
-			a.guidancePromoter.RecordTag(tag)
-		}
-	}
+	// (#466: promoter RecordTag removed along with the write-only
+	// persistence — injected hints never depended on it.)
 
 	result.Content = result.Content + "\n\n" + strings.Join(hints, "\n\n")
 }

@@ -68,7 +68,10 @@ var guidanceConflicts = []conflictPair{
 	},
 	{
 		// "commit now" vs "don't commit yet"
-		sideA:    []string{"COMMIT NOW", "STAGE AND COMMIT", "READY TO COMMIT"},
+		// #462: "IS READY TO COMMIT" — the bare form matched inside the
+		// negated "NOT READY TO COMMIT", judging two same-direction
+		// don't-commit hints as contradictory.
+		sideA:    []string{"COMMIT NOW", "STAGE AND COMMIT", "IS READY TO COMMIT"},
 		sideB:    []string{"DON'T COMMIT", "NOT READY", "BEFORE COMMITTING", "VERIFY BEFORE COMMIT", "DO NOT COMMIT"},
 		priority: "Do not commit until verification passes; the conservative directive wins.",
 	},
@@ -92,18 +95,19 @@ func detectGuidanceConflict(hints []string) string {
 	}
 
 	for _, cp := range guidanceConflicts {
-		// Find hints matching sideA and sideB independently.
-		// A single hint can match both sides (e.g., "act now but explore
-		// first"), but conflict is only between DIFFERENT hints.
+		// #462: mutual exclusion — a hint matching sideA of a pair must not
+		// simultaneously serve as the sideB matcher ("STOP EXPLORING, act
+		// now" + "stop exploring further and edit" are both stop-exploring
+		// hints, not a conflict).
 		for i, ui := range upperHints {
-			if !containsAnyKeyword(ui, cp.sideA) {
+			if !containsAnyKeyword(ui, cp.sideA) || containsAnyKeyword(ui, cp.sideB) {
 				continue
 			}
 			for j, uj := range upperHints {
 				if i == j {
 					continue
 				}
-				if containsAnyKeyword(uj, cp.sideB) {
+				if containsAnyKeyword(uj, cp.sideB) && !containsAnyKeyword(uj, cp.sideA) {
 					return "[guidance-conflict] Contradictory directives detected in concurrent guidance " +
 						"(cross-component interference). Two retained hints push in opposite directions. " +
 						cp.priority
@@ -115,12 +119,46 @@ func detectGuidanceConflict(hints []string) string {
 	return ""
 }
 
-// containsAnyKeyword checks if s contains any of the substrings.
+// containsAnyKeyword checks if s contains any of the keywords with every
+// keyword token anchored at a word start (#462: bare substring matching hit
+// stems inside other words, e.g. "EXPLOR" matching inside "STOP EXPLORING"
+// from the opposite side's perspective).
 func containsAnyKeyword(s string, subs []string) bool {
 	for _, sub := range subs {
-		if strings.Contains(s, sub) {
+		if keywordTokensAtWordStart(s, sub) {
 			return true
 		}
 	}
 	return false
+}
+
+// keywordTokensAtWordStart reports whether keyword appears in s as a
+// contiguous phrase starting at a word boundary (#462: bare substring
+// matching hit stems inside other words, e.g. "EXPLOR" matching inside
+// "STOP EXPLORING" from the opposite side's perspective). The boundary
+// check only guards the START of the phrase — prefix keywords like
+// "EXPLOR" still match inflected forms (EXPLORE/EXPLORING), while
+// mid-word hits ("WIDESPREAD" hitting "WIDER") and non-adjacent token
+// splices ("TOO" + "NARROW" from unrelated words) never match.
+func keywordTokensAtWordStart(s, keyword string) bool {
+	if keyword == "" {
+		return false
+	}
+	idx := 0
+	for {
+		j := strings.Index(s[idx:], keyword)
+		if j < 0 {
+			return false
+		}
+		at := idx + j
+		if at == 0 || !isWordRune(s[at-1]) {
+			return true
+		}
+		idx = at + 1
+	}
+}
+
+// isWordRune reports whether b is a word-continuation byte.
+func isWordRune(b byte) bool {
+	return b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9' || b == '_'
 }

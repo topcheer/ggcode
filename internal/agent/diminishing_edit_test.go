@@ -167,9 +167,11 @@ func TestMeasureEditSize_EmptyArgs(t *testing.T) {
 }
 
 func TestMeasureEditSize_BatchReplace(t *testing.T) {
-	args := json.RawMessage(`{"files":[{"pattern":"foo","replacement":"bar"}]}`)
-	size := measureEditSize("batch_replace", args)
-	expected := len("foo") + len("bar")
+	// #470: batch_replace branch removed (wrong arg shape, unreachable
+	// from productiveEditTools) — replaced by multi_file_write.
+	args := json.RawMessage(`{"files":[{"path":"a.go","content":"hello world, this is a large file body"},{"path":"b.go","content":"short"}]}`)
+	size := measureEditSize("multi_file_write", args)
+	expected := len("hello world, this is a large file body") + len("short")
 	if size != expected {
 		t.Fatalf("expected %d, got %d", expected, size)
 	}

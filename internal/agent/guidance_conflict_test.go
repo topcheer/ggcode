@@ -71,7 +71,7 @@ func TestDetectGuidanceConflict_ActVsExplore(t *testing.T) {
 
 func TestDetectGuidanceConflict_NarrowVsBroaden(t *testing.T) {
 	hints := []string{
-		"[verify-scope-narrow] Your scope is too broad, narrow it.",
+		"[verify-scope-narrow] NARROW SCOPE: your query is too broad.",
 		"[web-search-quality] Broaden your search for better coverage.",
 	}
 
@@ -125,8 +125,10 @@ func TestDetectGuidanceConflict_SameHintNotConflict(t *testing.T) {
 }
 
 func TestDetectGuidanceConflict_CaseInsensitive(t *testing.T) {
+	// #462: case-insensitive matching must still work across word-start
+	// anchored keywords.
 	hints := []string{
-		"[test] act now and stop exploring.",
+		"[test] make your best-guess edit now.",
 		"[test2] Please Explore More Before Acting.",
 	}
 
@@ -136,10 +138,23 @@ func TestDetectGuidanceConflict_CaseInsensitive(t *testing.T) {
 	}
 }
 
+func TestDetectGuidanceConflict_SameDirectionNoConflict(t *testing.T) {
+	// #462 regression: two hints saying the same thing (stop exploring)
+	// must NOT be judged contradictory (mutual-exclusion + word-start
+	// anchoring).
+	hints := []string{
+		"[test] ACT NOW, stop exploring.",
+		"[test2] stop exploring further and edit now.",
+	}
+	if result := detectGuidanceConflict(hints); result != "" {
+		t.Fatalf("expected no conflict for same-direction hints, got: %s", result)
+	}
+}
+
 func TestDetectGuidanceConflict_MaxOneConflict(t *testing.T) {
 	// Even with multiple conflicting pairs, only one conflict hint is returned.
 	hints := []string{
-		"[a] ACT NOW stop exploring.",
+		"[a] ACT NOW and commit.",
 		"[b] Please explore more first.",
 		"[c] Narrow your scope.",
 		"[d] Broaden your search.",

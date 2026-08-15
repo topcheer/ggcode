@@ -276,11 +276,16 @@ func measureEditSize(toolName string, args json.RawMessage) int {
 		}
 		return len(p.Content)
 
-	case "batch_replace":
+	case "multi_file_write":
+		// #470: this tool is in productiveEditTools but had NO branch —
+		// batch writes scored 0 bytes, dragging avgRecent toward the
+		// trivial threshold and flagging high-impact refactors as polish
+		// spirals. (The old batch_replace branch parsed the wrong arg shape
+		// and returned 0 unconditionally; it is removed — batch_replace is
+		// not in productiveEditTools anyway.)
 		var p struct {
 			Files []struct {
-				Pattern     string `json:"pattern"`
-				Replacement string `json:"replacement"`
+				Content string `json:"content"`
 			} `json:"files"`
 		}
 		if json.Unmarshal(args, &p) != nil {
@@ -288,7 +293,7 @@ func measureEditSize(toolName string, args json.RawMessage) int {
 		}
 		total := 0
 		for _, f := range p.Files {
-			total += len(f.Pattern) + len(f.Replacement)
+			total += len(f.Content)
 		}
 		return total
 

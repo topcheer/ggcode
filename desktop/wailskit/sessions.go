@@ -445,6 +445,11 @@ func loadSessionForExport(sessionID string) ([]SessionMessage, string, error) {
 	if err != nil {
 		return nil, "", fmt.Errorf("load session: %w", err)
 	}
-	msgs := buildSessionHistoryFromMessages(ses.Messages)
+	// #464: by-ID export must merge tunnel (mobile) user events exactly like
+	// the live-history path (#242, chat.go:652) — build first, then merge.
+	msgs := mergeTunnelUserMessages(
+		buildSessionHistoryFromMessages(ses.Messages),
+		ses.TunnelEvents,
+	)
 	return msgs, ses.Title, nil
 }

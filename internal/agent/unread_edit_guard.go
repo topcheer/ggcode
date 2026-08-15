@@ -271,6 +271,35 @@ func extractSinglePath(m map[string]any, keys ...string) []string {
 }
 
 // extractReadFilePaths returns file paths from read tool arguments.
+// readArgsHaveWindow reports whether read_file / multi_file_read args
+// carry an explicit offset/limit window (#463) — such reads fetch a chunk
+// of the file, not the whole thing.
+func readArgsHaveWindow(args json.RawMessage) bool {
+	if len(args) == 0 {
+		return false
+	}
+	var m struct {
+		Offset int `json:"offset"`
+		Limit  int `json:"limit"`
+		Files  []struct {
+			Offset int `json:"offset"`
+			Limit  int `json:"limit"`
+		} `json:"files"`
+	}
+	if json.Unmarshal(args, &m) != nil {
+		return false
+	}
+	if m.Offset > 0 || m.Limit > 0 {
+		return true
+	}
+	for _, f := range m.Files {
+		if f.Offset > 0 || f.Limit > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func extractReadFilePaths(toolName string, args json.RawMessage) []string {
 	if len(args) == 0 {
 		return nil

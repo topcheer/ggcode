@@ -119,13 +119,33 @@ func (s *serialReadState) reset() {
 	s.fired = false
 }
 
+// serialMutatingTools lists tools that MUTATE state — a call to any of
+// these legitimately breaks the read-batching streak. #465: the old
+// else-branch treated every non-whitelisted tool as a mutation, so
+// todo_write/ask_user/task_*/skill/cron_*/MCP reads reset the streak and
+// the batch-opportunity guidance never fired for explorer agents.
+var serialMutatingTools = map[string]bool{
+	"edit_file": true, "multi_edit_file": true, "multi_file_edit": true,
+	"write_file": true, "multi_file_write": true, "batch_replace": true,
+	"file_ops": true, "notebook_edit": true, "undo_edit": true,
+	"run_command": true, "start_command": true, "stop_command": true,
+	"write_command_input": true,
+	"git_add":             true, "git_commit": true, "git_checkout": true,
+	"git_revert": true, "git_reset": true, "git_stash": true,
+	"git_tag": true, "lsp_rename": true,
+	"scaffold_project": true, "enter_worktree": true, "teammate_shutdown": true,
+	"team_delete": true,
+}
+
 // recordToolCall is called once per tool call within the current turn.
+// Unknown tools (MCP, rarely used built-ins) are NEUTRAL per #465: they
+// neither advance the read streak nor reset it (fail-open).
 func (s *serialReadState) recordToolCall(toolName string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if serialReadOnlyTools[toolName] {
 		s.currentTurnReadOnly++
-	} else {
+	} else if serialMutatingTools[toolName] {
 		s.currentTurnHasMutation = true
 	}
 }

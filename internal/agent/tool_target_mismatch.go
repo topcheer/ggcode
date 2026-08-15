@@ -51,7 +51,10 @@ const (
 	toolTargetMaxWarnings = 2
 
 	// toolTargetMinConfidence: minimum number of mismatch signals to trigger.
-	toolTargetMinConfidence = 1
+	// #468: raised 1→2 — a single prose-noun vs path gap ("update
+	// documentation" then edit README.md) is the normal intent/wording
+	// difference, not evidence of operating on the wrong file.
+	toolTargetMinConfidence = 2
 )
 
 // toolTargetIntentRe detects intent statements that mention specific file paths
@@ -119,6 +122,13 @@ func extractStatedTargets(text string) []statedTarget {
 		if isFalsePositiveTarget(lower) {
 			continue
 		}
+		// #468: prose nouns ("documentation", "the config") are not stated
+		// file targets. Non-search intents must be path-like (contain a
+		// separator or a file extension); SEARCH terms are exempt
+		// (identifiers like authenticationHandler).
+		if classifyIntent(m[0]) != "search" && !targetLooksLikeFile(raw) {
+			continue
+		}
 		// Normalize: strip trailing punctuation
 		raw = strings.TrimRight(raw, ".,;:!?")
 		if raw == "" {
@@ -164,6 +174,30 @@ func isFalsePositiveTarget(s string) bool {
 		"all": true, "any": true, "some": true, "each": true,
 	}
 	return falsePositives[s]
+}
+
+// targetLooksLikeFile reports whether a stated target is path-like:
+// contains a path separator or ends with a short alphanumeric extension
+// (#468). Prose nouns like "documentation" fail this check.
+func targetLooksLikeFile(s string) bool {
+	if strings.ContainsAny(s, "/\\") {
+		return true
+	}
+	dot := strings.LastIndex(s, ".")
+	if dot <= 0 || dot == len(s)-1 {
+		return false
+	}
+	ext := s[dot+1:]
+	if len(ext) > 6 {
+		return false
+	}
+	for i := 0; i < len(ext); i++ {
+		b := ext[i]
+		if !(b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9') {
+			return false
+		}
+	}
+	return true
 }
 
 // classifyIntent determines the type of intent from the matched phrase.
