@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
@@ -283,8 +284,17 @@ func (nm *NotificationManager) runWinToast(title, body string) {
 	}
 }
 
+// psEscapeSingleQuotes escapes single quotes for PowerShell single-quoted
+// string literals (” doubling). Without this, an apostrophe in the title or
+// body closes the literal early, breaking toast syntax (#409).
+func psEscapeSingleQuotes(s string) string {
+	return strings.ReplaceAll(s, "'", "''")
+}
+
 // windowsToastScript builds the PowerShell balloon-toast script.
 func windowsToastScript(title, body string) string {
+	title = psEscapeSingleQuotes(title)
+	body = psEscapeSingleQuotes(body)
 	return "[System.Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms'); " +
 		"$balloon = New-Object System.Windows.Forms.NotifyIcon; " +
 		"$balloon.Icon = [System.Drawing.SystemIcons]::Information; " +

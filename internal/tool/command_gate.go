@@ -105,13 +105,18 @@ func NewCommandGate() *CommandGate {
 			// — this also fixes the dispersed form `rm --force /etc
 			// --recursive` where the target sits BETWEEN the flags (the old
 			// pattern required the path strictly after both flags).
+			// #410: the gap between elements must not cross command separators
+			// (; & |) — otherwise a later, unrelated segment of a compound
+			// command could contribute the "missing" flag or path anchor and
+			// hard-block benign commands like `rm -f old.tar && grep -r x /etc`.
+			// The rule therefore only evaluates the single rm sub-command.
 			pattern: regexp.MustCompile(`(?i)\brm\s+(?:` +
-				`.*` + rmF + `.*` + rmR + `.*` + rmP + `|` +
-				`.*` + rmF + `.*` + rmP + `.*` + rmR + `|` +
-				`.*` + rmR + `.*` + rmF + `.*` + rmP + `|` +
-				`.*` + rmR + `.*` + rmP + `.*` + rmF + `|` +
-				`.*` + rmP + `.*` + rmF + `.*` + rmR + `|` +
-				`.*` + rmP + `.*` + rmR + `.*` + rmF +
+				`[^;&|]*` + rmF + `[^;&|]*` + rmR + `[^;&|]*` + rmP + `|` +
+				`[^;&|]*` + rmF + `[^;&|]*` + rmP + `[^;&|]*` + rmR + `|` +
+				`[^;&|]*` + rmR + `[^;&|]*` + rmF + `[^;&|]*` + rmP + `|` +
+				`[^;&|]*` + rmR + `[^;&|]*` + rmP + `[^;&|]*` + rmF + `|` +
+				`[^;&|]*` + rmP + `[^;&|]*` + rmF + `[^;&|]*` + rmR + `|` +
+				`[^;&|]*` + rmP + `[^;&|]*` + rmR + `[^;&|]*` + rmF +
 				`)`)},
 		{kind: "catastrophic", desc: "disk format/erase",
 			pattern: regexp.MustCompile(`(?i)\b(mkfs\.|dd\s+if=.*of=/dev/|diskutil\s+eraseDisk|diskutil\s+partitionDisk)`)},

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/config"
@@ -109,7 +110,31 @@ func CheckExistingDaemon(workingDir string) (int, error) {
 		_ = os.Remove(pidPath)
 		return 0, nil
 	}
+	// Signal-0 only proves SOME process owns the PID now. After a daemon
+	// crash (SIGKILL/panic/power loss) the PID file survives and the OS may
+	// later hand the PID to an unrelated process — which would then block
+	// daemon startup forever with a false "already running". Verify the
+	// process identity before trusting the PID file (#412).
+	if !daemonIdentityMatches(info.PID) {
+		debug.Log("daemon", "PID %d alive but not a ggcode daemon (recycled PID); cleaning stale PID file %s", info.PID, pidPath)
+		_ = os.Remove(pidPath)
+		return 0, nil
+	}
 	return info.PID, nil
+}
+
+// daemonIdentityMatches reports whether the process at pid looks like a
+// ggcode daemon: its command line carries the hidden --__daemonized flag
+// set by ForkIntoBackground (argv[0] is rewritten to "ggcode[dirname]").
+// When the command line cannot be inspected (unsupported platform,
+// permission denied), it falls back to true — keeping the old signal-0
+// verdict — rather than blocking startup.
+func daemonIdentityMatches(pid int) bool {
+	cmdline := processCmdline(pid)
+	if cmdline == "" {
+		return true
+	}
+	return strings.Contains(cmdline, "--__daemonized") || strings.Contains(cmdline, "ggcode[")
 }
 
 // ForkIntoBackground re-execs the current binary as a background daemon.

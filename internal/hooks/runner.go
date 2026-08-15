@@ -158,7 +158,15 @@ func executeCommandHook(h Hook, env HookEnv, payload HookPayload) HookResult {
 		return HookResult{Allowed: true, Err: fmt.Errorf("resolve hook shell: %w", err)}
 	}
 	c.Dir = env.WorkingDir
-	c.Env = append(os.Environ(),
+	// #413: drop inherited GGCODE_* keys from os.Environ() before injecting
+	// ours. Otherwise the envp carries duplicate keys and the inherited value
+	// (e.g. set by a chained hook that spawned this ggcode) wins on getenv,
+	// shadowing the fresh payload.
+	c.Env = append(filterEnviron(os.Environ(),
+		"GGCODE_HOOK_PAYLOAD", "GGCODE_HOOK_EVENT", "GGCODE_RAW_INPUT",
+		"GGCODE_TOOL_NAME", "GGCODE_TOOL_SUCCESS", "GGCODE_TOOL_ERROR",
+		"GGCODE_TOOL_RESULT", "GGCODE_TOOL_DURATION",
+	),
 		"GGCODE_HOOK_PAYLOAD="+payloadJSON,
 		"GGCODE_HOOK_EVENT="+env.Event,
 		"GGCODE_RAW_INPUT="+env.RawInput,
@@ -168,6 +176,10 @@ func executeCommandHook(h Hook, env HookEnv, payload HookPayload) HookResult {
 		"GGCODE_TOOL_RESULT="+env.ToolResult,
 		"GGCODE_TOOL_DURATION="+env.ToolDuration,
 	)
+	// #413: put the hook in its own process group and kill the whole group
+	// on timeout — the default context kill only reaps the shell itself,
+	// leaving `cmd &` background children adopted by init.
+	setProcessGroupKill(c)
 	// Also pipe payload to stdin.
 	c.Stdin = strings.NewReader(payloadJSON)
 	var stdout, stderr bytes.Buffer
@@ -330,6 +342,31 @@ func matchAny(mode, pattern, toolName, rawInput string) bool {
 
 // matchTool checks if a hook's match pattern applies to a tool call.
 func matchTool(pattern, toolName, rawInput string) bool {
+	// #413: evaluate each pipe-separated alternative independently. The old
+	// code entered the function-call branch on the FIRST "(" anywhere in the
+	// pattern, so a mixed pattern like `edit_file(*)|bash` sliced
+	// patArgs="*)|bas" from the whole string — Contains was always false and
+	// the hook silently never fired. Splitting first makes each alternative
+	// parse with exactly one syntax.
+	if strings.Contains(pattern, "|") {
+		for _, alt := range strings.Split(pattern, "|") {
+			alt = strings.TrimSpace(alt)
+			if alt == "" {
+				continue
+			}
+			if matchToolSingle(alt, toolName, rawInput) {
+				return true
+			}
+		}
+		return false
+	}
+	return matchToolSingle(pattern, toolName, rawInput)
+}
+
+// matchToolSingle matches one pattern alternative (no pipes) against a tool
+// call. Two syntaxes: function-call `tool(args)` and simple glob on the tool
+// name.
+func matchToolSingle(pattern, toolName, rawInput string) bool {
 	// Function call pattern: tool_name(args...)
 	if parenIdx := strings.Index(pattern, "("); parenIdx > 0 {
 		// Guard against patterns like "edit_file(" — missing closing paren.
@@ -354,21 +391,27 @@ func matchTool(pattern, toolName, rawInput string) bool {
 
 	// Simple glob match on tool name
 	matched, _ := filepath.Match(pattern, toolName)
-	if matched {
-		return true
-	}
+	return matched
+}
 
-	// Pipe-separated patterns
-	if strings.Contains(pattern, "|") {
-		for _, p := range strings.Split(pattern, "|") {
-			p = strings.TrimSpace(p)
-			if m, _ := filepath.Match(p, toolName); m {
-				return true
+// filterEnviron removes entries whose key matches one of keys, so injected
+// values never collide with inherited ones (#413).
+func filterEnviron(environ []string, keys ...string) []string {
+	drop := make(map[string]struct{}, len(keys))
+	for _, k := range keys {
+		drop[k] = struct{}{}
+	}
+	out := environ[:0:0]
+	for _, kv := range environ {
+		i := strings.IndexByte(kv, '=')
+		if i > 0 {
+			if _, bad := drop[kv[:i]]; bad {
+				continue
 			}
 		}
+		out = append(out, kv)
 	}
-
-	return false
+	return out
 }
 
 // ExtractFilePath attempts to extract a file path from common tool argument patterns.

@@ -5,20 +5,22 @@ import (
 	"time"
 )
 
-func TestClamp(t *testing.T) {
+func TestParseField_OutOfRangeRejected(t *testing.T) {
+	// #415: range/step bounds out of range must error (same policy as the
+	// single-value path) instead of being silently clamped into different
+	// semantics.
 	tests := []struct {
-		v, min, max, want int
+		part    string
+		min, mx int
 	}{
-		{5, 0, 10, 5},
-		{-1, 0, 10, 0},
-		{15, 0, 10, 10},
-		{0, 0, 10, 0},
-		{10, 0, 10, 10},
+		{"60/5", 0, 23},   // hour step: 60 out of range
+		{"13-20", 1, 12},  // month range: 13 out of range
+		{"0-70", 0, 59},   // minute range: 70 out of range
+		{"24-2/2", 0, 23}, // range-with-step: 24 out of range
 	}
 	for _, tt := range tests {
-		got := clamp(tt.v, tt.min, tt.max)
-		if got != tt.want {
-			t.Errorf("clamp(%d,%d,%d) = %d, want %d", tt.v, tt.min, tt.max, got, tt.want)
+		if err := parseFieldPart(tt.part, tt.min, tt.mx, map[int]bool{}); err == nil {
+			t.Errorf("parseFieldPart(%q) expected out-of-range error, got nil", tt.part)
 		}
 	}
 }

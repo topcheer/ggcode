@@ -34,10 +34,30 @@ func workspaceKey(dir string) string {
 //
 // If oldStorePath doesn't exist, the workspace has no bucket, or the new
 // store already exists, migration is a no-op.
+//
+// #414 hardening:
+//   - The whole read-check-migrate-write sequence runs under an exclusive
+//     lock on the old store (flock on Unix, LockFileEx on Windows). Two
+//     instances starting concurrently used to both pass the Stat check and
+//     migrate the same recurring job into two session stores → cron double
+//     firing.
+//   - The new session store is written BEFORE the bucket is removed from
+//     the old store. The old delete-first order lost jobs permanently when
+//     the new-store write failed (disk full / permissions) with no rollback.
 func MigrateWorkspaceJobs(oldStorePath, newSessionPath, workspaceDir string) {
 	if oldStorePath == "" || newSessionPath == "" || workspaceDir == "" {
 		return
 	}
+
+	// Serialize concurrent migrations across processes (#414 TOCTOU).
+	// Lock file lives next to the old store so its lifecycle matches.
+	lockPath := oldStorePath + ".migrate.lock"
+	release, ok := acquireMigrationLock(lockPath)
+	if !ok {
+		debug.Log("cron", "MigrateWorkspaceJobs: another instance holds the migration lock; skipping")
+		return
+	}
+	defer release()
 
 	// If the session store already exists, this session was loaded before —
 	// no migration needed (jobs were already migrated on a previous run).
@@ -62,41 +82,49 @@ func MigrateWorkspaceJobs(oldStorePath, newSessionPath, workspaceDir string) {
 		return // no jobs for this workspace
 	}
 
-	// Remove this workspace from the old store immediately.
-	// This prevents concurrent instances from migrating the same jobs.
-	delete(sf, wsKey)
-
-	// Write back the old store (minus this workspace).
-	if len(sf) == 0 {
-		os.Remove(oldStorePath)
-	} else {
-		out, err := json.MarshalIndent(sf, "", "  ")
-		if err == nil {
-			util.AtomicWriteFile(oldStorePath, out, 0644)
-		}
-	}
-
-	// Write migrated recurring jobs to the new session store.
+	// Write the migrated recurring jobs to the NEW session store FIRST (#414).
+	// Only after that succeeds do we remove the bucket from the old store —
+	// a failed write leaves the old store untouched and a later start can
+	// retry, instead of losing the jobs forever.
 	var migrated []jobJSON
 	for _, j := range bucket.Jobs {
 		if j.Recurring {
 			migrated = append(migrated, j)
 		}
 	}
-	if len(migrated) == 0 {
-		return
+	if len(migrated) > 0 {
+		ss := sessionStore{Jobs: migrated}
+		out, err := json.MarshalIndent(ss, "", "  ")
+		if err != nil {
+			debug.Log("cron", "MigrateWorkspaceJobs: failed to marshal migrated jobs: %v", err)
+			return
+		}
+		if err := os.MkdirAll(filepath.Dir(newSessionPath), 0755); err != nil {
+			debug.Log("cron", "MigrateWorkspaceJobs: failed to create session store dir: %v", err)
+			return
+		}
+		if err := util.AtomicWriteFile(newSessionPath, out, 0644); err != nil {
+			debug.Log("cron", "MigrateWorkspaceJobs: failed to write migrated jobs to %s: %v (bucket kept in old store for retry)", newSessionPath, err)
+			return
+		}
+		debug.Log("cron", "MigrateWorkspaceJobs: migrated %d recurring jobs from workspace %s to session store", len(migrated), workspaceDir)
 	}
 
-	ss := sessionStore{Jobs: migrated}
-	out, err := json.MarshalIndent(ss, "", "  ")
-	if err != nil {
-		debug.Log("cron", "MigrateWorkspaceJobs: failed to marshal migrated jobs: %v", err)
-		return
-	}
-	os.MkdirAll(filepath.Dir(newSessionPath), 0755)
-	if err := util.AtomicWriteFile(newSessionPath, out, 0644); err != nil {
-		debug.Log("cron", "MigrateWorkspaceJobs: failed to write migrated jobs to %s: %v", newSessionPath, err)
+	// Now that the jobs are safely in the new store, remove this workspace
+	// from the old store so no other instance migrates them again.
+	delete(sf, wsKey)
+	if len(sf) == 0 {
+		if err := os.Remove(oldStorePath); err != nil && !os.IsNotExist(err) {
+			debug.Log("cron", "MigrateWorkspaceJobs: failed to remove empty old store %s: %v", oldStorePath, err)
+		}
 	} else {
-		debug.Log("cron", "MigrateWorkspaceJobs: migrated %d recurring jobs from workspace %s to session store", len(migrated), workspaceDir)
+		out, err := json.MarshalIndent(sf, "", "  ")
+		if err != nil {
+			debug.Log("cron", "MigrateWorkspaceJobs: failed to marshal old store: %v", err)
+			return
+		}
+		if err := util.AtomicWriteFile(oldStorePath, out, 0644); err != nil {
+			debug.Log("cron", "MigrateWorkspaceJobs: failed to write old store back: %v (bucket may be re-migrated)", err)
+		}
 	}
 }

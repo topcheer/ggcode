@@ -162,8 +162,16 @@ func parseFieldPart(part string, minVal, maxVal int, values map[int]bool) error 
 			rangeEnd = maxVal
 		}
 
-		rangeStart = clamp(rangeStart, minVal, maxVal)
-		rangeEnd = clamp(rangeEnd, minVal, maxVal)
+		// #415: reject out-of-range bounds instead of clamping — the single-
+		// value path errors on `60` hours, so `60/5` silently becoming 23:00
+		// (and `13-20` months becoming just December) rewrote the user's
+		// mistaken expression into different semantics.
+		if rangeStart < minVal || rangeStart > maxVal {
+			return fmt.Errorf("value %d out of range [%d-%d] in %q", rangeStart, minVal, maxVal, part)
+		}
+		if rangeEnd < minVal || rangeEnd > maxVal {
+			return fmt.Errorf("value %d out of range [%d-%d] in %q", rangeEnd, minVal, maxVal, part)
+		}
 		for v := rangeStart; v <= rangeEnd; v += step {
 			values[v] = true
 		}
@@ -181,8 +189,14 @@ func parseFieldPart(part string, minVal, maxVal int, values map[int]bool) error 
 		if err != nil {
 			return fmt.Errorf("invalid range end in %q", part)
 		}
-		start = clamp(start, minVal, maxVal)
-		end = clamp(end, minVal, maxVal)
+		// #415: reject out-of-range bounds instead of clamping (same policy
+		// as the single-value path).
+		if start < minVal || start > maxVal {
+			return fmt.Errorf("value %d out of range [%d-%d] in %q", start, minVal, maxVal, part)
+		}
+		if end < minVal || end > maxVal {
+			return fmt.Errorf("value %d out of range [%d-%d] in %q", end, minVal, maxVal, part)
+		}
 		for v := start; v <= end; v++ {
 			values[v] = true
 		}
@@ -207,16 +221,6 @@ func parseFieldPart(part string, minVal, maxVal int, values map[int]bool) error 
 	}
 	values[v] = true
 	return nil
-}
-
-func clamp(v, minVal, maxVal int) int {
-	if v < minVal {
-		return minVal
-	}
-	if v > maxVal {
-		return maxVal
-	}
-	return v
 }
 
 func firstOfNextMonth(t time.Time) time.Time {

@@ -28,7 +28,14 @@ func (l *SessionLock) SessionID() string {
 }
 
 // LockFilePath returns the path to the lock file for a session.
+// Invalid IDs (path traversal via --resume, e.g. "../../foo") fall back to a
+// safe, non-escaping placeholder — the same policy as JSONLStore.sessionPath
+// (#401). Without this, TryAcquireSessionLock would O_CREATE 0600 lock files
+// outside the store directory and Release would remove them (#411).
 func LockFilePath(storeDir, sessionID string) string {
+	if !validSessionID(sessionID) {
+		return filepath.Join(storeDir, "_invalid_id_.lock")
+	}
 	return filepath.Join(storeDir, sessionID+".lock")
 }
 
