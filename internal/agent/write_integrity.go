@@ -96,6 +96,8 @@ func registerAllChecks() {
 		{Name: "merge-conflict-markers", Run: stringCheckNew(checkMergeConflictMarkers)},
 
 		// --- Go correctness (crashes, data races, leaks) ---
+		// Re-registered per #328/#330: interface_compliance, deprecated_api,
+		// printf_format, suspicious_comparison, dep_major_bump, dependency_vuln.
 		{Name: "go-syntax", Langs: []Language{LangGo}, Run: func(ctx CheckContext) []string {
 			if ctx.GoAST != nil || strings.TrimSpace(ctx.NewContent) == "" {
 				return nil
@@ -124,6 +126,16 @@ func registerAllChecks() {
 		{Name: "sensitive-json", Langs: []Language{LangGo}, Run: sliceCheck(checkSensitiveJSONExposure)},
 		{Name: "hardcoded-secret", Run: sliceCheck(checkHardcodedSecrets)},
 		{Name: "insecure-patterns", Langs: []Language{LangGo, LangJSTS, LangPython}, Run: sliceCheck(checkInsecurePatterns)},
+
+		// --- Security: supply chain (#330) ---
+		{Name: "dep-major-bump", Run: stringCheck(checkBreakingChangeDepAsString)}, // all langs: self-filters by manifest filename
+		{Name: "dependency-vuln", Run: stringCheck(checkDependencyVulnsAsString)},  // all langs: self-filters by manifest filename
+
+		// --- Go correctness: API misuse / logic smells (#328/#330) ---
+		{Name: "deprecated-api", Langs: []Language{LangGo}, Run: stringCheck(checkDeprecatedAPI)},
+		{Name: "interface-compliance", Langs: []Language{LangGo}, Run: stringCheck(checkInterfaceCompliance)},
+		{Name: "printf-format", Langs: []Language{LangGo}, Run: sliceCheck(checkPrintfFormat)},
+		{Name: "suspicious-comparison", Langs: []Language{LangGo}, Run: stringCheck(checkSuspiciousComparison)},
 
 		// --- Markup structural (breaks rendering) ---
 		{Name: "tag-balance", Langs: []Language{LangMarkup, LangJSTS}, Run: stringCheckNew(checkTagBalance)},

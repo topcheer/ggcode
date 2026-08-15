@@ -1433,9 +1433,33 @@ func (a *App) IsGlobalHotkeyEnabled() bool {
 	return a.dc.IsGlobalHotkeyEnabled()
 }
 
+// workspaceRoot returns the containment root for file-browsing APIs. It
+// prefers the configured workspace directory (a.workDir) and falls back to
+// the process working directory when unset (#329).
+func (a *App) workspaceRoot() string {
+	if a.workDir != "" {
+		return a.workDir
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	return wd
+}
+
 // ListFiles returns files in the given directory (1 level deep).
+// #329: resolves symlinks and enforces containment within the workspace root
+// (same policy as wailskit.ListDirectory) before listing.
 func (a *App) ListFiles(dir string) []map[string]interface{} {
-	entries, err := os.ReadDir(dir)
+	if dir == "" {
+		dir = a.workspaceRoot()
+	}
+	abs, err := wailskit.ResolveContainedPath(a.workspaceRoot(), dir)
+	if err != nil {
+		debug.Log("desktop", "ListFiles denied %q: %v", dir, err)
+		return nil
+	}
+	entries, err := os.ReadDir(abs)
 	if err != nil {
 		return nil
 	}
@@ -1456,12 +1480,22 @@ func (a *App) ListFiles(dir string) []map[string]interface{} {
 }
 
 // ReadFileContent reads a text file and returns its content.
+// #329: delegates to wailskit.ReadFileContent's policy — symlink resolution,
+// workspace-root containment, and the 20MB text preview cap — anchored at the
+// app workspace root instead of os.Getwd().
 func (a *App) ReadFileContent(path string) (string, error) {
-	abs, err := filepath.Abs(path)
+	resolved, err := wailskit.ResolveContainedPath(a.workspaceRoot(), path)
 	if err != nil {
 		return "", err
 	}
-	data, err := os.ReadFile(abs)
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return "", fmt.Errorf("stat file: %w", err)
+	}
+	if info.Size() > wailskit.MaxReadFileTextBytes {
+		return "", fmt.Errorf("file too large to preview: %s is %d bytes (limit 20MB)", resolved, info.Size())
+	}
+	data, err := os.ReadFile(resolved)
 	if err != nil {
 		return "", err
 	}
@@ -1481,8 +1515,10 @@ type FileBinaryData struct {
 const maxReadFileBase64Bytes = 150 << 20
 
 // ReadFileAsBase64 reads a binary file (image, PDF, etc.) and returns base64 data.
+// #329: resolves symlinks and enforces workspace-root containment (same policy
+// as the other file APIs) in addition to the 150MB preview cap.
 func (a *App) ReadFileAsBase64(path string) (*FileBinaryData, error) {
-	abs, err := filepath.Abs(path)
+	abs, err := wailskit.ResolveContainedPath(a.workspaceRoot(), path)
 	if err != nil {
 		return nil, err
 	}

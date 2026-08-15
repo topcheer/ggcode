@@ -28,32 +28,13 @@ func ListDirectory(dir string, recursive bool) ([]FileInfo, error) {
 	if dir == "" {
 		dir, _ = os.Getwd()
 	}
-	abs, err := filepath.Abs(dir)
-	if err != nil {
-		return nil, fmt.Errorf("resolve path: %w", err)
-	}
-
-	// Security: resolve symlinks so a link inside the working directory
-	// cannot point outside it, then verify containment (mirrors
-	// ReadFileContent's boundary check).
 	wd, err := os.Getwd()
 	if err != nil {
 		return nil, fmt.Errorf("get working directory: %w", err)
 	}
-	resolved, err := filepath.EvalSymlinks(abs)
+	abs, err := ResolveContainedPath(wd, dir)
 	if err != nil {
-		return nil, fmt.Errorf("resolve path: %w", err)
-	}
-	rel, err := filepath.Rel(wd, resolved)
-	if err != nil {
-		return nil, fmt.Errorf("resolve relative path: %w", err)
-	}
-	// #285: ".." only escapes the working directory when it is a complete
-	// path element. A leading ".." prefix also matches legitimate dot-dot
-	// names like "..cfg" (filepath.Rel treats "..cfg" as an ordinary
-	// element), so reject only a bare ".." or "../..." prefix.
-	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return nil, fmt.Errorf("access denied: path outside working directory")
+		return nil, err
 	}
 
 	// Security: verify the path exists and is a directory
@@ -125,6 +106,65 @@ func readDirectoryEntries(abs string) ([]FileInfo, error) {
 	return result, nil
 }
 
+// MaxReadFileTextBytes exposes the text preview size cap so callers that
+// share this package's containment logic (e.g. the Wails App file APIs) can
+// enforce the same limit (#329).
+const MaxReadFileTextBytes = maxReadFileTextBytes
+
+// ResolveContainedPath resolves path (relative to root when applicable),
+// follows symlinks, and verifies the fully-resolved path stays within root.
+// It returns the resolved absolute path on success.
+//
+// Security notes (#146/#285/#329):
+//   - filepath.Abs only lexically cleans the path — it does NOT resolve
+//     symlinks. A symlink located inside root but pointing outside would
+//     pass a naive containment check while os.ReadFile follows it to an
+//     arbitrary target. Symlinks are resolved FIRST, then containment is
+//     verified against the resolved path.
+//   - ".." only escapes root when it is a complete path element; a leading
+//     ".." prefix must not falsely deny names like "..cfg" (#285).
+func ResolveContainedPath(root, path string) (string, error) {
+	if root == "" {
+		var err error
+		root, err = os.Getwd()
+		if err != nil {
+			return "", fmt.Errorf("get working directory: %w", err)
+		}
+	}
+	root, err := filepath.Abs(root)
+	if err != nil {
+		return "", fmt.Errorf("resolve root: %w", err)
+	}
+	// Resolve symlinks in the root itself too: on macOS t.TempDir()/TMPDIR
+	// lives under /var which is itself a symlink to /private/var, so without
+	// this the resolved target would never "be inside" the unresolved root.
+	root, err = filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", fmt.Errorf("resolve root: %w", err)
+	}
+	if !filepath.IsAbs(path) {
+		// Relative paths are anchored at the containment root, not the
+		// process working directory.
+		path = filepath.Join(root, path)
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve path: %w", err)
+	}
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", fmt.Errorf("resolve path: %w", err)
+	}
+	rel, err := filepath.Rel(root, resolved)
+	if err != nil {
+		return "", fmt.Errorf("resolve relative path: %w", err)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("access denied: path outside working directory")
+	}
+	return resolved, nil
+}
+
 // ReadFileContent reads a text file and returns its content.
 // For security, it restricts file access to the working directory.
 func ReadFileContent(path string) (string, error) {
@@ -132,29 +172,9 @@ func ReadFileContent(path string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("get working directory: %w", err)
 	}
-
-	abs, err := filepath.Abs(path)
+	resolved, err := ResolveContainedPath(wd, path)
 	if err != nil {
-		return "", fmt.Errorf("resolve path: %w", err)
-	}
-
-	// Security: filepath.Abs only lexically cleans the path — it does NOT
-	// resolve symlinks. A symlink located inside the working directory but
-	// pointing outside would pass the containment check below while
-	// os.ReadFile follows it to an arbitrary target. Resolve symlinks
-	// FIRST, then verify containment against the resolved path.
-	resolved, err := filepath.EvalSymlinks(abs)
-	if err != nil {
-		return "", fmt.Errorf("resolve path: %w", err)
-	}
-
-	// Security: verify the resolved path is within the working directory.
-	rel, err := filepath.Rel(wd, resolved)
-	if err != nil {
-		return "", fmt.Errorf("resolve relative path: %w", err)
-	}
-	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("access denied: path outside working directory")
+		return "", err
 	}
 
 	// #287: cap text preview size BEFORE reading. os.ReadFile loads the

@@ -321,3 +321,104 @@ func TestReadFileContent_SmallFileStillRead(t *testing.T) {
 		t.Fatalf("expected 'ok', got %q", content)
 	}
 }
+
+// #329: ResolveContainedPath is the shared containment helper backing both
+// wailskit's own APIs and the Wails App file APIs. It must anchor containment
+// at an explicit root (not os.Getwd) and still reject symlink escapes.
+// mustEval resolves symlinks in a test path so expectations match macOS
+// /var -> /private/var normalization done by ResolveContainedPath.
+func mustEval(t *testing.T, p string) string {
+	t.Helper()
+	r, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+func TestResolveContainedPath_WithinRoot(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "in.txt"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := ResolveContainedPath(dir, filepath.Join(dir, "in.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved != filepath.Join(mustEval(t, dir), "in.txt") {
+		t.Fatalf("unexpected resolved path %q", resolved)
+	}
+}
+
+func TestResolveContainedPath_RelativeToRoot(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "rel.txt"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// Run from an unrelated cwd: containment root is explicit, not Getwd.
+	old, _ := os.Getwd()
+	os.Chdir(t.TempDir())
+	defer os.Chdir(old)
+	resolved, err := ResolveContainedPath(dir, "rel.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved != filepath.Join(mustEval(t, dir), "rel.txt") {
+		t.Fatalf("unexpected resolved path %q", resolved)
+	}
+}
+
+func TestResolveContainedPath_OutsideRootDenied(t *testing.T) {
+	dir := t.TempDir()
+	other := t.TempDir()
+	if _, err := ResolveContainedPath(dir, other); err == nil {
+		t.Fatal("expected access denied for path outside root")
+	}
+	if _, err := ResolveContainedPath(dir, filepath.Join(dir, "..")); err == nil {
+		t.Fatal("expected access denied for parent traversal")
+	}
+}
+
+func TestResolveContainedPath_SymlinkEscapeDenied(t *testing.T) {
+	dir := t.TempDir()
+	outside := t.TempDir()
+	secret := filepath.Join(outside, "secret.txt")
+	if err := os.WriteFile(secret, []byte("pw"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "leak")
+	if err := os.Symlink(secret, link); err != nil {
+		t.Skipf("symlink creation failed: %v", err)
+	}
+	if _, err := ResolveContainedPath(dir, link); err == nil {
+		t.Fatal("expected access denied for symlink escape")
+	}
+}
+
+func TestResolveContainedPath_EmptyRootFallsBackToGetwd(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	old, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(old)
+	resolved, err := ResolveContainedPath("", "f.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved != filepath.Join(mustEval(t, dir), "f.txt") {
+		t.Fatalf("unexpected resolved path %q", resolved)
+	}
+}
+
+// #285 semantics preserved by the shared helper: dot-dot-prefixed names are fine.
+func TestResolveContainedPath_DotDotPrefixedName(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "..cfg"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ResolveContainedPath(dir, filepath.Join(dir, "..cfg")); err != nil {
+		t.Fatalf("expected ..cfg to be allowed, got %v", err)
+	}
+}

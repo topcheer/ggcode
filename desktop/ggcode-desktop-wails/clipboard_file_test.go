@@ -51,7 +51,7 @@ func TestReadFileAsBase64SizeLimit(t *testing.T) {
 	}
 	f.Close()
 
-	app := &App{}
+	app := &App{workDir: dir}
 	_, err = app.ReadFileAsBase64(big)
 	if err == nil {
 		t.Fatal("expected size-limit error for oversized file")
@@ -67,7 +67,7 @@ func TestReadFileAsBase64SmallFileOK(t *testing.T) {
 	if err := os.WriteFile(small, []byte("hello"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	app := &App{}
+	app := &App{workDir: dir}
 	data, err := app.ReadFileAsBase64(small)
 	if err != nil {
 		t.Fatalf("expected success, got %v", err)
@@ -77,5 +77,49 @@ func TestReadFileAsBase64SmallFileOK(t *testing.T) {
 	}
 	if data.Data != "aGVsbG8=" {
 		t.Fatalf("expected base64 'aGVsbG8=', got %q", data.Data)
+	}
+}
+
+// #329: App.ReadFileContent must enforce workspace-root containment.
+func TestAppReadFileContent_Containment(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "note.txt"), []byte("hi"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	app := &App{workDir: dir}
+
+	content, err := app.ReadFileContent(filepath.Join(dir, "note.txt"))
+	if err != nil || content != "hi" {
+		t.Fatalf("expected in-workspace read to succeed, got %q err=%v", content, err)
+	}
+
+	other := t.TempDir()
+	outside := filepath.Join(other, "secret.txt")
+	if err := os.WriteFile(outside, []byte("pw"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.ReadFileContent(outside); err == nil {
+		t.Fatal("expected access denied for file outside workspace root")
+	}
+}
+
+// #329: App.ListFiles must enforce workspace-root containment while keeping
+// the []map[string]interface{} shape the frontend expects.
+func TestAppListFiles_Containment(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("x"), 0644)
+	app := &App{workDir: dir}
+
+	entries := app.ListFiles(dir)
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(entries))
+	}
+	e := entries[0]
+	if e["name"] != "a.txt" || e["isDir"] != false {
+		t.Fatalf("unexpected entry shape: %+v", e)
+	}
+
+	if got := app.ListFiles(t.TempDir()); got != nil {
+		t.Fatalf("expected nil for directory outside workspace root, got %v", got)
 	}
 }
