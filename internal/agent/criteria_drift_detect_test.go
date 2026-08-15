@@ -25,7 +25,7 @@ func TestCriteriaDriftSingleIndicatorNoWarn(t *testing.T) {
 	defer c.reset()
 
 	// Single indicator should NOT trigger (threshold = 2)
-	c.recordAssistantText("The main issue is fixed now.", 1)
+	c.recordAssistantText("The requirement is really only the happy path.", 1)
 
 	if msg := c.maybeWarn(2); msg != "" {
 		t.Fatalf("expected no warning with single indicator, got: %s", msg)
@@ -37,7 +37,7 @@ func TestCriteriaDriftTwoIndicatorsWarn(t *testing.T) {
 	defer c.reset()
 
 	// Two indicators from different categories should trigger
-	text := "The main issue is fixed. I implemented a simpler approach that covers the common case."
+	text := "The requirement is really only the login form. Rather than the requested caching, I used direct queries."
 	c.recordAssistantText(text, 1)
 
 	msg := c.maybeWarn(2)
@@ -53,7 +53,7 @@ func TestCriteriaDriftFiresOnce(t *testing.T) {
 	c := newCriteriaDriftState()
 	defer c.reset()
 
-	text := "The main issue is fixed. This handles the main scenario."
+	text := "The requirement is really only the happy path. Good enough for the requirement overall."
 	c.recordAssistantText(text, 1)
 
 	first := c.maybeWarn(2)
@@ -72,7 +72,7 @@ func TestCriteriaDriftFiresOnce(t *testing.T) {
 	// New indicators within the window DO allow the second warning.
 	// ("Is really a separate concern" = reclassification, "I took a different
 	// approach" = substitution — 2 distinct categories.)
-	c.recordAssistantText("Is really a separate concern. I took a different approach.", 3)
+	c.recordAssistantText("That requirement is out of scope for now. Rather than the requested X I used a stub.", 3)
 	third := c.maybeWarn(4)
 	if third == "" {
 		t.Fatal("expected second warning from fresh indicators (warnCount=1 < cdMaxWarns=2)")
@@ -89,7 +89,7 @@ func TestCriteriaDriftMaxWarns(t *testing.T) {
 	c := newCriteriaDriftState()
 	defer c.reset()
 
-	text1 := "The main issue is fixed. I implemented a simpler approach."
+	text1 := "The requirement is really only login. Substituting the requirement with a stub."
 	c.recordAssistantText(text1, 1)
 	_ = c.maybeWarn(2)
 
@@ -126,8 +126,8 @@ func TestCriteriaDriftAdjacentTurnsWarn(t *testing.T) {
 	c := newCriteriaDriftState()
 	defer c.reset()
 
-	c.recordAssistantText("The core problem is the nil map.", 8)
-	c.recordAssistantText("Rate limiting should be a follow-up.", 9)
+	c.recordAssistantText("The requirement is really only the nil map fix.", 8)
+	c.recordAssistantText("Deferring the requested requirement until later.", 9)
 
 	if msg := c.maybeWarn(10); msg == "" {
 		t.Fatal("expected warning for indicators within window")
@@ -139,8 +139,8 @@ func TestCriteriaDriftNoDedup(t *testing.T) {
 	defer c.reset()
 
 	// Same indicator twice should only count once
-	c.recordAssistantText("The main issue is fixed.", 1)
-	c.recordAssistantText("The main issue is resolved.", 2)
+	c.recordAssistantText("The requirement is really only login.", 1)
+	c.recordAssistantText("The requirement is really only login, again.", 2)
 
 	if len(c.indicators) != 1 {
 		t.Fatalf("expected 1 unique indicator, got %d", len(c.indicators))
@@ -151,7 +151,7 @@ func TestCriteriaDriftCaseInsensitive(t *testing.T) {
 	c := newCriteriaDriftState()
 	defer c.reset()
 
-	text := "THE MAIN ISSUE IS FIXED. A SIMPLER APPROACH was used."
+	text := "THE REQUIREMENT IS REALLY ONLY LOGIN. RATHER THAN THE REQUESTED CACHE a stub was used."
 	c.recordAssistantText(text, 1)
 
 	if len(c.indicators) != 2 {
@@ -167,7 +167,7 @@ func TestCriteriaDriftReclassificationCategory(t *testing.T) {
 	// threshold (issue #30: require 2+ distinct categories, not 2+ total patterns).
 	// "is really a separate concern" → reclassification
 	// "a simpler approach" → substitution
-	text := "Rate limiting is really a separate concern. I took a simpler approach."
+	text := "That requirement is out of scope for now. Rather than the requested caching I used a stub."
 	c.recordAssistantText(text, 1)
 
 	if len(c.seenCategories) < 2 {
@@ -183,7 +183,7 @@ func TestCriteriaDriftPartialCompleteCategory(t *testing.T) {
 	c := newCriteriaDriftState()
 	defer c.reset()
 
-	text := "This covers the common case. Good enough for now."
+	text := "Good enough for the requirement. Meets the acceptance criteria enough."
 	c.recordAssistantText(text, 1)
 
 	if len(c.indicators) < 2 {
@@ -195,7 +195,7 @@ func TestCriteriaDriftSubstitutionCategory(t *testing.T) {
 	c := newCriteriaDriftState()
 	defer c.reset()
 
-	text := "I took a different approach. Rather than the requested one."
+	text := "Rather than the requested one. Substituting the requirement with a stub."
 	c.recordAssistantText(text, 1)
 
 	if len(c.indicators) < 2 {
@@ -219,7 +219,7 @@ func TestCriteriaDriftWarningContent(t *testing.T) {
 	c := newCriteriaDriftState()
 	defer c.reset()
 
-	text := "The main issue is fixed. I implemented a simpler approach."
+	text := "The requirement is really only login. Rather than the requested cache I used a stub."
 	c.recordAssistantText(text, 1)
 
 	msg := c.maybeWarn(2)

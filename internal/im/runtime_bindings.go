@@ -177,10 +177,10 @@ func (m *Manager) UnbindAdapter(adapterName string) error {
 			m.mu.Unlock()
 			return err
 		}
-		if len(bindings) == 0 {
-			m.mu.Unlock()
-			return ErrNoChannelBound
-		}
+		// Idempotent delete: no persisted bindings for this adapter is a
+		// successful no-op, not an error — the RemoveIMAdapter cascade
+		// (#396) must not fail when a binding was already cleaned or never
+		// existed.
 		for _, b := range bindings {
 			if err := m.bindingStore.Delete(b.Workspace, b.Adapter); err != nil {
 				m.mu.Unlock()

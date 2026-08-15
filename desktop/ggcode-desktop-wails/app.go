@@ -1815,18 +1815,13 @@ func (a *App) SaveIMAdapter(name string, values map[string]string) error {
 func (a *App) RemoveIMAdapter(name string) error {
 	debug.Log("desktop", "IM RemoveAdapter: name=%s", name)
 	a.imStopAdapter(name)
-	err := wailskit.RemoveIMAdapter(name)
+	// Cascade-unbind is handled inside wailskit.RemoveIMAdapter (#299/#396):
+	// a ghost binding keyed by adapter name would otherwise be inherited by
+	// a same-name rebuild.
+	err := wailskit.RemoveIMAdapter(name, a.imManager)
 	if err != nil {
 		debug.Log("desktop", "IM RemoveAdapter failed: %v", err)
 		return err
-	}
-	// #299: cascade-unbind the adapter's persisted bindings, or a ghost
-	// binding survives deletion and a same-name rebuild inherits the old
-	// channel access / auto-mute / LastSessionID state.
-	if a.imManager != nil {
-		if uerr := a.imManager.UnbindAdapter(name); uerr != nil {
-			debug.Log("desktop", "IM RemoveAdapter unbind: %v", uerr)
-		}
 	}
 	return nil
 }

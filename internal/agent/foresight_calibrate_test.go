@@ -48,7 +48,7 @@ func TestForesightCalibrate_SuccessPrediction_FailureResult(t *testing.T) {
 	s.recordPrediction(text, calls, 1)
 
 	// Actual result: failure -> mismatch
-	hint := s.checkCalibration("run_command", "Error: compilation failed", false, 1)
+	hint := s.checkCalibration("run_command", "exit status 1: compilation failed", false, 1)
 	if s.mismatches != 1 {
 		t.Fatalf("expected 1 mismatch, got %d", s.mismatches)
 	}
@@ -66,7 +66,7 @@ func TestForesightCalibrate_ThresholdReached(t *testing.T) {
 		text := "This should pass."
 		calls := []provider.ToolCallDelta{{Name: "run_command"}}
 		s.recordPrediction(text, calls, i+1)
-		s.checkCalibration("run_command", "Error: test failed", false, i+1)
+		s.checkCalibration("run_command", "exit status 1: test failed", false, i+1)
 	}
 
 	if s.mismatches != 3 {
@@ -133,7 +133,7 @@ func TestForesightCalibrate_MaxWarnings(t *testing.T) {
 		text := "This should pass."
 		calls := []provider.ToolCallDelta{{Name: "run_command"}}
 		s.recordPrediction(text, calls, i+1)
-		s.checkCalibration("run_command", "Error: failed", false, i+1)
+		s.checkCalibration("run_command", "exit status 1: failed", false, i+1)
 	}
 
 	// warnCount should be capped at 2

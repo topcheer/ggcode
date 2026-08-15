@@ -89,9 +89,10 @@ func TestUnbindAdapter(t *testing.T) {
 		t.Errorf("store should be empty, got %d", len(list))
 	}
 
-	// No binding at all
-	if err := mgr.UnbindAdapter("nonexistent"); err == nil {
-		t.Error("expected ErrNoChannelBound for nonexistent adapter")
+	// No binding at all: idempotent success (#396) — the RemoveIMAdapter
+	// cascade must not fail when the adapter has no bindings.
+	if err := mgr.UnbindAdapter("nonexistent"); err != nil {
+		t.Errorf("expected idempotent nil for nonexistent adapter, got %v", err)
 	}
 }
 

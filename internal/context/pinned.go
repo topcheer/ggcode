@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/topcheer/ggcode/internal/debug"
@@ -63,8 +64,11 @@ func (p *PinnedContext) Add(text string) (string, error) {
 	if text == "" {
 		return "", fmt.Errorf("cannot pin empty text")
 	}
-	if len(text) > maxPinnedChars {
-		text = text[:maxPinnedChars]
+	// Truncate by RUNES, not bytes: maxPinnedChars counts characters, and a
+	// byte slice could cut a multi-byte CJK/emoji rune in half, producing
+	// invalid UTF-8 that flows straight into the system message (#386).
+	if utf8.RuneCountInString(text) > maxPinnedChars {
+		text = string([]rune(text)[:maxPinnedChars])
 	}
 
 	p.mu.Lock()

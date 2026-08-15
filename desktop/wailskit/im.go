@@ -7,6 +7,8 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/session"
+
+	"github.com/topcheer/ggcode/internal/debug"
 )
 
 // IMAdapterInfo is a frontend-friendly representation of an IM adapter config.
@@ -203,13 +205,26 @@ func SaveIMAdapter(name string, values map[string]string) error {
 	return cfg.AddIMAdapter(name, adapterCfg)
 }
 
-// RemoveIMAdapter removes an IM adapter by name.
-func RemoveIMAdapter(name string) error {
+// RemoveIMAdapter removes an IM adapter by name. When imMgr is non-nil the
+// adapter's persisted bindings are cascade-deleted in the same operation
+// (#396): without the cascade an orphaned binding keyed by adapter NAME is
+// silently re-inherited when an adapter with the same name is rebuilt later.
+func RemoveIMAdapter(name string, imMgr interface {
+	UnbindAdapter(adapterName string) error
+}) error {
 	cfg, err := config.Load(config.ConfigPath())
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
-	return cfg.RemoveIMAdapter(name)
+	if err := cfg.RemoveIMAdapter(name); err != nil {
+		return err
+	}
+	if imMgr != nil {
+		if uerr := imMgr.UnbindAdapter(name); uerr != nil {
+			debug.Log("wailskit", "RemoveIMAdapter cascade unbind %s: %v", name, uerr)
+		}
+	}
+	return nil
 }
 
 // SetIMAdapterEnabled toggles the enabled state of an IM adapter.

@@ -80,6 +80,14 @@ type cleanRule struct {
 func NewCommandGate() *CommandGate {
 	g := &CommandGate{}
 
+	// rm dispersed-form subpatterns (#384): f-flag, r-flag, critical path.
+	// RE2 has no lookarounds, so "all three in any order" below is spelled
+	// as the 6 permutations of F/R/P — this catches dispersed forms like
+	// `rm --force /etc --recursive` where the target sits BETWEEN flags.
+	rmF := `(?:-[a-zA-Z]*f[a-zA-Z]*|--force)`
+	rmR := `(?:-[a-zA-Z]*r[a-zA-Z]*|--recursive)`
+	rmP := `(?:(/|~|/home|/Users|/etc|/var|/usr)\b|/dev/)`
+
 	// ================================================================
 	// BLOCK — catastrophic commands with zero legitimate use
 	// ================================================================
@@ -89,7 +97,22 @@ func NewCommandGate() *CommandGate {
 		{kind: "catastrophic", desc: "recursive force delete of root/critical directory",
 			pattern: regexp.MustCompile(`(?i)\brm\s+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*|--recursive\s+--force|--force\s+--recursive)\s+(/|~/|/home/?|/Users/?|/etc/?|/var/?|/usr/?|System|Applications)`)},
 		{kind: "catastrophic", desc: "recursive force delete (alternate flag order)",
-			pattern: regexp.MustCompile(`(?i)\brm\s+.*(-[a-zA-Z]*r[a-zA-Z]*|\\-\\-recursive).*(-[a-zA-Z]*f[a-zA-Z]*|\\-\\-force).*\s+(/|~/|/home|/Users|/etc|/var|/usr)`)},
+			// Long-flag alternation uses literal --recursive/--force: inside a
+			// raw string the old \\-\\- form only matched a literal backslash
+			// before each dash, so the long-flag branch was dead code (#384).
+			// RE2 has no lookarounds, so "all three elements in any order" is
+			// expressed as the 6 permutations of F(f-flag), R(r-flag), P(path)
+			// — this also fixes the dispersed form `rm --force /etc
+			// --recursive` where the target sits BETWEEN the flags (the old
+			// pattern required the path strictly after both flags).
+			pattern: regexp.MustCompile(`(?i)\brm\s+(?:` +
+				`.*` + rmF + `.*` + rmR + `.*` + rmP + `|` +
+				`.*` + rmF + `.*` + rmP + `.*` + rmR + `|` +
+				`.*` + rmR + `.*` + rmF + `.*` + rmP + `|` +
+				`.*` + rmR + `.*` + rmP + `.*` + rmF + `|` +
+				`.*` + rmP + `.*` + rmF + `.*` + rmR + `|` +
+				`.*` + rmP + `.*` + rmR + `.*` + rmF +
+				`)`)},
 		{kind: "catastrophic", desc: "disk format/erase",
 			pattern: regexp.MustCompile(`(?i)\b(mkfs\.|dd\s+if=.*of=/dev/|diskutil\s+eraseDisk|diskutil\s+partitionDisk)`)},
 		{kind: "catastrophic", desc: "fork bomb",

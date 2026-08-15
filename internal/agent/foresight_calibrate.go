@@ -80,8 +80,13 @@ var foresightSuccessPredRe = regexp.MustCompile(`(?i)(?:should|will|must|expect)
 // predicts failure and gets success, it may be surprised/confused.
 var foresightFailurePredRe = regexp.MustCompile(`(?i)(?:should|will|might|may|expect)\s+(?:it\s+to\s+)?(?:fail|error|not\s+(?:work|exist|be\s+found|compile|pass)|throw|crash|return\s+(?:an?\s+)?error|be\s+(?:missing|absent|null|undefined))`)
 
-// resultFailureRe detects failure indicators in tool results.
-var foresightResultFailureRe = regexp.MustCompile(`(?i)(?:error|failed|failure|panic|fatal|exception|not\s+found|no\s+such\s+(?:file|directory)|cannot|undefined|null\s+pointer|traceback|exit\s+code\s+[1-9]|status[:\s]+(?:4\d\d|5\d\d)|compilation\s+failed)`)
+// resultFailureRe detects failure indicators in tool results. Restricted to
+// STRUCTURED failure signals (exit codes, status prefixes, tracebacks) — the
+// old bare-word alternation (error|failed|cannot|undefined|...) matched the
+// error-handling idioms present in virtually every normal source file, so a
+// successful read_file of ordinary Go code was judged "actual failure" and
+// every success prediction became a mismatch (#394).
+var foresightResultFailureRe = regexp.MustCompile(`(?i)(?:exit\s+code\s+[1-9]|exit\s+status\s+[1-9]|status[:\s]+(?:4\d\d|5\d\d)|panic:|fatal:|traceback\s+\(|compilation\s+failed|\bIsError\b|tool_result_error)`)
 
 // resultEmptyRe detects empty or minimal results (prediction said content exists).
 var foresightResultEmptyRe = regexp.MustCompile(`(?i)(?:^$|no\s+(?:results?|matches?|content|output|data\s+found)|empty|0\s+(?:bytes|lines|matches|results)|nothing\s+(?:found|returned|matched))`)
@@ -126,29 +131,29 @@ func (s *foresightCalibrateState) recordPrediction(assistantText string, toolCal
 		return
 	}
 
-	// Determine prediction polarity for each tool call in this turn.
-	for _, tc := range toolCalls {
-		var predictedOK bool
-		hasSuccess := foresightSuccessPredRe.MatchString(assistantText)
-		hasFailure := foresightFailurePredRe.MatchString(assistantText)
-
-		if hasSuccess && !hasFailure {
-			predictedOK = true
-		} else if hasFailure && !hasSuccess {
-			predictedOK = false
-		} else {
-			// Ambiguous or both -- skip this tool call.
-			continue
-		}
-
-		// Extract a short snippet around the first prediction match.
+	// Determine the turn's prediction polarity ONCE. The old loop appended
+	// one prediction PER tool call with the same turn-level polarity, so a
+	// single prediction sentence backed by 2 tool calls was consumed and
+	// judged twice — double-counting mismatches toward the threshold of 3
+	// (#394). One turn, one prediction, attributed to the FIRST tool call.
+	var predictedOK bool
+	hasSuccess := foresightSuccessPredRe.MatchString(assistantText)
+	hasFailure := foresightFailurePredRe.MatchString(assistantText)
+	if hasSuccess && !hasFailure {
+		predictedOK = true
+	} else if hasFailure && !hasSuccess {
+		predictedOK = false
+	} else {
+		// Ambiguous or both -- no prediction for this turn.
+		return
+	}
+	if len(toolCalls) > 0 {
 		snippet := extractForesightSnippet(assistantText)
-
 		s.predictions = append(s.predictions, foresightPrediction{
 			iteration:   iteration,
 			predictedOK: predictedOK,
 			snippet:     snippet,
-			toolName:    tc.Name,
+			toolName:    toolCalls[0].Name,
 		})
 	}
 

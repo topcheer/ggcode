@@ -83,11 +83,14 @@ func (s *solutionFixationState) reset() {
 	s.firedFor = make(map[string]bool)
 }
 
-// editToolsFixation maps tool names that perform file edits.
+// editToolsFixation maps tool names that perform file edits. Kept in sync
+// with strategyFixationIsMutation — multi_file_edit was missing here, so
+// multi-file batch edit failures bypassed this detector entirely (#393).
 var editToolsFixation = map[string]bool{
 	"edit_file":       true,
 	"write_file":      true,
 	"multi_edit_file": true,
+	"multi_file_edit": true,
 	"notebook_edit":   true,
 }
 
@@ -162,9 +165,19 @@ func normalizePathFixation(p string) string {
 	if p == "" {
 		return ""
 	}
-	// Use base name to group related paths and reduce noise
-	if idx := strings.LastIndexByte(p, '/'); idx >= 0 {
-		return p[idx+1:]
+	// Normalize separators (Windows paths too) and keep the FULL cleaned
+	// path as the counting key. The old base-name reduction merged same-named
+	// files across directories (cmd/a/main.go vs internal/b/main.go), so
+	// failures against 4 DIFFERENT targets could stack into a false "fixated
+	// on the same location" warning (#393).
+	p = strings.ReplaceAll(p, "\\", "/")
+	// Clean duplicate separators without pulling in path for one join.
+	for strings.Contains(p, "//") {
+		p = strings.ReplaceAll(p, "//", "/")
+	}
+	// A path that normalizes to a bare separator carries no file identity.
+	if p == "/" {
+		return ""
 	}
 	return p
 }

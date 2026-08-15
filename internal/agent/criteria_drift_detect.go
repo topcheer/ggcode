@@ -98,48 +98,50 @@ func (c *criteriaDriftState) reset() {
 // Each pattern is matched case-insensitively as a substring.
 var criteriaDriftPatterns = map[string][]string{
 	// Requirement narrowing: dropping parts of the original ask
+	// #395: phrases must carry REQUIREMENT semantics (requirement /
+	// criteria / acceptance / asked-for + a narrowing verb). Bare
+	// diagnostic language ("the core problem is the race condition") is
+	// normal root-cause analysis, not criteria narrowing.
 	"narrowing": {
-		"the main issue is",
-		"the primary concern is",
-		"the core problem is",
-		"this handles the main case",
-		"this covers the primary",
-		"the essential functionality",
-		"the critical path is",
-		"focuses on the key",
+		"the requirement is really only",
+		"narrowing the scope of the requirement",
+		"the acceptance criteria can be limited to",
+		"only the core requirement matters",
+		"reducing the acceptance criteria",
+		"the essential requirement is just",
+		"trimming the requirement to",
 	},
 	// Silent substitution: replacing a hard requirement with an easier one
+	// Substitution must explicitly swap out something that was REQUESTED
+	// (#395); proposing "an alternative approach that avoids allocations"
+	// during normal design discussion is not substitution.
 	"substitution": {
-		"a simpler approach",
-		"a simpler solution",
-		"a simpler implementation",
-		"an alternative approach that",
-		"instead of the original",
+		"instead of the original requirement",
 		"rather than the requested",
-		"i took a different approach",
-		"i've simplified this to",
+		"instead of what was requested",
+		"a simpler solution than requested",
+		"i've simplified the requirement to",
+		"substituting the requirement with",
 	},
 	// Scope reclassification: moving unmet requirements to "out of scope"
+	// Reclassification must declare an UNMET requested item out of scope;
+	// general boundary-setting about unrelated concerns is normal (#395).
 	"reclassification": {
-		"is really a separate concern",
-		"is a separate issue",
-		"is out of scope for",
-		"falls outside the scope",
-		"beyond what was asked",
-		"is better addressed separately",
-		"should be a follow-up",
-		"is a different task",
+		"the requested is out of scope for",
+		"that requirement falls outside the scope",
+		"that requirement is out of scope",
+		"deferring the requested requirement",
+		"that part of the request is out of scope",
 	},
 	// Partial-as-complete: framing partial work as sufficient
+	// Partial-as-complete must frame PARTIAL work as satisfying the
+	// requirement (#395).
 	"partial_complete": {
-		"covers the common case",
-		"handles the main scenario",
-		"works for the typical use",
-		"good enough for now",
-		"sufficient for the majority",
-		"addresses the immediate need",
-		"this should work in most cases",
-		"functionally equivalent for",
+		"good enough for the requirement",
+		"sufficient for the stated requirement",
+		"the requirement is mostly met",
+		"this covers the required functionality",
+		"meets the acceptance criteria enough",
 	},
 }
 

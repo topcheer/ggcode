@@ -132,6 +132,13 @@ func (t BatchReplace) Execute(ctx context.Context, input json.RawMessage) (Resul
 		if err != nil {
 			return Result{IsError: true, Content: fmt.Sprintf("invalid regex pattern: %v", err)}, nil
 		}
+		// Go's regexp.Expand silently expands $N references to nonexistent
+		// capture groups as EMPTY strings — a literal "$5" intent would
+		// silently delete all matches (#385). Reject out-of-range group
+		// references up front; literal dollars must be written as $$.
+		if bad := invalidGroupRefs(re, args.Replacement); bad != "" {
+			return Result{IsError: true, Content: fmt.Sprintf("replacement references capture group %s but the pattern has only %d group(s); use $$ for a literal $", bad, re.NumSubexp())}, nil
+		}
 	}
 
 	// Deduplicate file paths preserving order.
@@ -343,4 +350,89 @@ func truncateForDiff(s string) string {
 		return s[:maxLineLen] + "..."
 	}
 	return s
+}
+
+// invalidGroupRefs scans replacement for $N / ${N} capture-group references
+// and returns the first reference whose group number exceeds re.NumSubexp().
+// Named references ($name) are checked against re.SubexpNames(). Returns ""
+// when every reference is valid. This prevents Go's regexp.Expand from
+// silently expanding out-of-range references to empty strings (#385).
+func invalidGroupRefs(re *regexp.Regexp, replacement string) string {
+	maxGroup := re.NumSubexp()
+	named := map[string]bool{}
+	for _, n := range re.SubexpNames() {
+		if n != "" {
+			named[n] = true
+		}
+	}
+	for i := 0; i < len(replacement); i++ {
+		if replacement[i] != '$' {
+			continue
+		}
+		if i+1 < len(replacement) && replacement[i+1] == '$' {
+			i++ // escaped literal $$ — skip both
+			continue
+		}
+		if i+1 < len(replacement) && replacement[i+1] == '{' {
+			if end := indexByteFrom(replacement, i+2, '}'); end > 0 {
+				ref := replacement[i+2 : end]
+				if n, ok := atoiSafe(ref); ok && n > maxGroup {
+					return ref
+				}
+				i = end
+				continue
+			}
+			continue
+		}
+		// $name or $N — consume the longest run of letters/digits/underscore
+		j := i + 1
+		for j < len(replacement) && isRefByte(replacement[j]) {
+			j++
+		}
+		ref := replacement[i+1 : j]
+		if ref == "" {
+			continue
+		}
+		if n, ok := atoiSafe(ref); ok {
+			if n > maxGroup {
+				return ref
+			}
+			i = j - 1
+			continue
+		}
+		// Named reference: only flag names that look numeric-ish invalid;
+		// unknown names also expand to empty, so reject them too (#385).
+		if !named[ref] {
+			return ref
+		}
+		i = j - 1
+	}
+	return ""
+}
+
+func indexByteFrom(s string, from int, b byte) int {
+	for k := from; k < len(s); k++ {
+		if s[k] == b {
+			return k
+		}
+	}
+	return -1
+}
+
+func isRefByte(b byte) bool {
+	return b == '_' || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
+}
+
+func atoiSafe(s string) (int, bool) {
+	if s == "" {
+		return 0, false
+	}
+	n := 0
+	for k := 0; k < len(s); k++ {
+		if s[k] < '0' || s[k] > '9' {
+			return 0, false
+		}
+		n = n*10 + int(s[k]-'0')
+	}
+	return n, true
 }

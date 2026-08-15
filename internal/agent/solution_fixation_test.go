@@ -147,14 +147,16 @@ func TestSolutionFixation_WriteFile(t *testing.T) {
 }
 
 func TestSolutionFixation_ExtractPathJSON(t *testing.T) {
+	// #393: extraction returns the full path; normalization (now keeping
+	// the full cleaned path, not the base name) is tested separately.
 	tests := []struct {
 		name string
 		args string
 		want string
 	}{
-		{"file_path field", `{"file_path":"/foo/bar.go","old_text":"x"}`, "bar.go"},
-		{"path field", `{"path":"./baz.go"}`, "baz.go"},
-		{"notebook_path field", `{"notebook_path":"/x/nb.ipynb"}`, "nb.ipynb"},
+		{"file_path field", `{"file_path":"/foo/bar.go","old_text":"x"}`, "/foo/bar.go"},
+		{"path field", `{"path":"./baz.go"}`, "./baz.go"},
+		{"notebook_path field", `{"notebook_path":"/x/nb.ipynb"}`, "/x/nb.ipynb"},
 		{"empty", `{}`, ""},
 		{"invalid json", `not json`, ""},
 		{"missing path", `{"content":"hello"}`, ""},
@@ -185,15 +187,22 @@ func TestSolutionFixation_Reset(t *testing.T) {
 }
 
 func TestSolutionFixation_NormalizePath(t *testing.T) {
+	// #393: the counting key keeps the FULL cleaned path — the old base-name
+	// reduction merged cmd/a/main.go with internal/b/main.go and stacked
+	// failures from different targets into one false warning.
 	tests := []struct {
 		input string
 		want  string
 	}{
-		{"/abs/path/file.go", "file.go"},
-		{"./relative/file.go", "file.go"},
+		{"/abs/path/file.go", "/abs/path/file.go"},
+		{"./relative/file.go", "./relative/file.go"},
 		{"file.go", "file.go"},
 		{"", ""},
 		{"/", ""},
+		{"cmd/a/main.go", "cmd/a/main.go"},
+		{"internal/b/main.go", "internal/b/main.go"},
+		{`C:\Users\x\main.go`, "C:/Users/x/main.go"},
+		{"dup//sep.go", "dup/sep.go"},
 	}
 	for _, tt := range tests {
 		got := normalizePathFixation(tt.input)

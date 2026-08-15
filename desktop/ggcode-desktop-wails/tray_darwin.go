@@ -10,17 +10,20 @@ package main
 #import <objc/runtime.h>
 #import <dispatch/dispatch.h>
 
-// We use a global int that Obj-C writes and Go polls via a timer.
-// This avoids the complexity of //export with Obj-C classes.
-static volatile int gcTrayAction = 0; // 0=none, 1=show, 2=newsession, 3=quit
+// We use a global bitmask that Obj-C sets (OR) and Go polls via a timer.
+// This avoids the complexity of //export with Obj-C classes. The old plain
+// store overwrote a pending action when two clicks landed inside one poll
+// window — a lost Quit left the process running (#400). Bitmask OR means
+// every click is retained until the poller drains it.
+static volatile int gcTrayAction = 0; // bit flags: 1=show 2=newsession 4=quit
 
 @interface GCTrayDelegate : NSObject
 @end
 
 @implementation GCTrayDelegate
-- (void)onShowClick    { gcTrayAction = 1; }
-- (void)onNewSessionClick { gcTrayAction = 2; }
-- (void)onQuitClick    { gcTrayAction = 3; }
+- (void)onShowClick    { __sync_or_and_fetch(&gcTrayAction, 1); }
+- (void)onNewSessionClick { __sync_or_and_fetch(&gcTrayAction, 2); }
+- (void)onQuitClick    { __sync_or_and_fetch(&gcTrayAction, 4); }
 @end
 
 static NSStatusItem *gcStatusItem = nil;
@@ -104,9 +107,8 @@ static void gcRemoveTray() {
 }
 
 static int gcPollTrayAction() {
-    int a = gcTrayAction;
-    gcTrayAction = 0;
-    return a;
+    // Atomically drain the whole bitmask; the OR-setters never lose a click.
+    return __sync_fetch_and_or(&gcTrayAction, 0) == 0 ? 0 : __sync_lock_test_and_set(&gcTrayAction, 0);
 }
 */
 import "C"
@@ -133,16 +135,20 @@ func (a *App) initSystemTray() {
 			case <-a.ctx.Done():
 				return
 			case <-ticker.C:
+				// Bitmask drain (#400): multiple clicks may have accumulated
+				// within one poll window; handle EVERY set bit so a Quit is
+				// never dropped because a Show arrived first.
 				action := int(C.gcPollTrayAction())
 				if action == 0 {
 					continue
 				}
-				switch action {
-				case 1:
+				if action&1 != 0 {
 					a.handleTrayShow()
-				case 2:
+				}
+				if action&2 != 0 {
 					a.handleTrayNewSession()
-				case 3:
+				}
+				if action&4 != 0 {
 					a.handleTrayQuit()
 				}
 			}

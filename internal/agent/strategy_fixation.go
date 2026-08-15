@@ -78,21 +78,26 @@ func (s *strategyFixationState) recordEdit(filePath string) {
 // If the verification failed, the failure is attributed to the most recently edited file.
 func (s *strategyFixationState) recordVerification(toolName string, output string, isError bool) {
 	if !isError {
-		// Successful verification resets failure count for the last edited file
-		// -- the approach is converging.
+		// Successful verification resets the FULL state for the last edited
+		// file (failures AND edit count) — the documented contract is "3+
+		// edits without any successful verification in between", so a green
+		// build proves the approach converged and stale early edits must not
+		// combine with later unrelated regressions to fire a false warning
+		// (#392).
 		if s.lastFile != "" {
 			s.fileFailures[s.lastFile] = 0
+			s.fileEdits[s.lastFile] = 0
 		}
 		return
 	}
-	// Failed verification: attribute to last edited file
+	// Failed verification: attribute to last edited file ONLY when the output
+	// actually names that file. The old generic keyword OR-match (build /
+	// compile / FAIL / error / undefined) attributed essentially EVERY failed
+	// verification to lastFile — cross-file errors (edit B, error in A) were
+	// routinely misattributed (#392).
 	if s.lastFile != "" {
-		// Only count if the output seems related to the file (heuristic: file name
-		// appears in error output, or it's a generic build/test failure)
 		fname := shortFileName(s.lastFile)
-		if strings.Contains(output, fname) || strings.Contains(output, "build") ||
-			strings.Contains(output, "compile") || strings.Contains(output, "FAIL") ||
-			strings.Contains(output, "error") || strings.Contains(output, "undefined") {
+		if fname != "" && strings.Contains(output, fname) {
 			s.fileFailures[s.lastFile]++
 		}
 	}

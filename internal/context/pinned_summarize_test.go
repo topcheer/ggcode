@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/topcheer/ggcode/internal/provider"
 )
@@ -85,5 +86,39 @@ func TestCalibrationSampleIncludesToolOverhead(t *testing.T) {
 	want := cm.tokens + 5000
 	if got := cm.calibrator.LastEstimated(); got != want {
 		t.Fatalf("calibration estimate should include tool overhead: want %d, got %d", want, got)
+	}
+}
+
+// TestPinnedTruncateRuneSafe verifies #386: per-item truncation cuts on
+// rune boundaries so multi-byte CJK content never becomes invalid UTF-8.
+func TestPinnedTruncateRuneSafe(t *testing.T) {
+	cm := NewManager(10000)
+	// 1200 CJK chars = 3600 bytes > maxPinnedChars(2000 as chars/bytes mix)
+	long := strings.Repeat("汉", 1200)
+	if _, err := cm.Pinned().Add(long); err != nil {
+		t.Fatalf("pin add failed: %v", err)
+	}
+	msgs := cm.Messages()
+	var got string
+	for _, m := range msgs {
+		for _, b := range m.Content {
+			if b.Type == "text" && strings.Contains(b.Text, "汉") {
+				got = b.Text
+			}
+		}
+	}
+	if got == "" {
+		// Render may not have run yet; check the pinned store directly.
+		list := cm.Pinned().List()
+		if len(list) == 0 {
+			t.Fatal("pinned item missing")
+		}
+		got = list[0].Text
+	}
+	if !utf8.ValidString(got) {
+		t.Fatalf("truncated pinned text is not valid UTF-8 (len=%d)", len(got))
+	}
+	if n := utf8.RuneCountInString(got); n > 2000 {
+		t.Fatalf("truncated pinned text exceeds rune budget: %d", n)
 	}
 }

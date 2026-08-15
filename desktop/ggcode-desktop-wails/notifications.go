@@ -30,14 +30,43 @@ type NotificationManager struct {
 	focused bool        // true when the app window has focus
 	enabled bool        // master toggle from desktop config
 	unread  int         // unread notification count for dock badge
+
+	// lastShown keyed by title+body for storm dedup (#398): concurrent
+	// sessions completing with identical fixed titles ("Task completed")
+	// used to spawn one OS banner per event.
+	lastShown map[string]time.Time
+
+	// winQueue serializes Windows toasts (#399): each PowerShell toast used
+	// to spawn its own process sleeping 6s; a 10-notification storm held
+	// 10 powershell processes (tens of MB each) simultaneously.
+	winQueue chan winToast
+}
+
+// winToast is one queued Windows notification (#399).
+type winToast struct {
+	title string
+	body  string
 }
 
 // NewNotificationManager creates a notification manager.
 // Default: enabled=true, focused=true (assume focused until told otherwise).
 func NewNotificationManager() *NotificationManager {
-	return &NotificationManager{
-		focused: true,
-		enabled: true,
+	nm := &NotificationManager{
+		focused:   true,
+		enabled:   true,
+		lastShown: make(map[string]time.Time),
+		winQueue:  make(chan winToast, 32),
+	}
+	// Single worker drains the Windows toast queue serially (#399): at most
+	// ONE powershell process is alive at a time regardless of storm size.
+	safego.Go("notify-win-worker", nm.drainWinQueue)
+	return nm
+}
+
+// drainWinQueue serially executes queued Windows toasts (#399).
+func (nm *NotificationManager) drainWinQueue() {
+	for t := range nm.winQueue {
+		nm.runWinToast(t.title, t.body)
 	}
 }
 
@@ -81,6 +110,30 @@ func (nm *NotificationManager) Notify(title, body string) {
 		nm.mu.Unlock()
 		return
 	}
+	// Storm dedup (#398): identical title+body within a short window collapses
+	// to one OS banner (multi-session completes share fixed titles like
+	// "Task completed"). Frontend center still receives every event.
+	key := title + "\x00" + body
+	if t, ok := nm.lastShown[key]; ok && time.Since(t) < 5*time.Second {
+		nm.unread++
+		count := nm.unread
+		ctx := nm.ctx
+		nm.mu.Unlock()
+		if ctx != nil {
+			if wctx, ok := ctx.(context.Context); ok {
+				wailsruntime.EventsEmit(wctx, "notification", map[string]string{
+					"title": title,
+					"body":  body,
+				})
+			}
+		}
+		debug.Log("desktop", "notification deduped: %s (unread=%d)", title, count)
+		return
+	}
+	if nm.lastShown == nil {
+		nm.lastShown = make(map[string]time.Time)
+	}
+	nm.lastShown[key] = time.Now()
 	nm.unread++
 	count := nm.unread
 	ctx := nm.ctx
@@ -210,26 +263,37 @@ func (nm *NotificationManager) notifyLinux(title, body string) {
 }
 
 func (nm *NotificationManager) notifyWindows(title, body string) {
-	// Use PowerShell toast notification on Windows.
-	// This is a best-effort approach — no external dependencies needed.
-	script := "[System.Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms'); " +
+	// Use PowerShell toast notification on Windows — best-effort, no
+	// external dependencies. Script assembly happens in the worker
+	// (windowsToastScript); this path only enqueues.
+	// Enqueue for the single worker (#399) — never spawn per-notification
+	select {
+	case nm.winQueue <- winToast{title: title, body: body}:
+	default:
+		debug.Log("desktop", "Windows toast queue full; dropping notification: %s", title)
+	}
+}
+
+// runWinToast executes one PowerShell toast synchronously (worker context).
+func (nm *NotificationManager) runWinToast(title, body string) {
+	script := windowsToastScript(title, body)
+	cmd := exec.Command("powershell", "-NoProfile", "-Command", script)
+	if err := cmd.Run(); err != nil {
+		debug.Log("desktop", "Windows notification failed: %v", err)
+	}
+}
+
+// windowsToastScript builds the PowerShell balloon-toast script.
+func windowsToastScript(title, body string) string {
+	return "[System.Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms'); " +
 		"$balloon = New-Object System.Windows.Forms.NotifyIcon; " +
 		"$balloon.Icon = [System.Drawing.SystemIcons]::Information; " +
-		"$balloon.BalloonTipTitle = '" + strings.ReplaceAll(title, "'", "''") + "'; " +
-		"$balloon.BalloonTipText = '" + strings.ReplaceAll(body, "'", "''") + "'; " +
+		"$balloon.BalloonTipTitle = '" + title + "'; " +
+		"$balloon.BalloonTipText = '" + body + "'; " +
 		"$balloon.Visible = $true; " +
 		"$balloon.ShowBalloonTip(5000); " +
 		"Start-Sleep -Seconds 6; " +
 		"$balloon.Dispose()"
-	// Run asynchronously: this fires inline on the approval/complete/error
-	// agent paths — the synchronous cmd.Run() blocked them 7-8s while the
-	// script slept (#202).
-	safego.Go("notify-windows", func() {
-		cmd := exec.Command("powershell", "-NoProfile", "-Command", script)
-		if err := cmd.Run(); err != nil {
-			debug.Log("desktop", "Windows notification failed: %v", err)
-		}
-	})
 }
 
 // --- Dock badge management ---

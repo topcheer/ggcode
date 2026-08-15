@@ -87,8 +87,15 @@ func DeleteSession(id string) error {
 	// index entry, silently undoing the deletion with a partial history.
 	storeDir, _ := session.DefaultDir()
 	if bridge := GetChatBridge(); bridge != nil && bridge.CurrentSessionID() == id {
-		// Our own current session: allowed (the caller clears bridge state
-		// before/after deletion); the lock is ours.
+		// Our own current session. The old code merely TRUSTED a
+		// "caller clears bridge state" contract that the frontend does not
+		// honor (Sidebar deletes without switching first): the persist
+		// handler kept its handle and O_CREATE-resurrected the deleted
+		// JSONL. Enforce the contract here (#397): cancel the active run
+		// and detach the bridge BEFORE the file removal, so no writer
+		// remains to revive it.
+		bridge.Cancel()
+		bridge.ClearCurrentSession()
 	} else if lock, lerr := session.TryAcquireSessionLock(storeDir, id); lerr == nil && lock != nil {
 		if !lock.Acquired() {
 			lock.Release()
