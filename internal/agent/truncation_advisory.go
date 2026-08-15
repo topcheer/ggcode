@@ -76,10 +76,37 @@ func truncationAdvisory(toolName string, originalLen int) string {
 		advice = "Browser output (" + sizeStr + ") was truncated. " +
 			"Use browser actions (extract, evaluate, screenshot) to target specific elements instead of full-page content."
 
+	case "task_output", "a2a_get_task":
+		// Deterministic snapshots: re-running with identical arguments returns
+		// byte-identical content, so the generic "tighter scope" advice is
+		// unexecutable and induces 2-4 wasted re-call loops (#365).
+		if toolName == "task_output" {
+			advice = "Task output (" + sizeStr + ") was truncated. task_output returns the same snapshot on every call — " +
+				"re-running it will not yield more. Re-call once with the tail_lines parameter to page through the end, " +
+				"or wait for auto-compact to free context."
+		} else {
+			advice = "Task status (" + sizeStr + ") was truncated. This is a deterministic snapshot of the same task — " +
+				"re-running with identical arguments returns the same bytes. Wait for auto-compact or use a2a_list_tasks pagination instead."
+		}
+
 	default:
-		// Generic advisory for any other tool
-		advice = "Tool output was " + sizeStr + " and has been truncated due to context pressure. " +
-			"Re-run the tool with tighter scope or use a more targeted approach to retrieve only the relevant section."
+		// MCP tools (mcp__server__tool) and other scope-less deterministic
+		// tools share a distinct problem: the generic advice below is
+		// unexecutable for them. Handle the known families first (#365).
+		switch {
+		case strings.HasPrefix(toolName, "mcp__"):
+			// MCP tool parameters are fixed by the server schema — the agent
+			// often has no scope-narrowing parameter available. The
+			// server-side result cap may also have already fired before this
+			// guard (#365).
+			advice = "MCP tool output (" + sizeStr + ") was truncated under context pressure. " +
+				"The tool's parameters are defined by the MCP server schema — if none of them can narrow the result, " +
+				"re-calling will return the same content and be truncated again. Prefer a different tool for the specific " +
+				"information you need, or wait for auto-compact to relieve context pressure."
+		default:
+			advice = "Tool output was " + sizeStr + " and has been truncated due to context pressure. " +
+				"Re-run the tool with tighter scope or use a more targeted approach to retrieve only the relevant section."
+		}
 	}
 
 	return "\n[Truncation advisory: " + advice + "]"

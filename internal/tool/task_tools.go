@@ -401,6 +401,11 @@ func (t TaskOutputTool) Parameters() json.RawMessage {
 			"type": "string",
 			"description": "ID of the background task"
 		},
+		"tail_lines": {
+			"type": "integer",
+			"minimum": 1,
+			"description": "Optional: return only the last N lines of the output. Use this to page through large task output without re-fetching the full snapshot."
+		},
 		"description": {
 			"type": "string",
 			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
@@ -414,13 +419,17 @@ func (t TaskOutputTool) Parameters() json.RawMessage {
 }
 func (t TaskOutputTool) Execute(_ context.Context, input json.RawMessage) (Result, error) {
 	var args struct {
-		TaskID string `json:"task_id"`
+		TaskID    string `json:"task_id"`
+		TailLines int    `json:"tail_lines"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
 	}
 	if args.TaskID == "" {
 		return Result{IsError: true, Content: "task_id is required"}, nil
+	}
+	if args.TailLines < 0 {
+		return Result{IsError: true, Content: "tail_lines must be a positive integer"}, nil
 	}
 
 	if t.Provider == nil {
@@ -430,6 +439,18 @@ func (t TaskOutputTool) Execute(_ context.Context, input json.RawMessage) (Resul
 	output, found := t.Provider.GetTaskOutput(args.TaskID)
 	if !found {
 		return Result{IsError: true, Content: fmt.Sprintf("task %q not found or has no output", args.TaskID)}, nil
+	}
+
+	// tail_lines lets the agent page through a large deterministic snapshot
+	// instead of re-fetching the full output and getting it bisected by the
+	// context-pressure guard every time (#365).
+	if args.TailLines > 0 {
+		lines := strings.Split(output, "\n")
+		if len(lines) > args.TailLines {
+			omitted := len(lines) - args.TailLines
+			output = fmt.Sprintf("[... %d earlier lines omitted; re-call with a larger tail_lines to page further back ...]\n%s",
+				omitted, strings.Join(lines[omitted:], "\n"))
+		}
 	}
 
 	return Result{Content: output}, nil

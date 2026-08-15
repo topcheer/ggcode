@@ -103,7 +103,17 @@ type mcpTool struct {
 	readOnly bool
 	blocked  bool
 	srvName  string
+
+	// ContextFill mirrors the agent guard's fill ratio (current tokens /
+	// compaction threshold, 0.0-1.0+). When ≥0.50 the result cap shrinks to
+	// stay under the guard's corresponding limit, avoiding a second
+	// middle-cutting truncation of an already head-only result (#365).
+	ContextFill float64
 }
+
+// maxMCPResultBytes caps MCP tool results at the agent-tool layer (50KB,
+// matching web_fetch).
+const maxMCPResultBytes = 50 * 1024
 
 func (t *mcpTool) Name() string        { return t.name }
 func (t *mcpTool) Description() string { return t.desc }
@@ -159,21 +169,36 @@ func (t *mcpTool) Execute(ctx context.Context, input json.RawMessage) (tool.Resu
 	// Cap result size to protect the agent's context window. MCP servers
 	// can return arbitrary content (database dumps, large file contents,
 	// API responses) that could flood the context. 50KB matches web_fetch.
-	const maxMCPResultBytes = 50 * 1024
-	if len(content) > maxMCPResultBytes {
+	//
+	// Under high context fill the agent-level guard (tool_output_guard.go)
+	// would re-truncate this 50KB head-only result down to 20-10KB, cutting
+	// the middle a second time. Shrinking our own cap to stay under the
+	// guard's smallest limit keeps head-only truncation the single cut
+	// (#365). ContextFill is the same ratio the guard uses (current tokens
+	// / compaction threshold); zero means unknown → use the full cap.
+	maxBytes := maxMCPResultBytes
+	switch {
+	case t.ContextFill >= 0.75:
+		maxBytes = 9 * 1024 // under the guard's 10KB critical limit
+	case t.ContextFill >= 0.65:
+		maxBytes = 19 * 1024 // under the guard's 20KB high limit
+	case t.ContextFill >= 0.50:
+		maxBytes = 39 * 1024 // under the guard's 40KB moderate limit
+	}
+	if len(content) > maxBytes {
 		// Byte-slicing can split a multi-byte UTF-8 rune (Chinese text hits
-		// this often at 50KB), producing invalid UTF-8 downstream. Back up to
+		// this often), producing invalid UTF-8 downstream. Back up to
 		// the nearest rune boundary before truncating (same pattern as
 		// internal/util/truncate.go, fix #262).
-		end := maxMCPResultBytes
+		end := maxBytes
 		for end > 0 && !utf8.RuneStart(content[end]) {
 			end--
 		}
 		content = content[:end] +
 			fmt.Sprintf("\n\n[... MCP result truncated: %d bytes total, showing first %d ...]",
 				len(content), end)
-		debug.Log("mcp", "result truncated: server=%s tool=%s total=%d cap=%d",
-			t.srvName, t.toolName, len(content), end)
+		debug.Log("mcp", "result truncated: server=%s tool=%s total=%d cap=%d fill=%.2f",
+			t.srvName, t.toolName, len(content), end, t.ContextFill)
 	}
 
 	return tool.Result{
