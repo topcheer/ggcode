@@ -326,6 +326,45 @@ func registerAllChecks() {
 		// --- Markup structural (breaks rendering) ---
 		{Name: "tag-balance", Langs: []Language{LangMarkup, LangJSTS}, Run: stringCheckNew(checkTagBalance)},
 		{Name: "delimiter-balance", Run: stringCheckNew(checkDelimiterBalance)},
+
+		// #516 (R73 census): "hardcoded-path" registered live — the ONLY
+		// zero-known-FP/FN survivor of the 5-detector sa-172 batch (E1: it
+		// already implements the #186/#171 per-instance multiset delta; E2:
+		// .go home-path-in-config warning fires, .md same content stays
+		// silent). Same revival precedent as #508 empty-error-body.
+		{Name: "hardcoded-path", Run: sliceCheck(checkHardcodedPaths)},
+		//
+		// #516 tombstones (sa-172 probe-verified, 12/13 hypotheses PASS;
+		// 10th census instance of the #328/#330/#499/#503–#510 class). Do
+		// NOT re-add these without the revival preconditions below:
+		//   - duplicate_code: token-frequency Jaccard is order-blind — two
+		//     functions with identical token multisets but opposite
+		//     execution order report "100% similar / structurally
+		//     identical bodies" (its own L124-129 concedes this); needs
+		//     ordered-sequence comparison (edit distance / LCS) + header
+		//     comment says min 5 stmts but const is 3.
+		//   - hardcoded_host: flags host:'localhost' (and 127.0.0.1, all
+		//     three of Go/JS/Python paths) as "binding to unintended
+		//     interfaces" — semantic inversion: loopback is the MOST
+		//     conservative binding, the stated risk is 0.0.0.0; needs
+		//     localhost removed from the risky-host set.
+		//   - http_timeout: BOTH broken — set-delta keys
+		//     (default-client-func:http.Get) are non-multiset so
+		//     delete-2-add-1-new swallows brand-new violations (0 warnings
+		//     where a fresh file with the same content warns twice), AND it
+		//     only inspects composite-literal fields so
+		//     c := &http.Client{}; c.Timeout = 30*time.Second still warns
+		//     "created without a Timeout field"; needs per-instance
+		//     multiset delta + same-function post-assignment tracking.
+		//   - loop_perf: double-counts nested-loop += (same line recorded
+		//     twice), misses string-typed FUNCTION PARAMS entirely
+		//     (identifyStringVars has no param case), and stringVars is
+		//     file-global-by-name (a string s in func A poisons an int s in
+		//     func B); needs per-function scoped vars + param collection +
+		//     nested-ForStmt dedup. Its helpers identifyStringVars/
+		//     isStringExpr were migrated to string_efficiency_check.go
+		//     (itself unregistered dead code — #509 fate-binding applies:
+		//     re-adjudicate together).
 	}
 
 	debug.Log("integrity", "registered %d post-write checks", len(allChecks))

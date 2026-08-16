@@ -252,3 +252,99 @@ func allStringOperands(args []ast.Expr, stringVars map[string]bool) bool {
 	}
 	return true
 }
+
+// --- Migrated from loop_perf_check.go (deleted in #516, R73 census) ---
+// FATE-BINDING (#509 precedent): identifyStringVars/isStringExpr survive only
+// for this currently-unregistered detector. When string_efficiency_check is
+// adjudicated for revival/deletion, these helpers must be re-adjudicated with it.
+// Known defects inherited from loop_perf usage do NOT apply here (see #516):
+// file-global-by-name scoping is this API's contract; consumers own scoping fixes.
+// type annotation, or assignment of string-returning function calls).
+func identifyStringVars(file *ast.File) map[string]bool {
+	stringVars := make(map[string]bool)
+
+	// Single pass: collect string vars from both ValueSpecs (var s string)
+	// and AssignStmts (s := "hello", s = strings.Join(...)).
+	ast.Inspect(file, func(n ast.Node) bool {
+		switch node := n.(type) {
+		case *ast.ValueSpec:
+			collectStringNamesFromSpec(node, stringVars)
+		case *ast.AssignStmt:
+			if node.Tok == token.ASSIGN || node.Tok == token.DEFINE {
+				collectStringNamesFromAssign(node, stringVars)
+			}
+		}
+		return true
+	})
+
+	return stringVars
+}
+
+// collectStringNamesFromSpec marks variables from a ValueSpec as string-typed
+// if they have a string type annotation or string-valued initializer.
+func collectStringNamesFromSpec(vs *ast.ValueSpec, stringVars map[string]bool) {
+	for i, name := range vs.Names {
+		if isStringTypeAnnotation(vs.Type) {
+			stringVars[name.Name] = true
+			continue
+		}
+		if i < len(vs.Values) && isStringExpr(vs.Values[i]) {
+			stringVars[name.Name] = true
+		}
+	}
+}
+
+// collectStringNamesFromAssign marks variables from an AssignStmt as string-typed
+// if their RHS is a known string expression.
+func collectStringNamesFromAssign(assign *ast.AssignStmt, stringVars map[string]bool) {
+	for i, lhs := range assign.Lhs {
+		if i >= len(assign.Rhs) {
+			break
+		}
+		ident, ok := lhs.(*ast.Ident)
+		if !ok {
+			continue
+		}
+		if isStringExpr(assign.Rhs[i]) {
+			stringVars[ident.Name] = true
+		}
+	}
+}
+
+// isStringTypeAnnotation returns true if the type expression is the builtin "string".
+func isStringTypeAnnotation(typ ast.Expr) bool {
+	if typ == nil {
+		return false
+	}
+	ident, ok := typ.(*ast.Ident)
+	return ok && ident.Name == "string"
+}
+
+// isStringExpr returns true if the AST expression is known to produce a
+// string value. Uses conservative heuristics for zero-dependency operation.
+func isStringExpr(expr ast.Expr) bool {
+	switch e := expr.(type) {
+	case *ast.BasicLit:
+		return e.Kind == token.STRING
+	case *ast.BinaryExpr:
+		if e.Op == token.ADD {
+			return isStringExpr(e.X) || isStringExpr(e.Y)
+		}
+	case *ast.CallExpr:
+		// string() conversion
+		if ident, ok := e.Fun.(*ast.Ident); ok && ident.Name == "string" {
+			return true
+		}
+		name := qualifiedCallName(e)
+		switch name {
+		case "fmt.Sprintf", "fmt.Sprint", "strings.Join", "strings.TrimSpace",
+			"strings.ToUpper", "strings.ToLower", "strings.Replace",
+			"strings.ReplaceAll", "strings.TrimPrefix", "strings.TrimSuffix",
+			"filepath.Join", "filepath.Base", "filepath.Dir", "filepath.Ext",
+			"strconv.Itoa", "strconv.FormatInt", "strconv.FormatFloat",
+			"strconv.FormatBool":
+			return true
+		}
+	}
+	return false
+}
