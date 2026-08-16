@@ -121,6 +121,24 @@ func registerAllChecks() {
 		// and eat the maxIntegrityWarnings budget. Do NOT re-add it here
 		// without a position-aware exemption (testify trailing msgAndArgs,
 		// t.Error*/t.Fatal* first-arg format strings).
+		//
+		// #506: same fate for "error-order" and "float-equality" (both
+		// fc5c4aad-stripped, both empirically 100%-FP on revival — sa-165
+		// probe-verified): checkErrorOrder fired on the io.Writer contract
+		// idiom (n, err := w.Write(b); total += n — n is VALID on error by
+		// contract, io.Copy does this) with a factually wrong "causes a
+		// panic" claim for non-pointer results, and its surviving true
+		// positives are already covered by nil-deref-after-error above
+		// (which stays silent on the writer idiom); checkFloatEquality
+		// matched EVERY math.* call as float64 (IsNaN/IsInf/Float64bits
+		// return bool/uint64 — its epsilon fix advice does not compile)
+		// and flagged exact-representable sentinels (== 0.5, == 1.0) where
+		// epsilon comparison would BREAK correct code. Revival
+		// preconditions: error-order → dereference-only uses + writer-
+		// contract exemption (then it converges to nil-deref-after-error);
+		// float-equality → function-name whitelist + exact-literal
+		// exemption + delta wiring + shadowing guard (golangci-lint keeps
+		// float-eq off by default for the same sentinel-vs-computed reason).
 		{Name: "concurrent-map-access", Langs: []Language{LangGo}, Run: stringCheck(checkConcurrentMapAccess)},
 		{Name: "context-leak", Langs: []Language{LangGo}, Run: stringCheck(checkContextLeak)},
 		{Name: "resource-leak", Langs: []Language{LangGo}, Run: sliceCheck(checkResourceLeaks)},
