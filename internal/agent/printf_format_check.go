@@ -186,47 +186,87 @@ func findPrintfFormatIssues(src string) []printfFormatInfo {
 	}
 
 	var results []printfFormatInfo
-
-	ast.Inspect(file, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
-
-		name := qualifiedCallName(call)
-		if name == "" {
-			return true
-		}
-
-		pos := fset.Position(call.Pos())
-
-		// Check printf-family: first format-arg position depends on function.
-		// For Fprintf/Fprint, the first arg is the writer, format is second.
-		if printfFamily[name] {
-			formatArgIdx := 0
-			if name == "fmt.Fprintf" {
-				formatArgIdx = 1
-			}
-			if issue := analyzePrintfCall(name, call, formatArgIdx, pos.Line); issue != nil {
-				results = append(results, *issue)
-			}
-		}
-
-		// Check non-format print family for redundant Sprintf wrapping.
-		if nonFormatPrintFamily[name] {
-			if issue := analyzeNonFormatCall(name, call, pos.Line); issue != nil {
-				results = append(results, *issue)
-			}
-		}
-
-		return true
-	})
-
+	ast.Walk(&printfFormatVisitor{fset: fset, issues: &results}, file)
 	return results
 }
 
+// printfFormatVisitor walks the AST carrying the enclosing function's
+// parameter names so calls are judged in scope (#505): a printf-family call
+// whose format argument IS a parameter of the enclosing function and whose
+// variadic tail spreads another parameter is idiomatic forwarding, not an
+// injection risk.
+type printfFormatVisitor struct {
+	fset   *token.FileSet
+	issues *[]printfFormatInfo
+	params map[string]bool // parameter names of the enclosing func; nil at top level
+}
+
+// Visit implements ast.Visitor. Returning a fresh visitor scopes parameter
+// tracking to that function's subtree.
+func (v *printfFormatVisitor) Visit(n ast.Node) ast.Visitor {
+	switch fn := n.(type) {
+	case *ast.FuncDecl:
+		return &printfFormatVisitor{fset: v.fset, issues: v.issues, params: funcParamNames(fn.Type.Params)}
+	case *ast.FuncLit:
+		// Closures also see the enclosing scope's names.
+		merged := make(map[string]bool, len(v.params)+4)
+		for k := range v.params {
+			merged[k] = true
+		}
+		for k := range funcParamNames(fn.Type.Params) {
+			merged[k] = true
+		}
+		return &printfFormatVisitor{fset: v.fset, issues: v.issues, params: merged}
+	case *ast.CallExpr:
+		v.checkCall(fn)
+	}
+	return v
+}
+
+// checkCall judges one call expression against the printf families.
+func (v *printfFormatVisitor) checkCall(call *ast.CallExpr) {
+	name := qualifiedCallName(call)
+	if name == "" {
+		return
+	}
+	pos := v.fset.Position(call.Pos())
+
+	// printf-family: first format-arg position depends on function.
+	// For Fprintf/Fprint, the first arg is the writer, format is second.
+	if printfFamily[name] {
+		formatArgIdx := 0
+		if name == "fmt.Fprintf" {
+			formatArgIdx = 1
+		}
+		if issue := analyzePrintfCall(name, call, formatArgIdx, pos.Line, v.params); issue != nil {
+			*v.issues = append(*v.issues, *issue)
+		}
+	}
+
+	// non-format print family: redundant Sprintf wrapping.
+	if nonFormatPrintFamily[name] {
+		if issue := analyzeNonFormatCall(name, call, pos.Line); issue != nil {
+			*v.issues = append(*v.issues, *issue)
+		}
+	}
+}
+
+// funcParamNames returns the declared parameter names as a set.
+func funcParamNames(fl *ast.FieldList) map[string]bool {
+	if fl == nil {
+		return nil
+	}
+	out := make(map[string]bool)
+	for _, field := range fl.List {
+		for _, name := range field.Names {
+			out[name.Name] = true
+		}
+	}
+	return out
+}
+
 // analyzePrintfCall checks a printf-family call for format string issues.
-func analyzePrintfCall(funcName string, call *ast.CallExpr, formatArgIdx, line int) *printfFormatInfo {
+func analyzePrintfCall(funcName string, call *ast.CallExpr, formatArgIdx, line int, params map[string]bool) *printfFormatInfo {
 	args := call.Args
 	if len(args) <= formatArgIdx {
 		return nil
@@ -241,6 +281,17 @@ func analyzePrintfCall(funcName string, call *ast.CallExpr, formatArgIdx, line i
 		// fmt.Errorf is often called with err.Error() or string concatenation
 		// for wrapping; allow that common pattern to reduce false positives.
 		if funcName == "fmt.Errorf" && isErrErrorCall(formatArg) {
+			return nil
+		}
+		// #505: idiomatic forwarding — the enclosing function received the
+		// format (and the variadic args it spreads) as its own parameters:
+		//   func logf(format string, args ...any) { log.Printf(format, args...) }
+		// This is Go's most common wrapper shape. go vet's printf checker
+		// recognizes it via type information and checks the wrapper's callers
+		// instead of flagging the forwarding line itself; without types we
+		// approximate by scope: format is a parameter AND the call ends with
+		// a spread of another parameter.
+		if isForwardedFormatExpr(formatArg, params) && endsWithVariadicParam(call, params) {
 			return nil
 		}
 		detail := formatExprToString(formatArg)
@@ -264,6 +315,19 @@ func analyzePrintfCall(funcName string, call *ast.CallExpr, formatArgIdx, line i
 	}
 	formatStr, ok := unquoteBasicLit(lit.Value)
 	if !ok {
+		return nil
+	}
+
+	// #505: variadic spread — the runtime slice length is unknowable, so
+	// counting the spread as exactly one argument is wrong. go vet skips
+	// spread calls for the same reason (fmt.Sprintf("%s=%v\n", kv...) is
+	// correct when kv has two elements).
+	if call.Ellipsis.IsValid() {
+		return nil
+	}
+	// #505: explicit argument indexes (%[1]s) reuse arguments; naive verb
+	// counting is invalid ("%[1]s and %[1]s" with one arg is correct).
+	if usesExplicitIndex(formatStr) {
 		return nil
 	}
 
@@ -373,6 +437,55 @@ func callNameFromExpr(e ast.Expr) string {
 		return ""
 	}
 	return qualifiedCallName(call)
+}
+
+// --- #505: variadic-forwarding and spread exemptions ---
+
+// isForwardedFormatExpr reports whether expr is a forwarding-safe format
+// argument for a call inside the function whose parameters are params: a
+// bare parameter identifier, or a string-literal prefix concatenated onto
+// one ("[WARN] "+format).
+func isForwardedFormatExpr(e ast.Expr, params map[string]bool) bool {
+	if len(params) == 0 {
+		return false
+	}
+	switch v := e.(type) {
+	case *ast.Ident:
+		return params[v.Name]
+	case *ast.BinaryExpr:
+		return v.Op == token.ADD &&
+			isStringConstExpr(v.X) &&
+			isForwardedFormatExpr(v.Y, params)
+	}
+	return false
+}
+
+// isStringConstExpr reports whether expr is a string literal or a
+// concatenation of string literals.
+func isStringConstExpr(e ast.Expr) bool {
+	switch v := e.(type) {
+	case *ast.BasicLit:
+		return v.Kind == token.STRING
+	case *ast.BinaryExpr:
+		return v.Op == token.ADD && isStringConstExpr(v.X) && isStringConstExpr(v.Y)
+	}
+	return false
+}
+
+// endsWithVariadicParam reports whether the call's final argument is a
+// spread (x...) of a parameter of the enclosing function.
+func endsWithVariadicParam(call *ast.CallExpr, params map[string]bool) bool {
+	if !call.Ellipsis.IsValid() || len(call.Args) == 0 || len(params) == 0 {
+		return false
+	}
+	id, ok := call.Args[len(call.Args)-1].(*ast.Ident)
+	return ok && params[id.Name]
+}
+
+// usesExplicitIndex reports whether the format contains explicit argument
+// indexes like %[1]s, which reuse arguments and defeat naive verb counting.
+func usesExplicitIndex(format string) bool {
+	return strings.Contains(format, "%[")
 }
 
 // countFormatVerbs counts the number of format verbs (%s, %d, %v, %%, etc.)

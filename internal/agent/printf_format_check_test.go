@@ -5,6 +5,93 @@ import (
 	"testing"
 )
 
+// #505: variadic spread — the spread supplies the verbs at runtime; counting
+// it as one argument produced a deterministic false positive (go vet skips
+// spread calls for the same reason).
+func TestCheckPrintfFormat_VariadicSpreadNoVerbCountWarning(t *testing.T) {
+	src := `package main
+
+import (
+	"fmt"
+	"log"
+)
+
+func f(kv []any, parts []string) {
+	fmt.Sprintf("%s=%v\n", kv...)
+	log.Printf("%s %s", parts...)
+}
+`
+	warnings := checkPrintfFormat("test.go", "", src)
+	if len(warnings) != 0 {
+		t.Fatalf("variadic spread must not warn, got %d: %v", len(warnings), warnings)
+	}
+}
+
+// #505: explicit index verbs (%[1]s) reuse arguments — naive counting is invalid.
+func TestCheckPrintfFormat_ExplicitIndexNoVerbCountWarning(t *testing.T) {
+	src := `package main
+
+import "fmt"
+
+func f(a string) string { return fmt.Sprintf("%[1]s and %[1]s", a) }
+`
+	warnings := checkPrintfFormat("test.go", "", src)
+	if len(warnings) != 0 {
+		t.Fatalf("explicit index verbs must not warn, got %d: %v", len(warnings), warnings)
+	}
+}
+
+// #505: forwarding wrappers are Go's most idiomatic helper shape; both the
+// bare-parameter and literal-prefix forms must be exempt from the
+// nonconstant-format injection warning.
+func TestCheckPrintfFormat_ForwardingWrapperNoWarning(t *testing.T) {
+	src := `package main
+
+import "log"
+
+func logf(format string, args ...any) { log.Printf(format, args...) }
+func warnf(format string, args ...any) { log.Printf("[WARN] "+format, args...) }
+`
+	warnings := checkPrintfFormat("test.go", "", src)
+	if len(warnings) != 0 {
+		t.Fatalf("forwarding wrappers must not warn, got %d: %v", len(warnings), warnings)
+	}
+}
+
+// #505: true positives must survive the exemptions — a LOCAL variable format
+// (not a parameter), and a plain verb-count mismatch without spread.
+func TestCheckPrintfFormat_TruePositivesSurviveExemptions(t *testing.T) {
+	src := `package main
+
+import (
+	"fmt"
+	"log"
+)
+
+func f() {
+	u := getUserInput()
+	log.Printf(u)
+	fmt.Printf("%d %d\n", 1)
+}
+`
+	warnings := checkPrintfFormat("test.go", "", src)
+	sawNonconstant, sawVerbCount := false, false
+	for _, w := range warnings {
+		if strings.Contains(w, "non-constant format string") {
+			sawNonconstant = true
+		}
+		if strings.Contains(w, "verb(s)") {
+			sawVerbCount = true
+		}
+	}
+	if !sawNonconstant {
+		t.Fatal("local-variable format must still warn (injection risk)")
+	}
+	if !sawVerbCount {
+		t.Fatal("plain verb-count mismatch (no spread) must still warn")
+	}
+}
+
 func TestCheckPrintfFormat_NonConstantFormat(t *testing.T) {
 	src := `package main
 
