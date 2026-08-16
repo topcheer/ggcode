@@ -136,13 +136,17 @@ func analyzeCacheLocked(sc SessionCost, pricing PricingTable) CacheAnalysis {
 // (previously the tracker billed cache tokens at 0 when fields were unset
 // while the analysis layer assumed the 0.10x/1.25x fallback).
 func effectiveCacheRates(rate ModelRate) (cacheReadPerM, cacheWritePerM float64) {
-	cacheReadPerM = rate.CacheReadPerM
-	if cacheReadPerM == 0 {
-		cacheReadPerM = rate.InputPerM * 0.10
+	// #559 (Bug C): only fall back to the industry-standard heuristics when
+	// the field is genuinely ABSENT. An explicit `cache_read_per_m: 0` (free
+	// cache reads) must stay 0 — previously it was treated as missing and
+	// billed at 0.10x input ($18 → $123, 6.8x).
+	cacheReadPerM = rate.InputPerM * 0.10
+	if rate.CacheReadSet || rate.CacheReadPerM > 0 {
+		cacheReadPerM = rate.CacheReadPerM
 	}
-	cacheWritePerM = rate.CacheWritePerM
-	if cacheWritePerM == 0 {
-		cacheWritePerM = rate.InputPerM * 1.25
+	cacheWritePerM = rate.InputPerM * 1.25
+	if rate.CacheWriteSet || rate.CacheWritePerM > 0 {
+		cacheWritePerM = rate.CacheWritePerM
 	}
 	return cacheReadPerM, cacheWritePerM
 }

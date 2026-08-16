@@ -46,6 +46,12 @@ func loadExternalSections(cfg *Config, mainConfigPath string) {
 	mcpPath := MCPServersPath(configDir)
 
 	// --- Vendors ---
+	// #559 (Bug E): the external file merges FIELD-LEVEL into the in-memory
+	// set (which mergeDefaultEndpoints already seeded with built-in vendors),
+	// instead of replacing same-name vendors wholesale — so a user overriding
+	// one field of a built-in vendor no longer deletes the other built-in
+	// endpoints (probe: zai 6 endpoints collapsed to 1, switching back to a
+	// deleted endpoint then failed Validate()).
 	if fileExists(vendorsPath) {
 		if v := loadVendorsFile(vendorsPath); v != nil {
 			cfg.Vendors = mergeVendors(cfg.Vendors, v)
@@ -295,7 +301,21 @@ func LoadMCPServersPublic(path string) []MCPServerConfig {
 }
 
 // mergeVendors merges external vendors on top of in-memory vendors.
-// External file values take precedence (they are the source of truth).
+//
+// #559 (Bug E): the merge is FIELD-LEVEL, not a wholesale replacement. When a
+// user overrides a same-name built-in vendor in vendors.yaml (even a single
+// field), built-in endpoints that the external definition does not mention are
+// preserved, keeping mergeDefaultEndpoints' promise that "new built-in
+// endpoints are available even when the user has an existing config" — load
+// order in Load() is mergeDefaultEndpoints → loadExternalSections, so a
+// whole-replace here would drop the built-in endpoints again (probe: zai
+// collapsed 6 built-in endpoints to 1; switching back to a deleted endpoint
+// then failed Validate()).
+//
+// Field-level precedence within an existing endpoint: non-zero external
+// fields win; zero-value external fields keep the built-in value. Explicitly
+// disabling a built-in endpoint remains possible by removing the whole vendor
+// entry via a fully custom definition or a distinct vendor name.
 func mergeVendors(base, external map[string]VendorConfig) map[string]VendorConfig {
 	if external == nil {
 		return base
@@ -303,8 +323,74 @@ func mergeVendors(base, external map[string]VendorConfig) map[string]VendorConfi
 	if base == nil {
 		base = make(map[string]VendorConfig)
 	}
-	for k, v := range external {
-		base[k] = v
+	for name, ext := range external {
+		cur, exists := base[name]
+		if !exists {
+			base[name] = ext
+			continue
+		}
+		// Vendor-level scalar merge: external non-zero fields win.
+		if ext.DisplayName != "" {
+			cur.DisplayName = ext.DisplayName
+		}
+		if ext.APIKey != "" {
+			cur.APIKey = ext.APIKey
+		}
+		// Endpoint merge: external endpoints are merged into the built-in set;
+		// built-in endpoints not mentioned by the external file are preserved.
+		if cur.Endpoints == nil {
+			cur.Endpoints = make(map[string]EndpointConfig)
+		}
+		for epName, extEP := range ext.Endpoints {
+			curEP, epExists := cur.Endpoints[epName]
+			if !epExists {
+				cur.Endpoints[epName] = extEP
+				continue
+			}
+			cur.Endpoints[epName] = mergeEndpointConfig(curEP, extEP)
+		}
+		base[name] = cur
+	}
+	return base
+}
+
+// mergeEndpointConfig merges an external endpoint definition on top of the
+// built-in one. Non-zero external fields win; zero-value external fields keep
+// the built-in value. This lets users override e.g. just the base_url while
+// keeping built-in models/tags/protocol.
+func mergeEndpointConfig(base, ext EndpointConfig) EndpointConfig {
+	if ext.DisplayName != "" {
+		base.DisplayName = ext.DisplayName
+	}
+	if ext.Protocol != "" {
+		base.Protocol = ext.Protocol
+	}
+	if ext.BaseURL != "" {
+		base.BaseURL = ext.BaseURL
+	}
+	if ext.AuthType != "" {
+		base.AuthType = ext.AuthType
+	}
+	if ext.APIKey != "" {
+		base.APIKey = ext.APIKey
+	}
+	if ext.DefaultModel != "" {
+		base.DefaultModel = ext.DefaultModel
+	}
+	if ext.SelectedModel != "" {
+		base.SelectedModel = ext.SelectedModel
+	}
+	if ext.ContextWindow > 0 {
+		base.ContextWindow = ext.ContextWindow
+	}
+	if ext.MaxTokens > 0 {
+		base.MaxTokens = ext.MaxTokens
+	}
+	if len(ext.Models) > 0 {
+		base.Models = ext.Models
+	}
+	if len(ext.Tags) > 0 {
+		base.Tags = ext.Tags
 	}
 	return base
 }

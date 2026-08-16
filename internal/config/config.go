@@ -1057,6 +1057,11 @@ func Load(path string) (*Config, error) {
 
 	expanded := ExpandEnvRecursiveWithLookup(raw, lookup)
 
+	// #559 (Bug F): surface ${...} forms the expander does not understand
+	// (e.g. "${KEY:?err}") instead of letting them silently become literal
+	// credential values.
+	WarnUnresolvedEnvRefs(expanded)
+
 	// Re-marshal and unmarshal into struct
 	expandedData, err := yaml.Marshal(expanded)
 	if err != nil {

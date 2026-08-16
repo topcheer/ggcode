@@ -8,15 +8,34 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/util"
 )
 
+// envPattern matches the plain ${VAR} form.
 var envPattern = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
+
+// #559 (Bug F): also recognize the standard bash default-value forms
+// ${VAR:-default} and ${VAR-default} so they no longer leak through as literal
+// strings (a literal "${MY_KEY:-fallback}" silently became the API key value,
+// with zero warnings, and was then treated as a plaintext secret by the key
+// migration). Group 1 is the variable name, group 2 is the default value
+// (present only for the :-/- form).
+var envDefaultPattern = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)(?::?-([^}]*))?\}`)
+
+// envAnyRefPattern matches any ${...} form, including ones the expander does
+// not understand; used by WarnUnresolvedEnvRefs to report leftovers.
+var envAnyRefPattern = regexp.MustCompile(`\$\{[^}]*\}`)
 
 type envLookupFunc func(string) (string, bool)
 
 // ExpandEnv replaces ${VAR} patterns in a string with environment variable values.
 // If the variable is not set, the pattern is left unchanged.
+//
+// #559 (Bug F): ${VAR:-default} (and ${VAR-default}) is expanded using bash
+// semantics: if VAR is unset or empty (:-) — or unset only (-) — the default
+// value is used. Unresolvable/unparseable ${...} forms are reported via
+// debug.Log instead of silently passing through.
 func ExpandEnv(s string) string {
 	return ExpandEnvWithLookup(s, os.LookupEnv)
 }
@@ -25,12 +44,40 @@ func ExpandEnvWithLookup(s string, lookup envLookupFunc) string {
 	if lookup == nil {
 		lookup = os.LookupEnv
 	}
-	return envPattern.ReplaceAllStringFunc(s, func(match string) string {
-		varName := match[2 : len(match)-1] // strip ${ and }
-		if val, ok := lookup(varName); ok {
-			return val
+	return envDefaultPattern.ReplaceAllStringFunc(s, func(match string) string {
+		sub := envDefaultPattern.FindStringSubmatch(match)
+		if sub == nil {
+			// Should be impossible (match came from the same pattern), but never
+			// silently fabricate a value.
+			debug.Log("config", "env expansion: unrecognized form %q left unchanged", match)
+			return match
 		}
-		return match
+		varName := sub[1]
+		rest := match[2+len(varName):] // ":default}", "-default}", or "}"
+		colonForm := strings.HasPrefix(rest, ":-")
+		dashForm := !colonForm && strings.HasPrefix(rest, "-")
+		val, set := lookup(varName)
+		switch {
+		case colonForm:
+			// ${VAR:-default}: VAR unset OR empty → default.
+			if set && val != "" {
+				return val
+			}
+			return sub[2]
+		case dashForm:
+			// ${VAR-default}: VAR unset → default; set (even empty) → value.
+			if set {
+				return val
+			}
+			return sub[2]
+		default:
+			// Plain ${VAR}: set → value; unset → keep pattern (existing behavior —
+			// later stages detect unresolved ${...} and surface onboarding errors).
+			if set {
+				return val
+			}
+			return match
+		}
 	})
 }
 
@@ -64,8 +111,38 @@ func expandValueWithLookup(v interface{}, lookup envLookupFunc) interface{} {
 	}
 }
 
+// WarnUnresolvedEnvRefs reports ${...} references in the given raw config map
+// that the expander does not understand (any ${...} that is neither plain
+// ${VAR} nor ${VAR:-default}/${VAR-default}). Previously such forms (e.g.
+// "${MY_KEY:?err}") silently became literal credential values with zero
+// warnings (#559 Bug F).
+func WarnUnresolvedEnvRefs(raw map[string]interface{}) {
+	if raw == nil {
+		return
+	}
+	var walk func(interface{})
+	walk = func(v interface{}) {
+		switch val := v.(type) {
+		case string:
+			// Any ${...} occurrence the expander does not consume is a form we
+			// do not support — report it instead of passing it through silently.
+			for _, m := range envAnyRefPattern.FindAllString(val, -1) {
+				debug.Log("config", "unrecognized env reference %q left as literal value; supported forms are ${VAR} and ${VAR:-default}", m)
+			}
+		case map[string]interface{}:
+			for _, item := range val {
+				walk(item)
+			}
+		case []interface{}:
+			for _, item := range val {
+				walk(item)
+			}
+		}
+	}
+	walk(raw)
+}
+
 // HomeDir returns the user's home directory.
-// Delegates to util.HomeDir which handles $HOME, os.UserHomeDir, and $USERPROFILE.
 func HomeDir() string {
 	return util.HomeDir()
 }
@@ -191,8 +268,10 @@ func referencedEnvVars(raw map[string]interface{}) map[string]struct{} {
 	walk = func(v interface{}) {
 		switch val := v.(type) {
 		case string:
-			for _, match := range envPattern.FindAllStringSubmatch(val, -1) {
-				if len(match) == 2 {
+			// #559 (Bug F): also pick up ${VAR} names inside ${VAR:-default}
+			// so keys.env / shell-rc fallback resolution covers them.
+			for _, match := range envDefaultPattern.FindAllStringSubmatch(val, -1) {
+				if len(match) >= 2 {
 					names[match[1]] = struct{}{}
 				}
 			}

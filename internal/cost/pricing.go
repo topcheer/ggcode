@@ -1,6 +1,9 @@
 package cost
 
-import "strings"
+import (
+	"encoding/json"
+	"strings"
+)
 
 // PricingType indicates how a model is billed.
 type PricingType string
@@ -32,6 +35,36 @@ type ModelRate struct {
 	CacheWritePerM float64     `json:"cache_write_per_m,omitempty"`
 	Type           PricingType `json:"type,omitempty"`
 	Plan           string      `json:"plan,omitempty"` // e.g., "GitHub Copilot", "GLM Coding Plan"
+
+	// CacheReadSet / CacheWriteSet are presence markers for the cache rate
+	// fields. #559 (Bug C): a user explicitly configuring `cache_read_per_m: 0`
+	// (free cache reads) previously fell back to the 0.10x-input heuristic
+	// ($18 reported as $123, 6.8x). With omitempty on the wire, presence cannot
+	// be recovered from the value alone, so an explicit marker is set during
+	// JSON unmarshal when the key appears.
+	CacheReadSet  bool `json:"-"`
+	CacheWriteSet bool `json:"-"`
+}
+
+// UnmarshalJSON records presence of the explicit cache rate fields so an
+// explicit 0 (free) is distinguishable from an absent field.
+func (r *ModelRate) UnmarshalJSON(data []byte) error {
+	type rawModelRate ModelRate
+	var raw rawModelRate
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*r = ModelRate(raw)
+	var probe struct {
+		CacheReadPerM  *float64 `json:"cache_read_per_m"`
+		CacheWritePerM *float64 `json:"cache_write_per_m"`
+	}
+	if err := json.Unmarshal(data, &probe); err != nil {
+		return err
+	}
+	r.CacheReadSet = probe.CacheReadPerM != nil
+	r.CacheWriteSet = probe.CacheWritePerM != nil
+	return nil
 }
 
 // IsMetered returns true if the model is billed per-token.
@@ -73,11 +106,16 @@ func (t PricingTable) Get(provider, model string) (ModelRate, bool) {
 	}
 
 	// Prefix match (longest wins for specificity)
+	// #559 (Bug A): forward-only. The old `HasPrefix(lowerModel, lk) ||
+	// HasPrefix(lk, lowerModel)` also matched when the QUERY was a prefix of the
+	// KEY, so querying "glm-4.5" (paid) hit "glm-4.5-air" (free) and $11 showed
+	// as $0. Only accept model names that START WITH a table key; shorter
+	// queries no longer match longer keys.
 	bestKey := ""
 	var bestRate ModelRate
 	for k, v := range models {
 		lk := strings.ToLower(k)
-		if strings.HasPrefix(lowerModel, lk) || strings.HasPrefix(lk, lowerModel) {
+		if strings.HasPrefix(lowerModel, lk) {
 			if len(lk) > len(bestKey) {
 				bestKey = lk
 				bestRate = v
@@ -89,10 +127,19 @@ func (t PricingTable) Get(provider, model string) (ModelRate, bool) {
 	}
 
 	// Suffix match (longest wins)
+	// #559 (Bug B): require a hard boundary so "my-proxy-o3" no longer hits
+	// the "o3" subscription rate ($180 shown as included). "-" cannot serve as
+	// a boundary (model names are hyphen-heavy, so "my-proxy-o3" ends with
+	// "-o3"); only a path separator ("/", as in "anthropic/o3") or the exact
+	// name qualifies.
 	bestKey = ""
 	for k, v := range models {
 		lk := strings.ToLower(k)
 		if strings.HasSuffix(lowerModel, lk) {
+			remaining := strings.TrimSuffix(lowerModel, lk)
+			if remaining != "" && !strings.HasSuffix(remaining, "/") {
+				continue
+			}
 			if len(lk) > len(bestKey) {
 				bestKey = lk
 				bestRate = v

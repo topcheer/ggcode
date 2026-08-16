@@ -85,10 +85,40 @@ func (kc KnightConfig) HasExplicitDailyTokenBudget() bool {
 	return kc.dailyTokenBudgetSet
 }
 
+// HasExplicitEnabled reports whether Enabled was explicitly configured
+// (present in YAML or set via SetEnabledExplicitly), including an explicit
+// false. Used by MarshalYAML so an explicit disable survives Save/Load.
+func (kc KnightConfig) HasExplicitEnabled() bool {
+	return kc.enabledSet
+}
+
 // SetEnabledExplicitly marks the Enabled field as explicitly set (from a slash command)
 // so that subsequent SetDefaults() calls will not overwrite it.
 func (kc *KnightConfig) SetEnabledExplicitly() {
 	kc.enabledSet = true
+}
+
+// MarshalYAML ensures an explicitly-set Enabled=false is persisted.
+//
+// #559 (G-adjacent): the `enabled,omitempty` tag makes yaml.Marshal drop a
+// false value before cleanZeroYAMLValues ever sees it, so an explicit disable
+// (e.g. /knight off → SetEnabledExplicitly → Save) never reached the file and
+// Knight re-enabled on reload. When enabledSet is true we re-inject
+// "enabled: false" into the marshaled node; true values are emitted by the tag
+// as before, and unset values keep the old omit behavior (no file bloat).
+func (kc KnightConfig) MarshalYAML() (interface{}, error) {
+	type rawKnightConfig KnightConfig
+	var node yaml.Node
+	if err := node.Encode(rawKnightConfig(kc)); err != nil {
+		return nil, err
+	}
+	if kc.enabledSet && !kc.Enabled && node.Kind == yaml.MappingNode {
+		node.Content = append(node.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "enabled"},
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: "false"},
+		)
+	}
+	return node, nil
 }
 
 // Knight returns the Knight configuration, applying defaults for zero values.
