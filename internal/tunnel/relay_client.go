@@ -300,6 +300,18 @@ func (rc *RelayClient) writePump(conn *websocket.Conn, done func()) {
 			}
 		case <-rc.gracefulStopCh:
 			for {
+				// Drain pendingFront (writes that failed and were queued
+				// for retry) first, mirroring the main loop. Otherwise a
+				// control message such as stop_sharing that previously
+				// failed to write is silently discarded during graceful
+				// shutdown — the relay room is never destroyed and mobile
+				// hangs until the relay TTL reaps it.
+				if msg, ok := rc.popPendingFront(); ok {
+					if !writeMsg(msg) {
+						return
+					}
+					continue
+				}
 				select {
 				case msg, ok := <-rc.sendCh:
 					if !ok {

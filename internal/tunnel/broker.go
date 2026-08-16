@@ -235,6 +235,14 @@ func (b *Broker) senderLoop() {
 			if b.session != nil {
 				if err := b.session.Send(msg); err != nil {
 					debug.Log("tunnel", "broker: send %s event=%s failed: %v", msg.Type, msg.EventID, err)
+					// Do NOT signalSent on failure. Waiters (e.g.
+					// StopSharingGracefully, which waits on this channel to
+					// confirm sharing_stopped was delivered) must not treat a
+					// failed attempt as successful delivery — otherwise the
+					// caller tears the broker down believing the relay got the
+					// event, making replay impossible. Mirrors the P2P path,
+					// which only confirms on success.
+					continue
 				}
 			}
 			b.signalSent(msg.EventID)
@@ -1100,43 +1108,50 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 	if info.Role != "server" {
 		return
 	}
-	plan, events := b.relayRecoveryPlan(info, currentSessionID)
-	if plan.trusted {
-		if info.LastEventID != "" {
-			b.bumpNextEvent(info.LastEventID)
-		}
-		b.markRelayReady()
-		// Always send active_session on server reconnect so the relay
-		// has up-to-date workspace metadata. Even when the relay's
-		// history is trusted, the room may have been restored from
-		// SQLite without workspace fields (e.g. after relay restart).
-		b.sendActiveSession(currentSessionID)
-		return
-	}
-	b.snapshotMu.RLock()
-	provider := b.snapshotProvider
-	b.snapshotMu.RUnlock()
-	if provider == nil {
-		return
-	}
-	snapshot := provider()
-	if snapshot.Status.Status == "" {
-		if status, ok := b.CurrentStatus(); ok {
-			snapshot.Status = status
-		}
-	}
-	if snapshot.Activity.Activity == "" {
-		if activity, ok := b.CurrentActivity(); ok {
-			snapshot.Activity = activity
-		}
-	}
-	if snapshot.SessionInfo == (SessionInfoData{}) && len(snapshot.History) == 0 && len(snapshot.ExtraEvents) == 0 && snapshot.Status.Status == "" && snapshot.Activity.Activity == "" {
-		return
-	}
+	// Server branch: compute the recovery plan and snapshot inside a
+	// goroutine, mirroring the client branch above. handleRelayConnected
+	// runs on the readPump; relayRecoveryPlan invokes the replay provider
+	// (may block on SQLite persistence reads) and the snapshot provider
+	// copies the full history under a lock. Blocking here stalls the
+	// readPump (no reads, no pongs) until the relay's 75s read timeout
+	// kicks the connection, causing a reconnect storm.
 	b.beginProjectionSync()
 	safego.Go("tunnel.broker.relayReplay", func() {
 		defer b.endProjectionSync()
 		if !b.isSessionStateCurrent(currentSessionID, currentGeneration) {
+			return
+		}
+		plan, events := b.relayRecoveryPlan(info, currentSessionID)
+		if plan.trusted {
+			if info.LastEventID != "" {
+				b.bumpNextEvent(info.LastEventID)
+			}
+			b.markRelayReady()
+			// Always send active_session on server reconnect so the relay
+			// has up-to-date workspace metadata. Even when the relay's
+			// history is trusted, the room may have been restored from
+			// SQLite without workspace fields (e.g. after relay restart).
+			b.sendActiveSession(currentSessionID)
+			return
+		}
+		b.snapshotMu.RLock()
+		provider := b.snapshotProvider
+		b.snapshotMu.RUnlock()
+		if provider == nil {
+			return
+		}
+		snapshot := provider()
+		if snapshot.Status.Status == "" {
+			if status, ok := b.CurrentStatus(); ok {
+				snapshot.Status = status
+			}
+		}
+		if snapshot.Activity.Activity == "" {
+			if activity, ok := b.CurrentActivity(); ok {
+				snapshot.Activity = activity
+			}
+		}
+		if snapshot.SessionInfo == (SessionInfoData{}) && len(snapshot.History) == 0 && len(snapshot.ExtraEvents) == 0 && snapshot.Status.Status == "" && snapshot.Activity.Activity == "" {
 			return
 		}
 		debug.Log("tunnel", "broker: relay recovery plan trusted=%t reset=%t suffix_from=%d relay session=%q count=%d local session=%q", plan.trusted, plan.reset, plan.replayFrom, info.SessionID, info.HistoryCount, currentSessionID)
@@ -1940,10 +1955,18 @@ func (b *Broker) enqueueControl(eventType string, data interface{}) {
 		debug.Log("tunnel", "broker: marshal control error for %s: %v", eventType, err)
 		return
 	}
+	// Read session-scoped fields outside the lock, mirroring
+	// enqueueWithBytes. AuthorityEpoch must be stamped on every outbound
+	// message: the relay coerces epoch=0 to 1 in bindRoomSession, which an
+	// established room treats as an authority change and destroys its entire
+	// accumulated history.
+	sid := b.SessionID()
+	epoch := b.AuthorityEpoch()
 	b.enqueueOut(GatewayMessage{
-		SessionID: b.SessionID(),
-		Type:      eventType,
-		Data:      dataBytes,
+		SessionID:      sid,
+		AuthorityEpoch: epoch,
+		Type:           eventType,
+		Data:           dataBytes,
 	})
 }
 
@@ -1952,15 +1975,19 @@ func (b *Broker) enqueueSnapshotEvent(ev SnapshotEvent) {
 		return
 	}
 	data := append(json.RawMessage(nil), ev.Data...)
+	// Read session-scoped fields before acquiring outMu to avoid nested
+	// locking (outMu → sessionMu.RLock), mirroring enqueueWithBytes.
 	sid := b.SessionID()
+	epoch := b.AuthorityEpoch()
 	b.outMu.Lock()
 	eventNum := b.nextEvent.Add(1)
 	msg := GatewayMessage{
-		SessionID: sid,
-		EventID:   fmt.Sprintf("ev-%09d", eventNum),
-		StreamID:  ev.StreamID,
-		Type:      ev.Type,
-		Data:      data,
+		SessionID:      sid,
+		EventID:        fmt.Sprintf("ev-%09d", eventNum),
+		StreamID:       ev.StreamID,
+		AuthorityEpoch: epoch,
+		Type:           ev.Type,
+		Data:           data,
 	}
 	b.outbound = append(b.outbound, msg)
 	b.outMu.Unlock()
