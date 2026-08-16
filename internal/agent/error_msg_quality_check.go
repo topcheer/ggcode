@@ -278,3 +278,64 @@ func checkErrorNewQuality(ce *ast.CallExpr, fset *token.FileSet, pos token.Pos) 
 
 	return nil
 }
+
+// --- Helpers migrated from error_wrap_check.go (#509) ---
+// callExprName, unquoteString, and unescapeQuotedString were moved here when
+// that dead detector was deleted; this file is their only remaining consumer.
+// NOTE: this file is itself unregistered (fc5c4aad census) — if it is ever
+// deleted, these helpers go with it.
+
+// callExprName returns the pkg.Func name of a selector call, or "".
+func callExprName(ce *ast.CallExpr) string {
+	sel, ok := ce.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return ""
+	}
+	pkg, ok := sel.X.(*ast.Ident)
+	if !ok {
+		return ""
+	}
+	return pkg.Name + "." + sel.Sel.Name
+}
+
+// unquoteString removes surrounding quotes from a Go string literal.
+func unquoteString(s string) (string, error) {
+	if len(s) >= 2 {
+		if (s[0] == '"' && s[len(s)-1] == '"') ||
+			(s[0] == '`' && s[len(s)-1] == '`') {
+			inner := s[1 : len(s)-1]
+			// For double-quoted strings, unescape.
+			if s[0] == '"' {
+				return unescapeQuotedString(inner), nil
+			}
+			return inner, nil // raw string
+		}
+	}
+	return s, fmt.Errorf("not a quoted string")
+}
+
+// unescapeQuotedString performs minimal unescaping of Go double-quoted string
+// content. Handles the most common escape sequences.
+func unescapeQuotedString(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+1 < len(s) {
+			i++
+			switch s[i] {
+			case 'n':
+				b.WriteByte('\n')
+			case 't':
+				b.WriteByte('\t')
+			case '"':
+				b.WriteByte('"')
+			case '\\':
+				b.WriteByte('\\')
+			default:
+				b.WriteByte(s[i])
+			}
+		} else {
+			b.WriteByte(s[i])
+		}
+	}
+	return b.String()
+}

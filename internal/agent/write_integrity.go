@@ -179,6 +179,31 @@ func registerAllChecks() {
 		// Revival preconditions: ignored-error → go/types integration;
 		// naked-return → min-lines>=30 + instance-level multiset delta +
 		// closure (FuncLit) coverage.
+		//
+		// #509: same fate for "accessibility" (a11y) and "error-wrap"
+		// (both sa-168 probe-verified). a11y was registered at birth
+		// (dc64b243) then stripped: it discards oldContent entirely (zero
+		// delta — identical rewrites re-report every issue), blindly regex-
+		// scans .js/.ts string literals (an a11y library's own test
+		// fixtures warn), and in JSX the "=>" inside arrow handlers
+		// terminates [^>]* before role/tabIndex/onKeyDown so ALL clickable
+		// divs warn — including correctly fixed ones (coaching agents into
+		// breaking correct accessible code); also advisory class (WCAG
+		// advice is what fc5c4aad removed as context pollution). Revival
+		// preconditions: string-literal stripping, JSX attribute-capture
+		// fix, per-element fingerprint multiset delta, critical-tier
+		// justification. error-wrap: the %v→%w pattern (Pattern 2) is 3/4
+		// FP (API-boundary intentional %v, multi-error aggregation where %w
+		// permits exactly one so the suggested fix has no valid form, and
+		// the `e`-name heuristic flags non-error strings with advice that
+		// would not compile); its delta is a bool-set keyed by format
+		// string / file-wide constants, masking growth and
+		// fix-one-introduce-one (silent FN). Pattern 1+3 (concat +
+		// errors.New(err.Error())) is the zero-FP core — the reserved
+		// partial-revival candidate, requiring #186 multiset delta and a
+		// critical-tier argument that lost chains break errors.Is/As.
+		// callExprName/unquoteString/unescapeQuotedString were migrated to
+		// error_msg_quality_check.go (their only remaining consumer).
 		{Name: "concurrent-map-access", Langs: []Language{LangGo}, Run: stringCheck(checkConcurrentMapAccess)},
 		{Name: "context-leak", Langs: []Language{LangGo}, Run: stringCheck(checkContextLeak)},
 		{Name: "resource-leak", Langs: []Language{LangGo}, Run: sliceCheck(checkResourceLeaks)},
