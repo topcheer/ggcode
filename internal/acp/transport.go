@@ -3,6 +3,7 @@ package acp
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -192,6 +193,36 @@ func (t *Transport) SendRequest(method string, params interface{}, timeout time.
 		return resp.RawResult, nil
 	case <-timer.C:
 		return nil, fmt.Errorf("timeout waiting for client response to %s", method)
+	}
+}
+
+// FailAllPending fails every in-flight Agent→Client request with err.
+// It is called when the Client disconnects (EOF) or the server shuts down so
+// waiters parked in SendRequest (e.g. a permission request waiting up to the
+// 5-minute default timeout) return immediately instead of hanging until the
+// timer expires. Requests failed this way observe resp.Error and surface the
+// error through the existing SendRequest error path.
+func (t *Transport) FailAllPending(err error) {
+	if err == nil {
+		err = errors.New("client connection closed")
+	}
+	failure := &JSONRPCResponse{
+		Error: &JSONRPCError{
+			Code:    ErrCodeInternalError,
+			Message: err.Error(),
+		},
+	}
+
+	t.pendingMu.Lock()
+	defer t.pendingMu.Unlock()
+	for id, ch := range t.pending {
+		// Non-blocking send mirrors DeliverResponse: buffer is 1 and each
+		// SendRequest consumes exactly one response.
+		select {
+		case ch <- failure:
+		default:
+		}
+		delete(t.pending, id)
 	}
 }
 

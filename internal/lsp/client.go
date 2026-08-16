@@ -1253,9 +1253,31 @@ func readRPCMessage(r *bufio.Reader) (rpcEnvelope, error) {
 	return msg, nil
 }
 
+// fileURI converts a filesystem path to a file:// URI.
+// Windows drive paths ("C:/foo/bar.go") must be rooted with a leading slash so
+// the drive letter is not mistaken for the URI host component: the correct
+// encoding is file:///C:/foo/bar.go (three slashes, empty host). Without the
+// root, url.URL.String() emits file://C:/foo/bar.go, which every consumer then
+// parses with "C:" as the host and loses the drive letter entirely.
 func fileURI(path string) string {
-	u := url.URL{Scheme: "file", Path: filepath.ToSlash(path)}
+	slashed := filepath.ToSlash(path)
+	if isWindowsDrivePath(slashed) {
+		slashed = "/" + slashed
+	}
+	u := url.URL{Scheme: "file", Path: slashed}
 	return u.String()
+}
+
+// isWindowsDrivePath reports whether s begins with a drive-letter prefix such
+// as "C:" or "d:". It is purely lexical so it works on every GOOS, which lets
+// POSIX hosts construct and round-trip Windows paths as plain strings.
+func isWindowsDrivePath(s string) bool {
+	return len(s) >= 2 && isDriveLetter(s[0]) && s[1] == ':'
+}
+
+// isDriveLetter reports whether c is an ASCII drive letter.
+func isDriveLetter(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 }
 
 func hasRPCID(id json.RawMessage) bool {
@@ -1415,10 +1437,31 @@ func parseDocumentDiagnostics(raw json.RawMessage) []Diagnostic {
 	return out
 }
 
+// uriToPath converts a file:// URI back to a filesystem path.
+// Two Windows encodings are handled so the drive letter survives the round
+// trip regardless of who produced the URI:
+//
+//	file:///C:/foo/bar.go  (canonical, three slashes, empty host)
+//	file://C:/foo/bar.go   (legacy two-slash form where the drive letter was
+//	                       parsed as the host; produced by older fileURI)
+//
+// Both yield "C:/foo/bar.go". POSIX URIs are returned cleaned, unchanged.
 func uriToPath(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme != "file" {
 		return raw
 	}
-	return filepath.Clean(u.Path)
+	path := u.Path
+	// Legacy two-slash form: reconstruct the drive letter from the host.
+	// url.Parse lowercases the host ("C:" → "c:"), so restore upper case.
+	if u.Host != "" && isWindowsDrivePath(u.Host) {
+		path = "/" + strings.ToUpper(u.Host[:1]) + u.Host[1:] + path
+	}
+	// Rooted Windows drive path: "/C:/foo" → "C:/foo". Forward slashes are
+	// kept (Windows APIs accept them), which also keeps this deterministic
+	// on non-Windows GOOS values.
+	if len(path) >= 3 && path[0] == '/' && isDriveLetter(path[1]) && path[2] == ':' {
+		return strings.ToUpper(path[1:2]) + ":" + path[3:]
+	}
+	return filepath.Clean(path)
 }

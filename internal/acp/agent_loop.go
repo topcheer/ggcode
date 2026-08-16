@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/agent"
@@ -30,7 +31,9 @@ type AgentLoop struct {
 	clientCaps ClientCapabilities
 	agent      *agent.Agent
 	cancel     context.CancelFunc
+	modeMu     sync.Mutex
 	mode       string // permission mode: "supervised", "auto", "bypass", "autopilot"
+	modeLocked bool   // true once the Client explicitly set a mode via session/set_mode
 }
 
 // NewAgentLoop creates a new AgentLoop for the given session.
@@ -98,10 +101,11 @@ func NewAgentLoop(
 	a.SetApprovalHandler(func(ctx context.Context, toolName string, input string) permission.Decision {
 		// In auto mode (default), allow safe operations automatically;
 		// only ask the Client for dangerous tools
-		if al.mode == "bypass" || al.mode == "autopilot" {
+		mode := al.Mode()
+		if mode == "bypass" || mode == "autopilot" {
 			return permission.Allow
 		}
-		if al.mode == "auto" {
+		if mode == "auto" {
 			// Auto mode: let the policy decide. If it says Ask, escalate to Client.
 			decision, _ := policy.Check(toolName, json.RawMessage(input))
 			if decision == permission.Allow {
@@ -128,10 +132,11 @@ func NewAgentLoop(
 
 	// Route diff confirmations through ACP permission request to Client
 	a.SetDiffConfirm(func(ctx context.Context, filePath, diffText string) bool {
-		if al.mode == "bypass" || al.mode == "autopilot" {
+		mode := al.Mode()
+		if mode == "bypass" || mode == "autopilot" {
 			return true
 		}
-		if al.mode == "auto" {
+		if mode == "auto" {
 			// Auto-approve file writes in auto mode
 			return true
 		}
@@ -212,9 +217,36 @@ func (al *AgentLoop) RestoreConversation(messages []Message) {
 	debug.Log("acp", "restored %d messages to agent context", len(messages))
 }
 
-// SetMode updates the permission mode for this agent loop.
+// SetMode updates the permission mode for this agent loop and marks it as
+// explicitly set by the Client. Once set, the mode survives loop recreation
+// between prompts (see Handler.applySessionModes) — it never silently reverts
+// to the default "auto". Guarded by modeMu so concurrent reads from the
+// approval/diff-confirm handlers stay race-free.
 func (al *AgentLoop) SetMode(mode string) {
+	al.modeMu.Lock()
 	al.mode = mode
+	al.modeLocked = true
+	al.modeMu.Unlock()
+	al.applyModePolicy(mode)
+}
+
+// SetModeDefault installs the initial mode without marking it as user-chosen.
+func (al *AgentLoop) SetModeDefault(mode string) {
+	al.modeMu.Lock()
+	al.mode = mode
+	al.modeMu.Unlock()
+	al.applyModePolicy(mode)
+}
+
+// Mode returns the current permission mode.
+func (al *AgentLoop) Mode() string {
+	al.modeMu.Lock()
+	defer al.modeMu.Unlock()
+	return al.mode
+}
+
+// applyModePolicy rebuilds the permission policy for the given mode.
+func (al *AgentLoop) applyModePolicy(mode string) {
 	var permMode permission.PermissionMode
 	switch mode {
 	case "bypass":

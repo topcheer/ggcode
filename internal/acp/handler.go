@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 
@@ -31,20 +32,26 @@ const (
 
 // Handler processes ACP JSON-RPC requests and dispatches to appropriate methods.
 type Handler struct {
-	transport     *Transport
-	sessions      map[string]*Session
-	sessionsMu    sync.RWMutex
-	initialized   bool
-	authenticated bool
-	version       int
-	clientCaps    ClientCapabilities
-	clientInfo    *ImplementationInfo
-	cfg           *config.Config
-	toolRegistry  *tool.Registry
-	prov          provider.Provider
-	sessionsDir   string                // directory for persistent sessions
-	workspaceDirs map[string]string     // sessionID → per-workspace sessionsDir
-	agentLoops    map[string]*AgentLoop // sessionID → active agent loop for mode changes
+	transport   *Transport
+	sessions    map[string]*Session
+	sessionsMu  sync.RWMutex
+	initialized bool
+	// Auth state — guarded by authMu (written by the background device-flow
+	// goroutine, read from handleSessionPrompt/handleAuthenticate).
+	authMu         sync.Mutex
+	authenticated  bool
+	authErr        error  // last async device-flow failure, propagated to the next prompt/authenticate call
+	authMethodUsed string // auth method the Client negotiated via session/authenticate
+	version        int
+	clientCaps     ClientCapabilities
+	clientInfo     *ImplementationInfo
+	cfg            *config.Config
+	toolRegistry   *tool.Registry
+	prov           provider.Provider
+	sessionsDir    string                // directory for persistent sessions
+	workspaceDirs  map[string]string     // sessionID → per-workspace sessionsDir
+	agentLoops     map[string]*AgentLoop // sessionID → active agent loop for mode changes
+	sessionModes   map[string]string     // sessionID → explicitly-set permission mode (survives prompt gaps)
 }
 
 // NewHandler creates a new ACP handler.
@@ -63,7 +70,15 @@ func NewHandler(cfg *config.Config, registry *tool.Registry, transport *Transpor
 		sessionsDir:   sessionsDir,
 		workspaceDirs: make(map[string]string),
 		agentLoops:    make(map[string]*AgentLoop),
+		sessionModes:  make(map[string]string),
 	}
+}
+
+// isAuthMethodRequired reports whether the negotiated auth method requires
+// successful authentication before prompts are allowed. "api-key" (env vars)
+// is validated synchronously in handleAuthenticate; "agent" completes async.
+func isAuthMethodRequired(methodID string) bool {
+	return methodID == "agent" || methodID == "api-key"
 }
 
 // Run starts the main ACP message loop. It reads messages from the transport
@@ -74,6 +89,9 @@ func (h *Handler) Run(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
+			// Fail all in-flight Agent→Client requests so waiters don't hang on
+			// their timeouts while the server is shutting down.
+			h.transport.FailAllPending(ctx.Err())
 			h.cleanupEmptySessions()
 			return ctx.Err()
 		default:
@@ -82,8 +100,11 @@ func (h *Handler) Run(ctx context.Context) error {
 		req, resp, err := h.transport.ReadAnyMessage()
 		if err != nil {
 			// EOF means client disconnected — normal shutdown.
-			// Clean up any sessions that have no conversation history.
+			// Fail all in-flight Agent→Client requests immediately so callers
+			// (e.g. permission requests with 5-minute timeouts) don't hang, then
+			// clean up any sessions that have no conversation history.
 			if errors.Is(err, io.EOF) {
+				h.transport.FailAllPending(fmt.Errorf("client disconnected"))
 				h.cleanupEmptySessions()
 				return nil
 			}
@@ -202,16 +223,30 @@ func (h *Handler) handleAuthenticate(params json.RawMessage) (interface{}, error
 
 	switch authParams.AuthMethodID {
 	case "agent":
-		// GitHub Device Flow — runs in background, sends user_code via notification
+		// GitHub Device Flow — runs in background, sends user_code via notification.
+		// Failures are recorded (under authMu) and propagated to the next
+		// session/prompt or session/authenticate call instead of being silently
+		// dropped in a debug log.
 		authHandler := NewAuthHandler(h.transport, "")
+		h.authMu.Lock()
+		h.authMethodUsed = "agent"
+		h.authErr = nil
+		h.authMu.Unlock()
 		safego.Go("acp.handler.deviceFlow", func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 			defer cancel()
 			if err := authHandler.HandleAgentAuth(ctx); err != nil {
 				debug.Log("acp", "device flow auth error: %v", err)
+				h.authMu.Lock()
+				h.authErr = fmt.Errorf("agent authentication failed: %w", err)
+				h.authenticated = false
+				h.authMu.Unlock()
 				return
 			}
+			h.authMu.Lock()
 			h.authenticated = true
+			h.authErr = nil
+			h.authMu.Unlock()
 		})
 		return AuthenticateResult{}, nil
 	case "api-key":
@@ -226,7 +261,11 @@ func (h *Handler) handleAuthenticate(params json.RawMessage) (interface{}, error
 				break
 			}
 		}
+		h.authMu.Lock()
 		h.authenticated = true
+		h.authErr = nil
+		h.authMethodUsed = "api-key"
+		h.authMu.Unlock()
 		return AuthenticateResult{}, nil
 	default:
 		return nil, fmt.Errorf("unknown auth method: %s", authParams.AuthMethodID)
@@ -278,6 +317,43 @@ func (h *Handler) handleSessionNew(params json.RawMessage) (interface{}, error) 
 }
 
 // handleSessionPrompt handles the "session/prompt" method.
+// checkPromptAuth returns an error when the negotiated auth method has not
+// completed successfully (either still in progress or failed), and nil when
+// prompts may proceed.
+func (h *Handler) checkPromptAuth() error {
+	h.authMu.Lock()
+	authenticated := h.authenticated
+	authErr := h.authErr
+	authMethod := h.authMethodUsed
+	h.authMu.Unlock()
+	if authMethod == "" || !isAuthMethodRequired(authMethod) || authenticated {
+		return nil
+	}
+	if authErr != nil {
+		return fmt.Errorf("authentication required (%s): %w", authMethod, authErr)
+	}
+	return fmt.Errorf("authentication required (%s): authentication is still in progress", authMethod)
+}
+
+// agentLoopForSession returns the existing agent loop for the session or
+// creates and registers a new one (restoring any prior conversation), so
+// loops are reused across prompts. Callers must then ApplyMode to re-apply
+// any explicitly-set permission mode.
+func (h *Handler) agentLoopForSession(session *Session) *AgentLoop {
+	h.sessionsMu.Lock()
+	defer h.sessionsMu.Unlock()
+	if loop, ok := h.agentLoops[session.ID]; ok {
+		return loop
+	}
+	loop := NewAgentLoop(h.cfg, h.toolRegistry, h.transport, session, h.clientCaps, h.prov)
+	// If session has existing messages, restore them into the agent context.
+	if msgs := session.Messages(); len(msgs) > 0 {
+		loop.RestoreConversation(msgs)
+	}
+	h.agentLoops[session.ID] = loop
+	return loop
+}
+
 func (h *Handler) handleSessionPrompt(params json.RawMessage) (interface{}, error) {
 	if !h.initialized {
 		return nil, fmt.Errorf("not initialized")
@@ -295,18 +371,22 @@ func (h *Handler) handleSessionPrompt(params json.RawMessage) (interface{}, erro
 		return nil, fmt.Errorf("session not found: %s", promptParams.SessionID)
 	}
 
-	// Get or create agent loop for this session (reuse across prompts)
-	h.sessionsMu.Lock()
-	loop, exists := h.agentLoops[session.ID]
-	if !exists {
-		loop = NewAgentLoop(h.cfg, h.toolRegistry, h.transport, session, h.clientCaps, h.prov)
-		// If session has existing messages, restore them into the agent context
-		if msgs := session.Messages(); len(msgs) > 0 {
-			loop.RestoreConversation(msgs)
-		}
-		h.agentLoops[session.ID] = loop
+	// Enforce the negotiated auth method: if the Client authenticated via
+	// session/authenticate and that flow has not completed (or has failed),
+	// prompts are rejected so the negotiated method is actually honored.
+	if err := h.checkPromptAuth(); err != nil {
+		return nil, err
 	}
-	h.sessionsMu.Unlock()
+
+	loop := h.agentLoopForSession(session)
+	// Re-apply any explicitly-set permission mode so it survives loop
+	// recreation between prompts (prevents silent revert to "auto").
+	h.sessionsMu.RLock()
+	mode, hasMode := h.sessionModes[session.ID]
+	h.sessionsMu.RUnlock()
+	if hasMode {
+		loop.SetMode(mode)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	session.SetCancel(cancel)
@@ -314,7 +394,9 @@ func (h *Handler) handleSessionPrompt(params json.RawMessage) (interface{}, erro
 	safego.Go("acp.handler.agentLoop", func() {
 		defer cancel()
 		defer func() {
-			// Clean up agent loop reference when done
+			// Clean up agent loop reference when done. The session's explicitly-set
+			// mode (h.sessionModes) intentionally survives so the next prompt
+			// re-applies it instead of silently reverting to "auto".
 			h.sessionsMu.Lock()
 			delete(h.agentLoops, promptParams.SessionID)
 			h.sessionsMu.Unlock()
@@ -437,15 +519,20 @@ func (h *Handler) handleSessionSetMode(params json.RawMessage) (interface{}, err
 		return nil, fmt.Errorf("invalid session/set_mode params: %w", err)
 	}
 
-	h.sessionsMu.RLock()
+	h.sessionsMu.Lock()
 	session, ok := h.sessions[modeParams.SessionID]
 	loop := h.agentLoops[modeParams.SessionID]
-	h.sessionsMu.RUnlock()
+	if ok {
+		// Persist the mode for this session so it survives loop recreation
+		// between prompts and is re-applied by handleSessionPrompt.
+		h.sessionModes[modeParams.SessionID] = modeParams.Mode
+	}
+	h.sessionsMu.Unlock()
 	if !ok {
 		return nil, fmt.Errorf("session not found: %s", modeParams.SessionID)
 	}
 
-	// Update the active agent loop's permission mode
+	// Update the active agent loop's permission mode (if one is running)
 	if loop != nil {
 		loop.SetMode(modeParams.Mode)
 	}
@@ -572,15 +659,14 @@ func (h *Handler) handleSessionClose(params json.RawMessage) (interface{}, error
 		return nil, fmt.Errorf("session %s not found", req.SessionID)
 	}
 
-	// Cancel any ongoing work
-	if session.Cancel != nil {
-		session.Cancel()
-	}
+	// Cancel any ongoing work (DoCancel takes the session lock)
+	session.DoCancel()
 
-	// Remove from active sessions
+	// Remove from active sessions and forget the session's explicit mode
 	h.sessionsMu.Lock()
 	delete(h.sessions, req.SessionID)
 	delete(h.agentLoops, req.SessionID)
+	delete(h.sessionModes, req.SessionID)
 	h.sessionsMu.Unlock()
 
 	debug.Log("acp", "session %s closed", req.SessionID)
@@ -594,49 +680,85 @@ func (h *Handler) handleSessionList(params json.RawMessage) (interface{}, error)
 		return nil, fmt.Errorf("parsing session/list params: %w", err)
 	}
 
+	// The actual on-disk layout (see Session.Save) is:
+	//
+	//	<sessionsDir>/<workspace-hash>/<sessionID>.json
+	//
+	// Sessions are stored as flat per-ID files inside each workspace-hash
+	// subdirectory — there is no "session.json" metadata file. Listing walks
+	// every workspace subdirectory and reads each <id>.json directly.
 	var sessions []SessionInfo
-	searchDir := h.sessionsDir
-	if req.CWD != "" {
-		searchDir = workspaceSessionsDir(h.sessionsDir, req.CWD)
+	for _, dir := range h.sessionSearchDirs(req.CWD) {
+		sessions = append(sessions, readSessionInfos(dir)...)
 	}
 
-	entries, err := os.ReadDir(searchDir)
-	if err != nil {
-		// No sessions yet is not an error
-		return ListSessionsResponse{Sessions: []SessionInfo{}}, nil
-	}
-
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		// Try to load session metadata
-		metaPath := filepath.Join(searchDir, entry.Name(), "session.json")
-		data, err := os.ReadFile(metaPath)
-		if err != nil {
-			continue
-		}
-		var sd struct {
-			ID        string `json:"id"`
-			CWD       string `json:"cwd"`
-			CreatedAt string `json:"created_at"`
-			UpdatedAt string `json:"updated_at"`
-		}
-		if err := json.Unmarshal(data, &sd); err != nil {
-			continue
-		}
-		sessions = append(sessions, SessionInfo{
-			SessionID: sd.ID,
-			CWD:       sd.CWD,
-			CreatedAt: sd.CreatedAt,
-			UpdatedAt: sd.UpdatedAt,
-		})
-	}
-
+	// Sort most-recently-updated first so clients show the latest session on top.
+	sort.Slice(sessions, func(i, j int) bool {
+		return sessions[i].UpdatedAt > sessions[j].UpdatedAt
+	})
 	if sessions == nil {
 		sessions = []SessionInfo{}
 	}
 	return ListSessionsResponse{Sessions: sessions}, nil
+}
+
+// sessionSearchDirs returns the workspace-hash directories to scan for the
+// given CWD. A non-empty cwd scopes the listing to that workspace's hash
+// directory; an empty cwd scans every workspace subdirectory.
+func (h *Handler) sessionSearchDirs(cwd string) []string {
+	if cwd != "" {
+		return []string{workspaceSessionsDir(h.sessionsDir, cwd)}
+	}
+	entries, err := os.ReadDir(h.sessionsDir)
+	if err != nil {
+		return nil
+	}
+	var dirs []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			dirs = append(dirs, filepath.Join(h.sessionsDir, entry.Name()))
+		}
+	}
+	return dirs
+}
+
+// sessionFileMeta is the minimal on-disk shape needed by session/list.
+type sessionFileMeta struct {
+	ID        string    `json:"id"`
+	CWD       string    `json:"cwd"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+// readSessionInfos loads every <id>.json session file in dir. Unreadable,
+// malformed, or anonymous entries are skipped — listing must never fail
+// because one file is corrupt.
+func readSessionInfos(dir string) []SessionInfo {
+	files, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var infos []SessionInfo
+	for _, f := range files {
+		if f.IsDir() || filepath.Ext(f.Name()) != ".json" {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(dir, f.Name()))
+		if err != nil {
+			continue
+		}
+		var sd sessionFileMeta
+		if err := json.Unmarshal(data, &sd); err != nil || sd.ID == "" {
+			continue
+		}
+		infos = append(infos, SessionInfo{
+			SessionID: sd.ID,
+			CWD:       sd.CWD,
+			CreatedAt: sd.CreatedAt.Format(time.RFC3339),
+			UpdatedAt: sd.UpdatedAt.Format(time.RFC3339),
+		})
+	}
+	return infos
 }
 
 // handleSessionResume resumes an existing session.
