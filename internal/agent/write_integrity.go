@@ -204,6 +204,31 @@ func registerAllChecks() {
 		// critical-tier argument that lost chains break errors.Is/As.
 		// callExprName/unquoteString/unescapeQuotedString were migrated to
 		// error_msg_quality_check.go (their only remaining consumer).
+		// #510: same fate for "error-msg-quality", "ctxkey", and
+		// "error-sentinel" (all registered at birth, stripped by fc5c4aad,
+		// 7th instance of the dead-code class; sa-169 probe-verified).
+		// error-msg-quality: its delta key embeds fset.Position (line:col)
+		// — any insert above a pre-existing generic message mismatches the
+		// key and re-reports it (the #507 error_swallow defect class,
+		// violating the #186 fingerprint convention); revival requires a
+		// content fingerprint keyed by message kind+quoted text. ctxkey:
+		// line-number delta, broken in BOTH directions — a shift re-reports
+		// AND a brand-new violation landing on an old line number is
+		// silently suppressed (FN: the promised write-time guard goes
+		// silent in the most common manual-rewrite shape); revival requires
+		// a key-literal+kind fingerprint. error-sentinel: the single-letter
+		// "e" heuristic plus bare "Canceled" sentinel name fire on
+		// non-error entities (for _, e := range events { if e == Canceled })
+		// with errors.Is advice that does not compile (#506 float-equality
+		// class), and it has no _test.go exemption — test files are where
+		// legal sentinel comparisons concentrate. Its content-fingerprint
+		// delta WAS correct (sentinel-cmp:X op Y) — strongest
+		// partial-revival candidate; preconditions: drop the single-letter
+		// "e" heuristic (or go/types, the same wall as #508 ignored-error),
+		// _test.go exemption, fresh zero-FP probe round.
+		// callExprName/unquoteString/unescapeQuotedString (#509 migration)
+		// went down with their sole consumer, as their fate-binding note
+		// predicted; exprText survives in suspicious_comparison_check.go.
 		{Name: "concurrent-map-access", Langs: []Language{LangGo}, Run: stringCheck(checkConcurrentMapAccess)},
 		{Name: "context-leak", Langs: []Language{LangGo}, Run: stringCheck(checkContextLeak)},
 		{Name: "resource-leak", Langs: []Language{LangGo}, Run: sliceCheck(checkResourceLeaks)},

@@ -4,34 +4,8 @@ import "testing"
 
 // Regression tests for #185 (content fingerprint delta) and
 // #186 (multiset delta): line shifts and fix-one-add-one must be handled.
-
-func TestErrorSentinel_LineShiftDoesNotRereport(t *testing.T) {
-	oldSrc := `package main
-import "io"
-func read() error {
-	err := reader.Read()
-	if err == io.EOF {
-		return nil
-	}
-	return err
-}`
-	// One line inserted ABOVE the pre-existing comparison shifts its line
-	// number — the delta must still recognize it as pre-existing.
-	newSrc := `package main
-import "io"
-// new comment line
-func read() error {
-	err := reader.Read()
-	if err == io.EOF {
-		return nil
-	}
-	return err
-}`
-	w := checkErrorSentinelCmp("sentinel.go", oldSrc, newSrc)
-	if len(w) != 0 {
-		t.Fatalf("expected no warnings for line-shifted pre-existing sentinel comparison, got %v", w)
-	}
-}
+// (The error-sentinel line-shift test was removed with its host detector in
+// #510; the two empty-error-body tests below are the live regression pair.)
 
 func TestEmptyError_FixOneAddOneIsDetected(t *testing.T) {
 	oldSrc := `package main
