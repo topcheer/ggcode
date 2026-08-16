@@ -202,7 +202,6 @@ type Agent struct {
 	destructiveGuard           *gitDestructiveState                  // destructive git operation detection (reset --hard, force push, etc.)
 	shellNativeHint            *shellNativeHintState                 // suggests native tools when agent uses shell for equivalent operations
 	monorepoScoper             *monorepoScoperState                  // monorepo package scope sprawl detection
-	mcpRuntime                 tool.MCPRuntime                       // MCP runtime for server snapshots (optional)
 	bgOrphan                   *bgOrphanState                        // orphaned background command detection (unchecked start_command jobs)
 	actionAnnihil              *actionAnnihilateState                // action annihilation detection (tool calls that cancel prior side effects)
 	exploreFrag                *exploreFragState                     // exploration fragmentation detection (scattered foraging without convergence)
@@ -912,15 +911,6 @@ func (a *Agent) SetCheckpointManager(m *checkpoint.Manager) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.checkpoints = m
-}
-
-// SetMCPRuntime wires the MCP runtime for ecosystem intelligence.
-// This enables the agent to detect MCP server health issues, tool name
-// conflicts, and capability gaps at session start.
-func (a *Agent) SetMCPRuntime(rt tool.MCPRuntime) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.mcpRuntime = rt
 }
 
 // CheckpointManager returns the checkpoint manager.
