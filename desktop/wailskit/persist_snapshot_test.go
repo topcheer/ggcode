@@ -78,6 +78,40 @@ func TestRunGeneration_AdvancesOnClear(t *testing.T) {
 	}
 }
 
+// #504: a superseded run's late stream events must not reach emit() after
+// the generation moved (ClearCurrentSession / newer run). emitIfCurrent is
+// the wired form of the guard #489's commit message claimed — emitGeneration
+// was declared but never compared, leaving the emit path unguarded.
+func TestEmitIfCurrent_DropsStaleRunEvents(t *testing.T) {
+	b := &ChatBridge{}
+	b.mu.Lock()
+	b.runSes = &session.Session{ID: "g1"}
+	b.mu.Unlock()
+	b.setRunPersistSnapshot()
+	runGen := b.currentRunGeneration()
+
+	delivered := false
+	b.OnStreamEvent = func(eventType string, data json.RawMessage) {
+		delivered = true
+	}
+
+	// Supersede the run BEFORE its late event drains — this is the one-click
+	// New Session shape: Cancel + ClearCurrentSession while the agent
+	// goroutine still emits tail events.
+	b.ClearCurrentSession()
+
+	b.emitIfCurrent(runGen, provider.StreamEvent{Type: provider.StreamEventText, Text: "ghost"})
+	if delivered {
+		t.Fatal("stale-run event leaked into the new session's stream")
+	}
+
+	// A current-generation event still flows through to the frontend.
+	b.emitIfCurrent(b.currentRunGeneration(), provider.StreamEvent{Type: provider.StreamEventText, Text: "live"})
+	if !delivered {
+		t.Fatal("current-run event was dropped by the stale guard")
+	}
+}
+
 // appendPersistMessage against the captured session writes to THAT
 // session's JSONL (sanity: snapshot path preserves #270 semantics).
 func TestAppendPersistMessage_TargetsCapturedSession(t *testing.T) {

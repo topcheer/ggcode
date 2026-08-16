@@ -167,15 +167,13 @@ type ChatBridge struct {
 	// runGeneration increments on every session switch/clear and run
 	// start/end (#489): late events from a superseded run compare their
 	// captured generation and self-drop instead of leaking into the new
-	// session (persist tail, stream emit).
+	// session — persist tails via the persist snapshot below, stream
+	// events via the per-callback emitIfCurrent guard (#504).
 	runGeneration uint64
 	// persistSession/persistGeneration are the closure-effective persist
 	// target captured at run start (#489); see setRunPersistSnapshot.
 	persistSession    *session.Session
 	persistGeneration uint64
-	// emitGeneration is the generation of the run whose events emit() is
-	// currently forwarding; 0 = none yet (#489).
-	emitGeneration uint64
 }
 
 // NewChatBridge creates a new chat bridge using the global config.
@@ -552,11 +550,15 @@ func (b *ChatBridge) sendMessageData(data tunnel.MessageData, source string, exc
 		b.lanchatHub.SetAgentBusy(true)
 	}
 
+	// #504: capture this run's generation so late events draining after a
+	// session clear / newer run self-drop in the callback instead of
+	// leaking into the new session's live history and frontend stream.
+	runGen := b.currentRunGeneration()
 	err := b.agent.RunStream(ctx, userMsg, func(ev provider.StreamEvent) {
 		if b.OnStreamEvent == nil {
 			return
 		}
-		b.emit(ev)
+		b.emitIfCurrent(runGen, ev)
 	})
 	if err != nil && !errors.Is(err, context.Canceled) {
 		// #489: a cancelled run draining its tail must not inject a
@@ -677,6 +679,30 @@ func (b *ChatBridge) clearRunPersistSnapshot() {
 	b.runGeneration++
 	b.persistSession = nil
 	b.mu.Unlock()
+}
+
+// currentRunGeneration returns the run generation under the lock.
+func (b *ChatBridge) currentRunGeneration() uint64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.runGeneration
+}
+
+// emitIfCurrent forwards ev to emit() only when the calling run's captured
+// generation is still current (#504): a superseded run (session cleared via
+// ClearCurrentSession, or a newer run started) drops its late stream events
+// instead of leaking them into the new session's live history and frontend
+// stream. This is the wired form of the guard #489's message claimed —
+// emitGeneration was declared but never compared, leaving emit() unguarded.
+func (b *ChatBridge) emitIfCurrent(gen uint64, ev provider.StreamEvent) {
+	b.mu.Lock()
+	stale := gen != b.runGeneration
+	b.mu.Unlock()
+	if stale {
+		debug.Log("wailskit", "drop stale-run stream event (type=%d)", ev.Type)
+		return
+	}
+	b.emit(ev)
 }
 
 func (b *ChatBridge) ClearCurrentSession() {
@@ -3243,8 +3269,9 @@ func (b *ChatBridge) SendHiddenText(text string) error {
 		}
 	}
 
+	runGen := b.currentRunGeneration() // #504: see emitIfCurrent
 	err := b.agent.RunStream(ctx, text, func(ev provider.StreamEvent) {
-		b.emit(ev)
+		b.emitIfCurrent(runGen, ev)
 	})
 	b.finishRun(err)
 	return err
@@ -4039,6 +4066,7 @@ func (b *ChatBridge) SendContent(content []provider.ContentBlock) error {
 	b.mu.Unlock()
 	// #489: bind THIS run's persist target (snapshot + generation).
 	b.setRunPersistSnapshot()
+	runGen := b.currentRunGeneration() // #504: see emitIfCurrent
 
 	if b.currentSes != nil {
 		msg := provider.Message{Role: "user", Content: content}
@@ -4049,7 +4077,7 @@ func (b *ChatBridge) SendContent(content []provider.ContentBlock) error {
 	}
 
 	err := b.agent.RunStreamWithContent(ctx, content, func(ev provider.StreamEvent) {
-		b.emit(ev)
+		b.emitIfCurrent(runGen, ev)
 	})
 	b.finishRun(err)
 	return err
