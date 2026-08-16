@@ -25,6 +25,7 @@ package agent
 // It is intentionally small and manually curated for accuracy.
 
 import (
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -261,6 +262,35 @@ func parseGoMod(content string) map[string]string {
 // --- npm: package.json parser ---
 func parsePackageJSON(content string) map[string]string {
 	deps := make(map[string]string)
+	var pkgJSON struct {
+		Dependencies    map[string]string `json:"dependencies"`
+		DevDependencies map[string]string `json:"devDependencies"`
+	}
+
+	// Parse as JSON first (handles both single-line minified and multi-line formatted)
+	if err := json.Unmarshal([]byte(content), &pkgJSON); err == nil {
+		// Extract from dependencies
+		for name, version := range pkgJSON.Dependencies {
+			if !strings.HasPrefix(name, "//") {
+				version = strings.TrimLeft(version, "^~>=< ")
+				if version != "" {
+					deps[strings.ToLower(name)] = version
+				}
+			}
+		}
+		// Extract from devDependencies
+		for name, version := range pkgJSON.DevDependencies {
+			if !strings.HasPrefix(name, "//") {
+				version = strings.TrimLeft(version, "^~>=< ")
+				if version != "" {
+					deps[strings.ToLower(name)] = version
+				}
+			}
+		}
+		return deps
+	}
+
+	// Fallback to line-by-line regex for malformed JSON (preserves backward compatibility)
 	re := regexp.MustCompile(`"([^"]+)"\s*:\s*"([^"]+)"`)
 	lines := strings.Split(content, "\n")
 	inDeps := false

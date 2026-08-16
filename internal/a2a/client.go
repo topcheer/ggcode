@@ -623,6 +623,12 @@ func (c *Client) rpc(ctx context.Context, method string, params interface{}, res
 // unclosed.
 func decodeSSECtx(ctx context.Context, r io.Reader, ch chan<- JSONRPCResponse) {
 	scanner := bufio.NewScanner(r)
+	// #565 F: default 64KB token limit silently aborted mid-event on large
+	// artifacts — scanner.Scan() returned false, scanner.Err() was never
+	// checked, and the terminal status event after the oversized one was
+	// lost with zero errors. 8MB covers artifact payloads well above the
+	// server's 4MB request cap and SSE line-splitting worst case.
+	scanner.Buffer(make([]byte, 64*1024), 8<<20)
 	var dataBuf strings.Builder
 
 	for scanner.Scan() {
@@ -662,6 +668,35 @@ func decodeSSECtx(ctx context.Context, r io.Reader, ch chan<- JSONRPCResponse) {
 		// Other SSE fields (event:, id:, retry:) are silently ignored.
 	}
 
+	// #565 F: scanner errors were swallowed — a token-too-long abort looked
+	// like a normal EOF. Surface it as a JSON-RPC internal-error response so
+	// the consumer sees the stream failed instead of waiting forever.
+	if err := scanner.Err(); err != nil {
+		if dataBuf.Len() > 0 {
+			// Best-effort flush of a complete event before the failure point.
+			data := strings.TrimRight(dataBuf.String(), "\n")
+			var resp JSONRPCResponse
+			if json.Unmarshal([]byte(data), &resp) == nil {
+				select {
+				case ch <- resp:
+				case <-ctx.Done():
+				}
+			}
+		}
+		select {
+		case ch <- JSONRPCResponse{
+			JSONRPC: "2.0",
+			ID:      json.RawMessage(`1`),
+			Error: &JSONRPCError{
+				Code:    -32603,
+				Message: fmt.Sprintf("SSE stream read failed: %v", err),
+			},
+		}:
+		case <-ctx.Done():
+		}
+		return
+	}
+
 	// Flush any remaining data at EOF.
 	if dataBuf.Len() > 0 {
 		data := strings.TrimRight(dataBuf.String(), "\n")
@@ -680,6 +715,8 @@ func decodeSSECtx(ctx context.Context, r io.Reader, ch chan<- JSONRPCResponse) {
 // joined with "\n" before parsing.
 func decodeSSE(r io.Reader, ch chan<- JSONRPCResponse) {
 	scanner := bufio.NewScanner(r)
+	// #565 F: same 64KB silent-truncation + swallowed-error fix as decodeSSECtx.
+	scanner.Buffer(make([]byte, 64*1024), 8<<20)
 	var dataBuf strings.Builder
 
 	for scanner.Scan() {
@@ -713,6 +750,26 @@ func decodeSSE(r io.Reader, ch chan<- JSONRPCResponse) {
 			dataBuf.WriteByte('\n')
 		}
 		// Other SSE fields (event:, id:, retry:) are silently ignored.
+	}
+
+	// #5565 F: propagate scanner errors instead of treating them as EOF.
+	if err := scanner.Err(); err != nil {
+		if dataBuf.Len() > 0 {
+			data := strings.TrimRight(dataBuf.String(), "\n")
+			var resp JSONRPCResponse
+			if json.Unmarshal([]byte(data), &resp) == nil {
+				ch <- resp
+			}
+		}
+		ch <- JSONRPCResponse{
+			JSONRPC: "2.0",
+			ID:      json.RawMessage(`1`),
+			Error: &JSONRPCError{
+				Code:    -32603,
+				Message: fmt.Sprintf("SSE stream read failed: %v", err),
+			},
+		}
+		return
 	}
 
 	// Flush any remaining data at EOF.

@@ -57,6 +57,12 @@ type TaskHandler struct {
 	maxTasks  int
 	timeout   time.Duration
 
+	// messageIndex maps message.MessageID → task ID for idempotent retries
+	// (#565 G): a client that times out and re-sends the same payload
+	// previously spawned a second, independent task — for side-effecting
+	// skills (code-edit / full-task) that double-executed the work.
+	messageIndex map[string]string
+
 	// Event callbacks for observability (TUI, daemon follow, IM).
 	onTaskEvent func(event TaskEventMessage)
 
@@ -120,14 +126,15 @@ func (h *TaskHandler) Timeout() time.Duration {
 // NewTaskHandler creates a handler bound to a specific workspace.
 func NewTaskHandler(workspace string, a *agent.Agent, reg *tool.Registry, opts ...HandlerOption) *TaskHandler {
 	h := &TaskHandler{
-		workspace: workspace,
-		agent:     a,
-		registry:  reg,
-		tasks:     make(map[string]*Task),
-		cancels:   make(map[string]cancelEntry),
-		meta:      detectWorkspaceMeta(workspace),
-		maxTasks:  5,
-		timeout:   5 * time.Minute,
+		workspace:    workspace,
+		agent:        a,
+		registry:     reg,
+		tasks:        make(map[string]*Task),
+		cancels:      make(map[string]cancelEntry),
+		messageIndex: make(map[string]string),
+		meta:         detectWorkspaceMeta(workspace),
+		maxTasks:     5,
+		timeout:      5 * time.Minute,
 	}
 	for _, opt := range opts {
 		opt(h)
@@ -152,6 +159,22 @@ func (h *TaskHandler) Handle(ctx context.Context, skill string, input Message, e
 	// Continue existing task (multi-turn / input-required flow).
 	if existingTaskID != "" {
 		return h.continueTask(ctx, existingTaskID, input)
+	}
+
+	// Idempotent retry (#565 G): same messageId re-sent (timeout + client
+	// retry) returns the ORIGINAL task instead of spawning a duplicate that
+	// would double-execute side effects for code-edit / full-task skills.
+	if input.MessageID != "" {
+		h.mu.Lock()
+		if tid, ok := h.messageIndex[input.MessageID]; ok {
+			if t, exists := h.tasks[tid]; exists {
+				snap := t.Snapshot()
+				h.mu.Unlock()
+				return &snap, nil
+			}
+			delete(h.messageIndex, input.MessageID)
+		}
+		h.mu.Unlock()
 	}
 
 	if skill == "" {
@@ -195,6 +218,9 @@ func (h *TaskHandler) Handle(ctx context.Context, skill string, input Message, e
 		done:      make(chan struct{}),
 	}
 	h.tasks[task.ID] = task
+	if input.MessageID != "" {
+		h.messageIndex[input.MessageID] = task.ID
+	}
 	h.mu.Unlock()
 
 	// Create cancellable context for this task.
@@ -410,7 +436,18 @@ func (h *TaskHandler) executeAgent(ctx context.Context, perm *SkillPermission, s
 	// Iteration limit is controlled by the task timeout, not max iterations.
 	// Only enforce MaxIterations if it's explicitly set (> 0).
 	maxIter := perm.MaxIterations
-	a := agent.NewAgent(h.agent.Provider(), h.agent.ToolRegistry(), h.agent.SystemPrompt(), maxIter)
+
+	// #565 A: enforce the skill allowlist on the AGENT path too. The
+	// whitelist was previously only checked in executeDirectTool, while the
+	// production wiring (root.go) ALWAYS has an agent — so every real
+	// request ran this loop with the FULL registry and a read-only skill
+	// (file-search) could invoke write_file / run_command. nil/empty
+	// AllowedTools = unrestricted (full-task).
+	reg := h.agent.ToolRegistry()
+	if len(perm.AllowedTools) > 0 {
+		reg = restrictRegistry(reg, perm.AllowedTools)
+	}
+	a := agent.NewAgent(h.agent.Provider(), reg, h.agent.SystemPrompt(), maxIter)
 
 	prompt := buildAgentPrompt(skill, text)
 
@@ -752,6 +789,26 @@ func isToolAllowed(toolName string, allowed []string) bool {
 	return false
 }
 
+// restrictRegistry builds a registry exposing only the tools named in
+// allowed (fix #565 A). Tool instances are shared with src — the same
+// ownership model as the previous direct pass-through; the agent package
+// never CloseAlls a registry it did not create — but only the allowlisted
+// subset is reachable by the agent loop. Unknown names are skipped.
+func restrictRegistry(src *tool.Registry, allowed []string) *tool.Registry {
+	restricted := tool.NewRegistry()
+	if src == nil {
+		return restricted
+	}
+	for _, name := range allowed {
+		t, ok := src.Get(name)
+		if !ok {
+			continue // tool not registered on this instance — nothing to expose
+		}
+		_ = restricted.Register(t)
+	}
+	return restricted
+}
+
 func extractText(msg Message) string {
 	var parts []string
 	for _, p := range msg.Parts {
@@ -855,6 +912,14 @@ func (h *TaskHandler) cleanupExpiredTasksLocked() {
 		if t.Status.State == TaskStateInputRequired && now.Sub(t.UpdatedAt) > maxInputRequiredAge {
 			delete(h.tasks, id)
 			delete(h.cancels, id)
+		}
+	}
+
+	// Reap messageId idempotency entries whose task is gone (#565 G) so the
+	// index cannot outlive its tasks or grow unboundedly.
+	for mid, tid := range h.messageIndex {
+		if _, ok := h.tasks[tid]; !ok {
+			delete(h.messageIndex, mid)
 		}
 	}
 }

@@ -166,11 +166,10 @@ func extractTaintFingerprints(content string) []string {
 		if idx < 0 {
 			continue
 		}
-		// Extract a window centered on the pattern match.
-		start := idx - 15
-		if start < 0 {
-			start = 0
-		}
+		// Extract a window starting at the pattern match point (no prefix noise).
+		// This ensures direct propagation detection works when agents pass the
+		// injection sentence verbatim to tool args without the original context.
+		start := idx
 		end := idx + len(pattern) + 35
 		if end > len(content) {
 			end = len(content)

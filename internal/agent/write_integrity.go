@@ -316,6 +316,7 @@ func registerAllChecks() {
 		// --- Security: supply chain (#330) ---
 		{Name: "dep-major-bump", Run: stringCheck(checkBreakingChangeDepAsString)}, // all langs: self-filters by manifest filename
 		{Name: "dependency-vuln", Run: stringCheck(checkDependencyVulnsAsString)},  // all langs: self-filters by manifest filename
+		{Name: "typosquat", Run: stringCheck(checkTyposquattingAsString)},          // all langs: self-filters by manifest filename (#567)
 
 		// --- Go correctness: API misuse / logic smells (#328/#330) ---
 		{Name: "deprecated-api", Langs: []Language{LangGo}, Run: stringCheck(checkDeprecatedAPI)},

@@ -24,6 +24,7 @@ import (
 type Server struct {
 	handler        *TaskHandler
 	card           AgentCard
+	cardMu         sync.RWMutex    // guards card (read in HTTP handlers, written by setters) #565 C
 	extendedCard   json.RawMessage // optional extended agent card
 	apiKeys        []string
 	server         *http.Server
@@ -146,7 +147,10 @@ func (s *Server) Start() error {
 	if host == "0.0.0.0" || host == "::" {
 		host = PreferredIP()
 	}
+	s.cardMu.Lock()
 	s.card.URL = fmt.Sprintf("%s://%s:%s", scheme, host, port)
+	cardURL := s.card.URL
+	s.cardMu.Unlock()
 
 	safego.Go("a2a.server.serve", func() {
 		if err := s.server.Serve(ln); err != nil && err != http.ErrServerClosed {
@@ -156,7 +160,7 @@ func (s *Server) Start() error {
 	})
 
 	debug.Log("a2a", "server listening on %s (card: %s/.well-known/agent.json)",
-		ln.Addr().String(), s.card.URL)
+		ln.Addr().String(), cardURL)
 	return nil
 }
 
@@ -175,10 +179,18 @@ func (s *Server) APIKey() string {
 }
 
 // Endpoint returns the base URL of the server.
-func (s *Server) Endpoint() string { return s.card.URL }
+func (s *Server) Endpoint() string {
+	s.cardMu.RLock()
+	defer s.cardMu.RUnlock()
+	return s.card.URL
+}
 
 // AgentCard returns a copy of the current agent card.
-func (s *Server) AgentCard() AgentCard { return s.card }
+func (s *Server) AgentCard() AgentCard {
+	s.cardMu.RLock()
+	defer s.cardMu.RUnlock()
+	return s.card
+}
 
 // Stop gracefully shuts down the server.
 func (s *Server) Stop() {
@@ -209,7 +221,11 @@ func (s *Server) handleAgentCard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(s.card)
+	// #565 C: copy under read lock — setters can run concurrently (hot config).
+	s.cardMu.RLock()
+	cardCopy := s.card
+	s.cardMu.RUnlock()
+	json.NewEncoder(w).Encode(cardCopy)
 }
 
 func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request) {
@@ -385,6 +401,9 @@ func (s *Server) handleMessageSend(w http.ResponseWriter, r *http.Request, req *
 		})
 	case <-r.Context().Done():
 		// Client disconnected — let the task continue in background.
+		// #565 G: previously an empty, silent branch; log so retry storms
+		// and half-closed connections are observable in debug logs.
+		debug.Log("a2a", "message/send: client disconnected for task %s; task continues in background", task.ID)
 	}
 }
 
@@ -446,8 +465,18 @@ func (s *Server) handleMessageStream(w http.ResponseWriter, r *http.Request, req
 	}
 	done := s.handler.GetTaskDone(task.ID)
 	if done == nil {
-		// Already terminal.
+		// Already terminal. #565 D: the task finished before this handler
+		// reached the subscription point (Handle runs synchronously), so the
+		// <-done path below never runs — emit artifacts here too or a
+		// fast-completing task would stream a bare terminal status.
 		t, _ := s.handler.GetTask(task.ID)
+		for _, art := range t.Artifacts {
+			s.sendSSE(w, flusher, req.ID, TaskArtifactUpdateEvent{
+				TaskID:    t.ID,
+				Artifact:  art,
+				LastChunk: true,
+			})
+		}
 		s.sendSSE(w, flusher, req.ID, TaskStatusUpdateEvent{TaskID: t.ID, Status: t.Status, Final: t.Status.State.IsTerminal()})
 		return
 	}
@@ -458,11 +487,24 @@ func (s *Server) handleMessageStream(w http.ResponseWriter, r *http.Request, req
 	select {
 	case <-done:
 		t, _ := s.handler.GetTask(task.ID)
+		// #565 D: emit artifact events before the terminal status so the
+		// streamed result matches the card's declared streaming capability.
+		for _, art := range t.Artifacts {
+			s.sendSSE(w, flusher, req.ID, TaskArtifactUpdateEvent{
+				TaskID:    t.ID,
+				Artifact:  art,
+				LastChunk: true,
+			})
+		}
 		s.sendSSE(w, flusher, req.ID, TaskStatusUpdateEvent{TaskID: t.ID, Status: t.Status, Final: t.Status.State.IsTerminal()})
 	case <-timer.C:
 		s.sendSSEError(w, flusher, req.ID, -32001, "task timed out")
 	case <-r.Context().Done():
-		// Client disconnected.
+		// Client disconnected mid-task: events emitted after this point are
+		// unrecoverable — there is no event buffer/replay, so anything the
+		// task produces while the subscriber is gone is lost. The client can
+		// still recover the final state via tasks/get or resubscribe.
+		debug.Log("a2a", "message/stream: client disconnected for task %s; stream events during disconnect are not replayed", task.ID)
 	}
 }
 
@@ -597,11 +639,24 @@ func (s *Server) handleTaskResubscribe(w http.ResponseWriter, r *http.Request, r
 	select {
 	case <-done:
 		t, _ := s.handler.GetTask(params.ID)
+		// #565 D: resubscribe previously only sent the terminal status — any
+		// artifacts produced while disconnected were permanently invisible.
+		// Emit them now, then the terminal status.
+		for _, art := range t.Artifacts {
+			s.sendSSE(w, flusher, req.ID, TaskArtifactUpdateEvent{
+				TaskID:    t.ID,
+				Artifact:  art,
+				LastChunk: true,
+			})
+		}
 		s.sendSSE(w, flusher, req.ID, TaskStatusUpdateEvent{TaskID: t.ID, Status: t.Status, Final: t.Status.State.IsTerminal()})
 	case <-timer.C:
 		s.sendSSEError(w, flusher, req.ID, -32001, "task timed out")
 	case <-r.Context().Done():
-		// Client disconnected.
+		// Client disconnected again — events produced during this gap are
+		// not replayed (no event buffer); final state remains available via
+		// tasks/get.
+		debug.Log("a2a", "tasks/resubscribe: client disconnected for task %s; events during disconnect are not replayed", params.ID)
 	}
 }
 
@@ -710,9 +765,11 @@ func (s *Server) handleGetExtendedCard(w http.ResponseWriter, req *JSONRPCReques
 // SetExtendedCard sets the optional extended agent card content.
 func (s *Server) SetExtendedCard(card json.RawMessage) {
 	s.extendedCard = card
+	s.cardMu.Lock()
 	if len(card) > 0 {
 		s.card.Capabilities.ExtendedAgentCard = true
 	}
+	s.cardMu.Unlock()
 }
 
 // SetTokenValidator installs an OAuth2/OIDC token validator.
@@ -769,8 +826,10 @@ func (s *Server) rebuildSecuritySchemes() {
 		security = append(security, map[string][]string{"mutualTLS": {}})
 	}
 
+	s.cardMu.Lock()
 	s.card.SecuritySchemes = schemes
 	s.card.Security = security
+	s.cardMu.Unlock()
 }
 
 // SetHandler connects the TaskHandler and wires push notifications.
@@ -838,7 +897,7 @@ func writeRPCResult(w http.ResponseWriter, id json.RawMessage, result interface{
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(JSONRPCResponse{
 		JSONRPC: "2.0",
-		ID:      id,
+		ID:      normalizeResponseID(id),
 		Result:  result,
 	})
 }
@@ -847,7 +906,21 @@ func writeRPCError(w http.ResponseWriter, id json.RawMessage, rpcErr *JSONRPCErr
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(JSONRPCResponse{
 		JSONRPC: "2.0",
-		ID:      id,
-		Error:   rpcErr,
+		// #565 E: JSON-RPC 2.0 requires the id member to be present (null
+		// when the request id could not be determined — parse error /
+		// invalid request); omitempty dropped it entirely.
+		ID:    normalizeResponseID(id),
+		Error: rpcErr,
 	})
+}
+
+// normalizeResponseID maps an absent request id to JSON null for response
+// serialization (fix #565 E). It returns json.RawMessage because the
+// JSONRPCResponse.ID field is json.RawMessage — a literal `null` byte
+// sequence passes omitempty's emptiness check and serializes as "id":null.
+func normalizeResponseID(id json.RawMessage) json.RawMessage {
+	if len(id) == 0 {
+		return json.RawMessage(`null`)
+	}
+	return id
 }
