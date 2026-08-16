@@ -51,7 +51,18 @@ func (Git) CurrentBranch(ctx context.Context, dir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(out), nil
+	branch := strings.TrimSpace(out)
+	// In detached HEAD state rev-parse --abbrev-ref returns the literal
+	// "HEAD" with exit code 0, which is useless as a display label. Fall
+	// back to the short commit SHA (issue #549 bug E, display layer only).
+	if branch == "HEAD" {
+		if sha, err := runVCSCmd(ctx, dir, "git", "rev-parse", "--short", "HEAD"); err == nil {
+			if short := strings.TrimSpace(sha); short != "" {
+				return short, nil
+			}
+		}
+	}
+	return branch, nil
 }
 
 func (Git) IsClean(ctx context.Context, dir string) (bool, error) {

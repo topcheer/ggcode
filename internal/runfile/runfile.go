@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
 )
@@ -32,6 +33,13 @@ type PortFile struct {
 
 // runDir is the subdirectory under ~/.ggcode/ for port files.
 const runDir = "run"
+
+// staleAfter is the mtime fallback: a port file whose modification time is
+// older than this is treated as stale even if its PID happens to be alive,
+// because a live-looking PID may be an unrelated recycled process (issue
+// #549 bug F). Port files are rewritten on every session start, so an old
+// mtime cannot belong to a currently running instance.
+const staleAfter = 24 * time.Hour
 
 // path returns the port file path for the given session ID.
 // Format: ~/.ggcode/run/<sessionID>.json
@@ -154,6 +162,14 @@ func readAtPath(p string) (*PortFile, error) {
 		_ = os.Remove(p)
 		debug.Log("runfile", "readAtPath: removed stale port file for dead pid %d: %s", pf.PID, p)
 		return nil, fmt.Errorf("process %d is not running (stale port file, removed)", pf.PID)
+	}
+	// Mtime fallback for PID reuse: signal-0 liveness cannot distinguish a
+	// recycled PID from the original owner. Anything older than staleAfter
+	// is removed regardless of the signal-0 result.
+	if info, err := os.Stat(p); err == nil && time.Since(info.ModTime()) > staleAfter {
+		_ = os.Remove(p)
+		debug.Log("runfile", "readAtPath: removed port file older than %v for pid %d (possible PID reuse): %s", staleAfter, pf.PID, p)
+		return nil, fmt.Errorf("port file for pid %d is older than %v (stale, removed)", pf.PID, staleAfter)
 	}
 	return &pf, nil
 }

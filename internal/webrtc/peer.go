@@ -21,10 +21,11 @@ type Peer struct {
 	pc *webrtc.PeerConnection
 	dc *webrtc.DataChannel
 
-	mu        sync.Mutex
-	dcReady   bool
-	closed    bool
-	closeOnce sync.Once
+	mu          sync.Mutex
+	dcReady     bool
+	closed      bool
+	closeOnce   sync.Once
+	dcReadyOnce sync.Once // guards dcReadyCh: closed exactly once by OnOpen or Close
 
 	// Callbacks (set by caller before ICE completes)
 	onMessage      func(data []byte)
@@ -34,6 +35,13 @@ type Peer struct {
 
 	// Completion signaling
 	dcReadyCh chan struct{}
+
+	// Trickle ICE buffering (issue #549 bug C): candidates that arrive
+	// before the remote description is set would make pion return
+	// InvalidStateError and be lost. Buffer them and replay after
+	// SetRemoteDescription succeeds.
+	remoteDescSet     bool
+	pendingCandidates []webrtc.ICECandidateInit
 }
 
 // pionLogger adapts pion/logging to our debug.Log system,
@@ -160,6 +168,7 @@ func (p *Peer) SetRemoteAnswer(sdp string) error {
 	if err := p.pc.SetRemoteDescription(desc); err != nil {
 		return fmt.Errorf("webrtc: set remote answer: %w", err)
 	}
+	p.markRemoteDescSet()
 	return nil
 }
 
@@ -174,6 +183,7 @@ func (p *Peer) SetRemoteOffer(sdp string) error {
 	if err := p.pc.SetRemoteDescription(desc); err != nil {
 		return fmt.Errorf("webrtc: set remote offer: %w", err)
 	}
+	p.markRemoteDescSet()
 
 	// Set up handler for the incoming DataChannel created by the host.
 	p.pc.OnDataChannel(func(dc *webrtc.DataChannel) {
@@ -201,12 +211,42 @@ func (p *Peer) CreateAnswer() (string, error) {
 // ─── ICE candidate exchange ───
 
 // AddICECandidate adds a remote trickle ICE candidate received from the peer.
+// If the remote description has not been applied yet, the candidate is
+// buffered instead of dropped: pion returns InvalidStateError in that state
+// and trickle ICE candidates frequently arrive before the SDP answer
+// (issue #549 bug C). Buffered candidates are replayed by
+// markRemoteDescSet once the remote description is applied.
 func (p *Peer) AddICECandidate(candidateStr string) error {
 	init, err := decodeCandidate(candidateStr)
 	if err != nil {
 		return fmt.Errorf("webrtc: decode candidate: %w", err)
 	}
+	p.mu.Lock()
+	if !p.remoteDescSet {
+		p.pendingCandidates = append(p.pendingCandidates, init)
+		p.mu.Unlock()
+		debug.Log("webrtc", "buffered ICE candidate received before remote description")
+		return nil
+	}
+	p.mu.Unlock()
 	return p.pc.AddICECandidate(init)
+}
+
+// markRemoteDescSet flags the remote description as applied and replays any
+// candidates buffered before it was available.
+func (p *Peer) markRemoteDescSet() {
+	p.mu.Lock()
+	p.remoteDescSet = true
+	pending := p.pendingCandidates
+	p.pendingCandidates = nil
+	p.mu.Unlock()
+	for _, init := range pending {
+		if err := p.pc.AddICECandidate(init); err != nil {
+			debug.Log("webrtc", "replay buffered ICE candidate: %v", err)
+		} else {
+			debug.Log("webrtc", "replayed buffered ICE candidate")
+		}
+	}
 }
 
 // OnICECandidate registers a callback for local ICE candidates.
@@ -226,18 +266,14 @@ func (p *Peer) attachDataChannel(dc *webrtc.DataChannel) {
 
 	dc.OnOpen(func() {
 		p.mu.Lock()
-		if p.closed {
-			p.mu.Unlock()
-			return
-		}
 		p.dcReady = true
 		fn := p.onDCOpen
 		p.mu.Unlock()
 		debug.Log("webrtc", "data channel opened")
-		// Signal readiness. Use a recover-free close guarded by closed flag:
-		// Close() also closes this channel, but it sets p.closed=true first
-		// under the same lock, so we won't double-close.
-		close(p.dcReadyCh)
+		// Signal readiness. dcReadyOnce guarantees exactly-once closing even
+		// if multiple DataChannels with the same label attach and open
+		// (remote can renegotiate), or if Close() runs concurrently.
+		p.signalDCReady()
 		if fn != nil {
 			fn()
 		}
@@ -306,23 +342,32 @@ func (p *Peer) IsReady() bool {
 // Close terminates the PeerConnection and DataChannel.
 func (p *Peer) Close() error {
 	p.closeOnce.Do(func() {
+		// Read p.dc under the lock: attachDataChannel writes it under the
+		// same lock from the pion OnDataChannel callback, which may fire at
+		// any time (issue #549 bug A, -race verified).
 		p.mu.Lock()
 		p.closed = true
-		wasReady := p.dcReady
+		dc := p.dc
 		p.mu.Unlock()
 
-		if p.dc != nil {
-			_ = p.dc.Close()
+		if dc != nil {
+			_ = dc.Close()
 		}
 		if p.pc != nil {
 			_ = p.pc.Close()
 		}
-		// Only close dcReadyCh if it hasn't been closed by OnOpen already.
-		if !wasReady {
-			close(p.dcReadyCh)
-		}
+		// dcReadyOnce makes this safe even if OnOpen closed the channel first.
+		p.signalDCReady()
 	})
 	return nil
+}
+
+// signalDCReady closes dcReadyCh exactly once. Safe to call from OnOpen
+// (possibly multiple times across renegotiated DataChannels) and from Close.
+func (p *Peer) signalDCReady() {
+	p.dcReadyOnce.Do(func() {
+		close(p.dcReadyCh)
+	})
 }
 
 func (p *Peer) handleDisconnect() {
