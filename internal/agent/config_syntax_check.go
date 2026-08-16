@@ -63,7 +63,17 @@ func configSyntaxCheck(filePath, content string) string {
 		return validateYAML(filePath, content)
 	case ".toml":
 		return validateTOML(filePath, content)
-	case ".xml", ".svg", ".xsd", ".xsl", ".xslt", ".rss", ".plist":
+	case ".xml", ".svg", ".xsd", ".xsl", ".xslt", ".rss":
+		return validateXML(filePath, content)
+	case ".plist":
+		// #527 Bug E: binary plists ("bplist" magic) are exactly as legal as
+		// XML plists and are what Xcode/defaults(1) routinely write. Routing
+		// them into the XML parser produced confident nonsense ("illegal
+		// character code U+0000") for perfectly valid files, with a message
+		// that (wrongly) asserted runtime failures.
+		if strings.HasPrefix(content, "bplist") {
+			return ""
+		}
 		return validateXML(filePath, content)
 	default:
 		return ""

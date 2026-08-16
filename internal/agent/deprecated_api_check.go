@@ -133,7 +133,7 @@ func checkDeprecatedAPI(filePath, oldContent, newContent string) string {
 	}
 
 	// Delta check: suppress instances that existed in old content.
-	newInstances := filterNewInstances(instances, oldContent)
+	newInstances := filterNewInstances(filePath, instances, oldContent)
 	if len(newInstances) == 0 {
 		return ""
 	}
@@ -199,10 +199,21 @@ func findDeprecatedSelectors(fset *token.FileSet, file *ast.File, importAliases 
 		}
 
 		impPath := importAliases[ident.Name]
-		fullName := ident.Name + "." + sel.Sel.Name
+		// #527 Bug B: resolve the qualifier through the import table so
+		// aliased imports (import mrand "math/rand" + mrand.Seed(...)) map
+		// back to the canonical package name before rule matching. The old
+		// bare-name comparison (ident.Name != rule.pkg) let every function-
+		// granularity selector rule be bypassed by an alias.
+		canonicalPkg := ident.Name
+		if impPath != "" {
+			if segs := strings.Split(impPath, "/"); len(segs) > 0 {
+				canonicalPkg = segs[len(segs)-1]
+			}
+		}
+		fullName := canonicalPkg + "." + sel.Sel.Name
 
 		for _, rule := range deprecatedRules {
-			if rule.kind != "selector" || ident.Name != rule.pkg || sel.Sel.Name != rule.name {
+			if rule.kind != "selector" || canonicalPkg != rule.pkg || sel.Sel.Name != rule.name {
 				continue
 			}
 			// Skip if already flagged by import-level check.
@@ -224,16 +235,50 @@ func findDeprecatedSelectors(fset *token.FileSet, file *ast.File, importAliases 
 	return instances
 }
 
-// filterNewInstances returns only instances not present in old content (delta-aware).
-func filterNewInstances(instances []deprecatedAPIInstance, oldContent string) []deprecatedAPIInstance {
+// filterNewInstances returns only instances not present in old content
+// (delta-aware, #527 Bug A: per-identifier multiset delta). Occurrences are
+// counted via the AST on BOTH sides, so a textual mention in the old content
+// — a TODO comment like "// TODO: remove strings.Title usage" or a string
+// literal — no longer suppresses a newly introduced real call, while N
+// pre-existing real calls suppress exactly N new ones. The old
+// position-blind strings.Contains delta permanently swallowed identifiers
+// that were merely mentioned anywhere in the old file.
+func filterNewInstances(filePath string, instances []deprecatedAPIInstance, oldContent string) []deprecatedAPIInstance {
+	remaining := countDeprecatedInstances(filePath, oldContent)
 	var result []deprecatedAPIInstance
 	for _, inst := range instances {
-		if strings.Contains(oldContent, inst.identifier) {
+		if remaining[inst.identifier] > 0 {
+			remaining[inst.identifier]--
 			continue
 		}
 		result = append(result, inst)
 	}
 	return result
+}
+
+// countDeprecatedInstances parses content (best-effort) and returns the
+// multiset of deprecated identifiers it actually USES: identifier →
+// occurrence count. Comment mentions and string literals never parse as
+// calls, so they count as zero (#527 Bug A). Unparseable content (empty or
+// mid-edit broken old state) also yields zero — the delta only suppresses
+// verified old usages.
+func countDeprecatedInstances(filePath, content string) map[string]int {
+	counts := make(map[string]int)
+	if strings.TrimSpace(content) == "" {
+		return counts
+	}
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, filePath, content, parser.AllErrors)
+	if err != nil {
+		return counts
+	}
+	aliases := collectImportAliases(file)
+	instances := findDeprecatedImports(fset, file)
+	instances = append(instances, findDeprecatedSelectors(fset, file, aliases, instances)...)
+	for _, inst := range instances {
+		counts[inst.identifier]++
+	}
+	return counts
 }
 
 // formatDeprecatedWarnings builds the warning string for detected instances.

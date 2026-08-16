@@ -54,11 +54,14 @@ func TestMCPHotReloadGlobalEditKeepsWorkspaceServers(t *testing.T) {
 	}, tool.NewRegistry())
 
 	w := NewMCPHotReload(globalDir, ws, mgr)
-	// Force the initial watermark past both files' mtimes so the reload below
-	// fires only for the deliberate post-construction edit.
+	// Force the initial baselines past both files' mtimes so the reload below
+	// fires only for the deliberate post-construction edit. #521 replaced the
+	// single lastMod watermark with per-path (mtime, hash) states.
 	time.Sleep(10 * time.Millisecond)
 	future := time.Now().Add(1 * time.Second)
-	w.lastMod = future
+	for _, p := range w.watchedPaths() {
+		w.watched[p] = &watchState{exists: true, mtime: future, hash: hashFile(p)}
+	}
 
 	w.checkAndReload(context.Background()) // no change yet → no-op
 

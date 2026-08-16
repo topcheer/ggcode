@@ -143,15 +143,21 @@ func checkCommentedCodeBlocks(filePath, oldContent, newContent string) []string 
 	}
 
 	oldBlocks := findCommentedCodeBlocks(oldContent, commentSyntax)
-	oldSet := make(map[string]bool, len(oldBlocks))
+	// #526 (D2): per-block multiset delta (#186/#171 convention). When old
+	// had one copy of a block and the edit pastes a second identical copy,
+	// the extra copy IS newly introduced and must warn; set semantics
+	// silently swallowed it.
+	oldCounts := make(map[string]int, len(oldBlocks))
 	for _, b := range oldBlocks {
-		oldSet[b] = true
+		oldCounts[b]++
 	}
 
 	var warnings []string
 	for _, block := range newBlocks {
-		// Only flag NEW blocks (not pre-existing)
-		if oldSet[block] {
+		// Only flag NEW blocks: each pre-existing copy suppresses exactly
+		// one new copy (multiset semantics).
+		if oldCounts[block] > 0 {
+			oldCounts[block]--
 			continue
 		}
 		lineCount := strings.Count(block, "\n") + 1
@@ -337,11 +343,6 @@ func looksLikeCode(content string) bool {
 		return true
 	}
 
-	// Function call pattern: identifier followed by (
-	if strings.Contains(content, "(") && strings.Contains(content, ")") {
-		return true
-	}
-
 	// Semicolon termination (C-like statements)
 	if strings.HasSuffix(content, ";") {
 		return true
@@ -354,7 +355,85 @@ func looksLikeCode(content string) bool {
 		}
 	}
 
+	// Function call pattern (#526): the "(" must directly follow an
+	// identifier/keyword character (a real call shape like foo(bar)) AND the
+	// line must carry no pure-text signal (sentence-ending period, common
+	// English words). The old any-parens rule flagged ordinary doc prose
+	// such as "Errors are wrapped (see above)..." as commented-out code.
+	if !hasProseSignal(content) && hasCallPattern(content) {
+		return true
+	}
+
 	return false
+}
+
+// proseSignalWords are common English function words. Their presence — or a
+// sentence-ending period — marks comment content as natural-language prose
+// for the purposes of the parenthesized-call heuristic (#526). Code keywords
+// (if/for/return/...) are deliberately excluded so they cannot neutralize
+// the other, stronger code criteria.
+var proseSignalWords = map[string]bool{
+	"a": true, "an": true, "the": true, "and": true, "or": true,
+	"but": true, "is": true, "are": true, "was": true, "were": true,
+	"be": true, "been": true, "of": true, "to": true, "in": true,
+	"on": true, "at": true, "by": true, "with": true, "from": true,
+	"as": true, "into": true, "than": true, "then": true, "this": true,
+	"that": true, "these": true, "those": true, "it": true, "its": true,
+	"we": true, "our": true, "you": true, "your": true, "they": true,
+	"their": true, "not": true, "no": true, "do": true, "does": true,
+	"did": true, "have": true, "has": true, "had": true, "will": true,
+	"would": true, "can": true, "could": true, "should": true, "may": true,
+	"might": true, "must": true, "when": true, "where": true, "which": true,
+	"who": true, "whose": true, "why": true, "how": true, "what": true,
+	"also": true, "only": true, "just": true, "any": true, "all": true,
+	"some": true, "such": true, "both": true, "each": true, "other": true,
+	"more": true, "most": true, "many": true, "see": true, "above": true,
+	"below": true, "use": true, "used": true, "using": true, "via": true,
+	"per": true, "over": true, "under": true, "once": true, "here": true,
+	"there": true, "again": true, "further": true,
+}
+
+// hasProseSignal reports whether content carries natural-language signals:
+// a sentence-ending period or common English function words (#526).
+func hasProseSignal(content string) bool {
+	trimmed := strings.TrimSpace(content)
+	if strings.HasSuffix(trimmed, ".") {
+		return true
+	}
+	for _, f := range strings.Fields(strings.ToLower(trimmed)) {
+		f = strings.Trim(f, ".,;:!?()\"'`")
+		if proseSignalWords[f] {
+			return true
+		}
+	}
+	return false
+}
+
+// hasCallPattern reports whether content contains an identifier immediately
+// followed by "(" with a closing ")" later on — the classic function-call
+// shape. Parenthesized prose like "(see above)" or "(a)" does not match:
+// there the "(" is preceded by whitespace, not an identifier character
+// (#526).
+func hasCallPattern(content string) bool {
+	for i := 0; i < len(content); i++ {
+		if content[i] != '(' {
+			continue
+		}
+		if i == 0 || !isIdentCharCCC(content[i-1]) {
+			continue
+		}
+		if strings.Contains(content[i:], ")") {
+			return true
+		}
+	}
+	return false
+}
+
+// isIdentCharCCC reports whether c can appear in a Go/JS/Python identifier.
+// Deliberately local (distinct name) so package-wide renames of the shared
+// isIdentChar helper cannot break this detector (#526).
+func isIdentCharCCC(c byte) bool {
+	return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
 }
 
 // extractBlockCommentCode checks if a single-line or multi-line block comment
