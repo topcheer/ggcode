@@ -52,7 +52,12 @@ func (m *Manager) UpdateBindingContextToken(adapter, token string) {
 			b.ContextToken = token
 			b.ContextTokenUpdatedAt = time.Now()
 			if m.bindingStore != nil {
-				_ = m.bindingStore.Save(*b)
+				// #520: a swallowed Save error means the token silently fails to
+				// persist and WeChat stops responding after ~2 messages on
+				// restart, with no log clue. Log it.
+				if err := m.bindingStore.Save(*b); err != nil {
+					debug.Log("wechat", "persist context_token failed: %v", err)
+				}
 			}
 			debug.Log("wechat", "persisted context_token for adapter=%s len=%d", adapter, len(token))
 			break

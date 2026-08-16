@@ -164,14 +164,28 @@ func isRetryable(err error) bool {
 	if containsHTTPStatus(msg, "400") {
 		return false
 	}
+	// #518: 422 must be excluded too — the typed path (isRetryableHTTPStatus)
+	// treats Unprocessable Entity as permanent (schema/semantic rejection;
+	// FriendlyError's own guidance is "switch model"). Without this, a
+	// non-typed go-openai stream error (plain fmt.Errorf, errors.As misses)
+	// from any OpenAI-compatible relay retried 20 times (~7m16s) per turn.
+	if containsHTTPStatus(msg, "422") {
+		return false
+	}
 
 	// Any other error with a recognizable HTTP status code is retryable.
-	// (400 is permanently excluded above — see #306.)
+	// (400/422 are permanently excluded above — see #306/#518.)
+	// #518: 422 must NOT be in this string-fallback list — the typed path
+	// (isRetryableHTTPStatus) treats 422 as permanent (schema/semantic
+	// rejection), so a non-typed go-openai stream error (plain fmt.Errorf,
+	// errors.As misses) must not spin ~7 minutes in 20 doomed retries.
+	// Anchor via containsHTTPStatus so digit coincidences like "id=42913"
+	// don't count as status codes (#518 low-risk side item).
 	for _, code := range []string{
-		"408", "409", "422", "429",
+		"408", "409", "429",
 		"500", "502", "503", "504", "520", "521", "522", "523", "524", "529",
 	} {
-		if strings.Contains(msg, code) {
+		if containsHTTPStatus(msg, code) {
 			return true
 		}
 	}

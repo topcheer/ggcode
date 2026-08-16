@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/topcheer/ggcode/internal/provider"
 )
@@ -278,11 +279,21 @@ func messagePreview(msg provider.Message) string {
 }
 
 // truncatePreview shortens a string to fit in a preview line.
+// #520: the cut must land on a rune boundary — 77 bytes splits a 3-byte CJK
+// character in two, leaving an invalid UTF-8 prefix that renders as U+FFFD.
 func truncatePreview(s string) string {
 	s = strings.ReplaceAll(s, "\n", " ")
 	s = strings.TrimSpace(s)
 	if len(s) > 80 {
-		return s[:77] + "..."
+		cut := s[:77]
+		// #520: back off until the cut is valid UTF-8 — a byte cut at 77 can
+		// land inside a multi-byte CJK rune; dropping bytes until the string
+		// is valid removes both the partial tail and its lead byte (at most
+		// 2 iterations for a 3-byte rune).
+		for len(cut) > 0 && !utf8.ValidString(cut) {
+			cut = cut[:len(cut)-1]
+		}
+		return cut + "..."
 	}
 	return s
 }

@@ -3,6 +3,7 @@ package daemon
 import (
 	"crypto/md5"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/topcheer/ggcode/internal/debug"
 	"os"
@@ -97,10 +98,23 @@ func CheckExistingDaemon(workingDir string) (int, error) {
 	}
 	info, err := ReadPIDFile(pidPath)
 	if err != nil {
-		// #431: a CORRUPT PID file (partial write, disk fault) would linger
-		// forever; remove it so the next fork starts clean.
-		_ = os.Remove(pidPath)
-		return 0, nil // unreadable PID file = no daemon
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		var syntaxErr *json.SyntaxError
+		var typeErr *json.UnmarshalTypeError
+		if errors.As(err, &syntaxErr) || errors.As(err, &typeErr) {
+			// #431: a CORRUPT PID file (partial write, disk fault) would linger
+			// forever; remove it so the next fork starts clean.
+			_ = os.Remove(pidPath)
+			return 0, nil
+		}
+		// #520: any other read error (EACCES on a root-owned 0600 file, NFS
+		// EIO, ...) is NOT evidence the daemon is gone. Deleting the PID file
+		// here lets the caller fork a second daemon (log interleaving, relay
+		// contention). Propagate the error and let the caller decide.
+		debug.Log("daemon", "PID file %s unreadable (transient/permission); NOT removing: %v", pidPath, err)
+		return 0, fmt.Errorf("reading PID file %s: %w", pidPath, err)
 	}
 	// Check if process is still alive
 	proc, err := os.FindProcess(info.PID)
