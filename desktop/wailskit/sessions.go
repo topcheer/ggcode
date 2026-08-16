@@ -117,6 +117,27 @@ func RenameSession(id string, title string) error {
 		return fmt.Errorf("load session: %w", err)
 	}
 	ses.Title = title
+	// Windowed-load guard (fix #538): store.Load keeps only messages within
+	// the last 24h. On large sessions (>=500 message records) whose user
+	// messages are all older than that window, the in-memory
+	// ses.HasUserInteraction() is false and AppendMetaToDisk silently
+	// no-ops — RenameSession returned nil without ever writing the title.
+	// Decide from the file on disk instead (the same approach the Delete
+	// path took via HasUserInteractionOnDisk), and when the file does hold
+	// user interaction, reload the session unwindowed so the meta append
+	// actually persists the rename.
+	if !ses.HasUserInteraction() {
+		onDisk, derr := store.HasUserInteractionOnDisk(id)
+		if derr == nil && onDisk {
+			if full, ferr := store.LoadWithOptions(id, true); ferr == nil {
+				full.Title = title
+				ses = full
+			}
+			// On full-load failure fall through with the windowed session:
+			// AppendMetaToDisk keeps its old no-op semantics rather than
+			// erroring, matching pre-fix behavior for odd files.
+		}
+	}
 	return store.AppendMetaToDisk(ses)
 }
 

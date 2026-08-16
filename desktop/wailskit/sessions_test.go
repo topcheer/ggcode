@@ -3,9 +3,15 @@
 package wailskit
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/session"
 )
 
 func TestShouldSkipHistoryTool(t *testing.T) {
@@ -150,5 +156,83 @@ func TestBuildSessionHistory_SystemMessagesSkipped(t *testing.T) {
 	}
 	if history[0].Role != "user" {
 		t.Fatalf("expected user, got %s", history[0].Role)
+	}
+}
+
+// TestRenameSession_LargeWindowedSession_PersistsToDisk reproduces fix #538
+// (Bug B): a session with >=500 message records whose only user message is
+// older than RecentMessageWindow (24h) gets a windowed store.Load that drops
+// that user message, so in-memory HasUserInteraction() is false and
+// AppendMetaToDisk silently no-ops — RenameSession returned nil without the
+// rename ever landing on disk.
+func TestRenameSession_LargeWindowedSession_PersistsToDisk(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp) // NewDefaultStore -> $HOME/.ggcode/sessions
+	dir := filepath.Join(tmp, ".ggcode", "sessions")
+	id := "sess538window" // valid session ID charset
+	path := filepath.Join(dir, id+".jsonl")
+
+	now := time.Now()
+	oldTS := now.Add(-48 * time.Hour) // user message: outside the 24h window
+	recentTS := now.Add(-1 * time.Hour)
+
+	var b strings.Builder
+	fmt.Fprintf(&b, `{"type":"meta","session_id":%q,"title":"Original title","created_at":%q,"updated_at":%q}`+"\n",
+		id, oldTS.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
+	fmt.Fprintf(&b, `{"type":"message","session_id":%q,"timestamp":%q,"message":{"role":"user","content":[{"type":"text","text":"please help"}]}}`+"\n",
+		id, oldTS.Format(time.RFC3339Nano))
+	for i := 0; i < 499; i++ {
+		fmt.Fprintf(&b, `{"type":"message","session_id":%q,"timestamp":%q,"message":{"role":"assistant","content":[{"type":"text","text":"ok %d"}]}}`+"\n",
+			id, recentTS.Format(time.RFC3339Nano), i)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(b.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := session.NewJSONLStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Precondition: the windowed load really drops the user message —
+	// otherwise this test would not exercise the bug path.
+	sesWindowed, err := store.Load(id)
+	if err != nil {
+		t.Fatalf("windowed load: %v", err)
+	}
+	if sesWindowed.HasUserInteraction() {
+		t.Fatal("precondition failed: windowed load kept the old user message; test no longer reproduces #538")
+	}
+
+	if err := RenameSession(id, "Renamed Title"); err != nil {
+		t.Fatalf("RenameSession: %v", err)
+	}
+
+	// The rename must actually be on disk (was a silent no-op before #538).
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"title":"Renamed Title"`) {
+		t.Fatal("rename was not persisted to the session JSONL file")
+	}
+
+	// And it must be visible on reload — both windowed (title lives in the
+	// trailing meta record, past the window cutoff) and full.
+	sesW2, err := store.Load(id)
+	if err != nil {
+		t.Fatalf("reload windowed: %v", err)
+	}
+	if sesW2.Title != "Renamed Title" {
+		t.Errorf("windowed reload title = %q, want %q", sesW2.Title, "Renamed Title")
+	}
+	sesFull, err := store.LoadWithOptions(id, true)
+	if err != nil {
+		t.Fatalf("reload full: %v", err)
+	}
+	if sesFull.Title != "Renamed Title" {
+		t.Errorf("full reload title = %q, want %q", sesFull.Title, "Renamed Title")
 	}
 }

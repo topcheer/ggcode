@@ -474,3 +474,92 @@ func TestCheckDelimiterBalance_RustUnterminatedMultiHashRawString(t *testing.T) 
 		t.Errorf("warning should mention unterminated raw string, got: %s", got)
 	}
 }
+
+func TestCheckDelimiterBalance_JSRegexLiteralNoFalsePositive(t *testing.T) {
+	content := `
+const re = /['"]+/;
+const cls = /[(]/;
+const nested = /a[b]c\//;
+const div = total / count;
+const half = (a + b) / 2;
+function pick(items) {
+	return items.filter(x => /foo/.test(x)) / items.length;
+}
+`
+	result := checkDelimiterBalance("test.js", content)
+	if result != "" {
+		t.Errorf("expected no warning for JS regex literals, got: %s", result)
+	}
+}
+
+func TestCheckDelimiterBalance_JSRegexTrueErrorStillReported(t *testing.T) {
+	content := `
+const re = /['"]+/;
+const cls = /[(]/;
+function broken( {
+	return re;
+}
+`
+	result := checkDelimiterBalance("test.js", content)
+	if result == "" {
+		t.Fatal("expected warning for real unclosed paren after regex lines, got empty")
+	}
+	if !strings.Contains(result, "unclosed") {
+		t.Errorf("warning should mention 'unclosed', got: %s", result)
+	}
+}
+
+func TestCheckDelimiterBalance_JSDivisionNotRegex(t *testing.T) {
+	content := `
+const avg = total / count;
+const half = (a + b) / 2;
+const ratio = width/height;
+const scale = 2 / 3;
+`
+	result := checkDelimiterBalance("test.ts", content)
+	if result != "" {
+		t.Errorf("expected no warning for divisions, got: %s", result)
+	}
+}
+
+func TestCheckDelimiterBalance_RubyHeredocBareBrackets(t *testing.T) {
+	content := `
+sql = <<~SQL
+  SELECT * FROM users WHERE (age > 21 AND tags @> ARRAY[1, 2])
+SQL
+puts sql
+val = format(<<~EOS.strip)
+  (a, [b])
+EOS
+puts val
+count = items << extra
+`
+	result := checkDelimiterBalance("test.rb", content)
+	if result != "" {
+		t.Errorf("expected no warning for Ruby heredocs, got: %s", result)
+	}
+}
+
+func TestCheckDelimiterBalance_RubyHeredocTrueErrorStillReported(t *testing.T) {
+	content := `
+sql = <<~SQL
+  body
+SQL
+def broken(
+`
+	result := checkDelimiterBalance("test.rb", content)
+	if !strings.Contains(result, "unclosed") {
+		t.Errorf("expected 'unclosed' warning after heredoc, got: %q", result)
+	}
+}
+
+func TestCheckDelimiterBalance_RubyUnterminatedHeredoc(t *testing.T) {
+	content := `
+sql = <<~SQL
+  body without terminator
+`
+	result := checkDelimiterBalance("test.rb", content)
+	if !strings.Contains(result, "unterminated heredoc") {
+		t.Errorf("expected 'unterminated heredoc' warning, got: %q", result)
+	}
+}

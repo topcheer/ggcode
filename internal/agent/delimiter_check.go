@@ -95,6 +95,8 @@ type commentStyle struct {
 	blockClose   string   // block comment close, e.g. "*/"
 	tripleQuotes bool     // Python-style """ or ''' multi-line strings
 	rust         bool     // Rust-specific handling: lifetimes and r#"..."# raw strings
+	jsLike       bool     // JS/TS family: '/' can open a regex literal (fix #538)
+	heredoc      bool     // Ruby: <<~ID / <<ID heredoc bodies are string data (fix #538)
 }
 
 // getCommentStyle returns the comment and string syntax for a given file type.
@@ -109,6 +111,7 @@ func getCommentStyle(filePath string) commentStyle {
 	case ".rb":
 		return commentStyle{
 			lineComments: []string{"#"},
+			heredoc:      true,
 		}
 	case ".rs":
 		return commentStyle{
@@ -125,6 +128,17 @@ func getCommentStyle(filePath string) commentStyle {
 		return commentStyle{
 			blockOpen:  "/*",
 			blockClose: "*/",
+		}
+	case ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts":
+		// C-like languages plus regex literals: after an expression-start
+		// context (operator, '(', ',', '=', keywords) a '/' opens a regex
+		// literal whose body — including character classes — must not feed
+		// the string or bracket states (fix #538).
+		return commentStyle{
+			lineComments: []string{"//"},
+			blockOpen:    "/*",
+			blockClose:   "*/",
+			jsLike:       true,
 		}
 	default:
 		// C-like languages: JS, TS, Java, C, C++, Rust, Dart, Swift, Kotlin, JSON
@@ -146,6 +160,9 @@ const (
 	dsBlockComment // /* ... */
 	dsTripleDouble // """ ... """
 	dsTripleSingle // ''' ... '''
+	dsRegex        // /.../ (JS regex literal, fix #538)
+	dsRegexClass   // [...] inside a JS regex literal
+	dsHeredoc      // Ruby heredoc body, terminator tracked separately
 )
 
 // openBracket tracks an opening delimiter and its line number for diagnostics.
@@ -160,6 +177,7 @@ func scanDelimiters(content string, style commentStyle) string {
 	var stack []openBracket
 	line := 1
 	state := dsCode
+	var pendingHeredoc, heredocTerm string
 
 	i := 0
 	n := len(content)
@@ -172,6 +190,29 @@ func scanDelimiters(content string, style commentStyle) string {
 			line++
 			if state == dsLineComment {
 				state = dsCode
+			}
+			if state == dsRegex || state == dsRegexClass {
+				// A JS regex literal cannot span lines, so a newline inside one
+				// means the regex-context heuristic misfired (it was really a
+				// division, e.g. "a /= b"). Contain the damage to that line:
+				// resume code state without reporting.
+				state = dsCode
+			}
+			if state == dsCode && pendingHeredoc != "" {
+				// A heredoc start was seen earlier on the line that just ended;
+				// its body begins on this next line (fix #538).
+				heredocTerm = pendingHeredoc
+				pendingHeredoc = ""
+				state = dsHeredoc
+				i++
+				continue
+			}
+			if state == dsHeredoc {
+				if end, ok := heredocTerminatorEnd(content, i+1, heredocTerm); ok {
+					i = end
+					state = dsCode
+					continue
+				}
 			}
 			i++
 			continue
@@ -212,6 +253,34 @@ func scanDelimiters(content string, style commentStyle) string {
 				}
 			}
 			if isLineCmt {
+				continue
+			}
+
+			// --- Ruby heredoc start (fix #538): <<~ID, <<-ID, <<ID, <<"ID", <<'ID' ---
+			// The heredoc body is string data, so bare brackets inside it must
+			// not enter the balance stack. The body only begins on the NEXT
+			// line, so just remember the terminator here and keep scanning the
+			// rest of the start line as code (e.g. in foo(<<~SQL.strip) the
+			// paren still closes on the same line).
+			if style.heredoc && c == '<' && i+1 < n && content[i+1] == '<' {
+				if term, next, ok := rubyHeredocStart(content, i); ok {
+					pendingHeredoc = term
+					i = next
+					continue
+				}
+			}
+
+			// --- JS regex literal vs division (fix #538) ---
+			// Decided from the previous significant character: after operators,
+			// opening brackets, separators or keywords a '/' opens a regex. The
+			// regex body (and its character classes) is consumed wholesale so
+			// patterns like /['"]+/ or /[(]/ no longer derange the string and
+			// bracket states. Note: '/' after ')' is treated as division (the
+			// common (a+b)/2 case); "if (x) /re/" misreads are contained by the
+			// newline fallback above.
+			if style.jsLike && c == '/' && regexMayStart(content, i) {
+				state = dsRegex
+				i++
 				continue
 			}
 
@@ -320,6 +389,37 @@ func scanDelimiters(content string, style commentStyle) string {
 			}
 			i++
 
+		case dsRegex:
+			if c == '\\' {
+				i += 2 // skip escaped char
+				continue
+			}
+			if c == '[' {
+				state = dsRegexClass
+				i++
+				continue
+			}
+			if c == '/' {
+				state = dsCode
+			}
+			// Newlines are handled by the shared handler above (containment).
+			i++
+
+		case dsRegexClass:
+			if c == '\\' {
+				i += 2
+				continue
+			}
+			if c == ']' {
+				state = dsRegex
+			}
+			i++
+
+		case dsHeredoc:
+			// Everything until the terminator line is string data; terminator
+			// detection happens in the shared newline handler above.
+			i++
+
 		case dsLineComment:
 			// Consumed by newline handler above.
 			i++
@@ -379,6 +479,12 @@ func scanDelimiters(content string, style commentStyle) string {
 			return fmt.Sprintf("line %d: unterminated triple-quoted string - missing closing triple double-quote", unclosedStringLine(content, i))
 		case dsTripleSingle:
 			return fmt.Sprintf("line %d: unterminated triple-quoted string - missing closing '''", unclosedStringLine(content, i))
+		case dsHeredoc:
+			return fmt.Sprintf("line %d: unterminated heredoc - missing terminator %s", unclosedStringLine(content, i), heredocTerm)
+			// dsRegex/dsRegexClass are deliberately NOT reported at EOF: that
+			// can also mean the heuristic read a division as a regex start
+			// (e.g. "x /= 2" on the last line); staying silent keeps this
+			// detector false-positive-averse (fix #538).
 		}
 	}
 
@@ -412,6 +518,154 @@ func indexRawStringClose(s string, k int) (int, bool) {
 		}
 	}
 	return 0, false
+}
+
+// regexMayStart reports whether the '/' at content[i] begins a regular
+// expression literal rather than a division operator, judged from the last
+// significant character before it (fix #538). A regex may start where an
+// expression is expected: after operators, opening brackets, separators, or
+// keywords like return/typeof/case. After an identifier, a number, or a
+// closing bracket it is division.
+func regexMayStart(content string, i int) bool {
+	j := i - 1
+	for j >= 0 {
+		switch content[j] {
+		case ' ', '\t', '\r', '\n':
+			j--
+			continue
+		}
+		break
+	}
+	if j < 0 {
+		return true // start of file
+	}
+	switch content[j] {
+	case '(', ',', '=', ':', '[', '!', '&', '|', '?', '{', '}', ';',
+		'+', '-', '*', '%', '<', '>', '~', '^':
+		return true
+	}
+	if isRegexWordByte(content[j]) {
+		k := j
+		for k >= 0 && isRegexWordByte(content[k]) {
+			k--
+		}
+		switch content[k+1 : j+1] {
+		case "return", "typeof", "instanceof", "in", "of", "case", "do",
+			"else", "new", "delete", "void", "yield", "await", "throw":
+			return true
+		}
+	}
+	return false
+}
+
+// isRegexWordByte reports whether b can appear in a JS identifier or number.
+func isRegexWordByte(b byte) bool {
+	return b == '_' || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
+}
+
+// rubyHeredocStart parses a Ruby heredoc start at content[i] (pointing at the
+// first '<' of "<<"). It returns the terminator identifier, the index just
+// past the heredoc start token, and ok=false when this is not a heredoc but a
+// plain << shift. Guards against misdetection (fix #538):
+//   - the token must be <<, <<~, <<-, <<"ID" or <<'ID'
+//   - a bare terminator must start with an uppercase letter (SQL, EOS...) —
+//     shift operands are lowercase variables in practice
+//   - the character before "<<" must not close an expression (')', ']', '}',
+//     quote) or be a digit: "x << Y" is a shift, "puts <<SQL" is a heredoc
+func rubyHeredocStart(content string, i int) (term string, next int, ok bool) {
+	n := len(content)
+	j := i + 2 // past "<<"
+	if j >= n {
+		return "", 0, false
+	}
+	if content[j] == '~' || content[j] == '-' {
+		j++ // squiggly / indentable heredoc
+	}
+	if j < n && (content[j] == '"' || content[j] == '\'') {
+		return rubyHeredocQuotedID(content, j, i)
+	}
+	return rubyHeredocBareID(content, j, i)
+}
+
+// rubyHeredocQuotedID parses <<"ID" / <<'ID' (after any ~/-) starting at the
+// opening quote content[j]; i is the index of the first '<' for the
+// preceded-by guard (see rubyHeredocStart).
+func rubyHeredocQuotedID(content string, j, i int) (string, int, bool) {
+	n := len(content)
+	q := content[j]
+	k := j + 1
+	for k < n && content[k] != q && content[k] != '\n' {
+		k++
+	}
+	if k >= n || content[k] != q || k == j+1 {
+		return "", 0, false // unterminated or empty quoted ID
+	}
+	if !heredocStartAllowedAfter(content, i) {
+		return "", 0, false
+	}
+	return content[j+1 : k], k + 1, true
+}
+
+// rubyHeredocBareID parses a bare terminator identifier (after any ~/-) at
+// content[j]. Only identifiers starting with an uppercase letter count as
+// heredoc terminators (SQL, EOS...): a lowercase operand is a shift in
+// practice. i is the index of the first '<' for the preceded-by guard.
+func rubyHeredocBareID(content string, j, i int) (string, int, bool) {
+	n := len(content)
+	s := j
+	for j < n && isRegexWordByte(content[j]) {
+		j++
+	}
+	term := content[s:j]
+	if term == "" || term[0] < 'A' || term[0] > 'Z' {
+		return "", 0, false
+	}
+	if !heredocStartAllowedAfter(content, i) {
+		return "", 0, false
+	}
+	return term, j, true
+}
+
+// heredocStartAllowedAfter reports whether a heredoc start may legally begin
+// at content[i]: the previous significant character must not close an
+// expression (')', ']', '}', quote) or be a digit — "x << Y" and "1 << n" are
+// shifts, "puts <<SQL" is a heredoc.
+func heredocStartAllowedAfter(content string, i int) bool {
+	p := i - 1
+	for p >= 0 && (content[p] == ' ' || content[p] == '\t') {
+		p--
+	}
+	if p < 0 {
+		return true // start of file
+	}
+	switch content[p] {
+	case ')', ']', '}', '"', '\'', '`':
+		return false
+	}
+	if content[p] >= '0' && content[p] <= '9' {
+		return false
+	}
+	return true
+}
+
+// heredocTerminatorEnd reports whether the line starting at content[pos] is
+// (optional whitespace +) the heredoc terminator term, returning the index
+// just past the terminator. Indentation is allowed for <<~/<<- forms and
+// tolerated for << to stay lenient.
+func heredocTerminatorEnd(content string, pos int, term string) (int, bool) {
+	n := len(content)
+	j := pos
+	for j < n && (content[j] == ' ' || content[j] == '\t') {
+		j++
+	}
+	if !strings.HasPrefix(content[j:], term) {
+		return 0, false
+	}
+	end := j + len(term)
+	if end < n && content[end] != '\n' {
+		return 0, false // the terminator must be alone on its line
+	}
+	return end, true
 }
 
 // unclosedStringLine returns the line number where the unclosed construct
