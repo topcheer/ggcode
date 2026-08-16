@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // archiveExtractor extracts text from archive files.
@@ -97,7 +99,10 @@ func (e *archiveExtractor) Extract(data []byte) (TextResult, error) {
 			if err == nil && result.Text != "" {
 				text := result.Text
 				if len(text) > maxArchiveEntrySize {
-					text = text[:maxArchiveEntrySize] + "\n... (truncated)"
+					// Snap to a rune boundary so we never slice a multi-byte
+					// CJK/emoji rune in half (#547, same fix as #301).
+					cut := util.SnapToRuneStart(text, maxArchiveEntrySize)
+					text = text[:cut] + "\n... (truncated)"
 				}
 				buf.WriteString(text)
 				buf.WriteByte('\n')

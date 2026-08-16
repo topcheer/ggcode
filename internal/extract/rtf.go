@@ -5,7 +5,44 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf16"
+
+	"golang.org/x/text/encoding/charmap"
 )
+
+// decodeCodePageByte maps a single byte from the given ANSI code page to a
+// rune. cp 0 or an unknown code page falls back to Windows-1252 (the RTF
+// default per the spec). Bytes that have no mapping decode to U+FFFD.
+func decodeCodePageByte(cp int, b byte) rune {
+	var decoder *charmap.Charmap
+	switch cp {
+	case 1250:
+		decoder = charmap.Windows1250
+	case 1251:
+		decoder = charmap.Windows1251
+	case 1252, 0: // RTF default per spec
+		decoder = charmap.Windows1252
+	case 1253:
+		decoder = charmap.Windows1253
+	case 1254:
+		decoder = charmap.Windows1254
+	case 1255:
+		decoder = charmap.Windows1255
+	case 1256:
+		decoder = charmap.Windows1256
+	case 1257:
+		decoder = charmap.Windows1257
+	case 1258:
+		decoder = charmap.Windows1258
+	case 932, 936, 949, 950:
+		// Multi-byte CJK code pages (Shift-JIS, GBK, UHC, Big5) are not
+		// single-byte decodable here; fall back to the raw byte (preserves
+		// prior behavior for these rare files).
+		return rune(b)
+	default:
+		decoder = charmap.Windows1252
+	}
+	return decoder.DecodeByte(b)
+}
 
 // rtfExtractor extracts plain text from Rich Text Format files.
 type rtfExtractor struct{}
@@ -22,6 +59,7 @@ func (rtfExtractor) Extract(data []byte) (TextResult, error) {
 	depth := 0
 	i := 0
 	n := len(raw)
+	ansiCP := 0 // \ansicpg value; 0 -> default 1252 semantics
 
 	for i < n {
 		ch := raw[i]
@@ -59,11 +97,13 @@ func (rtfExtractor) Extract(data []byte) (TextResult, error) {
 				i++ // skip destination marker
 				continue
 			case '\'':
-				// \'XX — hex-encoded ANSI character
+				// \'XX — hex-encoded character in the current \ansicpg code page.
+				// Decode to a rune and write as UTF-8 (#547): writing the raw byte
+				// produced invalid UTF-8 for any non-ASCII character (e.g. é).
 				if i+2 < n {
 					hex := raw[i+1 : i+3]
 					if val, err := strconv.ParseUint(hex, 16, 8); err == nil {
-						buf.WriteByte(byte(val))
+						buf.WriteRune(decodeCodePageByte(ansiCP, byte(val)))
 					}
 					i += 3
 					continue
@@ -104,12 +144,14 @@ func (rtfExtractor) Extract(data []byte) (TextResult, error) {
 			i = j
 
 			// Skip numeric parameter
+			paramStart := i
 			if i < n && raw[i] == '-' {
 				i++
 			}
 			for i < n && raw[i] >= '0' && raw[i] <= '9' {
 				i++
 			}
+			param := raw[paramStart:i]
 
 			// Handle known keywords that produce whitespace
 			switch keyword {
@@ -119,6 +161,11 @@ func (rtfExtractor) Extract(data []byte) (TextResult, error) {
 				buf.WriteByte('\t')
 			case "sect":
 				buf.WriteString("\n\n")
+			case "ansicpg":
+				// \ansicpgNNNN sets the code page for \'XX escapes (#547).
+				if v, err := strconv.Atoi(param); err == nil {
+					ansiCP = v
+				}
 			}
 
 			// Skip one optional space after keyword

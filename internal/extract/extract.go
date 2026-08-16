@@ -49,7 +49,11 @@ func init() {
 	defaultRegistry.Register(".tar.gz", &archiveExtractor{subFormat: "tar.gz"})
 	defaultRegistry.Register(".tgz", &archiveExtractor{subFormat: "tar.gz"})
 	defaultRegistry.Register(".tar.bz2", &archiveExtractor{subFormat: "tar.bz2"})
-	defaultRegistry.Register(".tar.xz", &archiveExtractor{subFormat: "tar.xz"})
+	// .tar.xz is intentionally NOT registered (#547): listTarXz has no xz
+	// decompressor, so registering it made IsDocumentFile()=true while
+	// Extract() always failed — a contract contradiction that silently
+	// dropped nested-archive entries. Unregistered means "unsupported
+	// format" is reported honestly up front.
 	// iWork
 	defaultRegistry.Register(".pages", &iworkExtractor{subFormat: "pages"})
 	defaultRegistry.Register(".numbers", &iworkExtractor{subFormat: "numbers"})

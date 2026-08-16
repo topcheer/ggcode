@@ -6,6 +6,8 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -58,8 +60,16 @@ func Dispatch(cfg HookConfig, env HookEnv) HookResult {
 				continue
 			}
 			h := h // capture for goroutine
+			// #547: detach from the caller's cancellable context. These stop
+			// hooks run AFTER the session/stream is winding down; inheriting a
+			// ctx that gets cancelled at teardown killed the hook process
+			// before it could do its job. executeHook falls back to
+			// context.Background() when Ctx is nil, so the per-hook timeout
+			// still applies and cancellation no longer leaks in.
+			asyncEnv := env
+			asyncEnv.Ctx = nil
 			safego.Go("hooks.async."+env.Event, func() {
-				_ = executeHook(h, env, payload)
+				_ = executeHook(h, asyncEnv, payload)
 			})
 		}
 		return HookResult{Allowed: true}
@@ -71,9 +81,12 @@ func Dispatch(cfg HookConfig, env HookEnv) HookResult {
 
 // runSync runs hooks sequentially. For blocking events, the first block wins.
 // For post_tool_use, collects inject_output from all matching hooks.
+// Hook execution errors (command failure, HTTP >= 400) are collected into the
+// returned HookResult.Err (joined) instead of being silently dropped (#547).
 func runSync(hooksList []Hook, env HookEnv) HookResult {
 	payload := BuildPayload(env)
 	var injectedOutput strings.Builder
+	var errs []error
 
 	for _, h := range hooksList {
 		if !matchAny(h.MatchMode, h.Match, env.ToolName, env.RawInput) {
@@ -83,6 +96,10 @@ func runSync(hooksList []Hook, env HookEnv) HookResult {
 		if !result.Allowed {
 			return result
 		}
+		if result.Err != nil {
+			// Non-blocking failure: record it but keep running remaining hooks.
+			errs = append(errs, fmt.Errorf("%s (match=%q): %w", env.Event, h.Match, result.Err))
+		}
 		if env.Event == EventPostToolUse && h.InjectOutput && result.Output != "" {
 			injectedOutput.WriteString(result.Output)
 			if !strings.HasSuffix(result.Output, "\n") {
@@ -91,7 +108,11 @@ func runSync(hooksList []Hook, env HookEnv) HookResult {
 		}
 	}
 
-	return HookResult{Allowed: true, Output: injectedOutput.String()}
+	res := HookResult{Allowed: true, Output: injectedOutput.String()}
+	if len(errs) > 0 {
+		res.Err = errors.Join(errs...)
+	}
+	return res
 }
 
 // executeHook dispatches to command or http execution based on hook type.
@@ -420,31 +441,41 @@ func filterEnviron(environ []string, keys ...string) []string {
 	return out
 }
 
+// pathParamFields lists tool argument fields that hold a filesystem path.
+// Order matters: most specific first.
+var pathParamFields = []string{"file_path", "path", "filename", "file"}
+
+// contentValueFields lists argument fields whose string value is arbitrary
+// user/agent content rather than a path. ExtractFilePath ignores these keys
+// entirely so example paths embedded in content (e.g. a JSON config sample
+// inside write_file's content) are never mistaken for the target file (#547).
+var contentValueFields = []string{"content", "body", "text", "new_text", "old_text"}
+
 // ExtractFilePath attempts to extract a file path from common tool argument patterns.
+// It parses rawInput as JSON and inspects only structured top-level fields;
+// values nested inside content-like fields are never scanned (#547).
 func ExtractFilePath(toolName string, rawInput string) string {
-	for _, key := range []string{"file_path", "path", "filename", "file"} {
-		idx := strings.Index(rawInput, `"`+key+`"`)
-		if idx < 0 {
+	trimmed := strings.TrimSpace(rawInput)
+	if trimmed == "" {
+		return ""
+	}
+	var args map[string]any
+	if err := json.Unmarshal([]byte(trimmed), &args); err != nil {
+		return "" // not structured JSON — no reliable path to extract
+	}
+	for _, contentKey := range contentValueFields {
+		delete(args, contentKey)
+	}
+	for _, key := range pathParamFields {
+		val, ok := args[key]
+		if !ok {
 			continue
 		}
-		rest := rawInput[idx:]
-		colonIdx := strings.Index(rest, ":")
-		if colonIdx < 0 {
-			continue
+		s, ok := val.(string)
+		if !ok || s == "" {
+			continue // non-string JSON value (null/number/bool) — skip
 		}
-		val := strings.TrimSpace(rest[colonIdx+1:])
-		// Only process string values — skip null, numbers, booleans, etc.
-		if len(val) == 0 || val[0] != '"' {
-			continue // non-string JSON value, skip to next key
-		}
-		val = strings.TrimPrefix(val, `"`)
-		val = strings.TrimSuffix(val, `"`)
-		if i := strings.Index(val, `"`); i > 0 {
-			val = val[:i]
-		}
-		if val != "" {
-			return val
-		}
+		return s
 	}
 	return ""
 }

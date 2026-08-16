@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"path"
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/util"
@@ -187,11 +188,16 @@ func parseOPFSpine(r *zip.Reader, opfPath string) ([]string, error) {
 }
 
 // resolvePath resolves a relative path against a base directory within the ZIP.
+// ".." and "." segments are normalized (path.Clean) so an OPF nested in a
+// subdirectory (e.g. OEBPS/) with spine hrefs like "../text/chap1.xhtml" —
+// allowed by OCF and common in Sigil/InDesign layouts — resolves to the real
+// ZIP entry instead of a nonexistent "OEBPS/../text/chap1.xhtml" (#547).
 func resolvePath(baseDir, relPath string) string {
-	if strings.HasPrefix(relPath, "/") {
-		return relPath[1:]
+	joined := relPath
+	if !strings.HasPrefix(relPath, "/") {
+		joined = baseDir + relPath
 	}
-	return baseDir + relPath
+	return strings.TrimPrefix(path.Clean(joined), "/")
 }
 
 // extractHTMLFromZip reads an HTML/XHTML file from the ZIP and extracts text.
