@@ -282,23 +282,30 @@ func (p *peer) trySend(msg relayMessage) bool {
 	}
 }
 
-// sendRaw enqueues a raw message. Non-blocking with a 2s grace period:
-// events are already persisted to history before sendRaw, so a dropped
-// live-forward is recoverable via cursor-based replay on reconnect.
+// sendRaw enqueues a raw message. Non-blocking: callers typically hold
+// room.sendMu while fanning out to many peers, so a single full buffer must
+// never stall the whole room for 2s × N. Events are already persisted to
+// history before sendRaw, so a dropped live-forward is recoverable via
+// cursor-based replay on reconnect.
 func (p *peer) sendRaw(raw []byte) {
 	select {
 	case p.sendCh <- raw:
+		return
 	case <-p.done:
-	case <-time.After(2 * time.Second):
-		// Buffer full (slow peer). Message is in history; will be
-		// replayed from cursor on reconnect. Close the connection so the
-		// client reconnects immediately and resumes from its last ACKed
-		// cursor — rather than continuing to receive live events with
-		// ordinal gaps that trigger unnecessary sync overlays.
-		log.Printf("[relay] send buffer full, dropping live-forward room=%s peer=%s — closing slow client",
-			shortToken(p.room.token), p.clientID)
-		go p.closeWithReason(1013, "send buffer full (slow client)")
+		return
+	default:
 	}
+	// Buffer full (slow peer). Message is in history; will be replayed from
+	// cursor on reconnect. Close the connection so the client reconnects
+	// immediately and resumes from its last ACKed cursor — rather than
+	// continuing to receive live events with ordinal gaps that trigger
+	// unnecessary sync overlays.
+	log.Printf("[relay] send buffer full, dropping live-forward room=%s peer=%s — closing slow client",
+		shortToken(p.room.token), p.clientID)
+	if p.hub != nil && p.hub.stats != nil {
+		p.hub.stats.recordDroppedSend()
+	}
+	go p.closeWithReason(1013, "send buffer full (slow client)")
 }
 
 func (p *peer) closeWithReason(code int, reason string) {
@@ -413,6 +420,15 @@ func (p *peer) readLoop(h *hub) {
 func (p *peer) detachFromRoom(roomDestroyed bool, h *hub) {
 	p.room.mu.Lock()
 	if p.role == "server" {
+		// Guard against a deposed server's deferred detach evicting a newer
+		// server that took over (old conn can linger TCP half-open for
+		// minutes). Mirrors the clientsByID[p.clientID]==p guard below.
+		if p.room.server != p {
+			p.room.mu.Unlock()
+			log.Printf("[relay] stale server detach ignored: room=%s client=%s",
+				shortToken(p.room.token), p.clientID)
+			return
+		}
 		p.room.server = nil
 		p.room.serverReady = false
 		token := p.room.token
@@ -514,6 +530,20 @@ func (p *peer) handleClientEncrypted(raw []byte, msg relayMessage) {
 func (p *peer) handleServerBroadcast(_ []byte, msg relayMessage) {
 	p.room.sendMu.Lock()
 	defer p.room.sendMu.Unlock()
+
+	// Only the current authoritative server may broadcast. A deposed
+	// server (kicked by a newer server but with a lingering open conn)
+	// must not rewrite history or the authority epoch — mirrors the
+	// p.room.server == p check in onServerReady.
+	p.room.mu.RLock()
+	authorized := p.room.server == p
+	p.room.mu.RUnlock()
+	if !authorized {
+		log.Printf("[relay] rejected stale server broadcast: room=%s client=%s type=%s",
+			shortToken(p.room.token), p.clientID, msg.Type)
+		p.hub.trace("server_broadcast_rejected", p.room.token, msg)
+		return
+	}
 
 	authorityEpoch, changed, hydrated, loaded := p.bindRoomSession(msg.SessionID, msg.AuthorityEpoch, false)
 	if msg.SessionID == "" {
@@ -632,6 +662,19 @@ func (p *peer) onActiveSession(msg relayMessage) {
 
 	p.room.sendMu.Lock()
 	defer p.room.sendMu.Unlock()
+
+	// Only the current authoritative server may (re)bind the room session.
+	// A deposed server's late active_session must not rewrite history or
+	// reset the authority epoch established by the new server.
+	p.room.mu.RLock()
+	authorized := p.room.server == p
+	p.room.mu.RUnlock()
+	if !authorized {
+		log.Printf("[relay] rejected stale server active_session: room=%s client=%s session=%s",
+			shortToken(p.room.token), p.clientID, sessionID)
+		p.hub.trace("server_active_session_rejected", p.room.token, msg)
+		return
+	}
 
 	// Update room workspace metadata
 	if wsPath != "" {
@@ -879,11 +922,14 @@ func (p *peer) onAck(msg relayMessage, h *hub) {
 	}
 	p.room.mu.Lock()
 	p.cursor = msg.EventID
+	// Read sessionID under the same lock: bindRoomSession writes it with
+	// room.mu held, and this cursor is persisted with the sessionID — an
+	// unsynchronized read here is a data race (-race-verified).
+	sid := p.room.sessionID
 	p.room.mu.Unlock()
 
 	if h.store != nil {
 		th := hashToken(p.room.token)
-		sid := p.room.sessionID
 		s := h.store
 		cid := p.clientID
 		eid := msg.EventID

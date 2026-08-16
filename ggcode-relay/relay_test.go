@@ -435,6 +435,7 @@ func TestPeerOnActiveSessionBumpsGenerationOnSessionSwitch(t *testing.T) {
 
 	h := newHub(nil)
 	server := newPeer(h, r, "server", nil)
+	r.server = server // authoritative server (issue #539: broadcasts require room.server == p)
 	client := newPeer(h, r, "client", nil)
 	r.clients[client] = struct{}{}
 
@@ -521,6 +522,7 @@ func TestV3ResumeReplaysBootstrapEventsInHistory(t *testing.T) {
 	r := newRoom("token")
 	h := newHub(nil)
 	server := newPeer(h, r, "server", nil)
+	r.server = server // authoritative server (issue #539: broadcasts require room.server == p)
 	server.handleServerBroadcast(nil, relayMessage{
 		Type:      "session_info",
 		SessionID: "sess-1",

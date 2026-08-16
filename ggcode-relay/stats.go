@@ -78,6 +78,7 @@ type relayStats struct {
 	roomStoreHits             uint64
 	roomStoreMisses           uint64
 	roomDestroys              uint64
+	droppedSends              uint64
 }
 
 type relayStatsSnapshot struct {
@@ -105,6 +106,7 @@ type relayStatsSnapshot struct {
 	RoomStoreHits             uint64
 	RoomStoreMisses           uint64
 	RoomDestroys              uint64
+	DroppedSends              uint64
 }
 
 func newRelayStats() *relayStats {
@@ -185,6 +187,12 @@ func (s *relayStats) recordRoomDestroy() {
 	atomic.AddUint64(&s.roomDestroys, 1)
 }
 
+// recordDroppedSend counts live-forwards dropped because a peer's send
+// buffer was full (slow consumer closed for cursor-based replay recovery).
+func (s *relayStats) recordDroppedSend() {
+	atomic.AddUint64(&s.droppedSends, 1)
+}
+
 func (s *relayStats) snapshot(h *hub) (relayStatsSnapshot, error) {
 	var snap relayStatsSnapshot
 	if h != nil {
@@ -229,6 +237,7 @@ func (s *relayStats) snapshot(h *hub) (relayStatsSnapshot, error) {
 	snap.RoomStoreHits = atomic.LoadUint64(&s.roomStoreHits)
 	snap.RoomStoreMisses = atomic.LoadUint64(&s.roomStoreMisses)
 	snap.RoomDestroys = atomic.LoadUint64(&s.roomDestroys)
+	snap.DroppedSends = atomic.LoadUint64(&s.droppedSends)
 	return snap, nil
 }
 
