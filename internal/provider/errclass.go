@@ -64,7 +64,8 @@ func (c FailureClass) String() string {
 //   - ZAI/GLM: coding plan, 使用上限, 套餐已到期
 //   - Volcengine Ark: QuotaExceeded
 //   - Aliyun: allocated quota
-//   - MiniMax: usage limit
+//   - MiniMax: usage limit (Anthropic's recoverable 5-hour-window form is
+//     excluded via anthropicWindowLimitMarkers before matching, #528)
 //   - Xiaomi MiMo: 额度耗尽
 var quotaKeywords = []string{
 	"coding plan",
@@ -89,6 +90,45 @@ var quotaKeywords = []string{
 	"公平使用",
 	"fair usage",
 	"access_terminated",
+	// MiniMax: "usage limit exceeded, 5-hour usage limit reached" (permanent
+	// until plan reset). Safe to match broadly (#528): Anthropic's
+	// recoverable 5-hour-window 429s are excluded earlier by
+	// anthropicWindowLimitMarkers ("5-hour window", "limit will reset",
+	// "weekly limit") inside isQuotaExhaustedString before this list is
+	// consulted, so the bare keyword cannot misfire on them.
+	"usage limit",
+}
+
+// anthropicWindowLimitMarkers are lowercased substrings that identify
+// Anthropic's recoverable usage-limit 429s (rate_limit_error). These reset
+// within hours, so they are transient rate limits — NOT permanent quota (#528).
+var anthropicWindowLimitMarkers = []string{
+	"5-hour window",    // "would exceed your usage limit for the 5-hour window"
+	"limit will reset", // "Your limit will reset at ..."
+	"weekly limit",     // weekly window variant
+}
+
+// isAnthropicWindowLimit reports whether the (lowercased) message carries a
+// marker of an auto-resetting Anthropic usage window.
+func isAnthropicWindowLimit(s string) bool {
+	return containsAny(s, anthropicWindowLimitMarkers)
+}
+
+// isQuotaExhaustedString reports whether the (lowercased) message indicates
+// permanent quota/billing exhaustion. It is the shared core of
+// IsQuotaExhaustedError and ClassifyLLMError.
+//
+// #528: Anthropic's recoverable 5-hour-window 429 message also contains
+// "usage limit", which caused a single rate-limit hit to trigger sticky
+// failover. anthropicWindowLimitMarkers ("5-hour window", "limit will reset",
+// "weekly limit") are checked first and exclude that form; MiniMax's genuine
+// message ("usage limit exceeded, 5-hour usage limit reached") carries no
+// marker and remains quota.
+func isQuotaExhaustedString(s string) bool {
+	if isAnthropicWindowLimit(s) {
+		return false
+	}
+	return containsAny(s, quotaKeywords)
 }
 
 // authKeywords are lowercased substrings indicating auth failure.
@@ -220,7 +260,7 @@ func IsQuotaExhaustedError(err error) bool {
 	if err == nil {
 		return false
 	}
-	return containsAny(strings.ToLower(err.Error()), quotaKeywords)
+	return isQuotaExhaustedString(strings.ToLower(err.Error()))
 }
 
 // ClassifyLLMError categorizes an LLM call failure. Order matters: quota is
@@ -232,6 +272,13 @@ func ClassifyLLMError(err error) FailureClass {
 		return FailureNone
 	}
 	if errors.Is(err, context.Canceled) {
+		return FailureNone
+	}
+	// #528: client-side deadlines (long-turn deadline, user re-sending after
+	// timeout) say nothing about provider health — same as Canceled (#304's
+	// sibling defect). Must NOT count toward the consecutive-failure failover
+	// threshold, which only exempts FailureNone.
+	if errors.Is(err, context.DeadlineExceeded) {
 		return FailureNone
 	}
 	// Guard against SDK error types whose .Error() panics on nil internals
@@ -248,7 +295,13 @@ func ClassifyLLMError(err error) FailureClass {
 	if IsContextOverflowError(err) {
 		return FailureTransient
 	}
-	if containsAny(s, quotaKeywords) {
+	// #528: Anthropic 5-hour-window usage limits auto-reset within hours —
+	// transient rate limit, never permanent quota, even though the message
+	// contains "usage limit".
+	if isAnthropicWindowLimit(s) {
+		return FailureRateLimit
+	}
+	if isQuotaExhaustedString(s) {
 		return FailureQuota
 	}
 	if containsAny(s, authKeywords) || containsAny(s, authStatusPatterns) {

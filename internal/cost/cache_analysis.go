@@ -99,18 +99,10 @@ func analyzeCacheLocked(sc SessionCost, pricing PricingTable) CacheAnalysis {
 	}
 	a.HasPricing = true
 
-	// Default cache pricing assumptions for metered models.
-	// These ratios follow the industry-standard Anthropic prompt caching pricing:
-	//   cache_read = 0.10 * input, cache_write = 1.25 * input
-	// If the pricing table has explicit cache rates, use those.
-	cacheReadPerM := rate.CacheReadPerM
-	if cacheReadPerM == 0 {
-		cacheReadPerM = rate.InputPerM * 0.10
-	}
-	cacheWritePerM := rate.CacheWritePerM
-	if cacheWritePerM == 0 {
-		cacheWritePerM = rate.InputPerM * 1.25
-	}
+	// #529: single source of truth for effective cache rates, shared with the
+	// Tracker (recalculate / recordAgentLocked) so both layers agree even when
+	// the user's merged pricing table omits explicit cache fields.
+	cacheReadPerM, cacheWritePerM := effectiveCacheRates(rate)
 
 	// Gross savings: what we saved by reading from cache instead of paying input price.
 	a.GrossSavingsUSD = float64(sc.CacheReadTokens) * (rate.InputPerM - cacheReadPerM) / 1e6
@@ -120,14 +112,39 @@ func analyzeCacheLocked(sc SessionCost, pricing PricingTable) CacheAnalysis {
 
 	a.NetSavingsUSD = a.GrossSavingsUSD - a.CacheWritePremiumUSD
 
-	// Cost without caching: all tokens (input + cache_read + cache_write) at input price.
-	a.EffectiveCostWithoutCache = float64(sc.InputTokens+sc.CacheReadTokens+sc.CacheWriteTokens) * rate.InputPerM / 1e6
+	// #529: numerator (TotalCostUSD) includes output tokens, so the baseline
+	// must too — otherwise output-heavy sessions produce absurd deep-negative
+	// percentages (e.g. -633%). Baseline = same tokens priced as if no caching
+	// existed (all input-shaped tokens at input price + output at output price).
+	a.EffectiveCostWithoutCache = float64(sc.InputTokens+sc.CacheReadTokens+sc.CacheWriteTokens)*rate.InputPerM/1e6 +
+		float64(sc.OutputTokens)*rate.OutputPerM/1e6
 
 	if a.EffectiveCostWithoutCache > 0 {
 		a.PercentSaved = (a.EffectiveCostWithoutCache - sc.TotalCostUSD) / a.EffectiveCostWithoutCache * 100
 	}
 
 	return a
+}
+
+// effectiveCacheRates returns the cache read/write per-million rates for a
+// metered model, falling back to the industry-standard Anthropic prompt
+// caching ratios (cache_read = 0.10x input, cache_write = 1.25x input) when
+// the pricing table omits explicit cache fields.
+//
+// #529: shared by analyzeCacheLocked and Tracker.recalculate/recordAgentLocked
+// so the tracker and the analysis layer can never disagree on cache pricing
+// (previously the tracker billed cache tokens at 0 when fields were unset
+// while the analysis layer assumed the 0.10x/1.25x fallback).
+func effectiveCacheRates(rate ModelRate) (cacheReadPerM, cacheWritePerM float64) {
+	cacheReadPerM = rate.CacheReadPerM
+	if cacheReadPerM == 0 {
+		cacheReadPerM = rate.InputPerM * 0.10
+	}
+	cacheWritePerM = rate.CacheWritePerM
+	if cacheWritePerM == 0 {
+		cacheWritePerM = rate.InputPerM * 1.25
+	}
+	return cacheReadPerM, cacheWritePerM
 }
 
 // CacheEfficiencyLevel categorizes cache performance.
@@ -155,6 +172,12 @@ func (a CacheAnalysis) EfficiencyLevel() CacheEfficiencyLevel {
 
 	// If write-to-read ratio is very high, we're writing to cache but rarely
 	// reading back — this is cache thrashing and wastes the write premium.
+	// #529: write-only caching (read == 0, write > 0) is the degenerate extreme
+	// of the same curve — the entire write premium is lost with zero payback —
+	// so it is Thrashing, not Marginal.
+	if a.CacheWriteTokens > 0 && a.CacheReadTokens == 0 {
+		return CacheEffThrashing
+	}
 	if a.CacheWriteTokens > 0 && a.CacheReadTokens > 0 {
 		ratio := float64(a.CacheWriteTokens) / float64(a.CacheReadTokens)
 		if ratio > 10 {

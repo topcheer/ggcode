@@ -103,11 +103,15 @@ func (t *Tracker) recordAgentLocked(agentID string, usage TokenUsage) {
 
 	rate, ok := t.pricing.Get(t.cost.Provider, t.cost.Model)
 	if ok {
+		// #529: use the shared fallback (0.10x/1.25x input) so cache tokens are
+		// never billed at zero when the pricing table omits explicit cache
+		// fields, and the tracker agrees with analyzeCacheLocked.
+		cacheReadPerM, cacheWritePerM := effectiveCacheRates(rate)
 		entry.TotalCostUSD =
 			float64(entry.InputTokens)*rate.InputPerM/1e6 +
 				float64(entry.OutputTokens)*rate.OutputPerM/1e6 +
-				float64(entry.CacheRead)*rate.CacheReadPerM/1e6 +
-				float64(entry.CacheWrite)*rate.CacheWritePerM/1e6
+				float64(entry.CacheRead)*cacheReadPerM/1e6 +
+				float64(entry.CacheWrite)*cacheWritePerM/1e6
 	}
 }
 
@@ -170,9 +174,11 @@ func (t *Tracker) recalculate() {
 	if !ok {
 		return
 	}
+	// #529: same shared cache-rate fallback as recordAgentLocked/analyzeCacheLocked.
+	cacheReadPerM, cacheWritePerM := effectiveCacheRates(rate)
 	t.cost.TotalCostUSD =
 		float64(t.cost.InputTokens)*rate.InputPerM/1e6 +
 			float64(t.cost.OutputTokens)*rate.OutputPerM/1e6 +
-			float64(t.cost.CacheReadTokens)*rate.CacheReadPerM/1e6 +
-			float64(t.cost.CacheWriteTokens)*rate.CacheWritePerM/1e6
+			float64(t.cost.CacheReadTokens)*cacheReadPerM/1e6 +
+			float64(t.cost.CacheWriteTokens)*cacheWritePerM/1e6
 }
