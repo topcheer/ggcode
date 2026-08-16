@@ -1,6 +1,8 @@
 package config
 
 import (
+	"reflect"
+
 	"github.com/topcheer/ggcode/internal/hooks"
 	"gopkg.in/yaml.v3"
 )
@@ -318,7 +320,12 @@ func (*Config) diffToolPerms(current, global map[string]ToolPermission, delta ma
 	}
 	permDelta := map[string]interface{}{}
 	for k, v := range current {
-		if _, exists := global[k]; !exists {
+		// Write the key when the VALUE differs from global, not only when the
+		// key is absent from global (#524 Bug A, write side). The old
+		// existence-only check silently dropped instance-scope value changes
+		// (e.g. allow→deny on a globally-configured tool), making SaveInstance
+		// a no-op that returned success while the override was lost.
+		if gv, exists := global[k]; !exists || gv != v {
 			permDelta[k] = string(v)
 		}
 	}
@@ -361,13 +368,33 @@ func (*Config) diffSwarm(current, global *SwarmConfig, delta map[string]interfac
 
 func (*Config) diffHooks(current, global *hooks.HookConfig, delta map[string]interface{}) {
 	hookDelta := map[string]interface{}{}
-	if len(current.PreToolUse) > 0 && len(global.PreToolUse) == 0 {
+	// The old `len(global.X)==0` guard silently dropped every instance hook
+	// change whenever the global config already had hooks (#524 Bug B). With
+	// replace-on-merge semantics (mergeHookConfig), write the instance list
+	// whenever it differs from the global list: on reload the instance list
+	// replaces the global one verbatim — neither dropped (the old guard) nor
+	// duplicated (what append semantics would do across save/reload cycles).
+	if len(current.PreToolUse) > 0 && !hookSlicesEqual(current.PreToolUse, global.PreToolUse) {
 		hookDelta["pre_tool_use"] = current.PreToolUse
 	}
-	if len(current.PostToolUse) > 0 && len(global.PostToolUse) == 0 {
+	if len(current.PostToolUse) > 0 && !hookSlicesEqual(current.PostToolUse, global.PostToolUse) {
 		hookDelta["post_tool_use"] = current.PostToolUse
 	}
 	if len(hookDelta) > 0 {
 		delta["hooks"] = hookDelta
 	}
+}
+
+// hookSlicesEqual reports whether two hook lists are deeply equal. Hook
+// contains map fields, so it is not comparable with ==.
+func hookSlicesEqual(a, b []hooks.Hook) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if !reflect.DeepEqual(a[i], b[i]) {
+			return false
+		}
+	}
+	return true
 }

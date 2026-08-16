@@ -142,16 +142,18 @@ func TestConfigPolicy_ExplicitAllow(t *testing.T) {
 	}
 }
 
-func TestConfigPolicy_SandboxDeny(t *testing.T) {
+// TestConfigPolicy_SandboxAsk: a write tool with a static allow rule is
+// downgraded to Ask (human confirmation) for paths outside the sandbox —
+// an explicit allow is not stricter than the no-rule default (#525 Bug D).
+func TestConfigPolicy_SandboxAsk(t *testing.T) {
 	rules := map[string]Decision{"write_file": Allow}
 	p := NewConfigPolicy(rules, []string{"/tmp"})
-	// Write tools outside sandbox are still denied (not auto-allowed).
 	d, err := p.Check("write_file", json.RawMessage(`{"file_path":"/etc/passwd"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d != Deny {
-		t.Errorf("expected Deny for write path outside sandbox, got %s", d)
+	if d != Ask {
+		t.Errorf("expected Ask for write path outside sandbox, got %s", d)
 	}
 }
 
@@ -162,8 +164,11 @@ func TestConfigPolicy_DangerousCommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d != Deny {
-		t.Errorf("expected Deny for dangerous command, got %s", d)
+	// Dangerous command under an explicit allow rule downgrades to Ask,
+	// aligned with the runtime cmdRules branch: allow must not be stricter
+	// than the no-rule default (#525 Bug C).
+	if d != Ask {
+		t.Errorf("expected Ask for dangerous command, got %s", d)
 	}
 }
 
@@ -174,8 +179,9 @@ func TestConfigPolicy_DangerousTmuxCommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d != Deny {
-		t.Errorf("expected Deny for dangerous tmux command, got %s", d)
+	// Same downgrade-to-Ask semantics as run_command (#525 Bug C).
+	if d != Ask {
+		t.Errorf("expected Ask for dangerous tmux command, got %s", d)
 	}
 }
 
@@ -272,8 +278,12 @@ func TestConfigPolicy_MultiFileToolPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d != Deny {
-		t.Fatalf("expected multi_file_edit deny for outside path, got %s", d)
+	// Out-of-sandbox write under a static allow rule downgrades to Ask, not
+	// hard Deny (#525 Bug D): an explicit allow must not be stricter than the
+	// no-rule default (Ask). Mirrors the read case above and the bypass
+	// branch's keep-human-in-the-loop semantics.
+	if d != Ask {
+		t.Fatalf("expected multi_file_edit Ask for outside path, got %s", d)
 	}
 }
 

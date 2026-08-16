@@ -797,7 +797,11 @@ func TestMergeInstance_SwarmConfig(t *testing.T) {
 }
 
 func TestMergeInstance_HookConfig(t *testing.T) {
-	// Instance hooks should be appended to global hooks, not replace them.
+	// A non-empty instance hook list REPLACES the global list (#524 Bug B):
+	// replace semantics can express "change or remove a global hook" and stay
+	// stable across save/reload cycles, where append semantics would
+	// duplicate entries. It is identical to append for the previously-
+	// reachable case (global list empty, covered below).
 	global := &Config{Hooks: hooks.HookConfig{
 		PreToolUse:  []hooks.Hook{{Command: "echo global-pre"}},
 		PostToolUse: []hooks.Hook{{Command: "echo global-post"}},
@@ -807,18 +811,34 @@ func TestMergeInstance_HookConfig(t *testing.T) {
 		PostToolUse: []hooks.Hook{{Command: "echo instance-post"}},
 	}}
 	MergeInstance(global, instance)
-	if len(global.Hooks.PreToolUse) != 2 {
-		t.Errorf("Hooks PreToolUse len = %d, want 2 (global + instance appended)", len(global.Hooks.PreToolUse))
+	if len(global.Hooks.PreToolUse) != 1 {
+		t.Errorf("Hooks PreToolUse len = %d, want 1 (instance replaces global)", len(global.Hooks.PreToolUse))
 	}
-	if len(global.Hooks.PostToolUse) != 2 {
-		t.Errorf("Hooks PostToolUse len = %d, want 2 (global + instance appended)", len(global.Hooks.PostToolUse))
+	if len(global.Hooks.PostToolUse) != 1 {
+		t.Errorf("Hooks PostToolUse len = %d, want 1 (instance replaces global)", len(global.Hooks.PostToolUse))
 	}
-	// Global hooks should come first, instance hooks after
-	if global.Hooks.PreToolUse[0].Command != "echo global-pre" {
-		t.Errorf("First pre hook should be global, got %q", global.Hooks.PreToolUse[0].Command)
+	if global.Hooks.PreToolUse[0].Command != "echo instance-pre" {
+		t.Errorf("Active pre hook should be instance, got %q", global.Hooks.PreToolUse[0].Command)
 	}
-	if global.Hooks.PreToolUse[1].Command != "echo instance-pre" {
-		t.Errorf("Second pre hook should be instance, got %q", global.Hooks.PreToolUse[1].Command)
+	if global.Hooks.PostToolUse[0].Command != "echo instance-post" {
+		t.Errorf("Active post hook should be instance, got %q", global.Hooks.PostToolUse[0].Command)
+	}
+
+	// Empty instance lists leave the global hooks in place (no accidental wipe).
+	global2 := &Config{Hooks: hooks.HookConfig{
+		PreToolUse: []hooks.Hook{{Command: "echo global-pre"}},
+	}}
+	MergeInstance(global2, &Config{})
+	if len(global2.Hooks.PreToolUse) != 1 || global2.Hooks.PreToolUse[0].Command != "echo global-pre" {
+		t.Errorf("empty instance hooks must not clear global hooks; got %+v", global2.Hooks.PreToolUse)
+	}
+
+	// Instance hooks on an empty global list are adopted directly (the
+	// previously-reachable case, unchanged by the new semantics).
+	global3 := &Config{}
+	MergeInstance(global3, instance)
+	if len(global3.Hooks.PreToolUse) != 1 || global3.Hooks.PreToolUse[0].Command != "echo instance-pre" {
+		t.Errorf("instance hook not adopted into empty global; got %+v", global3.Hooks.PreToolUse)
 	}
 }
 

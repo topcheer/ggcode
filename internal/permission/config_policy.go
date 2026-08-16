@@ -233,14 +233,32 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 		if isFileTool(toolName) {
 			for _, path := range extractFilePaths(input) {
 				if path != "" && !p.sandbox.Allowed(path) {
-					return Deny, nil
+					// Out-of-sandbox access under a static rule downgrades to Ask
+					// (human review), mirroring the bypass branch, which also
+					// keeps a human in the loop for out-of-sandbox writes. An
+					// explicit user Allow/Ask rule must not become a harder Deny
+					// than the no-rule default (Ask); only an explicit Deny rule
+					// stays Deny (#525 Bug D).
+					if d == Deny {
+						return Deny, nil
+					}
+					return Ask, nil
 				}
 			}
 		}
 		if isCommandTool(toolName) {
 			cmd, _ := extractCommand(input)
 			if cmd != "" && p.detector.IsDangerous(cmd) {
-				return Deny, nil
+				// Dangerous command under a static allow rule downgrades to Ask,
+				// matching the runtime cmdRules branch above: both rule sources
+				// are explicit user allows, so they must share the same downgrade
+				// target. An explicit allow must not be a harder Deny than the
+				// no-rule default (Ask). An explicit Deny rule stays Deny
+				// (#525 Bug C).
+				if d == Deny {
+					return Deny, nil
+				}
+				return Ask, nil
 			}
 			// Data egress always requires human gating, even when a static
 			// config allow rule matched (#256): a tools.run_command: allow

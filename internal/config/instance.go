@@ -143,14 +143,19 @@ func MergeInstance(global, instance *Config) {
 		global.instanceFields["allowed_dirs"] = true
 	}
 
-	// ToolPerms — add instance permissions not in global
-	if global.ToolPerms == nil && instance.ToolPerms != nil {
+	// ToolPerms — instance-wins on conflict (#524 Bug A, read side). The old
+	// merge only adopted instance keys ABSENT from global, so an instance
+	// allow→deny change on a globally-configured tool reverted to the global
+	// value after reload. Instance values now override global values; the
+	// overridden keys are recorded in instanceFields so Save() keeps them out
+	// of the global file (they persist via SaveInstance).
+	if global.ToolPerms == nil && len(instance.ToolPerms) > 0 {
 		global.ToolPerms = make(map[string]ToolPermission, len(instance.ToolPerms))
-		global.instanceFields["tool_permissions"] = true
 	}
 	for k, v := range instance.ToolPerms {
-		if _, exists := global.ToolPerms[k]; !exists {
+		if gv, exists := global.ToolPerms[k]; !exists || gv != v {
 			global.ToolPerms[k] = v
+			global.instanceFields["tool_permissions"] = true
 		}
 	}
 
@@ -184,7 +189,7 @@ func MergeInstance(global, instance *Config) {
 	mergeSwarmConfig(&global.Swarm, &instance.Swarm)
 
 	// Hooks
-	mergeHookConfig(&global.Hooks, &instance.Hooks)
+	mergeHookConfig(&global.Hooks, &instance.Hooks, global.instanceFields)
 }
 
 // mergeUIConfig merges instance UI config into global.
@@ -335,14 +340,23 @@ func mergeSwarmConfig(global, instance *SwarmConfig) {
 	}
 }
 
-// mergeHookConfig merges instance hook config into global by appending.
-// Instance hooks are added after global hooks (instance hooks run later).
-func mergeHookConfig(global, instance *hooks.HookConfig) {
+// mergeHookConfig merges instance hook config into global with REPLACE
+// semantics (#524 Bug B): a non-empty instance list replaces the global list.
+// The previous append semantics could not express "change or remove a global
+// hook" and would duplicate entries across save/reload cycles (load appends
+// global+instance, save diffs the merged list against the global snapshot and
+// re-writes it, reload appends again). Replace keeps that cycle stable, and is
+// identical to append for the previously-reachable case (global list empty).
+// Replaced/merged instance hooks are tracked so Save() strips them from the
+// global write — without this, instance hooks leaked into the global file.
+func mergeHookConfig(global, instance *hooks.HookConfig, tracked map[string]bool) {
 	if len(instance.PreToolUse) > 0 {
-		global.PreToolUse = append(global.PreToolUse, instance.PreToolUse...)
+		global.PreToolUse = instance.PreToolUse
+		tracked["hooks"] = true
 	}
 	if len(instance.PostToolUse) > 0 {
-		global.PostToolUse = append(global.PostToolUse, instance.PostToolUse...)
+		global.PostToolUse = instance.PostToolUse
+		tracked["hooks"] = true
 	}
 }
 
