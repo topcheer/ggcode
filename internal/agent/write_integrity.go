@@ -139,6 +139,26 @@ func registerAllChecks() {
 		// float-equality → function-name whitelist + exact-literal
 		// exemption + delta wiring + shadowing guard (golangci-lint keeps
 		// float-eq off by default for the same sentinel-vs-computed reason).
+		//
+		// #507: same fate for "error-swallow" and "error-nopropagate"
+		// (both fc5c4aad-stripped, sa-166 probe-verified 4 FP classes).
+		// error-swallow Pattern 2 (bare return) fired on named-result
+		// propagation — `func f() (err error) { ...; if err != nil {
+		// return } }` returns the NON-nil err, but the warning claimed
+		// "instead of returning nil"; Pattern 1 (empty body) is the only
+		// zero-FP revivable part. error-nopropagate fired on errors.Join
+		// accumulation, struct-field stores (s.lastErr = err), and channel
+		// handoffs (errCh <- err) — deferred-propagation sinks that AST
+		// heuristics cannot distinguish from swallowing without
+		// interprocedural dataflow (the reason go vet/errcheck/staticcheck
+		// all deliberately implement no such check), and its line-number
+		// delta re-reported every old instance after any top-of-file
+		// insert. Revival preconditions: error-swallow → named-result
+		// exemption + drop the "returning nil" claim (or revive Pattern 1
+		// alone); error-nopropagate → deferred-sink exemptions (error-slice
+		// append / field store / channel send / closure capture) +
+		// fingerprint delta instead of line numbers. The live helpers
+		// looksLikeError/isNilIdent were migrated to nil_deref_check.go.
 		{Name: "concurrent-map-access", Langs: []Language{LangGo}, Run: stringCheck(checkConcurrentMapAccess)},
 		{Name: "context-leak", Langs: []Language{LangGo}, Run: stringCheck(checkContextLeak)},
 		{Name: "resource-leak", Langs: []Language{LangGo}, Run: sliceCheck(checkResourceLeaks)},

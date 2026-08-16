@@ -387,7 +387,39 @@ func detectNilDeref(fset *token.FileSet, n ast.Node, nilRisk map[string]nilRiskE
 }
 
 // looksLikeError returns true if the variable name suggests it holds an error.
-// Delegates to the existing looksLikeErrorVar helper from error_swallow_check.go.
+// Migrated from error_swallow_check.go when that dead detector was deleted
+// (#507): this check was its only live consumer.
 func looksLikeError(name string) bool {
-	return looksLikeErrorVar(name)
+	switch name {
+	case "err", "e", "errs", "retErr", "callErr":
+		return true
+	default:
+		// Match names ending in "Err" or "Error" (e.g., parseErr, dbError).
+		if strings.HasSuffix(name, "Err") || strings.HasSuffix(name, "Error") {
+			return true
+		}
+		// Match errN pattern (err1, err2, etc.) - common when handling
+		// multiple error-returning calls in the same function.
+		if len(name) > 3 && name[:3] == "err" {
+			rest := name[3:]
+			isDigits := rest != ""
+			for _, c := range rest {
+				if c < '0' || c > '9' {
+					isDigits = false
+					break
+				}
+			}
+			if isDigits {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+// isNilIdent returns true if expr is the `nil` identifier.
+// Migrated from error_swallow_check.go (#507): shared by isErrorNilCheck.
+func isNilIdent(expr ast.Expr) bool {
+	ident, ok := expr.(*ast.Ident)
+	return ok && ident.Name == "nil"
 }
