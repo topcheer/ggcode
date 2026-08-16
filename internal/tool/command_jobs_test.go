@@ -168,3 +168,102 @@ func TestCommandJobToolDescriptionsGuideInteractiveUse(t *testing.T) {
 		t.Fatalf("write_command_input schema should clarify stdin-only behavior, got %s", string(writeInput.Parameters()))
 	}
 }
+
+// TestSecondsToDurationClampsOverflow (#513 Bug1): the seconds→Duration
+// multiplication must never overflow int64 — 9223372037s wraps negative
+// (WithTimeout expires instantly) and 18446744074s wraps to ~290ms.
+func TestSecondsToDurationClampsOverflow(t *testing.T) {
+	tests := []struct {
+		name    string
+		seconds int
+		want    time.Duration
+	}{
+		{"negative_uses_fallback", -1, 30 * time.Second},
+		{"zero_uses_fallback", 0, 30 * time.Second},
+		{"normal_value", 60, 60 * time.Second},
+		{"overflow_negative_wrap", 9223372037, 86400 * time.Second},
+		{"overflow_positive_wrap", 18446744074, 86400 * time.Second},
+		{"absurd_value", 99999999999, 86400 * time.Second},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := secondsToDuration(tt.seconds, 30*time.Second)
+			if got != tt.want {
+				t.Fatalf("secondsToDuration(%d) = %v, want %v", tt.seconds, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestSnapshotTotalLinesExcludesPartial (#513 Bug2): the trailing partial
+// line must not occupy a line number — when the next chunk completes it,
+// since_line polling must return the merged line instead of [].
+func TestSnapshotTotalLinesExcludesPartial(t *testing.T) {
+	mgr := NewCommandJobManager(t.TempDir())
+	started, err := mgr.Start(context.Background(), "printf 'line1\\npartial-without-newline'; sleep 0.3; printf -- '-continued\\n'", false, 10*time.Second)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	// Poll until the first chunk (partial, no trailing newline) is buffered.
+	var snap1 *CommandJobSnapshot
+	for i := 0; i < 50; i++ {
+		s, err := mgr.Read(started.ID, 10, 0)
+		if err != nil {
+			t.Fatalf("read: %v", err)
+		}
+		if s.TotalLines > 0 || (len(s.Lines) > 0 && strings.Contains(s.Lines[len(s.Lines)-1], "partial-without-newline")) {
+			snap1 = &s
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if snap1 == nil {
+		t.Fatal("never observed the partial-line snapshot")
+	}
+	// The partial line is visible as a preview but must NOT be counted.
+	if snap1.TotalLines != 1 {
+		t.Fatalf("snapshot with trailing partial: TotalLines = %d, want 1 (completed lines only)", snap1.TotalLines)
+	}
+
+	// Wait for the second chunk to complete the merge.
+	var snap2 *CommandJobSnapshot
+	for i := 0; i < 100; i++ {
+		s, err := mgr.Read(started.ID, 10, 0)
+		if err != nil {
+			t.Fatalf("read: %v", err)
+		}
+		if s.TotalLines >= 2 {
+			snap2 = &s
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if snap2 == nil {
+		t.Fatal("never observed the merged-line snapshot")
+	}
+	if snap2.TotalLines != 2 {
+		t.Fatalf("after merge: TotalLines = %d, want 2", snap2.TotalLines)
+	}
+
+	// The since_line=1 poll must now return the merged complete line
+	// (the old bug returned [] — the merged line occupied a line number
+	// already burned by the partial preview).
+	s, err := mgr.Read(started.ID, 10, 1)
+	if err != nil {
+		t.Fatalf("read since: %v", err)
+	}
+	found := false
+	for _, l := range s.Lines {
+		if strings.Contains(l, "partial-without-newline-continued") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("since_line=1 polling must return the merged line, got %q", s.Lines)
+	}
+
+	if _, err := mgr.Stop(started.ID); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+}
