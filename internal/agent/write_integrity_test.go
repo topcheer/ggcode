@@ -170,3 +170,18 @@ func validate(x int) int {
 		t.Errorf("expected 'panic()' in warning, got: %s", warning)
 	}
 }
+
+func TestCheckWriteIntegrity_HardcodedPathRegistered(t *testing.T) {
+	// #516: hardcoded-path spent multiple census rounds as unregistered dead
+	// code precisely because nothing asserted its registration. This guards
+	// against silent deregistration (e.g., a future registry refactor).
+	old := "package mypkg\n\nfunc load() string { return \"\" }\n"
+	newSrc := "package mypkg\n\nfunc load() string { return \"/Users/john/project/config.yaml\" }\n"
+	warning := checkWriteIntegrity("src/mypkg/loader.go", old, newSrc)
+	if warning == "" {
+		t.Fatal("expected hardcoded-path warning from checkWriteIntegrity (detector must stay registered, see #516)")
+	}
+	if !strings.Contains(warning, "macOS home path") {
+		t.Errorf("expected home path warning, got: %s", warning)
+	}
+}
