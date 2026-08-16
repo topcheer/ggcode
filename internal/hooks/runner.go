@@ -414,9 +414,13 @@ func matchToolSingle(pattern, toolName, rawInput string) bool {
 }
 
 // maxHookEnvValue caps each GGCODE_* env value injected into hook
-// processes (#566-C). 128KB keeps execve safely under typical E2BIG
-// (256KB-1MB on Linux/macOS) even with several large values present.
-const maxHookEnvValue = 128 * 1024
+// processes (#566-C). 64KB keeps execve safely under E2BIG on every
+// platform: Linux MAX_ARG_STRLEN caps the ENTIRE "NAME=value" string at
+// 131072 bytes (32 pages) — a 128KB value plus the variable-name prefix
+// still exceeded it on CI Linux runners (darwin has no per-string cap,
+// which is why the 128KB version passed locally). 64KB budgets for any
+// GGCODE_* variable name while staying large for realistic payloads.
+const maxHookEnvValue = 64 * 1024
 
 // truncateHookEnv truncates v to maxHookEnvValue bytes, snapping to a rune
 // boundary so multi-byte UTF-8 is never split. Returns (value, truncated).

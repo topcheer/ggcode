@@ -86,7 +86,7 @@ func TestIssue566_LargeRawInputDoesNotBreakHookExec(t *testing.T) {
 		t.Skip("spawns a shell process")
 	}
 	big := strings.Repeat("x", 1024*1024) // 1MB — previously E2BIG
-	h := Hook{Command: `test "$GGCODE_RAW_INPUT_TRUNCATED" = "1" && test ${#GGCODE_RAW_INPUT} -le 131072 && echo ok`}
+	h := Hook{Command: `test "$GGCODE_RAW_INPUT_TRUNCATED" = "1" && test ${#GGCODE_RAW_INPUT} -le 65536 && echo ok`}
 	env := HookEnv{
 		Event:    EventPreToolUse,
 		ToolName: "write_file",
