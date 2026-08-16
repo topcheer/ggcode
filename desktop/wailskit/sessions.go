@@ -460,10 +460,15 @@ func loadSessionForExport(sessionID string) ([]SessionMessage, string, error) {
 	if err != nil {
 		return nil, "", fmt.Errorf("open session store: %w", err)
 	}
-	ses, err := store.Load(sessionID)
+	ses, err := store.LoadWithOptions(sessionID, true)
 	if err != nil {
 		return nil, "", fmt.Errorf("load session: %w", err)
 	}
+	// #564: by-ID export must load the FULL transcript, not the 24h windowed
+	// view. store.Load silently truncated long-running sessions (probe:
+	// 500 messages → 1) with no truncation marker in the exported file — the
+	// same windowed-load trap RenameSession fixed in #538 (sister-path miss,
+	// 4th instance of the pattern).
 	// #464: by-ID export must merge tunnel (mobile) user events exactly like
 	// the live-history path (#242, chat.go:652) — build first, then merge.
 	msgs := mergeTunnelUserMessages(

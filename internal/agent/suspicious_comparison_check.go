@@ -32,6 +32,7 @@ import (
 	"go/parser"
 	"go/token"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -160,8 +161,11 @@ func findSuspiciousComparisons(fset *token.FileSet, file *ast.File) []suspicious
 			return true
 		}
 
-		// SA4003: float equality comparison is unreliable
-		if isFloatLiteral(binExpr.X) || isFloatLiteral(binExpr.Y) {
+		// SA4003: float equality comparison is unreliable — except against
+		// zero, which IEEE 754 represents exactly (SA4003 itself exempts
+		// zero). Fix #564: `x == 0.0` advisories pushed users to optimize
+		// correct code.
+		if isNonZeroFloatLiteral(binExpr.X) || isNonZeroFloatLiteral(binExpr.Y) {
 			pos := fset.Position(binExpr.Pos())
 			instances = append(instances, suspiciousCmpInstance{
 				posStr:    fmt.Sprintf("%s:%d", filepath.Base(pos.Filename), pos.Line),
@@ -209,15 +213,23 @@ func detectSuspiciousCmp(left, right string) string {
 	return ""
 }
 
-// isErrorNamed checks if an identifier name suggests it's an error value.
-// Matches: err, err2, errResult, or selectors like pkg.ErrXxx.
+// isErrorNamed checks if an identifier name suggests it's an error VALUE.
+// Matches: err, error, err2, errResult, or selectors like pkg.ErrXxx.
+// Deliberately does NOT match counter/metric names that merely start with
+// "error" (errorCount, errorTotal, errorRate, obj.errorCount) — those are
+// ints and flagging `errorCount == errorTotal` trained users to ignore
+// advisories (#564). Boundary rule: after the err prefix the next char
+// must be an uppercase letter or digit (camelCase edge).
 func isErrorNamed(text string) bool {
 	if text == "" {
 		return false
 	}
 	if isSimpleIdent(text) {
 		lower := strings.ToLower(text)
-		if lower == "err" || strings.HasPrefix(lower, "err") {
+		if lower == "err" || lower == "error" {
+			return true
+		}
+		if hasErrPrefixBoundary(text) {
 			return true
 		}
 	}
@@ -227,12 +239,26 @@ func isErrorNamed(text string) bool {
 		if strings.HasPrefix(field, "Err") || strings.HasSuffix(strings.ToLower(field), "error") {
 			return true
 		}
-		lowerField := strings.ToLower(field)
-		if strings.HasPrefix(lowerField, "err") {
+		if hasErrPrefixBoundary(field) {
 			return true
 		}
 	}
 	return false
+}
+
+// hasErrPrefixBoundary reports whether s starts with err/Err in camelCase
+// boundary form: the character after the prefix is an uppercase letter or
+// digit (errRead, ErrFoo, err2). Lowercase continuations (errorCount,
+// errorTotal) are counters, not error values.
+func hasErrPrefixBoundary(s string) bool {
+	if len(s) < 4 {
+		return false
+	}
+	if !strings.EqualFold(s[:3], "err") {
+		return false
+	}
+	c := s[3]
+	return (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
 }
 
 // isIdentStart reports whether ch can start a Go identifier.
@@ -337,6 +363,21 @@ func isFloatLiteral(expr ast.Expr) bool {
 		return false
 	}
 	return true
+}
+
+// isNonZeroFloatLiteral reports whether expr is a float literal with a
+// nonzero value. Zero is exactly representable, so `x == 0.0` is reliable
+// and not advisory-worthy (staticcheck SA4003 agrees). Fix #564 FP.
+func isNonZeroFloatLiteral(expr ast.Expr) bool {
+	lit, ok := expr.(*ast.BasicLit)
+	if !ok || lit.Kind != token.FLOAT {
+		return false
+	}
+	v, err := strconv.ParseFloat(lit.Value, 64)
+	if err != nil {
+		return true // unparseable (hex float etc.): stay conservative
+	}
+	return v != 0
 }
 
 // findConstantConditions detects conditions that are always true or false (SA4015).

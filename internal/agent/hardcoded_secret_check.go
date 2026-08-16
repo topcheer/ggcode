@@ -117,6 +117,16 @@ func checkHardcodedSecrets(filePath, oldContent, newContent string) []string {
 		}
 	}
 
+	// Skip Go test files: canonical documentation example keys (the AWS
+	// docs access-key ID, Stripe sk_test_ demo keys) embedded in tests are
+	// not live secrets. Mirrors the _test.go exemption
+	// suspicious_comparison_check.go has; fix #564 warning-fatigue — every
+	// probe test fired 4 spurious [SECURITY WARNING]s, training users to
+	// ignore real ones.
+	if strings.HasSuffix(lowerPath, "_test.go") {
+		return nil
+	}
+
 	// Also skip .env.example, .env.local, etc. (basename starts with ".env")
 	base := strings.ToLower(filepath.Base(filePath))
 	if strings.HasPrefix(base, ".env") {
