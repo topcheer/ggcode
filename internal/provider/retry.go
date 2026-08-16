@@ -207,10 +207,18 @@ func isRetryable(err error) bool {
 // a status label, matching the formats emitted by go-openai ("status code:
 // 401, message: ..."), JSON relays (`status":401`), and plain wrappers
 // ("statusCode:401").
+// #561(F): sentence-final terminators (`.` `)` `;` `:`) are anchors too —
+// `"status 401."` (period-terminated) previously matched none of the
+// patterns, fell through to the default-retryable path, and burned 19
+// retries (~7.5 min) on a permanent auth failure.
 func containsHTTPStatus(msg, code string) bool {
 	return strings.Contains(msg, " "+code+" ") ||
 		strings.Contains(msg, " "+code+",") ||
 		strings.Contains(msg, " "+code+"\n") ||
+		strings.Contains(msg, " "+code+".") ||
+		strings.Contains(msg, " "+code+")") ||
+		strings.Contains(msg, " "+code+";") ||
+		strings.Contains(msg, " "+code+":") ||
 		strings.Contains(msg, "code: "+code) ||
 		strings.Contains(msg, `status":`+code) ||
 		strings.Contains(msg, "statusCode:"+code)

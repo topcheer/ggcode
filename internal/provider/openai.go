@@ -134,6 +134,29 @@ func (p *OpenAIProvider) applySampling(req *openai.ChatCompletionRequest) {
 	}
 }
 
+// effectiveMaxTokens returns the max output tokens to send on the next
+// request: the adaptive cap when set (learned from rejections/truncations),
+// otherwise the configured maxTokens. Mirrors anthropic.go's
+// effectiveMaxTokens (#561-A: this was previously never consumed — requests
+// went out without max_tokens and the backend's small default truncated
+// them into a finish_reason=length continue-loop).
+func (p *OpenAIProvider) effectiveMaxTokens() int {
+	if p.cap != nil {
+		if v := p.cap.Get(); v > 0 {
+			return v
+		}
+	}
+	return p.maxTokens
+}
+
+// applyMaxTokens sets req.MaxTokens from the effective limit. A zero value
+// means "don't send" (use the model default).
+func (p *OpenAIProvider) applyMaxTokens(req *openai.ChatCompletionRequest) {
+	if v := p.effectiveMaxTokens(); v > 0 {
+		req.MaxTokens = v
+	}
+}
+
 func retryWithoutReasoningEffort(err error) bool {
 	var apiErr *openai.APIError
 	if errors.As(err, &apiErr) {
@@ -241,8 +264,10 @@ func NewOpenAIProviderWithConfig(config openai.ClientConfig, apiKey, model strin
 		extraHeaders.Set("X-OpenRouter-Categories", "cli-agent,programming-app")
 	}
 	var baseTransport http.RoundTripper
+	var origClient *http.Client
 	if hc, ok := config.HTTPClient.(*http.Client); ok && hc != nil && hc.Transport != nil {
 		baseTransport = hc.Transport
+		origClient = hc
 	}
 	if baseTransport == nil {
 		baseTransport = newProviderHTTPTransport()
@@ -252,9 +277,17 @@ func NewOpenAIProviderWithConfig(config openai.ClientConfig, apiKey, model strin
 		headers:    extraHeaders,
 		rateLimits: newRateLimitTracker(),
 	}
-	config.HTTPClient = &http.Client{
+	// #561(G): preserve the original client's Timeout/Jar/CheckRedirect —
+	// replacing the whole client dropped them (a 1ns-timeout caller config was
+	// silently ignored). Shallow-copy and swap only the Transport.
+	newClient := &http.Client{
 		Transport: transport,
 	}
+	if origClient != nil {
+		*newClient = *origClient
+		newClient.Transport = transport
+	}
+	config.HTTPClient = newClient
 
 	client := openai.NewClientWithConfig(config)
 	debug.Log("provider", "OpenAIProvider created: model=%s maxTokens=%d name=%s headers=%v",
@@ -318,6 +351,7 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 	}
 	p.applyToolChoice(&req)
 	p.applySampling(&req)
+	p.applyMaxTokens(&req)
 
 	var resp openai.ChatCompletionResponse
 	err := retryWithBackoffCtx(ctx, func() error {
@@ -370,6 +404,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 	}
 	p.applyToolChoice(&req)
 	p.applySampling(&req)
+	p.applyMaxTokens(&req)
 
 	debug.Log("openai", "ChatStream START model=%s msgs=%d tools=%d", p.model, len(chatMsgs), len(req.Tools))
 
@@ -519,7 +554,17 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 						continue
 					}
 
+					// #561(E): vLLM/OpenRouter compat layers may number choices
+					// starting at an index > 0. Prefer the choice with Index==0;
+					// if no choice carries Index 0, fall back to the first one
+					// so index>0 deltas are not silently dropped.
 					choice := resp.Choices[0]
+					for i := range resp.Choices {
+						if resp.Choices[i].Index == 0 {
+							choice = resp.Choices[i]
+							break
+						}
+					}
 					delta := choice.Delta
 
 					// Reasoning content (DeepSeek v4, etc.)

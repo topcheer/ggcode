@@ -196,6 +196,7 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 			var usage TokenUsage // reset per attempt to avoid leaking failed-attempt usage
 			var truncated bool
 			var policyBlocked bool
+			var outputChars int // #561(C): for usage fallback when UsageMetadata is missing
 			iter := p.client.Models.GenerateContentStream(ctx, p.model, contents, config)
 			emitted := false
 			retry := false
@@ -267,11 +268,13 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 				for _, part := range resp.Candidates[0].Content.Parts {
 					if part.Text != "" && !part.Thought {
 						emitted = true
+						outputChars += len(part.Text)
 						ch <- StreamEvent{Type: StreamEventText, Text: part.Text}
 					}
 					if part.FunctionCall != nil {
 						emitted = true
 						args, _ := json.Marshal(part.FunctionCall.Args)
+						outputChars += len(part.FunctionCall.Name) + len(args)
 						id := part.FunctionCall.ID
 						if id == "" {
 							id = part.FunctionCall.Name
@@ -296,6 +299,21 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 			}
 			if retry {
 				continue
+			}
+			// #561(C): when the stream never carried UsageMetadata, don't emit
+			// all-zero usage (it zeroes context-budget accounting and disables
+			// compaction). Fall back to CountTokens + char estimation, mirroring
+			// openai.go and anthropic.go.
+			if usage.InputTokens == 0 && usage.OutputTokens == 0 && usage.CacheRead == 0 {
+				inputTokens, err := p.CountTokens(ctx, messages)
+				if err != nil {
+					inputTokens = 0
+				}
+				usage = TokenUsage{
+					InputTokens:       inputTokens,
+					OutputTokens:      estimateTokensFromChars(outputChars),
+					PromptTokensTotal: inputTokens,
+				}
 			}
 			ch <- StreamEvent{Type: StreamEventDone, Usage: &usage, Truncated: truncated, PolicyBlocked: policyBlocked}
 			return
