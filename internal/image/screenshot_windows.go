@@ -72,12 +72,27 @@ $g.CopyFromScreen($rect.Left, $rect.Top, 0, 0, $bmp.Size)
 		sb.WriteString(fmt.Sprintf(
 			"$g.CopyFromScreen(%d, %d, 0, 0, (New-Object System.Drawing.Size(%d, %d)))\n",
 			r.X, r.Y, r.Width, r.Height))
+		sb.WriteString(fmt.Sprintf("$ox = %d\n$oy = %d\n", r.X, r.Y))
+		writeWindowsCursorDraw(&sb, opts)
 	} else {
-		sb.WriteString("$screen = [System.Windows.Forms.Screen]::PrimaryScreen\n")
+		// Full-display capture. opts.Display is 1-based over AllScreens order,
+		// matching ListDisplays on Windows (#555). Display<=1 keeps
+		// PrimaryScreen (0 means "primary"); Display>1 selects the Nth screen,
+		// falling back to primary when the index is out of range.
+		if idx, ok := displayScreenIndex(opts.Display); ok {
+			sb.WriteString(fmt.Sprintf(
+				"$screen = [System.Windows.Forms.Screen]::AllScreens[%d]\n", idx))
+			sb.WriteString("if ($null -eq $screen) { $screen = [System.Windows.Forms.Screen]::PrimaryScreen }\n")
+		} else {
+			sb.WriteString("$screen = [System.Windows.Forms.Screen]::PrimaryScreen\n")
+		}
 		sb.WriteString("$bounds = $screen.Bounds\n")
+		sb.WriteString("$ox = $bounds.X\n")
+		sb.WriteString("$oy = $bounds.Y\n")
 		sb.WriteString("$bmp = New-Object System.Drawing.Bitmap($bounds.Width, $bounds.Height)\n")
 		sb.WriteString("$g = [System.Drawing.Graphics]::FromImage($bmp)\n")
 		sb.WriteString("$g.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)\n")
+		writeWindowsCursorDraw(&sb, opts)
 	}
 
 	sb.WriteString(fmt.Sprintf(
@@ -152,4 +167,22 @@ Get-Process | Where-Object { $_.MainWindowHandle -ne 0 } | ForEach-Object {
 
 func escapePowerShell(s string) string {
 	return strings.ReplaceAll(s, "'", "''")
+}
+
+// writeWindowsCursorDraw appends mouse-cursor overlay drawing for non-window
+// captures, aligning the Windows path with the macOS screencapture -C
+// behavior (#555). $ox/$oy hold the capture origin in screen coordinates so
+// the cursor lands at its on-screen position inside the bitmap.
+func writeWindowsCursorDraw(sb *strings.Builder, opts ScreenshotOptions) {
+	if !opts.Cursor {
+		return
+	}
+	sb.WriteString(`
+$cp = [System.Windows.Forms.Cursor]::Position
+$cur = [System.Windows.Forms.Cursor]::Current
+if ($null -ne $cur) {
+  $crect = New-Object System.Drawing.Rectangle(($cp.X - $ox), ($cp.Y - $oy), $cur.Size.Width, $cur.Size.Height)
+  $cur.Draw($g, $crect)
+}
+`)
 }

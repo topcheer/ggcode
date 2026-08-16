@@ -63,12 +63,37 @@ func ListDisplays() ([]DisplayInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("system_profiler failed: %w", err)
 	}
+	return parseSPDisplaysJSON(out)
+}
 
+// macDisplayEntry is one flattened display unit from SPDisplaysDataType JSON.
+type macDisplayEntry struct {
+	Name   string
+	Width  int
+	Height int
+	Main   bool // spdisplays_main == spdisplays_yes
+	X, Y   int
+}
+
+// parseSPDisplaysJSON turns system_profiler SPDisplaysDataType JSON into
+// DisplayInfo entries. Displays are flattened across GPU entries and
+// renumbered 1..N over OUTPUT units (#555): the old code used the GPU-entry
+// index, so a single GPU driving two monitors reported both as Index:1
+// IsPrimary:true. IsPrimary prefers the entry with spdisplays_main=yes (real
+// primary) and falls back to the first display. X/Y come from
+// _spdisplays_display-vsa when present (multi-monitor negative origins);
+// older macOS versions without that field leave them at 0.
+func parseSPDisplaysJSON(out []byte) ([]DisplayInfo, error) {
 	var data struct {
 		SPDisplaysDataType []struct {
 			SpdisplaysNdrvs []struct {
 				SPDisplaysResolution string `json:"_spdisplays_resolution"`
 				Name                 string `json:"_name"`
+				Main                 string `json:"spdisplays_main"`
+				DisplayVsa           struct {
+					OffsetX int `json:"OffsetX"`
+					OffsetY int `json:"OffsetY"`
+				} `json:"_spdisplays_display-vsa"`
 			} `json:"spdisplays_ndrvs"`
 		} `json:"SPDisplaysDataType"`
 	}
@@ -76,18 +101,41 @@ func ListDisplays() ([]DisplayInfo, error) {
 		return nil, fmt.Errorf("parsing display info: %w", err)
 	}
 
-	var displays []DisplayInfo
-	for i, hw := range data.SPDisplaysDataType {
+	var flat []macDisplayEntry
+	for _, hw := range data.SPDisplaysDataType {
 		for _, disp := range hw.SpdisplaysNdrvs {
 			w, h := parseMacResolution(disp.SPDisplaysResolution)
-			displays = append(displays, DisplayInfo{
-				Index:     i + 1,
-				IsPrimary: i == 0,
-				Width:     w,
-				Height:    h,
-				Name:      disp.Name,
+			flat = append(flat, macDisplayEntry{
+				Name:   disp.Name,
+				Width:  w,
+				Height: h,
+				Main:   disp.Main == "spdisplays_yes",
+				X:      disp.DisplayVsa.OffsetX,
+				Y:      disp.DisplayVsa.OffsetY,
 			})
 		}
+	}
+
+	// Pick the primary: the spdisplays_main entry when present, else the first.
+	primary := 0
+	for i, d := range flat {
+		if d.Main {
+			primary = i
+			break
+		}
+	}
+
+	var displays []DisplayInfo
+	for i, d := range flat {
+		displays = append(displays, DisplayInfo{
+			Index:     i + 1, // renumber over output units, not GPU units
+			IsPrimary: i == primary,
+			Width:     d.Width,
+			Height:    d.Height,
+			X:         d.X,
+			Y:         d.Y,
+			Name:      d.Name,
+		})
 	}
 	if len(displays) == 0 {
 		displays = []DisplayInfo{{Index: 1, IsPrimary: true}}
@@ -156,20 +204,18 @@ for w in windows {
 }
 
 // findMacWindowID finds the window ID matching the given query string.
-// Matches by title substring or app name (case-insensitive).
+// Exact (case-insensitive) title/app matches are preferred over substring
+// matches so short queries do not land on unrelated windows (#555).
 func findMacWindowID(query string) (string, error) {
 	windows, err := ListWindows()
 	if err != nil {
 		return "", err
 	}
-	q := strings.ToLower(query)
-	for _, w := range windows {
-		if strings.Contains(strings.ToLower(w.Title), q) ||
-			strings.Contains(strings.ToLower(w.App), q) {
-			return strconv.Itoa(w.ID), nil
-		}
+	id, err := matchWindowQuery(windows, query)
+	if err != nil {
+		return "", err
 	}
-	return "", fmt.Errorf("no window found matching %q", query)
+	return strconv.Itoa(id), nil
 }
 
 func parseMacResolution(res string) (int, int) {

@@ -5,9 +5,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"image"
-	_ "image/gif"
-	_ "image/jpeg"
-	_ "image/png"
 	"io"
 	"os"
 	"path/filepath"
@@ -96,6 +93,18 @@ func Decode(data []byte) (Image, error) {
 		return Image{}, fmt.Errorf("failed to decode image: %w", err)
 	}
 
+	// #555: a valid header is not a valid image. DecodeConfig only parses the
+	// header, so truncated/corrupt bodies (e.g. a 53-byte PNG) passed with
+	// err=nil and bogus dimensions. Fully decode to verify the body before
+	// handing dimensions to callers. GIF is excluded: image/gif allows multi-
+	// frame streams where a later-frame decode error should not invalidate an
+	// already-decodable first frame, and the standard gif decoder tolerates it.
+	if mime != MIMEGIF {
+		if _, _, derr := image.Decode(bytes.NewReader(data)); derr != nil {
+			return Image{}, fmt.Errorf("image data corrupt or truncated: %w", derr)
+		}
+	}
+
 	return Image{
 		Data:   data,
 		MIME:   mime,
@@ -128,10 +137,23 @@ func ReadFile(path string) (Image, error) {
 	if err != nil {
 		return Image{}, fmt.Errorf("reading image file: %w", err)
 	}
-	if fi.Size() > int64(MaxSize) {
-		return Image{}, fmt.Errorf("image file %s too large: %d bytes (max %d)", path, fi.Size(), MaxSize)
+	var data []byte
+	if fi.Mode().IsRegular() {
+		if fi.Size() > int64(MaxSize) {
+			return Image{}, fmt.Errorf("image file %s too large: %d bytes (max %d)", path, fi.Size(), MaxSize)
+		}
+		data, err = io.ReadAll(f)
+	} else {
+		// #555: FIFOs, device files and other non-regular files report
+		// Size()==0, which used to bypass the precheck above; io.ReadAll then
+		// read unbounded data (the OOM #438 wanted to prevent). Read through
+		// a limit+1 window so oversized special files are rejected after
+		// MaxSize+1 bytes instead of being fully consumed.
+		data, err = ReadLimited(f, int64(MaxSize))
+		if err != nil {
+			return Image{}, fmt.Errorf("image file %s too large or unreadable (max %d bytes): %w", path, MaxSize, err)
+		}
 	}
-	data, err := io.ReadAll(f)
 	if err != nil {
 		return Image{}, fmt.Errorf("reading image file: %w", err)
 	}
@@ -169,4 +191,39 @@ func IsImageFile(path string) bool {
 		return true
 	}
 	return false
+}
+
+// matchWindowQuery resolves a window title/app query to a window ID with
+// exact (case-insensitive) matches strictly preferred over substring
+// matches, and title preferred over app. A short query like "terminal" then
+// lands on the window titled exactly "terminal" instead of an unrelated
+// "terminal — Drafts" window that merely contains the text (#555).
+func matchWindowQuery(windows []WindowInfo, query string) (int, error) {
+	q := strings.ToLower(query)
+	matchers := []func(WindowInfo) bool{
+		func(w WindowInfo) bool { return strings.ToLower(w.Title) == q },
+		func(w WindowInfo) bool { return strings.ToLower(w.App) == q },
+		func(w WindowInfo) bool { return strings.Contains(strings.ToLower(w.Title), q) },
+		func(w WindowInfo) bool { return strings.Contains(strings.ToLower(w.App), q) },
+	}
+	for _, m := range matchers {
+		for _, w := range windows {
+			if m(w) {
+				return w.ID, nil
+			}
+		}
+	}
+	return 0, fmt.Errorf("no window matching %q", query)
+}
+
+// displayScreenIndex translates a 1-based display number (as in
+// DisplayInfo.Index / ScreenshotOptions.Display) into a zero-based
+// AllScreens/screen-array index. ok=false means "primary screen" (Display 0
+// or 1); ok=true means the Nth screen in enumeration order (#555, used by the
+// Windows full-display capture path).
+func displayScreenIndex(display int) (index int, ok bool) {
+	if display > 1 {
+		return display - 1, true
+	}
+	return 0, false
 }

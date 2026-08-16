@@ -3,6 +3,7 @@
 package image
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -23,6 +24,37 @@ func CaptureScreen(opts ScreenshotOptions) (ScreenshotResult, error) {
 
 	rawPath, cleanup := createTempScreenshotPath(opts)
 	defer cleanup()
+
+	// #555: window capture support varies by tool. Previously grim and
+	// gnome-screenshot silently captured the FULL screen when opts.Window was
+	// set. Now grim resolves the window geometry via hyprctl, and tools that
+	// cannot target a window by title fail with an explicit, actionable error
+	// instead of returning the wrong image.
+	if opts.Window != "" {
+		switch tool {
+		case "grim":
+			region, err := resolveLinuxWindowRegion(opts.Window)
+			if err != nil {
+				return ScreenshotResult{}, fmt.Errorf(
+					"window capture with grim: %w (grim window capture requires hyprctl; alternatives: scrot or imagemagick import on X11)", err)
+			}
+			opts.Window = ""
+			opts.Region = &region
+		case "gnome-screenshot":
+			return ScreenshotResult{}, fmt.Errorf(
+				"gnome-screenshot cannot capture a specific window by title; use grim with hyprctl, scrot, or imagemagick (import) for window capture")
+		}
+	}
+
+	// #555: best-effort display selection. Most tools below cannot select an
+	// output by index, so translate the 1-based display index into a region
+	// covering that output (geometry from xrandr/wlr-randr). Region and Window
+	// take precedence. Resolution failure falls back to the default output.
+	if opts.Window == "" && opts.Region == nil && opts.Display > 1 {
+		if region, err := linuxDisplayBounds(opts.Display); err == nil {
+			opts.Region = &region
+		}
+	}
 
 	var cmd *exec.Cmd
 	switch tool {
@@ -216,7 +248,14 @@ func buildGrimCommand(outPath string, opts ScreenshotOptions) *exec.Cmd {
 }
 
 func buildGnomeScreenshotCommand(outPath string, opts ScreenshotOptions) *exec.Cmd {
-	return exec.Command("gnome-screenshot", "-f", outPath)
+	args := []string{"-f", outPath}
+	// #555: pass the requested display through when its name can be resolved.
+	if opts.Display > 1 {
+		if name, err := linuxDisplayName(opts.Display); err == nil {
+			args = append([]string{"--display=" + name}, args...)
+		}
+	}
+	return exec.Command("gnome-screenshot", args...)
 }
 
 func buildScrotCommand(outPath string, opts ScreenshotOptions) *exec.Cmd {
@@ -226,7 +265,13 @@ func buildScrotCommand(outPath string, opts ScreenshotOptions) *exec.Cmd {
 		args = append(args, "-a", fmt.Sprintf("%d,%d,%d,%d", r.X, r.Y, r.X+r.Width, r.Y+r.Height))
 	}
 	if opts.Window != "" {
-		args = append(args, "-u") // focused window only
+		// #555: prefer the resolved window ID (exact title match first via
+		// wmctrl) over "-u" (focused window), which may not be the requested one.
+		if wid, err := matchLinuxWindowID(opts.Window); err == nil {
+			args = append(args, "-i", fmt.Sprintf("0x%x", wid))
+		} else {
+			args = append(args, "-u") // focused window fallback
+		}
 	}
 	args = append(args, outPath)
 	return exec.Command("scrot", args...)
@@ -234,6 +279,12 @@ func buildScrotCommand(outPath string, opts ScreenshotOptions) *exec.Cmd {
 
 func buildImportCommand(outPath string, opts ScreenshotOptions) *exec.Cmd {
 	if opts.Window != "" {
+		// #555: a raw title query almost never matches X11 WM_NAME, so resolve
+		// to a concrete window ID first (exact title match preferred); only fall
+		// back to the raw query if resolution is unavailable.
+		if wid, err := matchLinuxWindowID(opts.Window); err == nil {
+			return exec.Command("import", "-window", fmt.Sprintf("0x%x", wid), outPath)
+		}
 		return exec.Command("import", "-window", opts.Window, outPath)
 	}
 	args := []string{"-window", "root"}
@@ -243,6 +294,106 @@ func buildImportCommand(outPath string, opts ScreenshotOptions) *exec.Cmd {
 	}
 	args = append(args, outPath)
 	return exec.Command("import", args...)
+}
+
+// matchLinuxWindowID resolves a title/app query to an X11 window ID via
+// wmctrl. Matching semantics (exact-first) live in matchWindowQuery (#555).
+func matchLinuxWindowID(query string) (int, error) {
+	windows, err := ListWindows()
+	if err != nil {
+		return 0, err
+	}
+	return matchWindowQuery(windows, query)
+}
+
+// resolveLinuxWindowRegion returns the geometry of the window matching query
+// using hyprctl (Hyperland compositor). grim has no window mode, so the
+// geometry is applied via -g. Other compositors are not guessed at: callers
+// surface an explicit error rather than silently capturing the full screen.
+func resolveLinuxWindowRegion(query string) (ScreenshotRegion, error) {
+	if _, err := exec.LookPath("hyprctl"); err != nil {
+		return ScreenshotRegion{}, fmt.Errorf("hyprctl not found")
+	}
+	out, err := exec.Command("hyprctl", "-j", "clients").Output()
+	if err != nil {
+		return ScreenshotRegion{}, fmt.Errorf("hyprctl failed: %w", err)
+	}
+	var clients []struct {
+		Title    string `json:"title"`
+		Class    string `json:"class"`
+		Position struct {
+			X int `json:"x"`
+			Y int `json:"y"`
+		} `json:"position"`
+		Size struct {
+			Width  int `json:"width"`
+			Height int `json:"height"`
+		} `json:"size"`
+	}
+	if err := json.Unmarshal(out, &clients); err != nil {
+		return ScreenshotRegion{}, fmt.Errorf("parsing hyprctl clients: %w", err)
+	}
+
+	// Exact match (title, then class) before substring match, mirroring
+	// matchLinuxWindowID's preference ordering.
+	q := strings.ToLower(query)
+	found := -1
+	for _, pass := range []struct{ exact bool }{{true}, {false}} {
+		for i, c := range clients {
+			title, class := strings.ToLower(c.Title), strings.ToLower(c.Class)
+			var match bool
+			if pass.exact {
+				match = title == q || class == q
+			} else {
+				match = strings.Contains(title, q) || strings.Contains(class, q)
+			}
+			if match {
+				found = i
+				break
+			}
+		}
+		if found >= 0 {
+			break
+		}
+	}
+	if found < 0 {
+		return ScreenshotRegion{}, fmt.Errorf("no hyprland window matching %q", query)
+	}
+	c := clients[found]
+	return ScreenshotRegion{X: c.Position.X, Y: c.Position.Y, Width: c.Size.Width, Height: c.Size.Height}, nil
+}
+
+// linuxDisplayBounds resolves a 1-based display index to its on-screen
+// geometry using xrandr (X11) or wlr-randr (Wayland) via ListDisplays.
+func linuxDisplayBounds(index int) (ScreenshotRegion, error) {
+	displays, err := ListDisplays()
+	if err != nil {
+		return ScreenshotRegion{}, err
+	}
+	if index < 1 || index > len(displays) {
+		return ScreenshotRegion{}, fmt.Errorf("display %d not found (%d displays)", index, len(displays))
+	}
+	d := displays[index-1]
+	if d.Width <= 0 || d.Height <= 0 {
+		return ScreenshotRegion{}, fmt.Errorf("display %d geometry unknown", index)
+	}
+	return ScreenshotRegion{X: d.X, Y: d.Y, Width: d.Width, Height: d.Height}, nil
+}
+
+// linuxDisplayName resolves a 1-based display index to its output name
+// (e.g. "HDMI-A-1") for tools like gnome-screenshot --display=NAME.
+func linuxDisplayName(index int) (string, error) {
+	displays, err := ListDisplays()
+	if err != nil {
+		return "", err
+	}
+	if index < 1 || index > len(displays) {
+		return "", fmt.Errorf("display %d not found (%d displays)", index, len(displays))
+	}
+	if displays[index-1].Name == "" {
+		return "", fmt.Errorf("display %d name unknown", index)
+	}
+	return displays[index-1].Name, nil
 }
 
 // Guard against unused import warnings on some build paths.

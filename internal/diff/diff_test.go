@@ -98,14 +98,15 @@ func TestStats(t *testing.T) {
 		t.Fatalf("expected 0 changes, got: %s", s)
 	}
 
-	// Additions only
-	s = Stats("hello\nworld", "hello\nworld\nfoo")
+	// Additions only (inputs carry trailing newlines so the #555 EOF-newline
+	// folding does not turn the shared last line into a change)
+	s = Stats("hello\nworld\n", "hello\nworld\nfoo\n")
 	if !strings.Contains(s, "+1") || !strings.Contains(s, "-0") {
 		t.Fatalf("expected +1 -0, got: %s", s)
 	}
 
 	// Deletions only
-	s = Stats("hello\nworld\nfoo", "hello\nworld")
+	s = Stats("hello\nworld\nfoo\n", "hello\nworld\n")
 	if !strings.Contains(s, "+0") || !strings.Contains(s, "-1") {
 		t.Fatalf("expected +0 -1, got: %s", s)
 	}
