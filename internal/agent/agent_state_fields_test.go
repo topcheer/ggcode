@@ -36,7 +36,6 @@ func TestNewAgentInitializesAllStateFields(t *testing.T) {
 	// NewAgent, with the reason. Every entry must be justified — do not add
 	// fields here just to make the test pass for a detector state.
 	nilFieldsAllowed := map[string]string{
-		"mcpRuntime":           "optional MCP runtime, injected via SetMCPRuntime",
 		"systemPromptInjector": "optional callback, injected via setter",
 		"onVerifyProgress":     "optional callback, injected via setter",
 		"onVerifyResult":       "optional callback, injected via setter",
