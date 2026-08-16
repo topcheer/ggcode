@@ -53,7 +53,6 @@ import (
 	"go/parser"
 	"go/token"
 	"path/filepath"
-	"strconv"
 	"strings"
 )
 
@@ -110,30 +109,7 @@ func checkPrintfFormat(filePath, oldContent, newContent string) []string {
 		return nil
 	}
 
-	newIssues := findPrintfFormatIssues(newContent)
-	if len(newIssues) == 0 {
-		return nil
-	}
-
-	// Delta-aware via per-instance set comparison keyed by kind+funcName+line
-	// (fix #172: count-diff missed remove-N-add-N — fixing one printf bug
-	// while introducing another passed silently; slicing by count reported
-	// wrong instances on net growth).
-	if strings.TrimSpace(oldContent) != "" {
-		oldIssues := findPrintfFormatIssues(oldContent)
-		oldSet := make(map[string]bool, len(oldIssues))
-		for _, iss := range oldIssues {
-			oldSet[iss.kind+"\x00"+iss.funcName+"\x00"+strconv.Itoa(iss.line)] = true
-		}
-		var fresh []printfFormatInfo
-		for _, iss := range newIssues {
-			if !oldSet[iss.kind+"\x00"+iss.funcName+"\x00"+strconv.Itoa(iss.line)] {
-				fresh = append(fresh, iss)
-			}
-		}
-		newIssues = fresh
-	}
-
+	newIssues := filterPreexistingPrintfIssues(oldContent, findPrintfFormatIssues(newContent))
 	if len(newIssues) == 0 {
 		return nil
 	}
@@ -170,6 +146,37 @@ func checkPrintfFormat(filePath, oldContent, newContent string) []string {
 	}
 
 	return warnings
+}
+
+// filterPreexistingPrintfIssues drops issues that already existed in the old
+// content, via per-instance multiset comparison keyed by
+// kind+funcName+detail (fix #533, the #186/#171 per-instance multiset
+// idiom): the LINE NUMBER is deliberately excluded so an unrelated edit
+// that shifts a pre-existing issue to another line does not re-report it.
+// `detail` carries the instance's stable content (the variable name for
+// nonconstant-format, the verb-vs-arg counts for verb-count), which keeps
+// the #172 fix intact: removing one instance while adding a different one
+// still yields a multiset surplus and is reported.
+func filterPreexistingPrintfIssues(oldContent string, newIssues []printfFormatInfo) []printfFormatInfo {
+	if strings.TrimSpace(oldContent) == "" || len(newIssues) == 0 {
+		return newIssues
+	}
+	oldIssues := findPrintfFormatIssues(oldContent)
+	oldCounts := make(map[string]int, len(oldIssues))
+	for _, iss := range oldIssues {
+		oldCounts[iss.kind+"\x00"+iss.funcName+"\x00"+iss.detail]++
+	}
+	consumed := make(map[string]int, len(oldCounts))
+	var fresh []printfFormatInfo
+	for _, iss := range newIssues {
+		key := iss.kind + "\x00" + iss.funcName + "\x00" + iss.detail
+		consumed[key]++
+		if consumed[key] <= oldCounts[key] {
+			continue // pre-existing instance; its multiset slot is already filled
+		}
+		fresh = append(fresh, iss)
+	}
+	return fresh
 }
 
 // findPrintfFormatIssues parses Go source and returns all printf format
@@ -276,8 +283,9 @@ func analyzePrintfCall(funcName string, call *ast.CallExpr, formatArgIdx, line i
 
 	// Case 1: Non-constant format string.
 	// The format arg is a variable, function call (other than a safe literal
-	// builder), binary expression, etc. String literals are safe.
-	if !isStringLiteral(formatArg) {
+	// builder), binary expression, etc. String literals — including
+	// compile-time concatenations of literals ("a "+"%d", #533) — are safe.
+	if !isStringConstExpr(formatArg) {
 		// fmt.Errorf is often called with err.Error() or string concatenation
 		// for wrapping; allow that common pattern to reduce false positives.
 		if funcName == "fmt.Errorf" && isErrErrorCall(formatArg) {
@@ -308,12 +316,9 @@ func analyzePrintfCall(funcName string, call *ast.CallExpr, formatArgIdx, line i
 		}
 	}
 
-	// Case 2: For literal format strings, check verb count vs argument count.
-	lit, ok := formatArg.(*ast.BasicLit)
-	if !ok {
-		return nil
-	}
-	formatStr, ok := unquoteBasicLit(lit.Value)
+	// Case 2: For constant format strings (literal or literal concatenation,
+	// #533), check verb count vs argument count.
+	formatStr, ok := constFormatString(formatArg)
 	if !ok {
 		return nil
 	}
@@ -331,15 +336,17 @@ func analyzePrintfCall(funcName string, call *ast.CallExpr, formatArgIdx, line i
 		return nil
 	}
 
-	verbs := countFormatVerbs(formatStr)
+	// #533: each `*` width/precision consumes an extra argument, so the
+	// argument count (not the bare verb count) must match.
+	argsNeeded := countFormatArgs(formatStr)
 	extraArgs := len(args) - formatArgIdx - 1
 
-	if verbs != extraArgs {
+	if argsNeeded != extraArgs {
 		return &printfFormatInfo{
 			kind:     "verb-count",
 			funcName: funcName,
 			line:     line,
-			detail:   fmt.Sprintf("%d format verb(s) but %d argument(s)", verbs, extraArgs),
+			detail:   fmt.Sprintf("%d format verb(s) but %d argument(s)", argsNeeded, extraArgs),
 		}
 	}
 
@@ -364,13 +371,6 @@ func analyzeNonFormatCall(funcName string, call *ast.CallExpr, line int) *printf
 		}
 	}
 	return nil
-}
-
-// isStringLiteral returns true if the expression is a Go string literal
-// (BasicLit of kind STRING).
-func isStringLiteral(e ast.Expr) bool {
-	lit, ok := e.(*ast.BasicLit)
-	return ok && lit.Kind == token.STRING
 }
 
 // isErrErrorCall returns true if the expression looks like `err.Error()`.
@@ -482,6 +482,33 @@ func endsWithVariadicParam(call *ast.CallExpr, params map[string]bool) bool {
 	return ok && params[id.Name]
 }
 
+// constFormatString folds a string-literal expression — a BasicLit or a
+// compile-time concatenation of literals ("count: "+"%d\n") — into its value
+// (#533: go vet treats literal concatenation as a constant format string).
+func constFormatString(e ast.Expr) (string, bool) {
+	switch v := e.(type) {
+	case *ast.BasicLit:
+		if v.Kind != token.STRING {
+			return "", false
+		}
+		return unquoteBasicLit(v.Value)
+	case *ast.BinaryExpr:
+		if v.Op != token.ADD {
+			return "", false
+		}
+		x, ok := constFormatString(v.X)
+		if !ok {
+			return "", false
+		}
+		y, ok := constFormatString(v.Y)
+		if !ok {
+			return "", false
+		}
+		return x + y, true
+	}
+	return "", false
+}
+
 // usesExplicitIndex reports whether the format contains explicit argument
 // indexes like %[1]s, which reuse arguments and defeat naive verb counting.
 func usesExplicitIndex(format string) bool {
@@ -509,7 +536,7 @@ func countFormatVerbs(format string) int {
 			continue
 		}
 		// Parse a single format directive (index, flags, width, precision, verb).
-		if verb, ok := parseFormatDirective(format, i); ok {
+		if verb, _, ok := parseFormatDirective(format, i); ok {
 			count++
 			i = verb
 		} else {
@@ -519,12 +546,43 @@ func countFormatVerbs(format string) int {
 	return count
 }
 
+// countFormatArgs counts the ARGUMENTS consumed by a format string: one per
+// verb plus one per `*` width/precision (fix #533: `fmt.Printf("%*d", w, v)`
+// is valid — the star takes the width from the argument list, matching go
+// vet's accounting).
+func countFormatArgs(format string) int {
+	args := 0
+	i := 0
+	for i < len(format) {
+		if format[i] != '%' {
+			i++
+			continue
+		}
+		i++
+		if i >= len(format) {
+			break
+		}
+		if format[i] == '%' {
+			i++
+			continue
+		}
+		if next, stars, ok := parseFormatDirective(format, i); ok {
+			args += 1 + stars
+			i = next
+		} else {
+			i++
+		}
+	}
+	return args
+}
+
 // parseFormatDirective parses a printf format directive starting at position
 // `start` (the character immediately after the opening %). It skips the
 // explicit arg index (%[N]), flags, width, and precision, then checks if the
-// next character is a valid verb. Returns the position after the verb and true
-// if a verb was found; otherwise returns start and false.
-func parseFormatDirective(format string, start int) (int, bool) {
+// next character is a valid verb. Returns the position after the verb, the
+// number of `*` width/precision stars (each consumes an argument, #533), and
+// true if a verb was found; otherwise returns start, 0, and false.
+func parseFormatDirective(format string, start int) (int, int, bool) {
 	i := start
 	// Skip explicit argument index: %[N]
 	if i < len(format) && format[i] == '[' {
@@ -536,22 +594,29 @@ func parseFormatDirective(format string, start int) (int, bool) {
 			i++
 		}
 	}
-	// Skip over flags, width, '*'.
-	i = skipWhile(format, i, func(b byte) bool {
-		return isFlagChar(b) || b == '*' || isDigit(b)
-	})
-	// Skip precision dot and its digits/star.
+	// Skip over flags, width, and precision; each `*` in that region
+	// consumes an argument (#533), so count them over the whole span.
+	region := i
+	i = skipWhile(format, i, isFlagWidthChar)
 	if i < len(format) && format[i] == '.' {
 		i++
-		i = skipWhile(format, i, func(b byte) bool {
-			return b == '*' || isDigit(b)
-		})
+		i = skipWhile(format, i, isPrecChar)
 	}
 	// The next non-flag character is the verb.
 	if i < len(format) && isVerbChar(format[i]) {
-		return i + 1, true
+		return i + 1, strings.Count(format[region:i], "*"), true
 	}
-	return start, false
+	return start, 0, false
+}
+
+// isFlagWidthChar matches flag characters, width digits, and the `*` width.
+func isFlagWidthChar(b byte) bool {
+	return isFlagChar(b) || isDigit(b) || b == '*'
+}
+
+// isPrecChar matches precision digits and the `*` precision.
+func isPrecChar(b byte) bool {
+	return isDigit(b) || b == '*'
 }
 
 // skipWhile advances index i past all consecutive bytes for which pred returns

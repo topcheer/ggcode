@@ -133,6 +133,7 @@ func checkNilDerefAfterError(filePath, oldContent, newContent string) string {
 type nilRiskEntry struct {
 	pos     int    // assignment position
 	errName string // associated error variable name
+	cleared bool   // risk suppressed inside an err==nil / v!=nil scope (not a permanent clear)
 }
 
 // findNilDerefsInFunc analyzes a function body for nil-deref-after-error patterns.
@@ -181,10 +182,13 @@ func findNilDerefsInFunc(fset *token.FileSet, body *ast.BlockStmt) []nilDerefIns
 }
 
 // processAssignment marks variables as nil-risk when they come from multi-return
-// assignments where the last value is likely an error.
+// assignments where the last value is likely an error. Single-value
+// reassignments of an already-risky variable are handled too (#533): a
+// clearly non-nil RHS (fallback `v = &S{...}`) permanently clears the risk.
 func processAssignment(assign *ast.AssignStmt, nilRisk map[string]nilRiskEntry) {
 	// Only consider multi-value assignments with at least 2 LHS.
 	if len(assign.Lhs) < 2 {
+		clearReassignedRisk(assign, nilRisk)
 		return
 	}
 
@@ -209,12 +213,65 @@ func processAssignment(assign *ast.AssignStmt, nilRisk map[string]nilRiskEntry) 
 	}
 }
 
+// clearReassignedRisk permanently clears the nil risk of a variable that is
+// reassigned alone (`v = ...`, #533) when the RHS is provably non-nil: an
+// address-of expression (`&S{...}`) or a `new(T)` call. Assignment of `nil`,
+// reads of the variable itself (`v = v.Next`), and ordinary calls keep the
+// risk — they can still produce nil.
+func clearReassignedRisk(assign *ast.AssignStmt, nilRisk map[string]nilRiskEntry) {
+	if len(assign.Lhs) != 1 {
+		return
+	}
+	ident, ok := assign.Lhs[0].(*ast.Ident)
+	if !ok || ident.Name == "_" {
+		return
+	}
+	if e, risky := nilRisk[ident.Name]; !risky || e.cleared {
+		// Not risky, or risk currently suppressed inside an err==nil / v!=nil
+		// scope: leave the snapshot semantics (#238) in charge of that scope.
+		return
+	}
+	for _, rhs := range assign.Rhs {
+		if isNonNullAssignExpr(rhs) {
+			delete(nilRisk, ident.Name)
+		}
+	}
+}
+
+// isNonNullAssignExpr reports whether the expression is provably non-nil as
+// the RHS of a pointer assignment.
+func isNonNullAssignExpr(e ast.Expr) bool {
+	switch v := e.(type) {
+	case *ast.UnaryExpr: // &S{...} / &T{} — composite address, never nil
+		return v.Op == token.AND
+	case *ast.CallExpr: // new(T)
+		if id, ok := v.Fun.(*ast.Ident); ok {
+			return id.Name == "new"
+		}
+	}
+	return false
+}
+
 // walkErrorCheckIf handles an if statement whose condition compares an error
 // variable against nil, applying the scope-transfer semantics of fix #238.
-// Non-error-check if statements are walked with unchanged risk state.
+// It also recognizes explicit value-nil guards (#533): a terminating
+// `if v == nil` body proves v non-nil afterwards, and `v != nil` bodies are
+// safe. Non-nil-check if statements are walked with unchanged risk state.
 func walkErrorCheckIf(is *ast.IfStmt, nilRisk map[string]nilRiskEntry, walk func(ast.Node)) {
 	bin, ok := is.Cond.(*ast.BinaryExpr)
-	if !ok || !isErrorNilCheck(bin) {
+	if !ok || (bin.Op != token.EQL && bin.Op != token.NEQ) {
+		walk(is.Body)
+		walk(is.Else)
+		return
+	}
+
+	// #533 (C1): explicit value-nil guard on a nil-risk variable.
+	if v := valueNilCheckedVar(bin, nilRisk); v != "" {
+		walkValueNilCheckIf(is, bin.Op, v, nilRisk, walk)
+		return
+	}
+
+	if !isErrorNilCheck(bin) {
 		walk(is.Body)
 		walk(is.Else)
 		return
@@ -227,7 +284,15 @@ func walkErrorCheckIf(is *ast.IfStmt, nilRisk map[string]nilRiskEntry, walk func
 	} else if ident, ok := bin.Y.(*ast.Ident); ok && isErrIdent(ident) {
 		errName = ident.Name
 	}
+	applyErrNilScopeSemantics(is, bin.Op, errName, nilRisk, walk)
+}
 
+// applyErrNilScopeSemantics implements the #238/#281/#533 scope-transfer
+// semantics for `if err == nil` / `if err != nil` guards on the given error
+// variable: risk is suppressed (not deleted) inside safe branches so that a
+// permanent clear made while walking a branch (fallback reassignment, #533)
+// or a report-once deletion is never resurrected by the restore.
+func applyErrNilScopeSemantics(is *ast.IfStmt, op token.Token, errName string, nilRisk map[string]nilRiskEntry, walk func(ast.Node)) {
 	// Snapshot nil-risk entries linked to this specific error variable.
 	saved := make(map[string]nilRiskEntry)
 	for k, e := range nilRisk {
@@ -235,22 +300,19 @@ func walkErrorCheckIf(is *ast.IfStmt, nilRisk map[string]nilRiskEntry, walk func
 			saved[k] = e
 		}
 	}
-	clearSaved := func() {
+	suppressSaved := func() { setSavedCleared(nilRisk, saved, true) }
+	unsuppressSaved := func() { setSavedCleared(nilRisk, saved, false) }
+	permanentlyClear := func() {
 		for k := range saved {
 			delete(nilRisk, k)
 		}
 	}
-	restoreSaved := func() {
-		for k, v := range saved {
-			nilRisk[k] = v
-		}
-	}
 
-	switch bin.Op {
+	switch op {
 	case token.EQL: // if err == nil { ... } — value is safe inside the body
-		clearSaved()
+		suppressSaved()
 		walk(is.Body)
-		restoreSaved()
+		unsuppressSaved()
 		if is.Else != nil { // else implies err != nil: risk applies
 			walk(is.Else)
 		}
@@ -258,19 +320,98 @@ func walkErrorCheckIf(is *ast.IfStmt, nilRisk map[string]nilRiskEntry, walk func
 		walk(is.Body)
 		thenTerminates := ifBodyTerminates(is.Body)
 		if thenTerminates {
-			clearSaved() // guard exits: code past the if implies err == nil
+			permanentlyClear() // guard exits: code past the if implies err == nil
 		}
 		if is.Else != nil { // else implies err == nil: safe
-			clearSaved()
+			suppressSaved()
 			walk(is.Else)
 			if !thenTerminates {
 				// Restore the risk after the else only when the then branch can
 				// fall through (#281). When the then branch terminates, code after
 				// the if is only reachable via the else (err == nil), so the risk
 				// stays permanently cleared.
-				restoreSaved()
+				unsuppressSaved()
 			}
 		}
+	}
+}
+
+// setVarCleared toggles the suppression flag on one nil-risk entry.
+func setVarCleared(nilRisk map[string]nilRiskEntry, name string, cleared bool) {
+	if e, ok := nilRisk[name]; ok {
+		e.cleared = cleared
+		nilRisk[name] = e
+	}
+}
+
+// setSavedCleared toggles the suppression flag on every snapshotted entry.
+func setSavedCleared(nilRisk, saved map[string]nilRiskEntry, cleared bool) {
+	for k := range saved {
+		setVarCleared(nilRisk, k, cleared)
+	}
+}
+
+// valueNilCheckedVar returns the variable name when the binary expression is
+// a nil comparison (`v == nil` / `nil != v`) against a nil-risk variable that
+// is not error-named (#533). Returns "" otherwise.
+func valueNilCheckedVar(bin *ast.BinaryExpr, nilRisk map[string]nilRiskEntry) string {
+	if bin.Op != token.EQL && bin.Op != token.NEQ {
+		return ""
+	}
+	if x, ok := bin.X.(*ast.Ident); ok && isNilIdent(bin.Y) && !isErrIdent(x) {
+		if _, risky := nilRisk[x.Name]; risky {
+			return x.Name
+		}
+	}
+	if y, ok := bin.Y.(*ast.Ident); ok && isNilIdent(bin.X) && !isErrIdent(y) {
+		if _, risky := nilRisk[y.Name]; risky {
+			return y.Name
+		}
+	}
+	return ""
+}
+
+// walkValueNilCheckIf applies #533 (C1) semantics for a guard that compares a
+// nil-risk value variable against nil:
+//
+//   - `if v != nil { ... }`: v is non-nil inside the body (risk suppressed);
+//     the else branch implies v == nil, so the risk stays active there.
+//   - `if v == nil { ... }`: v IS nil inside the body (deref there is a real
+//     bug, risk stays active); if the body terminates, code past the guard is
+//     only reachable with v != nil, so the risk is permanently cleared. The
+//     else branch implies v != nil (suppressed inside).
+func walkValueNilCheckIf(is *ast.IfStmt, op token.Token, varName string, nilRisk map[string]nilRiskEntry, walk func(ast.Node)) {
+	suppressVar := func() {
+		if e, ok := nilRisk[varName]; ok {
+			e.cleared = true
+			nilRisk[varName] = e
+		}
+	}
+	unsuppressVar := func() {
+		if e, ok := nilRisk[varName]; ok {
+			e.cleared = false
+			nilRisk[varName] = e
+		}
+	}
+
+	if op == token.NEQ { // if v != nil
+		suppressVar()
+		walk(is.Body)
+		unsuppressVar()
+		if is.Else != nil {
+			walk(is.Else) // v == nil here; risk applies
+		}
+		return
+	}
+	// if v == nil
+	walk(is.Body) // v is nil here; deref inside is genuinely dangerous
+	if ifBodyTerminates(is.Body) {
+		delete(nilRisk, varName) // past a terminating guard v cannot be nil
+	}
+	if is.Else != nil { // v != nil in the else branch
+		suppressVar()
+		walk(is.Else)
+		unsuppressVar()
 	}
 }
 
@@ -343,7 +484,7 @@ func detectNilDeref(fset *token.FileSet, n ast.Node, nilRisk map[string]nilRiskE
 	case *ast.SelectorExpr:
 		// x.Field or x.Method()
 		if x, ok := node.X.(*ast.Ident); ok {
-			if entry, risk := nilRisk[x.Name]; risk {
+			if entry, risk := nilRisk[x.Name]; risk && !entry.cleared {
 				pos := fset.Position(node.Pos())
 				instances = append(instances, nilDerefInstance{
 					posStr:  fmt.Sprintf("%s:%d", filepath.Base(pos.Filename), pos.Line),
@@ -357,7 +498,7 @@ func detectNilDeref(fset *token.FileSet, n ast.Node, nilRisk map[string]nilRiskE
 	case *ast.IndexExpr:
 		// x[idx] on a pointer to array/slice/map
 		if x, ok := node.X.(*ast.Ident); ok {
-			if entry, risk := nilRisk[x.Name]; risk {
+			if entry, risk := nilRisk[x.Name]; risk && !entry.cleared {
 				pos := fset.Position(node.Pos())
 				instances = append(instances, nilDerefInstance{
 					posStr:  fmt.Sprintf("%s:%d", filepath.Base(pos.Filename), pos.Line),
@@ -371,7 +512,7 @@ func detectNilDeref(fset *token.FileSet, n ast.Node, nilRisk map[string]nilRiskE
 	case *ast.StarExpr:
 		// *x
 		if x, ok := node.X.(*ast.Ident); ok {
-			if entry, risk := nilRisk[x.Name]; risk {
+			if entry, risk := nilRisk[x.Name]; risk && !entry.cleared {
 				pos := fset.Position(node.Pos())
 				instances = append(instances, nilDerefInstance{
 					posStr:  fmt.Sprintf("%s:%d", filepath.Base(pos.Filename), pos.Line),
