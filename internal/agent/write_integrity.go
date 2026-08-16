@@ -229,6 +229,33 @@ func registerAllChecks() {
 		// callExprName/unquoteString/unescapeQuotedString (#509 migration)
 		// went down with their sole consumer, as their fate-binding note
 		// predicted; exprText survives in suspicious_comparison_check.go.
+		// #511: same fate for "flaky-test-patterns" and "test-gaming"
+		// (8th dead-code instance; sa-170 probe-verified, 12/12 probes).
+		// flaky-test-patterns: the regex path matches comments and string
+		// literals by design (flagging "// time.Sleep removed" — coaching
+		// the agent for documenting the FIX), the goroutine check uses a
+		// ±15-line proximity window with no scope awareness (wg.Wait()
+		// 16+ lines away is invisible, and exprToString(FuncLit) returns
+		// "" so the warning reads "'go ' launched"), and isMapTypeExpr
+		// returns true for every *ast.Ident — `for _, tc := range tests`
+		// over a []struct is THE table-driven idiom, so nearly every new
+		// table-driven test warns; its rand advice is self-contradictory
+		// (concedes math/rand/v2 stays non-deterministic; rand.Seed is
+		// deprecated since Go 1.20 auto-seeding). test-gaming: a rename
+		// TestFoo→TestFooV2 is reported as "removed test function(s)...
+		// fix the code instead of deleting tests" (cheating accusation on
+		// legitimate refactoring), "expect " with a trailing space counts
+		// any prose string as an assertion, and the scalar assertion
+		// count is hedged — delete 2 real assertions, add 2 trivially-
+		// true ones, zero warnings (the anti-spec-gaming detector is
+		// bypassable by spec gaming itself; #506/#507 scalar/set-delta
+		// class). Partial-revival candidates: checkGoTestGaming's deleted-
+		// func signal is the strongest single detector (precondition:
+		// normalized-body similarity exemption so renames don't fire);
+		// assertion removal requires a line-level multiset delta; the
+		// goroutine check requires scope-aware sync lookup + FuncLit name
+		// fix. exprToString (lock_without_unlock_check.go) and isTestFile
+		// (debug_sniffer.go) survive in registered files.
 		{Name: "concurrent-map-access", Langs: []Language{LangGo}, Run: stringCheck(checkConcurrentMapAccess)},
 		{Name: "context-leak", Langs: []Language{LangGo}, Run: stringCheck(checkContextLeak)},
 		{Name: "resource-leak", Langs: []Language{LangGo}, Run: sliceCheck(checkResourceLeaks)},
