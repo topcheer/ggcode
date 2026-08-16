@@ -94,6 +94,8 @@ func registerAllChecks() {
 			return []string{fmt.Sprintf("This edit resulted in an EMPTY file (was %d bytes before). Verify this was intended - the old_text match may have consumed the entire file content.", len(ctx.OldContent))}
 		}},
 		{Name: "merge-conflict-markers", Run: stringCheckNew(checkMergeConflictMarkers)},
+		{Name: "content-growth", Run: stringCheck(checkContentGrowth)},
+		{Name: "edit-blast-radius", Run: stringCheck(checkEditBlastRadius)},
 
 		// --- Go correctness (crashes, data races, leaks) ---
 		// Re-registered per #328/#330: interface_compliance, deprecated_api,

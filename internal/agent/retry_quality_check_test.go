@@ -300,3 +300,55 @@ func hasWarning(warnings []string, sub string) bool {
 	}
 	return false
 }
+
+// #570 Bug D: lowercase (unexported) method names must be detected as
+// failing calls, matching Go convention for internal methods.
+func TestRetryQuality_LowercaseUnexportedMethod(t *testing.T) {
+	src := `package main
+import "net/http"
+type client struct{}
+func (c *client) get(url string) error { return nil }
+func fetch(c *client) {
+	for {
+		err := c.get("http://example.com")
+		if err != nil {
+			continue  // no backoff, no cap
+		}
+		break
+	}
+}`
+	w := checkRetryQuality("retry.go", "", src)
+	if !hasWarning(w, "no backoff delay") {
+		t.Fatalf("expected missing-backoff warning for lowercase method, got %v", w)
+	}
+	if !hasWarning(w, "no attempt cap") {
+		t.Fatalf("expected unbounded-retry warning for lowercase method, got %v", w)
+	}
+}
+
+// #570 Bug D: ForStmt-only changes (no new functions added) must be detected.
+func TestRetryQuality_ForStmtOnlyChange(t *testing.T) {
+	old := `package main
+import "net/http"
+func fetch(url string) {
+	resp, _ := http.Get(url)
+	_ = resp
+}`
+	// New code adds a retry loop to existing function
+	new := `package main
+import "net/http"
+func fetch(url string) {
+	for {
+		resp, err := http.Get(url)
+		if err != nil {
+			continue
+		}
+		_ = resp
+		break
+	}
+}`
+	w := checkRetryQuality("retry.go", old, new)
+	if !hasWarning(w, "no backoff delay") {
+		t.Fatalf("expected missing-backoff for ForStmt-only change, got %v", w)
+	}
+}

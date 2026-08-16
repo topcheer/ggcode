@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -284,5 +285,60 @@ func TestFalsePremise_GenericBranchExcludesSearchTools(t *testing.T) {
 	msg := f.checkFalsePremise("I updated the config file. Done.")
 	if msg != "" {
 		t.Fatalf("expected no warning for search-tool bare syntax error, got: %s", msg)
+	}
+}
+
+// #570 Bug C: real go test success output (ok, PASS, --- PASS:) must clear
+// stale failure records, preventing false "fabrication" warnings.
+func TestFalsePremise_GoTestSuccessClearsFailure(t *testing.T) {
+	// Simulate: go test fails with build error
+	f := newFalsePremiseState()
+	f.recordToolResult("run_command", "exit status 2\nFAIL ./pkg [build failed]", true)
+
+	// Agent fixes and re-runs: real go test success output patterns
+	testCases := []string{
+		"ok  pkg  1.2s",                          // standard go test success
+		"ok  github.com/user/repo/pkg  0.500s\n", // full package path
+		"PASS",                                   // standalone PASS
+		"--- PASS: TestFoo (0.10s)\n",            // verbose test output
+		"--- PASS: TestBar (0.05s)\n--- PASS: TestBaz (0.08s)\n", // multiple tests
+	}
+
+	for i, successOutput := range testCases {
+		t.Run(fmt.Sprintf("case_%d", i), func(t *testing.T) {
+			f2 := newFalsePremiseState()
+			f2.recordToolResult("run_command", "exit status 2\nFAIL ./pkg [build failed]", true)
+			f2.recordToolResult("run_command", successOutput, false)
+
+			if len(f2.recentErrors) != 0 {
+				t.Errorf("go test success should clear stale failure record, got %d errors remaining", len(f2.recentErrors))
+			}
+
+			// Agent claims success after the real go test passed
+			msg := f2.checkFalsePremise("Tests passed successfully")
+			if msg != "" {
+				t.Errorf("expected no warning after real go test success, got: %s", msg)
+			}
+		})
+	}
+}
+
+// #570 Bug C: ensure only real go test patterns clear failures, not
+// arbitrary strings containing "ok".
+func TestFalsePremise_OnlyRealGoTestPatternsSupersede(t *testing.T) {
+	f := newFalsePremiseState()
+	f.recordToolResult("run_command", "exit status 2\nFAIL ./pkg [build failed]", true)
+
+	// Non-go-test output with "ok" - should NOT clear the failure
+	f.recordToolResult("run_command", "everything looks ok to me", false)
+
+	if len(f.recentErrors) == 0 {
+		t.Error("non-go-test 'ok' should not clear build failure")
+	}
+
+	// Agent claims success - should still warn because failure wasn't superseded
+	msg := f.checkFalsePremise("Tests passed")
+	if msg == "" {
+		t.Error("expected warning when non-go-test 'ok' appears in output")
 	}
 }

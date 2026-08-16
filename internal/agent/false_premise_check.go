@@ -276,7 +276,7 @@ func indicatesNotFound(snippet string) bool {
 
 // --- Claim matchers ---
 
-var buildSuccessRe = regexp.MustCompile(`(?i)(build\s+(passed|succeed|succeeded|successful|success)|compiles?\s+(successfully|without error|clean)|compilation\s+success|tests?\s+(pass|passed|all pass|all passing|succeed)|all\s+tests?\s+pass|test\s+suite\s+pass|lint\s+(pass|passed|clean|ok))`)
+var buildSuccessRe = regexp.MustCompile(`(?i)(build\s+(passed|succeed|succeeded|successful|success)|compiles?\s+(successfully|without error|clean)|compilation\s+success|tests?\s+(pass|passed|all pass|all passing|succeed)|all\s+tests?\s+pass|test\s+suite\s+pass|lint\s+(pass|passed|clean|ok)|^ok\s+|^PASS$|^\s*---\s*PASS:)`)
 
 func matchesBuildSuccessClaim(lowered string) bool {
 	return buildSuccessRe.MatchString(lowered)

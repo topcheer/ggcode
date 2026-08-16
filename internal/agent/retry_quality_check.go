@@ -58,6 +58,12 @@ var failingCallFuncs = map[string]bool{
 	"Dial": true, "DialContext": true, "Ping": true,
 	"Read": true, "Write": true, "Send": true, "Receive": true,
 	"RoundTrip": true, "Call": true, "Request": true,
+	// Unexported methods (Go convention: lowercase names)
+	"do": true, "get": true, "post": true, "head": true,
+	"query": true, "queryrow": true, "exec": true,
+	"dial": true, "dialcontext": true, "ping": true,
+	"read": true, "write": true, "send": true, "receive": true,
+	"roundtrip": true, "call": true, "request": true,
 }
 
 // checkRetryQuality detects retry loops missing backoff delay or attempt cap.
