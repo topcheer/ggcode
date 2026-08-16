@@ -387,6 +387,7 @@ func NewDefaultStore() (*JSONLStore, error) {
 // loaded regardless of the time window. Use fullLoad=true for --full.
 func (s *JSONLStore) LoadWithOptions(id string, fullLoad bool) (*Session, error) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	prev := s.fullLoad
 	s.fullLoad = fullLoad
 	defer func() { s.fullLoad = prev }()
@@ -784,6 +785,7 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 			continue // skip malformed lines
 		}
 
+		lineStart := byteOffset
 		byteOffset += lineLen
 
 		switch rec.Type {
@@ -816,7 +818,7 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 		case "message":
 			// Apply time-windowed loading: skip old messages for rendering.
 			// Still track them for checkpoint context restoration.
-			if msgCutoff > 0 && byteOffset < msgCutoff {
+			if msgCutoff > 0 && lineStart < msgCutoff {
 				// Old message within cutoff — only keep for context restoration,
 				// not for ses.Messages (rendering). postCPEntries needs it for
 				// checkpoint logic, but allMessages (rendering) skips it.
@@ -1903,18 +1905,24 @@ func (s *JSONLStore) EnsureMeta(ses *Session) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	path := s.sessionPath(ses.ID)
-	if _, err := os.Stat(path); err == nil {
-		return nil // already exists
-	}
 
 	// Don't create a meta file for sessions with no user interaction.
 	if !ses.HasUserInteraction() {
 		return nil
 	}
 
-	// Write meta record as the first line
-	f, err := os.Create(path)
+	// O_EXCL guards against a cross-process TOCTOU (#531): the sessions
+	// directory is shared by multiple ggcode processes (CLI + desktop), and
+	// s.mu only serializes within this process. With Stat-then-Create(O_TRUNC)
+	// another process could create the file and append messages between our
+	// Stat and Create, and the truncate would wipe its session down to a
+	// single meta line. O_EXCL loses that race cleanly instead (backfillIDs
+	// uses the same pattern).
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
+		if os.IsExist(err) {
+			return nil // already exists (possibly created concurrently)
+		}
 		return err
 	}
 	defer f.Close()

@@ -41,10 +41,11 @@ func writeOldUserMessageJSONL(t *testing.T, dir, id string) {
 			t.Fatal(err)
 		}
 	}
-	// Boundary assistant message just outside the window. The window cutoff
-	// keeps the record whose end offset equals the cutoff byte offset, so
-	// without this separator the last user message would be retained by that
-	// boundary and the bug precondition would not hold.
+	// Boundary assistant message just outside the window. Cutoff semantics
+	// (#531): msgCutoff is the line-START offset of the first in-window
+	// message, so any message strictly before it is excluded even when its
+	// line-end offset equals msgCutoff. It exists here to prove the boundary
+	// is correct, not to be retained.
 	boundary := jsonlRecord{
 		Type: "message",
 		Message: &provider.Message{
@@ -86,15 +87,15 @@ func TestCleanupIfEmpty_WindowedLoadKeepsOldUserMessages(t *testing.T) {
 	id := "windowed-old-user"
 	writeOldUserMessageJSONL(t, dir, id)
 
-	// Sanity check (bug precondition): windowed load drops all user messages.
-	// The boundary record immediately before the final message is retained
-	// (its end offset equals the cutoff), so boundary + final = 2 messages.
+	// Sanity check (bug precondition): windowed load drops all user messages,
+	// including the boundary record whose line-end offset equals the cutoff
+	// (#531: comparison now uses line-start offsets). Only final remains.
 	loaded, err := store.Load(id)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(loaded.Messages) != 2 {
-		t.Fatalf("expected windowed load to keep boundary + final message, got %d", len(loaded.Messages))
+	if len(loaded.Messages) != 1 {
+		t.Fatalf("expected windowed load to keep only the final message, got %d", len(loaded.Messages))
 	}
 	if loaded.HasUserInteraction() {
 		t.Fatal("in-memory windowed session should report no user interaction (bug precondition)")
