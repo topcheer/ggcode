@@ -75,10 +75,20 @@ func RingHistoryMax(n int, categoryFilter string) []RingEntry {
 	return ringHistoryImpl(n, categoryFilter)
 }
 
+// ringHistoryImpl filters by exact category match. The entry's Category
+// field was already routed through tagToCategory on the write side
+// (ringAppend), so the read side must compare that field directly — the
+// old message-body substring fallback ("[agent]" appearing in prose like
+// "discussing [agent] loop") produced false positives (#537).
 func ringHistoryImpl(n int, categoryFilter string) []RingEntry {
+	// Reuse the write-side routing so a tag filter (e.g. "ctx") maps to its
+	// canonical category ("context") exactly as ringAppend stored it.
+	if cat, ok := tagToCategory[categoryFilter]; ok {
+		categoryFilter = cat
+	}
 	ringMu.Lock()
+	defer ringMu.Unlock()
 	if ringCount == 0 {
-		ringMu.Unlock()
 		return nil
 	}
 	// Read from ring buffer, starting from the oldest entry
@@ -90,15 +100,11 @@ func ringHistoryImpl(n int, categoryFilter string) []RingEntry {
 	out := make([]RingEntry, 0, n)
 	for i := 0; i < avail && len(out) < n; i++ {
 		entry := ringBuf[(start+i)%ringCap]
-		if categoryFilter != "" && !strings.Contains(strings.ToLower(entry.Category), strings.ToLower(categoryFilter)) {
-			// Also match against the tag embedded in the message, e.g. "[agent]"
-			if !strings.Contains(strings.ToLower(entry.Message), "["+strings.ToLower(categoryFilter)) {
-				continue
-			}
+		if categoryFilter != "" && !strings.EqualFold(entry.Category, categoryFilter) {
+			continue
 		}
 		out = append(out, entry)
 	}
-	ringMu.Unlock()
 	return out
 }
 

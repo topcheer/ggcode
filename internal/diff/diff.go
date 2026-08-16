@@ -84,9 +84,12 @@ func fastDiffFallback(oldLines, newLines []string, contextLines int) string {
 }
 
 // splitLines splits text into lines, preserving a trailing newline indicator.
+// Empty input yields no lines: an empty file is zero lines, not one empty
+// line, so diffs/stats for file creation don't report a phantom deletion
+// of an empty line (#537).
 func splitLines(text string) []string {
 	if text == "" {
-		return []string{""}
+		return nil
 	}
 	lines := strings.Split(text, "\n")
 	// Remove trailing empty string from final newline
@@ -148,17 +151,21 @@ func computeEditScript(old, new []string) []op {
 	return script
 }
 
+// lineEntry is one rendered line of a unified diff: a content line (kind
+// ' ', '+', '-') with its old/new file line numbers, or a hunk marker
+// (kind '~').
+type lineEntry struct {
+	kind    byte
+	text    string
+	oldNum  int
+	newNum  int
+	inGroup bool
+}
+
 // formatUnifiedDiff formats an edit script as unified diff.
 func formatUnifiedDiff(oldLines, newLines []string, script []op, contextLines int) string {
 	// First pass: mark which lines are in change groups
 	oldLine, newLine := 1, 1
-	type lineEntry struct {
-		kind    byte
-		text    string
-		oldNum  int
-		newNum  int
-		inGroup bool
-	}
 	var entries []lineEntry
 
 	// Identify change positions
@@ -192,8 +199,9 @@ func formatUnifiedDiff(oldLines, newLines []string, script []op, contextLines in
 		}
 
 		if nearChange {
-			if !inChange && idx > 0 {
-				// Truncation marker
+			if !inChange {
+				// Hunk start marker. Also fires at idx 0 so a hunk beginning at
+				// the first line still gets a header (#537).
 				entries = append(entries, lineEntry{kind: '~', text: "@@"})
 			}
 			inChange = true
@@ -231,18 +239,53 @@ func formatUnifiedDiff(oldLines, newLines []string, script []op, contextLines in
 		entries = append(entries, lineEntry{kind: '~', text: "@@"})
 	}
 
-	// Format output
+	// Format output. Hunk markers get a standard unified diff header
+	// "@@ -start,count +start,count @@" computed from the lines that follow
+	// up to the next marker. Bare "@@" markers are not a valid unified diff
+	// and left LLM/consumers without line-number anchors (#537).
 	var sb strings.Builder
-	for _, e := range entries {
-		switch e.kind {
-		case '~':
-			sb.WriteString(fmt.Sprintf("%s\n", e.text))
-		default:
+	for i := 0; i < len(entries); i++ {
+		e := entries[i]
+		if e.kind != '~' {
 			sb.WriteString(fmt.Sprintf("%c %s\n", e.kind, e.text))
+			continue
+		}
+		if header, ok := hunkHeader(entries, i); ok {
+			sb.WriteString(header)
 		}
 	}
 
 	return sb.String()
+}
+
+// hunkHeader computes the standard unified diff header "@@ -l,s +l,s @@"
+// for the hunk marker at index markerIdx. It scans the entries that follow
+// the marker (up to the next marker or end), anchoring on the first old/new
+// line numbers and counting context and change lines on each side. It
+// returns ok=false for a stray marker with no following lines (adjacent
+// markers around a one-line gap, or the trailing marker), which gets no
+// header.
+func hunkHeader(entries []lineEntry, markerIdx int) (string, bool) {
+	oldStart, newStart, oldCount, newCount := 0, 0, 0, 0
+	for j := markerIdx + 1; j < len(entries) && entries[j].kind != '~'; j++ {
+		le := entries[j]
+		if oldStart == 0 && le.oldNum > 0 {
+			oldStart = le.oldNum
+		}
+		if newStart == 0 && le.newNum > 0 {
+			newStart = le.newNum
+		}
+		if le.kind == '-' || le.kind == ' ' {
+			oldCount++
+		}
+		if le.kind == '+' || le.kind == ' ' {
+			newCount++
+		}
+	}
+	if oldCount == 0 && newCount == 0 {
+		return "", false
+	}
+	return fmt.Sprintf("@@ -%d,%d +%d,%d @@\n", oldStart, oldCount, newStart, newCount), true
 }
 
 // HasChanges returns true if old and new content differ.

@@ -3,11 +3,13 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/agentruntime"
@@ -251,7 +253,16 @@ func dedupeStrings(values []string) []string {
 	return out
 }
 
-// readStdin reads all data from stdin if it's a pipe, otherwise returns "".
+// stdinIdleTimeout bounds how long readStdin waits for the *next* chunk of
+// stdin data before giving up. A pipe whose writer never closes (e.g.
+// `tail -f x | ggcode -p`, or a parent holding the write-end open) used to
+// block io.ReadAll — and therefore all of startup — forever (#537).
+// A var (not const) so tests can shorten it.
+var stdinIdleTimeout = 30 * time.Second
+
+// readStdin reads all data from stdin if it's a pipe, otherwise returns nil.
+// Empty piped input returns nil (not []byte{}) so buildPipePrompt's nil check
+// correctly treats it as "no stdin data" (#537).
 func readStdin() ([]byte, error) {
 	// #402: a closed stdin fd (parent close(0) before exec — common in
 	// cron/daemon/CI callers) makes Stat return EBADF with a nil stat;
@@ -260,11 +271,49 @@ func readStdin() ([]byte, error) {
 	if err != nil || (stat.Mode()&os.ModeCharDevice) != 0 {
 		return nil, nil
 	}
-	data, err := io.ReadAll(os.Stdin)
-	if err != nil {
-		return nil, err
+	// Read manually with a per-read idle deadline instead of io.ReadAll so a
+	// stalled writer can't block startup indefinitely. A slow but flowing
+	// stream (data arriving at least once per window) still completes.
+	var buf []byte
+	chunk := make([]byte, 32*1024)
+	for {
+		n, readErr := readStdinChunk(chunk, stdinIdleTimeout)
+		buf = append(buf, chunk[:n]...)
+		if errors.Is(readErr, io.EOF) {
+			break
+		}
+		if readErr != nil {
+			if os.IsTimeout(readErr) {
+				// Stalled pipe: keep whatever arrived so far and move on.
+				fmt.Fprintf(os.Stderr, "stdin read timed out after %v; continuing with %d bytes\n", stdinIdleTimeout, len(buf))
+				break
+			}
+			return nil, readErr
+		}
 	}
-	return data, nil
+	if len(buf) == 0 {
+		return nil, nil
+	}
+	return buf, nil
+}
+
+// readStdinChunk reads once from stdin with an idle timeout.
+func readStdinChunk(buf []byte, timeout time.Duration) (int, error) {
+	type readResult struct {
+		n   int
+		err error
+	}
+	done := make(chan readResult, 1)
+	go func() {
+		n, err := os.Stdin.Read(buf)
+		done <- readResult{n, err}
+	}()
+	select {
+	case r := <-done:
+		return r.n, r.err
+	case <-time.After(timeout):
+		return 0, os.ErrDeadlineExceeded
+	}
 }
 
 // buildPipePrompt builds the prompt with optional image from stdin.

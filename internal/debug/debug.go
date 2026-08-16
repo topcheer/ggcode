@@ -449,15 +449,26 @@ func IsVerbose(pkg string) bool {
 	return verbose[cat]
 }
 
+// truncateMessage caps a log message at maxMessageLen bytes without
+// splitting a multi-byte rune mid-sequence. Byte slicing here used to cut
+// CJK runes in half, corrupting the tail with U+FFFD after JSON marshaling
+// (#537); this uses util.SnapToRuneStart for a rune-safe cut and appends
+// "..." so the truncation is visible.
+func truncateMessage(msg string) string {
+	if len(msg) <= maxMessageLen {
+		return msg
+	}
+	cut := util.SnapToRuneStart(msg, maxMessageLen-3)
+	return msg[:cut] + "..."
+}
+
 // Log writes a formatted message with a package tag to the appropriate
 // category-specific log file and the main log file.
 // Format: [HH:MM:SS.mmm] [pkg] message
 func Log(pkg, format string, args ...interface{}) {
 	cat := tagToCategory[pkg]
 	msg := fmt.Sprintf("[%s] "+format, append([]interface{}{pkg}, args...)...)
-	if len(msg) > maxMessageLen {
-		msg = msg[:maxMessageLen]
-	}
+	msg = truncateMessage(msg)
 
 	// LiveSink works independently of GGCODE_DEBUG — always fires.
 	// Read liveSink under RLock to avoid race with SetLiveSink.
@@ -522,9 +533,7 @@ func Logf(format string, args ...interface{}) {
 	if ms != nil {
 		ts := time.Now().Format("15:04:05.000000")
 		msg := fmt.Sprintf(format, args...)
-		if len(msg) > maxMessageLen {
-			msg = msg[:maxMessageLen]
-		}
+		msg = truncateMessage(msg)
 		msg += "\n"
 		_, _ = ms.Write([]byte(ts + " " + msg))
 	}
