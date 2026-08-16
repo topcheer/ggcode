@@ -962,9 +962,16 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 					}
 				}
 				if extraStart >= 0 {
-					for _, mr := range allMessages[extraStart:] {
-						if mr.Message != nil && mr.Message.ID != lastCpSummaryMsgID {
-							ses.ContextMessages = append(ses.ContextMessages, *mr.Message)
+					// extraStart indexes postCPEntries — the same unwindowed
+					// list the search above used. It must NOT be used to slice
+					// allMessages: the two index spaces diverge as soon as
+					// postCPEntries contains cost records or windowed-out old
+					// messages (>500 msgs / >24h sessions), which made
+					// allMessages[extraStart:] panic (bounds out of range) or
+					// silently restore the wrong context slice.
+					for _, entry := range postCPEntries[extraStart:] {
+						if entry.recType == "message" && entry.record.Message != nil && entry.record.Message.ID != lastCpSummaryMsgID {
+							ses.ContextMessages = append(ses.ContextMessages, *entry.record.Message)
 						}
 					}
 				} else {
