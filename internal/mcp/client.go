@@ -85,7 +85,35 @@ type Client struct {
 
 	// serverCaps holds the capabilities advertised by the server during
 	// initialize. Used to gate feature-specific requests (e.g., logging).
+	// Both serverCaps and negotiatedVersion are written by Initialize and read
+	// by capability gates / reconnect paths from other goroutines — all access
+	// must go through negotiatedState/setNegotiatedState (c.mu-guarded, #562 F).
 	serverCaps ServerCaps
+
+	// serverReqSem bounds goroutines spawned for interactive server requests
+	// (sampling/elicitation) dispatched off the read loop (#562 C). Lazily
+	// initialized under serverReqOnce so struct-literal clients are safe too.
+	serverReqOnce sync.Once
+	serverReqSem  chan struct{}
+}
+
+// negotiatedState returns the protocol version and server capabilities
+// negotiated during Initialize, synchronized with c.mu (#562 Bug F:
+// Initialize's write raced HasToolsListChanged's read — a precise TSan
+// report — and reconnect re-entry could observe torn state).
+func (c *Client) negotiatedState() (string, ServerCaps) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.negotiatedVersion, c.serverCaps
+}
+
+// setNegotiatedState records the negotiated version and server capabilities
+// under c.mu (companion to negotiatedState, #562 Bug F).
+func (c *Client) setNegotiatedState(version string, caps ServerCaps) {
+	c.mu.Lock()
+	c.negotiatedVersion = version
+	c.serverCaps = caps
+	c.mu.Unlock()
 }
 
 // NewClient creates a new MCP client for the given server config.
@@ -224,6 +252,8 @@ var knownMCPProtocolVersions = map[string]bool{
 // NegotiatedVersion returns the MCP protocol version agreed upon during
 // initialize, or empty string if not yet initialized.
 func (c *Client) NegotiatedVersion() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	return c.negotiatedVersion
 }
 
@@ -250,9 +280,6 @@ func (c *Client) Initialize(ctx context.Context) (*InitializeResult, error) {
 		return nil, fmt.Errorf("mcp[%s]: initialize: %w", c.name, err)
 	}
 
-	// Cache server capabilities for feature gating.
-	c.serverCaps = result.Capabilities
-
 	// Version negotiation: the server may respond with the same version
 	// (if it supports ours) or a different one (its latest supported).
 	// We accept any known version; reject unknown versions.
@@ -264,7 +291,10 @@ func (c *Client) Initialize(ctx context.Context) (*InitializeResult, error) {
 		return nil, fmt.Errorf("mcp[%s]: unsupported protocol version %q (client supports %s)",
 			c.name, serverVersion, latestMCPProtocolVersion)
 	}
-	c.negotiatedVersion = serverVersion
+	// Cache server capabilities for feature gating — under c.mu, together
+	// with the negotiated version, so capability readers never observe a
+	// torn half-updated state (#562 Bug F).
+	c.setNegotiatedState(serverVersion, result.Capabilities)
 
 	// Send initialized notification
 	notif := Notification{
@@ -272,42 +302,116 @@ func (c *Client) Initialize(ctx context.Context) (*InitializeResult, error) {
 		Method:  "notifications/initialized",
 	}
 	if err := c.sendNotification(ctx, notif); err != nil {
-		return nil, fmt.Errorf("mcp[%s]: initialized notification: %w", c.name, err)
+		// #562 Bug G: the initialize handshake itself has already succeeded —
+		// the version was negotiated and capabilities cached. A failed
+		// initialized notification is a transport-level symptom (e.g. EPIPE
+		// because the connection dropped right after the initialize response),
+		// not an initialization failure; reporting it as such misleads
+		// diagnosis. Downgrade to a warning — the next request will surface
+		// the dead transport with its own context.
+		debug.Log("mcp-client", "server=%s initialized notification send failed (handshake complete): %v", c.name, err)
 	}
 
 	return &result, nil
 }
 
+// maxPaginationPages bounds cursor-following in List* calls (#562 Bug A). A
+// broken or hostile server that echoes back the same cursor forever must not
+// turn pagination into an infinite request loop.
+const maxPaginationPages = 100
+
 // ListTools returns the tools provided by the MCP server.
+//
+// #562 Bug A: follows nextCursor pagination — servers were previously cut off
+// after the first page, silently losing every tool on later pages.
+// #562 Bug E: a server that did not advertise the tools capability now yields
+// an empty list instead of an error, mirroring how ListPrompts/ListResources
+// tolerate absent capabilities. Production callers gate all three behind one
+// discoverCapabilities call, so a resources-only server previously failed the
+// entire discovery.
 func (c *Client) ListTools(ctx context.Context) ([]ToolDefinition, error) {
-	params := ListToolsParams{}
-	var result ListToolsResult
-	if err := c.sendRequest(ctx, "tools/list", params, &result); err != nil {
-		return nil, fmt.Errorf("mcp[%s]: tools/list: %w", c.name, err)
+	// Preserve the closed-client error contract (see
+	// TestClientErrorContext_ListToolsOnClosed) even when the capability gate
+	// below would otherwise return early with an empty list.
+	if c.closed.Load() {
+		return nil, fmt.Errorf("mcp[%s]: connection closed", c.name)
 	}
-	return result.Tools, nil
+	_, caps := c.negotiatedState()
+	if caps.Tools == nil {
+		debug.Log("mcp-client", "server=%s tools capability not advertised; returning empty tool list", c.name)
+		return []ToolDefinition{}, nil
+	}
+	var all []ToolDefinition
+	cursor := ""
+	for page := 0; page < maxPaginationPages; page++ {
+		var result ListToolsResult
+		if err := c.sendRequest(ctx, "tools/list", ListToolsParams{Cursor: cursor}, &result); err != nil {
+			if len(all) > 0 {
+				// Pages already collected are still valid; report them and note
+				// the truncation rather than failing everything.
+				debug.Log("mcp-client", "server=%s tools/list page %d failed after %d tools: %v", c.name, page+1, len(all), err)
+				return all, nil
+			}
+			return nil, fmt.Errorf("mcp[%s]: tools/list: %w", c.name, err)
+		}
+		all = append(all, result.Tools...)
+		if result.NextCursor == "" {
+			return all, nil
+		}
+		cursor = result.NextCursor
+	}
+	debug.Log("mcp-client", "server=%s tools/list exceeded %d pages; stopping pagination", c.name, maxPaginationPages)
+	return all, nil
 }
 
 func (c *Client) ListPrompts(ctx context.Context) ([]PromptDefinition, error) {
-	params := struct {
-		Cursor string `json:"cursor,omitempty"`
-	}{}
-	var result ListPromptsResult
-	if err := c.sendRequest(ctx, "prompts/list", params, &result); err != nil {
-		return nil, fmt.Errorf("mcp[%s]: prompts/list: %w", c.name, err)
+	var all []PromptDefinition
+	cursor := ""
+	for page := 0; page < maxPaginationPages; page++ {
+		params := struct {
+			Cursor string `json:"cursor,omitempty"`
+		}{Cursor: cursor}
+		var result ListPromptsResult
+		if err := c.sendRequest(ctx, "prompts/list", params, &result); err != nil {
+			if len(all) > 0 {
+				debug.Log("mcp-client", "server=%s prompts/list page %d failed after %d prompts: %v", c.name, page+1, len(all), err)
+				return all, nil
+			}
+			return nil, fmt.Errorf("mcp[%s]: prompts/list: %w", c.name, err)
+		}
+		all = append(all, result.Prompts...)
+		if result.NextCursor == "" {
+			return all, nil
+		}
+		cursor = result.NextCursor
 	}
-	return result.Prompts, nil
+	debug.Log("mcp-client", "server=%s prompts/list exceeded %d pages; stopping pagination", c.name, maxPaginationPages)
+	return all, nil
 }
 
 func (c *Client) ListResources(ctx context.Context) ([]ResourceDefinition, error) {
-	params := struct {
-		Cursor string `json:"cursor,omitempty"`
-	}{}
-	var result ListResourcesResult
-	if err := c.sendRequest(ctx, "resources/list", params, &result); err != nil {
-		return nil, fmt.Errorf("mcp[%s]: resources/list: %w", c.name, err)
+	var all []ResourceDefinition
+	cursor := ""
+	for page := 0; page < maxPaginationPages; page++ {
+		params := struct {
+			Cursor string `json:"cursor,omitempty"`
+		}{Cursor: cursor}
+		var result ListResourcesResult
+		if err := c.sendRequest(ctx, "resources/list", params, &result); err != nil {
+			if len(all) > 0 {
+				debug.Log("mcp-client", "server=%s resources/list page %d failed after %d resources: %v", c.name, page+1, len(all), err)
+				return all, nil
+			}
+			return nil, fmt.Errorf("mcp[%s]: resources/list: %w", c.name, err)
+		}
+		all = append(all, result.Resources...)
+		if result.NextCursor == "" {
+			return all, nil
+		}
+		cursor = result.NextCursor
 	}
-	return result.Resources, nil
+	debug.Log("mcp-client", "server=%s resources/list exceeded %d pages; stopping pagination", c.name, maxPaginationPages)
+	return all, nil
 }
 
 func (c *Client) GetPrompt(ctx context.Context, name string, args map[string]interface{}) (*GetPromptResult, error) {
@@ -544,9 +648,7 @@ func (c *Client) sendRequestUnlocked(req Request, ctx context.Context) (*Respons
 
 func (c *Client) sendNotification(ctx context.Context, notif Notification) error {
 	// Bug B (#523): for HTTP the roundtrip must run WITHOUT c.mu, otherwise
-	// Close() blocks behind it exactly like the request path did. The generic
-	// path below still holds c.mu for the stdio write, which is required for
-	// frame serialization (#480) and cannot take c.mu reentrantly in sendHTTP.
+	// Close() blocks behind it exactly like the request path did.
 	if c.transport == "http" {
 		if c.closed.Load() {
 			return fmt.Errorf("mcp[%s]: connection closed", c.name)
@@ -554,45 +656,24 @@ func (c *Client) sendNotification(ctx context.Context, notif Notification) error
 		_, err := c.sendHTTP(ctx, notif)
 		return err
 	}
+	// #562 Bug B: the WS path now serializes its write under c.mu inside
+	// sendWSNotification, so this dispatcher must NOT already hold c.mu when
+	// handing off — the old generic path locked here and delegated to c.send,
+	// which would now reentrantly deadlock.
+	if c.transport == "ws" || c.transport == "websocket" {
+		_, err := c.sendWSNotification(ctx, notif)
+		return err
+	}
+	// stdio: frame serialization requires c.mu (#480).
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed.Load() {
 		return fmt.Errorf("mcp[%s]: connection closed", c.name)
 	}
-	_, err := c.send(notif, ctx)
-	return err
-}
-
-func (c *Client) send(msg interface{}, ctx context.Context) (*Response, error) {
-	switch c.transport {
-	case "http":
-		return c.sendHTTP(ctx, msg)
-	case "ws", "websocket":
-		// Notifications only need a write, not a read loop.
-		if _, ok := msg.(Notification); ok {
-			return c.sendWSNotification(ctx, msg)
-		}
-		// Requests are handled by sendRequestUnlocked via sendWSUnlocked.
-		// This path handles server-initiated requests (rare).
-		req, _ := msg.(Request)
-		return c.sendWSUnlocked(ctx, req)
-	case "", "stdio":
-		if err := c.writeMessageUnlocked(msg); err != nil {
-			return nil, fmt.Errorf("mcp[%s]: write message: %w", c.name, err)
-		}
-		switch msg.(type) {
-		case Notification:
-			return &Response{JSONRPC: "2.0"}, nil
-		default:
-			var reqID *ID
-			if r, ok := msg.(Request); ok {
-				reqID = r.ID
-			}
-			return c.readResponseWithCancel(ctx, reqID)
-		}
-	default:
-		return nil, fmt.Errorf("mcp[%s]: unsupported transport %q", c.name, c.transport)
+	if err := c.writeMessageUnlocked(notif); err != nil {
+		return fmt.Errorf("mcp[%s]: write message: %w", c.name, err)
 	}
+	return nil
 }
 
 func (c *Client) readResponseWithCancel(ctx context.Context, reqID *ID) (*Response, error) {
@@ -907,6 +988,14 @@ func (c *Client) readWSLoop(ctx context.Context, reqID *ID, waiter chan *Respons
 		}
 		switch typed := parsed.(type) {
 		case *Response:
+			// #562 Bug D: same unattributable-response rule as the stdio loop —
+			// responseIDMatches treats an empty raw ID as a match for ANY reqID,
+			// so without this pre-check an id:null error would be misattributed
+			// to whichever caller's read loop consumed it.
+			if isNullID(typed.ID) {
+				c.deliverResponse(typed)
+				continue
+			}
 			// Under concurrent requests a response may belong to a different
 			// caller. Route foreign responses to their waiter instead of
 			// dropping them (Bug A, #523 — mirrors the stdio fix #156).
@@ -929,10 +1018,25 @@ func (c *Client) readWSLoop(ctx context.Context, reqID *ID, waiter chan *Respons
 
 // sendWSNotification writes a notification over WebSocket without entering
 // a read loop (notifications are fire-and-forget).
+//
+// #562 Bug B: the write is serialized under c.mu with a closed check, exactly
+// like sendWSUnlocked and respondToServerRequestWS (the "#480 gorilla
+// single-writer" rule). The previous unlocked WriteMessage raced concurrent
+// request writes on the same connection — gorilla/websocket panics with
+// "concurrent write to websocket connection", which is a process-level crash,
+// not just a race-detector artifact (reproduced in an isolated process).
 func (c *Client) sendWSNotification(ctx context.Context, msg interface{}) (*Response, error) {
 	data, err := json.Marshal(msg)
 	if err != nil {
 		return nil, fmt.Errorf("mcp[%s]: marshal ws notification: %w", c.name, err)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed.Load() {
+		return nil, fmt.Errorf("mcp[%s]: connection closed", c.name)
+	}
+	if c.wsConn == nil {
+		return nil, fmt.Errorf("mcp[%s]: websocket connection not established", c.name)
 	}
 	if deadline, ok := ctx.Deadline(); ok {
 		_ = c.wsConn.SetWriteDeadline(deadline)
@@ -1158,10 +1262,19 @@ func (c *Client) readResponse(ctx context.Context, reqID *ID, waiter chan *Respo
 		}
 		switch typed := msg.(type) {
 		case *Response:
+			// #562 Bug D: null/absent-ID responses are unattributable (they are
+			// spec-mandated error replies to malformed requests). Route them to
+			// deliverResponse (which logs the drop) instead of returning them as
+			// the answer to whichever caller happens to hold readMu — the old
+			// path misattributed server-level errors to an innocent request.
+			if isNullID(typed.ID) {
+				c.deliverResponse(typed)
+				continue
+			}
 			// Under concurrent requests a response may belong to a different
 			// caller. Forward foreign responses to their waiter instead of
 			// misattributing them (fix #156).
-			if reqID != nil && len(typed.ID) > 0 && !responseIDMatches(typed.ID, reqID) {
+			if reqID != nil && !responseIDMatches(typed.ID, reqID) {
 				c.deliverResponse(typed)
 				continue
 			}
@@ -1170,7 +1283,16 @@ func (c *Client) readResponse(ctx context.Context, reqID *ID, waiter chan *Respo
 			c.processNotification(typed)
 			continue
 		case *Request:
-			if err := c.handleServerRequest(typed); err != nil {
+			// #562 Bug C: dispatching inside the read loop runs while readMu is
+			// held. Quick handlers (roots/list, ping, unknown method) answer
+			// immediately and stay synchronous — but sampling/elicitation wait
+			// for the USER for up to 5 minutes, during which every concurrent
+			// request times out and Aborts the whole connection. Interactive
+			// handlers are therefore deferred to a bounded goroutine and the
+			// loop keeps reading; response routing is unaffected because every
+			// response write goes through writeMessage (c.mu-serialized stdin
+			// writes), regardless of which goroutine issues it.
+			if err := c.dispatchServerRequest(typed); err != nil {
 				return nil, fmt.Errorf("mcp[%s]: handle server request: %w", c.name, err)
 			}
 		default:
@@ -1219,8 +1341,17 @@ func (c *Client) unregisterWaiter(reqID *ID, ch chan *Response) {
 
 // deliverResponse hands a response belonging to another concurrent caller to
 // that caller's waiter channel (fix #156).
+//
+// #562 Bug D: a response with a null/absent ID is legal JSON-RPC (the spec
+// mandates "id": null on error responses to malformed requests). Such a
+// response cannot be attributed to any request this client issued (our
+// requests always carry integer IDs), so it is neither delivered to a waiter
+// (misattribution) nor silently dropped — it is logged with its error detail
+// so the loss is diagnosable.
 func (c *Client) deliverResponse(resp *Response) {
-	if len(resp.ID) == 0 {
+	if isNullID(resp.ID) {
+		debug.Log("mcp-stdio", "server=%s dropping response with %s id (error: %s)",
+			c.name, idStateDesc(resp.ID), responseErrorDesc(resp))
 		return
 	}
 	key := string(bytes.TrimSpace(resp.ID))
@@ -1235,6 +1366,34 @@ func (c *Client) deliverResponse(resp *Response) {
 		return
 	}
 	debug.Log("mcp-stdio", "server=%s dropping response with unknown ID %s", c.name, key)
+}
+
+// isNullID reports whether a raw JSON-RPC response ID is absent or the JSON
+// literal null (#562 Bug D). Such responses are unattributable.
+func isNullID(raw json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(raw)
+	return len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null"))
+}
+
+// idStateDesc describes a null/empty response ID for drop logging (#562 D).
+func idStateDesc(raw json.RawMessage) string {
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return "null"
+	}
+	return "empty"
+}
+
+// responseErrorDesc extracts a compact error description for drop logging
+// (#562 D); returns "<no error>" for success payloads.
+func responseErrorDesc(resp *Response) string {
+	if resp == nil || resp.Error == nil {
+		return "<no error>"
+	}
+	msg := resp.Error.Message
+	if len(msg) > 200 {
+		msg = msg[:200]
+	}
+	return fmt.Sprintf("%d %s", resp.Error.Code, msg)
 }
 
 func (c *Client) readMessage(ctx context.Context) (interface{}, error) {
@@ -1332,10 +1491,13 @@ func (c *Client) handleServerRequest(req *Request) error {
 		return nil
 	}
 	switch req.Method {
-	case "sampling/createMessage":
-		return c.handleSampling(req)
-	case "elicitation/create":
-		return c.handleElicitation(req)
+	case "sampling/createMessage", "elicitation/create":
+		// Interactive handlers (#562 Bug C): never run them on the read-loop
+		// goroutine — they block on user input (up to 5 minutes for
+		// elicitation), stall the whole read loop, and cause every concurrent
+		// request to time out and Abort the connection. handleServerRequestAsync
+		// validates cheaply and defers the actual handler to a bounded worker.
+		return c.handleServerRequestAsync(req)
 	case "roots/list":
 		rootURI, err := currentRootURI()
 		if err != nil {
@@ -1349,6 +1511,66 @@ func (c *Client) handleServerRequest(req *Request) error {
 	default:
 		return c.writeErrorResponse(req.ID, -32601, fmt.Sprintf("method not found: %s", req.Method))
 	}
+}
+
+// dispatchServerRequest is the read-loop entry point for server-initiated
+// requests on the stdio path (#562 Bug C). It is a thin alias today but makes
+// the read-loop policy ("quick handlers inline, interactive ones deferred")
+// explicit at the call site.
+func (c *Client) dispatchServerRequest(req *Request) error {
+	return c.handleServerRequest(req)
+}
+
+// handleServerRequestAsync validates an interactive server request (sampling/
+// elicitation) and runs it on a bounded worker goroutine. Handlers without a
+// registered handler are rejected synchronously (cheap). Errors from the
+// handler itself are converted to JSON-RPC error responses inside the
+// goroutine, so this function returns only setup errors.
+func (c *Client) handleServerRequestAsync(req *Request) error {
+	isSampling := req.Method == "sampling/createMessage"
+	if isSampling && c.samplingHandler == nil {
+		return c.writeErrorResponse(req.ID, -32601, "sampling not supported")
+	}
+	if !isSampling && c.elicitationHandler == nil {
+		return c.writeErrorResponse(req.ID, -32601, "elicitation not supported")
+	}
+	// Bounded dispatch: a server flooding us with interactive requests must
+	// not spawn unbounded goroutines. Acquire a semaphore slot without
+	// blocking the read loop — if all workers are busy, reject with
+	// "server busy" instead of stalling reads (the exact failure mode of
+	// Bug C, just bounded).
+	c.serverReqOnce.Do(func() {
+		c.serverReqSem = make(chan struct{}, maxInteractiveServerRequests)
+	})
+	select {
+	case c.serverReqSem <- struct{}{}:
+	default:
+		return c.writeErrorResponse(req.ID, -32603, "too many concurrent interactive server requests")
+	}
+	name := c.name
+	reqCopy := *req
+	safego.Go("mcp.client.serverRequest", func() {
+		defer func() { <-c.serverReqSem }()
+		if err := c.handleInteractiveRequest(&reqCopy); err != nil {
+			debug.Log("mcp-client", "server=%s interactive request %s failed: %v", name, reqCopy.Method, err)
+		}
+	})
+	return nil
+}
+
+// maxInteractiveServerRequests bounds concurrent goroutines answering
+// interactive server requests (sampling/elicitation) dispatched off the read
+// loop (#562 Bug C).
+const maxInteractiveServerRequests = 8
+
+// handleInteractiveRequest runs on a worker goroutine (not the read loop) and
+// answers the request via the registered handler. Assumes the corresponding
+// handler is non-nil (checked by the caller).
+func (c *Client) handleInteractiveRequest(req *Request) error {
+	if req.Method == "sampling/createMessage" {
+		return c.handleSampling(req)
+	}
+	return c.handleElicitation(req)
 }
 
 // handleSampling processes a sampling/createMessage request from the MCP server.
@@ -1603,7 +1825,8 @@ func (c *Client) processNotification(notif *Notification) {
 // Valid levels: "debug", "info", "notice", "warning", "error", "critical",
 // "alert", "emergency".
 func (c *Client) SetLevel(ctx context.Context, level string) error {
-	if c.serverCaps.Logging == nil {
+	_, caps := c.negotiatedState()
+	if caps.Logging == nil {
 		return fmt.Errorf("mcp[%s]: server does not support logging", c.name)
 	}
 	params := struct {
@@ -1617,17 +1840,20 @@ func (c *Client) SetLevel(ctx context.Context, level string) error {
 
 // HasToolsListChanged returns true if the server advertised tools with listChanged.
 func (c *Client) HasToolsListChanged() bool {
-	return c.serverCaps.Tools != nil && c.serverCaps.Tools.ListChanged
+	_, caps := c.negotiatedState()
+	return caps.Tools != nil && caps.Tools.ListChanged
 }
 
 // HasLogging returns true if the server supports the logging capability.
 func (c *Client) HasLogging() bool {
-	return c.serverCaps.Logging != nil
+	_, caps := c.negotiatedState()
+	return caps.Logging != nil
 }
 
 // HasResourceSubscribe returns true if the server supports resource subscriptions.
 func (c *Client) HasResourceSubscribe() bool {
-	return c.serverCaps.Resources != nil && c.serverCaps.Resources.Subscribe
+	_, caps := c.negotiatedState()
+	return caps.Resources != nil && caps.Resources.Subscribe
 }
 
 // --- MCP Protocol Types ---
@@ -1687,10 +1913,14 @@ type ListToolsParams struct {
 
 type ListToolsResult struct {
 	Tools []ToolDefinition `json:"tools"`
+	// NextCursor is the pagination cursor for the next tools/list page (#562 A).
+	NextCursor string `json:"nextCursor,omitempty"`
 }
 
 type ListPromptsResult struct {
 	Prompts []PromptDefinition `json:"prompts"`
+	// NextCursor is the pagination cursor for the next prompts/list page (#562 A).
+	NextCursor string `json:"nextCursor,omitempty"`
 }
 
 type PromptDefinition struct {
@@ -1722,6 +1952,8 @@ type PromptMessage struct {
 
 type ListResourcesResult struct {
 	Resources []ResourceDefinition `json:"resources"`
+	// NextCursor is the pagination cursor for the next resources/list page (#562 A).
+	NextCursor string `json:"nextCursor,omitempty"`
 }
 
 type ResourceDefinition struct {
