@@ -67,6 +67,48 @@ var voidElements = map[string]bool{
 	"track": true, "wbr": true,
 }
 
+// htmlOptionalEndTagFileExts are parsed with HTML5 optional-end-tag
+// semantics (#545): li/td/tr/p/dd/dt/option/... may legally omit closing
+// tags — a following start tag (or the parent's closing tag, or end of
+// content) implicitly closes the open element. XHTML demands strict
+// pairing (it is XML), and JSX/TSX require explicit closing tags even for
+// HTML-named elements, so both families stay strict.
+var htmlOptionalEndTagFileExts = map[string]bool{
+	".html": true, ".htm": true,
+}
+
+// optionalEndTagElements lists the HTML5 elements whose end tags may be
+// omitted (WHATWG HTML §13 “Optional tags”): html/head/body omitted here
+// because they are structural; colgroup/caption included for table closing.
+var optionalEndTagElements = map[string]bool{
+	"li": true, "dt": true, "dd": true, "p": true,
+	"rt": true, "rp": true, "option": true, "optgroup": true,
+	"colgroup": true, "caption": true, "thead": true, "tbody": true,
+	"tfoot": true, "tr": true, "td": true, "th": true,
+}
+
+// startTagImplicitCloses maps a start tag to the stack-top elements it
+// implicitly closes (same-family siblings per spec): a new <li> closes an
+// open <li>, a new <tr> closes open <td>/<th>/<tr>, etc. The while-loop at
+// the call site pops chains (<tr><td>a<tr> pops td then tr).
+var startTagImplicitCloses = map[string]map[string]bool{
+	"li":       {"li": true},
+	"dt":       {"dt": true, "dd": true},
+	"dd":       {"dt": true, "dd": true},
+	"p":        {"p": true},
+	"option":   {"option": true},
+	"optgroup": {"optgroup": true, "option": true},
+	"rt":       {"rt": true, "rp": true},
+	"rp":       {"rt": true, "rp": true},
+	"td":       {"td": true, "th": true},
+	"th":       {"td": true, "th": true},
+	"tr":       {"tr": true, "td": true, "th": true},
+	"thead":    {"thead": true},
+	"tbody":    {"thead": true, "tbody": true, "tfoot": true, "tr": true, "td": true, "th": true},
+	"tfoot":    {"thead": true, "tbody": true, "tfoot": true, "tr": true, "td": true, "th": true},
+	"caption":  {"caption": true},
+}
+
 // maxTagScanSize limits the content size for tag balance checking.
 const maxTagScanSize = 512 * 1024 // 512KB
 
@@ -85,7 +127,7 @@ func checkTagBalance(filePath, content string) string {
 		return ""
 	}
 
-	msg := scanTagBalance(content, voidElementsFileExts[ext])
+	msg := scanTagBalance(content, voidElementsFileExts[ext], htmlOptionalEndTagFileExts[ext])
 	if msg == "" {
 		return ""
 	}
@@ -272,8 +314,11 @@ func matchBraceContainer(b []byte, start int) (end int, ok bool) {
 
 // scanTagBalance walks the content looking for tags and validates balance.
 // allowVoid enables HTML void-element semantics; XML-family callers must
-// pass false for strict pairing.
-func scanTagBalance(content string, allowVoid bool) string {
+// pass false for strict pairing. htmlOptional enables HTML5 optional-end-tag
+// implicit closing (#545): sibling start tags close open optional elements,
+// any closing tag closes descendant optional elements up to its match, and
+// trailing optional elements are legal at end of content.
+func scanTagBalance(content string, allowVoid, htmlOptional bool) string {
 	var stack []tagStackEntry
 
 	// Blank string literals inside JSX text-level expression containers
@@ -318,6 +363,17 @@ func scanTagBalance(content string, allowVoid bool) string {
 		// Closing tag: </div>
 		if m[2] >= 0 {
 			tagName := strings.ToLower(scanned[m[2]:m[3]])
+			// HTML5 optional-end-tag: a closing tag implicitly closes any open
+			// optional elements between it and its match ("no more content in
+			// the parent"): </ul> closes the trailing <li>, </div> a trailing
+			// <p>. Non-optional stack entries stop the pop so genuine
+			// mismatches (<div><span></div>) still error below.
+			if htmlOptional {
+				for len(stack) > 0 && stack[len(stack)-1].name != tagName &&
+					optionalEndTagElements[stack[len(stack)-1].name] {
+					stack = stack[:len(stack)-1]
+				}
+			}
 			if len(stack) == 0 {
 				return fmt.Sprintf("line %d: closing tag </%s> with no matching opening tag", line, tagName)
 			}
@@ -343,8 +399,29 @@ func scanTagBalance(content string, allowVoid bool) string {
 				continue
 			}
 
+			// HTML5 optional-end-tag: this start tag implicitly closes open
+			// same-family elements on the stack top — <li>one<li>two chains,
+			// <tr><td>a<td>b rows (#545).
+			if htmlOptional {
+				if closed := startTagImplicitCloses[tagName]; len(closed) > 0 {
+					for len(stack) > 0 && closed[stack[len(stack)-1].name] {
+						stack = stack[:len(stack)-1]
+					}
+				}
+			}
+
 			stack = append(stack, tagStackEntry{name: tagName, line: line})
 			continue
+		}
+	}
+
+	// HTML5 optional-end-tag: trailing optional elements are closed by "no
+	// more content in the parent" — <ul><li>one<li>two with no </ul> is still
+	// unusual but <p>one<p>two alone is legal; pop them before the unclosed
+	// check so only genuinely-required tags (div/span/...) report.
+	if htmlOptional {
+		for len(stack) > 0 && optionalEndTagElements[stack[len(stack)-1].name] {
+			stack = stack[:len(stack)-1]
 		}
 	}
 

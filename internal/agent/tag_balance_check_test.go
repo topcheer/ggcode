@@ -252,15 +252,17 @@ func TestCheckTagBalance_OrphanQuoteInBodyText(t *testing.T) {
 }
 
 // fix #275 companion: real imbalance must still be reported when unrelated
-// quotes appear in body text.
+// quotes appear in body text. The inner element is a non-optional <span> —
+// since #545, </div> legally closes an open <p> (HTML5 optional end tag), so
+// a <p> here would not be an imbalance anymore.
 func TestCheckTagBalance_OrphanQuotePlusRealImbalance(t *testing.T) {
-	content := `<div><p>result = "pending</div>`
+	content := `<div><span>result = "pending</div>`
 	got := checkTagBalance("page.html", content)
 	if got == "" {
-		t.Fatal("expected warning for unclosed <p>, got empty")
+		t.Fatal("expected warning for unclosed <span>, got empty")
 	}
-	if !strings.Contains(got, "does not match opening <p>") {
-		t.Errorf("expected mismatch warning about <p>, got: %s", got)
+	if !strings.Contains(got, "does not match opening <span>") {
+		t.Errorf("expected mismatch warning about <span>, got: %s", got)
 	}
 }
 
