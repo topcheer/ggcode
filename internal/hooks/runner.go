@@ -147,28 +147,33 @@ func executeCommandHook(h Hook, env HookEnv, payload HookPayload) HookResult {
 	defer cancel()
 
 	// Template expansion — only known vars, preserve unknown for shell.
+	// #566(D): every expansion value is shell-quoted so file paths with
+	// spaces/quotes stay a single word and RAW_INPUT content can never break
+	// out of its argument position (command injection via "; rm ...").
+	// Hook authors could not defend in the template itself — the shell
+	// re-parses quotes inside the expanded value either way.
 	expanded := os.Expand(h.Command, func(key string) string {
 		switch key {
 		case "TOOL_NAME":
-			return env.ToolName
+			return shellQuote(env.ToolName)
 		case "FILE_PATH":
-			return env.FilePath
+			return shellQuote(env.FilePath)
 		case "WORKING_DIR":
-			return env.WorkingDir
+			return shellQuote(env.WorkingDir)
 		case "RAW_INPUT":
-			return env.RawInput
+			return shellQuote(env.RawInput)
 		case "TOOL_SUCCESS":
 			return strconv.FormatBool(env.ToolSuccess)
 		case "TOOL_ERROR":
-			return env.ToolError
+			return shellQuote(env.ToolError)
 		case "TOOL_RESULT":
-			return env.ToolResult
+			return shellQuote(env.ToolResult)
 		case "TOOL_DURATION":
-			return env.ToolDuration
+			return shellQuote(env.ToolDuration)
 		case "EVENT":
-			return env.Event
+			return shellQuote(env.Event)
 		case "PAYLOAD":
-			return payloadJSON
+			return shellQuote(payloadJSON)
 		default:
 			return "${" + key + "}"
 		}
@@ -183,20 +188,7 @@ func executeCommandHook(h Hook, env HookEnv, payload HookPayload) HookResult {
 	// ours. Otherwise the envp carries duplicate keys and the inherited value
 	// (e.g. set by a chained hook that spawned this ggcode) wins on getenv,
 	// shadowing the fresh payload.
-	c.Env = append(filterEnviron(os.Environ(),
-		"GGCODE_HOOK_PAYLOAD", "GGCODE_HOOK_EVENT", "GGCODE_RAW_INPUT",
-		"GGCODE_TOOL_NAME", "GGCODE_TOOL_SUCCESS", "GGCODE_TOOL_ERROR",
-		"GGCODE_TOOL_RESULT", "GGCODE_TOOL_DURATION",
-	),
-		"GGCODE_HOOK_PAYLOAD="+payloadJSON,
-		"GGCODE_HOOK_EVENT="+env.Event,
-		"GGCODE_RAW_INPUT="+env.RawInput,
-		"GGCODE_TOOL_NAME="+env.ToolName,
-		"GGCODE_TOOL_SUCCESS="+strconv.FormatBool(env.ToolSuccess),
-		"GGCODE_TOOL_ERROR="+env.ToolError,
-		"GGCODE_TOOL_RESULT="+env.ToolResult,
-		"GGCODE_TOOL_DURATION="+env.ToolDuration,
-	)
+	c.Env = buildHookEnv(env, payloadJSON)
 	// #413: put the hook in its own process group and kill the whole group
 	// on timeout — the default context kill only reaps the shell itself,
 	// leaving `cmd &` background children adopted by init.
@@ -419,6 +411,62 @@ func matchToolSingle(pattern, toolName, rawInput string) bool {
 	// Simple glob match on tool name
 	matched, _ := filepath.Match(pattern, toolName)
 	return matched
+}
+
+// maxHookEnvValue caps each GGCODE_* env value injected into hook
+// processes (#566-C). 128KB keeps execve safely under typical E2BIG
+// (256KB-1MB on Linux/macOS) even with several large values present.
+const maxHookEnvValue = 128 * 1024
+
+// truncateHookEnv truncates v to maxHookEnvValue bytes, snapping to a rune
+// boundary so multi-byte UTF-8 is never split. Returns (value, truncated).
+func truncateHookEnv(v string) (string, bool) {
+	if len(v) <= maxHookEnvValue {
+		return v, false
+	}
+	cut := util.SnapToRuneStart(v, maxHookEnvValue)
+	return v[:cut], true
+}
+
+// shellQuote wraps s in single quotes, escaping embedded single quotes as
+// '\” — the standard POSIX-safe quoting. The result is always a single word
+// to the shell regardless of spaces, quotes, $, backticks, or ';'.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// buildHookEnv assembles the hook process environment: inherited environ
+// minus stale GGCODE_* keys (#413), plus fresh values. Oversized values are
+// truncated to maxHookEnvValue (#566-C): a 1MB RawInput previously made
+// fork/exec fail with E2BIG — the hook never started, yet pre_tool_use hooks
+// reported Allowed=true, silently bypassing audit/blocking hooks for large
+// tool inputs. The full payload still reaches the hook on stdin.
+func buildHookEnv(env HookEnv, payloadJSON string) []string {
+	truncPayload, payloadTrunc := truncateHookEnv(payloadJSON)
+	truncRaw, rawTrunc := truncateHookEnv(env.RawInput)
+	if payloadTrunc || rawTrunc {
+		debug.Log("hooks", "%s: env value truncated to %d bytes (payload=%v raw=%v)",
+			env.Event, maxHookEnvValue, payloadTrunc, rawTrunc)
+	}
+	extra := []string{
+		"GGCODE_HOOK_PAYLOAD=" + truncPayload,
+		"GGCODE_HOOK_EVENT=" + env.Event,
+		"GGCODE_RAW_INPUT=" + truncRaw,
+		"GGCODE_TOOL_NAME=" + env.ToolName,
+		"GGCODE_TOOL_SUCCESS=" + strconv.FormatBool(env.ToolSuccess),
+		"GGCODE_TOOL_ERROR=" + env.ToolError,
+		"GGCODE_TOOL_RESULT=" + env.ToolResult,
+		"GGCODE_TOOL_DURATION=" + env.ToolDuration,
+	}
+	if rawTrunc {
+		extra = append(extra, "GGCODE_RAW_INPUT_TRUNCATED=1")
+	}
+	return append(filterEnviron(os.Environ(),
+		"GGCODE_HOOK_PAYLOAD", "GGCODE_HOOK_EVENT", "GGCODE_RAW_INPUT",
+		"GGCODE_RAW_INPUT_TRUNCATED",
+		"GGCODE_TOOL_NAME", "GGCODE_TOOL_SUCCESS", "GGCODE_TOOL_ERROR",
+		"GGCODE_TOOL_RESULT", "GGCODE_TOOL_DURATION",
+	), extra...)
 }
 
 // filterEnviron removes entries whose key matches one of keys, so injected

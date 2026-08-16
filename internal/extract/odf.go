@@ -47,10 +47,14 @@ func (e *odfExtractor) Extract(data []byte) (TextResult, error) {
 	}
 
 	text := extractXMLText(string(content))
+	// #566(F): count real page breaks instead of blank-line pairs. The old
+	// strings.Count(text, "\n\n")+1 counted paragraph spacing, which is
+	// nearly always 0 for ODT (extractXMLText emits one \n per paragraph),
+	// so Pages was stuck at 1 even for long documents. extractXMLText
+	// renders each page-break element as "\n---\n", so pages = breaks + 1.
 	pages := 0
-	// Count page breaks for ODT
 	if e.subFormat == "odt" {
-		pages = strings.Count(text, "\n\n") + 1
+		pages = strings.Count(text, "\n---\n") + 1
 	}
 
 	return TextResult{

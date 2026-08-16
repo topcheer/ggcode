@@ -146,6 +146,31 @@ type archiveFile struct {
 	data []byte
 }
 
+// #566(E): zip entry read budgets. Previously every entry was buffered in
+// full (io.ReadAll up to 1MB+1 × 500 entries ≈ 500MB peak; a 390KB crafted
+// zip measured 120MB resident) even though plain-text entries only need a
+// small prefix for the preview. Two tiers:
+//   - structured entries (nested archives, registered document formats)
+//     still read up to maxArchiveEntrySize — they cannot be parsed truncated;
+//   - everything else reads only maxZipEntryRead bytes (preview budget).
+//
+// A cumulative cap bounds the worst case of many max-size structured entries.
+const (
+	maxZipEntryRead = 64 * 1024        // preview budget per plain entry
+	maxZipTotalRead = 32 * 1024 * 1024 // cumulative budget across all entries
+)
+
+// zipNeedsFullData reports whether an entry must be read whole (capped at
+// maxArchiveEntrySize) because it is a nested archive or a structured
+// document format that cannot be parsed from a truncated prefix.
+func zipNeedsFullData(name string) bool {
+	ext := extOf(name)
+	if isArchiveExt(ext) {
+		return true
+	}
+	return ext != "" && defaultRegistry.Get(ext) != nil
+}
+
 func listZip(data []byte) ([]archiveFile, error) {
 	r, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
@@ -158,6 +183,7 @@ func listZip(data []byte) ([]archiveFile, error) {
 		}
 	}
 	var files []archiveFile
+	var totalRead int64
 	for _, f := range r.File {
 		if f.FileInfo().IsDir() {
 			continue
@@ -165,15 +191,28 @@ func listZip(data []byte) ([]archiveFile, error) {
 		if len(files) >= maxArchiveEntries {
 			break
 		}
+		limit := int64(maxZipEntryRead)
+		if zipNeedsFullData(f.Name) {
+			limit = maxArchiveEntrySize
+		}
+		if totalRead >= maxZipTotalRead {
+			// Cumulative budget exhausted: keep listing the name so the
+			// file inventory stays complete, but do not buffer more data.
+			files = append(files, archiveFile{name: f.Name})
+			continue
+		}
 		rc, err := f.Open()
 		if err != nil {
 			continue
 		}
-		d, err := io.ReadAll(io.LimitReader(rc, maxArchiveEntrySize+1))
+		// Stream via LimitReader (limit+1 to detect over-limit) instead of
+		// buffering each entry in full.
+		d, err := io.ReadAll(io.LimitReader(rc, limit+1))
 		rc.Close()
 		if err != nil {
 			continue
 		}
+		totalRead += int64(len(d))
 		files = append(files, archiveFile{name: f.Name, data: d})
 	}
 	return files, nil

@@ -45,11 +45,13 @@ func (epubExtractor) Extract(data []byte) (TextResult, error) {
 
 	var buf strings.Builder
 	chapters := 0
+	missing := 0 // spine items whose ZIP entry could not be found/read
 	for _, itemPath := range spine {
 		fullPath := resolvePath(opfDir, itemPath)
 		text, err := extractHTMLFromZip(r, fullPath)
 		if err != nil {
-			continue // skip unreadable chapters
+			missing++ // skip unreadable chapters
+			continue
 		}
 		text = strings.TrimSpace(text)
 		if text == "" {
@@ -64,6 +66,26 @@ func (epubExtractor) Extract(data []byte) (TextResult, error) {
 		if buf.Len() > 50*1024*1024 {
 			buf.WriteString("\n\n... (truncated at 50MB)")
 			break
+		}
+	}
+
+	// #566(G): an EPUB that yields no text must not be reported as an
+	// empty-book success (Text:"" err:nil) — that is indistinguishable
+	// from a genuinely blank book and hides broken spines (e.g. Windows
+	// tools emitting backslash-separated hrefs that never match ZIP
+	// entry names). Return an explicit, diagnostic error instead.
+	if chapters == 0 {
+		switch {
+		case len(spine) == 0:
+			return TextResult{}, fmt.Errorf("EPUB has an empty spine (no itemref entries in OPF)")
+		case missing == len(spine):
+			ex := spine[0]
+			if len(spine) > 1 {
+				ex = strings.Join(spine[:2], ", ")
+			}
+			return TextResult{}, fmt.Errorf("EPUB spine lists %d chapters but none exist in the archive (paths like %q - backslash or non-standard paths?)", len(spine), ex)
+		default:
+			return TextResult{}, fmt.Errorf("EPUB extracted no text from %d spine chapters (%d unreadable)", len(spine), missing)
 		}
 	}
 

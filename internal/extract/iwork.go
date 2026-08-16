@@ -22,6 +22,7 @@ func (e *iworkExtractor) Extract(data []byte) (TextResult, error) {
 	}
 
 	var buf strings.Builder
+	xmlEntries := 0
 	for _, f := range r.File {
 		if f.FileInfo().IsDir() {
 			continue
@@ -33,6 +34,7 @@ func (e *iworkExtractor) Extract(data []byte) (TextResult, error) {
 		if !strings.HasSuffix(f.Name, ".xml") {
 			continue
 		}
+		xmlEntries++
 
 		rc, err := f.Open()
 		if err != nil {
@@ -53,6 +55,17 @@ func (e *iworkExtractor) Extract(data []byte) (TextResult, error) {
 			buf.WriteString("\n\n")
 		}
 		buf.WriteString(text)
+	}
+
+	// #566(G): iWork 2013+ stores body content in protobuf .iwa parts, which
+	// we cannot parse. Reporting Text:"" with err:nil made such files look
+	// like successfully-extracted empty documents. Say so explicitly
+	// instead; .iwa-only archives are the common case for modern files.
+	if buf.Len() == 0 {
+		if xmlEntries == 0 {
+			return TextResult{}, fmt.Errorf("%s archive contains no .xml parts (iWork 2013+ stores content in binary .iwa protobuf, which is unsupported)", e.subFormat)
+		}
+		return TextResult{}, fmt.Errorf("%s archive .xml parts contained no extractable text", e.subFormat)
 	}
 
 	return TextResult{
