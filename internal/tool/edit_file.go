@@ -72,6 +72,12 @@ func (t EditFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 		return Result{IsError: true, Content: "Error: " + msg}, nil
 	}
 
+	resolvedPath, err := resolveToolPath(args.FilePath, t.WorkingDir)
+	if err != nil {
+		return Result{IsError: true, Content: "Error: " + err.Error()}, nil
+	}
+	args.FilePath = resolvedPath
+
 	if t.SandboxCheck != nil && !t.SandboxCheck(args.FilePath) {
 		return Result{IsError: true, Content: "Error: path not allowed by sandbox policy"}, nil
 	}

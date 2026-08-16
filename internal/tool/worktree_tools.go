@@ -234,37 +234,57 @@ func findGitRoot(ctx context.Context, dir string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// isInsideWorktree checks if the current directory is inside a .ggcode/worktrees subdirectory.
+// isInsideWorktree reports whether gitDir is the root of a worktree created
+// by enter_worktree, returning the worktree path when true.
+//
+// Ownership verification (#542): every linked worktree — manual `git worktree
+// add`, submodule, or ggcode-managed — has a regular .git FILE whose content
+// is "gitdir: <main-repo>/.git/worktrees/<name>". That structure alone proves
+// nothing about who created the worktree. The previous implementation treated
+// ANY .git-file repository as a ggcode worktree, so exit_worktree(remove)
+// destructively deleted user-created worktrees and force-deleted their
+// unpushed branches. Now we additionally require that the worktree checkout
+// path is anchored under <main-repo>/.ggcode/worktrees/ — the location where
+// enter_worktree creates its worktrees.
 func isInsideWorktree(gitDir string) (bool, string, error) {
-	// Check if gitDir is inside a .ggcode/worktrees directory
-	// by looking at the path components
-	worktreesPrefix := filepath.Join(".ggcode", "worktrees") + string(filepath.Separator)
-	// Simple check: does the path contain .ggcode/worktrees
 	absPath, _ := filepath.Abs(gitDir)
-	if strings.Contains(absPath, worktreesPrefix) {
-		return true, absPath, nil
-	}
 
-	// Also check via git: if .git is a file (not directory), we're in a worktree
 	gitFile := filepath.Join(gitDir, ".git")
 	info, err := os.Lstat(gitFile)
-	if err != nil {
+	if err != nil || !info.Mode().IsRegular() {
+		// .git missing or a directory: main repository, not a linked worktree.
 		return false, "", nil
 	}
-	if info.Mode().IsRegular() {
-		// Read the gitdir reference
-		data, err := os.ReadFile(gitFile)
-		if err == nil && strings.HasPrefix(string(data), "gitdir: ") {
-			gitdir := strings.TrimSpace(strings.TrimPrefix(string(data), "gitdir: "))
-			// Check if it's under .ggcode/worktrees
-			if strings.Contains(gitdir, "worktrees") {
-				return true, absPath, nil
-			}
-		}
-		return true, absPath, nil
+	data, err := os.ReadFile(gitFile)
+	if err != nil || !strings.HasPrefix(string(data), "gitdir: ") {
+		// Unreadable or malformed .git file: cannot verify ownership, refuse.
+		return false, "", nil
 	}
+	gitdir := strings.TrimSpace(strings.TrimPrefix(string(data), "gitdir: "))
+	if !filepath.IsAbs(gitdir) {
+		gitdir = filepath.Join(gitDir, gitdir)
+	}
+	// gitdir points at <main-repo>/.git/worktrees/<name>; three levels up is
+	// the main repository root (same layout findGitRootFromWorktree relies on).
+	mainRoot := filepath.Dir(filepath.Dir(filepath.Dir(gitdir)))
 
-	return false, "", nil
+	// Anchored containment: the worktree checkout must live under
+	// <main-repo>/.ggcode/worktrees/ — not merely have that substring
+	// somewhere along its path.
+	worktreesDir := filepath.Join(mainRoot, ".ggcode", "worktrees")
+	resolvedPath, resolvedBase := absPath, worktreesDir
+	if r, err := filepath.EvalSymlinks(absPath); err == nil {
+		resolvedPath = r
+	}
+	if r, err := filepath.EvalSymlinks(worktreesDir); err == nil {
+		resolvedBase = r
+	}
+	rel, err := filepath.Rel(resolvedBase, resolvedPath)
+	if err != nil || rel == ".." || filepath.IsAbs(rel) ||
+		strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false, "", nil
+	}
+	return true, absPath, nil
 }
 
 // findGitRootFromWorktree finds the main repo root from a worktree path.

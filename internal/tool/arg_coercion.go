@@ -217,18 +217,23 @@ func ValidateRequiredParams(schema json.RawMessage, args json.RawMessage) string
 // isEmptyValue returns true if a JSON RawMessage represents an empty value:
 // null, empty string "", empty array [], or empty object {}.
 // Numbers (including 0) and booleans (including false) are NOT empty.
+// Whitespace-only strings (" ", "\t") are empty too (#542) — consistent with
+// CheckRequired's Trim behavior in tool.go, they must not slip past the
+// required-param gateway.
 func isEmptyValue(val json.RawMessage) bool {
 	s := strings.TrimSpace(string(val))
 	if s == "" || s == "null" {
 		return true
 	}
-	// Empty string: "" (with JSON quotes)
-	if s == `""` {
-		return true
-	}
-	// Empty array or object
 	if s == "[]" || s == "{}" {
 		return true
+	}
+	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+		var str string
+		if err := json.Unmarshal([]byte(s), &str); err == nil {
+			return strings.TrimSpace(str) == ""
+		}
+		// Malformed quoted value — treat as non-empty so validation stays neutral.
 	}
 	return false
 }

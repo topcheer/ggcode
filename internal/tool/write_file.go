@@ -6,7 +6,23 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
+
+// resolveToolPath resolves a tool file path against the tool's WorkingDir.
+// Relative paths are joined with workingDir so sub-agent calls with relative
+// paths do not silently land in the process CWD (#542). If the path is already
+// absolute it is used as-is (after cleaning).
+func resolveToolPath(path, workingDir string) (string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", fmt.Errorf("path is required")
+	}
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(workingDir, path)
+	}
+	return filepath.Clean(path), nil
+}
 
 // WriteFile implements the write_file tool.
 type WriteFile struct {
@@ -58,6 +74,12 @@ func (t WriteFile) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	if msg := CheckRequired("path", args.Path); msg != "" {
 		return Result{IsError: true, Content: "Error: " + msg}, nil
 	}
+
+	resolvedPath, err := resolveToolPath(args.Path, t.WorkingDir)
+	if err != nil {
+		return Result{IsError: true, Content: "Error: " + err.Error()}, nil
+	}
+	args.Path = resolvedPath
 
 	if t.SandboxCheck != nil && !t.SandboxCheck(args.Path) {
 		return Result{IsError: true, Content: "Error: path not allowed by sandbox policy"}, nil

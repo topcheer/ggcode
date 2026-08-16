@@ -17,6 +17,7 @@ type AllowedPathChecker func(path string) bool
 // ReadFile implements the read_file tool.
 type ReadFile struct {
 	SandboxCheck AllowedPathChecker
+	WorkingDir   string
 }
 
 func (t ReadFile) Name() string { return "read_file" }
@@ -69,6 +70,12 @@ func (t ReadFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 	if msg := CheckRequired("path", args.Path); msg != "" {
 		return Result{IsError: true, Content: "Error: " + msg}, nil
 	}
+
+	resolvedPath, err := resolveToolPath(args.Path, t.WorkingDir)
+	if err != nil {
+		return Result{IsError: true, Content: "Error: " + err.Error()}, nil
+	}
+	args.Path = resolvedPath
 
 	if t.SandboxCheck != nil && !t.SandboxCheck(args.Path) {
 		return Result{IsError: true, Content: "Error: path not allowed by sandbox policy"}, nil

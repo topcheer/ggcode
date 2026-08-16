@@ -72,13 +72,13 @@ func TestValidateRequiredParams_WhitespaceString(t *testing.T) {
 		"properties": {"path": {"type": "string"}},
 		"required": ["path"]
 	}`)
-	// A whitespace-only string value is technically present but likely useless.
-	// However, we treat it as present since the JSON value is not empty/null.
-	// Tools that care should use CheckRequired which trims whitespace.
+	// #542: whitespace-only strings are treated as missing, consistent with
+	// CheckRequired's Trim behavior in tool.go — a whitespace path or grep
+	// pattern is useless and previously bypassed the required-param gateway.
 	args := json.RawMessage(`{"path": "  "}`)
 	msg := ValidateRequiredParams(schema, args)
-	if msg != "" {
-		t.Errorf("whitespace string should be treated as present (not empty), got: %s", msg)
+	if msg == "" {
+		t.Fatal("expected missing param error for whitespace-only string")
 	}
 }
 
