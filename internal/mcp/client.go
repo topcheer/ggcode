@@ -526,8 +526,10 @@ func (c *Client) sendRequestUnlocked(req Request, ctx context.Context) (*Respons
 	case "ws", "websocket":
 		return c.sendWSUnlocked(ctx, req)
 	case "http":
-		c.mu.Lock()
-		defer c.mu.Unlock()
+		// Bug B (#523): the HTTP roundtrip must NOT hold c.mu — Close()
+		// takes c.mu first and would block until the request (or its OAuth
+		// 401 retry, which can take minutes of interactive time) finishes.
+		// sendHTTP now locks c.mu only for short state snapshot/write-backs.
 		return c.sendHTTP(ctx, req)
 	default: // stdio
 		c.mu.Lock()
@@ -541,6 +543,17 @@ func (c *Client) sendRequestUnlocked(req Request, ctx context.Context) (*Respons
 }
 
 func (c *Client) sendNotification(ctx context.Context, notif Notification) error {
+	// Bug B (#523): for HTTP the roundtrip must run WITHOUT c.mu, otherwise
+	// Close() blocks behind it exactly like the request path did. The generic
+	// path below still holds c.mu for the stdio write, which is required for
+	// frame serialization (#480) and cannot take c.mu reentrantly in sendHTTP.
+	if c.transport == "http" {
+		if c.closed.Load() {
+			return fmt.Errorf("mcp[%s]: connection closed", c.name)
+		}
+		_, err := c.sendHTTP(ctx, notif)
+		return err
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed.Load() {
@@ -672,21 +685,36 @@ func (c *Client) sendHTTPWithRetry(ctx context.Context, msg interface{}, allowRe
 	if err != nil {
 		return nil, fmt.Errorf("mcp[%s]: marshal http message: %w", c.name, err)
 	}
+	// Snapshot shared state under c.mu, then run the whole network roundtrip
+	// WITHOUT the lock (Bug B, #523). Previously the caller held c.mu across
+	// httpClient.Do + Handle401 (interactive OAuth can take minutes) + the 401
+	// retry, so Close() — whose first action is c.mu.Lock() — blocked until the
+	// request finished, contradicting its own contract that transports are
+	// aborted "without holding c.mu".
+	c.mu.Lock()
+	httpClient := c.httpClient
+	sessionID := c.sessionID
+	headers := c.headers
+	oauthHandler := c.oauthHandler
+	c.mu.Unlock()
+	if httpClient == nil {
+		return nil, fmt.Errorf("mcp[%s]: connection closed", c.name)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.url, bytes.NewReader(data))
 	if err != nil {
 		return nil, fmt.Errorf("mcp[%s]: create request: %w", c.name, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
-	for key, value := range c.headers {
+	for key, value := range headers {
 		req.Header.Set(key, value)
 	}
-	if c.sessionID != "" {
-		req.Header.Set("Mcp-Session-Id", c.sessionID)
+	if sessionID != "" {
+		req.Header.Set("Mcp-Session-Id", sessionID)
 	}
 	authHeader := ""
-	if c.oauthHandler != nil {
-		if token, _ := c.oauthHandler.GetAccessToken(ctx); token != "" {
+	if oauthHandler != nil {
+		if token, _ := oauthHandler.GetAccessToken(ctx); token != "" {
 			authHeader = "Bearer " + token
 			req.Header.Set("Authorization", authHeader)
 			debug.Log("mcp-http", "send_with_token server=%s has_token=true", c.name)
@@ -694,38 +722,24 @@ func (c *Client) sendHTTPWithRetry(ctx context.Context, msg interface{}, allowRe
 			debug.Log("mcp-http", "send_no_token server=%s", c.name)
 		}
 	}
-	resp, err := c.httpClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("mcp[%s]: http request: %w", c.name, err)
 	}
 	defer resp.Body.Close()
-	if sessionID := strings.TrimSpace(resp.Header.Get("Mcp-Session-Id")); sessionID != "" {
-		c.sessionID = sessionID
+	if newSession := strings.TrimSpace(resp.Header.Get("Mcp-Session-Id")); newSession != "" {
+		c.mu.Lock()
+		c.sessionID = newSession
+		c.mu.Unlock()
 	}
 	body, err := util.ReadAll(resp.Body, util.ReadLimitMCP)
 	if err != nil {
 		return nil, fmt.Errorf("mcp[%s]: read http body: %w", c.name, err)
 	}
 	debug.Log("mcp-http", "response server=%s status=%d content_type=%s body_len=%d", c.name, resp.StatusCode, resp.Header.Get("Content-Type"), len(body))
-	if (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) && c.oauthHandler != nil {
-		// 401 = no auth; 403 = auth present but insufficient permissions.
-		// Both should trigger OAuth DCR discovery as a fallback — the user's
-		// configured API key may have limited scope while OAuth grants broader access.
-		needsOAuth, _ := c.oauthHandler.Handle401(resp)
-		if allowRetry {
-			if token, _ := c.oauthHandler.GetAccessToken(ctx); token != "" && "Bearer "+token != authHeader {
-				// OAuth succeeded — permanently switch auth mode by removing the
-				// user-configured API key header so future requests use OAuth token only.
-				if _, hasUserAuth := c.headers["Authorization"]; hasUserAuth {
-					delete(c.headers, "Authorization")
-					debug.Log("mcp-http", "auth_switched server=%s from_apikey=true to_oauth=true", c.name)
-				}
-				debug.Log("mcp-http", "retry_after_discovery server=%s has_token=true", c.name)
-				return c.sendHTTPWithRetry(ctx, msg, false)
-			}
-		}
-		if needsOAuth {
-			return nil, &OAuthRequiredError{Handler: c.oauthHandler}
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		if retried, handled, err := c.handleHTTPAuthChallenge(ctx, msg, resp, authHeader, allowRetry, oauthHandler); handled {
+			return retried, err
 		}
 	}
 	if resp.StatusCode >= 400 {
@@ -742,6 +756,43 @@ func (c *Client) sendHTTPWithRetry(ctx context.Context, msg interface{}, allowRe
 	return parseHTTPResponse(body, resp.Header.Get("Content-Type"))
 }
 
+// handleHTTPAuthChallenge processes a 401/403 response when an OAuth handler
+// is configured. 401 = no auth; 403 = auth present but insufficient
+// permissions. Both trigger OAuth DCR discovery as a fallback — the user's
+// configured API key may have limited scope while OAuth grants broader
+// access. When handled is true the caller must return (retried, err)
+// verbatim; when false (no handler, or challenge not actionable) the caller
+// proceeds with normal status handling.
+func (c *Client) handleHTTPAuthChallenge(ctx context.Context, msg interface{}, resp *http.Response, authHeader string, allowRetry bool, oauthHandler *OAuthHandler) (retried *Response, handled bool, err error) {
+	if oauthHandler == nil {
+		return nil, false, nil
+	}
+	needsOAuth, _ := oauthHandler.Handle401(resp)
+	if allowRetry {
+		if token, _ := oauthHandler.GetAccessToken(ctx); token != "" && "Bearer "+token != authHeader {
+			// OAuth succeeded — permanently switch auth mode by removing the
+			// user-configured API key header so future requests use OAuth token
+			// only. Clone-then-swap under c.mu (Bug B, #523): concurrent senders
+			// hold a snapshot of the old map and range over it outside the lock.
+			c.mu.Lock()
+			if _, hasUserAuth := c.headers["Authorization"]; hasUserAuth {
+				headers := cloneStringMap(c.headers)
+				delete(headers, "Authorization")
+				c.headers = headers
+				debug.Log("mcp-http", "auth_switched server=%s from_apikey=true to_oauth=true", c.name)
+			}
+			c.mu.Unlock()
+			debug.Log("mcp-http", "retry_after_discovery server=%s has_token=true", c.name)
+			retried, err := c.sendHTTPWithRetry(ctx, msg, false)
+			return retried, true, err
+		}
+	}
+	if needsOAuth {
+		return nil, true, &OAuthRequiredError{Handler: oauthHandler}
+	}
+	return nil, false, nil
+}
+
 // sendWSUnlocked writes a request under c.mu, then reads the response
 // without holding c.mu (fix #138). This prevents reentrant deadlock when
 // a notification handler calls back into sendRequest. wsMu serializes
@@ -752,6 +803,16 @@ func (c *Client) sendWSUnlocked(ctx context.Context, req Request) (*Response, er
 	if err != nil {
 		return nil, fmt.Errorf("mcp[%s]: marshal ws message: %w", c.name, err)
 	}
+	// Register the waiter BEFORE the write hits the wire (Bug A, #523 — same
+	// ordering rule as the stdio path in fix #156): the moment WriteMessage
+	// returns, another caller's read loop may consume and route our response,
+	// so the waiter must already be in place.
+	var waiter chan *Response
+	if req.ID != nil {
+		waiter = make(chan *Response, 1)
+		c.registerWaiter(req.ID, waiter)
+		defer c.unregisterWaiter(req.ID, waiter)
+	}
 	// Write under c.mu to serialize WS writes.
 	c.mu.Lock()
 	if c.closed.Load() {
@@ -760,7 +821,6 @@ func (c *Client) sendWSUnlocked(ctx context.Context, req Request) (*Response, er
 	}
 	if deadline, ok := ctx.Deadline(); ok {
 		_ = c.wsConn.SetWriteDeadline(deadline)
-		_ = c.wsConn.SetReadDeadline(deadline)
 	}
 	if err := c.wsConn.WriteMessage(websocket.TextMessage, data); err != nil {
 		c.mu.Unlock()
@@ -768,15 +828,76 @@ func (c *Client) sendWSUnlocked(ctx context.Context, req Request) (*Response, er
 	}
 	c.mu.Unlock()
 	// Read loop — NOT holding c.mu so notification handlers can re-enter
-	// sendRequest without deadlock. wsMu ensures only one goroutine reads.
-	reqID := req.ID
+	// sendRequest without deadlock (fix #138).
+	return c.readWSResponse(ctx, req.ID, waiter)
+}
+
+// readWSResponse is the WebSocket counterpart of readResponseWithCancel
+// (Bug A, #523): responses belonging to other concurrent callers are routed
+// to their registered waiter instead of being dropped, and a cancelled or
+// timed-out caller aborts the connection so its read goroutine cannot pin
+// wsMu until the read deadline expires.
+func (c *Client) readWSResponse(ctx context.Context, reqID *ID, waiter chan *Response) (*Response, error) {
+	type result struct {
+		resp *Response
+		err  error
+	}
+	done := make(chan result, 1)
+	safego.Go("mcp.client.readWS", func() {
+		resp, err := c.readWSLoop(ctx, reqID, waiter)
+		done <- result{resp, err}
+	})
+	select {
+	case res := <-done:
+		return res.resp, res.err
+	case <-ctx.Done():
+		// Abort closes wsConn, unblocking the goroutine parked in ReadMessage
+		// inside wsMu — mirroring the stdio contract that transports are
+		// aborted "without holding c.mu". Bounded wait in case the goroutine
+		// never reaches done (safego-recovered panic, cf. #182).
+		c.Abort()
+		select {
+		case res := <-done:
+			return res.resp, res.err
+		case <-time.After(5 * time.Second):
+			return nil, fmt.Errorf("mcp[%s]: ws read goroutine did not return after abort: %w", c.name, ctx.Err())
+		}
+	}
+}
+
+// readWSLoop reads messages until the response for reqID arrives. Foreign
+// responses are handed to their waiter via deliverResponse (Bug A, #523);
+// the old code logged "dropping mismatched response ID" and consumed the
+// message, which guaranteed the other concurrent caller a false
+// mcpRequestTimeout of 120s. The ENTIRE loop — waiter poll, ReadMessage,
+// and delivery — runs under wsMu, mirroring how the stdio path holds readMu
+// across its whole loop (fix #156). This is race-free by construction:
+// deliveries happen only while the reader holds wsMu, so a waiter entry is
+// either visible to the owner's pre-read poll (delivered before it acquired
+// the lock) or cannot appear until it releases the lock — there is no gap
+// where an owner parks in ReadMessage with an already-delivered response
+// sitting unconsumed. Lock ordering is one-directional (wsMu→c.mu via
+// deliverResponse/respondToServerRequestWS; the write path takes only c.mu),
+// so this cannot deadlock. wsMu is therefore per-read-loop, not
+// per-ReadMessage, as of #523.
+func (c *Client) readWSLoop(ctx context.Context, reqID *ID, waiter chan *Response) (*Response, error) {
+	c.wsMu.Lock()
+	defer c.wsMu.Unlock()
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil, fmt.Errorf("mcp[%s]: context cancelled: %w", c.name, err)
 		}
-		c.wsMu.Lock()
+		if waiter != nil {
+			select {
+			case resp := <-waiter:
+				return resp, nil
+			default:
+			}
+		}
+		if deadline, ok := ctx.Deadline(); ok {
+			_ = c.wsConn.SetReadDeadline(deadline)
+		}
 		_, payload, err := c.wsConn.ReadMessage()
-		c.wsMu.Unlock()
 		if err != nil {
 			return nil, fmt.Errorf("mcp[%s]: websocket read: %w", c.name, err)
 		}
@@ -786,15 +907,17 @@ func (c *Client) sendWSUnlocked(ctx context.Context, req Request) (*Response, er
 		}
 		switch typed := parsed.(type) {
 		case *Response:
-			if reqID != nil {
-				reqIDJSON, _ := json.Marshal(reqID)
-				if len(typed.ID) > 0 && string(typed.ID) != string(reqIDJSON) {
-					debug.Log("mcp-ws", "server=%s dropping mismatched response ID", c.name)
-					continue
-				}
+			// Under concurrent requests a response may belong to a different
+			// caller. Route foreign responses to their waiter instead of
+			// dropping them (Bug A, #523 — mirrors the stdio fix #156).
+			if reqID != nil && !responseIDMatches(typed.ID, reqID) {
+				c.deliverResponse(typed)
+				continue
 			}
 			return typed, nil
 		case *Notification:
+			// processNotification only queues into a buffered channel (fix
+			// #255) and never blocks, so it is safe to call while holding wsMu.
 			c.processNotification(typed)
 			continue
 		case *Request:
