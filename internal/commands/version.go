@@ -195,6 +195,17 @@ func CheckVersionConstraint(actualVersion, op, requiredVersion string) bool {
 		// No version declared, cannot satisfy a version constraint.
 		return false
 	}
+	// #539-probe: npm pre-release exclusion — a version carrying a
+	// pre-release tag only satisfies a range/comparator when the boundary
+	// itself has a pre-release on the same [major,minor,patch] tuple
+	// (2.0.0-rc1 must NOT satisfy ^1.2.0, but 1.2.0-rc1 DOES satisfy
+	// ^1.2.0-beta). Equality ops (==, =, !=) stay pure precedence compares.
+	switch op {
+	case "^", "~", ">=", ">", "<=", "<":
+		if !prereleaseRangeAllowed(actualVersion, requiredVersion) {
+			return false
+		}
+	}
 	// #536: caret/tilde range semantics — a range check, not a point compare.
 	if op == "^" || op == "~" {
 		return inCaretTildeRange(actualVersion, requiredVersion, op == "^")
@@ -214,6 +225,46 @@ func CheckVersionConstraint(actualVersion, op, requiredVersion string) bool {
 	default: // "==", "=", ""
 		return cmp == 0
 	}
+}
+
+// prereleaseRangeAllowed implements the npm pre-release exclusion rule for
+// range-style comparators (^ ~ >= > <= <): if the actual version carries a
+// pre-release tag, it only satisfies the range when the boundary version
+// also carries a pre-release tag on the same [major,minor,patch] tuple.
+// Plain releases are always subject to normal comparison.
+func prereleaseRangeAllowed(actual, required string) bool {
+	// Tolerate the operator itself embedded in requiredVersion, mirroring
+	// inCaretTildeRange (e.g. a caller passing "^1.2.0" whole).
+	required = strings.TrimPrefix(strings.TrimSpace(required), "^")
+	required = strings.TrimPrefix(required, "~")
+	_, apre := parseVersionParts(actual)
+	if apre == "" {
+		return true
+	}
+	rp, rpre := parseVersionParts(required)
+	if rpre == "" {
+		return false
+	}
+	ap, _ := parseVersionParts(actual)
+	return sameCoreTuple(ap, rp)
+}
+
+// sameCoreTuple reports whether two numeric segment lists denote the same
+// [major,minor,patch] tuple, treating missing segments as 0.
+func sameCoreTuple(a, b []int) bool {
+	for i := 0; i < 3; i++ {
+		var ai, bi int
+		if i < len(a) {
+			ai = a[i]
+		}
+		if i < len(b) {
+			bi = b[i]
+		}
+		if ai != bi {
+			return false
+		}
+	}
+	return true
 }
 
 // inCaretTildeRange implements "^ver" and "~ver" range checks.
