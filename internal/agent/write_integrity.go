@@ -159,6 +159,26 @@ func registerAllChecks() {
 		// append / field store / channel send / closure capture) +
 		// fingerprint delta instead of line numbers. The live helpers
 		// looksLikeError/isNilIdent were migrated to nil_deref_check.go.
+		//
+		// #508: same fate for "ignored-error" and "naked-return" (both
+		// fc5c4aad-stripped, sa-167 probe-verified). ignored-error's method
+		// fallback asserted "returns an error" on zero-return-value methods
+		// (conn.Write on a `func (c fakeConn) Write(p []byte) {}` type —
+		// factually wrong, one level deeper than the #111 always-nil case),
+		// flagged the `_ =` deliberate-discard syntax errcheck leaves off
+		// by default, and ALL its three-segment keys (os.File.*, bufio.*,
+		// sql.*, http.Server.*) were unreachable in an untyped AST while
+		// its own marquee example json.NewEncoder(w).Encode resolved to
+		// json.Encoder.Encode vs the stored json.NewEncoder.Encode key —
+		// a double mismatch. Unfixable without go/types (why errcheck is
+		// built on types.Check). naked-return is advisory class (the
+		// fc5c4aad strip removed advisories to eliminate context
+		// pollution): fires on the defer+recover named-result idiom at
+		// threshold 20 (revive nakedret default 30), funcName-level delta
+		// masks same-function growth (2→3 returns, zero warnings).
+		// Revival preconditions: ignored-error → go/types integration;
+		// naked-return → min-lines>=30 + instance-level multiset delta +
+		// closure (FuncLit) coverage.
 		{Name: "concurrent-map-access", Langs: []Language{LangGo}, Run: stringCheck(checkConcurrentMapAccess)},
 		{Name: "context-leak", Langs: []Language{LangGo}, Run: stringCheck(checkContextLeak)},
 		{Name: "resource-leak", Langs: []Language{LangGo}, Run: sliceCheck(checkResourceLeaks)},
@@ -169,6 +189,15 @@ func registerAllChecks() {
 		{Name: "channel-safety", Langs: []Language{LangGo}, Run: sliceCheck(checkChannelSafety)},
 		{Name: "slice-bounds-risk", Langs: []Language{LangGo}, Run: sliceCheck(checkSliceBoundsRisk)},
 		{Name: "nil-deref-after-error", Langs: []Language{LangGo}, Run: stringCheck(checkNilDerefAfterError)},
+		// #508: registered as "empty-error-body" — this is the zero-FP
+		// Pattern 1 (empty body) revival the #507 tombstone reserved: the
+		// sa-167 probe suite confirmed pure-empty / comment-only /
+		// semicolon-only bodies detect precisely, non-error vars are exempt,
+		// and the fingerprint multiset delta (#186) handles the fix-one +
+		// introduce-one refactor pattern. Semantically distinct from
+		// nil-deref-after-error above (post-check inaction vs post-check
+		// misuse). Delta-gated: steady-state rewrites produce zero noise.
+		{Name: "empty-error-body", Langs: []Language{LangGo}, Run: sliceCheck(checkEmptyErrorBody)},
 		{Name: "range-nil-ptr", Langs: []Language{LangGo}, Run: stringCheck(checkRangeNilPtr)},
 		{Name: "panic-safety", Langs: []Language{LangGo}, Run: sliceCheck(checkPanicSafety)},
 		{Name: "retry-quality", Langs: []Language{LangGo}, Run: sliceCheck(checkRetryQuality)},
