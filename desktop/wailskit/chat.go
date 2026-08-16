@@ -450,6 +450,12 @@ func (b *ChatBridge) sendMessageData(data tunnel.MessageData, source string, exc
 	b.cancelled = false
 	b.finished = false // reset per-run finish guard (#223)
 	b.usageTurnIndex++
+	// #522: bump the generation at EVERY run start, not just SendContent
+	// (setRunPersistSnapshot was the only bump site). Without this, a
+	// cancelled text run's tail-draining callbacks pass the emitIfCurrent
+	// guard of a resent text run (both gen=N) and leak stale events into
+	// the new run's liveHistory (#504 guard defeated on the text path).
+	b.runGeneration++
 	turnID, _ := b.startDesktopTurnLocked()
 	b.runSes = b.currentSes // #270: persist-path snapshot, same critical section as b.cancel
 	b.mu.Unlock()
@@ -674,17 +680,7 @@ func (b *ChatBridge) finishRun(err error) {
 func (b *ChatBridge) setRunPersistSnapshot() {
 	b.mu.Lock()
 	b.runGeneration++
-	b.persistGeneration = b.runGeneration
 	b.persistSession = b.runSes
-	b.mu.Unlock()
-}
-
-// clearRunPersistSnapshot drops the per-run snapshot (run ended/cancelled).
-// Late persists after this find no snapshot and are dropped (#489).
-func (b *ChatBridge) clearRunPersistSnapshot() {
-	b.mu.Lock()
-	b.runGeneration++
-	b.persistSession = nil
 	b.mu.Unlock()
 }
 
@@ -3243,6 +3239,15 @@ func (b *ChatBridge) SendHiddenText(text string) error {
 	b.cancelled = false
 	b.finished = false // reset per-run finish guard (#223)
 	b.usageTurnIndex++
+	// #522: same generation bump as sendMessageData — hidden runs (LAN
+	// chat injection, deferred drains) previously reused the cancelled
+	// run's generation, defeating the emitIfCurrent guard.
+	b.runGeneration++
+	// #522: same desktop-turn obligation as sendMessageData (#514) —
+	// without it run_done carries the previous turn's (or empty) turn_id
+	// and liveHistory appends this run's reply onto the stale turn's
+	// assistant message.
+	b.startDesktopTurnLocked()
 	b.runSes = b.currentSes // #270: persist-path snapshot, same critical section as b.cancel
 	b.mu.Unlock()
 
