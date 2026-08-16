@@ -202,6 +202,49 @@ func psIsVerifyCommand(cmd string) bool {
 	}
 
 	// Build-system dispatch with target whitelists (#350).
+	if isVerify, handled := psBuildSystemVerify(tokens); handled {
+		return isVerify
+	}
+
+	// Generic patterns: phrase patterns use substring match; single-word
+	// patterns only match in COMMAND position (#553).
+	for _, pat := range verifyCmdPatterns {
+		if strings.Contains(pat, " ") {
+			if strings.Contains(lower, pat) {
+				return true
+			}
+			continue
+		}
+		// #553: a verify verb token (test/build/lint/verify/check/...) is only a
+		// verification action when it appears in COMMAND position — the first
+		// token of a pipeline segment, or the subcommand following a known
+		// runner (go/cargo/python -m/...). Bare token matching at ANY position
+		// let `grep -n test main.go` ("test" is a filename argument) arm
+		// everVerified and silence the detector for the entire run — the same
+		// consequence #483 fixed for hyphen-prefixed variants, but the exact
+		// bare-token match was left behind.
+		for t := range psCommandPositionTokens(tokens) {
+			if t == pat {
+				return true
+			}
+			// Hyphen/underscore variants (check-all, test-flight) are only
+			// trusted at SEGMENT-FIRST position — after a runner they are
+			// indistinguishable from script filenames (`go run lint_script.go`).
+			if psSegmentFirstTokens(tokens)[t] && (strings.HasPrefix(t, pat+"-") || strings.HasPrefix(t, pat+"_")) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// psBuildSystemVerify applies the build-system target whitelists (#350) to
+// a tokenized command. It reports (isVerify, handled): handled=false means
+// tokens[0] is not a build-system dispatcher and the caller should fall
+// through to generic pattern matching. Hygiene/service targets (make clean,
+// npm run dev) are NOT verification — a bare substring match previously
+// counted them and silenced the detector for the whole run.
+func psBuildSystemVerify(tokens []string) (isVerify, handled bool) {
 	switch tokens[0] {
 	case "make", "gmake", "mingw32-make":
 		// Only whitelisted targets count; `make` with no explicit target runs
@@ -211,10 +254,10 @@ func psIsVerifyCommand(cmd string) bool {
 				continue
 			}
 			if makeVerifyTargets[t] {
-				return true
+				return true, true
 			}
 		}
-		return false
+		return false, true
 	case "npm", "yarn", "pnpm", "bun":
 		// npm test / npm run <verify-script> count; dev/start/serve do not.
 		if len(tokens) >= 2 {
@@ -225,57 +268,102 @@ func psIsVerifyCommand(cmd string) bool {
 				script = tokens[1]
 			}
 			if script != "" && npmVerifyScripts[script] {
-				return true
+				return true, true
 			}
 		}
-		return false
+		return false, true
 	case "mvn", "mvnw":
 		for _, t := range tokens[1:] {
 			if mvnVerifyPhases[t] {
-				return true
+				return true, true
 			}
 		}
-		return false
+		return false, true
 	case "gradle", "gradlew", "./gradlew":
 		for _, t := range tokens[1:] {
 			if gradleVerifyTasks[t] {
-				return true
+				return true, true
 			}
 		}
-		return false
+		return false, true
 	case "cmake":
 		for _, t := range tokens[1:] {
 			if cmakeVerifyTargets[t] || strings.HasPrefix(t, "--target=") {
-				return true
+				return true, true
 			}
 		}
-		return false
+		return false, true
 	}
+	return false, false
+}
 
-	// Generic patterns: token match for single words, substring for phrases.
-	for _, pat := range verifyCmdPatterns {
-		if strings.Contains(pat, " ") {
-			if strings.Contains(lower, pat) {
-				return true
-			}
+// psRunnerPrefixes are commands whose NEXT token is a subcommand verb in
+// command position ("go test", "cargo build", "flutter analyze", "uv run
+// pytest"). Build-system dispatchers (make/npm/mvn/gradle/cmake) are included
+// so their targets are command-position inside compound commands
+// ("cd pkg; make test"), where the tokens[0] switch cannot see them.
+var psRunnerPrefixes = map[string]bool{
+	"go": true, "cargo": true, "uv": true, "poetry": true, "npx": true,
+	"bunx": true, "dotnet": true, "deno": true, "ruby": true, "bundle": true,
+	"flutter": true, "dart": true, "python": true, "python3": true,
+	"run":  true, // uv/poetry/deno run <script> — the script is the real command
+	"make": true, "gmake": true, "mingw32-make": true,
+	"npm": true, "yarn": true, "pnpm": true, "bun": true,
+	"mvn": true, "mvnw": true, "gradle": true, "gradlew": true, "./gradlew": true,
+	"cmake": true,
+}
+
+// psSegmentFirstTokens returns the tokens that occupy the FIRST position of
+// a pipeline/list segment (the tokens[0]-equivalent for each segment). Used
+// for the more permissive hyphen-variant matching: a bare "check-all" or
+// "test-flight" as the command itself is a verification verb, but the same
+// string at a non-first position is almost always a file/dir name.
+func psSegmentFirstTokens(tokens []string) map[string]bool {
+	cmds := make(map[string]bool)
+	segFirst := true
+	for _, t := range tokens {
+		if t == "|" || t == "||" || t == "&&" || t == ";" {
+			segFirst = true
 			continue
 		}
-		for i, t := range tokens {
-			if t == pat {
-				return true
-			}
-			// #483: hyphen/underscore variants (check-all, test-flight) are
-			// only verification when in COMMAND position (tokens[0]) — e.g.
-			// `ninja check-all`. At argument positions they are file/dir
-			// names (`git add test-utils.go`, `cat verify-config.yaml`,
-			// `gofmt -w test_utils.go`) and must NOT arm everVerified,
-			// which silenced the detector for the entire run.
-			if i == 0 && (strings.HasPrefix(t, pat+"-") || strings.HasPrefix(t, pat+"_")) {
-				return true
-			}
+		if segFirst {
+			cmds[t] = true
 		}
+		segFirst = false
 	}
-	return false
+	return cmds
+}
+
+// psCommandPositionTokens collects all tokens that occupy COMMAND position
+// in a tokenized shell command (#553): the first token of each pipeline /
+// list segment (split on |, ||, &&, ;) plus the token immediately following
+// a known runner prefix (go, cargo, ...) or a "-m" module flag
+// ("python -m pytest"). Tokens at argument positions (file names, flags)
+// are excluded so filename arguments like `grep -n test main.go` cannot
+// masquerade as verification verbs.
+func psCommandPositionTokens(tokens []string) map[string]bool {
+	cmds := make(map[string]bool)
+	segFirst := true
+	prevRunner := false
+	prevM := false
+	for _, t := range tokens {
+		if t == "|" || t == "||" || t == "&&" || t == ";" {
+			segFirst = true
+			prevRunner = false
+			prevM = false
+			continue
+		}
+		switch {
+		case segFirst:
+			cmds[t] = true
+		case prevRunner || prevM:
+			cmds[t] = true
+		}
+		segFirst = false
+		prevRunner = psRunnerPrefixes[t]
+		prevM = t == "-m"
+	}
+	return cmds
 }
 
 // checkSuccessClaim scans assistant text for success declarations and returns

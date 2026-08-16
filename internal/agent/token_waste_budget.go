@@ -49,6 +49,8 @@ package agent
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 )
@@ -150,10 +152,21 @@ func (s *tokenWasteBudgetState) reset() {
 // estimateTokens approximates the token count of a string.
 // Uses the standard ~4 chars/token heuristic.
 func estimateTokens(s string) int {
-	if len(s) == 0 {
+	return estimateTokensLen(s, len(s))
+}
+
+// estimateTokensLen is estimateTokens with an explicit byte length (#553 A1):
+// length is the tool result's ORIGINAL byte length even when s was later
+// extended (e.g., guidance hints appended by the agent loop). Pass -1 to use
+// len(s).
+func estimateTokensLen(s string, length int) int {
+	if length < 0 {
+		length = len(s)
+	}
+	if length == 0 {
 		return 0
 	}
-	n := int(float64(len(s)) * tokensPerChar)
+	n := int(float64(length) * tokensPerChar)
 	if n < 1 {
 		n = 1
 	}
@@ -166,11 +179,29 @@ func estimateTokens(s string) int {
 // isError indicates if the tool returned an error.
 // isRedundant indicates if this was flagged as a redundant/duplicate read.
 // readPaths tracks file paths read (for later expiration when edited).
+// recordToolResult records a tool result's token cost and waste category.
+// toolName is the tool that was called.
+// content is the result text.
+// isError indicates if the tool returned an error.
+// isRedundant indicates if this was flagged as a redundant/duplicate read.
+// readPaths tracks file paths read (for later expiration when edited).
 func (s *tokenWasteBudgetState) recordToolResult(toolName, content string, isError, isRedundant bool, pathsRead []string) {
+	s.recordToolResultLen(toolName, content, -1, isError, isRedundant, pathsRead)
+}
+
+// recordToolResultLen is recordToolResult with an optional originalLen
+// override (#553 A1): when >= 0, token estimation uses originalLen instead of
+// len(content). The agent loop appends guidance hints to result.Content AFTER
+// execution but BEFORE metering — estimating from the polluted string
+// double-counts hint tokens in both waste numerator and denominator
+// (probe: an original 1-token result recorded as 19). Category
+// classification still sees the full content; isNegativeResult markers are
+// never part of the appended hints.
+func (s *tokenWasteBudgetState) recordToolResultLen(toolName, content string, originalLen int, isError, isRedundant bool, pathsRead []string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	tokens := estimateTokens(content)
+	tokens := estimateTokensLen(content, originalLen)
 	cat := wasteNone
 
 	switch {
@@ -206,8 +237,11 @@ func (s *tokenWasteBudgetState) recordToolResult(toolName, content string, isErr
 	// read — if that one was already redundant, the earlier productive read
 	// was never reclassified as expired, systematically undercounting waste
 	// in exactly the read-then-invalidate loops this detector targets).
+	// Keys are normalized (#553 A3) so absolute-read + relative-edit (or the
+	// reverse) still expires the read instead of silently mismatching.
 	for _, p := range pathsRead {
-		s.readPathsMulti[p] = append(s.readPathsMulti[p], idx)
+		k := wastePathKey(p)
+		s.readPathsMulti[k] = append(s.readPathsMulti[k], idx)
 	}
 }
 
@@ -225,7 +259,12 @@ func isNegativeResult(content string) bool {
 		"0 findings", "no findings", "no issues",
 	}
 	for _, m := range negativeMarkers {
-		if strings.Contains(c, m) {
+		// #553 A2: every marker must start at a word boundary — reuse the
+		// #462 keywordTokensAtWordStart precedent (guidance_conflict.go). Bare
+		// strings.Contains let "clean" match inside "unclean working tree",
+		// wrongly exempting dirty-tree state info from the waste ratio and
+		// suppressing the 40% threshold warning.
+		if keywordTokensAtWordStart(c, m) {
 			return true
 		}
 	}
@@ -238,8 +277,13 @@ func (s *tokenWasteBudgetState) markFileEdited(path string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// #553 A3: normalize the edited path with the same key function used
+	// at read time — otherwise an absolute-path read followed by a
+	// relative-path edit never matches and the read silently escapes
+	// expiration.
+	key := wastePathKey(path)
 	// #418: reclassify EVERY recorded read of this path, not just the last.
-	for _, idx := range s.readPathsMulti[path] {
+	for _, idx := range s.readPathsMulti[key] {
 		if idx >= len(s.entries) {
 			continue
 		}
@@ -258,9 +302,29 @@ func (s *tokenWasteBudgetState) markFileEdited(path string) {
 			s.catTotals[wasteExpired] += entry.tokens
 		}
 	}
-	delete(s.readPathsMulti, path)
+	delete(s.readPathsMulti, key)
 	// Keep legacy map consistent in case other code reads it.
-	delete(s.readPaths, path)
+	delete(s.readPaths, key)
+}
+
+// wastePathKey normalizes a file path for the read-expiration maps (#553
+// A3): the agent may read a file by absolute path and later edit it by
+// relative path (or vice versa) — raw keys silently mismatch and the read
+// is never reclassified as expired waste. Empty paths stay empty (never
+// keyed). If the working directory cannot be resolved, falls back to
+// filepath.Clean only.
+func wastePathKey(p string) string {
+	if p == "" {
+		return ""
+	}
+	if !filepath.IsAbs(p) {
+		if wd, err := os.Getwd(); err == nil {
+			if abs, aerr := filepath.Abs(filepath.Join(wd, p)); aerr == nil {
+				p = abs
+			}
+		}
+	}
+	return filepath.Clean(p)
 }
 
 // maybeWarnTokenWaste checks the aggregate waste ratio and returns a guidance

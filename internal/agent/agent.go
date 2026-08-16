@@ -4274,6 +4274,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 			// Apply coalesced guidance hints to the tool result content.
 			// Both vision and non-vision paths share the same hint assembly logic.
+			// Capture the ORIGINAL content length FIRST (#553): the hints appended
+			// below flow into token-waste metering at record time — metering the
+			// polluted string double-counts hint tokens in both the waste numerator
+			// and denominator (probe: an original 1-token result recorded as 19).
+			originalContentLen := len(result.Content)
 			a.applyToolResultGuidance(&result, loopGuidance, searchParamHint, redundancyHint, equivHint, overuseHint)
 			if len(result.Images) > 0 && a.SupportsVision() {
 				imgs := make([]provider.ContentImage, len(result.Images))
@@ -4302,7 +4307,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 			isRedundant := redundancyHint != "" || overuseHint != ""
 			if a.tokenWasteBudget != nil {
-				a.tokenWasteBudget.recordToolResult(tc.Name, result.Content, result.IsError, isRedundant, pathsRead)
+				a.tokenWasteBudget.recordToolResultLen(tc.Name, result.Content, originalContentLen, result.IsError, isRedundant, pathsRead)
 			}
 			if err := ctx.Err(); err != nil {
 				// Context cancelled after completing some tools. Fill "cancelled"
