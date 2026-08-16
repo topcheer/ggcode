@@ -307,6 +307,10 @@ func registerAllChecks() {
 		{Name: "range-nil-ptr", Langs: []Language{LangGo}, Run: stringCheck(checkRangeNilPtr)},
 		{Name: "panic-safety", Langs: []Language{LangGo}, Run: sliceCheck(checkPanicSafety)},
 		{Name: "retry-quality", Langs: []Language{LangGo}, Run: sliceCheck(checkRetryQuality)},
+		// #571: race-verify-hint — detects newly introduced concurrency primitives
+		// and suggests running `go test -race`. Covers temporal race conditions
+		// invisible to static analysis. Fully implemented + unit tested.
+		{Name: "race-verify-hint", Langs: []Language{LangGo}, Run: sliceCheck(checkRaceVerifyHint)},
 
 		// --- Security (OWASP / CVE-class) ---
 		{Name: "sql-injection", Langs: []Language{LangGo}, Run: sliceCheck(checkSQLInjection)},
@@ -314,6 +318,10 @@ func registerAllChecks() {
 		{Name: "sensitive-json", Langs: []Language{LangGo}, Run: sliceCheck(checkSensitiveJSONExposure)},
 		{Name: "hardcoded-secret", Run: sliceCheck(checkHardcodedSecrets)},
 		{Name: "insecure-patterns", Langs: []Language{LangGo, LangJSTS, LangPython}, Run: sliceCheck(checkInsecurePatterns)},
+		// #571: http-plaintext — detects http:// URLs pointing to non-localhost
+		// hosts (OWASP A02:2021). Complements insecure-patterns (TLS bypass).
+		// Fully implemented + unit tested.
+		{Name: "http-plaintext", Run: sliceCheck(checkHTTPPlaintext)},
 
 		// --- Security: supply chain (#330) ---
 		{Name: "dep-major-bump", Run: stringCheck(checkBreakingChangeDepAsString)}, // all langs: self-filters by manifest filename
@@ -325,6 +333,60 @@ func registerAllChecks() {
 		{Name: "interface-compliance", Langs: []Language{LangGo}, Run: stringCheck(checkInterfaceCompliance)},
 		{Name: "printf-format", Langs: []Language{LangGo}, Run: sliceCheck(checkPrintfFormat)},
 		{Name: "suspicious-comparison", Langs: []Language{LangGo}, Run: stringCheck(checkSuspiciousComparison)},
+
+		// --- Go correctness: silent wrong behavior (#571) ---
+		// #571: value-recv-mutation — detects methods with value receivers that
+		// mutate receiver fields. These mutations are silently lost (bugs).
+		// Fully implemented + unit tested.
+		{Name: "value-recv-mutation", Langs: []Language{LangGo}, Run: sliceCheck(checkValueRecvMutation)},
+		// #571: unsafe-usage — detects dangerous unsafe package patterns
+		// (pointer arithmetic, reflect header misuse, stored uintptrs).
+		// Fully implemented + unit tested.
+		{Name: "unsafe-usage", Langs: []Language{LangGo}, Run: sliceCheck(checkUnsafeUsage)},
+		// #571: loop-capture — detects loop variable capture bugs in goroutines
+		// and deferred closures. TOMBSTONE: Go ≥ 1.22 changed loop semantics
+		// (loop variables are now per-iteration), mitigating this class of bugs.
+		// The detector remains available for older Go codebases; register manually
+		// if supporting Go < 1.22. See internal/agent/loop_capture_check.go.
+		// #571: init-sideeffect — detects init() functions that perform I/O
+		// (file reads, network calls, env mutation) at package import time.
+		// Fully implemented + unit tested.
+		{Name: "init-sideeffect", Langs: []Language{LangGo}, Run: sliceCheck(checkInitSideEffects)},
+		// #571: constant-conditional — detects if-statements with constant
+		// conditions (if true, if false, if 1 == 1) that create dead code.
+		// Fully implemented + unit tested.
+		{Name: "constant-conditional", Langs: []Language{LangGo}, Run: sliceCheck(checkConstantConditional)},
+		// #571: unreachable-code — detects code that can never execute due to
+		// preceding terminating statements or impossible branches. Fully
+		// implemented + unit tested.
+		{Name: "unreachable-code", Langs: []Language{LangGo}, Run: sliceCheck(checkUnreachableCode)},
+		// #571: test-isolation — detects global state mutations in test files
+		// (os.Setenv, mutating package-level vars) that cause test pollution.
+		// Fully implemented + unit tested.
+		{Name: "test-isolation", Langs: []Language{LangGo}, Run: stringCheck(checkTestIsolation)},
+		// #571: unkeyed-struct — detects struct initialization without field names
+		// (fragile, error-prone, violates Go idioms). Fully implemented + unit tested.
+		{Name: "unkeyed-struct", Langs: []Language{LangGo}, Run: sliceCheck(checkUnkeyedStruct)},
+		// #571: unicode-check — detects problematic Unicode characters (smart quotes,
+		// non-breaking space, zero-width chars) that break compilation or cause bugs.
+		// Fully implemented + unit tested.
+		{Name: "unicode-check", Run: stringCheck(checkUnicodeChars)},
+
+		// --- Go correctness: reward-hacking / test quality (#571) ---
+		// #571: hardcoded-output — detects input-to-output memorization
+		// (SpecBench pattern #1). Fully implemented + unit tested.
+		{Name: "hardcoded-output", Run: sliceCheck(checkHardcodedOutput)},
+		// #571: suppression-directives — detects newly added lint/type/coverage
+		// suppressions that silence diagnostics instead of fixing root causes.
+		// Fully implemented + unit tested.
+		{Name: "suppression-directives", Run: sliceCheck(checkSuppressionDirectives)},
+		// #571: placeholder-code — detects unambiguous placeholder/stub patterns
+		// (panic("not implemented"), etc.) that signal skipped implementation.
+		// Fully implemented + unit tested.
+		{Name: "placeholder-code", Run: sliceCheck(checkPlaceholderCode)},
+		// #571: assertion-presence — detects hollow test functions (no assertions).
+		// Returns string (not []string) for single-warning format.
+		{Name: "assertion-presence", Langs: []Language{LangGo}, Run: stringCheck(checkAssertionPresence)},
 
 		// --- Markup structural (breaks rendering) ---
 		{Name: "tag-balance", Langs: []Language{LangMarkup, LangJSTS}, Run: stringCheckNew(checkTagBalance)},
