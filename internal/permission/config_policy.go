@@ -151,7 +151,13 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 			return Allow, nil
 		}
 		if toolName == "exit_plan_mode" {
-			return Allow, nil
+			// Exiting plan mode restores write tools and the presented plan
+			// determines what code changes the agent makes next, so it needs
+			// user confirmation — Ask, not unconditional Allow (#551-D). The
+			// doc comment above has required confirmation all along; this branch
+			// previously contradicted it and let a plan-mode agent exit on its
+			// own, silently regaining write access without review.
+			return Ask, nil
 		}
 		if IsReadOnlyTool(toolName) {
 			// Read-only tools are always allowed in plan mode, even outside sandbox.

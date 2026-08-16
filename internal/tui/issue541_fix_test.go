@@ -83,9 +83,12 @@ func mkCp(runID, file, old, new string) checkpoint.Checkpoint {
 }
 
 func TestAccumulateRunChangesMultipleEditsSameFile(t *testing.T) {
+	// Contents are newline-terminated like real files so the #555
+	// EOF-newline diff semantics do not count a spurious intermediate
+	// "\ No newline" state change between chained checkpoints.
 	cps := []checkpoint.Checkpoint{
-		mkCp("r1", "a.go", "l1\nl2\nl3", "l1\nX\nl3"),
-		mkCp("r1", "a.go", "l1\nX\nl3", "l1\nX\nl3\nl4"),
+		mkCp("r1", "a.go", "l1\nl2\nl3\n", "l1\nX\nl3\n"),
+		mkCp("r1", "a.go", "l1\nX\nl3\n", "l1\nX\nl3\nl4\n"),
 	}
 	runFiles := map[string]bool{"a.go": true}
 	changes := accumulateRunChanges(cps, "r1", runFiles)

@@ -124,6 +124,7 @@ func NewSubAgentManager(
 		Manager:             mgr,
 		Provider:            prov,
 		ProviderGetter:      providerGetter,
+		AvailableModels:     availableModels,
 		Tools:               registry,
 		AgentFactory:        agentFactory,
 		WorkingDir:          workingDir,

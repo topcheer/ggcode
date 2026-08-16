@@ -23,6 +23,10 @@ type UseNamedAgentTool struct {
 	WorkingDir          string
 	OnUsage             func(provider.TokenUsage)
 	SystemPromptBuilder func(task, agentType string) string
+	// AvailableModels returns the models offered by the current endpoint.
+	// When set and non-empty, a template's Model override must be on the
+	// list (#551-C) — same gate as SpawnAgentTool.
+	AvailableModels func() []string
 }
 
 // currentProvider returns the live provider if ProviderGetter is set, otherwise
@@ -130,6 +134,36 @@ func (t UseNamedAgentTool) Execute(ctx context.Context, input json.RawMessage) (
 		}
 	}
 
+	// Validate the template's model override against available models on
+	// the current endpoint (#551-C). spawn_agent has enforced this since its
+	// L131-148 whitelist; without the same gate here, a template configured
+	// with a stale/unknown model silently spawned on the parent's model.
+	if m := strings.TrimSpace(tmpl.Model); m != "" && t.AvailableModels != nil {
+		available := t.AvailableModels()
+		if len(available) > 0 && !sliceContains(available, m) {
+			return Result{IsError: true, Content: fmt.Sprintf(
+				"named subagent '%s' requires model %q which is not available on the current endpoint. Available models: %s",
+				tmpl.Name, m, strings.Join(available, ", "))}, nil
+		}
+	}
+
+	// Determine provider: clone with model override if set. Fail loudly
+	// when the provider cannot honor a model override (#551-C) — previously
+	// CloneProviderWithModel silently returned the original provider and the
+	// template ran on the parent's model, which the template author never
+	// asked for and may not even support. Checked BEFORE Spawn so a rejected
+	// override does not leave a zombie sub-agent entry behind.
+	runProv := t.currentProvider()
+	if m := strings.TrimSpace(tmpl.Model); m != "" {
+		if c, ok := runProv.(provider.ClonableWithModel); ok {
+			runProv = c.CloneWithModel(m)
+		} else {
+			return Result{IsError: true, Content: fmt.Sprintf(
+				"named subagent '%s' requires model %q but the current provider (%T) does not support model overrides",
+				tmpl.Name, m, runProv)}, nil
+		}
+	}
+
 	id := t.Manager.Spawn(tmpl.Name, task, displayTask, allowedTools, ctx)
 
 	// Build tool info list
@@ -139,9 +173,6 @@ func (t UseNamedAgentTool) Execute(ctx context.Context, input json.RawMessage) (
 			allToolInfo = append(allToolInfo, ti)
 		}
 	}
-
-	// Determine provider: clone with model override if set
-	runProv := provider.CloneProviderWithModel(t.currentProvider(), tmpl.Model)
 
 	// Capture for goroutine closure
 	tools := t.Tools
@@ -216,5 +247,6 @@ func (t UseNamedAgentTool) Clone() Tool {
 		WorkingDir:          t.WorkingDir,
 		OnUsage:             t.OnUsage,
 		SystemPromptBuilder: t.SystemPromptBuilder,
+		AvailableModels:     t.AvailableModels,
 	}
 }

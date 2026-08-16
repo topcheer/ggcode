@@ -129,6 +129,14 @@ func NewDangerousDetector() *DangerousDetector {
 		{DangerHigh, regexp.MustCompile(`(?i)\bgit\s+clean\s+-[a-z]*f`), "git clean -f permanently deletes untracked files"},
 		{DangerHigh, regexp.MustCompile(`(?i)\bgit\s+checkout\s+--\s+\.`), "git checkout -- . discards ALL working tree changes"},
 		{DangerHigh, regexp.MustCompile(`(?i)\bgit\s+checkout\s+\.\s*$`), "git checkout . discards ALL working tree changes"},
+		// #551-E: `git checkout <ref> -- <paths>` (e.g. `git checkout HEAD -- .`
+		// or `git checkout main -- src/`) overwrites working tree files with the
+		// ref's version — same data loss as the bare forms above, but none of the
+		// existing patterns matched it (they require `--` or `.` directly after
+		// `checkout`). \S+ captures the branch/commit/tag; requiring a non-space
+		// path token after `--` keeps `git checkout -b feat` and plain
+		// `git checkout main` (switch-only, no discard) unmatched.
+		{DangerHigh, regexp.MustCompile(`(?i)\bgit\s+checkout\s+\S+\s+--\s+\S`), "git checkout <ref> -- <paths> discards working tree changes for those paths"},
 		{DangerHigh, regexp.MustCompile(`(?i)\bgit\s+restore\s+--staged\s+--worktree\s+\.`), "git restore --staged --worktree . discards ALL changes"},
 		{DangerHigh, regexp.MustCompile(`(?i)\bgit\s+restore\s+--worktree\s+\.`), "git restore --worktree . discards ALL working tree changes"},
 

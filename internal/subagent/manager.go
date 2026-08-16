@@ -266,6 +266,16 @@ func (s *SubAgent) IncrementToolCalls() {
 func (s *SubAgent) setStatus(st Status) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Terminal-state protection (#551-A): never regress from a terminal
+	// state (cancelled/completed/failed) back to pending/running. A Cancel()
+	// that lands between SetCancel() and the runner's setStatus(StatusRunning)
+	// used to be silently overwritten back to running, leaving a cancelled
+	// agent stuck in a non-terminal state. Mirrors Complete()'s guard.
+	switch s.Status {
+	case StatusCompleted, StatusFailed, StatusCancelled:
+		debug.Log("subagent", "setStatus: ignore %s transition, id=%s already terminal %s", st, s.ID, s.Status)
+		return
+	}
 	s.Status = st
 }
 
@@ -813,6 +823,18 @@ func (m *Manager) Complete(id string, result string, err error) {
 	// Terminal state check: don't overwrite cancelled/completed/failed
 	switch sa.Status {
 	case StatusCancelled, StatusCompleted, StatusFailed:
+		// Backfill the result (#551-B): the runner's cancel/error paths
+		// compute a head+tail truncated partial result BEFORE calling
+		// Complete (runner.go L336-348). When Cancel() won the race and set
+		// the terminal state first, this branch used to return without
+		// writing sa.Result — the partial output of all work done before the
+		// cancel was lost. Backfill only for error/timeout/cancel completions
+		// (which always pass a non-nil err alongside the partial result); a
+		// late *successful* Complete after a user cancel stays dropped,
+		// preserving the TestManagerCompleteAfterCancel semantics.
+		if result != "" && err != nil && sa.Result == "" {
+			sa.Result = result
+		}
 		sa.closeDone()
 		sa.mu.Unlock()
 		return
