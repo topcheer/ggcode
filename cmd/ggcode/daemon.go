@@ -114,6 +114,12 @@ func startBackgroundDaemon(cfg *config.Config, cfgFile string, bypass bool, resu
 	workingDir, _ := os.Getwd()
 	lang := daemon.ResolveLang(cfg.Language)
 
+	// #552-A: refuse to fork when a daemon already owns this working dir —
+	// the guard existed (CheckExistingDaemon) but was never wired here.
+	if err := daemon.EnsureDaemonSlot(workingDir); err != nil {
+		return err
+	}
+
 	extraArgs := []string{"--bypass=" + fmt.Sprintf("%v", bypass)}
 	if resumeID != "" {
 		extraArgs = append(extraArgs, "--resume="+resumeID)

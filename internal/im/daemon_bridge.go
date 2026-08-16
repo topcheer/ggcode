@@ -732,6 +732,11 @@ func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.Co
 			if !errors.Is(event.Error, context.Canceled) {
 				b.emitter.EmitText(provider.UserFacingError(event.Error))
 			}
+			// #552-D: a failed round must not leak its partial text into
+			// the next round — without this Reset, half-streamed text from
+			// the failed attempt is concatenated with the retry's text in
+			// the same message bubble at the next StreamEventDone.
+			round.Reset()
 			if sink != nil {
 				sink.OnError(event.Error)
 			}

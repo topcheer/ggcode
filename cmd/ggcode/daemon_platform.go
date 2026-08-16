@@ -36,6 +36,13 @@ func readKeyboard(ch chan<- byte) func() {
 
 // detachToBackground forks the daemon into background mode.
 func detachToBackground(lang daemon.Lang, cfgFile, workingDir, sessionID string) {
+	// #552-A: refuse to fork when a daemon already owns this working dir —
+	// otherwise 'd' pressed twice (or racing with --background) forks two
+	// daemons that interleave logs and fight over the relay.
+	if err := daemon.EnsureDaemonSlot(workingDir); err != nil {
+		fmt.Fprintf(os.Stderr, "%s\r\n", daemon.Tr(lang, "daemon.bg_fail", err))
+		return
+	}
 	var extra []string
 	if sessionID != "" {
 		extra = []string{"--resume=" + sessionID}

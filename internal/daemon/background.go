@@ -165,6 +165,34 @@ func daemonIdentityMatches(pid int) bool {
 	return base == "ggcode" || strings.HasPrefix(base, "ggcode-")
 }
 
+// EnsureDaemonSlot verifies that no live daemon already owns the given
+// working directory before a new fork is attempted. It returns a non-nil
+// error when a daemon is already running (pid reported) or when the PID
+// file cannot be read to rule one out (#552-A: the double-start guard
+// existed but was never wired into the fork entry points).
+func EnsureDaemonSlot(workingDir string) error {
+	pid, err := CheckExistingDaemon(workingDir)
+	if err != nil {
+		return fmt.Errorf("checking existing daemon: %w", err)
+	}
+	if pid != 0 {
+		return fmt.Errorf("daemon already running for %s (pid %d)", workingDir, pid)
+	}
+	return nil
+}
+
+// backgroundStdin returns an idle stdin for the daemonized child: /dev/null.
+// Inheriting the parent's tty stdin (#552-B) caused two failures:
+// term.MakeRaw on the user's terminal broke echo, and an SSH disconnect
+// delivered EOF on stdin, making the "background" daemon exit.
+func backgroundStdin() (*os.File, error) {
+	return os.OpenFile(os.DevNull, os.O_RDWR, 0)
+}
+
+// osStartProcess is indirected for tests so failure paths (PID file
+// cleanup on fork failure, #552-C) can be exercised without a real fork.
+var osStartProcess = os.StartProcess
+
 // ForkIntoBackground re-execs the current binary as a background daemon.
 // The child process argv[0] is set to "ggcode[dirname]".
 // stdout/stderr are redirected to a log file.
@@ -202,20 +230,33 @@ func ForkIntoBackground(cfgFile, workingDir, sessionID string, extraArgs ...stri
 		return 0, fmt.Errorf("resolving PID path: %w", err)
 	}
 
+	// #552-B: stdin must be /dev/null, never the parent's tty. The old
+	// comment claimed "will be /dev/null in background" but the code
+	// inherited os.Stdin.
+	stdin, err := backgroundStdin()
+	if err != nil {
+		logFile.Close()
+		return 0, fmt.Errorf("opening %s for daemon stdin: %w", os.DevNull, err)
+	}
+
 	procAttr := &os.ProcAttr{
 		Dir: workingDir,
 		Env: os.Environ(),
 		Files: []*os.File{
-			os.Stdin, // keep stdin for potential keyboard reads (will be /dev/null in background)
-			logFile,  // stdout → log
-			logFile,  // stderr → log
+			stdin,   // stdin → /dev/null (#552-B)
+			logFile, // stdout → log
+			logFile, // stderr → log
 		},
 		Sys: newBackgroundSysProcAttr(),
 	}
 
-	process, err := os.StartProcess(executable, args, procAttr)
+	process, err := osStartProcess(executable, args, procAttr)
+	stdin.Close()
 	logFile.Close()
 	if err != nil {
+		// #552-C: a failed fork must not leave a stale PID file behind —
+		// remove any pre-existing file so the next start begins clean.
+		_ = os.Remove(pidPath)
 		return 0, fmt.Errorf("starting background process: %w", err)
 	}
 
@@ -228,10 +269,35 @@ func ForkIntoBackground(cfgFile, workingDir, sessionID string, extraArgs ...stri
 	return process.Pid, nil
 }
 
-// CleanupDaemon removes the PID file for the given working directory.
+// CleanupDaemon removes the PID file for the given working directory, but
+// ONLY when it is owned by the current process (#552-E). A foreground
+// instance exiting must not delete the PID file of a background daemon
+// started for the same directory — that would make the background daemon
+// invisible to CheckExistingDaemon and allow a double start.
 func CleanupDaemon(workingDir string) {
 	pidPath, err := PIDFilePath(workingDir)
 	if err != nil {
+		return
+	}
+	info, err := ReadPIDFile(pidPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return
+		}
+		var syntaxErr *json.SyntaxError
+		var typeErr *json.UnmarshalTypeError
+		if errors.As(err, &syntaxErr) || errors.As(err, &typeErr) {
+			// Corrupt file is garbage; safe to remove.
+			_ = os.Remove(pidPath)
+			return
+		}
+		// Unreadable for other reasons (#520 semantics): do not delete —
+		// it may belong to a live daemon.
+		debug.Log("daemon", "CleanupDaemon: PID file %s unreadable, NOT removing: %v", pidPath, err)
+		return
+	}
+	if info.PID != os.Getpid() {
+		debug.Log("daemon", "CleanupDaemon: PID file %s owned by pid %d (not us %d); keeping it", pidPath, info.PID, os.Getpid())
 		return
 	}
 	_ = os.Remove(pidPath)
