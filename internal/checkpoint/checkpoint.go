@@ -40,6 +40,13 @@ type Manager struct {
 	mu             sync.Mutex
 	currentRunID   string // active run ID, set by StartRun
 
+	// evictedRuns records run IDs that lost checkpoints to the
+	// maxCheckpoints FIFO eviction. UndoRun refuses to batch-revert a run
+	// whose earliest checkpoints were evicted: the earliest surviving
+	// checkpoint is then a mid-run state, not the pre-run baseline, and
+	// writing it back would silently corrupt the file (issue #517).
+	evictedRuns map[string]bool
+
 	// corrections records user-initiated undos so the agent can be told its
 	// previous approach was rejected. Cleared at the start of each new run.
 	corrections []Correction
@@ -80,9 +87,28 @@ func (m *Manager) Save(filePath, oldContent, newContent, toolCall string) Checkp
 
 	m.checkpoints = append(m.checkpoints, cp)
 
-	// Evict oldest if over limit
-	if len(m.checkpoints) > m.maxCheckpoints {
-		m.checkpoints = m.checkpoints[len(m.checkpoints)-m.maxCheckpoints:]
+	// Evict oldest if over limit. Prefer evicting entries that do NOT
+	// belong to the active run, so the tail run segment — and with it the
+	// pre-run baseline UndoRun relies on — stays intact as long as possible
+	// (issue #517). When every entry belongs to the active run, eviction is
+	// unavoidable; the run is then flagged so UndoRun can refuse instead of
+	// silently rolling back to a mid-run state.
+	for len(m.checkpoints) > m.maxCheckpoints {
+		evictIdx := 0
+		for i, cp := range m.checkpoints {
+			if cp.RunID != m.currentRunID {
+				evictIdx = i
+				break
+			}
+		}
+		if m.evictedRuns == nil {
+			m.evictedRuns = make(map[string]bool)
+		}
+		// FIFO eviction removes a run's earliest surviving entry, which is
+		// either its true baseline (now lost) or evidence the baseline was
+		// already lost. Either way that run's UndoRun is no longer trustworthy.
+		m.evictedRuns[m.checkpoints[evictIdx].RunID] = true
+		m.checkpoints = append(m.checkpoints[:evictIdx], m.checkpoints[evictIdx+1:]...)
 	}
 
 	// New edit invalidates redo history
@@ -215,54 +241,28 @@ func (m *Manager) UndoRun() ([]Checkpoint, error) {
 	// Identify the run ID of the most recent checkpoint.
 	runID := m.checkpoints[len(m.checkpoints)-1].RunID
 
-	// Collect indices belonging to this run (from the end backward).
-	var runIndices []int
-	for i := len(m.checkpoints) - 1; i >= 0; i-- {
-		if m.checkpoints[i].RunID != runID {
-			break
-		}
-		runIndices = append(runIndices, i)
+	// Refuse when FIFO eviction has truncated this run: the earliest
+	// surviving checkpoint is a mid-run state, not the pre-run baseline, and
+	// writing it back would silently roll the file back to the wrong state
+	// (issue #517 Bug B). Refusal happens before any disk writes.
+	if m.evictedRuns[runID] {
+		return nil, fmt.Errorf(
+			"refusing to undo run %q: its earliest checkpoints were evicted by the %d-checkpoint limit, "+
+				"so the pre-run baseline is no longer recoverable (rolling back would restore a mid-run state); "+
+				"use single-step Undo instead",
+			runID, m.maxCheckpoints)
 	}
+
+	runIndices := m.runSegmentIndices(runID)
 	if len(runIndices) == 0 {
 		return nil, fmt.Errorf("no checkpoints in current run")
 	}
-
-	// For each unique file, we need the ORIGINAL content from the FIRST
-	// checkpoint of the run for that file. Build a map: filePath -> firstOldContent.
-	// runIndices is in reverse order (last first), so the first occurrence
-	// in forward order gives us the earliest checkpoint per file.
-	baselines := make(map[string]string)
-	for i := len(runIndices) - 1; i >= 0; i-- {
-		cp := m.checkpoints[runIndices[i]]
-		if _, exists := baselines[cp.FilePath]; !exists {
-			baselines[cp.FilePath] = cp.OldContent
-		}
-	}
+	baselines := m.preRunBaselines(runIndices)
 
 	// Write baseline content for each unique file.
-	var reverted []Checkpoint
-	revertedFiles := make(map[string]bool)
-	for _, idx := range runIndices {
-		cp := m.checkpoints[idx]
-		if revertedFiles[cp.FilePath] {
-			continue
-		}
-		baseline := baselines[cp.FilePath]
-		if err := util.AtomicWriteFile(cp.FilePath, []byte(baseline), 0644); err != nil {
-			// Remove already-reverted checkpoints from the list to keep
-			// metadata consistent with disk state.
-			for _, r := range reverted {
-				for j := len(m.checkpoints) - 1; j >= 0; j-- {
-					if m.checkpoints[j].FilePath == r.FilePath && m.checkpoints[j].RunID == runID {
-						m.checkpoints = append(m.checkpoints[:j], m.checkpoints[j+1:]...)
-						break
-					}
-				}
-			}
-			return reverted, fmt.Errorf("failed to revert %s: %w", cp.FilePath, err)
-		}
-		revertedFiles[cp.FilePath] = true
-		reverted = append(reverted, cp)
+	reverted, failErr := m.writeBaselines(runIndices, baselines, runID)
+	if failErr != nil {
+		return reverted, failErr
 	}
 
 	// Remove all run checkpoints from the list and push onto redo stack.
@@ -270,13 +270,86 @@ func (m *Manager) UndoRun() ([]Checkpoint, error) {
 	removed := make([]Checkpoint, len(m.checkpoints[cutoff:]))
 	copy(removed, m.checkpoints[cutoff:])
 	m.checkpoints = m.checkpoints[:cutoff]
+	delete(m.evictedRuns, runID) // hygiene: run fully undone, flag no longer meaningful
 	// Push in reverse so Redo() re-applies in original order.
 	for i := len(removed) - 1; i >= 0; i-- {
 		m.redoStack = append(m.redoStack, removed[i])
 	}
 
-	// Record the correction so the agent can learn from the rejection.
-	// Collect unique file paths from the reverted checkpoints.
+	m.recordRunCorrection(reverted, runID)
+
+	return reverted, nil
+}
+
+// runSegmentIndices returns the indices of checkpoints belonging to runID,
+// collected from the end backward (last-to-first). Must hold m.mu.
+func (m *Manager) runSegmentIndices(runID string) []int {
+	var runIndices []int
+	for i := len(m.checkpoints) - 1; i >= 0; i-- {
+		if m.checkpoints[i].RunID != runID {
+			break
+		}
+		runIndices = append(runIndices, i)
+	}
+	return runIndices
+}
+
+// preRunBaselines maps each unique file path in the run to the OldContent of
+// its FIRST checkpoint — the pre-run state. runIndices is in reverse order
+// (last first), so the first occurrence in forward order gives the earliest
+// checkpoint per file. Must hold m.mu.
+func (m *Manager) preRunBaselines(runIndices []int) map[string]string {
+	baselines := make(map[string]string)
+	for i := len(runIndices) - 1; i >= 0; i-- {
+		cp := m.checkpoints[runIndices[i]]
+		if _, exists := baselines[cp.FilePath]; !exists {
+			baselines[cp.FilePath] = cp.OldContent
+		}
+	}
+	return baselines
+}
+
+// writeBaselines writes each unique file's pre-run baseline to disk, once
+// per file, iterating runIndices last-to-first. On the first write failure it
+// removes ALL checkpoints of the already-reverted files in this run (not just
+// one per file) to keep metadata consistent with disk state — leaving
+// mid-run entries behind would let a later single-step Undo re-apply a
+// mid-run state on top of the rolled-back baseline (issue #517 Bug A) — and
+// returns the partially reverted checkpoints plus the error. Must hold m.mu.
+func (m *Manager) writeBaselines(runIndices []int, baselines map[string]string, runID string) ([]Checkpoint, error) {
+	var reverted []Checkpoint
+	revertedFiles := make(map[string]bool)
+	for _, idx := range runIndices {
+		cp := m.checkpoints[idx]
+		if revertedFiles[cp.FilePath] {
+			continue
+		}
+		if err := util.AtomicWriteFile(cp.FilePath, []byte(baselines[cp.FilePath]), 0644); err != nil {
+			m.removeRunCheckpointsFor(reverted, runID)
+			return reverted, fmt.Errorf("failed to revert %s: %w", cp.FilePath, err)
+		}
+		revertedFiles[cp.FilePath] = true
+		reverted = append(reverted, cp)
+	}
+	return reverted, nil
+}
+
+// removeRunCheckpointsFor deletes every checkpoint of the given files that
+// belongs to runID, scanning from the tail. Must hold m.mu.
+func (m *Manager) removeRunCheckpointsFor(cps []Checkpoint, runID string) {
+	for _, r := range cps {
+		for j := len(m.checkpoints) - 1; j >= 0; j-- {
+			if m.checkpoints[j].FilePath == r.FilePath && m.checkpoints[j].RunID == runID {
+				m.checkpoints = append(m.checkpoints[:j], m.checkpoints[j+1:]...)
+			}
+		}
+	}
+}
+
+// recordRunCorrection appends a Correction covering the unique files of a
+// fully reverted run so the agent can learn from the rejection.
+// Must hold m.mu.
+func (m *Manager) recordRunCorrection(reverted []Checkpoint, runID string) {
 	fileSet := make(map[string]bool)
 	for _, cp := range reverted {
 		fileSet[cp.FilePath] = true
@@ -295,8 +368,6 @@ func (m *Manager) UndoRun() ([]Checkpoint, error) {
 		RunID:    runID,
 		Time:     time.Now(),
 	})
-
-	return reverted, nil
 }
 
 // List returns all checkpoints (most recent last).
@@ -357,6 +428,7 @@ func (m *Manager) Clear() {
 	m.checkpoints = nil
 	m.redoStack = nil
 	m.corrections = nil
+	m.evictedRuns = nil
 }
 
 // RecentCorrections returns corrections recorded since the last run start.

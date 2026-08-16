@@ -591,6 +591,9 @@ func (s *Scheduler) Resume(id string) error {
 		// Rollback
 		s.mu.Lock()
 		job.Paused = true
+		// Match Pause() semantics (issue #519 companion): a paused job must
+		// not keep showing a stale next-fire time in UI/List.
+		job.NextFire = time.Time{}
 		if t, ok := s.timers[id]; ok {
 			t.Stop()
 			delete(s.timers, id)
@@ -644,66 +647,51 @@ func (s *Scheduler) scheduleJobLocked(job *Job) {
 		delay = 0
 	}
 	s.timers[job.ID] = time.AfterFunc(delay, func() {
-		defer func() {
-			if r := recover(); r != nil {
-				debug.Log("cron", "panic in timer callback for job %s: %v\n%s", job.ID, r, runtimedebug.Stack())
-			}
-		}()
+		s.fireJob(job, gen)
+	})
+}
 
-		// Read mutable fields under lock to avoid data race with Update().
-		s.mu.Lock()
-		// If a newer timer was scheduled (Update/Resume/Create), abort this
-		// stale callback to prevent a duplicate fire.
-		if s.generations[job.ID] != gen {
-			s.mu.Unlock()
-			return
+// fireJob is the timer-callback body for one scheduled fire of job at
+// generation gen. It is extracted from scheduleJobLocked's AfterFunc closure
+// so the fire path (including the debounce branch) can be exercised directly
+// by tests simulating double-trigger races (issue #519), and so the panic
+// recovery covers the whole body.
+func (s *Scheduler) fireJob(job *Job, gen uint64) {
+	defer func() {
+		if r := recover(); r != nil {
+			debug.Log("cron", "panic in timer callback for job %s: %v\n%s", job.ID, r, runtimedebug.Stack())
 		}
-		if _, exists := s.jobs[job.ID]; !exists {
-			s.mu.Unlock()
-			return
-		}
-		// Debounce: skip if this job was enqueued within the last 5 seconds.
-		// This prevents double-fire when Update runs during the unlocked
-		// enqueue window and creates a new timer that fires at the same time.
-		if last, ok := s.lastEnqueue[job.ID]; ok && time.Since(last) < 5*time.Second {
-			debug.Log("cron", "debounced duplicate fire for job %s (last enqueue %s ago)", job.ID, time.Since(last).Round(time.Millisecond))
-			// Still reschedule the next timer — without this, a debounced fire
-			// would permanently break the timer chain and the job would never
-			// fire again.
-			s.scheduleJobLocked(job)
-			s.mu.Unlock()
-			return
-		}
-		prompt := job.Prompt
-		queueIfBusy := job.QueueIfBusy
-		s.lastEnqueue[job.ID] = time.Now()
+	}()
+
+	// Read mutable fields under lock to avoid data race with Update().
+	s.mu.Lock()
+	// If a newer timer was scheduled (Update/Resume/Create), abort this
+	// stale callback to prevent a duplicate fire.
+	if s.generations[job.ID] != gen {
 		s.mu.Unlock()
-
-		s.enqueue(prompt, queueIfBusy)
-
-		s.mu.Lock()
-		// Re-check generation after enqueue: Update may have run during the
-		// unlocked window, scheduling a newer timer. If so, this stale callback
-		// must NOT reschedule (that would create an orphaned duplicate timer).
-		if s.generations[job.ID] != gen {
-			s.mu.Unlock()
-			return
-		}
-		// Check if job was deleted while we were enqueueing (TOCTOU fix).
-		// Without this check, a deleted recurring job would be re-scheduled
-		// here, creating an infinite loop of phantom firings.
-		if _, exists := s.jobs[job.ID]; !exists {
-			s.mu.Unlock()
-			return
-		}
+		return
+	}
+	if _, exists := s.jobs[job.ID]; !exists {
+		s.mu.Unlock()
+		return
+	}
+	// Debounce: skip if this job was enqueued within the last 5 seconds.
+	// This prevents double-fire when Update runs during the unlocked
+	// enqueue window and creates a new timer that fires at the same time.
+	if last, ok := s.lastEnqueue[job.ID]; ok && time.Since(last) < 5*time.Second {
+		debug.Log("cron", "debounced duplicate fire for job %s (last enqueue %s ago)", job.ID, time.Since(last).Round(time.Millisecond))
 		if job.Recurring {
-			// Reschedule from job.NextFire (the intended fire time), NOT time.Now().
-			// If the timer fired slightly early (e.g., NextFire=08:55:00 but fired at
-			// 08:54:59), using time.Now() would cause NextTime to return 08:55:00
-			// again - the same slot - resulting in a double-fire. Using NextFire
-			// guarantees we always advance past the current slot.
+			// Advance NextFire BEFORE rescheduling (issue #519): the timer
+			// that just fired consumed the current slot, so
+			// time.Until(NextFire) <= 0 here. Leaving it would clamp the
+			// delay to zero (AfterFunc(0)) and immediately re-enter this
+			// branch — a busy spin holding the lock for the rest of the 5s
+			// debounce window, after which the callback falls through to the
+			// normal path and enqueues a duplicate anyway, defeating the
+			// debounce entirely. Mirrors the post-enqueue reschedule below.
 			next, err := NextTime(job.CronExpr, job.NextFire)
 			if err != nil {
+				// Broken expression: same disposition as the post-enqueue path.
 				delete(s.jobs, job.ID)
 				delete(s.timers, job.ID)
 				s.mu.Unlock()
@@ -715,13 +703,65 @@ func (s *Scheduler) scheduleJobLocked(job *Job) {
 				return
 			}
 			job.NextFire = next
+			// Still reschedule the next timer — without this, a debounced
+			// fire would permanently break the timer chain and the job would
+			// never fire again.
 			s.scheduleJobLocked(job)
-		} else {
+		}
+		// Non-recurring: the fire that set lastEnqueue owns this job's
+		// lifecycle (its post-enqueue path deletes the one-shot). Rescheduling
+		// here would resurrect the job forever; deleting here would race the
+		// owner. Just drop this duplicate fire.
+		s.mu.Unlock()
+		return
+	}
+	prompt := job.Prompt
+	queueIfBusy := job.QueueIfBusy
+	s.lastEnqueue[job.ID] = time.Now()
+	s.mu.Unlock()
+
+	s.enqueue(prompt, queueIfBusy)
+
+	s.mu.Lock()
+	// Re-check generation after enqueue: Update may have run during the
+	// unlocked window, scheduling a newer timer. If so, this stale callback
+	// must NOT reschedule (that would create an orphaned duplicate timer).
+	if s.generations[job.ID] != gen {
+		s.mu.Unlock()
+		return
+	}
+	// Check if job was deleted while we were enqueueing (TOCTOU fix).
+	// Without this check, a deleted recurring job would be re-scheduled
+	// here, creating an infinite loop of phantom firings.
+	if _, exists := s.jobs[job.ID]; !exists {
+		s.mu.Unlock()
+		return
+	}
+	if job.Recurring {
+		// Reschedule from job.NextFire (the intended fire time), NOT time.Now().
+		// If the timer fired slightly early (e.g., NextFire=08:55:00 but fired at
+		// 08:54:59), using time.Now() would cause NextTime to return 08:55:00
+		// again - the same slot - resulting in a double-fire. Using NextFire
+		// guarantees we always advance past the current slot.
+		next, err := NextTime(job.CronExpr, job.NextFire)
+		if err != nil {
 			delete(s.jobs, job.ID)
 			delete(s.timers, job.ID)
+			s.mu.Unlock()
+			if err := s.save(); err != nil {
+				debug.Log("cron", "failed to persist removal of broken job %s: %v", job.ID, err)
+			} else {
+				debug.Log("cron", "removed broken cron job %s (invalid expression: %s)", job.ID, job.CronExpr)
+			}
+			return
 		}
-		s.mu.Unlock()
-	})
+		job.NextFire = next
+		s.scheduleJobLocked(job)
+	} else {
+		delete(s.jobs, job.ID)
+		delete(s.timers, job.ID)
+	}
+	s.mu.Unlock()
 }
 
 // SetSession binds this scheduler to a session store path, migrating
