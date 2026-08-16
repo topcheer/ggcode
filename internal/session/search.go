@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -210,13 +211,18 @@ func makeSnippet(text string, matchIdx int, needle string) string {
 }
 
 // extractSessionID derives the session ID from a JSONL file path.
+// #558 G: handle both '/' and '\\' separators — paths built on or sourced
+// from Windows must not fall through to LastIndex("/") — and strip only the
+// trailing extension of the BASENAME via filepath.Ext semantics. The old
+// LastIndex(base, ".") hack misfired on dots inside directory names (e.g.
+// Windows usernames like zhan.ju), producing garbage session IDs.
 func extractSessionID(path string) string {
 	base := path
-	if i := strings.LastIndex(base, "/"); i >= 0 {
+	if i := strings.LastIndexAny(base, `\/`); i >= 0 {
 		base = base[i+1:]
 	}
-	if i := strings.LastIndex(base, "."); i >= 0 {
-		base = base[:i]
+	if ext := filepath.Ext(base); ext != "" {
+		base = strings.TrimSuffix(base, ext)
 	}
 	return base
 }

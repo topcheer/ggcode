@@ -227,22 +227,100 @@ const recentMessageThreshold = 500
 // "timestamp":"..." field without fully deserializing the record.
 // Returns zero time if not found.
 func quickExtractTimestamp(line []byte) time.Time {
-	// Fast path: find "timestamp":" prefix
-	idx := bytes.Index(line, []byte(`"timestamp":"`))
-	if idx < 0 {
+	// #558 C: only read the TOP-LEVEL "timestamp" key. The Message (and any
+	// tool_use Input inside it) is serialized BEFORE the record-level Timestamp,
+	// so a naive bytes.Index picks up a pseudo-timestamp embedded in message
+	// content (e.g. {"timestamp":"2099-..."} in a tool_use input) and breaks
+	// findMessageCutoff's monotonicity assumption. topLevelStringField walks
+	// JSON structure (string tokens + depth), so keys nested inside message
+	// content are never confused with the record's own fields.
+	start, end := topLevelStringField(line, "timestamp")
+	if start < 0 {
 		return time.Time{}
 	}
-	start := idx + len(`"timestamp":"`)
-	end := bytes.IndexByte(line[start:], '"')
-	if end < 0 || end < 20 {
+	if end-start < 20 { // RFC3339 needs at least 20 chars: 2006-01-02T15:04:05Z
 		return time.Time{}
 	}
-	// RFC3339 format: 2006-01-02T15:04:05.999999999Z07:00
-	ts, err := time.Parse(time.RFC3339, string(line[start:start+end]))
+	ts, err := time.Parse(time.RFC3339, string(line[start:end]))
 	if err != nil {
 		return time.Time{}
 	}
 	return ts
+}
+
+// topLevelStringField locates the string value of a top-level (depth-1) key
+// in a flat JSON object line, returning the value's content byte range
+// [start, end) excluding quotes. It scans complete string tokens (escape
+// aware) so occurrences of the key name inside nested objects, arrays, or
+// string values never match. Returns (-1, -1) if the field is absent at
+// depth 1. This stays a single-pass byte scan — no unmarshaling.
+func topLevelStringField(line []byte, name string) (int, int) {
+	n := len(line)
+	depth := 0
+	i := 0
+	for i < n {
+		c := line[i]
+		switch c {
+		case '"':
+			// Scan the full string token [i, j] (closing quote at j).
+			j := i + 1
+			for j < n {
+				if line[j] == '\\' {
+					j += 2
+					continue
+				}
+				if line[j] == '"' {
+					break
+				}
+				j++
+			}
+			if j >= n {
+				return -1, -1 // unterminated string
+			}
+			tokenEnd := j + 1
+			// Key candidate: token at depth 1 whose content is the field name.
+			if depth == 1 && string(line[i+1:j]) == name {
+				k := tokenEnd
+				for k < n && (line[k] == ' ' || line[k] == '\t') {
+					k++
+				}
+				if k < n && line[k] == ':' {
+					k++
+					for k < n && (line[k] == ' ' || line[k] == '\t') {
+						k++
+					}
+					if k < n && line[k] == '"' {
+						v := k + 1
+						m := v
+						for m < n {
+							if line[m] == '\\' {
+								m += 2
+								continue
+							}
+							if line[m] == '"' {
+								break
+							}
+							m++
+						}
+						if m >= n {
+							return -1, -1
+						}
+						return v, m
+					}
+				}
+			}
+			i = tokenEnd
+		case '{', '[':
+			depth++
+			i++
+		case '}', ']':
+			depth--
+			i++
+		default:
+			i++
+		}
+	}
+	return -1, -1
 }
 
 // quickRecordType extracts the "type" field value via fast substring search.
@@ -522,7 +600,16 @@ func (s *JSONLStore) updateIndex(ses *Session) error {
 	found := false
 	for i, e := range idx {
 		if e.ID == ses.ID {
-			idx[i] = sessionToIndexEntry(ses)
+			newEntry := sessionToIndexEntry(ses)
+			// #558 F: under time-windowed loading ses.Messages holds only the
+			// recent window, so len(s.Messages) is a lower bound, not the real
+			// on-disk count. Message records are never removed from a session
+			// file, so taking the max with the previous index entry prevents the
+			// count from regressing on every windowed load.
+			if newEntry.MsgCount < e.MsgCount {
+				newEntry.MsgCount = e.MsgCount
+			}
+			idx[i] = newEntry
 			found = true
 			break
 		}
@@ -735,6 +822,14 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 		debug.Log("session", "loadSession: migration failed for %s: %v (continuing with original file)", id, err)
 	} else if migrated > 0 {
 		debug.Log("session", "loadSession: migrated %d message IDs in session %s", migrated, id)
+		// #558 A: migration rewrote the entire file (legacy checkpoint snapshot
+		// removed, summary message inserted) — every byte offset computed from
+		// the pre-migration file is stale. Recompute the cutoff against the
+		// rewritten file, otherwise outdated messages leak past the window on
+		// the first resume after migration.
+		if !s.fullLoad {
+			msgCutoff, totalMsgCount, _ = findMessageCutoff(path)
+		}
 	}
 
 	f, err := os.Open(path)
@@ -2085,6 +2180,19 @@ func hasNewFormatCheckpoint(path string) bool {
 func (s *JSONLStore) migrateMessageIDs(id string) (int, error) {
 	path := s.sessionPath(id)
 
+	// #558 D: hold the cross-process session lock across the entire
+	// read -> tmp -> rename cycle so a concurrent O_APPEND writer in another
+	// process cannot slip an append into the gap that the rename would drop.
+	unlock, lockErr := lockSessionFile(path)
+	if lockErr != nil {
+		debug.Log("session", "migrateMessageIDs: session lock unavailable: %v", lockErr)
+	}
+	defer func() {
+		if unlock != nil {
+			unlock()
+		}
+	}()
+
 	// Fast path: check if the file has already been migrated by scanning
 	// only the tail of the file for the last checkpoint record. If it's
 	// new format (has summary_msg_id), skip the expensive full-file scan.
@@ -2358,6 +2466,16 @@ func appendRecordLine(path string, rec jsonlRecord) error {
 	return appendRecordLines(path, []jsonlRecord{rec})
 }
 
+// lockSessionFile acquires a cross-process exclusive lock on a per-session
+// flock sidecar (path + ".flock"), reusing the lockIndexFile implementation.
+// It serializes full-file rewrites (backfill/migrate: read -> tmp -> rename)
+// against O_APPEND writers in OTHER processes — the store mutex only guards
+// the current process. The sidecar is never renamed or replaced, so the lock
+// stays valid across the atomic rename of the data file (#558 D).
+func lockSessionFile(path string) (func(), error) {
+	return lockIndexFile(path)
+}
+
 // appendRecordLines encodes multiple records and writes them all in a single
 // file open+write. This is significantly faster than calling appendRecordLine
 // in a loop because it avoids repeated open/close syscalls.
@@ -2371,6 +2489,19 @@ func appendRecordLines(path string, recs []jsonlRecord) error {
 		}
 	}
 	// O_APPEND guarantees atomic appends at the OS level on POSIX systems.
+	// #558 D: hold the cross-process session lock for the duration of the
+	// write so a concurrent full-file rewrite (backfill/migrate read -> tmp ->
+	// rename) in another process cannot drop this append between its read
+	// and its rename. Within one process the store mutex already serializes.
+	unlock, lockErr := lockSessionFile(path)
+	if lockErr != nil {
+		debug.Log("session", "appendRecordLines: session lock unavailable: %v", lockErr)
+	}
+	defer func() {
+		if unlock != nil {
+			unlock()
+		}
+	}()
 	// We intentionally skip f.Sync() (fsync) here for performance:
 	//   - Save() (full session rewrite via atomic rename) does fsync for durability.
 	//   - This append path trades fsync for speed since it's called frequently.
@@ -2428,6 +2559,18 @@ func messageFingerprint(msg *provider.Message) string {
 // whose fingerprint matches entries in the updates map.
 func (s *JSONLStore) backfillIDs(sessionID string, updates map[string]provider.Message) {
 	path := s.sessionPath(sessionID)
+
+	// #558 D: lock across read -> tmp -> rename (cross-process lost-update
+	// window vs O_APPEND writers, same as migrateMessageIDs).
+	unlock, lockErr := lockSessionFile(path)
+	if lockErr != nil {
+		debug.Log("session", "backfillIDs: session lock unavailable: %v", lockErr)
+	}
+	defer func() {
+		if unlock != nil {
+			unlock()
+		}
+	}()
 
 	f, err := os.Open(path)
 	if err != nil {
@@ -2538,6 +2681,18 @@ func firstMessageHasTimestamp(path string) bool {
 
 func (s *JSONLStore) backfillTimestamps(sessionID string) {
 	path := s.sessionPath(sessionID)
+
+	// #558 D: lock across read -> tmp -> rename (cross-process lost-update
+	// window vs O_APPEND writers, same as migrateMessageIDs).
+	unlock, lockErr := lockSessionFile(path)
+	if lockErr != nil {
+		debug.Log("session", "backfillTimestamps: session lock unavailable: %v", lockErr)
+	}
+	defer func() {
+		if unlock != nil {
+			unlock()
+		}
+	}()
 
 	// Fast path: stream-scan only until the first message record.
 	// If it already has a timestamp, the entire session is skipped without
