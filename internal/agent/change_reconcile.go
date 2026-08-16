@@ -35,6 +35,7 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -205,6 +206,11 @@ func (a *Agent) checkChangeReconcile(runStats *RunStats) string {
 		return ""
 	}
 
+	// #550 D2: deterministic ordering — git diff order varies with index
+	// state, which made the truncated display list flap between otherwise
+	// identical runs.
+	sort.Strings(unexpected)
+
 	// Build the warning message.
 	display := unexpected
 	if len(display) > maxUnexpectedFiles {
@@ -249,7 +255,18 @@ func gitChangedFiles(workingDir string) ([]string, error) {
 		return nil, nil
 	}
 
-	return strings.Split(output, "\n"), nil
+	// #550 D2: trim each line and drop empties — git output carrying CR
+	// line endings (core.autocrlf checkouts) or stray padding previously
+	// produced keys like "foo.go\r" that never matched the edited set,
+	// flagging every changed file as unreconciled.
+	lines := strings.Split(output, "\n")
+	files := make([]string, 0, len(lines))
+	for _, l := range lines {
+		if l = strings.TrimSpace(l); l != "" {
+			files = append(files, l)
+		}
+	}
+	return files, nil
 }
 
 // runGitCommandWithTimeout runs a git command with a timeout. Returns trimmed
@@ -267,12 +284,30 @@ func runGitCommandWithTimeout(cmd *exec.Cmd, timeout time.Duration) (string, err
 	return string(out), nil
 }
 
-// normalizeReconcilePath converts a file path to a canonical form for comparison.
-// Handles relative vs absolute path differences.
+// normalizeReconcilePath converts a file path to a canonical form for
+// comparison. Both sides — git diff output (repo-relative) and
+// FilesEdited (frequently absolute, as edit_file records what the agent
+// passed) — reduce to a repo-root-relative path so the SAME file compares
+// equal regardless of which form it arrived in.
 func normalizeReconcilePath(workingDir, path string) string {
-	abs, err := filepath.Abs(filepath.Join(workingDir, path))
+	wd, err := filepath.Abs(workingDir)
 	if err != nil {
-		return filepath.Clean(path)
+		wd = filepath.Clean(workingDir)
 	}
-	return abs
+	p := filepath.Clean(strings.TrimSpace(path))
+	if !filepath.IsAbs(p) {
+		// Git diff paths are repo-relative — anchor them to the working dir.
+		p = filepath.Join(wd, p)
+	}
+	// #550 D1: an ABSOLUTE path must never be joined onto workingDir —
+	// filepath.Join(wd, "/w/repo/x.go") silently produces the double
+	// prefix "/w/repo/w/repo/x.go", so every normal edit of an
+	// absolute-path file was misjudged "unreconciled" (systematic false
+	// positives on the main workflow). Reduce both forms to the
+	// repo-root-relative path via filepath.Rel instead.
+	rel, rerr := filepath.Rel(wd, p)
+	if rerr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return p // outside the working dir (or Rel failed): keep it absolute
+	}
+	return rel
 }

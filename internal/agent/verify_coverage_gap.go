@@ -353,7 +353,11 @@ func coverageExtractVerifyScopes(cmd string) []string {
 		}
 		r := strings.TrimRight(f, "/")
 		r = strings.TrimPrefix(r, "./")
-		if len(r) > 2 { // meaningful path
+		if r != "" {
+			// #550 B1: any NAMED directory is a real package scope — "./db/"
+			// previously failed the len>2 test and inflated to ALL, marking
+			// every edited package VERIFIED and masking the exact coverage
+			// gap this detector exists to surface.
 			scopes = append(scopes, r)
 		} else {
 			return []string{"ALL"} // "./" alone

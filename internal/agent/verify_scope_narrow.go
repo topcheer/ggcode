@@ -266,7 +266,14 @@ func (s *scopeNarrowState) recordVerificationCommand(toolName, cmd string, outpu
 		rawCommand: cmd,
 		scope:      scope,
 		category:   category,
-		passed:     !isError && !looksLikeTestFailure(output),
+		// #550 A3: the exit code (isError) is the authoritative outcome —
+		// the old `!isError && !looksLikeTestFailure(output)` ALSO let a
+		// lowercase-substring scan judge PASSING runs (exit 0) whose test
+		// names merely contain "error"/"fail" (e.g. TestHandleErrorFallback)
+		// as failed, silencing the narrowing detector on exactly the runs
+		// it should be watching. Output text is no longer trusted to gate
+		// the verdict.
+		passed: !isError,
 	}
 
 	s.history = append(s.history, entry)
@@ -349,7 +356,11 @@ func (s *scopeNarrowState) checkNarrowingPattern() string {
 	return "[Verification Scope Narrowing Detected] Your test/build commands have progressively narrowed scope:\n" +
 		"  1. `" + truncateCmdShort(oldest.rawCommand) + "` -> failed\n" +
 		"  2. `" + truncateCmdShort(middle.rawCommand) + "` -> " + passFailStr(middle.passed) + "\n" +
-		"  3. `" + truncateCmdShort(newest.rawCommand) + "` -> passed\n\n" +
+		// #550 A2: report the NEWEST command's REAL outcome — the hardcoded
+		// "-> passed" lied whenever the latest run actually failed (firing
+		// only requires middle OR newest to pass), contradicting the evidence
+		// and misleading the agent about the final state.
+		"  3. `" + truncateCmdShort(newest.rawCommand) + "` -> " + passFailStr(newest.passed) + "\n\n" +
 		"The narrowing may be masking failures outside the narrowed scope. " +
 		"Re-run the ORIGINAL broader command (`" + truncateCmdShort(originalCmd) + "`) to confirm " +
 		"all tests/builds pass, not just the narrowed subset. " +

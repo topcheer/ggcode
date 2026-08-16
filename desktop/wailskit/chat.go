@@ -170,6 +170,10 @@ type ChatBridge struct {
 	// session — persist tails via the persist snapshot below, stream
 	// events via the per-callback emitIfCurrent guard (#504).
 	runGeneration uint64
+	// activeRunGen is the generation of the run that most recently started
+	// (#550 E1): finishRun compares it against runGeneration and suppresses
+	// a superseded (zombie) run's outward run_done / busy-state emissions.
+	activeRunGen uint64
 	// persistSession/persistGeneration are the closure-effective persist
 	// target captured at run start (#489); see setRunPersistSnapshot.
 	persistSession    *session.Session
@@ -456,6 +460,7 @@ func (b *ChatBridge) sendMessageData(data tunnel.MessageData, source string, exc
 	// guard of a resent text run (both gen=N) and leak stale events into
 	// the new run's liveHistory (#504 guard defeated on the text path).
 	b.runGeneration++
+	b.activeRunGen = b.runGeneration // #550 E1: this run owns the finish path
 	turnID, _ := b.startDesktopTurnLocked()
 	b.runSes = b.currentSes // #270: persist-path snapshot, same critical section as b.cancel
 	b.mu.Unlock()
@@ -577,7 +582,10 @@ func (b *ChatBridge) sendMessageData(data tunnel.MessageData, source string, exc
 		// #489: a cancelled run draining its tail must not inject a
 		// "context canceled" error item into the (possibly NEW) session's
 		// live history — finishRun already handles cancellation semantics.
-		b.appendLiveError(err.Error())
+		// #550 E1: non-cancel errors of a SUPERSEDED run must not leak into
+		// the new session either — gate on the run generation, the same
+		// guard every stream event passes (emitIfCurrent).
+		b.appendLiveErrorIfCurrent(runGen, err.Error())
 	}
 	b.finishRun(err)
 
@@ -631,9 +639,24 @@ func (b *ChatBridge) finishRun(err error) {
 		return
 	}
 	b.finished = true
+	// #550 E1: if the run this finisher belongs to was superseded (session
+	// cleared / newer run started), its outward emissions would cross
+	// generations — run_done would clear the NEW run's frontend busy state
+	// and SetAgentBusy(false) would flip the LAN status while the new run
+	// is still working. Internal cleanup stays safe: persists are already
+	// generation-scoped via the run persist snapshot (#489).
+	superseded := b.activeRunGen != 0 && b.activeRunGen != b.runGeneration
 	b.mu.Unlock()
 
 	b.persistRunMessages()
+
+	if superseded {
+		debug.Log("wailskit", "suppressed superseded run's run_done/busy emissions (#550 E1)")
+		if b.metricCollector != nil {
+			b.metricCollector.Flush()
+		}
+		return
+	}
 
 	// Flush tunnel state
 	if broker := b.currentTunnelBroker(); broker != nil {
@@ -680,6 +703,7 @@ func (b *ChatBridge) finishRun(err error) {
 func (b *ChatBridge) setRunPersistSnapshot() {
 	b.mu.Lock()
 	b.runGeneration++
+	b.activeRunGen = b.runGeneration // #550 E1: runs that bump here own the finish path too
 	b.persistSession = b.runSes
 	b.mu.Unlock()
 }
@@ -708,7 +732,21 @@ func (b *ChatBridge) emitIfCurrent(gen uint64, ev provider.StreamEvent) {
 	b.emit(ev)
 }
 
-func (b *ChatBridge) ClearCurrentSession() {
+func (b *ChatBridge) ClearCurrentSession() error {
+	// #550 E1: refuse to clear while a run is active. Clearing mid-run
+	// installed a zombie: the old run kept draining with no cancel, its
+	// late finishRun/appendLiveError leaked into the freshly selected
+	// session, and run_done fired against the new turn. Callers that must
+	// clear mid-run (DeleteSession, StartNewSession) Cancel() first, which
+	// nils b.cancel in the same critical section.
+	b.mu.Lock()
+	busy := b.cancel != nil
+	b.mu.Unlock()
+	if busy {
+		debug.Log("wailskit", "ClearCurrentSession refused: agent run in progress (#550 E1)")
+		return fmt.Errorf("agent run in progress; cancel the run before clearing the session")
+	}
+
 	// Clean up ephemeral empty session before switching.
 	b.cleanupEphemeralSession()
 
@@ -748,6 +786,7 @@ func (b *ChatBridge) ClearCurrentSession() {
 	}
 	b.mu.Unlock()
 	b.bindSessionIntegrations(nil)
+	return nil
 }
 
 // cleanupEphemeralSession deletes the current session if it was marked
@@ -1277,7 +1316,19 @@ func (b *ChatBridge) saveSession() {
 }
 
 func (b *ChatBridge) StartNewSession() (string, error) {
-	b.ClearCurrentSession()
+	// #550 E1: cancel an active run before clearing — ClearCurrentSession
+	// now refuses while busy, and a mid-run "New Session" must not leave
+	// the old run draining as a zombie against the fresh session (same
+	// Cancel → clear invariant DeleteSession already follows, #209/#397).
+	b.mu.Lock()
+	busy := b.cancel != nil
+	b.mu.Unlock()
+	if busy {
+		b.Cancel()
+	}
+	if err := b.ClearCurrentSession(); err != nil {
+		return "", err
+	}
 	if err := b.ensureSession(); err != nil {
 		return "", err
 	}
@@ -2387,6 +2438,24 @@ func (b *ChatBridge) appendLiveError(text string) {
 	})
 }
 
+// appendLiveErrorIfCurrent appends an error entry to the live history only
+// when gen is still the current run generation (#550 E1): a superseded
+// run's late error used to bypass the emitIfCurrent guard and leak into the
+// newly selected session's history.
+func (b *ChatBridge) appendLiveErrorIfCurrent(gen uint64, text string) {
+	if strings.TrimSpace(text) == "" {
+		return
+	}
+	b.mu.Lock()
+	stale := gen != b.runGeneration
+	b.mu.Unlock()
+	if stale {
+		debug.Log("wailskit", "drop stale-run live error (superseded run) (#550 E1)")
+		return
+	}
+	b.appendLiveError(text)
+}
+
 func (b *ChatBridge) applySemanticToLiveHistory(semantic agentruntime.DesktopStreamSemantic) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -3243,6 +3312,7 @@ func (b *ChatBridge) SendHiddenText(text string) error {
 	// chat injection, deferred drains) previously reused the cancelled
 	// run's generation, defeating the emitIfCurrent guard.
 	b.runGeneration++
+	b.activeRunGen = b.runGeneration // #550 E1: this run owns the finish path
 	// #522: same desktop-turn obligation as sendMessageData (#514) —
 	// without it run_done carries the previous turn's (or empty) turn_id
 	// and liveHistory appends this run's reply onto the stale turn's

@@ -124,6 +124,19 @@ func (a *Agent) checkCrossFileImpact(runStats *RunStats) string {
 		return ""
 	}
 
+	// #550 C1: every file edited THIS run is excluded from the sibling scan
+	// below — a symbol move (definition removed in a.go, references updated
+	// in b.go) previously flagged the co-edited b.go as "affected by a file
+	// you did NOT edit", a false positive on a fully consistent edit set.
+	editedAbs := make(map[string]bool, len(goFiles))
+	for _, f := range goFiles {
+		af := f
+		if !filepath.IsAbs(af) {
+			af = filepath.Join(workingDir, af)
+		}
+		editedAbs[filepath.Clean(af)] = true
+	}
+
 	if len(goFiles) > 20 {
 		debug.Log("cross_impact", "skipping: %d Go files edited (too many)", len(goFiles))
 		return ""
@@ -168,6 +181,9 @@ func (a *Agent) checkCrossFileImpact(runStats *RunStats) string {
 		for _, sibling := range siblings {
 			if time.Now().After(deadline) {
 				break
+			}
+			if editedAbs[filepath.Clean(sibling)] {
+				continue // co-edited this run — not "a file you did NOT edit" (#550 C1)
 			}
 			content, err := os.ReadFile(sibling)
 			if err != nil {
