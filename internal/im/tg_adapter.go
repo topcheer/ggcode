@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	tgmd "github.com/eekstunt/telegramify-markdown-go"
 
@@ -264,9 +265,11 @@ func (a *tgAdapter) handleUpdate(ctx context.Context, update map[string]any) {
 		a.mu.RLock()
 		botUN := a.botUsername
 		a.mu.RUnlock()
-		if botUN != "" && strings.Contains(text, "@"+botUN) {
-			text = strings.TrimSpace(strings.ReplaceAll(text, "@"+botUN, ""))
-		}
+		// Structured mention stripping via entities: plain ReplaceAll
+		// corrupts text when the bot username is a prefix of another token
+		// (botUN="dev" turned "@devops" into "ops" and
+		// "dev@devtools.com" into "devtools.com") (#540).
+		text = tgStripBotMention(text, botUN, msg["entities"])
 	}
 
 	attachments, voiceText := a.processAttachments(ctx, msg)
@@ -1097,6 +1100,178 @@ func (a *tgAdapter) publishState(healthy bool, status, lastErr string) {
 		ContactURI: "https://t.me/" + a.botUsername,
 		UpdatedAt:  time.Now(),
 	})
+}
+
+// tgStripBotMention removes the bot's own @username mention from an inbound
+// group message. It prefers Telegram's structured entities (type=mention with
+// offset/length in UTF-16 code units), so ONLY the exact bot mention is
+// removed; a plain ReplaceAll corrupts text when the bot username is a prefix
+// of another token (botUN="dev" turned "@devops" into "ops" and
+// "dev@devtools.com" into "devtools.com") (#540). When entities are absent
+// it falls back to a word-boundary scan; when entities are present but
+// contain no bot mention, the text is returned untouched.
+func tgStripBotMention(text, botUsername string, entitiesRaw any) string {
+	if botUsername == "" || text == "" {
+		return text
+	}
+	target := "@" + botUsername
+	if !strings.Contains(text, target) {
+		return text
+	}
+	if entities, ok := entitiesRaw.([]any); ok && len(entities) > 0 {
+		type span struct{ start, end int }
+		var spans []span
+		for _, e := range entities {
+			em, ok := e.(map[string]any)
+			if !ok {
+				continue
+			}
+			if t, _ := em["type"].(string); t != "mention" {
+				continue
+			}
+			off, okOff := intValue(em["offset"])
+			length, okLen := intValue(em["length"])
+			if !okOff || !okLen || length <= 0 {
+				continue
+			}
+			if utf16Substr(text, off, length) == target {
+				spans = append(spans, span{off, off + length})
+			}
+		}
+		if len(spans) == 0 {
+			return text
+		}
+		// Remove spans back-to-front so earlier offsets stay valid.
+		for i := len(spans) - 1; i >= 0; i-- {
+			cut := utf16Cut(text, spans[i].start, spans[i].end)
+			text = tgCollapseAdjacentSpace(text, cut, spans[i].start)
+		}
+		return strings.TrimSpace(text)
+	}
+	// No entities available — fall back to word-boundary removal.
+	return tgStripBotMentionFallback(text, target)
+}
+
+// tgStripBotMentionFallback removes occurrences of target (@username) that
+// are delimited on both sides by non-mention characters, so "@dev" does not
+// match inside "@devops" or "dev@devtools.com" (#540).
+func tgStripBotMentionFallback(text, target string) string {
+	var idxs []int
+	search := 0
+	for {
+		rel := strings.Index(text[search:], target)
+		if rel < 0 {
+			break
+		}
+		abs := search + rel
+		if tgMentionBoundaryOK(text, abs, abs+len(target)) {
+			idxs = append(idxs, abs)
+		}
+		search = abs + len(target)
+	}
+	for i := len(idxs) - 1; i >= 0; i-- {
+		cut := text[:idxs[i]] + text[idxs[i]+len(target):]
+		text = tgCollapseAdjacentSpaceAtByte(text, cut, idxs[i])
+	}
+	return strings.TrimSpace(text)
+}
+
+// tgCollapseAdjacentSpace removes ONE of two adjacent spaces created by
+// deleting a token: orig is the string before the cut, cut the string after,
+// and unitOff the UTF-16 offset where the deletion happened. When the kept
+// character before the deletion is a space and the kept character after it is
+// also a space, one is dropped so "hi @dev run" becomes "hi run", not
+// "hi  run" (#540).
+func tgCollapseAdjacentSpace(orig, cut string, unitOff int) string {
+	byteOff := utf16ByteIndex(orig, unitOff)
+	if byteOff < 0 {
+		return cut
+	}
+	return tgCollapseAdjacentSpaceAtByte(orig, cut, byteOff)
+}
+
+func tgCollapseAdjacentSpaceAtByte(orig, cut string, byteOff int) string {
+	if byteOff > 0 && byteOff < len(cut) && orig[byteOff-1] == ' ' && cut[byteOff] == ' ' {
+		return cut[:byteOff] + cut[byteOff+1:]
+	}
+	return cut
+}
+
+// utf16ByteIndex converts a UTF-16 code unit offset in s to a byte offset.
+// Returns -1 when the offset falls outside the string.
+func utf16ByteIndex(s string, unitOff int) int {
+	unit := 0
+	for i, r := range s {
+		if unit >= unitOff {
+			return i
+		}
+		if r > 0xFFFF {
+			unit += 2
+		} else {
+			unit++
+		}
+	}
+	if unit == unitOff {
+		return len(s)
+	}
+	return -1
+}
+
+func tgMentionBoundaryOK(s string, start, end int) bool {
+	if start > 0 {
+		r, _ := utf8.DecodeLastRuneInString(s[:start])
+		if isTGMentionChar(r) {
+			return false
+		}
+	}
+	if end < len(s) {
+		r, _ := utf8.DecodeRuneInString(s[end:])
+		if isTGMentionChar(r) {
+			return false
+		}
+	}
+	return true
+}
+
+func isTGMentionChar(r rune) bool {
+	return r == '_' || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')
+}
+
+// utf16Substr returns s[off:off+length] where offsets are in UTF-16 code
+// units — the convention Telegram uses for message entity positions.
+func utf16Substr(s string, off, length int) string {
+	var b strings.Builder
+	unit := 0
+	end := off + length
+	for _, r := range s {
+		w := 1
+		if r > 0xFFFF {
+			w = 2
+		}
+		if unit >= off && unit < end {
+			b.WriteRune(r)
+		}
+		unit += w
+	}
+	return b.String()
+}
+
+// utf16Cut removes s[start:end] where offsets are in UTF-16 code units.
+func utf16Cut(s string, start, end int) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	unit := 0
+	for _, r := range s {
+		w := 1
+		if r > 0xFFFF {
+			w = 2
+		}
+		if unit < start || unit >= end {
+			b.WriteRune(r)
+		}
+		unit += w
+	}
+	return b.String()
 }
 
 func splitTGMessage(text string, maxLen int) []string {

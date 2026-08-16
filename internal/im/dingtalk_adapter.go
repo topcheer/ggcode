@@ -218,9 +218,7 @@ func (a *dingtalkAdapter) run(ctx context.Context) {
 			debug.Log("dingtalk", "adapter=%s error: %v", a.name, err)
 			a.publishState(false, "error", err.Error())
 		}
-
-		delay := backoffs[min(attempt, len(backoffs)-1)]
-		attempt++
+		delay, attempt := backoffFor(err, attempt, backoffs)
 		debug.Log("dingtalk", "adapter=%s reconnecting in %v (attempt %d)", a.name, delay, attempt)
 
 		select {
@@ -229,6 +227,17 @@ func (a *dingtalkAdapter) run(ctx context.Context) {
 		case <-time.After(jitterDuration(delay)):
 		}
 	}
+}
+
+// backoffFor returns the reconnect delay and the next attempt counter for a
+// serve result. A nil err means the connection served until a clean
+// disconnect — the counter is reset so the NEXT first retry uses the short
+// delay instead of the capped one (#389; parity with discord_adapter.run).
+func backoffFor(err error, attempt int, backoffs []time.Duration) (time.Duration, int) {
+	if err == nil {
+		attempt = 0
+	}
+	return backoffs[min(attempt, len(backoffs)-1)], attempt + 1
 }
 
 // ---- Connect + serve messages (single connection lifecycle) ----

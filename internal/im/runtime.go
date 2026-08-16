@@ -670,8 +670,14 @@ func (m *Manager) HandleInbound(ctx context.Context, msg InboundMessage) error {
 	m.mu.Lock()
 
 	// Dedup: skip if we've already processed this message recently.
+	// The mark is recorded BEFORE processing so concurrent redeliveries are
+	// deduplicated. Every failure return below rolls the mark back via
+	// rollbackDedup so the platform's redelivery of the SAME MessageID — the
+	// very case this dedup exists to handle (e.g. Feishu SDK retries) — is
+	// reprocessed instead of being silently swallowed (#540).
+	dedupKey := ""
 	if msgID := strings.TrimSpace(msg.Envelope.MessageID); msgID != "" {
-		dedupKey := msg.Envelope.Adapter + ":" + msgID
+		dedupKey = msg.Envelope.Adapter + ":" + msgID
 		if _, seen := m.seenMessages[dedupKey]; seen {
 			m.mu.Unlock()
 			return nil
@@ -689,6 +695,14 @@ func (m *Manager) HandleInbound(ctx context.Context, msg InboundMessage) error {
 			}
 		}
 	}
+	// rollbackDedup removes the seen-mark so a failed message is retried on
+	// redelivery. Must be called while m.mu is held; a no-op when the
+	// message had no MessageID (dedupKey == "").
+	rollbackDedup := func() {
+		if dedupKey != "" {
+			delete(m.seenMessages, dedupKey)
+		}
+	}
 
 	bridge := m.bridge
 	sessionBound := m.session != nil
@@ -702,14 +716,17 @@ func (m *Manager) HandleInbound(ctx context.Context, msg InboundMessage) error {
 	binding := m.currentBindings[msg.Envelope.Adapter]
 	changed := false
 	if !sessionBound {
+		rollbackDedup()
 		m.mu.Unlock()
 		return ErrNoSessionBound
 	}
 	if binding == nil {
+		rollbackDedup()
 		m.mu.Unlock()
 		return ErrNoChannelBound
 	}
 	if bridge == nil {
+		rollbackDedup()
 		m.mu.Unlock()
 		return ErrNoBridge
 	}
@@ -726,6 +743,7 @@ func (m *Manager) HandleInbound(ctx context.Context, msg InboundMessage) error {
 		needPersist = true
 	}
 	if binding.ChannelID != "" && msg.Envelope.ChannelID != binding.ChannelID {
+		rollbackDedup()
 		m.mu.Unlock()
 		return ErrInboundChannelDenied
 	}
@@ -740,6 +758,7 @@ func (m *Manager) HandleInbound(ctx context.Context, msg InboundMessage) error {
 	// Single persist call covering both ChannelID and LastInboundMessageID changes.
 	if needPersist && m.bindingStore != nil {
 		if err := m.persistBinding(*binding); err != nil {
+			rollbackDedup()
 			m.mu.Unlock()
 			return err
 		}
@@ -753,7 +772,15 @@ func (m *Manager) HandleInbound(ctx context.Context, msg InboundMessage) error {
 	if cb != nil {
 		cb(snapshot)
 	}
-	return bridge.SubmitInboundMessage(ctx, msg)
+	if err := bridge.SubmitInboundMessage(ctx, msg); err != nil {
+		// Roll the dedup mark back so the platform's retry of the same
+		// MessageID is reprocessed rather than silently dropped (#540).
+		m.mu.Lock()
+		rollbackDedup()
+		m.mu.Unlock()
+		return err
+	}
+	return nil
 }
 
 // HandlePairingInbound processes an inbound IM message for pairing.

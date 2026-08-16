@@ -185,9 +185,15 @@ func (a *feishuAdapter) Close() error {
 }
 
 func (a *feishuAdapter) run(ctx context.Context) {
-	// Initial token fetch (needed for sending messages regardless of transport)
-	if err := a.refreshToken(ctx); err != nil {
-		a.publishState(false, "error", fmt.Sprintf("token refresh: %v", err))
+	// Initial token fetch (needed for sending messages regardless of transport).
+	// Retry with backoff instead of dead-ending on the first failure: a
+	// transient network blip at startup must not leave the adapter in a
+	// terminal error state until a manual restart (#540). Mirrors the
+	// reconnect loops of DingTalk/Discord/WhatsApp.
+	if err := a.fetchTokenWithRetry(ctx, []time.Duration{3 * time.Second, 5 * time.Second, 10 * time.Second, 30 * time.Second}); err != nil {
+		if ctx.Err() == nil {
+			a.publishState(false, "error", fmt.Sprintf("token refresh: %v", err))
+		}
 		return
 	}
 	a.mu.Lock()
@@ -206,21 +212,56 @@ func (a *feishuAdapter) run(ctx context.Context) {
 	safego.Go("im.feishu.tokenRefresh", func() { a.tokenRefreshLoop(ctx) })
 
 	// Start webhook server if port configured (legacy mode)
+	var wsErr error
 	if a.webhookPort > 0 {
 		a.startWebhookServer(ctx)
 		<-ctx.Done()
 	} else {
 		// Default: use WebSocket long connection via Feishu SDK
-		a.runWebSocket(ctx)
+		wsErr = a.runWebSocket(ctx)
 	}
 
 	a.mu.Lock()
 	a.connected = false
 	a.mu.Unlock()
-	a.publishState(false, "stopped", "")
+	if wsErr != nil {
+		// WS client failure must surface as an error state, not "stopped" (#540).
+		a.publishState(false, "error", wsErr.Error())
+	} else {
+		a.publishState(false, "stopped", "")
+	}
 }
 
-func (a *feishuAdapter) runWebSocket(ctx context.Context) {
+// fetchTokenWithRetry performs the startup token fetch with backoff retries.
+// It keeps retrying (at the capped delay) until success or ctx cancellation,
+// matching the other adapters' reconnect semantics; backoffs is injectable so
+// tests can use sub-millisecond delays (#540).
+func (a *feishuAdapter) fetchTokenWithRetry(ctx context.Context, backoffs []time.Duration) error {
+	if len(backoffs) == 0 {
+		backoffs = []time.Duration{time.Second}
+	}
+	attempt := 0
+	for {
+		err := a.refreshToken(ctx)
+		if err == nil {
+			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		delay := backoffs[min(attempt, len(backoffs)-1)]
+		attempt++
+		a.publishState(false, "error", fmt.Sprintf("token refresh: %v (retrying in %v)", err, delay))
+		debug.Log("feishu", "adapter=%s startup token refresh failed (attempt %d), retrying in %v: %v", a.name, attempt, delay, err)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(delay):
+		}
+	}
+}
+
+func (a *feishuAdapter) runWebSocket(ctx context.Context) error {
 	// We bypass the SDK's WS client entirely because it silently drops
 	// MessageTypeCard frames (case MessageTypeCard: return in handleDataFrame).
 	// Instead, we establish our own single WS connection that handles both
@@ -263,15 +304,23 @@ func (a *feishuAdapter) runWebSocket(ctx context.Context) {
 	debug.Log("feishu", "adapter=%s WS connected (SDK client)", a.name)
 
 	if err := wsClient.Start(ctx); err != nil {
+		a.mu.Lock()
+		a.connected = false
+		a.mu.Unlock()
 		if ctx.Err() != nil {
-			return
+			return nil
 		}
 		debug.Log("feishu", "adapter=%s SDK WS client exited: %v", a.name, err)
+		// Surface the failure as an error state instead of only logging it —
+		// the optimistic "online" published above would otherwise stand
+		// uncorrected (#540).
+		return fmt.Errorf("ws client: %w", err)
 	}
 
 	a.mu.Lock()
 	a.connected = false
 	a.mu.Unlock()
+	return nil
 }
 
 // handleCardActionTrigger processes a card action callback received via

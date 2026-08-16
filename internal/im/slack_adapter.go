@@ -345,6 +345,13 @@ func (a *slackAdapter) handleMessage(ctx context.Context, event map[string]any) 
 		}
 	}
 
+	// Strip the bot's own @-mention token. In channels the only way to
+	// trigger the bot is an @-mention, and Slack renders it as a literal
+	// "<@U123>" token in the text field; without stripping, commands like
+	// "<@U123> /status" don't satisfy HasPrefix("/") and approval replies
+	// ("<@U123> y") fail to match the exact approval vocabulary (#540).
+	// Mentions of OTHER users are preserved.
+	text = a.stripBotMention(text)
 	text = strings.TrimSpace(text)
 	if text == "" && len(attachments) == 0 {
 		return
@@ -395,6 +402,37 @@ func (a *slackAdapter) handleMessage(ctx context.Context, event map[string]any) 
 			a.publishState(false, "warning", err.Error())
 		}
 	}
+}
+
+// stripBotMention removes the bot's own mention token from an inbound text.
+// Slack represents user mentions as "<@U123>" (or "<@U123|display name>")
+// literal tokens. Only the bot's own ID is removed; mentions of other users
+// are meaningful and preserved (#540).
+func (a *slackAdapter) stripBotMention(text string) string {
+	a.mu.RLock()
+	botID := a.botUserID
+	a.mu.RUnlock()
+	if botID == "" || text == "" {
+		return text
+	}
+	// Simple form: <@U123>
+	text = strings.ReplaceAll(text, "<@"+botID+">", "")
+	// Labelled form: <@U123|display name> — remove through the closing '>'.
+	labelled := "<@" + botID + "|"
+	for {
+		idx := strings.Index(text, labelled)
+		if idx < 0 {
+			break
+		}
+		end := idx + len(labelled)
+		if close := strings.IndexByte(text[end:], '>'); close >= 0 {
+			end += close + 1
+		} else {
+			end = len(text)
+		}
+		text = text[:idx] + text[end:]
+	}
+	return text
 }
 
 // processSlackAttachments extracts file attachments (images, audio, files) from a Slack message event.
