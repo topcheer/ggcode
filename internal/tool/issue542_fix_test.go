@@ -245,8 +245,9 @@ func TestIsEmptyValue_WhitespaceStringIsEmpty(t *testing.T) {
 		`"a"`:   false,
 		`" a "`: false,
 		`null`:  true,
-		`[]`:    true,
-		`{}`:    true,
+		// #568: explicit empty containers are provided values.
+		`[]`:    false,
+		`{}`:    false,
 		`0`:     false,
 		`false`: false,
 	}
@@ -275,17 +276,27 @@ func TestValidateRequiredParams_WhitespaceBypass(t *testing.T) {
 	}
 }
 
-// TestValidateRequiredParams_EmptyArrayStillEmpty: regression guard — the
-// other empty-value shapes keep their semantics.
-func TestValidateRequiredParams_EmptyArrayStillEmpty(t *testing.T) {
+// TestValidateRequiredParams_ExplicitEmptyIsProvided: regression guard for
+// #568 — an explicit [] or {} counts as provided; absent and null stay missing.
+func TestValidateRequiredParams_ExplicitEmptyIsProvided(t *testing.T) {
 	schema := json.RawMessage(`{"type":"object","properties":{"files":{"type":"array"}},"required":["files"]}`)
-	if msg := ValidateRequiredParams(schema, json.RawMessage(`{"files":[]}`)); msg == "" {
-		t.Fatal("empty array must still be flagged missing")
+	if msg := ValidateRequiredParams(schema, json.RawMessage(`{"files":[]}`)); msg != "" {
+		t.Fatalf("explicit empty array must be provided, got: %s", msg)
 	}
 	if msg := ValidateRequiredParams(schema, json.RawMessage(`{"files":["a"]}`)); msg != "" {
 		t.Fatalf("non-empty array flagged: %s", msg)
 	}
 	if msg := ValidateRequiredParams(schema, json.RawMessage(`{"files":0}`)); msg != "" {
 		t.Fatalf("numeric 0 must be considered present: %s", msg)
+	}
+	if msg := ValidateRequiredParams(schema, json.RawMessage(`{}`)); msg == "" {
+		t.Fatal("absent required field must still be flagged missing")
+	}
+	if msg := ValidateRequiredParams(schema, json.RawMessage(`{"files":null}`)); msg == "" {
+		t.Fatal("null required field must still be flagged missing")
+	}
+	objSchema := json.RawMessage(`{"type":"object","properties":{"opts":{"type":"object"}},"required":["opts"]}`)
+	if msg := ValidateRequiredParams(objSchema, json.RawMessage(`{"opts":{}}`)); msg != "" {
+		t.Fatalf("explicit empty object must be provided, got: %s", msg)
 	}
 }

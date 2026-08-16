@@ -9,15 +9,40 @@ import (
 	"strings"
 )
 
+// expandHomePath expands a leading tilde to the user's home directory (#568).
+// `~`, `~/`, and `~/x` resolve under $HOME; `~user` (another user's home) is
+// left untouched — only the current user's tilde is expanded here. When HOME
+// is not set the path is returned unchanged so callers keep their existing
+// behavior instead of silently writing into a literal "~" directory.
+func expandHomePath(path string) string {
+	if len(path) == 0 || path[0] != '~' {
+		return path
+	}
+	if len(path) == 1 || path[1] == '/' {
+		home, err := os.UserHomeDir()
+		if err != nil || home == "" {
+			return path
+		}
+		if len(path) == 1 {
+			return home
+		}
+		return filepath.Join(home, path[2:])
+	}
+	return path // "~user" or "~user/x" — not the current user's home
+}
+
 // resolveToolPath resolves a tool file path against the tool's WorkingDir.
 // Relative paths are joined with workingDir so sub-agent calls with relative
 // paths do not silently land in the process CWD (#542). If the path is already
-// absolute it is used as-is (after cleaning).
+// absolute it is used as-is (after cleaning). A leading ~ is expanded to the
+// user's home directory so weak-model paths like "~/notes.txt" do not land in
+// a literal "~" directory under the working dir (#568).
 func resolveToolPath(path, workingDir string) (string, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return "", fmt.Errorf("path is required")
 	}
+	path = expandHomePath(path)
 	if !filepath.IsAbs(path) {
 		path = filepath.Join(workingDir, path)
 	}

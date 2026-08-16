@@ -256,11 +256,18 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 		args.Timeout = maxCommandTimeoutSeconds
 	}
 
+	// #568: GUI commands also return immediately after Start — if their ctx
+	// derived from the request context, the deferred cancel would SIGTERM and
+	// then SIGKILL the app within ~100ms of the tool call returning, while the
+	// success message ("GUI application launched") still told the agent it
+	// worked. GUI apps must live on a Background-derived ctx like managed jobs.
+	isGUI := isGUICommand(args.Command)
 	var cmdCtx context.Context
 	var cancel context.CancelFunc
-	if t.JobManager != nil {
-		// Managed background jobs outlive this tool call, so their context must
-		// not derive from the request context or be deferred here.
+	if t.JobManager != nil || isGUI {
+		// Managed background jobs and detached GUI apps outlive this tool
+		// call, so their context must not derive from the request context or
+		// be deferred here.
 		cmdCtx, cancel = context.WithTimeout(context.Background(), time.Duration(args.Timeout)*time.Second)
 	} else {
 		cmdCtx, cancel = context.WithTimeout(ctx, time.Duration(args.Timeout)*time.Second)
@@ -340,12 +347,21 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 	}
 
 	// GUI commands: start and return immediately.
-	if isGUICommand(args.Command) {
+	if isGUI {
 		if err := cmd.Start(); err != nil {
+			// Release the timeout timer now — nothing else owns cancel on this
+			// early-return path.
+			cancel()
 			return Result{IsError: true, Content: fmt.Sprintf("failed to start GUI command: %v", err)}, nil
 		}
-		// Detach — don't wait for exit
-		safego.Go("tool.runCommand.guiWait", func() { _ = cmd.Wait() })
+		// Detach — don't wait for exit. The guiWait goroutine owns cancel: the
+		// timeout clock only fires after the app process has actually exited,
+		// so a long-lived GUI app is never killed by the tool call returning
+		// (#568).
+		safego.Go("tool.runCommand.guiWait", func() {
+			_ = cmd.Wait()
+			cancel()
+		})
 		return Result{Content: fmt.Sprintf("GUI application launched (pid %d).", cmd.Process.Pid)}, nil
 	}
 

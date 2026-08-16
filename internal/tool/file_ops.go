@@ -131,7 +131,7 @@ func (t FileOps) Execute(ctx context.Context, input json.RawMessage) (Result, er
 		if action != "delete" && action != "move" && action != "mkdir" {
 			return Result{IsError: true, Content: fmt.Sprintf("operations[%d]: invalid action %q (must be delete, move, or mkdir)", i, a.Action)}, nil
 		}
-		src, err := cleanAbsolutePath(a.Source)
+		src, err := cleanAbsolutePath(expandHomePath(a.Source))
 		if err != nil {
 			return Result{IsError: true, Content: fmt.Sprintf("operations[%d]: invalid source path %q: %v", i, a.Source, err)}, nil
 		}
@@ -140,7 +140,7 @@ func (t FileOps) Execute(ctx context.Context, input json.RawMessage) (Result, er
 			if a.Destination == "" {
 				return Result{IsError: true, Content: fmt.Sprintf("operations[%d]: move requires a destination", i)}, nil
 			}
-			dst, err = cleanAbsolutePath(a.Destination)
+			dst, err = cleanAbsolutePath(expandHomePath(a.Destination))
 			if err != nil {
 				return Result{IsError: true, Content: fmt.Sprintf("operations[%d]: invalid destination path %q: %v", i, a.Destination, err)}, nil
 			}

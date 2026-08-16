@@ -260,7 +260,9 @@ func (t ReadMCPResourceTool) Execute(ctx context.Context, input json.RawMessage)
 	// can be arbitrarily large. 50KB matches mcpTool.Execute's cap.
 	const maxMCPResourceBytes = 50 * 1024
 	if len(out) > maxMCPResourceBytes {
-		out = out[:maxMCPResourceBytes] +
+		// #568: byte slicing split multi-byte runes and left U+FFFD shards.
+		// Use the rune-boundary-safe truncator from #262's sibling path.
+		out = truncateUTF8Safe(out, maxMCPResourceBytes) +
 			fmt.Sprintf("\n\n[... MCP resource truncated: %d bytes total, showing first %d ...]",
 				len(out), maxMCPResourceBytes)
 	}

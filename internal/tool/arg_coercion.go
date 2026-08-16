@@ -88,9 +88,87 @@ func coerceValue(fieldSchema, val json.RawMessage) (json.RawMessage, bool) {
 		return coerceNumber(val)
 	case "boolean":
 		return coerceBoolean(val)
+	case "array":
+		return coerceArrayValue(fieldSchema, val)
+	case "object":
+		return coerceObjectValue(fieldSchema, val)
 	default:
 		return val, false
 	}
+}
+
+// coerceArrayValue recursively coerces each element of a JSON array against
+// the schema's "items" declaration (#568). Coercion previously stopped at
+// the top level, so MCP tool schemas declaring arrays of objects kept
+// string-encoded numbers/booleans from weak models unconverted.
+func coerceArrayValue(fieldSchema, val json.RawMessage) (json.RawMessage, bool) {
+	s := strings.TrimSpace(string(val))
+	if s == "" || s == "null" || s[0] != '[' {
+		return val, false // not an array — nothing to coerce
+	}
+	var spec struct {
+		Items json.RawMessage `json:"items"`
+	}
+	if err := json.Unmarshal(fieldSchema, &spec); err != nil || len(spec.Items) == 0 {
+		return val, false // no item schema — leave alone
+	}
+	var items []json.RawMessage
+	if err := json.Unmarshal(val, &items); err != nil {
+		return val, false
+	}
+	changed := false
+	for i, item := range items {
+		if coerced, ok := coerceValue(spec.Items, item); ok {
+			items[i] = coerced
+			changed = true
+		}
+	}
+	if !changed {
+		return val, false
+	}
+	out, err := json.Marshal(items)
+	if err != nil {
+		return val, false
+	}
+	return out, true
+}
+
+// coerceObjectValue recursively coerces the properties of a JSON object
+// against the schema's "properties" declarations (#568).
+func coerceObjectValue(fieldSchema, val json.RawMessage) (json.RawMessage, bool) {
+	s := strings.TrimSpace(string(val))
+	if s == "" || s == "null" || s[0] != '{' {
+		return val, false // not an object — nothing to coerce
+	}
+	var spec struct {
+		Properties map[string]json.RawMessage `json:"properties"`
+	}
+	if err := json.Unmarshal(fieldSchema, &spec); err != nil || len(spec.Properties) == 0 {
+		return val, false // no property schemas — leave alone
+	}
+	var objMap map[string]json.RawMessage
+	if err := json.Unmarshal(val, &objMap); err != nil {
+		return val, false
+	}
+	changed := false
+	for fieldName, propSchema := range spec.Properties {
+		existing, ok := objMap[fieldName]
+		if !ok {
+			continue
+		}
+		if coerced, done := coerceValue(propSchema, existing); done {
+			objMap[fieldName] = coerced
+			changed = true
+		}
+	}
+	if !changed {
+		return val, false
+	}
+	out, err := json.Marshal(objMap)
+	if err != nil {
+		return val, false
+	}
+	return out, true
 }
 
 // coerceInteger converts string-encoded integers to actual integers.
@@ -168,8 +246,10 @@ func coerceBoolean(val json.RawMessage) (json.RawMessage, bool) {
 // fixes types, validation catches omissions.
 //
 // A field is considered "missing" when it is absent from the arguments JSON,
-// null, an empty string, or an empty array/object. Numeric and boolean
-// values (including 0 and false) are always considered present.
+// null, or an empty/whitespace-only string. An explicit empty array [] or
+// object {} counts as provided — it carries meaning (e.g. clearing a list).
+// Numeric and boolean values (including 0 and false) are always considered
+// present.
 func ValidateRequiredParams(schema json.RawMessage, args json.RawMessage) string {
 	if len(schema) == 0 || len(args) == 0 {
 		return ""
@@ -215,17 +295,18 @@ func ValidateRequiredParams(schema json.RawMessage, args json.RawMessage) string
 }
 
 // isEmptyValue returns true if a JSON RawMessage represents an empty value:
-// null, empty string "", empty array [], or empty object {}.
+// null, empty string "", or a whitespace-only string.
+//
+// Explicit empty arrays [] and objects {} are NOT empty — they are provided
+// values with meaning (todo_write {"todos":[]} legitimately clears the list;
+// flagging them missing made the model retry the same call in a loop, #568).
 // Numbers (including 0) and booleans (including false) are NOT empty.
-// Whitespace-only strings (" ", "\t") are empty too (#542) — consistent with
+// Whitespace-only strings (" ", "\t") are empty (#542) — consistent with
 // CheckRequired's Trim behavior in tool.go, they must not slip past the
 // required-param gateway.
 func isEmptyValue(val json.RawMessage) bool {
 	s := strings.TrimSpace(string(val))
 	if s == "" || s == "null" {
-		return true
-	}
-	if s == "[]" || s == "{}" {
 		return true
 	}
 	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
