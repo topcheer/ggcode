@@ -7,14 +7,22 @@ import (
 )
 
 const (
-	defaultASCIIRatio   = 3.5 // chars per token for ASCII text
-	defaultCJKRatio     = 1.5 // chars per token for CJK text
+	defaultASCIIRatio = 3.5 // chars per token for ASCII text
+	// #515: 1.0 chars/token ≈ 1 token per CJK character. The old 1.5 assumed
+	// BPE-level compaction that modern tokenizers (cl100k, Claude, GLM) do not
+	// deliver for common Han characters (1.0–1.5+ tokens/char) — combined with
+	// cjkRatioMin=1.0 the underestimate was mathematically uncapped, delaying
+	// auto-compact in Chinese-heavy sessions until the provider hard-errors.
+	defaultCJKRatio     = 1.0 // chars per token for CJK text
 	calibWarmupSamples  = 5   // samples before calibration starts
 	calibAdjustInterval = 3   // adjust every N samples after warmup
 	asciiRatioMin       = 3.0
 	asciiRatioMax       = 5.0
-	cjkRatioMin         = 1.0
-	cjkRatioMax         = 2.0
+	// #515: allow the calibrator to reach 0.6 chars/token (≈1.67 tokens/char)
+	// so models that spend 1.5+ tokens per Han character can be fully
+	// corrected. The old floor of 1.0 capped correction ~45% low for them.
+	cjkRatioMin = 0.6
+	cjkRatioMax = 2.0
 )
 
 // TokenCalibrator self-calibrates the char/token ratio using API feedback.

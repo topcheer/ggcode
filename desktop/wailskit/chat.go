@@ -508,12 +508,19 @@ func (b *ChatBridge) sendMessageData(data tunnel.MessageData, source string, exc
 
 	if b.agent == nil {
 		if err := b.InitAgent(ctx); err != nil {
+			// #514: finishRun sends run_done (the ONLY path that clears the
+			// frontend busy state) + tunnel idle + LAN cleanup. b.cancel is
+			// already installed and b.finished was reset above, so skipping
+			// it left the frontend stuck streaming on agent-init failure.
+			b.finishRun(err)
 			return fmt.Errorf("init agent: %w", err)
 		}
 	}
 
 	// Ensure we have a session (mirrors Fyne bridge.ensureSession)
 	if err := b.ensureSession(); err != nil {
+		// #514: same finishRun obligation as InitAgent above.
+		b.finishRun(err)
 		return fmt.Errorf("ensure session: %w", err)
 	}
 	// Rebind the per-session projection broker before every run so subsequent
@@ -4005,6 +4012,7 @@ func (b *ChatBridge) SendContent(content []provider.ContentBlock) error {
 	b.cancelled = false
 	b.finished = false // reset per-run finish guard (#223)
 	b.usageTurnIndex++
+	b.startDesktopTurnLocked() // #514: open a real desktop turn — without it run_done carries the previous turn's (or empty) turn_id and liveHistory appends this run's reply onto the stale turn's assistant message
 	b.startTime = time.Now()
 	b.runSes = b.currentSes // #270: persist-path snapshot, same critical section as b.cancel
 	b.mu.Unlock()
@@ -4026,7 +4034,31 @@ func (b *ChatBridge) SendContent(content []provider.ContentBlock) error {
 			if pending.Hidden {
 				_ = b.SendHiddenText(pending.Text)
 			} else {
-				_ = b.SendMessage(pending.Text)
+				// #514: mirror sendMessageData's drain path (#461/#475) — a
+				// visible queued message must pop its OWN source/exclude pair
+				// (FIFO, index-aligned) and replay its tunnel.MessageData via
+				// sendMessageData so mobile Meta (attachments/source) survives.
+				// The old plain SendMessage left pendingSource[0] behind for the
+				// NEXT consume — source misattribution (desktop msgs tagged
+				// source=im, Telegram echo) and unbounded slice skew (#477 class).
+				data := tunnel.MessageData{Text: pending.Text}
+				src := "desktop"
+				exclude := ""
+				if pending.Meta != nil {
+					data = *pending.Meta
+					src = "mobile"
+				}
+				b.mu.Lock()
+				if len(b.pendingSource) > 0 {
+					src = b.pendingSource[0]
+					b.pendingSource = b.pendingSource[1:]
+				}
+				if len(b.pendingExclude) > 0 {
+					exclude = b.pendingExclude[0]
+					b.pendingExclude = b.pendingExclude[1:]
+				}
+				b.mu.Unlock()
+				_ = b.sendMessageData(data, src, exclude)
 			}
 		}
 	}()

@@ -17,7 +17,12 @@ import (
 
 const (
 	defaultCommandTimeout = 30 * time.Minute
-	maxCommandLogLines    = 400
+	// #513: hard ceiling for user-provided timeout seconds. The naive
+	// time.Duration(sec)*time.Second multiplication overflows int64 above
+	// ~9.22e9 seconds (wraps negative → WithTimeout expires instantly) —
+	// clamp before multiplying anywhere a seconds value enters Duration math.
+	maxCommandTimeoutSeconds = 86400 // one day
+	maxCommandLogLines       = 400
 )
 
 type CommandJobStatus string
@@ -356,7 +361,7 @@ func (m *CommandJobManager) snapshot(job *CommandJob) CommandJobSnapshot {
 		Timeout:       job.Timeout,
 		StartedAt:     job.StartedAt,
 		EndedAt:       job.EndedAt,
-		TotalLines:    job.TotalLines + partialLineCount(job.partial),
+		TotalLines:    job.TotalLines, // #513: completed lines only — the trailing partial line is NOT counted; once the next chunk completes it, appendOutput increments TotalLines and since_line polling returns it (counting the partial here made the merged complete line permanently invisible to pollers).
 		BufferedFrom:  job.BufferedFrom,
 		Lines:         lines,
 		Duration:      endedAt.Sub(job.StartedAt).Round(time.Second),
@@ -554,7 +559,7 @@ func isFinishedCommandStatus(status CommandJobStatus) bool {
 	}
 }
 
-func waitForCommandJob(_ context.Context, job *CommandJob, wait time.Duration) error {
+func waitForCommandJob(ctx context.Context, job *CommandJob, wait time.Duration) error {
 	if isFinishedCommandStatus(jobSnapshotStatus(job)) {
 		return nil
 	}
@@ -568,6 +573,11 @@ func waitForCommandJob(_ context.Context, job *CommandJob, wait time.Duration) e
 		return nil
 	case <-timer.C:
 		return nil
+	// #513: honor caller cancellation — the discarded ctx made a cancelled
+	// caller wait out the full poll window (API trap for callers that DO pass
+	// a meaningful context).
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 

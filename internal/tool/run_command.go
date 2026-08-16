@@ -157,7 +157,8 @@ func (t RunCommand) Parameters() json.RawMessage {
 		},
 		"timeout": {
 			"type": "integer",
-			"description": "Timeout in seconds (default: 1800)"
+			"description": "Timeout in seconds (default: 1800, max: 86400)",
+			"maximum": 86400
 		},
 		"description": {
 			"type": "string",
@@ -245,6 +246,14 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 
 	if args.Timeout <= 0 {
 		args.Timeout = int(defaultCommandTimeout / time.Second)
+	}
+	// #513: clamp before the seconds→nanoseconds multiplication.
+	// time.Duration(x)*time.Second has no overflow guard — e.g. 9223372037s
+	// wraps negative (WithTimeout expires instantly, command killed at 0s)
+	// and 18446744074s wraps to a positive ~290ms. Values above one day
+	// are never meaningful for a shell command.
+	if args.Timeout > maxCommandTimeoutSeconds {
+		args.Timeout = maxCommandTimeoutSeconds
 	}
 
 	var cmdCtx context.Context

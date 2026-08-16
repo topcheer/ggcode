@@ -86,25 +86,22 @@ func TestCommandJobManagerOwnerContextCancellationDoesNotStopJob(t *testing.T) {
 	}
 }
 
-func TestCommandJobManagerWaitIgnoresCancelledContext(t *testing.T) {
-	// After the fix, wait_command does not propagate request context
-	// cancellation. It waits for the specified duration or job completion.
+func TestCommandJobManagerWaitHonoursCancelledContext(t *testing.T) {
+	// #513: waitForCommandJob honors caller cancellation. A cancelled
+	// context returns ctx.Err() immediately instead of waiting out the
+	// poll window (the old discard-ctx behavior was an API trap).
 	mgr := NewCommandJobManager(t.TempDir())
 	started, err := mgr.Start(context.Background(), "sleep 5", false, 30*time.Second)
 	if err != nil {
 		t.Fatalf("start command job: %v", err)
 	}
 
-	// Wait with an already-cancelled context should still succeed.
 	waitCtx, cancel := context.WithCancel(context.Background())
 	cancel()
 
 	snap, err := mgr.Wait(waitCtx, started.ID, 1*time.Second, 20, 0)
-	if err != nil {
-		t.Fatalf("wait should not error on cancelled context: %v", err)
-	}
-	if snap.Status != CommandJobRunning {
-		t.Fatalf("expected running, got %s", snap.Status)
+	if err == nil {
+		t.Fatalf("expected context error on cancelled context, got snapshot: %+v", snap)
 	}
 
 	if _, err := mgr.Stop(started.ID); err != nil {

@@ -10,8 +10,8 @@ func TestTokenCalibrator_DefaultRatios(t *testing.T) {
 	if got := c.ASCIICharsPerToken(); got != 3.5 {
 		t.Errorf("default ASCII ratio = %v, want 3.5", got)
 	}
-	if got := c.CJKCharsPerToken(); got != 1.5 {
-		t.Errorf("default CJK ratio = %v, want 1.5", got)
+	if got := c.CJKCharsPerToken(); got != 1.0 {
+		t.Errorf("default CJK ratio = %v, want 1.0 (#515)", got)
 	}
 }
 
@@ -44,8 +44,8 @@ func TestTokenCalibrator_WarmupNoAdjust(t *testing.T) {
 	if got := c.ASCIICharsPerToken(); got != 3.5 {
 		t.Errorf("during warmup, ASCII ratio = %v, want 3.5 (no adjustment)", got)
 	}
-	if got := c.CJKCharsPerToken(); got != 1.5 {
-		t.Errorf("during warmup, CJK ratio = %v, want 1.5 (no adjustment)", got)
+	if got := c.CJKCharsPerToken(); got != 1.0 {
+		t.Errorf("during warmup, CJK ratio = %v, want 1.0 (no adjustment)", got)
 	}
 }
 
@@ -96,8 +96,8 @@ func TestTokenCalibrator_Reset(t *testing.T) {
 	if got := c.ASCIICharsPerToken(); got != 3.5 {
 		t.Errorf("after reset, ASCII ratio = %v, want 3.5", got)
 	}
-	if got := c.CJKCharsPerToken(); got != 1.5 {
-		t.Errorf("after reset, CJK ratio = %v, want 1.5", got)
+	if got := c.CJKCharsPerToken(); got != 1.0 {
+		t.Errorf("after reset, CJK ratio = %v, want 1.0", got)
 	}
 }
 
@@ -111,8 +111,8 @@ func TestTokenCalibrator_CompositionIsolation(t *testing.T) {
 	for i := 0; i < 11; i++ {
 		c.RecordSample(2000, 1000, 8000, 0)
 	}
-	if got := c.CJKCharsPerToken(); got != 1.5 {
-		t.Errorf("pure-ASCII samples must not move cjkRatio: got %v, want 1.5 (default, unobserved)", got)
+	if got := c.CJKCharsPerToken(); got != 1.0 {
+		t.Errorf("pure-ASCII samples must not move cjkRatio: got %v, want 1.0 (default, unobserved)", got)
 	}
 	if got := c.ASCIICharsPerToken(); got <= 3.5 {
 		t.Errorf("asciiRatio should have adjusted upward: got %v, want > 3.5", got)
@@ -126,8 +126,8 @@ func TestTokenCalibrator_CompositionIsolation(t *testing.T) {
 	if got := c2.ASCIICharsPerToken(); got != 3.5 {
 		t.Errorf("pure-CJK samples must not move asciiRatio: got %v, want 3.5", got)
 	}
-	if got := c2.CJKCharsPerToken(); got <= 1.5 {
-		t.Errorf("cjkRatio should have adjusted upward: got %v, want > 1.5", got)
+	if got := c2.CJKCharsPerToken(); got <= 1.0 {
+		t.Errorf("cjkRatio should have adjusted upward: got %v, want > 1.0", got)
 	}
 }
 
@@ -144,7 +144,7 @@ func TestTokenCalibrator_MixedSampleSplitsFactor(t *testing.T) {
 	pureA := pure.ASCIICharsPerToken()
 	mixedA := mixed.ASCIICharsPerToken()
 	mixedC := mixed.CJKCharsPerToken()
-	if mixedA <= 3.5 || mixedC <= 1.5 {
+	if mixedA <= 3.5 || mixedC <= 1.0 {
 		t.Errorf("mixed sample should adjust both ratios upward: ascii=%v cjk=%v", mixedA, mixedC)
 	}
 	// Mixed ASCII adjustment must be weaker than pure (share < 1).

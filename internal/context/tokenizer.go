@@ -25,8 +25,10 @@ func EstimateTokens(text string) int {
 			ascii++
 		}
 	}
-	// ASCII: ~3.5 chars/token, CJK: ~1.5 chars/token
-	return int(float64(ascii)/3.5) + cjk*2/3 + 1
+	// ASCII: ~3.5 chars/token, CJK: ~1.0 chars/token (#515 — the old 1.5
+	// chars/token ≈ 0.667 token/char underestimated modern tokenizers by
+	// 30–50%, delaying auto-compact in Chinese-heavy sessions).
+	return int(float64(ascii)/3.5) + cjk + 1
 }
 
 // EstimateTokensCalibrated uses calibrator ratios if available for a more

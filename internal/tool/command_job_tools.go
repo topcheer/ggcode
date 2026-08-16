@@ -463,5 +463,10 @@ func secondsToDuration(seconds int, fallback time.Duration) time.Duration {
 	if seconds <= 0 {
 		return fallback
 	}
+	// #513: clamp before multiplication — same overflow class as
+	// run_command.go (9223372037s wraps negative → instant kill).
+	if seconds > maxCommandTimeoutSeconds {
+		seconds = maxCommandTimeoutSeconds
+	}
 	return time.Duration(seconds) * time.Second
 }
