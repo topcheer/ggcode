@@ -268,7 +268,15 @@ func AddMCPServer(values map[string]string) error {
 // RemoveMCPServer removes an MCP server by name from the active session's
 // scope (workspace mcp_servers.yaml when bound to a workspace, else global).
 func RemoveMCPServer(name string) error {
-	cfg, err := loadSessionScopedConfig()
+	// #458: snapshot the bridge once so the scope decision and the Disconnect
+	// below see the same session even if a workspace switch interleaves.
+	// Without this, a switchWorkspace between loadSessionScopedConfig and the
+	// Disconnect below can leave the removed server connected in the old workspace
+	// while Disconnect operates on the new workspace's manager (#563).
+	globalMu.RLock()
+	chatSnap := activeChatBridge
+	globalMu.RUnlock()
+	cfg, err := loadSessionScopedConfigFor(chatSnap)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
@@ -281,12 +289,10 @@ func RemoveMCPServer(name string) error {
 	// Symmetric with SetMCPServerEnabled(false): disconnect immediately
 	// instead of waiting for the ~2s hot-reload poll (which may also miss
 	// workspace-scoped yaml changes) — without this the removed server's
-	// tools stayed callable during the window (#408).
-	globalMu.RLock()
-	chat := activeChatBridge
-	globalMu.RUnlock()
-	if chat != nil && chat.mcpManager != nil {
-		_ = chat.mcpManager.Disconnect(name)
+	// tools stayed callable during the window (#408). Uses chatSnap to
+	// ensure Disconnect targets the same session whose config we just saved.
+	if chatSnap != nil && chatSnap.mcpManager != nil {
+		_ = chatSnap.mcpManager.Disconnect(name)
 	}
 	return nil
 }
