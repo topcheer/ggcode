@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"sync"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -80,17 +81,44 @@ func redirectStderr() {
 	}()
 }
 
+// shouldRedirectStderr reports whether os.Stderr should be captured into the
+// debug log for this invocation. The redirect exists solely to protect the
+// TUI from stderr writes corrupting the drawing surface. Pipe mode
+// (`ggcode -p`) and non-TUI subcommands (`version`, `daemon`, `im`, ...) never
+// render the TUI, so redirecting buys nothing and actively swallows every
+// error message: RunPipe's fmt.Fprintf(os.Stderr, ...) paths and its os.Exit
+// calls happen deep inside cobra's RunE, where the restore-before-exit logic
+// below is structurally unreachable (#536). Skipping the redirect up front
+// keeps CI/scripts seeing real error output on stderr.
+func shouldRedirectStderr(args []string) bool {
+	for _, a := range args {
+		if a == "-p" || a == "--prompt" || strings.HasPrefix(a, "--prompt=") {
+			return false // pipe mode: errors must reach the caller's stderr
+		}
+	}
+	// A bare first argument that is not a flag is a subcommand
+	// (version, completion, daemon, im, mcp, llm-probe, acp, ...) — no TUI.
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		return false
+	}
+	return true
+}
+
 func main() {
 	defer debug.Close()
 
 	// Redirect os.Stderr at the file descriptor level. This catches ALL
 	// writes to stderr regardless of how the library obtained the fd:
 	// log.New(os.Stderr, ...), fmt.Fprint(os.Stderr, ...), etc.
-	redirectStderr()
+	// #536: skipped entirely for pipe mode and non-TUI subcommands so their
+	// error output reaches the real stderr instead of the debug ring buffer.
+	if shouldRedirectStderr(os.Args[1:]) {
+		redirectStderr()
 
-	// Also redirect the standard log package's default output.
-	log.SetOutput(logWriter{})
-	log.SetFlags(0)
+		// Also redirect the standard log package's default output.
+		log.SetOutput(logWriter{})
+		log.SetFlags(0)
+	}
 
 	cmd := NewRootCmd()
 	if err := cmd.Execute(); err != nil {

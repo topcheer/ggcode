@@ -43,12 +43,18 @@ func (s *JSONLStore) SearchSessions(query string, maxResults int) ([]SearchResul
 		return nil, err
 	}
 
-	// Sort by UpdatedAt descending so the most relevant / recent sessions
-	// are scanned first — important for the maxResults cutoff.
+	// Sort by UpdatedAt descending so the most recently active sessions are
+	// scanned first — a scan-order tiebreak only, since results are globally
+	// sorted by message timestamp before truncation below.
 	sort.Slice(idx, func(i, j int) bool {
 		return idx[i].UpdatedAt.After(idx[j].UpdatedAt)
 	})
 
+	// #536: collect ALL hits first, then sort by message timestamp, then
+	// truncate. Previously the scan stopped once maxResults hits were
+	// accumulated, so older hits from early-scanned (recently-updated)
+	// sessions evicted newer hits from later-scanned sessions — the final
+	// result was not "the N most recent matches".
 	var results []SearchResult
 	for _, e := range idx {
 		hits, err := searchInSessionFile(s.sessionPath(e.ID), e.Title, needle)
@@ -56,10 +62,6 @@ func (s *JSONLStore) SearchSessions(query string, maxResults int) ([]SearchResul
 			continue // skip unreadable sessions
 		}
 		results = append(results, hits...)
-		if maxResults > 0 && len(results) >= maxResults {
-			results = results[:maxResults]
-			break
-		}
 	}
 
 	// Sort results by timestamp descending (most recent first).
