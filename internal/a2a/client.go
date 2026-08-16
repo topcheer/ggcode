@@ -617,10 +617,44 @@ func (c *Client) rpc(ctx context.Context, method string, params interface{}, res
 	return nil
 }
 
-// decodeSSECtx is decodeSSE with ctx-guarded sends (#448): a consumer
-// that stops reading (cancel, timeout, early task-ID pickup) must not
-// leave this goroutine blocked forever on ch <- with the HTTP body
-// unclosed.
+// emitSSEData parses one accumulated SSE event payload and sends it on ch.
+// Sends are ctx-guarded (#448). Returns false if ctx fired before the send,
+// so the caller can stop decoding. Unparseable payloads are dropped silently,
+// matching the original per-event behavior.
+func emitSSEData(ctx context.Context, ch chan<- JSONRPCResponse, data string) bool {
+	var resp JSONRPCResponse
+	if json.Unmarshal([]byte(data), &resp) != nil {
+		return true
+	}
+	select {
+	case ch <- resp:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// emitSSEFailure sends the terminal JSON-RPC internal-error event for a
+// failed stream read (#565 F) so the consumer sees the stream died instead
+// of waiting forever on a silently truncated one.
+func emitSSEFailure(ctx context.Context, ch chan<- JSONRPCResponse, err error) {
+	select {
+	case ch <- JSONRPCResponse{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`1`),
+		Error: &JSONRPCError{
+			Code:    -32603,
+			Message: fmt.Sprintf("SSE stream read failed: %v", err),
+		},
+	}:
+	case <-ctx.Done():
+	}
+}
+
+// decodeSSECtx reads Server-Sent Events from r and sends them on ch. Sends
+// are ctx-guarded (#448): a consumer that stops reading (cancel, timeout,
+// early task-ID pickup) must not leave this goroutine blocked forever on
+// ch <- with the HTTP body unclosed.
 func decodeSSECtx(ctx context.Context, r io.Reader, ch chan<- JSONRPCResponse) {
 	scanner := bufio.NewScanner(r)
 	// #565 F: default 64KB token limit silently aborted mid-event on large
@@ -634,19 +668,13 @@ func decodeSSECtx(ctx context.Context, r io.Reader, ch chan<- JSONRPCResponse) {
 	for scanner.Scan() {
 		line := scanner.Text()
 
-		// Blank line = event boundary. Flush accumulated data.
+		// Blank line = event boundary: flush accumulated data.
 		if line == "" {
 			if dataBuf.Len() > 0 {
-				data := dataBuf.String()
-				dataBuf.Reset()
-				var resp JSONRPCResponse
-				if json.Unmarshal([]byte(data), &resp) == nil {
-					select {
-					case ch <- resp:
-					case <-ctx.Done():
-						return
-					}
+				if !emitSSEData(ctx, ch, dataBuf.String()) {
+					return
 				}
+				dataBuf.Reset()
 			}
 			continue
 		}
@@ -656,7 +684,8 @@ func decodeSSECtx(ctx context.Context, r io.Reader, ch chan<- JSONRPCResponse) {
 			continue
 		}
 
-		// Accumulate data lines.
+		// Accumulate data lines. Other SSE fields (event:, id:, retry:)
+		// are silently ignored.
 		if strings.HasPrefix(line, "data: ") {
 			dataBuf.WriteString(strings.TrimPrefix(line, "data: "))
 			dataBuf.WriteByte('\n')
@@ -665,121 +694,32 @@ func decodeSSECtx(ctx context.Context, r io.Reader, ch chan<- JSONRPCResponse) {
 			dataBuf.WriteString(strings.TrimPrefix(line, "data:"))
 			dataBuf.WriteByte('\n')
 		}
-		// Other SSE fields (event:, id:, retry:) are silently ignored.
 	}
 
 	// #565 F: scanner errors were swallowed — a token-too-long abort looked
-	// like a normal EOF. Surface it as a JSON-RPC internal-error response so
-	// the consumer sees the stream failed instead of waiting forever.
+	// like a normal EOF. Best-effort flush of a complete trailing event,
+	// then the error terminal event.
 	if err := scanner.Err(); err != nil {
 		if dataBuf.Len() > 0 {
-			// Best-effort flush of a complete event before the failure point.
-			data := strings.TrimRight(dataBuf.String(), "\n")
-			var resp JSONRPCResponse
-			if json.Unmarshal([]byte(data), &resp) == nil {
-				select {
-				case ch <- resp:
-				case <-ctx.Done():
-				}
-			}
+			emitSSEData(ctx, ch, strings.TrimRight(dataBuf.String(), "\n"))
 		}
-		select {
-		case ch <- JSONRPCResponse{
-			JSONRPC: "2.0",
-			ID:      json.RawMessage(`1`),
-			Error: &JSONRPCError{
-				Code:    -32603,
-				Message: fmt.Sprintf("SSE stream read failed: %v", err),
-			},
-		}:
-		case <-ctx.Done():
-		}
+		emitSSEFailure(ctx, ch, err)
 		return
 	}
 
 	// Flush any remaining data at EOF.
 	if dataBuf.Len() > 0 {
-		data := strings.TrimRight(dataBuf.String(), "\n")
-		var resp JSONRPCResponse
-		if json.Unmarshal([]byte(data), &resp) == nil {
-			select {
-			case ch <- resp:
-			case <-ctx.Done():
-			}
-		}
+		emitSSEData(ctx, ch, strings.TrimRight(dataBuf.String(), "\n"))
 	}
 }
 
 // decodeSSE reads Server-Sent Events from a reader and sends them on ch.
 // Handles multi-line data fields per SSE spec: consecutive "data:" lines are
-// joined with "\n" before parsing.
+// joined with "\n" before parsing. It is decodeSSECtx without cancellation —
+// context.Background() never fires, so every send is a plain blocking send,
+// byte-for-byte the legacy behavior (#565 F fix included).
 func decodeSSE(r io.Reader, ch chan<- JSONRPCResponse) {
-	scanner := bufio.NewScanner(r)
-	// #565 F: same 64KB silent-truncation + swallowed-error fix as decodeSSECtx.
-	scanner.Buffer(make([]byte, 64*1024), 8<<20)
-	var dataBuf strings.Builder
-
-	for scanner.Scan() {
-		line := scanner.Text()
-
-		// Blank line = event boundary. Flush accumulated data.
-		if line == "" {
-			if dataBuf.Len() > 0 {
-				data := dataBuf.String()
-				dataBuf.Reset()
-				var resp JSONRPCResponse
-				if json.Unmarshal([]byte(data), &resp) == nil {
-					ch <- resp
-				}
-			}
-			continue
-		}
-
-		// Comment lines (starting with ":") are ignored per SSE spec.
-		if strings.HasPrefix(line, ":") {
-			continue
-		}
-
-		// Accumulate data lines.
-		if strings.HasPrefix(line, "data: ") {
-			dataBuf.WriteString(strings.TrimPrefix(line, "data: "))
-			dataBuf.WriteByte('\n')
-		} else if strings.HasPrefix(line, "data:") {
-			// "data:" without space (also valid per spec).
-			dataBuf.WriteString(strings.TrimPrefix(line, "data:"))
-			dataBuf.WriteByte('\n')
-		}
-		// Other SSE fields (event:, id:, retry:) are silently ignored.
-	}
-
-	// #5565 F: propagate scanner errors instead of treating them as EOF.
-	if err := scanner.Err(); err != nil {
-		if dataBuf.Len() > 0 {
-			data := strings.TrimRight(dataBuf.String(), "\n")
-			var resp JSONRPCResponse
-			if json.Unmarshal([]byte(data), &resp) == nil {
-				ch <- resp
-			}
-		}
-		ch <- JSONRPCResponse{
-			JSONRPC: "2.0",
-			ID:      json.RawMessage(`1`),
-			Error: &JSONRPCError{
-				Code:    -32603,
-				Message: fmt.Sprintf("SSE stream read failed: %v", err),
-			},
-		}
-		return
-	}
-
-	// Flush any remaining data at EOF.
-	if dataBuf.Len() > 0 {
-		data := strings.TrimRight(dataBuf.String(), "\n")
-		var resp JSONRPCResponse
-		if json.Unmarshal([]byte(data), &resp) == nil {
-			ch <- resp
-		}
-	}
+	decodeSSECtx(context.Background(), r, ch)
 }
 
 // schemeNames extracts scheme type names for error messages.
