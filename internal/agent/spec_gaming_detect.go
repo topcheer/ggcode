@@ -36,6 +36,14 @@ package agent
 //      when the task is a bug fix or feature implementation (not a CI change)
 //
 // The detector fires AT MOST ONCE per run.
+//
+// #544 fixes (false-positive control):
+//   - Pattern 2 excludes read-only investigative commands (grep/rg/find/
+//     cat/... and `git grep`): a reviewer grepping for "t.Skip(" to CHECK
+//     whether tests were bypassed is legitimate investigation, not gaming.
+//   - Pattern 1 gains a task-intent exemption: when the user's task IS
+//     writing/updating tests (prompt mentions test/测试/回归), editing only
+//     test files is the expected outcome, not reward hacking.
 
 import (
 	"fmt"
@@ -231,10 +239,75 @@ func isCIConfigPath(path string) bool {
 	return false
 }
 
+// readOnlySearchVerbs are shell commands whose sole purpose is reading or
+// searching. Skip markers appearing in these commands are investigative
+// (e.g. grep -rn "t.Skip(" . to check whether tests were bypassed), never
+// introduction of skip markers (#544 Bug C1).
+var readOnlySearchVerbs = map[string]bool{
+	"grep": true, "egrep": true, "fgrep": true, "rg": true, "ripgrep": true,
+	"ag": true, "ack": true, "find": true, "cat": true, "head": true,
+	"tail": true, "less": true, "more": true, "wc": true, "git": false, // git handled below (nested subcommand)
+}
+
+// isReadOnlySearchCommand returns true when the shell command's effective
+// verb is a read-only search/read tool. Leading environment assignments
+// (FOO=bar cmd) are skipped so they cannot disguise the verb.
+func isReadOnlySearchCommand(cmd string) bool {
+	fields := strings.Fields(cmd)
+	idx := 0
+	// Skip leading env assignments (VAR=value) and no-op wrappers.
+	for idx < len(fields) && (strings.Contains(fields[idx], "=") || fields[idx] == "sudo" || fields[idx] == "command" || fields[idx] == "env") {
+		idx++
+	}
+	if idx >= len(fields) {
+		return false
+	}
+	verb := filepath.Base(fields[idx])
+	if readOnlySearchVerbs[verb] {
+		return true
+	}
+	// `git grep ...` is read-only investigation; other git subcommands fall
+	// through to the default (not classified as search).
+	if verb == "git" && idx+1 < len(fields) && fields[idx+1] == "grep" {
+		return true
+	}
+	return false
+}
+
+// isTestWritingTask returns true when the user's prompt indicates the task
+// itself is writing or updating tests. For such tasks, editing only test
+// files is the expected outcome — Pattern 1 must not fire (#544 Bug C2).
+// English keywords match whole words only (same tokenization as
+// isCIRelatedTask's #501 fix) to avoid substring hits like "latest".
+func isTestWritingTask(userPrompt string) bool {
+	lower := strings.ToLower(userPrompt)
+	// CJK keywords: substring match is safe (no substring collision risk).
+	for _, kw := range []string{"测试", "回归", "用例"} {
+		if strings.Contains(lower, kw) {
+			return true
+		}
+	}
+	words := strings.FieldsFunc(lower, func(r rune) bool {
+		return (r < 'a' || r > 'z') && (r < '0' || r > '9')
+	})
+	for _, w := range words {
+		switch w {
+		case "test", "tests", "testing", "unittest", "unittests":
+			return true
+		}
+	}
+	return false
+}
+
 // hasSkipMarkersInCommands checks if any run_command/start_command input
-// contains test skip/ignore markers.
+// contains test skip/ignore markers. Read-only investigative commands
+// (grep/search class) are excluded first (#544): grepping FOR a skip marker
+// is how a reviewer verifies tests were not bypassed.
 func hasSkipMarkersInCommands(commands []string) bool {
 	for _, cmd := range commands {
+		if isReadOnlySearchCommand(cmd) {
+			continue
+		}
 		lower := strings.ToLower(cmd)
 		for _, marker := range skipMarkers {
 			if strings.Contains(lower, strings.ToLower(marker)) {
@@ -295,8 +368,10 @@ func (a *Agent) checkSpecGaming(stats *RunStats, userPrompt string) string {
 		}
 	}
 
-	if len(testFiles) > 0 && len(sourceFiles) == 0 {
-		// Only test files were edited -- check if corresponding source exists
+	if len(testFiles) > 0 && len(sourceFiles) == 0 && !isTestWritingTask(userPrompt) {
+		// Only test files were edited -- check if corresponding source exists.
+		// Exempted when the task itself is to write/update tests (#544): the
+		// reviewer's own run hit this while legitimately writing tests.
 		warnings = append(warnings, fmt.Sprintf(
 			"Only test files were modified (%s) but no source files. "+
 				"Ensure you are fixing the actual code, not just modifying tests to pass.",

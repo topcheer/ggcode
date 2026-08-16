@@ -85,9 +85,12 @@ func ApplyToolCallBudget(agentInst *agent.Agent, cfg *config.Config) {
 	if agentInst == nil || cfg == nil {
 		return
 	}
-	if cfg.ToolCallBudget > 0 {
-		agentInst.SetToolCallBudget(cfg.ToolCallBudget)
-	}
+	// Always propagate, including 0 (#543): a config reload that removes
+	// tool_call_budget must reset any previously applied explicit budget,
+	// otherwise the old value survives until restart. 0 clears the explicit
+	// budget and lets auto-derivation from maxIter apply — the same
+	// always-call semantics as ApplySessionTimeout.
+	agentInst.SetToolCallBudget(cfg.ToolCallBudget)
 }
 
 // ApplySessionTimeout propagates the configured wall-clock session timeout to

@@ -1009,6 +1009,12 @@ func (a *Agent) SetHookConfig(cfg hooks.HookConfig) {
 func (a *Agent) SetSessionTokenBudget(budget int64) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	// #543: this body was previously empty — session_token_budget was
+	// parsed, validated, and listed by `config list` but never stored, so
+	// the documented feature was an end-to-end no-op. Storage and the
+	// enforcement primitive live in session_token_budget.go so this file's
+	// change stays confined to the setter (issue scope).
+	setAgentSessionTokenBudget(a, budget)
 }
 
 // SetToolCallBudget sets the maximum total tool calls allowed for a single

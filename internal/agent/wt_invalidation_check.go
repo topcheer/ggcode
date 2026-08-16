@@ -48,7 +48,9 @@ package agent
 //   - Tracks both read paths and time-sequence to provide specific guidance
 
 import (
+	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -118,10 +120,125 @@ func isWTMutatingTool(toolName string) bool {
 	}
 }
 
+// readOnlyGitSubcommands are git subcommands that never modify the working
+// tree. Their execution must NOT invalidate cached file reads (#544 Bug B).
+var readOnlyGitSubcommands = map[string]bool{
+	"status": true,
+	"list":   true,
+	"diff":   true,
+	"log":    true,
+	"show":   true,
+	"branch": true, // guarded further: only without -d/-D/--delete/-m/--move
+}
+
+// readOnlyStashActions are git_stash `action` values that only inspect.
+var readOnlyStashActions = map[string]bool{
+	"list": true,
+	"show": true,
+}
+
+// wtArgFields unmarshals the tool-arguments JSON object (best-effort;
+// malformed JSON yields nil).
+func wtArgFields(argsJSON string) map[string]any {
+	var m map[string]any
+	if err := json.Unmarshal([]byte(argsJSON), &m); err != nil {
+		return nil
+	}
+	return m
+}
+
+// isReadOnlyGitInvocation returns true when a mutating-classified git tool
+// call is actually read-only per its arguments (#544): checkMutation used to
+// discard arguments entirely, so `git stash list` (read-only) invalidated
+// every previously-read file. Classification:
+//
+//   - git_stash: the dedicated `action` field (enum in the tool schema) —
+//     list/show inspect, everything else (incl. the schema default push)
+//     mutates. The free-text `description` field is never consulted.
+//   - other tools: any string field containing a `git` token — the
+//     subcommand after `git` decides (status/list/diff/log/show are
+//     read-only; `branch` is read-only unless -d/-D/--delete/-m/--move;
+//     `stash` is read-only only as `stash list`/`stash show`).
+//
+// gitBranchMutatingFlags are `git branch` flags that turn a listing command
+// into a mutating one.
+var gitBranchMutatingFlags = map[string]bool{
+	"-d": true, "-D": true, "--delete": true, "-m": true, "--move": true,
+}
+
+// classifyGitCommandLine classifies one candidate command line. Returns
+// (readOnly, true) when a `git` token with a classifiable subcommand is
+// present; (false, false) when the line contains no git command.
+func classifyGitCommandLine(line string) (readOnly, found bool) {
+	fields := strings.Fields(line)
+	for idx := 0; idx < len(fields); idx++ {
+		if filepath.Base(fields[idx]) != "git" || idx+1 >= len(fields) {
+			continue
+		}
+		sub := strings.ToLower(fields[idx+1])
+		switch {
+		case sub == "stash":
+			if idx+2 >= len(fields) {
+				return false, true // bare `git stash` defaults to push (mutating)
+			}
+			return readOnlyStashActions[strings.ToLower(fields[idx+2])], true
+		case sub == "branch":
+			// `git branch` lists; -d/-D/--delete/-m/--move mutate.
+			for _, f := range fields[idx+2:] {
+				if gitBranchMutatingFlags[f] {
+					return false, true
+				}
+			}
+			return true, true
+		case readOnlyGitSubcommands[sub]:
+			return true, true
+		default:
+			return false, true // any other git subcommand: not read-only
+		}
+	}
+	return false, false
+}
+
+func isReadOnlyGitInvocation(toolName, argsJSON string) bool {
+	m := wtArgFields(argsJSON)
+	if m == nil {
+		return false
+	}
+
+	// The executed command line is the most authoritative signal (#544): a
+	// schema-default action=push wrapped around an actual `git stash list`
+	// command must still classify as read-only. Scan string fields first.
+	for _, v := range m {
+		s, ok := v.(string)
+		if !ok {
+			continue
+		}
+		if readOnly, found := classifyGitCommandLine(s); found {
+			return readOnly
+		}
+	}
+
+	// No git command found in any string field: for git_stash, fall back to
+	// the dedicated `action` field (list/show inspect, everything else —
+	// including the schema default push — mutates).
+	if toolName == "git_stash" {
+		if action, ok := m["action"].(string); ok {
+			return readOnlyStashActions[strings.ToLower(strings.TrimSpace(action))]
+		}
+	}
+	return false
+}
+
 // checkMutation is called after a git state-changing tool call executes.
 // If there are enough previously-read files to warrant a warning, it
 // returns a guidance message. Otherwise returns "".
-func (w *wtInvalidationState) checkMutation(toolName string, _ string) string {
+func (w *wtInvalidationState) checkMutation(toolName string, argsJSON string) string {
+	// #544 Bug B: read-only invocations (e.g. `git stash list`) never
+	// invalidate cached reads — the second parameter was previously
+	// discarded, misjudging read-only subcommands as mutating.
+	if isReadOnlyGitInvocation(toolName, argsJSON) {
+		return ""
+	}
 	if w.warnedCount >= maxWTInvalidationWarnings {
 		return ""
 	}

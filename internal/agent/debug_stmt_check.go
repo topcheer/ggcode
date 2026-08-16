@@ -40,6 +40,33 @@ import (
 // maxDebugScanLen caps the content size scanned for debug statements.
 const maxDebugScanLen = 256 * 1024
 
+// debugLineComment matches // line comments (JS/TS/Go/Rust/PHP/Swift) and
+// # line comments (Python/Ruby). Used to blank comment text before pattern
+// matching so a mention inside a comment — e.g. the very common
+// `// removed fmt.Println("dbg") below` — is not counted as a debug
+// statement (#544 Bug A, same class as #527's deprecated_api fix).
+var debugLineComment = regexp.MustCompile(`(//|#)[^\n]*`)
+
+// debugBlockCommentStart matches /* ... */ block comments (JS/TS/PHP/Swift).
+// Go also has them; a simple non-greedy across-the-whole-text regex is used —
+// it is the same trade-off deprecated_api_check made for comment awareness.
+var debugBlockComment = regexp.MustCompile(`(?s)/\*.*?\*/`)
+
+// stripDebugComments blanks line and block comments while preserving
+// newlines, so per-line structure and offsets stay stable. String literals
+// containing // or # (e.g. "https://x") may be over-stripped from the line's
+// tail — acceptable here: the check is delta-based (old vs new), so both
+// sides lose the same tails and no false introduction is manufactured.
+func stripDebugComments(content string) string {
+	out := debugBlockComment.ReplaceAllStringFunc(content, func(m string) string {
+		return strings.Repeat("\n", strings.Count(m, "\n"))
+	})
+	out = debugLineComment.ReplaceAllStringFunc(out, func(m string) string {
+		return strings.Repeat("\n", strings.Count(m, "\n"))
+	})
+	return out
+}
+
 // debugStmtExemptDirs lists directory patterns where debug statements are
 // expected and should NOT trigger warnings.
 var debugStmtExemptDirs = []string{
@@ -189,6 +216,14 @@ func checkDebugStmts(filePath, oldContent, newContent string) string {
 	if len(scanOld) > maxDebugScanLen {
 		scanOld = scanOld[:maxDebugScanLen]
 	}
+
+	// #544 Bug A: blank comments BEFORE matching. A comment that merely
+	// MENTIONS a debug call — `// removed fmt.Println("dbg") below` — must
+	// not be counted as introducing one. Same comment-awareness class as
+	// #527's deprecated_api fix; applied to both sides of the delta so the
+	// set comparison stays symmetric.
+	scanNew = stripDebugComments(scanNew)
+	scanOld = stripDebugComments(scanOld)
 
 	ext := strings.ToLower(filepath.Ext(filePath))
 
