@@ -294,8 +294,9 @@ func (m *Manager) ReconcileToolCalls() bool {
 
 	// ── Phase 1: collect information ──
 	type lateResult struct {
-		msgIdx int
-		block  provider.ContentBlock
+		msgIdx   int
+		blockIdx int // position of the block inside m.messages[msgIdx].Content (#535)
+		block    provider.ContentBlock
 	}
 	type needFix struct {
 		insertBefore int
@@ -346,9 +347,9 @@ func (m *Manager) ReconcileToolCalls() bool {
 		for id, name := range toolIDs {
 			foundLate := false
 			for j := nextAssistantIdx; j < len(m.messages); j++ {
-				for _, block := range m.messages[j].Content {
+				for bi, block := range m.messages[j].Content {
 					if block.Type == "tool_result" && block.ToolID == id {
-						late = append(late, lateResult{msgIdx: j, block: block})
+						late = append(late, lateResult{msgIdx: j, blockIdx: bi, block: block})
 						foundLate = true
 						break
 					}
@@ -380,14 +381,19 @@ func (m *Manager) ReconcileToolCalls() bool {
 	// ── Phase 2: apply fixes ──
 	oldMsgs := m.messages
 
-	staleMsgIdxs := make(map[int]bool)
-	var insertions []struct {
-		insertBefore int
-		msg          provider.Message
-	}
+	// Stale granularity is BLOCK-level, not message-level (#535): a late
+	// tool_result usually shares its user message with genuine user content
+	// (text typed while the tool was running, a pasted screenshot). Dropping
+	// the whole message silently destroyed that content — text/image blocks
+	// carry no ToolID, so they never entered the reinsertion whitelist below.
+	staleBlockIdxs := make(map[int]map[int]bool) // msgIdx → blockIdx set
+	var insertions []reconcileInsertion
 	for _, fix := range fixes {
 		for _, lr := range fix.lateBlocks {
-			staleMsgIdxs[lr.msgIdx] = true
+			if staleBlockIdxs[lr.msgIdx] == nil {
+				staleBlockIdxs[lr.msgIdx] = make(map[int]bool)
+			}
+			staleBlockIdxs[lr.msgIdx][lr.blockIdx] = true
 		}
 		var content []provider.ContentBlock
 		seen := make(map[string]bool)
@@ -412,30 +418,14 @@ func (m *Manager) ReconcileToolCalls() bool {
 			}
 		}
 		if len(content) > 0 {
-			insertions = append(insertions, struct {
-				insertBefore int
-				msg          provider.Message
-			}{insertBefore: fix.insertBefore, msg: provider.Message{Role: "user", Content: content}})
+			insertions = append(insertions, reconcileInsertion{
+				insertBefore: fix.insertBefore,
+				msg:          provider.Message{Role: "user", Content: content},
+			})
 		}
 	}
 
-	newMsgs := make([]provider.Message, 0, len(oldMsgs)+len(insertions))
-	for i, m := range oldMsgs {
-		for _, ins := range insertions {
-			if ins.insertBefore == i {
-				newMsgs = append(newMsgs, ins.msg)
-			}
-		}
-		if staleMsgIdxs[i] {
-			continue
-		}
-		newMsgs = append(newMsgs, m)
-	}
-	for _, ins := range insertions {
-		if ins.insertBefore == len(oldMsgs) {
-			newMsgs = append(newMsgs, ins.msg)
-		}
-	}
+	newMsgs, droppedMsgs, removedBlocks := rebuildReconciledMessages(oldMsgs, insertions, staleBlockIdxs)
 
 	m.messages = newMsgs
 	m.version++
@@ -454,9 +444,67 @@ func (m *Manager) ReconcileToolCalls() bool {
 		lateCount += len(fix.lateBlocks)
 		cancelledCount += len(fix.missingIDs)
 	}
-	debug.Log("ctx", "ReconcileToolCalls: relocated %d late tool_result(s), added %d cancelled, removed %d stale messages",
-		lateCount, cancelledCount, len(staleMsgIdxs))
+	debug.Log("ctx", "ReconcileToolCalls: relocated %d late tool_result(s), added %d cancelled, removed %d stale block(s) from %d message(s) (%d emptied, user content kept)",
+		lateCount, cancelledCount, removedBlocks, len(staleBlockIdxs), droppedMsgs)
 	return true
+}
+
+// reconcileInsertion is a user message (relocated tool_results plus
+// cancelled-tool placeholders) to be inserted before a given message index.
+type reconcileInsertion struct {
+	insertBefore int
+	msg          provider.Message
+}
+
+// rebuildReconciledMessages applies the phase-2 rebuild of ReconcileToolCalls:
+// insertions are placed before their target index, and stale tool_result
+// blocks (staleBlockIdxs: msgIdx → blockIdx set) are stripped from their
+// messages — keeping every other block of those messages (user text/images,
+// #535). Returns the rebuilt slice, the number of messages dropped because
+// they contained ONLY stale blocks, and the total number of stale blocks
+// removed.
+func rebuildReconciledMessages(oldMsgs []provider.Message, insertions []reconcileInsertion, staleBlockIdxs map[int]map[int]bool) (newMsgs []provider.Message, droppedMsgs, removedBlocks int) {
+	newMsgs = make([]provider.Message, 0, len(oldMsgs)+len(insertions))
+	for i, m := range oldMsgs {
+		for _, ins := range insertions {
+			if ins.insertBefore == i {
+				newMsgs = append(newMsgs, ins.msg)
+			}
+		}
+		kept, emptied := stripStaleBlocks(m, staleBlockIdxs[i])
+		if emptied {
+			droppedMsgs++ // message was nothing but late tool_results
+			continue
+		}
+		m.Content = kept
+		newMsgs = append(newMsgs, m)
+	}
+	for _, ins := range insertions {
+		if ins.insertBefore == len(oldMsgs) {
+			newMsgs = append(newMsgs, ins.msg)
+		}
+	}
+	for _, set := range staleBlockIdxs {
+		removedBlocks += len(set)
+	}
+	return newMsgs, droppedMsgs, removedBlocks
+}
+
+// stripStaleBlocks removes the given stale block indices from msg.Content.
+// An empty/nil stale set is a no-op. emptied reports that nothing survived
+// (the message consisted solely of relocated tool_result blocks).
+func stripStaleBlocks(msg provider.Message, stale map[int]bool) (kept []provider.ContentBlock, emptied bool) {
+	if len(stale) == 0 {
+		return msg.Content, false
+	}
+	kept = make([]provider.ContentBlock, 0, len(msg.Content))
+	for bi, b := range msg.Content {
+		if stale[bi] {
+			continue
+		}
+		kept = append(kept, b)
+	}
+	return kept, len(kept) == 0
 }
 
 // removeOrphanToolResults removes tool_result blocks whose tool_id has no
@@ -1950,6 +1998,17 @@ func estimateTokensStandalone(msg provider.Message) int {
 }
 
 func (m *Manager) estimateTokens(msg provider.Message) int {
+	return m.estimateTokensCalibrated(msg)
+}
+
+// estimateTokensCalibrated is the shared per-message token accounting used by
+// both estimateTokens and estimateMessagesTokens (#535). Previously the two
+// diverged: estimateMessagesTokens (the budget basis for recent-group
+// retention in buildSummaryPlan) skipped ReasoningContent and the ×6
+// tool_use structural overhead, underestimating reasoning-model messages by
+// up to 30x — recent groups far over budget were kept, compaction triggered
+// again immediately, and the session entered a compaction loop.
+func (m *Manager) estimateTokensCalibrated(msg provider.Message) int {
 	var sb strings.Builder
 	var hasImage bool
 	var toolCallCount int
@@ -1967,13 +2026,16 @@ func (m *Manager) estimateTokens(msg provider.Message) int {
 		}
 	}
 	n := EstimateTokensCalibrated(sb.String(), m.calibrator)
-	// Each message has ~4 tokens of structural overhead (role, separators).
-	n += 4
-	// Tool calls carry JSON structure overhead beyond their input text:
-	// tool name, id, type field, opening/closing braces, etc.
-	n += toolCallCount * 6
-	// Images are roughly 85-170 tokens for standard thumbnails,
-	// and up to 1100 tokens for large images. Use a conservative average.
+	return n + messageStructuralTokens(toolCallCount, hasImage)
+}
+
+// messageStructuralTokens returns the per-message structural overhead shared
+// by all token accounting paths (#535):
+//   - 4 tokens for message framing (role, separators)
+//   - 6 tokens per tool_use block (JSON structure: name, id, type, braces)
+//   - 170 tokens for images (85-170 for thumbnails, up to 1100 for large)
+func messageStructuralTokens(toolCallCount int, hasImage bool) int {
+	n := 4 + toolCallCount*6
 	if hasImage {
 		n += 170
 	}
@@ -2064,27 +2126,15 @@ func (m *Manager) buildSummaryPlan() (summaryPlan, bool) {
 
 // estimateMessagesTokens returns a rough token estimate for a slice of
 // messages, used for budget-aware recent group retention decisions.
+// Uses the same per-message accounting as (*Manager).estimateTokens
+// (#535): previously it skipped ReasoningContent and the tool_use ×6
+// overhead, so reasoning-heavy recent groups were massively under-budgeted
+// and compaction looped.
 func estimateMessagesTokens(msgs []provider.Message) int {
+	m := &Manager{calibrator: NewTokenCalibrator()}
 	total := 0
 	for _, msg := range msgs {
-		var hasImage bool
-		for _, block := range msg.Content {
-			total += EstimateTokens(block.Text)
-			total += EstimateTokens(block.Output)
-			total += EstimateTokens(block.ToolName)
-			if len(block.Input) > 0 {
-				total += EstimateTokens(string(block.Input))
-			}
-			if block.Type == "image" || block.ImageData != "" || len(block.Images) > 0 {
-				hasImage = true
-			}
-		}
-		// Images are roughly 85-170 tokens for standard thumbnails, up to
-		// 1100 for large ones — same heuristic as estimateTokens().
-		if hasImage {
-			total += 170
-		}
-		total += 4 // structural overhead (role, separators)
+		total += m.estimateTokensCalibrated(msg)
 	}
 	return total
 }
