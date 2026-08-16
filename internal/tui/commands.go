@@ -247,7 +247,7 @@ func shouldExecuteWhileBusy(text string) bool {
 		"/checkpoints", "/memory", "/todo", "/plugins", "/config", "/status", "/inspector",
 		"/stream", "/restart", "/help", "/?",
 		"/share", "/tunnel", "/unshare",
-		"/diff", "/hooks", "/cost", "/commit", "/retry", "/edit", "/copy", "/context", "/regenerate", "/regen", "/cron", "/debug", "/title", "/undo-run", "/pin":
+		"/diff", "/hooks", "/cost", "/commit", "/retry", "/edit", "/copy", "/context", "/regenerate", "/regen", "/cron", "/debug", "/title", "/pin":
 		return true
 	}
 	return false
@@ -589,6 +589,12 @@ func (m *Model) startNormalTextRun(text string, displayText string, displayInCha
 	// user submission was already persisted by appendUserMessage) and the
 	// message would be silently lost from the session JSONL.
 	m.appendUserMessage(text)
+
+	// Store for /retry and /edit. This producer was accidentally dropped by
+	// the e29ea0f3 refactor while both consumers survived, leaving /retry
+	// and /edit permanently on their "empty" branches. Restored per issue
+	// #541 (original position: startAutoRunCheck in 2fb70704).
+	m.lastUserSubmission = text
 
 	return m.continueDisplayedNormalTextRun(text)
 }

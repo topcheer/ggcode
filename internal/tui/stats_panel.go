@@ -26,6 +26,17 @@ func newViewport() ViewportModel {
 	return vp
 }
 
+// activePanelViewport returns the scrollable viewport of the panel that is
+// currently open, or nil when no panel (or a panel without a viewport) is
+// open. Used by mouse-wheel routing so wheel events scroll the visible
+// panel instead of the conversation hidden behind it (issue #541).
+func (m *Model) activePanelViewport() *ViewportModel {
+	if m.statsPanel != nil {
+		return &m.statsPanel.viewport
+	}
+	return nil
+}
+
 func (m Model) panelContentWidth() int {
 	width := m.viewWidth() - m.terminalRightMargin() - 4
 	if width < 1 {

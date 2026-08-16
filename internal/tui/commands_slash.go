@@ -74,9 +74,17 @@ func (m *Model) handleClearChat() {
 		model = m.config.Model
 	}
 	ses := session.NewSession(vendor, endpoint, model)
-	// No need to call Save here — the JSONL file is created lazily on the
-	// first AppendMessageToDisk call when the user sends their first message.
-	// Calling Save would just create an empty file.
+	// Persist the session file immediately so it exists on disk before the
+	// first message. JSONLStore.Save only touches (creates) the empty JSONL
+	// file — it does not rewrite messages and does not update the store
+	// index (that happens on the first AppendMessageToDisk), so this is safe
+	// for a brand-new empty session. cycleSession separately defends against
+	// the window before the index lists this session (issue #541).
+	if m.sessionStore != nil {
+		if err := m.sessionStore.Save(ses); err != nil {
+			debug.Log("tui", "clearChat persist new session: %v", err)
+		}
+	}
 
 	// Switch agent, view, lock, cron, and tunnel to the new session.
 	m.switchToSession(ses, true)

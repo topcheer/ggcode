@@ -16,6 +16,7 @@ import (
 	"github.com/topcheer/ggcode/internal/diff"
 	"github.com/topcheer/ggcode/internal/knight"
 	"github.com/topcheer/ggcode/internal/permission"
+	"github.com/topcheer/ggcode/internal/session"
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
 	"github.com/topcheer/ggcode/internal/util"
 )
@@ -153,6 +154,18 @@ func (m *Model) handleUndoCommand() tea.Cmd {
 // "Reject All" or Claude Code's "undo all changes" — essential when an agent
 // made bad changes across multiple files.
 func (m *Model) handleUndoRunCommand() tea.Cmd {
+	// Block while an agent run is in flight: UndoRun rolls files back and
+	// removes checkpoints while the agent may be writing the very same
+	// files, so the rollback can be silently overwritten by subsequent
+	// agent writes (issue #541). /retry, /edit and /regenerate carry the
+	// same guard; /undo-run is also no longer whitelisted in
+	// shouldExecuteWhileBusy so a mid-run invocation queues instead of
+	// racing the agent loop.
+	if m.loading {
+		m.chatWriteSystem(nextSystemID(), "Cannot undo-run while the agent is running. Wait for the current run to finish.")
+		m.chatListScrollToBottom()
+		return nil
+	}
 	if m.agent == nil {
 		return func() tea.Msg {
 			return streamMsg(m.t("checkpoint.disabled"))
@@ -224,6 +237,47 @@ func (m *Model) handleRedoCommand() tea.Cmd {
 	}
 }
 
+// nextSessionInCycle picks the session to switch to when cycling sessions
+// with Alt+Up/Alt+Down. The current session is treated as part of the cycle
+// even when the store listing does not include it yet — e.g. a fresh session
+// created by /clear has no messages on disk, so ListForWorkspace does not
+// list it. Without this, currentIdx silently defaulted to 0 and Alt+Down
+// jumped the user to sessions[1], skipping the most recent session
+// (issue #541).
+func nextSessionInCycle(sessions []*session.Session, current *session.Session, direction int) *session.Session {
+	if current != nil && !containsSessionID(sessions, current.ID) {
+		sessions = append([]*session.Session{current}, sessions...)
+	}
+	if len(sessions) == 0 {
+		return nil
+	}
+	currentID := ""
+	if current != nil {
+		currentID = current.ID
+	}
+	idx := 0
+	for i, s := range sessions {
+		if s.ID == currentID {
+			idx = i
+			break
+		}
+	}
+	next := (idx + direction + len(sessions)) % len(sessions)
+	if sessions[next].ID == currentID {
+		return nil // cycle contains only the current session
+	}
+	return sessions[next]
+}
+
+func containsSessionID(sessions []*session.Session, id string) bool {
+	for _, s := range sessions {
+		if s.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
 // Iteration 2: cycleSession switches to next/prev session in the same workspace.
 func (m *Model) cycleSession(direction int) tea.Cmd {
 	if m.sessionStore == nil {
@@ -234,25 +288,13 @@ func (m *Model) cycleSession(direction int) tea.Cmd {
 		return nil
 	}
 	sessions, err := m.sessionStore.ListForWorkspace(workspace)
-	if err != nil || len(sessions) == 0 {
+	if err != nil {
 		return nil
 	}
-	currentID := ""
-	if m.session != nil {
-		currentID = m.session.ID
-	}
-	currentIdx := 0
-	for i, s := range sessions {
-		if s.ID == currentID {
-			currentIdx = i
-			break
-		}
-	}
-	newIdx := (currentIdx + direction + len(sessions)) % len(sessions)
-	if newIdx == currentIdx {
+	target := nextSessionInCycle(sessions, m.session, direction)
+	if target == nil {
 		return nil
 	}
-	target := sessions[newIdx]
 	return m.resumeSession(target.ID)
 }
 

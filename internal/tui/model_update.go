@@ -90,10 +90,19 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		return m, nil
 
 	case tea.MouseWheelMsg:
-		// Route mouse wheel to the active panel's viewport if one is open.
-		// MouseWheelMsg implements the MouseMsg interface, so it must appear
-		// BEFORE case tea.MouseMsg in this type switch to be matched here.
-		// Default: scroll the main conversation.
+		// Route mouse wheel to the active panel's viewport if the open panel
+		// has one (the stats panel). Panels without a scrollable viewport
+		// fall through to scrolling the main conversation. MouseWheelMsg
+		// implements the MouseMsg interface, so it must appear BEFORE case
+		// tea.MouseMsg in this type switch to be matched here.
+		if vp := m.activePanelViewport(); vp != nil {
+			if msg.Button == tea.MouseWheelUp {
+				vp.ScrollUp(3)
+			} else {
+				vp.ScrollDown(3)
+			}
+			return m, nil
+		}
 		if m.chatList != nil && m.chatList.Len() > 0 {
 			if msg.Button == tea.MouseWheelUp {
 				m.chatList.ScrollUp(3)

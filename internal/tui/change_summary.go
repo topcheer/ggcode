@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/topcheer/ggcode/internal/checkpoint"
 	"github.com/topcheer/ggcode/internal/diff"
 )
 
@@ -39,30 +40,14 @@ func (m *Model) appendRunChangeSummary() {
 		runFiles[f] = true
 	}
 
-	// Gather checkpoint data per file: first OldContent and last NewContent.
-	type fileChange struct {
-		added   int
-		deleted int
-		isNew   bool
-		edits   int
-	}
-	changes := make(map[string]*fileChange)
-
+	// Gather checkpoint data per file, filtered to the run that just
+	// finished. See accumulateRunChanges for the accounting rules.
+	var changes map[string]*fileChange
 	if cpMgr != nil {
-		for _, cp := range cpMgr.List() {
-			if !runFiles[cp.FilePath] {
-				continue
-			}
-			fc, ok := changes[cp.FilePath]
-			if !ok {
-				// First checkpoint for this file — compute net diff.
-				added, deleted := diff.CountChanges(cp.OldContent, cp.NewContent)
-				isNew := cp.OldContent == ""
-				fc = &fileChange{added: added, deleted: deleted, isNew: isNew}
-				changes[cp.FilePath] = fc
-			}
-			fc.edits++
-		}
+		changes = accumulateRunChanges(cpMgr.List(), stats.RunID(), runFiles)
+	}
+	if changes == nil {
+		changes = make(map[string]*fileChange)
 	}
 
 	// For files with no checkpoint data (e.g., checkpoint evicted), still
@@ -117,6 +102,66 @@ func (m *Model) appendRunChangeSummary() {
 
 	summary := header + "\n" + strings.Join(lines, "\n")
 	m.chatWriteSystem(nextSystemID(), summary)
+}
+
+// fileChange is the net change for one file across a single agent run.
+type fileChange struct {
+	added   int
+	deleted int
+	isNew   bool
+	edits   int
+}
+
+// accumulateRunChanges computes per-file net changes for one agent run
+// from the checkpoint log (issue #541). It fixes three accounting bugs of
+// the previous implementation:
+//
+//   - Only the first checkpoint per file was counted, so multiple edits to
+//     the same file systematically under-reported the totals. The net diff
+//     now runs from the run's first checkpoint's OldContent to its LAST
+//     checkpoint's NewContent, accumulating every edit.
+//   - Checkpoints were not filtered by RunID, so earlier runs' checkpoints
+//     contaminated the current run's summary. Only checkpoints created by
+//     runID are counted now.
+//   - isNew treated any empty pre-edit content as "new file". A file that
+//     existed with content and was emptied before the run also has empty
+//     OldContent; such files are recognized via older checkpoints that saw
+//     non-empty content and are reported as modified, not new.
+func accumulateRunChanges(cps []checkpoint.Checkpoint, runID string, runFiles map[string]bool) map[string]*fileChange {
+	// Files that any checkpoint (any run) saw with non-empty content before
+	// an edit: proof the file existed before it was possibly emptied.
+	existedWithContent := make(map[string]bool)
+	for _, cp := range cps {
+		if cp.OldContent != "" {
+			existedWithContent[cp.FilePath] = true
+		}
+	}
+
+	changes := make(map[string]*fileChange)
+	firstOld := make(map[string]string)
+	lastNew := make(map[string]string)
+	for _, cp := range cps {
+		if !runFiles[cp.FilePath] {
+			continue
+		}
+		if runID != "" && cp.RunID != runID {
+			continue
+		}
+		if _, ok := firstOld[cp.FilePath]; !ok {
+			firstOld[cp.FilePath] = cp.OldContent
+		}
+		lastNew[cp.FilePath] = cp.NewContent
+		if changes[cp.FilePath] == nil {
+			changes[cp.FilePath] = &fileChange{}
+		}
+		changes[cp.FilePath].edits++
+	}
+	for f, fc := range changes {
+		old, nw := firstOld[f], lastNew[f]
+		fc.added, fc.deleted = diff.CountChanges(old, nw)
+		fc.isNew = old == "" && !existedWithContent[f]
+	}
+	return changes
 }
 
 // shortenPath converts an absolute path to a project-relative one for display.
