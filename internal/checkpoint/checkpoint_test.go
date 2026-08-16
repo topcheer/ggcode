@@ -141,7 +141,9 @@ func TestModifiedFiles(t *testing.T) {
 	m.Save("/src/main.go", "old1", "new1", "edit_file")
 	m.Save("/src/main.go", "new1", "new2", "edit_file")
 	m.Save("/src/util.go", "oldutil", "newutil", "write_file")
-	m.Save("/src/new.go", "", "fresh", "write_file")
+	// #554: Save assumes the file existed; a file-creating write_file must
+	// record existed=false or the checkpoint is not marked IsNew.
+	m.SaveWithExistence("/src/new.go", "", "fresh", "write_file", false)
 
 	files := m.ModifiedFiles()
 	if len(files) != 3 {

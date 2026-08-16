@@ -635,7 +635,7 @@ func (a *Agent) executeFileTool(ctx context.Context, t tool.Tool, tc provider.To
 	a.mu.Unlock()
 
 	// Determine file path and compute old/new content
-	filePath, oldContent, newContent, err := a.computeFileChange(tc)
+	filePath, oldContent, newContent, fileExisted, err := a.computeFileChange(tc)
 	if err != nil {
 		return tool.Result{Content: fmt.Sprintf("file change error: %v", err), IsError: true}
 	}
@@ -675,9 +675,10 @@ func (a *Agent) executeFileTool(ctx context.Context, t tool.Tool, tc provider.To
 		return tool.Result{Content: fmt.Sprintf("tool error: %v", err), IsError: true}
 	}
 
-	// Save checkpoint
+	// Save checkpoint. fileExisted distinguishes a file-creating write from an
+	// overwrite so undo removes vs restores the file correctly (issue #554 B).
 	if cpMgr != nil && !result.IsError {
-		cpMgr.Save(filePath, oldContent, newContent, tc.Name)
+		cpMgr.SaveWithExistence(filePath, oldContent, newContent, tc.Name, fileExisted)
 	}
 
 	// Post-write integrity check: validate file content for syntax errors,
@@ -752,7 +753,12 @@ func (a *Agent) executeFileTool(ctx context.Context, t tool.Tool, tc provider.To
 }
 
 // computeFileChange reads the old content and computes the new content for a file tool call.
-func (a *Agent) computeFileChange(tc provider.ToolCallDelta) (filePath, oldContent, newContent string, err error) {
+// fileExisted (the fourth return value) reports whether the target file existed
+// on disk before the tool call; it is false only when write_file creates a new
+// file. The checkpoint layer needs it to distinguish "created file" from
+// "edited a pre-existing empty file" — OldContent=="" alone cannot (issue #554 B/C).
+func (a *Agent) computeFileChange(tc provider.ToolCallDelta) (filePath, oldContent, newContent string, fileExisted bool, err error) {
+	fileExisted = true // assume present; write_file on a missing path flips it to false
 	switch tc.Name {
 	case "edit_file":
 		var args struct {
@@ -761,17 +767,17 @@ func (a *Agent) computeFileChange(tc provider.ToolCallDelta) (filePath, oldConte
 			NewText  string `json:"new_text"`
 		}
 		if err := json.Unmarshal(tc.Arguments, &args); err != nil {
-			return "", "", "", fmt.Errorf("invalid arguments: %w", err)
+			return "", "", "", false, fmt.Errorf("invalid arguments: %w", err)
 		}
 		filePath = args.FilePath
 		data, err := os.ReadFile(filePath)
 		if err != nil {
 			// File may not exist yet — that's OK for write_file, but edit_file needs it
-			return "", "", "", fmt.Errorf("cannot read file: %w", err)
+			return "", "", "", false, fmt.Errorf("cannot read file: %w", err)
 		}
 		oldContent = string(data)
 		newContent = replaceFirst(oldContent, args.OldText, args.NewText)
-		return filePath, oldContent, newContent, nil
+		return filePath, oldContent, newContent, true, nil
 
 	case "write_file":
 		var args struct {
@@ -779,20 +785,28 @@ func (a *Agent) computeFileChange(tc provider.ToolCallDelta) (filePath, oldConte
 			Content string `json:"content"`
 		}
 		if err := json.Unmarshal(tc.Arguments, &args); err != nil {
-			return "", "", "", fmt.Errorf("invalid arguments: %w", err)
+			return "", "", "", false, fmt.Errorf("invalid arguments: %w", err)
 		}
 		filePath = args.Path
 		data, err := os.ReadFile(filePath)
 		if err != nil {
-			oldContent = ""
+			// File does not exist yet — this write creates it. Capture that
+			// fact so the checkpoint can undo by removing the file instead of
+			// writing back an empty buffer (issue #554 B).
+			if os.IsNotExist(err) {
+				fileExisted = false
+				oldContent = ""
+			} else {
+				return "", "", "", false, fmt.Errorf("cannot read file: %w", err)
+			}
 		} else {
 			oldContent = string(data)
 		}
 		newContent = args.Content
-		return filePath, oldContent, newContent, nil
+		return filePath, oldContent, newContent, fileExisted, nil
 
 	default:
-		return "", "", "", fmt.Errorf("not a file tool: %s", tc.Name)
+		return "", "", "", false, fmt.Errorf("not a file tool: %s", tc.Name)
 	}
 }
 
@@ -836,7 +850,11 @@ func (a *Agent) executeUndoEdit(ctx context.Context, tc provider.ToolCallDelta) 
 				Content: fmt.Sprintf("Nothing to undo: %v", err),
 			}
 		}
-		isNew := cp.OldContent == ""
+		// Existed (not OldContent=="") distinguishes created files from
+		// pre-existing empty files (issue #554 B/C). With Existed=false the
+		// manager has already REMOVED the file, so the report must say so —
+		// claiming "restored" would mislead the agent about disk state.
+		isNew := !cp.Existed
 		result := tool.FormatUndoResult(cp.FilePath, cp.ToolCall, isNew)
 		// Include a diff summary of what changed
 		if !isNew && diff.HasChanges(cp.NewContent, cp.OldContent) {
@@ -854,7 +872,7 @@ func (a *Agent) executeUndoEdit(ctx context.Context, tc provider.ToolCallDelta) 
 				FilePath:  cp.FilePath,
 				ToolCall:  cp.ToolCall,
 				Timestamp: cp.Timestamp,
-				IsNew:     cp.OldContent == "",
+				IsNew:     !cp.Existed,
 			}
 		}
 		return tool.Result{Content: tool.FormatCheckpointList(infos)}
@@ -873,7 +891,7 @@ func (a *Agent) executeUndoEdit(ctx context.Context, tc provider.ToolCallDelta) 
 				Content: fmt.Sprintf("Revert failed: %v", err),
 			}
 		}
-		isNew := cp.OldContent == ""
+		isNew := !cp.Existed // not OldContent=="": pre-existing empty files are edits, not creations (#554 C)
 		result := tool.FormatUndoResult(cp.FilePath, cp.ToolCall, isNew)
 		result += fmt.Sprintf("\n\nAll edits after checkpoint %s have also been reverted.", args.CheckpointID)
 		debug.Log("agent", "undo_edit: reverted to %s for %s", args.CheckpointID, cp.FilePath)

@@ -3,7 +3,9 @@ package checkpoint
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -12,13 +14,23 @@ import (
 
 // Checkpoint represents a saved file state before a tool edit.
 type Checkpoint struct {
-	ID         string    `json:"id"`
-	FilePath   string    `json:"file_path"`
-	OldContent string    `json:"old_content"`
-	NewContent string    `json:"new_content"`
-	Timestamp  time.Time `json:"timestamp"`
-	ToolCall   string    `json:"tool_call"`
-	RunID      string    `json:"run_id,omitempty"` // agent run that created this checkpoint
+	ID         string `json:"id"`
+	FilePath   string `json:"file_path"`
+	OldContent string `json:"old_content"`
+	NewContent string `json:"new_content"`
+	// Existed records whether the file existed on disk before the tool call
+	// that produced this checkpoint. For write_file on a missing path it is
+	// false and OldContent is "", so undo must REMOVE the file rather than
+	// write back an empty buffer (which leaves a stray 0-byte file that can
+	// break builds). OldContent=="" alone cannot distinguish a newly created
+	// file from a pre-existing empty file (empty __init__.py, .gitkeep) —
+	// that conflation is issue #554 B/C. Manager.Save defaults it to true,
+	// which is correct for edit_file (its compute path fails when the file
+	// cannot be read).
+	Existed   bool      `json:"existed,omitempty"`
+	Timestamp time.Time `json:"timestamp"`
+	ToolCall  string    `json:"tool_call"`
+	RunID     string    `json:"run_id,omitempty"` // agent run that created this checkpoint
 }
 
 // Correction represents a user-initiated undo of agent file changes.
@@ -71,7 +83,19 @@ func (m *Manager) StartRun(runID string) {
 
 // Save records a checkpoint before a file edit.
 // A new edit invalidates the redo history (standard undo/redo semantics).
+// It assumes the file existed before the edit (true for edit_file, whose
+// compute path fails when the file cannot be read). Callers that can create
+// files (write_file) must call SaveWithExistence with the real stat result so
+// undo removes the file instead of writing back "" (issue #554 B).
 func (m *Manager) Save(filePath, oldContent, newContent, toolCall string) Checkpoint {
+	return m.SaveWithExistence(filePath, oldContent, newContent, toolCall, true)
+}
+
+// SaveWithExistence is Save with an explicit existed-before-edit flag.
+// existed=false marks a file-creating edit: OldContent is "" because the file
+// was absent, and undo restores that absence by deleting the file
+// (issue #554 B).
+func (m *Manager) SaveWithExistence(filePath, oldContent, newContent, toolCall string, existed bool) Checkpoint {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -80,6 +104,7 @@ func (m *Manager) Save(filePath, oldContent, newContent, toolCall string) Checkp
 		FilePath:   filePath,
 		OldContent: oldContent,
 		NewContent: newContent,
+		Existed:    existed,
 		Timestamp:  time.Now(),
 		ToolCall:   toolCall,
 		RunID:      m.currentRunID,
@@ -132,7 +157,10 @@ func (m *Manager) Undo() (*Checkpoint, error) {
 	// Save() call could overwrite (append into the truncated capacity).
 	cp := m.checkpoints[len(m.checkpoints)-1]
 
-	if err := util.AtomicWriteFile(cp.FilePath, []byte(cp.OldContent), 0644); err != nil {
+	// Restore the pre-edit state. A checkpoint with existed=false captured a
+	// file creation, so the restored state is "file missing" — remove it;
+	// writing "" back would leave a stray 0-byte file (issue #554 B).
+	if err := restoreCheckpointState(cp.FilePath, cp.OldContent, cp.Existed); err != nil {
 		return nil, fmt.Errorf("failed to write file: %w", err)
 	}
 
@@ -172,12 +200,32 @@ func (m *Manager) Revert(id string) (*Checkpoint, error) {
 	// the backing array (see Undo for details).
 	cp := m.checkpoints[idx]
 
-	if err := util.AtomicWriteFile(cp.FilePath, []byte(cp.OldContent), 0644); err != nil {
+	if err := restoreCheckpointState(cp.FilePath, cp.OldContent, cp.Existed); err != nil {
 		return nil, fmt.Errorf("failed to write file: %w", err)
 	}
 
 	m.checkpoints = m.checkpoints[:idx]
+	// Jumping to a past state invalidates the redo history, exactly like a
+	// new Save does. Without this, Undo → Revert → Redo would re-apply a
+	// checkpoint the user explicitly rolled back past, ending in a state the
+	// user rejected (issue #554 E).
+	m.redoStack = nil
 	return &cp, nil
+}
+
+// restoreCheckpointState writes oldContent back to path. When the checkpoint
+// recorded a file creation (file absent before the edit), the pre-edit state
+// is "missing", so the file is removed instead — a write would leave a stray
+// 0-byte file (issue #554 B). Removal tolerates an already-gone file so undo
+// stays idempotent.
+func restoreCheckpointState(path, oldContent string, existed bool) error {
+	if !existed && oldContent == "" {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return nil
+	}
+	return util.AtomicWriteFile(path, []byte(oldContent), 0644)
 }
 
 // FileSummary summarizes the edits made to a single file.
@@ -185,7 +233,7 @@ type FileSummary struct {
 	Path     string
 	Edits    int
 	LastTool string
-	IsNew    bool // true if the first checkpoint had empty OldContent
+	IsNew    bool // true if the file did not exist before its first checkpoint
 }
 
 // ModifiedFiles returns a summary of unique files modified via checkpoints,
@@ -202,7 +250,7 @@ func (m *Manager) ModifiedFiles() []FileSummary {
 		if !ok {
 			fs = &FileSummary{
 				Path:     cp.FilePath,
-				IsNew:    cp.OldContent == "",
+				IsNew:    !cp.Existed, // absent before the first checkpoint — NOT merely empty OldContent, which also matches pre-existing empty files (issue #554 C)
 				LastTool: cp.ToolCall,
 			}
 			summary[cp.FilePath] = fs
@@ -257,6 +305,22 @@ func (m *Manager) UndoRun() ([]Checkpoint, error) {
 	if len(runIndices) == 0 {
 		return nil, fmt.Errorf("no checkpoints in current run")
 	}
+
+	// Issue #554 D: runSegmentIndices stops at the first checkpoint of a
+	// DIFFERENT run when scanning backward from the tail, so any checkpoints
+	// of the same run BEFORE that boundary (a mid-list segment, left behind
+	// e.g. by writeBaselines' partial-failure cleanup removing only some
+	// files' entries) are invisible to it. Undoing only the tail segment would
+	// restore a mid-run state as if it were the pre-run baseline — the same
+	// silent corruption #517 guards against. Refuse instead.
+	tailStart := runIndices[len(runIndices)-1] // earliest index in the tail segment
+	for i := 0; i < tailStart; i++ {
+		if m.checkpoints[i].RunID == runID {
+			return nil, fmt.Errorf(
+				"refusing to undo run %q: its checkpoints are split into non-contiguous segments (mid-run entries survive before the tail segment, e.g. after a partial failure cleanup), so the pre-run baseline is no longer recoverable; use single-step Undo instead",
+				runID)
+		}
+	}
 	baselines := m.preRunBaselines(runIndices)
 
 	// Write baseline content for each unique file.
@@ -294,19 +358,26 @@ func (m *Manager) runSegmentIndices(runID string) []int {
 	return runIndices
 }
 
-// preRunBaselines maps each unique file path in the run to the OldContent of
+// preRunBaselines maps each unique file path in the run to the baseline of
 // its FIRST checkpoint — the pre-run state. runIndices is in reverse order
 // (last first), so the first occurrence in forward order gives the earliest
 // checkpoint per file. Must hold m.mu.
-func (m *Manager) preRunBaselines(runIndices []int) map[string]string {
-	baselines := make(map[string]string)
+func (m *Manager) preRunBaselines(runIndices []int) map[string]baselineState {
+	baselines := make(map[string]baselineState)
 	for i := len(runIndices) - 1; i >= 0; i-- {
 		cp := m.checkpoints[runIndices[i]]
 		if _, exists := baselines[cp.FilePath]; !exists {
-			baselines[cp.FilePath] = cp.OldContent
+			baselines[cp.FilePath] = baselineState{content: cp.OldContent, existed: cp.Existed}
 		}
 	}
 	return baselines
+}
+
+// baselineState is a file's pre-run state: its original content, or absence
+// when the run created the file (existed=false, content=="").
+type baselineState struct {
+	content string
+	existed bool
 }
 
 // writeBaselines writes each unique file's pre-run baseline to disk, once
@@ -316,7 +387,7 @@ func (m *Manager) preRunBaselines(runIndices []int) map[string]string {
 // mid-run entries behind would let a later single-step Undo re-apply a
 // mid-run state on top of the rolled-back baseline (issue #517 Bug A) — and
 // returns the partially reverted checkpoints plus the error. Must hold m.mu.
-func (m *Manager) writeBaselines(runIndices []int, baselines map[string]string, runID string) ([]Checkpoint, error) {
+func (m *Manager) writeBaselines(runIndices []int, baselines map[string]baselineState, runID string) ([]Checkpoint, error) {
 	var reverted []Checkpoint
 	revertedFiles := make(map[string]bool)
 	for _, idx := range runIndices {
@@ -324,9 +395,14 @@ func (m *Manager) writeBaselines(runIndices []int, baselines map[string]string, 
 		if revertedFiles[cp.FilePath] {
 			continue
 		}
-		if err := util.AtomicWriteFile(cp.FilePath, []byte(baselines[cp.FilePath]), 0644); err != nil {
-			m.removeRunCheckpointsFor(reverted, runID)
-			return reverted, fmt.Errorf("failed to revert %s: %w", cp.FilePath, err)
+		// Restore the file's pre-run state. When the run created the file,
+		// the baseline is "absent" and the file is removed rather than
+		// written back as a 0-byte file (issue #554 B).
+		if bl, ok := baselines[cp.FilePath]; ok {
+			if err := restoreCheckpointState(cp.FilePath, bl.content, bl.existed); err != nil {
+				m.removeRunCheckpointsFor(reverted, runID)
+				return reverted, fmt.Errorf("failed to revert %s: %w", cp.FilePath, err)
+			}
 		}
 		revertedFiles[cp.FilePath] = true
 		reverted = append(reverted, cp)

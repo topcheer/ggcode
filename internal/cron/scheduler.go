@@ -822,10 +822,12 @@ func (s *Scheduler) SwitchSession(storePath, oldStorePath, workspaceDir string) 
 	for id := range s.generations {
 		s.generations[id]++
 	}
-	// Do NOT clear lastEnqueue here — if a timer from the old session is
+	// Do NOT clear lastEnqueue HERE — if a timer from the old session is
 	// still executing its callback (Stop doesn't wait for in-flight callbacks),
-	// clearing lastEnqueue would remove the debounce protection and allow
-	// the new session's timer to double-fire.
+	// clearing lastEnqueue mid-callback would be racy. It is reset AFTER Load()
+	// below, which is the earliest safe point: the new generation counters
+	// already force any old in-flight callback to abort before enqueue, so the
+	// debounce map can be safely rebuilt for the new session (issue #554 G).
 	s.nextID = 0
 	s.storePath = storePath
 	s.mu.Unlock()
@@ -836,6 +838,19 @@ func (s *Scheduler) SwitchSession(storePath, oldStorePath, workspaceDir string) 
 	MigrateWorkspaceJobs(oldStorePath, storePath, workspaceDir)
 
 	s.Load()
+
+	// Reset debounce timestamps after Load(). Job IDs are NOT unique across
+	// sessions (both sessions typically number their first job "cron-1"), so
+	// a stale lastEnqueue["cron-1"] from the old session makes fireJob's 5s
+	// debounce silently swallow the NEW session's first fire — the ver-41
+	// probe observed fired==0 exactly this way (issue #554 G). Pruning by
+	// "exists in new job set" would be useless for those same-named IDs, so
+	// clear the whole map instead: the generation bump above already forces
+	// any still-running old-session callback to abort before enqueue, meaning
+	// there is no legitimate old-session fire left to debounce against.
+	s.mu.Lock()
+	s.lastEnqueue = make(map[string]time.Time)
+	s.mu.Unlock()
 }
 
 // Shutdown stops all timers and clears all jobs. The scheduler cannot be
