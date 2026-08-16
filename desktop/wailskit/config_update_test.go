@@ -157,3 +157,92 @@ func TestUpdateConfigInstanceFieldWriteBack(t *testing.T) {
 		t.Errorf("instance-sourced default_mode leaked into global config file:\n%s", globData)
 	}
 }
+
+// TestSetLimitsWithoutInstancePersistsGlobally (#532): on a global-only config
+// (no instance attached), SetEndpointLimits/SetModelLimits used to call
+// SaveInstanceScoped("") which returned nil while silently creating a garbage
+// instances/e3b0c442… (sha256 of empty string) directory — the edit reached no
+// parsed file and was lost on restart. They must fall back to the global save
+// and survive a reload.
+func TestSetLimitsWithoutInstancePersistsGlobally(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	cfg, err := config.Load(config.ConfigPath())
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	cfg.Vendor = "testv"
+	cfg.Endpoint = "main"
+	cfg.Model = "m1"
+	cfg.Vendors = map[string]config.VendorConfig{
+		"testv": {Endpoints: map[string]config.EndpointConfig{
+			"main": {BaseURL: "https://example.com", Protocol: "openai", Models: []string{"m1"}},
+		}},
+	}
+	SetConfig(cfg)
+
+	if err := SetEndpointLimits("testv", "main", 200000, 16384); err != nil {
+		t.Fatalf("SetEndpointLimits: %v", err)
+	}
+	if err := SetModelLimits("testv", "main", "m1", 128000, 8192); err != nil {
+		t.Fatalf("SetModelLimits: %v", err)
+	}
+
+	// No garbage empty-hash instance directory may be created (#532).
+	if _, err := os.Stat(config.InstanceDir("")); !os.IsNotExist(err) {
+		t.Errorf("garbage instance dir %s exists (stat err=%v); empty-instance save must not run without an attached instance", config.InstanceDir(""), err)
+	}
+
+	// Simulated restart: reload the global config; both edits must survive.
+	after, err := config.Load(config.ConfigPath())
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	ep := after.Vendors["testv"].Endpoints["main"]
+	if ep.ContextWindow != 200000 || ep.MaxTokens != 16384 {
+		t.Errorf("endpoint limits after reload = %d/%d, want 200000/16384 (edit lost on restart, #532)", ep.ContextWindow, ep.MaxTokens)
+	}
+	ml, ok := ep.ModelLimits["m1"]
+	if !ok || ml.ContextWindow != 128000 || ml.MaxTokens != 8192 {
+		t.Errorf("model limits after reload = %+v (ok=%v), want 128000/8192", ml, ok)
+	}
+}
+
+// TestSetModelLimitsInstanceSurvivesReload (#532 companion): with an instance
+// attached, a per-model limit edit must land in the instance override file and
+// survive a simulated restart (LoadWithInstance merge).
+func TestSetModelLimitsInstanceSurvivesReload(t *testing.T) {
+	globalPath, workspace := setupConfigTestEnv(t, "")
+
+	cfg := GetGlobalConfig()
+	cfg.Vendors = map[string]config.VendorConfig{
+		"testv": {Endpoints: map[string]config.EndpointConfig{
+			"main": {BaseURL: "https://example.com", Protocol: "openai", Models: []string{"m1"}},
+		}},
+	}
+
+	if err := SetModelLimits("testv", "main", "m1", 128000, 8192); err != nil {
+		t.Fatalf("SetModelLimits: %v", err)
+	}
+
+	// Written to the correct instance directory.
+	instPath := filepath.Join(config.InstanceDir(workspace), "ggcode.yaml")
+	instData, err := os.ReadFile(instPath)
+	if err != nil {
+		t.Fatalf("reading instance config: %v", err)
+	}
+	if !strings.Contains(string(instData), "model_limits") {
+		t.Errorf("instance config missing model_limits delta; got:\n%s", instData)
+	}
+
+	// Simulated restart: the instance merge must resurrect the override.
+	after, err := config.LoadWithInstance(globalPath, workspace)
+	if err != nil {
+		t.Fatalf("LoadWithInstance after update: %v", err)
+	}
+	ep := after.Vendors["testv"].Endpoints["main"]
+	ml, ok := ep.ModelLimits["m1"]
+	if !ok || ml.ContextWindow != 128000 || ml.MaxTokens != 8192 {
+		t.Errorf("model limits after reload = %+v (ok=%v), want 128000/8192", ml, ok)
+	}
+}

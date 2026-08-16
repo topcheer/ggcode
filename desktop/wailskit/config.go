@@ -962,6 +962,28 @@ func GetEndpointDetails(vendor, endpoint string) *EndpointDetails {
 	}
 }
 
+// persistLimitChange persists a vendor limit edit made in the settings UI.
+//
+// When an instance config is attached, the delta goes to the instance override
+// file via SaveInstanceScoped WITHOUT changing the sticky save scope: using
+// SaveScoped("instance") here would redirect all subsequent scope-aware saves
+// (Save*Preference, PatchIMAdapter) to the instance file for the lifetime of
+// this long-held shared config (#282). This path also avoids the full
+// Validate() which requires a non-empty model — limit changes don't affect
+// model validity.
+//
+// When NO instance config is attached, InstanceWorkspace() is "" and the
+// previously unconditional SaveInstanceScoped("") returned nil while
+// silently writing to a garbage instances/e3b0c442… (sha256 of empty string)
+// directory no one parses — the edit was lost on restart (#532). Fall back to
+// the global Save(), the same no-instance path saveWithInstanceWriteback uses.
+func persistLimitChange(cfg *config.Config) error {
+	if cfg.HasInstanceConfigAttached() {
+		return cfg.SaveInstanceScoped(cfg.InstanceWorkspace())
+	}
+	return cfg.Save()
+}
+
 // SetEndpointLimits updates context_window and max_tokens for a vendor/endpoint.
 // A value of 0 means "auto" (clears the override).
 func SetEndpointLimits(vendor, endpoint string, contextWindow, maxTokens int) error {
@@ -982,13 +1004,7 @@ func SetEndpointLimits(vendor, endpoint string, contextWindow, maxTokens int) er
 	ep.MaxTokens = maxTokens
 	vc.Endpoints[endpoint] = ep
 	globalCfg.Vendors[vendor] = vc
-	// Save to the instance override file WITHOUT changing the sticky save
-	// scope: using SaveScoped("instance") here would redirect all subsequent
-	// scope-aware saves (Save*Preference, PatchIMAdapter) to the instance file
-	// for the lifetime of this long-held shared config (#282).
-	// This path also avoids the full Validate() which requires a non-empty
-	// model — endpoint limit changes don't affect model validity.
-	return globalCfg.SaveInstanceScoped(globalCfg.InstanceWorkspace())
+	return persistLimitChange(globalCfg)
 }
 
 // SetModelLimits updates per-model context_window and max_tokens overrides
@@ -1021,8 +1037,9 @@ func SetModelLimits(vendor, endpoint, model string, contextWindow, maxTokens int
 	}
 	vc.Endpoints[endpoint] = ep
 	globalCfg.Vendors[vendor] = vc
-	// Non-sticky instance save — see SetEndpointLimits (#282).
-	return globalCfg.SaveInstanceScoped(globalCfg.InstanceWorkspace())
+	// Non-sticky instance save with no-instance fallback — see
+	// persistLimitChange (#282, #532).
+	return persistLimitChange(globalCfg)
 }
 
 // ModelLimitInfo represents per-model limit overrides for the frontend.
