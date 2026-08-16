@@ -70,6 +70,20 @@ func (f *falsePremiseState) reset() {
 	f.warningCount = 0
 }
 
+// buildVerifyToolPrefixes are command-execution tools whose outcomes are
+// command-granular, not tool-granular: a later successful ls does NOT clear
+// an earlier go build failure (#546 Bug 2).
+var buildVerifyToolPrefixes = map[string]bool{
+	"run_command":         true,
+	"start_command":       true,
+	"wait_command":        true,
+	"read_command_output": true,
+}
+
+// buildVerifyErrorRe identifies build/test/lint failures inside command-tool
+// error snippets — the records that command-granular clearing preserves.
+var buildVerifyErrorRe = regexp.MustCompile(`(?i)(build\s+fail|compil(e|ation)\s+(error|fail)|test.*(fail|panic)|FAIL\s|lint.*(error|fail)|exit\s+status\s+[1-9]|exit\s+code\s+[1-9])`)
+
 // recordToolResult is called after each tool execution.
 func (f *falsePremiseState) recordToolResult(toolName string, resultContent string, isError bool) {
 	if !isError {
@@ -77,10 +91,26 @@ func (f *falsePremiseState) recordToolResult(toolName string, resultContent stri
 		// superseded by newer evidence (#331). "fail → fix → re-run → report"
 		// is the core correct workflow; a stale error record for a tool that
 		// has since succeeded must not poison later success-claim checks.
+		//
+		// Exception (#546): command-execution tools are command-granular —
+		// a successful ls says nothing about an earlier failed go build, so
+		// build/test error snippets from these tools survive same-tool
+		// successes until aged out; all other errors keep #331 supersede.
 		kept := f.recentErrors[:0]
 		for _, e := range f.recentErrors {
 			if e.toolName != toolName {
 				kept = append(kept, e)
+				continue
+			}
+			if buildVerifyToolPrefixes[e.toolName] && buildVerifyErrorRe.MatchString(e.errorSnippet) {
+				// Command-granular (#546): only a success that is ITSELF a
+				// build/verify success ("build passed, 42 tests ok") may
+				// supersede a build failure — preserving #331's fail→fix→
+				// re-run-the-build→report workflow while an unrelated ls
+				// success no longer clears the record.
+				if !matchesBuildSuccessClaim(strings.ToLower(resultContent)) {
+					kept = append(kept, e)
+				}
 			}
 		}
 		f.recentErrors = kept
@@ -252,9 +282,22 @@ func matchesBuildSuccessClaim(lowered string) bool {
 	return buildSuccessRe.MatchString(lowered)
 }
 
-var foundResultRe = regexp.MustCompile(`(?i)(found\s+[0-9]+\s+(match|result|file|reference|occurrence)|returned\s+[0-9]+\s+(match|result))`)
+// foundResultRe counts must be ≥ 1 ([1-9] first digit): "found 0 matches"
+// faithfully relaying a no-hit grep is a true statement, not a confabulated
+// positive (#546). Zero-count statements are excluded via foundZeroCancelRe
+// below — the same cancel pattern the fileExists branch uses
+// (fileNotFoundCancelRe).
+var foundResultRe = regexp.MustCompile(`(?i)(found\s+[1-9][0-9]*\s+(match|result|file|reference|occurrence)|returned\s+[1-9][0-9]*\s+(match|result))`)
+
+// foundZeroCancelRe marks zero-count statements as truthful no-hit reports
+// ("found 0 matches", "returned 0 results as expected") — evidence of
+// checking, not confabulation (#546 Bug 1).
+var foundZeroCancelRe = regexp.MustCompile(`(?i)((found|returned)\s+0\s+(match|result|file|reference|occurrence))`)
 
 func matchesFoundResultClaim(lowered string) bool {
+	if foundZeroCancelRe.MatchString(lowered) {
+		return false
+	}
 	return foundResultRe.MatchString(lowered)
 }
 
