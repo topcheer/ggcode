@@ -192,6 +192,11 @@ func (a *Agent) checkFulfillmentGate(userPrompt string, runStats *RunStats, assi
 // isInformationalRequest returns true if the prompt looks like a question
 // rather than an action request.
 func isInformationalRequest(prompt string) bool {
+	// Lowercase once: indicators are lowercase and sentence-initial
+	// "What"/"How" must still count (#557 — the issue's prompt starts
+	// mid-sentence lowercase, but capitalized sentence starts exposed the
+	// case-sensitive gap).
+	prompt = strings.ToLower(prompt)
 	questionCount := 0
 	for _, indicator := range questionIndicators {
 		if strings.Contains(prompt, indicator) {
@@ -203,9 +208,14 @@ func isInformationalRequest(prompt string) bool {
 	}
 	// Only classify as informational if there are NO action verbs,
 	// or questions heavily outnumber actions.
+	// Word-boundary matching (#557): "what does the updateHandler function
+	// do?" must not count "update" — the bare substring hit misclassified
+	// informational prompts as executable, triggering no-files-edited
+	// reminders on plain Q&A turns. containsWord is the same guard
+	// isReadOnlyTask below already uses.
 	actionCount := 0
 	for _, verb := range actionVerbs {
-		if strings.Contains(prompt, verb) {
+		if containsWord(prompt, verb) {
 			actionCount++
 		}
 	}
@@ -261,11 +271,13 @@ func isAlphaNum(b byte) bool {
 }
 
 // detectActions returns the action verbs found in the prompt.
+// Word-boundary matching (#557): bare substring hits counted identifier
+// fragments ("updateHandler" as "update"), same class as #553/#546.
 func detectActions(prompt string) []string {
 	var found []string
 	seen := make(map[string]bool)
 	for _, verb := range actionVerbs {
-		if strings.Contains(prompt, verb) && !seen[verb] {
+		if containsWord(prompt, verb) && !seen[verb] {
 			found = append(found, verb)
 			seen[verb] = true
 		}

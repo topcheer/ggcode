@@ -40,6 +40,8 @@ import (
 	"encoding/json"
 	"hash/fnv"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/topcheer/ggcode/internal/debug"
 )
@@ -79,6 +81,36 @@ func (t *readHashTracker) reset() {
 	t.warned = make(map[string]bool)
 }
 
+// readValidityKey canonicalizes a path for hash-tracker keys (#557):
+// Clean resolves "./x"-style prefixes so identical paths in different
+// lexical forms converge. The shared normalizePath stays lexical (other
+// detectors depend on it); absolute-vs-relative convergence is handled by
+// lookupReadHash's suffix scan below.
+func readValidityKey(p string) string {
+	return filepath.Clean(strings.TrimSpace(p))
+}
+
+// lookupReadHash finds the stored hash for path, tolerating absolute vs
+// relative form mixtures (#557): reads often arrive absolute (resolveToolPath)
+// while edit calls carry repo-relative paths — the direct-key miss used to
+// silently skip the content-hash expiry check. On a miss, a bounded suffix
+// scan over the (small, per-run) map matches "/w/repo/a.go" against "a.go".
+func lookupReadHash(t *readHashTracker, path string) (uint64, bool) {
+	k := readValidityKey(path)
+	if h, ok := t.hashes[k]; ok {
+		return h, true
+	}
+	for key, h := range t.hashes {
+		if key == k {
+			return h, true
+		}
+		if strings.HasSuffix(key, "/"+k) || strings.HasSuffix(k, "/"+key) {
+			return h, true
+		}
+	}
+	return 0, false
+}
+
 // recordReadHash computes and stores a content hash for a file at read time.
 // Files larger than maxHashBytes are partially hashed (first 16KB).
 // Errors are silent -- this is an optimization layer, not a hard gate.
@@ -90,7 +122,7 @@ func (t *readHashTracker) recordReadHash(path string) {
 	if h == 0 {
 		return // Couldn't read or empty file; skip silently.
 	}
-	t.hashes[normalizePath(path)] = h
+	t.hashes[readValidityKey(path)] = h
 }
 
 // recordWriteHash clears any stored hash for a file the agent wrote/edited.
@@ -99,8 +131,14 @@ func (t *readHashTracker) recordWriteHash(path string) {
 	if path == "" {
 		return
 	}
-	n := normalizePath(path)
+	n := readValidityKey(path)
 	delete(t.hashes, n)
+	// Also drop any opposite-form key (abs vs rel mixture, #557).
+	for key := range t.hashes {
+		if strings.HasSuffix(key, "/"+n) || strings.HasSuffix(n, "/"+key) {
+			delete(t.hashes, key)
+		}
+	}
 	delete(t.warned, n)
 }
 
@@ -115,11 +153,11 @@ func (t *readHashTracker) validateContentAtEdit(path string, oldTextLen int) str
 	if path == "" {
 		return ""
 	}
-	n := normalizePath(path)
-	storedHash, ok := t.hashes[n]
+	storedHash, ok := lookupReadHash(t, path)
 	if !ok {
 		return "" // No prior hash; can't validate.
 	}
+	n := readValidityKey(path)
 	if t.warned[n] {
 		return "" // Already warned for this file.
 	}
