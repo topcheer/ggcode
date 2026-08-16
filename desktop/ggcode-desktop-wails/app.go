@@ -1178,7 +1178,12 @@ func (a *App) DeleteSession(id string) error {
 	// #305: tombstone the ID before the on-disk delete — the run goroutine
 	// cancelled above may still be draining and its late persists must not
 	// O_CREATE-resurrect the deleted session.
-	chat.MarkSessionDeleted(id)
+	// #530: chat may be nil here (startup onboarding early-return path, or
+	// NewChatBridge failure) and MarkSessionDeleted locks b.mu, which panics
+	// on a nil receiver — guard like the sibling methods above.
+	if chat != nil {
+		chat.MarkSessionDeleted(id)
+	}
 	return wailskit.DeleteSession(id)
 }
 
@@ -1679,7 +1684,8 @@ func (a *App) RespondApproval(requestID string, decision string) {
 
 // RespondAskUser is called from the frontend when the user responds to an ask_user request.
 func (a *App) RespondAskUser(requestID string, answersJSON string) {
-	if a.chat == nil {
+	chat := a.chat // #457: single-read snapshot
+	if chat == nil {
 		return
 	}
 
@@ -1689,6 +1695,20 @@ func (a *App) RespondAskUser(requestID string, answersJSON string) {
 		Answers []tool.AskUserAnswer `json:"answers"`
 	}
 	if err := json.Unmarshal([]byte(answersJSON), &payload); err != nil {
+		// #530: a malformed payload must not silently strand the pending
+		// ask_user run — RequestAskUser waits on a channel with no timeout,
+		// so a bare return here hangs the agent until manual cancel. Send a
+		// cancelled response to unblock the waiter and surface the error to
+		// the frontend instead.
+		debug.Log("app", "RespondAskUser: invalid answers payload: %v", err)
+		if msg, merr := json.Marshal(map[string]string{
+			"message": fmt.Sprintf("ask_user response error: invalid payload: %v", err),
+		}); merr == nil {
+			a.emitStreamEvent("error", msg)
+		}
+		chat.RespondAskUser(requestID, tool.AskUserResponse{
+			Status: tool.AskUserStatusCancelled,
+		})
 		return
 	}
 
@@ -1794,8 +1814,10 @@ func (a *App) startIMAdapters() {
 		chat.Emitter = im.NewIMEmitter(a.imManager, lang, a.workDir)
 		// Wire IM tool to the runtime manager
 		chat.SetIMManager(im.NewToolManagerAdapter(a.imManager))
+		// #530: keep this inside the nil guard — SetRuntimeStatusProvider on a
+		// nil chat would panic.
+		chat.SetRuntimeStatusProvider()
 	}
-	chat.SetRuntimeStatusProvider()
 
 	a.imManager.SetBridge(&im.InteractiveTextBridge{
 		Submit: func(_ context.Context, text string, adapterName string) error {
@@ -2134,12 +2156,13 @@ func (a *App) StartShare() (*ShareInfo, error) {
 	if sess := a.currentTunnelSession(); sess != nil {
 		info, err := sess.RefreshInvite(context.Background())
 		if err != nil {
-			// Stale session (room not live, relay restarted, etc.) — discard
-			// and create a fresh one below.
-			debug.Log("share", "refresh invite failed, starting new session: %v", err)
-			a.tunnelMu.Lock()
-			a.tunnelSession = nil
-			a.tunnelMu.Unlock()
+			// Stale session (room not live, relay restarted, etc.) — tear down
+			// and create a fresh one below. #530: merely nil-ing tunnelSession
+			// leaked the un-stopped old session/broker (relay connection and
+			// goroutines kept alive, chat stayed attached to a dead broker), so
+			// run the full stopShare() teardown instead.
+			debug.Log("share", "refresh invite failed, restarting share: %v", err)
+			a.stopShare()
 		} else {
 			return &ShareInfo{
 				ConnectURL:   info.ConnectURL,
