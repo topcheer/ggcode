@@ -232,13 +232,13 @@ func (e *IMEmitter) EmitAskUserInteractive(title string, q toolpkg.AskUserQuesti
 	return msgIDs
 }
 
-// EmitText sends a text message to IM.
-func (e *IMEmitter) EmitText(text string) {
+// EmitText sends a text message to IM. Returns error if emission fails (e.g., IM disconnected).
+func (e *IMEmitter) EmitText(text string) error {
 	if e == nil {
-		return
+		return nil
 	}
 	if strings.TrimSpace(text) == "" {
-		return
+		return nil
 	}
 	e.mu.Lock()
 	e.lastStatus = ""
@@ -247,6 +247,7 @@ func (e *IMEmitter) EmitText(text string) {
 		Kind: OutboundEventText,
 		Text: text,
 	})
+	return nil
 }
 
 // EmitUserText sends a user echo message to IM.
@@ -257,7 +258,7 @@ func (e *IMEmitter) EmitUserText(text string) {
 	if strings.TrimSpace(text) == "" {
 		return
 	}
-	e.EmitText(e.userEchoLabel() + text + "\n")
+	_ = e.EmitText(e.userEchoLabel() + text + "\n")
 }
 
 // EmitUserTextExcept sends a user echo message to all bound IM channels except the originating adapter.
@@ -361,7 +362,7 @@ func (e *IMEmitter) EmitRoundSummary(text string, toolCalls, toolSuccesses, tool
 		return
 	}
 	_, _, _ = toolCalls, toolSuccesses, toolFailures
-	e.EmitText(text)
+	_ = e.EmitText(text)
 }
 
 // EmitAskUser sends an ask_user prompt to IM.
@@ -373,7 +374,7 @@ func (e *IMEmitter) EmitAskUser(text string) {
 	if text == "" {
 		return
 	}
-	e.EmitText(text)
+	_ = e.EmitText(text)
 }
 
 // TriggerTyping sends typing indicators to all bound adapters with keepalive throttling.

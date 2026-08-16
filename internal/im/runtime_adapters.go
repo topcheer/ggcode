@@ -114,6 +114,15 @@ func (m *Manager) PublishAdapterState(state AdapterState) {
 		m.mu.Unlock()
 		return
 	}
+	// Terminal state guard: once an adapter is explicitly marked as disconnected
+	// (by stopAdapter), don't allow late error states to overwrite it. This prevents
+	// stale error messages from appearing in the UI after clean shutdown.
+	// Pattern from whatsapp_adapter L330.
+	if existing, ok := m.adapters[state.Name]; ok && existing.Status == "disconnected" {
+		m.mu.Unlock()
+		debug.Log("im", "PublishAdapterState: ignoring late state update for %s (already disconnected)", state.Name)
+		return
+	}
 	if state.UpdatedAt.IsZero() {
 		state.UpdatedAt = time.Now()
 	}

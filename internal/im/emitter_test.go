@@ -12,7 +12,7 @@ func TestIMEmitterNil(t *testing.T) {
 	var e *IMEmitter
 
 	// All methods on nil should be safe no-ops
-	e.EmitText("hello")
+	_ = e.EmitText("hello")
 	e.EmitUserText("hello")
 	e.EmitUserTextExcept("hello", "qq")
 	e.EmitStatus("thinking")
@@ -78,7 +78,7 @@ func TestIMEmitterEmitText(t *testing.T) {
 	mgr.currentBindings["qq"] = &ChannelBinding{Adapter: "qq", ChannelID: "ch1"}
 
 	e := NewIMEmitter(mgr, "en", "/tmp")
-	e.EmitText("hello world")
+	_ = e.EmitText("hello world")
 
 	// Give the async goroutine time to process
 	time.Sleep(150 * time.Millisecond)
@@ -93,8 +93,8 @@ func TestIMEmitterEmitText(t *testing.T) {
 
 	// Empty text should not emit
 	sink.reset()
-	e.EmitText("")
-	e.EmitText("   ")
+	_ = e.EmitText("")
+	_ = e.EmitText("   ")
 	time.Sleep(50 * time.Millisecond)
 	if len(sink.events()) != 0 {
 		t.Error("empty text should not emit")

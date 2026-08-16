@@ -389,11 +389,16 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 	b.mu.Lock()
 	approvalCh := b.pendingApproval
 	b.mu.Unlock()
-	if route.Kind == InboundRouteApproval && approvalCh != nil {
-		approvalCh <- route.Decision
-		b.mu.Lock()
-		b.pendingApproval = nil
-		b.mu.Unlock()
+	if route.Kind == InboundRouteApproval {
+		if approvalCh != nil {
+			approvalCh <- route.Decision
+			b.mu.Lock()
+			b.pendingApproval = nil
+			b.mu.Unlock()
+			return nil
+		}
+		// Approval timed out between snapshot and re-lock
+		debug.Log("daemon-bridge", "dropping stale approval reply: %s", text)
 		return nil
 	}
 
@@ -401,12 +406,17 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 	b.mu.Lock()
 	pending := b.pendingAsk
 	b.mu.Unlock()
-	if route.Kind == InboundRouteAskUser && pending != nil {
-		resp := BuildAskUserResponseFromText(pending.request, route.Text)
-		pending.response <- resp
-		b.mu.Lock()
-		b.pendingAsk = nil
-		b.mu.Unlock()
+	if route.Kind == InboundRouteAskUser {
+		if pending != nil {
+			resp := BuildAskUserResponseFromText(pending.request, route.Text)
+			pending.response <- resp
+			b.mu.Lock()
+			b.pendingAsk = nil
+			b.mu.Unlock()
+			return nil
+		}
+		// AskUser timed out between snapshot and re-lock
+		debug.Log("daemon-bridge", "dropping stale ask_user reply: %s", text)
 		return nil
 	}
 
@@ -443,7 +453,7 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 	b.runQueuedLoop(ctx2, content, "", func(ctx context.Context, text string) bool {
 		return false
 	}, func(err error) {
-		b.emitter.EmitText(provider.UserFacingError(err))
+		_ = b.emitter.EmitText(provider.UserFacingError(err))
 	})
 
 	return nil
@@ -473,8 +483,26 @@ func (b *DaemonBridge) HandleAskUser(ctx context.Context, req toolpkg.AskUserReq
 
 		// Try interactive buttons for choice questions; fallback to text for
 		// adapters that don't support InteractiveSender (e.g. QQ, DingDing).
+		// IMPORTANT: Register pendingAsk BEFORE sending buttons to eliminate
+		// the race window where early button clicks are silently dropped.
+		var msgIDs map[string]string
 		if len(q.Choices) > 0 {
-			msgIDs := b.emitter.EmitAskUserInteractive(q.Title, q, text)
+			// Block until the user replies via IM (text or button callback)
+			isMulti := q.Kind == toolpkg.AskUserKindMulti
+			pending := &pendingAskUser{
+				request:     singleReq, // use single-question request for correct answer mapping
+				response:    make(chan toolpkg.AskUserResponse, 1),
+				multiSelect: isMulti,
+			}
+			b.mu.Lock()
+			b.pendingAsk = pending
+			if isMulti {
+				b.multiSelectChosen = nil // reset accumulated selections
+			}
+			b.mu.Unlock()
+
+			// Now send interactive buttons - they can be safely received
+			msgIDs = b.emitter.EmitAskUserInteractive(q.Title, q, text)
 			if len(msgIDs) > 0 {
 				b.mu.Lock()
 				b.interactiveMsgIDs = msgIDs
@@ -543,7 +571,9 @@ func (b *DaemonBridge) handleApproval(ctx context.Context, toolName string, inpu
 	} else {
 		prompt = FormatApprovalRequest(ToolLangEn, toolName, input)
 	}
-	b.emitter.EmitText(prompt)
+	if err := b.emitter.EmitText(prompt); err != nil {
+		debug.Log("daemon", "approval: failed to emit prompt for tool=%s: %v", toolName, err)
+	}
 
 	// Create a channel and register it so IM replies can resolve it.
 	ch := make(chan permission.Decision, 1)
@@ -568,7 +598,7 @@ func (b *DaemonBridge) handleApproval(ctx context.Context, toolName string, inpu
 			resultMsg = FormatApprovalResult(ToolLangEn, toolName, decisionStr)
 		}
 		if resultMsg != "" {
-			b.emitter.EmitText(resultMsg)
+			_ = b.emitter.EmitText(resultMsg)
 		}
 		return decision
 	case <-ctx.Done():
@@ -646,7 +676,7 @@ func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.Co
 				if json.Unmarshal([]byte(event.Tool.Arguments), &args) == nil && args.Description != "" {
 					label = "📝 " + args.Description
 				}
-				b.emitter.EmitText(label)
+				_ = b.emitter.EmitText(label)
 			}
 			// Sleep tool is special: emit the duration immediately
 			// so the user sees it before the tool blocks.
@@ -710,7 +740,7 @@ func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.Co
 			if (mode == "quiet" || mode == "summary") && len(round.PendingTools) > 0 {
 				summary := formatToolSummary(b.language, round.PendingTools, round.ToolCalls, round.ToolSuccesses, round.ToolFailures)
 				if summary != "" {
-					b.emitter.EmitText(summary)
+					_ = b.emitter.EmitText(summary)
 				}
 			}
 
@@ -730,7 +760,7 @@ func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.Co
 
 		case provider.StreamEventError:
 			if !errors.Is(event.Error, context.Canceled) {
-				b.emitter.EmitText(provider.UserFacingError(event.Error))
+				_ = b.emitter.EmitText(provider.UserFacingError(event.Error))
 			}
 			// #552-D: a failed round must not leak its partial text into
 			// the next round — without this Reset, half-streamed text from
@@ -1041,7 +1071,7 @@ func (b *DaemonBridge) handleSlashCommand(ctx context.Context, text string, msg 
 		},
 	}); result.Handled {
 		if result.Response != "" {
-			b.emitter.EmitText(result.Response)
+			_ = b.emitter.EmitText(result.Response)
 		}
 		if result.MuteSelfAdapter != "" {
 			time.Sleep(500 * time.Millisecond)
@@ -1081,17 +1111,17 @@ func (b *DaemonBridge) handleConfigCommand() error {
 	fn := b.onProviderSwitch
 	b.mu.Unlock()
 	if fn == nil {
-		b.emitter.EmitText("❌ Config display not available in this mode.")
+		_ = b.emitter.EmitText("❌ Config display not available in this mode.")
 		return nil
 	}
 
 	// Call with all empty → returns current config summary
 	summary, err := fn("", "", "")
 	if err != nil {
-		b.emitter.EmitText(fmt.Sprintf("❌ %s", err))
+		_ = b.emitter.EmitText(fmt.Sprintf("❌ %s", err))
 		return nil
 	}
-	b.emitter.EmitText(summary)
+	_ = b.emitter.EmitText(summary)
 	return nil
 }
 
