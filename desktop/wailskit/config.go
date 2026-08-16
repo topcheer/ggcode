@@ -1075,12 +1075,19 @@ func GetModelLimits(vendor, endpoint string) []ModelLimitInfo {
 	return result
 }
 
+// AnthropicOAuthStatus reports whether the stored Anthropic OAuth token is
+// actually usable, aligning with auth.Store.HasUsableToken semantics (#560).
+// Previously it returned true for any non-empty AccessToken, ignoring
+// ExpiresAt — a revoked/expired token showed the desktop UI as "connected"
+// while API calls failed with 401. Return type stays bool so the
+// app.go GetAnthropicOAuthStatus binding and SettingsPage consumer are
+// unchanged.
 func AnthropicOAuthStatus() bool {
-	info, err := auth.DefaultStore().Load(auth.ProviderAnthropic)
-	if err != nil || info == nil {
+	usable, err := auth.DefaultStore().HasUsableToken(auth.ProviderAnthropic)
+	if err != nil {
 		return false
 	}
-	return info.AccessToken != ""
+	return usable
 }
 
 // StartAnthropicOAuth initiates the OAuth flow and returns the URL for the user to visit.

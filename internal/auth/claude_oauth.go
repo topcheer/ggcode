@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/safego"
@@ -95,6 +96,10 @@ func base64urlEncode(data []byte) string {
 func startClaudeCallbackListenerNet(expectedState string) (*ClaudeOAuthFlow, error) {
 	ch := make(chan claudeCallbackResult, 1)
 
+	// codeDelivered latches on the first successful callback so the
+	// authorization code is single-consumption (#560).
+	var codeDelivered atomic.Bool
+
 	mux := http.NewServeMux()
 	server := &http.Server{
 		Handler:      mux,
@@ -131,6 +136,18 @@ func startClaudeCallbackListenerNet(expectedState string) (*ClaudeOAuthFlow, err
 			return
 		}
 
+		// Single-consumption guard (#560): the authorization code is delivered
+		// exactly once. Previously the success branch left the listener running
+		// with no completion flag, so while CompleteAnthropicOAuth was still in
+		// the token-exchange step (up to 30s) a second callback carrying the
+		// same valid state could inject another code into the channel.
+		if !codeDelivered.CompareAndSwap(false, true) {
+			w.Header().Set("Content-Type", "text/plain")
+			w.WriteHeader(http.StatusGone)
+			fmt.Fprint(w, "Authorization code already delivered.")
+			return
+		}
+
 		// Redirect browser to success page
 		w.Header().Set("Location", claudeOAuthSuccessURL)
 		w.WriteHeader(http.StatusFound)
@@ -140,6 +157,16 @@ func startClaudeCallbackListenerNet(expectedState string) (*ClaudeOAuthFlow, err
 		case ch <- claudeCallbackResult{Code: code, IsAutomatic: true}:
 		default:
 		}
+
+		// Stop accepting further callbacks immediately: the deferred
+		// flow.Close() in CompleteAnthropicOAuth only runs after the token
+		// exchange. Async because http.Server.Shutdown waits for in-flight
+		// handlers (including this one) to return before completing.
+		safego.Go("auth.claudeOAuth.shutdown", func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			_ = server.Shutdown(shutdownCtx)
+		})
 	})
 
 	// Use net.Listen to get a random port
