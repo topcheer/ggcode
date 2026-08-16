@@ -17,11 +17,42 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
+
+// recordingTransport is a thread-safe Transport recording every message
+// the broker's senderLoop delivers — the stable observation point for
+// outbound traffic (senderLoop owns b.outbound; with a nil session its
+// batches are consumed-and-dropped, so peeking the queue races the loop).
+type recordingTransport struct {
+	mu   sync.Mutex
+	sent []GatewayMessage
+}
+
+func (r *recordingTransport) Send(data []byte) error {
+	var msg GatewayMessage
+	if err := json.Unmarshal(data, &msg); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	r.sent = append(r.sent, msg)
+	r.mu.Unlock()
+	return nil
+}
+func (r *recordingTransport) OnMessage(func([]byte)) {}
+func (r *recordingTransport) OnDisconnect(func())    {}
+func (r *recordingTransport) Close() error           { return nil }
+func (r *recordingTransport) IsConnected() bool      { return true }
+
+func (r *recordingTransport) messages() []GatewayMessage {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]GatewayMessage(nil), r.sent...)
+}
 
 // relayWouldClearHistory simulates ggcode-relay bindRoomSession epoch
 // handling: an inbound event epoch of 0 is coerced to 1; any epoch that then
@@ -53,6 +84,13 @@ func TestIssue534BugBControlAndSnapshotEventsCarryAuthorityEpoch(t *testing.T) {
 	b := NewBroker(nil)
 	defer b.Stop()
 
+	// Observe at the SEND side via a P2P transport: senderLoop consumes
+	// b.outbound and (with a nil session) drops the batch after consumption,
+	// so draining b.outbound directly races the consumer loop — that flaked
+	// in CI as "expected 2 outbound messages, got 0" while passing locally.
+	rec := &recordingTransport{}
+	b.SetP2PTransport(rec)
+
 	// Bump the generation so the broker epoch is not the coerced default 1.
 	b.resetSession()
 	roomEpoch := b.AuthorityEpoch()
@@ -66,7 +104,15 @@ func TestIssue534BugBControlAndSnapshotEventsCarryAuthorityEpoch(t *testing.T) {
 		Data: json.RawMessage(`{"id":"1","chunk":"hi"}`),
 	})
 
-	msgs := drainOutbound(b)
+	// Bounded wait for senderLoop to deliver both messages.
+	var msgs []GatewayMessage
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if msgs = rec.messages(); len(msgs) >= 2 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 	if len(msgs) != 2 {
 		t.Fatalf("expected 2 outbound messages, got %d", len(msgs))
 	}
