@@ -1,5 +1,28 @@
 package agent
 
+// ═══ TOMBSTONE (#556): DEAD CODE — zero production call sites ═══
+//
+// checkPrematureExit is never invoked: write_integrity.go and every
+// registration table in this package have no exit-call entry (verified by
+// the ver-43 probe, GitHub issue #556). Per the #328/#330/#499 dead-detector
+// convention this file is kept with a tombstone rather than deleted, and
+// must NOT be wired into the write-integrity registry as-is.
+//
+// If resurrected, fix these two probe-verified defects FIRST:
+//
+//  1. Method-name false exemption: findPrematureExitCalls skips every
+//     FuncDecl named "main", including METHODS like `func (a *App) main()`,
+//     whose body is NOT a process entry point. The exemption must require
+//     d.Recv == nil (plain function) before skipping.
+//
+//  2. Whole-file cmd/ exemption is too broad: isCmdPackage returns true when
+//     ANY path component equals "cmd" — so `pkg/cmd/util.go` or an
+//     `internal/foo/cmd_helper`-style tree is entirely exempted even though
+//     such files are library code, not binary entry points. It must only
+//     exempt files in a top-level cmd/<name>/ tree whose package is main.
+//
+// ═══ END TOMBSTONE ═══
+
 // Premature Exit Call Detection in Go Code
 //
 // Problem: AI coding agents frequently produce Go code that calls os.Exit(),

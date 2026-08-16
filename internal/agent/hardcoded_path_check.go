@@ -157,9 +157,18 @@ func checkHardcodedPaths(filePath, oldContent, newContent string) []string {
 
 	var warnings []string
 
+	// #556: strip comment lines first so paths mentioned in prose (// or #
+	// comments) cannot trigger warnings — same pattern as #544/#527
+	// (premature_refactor.prStripCommentLines).
+	scanNew := hpStripCommentLines(newContent)
+	scanOld := hpStripCommentLines(oldContent)
+
 	for _, pp := range hardcodedPathPatterns {
-		oldMatches := pp.re.FindAllString(oldContent, -1)
-		newMatches := pp.re.FindAllString(newContent, -1)
+		// #556: count occurrences line-by-line, exempting URL route literals
+		// (http.HandleFunc("/home/dashboard", h)) that the bare regex mistakes
+		// for machine-specific home paths (issue #556 vs #516 zero-FP claim).
+		oldMatches := pp.re.FindAllString(scanOld, -1)
+		newMatches := countNonExemptPathMatches(scanNew, pp.re)
 
 		// Per-instance set comparison (fix #171 — count-diff is blind to
 		// remove-N-add-N; see hardcoded_secret_check.go).
@@ -196,4 +205,91 @@ func formatPathWarning(pathType string, count int) string {
 			"and other developers. Use a relative path, os.UserHomeDir(), "+
 			"filepath.Join(), or an environment variable instead.",
 		count, noun, pathType)
+}
+
+// hpStripCommentLines removes // and # comment lines and /* */ blocks so
+// that paths mentioned in prose cannot trigger path warnings — only code
+// counts. Mirrors premature_refactor.prStripCommentLines (#544/#527 pattern;
+// local copy to avoid widening that file's API).
+func hpStripCommentLines(s string) string {
+	lines := strings.Split(s, "\n")
+	var keep []string
+	inBlock := false
+	for _, ln := range lines {
+		trimmed := strings.TrimSpace(ln)
+		if inBlock {
+			if strings.Contains(trimmed, "*/") {
+				inBlock = false
+			}
+			continue
+		}
+		if strings.HasPrefix(trimmed, "//") || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "/*") {
+			if !strings.Contains(trimmed, "*/") {
+				inBlock = true
+			}
+			continue
+		}
+		keep = append(keep, ln)
+	}
+	return strings.Join(keep, "\n")
+}
+
+// hpRouteContextWords are tokens that, when they appear in the line PREFIX
+// before a "/..." string literal, indicate a route-registration context
+// rather than a filesystem path (#556).
+var hpRouteContextWords = []string{
+	"handlefunc", // net/http, gin, echo, fiber...
+	"handle(",    // mux.Handle, chi Router.Handle
+	"route",      // r.Route, router.Route(...)
+	"router",     // gin.Default() assigned to var router
+	"mux",        // gorilla mux
+	"endpoint",   // endpoint registration
+	"http.",      // http.HandleX / http server config
+	"https.",
+	// HTTP verb methods (router.GET/POST/...). Dot-prefixed so that prose-like
+	// helper names ("parseInput(", which contains "put(") do not match.
+	".get(", ".post(", ".put(", ".delete(", ".patch(", ".head(", ".options(",
+}
+
+// isRoutePathLiteral reports whether the match at column matchStart in line
+// is a URL route literal (e.g. the first argument of
+// http.HandleFunc("/home/dashboard", h)) rather than a filesystem path.
+// Structural rule: the match must start immediately after a quote AND the
+// prefix before it must contain a routing-context word. This keeps real
+// filesystem paths like os.Open("/home/u/http-cache/file") reportable —
+// "http" inside the path value or after the match does not exempt it.
+func isRoutePathLiteral(line, match string, matchStart int) bool {
+	// Only "/"-rooted patterns can be URL routes (Windows C:\ paths cannot).
+	if !strings.HasPrefix(match, "/") {
+		return false
+	}
+	// Match must begin immediately after a string-literal opening quote.
+	if matchStart == 0 || (line[matchStart-1] != '"' && line[matchStart-1] != '\'') {
+		return false
+	}
+	prefix := strings.ToLower(line[:matchStart])
+	for _, w := range hpRouteContextWords {
+		if strings.Contains(prefix, w) {
+			return true
+		}
+	}
+	return false
+}
+
+// countNonExemptPathMatches finds all regex matches per line, skipping URL
+// route literals exempt by isRoutePathLiteral (#556).
+func countNonExemptPathMatches(content string, re *regexp.Regexp) []string {
+	var out []string
+	for _, ln := range strings.Split(content, "\n") {
+		for _, loc := range re.FindAllStringIndex(ln, -1) {
+			m := ln[loc[0]:loc[1]]
+			if !isRoutePathLiteral(ln, m, loc[0]) {
+				out = append(out, m)
+			}
+		}
+	}
+	return out
 }

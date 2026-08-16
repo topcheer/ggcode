@@ -279,6 +279,13 @@ func BindIMAdapter(name, workingDir string, imMgr interface{ BindAdapterToWorksp
 		return fmt.Errorf("IM manager not initialized")
 	}
 
+	// #556: validate the adapter exists in config BEFORE binding. Without this
+	// check the binding persisted to disk for an adapter that has no config
+	// entry — a "ghost" binding invisible in the UI, leaving state desynced.
+	if err := imAdapterExistsInConfig(name); err != nil {
+		return err
+	}
+
 	workspace := session.NormalizeWorkspacePath(workingDir)
 	return imMgr.BindAdapterToWorkspace(name, workspace)
 }
@@ -292,6 +299,11 @@ func RebindIMAdapter(name, workingDir string, imMgr interface{ BindAdapterToWork
 		return fmt.Errorf("IM manager not initialized")
 	}
 
+	// #556: same ghost-binding guard as BindIMAdapter.
+	if err := imAdapterExistsInConfig(name); err != nil {
+		return err
+	}
+
 	workspace := session.NormalizeWorkspacePath(workingDir)
 	return imMgr.BindAdapterToWorkspace(name, workspace)
 }
@@ -302,4 +314,24 @@ func UnbindIMAdapter(name string, imMgr interface{ UnbindAdapter(string) error }
 		return fmt.Errorf("IM manager not initialized")
 	}
 	return imMgr.UnbindAdapter(name)
+}
+
+// imAdapterExistsInConfig verifies that the named adapter has a config entry
+// in the user's ggcode.yaml (#556). Binding an adapter that is absent from
+// config persists a binding the UI cannot show (no adapter list entry),
+// producing a ghost binding on disk.
+func imAdapterExistsInConfig(name string) error {
+	cfg, err := config.Load(config.ConfigPath())
+	if err != nil {
+		// Config unreadable: do not block binding on a load failure — the
+		// manager may still be able to resolve the adapter at runtime.
+		return fmt.Errorf("load config: %w", err)
+	}
+	if cfg.IM.Adapters == nil {
+		return fmt.Errorf("IM adapter %q not found in config (add it in IM settings before binding)", name)
+	}
+	if _, ok := cfg.IM.Adapters[name]; !ok {
+		return fmt.Errorf("IM adapter %q not found in config (add it in IM settings before binding)", name)
+	}
+	return nil
 }

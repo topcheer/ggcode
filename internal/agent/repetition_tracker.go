@@ -84,7 +84,10 @@ func (rt *repetitionTracker) recordEditAttempt(toolName string, args json.RawMes
 	if filePath == "" {
 		return ""
 	}
-	filePath = normalizeFilePath(filePath)
+	// #556: shared rune-safe key so edit-side and read-side counters agree
+	// even for >80-rune paths (the read side previously keyed on a truncated
+	// hint from overseer.extractFileHint, so the two sides never matched).
+	filePath = repetitionFileKey(filePath)
 
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
@@ -111,7 +114,8 @@ func (rt *repetitionTracker) recordReadAttempt(filePath string) string {
 	if filePath == "" {
 		return ""
 	}
-	filePath = normalizeFilePath(filePath)
+	// #556: same shared key as the edit side — see repetitionFileKey.
+	filePath = repetitionFileKey(filePath)
 
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
@@ -223,6 +227,31 @@ func normalizeFilePath(path string) string {
 	// is one premature soft hint at 3 failures, far lighter than the escalate
 	// false-negative this normalization prevents.
 	return strings.ToLower(path)
+}
+
+// truncateRunesSafe truncates s to at most max runes without ever slicing
+// through a multi-byte sequence.
+func truncateRunesSafe(s string, max int) string {
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return string(r[:max])
+}
+
+// repetitionFileKey is the canonical tracker key for a file path, shared by
+// the edit side (recordEditAttempt) and the read side (recordReadAttempt).
+// #556: previously the edit side keyed on the full normalized path while the
+// read side keyed on a truncated hint (overseer.go extractFileHint: >80-rune
+// paths become 77 runes + a literal "..." suffix), so for long paths the two
+// counters diverged and the read-edit-fail cycle detector never fired
+// (probe: one.go=3, two.go=0). Both sides now converge on a 77-rune key:
+// the edit side truncates to 77, the read side strips the "..." marker and
+// truncates to 77 (paths <=80 runes pass through extractFileHint unchanged
+// and truncate identically here).
+func repetitionFileKey(path string) string {
+	p := strings.TrimSuffix(normalizeFilePath(path), "...")
+	return truncateRunesSafe(p, 77)
 }
 
 // --- Agent integration ---

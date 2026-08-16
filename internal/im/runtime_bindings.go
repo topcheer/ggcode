@@ -138,6 +138,14 @@ func (m *Manager) DeleteBinding(adapter, workspace string) error {
 
 // BindAdapterToWorkspace binds an adapter to a specific workspace,
 // removing any existing binding to a different workspace.
+//
+// #556 contract note: this method does NOT validate that adapterName exists
+// in the user's config — that is the caller's responsibility. Binding before
+// the adapter is registered/started is a SUPPORTED flow ("bound but not yet
+// active; takes effect on next startup"), so a runtime-side existence check
+// here would break legitimate deferred activation. The desktop entry point
+// (desktop/wailskit/im.go BindIMAdapter/RebindIMAdapter) validates against
+// config to reject ghost bindings.
 func (m *Manager) BindAdapterToWorkspace(adapterName, workspace string) error {
 	if adapterName == "" || workspace == "" {
 		return fmt.Errorf("adapter name and workspace must not be empty")
