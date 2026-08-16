@@ -68,12 +68,14 @@ func TestCheckDebugStmts_DebuggerJS(t *testing.T) {
 	}
 }
 
-func TestCheckDebugStmts_PythonPrint(t *testing.T) {
+// #512: print() is Python's only stdout primitive; a normal CLI print is
+// deliberately NOT flagged (sa-171 A1 FP). The debug constructs are.
+func TestCheckDebugStmts_PythonPrintNotFlagged(t *testing.T) {
 	old := "def foo():\n    pass\n"
-	new := "def foo():\n    print('debugging')\n"
+	new := "def foo():\n    print('result ready')\n"
 	warning := checkDebugStmts("foo.py", old, new)
-	if warning == "" {
-		t.Fatal("expected debug statement warning for print()")
+	if warning != "" {
+		t.Errorf("expected no warning for normal Python print output, got: %s", warning)
 	}
 }
 
@@ -86,12 +88,14 @@ func TestCheckDebugStmts_PythonBreakpoint(t *testing.T) {
 	}
 }
 
-func TestCheckDebugStmts_RustPrintln(t *testing.T) {
+// #512: println! is Rust's standard output macro; normal output is not
+// flagged. dbg! remains the explicit debug signal.
+func TestCheckDebugStmts_RustPrintlnNotFlagged(t *testing.T) {
 	old := "fn main() {}\n"
-	new := "fn main() {\n    println!(\"debug\");\n}\n"
+	new := "fn main() {\n    println!(\"Server listening on {}\", port);\n}\n"
 	warning := checkDebugStmts("main.rs", old, new)
-	if warning == "" {
-		t.Fatal("expected debug statement warning for println!")
+	if warning != "" {
+		t.Errorf("expected no warning for normal Rust println! output, got: %s", warning)
 	}
 }
 
@@ -178,21 +182,25 @@ func TestCheckDebugStmts_MultipleTypes(t *testing.T) {
 	}
 }
 
-func TestCheckDebugStmts_JavaSystemOut(t *testing.T) {
+// #512: System.out is Java's standard output primitive; normal output is
+// not flagged (sa-171 A3 FP).
+func TestCheckDebugStmts_JavaSystemOutNotFlagged(t *testing.T) {
 	old := "public class App {\n}\n"
-	new := "public class App {\n    public void run() {\n        System.out.println(\"debug\");\n    }\n}\n"
+	new := "public class App {\n    public void run() {\n        System.out.println(\"Listening on 8080\");\n    }\n}\n"
 	warning := checkDebugStmts("App.java", old, new)
-	if warning == "" {
-		t.Fatal("expected debug statement warning for System.out.println")
+	if warning != "" {
+		t.Errorf("expected no warning for normal System.out output, got: %s", warning)
 	}
 }
 
-func TestCheckDebugStmts_CPP(t *testing.T) {
+// #512: printf is C's standard output primitive; CLI usage output is not
+// flagged (sa-171 A2 FP).
+func TestCheckDebugStmts_CPPPrintfNotFlagged(t *testing.T) {
 	old := "int main() {\n    return 0;\n}\n"
-	new := "int main() {\n    printf(\"debug\\n\");\n    return 0;\n}\n"
+	new := "int main() {\n    printf(\"Usage: %s <input>\\n\", argv[0]);\n    return 0;\n}\n"
 	warning := checkDebugStmts("main.cpp", old, new)
-	if warning == "" {
-		t.Fatal("expected debug statement warning for printf")
+	if warning != "" {
+		t.Errorf("expected no warning for normal printf usage output, got: %s", warning)
 	}
 }
 

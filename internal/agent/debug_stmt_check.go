@@ -56,8 +56,22 @@ type leftoverDebugPattern struct {
 
 // leftoverDebugPatterns are ordered by language. Each uses word boundaries or
 // function-call syntax to minimize false positives.
+//
+// Design rule (#512): only flag UNAMBIGUOUS debug signals. Language-standard
+// stdout primitives are deliberately NOT matched — print() is the only way
+// to write output in Python, printf in C, System.out in Java, print in
+// Swift/Dart, println! in Rust, and puts/p in Ruby; CLI programs' normal
+// output is token-indistinguishable from debug prints, and coaching the agent
+// to "remove them" trains it to delete legitimate output (sa-171 probes:
+// a 10-print Python CLI reported "10 x print() (Python)"). Languages are
+// only covered when (a) an explicit debug construct exists (debugger;,
+// breakpoint(), dbg!, pprint, var_dump, debugPrint/dump), or (b) the language
+// has a strong logging convention making bare prints a leftover signal in
+// agent-written non-test code (Go's log.Printf, JS's structured loggers).
 var leftoverDebugPatterns = []leftoverDebugPattern{
 	// --- Go ---
+	// Kept: Go's strong log convention makes bare fmt.Print in non-test
+	// agent-written code a leftover-debug signal (sa-171 A5: true positive).
 	{
 		name:    "fmt.Print (Go)",
 		pattern: regexp.MustCompile(`\bfmt\.Print(f|ln)?\s*\(`),
@@ -82,11 +96,8 @@ var leftoverDebugPatterns = []leftoverDebugPattern{
 	},
 
 	// --- Python ---
-	{
-		name:    "print() (Python)",
-		pattern: regexp.MustCompile(`\bprint\s*\(`),
-		exts:    map[string]bool{".py": true},
-	},
+	// print() removed (#512): Python's only stdout primitive. Only the
+	// explicit debug constructs remain.
 	{
 		name:    "pprint (Python)",
 		pattern: regexp.MustCompile(`\bpprint(\.pprint)?\s*\(`),
@@ -99,35 +110,23 @@ var leftoverDebugPatterns = []leftoverDebugPattern{
 	},
 
 	// --- Rust ---
+	// println!/print!/eprintln!/eprint removed (#512): Rust's standard
+	// output macros. Only dbg! is an explicit debug signal.
 	{
-		name:    "println!/print!/eprintln! (Rust)",
-		pattern: regexp.MustCompile(`\b(println|print|eprintln|eprint|dbg)!`),
+		name:    "dbg! macro (Rust)",
+		pattern: regexp.MustCompile(`\bdbg!`),
 		exts:    map[string]bool{".rs": true},
 	},
 
-	// --- Ruby ---
-	// Note: bare `p` is an extremely common Ruby variable name (Proc, person,
-	// point). Only match actual debug calls: p(obj), puts(x), pp(x), warn(msg),
-	// or string-argument forms like puts "text" / p "text" (#112).
-	{
-		name:    "puts/p/pp (Ruby)",
-		pattern: regexp.MustCompile(`\b(puts|pp|p|warn)\s*[\({]|\b(puts|pp|p|warn)\s+"`),
-		exts:    map[string]bool{".rb": true},
-	},
+	// Ruby group removed (#512): puts/p/pp/warn are Ruby's standard output
+	// and warning primitives; no unambiguous debug construct exists, and the
+	// regex had no comment awareness (`# p(x)` warned, sa-171 A6).
 
-	// --- Java / Kotlin ---
-	{
-		name:    "System.out/err (Java/Kotlin)",
-		pattern: regexp.MustCompile(`\bSystem\.(out|err)\.(print|println|printf)\s*\(`),
-		exts:    map[string]bool{".java": true, ".kt": true},
-	},
+	// Java/Kotlin group removed (#512): System.out is the standard output
+	// primitive (sa-171 A3 FP).
 
-	// --- C / C++ ---
-	{
-		name:    "printf/fprintf (C/C++)",
-		pattern: regexp.MustCompile(`\b(printf|fprintf|puts|fputs|cout|cerr)\s*[<(]`),
-		exts:    map[string]bool{".c": true, ".cpp": true, ".cc": true, ".h": true, ".hpp": true},
-	},
+	// C/C++ group removed (#512): printf/fprintf/puts/cout are the standard
+	// output primitives (sa-171 A2 FP).
 
 	// --- PHP ---
 	{
@@ -136,17 +135,15 @@ var leftoverDebugPatterns = []leftoverDebugPattern{
 		exts:    map[string]bool{".php": true},
 	},
 
-	// --- Dart ---
-	{
-		name:    "print (Dart)",
-		pattern: regexp.MustCompile(`\bprint\s*\(`),
-		exts:    map[string]bool{".dart": true},
-	},
+	// Dart group removed (#512): print is the standard output primitive
+	// (sa-171 A4 FP); no unambiguous debug construct.
 
 	// --- Swift ---
+	// print removed (#512, sa-171 A4 FP); debugPrint/dump remain explicit
+	// debug signals.
 	{
-		name:    "print/debugPrint (Swift)",
-		pattern: regexp.MustCompile(`\b(print|debugPrint|dump)\s*\(`),
+		name:    "debugPrint/dump (Swift)",
+		pattern: regexp.MustCompile(`\b(debugPrint|dump)\s*\(`),
 		exts:    map[string]bool{".swift": true},
 	},
 }

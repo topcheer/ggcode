@@ -256,6 +256,33 @@ func registerAllChecks() {
 		// goroutine check requires scope-aware sync lookup + FuncLit name
 		// fix. exprToString (lock_without_unlock_check.go) and isTestFile
 		// (debug_sniffer.go) survive in registered files.
+		// #512: same fate for "i18n" and "time-format" (9th dead-code
+		// instance; sa-171 probe-verified). i18n: its signature discards
+		// oldContent entirely (identical rewrite re-reports — the #509 a11y
+		// zero-delta class), "YYYY-MM-DD" literals warn as "locale-sensitive"
+		// (ISO 8601 is locale-independent BY DESIGN; API schemas/regexes/docs
+		// are full of it), and its Go advice ("use locale-aware formatting"
+		// for t.Format("2006-01-02")) is unimplementable — the Go stdlib has
+		// no locale-aware date API (x/text is third-party), and log/wire
+		// formats SHOULD be locale-stable. time-format: the scalar delta
+		// (len(old)>=len(new) → nil) is broken in both directions —
+		// fix-one-add-one silently suppresses a NEW wrong layout (the #510
+		// ctxkey class) while any addition re-reports pre-existing ones; and
+		// extractTimeMethodName matches ANY .Parse receiver (strptime.Parse
+		// with a correct strftime layout gets "fixed" into Go tokens,
+		// breaking it). Its core signal (time.Parse("YYYY-MM-DD") → suggest
+		// "2006-01-02") was confirmed CORRECT — strongest partial-revival
+		// candidate of the three; preconditions: per-instance multiset delta
+		// (#171 convention) + receiver restriction (go/types or a time./
+		// known-time-var allowlist). Same round: the LIVE checkDebugStmts
+		// pattern table was narrowed to unambiguous debug signals — Python
+		// print/C printf/Java System.out/Swift+Dart print/Rust println!/
+		// Ruby puts-p are languages' ONLY stdout primitives, and coaching
+		// "Remove them" trained agents to delete legitimate CLI output
+		// (sa-171 A1: a 10-print Python script warned "10 x print()
+		// (Python)"); kept only debugger;/breakpoint()/dbg!/pprint/
+		// var_dump/debugPrint/dump + Go fmt.Print (log convention) + JS
+		// console.* (structured-logger convention).
 		{Name: "concurrent-map-access", Langs: []Language{LangGo}, Run: stringCheck(checkConcurrentMapAccess)},
 		{Name: "context-leak", Langs: []Language{LangGo}, Run: stringCheck(checkContextLeak)},
 		{Name: "resource-leak", Langs: []Language{LangGo}, Run: sliceCheck(checkResourceLeaks)},
