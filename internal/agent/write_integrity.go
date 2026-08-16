@@ -111,6 +111,16 @@ func registerAllChecks() {
 		// unit-tested detector with zero wiring (third instance of the
 		// #328/#330 dead-detector class).
 		{Name: "append-ignored", Langs: []Language{LangGo}, Run: sliceCheck(checkAppendIgnored)},
+		// #503: there is deliberately NO "assertion-weakening" entry here.
+		// checkAssertionWeakening (born 3129668f, unregistered by the
+		// fc5c4aad critical-only refactor) was DELETED, not resurrected:
+		// its position-unaware literal comparison treats human-readable
+		// message strings ("failed to fetch" → "failed to fetch user
+		// profile") as expected values, so re-registering it as-is would
+		// fire reward-hacking accusations on everyday error-message edits
+		// and eat the maxIntegrityWarnings budget. Do NOT re-add it here
+		// without a position-aware exemption (testify trailing msgAndArgs,
+		// t.Error*/t.Fatal* first-arg format strings).
 		{Name: "concurrent-map-access", Langs: []Language{LangGo}, Run: stringCheck(checkConcurrentMapAccess)},
 		{Name: "context-leak", Langs: []Language{LangGo}, Run: stringCheck(checkContextLeak)},
 		{Name: "resource-leak", Langs: []Language{LangGo}, Run: sliceCheck(checkResourceLeaks)},
