@@ -42,8 +42,7 @@ func init() {
 }
 
 const (
-	waMaxTextLen    = 65536 // Official: WhatsApp personal accounts support up to 65,536 characters per text message
-	waMaxReconnect  = 5
+	waMaxTextLen    = 65536                  // Official: WhatsApp personal accounts support up to 65,536 characters per text message
 	waInterMsgDelay = 300 * time.Millisecond // Conservative inter-chunk delay to avoid WhatsApp rate limiting
 )
 
@@ -56,6 +55,28 @@ var waBackoffs = []time.Duration{
 }
 
 var errWhatsAppLoggedOut = errors.New("whatsapp logged out")
+
+// waNextBackoff returns the reconnect delay for the given 0-based attempt,
+// capped at the largest entry of waBackoffs (60s). Reconnect attempts are
+// unbounded: a network outage — however long — must not permanently kill the
+// adapter (#603). Only errWhatsAppLoggedOut is terminal (see waTerminal).
+func waNextBackoff(attempt int) time.Duration {
+	if attempt < 0 {
+		attempt = 0
+	}
+	if attempt >= len(waBackoffs) {
+		return waBackoffs[len(waBackoffs)-1]
+	}
+	return waBackoffs[attempt]
+}
+
+// waTerminal reports whether a connectAndServe error is permanent. The only
+// permanent case is errWhatsAppLoggedOut (device unpaired; requires manual QR
+// re-pairing). Everything else — including multi-minute network outages —
+// retries forever with capped backoff (#603).
+func waTerminal(err error) bool {
+	return errors.Is(err, errWhatsAppLoggedOut)
+}
 
 // ---------------------------------------------------------------------------
 // Adapter struct
@@ -74,6 +95,10 @@ type whatsappAdapter struct {
 	mu        sync.RWMutex
 	connected bool
 	cancel    context.CancelFunc
+
+	// runWG tracks the run goroutine(s) started by Start so shutdown paths
+	// (and tests) can wait for them to finish writing session state (#603).
+	runWG sync.WaitGroup
 
 	// QR code for TUI display (set during pairing, cleared after connect)
 	lastQR      string
@@ -262,12 +287,22 @@ func (a *whatsappAdapter) Connected() bool {
 }
 
 func (a *whatsappAdapter) Stop() {
-	if a.cancel != nil {
-		a.cancel()
+	a.mu.Lock()
+	cancel := a.cancel
+	client := a.client
+	a.mu.Unlock()
+	if cancel != nil {
+		cancel()
 	}
-	if a.client != nil {
-		a.client.Disconnect()
+	if client != nil {
+		client.Disconnect()
 	}
+}
+
+// waitRunStopped blocks until every run goroutine started by Start has
+// exited. Useful for deterministic shutdown in tests (#603).
+func (a *whatsappAdapter) waitRunStopped() {
+	a.runWG.Wait()
 }
 
 // Close implements the Closer interface so the runtime can properly
@@ -311,8 +346,18 @@ func (a *whatsappAdapter) SupportsTyping() bool { return true }
 
 func (a *whatsappAdapter) Start(ctx context.Context) {
 	debug.Log("whatsapp", "adapter %q start", a.name)
-	ctx, a.cancel = context.WithCancel(ctx)
-	safego.Go("im.whatsapp.run", func() { a.run(ctx) })
+	ctx, cancel := context.WithCancel(ctx)
+	// Guard the cancel write with a.mu: Stop() reads a.cancel concurrently
+	// (hot restart = stopAdapter -> Start), and an unsynchronized write/read
+	// pair is a DATA RACE (#603).
+	a.mu.Lock()
+	a.cancel = cancel
+	a.mu.Unlock()
+	a.runWG.Add(1)
+	safego.Go("im.whatsapp.run", func() {
+		defer a.runWG.Done()
+		a.run(ctx)
+	})
 }
 
 func (a *whatsappAdapter) run(ctx context.Context) {
@@ -333,7 +378,7 @@ func (a *whatsappAdapter) run(ctx context.Context) {
 		default:
 		}
 
-		if errors.Is(err, errWhatsAppLoggedOut) {
+		if waTerminal(err) {
 			debug.Log("whatsapp", "adapter %q: logged out, waiting for manual re-pair", a.name)
 			return
 		}
@@ -344,16 +389,11 @@ func (a *whatsappAdapter) run(ctx context.Context) {
 			continue
 		}
 
-		if attempt >= waMaxReconnect {
-			debug.Log("whatsapp", "adapter %q: max reconnect attempts reached", a.name)
-			a.publishState(false, "error", "max reconnect attempts reached")
-			return
-		}
-
-		backoff := waBackoffs[attempt]
-		if attempt >= len(waBackoffs) {
-			backoff = waBackoffs[len(waBackoffs)-1]
-		}
+		// Transient failures (network outages, server hiccups) retry
+		// indefinitely with the backoff capped at the last waBackoffs entry —
+		// previously 5 attempts (~108s) permanently killed the adapter on any
+		// outage longer than ~2 minutes (#603).
+		backoff := waNextBackoff(attempt)
 		attempt++
 		jittered := jitterDuration(backoff)
 		debug.Log("whatsapp", "adapter %q: reconnect attempt %d in %v (jittered from %v)", a.name, attempt, jittered, backoff)
@@ -391,8 +431,13 @@ func (a *whatsappAdapter) connectAndServe(ctx context.Context) error {
 		a.device = container.NewDevice()
 	}
 
-	a.client = whatsmeow.NewClient(a.device, &waDebugLogger{prefix: "client"})
-	a.client.AddEventHandler(a.eventHandler())
+	client := whatsmeow.NewClient(a.device, &waDebugLogger{prefix: "client"})
+	client.AddEventHandler(a.eventHandler())
+	// Publish under a.mu: Stop() reads a.client concurrently and an
+	// unsynchronized write/read pair is a DATA RACE (#603).
+	a.mu.Lock()
+	a.client = client
+	a.mu.Unlock()
 	done := make(chan error, 1)
 	a.mu.Lock()
 	a.sessionDone = done

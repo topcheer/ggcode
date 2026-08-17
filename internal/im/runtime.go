@@ -39,7 +39,10 @@ type Manager struct {
 	sinks           map[string]Sink
 	adapters        map[string]AdapterState
 	approvals       map[string]*pendingApproval
-	onUpdate        func(StatusSnapshot)
+	// approvalPrunerActive guards the lazy time-driven approval pruner
+	// goroutine (see startApprovalPrunerLocked, #603).
+	approvalPrunerActive bool
+	onUpdate             func(StatusSnapshot)
 
 	// Dedup inbound messages by adapter+messageID to prevent platforms
 	// from delivering the same event twice (e.g. Feishu SDK retries).
@@ -1194,6 +1197,9 @@ func (m *Manager) RegisterApproval(req ApprovalRequest) (ApprovalRequest, <-chan
 	// Prune stale entries to bound memory. Resolved entries older than
 	// 5 minutes and unresolved entries older than 1 hour are removed.
 	m.pruneApprovalsLocked()
+	// Ensure the time-driven pruner is running so abandoned approvals are
+	// denied even if no further approval is ever registered (#603).
+	m.startApprovalPrunerLocked()
 	snapshot, cb := m.snapshotAndCallbackLocked()
 	m.mu.Unlock()
 	if cb != nil {
@@ -1290,13 +1296,23 @@ func (m *Manager) snapshotLocked() StatusSnapshot {
 	return snapshot
 }
 
+// approvalPruneInterval is how often the time-driven approval pruner runs.
+// It's a var (not const) so tests can override it for faster execution.
+var approvalPruneInterval = time.Minute
+
 // pruneApprovalsLocked removes stale entries from the approvals map to bound
 // memory. Resolved entries are removed immediately (the snapshot was already
 // taken at resolution time). Unresolved entries older than 1 hour are removed
 // (the user likely abandoned them). Must be called with m.mu held.
+//
+// There is deliberately no minimum-size gate: the #259 Deny-before-close
+// guarantee must hold even for a single abandoned approval. The previous
+// len<32 early-return left small maps permanently unpruned, so abandoned
+// approvals accumulated with zero cleanup and their waiters blocked on
+// <-resp forever (#603).
 func (m *Manager) pruneApprovalsLocked() {
-	if len(m.approvals) < 32 {
-		return // not worth pruning for small maps
+	if len(m.approvals) == 0 {
+		return
 	}
 	now := time.Now()
 	for id, ap := range m.approvals {
@@ -1313,6 +1329,39 @@ func (m *Manager) pruneApprovalsLocked() {
 			delete(m.approvals, id)
 		}
 	}
+}
+
+// startApprovalPrunerLocked lazily starts a time-driven pruner goroutine so
+// abandoned approvals (>1h unresolved) are denied and removed even if no new
+// approval is ever registered — RegisterApproval is otherwise the only prune
+// trigger, which left waiters hanging forever once registrations stopped
+// (#603). The goroutine self-terminates once the approvals map is empty; the
+// next RegisterApproval restarts it. Must be called with m.mu held.
+func (m *Manager) startApprovalPrunerLocked() {
+	if m.approvalPrunerActive {
+		return
+	}
+	m.approvalPrunerActive = true
+	safego.Go("im.approval-pruner", func() {
+		ticker := time.NewTicker(approvalPruneInterval)
+		defer ticker.Stop()
+		for range ticker.C {
+			m.mu.Lock()
+			m.pruneApprovalsLocked()
+			empty := len(m.approvals) == 0
+			if empty {
+				m.approvalPrunerActive = false
+			}
+			snapshot, cb := m.snapshotAndCallbackLocked()
+			m.mu.Unlock()
+			if cb != nil {
+				cb(snapshot)
+			}
+			if empty {
+				return
+			}
+		}
+	})
 }
 
 func (m *Manager) reloadBindingLocked() error {

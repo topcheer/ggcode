@@ -13,6 +13,22 @@ import (
 // It's a var (not const) so tests can override it for faster execution.
 var bindingWatcherInterval = 3 * time.Second
 
+// bindingStatChanged reports whether the bindings file changed given the
+// previous (mtime, size) snapshot.
+//
+// mtime equality alone must NOT skip the read: two rewrites inside the same
+// mtime granularity window (e.g. a cross-instance takeover rename followed by
+// a session-ID update) were swallowed by the strict After() check, leaving
+// both instances competing for the channel (#603). A size change with an
+// equal mtime now also counts as a modification.
+func bindingStatChanged(mod time.Time, size int64, lastMod time.Time, lastSize int64) bool {
+	if mod.After(lastMod) {
+		return true
+	}
+	// Equal timestamp (same granularity window): fall back to size.
+	return !mod.Before(lastMod) && size != lastSize
+}
+
 // StartBindingWatcher starts a background goroutine that monitors the
 // im-bindings.json file for LastSessionID changes by other ggcode instances.
 //
@@ -54,6 +70,7 @@ func (m *Manager) StartBindingWatcher() {
 
 	safego.Go("im.binding-watcher", func() {
 		var lastMod time.Time
+		var lastSize int64
 
 		// Resolve the file path from the store (only JSONFileBindingStore has a path).
 		var bindPath string
@@ -76,10 +93,11 @@ func (m *Manager) StartBindingWatcher() {
 					if err != nil {
 						continue
 					}
-					if !fi.ModTime().After(lastMod) {
+					if !bindingStatChanged(fi.ModTime(), fi.Size(), lastMod, lastSize) {
 						continue // file not modified since last check
 					}
 					lastMod = fi.ModTime()
+					lastSize = fi.Size()
 				}
 				// Either no file path (MemoryBindingStore) or file was modified.
 				m.checkBindingOwnership(store, workspace, sessionID)

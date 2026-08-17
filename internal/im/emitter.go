@@ -35,8 +35,15 @@ type IMEmitter struct {
 
 // imEmitterState manages a goroutine-based async event emission pipeline.
 type imEmitterState struct {
-	once sync.Once
-	ch   chan queuedIMEvent
+	// mu guards ch, started, and closed. The dispatcher goroutine is started
+	// lazily by the first enqueue; close() closes ch so the dispatcher drains
+	// its buffer and exits. Previously close() shared the dispatcher-start
+	// sync.Once, so after the first enqueue consumed the Once, close(ch) never
+	// ran and the shutdown API was dead-on-arrival (#603).
+	mu      sync.Mutex
+	started bool
+	closed  bool
+	ch      chan queuedIMEvent
 }
 
 type queuedIMEvent struct {
@@ -49,22 +56,38 @@ func newIMEmitterState() *imEmitterState {
 	return &imEmitterState{ch: make(chan queuedIMEvent, 256)}
 }
 
-// close shuts down the dispatcher goroutine by closing the channel.
-// After close, enqueue calls become no-ops. Safe to call multiple times.
+// close shuts down the dispatcher goroutine by closing the channel. Any
+// buffered events are drained by the dispatcher before it exits. After close,
+// enqueue calls become no-ops. Safe to call multiple times and safe to call
+// after enqueue (#603: previously this was a silent no-op once enqueue had
+// consumed the shared Once, so the dispatcher could never be shut down).
 func (s *imEmitterState) close() {
 	if s == nil {
 		return
 	}
-	s.once.Do(func() {
-		close(s.ch)
-	})
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
+	s.closed = true
+	close(s.ch)
 }
 
 func (s *imEmitterState) enqueue(mgr *Manager, event OutboundEvent, excludeAdapter string) {
 	if s == nil || mgr == nil {
 		return
 	}
-	s.once.Do(func() {
+	// Hold mu across the send: close() also runs under mu, so a concurrent
+	// close can never turn this send into a panic on a closed channel (#603).
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		// Dispatcher already shut down — drop the event.
+		return
+	}
+	if !s.started {
+		s.started = true
 		safego.Go("im.emitter.dispatch", func() {
 			for item := range s.ch {
 				var err error
@@ -78,7 +101,7 @@ func (s *imEmitterState) enqueue(mgr *Manager, event OutboundEvent, excludeAdapt
 				}
 			}
 		})
-	})
+	}
 	select {
 	case s.ch <- queuedIMEvent{mgr: mgr, event: event, excludeAdapter: excludeAdapter}:
 	default:

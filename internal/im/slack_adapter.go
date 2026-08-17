@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"mime/multipart"
 	"net/http"
@@ -108,6 +109,23 @@ func (a *slackAdapter) Close() error {
 	return nil
 }
 
+// errSlackAuthTerminal marks Slack auth failures that are deterministic —
+// retrying cannot fix them because the token itself is bad/revoked/expired or
+// the workspace is deactivated. The run loop exits permanently on this error
+// instead of retrying every 60s forever (#603). Transient errors (network,
+// ratelimited, 5xx) keep the normal retry path.
+var errSlackAuthTerminal = errors.New("slack auth terminal failure")
+
+// slackTerminalAuthErrors lists Slack API error codes (from auth.test and
+// apps.connections.open) that are terminal for the adapter.
+var slackTerminalAuthErrors = map[string]bool{
+	"invalid_auth":     true, // token is invalid
+	"not_authed":       true, // token missing / not provided
+	"token_revoked":    true, // token revoked by user or admin
+	"token_expired":    true, // token expired
+	"account_inactive": true, // workspace deactivated
+}
+
 func (a *slackAdapter) run(ctx context.Context) {
 	backoffs := []time.Duration{2 * time.Second, 5 * time.Second, 10 * time.Second, 30 * time.Second, 60 * time.Second}
 	attempt := 0
@@ -120,6 +138,15 @@ func (a *slackAdapter) run(ctx context.Context) {
 		if err != nil {
 			a.publishState(false, "error", err.Error())
 			debug.Log("slack", "adapter=%s error: %v", a.name, err)
+			// Deterministic auth failures (bad/revoked token) can never be fixed
+			// by retrying — exit permanently with an error state so the user is
+			// told to fix the token, instead of retrying every 60s forever
+			// (#603). Transient errors keep the retry path below.
+			if errors.Is(err, errSlackAuthTerminal) {
+				a.publishState(false, "error", "terminal auth failure, giving up: "+err.Error())
+				debug.Log("slack", "adapter=%s terminal auth failure, stopping adapter", a.name)
+				return
+			}
 		}
 		// Successful return (nil error) means the connection served until a
 		// clean disconnect — reset the backoff counter so the NEXT first retry
@@ -251,7 +278,11 @@ func (a *slackAdapter) connectAndServe(ctx context.Context) error {
 }
 
 func (a *slackAdapter) authTest(ctx context.Context) error {
-	url := slackAPIBase + "/auth.test"
+	baseURL := slackAPIBase
+	if a.apiBase != "" {
+		baseURL = a.apiBase
+	}
+	url := baseURL + "/auth.test"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
 	if err != nil {
 		return err
@@ -273,6 +304,9 @@ func (a *slackAdapter) authTest(ctx context.Context) error {
 	}
 	if ok, _ := result["ok"].(bool); !ok {
 		errMsg, _ := result["error"].(string)
+		if slackTerminalAuthErrors[errMsg] {
+			return fmt.Errorf("auth.test: %w: %s", errSlackAuthTerminal, errMsg)
+		}
 		return fmt.Errorf("Slack auth failed: %s", errMsg)
 	}
 	a.mu.Lock()
@@ -283,7 +317,11 @@ func (a *slackAdapter) authTest(ctx context.Context) error {
 }
 
 func (a *slackAdapter) appsConnectionsOpen(ctx context.Context) (string, error) {
-	url := slackAPIBase + "/apps.connections.open"
+	baseURL := slackAPIBase
+	if a.apiBase != "" {
+		baseURL = a.apiBase
+	}
+	url := baseURL + "/apps.connections.open"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(""))
 	if err != nil {
 		return "", err
@@ -305,6 +343,9 @@ func (a *slackAdapter) appsConnectionsOpen(ctx context.Context) (string, error) 
 	}
 	if ok, _ := result["ok"].(bool); !ok {
 		errMsg, _ := result["error"].(string)
+		if slackTerminalAuthErrors[errMsg] {
+			return "", fmt.Errorf("apps.connections.open: %w: %s", errSlackAuthTerminal, errMsg)
+		}
 		return "", fmt.Errorf("Slack apps.connections.open failed: %s", errMsg)
 	}
 	wsURL, _ := result["url"].(string)
