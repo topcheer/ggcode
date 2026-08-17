@@ -325,6 +325,13 @@ func (m Message) snapshot() Message {
 		Role:      m.Role,
 		MessageID: m.MessageID,
 	}
+	// Metadata carries protocol extensions from remote peers; it must be
+	// deep-copied or every Snapshot-based API path (tasks/get, tasks/list,
+	// ActiveTasks) silently drops it (#642).
+	if m.Metadata != nil {
+		cp.Metadata = make(json.RawMessage, len(m.Metadata))
+		copy(cp.Metadata, m.Metadata)
+	}
 	if m.Parts != nil {
 		cp.Parts = make([]Part, len(m.Parts))
 		for i, p := range m.Parts {
@@ -355,6 +362,12 @@ func (a Artifact) snapshot() Artifact {
 		ArtifactID: a.ArtifactID,
 		Append:     a.Append,
 		LastChunk:  a.LastChunk,
+	}
+	// Same as Message.snapshot: Artifact.Metadata is a protocol-extension
+	// transport field and must survive Snapshot (#642).
+	if a.Metadata != nil {
+		cp.Metadata = make(json.RawMessage, len(a.Metadata))
+		copy(cp.Metadata, a.Metadata)
 	}
 	if a.Parts != nil {
 		cp.Parts = make([]Part, len(a.Parts))
