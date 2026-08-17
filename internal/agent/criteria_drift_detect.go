@@ -181,8 +181,12 @@ func (c *criteriaDriftState) recordAssistantText(text string, iter int) {
 					}
 				}
 
-				// Check if we already have this indicator globally.
-				if !cdContains(c.indicators, pat) && !cdContainsStr(newIndicators, pat) {
+				// Check if we already recorded this indicator in this turn.
+				// #589: cross-turn repetition must count again - progressive
+				// drift often repeats the same phrase in later turns; the
+				// turn window in maybeWarn bounds accumulation instead of a
+				// global dedup that would swallow the drift signal.
+				if !cdContainsStr(newIndicators, pat) {
 					// #582: Skip patterns with authorization context.
 					if cdIsAuthExempt(text, pat, cat) {
 						debug.Log("agent", "Criteria drift indicator EXEMPT (auth context) (category=%s): %q at iteration %d", cat, pat, iter)
@@ -232,40 +236,132 @@ var cdAuthMarkers = []string{
 	"as instructed",
 }
 
+// cdIsSentenceBoundary reports whether b terminates a sentence. Semicolon and
+// newline are boundaries too: they prevent false exemptions across clauses
+// (#586 F2, #589).
+func cdIsSentenceBoundary(b byte) bool {
+	return b == '.' || b == '!' || b == '?' || b == ';' || b == '\n'
+}
+
+// cdSentenceStartBefore returns the index at which the sentence containing
+// position idx begins: just after the nearest preceding boundary character
+// (and following whitespace), or 0 when none precedes it.
+func cdSentenceStartBefore(lower string, idx int) int {
+	for i := idx; i > 0; i-- {
+		if cdIsSentenceBoundary(lower[i-1]) {
+			start := i
+			for start < len(lower) && cdIsSentenceBoundary(lower[start]) {
+				start++
+			}
+			for start < len(lower) && (lower[start] == ' ' || lower[start] == '\t' || lower[start] == '\r') {
+				start++
+			}
+			return start
+		}
+	}
+	return 0
+}
+
+// cdSentenceEndAfter returns the index just past the sentence containing idx.
+// When includeBoundary is true the terminating boundary character is included
+// (callers that slice whole sentences keep the punctuation); otherwise it is
+// excluded.
+func cdSentenceEndAfter(lower string, idx int, includeBoundary bool) int {
+	for i := idx; i < len(lower); i++ {
+		if cdIsSentenceBoundary(lower[i]) {
+			if includeBoundary {
+				return i + 1
+			}
+			return i
+		}
+	}
+	return len(lower)
+}
+
 // cdHasAuthContext checks if the given text contains authorization markers
 // that indicate user-authorized descoping. Returns true if any marker is found.
 // #586: Only markers in non-negated, authorization context count.
+// #589: Fixes for N1, N2, F1-B/C, N3 - check all marker occurrences, bounded
+// window for non-authorization verbs, and sentence-wide negation scan.
 func cdHasAuthContext(text string) bool {
 	lower := strings.ToLower(text)
 	for _, marker := range cdAuthMarkers {
-		idx := strings.Index(lower, marker)
-		if idx == -1 {
-			continue
-		}
-		// #586 F1: Check for negation before the marker
-		if idx > 0 {
-			prevChar := lower[idx-1]
-			// Skip if marker is immediately preceded by negation word or apostrophe
-			if prevChar == ' ' && idx > 5 {
-				// Check 5 chars before the space for negation words
-				prefix := lower[idx-5 : idx]
-				if strings.Contains(prefix, "not ") || strings.Contains(prefix, "never") || strings.Contains(prefix, "n't") {
+		// #589 N3: Check ALL occurrences of the marker (not just first)
+		// If any clean occurrence is found (non-negated, in authorization context), exempt.
+		markerIdx := 0
+		for {
+			idx := strings.Index(lower[markerIdx:], marker)
+			if idx == -1 {
+				break
+			}
+			idx += markerIdx // Adjust to absolute position
+
+			// Find sentence start for this marker occurrence
+			sentenceStart := cdSentenceStartBefore(lower, idx)
+
+			// #589 F1-B/C: Check for negation before the marker, scanning to sentence start
+			// Removed idx>5 and 5-char window limits - any negation in sentence blocks exemption.
+			// #589: Use bounded window (~30 chars) before marker to avoid false positives
+			// from negation words much earlier in the sentence.
+			if idx > sentenceStart {
+				// Check negation in a bounded window before the marker
+				negationCheckStart := idx - 30
+				if negationCheckStart < sentenceStart {
+					negationCheckStart = sentenceStart
+				}
+				prefix := lower[negationCheckStart:idx]
+				// Check for standalone "not" or "never" (with word boundaries)
+				prefixTrimmed := strings.TrimLeft(prefix, " \t\r\n")
+				if prefixTrimmed == "not" || prefixTrimmed == "never" ||
+					strings.HasPrefix(prefixTrimmed, "not ") ||
+					strings.HasPrefix(prefixTrimmed, "never ") ||
+					strings.Contains(prefix, " not ") ||
+					strings.HasSuffix(prefix, "not ") ||
+					strings.Contains(prefix, " never ") ||
+					strings.HasSuffix(prefix, "never ") ||
+					strings.Contains(prefix, "n't") {
+					// This occurrence is negated, try next occurrence
+					markerIdx = idx + len(marker)
 					continue
 				}
 			}
-		}
-		// #586 F1: Skip non-authorization verb forms (asked about, mentioned, etc.)
-		// "you asked me about X" is a question, not authorization
-		if idx+len(marker) < len(lower) {
-			suffix := lower[idx+len(marker):]
-			if strings.HasPrefix(suffix, " me about") || strings.HasPrefix(suffix, " about") {
-				continue
+
+			// #589 N1/N2: Skip non-authorization verb forms in bounded window WITHIN SAME SENTENCE
+			// Only "you asked me about" and "you asked about" are questions (non-authorization)
+			// "per your instruction about" is true authorization and should pass.
+			if idx+len(marker) < len(lower) {
+				// Find sentence end for this marker occurrence (boundary excluded)
+				sentenceEnd := cdSentenceEndAfter(lower, idx, false)
+				// Get suffix within same sentence only
+				suffix := lower[idx+len(marker) : sentenceEnd]
+
+				// #589 N1: Only block question forms with "about"
+				if strings.HasPrefix(suffix, " me about") || strings.HasPrefix(suffix, " about") {
+					// Check if marker is a question form ("asked") vs authorization ("instruction")
+					// Only "you asked me about" is non-authorization
+					if strings.Contains(marker, "asked") {
+						markerIdx = idx + len(marker)
+						continue
+					}
+					// "per your instruction about" passes through
+				}
+				// #589 N2: Only check bounded window (~20 chars) for "noted"/"mentioned"
+				// Distant occurrences (especially in different sentences) should not block authorization
+				var boundedSuffix string
+				if len(suffix) > 20 {
+					boundedSuffix = suffix[:20]
+				} else {
+					boundedSuffix = suffix
+				}
+				if strings.Contains(boundedSuffix, "mentioned") || strings.Contains(boundedSuffix, "noted") {
+					markerIdx = idx + len(marker)
+					continue
+				}
 			}
-			if strings.Contains(suffix, "mentioned") || strings.Contains(suffix, "noted") {
-				continue
-			}
+
+			// Found a clean marker occurrence (non-negated, in authorization context)
+			return true
 		}
-		return true
 	}
 	return false
 }
@@ -300,30 +396,9 @@ func cdIsAuthExempt(text, pattern string, category string) bool {
 		// Find the sentence containing this pattern occurrence
 		// #586 F2: Sentence boundaries include .!? ; and newline.
 		// Semicolon and newline create separate sentences to prevent false exemptions.
-		sentenceStart := 0
-		for i := patternIdx; i >= 0; i-- {
-			if i > 0 && (lower[i-1] == '.' || lower[i-1] == '!' || lower[i-1] == '?' || lower[i-1] == ';' || lower[i-1] == '\n') {
-				// Sentence starts AFTER the boundary character and any following whitespace
-				sentenceStart = i
-				// Skip the boundary character itself
-				for sentenceStart < len(lower) && (lower[sentenceStart] == '.' || lower[sentenceStart] == '!' || lower[sentenceStart] == '?' || lower[sentenceStart] == ';' || lower[sentenceStart] == '\n') {
-					sentenceStart++
-				}
-				// Skip whitespace after boundary
-				for sentenceStart < len(lower) && (lower[sentenceStart] == ' ' || lower[sentenceStart] == '\t' || lower[sentenceStart] == '\r') {
-					sentenceStart++
-				}
-				break
-			}
-		}
+		sentenceStart := cdSentenceStartBefore(lower, patternIdx)
 
-		sentenceEnd := len(lower)
-		for i := patternIdx; i < len(lower); i++ {
-			if lower[i] == '.' || lower[i] == '!' || lower[i] == '?' || lower[i] == ';' || lower[i] == '\n' {
-				sentenceEnd = i + 1
-				break
-			}
-		}
+		sentenceEnd := cdSentenceEndAfter(lower, patternIdx, true)
 
 		sentence := lower[sentenceStart:sentenceEnd]
 		// Only look for markers BEFORE this pattern occurrence

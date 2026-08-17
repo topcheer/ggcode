@@ -138,12 +138,20 @@ func TestCriteriaDriftNoDedup(t *testing.T) {
 	c := newCriteriaDriftState()
 	defer c.reset()
 
-	// Same indicator twice should only count once
-	c.recordAssistantText("The requirement is really only login.", 1)
-	c.recordAssistantText("The requirement is really only login, again.", 2)
-
+	// Intra-turn dedup still applies: the same phrase twice in ONE response
+	// (even across two sentences) counts once.
+	c.recordAssistantText("The requirement is really only login. The requirement is really only logout.", 1)
 	if len(c.indicators) != 1 {
-		t.Fatalf("expected 1 unique indicator, got %d", len(c.indicators))
+		t.Fatalf("expected 1 unique indicator within a turn, got %d", len(c.indicators))
+	}
+
+	// #589: Cross-turn repetition counts again. Progressive drift often
+	// repeats the same phrase in later turns; the turn window in maybeWarn
+	// bounds accumulation instead of a global dedup that would swallow the
+	// drift signal.
+	c.recordAssistantText("The requirement is really only login, again.", 2)
+	if len(c.indicators) != 2 {
+		t.Fatalf("expected 2 indicators after cross-turn repetition, got %d", len(c.indicators))
 	}
 }
 
