@@ -3,6 +3,7 @@ package wailskit
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/im"
@@ -55,7 +56,27 @@ func GetIMPlatformRegistry() []IMPlatformMeta {
 		{ID: "mattermost", DisplayName: "Mattermost", Fields: []IMPlatformField{{Key: "url", Label: "Server URL", Placeholder: "https://mm.example.com"}, {Key: "token", Label: "Access Token", Placeholder: "mattermost token", Secret: true}}},
 		{ID: "signal", DisplayName: "Signal", Fields: []IMPlatformField{{Key: "account", Label: "Phone Number", Placeholder: "+1234567890"}, {Key: "base_url", Label: "Signal CLI URL", Placeholder: "http://localhost:8080"}}},
 		{ID: "irc", DisplayName: "IRC", Fields: []IMPlatformField{{Key: "host", Label: "Server", Placeholder: "irc.libera.chat:6697"}, {Key: "nick", Label: "Nickname", Placeholder: "my-bot"}, {Key: "channels", Label: "Channels", Placeholder: "#channel1,#channel2"}}},
+		// #591: privateclaw is listed in the CLI help/platform docs (im_cmd.go
+		// accepts it verbatim), but was absent here — after #585's strong
+		// validation, doc-compliant adapters permanently failed Test
+		// Connection with "unknown platform".
+		{ID: "privateclaw", DisplayName: "Private Claw", Fields: []IMPlatformField{}},
 	}
+}
+
+// imPlatformByID returns the registry meta for a platform ID,
+// case-insensitively (#591): hand-written YAML and CLI input can carry
+// "Telegram" where the registry says "telegram" — a case mismatch must
+// not turn into "unknown platform".
+func imPlatformByID(platform string) *IMPlatformMeta {
+	registry := GetIMPlatformRegistry()
+	lower := strings.ToLower(platform)
+	for i := range registry {
+		if strings.ToLower(registry[i].ID) == lower {
+			return &registry[i]
+		}
+	}
+	return nil
 }
 
 // firstBoundWorkspace picks the workspace shown for an adapter from its
@@ -66,11 +87,18 @@ func firstBoundWorkspace(bindings []string, workingDir, normalizedWS string) (st
 	isCurrent := false
 	first := ""
 	for _, ws := range bindings {
-		if first == "" {
-			first = ws
+		if ws != "" && (ws == workingDir || ws == normalizedWS) {
+			// #591: the ws != "" guard from the pre-#587 code was dropped in the
+			// rewrite — with workingDir=="" (first start, uncached) and an
+			// empty-workspace legacy binding, both-empty compared equal and
+			// IsCurrent flipped true, nudging users to skip a needed bind.
+			// Empty workspace never matches; also guard the return value.
+			if workingDir != "" || normalizedWS != "" {
+				return ws, true
+			}
 		}
-		if ws == workingDir || ws == normalizedWS {
-			return ws, true
+		if first == "" && ws != "" {
+			first = ws
 		}
 	}
 	return first, isCurrent
@@ -300,14 +328,7 @@ func TestIMConnection(name string) error {
 	}
 
 	// Validate required fields from platform registry
-	registry := GetIMPlatformRegistry()
-	var platformMeta *IMPlatformMeta
-	for i := range registry {
-		if registry[i].ID == acfg.Platform {
-			platformMeta = &registry[i]
-			break
-		}
-	}
+	platformMeta := imPlatformByID(acfg.Platform)
 	if platformMeta == nil {
 		return fmt.Errorf("unknown platform %q for adapter %q", acfg.Platform, name)
 	}
@@ -321,9 +342,13 @@ func TestIMConnection(name string) error {
 		if !ok {
 			return fmt.Errorf("missing required field %q (%s)", field.Key, field.Label)
 		}
-		// Convert to string and check non-empty
-		strVal, ok := val.(string)
-		if !ok || strVal == "" {
+		// Normalize to string. #591: a hand-written ggcode.yaml like
+		// `appid: 123456789` parses as int (yaml.v3), and the previous
+		// val.(string) assertion misreported a populated field as "empty
+		// or invalid", sending users hunting for a problem that wasn't
+		// there. fmt %v keeps string values verbatim.
+		strVal := fmt.Sprintf("%v", val)
+		if strVal == "" {
 			return fmt.Errorf("required field %q (%s) is empty or invalid", field.Key, field.Label)
 		}
 	}

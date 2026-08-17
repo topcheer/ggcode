@@ -972,6 +972,17 @@ func Load(path string) (*Config, error) {
 			if !skipAuto {
 				applyFirstLaunchAnthropicBootstrap(cfg)
 			}
+			// #591: a missing main config does not mean no config exists at
+			// all — external sections (im.yaml etc.) can predate it (e.g.
+			// SaveIMAdapter → AddIMAdapter writes im.yaml while the main
+			// ggcode.yaml has not been created yet). The first-run branch
+			// previously returned without loadExternalSections, so a
+			// freshly created adapter was invisible to every later Load —
+			// Test Connection and the adapter list permanently reported
+			// "not found". External-file loading is read-only here (the
+			// migrate-out path can't trigger: hasMainSection is false for a
+			// missing file), so it is safe regardless of skipAuto.
+			loadExternalSections(cfg, path)
 			// When skipAutoConfig is set on first launch, clear the default
 			// vendor/endpoint/model so NeedsOnboard() returns true and the
 			// user gets the onboarding wizard instead of silently using a
