@@ -354,7 +354,7 @@ func idCheckSingleImpl(ctx CheckContext, oldIfaces map[string]idInterfaceInfo) [
 // idCollectPackageTypes gathers type→methods maps from the package directory
 // (excluding the current file) plus the current file's own methods.
 func idCollectPackageTypes(ctx CheckContext) map[string]map[string]bool {
-	pkgTypes := scanPackageTypeMethods(filepath.Dir(ctx.FilePath), ctx.FilePath)
+	pkgTypes := scanPackageTypeMethods(filepath.Dir(ctx.FilePath), ctx.FilePath, "")
 	allTypes := make(map[string]map[string]bool)
 	for k, v := range pkgTypes {
 		allTypes[k] = v

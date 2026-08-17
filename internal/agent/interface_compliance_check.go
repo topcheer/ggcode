@@ -103,8 +103,10 @@ func checkInterfaceCompliance(filePath, oldContent, newContent string) string {
 	}
 
 	// Scan the package directory for types that may implement these interfaces.
+	// Bug C fix: Also parse type declarations from the new content to include
+	// types defined in the edited file (for proper embedded promotion detection).
 	pkgDir := filepath.Dir(filePath)
-	typeMethods := scanPackageTypeMethods(pkgDir, filePath)
+	typeMethods := scanPackageTypeMethods(pkgDir, filePath, newContent)
 	if len(typeMethods) == 0 {
 		return ""
 	}
@@ -212,34 +214,115 @@ func methodSetsEqual(a, b map[string]string) bool {
 // scanPackageTypeMethods reads all .go files in the same directory (excluding
 // the edited file and test files) and builds a map of type name → set of
 // method names. This enables duck-typing checks without full type-checking.
-func scanPackageTypeMethods(dir, excludeFile string) map[string]map[string]bool {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil
+// It handles method promotion from embedded structs (Bug C fix).
+// The newContent parameter allows parsing types from the edited file for
+// proper embedded promotion detection.
+func scanPackageTypeMethods(dir, excludeFile, newContent string) map[string]map[string]bool {
+	// First pass: collect all type declarations (for embedded field info)
+	typeDecls := make(map[string][]string) // type name → list of embedded type names
+	var filesToProcess []*ast.File
+
+	// Parse the newContent (edited file) to include its types
+	if strings.TrimSpace(newContent) != "" {
+		fset := token.NewFileSet()
+		newFile, err := parser.ParseFile(fset, "", newContent, 0)
+		if err == nil {
+			filesToProcess = append(filesToProcess, newFile)
+			// Collect type declarations from new content
+			for _, decl := range newFile.Decls {
+				genDecl, ok := decl.(*ast.GenDecl)
+				if !ok || genDecl.Tok != token.TYPE {
+					continue
+				}
+				for _, spec := range genDecl.Specs {
+					typeSpec, ok := spec.(*ast.TypeSpec)
+					if !ok || typeSpec.Name == nil {
+						continue
+					}
+					structType, ok := typeSpec.Type.(*ast.StructType)
+					if !ok {
+						continue
+					}
+					// Extract embedded fields
+					var embedded []string
+					if structType.Fields != nil {
+						for _, field := range structType.Fields.List {
+							// Embedded field: has no field names
+							if len(field.Names) == 0 {
+								embeddedName := receiverTypeName(field.Type)
+								if embeddedName != "" {
+									embedded = append(embedded, embeddedName)
+								}
+							}
+						}
+					}
+					typeDecls[typeSpec.Name.Name] = embedded
+				}
+			}
+		}
 	}
 
-	excludeBase := filepath.Base(excludeFile)
-	result := make(map[string]map[string]bool)
+	// Parse other files in the directory
+	entries, err := os.ReadDir(dir)
+	if err == nil {
+		excludeBase := filepath.Base(excludeFile)
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			name := entry.Name()
+			if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+				continue
+			}
+			if name == excludeBase {
+				continue // skip the file being edited (already parsed as newContent)
+			}
 
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		if name == excludeBase {
-			continue // skip the file being edited (already parsed as newContent)
-		}
+			path := filepath.Join(dir, name)
+			fset := token.NewFileSet()
+			file, err := parser.ParseFile(fset, path, nil, 0)
+			if err != nil {
+				continue
+			}
+			filesToProcess = append(filesToProcess, file)
 
-		path := filepath.Join(dir, name)
-		fset := token.NewFileSet()
-		file, err := parser.ParseFile(fset, path, nil, 0)
-		if err != nil {
-			continue
+			// Collect type declarations for embedded field info
+			for _, decl := range file.Decls {
+				genDecl, ok := decl.(*ast.GenDecl)
+				if !ok || genDecl.Tok != token.TYPE {
+					continue
+				}
+				for _, spec := range genDecl.Specs {
+					typeSpec, ok := spec.(*ast.TypeSpec)
+					if !ok || typeSpec.Name == nil {
+						continue
+					}
+					structType, ok := typeSpec.Type.(*ast.StructType)
+					if !ok {
+						continue
+					}
+					// Extract embedded fields
+					var embedded []string
+					if structType.Fields != nil {
+						for _, field := range structType.Fields.List {
+							// Embedded field: has no field names
+							if len(field.Names) == 0 {
+								embeddedName := receiverTypeName(field.Type)
+								if embeddedName != "" {
+									embedded = append(embedded, embeddedName)
+								}
+							}
+						}
+					}
+					typeDecls[typeSpec.Name.Name] = embedded
+				}
+			}
 		}
+	}
 
+	// Second pass: collect all methods
+	methods := make(map[string]map[string]bool)
+	for _, file := range filesToProcess {
 		for _, decl := range file.Decls {
 			funcDecl, ok := decl.(*ast.FuncDecl)
 			if !ok || funcDecl.Name == nil || funcDecl.Recv == nil || len(funcDecl.Recv.List) == 0 {
@@ -249,14 +332,54 @@ func scanPackageTypeMethods(dir, excludeFile string) map[string]map[string]bool 
 			if recvType == "" {
 				continue
 			}
-			if _, ok := result[recvType]; !ok {
-				result[recvType] = make(map[string]bool)
+			if _, ok := methods[recvType]; !ok {
+				methods[recvType] = make(map[string]bool)
 			}
-			result[recvType][funcDecl.Name.Name] = true
+			methods[recvType][funcDecl.Name.Name] = true
 		}
 	}
 
+	// Third pass: promote methods from embedded types (depth-first, handle cycles)
+	result := make(map[string]map[string]bool)
+	for typeName, ownMethods := range methods {
+		// Start with own methods
+		completeMethods := make(map[string]bool)
+		for m := range ownMethods {
+			completeMethods[m] = true
+		}
+		// Promote from embedded types
+		promoteEmbeddedMethods(typeName, typeDecls, methods, completeMethods, make(map[string]bool))
+		result[typeName] = completeMethods
+	}
+
 	return result
+}
+
+// promoteEmbeddedMethods recursively promotes methods from embedded types.
+// Uses visited map to detect and break cycles.
+func promoteEmbeddedMethods(
+	typeName string,
+	typeDecls map[string][]string,
+	methods map[string]map[string]bool,
+	completeMethods map[string]bool,
+	visited map[string]bool,
+) {
+	if visited[typeName] {
+		return
+	}
+	visited[typeName] = true
+
+	embedded := typeDecls[typeName]
+	for _, embName := range embedded {
+		// Add all methods from embedded type
+		if embMethods, ok := methods[embName]; ok {
+			for m := range embMethods {
+				completeMethods[m] = true
+			}
+		}
+		// Recurse into embedded type's own embeddings
+		promoteEmbeddedMethods(embName, typeDecls, methods, completeMethods, visited)
+	}
 }
 
 // formatComplianceWarning produces the guidance string injected into the tool result.

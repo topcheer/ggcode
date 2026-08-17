@@ -211,15 +211,18 @@ func extractExportedSymbols(file *ast.File) []exportSymbol {
 				case *ast.TypeSpec:
 					if s.Name != nil && s.Name.IsExported() {
 						kind := "type"
-						switch s.Type.(type) {
-						case *ast.InterfaceType:
+						signature := ""
+						if ifaceType, ok := s.Type.(*ast.InterfaceType); ok {
 							kind = "interface"
-						case *ast.StructType:
+							// Bug B fix: record method set fingerprint for interfaces
+							signature = extractInterfaceMethodFingerprint(ifaceType)
+						} else if _, ok := s.Type.(*ast.StructType); ok {
 							kind = "struct"
 						}
 						syms = append(syms, exportSymbol{
-							Name: s.Name.Name,
-							Kind: kind,
+							Name:      s.Name.Name,
+							Kind:      kind,
+							Signature: signature,
 						})
 					}
 				case *ast.ValueSpec:
@@ -254,6 +257,27 @@ func normalizeFuncSignature(ft *ast.FuncType) string {
 		results = normalizeFieldList(ft.Results)
 	}
 	return fmt.Sprintf("(%s)(%s)", params, results)
+}
+
+// extractInterfaceMethodFingerprint creates a sorted string fingerprint of all
+// method names and signatures in an interface. Used by Bug B fix to detect
+// when methods are added or removed from exported interfaces.
+func extractInterfaceMethodFingerprint(ifaceType *ast.InterfaceType) string {
+	if ifaceType.Methods == nil {
+		return ""
+	}
+
+	var methods []string
+	for _, field := range ifaceType.Methods.List {
+		if ft, ok := field.Type.(*ast.FuncType); ok && len(field.Names) > 0 {
+			for _, name := range field.Names {
+				sig := normalizeFuncSignature(ft)
+				methods = append(methods, name.Name+":"+sig)
+			}
+		}
+	}
+	sort.Strings(methods)
+	return strings.Join(methods, "|")
 }
 
 // normalizeFieldList extracts a comma-separated type string from an AST
