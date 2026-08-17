@@ -86,7 +86,13 @@ func walkDirectoryEntries(abs string) ([]FileInfo, error) {
 			return nil
 		}
 		if len(result) >= maxRecursiveEntries {
-			return fmt.Errorf("recursive walk exceeded %d entries, stopping", maxRecursiveEntries)
+			// #636: hitting the cap must truncate, not fail. Returning an
+			// error aborted the walk and the caller discarded ALL collected
+			// entries — recursive browsing of large repos (>10k entries)
+			// yielded nothing at all. filepath.SkipAll stops the walk
+			// cleanly so the ~10k already-collected entries are returned.
+			debug.Log("files", "recursive walk truncated at %d entries", maxRecursiveEntries)
+			return filepath.SkipAll
 		}
 		relPath, _ := filepath.Rel(abs, path)
 		result = append(result, FileInfo{

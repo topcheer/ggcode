@@ -43,6 +43,21 @@ type DesktopConfig struct {
 	// When false (default), notifications are treated as enabled.
 	NotificationsEnabled bool `json:"notifications_enabled,omitempty"`
 	NotificationsSet     bool `json:"notifications_configured,omitempty"`
+
+	// #635: per-field dirty flags. dc is a full in-memory snapshot, not a
+	// dirty-field tracker, and bools have no "non-default" value to guard on
+	// (the #583 Bug 3 string/int guards can't work for them). Two desktop
+	// instances share the config file: instance B toggles notifications and
+	// saves; instance A (stale snapshot) then saves on window move or the
+	// unconditional shutdown Save — A's stale bools silently rolled back B's
+	// change. Only fields explicitly touched via a setter since load are
+	// written into the merged on-disk state; unexported so they never
+	// serialize.
+	dirtyWindowState   bool // SetWindowState ran (WindowMax/WindowPosSet/bounds)
+	dirtyFontZoom      bool // SetFontZoom ran
+	dirtyAlwaysOnTop   bool // SetAlwaysOnTop ran
+	dirtyGlobalHotkey  bool // SetGlobalHotkey ran
+	dirtyNotifications bool // SetNotificationsEnabled ran
 }
 
 func desktopConfigPath() string {
@@ -123,41 +138,7 @@ func (dc *DesktopConfig) Save() error {
 		}
 	}
 
-	// Merge: apply only non-empty/non-default values from dc to merged.
-	// This preserves fields set by other instances that are empty/default
-	// in our snapshot (e.g., language=zh-CN in instance A, empty in instance B).
-	if dc.WorkDir != "" {
-		merged.WorkDir = dc.WorkDir
-	}
-	if dc.WindowW != 0 {
-		merged.WindowW = dc.WindowW
-	}
-	if dc.WindowH != 0 {
-		merged.WindowH = dc.WindowH
-	}
-	if dc.WindowX != 0 {
-		merged.WindowX = dc.WindowX
-	}
-	if dc.WindowY != 0 {
-		merged.WindowY = dc.WindowY
-	}
-	// Language: only overwrite if this instance has a non-empty value.
-	// Preserve the value from other instances if we're empty (old snapshot).
-	if dc.Language != "" {
-		merged.Language = dc.Language
-	}
-	// WindowMax, AlwaysOnTop, GlobalHotkey, etc. are bools - always apply.
-	merged.WindowMax = dc.WindowMax
-	// #631: position-captured flag is a bool - always apply. It disambiguates
-	// a deliberate (0,0) origin from the zero-value "never captured" state;
-	// WindowX/WindowY above stay != 0-guarded for legacy compat.
-	merged.WindowPosSet = dc.WindowPosSet
-	merged.FontZoom = dc.FontZoom
-	merged.AlwaysOnTop = dc.AlwaysOnTop
-	merged.GlobalHotkey = dc.GlobalHotkey
-	merged.GlobalHotkeySet = dc.GlobalHotkeySet
-	merged.NotificationsEnabled = dc.NotificationsEnabled
-	merged.NotificationsSet = dc.NotificationsSet
+	merged.mergeFromDirty(dc)
 
 	// Use merged config for marshaling (not the raw dc).
 	data, err := json.MarshalIndent(&merged, "", "  ")
@@ -189,6 +170,57 @@ func (dc *DesktopConfig) Save() error {
 	return os.Rename(tmp, path)
 }
 
+// mergeFromDirty overlays the disk-state receiver with the fields dc actually
+// touched (#583 string/int non-empty guards; #635 dirty flags for bools and
+// FontZoom, which have no "non-default" sentinel). Untouched fields keep the
+// on-disk values so a stale snapshot from another instance cannot roll back
+// preferences that instance saved meanwhile. Pointer receiver on purpose:
+// DesktopConfig embeds a sync.Mutex, so a value receiver would copy the lock
+// (vet copylocks). Called from Save with dc.mu held; touches plain fields only.
+func (merged *DesktopConfig) mergeFromDirty(dc *DesktopConfig) {
+	if dc.WorkDir != "" {
+		merged.WorkDir = dc.WorkDir
+	}
+	if dc.WindowW != 0 {
+		merged.WindowW = dc.WindowW
+	}
+	if dc.WindowH != 0 {
+		merged.WindowH = dc.WindowH
+	}
+	if dc.WindowX != 0 {
+		merged.WindowX = dc.WindowX
+	}
+	if dc.WindowY != 0 {
+		merged.WindowY = dc.WindowY
+	}
+	// Language: only overwrite if this instance has a non-empty value.
+	// Preserve the value from other instances if we're empty (old snapshot).
+	if dc.Language != "" {
+		merged.Language = dc.Language
+	}
+	// #635: bools and FontZoom have no "non-default" sentinel, so they are
+	// merged only when this instance actually touched them via a setter.
+	// The companion *Set flags ride along with their owning toggle.
+	if dc.dirtyWindowState {
+		merged.WindowMax = dc.WindowMax
+		merged.WindowPosSet = dc.WindowPosSet
+	}
+	if dc.dirtyFontZoom {
+		merged.FontZoom = dc.FontZoom
+	}
+	if dc.dirtyAlwaysOnTop {
+		merged.AlwaysOnTop = dc.AlwaysOnTop
+	}
+	if dc.dirtyGlobalHotkey {
+		merged.GlobalHotkey = dc.GlobalHotkey
+		merged.GlobalHotkeySet = dc.GlobalHotkeySet
+	}
+	if dc.dirtyNotifications {
+		merged.NotificationsEnabled = dc.NotificationsEnabled
+		merged.NotificationsSet = dc.NotificationsSet
+	}
+}
+
 // SetWorkDir saves the work directory.
 func (dc *DesktopConfig) SetWorkDir(dir string) {
 	dc.mu.Lock()
@@ -204,6 +236,7 @@ func (dc *DesktopConfig) SetWorkDir(dir string) {
 func (dc *DesktopConfig) SetWindowState(w, h, x, y int, maximized bool) {
 	dc.mu.Lock()
 	defer dc.mu.Unlock()
+	dc.dirtyWindowState = true // #635
 	if maximized {
 		dc.WindowMax = true
 		return
@@ -239,6 +272,7 @@ func (dc *DesktopConfig) IsNotificationsEnabled() bool {
 func (dc *DesktopConfig) SetNotificationsEnabled(enabled bool) {
 	dc.mu.Lock()
 	defer dc.mu.Unlock()
+	dc.dirtyNotifications = true // #635
 	dc.NotificationsEnabled = enabled
 	dc.NotificationsSet = true
 }
@@ -258,6 +292,7 @@ func (dc *DesktopConfig) GetFontZoom() float64 {
 func (dc *DesktopConfig) SetFontZoom(zoom float64) {
 	dc.mu.Lock()
 	defer dc.mu.Unlock()
+	dc.dirtyFontZoom = true // #635
 	dc.FontZoom = zoom
 }
 
@@ -272,6 +307,7 @@ func (dc *DesktopConfig) IsAlwaysOnTop() bool {
 func (dc *DesktopConfig) SetAlwaysOnTop(on bool) {
 	dc.mu.Lock()
 	defer dc.mu.Unlock()
+	dc.dirtyAlwaysOnTop = true // #635
 	dc.AlwaysOnTop = on
 }
 
@@ -292,6 +328,7 @@ func (dc *DesktopConfig) IsGlobalHotkeyEnabled() bool {
 func (dc *DesktopConfig) SetGlobalHotkey(on bool) {
 	dc.mu.Lock()
 	defer dc.mu.Unlock()
+	dc.dirtyGlobalHotkey = true // #635
 	dc.GlobalHotkey = on
 	dc.GlobalHotkeySet = true
 }

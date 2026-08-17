@@ -34,28 +34,37 @@ type IMPlatformMeta struct {
 }
 
 // IMPlatformField describes a configuration field for an IM platform.
+// #637: Required distinguishes credentials the adapter cannot start without
+// from optional fields with runtime defaults. Previously every registry
+// field carried a Label and the validator's `Label == "" → skip` branch was
+// dead code, so optional fields (signal base_url, irc channels) were
+// hard-blocked as required.
 type IMPlatformField struct {
 	Key         string `json:"key"`
 	Label       string `json:"label"`
 	Placeholder string `json:"placeholder"`
 	Secret      bool   `json:"secret,omitempty"`
+	Required    bool   `json:"required,omitempty"`
 }
 
 // GetIMPlatformRegistry returns the list of supported IM platforms.
 func GetIMPlatformRegistry() []IMPlatformMeta {
 	return []IMPlatformMeta{
-		{ID: "qq", DisplayName: "QQ", Fields: []IMPlatformField{{Key: "appid", Label: "App ID", Placeholder: "QQ app ID"}, {Key: "appsecret", Label: "App Secret", Placeholder: "QQ app secret", Secret: true}}},
-		{ID: "telegram", DisplayName: "Telegram", Fields: []IMPlatformField{{Key: "bot_token", Label: "Bot Token", Placeholder: "123456:ABC-DEF...", Secret: true}}},
-		{ID: "discord", DisplayName: "Discord", Fields: []IMPlatformField{{Key: "token", Label: "Bot Token", Placeholder: "Discord bot token", Secret: true}}},
-		{ID: "feishu", DisplayName: "Feishu", Fields: []IMPlatformField{{Key: "app_id", Label: "App ID", Placeholder: "cli_xxx"}, {Key: "app_secret", Label: "App Secret", Placeholder: "Feishu app secret", Secret: true}}},
-		{ID: "dingtalk", DisplayName: "DingTalk", Fields: []IMPlatformField{{Key: "app_key", Label: "App Key", Placeholder: "dingxxx"}, {Key: "app_secret", Label: "App Secret", Placeholder: "DingTalk app secret", Secret: true}}},
-		{ID: "slack", DisplayName: "Slack", Fields: []IMPlatformField{{Key: "bot_token", Label: "Bot Token", Placeholder: "xoxb-xxx", Secret: true}, {Key: "app_token", Label: "App Token", Placeholder: "xapp-xxx", Secret: true}}},
+		// #637: Required flags preserve the pre-existing validation strength
+		// for real credentials; only runtime-optional fields (signal base_url,
+		// irc channels) stay unflagged.
+		{ID: "qq", DisplayName: "QQ", Fields: []IMPlatformField{{Key: "appid", Label: "App ID", Placeholder: "QQ app ID", Required: true}, {Key: "appsecret", Label: "App Secret", Placeholder: "QQ app secret", Secret: true, Required: true}}},
+		{ID: "telegram", DisplayName: "Telegram", Fields: []IMPlatformField{{Key: "bot_token", Label: "Bot Token", Placeholder: "123456:ABC-DEF...", Secret: true, Required: true}}},
+		{ID: "discord", DisplayName: "Discord", Fields: []IMPlatformField{{Key: "token", Label: "Bot Token", Placeholder: "Discord bot token", Secret: true, Required: true}}},
+		{ID: "feishu", DisplayName: "Feishu", Fields: []IMPlatformField{{Key: "app_id", Label: "App ID", Placeholder: "cli_xxx", Required: true}, {Key: "app_secret", Label: "App Secret", Placeholder: "Feishu app secret", Secret: true, Required: true}}},
+		{ID: "dingtalk", DisplayName: "DingTalk", Fields: []IMPlatformField{{Key: "app_key", Label: "App Key", Placeholder: "dingxxx", Required: true}, {Key: "app_secret", Label: "App Secret", Placeholder: "DingTalk app secret", Secret: true, Required: true}}},
+		{ID: "slack", DisplayName: "Slack", Fields: []IMPlatformField{{Key: "bot_token", Label: "Bot Token", Placeholder: "xoxb-xxx", Secret: true, Required: true}, {Key: "app_token", Label: "App Token", Placeholder: "xapp-xxx", Secret: true, Required: true}}},
 		{ID: "wechat", DisplayName: "WeChat", Fields: []IMPlatformField{}, QRAuth: true},
-		{ID: "wecom", DisplayName: "WeCom", Fields: []IMPlatformField{{Key: "bot_id", Label: "Bot ID", Placeholder: "WeCom bot ID"}, {Key: "secret", Label: "Secret", Placeholder: "WeCom secret", Secret: true}}},
+		{ID: "wecom", DisplayName: "WeCom", Fields: []IMPlatformField{{Key: "bot_id", Label: "Bot ID", Placeholder: "WeCom bot ID", Required: true}, {Key: "secret", Label: "Secret", Placeholder: "WeCom secret", Secret: true, Required: true}}},
 		{ID: "whatsapp", DisplayName: "WhatsApp", Fields: []IMPlatformField{}, QRAuth: true},
-		{ID: "mattermost", DisplayName: "Mattermost", Fields: []IMPlatformField{{Key: "url", Label: "Server URL", Placeholder: "https://mm.example.com"}, {Key: "token", Label: "Access Token", Placeholder: "mattermost token", Secret: true}}},
-		{ID: "signal", DisplayName: "Signal", Fields: []IMPlatformField{{Key: "account", Label: "Phone Number", Placeholder: "+1234567890"}, {Key: "base_url", Label: "Signal CLI URL", Placeholder: "http://localhost:8080"}}},
-		{ID: "irc", DisplayName: "IRC", Fields: []IMPlatformField{{Key: "host", Label: "Server", Placeholder: "irc.libera.chat:6697"}, {Key: "nick", Label: "Nickname", Placeholder: "my-bot"}, {Key: "channels", Label: "Channels", Placeholder: "#channel1,#channel2"}}},
+		{ID: "mattermost", DisplayName: "Mattermost", Fields: []IMPlatformField{{Key: "url", Label: "Server URL", Placeholder: "https://mm.example.com", Required: true}, {Key: "token", Label: "Access Token", Placeholder: "mattermost token", Secret: true, Required: true}}},
+		{ID: "signal", DisplayName: "Signal", Fields: []IMPlatformField{{Key: "account", Label: "Phone Number", Placeholder: "+1234567890", Required: true}, {Key: "base_url", Label: "Signal CLI URL", Placeholder: "http://localhost:8080"}}},
+		{ID: "irc", DisplayName: "IRC", Fields: []IMPlatformField{{Key: "host", Label: "Server", Placeholder: "irc.libera.chat:6697", Required: true}, {Key: "nick", Label: "Nickname", Placeholder: "my-bot", Required: true}, {Key: "channels", Label: "Channels", Placeholder: "#channel1,#channel2"}}},
 		// #591: privateclaw is listed in the CLI help/platform docs (im_cmd.go
 		// accepts it verbatim), but was absent here — after #585's strong
 		// validation, doc-compliant adapters permanently failed Test
@@ -178,6 +187,13 @@ func SaveIMAdapter(name string, values map[string]string) error {
 	platform := values["platform"]
 	if platform == "" {
 		return fmt.Errorf("platform is required")
+	}
+	// #637: reject unknown platforms at SAVE time, not just Test time.
+	// AddIMAdapter only checks non-empty, so "telegarm" persisted happily
+	// and the user only discovered the typo when Test Connection failed
+	// with "unknown platform" — leaving unstartable bad data in ggcode.yaml.
+	if imPlatformByID(platform) == nil {
+		return fmt.Errorf("unknown platform %q (see GetIMPlatformRegistry for supported IDs)", platform)
 	}
 
 	// Read enabled value from values map. If the caller did not send an
@@ -333,10 +349,10 @@ func TestIMConnection(name string) error {
 		return fmt.Errorf("unknown platform %q for adapter %q", acfg.Platform, name)
 	}
 
-	// Check all required fields are present and non-empty
+	// Check required fields (registry marks which are mandatory).
 	for _, field := range platformMeta.Fields {
-		if field.Label == "" {
-			continue // non-required field (registry doesn't have a 'required' flag)
+		if !field.Required {
+			continue
 		}
 		val, ok := acfg.Extra[field.Key]
 		if !ok {
@@ -351,6 +367,13 @@ func TestIMConnection(name string) error {
 		if strVal == "" {
 			return fmt.Errorf("required field %q (%s) is empty or invalid", field.Key, field.Label)
 		}
+	}
+
+	// #637: a stdio adapter's essential Command lives on the adapter struct
+	// (adapterCfg.Command), not in Extra — the Extra-only loop above never
+	// checked it, so a Command-less stdio config passed field validation.
+	if acfg.Transport == "stdio" && strings.TrimSpace(acfg.Command) == "" {
+		return fmt.Errorf("missing required field %q (stdio command)", "command")
 	}
 
 	return nil
