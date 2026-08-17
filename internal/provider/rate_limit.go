@@ -200,9 +200,13 @@ func parseRateLimitHeaders(h http.Header) RateLimitInfo {
 		if v := h.Get(prefix + "tokens-reset"); v != "" {
 			info.ResetTokens = parseAnthropicResetDuration(v)
 		}
-		if !info.IsEmpty() {
-			return info
-		}
+		// #602(R6): do NOT early-return after the first non-empty prefix
+		// group. A mixed-prefix response (old prefix carrying request
+		// headers, new prefix carrying token headers) used to return here
+		// with RemainingTokens=-1, so TokenFractionRemaining() read as 100%
+		// and token-critical warnings never fired. Both prefixes now merge
+		// into one info; each field is only overwritten when that specific
+		// header exists, so single-prefix responses parse exactly as before.
 	}
 
 	return info

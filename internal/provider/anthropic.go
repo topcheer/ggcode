@@ -472,13 +472,12 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 			break
 		}
 
-		// If the loop exited without a successful stream (all retries exhausted),
-		// report the failure instead of sending a Done event with empty usage.
-		if usage == nil && outputChars == 0 {
-			ch <- StreamEvent{Type: StreamEventError, Error: fmt.Errorf("anthropic stream: %d retry attempts exhausted", providerRetryAttempts)}
-			return
-		}
-
+		// #602(R5): the "retries exhausted" guard that used to live here was
+		// unreachable dead code — every iteration of the attempt loop above
+		// ends in `continue` (retry), `return` (streamError sent), or the
+		// unconditional usage assignment plus the single `break`, so the loop
+		// can never exit with usage == nil. The defensive estimate fallback
+		// below is kept for symmetry with openai.go/gemini.go.
 		if usage == nil {
 			// Fallback: estimate InputTokens from the messages themselves,
 			// same as the OpenAI provider does. Without this, InputTokens=0

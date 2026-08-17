@@ -286,7 +286,32 @@ func (f *FallbackProvider) watchStreamForFailover(ctx context.Context, failed Pr
 				f.consecutiveFail.Store(0)
 			}
 		}
-		for ev := range stream {
+		// #602(R2): every channel operation below watches ctx. `out` is
+		// unbuffered and consumers stop reading the moment they cancel;
+		// before this, a cancelled turn parked this goroutine on `out <-`,
+		// which parked the drain goroutine, which let the provider's own
+		// buffered channel fill — three stuck layers leaked per cancelled
+		// turn in long sessions/daemons.
+		send := func(ev StreamEvent) bool {
+			select {
+			case out <- ev:
+				return true
+			case <-ctx.Done():
+				return false
+			}
+		}
+		for {
+			var ev StreamEvent
+			select {
+			case next, ok := <-stream:
+				if !ok {
+					resetOnSuccess()
+					return
+				}
+				ev = next
+			case <-ctx.Done():
+				return
+			}
 			if !sawOutput && ev.Type == StreamEventError && ev.Error != nil {
 				_, canRetry := f.maybeFailover(ev.Error, failed)
 				// canRetry alone decides, matching the sync Chat/ChatStream
@@ -303,41 +328,67 @@ func (f *FallbackProvider) watchStreamForFailover(ctx context.Context, failed Pr
 					stream2, err2 := fallback.ChatStream(ctx, messages, tools)
 					if err2 == nil {
 						// Drain the failed stream and relay the fallback's.
+						// #602(R2): the drain must be cancellable too — a
+						// plain `for range stream` lived until the producer
+						// closed, adding one parked goroutine per cancelled
+						// turn.
 						go func() {
-							for range stream {
+							for {
+								select {
+								case _, ok := <-stream:
+									if !ok {
+										return
+									}
+								case <-ctx.Done():
+									return
+								}
 							}
 						}()
-						out <- StreamEvent{
+						if !send(StreamEvent{
 							Type: StreamEventSystem,
 							Text: fmt.Sprintf("primary provider failed (%v); failing over to %s", ev.Error, fallback.Name()),
+						}) {
+							return
 						}
-						for ev2 := range stream2 {
-							// #577(D): ANY content event (text, reasoning,
-							// tool-call, done) proves the fallback delivered —
-							// not just text. Counting text alone left pure
-							// tool-call/reasoning successes from clearing
-							// consecutiveFail, so stale counts prematurely
-							// failed over a healthy primary (#376 semantics).
-							// Mirrors the primary-stream rule at the bottom of
-							// this loop.
-							if ev2.Type != StreamEventError {
-								sawOutput = sawOutput || ev2.Type != StreamEventSystem
+						for {
+							select {
+							case ev2, ok := <-stream2:
+								if !ok {
+									resetOnSuccess()
+									return
+								}
+								// #577(D): ANY content event (text, reasoning,
+								// tool-call, done) proves the fallback delivered —
+								// not just text. Counting text alone left pure
+								// tool-call/reasoning successes from clearing
+								// consecutiveFail, so stale counts prematurely
+								// failed over a healthy primary (#376 semantics).
+								// Mirrors the primary-stream rule at the bottom of
+								// this loop.
+								if ev2.Type != StreamEventError {
+									sawOutput = sawOutput || ev2.Type != StreamEventSystem
+								}
+								if !send(ev2) {
+									return
+								}
+							case <-ctx.Done():
+								return
 							}
-							out <- ev2
 						}
-						resetOnSuccess()
-						return
 					}
 					// Fallback stream could not even start — surface the
 					// original error.
-					out <- ev
+					if !send(ev) {
+						return
+					}
 					continue
 				}
 			}
 			sawOutput = sawOutput || (ev.Type != StreamEventError && ev.Type != StreamEventSystem)
-			out <- ev
+			if !send(ev) {
+				return
+			}
 		}
-		resetOnSuccess()
 	}()
 	return out
 }

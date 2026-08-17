@@ -172,9 +172,20 @@ func isRetryable(err error) bool {
 	if containsHTTPStatus(msg, "422") {
 		return false
 	}
+	// #602(R1): 402 (payment required) and 413 (payload too large) complete
+	// the string-fallback exclusion list. The typed path
+	// (isRetryableHTTPStatus, #267) already treats both as permanent, but the
+	// string fallback only excluded 400/401/403/404/422 — a non-typed
+	// "status code: 402" from an OpenAI-compatible relay fell through to the
+	// default-retryable branch and burned 20 retries (~7 min) on a billing
+	// error that can never succeed. Fourth instance of the #306/#518/#267
+	// string-vs-typed divergence class.
+	if containsHTTPStatus(msg, "402") || containsHTTPStatus(msg, "413") {
+		return false
+	}
 
 	// Any other error with a recognizable HTTP status code is retryable.
-	// (400/422 are permanently excluded above — see #306/#518.)
+	// (400/402/413/422 are permanently excluded above — see #306/#518/#602.)
 	// #518: 422 must NOT be in this string-fallback list — the typed path
 	// (isRetryableHTTPStatus) treats 422 as permanent (schema/semantic
 	// rejection), so a non-typed go-openai stream error (plain fmt.Errorf,
@@ -212,16 +223,21 @@ func isRetryable(err error) bool {
 // patterns, fell through to the default-retryable path, and burned 19
 // retries (~7.5 min) on a permanent auth failure.
 func containsHTTPStatus(msg, code string) bool {
-	return strings.Contains(msg, " "+code+" ") ||
-		strings.Contains(msg, " "+code+",") ||
-		strings.Contains(msg, " "+code+"\n") ||
-		strings.Contains(msg, " "+code+".") ||
-		strings.Contains(msg, " "+code+")") ||
-		strings.Contains(msg, " "+code+";") ||
-		strings.Contains(msg, " "+code+":") ||
-		strings.Contains(msg, "code: "+code) ||
-		strings.Contains(msg, `status":`+code) ||
-		strings.Contains(msg, "statusCode:"+code)
+	// #602(R3): digit-terminated patterns go through containsPatternAnchored
+	// (errclass.go), which requires a non-digit (or end-of-string) boundary
+	// after the code. Bare substring matching let a 5-digit coincidence like
+	// `"status":40139` count as status 401 — the same digit-piercing class the
+	// classifier closed (#303/#456/#577).
+	return containsPatternAnchored(msg, " "+code+" ") ||
+		containsPatternAnchored(msg, " "+code+",") ||
+		containsPatternAnchored(msg, " "+code+"\n") ||
+		containsPatternAnchored(msg, " "+code+".") ||
+		containsPatternAnchored(msg, " "+code+")") ||
+		containsPatternAnchored(msg, " "+code+";") ||
+		containsPatternAnchored(msg, " "+code+":") ||
+		containsPatternAnchored(msg, "code: "+code) ||
+		containsPatternAnchored(msg, `status":`+code) ||
+		containsPatternAnchored(msg, "statusCode:"+code)
 }
 
 func isRetryableForContext(ctx context.Context, err error) bool {

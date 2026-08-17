@@ -109,9 +109,33 @@ var anthropicWindowLimitMarkers = []string{
 	"weekly limit",     // weekly window variant
 }
 
-// isAnthropicWindowLimit reports whether the (lowercased) message carries a
-// marker of an auto-resetting Anthropic usage window.
+// nonAnthropicQuotaCodes are quota error codes emitted by non-Anthropic
+// vendors (OpenAI: insufficient_quota; Kimi: exceeded_current_quota;
+// Volcengine Ark: QuotaExceeded). Their presence identifies the error
+// surface as non-Anthropic, so the Anthropic window-limit exclusion must
+// not apply even when the message also carries a generic "limit will
+// reset" phrase (#602 R4): OpenAI's billing-cycle message
+// "insufficient_quota: usage limit exceeded; your limit will reset at ..."
+// is a permanent quota failure, not a recoverable transient rate limit.
+// Before the vendor gate it classified as FailureRateLimit and was
+// retried 20 times, all doomed.
+var nonAnthropicQuotaCodes = []string{
+	"insufficient_quota",
+	"exceeded_current_quota", // also a quotaKeyword, matched as a whole
+	"quota_exceeded",
+	"quotaexceeded",
+	"quota exceeded",
+}
+
+// isAnthropicWindowLimit reports whether the (lowercased) message carries
+// a marker of an auto-resetting Anthropic usage window. #602(R4): only for
+// error surfaces that do not carry a non-Anthropic quota error code — the
+// exclusion describes Anthropic's recoverable 5-hour/weekly windows, not
+// OpenAI-style billing cycles that merely mention a reset time.
 func isAnthropicWindowLimit(s string) bool {
+	if containsAny(s, nonAnthropicQuotaCodes) {
+		return false
+	}
 	return containsAny(s, anthropicWindowLimitMarkers)
 }
 
@@ -220,14 +244,11 @@ var rateLimitStatusPatterns = []string{
 }
 
 // isRateLimitStatusHit reports whether the (lowercased) message contains an
-// anchored 429/529 status indicator.
+// anchored 429/529 status indicator. #602(R3): digit-terminated patterns
+// (e.g. `status":429`) require a trailing non-digit boundary so a 5-digit
+// coincidence like `"status":42999` cannot pierce the prefix match.
 func isRateLimitStatusHit(lower string) bool {
-	for _, pat := range rateLimitStatusPatterns {
-		if strings.Contains(lower, pat) {
-			return true
-		}
-	}
-	return false
+	return containsAnyAnchored(lower, rateLimitStatusPatterns)
 }
 
 // networkKeywords are lowercased substrings indicating transport-level
@@ -248,6 +269,51 @@ var networkKeywords = []string{
 func containsAny(s string, keywords []string) bool {
 	for _, k := range keywords {
 		if strings.Contains(s, k) {
+			return true
+		}
+	}
+	return false
+}
+
+// containsPatternAnchored reports whether s contains pat. When pat ENDS in
+// ASCII digits, the character right after the match in s must be a non-digit
+// (or end-of-string). #602(R3): the JSON anchors `status":401` /
+// `status":429` / `status":529` digit-pierced — a 5-digit coincidence like
+// `"status":40139` matched the "401" prefix and misclassified as
+// FailureAuth (and "42999" as FailureRateLimit), triggering sticky auth
+// failover for the rest of the session (#303/#456/#577 anchor-hardening
+// closure). Patterns that do not end in digits (e.g. " 401,") are already
+// self-delimiting and match via plain Contains.
+func containsPatternAnchored(s, pat string) bool {
+	i := len(pat)
+	for i > 0 && pat[i-1] >= '0' && pat[i-1] <= '9' {
+		i--
+	}
+	head, digits := pat[:i], pat[i:]
+	if digits == "" {
+		return strings.Contains(s, pat)
+	}
+	from := 0
+	for from+len(pat) <= len(s) {
+		j := strings.Index(s[from:], head)
+		if j < 0 {
+			return false
+		}
+		start := from + j
+		end := start + len(pat)
+		if s[start+len(head):end] == digits &&
+			(end >= len(s) || s[end] < '0' || s[end] > '9') {
+			return true
+		}
+		from = start + 1
+	}
+	return false
+}
+
+// containsAnyAnchored applies containsPatternAnchored over a pattern list.
+func containsAnyAnchored(s string, pats []string) bool {
+	for _, p := range pats {
+		if containsPatternAnchored(s, p) {
 			return true
 		}
 	}
@@ -315,7 +381,9 @@ func ClassifyLLMError(err error) FailureClass {
 	if isQuotaExhaustedString(s) {
 		return FailureQuota
 	}
-	if containsAny(s, authKeywords) || containsAny(s, authStatusPatterns) {
+	// #602(R3): status patterns go through the anchored matcher so
+	// `"status":40139` cannot pierce the `status":401` prefix.
+	if containsAny(s, authKeywords) || containsAnyAnchored(s, authStatusPatterns) {
 		return FailureAuth
 	}
 	if containsAny(s, rateLimitKeywords) || isRateLimitStatusHit(s) {
