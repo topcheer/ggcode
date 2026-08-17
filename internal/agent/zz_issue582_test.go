@@ -52,10 +52,10 @@ func TestIssue582Bug3_AuthorizedDescopingExempt(t *testing.T) {
 	c := newCriteriaDriftState()
 	defer c.reset()
 
-	// User explicitly says "rate limiting is out of scope, skip it"
-	// Agent faithfully responds: "as requested, that requirement is out of scope"
-	// This should NOT trigger because of the "as requested" authorization marker
-	text := "As you requested, rate limiting is out of scope for this phase."
+	// #586 F4: Use an actual pattern from the reclassification list.
+	// Pattern "that requirement is out of scope" must be present.
+	// Agent faithfully responds with user-authorized descoping.
+	text := "As you requested, that requirement is out of scope for this phase."
 	c.recordAssistantText(text, 1)
 
 	// Should have 0 indicators because the reclassification pattern is exempt
@@ -66,6 +66,17 @@ func TestIssue582Bug3_AuthorizedDescopingExempt(t *testing.T) {
 	msg := c.maybeWarn(2)
 	if msg != "" {
 		t.Fatalf("Bug 3: expected no warning for authorized descoping, got: %s", msg)
+	}
+
+	// #586 F4: Verify that exemption actually works by checking cdIsAuthExempt directly.
+	// If we remove the authorization marker, it should NOT be exempt.
+	textNoAuth := "That requirement is out of scope for this phase."
+	if cdIsAuthExempt(textNoAuth, "that requirement is out of scope", "reclassification") {
+		t.Fatal("Bug 3: expected no exemption without authorization marker")
+	}
+	// With authorization marker, it SHOULD be exempt.
+	if !cdIsAuthExempt(text, "that requirement is out of scope", "reclassification") {
+		t.Fatal("Bug 3: expected exemption with authorization marker")
 	}
 }
 
@@ -100,19 +111,20 @@ func TestIssue582Bug3_MultipleAuthMarkers(t *testing.T) {
 	}
 }
 
-// #582 Bug 3: Test that authorization markers only exempt reclassification.
-// Other categories should not be affected by authorization markers.
-func TestIssue582Bug3_AuthExemptionReclassificationOnly(t *testing.T) {
+// #582 Bug 3: Test that authorization markers exempt all categories.
+// #586 F3: Expanded to narrowing/reclassification/substitution/partial_complete.
+// When user authorizes any type of criteria change, it should be exempt.
+func TestIssue582Bug3_AuthExemptionAllCategories(t *testing.T) {
 	c := newCriteriaDriftState()
 	defer c.reset()
 
-	// "as requested" with narrowing pattern should still register
-	// (auth exemption only applies to reclassification category)
+	// "as requested" with narrowing pattern should be exempt (user authorized narrowing)
 	text := "As requested, the requirement is really only the happy path."
 	c.recordAssistantText(text, 1)
 
-	if len(c.indicators) != 1 {
-		t.Fatalf("expected 1 indicator (narrowing not exempt by auth), got %d: %v", len(c.indicators), c.indicators)
+	// Should have 0 indicators because the narrowing pattern is now exempt
+	if len(c.indicators) != 0 {
+		t.Fatalf("expected 0 indicators (narrowing with auth is now exempt), got %d: %v", len(c.indicators), c.indicators)
 	}
 }
 

@@ -155,18 +155,45 @@ func (c *criteriaDriftState) recordAssistantText(text string, iter int) {
 	lower := strings.ToLower(text)
 	newIndicators := []string{}
 
+	// #586 F7: Track indicators per sentence for deduplication
+	// This prevents two synonymous phrases in the same sentence from counting twice.
+	sentenceIndicators := make(map[string]map[string]bool) // sentence -> category -> seen
+
+	// Split text into sentences first for per-sentence dedup
+	sentences := cdSplitSentences(lower)
+	for _, sentence := range sentences {
+		sentenceIndicators[sentence] = make(map[string]bool)
+	}
+
 	for cat, pats := range criteriaDriftPatterns {
 		for _, pat := range pats {
 			if strings.Contains(lower, pat) {
-				// Check if we already have this indicator.
+				// #586 F7: Skip if we already have this category in the same sentence
+				matchedSentence := cdFindSentenceForPattern(lower, pat)
+				if matchedSentence != "" {
+					// Initialize sentence map if not exists
+					if sentenceIndicators[matchedSentence] == nil {
+						sentenceIndicators[matchedSentence] = make(map[string]bool)
+					}
+					if sentenceIndicators[matchedSentence][cat] {
+						debug.Log("agent", "Criteria drift indicator SKIPPED (dedupe) (category=%s, sentence=%q): %q at iteration %d", cat, matchedSentence, pat, iter)
+						continue
+					}
+				}
+
+				// Check if we already have this indicator globally.
 				if !cdContains(c.indicators, pat) && !cdContainsStr(newIndicators, pat) {
-					// #582: Skip reclassification patterns with authorization context.
+					// #582: Skip patterns with authorization context.
 					if cdIsAuthExempt(text, pat, cat) {
 						debug.Log("agent", "Criteria drift indicator EXEMPT (auth context) (category=%s): %q at iteration %d", cat, pat, iter)
 						continue
 					}
 					newIndicators = append(newIndicators, pat)
 					debug.Log("agent", "Criteria drift indicator (category=%s): %q at iteration %d", cat, pat, iter)
+					// Mark this category as seen in this sentence
+					if matchedSentence != "" {
+						sentenceIndicators[matchedSentence][cat] = true
+					}
 				}
 			}
 		}
@@ -190,70 +217,128 @@ func (c *criteriaDriftState) recordAssistantText(text string, iter int) {
 }
 
 // cdAuthMarkers are phrases that indicate user-authorized descoping (#582).
-// When these appear near a reclassification pattern, the indicator is exempt
+// When these appear before a drift pattern, the indicator is exempt
 // because it reflects faithful execution of explicit user instruction.
+// #586: Markers in negation or non-authorization context (e.g., "NOT as requested",
+// "you asked me about X", "mentioned") do NOT authorize descoping.
 var cdAuthMarkers = []string{
 	"as requested",
+	"as you requested",
 	"per your instruction",
 	"user asked",
 	"as you asked",
 	"you asked me",
 	"you instructed",
+	"as instructed",
 }
 
 // cdHasAuthContext checks if the given text contains authorization markers
 // that indicate user-authorized descoping. Returns true if any marker is found.
+// #586: Only markers in non-negated, authorization context count.
 func cdHasAuthContext(text string) bool {
 	lower := strings.ToLower(text)
 	for _, marker := range cdAuthMarkers {
-		if strings.Contains(lower, marker) {
-			return true
+		idx := strings.Index(lower, marker)
+		if idx == -1 {
+			continue
 		}
+		// #586 F1: Check for negation before the marker
+		if idx > 0 {
+			prevChar := lower[idx-1]
+			// Skip if marker is immediately preceded by negation word or apostrophe
+			if prevChar == ' ' && idx > 5 {
+				// Check 5 chars before the space for negation words
+				prefix := lower[idx-5 : idx]
+				if strings.Contains(prefix, "not ") || strings.Contains(prefix, "never") || strings.Contains(prefix, "n't") {
+					continue
+				}
+			}
+		}
+		// #586 F1: Skip non-authorization verb forms (asked about, mentioned, etc.)
+		// "you asked me about X" is a question, not authorization
+		if idx+len(marker) < len(lower) {
+			suffix := lower[idx+len(marker):]
+			if strings.HasPrefix(suffix, " me about") || strings.HasPrefix(suffix, " about") {
+				continue
+			}
+			if strings.Contains(suffix, "mentioned") || strings.Contains(suffix, "noted") {
+				continue
+			}
+		}
+		return true
 	}
 	return false
 }
 
 // cdIsAuthExempt checks if a pattern match is exempt due to user authorization.
-// For reclassification patterns, we require that an authorization marker appears
-// in the same sentence or immediate semantic context as the pattern.
+// For patterns in authorized categories, we require that an authorization marker
+// appears BEFORE the pattern in the same sentence.
 // This prevents false exemptions when auth markers appear in unrelated contexts
-// (e.g., "the pattern 'as requested' is being tested").
+// or after the pattern (retrospective justification).
+// #586: Expanded to narrowing/reclassification/dead-end/success-criterion categories.
 func cdIsAuthExempt(text, pattern string, category string) bool {
-	if category != "reclassification" {
+	// #586 F3: Expand exemption to all 4 categories, not just reclassification
+	// Users may authorize narrowing ("just focus on the core"), dead-end ("that's impossible"),
+	// success-criterion ("good enough is fine"), or reclassification ("that's out of scope").
+	if category != "narrowing" && category != "reclassification" && category != "substitution" && category != "partial_complete" {
 		return false
 	}
 
 	lower := strings.ToLower(text)
 	patternLower := strings.ToLower(pattern)
-	patternIdx := strings.Index(lower, patternLower)
-	if patternIdx == -1 {
-		return false
-	}
 
-	// Find the sentence containing the pattern
-	// Sentence boundaries are ., !, or ? followed by whitespace or end of string
-	sentenceStart := 0
-	for i := patternIdx; i >= 0; i-- {
-		if i > 0 && (lower[i-1] == '.' || lower[i-1] == '!' || lower[i-1] == '?') {
-			if i < len(lower) && (lower[i] == ' ' || lower[i] == '\t' || lower[i] == '\n') {
+	// #586 F6: For each pattern occurrence, find the nearest preceding marker
+	// This handles multiple patterns in the same sentence correctly.
+	patternIdx := 0
+	for {
+		relativeIdx := strings.Index(lower[patternIdx:], patternLower)
+		if relativeIdx == -1 {
+			break
+		}
+		patternIdx += relativeIdx // Adjust to absolute position
+
+		// Find the sentence containing this pattern occurrence
+		// #586 F2: Sentence boundaries include .!? ; and newline.
+		// Semicolon and newline create separate sentences to prevent false exemptions.
+		sentenceStart := 0
+		for i := patternIdx; i >= 0; i-- {
+			if i > 0 && (lower[i-1] == '.' || lower[i-1] == '!' || lower[i-1] == '?' || lower[i-1] == ';' || lower[i-1] == '\n') {
+				// Sentence starts AFTER the boundary character and any following whitespace
 				sentenceStart = i
+				// Skip the boundary character itself
+				for sentenceStart < len(lower) && (lower[sentenceStart] == '.' || lower[sentenceStart] == '!' || lower[sentenceStart] == '?' || lower[sentenceStart] == ';' || lower[sentenceStart] == '\n') {
+					sentenceStart++
+				}
+				// Skip whitespace after boundary
+				for sentenceStart < len(lower) && (lower[sentenceStart] == ' ' || lower[sentenceStart] == '\t' || lower[sentenceStart] == '\r') {
+					sentenceStart++
+				}
 				break
 			}
 		}
-	}
 
-	sentenceEnd := len(lower)
-	for i := patternIdx; i < len(lower); i++ {
-		if lower[i] == '.' || lower[i] == '!' || lower[i] == '?' {
-			sentenceEnd = i + 1
-			break
+		sentenceEnd := len(lower)
+		for i := patternIdx; i < len(lower); i++ {
+			if lower[i] == '.' || lower[i] == '!' || lower[i] == '?' || lower[i] == ';' || lower[i] == '\n' {
+				sentenceEnd = i + 1
+				break
+			}
 		}
+
+		sentence := lower[sentenceStart:sentenceEnd]
+		// Only look for markers BEFORE this pattern occurrence
+		relativePatternIdx := patternIdx - sentenceStart
+		patternPrefix := sentence[:relativePatternIdx]
+
+		// Check if there's an authorization marker BEFORE the pattern in this sentence
+		if cdHasAuthContext(patternPrefix) {
+			return true
+		}
+
+		patternIdx += len(patternLower)
 	}
 
-	sentence := lower[sentenceStart:sentenceEnd]
-
-	// Check if there's an authorization marker in the same sentence
-	return cdHasAuthContext(sentence)
+	return false
 }
 
 // maybeWarn returns guidance text if enough drift indicators have accumulated.
@@ -342,4 +427,55 @@ func cdContainsStr(slice []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// #586 F2: cdSplitSentences splits text into sentences.
+// Sentence boundaries: .!? ; newline followed by whitespace or end of string.
+func cdSplitSentences(text string) []string {
+	var sentences []string
+	start := 0
+	for i := 0; i < len(text); i++ {
+		if text[i] == '.' || text[i] == '!' || text[i] == '?' || text[i] == ';' || text[i] == '\n' {
+			end := i + 1
+			// Skip trailing whitespace
+			for end < len(text) && (text[end] == ' ' || text[end] == '\t' || text[end] == '\n' || text[end] == '\r') {
+				end++
+			}
+			if end > start {
+				sentences = append(sentences, text[start:end])
+			}
+			start = end
+		}
+	}
+	if start < len(text) {
+		sentences = append(sentences, text[start:])
+	}
+	return sentences
+}
+
+// #586 F7: cdFindSentenceForPattern finds which sentence contains the pattern.
+func cdFindSentenceForPattern(text, pattern string) string {
+	idx := strings.Index(text, pattern)
+	if idx == -1 {
+		return ""
+	}
+	// Find sentence start
+	start := 0
+	for i := idx; i >= 0; i-- {
+		if i > 0 && (text[i-1] == '.' || text[i-1] == '!' || text[i-1] == '?' || text[i-1] == ';' || text[i-1] == '\n') {
+			if i < len(text) && (text[i] == ' ' || text[i] == '\t' || text[i] == '\n' || text[i] == '\r') {
+				start = i
+				break
+			}
+		}
+	}
+	// Find sentence end
+	end := len(text)
+	for i := idx; i < len(text); i++ {
+		if text[i] == '.' || text[i] == '!' || text[i] == '?' || text[i] == ';' || text[i] == '\n' {
+			end = i + 1
+			break
+		}
+	}
+	return text[start:end]
 }
