@@ -164,12 +164,12 @@ func TestManagerCompositionLocked(t *testing.T) {
 		{Content: []provider.ContentBlock{{ReasoningContent: "think 45"}}}, // reasoning counts
 	}}
 	a, c := m.compositionLocked()
-	// ASCII: 11 (hello world) + 9 (mixed 你好 ok) + 3 (caf; é is non-ASCII non-CJK, ignored) + 14 (tool output 12) + 8 (think 45)
+	// ASCII: 11 (hello world) + 9 (mixed 你好 ok) + 3 (caf; é is Latin-Ext, now counted as CJK) + 14 (tool output 12) + 8 (think 45)
 	if a != 45 {
 		t.Errorf("asciiChars = %d, want %d", a, 45)
 	}
-	// CJK: 你好世界 (4; fullwidth ， U+FF0C not in ranges) + 你好 (2)
-	if c != 6 {
-		t.Errorf("cjkChars = %d, want %d", c, 6)
+	// CJK: 你好世界 (4; fullwidth ， U+FF0C not in ranges) + 你好 (2) + é (1, Latin-Ext)
+	if c != 7 {
+		t.Errorf("cjkChars = %d, want %d", c, 7)
 	}
 }

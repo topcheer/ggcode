@@ -574,11 +574,24 @@ func (s *JSONLStore) saveIndex(idx []indexEntry) error {
 }
 
 func (s *JSONLStore) updateIndex(ses *Session) error {
-	unlock, lockErr := lockIndexFile(s.indexPath())
+	// Retry flock acquisition with exponential backoff to handle transient
+	// lock contention from other processes (desktop + TUI).
+	var unlock func()
+	var lockErr error
+	for i := 0; i < 3; i++ {
+		unlock, lockErr = lockIndexFile(s.indexPath())
+		if lockErr == nil {
+			break
+		}
+		if i < 2 {
+			// Exponential backoff: 10ms, 20ms, 40ms
+			time.Sleep(time.Duration(10*(1<<i)) * time.Millisecond)
+		}
+	}
 	if lockErr != nil {
-		debug.Log("session", "updateIndex: failed to acquire index lock: %v", lockErr)
+		debug.Log("session", "updateIndex: failed to acquire index lock after 3 retries: %v", lockErr)
 		s.indexDirty = true
-		// Proceed without lock — better to try than skip entirely.
+		return lockErr
 	}
 	defer func() {
 		if unlock != nil {
@@ -2503,7 +2516,7 @@ func appendRecordLines(path string, recs []jsonlRecord) error {
 		}
 	}()
 	// We intentionally skip f.Sync() (fsync) here for performance:
-	//   - Save() (full session rewrite via atomic rename) does fsync for durability.
+	//   - Save() only does O_CREATE touch, no fsync on the atomic rename path.
 	//   - This append path trades fsync for speed since it's called frequently.
 	//   - The data reaches disk via the OS buffer cache within seconds.
 	//   - The only risk is power loss losing the last few buffered appends,
@@ -2540,12 +2553,7 @@ func messageFingerprint(msg *provider.Message) string {
 		case "tool_result":
 			sb.WriteString("r:")
 			sb.WriteString(c.ToolID)
-			// Cap output in fingerprint to bound memory for large results
-			out := c.Output
-			if len([]rune(out)) > 200 {
-				out = string([]rune(out)[:200])
-			}
-			sb.WriteString(out)
+			sb.WriteString(c.Output)
 		default:
 			sb.WriteString(c.Type)
 			sb.WriteByte('?')
@@ -2720,18 +2728,21 @@ func (s *JSONLStore) backfillTimestamps(sessionID string) {
 		return
 	}
 
-	// Check first message record — if it already has a timestamp, skip entirely.
-	firstMsgHasTimestamp := false
+	// Find the first real timestamp (if any) to use as backfill base.
+	var firstRealTimestamp time.Time
 	for _, line := range lines {
 		var rec jsonlRecord
 		if json.Unmarshal([]byte(line), &rec) != nil {
 			continue
 		}
-		if rec.Type == "message" {
-			firstMsgHasTimestamp = !rec.Timestamp.IsZero()
+		if rec.Type == "message" && !rec.Timestamp.IsZero() {
+			firstRealTimestamp = rec.Timestamp
 			break
 		}
 	}
+
+	// Check first message record — if it already has a timestamp, skip entirely.
+	firstMsgHasTimestamp := !firstRealTimestamp.IsZero()
 	if firstMsgHasTimestamp {
 		return
 	}
@@ -2740,7 +2751,14 @@ func (s *JSONLStore) backfillTimestamps(sessionID string) {
 	// mixed sessions (backfilled prefix + real-timestamped suffix) stay
 	// monotonic: a single shared timestamp broke findMessageCutoff's
 	// binary search, which assumes file order == chronological order (#198).
-	backfillTime := time.Now().Add(-6 * time.Hour)
+	// Use min(firstRealTimestamp, now-6h) to ensure monotonicity:
+	// - If first real timestamp is older than 6h, use it as base.
+	// - Otherwise use now-6h to avoid polluting recent sessions.
+	backfillBase := time.Now().Add(-6 * time.Hour)
+	if !firstRealTimestamp.IsZero() && firstRealTimestamp.Before(backfillBase) {
+		backfillBase = firstRealTimestamp
+	}
+	backfillTime := backfillBase
 	changed := false
 	n := 0
 	for i, line := range lines {

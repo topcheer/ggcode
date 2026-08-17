@@ -821,8 +821,22 @@ func (m *Manager) ApplyCompactResult(snapshot CompactSnapshot, result CompactRes
 	newMsgs := append([]provider.Message(nil), result.Messages...)
 	newMsgs = append(newMsgs, extra...)
 
-	if hasLiveSystem && len(newMsgs) > 0 && newMsgs[0].Role == "system" {
-		newMsgs[0] = liveSystem
+	if hasLiveSystem && len(newMsgs) > 0 {
+		// Identify the summary message by its marker, not by role.
+		// Summarize outputs role=system, so checking role would
+		// overwrite the actual summary with the live system prompt.
+		for i := range newMsgs {
+			if newMsgs[i].Role == "system" && len(newMsgs[i].Content) > 0 &&
+				newMsgs[i].Content[0].Type == "text" &&
+				strings.Contains(newMsgs[i].Content[0].Text, "[Previous conversation summary]") {
+				// Preserve summary, only replace if it's a bare system prompt.
+				continue
+			}
+			if newMsgs[i].Role == "system" {
+				newMsgs[i] = liveSystem
+				break
+			}
+		}
 	}
 
 	m.messages = newMsgs
@@ -980,17 +994,19 @@ func (m *Manager) RecordUsage(usage provider.TokenUsage) {
 
 // compositionLocked returns the ASCII/CJK character counts of all message
 // text, for composition-aware calibration (#355). Caller must hold m.mu.
+// Uses scriptTokenClasses from #535 to properly categorize Cyrillic,
+// Greek, and Latin-Extended scripts (previously invisible to calibration).
 func (m *Manager) compositionLocked() (asciiChars, cjkChars int) {
 	for _, msg := range m.messages {
 		for _, b := range msg.Content {
-			for _, r := range b.Text + b.ReasoningContent + b.Output {
-				switch {
-				case r < 0x80:
-					asciiChars++
-				case r >= 0x2E80 && r <= 0x9FFF || r >= 0xAC00 && r <= 0xD7AF || r >= 0xF900 && r <= 0xFAFF || r >= 0x3040 && r <= 0x30FF:
-					cjkChars++
-				}
-			}
+			text := b.Text + b.ReasoningContent + b.Output
+			a, c, le, cy, g, _ := scriptTokenClasses(text)
+			asciiChars += a
+			// Merge Latin-Extended, Cyrillic, and Greek into CJK bucket for
+			// calibration purposes — they are non-ASCII and consume similar
+			// token density to CJK characters. Full-width U+FF0C is correctly
+			// classified as 'other' by scriptTokenClasses.
+			cjkChars += c + le + cy + g
 		}
 	}
 	return asciiChars, cjkChars

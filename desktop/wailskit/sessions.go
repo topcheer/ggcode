@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/agentruntime"
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/tool"
@@ -96,14 +97,32 @@ func DeleteSession(id string) error {
 		// remains to revive it.
 		bridge.Cancel()
 		bridge.ClearCurrentSession()
-	} else if lock, lerr := session.TryAcquireSessionLock(storeDir, id); lerr == nil && lock != nil {
+		return store.Delete(id)
+	} else {
+		// Try to acquire lock for other instances' sessions.
+		lock, lerr := session.TryAcquireSessionLock(storeDir, id)
+		if lerr != nil {
+			// Fail-open when lock acquisition fails (e.g., filesystem error):
+			// allow deletion but log the skipped check. This matches the
+			// original behavior where a lock error was silently ignored,
+			// but adds visibility (#581 S1).
+			debug.Log("wailskit", "DeleteSession: failed to acquire lock for %s, proceeding anyway: %v", id, lerr)
+			return store.Delete(id)
+		}
+		if lock == nil {
+			return store.Delete(id)
+		}
 		if !lock.Acquired() {
 			lock.Release()
 			return fmt.Errorf("session %s is locked by another instance", id)
 		}
-		lock.Release()
+		// #581 (S1): Hold the lock across store.Delete to prevent TOCTOU:
+		// another instance's LoadSession could acquire the lock and start a
+		// persist handler between our Acquired() check and Delete(), causing
+		// O_CREATE resurrection (the exact scenario #298/#397 guard against).
+		defer lock.Release()
+		return store.Delete(id)
 	}
-	return store.Delete(id)
 }
 
 // RenameSession updates the title of a session by ID.
@@ -447,12 +466,21 @@ func loadSessionForExport(sessionID string) ([]SessionMessage, string, error) {
 		if chat == nil {
 			return nil, "", fmt.Errorf("no active session")
 		}
-		msgs := chat.CurrentSessionHistory()
-		title := ""
-		if ses := chat.CurrentSession(); ses != nil {
-			title = ses.Title
+		// #581 (S2): Export of "current session" must use FULL load, not the
+		// 24h windowed view. The in-memory b.currentSes was loaded via
+		// store.Load(id) (windowed), not store.LoadWithOptions(id, true) (full).
+		// Reload with the full-load path to match the by-ID export behavior (#564).
+		currentID := chat.CurrentSessionID()
+		if currentID == "" {
+			// Fallback to live history if no session ID (rare: ephemeral session)
+			msgs := chat.CurrentSessionHistory()
+			title := ""
+			if ses := chat.CurrentSession(); ses != nil {
+				title = ses.Title
+			}
+			return msgs, title, nil
 		}
-		return msgs, title, nil
+		sessionID = currentID
 	}
 
 	// Load a specific session by ID from the store.

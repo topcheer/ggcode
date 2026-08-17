@@ -65,7 +65,14 @@ func LoadDesktopConfig() *DesktopConfig {
 		if bak, berr := os.ReadFile(desktopConfigPath() + ".bak"); berr == nil {
 			bdc := &DesktopConfig{WindowW: 1280, WindowH: 860}
 			if json.Unmarshal(bak, bdc) == nil {
-				debug.Log("wailskit", "desktop config corrupted; recovered from .bak")
+				// #581 (D1): Promote the good .bak to main file so the first
+				// Save() after recovery rotates valid data, not corrupt bytes.
+				if werr := os.WriteFile(desktopConfigPath(), bak, 0600); werr != nil {
+					debug.Log("wailskit", "failed to promote .bak to main config: %v", werr)
+					// Still return recovered config; next Save() will try again.
+				} else {
+					debug.Log("wailskit", "desktop config corrupted; recovered and promoted from .bak")
+				}
 				return bdc
 			}
 		}
@@ -100,9 +107,18 @@ func (dc *DesktopConfig) Save() error {
 		return err
 	}
 	// #449: rotate the current good copy (if any) to .bak BEFORE writing.
+	// #581 (D1): Validate that old is parseable before rotating — a corrupt
+	// main file would overwrite the only good .bak, turning single corruption
+	// into total data loss. This closes the seam between #428 (read .bak) and
+	// #449 (write .bak) where the first Save() after recovery polluted the backup.
 	if old, rerr := os.ReadFile(path); rerr == nil && len(old) > 0 {
-		if werr := os.WriteFile(path+".bak", old, 0600); werr != nil {
-			debug.Log("wailskit", "failed to rotate desktop config .bak: %v", werr)
+		testCfg := &DesktopConfig{}
+		if json.Unmarshal(old, testCfg) == nil {
+			if werr := os.WriteFile(path+".bak", old, 0600); werr != nil {
+				debug.Log("wailskit", "failed to rotate desktop config .bak: %v", werr)
+			}
+		} else {
+			debug.Log("wailskit", "skipping desktop config .bak rotation: existing file is unparseable")
 		}
 	}
 	// Atomic write: temp file + rename, so a crash mid-write can never
