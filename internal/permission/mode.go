@@ -107,9 +107,19 @@ func IsReadOnlyTool(name string) bool {
 		// readOnlyToolNames whitelist, which are themselves read-only.
 		return true
 	}
-	// All MCP tools are allowed in plan mode (they have their own access control)
+	// #596-P2: MCP tools are NOT automatically read-only in plan mode.
+	// Default to Ask (non-read-only) unless on an explicit whitelist.
+	// This prevents write operations (drop_table, apply_patch, send_message)
+	// from bypassing plan mode restrictions.
 	if strings.HasPrefix(name, "mcp__") {
-		return true
+		// Whitelist of known read-only MCP tools. These have been verified
+		// to be safe in plan mode or only perform read operations.
+		readOnlyWhitelist := map[string]bool{
+			"mcp__web_reader__webReader":              true,
+			"mcp__web-search-prime__web_search_prime": true,
+			// Add more as they are verified to be read-only
+		}
+		return readOnlyWhitelist[name]
 	}
 	return false
 }

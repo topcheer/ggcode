@@ -523,16 +523,27 @@ func TestIsValidPermissionMode(t *testing.T) {
 // ============================================================================
 
 func TestIsReadOnlyTool_MCPTools(t *testing.T) {
-	// All MCP tools should be read-only
-	mcpTools := []string{
+	// #596-P2: MCP tools are NOT automatically read-only in plan mode.
+	// Write operations return false (require Ask).
+	writeTools := []string{
 		"mcp__tool1",
-		"mcp__read_file",
 		"mcp__write_operation",
+		"mcp__drop_table",
+	}
+	for _, tool := range writeTools {
+		if IsReadOnlyTool(tool) {
+			t.Errorf("IsReadOnlyTool(%q) should be false for write MCP tools", tool)
+		}
 	}
 
-	for _, tool := range mcpTools {
+	// Whitelisted read-only MCP tools return true
+	readOnlyTools := []string{
+		"mcp__web_reader__webReader",
+		"mcp__web-search-prime__web_search_prime",
+	}
+	for _, tool := range readOnlyTools {
 		if !IsReadOnlyTool(tool) {
-			t.Errorf("IsReadOnlyTool(%q) should be true for MCP tools", tool)
+			t.Errorf("IsReadOnlyTool(%q) should be true for whitelisted read-only MCP tools", tool)
 		}
 	}
 }

