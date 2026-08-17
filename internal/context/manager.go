@@ -88,8 +88,14 @@ const (
 	minRecentGroups           = 1    // keep last interaction group verbatim (budget permitting)
 	maxRecentGroupTokenRatio  = 0.15 // recent groups may occupy at most 15% of context window
 	minSummaryReserve         = 64
-	maxPTLRetries             = 3
-	tokenCountTimeout         = 100 * time.Millisecond
+	// uncoveredScriptFreezeShare is the uncovered-script rune share (Latin-
+	// Extended/Cyrillic/Greek/other, priced by fixed tokenizer tiers) above
+	// which a calibration sample is frozen (#623): such text's tokens are
+	// estimated by tiers invisible to the ascii/cjk ratio loop, so a sample
+	// dominated by them must not drive those ratios.
+	uncoveredScriptFreezeShare = 0.20
+	maxPTLRetries              = 3
+	tokenCountTimeout          = 100 * time.Millisecond
 )
 
 // Manager implements ContextManager.
@@ -995,9 +1001,24 @@ func (m *Manager) RecordUsage(usage provider.TokenUsage) {
 	// (tokenizer.go), structurally mis-calibrating ASCII while the actual
 	// scripts stay invisible to the ratio loop. Freeze instead: skip the
 	// sample entirely rather than mis-attribute it.
+	// #623: the (0,0) check alone was near-dead code — scriptTokenClasses
+	// counts spaces and punctuation as ASCII, so ANY non-CJK prose with a
+	// single space returned asciiChars>0 and bypassed the freeze. Cyrillic
+	// prose with space-derived "ASCII" then fed RecordSample at
+	// asciiShare=1.0 and drove asciiRatio 3.5→3.0 (clamp) — #598's pollution
+	// surviving from a second entry point. Freeze by script share instead:
+	// when uncovered-script runes dominate the content, skip the sample.
+	totalRunes := m.totalContentRunes()
 	if asciiChars+cjkChars == 0 {
-		if m.totalContentRunes() > 0 {
+		if totalRunes > 0 {
 			debug.Log("context-calibrator", "sample-frozen: uncovered scripts only (see #598/#605)")
+			return
+		}
+	} else if totalRunes > 0 {
+		uncovered := totalRunes - asciiChars - cjkChars
+		if uncovered > 0 && float64(uncovered)/float64(totalRunes) > uncoveredScriptFreezeShare {
+			debug.Log("context-calibrator", "sample-frozen: uncovered scripts are %d/%d runes (see #623)",
+				uncovered, totalRunes)
 			return
 		}
 	}
@@ -1116,7 +1137,15 @@ func (m *Manager) Summarize(ctx context.Context, prov provider.Provider) error {
 
 	debug.Log("ctx", "Summarize: old_msgs=%d has_system=%t", len(plan.oldMsgs), plan.hasSystem)
 
-	summaryText, err := summarizeMessages(ctx, prov, plan.oldMsgs, m.onUsage, m.summaryReserveTokens())
+	// #625: single-group sessions have no recent group to keep verbatim
+	// (len(groups) == minRecentGroups), so the compaction-triggering user
+	// request would otherwise survive only as the summary's one-sentence
+	// "Task" line. Embed its head verbatim in the summarization payload.
+	trigger := ""
+	if len(plan.recentMsgs) == 0 {
+		trigger = lastUserMessageText(plan.oldMsgs)
+	}
+	summaryText, err := summarizeMessages(ctx, prov, plan.oldMsgs, m.onUsage, m.summaryReserveTokens(), trigger)
 	if err != nil {
 		debug.Log("ctx", "Summarize: summarizeMessages FAILED: %v", err)
 		return err
@@ -2192,10 +2221,34 @@ func estimateMessagesTokens(msgs []provider.Message) int {
 	return total
 }
 
-func summarizeMessages(ctx context.Context, prov provider.Provider, msgs []provider.Message, onUsage func(provider.TokenUsage), summaryTokenLimit int) (string, error) {
+// triggerVerbatimMaxLen caps the verbatim embed of the compaction-triggering
+// user message (#625). Single-group sessions have no recent group to keep
+// verbatim (buildSummaryPlan requires len(groups) > minRecentGroups), so the
+// trigger message would otherwise survive only as the summary's one-sentence
+// "Task" line. The head of the raw request is embedded verbatim instead —
+// large enough to carry a full task statement, small enough that the
+// summarization prompt stays cheap.
+const triggerVerbatimMaxLen = 8000
+
+// headRunes returns the first n runes of s (rune-safe, unlike s[:n]).
+func headRunes(s string, n int) string {
+	runes := []rune(s)
+	if len(runes) <= n {
+		return s
+	}
+	return string(runes[:n]) + fmt.Sprintf("\n... (truncated, original %d runes)", len(runes))
+}
+
+func summarizeMessages(ctx context.Context, prov provider.Provider, msgs []provider.Message, onUsage func(provider.TokenUsage), summaryTokenLimit int, trigger string) (string, error) {
 	current := append([]provider.Message(nil), msgs...)
 	for attempt := 0; attempt <= maxPTLRetries; attempt++ {
 		payload := buildSummaryPayload(current)
+		// #625: single-group compaction has no verbatim recent group, so the
+		// triggering user request is embedded verbatim at the top of the
+		// payload — otherwise it survives only as a one-sentence summary.
+		if trigger != "" {
+			payload = "=== TRIGGER MESSAGE VERBATIM (the live user request that triggered this compaction — reproduce it under ## User Requests, condensed only for the token budget) ===\n" + trigger + "\n\n" + payload
+		}
 		summaryMsgs := []provider.Message{
 			{
 				Role: "system",
@@ -2236,6 +2289,7 @@ Active background commands or spawned sub-agents with their IDs and purpose. The
 
 ## User Requests
 The verbatim user requests (provided at the top of the payload) — preserve near-verbatim.
+When a TRIGGER MESSAGE VERBATIM section is present, it is the LIVE user request the agent must answer right after compaction: reproduce its full content in this section (condensed only if it exceeds the token budget), never reduce it to one sentence.
 
 Omit entirely:
 - Full source code (reference paths + key signatures only)
@@ -2459,6 +2513,23 @@ func buildSummaryPayload(msgs []provider.Message) string {
 		sb.WriteByte('\n')
 	}
 	return sb.String()
+}
+
+// lastUserMessageText returns the text of the LAST user-role text message
+// in msgs, rune-truncated to triggerVerbatimMaxLen (#625). Returns "" when
+// there is none.
+func lastUserMessageText(msgs []provider.Message) string {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role != "user" {
+			continue
+		}
+		for _, block := range msgs[i].Content {
+			if block.Type == "text" && strings.TrimSpace(block.Text) != "" {
+				return headRunes(block.Text, triggerVerbatimMaxLen)
+			}
+		}
+	}
+	return ""
 }
 
 // extractUserRequests collects text content from user-role messages, returning

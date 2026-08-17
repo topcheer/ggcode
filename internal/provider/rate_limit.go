@@ -173,10 +173,16 @@ func parseRateLimitHeaders(h http.Header) RateLimitInfo {
 		info.ResetTokens = parseDurationSafe(v)
 	}
 
-	// If OpenAI headers were found, return early.
-	if !info.IsEmpty() {
-		return info
-	}
+	// #624: do NOT early-return when the OpenAI group is non-empty. LiteLLM/
+	// OpenRouter-style gateways send their own x-ratelimit-* headers (often
+	// only the requests fields) ALONGSIDE the upstream anthropic-ratelimit-*
+	// token headers. The old `if !info.IsEmpty() { return info }` here
+	// dropped the Anthropic token headers, leaving RemainingTokens=-1 so
+	// TokenFractionRemaining() read as 100% and token-critical warnings never
+	// fired — the same failure mode #602 R6 fixed for the anthropic/rerate
+	// prefix pair. All groups now merge into one info; each field is only
+	// written when that specific header exists, so single-group responses
+	// parse exactly as before.
 
 	// Try Anthropic format (anthropic-ratelimit-* or reratelimit-*).
 	// The Anthropic SDK changed prefix from "anthropic-ratelimit-" to "reratelimit-"
