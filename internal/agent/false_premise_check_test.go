@@ -219,7 +219,7 @@ func TestMatchesBuildSuccessClaim(t *testing.T) {
 		"tests passed",
 	}
 	for _, s := range positive {
-		if !matchesBuildSuccessClaim(strings.ToLower(s)) {
+		if !matchesBuildSuccessClaim(strings.ToLower(s), false) {
 			t.Errorf("expected match for %q", s)
 		}
 	}
@@ -230,7 +230,7 @@ func TestMatchesBuildSuccessClaim(t *testing.T) {
 		"need to compile",
 	}
 	for _, s := range negative {
-		if matchesBuildSuccessClaim(strings.ToLower(s)) {
+		if matchesBuildSuccessClaim(strings.ToLower(s), false) {
 			t.Errorf("did not expect match for %q", s)
 		}
 	}

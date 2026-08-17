@@ -1247,6 +1247,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		a.strategyFixation.reset()
 		a.targetScatter.reset()
 		a.errorRush.reset()
+		a.phantomVerify.reset()
 		if a.recklessExec != nil {
 			a.recklessExec.reset()
 		}
@@ -1473,6 +1474,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.wtInvalidation.reset()
 	a.strategyExhaustion.reset()
 	a.falsePremise.reset()
+	a.phantomVerify.reset()
 	// Reset the edit failure recovery tracker.
 	a.editFailRecovery.reset()
 	// Reset the export guard so each run starts with a clean checked set.
@@ -3395,9 +3397,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.toolStorm.recordToolCall(tc.Name, i+1)
 			a.serialRead.recordToolCall(tc.Name)
 			a.reasoningRedund.recordReasoning("", true) // tool call breaks text-only streak
-			// Unverified confidence tracking: record tool calls to track
-			// whether verification (build/test/lint) was run after edits.
-			a.phantomVerify.recordToolCall(tc.Name, string(tc.Arguments))
 			// Verification coverage gap: detect edits across multiple packages
 			// but verification command only covers a subset.
 			if covWarn := a.editCoverage.recordToolCall(tc.Name, string(tc.Arguments)); covWarn != "" {
@@ -4029,6 +4028,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Green build illusion: track source modifications, builds, and tests.
 			// Premature success claim: track edits and verification commands.
 			a.prematureSuccess.recordToolCall(tc.Name, psArgs, result.IsError)
+			// Phantom verification: track which verification categories were
+			// actually run, ignoring failures (issue #593 P3).
+			a.phantomVerify.recordToolCall(tc.Name, string(tc.Arguments), result.IsError)
 			// Strategy fixation: track per-file edits and verification outcomes.
 			// Only genuine verification commands count: a successful cat/ls/
 			// git status must not reset streaks, and a failed one must not

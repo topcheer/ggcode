@@ -60,6 +60,7 @@ const (
 	phantomCatLint      = "lint"
 	phantomCatCompile   = "compile"
 	phantomCatTypecheck = "typecheck"
+	phantomCatCI        = "ci"
 )
 
 // phantomClaimPatterns maps verification category to outcome-claim regexes.
@@ -102,6 +103,20 @@ var phantomCommandPatterns = map[string]*regexp.Regexp{
 	phantomCatLint:      regexp.MustCompile(`(?i)\b(go\s+vet|golangci|eslint|flake8|pylint|ruff|rubocop|clang-tidy|shellcheck|lint|make\s+lint)\b`),
 	phantomCatCompile:   regexp.MustCompile(`(?i)\b(go\s+build|gcc|clang|cc\b|make\b|cmake|cargo\s+build|npm\s+run\s+build|tsc\b|compile)\b`),
 	phantomCatTypecheck: regexp.MustCompile(`(?i)\b(go\s+vet|go\s+build|tsc\b|--noEmit|mypy|pyright|flow\s+check|typecheck)\b`),
+	phantomCatCI:        regexp.MustCompile(`(?i)\bci_status\b`), // #593 P3: CI checks count as verification
+}
+
+// phantomCommandTools are tools whose "command" parameter should be checked
+// against verification patterns. Only command execution tools are included
+// — file content parameters (write_file content, edit_file new_text) are
+// excluded to avoid false positives (issue #593 P1).
+var phantomCommandTools = map[string]bool{
+	"run_command":         true,
+	"start_command":       true,
+	"wait_command":        true,
+	"read_command_output": true,
+	"task_output":         true,
+	"ci_status":           true,
 }
 
 // phantomVerifyClaim captures a single unverified verification-outcome claim.
@@ -135,16 +150,58 @@ func (s *phantomVerifyState) reset() {
 }
 
 // recordToolCall tracks whether a tool call constitutes running a verification
-// command of a specific category.
-func (s *phantomVerifyState) recordToolCall(toolName, toolInput string) {
-	// run_command and similar execution tools carry the verification command
-	// in their arguments. We check both tool name and input.
-	combined := toolName + " " + toolInput
+// command of a specific category. isError is the tool result's IsError flag:
+// a FAILED verification must not arm the category (issue #593 P3).
+func (s *phantomVerifyState) recordToolCall(toolName string, toolInput string, isError bool) {
+	// Failed verifications do not count as having run a successful verification
+	// — they should not arm categories (issue #593 P3, aligned with #350 fix).
+	if isError {
+		return
+	}
+
+	// Only check the "command" parameter for command execution tools (issue #593 P1).
+	// For file content tools (write_file, edit_file, etc.), we do NOT check the
+	// full arguments JSON — that would false-positive on content like
+	// "notes about go test conventions" in the file being written.
+	var cmdStr string
+	if phantomCommandTools[toolName] {
+		// For command tools, try to extract just the command string from arguments.
+		// If we can't parse it, fall back to checking the full input.
+		if extracted := extractCommandArg(toolInput); extracted != "" {
+			cmdStr = extracted
+		} else {
+			cmdStr = toolName + " " + toolInput
+		}
+	} else {
+		// For non-command tools, only check toolName, not the full arguments.
+		// This prevents file content from triggering false positives (issue #593 P1).
+		// ci_status is special: we check the toolName since it indicates CI verification.
+		cmdStr = toolName
+	}
+
 	for cat, re := range phantomCommandPatterns {
-		if re.MatchString(combined) {
+		if re.MatchString(cmdStr) {
 			s.categoriesRun[cat] = true
 		}
 	}
+}
+
+// extractCommandArg attempts to extract the "command" field value from a
+// JSON arguments string. Returns empty string if parsing fails.
+func extractCommandArg(argsJSON string) string {
+	// Simple heuristic: look for "command":"..." pattern in the JSON.
+	// This avoids full JSON parsing for performance.
+	const prefix = `"command":"`
+	idx := strings.Index(argsJSON, prefix)
+	if idx == -1 {
+		return ""
+	}
+	start := idx + len(prefix)
+	end := strings.Index(argsJSON[start:], `"`)
+	if end == -1 {
+		return ""
+	}
+	return argsJSON[start : start+end]
 }
 
 // detectPhantomClaims scans assistant text and returns verification-outcome claims

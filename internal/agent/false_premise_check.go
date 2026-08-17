@@ -84,6 +84,10 @@ var buildVerifyToolPrefixes = map[string]bool{
 // error snippets — the records that command-granular clearing preserves.
 var buildVerifyErrorRe = regexp.MustCompile(`(?i)(build\s+fail|compil(e|ation)\s+(error|fail)|test.*(fail|panic)|FAIL\s|lint.*(error|fail)|exit\s+status\s+[1-9]|exit\s+code\s+[1-9])`)
 
+// buildErrorRe identifies build-specific errors (excluding test failures)
+// for distinguishing build-only failures from test failures (#593 P6).
+var buildErrorRe = regexp.MustCompile(`(?i)(build\s+(error|fail)|compil(e|ation)\s+(error|fail))`)
+
 // recordToolResult is called after each tool execution.
 func (f *falsePremiseState) recordToolResult(toolName string, resultContent string, isError bool) {
 	if !isError {
@@ -98,17 +102,30 @@ func (f *falsePremiseState) recordToolResult(toolName string, resultContent stri
 		// successes until aged out; all other errors keep #331 supersede.
 		kept := f.recentErrors[:0]
 		for _, e := range f.recentErrors {
-			if e.toolName != toolName {
+			// Issue #593 P5: clear by fpIsBuildTestTool category, not exact toolName.
+			// If the current tool and the error tool are both in the same build/test
+			// verification category, a success should supersede the error (cross-tool
+			// rerun: run_command → start_command → wait_command).
+			sameCategory := fpIsBuildTestTool(toolName) && fpIsBuildTestTool(e.toolName)
+			isBuildTestError := buildVerifyToolPrefixes[e.toolName] && buildVerifyErrorRe.MatchString(e.errorSnippet)
+			if !sameCategory && e.toolName != toolName {
 				kept = append(kept, e)
 				continue
 			}
-			if buildVerifyToolPrefixes[e.toolName] && buildVerifyErrorRe.MatchString(e.errorSnippet) {
+			// Same tool always clears non-build-test errors (#331 semantics)
+			if e.toolName == toolName && !isBuildTestError {
+				continue
+			}
+			// Build/test errors require matching success (#593 P5 + #546)
+			if isBuildTestError {
 				// Command-granular (#546): only a success that is ITSELF a
 				// build/verify success ("build passed, 42 tests ok") may
 				// supersede a build failure — preserving #331's fail→fix→
 				// re-run-the-build→report workflow while an unrelated ls
 				// success no longer clears the record.
-				if !matchesBuildSuccessClaim(strings.ToLower(resultContent)) {
+				// Issue #593 P6: check if error was build-only to allow empty output.
+				isBuildOnly := buildErrorRe.MatchString(e.errorSnippet)
+				if !matchesBuildSuccessClaim(strings.ToLower(resultContent), isBuildOnly) {
 					kept = append(kept, e)
 				}
 			}
@@ -150,7 +167,9 @@ func (f *falsePremiseState) checkFalsePremise(assistantText string) string {
 
 		// Aligned with branch 4: acknowledging the earlier error means the claim
 		// is grounded, not confabulated (#331).
-		if fpIsBuildTestTool(err.toolName) && matchesBuildSuccessClaim(lowered) && !acknowledgesError(lowered) {
+		// Issue #593 P6: check if error was build-only to allow empty output.
+		isBuildOnly := buildErrorRe.MatchString(err.errorSnippet)
+		if fpIsBuildTestTool(err.toolName) && matchesBuildSuccessClaim(lowered, isBuildOnly) && !acknowledgesError(lowered) {
 			err.matched = true
 			found = append(found, buildContradiction(err, "build/test success",
 				"Re-run the build/test command and report the actual result."))
@@ -278,7 +297,12 @@ func indicatesNotFound(snippet string) bool {
 
 var buildSuccessRe = regexp.MustCompile(`(?i)(build\s+(passed|succeed|succeeded|successful|success)|compiles?\s+(successfully|without error|clean)|compilation\s+success|tests?\s+(pass|passed|all pass|all passing|succeed)|all\s+tests?\s+pass|test\s+suite\s+pass|lint\s+(pass|passed|clean|ok)|^ok\s+|^PASS$|^\s*---\s*PASS:)`)
 
-func matchesBuildSuccessClaim(lowered string) bool {
+func matchesBuildSuccessClaim(lowered string, isBuildOnly bool) bool {
+	// Issue #593 P6: empty output counts as success for build-only commands
+	// (not test commands which should have PASS/ok output).
+	if isBuildOnly && strings.TrimSpace(lowered) == "" {
+		return true
+	}
 	return buildSuccessRe.MatchString(lowered)
 }
 
@@ -312,7 +336,7 @@ func matchesFileExistsClaim(lowered string) bool {
 }
 
 var genericSuccessRe = regexp.MustCompile(`(?i)\b(done|success(fully)?|fixed|resolved|complete[ds]?|all\s+set|finished|works?\s+(now|correctly)|problem\s+is\s+(fixed|solved|resolved)|issue\s+is\s+(fixed|solved|resolved)|everything\s+(works?|passes?|is\s+(fine|good|correct)))\b`)
-var acknowledgesErrorRe = regexp.MustCompile(`(?i)(error|fail(ed|ure)?|did\s+not\s+(work|pass)|not\s+(working|passing)|incorrect|wrong|still\s+(fail|broken)|was\s+(unable|not\s+able)|could\s+not|cannot)`)
+var acknowledgesErrorRe = regexp.MustCompile(`(?i)\b(error|fail(ed|ure)?|did\s+not\s+(work|pass)|not\s+(working|passing)|incorrect|wrong|still\s+(fail|broken)|was\s+(unable|not\s+able)|could\s+not|cannot)\b`)
 
 func matchesGenericSuccessClaim(lowered string) bool {
 	return genericSuccessRe.MatchString(lowered)

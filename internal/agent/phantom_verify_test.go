@@ -9,20 +9,20 @@ func TestPhantomVerifyState_recordToolCall(t *testing.T) {
 	s := newPhantomVerifyState()
 
 	// Running a test command should mark test category as run
-	s.recordToolCall("run_command", "go test ./internal/agent/")
+	s.recordToolCall("run_command", "go test ./internal/agent/", false)
 	if !s.categoriesRun[phantomCatTest] {
 		t.Error("expected test category to be marked as run after 'go test' command")
 	}
 
 	// Running a build command should mark build category as run
-	s.recordToolCall("run_command", "go build ./...")
+	s.recordToolCall("run_command", "go build ./...", false)
 	if !s.categoriesRun[phantomCatBuild] {
 		t.Error("expected build category to be marked as run after 'go build' command")
 	}
 
 	// A non-verification tool call should not mark any category
 	s2 := newPhantomVerifyState()
-	s2.recordToolCall("read_file", "/some/path/file.go")
+	s2.recordToolCall("read_file", "/some/path/file.go", false)
 	for cat := range s2.categoriesRun {
 		t.Errorf("non-verification tool call should not mark category %q as run", cat)
 	}
@@ -53,7 +53,7 @@ func TestDetectPhantomClaims_testClaimWithoutCommand(t *testing.T) {
 func TestDetectPhantomClaims_testClaimWithCommandNotFlagged(t *testing.T) {
 	s := newPhantomVerifyState()
 	// Run a test command first
-	s.recordToolCall("run_command", "go test ./internal/agent/")
+	s.recordToolCall("run_command", "go test ./internal/agent/", false)
 	text := "All tests pass."
 	claims := s.detectPhantomClaims(text)
 
@@ -66,7 +66,7 @@ func TestDetectPhantomClaims_testClaimWithCommandNotFlagged(t *testing.T) {
 
 func TestDetectPhantomClaims_buildClaimWithCommandNotFlagged(t *testing.T) {
 	s := newPhantomVerifyState()
-	s.recordToolCall("run_command", "go build -tags goolm ./...")
+	s.recordToolCall("run_command", "go build -tags goolm ./...", false)
 	text := "The build passes."
 	claims := s.detectPhantomClaims(text)
 
@@ -142,7 +142,7 @@ func TestMaybeWarnPhantomVerify_nilStateSafe(t *testing.T) {
 
 func TestPhantomVerifyState_reset(t *testing.T) {
 	s := newPhantomVerifyState()
-	s.recordToolCall("run_command", "go test ./...")
+	s.recordToolCall("run_command", "go test ./...", false)
 	s.warnings = 1
 	s.reset()
 
@@ -186,7 +186,7 @@ func TestDetectPhantomClaims_multipleCategories(t *testing.T) {
 
 func TestRecordToolCall_makeBuild(t *testing.T) {
 	s := newPhantomVerifyState()
-	s.recordToolCall("run_command", "make build")
+	s.recordToolCall("run_command", "make build", false)
 	if !s.categoriesRun[phantomCatBuild] {
 		t.Error("expected build category from 'make build'")
 	}
@@ -194,7 +194,7 @@ func TestRecordToolCall_makeBuild(t *testing.T) {
 
 func TestRecordToolCall_eslint(t *testing.T) {
 	s := newPhantomVerifyState()
-	s.recordToolCall("run_command", "npx eslint src/")
+	s.recordToolCall("run_command", "npx eslint src/", false)
 	if !s.categoriesRun[phantomCatLint] {
 		t.Error("expected lint category from 'eslint' command")
 	}
@@ -202,7 +202,7 @@ func TestRecordToolCall_eslint(t *testing.T) {
 
 func TestRecordToolCall_pytest(t *testing.T) {
 	s := newPhantomVerifyState()
-	s.recordToolCall("run_command", "pytest tests/")
+	s.recordToolCall("run_command", "pytest tests/", false)
 	if !s.categoriesRun[phantomCatTest] {
 		t.Error("expected test category from 'pytest' command")
 	}
