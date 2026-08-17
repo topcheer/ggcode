@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -224,7 +225,15 @@ func TestHTTPConcurrentRequestsRunInParallel(t *testing.T) {
 		time.Sleep(300 * time.Millisecond)
 		atomic.AddInt32(&inFlight, -1)
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"ok"}]}}`))
+		// Echo the request id (#597 M1): a real JSON-RPC server answers with
+		// the caller's id; a fixed id=1 only worked because the HTTP parser
+		// used to accept ANY response (cross-injection bug #597 fixed that).
+		body, _ := io.ReadAll(r.Body)
+		var env struct {
+			ID json.RawMessage `json:"id"`
+		}
+		_ = json.Unmarshal(body, &env)
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":` + string(env.ID) + `,"result":{"content":[{"type":"text","text":"ok"}]}}`))
 	}))
 	defer server.Close()
 

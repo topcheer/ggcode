@@ -834,7 +834,18 @@ func (c *Client) sendHTTPWithRetry(ctx context.Context, msg interface{}, allowRe
 	case Notification:
 		return &Response{JSONRPC: "2.0"}, nil
 	}
-	return parseHTTPResponse(body, resp.Header.Get("Content-Type"))
+	// #597 M1: pass the request's JSON-RPC id down so the HTTP/SSE/NDJSON
+	// parsers only accept OUR response — concurrent streamable-HTTP requests
+	// share response streams, and the first parseable Response previously
+	// won (cross-request tool-output injection).
+	var reqID *ID
+	switch typed := msg.(type) {
+	case *Request:
+		reqID = typed.ID // Request.ID is already *ID
+	case Request:
+		reqID = typed.ID
+	}
+	return parseHTTPResponseForID(body, resp.Header.Get("Content-Type"), reqID)
 }
 
 // handleHTTPAuthChallenge processes a 401/403 response when an OAuth handler
@@ -1048,6 +1059,12 @@ func (c *Client) sendWSNotification(ctx context.Context, msg interface{}) (*Resp
 }
 
 func parseHTTPResponse(body []byte, contentType string) (*Response, error) {
+	return parseHTTPResponseForID(body, contentType, nil)
+}
+
+// parseHTTPResponseForID is the ID-aware form (#597 M1). reqID nil keeps
+// the legacy any-match behavior.
+func parseHTTPResponseForID(body []byte, contentType string, reqID *ID) (*Response, error) {
 	payload := body
 	if strings.Contains(strings.ToLower(contentType), "text/event-stream") {
 		// Some MCP servers send Notification messages (e.g., logging/progress)
@@ -1068,7 +1085,7 @@ func parseHTTPResponse(body []byte, contentType string) (*Response, error) {
 	if err != nil {
 		// Multi-message body (NDJSON) fails whole-body parsing — try fallbacks
 		// before giving up, since the first line may parse fine.
-		if r := extractNDJSONResponse(body); r != nil {
+		if r := extractNDJSONResponseForID(body, reqID); r != nil {
 			debug.Log("mcp-http", "parseHTTPResponse: whole-body parse failed, recovered Response via NDJSON fallback")
 			return r, nil
 		}
@@ -1076,17 +1093,21 @@ func parseHTTPResponse(body []byte, contentType string) (*Response, error) {
 	}
 	resp, ok := msg.(*Response)
 	if ok {
-		return resp, nil
+		if reqID != nil && !isNullID(resp.ID) && !responseIDMatches(resp.ID, reqID) {
+			debug.Log("mcp-http", "parseHTTPResponse: foreign response id (concurrent stream), trying extraction fallbacks")
+		} else {
+			return resp, nil
+		}
 	}
 	// First message was a Notification — try SSE extraction as fallback.
 	debug.Log("mcp-http", "parseHTTPResponse: first message was %T, trying SSE fallback", msg)
-	if r, err := extractSSEResponse(body); err == nil {
+	if r, err := extractSSEResponseForID(body, reqID); err == nil {
 		return r, nil
 	}
 	// NDJSON fallback: some servers (or gateways in front of them) return
 	// newline-delimited JSON messages — Notification first, then the Response.
 	// SSE extraction finds nothing because there is no "data:" prefix.
-	if r := extractNDJSONResponse(body); r != nil {
+	if r := extractNDJSONResponseForID(body, reqID); r != nil {
 		debug.Log("mcp-http", "parseHTTPResponse: recovered Response via NDJSON fallback")
 		return r, nil
 	}
@@ -1131,8 +1152,23 @@ func previewBody(body []byte) string {
 // one that parses as a JSON-RPC Response. This handles servers that send
 // Notification messages (logging, progress) before the actual Response.
 func extractSSEResponse(body []byte) (*Response, error) {
-	events := extractAllSSEData(body)
+	return extractSSEResponseForID(body, nil)
+}
+
+// extractSSEResponseForID is the ID-matching form (#597 M1): skip Responses
+// whose JSON-RPC id does not match reqID (mirrors stdio responseIDMatches
+// #156 and the WS waiter routing #523 — the HTTP path was the only one
+// without id matching; concurrent streamable-HTTP requests cross-injected
+// tool output, probe: the waiter for id=222 received id=111's result).
+// id:null responses match any caller (legacy routing).
+func extractSSEResponseForID(body []byte, reqID *ID) (*Response, error) {
+	events, scanErr := extractAllSSEDataChecked(body)
 	if len(events) == 0 {
+		if scanErr != nil {
+			// #597 M2: a >1MB SSE line exceeds bufio's buffer cap — report the
+			// real cause instead of misdiagnosing "no data event found".
+			return nil, fmt.Errorf("parsing SSE response: %w", scanErr)
+		}
 		return nil, fmt.Errorf("parsing SSE response: no data event found")
 	}
 	var lastParseErr error
@@ -1143,6 +1179,11 @@ func extractSSEResponse(body []byte) (*Response, error) {
 			continue
 		}
 		if resp, ok := msg.(*Response); ok {
+			if reqID != nil && !isNullID(resp.ID) && !responseIDMatches(resp.ID, reqID) {
+				// Foreign response in a shared stream — keep looking for ours.
+				debug.Log("mcp-http", "extractSSEResponse: skipping response with foreign id (concurrent stream)")
+				continue
+			}
 			return resp, nil
 		}
 		// Skip notifications — keep looking for the Response
@@ -1155,6 +1196,15 @@ func extractSSEResponse(body []byte) (*Response, error) {
 }
 
 func extractAllSSEData(body []byte) [][]byte {
+	events, _ := extractAllSSEDataChecked(body)
+	return events
+}
+
+// extractAllSSEDataChecked also surfaces scanner errors (#597 M2): a line
+// longer than the 1MB scanner buffer made Scan() stop silently and the old
+// code reported "no data event found" — misdiagnosing an oversized (>1MB)
+// tool result as a protocol error.
+func extractAllSSEDataChecked(body []byte) ([][]byte, error) {
 	scanner := bufio.NewScanner(bytes.NewReader(body))
 	scanner.Buffer(make([]byte, 0, 256*1024), 1024*1024)
 	var events [][]byte
@@ -1169,16 +1219,24 @@ func extractAllSSEData(body []byte) [][]byte {
 			dataLines = nil
 		}
 	}
+	if err := scanner.Err(); err != nil {
+		return events, fmt.Errorf("scanning SSE events (line exceeds %d bytes?): %w", 1024*1024, err)
+	}
 	if len(dataLines) > 0 {
 		events = append(events, []byte(strings.Join(dataLines, "\n")))
 	}
-	return events
+	return events, nil
 }
 
 // extractNDJSONResponse parses newline-delimited JSON bodies and returns the
 // first message that parses as a JSON-RPC Response. Handles servers that send
 // a Notification (e.g. logging) before the actual Response, without SSE framing.
 func extractNDJSONResponse(body []byte) *Response {
+	return extractNDJSONResponseForID(body, nil)
+}
+
+// extractNDJSONResponseForID is the ID-matching NDJSON form (#597 M1/M2).
+func extractNDJSONResponseForID(body []byte, reqID *ID) *Response {
 	scanner := bufio.NewScanner(bytes.NewReader(body))
 	scanner.Buffer(make([]byte, 0, 256*1024), 1024*1024)
 	for scanner.Scan() {
@@ -1191,9 +1249,16 @@ func extractNDJSONResponse(body []byte) *Response {
 			continue
 		}
 		if resp, ok := msg.(*Response); ok {
+			if reqID != nil && !isNullID(resp.ID) && !responseIDMatches(resp.ID, reqID) {
+				continue
+			}
 			return resp
 		}
 		debug.Log("mcp-http", "extractNDJSONResponse: skipping non-response message %T", msg)
+	}
+	if err := scanner.Err(); err != nil {
+		// #597 M2: surface the truncation cause instead of a silent nil.
+		debug.Log("mcp-http", "extractNDJSONResponse: scan error (line exceeds buffer?): %v", err)
 	}
 	return nil
 }
