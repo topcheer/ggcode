@@ -55,14 +55,18 @@ const (
 	maxFixationWarnings = 2
 )
 
-// fixationEntry tracks one edit attempt.
+// fixationEntry tracks ONE tool call in the sliding window. filePaths holds
+// every file the call targeted (multi_file_edit / multi_file_write touch all
+// entries of files[], so a failed batch edit is attributed to each file it
+// touched, #639); nil for non-edit calls, which still advance the window
+// because the documented window unit is "12 tool calls", not "12 edits".
 type fixationEntry struct {
-	filePath string
-	isError  bool
+	filePaths []string
+	isError   bool
 }
 
 type solutionFixationState struct {
-	recentEdits  []fixationEntry // sliding window of edit attempts
+	recentCalls  []fixationEntry // sliding window of the last 12 tool calls (any kind)
 	failedByFile map[string]int  // failed edit count per file in current window
 	warningCount int
 	firedFor     map[string]bool // files we already warned about this run
@@ -70,36 +74,56 @@ type solutionFixationState struct {
 
 func newSolutionFixationState() *solutionFixationState {
 	return &solutionFixationState{
-		recentEdits:  make([]fixationEntry, 0, fixationWindow+1),
+		recentCalls:  make([]fixationEntry, 0, fixationWindow+1),
 		failedByFile: make(map[string]int),
 		firedFor:     make(map[string]bool),
 	}
 }
 
 func (s *solutionFixationState) reset() {
-	s.recentEdits = s.recentEdits[:0]
+	s.recentCalls = s.recentCalls[:0]
 	s.failedByFile = make(map[string]int)
 	s.warningCount = 0
 	s.firedFor = make(map[string]bool)
 }
 
-// editToolsFixation maps tool names that perform file edits. Kept in sync
-// with strategyFixationIsMutation — multi_file_edit was missing here, so
-// multi-file batch edit failures bypassed this detector entirely (#393).
-var editToolsFixation = map[string]bool{
-	"edit_file":       true,
-	"write_file":      true,
-	"multi_edit_file": true,
-	"multi_file_edit": true,
-	"notebook_edit":   true,
+// agentMutationEditTools is the single canonical set of file-mutating edit
+// tools shared across the behavior detectors (#639). Before it existed,
+// solution_fixation, error_rush, and momentum_loss each kept a private edit
+// list and the three drifted apart: multi_file_write / batch_replace /
+// lsp_rename were mutations for one detector and invisible to another, so
+// the same failed edit fed the detectors inconsistently (and multi_file_edit
+// was missing from error_rush's mutation list entirely).
+//
+// strategyFixationIsMutation (strategy_fixation.go) intentionally stays a
+// separate predicate: it gates a different recording pipeline whose semantics
+// are verified by its own tests.
+var agentMutationEditTools = map[string]bool{
+	"edit_file":        true,
+	"write_file":       true,
+	"multi_edit_file":  true,
+	"multi_file_edit":  true,
+	"multi_file_write": true,
+	"notebook_edit":    true,
+	"batch_replace":    true,
+	"lsp_rename":       true,
 }
 
-// extractFilePathFromEditArgs extracts the target file path from edit tool arguments.
-// Returns empty string if path cannot be extracted.
-func extractFilePathFromEditArgs(args string) string {
+// isAgentMutationEditTool reports whether the tool mutates files.
+func isAgentMutationEditTool(name string) bool {
+	return agentMutationEditTools[name]
+}
+
+// extractFilePathsFromEditArgs extracts ALL target file paths from edit
+// tool arguments. A failed multi_file_edit / multi_file_write touches every
+// entry of files[] — attributing only Files[0] meant three failed batches
+// with reordered entries scattered one failure across three files and the
+// per-file threshold was structurally unreachable (#639).
+// Returns nil if no path can be extracted.
+func extractFilePathsFromEditArgs(args string) []string {
 	args = strings.TrimSpace(args)
 	if args == "" {
-		return ""
+		return nil
 	}
 
 	type editArgs struct {
@@ -111,31 +135,50 @@ func extractFilePathFromEditArgs(args string) string {
 		} `json:"files"`
 	}
 
+	var paths []string
+	add := func(p string) {
+		if np := normalizePathFixation(p); np != "" {
+			paths = append(paths, np)
+		}
+	}
+
 	var parsed editArgs
 	if err := json.Unmarshal([]byte(args), &parsed); err == nil {
-		if parsed.FilePath != "" {
-			return normalizePathFixation(parsed.FilePath)
+		add(parsed.FilePath)
+		add(parsed.Path)
+		add(parsed.Notebook)
+		for _, f := range parsed.Files {
+			add(f.Path)
 		}
-		if parsed.Path != "" {
-			return normalizePathFixation(parsed.Path)
-		}
-		if parsed.Notebook != "" {
-			return normalizePathFixation(parsed.Notebook)
-		}
-		if len(parsed.Files) > 0 && parsed.Files[0].Path != "" {
-			return normalizePathFixation(parsed.Files[0].Path)
+		if len(paths) > 0 {
+			return dedupePathsFixation(paths)
 		}
 	}
 
 	// Fallback: lightweight extraction of "file_path":"..." or "path":"..."
-	path := extractJSONStringFieldFixation(args, "file_path")
-	if path == "" {
-		path = extractJSONStringFieldFixation(args, "path")
+	for _, field := range []string{"file_path", "path", "notebook_path"} {
+		if v := extractJSONStringFieldFixation(args, field); v != "" {
+			add(v)
+		}
 	}
-	if path == "" {
-		path = extractJSONStringFieldFixation(args, "notebook_path")
+	return dedupePathsFixation(paths)
+}
+
+// dedupePathsFixation removes duplicate paths while preserving order.
+func dedupePathsFixation(paths []string) []string {
+	if len(paths) <= 1 {
+		return paths
 	}
-	return normalizePathFixation(path)
+	seen := make(map[string]bool, len(paths))
+	out := paths[:0]
+	for _, p := range paths {
+		if seen[p] {
+			continue
+		}
+		seen[p] = true
+		out = append(out, p)
+	}
+	return out
 }
 
 // extractJSONStringFieldFixation does a lightweight scan for "field":"value" pattern.
@@ -182,32 +225,39 @@ func normalizePathFixation(p string) string {
 	return p
 }
 
-// recordEdit records an edit tool call result. Called after each tool execution.
-func (s *solutionFixationState) recordEdit(toolName, args string, isError bool) {
-	if !editToolsFixation[toolName] {
-		return
+// recordToolCall records one tool call result. Called after EVERY tool
+// execution: the window advances on all tool calls (the documented unit is
+// "a sliding window of 12 tool calls"), while only mutation-edit calls with
+// an extractable path feed the per-file failure counts.
+//
+// #639: the window previously advanced only on edit calls, so failures
+// separated by dozens of healthy non-edit calls could still stack 3 failures
+// on one file and fire a false anchoring warning on long runs.
+func (s *solutionFixationState) recordToolCall(toolName, args string, isError bool) {
+	var paths []string
+	if isAgentMutationEditTool(toolName) {
+		paths = extractFilePathsFromEditArgs(args)
 	}
 
-	filePath := extractFilePathFromEditArgs(args)
-	if filePath == "" {
-		return
-	}
-
-	entry := fixationEntry{filePath: filePath, isError: isError}
-	s.recentEdits = append(s.recentEdits, entry)
+	entry := fixationEntry{filePaths: paths, isError: isError}
+	s.recentCalls = append(s.recentCalls, entry)
 
 	if isError {
-		s.failedByFile[filePath]++
+		for _, p := range paths {
+			s.failedByFile[p]++
+		}
 	}
 
 	// Evict oldest entry if window exceeded
-	if len(s.recentEdits) > fixationWindow {
-		old := s.recentEdits[0]
-		s.recentEdits = s.recentEdits[1:]
+	if len(s.recentCalls) > fixationWindow {
+		old := s.recentCalls[0]
+		s.recentCalls = s.recentCalls[1:]
 		if old.isError {
-			s.failedByFile[old.filePath]--
-			if s.failedByFile[old.filePath] <= 0 {
-				delete(s.failedByFile, old.filePath)
+			for _, p := range old.filePaths {
+				s.failedByFile[p]--
+				if s.failedByFile[p] <= 0 {
+					delete(s.failedByFile, p)
+				}
 			}
 		}
 	}

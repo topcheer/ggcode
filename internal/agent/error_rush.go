@@ -89,19 +89,83 @@ func errorRushIsDiagnostic(toolName string) bool {
 }
 
 // errorRushIsMutation returns true for tools that modify files or state.
+// Backed by the canonical agentMutationEditTools set (#639) so the edit-tool
+// list can no longer drift between solution_fixation / error_rush /
+// momentum_loss (multi_file_edit was missing here before, multi_file_write /
+// batch_replace / lsp_rename were present here but absent from the others).
 func errorRushIsMutation(toolName string) bool {
-	switch toolName {
-	case "edit_file", "write_file", "multi_edit_file", "multi_file_write",
-		"notebook_edit", "batch_replace", "lsp_rename":
-		return true
-	default:
+	return agentMutationEditTools[toolName]
+}
+
+// errorRushNonCodeErrorMarkers: error-output markers indicating the failure
+// is NOT a code-level failure (build/test/edit) but an environmental or
+// authorization one: permission denied by the user, tool/MCP/LSP unavailable
+// or timed out. These do not count toward the error streak because the
+// documented detector scope is "build errors, test failures, edit errors" —
+// counting permission rejections would let two denied approvals followed by
+// a normal edit fire a false "blind-fixing" warning (#640).
+var errorRushNonCodeErrorMarkers = []string{
+	"permission denied",
+	"permission request denied",
+	"operation not permitted",
+	"user denied",
+	"user declined",
+	"request denied",
+	"denied by user",
+	"declined by user",
+	"not authorized",
+	"unauthorized",
+	"tool unavailable",
+	"mcp server unavailable",
+	"mcp timeout",
+	"mcp server timeout",
+	"lsp unavailable",
+	"lsp server not running",
+	"connection refused",
+	"deadline exceeded",
+	"context deadline exceeded",
+	"context canceled",
+	"timed out",
+	"timeout",
+	"connection reset",
+	"network error",
+	"no such host",
+	"authentication failed",
+	"invalid api key",
+	"rate limit",
+	"too many requests",
+	"server error",
+	"service unavailable",
+}
+
+// errorRushIsNonCodeError reports whether an error output indicates an
+// environmental/authorization failure rather than a code-level one (#640).
+// Conservative substring match on the lowercased output.
+func errorRushIsNonCodeError(output string) bool {
+	if output == "" {
 		return false
 	}
+	lowered := strings.ToLower(output)
+	for _, marker := range errorRushNonCodeErrorMarkers {
+		if strings.Contains(lowered, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // recordToolCall processes each tool execution result.
 func (s *errorRushState) recordToolCall(toolName string, output string, isError bool) {
 	if isError {
+		// #640: only CODE-level failures (build/test/edit errors) feed the
+		// streak. Permission denials, tool/MCP/LSP unavailability and network
+		// timeouts are environment/authorization failures — they say nothing
+		// about the agent rushing fixes and must not fill the streak ahead of
+		// a legitimate edit (documented scope: "build errors, test failures,
+		// edit errors").
+		if errorRushIsNonCodeError(output) {
+			return
+		}
 		s.consecutiveErrors++
 		s.lastErrorOutput = output
 		s.hasInterimRead = false

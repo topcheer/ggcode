@@ -70,6 +70,11 @@ var momentumProductiveTools = map[string]bool{
 	"git_reset":        true,
 	"file_ops":         true,
 	"batch_replace":    true,
+	// #639: lsp_rename rewrites files across the workspace — it is a
+	// mutation-class edit and belongs in the same canonical set as
+	// edit_file/batch_replace (agentMutationEditTools); momentum_loss was
+	// the only detector not counting it as productive.
+	"lsp_rename": true,
 }
 
 // momentumIterRecord tracks one iteration's tool call composition.
@@ -179,8 +184,17 @@ func (m *momentumLossState) recordToolCall(toolName string, args json.RawMessage
 //  1. We're in the terminal phase (>= 60% of max iterations)
 //  2. There was meaningful prior productivity (>= 1 productive action in
 //     the first half of the run)
-//  3. The last N iterations have had 0 productive actions despite continued
-//     tool-call activity (i.e., the agent is still working but not producing)
+//  3. The last N completed iterations have had 0 productive actions despite
+//     continued tool-call activity (i.e., the agent is still working but not producing)
+//
+// #638: the production wiring calls startIteration(i+1) — which pre-appends
+// an empty record for the not-yet-run iteration — immediately BEFORE this
+// check. That trailing empty record always occupied one slot of the stall
+// window and never satisfied `productive == 0 && total > 0`, so with
+// momentumStallWindow == 2 at most ONE qualifying record remained and the
+// detector could never fire in production (unit tests built records by hand
+// and masked this). The fix: ignore trailing records with no tool calls yet
+// (the current, still-executing iteration) when scanning the stall window.
 func (m *momentumLossState) checkMomentumLoss(maxIter int) string {
 	if m.fired {
 		return ""
@@ -211,8 +225,15 @@ func (m *momentumLossState) checkMomentumLoss(maxIter int) string {
 		return ""
 	}
 
-	// Check the last N iterations for productivity collapse.
+	// Check the last N iterations for productivity collapse. Skip trailing
+	// iterations that have not executed any tool call yet (#638): in the
+	// production wiring order (startIteration -> check -> ... -> recordToolCall)
+	// the last slice element is the freshly pre-appended empty record for the
+	// iteration that is only starting now.
 	n := len(m.iterations)
+	for n > 0 && m.iterations[n-1].total == 0 {
+		n--
+	}
 	if n < momentumStallWindow {
 		return ""
 	}
