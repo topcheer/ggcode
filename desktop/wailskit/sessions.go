@@ -158,7 +158,17 @@ func RenameSession(id string, title string) error {
 			// erroring, matching pre-fix behavior for odd files.
 		}
 	}
-	return store.AppendMetaToDisk(ses)
+	if err := store.AppendMetaToDisk(ses); err != nil {
+		return err
+	}
+	// #628: mirror the rename into the live bridge. Later meta write-backs
+	// (usage/limits/permission-mode persists serialize b.currentSes) would
+	// otherwise resurrect the pre-rename title on disk, silently rolling
+	// back the rename the user just made.
+	if bridge := activeChatBridge; bridge != nil {
+		bridge.syncRenamedTitle(id, title)
+	}
+	return nil
 }
 
 // NewSession clears the current session so next chat creates a fresh one.
@@ -416,14 +426,19 @@ func formatMessagesAsMarkdown(msgs []SessionMessage, title string) string {
 				b.WriteString("\n```\n\n")
 			}
 			if msg.Content != "" {
-				if len(msg.Content) > 2000 {
+				// #629: tool Content (raw tool results — read_file of .env,
+				// config dumps, etc.) is written verbatim into .md exports.
+				// #583 only redacted the JSON path and Markdown ToolDetail;
+				// apply the same RedactForDisplay pass to tool Content here.
+				content := security.RedactForDisplay(msg.Content)
+				if len(content) > 2000 {
 					// #301: truncate on a rune boundary — byte slicing can split a
 					// multi-byte UTF-8 char and corrupt the exported .md file.
-					cut := msg.Content[:util.SnapToRuneStart(msg.Content, 2000)]
+					cut := content[:util.SnapToRuneStart(content, 2000)]
 					b.WriteString(cut)
 					b.WriteString("\n... (truncated)\n")
 				} else {
-					b.WriteString(msg.Content)
+					b.WriteString(content)
 					b.WriteString("\n")
 				}
 				b.WriteString("\n")

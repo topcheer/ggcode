@@ -1339,6 +1339,19 @@ func (b *ChatBridge) CurrentSessionID() string {
 	return b.currentSes.ID
 }
 
+// syncRenamedTitle mirrors an on-disk rename (RenameSession) into the
+// in-memory current session (#628). Meta write-backs such as usage persists,
+// SetSessionLimits, and SetPermissionMode serialize b.currentSes via
+// AppendMetaToDisk; without this sync the stale pre-rename title gets written
+// back and silently rolls back the rename on disk.
+func (b *ChatBridge) syncRenamedTitle(id, title string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.currentSes != nil && b.currentSes.ID == id {
+		b.currentSes.Title = title
+	}
+}
+
 // EnsureSession creates a default session if none exists (mirrors Fyne's ensureSession).
 // On first call with no current session, tries to auto-load the most recent
 // workspace session. If that session is locked by another instance, creates

@@ -72,22 +72,31 @@ func TestDesktopConfig_SetWorkDir(t *testing.T) {
 func TestDesktopConfig_SetWindowState(t *testing.T) {
 	withTestHome(t)
 	dc := &DesktopConfig{WindowW: 100, WindowH: 100}
-	dc.SetWindowState(1920, 1080, 250, 100, true)
-	if dc.WindowW != 1920 || dc.WindowH != 1080 {
-		t.Fatalf("size mismatch: %dx%d", dc.WindowW, dc.WindowH)
+	// #631: capture normal bounds first — a maximized save must NOT overwrite
+	// them with the OS-reported fullscreen bounds.
+	dc.SetWindowState(1440, 900, 250, 100, false)
+	dc.SetWindowState(1920, 1080, 0, 0, true)
+	if dc.WindowW != 1440 || dc.WindowH != 900 {
+		t.Fatalf("maximized save clobbered normal size: %dx%d", dc.WindowW, dc.WindowH)
 	}
 	if dc.WindowX != 250 || dc.WindowY != 100 {
-		t.Fatalf("position mismatch: %d,%d", dc.WindowX, dc.WindowY)
+		t.Fatalf("maximized save clobbered normal position: %d,%d", dc.WindowX, dc.WindowY)
 	}
 	if !dc.WindowMax {
 		t.Fatal("expected maximized=true")
+	}
+	if !dc.WindowPosSet {
+		t.Fatal("normal-mode save must set WindowPosSet")
 	}
 }
 
 func TestDesktopConfig_WindowStateRoundTrip(t *testing.T) {
 	withTestHome(t)
 	dc := &DesktopConfig{}
-	dc.SetWindowState(1600, 900, 300, 200, true)
+	// #631: normal-mode capture (sets bounds AND position flag), then quit
+	// while maximized — the remembered normal bounds must survive the trip.
+	dc.SetWindowState(1600, 900, 300, 200, false)
+	dc.SetWindowState(3008, 1692, 0, 0, true)
 	if err := dc.Save(); err != nil {
 		t.Fatal(err)
 	}
@@ -95,8 +104,14 @@ func TestDesktopConfig_WindowStateRoundTrip(t *testing.T) {
 	if loaded.WindowX != 300 || loaded.WindowY != 200 {
 		t.Fatalf("position round-trip mismatch: %d,%d", loaded.WindowX, loaded.WindowY)
 	}
+	if loaded.WindowW != 1600 || loaded.WindowH != 900 {
+		t.Fatalf("normal size lost in round-trip: %dx%d", loaded.WindowW, loaded.WindowH)
+	}
 	if !loaded.WindowMax {
 		t.Fatal("maximized flag lost in round-trip")
+	}
+	if !loaded.WindowPosSet {
+		t.Fatal("WindowPosSet lost in round-trip")
 	}
 }
 

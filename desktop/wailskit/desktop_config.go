@@ -21,7 +21,11 @@ type DesktopConfig struct {
 	WindowX   int    `json:"window_x,omitempty"`
 	WindowY   int    `json:"window_y,omitempty"`
 	WindowMax bool   `json:"window_maximized,omitempty"`
-	Language  string `json:"language,omitempty"`
+	// WindowPosSet records that a normal-mode window position (possibly (0,0))
+	// was captured, disambiguating a legitimate origin from the zero-value
+	// "unset" state (#631).
+	WindowPosSet bool   `json:"window_position_set,omitempty"`
+	Language     string `json:"language,omitempty"`
 
 	// Font zoom level (0.7 to 1.8). Default 0 means 100%.
 	FontZoom float64 `json:"font_zoom,omitempty"`
@@ -144,6 +148,10 @@ func (dc *DesktopConfig) Save() error {
 	}
 	// WindowMax, AlwaysOnTop, GlobalHotkey, etc. are bools - always apply.
 	merged.WindowMax = dc.WindowMax
+	// #631: position-captured flag is a bool - always apply. It disambiguates
+	// a deliberate (0,0) origin from the zero-value "never captured" state;
+	// WindowX/WindowY above stay != 0-guarded for legacy compat.
+	merged.WindowPosSet = dc.WindowPosSet
 	merged.FontZoom = dc.FontZoom
 	merged.AlwaysOnTop = dc.AlwaysOnTop
 	merged.GlobalHotkey = dc.GlobalHotkey
@@ -189,14 +197,25 @@ func (dc *DesktopConfig) SetWorkDir(dir string) {
 }
 
 // SetWindowState saves the window position and size.
+// #631: while maximized the OS reports fullscreen bounds; persisting them
+// would destroy the remembered normal bounds and a later unmaximize leaves
+// a fullscreen-sized "normal" window. Only the flag is updated in that
+// case, preserving the last captured normal bounds (and position flag).
 func (dc *DesktopConfig) SetWindowState(w, h, x, y int, maximized bool) {
 	dc.mu.Lock()
 	defer dc.mu.Unlock()
+	if maximized {
+		dc.WindowMax = true
+		return
+	}
 	dc.WindowW = w
 	dc.WindowH = h
 	dc.WindowX = x
 	dc.WindowY = y
-	dc.WindowMax = maximized
+	// #631: (0,0) is a valid position — record that normal-mode bounds were
+	// captured so restore can honor an origin-at-top-left window.
+	dc.WindowPosSet = true
+	dc.WindowMax = false
 }
 
 // SetLastSession was removed (#583 Bug 4): dead field with zero references.

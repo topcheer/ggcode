@@ -324,6 +324,16 @@ function LayoutInner() {
     // Backend loaded a session on startup (or via EnsureSession) — sync frontend state
     const offSessionChanged = EventsOn('session:changed', (data: any) => {
       const sid = data?.sessionId
+      if (sid === '') {
+        // #630: the backend cleared the current session (e.g. the active
+        // session was deleted). Reset to blank so the UI stops showing the
+        // deleted transcript and the next message starts a fresh session
+        // visibly instead of silently.
+        if (activeSessionId) {
+          setActiveSessionId('')
+        }
+        return
+      }
       if (sid && sid !== activeSessionId) {
         setActiveSessionId(sid)
       }

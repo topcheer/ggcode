@@ -142,7 +142,11 @@ func (a *App) startup(ctx context.Context) {
 	if a.dc.WindowW > 0 && a.dc.WindowH > 0 {
 		wailsruntime.WindowSetSize(ctx, a.dc.WindowW, a.dc.WindowH)
 	}
-	if a.dc.WindowX != 0 || a.dc.WindowY != 0 {
+	// #631: (0,0) is a legitimate window origin, not an "unset" sentinel.
+	// WindowPosSet records that a normal-mode position was actually captured;
+	// the nonzero fallback keeps legacy configs (saved before the flag
+	// existed) restoring as before.
+	if a.dc.WindowPosSet || a.dc.WindowX != 0 || a.dc.WindowY != 0 {
 		wailsruntime.WindowSetPosition(ctx, a.dc.WindowX, a.dc.WindowY)
 	}
 	if a.dc.WindowMax {
@@ -1282,6 +1286,13 @@ func (a *App) DeleteSession(id string) error {
 		// JSONL. ClearCurrentSession releases the lock and nils the pointer,
 		// forcing ensureSession to start a fresh session.
 		chat.ClearCurrentSession()
+		// #630: ClearCurrentSession fires OnSessionChanged (re-emitting
+		// session:changed with an empty sessionId), but that wiring only
+		// exists when startup completed normally. Emit explicitly so the
+		// frontend always learns the current session is gone and stops
+		// rendering the deleted transcript instead of silently writing the
+		// next message into a brand-new session.
+		a.enqueueUIEvent("session:changed", map[string]string{"sessionId": ""})
 	}
 	// #305: tombstone the ID before the on-disk delete — the run goroutine
 	// cancelled above may still be draining and its late persists must not
