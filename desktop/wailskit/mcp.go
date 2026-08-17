@@ -2,7 +2,10 @@ package wailskit
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/config"
@@ -70,12 +73,18 @@ func ListMCPServers() ([]MCPServerInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load config: %w", err)
 	}
-	if len(cfg.MCPServers) == 0 {
+	// #606: list the same merged server set the runtime actually runs. The
+	// runtime (BuildInteractiveRuntimeCore -> mcp.MergeStartupServers) folds
+	// Claude migration files (.mcp.json / ~/.claude.json) into the yaml set,
+	// so a yaml-only view here forked from reality: migrated servers were
+	// live (tools callable) yet invisible in the MCP panel.
+	servers := effectiveSessionServers(chatSnap, cfg)
+	if len(servers) == 0 {
 		return nil, nil
 	}
 
-	result := make([]MCPServerInfo, 0, len(cfg.MCPServers))
-	for _, s := range cfg.MCPServers {
+	result := make([]MCPServerInfo, 0, len(servers))
+	for _, s := range servers {
 		result = append(result, MCPServerInfo{
 			Name:     s.Name,
 			Type:     s.Type,
@@ -270,7 +279,13 @@ func AddMCPServer(values map[string]string) error {
 }
 
 // RemoveMCPServer removes an MCP server by name from the active session's
-// scope (workspace mcp_servers.yaml when bound to a workspace, else global).
+// scope: the workspace mcp_servers.yaml when bound to a workspace (else
+// global), AND — when the name is provided by a Claude migration file
+// (.mcp.json / ~/.claude.json / ~/.claude/mcp.json) instead of or in addition
+// to the yaml — that origin file too (#606). Without the origin cleanup the
+// remove path had two dead-ends: merged-only servers failed with "not found"
+// even though their tools were live, and removing a yaml copy was resurrected
+// by the merge that reloadSessionMCPServers (and every startup) re-runs.
 func RemoveMCPServer(name string) error {
 	// #458: snapshot the bridge once so the scope decision and the Disconnect
 	// below see the same session even if a workspace switch interleaves.
@@ -284,21 +299,131 @@ func RemoveMCPServer(name string) error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
-	if !cfg.RemoveMCPServer(name) {
-		return fmt.Errorf("MCP server %q not found", name)
+	removedYaml := cfg.RemoveMCPServer(name)
+	if removedYaml {
+		if err := cfg.SaveMCPServers(); err != nil {
+			return err
+		}
 	}
-	if err := cfg.SaveMCPServers(); err != nil {
+	// #606: clean the migration-file side as well. This covers merged-only
+	// servers (yaml removal returned false -> old code errored "not found")
+	// and dual-side names (yaml removal alone would be resurrected by merge).
+	removedOrigin, err := removeMigratedMCPServer(chatSnap, name)
+	if err != nil {
 		return err
+	}
+	if !removedYaml && !removedOrigin {
+		return fmt.Errorf("MCP server %q not found", name)
 	}
 	// Symmetric with SetMCPServerEnabled(false): disconnect immediately
 	// instead of waiting for the ~2s hot-reload poll (which may also miss
 	// workspace-scoped yaml changes) — without this the removed server's
 	// tools stayed callable during the window (#408). Uses chatSnap to
 	// ensure Disconnect targets the same session whose config we just saved.
+	// The reload then pushes the freshly-persisted state through the same
+	// merge the runtime uses; since every origin of the name has been
+	// removed from disk, the merge cannot resurrect it (#606).
 	if chatSnap != nil && chatSnap.mcpManager != nil {
 		_ = chatSnap.mcpManager.Disconnect(name)
+		reloadSessionMCPServers(chatSnap, cfg.MCPServers)
 	}
 	return nil
+}
+
+// effectiveSessionServers returns the effective MCP server set for the
+// session scope: the yaml servers plus Claude-migrated servers, computed by
+// the exact same merge the runtime runs at startup (BuildInteractiveCore ->
+// mcp.MergeStartupServers). The desktop MCP list must match the running set
+// or migrated servers become invisible-but-active (#606).
+func effectiveSessionServers(chat *ChatBridge, cfg *config.Config) []config.MCPServerConfig {
+	if cfg == nil {
+		return nil
+	}
+	workDir := ""
+	if chat != nil {
+		workDir = chat.WorkingDir()
+	}
+	merged, _ := mcp.MergeStartupServers(workDir, cfg.MCPServers)
+	return merged
+}
+
+// removeMigratedMCPServer deletes the named server from every Claude
+// migration file that provides it (.mcp.json / ~/.claude.json /
+// ~/.claude/mcp.json — the same sources mcp.MergeStartupServers reads, kept
+// in sync via claudeMigrationPaths). Other top-level keys of the file are
+// preserved byte-exactly via json.RawMessage round-tripping. Returns true
+// when at least one file was rewritten.
+func removeMigratedMCPServer(chat *ChatBridge, name string) (bool, error) {
+	workDir := ""
+	if chat != nil {
+		workDir = chat.WorkingDir()
+	}
+	removed := false
+	for _, path := range claudeMigrationPaths(workDir) {
+		changed, err := removeFromClaudeFile(path, name)
+		if err != nil {
+			return removed, err
+		}
+		removed = removed || changed
+	}
+	return removed, nil
+}
+
+// removeFromClaudeFile deletes the named server from one Claude config file.
+// It reports false (and leaves the file untouched) when the file is missing,
+// unparseable, or does not list the server. Other top-level keys are preserved
+// byte-exactly via json.RawMessage round-tripping.
+func removeFromClaudeFile(path, name string) (bool, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("read %s: %w", path, err)
+	}
+	var parsed map[string]json.RawMessage
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		// Not a parseable Claude config; leave untouched.
+		return false, nil
+	}
+	var servers map[string]json.RawMessage
+	if raw, ok := parsed["mcpServers"]; ok {
+		if err := json.Unmarshal(raw, &servers); err != nil {
+			return false, nil
+		}
+	}
+	if _, ok := servers[name]; !ok {
+		return false, nil
+	}
+	delete(servers, name)
+	updated, err := json.Marshal(servers)
+	if err != nil {
+		return false, fmt.Errorf("encode %s: %w", path, err)
+	}
+	parsed["mcpServers"] = updated
+	out, err := json.MarshalIndent(parsed, "", "  ")
+	if err != nil {
+		return false, fmt.Errorf("encode %s: %w", path, err)
+	}
+	if err := os.WriteFile(path, append(out, '\n'), 0o644); err != nil {
+		return false, fmt.Errorf("write %s: %w", path, err)
+	}
+	return true, nil
+}
+
+// claudeMigrationPaths mirrors internal/mcp.knownClaudeSources: the project
+// .mcp.json plus the user-level Claude files. Kept local because the
+// internal/mcp helper is unexported; the merge (reader side) is the source
+// of truth these paths must stay aligned with.
+func claudeMigrationPaths(workDir string) []string {
+	paths := []string{filepath.Join(workDir, ".mcp.json")}
+	if home := config.HomeDir(); strings.TrimSpace(home) != "" {
+		paths = append(paths,
+			filepath.Join(home, ".claude.json"),
+			filepath.Join(home, ".claude", "mcp.json"),
+		)
+	}
+	return paths
 }
 
 // parseShellArgs splits a command-line argument string with quote awareness.

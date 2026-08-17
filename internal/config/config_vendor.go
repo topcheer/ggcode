@@ -274,10 +274,13 @@ func (c *Config) UpsertMCPServer(server MCPServerConfig) (replaced bool) {
 	return false
 }
 
-// patchMCPServerConfig overlays the non-zero fields of patch onto base and
-// returns the merged config. Zero values (empty string, nil map/slice) mean
-// "not provided" and keep the existing value, so editing a single field does
-// not silently clear env/args/headers on an already-configured server (#249).
+// patchMCPServerConfig overlays the provided fields of patch onto base and
+// returns the merged config. Semantics per field kind (#249, #606 A3):
+//   - strings: empty means "not provided", keeps the existing value
+//   - Args/Env/Headers: nil means "not provided" (keep the existing value);
+//     an EMPTY non-nil slice/map means "explicitly cleared" and replaces the
+//     old value. Before #606 the len()>0 guard conflated the two, so saving
+//     a form with every env line deleted silently kept the old env.
 //
 // When switching server types, type-incompatible fields are cleared:
 // - http/sse types: Command and Args are cleared
@@ -308,13 +311,13 @@ func patchMCPServerConfig(base, patch MCPServerConfig) MCPServerConfig {
 	if patch.URL != "" {
 		merged.URL = patch.URL
 	}
-	if len(patch.Args) > 0 {
+	if patch.Args != nil {
 		merged.Args = patch.Args
 	}
-	if len(patch.Env) > 0 {
+	if patch.Env != nil {
 		merged.Env = patch.Env
 	}
-	if len(patch.Headers) > 0 {
+	if patch.Headers != nil {
 		merged.Headers = patch.Headers
 	}
 	return merged
