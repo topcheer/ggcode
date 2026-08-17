@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/config"
@@ -75,8 +74,8 @@ func WritePIDFile(path string, pid int, sessionID, workingDir string) error {
 		return err
 	}
 
-	// Non-blocking exclusive lock: returns EAGAIN if another process holds it.
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	// Non-blocking exclusive lock: returns an error if another process holds it.
+	if err := flockNonBlocking(f); err != nil {
 		f.Close()
 		return fmt.Errorf("daemon slot already locked (concurrent fork): %w", err)
 	}
