@@ -134,13 +134,15 @@ func GetFullConfig() (*FullConfig, error) {
 	}
 
 	// Check if API key is set (without exposing it)
+	// Guard on vendor entry existing; key resolution itself goes through
+	// resolveAPIKey so ${VAR} env references are expanded (#584 C3).
+	// ExpandEnv intentionally KEEPS unresolved ${VAR} patterns (later stages
+	// surface onboarding errors), so an unresolved reference must not be
+	// reported as "key is set" here.
 	apiKeySet := false
-	if vc, ok := cfg.Vendors[cfg.Vendor]; ok {
-		if ep, ok := vc.Endpoints[cfg.Endpoint]; ok {
-			apiKeySet = ep.APIKey != "" || vc.APIKey != ""
-		} else {
-			apiKeySet = vc.APIKey != ""
-		}
+	if _, ok := cfg.Vendors[cfg.Vendor]; ok {
+		key := resolveAPIKey(cfg, cfg.Vendor, cfg.Endpoint)
+		apiKeySet = key != "" && !strings.Contains(key, "${")
 	}
 
 	resolved, _ := cfg.ResolveActiveEndpoint()
@@ -225,11 +227,17 @@ func UpdateConfig(values map[string]interface{}) error {
 			if cfg.Vendors == nil {
 				cfg.Vendors = make(map[string]config.VendorConfig)
 			}
-			vc := cfg.Vendors[cfg.Vendor]
+			vc, ok := cfg.Vendors[cfg.Vendor]
+			if !ok {
+				return fmt.Errorf("vendor %q not found", cfg.Vendor)
+			}
 			if vc.Endpoints == nil {
 				vc.Endpoints = make(map[string]config.EndpointConfig)
 			}
-			ep := vc.Endpoints[cfg.Endpoint]
+			ep, ok := vc.Endpoints[cfg.Endpoint]
+			if !ok {
+				return fmt.Errorf("endpoint %q not found in vendor %q", cfg.Endpoint, cfg.Vendor)
+			}
 			ep.BaseURL = v
 			vc.Endpoints[cfg.Endpoint] = ep
 			cfg.Vendors[cfg.Vendor] = vc
@@ -313,6 +321,7 @@ func UpdateConfig(values map[string]interface{}) error {
 // Save() would strip from the global file because it originated from the
 // instance config.
 var updateConfigInstanceKeys = map[string]string{
+	"baseURL":                  "vendors",
 	"vendor":                   "vendor",
 	"endpoint":                 "endpoint",
 	"model":                    "model",

@@ -278,8 +278,27 @@ func (c *Config) UpsertMCPServer(server MCPServerConfig) (replaced bool) {
 // returns the merged config. Zero values (empty string, nil map/slice) mean
 // "not provided" and keep the existing value, so editing a single field does
 // not silently clear env/args/headers on an already-configured server (#249).
+//
+// When switching server types, type-incompatible fields are cleared:
+// - http/sse types: Command and Args are cleared
+// - stdio type: URL and Headers are cleared (#584 M2-case2)
 func patchMCPServerConfig(base, patch MCPServerConfig) MCPServerConfig {
 	merged := base
+
+	// Type switch: clear type-incompatible fields when type changes
+	if patch.Type != "" && patch.Type != merged.Type {
+		// Switching to http or sse: clear stdio fields
+		if patch.Type == "http" || patch.Type == "sse" {
+			merged.Command = ""
+			merged.Args = nil
+		}
+		// Switching to stdio: clear http/sse fields
+		if patch.Type == "stdio" {
+			merged.URL = ""
+			merged.Headers = nil
+		}
+	}
+
 	if patch.Type != "" {
 		merged.Type = patch.Type
 	}

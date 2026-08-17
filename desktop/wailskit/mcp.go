@@ -226,7 +226,11 @@ func AddMCPServer(values map[string]string) error {
 	// strings.Fields splits quoted paths containing spaces (e.g. "/Users/John Doe/").
 	// parseShellArgs handles " and ' quoting correctly.
 	if argsStr := values["args"]; argsStr != "" {
-		serverCfg.Args = parseShellArgs(argsStr)
+		args, err := parseShellArgs(argsStr)
+		if err != nil {
+			return fmt.Errorf("invalid args: %w", err)
+		}
+		serverCfg.Args = args
 	}
 
 	// Parse env_ prefixed keys into env map
@@ -300,14 +304,38 @@ func RemoveMCPServer(name string) error {
 // parseShellArgs splits a command-line argument string with quote awareness.
 // Unlike strings.Fields, it respects double and single quotes so arguments
 // containing spaces (e.g. "/Users/John Doe/config.json") are kept intact.
-func parseShellArgs(s string) []string {
+// Returns an error if quotes are unbalanced (#584 M1).
+func parseShellArgs(s string) ([]string, error) {
 	var args []string
 	var current strings.Builder
 	var inQuote byte  // 0 = no quote, '"' or '\'' = inside quote
+	var escape bool   // true if next char is escaped
 	seenChar := false // any char (incl. quotes) seen since last separator
 
 	for i := 0; i < len(s); i++ {
 		ch := s[i]
+
+		if escape {
+			// Escaped character - add it literally and clear escape flag
+			current.WriteByte(ch)
+			escape = false
+			seenChar = true
+			continue
+		}
+
+		if ch == '\\' {
+			// Backslash escapes quotes only. A backslash before any other
+			// character (or at end of input) is literal, so Windows paths
+			// and glob patterns are not silently corrupted (#584 M1).
+			if i+1 < len(s) && (s[i+1] == '"' || s[i+1] == '\'') {
+				escape = true
+				seenChar = true
+				continue
+			}
+			current.WriteByte(ch)
+			seenChar = true
+			continue
+		}
 
 		if inQuote != 0 {
 			if ch == inQuote {
@@ -338,9 +366,17 @@ func parseShellArgs(s string) []string {
 		}
 	}
 
+	// Check for unbalanced quotes or pending escape
+	if inQuote != 0 {
+		return nil, fmt.Errorf("unbalanced quote: missing closing %q", string(inQuote))
+	}
+	if escape {
+		return nil, fmt.Errorf("unterminated escape at end of string")
+	}
+
 	if seenChar {
 		args = append(args, current.String())
 	}
 
-	return args
+	return args, nil
 }
