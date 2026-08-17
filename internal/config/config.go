@@ -292,6 +292,7 @@ type Config struct {
 	saveScope          string                     `yaml:"-" json:"-"` // current save scope: "global" or "instance"
 	globalSnap         *Config                    `yaml:"-" json:"-"` // deep copy of global config before instance merge
 	instanceFields     map[string]bool            `yaml:"-" json:"-"` // fields that were filled by instance config
+	diskStrSnap        map[string]string          `yaml:"-" json:"-"` // #610: dotted path -> raw string value on disk at Load time (clear/tombstone basis)
 }
 
 // ImpersonationConfig holds persisted impersonation settings.
@@ -1052,6 +1053,13 @@ func Load(path string) (*Config, error) {
 			return nil, fmt.Errorf("parsing migrated config %s: %w", path, err)
 		}
 	}
+
+	// #610: record the raw (pre-expansion) string values present on disk so a
+	// later Save() can distinguish "explicitly cleared in memory" from
+	// "never set" and delete the stale key instead of letting the deep-merge
+	// resurrect it. Keys absent from disk at Load time are never recorded and
+	// therefore never deleted by Save (the #284 multi-process guard).
+	cfg.diskStrSnap = snapshotDiskStringKeys(raw)
 
 	// Expand env vars
 	lookup = runtimeEnvLookup(raw)

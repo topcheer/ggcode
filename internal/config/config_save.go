@@ -87,6 +87,12 @@ func (c *Config) Save() error {
 	// 3. Remove zero-value entries from the current map. This ensures that
 	//    un-set fields don't overwrite real values that exist in the file.
 	//    Only non-zero values participate in the merge overlay.
+	//
+	//    3a. (#610) First collect string leaves that are "" in memory. Combined
+	//    with the Load-time disk snapshot (c.diskStrSnap) these identify fields
+	//    that were explicitly cleared: the deep-merge below would otherwise
+	//    keep the stale file value for a key the overlay no longer carries.
+	clearedInMemory := collectEmptyStringPaths(currentRaw)
 	cleanZeroYAMLValues(currentRaw)
 
 	// 4. Build the data to write: merge onto existing file, or full write.
@@ -97,6 +103,12 @@ func (c *Config) Save() error {
 		existingRaw := map[string]interface{}{}
 		if yamlErr := yaml.Unmarshal(existingData, &existingRaw); yamlErr == nil {
 			deepMergeYAMLMaps(existingRaw, currentRaw)
+			// (#610) Delete keys that existed on disk at Load time and were
+			// explicitly cleared in memory, instead of letting the merge keep
+			// the old value. Keys absent at Load time are never touched, and a
+			// key whose on-disk value changed since our Load (another process)
+			// is preserved — the #284 semantics.
+			applyClearedTombstones(existingRaw, c.diskStrSnap, clearedInMemory)
 			merged, marshalErr := yaml.Marshal(existingRaw)
 			if marshalErr != nil {
 				return fmt.Errorf("marshaling merged config: %w", marshalErr)
@@ -176,6 +188,120 @@ func deepMergeYAMLMaps(dst, src map[string]interface{}) {
 		}
 		dst[key] = srcVal
 	}
+}
+
+// snapshotDiskStringKeys flattens a raw YAML map into dotted paths of
+// non-empty string leaves: {"ui": {"theme": "dark"}} -> {"ui.theme": "dark"}.
+// Values are captured verbatim (pre env-expansion) because Save() compares
+// them against the on-disk file, which is also pre-expansion (#610).
+func snapshotDiskStringKeys(m map[string]interface{}) map[string]string {
+	out := map[string]string{}
+	var walk func(prefix []string, cur map[string]interface{})
+	walk = func(prefix []string, cur map[string]interface{}) {
+		for k, v := range cur {
+			switch val := v.(type) {
+			case string:
+				if val != "" {
+					path := strings.Join(append(append([]string{}, prefix...), k), ".")
+					out[path] = val
+				}
+			case map[string]interface{}:
+				walk(append(append([]string{}, prefix...), k), val)
+			}
+		}
+	}
+	walk(nil, m)
+	return out
+}
+
+// collectEmptyStringPaths returns the dotted paths of "" string leaves in m.
+// These are the fields the current in-memory config has at its zero value and
+// which cleanZeroYAMLValues will strip from the merge overlay (#610).
+func collectEmptyStringPaths(m map[string]interface{}) map[string]bool {
+	out := map[string]bool{}
+	var walk func(prefix []string, cur map[string]interface{})
+	walk = func(prefix []string, cur map[string]interface{}) {
+		for k, v := range cur {
+			switch val := v.(type) {
+			case string:
+				if val == "" {
+					path := strings.Join(append(append([]string{}, prefix...), k), ".")
+					out[path] = true
+				}
+			case map[string]interface{}:
+				walk(append(append([]string{}, prefix...), k), val)
+			}
+		}
+	}
+	walk(nil, m)
+	return out
+}
+
+// applyClearedTombstones deletes keys whose value was present on disk at Load
+// time (per snap) and has since been explicitly cleared in memory to the empty
+// string (per cleared). The #284 multi-process guard applies in three
+// dimensions (#610):
+//   - keys absent from disk at Load time are never deleted (a field merely
+//     left at its zero default must not erase another process's value);
+//   - a key whose on-disk value changed since our Load (another process wrote
+//     a different value) is preserved, not deleted;
+//   - ${VAR} env references are never tombstoned, so key rotation semantics
+//     (#608) are unaffected.
+func applyClearedTombstones(existingRaw map[string]interface{}, snap map[string]string, cleared map[string]bool) {
+	if len(snap) == 0 || len(cleared) == 0 {
+		return
+	}
+	for path := range cleared {
+		loadedVal, wasOnDisk := snap[path]
+		if !wasOnDisk || strings.Contains(loadedVal, "${") {
+			continue
+		}
+		curVal, exists := yamlPathLookup(existingRaw, path)
+		if !exists {
+			continue // already gone from the file
+		}
+		curStr, isStr := curVal.(string)
+		if !isStr || curStr != loadedVal {
+			continue // changed on disk since our Load — preserve (#284)
+		}
+		yamlPathDelete(existingRaw, strings.Split(path, "."))
+	}
+}
+
+// yamlPathLookup resolves a dotted path against a nested YAML map.
+func yamlPathLookup(m map[string]interface{}, path string) (interface{}, bool) {
+	parts := strings.Split(path, ".")
+	var cur interface{} = m
+	for _, p := range parts {
+		cm, ok := cur.(map[string]interface{})
+		if !ok {
+			return nil, false
+		}
+		v, exists := cm[p]
+		if !exists {
+			return nil, false
+		}
+		cur = v
+	}
+	return cur, true
+}
+
+// yamlPathDelete removes the leaf at a dotted path, pruning ancestor maps that
+// become empty as a result.
+func yamlPathDelete(m map[string]interface{}, parts []string) {
+	if len(parts) == 0 {
+		return
+	}
+	if len(parts) > 1 {
+		if next, ok := m[parts[0]].(map[string]interface{}); ok {
+			yamlPathDelete(next, parts[1:])
+			if len(next) == 0 {
+				delete(m, parts[0])
+			}
+		}
+		return
+	}
+	delete(m, parts[0])
 }
 
 // cleanZeroYAMLValues recursively removes zero-value entries from a YAML map
