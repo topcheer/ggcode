@@ -20,6 +20,11 @@ func flockNonBlocking(f *os.File) error {
 	return syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
 }
 
+// openPIDFile opens the PID file for read/write, creating it if missing.
+func openPIDFile(path string) (*os.File, error) {
+	return os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
+}
+
 func checkProcessAlive(proc *os.Process) error {
 	return proc.Signal(syscall.Signal(0))
 }

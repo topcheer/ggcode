@@ -6,27 +6,64 @@ package daemon
 
 import (
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
 )
 
-// spawnDaemonLikeChild starts a short-lived child whose argv[0] contains the
-// "ggcode[" marker so daemonIdentityMatches accepts it as a daemon. This
+// spawnDaemonLikeChild starts a short-lived child whose identity carries a
+// ggcode marker so daemonIdentityMatches accepts it as a daemon. This
 // exercises the real identity-verification chain without a true ggcode fork.
+// Cross-platform: /bin/sleep does not exist on Windows, so we re-exec the
+// test binary itself from a copy named "ggcode-child" — argv[0] carries the
+// "ggcode[" marker on Unix, and on Windows the process image name
+// (identity_windows.go) matches the "ggcode-" prefix check.
 func spawnDaemonLikeChild(t *testing.T) *os.Process {
 	t.Helper()
-	bin, err := os.Executable()
+	exe, err := os.Executable()
 	if err != nil {
 		t.Fatalf("executable: %v", err)
 	}
-	_ = bin
-	proc, err := os.StartProcess("/bin/sleep", []string{"ggcode[zz-issue552]", "30"}, &os.ProcAttr{})
+	name := "ggcode-child"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	childPath := filepath.Join(t.TempDir(), name)
+	data, err := os.ReadFile(exe)
+	if err != nil {
+		t.Fatalf("read test binary: %v", err)
+	}
+	if err := os.WriteFile(childPath, data, 0o755); err != nil {
+		t.Fatalf("copy test binary: %v", err)
+	}
+	proc, err := os.StartProcess(childPath,
+		[]string{"ggcode[zz-issue552]", "-test.run=TestDaemonChildHelper"},
+		// Windows requires explicit stdio handles in ProcAttr.Files (nil
+		// yields "invalid argument" from CreateProcess); Unix would default
+		// to /dev/null, but passing the parent's handles is fine for tests.
+		&os.ProcAttr{
+			Env:   append(os.Environ(), "GG_TEST_DAEMON_CHILD=1"),
+			Files: []*os.File{os.Stdin, os.Stdout, os.Stderr},
+		},
+	)
 	if err != nil {
 		t.Fatalf("spawn helper: %v (unsupported platform?)", err)
 	}
 	return proc
+}
+
+// TestDaemonChildHelper is not a real test: it is the entry point used when
+// the test binary is re-executed as a daemon-like child by
+// spawnDaemonLikeChild. It stays alive so the parent can observe a live
+// ggcode-looking process; skipped instantly in normal test runs.
+func TestDaemonChildHelper(t *testing.T) {
+	if os.Getenv("GG_TEST_DAEMON_CHILD") != "1" {
+		t.Skip("helper entry point; active only when re-executed as daemon child")
+	}
+	time.Sleep(60 * time.Second)
 }
 
 // A: EnsureDaemonSlot must reject when a live daemon owns the working dir,
@@ -87,10 +124,7 @@ func TestIssue552A_EnsureDaemonSlotPropagatesReadError(t *testing.T) {
 	if err := WritePIDFile(pidPath, 4242, "sess", workDir); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(pidPath, 0o000); err != nil {
-		t.Skipf("cannot chmod (running as root?): %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(pidPath, 0o644) })
+	makePIDFileUnreadable(t, pidPath)
 
 	if err := EnsureDaemonSlot(workDir); err == nil {
 		t.Fatal("unreadable PID file must produce an error, not a silent allow")

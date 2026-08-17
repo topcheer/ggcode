@@ -21,12 +21,8 @@ func TestCheckExistingDaemon_TransientReadErrorKeepsPIDFile(t *testing.T) {
 	if err := WritePIDFile(pidPath, 4242, "sess", workDir); err != nil {
 		t.Fatalf("WritePIDFile: %v", err)
 	}
-	// Simulate EACCES: strip all permissions (owner is the test user, so
-	// os.ReadFile fails with permission denied on unix).
-	if err := os.Chmod(pidPath, 0o000); err != nil {
-		t.Fatalf("chmod: %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(pidPath, 0o644) })
+	// Simulate an unreadable PID file (EACCES on unix; dir-swap on windows).
+	makePIDFileUnreadable(t, pidPath)
 
 	pid, err := CheckExistingDaemon(workDir)
 	_ = pid

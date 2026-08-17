@@ -68,8 +68,10 @@ func LogFilePath(workingDir string) (string, error) {
 // exclusive flock to prevent concurrent forks from claiming the same slot
 // (#574 Bug D). The lock is held for the lifetime of the file.
 func WritePIDFile(path string, pid int, sessionID, workingDir string) error {
-	// Open with O_CREATE|O_RDWR; flock provides the atomicity guarantee.
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
+	// Open via platform helper: on Windows the handle must be opened with
+	// FILE_SHARE_DELETE so cleanup paths can unlink the PID file while the
+	// lock is held (Unix flock semantics allow this; #552-C/#552-E).
+	f, err := openPIDFile(path)
 	if err != nil {
 		return err
 	}
