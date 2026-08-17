@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/diff"
 )
 
 // Post-write file integrity validation.
@@ -61,10 +62,22 @@ func sliceCheck(fn func(string, string, string) []string) func(CheckContext) []s
 	}
 }
 
-// stringCheckNew wraps a func(string, string) string (no oldContent).
-func stringCheckNew(fn func(string, string) string) func(CheckContext) []string {
+// deltaGateNew wraps a new-content-only check (func(filePath, content))
+// with #601 W4 gating. The structural checks (merge-conflict-markers,
+// tag-balance, delimiter-balance, config-syntax) used to inspect only
+// NewContent, so a write that left a pre-existing problem completely
+// untouched re-reported it on every save — and with old==new (zero delta)
+// ALL of them fired on an untouched file (ver-90 probe: 5/5 zero-delta
+// checks still triggered). The gate reports only problems this write
+// introduced: zero-delta writes are skipped entirely, and a problem
+// already present in OldContent is not re-reported (same elimination
+// rationale as the #509/#512 tombstoned detectors).
+func deltaGateNew(fn func(string, string) string) func(CheckContext) []string {
 	return func(ctx CheckContext) []string {
-		if w := fn(ctx.FilePath, ctx.NewContent); w != "" {
+		if !diff.HasChanges(ctx.OldContent, ctx.NewContent) {
+			return nil
+		}
+		if w := fn(ctx.FilePath, ctx.NewContent); w != "" && fn(ctx.FilePath, ctx.OldContent) == "" {
 			return []string{w}
 		}
 		return nil
@@ -80,27 +93,42 @@ func registerAllChecks() {
 		// eliminate context pollution (each check wastes 100-300 tokens).
 
 		// --- File integrity ---
-		{Name: "binary-corruption", Run: func(ctx CheckContext) []string {
+		// #601 W4: binary-corruption, merge-conflict-markers, tag-balance,
+		// delimiter-balance and config-syntax previously inspected ONLY
+		// NewContent — a write that left a pre-existing problem untouched
+		// re-reported it on every save, and zero-delta writes (old==new)
+		// triggered all of them (ver-90 probe: 5/5). They are now delta-gated
+		// via deltaGateNew / explicit old-count comparison: only problems this
+		// write INTRODUCED are reported (the elimination rationale that got
+		// the #509/#512 tombstoned detectors killed).
+		{Name: "binary-corruption", Severity: SeverityCritical, Run: func(ctx CheckContext) []string {
 			count := strings.Count(ctx.NewContent, "\x00")
 			if count == 0 {
 				return nil
 			}
+			oldCount := strings.Count(ctx.OldContent, "\x00")
+			if oldCount >= count {
+				return nil
+			}
+			if oldCount > 0 {
+				return []string{fmt.Sprintf("This write introduced %d new null byte(s) (\\x00) - file now contains %d total. Content may be corrupted or incorrectly encoded. Check encoding and re-write if needed.", count-oldCount, count)}
+			}
 			return []string{fmt.Sprintf("File contains %d null byte(s) (\\x00) - content may be corrupted or incorrectly encoded. Check encoding and re-write if needed.", count)}
 		}},
-		{Name: "content-loss", Run: func(ctx CheckContext) []string {
+		{Name: "content-loss", Severity: SeverityCritical, Run: func(ctx CheckContext) []string {
 			if strings.TrimSpace(ctx.OldContent) == "" || strings.TrimSpace(ctx.NewContent) != "" {
 				return nil
 			}
 			return []string{fmt.Sprintf("This edit resulted in an EMPTY file (was %d bytes before). Verify this was intended - the old_text match may have consumed the entire file content.", len(ctx.OldContent))}
 		}},
-		{Name: "merge-conflict-markers", Run: stringCheckNew(checkMergeConflictMarkers)},
+		{Name: "merge-conflict-markers", Severity: SeverityCritical, Run: deltaGateNew(checkMergeConflictMarkers)},
 		{Name: "content-growth", Run: stringCheck(checkContentGrowth)},
 		{Name: "edit-blast-radius", Run: stringCheck(checkEditBlastRadius)},
 
 		// --- Go correctness (crashes, data races, leaks) ---
 		// Re-registered per #328/#330: interface_compliance, deprecated_api,
 		// printf_format, suspicious_comparison, dep_major_bump, dependency_vuln.
-		{Name: "go-syntax", Langs: []Language{LangGo}, Run: func(ctx CheckContext) []string {
+		{Name: "go-syntax", Langs: []Language{LangGo}, Severity: SeverityCritical, Run: func(ctx CheckContext) []string {
 			if ctx.GoAST != nil || strings.TrimSpace(ctx.NewContent) == "" {
 				return nil
 			}
@@ -313,20 +341,20 @@ func registerAllChecks() {
 		{Name: "race-verify-hint", Langs: []Language{LangGo}, Run: sliceCheck(checkRaceVerifyHint)},
 
 		// --- Security (OWASP / CVE-class) ---
-		{Name: "sql-injection", Langs: []Language{LangGo}, Run: sliceCheck(checkSQLInjection)},
-		{Name: "path-traversal", Langs: []Language{LangGo, LangJSTS, LangPython}, Run: sliceCheck(checkPathTraversal)},
-		{Name: "sensitive-json", Langs: []Language{LangGo}, Run: sliceCheck(checkSensitiveJSONExposure)},
-		{Name: "hardcoded-secret", Run: sliceCheck(checkHardcodedSecrets)},
-		{Name: "insecure-patterns", Langs: []Language{LangGo, LangJSTS, LangPython}, Run: sliceCheck(checkInsecurePatterns)},
+		{Name: "sql-injection", Langs: []Language{LangGo}, Severity: SeverityCritical, Run: sliceCheck(checkSQLInjection)},
+		{Name: "path-traversal", Langs: []Language{LangGo, LangJSTS, LangPython}, Severity: SeverityCritical, Run: sliceCheck(checkPathTraversal)},
+		{Name: "sensitive-json", Langs: []Language{LangGo}, Severity: SeverityCritical, Run: sliceCheck(checkSensitiveJSONExposure)},
+		{Name: "hardcoded-secret", Severity: SeverityCritical, Run: sliceCheck(checkHardcodedSecrets)},
+		{Name: "insecure-patterns", Langs: []Language{LangGo, LangJSTS, LangPython}, Severity: SeverityCritical, Run: sliceCheck(checkInsecurePatterns)},
 		// #571: http-plaintext — detects http:// URLs pointing to non-localhost
 		// hosts (OWASP A02:2021). Complements insecure-patterns (TLS bypass).
 		// Fully implemented + unit tested.
-		{Name: "http-plaintext", Run: sliceCheck(checkHTTPPlaintext)},
+		{Name: "http-plaintext", Severity: SeverityCritical, Run: sliceCheck(checkHTTPPlaintext)},
 
 		// --- Security: supply chain (#330) ---
-		{Name: "dep-major-bump", Run: stringCheck(checkBreakingChangeDepAsString)}, // all langs: self-filters by manifest filename
-		{Name: "dependency-vuln", Run: stringCheck(checkDependencyVulnsAsString)},  // all langs: self-filters by manifest filename
-		{Name: "typosquat", Run: stringCheck(checkTyposquattingAsString)},          // all langs: self-filters by manifest filename (#567)
+		{Name: "dep-major-bump", Severity: SeverityCritical, Run: stringCheck(checkBreakingChangeDepAsString)}, // all langs: self-filters by manifest filename
+		{Name: "dependency-vuln", Severity: SeverityCritical, Run: stringCheck(checkDependencyVulnsAsString)},  // all langs: self-filters by manifest filename
+		{Name: "typosquat", Severity: SeverityCritical, Run: stringCheck(checkTyposquattingAsString)},          // all langs: self-filters by manifest filename (#567)
 
 		// --- Go correctness: API misuse / logic smells (#328/#330) ---
 		{Name: "deprecated-api", Langs: []Language{LangGo}, Run: stringCheck(checkDeprecatedAPI)},
@@ -389,13 +417,13 @@ func registerAllChecks() {
 		{Name: "assertion-presence", Langs: []Language{LangGo}, Run: stringCheck(checkAssertionPresence)},
 
 		// --- Markup structural (breaks rendering) ---
-		{Name: "tag-balance", Langs: []Language{LangMarkup, LangJSTS}, Run: stringCheckNew(checkTagBalance)},
-		{Name: "delimiter-balance", Run: stringCheckNew(checkDelimiterBalance)},
+		{Name: "tag-balance", Langs: []Language{LangMarkup, LangJSTS}, Run: deltaGateNew(checkTagBalance)},
+		{Name: "delimiter-balance", Severity: SeverityCritical, Run: deltaGateNew(checkDelimiterBalance)},
 
 		// #575: config-syntax — validates JSON/YAML/TOML/XML syntax errors
 		// in config files after writes. Detects malformed configs that would
 		// crash apps at runtime. Fully implemented + unit tested.
-		{Name: "config-syntax", Run: stringCheckNew(configSyntaxCheck)},
+		{Name: "config-syntax", Severity: SeverityCritical, Run: deltaGateNew(configSyntaxCheck)},
 
 		// #516 (R73 census): "hardcoded-path" registered live — the ONLY
 		// zero-known-FP/FN survivor of the 5-detector sa-172 batch (E1: it
@@ -515,14 +543,24 @@ func checkEditBlastRadius(filePath, oldContent, newContent string) string {
 		return ""
 	}
 
-	ratio := float64(changed) / float64(oldLines)
+	// #601 W5: dividing changed lines by oldLines alone counted a pure
+	// append as a rewrite of MORE than the whole file (25 appended lines on
+	// a 20-line file reported "125% of the file"; 15 lines = 75% tripped
+	// the 60% "accidental rewrite" gate on a legitimate addition). The
+	// denominator is now max(oldLines, newLines) so a pure append can never
+	// exceed 100%.
+	newLines := strings.Count(strings.TrimRight(newContent, "\n"), "\n") + 1
+	denom := oldLines
+	if newLines > denom {
+		denom = newLines
+	}
+	ratio := float64(changed) / float64(denom)
 	if ratio >= 0.60 {
-		newLines := strings.Count(strings.TrimRight(newContent, "\n"), "\n") + 1
 		return fmt.Sprintf(
 			"This edit modified %d of %d lines (%.0f%% of the file): +%d added, -%d removed -> %d lines. "+
 				"This is a high blast-radius change - verify this was intentional and not an overly broad old_text match or accidental rewrite. "+
 				"For targeted changes, prefer edit_file with a more specific old_text anchor.",
-			changed, oldLines, ratio*100, added, removed, newLines)
+			changed, denom, ratio*100, added, removed, newLines)
 	}
 
 	return ""

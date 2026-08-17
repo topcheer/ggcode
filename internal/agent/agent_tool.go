@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"regexp"
 	runtimedebug "runtime/debug"
 	"strings"
 	"sync"
@@ -526,22 +527,11 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 		}
 	}
 
-	// Post-write hardcoded credential detection for multi-file edits.
-	if !result.IsError && len(plans) > 0 {
-		var secretWarnings []string
-		for _, plan := range plans {
-			if diff.HasChanges(plan.OldContent, plan.NewContent) {
-				secretWarnings = append(secretWarnings, checkHardcodedSecrets(plan.Path, plan.OldContent, plan.NewContent)...)
-			}
-		}
-		for _, w := range secretWarnings {
-			if result.Content != "" {
-				result.Content = result.Content + "\n\n" + w
-			} else {
-				result.Content = w
-			}
-		}
-	}
+	// Post-write hardcoded credential detection for multi-file edits
+	// (#601 W2): the per-plan checkWriteIntegrity loop above already runs the
+	// registry's "hardcoded-secret" check for each file; the direct duplicate
+	// call below was removed so each secret surfaces exactly once (the
+	// registry copy respects the maxIntegrityWarnings cap).
 
 	// Post-write debug statement detection for multi-file edits.
 	if !result.IsError && len(plans) > 0 {
@@ -708,20 +698,13 @@ func (a *Agent) executeFileTool(ctx context.Context, t tool.Tool, tc provider.To
 		}
 	}
 
-	// Post-write hardcoded credential detection: warn when the agent introduces
-	// real credential patterns (AWS keys, GitHub tokens, private keys, etc.) into
-	// source files. This prevents the agent from creating security vulnerabilities.
-	// Uses delta-based detection: only flags secrets INTRODUCED by this edit.
-	if !result.IsError {
-		secretWarnings := checkHardcodedSecrets(filePath, oldContent, newContent)
-		for _, w := range secretWarnings {
-			if result.Content != "" {
-				result.Content = result.Content + "\n\n" + w
-			} else {
-				result.Content = w
-			}
-		}
-	}
+	// Post-write hardcoded credential detection (#601 W2): previously this
+	// site ran checkHardcodedSecrets directly AND the "hardcoded-secret"
+	// registry entry ran it again — same check, same input, two copies of
+	// every warning, with the registry copy subject to the
+	// maxIntegrityWarnings cap and the direct copy not (behavior drifted with
+	// registration order). The registry (wired in #334/#341) is now the
+	// single source of truth; the duplicated direct call was removed.
 
 	// Post-write debug statement detection: warn when the agent introduces
 	// leftover debug print statements (fmt.Println, console.log, etc.) that
@@ -762,9 +745,10 @@ func (a *Agent) computeFileChange(tc provider.ToolCallDelta) (filePath, oldConte
 	switch tc.Name {
 	case "edit_file":
 		var args struct {
-			FilePath string `json:"file_path"`
-			OldText  string `json:"old_text"`
-			NewText  string `json:"new_text"`
+			FilePath   string `json:"file_path"`
+			OldText    string `json:"old_text"`
+			NewText    string `json:"new_text"`
+			ReplaceAll bool   `json:"replace_all"`
 		}
 		if err := json.Unmarshal(tc.Arguments, &args); err != nil {
 			return "", "", "", false, fmt.Errorf("invalid arguments: %w", err)
@@ -776,7 +760,16 @@ func (a *Agent) computeFileChange(tc provider.ToolCallDelta) (filePath, oldConte
 			return "", "", "", false, fmt.Errorf("cannot read file: %w", err)
 		}
 		oldContent = string(data)
-		newContent = replaceFirst(oldContent, args.OldText, args.NewText)
+		// #601 W1: the simulated edit must mirror the REAL edit_file tool's
+		// semantics (replace_all, line-number anchors, fuzzy matching, the
+		// uniqueness guard). This simulation feeds dry-run validation, diff
+		// preview, and checkpoint snapshots — a divergence lets real writes
+		// escape downstream detectors (nil-map-write, sql-injection, ...) and
+		// corrupts undo data.
+		newContent, err = simulateEditFile(oldContent, args.OldText, args.NewText, args.ReplaceAll)
+		if err != nil {
+			return "", "", "", false, err
+		}
 		return filePath, oldContent, newContent, true, nil
 
 	case "write_file":
@@ -813,6 +806,678 @@ func (a *Agent) computeFileChange(tc provider.ToolCallDelta) (filePath, oldConte
 // replaceFirst replaces the first occurrence of old in s with new.
 func replaceFirst(s, old, new string) string {
 	return strings.Replace(s, old, new, 1)
+}
+
+// ---------------------------------------------------------------------------
+// #601 W1: edit_file simulation — a faithful port of the real tool's
+// replacement semantics (internal/tool/edit_file.go + edit_match.go).
+// The sim-prefixed helpers are kept semantically identical to their
+// internal/tool counterparts so that simulateEditFile(content, ...) and
+// EditFile.Execute(...) produce byte-identical results for the same input.
+// internal/tool cannot be reused directly (its matching helpers are
+// unexported), and re-deriving simplistic behavior (the old literal
+// replaceFirst) is what caused the simulation/real divergence this issue
+// fixes. Known limitation: the real tool gofmt's .go files before writing
+// (formatGoBytes); already-formatted content is unaffected.
+// ---------------------------------------------------------------------------
+
+// simulateEditFile mirrors the core of EditFile.Execute: resolve old_text
+// (exact → read_file wrapper strip → line-number anchor → indent/CRLF/
+// trailing/fuzzy fallbacks), enforce the uniqueness guard, adjust new_text
+// with the same transform, and apply the replacement (all occurrences,
+// anchored splice, or first-only). Returns an error exactly where the real
+// tool returns an IsError result (empty old_text, no match, non-unique
+// match without replace_all) so the pipeline fails the same way.
+func simulateEditFile(content, oldText, newText string, replaceAll bool) (string, error) {
+	if oldText == "" {
+		return "", fmt.Errorf("Error: old_text is required")
+	}
+	mr := simResolveOldText(content, oldText)
+	if mr.canonical == "" {
+		return "", fmt.Errorf("old_text not found in file")
+	}
+	count := strings.Count(content, mr.canonical)
+	if !replaceAll && count > 1 && !mr.anchored {
+		return "", fmt.Errorf("old_text found %d times in file — must be unique. Add 1-3 lines of surrounding context to disambiguate, copy the exact numbered lines from read_file to anchor the intended occurrence, or set replace_all=true to replace every occurrence", count)
+	}
+	if mr.transform != "" {
+		newText = simAdjustNewText(content, newText, mr)
+	}
+	if replaceAll {
+		return strings.ReplaceAll(content, mr.canonical, newText), nil
+	}
+	if mr.anchored {
+		return content[:mr.start] + newText + content[mr.start+len(mr.canonical):], nil
+	}
+	return replaceFirst(content, mr.canonical, newText), nil
+}
+
+// simMatchResult mirrors tool.matchResult: describes a successful old_text
+// resolution against the file content.
+type simMatchResult struct {
+	canonical string // the actual bytes in content that will be replaced
+	transform string // diagnostic tag for which fallback fired ("" = exact)
+	shift     string // for leading-indent-shift: prefix to prepend to new_text lines
+	trim      string // for leading-indent-shift: prefix to trim from new_text lines
+	start     int    // byte offset of canonical in content when the match is anchored
+	anchored  bool
+}
+
+// simResolveOldText mirrors tool.resolveOldText.
+func simResolveOldText(content, oldText string) simMatchResult {
+	if oldText == "" {
+		return simMatchResult{}
+	}
+	if strings.Contains(content, oldText) {
+		return simMatchResult{canonical: oldText}
+	}
+	if trimmed, changed := simTrimReadFileWrapperLines(oldText); changed {
+		if mr := simResolveOldText(content, trimmed); mr.canonical != "" {
+			mr.transform = simPrependTransform("read-file-wrapper-stripped", mr.transform)
+			return mr
+		}
+	}
+	if anchored := simTryReadFileLineAnchor(content, oldText); anchored.canonical != "" {
+		return anchored
+	}
+	if normalized := simNormalizeIndentation(content, oldText); normalized != oldText && strings.Contains(content, normalized) {
+		return simMatchResult{canonical: normalized, transform: "indent-normalized"}
+	}
+	if stripped := simStripLineNumberPrefix(oldText); stripped != oldText {
+		if strings.Contains(content, stripped) {
+			return simMatchResult{canonical: stripped, transform: "line-numbers-stripped"}
+		}
+		if normalized := simNormalizeIndentation(content, stripped); normalized != stripped && strings.Contains(content, normalized) {
+			return simMatchResult{canonical: normalized, transform: "line-numbers-stripped+indent-normalized"}
+		}
+	}
+	if crlf := simTryCRLFMatch(content, oldText); crlf != "" {
+		return simMatchResult{canonical: crlf, transform: "crlf-converted"}
+	}
+	if canonical, shift, trim := simTryLeadingIndentShift(content, oldText); canonical != "" {
+		return simMatchResult{canonical: canonical, transform: "leading-indent-shift", shift: shift, trim: trim}
+	}
+	if trimmed := simTryTrailingWhitespaceMatch(content, oldText); trimmed != "" {
+		return simMatchResult{canonical: trimmed, transform: "trailing-whitespace-tolerant"}
+	}
+	if canonical := simTryFuzzyLineMatch(content, oldText); canonical != "" {
+		return simMatchResult{canonical: canonical, transform: "fuzzy-line-match"}
+	}
+	return simMatchResult{}
+}
+
+var (
+	simReadFileLineRE           = regexp.MustCompile(`^\s{0,12}(\d+)\t(.*)$`)
+	simReadFileLineNumberOnlyRE = regexp.MustCompile(`^\s{0,12}\d+\s*$`)
+	simLineNumberPrefixRE       = regexp.MustCompile(`^\s{0,12}\d+\t`)
+	simReadFileWrapperLineRE    = regexp.MustCompile(`^(?:\[(?:indent:|encoding:|Extracted from |File truncated:|File has |multi_file_read summary)|=== (?:FILE|ERROR): |\[end (?:file|error)\]$|\[skipped:)`)
+)
+
+type simNumberedBlock struct {
+	startLine int
+	lines     []string
+}
+
+type simFileLine struct {
+	text  string
+	start int
+	end   int
+}
+
+func simSplitFileLines(content string) []simFileLine {
+	if content == "" {
+		return nil
+	}
+	lines := make([]simFileLine, 0, strings.Count(content, "\n")+1)
+	start := 0
+	for start < len(content) {
+		rel := strings.IndexByte(content[start:], '\n')
+		if rel < 0 {
+			lines = append(lines, simFileLine{
+				text:  content[start:],
+				start: start,
+				end:   len(content),
+			})
+			break
+		}
+		end := start + rel
+		lines = append(lines, simFileLine{
+			text:  content[start:end],
+			start: start,
+			end:   end,
+		})
+		start = end + 1
+	}
+	return lines
+}
+
+func simParseReadFileNumberedBlock(text string) (simNumberedBlock, bool) {
+	lines := simTrimDanglingReadFileLineNumberOnlyLines(strings.Split(text, "\n"))
+	if len(lines) == 0 {
+		return simNumberedBlock{}, false
+	}
+	body := make([]string, len(lines))
+	startLine := 0
+	for i, line := range lines {
+		n, lineText, ok := simParseReadFileLine(line)
+		if !ok {
+			return simNumberedBlock{}, false
+		}
+		if i == 0 {
+			startLine = n
+		} else if n != startLine+i {
+			return simNumberedBlock{}, false
+		}
+		body[i] = lineText
+	}
+	return simNumberedBlock{startLine: startLine, lines: body}, true
+}
+
+func simParseReadFileLine(line string) (lineNumber int, text string, ok bool) {
+	if m := simReadFileLineRE.FindStringSubmatch(line); m != nil {
+		fmt.Sscanf(m[1], "%d", &lineNumber)
+		if lineNumber <= 0 {
+			return 0, "", false
+		}
+		return lineNumber, m[2], true
+	}
+	if simReadFileLineNumberOnlyRE.MatchString(line) {
+		fmt.Sscanf(strings.TrimSpace(line), "%d", &lineNumber)
+		if lineNumber <= 0 {
+			return 0, "", false
+		}
+		return lineNumber, "", true
+	}
+	return 0, "", false
+}
+
+func simResolveAnchoredCandidate(content, candidate, oldText string) simMatchResult {
+	if candidate == oldText {
+		return simMatchResult{canonical: candidate}
+	}
+	if normalized := simNormalizeIndentation(content, oldText); normalized == candidate {
+		return simMatchResult{canonical: candidate, transform: "indent-normalized"}
+	}
+	if strings.Contains(candidate, "\r\n") && !strings.Contains(oldText, "\r\n") {
+		if strings.ReplaceAll(oldText, "\n", "\r\n") == candidate {
+			return simMatchResult{canonical: candidate, transform: "crlf-converted"}
+		}
+	}
+	if canonical, shift, trim := simTryLeadingIndentShift(candidate, oldText); canonical == candidate {
+		return simMatchResult{canonical: candidate, transform: "leading-indent-shift", shift: shift, trim: trim}
+	}
+	if trimmed := simTryTrailingWhitespaceMatch(candidate, oldText); trimmed == candidate {
+		return simMatchResult{canonical: candidate, transform: "trailing-whitespace-tolerant"}
+	}
+	return simMatchResult{}
+}
+
+func simPrependTransform(prefix, suffix string) string {
+	switch {
+	case prefix == "":
+		return suffix
+	case suffix == "":
+		return prefix
+	default:
+		return prefix + "+" + suffix
+	}
+}
+
+func simTryReadFileLineAnchor(content, oldText string) simMatchResult {
+	block, ok := simParseReadFileNumberedBlock(oldText)
+	if !ok {
+		return simMatchResult{}
+	}
+	lines := simSplitFileLines(content)
+	if block.startLine <= 0 || block.startLine+len(block.lines)-1 > len(lines) {
+		return simMatchResult{}
+	}
+	startIdx := block.startLine - 1
+	endIdx := startIdx + len(block.lines) - 1
+	candidate := content[lines[startIdx].start:lines[endIdx].end]
+	mr := simResolveAnchoredCandidate(content, candidate, strings.Join(block.lines, "\n"))
+	if mr.canonical == "" {
+		return simMatchResult{}
+	}
+	mr.canonical = candidate
+	mr.transform = simPrependTransform("line-numbers-stripped", mr.transform)
+	mr.start = lines[startIdx].start
+	mr.anchored = true
+	return mr
+}
+
+// simAdjustNewText mirrors tool.adjustNewText: applies the transform that
+// located old_text to new_text so the replacement stays consistent.
+func simAdjustNewText(content, newText string, mr simMatchResult) string {
+	out := newText
+	if strings.Contains(mr.transform, "read-file-wrapper-stripped") {
+		if trimmed, changed := simTrimReadFileWrapperLines(out); changed {
+			out = trimmed
+		}
+	}
+	if strings.Contains(mr.transform, "line-numbers-stripped") {
+		out = simStripAllLineNumberPrefixes(out)
+	}
+	if strings.Contains(mr.transform, "indent-normalized") {
+		out = simNormalizeIndentation(content, out)
+	}
+	if strings.Contains(mr.transform, "crlf-converted") && !strings.Contains(out, "\r\n") {
+		out = strings.ReplaceAll(out, "\n", "\r\n")
+	}
+	if strings.Contains(mr.transform, "leading-indent-shift") {
+		if mr.shift != "" {
+			out = simApplyLeadingIndentShift(out, mr.shift)
+		}
+		if mr.trim != "" {
+			out = simTrimLeadingIndentShift(out, mr.trim)
+		}
+	}
+	return out
+}
+
+// simStripLineNumberPrefix mirrors tool.stripLineNumberPrefix: removes
+// "  42\t" style prefixes if a clear majority of non-empty lines have them.
+func simStripLineNumberPrefix(text string) string {
+	lines := simTrimDanglingReadFileLineNumberOnlyLines(strings.Split(text, "\n"))
+	matched, nonEmpty := 0, 0
+	for _, l := range lines {
+		if strings.TrimSpace(l) == "" {
+			continue
+		}
+		nonEmpty++
+		if simLineNumberPrefixRE.MatchString(l) {
+			matched++
+		}
+	}
+	if matched < 2 || matched < (nonEmpty/2+1) {
+		return text
+	}
+	out := make([]string, len(lines))
+	for i, l := range lines {
+		if simReadFileLineNumberOnlyRE.MatchString(l) {
+			out[i] = ""
+			continue
+		}
+		out[i] = simLineNumberPrefixRE.ReplaceAllString(l, "")
+	}
+	return strings.Join(out, "\n")
+}
+
+func simStripAllLineNumberPrefixes(text string) string {
+	lines := simTrimDanglingReadFileLineNumberOnlyLines(strings.Split(text, "\n"))
+	for i, l := range lines {
+		if simReadFileLineNumberOnlyRE.MatchString(l) {
+			lines[i] = ""
+			continue
+		}
+		lines[i] = simLineNumberPrefixRE.ReplaceAllString(l, "")
+	}
+	return strings.Join(lines, "\n")
+}
+
+func simTrimDanglingReadFileLineNumberOnlyLines(lines []string) []string {
+	if len(lines) == 0 {
+		return lines
+	}
+	hasAnchoredLine := false
+	for _, line := range lines {
+		if simReadFileLineRE.MatchString(line) || simReadFileLineNumberOnlyRE.MatchString(line) {
+			hasAnchoredLine = true
+			break
+		}
+	}
+	if !hasAnchoredLine {
+		return lines
+	}
+	start, end := 0, len(lines)
+	for start < end && simReadFileLineNumberOnlyRE.MatchString(lines[start]) {
+		start++
+	}
+	for end > start && simReadFileLineNumberOnlyRE.MatchString(lines[end-1]) {
+		end--
+	}
+	return lines[start:end]
+}
+
+func simTrimReadFileWrapperLines(text string) (string, bool) {
+	lines := strings.Split(text, "\n")
+	start, end := 0, len(lines)
+	firstContent := start
+	for firstContent < end && strings.TrimSpace(lines[firstContent]) == "" {
+		firstContent++
+	}
+	if firstContent < end && simReadFileWrapperLineRE.MatchString(lines[firstContent]) {
+		start = firstContent + 1
+		for start < end && (strings.TrimSpace(lines[start]) == "" || simReadFileWrapperLineRE.MatchString(lines[start])) {
+			start++
+		}
+	}
+	lastContent := end - 1
+	for lastContent >= start && strings.TrimSpace(lines[lastContent]) == "" {
+		lastContent--
+	}
+	if lastContent >= start && simReadFileWrapperLineRE.MatchString(lines[lastContent]) {
+		end = lastContent
+		for end > start && (strings.TrimSpace(lines[end-1]) == "" || simReadFileWrapperLineRE.MatchString(lines[end-1])) {
+			end--
+		}
+	}
+	if start == 0 && end == len(lines) {
+		return text, false
+	}
+	trimmed := strings.Join(lines[start:end], "\n")
+	if trimmed == "" {
+		return text, false
+	}
+	return trimmed, true
+}
+
+// simTryCRLFMatch mirrors tool.tryCRLFMatch.
+func simTryCRLFMatch(content, oldText string) string {
+	if !strings.Contains(content, "\r\n") {
+		return ""
+	}
+	if strings.Contains(oldText, "\r\n") {
+		return ""
+	}
+	if !strings.Contains(oldText, "\n") {
+		return ""
+	}
+	candidate := strings.ReplaceAll(oldText, "\n", "\r\n")
+	if strings.Contains(content, candidate) {
+		return candidate
+	}
+	return ""
+}
+
+// simLeadingWhitespace mirrors tool.leadingWhitespace.
+func simLeadingWhitespace(s string) string {
+	i := 0
+	for i < len(s) && (s[i] == ' ' || s[i] == '\t') {
+		i++
+	}
+	return s[:i]
+}
+
+// simTryLeadingIndentShift mirrors tool.tryLeadingIndentShift.
+func simTryLeadingIndentShift(content, oldText string) (canonical, shift, trim string) {
+	oldLines := strings.Split(oldText, "\n")
+	contentLines := strings.Split(content, "\n")
+	if len(oldLines) == 0 || len(oldLines) > len(contentLines) {
+		return "", "", ""
+	}
+	stripBoth := func(s string) string { return strings.TrimSpace(s) }
+	sOld := make([]string, len(oldLines))
+	firstNonEmpty := -1
+	for i, l := range oldLines {
+		s := stripBoth(l)
+		sOld[i] = s
+		if s != "" && firstNonEmpty < 0 {
+			firstNonEmpty = i
+		}
+	}
+	if firstNonEmpty < 0 {
+		return "", "", ""
+	}
+	for i := 0; i+len(sOld) <= len(contentLines); i++ {
+		match := true
+		for j := range sOld {
+			if stripBoth(contentLines[i+j]) != sOld[j] {
+				match = false
+				break
+			}
+		}
+		if !match {
+			continue
+		}
+		baseFile := simLeadingWhitespace(contentLines[i+firstNonEmpty])
+		baseOld := simLeadingWhitespace(oldLines[firstNonEmpty])
+		extraFile, extraOld := "", ""
+		switch {
+		case strings.HasPrefix(baseFile, baseOld):
+			extraFile = baseFile[len(baseOld):]
+		case strings.HasPrefix(baseOld, baseFile):
+			extraOld = baseOld[len(baseFile):]
+		default:
+			continue
+		}
+		if extraFile == "" && extraOld == "" {
+			continue
+		}
+		consistent := true
+		for j := range sOld {
+			if sOld[j] == "" {
+				continue
+			}
+			fileLead := simLeadingWhitespace(contentLines[i+j])
+			oldLead := simLeadingWhitespace(oldLines[j])
+			switch {
+			case extraFile != "":
+				if fileLead != extraFile+oldLead {
+					consistent = false
+				}
+			case extraOld != "":
+				if oldLead != extraOld+fileLead {
+					consistent = false
+				}
+			}
+			if !consistent {
+				break
+			}
+		}
+		if !consistent {
+			continue
+		}
+		return strings.Join(contentLines[i:i+len(sOld)], "\n"), extraFile, extraOld
+	}
+	return "", "", ""
+}
+
+// simApplyLeadingIndentShift mirrors tool.applyLeadingIndentShift.
+func simApplyLeadingIndentShift(text, shift string) string {
+	if shift == "" {
+		return text
+	}
+	lines := strings.Split(text, "\n")
+	for i, l := range lines {
+		if l == "" {
+			continue
+		}
+		lines[i] = shift + l
+	}
+	return strings.Join(lines, "\n")
+}
+
+func simTrimLeadingIndentShift(text, trim string) string {
+	if trim == "" {
+		return text
+	}
+	lines := strings.Split(text, "\n")
+	for i, l := range lines {
+		if l == "" {
+			continue
+		}
+		if strings.HasPrefix(l, trim) {
+			lines[i] = l[len(trim):]
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// simTryTrailingWhitespaceMatch mirrors tool.tryTrailingWhitespaceMatch.
+func simTryTrailingWhitespaceMatch(content, oldText string) string {
+	contentLines := strings.Split(content, "\n")
+	oldLines := strings.Split(oldText, "\n")
+	if len(oldLines) == 0 || len(oldLines) > len(contentLines) {
+		return ""
+	}
+	rstrip := func(s string) string { return strings.TrimRight(s, " \t") }
+	rstripOld := make([]string, len(oldLines))
+	for i, l := range oldLines {
+		rstripOld[i] = rstrip(l)
+	}
+	rstripContent := make([]string, len(contentLines))
+	for i, l := range contentLines {
+		rstripContent[i] = rstrip(l)
+	}
+	for i := 0; i+len(rstripOld) <= len(rstripContent); i++ {
+		match := true
+		for j := range rstripOld {
+			if rstripContent[i+j] != rstripOld[j] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return strings.Join(contentLines[i:i+len(rstripOld)], "\n")
+		}
+	}
+	return ""
+}
+
+// simTryFuzzyLineMatch mirrors tool.tryFuzzyLineMatch.
+func simTryFuzzyLineMatch(content, oldText string) string {
+	oldLines := strings.Split(oldText, "\n")
+	if len(oldLines) == 0 {
+		return ""
+	}
+	trimmedOld := make([]string, len(oldLines))
+	for i, l := range oldLines {
+		trimmedOld[i] = strings.TrimSpace(l)
+	}
+	fileLines := strings.Split(content, "\n")
+	nFile := len(fileLines)
+	nOld := len(trimmedOld)
+	for start := 0; start <= nFile-nOld; start++ {
+		matched := true
+		for j := 0; j < nOld; j++ {
+			if strings.TrimSpace(fileLines[start+j]) != trimmedOld[j] {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return strings.Join(fileLines[start:start+nOld], "\n")
+		}
+	}
+	return ""
+}
+
+// simNormalizeIndentation mirrors tool.normalizeIndentation: converts the
+// indentation of text to match the file's tab/space style.
+func simNormalizeIndentation(fileContent, text string) string {
+	fileUsesTabs := false
+	fileTabWidth := 0
+	{
+		tabLines, spaceLines := 0, 0
+		spaceWidths := map[int]int{}
+		lines := strings.Split(fileContent, "\n")
+		limit := len(lines)
+		if limit > 200 {
+			limit = 200
+		}
+		for _, line := range lines[:limit] {
+			if len(line) == 0 {
+				continue
+			}
+			if line[0] == '\t' {
+				tabLines++
+			} else if line[0] == ' ' {
+				spaceLines++
+				n := 0
+				for n < len(line) && line[n] == ' ' {
+					n++
+				}
+				if n >= 2 {
+					spaceWidths[n]++
+				}
+			}
+		}
+		fileUsesTabs = tabLines > spaceLines
+		if len(spaceWidths) > 0 {
+			allW := make([]int, 0, len(spaceWidths))
+			for w := range spaceWidths {
+				allW = append(allW, w)
+			}
+			g := allW[0]
+			for _, w := range allW[1:] {
+				g = simGCD(g, w)
+			}
+			if g < 2 {
+				g = 2
+			}
+			fileTabWidth = g
+		}
+		if fileTabWidth == 0 {
+			fileTabWidth = 4
+		}
+	}
+	textHasTabs := false
+	textHasLeadingSpaces := false
+	for _, line := range strings.Split(text, "\n") {
+		if len(line) > 0 && line[0] == '\t' {
+			textHasTabs = true
+		}
+		if len(line) > 0 && line[0] == ' ' {
+			textHasLeadingSpaces = true
+		}
+	}
+	if fileUsesTabs && !textHasTabs && textHasLeadingSpaces {
+		return simConvertSpacesToTabs(text, fileTabWidth)
+	}
+	if !fileUsesTabs && textHasTabs {
+		return simConvertTabsToSpaces(text, fileTabWidth)
+	}
+	return text
+}
+
+func simConvertSpacesToTabs(text string, tabWidth int) string {
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		if len(line) == 0 {
+			continue
+		}
+		spaces := 0
+		for spaces < len(line) && line[spaces] == ' ' {
+			spaces++
+		}
+		if spaces == 0 {
+			continue
+		}
+		tabs := spaces / tabWidth
+		remainder := spaces % tabWidth
+		if tabs == 0 && spaces > 0 {
+			tabs = 1
+			remainder = 0
+		}
+		lines[i] = strings.Repeat("\t", tabs) + strings.Repeat(" ", remainder) + line[spaces:]
+	}
+	return strings.Join(lines, "\n")
+}
+
+func simConvertTabsToSpaces(text string, tabWidth int) string {
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		if len(line) == 0 {
+			continue
+		}
+		tabs := 0
+		for tabs < len(line) && line[tabs] == '\t' {
+			tabs++
+		}
+		if tabs == 0 {
+			continue
+		}
+		lines[i] = strings.Repeat(" ", tabs*tabWidth) + line[tabs:]
+	}
+	return strings.Join(lines, "\n")
+}
+
+func simGCD(a, b int) int {
+	for b != 0 {
+		a, b = b, a%b
+	}
+	return a
 }
 
 // executeUndoEdit handles the undo_edit tool by routing to the checkpoint manager.

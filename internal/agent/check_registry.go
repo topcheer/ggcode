@@ -40,6 +40,25 @@ const (
 	LangJava   Language = 7 // .java
 )
 
+// CheckSeverity ranks how critical a check's findings are. When the
+// maxIntegrityWarnings budget forces the registry to choose which single
+// warning surfaces, higher-severity findings win regardless of
+// registration order; equal severities fall back to registration order.
+type CheckSeverity int
+
+const (
+	// SeverityDefault is the zero value: correctness findings that matter
+	// but do not outrank other findings by class.
+	SeverityDefault CheckSeverity = iota
+	// SeverityCritical marks checks whose findings indicate a security
+	// vulnerability or guaranteed corruption/crash (injected secrets, SQL
+	// injection, broken syntax, data-destroying writes). #601 W3: before
+	// this field existed the cap truncated strictly by registration index,
+	// so an early-registered advisory (e.g. edit-blast-radius) could crowd
+	// out a late-registered sql-injection finding.
+	SeverityCritical
+)
+
 // detectLanguage infers the Language from the file extension.
 func detectLanguage(filePath string) Language {
 	ext := strings.ToLower(filepath.Ext(filePath))
@@ -78,9 +97,10 @@ type CheckContext struct {
 
 // IntegrityCheck represents a single post-write integrity check.
 type IntegrityCheck struct {
-	Name  string
-	Langs []Language // empty or contains LangAny => runs for all languages
-	Run   func(ctx CheckContext) []string
+	Name     string
+	Langs    []Language // empty or contains LangAny => runs for all languages
+	Severity CheckSeverity
+	Run      func(ctx CheckContext) []string
 }
 
 // appliesTo returns true if the check should run for the given language.
@@ -120,6 +140,7 @@ func runChecksParallel(ctx CheckContext) []string {
 
 	type result struct {
 		index    int
+		severity CheckSeverity
 		warnings []string
 	}
 
@@ -145,7 +166,7 @@ func runChecksParallel(ctx CheckContext) []string {
 			warnings := allChecks[checkIdx].Run(ctx)
 			if len(warnings) > 0 {
 				mu.Lock()
-				results = append(results, result{index: checkIdx, warnings: warnings})
+				results = append(results, result{index: checkIdx, severity: allChecks[checkIdx].Severity, warnings: warnings})
 				mu.Unlock()
 			}
 		}(idx)
@@ -153,7 +174,13 @@ func runChecksParallel(ctx CheckContext) []string {
 
 	wg.Wait()
 
+	// #601 W3: order by severity first (most critical surfaces when the
+	// maxIntegrityWarnings cap truncates), then by registration index for
+	// stable, deterministic output within the same severity tier.
 	sort.Slice(results, func(a, b int) bool {
+		if results[a].severity != results[b].severity {
+			return results[a].severity > results[b].severity
+		}
 		return results[a].index < results[b].index
 	})
 
@@ -165,7 +192,10 @@ func runChecksParallel(ctx CheckContext) []string {
 }
 
 // formatWarnings renders warnings into the legacy string format expected by
-// callers, respecting the maxIntegrityWarnings cap.
+// callers, respecting the maxIntegrityWarnings cap. Callers receive the
+// warnings already ordered by severity (see runChecksParallel), so the cap
+// keeps the single most critical issue — not merely the earliest-registered
+// one (#601 W3).
 func formatWarnings(warnings []string) string {
 	if len(warnings) == 0 {
 		return ""
