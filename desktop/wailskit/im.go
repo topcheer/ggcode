@@ -58,6 +58,24 @@ func GetIMPlatformRegistry() []IMPlatformMeta {
 	}
 }
 
+// firstBoundWorkspace picks the workspace shown for an adapter from its
+// binding list: the current-workspace match if present (so the UI shows the
+// binding that matters here), else the first binding. IsCurrent is true iff
+// any binding matches the current workspace (#587).
+func firstBoundWorkspace(bindings []string, workingDir, normalizedWS string) (string, bool) {
+	isCurrent := false
+	first := ""
+	for _, ws := range bindings {
+		if first == "" {
+			first = ws
+		}
+		if ws == workingDir || ws == normalizedWS {
+			return ws, true
+		}
+	}
+	return first, isCurrent
+}
+
 // ListIMAdapters returns all configured IM adapters with workspace binding info.
 // imManager may be nil (no runtime bindings available).
 func ListIMAdapters(workingDir string, imMgr interface {
@@ -74,20 +92,27 @@ func ListIMAdapters(workingDir string, imMgr interface {
 
 	normalizedWS := session.NormalizeWorkspacePath(workingDir)
 
-	// Collect workspace bindings from imManager if available
-	boundWorkspaces := make(map[string]string) // adapterName → workspace
+	// Collect workspace bindings from imManager if available.
+	// #587: an adapter can carry MULTIPLE persisted bindings (legacy
+	// orphans from before #396's cascade cleanup + the current-workspace
+	// binding). Folding them into map[string]string silently kept only the
+	// slice's last entry (last-write-wins), so IsCurrent could read false
+	// even though the current workspace IS bound — misleading users into
+	// redundant re-binds. Keep all bound workspaces; IsCurrent matches on
+	// ANY binding.
+	boundWorkspaces := make(map[string][]string) // adapterName → bound workspaces
 	if imMgr != nil {
 		for _, b := range imMgr.AllPersistedBindings() {
 			if b.Adapter != "" {
-				boundWorkspaces[b.Adapter] = b.Workspace
+				boundWorkspaces[b.Adapter] = append(boundWorkspaces[b.Adapter], b.Workspace)
 			}
 		}
 	}
 
 	var result []IMAdapterInfo
 	for name, acfg := range cfg.IM.Adapters {
-		ws := boundWorkspaces[name]
-		isCurrent := ws != "" && (ws == workingDir || ws == normalizedWS)
+		var isCurrent bool
+		ws, isCurrent := firstBoundWorkspace(boundWorkspaces[name], workingDir, normalizedWS)
 
 		var muted bool
 		if imMgr != nil {
