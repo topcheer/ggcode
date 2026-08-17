@@ -337,11 +337,37 @@ func quickRecordType(line []byte) string {
 	return string(line[start : start+end])
 }
 
+// quickIsDialogueRole reports whether a raw message record line carries a
+// user or assistant role. Used by findMessageCutoff to anchor the recent
+// window on real conversation turns rather than system-note tails.
+func quickIsDialogueRole(line []byte) bool {
+	i := bytes.Index(line, []byte(`"role":"`))
+	if i < 0 {
+		return false
+	}
+	j := i + len(`"role":"`)
+	k := bytes.IndexByte(line[j:], '"')
+	if k < 0 {
+		return false
+	}
+	role := line[j : j+k]
+	return bytes.Equal(role, []byte("user")) || bytes.Equal(role, []byte("assistant"))
+}
+
 // findMessageCutoff does a fast first-pass scan of the JSONL file to
 // determine the byte offset after which all "message" records fall within
 // the recent time window. Returns (offset, totalMessageCount, lastTimestamp).
 // If the file has fewer than recentMessageThreshold messages or the last
 // message has no timestamp, returns (0, count, zeroTime) meaning "load all".
+//
+// The window is anchored on the last USER or ASSISTANT message, not the last
+// message of any role. Long-running sessions routinely end with a tail of
+// system messages (checkpoint notes, resume markers, compaction summaries)
+// appended hours or days after the last real exchange. Anchoring on that tail
+// put the entire 24h window over system-only records, so the TUI rendered
+// zero visible history even though the file had thousands of messages.
+// Anchoring on the last user/assistant message guarantees at least that
+// message (and its surrounding conversation) falls inside the window.
 func findMessageCutoff(path string) (int64, int, time.Time) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -352,8 +378,9 @@ func findMessageCutoff(path string) (int64, int, time.Time) {
 	// First: count messages and find last timestamp via fast scan.
 	// We track byte offsets of each message line in a slice.
 	type msgOff struct {
-		offset int64
-		ts     time.Time
+		offset     int64
+		ts         time.Time
+		isDialogue bool // role is user or assistant
 	}
 	var offsets []msgOff
 	var pos int64
@@ -366,7 +393,7 @@ func findMessageCutoff(path string) (int64, int, time.Time) {
 		// Fast check: is this a message record?
 		if rt := quickRecordType(sc.Bytes()); rt == "message" {
 			ts := quickExtractTimestamp(sc.Bytes())
-			offsets = append(offsets, msgOff{offset: pos, ts: ts})
+			offsets = append(offsets, msgOff{offset: pos, ts: ts, isDialogue: quickIsDialogueRole(sc.Bytes())})
 		}
 		pos += lineLen
 	}
@@ -376,8 +403,18 @@ func findMessageCutoff(path string) (int64, int, time.Time) {
 		return 0, totalMsgs, time.Time{}
 	}
 
-	// Find last message timestamp
-	last := offsets[totalMsgs-1].ts
+	// Find the anchor: the last message whose role is user or assistant.
+	// If none exists (system-only file), fall back to the last message.
+	last := time.Time{}
+	for i := totalMsgs - 1; i >= 0; i-- {
+		if offsets[i].isDialogue {
+			last = offsets[i].ts
+			break
+		}
+	}
+	if last.IsZero() {
+		last = offsets[totalMsgs-1].ts
+	}
 	if last.IsZero() {
 		// No timestamps — can't filter, load all.
 		return 0, totalMsgs, time.Time{}
