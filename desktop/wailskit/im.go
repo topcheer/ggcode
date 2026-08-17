@@ -190,37 +190,8 @@ func SaveIMAdapter(name string, values map[string]string) error {
 
 	// Check if updating an existing adapter
 	if existing, exists := cfg.IM.Adapters[name]; exists {
-		// Preserve fields not explicitly set via the UI update (#107)
-		adapterCfg.Args = existing.Args
-		adapterCfg.Env = existing.Env
-		adapterCfg.AllowFrom = existing.AllowFrom
-		// #300: the desktop update payload never carries transport/command
-		// (CLI-only fields) — preserve them like the others, or any desktop
-		// save silently wipes them.
-		if adapterCfg.Transport == "" {
-			adapterCfg.Transport = existing.Transport
-		}
-		if adapterCfg.Command == "" {
-			adapterCfg.Command = existing.Command
-		}
-		adapterCfg.OutputMode = existing.OutputMode
-		adapterCfg.Targets = existing.Targets
-		// Preserve existing Extra fields not in the update, then overwrite.
-		// When platform changes, discard old Extra to prevent cross-platform
-		// credential leakage (#585): telegram and slack both use "bot_token"
-		// field name, so switching platforms would incorrectly inherit the old token.
-		if existing.Extra != nil && existing.Platform == platform {
-			if adapterCfg.Extra == nil {
-				adapterCfg.Extra = make(map[string]interface{})
-			}
-			for k, v := range existing.Extra {
-				if _, inUpdate := extra[k]; !inUpdate {
-					adapterCfg.Extra[k] = v
-				}
-			}
-		}
 		// Update the adapter in-place and save once (avoid delete→save→re-add data loss).
-		cfg.IM.Adapters[name] = adapterCfg
+		cfg.IM.Adapters[name] = mergeExistingIntoUpdate(adapterCfg, existing)
 	}
 
 	// If the adapter didn't exist above, AddIMAdapter creates it. If it did,
@@ -229,6 +200,38 @@ func SaveIMAdapter(name string, values map[string]string) error {
 		return cfg.Save()
 	}
 	return cfg.AddIMAdapter(name, adapterCfg)
+}
+
+// mergeExistingIntoUpdate folds an existing adapter config into a UI update
+// payload: fields the desktop payload never carries are preserved (#107;
+// transport/command per #300), and Extra keys absent from the update are
+// kept — but ONLY when the platform is unchanged. On a platform switch the
+// old Extra is discarded to prevent cross-platform credential leakage
+// (#585): telegram and slack share the "bot_token" field name, so a switch
+// would otherwise inherit the old token as the new platform's credential.
+func mergeExistingIntoUpdate(update, existing config.IMAdapterConfig) config.IMAdapterConfig {
+	update.Args = existing.Args
+	update.Env = existing.Env
+	update.AllowFrom = existing.AllowFrom
+	if update.Transport == "" {
+		update.Transport = existing.Transport
+	}
+	if update.Command == "" {
+		update.Command = existing.Command
+	}
+	update.OutputMode = existing.OutputMode
+	update.Targets = existing.Targets
+	if existing.Extra != nil && existing.Platform == update.Platform {
+		if update.Extra == nil {
+			update.Extra = make(map[string]interface{})
+		}
+		for k, v := range existing.Extra {
+			if _, inUpdate := update.Extra[k]; !inUpdate {
+				update.Extra[k] = v
+			}
+		}
+	}
+	return update
 }
 
 // RemoveIMAdapter removes an IM adapter by name. When imMgr is non-nil the
