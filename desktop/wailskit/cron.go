@@ -3,6 +3,7 @@ package wailskit
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/cron"
@@ -78,25 +79,32 @@ func (b *ChatBridge) CreateCronJob(cronExpr, prompt string, recurring, queueIfBu
 }
 
 // UpdateCronJob updates an existing cron job's cron expression, prompt, and queueIfBusy.
-// Empty strings map to nil (field unchanged), preserving scheduler.Update's
-// partial-update semantics. For queueIfBusy, a bool cannot distinguish false
-// from unset, so this bridge uses "true updates, false leaves unchanged"
-// semantics: submitting false never overwrites a stored true. This prevents a
-// frontend edit that only changes the prompt from silently disabling
-// queue_if_busy (and thus skipping the job when the agent is busy) (#288).
-// Consequence: turning QueueIfBusy off is not expressible through this bridge;
-// the frontend would need a tri-state (e.g. *bool) to support that.
+// An empty cronExpr maps to nil (field unchanged), preserving scheduler.Update's
+// partial-update semantics for prompt-only edits. The prompt is REQUIRED:
+// an empty or whitespace-only prompt is a validation error (#617) — the old
+// ""→nil mapping silently kept the previous prompt while reporting success,
+// so a user clearing the field saw "saved" but the UI re-fetched the old
+// value. This aligns with CreateCronJob, which also rejects empty prompts
+// (an empty-prompt job is a dead job). For queueIfBusy, a bool cannot
+// distinguish false from unset, so this bridge uses "true updates, false
+// leaves unchanged" semantics: submitting false never overwrites a stored
+// true. This prevents a frontend edit that only changes the prompt from
+// silently disabling queue_if_busy (and thus skipping the job when the
+// agent is busy) (#288). Consequence: turning QueueIfBusy off is not
+// expressible through this bridge; the frontend would need a tri-state
+// (e.g. *bool) to support that.
 func (b *ChatBridge) UpdateCronJob(id, cronExpr, prompt string, queueIfBusy bool) (CronJobInfo, error) {
 	if b.cronScheduler == nil {
 		return CronJobInfo{}, fmt.Errorf("cron scheduler not available")
 	}
-	var cronPtr, promptPtr *string
+	if strings.TrimSpace(prompt) == "" {
+		return CronJobInfo{}, fmt.Errorf("prompt cannot be empty (#617): an empty-prompt cron job is a dead job; submit the full prompt with the update")
+	}
+	var cronPtr *string
 	if cronExpr != "" {
 		cronPtr = &cronExpr
 	}
-	if prompt != "" {
-		promptPtr = &prompt
-	}
+	promptPtr := &prompt
 	var qb *bool
 	if queueIfBusy {
 		qb = &queueIfBusy

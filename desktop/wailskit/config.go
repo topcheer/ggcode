@@ -577,12 +577,22 @@ func GetImpersonationPresets() []ImpersonationPresetInfo {
 }
 
 // ApplyImpersonation applies an impersonation preset and persists to config.
+// #614: an unknown presetID is rejected instead of silently disabling
+// impersonation while still persisting the ID (UI/runtime state fork), and
+// an empty/nil customHeaders map means "keep existing headers" — the
+// frontend submits `{} as Record<string,string>` on a plain preset switch,
+// and the old full-struct overwrite wiped user-saved custom headers
+// (#67/#69 struct-overwrite family, 4th instance).
 func ApplyImpersonation(presetID, version string, customHeaders map[string]string) error {
 	globalMu.Lock()
 	defer globalMu.Unlock()
 	cfg := globalCfg
 	if cfg == nil {
 		return fmt.Errorf("config not initialized")
+	}
+
+	if presetID != "none" && presetID != "" && provider.FindPresetByID(presetID) == nil {
+		return fmt.Errorf("unknown impersonation preset %q", presetID)
 	}
 
 	var preset *provider.ImpersonationPreset
@@ -595,12 +605,20 @@ func ApplyImpersonation(presetID, version string, customHeaders map[string]strin
 		}
 	}
 
-	provider.SetActiveImpersonation(preset, version, customHeaders)
+	// Merge, don't overwrite: only replace headers when this call actually
+	// carries any. Clearing all custom headers is not expressible through
+	// this API (an empty map is indistinguishable from "not submitted").
+	mergedHeaders := cfg.Impersonation.CustomHeaders
+	if len(customHeaders) > 0 {
+		mergedHeaders = customHeaders
+	}
+
+	provider.SetActiveImpersonation(preset, version, mergedHeaders)
 
 	cfg.Impersonation = config.ImpersonationConfig{
 		Preset:        presetID,
 		CustomVersion: version,
-		CustomHeaders: customHeaders,
+		CustomHeaders: mergedHeaders,
 	}
 	return cfg.Save()
 }
@@ -1176,7 +1194,25 @@ func CompleteAnthropicOAuth() error {
 		RefreshToken: tokenResp.RefreshToken,
 		ExpiresAt:    time.Now().Add(time.Duration(expiresIn) * time.Second),
 	}
-	return auth.DefaultStore().Save(info)
+	if err := auth.DefaultStore().Save(info); err != nil {
+		return err
+	}
+	// #616: the token is only read when the provider is (re)created via
+	// ResolveActiveEndpoint. Without this refresh the running provider keeps
+	// its old auth state and chats keep 401-ing until restart, while the UI
+	// (which reads the store via AnthropicOAuthStatus) shows "connected".
+	// Symmetric with App.UpdateConfig's post-save OnConfigProviderChanged.
+	refreshRunningProviderAfterAuth()
+	return nil
+}
+
+// refreshRunningProviderAfterAuth nudges the active bridge to rebuild its
+// provider so a freshly persisted credential is picked up immediately
+// instead of on the next config save or app restart (#616).
+func refreshRunningProviderAfterAuth() {
+	if bridge := GetChatBridge(); bridge != nil {
+		bridge.OnConfigProviderChanged()
+	}
 }
 
 // LogoutAnthropicOAuth removes the stored Anthropic OAuth token.

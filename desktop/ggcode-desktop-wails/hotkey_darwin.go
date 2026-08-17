@@ -21,21 +21,24 @@ static OSStatus gcHotkeyCallback(EventHandlerCallRef next, EventRef evt, void *d
 }
 
 // Register Option+Command+G as a system-wide hotkey.
-static void gcRegisterGlobalHotkey() {
+// Returns the first non-noErr OSStatus so callers can surface registration
+// failure (#615) — e.g. another app exclusively owning the combo.
+static OSStatus gcRegisterGlobalHotkey() {
     @autoreleasepool {
         EventTypeSpec spec;
         spec.eventClass = kEventClassKeyboard;
         spec.eventKind  = kEventHotKeyPressed;
 
-        InstallApplicationEventHandler(&gcHotkeyCallback, 1, &spec, NULL, &gcHotkeyHandler);
+        OSStatus st = InstallApplicationEventHandler(&gcHotkeyCallback, 1, &spec, NULL, &gcHotkeyHandler);
+        if (st != noErr) return st;
 
         EventHotKeyID keyID;
         keyID.signature = 'GGCO';
         keyID.id = 1;
 
         // kVK_ANSI_G = 0x05, modifiers: cmdKey | optionKey
-        RegisterEventHotKey(0x05, cmdKey | optionKey, keyID,
-                            GetApplicationEventTarget(), 0, &gcHotkeyRef);
+        return RegisterEventHotKey(0x05, cmdKey | optionKey, keyID,
+                                   GetApplicationEventTarget(), 0, &gcHotkeyRef);
     }
 }
 
@@ -60,6 +63,8 @@ static int gcPollHotkey() {
 import "C"
 
 import (
+	"fmt"
+	"sync"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -67,21 +72,53 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
-// initGlobalHotkey registers a system-wide hotkey (Option+Command+G)
-// to toggle the window visibility from anywhere.
-func (a *App) initGlobalHotkey() {
-	if a.dc == nil || !a.dc.IsGlobalHotkeyEnabled() {
-		return
-	}
-	C.gcRegisterGlobalHotkey()
-	debug.Log("desktop", "global hotkey registered: Option+Command+G")
+// hotkeyPollerMu guards the single hotkey poller's stop channel (#615:
+// every enable used to spawn one more 200ms poller goroutine that only
+// exited on app shutdown; repeated toggles leaked goroutines and made
+// several pollers race on the atomic gcHotkeyFired flag, so a hotkey press
+// was occasionally swallowed).
+var (
+	hotkeyPollerMu sync.Mutex
+	hotkeyStop     chan struct{}
+)
 
+// hotkeyPollerRunning reports whether the single poller goroutine is
+// registered (test hook for #615; synchronous under hotkeyPollerMu).
+func hotkeyPollerRunning() bool {
+	hotkeyPollerMu.Lock()
+	defer hotkeyPollerMu.Unlock()
+	return hotkeyStop != nil
+}
+
+// startHotkeyPoller ensures exactly one poller goroutine runs; a second
+// call while it is alive is a no-op.
+func (a *App) startHotkeyPoller() {
+	hotkeyPollerMu.Lock()
+	defer hotkeyPollerMu.Unlock()
+	if hotkeyStop != nil {
+		return // already running — reuse instead of stacking another poller
+	}
+	stop := make(chan struct{})
+	hotkeyStop = stop
+	var done <-chan struct{}
+	if a.ctx != nil {
+		done = a.ctx.Done()
+	}
 	safego.Go("hotkey-poller", func() {
 		ticker := time.NewTicker(200 * time.Millisecond)
 		defer ticker.Stop()
 		for {
 			select {
-			case <-a.ctx.Done():
+			case <-stop:
+				return
+			case <-done:
+				// App shutting down: clear the registration so a later
+				// re-enable (new app context) can start a fresh poller.
+				hotkeyPollerMu.Lock()
+				if hotkeyStop == stop {
+					hotkeyStop = nil
+				}
+				hotkeyPollerMu.Unlock()
 				return
 			case <-ticker.C:
 				if C.gcPollHotkey() != 0 {
@@ -92,8 +129,44 @@ func (a *App) initGlobalHotkey() {
 	})
 }
 
-// removeGlobalHotkey unregisters the system-wide hotkey.
+// stopHotkeyPoller stops the poller goroutine if one is running.
+func (a *App) stopHotkeyPoller() {
+	hotkeyPollerMu.Lock()
+	defer hotkeyPollerMu.Unlock()
+	if hotkeyStop != nil {
+		close(hotkeyStop)
+		hotkeyStop = nil
+	}
+}
+
+// initGlobalHotkey registers a system-wide hotkey (Option+Command+G)
+// to toggle the window visibility from anywhere. Returns an error when the
+// OS rejects the registration (e.g. the combo is exclusively owned by
+// another application) instead of silently pretending success (#615).
+func (a *App) initGlobalHotkey() error {
+	if a.dc == nil || !a.dc.IsGlobalHotkeyEnabled() {
+		return nil
+	}
+	// #615 test hook: replaces only the OS registration call, so the poller
+	// lifecycle below stays exercised. The real RegisterEventHotKey can fail
+	// on machines where another app owns the combo (OSStatus -9866).
+	if a.hotkeyRegisterHook != nil {
+		if err := a.hotkeyRegisterHook(); err != nil {
+			return err
+		}
+	} else if st := C.gcRegisterGlobalHotkey(); st != C.noErr {
+		return fmt.Errorf("RegisterEventHotKey failed (Option+Cmd+G may be in use by another app): OSStatus %d", int(st))
+	}
+	debug.Log("desktop", "global hotkey registered: Option+Command+G")
+	a.startHotkeyPoller()
+	return nil
+}
+
+// removeGlobalHotkey unregisters the system-wide hotkey and stops its
+// poller goroutine so repeated toggles do not leak one poller per enable
+// (#615).
 func (a *App) removeGlobalHotkey() {
+	a.stopHotkeyPoller()
 	C.gcUnregisterGlobalHotkey()
 	debug.Log("desktop", "global hotkey unregistered")
 }

@@ -45,7 +45,9 @@ func TestUpdateCronJob_PromptOnlyPreservesCronAndQueueIfBusy(t *testing.T) {
 }
 
 // TestUpdateCronJob_TrueEnablesQueueIfBusy verifies that submitting
-// queueIfBusy=true does enable it (true-updates semantics).
+// queueIfBusy=true does enable it (true-updates semantics). Since #617 the
+// prompt is required on every update (empty prompt = validation error), so
+// the queueIfBusy-only update resubmits the current prompt.
 func TestUpdateCronJob_TrueEnablesQueueIfBusy(t *testing.T) {
 	b := newTestCronBridge(t)
 
@@ -54,7 +56,7 @@ func TestUpdateCronJob_TrueEnablesQueueIfBusy(t *testing.T) {
 		t.Fatalf("CreateCronJob: %v", err)
 	}
 
-	updated, err := b.UpdateCronJob(created.ID, "", "", true)
+	updated, err := b.UpdateCronJob(created.ID, "", "prompt", true)
 	if err != nil {
 		t.Fatalf("UpdateCronJob: %v", err)
 	}
@@ -66,8 +68,9 @@ func TestUpdateCronJob_TrueEnablesQueueIfBusy(t *testing.T) {
 	}
 }
 
-// TestUpdateCronJob_CronOnlyPreservesPrompt verifies empty prompt is treated
-// as "unchanged".
+// TestUpdateCronJob_CronOnlyPreservesPrompt verifies a cron-only update
+// (empty cronExpr would be the no-op; here we change cronExpr while
+// resubmitting the unchanged prompt, which #617 requires) keeps the prompt.
 func TestUpdateCronJob_CronOnlyPreservesPrompt(t *testing.T) {
 	b := newTestCronBridge(t)
 
@@ -76,7 +79,7 @@ func TestUpdateCronJob_CronOnlyPreservesPrompt(t *testing.T) {
 		t.Fatalf("CreateCronJob: %v", err)
 	}
 
-	updated, err := b.UpdateCronJob(created.ID, "0 6 * * *", "", false)
+	updated, err := b.UpdateCronJob(created.ID, "0 6 * * *", "keep me", false)
 	if err != nil {
 		t.Fatalf("UpdateCronJob: %v", err)
 	}

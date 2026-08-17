@@ -59,6 +59,13 @@ type App struct {
 	// Close-to-tray support
 	lastCloseAttempt *time.Time
 
+	// #615: when non-nil, initGlobalHotkey calls this instead of the real
+	// RegisterEventHotKey (test hook; lets tests simulate both a free combo
+	// and one exclusively owned by another app without C interop — the real
+	// registration can fail in CI/headless runs, e.g. OSStatus -9866 when
+	// the combo is already taken).
+	hotkeyRegisterHook func() error
+
 	streamEvents chan uiEvent
 	streamOnce   sync.Once
 	shutdownOnce sync.Once
@@ -121,8 +128,11 @@ func (a *App) startup(ctx context.Context) {
 
 	// Register global hotkey now that the config (and its enabled flag) is
 	// available. This placement is before the onboarding early-return below,
-	// so the hotkey registers on every startup path.
-	a.initGlobalHotkey()
+	// so the hotkey registers on every startup path. Registration failure is
+	// logged, not fatal (#615): the app still runs, just without the hotkey.
+	if err := a.initGlobalHotkey(); err != nil {
+		debug.Log("desktop", "global hotkey registration failed: %v", err)
+	}
 
 	// Sync notification preference from config
 	a.notifications.SetEnabled(a.dc.IsNotificationsEnabled())
@@ -1605,19 +1615,40 @@ func (a *App) IsAlwaysOnTop() bool {
 
 // SetGlobalHotkeyEnabled toggles the system-wide global hotkey.
 // When enabled, Option+Command+G shows/hides the window from any app.
+// #615: if OS registration fails (e.g. the combo is exclusively owned by
+// another application), the persisted preference is rolled back and an
+// error is returned — previously SetGlobalHotkey+Save succeeded first and
+// the dropped RegisterEventHotKey OSStatus left the UI showing "enabled"
+// with a dead hotkey.
 func (a *App) SetGlobalHotkeyEnabled(enabled bool) error {
 	if a.dc == nil {
 		return fmt.Errorf("app not initialized")
 	}
-	a.dc.SetGlobalHotkey(enabled)
-	if err := a.dc.Save(); err != nil {
-		debug.Log("desktop", "persist global-hotkey failed: %v", err)
-		return fmt.Errorf("persist global hotkey setting: %w", err)
-	}
+	oldEnabled := a.dc.IsGlobalHotkeyEnabled()
 	if enabled {
-		a.initGlobalHotkey()
+		// Register FIRST; only persist once the OS actually accepted it.
+		a.dc.SetGlobalHotkey(true)
+		if err := a.initGlobalHotkey(); err != nil {
+			a.dc.SetGlobalHotkey(oldEnabled)
+			debug.Log("desktop", "global hotkey registration failed, rolling back to %v: %v", oldEnabled, err)
+			return fmt.Errorf("global hotkey registration failed: %w", err)
+		}
+		if err := a.dc.Save(); err != nil {
+			// Persist failed: undo the live registration so state stays
+			// consistent with what will be loaded on next startup.
+			a.removeGlobalHotkey()
+			a.dc.SetGlobalHotkey(oldEnabled)
+			debug.Log("desktop", "persist global-hotkey failed: %v", err)
+			return fmt.Errorf("persist global hotkey setting: %w", err)
+		}
 	} else {
+		a.dc.SetGlobalHotkey(false)
 		a.removeGlobalHotkey()
+		if err := a.dc.Save(); err != nil {
+			a.dc.SetGlobalHotkey(oldEnabled)
+			debug.Log("desktop", "persist global-hotkey failed: %v", err)
+			return fmt.Errorf("persist global hotkey setting: %w", err)
+		}
 	}
 	debug.Log("desktop", "global hotkey set to %v", enabled)
 	return nil
