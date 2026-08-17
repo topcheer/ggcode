@@ -47,6 +47,7 @@ package agent
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -207,11 +208,10 @@ func isConfigOrLockFile(path string) bool {
 	if strings.EqualFold(base, "dockerfile") {
 		return true
 	}
-
-	// Special case: Makefile (case-insensitive exact basename match only)
-	if strings.EqualFold(base, "makefile") {
-		return true
-	}
+	// #588: Makefile intentionally NOT treated as a config/lock file here —
+	// it is the verification vehicle itself (make test). Both Pattern 1's
+	// exemption and Pattern 3's blanket pass-through let tampered Makefiles
+	// through; Pattern 3 now content-analyzes it (hasMakefileTampering).
 
 	configSuffixes := []string{
 		".toml", ".yaml", ".yml", ".json", ".ini", ".cfg",
@@ -243,6 +243,122 @@ func isCIConfigPath(path string) bool {
 			if base == pattern {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+// makefileNoOpCommands are command bodies that turn a target into a no-op.
+var makefileNoOpCommands = []string{"echo", "true", "exit 0", "exit", ":", "pass", "printf ''", "printf \"\"", "@:", "@true", "@echo"}
+
+// hasMakefileTampering reports whether a Makefile's build/test verification
+// targets were neutered: a test target whose commands are all no-ops, or a
+// build target surviving while the test target was deleted (or commented
+// out) entirely. This is the partial detection the ciConfigFiles entry
+// "Makefile": false always promised (#588 Bug 2) — previously the comment
+// existed but no Makefile content analysis did, so `sed -i 's/go test/echo
+// ok/' Makefile` passed silently while both patterns waved it through.
+// Unreadable files return false (never warn on I/O errors).
+func hasMakefileTampering(path string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	return hasMakefileTamperingContent(string(data))
+}
+
+// makefileNoOpPrefixes are command prefixes that turn a target into a
+// no-op when they are the ONLY command shape present (echo/printf with any
+// arguments still produce no verification).
+var makefileNoOpPrefixes = []string{"echo", "true", "exit 0", "exit", ":", "pass", "printf", "@echo", "@true", "@exit", "@pass", "@printf", "@:", "-echo", "-true", "-exit", "-pass", "-printf"}
+
+// hasMakefileTamperingContent implements the Makefile analysis over raw
+// content (split from the path-taking wrapper so tests can exercise the
+// logic directly).
+func hasMakefileTamperingContent(content string) bool {
+	lines := strings.Split(content, "\n")
+	targets := map[string][]string{} // target name -> command lines
+	var order []string
+	cur := ""
+	for _, ln := range lines {
+		switch {
+		case strings.HasPrefix(ln, "\t") && cur != "":
+			targets[cur] = append(targets[cur], strings.TrimSpace(ln))
+		case strings.HasPrefix(ln, "#") || strings.TrimSpace(ln) == "":
+			// comments/blank lines — a commented-out "#test:" is absence
+		default:
+			// rule head: "name: deps" (possibly with := assignment)
+			head := ln
+			if idx := strings.Index(head, ":"); idx > 0 {
+				name := strings.TrimSpace(head[:idx])
+				if strings.HasSuffix(name, "=") || strings.Contains(head[idx:], ":=") {
+					cur = "" // variable assignment, not a target
+					continue
+				}
+				cur = name
+				targets[cur] = nil
+				order = append(order, cur)
+			} else {
+				cur = ""
+			}
+		}
+	}
+	isNoOp := func(cmd string) bool {
+		body := strings.TrimSpace(cmd)
+		body = strings.TrimPrefix(body, "@")
+		body = strings.TrimPrefix(body, "-")
+		body = strings.TrimSpace(body)
+		for _, prefix := range makefileNoOpPrefixes {
+			prefix = strings.TrimPrefix(strings.TrimPrefix(prefix, "@"), "-")
+			if body == prefix || strings.HasPrefix(body, prefix+" ") {
+				return true
+			}
+		}
+		return false
+	}
+	_ = order
+	for name, cmds := range targets {
+		isTestTarget := name == "test" || name == "check" || strings.HasSuffix(name, "-test") || name == "verify"
+		isBuildTarget := name == "build" || name == "all"
+		if !isTestTarget && !isBuildTarget {
+			continue
+		}
+		if len(cmds) == 0 {
+			// test/build target exists with no commands at all — nothing to run
+			return true
+		}
+		allNoOp := true
+		for _, c := range cmds {
+			if !isNoOp(c) {
+				allNoOp = false
+				break
+			}
+		}
+		// For build targets only flag pure no-op shape: "@echo 'build ok'"
+		// replacing a real build is tampering; normal builds carry a real
+		// command so this stays specific.
+		if allNoOp {
+			return true
+		}
+	}
+	// test target deleted while build survives
+	hasBuild := false
+	for name := range targets {
+		if name == "build" || name == "all" {
+			hasBuild = true
+		}
+	}
+	hasTest := false
+	for name := range targets {
+		if name == "test" || name == "check" || strings.HasSuffix(name, "-test") || name == "verify" {
+			hasTest = true
+		}
+	}
+	if hasBuild && !hasTest {
+		// A commented-out test target ("# test:") is a deliberate disable,
+		// not tampering — distinguish deletion from commenting.
+		if !strings.Contains(content, "# test:") && !strings.Contains(content, "#test:") {
+			return true
 		}
 	}
 	return false
@@ -479,13 +595,26 @@ func (a *Agent) checkSpecGaming(stats *RunStats, userPrompt string) string {
 	}
 
 	if len(testFiles) > 0 && len(sourceFiles) == 0 && !isTestWritingTask(userPrompt) {
-		// Only test files were edited -- check if corresponding source exists.
-		// Exempted when the task itself is to write/update tests (#544): the
-		// reviewer's own run hit this while legitimately writing tests.
-		warnings = append(warnings, fmt.Sprintf(
-			"Only test files were modified (%s) but no source files. "+
-				"Ensure you are fixing the actual code, not just modifying tests to pass.",
-			strings.Join(testFiles, ", ")))
+		// Only test files were edited -- check if corresponding source exists
+		// (#588 Bug 4: this comment always promised the check but it was never
+		// wired; stripTestSuffix was repo-wide dead code. If the stripped
+		// source file already exists on disk, adding/updating its test is a
+		// normal change, not gaming.)
+		sourceExists := false
+		for _, tf := range testFiles {
+			if src := stripTestSuffix(tf); src != tf {
+				if _, err := os.Stat(src); err == nil {
+					sourceExists = true
+					break
+				}
+			}
+		}
+		if !sourceExists {
+			warnings = append(warnings, fmt.Sprintf(
+				"Only test files were modified (%s) but no source files. "+
+					"Ensure you are fixing the actual code, not just modifying tests to pass.",
+				strings.Join(testFiles, ", ")))
+		}
 	}
 
 	// Pattern 2: Skip markers detected in commands
@@ -503,6 +632,16 @@ func (a *Agent) checkSpecGaming(stats *RunStats, userPrompt string) string {
 					"Verification configuration file '%s' was modified during a non-CI task. "+
 						"Ensure this change is necessary for the task, not to suppress test failures.", f))
 				break // one warning is enough
+			}
+			// #588 Bug 2: Makefile gets content analysis instead of a blanket
+			// pass ("Makefile": false in ciConfigFiles) — the detector's founding
+			// threat model (METR reward hacking: tamper `make test` into a no-op)
+			// was 100% missed while the L104 comment claimed partial handling.
+			if strings.EqualFold(filepath.Base(f), "makefile") && hasMakefileTampering(f) {
+				warnings = append(warnings, fmt.Sprintf(
+					"Makefile verification target '%s' appears neutered (no-op commands or deleted test target). "+
+						"Ensure the verification still actually runs the tests.", f))
+				break
 			}
 		}
 	}

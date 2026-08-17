@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"strings"
 	"testing"
 )
 
@@ -127,9 +126,9 @@ test:
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Test the makefile tampering detection logic
-			got := hasMakefileTampering(tt.makefile)
+			got := hasMakefileTamperingContent(tt.makefile)
 			if got != tt.want {
-				t.Errorf("hasMakefileTampering() = %v, want %v", got, tt.want)
+				t.Errorf("hasMakefileTamperingContent() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -341,7 +340,9 @@ func TestIssue588_Bug5_ConfigSuffixes(t *testing.T) {
 		{"dockerfile", true},
 		{"Dockerfile.prod", false},
 		{"mydockerfile", false},
-		{"Makefile", true},
+		// #588: Makefile is the verification vehicle, not a config file —
+		// Pattern 1 must not exempt it; Pattern 3 content-analyzes instead.
+		{"Makefile", false},
 		{"Cargo.toml", true},
 		{"config.yaml", true},
 		{"go.sum", true},
@@ -409,75 +410,4 @@ func TestIssue588_Bug2_MakefileCIConfigPath(t *testing.T) {
 			}
 		})
 	}
-}
-
-// Helper: hasMakefileTampering checks if build/test targets were replaced with no-ops
-func hasMakefileTampering(content string) bool {
-	// Parse targets and their commands
-	targets := make(map[string][]string)
-	lines := strings.Split(content, "\n")
-	var currentTarget string
-
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
-			continue
-		}
-
-		if strings.HasSuffix(trimmed, ":") && !strings.HasPrefix(trimmed, "\t") {
-			// New target
-			currentTarget = strings.TrimSuffix(trimmed, ":")
-			targets[currentTarget] = []string{}
-		} else if currentTarget != "" && (strings.HasPrefix(line, "\t") || strings.HasPrefix(line, " ")) {
-			// Command line (preserve original for checking)
-			targets[currentTarget] = append(targets[currentTarget], line)
-		}
-	}
-
-	// Additional check: if "build" target exists but "test" target doesn't,
-	// flag as potential test deletion - unless it was merely commented out
-	// (disabled) rather than deleted.
-	if _, hasBuild := targets["build"]; hasBuild {
-		if _, hasTest := targets["test"]; !hasTest {
-			if !strings.Contains(content, "# test:") && !strings.Contains(content, "#test:") {
-				return true
-			}
-		}
-	}
-
-	// Check test/build targets for no-op replacement tampering
-	for name, commands := range targets {
-		lowerName := strings.ToLower(name)
-		if lowerName != "test" && lowerName != "build" {
-			continue
-		}
-
-		// Empty test/build target = commands stripped = tampering
-		if len(commands) == 0 {
-			return true
-		}
-
-		hasRealCommand := false
-		for _, cmd := range commands {
-			lowerCmd := strings.ToLower(strings.TrimSpace(cmd))
-			// Real commands: anything that's not a pure no-op
-			if !strings.HasPrefix(lowerCmd, "@echo") &&
-				!strings.HasPrefix(lowerCmd, "@true") &&
-				!strings.HasPrefix(lowerCmd, "@exit 0") &&
-				!strings.HasPrefix(lowerCmd, "@pass") &&
-				!strings.HasPrefix(lowerCmd, ":") &&
-				!strings.HasPrefix(lowerCmd, "echo") &&
-				!strings.HasPrefix(lowerCmd, "true") &&
-				!strings.HasPrefix(lowerCmd, "exit 0") &&
-				!strings.HasPrefix(lowerCmd, "pass") {
-				hasRealCommand = true
-				break
-			}
-		}
-		if !hasRealCommand {
-			return true
-		}
-	}
-
-	return false
 }
