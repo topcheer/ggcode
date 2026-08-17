@@ -341,6 +341,10 @@ func RefreshClaudeToken(ctx context.Context, refreshToken string) (*Info, error)
 		return nil, fmt.Errorf("parsing refresh response: %w", err)
 	}
 
+	if tokenResp.AccessToken == "" {
+		return nil, fmt.Errorf("token refresh response missing access_token")
+	}
+
 	expiresIn := tokenResp.ExpiresIn
 	if expiresIn <= 0 {
 		expiresIn = 3600

@@ -392,6 +392,11 @@ func registerAllChecks() {
 		{Name: "tag-balance", Langs: []Language{LangMarkup, LangJSTS}, Run: stringCheckNew(checkTagBalance)},
 		{Name: "delimiter-balance", Run: stringCheckNew(checkDelimiterBalance)},
 
+		// #575: config-syntax — validates JSON/YAML/TOML/XML syntax errors
+		// in config files after writes. Detects malformed configs that would
+		// crash apps at runtime. Fully implemented + unit tested.
+		{Name: "config-syntax", Run: stringCheckNew(configSyntaxCheck)},
+
 		// #516 (R73 census): "hardcoded-path" registered live — the ONLY
 		// zero-known-FP/FN survivor of the 5-detector sa-172 batch (E1: it
 		// already implements the #186/#171 per-instance multiset delta; E2:

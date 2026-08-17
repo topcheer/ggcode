@@ -192,11 +192,14 @@ func TestConfigSyntaxCheck_LargeFile(t *testing.T) {
 
 func TestStripJSONComments_LineComments(t *testing.T) {
 	input := `{
-  // line comment
-  "a": 1,
-  "b": 2 // trailing comment
-}`
-	result := stripJSONComments(input)
+	  // line comment
+	  "a": 1,
+	  "b": 2 // trailing comment
+	}`
+	result, err := stripJSONComments(input)
+	if err != nil {
+		t.Fatalf("stripJSONComments() unexpected error: %v", err)
+	}
 	if warn := validateJSON("test.json", result); warn != "" {
 		t.Errorf("stripped JSONC should be valid, got: %s", warn)
 	}
@@ -204,13 +207,16 @@ func TestStripJSONComments_LineComments(t *testing.T) {
 
 func TestStripJSONComments_BlockComments(t *testing.T) {
 	input := `{
-  /* multi
-     line
-     comment */
-  "a": 1,
-  "b": /* inline */ 2
-}`
-	result := stripJSONComments(input)
+	  /* multi
+	     line
+	     comment */
+	  "a": 1,
+	  "b": /* inline */ 2
+	}`
+	result, err := stripJSONComments(input)
+	if err != nil {
+		t.Fatalf("stripJSONComments() unexpected error: %v", err)
+	}
 	if warn := validateJSON("test.json", result); warn != "" {
 		t.Errorf("stripped JSONC should be valid, got: %s", warn)
 	}
@@ -219,10 +225,13 @@ func TestStripJSONComments_BlockComments(t *testing.T) {
 func TestStripJSONComments_StringWithCommentChars(t *testing.T) {
 	// Comments inside strings should be preserved
 	input := `{
-  "url": "http://example.com", // real comment
-  "regex": "//not a comment"
-}`
-	result := stripJSONComments(input)
+	  "url": "http://example.com", // real comment
+	  "regex": "//not a comment"
+	}`
+	result, err := stripJSONComments(input)
+	if err != nil {
+		t.Fatalf("stripJSONComments() unexpected error: %v", err)
+	}
 	// The string value should be preserved
 	if !strings.Contains(result, "//not a comment") {
 		t.Errorf("comment-like chars inside string should be preserved, got: %s", result)

@@ -93,13 +93,17 @@ func validateJSON(filePath, content string) string {
 // standard JSON parsing. This handles the common .jsonc/.json5 pattern of
 // inline // comments and block /* */ comments.
 func validateJSONC(filePath, content string) string {
-	stripped := stripJSONComments(content)
+	stripped, err := stripJSONComments(content)
+	if err != nil {
+		return formatConfigError(filePath, "JSONC", err)
+	}
 	return validateJSON(filePath, stripped)
 }
 
 // stripJSONComments removes // line comments and /* block comments */ from
 // JSONC/JSON5 content, producing standard JSON suitable for encoding/json.
-func stripJSONComments(s string) string {
+// Returns the stripped JSON and an error if an unclosed block comment is found.
+func stripJSONComments(s string) (string, error) {
 	var b strings.Builder
 	b.Grow(len(s))
 
@@ -142,15 +146,18 @@ func stripJSONComments(s string) string {
 		// Block comment: skip to closing */.
 		if ch == '/' && i+1 < len(s) && s[i+1] == '*' {
 			i += 2
+			foundEnd := false
 			for i+1 < len(s) {
 				if s[i] == '*' && s[i+1] == '/' {
 					i += 2
+					foundEnd = true
 					break
 				}
 				i++
 			}
-			if i >= len(s) {
-				i = len(s)
+			if !foundEnd {
+				// Unclosed block comment - signal error by returning a marker
+				return "", fmt.Errorf("unclosed block comment")
 			}
 			continue
 		}
@@ -158,16 +165,89 @@ func stripJSONComments(s string) string {
 		b.WriteByte(ch)
 		i++
 	}
-	return b.String()
+	return b.String(), nil
 }
 
 // validateYAML parses YAML content and returns a warning on syntax errors.
+// Also checks for duplicate keys in mapping nodes.
 func validateYAML(filePath, content string) string {
+	// First check for duplicate keys by parsing the raw YAML text
+	// yaml.Unmarshal silently merges duplicates, so we need a different approach
+	if dupKeys := findYAMLDuplicateKeys(content); len(dupKeys) > 0 {
+		return fmt.Sprintf("YAML duplicate key(s) in %s: %s — fix before proceeding, "+
+			"this causes data loss (later keys overwrite earlier ones).",
+			filePath, strings.Join(dupKeys, ", "))
+	}
+
 	var node yaml.Node
 	if err := yaml.Unmarshal([]byte(content), &node); err != nil {
 		return formatConfigError(filePath, "YAML", err)
 	}
+
 	return ""
+}
+
+// findYAMLDuplicateKeys scans YAML text for duplicate keys at the same context level.
+// Returns a slice of duplicate key names found.
+// Uses a stack-based approach to track nesting context.
+func findYAMLDuplicateKeys(content string) []string {
+	lines := strings.Split(content, "\n")
+
+	// Stack of maps to track keys at each nesting level
+	// Each level has its own set of keys
+	var stack []map[string]struct{}
+	stack = append(stack, make(map[string]struct{}))
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue // Skip empty lines and comments
+		}
+
+		// Count leading spaces to determine indentation level
+		indent := 0
+		for i := 0; i < len(line) && line[i] == ' '; i++ {
+			indent++
+		}
+
+		// Adjust stack depth based on indentation
+		// Assuming 2 spaces per indent level (YAML convention)
+		depth := indent / 2
+		for len(stack) > depth+1 {
+			stack = stack[:len(stack)-1] // Pop to go up
+		}
+		for len(stack) < depth+1 {
+			stack = append(stack, make(map[string]struct{})) // Push to go down
+		}
+
+		// Skip list items
+		if strings.HasPrefix(trimmed, "-") || strings.HasPrefix(trimmed, "[") {
+			continue
+		}
+
+		// Find the first colon
+		colonIdx := strings.Index(trimmed, ":")
+		if colonIdx <= 0 {
+			continue // No key:value pair on this line
+		}
+
+		// Extract the key (everything before the first colon)
+		key := strings.TrimSpace(trimmed[:colonIdx])
+
+		// Skip if key starts with special chars (not a valid YAML key)
+		if key == "" || strings.HasPrefix(key, "\"") || strings.HasPrefix(key, "'") {
+			continue
+		}
+
+		// Check for duplicate at the current nesting level
+		currentLevel := stack[len(stack)-1]
+		if _, exists := currentLevel[key]; exists {
+			return []string{key}
+		}
+		currentLevel[key] = struct{}{}
+	}
+
+	return nil
 }
 
 // validateTOML parses TOML content and returns a warning on syntax errors.

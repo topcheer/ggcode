@@ -130,6 +130,11 @@ func (s *Store) HasUsableToken(providerID string) (bool, error) {
 		return false, nil
 	}
 	if !info.ExpiresAt.IsZero() && time.Now().After(info.ExpiresAt) {
+		// Add 30s clock skew tolerance - if token expired less than 30s ago,
+		// consider it still valid to avoid race conditions at the exact expiration moment
+		if time.Now().Sub(info.ExpiresAt) < 30*time.Second {
+			return true, nil
+		}
 		return false, nil
 	}
 	return true, nil
