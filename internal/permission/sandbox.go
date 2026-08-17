@@ -4,11 +4,18 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/topcheer/ggcode/internal/debug"
 )
 
 // PathSandbox restricts file operations to allowed directories.
 type PathSandbox struct {
 	allowedDirs []string
+	// getwdFailed records that the cwd fallback could not be established at
+	// construction time (os.Getwd error, e.g. deleted cwd on Linux). The
+	// sandbox then fails closed instead of silently allowing everything
+	// (#573-F).
+	getwdFailed bool
 }
 
 // NewPathSandbox creates a sandbox with the given allowed directories.
@@ -17,6 +24,11 @@ func NewPathSandbox(allowedDirs []string) *PathSandbox {
 	if len(allowedDirs) == 0 {
 		if wd, err := os.Getwd(); err == nil {
 			allowedDirs = []string{wd}
+		} else {
+			// #573-F: an empty dir list makes Allowed() fail open with no
+			// trace. Record the failure and fail closed instead.
+			debug.Log("permission", "PathSandbox: os.Getwd failed (%v); sandbox will fail closed", err)
+			return &PathSandbox{getwdFailed: true}
 		}
 	}
 	// Normalize paths (resolve symlinks like /tmp -> /private/tmp on macOS)
@@ -78,6 +90,12 @@ func resolvePath(path string) string {
 // It resolves symlinks to prevent sandbox escapes.
 func (s *PathSandbox) Allowed(path string) bool {
 	if len(s.allowedDirs) == 0 {
+		if s.getwdFailed {
+			// #573-F: fail closed — the sandbox could not be established, so
+			// silently allowing all paths would be an invisible security hole.
+			debug.Log("permission", "PathSandbox: denying %q — sandbox unavailable (os.Getwd failed)", path)
+			return false
+		}
 		return true // no restrictions
 	}
 

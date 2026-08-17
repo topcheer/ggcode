@@ -52,13 +52,25 @@ type dangerPattern struct {
 	reason string
 }
 
+// rmCmdAnchor matches positions where "rm" begins a command: at the start of
+// the command line, after a shell separator (; | & newline ( ` " '), or after
+// a common command wrapper (sudo/doas/xargs/nohup/env/nice). It replaces \b
+// word-boundary matching for the workflow-level (Medium) rm patterns, which
+// false-positived on subcommand words like "git rm -f" — a routine daily
+// workflow hard-Denied in auto mode (#573-E) — while still catching chained
+// forms like "make && rm -rf build" and long options (--force/--recursive).
+// The Critical rm-root patterns stay \b-anchored anywhere in the command:
+// deleting / is never a legitimate argument position, and canaries like
+// `echo 'rm -rf /'` must keep matching.
+const rmCmdAnchor = `(?:^|[|;&\n` + "`" + `("']\s*|(?:sudo|doas|xargs|nohup|env|nice)\s+)`
+
 // NewDangerousDetector creates a detector with default dangerous patterns.
 func NewDangerousDetector() *DangerousDetector {
 	d := &DangerousDetector{}
 	d.patterns = []dangerPattern{
 		// Critical: destructive commands (Unix)
-		{DangerCritical, regexp.MustCompile(`(?i)\brm\s+(-[a-zA-Z]*f[a-zA-Z]*\s+)?/\s*$`), "rm -rf / would delete the entire filesystem"},
-		{DangerCritical, regexp.MustCompile(`(?i)\brm\s+(-[a-zA-Z]*f[a-zA-Z]*\s+)?/\*`), "rm -rf /* would delete the entire filesystem"},
+		{DangerCritical, regexp.MustCompile(`(?i)\brm\s+(?:-[a-zA-Z]*f[a-zA-Z]*\s+)?/\s*$`), "rm -rf / would delete the entire filesystem"},
+		{DangerCritical, regexp.MustCompile(`(?i)\brm\s+(?:-[a-zA-Z]*f[a-zA-Z]*\s+)?/\*`), "rm -rf /* would delete the entire filesystem"},
 		{DangerCritical, regexp.MustCompile(`(?i)\bmkfs\b`), "mkfs would format a disk"},
 		{DangerCritical, regexp.MustCompile(`(?i)\bdd\s+.*\bif=/dev/`), "dd with device input could destroy data"},
 		{DangerCritical, regexp.MustCompile(`(?i)\bshred\b`), "shred securely deletes files"},
@@ -94,8 +106,8 @@ func NewDangerousDetector() *DangerousDetector {
 		{DangerHigh, regexp.MustCompile(`(?i)Set-ItemProperty.*HKLM:`), "modifying registry machine settings"},
 
 		// Medium: potentially destructive (Unix)
-		{DangerMedium, regexp.MustCompile(`(?i)\brm\s+(-[a-zA-Z]*r[a-zA-Z]*\s+).*\*`), "recursive rm with wildcard"},
-		{DangerMedium, regexp.MustCompile(`(?i)\brm\s+(-[a-zA-Z]*f[a-zA-Z]*\s+)`), "force rm without confirmation"},
+		{DangerMedium, regexp.MustCompile(`(?i)` + rmCmdAnchor + `rm\s+(?:-[a-zA-Z]*r[a-zA-Z]*(?:\s|$)|--recursive(?:\s|$)).*\*`), "recursive rm with wildcard"},
+		{DangerMedium, regexp.MustCompile(`(?i)` + rmCmdAnchor + `rm\s+(?:-[a-zA-Z]*f[a-zA-Z]*(?:\s|$)|--force(?:\s|$))`), "force rm without confirmation"},
 		{DangerMedium, regexp.MustCompile(`(?i)\bsudo\b`), "running command with elevated privileges"},
 		{DangerMedium, regexp.MustCompile(`(?i)\bcurl\b.*\|\s*bash\b`), "piping remote script to bash"},
 		{DangerMedium, regexp.MustCompile(`(?i)\bwget\b.*\|\s*sh\b`), "piping remote script to shell"},

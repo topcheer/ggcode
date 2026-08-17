@@ -74,6 +74,21 @@ func (rs *CommandRuleSet) Check(command string) (Decision, bool) {
 			return Allow, true
 		}
 	}
+	// #573-D: env-prefixed commands ("BAR=1 make build") should match rules
+	// saved for the bare command ("make*"); without this the always-allow for
+	// env-prefixed invocations structurally never fired.
+	if stripped := stripLeadingEnvAssignments(command); stripped != "" && stripped != command {
+		for _, re := range rs.deny {
+			if re.MatchString(stripped) {
+				return Deny, true
+			}
+		}
+		for _, re := range rs.allow {
+			if re.MatchString(stripped) {
+				return Allow, true
+			}
+		}
+	}
 	return Ask, false
 }
 
@@ -221,8 +236,18 @@ func compileCommandPattern(pattern string) (*regexp.Regexp, error) {
 			sb.WriteRune(ch)
 		}
 	}
-	sb.WriteString("$") // anchor at end — without this, 'git status' would
-	// match 'git status; rm -rf /' (command chaining injection)
+	if strings.Contains(pattern, "*") {
+		sb.WriteString("$") // anchor at end — without this, 'git status' would
+		// match 'git status; rm -rf /' (command chaining injection)
+	} else {
+		// #573-A: no wildcard — the documented contract (see examples above)
+		// is that "go build" matches "go build ./...": a prefix of further
+		// arguments, never a prefix of a chained command. Require
+		// end-of-string or an argument boundary (space/tab), and keep the same
+		// control-character exclusion as the wildcard so chaining cannot ride
+		// the rule ("go build; rm -rf /" must not match).
+		sb.WriteString(`(?:[ \t][^;|&` + "`" + `$()<>\n\r\\]*)?$`)
+	}
 	return regexp.Compile(sb.String())
 }
 
@@ -243,19 +268,16 @@ func (e *patternError) Error() string { return e.msg }
 //	"go build -tags goolm ./..." → "go build*"
 //	"make"             → "make*"
 //	"ls -la"           → "ls*"
+//	`FOO="a b" make`   → "make*" (quote-aware env stripping, #573-D)
 func CommandPrefixToPattern(command string) string {
 	command = strings.TrimSpace(command)
 	if command == "" {
 		return ""
 	}
-	// Remove leading env vars like "FOO=bar"
-	for strings.HasPrefix(command, "$") || (len(command) > 0 && (command[0] >= 'A' && command[0] <= 'Z') && strings.Contains(command[:min(len(command), 50)], "=")) {
-		if idx := strings.IndexByte(command, ' '); idx > 0 {
-			command = strings.TrimSpace(command[idx+1:])
-		} else {
-			break
-		}
-	}
+	// Remove leading env var assignments like "FOO=bar" or `FOO="a b"`
+	// (#573-D: the old space-split produced garbage patterns for quoted
+	// values containing spaces).
+	command = stripLeadingEnvAssignments(command)
 	tokens := strings.Fields(command)
 	if len(tokens) == 0 {
 		return ""
@@ -267,6 +289,80 @@ func CommandPrefixToPattern(command string) string {
 		prefix = tokens[0] + " " + tokens[1]
 	}
 	return prefix + "*"
+}
+
+// stripLeadingEnvAssignments removes leading environment variable
+// assignments (NAME=VALUE, $VAR) from a command string. VALUE may be
+// single- or double-quoted with embedded whitespace (#573-D).
+func stripLeadingEnvAssignments(command string) string {
+	for {
+		command = strings.TrimLeft(command, " \t")
+		if command == "" {
+			return ""
+		}
+		if command[0] == '$' {
+			if idx := strings.IndexAny(command, " \t"); idx > 0 {
+				command = command[idx+1:]
+				continue
+			}
+			return command
+		}
+		eq := strings.IndexByte(command, '=')
+		if eq <= 0 {
+			return command
+		}
+		if !isValidEnvName(command[:eq]) {
+			return command
+		}
+		rest := command[eq+1:]
+		if rest == "" {
+			return ""
+		}
+		switch rest[0] {
+		case '"', '\'':
+			q := rest[0]
+			end := strings.IndexByte(rest[1:], q)
+			if end < 0 {
+				// Unterminated quote — not ours to parse; treat as command.
+				return command
+			}
+			after := rest[end+2:]
+			if after == "" {
+				return ""
+			}
+			if after[0] == ' ' || after[0] == '\t' {
+				command = after
+				continue
+			}
+			return command
+		default:
+			idx := strings.IndexAny(rest, " \t")
+			if idx < 0 {
+				return ""
+			}
+			command = rest[idx+1:]
+			continue
+		}
+	}
+}
+
+// isValidEnvName reports whether s is a valid shell env var name
+// ([A-Za-z_][A-Za-z0-9_]*).
+func isValidEnvName(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c == '_':
+		case c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z':
+		case c >= '0' && c <= '9' && i > 0:
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // isCommonTwoWordPrefix returns true if the two-word combination is a common

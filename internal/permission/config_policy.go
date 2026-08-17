@@ -3,6 +3,7 @@ package permission
 import (
 	"encoding/json"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 
@@ -101,6 +102,22 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 
+	// #573-B: deny rules are mode-independent. They were previously consulted
+	// only in the Supervised branch, so Bypass/Autopilot/Auto returned Allow for
+	// commands the user explicitly denied (e.g. deny "npm run boom"). Deny is
+	// the strongest user intent (cmd_rules.go: deny patterns always take
+	// precedence) and must win in every mode.
+	if isCommandTool(toolName) {
+		if cmd, ok := extractCommand(input); ok && cmd != "" {
+			if rs := p.cmdRules; rs != nil {
+				if d, matched := rs.Check(cmd); matched && d == Deny {
+					debug.Log("permission", "command denied by deny rule (mode-independent)")
+					return Deny, nil
+				}
+			}
+		}
+	}
+
 	// Mode-specific handling
 	switch p.mode {
 	case BypassMode, AutopilotMode:
@@ -118,6 +135,19 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 				if p.networkDetector && IsNetworkExfiltrate(cmd) {
 					debug.Log("permission", "network exfiltration blocked in bypass mode")
 					return Ask, nil
+				}
+				// #573-C: redirection targets are file writes — hold them to the
+				// same bar as write tools (out-of-sandbox or sensitive path →
+				// Ask). Without this, `> ~/.ssh/authorized_keys` (High) slipped
+				// through because bypass only gates ≥Critical patterns and the
+				// file-tool sandbox fallback below never sees shell redirects —
+				// the classic prompt-injection persistence path.
+				for _, tgt := range extractRedirectTargets(cmd) {
+					resolved := expandTilde(tgt)
+					if !p.sandbox.Allowed(resolved) || isSensitivePath(resolved) {
+						debug.Log("permission", "redirect to out-of-sandbox/sensitive path blocked in bypass mode")
+						return Ask, nil
+					}
 				}
 			}
 		}
@@ -365,7 +395,11 @@ func (p *ConfigPolicy) GetDecision(toolName string) Decision {
 }
 
 // isSensitivePath returns true for paths that are system-critical or user-config.
+// Comparison is case-insensitive on platforms with case-insensitive filesystems
+// (macOS APFS, Windows) so `/Users/zhanjU/.backdoorrc` cannot dodge the check
+// by flipping case (#573-G); Linux keeps byte-exact comparison.
 func isSensitivePath(path string) bool {
+	path = filepath.Clean(path)
 	home := config.HomeDir()
 	sensitiveFiles := []string{
 		".bashrc", ".bash_profile", ".zshrc", ".zprofile", ".profile",
@@ -379,13 +413,13 @@ func isSensitivePath(path string) bool {
 		"keys.env", ".env",
 	}
 	for _, f := range sensitiveFiles {
-		if strings.HasSuffix(path, f) || path == f {
+		if pathHasSuffixFold(path, f) {
 			return true
 		}
 	}
 	// .env files anywhere in the project (contain secrets)
 	base := filepath.Base(path)
-	if base == ".env" || strings.HasPrefix(base, ".env.") {
+	if pathEqualFold(base, ".env") || pathHasPrefixFold(base, ".env.") {
 		return true
 	}
 	// Files containing credentials/secrets/tokens in their name
@@ -394,14 +428,63 @@ func isSensitivePath(path string) bool {
 		return true
 	}
 	// Writing directly to $HOME root (e.g., ~/.somefile where somefile is not a known app)
-	if strings.HasPrefix(path, home+"/") && !strings.Contains(strings.TrimPrefix(path, home+"/"), "/") {
-		// Single file directly in home dir - could be sensitive
-		base := strings.TrimPrefix(path, home+"/")
-		if strings.HasPrefix(base, ".") && len(base) > 1 {
-			return true
+	if home != "" && pathHasPrefixFold(path, home+"/") {
+		rest := path[len(home)+1:]
+		if !strings.Contains(rest, "/") {
+			// Single file directly in home dir - could be sensitive
+			if strings.HasPrefix(rest, ".") && len(rest) > 1 {
+				return true
+			}
 		}
 	}
 	return false
+}
+
+// pathFoldActive reports whether the current platform's filesystem compares
+// paths case-insensitively by default (macOS APFS/HFS+, Windows NTFS).
+func pathFoldActive() bool {
+	switch runtime.GOOS {
+	case "darwin", "windows":
+		return true
+	}
+	return false
+}
+
+// asciiEqualFold compares two strings using ASCII case folding only. Unicode
+// case folding (strings.EqualFold) is avoided because it can fold runes of
+// different byte lengths, which is wrong for path components.
+func asciiEqualFold(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := 0; i < len(a); i++ {
+		ca, cb := a[i], b[i]
+		if 'A' <= ca && ca <= 'Z' {
+			ca += 'a' - 'A'
+		}
+		if 'A' <= cb && cb <= 'Z' {
+			cb += 'a' - 'A'
+		}
+		if ca != cb {
+			return false
+		}
+	}
+	return true
+}
+
+func pathEqualFold(a, b string) bool {
+	if pathFoldActive() {
+		return asciiEqualFold(a, b)
+	}
+	return a == b
+}
+
+func pathHasPrefixFold(s, prefix string) bool {
+	return len(s) >= len(prefix) && pathEqualFold(s[:len(prefix)], prefix)
+}
+
+func pathHasSuffixFold(s, suffix string) bool {
+	return len(s) >= len(suffix) && pathEqualFold(s[len(s)-len(suffix):], suffix)
 }
 
 func isFileTool(name string) bool {
@@ -510,6 +593,116 @@ func extractCommand(input json.RawMessage) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// extractRedirectTargets returns file paths a shell command writes to via
+// output redirection (> and >>), including fd-prefixed forms (2>, &>). Used
+// to give command tools the same sensitive-path / out-of-sandbox gating that
+// file tools get (#573-C). Quoted sections are skipped so string literals
+// containing '>' don't fool the scanner; fd duplication (2>&1), process
+// substitution (>(cmd)) and sink devices (/dev/null) are excluded.
+func extractRedirectTargets(cmd string) []string {
+	var targets []string
+	var quote rune
+	runes := []rune(cmd)
+	for i := 0; i < len(runes); i++ {
+		c := runes[i]
+		if quote != 0 {
+			if c == quote {
+				quote = 0
+			}
+			continue
+		}
+		if c == '\'' || c == '"' {
+			quote = c
+			continue
+		}
+		if c != '>' {
+			continue
+		}
+		// Measure the '>' run (>, >>); longer runs are not redirections.
+		j := i
+		for j < len(runes) && runes[j] == '>' {
+			j++
+		}
+		if j-i > 2 {
+			i = j - 1
+			continue
+		}
+		if tok := scanRedirectToken(runes, j); tok != "" {
+			targets = append(targets, tok)
+		}
+		i = j - 1
+	}
+	return targets
+}
+
+// scanRedirectToken reads the target token following a redirection operator
+// that ends at index opEnd. It returns the unquoted file path, or "" when the
+// token is rejected: missing, fd duplication (2>&1), process substitution
+// (>(cmd)), non-path punctuation, or a harmless device sink (/dev/null).
+func scanRedirectToken(runes []rune, opEnd int) string {
+	k := opEnd
+	for k < len(runes) && (runes[k] == ' ' || runes[k] == '\t') {
+		k++
+	}
+	start := k
+	for k < len(runes) && !isRedirectDelim(runes[k]) {
+		k++
+	}
+	if k == start {
+		return ""
+	}
+	tok := unquoteToken(string(runes[start:k]))
+	if tok == "" {
+		return ""
+	}
+	switch tok[0] {
+	case '&', '(', ')', '|':
+		return ""
+	}
+	if isDevSink(tok) {
+		return ""
+	}
+	return tok
+}
+
+func isRedirectDelim(c rune) bool {
+	switch c {
+	case ' ', '\t', '\n', '\r', ';', '|', '&', '(', ')', '<', '>':
+		return true
+	}
+	return false
+}
+
+func unquoteToken(tok string) string {
+	if len(tok) >= 2 {
+		if (tok[0] == '"' && tok[len(tok)-1] == '"') || (tok[0] == '\'' && tok[len(tok)-1] == '\'') {
+			return tok[1 : len(tok)-1]
+		}
+	}
+	return tok
+}
+
+// isDevSink reports whether a redirect target is a harmless device sink.
+func isDevSink(path string) bool {
+	switch path {
+	case "/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty", "/dev/zero":
+		return true
+	}
+	return false
+}
+
+// expandTilde expands a leading ~ to the user's home directory so sandbox
+// and sensitive-path checks judge the real target (#573-C).
+func expandTilde(path string) string {
+	if path == "~" {
+		return config.HomeDir()
+	}
+	if strings.HasPrefix(path, "~/") {
+		return filepath.Join(config.HomeDir(), path[2:])
+	}
+	return path
 }
 
 func newOptionalPathSandbox(allowedDirs []string) *PathSandbox {
