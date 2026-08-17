@@ -63,6 +63,23 @@ func TestGUIProcessSurvivesExecuteReturn(t *testing.T) {
 		t.Fatalf("expected GUI launch message, got: %s", res.Content)
 	}
 
+	// Wait for the exec chain (sh -c → code → exec marker) to actually reach
+	// the marker process before starting the kill-window clock. Execute
+	// returns right after cmd.Start() of the direct child, so under system
+	// load the fork/exec chain can take longer than expected and race the
+	// pgrep below without this synchronization (observed ~1/6 flake rate).
+	// If the marker never appears at all, the GUI launch chain is broken.
+	appearDeadline := time.Now().Add(3 * time.Second)
+	for {
+		if _, err := exec.Command("pgrep", "-f", marker).CombinedOutput(); err == nil {
+			break
+		}
+		if time.Now().After(appearDeadline) {
+			t.Fatal("marker process never appeared — GUI launch chain failed (issue #568)")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
 	// Give the old kill window (SIGTERM→100ms→SIGKILL after Execute returned)
 	// plenty of time to elapse, then verify the sleeper is still alive.
 	time.Sleep(400 * time.Millisecond)
