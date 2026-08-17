@@ -264,10 +264,10 @@ func (c *Client) Initialize(ctx context.Context) (*InitializeResult, error) {
 			ListChanged bool `json:"listChanged,omitempty"`
 		}{ListChanged: true},
 	}
-	if c.samplingHandler != nil {
+	if c.samplingHandlerLocked() != nil {
 		caps.Sampling = &struct{}{}
 	}
-	if c.elicitationHandler != nil {
+	if c.elicitationHandlerLocked() != nil {
 		caps.Elicitation = &struct{}{}
 	}
 	params := InitializeParams{
@@ -457,6 +457,13 @@ func (c *Client) Close() error {
 	c.mu.Lock()
 	if c.closed.Load() {
 		c.mu.Unlock()
+		// #643: closed may have been set by procWatch when the stdio server
+		// process exited unexpectedly — that path never runs Abort(), so the
+		// notification dispatch worker is still parked on notificationDone.
+		// Abort() is idempotent (abortOnce), so running it here guarantees the
+		// cleanup block (close(notificationDone) etc.) executes and the worker
+		// goroutine exits instead of leaking on every crash-reconnect cycle.
+		c.Abort()
 		return nil
 	}
 	c.closed.Store(true)
@@ -574,6 +581,38 @@ const mcpRequestTimeout = 120 * time.Second
 // arbitrary Content-Length header; without a cap, make() either OOMs the
 // process or panics (makeslice), leaving sendRequest dead-locked (#182).
 const maxHeaderContentLength = 16 << 20 // 16MB
+
+// maxNDJSONLineLength bounds a single newline-delimited JSON message read by
+// readMessage's NDJSON branch (#643, sister gap of #182). A crashed or
+// malicious stdio server can emit `{` followed by an unbounded stream with no
+// newline; an unbounded ReadBytes would grow the buffer without limit and OOM
+// the client. Aligned with maxHeaderContentLength — far above any legitimate
+// MCP message, and NDJSON is the default stdio framing so this is the main
+// read path.
+const maxNDJSONLineLength = 16 << 20 // 16MB
+
+// readBoundedLine reads one '\n'-terminated line from r, failing once the
+// accumulated line exceeds max bytes (#643). bufio.Reader.ReadBytes has no
+// length limit, so we accumulate ReadSlice chunks and abort as soon as the
+// cap is crossed — the unbounded alternative lets a newline-less attacker
+// stream drive the buffer to OOM.
+func readBoundedLine(r *bufio.Reader, max int) ([]byte, error) {
+	var buf []byte
+	for {
+		chunk, err := r.ReadSlice('\n')
+		buf = append(buf, chunk...)
+		if len(buf) > max {
+			return nil, fmt.Errorf("line exceeds %d bytes (no newline within limit)", max)
+		}
+		if err == bufio.ErrBufferFull {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		return buf, nil
+	}
+}
 
 func (c *Client) sendRequest(ctx context.Context, method string, params interface{}, result interface{}) error {
 	if c.closed.Load() {
@@ -710,21 +749,55 @@ func (c *Client) readResponseWithCancel(ctx context.Context, reqID *ID) (*Respon
 		}
 		return res.resp, res.err
 	case <-ctx.Done():
-		c.Abort()
-		// The read goroutine normally delivers on done right after Abort,
-		// but if it panicked before reaching done <- result (recovered by
-		// safego.Go), a bare <-done would block forever (#182). Bound the
-		// wait so the caller gets the ctx error instead of hanging.
-		select {
-		case res := <-done:
-			if err := ctx.Err(); err != nil {
-				return nil, c.withStderr(err)
+		// #644: a single request's ctx timeout must not tear down the whole
+		// stdio connection while other requests are still in flight — that
+		// kills their healthy in-flight calls and permanently closes the
+		// client. Abort only when we are the last (or only) waiter; otherwise
+		// fail just this request and leave the shared transport alone.
+		if !c.hasOtherWaiters(waiter) {
+			c.Abort()
+			// The read goroutine normally delivers on done right after Abort,
+			// but if it panicked before reaching done <- result (recovered by
+			// safego.Go), a bare <-done would block forever (#182). Bound the
+			// wait so the caller gets the ctx error instead of hanging.
+			select {
+			case res := <-done:
+				if err := ctx.Err(); err != nil {
+					return nil, c.withStderr(err)
+				}
+				return res.resp, res.err
+			case <-time.After(5 * time.Second):
+				return nil, c.withStderr(fmt.Errorf("mcp[%s]: read goroutine did not return after abort: %w", c.name, ctx.Err()))
 			}
-			return res.resp, res.err
-		case <-time.After(5 * time.Second):
-			return nil, c.withStderr(fmt.Errorf("mcp[%s]: read goroutine did not return after abort: %w", c.name, ctx.Err()))
+		}
+		// Other waiters are active: return this request's ctx error now. The
+		// read goroutine still owns readMu and unwinds on its own once the
+		// server responds or the shared connection is torn down later.
+		return nil, c.withStderr(fmt.Errorf("mcp[%s]: request cancelled while %d other request(s) in flight, connection kept: %w",
+			c.name, c.waiterCountExcluding(waiter), ctx.Err()))
+	}
+}
+
+// hasOtherWaiters reports whether any request other than the one owning the
+// self channel still has a registered response waiter (#644). self may be
+// nil (caller has no waiter, e.g. a nil reqID) — then any registered waiter
+// counts as other.
+func (c *Client) hasOtherWaiters(self chan *Response) bool {
+	return c.waiterCountExcluding(self) > 0
+}
+
+// waiterCountExcluding returns the number of registered waiters whose channel
+// differs from self (#644).
+func (c *Client) waiterCountExcluding(self chan *Response) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	n := 0
+	for _, ch := range c.waiters {
+		if ch != self {
+			n++
 		}
 	}
+	return n
 }
 
 // writeMessage serializes the write under c.mu (#480) — all stdin
@@ -943,17 +1016,26 @@ func (c *Client) readWSResponse(ctx context.Context, reqID *ID, waiter chan *Res
 	case res := <-done:
 		return res.resp, res.err
 	case <-ctx.Done():
-		// Abort closes wsConn, unblocking the goroutine parked in ReadMessage
-		// inside wsMu — mirroring the stdio contract that transports are
-		// aborted "without holding c.mu". Bounded wait in case the goroutine
-		// never reaches done (safego-recovered panic, cf. #182).
-		c.Abort()
-		select {
-		case res := <-done:
-			return res.resp, res.err
-		case <-time.After(5 * time.Second):
-			return nil, fmt.Errorf("mcp[%s]: ws read goroutine did not return after abort: %w", c.name, ctx.Err())
+		// #644: same gate as the stdio path — Abort closes wsConn, unblocking
+		// the goroutine parked in ReadMessage inside wsMu, but only when no
+		// other request is still waiting on this shared connection. A single
+		// timed-out request must not kill concurrent healthy ones. Bounded
+		// wait in case the goroutine never reaches done (safego-recovered
+		// panic, cf. #182).
+		if !c.hasOtherWaiters(waiter) {
+			c.Abort()
+			select {
+			case res := <-done:
+				return res.resp, res.err
+			case <-time.After(5 * time.Second):
+				return nil, fmt.Errorf("mcp[%s]: ws read goroutine did not return after abort: %w", c.name, ctx.Err())
+			}
 		}
+		// Other waiters are active: fail only this request, keep the WS
+		// connection; the read goroutine unwinds when the server responds or
+		// the connection is legitimately torn down.
+		return nil, fmt.Errorf("mcp[%s]: ws request cancelled while %d other request(s) in flight, connection kept: %w",
+			c.name, c.waiterCountExcluding(waiter), ctx.Err())
 	}
 }
 
@@ -1488,7 +1570,9 @@ func (c *Client) readMessage(ctx context.Context) (interface{}, error) {
 			}
 			continue
 		case '{':
-			line, err := reader.ReadBytes('\n')
+			// #643: bound the line — ReadBytes grows the buffer without limit and
+			// a newline-less server stream OOMs the client (sister of #182).
+			line, err := readBoundedLine(reader, maxNDJSONLineLength)
 			if err != nil {
 				return nil, c.withStderr(fmt.Errorf("reading message line: %w", err))
 			}
@@ -1600,10 +1684,10 @@ func (c *Client) dispatchServerRequest(req *Request) error {
 // goroutine, so this function returns only setup errors.
 func (c *Client) handleServerRequestAsync(req *Request) error {
 	isSampling := req.Method == "sampling/createMessage"
-	if isSampling && c.samplingHandler == nil {
+	if isSampling && c.samplingHandlerLocked() == nil {
 		return c.writeErrorResponse(req.ID, -32601, "sampling not supported")
 	}
-	if !isSampling && c.elicitationHandler == nil {
+	if !isSampling && c.elicitationHandlerLocked() == nil {
 		return c.writeErrorResponse(req.ID, -32601, "elicitation not supported")
 	}
 	// Bounded dispatch: a server flooding us with interactive requests must
@@ -1648,7 +1732,8 @@ func (c *Client) handleInteractiveRequest(req *Request) error {
 // handleSampling processes a sampling/createMessage request from the MCP server.
 // Servers use this to ask the client to generate an LLM completion on their behalf.
 func (c *Client) handleSampling(req *Request) error {
-	if c.samplingHandler == nil {
+	handler := c.samplingHandlerLocked()
+	if handler == nil {
 		return c.writeErrorResponse(req.ID, -32601, "sampling not supported")
 	}
 
@@ -1662,7 +1747,7 @@ func (c *Client) handleSampling(req *Request) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	result, err := c.samplingHandler(ctx, params)
+	result, err := handler(ctx, params)
 	if err != nil {
 		return c.writeErrorResponse(req.ID, -32603, fmt.Sprintf("sampling failed: %v", err))
 	}
@@ -1672,7 +1757,8 @@ func (c *Client) handleSampling(req *Request) error {
 // handleElicitation processes an elicitation/create request from the MCP server.
 // Servers use this to ask the client to collect structured input from the user.
 func (c *Client) handleElicitation(req *Request) error {
-	if c.elicitationHandler == nil {
+	handler := c.elicitationHandlerLocked()
+	if handler == nil {
 		return c.writeErrorResponse(req.ID, -32601, "elicitation not supported")
 	}
 
@@ -1690,7 +1776,7 @@ func (c *Client) handleElicitation(req *Request) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	result, err := c.elicitationHandler(ctx, params)
+	result, err := handler(ctx, params)
 	if err != nil {
 		return c.writeErrorResponse(req.ID, -32603, fmt.Sprintf("elicitation failed: %v", err))
 	}
@@ -1701,14 +1787,41 @@ func (c *Client) handleElicitation(req *Request) error {
 // When set, the client advertises elicitation capability during initialize.
 // Pass nil to disable elicitation support.
 func (c *Client) SetElicitationHandler(h ElicitationHandler) {
+	// #645: guard with c.mu — the field is read from Initialize and from the
+	// read-loop goroutine (handleServerRequestAsync); an unlocked setter is a
+	// latent race for any caller that does not finish before Start (the
+	// SetNotificationHandler pattern).
+	c.mu.Lock()
 	c.elicitationHandler = h
+	c.mu.Unlock()
 }
 
 // SetSamplingHandler registers a handler for sampling/createMessage requests.
 // When set, the client advertises sampling capability during initialize.
 // Pass nil to disable sampling support.
 func (c *Client) SetSamplingHandler(h SamplingHandler) {
+	// #645: same c.mu guard as SetElicitationHandler.
+	c.mu.Lock()
 	c.samplingHandler = h
+	c.mu.Unlock()
+}
+
+// samplingHandlerLocked snapshots the registered sampling handler under c.mu
+// (#645). Callers that cannot hold c.mu (Initialize builds caps before the
+// request; the read-loop goroutine dispatches server requests) must read the
+// field through this accessor, not directly.
+func (c *Client) samplingHandlerLocked() SamplingHandler {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.samplingHandler
+}
+
+// elicitationHandlerLocked snapshots the registered elicitation handler under
+// c.mu (#645 — companion to samplingHandlerLocked).
+func (c *Client) elicitationHandlerLocked() ElicitationHandler {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.elicitationHandler
 }
 
 func (c *Client) writeResultResponse(id *ID, result interface{}) error {

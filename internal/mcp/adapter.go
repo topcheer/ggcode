@@ -129,6 +129,30 @@ func (t *mcpTool) SetContextFill(fill float64) {
 	t.fillMu.Unlock()
 }
 
+// Clone returns an independent copy of this tool (tool.Cloner, #645).
+// mcpTool holds mutable per-agent state — ContextFill is injected by each
+// agent's guard before every execution (agent_tool.go safeExecute). The tool
+// registry contract (internal/tool/tool.go) says tools with mutable state MUST
+// implement Cloner, otherwise Registry.Clone shares this instance and the main
+// agent's high fill (e.g. 0.75 → 9KB cap) bleeds into concurrent swarm
+// teammates' MCP results — truncation semantics cross agents. The clone starts
+// at fill 0 (unknown → full cap); each agent re-injects its own fill.
+// caller is an interface value copied by value, and toolName/srvName strings
+// are immutable — a shallow struct copy with a fresh mutex is a correct deep
+// copy. schema (json.RawMessage) is read-only by contract (Parameters).
+func (t *mcpTool) Clone() tool.Tool {
+	return &mcpTool{
+		name:     t.name,
+		caller:   t.caller,
+		toolName: t.toolName,
+		desc:     t.desc,
+		schema:   append(json.RawMessage(nil), t.schema...),
+		readOnly: t.readOnly,
+		blocked:  t.blocked,
+		srvName:  t.srvName,
+	}
+}
+
 func (t *mcpTool) Name() string        { return t.name }
 func (t *mcpTool) Description() string { return t.desc }
 func (t *mcpTool) Parameters() json.RawMessage {
