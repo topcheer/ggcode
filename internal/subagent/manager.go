@@ -294,6 +294,15 @@ func (s *SubAgent) setActivity(phase, toolName, args string) {
 	s.lastActivity = time.Now()
 }
 
+// refreshActivity bumps lastActivity without changing the current phase or
+// tool fields. Used for stream events that prove liveness but not a new phase
+// (e.g. tool-argument chunks during a long generation, #620).
+func (s *SubAgent) refreshActivity() {
+	s.mu.Lock()
+	s.lastActivity = time.Now()
+	s.mu.Unlock()
+}
+
 func (s *SubAgent) setToolExecuting(executing bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -388,7 +397,8 @@ type Manager struct {
 	// when the user configures max_concurrent > 5 (#226).
 	maxConcurrent int
 	// cancelAllTimeout is the max time CancelAll waits for each Running sub-agent's
-	// goroutine to actually terminate after context cancellation. Default: 5s.
+	// goroutine to actually terminate after context cancellation. Each agent gets
+	// the full budget (per-agent, not shared — #619). Default: 5s.
 	// Overridable for tests.
 	cancelAllTimeout time.Duration
 	// rootCtx is the lifecycle ctx for sub-agents. It is independent of any
@@ -408,6 +418,12 @@ type Manager struct {
 	shutdownOnce      sync.Once
 	watchdogDone      chan struct{} // closed to stop the watchdog goroutine
 	inactivityTimeout time.Duration // max time without activity before cancelling
+	// semOwners tracks which agent IDs currently hold a semaphore slot (#619).
+	// It lets the manager force-reclaim a slot when its owning goroutine is
+	// stuck in a non-cancellable RunStream: CancelAll's timeout path and the
+	// watchdog drain the token here so new agents are not permanently Pending.
+	// Guarded by m.mu.
+	semOwners map[string]bool
 }
 
 // NewManager creates a Manager with the given config.
@@ -434,6 +450,7 @@ func NewManager(cfg config.SubAgentConfig) *Manager {
 		watchdogDone:      make(chan struct{}),
 		inactivityTimeout: 5 * time.Minute,
 		maxConcurrent:     max,
+		semOwners:         make(map[string]bool),
 	}
 	m.startWatchdog()
 	return m
@@ -478,6 +495,14 @@ func (m *Manager) reapInactiveAgents() {
 	for _, id := range stale {
 		debug.Log("subagent", "watchdog: cancelling stale sub-agent %s (no activity for %v)", id, m.inactivityTimeout)
 		m.Cancel(id)
+		// The cancelled agent's goroutine normally exits on its own and
+		// releases its slot via Run's defer. If it is stuck (RunStream ignores
+		// ctx), reclaim the slot after a grace period so the concurrency slot
+		// does not leak permanently (#619).
+		staleID := id
+		safego.Go("subagent.watchdog.reclaim", func() {
+			m.ensureSlotReclaimed(staleID, m.reclaimGrace())
+		})
 	}
 	// Also purge old terminal agents to bound memory growth
 	m.purgeTerminalAgents()
@@ -715,6 +740,63 @@ func (sa *SubAgent) isGoroutineStarted() bool {
 	return sa.goroutineStarted
 }
 
+// reclaimGrace is how long the watchdog waits after cancelling a stale
+// sub-agent before force-reclaiming its semaphore slot. Matches CancelAll's
+// per-agent termination budget.
+func (m *Manager) reclaimGrace() time.Duration {
+	if m.cancelAllTimeout > 0 {
+		return m.cancelAllTimeout
+	}
+	return cancelAllTimeout
+}
+
+// ensureSlotReclaimed waits up to grace for the agent's goroutine to finish
+// (done closed). If it does not, the agent's semaphore slot is force-reclaimed
+// so a stuck goroutine cannot hold concurrency forever (#619).
+func (m *Manager) ensureSlotReclaimed(id string, grace time.Duration) {
+	sa, ok := m.Get(id)
+	if !ok || sa == nil {
+		return
+	}
+	sa.mu.Lock()
+	done := sa.done
+	started := sa.goroutineStarted
+	sa.mu.Unlock()
+	if !started || done == nil {
+		return
+	}
+	timer := time.NewTimer(grace)
+	defer timer.Stop()
+	select {
+	case <-done:
+	case <-timer.C:
+		if m.forceReclaimSlot(id) {
+			debug.Log("subagent", "watchdog: force-reclaimed semaphore slot of stuck sub-agent %s", id)
+		}
+	}
+}
+
+// forceReclaimSlot drains the semaphore token owned by agent id and clears
+// its ownership so the eventual late releaseSlot call becomes a no-op (#619).
+// Returns true if a slot was reclaimed.
+func (m *Manager) forceReclaimSlot(id string) bool {
+	m.mu.Lock()
+	held := m.semOwners[id]
+	if held {
+		delete(m.semOwners, id)
+	}
+	m.mu.Unlock()
+	if !held {
+		return false
+	}
+	select {
+	case <-m.sem:
+	default:
+		// Token already returned (raced with a normal release); nothing to do.
+	}
+	return true
+}
+
 // CancelAll cancels all pending or running sub-agents, then waits up to
 // cancelAllTimeout for each Running sub-agent's goroutine to actually
 // terminate. Returns the number cancelled.
@@ -735,7 +817,11 @@ func (m *Manager) CancelAll() int {
 	// Cancel() no longer closes done (it lets Complete() do that when the
 	// goroutine actually exits), so we must grab the channels while we can
 	// still distinguish Running (has goroutine) from Pending (no goroutine).
-	var doneChs []<-chan struct{}
+	type doneEntry struct {
+		id string
+		ch <-chan struct{}
+	}
+	var doneChs []doneEntry
 	for id, sa := range m.agents {
 		status := sa.getStatus()
 		if status == StatusPending || status == StatusRunning {
@@ -744,7 +830,7 @@ func (m *Manager) CancelAll() int {
 			// SetCancel() transitions Pending→Running but doesn't start a goroutine;
 			// only Run() sets goroutineStarted=true.
 			if sa.isGoroutineStarted() && sa.done != nil {
-				doneChs = append(doneChs, sa.done)
+				doneChs = append(doneChs, doneEntry{id: id, ch: sa.done})
 			}
 		}
 	}
@@ -758,22 +844,33 @@ func (m *Manager) CancelAll() int {
 	}
 	debug.Log("cancel", "CancelAll: cancelled %d agents, waiting on %d goroutines", cancelled, len(doneChs))
 
-	// Wait for Running agents' goroutines to actually terminate (with timeout).
-	if len(doneChs) > 0 {
+	// Wait for Running agents' goroutines to actually terminate. Each agent
+	// gets its own full timeout budget (#619): a single timer shared across the
+	// loop made the first slow agent eat everyone else's budget. On timeout the
+	// stuck agent's semaphore slot is force-reclaimed so a zombie goroutine
+	// cannot leave new agents permanently Pending (#619).
+	timedOut := 0
+	for _, ent := range doneChs {
 		timer := time.NewTimer(timeout)
-		defer timer.Stop()
-		for _, ch := range doneChs {
-			select {
-			case <-ch:
-				debug.Log("cancel", "CancelAll: goroutine terminated normally")
-			case <-timer.C:
-				// Timed out waiting — the sub-agent's goroutine may still be
-				// finishing. We've already set Status=Cancelled and cancelled
-				// its context, so it will terminate eventually.
-				debug.Log("cancel", "CancelAll: TIMEOUT waiting for goroutine termination")
-				return cancelled
+		select {
+		case <-ent.ch:
+			timer.Stop()
+			debug.Log("cancel", "CancelAll: goroutine %s terminated normally", ent.id)
+		case <-timer.C:
+			timer.Stop()
+			// Timed out waiting — the sub-agent's goroutine may still be
+			// finishing. We've already set Status=Cancelled and cancelled its
+			// context; force-reclaim its slot so concurrency isn't leaked.
+			timedOut++
+			if m.forceReclaimSlot(ent.id) {
+				debug.Log("cancel", "CancelAll: TIMEOUT waiting for %s, force-reclaimed its semaphore slot", ent.id)
 			}
+			// Continue with remaining agents so they still get their budget.
 		}
+	}
+	if timedOut > 0 {
+		debug.Log("cancel", "CancelAll: DONE with %d stuck goroutine(s), cancelled=%d", timedOut, cancelled)
+		return cancelled
 	}
 	debug.Log("cancel", "CancelAll: DONE all goroutines terminated, cancelled=%d", cancelled)
 	return cancelled
@@ -823,16 +920,15 @@ func (m *Manager) Complete(id string, result string, err error) {
 	// Terminal state check: don't overwrite cancelled/completed/failed
 	switch sa.Status {
 	case StatusCancelled, StatusCompleted, StatusFailed:
-		// Backfill the result (#551-B): the runner's cancel/error paths
-		// compute a head+tail truncated partial result BEFORE calling
-		// Complete (runner.go L336-348). When Cancel() won the race and set
-		// the terminal state first, this branch used to return without
-		// writing sa.Result — the partial output of all work done before the
-		// cancel was lost. Backfill only for error/timeout/cancel completions
-		// (which always pass a non-nil err alongside the partial result); a
-		// late *successful* Complete after a user cancel stays dropped,
-		// preserving the TestManagerCompleteAfterCancel semantics.
-		if result != "" && err != nil && sa.Result == "" {
+		// Backfill the result (#551-B, #621): when Cancel() won the race and
+		// set the terminal state first, the runner's Complete still carries the
+		// full output computed before the cancel. Previously only the error
+		// path (err != nil, partial result) was backfilled; a late *successful*
+		// Complete after a user cancel dropped its full result, losing all
+		// completed work. Now any non-empty result is backfilled when sa.Result
+		// is empty; the terminal status and error stay untouched so the parent
+		// still sees the cancellation.
+		if result != "" && sa.Result == "" {
 			sa.Result = result
 		}
 		sa.closeDone()
@@ -1106,8 +1202,36 @@ func (m *Manager) AcquireSemaphore(ctx context.Context) error {
 	}
 }
 
+// acquireSlot is AcquireSemaphore with slot ownership recorded under id so
+// the manager can force-reclaim the slot if this goroutine gets stuck (#619).
+func (m *Manager) acquireSlot(ctx context.Context, id string) error {
+	if err := m.AcquireSemaphore(ctx); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	m.semOwners[id] = true
+	m.mu.Unlock()
+	return nil
+}
+
 // ReleaseSemaphore releases a slot.
 func (m *Manager) ReleaseSemaphore() {
+	<-m.sem
+}
+
+// releaseSlot is ReleaseSemaphore for a named owner. If the slot was already
+// force-reclaimed (stuck goroutine, #619), this is a no-op so the semaphore
+// is not double-drained.
+func (m *Manager) releaseSlot(id string) {
+	m.mu.Lock()
+	held, ok := m.semOwners[id]
+	if ok {
+		delete(m.semOwners, id)
+	}
+	m.mu.Unlock()
+	if !ok || !held {
+		return
+	}
 	<-m.sem
 }
 

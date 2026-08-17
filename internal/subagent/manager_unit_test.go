@@ -364,14 +364,20 @@ func TestManagerCompleteAfterCancel(t *testing.T) {
 	mgr.SetCancel(id, cancel)
 
 	mgr.Cancel(id)
-	mgr.Complete(id, "too late", nil) // should be ignored
+	// The late Complete still backfills its result (#621): a successful
+	// Complete racing a user cancel must not silently drop completed work.
+	// The terminal status and error stay cancelled.
+	mgr.Complete(id, "too late", nil)
 
 	sa, _ := mgr.Get(id)
 	if sa.Status != StatusCancelled {
 		t.Errorf("expected cancelled, got %q", sa.Status)
 	}
-	if sa.Result != "" {
-		t.Errorf("expected empty result after cancel, got %q", sa.Result)
+	if sa.Result != "too late" {
+		t.Errorf("expected backfilled result %q, got %q", "too late", sa.Result)
+	}
+	if sa.Error != context.Canceled {
+		t.Errorf("expected error to stay context.Canceled, got %v", sa.Error)
 	}
 	cancel() // cleanup
 }

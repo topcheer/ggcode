@@ -57,11 +57,11 @@ type RunnerConfig struct {
 // The sub-agent gets its own context manager, tool subset, and provider instance.
 func Run(ctx context.Context, cfg RunnerConfig) {
 	// Acquire concurrency slot
-	if err := cfg.Manager.AcquireSemaphore(ctx); err != nil {
+	if err := cfg.Manager.acquireSlot(ctx, cfg.SubAgentID); err != nil {
 		cfg.Manager.Complete(cfg.SubAgentID, "", fmt.Errorf("failed to acquire slot: %w", err))
 		return
 	}
-	defer cfg.Manager.ReleaseSemaphore()
+	defer cfg.Manager.releaseSlot(cfg.SubAgentID)
 
 	// Panic recovery: ensures Complete() is always called so Wait() never blocks forever.
 	defer func() {
@@ -173,8 +173,11 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 		Detail      string
 	}
 	pendingTools := make(map[string]pendingToolMeta)
-	var unnamedTool pendingToolMeta
-	var hasUnnamedTool bool
+	// #622: FIFO queue for tool calls with no ID. A single slot was
+	// overwritten by a second unnamed call in the same turn, causing both
+	// ToolResults to mismatch (first got the second call's meta, second got a
+	// zero-value meta). FIFO preserves arrival order for pairing.
+	var unnamedTools []pendingToolMeta
 	var textBuf strings.Builder // accumulate text chunks into turn-level events
 	flushText := func() {
 		if textBuf.Len() == 0 {
@@ -226,17 +229,16 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 			if event.Tool.ID != "" {
 				pendingTools[event.Tool.ID] = meta
 			} else {
-				unnamedTool = meta
-				hasUnnamedTool = true
+				unnamedTools = append(unnamedTools, meta)
 			}
 		case provider.StreamEventToolResult:
 			flushText()
 			meta, ok := pendingTools[event.Tool.ID]
 			if ok {
 				delete(pendingTools, event.Tool.ID)
-			} else if event.Tool.ID == "" && hasUnnamedTool {
-				meta = unnamedTool
-				hasUnnamedTool = false
+			} else if event.Tool.ID == "" && len(unnamedTools) > 0 {
+				meta = unnamedTools[0]
+				unnamedTools = unnamedTools[1:]
 			}
 			if summary := subagentToolProgressSummary(meta.Name, event.Result); summary != "" {
 				cfg.Manager.UpdateProgress(cfg.SubAgentID, summary)
@@ -255,8 +257,16 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 				})
 			}
 			cfg.Manager.NotifyToolResult(cfg.SubAgentID, event.Tool.ID, meta.Name, "", "", event.Result, event.IsError)
+		case provider.StreamEventToolCallChunk:
+			// #620: streaming chunks of a large tool-argument payload are
+			// activity too. Without refreshing lastActivity here, a slow
+			// provider streaming >50KB of tool args (no text/reasoning events,
+			// ToolCallDone not yet arrived) was judged stale by the watchdog
+			// and killed mid-generation.
+			if sa, ok := cfg.Manager.Get(cfg.SubAgentID); ok {
+				sa.refreshActivity()
+			}
 		case provider.StreamEventSystem:
-			// Forward system events (retry, compaction) to the main panel
 			// so users see them alongside the main conversation, not just
 			// in the follow panel. Prefix with the agent name for clarity.
 			agentName := cfg.SubAgentID
