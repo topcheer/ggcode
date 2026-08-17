@@ -173,7 +173,9 @@ func TestIssue552E_CleanupDaemonOwnership(t *testing.T) {
 		t.Fatal("REGRESSION: foreground cleanup deleted the background daemon's PID file (#552-E)")
 	}
 
-	// Own PID → file removed.
+	// Own PID → file removed. The previous WritePIDFile holds the lock (#574-D),
+	// so we need to remove the file first to release it.
+	_ = os.Remove(pidPath)
 	if err := WritePIDFile(pidPath, os.Getpid(), "sess", workDir); err != nil {
 		t.Fatal(err)
 	}

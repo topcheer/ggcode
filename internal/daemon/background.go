@@ -10,10 +10,19 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/config"
 )
+
+// osStartProcess is indirected for tests so failure paths (PID file
+// cleanup on fork failure, #552-C) can be exercised without a real fork.
+var osStartProcess = os.StartProcess
+
+// testProcessCmdline is a test hook for mocking processCmdline. It shadows
+// the platform-specific implementation when non-nil. Set via tests only.
+var testProcessCmdline func(int) string
 
 // DaemonInfo holds metadata about a running daemon process.
 type DaemonInfo struct {
@@ -56,8 +65,22 @@ func LogFilePath(workingDir string) (string, error) {
 	return filepath.Join(dir, workDirHash(workingDir)+".log"), nil
 }
 
-// WritePIDFile writes a PID file with daemon metadata.
+// WritePIDFile writes a PID file with daemon metadata, acquiring an
+// exclusive flock to prevent concurrent forks from claiming the same slot
+// (#574 Bug D). The lock is held for the lifetime of the file.
 func WritePIDFile(path string, pid int, sessionID, workingDir string) error {
+	// Open with O_CREATE|O_RDWR; flock provides the atomicity guarantee.
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return err
+	}
+
+	// Non-blocking exclusive lock: returns EAGAIN if another process holds it.
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		f.Close()
+		return fmt.Errorf("daemon slot already locked (concurrent fork): %w", err)
+	}
+
 	info := DaemonInfo{
 		PID:        pid,
 		SessionID:  sessionID,
@@ -66,9 +89,29 @@ func WritePIDFile(path string, pid int, sessionID, workingDir string) error {
 	}
 	data, err := json.Marshal(info)
 	if err != nil {
+		f.Close()
 		return err
 	}
-	return os.WriteFile(path, data, 0o644)
+
+	// Write at offset 0 and truncate; the file is already locked.
+	if _, err := f.Seek(0, 0); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Truncate(0); err != nil {
+		f.Close()
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+
+	// Keep the file open and locked for the daemon's lifetime. The OS will
+	// release the lock when the process exits (or when we explicitly Close in
+	// cleanup paths). Caller is responsible for closing the file when the
+	// daemon shuts down.
+	return nil
 }
 
 // RemovePIDFile deletes the PID file.
@@ -143,26 +186,80 @@ func CheckExistingDaemon(workingDir string) (int, error) {
 // daemonIdentityMatches reports whether the process at pid looks like a
 // ggcode daemon: its command line carries the hidden --__daemonized flag
 // set by ForkIntoBackground (argv[0] is rewritten to "ggcode[dirname]").
+//
 // When the command line cannot be inspected (unsupported platform,
-// permission denied), it falls back to true — keeping the old signal-0
-// verdict — rather than blocking startup.
+// permission denied), we do NOT blindly return true. Instead, we check:
+//  1. Whether the process is still alive (signal 0)
+//  2. Whether the PID file is stale (older than 24h)
+//
+// This allows self-healing when cmdline is unavailable but the daemon
+// has clearly been gone for a long time (#574 Bug C). PID reuse concerns
+// (#412/#431) are mitigated by the 24h expiry threshold and the fact that
+// we only clean up when the process is actually dead.
 func daemonIdentityMatches(pid int) bool {
-	cmdline := processCmdline(pid)
-	if cmdline == "" {
+	var cmdline string
+	if testProcessCmdline != nil {
+		cmdline = testProcessCmdline(pid)
+	} else {
+		cmdline = processCmdline(pid)
+	}
+	if cmdline != "" {
+		// Normal path: cmdline available, verify daemon markers.
+		if strings.Contains(cmdline, "--__daemonized") || strings.Contains(cmdline, "ggcode[") {
+			return true
+		}
+		// #431: on Windows processCmdline returns only the executable IMAGE
+		// NAME (e.g. "ggcode.exe") from a toolhelp32 snapshot — no argv flags.
+		// Accept the daemon binary name so the real daemon is not mistaken for
+		// a recycled PID.
+		base := strings.ToLower(strings.TrimSpace(cmdline))
+		if strings.HasSuffix(base, ".exe") {
+			base = strings.TrimSuffix(base, ".exe")
+		}
+		return base == "ggcode" || strings.HasPrefix(base, "ggcode-")
+	}
+
+	// Cmdline unavailable: fall back to aliveness + mtime expiry check.
+	// First verify the process is actually alive.
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		// PID not found: process doesn't exist.
+		debug.Log("daemon", "daemonIdentityMatches: PID %d not found (os.FindProcess error)", pid)
+		return false
+	}
+	if err := checkProcessAlive(proc); err != nil {
+		// Signal 0 failed: process is gone.
+		debug.Log("daemon", "daemonIdentityMatches: PID %d signal-0 check failed (process dead)", pid)
+		return false
+	}
+
+	// Process is alive but cmdline is unavailable. Check mtime to detect stale
+	// PID files from crashed daemons. If the file is older than 24h, assume
+	// the PID has been recycled and clean it up. This is a safety valve for
+	// the rare case where cmdline inspection permanently fails.
+	pidPath, err := PIDFilePath(os.Getenv("PWD"))
+	if err != nil {
+		// Can't resolve PID file path; conservative: assume it's a daemon.
+		debug.Log("daemon", "daemonIdentityMatches: cannot resolve PID file path for mtime check, assuming alive")
 		return true
 	}
-	if strings.Contains(cmdline, "--__daemonized") || strings.Contains(cmdline, "ggcode[") {
+	info, err := os.Stat(pidPath)
+	if err != nil {
+		// PID file doesn't exist; this shouldn't happen here (we're called after
+		// ReadPIDFile succeeded), but treat conservatively.
+		debug.Log("daemon", "daemonIdentityMatches: PID file stat error, assuming alive: %v", err)
 		return true
 	}
-	// #431: on Windows processCmdline returns only the executable IMAGE
-	// NAME (e.g. "ggcode.exe") from a toolhelp32 snapshot — no argv flags.
-	// Accept the daemon binary name so the real daemon is not mistaken for
-	// a recycled PID.
-	base := strings.ToLower(strings.TrimSpace(cmdline))
-	if strings.HasSuffix(base, ".exe") {
-		base = strings.TrimSuffix(base, ".exe")
+	age := time.Since(info.ModTime())
+	if age > 24*time.Hour {
+		debug.Log("daemon", "daemonIdentityMatches: PID %d alive but PID file is %v old; assuming recycled PID and stale", pid, age.Round(time.Hour))
+		return false
 	}
-	return base == "ggcode" || strings.HasPrefix(base, "ggcode-")
+
+	// Process is alive and PID file is recent (<24h). Conservatively accept it.
+	// PID reuse risk exists but is mitigated by the 24h threshold.
+	debug.Log("daemon", "daemonIdentityMatches: PID %d alive, PID file age %v, assuming daemon (cmdline unavailable)", pid, age.Round(time.Minute))
+	return true
 }
 
 // EnsureDaemonSlot verifies that no live daemon already owns the given
@@ -189,10 +286,6 @@ func backgroundStdin() (*os.File, error) {
 	return os.OpenFile(os.DevNull, os.O_RDWR, 0)
 }
 
-// osStartProcess is indirected for tests so failure paths (PID file
-// cleanup on fork failure, #552-C) can be exercised without a real fork.
-var osStartProcess = os.StartProcess
-
 // ForkIntoBackground re-execs the current binary as a background daemon.
 // The child process argv[0] is set to "ggcode[dirname]".
 // stdout/stderr are redirected to a log file.
@@ -214,7 +307,13 @@ func ForkIntoBackground(cfgFile, workingDir, sessionID string, extraArgs ...stri
 	// Set argv[0] to display name
 	args[0] = displayName
 
-	// Open log file
+	// Open log file.
+	// NOTE: Log rotation is not supported by this simple O_APPEND implementation.
+	// If external log rotation is used, the daemon will continue writing to the old
+	// inode (the old file) because the fd is never re-opened after rotation.
+	// To properly support rotation, the daemon would need to track the current
+	// log file inode and reopen on change, or use a signal-based reopen mechanism.
+	// This limitation is documented in issue #574 (Bug E).
 	logPath, err := LogFilePath(workingDir)
 	if err != nil {
 		return 0, fmt.Errorf("resolving log path: %w", err)

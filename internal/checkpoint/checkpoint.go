@@ -180,6 +180,9 @@ func (m *Manager) Undo() (*Checkpoint, error) {
 
 // Revert rolls back to a specific checkpoint by ID, writing OldContent back to the file.
 // It also removes all checkpoints newer than the target.
+// Unlike Undo (which reverts the most recent checkpoint), Revert jumps to an
+// arbitrary past state, so the redo stack is cleared (standard undo/redo semantics).
+// A Correction is recorded so the agent can learn from this rejection (#574 Bug G).
 func (m *Manager) Revert(id string) (*Checkpoint, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -204,12 +207,32 @@ func (m *Manager) Revert(id string) (*Checkpoint, error) {
 		return nil, fmt.Errorf("failed to write file: %w", err)
 	}
 
+	// Collect files being reverted for the Correction record.
+	revertedFiles := make(map[string]bool)
+	for i := idx; i < len(m.checkpoints); i++ {
+		revertedFiles[m.checkpoints[i].FilePath] = true
+	}
+	files := make([]string, 0, len(revertedFiles))
+	for f := range revertedFiles {
+		files = append(files, f)
+	}
+
 	m.checkpoints = m.checkpoints[:idx]
 	// Jumping to a past state invalidates the redo history, exactly like a
 	// new Save does. Without this, Undo → Revert → Redo would re-apply a
 	// checkpoint the user explicitly rolled back past, ending in a state the
 	// user rejected (issue #554 E).
 	m.redoStack = nil
+
+	// Record the correction so the agent can learn from the rejection (#574 Bug G).
+	// Use the ToolCall from the reverted checkpoint to identify what was rejected.
+	m.corrections = append(m.corrections, Correction{
+		Files:    files,
+		ToolCall: cp.ToolCall,
+		RunID:    cp.RunID,
+		Time:     time.Now(),
+	})
+
 	return &cp, nil
 }
 
