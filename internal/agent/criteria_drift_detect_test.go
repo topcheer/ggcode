@@ -163,19 +163,20 @@ func TestCriteriaDriftReclassificationCategory(t *testing.T) {
 	c := newCriteriaDriftState()
 	defer c.reset()
 
-	// Use indicators from 2 different categories to trigger the category-based
-	// threshold (issue #30: require 2+ distinct categories, not 2+ total patterns).
-	// "is really a separate concern" → reclassification
-	// "a simpler approach" → substitution
+	// #582: Threshold now uses indicator count (not category count).
+	// "that requirement is out of scope for now" → reclassification
+	// "rather than the requested caching" → substitution
+	// Total: 2 indicators from 2 categories, should trigger.
 	text := "That requirement is out of scope for now. Rather than the requested caching I used a stub."
 	c.recordAssistantText(text, 1)
 
+	// seenCategories is still tracked for compatibility (legacy field)
 	if len(c.seenCategories) < 2 {
-		t.Fatalf("expected 2+ categories, got %d: %v", len(c.seenCategories), c.seenCategories)
+		t.Fatalf("expected 2+ categories tracked, got %d: %v", len(c.seenCategories), c.seenCategories)
 	}
 	msg := c.maybeWarn(2)
 	if msg == "" {
-		t.Fatal("expected warning with 2+ distinct category indicators")
+		t.Fatal("expected warning with 2+ indicators across categories")
 	}
 }
 

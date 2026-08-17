@@ -312,8 +312,16 @@ func (f *FallbackProvider) watchStreamForFailover(ctx context.Context, failed Pr
 							Text: fmt.Sprintf("primary provider failed (%v); failing over to %s", ev.Error, fallback.Name()),
 						}
 						for ev2 := range stream2 {
+							// #577(D): ANY content event (text, reasoning,
+							// tool-call, done) proves the fallback delivered —
+							// not just text. Counting text alone left pure
+							// tool-call/reasoning successes from clearing
+							// consecutiveFail, so stale counts prematurely
+							// failed over a healthy primary (#376 semantics).
+							// Mirrors the primary-stream rule at the bottom of
+							// this loop.
 							if ev2.Type != StreamEventError {
-								sawOutput = sawOutput || ev2.Type == StreamEventText
+								sawOutput = sawOutput || ev2.Type != StreamEventSystem
 							}
 							out <- ev2
 						}

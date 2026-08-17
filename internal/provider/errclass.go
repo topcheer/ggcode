@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"errors"
+	"net/url"
 	"strings"
 )
 
@@ -278,7 +279,17 @@ func ClassifyLLMError(err error) FailureClass {
 	// timeout) say nothing about provider health — same as Canceled (#304's
 	// sibling defect). Must NOT count toward the consecutive-failure failover
 	// threshold, which only exempts FailureNone.
+	// #577(E): BUT a DeadlineExceeded reported through *url.Error IS an HTTP
+	// client timeout (net/http always wraps transport/ctx-deadline errors in
+	// url.Error) — before this, a pure-timeout endpoint accumulated 0 across
+	// 10 real client timeouts and never tripped FailoverTriggerRepeated. Only
+	// the unwrapped agent-side sentinel stays exempt; the url.Error-wrapped
+	// form counts as a network failure.
 	if errors.Is(err, context.DeadlineExceeded) {
+		var urlErr *url.Error
+		if errors.As(err, &urlErr) {
+			return FailureNetwork
+		}
 		return FailureNone
 	}
 	// Guard against SDK error types whose .Error() panics on nil internals

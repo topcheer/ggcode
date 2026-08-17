@@ -427,6 +427,12 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 			// Reset per-attempt state to avoid leaking failed-attempt usage
 			// into the next (successful) attempt. Same fix as gemini.go.
 			usage = nil
+			// #577(B): truncated must reset per attempt too. Attempt 1 could hit
+			// finish_reason=length and then die to a retryable transport error
+			// (emitted=false → retry); a fully-complete attempt 2 then shipped
+			// Done{Truncated:true}, making the agent inject a needless
+			// "continue" prompt on a complete response (up to 3 wasted calls).
+			truncated = false
 
 			// (Re-)establish the stream for each attempt
 			var localStreamer *openai.ChatCompletionStream

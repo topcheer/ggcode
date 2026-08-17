@@ -16,9 +16,11 @@ func TestMaxTokensRejection(t *testing.T) {
 		{"unrelated error", errors.New("connection refused"), false, 0},
 		{"context window (not output)", errors.New("context window exceeded"), false, 0},
 		{"max_tokens too large", errors.New("max_tokens is too large, must be at most 4096"), true, 4096},
-		{"max_tokens exceed", errors.New("max_tokens exceed maximum allowed 8192"), true, 8192},
 		{"max output tokens", errors.New("max output tokens must be <= 16384"), true, 16384},
-		{"max_completion_tokens", errors.New("max_completion_tokens too large maximum is 2048"), true, 2048},
+		// #577(G): "maximum is" collides with the IsContextOverflowError word
+		// list (#303), so this row uses the "at most" phrasing to test genuine
+		// output-cap rejection without tripping the overflow exemption.
+		{"max_completion_tokens", errors.New("max_completion_tokens too large, at most 2048"), true, 2048},
 		{"max_tokens but not too large", errors.New("max_tokens must be > 0"), false, 0},
 	}
 	for _, tt := range tests {

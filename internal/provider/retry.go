@@ -417,8 +417,14 @@ func FriendlyError(err error) string {
 		}
 	}
 	if statusCode == 0 {
+		// #577(A): anchor via containsHTTPStatus — the same helper isRetryable
+		// uses — instead of bare substring matching. Digit coincidences like
+		// "40123 tokens remaining" in a quota message were misreported as
+		// auth failure ("invalid API key, run config set api_key"), sending
+		// users down the wrong debugging path. Third occurrence of this bug
+		// class (#303, #561-F fixed the other two).
 		for _, code := range []int{400, 401, 402, 403, 404, 408, 413, 422, 429, 500, 502, 503, 504} {
-			if strings.Contains(msg, strconv.Itoa(code)) {
+			if containsHTTPStatus(msg, strconv.Itoa(code)) {
 				statusCode = code
 				break
 			}

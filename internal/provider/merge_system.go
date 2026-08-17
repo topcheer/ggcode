@@ -21,11 +21,27 @@ func MergeSystemMessages(messages []Message) []Message {
 	var systemBlocks []ContentBlock
 	var nonSystem []Message
 	hasSystem := false
+	seenFirstSystem := false
 
 	for _, m := range messages {
 		if m.Role == "system" {
 			hasSystem = true
-			// Merge text blocks from all system messages
+			if !seenFirstSystem {
+				// #577(F): the documented contract says non-text blocks (images,
+				// etc.) from the FIRST system message are preserved. Keep every
+				// block in original order, dropping only whitespace-only text
+				// blocks. (Subsequent system messages keep contributing text
+				// only, per the same contract.)
+				seenFirstSystem = true
+				for _, b := range m.Content {
+					if b.Type == "text" && strings.TrimSpace(b.Text) == "" {
+						continue
+					}
+					systemBlocks = append(systemBlocks, b)
+				}
+				continue
+			}
+			// Merge text blocks from subsequent system messages
 			for _, b := range m.Content {
 				if b.Type == "text" && strings.TrimSpace(b.Text) != "" {
 					systemBlocks = append(systemBlocks, b)

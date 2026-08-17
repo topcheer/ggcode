@@ -304,6 +304,11 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 			var inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens int
 			emitted := false
 			retry := false
+			// #577(C): reset truncated per attempt — attempt 1 could observe
+			// stop_reason=max_tokens and then die to a retryable error; a
+			// complete attempt 2 must not inherit Truncated=true. Mirrors the
+			// gemini.go per-attempt declaration (#561-C) and openai.go (#577-B).
+			truncated = false
 
 			func() {
 				stream := p.client.Messages.NewStreaming(ctx, params)

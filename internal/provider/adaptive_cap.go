@@ -271,12 +271,18 @@ func maxTokensRejection(err error) (rejected bool, parsedLimit int) {
 	if err == nil {
 		return false, 0
 	}
-	msg := strings.ToLower(err.Error())
 	// Don't false-positive on context-window errors — those are about input,
 	// not output cap.
-	if strings.Contains(msg, "context window") || strings.Contains(msg, "context length") {
+	// #577(G): reuse the authoritative IsContextOverflowError word list (20+
+	// phrases — the same authority isRetryable consults) instead of the old
+	// two-phrase check. Combined messages like "prompt tokens + max_tokens
+	// exceeds the maximum" were misjudged 3/3 in the ver-65 probe as output-cap
+	// rejections, so OnRejected clamped the output cap to the input window —
+	// and the lo/hi monotonic invariant makes that wrong clamp permanent.
+	if IsContextOverflowError(err) {
 		return false, 0
 	}
+	msg := strings.ToLower(err.Error())
 	hasMaxTok := strings.Contains(msg, "max_tokens") ||
 		strings.Contains(msg, "max tokens") ||
 		strings.Contains(msg, "maxoutputtokens") ||

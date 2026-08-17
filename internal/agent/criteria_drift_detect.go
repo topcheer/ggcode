@@ -126,6 +126,8 @@ var criteriaDriftPatterns = map[string][]string{
 	// Scope reclassification: moving unmet requirements to "out of scope"
 	// Reclassification must declare an UNMET requested item out of scope;
 	// general boundary-setting about unrelated concerns is normal (#395).
+	// #582: user-authorized descoping (e.g., "as requested, that requirement is out of scope")
+	// is exempt - it reflects faithful execution of explicit user instruction, not proxy gaming.
 	"reclassification": {
 		"the requested is out of scope for",
 		"that requirement falls outside the scope",
@@ -158,6 +160,11 @@ func (c *criteriaDriftState) recordAssistantText(text string, iter int) {
 			if strings.Contains(lower, pat) {
 				// Check if we already have this indicator.
 				if !cdContains(c.indicators, pat) && !cdContainsStr(newIndicators, pat) {
+					// #582: Skip reclassification patterns with authorization context.
+					if cdIsAuthExempt(text, pat, cat) {
+						debug.Log("agent", "Criteria drift indicator EXEMPT (auth context) (category=%s): %q at iteration %d", cat, pat, iter)
+						continue
+					}
 					newIndicators = append(newIndicators, pat)
 					debug.Log("agent", "Criteria drift indicator (category=%s): %q at iteration %d", cat, pat, iter)
 				}
@@ -168,7 +175,8 @@ func (c *criteriaDriftState) recordAssistantText(text string, iter int) {
 	for _, pat := range newIndicators {
 		c.indicators = append(c.indicators, cdIndicator{pattern: pat, iter: iter})
 	}
-	// Track which categories have been seen for category-based dedup (issue #30).
+	// Track which categories have been seen (legacy; kept for compatibility).
+	// Note: After #582 fix, the threshold uses indicator count, not category count.
 	for cat := range criteriaDriftPatterns {
 		for _, ind := range newIndicators {
 			for _, pat := range criteriaDriftPatterns[cat] {
@@ -179,6 +187,73 @@ func (c *criteriaDriftState) recordAssistantText(text string, iter int) {
 			}
 		}
 	}
+}
+
+// cdAuthMarkers are phrases that indicate user-authorized descoping (#582).
+// When these appear near a reclassification pattern, the indicator is exempt
+// because it reflects faithful execution of explicit user instruction.
+var cdAuthMarkers = []string{
+	"as requested",
+	"per your instruction",
+	"user asked",
+	"as you asked",
+	"you asked me",
+	"you instructed",
+}
+
+// cdHasAuthContext checks if the given text contains authorization markers
+// that indicate user-authorized descoping. Returns true if any marker is found.
+func cdHasAuthContext(text string) bool {
+	lower := strings.ToLower(text)
+	for _, marker := range cdAuthMarkers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// cdIsAuthExempt checks if a pattern match is exempt due to user authorization.
+// For reclassification patterns, we require that an authorization marker appears
+// in the same sentence or immediate semantic context as the pattern.
+// This prevents false exemptions when auth markers appear in unrelated contexts
+// (e.g., "the pattern 'as requested' is being tested").
+func cdIsAuthExempt(text, pattern string, category string) bool {
+	if category != "reclassification" {
+		return false
+	}
+
+	lower := strings.ToLower(text)
+	patternLower := strings.ToLower(pattern)
+	patternIdx := strings.Index(lower, patternLower)
+	if patternIdx == -1 {
+		return false
+	}
+
+	// Find the sentence containing the pattern
+	// Sentence boundaries are ., !, or ? followed by whitespace or end of string
+	sentenceStart := 0
+	for i := patternIdx; i >= 0; i-- {
+		if i > 0 && (lower[i-1] == '.' || lower[i-1] == '!' || lower[i-1] == '?') {
+			if i < len(lower) && (lower[i] == ' ' || lower[i] == '\t' || lower[i] == '\n') {
+				sentenceStart = i
+				break
+			}
+		}
+	}
+
+	sentenceEnd := len(lower)
+	for i := patternIdx; i < len(lower); i++ {
+		if lower[i] == '.' || lower[i] == '!' || lower[i] == '?' {
+			sentenceEnd = i + 1
+			break
+		}
+	}
+
+	sentence := lower[sentenceStart:sentenceEnd]
+
+	// Check if there's an authorization marker in the same sentence
+	return cdHasAuthContext(sentence)
 }
 
 // maybeWarn returns guidance text if enough drift indicators have accumulated.
@@ -218,7 +293,9 @@ func (c *criteriaDriftState) maybeWarn(iter int) string {
 			}
 		}
 	}
-	if len(cats) < cdThreshold {
+	// #582: Count distinct indicators, not categories. The header says
+	// "Requires 2+ distinct drift indicators" and this is the correct semantics.
+	if len(c.indicators) < cdThreshold {
 		return ""
 	}
 
