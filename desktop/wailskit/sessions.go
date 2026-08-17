@@ -9,6 +9,7 @@ import (
 	"github.com/topcheer/ggcode/internal/agentruntime"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/security"
 	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/tool"
 	"github.com/topcheer/ggcode/internal/util"
@@ -406,8 +407,12 @@ func formatMessagesAsMarkdown(msgs []SessionMessage, title string) string {
 			b.WriteString(label)
 			b.WriteString("\n\n")
 			if msg.ToolDetail != "" {
+				// #583 (Bug 1): Redact secrets in ToolDetail (config set api_key,
+				// write_file .env content, etc.). ToolDetail comes from
+				// tool.DescribeTool which may include raw args with secrets.
+				detail := security.RedactForDisplay(msg.ToolDetail)
 				b.WriteString("```\n")
-				b.WriteString(msg.ToolDetail)
+				b.WriteString(detail)
 				b.WriteString("\n```\n\n")
 			}
 			if msg.Content != "" {
@@ -439,14 +444,45 @@ func ExportSessionToJSON(sessionID string) (string, error) {
 }
 
 // formatMessagesAsJSON converts session messages into a JSON document.
+// #583 (Bug 1): Applies truncation (2000 runes) and secret redaction to
+// ToolArgs, ToolDetail, and Content fields before marshaling. This matches
+// the Markdown export protection level and prevents credential leakage in
+// exported JSON files (users actively save/share these artifacts).
 // Extracted for testability.
 func formatMessagesAsJSON(msgs []SessionMessage, title string) (string, error) {
+	// Apply truncation and redaction to each message before marshaling.
+	cleanMsgs := make([]SessionMessage, 0, len(msgs))
+	for _, msg := range msgs {
+		clean := msg
+
+		// Truncate ToolArgs BEFORE redaction (to catch truly large inputs).
+		if len(clean.ToolArgs) > 2000 {
+			clean.ToolArgs = clean.ToolArgs[:util.SnapToRuneStart(clean.ToolArgs, 2000)]
+		}
+		// Then redact any secrets in the truncated args.
+		clean.ToolArgs = security.RedactForDisplay(clean.ToolArgs)
+
+		// Redact ToolDetail (comes from tool.DescribeTool, may show secrets).
+		if clean.ToolDetail != "" {
+			clean.ToolDetail = security.RedactForDisplay(clean.ToolDetail)
+		}
+
+		// Truncate Content BEFORE redaction (to catch large outputs like read_file).
+		if len(clean.Content) > 2000 {
+			clean.Content = clean.Content[:util.SnapToRuneStart(clean.Content, 2000)]
+		}
+		// Then redact any secrets in the truncated content.
+		clean.Content = security.RedactForDisplay(clean.Content)
+
+		cleanMsgs = append(cleanMsgs, clean)
+	}
+
 	export := struct {
 		Title    string           `json:"title"`
 		Messages []SessionMessage `json:"messages"`
 	}{
 		Title:    title,
-		Messages: msgs,
+		Messages: cleanMsgs,
 	}
 
 	data, err := json.MarshalIndent(export, "", "  ")

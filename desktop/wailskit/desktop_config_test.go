@@ -24,7 +24,7 @@ func TestDesktopConfig_Defaults(t *testing.T) {
 func TestDesktopConfig_MissingFile(t *testing.T) {
 	withTestHome(t)
 	dc := LoadDesktopConfig()
-	if dc.WorkDir != "" || dc.LastSession != "" {
+	if dc.WorkDir != "" {
 		t.Fatal("expected empty values when file missing")
 	}
 }
@@ -33,11 +33,10 @@ func TestDesktopConfig_SaveLoadRoundTrip(t *testing.T) {
 	withTestHome(t)
 
 	dc := &DesktopConfig{
-		WorkDir:     "/home/user/project",
-		WindowW:     1920,
-		WindowH:     1080,
-		LastSession: "sess-123",
-		Language:    "zh-CN",
+		WorkDir:  "/home/user/project",
+		WindowW:  1920,
+		WindowH:  1080,
+		Language: "zh-CN",
 	}
 	if err := dc.Save(); err != nil {
 		t.Fatal(err)
@@ -49,9 +48,6 @@ func TestDesktopConfig_SaveLoadRoundTrip(t *testing.T) {
 	}
 	if loaded.WindowW != 1920 || loaded.WindowH != 1080 {
 		t.Fatalf("window size mismatch: %dx%d", loaded.WindowW, loaded.WindowH)
-	}
-	if loaded.LastSession != "sess-123" {
-		t.Fatalf("LastSession mismatch: %q", loaded.LastSession)
 	}
 	if loaded.Language != "zh-CN" {
 		t.Fatalf("Language mismatch: %q", loaded.Language)
@@ -67,14 +63,11 @@ func TestDesktopConfig_SetWorkDir(t *testing.T) {
 	}
 }
 
-func TestDesktopConfig_SetLastSession(t *testing.T) {
-	withTestHome(t)
-	dc := &DesktopConfig{WindowW: 100, WindowH: 100}
-	dc.SetLastSession("sess-456")
-	if dc.LastSession != "sess-456" {
-		t.Fatalf("expected sess-456, got %q", dc.LastSession)
-	}
-}
+// TestDesktopConfig_SetLastSession removed (#583 Bug 4):
+// LastSession field and SetLastSession() method were removed as dead code.
+// The field had zero read references and zero setter calls in production code.
+// The comment "shared with the Fyne desktop" was misleading - Fyne has no
+// reference to wailskit's DesktopConfig.
 
 func TestDesktopConfig_SetWindowState(t *testing.T) {
 	withTestHome(t)

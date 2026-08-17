@@ -69,3 +69,7 @@ internal/plugin/grpc/testdata/echo-plugin/echo-plugin.exe
 
 # Generated ggreport output
 ggreport.html
+
+# editor/agent backup files (#582)
+*.bak[0-9]*
+*.bak$

@@ -10,19 +10,18 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// DesktopConfig stores window state and preferences, shared with the Fyne desktop.
+// DesktopConfig stores window state and preferences.
 // File: ~/.ggcode/desktop-config.json
 type DesktopConfig struct {
 	mu sync.Mutex
 
-	WorkDir     string `json:"work_dir,omitempty"`
-	WindowW     int    `json:"window_width,omitempty"`
-	WindowH     int    `json:"window_height,omitempty"`
-	WindowX     int    `json:"window_x,omitempty"`
-	WindowY     int    `json:"window_y,omitempty"`
-	WindowMax   bool   `json:"window_maximized,omitempty"`
-	LastSession string `json:"last_session_id,omitempty"`
-	Language    string `json:"language,omitempty"`
+	WorkDir   string `json:"work_dir,omitempty"`
+	WindowW   int    `json:"window_width,omitempty"`
+	WindowH   int    `json:"window_height,omitempty"`
+	WindowX   int    `json:"window_x,omitempty"`
+	WindowY   int    `json:"window_y,omitempty"`
+	WindowMax bool   `json:"window_maximized,omitempty"`
+	Language  string `json:"language,omitempty"`
 
 	// Font zoom level (0.7 to 1.8). Default 0 means 100%.
 	FontZoom float64 `json:"font_zoom,omitempty"`
@@ -94,6 +93,11 @@ func LoadDesktopConfig() *DesktopConfig {
 // .bak (#449). The recovery path in LoadDesktopConfig reads .bak, but Save
 // never produced one — a crash mid-write meant first corruption lost all
 // preferences with no backup to recover from.
+// #583 (Bug 3): Performs read-merge before writing to prevent multi-instance
+// clobbering. An instance with an old snapshot would otherwise overwrite newer
+// preferences set by another instance. The merge strategy: read disk, then
+// apply only non-empty/non-default fields from the current instance, preserving
+// other instances' changes.
 func (dc *DesktopConfig) Save() error {
 	dc.mu.Lock()
 	defer dc.mu.Unlock()
@@ -102,10 +106,57 @@ func (dc *DesktopConfig) Save() error {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(dc, "", "  ")
+
+	// #583 (Bug 3): Read-merge to preserve other instances' changes.
+	// Load current disk state and merge with this instance's dirty fields.
+	var merged DesktopConfig
+	if data, rerr := os.ReadFile(path); rerr == nil && len(data) > 0 {
+		// Disk file exists and is readable: merge with it.
+		if uerr := json.Unmarshal(data, &merged); uerr != nil {
+			// Disk file is corrupt. Log but continue with defaults - the
+			// rotation logic below will handle preserving the corrupt file.
+			debug.Log("wailskit", "Save: disk config is corrupt, using defaults for merge: %v", uerr)
+		}
+	}
+
+	// Merge: apply only non-empty/non-default values from dc to merged.
+	// This preserves fields set by other instances that are empty/default
+	// in our snapshot (e.g., language=zh-CN in instance A, empty in instance B).
+	if dc.WorkDir != "" {
+		merged.WorkDir = dc.WorkDir
+	}
+	if dc.WindowW != 0 {
+		merged.WindowW = dc.WindowW
+	}
+	if dc.WindowH != 0 {
+		merged.WindowH = dc.WindowH
+	}
+	if dc.WindowX != 0 {
+		merged.WindowX = dc.WindowX
+	}
+	if dc.WindowY != 0 {
+		merged.WindowY = dc.WindowY
+	}
+	// Language: only overwrite if this instance has a non-empty value.
+	// Preserve the value from other instances if we're empty (old snapshot).
+	if dc.Language != "" {
+		merged.Language = dc.Language
+	}
+	// WindowMax, AlwaysOnTop, GlobalHotkey, etc. are bools - always apply.
+	merged.WindowMax = dc.WindowMax
+	merged.FontZoom = dc.FontZoom
+	merged.AlwaysOnTop = dc.AlwaysOnTop
+	merged.GlobalHotkey = dc.GlobalHotkey
+	merged.GlobalHotkeySet = dc.GlobalHotkeySet
+	merged.NotificationsEnabled = dc.NotificationsEnabled
+	merged.NotificationsSet = dc.NotificationsSet
+
+	// Use merged config for marshaling (not the raw dc).
+	data, err := json.MarshalIndent(&merged, "", "  ")
 	if err != nil {
 		return err
 	}
+
 	// #449: rotate the current good copy (if any) to .bak BEFORE writing.
 	// #581 (D1): Validate that old is parseable before rotating — a corrupt
 	// main file would overwrite the only good .bak, turning single corruption
@@ -148,12 +199,10 @@ func (dc *DesktopConfig) SetWindowState(w, h, x, y int, maximized bool) {
 	dc.WindowMax = maximized
 }
 
-// SetLastSession saves the last active session ID.
-func (dc *DesktopConfig) SetLastSession(id string) {
-	dc.mu.Lock()
-	defer dc.mu.Unlock()
-	dc.LastSession = id
-}
+// SetLastSession was removed (#583 Bug 4): dead field with zero references.
+// LastSession field was only serialized but never read or set in production code.
+// The comment "shared with the Fyne desktop" was misleading - Fyne has no
+// reference to wailskit's DesktopConfig. Use app-level state instead if needed.
 
 // IsNotificationsEnabled returns whether desktop notifications are enabled.
 // Defaults to true when never explicitly set.
