@@ -88,8 +88,34 @@ var foresightFailurePredRe = regexp.MustCompile(`(?i)(?:should|will|might|may|ex
 // every success prediction became a mismatch (#394).
 var foresightResultFailureRe = regexp.MustCompile(`(?i)(?:exit\s+code\s+[1-9]|exit\s+status\s+[1-9]|status[:\s]+(?:4\d\d|5\d\d)|panic:|fatal:|traceback\s+\(|compilation\s+failed|\bIsError\b|tool_result_error)`)
 
-// resultEmptyRe detects empty or minimal results (prediction said content exists).
-var foresightResultEmptyRe = regexp.MustCompile(`(?i)(?:^$|no\s+(?:results?|matches?|content|output|data\s+found)|empty|0\s+(?:bytes|lines|matches|results)|nothing\s+(?:found|returned|matched))`)
+// resultEmptyRe detects empty or minimal results (prediction said content
+// exists). #613: restricted to STRUCTURED empty signals — the old bare-word
+// alternation (|empty|no results|...) substring-matched the entire tool
+// result, so a successful read_file of ordinary source code containing
+// "ErrEmpty" / "empty string" was judged "actually empty" and every content
+// prediction became a false mismatch (same family as the #394 failure-regex
+// fix; the twin branch was missed then).
+var foresightResultEmptyRe = regexp.MustCompile(`(?i)^(?:$|no\s+(?:results?|matches?|content|output|data)\s+found$|(?:is\s+)?empty$|0\s+(?:bytes|lines|matches|results)$|nothing\s+(?:found|returned|matched)$)`)
+
+// foresightResultEmpty determines whether a tool result is actually empty
+// using structural signals, not substring matching (#613 defect 1):
+//   - zero-length content
+//   - whitespace-only content
+//   - a short (<80 chars) result consisting of a structured "no matches /
+//     empty" marker line — long file contents merely mentioning the word
+//     "empty" are NOT empty results.
+func foresightResultEmpty(content string) bool {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return true
+	}
+	if len(trimmed) > 80 {
+		// Real content (e.g., a file read) that merely contains the word
+		// "empty" somewhere is not an empty result.
+		return false
+	}
+	return foresightResultEmptyRe.MatchString(trimmed)
+}
 
 // ---------------------------------------------------------------------------
 // State
@@ -147,15 +173,22 @@ func (s *foresightCalibrateState) recordPrediction(assistantText string, toolCal
 		// Ambiguous or both -- no prediction for this turn.
 		return
 	}
-	if len(toolCalls) > 0 {
-		snippet := extractForesightSnippet(assistantText)
-		s.predictions = append(s.predictions, foresightPrediction{
-			iteration:   iteration,
-			predictedOK: predictedOK,
-			snippet:     snippet,
-			toolName:    toolCalls[0].Name,
-		})
+	// Multi-tool turns (#613 defect 2): a turn-level prediction cannot be
+	// attributed to toolCalls[0] — in a [read_file, run_command] turn where
+	// the prediction actually concerns run_command, the first-arriving
+	// read_file result would consume it and record a spurious mismatch while
+	// the real run_command outcome goes unverified. Per the issue's guidance,
+	// reconcile ONLY single-tool turns; skip recording for multi-tool turns.
+	if len(toolCalls) > 1 {
+		return
 	}
+	snippet := extractForesightSnippet(assistantText)
+	s.predictions = append(s.predictions, foresightPrediction{
+		iteration:   iteration,
+		predictedOK: predictedOK,
+		snippet:     snippet,
+		toolName:    toolCalls[0].Name,
+	})
 
 	// Cap pending predictions to avoid unbounded growth.
 	if len(s.predictions) > 30 {
@@ -201,14 +234,29 @@ func (s *foresightCalibrateState) checkCalibration(toolName string, resultConten
 		return ""
 	}
 
-	// Match predictions to this tool call. We consume the oldest matching
-	// prediction per tool call.
+	// Match predictions to this tool call. #613 defect 2: predictions must be
+	// consumed on the SAME agent loop iteration they were recorded on — the
+	// iteration field existed but was never compared, letting a multi-tool
+	// turn's prediction be eaten by the wrong tool's result. Preferred match:
+	// same iteration AND same tool name. Deferred-attribution predictions
+	// (toolName == "", recorded for multi-tool turns) accept any tool result
+	// from the SAME iteration. A prediction from a different iteration is
+	// only consumed as a last resort when it is an exact tool-name match
+	// (single-tool rounds legitimately settle one iteration later because
+	// tool execution happens after the next iteration's recordPrediction).
 	matched := -1
+	fallback := -1
 	for i, p := range s.predictions {
-		if p.toolName == toolName || (p.toolName == "" && toolName != "") {
+		if p.iteration == iteration && (p.toolName == toolName || p.toolName == "") {
 			matched = i
 			break
 		}
+		if p.toolName == toolName && fallback < 0 {
+			fallback = i
+		}
+	}
+	if matched < 0 {
+		matched = fallback
 	}
 	if matched < 0 {
 		return ""
@@ -220,7 +268,7 @@ func (s *foresightCalibrateState) checkCalibration(toolName string, resultConten
 
 	// Determine actual outcome polarity.
 	actualOK := !isError && !foresightResultFailureRe.MatchString(resultContent)
-	actualEmpty := foresightResultEmptyRe.MatchString(resultContent)
+	actualEmpty := foresightResultEmpty(resultContent)
 
 	// Check for mismatch.
 	mismatch := false

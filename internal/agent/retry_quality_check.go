@@ -81,6 +81,14 @@ func checkRetryQuality(filePath, oldContent, newContent string) []string {
 		return nil
 	}
 
+	// #618: pre-compute identifiers bound to timer/ticker objects so that
+	// `<-x.C` receives are only treated as backoff when x is provably a
+	// time.NewTimer/NewTicker result.
+	for k := range retryTimerIdents {
+		delete(retryTimerIdents, k)
+	}
+	collectTimerIdents(file)
+
 	issues := findRetryLoopIssues(file, fset)
 	if len(issues) == 0 {
 		return nil
@@ -91,7 +99,25 @@ func checkRetryQuality(filePath, oldContent, newContent string) []string {
 		oldFset := token.NewFileSet()
 		oldFile, oldErr := parser.ParseFile(oldFset, filePath, oldContent, 0)
 		if oldErr == nil && oldFile != nil {
-			oldSet := retryIssueSet(findRetryLoopIssues(oldFile, oldFset))
+			// Analyze old content with its own timer-ident map state so
+			// findRetryLoopIssues sees the old file's timer bindings.
+			savedTimers := make(map[string]bool, len(retryTimerIdents))
+			for k, v := range retryTimerIdents {
+				savedTimers[k] = v
+			}
+			for k := range retryTimerIdents {
+				delete(retryTimerIdents, k)
+			}
+			collectTimerIdents(oldFile)
+			oldIssues := findRetryLoopIssues(oldFile, oldFset)
+			// Restore the new content's timer bindings.
+			for k := range retryTimerIdents {
+				delete(retryTimerIdents, k)
+			}
+			for k, v := range savedTimers {
+				retryTimerIdents[k] = v
+			}
+			oldSet := retryIssueSet(oldIssues)
 			filtered := issues[:0]
 			for _, iss := range issues {
 				if !oldSet[iss.key] {
@@ -264,6 +290,12 @@ func branchContinuesOnError(body *ast.BlockStmt) bool {
 //     cancellation provides termination and paced termination)
 func loopBodyHasBackoff(body *ast.BlockStmt) bool {
 	found := false
+	// #618: collect identifiers bound to time.NewTimer/time.NewTicker results
+	// anywhere in the file scope so that a `<-x.C` receive can be verified as a
+	// genuine timer/ticker channel (comment above notwithstanding, this loop's
+	// body alone cannot prove the receiver's type). We conservatively treat a
+	// .C receive as timer-based only when the receiver identifier is a known
+	// NewTimer/NewTicker result in the same file.
 	ast.Inspect(body, func(node ast.Node) bool {
 		if found {
 			return false
@@ -275,11 +307,18 @@ func loopBodyHasBackoff(body *ast.BlockStmt) bool {
 				return false
 			}
 		case *ast.UnaryExpr:
-			// <-x.C receive on a timer/ticker channel.
+			// <-x.C receive on a timer/ticker channel. #618: receiving on ANY
+			// struct field named "C" is not a delay — an event/subscription
+			// channel `for { ev := <-sub.C; ... }` hot-loops. Verify the
+			// receiver identifier is a time.NewTimer/time.NewTicker result
+			// (created in this body or passed in and bound at the call site —
+			// see timerRecvOK).
 			if n.Op == token.ARROW {
 				if sel, ok := n.X.(*ast.SelectorExpr); ok && sel.Sel.Name == "C" {
-					found = true
-					return false
+					if id, ok := sel.X.(*ast.Ident); ok && isTimerLikeIdent(id) {
+						found = true
+						return false
+					}
 				}
 			}
 		case *ast.SelectStmt:
@@ -291,6 +330,51 @@ func loopBodyHasBackoff(body *ast.BlockStmt) bool {
 		return true
 	})
 	return found
+}
+
+// retryTimerIdents is populated per-file with identifiers bound to
+// time.NewTimer / time.NewTicker results, so `<-x.C` receives can be verified
+// as genuine timer/ticker channels (#618 defect 3).
+var retryTimerIdents = map[string]bool{}
+
+// isTimerLikeIdent reports whether id is a known time.NewTimer/NewTicker
+// receiver in the current file analysis.
+func isTimerLikeIdent(id *ast.Ident) bool {
+	return retryTimerIdents[id.Name]
+}
+
+// collectTimerIdents records identifiers assigned from time.NewTimer or
+// time.NewTicker calls anywhere in the file.
+func collectTimerIdents(file *ast.File) {
+	ast.Inspect(file, func(node ast.Node) bool {
+		as, ok := node.(*ast.AssignStmt)
+		if !ok {
+			return true
+		}
+		for _, rhs := range as.Rhs {
+			call, ok := rhs.(*ast.CallExpr)
+			if !ok {
+				continue
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok {
+				continue
+			}
+			pkg, ok := sel.X.(*ast.Ident)
+			if !ok || pkg.Name != "time" {
+				continue
+			}
+			if sel.Sel.Name != "NewTimer" && sel.Sel.Name != "NewTicker" {
+				continue
+			}
+			for _, lhs := range as.Lhs {
+				if id, ok := lhs.(*ast.Ident); ok {
+					retryTimerIdents[id.Name] = true
+				}
+			}
+		}
+		return true
+	})
 }
 
 // isBackoffCall returns true for calls that introduce a delay/backoff.
@@ -347,16 +431,31 @@ func loopHasAttemptCap(loop *ast.ForStmt) bool {
 	// For-condition form: for i := 0; i < max; i++ -- inherently bounded.
 	if loop.Cond != nil {
 		return true
-	}
-	// Range form is always bounded by the collection.
+	} // For-init form with an attempt-like counter: for attempt := 0; ...; attempt++
+	// The init counter only provides a cap when it is actually bounded — either
+	// the loop condition compares it (handled by the Cond != nil branch above)
+	// or the body checks it against a max (#618: a counter that is incremented
+	// but never compared is NOT an attempt cap; a name like countryCode must
+	// not exempt an unbounded loop either).
+	var initCounterName string
 	if loop.Init != nil {
 		if as, ok := loop.Init.(*ast.AssignStmt); ok {
 			for _, l := range as.Lhs {
 				if id, ok := l.(*ast.Ident); ok && isAttemptCounterName(id.Name) {
-					return true
+					initCounterName = id.Name
+					break
 				}
 			}
 		}
+	}
+	if initCounterName != "" {
+		// Counter exists — require semantic evidence that it is compared
+		// against a bound somewhere in the body (if attempt >= max { return }).
+		if bodyHasCounterCheck(loop.Body) {
+			return true
+		}
+		// Post statement incrementing the counter with no body check and no
+		// condition is still unbounded — fall through to the remaining checks.
 	}
 	// A select with a <-ctx.Done() case that exits (return/break) provides
 	// bounded termination for an otherwise unbounded loop.
@@ -428,11 +527,23 @@ func stmtListExitsLoop(stmts []ast.Stmt) bool {
 }
 
 // isAttemptCounterName returns true for common attempt/retry counter names.
+// #618: whole-word match only — substring matching exempted unrelated
+// identifiers (countryCode contains "count", attemptLog contains "attempt"),
+// silently suppressing unbounded-retry detection for those loops.
 func isAttemptCounterName(name string) bool {
 	low := strings.ToLower(name)
-	for _, p := range []string{"attempt", "retry", "retries", "count", "tries"} {
-		if strings.Contains(low, p) {
+	for _, w := range []string{"attempt", "attempts", "retry", "retries", "count", "counts", "tries"} {
+		if low == w {
 			return true
+		}
+	}
+	// Compound names: attemptCount, retryCount, attempt_count...
+	for _, p := range []string{"attempt", "retry", "tries"} {
+		if strings.HasPrefix(low, p+"_") || strings.HasSuffix(low, "_"+p) {
+			return true
+		}
+		if strings.HasPrefix(low, p+"c") {
+			return true // attemptCount, retryCount
 		}
 	}
 	return false
@@ -441,6 +552,9 @@ func isAttemptCounterName(name string) bool {
 // bodyHasCounterCheck returns true if the body compares a counter-like
 // variable against a max/threshold (i < maxRetries).
 func bodyHasCounterCheck(body *ast.BlockStmt) bool {
+	if body == nil {
+		return false
+	}
 	found := false
 	ast.Inspect(body, func(node ast.Node) bool {
 		if found {
@@ -458,16 +572,33 @@ func bodyHasCounterCheck(body *ast.BlockStmt) bool {
 	return found
 }
 
-// hasAttemptComparison returns true if a condition references an attempt-like
-// counter variable.
+// hasAttemptComparison returns true if a condition COMPARES an attempt-like
+// counter variable against anything (a max/threshold: attempt >= maxRetries,
+// tries < 3). #618: merely mentioning a counter-named identifier is not a
+// bound — `if attemptLog != nil || retriesEnabled { continue }` must not
+// exempt an otherwise unbounded retry loop.
 func hasAttemptComparison(cond ast.Expr) bool {
 	found := false
 	ast.Inspect(cond, func(node ast.Node) bool {
 		if found {
 			return false
 		}
-		if id, ok := node.(*ast.Ident); ok && isAttemptCounterName(id.Name) {
+		bin, ok := node.(*ast.BinaryExpr)
+		if !ok {
+			return true
+		}
+		switch bin.Op {
+		case token.LSS, token.LEQ, token.GTR, token.GEQ:
+		default:
+			return true
+		}
+		if id, ok := bin.X.(*ast.Ident); ok && isAttemptCounterName(id.Name) {
 			found = true
+			return false
+		}
+		if id, ok := bin.Y.(*ast.Ident); ok && isAttemptCounterName(id.Name) {
+			found = true
+			return false
 		}
 		return true
 	})

@@ -259,6 +259,20 @@ func (a *Agent) consumeReadyPreCompact(onEvent func(provider.StreamEvent)) bool 
 				reason = "live messages shrunk below snapshot size"
 			}
 			debug.Log("precompact", "RESULT DISCARDED: %s (snapshot.OrigLen=%d live=%d)", reason, pc.snapshot.OrigLen, len(a.contextManager.Messages()))
+			// #612: a discarded result leaves the stale 2-minute cooldown set
+			// by maybeAutoCompact at schedule time. The cooldown-on-failure is
+			// intentional for genuinely failed compactions, but a DISCARD means
+			// the summarization itself succeeded while the live context moved
+			// on — if tokens are still above the auto-compact threshold, refund
+			// the cooldown so the next loop pass can schedule a fresh precompact
+			// against the current context. Otherwise the only remaining escape
+			// is destructive truncation once tokens cross promptBudget.
+			if threshold := a.contextManager.AutoCompactThreshold(); threshold > 0 && a.contextManager.TokenCount() >= threshold {
+				a.mu.Lock()
+				a.precompactCooldownUntil = time.Time{}
+				a.mu.Unlock()
+				debug.Log("precompact", "RESULT DISCARDED but tokens still over threshold; cooldown refunded for immediate re-schedule")
+			}
 			// Remove the compaction marker — compaction failed, marker is stale.
 			if onEvent != nil {
 				onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: "[Auto-compressing context... result discarded (messages changed)]"})
