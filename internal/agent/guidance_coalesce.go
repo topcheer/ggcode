@@ -100,6 +100,20 @@ func extractHintTag(hint string) string {
 	return strings.TrimSpace(m[1])
 }
 
+// criticalHintTagsLower is the lowercase-normalized view of
+// criticalHintTags (#607 B1: the old fallback probed
+// criticalHintTags[strings.ToUpper(tag)] against lowercase-hyphen keys like
+// "hardcoded-secret" — ToUpper could never hit, so Pascal/Title forms such
+// as "Hardcoded-Secret" lost both cap exemption and budget bypass. Both
+// sides now normalize via strings.ToLower.)
+var criticalHintTagsLower = func() map[string]bool {
+	m := make(map[string]bool, len(criticalHintTags))
+	for k := range criticalHintTags {
+		m[strings.ToLower(k)] = true
+	}
+	return m
+}()
+
 // isCriticalTag returns true if the tag represents a critical/safety issue
 // that should always be retained. #441: EXACT match only (case-insensitive)
 // — the old substring fallback let tags like "[SECURITY-TIP]" or
@@ -108,10 +122,7 @@ func isCriticalTag(tag string) bool {
 	if tag == "" {
 		return false
 	}
-	if criticalHintTags[tag] {
-		return true
-	}
-	return criticalHintTags[strings.ToUpper(tag)]
+	return criticalHintTagsLower[strings.ToLower(tag)]
 }
 
 // coalesceGuidance takes a slice of guidance hints for a single tool
@@ -284,12 +295,52 @@ func (a *Agent) applyToolResultGuidance(
 	}
 
 	hints = coalesceGuidance(hints)
-	if ch := detectGuidanceConflict(hints); ch != "" {
-		hints = append([]string{ch}, hints...)
+
+	// #607 B2: tool-result hint injection previously bypassed the per-turn
+	// guidance budget entirely — the budget's "hard per-turn limit across ALL
+	// detectors" only gated injectGuidance, so every tool result could stack
+	// additional advisory hints past the 5/turn cap. Route through the same
+	// budget (critical hints still bypass).
+	// #607 B3: allowDeduped also deduplicates by tag across tool results in
+	// the same turn, so the same meta-hint is not re-injected result after
+	// result.
+	injected := make([]string, 0, len(hints))
+	for _, h := range hints {
+		if a.guidanceBudget.allowDeduped(h) {
+			injected = append(injected, h)
+		}
+	}
+
+	// #607 B3: the conflict meta-hint itself counts against the budget
+	// (previously it was prepended AFTER coalescing, pushing the total past
+	// the per-result cap), and its detection input must not contain our own
+	// [guidance-coalesced] suppression summaries — those quote suppressed
+	// tag names and can re-enter as pseudo-conflicts.
+	if ch := detectGuidanceConflict(stripCoalescedSummaries(injected)); ch != "" && a.guidanceBudget.allowDeduped(ch) {
+		injected = append([]string{ch}, injected...)
+	}
+
+	if len(injected) == 0 {
+		return
 	}
 
 	// (#466: promoter RecordTag removed along with the write-only
 	// persistence — injected hints never depended on it.)
 
-	result.Content = result.Content + "\n\n" + strings.Join(hints, "\n\n")
+	result.Content = result.Content + "\n\n" + strings.Join(injected, "\n\n")
+}
+
+// stripCoalescedSummaries removes [guidance-coalesced] suppression summary
+// lines from the hint set before conflict detection (#607 B3: the summary
+// text quotes suppressed directive tag names, which the keyword-based
+// conflict detector can mistake for a real retained directive pair).
+func stripCoalescedSummaries(hints []string) []string {
+	filtered := make([]string, 0, len(hints))
+	for _, h := range hints {
+		if strings.ToLower(extractHintTag(h)) == "guidance-coalesced" {
+			continue
+		}
+		filtered = append(filtered, h)
+	}
+	return filtered
 }

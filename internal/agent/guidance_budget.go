@@ -29,6 +29,8 @@ package agent
 // providing a hard per-turn limit across ALL detectors combined.
 
 import (
+	"strings"
+
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
 )
@@ -51,6 +53,10 @@ const (
 type guidanceBudget struct {
 	injected   int
 	suppressed int
+	// seenHintTags records tags of tool-result hints already injected this
+	// turn (#607 B3: cross-result dedup — the same meta-hint must not be
+	// re-injected into every subsequent tool result).
+	seenHintTags map[string]bool
 }
 
 // reset clears the budget at the start of a new iteration.
@@ -61,6 +67,7 @@ func (g *guidanceBudget) reset() {
 	}
 	g.injected = 0
 	g.suppressed = 0
+	g.seenHintTags = nil
 }
 
 // allow checks whether a guidance message with the given text should be
@@ -77,6 +84,28 @@ func (g *guidanceBudget) allow(text string) bool {
 	}
 	g.suppressed++
 	return false
+}
+
+// allowDeduped is the tool-result-hint variant of allow (#607 B2/B3).
+// In addition to the per-turn budget, it deduplicates by hint tag across
+// ALL tool results in the same turn — a hint whose tag was already
+// injected into a previous tool result this turn is suppressed instead of
+// being repeated verbatim in every subsequent result.
+func (g *guidanceBudget) allowDeduped(text string) bool {
+	// Critical messages always pass through, but still record their tag so
+	// later duplicate copies of the same critical hint are deduplicated.
+	tag := strings.ToLower(extractHintTag(text))
+	if tag != "" {
+		if g.seenHintTags == nil {
+			g.seenHintTags = make(map[string]bool)
+		}
+		if g.seenHintTags[tag] {
+			g.suppressed++
+			return false
+		}
+		g.seenHintTags[tag] = true
+	}
+	return g.allow(text)
 }
 
 // isCriticalGuidance returns true if the guidance text's HEAD TAG marks it
