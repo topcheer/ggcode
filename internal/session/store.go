@@ -337,6 +337,19 @@ func quickRecordType(line []byte) string {
 	return string(line[start : start+end])
 }
 
+// lastDialogueIndex returns the index of the most recent user-role message,
+// or -1 when the slice contains none. Used by the MaxContextMessages
+// truncation (#607) to guarantee the agent context window keeps real
+// dialogue even when a system-note tail fills the message quota.
+func lastDialogueIndex(msgs []provider.Message) int {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == "user" {
+			return i
+		}
+	}
+	return -1
+}
+
 // quickIsDialogueRole reports whether a raw message record line carries a
 // user or assistant role. Used by findMessageCutoff to anchor the recent
 // window on real conversation turns rather than system-note tails.
@@ -1212,6 +1225,18 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 			for start > 0 && isOrphanToolMessage(ses.Messages[start]) {
 				start--
 				omitted--
+			}
+			// #607: guarantee the window contains real dialogue. Long-running
+			// sessions can end with a tail of system notes (checkpoint markers,
+			// resume notes); counting any role toward the MaxContextMessages
+			// quota could fill the entire window with system records and push
+			// every user/assistant exchange out of the agent's input - same
+			// family as the render-window anchor bug (#601), with the LLM as
+			// the victim instead of the TUI. Clamp the window start so the most
+			// recent user message stays inside.
+			if lastUser := lastDialogueIndex(ses.Messages); lastUser >= 0 && start > lastUser {
+				omitted -= start - lastUser
+				start = lastUser
 			}
 			ses.ContextMessages = ses.Messages[start:]
 			// Prepend a system note so the agent knows earlier context was truncated,
