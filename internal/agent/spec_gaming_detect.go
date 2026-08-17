@@ -202,11 +202,20 @@ func isConfigOrLockFile(path string) bool {
 		base = path[idx+1:]
 	}
 	lower := strings.ToLower(base)
+
+	// Special case: Dockerfile (case-insensitive exact basename match only)
+	if strings.EqualFold(base, "dockerfile") {
+		return true
+	}
+
+	// Special case: Makefile (case-insensitive exact basename match only)
+	if strings.EqualFold(base, "makefile") {
+		return true
+	}
+
 	configSuffixes := []string{
 		".toml", ".yaml", ".yml", ".json", ".ini", ".cfg",
 		".lock", ".mod", ".sum", ".env",
-		".md", ".txt", ".lock",
-		"dockerfile", "makefile",
 	}
 	for _, s := range configSuffixes {
 		if strings.HasSuffix(lower, s) {
@@ -246,7 +255,7 @@ func isCIConfigPath(path string) bool {
 var readOnlySearchVerbs = map[string]bool{
 	"grep": true, "egrep": true, "fgrep": true, "rg": true, "ripgrep": true,
 	"ag": true, "ack": true, "find": true, "cat": true, "head": true,
-	"tail": true, "less": true, "more": true, "wc": true, "git": false, // git handled below (nested subcommand)
+	"tail": true, "less": true, "more": true, "wc": true, "git": true, // git handled below (nested subcommand)
 }
 
 // isReadOnlySearchCommand returns true when the shell command's effective
@@ -266,10 +275,16 @@ func isReadOnlySearchCommand(cmd string) bool {
 	if readOnlySearchVerbs[verb] {
 		return true
 	}
-	// `git grep ...` is read-only investigation; other git subcommands fall
-	// through to the default (not classified as search).
-	if verb == "git" && idx+1 < len(fields) && fields[idx+1] == "grep" {
-		return true
+	if verb == "git" && idx+1 < len(fields) {
+		// git grep is read-only investigation
+		if fields[idx+1] == "grep" {
+			return true
+		}
+		// git log -S and git log -G are historical investigation
+		if fields[idx+1] == "log" && idx+2 < len(fields) &&
+			(fields[idx+2] == "-S" || fields[idx+2] == "-G") {
+			return true
+		}
 	}
 	return false
 }
@@ -292,7 +307,89 @@ func isTestWritingTask(userPrompt string) bool {
 	})
 	for _, w := range words {
 		switch w {
-		case "test", "tests", "testing", "unittest", "unittests":
+		case "test", "tests", "testing", "unittest", "unittests",
+			"spec", "specs", "specification", "specifications",
+			"coverage":
+			return true
+		}
+	}
+	// CJK keywords: substring match is safe (no substring collision risk).
+	for _, kw := range []string{"测试", "回归", "用例", "单测", "单元测试"} {
+		if strings.Contains(lower, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+// isSkipMarkerRemovalCommand returns true when the command appears to be
+// REMOVING skip markers (legitimate remediation) rather than adding them.
+// Examples:
+//   - sed -i 's/t.Skip(/t.Log(/' - removes t.Skip
+//   - awk '{gsub(/t.Skip\(/, "t.Log(")}' - removes t.Skip
+//   - sed -i 's/@pytest.mark.skip//' - removes @pytest.mark.skip
+func isSkipMarkerRemovalCommand(cmd string) bool {
+	lower := strings.ToLower(cmd)
+
+	// Check for sed/awk replacement patterns
+	fields := strings.Fields(cmd)
+	if len(fields) < 2 {
+		return false
+	}
+
+	verb := filepath.Base(fields[0])
+	if verb != "sed" && verb != "awk" {
+		return false
+	}
+
+	if verb == "sed" {
+		return isSedSkipRemoval(cmd)
+	}
+	return isAwkSkipRemoval(lower)
+}
+
+// isSedSkipRemoval detects sed 's/PATTERN/REPLACEMENT/' where PATTERN
+// contains a skip marker but REPLACEMENT does NOT contain the same marker
+// (i.e., the marker is being removed, not introduced).
+func isSedSkipRemoval(cmd string) bool {
+	// Extract the s/// pattern (simplified parsing)
+	parts := strings.Split(cmd, "'s/")
+	if len(parts) < 2 {
+		return false
+	}
+	replacementParts := strings.Split(parts[1], "/")
+	if len(replacementParts) < 2 {
+		return false
+	}
+	pattern := strings.ToLower(replacementParts[0])
+	replacement := strings.ToLower(replacementParts[1])
+
+	hasSkipInPattern := containsAnySkipMarker(pattern)
+	hasSkipInReplacement := containsAnySkipMarker(replacement)
+
+	// Exempt if pattern has skip but replacement doesn't
+	return hasSkipInPattern && !hasSkipInReplacement
+}
+
+// isAwkSkipRemoval detects awk gsub(/PATTERN/, "REPLACEMENT") where the
+// pattern contains a skip marker (heuristic: assume replacement removes it).
+func isAwkSkipRemoval(lower string) bool {
+	if !strings.Contains(lower, "gsub(") {
+		return false
+	}
+	// Normalize backslash escapes first (t\.Skip\( → t.skip( so escaped
+	// regex markers are recognized as removal too (#588 Bug1).
+	normalized := strings.ReplaceAll(lower, "\\", "")
+	// Simplified: if gsub contains skip marker, assume removal
+	// (awk scripts are complex, but this is a reasonable approximation)
+	return containsAnySkipMarker(normalized)
+}
+
+// containsAnySkipMarker reports whether s contains any skip marker,
+// case-insensitively.
+func containsAnySkipMarker(s string) bool {
+	for _, marker := range skipMarkers {
+		if strings.Contains(s, strings.ToLower(marker)) {
 			return true
 		}
 	}
@@ -301,16 +398,29 @@ func isTestWritingTask(userPrompt string) bool {
 
 // hasSkipMarkersInCommands checks if any run_command/start_command input
 // contains test skip/ignore markers. Read-only investigative commands
-// (grep/search class) are excluded first (#544): grepping FOR a skip marker
-// is how a reviewer verifies tests were not bypassed.
+// (grep/search class, git log -S/-G) are excluded first (#544): grepping
+// FOR a skip marker or investigating historical changes is legitimate,
+// not gaming. Also exempts sed/awk commands that REMOVE skip markers
+// (remediation, not introduction).
 func hasSkipMarkersInCommands(commands []string) bool {
 	for _, cmd := range commands {
-		if isReadOnlySearchCommand(cmd) {
+		// Check if this is an exempt command
+		if isSkipMarkerRemovalCommand(cmd) || isReadOnlySearchCommand(cmd) {
 			continue
 		}
 		lower := strings.ToLower(cmd)
 		for _, marker := range skipMarkers {
-			if strings.Contains(lower, strings.ToLower(marker)) {
+			// Check for both unescaped and escaped forms of skip markers
+			// e.g., "t.Skip(" and "t.Skip\(" or "t\.Skip\("
+			markerLower := strings.ToLower(marker)
+			if strings.Contains(lower, markerLower) {
+				return true
+			}
+			// Check escaped versions (backslash before parentheses/dots)
+			// In Go raw strings, a single backslash in the pattern is represented as \\
+			escapedMarker := strings.ReplaceAll(marker, "(", "\\(")
+			escapedMarker = strings.ReplaceAll(escapedMarker, ".", "\\.")
+			if strings.Contains(cmd, escapedMarker) {
 				return true
 			}
 		}
