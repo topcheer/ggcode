@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/topcheer/ggcode/internal/debug"
@@ -987,9 +988,35 @@ func (m *Manager) RecordUsage(usage provider.TokenUsage) {
 	// tokenCountLocked() here: the baseline was just overwritten by this
 	// very usage, which would make the comparison circular.
 	asciiChars, cjkChars := m.compositionLocked()
+	// #605 G3: compositionLocked counts only ASCII and true CJK (#598). A
+	// pure-Cyrillic/Greek session returns (0,0) — RecordSample would fall
+	// back to its ASCII-only assumption (asciiShare=1.0) and drive asciiRatio
+	// with samples the estimation side prices via fixed per-script tiers
+	// (tokenizer.go), structurally mis-calibrating ASCII while the actual
+	// scripts stay invisible to the ratio loop. Freeze instead: skip the
+	// sample entirely rather than mis-attribute it.
+	if asciiChars+cjkChars == 0 {
+		if m.totalContentRunes() > 0 {
+			debug.Log("context-calibrator", "sample-frozen: uncovered scripts only (see #598/#605)")
+			return
+		}
+	}
 	m.calibrator.RecordSample(m.tokens+m.toolDefinitionOverhead, totalInput, asciiChars, cjkChars)
 	debug.Log("ctx", "RecordUsage: input=%d cache_read=%d output=%d old_baseline=%d→new_baseline=%d estimated=%d delta=%d",
 		usage.InputTokens, usage.CacheRead, usage.OutputTokens, oldBaseline, m.baselineTokens, m.tokens, m.baselineTokens-m.tokens)
+}
+
+// totalContentRunes counts all runes across message text/reasoning/output
+// regardless of script (#605 G3) — used to distinguish "empty context" from
+// "context written in scripts the ratio calibration does not cover".
+func (m *Manager) totalContentRunes() int {
+	total := 0
+	for _, msg := range m.messages {
+		for _, b := range msg.Content {
+			total += utf8.RuneCountInString(b.Text + b.ReasoningContent + b.Output)
+		}
+	}
+	return total
 }
 
 // compositionLocked returns the ASCII/CJK character counts of all message

@@ -491,6 +491,13 @@ func scanDelimiters(content string, style commentStyle) string {
 	// Check for unclosed opening delimiters.
 	if len(stack) > 0 {
 		unclosed := stack[0] // outermost unclosed
+		// #605 G4: include the count so a 1→2 worsening write produces a
+		// DIFFERENT message than the pre-existing single imbalance — the
+		// delta gate compares messages to separate "untouched" from
+		// "introduced/worsened".
+		if len(stack) > 1 {
+			return fmt.Sprintf("line %d: unclosed '%s' — missing closing delimiter (%d unclosed total)", unclosed.line, bracketName(unclosed.char), len(stack))
+		}
 		return fmt.Sprintf("line %d: unclosed '%s' — missing closing delimiter", unclosed.line, bracketName(unclosed.char))
 	}
 

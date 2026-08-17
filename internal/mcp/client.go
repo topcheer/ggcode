@@ -1192,6 +1192,13 @@ func extractSSEResponseForID(body []byte, reqID *ID) (*Response, error) {
 	if lastParseErr != nil {
 		return nil, fmt.Errorf("parsing SSE response: no valid JSON-RPC message found: %w", lastParseErr)
 	}
+	// #605 G1: no Response matched among the parsed events AND the scanner
+	// hit its buffer cap mid-stream (e.g. a notification first, then a >1MB
+	// result line) — the truncation cause outranks the count-based message;
+	// otherwise we repeat #597 M2's misdiagnosis one step later in the stream.
+	if scanErr != nil {
+		return nil, fmt.Errorf("parsing SSE response: %w", scanErr)
+	}
 	return nil, fmt.Errorf("parsing SSE response: no Response found in %d event(s)", len(events))
 }
 

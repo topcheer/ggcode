@@ -66,3 +66,18 @@ func TestIssue597_M2_OversizedSSELineSurfacesError(t *testing.T) {
 		t.Fatalf("error should carry SSE context: %v", scanErr)
 	}
 }
+
+// TestIssue605_G1_MidStreamErrTooLongNotSwallowed: a notification followed
+// by a >1MB line previously reported "no Response found in 1 event(s)"
+// — #597 M2's misdiagnosis preserved one step later (#605 G1 probe).
+func TestIssue605_G1_MidStreamErrTooLongNotSwallowed(t *testing.T) {
+	body := "data: " + `{"jsonrpc":"2.0","method":"notifications/progress","params":{}}` + "\n\n" +
+		"data: " + strings.Repeat("x", 2*1024*1024) + "\n\n"
+	_, err := extractSSEResponse([]byte(body))
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "scanning SSE") {
+		t.Fatalf("truncation cause must outrank count message, got: %v", err)
+	}
+}

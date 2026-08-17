@@ -328,8 +328,15 @@ func (a *App) emitStreamEvent(eventType string, data json.RawMessage) {
 	// window is not focused (user switched to another app).
 	if a.notifications != nil {
 		switch eventType {
-		case "complete":
-			a.notifications.Notify("GGCode", notifyCompleteBody(data))
+		case "run_done":
+			// #605 G2: the completion event is "run_done" (chat.go L722), not
+			// "complete" — the old case was dead code with zero emitters, so
+			// #600 N5's concurrent-session merge defect was fully preserved.
+			// Payload: {turn_id, message_id, error}; error != "" is a failed
+			// run — the error case below owns that notification.
+			if streamEventStringField(data, "error") == "" {
+				a.notifications.Notify("GGCode", notifyCompleteBody(data))
+			}
 		case "error":
 			a.notifications.Notify("GGCode", notifyErrorBody(data))
 		case "approval:request":

@@ -77,10 +77,20 @@ func deltaGateNew(fn func(string, string) string) func(CheckContext) []string {
 		if !diff.HasChanges(ctx.OldContent, ctx.NewContent) {
 			return nil
 		}
-		if w := fn(ctx.FilePath, ctx.NewContent); w != "" && fn(ctx.FilePath, ctx.OldContent) == "" {
-			return []string{w}
+		newW := fn(ctx.FilePath, ctx.NewContent)
+		if newW == "" {
+			return nil
 		}
-		return nil
+		// #605 G4: the old boolean gate (fn(old)=="") suppressed 1→2
+		// worsening writes — an edit that ADDS a second imbalance while the
+		// first remains got zero warning (ver-93 probe). Identical old/new
+		// messages mean the untouched pre-existing problem (W4's target);
+		// a DIFFERENT message means this write introduced or moved a problem
+		// (different line/marker) and must surface.
+		if oldW := fn(ctx.FilePath, ctx.OldContent); oldW == newW {
+			return nil
+		}
+		return []string{newW}
 	}
 }
 
