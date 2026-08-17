@@ -21,14 +21,22 @@ func TestParseClipboardPathOutputSplitsOnlyByLines(t *testing.T) {
 	}
 }
 
-func TestParseClipboardPathOutputFileURLAndCR(t *testing.T) {
+func TestParseClipboardPathOutputCRHandling(t *testing.T) {
+	// #579: the file:// URI branch was removed as dead code (upstream
+	// AppleScript reads |path|(), never URIs). This test now covers the
+	// surviving behavior: CR/LF normalization and literal passthrough.
 	output := "file:///tmp/a%20b.txt\r\n/tmp/c.txt"
 	paths := parseClipboardPathOutput(output)
 	if len(paths) != 2 {
 		t.Fatalf("expected 2 paths, got %d: %v", len(paths), paths)
 	}
-	if paths[0] != "/tmp/a b.txt" {
-		t.Fatalf("expected decoded file URL path, got %q", paths[0])
+	// Dead branch removed: the first item passes through literally — it
+	// is a phantom path only if upstream ever produced URIs (it cannot).
+	if paths[0] != "file:///tmp/a%20b.txt" {
+		t.Fatalf("expected literal passthrough after dead-code removal, got %q", paths[0])
+	}
+	if paths[1] != "/tmp/c.txt" {
+		t.Fatalf("expected %q, got %q", "/tmp/c.txt", paths[1])
 	}
 }
 

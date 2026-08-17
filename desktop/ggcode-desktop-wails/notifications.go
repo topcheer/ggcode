@@ -107,8 +107,28 @@ func (nm *NotificationManager) SetFocused(focused bool) {
 // It also bumps the dock badge count.
 func (nm *NotificationManager) Notify(title, body string) {
 	nm.mu.Lock()
-	if !nm.enabled || nm.focused {
+	if !nm.enabled {
 		nm.mu.Unlock()
+		return
+	}
+	if nm.focused {
+		// #579: focused sessions still get the in-app notification-center
+		// event — previously this early return dropped EventsEmit entirely,
+		// so completed-task events never reached the frontend history while
+		// the user was looking at the app (the "center still receives every
+		// event" comment only held inside the dedup branch). Only the OS
+		// banner/badge path is suppressed when focused.
+		ctx := nm.ctx
+		nm.mu.Unlock()
+		if ctx != nil {
+			if wctx, ok := ctx.(context.Context); ok {
+				wailsruntime.EventsEmit(wctx, "notification", map[string]string{
+					"title": title,
+					"body":  body,
+				})
+			}
+		}
+		debug.Log("desktop", "notification os-banner suppressed (focused), center event emitted: %s", title)
 		return
 	}
 	// Storm dedup (#398): identical title+body within a short window collapses
@@ -177,6 +197,35 @@ func (nm *NotificationManager) NotifyApprovalNeeded(title, body string) {
 		nm.mu.Unlock()
 		return
 	}
+	// #579 storm dedup: replayed/concurrent stream events can deliver the
+	// same approval request N times; title/body are effectively fixed
+	// ("GGCode"/"Approval needed"), so without dedup each replay spawned
+	// another osascript process (0.3-1.5s cold start) — #398 covered
+	// Notify only. Approval semantics preserved: no focused suppression
+	// here; the dedup window collapses the OS banner but still emits the
+	// frontend center event.
+	apKey := "approval\x00" + title + "\x00" + body
+	if t, ok := nm.lastShown[apKey]; ok && time.Since(t) < 5*time.Second {
+		ctxSnap := nm.ctx // #450: snapshot under the lock
+		nm.mu.Unlock()
+		if ctx := ctxSnap; ctx != nil {
+			if wctx, ok := ctx.(context.Context); ok {
+				wailsruntime.EventsEmit(wctx, "notification", map[string]string{
+					"title": title,
+					"body":  body,
+				})
+			}
+		}
+		debug.Log("desktop", "approval notification deduped: %s", title)
+		return
+	}
+	if nm.lastShown == nil {
+		nm.lastShown = make(map[string]time.Time)
+	}
+	if len(nm.lastShown) >= maxLastShownEntries {
+		nm.pruneLastShown()
+	}
+	nm.lastShown[apKey] = time.Now()
 	// Approval notifications show even when focused (they're important),
 	// but only bump badge if not focused.
 	if !nm.focused {

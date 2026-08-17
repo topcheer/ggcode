@@ -545,15 +545,15 @@ func parseClipboardPathOutput(output string) []string {
 	// Split only by newlines. The AppleScript above joins the path list with
 	// linefeed, so no ", " secondary split is needed (and it would corrupt
 	// file names containing ", ").
+	// #579: the former file:// prefix branch was dead code — the upstream
+	// AppleScript reads |path|() which never returns URIs, so the branch
+	// only fired on synthetic test input and masked the separator's real
+	// limitation: macOS filenames may legally contain \n, which the
+	// linefeed separator cannot distinguish (documented in zz_issue579_test).
 	for _, item := range strings.Split(strings.ReplaceAll(output, "\r", "\n"), "\n") {
 		item = strings.TrimSpace(item)
 		if item == "" {
 			continue
-		}
-		if strings.HasPrefix(item, "file://") {
-			if u, err := url.Parse(item); err == nil {
-				item = u.Path
-			}
 		}
 		paths = append(paths, item)
 	}
@@ -582,6 +582,14 @@ func readClipboardFileAttachment(path string) ClipboardAttachment {
 	}
 
 	if img, err := imgpkg.ReadFile(path); err == nil {
+		// #579: imgpkg.ReadFile enforces its own 20MB MaxSize, but the
+		// clipboard contract here is 10MB — on FIFOs (Stat size 0) the
+		// pre-read check above passed vacuously and this branch could
+		// hand back ~20MB×1.33 base64. Enforce the contract post-read.
+		if int64(len(img.Data)) > maxClipboardFileBytes {
+			att.Error = "File is larger than 10MB"
+			return att
+		}
 		att.Kind = "image"
 		att.MimeType = img.MIME
 		att.Data = imgpkg.EncodeBase64(img)
@@ -1382,11 +1390,16 @@ func (a *App) RemoveMCPServer(name string) error {
 // ─── Cron Jobs ───────────────────────────────────────────
 
 // ListCronJobs returns all cron jobs for the current session.
-func (a *App) ListCronJobs() []wailskit.CronJobInfo {
-	if bridge := wailskit.GetChatBridge(); bridge != nil {
-		return bridge.ListCronJobs()
+// #580: surface bridge/scheduler-unavailable as an error instead of a
+// silent empty list — cron jobs are workspace-persistent, and an empty
+// success state reads as "all jobs lost" after onboarding early-exit or
+// provider-resolution failure paths.
+func (a *App) ListCronJobs() ([]wailskit.CronJobInfo, error) {
+	bridge := wailskit.GetChatBridge()
+	if bridge == nil {
+		return nil, fmt.Errorf("chat bridge not available")
 	}
-	return nil
+	return bridge.ListCronJobs()
 }
 
 // GetCronJob returns a single cron job by ID.
@@ -1628,6 +1641,14 @@ func (a *App) ReadFileAsBase64(path string) (*FileBinaryData, error) {
 	data, err := os.ReadFile(abs)
 	if err != nil {
 		return nil, err
+	}
+	// #579: FIFO post-read recheck — Stat().Size() is 0 on FIFOs (same
+	// class as #459's clipboard fix), so the 150MB pre-check passes
+	// vacuously and ReadFile pulls unbounded data into memory before the
+	// base64 expansion. Cap actual damage at detection time.
+	if int64(len(data)) > maxReadFileBase64Bytes {
+		return nil, fmt.Errorf("file data is %.1fMB, exceeding the %dMB preview limit; please open it in an external application instead",
+			float64(len(data))/(1<<20), maxReadFileBase64Bytes/(1<<20))
 	}
 	mime := mimeTypeFromExt(abs)
 	return &FileBinaryData{
