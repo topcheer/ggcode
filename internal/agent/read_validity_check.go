@@ -32,13 +32,17 @@ package agent
 // Design constraints:
 //   - Zero LLM cost (deterministic hash comparison)
 //   - FNV-1a is 5-10x faster than SHA256 for small files (<100KB typical)
-//   - Only hashes first 16KB of large files (sufficient for change detection)
+//   - Hashes up to the first 1MB of very large files (#627: the old 16KB
+//     prefix window left the tail of large files as a blind spot, silently
+//     missing sub-second edits beyond the prefix — the very case this
+//     detector exists to catch)
 //   - Falls back gracefully if file can't be read (open error → skip check)
 //   - Non-blocking: advice is appended to tool result, execution proceeds
 
 import (
 	"encoding/json"
 	"hash/fnv"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -47,10 +51,12 @@ import (
 )
 
 const (
-	// maxHashBytes limits how much of the file we hash. For change detection,
-	// the first 16KB is sufficient: it covers imports, function signatures,
-	// and the beginning of the body where edits are most likely to diverge.
-	maxHashBytes = 16 * 1024
+	// maxHashBytes limits how much of the file we hash (#627). 1MB covers
+	// virtually every source file in full; only beyond that do we fall back
+	// to prefix hashing. The old 16KB window missed edits in the tail of
+	// large files even when sub-second mtime races were the whole point of
+	// the content hash.
+	maxHashBytes = 1024 * 1024
 
 	// staleHashThreshold is the minimum number of characters in old_text that
 	// triggers the sub-second-stale warning. Trivial edits (one-line fixes)
@@ -90,23 +96,43 @@ func readValidityKey(p string) string {
 	return filepath.Clean(strings.TrimSpace(p))
 }
 
+// resolveReadHashKey finds the unique map key that corresponds to path.
+// An exact key match wins. Otherwise a bounded suffix scan tolerates
+// absolute-vs-relative form mixtures (#557), but ONLY when exactly one
+// candidate matches (#627): monorepos commonly hold several files with
+// the same basename, and with random map iteration order the old scan
+// returned an arbitrary sibling's hash — mis-reporting "content changed"
+// or hiding real staleness. On ambiguity we give up and log.
+func resolveReadHashKey(t *readHashTracker, path string) (string, bool) {
+	k := readValidityKey(path)
+	if _, ok := t.hashes[k]; ok {
+		return k, true
+	}
+	match := ""
+	count := 0
+	for key := range t.hashes {
+		if strings.HasSuffix(key, "/"+k) || strings.HasSuffix(k, "/"+key) {
+			match = key
+			count++
+		}
+	}
+	if count == 1 {
+		return match, true
+	}
+	if count > 1 {
+		debug.Log("agent", "read-validity: ambiguous suffix match for %s (%d same-basename candidates), skipping lookup", k, count)
+	}
+	return "", false
+}
+
 // lookupReadHash finds the stored hash for path, tolerating absolute vs
 // relative form mixtures (#557): reads often arrive absolute (resolveToolPath)
 // while edit calls carry repo-relative paths — the direct-key miss used to
-// silently skip the content-hash expiry check. On a miss, a bounded suffix
-// scan over the (small, per-run) map matches "/w/repo/a.go" against "a.go".
+// silently skip the content-hash expiry check. Suffix matching requires a
+// unique hit (#627).
 func lookupReadHash(t *readHashTracker, path string) (uint64, bool) {
-	k := readValidityKey(path)
-	if h, ok := t.hashes[k]; ok {
-		return h, true
-	}
-	for key, h := range t.hashes {
-		if key == k {
-			return h, true
-		}
-		if strings.HasSuffix(key, "/"+k) || strings.HasSuffix(k, "/"+key) {
-			return h, true
-		}
+	if key, ok := resolveReadHashKey(t, path); ok {
+		return t.hashes[key], true
 	}
 	return 0, false
 }
@@ -133,13 +159,34 @@ func (t *readHashTracker) recordWriteHash(path string) {
 	}
 	n := readValidityKey(path)
 	delete(t.hashes, n)
-	// Also drop any opposite-form key (abs vs rel mixture, #557).
-	for key := range t.hashes {
-		if strings.HasSuffix(key, "/"+n) || strings.HasSuffix(n, "/"+key) {
-			delete(t.hashes, key)
-		}
+	// Also drop the opposite-form key (abs vs rel mixture, #557) — but only
+	// when the suffix match is unambiguous (#627): sibling files sharing a
+	// basename must not have their hashes evicted by a relative-form write.
+	if key, ok := resolveReadHashKey(t, path); ok {
+		delete(t.hashes, key)
 	}
 	delete(t.warned, n)
+	if wk, ok := resolveWarnedKey(t, path); ok {
+		delete(t.warned, wk)
+	}
+}
+
+// resolveWarnedKey mirrors resolveReadHashKey for the warned map, so a
+// write in one path form clears the warned flag recorded in the other.
+func resolveWarnedKey(t *readHashTracker, path string) (string, bool) {
+	k := readValidityKey(path)
+	match := ""
+	count := 0
+	for key := range t.warned {
+		if key == k || strings.HasSuffix(key, "/"+k) || strings.HasSuffix(k, "/"+key) {
+			match = key
+			count++
+		}
+	}
+	if count == 1 {
+		return match, true
+	}
+	return "", false
 }
 
 // validateContentAtEdit checks whether the file content has changed since
@@ -196,10 +243,12 @@ func hashFilePrefix(path string) uint64 {
 	}
 	defer f.Close()
 
+	// Read the full window in a loop: a single Read may return short for
+	// large buffers even on regular files (#627 — window is now 1MB).
 	buf := make([]byte, maxHashBytes)
-	n, err := f.Read(buf)
+	n, err := io.ReadFull(f, buf)
 	if err != nil && n == 0 {
-		return 0
+		return 0 // Empty or unreadable; treat as no-hash.
 	}
 
 	h := fnv.New64a()

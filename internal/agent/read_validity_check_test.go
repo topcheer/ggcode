@@ -286,7 +286,7 @@ func TestReadHashTracker_LargeFilePartialHash(t *testing.T) {
 	dir := t.TempDir()
 	f := filepath.Join(dir, "large.go")
 
-	// Create a file larger than maxHashBytes.
+	// Create a file larger than maxHashBytes (1MB since #627).
 	large := make([]byte, maxHashBytes+4096)
 	for i := range large {
 		large[i] = byte(i % 256)
@@ -312,6 +312,44 @@ func TestReadHashTracker_LargeFilePartialHash(t *testing.T) {
 	hint2 := tr.validateContentAtEdit(f, 100)
 	if hint2 == "" {
 		t.Error("changes within hashed prefix should trigger warning")
+	}
+}
+
+// #627 defect 2: a tail edit in a file that fits the (now 1MB) hash window
+// must be detected even when mtime is restored to the original value, which
+// simulates a sub-second edit the mtime check cannot see.
+func TestReadHashTracker_TailEditWithinWindowDetected(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "big.go")
+
+	// 32KB file: fully hashed now, tail beyond the old 16KB window.
+	content := make([]byte, 32*1024)
+	for i := range content {
+		content[i] = byte(i % 251)
+	}
+	if err := os.WriteFile(f, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	origMtime := fi.ModTime()
+
+	tr := newReadHashTracker()
+	tr.recordReadHash(f)
+
+	// Edit deep in the tail (byte 31KB) and restore the original mtime.
+	content[31*1024] = 99
+	if err := os.WriteFile(f, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(f, origMtime, origMtime); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := tr.validateContentAtEdit(f, 100); got == "" {
+		t.Error("tail edit within hash window not detected despite restored mtime (#627)")
 	}
 }
 

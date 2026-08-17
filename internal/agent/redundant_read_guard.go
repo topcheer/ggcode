@@ -85,9 +85,12 @@ func (r *redundantReadState) checkRedundantRead(path string, partial bool) strin
 	}
 	// #463: windowed reads (offset/limit) fetch a DIFFERENT chunk of a
 	// large file — path-level "already in context" logic does not apply.
-	// Record the mtime and step aside so chunked reads are never flagged.
+	// #626: a partial read must NOT seed the mtime baseline either. Only a
+	// fragment of the file is in context, so a later FULL read of the same
+	// file is not redundant — seeding the baseline here used to make the
+	// full read get mis-flagged as "already read" even though the context
+	// held just a slice. Partial reads step aside entirely.
 	if partial {
-		r.recordReadMtime(path)
 		return ""
 	}
 	n := normalizePath(path)
