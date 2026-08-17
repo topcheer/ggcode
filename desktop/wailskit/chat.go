@@ -518,6 +518,18 @@ func (b *ChatBridge) sendMessageData(data tunnel.MessageData, source string, exc
 	}()
 
 	if b.agent == nil {
+		// #269: never auto-rebuild against a session whose lock we do not
+		// hold — the auto-rebuild bypasses the session lock and would
+		// cross-append to a JSONL another instance may now own.
+		b.mu.Lock()
+		ses := b.currentSes
+		mismatch := b.sessionLockMismatchLocked(ses)
+		b.mu.Unlock()
+		if mismatch {
+			err := fmt.Errorf("session %s lock mismatch; refusing agent auto-rebuild", ses.ID)
+			b.finishRun(err)
+			return err
+		}
 		if err := b.InitAgent(ctx); err != nil {
 			// #514: finishRun sends run_done (the ONLY path that clears the
 			// frontend busy state) + tunnel idle + LAN cleanup. b.cancel is
@@ -534,6 +546,21 @@ func (b *ChatBridge) sendMessageData(data tunnel.MessageData, source string, exc
 		b.finishRun(err)
 		return fmt.Errorf("ensure session: %w", err)
 	}
+	// #594: bind THIS run's persist target. The text path never called
+	// setRunPersistSnapshot (SendContent was the only production caller),
+	// so every desktop text / IM / mobile / LAN message silently skipped
+	// disk persistence — entire conversations vanished on restart; only
+	// the image-paste path persisted. Refresh the run snapshot AFTER
+	// ensureSession (the session may just have been created) and install
+	// the per-run persist binding, mirroring SendContent. This also closes
+	// the stale-binding variant: after SendContent bound session A, a
+	// LoadSession(B) + text send persisted B's messages into A's JSONL (or
+	// dropped them on lock mismatch) because the snapshot still pointed at
+	// A — rebinding per run keeps the target current.
+	b.mu.Lock()
+	b.runSes = b.currentSes
+	b.mu.Unlock()
+	b.setRunPersistSnapshot()
 	// Rebind the per-session projection broker before every run so subsequent
 	// turns cannot inherit a stale broker callback/session binding.
 	b.bindTunnelProjectionSession()
@@ -1267,52 +1294,6 @@ func (b *ChatBridge) persistRunMessages() {
 	ses.Messages = append(ses.Messages, newMsgs...)
 	ses.UpdatedAt = time.Now()
 	b.mu.Unlock()
-}
-
-func (b *ChatBridge) saveSession() {
-	b.mu.Lock()
-	ses := b.currentSes
-	store := b.sessionStore
-	agent := b.agent
-	digests := b.pendingDigests
-	b.pendingDigests = nil
-	b.mu.Unlock()
-
-	if agent == nil {
-		msgs := ses.Messages
-		if len(digests) > 0 {
-			msgs = append(msgs, digests...)
-		}
-		_ = agentruntime.SaveSessionMessages(store, ses, msgs)
-		return
-	}
-
-	agentMsgs := agent.Messages()
-
-	// Detect compaction: agent has fewer messages than session → compaction
-	// happened. The checkpoint handler already appended a checkpoint record
-	// to disk. Do NOT do a full rewrite — that would destroy pre-compaction
-	// history from the JSONL file.
-	if _, ok := store.(*session.JSONLStore); ok && len(agentMsgs) < len(ses.Messages) {
-		log.Printf("[chat] compaction detected: agent=%d msgs vs session=%d msgs, skipping full rewrite",
-			len(agentMsgs), len(ses.Messages))
-		// Do NOT overwrite ses.Messages — that would destroy pre-compaction
-		// history in memory. The checkpoint handler already persisted the
-		// compacted state to disk. Just append new digests.
-		for _, dg := range digests {
-			ses.Messages = append(ses.Messages, dg)
-			// Disk persistence handled by onPersist (SetPersistHandler).
-		}
-		return
-	}
-
-	// With per-message persistence (SetPersistHandler), all agent messages
-	// are already written to JSONL incrementally. Only append extra digests
-	// that the agent didn't add itself (e.g. turn summaries).
-	for _, dg := range digests {
-		ses.Messages = append(ses.Messages, dg)
-		// Disk persistence handled by onPersist (SetPersistHandler).
-	}
 }
 
 func (b *ChatBridge) StartNewSession() (string, error) {
@@ -3352,6 +3333,14 @@ func (b *ChatBridge) SendHiddenText(text string) error {
 	}
 
 	runGen := b.currentRunGeneration() // #504: see emitIfCurrent
+	// #594: hidden-text runs need the persist binding too — this path sets
+	// runSes+generation at run start but never installed the per-run
+	// persist target, so hidden/system prompts never reached disk either.
+	b.mu.Lock()
+	b.runSes = b.currentSes
+	b.mu.Unlock()
+	b.setRunPersistSnapshot()
+	runGen = b.currentRunGeneration()
 	err := b.agent.RunStream(ctx, text, func(ev provider.StreamEvent) {
 		b.emitIfCurrent(runGen, ev)
 	})
