@@ -54,8 +54,10 @@ function LayoutInner() {
       const focused = !document.hidden && document.hasFocus()
       App.SetWindowFocused(focused).catch(() => {})
     }
-    // Set initial state (focused on mount)
-    App.SetWindowFocused(true).catch(() => {})
+    // Set initial state from actual window state (#600 N3): a background-
+    // started window never fires blur (it never had focus), so hardcoding
+    // focused=true here permanently suppressed OS notifications for it.
+    updateFocus()
     document.addEventListener('visibilitychange', updateFocus)
     window.addEventListener('blur', updateFocus)
     window.addEventListener('focus', updateFocus)

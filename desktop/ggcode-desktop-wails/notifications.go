@@ -175,8 +175,25 @@ func (nm *NotificationManager) Notify(title, body string) {
 	// Update dock badge
 	nm.setBadge(count)
 
-	// Show OS-level notification
-	nm.showOSNotification(title, body)
+	// Show OS-level notification. #600 N4: on Windows the toast queue can be
+	// full; enqueueWinToast reports that and we roll back the dedup-map entry
+	// and unread count committed above — otherwise the badge counts a banner
+	// that will never display, and a retry within 5s hits the dedup branch
+	// and is never re-queued either.
+	if runtime.GOOS == "windows" {
+		if !nm.enqueueWinToast(title, body) {
+			nm.mu.Lock()
+			delete(nm.lastShown, key)
+			nm.unread--
+			if nm.unread < 0 {
+				nm.unread = 0
+			}
+			nm.mu.Unlock()
+			debug.Log("desktop", "notification rolled back after toast enqueue failure: %s", title)
+		}
+	} else {
+		nm.showOSNotification(title, body)
+	}
 
 	// Also emit to frontend for in-app notification center
 	if ctx != nil {
@@ -206,6 +223,14 @@ func (nm *NotificationManager) NotifyApprovalNeeded(title, body string) {
 	// frontend center event.
 	apKey := "approval\x00" + title + "\x00" + body
 	if t, ok := nm.lastShown[apKey]; ok && time.Since(t) < 5*time.Second {
+		// #600 N2: #427 fixed this exact omission in Notify's dedup branch but
+		// the sister function was missed — deduped approvals bumped nothing, so
+		// replayed requests never moved the badge. Mirror Notify: bump unread
+		// when unfocused and refresh the badge.
+		if !nm.focused {
+			nm.unread++
+		}
+		count := nm.unread
 		ctxSnap := nm.ctx // #450: snapshot under the lock
 		nm.mu.Unlock()
 		if ctx := ctxSnap; ctx != nil {
@@ -216,7 +241,10 @@ func (nm *NotificationManager) NotifyApprovalNeeded(title, body string) {
 				})
 			}
 		}
-		debug.Log("desktop", "approval notification deduped: %s", title)
+		if count > 0 {
+			nm.setBadge(count)
+		}
+		debug.Log("desktop", "approval notification deduped: %s (unread=%d)", title, count)
 		return
 	}
 	if nm.lastShown == nil {
@@ -240,7 +268,20 @@ func (nm *NotificationManager) NotifyApprovalNeeded(title, body string) {
 	if count > 0 {
 		nm.setBadge(count)
 	}
-	nm.showOSNotification(title, body)
+	// #600 N4: same queue-full rollback contract as Notify (Windows only).
+	if runtime.GOOS == "windows" {
+		if !nm.enqueueWinToast(title, body) {
+			nm.mu.Lock()
+			delete(nm.lastShown, apKey)
+			if !nm.focused && nm.unread > 0 {
+				nm.unread--
+			}
+			nm.mu.Unlock()
+			debug.Log("desktop", "approval notification rolled back after toast enqueue failure: %s", title)
+		}
+	} else {
+		nm.showOSNotification(title, body)
+	}
 
 	// #427: approval notifications must also reach the in-app notification
 	// center — Notify() emits "notification" on both paths, but this path
@@ -364,14 +405,24 @@ func (nm *NotificationManager) notifyLinux(title, body string) {
 }
 
 func (nm *NotificationManager) notifyWindows(title, body string) {
-	// Use PowerShell toast notification on Windows — best-effort, no
-	// external dependencies. Script assembly happens in the worker
-	// (windowsToastScript); this path only enqueues.
-	// Enqueue for the single worker (#399) — never spawn per-notification
+	// Kept for interface parity; real delivery goes through enqueueWinToast so
+	// callers can roll back their dedup/unread commits on queue-full (#600 N4).
+	_ = nm.enqueueWinToast(title, body)
+}
+
+// enqueueWinToast offers a toast to the single worker queue (#399) and
+// reports whether it was accepted. Returns false when the queue is full —
+// the caller must then roll back its lastShown/unread commits (#600 N4).
+// Platform-independent by design (callers gate on GOOS before calling); the
+// queue mechanics are identical everywhere, which keeps the rollback path
+// unit-testable on non-Windows hosts.
+func (nm *NotificationManager) enqueueWinToast(title, body string) bool {
 	select {
 	case nm.winQueue <- winToast{title: title, body: body}:
+		return true
 	default:
 		debug.Log("desktop", "Windows toast queue full; dropping notification: %s", title)
+		return false
 	}
 }
 

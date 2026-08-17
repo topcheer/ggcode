@@ -329,15 +329,98 @@ func (a *App) emitStreamEvent(eventType string, data json.RawMessage) {
 	if a.notifications != nil {
 		switch eventType {
 		case "complete":
-			a.notifications.Notify("GGCode", "Task completed")
+			a.notifications.Notify("GGCode", notifyCompleteBody(data))
 		case "error":
-			a.notifications.Notify("GGCode", "An error occurred")
+			a.notifications.Notify("GGCode", notifyErrorBody(data))
 		case "approval:request":
-			a.notifications.NotifyApprovalNeeded("GGCode", "Approval needed")
+			a.notifications.NotifyApprovalNeeded("GGCode", notifyApprovalBody(data))
 		case "ask_user:request":
-			a.notifications.NotifyApprovalNeeded("GGCode", "Question from agent")
+			a.notifications.NotifyApprovalNeeded("GGCode", notifyAskUserBody(data))
 		}
 	}
+}
+
+// streamEventStringField extracts a top-level string field from a stream-event
+// payload. Returns "" for nil payloads, non-JSON payloads, or missing/non-string
+// fields — callers treat "" as "no identity available" and fall back to the
+// legacy fixed wording.
+func streamEventStringField(data json.RawMessage, key string) string {
+	if len(data) == 0 {
+		return ""
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal(data, &m); err != nil {
+		return ""
+	}
+	if v, ok := m[key].(string); ok {
+		return v
+	}
+	return ""
+}
+
+// shortNotifyID trims an opaque request id to its first 8 chars for display.
+func shortNotifyID(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
+}
+
+// notifyApprovalBody (#600 N1): fold requestID/toolName into the body so that
+// two DISTINCT approval requests arriving within the 5s dedup window produce
+// distinct dedup keys. The old fixed body ("Approval needed") made the second
+// approval's OS banner silently swallowed — after remotely approving the
+// first, the agent stalled with no banner and no badge change.
+func notifyApprovalBody(data json.RawMessage) string {
+	tool := streamEventStringField(data, "toolName")
+	req := shortNotifyID(streamEventStringField(data, "requestID"))
+	switch {
+	case tool != "" && req != "":
+		return "Approval needed: " + tool + " (#" + req + ")"
+	case tool != "":
+		return "Approval needed: " + tool
+	case req != "":
+		return "Approval needed (#" + req + ")"
+	}
+	return "Approval needed"
+}
+
+// notifyAskUserBody: same identity treatment for ask_user requests (title +
+// requestID from the chat.go payload).
+func notifyAskUserBody(data json.RawMessage) string {
+	title := streamEventStringField(data, "title")
+	req := shortNotifyID(streamEventStringField(data, "requestID"))
+	switch {
+	case title != "" && req != "":
+		return "Question from agent: " + title + " (#" + req + ")"
+	case title != "":
+		return "Question from agent: " + title
+	case req != "":
+		return "Question from agent (#" + req + ")"
+	}
+	return "Question from agent"
+}
+
+// notifyCompleteBody (#600 N5): include the turn id so concurrent sessions
+// completing within the 5s window are not dedup-merged into one banner.
+func notifyCompleteBody(data json.RawMessage) string {
+	if turn := streamEventStringField(data, "turn_id"); turn != "" {
+		return "Task completed (" + shortNotifyID(turn) + ")"
+	}
+	return "Task completed"
+}
+
+// notifyErrorBody (#600 N5): include the error text (truncated) so different
+// errors from concurrent sessions are not dedup-merged.
+func notifyErrorBody(data json.RawMessage) string {
+	msg := streamEventStringField(data, "message")
+	if len(msg) > 80 {
+		msg = msg[:80] + "..."
+	}
+	if msg != "" {
+		return "An error occurred: " + msg
+	}
+	return "An error occurred"
 }
 
 func (a *App) switchWorkspace(dir string) error {
