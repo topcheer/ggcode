@@ -251,12 +251,14 @@ func (a *Agent) consumeReadyPreCompact(onEvent func(provider.StreamEvent)) bool 
 		debug.Log("precompact", "READY consumed applied=%t tokens=%d startTok=%d result.changed=%t result.msgs=%d", applied, newTokens, pc.startTok, pc.result.Changed, len(pc.result.Messages))
 		if !applied {
 			reason := "unknown"
+			liveShrunk := false
 			if !pc.result.Changed {
 				reason = "summarization produced no change"
 			} else if len(pc.result.Messages) == 0 {
 				reason = "summarization produced empty result"
 			} else {
 				reason = "live messages shrunk below snapshot size"
+				liveShrunk = true
 			}
 			debug.Log("precompact", "RESULT DISCARDED: %s (snapshot.OrigLen=%d live=%d)", reason, pc.snapshot.OrigLen, len(a.contextManager.Messages()))
 			// #612: a discarded result leaves the stale 2-minute cooldown set
@@ -267,11 +269,18 @@ func (a *Agent) consumeReadyPreCompact(onEvent func(provider.StreamEvent)) bool 
 			// the cooldown so the next loop pass can schedule a fresh precompact
 			// against the current context. Otherwise the only remaining escape
 			// is destructive truncation once tokens cross promptBudget.
-			if threshold := a.contextManager.AutoCompactThreshold(); threshold > 0 && a.contextManager.TokenCount() >= threshold {
-				a.mu.Lock()
-				a.precompactCooldownUntil = time.Time{}
-				a.mu.Unlock()
-				debug.Log("precompact", "RESULT DISCARDED but tokens still over threshold; cooldown refunded for immediate re-schedule")
+			// #633: the refund exists for the "live context moved on" case
+			// ONLY. no-change/empty are real summarization failures — refunding
+			// their cooldown made maybeAutoCompact reschedule a full-context
+			// LLM summarization every single turn (back-to-back, no backoff)
+			// that failed the same way each time. Those keep the cooldown.
+			if liveShrunk {
+				if threshold := a.contextManager.AutoCompactThreshold(); threshold > 0 && a.contextManager.TokenCount() >= threshold {
+					a.mu.Lock()
+					a.precompactCooldownUntil = time.Time{}
+					a.mu.Unlock()
+					debug.Log("precompact", "RESULT DISCARDED but tokens still over threshold; cooldown refunded for immediate re-schedule")
+				}
 			}
 			// Remove the compaction marker — compaction failed, marker is stale.
 			if onEvent != nil {

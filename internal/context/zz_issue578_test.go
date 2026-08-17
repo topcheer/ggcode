@@ -28,7 +28,7 @@ func TestIssue578_BugA_compositionLocked(t *testing.T) {
 	}
 
 	// Check composition via internal function
-	ascii, cjk := m.compositionLocked()
+	ascii, cjk, latinExt := m.compositionLocked()
 
 	// "Привет мир! Hello мир!" breakdown:
 	// ASCII: "system" (6) + "Hello" (5) + "!"×2 (2) + spaces (3) = 16 chars
@@ -43,6 +43,9 @@ func TestIssue578_BugA_compositionLocked(t *testing.T) {
 	}
 	if cjk != 0 {
 		t.Errorf("expected 0 CJK-bucket chars (Cyrillic excluded per #598), got %d", cjk)
+	}
+	if latinExt != 0 {
+		t.Errorf("expected 0 Latin-Extended chars, got %d", latinExt)
 	}
 
 	t.Logf("composition: ascii=%d cjk=%d (Cyrillic excluded per #598)", ascii, cjk)

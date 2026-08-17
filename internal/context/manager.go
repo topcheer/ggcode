@@ -993,7 +993,7 @@ func (m *Manager) RecordUsage(usage provider.TokenUsage) {
 	// the overhead in tokenCountLocked afterwards (#383). Do NOT use
 	// tokenCountLocked() here: the baseline was just overwritten by this
 	// very usage, which would make the comparison circular.
-	asciiChars, cjkChars := m.compositionLocked()
+	asciiChars, cjkChars, latinExtChars := m.compositionLocked()
 	// #605 G3: compositionLocked counts only ASCII and true CJK (#598). A
 	// pure-Cyrillic/Greek session returns (0,0) — RecordSample would fall
 	// back to its ASCII-only assumption (asciiShare=1.0) and drive asciiRatio
@@ -1008,14 +1008,20 @@ func (m *Manager) RecordUsage(usage provider.TokenUsage) {
 	// asciiShare=1.0 and drove asciiRatio 3.5→3.0 (clamp) — #598's pollution
 	// surviving from a second entry point. Freeze by script share instead:
 	// when uncovered-script runes dominate the content, skip the sample.
+	// #634: latinExt is a COVERED script for the freeze — the estimation
+	// side prices it via its own tier (3.0 chars/token, close to ASCII's
+	// 3.5), and counting it uncovered froze every sample of Vietnamese-style
+	// sessions (>20% non-ASCII Latin), so asciiRatio never calibrated at
+	// all — regressing the #598 drift family the freeze was built to stop.
+	// latinExt still does NOT feed the ratio composition (#598).
 	totalRunes := m.totalContentRunes()
-	if asciiChars+cjkChars == 0 {
+	if asciiChars+cjkChars+latinExtChars == 0 {
 		if totalRunes > 0 {
 			debug.Log("context-calibrator", "sample-frozen: uncovered scripts only (see #598/#605)")
 			return
 		}
 	} else if totalRunes > 0 {
-		uncovered := totalRunes - asciiChars - cjkChars
+		uncovered := totalRunes - asciiChars - cjkChars - latinExtChars
 		if uncovered > 0 && float64(uncovered)/float64(totalRunes) > uncoveredScriptFreezeShare {
 			debug.Log("context-calibrator", "sample-frozen: uncovered scripts are %d/%d runes (see #623)",
 				uncovered, totalRunes)
@@ -1040,34 +1046,36 @@ func (m *Manager) totalContentRunes() int {
 	return total
 }
 
-// compositionLocked returns the ASCII/CJK character counts of all message
-// text, for composition-aware calibration (#355). Caller must hold m.mu.
-// Uses scriptTokenClasses from #535 to properly categorize Cyrillic,
-// Greek, and Latin-Extended scripts (previously invisible to calibration).
-func (m *Manager) compositionLocked() (asciiChars, cjkChars int) {
+// compositionLocked returns the ASCII/CJK/Latin-Extended character counts
+// of all message text, for composition-aware calibration (#355). Caller must
+// hold m.mu. Uses scriptTokenClasses from #535 to properly categorize
+// Cyrillic, Greek, and Latin-Extended scripts (previously invisible to
+// calibration).
+func (m *Manager) compositionLocked() (asciiChars, cjkChars, latinExtChars int) {
 	for _, msg := range m.messages {
 		for _, b := range msg.Content {
 			text := b.Text + b.ReasoningContent + b.Output
 			// #598: Latin-Extended/Cyrillic/Greek counts are intentionally
-			// discarded here (blanked) — only true CJK feeds the calibration
-			// ratio; see the comment at cjkChars += c below.
-			a, c, _, _, _, _ := scriptTokenClasses(text)
+			// excluded from the ascii/cjk calibration composition — only true
+			// CJK feeds the CJK ratio (see below). latinExt is returned
+			// separately (#634) so RecordUsage's freeze check can treat it as a
+			// covered script without feeding it into the ratio math.
+			a, c, le, _, _, _ := scriptTokenClasses(text)
 			asciiChars += a
-			// Merge Latin-Extended, Cyrillic, and Greek into CJK bucket for
-			// calibration purposes — they are non-ASCII and consume similar
-			// token density to CJK characters. Full-width U+FF0C is correctly
-			// classified as 'other' by scriptTokenClasses.
-			// #598: only true CJK participates in the CJK calibration ratio.
-			// #578's fix folded Cyrillic/Greek/LatinExt into this bucket citing
-			// "similar density", but the project's own tokenizer prices them
-			// 2.5/2.0/3.0 chars-per-token vs CJK 1.0 — a 2.5x gap. A pure-
-			// Cyrillic session pegged cjkRatio to its 2.0 clamp and Chinese
-			// tokens were then underestimated ~50%, delaying auto-compact back
-			// into #515-style provider hard errors.
+			// Merge of Latin-Extended/Cyrillic/Greek into the CJK bucket for
+			// calibration purposes was REMOVED by #598: only true CJK
+			// participates in the CJK calibration ratio. #578's fix folded
+			// Cyrillic/Greek/LatinExt into this bucket citing "similar density",
+			// but the project's own tokenizer prices them 2.5/2.0/3.0
+			// chars-per-token vs CJK 1.0 — a 2.5x gap. A pure-Cyrillic session
+			// pegged cjkRatio to its 2.0 clamp and Chinese tokens were then
+			// underestimated ~50%, delaying auto-compact back into #515-style
+			// provider hard errors.
 			cjkChars += c
+			latinExtChars += le
 		}
 	}
-	return asciiChars, cjkChars
+	return asciiChars, cjkChars, latinExtChars
 }
 
 func (m *Manager) Clear() {

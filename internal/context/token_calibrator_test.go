@@ -163,8 +163,8 @@ func TestManagerCompositionLocked(t *testing.T) {
 		{Content: []provider.ContentBlock{{Output: "tool output 12"}}},     // output text counts
 		{Content: []provider.ContentBlock{{ReasoningContent: "think 45"}}}, // reasoning counts
 	}}
-	a, c := m.compositionLocked()
-	// ASCII: 11 (hello world) + 9 (mixed 你好 ok) + 3 (caf; é is Latin-Ext, now counted as CJK) + 14 (tool output 12) + 8 (think 45)
+	a, c, le := m.compositionLocked()
+	// ASCII: 11 (hello world) + 9 (mixed 你好 ok) + 3 (caf; é is Latin-Ext, returned separately per #634) + 14 (tool output 12) + 8 (think 45)
 	if a != 45 {
 		t.Errorf("asciiChars = %d, want %d", a, 45)
 	}
@@ -175,5 +175,8 @@ func TestManagerCompositionLocked(t *testing.T) {
 	// Chinese ~50%).
 	if c != 6 {
 		t.Errorf("cjkChars = %d, want %d", c, 6)
+	}
+	if le != 1 { // café's é — covered-script count per #634
+		t.Errorf("latinExtChars = %d, want 1", le)
 	}
 }

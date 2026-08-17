@@ -81,15 +81,15 @@ func checkRetryQuality(filePath, oldContent, newContent string) []string {
 		return nil
 	}
 
-	// #618: pre-compute identifiers bound to timer/ticker objects so that
+	// #618/#632: pre-compute identifiers bound to timer/ticker objects so that
 	// `<-x.C` receives are only treated as backoff when x is provably a
-	// time.NewTimer/NewTicker result.
-	for k := range retryTimerIdents {
-		delete(retryTimerIdents, k)
-	}
-	collectTimerIdents(file)
+	// time.NewTimer/NewTicker result. #632: this map is per-call (local) —
+	// the #618 version used an unlocked package-global map, which is a fatal
+	// concurrent-map-write panic when parallel tool checks enter
+	// checkRetryQuality from two goroutines at once.
+	timers := collectTimerIdents(file)
 
-	issues := findRetryLoopIssues(file, fset)
+	issues := findRetryLoopIssues(file, fset, timers)
 	if len(issues) == 0 {
 		return nil
 	}
@@ -99,24 +99,11 @@ func checkRetryQuality(filePath, oldContent, newContent string) []string {
 		oldFset := token.NewFileSet()
 		oldFile, oldErr := parser.ParseFile(oldFset, filePath, oldContent, 0)
 		if oldErr == nil && oldFile != nil {
-			// Analyze old content with its own timer-ident map state so
-			// findRetryLoopIssues sees the old file's timer bindings.
-			savedTimers := make(map[string]bool, len(retryTimerIdents))
-			for k, v := range retryTimerIdents {
-				savedTimers[k] = v
-			}
-			for k := range retryTimerIdents {
-				delete(retryTimerIdents, k)
-			}
-			collectTimerIdents(oldFile)
-			oldIssues := findRetryLoopIssues(oldFile, oldFset)
-			// Restore the new content's timer bindings.
-			for k := range retryTimerIdents {
-				delete(retryTimerIdents, k)
-			}
-			for k, v := range savedTimers {
-				retryTimerIdents[k] = v
-			}
+			oldIssues := func() []retryLoopIssue {
+				// #632: analyze old content with its own local timer map so
+				// concurrent callers never share state.
+				return findRetryLoopIssues(oldFile, oldFset, collectTimerIdents(oldFile))
+			}()
 			oldSet := retryIssueSet(oldIssues)
 			filtered := issues[:0]
 			for _, iss := range issues {
@@ -140,7 +127,7 @@ func checkRetryQuality(filePath, oldContent, newContent string) []string {
 
 // findRetryLoopIssues walks the AST and inspects every for-loop for retry
 // resilience problems.
-func findRetryLoopIssues(file *ast.File, fset *token.FileSet) []retryLoopIssue {
+func findRetryLoopIssues(file *ast.File, fset *token.FileSet, timers map[string]bool) []retryLoopIssue {
 	var issues []retryLoopIssue
 	ast.Inspect(file, func(node ast.Node) bool {
 		loop, ok := node.(*ast.ForStmt)
@@ -154,7 +141,7 @@ func findRetryLoopIssues(file *ast.File, fset *token.FileSet) []retryLoopIssue {
 			return true
 		}
 		posStr := fset.Position(loop.Pos()).String()
-		if !loopBodyHasBackoff(loop.Body) {
+		if !loopBodyHasBackoff(loop.Body, timers) {
 			issues = append(issues, retryLoopIssue{
 				key:     "missing-backoff:" + posStr,
 				kind:    "missing-backoff",
@@ -288,14 +275,12 @@ func branchContinuesOnError(body *ast.BlockStmt) bool {
 //     inside or outside the loop
 //   - a select statement containing a <-ctx.Done() case (context-aware
 //     cancellation provides termination and paced termination)
-func loopBodyHasBackoff(body *ast.BlockStmt) bool {
+func loopBodyHasBackoff(body *ast.BlockStmt, timers map[string]bool) bool {
 	found := false
 	// #618: collect identifiers bound to time.NewTimer/time.NewTicker results
 	// anywhere in the file scope so that a `<-x.C` receive can be verified as a
-	// genuine timer/ticker channel (comment above notwithstanding, this loop's
-	// body alone cannot prove the receiver's type). We conservatively treat a
-	// .C receive as timer-based only when the receiver identifier is a known
-	// NewTimer/NewTicker result in the same file.
+	// genuine timer/ticker channel. timers is the per-call map returned by
+	// collectTimerIdents (#632: no shared global state).
 	ast.Inspect(body, func(node ast.Node) bool {
 		if found {
 			return false
@@ -315,7 +300,7 @@ func loopBodyHasBackoff(body *ast.BlockStmt) bool {
 			// see timerRecvOK).
 			if n.Op == token.ARROW {
 				if sel, ok := n.X.(*ast.SelectorExpr); ok && sel.Sel.Name == "C" {
-					if id, ok := sel.X.(*ast.Ident); ok && isTimerLikeIdent(id) {
+					if id, ok := sel.X.(*ast.Ident); ok && timers[id.Name] {
 						found = true
 						return false
 					}
@@ -332,20 +317,12 @@ func loopBodyHasBackoff(body *ast.BlockStmt) bool {
 	return found
 }
 
-// retryTimerIdents is populated per-file with identifiers bound to
-// time.NewTimer / time.NewTicker results, so `<-x.C` receives can be verified
-// as genuine timer/ticker channels (#618 defect 3).
-var retryTimerIdents = map[string]bool{}
-
-// isTimerLikeIdent reports whether id is a known time.NewTimer/NewTicker
-// receiver in the current file analysis.
-func isTimerLikeIdent(id *ast.Ident) bool {
-	return retryTimerIdents[id.Name]
-}
-
 // collectTimerIdents records identifiers assigned from time.NewTimer or
-// time.NewTicker calls anywhere in the file.
-func collectTimerIdents(file *ast.File) {
+// time.NewTicker calls anywhere in the file and returns a fresh per-call map
+// (#632: the #618 package-global map was mutated without a lock — a fatal
+// concurrent-map-write panic under parallel checkRetryQuality calls).
+func collectTimerIdents(file *ast.File) map[string]bool {
+	timers := make(map[string]bool)
 	ast.Inspect(file, func(node ast.Node) bool {
 		as, ok := node.(*ast.AssignStmt)
 		if !ok {
@@ -369,12 +346,13 @@ func collectTimerIdents(file *ast.File) {
 			}
 			for _, lhs := range as.Lhs {
 				if id, ok := lhs.(*ast.Ident); ok {
-					retryTimerIdents[id.Name] = true
+					timers[id.Name] = true
 				}
 			}
 		}
 		return true
 	})
+	return timers
 }
 
 // isBackoffCall returns true for calls that introduce a delay/backoff.

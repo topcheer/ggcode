@@ -6,7 +6,6 @@ package agent
 // only escape left is destructive truncation once tokens cross promptBudget.
 
 import (
-	"strings"
 	"testing"
 	"time"
 
@@ -32,34 +31,36 @@ func injectDonePrecompact(t *testing.T, a *Agent) {
 
 // Discard while tokens are still over the auto-compact threshold must refund
 // the cooldown so the next loop pass can schedule a fresh precompact.
+// #633: the refund now applies ONLY to the live-shrunk discard (successful
+// summarization, live context moved on); no-change/empty failures keep the
+// cooldown — see zz_issue633_test.go.
 func TestIssue612_DiscardRefundsCooldownWhenOverThreshold(t *testing.T) {
 	a := NewAgent(&mockProvider{}, tool.NewRegistry(), "", 1)
 	defer a.Close()
-	a.ContextManager().SetContextWindow(80)
-	for i := 0; i < 6; i++ {
-		a.AddMessage(provider.Message{Role: "user", Content: []provider.ContentBlock{provider.TextBlock(strings.Repeat("old context ", 8))}})
-		a.AddMessage(provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock(strings.Repeat("reply ", 8))}})
-	}
-	if tokens := a.ContextManager().TokenCount(); tokens < a.ContextManager().AutoCompactThreshold() {
-		t.Fatalf("setup: tokens=%d must exceed threshold=%d", tokens, a.ContextManager().AutoCompactThreshold())
-	}
-
-	// Simulate the cooldown set by maybeAutoCompact at schedule time.
+	base := a.ContextManager().(*ctxpkg.Manager)
+	dm := &discardCM{Manager: base, threshold: 100, tokens: 500}
+	a.SetContextManager(dm)
 	future := time.Now().Add(2 * time.Minute)
 	a.mu.Lock()
 	a.precompactCooldownUntil = future
+	pc := &precompactState{
+		done:     make(chan struct{}),
+		snapshot: ctxpkg.CompactSnapshot{OrigLen: 3, Messages: make([]provider.Message, 3)},
+		result:   ctxpkg.CompactResult{Changed: true, Messages: []provider.Message{{Role: "system"}}}, // successful summary, apply rejected (live shrunk)
+	}
+	close(pc.done)
+	a.precompact = pc
 	a.mu.Unlock()
 
-	injectDonePrecompact(t, a)
 	if applied := a.consumeReadyPreCompact(nil); applied {
-		t.Fatal("expected discard (Changed=false result)")
+		t.Fatal("expected discard (apply rejected)")
 	}
 
 	a.mu.RLock()
 	cd := a.precompactCooldownUntil
 	a.mu.RUnlock()
 	if !cd.IsZero() {
-		t.Fatalf("cooldown must be refunded after discard while over threshold; remaining=%s", time.Until(cd).Round(time.Second))
+		t.Fatalf("cooldown must be refunded after live-shrunk discard while over threshold; remaining=%s", time.Until(cd).Round(time.Second))
 	}
 }
 
