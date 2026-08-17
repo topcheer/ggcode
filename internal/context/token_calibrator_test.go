@@ -168,8 +168,12 @@ func TestManagerCompositionLocked(t *testing.T) {
 	if a != 45 {
 		t.Errorf("asciiChars = %d, want %d", a, 45)
 	}
-	// CJK: 你好世界 (4; fullwidth ， U+FF0C not in ranges) + 你好 (2) + é (1, Latin-Ext)
-	if c != 7 {
-		t.Errorf("cjkChars = %d, want %d", c, 7)
+	// CJK: 你好世界 (4; fullwidth ， U+FF0C not in ranges) + 你好 (2) = 6.
+	// #598: é (Latin-Ext) no longer counts — Cyrillic/Greek/LatinExt were
+	// removed from the CJK calibration bucket (2-3x token-density gap vs
+	// CJK; their inclusion pegged cjkRatio to clamp and underestimated
+	// Chinese ~50%).
+	if c != 6 {
+		t.Errorf("cjkChars = %d, want %d", c, 6)
 	}
 }

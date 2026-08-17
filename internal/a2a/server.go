@@ -285,10 +285,20 @@ func (s *Server) authenticate(r *http.Request) bool {
 		token := strings.TrimPrefix(authHeader, "Bearer ")
 		if s.tokenValidator != nil {
 			_, err := s.tokenValidator.ValidateToken(r.Context(), token)
-			return err == nil
+			if err == nil {
+				return true
+			}
+			// #598 / #404 dual-credential policy: a rejected Bearer token
+			// falls through to mTLS instead of hard-rejecting. Some HTTP
+			// clients unconditionally attach an Authorization header, so a
+			// valid-mTLS peer with a stray Bearer header was silently denied
+			// while removing the header let the same peer through.
 		}
-		// No validator configured → reject
-		return false
+		// No validator configured → reject (no fall-through: without a
+		// validator the Bearer credential is unverifiable, not failed).
+		if s.tokenValidator == nil {
+			return false
+		}
 	}
 
 	// 3) mTLS — client certificate verified at TLS handshake level

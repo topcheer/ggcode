@@ -32,15 +32,20 @@ func TestIssue578_BugA_compositionLocked(t *testing.T) {
 
 	// "Привет мир! Hello мир!" breakdown:
 	// ASCII: "system" (6) + "Hello" (5) + "!"×2 (2) + spaces (3) = 16 chars
-	// Cyrillic: "Привет" (6) + "мир"×2 (6) = 12 chars, counted in CJK bucket
+	// Cyrillic: "Привет" (6) + "мир"×2 (6) = 12 chars — #598: NO LONGER in
+	// the CJK calibration bucket. #578 originally folded Cyrillic in (the
+	// tokenizer prices it 2.5 chars/token vs CJK 1.0), which pegged
+	// cjkRatio to clamp after pure-Cyrillic sessions and underestimated
+	// later Chinese by ~50%. Script classification itself (#535) is
+	// unchanged — only calibration membership narrowed.
 	if ascii != 16 {
 		t.Errorf("expected 16 ASCII chars, got %d", ascii)
 	}
-	if cjk != 12 { // Cyrillic must land in the CJK bucket (#535)
-		t.Errorf("expected 12 CJK-bucket chars (Cyrillic), got %d", cjk)
+	if cjk != 0 {
+		t.Errorf("expected 0 CJK-bucket chars (Cyrillic excluded per #598), got %d", cjk)
 	}
 
-	t.Logf("composition: ascii=%d cjk=%d (Cyrillic counted in CJK)", ascii, cjk)
+	t.Logf("composition: ascii=%d cjk=%d (Cyrillic excluded per #598)", ascii, cjk)
 }
 
 // TestIssue578_BugD_summaryProtection verifies that ApplyCompactResult

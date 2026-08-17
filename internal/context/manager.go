@@ -1000,13 +1000,23 @@ func (m *Manager) compositionLocked() (asciiChars, cjkChars int) {
 	for _, msg := range m.messages {
 		for _, b := range msg.Content {
 			text := b.Text + b.ReasoningContent + b.Output
-			a, c, le, cy, g, _ := scriptTokenClasses(text)
+			// #598: Latin-Extended/Cyrillic/Greek counts are intentionally
+			// discarded here (blanked) — only true CJK feeds the calibration
+			// ratio; see the comment at cjkChars += c below.
+			a, c, _, _, _, _ := scriptTokenClasses(text)
 			asciiChars += a
 			// Merge Latin-Extended, Cyrillic, and Greek into CJK bucket for
 			// calibration purposes — they are non-ASCII and consume similar
 			// token density to CJK characters. Full-width U+FF0C is correctly
 			// classified as 'other' by scriptTokenClasses.
-			cjkChars += c + le + cy + g
+			// #598: only true CJK participates in the CJK calibration ratio.
+			// #578's fix folded Cyrillic/Greek/LatinExt into this bucket citing
+			// "similar density", but the project's own tokenizer prices them
+			// 2.5/2.0/3.0 chars-per-token vs CJK 1.0 — a 2.5x gap. A pure-
+			// Cyrillic session pegged cjkRatio to its 2.0 clamp and Chinese
+			// tokens were then underestimated ~50%, delaying auto-compact back
+			// into #515-style provider hard errors.
+			cjkChars += c
 		}
 	}
 	return asciiChars, cjkChars

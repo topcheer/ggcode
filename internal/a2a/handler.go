@@ -670,17 +670,20 @@ func (h *TaskHandler) GetTaskDone(id string) <-chan struct{} {
 // CancelTask cancels a running task by canceling its context.
 func (h *TaskHandler) CancelTask(id string) error {
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	t, ok := h.tasks[id]
 	if !ok {
+		h.mu.Unlock()
 		return fmt.Errorf("task not found: %s", id)
 	}
 	if t.Status.State == TaskStateCanceled {
 		// Already canceled — idempotent success.
+		h.mu.Unlock()
 		return nil
 	}
 	if t.Status.IsTerminal() {
-		return fmt.Errorf("task already in terminal state: %s", t.Status.State)
+		err := fmt.Errorf("task already in terminal state: %s", t.Status.State)
+		h.mu.Unlock()
+		return err
 	}
 	t.Status = TaskStatus{State: TaskStateCanceled, Timestamp: time.Now()}
 	t.UpdatedAt = time.Now()
@@ -695,6 +698,37 @@ func (h *TaskHandler) CancelTask(id string) error {
 	if entry, ok := h.cancels[id]; ok {
 		entry.cancel()
 		delete(h.cancels, id)
+	}
+	// #598: fire the same dual callbacks every other terminal transition
+	// sends (updateStatus fires onTaskEvent + pushNotifier). CancelTask
+	// previously set Canceled/closed done/cancelled the ctx but never
+	// notified — webhook/SSE subscribers watched the task go silent
+	// forever, and the execute goroutine's rescue path (which requires
+	// state==Working) skipped because the state had already changed.
+	// Snapshot under the lock, fire outside it (callbacks may re-enter).
+	taskID := t.ID
+	skill := t.Skill
+	snapshot := t.Snapshot()
+	eventFn := h.onTaskEvent
+	pushFn := h.pushNotifier
+	h.mu.Unlock()
+	if eventFn != nil {
+		msg := TaskEventMessage{
+			Type:    "cancel",
+			TaskID:  taskID,
+			Skill:   skill,
+			Message: fmt.Sprintf("A2A task canceled [%s]", skill),
+		}
+		safego.Go("a2a.taskEvent", func() { eventFn(msg) })
+	}
+	if pushFn != nil {
+		pushFn(taskID, StreamResponse{
+			StatusUpdate: &TaskStatusUpdateEvent{
+				TaskID: taskID,
+				Status: snapshot.Status,
+				Final:  true,
+			},
+		})
 	}
 	return nil
 }
