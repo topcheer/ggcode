@@ -573,6 +573,7 @@ func commandSnapshotOutput(snapshot CommandJobSnapshot) string {
 func (t RunCommand) Clone() Tool {
 	return &RunCommand{
 		WorkingDir: t.WorkingDir,
+		JobManager: t.JobManager,
 		Policy:     t.Policy,
 		OutputTee:  t.OutputTee,
 		OnPreExec:  t.OnPreExec,

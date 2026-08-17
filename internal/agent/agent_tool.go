@@ -840,6 +840,15 @@ func simulateEditFile(content, oldText, newText string, replaceAll bool) (string
 	if !replaceAll && count > 1 && !mr.anchored {
 		return "", fmt.Errorf("old_text found %d times in file — must be unique. Add 1-3 lines of surrounding context to disambiguate, copy the exact numbered lines from read_file to anchor the intended occurrence, or set replace_all=true to replace every occurrence", count)
 	}
+	// #604 T2 mirror: the real edit_file re-counts under lenient semantics
+	// when a fallback transform folded semantically-duplicate blocks into
+	// one canonical match — the simulation must refuse identically or it
+	// diverges from the tool (the #601 dual-side lock exists for this).
+	if !replaceAll && !mr.anchored && count <= 1 {
+		if loose, _ := tool.LenientRecount(content, oldText, mr.transform); loose > 1 {
+			return "", fmt.Errorf("old_text matched %d times in file under whitespace-tolerant matching — must be unique. Add context to disambiguate or set replace_all=true", loose)
+		}
+	}
 	if mr.transform != "" {
 		newText = simAdjustNewText(content, newText, mr)
 	}

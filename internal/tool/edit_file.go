@@ -110,6 +110,24 @@ func (t EditFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 	oldText := mr.canonical
 
 	count := strings.Count(content, oldText)
+	if !args.ReplaceAll && !mr.anchored {
+		// #604 T2: a fallback transform (trailing-ws/indent-shift/fuzzy) can
+		// fold semantically-duplicate blocks into a single byte-exact canonical
+		// match. Re-count under the lenient semantics the fallback actually used;
+		// if that finds more than one match, refuse to silently edit the first.
+		if count <= 1 {
+			if loose, looseLines := lenientRecount(content, args.OldText, mr); loose > 1 {
+				msg := fmt.Sprintf(
+					"old_text matched %d times in file under whitespace-tolerant matching (match used transform %q) — must be unique. The repeated blocks differ only in whitespace. Add 1-3 lines of surrounding context to disambiguate, copy the exact numbered lines from read_file to anchor the intended occurrence, or set replace_all=true to replace every occurrence.",
+					loose, mr.transform,
+				)
+				if len(looseLines) > 0 {
+					msg += fmt.Sprintf(" Loose matches start at line(s): %s.", formatMatchLines(looseLines))
+				}
+				return Result{IsError: true, Content: msg}, nil
+			}
+		}
+	}
 	if !args.ReplaceAll && count > 1 && !mr.anchored {
 		lines := findMatchLineNumbers(content, oldText)
 		msg := fmt.Sprintf(

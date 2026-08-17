@@ -602,6 +602,75 @@ func formatMatchLines(lines []int) string {
 	return strings.Join(parts, ", ")
 }
 
+// lenientRecount re-counts occurrences of rawOld in content using the same
+// whitespace-insensitive semantics as the fallback resolvers (every line of
+// old_text compared to every line of the file after TrimSpace). #604 T2: the
+// uniqueness gate runs on the canonical (transformed) form, so loose matching
+// can fold several semantically-duplicate blocks into a single byte-exact
+// canonical match — strings.Count then reports 1 and the edit silently
+// replaces the first block. Call this when a fallback transform fired and the
+// byte-exact count is <= 1; a loose count > 1 means the match is not unique
+// under the semantics actually used to locate it, and the caller must return
+// a disambiguation error. Returns the loose match count plus the 1-based
+// start line numbers (capped at 10) for the error message.
+func lenientRecount(content, rawOld string, mr matchResult) (int, []int) {
+	if mr.anchored || mr.transform == "" {
+		return 0, nil
+	}
+	return lenientRecountRaw(content, rawOld, mr.transform)
+}
+
+// LenientRecount is the exported form for out-of-package mirrors of the
+// edit pipeline (agent_tool.go simulateEditFile, #601 dual-side lock):
+// re-counts occurrences under the whitespace-tolerant semantics the
+// fallback resolvers actually used. Single implementation on the real
+// side; transform "" means no fallback fired (count is 0, gate no-op).
+func LenientRecount(content, rawOld, transform string) (int, []int) {
+	if transform == "" {
+		return 0, nil
+	}
+	return lenientRecountRaw(content, rawOld, transform)
+}
+
+func lenientRecountRaw(content, rawOld, transform string) (int, []int) {
+	probe := rawOld
+	if strings.Contains(transform, "read-file-wrapper-stripped") {
+		if trimmed, changed := trimReadFileWrapperLines(probe); changed {
+			probe = trimmed
+		}
+	}
+	if strings.Contains(transform, "line-numbers-stripped") {
+		probe = stripAllLineNumberPrefixes(probe)
+	}
+	if probe == "" {
+		return 0, nil
+	}
+	trimmedOld := make([]string, 0, strings.Count(probe, "\n")+1)
+	for _, l := range strings.Split(probe, "\n") {
+		trimmedOld = append(trimmedOld, strings.TrimSpace(l))
+	}
+	fileLines := strings.Split(content, "\n")
+	nOld := len(trimmedOld)
+	count := 0
+	var lines []int
+	for start := 0; start+nOld <= len(fileLines); start++ {
+		matched := true
+		for j := range trimmedOld {
+			if strings.TrimSpace(fileLines[start+j]) != trimmedOld[j] {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			count++
+			if len(lines) < 10 {
+				lines = append(lines, start+1)
+			}
+		}
+	}
+	return count, lines
+}
+
 // tryFuzzyLineMatch compares old_text against the file content by stripping
 // leading/trailing whitespace from every line in both. This catches the most
 // common LLM edit failure: the text content is correct but whitespace (tab vs

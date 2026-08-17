@@ -163,6 +163,21 @@ func planTextEdits(content string, edits []textEdit) (string, int, string) {
 			}
 			return "", 0, msg
 		}
+		// #604 T2 (multi_edit_file): same lenient recount as edit_file — a
+		// whitespace-tolerant fallback must not bypass the uniqueness gate when
+		// semantically-duplicate blocks collapse to one byte-exact match.
+		if !mr.anchored && count <= 1 {
+			if loose, looseLines := lenientRecount(content, edit.OldText, mr); loose > 1 {
+				msg := fmt.Sprintf(
+					"edits[%d]: old_text matched %d times under whitespace-tolerant matching (transform %q) — must be unique. Add 1-3 lines of surrounding context to disambiguate, or copy the exact numbered lines from read_file so this edit is line-number anchored.",
+					i, loose, mr.transform,
+				)
+				if len(looseLines) > 0 {
+					msg += fmt.Sprintf(" Loose matches start at line(s): %s.", formatMatchLines(looseLines))
+				}
+				return "", 0, msg
+			}
+		}
 		idx := mr.start
 		if !mr.anchored {
 			idx = strings.Index(content, oldText)
