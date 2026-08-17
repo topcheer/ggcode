@@ -33,7 +33,9 @@ func TestCheckSuppressionDirectives_PythonTypeIgnore(t *testing.T) {
 
 func TestCheckSuppressionDirectives_PythonNoQA(t *testing.T) {
 	old := "import os\n"
-	new_ := "import os  # noqa: F401\n"
+	// Bare # noqa (no rule code) — scoped forms like "# noqa: F401" are
+	// legitimate targeted suppressions and must NOT warn (#572 contract).
+	new_ := "import os  # noqa\n"
 
 	warnings := checkSuppressionDirectives("main.py", old, new_)
 	if len(warnings) == 0 {

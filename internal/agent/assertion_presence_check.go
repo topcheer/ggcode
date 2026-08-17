@@ -59,6 +59,21 @@ var goAssertionCalls = map[string]bool{
 	"Fail":    true,
 	"FailNow": true,
 	"Logf":    false, // Log alone is not an assertion, only present for completeness
+
+	// gomega methods (#572 D8: Expect is an assertion even without require/assert prefix)
+	"Expect":       true,
+	"Eventually":   true,
+	"Consistently": true,
+}
+
+// goTestSkips are testing.T methods that intentionally abort a test early.
+// A test guarded by t.Skip/t.Skipf/t.SkipNow is conditional by design (e.g.
+// TestRequiresDocker) — it is not hollow even when its body has no other
+// assertion calls (#572).
+var goTestSkips = map[string]bool{
+	"Skip":    true,
+	"Skipf":   true,
+	"SkipNow": true,
 }
 
 // goAssertionPkgs are package qualifiers whose calls are always assertions.
@@ -219,6 +234,14 @@ func countAssertionCalls(body *ast.BlockStmt, testingTName string) int {
 			// Check for t.Error, t.Fatal, etc. (selector expression: t.Errorf)
 			if sel, ok := node.Fun.(*ast.SelectorExpr); ok {
 				method := sel.Sel.Name
+				// Skip guard (#572): t.Skip/t.Skipf/t.SkipNow on the testing.T
+				//// receiver marks the test as intentionally conditional — not hollow.
+				if goTestSkips[method] {
+					if ident, ok := sel.X.(*ast.Ident); ok && names[ident.Name] {
+						count++
+						return true
+					}
+				}
 				if goAssertionCalls[method] {
 					// Verify receiver looks like testing.T (any active name).
 					if ident, ok := sel.X.(*ast.Ident); ok && names[ident.Name] {

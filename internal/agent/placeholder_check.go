@@ -143,10 +143,8 @@ func checkPlaceholderCode(filePath, oldContent, newContent string) []string {
 
 	// 1. Language-specific placeholder patterns (substring-based).
 	// Position-aware comparison (fix #171/#175): fixed substrings like
-	// `panic("TODO")` are identical everywhere, so a text-keyed multiset
-	// cannot distinguish a moved occurrence from a stale one. Compare
-	// line-number multisets instead — removing the pattern in one function
-	// while adding it in another shows as a net-new line and is flagged.
+	// `panic("TODO")` are identical everywhere, so we use trimmed line content
+	// to distinguish actual new occurrences from moved ones (fix #572 Bug C).
 	for _, p := range patterns {
 		oldLines := substringLineMultiset(oldContent, p.pattern)
 		newLines := substringLineMultiset(newContent, p.pattern)
@@ -171,26 +169,22 @@ func checkPlaceholderCode(filePath, oldContent, newContent string) []string {
 	return warnings
 }
 
-// substringLineMultiset returns a map of line-number → occurrence count of
-// substr in content (fix #175).
-func substringLineMultiset(content, substr string) map[int]int {
-	lines := make(map[int]int)
+// substringLineMultiset returns a map of trimmed line content → occurrence count of
+// substr in content (fix #572 Bug C: use content, not line numbers, to avoid FP when
+// lines are inserted above existing placeholders).
+func substringLineMultiset(content, substr string) map[string]int {
+	lines := make(map[string]int)
 	if substr == "" || content == "" {
 		return lines
 	}
-	lineOf := func(idx int) int {
-		return 1 + strings.Count(content[:idx], "\n")
-	}
-	start := 0
-	for {
-		i := strings.Index(content[start:], substr)
-		if i < 0 {
-			return lines
+	contentLines := strings.Split(content, "\n")
+	for _, line := range contentLines {
+		trimmed := strings.TrimSpace(line)
+		if strings.Contains(trimmed, substr) {
+			lines[trimmed]++
 		}
-		abs := start + i
-		lines[lineOf(abs)]++
-		start = abs + len(substr)
 	}
+	return lines
 }
 
 // checkVagueTodos detects newly-introduced vague TODO/FIXME comments.

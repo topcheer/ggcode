@@ -36,6 +36,8 @@ const (
 	LangJSTS   Language = 3 // .js, .ts, .jsx, .tsx, .mjs, .cjs
 	LangMarkup Language = 4 // .html, .xml, .vue, .svelte, .svg
 	LangConfig Language = 5 // .json, .yaml, .yml, .toml
+	LangRuby   Language = 6 // .rb, .ruby
+	LangJava   Language = 7 // .java
 )
 
 // detectLanguage infers the Language from the file extension.
@@ -52,6 +54,10 @@ func detectLanguage(filePath string) Language {
 		return LangMarkup
 	case ".json", ".jsonc", ".yaml", ".yml", ".toml":
 		return LangConfig
+	case ".rb", ".ruby", ".rake", ".gemspec":
+		return LangRuby
+	case ".java":
+		return LangJava
 	default:
 		return LangAny
 	}

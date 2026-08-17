@@ -308,6 +308,19 @@ func isLikelyConfigGetter(name string) bool {
 			return true
 		}
 	}
+	// #572: reference-table names (monthNames, currencySymbols, httpStatusText,
+	// …) are legitimate static display/reference data, not memorized test
+	// input-to-output pairs. They are conventionally named after the data they
+	// hold, unlike memorization maps hidden inside compute-sounding functions.
+	referenceSuffixes := []string{
+		"names", "symbols", "text", "texts", "labels", "codes",
+		"titles", "months", "days", "units", "statuses",
+	}
+	for _, s := range referenceSuffixes {
+		if strings.HasSuffix(lower, s) {
+			return true
+		}
+	}
 	return false
 }
 
@@ -327,7 +340,9 @@ func checkHardcodedOutputPython(src string) []string {
 		// counting `"` chars then dividing by 2 reported 2x the real entry
 		// count — a 3-pair dict fired claiming "6 entries", and the threshold
 		// was effectively >=3 pairs instead of the documented >=5).
-		pairRe := regexp.MustCompile(`"[^"]*"\s*:\s*(?:"[^"]*"|[^,}]+)`)
+		// #572 A6: accept single-quoted strings too — Python dicts commonly use
+		// them and the double-quote-only pattern silently missed them.
+		pairRe := regexp.MustCompile(`("[^"]*"|'[^']*')\s*:\s*("[^"]*"|'[^']*'|[^,}]+)`)
 		entries := len(pairRe.FindAllString(m[1], -1))
 		if entries >= minHardcodedEntries {
 			if allStringLiterals(m[1]) {
@@ -420,7 +435,8 @@ func checkHardcodedOutputString(src string) []string {
 
 func allStringLiterals(s string) bool {
 	// Rough check: at least 80% of content is string literals
-	quoted := strings.Count(s, `"`)
+	// #572 A6: count single quotes as well, matching the pair regex above.
+	quoted := strings.Count(s, `"`) + strings.Count(s, `'`)
 	total := len(strings.Fields(s))
 	if total == 0 {
 		return false
