@@ -639,9 +639,24 @@ func (s *JSONLStore) updateIndex(ses *Session) error {
 }
 
 func (s *JSONLStore) removeFromIndex(id string) error {
-	unlock, lockErr := lockIndexFile(s.indexPath())
+	// Retry flock acquisition with exponential backoff to handle transient
+	// lock contention from other processes (desktop + TUI). Matches updateIndex.
+	var unlock func()
+	var lockErr error
+	for i := 0; i < 3; i++ {
+		unlock, lockErr = lockIndexFile(s.indexPath())
+		if lockErr == nil {
+			break
+		}
+		if i < 2 {
+			// Exponential backoff: 10ms, 20ms, 40ms
+			time.Sleep(time.Duration(10*(1<<i)) * time.Millisecond)
+		}
+	}
 	if lockErr != nil {
-		debug.Log("session", "removeFromIndex: failed to acquire index lock: %v", lockErr)
+		debug.Log("session", "removeFromIndex: failed to acquire index lock after 3 retries: %v", lockErr)
+		s.indexDirty = true
+		return lockErr
 	}
 	defer func() {
 		if unlock != nil {
@@ -651,7 +666,14 @@ func (s *JSONLStore) removeFromIndex(id string) error {
 
 	idx, err := s.loadIndexNoRepair()
 	if err != nil {
+		s.indexDirty = true
 		return err
+	}
+	if idx == nil && s.indexDirty {
+		// Index is corrupt (not just empty — loadIndexNoRepair set the
+		// dirty flag). Don't write an empty index that would hide
+		// real entries from List(). Keep dirty flag for runMaintenance to rebuild.
+		return nil
 	}
 	filtered := make([]indexEntry, 0, len(idx))
 	for _, e := range idx {
@@ -2506,9 +2528,26 @@ func appendRecordLines(path string, recs []jsonlRecord) error {
 	// write so a concurrent full-file rewrite (backfill/migrate read -> tmp ->
 	// rename) in another process cannot drop this append between its read
 	// and its rename. Within one process the store mutex already serializes.
-	unlock, lockErr := lockSessionFile(path)
+	//
+	// Retry flock acquisition with exponential backoff to handle transient
+	// lock contention. If all retries fail, abort the append rather than
+	// continuing with unlocked O_APPEND writes that can be lost to concurrent
+	// renames (60/60 appends lost in probes without this guard).
+	var unlock func()
+	var lockErr error
+	for i := 0; i < 3; i++ {
+		unlock, lockErr = lockSessionFile(path)
+		if lockErr == nil {
+			break
+		}
+		if i < 2 {
+			// Exponential backoff: 10ms, 20ms, 40ms
+			time.Sleep(time.Duration(10*(1<<i)) * time.Millisecond)
+		}
+	}
 	if lockErr != nil {
-		debug.Log("session", "appendRecordLines: session lock unavailable: %v", lockErr)
+		debug.Log("session", "appendRecordLines: failed to acquire session lock after 3 retries: %v", lockErr)
+		return lockErr
 	}
 	defer func() {
 		if unlock != nil {
