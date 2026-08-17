@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/topcheer/ggcode/internal/debug"
 )
 
 // maxReadFileTextBytes caps ReadFileContent so a huge text file cannot be
@@ -12,6 +14,11 @@ import (
 // Text previews render the whole string, so this is lower than the 150MB
 // binary (base64) preview cap from #253.
 const maxReadFileTextBytes = 20 * 1024 * 1024 // 20MB
+
+// maxRecursiveEntries caps the total number of entries returned by
+// walkDirectoryEntries to prevent unbounded memory growth when walking
+// deep or wide directory trees (#580).
+const maxRecursiveEntries = 10000
 
 // FileInfo describes a file or directory entry.
 type FileInfo struct {
@@ -58,18 +65,32 @@ func walkDirectoryEntries(abs string) ([]FileInfo, error) {
 	var result []FileInfo
 	err := filepath.WalkDir(abs, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
-			return nil // skip errors for individual entries
+			debug.Log("files", "walk error at %q: %v", path, err)
+			return nil // skip errors for individual entries, but log them (#580)
 		}
 		if path == abs {
 			return nil // skip root
 		}
+		// Exclude common generated/cache directories to avoid wasting time
+		// and hitting entry limits (#580).
+		name := d.Name()
+		if name == "node_modules" || name == ".git" || name == ".vscode" || name == ".idea" {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
 		fi, fiErr := d.Info()
 		if fiErr != nil {
+			debug.Log("files", "stat error at %q: %v", path, fiErr)
 			return nil
+		}
+		if len(result) >= maxRecursiveEntries {
+			return fmt.Errorf("recursive walk exceeded %d entries, stopping", maxRecursiveEntries)
 		}
 		relPath, _ := filepath.Rel(abs, path)
 		result = append(result, FileInfo{
-			Name:     d.Name(),
+			Name:     name,
 			IsDir:    d.IsDir(),
 			Size:     fi.Size(),
 			Modified: fi.ModTime().Unix(),

@@ -112,10 +112,10 @@ func (s *LogStream) Drain() []LogEntry {
 	out := make([]LogEntry, 0, len(s.pending)+1)
 	if s.overflow > 0 {
 		out = append(out, LogEntry{
-			// #428: a real Seq, not the zero default — two overflow notices in
-			// one session previously collided on Seq=0, producing React
-			// duplicate keys in the frontend.
-			Seq:      atomic.AddInt64(&s.seq, 1),
+			// #580: Position the overflow notice before the first retained entry
+			// (the oldest in pending), so sorted consumers see it in correct
+			// chronological order instead of at the end.
+			Seq:      s.pending[0].Seq - int64(s.overflow),
 			Category: "logstream",
 			Message:  fmt.Sprintf("log stream overflow: %d entries dropped (pending queue capped at %d)", s.overflow, s.maxPend),
 			Time:     time.Now().Format("15:04:05.000"),

@@ -41,16 +41,16 @@ func cronJobToInfo(j cron.Job) CronJobInfo {
 }
 
 // ListCronJobs returns all cron jobs for the current session.
-func (b *ChatBridge) ListCronJobs() []CronJobInfo {
+func (b *ChatBridge) ListCronJobs() ([]CronJobInfo, error) {
 	if b.cronScheduler == nil {
-		return nil
+		return nil, fmt.Errorf("cron scheduler not available")
 	}
 	jobs := b.cronScheduler.List()
 	result := make([]CronJobInfo, len(jobs))
 	for i, j := range jobs {
 		result[i] = cronJobToInfo(j)
 	}
-	return result
+	return result, nil
 }
 
 // GetCronJob returns a single cron job by ID.
