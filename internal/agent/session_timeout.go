@@ -2,11 +2,19 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
 )
+
+// ErrSessionTimeout is the sentinel error returned when an agent run is
+// terminated by the session wall-clock timeout. Callers (sub-agents, ACP
+// loops, cron schedulers) should use errors.Is to distinguish this terminal
+// state from normal completion (nil), iteration exhaustion ("max iterations
+// reached"), and context cancellation (#611).
+var ErrSessionTimeout = errors.New("session wall-clock timeout exceeded")
 
 // Session Wall-Clock Timeout
 //
@@ -86,7 +94,11 @@ func (s *sessionTimeoutState) start(isAutopilot bool) {
 
 // check returns a non-empty message if the session should stop due to wall-clock
 // timeout. It also returns progressive warning messages at 80% and 95% of the
-// timeout. The returned message should be injected into the conversation context.
+// timeout. The 80%/95% warnings are injected into LLM context so the model can
+// wrap up before the deadline. The 100% stop message, however, is a user-facing
+// notification only — the loop has already ended, so injecting a "summarize"
+// directive would never be consumed in-run and would merely confuse the next
+// session turn (same rationale as the toolCallBudget hard stop, #367/#611).
 // Returns empty string if no action is needed.
 func (s *sessionTimeoutState) check() string {
 	if s == nil || s.timeout <= 0 || s.startTime.IsZero() {
@@ -99,8 +111,7 @@ func (s *sessionTimeoutState) check() string {
 	if ratio >= 1.0 {
 		return fmt.Sprintf(
 			"[session-timeout] Wall-clock limit of %s reached (elapsed: %s). "+
-				"Stopping the agent loop to prevent unbounded resource consumption. "+
-				"Summarize what was accomplished and what remains.",
+				"Stopping the agent loop to prevent unbounded resource consumption.",
 			s.timeout.Round(time.Second), elapsed.Round(time.Second),
 		)
 	}

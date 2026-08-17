@@ -1623,6 +1623,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	}
 	// Sycophancy detection: capture candidate factual premises from the user
 	// message so the agent's response can be checked for unverified agreement.
+	sessionTimedOut := false // set when the loop breaks due to session wall-clock timeout (#611)
 	for i := 0; a.maxIter <= 0 || i < a.maxIter; i++ {
 		runStats.Iterations = i + 1
 		if err := ctx.Err(); err != nil {
@@ -1639,6 +1640,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			})
 			if a.sessionTimeout.shouldStop() {
 				debug.Log("session-timeout", "wall-clock timeout exceeded, stopping agent loop")
+				sessionTimedOut = true
 				break
 			}
 		}
@@ -4443,6 +4445,24 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			})
 			msgs = a.contextManager.Messages()
 		}
+	}
+	// Session wall-clock timeout (#611): this break path previously fell through
+	// to the shared post-loop block, misreporting "max iterations (N) reached"
+	// when maxIter>0 and silently returning nil when maxIter<=0 (autopilot/cron
+	// semantics), making timeout-killed runs indistinguishable from success.
+	// Check the dedicated flag FIRST and mirror the toolCallBudget hard-stop
+	// pattern: dedicated summary + sentinel error so callers (sub-agents, ACP
+	// loops, cron) can distinguish timeout from both normal completion and
+	// iteration exhaustion.
+	if sessionTimedOut {
+		runStats.finalize(nil) // compute Duration for the summary
+		summary := runStats.Summary()
+		onEvent(provider.StreamEvent{
+			Type: provider.StreamEventText,
+			Text: fmt.Sprintf("\nSession wall-clock timeout reached (limit: %s). Summary: %s.\nYour task may be partially complete — review the changes above. You can continue by sending a follow-up message.", a.sessionTimeout.timeout.Round(time.Second), summary),
+		})
+		onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: ErrSessionTimeout})
+		return ErrSessionTimeout
 	}
 	if a.maxIter > 0 {
 		// Emit a summary of what was accomplished before the error, so the
