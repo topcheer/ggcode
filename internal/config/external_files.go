@@ -133,6 +133,22 @@ func SaveVendors(configDir string, vendors map[string]VendorConfig) error {
 		}
 	}
 
+	// #608: Load() expands ${VAR} references in vendors.yaml into memory and
+	// then auto-saves, which previously rewrote the file with the materialized
+	// literal values — destroying the env references (data loss for anyone
+	// managing secrets/URLs via environment variables). Before writing, restore
+	// any ${VAR} leaf from the current on-disk file whose expansion equals the
+	// in-memory value about to be written. If the in-memory value differs from
+	// the expansion (user actually changed it), the new value is kept.
+	if existingData, readErr := os.ReadFile(path); readErr == nil {
+		existingRaw := map[string]interface{}{}
+		if yaml.Unmarshal(existingData, &existingRaw) == nil {
+			lookup := runtimeEnvLookup(nil)
+			if restored, ok := restoreEnvRefs(existingRaw, raw, lookup).(map[string]interface{}); ok {
+				raw = restored
+			}
+		}
+	}
 	out, err := yaml.Marshal(raw)
 	if err != nil {
 		return err
@@ -216,6 +232,43 @@ func SaveMCPServers(configDir string, servers []MCPServerConfig) error {
 		return fmt.Errorf("marshaling mcp servers: %w", err)
 	}
 	return writeSecureConfigFile(path, out)
+}
+
+// restoreEnvRefs walks an on-disk (unexpanded) tree and an outgoing
+// (expanded) tree in parallel. At each string leaf, if the on-disk value
+// contains a ${VAR} reference and expanding it with the runtime environment
+// yields exactly the outgoing value, the unexpanded reference is returned so
+// the caller can keep referencing the environment instead of materializing
+// it (#608). Any mismatch (changed value, changed shape) keeps the outgoing
+// value untouched.
+func restoreEnvRefs(existing, out interface{}, lookup envLookupFunc) interface{} {
+	switch ev := existing.(type) {
+	case map[string]interface{}:
+		if ov, ok := out.(map[string]interface{}); ok {
+			for k, v := range ov {
+				if evVal, present := ev[k]; present {
+					ov[k] = restoreEnvRefs(evVal, v, lookup)
+				}
+			}
+			return ov
+		}
+	case []interface{}:
+		if ov, ok := out.([]interface{}); ok {
+			for i := range ov {
+				if i < len(ev) {
+					ov[i] = restoreEnvRefs(ev[i], ov[i], lookup)
+				}
+			}
+			return ov
+		}
+	case string:
+		if outStr, ok := out.(string); ok && strings.Contains(ev, "${") {
+			if ExpandEnvWithLookup(ev, lookup) == outStr {
+				return ev
+			}
+		}
+	}
+	return out
 }
 
 // loadVendorsFile reads and parses a vendors.yaml file.

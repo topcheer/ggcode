@@ -172,13 +172,17 @@ func MergeInstance(global, instance *Config) {
 	}
 
 	// Knight
-	mergeKnightConfig(&global.KnightConfig, &instance.KnightConfig)
+	// #609: the four sub-merges below now register their top-level YAML keys
+	// in instanceFields — without this, instance knight/a2a/subagents/swarm
+	// values leaked into the global ggcode.yaml on Save() (same class of bug
+	// the hook leak was fixed with via mergeHookConfig's tracked map).
+	mergeKnightConfig(&global.KnightConfig, &instance.KnightConfig, global.instanceFields)
 
 	// A2A
-	mergeA2AConfigFields(&global.A2A, &instance.A2A)
+	mergeA2AConfigFields(&global.A2A, &instance.A2A, global.instanceFields)
 
 	// SubAgents
-	mergeSubAgentConfig(&global.SubAgents, &instance.SubAgents)
+	mergeSubAgentConfig(&global.SubAgents, &instance.SubAgents, global.instanceFields)
 
 	// Impersonation
 	if global.Impersonation.Preset == "" && instance.Impersonation.Preset != "" {
@@ -186,7 +190,7 @@ func MergeInstance(global, instance *Config) {
 	}
 
 	// Swarm
-	mergeSwarmConfig(&global.Swarm, &instance.Swarm)
+	mergeSwarmConfig(&global.Swarm, &instance.Swarm, global.instanceFields)
 
 	// Hooks
 	mergeHookConfig(&global.Hooks, &instance.Hooks, global.instanceFields)
@@ -239,8 +243,10 @@ func mergeIMConfig(global, instance *IMConfig, tracked map[string]bool) {
 	}
 }
 
-// mergeKnightConfig merges instance Knight config into global.
-func mergeKnightConfig(global, instance *KnightConfig) {
+// mergeKnightConfig merges instance Knight config into global. Fields filled
+// from the instance are recorded in tracked so Save() strips them from the
+// global file write (#609).
+func mergeKnightConfig(global, instance *KnightConfig, tracked map[string]bool) {
 	// Knight.Enabled default is true; only override if global is explicitly false
 	// and instance is true, or vice versa. Since we can't distinguish "explicitly
 	// false" from "default false" without the YAML raw data, we use the simple rule:
@@ -254,89 +260,117 @@ func mergeKnightConfig(global, instance *KnightConfig) {
 		// instance CAN turn it back on. This is by design — the instance admin
 		// may want to enable knight for a specific project.
 		global.Enabled = instance.Enabled
+		tracked["knight"] = true
 	}
 
 	if global.TrustLevel == "" && instance.TrustLevel != "" {
 		global.TrustLevel = instance.TrustLevel
+		tracked["knight"] = true
 	}
 	if global.DailyTokenBudget == 0 && instance.DailyTokenBudget != 0 {
 		global.DailyTokenBudget = instance.DailyTokenBudget
+		tracked["knight"] = true
 	}
 	if global.IdleDelaySec == 0 && instance.IdleDelaySec != 0 {
 		global.IdleDelaySec = instance.IdleDelaySec
+		tracked["knight"] = true
 	}
 	if len(global.Capabilities) == 0 && len(instance.Capabilities) > 0 {
 		global.Capabilities = instance.Capabilities
+		tracked["knight"] = true
 	}
 	if global.Vendor == "" && instance.Vendor != "" {
 		global.Vendor = instance.Vendor
+		tracked["knight"] = true
 	}
 	if global.Endpoint == "" && instance.Endpoint != "" {
 		global.Endpoint = instance.Endpoint
+		tracked["knight"] = true
 	}
 	if global.Model == "" && instance.Model != "" {
 		global.Model = instance.Model
+		tracked["knight"] = true
 	}
 }
 
 // mergeA2AConfigFields merges instance A2A config into global.
-// Uses the same "global wins if set" rule.
-func mergeA2AConfigFields(global, instance *A2AConfig) {
+// Uses the same "global wins if set" rule. Instance-filled fields are
+// tracked so Save() keeps them out of the global file (#609).
+func mergeA2AConfigFields(global, instance *A2AConfig, tracked map[string]bool) {
 	if !global.Disabled && instance.Disabled {
 		global.Disabled = instance.Disabled
+		tracked["a2a"] = true
 	}
 	if global.Port == 0 && instance.Port != 0 {
 		global.Port = instance.Port
+		tracked["a2a"] = true
 	}
 	if global.Host == "" && instance.Host != "" {
 		global.Host = instance.Host
+		tracked["a2a"] = true
 	}
 	if global.MaxTasks == 0 && instance.MaxTasks != 0 {
 		global.MaxTasks = instance.MaxTasks
+		tracked["a2a"] = true
 	}
 	if global.TaskTimeout == "" && instance.TaskTimeout != "" {
 		global.TaskTimeout = instance.TaskTimeout
+		tracked["a2a"] = true
 	}
 	if global.Auth.APIKey == "" && instance.Auth.APIKey != "" {
 		global.Auth.APIKey = instance.Auth.APIKey
+		tracked["a2a"] = true
 	}
 	if len(global.Auth.APIKeys) == 0 && len(instance.Auth.APIKeys) > 0 {
 		global.Auth.APIKeys = instance.Auth.APIKeys
+		tracked["a2a"] = true
 	}
 	if global.Auth.OAuth2 == nil && instance.Auth.OAuth2 != nil {
 		global.Auth.OAuth2 = instance.Auth.OAuth2
+		tracked["a2a"] = true
 	}
 	if global.Auth.OIDC == nil && instance.Auth.OIDC != nil {
 		global.Auth.OIDC = instance.Auth.OIDC
+		tracked["a2a"] = true
 	}
 	if global.Auth.MTLS == nil && instance.Auth.MTLS != nil {
 		global.Auth.MTLS = instance.Auth.MTLS
+		tracked["a2a"] = true
 	}
 }
 
 // mergeSubAgentConfig merges instance subagent config into global.
-func mergeSubAgentConfig(global, instance *SubAgentConfig) {
+// Instance-filled fields are tracked so Save() keeps them out of the global
+// file (#609).
+func mergeSubAgentConfig(global, instance *SubAgentConfig, tracked map[string]bool) {
 	if global.MaxConcurrent == 0 && instance.MaxConcurrent != 0 {
 		global.MaxConcurrent = instance.MaxConcurrent
+		tracked["subagents"] = true
 	}
 	if global.Timeout == 0 && instance.Timeout != 0 {
 		global.Timeout = instance.Timeout
+		tracked["subagents"] = true
 	}
 }
 
-// mergeSwarmConfig merges instance swarm config into global.
-func mergeSwarmConfig(global, instance *SwarmConfig) {
+// mergeSwarmConfig merges instance swarm config into global. Instance-filled
+// fields are tracked so Save() keeps them out of the global file (#609).
+func mergeSwarmConfig(global, instance *SwarmConfig, tracked map[string]bool) {
 	if global.MaxTeammatesPerTeam == 0 && instance.MaxTeammatesPerTeam != 0 {
 		global.MaxTeammatesPerTeam = instance.MaxTeammatesPerTeam
+		tracked["swarm"] = true
 	}
 	if global.TeammateTimeout == 0 && instance.TeammateTimeout != 0 {
 		global.TeammateTimeout = instance.TeammateTimeout
+		tracked["swarm"] = true
 	}
 	if global.InboxSize == 0 && instance.InboxSize != 0 {
 		global.InboxSize = instance.InboxSize
+		tracked["swarm"] = true
 	}
 	if global.PollInterval == 0 && instance.PollInterval != 0 {
 		global.PollInterval = instance.PollInterval
+		tracked["swarm"] = true
 	}
 }
 
