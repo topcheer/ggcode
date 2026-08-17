@@ -180,8 +180,11 @@ func SaveIMAdapter(name string, values map[string]string) error {
 		}
 		adapterCfg.OutputMode = existing.OutputMode
 		adapterCfg.Targets = existing.Targets
-		// Preserve existing Extra fields not in the update, then overwrite
-		if existing.Extra != nil {
+		// Preserve existing Extra fields not in the update, then overwrite.
+		// When platform changes, discard old Extra to prevent cross-platform
+		// credential leakage (#585): telegram and slack both use "bot_token"
+		// field name, so switching platforms would incorrectly inherit the old token.
+		if existing.Extra != nil && existing.Platform == platform {
 			if adapterCfg.Extra == nil {
 				adapterCfg.Extra = make(map[string]interface{})
 			}
@@ -248,9 +251,10 @@ func SetIMAdapterEnabled(name string, enabled bool) error {
 	return cfg.SetIMAdapterEnabled(name, enabled)
 }
 
-// TestIMConnection attempts to validate an IM adapter configuration.
-// It performs a basic connectivity check by verifying the config has
-// the minimum required fields for the given platform.
+// TestIMConnection performs basic required-field validation for an IM adapter.
+// It checks that all required fields for the platform are non-empty.
+// Note: this is field validation only — full connectivity and authentication
+// requires starting the actual adapter runtime (im.Manager).
 func TestIMConnection(name string) error {
 	cfg, err := config.Load(config.ConfigPath())
 	if err != nil {
@@ -266,8 +270,36 @@ func TestIMConnection(name string) error {
 	if acfg.Platform == "" {
 		return fmt.Errorf("adapter %q has no platform configured", name)
 	}
-	// Basic validation — full adapter creation requires the im.Manager runtime.
-	// The frontend should start the adapter and observe state changes.
+
+	// Validate required fields from platform registry
+	registry := GetIMPlatformRegistry()
+	var platformMeta *IMPlatformMeta
+	for i := range registry {
+		if registry[i].ID == acfg.Platform {
+			platformMeta = &registry[i]
+			break
+		}
+	}
+	if platformMeta == nil {
+		return fmt.Errorf("unknown platform %q for adapter %q", acfg.Platform, name)
+	}
+
+	// Check all required fields are present and non-empty
+	for _, field := range platformMeta.Fields {
+		if field.Label == "" {
+			continue // non-required field (registry doesn't have a 'required' flag)
+		}
+		val, ok := acfg.Extra[field.Key]
+		if !ok {
+			return fmt.Errorf("missing required field %q (%s)", field.Key, field.Label)
+		}
+		// Convert to string and check non-empty
+		strVal, ok := val.(string)
+		if !ok || strVal == "" {
+			return fmt.Errorf("required field %q (%s) is empty or invalid", field.Key, field.Label)
+		}
+	}
+
 	return nil
 }
 
