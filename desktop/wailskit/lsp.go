@@ -103,6 +103,17 @@ func (b *ChatBridge) InstallLSPServer(languageID, optionID string) LSPInstallRes
 	wd := b.workingDir
 	b.mu.Unlock()
 
+	// #599 L1: an empty workingDir (Getwd swallowed at bridge construction)
+	// would silently install into the process CWD and report Success —
+	// reachable only on that rare construction failure, but when it hits
+	// the install lands somewhere the user never intended. Refuse instead.
+	if wd == "" {
+		return LSPInstallResult{
+			Success: false,
+			Output:  "cannot install LSP server: working directory is unavailable (bridge constructed without a valid cwd); retry after restarting in the project directory",
+		}
+	}
+
 	opts := lsp.GetInstallOptions(languageID, wd)
 	if len(opts) == 0 {
 		return LSPInstallResult{

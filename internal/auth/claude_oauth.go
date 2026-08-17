@@ -114,6 +114,23 @@ func startClaudeCallbackListenerNet(expectedState string) (*ClaudeOAuthFlow, err
 		errParam := q.Get("error")
 
 		if errParam != "" {
+			// State validation required even in error branch (#599): prevents
+			// single-packet abortion of in-flight auth flows via crafted
+			// /callback?error= requests without a valid state parameter.
+			if state != expectedState {
+				w.Header().Set("Content-Type", "text/plain")
+				w.WriteHeader(http.StatusBadRequest)
+				fmt.Fprint(w, "Invalid callback: state mismatch in error response")
+				return
+			}
+			// Single-consumption guard (#560): reject duplicate error callbacks
+			// after a code has been delivered or error already processed.
+			if codeDelivered.Load() {
+				w.Header().Set("Content-Type", "text/plain")
+				w.WriteHeader(http.StatusGone)
+				fmt.Fprint(w, "Authorization already completed.")
+				return
+			}
 			desc := q.Get("error_description")
 			w.Header().Set("Content-Type", "text/plain")
 			w.WriteHeader(http.StatusBadRequest)
