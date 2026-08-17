@@ -100,6 +100,11 @@ var successClaimPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\b(?:everything|all)\s+(?:is|looks|seems|appears)\s+(?:good|correct|working|fine|passing)\b`),
 	regexp.MustCompile(`(?i)\bdone\s*[!.]\s*$`),
 	regexp.MustCompile(`(?i)\b(?:implementation|fix|change)\s+(?:is\s+)?(?:complete|finished|done|ready)\b`),
+	// #595: gerund completed-action claims — "After applying the fix, all
+	// tests pass" / "After running the tests, everything passes" / "Once
+	// applied, the fix resolves the issue" are present-tense assertions.
+	regexp.MustCompile(`(?i)\beverything\s+(?:passes|passed|works|working|succeeds|succeeded)\b`),
+	regexp.MustCompile(`(?i)\b(?:fix|patch|change)\s+(?:resolves|resolved|fixes|fixed)\b`),
 }
 
 // conditionalGuardWords prevent false positives - if these appear near the
@@ -111,9 +116,14 @@ var conditionalGuardWords = []string{
 }
 
 // verifyTools are tool names that constitute verification actions.
+// Aligned with false_premise_check.go fpIsBuildTestTool (#595).
 var verifyTools = map[string]bool{
-	"run_command": true, // checked further via command argument
-	"ci_status":   true,
+	"run_command":         true, // checked further via command argument
+	"start_command":       true, // checked further via command argument
+	"wait_command":        true,
+	"task_output":         true,
+	"read_command_output": true,
+	"ci_status":           true,
 }
 
 // psEditTools are tool names that modify files (require re-verification).
@@ -164,8 +174,9 @@ func (p *prematureSuccessState) recordToolCall(toolName string, args map[string]
 	}
 
 	if verifyTools[toolName] {
-		// For run_command, check if the command is actually a verify command.
-		if toolName == "run_command" {
+		// For run_command and start_command, check if the command is actually
+		// a verify command (#595).
+		if toolName == "run_command" || toolName == "start_command" {
 			cmd, _ := args["command"].(string)
 			if !psIsVerifyCommand(cmd) {
 				return
@@ -176,9 +187,14 @@ func (p *prematureSuccessState) recordToolCall(toolName string, args map[string]
 			// count it as a passing verification. Record it so a later success
 			// claim can be flagged as contradicting an observed failure (#350).
 			p.lastVerifyFailed = true
-			p.lastVerifyFailedCmd, _ = args["command"].(string)
+			if cmd, ok := args["command"].(string); ok {
+				p.lastVerifyFailedCmd = cmd
+			}
 			return
 		}
+		// Successful verification: clear edit counter and failure state.
+		// wait_command, task_output, read_command_output success results
+		// count as verification completion (#595).
 		p.editsSinceVerify = 0
 		p.everVerified = true
 		p.lastVerifyFailed = false
@@ -206,12 +222,25 @@ func psIsVerifyCommand(cmd string) bool {
 		return isVerify
 	}
 
-	// Generic patterns: phrase patterns use substring match; single-word
-	// patterns only match in COMMAND position (#553).
+	// Generic patterns: phrase patterns use command-position match
+	// (issue #593 P4) to avoid false positives like `grep -n "go test" Makefile`;
+	// single-word patterns only match in COMMAND position (#553).
 	for _, pat := range verifyCmdPatterns {
 		if strings.Contains(pat, " ") {
-			if strings.Contains(lower, pat) {
-				return true
+			// Multi-word phrases must match at command position, not anywhere
+			// in the string. Use psCommandPositionTokens for the check.
+			cmdPosTokens := psCommandPositionTokens(tokens)
+			for t := range cmdPosTokens {
+				// Check if the multi-word pattern matches at this token position
+				// by reconstructing the substring starting from this token.
+				if i := indexOfToken(tokens, t); i >= 0 {
+					if i+len(strings.Fields(pat)) <= len(tokens) {
+						substr := strings.Join(tokens[i:i+len(strings.Fields(pat))], " ")
+						if substr == pat {
+							return true
+						}
+					}
+				}
 			}
 			continue
 		}
@@ -313,6 +342,16 @@ var psRunnerPrefixes = map[string]bool{
 	"cmake": true,
 }
 
+// indexOfToken returns the index of token in the tokens slice, or -1 if not found.
+func indexOfToken(tokens []string, token string) int {
+	for i, t := range tokens {
+		if t == token {
+			return i
+		}
+	}
+	return -1
+}
+
 // psSegmentFirstTokens returns the tokens that occupy the FIRST position of
 // a pipeline/list segment (the tokens[0]-equivalent for each segment). Used
 // for the more permissive hyphen-variant matching: a bare "check-all" or
@@ -390,6 +429,9 @@ func (p *prematureSuccessState) checkSuccessClaim(assistantText string) string {
 			continue
 		}
 		// Check for conditional guard words near the match (within 40 chars before).
+		// Exception (#595): "after" and "once" are only guard words when followed
+		// by incomplete verb forms (participles, future tense). Past-tense assertions
+		// like "After applying the fix, all tests pass" are legitimate claims.
 		start := loc[0] - 40
 		if start < 0 {
 			start = 0
@@ -397,10 +439,32 @@ func (p *prematureSuccessState) checkSuccessClaim(assistantText string) string {
 		contextBefore := assistantText[start:loc[0]]
 		guarded := false
 		for _, gw := range conditionalGuardWords {
-			if strings.Contains(strings.ToLower(contextBefore), gw) {
-				guarded = true
-				break
+			idx := strings.Index(strings.ToLower(contextBefore), gw)
+			if idx == -1 {
+				continue
 			}
+			// For "once " and "after ", only genuinely incomplete/future forms
+			// guard the claim (#595). A gerund + object ("applying the fix",
+			// "running the tests") or a participle ("once applied") denotes a
+			// COMPLETED action, so the claim stands. In-progress/future markers
+			// — "will ", "going to", "pending", "now" right after the guard
+			// word ("After applying now...") — keep the guard.
+			if gw == "once " || gw == "after " {
+				afterGuard := strings.ToLower(contextBefore[idx+len(gw):])
+				for _, marker := range []string{"will ", "going to", "pending", "now"} {
+					if strings.Contains(afterGuard, marker) {
+						guarded = true
+						break
+					}
+				}
+				if guarded {
+					break
+				}
+				// Completed-action phrasing is NOT a guard.
+				continue
+			}
+			guarded = true
+			break
 		}
 		if !guarded {
 			claimFound = true
