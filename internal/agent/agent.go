@@ -1724,8 +1724,15 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// Error compounding risk: compute geometric compounding probability
 		// and warn when accumulated errors make the trajectory unreliable.
 		if ecMsg := a.errorCompound.maybeWarn(i + 1); ecMsg != "" {
-			a.injectGuidance(ecMsg)
-			msgs = a.contextManager.Messages()
+			// #681: maybeWarn consumed the per-run quota ("at most 2 per run")
+			// by returning; only a delivered message may keep it. Suppressed
+			// fires are rolled back so the quota is not burned with zero
+			// guidance delivered.
+			if a.injectGuidance(ecMsg) {
+				msgs = a.contextManager.Messages()
+			} else {
+				a.errorCompound.markUndelivered()
+			}
 		}
 		// Correction spiral: detect error severity escalation across fix attempts.
 		// Warns when each correction introduces a worse error (feedback control instability).
@@ -1914,8 +1921,14 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// a one-time hint to confirm scope and consider package-scoped ops.
 		if monorepoMsg := a.monorepoScoper.maybeWarnScopeSprawl(); monorepoMsg != "" {
 			debug.Log("monorepo-scope", "package scope sprawl detected: %s", monorepoMsg)
-			a.injectGuidance(monorepoMsg)
-			msgs = a.contextManager.Messages()
+			// #681: one-shot hint — if the per-turn budget suppresses it, the
+			// one-time chance is restored so it retries on a later iteration
+			// instead of the detector going dark for the rest of the run.
+			if a.injectGuidance(monorepoMsg) {
+				msgs = a.contextManager.Messages()
+			} else {
+				a.monorepoScoper.markUndelivered()
+			}
 		}
 		// Mid-point progress checkpoint: at 60% of max iterations, inject a
 		// one-time progress assessment. This is the lightweight "overseer"
@@ -1925,10 +1938,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		if a.maxIter >= 20 && !progressCheckInjected && i+1 >= a.maxIter*3/5 {
 			progressCheckInjected = true
 			debug.Log("agent", "Injecting mid-point progress checkpoint at iteration %d/%d", i+1, a.maxIter)
-			a.injectGuidance(fmt.Sprintf(
-				"Progress checkpoint: iteration %d/%d. Assess — on track? If not, switch strategy.",
-				i+1, a.maxIter,
-			))
+			// #681: one-shot protocol prompt — direct add, exempt from the
+			// per-turn guidance budget like the loop-recovery nudges above
+			// (budget suppression would silently burn the run's only
+			// checkpoint exactly when the run is struggling hardest).
+			a.contextManager.Add(provider.Message{
+				Role: "user",
+				Content: []provider.ContentBlock{{Type: "text", Text: fmt.Sprintf(
+					"Progress checkpoint: iteration %d/%d. Assess — on track? If not, switch strategy.",
+					i+1, a.maxIter,
+				)}},
+			})
 			msgs = a.contextManager.Messages() // refresh after adding checkpoint
 		}
 		// Adaptive effort: adjust reasoning budget per-turn based on recent

@@ -235,7 +235,14 @@ func FormatCacheAnalysis(a CacheAnalysis) string {
 		if a.NetSavingsUSD >= 0 {
 			b.WriteString(fmt.Sprintf("savings: %s (%.0f%% off)", FormatCost(a.NetSavingsUSD), a.PercentSaved))
 		} else {
-			b.WriteString(fmt.Sprintf("net loss: %s (-%.0f%%)", FormatCost(-a.NetSavingsUSD), a.PercentSaved))
+			// #683: PercentSaved is already negative on the loss branch, so
+			// "(-%.0f%%)" produced "--633%". Use the absolute value and let the
+			// explicit "-" carry the direction.
+			pct := a.PercentSaved
+			if pct < 0 {
+				pct = -pct
+			}
+			b.WriteString(fmt.Sprintf("net loss: %s (-%.0f%%)", FormatCost(-a.NetSavingsUSD), pct))
 		}
 	}
 

@@ -220,6 +220,17 @@ func (s *monorepoScoperState) maybeWarnScopeSprawl() string {
 	return formatScopeSprawlHint(pkgs)
 }
 
+// markUndelivered un-burns the one-shot chance consumed by a
+// maybeWarnScopeSprawl call whose guidance was suppressed by the
+// per-turn guidance budget (#681: one-shot + budget-droppable = the
+// detector randomly goes dark for the whole run). After this call the
+// sprawl check may fire again on a later, less saturated iteration.
+func (s *monorepoScoperState) markUndelivered() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.fired = false
+}
+
 // formatScopeSprawlHint produces the concise hint message.
 func formatScopeSprawlHint(pkgs []string) string {
 	// Cap displayed package names.

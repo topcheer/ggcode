@@ -108,6 +108,16 @@ type errorCompoundState struct {
 	// Critical escalation requires this to be > 0: a recovery period with
 	// zero new errors must never escalate severity (#336).
 	newErrSinceWarn int
+
+	// #681 revert snapshot: maybeWarn consumes the per-run quota ("at most
+	// 2 per run") when it RETURNS a message, but since #677 the message
+	// then goes through the per-turn guidance budget, which may suppress
+	// it. "Returned != delivered": a suppressed fire must not burn the
+	// quota (that is how the detector could go permanently dark with zero
+	// guidance ever delivered). markUndelivered restores this snapshot.
+	canRevertWarn    bool
+	prevLastWarnedAt int
+	prevNewErrSince  int
 }
 
 func newErrorCompoundState() *errorCompoundState {
@@ -238,11 +248,32 @@ func (s *errorCompoundState) maybeWarn(iteration int) string {
 		return ""
 	}
 
+	s.canRevertWarn = true
+	s.prevLastWarnedAt = s.lastWarnedAt
+	s.prevNewErrSince = s.newErrSinceWarn
 	s.warningCount++
 	s.lastWarnedAt = iteration
 	s.newErrSinceWarn = 0
 
 	return s.formatWarning(wSteps, wErrs, density, wVerify, wEdit, wTool)
+}
+
+// markUndelivered reverts the quota consumption of the most recent
+// maybeWarn fire whose guidance was suppressed by the per-turn guidance
+// budget (#681). The detector's own thresholds are unchanged; only the
+// per-run warning quota, the spacing marker, and the escalation counter
+// are rolled back so the warning can be re-fired on a later, less
+// saturated iteration. No-op if there is no revertible fire.
+func (s *errorCompoundState) markUndelivered() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.canRevertWarn || s.warningCount == 0 {
+		return
+	}
+	s.canRevertWarn = false
+	s.warningCount--
+	s.lastWarnedAt = s.prevLastWarnedAt
+	s.newErrSinceWarn = s.prevNewErrSince
 }
 
 // formatWarning builds the guidance message for a firing warning. Severity

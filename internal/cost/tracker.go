@@ -14,6 +14,13 @@ type SessionCost struct {
 	CacheReadTokens  int64   `json:"cache_read_tokens"`
 	CacheWriteTokens int64   `json:"cache_write_tokens"`
 	TotalCostUSD     float64 `json:"total_cost_usd"`
+
+	// HasPricing reports whether pricing data was available for the
+	// provider/model when TotalCostUSD was last computed. #683: without it,
+	// unknown models displayed a false-precise $0.0000 indistinguishable from
+	// a genuinely free session, and persisted .cost.json snapshots never
+	// recalculated even after pricing became available.
+	HasPricing bool `json:"has_pricing,omitempty"`
 }
 
 // AgentCostEntry tracks token usage attributable to a single sub-agent,
@@ -172,8 +179,14 @@ func (t *Tracker) SessionCost() SessionCost {
 func (t *Tracker) recalculate() {
 	rate, ok := t.pricing.Get(t.cost.Provider, t.cost.Model)
 	if !ok {
+		// #683: mark the session as having no pricing data instead of leaving
+		// a silent $0.00 that display layers rendered as a real cost. The
+		// persisted total (if any) is preserved so a loaded snapshot is never
+		// zeroed — display layers show "(no pricing data)" instead.
+		t.cost.HasPricing = false
 		return
 	}
+	t.cost.HasPricing = true
 	// #529: same shared cache-rate fallback as recordAgentLocked/analyzeCacheLocked.
 	cacheReadPerM, cacheWritePerM := effectiveCacheRates(rate)
 	t.cost.TotalCostUSD =

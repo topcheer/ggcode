@@ -129,11 +129,19 @@ func isCriticalGuidance(text string) bool {
 // (empty-response retry, truncation continuation, inline-tool-call format
 // correction) intentionally stay direct adds: they carry their own hard
 // caps, and budget suppression would break loop recovery.
-func (a *Agent) injectGuidance(text string) {
+//
+// #681: returns whether the message was actually DELIVERED (false = the
+// per-turn budget suppressed it). Returning a message from a detector is
+// not delivering it: callers with one-shot semantics (monorepo scope hint)
+// or per-run warning quotas (errorCompound's "at most 2 per run") must
+// only consume their one chance / quota when this returns true, otherwise
+// a saturated detector turn burns the quota with ZERO guidance delivered
+// (the detector goes permanently dark — "returned != delivered").
+func (a *Agent) injectGuidance(text string) bool {
 	if !a.guidanceBudget.allow(text) {
 		debug.Log("guidance-budget", "suppressing guidance message (budget exceeded, %d suppressed this turn)",
 			a.guidanceBudget.suppressed)
-		return
+		return false
 	}
 	a.contextManager.Add(provider.Message{
 		Role: "user",
@@ -142,4 +150,5 @@ func (a *Agent) injectGuidance(text string) {
 			Text: text,
 		}},
 	})
+	return true
 }

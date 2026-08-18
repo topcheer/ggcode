@@ -30,19 +30,29 @@ const (
 
 func (e *archiveExtractor) Extract(data []byte) (TextResult, error) {
 	var files []archiveFile
+	var total int
+	var truncated bool
 	var err error
 
 	switch e.subFormat {
 	case "zip":
 		files, err = listZip(data)
+		if err == nil {
+			total = len(files)
+			if len(files) >= maxArchiveEntries {
+				if t := totalZipFiles(data); t > len(files) {
+					total, truncated = t, true
+				}
+			}
+		}
 	case "tar":
-		files, err = listTar(data, false, "")
+		files, total, truncated, err = listTar(data)
 	case "tar.gz", "tgz":
-		files, err = listTarGz(data)
+		files, total, truncated, err = listTarGz(data)
 	case "tar.bz2":
-		files, err = listTarBz2(data)
+		files, total, truncated, err = listTarBz2(data)
 	case "tar.xz":
-		files, err = listTarXz(data)
+		files, total, truncated, err = listTarXz(data)
 	default:
 		return TextResult{}, fmt.Errorf("unsupported archive format: %s", e.subFormat)
 	}
@@ -53,11 +63,13 @@ func (e *archiveExtractor) Extract(data []byte) (TextResult, error) {
 	var buf strings.Builder
 	fmt.Fprintf(&buf, "[Archive: %s format, %d files]\n\n", e.subFormat, len(files))
 
-	if len(files) >= maxArchiveEntries && e.subFormat == "zip" {
-		total := totalZipFiles(data)
-		if total > len(files) {
-			fmt.Fprintf(&buf, "[Showing first %d of %d files]\n\n", len(files), total)
-		}
+	// #682: tar-family listings could be silently truncated (200MB decompress
+	// limit, >500-entry stop) with no marker, unlike the zip path. Surface the
+	// truncation so consumers know the inventory is partial.
+	if truncated && total > len(files) {
+		fmt.Fprintf(&buf, "[Showing first %d of %d files]\n\n", len(files), total)
+	} else if truncated {
+		buf.WriteString("[Truncated: archive exceeds extraction limits]\n\n")
 	}
 
 	for _, f := range files {
@@ -237,51 +249,72 @@ func totalZipFiles(data []byte) int {
 // decompression bombs (small compressed file → huge uncompressed data).
 const maxTarDecompressSize = 200 * 1024 * 1024 // 200MB
 
-func listTarGz(data []byte) ([]archiveFile, error) {
+func listTarGz(data []byte) ([]archiveFile, int, bool, error) {
 	gz, err := gzip.NewReader(bytes.NewReader(data))
 	if err != nil {
-		return nil, fmt.Errorf("open gzip: %w", err)
+		return nil, 0, false, fmt.Errorf("open gzip: %w", err)
 	}
 	defer gz.Close()
 	return listTarFromReader(io.LimitReader(gz, maxTarDecompressSize))
 }
 
-func listTarBz2(data []byte) ([]archiveFile, error) {
+func listTarBz2(data []byte) ([]archiveFile, int, bool, error) {
 	br := bzip2.NewReader(bytes.NewReader(data))
 	return listTarFromReader(io.LimitReader(br, maxTarDecompressSize))
 }
 
-func listTarXz(data []byte) ([]archiveFile, error) {
+func listTarXz(data []byte) ([]archiveFile, int, bool, error) {
 	// xz requires external dependency; try decompressing manually
 	// For now, return a helpful error
-	return nil, fmt.Errorf("tar.xz support requires xz decompression (not yet available)")
+	return nil, 0, false, fmt.Errorf("tar.xz support requires xz decompression (not yet available)")
 }
 
-func listTar(data []byte, _ bool, _ string) ([]archiveFile, error) {
+func listTar(data []byte) ([]archiveFile, int, bool, error) {
 	return listTarFromReader(bytes.NewReader(data))
 }
 
-func listTarFromReader(r io.Reader) ([]archiveFile, error) {
+// listTarFromReader returns the buffered files (≤ maxArchiveEntries), the
+// total regular-file count when knowable, and whether the listing was
+// truncated (decompression limit hit or entry cap reached). #682: previously
+// truncation was silent and the drain loop's file count was discarded.
+func listTarFromReader(r io.Reader) ([]archiveFile, int, bool, error) {
 	tr := tar.NewReader(r)
 	var files []archiveFile
+	total := 0
+	truncated := false
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
+			// Unexpected error: 200MB decompression limit hit or corrupt
+			// stream. The listing so far is partial — mark it.
+			truncated = true
 			break
 		}
 		if hdr.Typeflag != tar.TypeReg && hdr.Typeflag != 0 {
 			continue
 		}
+		total++
 		if len(files) >= maxArchiveEntries {
-			// Drain remaining headers to count total files
+			// Drain remaining headers to count total files (#682: the count
+			// was previously computed and discarded — now it drives the
+			// "[Showing first %d of %d files]" marker, matching the zip path).
 			for {
-				_, err := tr.Next()
+				h, err := tr.Next()
 				if err != nil {
+					if err != io.EOF {
+						truncated = true
+					}
 					break
 				}
+				if h.Typeflag == tar.TypeReg || h.Typeflag == 0 {
+					total++
+				}
+			}
+			if total > len(files) {
+				truncated = true
 			}
 			break
 		}
@@ -291,7 +324,7 @@ func listTarFromReader(r io.Reader) ([]archiveFile, error) {
 		}
 		files = append(files, archiveFile{name: hdr.Name, data: d})
 	}
-	return files, nil
+	return files, total, truncated, nil
 }
 
 // extractArchiveContentDepth recursively extracts text from a nested archive.

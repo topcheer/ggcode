@@ -133,6 +133,14 @@ func (m *Manager) Load(sessionID, providerName, model string) {
 
 	t := NewTracker(providerName, model, m.pricing)
 	t.cost = sc
+	// #683: snapshots persisted while pricing was unknown never recomputed,
+	// even after the pricing table learned the model. Recalculate only those;
+	// snapshots that already carry a computed cost are trusted as-is (a blind
+	// recalculation would zero manually persisted totals when pricing is
+	// still unknown).
+	if !sc.HasPricing {
+		t.recalculate()
+	}
 	m.trackers[sessionID] = t
 }
 
@@ -162,6 +170,10 @@ func (m *Manager) LoadAllFromDisk() int {
 		m.mu.Lock()
 		t := NewTracker(sc.Provider, sc.Model, m.pricing)
 		t.cost = sc
+		// #683: recalculate only no-pricing snapshots — see Load().
+		if !sc.HasPricing {
+			t.recalculate()
+		}
 		m.trackers[sessionID] = t
 		m.mu.Unlock()
 		loaded++
@@ -190,11 +202,19 @@ func (m *Manager) AggregateAllCosts() SessionCost {
 }
 
 // FormatCost returns a human-readable cost string.
+// #683: negative amounts previously rendered as "$-1.50"; use the conventional
+// "-$1.50" placement so callers composing "net loss: $x (-y%)" can't produce
+// a "--" double-minus.
 func FormatCost(usd float64) string {
-	if usd < 0.01 {
-		return fmt.Sprintf("$%.4f", usd)
+	sign := ""
+	if usd < 0 {
+		sign = "-"
+		usd = -usd
 	}
-	return fmt.Sprintf("$%.2f", usd)
+	if usd < 0.01 {
+		return fmt.Sprintf("%s$%.4f", sign, usd)
+	}
+	return fmt.Sprintf("%s$%.2f", sign, usd)
 }
 
 // FormatTokens returns a human-readable token count.
@@ -207,13 +227,20 @@ func FormatTokens(n int64) string {
 
 // FormatSessionCost returns a formatted summary for a session.
 func FormatSessionCost(sc SessionCost, now time.Time) string {
+	// #683: an unknown model previously showed a false-precise "$0.0000",
+	// indistinguishable from a genuinely free session. Honor the
+	// "(no pricing data)" display promised by PricingUnknown.
+	costStr := FormatCost(sc.TotalCostUSD)
+	if !sc.HasPricing {
+		costStr = "(no pricing data)"
+	}
 	return fmt.Sprintf(
 		"  %s (%s) — in: %s  out: %s  cost: %s",
 		sc.Model,
 		sc.Provider,
 		FormatTokens(sc.InputTokens),
 		FormatTokens(sc.OutputTokens),
-		FormatCost(sc.TotalCostUSD),
+		costStr,
 	)
 }
 
