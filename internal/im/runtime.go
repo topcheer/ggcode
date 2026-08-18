@@ -500,6 +500,12 @@ func (m *Manager) UnbindSession() {
 	m.session = nil
 	m.currentBindings = make(map[string]*ChannelBinding)
 	m.disabledBindings = make(map[string]*ChannelBinding)
+	// #719: resetting the adapterCancels map without invoking each cancel
+	// leaked the adapters' goroutines and open connections (their sink
+	// Close() was skipped entirely). Stop every registered adapter first.
+	for name := range m.adapterCancels {
+		m.stopAdapter(name)
+	}
 	m.adapterCancels = make(map[string]context.CancelFunc)
 	m.pendingPairing = nil
 	// Stop the binding watcher since we no longer have a session.
@@ -830,7 +836,22 @@ func (m *Manager) HandlePairingInbound(msg InboundMessage) (PairingResult, error
 	if m.pendingPairing != nil {
 		pending := *m.pendingPairing
 		pending.ExistingBinding = cloneBinding(m.pendingPairing.ExistingBinding)
-		if pending.Adapter == msg.Envelope.Adapter && pending.ChannelID == channelID {
+		sameChannel := pending.Adapter == msg.Envelope.Adapter && pending.ChannelID == channelID
+		// #719 self-healing: the single pairing slot must not be held hostage.
+		// Drop a challenge older than pairingChallengeTTL, or idle longer than
+		// pairingPreemptIdleAfter when a different channel asks, then fall
+		// through so this message creates a fresh challenge.
+		now := time.Now()
+		age := now.Sub(pending.RequestedAt)
+		lastActive := pending.RequestedAt
+		if pending.LastInboundAt.After(lastActive) {
+			lastActive = pending.LastInboundAt
+		}
+		idle := now.Sub(lastActive)
+		if age > pairingChallengeTTL || (!sameChannel && idle > pairingPreemptIdleAfter) {
+			debug.Log("im", "HandlePairingInbound: dropping stale pairing slot adapter=%s channel=%s age=%s idle=%s", pending.Adapter, pending.ChannelID, age.Truncate(time.Second), idle.Truncate(time.Second))
+			m.pendingPairing = nil
+		} else if sameChannel {
 			if normalizePairingCode(msg.Text) == pending.Code {
 				newBinding := buildPairingBinding(msg, pending.ExistingBinding, m.session.Workspace)
 				bound, err := m.bindChannelLocked(newBinding)
@@ -867,19 +888,25 @@ func (m *Manager) HandlePairingInbound(msg InboundMessage) (PairingResult, error
 					NewBinding:      &copy,
 				}, nil
 			}
+			// #719: bound the brute-force surface of the 4-digit code.
+			if result, handled, err := m.recordWrongCodeLocked(key, pending, msg.Envelope.ReceivedAt); handled {
+				m.mu.Unlock()
+				return result, err
+			}
 			m.mu.Unlock()
 			return PairingResult{
 				Consumed:  true,
 				Kind:      pending.Kind,
 				ReplyText: "绑定码不正确，请输入屏幕上显示的 4 位绑定码。",
 			}, nil
+		} else {
+			m.mu.Unlock()
+			return PairingResult{
+				Consumed:  true,
+				Kind:      pending.Kind,
+				ReplyText: fmt.Sprintf("当前已有其他渠道在等待绑定，请在对应 %s 渠道输入屏幕上的 4 位绑定码。", msg.Envelope.Platform),
+			}, nil
 		}
-		m.mu.Unlock()
-		return PairingResult{
-			Consumed:  true,
-			Kind:      pending.Kind,
-			ReplyText: fmt.Sprintf("当前已有其他渠道在等待绑定，请在对应 %s 渠道输入屏幕上的 4 位绑定码。", msg.Envelope.Platform),
-		}, nil
 	}
 
 	code, err := newPairingCode()
@@ -934,6 +961,51 @@ func (m *Manager) HandlePairingInbound(msg InboundMessage) (PairingResult, error
 	}, nil
 }
 
+// recordWrongCodeLocked counts one wrong-code submission against the pending
+// challenge (issue #719). Caller must hold m.mu and is responsible for
+// unlocking. When the attempt budget (maxPairingWrongCodeAttempts) is
+// exhausted it discards the challenge, advances the channel's RejectCount
+// through the existing blacklist mechanism, persists pairing state, and
+// returns (cancelResult, true, nil), or (zero, true, err) if persistence
+// fails. Otherwise it returns (zero, false, nil) and the caller replies with
+// the standard wrong-code message.
+func (m *Manager) recordWrongCodeLocked(key string, pending PairingChallenge, receivedAt time.Time) (PairingResult, bool, error) {
+	if m.pendingPairing == nil {
+		return PairingResult{}, false, nil
+	}
+	m.pendingPairing.WrongCodeAttempts++
+	m.pendingPairing.LastInboundAt = receivedAt
+	if m.pendingPairing.WrongCodeAttempts < maxPairingWrongCodeAttempts {
+		return PairingResult{}, false, nil
+	}
+	state := m.pairingStates[key]
+	state.Adapter = pending.Adapter
+	state.Platform = pending.Platform
+	state.ChannelID = pending.ChannelID
+	state.RejectCount++
+	state.UpdatedAt = time.Now()
+	if state.RejectCount >= pairingBlacklistAfterRejects && state.BlacklistedAt.IsZero() {
+		state.BlacklistedAt = state.UpdatedAt
+	}
+	m.pairingStates[key] = state
+	if err := m.savePairingStatesLocked(); err != nil {
+		return PairingResult{}, true, err
+	}
+	m.pendingPairing = nil
+	snapshot, cb := m.snapshotAndCallbackLocked()
+	m.mu.Unlock()
+	if cb != nil {
+		cb(snapshot)
+	}
+	// Re-acquire so the caller's unconditional Unlock stays correct.
+	m.mu.Lock()
+	return PairingResult{
+		Consumed:  true,
+		Kind:      pending.Kind,
+		ReplyText: "绑定码错误次数过多，本次配对已取消。请重新发起配对请求获取新的绑定码。",
+	}, true, nil
+}
+
 func (m *Manager) RejectPendingPairing() (*PairingChallenge, bool, error) {
 	m.mu.Lock()
 	if m.pendingPairing == nil {
@@ -950,7 +1022,7 @@ func (m *Manager) RejectPendingPairing() (*PairingChallenge, bool, error) {
 	state.RejectCount++
 	state.UpdatedAt = time.Now()
 	blacklisted := false
-	if state.RejectCount >= 3 {
+	if state.RejectCount >= pairingBlacklistAfterRejects {
 		if state.BlacklistedAt.IsZero() {
 			state.BlacklistedAt = state.UpdatedAt
 		}
@@ -1109,7 +1181,10 @@ func (m *Manager) SendDirect(ctx context.Context, binding ChannelBinding, event 
 		// Mirror GenerateShareLink's explicit not-running error.
 		return fmt.Errorf("IM adapter %q is not running", binding.Adapter)
 	}
-	return sink.Send(ctx, binding, event)
+	// #719: route through sendWithTimeout so direct sends get the same
+	// per-attempt timeout and bounded retry as fan-out sends, instead of
+	// inheriting an unbounded caller context.
+	return sendWithTimeout(ctx, sink, binding, event)
 }
 
 // SendInteractive sends an interactive message to all bound adapters that

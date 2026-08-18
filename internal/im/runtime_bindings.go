@@ -2,6 +2,7 @@ package im
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -359,6 +360,11 @@ func (m *Manager) EnableBinding(adapterName string) error {
 	if onRestart != nil {
 		if err := onRestart(adapterName); err != nil {
 			debug.Log("im", "enable restart adapter %s: %v", adapterName, err)
+			// #719: a failed restart used to be swallowed into a debug log
+			// while the API still reported success. Propagate so the caller
+			// knows the adapter is enabled in state but not running.
+			m.syncInstanceActiveChannels()
+			return fmt.Errorf("enable adapter %s: restart failed: %w", adapterName, err)
 		}
 	}
 	debug.Log("im", "EnableBinding: adapter=%s workspace=%s", adapterName, workspace)
@@ -478,6 +484,9 @@ func (m *Manager) UnmuteBinding(adapterName string) error {
 	if onRestart != nil {
 		if err := onRestart(adapterName); err != nil {
 			debug.Log("im", "unmute restart adapter %s: %v", adapterName, err)
+			// #719: propagate restart failure instead of reporting success.
+			m.syncInstanceActiveChannels()
+			return fmt.Errorf("unmute adapter %s: restart failed: %w", adapterName, err)
 		}
 	}
 	debug.Log("im", "UnmuteBinding: adapter=%s workspace=%s", adapterName, workspace)
@@ -601,14 +610,20 @@ func (m *Manager) UnmuteAll() (int, error) {
 			}
 		}
 	}
+	var restartErrs []error
 	for _, name := range toRestart {
 		if onRestart != nil {
 			if err := onRestart(name); err != nil {
 				debug.Log("im", "unmute-all restart adapter %s: %v", name, err)
+				// #719: propagate restart failures instead of reporting success.
+				restartErrs = append(restartErrs, fmt.Errorf("adapter %s: %w", name, err))
 			}
 		}
 	}
 	m.syncInstanceActiveChannels()
+	if len(restartErrs) > 0 {
+		return count, fmt.Errorf("unmute-all restart failed: %w", errors.Join(restartErrs...))
+	}
 	return count, nil
 }
 

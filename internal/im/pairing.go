@@ -14,6 +14,26 @@ import (
 
 type PairingKind string
 
+// Pairing slot hardening limits (issue #719). The pendingPairing slot is a
+// single pointer: without expiry it can be held hostage indefinitely by an
+// abandoned request, and the 4-digit code space (10^4) is small enough that
+// unbounded wrong-code attempts turn a DoS into an unauthorized binding.
+const (
+	// pairingChallengeTTL is the maximum age of a pending challenge before a
+	// new pairing request (from any channel) may discard it.
+	pairingChallengeTTL = 5 * time.Minute
+	// pairingPreemptIdleAfter is how long the slot must have been idle before
+	// a DIFFERENT channel may preempt it with a fresh challenge.
+	pairingPreemptIdleAfter = 2 * time.Minute
+	// maxPairingWrongCodeAttempts is how many wrong codes are accepted before
+	// the challenge is discarded and the channel's RejectCount advances.
+	maxPairingWrongCodeAttempts = 5
+	// pairingBlacklistAfterRejects is the RejectCount threshold that
+	// blacklists a pairing channel (shared by operator reject and code
+	// attempt exhaustion paths).
+	pairingBlacklistAfterRejects = 3
+)
+
 const (
 	PairingKindBind   PairingKind = "bind"
 	PairingKindRebind PairingKind = "rebind"
@@ -33,6 +53,11 @@ type PairingChallenge struct {
 	LastInboundMessageID string
 	LastInboundAt        time.Time
 	ExistingBinding      *ChannelBinding
+	// WrongCodeAttempts counts failed code submissions against this
+	// challenge (issue #719). At maxPairingWrongCodeAttempts the challenge
+	// is discarded and the channel's RejectCount advances toward the
+	// existing blacklist mechanism.
+	WrongCodeAttempts int
 }
 
 func (c PairingChallenge) ReplyBinding() ChannelBinding {
