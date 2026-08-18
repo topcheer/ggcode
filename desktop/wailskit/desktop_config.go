@@ -58,6 +58,7 @@ type DesktopConfig struct {
 	dirtyAlwaysOnTop   bool // SetAlwaysOnTop ran
 	dirtyGlobalHotkey  bool // SetGlobalHotkey ran
 	dirtyNotifications bool // SetNotificationsEnabled ran
+	dirtyWorkDir       bool // #710: SetWorkDir ran since the last successful Save
 }
 
 func desktopConfigPath() string {
@@ -167,7 +168,16 @@ func (dc *DesktopConfig) Save() error {
 	if werr := os.WriteFile(tmp, data, 0600); werr != nil {
 		return werr
 	}
-	return os.Rename(tmp, path)
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+	// #710: WorkDir is now durably persisted (or superseded by a newer
+	// on-disk value): clear the flag so a LATER Save from this instance —
+	// e.g. the unconditional shutdown Save — no longer counts as "this
+	// instance recently switched workspace" and cannot roll back a switch
+	// another instance performed in between.
+	dc.dirtyWorkDir = false
+	return nil
 }
 
 // mergeFromDirty overlays the disk-state receiver with the fields dc actually
@@ -178,8 +188,23 @@ func (dc *DesktopConfig) Save() error {
 // DesktopConfig embeds a sync.Mutex, so a value receiver would copy the lock
 // (vet copylocks). Called from Save with dc.mu held; touches plain fields only.
 func (merged *DesktopConfig) mergeFromDirty(dc *DesktopConfig) {
-	if dc.WorkDir != "" {
+	// #710: WorkDir merges only when this instance explicitly switched
+	// workspace (SetWorkDir) since its last successful Save. The old non-empty
+	// guard was ineffective for this field — WorkDir is almost always
+	// non-empty in any loaded instance, so a stale snapshot's shutdown Save
+	// rolled back the workspace another instance had just switched to. Unlike
+	// the UI fields below, the workspace is point-in-time shared state: the
+	// newest switch should win, hence Save() clears the flag after
+	// persisting instead of letting it stay dirty for the instance's lifetime.
+	if dc.dirtyWorkDir {
 		merged.WorkDir = dc.WorkDir
+	}
+	// Language: only overwrite if this instance has a non-empty value.
+	// Preserve the value from other instances if we're empty (old snapshot).
+	// #710: unlike WorkDir, no setter/dirty flag exists for Language yet, so
+	// the non-empty guard remains its (known-limited, lower-impact) protection.
+	if dc.Language != "" {
+		merged.Language = dc.Language
 	}
 	// #647: WindowW/H/X/Y moved inside the dirtyWindowState gate. The old
 	// `!= 0` guards dropped a legitimate (0,0) origin (and any 0-width edge
@@ -221,10 +246,13 @@ func (merged *DesktopConfig) mergeFromDirty(dc *DesktopConfig) {
 	}
 }
 
-// SetWorkDir saves the work directory.
+// SetWorkDir saves the work directory. #710: marks the field dirty so only
+// an instance that actually switched workspace writes it into the merged
+// on-disk state (same #635 pattern as the toggles).
 func (dc *DesktopConfig) SetWorkDir(dir string) {
 	dc.mu.Lock()
 	defer dc.mu.Unlock()
+	dc.dirtyWorkDir = true // #710
 	dc.WorkDir = dir
 }
 

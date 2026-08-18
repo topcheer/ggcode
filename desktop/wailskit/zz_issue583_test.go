@@ -188,10 +188,12 @@ func TestIssue583_ConfigMultiInstanceMerge(t *testing.T) {
 	// #647: window bounds merge via the dirtyWindowState flag (set by
 	// SetWindowState), like every production instance — a raw struct literal
 	// never marks bounds dirty, so its W/H would be (correctly) ignored.
+	// #710: WorkDir merges via the dirtyWorkDir flag (set by SetWorkDir),
+	// same reason — a raw struct literal never marks it dirty.
 	instB := &DesktopConfig{
-		WorkDir:  "/workspace/b", // Different workdir to simulate different instance
-		Language: "",             // Empty simulates old snapshot
+		Language: "", // Empty simulates old snapshot
 	}
+	instB.SetWorkDir("/workspace/b") // Different workdir to simulate different instance
 	instB.SetWindowState(1920, 1080, 0, 0, false)
 
 	// Instance B saves - with read-merge, this should NOT overwrite A's language

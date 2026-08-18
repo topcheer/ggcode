@@ -35,10 +35,12 @@ func TestDesktopConfig_SaveLoadRoundTrip(t *testing.T) {
 	// #647: window bounds persist via the dirtyWindowState flag set by
 	// SetWindowState (the production path); raw struct-literal bounds are
 	// intentionally not merged by Save.
+	// #710: WorkDir likewise persists via the dirtyWorkDir flag set by
+	// SetWorkDir; raw struct-literal WorkDir is not merged either.
 	dc := &DesktopConfig{
-		WorkDir:  "/home/user/project",
 		Language: "zh-CN",
 	}
+	dc.SetWorkDir("/home/user/project")
 	dc.SetWindowState(1920, 1080, 0, 0, false)
 	if err := dc.Save(); err != nil {
 		t.Fatal(err)
