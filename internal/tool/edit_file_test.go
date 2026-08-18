@@ -25,7 +25,7 @@ func TestEditFile_Basic(t *testing.T) {
 
 	ef := EditFile{}
 	input := json.RawMessage(`{
-		"file_path": "` + fp + `",
+		"file_path": "` + filepath.ToSlash(fp) + `",
 		"old_text": "hello",
 		"new_text": "world"
 	}`)
@@ -66,7 +66,7 @@ func TestEditFile_OldTextNotFound(t *testing.T) {
 
 	ef := EditFile{}
 	input := json.RawMessage(`{
-		"file_path": "` + fp + `",
+		"file_path": "` + filepath.ToSlash(fp) + `",
 		"old_text": "goodbye",
 		"new_text": "farewell"
 	}`)
@@ -98,7 +98,7 @@ func TestEditFile_MultilineReplace(t *testing.T) {
 
 	ef := EditFile{}
 	input := json.RawMessage(`{
-		"file_path": "` + fp + `",
+		"file_path": "` + filepath.ToSlash(fp) + `",
 		"old_text": "line1\nline2",
 		"new_text": "replaced1\nreplaced2"
 	}`)
@@ -124,7 +124,7 @@ func TestEditFile_EmptyNewText(t *testing.T) {
 
 	ef := EditFile{}
 	input := json.RawMessage(`{
-		"file_path": "` + fp + `",
+		"file_path": "` + filepath.ToSlash(fp) + `",
 		"old_text": "remove this\n",
 		"new_text": ""
 	}`)
@@ -153,7 +153,7 @@ func TestEditFile_TabFileSpaceOldText_AutoNormalize(t *testing.T) {
 	ef := EditFile{}
 	// LLM sends 4-space indentation instead of tab
 	input := json.RawMessage(`{
-		"file_path": "` + fp + `",
+		"file_path": "` + filepath.ToSlash(fp) + `",
 		"old_text": "    fmt.Println(\"hello\")",
 		"new_text": "    fmt.Println(\"world\")"
 	}`)
@@ -182,7 +182,7 @@ func TestEditFile_TabFileSpaceOldText_Multiline(t *testing.T) {
 	ef := EditFile{}
 	// LLM sends spaces for both tab levels
 	input := json.RawMessage(`{
-		"file_path": "` + fp + `",
+		"file_path": "` + filepath.ToSlash(fp) + `",
 		"old_text": "    if true {\n        fmt.Println(\"hello\")\n    }",
 		"new_text": "    if false {\n        fmt.Println(\"bye\")\n    }"
 	}`)
@@ -211,7 +211,7 @@ func TestEditFile_SpaceFileTabOldText_AutoNormalize(t *testing.T) {
 	ef := EditFile{}
 	// LLM sends tab indentation
 	input := json.RawMessage(`{
-		"file_path": "` + fp + `",
+		"file_path": "` + filepath.ToSlash(fp) + `",
 		"old_text": "\tport: 8080",
 		"new_text": "\tport: 9090"
 	}`)
