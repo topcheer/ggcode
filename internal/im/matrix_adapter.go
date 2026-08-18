@@ -706,6 +706,24 @@ func (a *matrixAdapter) resolveImageToBytes(ctx context.Context, img ExtractedIm
 	}
 }
 
+// matrixRetryAfterMaxMS caps server-provided retry_after_ms values (#664).
+// 24h in milliseconds — a sane upper bound for a homeserver backoff.
+const matrixRetryAfterMaxMS = 24 * 60 * 60 * 1000
+
+// matrixRetryAfter converts a server-provided retry_after_ms value (already
+// verified > 0 by the caller) into a Duration, clamping to
+// matrixRetryAfterMaxMS BEFORE the float→Duration multiplication. Without
+// the clamp, retry_after_ms above ~9.22e12 (or +Inf) wraps to a large
+// negative duration, and time.After(negative) fires immediately — a zero-
+// delay hammering that ignores the server's backoff signal (bounded by
+// matrixMaxRetries, but still 4 rapid hits per send).
+func matrixRetryAfter(msFloat float64) time.Duration {
+	if msFloat > matrixRetryAfterMaxMS {
+		msFloat = matrixRetryAfterMaxMS
+	}
+	return time.Duration(msFloat) * time.Millisecond
+}
+
 // sendImage uploads image data to the Matrix homeserver and sends an m.image event.
 func (a *matrixAdapter) sendImage(ctx context.Context, roomID, threadID string, data []byte, mimeType string) error {
 	// #433: snapshot the client under the read lock — reconnect writes it.
@@ -753,8 +771,12 @@ func (a *matrixAdapter) sendImage(ctx context.Context, roomID, threadID string, 
 		if errors.As(err, &respErr) && respErr.ErrCode == "M_LIMIT_EXCEEDED" && attempt < matrixMaxRetries {
 			retryAfter := matrixInterMessageDelay * 2
 			if ms, ok := respErr.ExtraData["retry_after_ms"]; ok {
+				// #664: clamp BEFORE the float→Duration conversion (same family
+				// as #513/#658). retry_after_ms > 9.22e12 or +Inf wraps to a
+				// large negative duration and time.After(negative) fires
+				// immediately, bypassing the server's backoff.
 				if msFloat, ok2 := ms.(float64); ok2 && msFloat > 0 {
-					retryAfter = time.Duration(msFloat) * time.Millisecond
+					retryAfter = matrixRetryAfter(msFloat)
 				}
 			}
 			select {
@@ -856,8 +878,12 @@ func (a *matrixAdapter) sendText(ctx context.Context, roomID, threadID, text str
 			if errors.As(err, &respErr) && respErr.ErrCode == "M_LIMIT_EXCEEDED" && attempt < matrixMaxRetries {
 				retryAfter := matrixInterMessageDelay * 2
 				if ms, ok := respErr.ExtraData["retry_after_ms"]; ok {
+					// #664: clamp BEFORE the float→Duration conversion (same family
+					// as #513/#658). retry_after_ms > 9.22e12 or +Inf wraps to a
+					// large negative duration and time.After(negative) fires
+					// immediately, bypassing the server's backoff.
 					if msFloat, ok2 := ms.(float64); ok2 && msFloat > 0 {
-						retryAfter = time.Duration(msFloat) * time.Millisecond
+						retryAfter = matrixRetryAfter(msFloat)
 					}
 				}
 				debug.Log("matrix", "adapter=%s rate-limited (M_LIMIT_EXCEEDED), retry %d/%d after %v",

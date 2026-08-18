@@ -44,6 +44,13 @@ func LoadA2AOverride(workspace string) *A2AConfig {
 	if err := yaml.Unmarshal(migrated, &override); err != nil {
 		return nil
 	}
+	// #665: remember whether the "disabled" key was explicitly present in
+	// the source yaml (either true or false). MergeA2AConfig uses this to
+	// distinguish "explicitly set" from "absent" (zero value), enabling
+	// the instance-wins semantics in both directions.
+	if _, ok := raw["disabled"]; ok {
+		override.disabledExplicit = true
+	}
 	return &override
 }
 
@@ -53,7 +60,14 @@ func MergeA2AConfig(base *A2AConfig, override *A2AConfig) {
 	if override == nil {
 		return
 	}
-	if override.Disabled {
+	// #665: instance wins — when the "disabled" key was explicitly present
+	// in the override yaml (true OR false), assign it unconditionally so a
+	// workspace a2a.yaml with `disabled: false` can re-enable a globally
+	// disabled A2A. Overrides constructed programmatically (no explicit
+	// marker) keep the legacy one-way merge: only disable, never re-enable.
+	if override.disabledExplicit {
+		base.Disabled = override.Disabled
+	} else if override.Disabled {
 		base.Disabled = true
 	}
 	if override.Port != 0 {

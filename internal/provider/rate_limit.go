@@ -252,6 +252,18 @@ func parseDurationSafe(s string) time.Duration {
 	// Try raw milliseconds (OpenAI sometimes sends "86400000ms" which
 	// time.ParseDuration handles, but also bare "86400000").
 	if ms, err := strconv.ParseInt(s, 10, 64); err == nil {
+		// #664: reject non-positive and clamp oversized values BEFORE the
+		// ms→ns multiplication (same family as #513/#658). A bare "-5000"
+		// produced a negative duration and ~9.3e12 overflowed negative —
+		// both flowed into tracker display as misleading values. This path
+		// is display/logging only; values above 24h clamp to 24h.
+		if ms <= 0 {
+			return 0
+		}
+		const maxMS = 24 * 60 * 60 * 1000
+		if ms > maxMS {
+			ms = maxMS
+		}
 		return time.Duration(ms) * time.Millisecond
 	}
 	return 0

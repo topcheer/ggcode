@@ -409,6 +409,12 @@ type A2AConfig struct {
 	TaskTimeout string        `yaml:"task_timeout"`         // per-task timeout (default "5m")
 	Interfaces  []string      `yaml:"interfaces,omitempty"` // mDNS advertise interfaces (default: auto-detect default route)
 	Auth        A2AAuthConfig `yaml:"auth,omitempty"`
+
+	// disabledExplicit records that the "disabled" key was explicitly present
+	// in the source yaml (#665). Only set by LoadA2AOverride; enables the
+	// bidirectional instance-wins merge in MergeA2AConfig. Unexported so it
+	// never round-trips through yaml or crosses package boundaries.
+	disabledExplicit bool
 }
 
 // P2PConfig controls WebRTC P2P direct connection between host and mobile.
