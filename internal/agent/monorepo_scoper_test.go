@@ -201,6 +201,34 @@ func TestMonorepoScoper_CrossCuttingDirsNotCounted(t *testing.T) {
 	}
 }
 
+// TestMonorepoScoper_MixedSeparatorsClassify guards the Windows fix: rootDir
+// comes from filepath.Join (native separators) while edit paths arrive as the
+// LLM's literal tool arguments (forward slashes). Before the ToSlash
+// normalization, prefix matching and SplitN both failed on Windows and the
+// detector went permanently silent there. This test pins the mixed form on
+// every platform.
+func TestMonorepoScoper_MixedSeparatorsClassify(t *testing.T) {
+	s := &monorepoScoperState{
+		enabled:  true,
+		rootDir:  filepath.Join(`C:\work`, "repo"), // native-separator root, as detectMonorepo records it
+		crossPkg: map[string]bool{},
+	}
+	root := `C:/work/repo` // same root, LLM-style forward slashes
+	cases := []struct{ path, want string }{
+		{root + "/users/index.ts", "users"},
+		{root + "/orders/lib/util.go", "orders"},
+		{root + "/shared/types.ts", ""}, // cross-cutting
+		{root + "/README.md", ""},       // root file
+		// Native-separator paths must keep working too (same form as rootDir).
+		{filepath.Join(root, "users", "index.ts"), "users"},
+	}
+	for _, tc := range cases {
+		if got := s.classifyPackage(tc.path); got != tc.want {
+			t.Errorf("classifyPackage(%s) = %q, want %q", tc.path, got, tc.want)
+		}
+	}
+}
+
 func TestItoa(t *testing.T) {
 	// Verify strconv.Itoa produces expected output (used by formatScopeSprawlHint).
 	cases := []struct {
