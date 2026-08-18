@@ -108,18 +108,158 @@ func f(db *sql.DB, a, b string) {
 }
 
 func TestSQLInjection_CappedWarnings(t *testing.T) {
+	// Fixture uses identifier concat (unsafe). Issue #720 made literal-only
+	// concat safe, so distinct string prefixes keep 5 distinct fingerprints.
 	src := `package main
 import "database/sql"
-func f(db *sql.DB) {
-	db.Query("x" + "a")
-	db.Query("x" + "b")
-	db.Query("x" + "c")
-	db.Query("x" + "d")
-	db.Query("x" + "e")
+func f(db *sql.DB, a string) {
+	db.Query("x" + a)
+	db.Query("y" + a)
+	db.Query("z" + a)
+	db.Query("w" + a)
+	db.Query("v" + a)
 }`
 	warnings := checkSQLInjection("test.go", "", src)
 	if len(warnings) != maxSQLInjectionWarnings+1 {
 		t.Fatalf("expected %d warnings (capped + notice), got %d", maxSQLInjectionWarnings+1, len(warnings))
+	}
+}
+
+// Issue #720: type-safe integer concatenation must not be flagged.
+func TestSQLInjection_IntConcatSafe(t *testing.T) {
+	src := `package main
+import ("database/sql"; "strconv")
+func f(db *sql.DB, id int) {
+	db.Query("SELECT * FROM t WHERE id = " + strconv.Itoa(id))
+}`
+	warnings := checkSQLInjection("test.go", "", src)
+	if len(warnings) != 0 {
+		t.Fatalf("expected 0 for strconv.Itoa concat, got %d: %v", len(warnings), warnings)
+	}
+}
+
+func TestSQLInjection_FormatIntConcatSafe(t *testing.T) {
+	src := `package main
+import ("database/sql"; "strconv")
+func f(db *sql.DB, id int64) {
+	db.Query("SELECT * FROM t WHERE id = " + strconv.FormatInt(id, 10))
+}`
+	warnings := checkSQLInjection("test.go", "", src)
+	if len(warnings) != 0 {
+		t.Fatalf("expected 0 for strconv.FormatInt concat, got %d: %v", len(warnings), warnings)
+	}
+}
+
+func TestSQLInjection_LiteralOnlyConcatSafe(t *testing.T) {
+	// All-literal concat is a compile-time constant query: nothing dynamic.
+	src := `package main
+import "database/sql"
+func f(db *sql.DB) {
+	db.Query("SELECT * FROM t" + " WHERE a = 1")
+}`
+	warnings := checkSQLInjection("test.go", "", src)
+	if len(warnings) != 0 {
+		t.Fatalf("expected 0 for literal-only concat, got %d: %v", len(warnings), warnings)
+	}
+}
+
+func TestSQLInjection_MixedIntAndIdentFlagged(t *testing.T) {
+	// One unsafe (identifier) operand in the chain keeps the warning.
+	src := `package main
+import ("database/sql"; "strconv")
+func f(db *sql.DB, id int, name string) {
+	db.Query("SELECT * FROM t WHERE id = " + strconv.Itoa(id) + " AND name = '" + name + "'")
+}`
+	warnings := checkSQLInjection("test.go", "", src)
+	if len(warnings) != 1 {
+		t.Fatalf("expected 1 for mixed int-conv + identifier concat, got %d: %v", len(warnings), warnings)
+	}
+}
+
+func TestSQLInjection_SprintfIntVerbsSafe(t *testing.T) {
+	src := `package main
+import ("database/sql"; "fmt")
+func f(db *sql.DB, limit, offset int) {
+	db.Query(fmt.Sprintf("SELECT * FROM t LIMIT %d OFFSET %d", limit, offset))
+}`
+	warnings := checkSQLInjection("test.go", "", src)
+	if len(warnings) != 0 {
+		t.Fatalf("expected 0 for integer-verb Sprintf, got %d: %v", len(warnings), warnings)
+	}
+}
+
+func TestSQLInjection_SprintfStringVerbStillFlagged(t *testing.T) {
+	src := `package main
+import ("database/sql"; "fmt")
+func f(db *sql.DB, userInput string) {
+	db.Query(fmt.Sprintf("SELECT * FROM t WHERE name = '%s'", userInput))
+}`
+	warnings := checkSQLInjection("test.go", "", src)
+	if len(warnings) != 1 {
+		t.Fatalf("expected 1 for string-verb Sprintf, got %d: %v", len(warnings), warnings)
+	}
+	if !contains(warnings[0], "fmt.Sprintf") {
+		t.Errorf("expected Sprintf mention, got: %s", warnings[0])
+	}
+}
+
+func TestSQLInjection_SprintfMixedVerbsFlagged(t *testing.T) {
+	// A single string-capable verb (%s) makes the whole format unsafe even
+	// when other verbs are integer-only.
+	src := `package main
+import ("database/sql"; "fmt")
+func f(db *sql.DB, limit int, name string) {
+	db.Query(fmt.Sprintf("SELECT * FROM t LIMIT %d WHERE name = '%s'", limit, name))
+}`
+	warnings := checkSQLInjection("test.go", "", src)
+	if len(warnings) != 1 {
+		t.Fatalf("expected 1 for mixed %%d+%%s Sprintf, got %d: %v", len(warnings), warnings)
+	}
+}
+
+func TestSQLInjection_SprintfDynamicTableAdvisoryWording(t *testing.T) {
+	// Dynamic table names cannot be parameterized; the warning must be
+	// advisory (issue #720), not an imperative rewrite instruction.
+	src := `package main
+import ("database/sql"; "fmt")
+func f(db *sql.DB, table string) {
+	db.Query(fmt.Sprintf("SELECT * FROM %s WHERE id = ?", table))
+}`
+	warnings := checkSQLInjection("test.go", "", src)
+	if len(warnings) != 1 {
+		t.Fatalf("expected 1 for dynamic table Sprintf, got %d: %v", len(warnings), warnings)
+	}
+	if strings.Contains(warnings[0], "Use parameterized query") {
+		t.Errorf("imperative rewrite advice is wrong for dynamic identifiers: %s", warnings[0])
+	}
+	if !strings.Contains(warnings[0], "consider") {
+		t.Errorf("expected advisory wording, got: %s", warnings[0])
+	}
+}
+
+func TestSQLInjection_SprintfNoVerbsSafe(t *testing.T) {
+	// No verbs -> constant query.
+	src := `package main
+import ("database/sql"; "fmt")
+func f(db *sql.DB) {
+	db.Query(fmt.Sprintf("SELECT * FROM t WHERE a = 1"))
+}`
+	warnings := checkSQLInjection("test.go", "", src)
+	if len(warnings) != 0 {
+		t.Fatalf("expected 0 for verb-free Sprintf, got %d: %v", len(warnings), warnings)
+	}
+}
+
+func TestSQLInjection_SprintfNonLiteralFormatFlagged(t *testing.T) {
+	// Non-literal format string: conservatively unsafe.
+	src := `package main
+import ("database/sql"; "fmt")
+func f(db *sql.DB, format string, arg int) {
+	db.Query(fmt.Sprintf(format, arg))
+}`
+	warnings := checkSQLInjection("test.go", "", src)
+	if len(warnings) != 1 {
+		t.Fatalf("expected 1 for non-literal format Sprintf, got %d: %v", len(warnings), warnings)
 	}
 }
 

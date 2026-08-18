@@ -8,11 +8,15 @@ package agent
 //
 //   1. String concatenation in query:
 //        db.Query("SELECT * FROM users WHERE name = '" + name + "'")
-//        rows, _ := db.Query("SELECT * FROM t WHERE id = " + strconv.Itoa(id))
 //
 //   2. fmt.Sprintf interpolation:
 //        db.Query(fmt.Sprintf("SELECT * FROM users WHERE role = '%s'", role))
 //        db.Exec(fmt.Sprintf("DELETE FROM orders WHERE status = '%s'", status))
+//
+// Type-safe constructions are NOT flagged (issue #720): concatenation
+// whose operands are all literals or strconv integer conversions, and
+// Sprintf formats using only integer verbs (%d, %c, ...), produce digits or
+// compile-time constants that cannot carry SQL metacharacters.
 //
 // The safe alternative uses parameterized queries with placeholders (? or $1):
 //   db.Query("SELECT * FROM users WHERE name = ?", name)
@@ -39,6 +43,7 @@ import (
 	"go/parser"
 	"go/token"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -148,7 +153,7 @@ func sqlInjScan(filePath, content string) []sqlInjIssue {
 			return true
 		}
 
-		reason := sqlInjCheckUnsafeArg(queryArg)
+		reason, advice := sqlInjCheckUnsafeArg(queryArg)
 		if reason == "" {
 			return true
 		}
@@ -167,9 +172,8 @@ func sqlInjScan(filePath, content string) []sqlInjIssue {
 		}
 		issues = append(issues, sqlInjIssue{
 			text: fmt.Sprintf(
-				"SQL injection risk at %s: %s Use parameterized query with placeholders "+
-					"(e.g., db.Query(\"SELECT ... WHERE col = ?\", value)).",
-				fset.Position(call.Pos()), reason),
+				"SQL injection risk at %s: %s %s",
+				fset.Position(call.Pos()), reason, advice),
 			fingerprint: methodName + "|" + lineText,
 		})
 		return true
@@ -212,19 +216,90 @@ func sqlInjGetQueryArg(call *ast.CallExpr, methodName string) ast.Expr {
 }
 
 // sqlInjCheckUnsafeArg inspects a query argument and returns a non-empty
-// reason string if it uses string concatenation or fmt.Sprintf.
-func sqlInjCheckUnsafeArg(arg ast.Expr) string {
+// reason string if it uses unsafe string concatenation or fmt.Sprintf
+// interpolation, plus the advice text to append. Type-safe constructions
+// are exempt (issue #720):
+//
+//   - Concatenation whose operands are ALL literals or safe integer-to-
+//     string conversions (strconv.Itoa, strconv.FormatInt/FormatUint)
+//     cannot inject: digits and compile-time constants carry no SQL
+//     metacharacters.
+//   - fmt.Sprintf whose format string only uses integer verbs (%d, %c, ...)
+//     is silent for the same reason. String-capable verbs (%s, %v, %q) keep
+//     the warning, softened to a recommendation because dynamic table and
+//     column names are legitimately built via Sprintf and cannot be passed
+//     as query parameters.
+func sqlInjCheckUnsafeArg(arg ast.Expr) (reason, advice string) {
 	switch expr := arg.(type) {
 	case *ast.BinaryExpr:
 		if expr.Op == token.ADD {
-			return "SQL query uses string concatenation (+)."
+			if sqlInjConcatOperandsSafe(expr) {
+				return "", ""
+			}
+			return "SQL query uses string concatenation (+).",
+				"Use parameterized query with placeholders " +
+					"(e.g., db.Query(\"SELECT ... WHERE col = ?\", value))."
 		}
 	case *ast.CallExpr:
 		if sqlInjIsFmtSprintf(expr) {
-			return "SQL query uses fmt.Sprintf for interpolation."
+			if sqlInjSprintfIntVerbsOnly(expr) {
+				return "", ""
+			}
+			return "SQL query uses fmt.Sprintf with a string-capable verb (%s/%v/%q) for interpolation.",
+				"If interpolated values may be user-controlled, consider a parameterized query with " +
+					"placeholders; dynamic table or column names cannot be parameterized -- validate " +
+					"them against an allowlist instead."
 		}
 	}
-	return ""
+	return "", ""
+}
+
+// sqlInjConcatOperandsSafe reports whether every operand of a `+` chain is
+// type-safe for SQL: numeric/string literals or integer-to-string
+// conversions via strconv. Such operands can only produce digits or
+// compile-time constant text, which cannot carry SQL metacharacters.
+func sqlInjConcatOperandsSafe(expr *ast.BinaryExpr) bool {
+	return sqlInjOperandSafe(expr.X) && sqlInjOperandSafe(expr.Y)
+}
+
+// sqlInjOperandSafe reports whether a single concatenation operand is
+// provably injection-free. Bare identifiers, selector expressions, index
+// expressions, and arbitrary calls have statically unknown types (they may
+// be strings carrying user data), so they are conservatively unsafe.
+func sqlInjOperandSafe(e ast.Expr) bool {
+	switch v := e.(type) {
+	case *ast.BasicLit:
+		// INT and STRING literals are compile-time constants.
+		return true
+	case *ast.ParenExpr:
+		return sqlInjOperandSafe(v.X)
+	case *ast.BinaryExpr:
+		return v.Op == token.ADD && sqlInjOperandSafe(v.X) && sqlInjOperandSafe(v.Y)
+	case *ast.CallExpr:
+		return sqlInjIsSafeIntToString(v)
+	}
+	return false
+}
+
+// sqlInjIsSafeIntToString reports whether the call is strconv.Itoa(x) or
+// strconv.FormatInt/FormatUint(x, base) -- conversions whose output can
+// only contain digits, a sign, or a base prefix.
+func sqlInjIsSafeIntToString(call *ast.CallExpr) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	pkg, ok := sel.X.(*ast.Ident)
+	if !ok || pkg.Name != "strconv" {
+		return false
+	}
+	switch sel.Sel.Name {
+	case "Itoa":
+		return len(call.Args) == 1
+	case "FormatInt", "FormatUint":
+		return len(call.Args) == 2
+	}
+	return false
 }
 
 // sqlInjIsFmtSprintf returns true if the call expression is fmt.Sprintf.
@@ -238,4 +313,76 @@ func sqlInjIsFmtSprintf(call *ast.CallExpr) bool {
 		return false
 	}
 	return pkg.Name == "fmt" && sel.Sel.Name == "Sprintf"
+}
+
+// sqlInjSprintfIntVerbsOnly reports whether a fmt.Sprintf call's format
+// string is a literal containing only integer-capable verbs (%d, %c, %b,
+// %o, %O, %U, %x, %X). Those verbs render numbers as digit text and cannot
+// embed SQL metacharacters, so the interpolation is type-safe. A non-literal
+// format string is conservatively treated as unsafe.
+func sqlInjSprintfIntVerbsOnly(call *ast.CallExpr) bool {
+	if len(call.Args) == 0 {
+		return false
+	}
+	lit, ok := call.Args[0].(*ast.BasicLit)
+	if !ok || lit.Kind != token.STRING {
+		return false
+	}
+	format, err := strconv.Unquote(lit.Value)
+	if err != nil {
+		return false
+	}
+	return sqlInjFormatIntVerbsOnly(format)
+}
+
+// sqlInjFormatIntVerbsOnly scans a format string and reports whether every
+// verb is integer-capable. %% literals and flag/width/precision segments are
+// skipped. String-capable verbs (%s, %v, %q) or any unknown verb fails.
+func sqlInjFormatIntVerbsOnly(format string) bool {
+	for i := 0; i < len(format); i++ {
+		if format[i] != '%' {
+			continue
+		}
+		if i+1 < len(format) && format[i+1] == '%' {
+			i++ // %% is a literal percent sign
+			continue
+		}
+		j := sqlInjSkipFormatFlags(format, i+1)
+		if j >= len(format) {
+			// Trailing '%' with no verb: Sprintf appends "%!(NOVERB)" and
+			// embeds no argument value.
+			return true
+		}
+		if !sqlInjIsIntVerb(format[j]) {
+			// %s, %v, %q, %t, or anything else: value-dependent text.
+			return false
+		}
+		i = j
+	}
+	return true
+}
+
+// sqlInjSkipFormatFlags returns the index of the first byte at or after
+// start that is not part of a verb's flag/width/precision/argument-index
+// segment (e.g. "%-08.3[2]d").
+func sqlInjSkipFormatFlags(format string, start int) int {
+	for j := start; j < len(format); j++ {
+		c := format[j]
+		isFlag := c == '+' || c == '-' || c == '#' || c == ' ' || c == '*' || c == '.' ||
+			c == '[' || c == ']' || (c >= '0' && c <= '9')
+		if !isFlag {
+			return j
+		}
+	}
+	return len(format)
+}
+
+// sqlInjIsIntVerb reports whether a format verb renders only integer values
+// (digits, sign, or base prefix) and therefore cannot carry SQL metacharacters.
+func sqlInjIsIntVerb(verb byte) bool {
+	switch verb {
+	case 'b', 'c', 'd', 'o', 'O', 'U', 'x', 'X':
+		return true
+	}
+	return false
 }
