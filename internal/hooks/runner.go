@@ -547,8 +547,10 @@ const hookJSONTruncationMarker = `{"truncated": true, "reason": "payload exceeds
 // (fail-open). Strategy, in order:
 //  1. If the doc fits, return it unchanged.
 //  2. Try to cut at a structural boundary (outside any string literal) and
-//     repair the prefix into a complete document. Only attempted when the
-//     prefix still closes the root object; otherwise parsing would break.
+//     repair the prefix into a complete document by closing every container
+//     still open at the cut (#691: the depth counter was never used to emit
+//     closers, so a root-unclosed prefix never passed json.Valid and every
+//     >64KB payload collapsed to the marker — the primary path was dead code).
 //  3. Fall back to an explicit truncation marker — visible failure with a
 //     pointer to stdin, never silent corruption.
 func truncateHookEnvJSON(v string) string {
@@ -563,28 +565,54 @@ func truncateHookEnvJSON(v string) string {
 	return hookJSONTruncationMarker
 }
 
+// jsonCutCandidate records a byte position that ends a complete JSON token
+// outside any string literal, together with the closers needed to turn the
+// prefix into a complete document (the closing brackets for every container
+// still open at that position, innermost first).
+type jsonCutCandidate struct {
+	pos     int
+	closers string
+}
+
+// jsonClosersFor returns the closer string for an open-container stack,
+// innermost first: ['{','['] → "]}".
+func jsonClosersFor(stack []byte) string {
+	var b strings.Builder
+	for i := len(stack) - 1; i >= 0; i-- {
+		if stack[i] == '{' {
+			b.WriteByte('}')
+		} else {
+			b.WriteByte(']')
+		}
+	}
+	return b.String()
+}
+
 // truncateJSONDocument cuts v to at most limit bytes at a position that is
-// structurally safe for JSON (outside any string literal) and repairs the
-// prefix into a complete document by closing open containers. Returns
-// (repaired, ok); ok is false when no safe cut exists (e.g. the entire budget
-// is consumed by one giant string literal).
+// structurally safe for JSON (outside any string literal, right after a
+// complete token) and repairs the prefix into a complete document by closing
+// every container still open at the cut (#691: the previous implementation
+// tracked only a numeric depth, never appended closers, and then required
+// json.Valid on the still-unclosed prefix — always false for any document
+// that actually needed truncation, so the structural path was unreachable).
+// Returns (repaired, ok); ok is false when no safe cut exists (e.g. the entire
+// budget is consumed by one giant string literal).
 func truncateJSONDocument(v string, limit int) (string, bool) {
 	// Find the largest cut position <= limit that is outside a string
 	// literal and at a token boundary. Scan with a minimal JSON tokenizer:
-	// depth tracking plus in-string/escape state.
+	// open-container stack (recording types) plus in-string/escape state.
 	const (
 		inCode = iota
 		inString
 		inEscape
 	)
 	state := inCode
-	depth := 0
-	bestCut := -1
+	var stack []byte
+	var cuts []jsonCutCandidate
 	end := len(v)
 	if end > limit {
 		end = limit
 	}
-	// Start at 1 so bestCut never lands inside the leading '{'.
 	for i := 0; i < end; i++ {
 		c := v[i]
 		switch state {
@@ -593,48 +621,55 @@ func truncateJSONDocument(v string, limit int) (string, bool) {
 			case '"':
 				state = inString
 			case '{', '[':
-				depth++
+				stack = append(stack, c)
 			case '}', ']':
-				depth--
-				// After a closed container we are at a safe cut point.
-				bestCut = i + 1
+				if len(stack) > 0 {
+					stack = stack[:len(stack)-1]
+				}
+				// Right after a closed container is a safe cut point.
+				cuts = append(cuts, jsonCutCandidate{pos: i + 1, closers: jsonClosersFor(stack)})
 			case ',':
 				// A comma ends a member; cutting right after it leaves a
-				// dangling separator that must be repaired away — handled
-				// below by trimming trailing commas.
-				bestCut = i + 1
+				// dangling separator — trimmed below.
+				if len(stack) > 0 {
+					cuts = append(cuts, jsonCutCandidate{pos: i + 1, closers: jsonClosersFor(stack)})
+				}
 			}
 		case inString:
 			if c == '\\' {
 				state = inEscape
 			} else if c == '"' {
 				state = inCode
-				// Position right after a complete string is safe only when
-				// it is a value/member boundary; the next byte decides, so
-				// record it as a candidate — trailing-comma cleanup repairs.
-				bestCut = i + 1
+				// Right after a complete string is a value/member boundary
+				// candidate (valid only when it closes a value, not a bare
+				// key — json.Valid below rejects the latter).
+				cuts = append(cuts, jsonCutCandidate{pos: i + 1, closers: jsonClosersFor(stack)})
 			}
 		case inEscape:
 			state = inString
 		}
 	}
-	if bestCut <= 0 {
-		return "", false
+	// Try candidates from the largest cut position backward; the first one
+	// that repairs into a complete, in-budget, valid document wins.
+	for i := len(cuts) - 1; i >= 0; i-- {
+		cut := cuts[i]
+		prefix := strings.TrimRight(v[:cut.pos], " \t\r\n")
+		// Repair: strip a dangling separator left by a cut after ','.
+		prefix = strings.TrimSuffix(prefix, ",")
+		prefix = strings.TrimRight(prefix, " \t\r\n")
+		if prefix == "" {
+			continue
+		}
+		repaired := prefix + cut.closers
+		if len(repaired) > limit {
+			continue
+		}
+		if !json.Valid([]byte(repaired)) {
+			continue
+		}
+		return repaired, true
 	}
-	prefix := strings.TrimRight(v[:bestCut], " \t\r\n")
-	// Repair: strip a dangling separator left by a cut after ','.
-	prefix = strings.TrimSuffix(prefix, ",")
-	prefix = strings.TrimRight(prefix, " \t\r\n")
-	if prefix == "" {
-		return "", false
-	}
-	// Validate that the prefix is itself complete JSON: the state machine
-	// above only tracks strings, so re-parse cheaply with json.Valid on the
-	// candidate before accepting it.
-	if !json.Valid([]byte(prefix)) {
-		return "", false
-	}
-	return prefix, true
+	return "", false
 }
 
 // formatPolicyNotice builds the non-blocking policy verdict label shared by

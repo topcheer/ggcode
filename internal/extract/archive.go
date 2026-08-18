@@ -263,18 +263,34 @@ func totalZipFiles(data []byte) int {
 // decompression bombs (small compressed file → huge uncompressed data).
 const maxTarDecompressSize = 200 * 1024 * 1024 // 200MB
 
+// countingReader counts bytes read through it so a mid-stream tar error can
+// be attributed correctly (#692): reaching maxTarDecompressSize is a size
+// limit on a healthy archive, not corruption.
+type countingReader struct {
+	r io.Reader
+	n int64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += int64(n)
+	return n, err
+}
+
 func listTarGz(data []byte) ([]archiveFile, int, bool, bool, error) {
 	gz, err := gzip.NewReader(bytes.NewReader(data))
 	if err != nil {
 		return nil, 0, false, false, fmt.Errorf("open gzip: %w", err)
 	}
 	defer gz.Close()
-	return listTarFromReader(io.LimitReader(gz, maxTarDecompressSize))
+	cr := &countingReader{r: io.LimitReader(gz, maxTarDecompressSize)}
+	return listTarFromReader(cr, cr)
 }
 
 func listTarBz2(data []byte) ([]archiveFile, int, bool, bool, error) {
 	br := bzip2.NewReader(bytes.NewReader(data))
-	return listTarFromReader(io.LimitReader(br, maxTarDecompressSize))
+	cr := &countingReader{r: io.LimitReader(br, maxTarDecompressSize)}
+	return listTarFromReader(cr, cr)
 }
 
 func listTarXz(data []byte) ([]archiveFile, int, bool, bool, error) {
@@ -284,17 +300,26 @@ func listTarXz(data []byte) ([]archiveFile, int, bool, bool, error) {
 }
 
 func listTar(data []byte) ([]archiveFile, int, bool, bool, error) {
-	return listTarFromReader(bytes.NewReader(data))
+	return listTarFromReader(bytes.NewReader(data), nil)
 }
 
 // listTarFromReader returns the buffered files (≤ maxArchiveEntries), the
 // total regular-file count when knowable, whether the listing was truncated
-// (entry cap reached), and whether the stream errored mid-way (corruption or
-// decompression-limit hit). #682: previously truncation was silent and the
+// (entry cap or decompress-size cap reached), and whether the stream errored
+// mid-way (genuine corruption). #682: previously truncation was silent and the
 // drain loop's file count was discarded. #687: corruption and limit
 // truncation are reported separately so the marker does not misattribute a
-// corrupt stream to a size limit.
-func listTarFromReader(r io.Reader) ([]archiveFile, int, bool, bool, error) {
+// corrupt stream to a size limit. #692: the 200MB decompression cap was
+// bucketed as corruption — a healthy-but-large archive must surface the
+// truncation marker instead. `limited` is the countingReader wrapping the
+// size-capped stream (nil for plain tar, which has no decompress cap); when
+// the byte count reached the cap, any stream error — including a clean
+// io.EOF when the cut lands exactly on a header boundary — is a size-limit
+// hit, not corruption.
+func listTarFromReader(r io.Reader, limited *countingReader) ([]archiveFile, int, bool, bool, error) {
+	limitHit := func() bool {
+		return limited != nil && limited.n >= maxTarDecompressSize
+	}
 	tr := tar.NewReader(r)
 	var files []archiveFile
 	total := 0
@@ -303,14 +328,25 @@ func listTarFromReader(r io.Reader) ([]archiveFile, int, bool, bool, error) {
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
+			// #692: a clean EOF with the byte budget exhausted means the
+			// LimitReader cut the stream exactly on a header boundary —
+			// silent truncation otherwise.
+			if limitHit() {
+				truncated = true
+			}
 			break
 		}
 		if err != nil {
-			// Unexpected error: corrupt stream (or the 200MB decompression
-			// limit surfaced as a read error). The listing so far is partial.
-			// #687: report corruption separately from entry-cap truncation.
-			corrupt = true
-			truncated = false
+			// Unexpected error: either a genuinely corrupt stream or the
+			// 200MB decompression limit surfacing as a read error (#692:
+			// these are distinct failure modes — check the byte count
+			// before blaming corruption). The listing so far is partial.
+			if limitHit() {
+				truncated = true
+			} else {
+				corrupt = true
+				truncated = false
+			}
 			break
 		}
 		if hdr.Typeflag != tar.TypeReg && hdr.Typeflag != 0 {
@@ -324,7 +360,7 @@ func listTarFromReader(r io.Reader) ([]archiveFile, int, bool, bool, error) {
 			for {
 				h, err := tr.Next()
 				if err != nil {
-					if err != io.EOF {
+					if err != io.EOF && !limitHit() {
 						corrupt = true
 					}
 					break

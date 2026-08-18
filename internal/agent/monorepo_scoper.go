@@ -217,11 +217,16 @@ const maxMonorepoSuppressions = 3
 
 // maybeWarnScopeSprawl checks if the agent is editing across too many packages
 // without apparent cross-package intent. Returns a hint message or "".
+// Termination is guaranteed by `fired` alone: markUndelivered re-arms it at
+// most maxMonorepoSuppressions times, after which it stops re-arming and
+// fired stays true for the rest of the run (#695: the old
+// `suppressions > max` clause here was unreachable dead code — suppressions
+// can never exceed maxMonorepoSuppressions).
 func (s *monorepoScoperState) maybeWarnScopeSprawl() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if !s.enabled || s.fired || s.suppressions > maxMonorepoSuppressions || len(s.touchedDirs) < 3 {
+	if !s.enabled || s.fired || len(s.touchedDirs) < 3 {
 		return ""
 	}
 
@@ -247,8 +252,10 @@ func (s *monorepoScoperState) markUndelivered() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.suppressions >= maxMonorepoSuppressions {
-		// Next maybeWarnScopeSprawl call hits the > cap guard and gives up
-		// for the run; keep fired=true so no further retries.
+		// Re-arm budget exhausted (#687): fired stays true, which is what
+		// stops the retry cycle — every later maybeWarnScopeSprawl call
+		// short-circuits on it (#695: the old comment claimed an
+		// unreachable `> cap` guard in maybeWarnScopeSprawl did this).
 		return
 	}
 	s.suppressions++
