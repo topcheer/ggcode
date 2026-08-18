@@ -2223,7 +2223,7 @@ func extractReadCall(toolName string, input json.RawMessage) readCall {
 		if json.Unmarshal(input, &args) == nil && args.Path != "" {
 			return readCall{
 				paths: []string{args.Path},
-				rng:   readRange{offset: args.Offset, limit: args.Limit, full: args.Offset == 0},
+				rng:   readRange{offset: args.Offset, limit: args.Limit, full: args.Offset == 0 && args.Limit <= 0},
 			}
 		}
 	case "multi_file_read":

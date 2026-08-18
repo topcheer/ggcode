@@ -242,8 +242,31 @@ func (c CodeExecution) runCode(ctx context.Context, code string) (*execResult, e
 				inputJSON = json.RawMessage(`{}`)
 			}
 
-			// Execute the tool synchronously.
-			result, err := toolRef.Execute(ctx, inputJSON)
+			// Execute the tool on a separate goroutine and select on
+			// ctx.Done(). vm.Interrupt only fires at JS bytecode
+			// boundaries, so a synchronous Execute could block the VM
+			// thread past the deadline while inside a native tool call.
+			type toolOutcome struct {
+				result Result
+				err    error
+			}
+			done := make(chan toolOutcome, 1)
+			safego.Go("code_execution.toolExec", func() {
+				result, err := toolRef.Execute(ctx, inputJSON)
+				done <- toolOutcome{result: result, err: err}
+			})
+
+			var result Result
+			var err error
+			select {
+			case oc := <-done:
+				result, err = oc.result, oc.err
+			case <-ctx.Done():
+				toolCallsMu.Lock()
+				toolCalls = append(toolCalls, fmt.Sprintf("%s → timeout", name))
+				toolCallsMu.Unlock()
+				return rejectPromise(vm, fmt.Errorf("%s timed out after %v", name, codeExecTimeout))
+			}
 			if err != nil {
 				toolCallsMu.Lock()
 				toolCalls = append(toolCalls, fmt.Sprintf("%s → error: %v", name, err))

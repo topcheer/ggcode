@@ -179,6 +179,11 @@ func (t FileOps) Execute(ctx context.Context, input json.RawMessage) (Result, er
 			out.Skipped++
 		case "error":
 			out.Errors++
+		default:
+			// Unknown status (e.g. panic mid-op recovered with a zero-value
+			// result whose Status is "") — count it as an error so the
+			// summary never claims success for an unaccounted op.
+			out.Errors++
 		}
 	}
 
