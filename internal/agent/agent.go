@@ -1477,6 +1477,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.phantomVerify.reset()
 	// Reset the edit failure recovery tracker.
 	a.editFailRecovery.reset()
+	// #677: solution fixation / redundant re-verify were the only detectors
+	// whose reset() this per-run block never called — "at most 2 warnings per
+	// run" silently degraded to a per-Agent lifetime cap (permanent silence
+	// after the first 2) and firedFor / recentCalls / failedByFile state
+	// leaked across runs.
+	a.solutionFixation.reset()
+	a.redundantReverify.reset()
 	// Reset the export guard so each run starts with a clean checked set.
 	a.exportGuard.reset()
 	a.hubPackageGuard.reset()
@@ -1704,58 +1711,40 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// heuristic based on cross-tool category analysis.
 		if thermalMsg := a.toolThermal.maybeWarn(i); thermalMsg != "" {
 			debug.Log("thermal-profile", "imbalanced tool usage detected at iteration %d: %s", i+1, a.toolThermal.categoryBreakdown())
-			a.contextManager.Add(provider.Message{
-				Role:    "user",
-				Content: []provider.ContentBlock{{Type: "text", Text: thermalMsg}},
-			})
+			a.injectGuidance(thermalMsg)
 			msgs = a.contextManager.Messages()
 		}
 		// Momentum loss detection: track per-iteration productivity and
 		// warn when late-phase productivity collapses after early progress.
 		a.momentumLoss.startIteration(i + 1)
 		if momentumMsg := a.momentumLoss.checkMomentumLoss(a.maxIter); momentumMsg != "" {
-			a.contextManager.Add(provider.Message{
-				Role:    "user",
-				Content: []provider.ContentBlock{{Type: "text", Text: momentumMsg}},
-			})
+			a.injectGuidance(momentumMsg)
 			msgs = a.contextManager.Messages()
 		}
 		// Error compounding risk: compute geometric compounding probability
 		// and warn when accumulated errors make the trajectory unreliable.
 		if ecMsg := a.errorCompound.maybeWarn(i + 1); ecMsg != "" {
-			a.contextManager.Add(provider.Message{
-				Role:    "user",
-				Content: []provider.ContentBlock{{Type: "text", Text: ecMsg}},
-			})
+			a.injectGuidance(ecMsg)
 			msgs = a.contextManager.Messages()
 		}
 		// Correction spiral: detect error severity escalation across fix attempts.
 		// Warns when each correction introduces a worse error (feedback control instability).
 		if csMsg := a.correctionSpiral.maybeWarn(i + 1); csMsg != "" {
-			a.contextManager.Add(provider.Message{
-				Role:    "user",
-				Content: []provider.ContentBlock{{Type: "text", Text: csMsg}},
-			})
+			a.injectGuidance(csMsg)
 			msgs = a.contextManager.Messages()
 		}
 		// Verification debt: warn when source edits accumulate without a
 		// successful build. Prevents last-mile failure from compounding
 		// unverified changes (arXiv:2602.16666).
 		if vdMsg := a.verifyDebt.maybeWarn(i + 1); vdMsg != "" {
-			a.contextManager.Add(provider.Message{
-				Role:    "user",
-				Content: []provider.ContentBlock{{Type: "text", Text: vdMsg}},
-			})
+			a.injectGuidance(vdMsg)
 			msgs = a.contextManager.Messages()
 		}
 		// Cross-file edit propagation risk: warn when many DISTINCT files
 		// are edited without verification. Cross-file dependency chains
 		// create error propagation paths (MAST taxonomy, Cemri et al. 2025).
 		if epMsg := a.editPropagation.maybeWarn(i + 1); epMsg != "" {
-			a.contextManager.Add(provider.Message{
-				Role:    "user",
-				Content: []provider.ContentBlock{{Type: "text", Text: epMsg}},
-			})
+			a.injectGuidance(epMsg)
 			msgs = a.contextManager.Messages()
 		}
 		// Premature success declaration: if the agent claimed completion in a
@@ -1763,54 +1752,36 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// metacognitive calibration gap.
 		if sgMsg := a.subgoalTrack.maybeWarn(i + 1); sgMsg != "" {
 			debug.Log("agent", "Iteration %d: subgoal completion gap detected", i+1)
-			a.contextManager.Add(provider.Message{
-				Role:    "user",
-				Content: []provider.ContentBlock{{Type: "text", Text: sgMsg}},
-			})
+			a.injectGuidance(sgMsg)
 			msgs = a.contextManager.Messages()
 		}
 		if sdMsg := a.successDeclare.maybeWarn(i + 1); sdMsg != "" {
 			debug.Log("agent", "Iteration %d: premature success declaration detected", i+1)
-			a.contextManager.Add(provider.Message{
-				Role:    "user",
-				Content: []provider.ContentBlock{{Type: "text", Text: sdMsg}},
-			})
+			a.injectGuidance(sdMsg)
 			msgs = a.contextManager.Messages()
 		}
 		if cdMsg := a.criteriaDrift.maybeWarn(i + 1); cdMsg != "" {
 			debug.Log("agent", "Iteration %d: success criteria drift detected", i+1)
-			a.contextManager.Add(provider.Message{
-				Role:    "user",
-				Content: []provider.ContentBlock{{Type: "text", Text: cdMsg}},
-			})
+			a.injectGuidance(cdMsg)
 			msgs = a.contextManager.Messages()
 		}
 		// Attempt brief: compact summary of failed approaches to prevent
 		// repeating the same dead-end strategy.
 		if abMsg := a.attemptBrief.maybeBrief(i + 1); abMsg != "" {
 			debug.Log("agent", "Iteration %d: injecting attempt brief", i+1)
-			a.contextManager.Add(provider.Message{
-				Role:    "user",
-				Content: []provider.ContentBlock{{Type: "text", Text: abMsg}},
-			})
+			a.injectGuidance(abMsg)
 			msgs = a.contextManager.Messages()
 		}
 		// Wasted exploration detection: nudge the agent when previous
 		// search results containing file paths were never acted upon.
 		if wastedExploreMsg := a.maybeWarnWastedExplore(i + 1); wastedExploreMsg != "" {
-			a.contextManager.Add(provider.Message{
-				Role:    "user",
-				Content: []provider.ContentBlock{{Type: "text", Text: wastedExploreMsg}},
-			})
+			a.injectGuidance(wastedExploreMsg)
 			msgs = a.contextManager.Messages()
 		}
 		// Information scent decay detection: nudge when consecutive
 		// exploration calls yield diminishing novel information.
 		if scentMsg := a.infoScent.maybeWarn(i + 1); scentMsg != "" {
-			a.contextManager.Add(provider.Message{
-				Role:    "user",
-				Content: []provider.ContentBlock{{Type: "text", Text: scentMsg}},
-			})
+			a.injectGuidance(scentMsg)
 			msgs = a.contextManager.Messages()
 		}
 		// Orphaned background command detection: nudge the agent to check
@@ -1819,17 +1790,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// Query convergence failure: detect repeated similar search queries
 		// across iterations without progressing to code action.
 		if qcMsg := a.queryConverge.maybeWarn(i + 1); qcMsg != "" {
-			a.contextManager.Add(provider.Message{
-				Role:    "user",
-				Content: []provider.ContentBlock{{Type: "text", Text: qcMsg}},
-			})
+			a.injectGuidance(qcMsg)
 			msgs = a.contextManager.Messages()
 		}
 		if bgOrphanMsg := a.maybeWarnBgOrphan(i + 1); bgOrphanMsg != "" {
-			a.contextManager.Add(provider.Message{
-				Role:    "user",
-				Content: []provider.ContentBlock{{Type: "text", Text: bgOrphanMsg}},
-			})
+			a.injectGuidance(bgOrphanMsg)
 			msgs = a.contextManager.Messages()
 		}
 		// Tool call storm detection: when diverse tools are fired in
@@ -1837,10 +1802,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// guidance nudge to pause and synthesize (test-time scaling).
 		if stormMsg := a.toolStorm.maybeWarn(); stormMsg != "" {
 			debug.Log("agent", "Iteration %d: tool call storm detected", i+1)
-			a.contextManager.Add(provider.Message{
-				Role:    "user",
-				Content: []provider.ContentBlock{{Type: "text", Text: stormMsg}},
-			})
+			a.injectGuidance(stormMsg)
 			msgs = a.contextManager.Messages()
 		}
 		// Reasoning redundancy detection: consecutive text-only iterations with
@@ -1848,28 +1810,19 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// Nudge the agent to stop deliberating and act.
 		if rrMsg := a.reasoningRedund.maybeWarn(i+1, a.maxIter); rrMsg != "" {
 			debug.Log("reasoning-redund", "Iteration %d: reasoning redundancy detected -- consecutive text-only overthinking", i+1)
-			a.contextManager.Add(provider.Message{
-				Role:    "user",
-				Content: []provider.ContentBlock{{Type: "text", Text: rrMsg}},
-			})
+			a.injectGuidance(rrMsg)
 			msgs = a.contextManager.Messages()
 		}
 		// Iteration pressure degradation: detect verify/edit ratio drop
 		// near the iteration budget limit (metacognitive monitoring).
 		if ipMsg := a.maybeWarnIterPressure(i + 1); ipMsg != "" {
-			a.contextManager.Add(provider.Message{
-				Role:    "user",
-				Content: []provider.ContentBlock{{Type: "text", Text: ipMsg}},
-			})
+			a.injectGuidance(ipMsg)
 			msgs = a.contextManager.Messages()
 		}
 		// Unverified mutation streak: detect consecutive edits without any
 		// verification (build/test/run) to encourage tight feedback loops.
 		if bsMsg := a.bareEditStreak.maybeWarn(i + 1); bsMsg != "" {
-			a.contextManager.Add(provider.Message{
-				Role:    "user",
-				Content: []provider.ContentBlock{{Type: "text", Text: bsMsg}},
-			})
+			a.injectGuidance(bsMsg)
 			msgs = a.contextManager.Messages()
 		}
 		// Verification coverage gap: handled in tool-execution loop below.
@@ -1877,30 +1830,21 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// multiple times with intervening failed verifications, suggesting an
 		// approach-level failure (PARC arXiv:2512.03549).
 		if sfMsg := a.strategyFixation.check(); sfMsg != "" {
-			a.contextManager.Add(provider.Message{
-				Role:    "user",
-				Content: []provider.ContentBlock{{Type: "text", Text: sfMsg}},
-			})
+			a.injectGuidance(sfMsg)
 			msgs = a.contextManager.Messages()
 		}
 		// Error rush: detect panic coding -- blind-fixing after consecutive
 		// errors without diagnostic reads in between (Agentic Overconfidence,
 		// arXiv 2026; AgentDiet, FSE 2026).
 		if erMsg := a.errorRush.check(); erMsg != "" {
-			a.contextManager.Add(provider.Message{
-				Role:    "user",
-				Content: []provider.ContentBlock{{Type: "text", Text: erMsg}},
-			})
+			a.injectGuidance(erMsg)
 			msgs = a.contextManager.Messages()
 		}
 		// Target scatter: detect world model miscalibration -- the agent
 		// examines many unrelated files without converging, indicating it
 		// does not know where to look (Qwen-AgentWorld 2026; SICA NeurIPS 2025).
 		if tsMsg := a.targetScatter.check(); tsMsg != "" {
-			a.contextManager.Add(provider.Message{
-				Role:    "user",
-				Content: []provider.ContentBlock{{Type: "text", Text: tsMsg}},
-			})
+			a.injectGuidance(tsMsg)
 			msgs = a.contextManager.Messages()
 		}
 		// Attention fragmentation: detect rapid directory context-switching
@@ -1908,10 +1852,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// arXiv:2506.06843). High switch density means the model is thrashing
 		// between unrelated concerns instead of maintaining coherent focus.
 		if afMsg := a.attentionFragment.analyze(); afMsg != "" {
-			a.contextManager.Add(provider.Message{
-				Role:    "user",
-				Content: []provider.ContentBlock{{Type: "text", Text: afMsg}},
-			})
+			a.injectGuidance(afMsg)
 			msgs = a.contextManager.Messages()
 		}
 		// Drift-recurrence iteration bookkeeping: check()'s post-warning
@@ -1923,20 +1864,14 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// Futile cycle: detect when the agent re-reads the same set of files
 		// that it explored earlier without making any edits in between.
 		if fcMsg := a.futileCycle.maybeWarn(i + 1); fcMsg != "" {
-			a.contextManager.Add(provider.Message{
-				Role:    "user",
-				Content: []provider.ContentBlock{{Type: "text", Text: fcMsg}},
-			})
+			a.injectGuidance(fcMsg)
 			msgs = a.contextManager.Messages()
 		}
 		// Constraint amnesia: remind the agent of user-specified constraints
 		// that may have scrolled out of effective attention after many iterations.
 		// Catastrophic forgetting in token space (Letta/MemGPT 2025).
 		if caMsg := a.constraintAmnesia.maybeWarn(i + 1); caMsg != "" {
-			a.contextManager.Add(provider.Message{
-				Role:    "user",
-				Content: []provider.ContentBlock{{Type: "text", Text: caMsg}},
-			})
+			a.injectGuidance(caMsg)
 			msgs = a.contextManager.Messages()
 		}
 		// Diagnostic-action disconnect detection: when the agent has received
@@ -1957,29 +1892,20 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			if delegationOrphanGateEnabled {
 				if delOrchMsg := a.delegationOrch.maybeWarnOrphanedDelegations(i + 1); delOrchMsg != "" {
 					debug.Log("agent", "Iteration %d: delegation orphan gate injected guidance", i+1)
-					a.contextManager.Add(provider.Message{
-						Role:    "user",
-						Content: []provider.ContentBlock{{Type: "text", Text: delOrchMsg}},
-					})
+					a.injectGuidance(delOrchMsg)
 					msgs = a.contextManager.Messages()
 				}
 			}
 			if delegationSerialGateEnabled {
 				if serialMsg := a.delegationOrch.maybeWarnSerialDelegation(); serialMsg != "" {
 					debug.Log("agent", "Iteration %d: serial delegation gate injected guidance", i+1)
-					a.contextManager.Add(provider.Message{
-						Role:    "user",
-						Content: []provider.ContentBlock{{Type: "text", Text: serialMsg}},
-					})
+					a.injectGuidance(serialMsg)
 					msgs = a.contextManager.Messages()
 				}
 			}
 			if overDelMsg := a.delegationOrch.maybeWarnOverDelegation(); overDelMsg != "" {
 				debug.Log("agent", "Iteration %d: over-delegation gate injected guidance", i+1)
-				a.contextManager.Add(provider.Message{
-					Role:    "user",
-					Content: []provider.ContentBlock{{Type: "text", Text: overDelMsg}},
-				})
+				a.injectGuidance(overDelMsg)
 				msgs = a.contextManager.Messages()
 			}
 		}
@@ -1988,10 +1914,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// a one-time hint to confirm scope and consider package-scoped ops.
 		if monorepoMsg := a.monorepoScoper.maybeWarnScopeSprawl(); monorepoMsg != "" {
 			debug.Log("monorepo-scope", "package scope sprawl detected: %s", monorepoMsg)
-			a.contextManager.Add(provider.Message{
-				Role:    "user",
-				Content: []provider.ContentBlock{{Type: "text", Text: monorepoMsg}},
-			})
+			a.injectGuidance(monorepoMsg)
 			msgs = a.contextManager.Messages()
 		}
 		// Mid-point progress checkpoint: at 60% of max iterations, inject a
@@ -2002,16 +1925,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		if a.maxIter >= 20 && !progressCheckInjected && i+1 >= a.maxIter*3/5 {
 			progressCheckInjected = true
 			debug.Log("agent", "Injecting mid-point progress checkpoint at iteration %d/%d", i+1, a.maxIter)
-			a.contextManager.Add(provider.Message{
-				Role: "user",
-				Content: []provider.ContentBlock{{
-					Type: "text",
-					Text: fmt.Sprintf(
-						"Progress checkpoint: iteration %d/%d. Assess — on track? If not, switch strategy.",
-						i+1, a.maxIter,
-					),
-				}},
-			})
+			a.injectGuidance(fmt.Sprintf(
+				"Progress checkpoint: iteration %d/%d. Assess — on track? If not, switch strategy.",
+				i+1, a.maxIter,
+			))
 			msgs = a.contextManager.Messages() // refresh after adding checkpoint
 		}
 		// Adaptive effort: adjust reasoning budget per-turn based on recent
@@ -2103,13 +2020,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// deterministic analysis. Guidance is injected into the context
 		// manager as a low-priority system note.
 		if cacheGuidance := a.cacheEffMonitor.record(resp.Usage); cacheGuidance != "" {
-			a.contextManager.Add(provider.Message{
-				Role: "user",
-				Content: []provider.ContentBlock{{
-					Type: "text",
-					Text: cacheGuidance,
-				}},
-			})
+			a.injectGuidance(cacheGuidance)
 			debug.Log("cache-efficiency", "injecting cache bust storm guidance at iteration %d", i+1)
 		}
 		// Detect empty LLM response: API accepted input but produced no output.
@@ -2141,7 +2052,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				})
 				return nil
 			}
-			// Retry: inject a nudge and continue
+			// Retry: inject a nudge and continue.
+			// #677: loop-recovery protocol, NOT detector guidance — it keeps its
+			// own cap (3 consecutive empties abort the run) and must stay outside
+			// the per-turn guidance budget: budget suppression would make
+			// empty-response recovery impossible.
 			a.contextManager.Add(provider.Message{
 				Role: "user",
 				Content: []provider.ContentBlock{{
@@ -2167,6 +2082,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					Type: provider.StreamEventSystem,
 					Text: "[Response was truncated by output length limit — continuing...] ",
 				})
+				// #677: continuation protocol, NOT detector guidance — a budget-
+				// suppressed continuation prompt would strand the partial output, so
+				// it stays a direct add (own cap: truncationContinues < 3).
 				a.contextManager.Add(provider.Message{
 					Role: "user",
 					Content: []provider.ContentBlock{{
@@ -2206,6 +2124,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				inlineToolCallNudges++
 				debug.Log("agent", "Iteration %d: inline tool call detected in text, nudging model (attempt %d/2)", i+1, inlineToolCallNudges)
 				a.contextManager.Add(resp.Message)
+				// #677: format-correction protocol, NOT detector guidance — if the
+				// budget suppressed it, a model that only writes inline tool calls
+				// could never emit a structured tool_use block again this turn
+				// (own cap: 2 nudges).
 				a.contextManager.Add(provider.Message{
 					Role: "user",
 					Content: []provider.ContentBlock{{
@@ -3425,13 +3347,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// re-run without intervening file edits (idempotency violation).
 			if rvHint := a.redundantReverify.recordToolCall(tc.Name, string(tc.Arguments), i+1, result.IsError); rvHint != "" {
 				debug.Log("agent", "Iteration %d: redundant re-verification detector triggered", i+1)
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: rvHint,
-					}},
-				})
+				a.injectGuidance(rvHint)
 			}
 			// Outcome misattribution: record tool calls to track corrective
 			// actions between failure and success claim.
@@ -3506,13 +3422,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.redundantReverify.recordEdit(tc.Name)
 			if fixationHint := a.solutionFixation.checkAndWarn(); fixationHint != "" {
 				debug.Log("agent", "Iteration %d: solution fixation detector triggered", i+1)
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: fixationHint,
-					}},
-				})
+				a.injectGuidance(fixationHint)
 			}
 			// Unverified self-diagnosis: record tool results to track errors
 			// and verification calls for correlated failure detection.

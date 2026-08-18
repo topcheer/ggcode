@@ -119,6 +119,16 @@ func isCriticalGuidance(text string) bool {
 // injectGuidance is the budget-aware replacement for direct
 // contextManager.Add(provider.Message{Role: "user", ...}) calls from
 // detectors. It checks the per-turn budget before injecting.
+//
+// #677: ALL iteration-level detector injections in agent.go's run loop
+// (errorRush, solutionFixation, errorCompound, correctionSpiral,
+// momentumLoss, targetScatter, redundantReverify, verifyDebt, ...) route
+// through this method, so the "hard per-turn limit across ALL detectors"
+// promise holds for the iteration-level cluster too — not just the
+// tool-result hint path (#441/#607). Loop-recovery protocol nudges
+// (empty-response retry, truncation continuation, inline-tool-call format
+// correction) intentionally stay direct adds: they carry their own hard
+// caps, and budget suppression would break loop recovery.
 func (a *Agent) injectGuidance(text string) {
 	if !a.guidanceBudget.allow(text) {
 		debug.Log("guidance-budget", "suppressing guidance message (budget exceeded, %d suppressed this turn)",
