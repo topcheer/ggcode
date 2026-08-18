@@ -126,6 +126,7 @@ func findInsecurePatternsGo(content string) []insecurePatternInstance {
 
 	// Text-based checks (fast, always available).
 	lines := strings.Split(content, "\n")
+	inBlockComment := false // fix #728: /* */ block comment state across lines
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
 
@@ -135,10 +136,14 @@ func findInsecurePatternsGo(content string) []insecurePatternInstance {
 		// weak crypto, SQL, command injection) operates on code only and no
 		// longer fires on comment mentions like
 		// `// do not use InsecureSkipVerify: true`.
-		if strings.HasPrefix(trimmed, "//") || strings.HasPrefix(trimmed, "/*") {
+		// Fix #728: block-comment BODY lines (` * InsecureSkipVerify: true ...`)
+		// start with neither `//` nor `/*` and previously slipped through; the
+		// block state machine below skips them until `*/`.
+		code, ok := cStyleBlockCommentLine(trimmed, &inBlockComment)
+		if !ok {
 			continue
 		}
-		trimmed = goStripTrailingComment(trimmed)
+		trimmed = goStripTrailingComment(code)
 
 		// 1. InsecureSkipVerify: true
 		if strings.Contains(trimmed, "InsecureSkipVerify") &&
@@ -308,6 +313,7 @@ func checkInsecurePatternsJS(filePath, oldContent, newContent string) []string {
 func findInsecurePatternsJS(content string) []insecurePatternInstance {
 	var issues []insecurePatternInstance
 	lines := strings.Split(content, "\n")
+	inBlockComment := false // fix #728: /* */ block comment state across lines
 
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
@@ -316,10 +322,13 @@ func findInsecurePatternsJS(content string) []insecurePatternInstance {
 		// `//` and `/*` comment syntax, so the Go trailing-comment stripper is
 		// reused; full-line comments are skipped entirely. Comment mentions
 		// like `// eval(userInput) is dangerous` no longer trigger.
-		if strings.HasPrefix(trimmed, "//") || strings.HasPrefix(trimmed, "/*") {
+		// Fix #728: block-comment BODY lines (` * eval(...)` etc.) previously
+		// survived the `//`/`/*` prefix check; the block state machine skips them.
+		code, ok := cStyleBlockCommentLine(trimmed, &inBlockComment)
+		if !ok {
 			continue
 		}
-		trimmed = goStripTrailingComment(trimmed)
+		trimmed = goStripTrailingComment(code)
 
 		lower := strings.ToLower(trimmed)
 
@@ -587,6 +596,50 @@ func pyStripCommentsAndStrings(line string) string {
 		i++
 	}
 	return b.String()
+}
+
+// cStyleBlockCommentLine applies /* */ block-comment state tracking to one
+// trimmed C-style (Go/JS) code line (fix #728). It returns the code portion
+// of the line and ok=false when the entire line is comment and must be
+// skipped. `inBlock` carries the cross-line block-comment state.
+//
+// Semantics:
+//   - While inside a block, a line without `*/` is entirely comment; a line
+//     containing `*/` yields the code after the closer.
+//   - A line starting with `//` is a full-line comment (fix #723 behavior).
+//   - A line starting with `/*` is skipped entirely (fix #723 behavior); if it
+//     does not close on the same line, the block state opens.
+//   - A line where `/*` opens mid-line and does not close keeps the code
+//     before the opener and opens the block state (mixed-line handling).
+func cStyleBlockCommentLine(trimmed string, inBlock *bool) (string, bool) {
+	if *inBlock {
+		end := strings.Index(trimmed, "*/")
+		if end < 0 {
+			return "", false // still inside block comment body
+		}
+		*inBlock = false
+		trimmed = strings.TrimSpace(trimmed[end+2:])
+		if trimmed == "" {
+			return "", false
+		}
+	}
+	if strings.HasPrefix(trimmed, "//") {
+		return "", false
+	}
+	if strings.HasPrefix(trimmed, "/*") {
+		if !strings.Contains(trimmed[2:], "*/") {
+			*inBlock = true
+		}
+		return "", false
+	}
+	if idx := strings.Index(trimmed, "/*"); idx >= 0 && !strings.Contains(trimmed[idx+2:], "*/") {
+		*inBlock = true
+		trimmed = strings.TrimSpace(trimmed[:idx])
+		if trimmed == "" {
+			return "", false
+		}
+	}
+	return trimmed, true
 }
 
 // goStripTrailingComment removes a trailing // or /* comment from a single

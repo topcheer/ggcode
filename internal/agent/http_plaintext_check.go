@@ -31,8 +31,11 @@ import (
 )
 
 // httpPlaintextRe matches http:// URLs in source code.
-// Captures the host portion after "http://".
-var httpPlaintextRe = regexp.MustCompile(`http://([a-zA-Z0-9._:-]+)`)
+// Captures the host portion after "http://". Fix #726: the host alternation
+// now includes the bracketed IPv6 form `[2001:db8::1]` - the previous charset
+// lacked brackets, so public IPv6 plaintext HTTP URLs never matched at all
+// (and the `[::1]` whitelist entry was dead code).
+var httpPlaintextRe = regexp.MustCompile(`http://(\[[0-9a-fA-F:.]+\]|[a-zA-Z0-9._:-]+)`)
 
 // localhostHosts lists host patterns that are exempt from plaintext HTTP
 // warnings because they represent local development environments.
@@ -91,7 +94,12 @@ func extractHTTPHosts(content string) map[string]bool {
 		if len(m) >= 2 {
 			// Take only the host part (before port or path)
 			host := m[1]
-			if idx := strings.IndexByte(host, ':'); idx > 0 {
+			if strings.HasPrefix(host, "[") {
+				// Bracketed IPv6 literal (fix #726): the port, if any, follows the
+				// closing ']' and is outside the capture. Strip the brackets so the
+				// bare address compares against the whitelist ("::1" et al).
+				host = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
+			} else if idx := strings.IndexByte(host, ':'); idx > 0 {
 				host = host[:idx] // strip port
 			}
 			result[host] = true

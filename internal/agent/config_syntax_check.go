@@ -189,14 +189,33 @@ func validateYAML(filePath, content string) string {
 
 // findYAMLDuplicateKeys scans YAML text for duplicate keys at the same context level.
 // Returns a slice of duplicate key names found.
-// Uses a stack-based approach to track nesting context.
+//
+// Fix #725: two defects addressed.
+//   - Defect A (block scalars): lines inside `key: |` / `key: >` block scalars
+//     (with optional +/- and indentation-digit modifiers) are literal content,
+//     not mappings. A line-level scanner that lacks block-scalar state tracking
+//     misparses GitHub Actions `run: |` shell bodies (`echo "Phase 1: ..."`)
+//     as duplicate keys, and the early return in validateYAML then suppresses
+//     the real yaml.Unmarshal validation. We now track the block and skip its
+//     body until indentation falls back to (or below) the key's indentation.
+//   - Defect B (hardcoded 2-space indent): `depth := indent / 2` assumed
+//     2-space indentation, so 1-space-indented legal YAML mapped to depth 0 and
+//     collided with top-level keys. Replaced with a standard lexer-style
+//     indentation stack: push when indent grows, pop while stack top exceeds
+//     the current indent. Any consistent indentation width now works.
 func findYAMLDuplicateKeys(content string) []string {
 	lines := strings.Split(content, "\n")
 
-	// Stack of maps to track keys at each nesting level
-	// Each level has its own set of keys
+	// Stack of maps to track keys at each nesting level, paired with an
+	// indentation stack recording the column at which each level opened.
 	var stack []map[string]struct{}
 	stack = append(stack, make(map[string]struct{}))
+	indentStack := []int{0}
+
+	// Block scalar state (defect A): when true, lines with indentation greater
+	// than blockIndent are literal scalar content and must be skipped.
+	inBlockScalar := false
+	blockIndent := 0
 
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
@@ -204,21 +223,24 @@ func findYAMLDuplicateKeys(content string) []string {
 			continue // Skip empty lines and comments
 		}
 
-		// Count leading spaces to determine indentation level
+		// Count leading spaces to determine indentation level.
 		indent := 0
 		for i := 0; i < len(line) && line[i] == ' '; i++ {
 			indent++
 		}
 
-		// Adjust stack depth based on indentation
-		// Assuming 2 spaces per indent level (YAML convention)
-		depth := indent / 2
-		for len(stack) > depth+1 {
-			stack = stack[:len(stack)-1] // Pop to go up
+		// Defect A: inside a block scalar, skip body lines (more indented than
+		// the key). A line at or below the key's indentation ends the block.
+		if inBlockScalar {
+			if indent > blockIndent {
+				continue // literal block scalar content, not a mapping line
+			}
+			inBlockScalar = false
 		}
-		for len(stack) < depth+1 {
-			stack = append(stack, make(map[string]struct{})) // Push to go down
-		}
+
+		// Defect B: adjust stack depth via an indentation stack instead of a
+		// hardcoded indent/2 division (see yamlAdjustIndentStack).
+		yamlAdjustIndentStack(&stack, &indentStack, indent)
 
 		// Skip list items
 		if strings.HasPrefix(trimmed, "-") || strings.HasPrefix(trimmed, "[") {
@@ -239,6 +261,15 @@ func findYAMLDuplicateKeys(content string) []string {
 			continue
 		}
 
+		// Defect A: detect block scalar headers (`|`, `>`, with optional +/-
+		// chomping and explicit-indent digit modifiers). The following lines are
+		// literal content until indentation returns to/below this key's indent.
+		value := strings.TrimSpace(trimmed[colonIdx+1:])
+		if isYAMLBlockScalarHeader(value) {
+			inBlockScalar = true
+			blockIndent = indent
+		}
+
 		// Check for duplicate at the current nesting level
 		currentLevel := stack[len(stack)-1]
 		if _, exists := currentLevel[key]; exists {
@@ -248,6 +279,46 @@ func findYAMLDuplicateKeys(content string) []string {
 	}
 
 	return nil
+}
+
+// yamlAdjustIndentStack maintains the parallel key-map and indentation stacks
+// for findYAMLDuplicateKeys (fix #725, defect B). Levels opened deeper than the
+// current line's indentation are popped; a deeper indentation opens a new
+// nesting level. Replaces the previous hardcoded `depth := indent / 2` logic,
+// which mis-handled indentation widths other than 2 spaces.
+func yamlAdjustIndentStack(stack *[]map[string]struct{}, indentStack *[]int, indent int) {
+	for len(*indentStack) > 1 && indent < (*indentStack)[len(*indentStack)-1] {
+		*indentStack = (*indentStack)[:len(*indentStack)-1]
+		*stack = (*stack)[:len(*stack)-1]
+	}
+	if indent > (*indentStack)[len(*indentStack)-1] {
+		*indentStack = append(*indentStack, indent)
+		*stack = append(*stack, make(map[string]struct{}))
+	}
+}
+
+// isYAMLBlockScalarHeader reports whether a YAML value (text after `key:`)
+// opens a block scalar: `|` (literal) or `>` (folded), optionally followed by
+// a chomping indicator (+/-) and/or an explicit indentation digit, in either
+// order (e.g. `|`, `>-`, `|2`, `>2-`). Fix #725.
+func isYAMLBlockScalarHeader(value string) bool {
+	if value == "" {
+		return false
+	}
+	if value[0] != '|' && value[0] != '>' {
+		return false
+	}
+	rest := value[1:]
+	// Consume at most one '+'/'-' and at most one digit (any order).
+	for i := 0; i < 2 && rest != ""; i++ {
+		c := rest[0]
+		if c == '+' || c == '-' || (c >= '1' && c <= '9') {
+			rest = rest[1:]
+			continue
+		}
+		break
+	}
+	return rest == ""
 }
 
 // validateTOML parses TOML content and returns a warning on syntax errors.
