@@ -84,6 +84,9 @@ func setupRealE2E(t *testing.T, name, workspaceDir string) *e2eEnv {
 		Host:   "127.0.0.1",
 		Port:   0,
 		APIKey: e2eAPIKey,
+		// #715: push callback SSRF guard — hermetic allowlist entry so the
+		// CRUD test needs no DNS or external network.
+		PushCallbackAllowlist: []string{"push-e2e.invalid"},
 	}, handler)
 	if err := srv.Start(); err != nil {
 		t.Fatalf("start server: %v", err)
@@ -940,11 +943,13 @@ func TestRealE2E_PushNotificationConfigCRUD(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	pushURL := "http://127.0.0.1:19999/callback"
+	// #715: wildcard configs (TaskID=="") require operator opt-in; use a
+	// task-scoped config with an allowlisted https host instead.
+	pushURL := "https://push-e2e.invalid/callback"
 
 	// Set push config
 	cfg, err := env.client.SetPushConfig(ctx, PushNotificationConfig{
-		TaskID: "",
+		TaskID: "e2e-push-crud",
 		URL:    pushURL,
 		Token:  "test-bearer-token",
 	})

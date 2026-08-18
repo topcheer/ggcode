@@ -52,6 +52,9 @@ var (
 	ErrAuthRequired              = &JSONRPCError{Code: -32006, Message: "Authentication required"}
 	ErrUnsupportedMode           = &JSONRPCError{Code: -32007, Message: "Unsupported output mode"}
 	ErrExtendedCardNotConfigured = &JSONRPCError{Code: -32008, Message: "Extended agent card not configured"}
+	// #715: push registration refused because the deployment has no real
+	// authentication (no key / only the public default key).
+	ErrPushAuthNotConfigured = &JSONRPCError{Code: -32009, Message: "Push notifications disabled: real authentication required"}
 )
 
 // ---------------------------------------------------------------------------

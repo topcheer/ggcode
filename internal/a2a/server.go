@@ -36,6 +36,11 @@ type Server struct {
 	tokenValidator *auth.TokenValidator // OAuth2/OIDC token validation
 	mtlsEnabled    bool
 	tlsConfig      *tls.Config // TLS config for mTLS (set via SetTLSConfig)
+
+	// #715: push callback SSRF guard + wildcard opt-in.
+	pushGuard                *pushGuard
+	allowWildcardPushConfigs bool
+	pushClient               *http.Client
 }
 
 // ServerConfig holds A2A server configuration.
@@ -51,6 +56,17 @@ type ServerConfig struct {
 	// previously hardcoded false, so spec-compliant clients never registered
 	// and the feature was unreachable. Default true.
 	PushNotifications *bool
+
+	// PushCallbackAllowlist (#715) explicitly opts in callback hosts that
+	// the SSRF guard rejects by default (private/loopback/link-local
+	// ranges, plain http). Entries: CIDR ("10.0.0.0/8"), bare IP, or
+	// hostname ("collector.lan").
+	PushCallbackAllowlist []string
+
+	// AllowWildcardPushCallbacks (#715) permits push configs whose TaskID
+	// is empty — those match notifications for ALL tasks, so they are
+	// refused unless explicitly opted in.
+	AllowWildcardPushCallbacks bool
 }
 
 // NewServer creates a new A2A server.
@@ -62,11 +78,14 @@ func NewServer(cfg ServerConfig, handler *TaskHandler) *Server {
 	}
 
 	s := &Server{
-		handler:     handler,
-		apiKeys:     apiKeys,
-		done:        make(chan struct{}),
-		pushConfigs: make(map[string]PushNotificationConfig),
+		handler:                  handler,
+		apiKeys:                  apiKeys,
+		done:                     make(chan struct{}),
+		pushConfigs:              make(map[string]PushNotificationConfig),
+		pushGuard:                newPushGuard(cfg.PushCallbackAllowlist),
+		allowWildcardPushConfigs: cfg.AllowWildcardPushCallbacks,
 	}
+	s.pushClient = s.pushHTTPClient()
 
 	// Wire push notification callbacks: handler → server.firePushNotifications.
 	if handler != nil {
@@ -702,6 +721,17 @@ func (s *Server) sendSSEError(w io.Writer, flusher http.Flusher, id json.RawMess
 // ---------------------------------------------------------------------------
 
 func (s *Server) handlePushConfigSet(w http.ResponseWriter, req *JSONRPCRequest) {
+	// #715: push callbacks stream task snapshots to a client-chosen URL.
+	// With no real authentication configured (no key / only the public
+	// default key), any LAN peer could register an exfiltration endpoint.
+	if reason := s.pushRegistrationDisabled(); reason != "" {
+		writeRPCError(w, req.ID, &JSONRPCError{
+			Code:    ErrPushAuthNotConfigured.Code,
+			Message: ErrPushAuthNotConfigured.Message,
+			Data:    "push notifications disabled: " + reason + "; set a2a.auth.api_key to a real secret (or configure oauth2/mTLS) to enable",
+		})
+		return
+	}
 	var cfg PushNotificationConfig
 	if err := json.Unmarshal(req.Params, &cfg); err != nil {
 		writeRPCError(w, req.ID, ErrInvalidParams)
@@ -709,6 +739,27 @@ func (s *Server) handlePushConfigSet(w http.ResponseWriter, req *JSONRPCRequest)
 	}
 	if cfg.ID == "" {
 		cfg.ID = fmt.Sprintf("push-%d", time.Now().UnixNano())
+	}
+	// #715: empty TaskID matches ALL tasks — a wildcard exfil channel.
+	// Requires explicit opt-in (ServerConfig.AllowWildcardPushCallbacks).
+	if cfg.TaskID == "" && !s.allowWildcardPushConfigs {
+		writeRPCError(w, req.ID, &JSONRPCError{
+			Code:    ErrInvalidParams.Code,
+			Message: ErrInvalidParams.Message,
+			Data:    "push config with empty taskId matches ALL tasks and requires explicit operator opt-in (AllowWildcardPushCallbacks)",
+		})
+		return
+	}
+	// #715: validate the callback URL before storing it — reject
+	// non-https (unless allowlisted), loopback/RFC1918/link-local targets.
+	if err := s.validatePushCallbackURL(cfg.URL); err != nil {
+		debug.Log("a2a.push", "rejected callback URL %q: %v", cfg.URL, err)
+		writeRPCError(w, req.ID, &JSONRPCError{
+			Code:    ErrInvalidParams.Code,
+			Message: ErrInvalidParams.Message,
+			Data:    "invalid push callback url: " + err.Error(),
+		})
+		return
 	}
 	s.pushMu.Lock()
 	s.pushConfigs[cfg.ID] = cfg
@@ -862,6 +913,19 @@ func (s *Server) firePushNotifications(taskID string, payload StreamResponse) {
 	}
 	s.pushMu.RUnlock()
 
+	// #715 defense-in-depth: re-check every callback URL at delivery time.
+	// Configs planted directly (pre-guard state, future bugs) or whose DNS
+	// has since changed to an internal address must never be dialed.
+	deliverable := configs[:0:0]
+	for _, cfg := range configs {
+		if err := s.validatePushCallbackURL(cfg.URL); err != nil {
+			debug.Log("a2a.push", "skipping delivery to unverified callback %q: %v", cfg.URL, err)
+			continue
+		}
+		deliverable = append(deliverable, cfg)
+	}
+	configs = deliverable
+
 	body, err := json.Marshal(payload)
 	if err != nil {
 		debug.Log("a2a", "push marshal error: %v", err)
@@ -883,7 +947,10 @@ func (s *Server) firePushNotifications(taskID string, payload StreamResponse) {
 			if token != "" {
 				req.Header.Set("Authorization", "Bearer "+token)
 			}
-			resp, err := http.DefaultClient.Do(req)
+			// #715: dedicated client — hard timeout + CheckRedirect that
+			// re-validates every redirect hop against the same SSRF rules
+			// (http.DefaultClient followed redirects to internal targets).
+			resp, err := s.pushClient.Do(req)
 			if err != nil {
 				debug.Log("a2a", "push delivery error: %v", err)
 				return
