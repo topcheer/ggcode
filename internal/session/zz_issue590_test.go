@@ -9,6 +9,28 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
+// drainStoreMaintenance waits until the store's background maintenance
+// goroutine (index rebuild) is idle (#676). Save/Delete/List schedule
+// runMaintenance asynchronously; if the test returns while it is still
+// writing, t.TempDir()'s RemoveAll races the residual writes and fails CI
+// with "unlinkat: directory not empty". Registered via t.Cleanup — LIFO
+// ordering guarantees it runs BEFORE the TempDir removal registered earlier.
+func drainStoreMaintenance(t *testing.T, store *JSONLStore) {
+	t.Helper()
+	t.Cleanup(func() {
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			store.mu.Lock()
+			idle := !store.maintenanceRunning
+			store.mu.Unlock()
+			if idle {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	})
+}
+
 // TestT1_RemoveFromIndex_CorruptGuard verifies that removeFromIndex does not
 // write an empty index when the on-disk index is corrupt. Without the guard,
 // a corrupt index + ordinary Delete would write a legitimate empty [] JSON,
@@ -21,6 +43,7 @@ func TestT1_RemoveFromIndex_CorruptGuard(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewJSONLStore: %v", err)
 	}
+	drainStoreMaintenance(t, store) // #676: drain async index writes before TempDir cleanup
 
 	// Create 5 sessions with user messages
 	sessions := make([]*Session, 5)
@@ -159,6 +182,7 @@ func TestT2_RemoveFromIndex_RetryOnLockFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewJSONLStore: %v", err)
 	}
+	drainStoreMaintenance(t, store) // #676: drain async index writes before TempDir cleanup
 
 	// Create a session
 	ses := &Session{
