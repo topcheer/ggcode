@@ -466,6 +466,7 @@ func (s *Scheduler) Update(id string, cronExpr *string, prompt *string, queueIfB
 	origCron := job.CronExpr
 	origPrompt := job.Prompt
 	origQueue := job.QueueIfBusy
+	origNextFire := job.NextFire
 
 	if cronExpr != nil {
 		job.CronExpr = *cronExpr
@@ -485,7 +486,13 @@ func (s *Scheduler) Update(id string, cronExpr *string, prompt *string, queueIfB
 			s.mu.Unlock()
 			return Job{}, err
 		}
-		job.NextFire = next
+		// Paused jobs must keep a zero NextFire (the #311 invariant maintained
+		// by Pause() and Load()): the timer is not scheduled while paused, so a
+		// non-zero NextFire would show the UI a fire time that never arrives.
+		// Resume() recomputes it from the new expression. (#667)
+		if !job.Paused {
+			job.NextFire = next
+		}
 	}
 	newSnapshot := job.Snapshot()
 
@@ -506,8 +513,19 @@ func (s *Scheduler) Update(id string, cronExpr *string, prompt *string, queueIfB
 		job.Prompt = origPrompt
 		job.QueueIfBusy = origQueue
 		if cronExpr != nil {
-			next, _ := NextTime(origCron, time.Now())
-			job.NextFire = next
+			if job.Paused {
+				// Preserve the paused zero-NextFire invariant on rollback too. (#667)
+				job.NextFire = time.Time{}
+			} else if next, nerr := NextTime(origCron, time.Now()); nerr != nil {
+				// origCron was previously validated, so this path is defensive;
+				// a zero NextFire here would make scheduleJobLocked clamp the
+				// delay to 0 and fire immediately via AfterFunc(0). Keep the
+				// pre-update value instead. (#667)
+				job.NextFire = origNextFire
+				debug.Log("cron", "Update rollback: NextTime(%q) failed: %v; keeping prior NextFire", origCron, nerr)
+			} else {
+				job.NextFire = next
+			}
 		}
 		if t, ok := s.timers[id]; ok {
 			t.Stop()

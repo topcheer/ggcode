@@ -58,14 +58,28 @@ func (s *ProjectionStore) Append(msg GatewayMessage) error {
 	}
 
 	cloned := cloneGatewayMessage(msg)
-	cloned.AuthorityEpoch = state.ensureAuthorityEpoch()
+	current := state.ensureAuthorityEpoch()
+	// #666: events from a superseded authority epoch must not be "laundered"
+	// into the current (post-CutAuthority) epoch. If the message carries an
+	// epoch below the store's, it is a late arrival from the old authority's
+	// recorder (the broker callback is not synchronized with the cut) — drop
+	// it instead of persisting it, so replay and the last-writer snapshot
+	// slots stay free of old-authority pollution.
+	if cloned.AuthorityEpoch != 0 && cloned.AuthorityEpoch < current {
+		return nil
+	}
+	if cloned.AuthorityEpoch == 0 {
+		// Legacy messages without an epoch adopt the store's current epoch
+		// (pre-#666 behavior).
+		cloned.AuthorityEpoch = current
+	}
 	switch cloned.Type {
 	case EventSessionInfo:
-		state.SessionInfo = &cloned
+		state.SessionInfo = replaceProjectionSlot(state.SessionInfo, &cloned)
 	case EventStatus:
-		state.Status = &cloned
+		state.Status = replaceProjectionSlot(state.Status, &cloned)
 	case EventActivity:
-		state.Activity = &cloned
+		state.Activity = replaceProjectionSlot(state.Activity, &cloned)
 	}
 
 	state.Events = append(state.Events, cloned)
@@ -282,4 +296,15 @@ func (s *projectionFile) ensureAuthorityEpoch() uint64 {
 		return 1
 	}
 	return s.AuthorityEpoch
+}
+
+// replaceProjectionSlot implements the last-writer-wins snapshot slot update
+// with an epoch guard (#666): an incoming snapshot event only replaces the
+// current slot when it is from the same or a newer authority epoch, so a late
+// old-authority status/activity cannot clobber the new authority's snapshot.
+func replaceProjectionSlot(existing, incoming *GatewayMessage) *GatewayMessage {
+	if existing == nil || incoming.AuthorityEpoch >= existing.AuthorityEpoch {
+		return incoming
+	}
+	return existing
 }

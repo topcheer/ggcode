@@ -9,6 +9,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/topcheer/ggcode/internal/debug"
 )
 
 // Transport manages JSON-RPC 2.0 communication over stdio.
@@ -243,6 +245,11 @@ func (t *Transport) DeliverResponse(resp *JSONRPCResponse) {
 	case int64:
 		id = v
 	default:
+		// JSON-RPC 2.0 requires the peer to echo the request id verbatim, so
+		// a non-numeric id here means the peer violated the spec — the
+		// matching SendRequest will hang until its timeout. Log it so the
+		// failure is diagnosable instead of silent. (#669)
+		debug.Log("acp", "DeliverResponse: dropping response with non-numeric id %v (type %T); JSON-RPC 2.0 requires echoing the request id", resp.ID, resp.ID)
 		return
 	}
 

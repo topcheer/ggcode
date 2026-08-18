@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/auth"
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/util"
 )
 
@@ -45,6 +47,9 @@ type AuthHandler struct {
 	transport *Transport
 	sessionID string
 	store     *auth.Store
+
+	// accessTokenURL overrides the token polling endpoint (tests).
+	accessTokenURL string
 }
 
 // NewAuthHandler creates a new auth handler.
@@ -167,19 +172,25 @@ func (ah *AuthHandler) pollForToken(ctx context.Context, deviceResp *DeviceCodeR
 			return "", fmt.Errorf("device code expired")
 		case <-ticker.C:
 			token, err := ah.checkToken(ctx, deviceResp.DeviceCode)
-			if err != nil {
-				// "authorization_pending" means user hasn't entered code yet
-				if err.Error() == "authorization_pending" {
-					continue
-				}
-				// "slow_down" means increase interval
-				if err.Error() == "slow_down" {
-					ticker.Reset(time.Duration(interval+5) * time.Second)
-					continue
-				}
-				return "", err
+			if err == nil {
+				return token, nil
 			}
-			return token, nil
+			switch classifyDevicePollError(err) {
+			case devicePollSlowDown:
+				// RFC 8628 §3.5: each slow_down response requires the polling
+				// interval to grow by 5 seconds cumulatively (5→10→15…), not a
+				// constant reset back to base+5. (#668)
+				interval += 5
+				ticker.Reset(time.Duration(interval) * time.Second)
+			case devicePollAbort:
+				return "", err
+			default:
+				// authorization_pending, or a transient network/transport error.
+				// The user may already have visited the verification URI and
+				// entered the user_code — aborting on a proxy blip would waste
+				// that. Keep polling until the device code expires. (#668)
+				debug.Log("acp", "device flow: token poll error (will retry): %v", err)
+			}
 		}
 	}
 }
@@ -195,7 +206,11 @@ func (ah *AuthHandler) checkToken(ctx context.Context, deviceCode string) (strin
 	reqCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(reqCtx, "POST", githubAccessTokenURL, bytes.NewBufferString(data.Encode()))
+	endpoint := ah.accessTokenURL
+	if endpoint == "" {
+		endpoint = githubAccessTokenURL
+	}
+	req, err := http.NewRequestWithContext(reqCtx, "POST", endpoint, bytes.NewBufferString(data.Encode()))
 	if err != nil {
 		return "", err
 	}
@@ -214,7 +229,15 @@ func (ah *AuthHandler) checkToken(ctx context.Context, deviceCode string) (strin
 	}
 
 	if result.Error != "" {
-		return "", fmt.Errorf("%s", result.Error)
+		switch result.Error {
+		case "authorization_pending":
+			return "", errDeviceAuthPending
+		case "slow_down":
+			return "", errDeviceSlowDown
+		case "access_denied", "expired_token":
+			return "", &terminalDeviceFlowError{err: fmt.Errorf("device flow: %s", result.Error)}
+		}
+		return "", &terminalDeviceFlowError{err: fmt.Errorf("device flow: unexpected OAuth error: %s", result.Error)}
 	}
 
 	return result.AccessToken, nil
@@ -227,4 +250,48 @@ func (ah *AuthHandler) saveToken(token string) error {
 		Type:        "github_device_flow",
 		AccessToken: token,
 	})
+}
+
+// Device-flow poll error sentinels (#668).
+var (
+	errDeviceAuthPending = errors.New("authorization_pending")
+	errDeviceSlowDown    = errors.New("slow_down")
+)
+
+// terminalDeviceFlowError marks OAuth errors that must abort the whole device
+// flow (RFC 8628 §3.5: access_denied, expired_token — plus unrecognized OAuth
+// errors). Network/transport failures are NOT terminal: the user may already
+// have entered the user_code, so a transient blip must not invalidate it.
+type terminalDeviceFlowError struct{ err error }
+
+func (e *terminalDeviceFlowError) Error() string { return e.err.Error() }
+func (e *terminalDeviceFlowError) Unwrap() error { return e.err }
+
+type devicePollAction int
+
+const (
+	devicePollContinue devicePollAction = iota // keep polling at the current interval
+	devicePollSlowDown                         // grow the interval per RFC 8628 §3.5
+	devicePollAbort                            // terminal failure, abort the flow
+)
+
+// classifyDevicePollError decides how the token poll loop reacts to a
+// checkToken error (#668): terminal OAuth errors abort; authorization_pending
+// continues at the same interval; slow_down grows the interval (handled by the
+// caller via interval += 5, cumulative 5→10→15…); anything else — wrapped
+// network/transport/decode errors — is retried until the device code expires
+// so one transient failure cannot waste an already-entered user_code.
+func classifyDevicePollError(err error) devicePollAction {
+	switch {
+	case errors.Is(err, errDeviceAuthPending):
+		return devicePollContinue
+	case errors.Is(err, errDeviceSlowDown):
+		return devicePollSlowDown
+	default:
+		var te *terminalDeviceFlowError
+		if errors.As(err, &te) {
+			return devicePollAbort
+		}
+		return devicePollContinue
+	}
 }
