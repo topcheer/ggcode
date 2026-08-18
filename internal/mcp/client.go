@@ -450,35 +450,29 @@ func (c *Client) CallTool(ctx context.Context, name string, args map[string]inte
 
 // Close terminates the server process.
 func (c *Client) Close() error {
-	// Capture cleanup targets BEFORE calling Abort(), because Abort()
-	// unconditionally sets c.closed=true via abortOnce.Do — if we check
-	// c.closed after Abort(), the cleanup block would always be skipped
-	// (the original bug from issue #39).
+	// #717: a stdio writer stuck on a full pipe (child stopped reading
+	// stdin) holds c.mu with no deadline — the old lock-first order blocked
+	// here forever, making the Abort() below unreachable, so Close()
+	// deadlocked permanently whenever the child stopped draining stdin.
+	// Abort is idempotent and lock-free (it is documented as callable with
+	// c.mu held), so tear the transport down FIRST: closing stdin and
+	// killing the process group unblocks any stuck writer, which then
+	// releases c.mu and lets the bookkeeping below proceed. Abort also runs
+	// the #643 cleanup (notification worker) on every path, and the #39
+	// "capture before Abort" concern disappears because the closed flag no
+	// longer gates any cleanup here.
+	c.Abort()
+
 	c.mu.Lock()
-	if c.closed.Load() {
-		c.mu.Unlock()
-		// #643: closed may have been set by procWatch when the stdio server
-		// process exited unexpectedly — that path never runs Abort(), so the
-		// notification dispatch worker is still parked on notificationDone.
-		// Abort() is idempotent (abortOnce), so running it here guarantees the
-		// cleanup block (close(notificationDone) etc.) executes and the worker
-		// goroutine exits instead of leaking on every crash-reconnect cycle.
-		c.Abort()
-		return nil
-	}
-	c.closed.Store(true)
 	cmd := c.cmd
 	transport := c.transport
 	c.sessionID = ""
 	c.httpClient = nil
 	c.procCancel = nil
+	waitDone := c.procWaitDone
 	oauthHandler := c.oauthHandler
 	c.oauthHandler = nil
 	c.mu.Unlock()
-
-	// Abort transports (without holding c.mu) so any in-flight
-	// sendRequest/sendNotification holding the lock can unwind quickly.
-	c.Abort()
 
 	if oauthHandler != nil {
 		oauthHandler.Close()
@@ -487,9 +481,6 @@ func (c *Client) Close() error {
 		// Wait for the process to exit WITHOUT calling cmd.Wait() again — the
 		// procWatch goroutine owns the single legal Wait() call, and concurrent
 		// exec.Cmd.Wait invocations race on the Cmd's internal state (#292).
-		c.mu.Lock()
-		waitDone := c.procWaitDone
-		c.mu.Unlock()
 		if waitDone != nil {
 			select {
 			case <-waitDone:
@@ -828,15 +819,61 @@ func (c *Client) writeMessageUnlocked(msg interface{}) error {
 	}
 	if c.transport == "" || c.transport == "stdio" {
 		data = append(data, '\n')
-		_, err = c.stdin.Write(data)
-		return err
+		return c.writeStdinWithDeadline(data)
 	}
 	header := fmt.Sprintf("Content-Length: %d\r\n\r\n", len(data))
-	if _, err := c.stdin.Write([]byte(header)); err != nil {
+	if err := c.writeStdinWithDeadline([]byte(header)); err != nil {
 		return err
 	}
-	_, err = c.stdin.Write(data)
-	return err
+	return c.writeStdinWithDeadline(data)
+}
+
+// mcpStdioWriteTimeout (#717) bounds a single stdin write. A child that
+// stopped reading stdin leaves the pipe full; a plain c.stdin.Write then
+// blocks forever while the caller holds c.mu, so Close() — which needs
+// c.mu — deadlocked permanently and Abort() was unreachable. A var (not a
+// const) so tests can shorten it.
+var mcpStdioWriteTimeout = 15 * time.Second
+
+// writeStdinWithDeadline writes data to the child's stdin with a deadline.
+// The caller holds c.mu; serialization is unchanged because the write
+// still happens one-at-a-time under the lock. On timeout it calls Abort()
+// (lock-free and idempotent — documented as callable with c.mu held):
+// closing stdin and killing the process group closes the pipe's read end,
+// which makes the kernel fail the stuck Write (EPIPE) so the writer
+// goroutine exits instead of leaking.
+func (c *Client) writeStdinWithDeadline(data []byte) error {
+	stdin := c.stdin
+	if stdin == nil {
+		return fmt.Errorf("mcp[%s]: stdin closed", c.name)
+	}
+	if c.closed.Load() {
+		return fmt.Errorf("mcp[%s]: connection closed", c.name)
+	}
+	writeDone := make(chan error, 1)
+	go func() {
+		_, err := stdin.Write(data)
+		writeDone <- err
+	}()
+	select {
+	case err := <-writeDone:
+		return err
+	case <-time.After(mcpStdioWriteTimeout):
+		// Deadline exceeded — the child is not draining stdin. Tear the
+		// transport down so this writer (and Close()) can make progress.
+		c.Abort()
+		select {
+		case err := <-writeDone:
+			if err == nil {
+				// Write landed exactly as the deadline fired; report failure
+				// anyway — the transport is now aborted.
+				err = fmt.Errorf("mcp[%s]: stdin write deadline exceeded", c.name)
+			}
+			return err
+		case <-time.After(10 * time.Second):
+			return fmt.Errorf("mcp[%s]: stdin write timed out after %s and did not unwound after Abort", c.name, mcpStdioWriteTimeout)
+		}
+	}
 }
 
 func (c *Client) sendHTTP(ctx context.Context, msg interface{}) (*Response, error) {
@@ -895,11 +932,18 @@ func (c *Client) sendHTTPWithRetry(ctx context.Context, msg interface{}, allowRe
 		c.sessionID = newSession
 		c.mu.Unlock()
 	}
+	// #597 M1 + #716: for success-status SSE responses, stream-parse at
+	// event boundaries instead of draining to EOF — spec-compliant servers
+	// may keep the stream open after the Response event.
+	if streamed, handled, err := c.tryStreamSSEResponse(resp, msg); handled {
+		return streamed, err
+	}
 	body, err := util.ReadAll(resp.Body, util.ReadLimitMCP)
 	if err != nil {
 		return nil, fmt.Errorf("mcp[%s]: read http body: %w", c.name, err)
 	}
-	debug.Log("mcp-http", "response server=%s status=%d content_type=%s body_len=%d", c.name, resp.StatusCode, resp.Header.Get("Content-Type"), len(body))
+	contentType := resp.Header.Get("Content-Type")
+	debug.Log("mcp-http", "response server=%s status=%d content_type=%s body_len=%d", c.name, resp.StatusCode, contentType, len(body))
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 		if retried, handled, err := c.handleHTTPAuthChallenge(ctx, msg, resp, authHeader, allowRetry, oauthHandler); handled {
 			return retried, err
@@ -916,18 +960,51 @@ func (c *Client) sendHTTPWithRetry(ctx context.Context, msg interface{}, allowRe
 	case Notification:
 		return &Response{JSONRPC: "2.0"}, nil
 	}
-	// #597 M1: pass the request's JSON-RPC id down so the HTTP/SSE/NDJSON
-	// parsers only accept OUR response — concurrent streamable-HTTP requests
-	// share response streams, and the first parseable Response previously
-	// won (cross-request tool-output injection).
-	var reqID *ID
+	// #597 M1: the request's JSON-RPC id makes the HTTP/SSE/NDJSON parsers
+	// only accept OUR response — concurrent streamable-HTTP requests share
+	// response streams, and the first parseable Response previously won
+	// (cross-request tool-output injection).
+	return parseHTTPResponseForID(body, contentType, requestIDOf(msg))
+}
+
+// requestIDOf extracts the JSON-RPC id from a request message (nil for
+// notifications / unknown shapes).
+func requestIDOf(msg interface{}) *ID {
 	switch typed := msg.(type) {
 	case *Request:
-		reqID = typed.ID // Request.ID is already *ID
+		return typed.ID // Request.ID is already *ID
 	case Request:
-		reqID = typed.ID
+		return typed.ID
 	}
-	return parseHTTPResponseForID(body, resp.Header.Get("Content-Type"), reqID)
+	return nil
+}
+
+// tryStreamSSEResponse (#716) handles success-status SSE responses by
+// streaming: it parses events off the live response stream and returns as
+// soon as the reqID-matching Response arrives, instead of draining the body
+// to EOF first. Spec-compliant servers may keep the SSE stream open after
+// the Response event (notification-push gateways) — the old drain-to-EOF
+// blocked every request for the full mcpRequestTimeout on such servers.
+// Notifications received before the Response are routed through
+// processNotification instead of being discarded. handled=false means the
+// response was not a success-status SSE stream and the caller must fall
+// through to the buffered body path.
+func (c *Client) tryStreamSSEResponse(resp *http.Response, msg interface{}) (streamed *Response, handled bool, err error) {
+	contentType := resp.Header.Get("Content-Type")
+	if resp.StatusCode >= 400 || !strings.Contains(strings.ToLower(contentType), "text/event-stream") {
+		return nil, false, nil
+	}
+	if _, isNotif := msg.(Notification); isNotif {
+		// Fire-and-forget: never wait for the server's stream.
+		debug.Log("mcp-http", "response server=%s status=%d content_type=%s (notification, stream not awaited)", c.name, resp.StatusCode, contentType)
+		return &Response{JSONRPC: "2.0"}, true, nil
+	}
+	streamed, serr := c.streamHTTPSSEResponse(resp.Body, requestIDOf(msg))
+	if serr != nil {
+		return nil, true, fmt.Errorf("mcp[%s]: read http body: %w", c.name, serr)
+	}
+	debug.Log("mcp-http", "response server=%s status=%d content_type=%s (streamed, early return on matching Response)", c.name, resp.StatusCode, contentType)
+	return streamed, true, nil
 }
 
 // handleHTTPAuthChallenge processes a 401/403 response when an OAuth handler
@@ -1324,6 +1401,87 @@ func extractAllSSEDataChecked(body []byte) ([][]byte, error) {
 		events = append(events, []byte(strings.Join(dataLines, "\n")))
 	}
 	return events, nil
+}
+
+// streamHTTPSSEResponse (#716) is the streaming counterpart of
+// extractSSEResponseForID: instead of buffering the whole body first
+// (drain-to-EOF), it parses events off the live response stream as they
+// arrive and returns as soon as the Response matching reqID is seen — so
+// spec-compliant servers that keep the SSE stream open after the Response
+// event (notification-push gateways) no longer block every request for the
+// full mcpRequestTimeout. Notification events received along the way are
+// routed through processNotification (handler + queued channel) instead of
+// being discarded. Foreign-id responses in a shared stream are skipped
+// (#597 M1 semantics preserved). reqID == nil accepts the first Response
+// (legacy routing, mirrors extractSSEResponse).
+func (c *Client) streamHTTPSSEResponse(r io.Reader, reqID *ID) (*Response, error) {
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 256*1024), 1024*1024)
+	var dataLines []string
+	var found *Response
+	var lastParseErr error
+	events := 0
+	// flush assembles the pending data: lines into one SSE event payload and
+	// parses it (#597 M1 id matching; #716 notification routing).
+	flush := func() {
+		if len(dataLines) == 0 {
+			return
+		}
+		payload := []byte(strings.Join(dataLines, "\n"))
+		dataLines = nil
+		events++
+		msg, err := ParseMessage(payload)
+		if err != nil {
+			lastParseErr = err
+			return
+		}
+		switch typed := msg.(type) {
+		case *Response:
+			if reqID != nil && !isNullID(typed.ID) && !responseIDMatches(typed.ID, reqID) {
+				debug.Log("mcp-http", "streamHTTPSSEResponse: skipping response with foreign id (concurrent stream)")
+				return
+			}
+			found = typed
+		case *Notification:
+			// #716: server notifications (e.g. tools/list_changed) riding the
+			// POST response stream must reach the handler, not vanish with
+			// the discarded body bytes.
+			c.processNotification(typed)
+		default:
+			debug.Log("mcp-http", "streamHTTPSSEResponse: skipping non-response SSE event %T", msg)
+		}
+	}
+	for scanner.Scan() {
+		line := scanner.Text()
+		switch {
+		case strings.HasPrefix(line, "data:"):
+			dataLines = append(dataLines, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
+		case strings.TrimSpace(line) == "":
+			flush()
+			if found != nil {
+				return found, nil
+			}
+		}
+	}
+	scanErr := scanner.Err()
+	if found == nil {
+		flush() // trailing event not terminated by a blank line
+	}
+	if found != nil {
+		return found, nil
+	}
+	// Error mirrors extractSSEResponseForID so diagnostics stay uniform
+	// (#597 M2: truncation cause outranks the count-based message).
+	if scanErr != nil {
+		return nil, fmt.Errorf("parsing SSE response: scanning SSE events (line exceeds %d bytes?): %w", 1024*1024, scanErr)
+	}
+	if events == 0 {
+		return nil, fmt.Errorf("parsing SSE response: no data event found")
+	}
+	if lastParseErr != nil {
+		return nil, fmt.Errorf("parsing SSE response: no valid JSON-RPC message found: %w", lastParseErr)
+	}
+	return nil, fmt.Errorf("parsing SSE response: no Response found in %d event(s)", events)
 }
 
 // extractNDJSONResponse parses newline-delimited JSON bodies and returns the
