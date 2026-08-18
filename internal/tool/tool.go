@@ -246,7 +246,7 @@ type Cloner interface {
 func (r *Registry) Clone() *Registry {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	newReg := &Registry{tools: make(map[string]Tool, len(r.tools))}
+	newReg := &Registry{tools: make(map[string]Tool, len(r.tools)), codeIndex: r.codeIndex} // #661: codeIndex is shared read-only; keep it so clones don't silently return nil
 	for name, t := range r.tools {
 		if c, ok := t.(Cloner); ok {
 			newReg.tools[name] = c.Clone()

@@ -105,21 +105,21 @@ func newMCPCmd(cfgFile *string) *cobra.Command {
 				return err
 			}
 			if len(cfg.MCPServers) == 0 {
-				_, _ = fmt.Fprint(cmd.OutOrStdout(), "No MCP servers configured in "+cfg.FilePath+"\r\n")
+				_, _ = fmt.Fprint(cmd.OutOrStdout(), "No MCP servers configured in "+cfg.FilePath+"\n")
 				return nil
 			}
 			var out strings.Builder
 			for i, server := range cfg.MCPServers {
 				if i > 0 {
-					out.WriteString("\r\n")
+					out.WriteString("\n")
 				}
 				out.WriteString(server.Name)
 				out.WriteString(" [")
 				out.WriteString(firstNonEmptyTransport(server.Type))
-				out.WriteString("]\r\n")
+				out.WriteString("]\n")
 				out.WriteString("  target: ")
 				out.WriteString(formatMCPServerTarget(server))
-				out.WriteString("\r\n")
+				out.WriteString("\n")
 			}
 			_, _ = fmt.Fprint(cmd.OutOrStdout(), out.String())
 			return nil

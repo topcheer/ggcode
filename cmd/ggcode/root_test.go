@@ -361,10 +361,10 @@ func TestMCPListCommandShowsConfiguredServers(t *testing.T) {
 		t.Fatalf("Execute() error = %v", err)
 	}
 	output := out.String()
-	if !strings.Contains(output, "12306-mcp [stdio]\r\n  target: npx -y 12306-mcp stdio") {
+	if !strings.Contains(output, "12306-mcp [stdio]\n  target: npx -y 12306-mcp stdio") {
 		t.Fatalf("expected stdio MCP entry, got:\n%s", output)
 	}
-	if !strings.Contains(output, "web-reader [http]\r\n  target: https://mcp.example.com/api") {
+	if !strings.Contains(output, "web-reader [http]\n  target: https://mcp.example.com/api") {
 		t.Fatalf("expected http MCP entry, got:\n%s", output)
 	}
 }
@@ -396,7 +396,7 @@ func TestMCPListCommandRepairsMalformedFlagEntry(t *testing.T) {
 	if strings.Contains(output, "config [stdio] --config") {
 		t.Fatalf("expected malformed MCP entry to be hidden, got:\n%s", output)
 	}
-	if !strings.Contains(output, "12306-mcp [stdio]\r\n  target: npx -y 12306-mcp") {
+	if !strings.Contains(output, "12306-mcp [stdio]\n  target: npx -y 12306-mcp") {
 		t.Fatalf("expected valid MCP entry, got:\n%s", output)
 	}
 

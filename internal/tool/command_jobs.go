@@ -415,6 +415,14 @@ func (j *CommandJob) finish(status CommandJobStatus, errText string) {
 	j.ErrText = errText
 	j.EndedAt = time.Now()
 	done := j.done
+	// #659: call cancel before dropping the reference. Auto-background jobs
+	// derive their ctx from context.WithTimeout(context.Background(), ...) in
+	// run_command with no deferred cancel; without this call, every
+	// quick-terminal job leaked the timer/ctx tree until the timeout (up to
+	// 24h) expired. cancel is idempotent.
+	if j.cancel != nil {
+		j.cancel()
+	}
 	j.cancel = nil
 	stdin := j.stdin
 	j.stdin = nil

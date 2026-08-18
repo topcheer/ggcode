@@ -52,6 +52,17 @@ func (t SleepTool) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	if args.Milliseconds < 0 {
 		return Result{IsError: true, Content: "milliseconds must be non-negative"}, nil
 	}
+	// #658: clamp before the seconds→nanoseconds multiplication (same family
+	// as the #513 fix in run_command). time.Duration(x)*time.Second has no
+	// overflow guard — e.g. 9223372037s wraps negative, which would slip past
+	// both the d<=0 fast path (reporting a bogus "Slept for 0s" success) and
+	// the 30-minute cap below. Values above the cap are rejected explicitly.
+	if args.Seconds > 1800 {
+		return Result{IsError: true, Content: fmt.Sprintf("sleep duration %ds exceeds maximum of 30m", args.Seconds)}, nil
+	}
+	if args.Milliseconds > 1800*1000 {
+		return Result{IsError: true, Content: fmt.Sprintf("sleep duration %dms exceeds maximum of 30m", args.Milliseconds)}, nil
+	}
 
 	d := time.Duration(args.Seconds)*time.Second + time.Duration(args.Milliseconds)*time.Millisecond
 	if d <= 0 {
