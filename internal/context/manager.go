@@ -785,6 +785,26 @@ func (m *Manager) ApplyCompactResult(snapshot CompactSnapshot, result CompactRes
 	debug.Log("ctx", "ApplyCompactResult: liveMsgs=%d snapshot.OrigLen=%d snapshot.LastMsgID=%s extraStart=%d result.msgs=%d",
 		len(m.messages), snapshot.OrigLen, snapshot.LastMsgID, extraStart, len(result.Messages))
 
+	// #651: real live-shrunk rejection. The live message list shrank below
+	// the snapshot size only when messages were REMOVED during the compaction
+	// window (/clear, checkpoint rewind, another compaction) — the lossy
+	// summary assumed those messages exist and applying it on top of a
+	// rewound context would resurrect dropped content. The LastMsgID scan
+	// above already signalled this (LastMsgID absent + OrigLen > live);
+	// previously the code only logged and applied anyway, which made the
+	// agent-side liveShrunk refund branch (#612/#633) unreachable outside
+	// mocks. len(extraStart) growth (messages appended) is unaffected.
+	if len(m.messages) < len(snapshot.Messages) {
+		debug.Log("ctx", "ApplyCompactResult: REJECT live-shrunk: liveMsgs=%d < snapshotMsgs=%d (messages removed during compaction window)",
+			len(m.messages), len(snapshot.Messages))
+		// Unlock before returning — this early return sat between Lock() and
+		// the function's tail Unlock() and leaked m.mu forever, deadlocking
+		// every later Manager call (Messages/TokenCount/next compaction).
+		n := m.tokenCountLocked()
+		m.mu.Unlock()
+		return false, n
+	}
+
 	// Detect (but do NOT reject) messages that changed within the snapshot
 	// range.  The compaction summary is a lossy compression of the
 	// conversation — it does not require byte-level accuracy of the source.
@@ -1028,7 +1048,11 @@ func (m *Manager) RecordUsage(usage provider.TokenUsage) {
 			return
 		}
 	}
-	m.calibrator.RecordSample(m.tokens+m.toolDefinitionOverhead, totalInput, asciiChars, cjkChars)
+	// #649: latinExtChars feeds the composition shares so Vietnamese-style
+	// residuals are attributed to their own (fixed-tier) bucket instead of
+	// 100% to asciiRatio. RecordSample itself freezes the adjustment when
+	// latinExt dominates (see token_calibrator.go).
+	m.calibrator.RecordSample(m.tokens+m.toolDefinitionOverhead, totalInput, asciiChars, cjkChars, latinExtChars)
 	debug.Log("ctx", "RecordUsage: input=%d cache_read=%d output=%d old_baseline=%d→new_baseline=%d estimated=%d delta=%d",
 		usage.InputTokens, usage.CacheRead, usage.OutputTokens, oldBaseline, m.baselineTokens, m.tokens, m.baselineTokens-m.tokens)
 }

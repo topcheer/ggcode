@@ -482,8 +482,8 @@ func TestContextManager_ApplyCompactResult_StaleSnapshot_Rejected(t *testing.T) 
 	}
 
 	applied, _ := cm.ApplyCompactResult(snapshot, result)
-	if !applied {
-		t.Fatal("expected stale snapshot to be applied (lossy summary is acceptable with LastMsgID)")
+	if applied {
+		t.Fatal("expected stale snapshot to be REJECTED (#651): live shrank below snapshot size after Clear — applying the lossy summary would resurrect dropped content")
 	}
 }
 
@@ -684,8 +684,12 @@ func TestContextManager_ApplyCompactResult_LiveShorterThanSnapshot_Rejected(t *t
 	}
 
 	applied, _ := cm.ApplyCompactResult(snapshot, result)
-	if !applied {
-		t.Fatal("expected snapshot to be applied even when live has fewer messages (LastMsgID fallback)")
+	if applied {
+		t.Fatal("expected snapshot to be REJECTED when live has fewer messages than the snapshot (#651 live-shrunk): messages were removed during the compaction window")
+	}
+	// Rejected apply must not mutate the live context.
+	if len(cm.Messages()) == 0 {
+		t.Fatal("rejected apply must leave live messages intact")
 	}
 }
 

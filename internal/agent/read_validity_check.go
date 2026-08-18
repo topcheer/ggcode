@@ -138,7 +138,7 @@ func lookupReadHash(t *readHashTracker, path string) (uint64, bool) {
 }
 
 // recordReadHash computes and stores a content hash for a file at read time.
-// Files larger than maxHashBytes are partially hashed (first 16KB).
+// Files larger than maxHashBytes are partially hashed (first 1MB window).
 // Errors are silent -- this is an optimization layer, not a hard gate.
 func (t *readHashTracker) recordReadHash(path string) {
 	if path == "" {
@@ -159,11 +159,30 @@ func (t *readHashTracker) recordWriteHash(path string) {
 	}
 	n := readValidityKey(path)
 	delete(t.hashes, n)
-	// Also drop the opposite-form key (abs vs rel mixture, #557) — but only
-	// when the suffix match is unambiguous (#627): sibling files sharing a
-	// basename must not have their hashes evicted by a relative-form write.
-	if key, ok := resolveReadHashKey(t, path); ok {
-		delete(t.hashes, key)
+	// Also drop every key that canonicalizes to the SAME file as the written
+	// path (absolute-vs-relative form mixtures, #557), while keys belonging to
+	// same-basename sibling files survive (#627). #650: the previous code
+	// evicted via resolveReadHashKey's unique-suffix resolution only — when a
+	// sibling made the suffix scan ambiguous, the SAME file's other-form key
+	// was left behind, and the next edit in that form hit a stale hash against
+	// post-write content, mis-reporting "content changed" on the agent's own
+	// edit. Canonicalization makes the target set exact: a key is the same
+	// file iff its clean form is the written path itself or a path-suffix of
+	// it (the relative-form key "a.go" is a suffix of "/repo/a.go"). #627: a
+	// BARE-basename write ("config.go" with x/config.go and y/config.go both
+	// tracked) matches several siblings — that is ambiguity, not identity;
+	// evicting would drop a sibling's hash, so evict none (conservative).
+	matched := make([]string, 0, 2)
+	for key := range t.hashes {
+		if key == n {
+			continue // already deleted above
+		}
+		if strings.HasSuffix(n, "/"+key) || strings.HasSuffix(key, "/"+n) {
+			matched = append(matched, key)
+		}
+	}
+	if len(matched) == 1 {
+		delete(t.hashes, matched[0])
 	}
 	delete(t.warned, n)
 	if wk, ok := resolveWarnedKey(t, path); ok {
@@ -243,9 +262,19 @@ func hashFilePrefix(path string) uint64 {
 	}
 	defer f.Close()
 
+	// #650: size the read buffer to the file — a 4KB source file must not pay
+	// a 1MB allocation+read on every read_file and every edit-side re-hash.
+	// Only files actually larger than maxHashBytes get the full window.
+	size := maxHashBytes
+	if fi, err := f.Stat(); err == nil && fi.Size() < int64(size) {
+		size = int(fi.Size())
+	}
+	if size <= 0 {
+		return 0 // empty file: no hash
+	}
 	// Read the full window in a loop: a single Read may return short for
 	// large buffers even on regular files (#627 — window is now 1MB).
-	buf := make([]byte, maxHashBytes)
+	buf := make([]byte, size)
 	n, err := io.ReadFull(f, buf)
 	if err != nil && n == 0 {
 		return 0 // Empty or unreadable; treat as no-hash.

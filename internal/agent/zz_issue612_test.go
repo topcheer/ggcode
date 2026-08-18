@@ -45,6 +45,7 @@ func TestIssue612_DiscardRefundsCooldownWhenOverThreshold(t *testing.T) {
 	a.precompactCooldownUntil = future
 	pc := &precompactState{
 		done:     make(chan struct{}),
+		startTok: 500, // #651: the refund gate reads tokens at SCHEDULE time
 		snapshot: ctxpkg.CompactSnapshot{OrigLen: 3, Messages: make([]provider.Message, 3)},
 		result:   ctxpkg.CompactResult{Changed: true, Messages: []provider.Message{{Role: "system"}}}, // successful summary, apply rejected (live shrunk)
 	}

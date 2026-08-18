@@ -274,12 +274,19 @@ func (a *Agent) consumeReadyPreCompact(onEvent func(provider.StreamEvent)) bool 
 			// their cooldown made maybeAutoCompact reschedule a full-context
 			// LLM summarization every single turn (back-to-back, no backoff)
 			// that failed the same way each time. Those keep the cooldown.
+			// #651: the threshold gate must use the token count observed when
+			// the compaction was SCHEDULED (pc.startTok), not the post-shrink
+			// live count. liveShrunk means messages were REMOVED during the
+			// window, so the live context is now far BELOW the threshold —
+			// gating on TokenCount() made the refund unreachable in
+			// production (mock-only) even though discard-by-shrink is exactly
+			// the case the refund exists for.
 			if liveShrunk {
-				if threshold := a.contextManager.AutoCompactThreshold(); threshold > 0 && a.contextManager.TokenCount() >= threshold {
+				if threshold := a.contextManager.AutoCompactThreshold(); threshold > 0 && pc.startTok >= threshold {
 					a.mu.Lock()
 					a.precompactCooldownUntil = time.Time{}
 					a.mu.Unlock()
-					debug.Log("precompact", "RESULT DISCARDED but tokens still over threshold; cooldown refunded for immediate re-schedule")
+					debug.Log("precompact", "RESULT DISCARDED (live shrunk) but scheduled tokens %d still over threshold %d; cooldown refunded for immediate re-schedule", pc.startTok, threshold)
 				}
 			}
 			// Remove the compaction marker — compaction failed, marker is stale.
