@@ -839,6 +839,7 @@ func (m *Manager) ApplyCompactResult(snapshot CompactSnapshot, result CompactRes
 	// Everything after that message is "extra" (arrived during compaction)
 	// and must be preserved. Everything before gets replaced by the summary.
 	extraStart := 0
+	anchorMissing := false
 	if snapshot.LastMsgID != "" {
 		// Scan for the last snapshot message by ID.
 		foundIdx := -1
@@ -850,13 +851,17 @@ func (m *Manager) ApplyCompactResult(snapshot CompactSnapshot, result CompactRes
 		if foundIdx >= 0 {
 			extraStart = foundIdx + 1
 		} else {
-			// LastMsgID not found — messages were removed during compaction.
-			// Use OrigLen as fallback (best effort).
-			if snapshot.OrigLen >= 0 && snapshot.OrigLen <= len(m.messages) {
-				extraStart = snapshot.OrigLen
-			} else {
-				extraStart = len(m.messages)
-			}
+			// #718: LastMsgID not found — messages were removed during the
+			// compaction window (rewind/clear/another compaction). The old
+			// OrigLen fallback silently replaced every live message at index
+			// >= OrigLen whenever removals were balanced by appends (equal
+			// length passes the shrink guard below), so messages that arrived
+			// during the window were swallowed by the lossy summary. The
+			// anchor ID is the ONLY reliable way to tell snapshot messages
+			// apart from window arrivals; when it is gone, refuse to apply.
+			// Both old fallbacks (OrigLen / len(messages)) fed the same
+			// silent-loss path, so they are removed entirely.
+			anchorMissing = true
 		}
 	} else {
 		// No LastMsgID (old snapshot) — fall back to OrigLen.
@@ -869,8 +874,33 @@ func (m *Manager) ApplyCompactResult(snapshot CompactSnapshot, result CompactRes
 	if extraStart > len(m.messages) {
 		extraStart = len(m.messages)
 	}
-	debug.Log("ctx", "ApplyCompactResult: liveMsgs=%d snapshot.OrigLen=%d snapshot.LastMsgID=%s extraStart=%d result.msgs=%d",
-		len(m.messages), snapshot.OrigLen, snapshot.LastMsgID, extraStart, len(result.Messages))
+	debug.Log("ctx", "ApplyCompactResult: liveMsgs=%d snapshot.OrigLen=%d snapshot.LastMsgID=%s extraStart=%d result.msgs=%d anchorMissing=%t",
+		len(m.messages), snapshot.OrigLen, snapshot.LastMsgID, extraStart, len(result.Messages), anchorMissing)
+
+	if anchorMissing {
+		// #718: refusing to apply is mandatory (we cannot tell snapshot
+		// messages from window arrivals), but the CLASSIFICATION must reuse
+		// the #663 classifier so the agent-side cooldown semantics stay
+		// intact: benignRemoval (orphan cleanup, retry truncation) keeps the
+		// cooldown (BenignTrim) — the live context is still essentially the
+		// one that warranted compaction; userReset (Clear/rewind/another
+		// compaction) refunds it (UserReset); unknown defaults to UserReset,
+		// the pre-#663 safe direction. Orphan cleanup can remove the anchor
+		// message itself (zz_issue702_test.go), which is why this branch —
+		// not just the length guard — needs the classifier.
+		if m.userReset {
+			m.lastReject = CompactRejectUserReset
+		} else if m.benignRemoval {
+			m.lastReject = CompactRejectBenignTrim
+		} else {
+			m.lastReject = CompactRejectUserReset
+		}
+		debug.Log("ctx", "ApplyCompactResult: REJECT anchor-missing (%s): LastMsgID %q not in live msgs (liveMsgs=%d, snapshotMsgs=%d) — removed during compaction window; refusing to apply",
+			m.lastReject, snapshot.LastMsgID, len(m.messages), len(snapshot.Messages))
+		n := m.tokenCountLocked()
+		m.mu.Unlock()
+		return false, n
+	}
 
 	// #651: real live-shrunk rejection. The live message list shrank below
 	// the snapshot size only when messages were REMOVED during the compaction
@@ -1494,49 +1524,10 @@ const toolUseInputClearMinLen = 200
 // and the model has produced its response/tool calls.
 const reasoningCompactMinLen = 200
 
-// EstimateClearableTokens performs a read-only scan to estimate how many
-// characters would be freed by ClearOldToolResults(keepN) WITHOUT actually
-// mutating any content. This enables cache-break-aware decisions: only clear
-// when the token savings justify the prompt cache prefix disruption.
-//
-// TokenPilot (arXiv:2606.17016, June 2026) found that in-place context
-// mutations break the cached prefix for all content after the first mutated
-// position. If savings are trivial (< 3% of context), the cache miss penalty
-// exceeds the token savings — clearing is net-negative.
-func (m *Manager) EstimateClearableTokens(keepN int) int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	var targets int
-	for _, msg := range m.messages {
-		for _, b := range msg.Content {
-			if b.Type != "tool_result" {
-				continue
-			}
-			if b.IsError {
-				continue
-			}
-			if len(b.Output) < toolResultClearMinLen {
-				continue
-			}
-			if strings.HasPrefix(b.Output, "[cleared:") {
-				continue
-			}
-			if hasSemanticImportance(b.Output) {
-				continue
-			}
-			targets++
-		}
-	}
-	if targets <= keepN {
-		return 0
-	}
-	toClear := targets - keepN
-	// Conservative estimate: average clearable result is ~2x the minimum
-	// threshold (toolResultClearMinLen = 500 chars). Placeholder is ~80 chars.
-	// So each clear saves ~920 chars ≈ 230 tokens.
-	return toClear * 920
-}
+// EstimateClearableTokens was removed (#718): it returned ~920*count CHARS
+// while its name/doc promised TOKENS (a 4x overestimate that would have made
+// any cache-break-vs-savings gate decide in the wrong direction), and it had
+// zero callers repo-wide. ClearOldToolResults below is the live mechanism.
 
 // ClearOldToolResults replaces large tool_result outputs from older messages
 // with short placeholders, keeping the most recent `keepN` tool results intact.
@@ -1829,11 +1820,30 @@ func shortPath(path string) string {
 }
 
 // truncStr truncates a string to maxLen, appending "..." if truncated.
+// Rune-safe (#718): byte-boundary slicing split multi-byte UTF-8 sequences
+// (CJK, emoji), and json.Marshal then emitted U+FFFD for the dangling
+// partial rune.
 func truncStr(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
 	}
-	return s[:maxLen-3] + "..."
+	return headRunesPlain(s, maxLen-3) + "..."
+}
+
+// headRunesPlain returns the longest prefix of s that is at most maxBytes
+// long AND ends on a rune boundary. Unlike headRunes it appends no marker.
+func headRunesPlain(s string, maxBytes int) string {
+	if maxBytes <= 0 {
+		return ""
+	}
+	if len(s) <= maxBytes {
+		return s
+	}
+	cut := maxBytes
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut]
 }
 
 // ClearOldToolUseInputs truncates the Input (arguments) of tool_use blocks
@@ -2030,21 +2040,29 @@ func (m *Manager) CompactSupersededReads() int {
 	// Track:
 	//   file path → ordered list of ToolIDs that read it
 	//   ToolID → set of (normalized) paths it read (for multi-file reads)
+	// For read_file, also record the line range [offset, offset+limit) so
+	// #718 range-aware supersession can distinguish a head segment from a
+	// tail segment of the same file. multi_file_read has no offset
+	// parameter, so its calls keep a whole-file range.
 	pathToToolIDs := make(map[string][]string)
 	toolIDToPaths := make(map[string]map[string]bool)
+	toolIDToRange := make(map[string]readRange) // read_file only: which slice of the file
 	for _, msg := range m.messages {
 		for _, b := range msg.Content {
 			if b.Type != "tool_use" {
 				continue
 			}
-			paths := extractReadPaths(b.ToolName, b.Input)
-			for _, p := range paths {
+			read := extractReadCall(b.ToolName, b.Input)
+			for _, p := range read.paths {
 				norm := normalizeFilePath(p)
 				pathToToolIDs[norm] = append(pathToToolIDs[norm], b.ToolID)
 				if toolIDToPaths[b.ToolID] == nil {
 					toolIDToPaths[b.ToolID] = make(map[string]bool)
 				}
 				toolIDToPaths[b.ToolID][norm] = true
+			}
+			if len(read.paths) > 0 {
+				toolIDToRange[b.ToolID] = read.rng
 			}
 		}
 	}
@@ -2055,10 +2073,30 @@ func (m *Manager) CompactSupersededReads() int {
 	// have been re-read later — otherwise we lose content for files that
 	// were NOT re-read. For single read_file calls (one path), the
 	// current behavior is correct: the single file was re-read.
+	//
+	// #718: "re-read later" must additionally mean the later read COVERS
+	// the earlier one. read_file encourages paging large files with
+	// offset/limit; an offset=1 head read and an offset=5000 tail read
+	// share no content, so keying supersession on path alone replaced the
+	// head read's output with a placeholder and the model "forgot" the
+	// top of the file. Coverage rule: a full read (no offset param)
+	// supersedes every earlier read of the path; a partial read supersedes
+	// only earlier reads whose recorded range it covers.
 	partiallySuperseded := make(map[string]bool) // toolIDs with ≥1 file superseded
 	for _, ids := range pathToToolIDs {
-		if len(ids) > 1 {
-			for _, id := range ids[:len(ids)-1] {
+		if len(ids) < 2 {
+			continue
+		}
+		for i, id := range ids[:len(ids)-1] {
+			// superseded iff SOME later read of this path covers id's range
+			covered := false
+			for _, laterID := range ids[i+1:] {
+				if readCovers(toolIDToRange[laterID], toolIDToRange[id]) {
+					covered = true
+					break
+				}
+			}
+			if covered {
 				partiallySuperseded[id] = true
 			}
 		}
@@ -2125,19 +2163,68 @@ func (m *Manager) CompactSupersededReads() int {
 	return freed
 }
 
-// extractReadPaths extracts file paths from the Input JSON of read tools.
-// Supports read_file ({"path": "..."}) and multi_file_read ({"files": [{"path": "..."}]}).
-func extractReadPaths(toolName string, input json.RawMessage) []string {
+// readRange describes which slice of a file a read_file call covered.
+// full=true means the whole file was requested (no offset parameter).
+type readRange struct {
+	offset int64
+	limit  int64
+	full   bool
+}
+
+// readCovers reports whether the later read's range covers the earlier
+// read's range, i.e. every part the earlier read returned is also contained
+// in the later read's window. read_file's offset/limit are 1-based line
+// numbers; only their numeric order matters for coverage. A zero
+// (full=false, offset=0, limit=0) earlier range — pre-#718 tool results
+// whose recorded args are unknown — is treated as coverable by anything,
+// preserving the pre-#718 whole-file semantics for those.
+func readCovers(later, earlier readRange) bool {
+	if later.full {
+		return true // whole-file read covers everything
+	}
+	if earlier.full {
+		return false // a partial read cannot cover a full read
+	}
+	if earlier == (readRange{}) {
+		return true // unknown earlier range: keep pre-#718 behavior
+	}
+	if earlier.limit <= 0 {
+		// Earlier read had offset but no limit → offset..EOF.
+		return later.offset <= earlier.offset && later.limit <= 0
+	}
+	if later.limit <= 0 {
+		// Later read: offset..EOF. Covers earlier iff it starts at or before it.
+		return later.offset <= earlier.offset
+	}
+	return later.offset <= earlier.offset && later.offset+later.limit >= earlier.offset+earlier.limit
+}
+
+// readCall is the parsed form of a read tool's input: the paths it touched
+// plus (for read_file) the line range it covered.
+type readCall struct {
+	paths []string
+	rng   readRange // meaningful only for read_file (single path)
+}
+
+// extractReadCall parses a read tool's Input JSON into paths plus the
+// range read for read_file (#718). multi_file_read keeps a full range — it
+// has no offset parameter, whole files are always returned.
+func extractReadCall(toolName string, input json.RawMessage) readCall {
 	if len(input) == 0 {
-		return nil
+		return readCall{}
 	}
 	switch toolName {
 	case "read_file":
 		var args struct {
-			Path string `json:"path"`
+			Path   string `json:"path"`
+			Offset int64  `json:"offset"`
+			Limit  int64  `json:"limit"`
 		}
 		if json.Unmarshal(input, &args) == nil && args.Path != "" {
-			return []string{args.Path}
+			return readCall{
+				paths: []string{args.Path},
+				rng:   readRange{offset: args.Offset, limit: args.Limit, full: args.Offset == 0},
+			}
 		}
 	case "multi_file_read":
 		var args struct {
@@ -2152,10 +2239,16 @@ func extractReadPaths(toolName string, input json.RawMessage) []string {
 					paths = append(paths, f.Path)
 				}
 			}
-			return paths
+			return readCall{paths: paths, rng: readRange{full: true}}
 		}
 	}
-	return nil
+	return readCall{}
+}
+
+// extractReadPaths extracts file paths from the Input JSON of read tools.
+// Supports read_file ({"path": "..."}) and multi_file_read ("files": [{"path": "..."}]}).
+func extractReadPaths(toolName string, input json.RawMessage) []string {
+	return extractReadCall(toolName, input).paths
 }
 
 // normalizeFilePath normalizes a file path for comparison purposes.
@@ -2652,7 +2745,9 @@ func buildSummaryPayload(msgs []provider.Message) string {
 			case "tool_result":
 				output := block.Output
 				if len(output) > payloadToolResultMaxLen {
-					output = output[:payloadToolResultHead] + fmt.Sprintf("\n... (truncated, original %d chars)", len(output))
+					// #718: rune-safe head — a byte cut split multi-byte runes
+					// and json.Marshal emitted U+FFFD for the partial rune.
+					output = headRunesPlain(output, payloadToolResultHead) + fmt.Sprintf("\n... (truncated, original %d chars)", len(output))
 				}
 				sb.WriteString(fmt.Sprintf("Tool result: %s\n", output))
 				if n := len(block.Images); n > 0 {
@@ -2703,7 +2798,7 @@ func extractUserRequests(msgs []provider.Message, maxLen int) []string {
 			// Skip tool result echoes (some providers put tool_result content
 			// in user messages with only tool_result blocks, but we check text)
 			if len(text) > maxLen {
-				text = text[:maxLen] + "..."
+				text = headRunesPlain(text, maxLen-3) + "..."
 			}
 			requests = append(requests, text)
 		}
@@ -2796,7 +2891,7 @@ func formatToolInputForSummary(input []byte, maxLen int) string {
 	}
 	result := strings.Join(parts, ", ")
 	if len(result) > maxLen {
-		result = result[:maxLen-3] + "..."
+		result = headRunesPlain(result, maxLen-3) + "..."
 	}
 	return result
 }
