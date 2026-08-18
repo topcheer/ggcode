@@ -1067,7 +1067,16 @@ func TestLoadWithInstance_LegacyA2A(t *testing.T) {
 
 func TestWriteFileAtomic_BadPath(t *testing.T) {
 	withTestHome(t)
-	err := writeFileAtomic("/nonexistent/dir/file.yaml", []byte("test"), 0644)
+	// Use an existing FILE as a parent directory component: every platform
+	// fails with ENOTDIR and nothing is created on disk. A literal
+	// "/nonexistent/dir/..." path only errors on systems where the root is
+	// unwritable — on Windows C:\ is writable, so writeSecureConfigFile's
+	// MkdirAll actually creates the tree and pollutes the machine.
+	f := filepath.Join(t.TempDir(), "afile")
+	if err := os.WriteFile(f, []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	err := writeFileAtomic(filepath.Join(f, "sub", "file.yaml"), []byte("test"), 0644)
 	if err == nil {
 		t.Error("writeFileAtomic should fail for nonexistent directory")
 	}

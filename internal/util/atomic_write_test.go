@@ -67,7 +67,17 @@ func TestAtomicWriteFile_Overwrite(t *testing.T) {
 }
 
 func TestAtomicWriteFile_BadDir(t *testing.T) {
-	err := AtomicWriteFile("/nonexistent/dir/file.txt", []byte("data"), 0644)
+	// The path uses an EXISTING FILE as a parent directory component: every
+	// platform fails this with ENOTDIR (or the Windows equivalent) and nothing
+	// is created on disk. A literal "/nonexistent/dir/..." path is wrong on
+	// Windows — the C:\ root is writable, so MkdirAll-style parents would
+	// actually create the tree (polluting the machine and making this test
+	// fail only depending on what ran before).
+	f := filepath.Join(t.TempDir(), "afile")
+	if err := os.WriteFile(f, []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	err := AtomicWriteFile(filepath.Join(f, "sub", "file.txt"), []byte("data"), 0644)
 	if err == nil {
 		t.Fatal("expected error for nonexistent directory")
 	}
