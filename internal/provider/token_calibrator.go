@@ -24,6 +24,21 @@ const (
 	// ratioClampMin/Max prevent extreme ratios from destabilizing estimates.
 	ratioClampMin = 0.3
 	ratioClampMax = 3.0
+
+	// calibrateFailureBackoff is the base backoff after a failed calibration
+	// attempt (#708). Doubles per consecutive failure, capped at
+	// calibrateFailureBackoffMax. During the backoff window CountTokens uses
+	// the local estimate without touching the remote endpoint — a persistently
+	// 429/5xx count_tokens API no longer turns every call into a synchronous
+	// 2s-blocked remote attempt competing for the same rate-limit quota.
+	calibrateFailureBackoff = 5 * time.Second
+
+	// calibrateFailureBackoffMax caps the exponential backoff.
+	calibrateFailureBackoffMax = 60 * time.Second
+
+	// calibrateMaxConsecutiveFailures disables remote calibration after this
+	// many consecutive failed attempts (a fresh success resets the count).
+	calibrateMaxConsecutiveFailures = 5
 )
 
 // tokenCountCalibrator provides periodic real-API calibration for token
@@ -43,6 +58,8 @@ type tokenCountCalibrator struct {
 	ratio         float64   // correction factor: realTokens / estimatedTokens
 	lastCalibrate time.Time // last successful calibration time
 	callCount     int       // calls since last calibration trigger
+	lastFailure   time.Time // last failed calibration attempt (#708)
+	failCount     int       // consecutive failed calibration attempts (#708)
 }
 
 // newTokenCountCalibrator creates a calibrator with default settings.
@@ -58,6 +75,19 @@ func newTokenCountCalibrator() *tokenCountCalibrator {
 func (c *tokenCountCalibrator) shouldCalibrate() bool {
 	if !c.enabled {
 		return false
+	}
+	// Failure backoff (#708): after a failed attempt, suppress any new
+	// calibration attempt (synchronous or async) until the exponential
+	// backoff elapses. Callers fall back to the local ratio-adjusted
+	// estimate without hitting the remote endpoint.
+	if !c.lastFailure.IsZero() {
+		backoff := calibrateFailureBackoff << uint(c.failCount-1)
+		if backoff > calibrateFailureBackoffMax || backoff <= 0 {
+			backoff = calibrateFailureBackoffMax
+		}
+		if time.Since(c.lastFailure) < backoff {
+			return false
+		}
 	}
 	c.callCount++
 	if c.lastCalibrate.IsZero() {
@@ -99,9 +129,36 @@ func (c *tokenCountCalibrator) applyResult(estimated, realTokens int) {
 
 	c.lastCalibrate = time.Now()
 	c.callCount = 0
+	c.lastFailure = time.Time{}
+	c.failCount = 0
 
 	debug.Log("provider-calibrator", "ratio updated: estimated=%d real=%d observed=%.3f newRatio=%.3f",
 		estimated, realTokens, observedRatio, c.ratio)
+}
+
+// recordFailure records a failed calibration attempt (429/5xx/network) and
+// starts (or extends) the exponential backoff window (#708). After
+// calibrateMaxConsecutiveFailures consecutive failures the calibrator is
+// disabled permanently — the local estimate is used from then on.
+func (c *tokenCountCalibrator) recordFailure() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.enabled {
+		return
+	}
+	c.failCount++
+	c.lastFailure = time.Now()
+	if c.failCount >= calibrateMaxConsecutiveFailures {
+		c.enabled = false
+		c.ratio = 1.0
+		debug.Log("provider-calibrator", "remote counting disabled after %d consecutive calibration failures", c.failCount)
+		return
+	}
+	backoff := calibrateFailureBackoff << uint(c.failCount-1)
+	if backoff > calibrateFailureBackoffMax || backoff <= 0 {
+		backoff = calibrateFailureBackoffMax
+	}
+	debug.Log("provider-calibrator", "calibration failed (%d consecutive), backing off %s", c.failCount, backoff)
 }
 
 // disable permanently turns off remote calibration (e.g., endpoint returns 404).

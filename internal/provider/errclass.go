@@ -127,6 +127,22 @@ var nonAnthropicQuotaCodes = []string{
 	"quota exceeded",
 }
 
+// chineseQuotaMarkers are strong Chinese quota-exhaustion keywords (#708
+// folded LOW): a non-Anthropic vendor emitting an Anthropic-style message
+// with "limit will reset" plus Chinese quota wording is a permanent quota
+// failure, not a recoverable window limit — veto the Anthropic exclusion
+// when any of these appear.
+var chineseQuotaMarkers = []string{
+	"使用上限",
+	"配额超限",
+	"配额耗尽",
+	"额度已用完",
+	"额度耗尽",
+	"余额不足",
+	"套餐已到期",
+	"欠费",
+}
+
 // isAnthropicWindowLimit reports whether the (lowercased) message carries
 // a marker of an auto-resetting Anthropic usage window. #602(R4): only for
 // error surfaces that do not carry a non-Anthropic quota error code — the
@@ -134,6 +150,11 @@ var nonAnthropicQuotaCodes = []string{
 // OpenAI-style billing cycles that merely mention a reset time.
 func isAnthropicWindowLimit(s string) bool {
 	if containsAny(s, nonAnthropicQuotaCodes) {
+		return false
+	}
+	// #708 folded hardening: veto on strong Chinese quota wording — the
+	// English-code whitelist above only knows OpenAI/Kimi/Volcengine codes.
+	if containsAny(s, chineseQuotaMarkers) {
 		return false
 	}
 	return containsAny(s, anthropicWindowLimitMarkers)

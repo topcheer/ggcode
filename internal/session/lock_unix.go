@@ -70,14 +70,19 @@ func TryAcquireSessionLock(storeDir, sessionID string) (*SessionLock, error) {
 		}
 	}
 
-	// #430: retries exhausted — the last reopen+relock above may still hold
+	// #430/#709: retries exhausted — the last reopen+relock above may still hold
 	// a racy inode. Perform one final SameFile check and FAIL CLOSED (return
-	// an error) instead of silently falling through as a dual holder.
-	if fi, serr := f.Stat(); serr == nil {
-		if pathFi, perr := os.Stat(lockPath); perr != nil || !os.SameFile(fi, pathFi) {
-			f.Close()
-			return nil, fmt.Errorf("session lock %s: unlink race persisted after retries", lockPath)
-		}
+	// an error) instead of silently falling through as a dual holder. A stat
+	// error here is also fail-closed: we cannot prove the path still resolves
+	// to our inode, so we must not acquire.
+	fi, serr := f.Stat()
+	if serr != nil {
+		f.Close()
+		return nil, fmt.Errorf("session lock %s: final stat failed: %w", lockPath, serr)
+	}
+	if pathFi, perr := os.Stat(lockPath); perr != nil || !os.SameFile(fi, pathFi) {
+		f.Close()
+		return nil, fmt.Errorf("session lock %s: unlink race persisted after retries", lockPath)
 	}
 
 	// Write our PID.

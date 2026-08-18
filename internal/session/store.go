@@ -460,7 +460,10 @@ func findMessageCutoff(path string) (int64, int, time.Time) {
 	lo, hi := 0, totalMsgs
 	for lo < hi {
 		mid := (lo + hi) / 2
-		if offsets[mid].ts.Before(cutoff) {
+		// #709: treat zero timestamps conservatively — a malformed/legacy
+		// record mid-file must not be treated as "before cutoff" and push the
+		// cutoff past newer messages. Zero-ts records land inside the window.
+		if !offsets[mid].ts.IsZero() && offsets[mid].ts.Before(cutoff) {
 			lo = mid + 1
 		} else {
 			hi = mid
@@ -1535,9 +1538,12 @@ func (s *JSONLStore) pruneInvalidIndexEntries(idx []indexEntry) ([]indexEntry, b
 		ses, loadErr := s.loadSessionFull(e.ID)
 		if loadErr != nil {
 			// Transient I/O errors (network filesystem, permission, lock) must
-			// NOT cause permanent file deletion. Skip the index entry but keep
-			// the file on disk so it can be loaded on a subsequent attempt.
-			debug.Log("session", "pruneInvalidIndexEntries: skipping %s due to load error: %v", e.ID, loadErr)
+			// NOT cause permanent file deletion. Keep the entry in the index so
+			// the session does not flicker out of List() until the next repair
+			// pass — only a confirmed no-user-interaction session is pruned
+			// (#709 hardening).
+			debug.Log("session", "pruneInvalidIndexEntries: keeping %s despite load error: %v", e.ID, loadErr)
+			validIdx = append(validIdx, e)
 			continue
 		}
 		if !ses.HasUserInteraction() {
@@ -1581,7 +1587,10 @@ func (s *JSONLStore) RepairIndex() (bool, error) {
 func (s *JSONLStore) repairIndex(idx []indexEntry) (bool, error) {
 	unlock, lockErr := lockIndexFile(s.indexPath())
 	if lockErr != nil {
-		debug.Log("session", "repairIndex: failed to acquire index lock: %v", lockErr)
+		// #709 hardening: match updateIndex's discipline — never write the
+		// index unguarded. A fixed .tmp path written without the flock can
+		// interleave with another process's save and corrupt the index.
+		return false, fmt.Errorf("repairIndex: failed to acquire index lock: %w", lockErr)
 	}
 	defer func() {
 		if unlock != nil {

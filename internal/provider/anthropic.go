@@ -537,7 +537,10 @@ func (p *AnthropicProvider) CountTokens(ctx context.Context, messages []Message)
 		realTokens, err := p.remoteCountTokens(calCtx, messages)
 		if err != nil {
 			debug.Log("provider-calibrator", "first calibration failed: %v", err)
-			p.calibrator.disable()
+			// Transient failures (429/5xx/network) back off instead of retrying
+			// a synchronous remote attempt on every call (#708); permanent
+			// 404/403 errors disable inside remoteCountTokens.
+			p.calibrator.recordFailure()
 			return estimated, nil
 		}
 		p.calibrator.applyResult(estimated, realTokens)
@@ -554,7 +557,8 @@ func (p *AnthropicProvider) CountTokens(ctx context.Context, messages []Message)
 		realTokens, err := p.remoteCountTokens(calCtx, messages)
 		if err != nil {
 			debug.Log("provider-calibrator", "async calibration failed: %v", err)
-			return // transient errors don't disable
+			p.calibrator.recordFailure() // transient errors back off, don't disable (#708)
+			return
 		}
 		p.calibrator.applyResult(estimated, realTokens)
 		debug.Log("provider-calibrator", "async calibration OK: estimated=%d real=%d ratio=%.3f", estimated, realTokens, p.calibrator.currentRatio())
