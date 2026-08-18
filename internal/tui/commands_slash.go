@@ -159,10 +159,21 @@ func (m *Model) switchToSession(ses *session.Session, isNew bool) {
 	}
 
 	// Restore session-scoped state.
+	// Cancel any pending approval/questionnaire state from the old session so a
+	// stale approval dialog or tunnel answer cannot leak across the switch
+	// (issue #688 LOW).
+	m.clearPendingApprovals()
 	if isNew {
 		// New session inherits global default permission mode.
 		if m.config != nil {
 			globalMode := permission.ParsePermissionMode(m.config.DefaultMode)
+			// Keep the policy layer in sync with the displayed mode: without
+			// this, a session A autopilot/bypass mode silently survives into the
+			// new session and auto-allows dangerous tools while the status bar
+			// shows the global default (issue #688 HIGH).
+			if cp, ok := m.policy.(*permission.ConfigPolicy); ok {
+				cp.SetMode(globalMode)
+			}
 			m.mode = globalMode
 		}
 	} else {
@@ -230,6 +241,38 @@ func (m *Model) resetConversationView() {
 	m.runFailed = false
 	m.spinner.Stop()
 	m.chatListScrollToBottom()
+}
+
+// clearPendingApprovals cancels any pending approval/confirm/questionnaire
+// state. It is called on session switches and permission-mode changes so an
+// old session's (or old mode's) approval request cannot leak into a new one
+// (issue #688 LOW). Blocked waiters are released with a non-blocking Deny/false
+// send; if the receiver is already gone the send is dropped.
+func (m *Model) clearPendingApprovals() {
+	if pa := m.pendingApproval; pa != nil {
+		m.pendingApproval = nil
+		if pa.Response != nil {
+			safego.Go("tui.clearPendingApprovals.deny", func() {
+				select {
+				case pa.Response <- permission.Deny:
+				default:
+				}
+			})
+		}
+	}
+	if pd := m.pendingDiffConfirm; pd != nil {
+		m.pendingDiffConfirm = nil
+		if pd.Response != nil {
+			safego.Go("tui.clearPendingApprovals.diffDeny", func() {
+				select {
+				case pd.Response <- false:
+				default:
+				}
+			})
+		}
+	}
+	m.tunnelPendingApprovalID = ""
+	m.pendingQuestionnaire = nil
 }
 
 func (m *Model) handleApproval(d permission.Decision) tea.Cmd {

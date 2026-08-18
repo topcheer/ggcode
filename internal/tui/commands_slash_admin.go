@@ -29,6 +29,9 @@ func (m Model) handleModeSwitch() (tea.Model, tea.Cmd) {
 	if cp, ok := m.policy.(*permission.ConfigPolicy); ok {
 		cp.SetMode(m.mode)
 	}
+	// A pending approval request belongs to the old mode's permission context;
+	// drop it so it cannot be answered under the new mode (issue #688 LOW).
+	m.clearPendingApprovals()
 	m.persistModePreference()
 	return m, nil
 }
@@ -42,6 +45,8 @@ func (m *Model) handleModeCommand(parts []string) tea.Cmd {
 		if cp, ok := m.policy.(*permission.ConfigPolicy); ok {
 			cp.SetMode(newMode)
 		}
+		// Drop any pending approval from the old mode's context (issue #688 LOW).
+		m.clearPendingApprovals()
 		m.persistModePreference()
 	} else {
 		m.chatWriteSystem(nextSystemID(), m.t("mode.current", m.mode))
