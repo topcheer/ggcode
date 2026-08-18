@@ -119,7 +119,12 @@ func TestListTasksRPCInvalidPageToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	var rpcResp JSONRPCResponse
-	json.NewDecoder(resp.Body).Decode(&rpcResp)
+	// Check the decode: under full-suite load a truncated/empty body decodes
+	// to a zero-value response whose Error is nil, which used to surface as a
+	// false "expected JSON-RPC error for stale page token, got success".
+	if derr := json.NewDecoder(resp.Body).Decode(&rpcResp); derr != nil {
+		t.Fatalf("decoding JSON-RPC response: %v", derr)
+	}
 	resp.Body.Close()
 	if rpcResp.Error == nil {
 		t.Fatal("expected JSON-RPC error for stale page token, got success")

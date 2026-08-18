@@ -177,6 +177,10 @@ type Manager struct {
 	benignRemoval bool                // a benign (non-semantic) removal happened since last snapshot
 	userReset     bool                // a user-driven reset (Clear/rewind) happened since last snapshot
 	lastReject    CompactRejectReason // reason of the most recent ApplyCompactResult call
+	// lastSummarizeApplied records whether the most recent Summarize call
+	// actually replaced the conversation (#702b: m.version also bumps on Add,
+	// so CheckAndSummarize must not infer "applied" from a version delta).
+	lastSummarizeApplied bool
 }
 
 // NewManager creates a ContextManager with the given context window limit.
@@ -1300,6 +1304,7 @@ func (m *Manager) Summarize(ctx context.Context, prov provider.Provider) error {
 	// shrink guard: discard and let the next trigger re-plan from CURRENT
 	// state.
 	if m.nonTailMutSeq != plan.origVersion {
+		m.lastSummarizeApplied = false // #702b: discarded — nothing was applied
 		m.mu.Unlock()
 		debug.Log("ctx", "Summarize: non-tail mutation during LLM window (seq %d→%d), discarding stale snapshot",
 			plan.origVersion, m.nonTailMutSeq)
@@ -1352,6 +1357,7 @@ func (m *Manager) Summarize(ctx context.Context, prov provider.Provider) error {
 
 	oldLen := len(m.messages)
 	m.messages = newMsgs
+	m.lastSummarizeApplied = true // #702b: this Summarize call did apply
 	// Re-inject pinned context after compaction — the pinned contract
 	// ("survive compaction") must hold on the direct Summarize path too
 	// (PTL recovery, /compact), not just ApplyCompactResult. Without this,
@@ -1374,16 +1380,19 @@ func (m *Manager) Summarize(ctx context.Context, prov provider.Provider) error {
 func (m *Manager) CheckAndSummarize(ctx context.Context, prov provider.Provider) (bool, error) {
 	debug.Log("ctx", "CheckAndSummarize: tokens=%d contextWindow=%d threshold=%d ratio=%.2f", m.TokenCount(), m.ContextWindow(), m.AutoCompactThreshold(), m.UsageRatio())
 
-	m.mu.Lock()
-	beforeVersion := m.version
-	m.mu.Unlock()
 	err := m.Summarize(ctx, prov)
 	if err != nil {
 		debug.Log("ctx", "CheckAndSummarize: Summarize FAILED: %v", err)
 		return false, err
 	}
 	m.mu.Lock()
-	summaryChanged := m.version != beforeVersion
+	// #702b: do NOT infer "compaction happened" from a version delta — Add()
+	// also bumps m.version, so a concurrent Add during the LLM window made
+	// this report a false "changed=true" on the no-plan and TOCTOU-discard
+	// paths (both return nil without applying), causing callers to skip
+	// fallbacks (e.g. PTL retry) while the context was still over budget.
+	// Summarize now records explicitly whether it applied.
+	summaryChanged := m.lastSummarizeApplied
 	m.mu.Unlock()
 	debug.Log("ctx", "CheckAndSummarize: done tokens=%d msgs=%d changed=%t",
 		m.TokenCount(), len(m.Messages()), summaryChanged)
@@ -1398,6 +1407,10 @@ func (m *Manager) TruncateOldestGroupForRetry() bool {
 		return false
 	}
 	m.messages = truncated
+	m.markBenignRemoval() // #663/#702a: retry truncation is benign tail cleanup — a live-shrunk
+	// compaction result rejected after this must classify as BenignTrim
+	// (cooldown stays), not UserReset (which would refund the precompact
+	// cooldown and reschedule a redundant full-context summarization).
 	m.version++
 	m.nonTailMutSeq++
 	m.recalcTokens()
@@ -2103,6 +2116,7 @@ func (m *Manager) CompactSupersededReads() int {
 	}
 
 	before := m.tokens
+	m.markBenignRemoval() // #663/#702a: superseded-read compaction is benign bookkeeping
 	m.version++
 	m.nonTailMutSeq++
 	m.recalcTokens()

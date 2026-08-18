@@ -52,7 +52,12 @@ func TestCommitHint_WithUncommittedChanges(t *testing.T) {
 	a := &Agent{commitHint: newCommitHintState()}
 	a.SetWorkingDir(dir)
 
-	stats := &RunStats{ToolCalls: map[string]int{"edit_file": 1}}
+	// #698: the hint scopes to the agent's own edit list (absolute paths)
+	// intersected with the dirty tree.
+	stats := &RunStats{
+		ToolCalls:   map[string]int{"edit_file": 1},
+		FilesEdited: []string{filepath.Join(dir, "main.go")},
+	}
 	msg := a.checkCommitHintGate(stats)
 	if msg == "" {
 		t.Fatal("expected non-empty commit hint message")
@@ -93,7 +98,7 @@ func TestCommitHint_Reset(t *testing.T) {
 }
 
 func TestCountChangedFiles(t *testing.T) {
-	porcelain := " M main.go\n?? new.go\n A added.go\n"
+	porcelain := " M main.go\n?? new.go\nA  added.go\n"
 	count := countChangedFiles(porcelain)
 	if count != 3 {
 		t.Errorf("expected 3 changed files, got %d", count)
@@ -106,14 +111,32 @@ func TestCountChangedFiles(t *testing.T) {
 	}
 }
 
-func TestCommitHint_StashSkipsHint(t *testing.T) {
+// TestCommitHint_StashDoesNotSuppressHint pins #698's contract change: a
+// git_stash round trip (push + pop) leaves the agent's edits uncommitted in
+// the tree — exactly what this gate exists to flag. Only git_add/git_commit
+// suppress the hint.
+func TestCommitHint_StashDoesNotSuppressHint(t *testing.T) {
+	dir := t.TempDir()
+	runGitCommitTest(t, dir, "init")
+	runGitCommitTest(t, dir, "config", "user.email", "test@test.com")
+	runGitCommitTest(t, dir, "config", "user.name", "test")
+	writeFileCommitTest(t, dir, "main.go", "package main\n")
+	runGitCommitTest(t, dir, "add", "main.go")
+	runGitCommitTest(t, dir, "commit", "-m", "initial")
+	writeFileCommitTest(t, dir, "main.go", "package main\n\nfunc main() {}\n")
+
 	a := &Agent{commitHint: newCommitHintState()}
-	stats := &RunStats{ToolCalls: map[string]int{
-		"edit_file": 1,
-		"git_stash": 1,
-	}}
-	if msg := a.checkCommitHintGate(stats); msg != "" {
-		t.Errorf("expected empty message when agent stashed, got: %s", msg)
+	a.SetWorkingDir(dir)
+
+	stats := &RunStats{
+		ToolCalls: map[string]int{
+			"edit_file": 1,
+			"git_stash": 2, // push + pop round trip
+		},
+		FilesEdited: []string{filepath.Join(dir, "main.go")},
+	}
+	if msg := a.checkCommitHintGate(stats); msg == "" {
+		t.Error("expected commit hint despite git_stash round trip — stash is not version-control completion")
 	}
 }
 

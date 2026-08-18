@@ -261,7 +261,9 @@ func (m *Manager) Revert(id string) (*Checkpoint, error) {
 	files := make([]string, 0, len(order))
 	for _, f := range order {
 		st := targets[f]
-		if err := restoreCheckpointState(f, st.content, st.existed); err != nil {
+		// #696: seam for the #685 regression tests — swap to record write order
+		// and inject per-path failures deterministically.
+		if err := restoreFile(f, st.content, st.existed); err != nil {
 			if len(files) == 0 {
 				return nil, fmt.Errorf("failed to revert %s: %w", f, err)
 			}
@@ -305,6 +307,10 @@ func restoreCheckpointState(path, oldContent string, existed bool) error {
 	}
 	return util.AtomicWriteFile(path, []byte(oldContent), 0644)
 }
+
+// restoreFile is the seam over restoreCheckpointState (#696): tests swap it
+// to record write order and inject per-path failures deterministically.
+var restoreFile = restoreCheckpointState
 
 // FileSummary summarizes the edits made to a single file.
 type FileSummary struct {

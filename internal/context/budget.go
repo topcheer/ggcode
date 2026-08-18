@@ -89,7 +89,9 @@ const defaultTopN = 5
 // visibility into what's consuming context tokens — enabling smarter compaction
 // decisions and context optimization.
 //
-// Token estimation uses the same ~4 chars/token heuristic as EstimateTokens.
+// Token estimation delegates to the same script-aware estimator as
+// EstimateTokens (#702c: the old len/4 fork systematically underestimated
+// pure-CJK text by ~25%-2x versus the tokenizer's ~1.0 chars/token CJK tier).
 // This is intentionally lightweight (no LLM calls, no network) so it can be
 // called on every turn if needed.
 func AnalyzeBudget(msgs []provider.Message) *BudgetBreakdown {
@@ -223,24 +225,24 @@ func categorizeBlock(block provider.ContentBlock, msgRole string) BudgetCategory
 // using the ~4 chars/token heuristic. Image blocks are estimated at a fixed
 // overhead since base64 image data is much larger than its token equivalent.
 func estimateBlockTokens(block provider.ContentBlock) int {
-	// Text blocks: ~4 chars/token
+	// Text blocks: script-aware estimator (same as EstimateTokens).
 	if block.Text != "" {
-		return estimateTokensChars(block.Text)
+		return EstimateTokens(block.Text)
 	}
 
 	// Tool use: input JSON
 	if block.Type == "tool_use" && len(block.Input) > 0 {
-		return estimateTokensChars(string(block.Input)) + 10 // overhead for tool name + structure
+		return EstimateTokens(string(block.Input)) + 10 // overhead for tool name + structure
 	}
 
 	// Tool result: output text
 	if block.Type == "tool_result" && block.Output != "" {
-		return estimateTokensChars(block.Output) + 5 // small overhead
+		return EstimateTokens(block.Output) + 5 // small overhead
 	}
 
 	// Reasoning content
 	if block.ReasoningContent != "" {
-		return estimateTokensChars(block.ReasoningContent)
+		return EstimateTokens(block.ReasoningContent)
 	}
 
 	// Image blocks: base64 data is inflated; estimate actual token overhead

@@ -1,73 +1,130 @@
 package checkpoint
 
-// Regression tests for issue #685 (regression of #678):
-//  1. Revert with partial write-back failure must iterate files in
-//     deterministic checkpoint order (not Go's randomized map order) so the
-//     set of restored files is reproducible, and the error must disclose
-//     exactly which files WERE restored and which remain pending.
-//  2. The history must stay intact on failure (retryable), matching
-//     writeBaselines' policy.
+// Deterministic regression tests for #685 (and #696/#697, the test-quality
+// follow-up): Revert must iterate files in deterministic checkpoint
+// first-touch order — never Go's randomized map order — and, on partial
+// write-back failure, disclose EXACTLY which files were restored and which
+// remain pending.
+//
+// #696/#697: the previous version of this file pinned order only
+// probabilistically (a map-order regression passed ~1/3 of runs because the
+// substring assertions happened to hold for wrong-but-lucky permutations) and
+// never checked disclosure accuracy against actual writes. These tests swap
+// the restoreFile seam (checkpoint.go) so every attempted write is recorded
+// and failures are injected per-path — deterministic regardless of map
+// iteration order.
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
-// failingFS simulates write failures for specific paths. It records every
-// attempted write so tests can assert both order and disclosure.
-type issue685FS struct {
-	real      string // backing dir for successful writes
-	failPaths map[string]bool
-	attempts  []string
+// seamRecorder wraps the restoreFile seam to record the exact sequence of
+// write attempts. failPaths return errors instead of writing.
+type seamRecorder struct {
+	mu        sync.Mutex
+	attempts  []string          // every path passed to the seam, in call order
+	failPaths map[string]error  // paths whose write must fail
+	_         map[string]string // placeholder for future content capture
 }
 
-func (f *issue685FS) writeFile(path string, data []byte) error {
-	f.attempts = append(f.attempts, path)
-	if f.failPaths[path] {
-		return &os.PathError{Op: "write", Path: path, Err: os.ErrPermission}
+func newSeamRecorder(failPaths map[string]error) *seamRecorder {
+	return &seamRecorder{failPaths: failPaths}
+}
+
+func (r *seamRecorder) install(t *testing.T) {
+	t.Helper()
+	old := restoreFile
+	restoreFile = func(path, content string, existed bool) error {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		r.attempts = append(r.attempts, path)
+		if err, ok := r.failPaths[path]; ok {
+			return err
+		}
+		if !existed && content == "" {
+			// Mirror restoreCheckpointState's creation-removal semantics.
+			if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+			return nil
+		}
+		return os.WriteFile(path, []byte(content), 0o644)
 	}
-	return os.WriteFile(filepath.Join(f.real, filepath.Base(path)), data, 0644)
+	t.Cleanup(func() { restoreFile = old })
 }
 
-func TestIssue685_RevertDeterministicOrderAndDisclosure(t *testing.T) {
+// TestIssue685_SuccessDeterministicFirstTouchOrder pins the success path:
+// three checkpoints a→b→c (c a creation) must be written back in exactly
+// a,b,c order, disk must hold the pre-edit contents afterwards, and the
+// created file must be removed. A regression to `for f := range targets`
+// (map order) fails the exact-sequence assertion on ~5/6 of runs — and any
+// order missing one of the three files fails 100% of runs.
+func TestIssue685_SuccessDeterministicFirstTouchOrder(t *testing.T) {
 	dir := t.TempDir()
 	m := NewManager(50)
 
-	// Simulate a checkpoint chain: cp0 (a.go), cp1 (b.go), cp2 (c.go).
-	// Reverting to cp0 must restore a.go, b.go, c.go — in first-touch order.
-	steps := []struct {
-		path, old, new string
-		existed        bool
-	}{
-		{filepath.Join(dir, "a.go"), "old-a", "new-a", true},
-		{filepath.Join(dir, "b.go"), "old-b", "new-b", true},
-		{filepath.Join(dir, "c.go"), "", "new-c", false},
-	}
-	for _, st := range steps {
-		if err := os.WriteFile(st.path, []byte(st.old), 0644); err != nil && st.existed {
-			t.Fatal(err)
-		}
-		m.SaveWithExistence(st.path, st.old, st.new, "edit_file", st.existed)
-	}
+	aPath := filepath.Join(dir, "a.go")
+	bPath := filepath.Join(dir, "b.go")
+	cPath := filepath.Join(dir, "c.go")
 
-	cps := m.List()
-	target := cps[0].ID
-	cp, err := m.Revert(target)
-	if err != nil {
+	// Simulate the edit chain: a (old-a → new-a), b (old-b → new-b),
+	// c (created, existed=false).
+	if err := os.WriteFile(aPath, []byte("old-a"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bPath, []byte("old-b"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m.SaveWithExistence(aPath, "old-a", "new-a", "edit_file", true)
+	m.SaveWithExistence(bPath, "old-b", "new-b", "edit_file", true)
+	m.SaveWithExistence(cPath, "", "new-c", "edit_file", false)
+
+	rec := newSeamRecorder(nil)
+	rec.install(t)
+
+	target := m.List()[0].ID
+	if _, err := m.Revert(target); err != nil {
 		t.Fatalf("revert: %v", err)
 	}
-	if cp == nil {
-		t.Fatal("expected checkpoint result")
+
+	// 1. Exact deterministic order — first-touch checkpoint order.
+	wantOrder := []string{aPath, bPath, cPath}
+	if fmt.Sprint(rec.attempts) != fmt.Sprint(wantOrder) {
+		t.Fatalf("write order must be deterministic first-touch order %v, got %v", wantOrder, rec.attempts)
 	}
-	// All three files should have been restored (write to real paths).
+
+	// 2. Disk contents restored to pre-edit states.
+	for path, want := range map[string]string{aPath: "old-a", bPath: "old-b"} {
+		got, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		if string(got) != want {
+			t.Fatalf("%s content = %q, want %q", path, got, want)
+		}
+	}
+	// 3. The created-then-reverted file must be gone (not a stray 0-byte file).
+	if _, err := os.Stat(cPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("created-then-reverted file must be removed, stat err = %v", err)
+	}
+	// 4. History truncated after success.
 	if len(m.checkpoints) != 0 {
 		t.Fatalf("history must be truncated after successful revert, len=%d", len(m.checkpoints))
 	}
 }
 
-func TestIssue685_RevertFailure_DisclosesRestoredAndPending(t *testing.T) {
+// TestIssue685_FailureC_DisclosureAccurate pins the 3-file partial-failure
+// case: c fails, a and b restored. The error message's restored list must
+// contain EXACTLY {a,b} and the pending list EXACTLY {c} — a lying disclosure
+// (listing b as restored when order was [a,c,b] and b was never written)
+// previously escaped 100% of runs.
+func TestIssue685_FailureC_DisclosureAccurate(t *testing.T) {
 	dir := t.TempDir()
 	m := NewManager(50)
 
@@ -75,87 +132,105 @@ func TestIssue685_RevertFailure_DisclosesRestoredAndPending(t *testing.T) {
 	bPath := filepath.Join(dir, "b.go")
 	cPath := filepath.Join(dir, "c.go")
 	for _, p := range []string{aPath, bPath, cPath} {
-		if err := os.WriteFile(p, []byte("old"), 0644); err != nil {
+		if err := os.WriteFile(p, []byte("old"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-	}
-
-	// Record checkpoints in order a, b, c.
-	for _, p := range []string{aPath, bPath, cPath} {
 		m.SaveWithExistence(p, "old", "new", "edit_file", true)
 	}
 
-	// Make the c.go write-back fail deterministically on every platform:
-	// replace the file with a same-name directory — every write strategy
-	// (direct write, temp-file + rename) fails; os.Chmod injection is a no-op
-	// on Windows (same lesson as #667/#673, 3905b3c6).
-	if err := os.Remove(cPath); err != nil {
-		t.Fatalf("remove for dir-swap: %v", err)
-	}
-	if err := os.Mkdir(cPath, 0o755); err != nil {
-		t.Fatalf("dir-swap: %v", err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(cPath) })
+	rec := newSeamRecorder(map[string]error{
+		cPath: &os.PathError{Op: "write", Path: cPath, Err: os.ErrPermission},
+	})
+	rec.install(t)
 
-	target := m.List()[0].ID
-	_, err := m.Revert(target)
+	_, err := m.Revert(m.List()[0].ID)
 	if err == nil {
-		t.Fatal("expected revert failure when last file is unwritable")
+		t.Fatal("expected revert failure when c.go write fails")
 	}
-	// Disclosure: the error must name c.go as the failure and disclose that
-	// a.go and b.go were restored (partial state).
 	msg := err.Error()
+
+	// Order: deterministic a,b,c; the attempt on c failed so only a,b hit disk.
+	wantOrder := []string{aPath, bPath, cPath}
+	if fmt.Sprint(rec.attempts) != fmt.Sprint(wantOrder) {
+		t.Fatalf("write order must be %v, got %v", wantOrder, rec.attempts)
+	}
+
+	// Disclosure accuracy: message must name the failing file, list restored
+	// EXACTLY {a,b}, and pending EXACTLY {c} (Go %v slice rendering, e.g.
+	// "restored [.../a.go .../b.go]; still pending [.../c.go]").
 	if !strings.Contains(msg, cPath) {
 		t.Fatalf("error must name the failing file: %q", msg)
 	}
-	if !strings.Contains(msg, "restored") || !strings.Contains(msg, aPath) || !strings.Contains(msg, bPath) {
-		t.Fatalf("error must disclose restored files a,b: %q", msg)
+	if !assertPathListExact(msg, "restored ", []string{aPath, bPath}) {
+		t.Fatalf("error's restored list must be exactly [a b]: %q", msg)
 	}
-	if !strings.Contains(msg, "pending") {
-		t.Fatalf("error must disclose pending state: %q", msg)
+	if !assertPathListExact(msg, "still pending ", []string{cPath}) {
+		t.Fatalf("error's pending list must be exactly [c]: %q", msg)
 	}
-	// History must remain intact (retryable).
+
+	// Disk state matches the disclosure: a and b restored, c untouched.
+	for _, p := range []string{aPath, bPath} {
+		got, rerr := os.ReadFile(p)
+		if rerr != nil || string(got) != "old" {
+			t.Fatalf("%s must be restored to %q, got %q (err=%v)", p, "old", got, rerr)
+		}
+	}
+	// History stays intact — retry remains possible.
 	if len(m.checkpoints) != 3 {
 		t.Fatalf("history must be kept on failure, len=%d", len(m.checkpoints))
 	}
 }
 
-func TestIssue685_RevertFailure_FirstFileFails_NoPartialClaim(t *testing.T) {
+// TestIssue685_FailureA_NoPartialClaim pins the first-file-failure case:
+// nothing restored, so the error must NOT claim any partial restore.
+func TestIssue685_FailureA_NoPartialClaim(t *testing.T) {
 	dir := t.TempDir()
 	m := NewManager(50)
 
 	aPath := filepath.Join(dir, "a.go")
 	bPath := filepath.Join(dir, "b.go")
 	for _, p := range []string{aPath, bPath} {
-		if err := os.WriteFile(p, []byte("old"), 0644); err != nil {
+		if err := os.WriteFile(p, []byte("old"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-	}
-	for _, p := range []string{aPath, bPath} {
 		m.SaveWithExistence(p, "old", "new", "edit_file", true)
 	}
 
-	// First-file failure injection: same-name directory swap on a.go
-	// (deterministic cross-platform, see test above).
-	if err := os.Remove(aPath); err != nil {
-		t.Fatalf("remove for dir-swap: %v", err)
-	}
-	if err := os.Mkdir(aPath, 0o755); err != nil {
-		t.Fatalf("dir-swap: %v", err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(aPath) })
+	rec := newSeamRecorder(map[string]error{
+		aPath: &os.PathError{Op: "write", Path: aPath, Err: os.ErrPermission},
+	})
+	rec.install(t)
 
-	target := m.List()[0].ID
-	_, err := m.Revert(target)
+	_, err := m.Revert(m.List()[0].ID)
 	if err == nil {
 		t.Fatal("expected failure")
 	}
-	// First-file failure: no "restored" list, no false partial claim.
 	msg := err.Error()
-	if strings.Contains(msg, "restored") {
+
+	// Only a was attempted (first in order) and it failed.
+	if len(rec.attempts) != 1 || rec.attempts[0] != aPath {
+		t.Fatalf("only the first file may be attempted, got %v", rec.attempts)
+	}
+	if strings.Contains(msg, "partial state") || strings.Contains(msg, "restored") {
 		t.Fatalf("first-file failure must not claim partial restore: %q", msg)
 	}
 	if !strings.Contains(msg, aPath) {
 		t.Fatalf("error must name failing file: %q", msg)
 	}
+	// History intact — retry remains possible.
+	if len(m.checkpoints) != 2 {
+		t.Fatalf("history must be kept on failure, len=%d", len(m.checkpoints))
+	}
+}
+
+// assertPathListExact checks that msg contains the Go %v slice rendering of
+// exactly the given paths after label ("<label>[a b]") — i.e. the disclosure
+// lists the files and ONLY those files. A swapped, missing, or extra entry
+// fails the full-string containment.
+func assertPathListExact(msg, label string, want []string) bool {
+	if len(want) == 0 {
+		return !strings.Contains(msg, label)
+	}
+	rend := fmt.Sprintf("%v", want) // [path1 path2]
+	return strings.Contains(msg, label+rend)
 }

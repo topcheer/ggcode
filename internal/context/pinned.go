@@ -78,12 +78,13 @@ func (p *PinnedContext) Add(text string) (string, error) {
 		return "", fmt.Errorf("maximum %d pinned items reached, remove one first", maxPinnedItems)
 	}
 
-	totalLen := 0
+	totalRunes := 0
 	for _, item := range p.items {
-		totalLen += len(item.Text)
+		totalRunes += utf8.RuneCountInString(item.Text)
 	}
-	if totalLen+len(text) > maxPinnedTotal {
-		remaining := maxPinnedTotal - totalLen
+	itemRunes := utf8.RuneCountInString(text)
+	if totalRunes+itemRunes > maxPinnedTotal {
+		remaining := maxPinnedTotal - totalRunes
 		return "", fmt.Errorf("pinned context budget exceeded (%d chars remaining of %d)", remaining, maxPinnedTotal)
 	}
 
