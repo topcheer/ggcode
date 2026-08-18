@@ -142,10 +142,13 @@ func checkHardcodedPaths(filePath, oldContent, newContent string) []string {
 		return nil
 	}
 
-	// Skip test fixture directories.
+	// Skip test fixture directories. Segment-exact match (same semantics
+	// as the #247 fix in hardcoded_secret_check): substring matching both
+	// missed trailing segments without a slash and exempted unrelated
+	// paths like myfixturesnote/ (#733).
 	lowerPath := strings.ToLower(filePath)
 	for _, dir := range secretExemptDirs {
-		if strings.Contains(lowerPath, dir) {
+		if pathHasSegment(lowerPath, dir) {
 			return nil
 		}
 	}

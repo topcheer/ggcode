@@ -14,6 +14,41 @@ func TestCheckHardcodedPaths_NoPaths(t *testing.T) {
 	}
 }
 
+// #733: substring matching exempted non-fixture paths that merely CONTAIN
+// an exempt word (mockserver, remocks, myfixturesnote). Segment-exact
+// matching (pathHasSegment, same as the #247 fix) must exempt only real
+// fixture segments while real hardcoded paths in lookalike dirs warn.
+func TestCheckHardcodedPaths_FixtureExemptionSegmentExact(t *testing.T) {
+	old := "package main\n"
+	new := `package main
+
+const dbConfig = "/Users/john/secrets/db-config.json"
+`
+	cases := []struct {
+		name     string
+		filePath string
+	}{
+		{"mockserver contains mocks", "internal/mockserver/config.go"},
+		{"remocks contains mocks", "pkg/remocks/util.go"},
+		{"remockservice contains mocks", "api/remockservice/handler.go"},
+		{"myfixturesnote contains fixtures", "cmd/myfixturesnote/main.go"},
+	}
+	for _, tc := range cases {
+		warnings := checkHardcodedPaths(tc.filePath, old, new)
+		if len(warnings) == 0 {
+			t.Errorf("%s: expected hardcoded path warning (substring exemption must not apply), got none", tc.name)
+		}
+	}
+
+	// Real fixture directories stay exempt.
+	if warnings := checkHardcodedPaths("internal/mocks/config.go", old, new); len(warnings) != 0 {
+		t.Errorf("real mocks segment should stay exempt, got: %v", warnings)
+	}
+	if warnings := checkHardcodedPaths("test/fixtures/data.go", old, new); len(warnings) != 0 {
+		t.Errorf("real fixtures segment should stay exempt, got: %v", warnings)
+	}
+}
+
 func TestCheckHardcodedPaths_MacOSHomeIntroduced(t *testing.T) {
 	old := "package main\n"
 	new := `package main
