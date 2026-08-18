@@ -1173,6 +1173,7 @@ func StartAnthropicOAuth() (string, error) {
 // their own completion against the current flow.
 func CompleteAnthropicOAuth() (err error) {
 	var call *oauthCompleteCall
+	var flow *auth.ClaudeOAuthFlow
 	for {
 		// #670 single-flight: acquire the completion slot. A second caller
 		// while one completion is running joins it — but only when both
@@ -1182,7 +1183,7 @@ func CompleteAnthropicOAuth() (err error) {
 			// Lock order oauthCompleteMu → oauthMu is fixed (no reverse
 			// nesting exists in this package), so this read is race-free.
 			oauthMu.Lock()
-			flowEpoch, logoutGen := oauthFlowEpoch, oauthLogoutGen
+			flowEpoch := oauthFlowEpoch
 			oauthMu.Unlock()
 			if inflight.flowEpoch == flowEpoch {
 				oauthCompleteMu.Unlock()
@@ -1194,7 +1195,16 @@ func CompleteAnthropicOAuth() (err error) {
 					// #674: unless a logout removed that token while we were
 					// parked — then the success is no longer backed by the
 					// store and must not be reported as connected.
-					if inflight.logoutGen == logoutGen {
+					// #680: compare against the CURRENT logout generation read
+					// AFTER waking, not the pre-park snapshot. The old code
+					// compared two pre-park snapshots (joiner's vs the
+					// flight's), so a logout that ran between done-close and
+					// this wakeup went unnoticed and the joiner returned nil
+					// ("connected") for a token that had just been deleted.
+					oauthMu.Lock()
+					curLogoutGen := oauthLogoutGen
+					oauthMu.Unlock()
+					if inflight.logoutGen == curLogoutGen {
 						return nil
 					}
 					return fmt.Errorf("oauth token saved by concurrent call was removed by a concurrent logout")
@@ -1214,6 +1224,15 @@ func CompleteAnthropicOAuth() (err error) {
 			flowEpoch: oauthFlowEpoch,
 			logoutGen: oauthLogoutGen,
 		}
+		// #680: snapshot the flow TOGETHER with the epoch in the same oauthMu
+		// critical section. The old code read currentOAuthFlow in a separate
+		// critical section after releasing the slot locks; a
+		// StartAnthropicOAuth squeezed in between installed a new flow and
+		// bumped the epoch (E1), leaving this winner holding an E0 marker
+		// while operating on flow B — its teardown then closed the NEW flow
+		// and the next same-flow Complete hit "no OAuth flow in progress"
+		// even though the token had been saved.
+		flow = currentOAuthFlow
 		oauthMu.Unlock()
 		oauthCompleteInFlight = call
 		oauthCompleteMu.Unlock()
@@ -1229,9 +1248,6 @@ func CompleteAnthropicOAuth() (err error) {
 		close(call.done)
 	}()
 
-	oauthMu.Lock()
-	flow := currentOAuthFlow
-	oauthMu.Unlock()
 	if flow == nil {
 		return fmt.Errorf("no OAuth flow in progress")
 	}

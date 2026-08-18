@@ -178,11 +178,22 @@ func (m *Manager) Undo() (*Checkpoint, error) {
 	return &cp, nil
 }
 
-// Revert rolls back to a specific checkpoint by ID, writing OldContent back to the file.
-// It also removes all checkpoints newer than the target.
+// Revert rolls back to a specific checkpoint by ID, restoring EVERY file
+// touched by that checkpoint or any of its successors to its state at the
+// moment just before the target checkpoint ran, then removes those
+// checkpoints.
 // Unlike Undo (which reverts the most recent checkpoint), Revert jumps to an
 // arbitrary past state, so the redo stack is cleared (standard undo/redo semantics).
 // A Correction is recorded so the agent can learn from this rejection (#574 Bug G).
+//
+// #678: the pre-fix implementation restored only the target checkpoint's own
+// file while still truncating ALL later checkpoints. In a multi-file run
+// (cp1 edits f1, cp2 edits f2, cp3 edits f1 again), Revert(cp2) left f1 at its
+// cp3 state on disk, deleted cp3 (the record needed to undo that state),
+// recorded a Correction claiming BOTH files were reverted, and produced a
+// mixed disk state that never existed. UndoRun already had the correct
+// semantics (per-file baseline write-back); Revert now follows the same
+// pattern.
 func (m *Manager) Revert(id string) (*Checkpoint, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -203,17 +214,40 @@ func (m *Manager) Revert(id string) (*Checkpoint, error) {
 	// the backing array (see Undo for details).
 	cp := m.checkpoints[idx]
 
-	if err := restoreCheckpointState(cp.FilePath, cp.OldContent, cp.Existed); err != nil {
-		return nil, fmt.Errorf("failed to write file: %w", err)
+	// Compute, for every file touched at idx or later, the state it was in at
+	// the revert moment (just before the target checkpoint's edit ran):
+	//   - a file whose latest pre-idx checkpoint is cp_prev was last written
+	//     by that edit, so its state is cp_prev.NewContent (the file exists
+	//     after any edit, hence existed=true even when cp_prev created it);
+	//   - a file with no pre-idx checkpoint is entering its FIRST edit of the
+	//     surviving history, so its pre-state is the first idx-or-later
+	//     checkpoint's OldContent/Existed pair.
+	targets := make(map[string]baselineState)
+	for i := idx; i < len(m.checkpoints); i++ {
+		f := m.checkpoints[i].FilePath
+		if _, ok := targets[f]; ok {
+			continue
+		}
+		state := baselineState{content: m.checkpoints[i].OldContent, existed: m.checkpoints[i].Existed}
+		for j := idx - 1; j >= 0; j-- {
+			if m.checkpoints[j].FilePath == f {
+				state = baselineState{content: m.checkpoints[j].NewContent, existed: true}
+				break
+			}
+		}
+		targets[f] = state
 	}
 
-	// Collect files being reverted for the Correction record.
-	revertedFiles := make(map[string]bool)
-	for i := idx; i < len(m.checkpoints); i++ {
-		revertedFiles[m.checkpoints[i].FilePath] = true
-	}
-	files := make([]string, 0, len(revertedFiles))
-	for f := range revertedFiles {
+	// Write every file's revert-moment state back to disk BEFORE truncating
+	// history: only when all writes succeed does disk match the pre-idx
+	// moment. On failure the checkpoint list is left intact so the caller can
+	// retry or fall back to single-step Undo — a partial truncation would
+	// strand the not-yet-restored files exactly like #678.
+	files := make([]string, 0, len(targets))
+	for f, st := range targets {
+		if err := restoreCheckpointState(f, st.content, st.existed); err != nil {
+			return nil, fmt.Errorf("failed to revert %s: %w", f, err)
+		}
 		files = append(files, f)
 	}
 
@@ -226,6 +260,7 @@ func (m *Manager) Revert(id string) (*Checkpoint, error) {
 
 	// Record the correction so the agent can learn from the rejection (#574 Bug G).
 	// Use the ToolCall from the reverted checkpoint to identify what was rejected.
+	// Files is now honest: every listed file was actually written back.
 	m.corrections = append(m.corrections, Correction{
 		Files:    files,
 		ToolCall: cp.ToolCall,
