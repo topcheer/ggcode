@@ -101,7 +101,8 @@ func detectBatchEditConflicts(toolCalls []provider.ToolCallDelta) map[int]string
 }
 
 // extractFilePathsForConflict extracts target file paths from a file-editing
-// tool call. It handles both single-file tools (edit_file, write_file) and
+// extractFilePathsForConflict pulls the target file paths from a tool call's
+// arguments. It handles both single-file tools (edit_file, write_file) and
 // multi-file tools (multi_edit_file, multi_file_write, multi_file_edit).
 func extractFilePathsForConflict(tc provider.ToolCallDelta) []string {
 	if len(tc.Arguments) == 0 {
@@ -113,42 +114,39 @@ func extractFilePathsForConflict(tc provider.ToolCallDelta) []string {
 	}
 
 	var paths []string
+	appendStr := func(key string) {
+		if p, ok := args[key].(string); ok {
+			paths = append(paths, p)
+		}
+	}
+	appendFromList := func(listKey, pathKey string) {
+		items, ok := args[listKey].([]any)
+		if !ok {
+			return
+		}
+		for _, item := range items {
+			m, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			if p, ok := m[pathKey].(string); ok {
+				paths = append(paths, p)
+			}
+		}
+	}
+
 	switch tc.Name {
 	case "write_file", "edit_file":
-		if p, ok := args["path"].(string); ok {
-			paths = append(paths, p)
-		}
-		if p, ok := args["file_path"].(string); ok {
-			paths = append(paths, p)
-		}
+		appendStr("path")
+		appendStr("file_path")
 	case "multi_edit_file":
-		if p, ok := args["file_path"].(string); ok {
-			paths = append(paths, p)
-		}
+		appendStr("file_path")
 		// multi_edit_file edits array also contains path in some variants.
-		if edits, ok := args["edits"].([]any); ok {
-			for _, e := range edits {
-				if em, ok := e.(map[string]any); ok {
-					if p, ok := em["path"].(string); ok {
-						paths = append(paths, p)
-					}
-				}
-			}
-		}
+		appendFromList("edits", "path")
 	case "multi_file_edit", "multi_file_write":
-		if files, ok := args["files"].([]any); ok {
-			for _, f := range files {
-				if fm, ok := f.(map[string]any); ok {
-					if p, ok := fm["path"].(string); ok {
-						paths = append(paths, p)
-					}
-				}
-			}
-		}
+		appendFromList("files", "path")
 	case "notebook_edit":
-		if p, ok := args["notebook_path"].(string); ok {
-			paths = append(paths, p)
-		}
+		appendStr("notebook_path")
 	}
 	return paths
 }
