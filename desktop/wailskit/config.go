@@ -392,14 +392,21 @@ func saveWithInstanceWriteback(cfg *config.Config, vendor string) error {
 	if !cfg.HasInstanceConfigAttached() {
 		return nil
 	}
-	for _, yk := range cfg.InstanceFields() {
-		if yk == "vendors" {
-			if err := cfg.SaveInstanceScoped(cfg.InstanceWorkspace()); err != nil {
-				return err
-			}
-			cfg.SyncVendorToGlobalSnapshot(vendor)
-			break
+	// #734: gate on runtime vendor provenance rather than the InstanceFields()
+	// "vendors" flag. The flag is only set when MergeInstance adopted at least
+	// one vendor key from the instance file, so an attached instance config
+	// WITHOUT a vendors section (the common instance.yaml carrying just
+	// language/mode) left the gate closed: the runtime-added vendor was
+	// dropped by Save()'s globalOnlyVendors filter and lost on restart. The
+	// provenance check asks exactly the question Save()'s filter answers -
+	// "is this vendor absent from the global snapshot?" - so it covers every
+	// shape of the #368 family. The flag itself keeps its serialization-only
+	// semantics inside Save().
+	if cfg.VendorNotInGlobalSnapshot(vendor) {
+		if err := cfg.SaveInstanceScoped(cfg.InstanceWorkspace()); err != nil {
+			return err
 		}
+		cfg.SyncVendorToGlobalSnapshot(vendor)
 	}
 	return nil
 }

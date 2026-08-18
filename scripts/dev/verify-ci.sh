@@ -24,6 +24,13 @@ unset ZAI_MODEL
 # ── Config ────────────────────────────────────────────────────────────────
 # Default GOMEMLIMIT matches GitHub CI (2GiB). Override via VERIFY_CI_MEMLIMIT.
 GOMEMLIMIT="${VERIFY_CI_MEMLIMIT:-2GiB}"
+# Cap build/test parallelism: `go build` and `go mod download` default -p to
+# the machine core count; on shared/constrained runners the parallel
+# compilation of large packages spikes peak RSS past the cgroup/OS limit and
+# the toolchain gets OOM-killed ("signal: killed") before any code issue is
+# reported. GOMAXPROCS caps every downstream go command in one knob. Override
+# via VERIFY_CI_GOMAXPROCS on roomier machines.
+export GOMAXPROCS="${VERIFY_CI_GOMAXPROCS:-2}"
 # Set VERIFY_CI_FULL=1 to also run cross-compile, desktop, and frontend checks.
 FULL="${VERIFY_CI_FULL:-0}"
 

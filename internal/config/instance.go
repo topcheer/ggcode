@@ -536,6 +536,32 @@ func (c *Config) SyncVendorToGlobalSnapshot(vendor string) {
 	}
 }
 
+// VendorNotInGlobalSnapshot reports whether vendor exists in the current
+// config but is absent from the pre-instance-merge global snapshot
+// (globalSnap). This is the runtime provenance check the desktop write-back
+// gate uses (#734): instanceFields["vendors"] is only set when
+// MergeInstance adopted at least one vendor KEY from the instance file, so
+// an attached instance config WITHOUT a vendors section (the common
+// instance.yaml carrying just language/mode) leaves the flag unset - a
+// vendor added at runtime (AddCustomEndpoint / SaveAPIKey) then bypassed
+// the instance write-back and was dropped by Save()'s globalOnlyVendors
+// filter, silently lost on restart.
+//
+// Returns false when no snapshot exists (no instance merge happened):
+// Save() performs no vendor filtering in that case, so no write-back is
+// needed. Conventions match SyncVendorToGlobalSnapshot: callers hold the
+// config lock (wailskit globalMu) when mutating.
+func (c *Config) VendorNotInGlobalSnapshot(vendor string) bool {
+	if c == nil || c.globalSnap == nil || vendor == "" {
+		return false
+	}
+	if _, inSnap := c.globalSnap.Vendors[vendor]; inSnap {
+		return false
+	}
+	_, inCur := c.Vendors[vendor]
+	return inCur
+}
+
 // SaveScoped persists config changes to either global or instance config.
 // scope: "global" saves to the global config file (default behavior).
 // scope: "instance" saves to the instance config directory.
