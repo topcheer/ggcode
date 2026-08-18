@@ -42,12 +42,13 @@ echo "[verify-ci] building ggcode"
 GOMEMLIMIT="${GOMEMLIMIT}" go build -tags goolm -o /tmp/ggcode ./cmd/ggcode
 
 echo "[verify-ci] running go vet"
-# -p 2: vet defaults to -p=GOMAXPROCS; on shared/constrained runners the
+# -p 1: vet defaults to -p=GOMAXPROCS; on shared/constrained runners the
 # parallel type-checking of large packages (internal/agent, desktop) spikes
 # peak RSS past GOMEMLIMIT and the process gets OOM-killed ("signal: killed")
 # before any code issue is reported. Same rationale as the -p 1 on go test
-# below. Override via VERIFY_CI_VET_P.
-GOMEMLIMIT="${GOMEMLIMIT}" go vet -tags goolm -p "${VERIFY_CI_VET_P:-2}" ./...
+# below. -p 2 still reproduced the OOM kill on shared machines, so 1 is the
+# default; override via VERIFY_CI_VET_P.
+GOMEMLIMIT="${GOMEMLIMIT}" go vet -tags goolm -p "${VERIFY_CI_VET_P:-1}" ./...
 
 echo "[verify-ci] running tests (main module, unit only)"
 # NOTE: do NOT use the "integration" tag here - integration tests (e.g. browser

@@ -532,7 +532,18 @@ func (s *Scheduler) Update(id string, cronExpr *string, prompt *string, queueIfB
 			delete(s.timers, id)
 		}
 		if !job.Paused {
-			s.scheduleJobLocked(job)
+			if job.NextFire.After(time.Now()) {
+				s.scheduleJobLocked(job)
+			} else {
+				// Only reachable via the defensive NextTime-failure branch
+				// above, where the restored NextFire is zero or already
+				// elapsed. Rebuilding the timer anyway would clamp the delay
+				// to 0 and fire immediately via AfterFunc(0) — a spurious fire
+				// the user never asked for (#673). Leave the job unscheduled;
+				// the log line keeps the stalled timer observable, and the next
+				// Update/Resume/Load reschedules it.
+				debug.Log("cron", "Update rollback: job %s NextFire %v is not in the future; skipping timer rebuild to avoid an immediate AfterFunc(0) fire", id, job.NextFire)
+			}
 		}
 		s.mu.Unlock()
 		debug.Log("cron", "Update: failed to persist job %s: %v", id, err)

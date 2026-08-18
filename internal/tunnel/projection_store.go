@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/debug"
 )
 
 const ProjectionReplayLimit = 1000
@@ -66,6 +67,12 @@ func (s *ProjectionStore) Append(msg GatewayMessage) error {
 	// it instead of persisting it, so replay and the last-writer snapshot
 	// slots stay free of old-authority pollution.
 	if cloned.AuthorityEpoch != 0 && cloned.AuthorityEpoch < current {
+		// Observability (#673): the intentional nil made a dropped event
+		// indistinguishable from a successful persist — callers (e.g.
+		// tunnel_host AppendProjectionEvent) could not flag projBroken. Log
+		// the drop so stale-epoch late arrivals are diagnosable.
+		debug.Log("tunnel", "projection store: dropped stale-epoch event (session=%s type=%s event_id=%s epoch=%d < current=%d) — late arrival from a superseded authority, not persisted",
+			sessionID, cloned.Type, cloned.EventID, cloned.AuthorityEpoch, current)
 		return nil
 	}
 	if cloned.AuthorityEpoch == 0 {
