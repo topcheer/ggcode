@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"sync"
 	"testing"
@@ -22,6 +23,37 @@ func TestWriteMessageConcurrentNoInterleave(t *testing.T) {
 	defer r.Close()
 
 	c := &Client{name: "test", stdin: w, transport: "stdio"}
+
+	// The reader MUST run concurrently with the writers: Windows anonymous
+	// pipes buffer only ~4KB (Linux: 64KB), so the previous read-after-
+	// wg.Wait design deadlocked there once 200 frames (~15KB) exceeded the
+	// buffer — writers blocked on the full pipe, wg.Wait never returned, and
+	// the whole package hit its test timeout. Draining as the writers write
+	// keeps this correct on every platform; both assertions are unchanged.
+	type readResult struct {
+		lines int
+		err   error
+	}
+	resCh := make(chan readResult, 1)
+	go func() {
+		sc := bufio.NewScanner(r)
+		sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		lines := 0
+		for sc.Scan() {
+			line := sc.Text()
+			if line == "" {
+				continue
+			}
+			var obj map[string]interface{}
+			if err := json.Unmarshal([]byte(line), &obj); err != nil {
+				r.Close() // unblock any writer still waiting on the full pipe
+				resCh <- readResult{err: fmt.Errorf("interleaved/corrupt frame (#480 regression) at line %d: %v — %q", lines+1, err, line)}
+				return
+			}
+			lines++
+		}
+		resCh <- readResult{lines: lines}
+	}()
 
 	const writers = 4
 	const perWriter = 50
@@ -46,26 +78,20 @@ func TestWriteMessageConcurrentNoInterleave(t *testing.T) {
 	}
 	close(start)
 	wg.Wait()
-	w.Close()
+	w.Close() // EOF: lets the scanner finish after draining the pipe
 
-	// Every line must be a complete, parseable JSON object — an interleaved
-	// frame would fail json.Unmarshal or produce glued/duplicated content.
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	lines := 0
-	for sc.Scan() {
-		line := sc.Text()
-		if line == "" {
-			continue
+	// Every line must have been a complete, parseable JSON object — an
+	// interleaved frame would fail json.Unmarshal or produce glued content.
+	select {
+	case res := <-resCh:
+		if res.err != nil {
+			t.Fatal(res.err)
 		}
-		var obj map[string]interface{}
-		if err := json.Unmarshal([]byte(line), &obj); err != nil {
-			t.Fatalf("interleaved/corrupt frame (#480 regression) at line %d: %v — %q", lines+1, err, line)
+		if res.lines != writers*perWriter {
+			t.Fatalf("expected %d frames, got %d (frames lost or glued)", writers*perWriter, res.lines)
 		}
-		lines++
-	}
-	if lines != writers*perWriter {
-		t.Fatalf("expected %d frames, got %d (frames lost or glued)", writers*perWriter, lines)
+	case <-time.After(30 * time.Second):
+		t.Fatal("reader did not finish within 30s — writers done and pipe closed, but EOF never observed")
 	}
 }
 
