@@ -3,7 +3,6 @@ package permission
 import (
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/topcheer/ggcode/internal/debug"
 )
@@ -118,7 +117,14 @@ func (s *PathSandbox) Allowed(path string) bool {
 	}
 
 	for _, dir := range s.allowedDirs {
-		if strings.HasPrefix(resolved, dir+string(os.PathSeparator)) || resolved == dir {
+		// #713: case-insensitive platforms (macOS APFS, Windows NTFS) compare
+		// paths case-insensitively, but filepath.EvalSymlinks does NOT rewrite
+		// to the real-case spelling. A wrong-case variant of the workspace dir
+		// then failed the byte-exact prefix compare in BOTH the existing and
+		// non-existing path cases — a false Deny in auto mode, false Ask
+		// elsewhere. Segment-wise ASCII fold (pathFoldActive-aware) instead;
+		// case-sensitive platforms keep byte equality.
+		if pathHasPrefixFold(resolved, dir+string(os.PathSeparator)) || pathEqualFold(resolved, dir) {
 			return true
 		}
 	}

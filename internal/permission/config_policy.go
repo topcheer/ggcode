@@ -108,7 +108,11 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 	// the strongest user intent (cmd_rules.go: deny patterns always take
 	// precedence) and must win in every mode.
 	if isCommandTool(toolName) {
-		if cmd, ok := extractCommand(input); ok && cmd != "" {
+		// #713: deny rules must cover every command channel. The terminal
+		// tools' `text` field (iterm2/warp "write text") is typed into the
+		// user's interactive shell and executes; leaving it unaudited let a
+		// deny rule be bypassed via that second channel in every mode.
+		for _, cmd := range extractCommandsForTool(toolName, input) {
 			if rs := p.cmdRules; rs != nil {
 				if d, matched := rs.Check(cmd); matched && d == Deny {
 					debug.Log("permission", "command denied by deny rule (mode-independent)")
@@ -124,8 +128,8 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 		// Bypass mode: allow everything except extremely dangerous operations
 		// and network exfiltration (data egress always requires human gating).
 		if isCommandTool(toolName) {
-			cmd, _ := extractCommand(input)
-			if cmd != "" {
+			// #713: audit every channel (command + terminal `text`).
+			for _, cmd := range extractCommandsForTool(toolName, input) {
 				if p.detector.IsExtremelyDangerous(cmd) {
 					return Ask, nil
 				}
@@ -190,8 +194,10 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 			return Ask, nil
 		}
 		if IsReadOnlyTool(toolName) {
-			// Read-only tools are always allowed in plan mode, even outside sandbox.
-			// Plan mode is strictly read-only, so there's no risk.
+			if d := p.checkPlanReadOnlyExceptions(toolName, input); d != Allow {
+				return d, nil
+			}
+			// Non-sensitive read-only tools remain always allowed in plan mode.
 			return Allow, nil
 		}
 		return Deny, nil
@@ -201,8 +207,8 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 		// confirmation even in auto mode because they can exfiltrate data
 		// to external endpoints (prompt injection defense).
 		if isCommandTool(toolName) {
-			cmd, _ := extractCommand(input)
-			if cmd != "" {
+			// #713: audit every channel (command + terminal `text`).
+			for _, cmd := range extractCommandsForTool(toolName, input) {
 				if p.detector.IsDangerous(cmd) {
 					return Deny, nil
 				}
@@ -210,6 +216,20 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 					if nc := CheckNetwork(cmd); nc.Risk != NetworkNone {
 						debug.Log("permission", "network egress in auto mode: %s (risk=%s)", nc.Reason, nc.Risk)
 						return Ask, nil
+					}
+				}
+				// #711: redirect targets are file writes — hold them to the same
+				// bar as write tools, mirroring the #573-C gate that protects
+				// bypass/autopilot but was never copied here. Without it, Auto was
+				// the ONLY mode silently allowing `> ~/.docker/config.json` or a
+				// LaunchAgents plist write (run_command is neither a file tool nor
+				// caught by the dangerous-pattern list). Auto has no human loop,
+				// so the decision is Deny rather than Ask.
+				for _, tgt := range extractRedirectTargets(cmd) {
+					resolved := expandTilde(tgt)
+					if !p.sandbox.Allowed(resolved) || isSensitivePath(resolved) {
+						debug.Log("permission", "redirect to out-of-sandbox/sensitive path denied in auto mode (#711)")
+						return Deny, nil
 					}
 				}
 			}
@@ -240,8 +260,10 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 		return Allow, nil
 	}
 	if isCommandTool(toolName) {
-		cmd, _ := extractCommand(input)
-		if cmd != "" {
+		// #713: audit every channel (command + terminal `text`); the
+		// mode-independent deny short-circuit at the top of Check has
+		// already returned on any Deny match, so an allow-match here is safe.
+		for _, cmd := range extractCommandsForTool(toolName, input) {
 			rs := p.cmdRules
 			if rs != nil {
 				if d, matched := rs.Check(cmd); matched {
@@ -283,26 +305,27 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 			}
 		}
 		if isCommandTool(toolName) {
-			cmd, _ := extractCommand(input)
-			if cmd != "" && p.detector.IsDangerous(cmd) {
-				// Dangerous command under a static allow rule downgrades to Ask,
-				// matching the runtime cmdRules branch above: both rule sources
-				// are explicit user allows, so they must share the same downgrade
-				// target. An explicit allow must not be a harder Deny than the
-				// no-rule default (Ask). An explicit Deny rule stays Deny
-				// (#525 Bug C).
-				if d == Deny {
-					return Deny, nil
+			for _, cmd := range extractCommandsForTool(toolName, input) {
+				if p.detector.IsDangerous(cmd) {
+					// Dangerous command under a static allow rule downgrades to Ask,
+					// matching the runtime cmdRules branch above: both rule sources
+					// are explicit user allows, so they must share the same downgrade
+					// target. An explicit allow must not be a harder Deny than the
+					// no-rule default (Ask). An explicit Deny rule stays Deny
+					// (#525 Bug C).
+					if d == Deny {
+						return Deny, nil
+					}
+					return Ask, nil
 				}
-				return Ask, nil
-			}
-			// Data egress always requires human gating, even when a static
-			// config allow rule matched (#256): a tools.run_command: allow
-			// setting covers the command word while the payload can still
-			// exfiltrate credentials (curl -d @~/.ssh/id_rsa ...). Mirrors
-			// the cmdRules branch above and the bypass/auto branches.
-			if cmd != "" && IsNetworkExfiltrate(cmd) {
-				return Ask, nil
+				// Data egress always requires human gating, even when a static
+				// config allow rule matched (#256): a tools.run_command: allow
+				// setting covers the command word while the payload can still
+				// exfiltrate credentials (curl -d @~/.ssh/id_rsa ...). Mirrors
+				// the cmdRules branch above and the bypass/auto branches.
+				if IsNetworkExfiltrate(cmd) {
+					return Ask, nil
+				}
 			}
 		}
 		return d, nil
@@ -575,6 +598,50 @@ func extractFilePaths(input json.RawMessage) []string {
 	return paths
 }
 
+// isTerminalTool reports whether the tool drives an external terminal
+// multiplexer/emulator (tmux/ghostty/warp/kitty/iterm2). Their `text`
+// parameter is typed into the user's interactive shell and EXECUTES
+// (iterm2 write-text drives AppleScript "write text"), making it a real
+// second command channel alongside `command` (#713). Scoping the `text`
+// audit to exactly these tools avoids the #197 over-matching that removing
+// the generic `input` key from command matching fixed.
+func isTerminalTool(name string) bool {
+	switch name {
+	case "tmux", "ghostty", "warp", "kitty", "iterm2":
+		return true
+	}
+	return false
+}
+
+// extractCommandsForTool returns every shell-command channel in a command
+// tool's input: the `command` key, the `input` key, and - for the terminal
+// tools only - the `text` key. Empty strings are filtered. Callers must
+// classify each channel separately because command patterns are
+// start-anchored; concatenating channels would leave all but the first
+// unaudited (#713).
+func extractCommandsForTool(toolName string, input json.RawMessage) []string {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(input, &m); err != nil {
+		return nil
+	}
+	keys := []string{"command", "input"}
+	if isTerminalTool(toolName) {
+		keys = append(keys, "text")
+	}
+	var cmds []string
+	for _, key := range keys {
+		v, ok := m[key]
+		if !ok {
+			continue
+		}
+		var s string
+		if err := json.Unmarshal(v, &s); err == nil && s != "" {
+			cmds = append(cmds, s)
+		}
+	}
+	return cmds
+}
+
 func extractCommand(input json.RawMessage) (string, bool) {
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(input, &m); err != nil {
@@ -703,6 +770,87 @@ func expandTilde(path string) string {
 		return filepath.Join(config.HomeDir(), path[2:])
 	}
 	return path
+}
+
+// isWebEgressTool reports whether the tool sends caller-supplied data to
+// external endpoints — the egress half of the plan-mode read→exfiltrate
+// loop (#712). Covers built-in web tools and their whitelisted MCP twins.
+func isWebEgressTool(name string) bool {
+	switch name {
+	case "web_fetch", "web_search",
+		"mcp__web_reader__webReader", "mcp__web-search-prime__web_search_prime":
+		return true
+	}
+	return false
+}
+
+// exfilPayloadMarkers are case-insensitive signatures that a web tool's
+// request payload carries secret/credential material: key file paths,
+// private-key block headers, known token prefixes (#712).
+var exfilPayloadMarkers = []string{
+	// Secret file paths commonly cat'd then embedded in a URL/body
+	"id_rsa", "id_ed25519", "authorized_keys", "known_hosts",
+	".aws/credentials", "credentials.json", "keys.env", ".netrc",
+	".npmrc", ".pypirc", ".ssh/",
+	// PEM/OpenSSH private-key block headers
+	"begin rsa private key", "begin ec private key", "begin openssh private key",
+	"begin private key", "begin dsa private key",
+	// Known token prefixes
+	"ghp_", "gho_", "ghu_", "ghs_", "github_pat_", "sk-ant-api",
+	"xoxb-", "xoxp-", "xapp-", "akia", // GitHub / Slack / AWS prefixes
+}
+
+// hasDataEgressSignature returns true if a web tool call's arguments carry
+// secret/credential material — the classic read-then-exfiltrate shape where
+// a previously-read key ends up in the fetched URL or request body (#712).
+func hasDataEgressSignature(input json.RawMessage) bool {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(input, &m); err != nil {
+		return false
+	}
+	for _, v := range m {
+		var s string
+		if err := json.Unmarshal(v, &s); err != nil || s == "" {
+			continue
+		}
+		// URL query strings encode spaces as '+', so "-----BEGIN+RSA+PRIVATE
+		// KEY-----" must be normalized before matching space-containing markers.
+		lower := strings.ReplaceAll(strings.ToLower(s), "+", " ")
+		for _, marker := range exfilPayloadMarkers {
+			if strings.Contains(lower, marker) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// checkPlanReadOnlyExceptions applies the #712 exceptions to plan mode's
+// read-only Allow: the unconditional Allow had two holes that made plan mode
+// WEAKER than supervised for sensitive reads — (a) a sensitive-path read
+// (~/.ssh/id_rsa, credentials) silently put secrets into model context, and
+// (b) web_fetch/web_search — also whitelisted — could carry them out, closing
+// a read→exfiltrate loop with zero prompts. Sensitive out-of-sandbox reads
+// and web calls carrying secret material are denied outright (plan mode has
+// no human loop to route an Ask through). Returns Deny when an exception
+// trips, Allow when the call is benign.
+func (p *ConfigPolicy) checkPlanReadOnlyExceptions(toolName string, input json.RawMessage) Decision {
+	if isFileTool(toolName) {
+		for _, path := range extractFilePaths(input) {
+			if path != "" {
+				resolved := expandTilde(path)
+				if !p.sandbox.Allowed(resolved) && isSensitivePath(resolved) {
+					debug.Log("permission", "sensitive-path read denied in plan mode (#712)")
+					return Deny
+				}
+			}
+		}
+	}
+	if isWebEgressTool(toolName) && hasDataEgressSignature(input) {
+		debug.Log("permission", "web call with data-egress signature denied in plan mode (#712)")
+		return Deny
+	}
+	return Allow
 }
 
 func newOptionalPathSandbox(allowedDirs []string) *PathSandbox {

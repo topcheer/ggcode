@@ -710,12 +710,16 @@ func (m *Manager) Cancel(id string) bool {
 	sa.CurrentPhase = "cancelled"
 	sa.Error = context.Canceled
 	sa.EndedAt = time.Now()
+	sa.toolExecuting = false // #713: cancelled is terminal; a stuck tool flag must not keep suppressing the watchdog.
 	debug.Log("cancel", "Cancel: set Status=Cancelled id=%s goroutineStarted=%v", id, sa.goroutineStarted)
-	// Do NOT close done here — let the goroutine's Complete() call close it
-	// when it actually terminates. This allows CancelAll()'s wait loop to
-	// genuinely wait for goroutine termination (with timeout fallback).
-	// Complete() calls closeDone() in all paths, including when Status is
-	// already Cancelled (terminal state check).
+	// #713: if the goroutine never started (pending agent cancelled before
+	// Spawn), no one will ever call Complete() to close `done`. Production
+	// callers currently run an unconditional follow-up Wait after Spawn,
+	// so this is contract hardening rather than a live bug — close it here
+	// so the channel reflects reality in every path.
+	if !sa.goroutineStarted {
+		sa.closeDone()
+	}
 	sa.mu.Unlock()
 	m.notifyUpdate(sa)
 	return true
@@ -730,6 +734,13 @@ func (sa *SubAgent) closeDone() {
 			close(sa.done)
 		}
 	}
+}
+
+// doneChan returns the done channel (nil if unset). Caller must NOT hold sa.mu.
+func (sa *SubAgent) doneChan() <-chan struct{} {
+	sa.mu.Lock()
+	defer sa.mu.Unlock()
+	return sa.done
 }
 
 // isGoroutineStarted reports whether the agent's goroutine has actually started.
@@ -949,6 +960,7 @@ func (m *Manager) Complete(id string, result string, err error) {
 	}
 	sa.Result = result
 	sa.EndedAt = time.Now()
+	sa.toolExecuting = false // #713: Complete is terminal; a stuck tool flag must not keep suppressing the watchdog.
 	sa.closeDone()
 	sa.mu.Unlock()
 

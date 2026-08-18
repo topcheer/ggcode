@@ -231,7 +231,8 @@ func compileCommandPattern(pattern string) (*regexp.Regexp, error) {
 	// prefix-glob patterns to enforce word boundaries (#596-P3): "make*"
 	// matches "make" or "make build", NOT "makeevil". Flag chars like
 	// "go build -tags" still match because they appear AFTER a space.
-	controlPrefix := `[^;|&` + "`" + `$()<>\n\r\\-]*`
+	// (#713: the separate controlPrefix class was removed — the only branch
+	// that ever selected it was provably unreachable.)
 	control := `[^;|&` + "`" + `$()<>\n\r\\]*`
 	trailingOnly := strings.HasSuffix(pattern, "*") &&
 		!strings.Contains(pattern[:len(pattern)-1], "*")
@@ -239,12 +240,17 @@ func compileCommandPattern(pattern string) (*regexp.Regexp, error) {
 	sb.WriteString("(?i)^") // anchor at start
 	for _, ch := range pattern {
 		if ch == '*' {
-			// In prefix-glob patterns, use hyphen-excluding control for word boundary
-			if strings.HasSuffix(string(sb.String()), controlPrefix) {
-				sb.WriteString(controlPrefix)
-			} else {
-				sb.WriteString(control)
-			}
+			// Substring-glob class. Prefix-glob wildcards never take this
+			// path to production: the trailingOnly branch below re-emits the
+			// wildcard as the optionalArgs word-boundary group. The old
+			// HasSuffix(controlPrefix) probe was unreachable in every
+			// construction path — escaped pattern literals can never
+			// reproduce the class text, and no earlier write emits it — so
+			// it is removed rather than kept as dead code under a comment
+			// that implies prefix-globs get the hyphen-excluding class here
+			// (#713). Word boundaries come from optionalArgs' mandatory
+			// space, not from this class.
+			sb.WriteString(control)
 			continue
 		}
 		// Escape regex metacharacters

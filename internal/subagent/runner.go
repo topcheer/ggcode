@@ -366,8 +366,18 @@ func Wait(ctx context.Context, mgr *Manager, id string) (string, error) {
 		return "", fmt.Errorf("sub-agent %s not found", id)
 	}
 
+	// #713: select the done channel instead of polling status only. A
+	// Cancel-then-Complete race previously returned an empty snapshot once
+	// (Cancel had already set the terminal status with an empty Result; the
+	// runner's Complete backfill arrived a moment later). Waiting on done —
+	// closed by every terminal transition — plus a short post-signal grace
+	// closes that window; the result is also persisted either way.
+	done := sa.doneChan()
+
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
+	timer := time.NewTimer(500 * time.Millisecond)
+	defer timer.Stop()
 
 	for {
 		sa.mu.Lock()
@@ -380,6 +390,20 @@ func Wait(ctx context.Context, mgr *Manager, id string) (string, error) {
 		case StatusCompleted:
 			return result, nil
 		case StatusFailed, StatusCancelled:
+			// Grace: if the runner's Complete backfill is still in flight,
+			// give it a moment to land before returning a possibly empty result.
+			if done != nil {
+				select {
+				case <-done:
+				case <-timer.C:
+				case <-ctx.Done():
+					return "", ctx.Err()
+				}
+			}
+			// Re-read after the grace window.
+			sa.mu.Lock()
+			result = sa.Result
+			sa.mu.Unlock()
 			return result, err
 		}
 
