@@ -76,6 +76,51 @@ type CompactResult struct {
 	Changed    bool
 }
 
+// CompactRejectReason categorizes why ApplyCompactResult refused a result.
+// The agent uses it to attribute refunds correctly (#663): only user-driven
+// context resets (clear/rewind/another compaction replacing the context)
+// justify refunding the precompact cooldown — the live tokens that triggered
+// the summarization are GONE, so a fresh schedule would summarize a context
+// that no longer needs it. Benign internal cleanup (retry truncation via
+// RemoveLastAssistantGroup, orphan tool-result removal) removes a few tail
+// messages with no semantic loss; the live context is still essentially the
+// one that warranted compaction, so the cooldown must STAY to prevent
+// rescheduling a redundant full-context summarization every turn.
+type CompactRejectReason int
+
+const (
+	// CompactRejectNone: the result was applied (no rejection).
+	CompactRejectNone CompactRejectReason = iota
+	// CompactRejectNoChange: summarization produced no change (real failure).
+	CompactRejectNoChange
+	// CompactRejectEmpty: summarization produced an empty result (real failure).
+	CompactRejectEmpty
+	// CompactRejectUserReset: live context was user-driven reset (clear,
+	// rewind, another compaction) — messages removed with semantic loss.
+	CompactRejectUserReset
+	// CompactRejectBenignTrim: live context lost a few tail messages to benign
+	// internal cleanup (retry truncation, orphan tool-result removal).
+	CompactRejectBenignTrim
+)
+
+// String implements fmt.Stringer for debug logs.
+func (r CompactRejectReason) String() string {
+	switch r {
+	case CompactRejectNone:
+		return "none"
+	case CompactRejectNoChange:
+		return "no-change"
+	case CompactRejectEmpty:
+		return "empty"
+	case CompactRejectUserReset:
+		return "user-reset"
+	case CompactRejectBenignTrim:
+		return "benign-trim"
+	default:
+		return "unknown"
+	}
+}
+
 const (
 	// Summary output cap: 5% of contextWindow, but capped at a fixed
 	// absolute maximum. For 200K context → 10K; for 1M context → 12K (not 50K).
@@ -123,6 +168,15 @@ type Manager struct {
 	pinned                   *PinnedContext             // user-pinned context that survives compaction
 	lastLoggedReserve        int                        // last logged effectiveOutputReserve value (suppress duplicate logs)
 	lastLoggedThreshold      int                        // last logged autoCompactThreshold value (suppress duplicate logs)
+	// #663: attribution for message removals. When ApplyCompactResult rejects
+	// a live-shrunk result, the agent must distinguish a USER-DRIVEN reset
+	// (Clear, rewind, another compaction — semantic loss, cooldown refund OK)
+	// from BENIGN internal cleanup (retry truncation, orphan tool-result
+	// removal — no semantic loss, refund would reschedule a redundant
+	// full-context summarization).
+	benignRemoval bool                // a benign (non-semantic) removal happened since last snapshot
+	userReset     bool                // a user-driven reset (Clear/rewind) happened since last snapshot
+	lastReject    CompactRejectReason // reason of the most recent ApplyCompactResult call
 }
 
 // NewManager creates a ContextManager with the given context window limit.
@@ -132,6 +186,21 @@ func NewManager(contextWindow int) *Manager {
 		calibrator:    NewTokenCalibrator(),
 		pinned:        newPinnedContext(),
 	}
+}
+
+// markBenignRemoval records that a message removal happened via a benign
+// internal-cleanup path (no semantic content loss). Caller must hold m.mu.
+func (m *Manager) markBenignRemoval() {
+	m.benignRemoval = true
+}
+
+// LastCompactRejectReason returns the rejection reason recorded by the most
+// recent ApplyCompactResult call (#663). CompactRejectNone means the last
+// result was applied (or no call happened yet).
+func (m *Manager) LastCompactRejectReason() CompactRejectReason {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.lastReject
 }
 
 // Pinned returns the PinnedContext store for user-pinned context items.
@@ -205,6 +274,7 @@ func (m *Manager) removeSystemMessageByMarker(marker string) {
 	idx := m.findSystemMessageIdx(marker)
 	if idx >= 0 {
 		m.messages = append(m.messages[:idx], m.messages[idx+1:]...)
+		m.markBenignRemoval() // #663: marker housekeeping — no semantic loss
 	}
 }
 
@@ -435,6 +505,7 @@ func (m *Manager) ReconcileToolCalls() bool {
 	newMsgs, droppedMsgs, removedBlocks := rebuildReconciledMessages(oldMsgs, insertions, staleBlockIdxs)
 
 	m.messages = newMsgs
+	m.markBenignRemoval() // #663: reconcile rebuild — bookkeeping, no semantic loss
 	m.version++
 	m.nonTailMutSeq++
 	m.tokens = 0
@@ -565,6 +636,7 @@ func (m *Manager) removeOrphanToolResults() {
 		}
 	}
 	if changed {
+		m.markBenignRemoval() // #663: orphan cleanup — no semantic loss
 		m.version++
 		m.nonTailMutSeq++
 		m.tokens = 0
@@ -660,6 +732,10 @@ func (m *Manager) MessagesAndTokenCount() ([]provider.Message, int) {
 func (m *Manager) CompactSnapshot() CompactSnapshot {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	// #663: a new snapshot opens a fresh attribution window — removal markers
+	// now answer "what kind of removal happened during THIS compaction window?".
+	m.benignRemoval = false
+	m.userReset = false
 	msgs := make([]provider.Message, len(m.messages))
 	for i, msg := range m.messages {
 		msgs[i] = msg
@@ -742,6 +818,13 @@ func contentFingerprint(m provider.Message) uint64 {
 func (m *Manager) ApplyCompactResult(snapshot CompactSnapshot, result CompactResult) (bool, int) {
 	if !result.Changed || len(result.Messages) == 0 {
 		debug.Log("ctx", "ApplyCompactResult: REJECT result.changed=%t result.msgs=%d", result.Changed, len(result.Messages))
+		m.mu.Lock()
+		if !result.Changed {
+			m.lastReject = CompactRejectNoChange
+		} else {
+			m.lastReject = CompactRejectEmpty
+		}
+		m.mu.Unlock()
 		return false, m.TokenCount()
 	}
 
@@ -795,8 +878,26 @@ func (m *Manager) ApplyCompactResult(snapshot CompactSnapshot, result CompactRes
 	// agent-side liveShrunk refund branch (#612/#633) unreachable outside
 	// mocks. len(extraStart) growth (messages appended) is unaffected.
 	if len(m.messages) < len(snapshot.Messages) {
-		debug.Log("ctx", "ApplyCompactResult: REJECT live-shrunk: liveMsgs=%d < snapshotMsgs=%d (messages removed during compaction window)",
-			len(m.messages), len(snapshot.Messages))
+		// #663: classify the shrink. userReset (Clear/rewind/another
+		// compaction) is a semantic reset — the agent may refund the precompact
+		// cooldown because the context that triggered compaction no longer
+		// exists. benignRemoval (retry truncation, orphan cleanup, reconcile
+		// rebuild) is bookkeeping — the live context is still essentially the
+		// one that warranted compaction, so the cooldown MUST stay, otherwise
+		// maybeAutoCompact reschedules a redundant full-context summarization
+		// every turn (retry storms amplified this into repeated wasted LLM
+		// calls). Unknown (neither flag set — e.g. a Manager subclass removing
+		// messages some other way) defaults to userReset: refunding is the
+		// pre-#663 behavior and the safe direction for #612/#651 compat.
+		if m.userReset {
+			m.lastReject = CompactRejectUserReset
+		} else if m.benignRemoval {
+			m.lastReject = CompactRejectBenignTrim
+		} else {
+			m.lastReject = CompactRejectUserReset
+		}
+		debug.Log("ctx", "ApplyCompactResult: REJECT live-shrunk (%s): liveMsgs=%d < snapshotMsgs=%d (messages removed during compaction window)",
+			m.lastReject, len(m.messages), len(snapshot.Messages))
 		// Unlock before returning — this early return sat between Lock() and
 		// the function's tail Unlock() and leaked m.mu forever, deadlocking
 		// every later Manager call (Messages/TokenCount/next compaction).
@@ -904,6 +1005,7 @@ func (m *Manager) ApplyCompactResult(snapshot CompactSnapshot, result CompactRes
 
 	debug.Log("ctx", "ApplyCompactResult: APPLIED liveTokensBefore=%d liveTokensAfter=%d snapshotMsgs=%d compacted=%d extra=%d resultTokenCount=%d",
 		liveTokensBefore, liveTokensAfter, snapshot.OrigLen, len(result.Messages), len(extra), result.TokenCount)
+	m.lastReject = CompactRejectNone // #663: successful apply clears the reject reason
 
 	// Trigger onPersist outside the lock for the summary message.
 	persistFn := m.onPersist
@@ -1105,6 +1207,7 @@ func (m *Manager) compositionLocked() (asciiChars, cjkChars, latinExtChars int) 
 func (m *Manager) Clear() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.userReset = true // #663: /clear is a user-driven semantic reset
 	oldTokens := m.tokenCountLocked()
 	oldMsgCount := len(m.messages)
 	if len(m.messages) > 0 && m.messages[0].Role == "system" {
@@ -1345,6 +1448,7 @@ func (m *Manager) RemoveLastAssistantGroup() string {
 	// Truncate: keep everything up to and including the last user message,
 	// discard the assistant response and any trailing tool messages.
 	m.messages = m.messages[:lastUserIdx+1]
+	m.markBenignRemoval() // #663: retry/regenerate truncation — no semantic loss
 	m.version++
 	m.nonTailMutSeq++
 	m.recalcTokens()

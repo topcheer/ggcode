@@ -77,6 +77,10 @@ func isRetryableCompactError(err error) bool {
 type snapshotCompactManager interface {
 	CompactSnapshot() ctxpkg.CompactSnapshot
 	ApplyCompactResult(ctxpkg.CompactSnapshot, ctxpkg.CompactResult) (bool, int)
+	// LastCompactRejectReason reports why the most recent ApplyCompactResult
+	// refused its result (#663) — the agent refunds the cooldown only for
+	// USER-DRIVEN resets, not benign internal cleanup.
+	LastCompactRejectReason() ctxpkg.CompactRejectReason
 }
 
 // PreCompactStatus is a UI-friendly snapshot of any in-flight pre-compact.
@@ -252,13 +256,44 @@ func (a *Agent) consumeReadyPreCompact(onEvent func(provider.StreamEvent)) bool 
 		if !applied {
 			reason := "unknown"
 			liveShrunk := false
-			if !pc.result.Changed {
-				reason = "summarization produced no change"
-			} else if len(pc.result.Messages) == 0 {
-				reason = "summarization produced empty result"
-			} else {
-				reason = "live messages shrunk below snapshot size"
-				liveShrunk = true
+			// #663: prefer the Manager's structured reject reason. liveShrunk is
+			// now refined into user-reset (refund-eligible) vs benign-trim (NOT
+			// refund-eligible): benign internal cleanup (retry truncation via
+			// RemoveLastAssistantGroup, orphan tool-result removal) removes tail
+			// messages with no semantic loss — the live context is still the one
+			// that warranted compaction, so refunding the cooldown made
+			// maybeAutoCompact reschedule a redundant full-context LLM
+			// summarization on every turn (retry storms repeated the waste).
+			// The legacy exclusion-style classification stays as fallback for
+			// managers that do not expose a reject reason.
+			if rr, ok := snapshotMgr.(interface {
+				LastCompactRejectReason() ctxpkg.CompactRejectReason
+			}); ok {
+				switch rr.LastCompactRejectReason() {
+				case ctxpkg.CompactRejectNoChange:
+					reason = "summarization produced no change"
+				case ctxpkg.CompactRejectEmpty:
+					reason = "summarization produced empty result"
+				case ctxpkg.CompactRejectUserReset:
+					reason = "live context user-reset (clear/rewind) during compaction window"
+					liveShrunk = true
+				case ctxpkg.CompactRejectBenignTrim:
+					reason = "benign internal cleanup (retry truncation/orphan removal) during compaction window"
+					liveShrunk = false
+				default:
+					// CompactRejectNone but applied==false — should not happen;
+					// fall through to the legacy classification below.
+				}
+			}
+			if reason == "unknown" {
+				if !pc.result.Changed {
+					reason = "summarization produced no change"
+				} else if len(pc.result.Messages) == 0 {
+					reason = "summarization produced empty result"
+				} else {
+					reason = "live messages shrunk below snapshot size"
+					liveShrunk = true
+				}
 			}
 			debug.Log("precompact", "RESULT DISCARDED: %s (snapshot.OrigLen=%d live=%d)", reason, pc.snapshot.OrigLen, len(a.contextManager.Messages()))
 			// #612: a discarded result leaves the stale 2-minute cooldown set

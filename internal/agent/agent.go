@@ -3499,7 +3499,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 			// Solution fixation: track failed edit attempts per file to
 			// detect diagnosis anchoring (arXiv:2505.15392, arXiv:2509.25370).
-			a.solutionFixation.recordEdit(tc.Name, string(tc.Arguments), result.IsError)
+			// #639: every tool call advances the sliding window (the unit is
+			// "12 tool calls", not "12 edits"); only failed mutation edits
+			// feed the per-file counts (handled inside recordToolCall).
+			a.solutionFixation.recordToolCall(tc.Name, string(tc.Arguments), result.IsError)
 			a.redundantReverify.recordEdit(tc.Name)
 			if fixationHint := a.solutionFixation.checkAndWarn(); fixationHint != "" {
 				debug.Log("agent", "Iteration %d: solution fixation detector triggered", i+1)

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -409,6 +410,14 @@ func findMessageCutoff(path string) (int64, int, time.Time) {
 			pos += consumed
 			continue
 		}
+		if rerr != nil && !errors.Is(rerr, io.EOF) {
+			// #662: a real I/O error truncated the offset scan. Log loudly so
+			// the truncated window is visible — findMessageCutoff cannot return
+			// an error (signature), but silently computing the cutoff from a
+			// partial file is what #656 fixed for long lines and must not be
+			// reintroduced for I/O errors.
+			debug.Log("session", "findMessageCutoff %s: I/O error at offset %d after %d message records: cutoff computed from PARTIAL file", path, pos, len(offsets))
+		}
 		if line := bytes.TrimRight(raw, "\r\n"); len(line) > 0 {
 			// Fast check: is this a message record?
 			if rt := quickRecordType(line); rt == "message" {
@@ -418,7 +427,7 @@ func findMessageCutoff(path string) (int64, int, time.Time) {
 		}
 		pos += consumed
 		if rerr != nil {
-			break // io.EOF or I/O error — window from what we scanned
+			break // io.EOF (normal) — real I/O errors were logged above (#662)
 		}
 	}
 
@@ -969,6 +978,7 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 	)
 
 	var byteOffset int64
+	var ioErr error // #662: real I/O error (EIO/EDQUOT/...) — distinct from io.EOF
 	for {
 		raw, consumed, rerr := readLineLimitedCounted(br, maxLine)
 		byteOffset += consumed
@@ -976,11 +986,22 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 			skippedLong++
 			continue // oversized line consumed; load resumes at the next one
 		}
+		if rerr != nil && !errors.Is(rerr, io.EOF) {
+			// #662: a real I/O error (EIO, bad sector, dropped network mount) is
+			// NOT the same as a clean end-of-file. #656's tolerant loop lumped
+			// both together and silently returned a TRUNCATED session; the next
+			// Save then O_APPENDs onto the truncated state and the tail records
+			// are permanently lost. Keep the partial read (still process this
+			// final line), but surface the error to the caller afterwards so the
+			// caller can retry or report instead of treating it as success.
+			ioErr = rerr
+			debug.Log("session", "loadSession %s: I/O error at offset %d after %d message records: %v", id, byteOffset, len(allMessages), rerr)
+		}
 		lineLen := consumed
 		line := strings.TrimSpace(string(raw))
 		if line == "" {
 			if rerr != nil {
-				break // io.EOF or I/O error — keep what we have (#656)
+				break // io.EOF (clean end) or recorded ioErr — stop the scan
 			}
 			continue
 		}
@@ -1045,8 +1066,10 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 			// The projection store is the sole source of tunnel event history.
 		}
 		if rerr != nil {
-			// io.EOF or a real I/O error: keep what was loaded — a partially
-			// readable session beats an unrecoverable one (#656).
+			// io.EOF is the normal end of the file. A real I/O error was
+			// already recorded in ioErr above — the loop breaks here either
+			// way, but the error is returned to the caller after processing
+			// (#662) instead of being silently swallowed as success.
 			break
 		}
 	}
@@ -1054,6 +1077,12 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 		debug.Log("session", "loadSession %s: skipped %d over-long line(s) >10MB — session remains loadable (#656)", id, skippedLong)
 	}
 	f.Close() // close read handle before potential backfill rewrite
+	if ioErr != nil {
+		// #662: never hand back a truncated session as a load success — the
+		// caller would Save (O_APPEND) on top of it and permanently lose the
+		// unread tail. The file itself is healthy; a retry can recover fully.
+		return nil, fmt.Errorf("loadSession %s: I/O error reading session file (partial read of %d messages, refusing to return truncated state): %w", id, len(allMessages), ioErr)
+	}
 
 	// Backfill timestamps for historical sessions (created before timestamp feature).
 	// If the first message has no timestamp, all messages get set to 6 hours ago.
@@ -2200,12 +2229,21 @@ func LastTurnIndex(ses *Session) int {
 	if ses == nil {
 		return 0
 	}
+	// Full max scan (#669): #656/#657 tolerate dropping corrupted trailing
+	// records, so the last element is not necessarily the max turn index.
+	// Trusting only the final element under-reported the turn baseline after
+	// a corrupted-line drop, causing turn numbers to be reused (metrics
+	// merges, UsageTurnIndex double counting). O(n), called once per AdoptSession.
 	last := 0
-	if n := len(ses.UsageHistory); n > 0 && ses.UsageHistory[n-1].TurnIndex > last {
-		last = ses.UsageHistory[n-1].TurnIndex
+	for _, u := range ses.UsageHistory {
+		if u.TurnIndex > last {
+			last = u.TurnIndex
+		}
 	}
-	if n := len(ses.Metrics); n > 0 && ses.Metrics[n-1].TurnIndex > last {
-		last = ses.Metrics[n-1].TurnIndex
+	for _, m := range ses.Metrics {
+		if m.TurnIndex > last {
+			last = m.TurnIndex
+		}
 	}
 	return last
 }
