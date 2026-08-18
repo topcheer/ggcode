@@ -129,6 +129,17 @@ func findInsecurePatternsGo(content string) []insecurePatternInstance {
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
 
+		// Fix #723: strip comments once for ALL text checks below (previously
+		// only the SQL check did this, fix #278). Full-line comments are skipped
+		// entirely; trailing comments are stripped, so every check (TLS bypass,
+		// weak crypto, SQL, command injection) operates on code only and no
+		// longer fires on comment mentions like
+		// `// do not use InsecureSkipVerify: true`.
+		if strings.HasPrefix(trimmed, "//") || strings.HasPrefix(trimmed, "/*") {
+			continue
+		}
+		trimmed = goStripTrailingComment(trimmed)
+
 		// 1. InsecureSkipVerify: true
 		if strings.Contains(trimmed, "InsecureSkipVerify") &&
 			(strings.Contains(trimmed, "true") || strings.Contains(trimmed, "True")) {
@@ -152,22 +163,19 @@ func findInsecurePatternsGo(content string) []insecurePatternInstance {
 		}
 
 		// 3. SQL injection via string concatenation: "SELECT" + variable or fmt.Sprintf with SELECT.
-		// Full-line comments are skipped and trailing comments are stripped
-		// first (fix #278): `a := b + c // SELECT count FROM users` must not
-		// count the comment's keywords as the query.
+		// Comments are already stripped above (fix #723 generalizes fix #278):
+		// `a := b + c // SELECT count FROM users` must not count the comment's
+		// keywords as the query.
 		// Fix #245: `i++` and `x += y` are not concatenation and must not count.
-		if !strings.HasPrefix(trimmed, "//") && !strings.HasPrefix(trimmed, "/*") {
-			codePart := goStripTrailingComment(trimmed)
-			upperLine := strings.ToUpper(codePart)
-			if isSQLKeywordLine(upperLine) {
-				// Check for concatenation or Sprintf in the same line
-				if lineHasConcatPlus(codePart) || strings.Contains(codePart, "Sprintf") {
-					issues = append(issues, insecurePatternInstance{
-						category: "SQL injection",
-						detail:   "SQL query built with string concatenation/Sprintf - use parameterized queries (? placeholders)",
-						line:     i + 1,
-					})
-				}
+		upperLine := strings.ToUpper(trimmed)
+		if isSQLKeywordLine(upperLine) {
+			// Check for concatenation or Sprintf in the same line
+			if lineHasConcatPlus(trimmed) || strings.Contains(trimmed, "Sprintf") {
+				issues = append(issues, insecurePatternInstance{
+					category: "SQL injection",
+					detail:   "SQL query built with string concatenation/Sprintf - use parameterized queries (? placeholders)",
+					line:     i + 1,
+				})
 			}
 		}
 
@@ -303,6 +311,16 @@ func findInsecurePatternsJS(content string) []insecurePatternInstance {
 
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
+
+		// Fix #723: strip comments once for ALL checks below. JS shares Go's
+		// `//` and `/*` comment syntax, so the Go trailing-comment stripper is
+		// reused; full-line comments are skipped entirely. Comment mentions
+		// like `// eval(userInput) is dangerous` no longer trigger.
+		if strings.HasPrefix(trimmed, "//") || strings.HasPrefix(trimmed, "/*") {
+			continue
+		}
+		trimmed = goStripTrailingComment(trimmed)
+
 		lower := strings.ToLower(trimmed)
 
 		// rejectUnauthorized: false / 0 (Node.js TLS bypass). Fix #245: match the
@@ -400,7 +418,14 @@ func findInsecurePatternsPython(content string) []insecurePatternInstance {
 
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		lower := strings.ToLower(trimmed)
+
+		// Fix #723: strip Python comments and string literals once for ALL
+		// checks below (previously only verify=False did this, fix #274).
+		// '#' is a comment marker only in Python — Go/JS lines are handled by
+		// their own helpers, never here. Comment mentions like
+		// `# hashlib.md5(password) is weak` no longer trigger.
+		code := pyStripCommentsAndStrings(trimmed)
+		lower := strings.ToLower(code)
 
 		// verify=False / verify=0 / ssl=False (requests, httpx, aiohttp,
 		// urllib3). Fix #245: previous three-condition substring AND missed
@@ -408,9 +433,8 @@ func findInsecurePatternsPython(content string) []insecurePatternInstance {
 		// the assignment alone is now treated as a strong enough signal.
 		// Fix #274: match against comment/string-stripped text so mentions of
 		// verify=False inside Python comments (#), docstrings, string literals
-		// and URL query strings are not flagged. Only this check is affected;
-		// the other Python checks below keep operating on the raw line.
-		if insecureVerifyDisabledRe.MatchString(pyStripCommentsAndStrings(trimmed)) {
+		// and URL query strings are not flagged.
+		if insecureVerifyDisabledRe.MatchString(code) {
 			issues = append(issues, insecurePatternInstance{
 				category: "TLS bypass",
 				detail:   "SSL verification disabled (verify=False/ssl=False) - removes MITM protection",
@@ -450,9 +474,10 @@ func findInsecurePatternsPython(content string) []insecurePatternInstance {
 			})
 		}
 
-		// eval()/exec() with dynamic input
-		if (strings.Contains(lower, "eval(") || strings.Contains(lower, "exec(")) &&
-			!strings.Contains(lower, "#") {
+		// eval()/exec() with dynamic input. Fix #723: the raw-line `#` guard is
+		// gone — comment stripping above already removes `# ...` text, and
+		// mentions inside string literals are now also skipped.
+		if strings.Contains(lower, "eval(") || strings.Contains(lower, "exec(") {
 			issues = append(issues, insecurePatternInstance{
 				category: "code injection",
 				detail:   "eval()/exec() with dynamic content - code injection risk",
@@ -506,9 +531,10 @@ func lineHasConcatPlus(line string) bool {
 }
 
 // pyStripCommentsAndStrings removes Python comments and string-literal
-// contents from a single line (fix #274), so mentions of insecure patterns
-// inside comments (`# ...`), docstrings, string literals or URL query strings
-// do not trigger the verify-bypass detector. '#' starts a comment when found
+// contents from a single line (fix #274; shared by all Python checks since
+// fix #723), so mentions of insecure patterns inside comments (`# ...`),
+// docstrings, string literals or URL query strings do not trigger the
+// detectors. '#' starts a comment when found
 // outside a string; '...', "...", ”'...”' and """...""" contents are
 // dropped (the delimiting quotes are consumed too).
 //
@@ -563,9 +589,10 @@ func pyStripCommentsAndStrings(line string) string {
 	return b.String()
 }
 
-// goStripTrailingComment removes a trailing // or /* comment from a single Go
-// code line (fix #278), so SQL keywords inside trailing comments do not
-// trigger the text-based SQL injection check.
+// goStripTrailingComment removes a trailing // or /* comment from a single
+// C-style code line (Go and JS; fix #278, shared by all checks since fix
+// #723), so insecure patterns inside trailing comments do not trigger the
+// text-based detectors.
 //
 // Simplified (deliberate): only the spaced forms " // " and " /* " are treated
 // as comment starts, which keeps URL literals like "http://example.com"
