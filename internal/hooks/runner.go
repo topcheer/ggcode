@@ -79,8 +79,9 @@ func Dispatch(cfg HookConfig, env HookEnv) HookResult {
 	return runSync(hooks, env)
 }
 
-// runSync runs hooks sequentially. For blocking events, the first block wins.
-// For post_tool_use, collects inject_output from all matching hooks.
+// runSync runs hooks sequentially. For blocking events (pre_tool_use,
+// on_user_message), the first block wins. post_tool_use never blocks —
+// it only collects inject_output from all matching hooks (#679).
 // Hook execution errors (command failure, HTTP >= 400) are collected into the
 // returned HookResult.Err (joined) instead of being silently dropped (#547).
 func runSync(hooksList []Hook, env HookEnv) HookResult {
@@ -93,7 +94,11 @@ func runSync(hooksList []Hook, env HookEnv) HookResult {
 			continue
 		}
 		result := executeHook(h, env, payload)
-		if !result.Allowed {
+		if !result.Allowed && isBlockingEvent(env.Event) {
+			// Only blocking events short-circuit on a block. post_tool_use
+			// hooks cannot un-run the tool, so honoring a block there dropped
+			// the inject_output already collected and skipped remaining
+			// hooks (#679).
 			return result
 		}
 		if result.Err != nil {
@@ -115,6 +120,16 @@ func runSync(hooksList []Hook, env HookEnv) HookResult {
 	return res
 }
 
+// isBlockingEvent reports whether block semantics (command exit 2 /
+// HTTP 403 → Allowed=false) apply to this event. Defined for
+// pre_tool_use and on_user_message only (#679): post_tool_use hooks run
+// after the tool has already executed — an exit 2 there cannot un-run
+// it, so honoring it just dropped collected inject_output and skipped
+// the remaining hooks.
+func isBlockingEvent(event string) bool {
+	return event == EventPreToolUse || event == EventOnUserMessage
+}
+
 // executeHook dispatches to command or http execution based on hook type.
 func executeHook(h Hook, env HookEnv, payload HookPayload) HookResult {
 	switch h.HasType() {
@@ -126,7 +141,8 @@ func executeHook(h Hook, env HookEnv, payload HookPayload) HookResult {
 }
 
 // executeCommandHook runs a local shell command.
-// Exit code 2 = block (pre hooks). Stdout captured for inject_output.
+// Exit code 2 = block (blocking events only — pre_tool_use,
+// on_user_message; #679). Stdout captured for inject_output.
 func executeCommandHook(h Hook, env HookEnv, payload HookPayload) HookResult {
 	payloadJSON := string(payload.JSON())
 
@@ -147,37 +163,7 @@ func executeCommandHook(h Hook, env HookEnv, payload HookPayload) HookResult {
 	defer cancel()
 
 	// Template expansion — only known vars, preserve unknown for shell.
-	// #566(D): every expansion value is shell-quoted so file paths with
-	// spaces/quotes stay a single word and RAW_INPUT content can never break
-	// out of its argument position (command injection via "; rm ...").
-	// Hook authors could not defend in the template itself — the shell
-	// re-parses quotes inside the expanded value either way.
-	expanded := os.Expand(h.Command, func(key string) string {
-		switch key {
-		case "TOOL_NAME":
-			return shellQuote(env.ToolName)
-		case "FILE_PATH":
-			return shellQuote(env.FilePath)
-		case "WORKING_DIR":
-			return shellQuote(env.WorkingDir)
-		case "RAW_INPUT":
-			return shellQuote(env.RawInput)
-		case "TOOL_SUCCESS":
-			return strconv.FormatBool(env.ToolSuccess)
-		case "TOOL_ERROR":
-			return shellQuote(env.ToolError)
-		case "TOOL_RESULT":
-			return shellQuote(env.ToolResult)
-		case "TOOL_DURATION":
-			return shellQuote(env.ToolDuration)
-		case "EVENT":
-			return shellQuote(env.Event)
-		case "PAYLOAD":
-			return shellQuote(payloadJSON)
-		default:
-			return "${" + key + "}"
-		}
-	})
+	expanded := expandHookTemplate(h.Command, env, payloadJSON)
 
 	c, _, err := util.NewShellCommandContext(ctx, expanded)
 	if err != nil {
@@ -201,7 +187,12 @@ func executeCommandHook(h Hook, env HookEnv, payload HookPayload) HookResult {
 
 	err = c.Run()
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 2 {
+		// Exit 2 = block, but blocking events only (#679). A post_tool_use
+		// hook exiting 2 cannot un-run the tool; honoring it turned the
+		// exit into a fake block that dropped collected inject_output and
+		// skipped the remaining hooks. Non-blocking events fall through to
+		// the generic error path (collected into errs by runSync).
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 2 && isBlockingEvent(env.Event) {
 			blockMsg := strings.TrimSpace(stderr.String())
 			if blockMsg == "" {
 				blockMsg = strings.TrimSpace(stdout.String())
@@ -219,8 +210,53 @@ func executeCommandHook(h Hook, env HookEnv, payload HookPayload) HookResult {
 	return HookResult{Allowed: true, Output: stdout.String()}
 }
 
+// expandHookTemplate expands $VAR references in a hook command template.
+// Only known vars, preserve unknown for shell.
+// #566(D): every expansion value is shell-quoted so file paths with
+// spaces/quotes stay a single word and RAW_INPUT content can never break
+// out of its argument position (command injection via "; rm ...").
+// Hook authors could not defend in the template itself — the shell
+// re-parses quotes inside the expanded value either way.
+// #679: RAW_INPUT and PAYLOAD are additionally capped at maxHookEnvValue
+// before quoting — the expanded value becomes part of the shell command
+// line (argv); past 64KB it crosses Linux MAX_ARG_STRLEN, execve fails
+// E2BIG, the hook never starts, and the pre_tool_use audit silently
+// passes (same rationale as the envp cap in buildHookEnv). The full input
+// still reaches the hook via stdin.
+func expandHookTemplate(command string, env HookEnv, payloadJSON string) string {
+	return os.Expand(command, func(key string) string {
+		switch key {
+		case "TOOL_NAME":
+			return shellQuote(env.ToolName)
+		case "FILE_PATH":
+			return shellQuote(env.FilePath)
+		case "WORKING_DIR":
+			return shellQuote(env.WorkingDir)
+		case "RAW_INPUT":
+			truncRaw, _ := truncateHookEnv(env.RawInput)
+			return shellQuote(truncRaw)
+		case "TOOL_SUCCESS":
+			return strconv.FormatBool(env.ToolSuccess)
+		case "TOOL_ERROR":
+			return shellQuote(env.ToolError)
+		case "TOOL_RESULT":
+			return shellQuote(env.ToolResult)
+		case "TOOL_DURATION":
+			return shellQuote(env.ToolDuration)
+		case "EVENT":
+			return shellQuote(env.Event)
+		case "PAYLOAD":
+			truncPayload, _ := truncateHookEnv(payloadJSON)
+			return shellQuote(truncPayload)
+		default:
+			return "${" + key + "}"
+		}
+	})
+}
+
 // executeHTTPHook sends an HTTP POST with the standardized payload.
-// HTTP 403 = block (pre hooks). Response body captured for inject_output.
+// HTTP 403 = block (blocking events only — pre_tool_use, on_user_message;
+// #679). Response body captured for inject_output.
 func executeHTTPHook(h Hook, env HookEnv, payload HookPayload) HookResult {
 	payloadJSON := payload.JSON()
 
@@ -273,7 +309,9 @@ func executeHTTPHook(h Hook, env HookEnv, payload HookPayload) HookResult {
 
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024)) // cap at 64KB
 
-	if resp.StatusCode == http.StatusForbidden {
+	// HTTP 403 = block, blocking events only (#679) — same event rule as
+	// exit 2. Non-blocking events fall through to the >=400 error path.
+	if resp.StatusCode == http.StatusForbidden && isBlockingEvent(env.Event) {
 		blockMsg := strings.TrimSpace(string(body))
 		debug.Log("hooks", "%s BLOCKED: HTTP %d body=%s", env.Event, resp.StatusCode, blockMsg)
 		return HookResult{
@@ -401,8 +439,25 @@ func matchToolSingle(pattern, toolName, rawInput string) bool {
 		if patArgs == "*" || patArgs == "" {
 			return true
 		}
+		// #679: a trailing `*` is a prefix anchor on the extracted path, not
+		// a no-op over the whole argument JSON. The old code ran
+		// Contains(rawInput, prefix) — byte-identical to the no-star branch —
+		// against the ENTIRE JSON including content fields (new_text/
+		// old_text), so `edit_file(internal/*)` fired when the edit content
+		// merely mentioned "internal/" and an exit-2 audit hook mis-blocked
+		// the call. Now: true path prefix first; when a path exists but is
+		// not prefixed, the secondary Contains runs over content-stripped
+		// JSON only (path-like field names still match, #429); the legacy
+		// whole-JSON Contains survives only when no structured path can be
+		// extracted (run_command argument matching, #413).
 		if strings.HasSuffix(patArgs, "*") {
 			prefix := strings.TrimSuffix(patArgs, "*")
+			if p := ExtractFilePath(toolName, rawInput); p != "" {
+				if strings.HasPrefix(p, prefix) {
+					return true
+				}
+				return strings.Contains(stripContentValues(rawInput), prefix)
+			}
 			return strings.Contains(rawInput, prefix)
 		}
 		return strings.Contains(rawInput, patArgs)
@@ -502,6 +557,29 @@ var pathParamFields = []string{"file_path", "path", "filename", "file"}
 // entirely so example paths embedded in content (e.g. a JSON config sample
 // inside write_file's content) are never mistaken for the target file (#547).
 var contentValueFields = []string{"content", "body", "text", "new_text", "old_text"}
+
+// stripContentValues re-serializes rawInput as JSON with content-like values
+// (content/body/text/new_text/old_text) removed, so substring matching can
+// never fire on user/agent content — only on structural field names and path
+// values (#679). Returns "" when rawInput is not structured JSON.
+func stripContentValues(rawInput string) string {
+	trimmed := strings.TrimSpace(rawInput)
+	if trimmed == "" {
+		return ""
+	}
+	var args map[string]any
+	if err := json.Unmarshal([]byte(trimmed), &args); err != nil {
+		return ""
+	}
+	for _, k := range contentValueFields {
+		delete(args, k)
+	}
+	b, err := json.Marshal(args)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
 
 // ExtractFilePath attempts to extract a file path from common tool argument patterns.
 // It parses rawInput as JSON and inspects only structured top-level fields;
