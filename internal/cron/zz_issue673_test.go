@@ -15,7 +15,6 @@ import (
 // rebuild when the restored NextFire is not in the future.
 func TestIssue673UpdateRollbackSkipsExpiredTimerRebuild(t *testing.T) {
 	dir := t.TempDir()
-	defer os.Chmod(dir, 0o755) // restore for TempDir cleanup
 	storePath := filepath.Join(dir, "jobs.json")
 
 	var fired atomic.Int32
@@ -37,14 +36,22 @@ func TestIssue673UpdateRollbackSkipsExpiredTimerRebuild(t *testing.T) {
 	stored.NextFire = time.Now().Add(-time.Hour)
 	s.mu.Unlock()
 
-	if err := os.Chmod(dir, 0o500); err != nil {
-		t.Fatalf("chmod dir: %v", err)
+	// Make persistence fail: replace the store with a same-name directory
+	// (deterministic on all platforms; the previous os.Chmod(dir, 0o500)
+	// injection was a no-op on Windows — found during windows/amd64
+	// verification of #673).
+	if err := os.Remove(storePath); err != nil {
+		t.Fatalf("remove store for dir-swap: %v", err)
 	}
+	if err := os.Mkdir(storePath, 0o755); err != nil {
+		t.Fatalf("mkdir in place of store: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(storePath) })
+
 	newExpr := "0 6 1 1 *"
 	if _, err := s.Update(job.ID, &newExpr, nil, nil); err == nil {
 		t.Fatalf("Update should fail when persistence fails")
 	}
-	_ = os.Chmod(dir, 0o755)
 
 	// The defensive rollback branch keeps the prior (elapsed) NextFire...
 	got, ok := s.Get(job.ID)

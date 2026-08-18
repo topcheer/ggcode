@@ -67,7 +67,6 @@ func TestIssue667UpdatePausedKeepsZeroNextFire(t *testing.T) {
 // NextTime error on rollback must be handled).
 func TestIssue667UpdateRollbackPausedInvariant(t *testing.T) {
 	dir := t.TempDir()
-	defer os.Chmod(dir, 0o755) // restore for TempDir cleanup
 	storePath := filepath.Join(dir, "jobs.json")
 
 	s := NewScheduler(func(string, bool) {}, storePath)
@@ -81,11 +80,19 @@ func TestIssue667UpdateRollbackPausedInvariant(t *testing.T) {
 		t.Fatalf("Pause: %v", err)
 	}
 
-	// Make persistence fail: read-only directory blocks the atomic
-	// write/rename used by save().
-	if err := os.Chmod(dir, 0o500); err != nil {
-		t.Fatalf("chmod dir: %v", err)
+	// Make persistence fail: replace the store with a same-name directory.
+	// Every persistence strategy (direct write, temp-file + rename) fails
+	// deterministically on all platforms. (The previous os.Chmod(dir, 0o500)
+	// injection was a no-op on Windows — the readonly attribute does not
+	// block creating/renaming files inside a directory — found during
+	// windows/amd64 verification of #667.)
+	if err := os.Remove(storePath); err != nil {
+		t.Fatalf("remove store for dir-swap: %v", err)
 	}
+	if err := os.Mkdir(storePath, 0o755); err != nil {
+		t.Fatalf("mkdir in place of store: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(storePath) })
 
 	newExpr := "0 6 1 1 *"
 	if _, err := s.Update(job.ID, &newExpr, nil, nil); err == nil {
