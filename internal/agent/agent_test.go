@@ -26,12 +26,19 @@ func init() {
 type mockTool struct {
 	name   string
 	result tool.Result
+
+	// delay, when > 0, is slept inside Execute so tool-duration metrics are
+	// measurable on hosts with coarse monotonic clocks (~0.6ms VM QPC).
+	delay time.Duration
 }
 
 func (t mockTool) Name() string                { return t.name }
 func (t mockTool) Description() string         { return "mock tool" }
 func (t mockTool) Parameters() json.RawMessage { return json.RawMessage(`{"type":"object"}`) }
 func (t mockTool) Execute(ctx context.Context, input json.RawMessage) (tool.Result, error) {
+	if t.delay > 0 {
+		time.Sleep(t.delay)
+	}
 	return t.result, nil
 }
 
@@ -85,6 +92,18 @@ type mockProvider struct {
 	tokenCount    int
 	chatCalls     int
 	streamCalls   int
+
+	// firstEventDelay, when > 0, delays delivery of the first streamed event
+	// by this duration (goroutine delivery, ctx-aware). Metric tests use it so
+	// TTFT/Duration exceed one tick of coarse monotonic clocks: Windows VM QPC
+	// can be ~0.6ms, where an instant mock measures 0 and "expected positive"
+	// assertions cannot distinguish a recorded metric from a zero one.
+	firstEventDelay time.Duration
+
+	// eventInterval, when > 0, additionally spaces every subsequent event,
+	// making event-to-event windows (e.g. Reasoning→Done think time) measurable
+	// on the same coarse clocks.
+	eventInterval time.Duration
 }
 
 type blockingSummaryProvider struct {
@@ -290,6 +309,32 @@ func (m *mockProvider) ChatStream(ctx context.Context, messages []provider.Messa
 	}
 	m.mu.Unlock()
 	ch := make(chan provider.StreamEvent, len(events))
+	if m.firstEventDelay > 0 || m.eventInterval > 0 {
+		// Delayed/spaced event delivery so elapsed-time metrics (TTFT, Duration,
+		// think-time windows between events) exceed one clock tick on hosts with
+		// coarse monotonic clocks.
+		go func() {
+			for i, event := range events {
+				d := m.eventInterval
+				if i == 0 {
+					d = m.firstEventDelay
+				}
+				if d > 0 {
+					timer := time.NewTimer(d)
+					select {
+					case <-timer.C:
+					case <-ctx.Done():
+						timer.Stop()
+						close(ch)
+						return
+					}
+				}
+				ch <- event
+			}
+			close(ch)
+		}()
+		return ch, nil
+	}
 	for _, event := range events {
 		ch <- event
 	}
@@ -1754,6 +1799,7 @@ func TestRunStreamEmitsErrorWhenMaxIterationsReached(t *testing.T) {
 
 func TestRunStreamEmitsLLMMetric(t *testing.T) {
 	mp := &mockProvider{
+		firstEventDelay: time.Millisecond, // measurable TTFT on coarse clocks (~0.6ms VM QPC)
 		streamEvents: [][]provider.StreamEvent{{
 			{Type: provider.StreamEventText, Text: "Hello"},
 			{Type: provider.StreamEventDone, Usage: &provider.TokenUsage{InputTokens: 10, OutputTokens: 5}},
@@ -1832,6 +1878,7 @@ func TestEmitUsageWithSource(t *testing.T) {
 
 func TestRunStreamEmitsToolMetric(t *testing.T) {
 	mp := &mockProvider{
+		firstEventDelay: time.Millisecond, // measurable durations on coarse clocks (~0.6ms VM QPC)
 		streamEvents: [][]provider.StreamEvent{
 			{
 				{Type: provider.StreamEventToolCallDone, Tool: provider.ToolCallDelta{ID: "tc1", Name: "mock", Arguments: json.RawMessage(`{}`)}},
@@ -1844,7 +1891,11 @@ func TestRunStreamEmitsToolMetric(t *testing.T) {
 		},
 	}
 	registry := tool.NewRegistry()
-	if err := registry.Register(mockTool{name: "mock", result: tool.Result{Content: "ok"}}); err != nil {
+	if err := registry.Register(mockTool{
+		name:   "mock",
+		result: tool.Result{Content: "ok"},
+		delay:  time.Millisecond, // measurable tool duration on coarse clocks (~0.6ms VM QPC)
+	}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1936,6 +1987,8 @@ func TestRunStreamEmitsToolMetricOnFailure(t *testing.T) {
 
 func TestRunStreamEmitsReasoningMetric(t *testing.T) {
 	mp := &mockProvider{
+		firstEventDelay: time.Millisecond, // measurable TTFT on coarse clocks (~0.6ms VM QPC)
+		eventInterval:   time.Millisecond, // Reasoning→Done think window spans multiple ticks
 		streamEvents: [][]provider.StreamEvent{
 			{
 				{Type: provider.StreamEventReasoning, Text: "thinking..."},
