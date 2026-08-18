@@ -11,6 +11,7 @@ type InboundRouteKind string
 const (
 	InboundRouteEmpty    InboundRouteKind = "empty"
 	InboundRouteSlash    InboundRouteKind = "slash"
+	InboundRouteShell    InboundRouteKind = "shell"
 	InboundRouteApproval InboundRouteKind = "approval"
 	InboundRouteAskUser  InboundRouteKind = "ask_user"
 	InboundRouteMessage  InboundRouteKind = "message"
@@ -30,6 +31,13 @@ func RouteInboundText(text string, hasPendingApproval, hasPendingAskUser bool) I
 	}
 	if strings.HasPrefix(trimmed, "/") {
 		return InboundRoute{Kind: InboundRouteSlash, Text: trimmed}
+	}
+	// Shell passthrough ($ cmd / ! cmd) routes BEFORE approval/ask/message:
+	// like the TUI escape, it must execute immediately even while the agent
+	// is mid-turn — queuing it into the agent loop would defer a command the
+	// user expects to run now (and the model might reinterpret it).
+	if IsInboundShellCommand(trimmed) {
+		return InboundRoute{Kind: InboundRouteShell, Text: trimmed}
 	}
 	if hasPendingApproval {
 		if decision, ok := ParseApprovalReply(trimmed); ok {

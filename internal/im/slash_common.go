@@ -77,6 +77,7 @@ func CommonIMHelpText(extraLines ...string) string {
 		"/muteim <name> - Mute a specific adapter",
 		"/muteall - Mute all adapters except the one you're using",
 		"/muteself - Mute THIS adapter (you'll stop receiving replies; use /restart from another adapter to recover)",
+		"$ <command> (or ! <command>) - Run a shell command directly; output is pushed back immediately (runs even while the agent is busy)",
 	}
 	lines = append(lines, extraLines...)
 	lines = append(lines, "/help - Show this help")

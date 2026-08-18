@@ -64,7 +64,8 @@ type DaemonBridge struct {
 	restartDebug         bool                                                 // set by /restart debug to enable debug logging on next launch
 	eventSubs            []*daemonBridgeSub
 	eventSubMu           sync.RWMutex
-	cascadeCancel        func() // called to cascade-cancel sub-agents/delegates on interrupt
+	cascadeCancel        func()             // called to cascade-cancel sub-agents/delegates on interrupt
+	emitTextOverride     func(string) error // test hook: when set, replaces emitter.EmitText for shell passthrough
 }
 
 // NewDaemonBridge creates a bridge that submits IM messages directly to the agent.
