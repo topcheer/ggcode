@@ -2836,6 +2836,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// are executed concurrently before the sequential loop. Results are
 		// consumed in-order; side-effect tools still run sequentially.
 		preExecuted := a.preExecuteReadOnlyTools(ctx, toolCalls)
+		// Parallel pre-execution of wait-family tools (wait_agent,
+		// teammate_results): concurrent waits make batch latency the MAX
+		// instead of the SUM of remaining sub-agent runtimes, and every wait's
+		// progress streams live (per-toolID callbacks) instead of only the
+		// first being visible. Consumed in-order below.
+		waitPreExecuted := a.preExecuteWaitTools(ctx, toolCalls)
 		// Batch edit conflict detection: when the LLM emits multiple file-editing
 		// calls targeting the same file in one batch, warn upfront so the model
 		// knows subsequent edits may fail (file content changes after each edit).
@@ -2990,6 +2996,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			} else if pre, ok := preExecuted[idx]; ok {
 				// Parallel pre-execution result (LLMCompiler/W&D-inspired).
 				// Runs permission check; if denied, the read-only result is discarded.
+				result = a.usePreExecutedWithPermission(ctx, tc, pre)
+			} else if pre, ok := waitPreExecuted[idx]; ok {
+				// Wait-family parallel result: same permission semantics as
+				// read-only pre-execution (waiting is side-effect-free, denial
+				// merely discards the snapshot).
 				result = a.usePreExecutedWithPermission(ctx, tc, pre)
 			} else if cmdCached, hit := a.checkCommandCache(tc.Name, tc.Arguments); hit {
 				// Deterministic command cache: skip re-running build/test commands
