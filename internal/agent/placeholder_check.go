@@ -141,13 +141,23 @@ func checkPlaceholderCode(filePath, oldContent, newContent string) []string {
 
 	var warnings []string
 
+	// fix #730 (same family as #723/#728): strip comments and docstring
+	// bodies from both versions BEFORE the multiset comparison, so MENTIONS
+	// of placeholder patterns inside comments or docstrings (e.g. "// legacy
+	// path used to panic(...)" or a Python docstring documenting a raise) do
+	// not count as introduced placeholders. checkVagueTodos intentionally
+	// still runs on the RAW content — its patterns are TODO comments by
+	// definition and must keep matching comments.
+	oldStripped := stripPlaceholderComments(oldContent, ext)
+	newStripped := stripPlaceholderComments(newContent, ext)
+
 	// 1. Language-specific placeholder patterns (substring-based).
 	// Position-aware comparison (fix #171/#175): fixed substrings like
 	// `panic("TODO")` are identical everywhere, so we use trimmed line content
 	// to distinguish actual new occurrences from moved ones (fix #572 Bug C).
 	for _, p := range patterns {
-		oldLines := substringLineMultiset(oldContent, p.pattern)
-		newLines := substringLineMultiset(newContent, p.pattern)
+		oldLines := substringLineMultiset(oldStripped, p.pattern)
+		newLines := substringLineMultiset(newStripped, p.pattern)
 		introduced := 0
 		for line, cnt := range newLines {
 			if old := oldLines[line]; cnt > old {
@@ -167,6 +177,150 @@ func checkPlaceholderCode(filePath, oldContent, newContent string) []string {
 	}
 
 	return warnings
+}
+
+// stripPlaceholderComments removes comments (and Python docstring bodies)
+// from content so MENTIONS of placeholder patterns inside comments or
+// docstrings do not count toward the multiset comparison (fix #730, same
+// family as #723 for insecure-pattern comment FPs and #728 for block-comment
+// body lines).
+//
+// Reuses the shared #723/#728 helpers for C-style languages
+// (cStyleBlockCommentLine + goStripTrailingComment). For Python/Ruby a
+// dedicated line stripper (pyStripCommentsKeepStrings) removes `#` comments
+// and triple-quoted docstring bodies — with cross-line docstring state — but
+// deliberately KEEPS single-quoted string literals: several real placeholder
+// patterns contain string literals (e.g. `raise Exception("TODO")`), which
+// the shared pyStripCommentsAndStrings would drop (its string-dropping
+// semantics are correct for insecure-pattern detection but would create
+// false negatives here).
+//
+// Stripped-to-empty lines are harmless: substringLineMultiset keys on
+// trimmed line content, so an empty line never contains any pattern.
+func stripPlaceholderComments(content, ext string) string {
+	switch ext {
+	case ".py", ".rb":
+		return pyStripCommentsKeepStrings(content)
+	case ".go", ".js", ".jsx", ".ts", ".tsx", ".rs", ".java", ".kt":
+		return cStyleStripComments(content)
+	default:
+		return content
+	}
+}
+
+// cStyleStripComments strips // and /* */ comments from C-style source
+// content (Go, JS/TS, Rust, Java, Kotlin), reusing the #723/#728 shared
+// helpers: cStyleBlockCommentLine for block-comment state tracking and
+// full-line comments, goStripTrailingComment for trailing comments on code
+// lines. String literals are untouched.
+func cStyleStripComments(content string) string {
+	lines := strings.Split(content, "\n")
+	inBlock := false
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		code, ok := cStyleBlockCommentLine(trimmed, &inBlock)
+		if !ok {
+			lines[i] = ""
+			continue
+		}
+		lines[i] = goStripTrailingComment(code)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// pyStripCommentsKeepStrings removes `#` comments and triple-quoted
+// (doc)string bodies from Python/Ruby source content, tracking docstring
+// state ACROSS lines (unlike the per-line pyStripCommentsAndStrings, a
+// multi-line docstring's body lines are fully dropped too). Single-quoted
+// string literals are kept verbatim so quote-containing placeholder
+// patterns (raise Exception("TODO")) remain detectable (fix #730).
+func pyStripCommentsKeepStrings(content string) string {
+	lines := strings.Split(content, "\n")
+	inDoc := false
+	var docQ rune
+	for i, line := range lines {
+		if inDoc {
+			closer := pyFindTripleQuote(line, docQ)
+			if closer < 0 {
+				lines[i] = ""
+				continue
+			}
+			// Docstring closes on this line; process the remainder as code.
+			line = line[closer+3:]
+			inDoc = false
+		}
+		lines[i] = pyStripLineKeepStrings(line, &inDoc, &docQ)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// pyStripLineKeepStrings strips `#` comments and docstring openers from one
+// line, copying single-quoted string literals through unchanged.
+func pyStripLineKeepStrings(line string, inDoc *bool, docQ *rune) string {
+	var b strings.Builder
+	r := []rune(line)
+	n := len(r)
+	i := 0
+	for i < n {
+		c := r[i]
+		if c == '#' {
+			break // comment: rest of line ignored
+		}
+		if c == '"' || c == '\'' {
+			var lit string
+			lit, i = pyScanQuoted(r, i, inDoc, docQ)
+			b.WriteString(lit)
+			continue
+		}
+		b.WriteRune(c)
+		i++
+	}
+	return b.String()
+}
+
+// pyScanQuoted consumes a quoted span starting at rune index i (r[i] is the
+// opening quote). Triple-quoted (doc)strings are dropped: contents are
+// skipped if the span closes on this line, otherwise the cross-line docstring
+// state is opened and the rest of the line is dropped. Single-quoted strings
+// are returned verbatim (delimiters included). Returns the text to emit (may
+// be empty) and the next rune index.
+func pyScanQuoted(r []rune, i int, inDoc *bool, docQ *rune) (string, int) {
+	n := len(r)
+	c := r[i]
+	if i+2 < n && r[i+1] == c && r[i+2] == c {
+		// Triple-quoted (doc)string.
+		j := i + 3
+		for j+2 < n {
+			if r[j] == c && r[j+1] == c && r[j+2] == c {
+				return "", j + 3 // closed on this line: drop contents
+			}
+			j++
+		}
+		*inDoc = true
+		*docQ = c
+		return "", n // unterminated: drop rest of line
+	}
+	// Single-quoted string: keep the literal verbatim.
+	j := i + 1
+	for j < n && r[j] != c {
+		j++
+	}
+	if j < n {
+		return string(r[i : j+1]), j + 1
+	}
+	return string(r[i:]), n // unterminated: keep rest of line
+}
+
+// pyFindTripleQuote returns the rune index of a triple quote `qqq` in line,
+// or -1 if absent.
+func pyFindTripleQuote(line string, q rune) int {
+	r := []rune(line)
+	for j := 0; j+2 < len(r); j++ {
+		if r[j] == q && r[j+1] == q && r[j+2] == q {
+			return j
+		}
+	}
+	return -1
 }
 
 // substringLineMultiset returns a map of trimmed line content → occurrence count of

@@ -1,12 +1,10 @@
 package agent
 
-// CHARACTERIZATION TEST for issue #730 (log output documents CURRENT buggy
-// behavior - do not treat it as correct semantics). Comment and docstring
-// MENTIONS of placeholder patterns (panic/raise/throw) fire the placeholder
-// detector because substringLineMultiset has no comment stripping. 3 of 4
-// cases emit warnings (Py comment, Py docstring, Go comment); the control
-// case (real placeholder) also fires, as intended. When #730 is fixed,
-// expect 0 warnings for the three mention cases and keep the control at 1.
+// REGRESSION TEST for issue #730 (fixed): comment and docstring MENTIONS
+// of placeholder patterns (panic/raise/throw) must NOT fire the placeholder
+// detector — substringLineMultiset comparison now runs on comment-stripped
+// content (fix #730, same family as #723/#728). The three mention cases
+// must emit 0 warnings; the control case (real placeholder) must stay at 1.
 //
 // Repro: go test -tags goolm -run 'TestR166PlaceholderCommentFP' -v ./internal/agent/
 
@@ -25,6 +23,14 @@ func TestR166PlaceholderCommentFP(t *testing.T) {
 	}
 	for _, c := range cases {
 		w := checkPlaceholderCode(c.file, "", c.code)
-		t.Logf("%s -> %d warning(s): %v", c.name, len(w), w)
+		if c.name == "Control: real placeholder py" {
+			if len(w) != 1 {
+				t.Errorf("%s: expected exactly 1 warning, got %d: %v", c.name, len(w), w)
+			}
+			continue
+		}
+		if len(w) != 0 {
+			t.Errorf("%s (issue #730 FP): expected 0 warnings, got %d: %v", c.name, len(w), w)
+		}
 	}
 }

@@ -42,12 +42,12 @@ func TestCheckPlaceholderCode_JSThrow(t *testing.T) {
 }
 
 func TestCheckPlaceholderCode_PreExistingNotFlagged(t *testing.T) {
-	// panic("not implemented") already in old content — should NOT be flagged
+	// panic("not implemented") already in old content - should NOT be flagged
 	old := "package main\n\nfunc process() {\n\tpanic(\"not implemented\")\n}\n"
 	new := old // no change
 
 	warnings := checkPlaceholderCode("process.go", old, new)
-	// Same count — should not flag
+	// Same count - should not flag
 	for _, w := range warnings {
 		if strings.Contains(w, "panic") {
 			t.Errorf("pre-existing placeholder should not be flagged: %s", w)
@@ -56,7 +56,7 @@ func TestCheckPlaceholderCode_PreExistingNotFlagged(t *testing.T) {
 }
 
 func TestCheckPlaceholderCode_RemovedPlaceholderNotFlagged(t *testing.T) {
-	// Agent REMOVES a placeholder — should definitely not be flagged
+	// Agent REMOVES a placeholder - should definitely not be flagged
 	old := "package main\n\nfunc process() {\n\tpanic(\"not implemented\")\n}\n"
 	new := "package main\n\nfunc process() {\n\tfmt.Println(\"done\")\n}\n"
 
@@ -177,5 +177,65 @@ func TestPlaceholder_MovedPatternDetected(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("moved panic(TODO) must be flagged: %v", w)
+	}
+}
+
+// TestPlaceholder_CommentAndDocstringMentionsNotFlagged pins fix #730 (same
+// family as #723/#728): MENTIONS of placeholder patterns inside comments,
+// block-comment bodies, trailing comments, and Python docstrings must NOT
+// count as introduced placeholders.
+func TestPlaceholder_CommentAndDocstringMentionsNotFlagged(t *testing.T) {
+	cases := []struct {
+		name string
+		file string
+		code string
+	}{
+		{"Go full-line comment", "main.go", "package main\n\n// legacy path used to panic(\"not implemented\") before v2\nfunc f() {}\n"},
+		{"Go trailing comment", "main.go", "package main\n\nfunc f() { x := 1 } // no longer panic(\"not implemented\")\n"},
+		{"Go block-comment body", "main.go", "package main\n\n/*\nlegacy path: panic(\"not implemented\")\nwas removed in v2\n*/\nfunc f() {}\n"},
+		{"Python # comment", "app.py", "# for unsupported ops we raise NotImplementedError here\nvalue = 1\n"},
+		{"Python single-line docstring", "app.py", "def f():\n    \"\"\"Will raise NotImplementedError if unsupported.\"\"\"\n    return 1\n"},
+		{"Python multi-line docstring", "app.py", "def f():\n    \"\"\"\n    Raises NotImplementedError if unsupported.\n    See docs for details.\n    \"\"\"\n    return 1\n"},
+		{"JS comment mentions throw", "app.ts", "// throws new Error(\"not implemented\") on purpose? no, removed\nexport const f = () => 1;\n"},
+	}
+	for _, c := range cases {
+		for _, w := range checkPlaceholderCode(c.file, "", c.code) {
+			t.Errorf("%s (issue #730 FP): expected no warnings, got: %s", c.name, w)
+		}
+	}
+}
+
+// TestPlaceholder_RealStubsStillFlaggedAfterStrip is the control side of fix
+// #730: real (non-comment) placeholder code must still be detected after
+// comment stripping - including the quote-containing Python pattern whose
+// literal is preserved by pyStripCommentsKeepStrings.
+func TestPlaceholder_RealStubsStillFlaggedAfterStrip(t *testing.T) {
+	cases := []struct {
+		name    string
+		file    string
+		code    string
+		wantSub string
+	}{
+		{"Go panic stub", "main.go", "package main\n\nfunc f() {\n\tpanic(\"not implemented\")\n}\n", "panic"},
+		{"Python raise stub", "app.py", "def f(x):\n    raise NotImplementedError\n", "NotImplementedError"},
+		{"Python quote-containing stub", "app.py", "def f(x):\n    raise Exception(\"TODO\")\n", "TODO"},
+		{"JS throw stub", "app.ts", "function f() {\n  throw new Error(\"not implemented\");\n}\n", "throw"},
+		// Real placeholder AFTER a docstring: proves cross-line docstring state
+		// does not swallow subsequent code lines.
+		{"Stub after docstring", "app.py", "def f():\n    \"\"\"Doc.\"\"\"\n    raise NotImplementedError\n", "NotImplementedError"},
+		// Real placeholder inside what looks like comment territory: code line
+		// with trailing comment stripped, placeholder intact.
+		{"Go code then trailing comment", "main.go", "package main\n\nfunc f() { panic(\"TODO\") } // hint\n", "TODO"},
+	}
+	for _, c := range cases {
+		found := false
+		for _, w := range checkPlaceholderCode(c.file, "", c.code) {
+			if strings.Contains(w, c.wantSub) {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%s: expected warning mentioning %q, got none", c.name, c.wantSub)
+		}
 	}
 }
