@@ -189,13 +189,25 @@ func (s *monorepoScoperState) recordEdit(filePath string) {
 // classifyPackage determines which top-level package a file path belongs to.
 // Returns "" for files outside any known package or in cross-cutting dirs.
 func (s *monorepoScoperState) classifyPackage(filePath string) string {
-	rel := filePath
-	if s.rootDir != "" && strings.HasPrefix(filePath, s.rootDir) {
-		rel = strings.TrimPrefix(filePath, s.rootDir)
-		rel = strings.TrimPrefix(rel, string(filepath.Separator))
+	// Normalize separators first: rootDir comes from filepath.Join (backslashes
+	// on Windows) while filePath is usually the LLM's literal tool argument
+	// (forward slashes). Splitting the raw strings on filepath.Separator made
+	// every prefix/rel test fail on Windows, silently disabling the whole
+	// detector there (both separator styles happen to agree on Linux, which is
+	// why this only shows up in Windows verification).
+	filePath = filepath.ToSlash(filePath)
+	rootDir := ""
+	if s.rootDir != "" {
+		rootDir = filepath.ToSlash(s.rootDir)
 	}
 
-	parts := strings.SplitN(rel, string(filepath.Separator), 2)
+	rel := filePath
+	if rootDir != "" && strings.HasPrefix(filePath, rootDir) {
+		rel = strings.TrimPrefix(filePath, rootDir)
+		rel = strings.TrimPrefix(rel, "/")
+	}
+
+	parts := strings.SplitN(rel, "/", 2)
 	if len(parts) < 2 || parts[0] == "" {
 		return ""
 	}
