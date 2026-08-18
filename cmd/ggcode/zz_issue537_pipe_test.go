@@ -41,7 +41,10 @@ func TestReadStdinEmptyPipeReturnsNil(t *testing.T) {
 // TestBuildPipePromptEmptyStdinNoPrefix covers #537 Bug E at the prompt
 // level: empty piped stdin must NOT prepend "\n\n" to the user prompt.
 func TestBuildPipePromptEmptyStdinNoPrefix(t *testing.T) {
-	prompt, blocks := buildPipePrompt("hi", nil)
+	prompt, blocks, err := buildPipePrompt("hi", nil)
+	if err != nil {
+		t.Fatalf("buildPipePrompt: %v", err)
+	}
 	if blocks != nil {
 		t.Fatalf("expected nil blocks, got %v", blocks)
 	}

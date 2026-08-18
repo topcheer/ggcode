@@ -7,9 +7,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/agentruntime"
@@ -21,6 +24,7 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/subagent"
 	"github.com/topcheer/ggcode/internal/tool"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // RunPipe executes the agent in non-interactive pipe mode.
@@ -139,7 +143,11 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 	}
 
 	// Compose the full prompt (may include image from stdin)
-	fullPrompt, imageBlocks := buildPipePrompt(prompt, stdinData)
+	fullPrompt, imageBlocks, err := buildPipePrompt(prompt, stdinData)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		return 1
+	}
 
 	// Output destination
 	var w io.Writer = os.Stdout
@@ -153,8 +161,13 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 		w = f
 	}
 
-	// Run agent non-interactively
-	ctx, cancel := context.WithCancel(context.Background())
+	// Run agent non-interactively. Watch SIGINT/SIGTERM so CI-style stop
+	// signals (`timeout --signal=TERM ... ggcode -p ...`) cancel the context
+	// and let the deferred cleanup below (core.Close, ACP clients, output
+	// file, checkpoints) run instead of killing the process outright (#722).
+	sigCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	ctx, cancel := context.WithCancel(sigCtx)
 	defer cancel()
 
 	var hasError bool
@@ -260,6 +273,15 @@ func dedupeStrings(values []string) []string {
 // A var (not const) so tests can shorten it.
 var stdinIdleTimeout = 30 * time.Second
 
+// stdinChunkSize is the per-read buffer size for readStdin.
+const stdinChunkSize = 32 * 1024
+
+// stdinMaxBytes caps total buffered stdin data. Aligned with
+// util.ReadLimitGeneral (the repo's generic-input limit family) so pipe mode
+// gets the same "prevents unbounded memory allocation" guarantee (#722).
+// A var (not const) so tests can shrink it.
+var stdinMaxBytes int64 = util.ReadLimitGeneral
+
 // readStdin reads all data from stdin if it's a pipe, otherwise returns nil.
 // Empty piped input returns nil (not []byte{}) so buildPipePrompt's nil check
 // correctly treats it as "no stdin data" (#537).
@@ -274,11 +296,20 @@ func readStdin() ([]byte, error) {
 	// Read manually with a per-read idle deadline instead of io.ReadAll so a
 	// stalled writer can't block startup indefinitely. A slow but flowing
 	// stream (data arriving at least once per window) still completes.
+	// The cumulative size is also capped (#722): `cat 4GB.bin | ggcode -p`
+	// used to buffer everything (then copy it again into the prompt string),
+	// ballooning RSS until the process got OOM-killed with no diagnosis.
 	var buf []byte
-	chunk := make([]byte, 32*1024)
 	for {
+		// Fresh chunk per iteration: on idle-timeout a reader goroutine stays
+		// parked in os.Stdin.Read holding this buffer, so chunks must never be
+		// reused across reads (#722).
+		chunk := make([]byte, stdinChunkSize)
 		n, readErr := readStdinChunk(chunk, stdinIdleTimeout)
 		buf = append(buf, chunk[:n]...)
+		if int64(len(buf)) > stdinMaxBytes {
+			return nil, fmt.Errorf("stdin input exceeded %d byte limit (%d bytes received); refusing to buffer unbounded input, write large data to a file and reference it from the prompt instead", stdinMaxBytes, len(buf))
+		}
 		if errors.Is(readErr, io.EOF) {
 			break
 		}
@@ -297,7 +328,9 @@ func readStdin() ([]byte, error) {
 	return buf, nil
 }
 
-// readStdinChunk reads once from stdin with an idle timeout.
+// readStdinChunk reads once from stdin with an idle timeout. On timeout the
+// reader goroutine remains parked holding buf, so callers must pass a buffer
+// that is not reused across calls (see readStdin).
 func readStdinChunk(buf []byte, timeout time.Duration) (int, error) {
 	type readResult struct {
 		n   int
@@ -316,10 +349,12 @@ func readStdinChunk(buf []byte, timeout time.Duration) (int, error) {
 	}
 }
 
-// buildPipePrompt builds the prompt with optional image from stdin.
-func buildPipePrompt(prompt string, stdinData []byte) (string, []provider.ContentBlock) {
+// buildPipePrompt builds the prompt with optional image from stdin. Non-image
+// stdin must be valid UTF-8 text; raw binaries are rejected with an error
+// instead of being silently mangled into the prompt (#722).
+func buildPipePrompt(prompt string, stdinData []byte) (string, []provider.ContentBlock, error) {
 	if stdinData == nil {
-		return prompt, nil
+		return prompt, nil, nil
 	}
 
 	// Check if stdin is an image
@@ -333,12 +368,15 @@ func buildPipePrompt(prompt string, stdinData []byte) (string, []provider.Conten
 				provider.TextBlock(prompt),
 				provider.ImageBlock(img.MIME, image.EncodeBase64(img)),
 			}
-			return "", blocks
+			return "", blocks, nil
 		}
 	}
 
-	// Plain text
-	return string(stdinData) + "\n\n" + prompt, nil
+	// Plain text: reject binary input before it becomes a lossy string.
+	if !utf8.Valid(stdinData) {
+		return "", nil, fmt.Errorf("stdin data is not valid UTF-8 text (looks like binary); pipe plain text or a recognized image format instead")
+	}
+	return string(stdinData) + "\n\n" + prompt, nil, nil
 }
 
 func formatPipeProgressEvent(event provider.StreamEvent) string {
