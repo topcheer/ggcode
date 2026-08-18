@@ -2101,10 +2101,10 @@ func (b *ChatBridge) StartMCPOAuth(ctx context.Context, serverName string, openU
 
 	result := &MCPOAuthStartResult{ServerName: serverName}
 	if handler.SupportsDeviceFlow() {
+		// Request the full server-declared scope set (#735): truncating to 4
+		// broke servers declaring 5+ scopes (invalid_scope or silently
+		// underprivileged tokens); the auth-flow branch below never truncates.
 		scopes := handler.GetScopes()
-		if len(scopes) > 4 {
-			scopes = scopes[:4]
-		}
 		devResp, err := handler.StartDeviceFlow(startCtx, scopes)
 		if err == nil {
 			result.AuthorizeURL = devResp.VerificationURI

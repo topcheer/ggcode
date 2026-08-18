@@ -386,11 +386,9 @@ func (m *Model) startMCPOAuth(oauthErr *plugin.MCPOAuthRequiredError) tea.Cmd {
 
 		// Try device flow first (no client_secret needed, no callback server needed)
 		if handler.SupportsDeviceFlow() {
+			// Full server-declared scopes (#735): least-privilege is guaranteed by
+			// the server's scopes_supported, client-side truncation only broke it.
 			scopes := handler.GetScopes()
-			// Limit scopes to avoid overly permissive requests
-			if len(scopes) > 4 {
-				scopes = scopes[:4]
-			}
 			devResp, err := handler.StartDeviceFlow(ctx, scopes)
 			if err == nil {
 				// Open verification URI in browser

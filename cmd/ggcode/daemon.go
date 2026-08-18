@@ -755,10 +755,8 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 				}
 				// Try device flow first
 				if handler.SupportsDeviceFlow() {
+					// Full server-declared scopes, no truncation (#735).
 					scopes := handler.GetScopes()
-					if len(scopes) > 4 {
-						scopes = scopes[:4]
-					}
 					devResp, err := handler.StartDeviceFlow(ctx, scopes)
 					if err == nil {
 						fmt.Fprintf(os.Stderr, "\x1b[33m\u2b21 MCP OAuth: %s\x1b[0m\r\n", serverName)
