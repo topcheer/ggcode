@@ -434,9 +434,26 @@ func (m *Manager) UnmuteBinding(adapterName string) error {
 	// points at another session. (MuteBinding deliberately keeps LastSessionID
 	// — "not a release of session ownership" — and UnmuteAll never rewrites
 	// it, so claiming here was never the intended design.)
-	if m.session != nil && binding.LastSessionID != "" && binding.LastSessionID != m.session.SessionID {
+	//
+	// #693 follow-up: distinguish a LIVE foreign owner (reject — the #689
+	// hijack case) from a DEAD one (a crash, kill -9 or power loss never runs
+	// the exit cleanup that clears LastSessionID, so the binding is an orphan
+	// and would otherwise be stuck muted forever with no recovery path short
+	// of disable+enable/rebind). Liveness is decided via the instance-detect
+	// registry: if no other ggcode instance is alive in this workspace, the
+	// foreign owner cannot be running — allow takeover (the UpdateSessionID
+	// below re-claims it for this session). If other instances are alive we
+	// cannot tell which one owns the binding, so stay conservative and reject.
+	// instanceDetect == nil (never registered) is also conservative: reject.
+	switch m.bindingOwnershipLocked(binding) {
+	case ownershipForeignLive:
 		m.mu.Unlock()
-		return fmt.Errorf("adapter %q is owned by another session (last=%s); unmute denied", adapterName, binding.LastSessionID)
+		return fmt.Errorf("adapter %q is owned by another live session (last=%s); unmute denied (disable+enable the adapter or rebind to take over)", adapterName, binding.LastSessionID)
+	case ownershipForeignDead:
+		debug.Log("im", "UnmuteBinding: dead-owner takeover of %s from dead session=%s", adapterName, binding.LastSessionID)
+		// Keep in-memory ownership in sync with the persisted claim below.
+		// (ownershipForeignDead implies m.session != nil.)
+		binding.LastSessionID = m.session.SessionID
 	}
 	binding.Muted = false
 	onRestart := m.onRestart
@@ -498,25 +515,91 @@ func (m *Manager) MuteAllExcept(exclude string) (int, error) {
 	return count, nil
 }
 
+// bindingOwnership classifies a binding's persisted owner relative to this
+// session. Shared by UnmuteBinding and UnmuteAll so both apply the identical
+// #689/#693 rule (live foreign owner → reject/skip; dead foreign owner →
+// takeover; own or unclaimed → proceed).
+type bindingOwnership int
+
+const (
+	ownershipOwned       bindingOwnership = iota // ours or unclaimed
+	ownershipForeignDead                         // foreign owner's instance is dead — takeover allowed
+	ownershipForeignLive                         // foreign owner's instance is alive — reject/skip
+)
+
+// bindingOwnershipLocked classifies binding ownership. Caller must hold m.mu.
+func (m *Manager) bindingOwnershipLocked(binding *ChannelBinding) bindingOwnership {
+	if m.session == nil || binding.LastSessionID == "" || binding.LastSessionID == m.session.SessionID {
+		return ownershipOwned
+	}
+	if m.foreignOwnerPossiblyAliveLocked() {
+		return ownershipForeignLive
+	}
+	return ownershipForeignDead
+}
+
+// foreignOwnerPossiblyAliveLocked reports whether a foreign-owed binding's
+// owner might still be running. Caller must hold m.mu (or accept the race).
+// It consults the instance-detect registry: another LIVE instance in this
+// workspace could own the binding → true. No other live instance (only self)
+// → the owner must be dead → false. Unregistered detector (nil) → true
+// (unknown, be conservative and keep the #689 rejection).
+func (m *Manager) foreignOwnerPossiblyAliveLocked() bool {
+	if m.instanceDetect == nil {
+		return true
+	}
+	return len(m.instanceDetect.ListInstances()) > 1
+}
+
 // UnmuteAll unmutes all muted bindings for this process.
 // Returns the number of adapters that were unmuted.
+//
+// #693: applies the same ownership rule as UnmuteBinding — bindings owned by
+// another LIVE session are skipped (staying muted), while dead owners' orphan
+// bindings are taken over and re-claimed for this session.
 func (m *Manager) UnmuteAll() (int, error) {
 	m.mu.Lock()
 	var toRestart []string
+	var toClaim []string
 	count := 0
 	for name, binding := range m.currentBindings {
 		if !binding.Muted {
 			continue
+		}
+		switch m.bindingOwnershipLocked(binding) {
+		case ownershipForeignLive:
+			// Same #689/#693 rule as UnmuteBinding: UnmuteAll must not become a
+			// back door that grabs a live foreign owner's channel for the ~3s
+			// window before the binding watcher re-mutes it.
+			debug.Log("im", "UnmuteAll: skipping %s owned by live session=%s", name, binding.LastSessionID)
+			continue
+		case ownershipForeignDead:
+			binding.LastSessionID = m.session.SessionID // implies m.session != nil
+			toClaim = append(toClaim, name)
 		}
 		binding.Muted = false
 		toRestart = append(toRestart, name)
 		count++
 	}
 	onRestart := m.onRestart
+	workspace := ""
+	sessionID := ""
+	if m.session != nil {
+		workspace = m.session.Workspace
+		sessionID = m.session.SessionID
+	}
+	store := m.bindingStore
 	snapshot, cb := m.snapshotAndCallbackLocked()
 	m.mu.Unlock()
 	if cb != nil {
 		cb(snapshot)
+	}
+	for _, name := range toClaim {
+		if store != nil && workspace != "" {
+			if err := store.UpdateSessionID(workspace, name, sessionID); err != nil {
+				debug.Log("im", "UnmuteAll: failed to claim %s for session=%s: %v", name, sessionID, err)
+			}
+		}
 	}
 	for _, name := range toRestart {
 		if onRestart != nil {

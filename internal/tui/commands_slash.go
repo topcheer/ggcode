@@ -21,6 +21,7 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/session"
+	toolpkg "github.com/topcheer/ggcode/internal/tool"
 	"github.com/topcheer/ggcode/internal/tunnel"
 )
 
@@ -248,31 +249,48 @@ func (m *Model) resetConversationView() {
 // old session's (or old mode's) approval request cannot leak into a new one
 // (issue #688 LOW). Blocked waiters are released with a non-blocking Deny/false
 // send; if the receiver is already gone the send is dropped.
+//
+// The sends are deliberately SYNCHRONOUS non-blocking selects: they can never
+// block (select with default), so there is no need to hand them to safego.Go.
+// Going through a goroutine made the release timing-dependent — a caller that
+// checks the channel right after a session switch could see it still empty
+// (flaky "waiter not released" races under -race).
 func (m *Model) clearPendingApprovals() {
 	if pa := m.pendingApproval; pa != nil {
 		m.pendingApproval = nil
 		if pa.Response != nil {
-			safego.Go("tui.clearPendingApprovals.deny", func() {
-				select {
-				case pa.Response <- permission.Deny:
-				default:
-				}
-			})
+			select {
+			case pa.Response <- permission.Deny:
+			default:
+			}
 		}
 	}
 	if pd := m.pendingDiffConfirm; pd != nil {
 		m.pendingDiffConfirm = nil
 		if pd.Response != nil {
-			safego.Go("tui.clearPendingApprovals.diffDeny", func() {
-				select {
-				case pd.Response <- false:
-				default:
-				}
-			})
+			select {
+			case pd.Response <- false:
+			default:
+			}
+		}
+	}
+	// #694: the questionnaire's response channel must be released too — the
+	// agent-side waiter (repl.go) blocks on a run-level ctx with no timeout;
+	// dropping the state without answering would hang the agent goroutine and
+	// leave m.loading stuck. Same non-blocking cancelled send as above, dropped
+	// if the receiver is already gone.
+	if qs := m.pendingQuestionnaire; qs != nil {
+		m.pendingQuestionnaire = nil
+		m.tunnelPendingAskUserID = ""
+		if qs.response != nil {
+			resp := qs.buildResponse(toolpkg.AskUserStatusCancelled)
+			select {
+			case qs.response <- resp:
+			default:
+			}
 		}
 	}
 	m.tunnelPendingApprovalID = ""
-	m.pendingQuestionnaire = nil
 }
 
 func (m *Model) handleApproval(d permission.Decision) tea.Cmd {
