@@ -5,6 +5,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestIsInboundShellCommand(t *testing.T) {
@@ -103,6 +104,68 @@ func TestHandleShellInbound_UsageHintOnBarePrefix(t *testing.T) {
 	defer em.mu.Unlock()
 	if len(em.texts) == 0 || !strings.Contains(em.texts[0], "Usage") {
 		t.Fatalf("expected usage hint, got %v", em.texts)
+	}
+}
+
+// waitForShellResult polls until predicate matches an emitted text or fails.
+func waitForShellResult(t *testing.T, em *captureEmitter, pred func(string) bool, what string) string {
+	t.Helper()
+	for i := 0; i < 150; i++ {
+		em.mu.Lock()
+		texts := append([]string(nil), em.texts...)
+		em.mu.Unlock()
+		for _, tx := range texts {
+			if pred(tx) {
+				return tx
+			}
+		}
+		sleepMs(20)
+	}
+	t.Fatalf("%s was not pushed back", what)
+	return ""
+}
+
+// TestHandleShellInbound_TruncationPreservesUTF8 (issue #727): truncating at a
+// byte cap must not split a multi-byte rune: Telegram rejects invalid UTF-8
+// with a 400 and the result would never reach the user.
+func TestHandleShellInbound_TruncationPreservesUTF8(t *testing.T) {
+	em := &captureEmitter{}
+	b := &DaemonBridge{emitTextOverride: em.EmitText}
+	// 1200 CJK chars = ~3600 bytes > 3500 cap; cap lands mid-rune.
+	body := strings.Repeat("中", 1200)
+	b.handleShellInbound("$ printf '%s' '" + body + "'")
+
+	out := waitForShellResult(t, em, func(s string) bool { return strings.Contains(s, "truncated") }, "truncated CJK output")
+	if !utf8.ValidString(out) {
+		t.Fatalf("truncated output is not valid UTF-8: %q", out[:80])
+	}
+	if !strings.Contains(out, "中") {
+		t.Fatal("expected CJK content in truncated output")
+	}
+}
+
+func TestHandleShellInbound_TruncationEnglish(t *testing.T) {
+	em := &captureEmitter{}
+	b := &DaemonBridge{emitTextOverride: em.EmitText}
+	b.handleShellInbound("$ printf '%s' " + strings.Repeat("a", 4000))
+
+	out := waitForShellResult(t, em, func(s string) bool { return strings.Contains(s, "truncated") }, "truncated English output")
+	if !utf8.ValidString(out) {
+		t.Fatal("English truncated output must be valid UTF-8")
+	}
+	if !strings.Contains(out, strings.Repeat("a", 100)) {
+		t.Fatal("expected body content in truncated output")
+	}
+}
+
+func TestHandleShellInbound_ExactlyAtCapNotTruncated(t *testing.T) {
+	em := &captureEmitter{}
+	b := &DaemonBridge{emitTextOverride: em.EmitText}
+	b.handleShellInbound("$ printf '%s' " + strings.Repeat("b", inboundShellMaxOutput))
+
+	out := waitForShellResult(t, em, func(s string) bool { return strings.Contains(s, "exit") }, "at-cap output")
+	if strings.Contains(out, "truncated") {
+		t.Fatal("output exactly at cap must not be truncated")
 	}
 }
 

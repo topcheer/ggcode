@@ -126,3 +126,39 @@ func TestIsLocalFilePath(t *testing.T) {
 		}
 	}
 }
+
+// TestExtractImagesFromText_QueryStringExtension (issue #729): a ".png" that
+// lives inside a query string is NOT a bare image URL and must not be
+// extracted (it would trigger a pointless 60s download attempt).
+func TestExtractImagesFromText_QueryStringExtension(t *testing.T) {
+	cases := []struct {
+		name string
+		text string
+	}{
+		{"ext only in query", "download at http://example.com/download?format=.png now"},
+		{"filename in query", "see http://example.com?file=report.png&x=1 today"},
+		{"hash fragment", "see http://example.com/page#logo.png here"},
+	}
+	for _, tc := range cases {
+		images, _ := ExtractImagesFromText(tc.text)
+		for _, img := range images {
+			if img.Kind == "url" {
+				t.Errorf("%s: incorrectly extracted URL %q", tc.name, img.Data)
+			}
+		}
+	}
+}
+
+// TestExtractImagesFromText_LegitQueryImageURL: URLs whose real path ends in
+// an image extension must still be extracted, with or without a query string.
+func TestExtractImagesFromText_LegitQueryImageURL(t *testing.T) {
+	images, _ := ExtractImagesFromText("check https://cdn.x/img.png?v=2 pls")
+	if len(images) != 1 || images[0].Data != "https://cdn.x/img.png?v=2" {
+		t.Fatalf("query URL: got %v, want single https://cdn.x/img.png?v=2", images)
+	}
+
+	images, _ = ExtractImagesFromText("check https://cdn.x/img.png pls")
+	if len(images) != 1 || images[0].Data != "https://cdn.x/img.png" {
+		t.Fatalf("plain URL: got %v, want single https://cdn.x/img.png", images)
+	}
+}

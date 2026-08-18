@@ -10,6 +10,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/safego"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // Inbound shell passthrough.
@@ -96,13 +97,19 @@ func (b *DaemonBridge) handleShellInbound(text string) {
 			sb.WriteString(fmt.Sprintf("(no output, exit error: %v)", err))
 		} else if body != "" {
 			if len(body) > inboundShellMaxOutput {
-				body = body[:inboundShellMaxOutput] + fmt.Sprintf("\n… (truncated, %d more chars)", len(body)-inboundShellMaxOutput)
+				// Snap to a rune boundary: byte-slicing mid-rune produces invalid
+				// UTF-8, which Telegram's API rejects with a 400 (see subagent/runner.go
+				// for the same pattern).
+				cut := util.SnapToRuneStart(body, inboundShellMaxOutput)
+				body = body[:cut] + fmt.Sprintf("\n… (truncated, %d more chars)", len(body)-cut)
 			}
 			sb.WriteString(body)
 		}
 		sb.WriteString(fmt.Sprintf("\n— exit %v in %s", exitCodeOrErr(err), elapsed.Round(time.Millisecond)))
 		debug.Log("daemon-bridge", "inbound shell '%s' done in %s (err=%v)", cmdText, elapsed.Round(time.Millisecond), err)
-		_ = b.emitShellText(sb.String())
+		if err := b.emitShellText(sb.String()); err != nil {
+			debug.Log("daemon-bridge", "inbound shell '%s' emit failed: %v", cmdText, err)
+		}
 	})
 }
 
