@@ -129,11 +129,17 @@ func MergeInstance(global, instance *Config) {
 	// Vendors — add instance vendors not in global
 	if global.Vendors == nil && instance.Vendors != nil {
 		global.Vendors = make(map[string]VendorConfig, len(instance.Vendors))
-		global.instanceFields["vendors"] = true
 	}
+	// #731: register the flag per adopted vendor KEY (same key-level semantics
+	// as ToolPerms below). Previously the flag was only set when global.Vendors
+	// was nil (global has A, instance has B) merged B into
+	// memory without marking "vendors" as instance-sourced, so the desktop
+	// write-back gate (InstanceFields() contains "vendors") never opened and
+	// AddCustomEndpoint/SaveAPIKey changes were silently lost on restart.
 	for k, v := range instance.Vendors {
 		if _, exists := global.Vendors[k]; !exists {
 			global.Vendors[k] = v
+			global.instanceFields["vendors"] = true
 		}
 	}
 
