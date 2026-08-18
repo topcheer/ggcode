@@ -15,8 +15,14 @@ func TestExpiredRead_BasicExpiryDetection(t *testing.T) {
 	if hint == "" {
 		t.Fatal("expected expiry hint when editing a previously-read file")
 	}
-	if !strings.Contains(hint, "changed since") {
-		t.Fatalf("hint should mention changed since, got: %s", hint)
+	if !strings.Contains(hint, "pre-edit read is stale") {
+		t.Fatalf("hint should mention the stale pre-edit read, got: %s", hint)
+	}
+	// #707: the imperative "Re-read for current content" contradicted the
+	// post-edit re-read detector — the message must point at the edit result,
+	// never instruct a re-read.
+	if strings.Contains(hint, "Re-read for current content") {
+		t.Fatalf("hint must not instruct a re-read (contradicts checkPostEditReread), got: %s", hint)
 	}
 }
 
