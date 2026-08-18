@@ -103,8 +103,18 @@ func TestDetectBatchEditConflicts_CaseInsensitive(t *testing.T) {
 		{Name: "edit_file", Arguments: mustJSON(t, map[string]string{"file_path": "foo.go"})},
 	}
 	warnings := detectBatchEditConflicts(calls)
-	if len(warnings) != 2 {
-		t.Fatalf("expected conflict for case-insensitive paths, got %d", len(warnings))
+	if batchPathFoldActive() {
+		// Case-insensitive filesystem (macOS APFS, Windows): Foo.go and
+		// foo.go are the same file, so both calls get a conflict warning.
+		if len(warnings) != 2 {
+			t.Fatalf("expected conflict for case-insensitive paths, got %d", len(warnings))
+		}
+		return
+	}
+	// Case-sensitive filesystem (Linux ext4, #714): distinct files, no
+	// conflict. The unconditional 2-warning expectation broke Linux CI.
+	if len(warnings) != 0 {
+		t.Fatalf("case-sensitive platform: Foo.go vs foo.go are different files, got %d warnings", len(warnings))
 	}
 }
 

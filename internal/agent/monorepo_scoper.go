@@ -195,10 +195,10 @@ func (s *monorepoScoperState) classifyPackage(filePath string) string {
 	// every prefix/rel test fail on Windows, silently disabling the whole
 	// detector there (both separator styles happen to agree on Linux, which is
 	// why this only shows up in Windows verification).
-	filePath = filepath.ToSlash(filePath)
+	filePath = strings.ReplaceAll(filePath, "\\", "/")
 	rootDir := ""
 	if s.rootDir != "" {
-		rootDir = filepath.ToSlash(s.rootDir)
+		rootDir = strings.ReplaceAll(s.rootDir, "\\", "/")
 	}
 
 	rel := filePath
