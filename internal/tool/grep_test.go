@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -324,4 +325,53 @@ func containsAny(s string, substrs ...string) bool {
 		}
 	}
 	return false
+}
+
+func TestFormatCountReportsGlobalTotalsWithPagination(t *testing.T) {
+	// 10 files, 100 total matches: a=15,b=12,c=10,d=9,e=8,f=8,g=8,h=7,i=7,j=16
+	counts := map[string]int{
+		"a.go": 15, "b.go": 12, "c.go": 10, "d.go": 9, "e.go": 8,
+		"f.go": 8, "g.go": 8, "h.go": 7, "i.go": 7, "j.go": 16,
+	}
+
+	// Page 1: offset=0, head_limit=3 -> 3 lines listed, but global totals.
+	res := formatCount(counts, grepArgs{Offset: 0, HeadLimit: 3})
+	content := res.Content
+	if !containsAny(content, "10 file(s)") || !containsAny(content, "100 match(es)") {
+		t.Fatalf("expected global totals '10 file(s), 100 match(es) total', got:\n%s", content)
+	}
+	if lines := countNonEmptyLines(content); lines != 3+1 { // 3 file lines + summary
+		t.Fatalf("expected 3 listed files + summary, got %d lines:\n%s", lines, content)
+	}
+	if !containsAny(content, "a.go: 15") || !containsAny(content, "c.go: 10") || containsAny(content, "d.go:") {
+		t.Fatalf("expected only first-page files a,b,c listed, got:\n%s", content)
+	}
+
+	// Page 2: same global totals.
+	res2 := formatCount(counts, grepArgs{Offset: 3, HeadLimit: 3})
+	if !containsAny(res2.Content, "10 file(s)") || !containsAny(res2.Content, "100 match(es)") {
+		t.Fatalf("page 2 should report same global totals, got:\n%s", res2.Content)
+	}
+	if !containsAny(res2.Content, "d.go: 9") || containsAny(res2.Content, "a.go:") {
+		t.Fatalf("page 2 should list only d,e,f, got:\n%s", res2.Content)
+	}
+
+	// No pagination: behavior unchanged, all 10 files listed.
+	res3 := formatCount(counts, grepArgs{})
+	if !containsAny(res3.Content, "10 file(s), 100 match(es) total") {
+		t.Fatalf("unpaginated output should report all totals, got:\n%s", res3.Content)
+	}
+	if lines := countNonEmptyLines(res3.Content); lines != 10+1 {
+		t.Fatalf("expected 10 file lines + summary, got %d lines", lines)
+	}
+}
+
+func countNonEmptyLines(s string) int {
+	n := 0
+	for _, l := range strings.Split(s, "\n") {
+		if strings.TrimSpace(l) != "" {
+			n++
+		}
+	}
+	return n
 }

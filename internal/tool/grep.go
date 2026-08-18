@@ -701,14 +701,17 @@ func formatCount(fileCounts map[string]int, args grepArgs) Result {
 	}
 	paths = paths[start:end]
 
-	var sb strings.Builder
 	totalMatches := 0
+	for _, c := range fileCounts {
+		totalMatches += c
+	}
+
+	var sb strings.Builder
 	for _, p := range paths {
 		c := fileCounts[p]
-		totalMatches += c
 		fmt.Fprintf(&sb, "%s: %d\n", p, c)
 	}
-	fmt.Fprintf(&sb, "\n%d file(s), %d match(es) total", len(paths), totalMatches)
+	fmt.Fprintf(&sb, "\n%d file(s), %d match(es) total", total, totalMatches)
 	return Result{Content: sb.String()}
 }
 
