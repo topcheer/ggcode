@@ -3,6 +3,7 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
+	"runtime"
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -152,9 +153,39 @@ func extractFilePathsForConflict(tc provider.ToolCallDelta) []string {
 	return paths
 }
 
-// normalizeBatchPath lowercases and trims the path for case-insensitive matching.
-// On case-insensitive filesystems (macOS HFS+, Windows NTFS), Foo.go and
-// foo.go refer to the same file.
+// normalizeBatchPath canonicalizes the path for same-file matching.
+// Case folding applies ONLY on case-insensitive filesystems (macOS APFS/HFS+,
+// Windows NTFS) — there Foo.go and foo.go are the same file. On case-sensitive
+// filesystems (Linux ext4 and most CI runners) Config.yaml and config.yaml are
+// genuinely different files; folding them would misreport two independent edits
+// as a same-file conflict and push the model toward the wrong remedy (#714).
+// ASCII-only folding (mirroring internal/permission's pathFoldActive pattern)
+// avoids Unicode folds that change byte lengths.
 func normalizeBatchPath(p string) string {
-	return strings.ToLower(strings.TrimSpace(p))
+	p = strings.TrimSpace(p)
+	if !batchPathFoldActive() {
+		return p
+	}
+	return asciiFoldLower(p)
+}
+
+// batchPathFoldActive reports whether this platform's filesystem compares
+// paths case-insensitively by default.
+func batchPathFoldActive() bool {
+	switch runtime.GOOS {
+	case "darwin", "windows":
+		return true
+	}
+	return false
+}
+
+// asciiFoldLower lowercases ASCII letters only (byte-length preserving).
+func asciiFoldLower(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if 'A' <= c && c <= 'Z' {
+			b[i] = c + ('a' - 'A')
+		}
+	}
+	return string(b)
 }
