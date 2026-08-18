@@ -32,12 +32,14 @@ func TestDesktopConfig_MissingFile(t *testing.T) {
 func TestDesktopConfig_SaveLoadRoundTrip(t *testing.T) {
 	withTestHome(t)
 
+	// #647: window bounds persist via the dirtyWindowState flag set by
+	// SetWindowState (the production path); raw struct-literal bounds are
+	// intentionally not merged by Save.
 	dc := &DesktopConfig{
 		WorkDir:  "/home/user/project",
-		WindowW:  1920,
-		WindowH:  1080,
 		Language: "zh-CN",
 	}
+	dc.SetWindowState(1920, 1080, 0, 0, false)
 	if err := dc.Save(); err != nil {
 		t.Fatal(err)
 	}

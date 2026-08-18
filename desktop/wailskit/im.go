@@ -192,9 +192,17 @@ func SaveIMAdapter(name string, values map[string]string) error {
 	// AddIMAdapter only checks non-empty, so "telegarm" persisted happily
 	// and the user only discovered the typo when Test Connection failed
 	// with "unknown platform" — leaving unstartable bad data in ggcode.yaml.
-	if imPlatformByID(platform) == nil {
+	meta := imPlatformByID(platform)
+	if meta == nil {
 		return fmt.Errorf("unknown platform %q (see GetIMPlatformRegistry for supported IDs)", platform)
 	}
+	// #648: validation is case-insensitive (#591 semantics) but the runtime
+	// adapter startup switch (internal/im startConfiguredAdapter) matches
+	// platform IDs EXACTLY with no default error branch — persisting the
+	// user's "Telegram" (the registry DisplayName) saved fine yet silently
+	// never started. Persist the registry's canonical ID so a config the
+	// save path endorses is one the runtime can actually launch.
+	platform = meta.ID
 
 	// Read enabled value from values map. If the caller did not send an
 	// explicit enabled value, preserve the existing adapter's Enabled state

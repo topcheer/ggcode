@@ -883,6 +883,19 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
   useEffect(() => {
     // If no sessionId from parent, try to fetch it directly from backend.
     if (!sessionId) {
+      // #630/#646: an explicit EMPTY id means the backend cleared the
+      // current session (e.g. the active session was deleted and the
+      // session:changed '' handler in Layout reset its state). Drop the
+      // stale transcript so the deleted session stops rendering; the next
+      // message then visibly starts a fresh session. Distinguish '' from
+      // the initial undefined — on first mount nothing has loaded yet and
+      // the backend may still hand us the auto-loaded session id below.
+      if (sessionId === '' && loadedSessionRef.current !== undefined && !runActiveRef.current) {
+        loadedSessionRef.current = undefined
+        setMessages([])
+        messagesRef.current = []
+        setThinking(false)
+      }
       App.GetCurrentSessionID().then((id: any) => {
         if (typeof id === 'string' && id) {
           // session:changed event in Layout will provide the sessionId

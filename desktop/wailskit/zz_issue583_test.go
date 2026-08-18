@@ -185,12 +185,14 @@ func TestIssue583_ConfigMultiInstanceMerge(t *testing.T) {
 	// Instance B: Load old state (simulating instance started before A's change)
 	// In real scenario, B would have the old snapshot. Here we simulate by
 	// creating a fresh instance without reading the disk first.
+	// #647: window bounds merge via the dirtyWindowState flag (set by
+	// SetWindowState), like every production instance — a raw struct literal
+	// never marks bounds dirty, so its W/H would be (correctly) ignored.
 	instB := &DesktopConfig{
 		WorkDir:  "/workspace/b", // Different workdir to simulate different instance
 		Language: "",             // Empty simulates old snapshot
-		WindowW:  1920,           // Different window size
-		WindowH:  1080,
 	}
+	instB.SetWindowState(1920, 1080, 0, 0, false)
 
 	// Instance B saves - with read-merge, this should NOT overwrite A's language
 	// Instead, it should merge B's changes (workdir, window) with A's language

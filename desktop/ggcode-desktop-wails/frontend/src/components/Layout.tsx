@@ -325,17 +325,25 @@ function LayoutInner() {
     const offSessionChanged = EventsOn('session:changed', (data: any) => {
       const sid = data?.sessionId
       if (sid === '') {
-        // #630: the backend cleared the current session (e.g. the active
+        // #630/#646: the backend cleared the current session (e.g. the active
         // session was deleted). Reset to blank so the UI stops showing the
         // deleted transcript and the next message starts a fresh session
         // visibly instead of silently.
-        if (activeSessionId) {
+        // #646: this handler is registered in a useEffect with an empty dep
+        // array, so reading the `activeSessionId` state here was a stale
+        // closure — it always saw the first-render `undefined`, the guard
+        // below was permanently falsy, and the reset branch was dead code.
+        // Read the ref mirror (kept current at every render, the same
+        // pattern switchSession uses) instead.
+        if (activeSessionIdRef.current) {
           setActiveSessionId('')
+          activeSessionIdRef.current = ''
         }
         return
       }
-      if (sid && sid !== activeSessionId) {
+      if (sid && sid !== activeSessionIdRef.current) {
         setActiveSessionId(sid)
+        activeSessionIdRef.current = sid
       }
     })
     return () => {

@@ -181,17 +181,21 @@ func (merged *DesktopConfig) mergeFromDirty(dc *DesktopConfig) {
 	if dc.WorkDir != "" {
 		merged.WorkDir = dc.WorkDir
 	}
-	if dc.WindowW != 0 {
+	// #647: WindowW/H/X/Y moved inside the dirtyWindowState gate. The old
+	// `!= 0` guards dropped a legitimate (0,0) origin (and any 0-width edge
+	// case) while WindowPosSet was still persisted from the dirty flag —
+	// leaving the contradictory on-disk state "WindowPosSet=true + stale
+	// coords" and restoring the window to its OLD position on next launch.
+	// Bounds are plain ints with no non-default sentinel (0 is valid), so —
+	// exactly like the bools below — only an instance that actually ran
+	// SetWindowState may write them.
+	if dc.dirtyWindowState {
 		merged.WindowW = dc.WindowW
-	}
-	if dc.WindowH != 0 {
 		merged.WindowH = dc.WindowH
-	}
-	if dc.WindowX != 0 {
 		merged.WindowX = dc.WindowX
-	}
-	if dc.WindowY != 0 {
 		merged.WindowY = dc.WindowY
+		merged.WindowMax = dc.WindowMax
+		merged.WindowPosSet = dc.WindowPosSet
 	}
 	// Language: only overwrite if this instance has a non-empty value.
 	// Preserve the value from other instances if we're empty (old snapshot).
@@ -201,10 +205,6 @@ func (merged *DesktopConfig) mergeFromDirty(dc *DesktopConfig) {
 	// #635: bools and FontZoom have no "non-default" sentinel, so they are
 	// merged only when this instance actually touched them via a setter.
 	// The companion *Set flags ride along with their owning toggle.
-	if dc.dirtyWindowState {
-		merged.WindowMax = dc.WindowMax
-		merged.WindowPosSet = dc.WindowPosSet
-	}
 	if dc.dirtyFontZoom {
 		merged.FontZoom = dc.FontZoom
 	}
