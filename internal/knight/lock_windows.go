@@ -3,10 +3,13 @@
 package knight
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"golang.org/x/sys/windows"
@@ -19,6 +22,19 @@ type instanceLock struct {
 	file *os.File
 	path string
 }
+
+// lockPIDOffset is the byte offset where the holder's PID is stored in the
+// lock file. LockFileEx below locks byte 0 only; on Windows byte-range locks
+// are MANDATORY — any read from a different handle that touches a locked
+// byte fails with a sharing violation. os.ReadFile reads from offset 0, so it
+// always hits the locked byte 0 and readLockPID/LockHeldBy got 0 on every
+// call (Linux flock is advisory process-wide, so the same code works there).
+// Storing the PID at an offset outside the locked region keeps diagnostics
+// readable through a separate handle while the lock is held.
+const (
+	lockPIDOffset = 32
+	lockPIDMaxLen = 16
+)
 
 // tryAcquireLock attempts to acquire an exclusive lock on the Knight lock file
 // in the project's .ggcode/ directory. Returns the lock on success, or nil if
@@ -51,9 +67,13 @@ func tryAcquireLock(projDir string) *instanceLock {
 		return nil
 	}
 
-	// Write our PID so other instances can report who holds the lock.
+	// Write our PID so other instances can report who holds the lock. The PID
+	// lives at lockPIDOffset, OUTSIDE the byte-0 lock range: mandatory Windows
+	// byte-range locks make any locked byte unreadable through other handles,
+	// so the classic "PID at offset 0" layout made the diagnostic read below
+	// fail with a sharing violation on every call.
 	f.Truncate(0)
-	f.Seek(0, 0)
+	f.Seek(lockPIDOffset, 0)
 	f.WriteString(strconv.Itoa(os.Getpid()))
 	f.Sync()
 
@@ -72,13 +92,22 @@ func (l *instanceLock) release() {
 	}
 }
 
-// readLockPID reads the PID from a lock file for informational purposes.
+// readLockPID reads the PID from a lock file for informational purposes. It
+// reads ONLY the unlocked PID region (offset lockPIDOffset..) — a mandatory
+// Windows byte-range lock on byte 0 makes whole-file reads fail from any
+// handle other than the lock owner's.
 func readLockPID(f *os.File) int {
-	data, err := os.ReadFile(f.Name())
-	if err != nil || len(data) == 0 {
+	if f == nil {
 		return 0
 	}
-	pid, _ := strconv.Atoi(string(data[:min(len(data), 16)]))
+	buf := make([]byte, lockPIDMaxLen)
+	n, err := f.ReadAt(buf, lockPIDOffset)
+	if err != nil && err != io.EOF {
+		return 0
+	}
+	data := buf[:n]
+	// Trim padding zeros / trailing junk before parsing.
+	pid, _ := strconv.Atoi(strings.TrimSpace(string(bytes.TrimRight(data, "\x00"))))
 	return pid
 }
 
@@ -86,21 +115,19 @@ func readLockPID(f *os.File) int {
 // given project directory, or 0 if the lock is not held.
 func LockHeldBy(projDir string) (int, error) {
 	lockPath := filepath.Join(projDir, ".ggcode", "knight.lock")
-	data, err := os.ReadFile(lockPath)
+	f, err := os.OpenFile(lockPath, os.O_RDWR, 0600)
 	if err != nil {
 		return 0, nil // no lock file
 	}
-	pid, _ := strconv.Atoi(string(data[:min(len(data), 16)]))
+	defer f.Close()
+	// Read only the unlocked PID region (see readLockPID): whole-file reads
+	// hit the mandatory byte-0 lock and fail with a sharing violation while
+	// another instance actually holds the lock.
+	pid := readLockPID(f)
 	if pid <= 0 {
 		return 0, nil
 	}
 	// Verify the lock is actually held by checking with a non-blocking attempt
-	f, err := os.OpenFile(lockPath, os.O_RDWR, 0600)
-	if err != nil {
-		return pid, nil // can't open = stale
-	}
-	defer f.Close()
-
 	handle := windows.Handle(f.Fd())
 	overlapped := windows.Overlapped{}
 	err = windows.LockFileEx(handle, windows.LOCKFILE_EXCLUSIVE_LOCK|windows.LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, &overlapped)
