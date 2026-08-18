@@ -1375,10 +1375,15 @@ func (m *Manager) reloadBindingLocked() error {
 		}
 	}
 
-	m.currentBindings = make(map[string]*ChannelBinding)
+	// #689: check preconditions BEFORE clearing currentBindings. BindAdapterToWorkspace
+	// has no session precondition (unlike BindChannel) and the desktop entry point
+	// (BindIMAdapter) calls it before a session exists, so this early-return path is
+	// reachable — clearing first wiped all in-memory bindings and discarded the
+	// prevMuted state the comment above promises to preserve.
 	if m.bindingStore == nil || m.session == nil {
 		return nil
 	}
+	m.currentBindings = make(map[string]*ChannelBinding)
 	bindings, err := m.bindingStore.ListByWorkspace(m.session.Workspace)
 	if err != nil {
 		return err

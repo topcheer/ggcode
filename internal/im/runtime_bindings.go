@@ -175,6 +175,15 @@ func (m *Manager) BindAdapterToWorkspace(adapterName, workspace string) error {
 		return fmt.Errorf("exclusive bind: %w", err)
 	}
 
+	// #434/#689: purge any DISABLED entry for this adapter. BindExclusive just
+	// replaced every persisted binding for this adapter (any workspace), so any
+	// disabledBindings tombstone is now a stale copy of a binding that no longer
+	// exists — without this purge reloadBindingLocked skips the fresh binding
+	// (dead adapter until restart) and EnableBinding would resurrect the stale
+	// pre-rebind copy (old workspace) back into currentBindings. UnbindAdapter
+	// and DeleteBinding do the same purge; this was the lone omission.
+	delete(m.disabledBindings, adapterName)
+
 	// Reload bindings to reflect the change
 	if err := m.reloadBindingLocked(); err != nil {
 		m.mu.Unlock()
@@ -188,6 +197,9 @@ func (m *Manager) BindAdapterToWorkspace(adapterName, workspace string) error {
 	if cb != nil {
 		cb(snapshot)
 	}
+	// #689: every other binding mutation calls this; a rebind that moves the
+	// adapter between workspaces must refresh other instances' snapshots too.
+	m.syncInstanceActiveChannels()
 
 	return nil
 }
@@ -412,6 +424,19 @@ func (m *Manager) UnmuteBinding(adapterName string) error {
 	if !ok || !binding.Muted {
 		m.mu.Unlock()
 		return ErrNoChannelBound
+	}
+	// #689 ownership check: foreign-mute semantics (reloadBindingLocked) keep
+	// other sessions' bindings in currentBindings with Muted=true, so "is muted"
+	// alone does not mean we own this channel. Unconditionally calling
+	// UpdateSessionID below let instance B steal session A's active channel:
+	// B claims ownership + starts the adapter, A's next reload sees foreign and
+	// mutes/stops — silent channel hijack. Reject when the persisted ownership
+	// points at another session. (MuteBinding deliberately keeps LastSessionID
+	// — "not a release of session ownership" — and UnmuteAll never rewrites
+	// it, so claiming here was never the intended design.)
+	if m.session != nil && binding.LastSessionID != "" && binding.LastSessionID != m.session.SessionID {
+		m.mu.Unlock()
+		return fmt.Errorf("adapter %q is owned by another session (last=%s); unmute denied", adapterName, binding.LastSessionID)
 	}
 	binding.Muted = false
 	onRestart := m.onRestart

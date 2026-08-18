@@ -261,19 +261,31 @@ func SaveIMAdapter(name string, values map[string]string) error {
 // old Extra is discarded to prevent cross-platform credential leakage
 // (#585): telegram and slack share the "bot_token" field name, so a switch
 // would otherwise inherit the old token as the new platform's credential.
+//
+// #690 extends the same guard to the transport-layer field family
+// (Transport/Command/Args/Env, and AllowFrom): on a platform switch the old
+// values are NOT inherited. Args/Env used to be copied unconditionally and
+// Transport/Command were backfilled whenever the update left them empty, so a
+// telegram→discord switch kept the old stdio bridge command and its env
+// (e.g. TELEGRAM_BOT_TOKEN) — the new adapter would launch the OLD platform's
+// bridge process with the OLD platform's credentials. AllowFrom entries are
+// platform-specific user/channel IDs, so they are reset on switch too.
 func mergeExistingIntoUpdate(update, existing config.IMAdapterConfig) config.IMAdapterConfig {
-	update.Args = existing.Args
-	update.Env = existing.Env
-	update.AllowFrom = existing.AllowFrom
-	if update.Transport == "" {
-		update.Transport = existing.Transport
-	}
-	if update.Command == "" {
-		update.Command = existing.Command
-	}
 	update.OutputMode = existing.OutputMode
 	update.Targets = existing.Targets
-	if existing.Extra != nil && existing.Platform == update.Platform {
+	samePlatform := existing.Platform == update.Platform
+	if samePlatform {
+		update.Args = existing.Args
+		update.Env = existing.Env
+		update.AllowFrom = existing.AllowFrom
+		if update.Transport == "" {
+			update.Transport = existing.Transport
+		}
+		if update.Command == "" {
+			update.Command = existing.Command
+		}
+	}
+	if existing.Extra != nil && samePlatform {
 		if update.Extra == nil {
 			update.Extra = make(map[string]interface{})
 		}
