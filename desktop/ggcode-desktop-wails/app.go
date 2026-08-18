@@ -240,8 +240,42 @@ func (a *App) enqueueUIEvent(name string, payload interface{}) {
 	select {
 	case a.streamEvents <- uiEvent{name: name, payload: payload}:
 	default:
+		// #706: that trade-off is only valid for regenerable stream data
+		// (chat:stream token deltas — the next delta repaints the view).
+		// One-shot interactive events (ask_user/approval request/cancel,
+		// pending_consumed) are NOT regenerable: a dropped request leaves
+		// the agent blocked on a no-timeout ask with no dialog shown, and a
+		// dropped cancel leaves a stale dialog. Route those through a
+		// lossless bypass — a direct EventsEmit dispatch (non-blocking;
+		// guarded by safego.Run so a dispatch panic cannot kill the agent
+		// goroutine). A request and its cancel can therefore never both be
+		// lost.
+		if interactiveUIEvent(name) {
+			debug.Log("desktop", "enqueueUIEvent: main buffer full, dispatching interactive event %q directly (lossless bypass)", name)
+			safego.Run("wails-event-emit", func() {
+				if a.ctx == nil {
+					return
+				}
+				wailsruntime.EventsEmit(a.ctx, name, payload)
+			})
+			return
+		}
 		debug.Log("desktop", "enqueueUIEvent: dropping UI event %q (buffer full or consumer dead)", name)
 	}
+}
+
+// interactiveUIEvent reports whether an event is one-shot interactive traffic
+// whose loss is user-visible and unrecoverable (#706): ask_user/approval
+// requests (the agent blocks on a no-timeout channel waiting for the answer)
+// and their cancels (the dialog must be dismissed), plus pending_consumed.
+// Regenerable stream tokens do NOT belong here.
+func interactiveUIEvent(name string) bool {
+	switch name {
+	case "ask_user:request", "approval:request",
+		"ask_user:cancel", "approval:cancel", "pending_consumed":
+		return true
+	}
+	return false
 }
 
 func (a *App) initWorkspace(dir string) error {

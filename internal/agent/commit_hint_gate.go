@@ -124,7 +124,20 @@ func (a *Agent) checkCommitHintGate(runStats *RunStats) string {
 			dirty[i] = filepath.Join(workingDir, p)
 		}
 	}
-	mine := intersectFileSets(edited, dirty)
+	// #705: FilesEdited records the LLM's literal pre-execution tool argument,
+	// which is relative in the most common usage (edit_file {path: "src/foo.go"}
+	// resolves against the tool's WorkingDir at execution time, but the record
+	// side keeps the literal string). Absolutize both sides against workingDir
+	// or the intersection is always empty and the #698 fix is inert.
+	editedAbs := make([]string, len(edited))
+	for i, p := range edited {
+		if !filepath.IsAbs(p) {
+			editedAbs[i] = filepath.Join(workingDir, p)
+		} else {
+			editedAbs[i] = p
+		}
+	}
+	mine := intersectFileSets(editedAbs, dirty)
 	if len(mine) == 0 {
 		// None of the agent's edits are dirty — the tree's dirt belongs to
 		// someone else; never urge the agent to commit it.
