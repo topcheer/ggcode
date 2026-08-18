@@ -104,7 +104,17 @@ func errorRushIsMutation(toolName string) bool {
 // documented detector scope is "build errors, test failures, edit errors" —
 // counting permission rejections would let two denied approvals followed by
 // a normal edit fire a false "blind-fixing" warning (#640).
+//
+// #653: the table must stay NARROW — tool/framework-level identifiers only.
+// Generic infrastructure substrings ("timed out", "timeout", "connection
+// refused", "server error", "service unavailable", "no such host", ...) were
+// removed because they routinely appear inside REAL build/test failure output
+// (e.g. "panic: test timed out after 10m0s", "dial tcp ...: connect:
+// connection refused" from a service that failed to start). Matching those
+// made the streak blind to exactly the detector's core scenario: the agent
+// blindly "fixing" flaky/network-dependent test failures.
 var errorRushNonCodeErrorMarkers = []string{
+	// user/authorization denials at the tool-framework level
 	"permission denied",
 	"permission request denied",
 	"operation not permitted",
@@ -115,32 +125,25 @@ var errorRushNonCodeErrorMarkers = []string{
 	"declined by user",
 	"not authorized",
 	"unauthorized",
-	"tool unavailable",
-	"mcp server unavailable",
-	"mcp timeout",
-	"mcp server timeout",
-	"lsp unavailable",
-	"lsp server not running",
-	"connection refused",
-	"deadline exceeded",
-	"context deadline exceeded",
-	"context canceled",
-	"timed out",
-	"timeout",
-	"connection reset",
-	"network error",
-	"no such host",
 	"authentication failed",
 	"invalid api key",
 	"rate limit",
 	"too many requests",
-	"server error",
-	"service unavailable",
+	// tool/MCP/LSP framework availability markers
+	"tool unavailable",
+	"mcp server unavailable",
+	"mcp timeout",
+	"mcp server timeout",
+	"mcp server not running",
+	"lsp unavailable",
+	"lsp server not running",
 }
 
 // errorRushIsNonCodeError reports whether an error output indicates an
 // environmental/authorization failure rather than a code-level one (#640).
-// Conservative substring match on the lowercased output.
+// Conservative substring match on the lowercased output; the marker table is
+// restricted to tool-framework identifiers so real command output (build/test
+// failures quoting network or timeout text) still feeds the streak (#653).
 func errorRushIsNonCodeError(output string) bool {
 	if output == "" {
 		return false

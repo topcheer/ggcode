@@ -266,9 +266,17 @@ func optionTakesValue(isScp bool, name string) bool {
 		return true
 	}
 	switch name {
-	case "rsh", "exclude-from", "include-from", "files-from", "suffix", "chmod",
+	case "rsh", "exclude", "include", "filter", "exclude-from", "include-from",
+		"files-from", "suffix", "chmod", "chown", "usermap", "groupmap",
 		"rsync-path", "password-file", "compare-dest", "copy-dest", "link-dest",
+		"backup-dir", "block-size", "max-size", "min-size", "compress-level",
 		"log-file", "out-format", "temp-dir", "partial-dir":
+		// #654: exclude/include (and filter) take their pattern as a BARE next
+		// token (--exclude 'srv:cache' == --exclude=srv:cache). Without them
+		// here the tokenizer treats the pattern as an operand, and a pattern
+		// containing a colon (no slash prefix, not a drive letter) passes
+		// isRemoteOperand — corrupting the source/destination direction
+		// analysis added in #641.
 		return true
 	}
 	return false

@@ -177,9 +177,13 @@ func (b *DaemonBridge) handleInteractiveCallback(cb InteractiveCallback) {
 	}
 	// Clear pendingAsk to match the text reply path — otherwise a subsequent
 	// text message can route to the same (already consumed) response channel
-	// and block forever (deadlock).
+	// and block forever (deadlock). Compare-then-clear (#655): if another
+	// inbound path already replaced pendingAsk for the NEXT question, that
+	// registration must survive.
 	b.mu.Lock()
-	b.pendingAsk = nil
+	if b.pendingAsk == pending {
+		b.pendingAsk = nil
+	}
 	b.interactiveMsgIDs = nil
 	b.mu.Unlock()
 }
@@ -393,7 +397,9 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 		if approvalCh != nil {
 			approvalCh <- route.Decision
 			b.mu.Lock()
-			b.pendingApproval = nil
+			if b.pendingApproval == approvalCh { // #655: compare-then-clear — a concurrent reply for the NEXT question must not be wiped
+				b.pendingApproval = nil
+			}
 			b.mu.Unlock()
 			return nil
 		}
@@ -411,7 +417,9 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 			resp := BuildAskUserResponseFromText(pending.request, route.Text)
 			pending.response <- resp
 			b.mu.Lock()
-			b.pendingAsk = nil
+			if b.pendingAsk == pending { // #655: compare-then-clear, not blind wipe
+				b.pendingAsk = nil
+			}
 			b.mu.Unlock()
 			return nil
 		}
@@ -483,39 +491,14 @@ func (b *DaemonBridge) HandleAskUser(ctx context.Context, req toolpkg.AskUserReq
 
 		// Try interactive buttons for choice questions; fallback to text for
 		// adapters that don't support InteractiveSender (e.g. QQ, DingDing).
-		// IMPORTANT: Register pendingAsk BEFORE sending buttons to eliminate
-		// the race window where early button clicks are silently dropped.
+		// #655: pendingAsk is registered EXACTLY ONCE per question, BEFORE the
+		// prompt/buttons go out. The old code registered a second, fresh-channel
+		// pending unconditionally after sending the buttons — answers landing in
+		// the race window resolved into the overwritten first channel (buffered,
+		// nobody listening) and were silently dropped, forcing the user to click
+		// again; the duplicate multiSelectChosen reset also wiped selections
+		// accumulated inside that window.
 		var msgIDs map[string]string
-		if len(q.Choices) > 0 {
-			// Block until the user replies via IM (text or button callback)
-			isMulti := q.Kind == toolpkg.AskUserKindMulti
-			pending := &pendingAskUser{
-				request:     singleReq, // use single-question request for correct answer mapping
-				response:    make(chan toolpkg.AskUserResponse, 1),
-				multiSelect: isMulti,
-			}
-			b.mu.Lock()
-			b.pendingAsk = pending
-			if isMulti {
-				b.multiSelectChosen = nil // reset accumulated selections
-			}
-			b.mu.Unlock()
-
-			// Now send interactive buttons - they can be safely received
-			msgIDs = b.emitter.EmitAskUserInteractive(q.Title, q, text)
-			if len(msgIDs) > 0 {
-				b.mu.Lock()
-				b.interactiveMsgIDs = msgIDs
-				b.mu.Unlock()
-			}
-		} else {
-			// Text-only question — send plain text to all adapters
-			if text != "" {
-				b.emitter.EmitAskUser(text)
-			}
-		}
-
-		// Block until the user replies via IM (text or button callback)
 		isMulti := q.Kind == toolpkg.AskUserKindMulti
 		pending := &pendingAskUser{
 			request:     singleReq, // use single-question request for correct answer mapping
@@ -528,6 +511,21 @@ func (b *DaemonBridge) HandleAskUser(ctx context.Context, req toolpkg.AskUserReq
 			b.multiSelectChosen = nil // reset accumulated selections
 		}
 		b.mu.Unlock()
+
+		if len(q.Choices) > 0 {
+			// Send interactive buttons — callbacks can be safely received now.
+			msgIDs = b.emitter.EmitAskUserInteractive(q.Title, q, text)
+			if len(msgIDs) > 0 {
+				b.mu.Lock()
+				b.interactiveMsgIDs = msgIDs
+				b.mu.Unlock()
+			}
+		} else {
+			// Text-only question — send plain text to all adapters
+			if text != "" {
+				b.emitter.EmitAskUser(text)
+			}
+		}
 
 		select {
 		case resp := <-pending.response:
@@ -546,7 +544,9 @@ func (b *DaemonBridge) HandleAskUser(ctx context.Context, req toolpkg.AskUserReq
 			}
 		case <-ctx.Done():
 			b.mu.Lock()
-			b.pendingAsk = nil
+			if b.pendingAsk == pending { // #655: compare-then-clear, not blind wipe
+				b.pendingAsk = nil
+			}
 			b.mu.Unlock()
 			return toolpkg.AskUserResponse{}, ctx.Err()
 		}
@@ -604,7 +604,9 @@ func (b *DaemonBridge) handleApproval(ctx context.Context, toolName string, inpu
 	case <-ctx.Done():
 		debug.Log("daemon", "approval: context cancelled for tool=%s", toolName)
 		b.mu.Lock()
-		b.pendingApproval = nil
+		if b.pendingApproval == ch { // #655: compare-then-clear, not blind wipe
+			b.pendingApproval = nil
+		}
 		b.mu.Unlock()
 		return permission.Deny
 	}

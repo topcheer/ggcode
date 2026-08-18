@@ -69,9 +69,6 @@ func TestIssue640_IsNonCodeErrorClassification(t *testing.T) {
 		"MCP server unavailable",
 		"mcp timeout",
 		"lsp server not running",
-		"connection refused",
-		"context deadline exceeded",
-		"request timed out",
 		"rate limit exceeded",
 	}
 	for _, out := range nonCode {
@@ -79,12 +76,20 @@ func TestIssue640_IsNonCodeErrorClassification(t *testing.T) {
 			t.Errorf("expected %q to be classified as non-code error", out)
 		}
 	}
+	// #653: generic infrastructure substrings were removed from the marker
+	// table — they routinely appear inside REAL build/test failure output and
+	// made the streak blind to flaky-test "blind fixing" loops. They now
+	// count as code-level errors (feeding the streak) by design.
 	codeErrors := []string{
 		"",
 		"build failed: undefined: foo",
 		"FAIL: TestIssue (exit status 1)",
 		"edit failed: old_text not found",
 		"undefined variable x",
+		"connection refused",
+		"context deadline exceeded",
+		"request timed out",
+		"panic: test timed out after 10m0s",
 	}
 	for _, out := range codeErrors {
 		if errorRushIsNonCodeError(out) {

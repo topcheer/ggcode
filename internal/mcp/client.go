@@ -749,6 +749,15 @@ func (c *Client) readResponseWithCancel(ctx context.Context, reqID *ID) (*Respon
 		}
 		return res.resp, res.err
 	case <-ctx.Done():
+		// #652: the waiter must be unregistered as soon as this request gives
+		// up, NOT when the read goroutine exits. The goroutine is parked behind
+		// readMu in Peek(1) when the server hangs, and readMessage's ctx check
+		// is unreachable there — deferring the unregistration to goroutine exit
+		// leaves a ghost waiter forever, which keeps hasOtherWaiters true for
+		// every later request and permanently blocks the only Abort path.
+		if waiter != nil {
+			c.unregisterWaiter(reqID, waiter)
+		}
 		// #644: a single request's ctx timeout must not tear down the whole
 		// stdio connection while other requests are still in flight — that
 		// kills their healthy in-flight calls and permanently closes the
