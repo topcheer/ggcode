@@ -398,17 +398,28 @@ func findMessageCutoff(path string) (int64, int, time.Time) {
 	var offsets []msgOff
 	var pos int64
 
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
-	for sc.Scan() {
-		lineLen := int64(len(sc.Bytes())) + 1 // +1 for newline
-
-		// Fast check: is this a message record?
-		if rt := quickRecordType(sc.Bytes()); rt == "message" {
-			ts := quickExtractTimestamp(sc.Bytes())
-			offsets = append(offsets, msgOff{offset: pos, ts: ts, isDialogue: quickIsDialogueRole(sc.Bytes())})
+	// #656: same tolerant bounded reader as loadSession — a >10MB line must
+	// not truncate the offset scan (it previously killed the Scanner, so the
+	// cutoff was computed from a partial file).
+	br := bufio.NewReader(f)
+	const maxLine = 10 * 1024 * 1024
+	for {
+		raw, consumed, rerr := readLineLimitedCounted(br, maxLine)
+		if rerr == errLineTooLong {
+			pos += consumed
+			continue
 		}
-		pos += lineLen
+		if line := bytes.TrimRight(raw, "\r\n"); len(line) > 0 {
+			// Fast check: is this a message record?
+			if rt := quickRecordType(line); rt == "message" {
+				ts := quickExtractTimestamp(line)
+				offsets = append(offsets, msgOff{offset: pos, ts: ts, isDialogue: quickIsDialogueRole(line)})
+			}
+		}
+		pos += consumed
+		if rerr != nil {
+			break // io.EOF or I/O error — window from what we scanned
+		}
 	}
 
 	totalMsgs := len(offsets)
@@ -927,9 +938,15 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 	defer f.Close()
 
 	ses := &Session{ID: id}
-	sc := bufio.NewScanner(f)
-	// Increase buffer for large tool outputs
-	sc.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+	// #656: use the same fault-tolerant bounded reader as the search path
+	// (#478) instead of bufio.Scanner. A single over-long JSONL line (e.g. a
+	// >10MB base64 image blob) previously tripped Scanner's ErrTooLong and
+	// made loadSession hard-fail — the ENTIRE session became unrecoverable.
+	// Over-long lines are now consumed, skipped, and logged; every other
+	// record keeps loading.
+	br := bufio.NewReader(f)
+	const maxLine = 10 * 1024 * 1024
+	skippedLong := 0
 
 	// Single-pass scan: track the last checkpoint and all post-checkpoint records.
 	// We only keep lightweight non-checkpoint records; checkpoint messages are
@@ -952,21 +969,32 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 	)
 
 	var byteOffset int64
-	for sc.Scan() {
-		lineLen := int64(len(sc.Bytes())) + 1
-		line := strings.TrimSpace(sc.Text())
+	for {
+		raw, consumed, rerr := readLineLimitedCounted(br, maxLine)
+		byteOffset += consumed
+		if rerr == errLineTooLong {
+			skippedLong++
+			continue // oversized line consumed; load resumes at the next one
+		}
+		lineLen := consumed
+		line := strings.TrimSpace(string(raw))
 		if line == "" {
-			byteOffset += lineLen
+			if rerr != nil {
+				break // io.EOF or I/O error — keep what we have (#656)
+			}
 			continue
 		}
 		var rec jsonlRecord
 		if err := json.Unmarshal([]byte(line), &rec); err != nil {
-			byteOffset += lineLen
+			// #657: malformed lines (e.g. a crash-torn half line that fused with
+			// a later record) were dropped silently — log so record loss is visible.
+			debug.Log("session", "loadSession %s: skipping malformed JSONL line at offset %d: %v", id, byteOffset-lineLen, err)
 			continue // skip malformed lines
 		}
 
-		lineStart := byteOffset
-		byteOffset += lineLen
+		// byteOffset was already advanced past this line at the loop top;
+		// lineStart is where this record began.
+		lineStart := byteOffset - lineLen
 
 		switch rec.Type {
 		case "meta":
@@ -1016,9 +1044,14 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 			// Old files may still contain these lines — skip them silently.
 			// The projection store is the sole source of tunnel event history.
 		}
+		if rerr != nil {
+			// io.EOF or a real I/O error: keep what was loaded — a partially
+			// readable session beats an unrecoverable one (#656).
+			break
+		}
 	}
-	if err := sc.Err(); err != nil {
-		return nil, fmt.Errorf("reading session %s: %w", id, err)
+	if skippedLong > 0 {
+		debug.Log("session", "loadSession %s: skipped %d over-long line(s) >10MB — session remains loadable (#656)", id, skippedLong)
 	}
 	f.Close() // close read handle before potential backfill rewrite
 
@@ -2556,6 +2589,63 @@ func (s *JSONLStore) AppendCheckpointToDisk(ses *Session, summaryMsgID, lastMsgI
 	return s.updateIndex(ses)
 }
 
+// readLineLimitedCounted is the load-path sibling of readLineLimited (#478):
+// it additionally reports how many bytes the line consumed — including a
+// fully discarded over-long line — so loadSession's byteOffset accounting
+// (used for time-windowed message loading) stays anchored even when poison
+// lines are skipped (#656).
+func readLineLimitedCounted(br *bufio.Reader, limit int) (line []byte, consumed int64, err error) {
+	var buf []byte
+	for {
+		chunk, rerr := br.ReadSlice('\n')
+		consumed += int64(len(chunk))
+		if rerr == bufio.ErrBufferFull {
+			if len(buf)+len(chunk) > limit {
+				// Discard this entire line, keep the reader moving.
+				for rerr == bufio.ErrBufferFull {
+					chunk, rerr = br.ReadSlice('\n')
+					consumed += int64(len(chunk))
+				}
+				return nil, consumed, errLineTooLong
+			}
+			buf = append(buf, chunk...)
+			continue
+		}
+		buf = append(buf, chunk...)
+		if len(buf) > limit {
+			return nil, consumed, errLineTooLong
+		}
+		return buf, consumed, rerr
+	}
+}
+
+// terminateTornTail checks whether the file's final byte is a newline. If not
+// (a crash tore the previous write mid-line), it appends one so the next
+// record starts on a fresh line instead of fusing with the residue — at load
+// time a fused line fails json.Unmarshal and BOTH records are lost (#657).
+// The caller must hold the session lock; f must be opened O_APPEND|O_RDWR.
+func terminateTornTail(f *os.File) error {
+	st, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if st.Size() == 0 {
+		return nil // fresh file, nothing torn
+	}
+	var last [1]byte
+	if _, err := f.ReadAt(last[:], st.Size()-1); err != nil {
+		return err
+	}
+	if last[0] == '\n' {
+		return nil // clean tail
+	}
+	if _, err := f.Write([]byte{'\n'}); err != nil { // O_APPEND: lands at EOF
+		return err
+	}
+	debug.Log("session", "appendRecordLines: terminated torn trailing line (crash residue) in %s", f.Name())
+	return nil
+}
+
 // appendRecordLine encodes rec to a single buffer then writes it in one
 // os.File.Write call. Combined with the store mutex, this guarantees no JSONL
 // line interleaving even for records larger than PIPE_BUF.
@@ -2622,9 +2712,20 @@ func appendRecordLines(path string, recs []jsonlRecord) error {
 	//   - The data reaches disk via the OS buffer cache within seconds.
 	//   - The only risk is power loss losing the last few buffered appends,
 	//     which is acceptable for session event logs.
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	// O_RDWR (not O_WRONLY) so the torn-tail check below can read the last
+	// byte through the same handle.
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0600)
 	if err != nil {
 		return err
+	}
+	// #657: a crash/SIGKILL mid-write can leave a torn final line with no
+	// trailing '\n'. Appending directly would fuse the new record onto that
+	// residue, and load would then silently drop BOTH lines (json.Unmarshal
+	// fails -> continue). We hold the session lock here, so terminate the
+	// torn line before appending.
+	if err := terminateTornTail(f); err != nil {
+		// Non-fatal: a failed check must not block appends entirely.
+		debug.Log("session", "appendRecordLines: torn-tail check failed for %s: %v", path, err)
 	}
 	if _, err := f.Write(buf.Bytes()); err != nil {
 		f.Close()
