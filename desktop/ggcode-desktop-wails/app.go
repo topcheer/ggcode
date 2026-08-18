@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"mime"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -712,16 +713,33 @@ func readClipboardFileAttachment(path string) ClipboardAttachment {
 		att.Error = "File is larger than 10MB"
 		return att
 	}
-	att.MimeType = mime.TypeByExtension(strings.ToLower(filepath.Ext(path)))
+	// #671: MimeType must come from the same source of truth as Kind/Error —
+	// the file CONTENT — not the extension. Previously the extension-derived
+	// value was never overridden (only used as a fallback when empty), so a
+	// UTF-16 .txt was rejected as binary while still reporting
+	// "text/plain; charset=utf-8", and a renamed image kept an "image/*"
+	// label on non-image bytes.
+	extMime := mime.TypeByExtension(strings.ToLower(filepath.Ext(path)))
+	sniffed := http.DetectContentType(data)
 	if looksLikeText(data) {
 		att.Kind = "text"
-		if att.MimeType == "" {
-			att.MimeType = "text/plain; charset=utf-8"
+		// Keep the extension's richer text type (e.g. text/csv) only when
+		// it agrees with the content verdict; otherwise the sniffed value
+		// wins so MimeType can never contradict Kind.
+		if extMime != "" && strings.HasPrefix(extMime, "text/") {
+			att.MimeType = extMime
+		} else {
+			att.MimeType = sniffed
 		}
 		att.Content = string(data)
 		return att
 	}
-	if att.MimeType == "" {
+	// Binary rejection path: report the sniffed content type. If sniffing
+	// still claims text/* (e.g. UTF-16 BOM detection), the content failed
+	// the paste-text heuristic, so downgrade to opaque octet-stream — no
+	// field may claim text while Kind/Error reject the data as binary.
+	att.MimeType = sniffed
+	if att.MimeType == "" || strings.HasPrefix(att.MimeType, "text/") {
 		att.MimeType = "application/octet-stream"
 	}
 	att.Error = "Binary files are not pasted as text"

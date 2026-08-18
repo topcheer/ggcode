@@ -1149,7 +1149,41 @@ func StartAnthropicOAuth() (string, error) {
 
 // CompleteAnthropicOAuth blocks until the OAuth callback is received and the token is saved.
 // Should be called from a goroutine after the browser is opened.
-func CompleteAnthropicOAuth() error {
+//
+// #670: single-flight — concurrent callers (double-click / event replay)
+// previously raced as independent waiters on the shared flow's capacity-1
+// callback channel; the loser returned a misleading "waiting for auth code"
+// failure even though the winner had actually saved the token. Concurrent
+// callers now join the in-flight call and observe its outcome.
+func CompleteAnthropicOAuth() (err error) {
+	// #670 single-flight: acquire the completion slot. A second caller
+	// while one completion is running waits for and inherits its outcome
+	// instead of racing the flow directly.
+	oauthCompleteMu.Lock()
+	if inflight := oauthCompleteInFlight; inflight != nil {
+		oauthCompleteMu.Unlock()
+		<-inflight.done
+		if inflight.err == nil {
+			// The concurrent call completed successfully; this caller's
+			// goal (a saved token) is achieved — report success, not a fake
+			// "failed" that would send the user through re-auth.
+			return nil
+		}
+		return fmt.Errorf("oauth completion by concurrent call failed: %w", inflight.err)
+	}
+	call := &oauthCompleteCall{done: make(chan struct{})}
+	oauthCompleteInFlight = call
+	oauthCompleteMu.Unlock()
+	defer func() {
+		// Publish the outcome (err is the named return; every return path
+		// assigns it) and release the slot before waking joiners.
+		oauthCompleteMu.Lock()
+		call.err = err
+		oauthCompleteInFlight = nil
+		oauthCompleteMu.Unlock()
+		close(call.done)
+	}()
+
 	oauthMu.Lock()
 	flow := currentOAuthFlow
 	oauthMu.Unlock()
@@ -1216,11 +1250,45 @@ func refreshRunningProviderAfterAuth() {
 }
 
 // LogoutAnthropicOAuth removes the stored Anthropic OAuth token.
+//
+// #670: logout is the mirror image of CompleteAnthropicOAuth's #616 fix —
+// the running provider only re-reads credentials when it is rebuilt, so
+// without the symmetric refresh below the provider kept authenticating
+// with the deleted access token until it expired, while the UI (which
+// reads the store) already showed "disconnected". The in-flight OAuth
+// flow (callback listener + receiver goroutine) is also cancelled so it
+// does not linger until Complete's timeout.
 func LogoutAnthropicOAuth() error {
-	return auth.DefaultStore().Delete(auth.ProviderAnthropic)
+	err := auth.DefaultStore().Delete(auth.ProviderAnthropic)
+	// Cancel any in-flight flow first so a racing CompleteAnthropicOAuth
+	// waiter unblocks promptly instead of polling a dead login.
+	oauthMu.Lock()
+	if currentOAuthFlow != nil {
+		currentOAuthFlow.Close()
+		currentOAuthFlow = nil
+	}
+	oauthMu.Unlock()
+	// Symmetric with CompleteAnthropicOAuth's post-save refresh (#616,
+	// #670): rebuild the running provider so the removed credential is
+	// dropped from memory together with the disk token.
+	refreshRunningProviderAfterAuth()
+	return err
 }
 
 var (
 	oauthMu          sync.Mutex
 	currentOAuthFlow *auth.ClaudeOAuthFlow
+
+	// #670 single-flight slot for CompleteAnthropicOAuth.
+	oauthCompleteMu       sync.Mutex
+	oauthCompleteInFlight *oauthCompleteCall
 )
+
+// oauthCompleteCall represents one in-flight CompleteAnthropicOAuth run.
+// The winner writes err exactly once (under oauthCompleteMu, before
+// closing done); concurrent losers wait on done and observe the shared
+// outcome instead of racing the flow's capacity-1 callback channel (#670).
+type oauthCompleteCall struct {
+	done chan struct{}
+	err  error
+}
