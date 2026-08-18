@@ -293,7 +293,8 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 		var usage *TokenUsage
 		var outputChars int
 		var truncated bool
-		streamError := false // set when a non-retryable error was sent to ch
+		streamError := false       // set when a non-retryable error was sent to ch
+		budget := newRetryBudget() // #722: cap cumulative retry backoff sleep per stream call
 
 		for attempt := 0; attempt < providerRetryAttempts; attempt++ {
 			if attempt > 0 {
@@ -416,7 +417,12 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 						}
 
 					case "message_start":
-						inputTokens = int(event.Message.Usage.InputTokens)
+						// #722: same non-zero guard as message_delta above — an
+						// out-of-order (protocol-violating) stream must not zero out
+						// input tokens already counted.
+						if event.Message.Usage.InputTokens > 0 && inputTokens == 0 {
+							inputTokens = int(event.Message.Usage.InputTokens)
+						}
 						debug.Log("anthropic", "message_start usage: input_tokens=%d output_tokens=%d cache_read=%d cache_write=%d",
 							event.Message.Usage.InputTokens, event.Message.Usage.OutputTokens,
 							event.Message.Usage.CacheReadInputTokens, event.Message.Usage.CacheCreationInputTokens)
@@ -442,7 +448,12 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 						// Notify user about retry
 						delay := retryDelay(err, attempt)
 						ch <- StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Retry %d/%d, waiting %v...] ", attempt+1, providerRetryAttempts, delay)}
-						if sleepErr := retrySleep(ctx, delay); sleepErr != nil {
+						if sleepErr := budget.sleep(ctx, delay); sleepErr != nil {
+							// #722: budget exhausted — stop retrying now; wrap with the
+							// sentinel so the failover layer switches immediately.
+							if sleepErr == errRetryBudgetExhausted {
+								sleepErr = fmt.Errorf("%w: %w", errRetryBudgetExhausted, err)
+							}
 							ch <- StreamEvent{Type: StreamEventError, Error: sleepErr}
 							streamError = true
 							return

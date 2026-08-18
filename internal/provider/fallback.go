@@ -126,12 +126,20 @@ func (f *FallbackProvider) maybeFailover(err error, failed Provider) (error, boo
 		return nil, false
 	}
 
+	// #722: retry-budget exhaustion means the inner retry loop already gave
+	// this provider a best-effort chance (the full 20-attempt backoff budget
+	// sleeps ~7.5min; demanding failoverThreshold such calls blocks headless
+	// callers ~23min). Treat it as sustained failure and switch NOW.
+	// Checked before the FailureNone gate below because the sentinel wraps a
+	// genuine provider failure that was already classified retryable.
+	budgetExhausted := errors.Is(err, errRetryBudgetExhausted)
+
 	// #304: user cancellation is not a provider failure. ClassifyLLMError
 	// already returns FailureNone for context.Canceled ("non-model failure"),
 	// but the counter below consumed every non-quota/auth error — 3
 	// consecutive cancels on the non-streaming path would sticky-failover a
 	// healthy primary for the rest of the session.
-	if ClassifyLLMError(err) == FailureNone {
+	if !budgetExhausted && ClassifyLLMError(err) == FailureNone {
 		return err, false
 	}
 	// #303: context overflow is a request-size problem handled by agent-side
@@ -141,6 +149,9 @@ func (f *FallbackProvider) maybeFailover(err error, failed Provider) (error, boo
 	}
 
 	immediate, trigger := shouldFailover(err)
+	if budgetExhausted {
+		immediate, trigger = true, FailoverTriggerRepeated
+	}
 
 	if !immediate {
 		// Transient error — increment counter and check threshold.

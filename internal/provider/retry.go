@@ -17,9 +17,59 @@ import (
 )
 
 const (
-	providerRetryAttempts   = 20
+	providerRetryAttempts = 20
+	// providerRetryBackoffCap caps a single backoff sleep.
 	providerRetryBackoffCap = 30 * time.Second
 )
+
+// providerRetryTimeBudget caps the CUMULATIVE backoff sleep per logical call
+// (#722). Without it, 20 attempts with 1s→30s exponential backoff sleep
+// ~7.5min per call; multiplied by the failover layer's 3-call threshold a
+// persistently failing primary blocks headless callers (cron/daemon/a2a)
+// ~23min before the fallback takes over. Interactive users can Ctrl-C, so
+// this is primarily a headless guard. Declared as a var so tests can
+// shrink it.
+var providerRetryTimeBudget = 2 * time.Minute
+
+// errRetryBudgetExhausted marks a failure whose inner retry loop already
+// consumed the full per-call backoff budget — the provider got a best-effort
+// chance. FallbackProvider treats it as sustained failure and switches
+// immediately instead of demanding failoverThreshold more full-budget calls.
+var errRetryBudgetExhausted = errors.New("retry budget exhausted")
+
+// retryBudget tracks cumulative backoff sleep against
+// providerRetryTimeBudget. Once the deadline passes, sleep returns
+// errRetryBudgetExhausted so callers stop retrying and surface a
+// sentinel-wrapped error.
+type retryBudget struct {
+	deadline time.Time
+	done     bool
+}
+
+func newRetryBudget() *retryBudget {
+	return &retryBudget{deadline: time.Now().Add(providerRetryTimeBudget)}
+}
+
+// sleep sleeps for delay (from retryDelay) unless the budget deadline is
+// closer, in which case it truncates the sleep and returns
+// errRetryBudgetExhausted (the pending retry must not run — the budget is
+// spent). Context cancellation propagates unchanged.
+func (b *retryBudget) sleep(ctx context.Context, delay time.Duration) error {
+	if remaining := time.Until(b.deadline); remaining <= 0 {
+		b.done = true
+		return errRetryBudgetExhausted
+	} else if delay > remaining {
+		b.done = true
+		delay = remaining
+	}
+	if err := retrySleep(ctx, delay); err != nil {
+		return err
+	}
+	if b.done {
+		return errRetryBudgetExhausted
+	}
+	return nil
+}
 
 var retrySleep = func(ctx context.Context, delay time.Duration) error {
 	select {
@@ -284,6 +334,7 @@ func retryWithBackoffCtx(ctx context.Context, fn func() error, maxAttempts int) 
 	if maxAttempts <= 0 {
 		maxAttempts = 1
 	}
+	budget := newRetryBudget()
 	var lastErr error
 	for i := 0; i < maxAttempts; i++ {
 		err := fn()
@@ -294,7 +345,13 @@ func retryWithBackoffCtx(ctx context.Context, fn func() error, maxAttempts int) 
 		if !isRetryableForContext(ctx, err) || i == maxAttempts-1 {
 			return err
 		}
-		if sleepErr := retrySleep(ctx, retryDelay(err, i)); sleepErr != nil {
+		if sleepErr := budget.sleep(ctx, retryDelay(err, i)); sleepErr != nil {
+			// #722: budget exhaustion wraps the LAST provider error so the
+			// failover layer recognizes best-effort exhaustion and switches
+			// immediately instead of running the full threshold again.
+			if errors.Is(sleepErr, errRetryBudgetExhausted) {
+				return fmt.Errorf("%w: %w", errRetryBudgetExhausted, err)
+			}
 			return sleepErr
 		}
 	}

@@ -381,7 +381,22 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 	}
 	content := p.convertResponseContent(choice.Message)
 
+	// #722: minimal relays omit `usage` on non-streaming completions; the
+	// only caller today is the compaction summarizer, where a zero Usage
+	// silently understates cost/budget. Mirror the streaming path's
+	// CountTokens + chars-based estimate fallback (ChatStream tail).
 	usage := openAIUsage(resp.Usage)
+	if usage.InputTokens == 0 && usage.OutputTokens == 0 {
+		inputTokens, err := p.CountTokens(ctx, messages)
+		if err != nil {
+			inputTokens = 0
+		}
+		usage = TokenUsage{
+			InputTokens:       inputTokens,
+			OutputTokens:      estimateTokensFromChars(len(choice.Message.Content)),
+			PromptTokensTotal: inputTokens,
+		}
+	}
 
 	return &ChatResponse{
 		Message: Message{Role: "assistant", Content: content},
@@ -417,7 +432,8 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 		var outputChars int
 		var err error
 		var truncated bool
-		streamError := false // set when a non-retryable error was sent to ch
+		streamError := false       // set when a non-retryable error was sent to ch
+		budget := newRetryBudget() // #722: cap cumulative retry backoff sleep per stream call
 
 		for attempt := 0; attempt < providerRetryAttempts; attempt++ {
 			if attempt > 0 {
@@ -446,7 +462,12 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 					debug.Log("openai", "CONNECT FAILED model=%s baseURL=%s attempt=%d/%d delay=%v: %T: %v", p.model, p.baseURL, attempt+1, providerRetryAttempts, delay, err, err)
 					// Notify user about retry
 					ch <- StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Retry %d/%d, waiting %v...] ", attempt+1, providerRetryAttempts, delay)}
-					if sleepErr := retrySleep(ctx, delay); sleepErr != nil {
+					if sleepErr := budget.sleep(ctx, delay); sleepErr != nil {
+						// #722: budget exhausted — stop retrying now; wrap with the
+						// sentinel so the failover layer switches immediately.
+						if sleepErr == errRetryBudgetExhausted {
+							sleepErr = fmt.Errorf("%w: %w", errRetryBudgetExhausted, err)
+						}
 						ch <- StreamEvent{Type: StreamEventError, Error: sleepErr}
 						streamError = true
 						return
@@ -534,7 +555,12 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 						if !emitted && isRetryableForContext(ctx, recvErr) && attempt < providerRetryAttempts-1 {
 							delay := retryDelay(recvErr, attempt)
 							ch <- StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Retry %d/%d, waiting %v...] ", attempt+1, providerRetryAttempts, delay)}
-							if sleepErr := retrySleep(ctx, delay); sleepErr != nil {
+							if sleepErr := budget.sleep(ctx, delay); sleepErr != nil {
+								// #722: budget exhausted — stop retrying now; wrap with
+								// the sentinel so the failover layer switches immediately.
+								if sleepErr == errRetryBudgetExhausted {
+									sleepErr = fmt.Errorf("%w: %w", errRetryBudgetExhausted, recvErr)
+								}
 								ch <- StreamEvent{Type: StreamEventError, Error: sleepErr}
 								// Mark the stream as errored so the tail does
 								// not emit a usage-bearing Done after the
@@ -589,10 +615,20 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 
 					// Tool call deltas
 					for _, tc := range delta.ToolCalls {
-						if tc.Index == nil {
+						idx := -1
+						if tc.Index != nil {
+							idx = int(*tc.Index)
+						} else if len(delta.ToolCalls) == 1 {
+							// #722: the official API and mainstream relays always send
+							// index, but minimal relays omit it. A single call in the
+							// delta has nothing to disambiguate — default to 0 instead
+							// of silently discarding the whole turn's tool call.
+							idx = 0
+						} else {
+							// Multiple calls without index cannot be located safely.
+							debug.Log("openai", "dropping tool-call delta without index (multi-call delta, id=%s name=%s)", tc.ID, tc.Function.Name)
 							continue
 						}
-						idx := int(*tc.Index)
 						existing, ok := toolCalls[idx]
 						if !ok {
 							existing = &ToolCallDelta{Index: idx}

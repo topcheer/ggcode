@@ -192,6 +192,7 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 	safego.Go("provider.gemini.streamRead", func() {
 		defer close(ch)
 
+		budget := newRetryBudget() // #722: cap cumulative retry backoff sleep per stream call
 		for attempt := 0; attempt < providerRetryAttempts; attempt++ {
 			var usage TokenUsage // reset per attempt to avoid leaking failed-attempt usage
 			var truncated bool
@@ -209,7 +210,12 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 						// Notify user about retry
 						delay := retryDelay(err, attempt)
 						ch <- StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Retry %d/%d, waiting %v...] ", attempt+1, providerRetryAttempts, delay)}
-						if sleepErr := retrySleep(ctx, delay); sleepErr != nil {
+						if sleepErr := budget.sleep(ctx, delay); sleepErr != nil {
+							// #722: budget exhausted — stop retrying now; wrap with the
+							// sentinel so failover switches immediately.
+							if sleepErr == errRetryBudgetExhausted {
+								sleepErr = fmt.Errorf("%w: %w", errRetryBudgetExhausted, err)
+							}
 							ch <- StreamEvent{Type: StreamEventError, Error: sleepErr}
 							return
 						}
