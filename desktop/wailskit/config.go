@@ -1143,6 +1143,13 @@ func StartAnthropicOAuth() (string, error) {
 		currentOAuthFlow.Close()
 	}
 	currentOAuthFlow = flow
+	// #674: every install starts a new flow generation. A completion parked
+	// on the previous flow must not speak for this one — the single-flight in
+	// CompleteAnthropicOAuth keys on this epoch, so a fresh login's Complete
+	// never inherits the old flow's failure (which previously left the new
+	// flow with no waiter at all: its callback listener leaked and the fresh
+	// login's auth code was dropped).
+	oauthFlowEpoch++
 	oauthMu.Unlock()
 	return flow.AutoURL, nil
 }
@@ -1155,25 +1162,63 @@ func StartAnthropicOAuth() (string, error) {
 // callback channel; the loser returned a misleading "waiting for auth code"
 // failure even though the winner had actually saved the token. Concurrent
 // callers now join the in-flight call and observe its outcome.
+//
+// #674: the flight is bound to the flow generation. A caller arriving while
+// a completion from an OLDER generation is still parked (user re-clicked
+// login; Start closed the old flow and installed a new one) must NOT
+// inherit the old flight's outcome — that hijack surfaced the old flow's
+// failure to the fresh login while the new flow itself ended up with no
+// waiter, leaking its callback listener and dropping the new auth code.
+// Such callers wait for the stale flight to release the slot and then run
+// their own completion against the current flow.
 func CompleteAnthropicOAuth() (err error) {
-	// #670 single-flight: acquire the completion slot. A second caller
-	// while one completion is running waits for and inherits its outcome
-	// instead of racing the flow directly.
-	oauthCompleteMu.Lock()
-	if inflight := oauthCompleteInFlight; inflight != nil {
-		oauthCompleteMu.Unlock()
-		<-inflight.done
-		if inflight.err == nil {
-			// The concurrent call completed successfully; this caller's
-			// goal (a saved token) is achieved — report success, not a fake
-			// "failed" that would send the user through re-auth.
-			return nil
+	var call *oauthCompleteCall
+	for {
+		// #670 single-flight: acquire the completion slot. A second caller
+		// while one completion is running joins it — but only when both
+		// belong to the same flow generation (#674).
+		oauthCompleteMu.Lock()
+		if inflight := oauthCompleteInFlight; inflight != nil {
+			// Lock order oauthCompleteMu → oauthMu is fixed (no reverse
+			// nesting exists in this package), so this read is race-free.
+			oauthMu.Lock()
+			flowEpoch, logoutGen := oauthFlowEpoch, oauthLogoutGen
+			oauthMu.Unlock()
+			if inflight.flowEpoch == flowEpoch {
+				oauthCompleteMu.Unlock()
+				<-inflight.done
+				if inflight.err == nil {
+					// The concurrent call completed successfully; this caller's
+					// goal (a saved token) is achieved — report success, not a fake
+					// "failed" that would send the user through re-auth.
+					// #674: unless a logout removed that token while we were
+					// parked — then the success is no longer backed by the
+					// store and must not be reported as connected.
+					if inflight.logoutGen == logoutGen {
+						return nil
+					}
+					return fmt.Errorf("oauth token saved by concurrent call was removed by a concurrent logout")
+				}
+				return fmt.Errorf("oauth completion by concurrent call failed: %w", inflight.err)
+			}
+			// Stale generation (#674): the flight belongs to a flow that was
+			// replaced or torn down. Do NOT inherit its outcome; wait for the
+			// slot to be released, then complete against the current flow.
+			oauthCompleteMu.Unlock()
+			<-inflight.done
+			continue
 		}
-		return fmt.Errorf("oauth completion by concurrent call failed: %w", inflight.err)
+		oauthMu.Lock()
+		call = &oauthCompleteCall{
+			done:      make(chan struct{}),
+			flowEpoch: oauthFlowEpoch,
+			logoutGen: oauthLogoutGen,
+		}
+		oauthMu.Unlock()
+		oauthCompleteInFlight = call
+		oauthCompleteMu.Unlock()
+		break // slot acquired as this generation's winner
 	}
-	call := &oauthCompleteCall{done: make(chan struct{})}
-	oauthCompleteInFlight = call
-	oauthCompleteMu.Unlock()
 	defer func() {
 		// Publish the outcome (err is the named return; every return path
 		// assigns it) and release the slot before waking joiners.
@@ -1228,6 +1273,15 @@ func CompleteAnthropicOAuth() (err error) {
 		RefreshToken: tokenResp.RefreshToken,
 		ExpiresAt:    time.Now().Add(time.Duration(expiresIn) * time.Second),
 	}
+	// #674: the 30s exchange above cannot be cancelled (the auth code is
+	// already consumed), so a LogoutAnthropicOAuth that ran while it was in
+	// flight must gate the Save — otherwise the exchange's completion
+	// "revived" the token the user had just deleted. call.logoutGen was
+	// snapshotted at slot acquisition; any logout since bumps the counter.
+	if call.supersededByLogout() {
+		debug.Log("wailskit", "oauth: token exchange finished after logout; discarding token instead of saving (#674)")
+		return fmt.Errorf("logout occurred during token exchange; token not saved")
+	}
 	if err := auth.DefaultStore().Save(info); err != nil {
 		return err
 	}
@@ -1259,15 +1313,22 @@ func refreshRunningProviderAfterAuth() {
 // flow (callback listener + receiver goroutine) is also cancelled so it
 // does not linger until Complete's timeout.
 func LogoutAnthropicOAuth() error {
-	err := auth.DefaultStore().Delete(auth.ProviderAnthropic)
-	// Cancel any in-flight flow first so a racing CompleteAnthropicOAuth
-	// waiter unblocks promptly instead of polling a dead login.
+	// #674: bump the logout generation and delete the stored token under
+	// oauthMu BEFORE anything else, so a completion whose (uncancellable)
+	// 30s token exchange is still in flight observes the bump via its
+	// call.logoutGen check in CompleteAnthropicOAuth and skips its Save
+	// instead of reviving the token the user just deleted. The flow epoch
+	// also bumps so parked same-generation joiners of any in-flight
+	// completion stop trusting its eventual success.
 	oauthMu.Lock()
+	oauthLogoutGen++
+	oauthFlowEpoch++
 	if currentOAuthFlow != nil {
 		currentOAuthFlow.Close()
 		currentOAuthFlow = nil
 	}
 	oauthMu.Unlock()
+	err := auth.DefaultStore().Delete(auth.ProviderAnthropic)
 	// Symmetric with CompleteAnthropicOAuth's post-save refresh (#616,
 	// #670): rebuild the running provider so the removed credential is
 	// dropped from memory together with the disk token.
@@ -1279,6 +1340,20 @@ var (
 	oauthMu          sync.Mutex
 	currentOAuthFlow *auth.ClaudeOAuthFlow
 
+	// #674: flow generation counter. Bumped under oauthMu whenever the
+	// current flow is replaced (StartAnthropicOAuth) or torn down
+	// (LogoutAnthropicOAuth). Completions snapshot it into their
+	// single-flight slot; joiners only inherit a flight of the SAME
+	// generation, so a re-login's fresh Complete is never hijacked by a
+	// stale flight's failure.
+	oauthFlowEpoch uint64
+
+	// #674: logout generation counter. Bumped under oauthMu at the top of
+	// LogoutAnthropicOAuth. A completion whose uncancellable token
+	// exchange finishes after the logout compares its snapshotted value
+	// against the current one and skips Save — the token must not revive.
+	oauthLogoutGen uint64
+
 	// #670 single-flight slot for CompleteAnthropicOAuth.
 	oauthCompleteMu       sync.Mutex
 	oauthCompleteInFlight *oauthCompleteCall
@@ -1288,7 +1363,23 @@ var (
 // The winner writes err exactly once (under oauthCompleteMu, before
 // closing done); concurrent losers wait on done and observe the shared
 // outcome instead of racing the flow's capacity-1 callback channel (#670).
+// flowEpoch/logoutGen snapshot the OAuth generations at slot acquisition
+// (#674): joiners from a different flow generation run their own
+// completion instead of inheriting a stale outcome, and a winner whose
+// exchange straddles a logout refuses to save the revived token.
 type oauthCompleteCall struct {
-	done chan struct{}
-	err  error
+	done      chan struct{}
+	err       error
+	flowEpoch uint64
+	logoutGen uint64
+}
+
+// supersededByLogout reports whether a logout ran after this call snapshotted
+// the logout generation (#674). Used to gate the post-exchange token Save: an
+// uncancellable exchange that straddles a logout must not revive the token
+// the user just deleted.
+func (c *oauthCompleteCall) supersededByLogout() bool {
+	oauthMu.Lock()
+	defer oauthMu.Unlock()
+	return c.logoutGen != oauthLogoutGen
 }

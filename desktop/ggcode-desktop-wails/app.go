@@ -723,10 +723,16 @@ func readClipboardFileAttachment(path string) ClipboardAttachment {
 	sniffed := http.DetectContentType(data)
 	if looksLikeText(data) {
 		att.Kind = "text"
-		// Keep the extension's richer text type (e.g. text/csv) only when
+		// Keep the extension's richer textual type (e.g. text/csv) only when
 		// it agrees with the content verdict; otherwise the sniffed value
 		// wins so MimeType can never contradict Kind.
-		if extMime != "" && strings.HasPrefix(extMime, "text/") {
+		// #675: "richer textual type" is not just text/* — XML-family
+		// extension mimes (image/svg+xml per RFC 7303's …+xml suffix,
+		// application/xml, …) and other textual application/* types are
+		// UTF-8 text too. The text/-only whitelist degraded a pasted .svg
+		// from image/svg+xml to the sniffed text/plain, contradicting the
+		// comment's stated intent.
+		if extMime != "" && isTextualExtensionMime(extMime) {
 			att.MimeType = extMime
 		} else {
 			att.MimeType = sniffed
@@ -763,6 +769,26 @@ func looksLikeText(data []byte) bool {
 		}
 	}
 	return controls*100/len(data) < 5
+}
+
+// isTextualExtensionMime reports whether an extension-derived MIME type
+// denotes textual content, so the text branch of the clipboard attachment
+// path may keep the extension's richer type instead of the blander sniffed
+// text/plain (#675). RFC 7303: any "…+xml" suffix is XML — textual (this is
+// what keeps image/svg+xml on a pasted .svg). Plus the common textual
+// application/* types whose extensions (.json, .js, .yaml, …) map outside
+// text/.
+func isTextualExtensionMime(m string) bool {
+	if strings.HasPrefix(m, "text/") || strings.HasSuffix(m, "+xml") {
+		return true
+	}
+	switch m {
+	case "application/xml", "application/json", "application/javascript",
+		"application/x-javascript", "application/yaml", "application/x-yaml",
+		"application/toml":
+		return true
+	}
+	return false
 }
 
 // SendMessage sends a user message to the agent.
