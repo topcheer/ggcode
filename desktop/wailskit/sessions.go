@@ -470,24 +470,28 @@ func formatMessagesAsJSON(msgs []SessionMessage, title string) (string, error) {
 	for _, msg := range msgs {
 		clean := msg
 
-		// Truncate ToolArgs BEFORE redaction (to catch truly large inputs).
+		// #704: redact FIRST, then truncate — the opposite order let a secret
+		// straddling the 2000-byte cut lose its matchable tail (below the
+		// pattern's {36,} minimum) and leak plaintext token chars into the
+		// exported JSON. The Markdown path (:428-444) already redacts first;
+		// truncation may now at worst split a [REDACTED] marker — harmless.
+		clean.ToolArgs = security.RedactForDisplay(clean.ToolArgs)
 		if len(clean.ToolArgs) > 2000 {
 			clean.ToolArgs = clean.ToolArgs[:util.SnapToRuneStart(clean.ToolArgs, 2000)]
 		}
-		// Then redact any secrets in the truncated args.
-		clean.ToolArgs = security.RedactForDisplay(clean.ToolArgs)
 
 		// Redact ToolDetail (comes from tool.DescribeTool, may show secrets).
 		if clean.ToolDetail != "" {
 			clean.ToolDetail = security.RedactForDisplay(clean.ToolDetail)
 		}
 
-		// Truncate Content BEFORE redaction (to catch large outputs like read_file).
+		// #704: same order as ToolArgs — redact the full value first so a
+		// boundary-straddling secret is fully matched, then truncate to 2000
+		// bytes on a rune boundary (matches the Markdown export path).
+		clean.Content = security.RedactForDisplay(clean.Content)
 		if len(clean.Content) > 2000 {
 			clean.Content = clean.Content[:util.SnapToRuneStart(clean.Content, 2000)]
 		}
-		// Then redact any secrets in the truncated content.
-		clean.Content = security.RedactForDisplay(clean.Content)
 
 		cleanMsgs = append(cleanMsgs, clean)
 	}
