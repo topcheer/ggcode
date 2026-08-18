@@ -21,6 +21,13 @@ type SessionCost struct {
 	// a genuinely free session, and persisted .cost.json snapshots never
 	// recalculated even after pricing became available.
 	HasPricing bool `json:"has_pricing,omitempty"`
+
+	// SessionsWithoutPricing is only meaningful on aggregates produced by
+	// Manager.AggregateAllCosts (#687): the number of summed sessions whose
+	// costs are unknown (HasPricing=false). A nonzero value means
+	// TotalCostUSD is a PARTIAL sum — callers must annotate it, not present
+	// it as a precise total.
+	SessionsWithoutPricing int `json:"sessions_without_pricing,omitempty"`
 }
 
 // AgentCostEntry tracks token usage attributable to a single sub-agent,

@@ -49,6 +49,14 @@ type monorepoScoperState struct {
 	touchedDirs map[string]int  // package_dir -> edit count
 	fired       bool            // whether the hint has already fired this run
 	crossPkg    map[string]bool // packages explicitly flagged as cross-cutting (shared, common, lib)
+
+	// suppressions counts how many times a fired hint was bounced by the
+	// guidance budget (#687). markUndelivered re-arms the one-shot, but an
+	// unbounded retry loop kept re-paying O(touchedDirs) formatting on every
+	// iteration during a saturated turn — and errorCompound, which always runs
+	// before the monorepo check, permanently starved it. After
+	// maxMonorepoSuppressions consecutive rejections we give up for the run.
+	suppressions int
 }
 
 // monorepoMarkers are files whose presence at a directory level indicates a
@@ -152,12 +160,14 @@ func (s *monorepoScoperState) discoverPackages(rootDir string) {
 	}
 }
 
-// reset clears per-run state.
+// reset clears per-run state. #687: the suppression budget is per-run too —
+// a saturated turn must not permanently disarm the detector for later runs.
 func (s *monorepoScoperState) reset() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.touchedDirs = make(map[string]int)
 	s.fired = false
+	s.suppressions = 0
 }
 
 // recordEdit tracks which package directory a file edit targets.
@@ -200,13 +210,18 @@ func (s *monorepoScoperState) classifyPackage(filePath string) string {
 	return topDir
 }
 
+// maxMonorepoSuppressions caps how many budget rejections the sprawl hint
+// tolerates before giving up for the run (#687). Three re-arms is enough to
+// survive transient saturation without an unbounded per-iteration retry.
+const maxMonorepoSuppressions = 3
+
 // maybeWarnScopeSprawl checks if the agent is editing across too many packages
 // without apparent cross-package intent. Returns a hint message or "".
 func (s *monorepoScoperState) maybeWarnScopeSprawl() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if !s.enabled || s.fired || len(s.touchedDirs) < 3 {
+	if !s.enabled || s.fired || s.suppressions > maxMonorepoSuppressions || len(s.touchedDirs) < 3 {
 		return ""
 	}
 
@@ -225,9 +240,18 @@ func (s *monorepoScoperState) maybeWarnScopeSprawl() string {
 // per-turn guidance budget (#681: one-shot + budget-droppable = the
 // detector randomly goes dark for the whole run). After this call the
 // sprawl check may fire again on a later, less saturated iteration.
+// #687: the re-arm is bounded — a permanently saturated turn (e.g. an
+// errorCompound storm that always claims the budget first) would otherwise
+// retry forever, re-paying the O(touchedDirs) format cost each iteration.
 func (s *monorepoScoperState) markUndelivered() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.suppressions >= maxMonorepoSuppressions {
+		// Next maybeWarnScopeSprawl call hits the > cap guard and gives up
+		// for the run; keep fired=true so no further retries.
+		return
+	}
+	s.suppressions++
 	s.fired = false
 }
 

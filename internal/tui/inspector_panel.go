@@ -385,7 +385,20 @@ func (m *Model) handleInspectorPrimaryAction(items []inspectorPanelItem) (Model,
 		}
 		// Invalidate tool caches (same as /undo) to prevent stale results.
 		m.agent.InvalidateToolCaches()
-		m.setInspectorMessage(inspectorText(m.currentLanguage(), "reverted", displayToolFileTarget(cp.FilePath)))
+		// #685: a multi-file span revert restores EVERY file after the target
+		// checkpoint, not just the checkpoint's own file — showing a single
+		// filename understated the rollback and could lure the user into
+		// editing other files that were silently reverted. List all restored
+		// files (same honesty as the agent-side message).
+		restored := cpMgr.ModifiedFiles()
+		var names []string
+		for _, fs := range restored {
+			names = append(names, fs.Path)
+		}
+		if len(names) == 0 {
+			names = []string{cp.FilePath}
+		}
+		m.setInspectorMessage(inspectorText(m.currentLanguage(), "reverted", strings.Join(names, ", ")))
 		return *m, nil
 	case inspectorPanelStatus:
 		return m.handleInspectorLSPStatusAction(items)
@@ -1193,7 +1206,7 @@ func inspectorText(lang Language, key string, args ...any) string {
 		case "revert_failed":
 			msg = "回退失败：%v"
 		case "reverted":
-			msg = "已回退到检查点：%s"
+			msg = "已回退到检查点（已恢复文件：%s）"
 		case "agent_cancelled":
 			msg = "已取消子 Agent %s"
 		case "agent_cancel_failed":
@@ -1366,7 +1379,7 @@ func inspectorText(lang Language, key string, args ...any) string {
 		case "revert_failed":
 			msg = "Revert failed: %v"
 		case "reverted":
-			msg = "Reverted checkpoint for %s"
+			msg = "Reverted checkpoint (restored files: %s)"
 		case "agent_cancelled":
 			msg = "Cancelled sub-agent %s"
 		case "agent_cancel_failed":

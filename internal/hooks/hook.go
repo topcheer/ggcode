@@ -62,6 +62,12 @@ type HookResult struct {
 	Allowed bool   // false means block the operation (pre hooks only)
 	Output  string // captured stdout or HTTP response body (for inject_output)
 	Err     error
+	// PolicyNotice carries a policy verdict (exit 2 / HTTP 403) from a
+	// NON-blocking event. #684: post_tool_use cannot honor the block, but the
+	// hook author's stderr reason still matters — and every consumer of post
+	// hook results reads only Output. runSync folds this into the returned
+	// Output so the reason reaches the model instead of vanishing.
+	PolicyNotice string
 }
 
 // HookEnv holds all context data passed to hook commands and webhooks.

@@ -243,10 +243,30 @@ func (m *Manager) Revert(id string) (*Checkpoint, error) {
 	// moment. On failure the checkpoint list is left intact so the caller can
 	// retry or fall back to single-step Undo — a partial truncation would
 	// strand the not-yet-restored files exactly like #678.
-	files := make([]string, 0, len(targets))
-	for f, st := range targets {
+	//
+	// #685: iterate in deterministic checkpoint order (first-touch order)
+	// instead of Go's randomized map order — which files got restored before
+	// a write failed used to differ run to run, with zero disclosure. On
+	// failure the error now lists exactly which files WERE restored and which
+	// remain pending, mirroring writeBaselines' disclosure policy.
+	order := make([]string, 0, len(targets))
+	seen := make(map[string]bool, len(targets))
+	for i := idx; i < len(m.checkpoints); i++ {
+		f := m.checkpoints[i].FilePath
+		if !seen[f] {
+			seen[f] = true
+			order = append(order, f)
+		}
+	}
+	files := make([]string, 0, len(order))
+	for _, f := range order {
+		st := targets[f]
 		if err := restoreCheckpointState(f, st.content, st.existed); err != nil {
-			return nil, fmt.Errorf("failed to revert %s: %w", f, err)
+			if len(files) == 0 {
+				return nil, fmt.Errorf("failed to revert %s: %w", f, err)
+			}
+			return nil, fmt.Errorf("failed to revert %s: %w (partial state: restored %v; still pending %v — history kept, retry or use single-step Undo)",
+				f, err, files, order[len(files):])
 		}
 		files = append(files, f)
 	}

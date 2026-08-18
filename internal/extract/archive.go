@@ -32,6 +32,7 @@ func (e *archiveExtractor) Extract(data []byte) (TextResult, error) {
 	var files []archiveFile
 	var total int
 	var truncated bool
+	var corrupt bool
 	var err error
 
 	switch e.subFormat {
@@ -46,13 +47,13 @@ func (e *archiveExtractor) Extract(data []byte) (TextResult, error) {
 			}
 		}
 	case "tar":
-		files, total, truncated, err = listTar(data)
+		files, total, truncated, corrupt, err = listTar(data)
 	case "tar.gz", "tgz":
-		files, total, truncated, err = listTarGz(data)
+		files, total, truncated, corrupt, err = listTarGz(data)
 	case "tar.bz2":
-		files, total, truncated, err = listTarBz2(data)
+		files, total, truncated, corrupt, err = listTarBz2(data)
 	case "tar.xz":
-		files, total, truncated, err = listTarXz(data)
+		files, total, truncated, corrupt, err = listTarXz(data)
 	default:
 		return TextResult{}, fmt.Errorf("unsupported archive format: %s", e.subFormat)
 	}
@@ -70,6 +71,12 @@ func (e *archiveExtractor) Extract(data []byte) (TextResult, error) {
 		fmt.Fprintf(&buf, "[Showing first %d of %d files]\n\n", len(files), total)
 	} else if truncated {
 		buf.WriteString("[Truncated: archive exceeds extraction limits]\n\n")
+	}
+	// #687: a mid-stream tar error can mean CORRUPTION, not a size limit —
+	// mislabeling it "exceeds extraction limits" sends the agent down the
+	// wrong attribution path. Distinguish the two explicitly.
+	if corrupt {
+		fmt.Fprintf(&buf, "[Corrupt archive: stream error after %d files; listing is partial]\n\n", len(files))
 	}
 
 	for _, f := range files {
@@ -108,7 +115,14 @@ func (e *archiveExtractor) Extract(data []byte) (TextResult, error) {
 		// Known document format
 		if ext != "" && defaultRegistry.Get(ext) != nil && !isArchiveExt(ext) {
 			result, err := Extract(name, f.data)
-			if err == nil && result.Text != "" {
+			// #686: an extraction error used to drop the entry silently — the
+			// archive inventory lost track of it entirely. Mark it visibly so
+			// the listing stays honest (partial content from e.g. a
+			// decode-broken SVG now arrives flagged via its own text, but
+			// hard errors still surface here).
+			if err != nil {
+				fmt.Fprintf(&buf, "[Extraction failed: %v]\n\n", err)
+			} else if result.Text != "" {
 				text := result.Text
 				if len(text) > maxArchiveEntrySize {
 					// Snap to a rune boundary so we never slice a multi-byte
@@ -249,48 +263,54 @@ func totalZipFiles(data []byte) int {
 // decompression bombs (small compressed file → huge uncompressed data).
 const maxTarDecompressSize = 200 * 1024 * 1024 // 200MB
 
-func listTarGz(data []byte) ([]archiveFile, int, bool, error) {
+func listTarGz(data []byte) ([]archiveFile, int, bool, bool, error) {
 	gz, err := gzip.NewReader(bytes.NewReader(data))
 	if err != nil {
-		return nil, 0, false, fmt.Errorf("open gzip: %w", err)
+		return nil, 0, false, false, fmt.Errorf("open gzip: %w", err)
 	}
 	defer gz.Close()
 	return listTarFromReader(io.LimitReader(gz, maxTarDecompressSize))
 }
 
-func listTarBz2(data []byte) ([]archiveFile, int, bool, error) {
+func listTarBz2(data []byte) ([]archiveFile, int, bool, bool, error) {
 	br := bzip2.NewReader(bytes.NewReader(data))
 	return listTarFromReader(io.LimitReader(br, maxTarDecompressSize))
 }
 
-func listTarXz(data []byte) ([]archiveFile, int, bool, error) {
+func listTarXz(data []byte) ([]archiveFile, int, bool, bool, error) {
 	// xz requires external dependency; try decompressing manually
 	// For now, return a helpful error
-	return nil, 0, false, fmt.Errorf("tar.xz support requires xz decompression (not yet available)")
+	return nil, 0, false, false, fmt.Errorf("tar.xz support requires xz decompression (not yet available)")
 }
 
-func listTar(data []byte) ([]archiveFile, int, bool, error) {
+func listTar(data []byte) ([]archiveFile, int, bool, bool, error) {
 	return listTarFromReader(bytes.NewReader(data))
 }
 
 // listTarFromReader returns the buffered files (≤ maxArchiveEntries), the
-// total regular-file count when knowable, and whether the listing was
-// truncated (decompression limit hit or entry cap reached). #682: previously
-// truncation was silent and the drain loop's file count was discarded.
-func listTarFromReader(r io.Reader) ([]archiveFile, int, bool, error) {
+// total regular-file count when knowable, whether the listing was truncated
+// (entry cap reached), and whether the stream errored mid-way (corruption or
+// decompression-limit hit). #682: previously truncation was silent and the
+// drain loop's file count was discarded. #687: corruption and limit
+// truncation are reported separately so the marker does not misattribute a
+// corrupt stream to a size limit.
+func listTarFromReader(r io.Reader) ([]archiveFile, int, bool, bool, error) {
 	tr := tar.NewReader(r)
 	var files []archiveFile
 	total := 0
 	truncated := false
+	corrupt := false
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
-			// Unexpected error: 200MB decompression limit hit or corrupt
-			// stream. The listing so far is partial — mark it.
-			truncated = true
+			// Unexpected error: corrupt stream (or the 200MB decompression
+			// limit surfaced as a read error). The listing so far is partial.
+			// #687: report corruption separately from entry-cap truncation.
+			corrupt = true
+			truncated = false
 			break
 		}
 		if hdr.Typeflag != tar.TypeReg && hdr.Typeflag != 0 {
@@ -305,7 +325,7 @@ func listTarFromReader(r io.Reader) ([]archiveFile, int, bool, error) {
 				h, err := tr.Next()
 				if err != nil {
 					if err != io.EOF {
-						truncated = true
+						corrupt = true
 					}
 					break
 				}
@@ -324,7 +344,7 @@ func listTarFromReader(r io.Reader) ([]archiveFile, int, bool, error) {
 		}
 		files = append(files, archiveFile{name: hdr.Name, data: d})
 	}
-	return files, total, truncated, nil
+	return files, total, truncated, corrupt, nil
 }
 
 // extractArchiveContentDepth recursively extracts text from a nested archive.

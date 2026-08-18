@@ -111,6 +111,17 @@ func runSync(hooksList []Hook, env HookEnv) HookResult {
 				injectedOutput.WriteString("\n")
 			}
 		}
+		// #684: a policy verdict (exit 2 / HTTP 403) on a non-blocking event
+		// cannot be honored as a block, but its reason must still reach the
+		// model — every consumer of post hook results reads only Output. Unlike
+		// inject_output this is NOT gated on InjectOutput: the hook author
+		// explicitly flagged something, not answered a request for output.
+		if env.Event == EventPostToolUse && result.PolicyNotice != "" {
+			injectedOutput.WriteString(result.PolicyNotice)
+			if !strings.HasSuffix(result.PolicyNotice, "\n") {
+				injectedOutput.WriteString("\n")
+			}
+		}
 	}
 
 	res := HookResult{Allowed: true, Output: injectedOutput.String()}
@@ -204,6 +215,27 @@ func executeCommandHook(h Hook, env HookEnv, payload HookPayload) HookResult {
 				Err:     err,
 			}
 		}
+		// #684: even when exit 2 is not honored as a block (non-blocking
+		// events), the hook author's reason must survive — stderr is not part
+		// of exec.ExitError and nothing downstream read Err for the reason.
+		// Surface it as a PolicyNotice so runSync folds it into Output.
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			if reason := strings.TrimSpace(stderr.String()); reason != "" {
+				if exitErr.ExitCode() == 2 && !isBlockingEvent(env.Event) {
+					debug.Log("hooks", "%s POLICY (non-blocking exit 2): tool=%s reason=%s", env.Event, env.ToolName, reason)
+					return HookResult{
+						Allowed:      true,
+						Output:       stdout.String(),
+						PolicyNotice: fmt.Sprintf("[%s policy: %s]", env.Event, reason),
+						Err:          err,
+					}
+				}
+				// Other failures: fold a one-line stderr into the error so the
+				// reason is diagnosable in the joined error string.
+				return HookResult{Allowed: true, Output: stdout.String(),
+					Err: fmt.Errorf("hook command failed: %w%s", err, stderrSuffix(stderr.String()))}
+			}
+		}
 		return HookResult{Allowed: true, Output: stdout.String(), Err: fmt.Errorf("hook command failed: %w", err)}
 	}
 
@@ -233,8 +265,13 @@ func expandHookTemplate(command string, env HookEnv, payloadJSON string) string 
 		case "WORKING_DIR":
 			return shellQuote(env.WorkingDir)
 		case "RAW_INPUT":
-			truncRaw, _ := truncateHookEnv(env.RawInput)
-			return shellQuote(truncRaw)
+			// #684: a raw byte-cap can cut the JSON mid-escape/mid-literal and
+			// hand hooks INVALID JSON — an audit hook's jq/python then fails,
+			// takes the generic error path, and the check silently passes
+			// (fail-open). Snap the cut to a JSON token boundary instead; when
+			// no clean cut exists, drop the payload to a short explicit
+			// truncation marker so hooks fail visibly on a well-formed doc.
+			return shellQuote(truncateHookEnvJSON(env.RawInput))
 		case "TOOL_SUCCESS":
 			return strconv.FormatBool(env.ToolSuccess)
 		case "TOOL_ERROR":
@@ -246,8 +283,7 @@ func expandHookTemplate(command string, env HookEnv, payloadJSON string) string 
 		case "EVENT":
 			return shellQuote(env.Event)
 		case "PAYLOAD":
-			truncPayload, _ := truncateHookEnv(payloadJSON)
-			return shellQuote(truncPayload)
+			return shellQuote(truncateHookEnvJSON(payloadJSON))
 		default:
 			return "${" + key + "}"
 		}
@@ -311,12 +347,22 @@ func executeHTTPHook(h Hook, env HookEnv, payload HookPayload) HookResult {
 
 	// HTTP 403 = block, blocking events only (#679) — same event rule as
 	// exit 2. Non-blocking events fall through to the >=400 error path.
-	if resp.StatusCode == http.StatusForbidden && isBlockingEvent(env.Event) {
+	if resp.StatusCode == http.StatusForbidden {
 		blockMsg := strings.TrimSpace(string(body))
-		debug.Log("hooks", "%s BLOCKED: HTTP %d body=%s", env.Event, resp.StatusCode, blockMsg)
+		if isBlockingEvent(env.Event) {
+			debug.Log("hooks", "%s BLOCKED: HTTP %d body=%s", env.Event, resp.StatusCode, blockMsg)
+			return HookResult{
+				Allowed: false,
+				Output:  fmt.Sprintf("Blocked by %s hook: %s", env.Event, blockMsg),
+			}
+		}
+		// #684: non-blocking 403 still carries the author's reason — keep it
+		// visible as a PolicyNotice instead of vanishing into "hook HTTP 403".
+		debug.Log("hooks", "%s POLICY (non-blocking 403): body=%s", env.Event, blockMsg)
 		return HookResult{
-			Allowed: false,
-			Output:  fmt.Sprintf("Blocked by %s hook: %s", env.Event, blockMsg),
+			Allowed:      true,
+			Output:       string(body),
+			PolicyNotice: formatPolicyNotice(env.Event, blockMsg),
 		}
 	}
 
@@ -485,6 +531,139 @@ func truncateHookEnv(v string) (string, bool) {
 	}
 	cut := util.SnapToRuneStart(v, maxHookEnvValue)
 	return v[:cut], true
+}
+
+// hookJSONTruncationMarker is the document injected when a JSON payload does
+// not fit the argv budget and cannot be cut cleanly. It is deliberately small
+// and itself valid JSON-embeddable text: hooks parsing it see a well-formed
+// (if useless) string instead of a parse crash, and the marker names the real
+// recovery path (stdin carries the full payload).
+const hookJSONTruncationMarker = `{"truncated": true, "reason": "payload exceeds argv limit; read full payload from stdin"}`
+
+// truncateHookEnvJSON caps a JSON document for the argv channel while keeping
+// it parseable (#684). Byte-cap truncation that lands inside a string
+// literal or escape sequence produces invalid JSON — audit hooks feeding it
+// to jq/python fail, fall into the generic error path, and silently pass
+// (fail-open). Strategy, in order:
+//  1. If the doc fits, return it unchanged.
+//  2. Try to cut at a structural boundary (outside any string literal) and
+//     repair the prefix into a complete document. Only attempted when the
+//     prefix still closes the root object; otherwise parsing would break.
+//  3. Fall back to an explicit truncation marker — visible failure with a
+//     pointer to stdin, never silent corruption.
+func truncateHookEnvJSON(v string) string {
+	if len(v) <= maxHookEnvValue {
+		return v
+	}
+	if repaired, ok := truncateJSONDocument(v, maxHookEnvValue); ok {
+		return repaired
+	}
+	debug.Log("hooks", "payload %d bytes exceeds %d argv budget; replacing with truncation marker (full payload on stdin)",
+		len(v), maxHookEnvValue)
+	return hookJSONTruncationMarker
+}
+
+// truncateJSONDocument cuts v to at most limit bytes at a position that is
+// structurally safe for JSON (outside any string literal) and repairs the
+// prefix into a complete document by closing open containers. Returns
+// (repaired, ok); ok is false when no safe cut exists (e.g. the entire budget
+// is consumed by one giant string literal).
+func truncateJSONDocument(v string, limit int) (string, bool) {
+	// Find the largest cut position <= limit that is outside a string
+	// literal and at a token boundary. Scan with a minimal JSON tokenizer:
+	// depth tracking plus in-string/escape state.
+	const (
+		inCode = iota
+		inString
+		inEscape
+	)
+	state := inCode
+	depth := 0
+	bestCut := -1
+	end := len(v)
+	if end > limit {
+		end = limit
+	}
+	// Start at 1 so bestCut never lands inside the leading '{'.
+	for i := 0; i < end; i++ {
+		c := v[i]
+		switch state {
+		case inCode:
+			switch c {
+			case '"':
+				state = inString
+			case '{', '[':
+				depth++
+			case '}', ']':
+				depth--
+				// After a closed container we are at a safe cut point.
+				bestCut = i + 1
+			case ',':
+				// A comma ends a member; cutting right after it leaves a
+				// dangling separator that must be repaired away — handled
+				// below by trimming trailing commas.
+				bestCut = i + 1
+			}
+		case inString:
+			if c == '\\' {
+				state = inEscape
+			} else if c == '"' {
+				state = inCode
+				// Position right after a complete string is safe only when
+				// it is a value/member boundary; the next byte decides, so
+				// record it as a candidate — trailing-comma cleanup repairs.
+				bestCut = i + 1
+			}
+		case inEscape:
+			state = inString
+		}
+	}
+	if bestCut <= 0 {
+		return "", false
+	}
+	prefix := strings.TrimRight(v[:bestCut], " \t\r\n")
+	// Repair: strip a dangling separator left by a cut after ','.
+	prefix = strings.TrimSuffix(prefix, ",")
+	prefix = strings.TrimRight(prefix, " \t\r\n")
+	if prefix == "" {
+		return "", false
+	}
+	// Validate that the prefix is itself complete JSON: the state machine
+	// above only tracks strings, so re-parse cheaply with json.Valid on the
+	// candidate before accepting it.
+	if !json.Valid([]byte(prefix)) {
+		return "", false
+	}
+	return prefix, true
+}
+
+// formatPolicyNotice builds the non-blocking policy verdict label shared by
+// the exit-2 and HTTP-403 paths (#684).
+func formatPolicyNotice(event, reason string) string {
+	return fmt.Sprintf("[%s policy: %s]", event, reason)
+}
+
+// stderrSuffix formats a one-line stderr tail for error wrapping. #684:
+// exec.ExitError does not carry stderr, so the hook author's failure reason
+// vanished into an unread buffer. Empty stderr yields "" so %s-suffixed
+// error strings stay clean.
+func stderrSuffix(stderr string) string {
+	if strings.TrimSpace(stderr) == "" {
+		return ""
+	}
+	// Collapse to the first non-empty line, capped, to keep the joined
+	// per-hook error readable when a hook spews a stack trace.
+	line := strings.TrimSpace(stderr)
+	if i := strings.IndexByte(line, '\n'); i >= 0 {
+		line = line[:i]
+	}
+	const maxStderrTail = 200
+	line = strings.TrimSpace(line)
+	if len(line) > maxStderrTail {
+		cut := util.SnapToRuneStart(line, maxStderrTail)
+		line = line[:cut] + "..."
+	}
+	return " (stderr: " + line + ")"
 }
 
 // shellQuote wraps s in single quotes, escaping embedded single quotes as

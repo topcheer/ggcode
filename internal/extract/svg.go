@@ -35,10 +35,16 @@ func (svgExtractor) Extract(data []byte) (TextResult, error) {
 			break
 		}
 		if err != nil {
-			// #682: decode errors (undefined entities, bare &, illegal UTF-8)
-			// were silently swallowed and partial text returned as success —
-			// indistinguishable from a complete extraction. Propagate now.
-			return TextResult{}, fmt.Errorf("decode svg: %w", err)
+			// #686: decode errors (undefined entities like &nbsp;, bare &, illegal
+			// UTF-8) previously returned ZERO text — worse than the original
+			// "missing a few segments" bug the #682 fix chased. Return the text
+			// extracted up to the error, explicitly flagged, so callers and
+			// nested consumers (archive entries) keep the partial content and
+			// can see why it stops where it does.
+			return TextResult{
+				Text:   strings.TrimSpace(buf.String()) + fmt.Sprintf("\n[SVG decode error: %v]", err),
+				Format: "svg",
+			}, nil
 		}
 		switch t := token.(type) {
 		case xml.StartElement:

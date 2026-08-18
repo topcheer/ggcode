@@ -689,7 +689,13 @@ func (m *Model) handleCostAllCommand() tea.Cmd {
 
 	// Grand totals
 	sb.WriteString("--- All-Time Totals ---\n")
-	sb.WriteString(fmt.Sprintf("  Total cost:         %s\n", cost.FormatCost(agg.TotalCostUSD)))
+	// #687: when part of the summed sessions lack pricing data, the total is
+	// a partial sum — annotate instead of presenting a false-precise number.
+	totalCostStr := cost.FormatCost(agg.TotalCostUSD)
+	if agg.SessionsWithoutPricing > 0 {
+		totalCostStr += fmt.Sprintf(" (partial: %d sessions without pricing data)", agg.SessionsWithoutPricing)
+	}
+	sb.WriteString(fmt.Sprintf("  Total cost:         %s\n", totalCostStr))
 	sb.WriteString(fmt.Sprintf("  Input tokens:       %s\n", humanizeTokenCount(int(agg.InputTokens))))
 	sb.WriteString(fmt.Sprintf("  Output tokens:      %s\n", humanizeTokenCount(int(agg.OutputTokens))))
 	if agg.CacheReadTokens > 0 {

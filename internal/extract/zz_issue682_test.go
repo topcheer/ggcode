@@ -96,12 +96,21 @@ func TestZZ682_TarNoFalseTruncationMarker(t *testing.T) {
 	}
 }
 
-// zz682b: SVG decode error must surface as an error, not partial text as success.
+// zz682b: SVG decode error must surface — updated by #686: the original
+// hard-error path dropped ALL extracted text ("partial text flagged" was
+// promised but never shipped). The contract is now: partial text is
+// returned AND explicitly flagged, never silently success-looking.
 func TestZZ682_SVGDecodeErrorPropagates(t *testing.T) {
 	bad := `<svg xmlns="http://www.w3.org/2000/svg"><text>good part</text> bad &entity <text>more</text></svg>`
-	_, err := Extract("t.svg", []byte(bad))
-	if err == nil {
-		t.Fatal("expected decode error for undefined entity, got nil (silent partial success)")
+	res, err := Extract("t.svg", []byte(bad))
+	if err != nil {
+		t.Fatalf("#686: decode errors must yield flagged partial text, not a hard error: %v", err)
+	}
+	if !strings.Contains(res.Text, "good part") {
+		t.Errorf("partial text before the decode error must be kept: %q", res.Text)
+	}
+	if !strings.Contains(res.Text, "SVG decode error") {
+		t.Errorf("partial text must be explicitly flagged, not silent success: %q", res.Text)
 	}
 }
 

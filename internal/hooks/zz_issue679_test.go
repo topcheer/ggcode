@@ -199,8 +199,11 @@ func TestIssue679_PostToolUseHTTP403NonBlocking(t *testing.T) {
 	if !res.Allowed {
 		t.Fatalf("HTTP 403 on post_tool_use must not block: %+v", res)
 	}
-	if res.Err == nil || !strings.Contains(res.Err.Error(), "403") {
-		t.Errorf("403 must surface as non-blocking Err, got %v", res.Err)
+	// #684 supersedes the old "non-blocking Err" channel: post-tool consumers
+	// read only Output, so the reason now travels via PolicyNotice (folded
+	// into Output by runSync) instead of a dropped Err.
+	if res.PolicyNotice == "" || !strings.Contains(res.PolicyNotice, "policy violation") {
+		t.Errorf("403 reason must surface via PolicyNotice, got %q", res.PolicyNotice)
 	}
 }
 

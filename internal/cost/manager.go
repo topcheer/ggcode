@@ -182,12 +182,18 @@ func (m *Manager) LoadAllFromDisk() int {
 }
 
 // AggregateAllCosts returns the summed totals across all sessions.
+// #687: the aggregate previously ignored per-session HasPricing — mixing
+// priced and unpriced sessions produced a false-precise total (the single-
+// session path already displayed "(no pricing data)"). SessionsWithoutPricing
+// carries the count so callers can annotate the total; HasPricing on the
+// aggregate is true only when EVERY session had pricing.
 func (m *Manager) AggregateAllCosts() SessionCost {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
 	var agg SessionCost
 	sessions := 0
+	withoutPricing := 0
 	for _, t := range m.trackers {
 		sc := t.SessionCost()
 		agg.InputTokens += sc.InputTokens
@@ -195,9 +201,14 @@ func (m *Manager) AggregateAllCosts() SessionCost {
 		agg.CacheReadTokens += sc.CacheReadTokens
 		agg.CacheWriteTokens += sc.CacheWriteTokens
 		agg.TotalCostUSD += sc.TotalCostUSD
+		if !sc.HasPricing {
+			withoutPricing++
+		}
 		sessions++
 	}
 	agg.Provider = fmt.Sprintf("%d sessions", sessions)
+	agg.SessionsWithoutPricing = withoutPricing
+	agg.HasPricing = withoutPricing == 0 && sessions > 0
 	return agg
 }
 
