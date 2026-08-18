@@ -102,12 +102,24 @@ func (t MultiEditFile) Execute(ctx context.Context, input json.RawMessage) (Resu
 	for i, edit := range args.Edits {
 		edits[i] = textEdit{OldText: edit.OldText, NewText: edit.NewText}
 	}
+	original := content
 	content, _, msg := planTextEdits(content, edits)
 	if msg != "" {
 		if stale := staleReadHint(args.FilePath); stale != "" {
 			msg += ". " + stale
 		}
 		return Result{IsError: true, Content: msg}, nil
+	}
+
+	// No-op guard: if all edits produce identical content, skip the write.
+	// This prevents unnecessary mtime changes, checkpoint saves, cache
+	// invalidation, and file-integrity tracking noise from no-effect edits
+	// (e.g. the LLM retried edits that were already applied).
+	if content == original {
+		return Result{Content: fmt.Sprintf(
+			"No change: all %d edits produce identical content in %s. The file is already in the desired state.",
+			len(args.Edits), args.FilePath,
+		)}, nil
 	}
 
 	// Capture diagnostic baseline BEFORE the write so post-edit diagnostics
