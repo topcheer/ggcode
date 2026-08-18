@@ -133,11 +133,11 @@ func main() {
 			// Only intercept the first close attempt; a second close within 3s
 			// actually quits (to avoid trapping users who don't want tray mode).
 			now := time.Now()
-			if app.lastCloseAttempt != nil && now.Sub(*app.lastCloseAttempt) < 3*time.Second {
+			if prev := app.lastCloseAttempt.Load(); prev != nil && now.Sub(*prev) < 3*time.Second {
 				// Double close within 3s -> actually quit
 				return false
 			}
-			app.lastCloseAttempt = &now
+			app.lastCloseAttempt.Store(&now) // #700: atomic (4 goroutines touch this)
 			runtime.WindowHide(ctx)
 			// Notify frontend that window was hidden to tray
 			app.enqueueUIEvent("tray:hidden", nil)

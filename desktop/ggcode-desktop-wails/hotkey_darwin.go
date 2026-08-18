@@ -180,15 +180,15 @@ func (a *App) toggleWindowViaHotkey() {
 	// Wails v2 does not expose window visibility query, so we track state
 	// ourselves. If the window was hidden by close-to-tray or hotkey, show it.
 	// Otherwise hide it (user is actively working in the app).
-	if a.lastCloseAttempt != nil {
+	if a.lastCloseAttempt.Load() != nil {
 		// Window was hidden to tray — show it
-		a.lastCloseAttempt = nil
+		a.lastCloseAttempt.Store(nil)
 		runtime.WindowShow(a.ctx)
 		a.enqueueUIEvent("tray:show", nil)
 	} else {
 		// Window is visible — hide it
 		now := time.Now()
-		a.lastCloseAttempt = &now
+		a.lastCloseAttempt.Store(&now) // #700: atomic (4 goroutines touch this)
 		runtime.WindowHide(a.ctx)
 		a.enqueueUIEvent("tray:hidden", nil)
 	}

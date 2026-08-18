@@ -162,7 +162,7 @@ func (a *App) removeSystemTray() {
 
 func (a *App) handleTrayShow() {
 	debug.Log("desktop", "tray: show window")
-	a.lastCloseAttempt = nil
+	a.lastCloseAttempt.Store(nil) // #700: atomic (4 goroutines touch this)
 	if a.ctx == nil {
 		return
 	}
@@ -172,7 +172,7 @@ func (a *App) handleTrayShow() {
 
 func (a *App) handleTrayNewSession() {
 	debug.Log("desktop", "tray: new session")
-	a.lastCloseAttempt = nil
+	a.lastCloseAttempt.Store(nil) // #700: atomic (4 goroutines touch this)
 	if a.ctx == nil {
 		return
 	}

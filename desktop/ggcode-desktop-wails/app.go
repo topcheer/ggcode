@@ -15,6 +15,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -57,8 +58,10 @@ type App struct {
 
 	notifications *NotificationManager
 
-	// Close-to-tray support
-	lastCloseAttempt *time.Time
+	// Close-to-tray support (#700: accessed from four goroutines —
+	// OnBeforeClose, SetWindowFocused, the hotkey poller, and CGO tray
+	// callbacks — so all reads/writes go through atomic Load/Store).
+	lastCloseAttempt atomic.Pointer[time.Time]
 
 	// #615: when non-nil, initGlobalHotkey calls this instead of the real
 	// RegisterEventHotKey (test hook; lets tests simulate both a free combo
@@ -199,7 +202,9 @@ func (a *App) startup(ctx context.Context) {
 		return
 	}
 
-	a.initWorkspace(a.workDir)
+	if err := a.initWorkspace(a.workDir); err != nil {
+		debug.Log("desktop", "initWorkspace failed: %v", err)
+	}
 }
 
 func (a *App) startEventLoop() {
@@ -207,10 +212,16 @@ func (a *App) startEventLoop() {
 		a.streamEvents = make(chan uiEvent, 4096)
 		safego.Go("wails-event-loop", func() {
 			for ev := range a.streamEvents {
-				if a.ctx == nil {
-					continue
-				}
-				wailsruntime.EventsEmit(a.ctx, ev.name, ev.payload)
+				// #701: per-event recover — a panic in EventsEmit (e.g. during
+				// Wails shutdown teardown) must skip one event, not kill the
+				// only consumer and permanently deadlock every emitter on a
+				// full 4096 buffer.
+				safego.Run("wails-event-emit", func() {
+					if a.ctx == nil {
+						return
+					}
+					wailsruntime.EventsEmit(a.ctx, ev.name, ev.payload)
+				})
 			}
 		})
 	})
@@ -223,12 +234,19 @@ func (a *App) enqueueUIEvent(name string, payload interface{}) {
 		}
 		return
 	}
-	a.streamEvents <- uiEvent{name: name, payload: payload}
+	// #701: non-blocking send with drop accounting — if the consumer loop
+	// ever dies or falls behind, a dropped UI event is strictly better than
+	// a frozen agent loop blocked forever on a full buffer.
+	select {
+	case a.streamEvents <- uiEvent{name: name, payload: payload}:
+	default:
+		debug.Log("desktop", "enqueueUIEvent: dropping UI event %q (buffer full or consumer dead)", name)
+	}
 }
 
-func (a *App) initWorkspace(dir string) {
+func (a *App) initWorkspace(dir string) error {
 	if dir == "" {
-		return
+		return nil
 	}
 	cfg, err := wailskit.LoadConfigForWorkspace(dir)
 	if err != nil {
@@ -245,7 +263,10 @@ func (a *App) initWorkspace(dir string) {
 	// Initialize chat bridge with loaded config
 	chat, err := wailskit.NewChatBridge()
 	if err != nil {
-		return
+		// #699 (defensive): propagate instead of silently returning with
+		// a.chat == nil — a future NewChatBridge failure must not masquerade
+		// as success.
+		return err
 	}
 	chat.OnStreamEvent = func(eventType string, data json.RawMessage) {
 		a.emitStreamEvent(eventType, data)
@@ -295,6 +316,7 @@ func (a *App) initWorkspace(dir string) {
 		})
 		wailsruntime.EventsEmit(a.ctx, "config:updated", nil)
 	}
+	return nil
 }
 
 // ToggleLogStream enables or disables the runtime debug log stream.
@@ -468,8 +490,9 @@ func (a *App) switchWorkspace(dir string) error {
 	// chdir is guaranteed to succeed because we verified the dir above.
 	a.workDir = dir
 	_ = os.Chdir(dir)
-	a.initWorkspace(dir)
-	return nil
+	// #699 (defensive): propagate initWorkspace's error instead of
+	// unconditionally claiming success.
+	return a.initWorkspace(dir)
 }
 
 // shutdown is called when the app is closing.
@@ -536,8 +559,7 @@ func (a *App) CompleteOnboard(vendor, endpoint, model, apiKey string) error {
 		}
 	}
 	// Reload chat bridge with new config
-	a.initWorkspace(a.workDir)
-	return nil
+	return a.initWorkspace(a.workDir)
 }
 
 // GetVendorPresets returns vendor presets for onboarding.
@@ -1037,12 +1059,12 @@ func (a *App) SetWindowFocused(focused bool) {
 	if a.notifications != nil {
 		a.notifications.SetFocused(focused)
 	}
-	if focused && a.lastCloseAttempt != nil {
+	if focused && a.lastCloseAttempt.Load() != nil {
 		// The window is visible and focused again (e.g. restored via Dock
 		// icon click, which Wails handles natively without notifying Go).
 		// Clear the close-to-tray flag so the global hotkey toggle reflects
 		// actual visibility instead of a stale hidden-state heuristic (#158).
-		a.lastCloseAttempt = nil
+		a.lastCloseAttempt.Store(nil)
 	}
 }
 
@@ -1357,11 +1379,11 @@ func (a *App) RenameSession(id string, title string) error {
 
 // NewSession creates a fresh initialized session, cancelling any current work.
 func (a *App) NewSession() (string, error) {
-	chat := a.chat // #457: single-read snapshot
-	if a.chat == nil {
-		return "", nil
+	chat := a.chat   // #457: single-read snapshot
+	if chat == nil { // #699: check the snapshot, not the field
+		return "", fmt.Errorf("chat not available")
 	}
-	a.chat.Cancel()
+	chat.Cancel()
 	a.stopShareForSessionChange()
 	return chat.StartNewSession()
 }
@@ -1922,7 +1944,10 @@ func (a *App) RespondAskUser(requestID string, answersJSON string) {
 		AnsweredCount: answeredCount,
 		Answers:       payload.Answers,
 	}
-	a.chat.RespondAskUser(requestID, response)
+	// #699: use the snapshot taken above — re-reading a.chat here races a
+	// concurrent switchWorkspace (nil → panic, or replace → response lands in
+	// the NEW bridge's broker and the OLD ask_user waiter hangs, #530 pattern).
+	chat.RespondAskUser(requestID, response)
 }
 
 // ─── IM Runtime (mirrors Fyne's initIMRuntime / im_bridge.go) ──────────

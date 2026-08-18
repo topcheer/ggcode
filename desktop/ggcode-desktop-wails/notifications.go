@@ -65,9 +65,14 @@ func NewNotificationManager() *NotificationManager {
 }
 
 // drainWinQueue serially executes queued Windows toasts (#399).
+// #701: per-event recover — a panicking toast must skip one notification,
+// not kill the only consumer and block every future notifier on the queue.
 func (nm *NotificationManager) drainWinQueue() {
 	for t := range nm.winQueue {
-		nm.runWinToast(t.title, t.body)
+		t := t
+		safego.Run("notify-win-toast", func() {
+			nm.runWinToast(t.title, t.body)
+		})
 	}
 }
 
