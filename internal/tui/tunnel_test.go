@@ -1010,6 +1010,46 @@ func TestHandleTunnelModeChangeMsg_InvalidMode(t *testing.T) {
 	}
 }
 
+// #743: the two low-severity flaws the old indirect guard carried, now fixed
+// by the IsValidPermissionMode rewrite.
+func TestHandleTunnelModeChangeMsg_GuardEdgeCases(t *testing.T) {
+	// Case-insensitive valid name must be ACCEPTED (old guard rejected "SUPERVISED").
+	m := newTestModel()
+	m.mode = permission.AutoMode
+	_, _ = m.handleTunnelModeChangeMsg(tunnelModeChangeMsg{mode: "SUPERVISED"})
+	if m.mode != permission.SupervisedMode {
+		t.Errorf("SUPERVISED should be accepted case-insensitively, got %v", m.mode)
+	}
+
+	// Empty string must be REJECTED (old guard exempted it, changing nothing
+	// but leaking the parse default into later state).
+	m2 := newTestModel()
+	m2.mode = permission.AutoMode
+	_, _ = m2.handleTunnelModeChangeMsg(tunnelModeChangeMsg{mode: ""})
+	if m2.mode != permission.AutoMode {
+		t.Errorf("empty mode must be rejected, mode changed to %v", m2.mode)
+	}
+}
+
+// #743: TUI local /mode with an invalid name must report an error and leave
+// the mode unchanged (previously it silently applied and persisted the
+// supervised fallback with no output at all).
+func TestHandleModeCommand_InvalidNameRejected(t *testing.T) {
+	m := newTestModel()
+	m.mode = permission.BypassMode
+
+	_ = m.handleModeCommand([]string{"mode", "autopilt"})
+
+	if m.mode != permission.BypassMode {
+		t.Errorf("mode must not change for invalid name, got %v", m.mode)
+	}
+	// Valid names still work.
+	_ = m.handleModeCommand([]string{"mode", "autopilot"})
+	if m.mode != permission.AutopilotMode {
+		t.Errorf("valid name should switch mode, got %v", m.mode)
+	}
+}
+
 // ─── Tunnel command handler nil-safety ───
 
 func TestHandleTunnelCommand_StatusInactive(t *testing.T) {
