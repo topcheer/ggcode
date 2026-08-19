@@ -3070,6 +3070,21 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					a.codeIndex.MarkDirty(extractEditedPaths(tc))
 				}
 			}
+			// #750: shell commands can mutate sources too (gofmt -w, sed -i,
+			// git apply, go mod tidy...). They are invisible to the tool-name
+			// gate above, so cached build/test results would be served stale
+			// with a false "no source files have changed" annotation -- or a
+			// stale PASS after a bad patch (false green light). Reuse the
+			// #749 shellMutatesSources heuristic; FP cost is one lost cache
+			// reuse, FN cost is executing on wrong results.
+			if (tc.Name == "run_command" || tc.Name == "start_command") && !result.IsError {
+				if cmd, _ := parseRunCommandArgs(tc.Arguments); shellMutatesSources(cmd) {
+					a.speculator.invalidateCache()
+					a.toolMemo.invalidateTTLBased()
+					a.commandCache.invalidate()
+					debug.Log("agent", "shell source mutation %q: invalidated command/speculator/memo caches", cmd)
+				}
+			}
 			// Store result in memoization cache for read-only tools.
 			if speculativeSafeTools[tc.Name] && !result.IsError {
 				a.toolMemo.put(tc.Name, tc.Arguments, result)
