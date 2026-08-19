@@ -243,6 +243,14 @@ func startConfiguredAdapter(ctx context.Context, cfg config.IMConfig, name strin
 			return err
 		}
 		start(adapter)
+	default:
+		// #736: an unrecognized platform previously fell through silently -
+		// no error, no log, the adapter just never started (a diagnostic
+		// black hole for legacy non-canonical configs like platform:
+		// "Telegram"). Leave a traceable log line. We intentionally do NOT
+		// return an error: one bad adapter must not block the others.
+		adapterCancel()
+		debug.Log("im", "adapter %q: unknown platform %q (expected canonical registry ID e.g. \"telegram\"), skipping start", name, adapterCfg.Platform)
 	}
 	return nil
 }

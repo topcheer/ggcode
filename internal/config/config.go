@@ -1002,6 +1002,10 @@ func Load(path string) (*Config, error) {
 			}
 			cfg.expandEnvWithLookup(lookup)
 			cfg.normalizeActiveModel()
+			// #736: heal legacy non-canonical IM adapter platform names
+			// (e.g. "Telegram" persisted before #648) at load time so the
+			// runtime exact-match switch actually starts them.
+			cfg.normalizeIMAdapterPlatforms()
 			if err := cfg.Validate(); err != nil {
 				return nil, err
 			}
@@ -1109,6 +1113,11 @@ func Load(path string) (*Config, error) {
 
 	cfg.expandEnvWithLookup(lookup)
 	cfg.normalizeActiveModel()
+	// #736: heal legacy non-canonical IM adapter platform names (e.g.
+	// "Telegram" persisted before #648 fixed the save path). In-memory
+	// canonicalization here means the next compact re-save below persists
+	// the canonical ID, so bad data self-heals.
+	cfg.normalizeIMAdapterPlatforms()
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("validating config %s: %w", path, err)
 	}
@@ -1156,6 +1165,61 @@ func isDefaultUserConfigPath(path string) bool {
 		return false
 	}
 	return filepath.Clean(path) == filepath.Clean(ConfigPath())
+}
+
+// canonicalIMPlatforms mirrors the canonical platform IDs of the IM adapter
+// registry (internal/im Platform* constants and wailskit GetIMPlatformRegistry).
+// internal/im imports internal/config, so the config package cannot reference
+// the registry directly without an import cycle - hence this local set.
+// Keep in sync when a platform is added.
+var canonicalIMPlatforms = map[string]struct{}{
+	"qq":          {},
+	"telegram":    {},
+	"discord":     {},
+	"feishu":      {},
+	"dingtalk":    {},
+	"slack":       {},
+	"dummy":       {},
+	"wechat":      {},
+	"wecom":       {},
+	"mattermost":  {},
+	"matrix":      {},
+	"signal":      {},
+	"irc":         {},
+	"nostr":       {},
+	"synology":    {},
+	"twitch":      {},
+	"whatsapp":    {},
+	"privateclaw": {},
+}
+
+// normalizeIMAdapterPlatforms canonicalizes IM adapter platform names
+// case-insensitively (#736). #648 fixed the SAVE path to persist the
+// registry's canonical ID, but configs saved before that fix carry values
+// like "Telegram" that the runtime startup switch (internal/im
+// startConfiguredAdapter) matches exactly - the adapter silently never
+// started and no migration healed the stored data. Load-time
+// normalization fixes the in-memory value; the next Save persists it.
+// Unknown platforms are left untouched (validation/save paths own
+// rejecting them).
+func (c *Config) normalizeIMAdapterPlatforms() {
+	if c == nil || c.IM.Adapters == nil {
+		return
+	}
+	for name, adapter := range c.IM.Adapters {
+		trimmed := strings.TrimSpace(adapter.Platform)
+		if trimmed == "" {
+			continue
+		}
+		lower := strings.ToLower(trimmed)
+		if _, known := canonicalIMPlatforms[lower]; !known {
+			continue
+		}
+		if adapter.Platform != lower {
+			adapter.Platform = lower
+			c.IM.Adapters[name] = adapter
+		}
+	}
 }
 
 func (c *Config) expandEnv() {
