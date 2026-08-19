@@ -63,6 +63,8 @@ func (m *Model) ExecuteRemoteSlashCommand(text string) (string, bool) {
 			"/model [name] - Show or switch model",
 			"/stream start|stop|status|config - Control live streaming",
 			"/config - Show current provider, model and endpoint configuration",
+			"/cost - Session and cross-session cost summary",
+			"/mode [name] - Show or switch permission mode",
 		},
 		OnRestart: func(debug bool) (string, error) {
 			if debug {

@@ -1039,6 +1039,8 @@ func (b *DaemonBridge) handleSlashCommand(ctx context.Context, text string, msg 
 			"/provider [vendor] [endpoint] - Show or switch LLM provider",
 			"/model [name] - Show or switch model",
 			"/config - Show current provider and model configuration",
+			"/cost - Session and cross-session cost summary",
+			"/mode [name] - Show or switch permission mode",
 		},
 		OnRestart: func(debugMode bool) (string, error) {
 			b.mu.Lock()
