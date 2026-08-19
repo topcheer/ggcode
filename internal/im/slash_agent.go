@@ -114,7 +114,20 @@ func (b *DaemonBridge) agentModeQuery(arg string) (string, error) {
 	if arg == "" {
 		return "Current permission mode: " + policy.Mode().String(), nil
 	}
+	// #743: reject unknown mode names instead of silently falling back to
+	// supervised (ParsePermissionMode's fail-safe default is meant for
+	// config parsing, not user input - a typo over IM would silently drop
+	// the session to per-tool approvals and report it as a success switch).
+	if !permission.IsValidPermissionMode(arg) {
+		return fmt.Sprintf("Invalid mode %q. Valid modes: supervised | plan | auto | bypass | autopilot", arg), nil
+	}
 	newMode := permission.ParsePermissionMode(arg)
+	// #743: an invalid mode name previously fell through to
+	// ParsePermissionMode's default (supervised) silently - the user asked
+	// for a mode that does not exist and got no feedback. Validate first.
+	if !permission.IsValidPermissionMode(strings.ToLower(strings.TrimSpace(arg))) {
+		return "", fmt.Errorf("unknown mode %q (usage: /mode supervised|plan|auto|bypass|autopilot)", arg)
+	}
 	if cp, ok := policy.(*permission.ConfigPolicy); ok {
 		cp.SetMode(newMode)
 		return "Permission mode switched to: " + newMode.String(), nil
