@@ -421,6 +421,13 @@ func (s *relayStore) cleanupExpired(now time.Time) error {
 	if _, err = tx.Exec(`DELETE FROM relay_rooms WHERE current_session_id = '' AND updated_at < ?`, cutoff); err != nil {
 		return fmt.Errorf("delete expired rooms: %w", err)
 	}
+	// #747: cursors follow the room lifecycle (destroyRoom/nukeAll both clean
+	// them); retention cleanup must too, or rows for every expired (token,
+	// client) pair accumulate forever. TTL via updated_at is simplest and also
+	// removes stale cursors for token-recreated rooms.
+	if _, err = tx.Exec(`DELETE FROM relay_client_cursors WHERE updated_at < ?`, cutoff); err != nil {
+		return fmt.Errorf("delete expired cursors: %w", err)
+	}
 	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("commit cleanup tx: %w", err)
 	}
