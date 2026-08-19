@@ -1090,6 +1090,15 @@ func (b *DaemonBridge) handleSlashCommand(ctx context.Context, text string, msg 
 			}
 			return fn("", "", "")
 		},
+		OnExtra: func(parts []string) (string, bool) {
+			// Query-style agent commands (/cost, /mode) - one-shot text
+			// output, safe for IM (no interactive input needed). Interactive
+			// TUI commands (/edit, /copy, ...) stay TUI-only by design.
+			return ExecuteAgentSlashCommand(strings.Join(parts, " "), AgentSlashOptions{
+				OnCost: b.agentCostSummary,
+				OnMode: b.agentModeQuery,
+			})
+		},
 	}); result.Handled {
 		if result.Response != "" {
 			_ = b.emitter.EmitText(result.Response)
