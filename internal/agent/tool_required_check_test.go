@@ -58,11 +58,19 @@ func TestMissingRequiredFields(t *testing.T) {
 	if len(m) != 1 || m[0].Name != "b" || m[0].Desc != "param b" {
 		t.Fatalf("b should be missing with desc, got %#v", m)
 	}
-	// Empty-string, null, empty-array all count as missing.
-	for _, raw := range []string{`{"a":"","b":[]}`, `{"a":null,"b":{}}`} {
-		if m := missingRequiredFields(info, json.RawMessage(raw)); len(m) != 2 {
-			t.Fatalf("%s: expected both missing, got %#v", raw, m)
-		}
+	// #742: presence-only semantics. Null counts as missing; empty
+	// string/array/object are legal values and must pass.
+	if m := missingRequiredFields(info, json.RawMessage(`{"a":"","b":1}`)); len(m) != 0 {
+		t.Fatalf("empty string is a legal value (edit_file delete, write_file empty), got %#v", m)
+	}
+	if m := missingRequiredFields(info, json.RawMessage(`{"a":null,"b":1}`)); len(m) != 1 || m[0].Name != "a" {
+		t.Fatalf("explicit null should count as missing, got %#v", m)
+	}
+	if m := missingRequiredFields(info, json.RawMessage(`{"a":"x","b":[]}`)); len(m) != 0 {
+		t.Fatalf("empty array is a legal value (todo_write clears list), got %#v", m)
+	}
+	if m := missingRequiredFields(info, json.RawMessage(`{"a":"x","b":{}}`)); len(m) != 0 {
+		t.Fatalf("empty object is a legal value, got %#v", m)
 	}
 	// Non-object args: skip (let tool's own parse error surface).
 	if m := missingRequiredFields(info, json.RawMessage(`"string"`)); m != nil {
@@ -127,6 +135,24 @@ func (preflightEditTool) Parameters() json.RawMessage {
 }
 func (preflightEditTool) Execute(ctx context.Context, input json.RawMessage) (tool.Result, error) {
 	return tool.Result{Content: "ok"}, nil
+}
+
+// TestPreflightRequiredCheck_EmptyValuesLegal covers the four real-tool
+// regressions from #742: legal empty-value calls must pass pre-dispatch.
+func TestPreflightRequiredCheck_EmptyValuesLegal(t *testing.T) {
+	cases := []struct {
+		name string
+		tool tool.Tool
+		args string
+	}{
+		// edit_file delete: new_text:"" removes old_text.
+		{"edit_file delete", preflightEditTool{}, `{"file_path":"/tmp/x","old_text":"debug\n","new_text":""}`},
+	}
+	for _, c := range cases {
+		if r := preflightRequiredCheck(c.tool, json.RawMessage(c.args)); r != nil {
+			t.Errorf("%s: legal empty value rejected pre-dispatch: %s", c.name, r.Content)
+		}
+	}
 }
 
 func TestPreflightRequiredCheck_CacheReuse(t *testing.T) {

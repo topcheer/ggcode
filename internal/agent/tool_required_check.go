@@ -28,7 +28,9 @@ import (
 //   - Top-level required only. Nested schemas (multi_edit_file's
 //     edits[].old_text/new_text) stay with the tool's own checks.
 //   - Malformed schema JSON skips validation (never blocks execution).
-//   - Presence check only (null/non-empty); type coercion stays downstream.
+//   - Presence check only (explicit null counts as missing); empty
+//     string/array/object are legal values (#742); type coercion stays
+//     downstream.
 
 type requiredSchemaCache struct {
 	mu     sync.RWMutex
@@ -92,7 +94,15 @@ func (c *requiredSchemaCache) get(t tool.Tool) *requiredSchemaInfo {
 }
 
 // missingRequiredFields returns the schema-required top-level parameters
-// that are absent or empty in the call arguments.
+// that are absent, or explicitly null, in the call arguments.
+//
+// #742: JSON Schema `required` means the KEY must be present, not non-empty.
+// Empty values are legal and load-bearing for several tools (edit_file
+// deletes via new_text:"", write_file creates empty files via content:"",
+// batch_replace deletes via replacement:"", todo_write clears the list via
+// todos:[]); rejecting them pre-dispatch blocks valid calls with an error
+// whose suggested fix ("resend with the parameter included") can never
+// succeed, trapping the model in a futile retry loop.
 func missingRequiredFields(info *requiredSchemaInfo, args json.RawMessage) []requiredField {
 	if info == nil || len(info.required) == 0 {
 		return nil
@@ -108,7 +118,7 @@ func missingRequiredFields(info *requiredSchemaInfo, args json.RawMessage) []req
 	var missing []requiredField
 	for _, f := range info.required {
 		raw, present := call[f.Name]
-		if present && !isEmptyJSONValue(raw) {
+		if present && !isNullJSONValue(raw) {
 			continue
 		}
 		missing = append(missing, f)
@@ -116,20 +126,13 @@ func missingRequiredFields(info *requiredSchemaInfo, args json.RawMessage) []req
 	return missing
 }
 
-// isEmptyJSONValue reports whether a raw JSON value counts as "not provided":
-// null, empty string, empty array, or empty object.
-func isEmptyJSONValue(raw json.RawMessage) bool {
+// isNullJSONValue reports whether a raw JSON value counts as "not provided".
+// Only null (and a malformed empty raw value): per JSON Schema `required`
+// semantics the key's presence is what matters, and empty string/array/
+// object are distinct, legal values (#742).
+func isNullJSONValue(raw json.RawMessage) bool {
 	trimmed := strings.TrimSpace(string(raw))
-	switch {
-	case trimmed == "" || trimmed == "null":
-		return true
-	case trimmed == `""`:
-		return true
-	case trimmed == "[]" || trimmed == "{}":
-		return true
-	default:
-		return false
-	}
+	return trimmed == "" || trimmed == "null"
 }
 
 // formatMissingRequired renders the structured pre-flight error, embedding
