@@ -112,6 +112,14 @@ func bareStreakIsVerification(toolName string, toolInput string) bool {
 // commandIsVerification checks if a run_command/start_command input actually
 // verifies code correctness (fix #141). Commands like "echo", "ls", "pwd",
 // "cat", "git add", "git commit" are NOT verification.
+//
+// #748: delegate to the position-aware psIsVerifyCommand (premature_success.go)
+// instead of a local prefix list - the prefix-only match missed "cd dir && go
+// test", env-prefixed (GOFLAGS=... make verify-ci), and "# comment"-prefixed
+// commands, producing false "no verification" warnings right after a green
+// test run. psIsVerifyCommand handles &&-segments, env prefixes, and
+// build-system target whitelists (#350/#483/#553) and is already reused by
+// four other detectors.
 func commandIsVerification(toolInput string) bool {
 	if toolInput == "" {
 		return false // no command info → don't assume verification
@@ -122,24 +130,43 @@ func commandIsVerification(toolInput string) bool {
 	if err := json.Unmarshal([]byte(toolInput), &args); err != nil {
 		return false
 	}
-	cmd := strings.ToLower(strings.TrimSpace(args.Command))
-	if cmd == "" {
+	return psIsVerifyCommand(stripCommandPrefixes(args.Command))
+}
+
+// stripCommandPrefixes removes leading '#' comment lines and leading VAR=value
+// env assignments so position-aware matching sees the true command position.
+// psIsVerifyCommand's build-system dispatch keys on tokens[0], which for
+// env-prefixed invocations (GOFLAGS=... make verify-ci) is the assignment
+// itself, so the whitelist never sees "make" (#748).
+func stripCommandPrefixes(cmd string) string {
+	var real []string
+	for _, line := range strings.Split(cmd, "\n") {
+		t := strings.TrimSpace(line)
+		if t == "" || strings.HasPrefix(t, "#") {
+			continue
+		}
+		fields := strings.Fields(t)
+		for len(fields) > 0 && isEnvAssign(fields[0]) {
+			fields = fields[1:]
+		}
+		real = append(real, fields...)
+	}
+	return strings.Join(real, " ")
+}
+
+// isEnvAssign reports whether tok looks like a leading VAR=value assignment.
+func isEnvAssign(tok string) bool {
+	i := strings.Index(tok, "=")
+	if i <= 0 {
 		return false
 	}
-	// Known verification command prefixes.
-	verificationPrefixes := []string{
-		"go test", "go build", "go vet", "go check",
-		"make ", "npm test", "npm run", "yarn test", "cargo test", "pytest",
-		"python -m pytest", "jest", "vitest", "deno test",
-		"go run", // running a test binary or quick check
-		"clang", "gcc", "rustc",
-		"shellcheck", "golangci-lint", "eslint", "tsc",
-		"sqlc verify", "protoc",
-	}
-	for _, prefix := range verificationPrefixes {
-		if strings.HasPrefix(cmd, prefix) {
-			return true
+	for _, r := range tok[:i] {
+		switch {
+		case r == '_' || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z'):
+		case r >= '0' && r <= '9':
+		default:
+			return false
 		}
 	}
-	return false
+	return true
 }

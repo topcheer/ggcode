@@ -213,6 +213,15 @@ func (s *buildIdempotencyState) recordToolCall(toolName string, args json.RawMes
 		return ""
 	}
 
+	// #749: shell commands can mutate sources too (gofmt -w, go mod tidy,
+	// sed -i, git apply, generators). They are invisible to sourceMutatingTools,
+	// so without this the next build is misreported as redundant with a false
+	// "guaranteed identical" claim. Count as an edit; asymmetric cost says
+	// prefer missing a redundant-build warning over suppressing a needed one.
+	if shellMutatesSources(cmd) {
+		s.editsSinceLastBuild++
+	}
+
 	isBuild, label := detectBuildTestCommand(cmd)
 	if !isBuild {
 		return ""
@@ -237,6 +246,27 @@ func (s *buildIdempotencyState) recordToolCall(toolName string, args json.RawMes
 	s.editsSinceLastBuild = 0
 
 	return warning
+}
+
+// shellMutatesSources reports whether a shell command plausibly rewrites
+// source files (or module files) in place (#749). Substring match on the
+// lowercased command is deliberately broad: the cost of a false positive is
+// one missed redundancy warning, while the cost of a false negative is
+// actively discouraging a necessary rebuild.
+func shellMutatesSources(cmd string) bool {
+	lower := strings.ToLower(cmd)
+	for _, pat := range []string{
+		"gofmt -w", "gofmt -l -w", "goimports -w",
+		"sed -i", "git apply", "patch -p",
+		"go mod tidy", "go mod get", "go get ",
+		"gofumpt -w", "prettier --write", "eslint --fix",
+		"rustfmt", "black ", "isort ", "autopep8",
+	} {
+		if strings.Contains(lower, pat) {
+			return true
+		}
+	}
+	return false
 }
 
 func formatIdempotencyWarning(label string, lastBuildIter, curIter int, totalRedundant int) string {

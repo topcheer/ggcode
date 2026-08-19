@@ -60,6 +60,7 @@ var verifyCmdPatterns = []string{
 var makeVerifyTargets = map[string]bool{
 	"test": true, "tests": true, "verify": true, "ci": true, "build": true,
 	"lint": true, "check": true, "e2e": true, "validate": true, "integration": true,
+	"verify-ci": true, // this repo's canonical full verification target (#748)
 }
 
 // npmVerifyScripts is the whitelist of npm script names that count as
