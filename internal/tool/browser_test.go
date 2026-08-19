@@ -78,6 +78,35 @@ func TestBrowserToolUnknownAction(t *testing.T) {
 	}
 }
 
+// #741: file:// navigation must be refused at the Execute level before any
+// Chrome session is created - no Chrome binary required to run this test.
+func TestBrowserNavigateRejectsFileScheme(t *testing.T) {
+	b := NewBrowser()
+	for _, rawURL := range []string{
+		"file:///Users/x/.ssh/id_rsa", // the #741 attack
+		"file:///etc/passwd",
+		"chrome://settings",
+		"data:text/html,<script>1</script>",
+		"javascript:alert(1)",
+		"/Users/x/relative",
+	} {
+		input, _ := json.Marshal(map[string]string{
+			"action": "navigate",
+			"url":    rawURL,
+		})
+		result, err := b.Execute(nil, input)
+		if err != nil {
+			t.Fatalf("url %s: unexpected error: %v", rawURL, err)
+		}
+		if !result.IsError {
+			t.Errorf("url %s: expected error result", rawURL)
+		}
+		if !strings.Contains(result.Content, "http/https") {
+			t.Errorf("url %s: error should explain the http/https-only policy, got: %s", rawURL, result.Content)
+		}
+	}
+}
+
 func TestBrowserFormatJSResult(t *testing.T) {
 	tests := []struct {
 		input    interface{}
@@ -134,7 +163,7 @@ func TestRegistryCloseAll(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Register a non-Closer tool too — CloseAll should skip it
+	// Register a non-Closer tool too - CloseAll should skip it
 	if err := r.Register(WebFetch{}); err != nil {
 		t.Fatal(err)
 	}
