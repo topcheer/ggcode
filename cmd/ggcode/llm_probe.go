@@ -183,6 +183,10 @@ func runLLMProbe(cfgFile, vendorFilter, endpointFilter, modelOverride string, li
 			Model:    resolved.Model,
 		}
 
+		// Each API call gets its own timeoutSec budget (#746): the help text
+		// promises "per API call", and a diagnostic tool must not let a slow
+		// Chat eat the budget and misreport Stream as TIMEOUT. We rebuild the
+		// context before each call instead of sharing one per-endpoint ctx.
 		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSec)*time.Second)
 
 		prov, perr := provider.NewProvider(resolved)
@@ -195,9 +199,11 @@ func runLLMProbe(cfgFile, vendorFilter, endpointFilter, modelOverride string, li
 		}
 
 		// Estimate tokens
+		ctx, cancel = perCallTimeout(ctx, cancel, timeoutSec)
 		r.Estimate, _ = prov.CountTokens(ctx, msgs)
 
 		// Test Chat (non-streaming)
+		ctx, cancel = perCallTimeout(ctx, cancel, timeoutSec)
 		start := time.Now()
 		resp, err := prov.Chat(ctx, msgs, nil)
 		r.ChatLatency = time.Since(start)
@@ -226,6 +232,7 @@ func runLLMProbe(cfgFile, vendorFilter, endpointFilter, modelOverride string, li
 		}
 
 		// Test ChatStream
+		ctx, cancel = perCallTimeout(ctx, cancel, timeoutSec)
 		start = time.Now()
 		ch, err := prov.ChatStream(ctx, msgs, nil)
 		if err != nil {
@@ -272,6 +279,15 @@ func runLLMProbe(cfgFile, vendorFilter, endpointFilter, modelOverride string, li
 	// Print results
 	printProbeResults(results, verbose)
 	return nil
+}
+
+// perCallTimeout replaces the current probe context with a fresh one carrying
+// a full timeoutSec budget, cancelling the previous context so no timer leaks
+// (#746: help promises "Timeout per API call"; sharing one per-endpoint ctx
+// made a slow Chat systematically misreport Stream as TIMEOUT).
+func perCallTimeout(_ context.Context, cancel context.CancelFunc, timeoutSec int) (context.Context, context.CancelFunc) {
+	cancel()
+	return context.WithTimeout(context.Background(), time.Duration(timeoutSec)*time.Second)
 }
 
 // fetchFirstModel calls the provider's ListModels API and returns the first available model.
