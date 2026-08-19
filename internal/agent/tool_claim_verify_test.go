@@ -28,16 +28,24 @@ func TestClaimVerify_PanicInOutput(t *testing.T) {
 }
 
 func TestClaimVerify_NoResults(t *testing.T) {
+	// Command output containing a zero-match status line (true positive).
 	s := newClaimVerifyState()
-	g := s.check("grep", "pattern: foo\n0 matches", false)
+	g := s.check("run_command", "rg foo ./src\n0 matches", false)
 	if g == "" {
 		t.Fatal("expected guidance for 0 matches")
+	}
+	// grep's own zero-result meta-status line (true positive, issue #739 path).
+	g = s.check("grep", "No matches found.", false)
+	if g == "" {
+		t.Fatal("expected guidance for grep zero-result meta-status")
 	}
 }
 
 func TestClaimVerify_NotFound(t *testing.T) {
+	// Path-not-found status in command output (true positive). read_file with
+	// such text is now a content-bearing false positive — see zz_issue739_test.go.
 	s := newClaimVerifyState()
-	g := s.check("read_file", "Error: no such file or directory", false)
+	g := s.check("run_command", "cat foo.txt\nError: no such file or directory", false)
 	if g == "" {
 		t.Fatal("expected guidance for file not found")
 	}

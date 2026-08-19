@@ -48,10 +48,31 @@ func (c *claimVerifyState) reset() {
 
 const claimVerifyMaxInjections = 3
 
-// toolsForClaimVerify are tools whose results most commonly get misinterpreted.
-var toolsForClaimVerify = map[string]bool{
-	"run_command":     true,
-	"start_command":   true,
+// claimVerifyCommandTools are tools whose result content reflects the
+// execution status of a command the agent ran (stdout/stderr of a shell
+// command). For these tools, status patterns like "exit code: 1" are
+// genuine execution-state signals and pattern scanning is appropriate.
+var claimVerifyCommandTools = map[string]bool{
+	"run_command":   true,
+	"start_command": true,
+}
+
+// claimVerifyContentTools are content-bearing tools whose result.Content is
+// arbitrary file content, match lines, or symbol listings — not the tool's
+// own execution status. Running strings.Contains status patterns over such
+// content produces false positives (issue #739): a successful grep for
+// "does not exist", a read_file of test source containing t.Fatal, or a
+// shell script containing the literal "exit code: 1" would each be injected
+// with advisories contradicting the actual outcome.
+//
+// For these tools we only match the tool's OWN meta-status line: a short
+// fixed status message the tool itself emits when it found nothing. The
+// grep family returns exactly "No matches found." (optionally followed by a
+// "Suggestions:" block) as the whole result on zero matches. We therefore
+// require the trimmed content to START with the meta-status phrase — a
+// successful grep whose first matched line merely mentions the phrase (the
+// false-positive case) has match lines before/around it and will not match.
+var claimVerifyContentTools = map[string]bool{
 	"grep":            true,
 	"search_files":    true,
 	"glob":            true,
@@ -64,6 +85,14 @@ var toolsForClaimVerify = map[string]bool{
 	"lsp_hover":       true,
 	"lsp_diagnostics": true,
 }
+
+// claimVerifyMetaStatusPrefix is the zero-result meta-status line emitted by
+// the grep tool itself (internal/tool/grep.go formatGrepOutput) when the
+// search succeeded but matched nothing. Matching on this prefix preserves
+// the intended true positive — warning when a nominally-successful search
+// actually found nothing — without treating user content that merely
+// contains status-like wording as a failure signal.
+const claimVerifyMetaStatusPrefix = "no matches found."
 
 // claimVerifyPatterns are (pattern, message) pairs. Patterns are matched
 // case-insensitively against the tool result content. Each pattern targets
@@ -100,11 +129,18 @@ var claimVerifyPatterns = []claimVerifyPattern{
 // checkClaimVerify scans a tool result for commonly misinterpreted failure
 // signals and returns guidance if a risk is detected. Returns "" if no issue
 // or if the injection cap has been reached.
+//
+// Semantic boundary (issue #739): status patterns are only meaningful for
+// command-execution tools, where Content is the command's own output. For
+// content-bearing tools, Content is arbitrary user/file data, so only the
+// tool's own zero-result meta-status line is checked.
 func (c *claimVerifyState) check(toolName, content string, isError bool) string {
 	if c.injections >= claimVerifyMaxInjections {
 		return ""
 	}
-	if !toolsForClaimVerify[toolName] {
+	isCommand := claimVerifyCommandTools[toolName]
+	isContent := claimVerifyContentTools[toolName]
+	if !isCommand && !isContent {
 		return ""
 	}
 	if content == "" {
@@ -117,6 +153,20 @@ func (c *claimVerifyState) check(toolName, content string, isError bool) string 
 		return ""
 	}
 
+	// Content-bearing tools: only the tool's own zero-result meta-status line
+	// counts as a signal. Match lines / file content that merely CONTAIN the
+	// phrase are payload, not status (fixes issue #739 false positives).
+	if isContent {
+		trimmedLower := strings.ToLower(strings.TrimSpace(content))
+		if strings.HasPrefix(trimmedLower, claimVerifyMetaStatusPrefix) {
+			c.injections++
+			debug.Log("claim_verify", "zero-result meta-status detected: tool=%s", toolName)
+			return "[Verify] Search returned no matches. Do not claim results were found. Re-read the tool output carefully before proceeding."
+		}
+		return ""
+	}
+
+	// Command-execution tools: scan the command output for status patterns.
 	lower := strings.ToLower(content)
 	// Only scan the first 4000 chars to keep cost low on huge outputs.
 	if len(lower) > 4000 {
