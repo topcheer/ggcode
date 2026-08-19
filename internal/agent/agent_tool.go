@@ -576,6 +576,13 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 // forever on a tool that ignores its context parameter. The goroutine may continue
 // running in the background (we can't kill it), but the agent loop is unblocked.
 func (a *Agent) safeExecute(t tool.Tool, ctx context.Context, args json.RawMessage) (result tool.Result, err error) {
+	// Pre-flight required-parameter check (schema-driven, #first-call-fail
+	// root cause): reject before dispatch with an error that embeds each
+	// missing parameter's schema description, so the LLM fixes the call in
+	// one retry instead of guessing from a bare parameter name.
+	if r := preflightRequiredCheck(t, args); r != nil {
+		return *r, nil
+	}
 	// Fill-aware tools (MCP adapter) shrink their own result cap to stay
 	// under the context-pressure guard's limits, keeping head-only
 	// truncation the single cut (#365, wiring fixed in #369).
