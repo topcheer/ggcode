@@ -3,7 +3,6 @@ package a2a
 import (
 	"fmt"
 	"net"
-	"os"
 	"strconv"
 	"strings"
 
@@ -232,7 +231,13 @@ func sanitizeMDNSName(name string) string {
 	name = strings.ReplaceAll(name, ":", "-")
 	name = strings.ReplaceAll(name, " ", "-")
 	name = strings.ReplaceAll(name, "_", "-")
-	name = strings.ReplaceAll(name, string(os.PathSeparator), "-")
+	// Both separators are invalid in an mDNS label (RFC 1034: letters,
+	// digits, hyphen only) and both can appear in a path on Windows
+	// ("C:/x/y" is legal), so the exclusion must not key on
+	// os.PathSeparator — on Windows that left "/" through and produced an
+	// invalid broadcast name.
+	name = strings.ReplaceAll(name, "/", "-")
+	name = strings.ReplaceAll(name, "\\", "-")
 	if len(name) > 63 {
 		name = name[:63]
 	}
