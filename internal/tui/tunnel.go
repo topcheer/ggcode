@@ -1045,8 +1045,10 @@ func (m *Model) handleTunnelModeChangeMsg(msg tunnelModeChangeMsg) (tea.Model, t
 		return m, nil
 	}
 	newMode := permission.ParsePermissionMode(msg.mode)
-	if newMode == permission.SupervisedMode && msg.mode != "supervised" && msg.mode != "" {
-		// ParsePermissionMode defaults to supervised for unknown values — reject.
+	// #743: use IsValidPermissionMode instead of inferring validity from the
+	// parse fallback — the old guard rejected "SUPERVISED" (case-sensitive
+	// raw compare) and exempted the empty string.
+	if !permission.IsValidPermissionMode(msg.mode) {
 		return m, nil
 	}
 	m.mode = newMode

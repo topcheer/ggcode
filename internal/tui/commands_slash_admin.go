@@ -38,6 +38,13 @@ func (m Model) handleModeSwitch() (tea.Model, tea.Cmd) {
 
 func (m *Model) handleModeCommand(parts []string) tea.Cmd {
 	if len(parts) > 1 {
+		// #743: reject unknown mode names instead of silently falling back
+		// to supervised (ParsePermissionMode's fail-safe default is intended
+		// for config parsing, not user input).
+		if !permission.IsValidPermissionMode(parts[1]) {
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Invalid mode %q. Valid modes: supervised | plan | auto | bypass | autopilot", parts[1]))
+			return nil
+		}
 		oldMode := m.mode
 		newMode := permission.ParsePermissionMode(parts[1])
 		m.mode = newMode
