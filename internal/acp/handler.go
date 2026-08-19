@@ -427,11 +427,10 @@ func (h *Handler) handleSessionPrompt(params json.RawMessage) (interface{}, erro
 			debug.Log("acp", "failed to save session: %v", saveErr)
 		}
 		// Clean up MCP connections
-		if session.mcpManager != nil {
-			if err := session.mcpManager.Close(); err != nil {
-				debug.Log("acp", "MCP cleanup error: %v", err)
-			}
-		}
+		// #751: MCP servers are SESSION-level (per ACP spec); closing the
+		// manager in this per-prompt defer killed all MCP tools from prompt #2
+		// onward (no reconnection path exists). Close now happens in
+		// handleSessionClose / on manager replacement in connectMCPServers.
 	})
 
 	// Return immediately; updates come via session/update notifications
@@ -662,11 +661,25 @@ func (h *Handler) handleSessionClose(params json.RawMessage) (interface{}, error
 	// Cancel any ongoing work (DoCancel takes the session lock)
 	session.DoCancel()
 
+	// #751: close the session-level MCP manager here -- its lifetime is
+	// session/new -> session/close. Previously it was closed in the per-prompt
+	// defer (breaking MCP from prompt #2) and never closed when a session was
+	// closed before any prompt completed (stdio process leak).
+	if session.mcpManager != nil {
+		if err := session.mcpManager.Close(); err != nil {
+			debug.Log("acp", "MCP cleanup error on session close: %v", err)
+		}
+	}
+
 	// Remove from active sessions and forget the session's explicit mode
 	h.sessionsMu.Lock()
 	delete(h.sessions, req.SessionID)
 	delete(h.agentLoops, req.SessionID)
 	delete(h.sessionModes, req.SessionID)
+	// #752: the fourth sessionID-keyed map was omitted here; its only reader
+	// looks up via h.sessions, so a stale entry is unreachable and leaks
+	// ~150-250 bytes per closed session for the process lifetime.
+	delete(h.workspaceDirs, req.SessionID)
 	h.sessionsMu.Unlock()
 
 	debug.Log("acp", "session %s closed", req.SessionID)
@@ -880,6 +893,14 @@ func getDefaultConfigOptions() []SessionConfigOption {
 func (h *Handler) connectMCPServers(ctx context.Context, session *Session, servers []MCPServer) error {
 	if len(servers) == 0 {
 		return nil
+	}
+	// #751: replacing a manager (session/resume with new MCP servers) must
+	// close the old one -- otherwise its stdio processes leak and its tools
+	// linger in the shared registry.
+	if session.mcpManager != nil {
+		if err := session.mcpManager.Close(); err != nil {
+			debug.Log("acp", "MCP close on manager replacement: %v", err)
+		}
 	}
 	mgr := NewMCPManager(h.toolRegistry)
 	if err := mgr.ConnectServers(ctx, servers); err != nil {
