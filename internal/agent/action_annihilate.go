@@ -180,6 +180,14 @@ func (s *actionAnnihilateState) recordToolCall(toolName string, args json.RawMes
 
 // checkAnnihilation examines whether the current tool call cancels a prior one.
 func (s *actionAnnihilateState) checkAnnihilation(currentTool string, currentArgs json.RawMessage, iteration int) string {
+	// undo_edit is handled as one unified case (#744): action=list is a pure
+	// read (checkpoint listing) that cancels nothing, and undo/revert must
+	// cite the most recent prior edit across edit_file/multi_edit_file/
+	// write_file rather than pair-declaration order.
+	if currentTool == "undo_edit" {
+		return s.checkUndoEditAnnihilation(currentArgs, iteration)
+	}
+
 	for _, pair := range annihilationPairs {
 		if currentTool != pair.cancelTool {
 			continue
@@ -208,6 +216,61 @@ func (s *actionAnnihilateState) checkAnnihilation(currentTool string, currentArg
 	}
 
 	return ""
+}
+
+// checkUndoEditAnnihilation detects edit→undo_edit annihilation with two
+// corrections over naive pair matching (#744):
+//   - undo_edit with action=list is a pure read and never fires a warning;
+//   - the warning cites the most recent prior edit tool by iteration, so
+//     mixed edit_file/write_file sequences attribute to the edit actually
+//     undone, not to whichever pair is declared first.
+//
+// Caller must hold s.mu.
+func (s *actionAnnihilateState) checkUndoEditAnnihilation(currentArgs json.RawMessage, iteration int) string {
+	if undoEditAction(currentArgs) == "list" {
+		return ""
+	}
+	for i := len(s.actions) - 1; i >= 0; i-- {
+		prior := s.actions[i]
+		desc, ok := undoEditPriorDescription(prior.tool)
+		if !ok {
+			continue
+		}
+		s.cancelCount++
+		if s.warnsIssued >= s.maxWarns {
+			return ""
+		}
+		s.warnsIssued++
+		debug.Log("agent", "Iteration %d: action annihilation detected: %s (pair #%d)",
+			iteration, desc, s.cancelCount)
+		return formatAnnihilationWarning(desc, prior.iteration, iteration, s.cancelCount)
+	}
+	return ""
+}
+
+// undoEditAction extracts the action argument of an undo_edit call. Missing
+// or unparsable args are treated as "undo" (state-changing) so detection
+// stays conservative on malformed input.
+func undoEditAction(args json.RawMessage) string {
+	var parsed struct {
+		Action string `json:"action"`
+	}
+	if err := json.Unmarshal(args, &parsed); err != nil || parsed.Action == "" {
+		return "undo"
+	}
+	return parsed.Action
+}
+
+// undoEditPriorDescription maps an edit tool to its undo_edit annihilation
+// description, sourced from annihilationPairs so descriptions stay in one
+// place. ok is false for tools that are not edit-undo priors.
+func undoEditPriorDescription(priorTool string) (string, bool) {
+	for _, p := range annihilationPairs {
+		if p.cancelTool == "undo_edit" && p.priorTool == priorTool {
+			return p.description, true
+		}
+	}
+	return "", false
 }
 
 func formatAnnihilationWarning(desc string, priorIter, curIter int, totalCancels int) string {
