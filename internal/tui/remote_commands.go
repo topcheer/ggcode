@@ -365,5 +365,11 @@ func (d tuiSlashDeps) GitDiff(args []string) (string, error) {
 	if err != nil && len(out) == 0 {
 		return "", fmt.Errorf("git diff: %v", err)
 	}
-	return strings.TrimRight(string(out), "\n"), nil
+	trimmed := strings.TrimRight(string(out), "\n")
+	if trimmed == "" {
+		// Clean tree: git diff exits 0 with empty output. One-shot command
+		// contracts (parity test + IM bridge) require a non-empty response.
+		return "No changes.", nil
+	}
+	return trimmed, nil
 }

@@ -198,7 +198,13 @@ func (b *DaemonBridge) GitDiff(args []string) (string, error) {
 	if err != nil && len(out) == 0 {
 		return "", fmt.Errorf("git diff: %v", err)
 	}
-	return strings.TrimRight(string(out), "\n"), nil
+	trimmed := strings.TrimRight(string(out), "\n")
+	if trimmed == "" {
+		// Clean tree: git diff exits 0 with empty output. IM users would
+		// otherwise receive an empty message. Mirrors the TUI path's fix.
+		return "No changes.", nil
+	}
+	return trimmed, nil
 }
 
 // Compile-time interface conformance for the path-A deps implementation.
