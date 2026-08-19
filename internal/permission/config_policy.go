@@ -122,6 +122,17 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 		}
 	}
 
+	// #741 / #573-B extension: an explicit user Deny rule is mode-independent
+	// for EVERY tool, not just command tools. AutoMode previously never
+	// consulted p.rules, so a user-configured `tools.browser: deny` was
+	// silently ignored while the browser tool could navigate to file:// URLs
+	// that read_file would have sandboxed. Deny is the strongest user intent
+	// and must win in every mode, before any mode-specific logic runs.
+	if d, ok := p.rules[toolName]; ok && d == Deny {
+		debug.Log("permission", "tool denied by explicit deny rule (mode-independent): %s", toolName)
+		return Deny, nil
+	}
+
 	// Mode-specific handling
 	switch p.mode {
 	case BypassMode, AutopilotMode:

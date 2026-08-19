@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -100,7 +101,7 @@ func (b *Browser) Parameters() json.RawMessage {
 		},
 		"url": {
 			"type": "string",
-			"description": "URL to navigate to (for 'navigate' action)."
+			"description": "URL to navigate to (for 'navigate' action). Only http/https URLs are allowed; file:// and other schemes are rejected (use read_file for local files)."
 		},
 		"profile": {
 			"type": "string",
@@ -520,8 +521,31 @@ func (b *Browser) getSession(profileName, sessionID string, headless *bool) (*br
 	return tab, nil
 }
 
+// isAllowedNavScheme reports whether rawURL uses a scheme permitted for
+// browser navigation (#741). Only http/https are allowed: file:// navigation
+// turns the browser into an unauthenticated local-file reader that bypasses
+// the workspace sandbox read_file enforces, and chrome:// exposes browser
+// internals — neither can be reached through any other vetted channel.
+// Schemeless input is also rejected (chromedp would treat it as a search or
+// relative file path, which is ambiguous and can land on file:// after
+// redirect).
+func isAllowedNavScheme(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return false
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "http", "https":
+		return true
+	}
+	return false
+}
+
 // doNavigate opens a URL and optionally waits for an element.
 func (b *Browser) doNavigate(ctx context.Context, profile, session, rawURL, waitFor string, waitTimeout int, headless *bool) (Result, error) {
+	if !isAllowedNavScheme(rawURL) {
+		return Result{IsError: true, Content: fmt.Sprintf("navigation refused: only http/https URLs are allowed (got %q). file:// and other schemes bypass the workspace sandbox (#741). Use the read_file tool for local file access, subject to permission checks.", rawURL)}, nil
+	}
 	tab, err := b.getSession(profile, session, headless)
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
