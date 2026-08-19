@@ -101,12 +101,15 @@ var raIntentPatterns = map[raCategory][]string{
 
 // raToolCategory maps tool names to action categories.
 func raToolCategory(toolName string) raCategory {
+	// File-editing tools are classified via the canonical sourceMutatingTools
+	// superset (#738) so the fix category can never drift from the registered
+	// tool set.
+	if sourceMutatingTools[toolName] {
+		return raCatFix
+	}
 	switch toolName {
 	case "run_command", "start_command":
 		return raCatVerify
-	case "edit_file", "write_file", "multi_edit_file", "multi_file_edit",
-		"notebook_edit", "batch_replace":
-		return raCatFix
 	case "read_file", "multi_file_read", "lsp_hover", "lsp_symbols",
 		"lsp_definition", "lsp_references", "lsp_implementation",
 		"lsp_document_highlights", "lsp_incoming_calls", "lsp_outgoing_calls",

@@ -83,14 +83,10 @@ func newCausalAttributionState() *causalAttributionState {
 	}
 }
 
-// editTools identifies which tool calls constitute "edit steps".
-var causalEditTools = map[string]bool{
-	"edit_file":       true,
-	"write_file":      true,
-	"multi_edit_file": true,
-	"multi_file_edit": true,
-	"file_ops":        true, // move/delete can also cause failures
-}
+// causalEditTools identifies which tool calls constitute "edit steps".
+// Aliased to the canonical sourceMutatingTools superset (#738); file_ops
+// move/delete remains included via the canonical set.
+var causalEditTools = sourceMutatingTools
 
 // verifyToolPatterns identifies build/test verification commands.
 var causalVerifyRe = regexp.MustCompile(`(?i)(go\s+(build|test|vet)|make\s+\w+|npm\s+(test|run)|cargo\s+(build|test)|pytest|jest|\.\/gradlew)`)

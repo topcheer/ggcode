@@ -289,14 +289,9 @@ func csSeverityLabel(level int) string {
 }
 
 // csIsEditTool checks if a tool modifies files (same set as other detectors).
+// Derived from the canonical sourceMutatingTools superset (#738).
 func csIsEditTool(toolName string) bool {
-	switch toolName {
-	case "edit_file", "multi_edit_file", "write_file", "multi_file_write",
-		"multi_file_edit", "file_ops", "notebook_edit":
-		return true
-	default:
-		return false
-	}
+	return sourceMutatingTools[toolName]
 }
 
 // csIsVerifyTool was removed (#491): tool-NAME-level verify classification

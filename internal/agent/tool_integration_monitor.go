@@ -102,24 +102,19 @@ var toolsForIntegration = map[string]bool{
 // the "investigation phase": evidence consumed by the mutation's target is
 // integrated by action, and unrelated evidence expires rather than
 // surviving across intervening mutating calls (penetration limit).
-var integrationMutatingTools = map[string]bool{
-	"edit_file":       true,
-	"multi_edit_file": true,
-	"write_file":      true,
-	"notebook_edit":   true,
-	"batch_replace":   true,
-	"file_ops":        true,
-	"lsp_rename":      true,
-	"run_command":     true,
-	"start_command":   true,
-	"git_add":         true,
-	"git_commit":      true,
-	"git_reset":       true,
-	"git_revert":      true,
-	"git_checkout":    true,
-	"git_stash":       true,
-	"git_tag":         true,
-}
+// Derived from the canonical sourceMutatingTools superset plus command/git
+// side-effect tools (#738).
+var integrationMutatingTools = derivedEditTools(map[string]bool{
+	"run_command":   true,
+	"start_command": true,
+	"git_add":       true,
+	"git_commit":    true,
+	"git_reset":     true,
+	"git_revert":    true,
+	"git_checkout":  true,
+	"git_stash":     true,
+	"git_tag":       true,
+})
 
 // Patterns for extracting high-signal tokens from tool outputs.
 // These represent the "evidence" an agent should carry forward.

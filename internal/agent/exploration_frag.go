@@ -93,21 +93,15 @@ var explorationFragToolNames = map[string]bool{
 
 // mutatingToolNamesFrag identifies tools that indicate convergence (the agent
 // found what it was looking for and is now acting).
-var mutatingToolNamesFrag = map[string]bool{
-	"edit_file":        true,
-	"multi_edit_file":  true,
-	"multi_file_edit":  true,
-	"write_file":       true,
-	"multi_file_write": true,
-	"run_command":      true,
-	"start_command":    true,
-	"git_commit":       true,
-	"git_add":          true,
-	"git_checkout":     true,
-	"notebook_edit":    true,
-	"batch_replace":    true,
-	"file_ops":         true,
-}
+// Derived from the canonical sourceMutatingTools superset plus command/git
+// side-effect tools (#738).
+var mutatingToolNamesFrag = derivedEditTools(map[string]bool{
+	"run_command":   true,
+	"start_command": true,
+	"git_commit":    true,
+	"git_add":       true,
+	"git_checkout":  true,
+})
 
 // exploreFragEntry records a single exploration tool call.
 type exploreFragEntry struct {

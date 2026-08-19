@@ -199,13 +199,15 @@ func (s *trajectoryHealthState) assess() ([]healthDimension, int) {
 }
 
 // countToolTypes categorizes tool calls into edit and read-only counts.
-// editCount = file-editing tools (edit_file, write_file, multi_edit_file, multi_file_edit)
-// readCount = read-only exploration tools
+// editCount = canonical sourceMutatingTools (#738); readCount = read-only
+// exploration tools
 func countToolTypes(toolCalls []provider.ToolCallDelta) (editCount, readCount int) {
 	for _, tc := range toolCalls {
-		switch tc.Name {
-		case "edit_file", "write_file", "multi_edit_file", "multi_file_edit":
+		if sourceMutatingTools[tc.Name] {
 			editCount++
+			continue
+		}
+		switch tc.Name {
 		case "read_file", "multi_file_read", "grep", "search_files", "glob",
 			"list_directory", "code_search", "lsp_hover", "lsp_definition",
 			"lsp_references", "lsp_symbols", "lsp_workspace_symbols",

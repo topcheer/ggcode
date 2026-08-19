@@ -103,7 +103,9 @@ func irrevClassifyTool(toolName, args string) int {
 	// Tier 2: Medium irreversibility (harder to undo)
 	case "git_commit", "git_revert":
 		return irrevTierMedium
-	case "file_ops", "batch_replace":
+	case "file_ops", "batch_replace", "lsp_rename":
+		// lsp_rename applies LSP workspace edits across files (no dispatch-layer
+		// checkpoint, see agent_tool.go) -- same tier as file_ops/batch_replace.
 		return irrevTierMedium
 	case "start_command", "run_command":
 		// Commands are at least medium — could be anything

@@ -91,13 +91,8 @@ var outcomeVerifiableTools = map[string]bool{
 
 // Corrective tools that invalidate a misattribution check (if used
 // between the failure and the success claim, the agent is addressing it).
-var outcomeCorrectiveTools = map[string]bool{
-	"edit_file":       true,
-	"multi_edit_file": true,
-	"multi_file_edit": true,
-	"write_file":      true,
-	"batch_replace":   true,
-}
+// Aliased to the canonical sourceMutatingTools superset (#738).
+var outcomeCorrectiveTools = sourceMutatingTools
 
 // outcomeMisattribState tracks failures and corrective actions per run.
 type outcomeMisattribState struct {

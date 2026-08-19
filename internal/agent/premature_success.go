@@ -127,14 +127,8 @@ var verifyTools = map[string]bool{
 }
 
 // psEditTools are tool names that modify files (require re-verification).
-var psEditTools = map[string]bool{
-	"edit_file":       true,
-	"write_file":      true,
-	"multi_edit_file": true,
-	"multi_file_edit": true,
-	"file_ops":        true,
-	"batch_replace":   true,
-}
+// Aliased to the canonical sourceMutatingTools superset (#738).
+var psEditTools = sourceMutatingTools
 
 // prematureSuccessState tracks edits and verification across a run.
 type prematureSuccessState struct {

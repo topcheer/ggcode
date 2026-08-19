@@ -50,15 +50,15 @@ import (
 // privilegedSinkTools are tools whose arguments constitute privileged actions
 // (state mutation, file system changes, command execution). If tainted
 // content flows into their arguments, that is an information-flow violation.
-var privilegedSinkTools = map[string]bool{
-	"edit_file":           true,
-	"write_file":          true,
-	"multi_edit_file":     true,
-	"batch_replace":       true,
+//
+// Derived from the canonical sourceMutatingTools superset (#738): every
+// registered disk-writing tool (multi_file_edit, multi_file_write,
+// lsp_rename, ...) is a sink, plus command-execution and git side-effect
+// tools that sit outside the file-editing canon.
+var privilegedSinkTools = derivedEditTools(map[string]bool{
 	"run_command":         true,
 	"start_command":       true,
 	"write_command_input": true,
-	"file_ops":            true,
 	"git_add":             true,
 	"git_commit":          true,
 	"git_checkout":        true,
@@ -66,8 +66,7 @@ var privilegedSinkTools = map[string]bool{
 	"git_revert":          true,
 	"git_stash":           true,
 	"git_tag":             true,
-	"notebook_edit":       true,
-}
+})
 
 // destructiveSinkTools are a subset of privileged sinks that cause
 // irreversible state changes. These trigger the broader influence-window

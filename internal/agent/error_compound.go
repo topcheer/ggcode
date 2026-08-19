@@ -340,12 +340,7 @@ func ecIsVerifyCmd(toolName string) bool {
 }
 
 // ecIsEditTool checks if a tool modifies files.
+// Derived from the canonical sourceMutatingTools superset (#738).
 func ecIsEditTool(toolName string) bool {
-	switch toolName {
-	case "edit_file", "multi_edit_file", "write_file", "multi_file_write",
-		"multi_file_edit", "file_ops", "notebook_edit":
-		return true
-	default:
-		return false
-	}
+	return sourceMutatingTools[toolName]
 }

@@ -155,13 +155,9 @@ func recklessIsExplorationTool(name string) bool {
 }
 
 // recklessIsEditTool returns true for tools that modify files.
+// Derived from the canonical sourceMutatingTools superset (#738).
 func recklessIsEditTool(name string) bool {
-	switch name {
-	case "edit_file", "write_file", "multi_edit_file", "multi_file_edit",
-		"multi_file_write", "notebook_edit", "batch_replace":
-		return true
-	}
-	return false
+	return sourceMutatingTools[name]
 }
 
 // recklessExtractPaths extracts file paths from tool arguments.

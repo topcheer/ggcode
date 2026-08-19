@@ -56,12 +56,8 @@ const (
 )
 
 // editToolSet contains tools that modify code (productive actions).
-var editToolSet = map[string]bool{
-	"edit_file":       true,
-	"write_file":      true,
-	"multi_edit_file": true,
-	"multi_file_edit": true,
-}
+// Aliased to the canonical sourceMutatingTools superset (#738).
+var editToolSet = sourceMutatingTools
 
 // verifyToolSet contains tools that verify code correctness.
 var verifyToolSet = map[string]bool{

@@ -74,13 +74,9 @@ func undoBlindIsUndoOp(toolName string) bool {
 }
 
 // undoBlindIsMutation returns true for tools that modify files.
+// Derived from the canonical sourceMutatingTools superset (#738).
 func undoBlindIsMutation(toolName string) bool {
-	switch toolName {
-	case "edit_file", "multi_edit_file", "write_file", "multi_file_edit",
-		"multi_file_write", "batch_replace", "lsp_rename", "notebook_edit":
-		return true
-	}
-	return false
+	return sourceMutatingTools[toolName]
 }
 
 // undoBlindIsRead returns true for tools that read file content.

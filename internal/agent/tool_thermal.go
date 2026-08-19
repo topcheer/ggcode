@@ -99,11 +99,17 @@ var toolCategoryMap = map[string]thermalCategory{
 	"web_search":                 thermalExplore,
 	"web_fetch":                  thermalExplore,
 
-	// Modification (code changes)
+	// Modification (code changes) -- canonical sourceMutatingTools members
+	// (#738): edit_file, write_file, multi_edit_file, multi_file_edit,
+	// multi_file_write, batch_replace, lsp_rename, file_ops, notebook_edit.
 	"edit_file":        thermalModify,
 	"write_file":       thermalModify,
 	"multi_edit_file":  thermalModify,
+	"multi_file_edit":  thermalModify,
 	"multi_file_write": thermalModify,
+	"batch_replace":    thermalModify,
+	"lsp_rename":       thermalModify,
+	"file_ops":         thermalModify,
 	"notebook_edit":    thermalModify,
 
 	// Execution (side-effect operations)

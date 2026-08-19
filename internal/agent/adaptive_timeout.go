@@ -111,7 +111,9 @@ func classifyTool(toolName string) toolTimeoutCategory {
 	case toolName == "grep" || toolName == "search_files" || toolName == "glob" || toolName == "code_search":
 		return catSearch
 	case toolName == "edit_file" || toolName == "write_file" ||
-		toolName == "multi_edit_file" || toolName == "multi_file_write" ||
+		toolName == "multi_edit_file" || toolName == "multi_file_edit" ||
+		toolName == "multi_file_write" || toolName == "batch_replace" ||
+		toolName == "lsp_rename" || toolName == "file_ops" ||
 		toolName == "notebook_edit":
 		return catEdit
 	case strings.HasPrefix(toolName, "lsp_") || toolName == "code_health":

@@ -136,15 +136,12 @@ func (s *actionHedgingState) reset() {
 }
 
 // isMutationTool returns true if the tool name is a code-editing/mutation tool.
+// Derived from the canonical sourceMutatingTools superset plus git side-effect
+// tools (#738) so the file-editing members can never drift.
 func isMutationTool(toolName string) bool {
-	switch toolName {
-	case "edit_file", "write_file", "multi_edit_file", "multi_file_edit",
-		"batch_replace", "git_commit", "git_add", "git_reset",
-		"git_revert", "git_checkout", "git_stash", "notebook_edit":
-		return true
-	default:
-		return false
-	}
+	return sourceMutatingTools[toolName] ||
+		toolName == "git_commit" || toolName == "git_add" || toolName == "git_reset" ||
+		toolName == "git_revert" || toolName == "git_checkout" || toolName == "git_stash"
 }
 
 // scanActionHedging analyzes assistant text for action-hedging language.

@@ -211,12 +211,9 @@ func normalizeCascadePath(path string) string {
 }
 
 // isEditingTool returns true for tools that modify files.
+// Derived from the canonical sourceMutatingTools superset (#738).
 func isEditingTool(name string) bool {
-	switch name {
-	case "edit_file", "multi_edit_file", "multi_file_edit", "write_file", "notebook_edit":
-		return true
-	}
-	return false
+	return sourceMutatingTools[name]
 }
 
 // isGoKeyword filters symbol extraction false positives.

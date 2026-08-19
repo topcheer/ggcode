@@ -50,16 +50,13 @@ var qcSearchTools = map[string]bool{
 	"glob":         true,
 }
 
-// codeActionTools that indicate the agent moved beyond exploration.
-var qcActionTools = map[string]bool{
-	"edit_file":        true,
-	"multi_edit_file":  true,
-	"multi_file_edit":  true,
-	"write_file":       true,
-	"multi_file_write": true,
-	"run_command":      true,
-	"git_commit":       true,
-}
+// qcActionTools that indicate the agent moved beyond exploration.
+// Derived from the canonical sourceMutatingTools superset plus command/git
+// tools (#738).
+var qcActionTools = derivedEditTools(map[string]bool{
+	"run_command": true,
+	"git_commit":  true,
+})
 
 func newQueryConvergeState() *queryConvergeState {
 	return &queryConvergeState{

@@ -78,13 +78,9 @@ func extractEAPaths(args string) []string {
 	return paths
 }
 
+// eaIsEditTool is derived from the canonical sourceMutatingTools superset (#738).
 func eaIsEditTool(tool string) bool {
-	switch tool {
-	case "edit_file", "write_file", "multi_edit_file", "multi_file_edit",
-		"notebook_edit":
-		return true
-	}
-	return false
+	return sourceMutatingTools[tool]
 }
 
 func eaIsReadTool(tool string) bool {

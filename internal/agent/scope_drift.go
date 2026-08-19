@@ -217,11 +217,6 @@ func (a *Agent) resetScopeDrift() {
 }
 
 // productiveEditTools are tools that modify files (subset of productiveTools).
-var productiveEditTools = map[string]bool{
-	"edit_file":        true,
-	"write_file":       true,
-	"multi_edit_file":  true,
-	"multi_file_edit":  true,
-	"multi_file_write": true,
-	"notebook_edit":    true,
-}
+// Aliased to the canonical sourceMutatingTools superset (#738) so it can
+// never drift from the registered tool set.
+var productiveEditTools = sourceMutatingTools

@@ -84,15 +84,9 @@ var effortReadOnlyTools = map[string]bool{
 	"lsp_document_highlights":    true,
 }
 
-// editTools are tools that modify files — higher stakes, benefit from more reasoning.
-var editTools = map[string]bool{
-	"edit_file":        true,
-	"write_file":       true,
-	"multi_edit_file":  true,
-	"multi_file_edit":  true,
-	"multi_file_write": true,
-	"notebook_edit":    true,
-}
+// editTools are tools that modify files -- higher stakes, benefit from more reasoning.
+// Aliased to the canonical sourceMutatingTools superset (#738).
+var editTools = sourceMutatingTools
 
 // errorRecoverySignals are tools or patterns that indicate the agent is
 // recovering from a failure — high effort helps avoid repeating mistakes.

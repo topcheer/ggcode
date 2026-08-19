@@ -116,13 +116,9 @@ var reproducerCommandRe = regexp.MustCompile(
 	`(?:^|[\s:"])(?:python3?|node|go\s+run|ruby|cargo\s+run|bash|sh)\s+\S+\.(?:py|js|ts|go|rb|rs|sh)`,
 )
 
-// editToolNames identifies tools that modify source files.
-var reproducerEditToolNames = map[string]bool{
-	"edit_file":       true,
-	"multi_edit_file": true,
-	"write_file":      true,
-	"multi_file_edit": true,
-}
+// reproducerEditToolNames identifies tools that modify source files.
+// Aliased to the canonical sourceMutatingTools superset (#738).
+var reproducerEditToolNames = sourceMutatingTools
 
 // runToolNames identifies tools that execute commands (potential re-runs).
 var reproducerRunToolNames = map[string]bool{
