@@ -215,14 +215,10 @@ func (s *editCoverageState) checkCoverage(toolName, rawArgs string) string {
 }
 
 // coverageIsEditTool returns true for tools that modify files.
+// Derived from the canonical sourceMutatingTools superset (#738) so it can
+// never drift from the registered tool set.
 func coverageIsEditTool(toolName string) bool {
-	switch toolName {
-	case "edit_file", "multi_edit_file", "write_file", "multi_file_write",
-		"multi_file_edit", "file_ops", "notebook_edit":
-		return true
-	default:
-		return false
-	}
+	return sourceMutatingTools[toolName]
 }
 
 // coverageIsVerifyTool returns true for tools that run verification commands.
@@ -264,6 +260,23 @@ func coverageExtractFilePaths(toolName, args string) []string {
 					}
 				}
 			}
+		}
+	case "batch_replace":
+		// files is a []string of absolute paths (#738).
+		if filesRaw, ok := raw["files"]; ok {
+			var files []string
+			if json.Unmarshal(filesRaw, &files) == nil {
+				for _, f := range files {
+					if f != "" {
+						paths = append(paths, f)
+					}
+				}
+			}
+		}
+	case "lsp_rename":
+		// Applies LSP workspace edits anchored at the target file (#738).
+		if fp, ok := coverageGetStr(raw, "path"); ok {
+			paths = append(paths, fp)
 		}
 	case "file_ops":
 		if opsRaw, ok := raw["operations"]; ok {
