@@ -203,6 +203,50 @@ func UpdateConfig(values map[string]interface{}) error {
 		return fmt.Errorf("config not initialized")
 	}
 
+	// #740: validate before mutate. Four checks inside the mutation chain
+	// below can fail and return mid-way (vendor/endpoint existence for
+	// baseURL, duration parsing for the two timeouts), leaving fields that
+	// were already written resident in the shared in-memory cfg — reported by
+	// GetFullConfig, picked up by the next chat session without Save, and
+	// silently persisted by the next successful save through any of the four
+	// Save paths. All fallible validation now happens before a single field
+	// is touched, so a failed update leaves the config exactly as it was.
+	if v, ok := values["subAgentTimeout"].(string); ok {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			// Silent success on a typo'd duration hid the failure (#206).
+			return fmt.Errorf("invalid subAgentTimeout %q (use e.g. \"45s\"): %w", v, err)
+		}
+		_ = d // applied below, after all validation passes
+	}
+	if v, ok := values["swarmTimeout"].(string); ok {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return fmt.Errorf("invalid swarmTimeout %q (use e.g. \"45s\"): %w", v, err)
+		}
+		_ = d
+	}
+	if v, ok := values["baseURL"].(string); ok && v != "" {
+		// Mirror the effective vendor/endpoint the mutation chain will use:
+		// vendor/endpoint values in the same map take precedence over cfg.
+		vendor, endpoint := cfg.Vendor, cfg.Endpoint
+		if nv, ok := values["vendor"].(string); ok && nv != "" {
+			vendor = nv
+		}
+		if ne, ok := values["endpoint"].(string); ok && ne != "" {
+			endpoint = ne
+		}
+		if vendor != "" && endpoint != "" {
+			vc, ok := cfg.Vendors[vendor]
+			if !ok {
+				return fmt.Errorf("vendor %q not found", vendor)
+			}
+			if _, ok := vc.Endpoints[endpoint]; !ok {
+				return fmt.Errorf("endpoint %q not found in vendor %q", endpoint, vendor)
+			}
+		}
+	}
+
 	if v, ok := values["vendor"].(string); ok && v != "" {
 		cfg.Vendor = v
 	}
@@ -222,7 +266,8 @@ func UpdateConfig(values map[string]interface{}) error {
 		cfg.DefaultMode = v
 	}
 	if v, ok := values["baseURL"].(string); ok && v != "" {
-		// Update the current endpoint's base_url
+		// Update the current endpoint's base_url. Existence was pre-validated
+		// above (#740); only the write happens here.
 		if cfg.Vendor != "" && cfg.Endpoint != "" {
 			if cfg.Vendors == nil {
 				cfg.Vendors = make(map[string]config.VendorConfig)
@@ -280,18 +325,13 @@ func UpdateConfig(values map[string]interface{}) error {
 		cfg.A2A.Port = int(v)
 	}
 	if v, ok := values["subAgentTimeout"].(string); ok {
-		d, err := time.ParseDuration(v)
-		if err != nil {
-			// Silent success on a typo'd duration hid the failure (#206).
-			return fmt.Errorf("invalid subAgentTimeout %q (use e.g. \"45s\"): %w", v, err)
-		}
+		// Pre-parsed above (#740); ParseDuration cannot fail here.
+		d, _ := time.ParseDuration(v)
 		cfg.SubAgents.Timeout = d
 	}
 	if v, ok := values["swarmTimeout"].(string); ok {
-		d, err := time.ParseDuration(v)
-		if err != nil {
-			return fmt.Errorf("invalid swarmTimeout %q (use e.g. \"45s\"): %w", v, err)
-		}
+		// Pre-parsed above (#740); ParseDuration cannot fail here.
+		d, _ := time.ParseDuration(v)
 		cfg.Swarm.TeammateTimeout = d
 	}
 	if v, ok := values["a2aHost"].(string); ok {
