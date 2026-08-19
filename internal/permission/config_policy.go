@@ -422,8 +422,14 @@ func (p *ConfigPolicy) GetDecision(toolName string) Decision {
 // (macOS APFS, Windows) so `/Users/zhanjU/.backdoorrc` cannot dodge the check
 // by flipping case (#573-G); Linux keeps byte-exact comparison.
 func isSensitivePath(path string) bool {
-	path = filepath.Clean(path)
-	home := config.HomeDir()
+	// Normalize separators before comparing: the suffix table and home
+	// prefix below use "/", but Windows paths carry "\" (filepath.Clean
+	// keeps them). Without ToSlash the suffix match (".ssh/id_rsa" vs
+	// "C:\Users\u\.ssh\id_rsa") and the home-prefix match ("C:\Users\u/"
+	// vs "C:\Users\u\...") never fired on Windows, silently disabling the
+	// sensitive-path gates. ToSlash is a no-op on Unix.
+	path = filepath.ToSlash(filepath.Clean(path))
+	home := filepath.ToSlash(config.HomeDir())
 	sensitiveFiles := []string{
 		".bashrc", ".bash_profile", ".zshrc", ".zprofile", ".profile",
 		".ssh/config", ".ssh/authorized_keys", ".ssh/id_rsa", ".ssh/id_ed25519",

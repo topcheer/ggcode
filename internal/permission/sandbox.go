@@ -3,6 +3,7 @@ package permission
 import (
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/topcheer/ggcode/internal/debug"
 )
@@ -107,7 +108,16 @@ func (s *PathSandbox) Allowed(path string) bool {
 	// Per-agent policies are constructed with the agent's working directory
 	// as allowedDirs[0], so this reproduces the tool-side resolution.
 	// Absolute paths (the other caller, AllowedPathForTool) are unaffected.
-	if !filepath.IsAbs(path) {
+	// A POSIX-rooted path ("/etc/passwd") is not absolute on Windows
+	// (filepath.IsAbs requires a drive or UNC prefix), so it used to fall
+	// into the relative-path anchoring below and got joined under the
+	// sandbox root ("C:\...\sandbox\etc\passwd") — every POSIX-style path
+	// then passed the containment check and the mode-level Deny/Ask gates
+	// never fired. Treat a leading "/" as rooted: resolvePath's
+	// filepath.Abs maps it to the current drive root ("C:\etc\passwd"),
+	// which correctly fails the allowed-dir prefix compare. On Unix this
+	// clause is unreachable for such paths (IsAbs already true).
+	if !filepath.IsAbs(path) && !strings.HasPrefix(path, "/") {
 		path = filepath.Join(s.allowedDirs[0], path)
 	}
 

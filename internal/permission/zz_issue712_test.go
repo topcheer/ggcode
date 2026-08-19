@@ -27,20 +27,23 @@ func TestIssue712PlanModeSensitiveReadDenied(t *testing.T) {
 	policy := NewConfigPolicyWithMode(nil, []string{"."}, PlanMode)
 
 	sshKey := issue712HomeRel(t, ".ssh/id_rsa")
-	d, err := policy.Check("read_file", json.RawMessage(`{"file_path":"`+sshKey+`"}`))
+	sshInput, _ := json.Marshal(map[string]string{"file_path": sshKey})
+	d, err := policy.Check("read_file", sshInput)
 	if err != nil || d != Deny {
 		t.Errorf("#712: plan read of %s should be Deny, got %v err=%v", sshKey, d, err)
 	}
 
 	awsCreds := issue712HomeRel(t, ".aws/credentials")
-	d, err = policy.Check("read_file", json.RawMessage(`{"file_path":"`+awsCreds+`"}`))
+	awsInput, _ := json.Marshal(map[string]string{"file_path": awsCreds})
+	d, err = policy.Check("read_file", awsInput)
 	if err != nil || d != Deny {
 		t.Errorf("#712: plan read of %s should be Deny, got %v err=%v", awsCreds, d, err)
 	}
 
 	// multi_file_read with one sensitive path among normal ones
 	normal := filepath.Join(".", "README.md")
-	d, err = policy.Check("multi_file_read", json.RawMessage(`{"files":[{"path":"`+normal+`"},{"path":"`+sshKey+`"}]}`))
+	multiInput, _ := json.Marshal(map[string]any{"files": []map[string]string{{"path": normal}, {"path": sshKey}}})
+	d, err = policy.Check("multi_file_read", multiInput)
 	if err != nil || d != Deny {
 		t.Errorf("#712: plan multi_file_read containing sensitive path should be Deny, got %v err=%v", d, err)
 	}
