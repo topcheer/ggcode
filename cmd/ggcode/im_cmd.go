@@ -908,10 +908,14 @@ func isSecretKey(key string) bool {
 }
 
 func maskSecret(s string) string {
-	if len(s) <= 8 {
+	// Guard on rune count, not byte length: a byte guard diverges from the
+	// rune slicing below for multibyte values, panicking on negative Repeat
+	// (3 CJK chars) or printing the secret unmasked (4 CJK chars). #745
+	r := []rune(s)
+	if len(r) <= 8 {
 		return "****"
 	}
-	return string([]rune(s)[:4]) + strings.Repeat("*", len([]rune(s))-4)
+	return string(r[:4]) + strings.Repeat("*", len(r)-4)
 }
 
 func sortedKeys(m map[string]interface{}) []string {

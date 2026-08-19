@@ -991,10 +991,13 @@ func maskSecret(value string) string {
 }
 
 func maskPlaintext(s string) string {
-	if len(s) <= 8 {
+	// Guard on rune count, not byte length: same multibyte divergence as
+	// maskSecret in cmd/ggcode (runes 3-7 panic, 8 runes print unmasked). #745
+	r := []rune(s)
+	if len(r) <= 8 {
 		return "****"
 	}
-	return string([]rune(s)[:4]) + strings.Repeat("*", len([]rune(s))-8) + string([]rune(s)[len([]rune(s))-4:])
+	return string(r[:4]) + strings.Repeat("*", len(r)-8) + string(r[len(r)-4:])
 }
 
 func redactMCPServer(srv config.MCPServerConfig) config.MCPServerConfig {
