@@ -55,9 +55,55 @@ var sourceMutatingTools = map[string]bool{
 var fileEditingTools = sourceMutatingTools
 
 // assertEditToolMapsInSync is referenced by TestSourceMutatingToolsSuperset
-// to guarantee the canonical map stays complete.
+// to guarantee the canonical map stays complete and every per-purpose gate
+// derived in #738 still covers the full canonical superset (aliases share the
+// same map object; wider-semantics gates are built with derivedEditTools).
 func assertEditToolMapsInSync() bool {
-	return len(sourceMutatingTools) == 9 && fileEditingTools["batch_replace"] && reverifyEditTools["lsp_rename"]
+	if !(len(sourceMutatingTools) == 9 && fileEditingTools["batch_replace"] && reverifyEditTools["lsp_rename"] &&
+		strategyFixationIsMutation("file_ops") && strategyFixationIsMutation("multi_file_write")) {
+		return false
+	}
+	// Aliased gates (same canonical map, all 9 members by construction).
+	for _, m := range []map[string]bool{
+		editTools,               // adaptive_effort
+		causalEditTools,         // causal_attribution
+		psEditTools,             // premature_success
+		outcomeCorrectiveTools,  // outcome_misattrib
+		productiveEditTools,     // scope_drift
+		editToolSet,             // iter_pressure
+		reproducerEditToolNames, // reproducer_lifecycle
+	} {
+		if len(m) != len(sourceMutatingTools) {
+			return false
+		}
+		for t := range sourceMutatingTools {
+			if !m[t] {
+				return false
+			}
+		}
+	}
+	// Superset gates (canonical members + declared extras).
+	for _, m := range []map[string]bool{
+		privilegedSinkTools,      // taint_influence_check
+		mutatingToolNamesFrag,    // exploration_frag
+		qcActionTools,            // query_converge
+		integrationMutatingTools, // tool_integration_monitor
+	} {
+		for t := range sourceMutatingTools {
+			if !m[t] {
+				return false
+			}
+		}
+	}
+	// Predicate gates (derived lookups).
+	for t := range sourceMutatingTools {
+		if !isEditTool(t) || !isEditingTool(t) || !coverageIsEditTool(t) ||
+			!bareStreakIsMutation(t) || !csIsEditTool(t) || !ecIsEditTool(t) ||
+			!recklessIsEditTool(t) || !undoBlindIsMutation(t) || !eaIsEditTool(t) {
+			return false
+		}
+	}
+	return true
 }
 
 // fileReadingTools is the set of tools that read file contents.
@@ -371,7 +417,34 @@ func sfExtractMutationPaths(args json.RawMessage) []string {
 		}
 	}
 
-	for _, field := range []string{"file_path", "path", "notebook_path"} {
+	sfAddStringFields(add, raw, "file_path", "path", "notebook_path")
+
+	// files[] has two shapes: []map (multi_file_edit/multi_file_write) and
+	// plain []string (batch_replace schema) -- both must yield every path (#737).
+	if filesRaw, ok := raw["files"]; ok {
+		sfAddMapListStringFields(add, filesRaw, "file_path", "path")
+		var plainFiles []string
+		if json.Unmarshal(filesRaw, &plainFiles) == nil {
+			for _, s := range plainFiles {
+				add(s)
+			}
+		}
+	}
+
+	// file_ops carries its targets in operations[].source/destination;
+	// previously never extracted, so file_ops mutations were untracked (#737).
+	// source is always a touched path; destination matters for move/rename.
+	if opsRaw, ok := raw["operations"]; ok {
+		sfAddMapListStringFields(add, opsRaw, "source", "destination")
+	}
+
+	return out
+}
+
+// sfAddStringFields unmarshals each named top-level field of raw as a string
+// and passes the values to add (empty strings are dropped by add).
+func sfAddStringFields(add func(string), raw map[string]json.RawMessage, fields ...string) {
+	for _, field := range fields {
 		if v, ok := raw[field]; ok {
 			var s string
 			if json.Unmarshal(v, &s) == nil {
@@ -379,24 +452,19 @@ func sfExtractMutationPaths(args json.RawMessage) []string {
 			}
 		}
 	}
+}
 
-	if filesRaw, ok := raw["files"]; ok {
-		var files []map[string]json.RawMessage
-		if json.Unmarshal(filesRaw, &files) == nil {
-			for _, f := range files {
-				for _, field := range []string{"file_path", "path"} {
-					if v, ok := f[field]; ok {
-						var s string
-						if json.Unmarshal(v, &s) == nil {
-							add(s)
-						}
-					}
-				}
-			}
-		}
+// sfAddMapListStringFields unmarshals rawJSON as a list of string-keyed maps
+// (e.g. files[] or operations[]) and passes each named field's string value
+// from every element to add.
+func sfAddMapListStringFields(add func(string), rawJSON json.RawMessage, fields ...string) {
+	var list []map[string]json.RawMessage
+	if json.Unmarshal(rawJSON, &list) != nil {
+		return
 	}
-
-	return out
+	for _, entry := range list {
+		sfAddStringFields(add, entry, fields...)
+	}
 }
 
 // isSourceCodeFile returns true if the path has a source-code extension.

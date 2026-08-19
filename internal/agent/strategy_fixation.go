@@ -217,13 +217,12 @@ func shortFileName(path string) string {
 }
 
 // strategyFixationIsMutation returns true for tools that modify files.
+// Derived from the canonical sourceMutatingTools superset (#737, fixing the
+// #153/#154 drift where only 5 of the 9 mutation tools were tracked —
+// batch_replace/lsp_rename/file_ops/multi_file_write codemod retries were
+// silently untracked, the most typical fixation scenario).
 func strategyFixationIsMutation(toolName string) bool {
-	switch toolName {
-	case "edit_file", "write_file", "multi_edit_file", "multi_file_edit", "notebook_edit":
-		return true
-	default:
-		return false
-	}
+	return sourceMutatingTools[toolName]
 }
 
 // strategyFixationIsVerification returns true for tools that verify correctness.

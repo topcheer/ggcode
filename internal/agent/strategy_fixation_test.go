@@ -323,7 +323,12 @@ func TestShortFileName(t *testing.T) {
 }
 
 func TestStrategyFixationIsMutation(t *testing.T) {
-	tools := []string{"edit_file", "write_file", "multi_edit_file", "multi_file_edit", "notebook_edit"}
+	// #737: must match the canonical sourceMutatingTools superset (#153/#154),
+	// not a partial list -- batch codemod tools were previously untracked.
+	tools := []string{
+		"edit_file", "write_file", "multi_edit_file", "multi_file_edit",
+		"multi_file_write", "batch_replace", "lsp_rename", "file_ops", "notebook_edit",
+	}
 	for _, tool := range tools {
 		if !strategyFixationIsMutation(tool) {
 			t.Errorf("expected %s to be mutation", tool)
