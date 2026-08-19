@@ -673,9 +673,15 @@ func (m Model) Init() tea.Cmd {
 	}
 	// Check whether the project has a GGCODE.md (or AGENTS.md, CLAUDE.md,
 	// COPILOT.md). If none exist AND the directory has real project files
-	// (non-hidden), prompt the user to initialize.
+	// (non-hidden), prompt the user to initialize. The HOME directory is
+	// skipped: users often run ggcode there for ad-hoc chores, not to
+	// treat their home as a "project", and its non-hidden entries
+	// (Desktop, Documents, ...) would otherwise always trigger the prompt.
 	cmds = append(cmds, func() tea.Msg {
 		workDir, _ := os.Getwd()
+		if isHomeDir(workDir) {
+			return initPromptCheckMsg{needsInit: false}
+		}
 		target, existing, _ := memory.ResolveProjectMemoryInitTarget(workDir)
 		if len(existing) == 0 && dirHasProjectFiles(workDir) {
 			return initPromptCheckMsg{needsInit: true, target: target}
@@ -709,6 +715,29 @@ func dirHasProjectFiles(dir string) bool {
 		}
 	}
 	return false
+}
+
+// isHomeDir reports whether dir is the user's home directory. Comparison is
+// done on cleaned absolute paths; symlinked homes (e.g. /var -> /private/var
+// on macOS) are handled via EvalSymlinks when it succeeds.
+func isHomeDir(dir string) bool {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return false
+	}
+	dir = filepath.Clean(dir)
+	home = filepath.Clean(home)
+	if dir == home {
+		return true
+	}
+	// Resolve symlinks on both sides before comparing (best-effort).
+	if resolvedDir, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = resolvedDir
+	}
+	if resolvedHome, err := filepath.EvalSymlinks(home); err == nil {
+		home = resolvedHome
+	}
+	return dir == home
 }
 
 func (m *Model) SetProgram(p *tea.Program) {
