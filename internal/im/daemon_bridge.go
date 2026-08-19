@@ -1034,14 +1034,12 @@ func (b *DaemonBridge) handleSlashCommand(ctx context.Context, text string, msg 
 		Manager:     b.manager,
 		SelfAdapter: msg.Envelope.Adapter,
 		Text:        text,
-		HelpExtraLines: []string{
+		HelpExtraLines: append([]string{
 			"/restart [debug] - Restart daemon (unmutes all adapters; add 'debug' to enable GGCODE_DEBUG=1)",
 			"/provider [vendor] [endpoint] - Show or switch LLM provider",
 			"/model [name] - Show or switch model",
 			"/config - Show current provider and model configuration",
-			"/cost - Session and cross-session cost summary",
-			"/mode [name] - Show or switch permission mode",
-		},
+		}, IMSlashHelpLines()...),
 		OnRestart: func(debugMode bool) (string, error) {
 			b.mu.Lock()
 			onRestart := b.onRestart
@@ -1093,13 +1091,9 @@ func (b *DaemonBridge) handleSlashCommand(ctx context.Context, text string, msg 
 			return fn("", "", "")
 		},
 		OnExtra: func(parts []string) (string, bool) {
-			// Query-style agent commands (/cost, /mode) - one-shot text
-			// output, safe for IM (no interactive input needed). Interactive
-			// TUI commands (/edit, /copy, ...) stay TUI-only by design.
-			return ExecuteAgentSlashCommand(strings.Join(parts, " "), AgentSlashOptions{
-				OnCost: b.agentCostSummary,
-				OnMode: b.agentModeQuery,
-			})
+			// Shared registry dispatch (one-shot query commands + TUI-only
+			// hints). The bridge itself implements SlashDeps (agent + disk).
+			return ExecuteRegistrySlashCommand(b, strings.Join(parts, " "))
 		},
 	}); result.Handled {
 		if result.Response != "" {

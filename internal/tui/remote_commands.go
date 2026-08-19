@@ -3,12 +3,15 @@ package tui
 import (
 	"fmt"
 	"os"
+	"os/exec"
+	"sort"
 	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/topcheer/ggcode/internal/im"
+	"github.com/topcheer/ggcode/internal/permission"
 )
 
 const (
@@ -57,15 +60,13 @@ func (m *Model) ExecuteRemoteSlashCommand(text string) (string, bool) {
 		Manager:     m.imManager,
 		SelfAdapter: m.remoteInboundAdapter,
 		Text:        text,
-		HelpExtraLines: []string{
+		HelpExtraLines: append([]string{
 			"/restart [debug] - Restart ggcode (add 'debug' to enable GGCODE_DEBUG=1)",
 			"/provider [vendor] [endpoint] - Show or switch LLM provider",
 			"/model [name] - Show or switch model",
 			"/stream start|stop|status|config - Control live streaming",
 			"/config - Show current provider, model and endpoint configuration",
-			"/cost - Session and cross-session cost summary",
-			"/mode [name] - Show or switch permission mode",
-		},
+		}, im.IMSlashHelpLines()...),
 		OnRestart: func(debug bool) (string, error) {
 			if debug {
 				return m.executeRemoteRestartCommand([]string{"/restart", "debug"}), nil
@@ -97,13 +98,10 @@ func (m *Model) ExecuteRemoteSlashCommand(text string) (string, bool) {
 			case "/stream":
 				resp, _ := m.handleStreamSlash(strings.Join(parts[1:], " "))
 				return resp, true
-			case "/cost", "/mode":
-				// Query-style agent commands: shared with the daemon bridge
-				// path (im.ExecuteAgentSlashCommand). In the TUI-attached
-				// mode these read live model state where available.
-				return m.executeAgentSlashQuery(strings.ToLower(parts[0]))
 			default:
-				return "", false
+				// Shared registry dispatch (path B): the same table the daemon
+				// bridge serves from, with the live model as deps.
+				return im.ExecuteRegistrySlashCommand(tuiSlashDeps{m}, strings.Join(parts, " "))
 			}
 		},
 	}); result.Handled {
@@ -247,38 +245,125 @@ func (m *Model) executeRemoteConfig() string {
 	return m.remoteSwitchChoices()
 }
 
-// executeAgentSlashQuery serves /cost and /mode for IM-attached TUI sessions.
-// Unlike the daemon path (which reads disk), the TUI has live state: the
-// in-memory session for /cost and the model's policy for /mode.
-func (m *Model) executeAgentSlashQuery(cmd string) (string, bool) {
-	switch cmd {
-	case "/cost":
-		// Prefer live session usage (same data the local /cost shows); fall
-		// back to the cross-session disk summary when no usage is recorded.
-		if m.session != nil {
-			usage := m.session.TokenUsage
-			if usage.Total() > 0 {
-				var sb strings.Builder
-				sb.WriteString("Session Cost:\n\n")
-				sb.WriteString(fmt.Sprintf("  Model:  %s (%s)\n", m.session.Model, m.session.Vendor))
-				sb.WriteString(fmt.Sprintf("  Input tokens:  %s\n", humanizeTokenCount(usage.InputTokens)))
-				sb.WriteString(fmt.Sprintf("  Output tokens: %s\n", humanizeTokenCount(usage.OutputTokens)))
-				if usage.CacheRead > 0 {
-					sb.WriteString(fmt.Sprintf("  Cache read:    %s\n", humanizeTokenCount(usage.CacheRead)))
-				}
-				if usage.CacheWrite > 0 {
-					sb.WriteString(fmt.Sprintf("  Cache write:   %s\n", humanizeTokenCount(usage.CacheWrite)))
-				}
-				return sb.String(), true
+// tuiSlashDeps implements im.SlashDeps from the live TUI model state -
+// the path-B counterpart of the daemon bridge's implementation. Where the
+// bridge reads disk stores, the TUI prefers its in-memory session (richer
+// and current-turn fresh), falling back to the shared disk renderers.
+type tuiSlashDeps struct{ m *Model }
+
+func (d tuiSlashDeps) SessionCostSummary() (string, error) {
+	if d.m.session != nil {
+		usage := d.m.session.TokenUsage
+		if usage.Total() > 0 {
+			var sb strings.Builder
+			sb.WriteString("Session Cost:\n\n")
+			sb.WriteString(fmt.Sprintf("  Model:  %s (%s)\n", d.m.session.Model, d.m.session.Vendor))
+			sb.WriteString(fmt.Sprintf("  Input tokens:  %s\n", humanizeTokenCount(usage.InputTokens)))
+			sb.WriteString(fmt.Sprintf("  Output tokens: %s\n", humanizeTokenCount(usage.OutputTokens)))
+			if usage.CacheRead > 0 {
+				sb.WriteString(fmt.Sprintf("  Cache read:    %s\n", humanizeTokenCount(usage.CacheRead)))
 			}
+			if usage.CacheWrite > 0 {
+				sb.WriteString(fmt.Sprintf("  Cache write:   %s\n", humanizeTokenCount(usage.CacheWrite)))
+			}
+			return sb.String(), nil
 		}
-		summary, err := im.BuildCrossSessionCostSummary()
-		if err != nil {
-			return fmt.Sprintf("Cost query failed: %v", err), true
-		}
-		return summary, true
-	case "/mode":
-		return "Current permission mode: " + m.mode.String(), true
 	}
-	return "", false
+	return im.BuildCrossSessionCostSummary()
+}
+
+func (d tuiSlashDeps) SessionUsageSummary() (string, error) {
+	if d.m.session != nil && d.m.session.TokenUsage.Total() > 0 {
+		u := d.m.session.TokenUsage
+		var sb strings.Builder
+		sb.WriteString("Session Token Usage:\n\n")
+		sb.WriteString(fmt.Sprintf("  Input tokens:  %s\n", humanizeTokenCount(u.InputTokens)))
+		sb.WriteString(fmt.Sprintf("  Output tokens: %s\n", humanizeTokenCount(u.OutputTokens)))
+		if u.CacheRead > 0 {
+			sb.WriteString(fmt.Sprintf("  Cache read:    %s\n", humanizeTokenCount(u.CacheRead)))
+		}
+		if u.CacheWrite > 0 {
+			sb.WriteString(fmt.Sprintf("  Cache write:   %s\n", humanizeTokenCount(u.CacheWrite)))
+		}
+		return sb.String(), nil
+	}
+	return im.BuildCrossSessionCostSummary()
+}
+
+func (d tuiSlashDeps) CurrentMode() string {
+	return d.m.mode.String()
+}
+
+func (d tuiSlashDeps) SwitchMode(name string) error {
+	// Mirror handleModeCommand semantics: parse, apply to model + policy,
+	// drop stale approvals, persist the preference to session metadata.
+	newMode := permission.ParsePermissionMode(name)
+	d.m.mode = newMode
+	if cp, ok := d.m.policy.(*permission.ConfigPolicy); ok {
+		cp.SetMode(newMode)
+	}
+	d.m.clearPendingApprovals()
+	d.m.persistModePreference()
+	return nil
+}
+
+func (d tuiSlashDeps) ToolList() (string, error) {
+	if d.m.agent == nil {
+		return "Agent not initialized.", nil
+	}
+	reg := d.m.agent.ToolRegistry()
+	if reg == nil {
+		return "Tool registry not available.", nil
+	}
+	tools := reg.List()
+	sort.Slice(tools, func(i, j int) bool { return tools[i].Name() < tools[j].Name() })
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Available tools (%d):\n\n", len(tools)))
+	for _, t := range tools {
+		desc := t.Description()
+		if len(desc) > 120 {
+			desc = desc[:117] + "..."
+		}
+		sb.WriteString(fmt.Sprintf("  %-20s %s\n", t.Name(), desc))
+	}
+	return sb.String(), nil
+}
+
+func (d tuiSlashDeps) ModifiedFiles() (string, error) {
+	if d.m.agent == nil {
+		return "Agent not initialized.", nil
+	}
+	cpMgr := d.m.agent.CheckpointManager()
+	if cpMgr == nil {
+		return "Checkpoints not available.", nil
+	}
+	files := cpMgr.ModifiedFiles()
+	if len(files) == 0 {
+		return "No files modified yet this session.", nil
+	}
+	totalEdits := 0
+	for _, f := range files {
+		totalEdits += f.Edits
+	}
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Modified files (%d, %d edits):\n\n", len(files), totalEdits))
+	for _, f := range files {
+		flag := ""
+		if f.IsNew {
+			flag = " (new)"
+		}
+		sb.WriteString(fmt.Sprintf("  %s - %d edits%s\n", f.Path, f.Edits, flag))
+	}
+	return sb.String(), nil
+}
+
+func (d tuiSlashDeps) GitDiff(args []string) (string, error) {
+	gitArgs := append([]string{"diff"}, args...)
+	cmd := exec.Command("git", gitArgs...)
+	cmd.Dir = workingDirFromModel(d.m)
+	out, err := cmd.CombinedOutput()
+	if err != nil && len(out) == 0 {
+		return "", fmt.Errorf("git diff: %v", err)
+	}
+	return strings.TrimRight(string(out), "\n"), nil
 }

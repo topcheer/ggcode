@@ -2,60 +2,21 @@ package im
 
 import (
 	"fmt"
+	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 
+	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/cost"
 	"github.com/topcheer/ggcode/internal/permission"
+	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// AgentSlashOptions wires one-shot, text-output agent commands into the IM
-// slash executor. These mirror TUI slash commands that need no interactive
-// input (interactive ones like /edit, /copy stay TUI-only by design).
-type AgentSlashOptions struct {
-	// OnCost handles "/cost" (cross-session disk summary; the daemon has no
-	// in-memory TUI session, so disk is the authoritative source).
-	OnCost func() (string, error)
-	// OnMode handles "/mode [name]": no arg shows the current permission
-	// mode; with an arg it switches (ConfigPolicy.SetMode semantics).
-	OnMode func(arg string) (string, error)
-}
-
-// ExecuteAgentSlashCommand handles query-style agent commands (/cost, /mode).
-// Returns (response, handled); unhandled commands fall through to the
-// caller's unknown-command path.
-func ExecuteAgentSlashCommand(text string, opts AgentSlashOptions) (string, bool) {
-	parts := strings.Fields(strings.TrimSpace(text))
-	if len(parts) == 0 || !strings.HasPrefix(parts[0], "/") {
-		return "", false
-	}
-	switch strings.ToLower(parts[0]) {
-	case "/cost":
-		if opts.OnCost == nil {
-			return "Cost data not available in this mode.", true
-		}
-		resp, err := opts.OnCost()
-		if err != nil {
-			return fmt.Sprintf("Cost query failed: %v", err), true
-		}
-		return resp, true
-	case "/mode":
-		if opts.OnMode == nil {
-			return "Permission mode not available in this mode.", true
-		}
-		arg := ""
-		if len(parts) > 1 {
-			arg = parts[1]
-		}
-		resp, err := opts.OnMode(arg)
-		if err != nil {
-			return fmt.Sprintf("Mode switch failed: %v", err), true
-		}
-		return resp, true
-	}
-	return "", false
-}
+// Path-A (daemon bridge) implementation of SlashDeps. The agent and disk
+// stores are the data sources; the TUI-attached path supplies its own live
+// implementation from the model state.
 
 // BuildCrossSessionCostSummary renders the cross-session cost summary from
 // disk - the same authoritative source as the TUI's /cost all. Package-level
@@ -94,43 +55,155 @@ func BuildCrossSessionCostSummary() (string, error) {
 	return sb.String(), nil
 }
 
-// agentCostSummary renders the cross-session cost summary from disk - the
-// same authoritative source as the TUI's /cost all (the daemon has no TUI
-// session object, and per-session in-memory usage lives in the TUI process).
-func (b *DaemonBridge) agentCostSummary() (string, error) {
+// buildDiskUsageSummary aggregates token counts across all persisted
+// sessions - the /usage view when no live session object is at hand.
+func buildDiskUsageSummary() (string, error) {
+	dataDir := filepath.Join(config.ConfigDir(), "cost")
+	mgr := cost.NewManager(cost.DefaultPricingTable(), dataDir)
+	loaded := mgr.LoadAllFromDisk()
+	if loaded == 0 {
+		return "No usage data found yet.", nil
+	}
+	agg := mgr.AggregateAllCosts()
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Token Usage (%d sessions, all-time):\n\n", loaded))
+	sb.WriteString(fmt.Sprintf("  Input tokens:  %s\n", humanCount(agg.InputTokens)))
+	sb.WriteString(fmt.Sprintf("  Output tokens: %s\n", humanCount(agg.OutputTokens)))
+	if agg.CacheReadTokens > 0 {
+		sb.WriteString(fmt.Sprintf("  Cache read:    %s\n", humanCount(agg.CacheReadTokens)))
+	}
+	if agg.CacheWriteTokens > 0 {
+		sb.WriteString(fmt.Sprintf("  Cache write:   %s\n", humanCount(agg.CacheWriteTokens)))
+	}
+	total := agg.InputTokens + agg.OutputTokens + agg.CacheReadTokens + agg.CacheWriteTokens
+	sb.WriteString(fmt.Sprintf("\n  Total: %s", humanCount(total)))
+	return sb.String(), nil
+}
+
+func humanCount(n int64) string {
+	switch {
+	case n >= 1_000_000_000:
+		return fmt.Sprintf("%.1fB", float64(n)/1_000_000_000)
+	case n >= 1_000_000:
+		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
+	case n >= 1_000:
+		return fmt.Sprintf("%.1fK", float64(n)/1_000)
+	default:
+		return fmt.Sprintf("%d", n)
+	}
+}
+
+func (b *DaemonBridge) liveAgent() *agent.Agent {
+	b.mu.Lock()
+	a := b.agent
+	b.mu.Unlock()
+	return a
+}
+
+func (b *DaemonBridge) SessionCostSummary() (string, error) {
 	return BuildCrossSessionCostSummary()
 }
 
-// agentModeQuery shows or switches the agent's permission mode. Switching
-// mirrors the TUI /mode semantics: parse, apply via ConfigPolicy.SetMode.
-func (b *DaemonBridge) agentModeQuery(arg string) (string, error) {
-	b.mu.Lock()
-	agentRef := b.agent
-	b.mu.Unlock()
-	if agentRef == nil {
-		return "", fmt.Errorf("no agent attached")
-	}
-	policy := agentRef.PermissionPolicy()
-	if arg == "" {
-		return "Current permission mode: " + policy.Mode().String(), nil
-	}
-	// #743: reject unknown mode names instead of silently falling back to
-	// supervised (ParsePermissionMode's fail-safe default is meant for
-	// config parsing, not user input - a typo over IM would silently drop
-	// the session to per-tool approvals and report it as a success switch).
-	if !permission.IsValidPermissionMode(arg) {
-		return fmt.Sprintf("Invalid mode %q. Valid modes: supervised | plan | auto | bypass | autopilot", arg), nil
-	}
-	newMode := permission.ParsePermissionMode(arg)
-	// #743: an invalid mode name previously fell through to
-	// ParsePermissionMode's default (supervised) silently - the user asked
-	// for a mode that does not exist and got no feedback. Validate first.
-	if !permission.IsValidPermissionMode(strings.ToLower(strings.TrimSpace(arg))) {
-		return "", fmt.Errorf("unknown mode %q (usage: /mode supervised|plan|auto|bypass|autopilot)", arg)
-	}
-	if cp, ok := policy.(*permission.ConfigPolicy); ok {
-		cp.SetMode(newMode)
-		return "Permission mode switched to: " + newMode.String(), nil
-	}
-	return "", fmt.Errorf("mode switching not supported by the active policy (%T)", policy)
+func (b *DaemonBridge) SessionUsageSummary() (string, error) {
+	return buildDiskUsageSummary()
 }
+
+func (b *DaemonBridge) CurrentMode() string {
+	a := b.liveAgent()
+	if a == nil {
+		return "(no agent attached)"
+	}
+	return a.PermissionPolicy().Mode().String()
+}
+
+func (b *DaemonBridge) SwitchMode(name string) error {
+	a := b.liveAgent()
+	if a == nil {
+		return fmt.Errorf("no agent attached")
+	}
+	policy := a.PermissionPolicy()
+	cp, ok := policy.(*permission.ConfigPolicy)
+	if !ok {
+		return fmt.Errorf("mode switching not supported by the active policy (%T)", policy)
+	}
+	cp.SetMode(permission.ParsePermissionMode(name))
+	return nil
+}
+
+func (b *DaemonBridge) ToolList() (string, error) {
+	a := b.liveAgent()
+	if a == nil {
+		return "No agent attached.", nil
+	}
+	reg := a.ToolRegistry()
+	if reg == nil {
+		return "Tool registry not available.", nil
+	}
+	tools := reg.List()
+	if len(tools) == 0 {
+		return "No tools registered.", nil
+	}
+	sort.Slice(tools, func(i, j int) bool { return tools[i].Name() < tools[j].Name() })
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Available tools (%d):\n\n", len(tools)))
+	for _, t := range tools {
+		desc := t.Description()
+		if len(desc) > 120 {
+			desc = desc[:117] + "..."
+		}
+		sb.WriteString(fmt.Sprintf("  %-20s %s\n", t.Name(), desc))
+	}
+	return sb.String(), nil
+}
+
+func (b *DaemonBridge) ModifiedFiles() (string, error) {
+	a := b.liveAgent()
+	if a == nil {
+		return "No agent attached.", nil
+	}
+	cpMgr := a.CheckpointManager()
+	if cpMgr == nil {
+		return "Checkpoints not available.", nil
+	}
+	files := cpMgr.ModifiedFiles()
+	if len(files) == 0 {
+		return "No files modified yet this session.", nil
+	}
+	totalEdits := 0
+	for _, f := range files {
+		totalEdits += f.Edits
+	}
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Modified files (%d, %d edits):\n\n", len(files), totalEdits))
+	for _, f := range files {
+		flag := ""
+		if f.IsNew {
+			flag = " (new)"
+		}
+		sb.WriteString(fmt.Sprintf("  %s - %d edits%s\n", f.Path, f.Edits, flag))
+	}
+	return sb.String(), nil
+}
+
+func (b *DaemonBridge) GitDiff(args []string) (string, error) {
+	b.mu.Lock()
+	dir := b.workingDir
+	b.mu.Unlock()
+	gitArgs := append([]string{"diff"}, args...)
+	cmd := exec.Command("git", gitArgs...)
+	if dir != "" {
+		cmd.Dir = dir
+	}
+	out, err := cmd.CombinedOutput()
+	if err != nil && len(out) == 0 {
+		return "", fmt.Errorf("git diff: %v", err)
+	}
+	return strings.TrimRight(string(out), "\n"), nil
+}
+
+// Compile-time interface conformance for the path-A deps implementation.
+var _ SlashDeps = (*DaemonBridge)(nil)
+
+// keep provider import for token usage parity with the TUI path (usage
+// rendering on the TUI side references provider.TokenUsage).
+var _ = provider.TokenUsage{}
