@@ -57,10 +57,10 @@ func ExecuteAgentSlashCommand(text string, opts AgentSlashOptions) (string, bool
 	return "", false
 }
 
-// agentCostSummary renders the cross-session cost summary from disk - the
-// same authoritative source as the TUI's /cost all (the daemon has no TUI
-// session object, and per-session in-memory usage lives in the TUI process).
-func (b *DaemonBridge) agentCostSummary() (string, error) {
+// BuildCrossSessionCostSummary renders the cross-session cost summary from
+// disk - the same authoritative source as the TUI's /cost all. Package-level
+// so both inbound paths (daemon bridge and TUI remote) share one rendering.
+func BuildCrossSessionCostSummary() (string, error) {
 	dataDir := filepath.Join(config.ConfigDir(), "cost")
 	mgr := cost.NewManager(cost.DefaultPricingTable(), dataDir)
 	loaded := mgr.LoadAllFromDisk()
@@ -92,6 +92,13 @@ func (b *DaemonBridge) agentCostSummary() (string, error) {
 		sb.WriteString(fmt.Sprintf(" (%d sessions without pricing data)", agg.SessionsWithoutPricing))
 	}
 	return sb.String(), nil
+}
+
+// agentCostSummary renders the cross-session cost summary from disk - the
+// same authoritative source as the TUI's /cost all (the daemon has no TUI
+// session object, and per-session in-memory usage lives in the TUI process).
+func (b *DaemonBridge) agentCostSummary() (string, error) {
+	return BuildCrossSessionCostSummary()
 }
 
 // agentModeQuery shows or switches the agent's permission mode. Switching

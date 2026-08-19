@@ -66,24 +66,25 @@ func (b *DaemonBridge) emitShellText(s string) error {
 	return b.emitter.EmitText(s)
 }
 
-// handleShellInbound executes the shell command and pushes the output back
-// to the IM client via the emitter. Runs the command asynchronously so the
-// inbound loop is not blocked; the emitter is safe for concurrent use.
-func (b *DaemonBridge) handleShellInbound(text string) {
+// RunInboundShellAsync executes a `$ cmd` / `! cmd` passthrough and pushes
+// the output back via emit. Package-level so both inbound paths share one
+// implementation: the daemon bridge (DaemonBridge.handleShellInbound) and
+// the TUI remote-inbound handler (im-bound sessions with an attached TUI).
+// Runs asynchronously; emit must be safe for concurrent use.
+func RunInboundShellAsync(text string, emit func(string) error) {
 	cmdText, ok := splitInboundShellCommand(text)
 	if !ok || cmdText == "" {
-		_ = b.emitShellText("Usage: $ <command> (or ! <command>)")
+		_ = emit("Usage: $ <command> (or ! <command>)")
 		return
 	}
-
-	_ = b.emitShellText(fmt.Sprintf("⌨ Running: %s", cmdText))
-	safego.Go("im.daemonBridge.shell", func() {
+	_ = emit(fmt.Sprintf("⌨ Running: %s", cmdText))
+	safego.Go("im.inboundShell", func() {
 		ctx, cancel := context.WithTimeout(context.Background(), inboundShellTimeout)
 		defer cancel()
 
 		start := time.Now()
 		// sh -c, not bash: matches the TUI escape semantics and keeps the
-		// dependency footprint identical across platforms the daemon runs on.
+		// dependency footprint identical across platforms.
 		cmd := exec.CommandContext(ctx, "sh", "-c", cmdText)
 		out, err := cmd.CombinedOutput()
 		elapsed := time.Since(start)
@@ -98,8 +99,7 @@ func (b *DaemonBridge) handleShellInbound(text string) {
 		} else if body != "" {
 			if len(body) > inboundShellMaxOutput {
 				// Snap to a rune boundary: byte-slicing mid-rune produces invalid
-				// UTF-8, which Telegram's API rejects with a 400 (see subagent/runner.go
-				// for the same pattern).
+				// UTF-8, which Telegram's API rejects with a 400.
 				cut := util.SnapToRuneStart(body, inboundShellMaxOutput)
 				body = body[:cut] + fmt.Sprintf("\n… (truncated, %d more chars)", len(body)-cut)
 			}
@@ -107,10 +107,17 @@ func (b *DaemonBridge) handleShellInbound(text string) {
 		}
 		sb.WriteString(fmt.Sprintf("\n— exit %v in %s", exitCodeOrErr(err), elapsed.Round(time.Millisecond)))
 		debug.Log("daemon-bridge", "inbound shell '%s' done in %s (err=%v)", cmdText, elapsed.Round(time.Millisecond), err)
-		if err := b.emitShellText(sb.String()); err != nil {
+		if err := emit(sb.String()); err != nil {
 			debug.Log("daemon-bridge", "inbound shell '%s' emit failed: %v", cmdText, err)
 		}
 	})
+}
+
+// handleShellInbound executes the shell command and pushes the output back
+// to the IM client via the emitter. Runs the command asynchronously so the
+// inbound loop is not blocked; the emitter is safe for concurrent use.
+func (b *DaemonBridge) handleShellInbound(text string) {
+	RunInboundShellAsync(text, b.emitShellText)
 }
 
 // exitCodeOrErr renders an exec error's exit code, or a generic marker.

@@ -95,6 +95,11 @@ func (m *Model) ExecuteRemoteSlashCommand(text string) (string, bool) {
 			case "/stream":
 				resp, _ := m.handleStreamSlash(strings.Join(parts[1:], " "))
 				return resp, true
+			case "/cost", "/mode":
+				// Query-style agent commands: shared with the daemon bridge
+				// path (im.ExecuteAgentSlashCommand). In the TUI-attached
+				// mode these read live model state where available.
+				return m.executeAgentSlashQuery(strings.ToLower(parts[0]))
 			default:
 				return "", false
 			}
@@ -238,4 +243,40 @@ func (m *Model) executeRemoteConfig() string {
 		return "Config not available"
 	}
 	return m.remoteSwitchChoices()
+}
+
+// executeAgentSlashQuery serves /cost and /mode for IM-attached TUI sessions.
+// Unlike the daemon path (which reads disk), the TUI has live state: the
+// in-memory session for /cost and the model's policy for /mode.
+func (m *Model) executeAgentSlashQuery(cmd string) (string, bool) {
+	switch cmd {
+	case "/cost":
+		// Prefer live session usage (same data the local /cost shows); fall
+		// back to the cross-session disk summary when no usage is recorded.
+		if m.session != nil {
+			usage := m.session.TokenUsage
+			if usage.Total() > 0 {
+				var sb strings.Builder
+				sb.WriteString("Session Cost:\n\n")
+				sb.WriteString(fmt.Sprintf("  Model:  %s (%s)\n", m.session.Model, m.session.Vendor))
+				sb.WriteString(fmt.Sprintf("  Input tokens:  %s\n", humanizeTokenCount(usage.InputTokens)))
+				sb.WriteString(fmt.Sprintf("  Output tokens: %s\n", humanizeTokenCount(usage.OutputTokens)))
+				if usage.CacheRead > 0 {
+					sb.WriteString(fmt.Sprintf("  Cache read:    %s\n", humanizeTokenCount(usage.CacheRead)))
+				}
+				if usage.CacheWrite > 0 {
+					sb.WriteString(fmt.Sprintf("  Cache write:   %s\n", humanizeTokenCount(usage.CacheWrite)))
+				}
+				return sb.String(), true
+			}
+		}
+		summary, err := im.BuildCrossSessionCostSummary()
+		if err != nil {
+			return fmt.Sprintf("Cost query failed: %v", err), true
+		}
+		return summary, true
+	case "/mode":
+		return "Current permission mode: " + m.mode.String(), true
+	}
+	return "", false
 }

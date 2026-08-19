@@ -51,6 +51,20 @@ func (m Model) handleRemoteInbound(msg remoteInboundMsg, spinnerCmd tea.Cmd) (te
 		}
 	}
 
+	// Shell passthrough ($ cmd / ! cmd): execute immediately even while a
+	// turn is running, mirroring the daemon bridge and the local TUI escape.
+	// Never queued as an agent submission - the user expects direct output.
+	if route.Kind == im.InboundRouteShell {
+		if msg.Response != nil {
+			msg.Response <- nil
+		}
+		im.RunInboundShellAsync(route.Text, func(s string) error {
+			m.emitIMText(s)
+			return nil
+		})
+		return m, nil
+	}
+
 	if route.Kind == im.InboundRouteApproval {
 		toolName := m.pendingApproval.ToolName
 		decisionStr := "deny"
