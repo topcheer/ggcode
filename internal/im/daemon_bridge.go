@@ -305,6 +305,15 @@ func (b *DaemonBridge) tryQueueOrBeginRun(content []provider.ContentBlock, logPr
 	// Begin run slot (inline of beginRunSlot logic)
 	ctx, cancel := context.WithCancel(context.Background())
 	b.pendingInterruptions = b.pendingInterruptions[:0]
+	// Nil-agent guard: bare DaemonBridges (tests, partial setup, or the
+	// pre-agent wiring window) must not SIGSEGV here. Log and treat as a
+	// queued interruption that will be drained once an agent is attached.
+	if b.agent == nil {
+		debug.Log("daemon-bridge", "%stryQueueOrBeginRun: no agent attached; deferring content", logPrefix)
+		b.pendingInterruptions = append(b.pendingInterruptions, pendingInterruption{Content: content})
+		cancel()
+		return nil, true
+	}
 	b.agent.SetInterruptionHandler(func() string {
 		b.mu.Lock()
 		defer b.mu.Unlock()
@@ -388,6 +397,15 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 	// Slash commands take priority over everything (including pending approval/ask_user)
 	if route.Kind == InboundRouteSlash {
 		return b.handleSlashCommand(ctx, text, msg)
+	}
+
+	// Shell passthrough ($ cmd / ! cmd): executes immediately even while the
+	// agent is mid-turn, matching the TUI escape - never queued into the agent
+	// loop. Order mirrors RouteInboundText: after slash, before approval/ask
+	// (approval replies y/n/a never start with $ or !).
+	if route.Kind == InboundRouteShell {
+		b.handleShellInbound(route.Text)
+		return nil
 	}
 
 	// Check for pending approval — y/a/n reply for tool permission
