@@ -12,6 +12,7 @@ import (
 var ByteLimitPlatforms = map[Platform]bool{
 	PlatformWeCom:  true, // 2048 bytes
 	PlatformWechat: true, // 2048 bytes
+	PlatformFeishu: true, // interactive card limit is ~30KB of JSON bytes, not chars (#757)
 }
 
 // PlatformLimits defines the maximum message length for each IM platform.

@@ -1571,7 +1571,12 @@ func (a *feishuAdapter) sendImageMessage(ctx context.Context, chatID, imageKey s
 }
 
 func splitFeishuMessage(text string, maxLen int) []string {
-	return splitMessageRunes(text, maxLen, true, false, false)
+	// #757: the Feishu interactive card limit (~30KB) applies to the JSON
+	// payload BYTES. The old rune-based split let a 28000-rune CJK chunk
+	// reach ~84KB (3 bytes/rune) -- every long Chinese reply exceeded the
+	// card limit, failed, and degraded to plain text via fallback. Split on
+	// bytes; maxLen (28000) already leaves headroom for card structure.
+	return splitMessageBytes(text, maxLen)
 }
 
 func intValueStr(s string) (int, bool) {
