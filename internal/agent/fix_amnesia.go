@@ -43,7 +43,12 @@ import (
 type fixAmnesiaState struct {
 	mu sync.Mutex
 
-	// fixedPatterns tracks error categories that were observed and fixed.
+	// observed tracks error categories seen in tool results, per file.
+	// Key: error category; Value: files where the error was observed.
+	observed map[string][]string
+
+	// fixedPatterns tracks error categories that were observed AND
+	// subsequently fixed (agent edited the file and the error did not recur).
 	// Key: error category; Value: file where it was fixed.
 	fixedPatterns map[string][]string // category -> list of files
 
@@ -80,9 +85,24 @@ var faErrorCategories = []faErrorCategory{
 		contentPattern: regexp.MustCompile(`(?m)^\s*\w+\([^)]*\)\s*$`),
 	},
 	{
-		category:       "missing-import",
-		label:          "used a package symbol without importing the package",
-		contentPattern: regexp.MustCompile(`(?m)(?:^|\s)(fmt|os|io|net|http|sync|time|errors|strings|strconv|bytes|context|encoding/json)\.\w+`),
+		category: "missing-import",
+		label:    "used a package symbol without importing the package",
+		// #754: contentPattern nil -- detection is content-aware via
+		// contentMatchesCategory (stdlib symbol used but import block lacks
+		// the package). The old pattern matched ANY stdlib usage; healthy
+		// code with correct imports hit ~100%.
+	},
+	{
+		category: "unused-variable",
+		label:    "variable declared and not used",
+		// #754: no content pattern -- observation seeds only (see
+		// classifyToolError). Using variables in new files is healthy code.
+	},
+	{
+		category: "unused-import",
+		label:    "import declared and not used",
+		// #754: no content pattern -- the fix DELETES an import; new files
+		// legitimately importing packages are healthy code.
 	},
 	{
 		category:       "defer-in-loop",
@@ -109,6 +129,7 @@ var faErrorCategories = []faErrorCategory{
 // newFixAmnesiaState creates a fresh detector for this run.
 func newFixAmnesiaState() *fixAmnesiaState {
 	return &fixAmnesiaState{
+		observed:      make(map[string][]string),
 		fixedPatterns: make(map[string][]string),
 		warned:        make(map[string]bool),
 		maxWarnings:   2,
@@ -117,13 +138,34 @@ func newFixAmnesiaState() *fixAmnesiaState {
 
 // recordErrorObserved tracks that an error of the given category was observed
 // (from build output, test failures, or tool errors). Called when errors are
-// seen in tool results.
+// seen in tool results. #754: this only records OBSERVATION -- a category
+// becomes "fixed" solely via recordFileEdited (agent edited the file after
+// the error and the error did not recur on the same file).
 func (d *fixAmnesiaState) recordErrorObserved(category, file string) {
+	if category == "" || file == "" {
+		return
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	// We only track it as "seen" — it becomes "fixed" when the agent edits
-	// the file containing it (detected via recordFix).
-	d.fixedPatterns[category] = appendIfMissing(d.fixedPatterns[category], file)
+	d.observed[category] = appendIfMissing(d.observed[category], file)
+}
+
+// recordFileEdited promotes OBSERVED categories for the edited file to
+// FIXED: the agent touched the file after the error was seen (#754 wiring of
+// the observe->fix two-phase design; recordFix was never called before).
+func (d *fixAmnesiaState) recordFileEdited(file string) {
+	if file == "" {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for cat, files := range d.observed {
+		for _, f := range files {
+			if f == file {
+				d.fixedPatterns[cat] = appendIfMissing(d.fixedPatterns[cat], f)
+			}
+		}
+	}
 }
 
 // recordFix marks a category as fixed in the given file (because the agent
@@ -187,8 +229,9 @@ func (d *fixAmnesiaState) checkContentAgainstFixed(fixFile, newFile, content str
 			continue
 		}
 
-		// Check if the new content matches the error pattern
-		if ec.contentPattern.MatchString(content) {
+		// Check if the new content matches the error pattern (#754:
+		// nil patterns and import-aware analysis handled inside).
+		if contentMatchesCategory(ec, content) {
 			if warningCount+len(warnings) >= d.maxWarnings {
 				break
 			}
@@ -220,8 +263,19 @@ func classifyToolError(_ string, errMsg string) (category, file string) {
 	switch {
 	case strings.Contains(errLower, "nil pointer") || strings.Contains(errLower, "nil dereference"):
 		return "nil-deref-after-nil-check", file
-	case strings.Contains(errLower, "declared and not used") || strings.Contains(errLower, "unused import") ||
-		strings.Contains(errLower, "imported and not used"):
+	// #754: "declared and not used" is an UNUSED VARIABLE -- fixing it (using
+	// or removing the variable) has nothing to do with imports, and "unused
+	// import" is fixed by DELETING an import. Neither implies that a later
+	// file using stdlib symbols is missing imports. Split into its own
+	// category with no contentPattern: it can seed observation (triggering
+	// promotion via edit) but never matches new content, so it cannot
+	// produce cross-file false positives on healthy code.
+	case strings.Contains(errLower, "declared and not used"):
+		return "unused-variable", file
+	case strings.Contains(errLower, "imported and not used") || strings.Contains(errLower, "unused import"):
+		return "unused-import", file
+	case strings.Contains(errLower, "undefined:") && (strings.Contains(errLower, "fmt.") || strings.Contains(errLower, "os.") ||
+		strings.Contains(errLower, "strings.") || strings.Contains(errLower, "errors.")):
 		return "missing-import", file
 	case strings.Contains(errLower, "defer in loop") || strings.Contains(errLower, "resource leak"):
 		return "defer-in-loop", file
@@ -248,6 +302,57 @@ func extractFilePathFromError(errMsg string) string {
 		return m2[1]
 	}
 	return ""
+}
+
+// faStdlibPkgs lists the common stdlib packages checked by the
+// missing-import content analysis (#754).
+var faStdlibPkgs = []string{"fmt", "os", "io", "net", "http", "sync", "time", "errors", "strings", "strconv", "bytes", "context", "encoding/json"}
+
+// contentMatchesCategory reports whether new content exhibits the error
+// category. Categories without a pattern (unused-variable/unused-import)
+// never match; missing-import uses real import-block analysis instead of the
+// old any-stdlib-usage pattern (#754).
+func contentMatchesCategory(ec faErrorCategory, content string) bool {
+	if ec.category == "missing-import" {
+		return missingImportInContent(content)
+	}
+	if ec.contentPattern == nil {
+		return false
+	}
+	return ec.contentPattern.MatchString(content)
+}
+
+// missingImportInContent reports whether the content uses one of the common
+// stdlib packages without importing it. Handles both import forms:
+// single-line `import "fmt"` and grouped `import ( ... )` blocks. Comments
+// between imports are tolerated inside grouped blocks.
+func missingImportInContent(content string) bool {
+	for _, pkg := range faStdlibPkgs {
+		used := regexp.MustCompile(`(?:^|\s)` + regexp.QuoteMeta(pkg) + `\.`)
+		if !used.MatchString(content) {
+			continue
+		}
+		if !hasImportFor(content, pkg) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasImportFor reports whether content imports pkg (single-line or block).
+func hasImportFor(content, pkg string) bool {
+	imp := regexp.MustCompile(`(?m)^import\s+"` + regexp.QuoteMeta(pkg) + `"`)
+	if imp.MatchString(content) {
+		return true
+	}
+	blk := regexp.MustCompile(`(?s)import\s*\((.*?)\)`)
+	for _, m := range blk.FindAllStringSubmatch(content, -1) {
+		line := regexp.MustCompile(`(?m)^\s*(?:\w+\s+)?"` + regexp.QuoteMeta(pkg) + `"`)
+		if line.MatchString(m[1]) {
+			return true
+		}
+	}
+	return false
 }
 
 // appendIfMissing adds s to slice only if not already present.

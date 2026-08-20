@@ -3957,6 +3957,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 						}
 						a.fixAmnesia.recordErrorObserved(cat, file)
 					}
+				} else {
+					// #754: successful edit promotes observed errors in this
+					// file to FIXED (observe->fix two-phase wiring; previously
+					// recordErrorObserved alone marked categories "fixed" with
+					// no edit ever happening).
+					a.fixAmnesia.recordFileEdited(fp)
 				}
 				// Check new content for patterns matching previously-fixed errors.
 				if faGuidance := a.fixAmnesia.checkContentAgainstFixed("", fp, result.Content); faGuidance != "" {

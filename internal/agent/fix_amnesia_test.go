@@ -10,7 +10,7 @@ func TestFixAmnesia_BasicDetection(t *testing.T) {
 
 	// Simulate: nil dereference error observed in fileA.go
 	d.recordErrorObserved("nil-deref-after-nil-check", "/src/fileA.go")
-
+	d.recordFileEdited("/src/fileA.go") // #754: observed errors only arm after a successful edit
 	// Now check content in fileB.go that matches the pattern
 	// The pattern looks for nil check followed by method call outside guard
 	content := `
@@ -37,7 +37,7 @@ result.Method()
 func TestFixAmnesia_SameFileNoWarning(t *testing.T) {
 	d := newFixAmnesiaState()
 	d.recordErrorObserved("nil-deref-after-nil-check", "/src/fileA.go")
-
+	d.recordFileEdited("/src/fileA.go") // #754: observed errors only arm after a successful edit
 	content := `
 if err != nil {
     return err
@@ -71,7 +71,7 @@ func TestFixAmnesia_DifferentCategoryNoWarning(t *testing.T) {
 	d := newFixAmnesiaState()
 	// Observed nil-deref fix
 	d.recordErrorObserved("nil-deref-after-nil-check", "/src/fileA.go")
-
+	d.recordFileEdited("/src/fileA.go") // #754: observed errors only arm after a successful edit
 	// Content does NOT match nil-deref pattern
 	content := `package main
 func main() {
@@ -90,8 +90,7 @@ func TestFixAmnesia_MaxWarnings(t *testing.T) {
 
 	// First trigger
 	d.recordErrorObserved("nil-deref-after-nil-check", "/src/fileA.go")
-	d.recordErrorObserved("defer-in-loop", "/src/fileC.go")
-
+	d.recordFileEdited("/src/fileA.go") // #754: observed errors only arm after a successful edit	d.recordErrorObserved("defer-in-loop", "/src/fileC.go")\n	d.recordFileEdited("/src/fileC.go") // #754: observed errors only arm after a successful edit
 	content := `
 if err != nil {
     return err
@@ -120,7 +119,7 @@ func TestFixAmnesia_AlreadyWarnedCategory(t *testing.T) {
 	d := newFixAmnesiaState()
 
 	d.recordErrorObserved("nil-deref-after-nil-check", "/src/fileA.go")
-
+	d.recordFileEdited("/src/fileA.go") // #754: observed errors only arm after a successful edit
 	content := `
 if err != nil {
     return err
@@ -146,8 +145,12 @@ func TestClassifyToolError(t *testing.T) {
 		wantCat string
 	}{
 		{"panic: runtime error: nil pointer dereference", "nil-deref-after-nil-check"},
-		{"./main.go:10:2: declared and not used: x", "missing-import"},
-		{"./main.go:5:2: imported and not used: \"fmt\"", "missing-import"},
+		// #754: these are NOT missing-import errors -- "declared and not
+		// used" is an unused variable, "imported and not used" is fixed by
+		// DELETING an import. Old rows asserted the misclassification.
+		{"./main.go:10:2: declared and not used: x", "unused-variable"},
+		{"./main.go:5:2: imported and not used: \"fmt\"", "unused-import"},
+		{"./main.go:7:2: undefined: fmt.Stringer", "missing-import"},
 		{"fatal error: concurrent map writes", "map-concurrent-write"},
 		{"some random error message", ""},
 	}
