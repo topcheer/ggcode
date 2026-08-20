@@ -218,17 +218,55 @@ func collectGoDecls(filePath, src string) map[goDeclKey]int {
 // --- Python (regex-based) ---
 
 // pythonFuncRe matches top-level and class method function definitions.
-var pythonFuncRe = regexp.MustCompile(`(?m)^\s*(async\s+)?def\s+(\w+)\s*\(`)
+// Group 1 captures leading indentation so methods can be scoped to their
+// enclosing class (#753); group 3 is the function name.
+var pythonFuncRe = regexp.MustCompile(`(?m)^(\s*)(async\s+)?def\s+(\w+)\s*\(`)
 
 // pythonClassRe matches class definitions.
 var pythonClassRe = regexp.MustCompile(`(?m)^class\s+(\w+)\s*[\(:]`)
 
 // checkPythonDuplicateDecls detects duplicate function/class definitions.
+// Methods are scoped to their class (#753): same-name methods in different
+// classes are legal Python idiom (__init__, run, process...) and must not
+// count as duplicates of each other -- mirroring the Go path's method:Recv
+// scoping, which the Python path lacked.
 func checkPythonDuplicateDecls(oldContent, newContent string) []dupDecl {
-	return checkRegexDuplicates(oldContent, newContent, []regexDeclPattern{
-		{re: pythonFuncRe, kind: "function", group: 2},
-		{re: pythonClassRe, kind: "class", group: 1},
-	})
+	return compareDeclCounts(
+		collectPythonDecls(oldContent),
+		collectPythonDecls(newContent),
+	)
+}
+
+// collectPythonDecls counts Python declarations with class scoping for
+// methods (#753). Top-level def -> function:<name>; indented def under the
+// most recent class line -> method:<Class>.<name>; class -> class:<name>.
+// An indented def before any class line falls back to function:<name>
+// (preserving pre-#753 behavior for module-level nested defs).
+func collectPythonDecls(src string) map[regexDeclKey]int {
+	counts := make(map[regexDeclKey]int)
+	if strings.TrimSpace(src) == "" {
+		return counts
+	}
+	currentClass := ""
+	for _, raw := range strings.Split(src, "\n") {
+		line := strings.TrimRight(raw, "\r")
+		if cm := pythonClassRe.FindStringSubmatch(line); cm != nil {
+			currentClass = cm[1]
+			counts[regexDeclKey{"class", cm[1]}]++
+			continue
+		}
+		fm := pythonFuncRe.FindStringSubmatch(line)
+		if fm == nil {
+			continue
+		}
+		name := fm[3]
+		if fm[1] != "" && currentClass != "" {
+			counts[regexDeclKey{"method", currentClass + "." + name}]++
+		} else {
+			counts[regexDeclKey{"function", name}]++
+		}
+	}
+	return counts
 }
 
 // --- JavaScript/TypeScript (regex-based) ---
@@ -264,9 +302,15 @@ type regexDeclPattern struct {
 // checkRegexDuplicates is a generic engine that counts declaration names
 // from old and new content using regex patterns, then flags NEW duplicates.
 func checkRegexDuplicates(oldContent, newContent string, patterns []regexDeclPattern) []dupDecl {
-	oldCounts := collectRegexDecls(oldContent, patterns)
-	newCounts := collectRegexDecls(newContent, patterns)
+	return compareDeclCounts(
+		collectRegexDecls(oldContent, patterns),
+		collectRegexDecls(newContent, patterns),
+	)
+}
 
+// compareDeclCounts flags names whose new count reached 2+ while the old
+// count was below 2 (pre-existing duplicates are not re-reported).
+func compareDeclCounts(oldCounts, newCounts map[regexDeclKey]int) []dupDecl {
 	var dups []dupDecl
 	seen := make(map[string]bool)
 
