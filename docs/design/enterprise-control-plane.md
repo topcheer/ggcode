@@ -239,13 +239,39 @@ three profiles the same artifact:
   corp wildcard). SQLite mode acceptable below ~50 enrolled machines;
   the migration to Postgres is a documented dump/restore, not a rewrite.
 
-**Client-side distribution (all profiles)**
-- Employees install ggcode through the internal channel: MDM push
-  (pkg/msi), internal installer endpoint (`ggcode-installer` already
-  exists as a cmd), or a mirrored release artifact - never public
-  GitHub. Enrollment (`ggcode enterprise enroll`) points at the internal
-  control plane; `minClientVersion` in the policy forces upgrades via
-  the same channel the fleet already uses.
+**Client-side fleet deployment (all profiles) - the real enterprise surface**
+
+The enterprise fleet is **CLI + desktop**; that is where mass deployment
+effort goes:
+
+- **CLI**: distributed via MDM (pkg/msi/silent-install scripts), an
+  internal installer endpoint (the `ggcode-installer` cmd already
+  exists), or mirrored release artifacts - never public GitHub.
+  Enrollment points at the internal control plane; `minClientVersion`
+  in the policy forces fleet upgrades through the same channel.
+- **Desktop** (`ggcode-desktop`): same MDM channel (dmg/msi/AppImage);
+  auto-update must be re-pointed at the internal update server or
+  disabled by managed policy - desktop builds phoning out to a public
+  update feed is an audit finding in every regulated org.
+- **Gradual rollout**: policy canary staging doubles as the client
+  rollout gate - new desktop builds ship to the same 1% -> 25% -> 100%
+  cohorts the policy rollouts already define.
+
+**Mobile positioning (explicitly NOT a default enterprise surface)**
+
+The relay/`ggcode-mobile` path is a personal/remote-access shape: it
+assumes a public-reachable relay, which contradicts enterprise network
+boundaries. Mobile enters scope only when the enterprise already has
+the prerequisites for it:
+
+- an internal app-distribution server (MDM app catalog / enterprise App
+  Store / internal Play managed distribution), and
+- device-level control enforcing intranet-only access (MDM VPN/per-app
+  VPN + device compliance), since the mobile client needs a managed
+  path to the internal control plane and LLM gateway.
+
+Absent both, mobile is out of scope for the enterprise deployment;
+nothing in the control plane design assumes it.
 - Degraded-mode is a deployment property: control plane unreachable
   (maintenance, DR) → clients keep enforcing the last cached policy
   (72h maxCacheAge), so LLM work does not stop when the control plane
