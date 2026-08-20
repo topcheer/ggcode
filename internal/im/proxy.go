@@ -6,9 +6,11 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -27,17 +29,78 @@ func resolveProxy(configValue, envKey string) string {
 	return ""
 }
 
-// setEnvTemp temporarily sets an environment variable and returns a cleanup function.
-func setEnvTemp(key, value string) func() {
-	orig, had := os.LookupEnv(key)
-	os.Setenv(key, value)
-	return func() {
-		if had {
-			os.Setenv(key, orig)
-		} else {
-			os.Unsetenv(key)
-		}
+// setEnvTemp previously lived here: it set HTTPS_PROXY around nostr connects,
+// but net/http caches the env-proxy func in a sync.Once at first use, so the
+// hack either never took effect (cache already primed by earlier HTTP traffic)
+// or permanently latched the temporary proxy into the process-wide transport
+// (#758). Replaced by the per-host transport interceptor below.
+
+// hostProxyRoutes maps destination hosts to the proxy they must use,
+// overriding the environment default. Populated by adapters whose relays
+// need a proxy (nostr), consulted by nostrTransportProxy.
+var hostProxyRoutes = struct {
+	sync.RWMutex
+	m map[string]*url.URL
+}{m: make(map[string]*url.URL)}
+
+// proxyInterceptorOnce guards the one-time wrap of http.DefaultTransport's
+// Proxy func. Wrapping is idempotent and behavior-preserving for hosts that
+// are not registered: they fall through to http.ProxyFromEnvironment.
+var proxyInterceptorOnce sync.Once
+
+// RegisterHostProxy pins proxyURL for all requests to host (host:port form
+// as it appears in request URLs). Call UnregisterHostProxy when the adapter
+// stops using the host.
+func RegisterHostProxy(host, proxyURL string) error {
+	u, err := url.Parse(proxyURL)
+	if err != nil {
+		return fmt.Errorf("invalid proxy URL %q: %w", proxyURL, err)
 	}
+	hostProxyRoutes.Lock()
+	hostProxyRoutes.m[host] = u
+	hostProxyRoutes.Unlock()
+	installProxyInterceptor()
+	return nil
+}
+
+// UnregisterHostProxy removes a host's pinned proxy.
+func UnregisterHostProxy(host string) {
+	hostProxyRoutes.Lock()
+	delete(hostProxyRoutes.m, host)
+	hostProxyRoutes.Unlock()
+}
+
+// pinnedProxyFor returns the registered proxy for the request's host, or
+// (nil, false) when the host has no pinned proxy.
+func pinnedProxyFor(req *http.Request) (*url.URL, bool) {
+	hostProxyRoutes.RLock()
+	u, hit := hostProxyRoutes.m[req.URL.Host]
+	hostProxyRoutes.RUnlock()
+	return u, hit
+}
+
+// installProxyInterceptor wraps http.DefaultTransport.Proxy so registered
+// hosts are routed through their pinned proxy while every other request
+// keeps the standard env behavior. Unlike the old HTTPS_PROXY env hack this
+// is deterministic (no sync.Once env caching) and scoped (no process-wide
+// pollution of unrelated traffic).
+func installProxyInterceptor() {
+	proxyInterceptorOnce.Do(func() {
+		t, ok := http.DefaultTransport.(*http.Transport)
+		if !ok || t == nil {
+			return // custom transport; do not touch
+		}
+		orig := t.Proxy
+		if orig == nil {
+			orig = http.ProxyFromEnvironment
+		}
+		t.Proxy = func(req *http.Request) (*url.URL, error) {
+			if u, hit := pinnedProxyFor(req); hit {
+				return u, nil
+			}
+			return orig(req)
+		}
+	})
 }
 
 // proxyDial creates a TCP connection through an HTTP CONNECT or SOCKS5 proxy.

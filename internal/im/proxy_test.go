@@ -113,27 +113,3 @@ func TestProxyDial_InvalidURL(t *testing.T) {
 		t.Error("expected error for invalid URL")
 	}
 }
-
-func TestSetEnvTemp(t *testing.T) {
-	// Set a new env var
-	cleanup := setEnvTemp("TEST_SETENV_TMP", "value1")
-	if os.Getenv("TEST_SETENV_TMP") != "value1" {
-		t.Error("env not set")
-	}
-	cleanup()
-	if os.Getenv("TEST_SETENV_TMP") != "" {
-		t.Error("env not cleaned up")
-	}
-
-	// Overwrite existing env var
-	os.Setenv("TEST_SETENV_TMP", "original")
-	cleanup = setEnvTemp("TEST_SETENV_TMP", "override")
-	if os.Getenv("TEST_SETENV_TMP") != "override" {
-		t.Error("env not overwritten")
-	}
-	cleanup()
-	if os.Getenv("TEST_SETENV_TMP") != "original" {
-		t.Errorf("env not restored: %q", os.Getenv("TEST_SETENV_TMP"))
-	}
-	os.Unsetenv("TEST_SETENV_TMP")
-}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -175,17 +176,24 @@ func (a *nostrAdapter) relayLoop(ctx context.Context, relayURL string) {
 func (a *nostrAdapter) connectRelay(ctx context.Context, relayURL string) error {
 	debug.Log("nostr", "adapter=%s connecting to %s proxy=%s", a.name, relayURL, a.proxy)
 
-	// If proxy is set, inject HTTPS_PROXY into the environment.
-	// go-nostr/coder/websocket uses http.DefaultTransport which reads HTTPS_PROXY.
-	var cleanup func()
+	// #758: the old HTTPS_PROXY env hack never worked reliably -- net/http
+	// caches the env-proxy func in a sync.Once at first use, so the temp
+	// value was either ignored (cache primed by earlier HTTP traffic) or
+	// permanently captured into the process-wide transport. Route this
+	// relay's host through the per-host transport interceptor instead:
+	// deterministic for the relay, untouched for all other traffic.
+	relayHost := ""
 	if a.proxy != "" {
-		cleanup = setEnvTemp("HTTPS_PROXY", a.proxy)
-	}
-	defer func() {
-		if cleanup != nil {
-			cleanup()
+		if u, err := url.Parse(relayURL); err == nil && u.Host != "" {
+			relayHost = u.Host
+			if err := RegisterHostProxy(relayHost, a.proxy); err != nil {
+				return fmt.Errorf("connect %s: %w", relayURL, err)
+			}
+			defer UnregisterHostProxy(relayHost)
+		} else if err != nil {
+			return fmt.Errorf("connect %s: invalid relay URL: %w", relayURL, err)
 		}
-	}()
+	}
 
 	relay, err := nostr.RelayConnect(ctx, relayURL)
 	if err != nil {
