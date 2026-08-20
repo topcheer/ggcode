@@ -59,12 +59,18 @@ func imUnlockFileEx(handle syscall.Handle, length uint32, offset uint32) error {
 	var ol syscall.Overlapped
 	ol.Offset = offset
 
+	// Win32: BOOL UnlockFileEx(HANDLE hFile, DWORD dwReserved, DWORD
+	// nNumberOfBytesToUnlockLow, DWORD nNumberOfBytesToUnlockHigh,
+	// LPOVERLAPPED lpOverlapped). #755: a stray leading uintptr(0) used to
+	// put NULL in hFile (ERROR_INVALID_HANDLE) and the handle in dwReserved
+	// -- the explicit unlock never worked; release relied solely on the
+	// implicit Close() semantics.
 	r1, _, e1 := syscall.SyscallN(
 		imProcUnlockFileEx.Addr(),
-		uintptr(0),
 		uintptr(handle),
+		uintptr(0), // dwReserved, must be zero
 		uintptr(length),
-		uintptr(0),
+		uintptr(0), // nNumberOfBytesToUnlockHigh
 		uintptr(unsafe.Pointer(&ol)),
 	)
 	if r1 == 0 {
