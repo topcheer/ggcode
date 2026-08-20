@@ -41,8 +41,29 @@ func NewShellCommandContext(ctx context.Context, command string) (*exec.Cmd, She
 	// (default true); $ErrorActionPreference alone does not cover it.
 	// Disable both so native stderr doesn't make successful commands look
 	// like failures.
+	//
+	// UTF-8 is pinned for every layer that can otherwise corrupt text or
+	// FILES (#574 family of Windows encoding breakage):
+	//   - [Console]::Output/InputEncoding: how the console decodes native
+	//     command output / input. Windows PowerShell 5.1 defaults to the OEM
+	//     codepage (GBK etc. on non-English systems) - Chinese/space-padded
+	//     output would arrive as mojibake, and piped UTF-8 stdin would be
+	//     misread. try/catch: setting these can fail in exotic hosts.
+	//   - $OutputEncoding: the encoding PowerShell uses when piping data TO
+	//     native programs (defaults to ASCII in 5.1 - non-ASCII args/pipes
+	//     get corrupted to '?').
+	//   - $PSDefaultParameterValues['*:Encoding']='utf8': makes
+	//     Set-Content/Out-File/redirection default to UTF-8. This is the
+	//     file-corruption fix: 5.1 defaults Set-Content to ANSI and Out-File
+	//     to UTF-16LE, so agent-driven file edits through PowerShell silently
+	//     rewrote UTF-8 files into GBK/UTF-16 (mass corruption).
+	// pwsh 7+ already defaults to UTF-8 everywhere; the assignments are
+	// harmless no-ops there and corrective for powershell.exe.
 	if spec.Name == "powershell" {
-		command = "$ErrorActionPreference='Continue'; $PSNativeCommandUseErrorActionPreference=$false; " + command
+		command = "try{[Console]::OutputEncoding=[Text.Encoding]::UTF8;[Console]::InputEncoding=[Text.Encoding]::UTF8}catch{};" +
+			"$OutputEncoding=[Text.Encoding]::UTF8;" +
+			"$PSDefaultParameterValues['*:Encoding']='utf8';" +
+			"$ErrorActionPreference='Continue'; $PSNativeCommandUseErrorActionPreference=$false; " + command
 	}
 	return exec.CommandContext(ctx, spec.Path, append(spec.Args, command)...), spec, nil
 }
