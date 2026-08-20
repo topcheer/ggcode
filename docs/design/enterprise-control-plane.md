@@ -205,6 +205,57 @@ in-place edits break verification during export or spot-check.
   means re-enrollment (keys are in it) - documented recovery path.
 - Observability: /metrics (Prometheus), /healthz, structured logs
 
+### Enterprise deployment profiles
+
+How enterprises actually run this internally. The single static binary
+(relay Dockerfile precedent: multi-stage, `CGO_ENABLED=0`, alpine scratch
+runtime - no glibc, no external fetches at runtime) is what makes all
+three profiles the same artifact:
+
+**Profile A - Air-gapped (regulated: finance/defense/gov)**
+- Deliverable: versioned bundle = OCI image tarball (`docker save`) +
+  SHA256SUMS + signed Helm chart, shipped over the enterprise's approved
+  file-transfer channel. Nothing phones home; the embedded SPA has zero
+  CDN deps by design.
+- Install: internal Harbor registry (or `docker load` on a single VM),
+  internal CA-issued TLS certs, secrets from the on-prem vault
+  (SignerProvider seam; master key never lives in a committed env file).
+- Upgrades are pull-based events initiated by the customer: new bundle
+  → `helm upgrade` / compose pull. Version pinning is theirs; the
+  changelog + migration notes ship inside the bundle.
+
+**Profile B - Kubernetes + internal registry (the default enterprise shape)**
+- Helm chart in-repo (`deploy/chart/`), values mirror-able: image from
+  internal Harbor, Postgres via operator or platform DB service,
+  Ingress with corp TLS, HPA 2+ replicas (Postgres mode), PDB.
+- GitOps friendly: chart renders declaratively; the policy DB stays the
+  only stateful thing, so DR = database snapshot + re-deploy.
+- LLM gateway sits in the same cluster or an egress-gateway segment;
+  clients reach it over the corp network/VPN with mTLS from the internal
+  CA.
+
+**Profile C - Single VM + docker compose (SMB / pilot)**
+- compose file: control + Postgres + Caddy (TLS from internal CA or
+  corp wildcard). SQLite mode acceptable below ~50 enrolled machines;
+  the migration to Postgres is a documented dump/restore, not a rewrite.
+
+**Client-side distribution (all profiles)**
+- Employees install ggcode through the internal channel: MDM push
+  (pkg/msi), internal installer endpoint (`ggcode-installer` already
+  exists as a cmd), or a mirrored release artifact - never public
+  GitHub. Enrollment (`ggcode enterprise enroll`) points at the internal
+  control plane; `minClientVersion` in the policy forces upgrades via
+  the same channel the fleet already uses.
+- Degraded-mode is a deployment property: control plane unreachable
+  (maintenance, DR) → clients keep enforcing the last cached policy
+  (72h maxCacheAge), so LLM work does not stop when the control plane
+  does. Only SSO-token expiry gates sessions.
+
+**HA / DR summary**: control plane is stateless replicas + one stateful
+DB; RPO = DB snapshot cadence, RTO = re-deploy time; enrollment keys
+export procedure documented (losing keys = fleet re-enrollment, which
+is the documented worst case).
+
 ## Rollout plan (mirrors client phases)
 
 - **CP-1** (with client P1): policy CRUD + approval flow + signing +
