@@ -17,6 +17,13 @@ func TestRemoteSlashDiff_CleanTreeSaysNoChanges(t *testing.T) {
 		t.Helper()
 		cmd := exec.Command("git", args...)
 		cmd.Dir = dir
+		// CI runners may lack a global git identity (Release workflow flake:
+		// git commit exit 128 "Please tell me who you are"). Provide one
+		// explicitly so the test never depends on ambient config.
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@example.com",
+			"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@example.com",
+		)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v\n%s", args, err, out)
 		}
