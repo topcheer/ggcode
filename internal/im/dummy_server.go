@@ -31,7 +31,6 @@ type sseBroker struct {
 	head    int // write position (ring)
 	seq     int64
 	subs    map[chan sseEntry]struct{}
-	pinned  map[int64]sseEntry // approval_request events are never evicted
 }
 
 type sseEntry struct {
@@ -58,7 +57,6 @@ func newSSEBroker(bufSize int) *sseBroker {
 		buffer:  make([]sseEntry, bufSize),
 		bufSize: bufSize,
 		subs:    make(map[chan sseEntry]struct{}),
-		pinned:  make(map[int64]sseEntry),
 	}
 }
 
@@ -105,14 +103,7 @@ func (s *httpServer) pushEvent(event OutboundEvent) {
 	if sseType == "" {
 		return
 	}
-	seq := s.sseBroker.push(sseType, data)
-
-	// Pin approval_request events so they're never evicted by ring rotation
-	if sseType == "approval_request" {
-		s.sseBroker.mu.Lock()
-		s.sseBroker.pinned[seq] = sseEntry{seq: seq, event: sseType, data: data}
-		s.sseBroker.mu.Unlock()
-	}
+	s.sseBroker.push(sseType, data)
 }
 
 // outboundToSSE converts an OutboundEvent to an SSE event type and JSON data.
