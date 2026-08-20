@@ -186,8 +186,9 @@ zero impact on non-enterprise users.
 
 ## Open questions
 
-1. Policy authoring UI lives in the control plane - out of scope here; the
-   schema above is the contract.
+1. Policy authoring UI lives in the control plane - now designed in
+   `enterprise-control-plane.md` (same directory); the schema above remains
+   the shared contract between the two halves.
 2. Team/project-scoped policies (different caps per repo)? v2: policy
    bundle carries optional workspace matchers; v1 is machine-global.
 3. Usage reporting granularity (tokens per user? per repo?) - deferred to
