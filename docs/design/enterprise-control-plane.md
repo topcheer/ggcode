@@ -154,6 +154,46 @@ RBAC roles map to IdP groups (SSO via the same corp OIDC the end users
 hit; admins are just another audience). All mutations go through the
 audit log; the log is hash-chained so truncation is detectable.
 
+### RBAC matrix
+
+Four roles; every API route and UI action maps to exactly one column
+below (denied = not routed, so the UI never shows a button that would 403):
+
+| Capability | Policy author | Approver | Fleet viewer | Key admin |
+|---|---|---|---|---|
+| Draft / edit policy | yes | no (read) | no | no |
+| Approve / reject (4-eyes) | no | yes | no | no |
+| Publish + rollout slider | no | yes | no | no |
+| View policies / versions | yes | yes | yes | yes |
+| View fleet + drift | no | yes | yes | no |
+| Revoke machine | no | yes | no | no |
+| Rotate / revoke signing keys | no | no | no | yes |
+| View audit log | yes | yes | yes | yes |
+
+Separation of duties: author cannot approve (enforced server-side,
+matching the approvals table's reviewer != created_by check); key admin
+touches keys only - keys and policy are different blast radii, and the
+same person holding both could sign anything they authored.
+
+### Audit event types
+
+Every mutation appends one row; `action` values (extend as routes are
+added - the enum lives in one place, validated on write):
+
+- `policy.draft.save`, `policy.submit_review`, `policy.approve`,
+  `policy.reject` (with approver note)
+- `policy.publish` (version, rollout_pct, bundle hash)
+- `policy.rollout.update` (canary percentage changes)
+- `key.generate`, `key.rotate` (grace window start/end),
+  `key.retire`, `key.revoke`
+- `device.enroll.approve`, `device.revoke`, `device.tags.update`
+- `admin.role.grant`, `admin.role.revoke`
+- `settings.update` (retention, maxCacheAge overrides)
+
+`before`/`after` carry the affected object JSON; `sig` chains each row
+to the previous (HMAC per the Data model DDL), so silent deletion or
+in-place edits break verification during export or spot-check.
+
 ## Deployment & ops
 
 - Single binary `ggcode-control`; config via env + `control.yaml`

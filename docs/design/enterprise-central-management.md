@@ -189,7 +189,11 @@ zero impact on non-enterprise users.
 1. Policy authoring UI lives in the control plane - now designed in
    `enterprise-control-plane.md` (same directory); the schema above remains
    the shared contract between the two halves.
-2. Team/project-scoped policies (different caps per repo)? v2: policy
-   bundle carries optional workspace matchers; v1 is machine-global.
-3. Usage reporting granularity (tokens per user? per repo?) - deferred to
-   P4 with the telemetry hooks.
+2. Team/project-scoped policies (different caps per repo)? Open in both
+   halves: v1 is machine-global on the client and single-policy on the
+   control plane (see its Open questions); the workspace-matcher seam is
+   noted in both designs for v2.
+3. Usage reporting granularity - decided by the control plane telemetry
+   model (`enterprise-control-plane.md`, Data model + Admin UI #5): per
+   user x model x repo-hash (repo sent as salted hash, never plaintext).
+   Remaining open piece is retention/aggregation policy, deferred to P4.
