@@ -80,16 +80,28 @@ func (t GitStash) Execute(ctx context.Context, input json.RawMessage) (Result, e
 		gitArgs = []string{"stash", "pop"}
 		if args.Index > 0 {
 			gitArgs = append(gitArgs, fmt.Sprintf("stash@{%d}", args.Index))
+		} else if args.Index < 0 {
+			// #833: a negative index silently skipped the stash@{N} arg and
+			// git defaulted to stash@{0} — destructive drop hit the wrong stash.
+			return Result{IsError: true, Content: fmt.Sprintf("invalid stash index %d: must be >= 0", args.Index)}, nil
 		}
 	case "apply":
 		gitArgs = []string{"stash", "apply"}
 		if args.Index > 0 {
 			gitArgs = append(gitArgs, fmt.Sprintf("stash@{%d}", args.Index))
+		} else if args.Index < 0 {
+			// #833: a negative index silently skipped the stash@{N} arg and
+			// git defaulted to stash@{0} — destructive drop hit the wrong stash.
+			return Result{IsError: true, Content: fmt.Sprintf("invalid stash index %d: must be >= 0", args.Index)}, nil
 		}
 	case "drop":
 		gitArgs = []string{"stash", "drop"}
 		if args.Index > 0 {
 			gitArgs = append(gitArgs, fmt.Sprintf("stash@{%d}", args.Index))
+		} else if args.Index < 0 {
+			// #833: a negative index silently skipped the stash@{N} arg and
+			// git defaulted to stash@{0} — destructive drop hit the wrong stash.
+			return Result{IsError: true, Content: fmt.Sprintf("invalid stash index %d: must be >= 0", args.Index)}, nil
 		}
 	default:
 		return Result{IsError: true, Content: fmt.Sprintf("unsupported action %q: must be push, pop, apply, or drop", action)}, nil

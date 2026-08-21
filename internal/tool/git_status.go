@@ -79,7 +79,7 @@ func (t GitStatus) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	lines := strings.Split(trimmed, "\n")
 	if len(lines) > maxGitStatusLines {
 		// Count by status type for the summary
-		var modified, added, deleted, untracked int
+		var modified, added, deleted, untracked, conflicted int
 		for _, l := range lines {
 			if len(l) < 2 {
 				continue
@@ -93,12 +93,25 @@ func (t GitStatus) Execute(ctx context.Context, input json.RawMessage) (Result, 
 				added++
 			case strings.Contains(l[:2], "D"):
 				deleted++
+			case strings.Contains(l[:2], "R") || strings.Contains(l[:2], "C"):
+				// #834: renamed/copied entries fell through every bucket.
+				modified++
+			case strings.Contains(l[:2], "U") || l[:2] == "AA" || l[:2] == "DD":
+				// #834: unmerged conflict states (UU/AA/DD/AU/UA) — the most
+				// important class — were silently hidden from the summary.
+				conflicted++
 			}
 		}
 		shown := strings.Join(lines[:maxGitStatusLines], "\n")
 		return Result{Content: shown +
-			fmt.Sprintf("\n\n... [%d more files hidden. Summary: %d modified, %d added, %d deleted, %d untracked. Use 'git status --short | grep <pattern>' to filter.]",
-				len(lines)-maxGitStatusLines, modified, added, deleted, untracked)}, nil
+			fmt.Sprintf("\n\n... [%d more files hidden. Summary: %d modified, %d added, %d deleted, %d untracked%s. Use 'git status --short | grep <pattern>' to filter.]",
+				len(lines)-maxGitStatusLines, modified, added, deleted, untracked,
+				func() string {
+					if conflicted > 0 {
+						return fmt.Sprintf(", %d CONFLICTED", conflicted)
+					}
+					return ""
+				}())}, nil
 	}
 
 	return Result{Content: trimmed}, nil

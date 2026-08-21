@@ -216,12 +216,30 @@ func matchDoubleStar(pattern, name string) (bool, error) {
 	if suffix == "" {
 		return true, nil
 	}
-	// Check if rest ends with suffix (can be globbed)
+	// #830: a multi-segment suffix ('src/**/gen/config.yaml' style) never
+	// matched — filepath.Match does not cross '/' and Base() drops the
+	// directory part, so the guard silently failed OPEN (at odds with the
+	// #445 fail-closed history). Accept a tail segment-wise match.
+	sSegs := strings.Split(suffix, "/")
+	if len(nSegs)-len(pSegs) >= len(sSegs) {
+		off := len(nSegs) - len(sSegs)
+		all := true
+		for i, s := range sSegs {
+			ok, err := filepath.Match(s, nSegs[off+i])
+			if err != nil || !ok {
+				all = false
+				break
+			}
+		}
+		if all {
+			return true, nil
+		}
+	}
+	// Single-segment or globbed suffix against the base.
 	matched, err := filepath.Match(suffix, filepath.Base(rest))
 	if err == nil && matched {
 		return true, nil
 	}
-	// Also try matching suffix against the full rest path
 	matched2, err2 := filepath.Match(suffix, rest)
 	return matched2 && err2 == nil, nil
 }

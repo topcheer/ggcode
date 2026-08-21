@@ -126,9 +126,20 @@ func collectCandidates(parentDir, base string, maxDepth int) []string {
 
 	stem := strings.TrimSuffix(base, filepath.Ext(base))
 
+	// #836: the ancestor-fallback walk runs from the first existing
+	// ancestor — on a typo'd deep path that can be the volume root, and an
+	// unbounded walk there can take minutes, triggered automatically on
+	// every file-not-found. Cap the files examined.
+	const maxWalkFiles = 20000
+	walked := 0
+
 	filepath.Walk(startDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil
+		}
+		walked++
+		if walked > maxWalkFiles {
+			return filepath.SkipAll
 		}
 		if info.IsDir() {
 			name := info.Name()

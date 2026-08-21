@@ -79,16 +79,29 @@ func TestValidateRefName(t *testing.T) {
 		}
 	}
 
+	// #837: execution goes through exec.CommandContext (no shell), so
+	// shell metacharacters are NOT valid rejection reasons anymore — only
+	// characters git's check-refformat forbids. These stay invalid:
 	invalid := map[string]string{
-		"$(echo)":    "shell substitution",
-		"a;b":        "semicolon",
-		"a | b":      "pipe",
-		"-flag":      "starts with dash",
-		`quote"name`: "double quote",
+		"a b":   "space (git forbidden)",
+		"a~b":   "tilde (git forbidden)",
+		"a^b":   "caret (git forbidden)",
+		"a:b":   "colon (git forbidden)",
+		"a?b":   "question mark (git forbidden)",
+		"a*b":   "asterisk (git forbidden)",
+		"a[b":   "open bracket (git forbidden)",
+		"..":    "dotdot (git forbidden)",
+		"-flag": "starts with dash",
 	}
 	for ref, reason := range invalid {
 		if err := validateRefName(ref); err == nil {
 			t.Errorf("validateRefName(%q) = nil, want error (%s)", ref, reason)
+		}
+	}
+	// Legal git refs the old shell-metachar blacklist wrongly refused.
+	for _, ref := range []string{"release$v2", `fix(typo)`, "quote\"name", "a;b"} {
+		if err := validateRefName(ref); err != nil {
+			t.Errorf("#837: validateRefName(%q) = %v, want nil (legal git ref)", ref, err)
 		}
 	}
 }

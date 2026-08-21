@@ -180,13 +180,12 @@ func injectIntoMFlag(cmd string, mIdx int) string {
 
 	quote := cmd[pos]
 	if quote != '"' && quote != '\'' {
-		// Unquoted message — find end of message (next flag or end of string)
-		end := strings.IndexByte(cmd[pos:], ' ')
-		if end < 0 {
-			return cmd + "\n\n" + coAuthorTrailer
-		}
-		absEnd := pos + end
-		return cmd[:absEnd] + "\n\n" + coAuthorTrailer + cmd[absEnd:]
+		// #831: injecting a raw newline into an unquoted -m message corrupts
+		// the shell command (the trailer line becomes a separate command and
+		// '<noreply@...>' parses as an input redirection). Use the --trailer
+		// flag form (same as the no-m path) — git appends it to the message
+		// body itself, no shell structure is touched.
+		return cmd + " --trailer \"" + coAuthorTrailer + "\""
 	}
 
 	// Quoted message — find closing quote

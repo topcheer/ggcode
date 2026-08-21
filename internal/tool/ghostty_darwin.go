@@ -223,7 +223,7 @@ func (g *GhosttyTool) executeSplit(terminalID, direction string, size int, comma
 	spec := terminalSpecifier(terminalID)
 
 	var resizePart string
-	if size > 0 && size < 99 {
+	if size > 0 && size <= 99 { // #838: schema max is 99; < 99 silently ignored the documented maximum
 		// Ghostty resize_split amount is in PIXELS, not percentage.
 		// After a 50/50 split, move the divider so the new pane is size%.
 		delta := 50 - size
@@ -256,8 +256,12 @@ func (g *GhosttyTool) executeSplit(terminalID, direction string, size int, comma
 
 	var cmdPart string
 	if strings.TrimSpace(command) != "" {
+		// #832: working_dir went through AppleScript escaping only — no
+		// shell-level quoting. 'cd /Volumes/new ggai' broke ('too many
+		// arguments') and a crafted working_dir executed as-is. Match the
+		// iTerm2 implementation: single-quote with shell escaping.
 		cmdPart = fmt.Sprintf(`
-	input text "cd %s && %s" to newTerm`, escapeAS(wd), escapeAS(command))
+	input text "cd '%s' && %s" to newTerm`, escapeShellSingleQuote(wd), escapeAS(command))
 	}
 
 	script := fmt.Sprintf(`
@@ -272,7 +276,7 @@ end tell`, spec, dir, resizePart, cmdPart)
 		return Result{IsError: true, Content: fmt.Sprintf("ghostty split failed: %v", err)}
 	}
 
-	if size > 0 && size < 99 {
+	if size > 0 && size <= 99 { // #838: schema max is 99; < 99 silently ignored the documented maximum
 		return Result{Content: fmt.Sprintf("ghostty split created: direction=%s, size=%d%%, terminal_id=%s", dir, size, out)}
 	}
 	return Result{Content: fmt.Sprintf("ghostty split created: direction=%s, terminal_id=%s", dir, out)}

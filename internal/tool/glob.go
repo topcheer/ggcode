@@ -72,9 +72,11 @@ func (t Glob) Execute(ctx context.Context, input json.RawMessage) (Result, error
 		return Result{IsError: true, Content: fmt.Sprintf("glob error: %v", err)}, nil
 	}
 
-	// filepath.Glob doesn't support ** natively in all Go versions,
-	// so also do a manual recursive walk for patterns containing **
-	if len(matches) == 0 && strings.Contains(args.Pattern, "**") {
+	// #829: filepath.Glob treats ** as a single * (one segment). For
+	// '**/*.go' Glob returns depth-1 files only, so the old
+	// 'len(matches)==0 && Contains(**)' guard never fired and deep files
+	// were silently missing. Any ** pattern goes to walkGlob unconditionally.
+	if strings.Contains(args.Pattern, "**") {
 		matches = walkGlob(args.Directory, args.Pattern, tracked)
 	} else if tracked != nil {
 		// Filter by gitignore
@@ -169,13 +171,14 @@ func walkGlob(baseDir, pattern string, tracked map[string]struct{}) []string {
 			}
 		}
 
-		// Remove prefix, try matching suffix against remainder
+		// Remove prefix, try matching suffix against remainder.
+		// #829: filepath.Match's * does not cross '/', so a suffix like
+		// '/*.go' never matched 'deep/two.go'. Match segment-wise, allowing
+		// '**' to absorb any number of leading segments.
 		rel, _ := filepath.Rel(startDir, path)
-		matched, _ := filepath.Match(suffix, rel)
-		if !matched {
-			// Also try matching with any sub-path
-			matched, _ = filepath.Match(strings.TrimPrefix(suffix, string(filepath.Separator)), rel)
-		}
+		relSlash := filepath.ToSlash(rel)
+		suffixSlash := strings.TrimPrefix(filepath.ToSlash(suffix), "/")
+		matched := matchStarStarSuffix(suffixSlash, relSlash)
 		if matched {
 			absPath, _ := filepath.Abs(path)
 			results = append(results, absPath)
@@ -184,4 +187,36 @@ func walkGlob(baseDir, pattern string, tracked map[string]struct{}) []string {
 	})
 
 	return results
+}
+
+// matchStarStarSuffix matches rel against a '**/'-style suffix where **
+// absorbs any number of leading segments (#829).
+func matchStarStarSuffix(suffix, rel string) bool {
+	if suffix == "" {
+		return true
+	}
+	if !strings.Contains(suffix, "/") {
+		// Single-segment suffix with wildcards (e.g. '*.go'): * does not
+		// cross '/', so match the BASE segment ('sub/nested.go' vs '*.go')
+		// or, for literal names, any tail segment.
+		if strings.ContainsAny(suffix, "*?[") {
+			ok, _ := filepath.Match(suffix, filepath.Base(rel))
+			return ok
+		}
+		return rel == suffix || strings.HasSuffix(rel, "/"+suffix)
+	}
+	// Multi-segment suffix: every suffix segment must match from the tail.
+	sSegs := strings.Split(suffix, "/")
+	rSegs := strings.Split(rel, "/")
+	if len(rSegs) < len(sSegs) {
+		return false
+	}
+	off := len(rSegs) - len(sSegs)
+	for i, s := range sSegs {
+		ok, err := filepath.Match(s, rSegs[off+i])
+		if err != nil || !ok {
+			return false
+		}
+	}
+	return true
 }

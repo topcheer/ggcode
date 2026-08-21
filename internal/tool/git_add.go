@@ -73,6 +73,10 @@ func (t GitAdd) Execute(ctx context.Context, input json.RawMessage) (Result, err
 			return Result{IsError: true, Content: fmt.Sprintf("%s add failed: %v", v.Name(), err)}, nil
 		}
 		trimmed := strings.TrimSpace(out)
+		// #835: the sensitive-file advisory must fire on hg/svn too.
+		if secretWarning != "" {
+			trimmed = strings.TrimSpace(trimmed + "\n\n" + secretWarning)
+		}
 		if trimmed == "" {
 			return Result{Content: fmt.Sprintf("Staged %d file(s).", len(args.Files))}, nil
 		}
@@ -122,7 +126,15 @@ func checkSensitiveFiles(files []string) string {
 	for _, f := range files {
 		lf := strings.ToLower(f)
 		for _, pattern := range sensitiveFilePatterns {
-			if strings.HasSuffix(lf, pattern) || strings.Contains(lf, pattern) {
+			// #835: the old 'HasSuffix || Contains' reduced to a bare substring
+			// match — 'app.environment.go' hit '.env' every stage. Anchor
+			// short patterns to path boundaries.
+			hit := strings.HasSuffix(lf, pattern)
+			if !hit && strings.Contains(pattern, ".") {
+				hit = strings.Contains(lf, pattern+"/") || strings.Contains(lf, "/"+pattern) ||
+					strings.HasSuffix(lf, "/"+pattern)
+			}
+			if hit {
 				flagged = append(flagged, f)
 				break
 			}

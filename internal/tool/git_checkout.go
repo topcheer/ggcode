@@ -187,10 +187,19 @@ func validateRefName(ref string) error {
 	if len(ref) > 200 {
 		return fmt.Errorf("start_point too long")
 	}
-	// Block characters that could enable shell injection.
+	if strings.Contains(ref, "..") {
+		return fmt.Errorf("start_point %q must not contain '..'", ref)
+	}
+	if strings.HasPrefix(ref, "@{") || strings.HasSuffix(ref, ".lock") {
+		return fmt.Errorf("start_point %q uses a reserved form", ref)
+	}
+	// Block characters git itself forbids in ref names (check-ref-format).
+	// #837: execution goes through exec.CommandContext (no shell), so '$',
+	// backtick, parens and quotes are legal ref characters; 'release$v2' was
+	// wrongly refused by the old shell-metacharacter blacklist.
 	for _, ch := range ref {
 		switch ch {
-		case ' ', ';', '|', '&', '$', '`', '(', ')', '<', '>', '\n', '\r', '\\', '"', '\'':
+		case ' ', '~', '^', ':', '?', '*', '[', '\n', '\r', '\\':
 			return fmt.Errorf("start_point %q contains invalid character %q", ref, ch)
 		}
 		if ch < 0x20 || ch == 0x7f {
