@@ -156,6 +156,13 @@ func AdaptiveCapFor(vendor, baseURL, model string, userHint int) *adaptiveCap {
 	defer capRegistryMu.Unlock()
 
 	if c, ok := capRegistry[key]; ok {
+		// #784: an explicit user hint must always be honored, including on
+		// already-registered caps: lowering max_tokens below the learned cap
+		// is by definition safe (anything <= lo is verified-safe).
+		if hint := int64(userHint); hint > 0 && hint < c.cur.Load() {
+			c.userHint = hint
+			c.cur.Store(hint)
+		}
 		return c
 	}
 	c := &adaptiveCap{
@@ -170,12 +177,20 @@ func AdaptiveCapFor(vendor, baseURL, model string, userHint int) *adaptiveCap {
 		start := persisted.Cur
 		hint := int64(userHint)
 		if hint > 0 {
-			if c.hi > 0 && hint >= c.hi {
+			switch {
+			case c.hi > 0 && hint >= c.hi:
 				start = c.hi - 1
-			} else if hint > c.lo {
+				if start < c.lo {
+					// #784: lo==hi (converged) -- hi-1 < lo violates the file
+					// invariant cur in [lo,hi] and makes OnTruncated jitter.
+					start = c.lo
+				}
+			case hint > c.lo:
 				start = hint
-			} else {
-				start = c.lo
+			default:
+				// #784: hint <= lo: user explicitly lowered the cap; anything
+				// below the highest verified-safe value is safe.
+				start = hint
 			}
 		}
 		if start < 1 {

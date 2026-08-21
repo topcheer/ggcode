@@ -98,6 +98,10 @@ fi
 cd "$WORK_DIR" 2>/dev/null || true
 
 # 4. Launch new process — exec replaces this script
+# #797: 'trap cleanup EXIT' never fires after a successful exec (bash only
+# runs the fallback on exec FAILURE), so every normal restart leaked a
+# temp script. Delete explicitly before exec.
+rm -f "$SCRIPT" 2>/dev/null || true
 echo "[ggcode restart] starting $BINARY ${ARGS[*]:-}"
 if [ ${#ARGS[@]} -gt 0 ]; then
     exec "$BINARY" "${ARGS[@]}"

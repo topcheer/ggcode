@@ -786,10 +786,23 @@ func (p *AnthropicProvider) buildParams(messages []Message, tools []ToolDefiniti
 		}
 		msgParams = append(msgParams, param)
 	}
+	// #786: systemBlocks are flushed when a user message is encountered; a
+	// message list with no user role (assistant-prefill-first resume) used
+	// to silently drop the entire system prompt. Flush any remainder into
+	// params.System as a last resort so the prompt is never lost.
 	params := anthropic.MessageNewParams{
 		Model:     p.model,
 		MaxTokens: int64(p.effectiveMaxTokens()),
 		Messages:  msgParams,
+	}
+	if len(systemBlocks) > 0 {
+		for _, sb := range systemBlocks {
+			block := anthropic.TextBlockParam{Text: sb.text}
+			if sb.cache {
+				block.CacheControl = anthropic.NewCacheControlEphemeralParam()
+			}
+			params.System = append(params.System, block)
+		}
 	}
 
 	// Apply temperature when set (0 means use provider default).

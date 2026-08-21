@@ -38,21 +38,25 @@ func loadMCPDisabledSet() map[string]bool {
 
 	path, err := mcpDisabledPath()
 	if err != nil {
-		mcpDisabledCache = map[string]bool{}
-		mcpDisabledCacheOK = true
-		return mcpDisabledCache
+		// #781: never cache non-not-exist failures -- a transient error
+		// during AtomicWriteFile's rename window poisoned the cache and a
+		// later SetMCPDisabled wrote it back as the full truth, silently
+		// re-enabling previously disabled servers.
+		return map[string]bool{}
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		mcpDisabledCache = map[string]bool{}
-		mcpDisabledCacheOK = true
-		return mcpDisabledCache
+		if os.IsNotExist(err) {
+			mcpDisabledCache = map[string]bool{}
+			mcpDisabledCacheOK = true
+			return mcpDisabledCache
+		}
+		return map[string]bool{}
 	}
 	var names []string
 	if err := json.Unmarshal(data, &names); err != nil {
-		mcpDisabledCache = map[string]bool{}
-		mcpDisabledCacheOK = true
-		return mcpDisabledCache
+		// #781: corrupt JSON is also not cacheable as truth.
+		return map[string]bool{}
 	}
 	m := make(map[string]bool, len(names))
 	for _, n := range names {

@@ -37,7 +37,11 @@ func (m *Manager) loadEntry(entry config.PluginConfigEntry) {
 		} else if len(entry.Commands) > 0 {
 			m.loadCommandPlugin(entry)
 		} else {
-			if strings.Contains(entry.Path, ".") {
+			// #787: the old Contains(".") heuristic routed dotted
+			// non-.so paths ('./run.sh', '~/tools/my.tool/run') to
+			// plugin.Open, which can only fail. Default to the command
+			// plugin unless the extension really is .so.
+			if filepath.Ext(entry.Path) == ".so" {
 				m.loadGoPlugin(entry)
 			} else {
 				m.loadCommandPlugin(entry)

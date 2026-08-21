@@ -52,6 +52,13 @@ func (s *Session) RebuildEndpointStats() {
 			continue
 		}
 		metricsByEndpoint[key] = append(metricsByEndpoint[key], ev)
+		// #800: apply the same 200-entry cap as AppendMetricForEndpoint --
+		// the rebuild path previously restored unbounded history for long
+		// sessions, violating the documented invariant.
+		if len(metricsByEndpoint[key]) > maxEndpointMetricsPerKey {
+			excess := len(metricsByEndpoint[key]) - maxEndpointMetricsPerKey
+			metricsByEndpoint[key] = metricsByEndpoint[key][excess:]
+		}
 	}
 	s.endpointStatsMu.Lock()
 	s.EndpointUsage = usageByEndpoint

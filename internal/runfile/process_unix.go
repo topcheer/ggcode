@@ -10,5 +10,8 @@ func processExists(pid int) bool {
 		return false
 	}
 	err := syscall.Kill(pid, 0)
-	return err == nil
+	// #799: EPERM means the process EXISTS but belongs to another user
+	// (shared-HOME/sudo layouts); treating it as dead made callers delete
+	// live instances' port files cross-user.
+	return err == nil || err == syscall.EPERM
 }

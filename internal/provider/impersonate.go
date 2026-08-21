@@ -172,8 +172,10 @@ func ResolveImpersonationHeaders() http.Header {
 	h.Set("User-Agent", ua)
 
 	// Apply preset extra headers
-	for k, v := range preset.ExtraHeaders {
-		val := strings.ReplaceAll(v, "{version}", strings.TrimSpace(version))
+	for k, hv := range preset.ExtraHeaders {
+		// #789: reuse the User-Agent fallback (v); the raw version variable
+		// produced 'aider/' for Editor-Version when version was empty.
+		val := strings.ReplaceAll(hv, "{version}", v)
 		h.Set(k, val)
 	}
 

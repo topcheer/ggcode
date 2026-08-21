@@ -160,9 +160,16 @@ func UserFacingErrorLang(err error, lang string) string {
 	}
 
 	// ---- Context window / prompt too long ----
+	// #783: a bare "max_tokens" mention is usually a parameter 400
+	// ('invalid max_tokens: must be greater than 0'); map it to overflow only
+	// when an overflow cue co-occurs, else /compact advice masks the config
+	// error.
+	maxTokensMention := strings.Contains(raw, "max_tokens")
+	overflowCue := strings.Contains(raw, "exceed") || strings.Contains(raw, "maximum") ||
+		strings.Contains(raw, "context") || strings.Contains(raw, "too long")
 	if strings.Contains(raw, "context_window") || strings.Contains(raw, "context length") ||
-		strings.Contains(raw, "max_tokens") || strings.Contains(raw, "prompt too long") ||
-		strings.Contains(raw, "token limit") {
+		strings.Contains(raw, "prompt too long") || strings.Contains(raw, "token limit") ||
+		(maxTokensMention && overflowCue) {
 		if zh {
 			return "对话内容过长，已超出模型上下文限制。请尝试 /compact 或缩短对话"
 		}

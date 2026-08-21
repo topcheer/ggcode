@@ -221,7 +221,11 @@ func (e *Encoder) buildArgs(encoderName string, isHW bool) []string {
 // selectEncoder picks the best available encoder.
 func (e *Encoder) selectEncoder() (name string, isHW bool) {
 	if e.hwEncoder != "" {
-		return e.hwEncoder, true
+		// #790: normalize through BestEncoder -- the documented config values
+		// 'auto'/'software' were passed verbatim to ffmpeg ('-c:v auto'), which
+		// fails with Unknown encoder AFTER cmd.Start() already set running=true.
+		name := BestEncoder(e.hwEncoder)
+		return name, EncoderIsHardware(name)
 	}
 	// Auto-detect hardware encoder
 	if hw := detectHWEncoder(); hw != "" {

@@ -451,7 +451,9 @@ func IsEmoji(r rune) bool {
 		return true
 	case r >= 0xFE00 && r <= 0xFE0F: // Variation Selectors
 		return true
-	case r >= 0x200D: // ZWJ (used in compound emoji)
+	case r == 0x200D: // ZWJ (used in compound emoji) -- exact codepoint;
+		// #794: r >= 0x200D with no upper bound classified every CJK, kana,
+		// hangul, fullwidth and box-drawing rune as emoji.
 		return true
 	}
 	return false

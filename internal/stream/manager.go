@@ -248,6 +248,12 @@ func (m *Manager) frameLoop() {
 					if err := m.encoder.Start(); err != nil {
 						m.encoderMu.Unlock()
 						debug.Log("stream", "encoder start failed: %v", err)
+						// #792: roll back the running state -- frameLoop's early
+						// return left running=true forever, so IsRunning() lied,
+						// a second Start() hit 'already running', and the UI kept
+						// showing a dead stream. Route through Stop() for full
+						// cleanup (targets, broadcaster, stopCh).
+						m.Stop()
 						return
 					}
 					m.encoderMu.Unlock()

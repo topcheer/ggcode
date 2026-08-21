@@ -778,6 +778,12 @@ func (m *MCPManager) Install(ctx context.Context, server config.MCPServerConfig)
 			}
 			_ = previous.Close()
 		}
+		// #785: mirror Reload's cleanup (#314): a stale pendingOAuth handler
+		// for the OLD config survived replacement and kept reporting
+		// OAuthRequired=true -- a dead OAuth prompt that can never complete.
+		m.mu.Lock()
+		delete(m.pendingOAuth, server.Name)
+		m.mu.Unlock()
 		m.connectOne(ctx, plugin)
 		return nil
 	}

@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -458,10 +459,18 @@ func (p *GeminiProvider) convertMessages(messages []Message) ([]*genai.Content, 
 				parts = append(parts, &genai.Part{Text: b.Text})
 			case "image":
 				// Gemini uses InlineData for inline images
+				// #780: ImageData is a base64 STRING (provider contract, same as
+				// openai.go/anthropic.go); Blob.Data is raw bytes and encoding/json
+				// re-encodes []byte on marshal, so []byte(b.ImageData)
+				// double-encoded every vision payload.
+				imgBytes, decErr := base64.StdEncoding.DecodeString(b.ImageData)
+				if decErr != nil {
+					imgBytes = []byte(b.ImageData)
+				}
 				parts = append(parts, &genai.Part{
 					InlineData: &genai.Blob{
 						MIMEType: b.ImageMIME,
-						Data:     []byte(b.ImageData),
+						Data:     imgBytes,
 					},
 				})
 			case "tool_use":

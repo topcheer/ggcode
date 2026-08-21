@@ -41,7 +41,6 @@ var knownModelContextWindows = []struct {
 	{"o1-mini", 128_000},
 	{"o1-preview", 128_000},
 	{"o1", 200_000},
-	{"gpt-4", 8_192},
 	{"gpt-3.5-turbo", 16_385},
 
 	// ── Gemini (Google) ─────────────────────────────────────────────────
@@ -105,6 +104,14 @@ func LookupKnownModelContextWindow(model string) int {
 		return 0
 	}
 	lower := strings.ToLower(model)
+	// #782: bare "gpt-4" is EXACT-match only. As a prefix entry it hijacked
+	// every unlisted gpt-4.x (128K-1M real windows) down to 8192, and
+	// context_probe short-circuits on known>0 so the probe never corrected
+	// it -- chronic over-compaction. Unlisted models now fall through to
+	// the probe path, which measures the real window.
+	if lower == "gpt-4" {
+		return 8_192
+	}
 	for _, entry := range knownModelContextWindows {
 		if strings.HasPrefix(lower, entry.pattern) {
 			return entry.window

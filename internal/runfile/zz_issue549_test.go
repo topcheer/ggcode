@@ -54,16 +54,20 @@ func writeTestPortFile(t *testing.T, dir string, pid int, age time.Duration) str
 
 func TestIssue549BugF_PIDReuseStaleFileExpires(t *testing.T) {
 	dir := t.TempDir()
-	// PID is the *test process itself* — alive by signal-0 semantics, but
-	// unrelated to the (recycled) session that wrote the file. The file's
-	// mtime is 25h old, so it must be treated as stale and removed.
+	// PID is the *test process itself* — alive by signal-0 semantics. The
+	// file's mtime is 25h old. #791 flipped the original 549-F verdict:
+	// port files are written only at process start (no heartbeat), so a
+	// stale mtime with a live PID is the NORMAL state of any daemon past
+	// 24h, and deleting it wiped live daemons from discovery. The file must
+	// now be KEPT (deletion belongs exclusively to the dead-pid branch);
+	// PID-recycling false-positives are the accepted, far rarer cost.
 	p := writeTestPortFile(t, dir, os.Getpid(), 25*time.Hour)
 
-	if _, err := readAtPath(p); err == nil {
-		t.Fatal("expected stale error for old port file with live-but-recycled PID")
+	if _, err := readAtPath(p); err != nil {
+		t.Fatalf("long-running live daemon's port file must stay readable: %v", err)
 	}
-	if _, err := os.Stat(p); !os.IsNotExist(err) {
-		t.Fatal("stale port file should have been removed")
+	if _, err := os.Stat(p); err != nil {
+		t.Fatalf("stale-mtime but live-pid port file must NOT be removed: %v", err)
 	}
 }
 

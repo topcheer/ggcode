@@ -376,7 +376,10 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 	// anthropic/gemini and this file's own streaming path all report
 	// finish_reason=length via OnTruncated; without it the cap never lowers
 	// and requests stay truncated.
-	if string(choice.FinishReason) == "length" && p.cap != nil {
+	// #788: relay backends (vLLM, gateways) report finish_reason
+	// max_tokens/max_output_tokens on non-streaming completions too; the
+	// streaming path already normalizes via isLengthFinishReason.
+	if isLengthFinishReason(string(choice.FinishReason)) && p.cap != nil {
 		p.cap.OnTruncated()
 	}
 	content := p.convertResponseContent(choice.Message)

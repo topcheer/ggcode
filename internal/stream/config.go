@@ -93,6 +93,20 @@ func (c *StreamConfig) Validate() error {
 		}
 		names[t.Name] = true
 	}
+	// #796: 'enabled' is easy to omit in hand-written YAML and Start()
+	// silently no-ops with zero targets -- fail loudly at validation time.
+	if len(c.Targets) > 0 {
+		anyEnabled := false
+		for _, t := range c.Targets {
+			if t.Enabled {
+				anyEnabled = true
+				break
+			}
+		}
+		if !anyEnabled {
+			return fmt.Errorf("stream: %d target(s) configured but none enabled: set 'enabled: true' on at least one target", len(c.Targets))
+		}
+	}
 	return nil
 }
 

@@ -21,14 +21,15 @@ set WORK_DIR={{.WorkDirWinEscaped}}
 
 echo [ggcode restart] waiting for process %PARENT_PID% to exit...
 
-REM 1. Wait for parent to exit (poll with tasklist, 30s timeout)
+REM 1. Wait for parent to exit (poll with tasklist; 300 iterations x
+REM ~0.15-0.45s per round = ~45-135s actual, not 30s)
 set /a DEADLINE=0
 :waitloop
 tasklist /FI "PID eq %PARENT_PID%" /NH 2>nul | findstr /I "%PARENT_PID%" >nul
 if errorlevel 1 goto exited
 set /a DEADLINE+=1
 if %DEADLINE% GEQ 300 (
-    echo [ggcode restart] ERROR: process %PARENT_PID% did not exit within 30s
+    echo [ggcode restart] ERROR: process %PARENT_PID% did not exit within ~45-135s
     del /f "%~f0" 2>nul
     exit /b 1
 )
@@ -44,8 +45,11 @@ ping -n 1 127.0.0.1 >nul
 REM 3. cd to original working directory
 cd /d "%WORK_DIR%" 2>nul
 
-REM 4. Self-delete (schedule removal after exit)
-start "" /b cmd /c "del /f /q "%~f0" 2>nul"
+REM 4. Self-delete: the classic 'start /b del' races the parent cmd's open
+REM file handle and loses 100% of the time (#798). The (goto) 2>nul idiom
+REM executes in-place without holding the script handle, letting the del
+REM succeed before the new process launches.
+(goto) 2>nul & del /f /q "%~f0"
 
 REM 5. Launch new process
 echo [ggcode restart] starting %BINARY% {{.ArgsWin}}

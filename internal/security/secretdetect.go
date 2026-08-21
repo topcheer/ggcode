@@ -68,10 +68,12 @@ var secretPatterns = []SecretPattern{
 		Pattern:  regexp.MustCompile(`gh[pousr]_[0-9A-Za-z]{36,255}`),
 	},
 	{
-		ID:       "github_classic_token",
-		Name:     "GitHub Classic Token",
+		ID:       "github_fine_grained_token",
+		Name:     "GitHub Fine-Grained Token",
 		Severity: "high",
-		Pattern:  regexp.MustCompile(`github_pat_[0-9A-Za-z_]{82}`),
+		// #793: github_pat_ is the FINE-GRAINED form; classic tokens are
+		// ghp_/gho_ and are covered by the gh[pousr]_ pattern above.
+		Pattern: regexp.MustCompile(`github_pat_[0-9A-Za-z_]{82}`),
 	},
 	{
 		ID:       "gitlab_token",
@@ -97,7 +99,11 @@ var secretPatterns = []SecretPattern{
 		ID:       "pypi_token",
 		Name:     "PyPI Upload Token",
 		Severity: "high",
-		Pattern:  regexp.MustCompile(`pypi-AgEIcHlHaVZpWlBbWlFbWlFbWlFb[A-Za-z0-9\-_]{60}`),
+		// #801: real tokens start 'pypi-AgEIcHlwaW5p' (base64 of the
+		// version-2 header + 'pypi'); the old hardcoded segment diverged at
+		// char 10 (a middle slice of one sample token) and missed ~100% of
+		// real keys. Length is variable (~70-100+).
+		Pattern: regexp.MustCompile("pypi-AgEIcHlwaW5p[A-Za-z0-9\\-_]{50,}"),
 	},
 	{
 		ID:       "docker_token",
@@ -148,7 +154,9 @@ var secretPatterns = []SecretPattern{
 		ID:       "openai_api_key",
 		Name:     "OpenAI API Key",
 		Severity: "high",
-		// Covers classic sk-... and modern sk-proj-.../sk-svcacct-... formats
+		// Covers classic sk-... and modern sk-proj-.../sk-svcacct-... formats.
+		// #793: the char class also absorbs sk-ant- (Anthropic) keys; RE2
+		// has no lookahead, so the exclusion is applied in code (scan loop).
 		Pattern: regexp.MustCompile(`sk-(?:proj-|svcacct-)?[A-Za-z0-9\-_]{20,}`),
 	},
 	{
@@ -197,6 +205,19 @@ func ScanForSecrets(filePath, content string) []Finding {
 
 	for _, sp := range secretPatterns {
 		matches := sp.Pattern.FindAllStringIndex(content, -1)
+		// #793: sk-ant- (Anthropic) keys also match the openai pattern's
+		// char class; RE2 lacks lookahead so drop them here.
+		// anthropic_api_key covers them -- no duplicate/misattribution.
+		if sp.ID == "openai_api_key" {
+			filtered := matches[:0]
+			for _, loc := range matches {
+				if strings.HasPrefix(content[loc[0]:], "sk-ant-") {
+					continue
+				}
+				filtered = append(filtered, loc)
+			}
+			matches = filtered
+		}
 		for _, loc := range matches {
 			matchText := content[loc[0]:loc[1]]
 			// Extract the actual secret portion if the pattern has capture groups

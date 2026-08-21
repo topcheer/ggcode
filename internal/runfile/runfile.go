@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -164,12 +165,14 @@ func readAtPath(p string) (*PortFile, error) {
 		return nil, fmt.Errorf("process %d is not running (stale port file, removed)", pf.PID)
 	}
 	// Mtime fallback for PID reuse: signal-0 liveness cannot distinguish a
-	// recycled PID from the original owner. Anything older than staleAfter
-	// is removed regardless of the signal-0 result.
+	// recycled PID from the original owner. #791: the old rule DELETED any
+	// file older than 24h, but port files are written only at process start
+	// (no heartbeat), so a healthy daemon past 24h was wiped from discovery
+	// while still running. Now a stale mtime with a LIVE pid only logs a
+	// warning -- deletion happens exclusively in the dead-pid branch above,
+	// which is the only case where recycling is certain.
 	if info, err := os.Stat(p); err == nil && time.Since(info.ModTime()) > staleAfter {
-		_ = os.Remove(p)
-		debug.Log("runfile", "readAtPath: removed port file older than %v for pid %d (possible PID reuse): %s", staleAfter, pf.PID, p)
-		return nil, fmt.Errorf("port file for pid %d is older than %v (stale, removed)", pf.PID, staleAfter)
+		debug.Log("runfile", "readAtPath: port file for pid %d is older than %v but pid is alive (no heartbeat; kept): %s", pf.PID, staleAfter, p)
 	}
 	return &pf, nil
 }
@@ -189,10 +192,19 @@ func normalizeWorkspace(workspace string) string {
 	if trimmed == "" {
 		return ""
 	}
-	if resolved, err := filepath.EvalSymlinks(trimmed); err == nil {
-		return filepath.Clean(resolved)
+	resolved := trimmed
+	if r, err := filepath.EvalSymlinks(trimmed); err == nil {
+		resolved = r
 	}
-	return filepath.Clean(trimmed)
+	resolved = filepath.Clean(resolved)
+	// #795: case-insensitive filesystems (darwin/windows default volumes)
+	// treat /tmp/Proj and /tmp/proj as the same workspace, but the string
+	// comparison missed the live instance. Fold case there; Linux
+	// case-sensitive volumes keep exact spelling.
+	if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
+		return strings.ToLower(resolved)
+	}
+	return resolved
 }
 
 // isAlive checks whether a process with the given PID exists.
