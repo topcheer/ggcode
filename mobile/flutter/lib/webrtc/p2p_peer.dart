@@ -13,21 +13,36 @@ class ICEConfig {
   // NOTE: Chinese ISPs commonly block UDP port 3478 (standard STUN/TURN port).
   // The self-hosted TURN server on hostyuntk3 uses port 8443 to avoid this.
   // Public STUN servers on 3478 are omitted (unreachable from CN mobile networks).
-  static const defaultConfig = ICEConfig(
-    iceServers: [
-      // Self-hosted TURN (also serves STUN on same port).
-      // Port 8443 avoids ISP blocking of 3478.
+  //
+  // #930: TURN credentials are injected at build time via
+  // --dart-define=GGCODE_TURN_USERNAME=... --dart-define=GGCODE_TURN_CREDENTIAL=...
+  // (aligned with the Go host's env-var approach from #924 - no hardcoded
+  // default: the previous embedded pair leaks from every APK/IPA via
+  // strings on the Dart AOT snapshot). Without credentials only the
+  // STUN Binding URL is configured; deployments needing TURN relay must
+  // pass both defines.
+  static const String _turnUsername = String.fromEnvironment('GGCODE_TURN_USERNAME');
+  static const String _turnCredential = String.fromEnvironment('GGCODE_TURN_CREDENTIAL');
+
+  static ICEConfig get defaultConfig {
+    final servers = <Map<String, dynamic>>[
       {
+        // STUN needs no credentials; port 8443 avoids ISP blocking of 3478.
+        'urls': ['stun:turn.allpayone.net:8443'],
+      },
+    ];
+    if (_turnUsername.isNotEmpty && _turnCredential.isNotEmpty) {
+      servers.add({
         'urls': [
           'turn:turn.allpayone.net:8443?transport=udp',
           'turn:turn.allpayone.net:8443?transport=tcp',
-          'stun:turn.allpayone.net:8443',
         ],
-        'username': 'admin',
-        'credential': 'allwap123',
-      },
-    ],
-  );
+        'username': _turnUsername,
+        'credential': _turnCredential,
+      });
+    }
+    return ICEConfig(iceServers: servers);
+  }
 
   Map<String, dynamic> toMap() => {'iceServers': iceServers};
 }
