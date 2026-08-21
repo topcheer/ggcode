@@ -51,7 +51,6 @@ jobs:
             "fmt"
             "net/http"
             "os"
-            "time"
 
             "github.com/topcheer/ggcode/internal/util"
           )
@@ -76,9 +75,10 @@ jobs:
 
           import (
             "fmt"
+            "io"
             "net/http"
             "os"
-            "io"
+            "time"
 
             "github.com/topcheer/ggcode/internal/util"
           )
