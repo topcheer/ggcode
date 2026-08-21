@@ -69,8 +69,16 @@ func NewDangerousDetector() *DangerousDetector {
 	d := &DangerousDetector{}
 	d.patterns = []dangerPattern{
 		// Critical: destructive commands (Unix)
-		{DangerCritical, regexp.MustCompile(`(?i)\brm\s+(?:-[a-zA-Z]*f[a-zA-Z]*\s+)?/\s*$`), "rm -rf / would delete the entire filesystem"},
-		{DangerCritical, regexp.MustCompile(`(?i)\brm\s+(?:-[a-zA-Z]*f[a-zA-Z]*\s+)?/\*`), "rm -rf /* would delete the entire filesystem"},
+		// #778: the flag group must cover long-option forms too -- previously
+		// only short flags (-rf) matched, so GNU long forms (--recursive
+		// --force, and above all --no-preserve-root, the ONLY flag that lets
+		// rm actually delete /) scored DangerNone and ran with zero
+		// confirmation in bypass/autopilot (config_policy only blocks >=Critical).
+		{DangerCritical, regexp.MustCompile(`(?i)\brm\s+(?:(?:-{1,2}[a-zA-Z][a-zA-Z-]*|-[a-zA-Z]+)\s+)*(?:-[a-zA-Z]*f[a-zA-Z]*\s+)?/\s*$`), "rm -rf / would delete the entire filesystem"},
+		{DangerCritical, regexp.MustCompile(`(?i)\brm\s+(?:(?:-{1,2}[a-zA-Z][a-zA-Z-]*|-[a-zA-Z]+)\s+)*(?:-[a-zA-Z]*f[a-zA-Z]*\s+)?/\*`), "rm -rf /* would delete the entire filesystem"},
+		// --no-preserve-root alone turns `rm -rf /` from a guarded refusal
+		// into a real filesystem wipe; Critical wherever it appears.
+		{DangerCritical, regexp.MustCompile(`(?i)\brm\b[^|;&\n]*--no-preserve-root`), "rm --no-preserve-root can delete the root filesystem"},
 		{DangerCritical, regexp.MustCompile(`(?i)\bmkfs\b`), "mkfs would format a disk"},
 		{DangerCritical, regexp.MustCompile(`(?i)\bdd\s+.*\bif=/dev/`), "dd with device input could destroy data"},
 		{DangerCritical, regexp.MustCompile(`(?i)\bshred\b`), "shred securely deletes files"},

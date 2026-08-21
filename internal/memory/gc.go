@@ -34,12 +34,20 @@ func (am *AutoMemory) GarbageCollect() GCStats {
 	}
 
 	now := time.Now()
+	// #779: curation's count-cap is a PROMPT-layer throttle, not a deletion
+	// verdict. Re-run the cap split so count-capped default entries are kept
+	// on disk (they re-enter the active set as soon as older entries expire);
+	// only expired transient and dedup losers are physically removed.
 	active, _, _, _ := curateEntries(metas, now)
+	promptActive, cappedEvicted := capByCountSplit(active, maxActiveMemories)
 
-	// Build a set of keys that survived curation.
-	activeKeys := make(map[string]bool, len(active))
-	for _, m := range active {
+	// Build the disk whitelist: survivors of expiry+dedup AND cap evictions.
+	activeKeys := make(map[string]bool, len(promptActive)+len(cappedEvicted))
+	for _, m := range promptActive {
 		activeKeys[m.Key] = true
+	}
+	for _, m := range cappedEvicted {
+		activeKeys[m.Key] = true // capped ≠ dead: keep the file
 	}
 
 	stats := GCStats{Total: len(metas)}

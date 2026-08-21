@@ -98,7 +98,12 @@ func commandSignature(cmd string) string {
 	if cmd == "" {
 		return ""
 	}
-	if strings.ContainsAny(cmd, ";|&") {
+	// #777: newlines, $( ) and backticks execute/embed additional commands
+	// beyond the ;|& chain forms. Without them the first line's tokens became
+	// the signature, so an approved "make build" silently auto-approved a
+	// two-line payload; `git push <anything>` also fell into the approved
+	// "git push origin main" key. Never memorize shell metacharacter commands.
+	if strings.ContainsAny(cmd, ";|&\n$`") || strings.Contains(cmd, "$(") {
 		return cmd + ":no-auto-approve:chained"
 	}
 	tokens := strings.Fields(cmd)

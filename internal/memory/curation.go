@@ -214,7 +214,11 @@ func curateEntries(metas []MemoryMeta, now time.Time) (active []MemoryMeta, expi
 	// Phase 4: total-count cap. If the number of active memories still exceeds
 	// maxActiveMemories after expiry + dedup, evict the oldest default-category
 	// entries (lowest priority). Persistent and evolving memories are always kept.
-	active, cappedCount = capByCount(active, maxActiveMemories)
+	// #779: count-capped entries are NOT dead -- the cap is a prompt-layer
+	// throttle and the files must stay on disk; GC deletes only expired
+	// transient and dedup losers, never capped evictions.
+	active, capped := capByCountSplit(active, maxActiveMemories)
+	cappedCount = len(capped)
 
 	return active, expiredCount, dedupedCount, cappedCount
 }
@@ -224,8 +228,15 @@ func curateEntries(metas []MemoryMeta, now time.Time) (active []MemoryMeta, expi
 // limit is reached. If all defaults are exhausted and the count still exceeds
 // max, the remaining entries are kept (persistent/evolving are never dropped).
 func capByCount(active []MemoryMeta, max int) ([]MemoryMeta, int) {
+	kept, evicted := capByCountSplit(active, max)
+	return kept, len(evicted)
+}
+
+// capByCountSplit partitions active entries into (kept, evicted-by-cap).
+// #779: GC needs the evicted KEYS to know which on-disk files must survive.
+func capByCountSplit(active []MemoryMeta, max int) (kept, evicted []MemoryMeta) {
 	if len(active) <= max {
-		return active, 0
+		return active, nil
 	}
 
 	// Separate default-category entries (evictable) from protected entries.
@@ -241,25 +252,27 @@ func capByCount(active []MemoryMeta, max int) ([]MemoryMeta, int) {
 		overflow = len(defaults)
 	}
 	if overflow <= 0 {
-		return active, 0
+		return active, nil
 	}
 
 	// Sort defaults oldest-first; the oldest `overflow` entries are evicted.
 	sort.Slice(defaults, func(i, j int) bool {
 		return defaults[i].CreatedAt.Before(defaults[j].CreatedAt)
 	})
-	evictedKeys := make(map[string]bool, overflow)
+	evict := make(map[string]bool, overflow)
 	for i := 0; i < overflow; i++ {
-		evictedKeys[defaults[i].Key] = true
+		evict[defaults[i].Key] = true
 	}
 
-	var result []MemoryMeta
+	var keptList, evictedList []MemoryMeta
 	for _, m := range active {
-		if !evictedKeys[m.Key] {
-			result = append(result, m)
+		if evict[m.Key] {
+			evictedList = append(evictedList, m)
+		} else {
+			keptList = append(keptList, m)
 		}
 	}
-	return result, overflow
+	return keptList, evictedList
 }
 
 // buildMemoryMeta creates metadata for a memory file from its key and modtime.
