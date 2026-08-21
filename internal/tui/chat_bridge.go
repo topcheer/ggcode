@@ -249,6 +249,12 @@ func (m *Model) chatFinishTool(ts ToolStatusMsg) {
 		"write_command_input", "list_commands":
 		return
 	}
+	// LSP tools → skip. #885: chatStartTool skips lsp_* (no card created),
+	// but finish had no matching skip — the not-tracked path created a
+	// finished card that never existed as a running one.
+	if strings.HasPrefix(ts.ToolName, "lsp_") {
+		return
+	}
 	// exit_plan_mode → render plan as assistant message (not a tool card)
 	if ts.ToolName == "exit_plan_mode" {
 		var args struct {

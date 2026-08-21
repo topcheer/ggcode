@@ -181,14 +181,18 @@ func (t *Tape) Lookup(toolName string, input json.RawMessage, strictFIFO bool) (
 	inputHash := HashInput(input)
 	key := toolName + "\x00" + inputHash
 	slots := t.entries[key]
+	// #877: non-strict mode promises "last recorded result wins" but the
+	// loop returned on the FIRST slot — first-wins, never advancing, serving
+	// stale results when a key was recorded 2+ times (e.g. two identical
+	// read_file calls spanning a file change). Take the last slot directly.
+	if !strictFIFO && len(slots) > 0 {
+		s := slots[len(slots)-1]
+		s.consumers++
+		return s.Entry, true
+	}
 	for _, s := range slots {
-		if strictFIFO {
-			if !s.consumed {
-				s.consumed = true
-				s.consumers++
-				return s.Entry, true
-			}
-		} else {
+		if !s.consumed {
+			s.consumed = true
 			s.consumers++
 			return s.Entry, true
 		}

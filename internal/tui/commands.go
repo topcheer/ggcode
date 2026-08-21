@@ -492,7 +492,10 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 		case "/restart":
 			return m.handleRestartCommand(text)
 		case "/stream":
-			args := strings.TrimPrefix(text, "/stream")
+			// #885: dispatch lowercased the text to match, but TrimPrefix
+			// used the original — "/Stream on" kept "/Stream on" as args and
+			// printed help instead of acting.
+			args := strings.TrimPrefix(strings.ToLower(text), "/stream")
 			args = strings.TrimSpace(args)
 			resp, _ := m.handleStreamSlash(args)
 			m.chatWriteSystem(nextSystemID(), resp)

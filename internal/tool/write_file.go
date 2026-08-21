@@ -119,8 +119,10 @@ func (t WriteFile) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	}
 
 	// Check if file already exists (for overwrite awareness)
+	fileExists := false
 	var oldSize int64
 	if info, err := os.Stat(args.Path); err == nil {
+		fileExists = true
 		oldSize = info.Size()
 	}
 
@@ -128,7 +130,11 @@ func (t WriteFile) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	// last read/write, refuse the overwrite to prevent silent data loss.
 	// This is critical in multi-agent scenarios where concurrent edits can
 	// cause lost updates.
-	if oldSize > 0 {
+	// #881: run the guard whenever the file EXISTS, not only when size>0 —
+	// external truncation to 0 bytes is the most extreme staleness, yet it
+	// was exactly the case that bypassed the guard (CheckStale does not
+	// depend on size).
+	if fileExists {
 		if stale, since := defaultFileTracker.CheckStale(args.Path); stale {
 			return Result{IsError: true, Content: fmt.Sprintf(
 				"file was modified externally since last read (changed after %s). "+

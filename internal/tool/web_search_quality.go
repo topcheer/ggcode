@@ -97,14 +97,14 @@ func assessSearchResults(query string, results []searchResult) []searchResult {
 		})
 	}
 
-	// Phase 4: Deduplicate by domain (keep highest-scoring per domain)
-	scored = deduplicateByDomain(scored)
-
-	// Phase 5: Sort by score descending (stable to preserve original
-	// DDG rank order for equal scores)
+	// Phase 4/5 order swap (#884): dedup ran BEFORE the score sort, so it
+	// kept the first N per domain by DDG rank — a domain's highest-SCORING
+	// result could be dropped before scores were ever consulted. Sort first,
+	// then dedup (stable sort preserves rank order for ties).
 	sort.SliceStable(scored, func(i, j int) bool {
 		return scored[i].score > scored[j].score
 	})
+	scored = deduplicateByDomain(scored)
 
 	// Convert back to searchResult with type tag in title
 	out := make([]searchResult, len(scored))
@@ -289,8 +289,9 @@ func isSpamDomain(domain string) bool {
 }
 
 // deduplicateByDomain caps the number of results from the same domain.
-// Keeps the highest-scoring results per domain (by index order, since
-// input is in DDG rank order before scoring).
+// Keeps the highest-scoring results per domain. #884: input must already
+// be score-sorted (the caller sorts before deduping) so "first N per domain"
+// equals "highest-scoring N per domain".
 func deduplicateByDomain(scored []scoredResult) []scoredResult {
 	if len(scored) <= maxResultsPerDomain {
 		return scored

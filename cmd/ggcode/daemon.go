@@ -244,7 +244,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	buildCurrentSystemPrompt := func() (string, []string) {
 		remoteAgentsInfo := ""
 		if a2aReg != nil {
-			if instances := a2aReg.CachedInstances(); len(instances) > 1 {
+			if instances := a2aReg.CachedInstances(); len(instances) > 0 { // #882: single-peer case included (>1 skipped it)
 				remoteAgentsInfo = a2a.FormatRemoteAgents(instances, nil)
 			}
 		}
@@ -473,7 +473,13 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 			sessionLock = lock
 		} else if lock != nil && !lock.Acquired() {
 			pid := lock.HolderPID()
-			return fmt.Errorf("session %s is locked by another instance (PID %d)", ses.ID[:8], pid)
+			// #882: guard short session IDs — root.go guards the same slice;
+			// a corrupted short ID must not panic the daemon here.
+			short := ses.ID
+			if len(short) > 8 {
+				short = short[:8]
+			}
+			return fmt.Errorf("session %s is locked by another instance (PID %d)", short, pid)
 		}
 	}
 	// Ensure session lock is released on ANY exit path (e.g., IM adapter
@@ -1577,6 +1583,15 @@ loop:
 		}
 		if bypass {
 			args = append(args, "--bypass")
+		}
+		// #873: propagate --tunnel/--full through the restart argv — a tunnel
+		// daemon otherwise loses its mobile tunnel silently (phone connections
+		// drop, no error anywhere) and --full sessions fall back to 24h window.
+		if startTunnel {
+			args = append(args, "--tunnel")
+		}
+		if fullLoad {
+			args = append(args, "--full")
 		}
 
 		// If /restart debug was requested, inject GGCODE_DEBUG=1

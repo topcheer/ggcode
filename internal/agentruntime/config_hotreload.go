@@ -13,7 +13,7 @@ import (
 	"github.com/topcheer/ggcode/internal/safego"
 )
 
-// ConfigHotReload watches ggcode.yaml (+ vendors.yaml / im.yaml) for content
+// ConfigHotReload watches ggcode.yaml (+ vendors.yaml) for content
 // changes and refreshes the in-memory Config so edits made in one ggcode
 // instance (or by hand) propagate to every instance on the machine.
 //
@@ -70,11 +70,14 @@ func NewConfigHotReload(configPath string, access *configAccess) *ConfigHotReloa
 }
 
 // watchedFiles returns the files whose edits this watcher reacts to.
+// #876: im.yaml is deliberately NOT watched — applyFreshConfig cannot apply
+// IM fields (the IM manager holds the startup snapshot and a live reconnect
+// is out of scope for the safe field-level refresh). Watching it anyway made
+// every edit log "config refreshed" while nothing changed for IM.
 func (w *ConfigHotReload) watchedFiles() []string {
 	return []string{
 		w.configPath,
 		filepath.Join(w.externalDir, "vendors.yaml"),
-		filepath.Join(w.externalDir, "im.yaml"),
 	}
 }
 

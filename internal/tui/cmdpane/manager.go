@@ -243,7 +243,15 @@ func (m *Manager) paneExists(ctx context.Context, paneID string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return strings.Contains(out, paneID), nil
+	// #879: tmux pane IDs are %N — substring match misdetected %5 as alive
+	// whenever %50..%59 exist, silently discarding output routed to the dead
+	// pane. Compare exactly, line by line.
+	for _, line := range strings.Split(out, "\n") {
+		if strings.TrimSpace(line) == paneID {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // killPane kills the current command pane (if it's not self).

@@ -34,7 +34,7 @@ type WebFetch struct {
 
 func (t WebFetch) Name() string { return "web_fetch" }
 func (t WebFetch) Description() string {
-	return "Fetch a URL and return its text content. Strips HTML tags, truncates to 50000 chars. Does not summarize — use the optional prompt to instruct the LLM. For interactive/login pages, use browser automation."
+	return "Fetch a URL and return its text content. Strips HTML tags, truncates to 20000 chars (context-efficiency cap; #874: description previously promised 50000). Does not summarize — use the optional prompt to instruct the LLM. For interactive/login pages, use browser automation."
 }
 
 // ToolMeta provides Gen 3 metadata for cost-aware and rate-aware selection.
@@ -287,10 +287,16 @@ func getPrivateNetworks() ([]*net.IPNet, error) {
 		privateNetworks, privateNetworksErr = parsePrivateNetworks([]string{
 			"127.0.0.0/8",
 			"::1/128",
+			// #874: 0.0.0.0/8 — connect() to 0.0.0.0 is loopback-equivalent on
+			// major OSes (classic probe-localhost bypass).
+			"0.0.0.0/8",
 			"10.0.0.0/8",
 			"172.16.0.0/12",
 			"192.168.0.0/16",
 			"169.254.0.0/16",
+			// #874: fc00::/7 — IPv6 ULA (fd00::/8 internal addresses) passed
+			// the guard and reached internal services.
+			"fc00::/7",
 			"fe80::/10",
 			"::ffff:127.0.0.0/104",
 		})

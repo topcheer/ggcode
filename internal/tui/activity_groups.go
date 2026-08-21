@@ -188,6 +188,10 @@ func (m *Model) applyTodoWrite(ts ToolStatusMsg) string {
 	if len(previous) == 0 && len(current) > 0 {
 		// Task mode just started — ensure sidebar is visible.
 		m.sidebarVisible = true
+	} else if len(current) == 0 && len(previous) > 0 {
+		// #885: all todos cleared — hide the sidebar (previously unreachable
+		// because parseTodoSnapshot rejected the empty snapshot).
+		m.sidebarVisible = false
 	} else if len(current) > 0 {
 		allDone := true
 		for _, td := range current {
@@ -230,9 +234,12 @@ func parseTodoSnapshot(rawArgs string) ([]todoStateItem, bool) {
 	var args struct {
 		Todos []todoStateItem `json:"todos"`
 	}
-	if err := json.Unmarshal([]byte(rawArgs), &args); err != nil || len(args.Todos) == 0 {
+	if err := json.Unmarshal([]byte(rawArgs), &args); err != nil {
 		return nil, false
 	}
+	// #885: an explicitly EMPTY todos array is a valid "clear all" snapshot
+	// — returning false here short-circuited applyTodoWrite before the
+	// sidebar auto-hide, so clearing todos left an empty sidebar visible.
 	return args.Todos, true
 }
 

@@ -130,8 +130,16 @@ type fileChange struct {
 func accumulateRunChanges(cps []checkpoint.Checkpoint, runID string, runFiles map[string]bool) map[string]*fileChange {
 	// Files that any checkpoint (any run) saw with non-empty content before
 	// an edit: proof the file existed before it was possibly emptied.
+	// #883: exclude the CURRENT run's checkpoints — a file created by
+	// write_file then edited by edit_file in the same run has non-empty
+	// OldContent at cp2, which wrongly counted as pre-existing evidence and
+	// reported the file as Modified instead of Added. The main loop applies
+	// the same RunID filter (see below).
 	existedWithContent := make(map[string]bool)
 	for _, cp := range cps {
+		if runID != "" && cp.RunID == runID {
+			continue
+		}
 		if cp.OldContent != "" {
 			existedWithContent[cp.FilePath] = true
 		}

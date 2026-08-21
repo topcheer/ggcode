@@ -471,7 +471,25 @@ func (a *configAccess) setAPIKeyByPathWithProbe(path, value string) error {
 	if len(parts) == 1 {
 		// vendor-level key
 		vendor := parts[0]
-		testResolved, err := a.cfg.ResolveEndpointSelection(vendor, a.cfg.Endpoint, a.cfg.Model)
+		// #875: the session's endpoint name belongs to the session's VENDOR —
+		// probing vendor X with it either rejects legal keys (endpoint not
+		// configured for X) or probes a same-named wrong endpoint. Prefer an
+		// endpoint of THIS vendor: the session's endpoint if it belongs to the
+		// vendor, else the sole endpoint if unambiguous.
+		probeEndpoint := a.cfg.Endpoint
+		if vc, ok := a.cfg.Vendors[vendor]; ok {
+			if _, ok := vc.Endpoints[probeEndpoint]; !ok {
+				if len(vc.Endpoints) == 1 {
+					for name := range vc.Endpoints {
+						probeEndpoint = name
+					}
+				} else if probeEndpoint != "" {
+					// Ambiguous: can't guess which endpoint to probe.
+					return fmt.Errorf("vendor %s has multiple endpoints and the current session endpoint %q does not belong to it; set the key at endpoint level (vendors.%s.<endpoint>.api_key) so the probe targets the right endpoint", vendor, probeEndpoint, vendor)
+				}
+			}
+		}
+		testResolved, err := a.cfg.ResolveEndpointSelection(vendor, probeEndpoint, a.cfg.Model)
 		if err != nil {
 			return fmt.Errorf("cannot resolve: %w", err)
 		}

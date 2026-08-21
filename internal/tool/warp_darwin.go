@@ -70,7 +70,12 @@ func (w *WarpTool) executeInput(text string) Result {
 	if text == "" {
 		return Result{IsError: true, Content: "text is required for input action"}
 	}
-	w.sendKeys(text)
+	// #880: propagate sendKeys failures — previously a failed keystroke
+	// script (e.g. multiline before escaping) reported success and the
+	// follow-up enter key executed whatever stale content the pane held.
+	if err := w.sendKeys(text); err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("warp: input failed: %v", err)}
+	}
 	preview := text
 	if len([]rune(preview)) > 60 {
 		preview = string([]rune(preview)[:60]) + "..."
@@ -111,17 +116,28 @@ func (w *WarpTool) executeSendKey(key string, modifiers string) Result {
 }
 
 // sendKeys types text into Warp using System Events keystroke.
-func (w *WarpTool) sendKeys(text string) {
+func (w *WarpTool) sendKeys(text string) error {
 	// Activate Warp first
-	exec.Command("osascript", "-e", `tell application "Warp" to activate`).Run()
+	if err := exec.Command("osascript", "-e", `tell application "Warp" to activate`).Run(); err != nil {
+		return fmt.Errorf("activate Warp: %w", err)
+	}
 	time.Sleep(30 * time.Millisecond)
 
-	// Escape double quotes and backslashes for AppleScript string
+	// Escape backslash, double quote, and control chars for AppleScript
+	// string literals. #880: raw newlines/tabs are FORBIDDEN in AppleScript
+	// literals — a multiline text produced a syntax-error script, the error
+	// was discarded, and the tool reported success while nothing was typed.
 	escaped := strings.ReplaceAll(text, "\\", "\\\\")
 	escaped = strings.ReplaceAll(escaped, "\"", "\\\"")
+	escaped = strings.ReplaceAll(escaped, "\r", "\\r")
+	escaped = strings.ReplaceAll(escaped, "\n", "\\n")
+	escaped = strings.ReplaceAll(escaped, "\t", "\\t")
 
 	script := fmt.Sprintf(`tell application "System Events" to keystroke "%s"`, escaped)
-	exec.Command("osascript", "-e", script).Run()
+	if err := exec.Command("osascript", "-e", script).Run(); err != nil {
+		return fmt.Errorf("keystroke script failed: %w", err)
+	}
+	return nil
 }
 
 // sendKeystroke sends a single character keystroke with optional modifiers.

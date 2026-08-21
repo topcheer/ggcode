@@ -140,7 +140,10 @@ func (m *Model) lanChatBroadcastTeam(ctx context.Context, content string) {
 		if p.NodeID == selfNodeID || !p.Online || p.Team != myTeam {
 			continue
 		}
-		hub.SendDirect(ctx, p.NodeID, lanchat.RoleAgent, content, nil)
+		// #878: team broadcasts are human-facing — target the participant's
+		// HUMAN panel like the DM path does, not unconditionally the agent
+		// (which triggered agent approval loops and left panels empty).
+		hub.SendDirect(ctx, p.NodeID, lanchat.RoleHuman, content, nil)
 		sent++
 	}
 
