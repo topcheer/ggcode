@@ -174,7 +174,7 @@ func esCatalog(key string) string {
 		return "preguntar según sea necesario"
 	case "mode.approval.none":
 		return "sin paradas de aprobación"
-	case "mode.approval.crítical":
+	case "mode.approval.critical":
 		return "solo críticas"
 	case "mode.tools.rules":
 		return "seguir reglas de herramientas"
@@ -186,7 +186,7 @@ func esCatalog(key string) string {
 		return "casí todas las herramientas"
 	case "mode.agent.waits":
 		return "espera por usted"
-	case "mode.agent.autocontinúe":
+	case "mode.agent.autocontinue":
 		return "continúa solo"
 	case "hint.enter_send":
 		return "Enter enviar"
@@ -610,7 +610,7 @@ func esCatalog(key string) string {
 		return "Lista de táreas:\n%s\n\n"
 	case "bug.title":
 		return "=== Díagnósticos de Reporte de Errores ===\n\n"
-	case "bug.versión":
+	case "bug.version":
 		return "Versión: %s\n"
 	case "bug.os":
 		return "SO: %s %s\n"
@@ -646,7 +646,7 @@ func esCatalog(key string) string {
 		return "Estado:\n"
 	case "panel.update":
 		return "Actualización"
-	case "label.versión":
+	case "label.version":
 		return "Versión"
 	case "label.latest":
 		return "Última"
@@ -668,7 +668,7 @@ func esCatalog(key string) string {
 		return "Preparando actualización"
 	case "update.failed":
 		return "Actualización fallida: %v\n\n"
-	case "update.restárt_failed":
+	case "update.restart_failed":
 		return "Actualización preparada, pero error al reiniciar: %v\n\n"
 	case "update.pm_hint.brew":
 		return "Actualización instalada. Nota: ggcode fue instalado via Homebrew.\nEjecute `brew upgrade ggcode` para mantener Homebrew sincronizado.\n\n"
@@ -966,7 +966,7 @@ func esCatalog(key string) string {
 		return "Ejecutar autorreflexión en la sesión actual"
 	case "slash.regenerate":
 		return "Regenerar última respuesta de AI (descartar y reejecutar)"
-	case "slash.restárt":
+	case "slash.restart":
 		return "Reiniciar proceso de ggcode"
 	case "slash.retry":
 		return "Reintentar la última ejecución fallida del agente"

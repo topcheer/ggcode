@@ -107,7 +107,15 @@ const (
 )
 
 func normalizeLanguage(s string) Language {
-	switch strings.ToLower(strings.TrimSpace(s)) {
+	// #894: POSIX-style locales (zh_TW.UTF-8, fr_FR.ISO-8859-1) carry a
+	// codeset suffix that no case below matched — strip it first, and
+	// normalize '_' to '-' so zh_tw maps like zh-tw already does.
+	norm := strings.ToLower(strings.TrimSpace(s))
+	if i := strings.IndexByte(norm, '.'); i >= 0 {
+		norm = norm[:i]
+	}
+	norm = strings.ReplaceAll(norm, "_", "-")
+	switch norm {
 	case "zh", "zh-cn", "zh_hans", "zh-hans", "cn", "zh-sg":
 		return LangZhCN
 	case "ja", "ja-jp", "japanese", "jp":
@@ -126,7 +134,7 @@ func normalizeLanguage(s string) Language {
 		return LangPt
 	case "vi", "vi-vn", "vietnamese":
 		return LangVi
-	case "zh-tw", "zh-hant", "zh_hant", "zh-hk", "zh-mo", "tw":
+	case "zh-tw", "zh-hant", "zh-hk", "zh-mo", "tw":
 		return LangZhTW
 	default:
 		return LangEnglish

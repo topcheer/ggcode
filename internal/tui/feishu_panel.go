@@ -394,8 +394,6 @@ func (m Model) feishuBindingLabels(entries []feishuBindingEntry) []string {
 		switch {
 		case entry.Disabled:
 			status = m.t("panel.feishu.entry.disabled")
-		case entry.Disabled:
-			status = m.t("panel.feishu.entry.disabled")
 		case entry.Muted:
 			status = m.t("panel.feishu.entry.muted")
 		case entry.OccupiedBy != "" && entry.OccupiedBy == currentWS:
@@ -483,10 +481,15 @@ func (m Model) feishuAdapterStatus(state *im.AdapterState) string {
 	if status == "" {
 		status = m.t("panel.feishu.status.unknown")
 	}
+	// #894: both branches previously returned the same value — offline
+	// adapters showed their cached "running" status. Mirror wecom.
 	if state.Healthy {
 		return status
 	}
-	return status
+	if strings.TrimSpace(state.LastError) != "" {
+		return state.LastError
+	}
+	return status + " (offline)"
 }
 
 func feishuStatePtr(state im.AdapterState) *im.AdapterState {

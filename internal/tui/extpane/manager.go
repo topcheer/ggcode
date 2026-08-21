@@ -109,6 +109,14 @@ func (m *Manager) Available() bool {
 // goBackend runs a backend operation in a goroutine with bounded concurrency
 // and WaitGroup tracking.
 func (m *Manager) goBackend(fn func()) {
+	// #891: wg.Add racing CloseAll's wg.Wait is the classic Add-after-Wait
+	// panic window (or Wait returning before this cleanup runs). Gate the
+	// Add on stopCh: after shutdown began, skip instead of track.
+	select {
+	case <-m.stopCh:
+		return
+	default:
+	}
 	m.wg.Add(1)
 	safego.Go("extpane.backend", func() {
 		defer m.wg.Done()
@@ -147,7 +155,9 @@ func (m *Manager) EnsurePane(agentID, name, kind string) {
 		return
 	}
 	// Hard cap: never exceed maxPanes concurrent tabs.
-	if len(m.panes) >= maxPanes {
+	// #894: count in-flight creations too — concurrent EnsurePane calls all
+	// passed the old len(panes) check and breached the cap.
+	if len(m.panes)+len(m.creating) >= maxPanes {
 		m.mu.Unlock()
 		return
 	}
@@ -301,6 +311,13 @@ func (m *Manager) HandleDone(agentID, name string, isError bool) {
 	m.UpdateStatus(agentID, name, kind, status)
 
 	// Schedule cleanup after grace period
+	// #891: gate Add on stopCh (see goBackend) — shutdown racing this
+	// event-driven path could Add concurrently with CloseAll's Wait.
+	select {
+	case <-m.stopCh:
+		return
+	default:
+	}
 	m.wg.Add(1)
 	safego.Go("extpane.cleanup", func() {
 		defer m.wg.Done()
@@ -367,6 +384,12 @@ func (m *Manager) closePane(agentID string) {
 // startFlusher runs a background goroutine that flushes buffered text
 // at ~10 Hz to each agent's log file.
 func (m *Manager) startFlusher() {
+	// #891: same stopCh gate as goBackend (Add-after-Wait panic window).
+	select {
+	case <-m.stopCh:
+		return
+	default:
+	}
 	m.wg.Add(1)
 	safego.Go("extpane.flusher", func() {
 		defer m.wg.Done()

@@ -3,6 +3,7 @@ package extpane
 import (
 	"context"
 	"fmt"
+	"github.com/topcheer/ggcode/internal/debug"
 	"os/exec"
 	"strings"
 	"time"
@@ -20,7 +21,11 @@ func newTmuxBackend() *tmuxBackend {
 	}
 	b := &tmuxBackend{}
 	// Capture our own window ID so we never kill it.
-	out, err := runTmux(context.Background(), "display-message", "-p", "#{window_id}")
+	// #894: 3s timeout like sibling calls — context.Background() with no
+	// deadline let a hung tmux server block TUI model construction forever.
+	probeCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	out, err := runTmux(probeCtx, "display-message", "-p", "#{window_id}")
 	if err == nil {
 		b.selfWindowID = strings.TrimSpace(out)
 	}
@@ -34,13 +39,35 @@ func (t *tmuxBackend) CreateTab(ctx context.Context, title, logfile string) (str
 	// Temporarily suppress after-new-window hook to avoid user tmux configs
 	// that trigger interactive rename prompts (command-prompt).
 	// Save the current hook value so we can restore it.
-	savedHook, _ := runTmux(ctx, "show-hooks", "-g", "after-new-window")
+	savedHook, showErr := runTmux(ctx, "show-hooks", "-g", "after-new-window")
 	savedHook = strings.TrimSpace(savedHook)
-	if savedHook != "" && !strings.HasPrefix(savedHook, "after-new-window") {
-		// show-hooks returns "after-new-window -> ..." format; keep full line for restore
+	if showErr != nil {
+		// #890: previously the error was discarded, leaving savedHook empty,
+		// so restore was silently skipped — but the unset below still ran.
+		debug.Log("extpane", "show-hooks failed, will still unset+restore best-effort: %v", showErr)
 	}
 	// Unset the hook globally.
 	_, _ = runTmux(ctx, "set-hook", "-g", "-u", "after-new-window")
+
+	// #890: restore via defer — an early return (new-window failure) used
+	// to skip the restore entirely, permanently losing the user's GLOBAL
+	// hook on the error path.
+	restore := func() {
+		if savedHook == "" {
+			// Nothing was recorded: un-setting was safe only if the hook never
+			// existed; leave unset (best effort) — re-query cannot succeed if
+			// the initial read failed.
+			return
+		}
+		hookCmd := strings.SplitN(savedHook, " -> ", 2)
+		if len(hookCmd) == 2 {
+			_, _ = runTmux(context.Background(), "set-hook", "-g", "after-new-window", strings.TrimSpace(hookCmd[1]))
+		} else {
+			// Unexpected format — restore the raw value so nothing is lost.
+			_, _ = runTmux(context.Background(), "set-hook", "-g", "after-new-window", savedHook)
+		}
+	}
+	defer restore()
 
 	args := []string{
 		"new-window", "-P", "-F", "#{window_id}",
@@ -54,16 +81,6 @@ func (t *tmuxBackend) CreateTab(ctx context.Context, title, logfile string) (str
 	tabID := strings.TrimSpace(output)
 	if tabID == "" {
 		return "", fmt.Errorf("tmux new-window: empty window ID")
-	}
-
-	// Restore the original hook (if any) so user's tmux config still works
-	// for manually created windows.
-	if savedHook != "" {
-		// Extract the command part after "after-new-window -> "
-		hookCmd := strings.SplitN(savedHook, " -> ", 2)
-		if len(hookCmd) == 2 {
-			_, _ = runTmux(ctx, "set-hook", "-g", "after-new-window", strings.TrimSpace(hookCmd[1]))
-		}
 	}
 
 	return tabID, nil

@@ -26,13 +26,13 @@ func frCatalog(key string) string {
 		return "Éditeur verrouillé"
 	case "panel.commands":
 		return "Commandes:"
-	case "panel.fîles":
+	case "panel.files":
 		return "Fichiers:"
 	case "panel.agent_status":
 		return "Statut de l'agent"
 	case "panel.mode_policy":
 		return "Politique de mode"
-	case "panel.session_usâge":
+	case "panel.session_usage":
 		return "Utilisation session"
 	case "panel.metrics":
 		return "Métriques"
@@ -50,7 +50,7 @@ func frCatalog(key string) string {
 		return "Reconnexion non disponible dans cette session."
 	case "panel.mcp.reconnecting":
 		return "Reconnexion de %s..."
-	case "panel.mcp.reconnect_faîled":
+	case "panel.mcp.reconnect_failed":
 		return "Impossible de reconnectér %s."
 	case "panel.mcp.uninstalling":
 		return "Désinstallation de %s..."
@@ -60,7 +60,7 @@ func frCatalog(key string) string {
 		return "Approbation requise"
 	case "panel.bypass_approval":
 		return "Approbation mode bypass"
-	case "panel.review_fîle_change":
+	case "panel.review_file_change":
 		return "Examinér modification de fichier"
 	case "label.vendor":
 		return "fournisseur"
@@ -86,7 +86,7 @@ func frCatalog(key string) string {
 		return "activité"
 	case "label.window":
 		return "fenêtre"
-	case "label.usâge":
+	case "label.usage":
 		return "utilisation"
 	case "label.compact":
 		return "compact"
@@ -132,9 +132,9 @@ func frCatalog(key string) string {
 		return "taux échec"
 	case "label.slow_tools":
 		return "outils lents"
-	case "label.récent_turns":
+	case "label.recent_turns":
 		return "tours récents"
-	case "label.fîle":
+	case "label.file":
 		return "fichier"
 	case "label.directory":
 		return "répertoire"
@@ -164,7 +164,7 @@ func frCatalog(key string) string {
 		return "Astuces: utiliséz @chemin pour inclure des fichiers, /? pour l'aide, et Shift+Tab pour changer de mode."
 	case "startup.banner":
 		return "Préparation de l'interface terminal et filtrâge du bruit de démarrâge. Vous pouvez saisir immediatement; cette bannière disparaitra une fois le démarrâge terminé."
-	case "hint.autocomplète":
+	case "hint.autocomplete":
 		return "Tab/Shift+Tab naviguer • Enter appliquér • Esc fermér"
 	case "hint.mention":
 		return "@ joindre fichiers/dossiers • Tab/Shift+Tab naviguer • Enter appliquér"
@@ -190,7 +190,7 @@ func frCatalog(key string) string {
 		return "continue seul"
 	case "hint.enter_send":
 		return "Enter envoyér"
-	case "hint.ctrlv_imâge":
+	case "hint.ctrlv_image":
 		return "Ctrl+V / Ctrl+Shift+V coller imâge"
 	case "hint.ctrlr_sidebar":
 		return "Ctrl+R barre laterale"
@@ -206,9 +206,9 @@ func frCatalog(key string) string {
 		return "Ctrl+C annulér"
 	case "hint.ctrlc_exit":
 		return "Ctrl+C effacér/quitter"
-	case "hint.imâge_attâched":
+	case "hint.image_attached":
 		return "imâge jointe"
-	case "hint.imâge_attâched_count":
+	case "hint.image_attached_count":
 		return "%d imâge(s) jointe(s)"
 	case "hint.follow_panel":
 		return "Ctrl+N suivre"
@@ -228,7 +228,7 @@ func frCatalog(key string) string {
 		return "Annulation..."
 	case "status.compacting":
 		return "Compression du contexte..."
-	case "status.compactéd":
+	case "status.compacted":
 		return "[conversation compactée]"
 	case "reasoning.effort.status":
 		return "Effort de réflexion: %s"
@@ -256,7 +256,7 @@ func frCatalog(key string) string {
 		return "%d outils utilisés"
 	case "tool.done":
 		return "terminé"
-	case "tool.faîled":
+	case "tool.failed":
 		return "échoué"
 	case "tool.no_output":
 		return "sans sortie"
@@ -296,9 +296,9 @@ func frCatalog(key string) string {
 		return "Langue non supportée: %s\n%s\n\n"
 	case "lang.switch":
 		return "Langue changée en: %s\n\n"
-	case "lang.sélection.current":
+	case "lang.selection.current":
 		return " Actuel: %s"
-	case "lang.sélection.hint":
+	case "lang.selection.hint":
 		return " Tab/j/k déplacer • Enter confirmér • e/z raccourcis • Esc annulér"
 	case "lang.first_use.title":
 		return "Choisissez votre langue préférée"
@@ -308,7 +308,7 @@ func frCatalog(key string) string {
 		return " Tab/j/k déplacer • Enter confirmér • e/z raccourcis"
 	case "mode.current":
 		return "Mode actuel: %s\nUtilisation: /mode <supervised|plan|auto|bypass|autopilot>\n  supervised  Demander quand un outil n'a pas de règle explicite\n  plan        Exploration en lecture seule; refusér écritures et commandes\n  auto        Autorisér opérations sûres, refusér dangéréuses\n  bypass      Autorisér presque tout; n'arrêtér que pour actions critiques\n  autopilot   bypass + continuer quand le modèle demandé\n\n"
-	case "mode.persist_faîled":
+	case "mode.persist_failed":
 		return "Erreur lors de la sauvegardé de la préférence de mode: %v"
 	case "input.placeholder":
 		return "Saisissez un messâge... ($ shell, # chat)"
@@ -346,11 +346,11 @@ func frCatalog(key string) string {
 		return "API key"
 	case "panel.provider.api_key.missing":
 		return "manquant"
-	case "panel.provider.api_key.configuréd":
+	case "panel.provider.api_key.configured":
 		return "configuré"
-	case "panel.provider.auth.connectéd":
+	case "panel.provider.auth.connected":
 		return "connecté"
-	case "panel.provider.auth.not_connectéd":
+	case "panel.provider.auth.not_connected":
 		return "non connecté"
 	case "panel.provider.base_url":
 		return "URL de base"
@@ -390,27 +390,27 @@ func frCatalog(key string) string {
 		return "Ouvrez %s et saisissez le code %s. En attente d'autorisation..."
 	case "panel.provider.login.copied":
 		return "Code d'appareil copie dans le presse-papiers."
-	case "panel.provider.login.copy_faîled":
+	case "panel.provider.login.copy_failed":
 		return "Erreur lors de la copie du code d'appareil: %s"
 	case "panel.provider.login.browser_opened":
 		return "Pâge de vérification ouverte dans votre navigateur."
-	case "panel.provider.login.browser_faîled":
+	case "panel.provider.login.browser_failed":
 		return "Erreur lors de l'ouverture de la pâge de vérification: %s"
-	case "panel.provider.login.succèss":
+	case "panel.provider.login.success":
 		return "GitHub Copilot connecté."
-	case "panel.provider.login.faîled":
+	case "panel.provider.login.failed":
 		return "Erreur de connexion GitHub Copilot: %s"
-	case "panel.provider.logoût.succèss":
+	case "panel.provider.logout.success":
 		return "GitHub Copilot deconnecté."
 	case "panel.provider.refreshing_vendor":
 		return "Actualisation des modèles pour %s..."
-	case "panel.provider.refresh.save_faîled":
+	case "panel.provider.refresh.save_failed":
 		return "Modèles actualisés, mais erreur de sauvegardé de config: %s"
 	case "panel.provider.refresh.partial":
 		return "Actualisé(s) %d endpoint(s), découvert(s) %d modèle(s). Certains endpoints ont échoué: %v"
-	case "panel.provider.refresh.succèss":
+	case "panel.provider.refresh.success":
 		return "Actualisé(s) %d endpoint(s), découvert(s) %d modèle(s)."
-	case "panel.provider.refresh.faîled":
+	case "panel.provider.refresh.failed":
 		return "Erreur d'actualisation des modèles: %s"
 	case "panel.provider.refresh.none":
 		return "Aucun endpoint actualisable pour ce fournisseur."
@@ -448,7 +448,7 @@ func frCatalog(key string) string {
 		return "Rétabli en autodetection (sauvegardé)"
 	case "panel.model.switched":
 		return "Modèle change en %s."
-	case "panel.model.refresh.save_faîled":
+	case "panel.model.refresh.save_failed":
 		return "Modèles actualisés, mais erreur de sauvegardé de config: %s"
 	case "panel.model.refresh.builtin_reason":
 		return "Utilisation des modèles intégrés: %s"
@@ -470,15 +470,15 @@ func frCatalog(key string) string {
 		return "Dernier envoi chargé — éditéz et appuyez sur Enter pour envoyér."
 	case "command.help_hint":
 		return "Saisissez /help pour voir les commandes disponibles\n\n"
-	case "command.usâge.allow":
+	case "command.usage.allow":
 		return "Usâge: /allow <nom-outil>\n\n"
-	case "command.usâge.resume":
+	case "command.usage.resume":
 		return "Usâge: /resume <id-session>\n\n"
-	case "command.usâge.export":
+	case "command.usage.export":
 		return "Usâge: /export <id-session>\n\n"
-	case "init.resolve_faîled":
+	case "init.resolve_failed":
 		return "Erreur de resolution de la cible d'init: %v\n\n"
-	case "init.generate_faîled":
+	case "init.generate_failed":
 		return "Erreur de génération du contenu GGCODE.md: %v\n\n"
 	case "init.collecting":
 		return "Collecte des connaissances du projet..."
@@ -494,7 +494,7 @@ func frCatalog(key string) string {
 		return " y = créer GGCODE.md • n/Esc = passer"
 	case "command.model_switched":
 		return "Modèle change en: %s (fournisseur: %s)\n\n"
-	case "command.model_faîled":
+	case "command.model_failed":
 		return "Erreur lors du changement de modèle: %v\n\n"
 	case "command.model_current":
 		return "Modèle actuel: %s (fournisseur: %s)\nModèles disponibles: %s\nUtilisez /model pour ouvrir le panneau de modèles ou /model <nom-modèle> pour changer directement.\n\n"
@@ -502,7 +502,7 @@ func frCatalog(key string) string {
 		return "Fournisseur inconnu: %s (disponibles: %v)\n\n"
 	case "command.provider_switched":
 		return "Fournisseur change en: %s (modèle: %s)\n\n"
-	case "command.provider_faîled":
+	case "command.provider_failed":
 		return "Erreur lors de la mise à jour de la sélection de fournisseur: %v\n\n"
 	case "command.provider_current":
 		return "Fournisseur actuel: %s (endpoint: %s, modèle: %s)\nFournisseurs disponibles: %s\nEndpoints disponibles: %s\nUsâge: /provider [fournisseur] [endpoint]\n\n"
@@ -512,7 +512,7 @@ func frCatalog(key string) string {
 		return "Commande personnalisée /%s:\n"
 	case "command.mention_error":
 		return "Erreur de mention: %v"
-	case "session.list_faîled":
+	case "session.list_failed":
 		return "Erreur lors du listâge des sessions: %v\n\n"
 	case "session.untitled":
 		return "sans titre"
@@ -530,33 +530,33 @@ func frCatalog(key string) string {
 		return "Nouvelle session: %s\n\n"
 	case "session.resume":
 		return "Session reprise: %s — %s (%d messâges)\n\n"
-	case "session.resume_faîled":
+	case "session.resume_failed":
 		return "Erreur lors de la reprise de la session %s: %v\n\n"
 	case "session.resume_fallback":
 		return "Démarrage d'une nouvelle session à la place.\n\n"
-	case "session.export_faîled":
+	case "session.export_failed":
 		return "Erreur lors de l'export de session: %v\n\n"
-	case "session.write_faîled":
+	case "session.write_failed":
 		return "Erreur lors de l'écriture du fichier: %v\n\n"
 	case "session.exported":
 		return "Session exportée %s vers %s\n\n"
 	case "checkpoint.disabled":
 		return "Points de contrôle non actives.\n\n"
-	case "checkpoint.undo_faîled":
+	case "checkpoint.undo_failed":
 		return "Erreur d'annulation: %v\n\n"
 	case "checkpoint.undid":
 		return "Annulé %s sur %s (checkpoint %s)\n"
 	case "checkpoint.none":
 		return "Aucun checkpoint.\n\n"
-	case "fîles.disabled":
+	case "files.disabled":
 		return "Points de contrôle non actives.\n\n"
-	case "fîles.none":
+	case "files.none":
 		return "Aucun fichier modifié par l'agent dans cette session.\n\n"
-	case "fîles.title":
+	case "files.title":
 		return "Fichiers modifiés par l'agent (%d fichiers, %d éditions):\n\n"
-	case "fîles.item":
+	case "files.item":
 		return "  %s  %d éditions  dernier: %s%s\n"
-	case "fîles.hint":
+	case "files.hint":
 		return "\nUtilisez /undo pour annulér l'édition la plus récente, /checkpoints pour les détails.\n\n"
 	case "checkpoint.list.title":
 		return "Checkpoints (%d):\n\n"
@@ -566,13 +566,13 @@ func frCatalog(key string) string {
 		return "\nUtilisez /undo pour annulér le plus récent.\n\n"
 	case "memory.auto_unavailable":
 		return "Mémoire automatique non initialisée.\n\n"
-	case "memory.list_faîled":
+	case "memory.list_failed":
 		return "Erreur lors du listâge des mémoires: %v\n\n"
 	case "memory.none":
 		return "Aucune mémoire automatique sauvegardée.\n\n"
 	case "memory.auto_title":
 		return "Mémoires Automatiques:\n"
-	case "memory.clear_faîled":
+	case "memory.clear_failed":
 		return "Erreur lors du nettoyâge des mémoires: %v\n\n"
 	case "memory.cleared":
 		return "Toutes les mémoires automatiques supprimées.\n\n"
@@ -586,11 +586,11 @@ func frCatalog(key string) string {
 		return "Mémoire Automatique:\n"
 	case "memory.auto_none":
 		return "  Aucune mémoire automatique chargée.\n"
-	case "memory.usâge":
+	case "memory.usage":
 		return "\nUsâge: /memory [list|clear]\n\n"
 	case "compact.unavailable":
 		return "Gestionnaire de contexte non disponible.\n\n"
-	case "compact.faîled":
+	case "compact.failed":
 		return "Erreur de compactâge: %v\n\n"
 	case "compact.done":
 		return "Historique de conversation compacté.\n\n"
@@ -598,13 +598,13 @@ func frCatalog(key string) string {
 		return "Historique de conversation compacté (%d → %d tokens).\n\n"
 	case "todo.cleared":
 		return "Liste de tâches supprimée.\n\n"
-	case "todo.clear_faîled":
+	case "todo.clear_failed":
 		return "Erreur lors du nettoyâge des tâches: %v\n\n"
 	case "todo.none":
 		return "Aucune liste de tâches trouvée. Utilisez l'outil todo_write pour en créer une.\n\n"
-	case "todo.read_faîled":
+	case "todo.read_failed":
 		return "Erreur de lecture des tâches: %v\n\n"
-	case "todo.parse_faîled":
+	case "todo.parse_failed":
 		return "Erreur d'analysé des tâches: %v\n\n"
 	case "todo.title":
 		return "Liste de tâches:\n%s\n\n"
@@ -628,7 +628,7 @@ func frCatalog(key string) string {
 		return "Dernière erreur: %s\n"
 	case "bug.hint":
 		return "\nIncluez ces informations lors du signalement d'un bug.\n\n"
-	case "config.usâge":
+	case "config.usage":
 		return "Usâge: /config set <cle> <valeur>\n\nCles: model, vendor, endpoint, languâge, apikey [--vendor]\n\nEndpoints: /config add-endpoint <nom> <url_base> [--protocol openai] [--apikey sk-xxx]\n          /config remove-endpoint <nom>\n\n"
 	case "config.not_loaded":
 		return "Configuration non chargée.\n\n"
@@ -636,7 +636,7 @@ func frCatalog(key string) string {
 		return "Config: modèle = %s\n\n"
 	case "config.provider_set":
 		return "Config: fournisseur = %s\n\n"
-	case "config.languâge_set":
+	case "config.language_set":
 		return "Config: langue = %s\n\n"
 	case "config.unknown_key":
 		return "Cle de config inconnue: %s\nSupportées: model, provider, languâge\n\n"
@@ -660,15 +660,15 @@ func frCatalog(key string) string {
 		return "actuel: %s (dernière: %s)"
 	case "update.unknown":
 		return "non vérifié encore"
-	case "update.check_faîled":
+	case "update.check_failed":
 		return "vérification échouée: %s"
 	case "update.unavailable":
 		return "Mise à jour non disponible dans cette session.\n\n"
 	case "update.preparing":
 		return "Préparation de la mise à jour"
-	case "update.faîled":
+	case "update.failed":
 		return "Mise à jour échouée: %v\n\n"
-	case "update.restart_faîled":
+	case "update.restart_failed":
 		return "Mise à jour préparée, mais erreur de redémarrage: %v\n\n"
 	case "update.pm_hint.brew":
 		return "Mise à jour installée. Noté: ggcode a été installe via Homebrew.\nExécutez `brew upgrade ggcode` pour garder Homebrew synchronisé.\n\n"
@@ -696,17 +696,17 @@ func frCatalog(key string) string {
 		return "Outils actifs"
 	case "mcp.more":
 		return "… %d de plus • /mcp"
-	case "imâge.usâge":
+	case "image.usage":
 		return "Usâge: /imâge <chemin/vers/fichier.png> ou /imâge paste\n"
-	case "imâge.formats":
+	case "image.formats":
 		return "Formats supportes: PNG, JPEG, GIF, WebP (max 20MB)\n\n"
-	case "imâge.attâched":
+	case "image.attached":
 		return "Imâge jointe: %s\n"
-	case "imâge.attâched_hint":
+	case "image.attached_hint":
 		return "Envoyéz un messâge pour inclure l'imâge, ou /imâge pour en joindre une autre.\n\n"
-	case "imâge.clipboard_faîled":
+	case "image.clipboard_failed":
 		return "Impossible de coller une imâge du presse-papiers: %v"
-	case "imâge.clipboard_no_imâge_windows":
+	case "image.clipboard_no_image_windows":
 		return "Aucune imâge dans le presse-papiers. Sous Windows, Ctrl+V est souvent intercepte par le terminal. Essayez Ctrl+Shift+V ou /imâge paste."
 	case "agents.unavailable":
 		return "Gestionnaire de sous-agents non configuré.\n\n"
@@ -718,11 +718,11 @@ func frCatalog(key string) string {
 		return "  %s [%s]%s - %s\n"
 	case "agents.hint":
 		return "\nUtilisez /agent <id> pour les détails, /agent cancel <id> pour annulér.\n\n"
-	case "agent.usâge":
+	case "agent.usage":
 		return "Usâge: /agent <id> ou /agent cancel <id>\n\n"
 	case "agent.cancelled":
 		return "Sous-agent %s annulé\n\n"
-	case "agent.cancel_faîled":
+	case "agent.cancel_failed":
 		return "Impossible d'annulér %s (introuvable ou pas en cours)\n\n"
 	case "agent.not_found":
 		return "Sous-agent %s introuvable\n\n"
@@ -752,7 +752,7 @@ func frCatalog(key string) string {
 		return "Gérér la mémoire"
 	case "slash.undo":
 		return "Annulér la dernière édition de fichier"
-	case "slash.fîles":
+	case "slash.files":
 		return "Afficher les fichiers modifiés par l'agent"
 	case "slash.checkpoints":
 		return "Lister les checkpoints"
@@ -760,7 +760,7 @@ func frCatalog(key string) string {
 		return "Toujours autorisér un outil"
 	case "slash.plugins":
 		return "Lister les plugins chargés"
-	case "slash.imâge":
+	case "slash.image":
 		return "Joindre une imâge"
 	case "slash.init":
 		return "Génèrer le GGCODE.md du projet"
@@ -868,7 +868,7 @@ func frCatalog(key string) string {
 		return "Lie: %s"
 	case "panel.qq.entry.muted":
 		return "Muet"
-	case "panel.qq.détails":
+	case "panel.qq.details":
 		return "Détails"
 	case "panel.qq.status":
 		return "Statut: %s"
@@ -906,17 +906,17 @@ func frCatalog(key string) string {
 		return "Code QR:"
 	case "panel.qq.share_link":
 		return "Lien de Partâge:"
-	case "panel.qq.messâge.no_bot":
+	case "panel.qq.message.no_bot":
 		return "Aucun bot QQ disponible."
-	case "panel.qq.messâge.bound_succèss":
+	case "panel.qq.message.bound_success":
 		return "Bot QQ lie au workspace actuel. Utilisez c pour générer le code QR de liaison de canal."
-	case "panel.qq.messâge.share_generated":
+	case "panel.qq.message.share_generated":
 		return "Lien de partâge QQ généré. Scannez le code QR, ajoutéz le bot, puis envoyéz un messâge pour démarrer la liaison."
-	case "panel.qq.messâge.unbound":
+	case "panel.qq.message.unbound":
 		return "Canal QQ delie."
-	case "panel.qq.messâge.cleared":
+	case "panel.qq.message.cleared":
 		return "Autorisation de canal QQ supprimée pour le workspace actuel."
-	case "panel.qq.messâge.added_bot":
+	case "panel.qq.message.added_bot":
 		return "Bot QQ ajouté %s."
 	case "panel.qq.error.config_unavailable":
 		return "configuration non disponible"
@@ -924,7 +924,7 @@ func frCatalog(key string) string {
 		return "La config du bot QQ doit être: <bot-id> <appid> <appsecret>"
 	case "panel.qq.error.adapter_required":
 		return "Le nom de l'adapteur QQ est requis"
-	case "panel.qq.error.not_configuréd":
+	case "panel.qq.error.not_configured":
 		return "Le bot QQ %q n'est pas configuré"
 	case "panel.qq.error.disabled":
 		return "Le bot QQ %q est désactivé"
@@ -932,7 +932,7 @@ func frCatalog(key string) string {
 		return "l'adapteur %q n'est pas un bot QQ"
 	case "panel.qq.error.not_online":
 		return "Le bot QQ %q n'est pas en ligne"
-	case "panel.qq.error.not_online_détail":
+	case "panel.qq.error.not_online_detail":
 		return "Le bot QQ %q n'est pas en ligne: %s"
 	case "panel.qq.runtime.available":
 		return "disponible"
@@ -996,9 +996,9 @@ func frCatalog(key string) string {
 		return "Aucune session active a bifurquér."
 	case "branch.empty":
 		return "La session n'a pas de messâges a bifurquér."
-	case "branch.save_faîled":
+	case "branch.save_failed":
 		return "Erreur lors de la creation de la session bifurquée: %v"
-	case "branch.succèss":
+	case "branch.success":
 		return "Bifurqué vers nouvelle session %s (depuis: %s). La session originale est conservée."
 	case "help.text":
 		return `Commandes disponibles:
@@ -1080,7 +1080,7 @@ Souris:
 		return "Tunnel arrêté."
 	case "tunnel.not_active":
 		return "Aucune session de partâge active."
-	case "tunnel.mobile_connectéd":
+	case "tunnel.mobile_connected":
 		return "Client mobile connecté."
 	case "config.save_scope_global":
 		return "Sauvegardér vers → Global"
@@ -1108,7 +1108,7 @@ Souris:
 		return "Répertoire de travail non défini."
 	case "reflect.no_memory":
 		return "Mémoire de projet non disponible pour ce répertoire."
-	case "reflect.load_faîled":
+	case "reflect.load_failed":
 		return "Erreur de chargément des insights: %v"
 	case "reflect.empty":
 		return "Aucun insight d'exécution pour le moment. Les insights sont générés automatiquement après chaque exécution d'agent avec 3+ appels d'outils ou éditions de fichiers."

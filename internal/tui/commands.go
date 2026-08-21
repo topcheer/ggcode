@@ -492,11 +492,12 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 		case "/restart":
 			return m.handleRestartCommand(text)
 		case "/stream":
-			// #885: dispatch lowercased the text to match, but TrimPrefix
-			// used the original — "/Stream on" kept "/Stream on" as args and
-			// printed help instead of acting.
-			args := strings.TrimPrefix(strings.ToLower(text), "/stream")
-			args = strings.TrimSpace(args)
+			// #885: TrimPrefix must not use the raw text (case-mismatch dropped
+			// args) — but #893 showed lowercasing the WHOLE input breaks
+			// case-sensitive target names. Lowercase only the command token:
+			// the dispatch already matched case-insensitively, so the first 7
+			// chars are the command and the rest are args verbatim.
+			args := strings.TrimSpace(text[len("/stream"):])
 			resp, _ := m.handleStreamSlash(args)
 			m.chatWriteSystem(nextSystemID(), resp)
 			return nil

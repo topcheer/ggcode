@@ -252,7 +252,13 @@ func (m Model) renderHooksEditForm() string {
 	}
 
 	sb.WriteString(tr(m.language, "hooks.editHelp"))
-	return m.renderContextBox(tr(m.language, "hooks.addTitle"), sb.String(), lipgloss.Color("13"))
+	// #894: outer box title computed editTitle for the inner heading but
+	// the renderContextBox used addTitle unconditionally.
+	boxTitle := tr(m.language, "hooks.addTitle")
+	if !p.editingNew {
+		boxTitle = tr(m.language, "hooks.editTitle")
+	}
+	return m.renderContextBox(boxTitle, sb.String(), lipgloss.Color("13"))
 }
 
 func (m *Model) handleHooksPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
