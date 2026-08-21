@@ -218,9 +218,9 @@ func koCatalog(key string) string {
 	case "queued.count":
 		return "%d개 대기 중"
 	case "queued.output":
-		return "[대기 %d 보류 중]\\n\\n"
+		return "[대기 %d 보류 중]\n\n"
 	case "interrupt.delivered":
-		return "[활성 실행에 전달됨; 계획 수정 중]\\n"
+		return "[활성 실행에 전달됨; 계획 수정 중]\n"
 	case "status.thinking":
 		return "생각 중..."
 	case "status.writing":
@@ -288,7 +288,7 @@ func koCatalog(key string) string {
 	case "exit.confirm":
 		return "ggcode를 종료하시겠습니까?"
 	case "cancel.confirm":
-		return "실행 중인 에이전트를 취소하려면 Ctrl-C 또는 Esc를 다시 누르세요.\\n\\n"
+		return "실행 중인 에이전트를 취소하려면 Ctrl-C 또는 Esc를 다시 누르세요.\n\n"
 	case "interrupted":
 		return "중단됨"
 	case "lang.current":
@@ -470,17 +470,17 @@ func koCatalog(key string) string {
 	case "command.edit_ready":
 		return "이전 제출을 로드했습니다 — 편집 후 Enter를 눌러 전송하세요."
 	case "command.help_hint":
-		return "사용 가능한 명령은 /help를 입력하세요\\n\\n"
+		return "사용 가능한 명령은 /help를 입력하세요\n\n"
 	case "command.usage.allow":
-		return "사용법: /allow <도구-이름>\\n\\n"
+		return "사용법: /allow <도구-이름>\n\n"
 	case "command.usage.resume":
-		return "사용법: /resume <세션-id>\\n\\n"
+		return "사용법: /resume <세션-id>\n\n"
 	case "command.usage.export":
-		return "사용법: /export <세션-id>\\n\\n"
+		return "사용법: /export <세션-id>\n\n"
 	case "init.resolve_failed":
-		return "초기화 대상 확인 실패: %v\\n\\n"
+		return "초기화 대상 확인 실패: %v\n\n"
 	case "init.generate_failed":
-		return "GGCODE.md 콘텐츠 생성 실패: %v\\n\\n"
+		return "GGCODE.md 콘텐츠 생성 실패: %v\n\n"
 	case "init.collecting":
 		return "프로젝트 지식 수집 중..."
 	case "init.prompt.title":
@@ -494,157 +494,157 @@ func koCatalog(key string) string {
 	case "init.prompt.hint":
 		return " y = GGCODE.md 생성 • n/Esc = 건너뛰기"
 	case "command.model_switched":
-		return "모델 전환: %s (제공자: %s)\\n\\n"
+		return "모델 전환: %s (제공자: %s)\n\n"
 	case "command.model_failed":
-		return "모델 전환 실패: %v\\n\\n"
+		return "모델 전환 실패: %v\n\n"
 	case "command.model_current":
-		return "현재 모델: %s (제공자: %s)\\n사용 가능한 모델: %s\\n/model로 모델 패널을 열거나 /model <모델-이름>으로 직접 전환하세요.\\n\\n"
+		return "현재 모델: %s (제공자: %s)\n사용 가능한 모델: %s\n/model로 모델 패널을 열거나 /model <모델-이름>으로 직접 전환하세요.\n\n"
 	case "command.provider_unknown":
-		return "알 수 없는 제공자: %s (사용 가능: %v)\\n\\n"
+		return "알 수 없는 제공자: %s (사용 가능: %v)\n\n"
 	case "command.provider_switched":
-		return "제공자 전환: %s (모델: %s)\\n\\n"
+		return "제공자 전환: %s (모델: %s)\n\n"
 	case "command.provider_failed":
-		return "제공자 선택 업데이트 실패: %v\\n\\n"
+		return "제공자 선택 업데이트 실패: %v\n\n"
 	case "command.provider_current":
-		return "현재 제공자: %s (엔드포인트: %s, 모델: %s)\\n사용 가능한 제공자: %s\\n사용 가능한 엔드포인트: %s\\n사용법: /provider [제공자] [엔드포인트]\\n\\n"
+		return "현재 제공자: %s (엔드포인트: %s, 모델: %s)\n사용 가능한 제공자: %s\n사용 가능한 엔드포인트: %s\n사용법: /provider [제공자] [엔드포인트]\n\n"
 	case "command.allow_set":
-		return "✓ %s이(가) 항상 허용되었습니다\\n\\n"
+		return "✓ %s이(가) 항상 허용되었습니다\n\n"
 	case "command.custom":
-		return "사용자 정의 명령 /%s:\\n"
+		return "사용자 정의 명령 /%s:\n"
 	case "command.mention_error":
 		return "멘션 확장 오류: %v"
 	case "session.list_failed":
-		return "세션 목록 조회 오류: %v\\n\\n"
+		return "세션 목록 조회 오류: %v\n\n"
 	case "session.untitled":
 		return "제목 없음"
 	case "session.store_missing":
-		return "세션 저장소가 구성되지 않았습니다.\\n\\n"
+		return "세션 저장소가 구성되지 않았습니다.\n\n"
 	case "session.none":
-		return "세션을 찾을 수 없습니다.\\n\\n"
+		return "세션을 찾을 수 없습니다.\n\n"
 	case "session.list.title":
-		return "세션:\\n\\n"
+		return "세션:\n\n"
 	case "session.list.item":
-		return "  %d. %s  %s  (%s)\\n"
+		return "  %d. %s  %s  (%s)\n"
 	case "session.list.hint":
-		return "\\n/resume <id>로 세션을 계속하세요\\n\\n"
+		return "\n/resume <id>로 세션을 계속하세요\n\n"
 	case "session.new":
-		return "새 세션: %s\\n\\n"
+		return "새 세션: %s\n\n"
 	case "session.resume":
-		return "세션 재개: %s — %s (메시지 %d개)\\n\\n"
+		return "세션 재개: %s — %s (메시지 %d개)\n\n"
 	case "session.resume_failed":
-		return "세션 %s 재개 실패: %v\\n\\n"
+		return "세션 %s 재개 실패: %v\n\n"
 	case "session.resume_fallback":
-		return "대신 새 세션을 시작합니다.\\n\\n"
+		return "대신 새 세션을 시작합니다.\n\n"
 	case "session.export_failed":
-		return "세션 내보내기 오류: %v\\n\\n"
+		return "세션 내보내기 오류: %v\n\n"
 	case "session.write_failed":
-		return "파일 쓰기 오류: %v\\n\\n"
+		return "파일 쓰기 오류: %v\n\n"
 	case "session.exported":
-		return "세션 %s을(를) %s(으)로 내보냈습니다\\n\\n"
+		return "세션 %s을(를) %s(으)로 내보냈습니다\n\n"
 	case "checkpoint.disabled":
-		return "체크포인트가 활성화되지 않았습니다.\\n\\n"
+		return "체크포인트가 활성화되지 않았습니다.\n\n"
 	case "checkpoint.undo_failed":
-		return "실행 취소 실패: %v\\n\\n"
+		return "실행 취소 실패: %v\n\n"
 	case "checkpoint.undid":
-		return "%s의 %s 실행 취소 (체크포인트 %s)\\n"
+		return "%s의 %s 실행 취소 (체크포인트 %s)\n"
 	case "checkpoint.none":
-		return "체크포인트가 없습니다.\\n\\n"
+		return "체크포인트가 없습니다.\n\n"
 	case "files.disabled":
 		return "파일 브라우저 비활성화"
 	case "files.none":
-		return "이 세션에서 에이전트가 수정한 파일이 없습니다.\\n\\n"
+		return "이 세션에서 에이전트가 수정한 파일이 없습니다.\n\n"
 	case "files.title":
 		return "파일"
 	case "files.item":
-		return "  %s  %d회 편집  마지막: %s%s\\n"
+		return "  %s  %d회 편집  마지막: %s%s\n"
 	case "files.hint":
 		return "파일 선택"
 	case "checkpoint.list.title":
-		return "체크포인트 (%d):\\n\\n"
+		return "체크포인트 (%d):\n\n"
 	case "checkpoint.list.item":
-		return "  %d. %s  %s  %s  %s\\n"
+		return "  %d. %s  %s  %s  %s\n"
 	case "checkpoint.list.hint":
-		return "\\n/undo로 가장 최근 항목을 되돌리세요\\n\\n"
+		return "\n/undo로 가장 최근 항목을 되돌리세요\n\n"
 	case "memory.auto_unavailable":
-		return "자동 메모리가 초기화되지 않았습니다.\\n\\n"
+		return "자동 메모리가 초기화되지 않았습니다.\n\n"
 	case "memory.list_failed":
-		return "메모리 목록 조회 오류: %v\\n\\n"
+		return "메모리 목록 조회 오류: %v\n\n"
 	case "memory.none":
 		return "메모리가 없습니다"
 	case "memory.auto_title":
-		return "자동 메모리:\\n"
+		return "자동 메모리:\n"
 	case "memory.clear_failed":
-		return "메모리 삭제 오류: %v\\n\\n"
+		return "메모리 삭제 오류: %v\n\n"
 	case "memory.cleared":
-		return "모든 자동 메모리가 삭제되었습니다.\\n\\n"
+		return "모든 자동 메모리가 삭제되었습니다.\n\n"
 	case "memory.title":
 		return "메모리"
 	case "memory.project":
-		return "프로젝트 메모리:\\n"
+		return "프로젝트 메모리:\n"
 	case "memory.project_none":
-		return "  로드된 프로젝트 메모리 파일이 없습니다.\\n"
+		return "  로드된 프로젝트 메모리 파일이 없습니다.\n"
 	case "memory.auto":
-		return "자동 메모리:\\n"
+		return "자동 메모리:\n"
 	case "memory.auto_none":
-		return "  로드된 자동 메모리가 없습니다.\\n"
+		return "  로드된 자동 메모리가 없습니다.\n"
 	case "memory.usage":
-		return "\\n사용법: /memory [list|clear]\\n\\n"
+		return "\n사용법: /memory [list|clear]\n\n"
 	case "compact.unavailable":
-		return "컨텍스트 관리자를 사용할 수 없습니다.\\n\\n"
+		return "컨텍스트 관리자를 사용할 수 없습니다.\n\n"
 	case "compact.failed":
-		return "압축 실패: %v\\n\\n"
+		return "압축 실패: %v\n\n"
 	case "compact.done":
 		return "압축 완료"
 	case "compact.done_with_stats":
-		return "대화 기록이 압축되었습니다 (%d → %d 토큰).\\n\\n"
+		return "대화 기록이 압축되었습니다 (%d → %d 토큰).\n\n"
 	case "todo.cleared":
-		return "TODO 목록이 삭제되었습니다.\\n\\n"
+		return "TODO 목록이 삭제되었습니다.\n\n"
 	case "todo.clear_failed":
-		return "TODO 삭제 오류: %v\\n\\n"
+		return "TODO 삭제 오류: %v\n\n"
 	case "todo.none":
-		return "TODO 목록을 찾을 수 없습니다. todo_write 도구로 생성하세요.\\n\\n"
+		return "TODO 목록을 찾을 수 없습니다. todo_write 도구로 생성하세요.\n\n"
 	case "todo.read_failed":
-		return "TODO 읽기 오류: %v\\n\\n"
+		return "TODO 읽기 오류: %v\n\n"
 	case "todo.parse_failed":
-		return "TODO 파싱 오류: %v\\n\\n"
+		return "TODO 파싱 오류: %v\n\n"
 	case "todo.title":
-		return "TODO 목록:\\n%s\\n\\n"
+		return "TODO 목록:\n%s\n\n"
 	case "bug.title":
-		return "=== 버그 보고 진단 ===\\n\\n"
+		return "=== 버그 보고 진단 ===\n\n"
 	case "bug.version":
-		return "버전: %s\\n"
+		return "버전: %s\n"
 	case "bug.os":
-		return "운영체제: %s %s\\n"
+		return "운영체제: %s %s\n"
 	case "bug.go":
-		return "Go: %s\\n"
+		return "Go: %s\n"
 	case "bug.provider":
-		return "제공자: %s\\n"
+		return "제공자: %s\n"
 	case "bug.model":
-		return "모델: %s\\n"
+		return "모델: %s\n"
 	case "bug.session":
-		return "세션: %s (메시지 %d개)\\n"
+		return "세션: %s (메시지 %d개)\n"
 	case "bug.mcp":
-		return "MCP 서버: %d개\\n"
+		return "MCP 서버: %d개\n"
 	case "bug.last_error":
-		return "마지막 오류: %s\\n"
+		return "마지막 오류: %s\n"
 	case "bug.hint":
-		return "\\n버그를 보고할 때 이 정보를 포함해 주세요.\\n\\n"
+		return "\n버그를 보고할 때 이 정보를 포함해 주세요.\n\n"
 	case "config.usage":
-		return "사용법: /config set <키> <값>\\n\\n키: model, vendor, endpoint, language, apikey [--vendor]\\n\\n엔드포인트: /config add-endpoint <이름> <base_url> [--protocol openai] [--apikey sk-xxx]\\n          /config remove-endpoint <이름>\\n\\n"
+		return "사용법: /config set <키> <값>\n\n키: model, vendor, endpoint, language, apikey [--vendor]\n\n엔드포인트: /config add-endpoint <이름> <base_url> [--protocol openai] [--apikey sk-xxx]\n          /config remove-endpoint <이름>\n\n"
 	case "config.not_loaded":
-		return "설정을 불러오지 못했습니다.\\n\\n"
+		return "설정을 불러오지 못했습니다.\n\n"
 	case "config.model_set":
-		return "설정: 모델 = %s\\n\\n"
+		return "설정: 모델 = %s\n\n"
 	case "config.provider_set":
-		return "설정: 제공자 = %s\\n\\n"
+		return "설정: 제공자 = %s\n\n"
 	case "config.language_set":
-		return "설정: 언어 = %s\\n\\n"
+		return "설정: 언어 = %s\n\n"
 	case "config.unknown_key":
-		return "알 수 없는 설정 키: %s\\n지원됨: model, provider, language\\n\\n"
+		return "알 수 없는 설정 키: %s\n지원됨: model, provider, language\n\n"
 	case "config.title":
-		return "현재 설정:\\n"
+		return "현재 설정:\n"
 	case "status.title":
-		return "상태:\\n"
+		return "상태:\n"
 	case "panel.update":
 		return "업데이트"
 	case "label.version":
@@ -664,75 +664,75 @@ func koCatalog(key string) string {
 	case "update.check_failed":
 		return "확인 실패: %s"
 	case "update.unavailable":
-		return "이 세션에서는 업데이트를 사용할 수 없습니다.\\n\\n"
+		return "이 세션에서는 업데이트를 사용할 수 없습니다.\n\n"
 	case "update.preparing":
 		return "업데이트 준비 중"
 	case "update.failed":
-		return "업데이트 실패: %v\\n\\n"
+		return "업데이트 실패: %v\n\n"
 	case "update.restart_failed":
-		return "업데이트가 준비되었지만 재시작에 실패했습니다: %v\\n\\n"
+		return "업데이트가 준비되었지만 재시작에 실패했습니다: %v\n\n"
 	case "update.pm_hint.brew":
-		return "업데이트 설치 완료. 참고: Homebrew로 설치되었습니다.\\nHomebrew 동기화를 위해 `brew upgrade ggcode`를 실행하세요.\\n\\n"
+		return "업데이트 설치 완료. 참고: Homebrew로 설치되었습니다.\nHomebrew 동기화를 위해 `brew upgrade ggcode`를 실행하세요.\n\n"
 	case "update.pm_hint.scoop":
-		return "업데이트 설치 완료. 참고: Scoop으로 설치되었습니다.\\nScoop 동기화를 위해 `scoop update ggcode`를 실행하세요.\\n\\n"
+		return "업데이트 설치 완료. 참고: Scoop으로 설치되었습니다.\nScoop 동기화를 위해 `scoop update ggcode`를 실행하세요.\n\n"
 	case "update.pm_hint.winget":
-		return "업데이트 설치 완료. 참고: winget으로 설치되었습니다.\\nwinget 동기화를 위해 `winget upgrade ggcode`를 실행하세요.\\n\\n"
+		return "업데이트 설치 완료. 참고: winget으로 설치되었습니다.\nwinget 동기화를 위해 `winget upgrade ggcode`를 실행하세요.\n\n"
 	case "update.pm_hint.snap":
-		return "업데이트 설치 완료. 참고: Snap으로 설치되었습니다.\\nSnap 동기화를 위해 `sudo snap refresh ggcode`를 실행하세요.\\n\\n"
+		return "업데이트 설치 완료. 참고: Snap으로 설치되었습니다.\nSnap 동기화를 위해 `sudo snap refresh ggcode`를 실행하세요.\n\n"
 	case "update.other_installs":
-		return "이 시스템에서 다른 ggcode 설치가 감지되었습니다:\\n%s\\n다른 ggcode가 PATH에 먼저 나타나면 함께 업데이트하거나 PATH 순서를 조정하세요.\\n\\n"
+		return "이 시스템에서 다른 ggcode 설치가 감지되었습니다:\n%s\n다른 ggcode가 PATH에 먼저 나타나면 함께 업데이트하거나 PATH 순서를 조정하세요.\n\n"
 	case "update.dual_scope":
-		return "경고: 사용자 및 시스템 전체 ggcode 설치가 모두 발견되었습니다:\\n  사용자: %s\\n  시스템: %s\\nPATH 충돌이 발생할 수 있습니다. 설정 > 앱에서 하나를 제거하는 것을 고려하세요.\\n\\n"
+		return "경고: 사용자 및 시스템 전체 ggcode 설치가 모두 발견되었습니다:\n  사용자: %s\n  시스템: %s\nPATH 충돌이 발생할 수 있습니다. 설정 > 앱에서 하나를 제거하는 것을 고려하세요.\n\n"
 	case "plugins.unavailable":
-		return "플러그인 관리자를 사용할 수 없습니다.\\n\\n"
+		return "플러그인 관리자를 사용할 수 없습니다.\n\n"
 	case "plugins.none":
-		return "로드된 플러그인이 없습니다.\\n\\n"
+		return "로드된 플러그인이 없습니다.\n\n"
 	case "plugins.title":
-		return "플러그인:\\n"
+		return "플러그인:\n"
 	case "mcp.none":
-		return "구성된 MCP 서버가 없습니다.\\n\\n"
+		return "구성된 MCP 서버가 없습니다.\n\n"
 	case "mcp.title":
-		return "MCP 서버:\\n"
+		return "MCP 서버:\n"
 	case "mcp.active_tools":
 		return "활성 도구"
 	case "mcp.more":
 		return "… %d개 더 • /mcp"
 	case "image.usage":
-		return "사용법: /image <경로/파일.png> 또는 /image paste\\n"
+		return "사용법: /image <경로/파일.png> 또는 /image paste\n"
 	case "image.formats":
-		return "지원 형식: PNG, JPEG, GIF, WebP (최대 20MB)\\n\\n"
+		return "지원 형식: PNG, JPEG, GIF, WebP (최대 20MB)\n\n"
 	case "image.attached":
-		return "이미지 첨부됨: %s\\n"
+		return "이미지 첨부됨: %s\n"
 	case "image.attached_hint":
-		return "메시지를 보내 이미지를 포함하거나, /image로 다른 이미지를 첨부하세요.\\n\\n"
+		return "메시지를 보내 이미지를 포함하거나, /image로 다른 이미지를 첨부하세요.\n\n"
 	case "image.clipboard_failed":
 		return "클립보드에서 이미지를 붙여널 수 없습니다: %v"
 	case "image.clipboard_no_image_windows":
 		return "클립보드에서 이미지를 찾을 수 없습니다. Windows에서는 Ctrl+V가 종종 가로채집니다."
 	case "agents.unavailable":
-		return "서브에이전트 관리자가 구성되지 않았습니다.\\n\\n"
+		return "서브에이전트 관리자가 구성되지 않았습니다.\n\n"
 	case "agents.none":
-		return "아직 생성된 서브에이전트가 없습니다.\\nLLLM이 spawn_agent 도구를 사용하여 서브에이전트를 생성할 수 있습니다.\\n\\n"
+		return "아직 생성된 서브에이전트가 없습니다.\nLLLM이 spawn_agent 도구를 사용하여 서브에이전트를 생성할 수 있습니다.\n\n"
 	case "agents.title":
-		return "서브에이전트 %d개:\\n"
+		return "서브에이전트 %d개:\n"
 	case "agents.item":
-		return "  %s [%s]%s - %s\\n"
+		return "  %s [%s]%s - %s\n"
 	case "agents.hint":
-		return "\\n/agent <id>로 상세 정보, /agent cancel <id>로 취소하세요.\\n\\n"
+		return "\n/agent <id>로 상세 정보, /agent cancel <id>로 취소하세요.\n\n"
 	case "agent.usage":
-		return "사용법: /agent <id> 또는 /agent cancel <id>\\n\\n"
+		return "사용법: /agent <id> 또는 /agent cancel <id>\n\n"
 	case "agent.cancelled":
 		return "에이전트가 취소되었습니다"
 	case "agent.cancel_failed":
-		return "%s을(를) 취소할 수 없습니다 (찾을 수 없거나 실행 중이 아님)\\n\\n"
+		return "%s을(를) 취소할 수 없습니다 (찾을 수 없거나 실행 중이 아님)\n\n"
 	case "agent.not_found":
-		return "서브에이전트 %s을(를) 찾을 수 없습니다\\n\\n"
+		return "서브에이전트 %s을(를) 찾을 수 없습니다\n\n"
 	case "agent.title":
 		return "에이전트"
 	case "agent.result":
-		return "결과: %s\\n"
+		return "결과: %s\n"
 	case "agent.error":
-		return "오류: %v\\n"
+		return "오류: %v\n"
 	case "slash.help":
 		return "도움말 표시"
 	case "slash.sessions":
@@ -1040,9 +1040,9 @@ func koCatalog(key string) string {
 	case "reflect.empty":
 		return "아직 실행 인사이트가 없습니다. 인사이트는 도구 호출 3회 이상 또는 파일 편집이 있는 에이전트 실행 후 자동으로 생성됩니다."
 	case "reflect.title":
-		return "## 누적 실행 인사이트\\n\\n"
+		return "## 누적 실행 인사이트\n\n"
 	case "reflect.memory_location":
-		return "메모리 위치: %s\\n"
+		return "메모리 위치: %s\n"
 	case "knight.unavailable":
 		return "Knight를 사용할 수 없습니다"
 	case "pairing.rejected":

@@ -3,6 +3,7 @@ package tui
 // Guard tests for the #890-#894 fix round.
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -49,5 +50,20 @@ func TestSlashStreamArgsPreserveCase(t *testing.T) {
 	args := strings.TrimSpace(text[len("/stream"):])
 	if args != "start MyTarget" {
 		t.Fatalf("args = %q, want %q", args, "start MyTarget")
+	}
+}
+
+// TestCatalogValuesNoLiteralBackslashN (#895): values must contain real
+// newline escapes (\n), never the double-escaped literal \\n that renders
+// as raw "\n" text in the UI.
+func TestCatalogValuesNoLiteralBackslashN(t *testing.T) {
+	for _, p := range []string{"i18n_ko.go", "i18n_ja.go", "i18n_en.go", "i18n_fr.go", "i18n_es.go", "i18n_zh_cn.go", "i18n_zh_tw.go"} {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			continue // optional catalogs in this test context
+		}
+		if strings.Contains(string(data), `\\n`) {
+			t.Errorf("%s contains literal \\\\n escapes", p)
+		}
 	}
 }

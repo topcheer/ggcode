@@ -216,9 +216,9 @@ func jaCatalog(key string) string {
 	case "queued.count":
 		return "%d 件キュー中"
 	case "queued.output":
-		return "[キュー %d 件保留中]\\n\\n"
+		return "[キュー %d 件保留中]\n\n"
 	case "interrupt.delivered":
-		return "[アクティブ実行に配信; 計画修正中]\\n"
+		return "[アクティブ実行に配信; 計画修正中]\n"
 	case "status.thinking":
 		return "考え中..."
 	case "status.writing":
