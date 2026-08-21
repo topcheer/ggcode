@@ -46,7 +46,10 @@ echo "[verify-ci] downloading modules"
 go mod download
 
 echo "[verify-ci] building ggcode"
-GOMEMLIMIT="${GOMEMLIMIT}" go build -tags goolm -o /tmp/ggcode ./cmd/ggcode
+# -p 1 on build too: parallel compilation of large packages (desktop/wailskit,
+# internal/agent) spikes peak RSS past GOMEMLIMIT on shared machines and gets
+# OOM-killed ("signal: killed") - same rationale as the -p 1 on vet/test below.
+GOMEMLIMIT="${GOMEMLIMIT}" GOGC=50 go build -p 1 -tags goolm -o /tmp/ggcode ./cmd/ggcode
 
 echo "[verify-ci] running go vet"
 # -p 1: vet defaults to -p=GOMAXPROCS; on shared/constrained runners the
