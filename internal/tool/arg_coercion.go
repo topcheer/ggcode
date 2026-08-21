@@ -196,6 +196,13 @@ func coerceInteger(val json.RawMessage) (json.RawMessage, bool) {
 		if math.IsNaN(f) || f < math.MinInt64 || f >= math.MaxInt64 {
 			return val, false
 		}
+		// #802: only INTEGRAL floats may coerce ('42.0' -> 42). int64(f)
+		// silently truncated '3.7' -> 3, executing a weak model's typo'd
+		// integer param (lines/offset/counts) with wrong data instead of the
+		// corrective type error this module's philosophy (L26) promises.
+		if f != math.Trunc(f) {
+			return val, false
+		}
 		return json.RawMessage(strconv.FormatInt(int64(f), 10)), true
 	}
 	return val, false
