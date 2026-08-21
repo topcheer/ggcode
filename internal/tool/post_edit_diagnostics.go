@@ -166,7 +166,10 @@ func checkSiblingDiagnostics(ctx context.Context, workingDir, filePath string) s
 			b.WriteString(fmt.Sprintf("  ... and %d more\n", len(warnings)-3))
 		}
 	}
-	b.WriteString("These errors are in sibling files caused by your edit. Fix them too.")
+	// #856: cached sibling diagnostics may predate this edit (no baseline
+	// diff available for other files), so don't assert causality — point the
+	// agent at verification instead of chasing edit-caused errors.
+	b.WriteString("Sibling files in this package report errors. These may pre-date your edit — check whether they reference symbols you changed before fixing.")
 	return b.String()
 }
 
@@ -235,7 +238,9 @@ func checkCrossPackageDiagnostics(ctx context.Context, workingDir, filePath stri
 			b.WriteString(fmt.Sprintf("  ... and %d more\n", len(warnings)-3))
 		}
 	}
-	b.WriteString("These errors are in files that import the package you just edited. Fix them too.")
+	// #856: same as sibling diagnostics — cross-package errors come from a
+	// gopls cache with no baseline; avoid the false 'caused by your edit'.
+	b.WriteString("Files importing this package report errors. These may pre-date your edit — check whether they call symbols you changed before fixing.")
 	return b.String()
 }
 
