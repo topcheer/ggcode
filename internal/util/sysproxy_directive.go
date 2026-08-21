@@ -34,10 +34,14 @@ func ProxyURLFromDirective(directive string) *url.URL {
 		return nil
 	case strings.HasPrefix(upper, "PROXY "), strings.HasPrefix(upper, "HTTPS "):
 		return parseHostPortDirective(d[6:], "http")
-	case strings.HasPrefix(upper, "SOCKS5 "), strings.HasPrefix(upper, "SOCKS "):
+	case strings.HasPrefix(upper, "SOCKS5 "):
+		return parseHostPortDirective(d[len("SOCKS5 "):], "socks5")
+	case strings.HasPrefix(upper, "SOCKS "):
 		// PAC "SOCKS" means SOCKS4 per spec but is universally served by
 		// SOCKS5-capable servers; map both to socks5 (SOCKS4 is extinct).
-		return parseHostPortDirective(d[len("SOCKS5 "):], "socks5")
+		// NOTE: slice by len("SOCKS ") (6), NOT len("SOCKS5 ") (7) - the
+		// mismatch trimmed the first host char ("10.0.0.1" -> "0.0.1").
+		return parseHostPortDirective(d[len("SOCKS "):], "socks5")
 	case strings.HasPrefix(upper, "SOCKS4 "):
 		return nil // no stdlib socks4 dialer
 	default:
