@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 // CmdSnippetTool provides a persistent, project-scoped library of reusable
@@ -200,14 +201,14 @@ func (t *CmdSnippetTool) doSave(name, command, desc string, tags []string) (Resu
 	if command == "" {
 		return Result{IsError: true, Content: "command is required"}, nil
 	}
-	if len(name) > cmdSnippetMaxName {
-		return Result{IsError: true, Content: fmt.Sprintf("name too long: %d chars (max %d)", len(name), cmdSnippetMaxName)}, nil
+	if utf8.RuneCountInString(name) > cmdSnippetMaxName {
+		return Result{IsError: true, Content: fmt.Sprintf("name too long: %d chars (max %d)", utf8.RuneCountInString(name), cmdSnippetMaxName)}, nil
 	}
-	if len(command) > cmdSnippetMaxCommand {
-		return Result{IsError: true, Content: fmt.Sprintf("command too long: %d chars (max %d)", len(command), cmdSnippetMaxCommand)}, nil
+	if utf8.RuneCountInString(command) > cmdSnippetMaxCommand {
+		return Result{IsError: true, Content: fmt.Sprintf("command too long: %d chars (max %d)", utf8.RuneCountInString(command), cmdSnippetMaxCommand)}, nil
 	}
-	if len(desc) > cmdSnippetMaxDesc {
-		desc = desc[:cmdSnippetMaxDesc-3] + "..."
+	if utf8.RuneCountInString(desc) > cmdSnippetMaxDesc {
+		desc = truncateRunes(desc, cmdSnippetMaxDesc-3) + "..."
 	}
 	if len(tags) > cmdSnippetMaxTags {
 		tags = tags[:cmdSnippetMaxTags]

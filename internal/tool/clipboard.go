@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // ClipboardTool lets the agent read from and write to the system clipboard.
@@ -65,7 +66,9 @@ func (t ClipboardTool) Execute(ctx context.Context, input json.RawMessage) (Resu
 		if strings.TrimSpace(args.Text) == "" {
 			return Result{IsError: true, Content: "action='write' requires non-empty 'text' parameter"}, nil
 		}
-		if len(args.Text) > clipboardMaxChars {
+		// #809: rune count, not bytes -- CJK text (3 bytes/rune) got a ~1/3
+		// quota under len().
+		if utf8.RuneCountInString(args.Text) > clipboardMaxChars {
 			return Result{IsError: true, Content: fmt.Sprintf("text exceeds maximum of %d characters", clipboardMaxChars)}, nil
 		}
 		return t.writeClipboard(ctx, args.Text)
@@ -87,10 +90,20 @@ func (ClipboardTool) readClipboard(ctx context.Context) (Result, error) {
 	if text == "" {
 		return Result{Content: "(clipboard is empty)"}, nil
 	}
-	if len(text) > clipboardMaxChars {
-		text = text[:clipboardMaxChars] + "\n... (truncated)"
+	if utf8.RuneCountInString(text) > clipboardMaxChars {
+		text = truncateRunes(text, clipboardMaxChars) + "\n... (truncated)"
 	}
 	return Result{Content: text}, nil
+}
+
+// truncateRunes cuts s to at most max runes without splitting a
+// multi-byte rune (#809).
+func truncateRunes(s string, max int) string {
+	if utf8.RuneCountInString(s) <= max {
+		return s
+	}
+	runes := []rune(s)
+	return string(runes[:max])
 }
 
 func (ClipboardTool) writeClipboard(ctx context.Context, text string) (Result, error) {
@@ -103,8 +116,8 @@ func (ClipboardTool) writeClipboard(ctx context.Context, text string) (Result, e
 		return Result{IsError: true, Content: fmt.Sprintf("clipboard write failed: %v", err)}, nil
 	}
 	preview := text
-	if len(preview) > 200 {
-		preview = preview[:200] + "..."
+	if utf8.RuneCountInString(preview) > 200 {
+		preview = truncateRunes(preview, 200) + "..."
 	}
 	return Result{Content: fmt.Sprintf("Copied %d characters to clipboard: %s", len(text), preview)}, nil
 }
