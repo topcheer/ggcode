@@ -42,6 +42,8 @@ jobs:
       - name: Build probe helper
         shell: pwsh
         run: |
+          # Out-File does not create parent directories.
+          New-Item -ItemType Directory -Force -Path probe, probe/fetch, probe/bin | Out-Null
           @'
           package main
 
@@ -49,7 +51,6 @@ jobs:
             "fmt"
             "net/http"
             "os"
-            "time"
 
             "github.com/topcheer/ggcode/internal/util"
           )
@@ -74,9 +75,10 @@ jobs:
 
           import (
             "fmt"
+            "io"
             "net/http"
             "os"
-            "io"
+            "time"
 
             "github.com/topcheer/ggcode/internal/util"
           )
@@ -141,16 +143,26 @@ jobs:
           New-Item -ItemType Directory -Force -Path probe/www | Out-Null
           $pac | Out-File -Encoding ascii probe/www/proxy.pac
 
+          # Serve the PAC script on 127.0.0.1:8099 -- AutoConfigURL points
+          # here and fetchPACScript GETs it, so something must listen.
+          $py = if (Get-Command python -ErrorAction SilentlyContinue) { 'python' } else { 'py' }
+          $server = Start-Process -FilePath $py -ArgumentList '-m','http.server','8099','--directory','probe/www' -PassThru -WindowStyle Hidden
           $reg = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings"
           Set-ItemProperty $reg AutoConfigURL "http://127.0.0.1:8099/proxy.pac"
           try {
+            $up = $false
+            foreach ($i in 1..20) {
+              try { Invoke-WebRequest -NoProxy -UseBasicParsing http://127.0.0.1:8099/proxy.pac -TimeoutSec 2 | Out-Null; $up = $true; break } catch { Start-Sleep -Milliseconds 500 }
+            }
+            if (-not $up) { Write-Error "PAC server on :8099 did not come up"; exit 1 }
             $out = & probe/bin/probe.exe
             if ($out -notmatch '^PROXY http://127\.0\.0\.1:8888') { Write-Error "expected PAC-directed proxy, got: $out"; exit 1 }
             Write-Host "layer3 OK: $out"
           } finally {
             Remove-ItemProperty $reg AutoConfigURL
+            if ($server -and -not $server.HasExited) { Stop-Process -Id $server.Id -Force }
           }
 
       - name: Table tests (all platforms)
         shell: pwsh
-        run: go test -tags goolm -count=1 -run "PAC|SmartProxy" ./internal/util/
+        run: go test -tags goolm -count=1 -run "PAC|SmartProxy|Directive" ./internal/util/
