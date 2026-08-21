@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 // SafeSymlink creates a symbolic link from oldname to newname.
@@ -34,8 +36,10 @@ func SafeSymlink(oldname, newname string) error {
 }
 
 // junctionDir creates a Windows directory junction (similar to symlink for dirs).
+// #923: junctions need NO privilege (unlike symlinks) - this previously
+// fell back to recursively COPYING the tree (no link semantics: source
+// updates never propagated; deleting the copy left the source untouched).
 func junctionDir(oldname, newname string) error {
-	// Use absolute path for junction target
 	absOld, err := filepath.Abs(oldname)
 	if err != nil {
 		return fmt.Errorf("junction: abs path: %w", err)
@@ -45,26 +49,24 @@ func junctionDir(oldname, newname string) error {
 		return fmt.Errorf("junction: abs path: %w", err)
 	}
 
-	// Remove existing target if any
+	// Refuse to destroy an existing NON-EMPTY target (the old code's
+	// silent os.Remove could delete real files).
+	if entries, err := os.ReadDir(absNew); err == nil && len(entries) > 0 {
+		return fmt.Errorf("junction: target %s not empty", absNew)
+	}
 	_ = os.Remove(absNew)
 
-	// Create junction using cmd /c mklink /J
 	return cmdJunction(absOld, absNew)
 }
 
+// cmdJunction creates a real junction via cmd /c mklink /J (#923).
 func cmdJunction(target, link string) error {
-	// Fallback: just copy the directory tree
-	return filepath.Walk(target, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, _ := filepath.Rel(target, path)
-		dst := filepath.Join(link, rel)
-		if info.IsDir() {
-			return os.MkdirAll(dst, info.Mode())
-		}
-		return copyFile(path, dst)
-	})
+	cmd := exec.Command("cmd", "/c", "mklink", "/J", link, target)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("mklink /J %s %s: %v: %s", link, target, err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 func copyFile(src, dst string) error {

@@ -159,9 +159,10 @@ func (m *UpgradeManager) Start() {
 // the newly established relay connection. If P2P is already active
 // (DataChannel open), it is left untouched.
 //
-// Debounce: if called within 2s of a previous Restart, the call is
+// Debounce: if called within 5s of a previous Restart, the call is
 // coalesced into the pending restart to avoid tearing down peers when
-// the relay fires multiple connect events in rapid succession.
+// the relay fires multiple connect events in rapid succession (#923:
+// comment said 2s while the code uses 5s).
 func (m *UpgradeManager) Restart() {
 	if !m.cfg.Enabled {
 		return
@@ -221,6 +222,18 @@ func (m *UpgradeManager) runUpgrade(signalCh chan SignalMessage) {
 	// Note: p2pNegotiating stays true through P2P disconnect. It's cleared
 	// when P2P fails and we revert to relay (allowing recovery replay).
 
+	// #923: every early-exit path MUST clear p2pNegotiating + trigger
+	// recovery replay, or a transient factory/startNeg failure permanently
+	// suppresses replay (events missed during negotiation never sync).
+	failAndRevert := func(reason string) {
+		debug.Log("tunnel", "upgrade: reverting to relay (%s)", reason)
+		m.broker.p2pNegotiating.Store(false)
+		m.broker.TriggerReplayNow()
+		if !m.staleGenLocked() {
+			m.setState(UpgradeFailed)
+		}
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), m.cfg.ICETimeout)
 	defer cancel()
 
@@ -237,6 +250,7 @@ func (m *UpgradeManager) runUpgrade(signalCh chan SignalMessage) {
 	case <-time.After(3 * time.Second):
 		debug.Log("tunnel", "upgrade: mobile-ready delay elapsed")
 	case <-ctx.Done():
+		failAndRevert("ready-delay ctx done")
 		return
 	}
 
@@ -253,7 +267,7 @@ func (m *UpgradeManager) runUpgrade(signalCh chan SignalMessage) {
 	p2pTransport, readyCh, startNeg, cleanup, err := m.factory()
 	if err != nil {
 		debug.Log("tunnel", "upgrade: factory error: %v", err)
-		m.setState(UpgradeFailed)
+		failAndRevert("factory error")
 		return
 	}
 
@@ -328,9 +342,7 @@ func (m *UpgradeManager) runUpgrade(signalCh chan SignalMessage) {
 	recvCh := (<-chan SignalMessage)(signalCh)
 	if err := startNeg(sendSignal, recvCh); err != nil {
 		debug.Log("tunnel", "upgrade: negotiation start error: %v", err)
-		if !staleGen() {
-			m.setState(UpgradeFailed)
-		}
+		failAndRevert("startNeg error")
 		return
 	}
 
@@ -340,7 +352,9 @@ func (m *UpgradeManager) runUpgrade(signalCh chan SignalMessage) {
 	case <-p2pDone:
 		// P2P disconnected, OnDisconnect already handled cleanup.
 	case <-ctx.Done():
-		if m.state == UpgradeActive {
+		// #923: read state under the lock (setState writes under m.mu).
+		state := m.stateLocked()
+		if state == UpgradeActive {
 			// P2P is active — wait for disconnect instead of timing out.
 			debug.Log("tunnel", "upgrade: ctx done but P2P active, waiting for disconnect")
 			<-p2pDone
@@ -360,6 +374,23 @@ func (m *UpgradeManager) setState(s UpgradeState) {
 	m.state = s
 	m.mu.Unlock()
 	m.notifyState()
+}
+
+// stateLocked returns the current upgrade state safely (#923: runUpgrade
+// read m.state without the lock while setState writes under it).
+func (m *UpgradeManager) stateLocked() UpgradeState {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.state
+}
+
+// staleGenLocked reports whether the manager generation has moved on since
+// the caller captured it (#923: shared by runUpgrade's failAndRevert).
+func (m *UpgradeManager) staleGenLocked() bool {
+	m.mu.Lock()
+	gen := m.generation
+	m.mu.Unlock()
+	return gen != m.generation
 }
 
 func (m *UpgradeManager) notifyState() {
