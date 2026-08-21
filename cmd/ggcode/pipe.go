@@ -68,6 +68,9 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 	// Setup tools (after policy so sandbox checks can be wired)
 	var ag *agent.Agent
 	core, err := agentruntime.BuildInteractiveRuntimeCore(cfg, workingDir, policy)
+	if err == nil {
+		core.SetConfigPath(cfgPath) // #763: enable config hot-reload watch
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "building runtime core: %v\n", err)
 		return 1

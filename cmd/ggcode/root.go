@@ -436,6 +436,9 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	var ag *agent.Agent // declared early so closures can capture it
 
 	core, err := agentruntime.BuildInteractiveRuntimeCore(cfg, workingDir, policy)
+	if err == nil {
+		core.SetConfigPath(cfgFile) // #763: enable config hot-reload watch
+	}
 	if err != nil {
 		return err
 	}

@@ -34,12 +34,14 @@ type InteractiveRuntimeCore struct {
 	CommandManager   *commands.Manager
 	Tunnel           *TunnelHost // unified tunnel event management
 	configAccess     *configAccess
+	configPath       string // ggcode.yaml the session loaded (hot-reload watch target)
 	workingDir       string
 
-	mcpCtx         context.Context
-	mcpCancel      context.CancelFunc
-	mcpHotReload   *MCPHotReload
-	skillHotReload *SkillHotReload
+	mcpCtx          context.Context
+	mcpCancel       context.CancelFunc
+	mcpHotReload    *MCPHotReload
+	configHotReload *ConfigHotReload
+	skillHotReload  *SkillHotReload
 }
 
 func BuildInteractiveRuntimeCore(cfg *config.Config, workingDir string, policy permission.PermissionPolicy) (*InteractiveRuntimeCore, error) {
@@ -124,6 +126,13 @@ func (c *InteractiveRuntimeCore) SetConfigAgent(ag *agent.Agent) {
 	}
 }
 
+// SetConfigPath records which ggcode.yaml the session loaded, enabling
+// the config hot-reload watcher in StartBackgroundServices. Call before
+// StartBackgroundServices; without it no config hot-reload runs.
+func (c *InteractiveRuntimeCore) SetConfigPath(path string) {
+	c.configPath = path
+}
+
 // SetConfigUINotify sets an optional callback for UI refresh after provider changes.
 func (c *InteractiveRuntimeCore) SetConfigUINotify(fn func()) {
 	if c.configAccess != nil {
@@ -151,6 +160,12 @@ func (c *InteractiveRuntimeCore) StartBackgroundServices() {
 			c.skillHotReload = NewSkillHotReload(c.CommandManager, dirs)
 			c.skillHotReload.Start(c.mcpCtx)
 		}
+	}
+
+	// Start ggcode.yaml/vendors.yaml config hot-reload (#763).
+	if c.configAccess != nil && c.configPath != "" {
+		c.configHotReload = NewConfigHotReload(c.configPath, c.configAccess)
+		c.configHotReload.Start(c.mcpCtx)
 	}
 }
 

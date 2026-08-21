@@ -158,6 +158,9 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	// Tools
 	var ag *agent.Agent
 	core, err := agentruntime.BuildInteractiveRuntimeCore(cfg, workingDir, policy)
+	if err == nil {
+		core.SetConfigPath(cfgFile) // #763: enable config hot-reload watch
+	}
 	if err != nil {
 		return err
 	}

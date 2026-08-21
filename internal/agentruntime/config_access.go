@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/agent"
@@ -19,10 +20,12 @@ import (
 // configAccess implements tool.ConfigAccess backed by *config.Config.
 // It does NOT depend on any UI layer type.
 type configAccess struct {
+	cfgMu      sync.RWMutex // guards cfg pointer swaps and field refreshes (config hot-reload)
 	cfg        *config.Config
 	workingDir string
 	agentInst  *agent.Agent // set after agent creation via SetAgent()
-	uiNotify   func()       // optional UI refresh callback
+	uiNotify   func()       // optional UI refresh callback after provider changes
+	hotReload  *ConfigHotReload
 }
 
 // NewConfigAccess creates a ConfigAccess backed by the given config.
@@ -44,6 +47,8 @@ func (a *configAccess) SetUINotify(fn func()) {
 // --- Get ---
 
 func (a *configAccess) Get(key string) (string, error) {
+	a.cfgMu.RLock()
+	defer a.cfgMu.RUnlock()
 	if a.cfg == nil {
 		return "", fmt.Errorf("config is nil")
 	}
@@ -134,6 +139,8 @@ func (a *configAccess) Get(key string) (string, error) {
 // --- Set ---
 
 func (a *configAccess) Set(key, value string) error {
+	a.cfgMu.Lock()
+	defer a.cfgMu.Unlock()
 	if a.cfg == nil {
 		return fmt.Errorf("config is nil")
 	}
