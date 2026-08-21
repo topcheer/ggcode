@@ -2,8 +2,10 @@ package tui
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/session"
@@ -118,6 +120,31 @@ func TestSessionRecap(t *testing.T) {
 		}
 		if !contains(recap, "...") {
 			t.Errorf("recap should truncate long preview, got: %s", recap[len(recap)-50:])
+		}
+	})
+
+	// #913: byte-slicing at 120 split CJK runes mid-character (mojibake on
+	// resume); truncation must land on rune boundaries.
+	t.Run("cjk preview truncates on rune boundary", func(t *testing.T) {
+		longPreview := strings.Repeat("好", 130) // 130 runes, 390 bytes
+		ses := &session.Session{
+			Title:     "Test",
+			UpdatedAt: now,
+			Preview:   longPreview,
+			Messages: []provider.Message{
+				{Role: "user"},
+			},
+		}
+		recap := sessionRecap(ses, now)
+		if recap == "" {
+			t.Fatal("expected non-empty recap")
+		}
+		// Whatever got kept must be valid UTF-8 with no replacement chars.
+		if strings.ContainsRune(recap, utf8.RuneError) {
+			t.Errorf("cjk truncation produced invalid utf-8: %q", recap[len(recap)-60:])
+		}
+		if !contains(recap, "...") {
+			t.Errorf("recap should truncate long cjk preview")
 		}
 	})
 }
