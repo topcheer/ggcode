@@ -37,7 +37,7 @@ func WrapTransport(base *http.Transport) *http.Transport {
 		t = base.Clone()
 	} else {
 		t = &http.Transport{
-			Proxy: http.ProxyFromEnvironment,
+			Proxy: SmartProxyFunc(),
 		}
 	}
 	// Disable HTTP/2 globally to prevent a crash in net/http's http2 client

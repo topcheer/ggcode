@@ -29,7 +29,7 @@ func newProviderHTTPTransport() *http.Transport {
 		IdleConnTimeout:       providerIdleConnTimeout,
 		MaxIdleConns:          providerMaxIdleConns,
 		MaxIdleConnsPerHost:   providerMaxIdleConnsPerHost,
-		Proxy:                 http.ProxyFromEnvironment,
+		Proxy:                 util.SmartProxyFunc(),
 		// Disable HTTP/2 to prevent a crash in net/http's http2 client conn
 		// readLoop on Windows (Go 1.26.x). The http2Framer.ReadFrameHeader
 		// panics with a nil pointer when the connection is reset by the peer

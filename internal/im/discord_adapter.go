@@ -120,6 +120,13 @@ func (a *discordAdapter) run(ctx context.Context) {
 		}
 		err := a.connectAndServe(ctx)
 		if err != nil {
+			select {
+			case <-ctx.Done():
+				// Don't publish late errors after context cancellation
+				// They would override the "stopped" state set below
+				return
+			default:
+			}
 			a.publishState(false, "error", err.Error())
 			debug.Log("discord", "adapter=%s error: %v", a.name, err)
 		}

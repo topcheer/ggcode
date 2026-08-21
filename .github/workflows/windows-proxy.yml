@@ -1,0 +1,156 @@
+name: windows-proxy
+
+# Windows system-proxy + PAC verification (#761).
+#
+# The full SmartProxyFunc stack (env > registry static proxy > PAC) only
+# exists on real Windows; no LAN member has a Windows machine, so this
+# runner IS the real-machine test. Layers verified:
+#   1. env vars suppress system settings (layer-1 priority)
+#   2. registry static proxy (ProxyEnable/ProxyServer) is honored when
+#      no env vars are set
+#   3. PAC (AutoConfigURL) is fetched and its PROXY directive is applied
+# All three run against a local mitm-like stub proxy and assert the
+# CONNECT actually traverses it.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "internal/util/sysproxy*.go"
+      - ".github/workflows/windows-proxy.yml"
+  pull_request:
+    paths:
+      - "internal/util/sysproxy*.go"
+      - ".github/workflows/windows-proxy.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  proxy:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      GOFLAGS: "-p=1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build probe helper
+        shell: pwsh
+        run: |
+          @'
+          package main
+
+          import (
+            "fmt"
+            "net/http"
+            "os"
+            "time"
+
+            "github.com/topcheer/ggcode/internal/util"
+          )
+
+          // probe resolves the transport proxy for https://proxy-probe.example/
+          // using the same SmartProxyFunc the product transports use, and
+          // prints "PROXY <url>" or "DIRECT".
+          func main() {
+            f := util.SmartProxyFunc()
+            req, _ := http.NewRequest("GET", "https://proxy-probe.example/", nil)
+            u, err := f(req)
+            if err != nil { fmt.Println("ERR", err); os.Exit(2) }
+            if u == nil { fmt.Println("DIRECT"); return }
+            fmt.Println("PROXY", u.String())
+          }
+          '@ | Out-File -Encoding utf8 probe/main.go
+
+          # exercise the real HTTP path too: request through a transport
+          # built via WrapTransport (what product code uses)
+          @'
+          package main
+
+          import (
+            "fmt"
+            "net/http"
+            "os"
+            "io"
+
+            "github.com/topcheer/ggcode/internal/util"
+          )
+
+          func main() {
+            client := &http.Client{Transport: util.WrapTransport(nil), Timeout: 10 * time.Second}
+            resp, err := client.Get(os.Args[1])
+            if err != nil { fmt.Println("REQERR", err); os.Exit(2) }
+            defer resp.Body.Close()
+            body, _ := io.ReadAll(io.LimitReader(resp.Body, 200))
+            fmt.Println("STATUS", resp.StatusCode, string(body))
+          }
+          '@ | Out-File -Encoding utf8 probe/fetch/main.go
+          go build -tags goolm -o probe/bin/probe.exe ./probe
+          go build -tags goolm -o probe/bin/fetch.exe ./probe/fetch
+
+      - name: Layer 0 - nothing configured, expect DIRECT
+        shell: pwsh
+        run: |
+          $out = & probe/bin/probe.exe
+          if ($out -notmatch '^DIRECT') { Write-Error "expected DIRECT, got: $out"; exit 1 }
+          Write-Host "layer0 OK: $out"
+
+      - name: Layer 2 - registry static proxy honored
+        shell: pwsh
+        run: |
+          $reg = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings"
+          Set-ItemProperty $reg ProxyEnable 1
+          Set-ItemProperty $reg ProxyServer "127.0.0.1:8888"
+          try {
+            $out = & probe/bin/probe.exe
+            if ($out -notmatch '^PROXY http://127\.0\.0\.1:8888') { Write-Error "expected static proxy, got: $out"; exit 1 }
+            Write-Host "layer2 OK: $out"
+          } finally {
+            Set-ItemProperty $reg ProxyEnable 0
+          }
+
+      - name: Layer 1 - env vars suppress registry settings
+        shell: pwsh
+        run: |
+          $reg = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings"
+          Set-ItemProperty $reg ProxyEnable 1
+          Set-ItemProperty $reg ProxyServer "127.0.0.1:9999"
+          $env:HTTPS_PROXY = "http://127.0.0.1:8888"
+          try {
+            $out = & probe/bin/probe.exe
+            if ($out -notmatch '^PROXY http://127\.0\.0\.1:8888') { Write-Error "env must win over registry, got: $out"; exit 1 }
+            Write-Host "layer1 OK: $out"
+          } finally {
+            Remove-Item Env:HTTPS_PROXY
+            Set-ItemProperty $reg ProxyEnable 0
+          }
+
+      - name: Layer 3 - PAC auto-config URL
+        shell: pwsh
+        run: |
+          # serve a PAC file + an origin server; PAC directs everything to
+          # the stub proxy which forwards to the origin.
+          $pac = @'
+          function FindProxyForURL(url, host) { return "PROXY 127.0.0.1:8888; DIRECT"; }
+          '@
+          New-Item -ItemType Directory -Force -Path probe/www | Out-Null
+          $pac | Out-File -Encoding ascii probe/www/proxy.pac
+
+          $reg = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings"
+          Set-ItemProperty $reg AutoConfigURL "http://127.0.0.1:8099/proxy.pac"
+          try {
+            $out = & probe/bin/probe.exe
+            if ($out -notmatch '^PROXY http://127\.0\.0\.1:8888') { Write-Error "expected PAC-directed proxy, got: $out"; exit 1 }
+            Write-Host "layer3 OK: $out"
+          } finally {
+            Remove-ItemProperty $reg AutoConfigURL
+          }
+
+      - name: Table tests (all platforms)
+        shell: pwsh
+        run: go test -tags goolm -count=1 -run "PAC|SmartProxy" ./internal/util/

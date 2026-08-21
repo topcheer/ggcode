@@ -165,7 +165,7 @@ func (c *Client) Start(ctx context.Context) error {
 			headers.Set(key, value)
 		}
 		dialer := *websocket.DefaultDialer
-		dialer.Proxy = http.ProxyFromEnvironment
+		dialer.Proxy = util.SmartProxyFunc()
 		conn, _, err := dialer.DialContext(ctx, c.url, headers)
 		if err != nil {
 			return fmt.Errorf("mcp[%s]: websocket dial: %w", c.name, err)

@@ -215,6 +215,13 @@ func (a *dingtalkAdapter) run(ctx context.Context) {
 		a.publishState(false, "disconnected", "")
 
 		if err != nil {
+			select {
+			case <-ctx.Done():
+				// Don't publish late errors after context cancellation
+				// They would override the "disconnected" state set above
+				return
+			default:
+			}
 			debug.Log("dingtalk", "adapter=%s error: %v", a.name, err)
 			a.publishState(false, "error", err.Error())
 		}
