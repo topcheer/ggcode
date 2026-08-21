@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -455,9 +456,14 @@ func parseIntPositive(s string) (int, error) {
 		s = s[:len(s)-1]
 	}
 	var val int
-	_, err := fmt.Sscanf(s, "%d", &val)
-	if err != nil {
+	// #903: Sscanf stops at the first non-digit WITHOUT error — '0x10'
+	// parsed as 0 and silently wiped the context window with a success
+	// message. Validate the whole string via a round-trip comparison.
+	if _, err := fmt.Sscanf(s, "%d", &val); err != nil {
 		return 0, fmt.Errorf("invalid number: %q", s)
+	}
+	if strconv.Itoa(val) != s {
+		return 0, fmt.Errorf("invalid number: %q (trailing characters or non-decimal input)", s)
 	}
 	if val < 0 {
 		return 0, fmt.Errorf("must be >= 0")

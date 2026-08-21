@@ -709,6 +709,41 @@ func (c *Config) SetIMAdapterExtra(name, key, value string) error {
 	})
 }
 
+// SetIMAdapterEnv sets a single key in the adapter's Env map.
+// #897: env edits previously fell into SetIMAdapterExtra, writing a literal
+// 'env.FOO' key into Extra while adapter.Env kept its old value (config
+// pollution + silently ineffective edits + fake bounce-back in the panel).
+func (c *Config) SetIMAdapterEnv(name, key, value string) error {
+	if c == nil {
+		return fmt.Errorf("config is nil")
+	}
+	name = strings.TrimSpace(name)
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return fmt.Errorf("key is required")
+	}
+	if c.IM.Adapters == nil {
+		return fmt.Errorf("IM adapter %q not found", name)
+	}
+	adapter, ok := c.IM.Adapters[name]
+	if !ok {
+		return fmt.Errorf("IM adapter %q not found", name)
+	}
+	if adapter.Env == nil {
+		adapter.Env = make(map[string]string)
+	}
+	adapter.Env[key] = value
+	c.IM.Adapters[name] = adapter
+	return c.PatchIMAdapter(name, func(a map[string]interface{}) {
+		env, _ := a["env"].(map[string]interface{})
+		if env == nil {
+			env = map[string]interface{}{}
+		}
+		env[key] = value
+		a["env"] = env
+	})
+}
+
 // PatchIMAdapter patches a single IM adapter. For global scope, it operates
 // on im.yaml (external file). For instance scope, it patches the instance
 // ggcode.yaml directly (instance configs keep inline im: section).

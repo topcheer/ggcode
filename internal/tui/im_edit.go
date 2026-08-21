@@ -276,7 +276,14 @@ func (m *Model) saveIMEditField(adapterName, field, value string) tea.Cmd {
 			return imEditResultMsg{adapterName: adapterName, field: field, err: errors.New("config unavailable")}
 		}
 		// 1. Persist to config struct + YAML + keys.env (via Save's post-migration).
-		if err := m.config.SetIMAdapterExtra(adapterName, field, value); err != nil {
+		// #897: 'env.'-prefixed fields must write adapter.Env, not Extra —
+		// SetIMAdapterExtra would store a literal 'env.FOO' key, never apply
+		// to the running adapter, and bounce back in the edit panel.
+		if strings.HasPrefix(field, "env.") {
+			if err := m.config.SetIMAdapterEnv(adapterName, strings.TrimPrefix(field, "env."), value); err != nil {
+				return imEditResultMsg{adapterName: adapterName, field: field, err: err}
+			}
+		} else if err := m.config.SetIMAdapterExtra(adapterName, field, value); err != nil {
 			return imEditResultMsg{adapterName: adapterName, field: field, err: err}
 		}
 		// 2. Hot-reload: if the adapter is running, stop it and restart with new config.

@@ -384,14 +384,10 @@ func (m *Model) clearMMChannel(adapterName string) tea.Cmd {
 		if m.imManager == nil {
 			return mattermostBindResultMsg{}
 		}
-		ws := m.currentWorkspacePath()
-		if bindings, err := m.imManager.ListBindings(); err == nil {
-			for _, b := range bindings {
-				if b.Adapter == adapterName && b.Workspace == ws {
-					_ = m.imManager.UnbindAdapter(adapterName)
-					break
-				}
-			}
+		// #898/#905: unbind mislabeled as clear (binding lost) + false
+		// "cleared" when nothing matched. Clear channel fields only.
+		if err := m.imManager.ClearChannelByAdapter(adapterName); err != nil {
+			return mattermostBindResultMsg{err: err}
 		}
 		return mattermostBindResultMsg{message: m.t("panel.mattermost.message.cleared")}
 	}
@@ -458,8 +454,6 @@ func (m Model) mattermostBindingLabels(entries []mattermostBindingEntry) []strin
 	for _, entry := range entries {
 		var status string
 		switch {
-		case entry.Disabled:
-			status = m.t("panel.mattermost.entry.disabled")
 		case entry.Disabled:
 			status = m.t("panel.mattermost.entry.disabled")
 		case entry.Muted:

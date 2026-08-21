@@ -618,8 +618,6 @@ func (m Model) signalBindingLabels(entries []signalBindingEntry) []string {
 		switch {
 		case entry.Disabled:
 			status = m.t("panel.signal.entry.disabled")
-		case entry.Disabled:
-			status = m.t("panel.signal.entry.disabled")
 		case entry.Muted:
 			status = m.t("panel.signal.entry.muted")
 		case entry.OccupiedBy != "" && entry.OccupiedBy == currentWS:

@@ -400,6 +400,9 @@ func (m Model) handleApprovalKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		return m, nil
 	case "enter", "y", "Y":
 		if len(pending) > 0 {
+			// #899: pending may shrink while the popup is open (timeout,
+			// remote cancel) — clamp or the index panics.
+			p.approvalIdx %= len(pending)
 			approved, _ := m.lanChatHub.ApproveMessage(pending[p.approvalIdx].Message.ID)
 			p.approvalPopup = false
 			if approved != nil {
@@ -414,6 +417,7 @@ func (m Model) handleApprovalKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	case "a", "A":
 		// Always Approve — set policy then approve this message
 		if len(pending) > 0 {
+			p.approvalIdx %= len(pending) // #899
 			msg := pending[p.approvalIdx].Message
 			m.lanChatHub.SetApprovalPolicy(msg.FromNick, "always")
 			approved, _ := m.lanChatHub.ApproveMessage(msg.ID)
@@ -428,6 +432,7 @@ func (m Model) handleApprovalKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		return m, nil
 	case "n", "N", "r", "R":
 		if len(pending) > 0 {
+			p.approvalIdx %= len(pending) // #899
 			m.lanChatHub.RejectMessage(pending[p.approvalIdx].Message.ID, "rejected by host")
 			p.approvalPopup = false
 		}
@@ -626,6 +631,9 @@ func (m *Model) renderLanChatPanel() string {
 	if p.approvalPopup && hub != nil {
 		pending := hub.PendingApprovals()
 		if len(pending) > 0 {
+			if p.approvalIdx >= len(pending) { // #899: clamp on render too
+				p.approvalIdx %= len(pending)
+			}
 			body = append(body, "")
 			current := pending[p.approvalIdx]
 			popup := fmt.Sprintf(">> %s -> your agent:\n  %q\n\n  [Enter] Approve Once  [A] Always Approve  [N] Reject  [Esc] Close",

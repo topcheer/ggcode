@@ -402,8 +402,6 @@ func (m Model) slackBindingLabels(entries []slackBindingEntry) []string {
 		switch {
 		case entry.Disabled:
 			status = m.t("panel.slack.entry.disabled")
-		case entry.Disabled:
-			status = m.t("panel.slack.entry.disabled")
 		case entry.Muted:
 			status = m.t("panel.slack.entry.muted")
 		case entry.OccupiedBy != "" && entry.OccupiedBy == currentWS:

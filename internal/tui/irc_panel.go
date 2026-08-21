@@ -387,14 +387,13 @@ func (m *Model) clearIRCChannel(adapterName string) tea.Cmd {
 		if m.imManager == nil {
 			return ircBindResultMsg{}
 		}
-		ws := m.currentWorkspacePath()
-		if bindings, err := m.imManager.ListBindings(); err == nil {
-			for _, b := range bindings {
-				if b.Adapter == adapterName && b.Workspace == ws {
-					_ = m.imManager.UnbindAdapter(adapterName)
-					break
-				}
-			}
+		// #898: this was byte-for-byte the u-key UNBIND path — pressing x to
+		// clear the channel silently lost the whole workspace binding.
+		// Clear channel fields only, keep the binding (same semantics as
+		// the generic panel's clearIMPanelChannel). #905: report not-found
+		// instead of a false 'cleared' when no binding matches.
+		if err := m.imManager.ClearChannelByAdapter(adapterName); err != nil {
+			return ircBindResultMsg{err: err}
 		}
 		return ircBindResultMsg{message: m.t("panel.irc.message.cleared")}
 	}
@@ -461,8 +460,6 @@ func (m Model) ircBindingLabels(entries []ircBindingEntry) []string {
 	for _, entry := range entries {
 		var status string
 		switch {
-		case entry.Disabled:
-			status = m.t("panel.irc.entry.disabled")
 		case entry.Disabled:
 			status = m.t("panel.irc.entry.disabled")
 		case entry.Muted:

@@ -438,14 +438,12 @@ func (m *Model) clearNostrChannel(adapterName string) tea.Cmd {
 		if m.imManager == nil {
 			return nostrBindResultMsg{}
 		}
-		ws := m.currentWorkspacePath()
-		if bindings, err := m.imManager.ListBindings(); err == nil {
-			for _, b := range bindings {
-				if b.Adapter == adapterName && b.Workspace == ws {
-					_ = m.imManager.UnbindAdapter(adapterName)
-					break
-				}
-			}
+		// #898/#905: this was the UNBIND path mislabeled as "clear
+		// channel" (whole workspace binding lost) AND reported success
+		// even when no binding matched. Clear channel fields only;
+		// surface not-found instead of a false "cleared".
+		if err := m.imManager.ClearChannelByAdapter(adapterName); err != nil {
+			return nostrBindResultMsg{err: err}
 		}
 		return nostrBindResultMsg{message: m.t("panel.nostr.message.cleared")}
 	}
@@ -512,8 +510,6 @@ func (m Model) nostrBindingLabels(entries []nostrBindingEntry) []string {
 	for _, entry := range entries {
 		var status string
 		switch {
-		case entry.Disabled:
-			status = m.t("panel.nostr.entry.disabled")
 		case entry.Disabled:
 			status = m.t("panel.nostr.entry.disabled")
 		case entry.Muted:

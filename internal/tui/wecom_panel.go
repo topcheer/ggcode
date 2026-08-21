@@ -466,8 +466,6 @@ func (m Model) wecomBindingLabels(entries []wecomBindingEntry) []string {
 		switch {
 		case entry.Disabled:
 			status = m.t("panel.wecom.entry.disabled")
-		case entry.Disabled:
-			status = m.t("panel.wecom.entry.disabled")
 		case entry.Muted:
 			status = m.t("panel.wecom.entry.muted")
 		case entry.OccupiedBy != "" && entry.OccupiedBy == currentWS:

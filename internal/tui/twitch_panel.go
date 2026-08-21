@@ -462,8 +462,6 @@ func (m Model) twitchBindingLabels(entries []twitchBindingEntry) []string {
 		switch {
 		case entry.Disabled:
 			status = m.t("panel.twitch.entry.disabled")
-		case entry.Disabled:
-			status = m.t("panel.twitch.entry.disabled")
 		case entry.Muted:
 			status = m.t("panel.twitch.entry.muted")
 		case entry.OccupiedBy != "" && entry.OccupiedBy == currentWS:

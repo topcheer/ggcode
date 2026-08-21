@@ -1212,6 +1212,11 @@ func (m *Model) closeActivePanel() bool {
 	switch {
 	case m.modelPanel != nil:
 		m.closeModelPanel()
+	// #904: hasActivePanel counts hooksPanel but this switch had no case —
+	// Ctrl+C fell through to exit-confirmation (second press could quit the
+	// TUI) instead of closing a mere panel.
+	case m.hooksPanel != nil:
+		m.closeHooksPanel()
 	case m.providerPanel != nil:
 		m.closeProviderPanel()
 	case m.tgPanel != nil:

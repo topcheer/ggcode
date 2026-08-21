@@ -344,7 +344,10 @@ var imPanelConfigs = map[string]imPanelConfig{
 		color:       "35",
 		parseCreateSpec: func(spec string) (map[string]string, error) {
 			fields := strings.Fields(spec)
-			if len(fields) < 3 {
+			// #896: builder reads fields[3] — a 3-field input (natural typo
+			// short of the token) passed the old <3 guard and panicked the
+			// TUI (closure runs in a tea.Cmd goroutine).
+			if len(fields) < 4 {
 				return nil, errors.New("invalid format: expected name homeserver user_id access_token")
 			}
 			return map[string]string{
@@ -669,7 +672,11 @@ func (m *Model) generateIMPanelShareLink(entry imBindingEntry) tea.Cmd {
 			return imBindResultMsg{err: fmt.Errorf("render QR code: %w", err)}
 		}
 		return imBindResultMsg{
-			message:      m.t("panel." + entry.Adapter + ".message.share_generated"),
+			// #901: entry.Adapter is the user-chosen INSTANCE name; the i18n
+			// key exists only for platform types, not instance names — the
+			// bar showed the literal key. This helper serves QQ-style share
+			// flows; use the QQ platform key directly.
+			message:      m.t("panel.qq.message.share_generated"),
 			shareAdapter: entry.Adapter,
 			shareLink:    link,
 			shareQRCode:  qr,

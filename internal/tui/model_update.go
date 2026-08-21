@@ -366,10 +366,36 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		return m.handleAgentErrMsg(msg)
 
 	case knightTaskResultMsg:
+		// #902: empty case left the spinner forever and agentBusy stuck —
+		// every later submission queued behind a dead /knight run.
+		m.setLoading(false)
+		if msg.Err != nil {
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("knight task %s failed: %v", msg.Result.TaskName, msg.Err))
+		} else {
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("knight task %s done (%s): %s", msg.Result.TaskName, msg.Result.Duration, msg.Result.Output))
+		}
+		return m, nil
 
 	case knightProjectProposalResultMsg:
+		// #902: same deadlock class as knightTaskResultMsg.
+		m.setLoading(false)
+		if msg.Err != nil {
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("knight proposal failed: %v", msg.Err))
+		} else {
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("knight proposal ready: %s", msg.Proposal.Title))
+		}
+		return m, nil
 
 	case knightTaskEventMsg:
+		// #902: per model_messages.go these should surface as a system chat
+		// message (task started/completed progress).
+		m.setLoading(false)
+		if msg.Report != "" {
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("knight %s: %s", msg.TaskName, msg.Report))
+		} else {
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("knight %s started", msg.TaskName))
+		}
+		return m, nil
 
 	case initPromptCheckMsg:
 		m.initPromptActive = msg.needsInit
@@ -529,6 +555,11 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			m.suppressNextTunnelSystem = sysMsg
 			m.chatWriteSystem(nextSystemID(), sysMsg)
 			m.queuePendingSubmissionHidden(prompt)
+			// #903: queued successfully — must return here; the debug log
+			// below then claimed 'skipped (queue_if_busy=false)', the exact
+			// opposite of what happened.
+			debug.Log("cron", "queued firing (agent busy, queue_if_busy=true): %s", msg.Prompt)
+			return m, nil
 		}
 		// queue_if_busy=false and agent busy: skip silently (debug log for observability)
 		debug.Log("cron", "skipped firing (agent busy, queue_if_busy=false): %s", msg.Prompt)

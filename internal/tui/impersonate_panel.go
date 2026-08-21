@@ -21,6 +21,10 @@ const (
 	impSectionHeaders
 )
 
+// impMaxVisible is the impersonate panel render window height (#900:
+// single source shared by render and scroll math).
+const impMaxVisible = 16
+
 type headerEntry struct {
 	Key   string
 	Value string
