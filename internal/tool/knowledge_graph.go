@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 // KnowledgeGraphTool provides a persistent, project-scoped knowledge graph
@@ -183,7 +184,16 @@ func (t *KnowledgeGraphTool) doAdd(s *kgStore, p *kgParams) (Result, error) {
 
 	now := time.Now()
 	if ex, ok := s.Nodes[id]; ok {
-		ex.Type, ex.Title, ex.Content = nt, p.Title, p.Content
+		ex.Type = nt
+		if p.Title != "" {
+			ex.Title = p.Title
+		}
+		// #844: Content was unconditionally assigned - an update carrying only
+		// status=superseded erased the node's accumulated text. Guard like
+		// Tags/Status so partial updates preserve prior content.
+		if p.Content != "" {
+			ex.Content = p.Content
+		}
 		if p.Tags != nil {
 			ex.Tags = p.Tags
 		}
@@ -483,8 +493,9 @@ func formatNodeShort(sb *strings.Builder, n *kgNode) {
 	sb.WriteString(fmt.Sprintf("[%s] %s (id=%s)\n", n.Type, n.Title, n.ID))
 	if n.Content != "" {
 		pv := n.Content
-		if len(pv) > 200 {
-			pv = pv[:200] + "..."
+		// #850: rune-safe preview - byte slicing split multibyte characters.
+		if utf8.RuneCountInString(pv) > 200 {
+			pv = string([]rune(pv)[:200]) + "..."
 		}
 		sb.WriteString(fmt.Sprintf("  %s\n", pv))
 	}

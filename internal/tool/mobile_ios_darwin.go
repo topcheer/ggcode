@@ -4,6 +4,7 @@ package tool
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -229,8 +230,20 @@ func (b *iosBackend) screenshot(ctx context.Context, device, format string, qual
 }
 
 func (b *iosBackend) tap(ctx context.Context, device, ref string, x, y int) (Result, error) {
-	// Use AppleScript to send a click to the Simulator window at the given coordinates.
-	// This works because Simulator renders at a 1:1 pixel ratio on macOS.
+	// #843: mirror the Android backend - a ref without coordinates cannot
+	// be resolved here; silently defaulting to (0,0) clicks the top-left of
+	// the SCREEN (outside the Simulator window) while reporting success.
+	if ref != "" {
+		return Result{IsError: true, Content: "element reference requires a prior snapshot - tap the field first with explicit coordinates"}, nil
+	}
+	// #842: screenshot pixels are DEVICE physical pixels (2x/3x Retina),
+	// while click-at coordinates are screen-absolute points. Divide by the
+	// device scale factor so coordinates inferred from screenshots land on
+	// their targets.
+	sx, sy := b.scaleForDevice(device)
+	if sx > 1 || sy > 1 {
+		x, y = x/sx, y/sy
+	}
 	script := fmt.Sprintf(`
 tell application "Simulator" to activate
 delay 0.2
@@ -242,6 +255,58 @@ end tell`, x, y)
 		return Result{IsError: true, Content: fmt.Sprintf("tap failed: %v\n%s\nNote: Grant Accessibility permission to Terminal/ggcode in System Preferences > Security & Privacy > Privacy > Accessibility", err, stderr)}, nil
 	}
 	return Result{Content: fmt.Sprintf("Tapped at (%d, %d).", x, y)}, nil
+}
+
+// scaleForDevice returns the pixel scale factor of the booted simulator
+// (2 for Retina, 3 for Plus/Pro Max; 1 when unknown) (#842). Derived by
+// capturing a screenshot and comparing its pixel width against the
+// device's logical screen width from simctl list --json.
+func (b *iosBackend) scaleForDevice(device string) (int, int) {
+	// Screenshot pixel size: PNG header bytes 16-24 hold width/height.
+	tmp, err := os.CreateTemp("", "ggcode-scale-*.png")
+	if err != nil {
+		return 1, 1
+	}
+	path := tmp.Name()
+	tmp.Close()
+	defer os.Remove(path)
+	if _, _, err := runCommand(context.Background(), 10*time.Second, "xcrun", "simctl", "io", device, "screenshot", path); err != nil {
+		return 1, 1
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || len(data) < 24 {
+		return 1, 1
+	}
+	pxW := int(binary.BigEndian.Uint32(data[16:20]))
+	pxH := int(binary.BigEndian.Uint32(data[20:24]))
+	if pxW <= 0 || pxH <= 0 {
+		return 1, 1
+	}
+	// Logical size from simctl device list JSON.
+	_, out, _ := runCommand(context.Background(), 10*time.Second, "xcrun", "simctl", "list", "devices", "--json")
+	var list struct {
+		Devices map[string][]struct {
+			UDID string `json:"udid"`
+		} `json:"devices"`
+	}
+	if json.Unmarshal([]byte(out), &list) == nil {
+		for _, devs := range list.Devices {
+			for _, d := range devs {
+				if d.UDID == device {
+					// Probe common logical widths against pixel width.
+					for _, logical := range []int{320, 375, 390, 393, 414, 428, 430, 744, 768, 1024} {
+						if pxW%logical == 0 {
+							s := pxW / logical
+							if s >= 1 && s <= 3 {
+								return s, s
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	return 1, 1
 }
 
 func (b *iosBackend) typeText(ctx context.Context, device, ref, text string, x, y int) (Result, error) {
@@ -266,23 +331,27 @@ end tell`, escapedText)
 }
 
 func (b *iosBackend) swipe(ctx context.Context, device, ref string, x, y, endX, endY int) (Result, error) {
-	// Use AppleScript CGEvent-based mouse drag
-	steps := 5
-	scriptParts := []string{
-		`tell application "Simulator" to activate`,
-		`delay 0.2`,
+	// #841: discrete clicks are full press+release cycles - iOS never
+	// recognizes them as a pan. Build a sustained mouse down -> move ->
+	// mouse up drag via System Events.
+	sx, sy := b.scaleForDevice(device)
+	if sx > 1 || sy > 1 {
+		x, y, endX, endY = x/sx, y/sy, endX/sx, endY/sy
 	}
-	// Build mouse down → move → mouse up sequence
-	scriptParts = append(scriptParts, fmt.Sprintf(
-		`tell application "System Events" to click at {%d, %d}`, x, y))
+	steps := 8
+	var sb strings.Builder
+	sb.WriteString(`tell application "Simulator" to activate` + "\n" + `delay 0.2` + "\n")
+	sb.WriteString("tell application \"System Events\"\n")
+	sb.WriteString(fmt.Sprintf("  mouse move to {%d, %d}\n", x, y))
+	sb.WriteString("  mouse down\n")
 	for i := 1; i <= steps; i++ {
 		interX := x + (endX-x)*i/steps
 		interY := y + (endY-y)*i/steps
-		scriptParts = append(scriptParts, fmt.Sprintf(
-			`tell application "System Events" to click at {%d, %d}`, interX, interY))
+		sb.WriteString(fmt.Sprintf("  mouse move to {%d, %d}\n", interX, interY))
 	}
-	script := strings.Join(scriptParts, "\n")
-	_, stderr, err := runCommand(ctx, 15*time.Second, "osascript", "-e", script)
+	sb.WriteString("  mouse up\n")
+	sb.WriteString("end tell")
+	_, stderr, err := runCommand(ctx, 15*time.Second, "osascript", "-e", sb.String())
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("swipe failed: %v\n%s", err, stderr)}, nil
 	}

@@ -430,8 +430,11 @@ func (t *Iterm2Tool) executeSendKey(sessionID, key, modifiers string) Result {
 		"escape": "\x1b", "esc": "\x1b",
 		"tab":       "\t",
 		"space":     " ",
-		"backspace": "\x7f", "delete": "\x7f",
-		"up": "\x1b[A", "down": "\x1b[B", "right": "\x1b[C", "left": "\x1b[D",
+		"backspace": "\x7f",
+		// #849: forward delete is ESC[3~ (kitty sends the same) - mapping it
+		// to DEL erased the character LEFT of the cursor.
+		"delete": "\x1b[3~",
+		"up":     "\x1b[A", "down": "\x1b[B", "right": "\x1b[C", "left": "\x1b[D",
 		"home": "\x1b[H", "end": "\x1b[F",
 		"pageup": "\x1b[5~", "pagedown": "\x1b[6~",
 		"f1": "\x1bOP", "f2": "\x1bOQ", "f3": "\x1bOR", "f4": "\x1bOS",
@@ -443,7 +446,7 @@ func (t *Iterm2Tool) executeSendKey(sessionID, key, modifiers string) Result {
 	if seq, ok := escMap[keyLower]; ok {
 		data = seq
 	} else if len(key) == 1 {
-		// Single character — apply modifier transformations
+		// Single character - apply modifier transformations
 		data = key
 		mods := strings.ToLower(modifiers)
 		if strings.Contains(mods, "control") || strings.Contains(mods, "ctrl") {
@@ -701,7 +704,7 @@ end tell`
 		script = `
 tell application "iTerm" to activate
 tell application "System Events"
-	click menu item "Toggle Broadcasting to Current Split Pane" of menu "Shell" of menu bar item "Shell" of menu bar 1 of process "iTerm2"
+	click menu item "Stop Broadcasting Input" of menu "Shell" of menu bar item "Shell" of menu bar 1 of process "iTerm2"
 end tell`
 	default:
 		return Result{IsError: true, Content: fmt.Sprintf("invalid broadcast sub-action %q (use toggle/on/off)", subAction)}
@@ -723,7 +726,7 @@ func (t *Iterm2Tool) executeMark(subAction string) Result {
 
 	switch sub {
 	case "set":
-		// Use OSC 1337 escape sequence written directly to TTY — no
+		// Use OSC 1337 escape sequence written directly to TTY - no
 		// Accessibility permission needed.
 		err := t.iterm2WriteToTTY("", "\033]1337;SetMark\007")
 		if err != nil {
@@ -732,7 +735,7 @@ func (t *Iterm2Tool) executeMark(subAction string) Result {
 		return Result{Content: "iterm2 mark: set"}
 
 	case "next", "prev", "clear":
-		// No known escape sequence for jump/clear marks — needs keyboard
+		// No known escape sequence for jump/clear marks - needs keyboard
 		// shortcuts via System Events, which requires Accessibility.
 		script := fmt.Sprintf(`
 tell application "iTerm" to activate

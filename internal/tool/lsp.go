@@ -392,7 +392,13 @@ func capLSPOutput(s string) string {
 	if len(s) <= maxLSPOutputBytes {
 		return s
 	}
-	return s[:maxLSPOutputBytes] + "\n... [LSP output truncated]"
+	// #850: byte slicing split multibyte characters (CJK mojibake) -
+	// back off to a rune boundary instead.
+	cut := maxLSPOutputBytes
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "\n... [LSP output truncated]"
 }
 
 func resolveLSPToolPath(path, workingDir string, sandboxCheck AllowedPathChecker) (string, error) {
@@ -578,7 +584,7 @@ func NewLSPTools(workingDir string, readSandbox, writeSandbox AllowedPathChecker
 		},
 		lspPositionTool{
 			name:         "lsp_document_highlights",
-			description:  "Find all occurrences of the symbol at a specific position within the CURRENT file, classified as read/write/text. Faster and more precise than lsp_references or grep for local edits — use this when you need to understand how a variable/function is used within one file.",
+			description:  "Find all occurrences of the symbol at a specific position within the CURRENT file, classified as read/write/text. Faster and more precise than lsp_references or grep for local edits - use this when you need to understand how a variable/function is used within one file.",
 			workingDir:   workingDir,
 			sandboxCheck: readSandbox,
 			exec: func(ctx context.Context, workspace, path string, pos lsp.Position) (string, error) {
@@ -764,7 +770,7 @@ func NewLSPTools(workingDir string, readSandbox, writeSandbox AllowedPathChecker
 				for _, item := range items {
 					entry := fmt.Sprintf("%s:%d:%d %s", item.Path, item.Range.Start.Line, item.Range.Start.Character, item.Name)
 					if item.Detail != "" {
-						entry += " — " + item.Detail
+						entry += " - " + item.Detail
 					}
 					data, _ := json.Marshal(item)
 					out = append(out, entry+"\n"+string(data))
@@ -793,7 +799,7 @@ func NewLSPTools(workingDir string, readSandbox, writeSandbox AllowedPathChecker
 				for _, call := range calls {
 					entry := fmt.Sprintf("%s:%d:%d %s", call.From.Path, call.From.Range.Start.Line, call.From.Range.Start.Character, call.From.Name)
 					if call.From.Detail != "" {
-						entry += " — " + call.From.Detail
+						entry += " - " + call.From.Detail
 					}
 					out = append(out, entry)
 				}
@@ -821,7 +827,7 @@ func NewLSPTools(workingDir string, readSandbox, writeSandbox AllowedPathChecker
 				for _, call := range calls {
 					entry := fmt.Sprintf("%s:%d:%d %s", call.To.Path, call.To.Range.Start.Line, call.To.Range.Start.Character, call.To.Name)
 					if call.To.Detail != "" {
-						entry += " — " + call.To.Detail
+						entry += " - " + call.To.Detail
 					}
 					out = append(out, entry)
 				}

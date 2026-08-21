@@ -352,11 +352,14 @@ func (t IMTool) doSend(ctx context.Context, adapter, message string, autoStart b
 
 	// Case 2: adapter is muted or disabled, and auto_start is false
 	if !autoStart {
-		stateDesc := "muted"
+		// #848: muted adapters are almost always 'unhealthy' too - checking
+		// health first pointed operators at connection debugging instead of
+		// unmute/auto_start. Mute is the actionable state; check it first.
+		stateDesc := "not healthy"
 		if isDisabled {
 			stateDesc = "disabled"
-		} else if !healthy {
-			stateDesc = "not healthy"
+		} else if isMuted {
+			stateDesc = "muted"
 		}
 		return Result{IsError: true, Content: fmt.Sprintf(
 			"adapter %q is %s. Set auto_start=true to automatically activate it before sending.",
@@ -364,7 +367,7 @@ func (t IMTool) doSend(ctx context.Context, adapter, message string, autoStart b
 		)}, nil
 	}
 
-	// Case 3: auto_start=true — check multi-instance conflict first
+	// Case 3: auto_start=true - check multi-instance conflict first
 	if t.Manager.OtherInstancesHaveActiveChannels() {
 		// Another instance in the same workspace has active channels.
 		// Starting a competing adapter connection would cause conflicts
@@ -377,7 +380,7 @@ func (t IMTool) doSend(ctx context.Context, adapter, message string, autoStart b
 		)}, nil
 	}
 
-	// Case 4: auto_start=true, no conflict — activate the adapter
+	// Case 4: auto_start=true, no conflict - activate the adapter
 	var activateErr error
 	if isDisabled {
 		activateErr = t.Manager.EnableBinding(adapter)

@@ -1537,9 +1537,9 @@ func kittyLabel(args map[string]any) ToolPresentation {
 	case "new_window":
 		return toolPres("Kitty New Window", argStr(args, "command"))
 	case "focus":
-		return toolPres("Kitty Focus", fmt.Sprintf("window %v", args["window_id"]))
+		return toolPres("Kitty Focus", kittyWindowLabel(args))
 	case "close":
-		return toolPres("Kitty Close", fmt.Sprintf("window %v", args["window_id"]))
+		return toolPres("Kitty Close", kittyWindowLabel(args))
 	case "close_tab":
 		return toolPres("Kitty Close Tab", "")
 	case "select_tab":
@@ -1574,7 +1574,7 @@ func kittyLabel(args map[string]any) ToolPresentation {
 		}
 		return toolPres("Kitty Resize", fmt.Sprintf("%s %+d", axis, inc))
 	case "get_text":
-		return toolPres("Kitty Get Text", fmt.Sprintf("window %v", args["window_id"]))
+		return toolPres("Kitty Get Text", kittyWindowLabel(args))
 	case "zoom":
 		return toolPres("Kitty Zoom", "")
 	case "set_tab_title":
@@ -2093,4 +2093,13 @@ func extractIntField(text, prefix string) int {
 		}
 	}
 	return n
+}
+
+// kittyWindowLabel renders the window_id argument for kitty tool calls,
+// showing "(focused)" when omitted instead of a misleading "<nil>" (#852).
+func kittyWindowLabel(args map[string]any) string {
+	if id := argStr(args, "window_id"); id != "" {
+		return "window " + id
+	}
+	return "window (focused)"
 }

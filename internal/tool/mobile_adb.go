@@ -203,7 +203,7 @@ func (a *androidBackend) screenshot(ctx context.Context, device, format string, 
 		return Result{IsError: true, Content: fmt.Sprintf("failed to read screenshot: %v", err)}, nil
 	}
 	if len(data) == 0 {
-		return Result{IsError: true, Content: "screenshot captured 0 bytes — device may be offline"}, nil
+		return Result{IsError: true, Content: "screenshot captured 0 bytes - device may be offline"}, nil
 	}
 
 	if headless {
@@ -216,7 +216,7 @@ func (a *androidBackend) screenshot(ctx context.Context, device, format string, 
 
 func (a *androidBackend) tap(ctx context.Context, device, ref string, x, y int) (Result, error) {
 	if ref != "" {
-		return Result{IsError: true, Content: "element reference requires a prior snapshot — use coordinates instead, or call snapshot first"}, nil
+		return Result{IsError: true, Content: "element reference requires a prior snapshot - use coordinates instead, or call snapshot first"}, nil
 	}
 	args := adbDeviceArgs(device)
 	args = append(args, "shell", "input", "tap", strconv.Itoa(x), strconv.Itoa(y))
@@ -229,11 +229,17 @@ func (a *androidBackend) tap(ctx context.Context, device, ref string, x, y int) 
 
 func (a *androidBackend) typeText(ctx context.Context, device, ref, text string, x, y int) (Result, error) {
 	if ref != "" {
-		return Result{IsError: true, Content: "element reference requires a prior snapshot — tap the field first, then type"}, nil
+		return Result{IsError: true, Content: "element reference requires a prior snapshot - tap the field first, then type"}, nil
 	}
 	// Tap the field first if coordinates provided
 	if x > 0 || y > 0 {
-		if _, _, err := runCommand(ctx, 5*time.Second, a.adbPath, "shell", "input", "tap", strconv.Itoa(x), strconv.Itoa(y)); err != nil {
+		// #840: include the device selector - without it, multi-device setups
+		// fail 'more than one device/emulator', the error is swallowed below,
+		// and the text goes to whatever holds focus while the tool reports
+		// success.
+		preArgs := adbDeviceArgs(device)
+		preArgs = append(preArgs, "shell", "input", "tap", strconv.Itoa(x), strconv.Itoa(y))
+		if _, _, err := runCommand(ctx, 5*time.Second, a.adbPath, preArgs...); err != nil {
 			// Non-fatal, continue with typing
 		}
 		time.Sleep(200 * time.Millisecond)
@@ -272,11 +278,26 @@ func (a *androidBackend) press(ctx context.Context, device, key string) (Result,
 }
 
 func (a *androidBackend) logs(ctx context.Context, device, pkg string, lines int) (Result, error) {
+	unfiltered := false
 	args := adbDeviceArgs(device)
 	if pkg != "" {
-		args = append(args, "shell", "logcat", "-d", "--pid=$(pidof", "-s", pkg+" 2>/dev/null)")
+		// #847: the old form passed '--pid=$(pidof' as separate argv fragments
+		// with '2>/dev/null' glued to the package name - no shell expands
+		// $(...), so the pidof match almost always failed and every call fell
+		// to the unfiltered fallback. Query the pid first, then filter by it.
+		pidArgs := adbDeviceArgs(device)
+		pidArgs = append(pidArgs, "shell", "pidof", pkg)
+		_, outPid, _ := runCommand(ctx, 5*time.Second, a.adbPath, pidArgs...)
+		pid := strings.TrimSpace(outPid)
+		if pid != "" {
+			args = append(args, "shell", "logcat", "-d", "--pid="+pid, "-t", strconv.Itoa(lines))
+		} else {
+			// App not running - no pid to filter by. Fail loud instead of
+			// silently returning unrelated system noise as 'app logs'.
+			return Result{IsError: true, Content: fmt.Sprintf("app %q is not running (no pid); cannot filter logcat by package", pkg)}, nil
+		}
 	} else {
-		args = append(args, "shell", "logcat", "-d")
+		args = append(args, "shell", "logcat", "-d", "-t", strconv.Itoa(lines))
 	}
 	out, stderr, err := runCommand(ctx, 15*time.Second, a.adbPath, args...)
 	if err != nil {
@@ -287,7 +308,9 @@ func (a *androidBackend) logs(ctx context.Context, device, pkg string, lines int
 		if err != nil {
 			return Result{IsError: true, Content: fmt.Sprintf("logcat failed: %v\n%s", err, stderr)}, nil
 		}
+		unfiltered = true
 	}
+	_ = unfiltered
 	// Trim to last N lines
 	allLines := strings.Split(strings.TrimSpace(out), "\n")
 	if len(allLines) > lines {
@@ -398,10 +421,21 @@ func parseAndroidNode(attrs string) *uiElement {
 func simplifyAndroidClass(class string) string {
 	// Android.Widget.Button -> button
 	// android.widget.TextView -> text
+	// #839: uiautomator output can be malformed ('View', 'Layout', 'android.widget.',
+	// even '.'); TrimSuffix can empty the last segment and [:1] panicked with
+	// slice bounds out of range, crashing the whole process. Guard first.
 	parts := strings.Split(class, ".")
 	last := parts[len(parts)-1]
 	last = strings.TrimSuffix(last, "View")
 	last = strings.TrimSuffix(last, "Layout")
+	if last == "" {
+		if len(parts) > 1 {
+			// class like 'android.widget.View' - use the package segment
+			last = parts[len(parts)-2]
+		} else {
+			return strings.ToLower(strings.TrimSpace(class))
+		}
+	}
 	last = strings.ToLower(string([]rune(last)[:1])) + string([]rune(last)[1:])
 	return last
 }

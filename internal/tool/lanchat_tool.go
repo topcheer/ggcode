@@ -91,7 +91,7 @@ func (r *agentRateLimiter) checkDM(sender, recipient string, cooldown time.Durat
 	}
 	remaining := cooldown - elapsed
 	return fmt.Sprintf(
-		"rate-limited (%s remaining) — use sleep tool with seconds=%d to defer retry",
+		"rate-limited (%s remaining) - use sleep tool with seconds=%d to defer retry",
 		formatCooldown(remaining),
 		int(remaining.Seconds())+1,
 	)
@@ -163,7 +163,7 @@ func (t *LanChatTool) sharedWorkspaceHint(recipientNodeIDs []string) string {
 		"\n⚠ Shared workspace: %s work in %s too. When instructing them: "+
 			"(1) no git stash/checkout/reset (clobbers others' changes), "+
 			"(2) only stage your own files, "+
-			"(3) don't fix other agents' code — DM the owner, "+
+			"(3) don't fix other agents' code - DM the owner, "+
 			"(4) use worktree for isolated changes.",
 		strings.Join(sameWSNames, ", "), selfWS)
 }
@@ -196,7 +196,7 @@ func (t *LanChatTool) displayName(nodeID string) string {
 			break
 		}
 	}
-	// Node not in participants list — show a short prefix instead of the full long ID
+	// Node not in participants list - show a short prefix instead of the full long ID
 	if len(nodeID) > 16 {
 		return string([]rune(nodeID)[:16]) + "..."
 	}
@@ -226,7 +226,7 @@ func (t LanChatTool) Description() string {
 		"- Prefer targeted DMs (action='send') over broadcasts. Only broadcast when the user explicitly asks.\n" +
 		"- Do NOT send acknowledgments (\"got it\", \"thanks\"). Do the work silently.\n" +
 		"- Check action='list' for agent_busy status before messaging. Don't message busy agents unless urgent.\n" +
-		"- One message per task. No follow-up pings — check action='list' or wait.\n\n" +
+		"- One message per task. No follow-up pings - check action='list' or wait.\n\n" +
 		"Actions: list, send (DM), broadcast (your team), broadcast_all (everyone), send_team, history, pending, approve, reject, set_identity. " +
 		"Nick format: <name>_<role>. Use node_id from list as 'to' field, not nick."
 }
@@ -250,7 +250,7 @@ func (t LanChatTool) Parameters() json.RawMessage {
 			},
 			"nick": {
 				"type": "string",
-				"description": "New nickname for set_identity (e.g. 'alice', 'bob'). Combined with role to form the composite nick 'nick_role'. Optional — only provided fields are changed."
+				"description": "New nickname for set_identity (e.g. 'alice', 'bob'). Combined with role to form the composite nick 'nick_role'. Optional - only provided fields are changed."
 			},
 			"role": {
 				"type": "string",
@@ -313,7 +313,7 @@ func (t LanChatTool) Execute(ctx context.Context, input json.RawMessage) (Result
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
 	}
 
-	// as_agent defaults to true — this tool is almost always called by the
+	// as_agent defaults to true - this tool is almost always called by the
 	// agent, so messages should come from the agent identity. Only explicitly
 	// set as_agent=false should override this.
 	asAgent := true
@@ -475,7 +475,7 @@ func (t LanChatTool) resolveRecipients(ids []string) []string {
 			continue
 		}
 
-		// Not found in active peers — try archive fallback
+		// Not found in active peers - try archive fallback
 		unresolved = append(unresolved, raw)
 	}
 
@@ -491,7 +491,7 @@ func (t LanChatTool) resolveRecipients(ids []string) []string {
 		}
 
 		if ap != nil && ap.Team != "" && ap.Role != "" {
-			// Found in archive — try to find a currently active peer
+			// Found in archive - try to find a currently active peer
 			// with the same team+role (the peer may have restarted)
 			key := ap.Team + "|" + ap.Role
 			if id, ok := byTeamRole[key]; ok {
@@ -502,7 +502,7 @@ func (t LanChatTool) resolveRecipients(ids []string) []string {
 				continue
 			}
 		}
-		// If nothing matched, skip silently — caller handles empty result
+		// If nothing matched, skip silently - caller handles empty result
 	}
 
 	return resolved
@@ -599,7 +599,7 @@ func (t LanChatTool) doSend(ctx context.Context, content string, toNodeIDs []str
 	// prefix match (nick starts with the given string).
 	resolved := t.resolveRecipients(toNodeIDs)
 	if len(resolved) == 0 {
-		// No matches at all — show available participants to help
+		// No matches at all - show available participants to help
 		hint := t.doList("")
 		return Result{IsError: true, Content: fmt.Sprintf(
 			"no recipient found for: %s. Use action='list' to see valid node_ids and nicks.\n%s",
@@ -706,7 +706,7 @@ func (t LanChatTool) doSend(ctx context.Context, content string, toNodeIDs []str
 }
 
 // doBroadcastTeam broadcasts to members of the sender's own team.
-// This is the default broadcast behavior — it respects team isolation.
+// This is the default broadcast behavior - it respects team isolation.
 func (t LanChatTool) doBroadcastTeam(ctx context.Context, content string, asAgent bool) (Result, error) {
 	if content == "" {
 		return Result{IsError: true, Content: "message content is required for broadcast"}, nil
@@ -741,7 +741,12 @@ func (t LanChatTool) doBroadcastAll(ctx context.Context, content string, asAgent
 		return Result{IsError: true, Content: "no online participants to broadcast to"}, nil
 	}
 
-	toRole := lanchat.RoleAgent
+	// #845: mirror doSend's as_agent semantics - a human broadcast must land
+	// in human chat panels, not trigger every peer's agent approval loop.
+	toRole := lanchat.RoleHuman
+	if asAgent {
+		toRole = lanchat.RoleAgent
+	}
 
 	// Per-peer rate-limit check for agent-originated messages
 	var allowed []string
@@ -1013,7 +1018,7 @@ func (t LanChatTool) doSetIdentity(nick, role, team string) (Result, error) {
 	curRole := t.Hub.Role()
 	curTeam := t.Hub.Team()
 
-	// HumanNick is a composite "name_role" — extract the name part
+	// HumanNick is a composite "name_role" - extract the name part
 	if nick == "" {
 		if idx := strings.LastIndex(curNick, "_"); idx >= 0 {
 			nick = curNick[:idx]

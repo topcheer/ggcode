@@ -16,7 +16,7 @@ import (
 
 // MobileDeviceTool controls native mobile apps on iOS Simulator and Android
 // Emulator/Device. It provides screenshot, UI tree snapshot, tap, type, swipe,
-// launch, install, and log collection capabilities — all through system tools
+// launch, install, and log collection capabilities - all through system tools
 // (xcrun simctl / adb) with zero external dependencies.
 type MobileDeviceTool struct {
 	mu      sync.Mutex
@@ -221,7 +221,9 @@ func (t *MobileDeviceTool) Execute(ctx context.Context, input json.RawMessage) (
 	case "snapshot":
 		return backend.snapshot(ctx, device)
 	case "screenshot":
-		return backend.screenshot(ctx, device, p.Format, p.Quality, false)
+		// #851: honor the headless parameter - hardcoding false forced a
+		// visible emulator window for every screenshot request.
+		return backend.screenshot(ctx, device, p.Format, p.Quality, p.Headless)
 	case "tap":
 		return backend.tap(ctx, device, p.Ref, p.X, p.Y)
 	case "type":
