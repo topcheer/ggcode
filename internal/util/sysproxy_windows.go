@@ -73,10 +73,13 @@ type pacState struct {
 // staticSystemProxy resolves the registry static proxy (ProxyEnable /
 // ProxyServer / ProxyOverride) for a single request, mirroring
 // ieproxy's staticProxy but never consulting the auto-config entry.
-// Returns (nil, nil) when the static proxy is disabled.
+// Returns (nil, nil) when the static proxy is disabled. Note: an
+// autoDetect flag alone (WPAD, no AutoConfigURL) must NOT suppress the
+// static proxy -- github runners boot with fAutoDetect=true, and the
+// guard used to turn layer 2 into DIRECT there.
 func staticSystemProxy(req *http.Request) (*url.URL, error) {
 	conf := ieproxy.GetConf()
-	if conf.Automatic.Active || !conf.Static.Active || req.URL == nil {
+	if !conf.Static.Active || req.URL == nil {
 		return nil, nil
 	}
 	cfg := httpproxy.Config{
