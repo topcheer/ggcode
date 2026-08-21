@@ -14,7 +14,9 @@ func InferDefaultLayout(workspace string) []LayoutPane {
 	if fileExists(filepath.Join(workspace, "go.mod")) {
 		layout := []LayoutPane{
 			{Purpose: "shell", Command: "", Horizontal: true, Size: "35%"},
-			{Purpose: "test", Command: "go test -tags goolm ./...", Horizontal: false, Size: "30%"},
+			// #811: this is a GENERIC first-run layout; hardcoding this repo's
+			// '-tags goolm' filtered out every test in third-party projects.
+			{Purpose: "test", Command: "go test ./...", Horizontal: false, Size: "30%"},
 		}
 		if makefileHasTarget(workspace, "verify-ci") {
 			layout = append(layout, LayoutPane{Purpose: "verify", Command: "make verify-ci", Horizontal: false, Size: "30%"})

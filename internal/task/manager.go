@@ -149,11 +149,38 @@ func (m *Manager) Update(taskID string, opts UpdateOptions) (Task, error) {
 		return Task{}, fmt.Errorf("task %q status is %s, expected %s", taskID, t.Status, *opts.ExpectedStatus)
 	}
 
-	// Validate status transition
-	if opts.Status != nil {
-		if !IsValidStatus(string(*opts.Status)) {
-			return Task{}, fmt.Errorf("invalid status %q", *opts.Status)
+	// Validate status transition FIRST (#803): collect dependency edges and
+	// verify them before ANY mutation, so 'error = not modified' holds even
+	// when a later edge fails — Update(id, {Status: completed, AddBlockedBy:
+	// [nonexistent]}) must not leave Status half-applied.
+	if opts.Status != nil && !IsValidStatus(string(*opts.Status)) {
+		return Task{}, fmt.Errorf("invalid status %q", *opts.Status)
+	}
+	for _, blockID := range opts.AddBlocks {
+		if blockID == taskID {
+			return Task{}, fmt.Errorf("task %q cannot block itself (self-dependency)", taskID)
 		}
+		if !m.hasTask(blockID) {
+			return Task{}, fmt.Errorf("blocked task %q not found", blockID)
+		}
+		if m.wouldCreateCycle(blockID, taskID) {
+			return Task{}, fmt.Errorf("circular dependency detected: task %q is (transitively) blocked by task %q — cannot add block %q → %q", taskID, blockID, taskID, blockID)
+		}
+	}
+	for _, depID := range opts.AddBlockedBy {
+		if depID == taskID {
+			return Task{}, fmt.Errorf("task %q cannot depend on itself", taskID)
+		}
+		if !m.hasTask(depID) {
+			return Task{}, fmt.Errorf("blocking task %q not found", depID)
+		}
+		if m.wouldCreateCycle(taskID, depID) {
+			return Task{}, fmt.Errorf("circular dependency detected adding blocked-by %q", depID)
+		}
+	}
+
+	// All validation passed — apply mutations.
+	if opts.Status != nil {
 		t.Status = *opts.Status
 	}
 	if opts.Subject != nil {
@@ -169,19 +196,8 @@ func (m *Manager) Update(taskID string, opts UpdateOptions) (Task, error) {
 		t.Owner = *opts.Owner
 	}
 
-	// Add block relationships
+	// Add block relationships (validated above; now safe to apply)
 	for _, blockID := range opts.AddBlocks {
-		if blockID == taskID {
-			return Task{}, fmt.Errorf("task %q cannot block itself (self-dependency)", taskID)
-		}
-		if !m.hasTask(blockID) {
-			return Task{}, fmt.Errorf("blocked task %q not found", blockID)
-		}
-		// Cycle detection: if blockID is already (transitively) blocked by
-		// taskID, adding this edge would create a circular dependency.
-		if m.wouldCreateCycle(blockID, taskID) {
-			return Task{}, fmt.Errorf("circular dependency detected: task %q is (transitively) blocked by task %q — cannot add block %q → %q", taskID, blockID, taskID, blockID)
-		}
 		if !contains(t.Blocks, blockID) {
 			t.Blocks = append(t.Blocks, blockID)
 		}

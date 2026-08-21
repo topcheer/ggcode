@@ -149,7 +149,17 @@ func (s *TemplateStore) List() ([]NamedAgentTemplate, error) {
 
 // Delete removes a template by name.
 func (s *TemplateStore) Delete(name string) error {
+	// #812: mirror Load's collision guard — 'Code Reviewer' and
+	// 'code_reviewer' sanitize to the same file; deleting the wrong casing
+	// permanently destroyed the other template and reported success.
 	path := filepath.Join(s.dir, sanitizeName(name)+".json")
+	data, err := os.ReadFile(path)
+	if err == nil {
+		var stored NamedAgentTemplate
+		if jsonErr := json.Unmarshal(data, &stored); jsonErr == nil && stored.Name != "" && stored.Name != name {
+			return fmt.Errorf("template file %q belongs to %q, not %q — refusing to delete the wrong template", sanitizeName(name)+".json", stored.Name, name)
+		}
+	}
 	if err := os.Remove(path); err != nil {
 		return fmt.Errorf("delete template %q: %w", name, err)
 	}

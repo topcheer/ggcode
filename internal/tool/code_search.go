@@ -198,7 +198,11 @@ func collectSourceFiles(ctx context.Context, baseDir, fileType string, sandboxCh
 		if len(globs) > 0 {
 			matched := false
 			for _, g := range globs {
-				if m, _ := filepath.Match(g, d.Name()); m {
+				// #807: filepath.Match sees only the base name, so patterns with
+				// directory parts ('src/*.ts', 'cmd/*.go') matched nothing, and
+				// '**' was unsupported despite the docs. Match against the
+				// repo-relative path, expanding '**/' to 'any depth'.
+				if globMatchPath(g, relPath) || globMatchPath(g, d.Name()) {
 					matched = true
 					break
 				}
@@ -291,4 +295,24 @@ func formatSearchResults(results []bm25Result, queryTerms []string, totalFiles i
 
 	sb.WriteString("\nUse read_file or grep to inspect these files in detail.\n")
 	return Result{Content: sb.String()}
+}
+
+// globMatchPath matches a glob against a slash-normalized relative path,
+// supporting the documented '**' (any depth) form that filepath.Match
+// lacks (#807).
+func globMatchPath(pattern, path string) bool {
+	pattern = filepath.ToSlash(pattern)
+	path = filepath.ToSlash(path)
+	if strings.HasPrefix(pattern, "**/") {
+		rest := pattern[3:]
+		segs := strings.Split(path, "/")
+		for i := range segs {
+			if ok, _ := filepath.Match(rest, strings.Join(segs[i:], "/")); ok {
+				return true
+			}
+		}
+		return false
+	}
+	ok, _ := filepath.Match(pattern, path)
+	return ok
 }

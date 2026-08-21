@@ -85,6 +85,10 @@ func (t CodeHealthTool) Execute(ctx context.Context, input json.RawMessage) (Res
 	}
 	if args.MaxFiles > 0 {
 		opts.MaxFiles = args.MaxFiles
+	} else {
+		// #810: schema documents '0 = no limit' but MaxFiles only honors >0,
+		// silently scanning 500. Honor the documented 0 = unlimited.
+		opts.MaxFiles = 1_000_000
 	}
 
 	report, err := codehealth.Analyze(absDir, opts)

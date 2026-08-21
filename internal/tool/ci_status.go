@@ -17,6 +17,7 @@ package tool
 // read-only — it never triggers or cancels runs.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -313,10 +314,16 @@ func ghRun(ctx context.Context, dir string, args ...string) (string, error) {
 
 	cmd := exec.CommandContext(cctx, "gh", args...)
 	cmd.Dir = dir
-	out, err := cmd.CombinedOutput()
+	// #808: gh writes 'Notice:' lines (token refresh, upgrade hints) to
+	// stderr even on exit 0; CombinedOutput mixed them ahead of the JSON
+	// and every action failed to parse. Capture stdout for data, stderr
+	// only for error reporting.
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
 	if err != nil {
-		debug.Log("ci-status", "gh %s failed: %v: %s", strings.Join(args, " "), err, string(out))
-		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+		debug.Log("ci-status", "gh %s failed: %v: %s", strings.Join(args, " "), err, stderr.String())
+		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
 	}
 	return string(out), nil
 }

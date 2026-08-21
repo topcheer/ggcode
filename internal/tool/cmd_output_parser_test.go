@@ -265,10 +265,20 @@ func TestSummarizeCommandOutput_LargeTestRunSavesTokens(t *testing.T) {
 // TestIsGoTestCommandWordBoundary verifies #387: "go test" must end the
 // command or be followed by whitespace — "go testdata" is NOT a go test run.
 func TestIsGoTestCommandWordBoundary(t *testing.T) {
+	// #806: bare 'gotest' substring routed gotestsum/gotest.sh here too;
+	// a REAL standalone gotest invocation still matches via the
+	// word-boundary regex.
 	positive := []string{"go test ./...", "go test", "cd x && go test ./y", "gotest ./..."}
+	// #806: these must NOT match (the old Contains("gotest") bug class).
+	negative2 := []string{"gotestsum ./...", "bash scripts/gotest.sh"}
 	for _, cmd := range positive {
 		if !isGoTestCommand(strings.ToLower(cmd)) {
 			t.Errorf("expected match for %q", cmd)
+		}
+	}
+	for _, cmd := range negative2 {
+		if isGoTestCommand(strings.ToLower(cmd)) {
+			t.Errorf("#806: expected NO match for %q", cmd)
 		}
 	}
 	negative := []string{"go testdata ./...", "go testdata", "cargo test", "echo go testdata"}

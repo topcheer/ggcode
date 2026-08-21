@@ -250,9 +250,8 @@ func normalizeAskUserQuestion(index int, q AskUserQuestion) (AskUserQuestion, er
 	q.Kind = kind
 	q.Placeholder = strings.TrimSpace(q.Placeholder)
 	if q.Kind == AskUserKindSingle || q.Kind == AskUserKindMulti {
-		if !q.AllowFreeform {
-			q.AllowFreeform = true
-		}
+		// #804: AllowFreeform=false is a legitimate choice-only question; the
+		// old unconditional override made the schema field dead config.
 		if len(q.Choices) == 0 {
 			return AskUserQuestion{}, fmt.Errorf("%s: choices are required for %s questions", q.ID, q.Kind)
 		}

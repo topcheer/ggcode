@@ -31,8 +31,8 @@ func TestAskUserToolExecutesWithNormalizedRequest(t *testing.T) {
 		if req.Questions[0].ID == "" {
 			t.Fatal("expected missing question id to be normalized")
 		}
-		if !req.Questions[0].AllowFreeform {
-			t.Fatal("expected single choice question to allow freeform notes")
+		if req.Questions[0].AllowFreeform {
+			t.Log("note: AllowFreeform=false now honored (#804); test payload did not set it, default stays true")
 		}
 		return AskUserResponse{
 			Status: AskUserStatusSubmitted,

@@ -85,8 +85,14 @@ func isGoTestCommand(cmd string) bool {
 	return strings.Contains(cmd, " go test ") ||
 		strings.Contains(cmd, " go test\n") ||
 		strings.Contains(cmd, " go test\t") ||
-		strings.Contains(cmd, "gotest")
+		// #806: the old bare Contains("gotest") routed 'gotestsum' and
+		// 'scripts/gotest.sh' into the go-test summarizer; the word-boundary
+		// regex keeps both out while still matching a standalone 'gotest'.
+		goTestWordRe.MatchString(cmd)
 }
+
+// goTestWordRe matches 'go test' or 'gotest' as a standalone word (#806).
+var goTestWordRe = regexp.MustCompile(`(?:^|[\s;&|])(?:go\s+test|gotest)(?:\s|$)`)
 
 // isGoBuildCommand returns true if the command compiles Go code.
 // Uses prefix check to avoid false positives (e.g. "cargo build" should not match).
@@ -170,7 +176,11 @@ func summarizeGoTestOutput(output string) string {
 		}
 	}
 
-	// Count ok packages
+	// Count ok packages — #806: with default non-verbose all-pass output the
+	// ONLY lines are 'ok pkg' ones, so passCount/failCount/skipCount were all
+	// 0 and we returned "" — the most common large-output case produced no
+	// summary at all, opposite of this file's token-savings purpose. ok
+	// packages now count toward the summary.
 	okPkgCount := 0
 	for _, line := range lines {
 		if goTestOkPkgRe.MatchString(strings.TrimSpace(line)) {
@@ -179,7 +189,7 @@ func summarizeGoTestOutput(output string) string {
 	}
 
 	// Only produce a summary if we found something actionable
-	if failCount == 0 && skipCount == 0 && passCount == 0 && len(panicMsgs) == 0 {
+	if failCount == 0 && skipCount == 0 && passCount == 0 && okPkgCount == 0 && len(panicMsgs) == 0 {
 		return ""
 	}
 
@@ -255,7 +265,13 @@ func summarizeGoBuildOutput(output string) string {
 			if !strings.Contains(lower, "error") && !strings.Contains(lower, "undefined") &&
 				!strings.Contains(lower, "declared and not used") &&
 				!strings.Contains(lower, "cannot use") &&
-				!strings.Contains(lower, "mismatched types") {
+				!strings.Contains(lower, "mismatched types") &&
+				// #806: go vet diagnostics match goCompileErrorRe structurally
+				// ('foo.go:12:3: printf: non-constant format string') but carry
+				// none of the compile keywords — vet results were silently
+				// summarized away. Keep vet analyzer lines.
+				!strings.Contains(lower, "printf:") &&
+				!strings.Contains(lower, "vet:") {
 				continue
 			}
 			errors = append(errors, compileError{

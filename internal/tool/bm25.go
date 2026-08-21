@@ -68,18 +68,21 @@ func tokenizeRaw(text string, expand bool) []string {
 		word := current.String()
 		current.Reset()
 
-		// Split camelCase / PascalCase: "HttpRequest" → "http", "request"
+		// Split camelCase / PascalCase and snake_case (#805):
+		// "HttpRequest" -> "http","request"; "user_id" -> "user","id"
 		for _, part := range splitCamelCase(word) {
-			part = strings.ToLower(part)
-			if len(part) < 2 {
-				continue
-			}
-			if codeStopwords[part] {
-				continue
-			}
-			terms = append(terms, part)
-			if expand {
-				terms = append(terms, expandTerm(part)...)
+			for _, sub := range splitSnake(part) {
+				sub = strings.ToLower(sub)
+				if len(sub) < 2 {
+					continue
+				}
+				if codeStopwords[sub] {
+					continue
+				}
+				terms = append(terms, sub)
+				if expand {
+					terms = append(terms, expandTerm(sub)...)
+				}
 			}
 		}
 	}
@@ -100,6 +103,21 @@ func tokenizeRaw(text string, expand bool) []string {
 // or keyword: letters, digits, and underscore.
 func isTokenRune(r rune) bool {
 	return unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_'
+}
+
+// splitSnake splits snake_case identifiers (#805): '_' was a token rune
+// and splitCamelCase only splits at case transitions, so 'user_id' indexed
+// as ONE token and never matched query 'id' — systematic recall failure for
+// the most common Go/Python identifier style.
+func splitSnake(w string) []string {
+	parts := strings.Split(w, "_")
+	out := parts[:0]
+	for _, p := range parts {
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // splitCamelCase splits a word at camelCase boundaries.

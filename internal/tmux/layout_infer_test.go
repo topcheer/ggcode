@@ -13,7 +13,8 @@ func TestInferDefaultLayoutGoProject(t *testing.T) {
 	writeTestFile(t, filepath.Join(workspace, "Makefile"), "verify-ci:\n\tgo test ./...\n")
 
 	layout := InferDefaultLayout(workspace)
-	if !layoutHas(layout, "shell", "") || !layoutHas(layout, "test", "go test -tags goolm ./...") || !layoutHas(layout, "verify", "make verify-ci") {
+	// #811: generic layout no longer hardcodes this repo's build tag.
+	if !layoutHas(layout, "shell", "") || !layoutHas(layout, "test", "go test ./...") || !layoutHas(layout, "verify", "make verify-ci") {
 		t.Fatalf("Go layout = %+v", layout)
 	}
 }
@@ -55,11 +56,11 @@ func TestManagerSetupInfersAndPersistsDefaultLayout(t *testing.T) {
 		t.Fatalf("expected setup to fail when not inside tmux, got created=%+v", created)
 	}
 	layout := mgr.Layout("default")
-	if !layoutHas(layout, "test", "go test -tags goolm ./...") {
+	if !layoutHas(layout, "test", "go test ./...") {
 		t.Fatalf("expected inferred default layout to be saved, got %+v", layout)
 	}
 	reloaded := NewManagerWithStorePath(NewClient(), workspace, storePath)
-	if !layoutHas(reloaded.Layout("default"), "test", "go test -tags goolm ./...") {
+	if !layoutHas(reloaded.Layout("default"), "test", "go test ./...") {
 		t.Fatalf("expected inferred layout to persist, got %+v", reloaded.Layout("default"))
 	}
 }

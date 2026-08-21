@@ -69,6 +69,9 @@ type gateRule struct {
 	desc    string
 	pattern *regexp.Regexp
 	kind    string // "catastrophic" | "injection" | "destructive" | "security"
+	// #814: evaluate ONLY against the quote/heredoc-inert form — the shell
+	// never executes quoted interiors or heredoc bodies as command args.
+	quotedInert bool
 }
 
 type cleanRule struct {
@@ -86,7 +89,11 @@ func NewCommandGate() *CommandGate {
 	// `rm --force /etc --recursive` where the target sits BETWEEN flags.
 	rmF := `(?:-[a-zA-Z]*f[a-zA-Z]*|--force)`
 	rmR := `(?:-[a-zA-Z]*r[a-zA-Z]*|--recursive)`
-	rmP := `(?:(/|~|/home|/Users|/etc|/var|/usr)\b|/dev/)`
+	// #813: bare `/` matched the leading slash of ANY absolute path, so
+	// routine build hygiene (rm -rf /tmp/build-cache) was hard-Blocked as
+	// root destruction. Keep only genuine catastrophic roots; /tmp and
+	// /var/folders style caches are deliberate non-members.
+	rmP := `(?:(~|/home|/Users|/etc|/var|/usr|/bin|/sbin|/lib|/boot)\b|/dev/)`
 	// #436: newline is a shell command separator too — the gap class must
 	// not cross it, else a benign multi-line script (`# comment` + `rm -f x`
 	// + `grep -r ... /etc`) let the grep segment contribute -r and /etc to
@@ -99,9 +106,13 @@ func NewCommandGate() *CommandGate {
 	g.blockRules = []*gateRule{
 
 		// --- Filesystem destruction ---
-		{kind: "catastrophic", desc: "recursive force delete of root/critical directory",
-			pattern: regexp.MustCompile(`(?i)\brm\s+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*|--recursive\s+--force|--force\s+--recursive)\s+(/|~/|/home/?|/Users/?|/etc/?|/var/?|/usr/?|System|Applications)`)},
-		{kind: "catastrophic", desc: "recursive force delete (alternate flag order)",
+		// #814: quotedInert — the shell never executes quoted interiors or
+		// heredoc bodies as rm arguments, so these rules must not assemble
+		// F/R/P elements across quotes (`grep 'rm -rf /etc/hosts' README.md`,
+		// script-writing heredocs).
+		{kind: "catastrophic", desc: "recursive force delete of root/critical directory", quotedInert: true,
+			pattern: regexp.MustCompile(`(?i)\brm\s+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*|--recursive\s+--force|--force\s+--recursive)\s+(/(\s|$)|~/|/home/?|/Users/?|/etc/?|/var/?|/usr/?|/bin/?|/sbin/?|/lib/?|/boot/?|System|Applications|/dev/)`)},
+		{kind: "catastrophic", desc: "recursive force delete (alternate flag order)", quotedInert: true,
 			// Long-flag alternation uses literal --recursive/--force: inside a
 			// raw string the old \\-\\- form only matched a literal backslash
 			// before each dash, so the long-flag branch was dead code (#384).
@@ -145,7 +156,11 @@ func NewCommandGate() *CommandGate {
 
 		// --- Credential exfiltration ---
 		{kind: "catastrophic", desc: "credential exfiltration via network",
-			pattern: regexp.MustCompile(`(?i)\b(curl|wget|nc|ncat)\s+.*(\b~?/\.(ssh|gnupg|aws|env)/|\b/etc/(passwd|shadow)|--post-file.*\.(ssh|aws|env|gnupg)|<\s*~?/\.\w+/)`)},
+			// #817: the two file-path alternates previously carried \b anchors
+			// before NON-word chars (~ and /) — a boundary never exists there,
+			// so `curl -T ~/.ssh/id_rsa` and `-d @/etc/passwd` passed the hard
+			// Block. Path alternates are now anchored by their own delimiters.
+			pattern: regexp.MustCompile(`(?i)\b(curl|wget|nc|ncat)\s+.*((~|@|=|\s|\()/\.(ssh|gnupg|aws|env)/|(^|[\s=@(])/etc/(passwd|shadow)|--post-file.*\.(ssh|aws|env|gnupg)|<\s*~?/\.\w+/)`)},
 
 		// --- History manipulation to hide tracks ---
 		{kind: "catastrophic", desc: "history manipulation to hide tracks",
@@ -186,12 +201,14 @@ func NewCommandGate() *CommandGate {
 			pattern: regexp.MustCompile(`(?i)\brm\s+(-[a-zA-Z]*f[a-zA-Z]*\s+)?-[a-zA-Z]*r[a-zA-Z]*\s+`)},
 		{kind: "destructive", desc: "force delete without confirmation",
 			pattern: regexp.MustCompile(`(?i)\brm\s+-[a-zA-Z]*f[a-zA-Z]*\s+`)},
-		// Windows recursive delete — flags anchored as standalone tokens so
-		// Unix paths containing 's' (/Users, /srv) don't trigger false asks
+		// Windows recursive delete — #816: the old /[a-z]{0,3}s[a-z]{0,2}
+		// token shape matched plain Unix dirs (/srv, /src, /sys). Real
+		// Windows invocations carry a drive letter or backslash path; require
+		// that context so Unix rmdir/del stop false-triggering.
 		{kind: "destructive", desc: "Windows recursive directory delete (rd/rmdir /s)",
-			pattern: regexp.MustCompile(`(?i)\b(rd|rmdir)\s+(/[a-z]{0,3}s[a-z]{0,2}(\s|$)|.*\s/[a-z]{0,3}s[a-z]{0,2}(\s|$))`)},
+			pattern: regexp.MustCompile(`(?i)\b(rd|rmdir)\s+([^&|;\n]*[/\\]s(\s|$)[^&|;\n]*([a-z]:[\\/]|\\\\)|[a-z]:[\\/][^&|;\n]*[/\\]s(\s|$))`)},
 		{kind: "destructive", desc: "Windows recursive file delete (del /s)",
-			pattern: regexp.MustCompile(`(?i)\bdel\s+(/[a-z]{0,3}s[a-z]{0,2}(\s|$)|.*\s/[a-z]{0,3}s[a-z]{0,2}(\s|$))`)},
+			pattern: regexp.MustCompile(`(?i)\bdel\s+([^&|;\n]*[/\\]s(\s|$)[^&|;\n]*([a-z]:[\\/]|\\\\)|[a-z]:[\\/][^&|;\n]*[/\\]s(\s|$))`)},
 		{kind: "destructive", desc: "Windows registry deletion (reg delete)",
 			pattern: regexp.MustCompile(`(?i)\breg\s+delete\b`)},
 		{kind: "destructive", desc: "overwrite /etc/hosts",
@@ -205,7 +222,9 @@ func NewCommandGate() *CommandGate {
 
 		// --- Network-based risks ---
 		{kind: "security", desc: "piping remote content to shell",
-			pattern: regexp.MustCompile(`(?i)(curl|wget)\s+.*\|\s*(ba)?sh`)},
+			// #815: trailing \b — 'sh' is a prefix of sha256sum/shasum/shfmt,
+			// so checksum verification (curl ... | sha256sum -c) was flagged.
+			pattern: regexp.MustCompile(`(?i)(curl|wget)\s+.*\|\s*(ba)?sh\b`)},
 		{kind: "security", desc: "download and execute script",
 			pattern: regexp.MustCompile(`(?i)(curl|wget)\s+.*>\s*/tmp/.*\.\w+\s*&&\s*(ba)?sh\s+/tmp/`)},
 
@@ -270,8 +289,13 @@ func (g *CommandGate) Check(cmd string) GateResult {
 	if norm := stripQuotedSeparators(cmd); norm != cmd {
 		matchCmd = cmd + "\n" + norm
 	}
+	inertCmd := blankQuotedAndHeredocs(cmd)
 	for _, rule := range g.blockRules {
-		if rule.pattern.MatchString(matchCmd) {
+		target := matchCmd
+		if rule.quotedInert {
+			target = inertCmd
+		}
+		if rule.pattern.MatchString(target) {
 			return GateResult{
 				Behavior:   Block,
 				CleanedCmd: cmd,
@@ -336,6 +360,60 @@ func stripQuotedSeparators(cmd string) string {
 			} else {
 				b.WriteByte(c)
 			}
+		case c == '"' || c == '\'':
+			quote = c
+			b.WriteByte(c)
+		default:
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
+}
+
+// blankQuotedAndHeredocs replaces quoted-string interiors and heredoc
+// bodies with inert filler (#814). The rm permutation rules must not
+// assemble F/R/P elements from text the shell will never execute as rm
+// arguments — `grep 'rm -rf /etc/hosts' README.md` or a script-writing
+// heredoc mentioning rm must not hard-Block the enclosing legitimate
+// command.
+func blankQuotedAndHeredocs(cmd string) string {
+	lines := strings.Split(cmd, "\n")
+	out := make([]string, 0, len(lines))
+	heredoc := ""
+	for _, line := range lines {
+		if heredoc != "" {
+			if strings.TrimSpace(line) == heredoc {
+				heredoc = ""
+				out = append(out, line)
+			} else {
+				out = append(out, " ")
+			}
+			continue
+		}
+		out = append(out, blankQuotes(line))
+		if m := heredocOpenerRe.FindStringSubmatch(line); m != nil {
+			heredoc = m[1]
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
+var heredocOpenerRe = regexp.MustCompile(`<<-?\s*['\"]?([A-Za-z_][A-Za-z0-9_]*)`)
+
+// blankQuotes replaces quoted interiors (single/double) with a space.
+func blankQuotes(line string) string {
+	var b strings.Builder
+	b.Grow(len(line))
+	quote := byte(0)
+	for i := 0; i < len(line); i++ {
+		c := line[i]
+		switch {
+		case quote != 0:
+			if c == quote {
+				quote = 0
+				b.WriteByte(c)
+			}
+			// interior blanked
 		case c == '"' || c == '\'':
 			quote = c
 			b.WriteByte(c)
