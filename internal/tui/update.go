@@ -83,7 +83,11 @@ func (m Model) shouldShowUpdateSection() bool {
 	if strings.TrimSpace(version.Display()) == "" {
 		return false
 	}
-	return m.updateInfo.HasUpdate
+	// #917: returning only HasUpdate made the 'up to date' else-branch in
+	// renderUpdateSection unreachable dead code - the section's structure
+	// shows update status (both states), so show whenever version info is
+	// available.
+	return true
 }
 
 func (m Model) updateStatusSummary() string {

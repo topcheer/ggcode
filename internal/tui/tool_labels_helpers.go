@@ -175,11 +175,11 @@ func localizedToolLabel(lang Language, action string) string {
 		case "commit":
 			return "提交"
 		case "spawn_agent":
-			return "Starting subagent"
+			return "启动子代理" // #917: was untranslated English
 		case "list_agents":
 			return "获取子代理列表"
 		case "wait_agent":
-			return "Checking subagent progress"
+			return "检查子代理进度" // #917: was untranslated English
 		case "a2a_remote":
 			return "远程调用"
 		case "a2a_discover":

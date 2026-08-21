@@ -66,12 +66,15 @@ func (m Model) View() tea.View {
 	if deviceBanner != "" {
 		availableHeight -= lipgloss.Height(deviceBanner)
 	}
-	if availableHeight < 8 {
-		availableHeight = 8
-	}
-
 	if lanChatBar != "" {
 		availableHeight -= lipgloss.Height(lanChatBar)
+	}
+
+	// #917: clamp AFTER subtracting the LAN bar - clamping before left the
+	// conversation below the intended floor in short windows (the panelH
+	// path already subtracted first, clamping at >=6).
+	if availableHeight < 8 {
+		availableHeight = 8
 	}
 
 	if debug.IsVerbose("layout") {

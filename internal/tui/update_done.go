@@ -19,8 +19,9 @@ import (
 
 // notificationSummary builds a short human-readable summary of the completed
 // agent run for use in desktop notifications.
-func (m Model) notificationSummary(duration time.Duration) string {
-	toolCount := m.statusToolCount
+func (m Model) notificationSummary(duration time.Duration, toolCount int) string {
+	// #917: toolCount passed by the caller (captured BEFORE the status
+	// reset zeroed m.statusToolCount).
 	if toolCount > 0 {
 		return fmt.Sprintf("Agent completed after %s (%d tool calls).", duration.Round(time.Second), toolCount)
 	}
@@ -115,6 +116,9 @@ func (m Model) handleAgentDoneMsg(msg agentDoneMsg) (Model, tea.Cmd) {
 	m.statusActivity = ""
 	m.statusToolName = ""
 	m.statusToolArg = ""
+	// #917: capture the tool count BEFORE zeroing - notificationSummary
+	// read it after the reset, making the '(N tool calls)' branch dead.
+	doneToolCount := m.statusToolCount
 	m.statusToolCount = 0
 	m.rolloverTunnelMainStream(false)
 	m.pushTunnelCurrentStatus()
@@ -138,7 +142,7 @@ func (m Model) handleAgentDoneMsg(msg agentDoneMsg) (Model, tea.Cmd) {
 	if !m.runStartTime.IsZero() {
 		runDur = time.Since(m.runStartTime)
 	}
-	summary := m.notificationSummary(runDur)
+	summary := m.notificationSummary(runDur, doneToolCount)
 	notify.OnCompletion(notifCfg, runDur, wasFailed, summary)
 	if !wasCanceled && !wasFailed {
 		m.persistFullSessionMessages()

@@ -46,7 +46,7 @@ var urlExpandAllowPrivate bool
 // Safety:
 //   - SSRF protection: private/internal hosts are blocked (same logic as web_fetch)
 //   - Max 3 URLs per message to prevent context bloat
-//   - 15s per-URL timeout, 50K char truncation
+//   - 15s per-URL timeout, 4K char truncation (maxFetchChars)
 //   - Non-200 responses are included as error summaries (useful for debugging)
 func ExpandURLs(ctx context.Context, input string) string {
 	return expandURLsWithOpts(ctx, input, urlExpandAllowPrivate)
@@ -70,21 +70,31 @@ func expandURLsWithOpts(ctx context.Context, input string, allowPrivate bool) st
 		results[i] = fetchResult{url: u}
 	}
 
-	// Fetch concurrently
-	done := make(chan int, len(urls))
+	// #916: goroutines send their result over a channel; the composer
+	// never reads the shared slice while fetches may still write it
+	// (deadline/ctx-cancel used to race the writes).
+	type indexedResult struct {
+		idx int
+		res fetchResult
+	}
+	resCh := make(chan indexedResult, len(urls))
 	for i, u := range urls {
 		go func(idx int, rawURL string) {
 			text, err := fetchURLContent(ctx, rawURL, allowPrivate)
-			results[idx] = fetchResult{url: rawURL, text: text, err: err}
-			done <- idx
+			resCh <- indexedResult{idx: idx, res: fetchResult{url: rawURL, text: text, err: err}}
 		}(i, u)
 	}
 
 	// Wait for all fetches with an overall deadline
+	collected := 0
 	deadline := time.After(fetchTimeout + 5*time.Second)
-	for i := 0; i < len(urls); i++ {
+	for collected < len(urls) {
 		select {
-		case <-done:
+		case r := <-resCh:
+			if r.idx >= 0 && r.idx < len(results) {
+				results[r.idx] = r.res
+			}
+			collected++
 		case <-deadline:
 			// Remaining fetches will have empty text; move on
 			goto compose

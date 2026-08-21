@@ -40,8 +40,14 @@ func (m Model) handleShellCommandDoneMsg(msg shellCommandDoneMsg) (Model, tea.Cm
 
 	wasCanceled := m.runCanceled
 	wasFailed := m.runFailed
-	m.runCanceled = false
-	m.runFailed = false
+	// #915: only the run that OWNS these flags may clear them - a shell
+	// command finishing used to zero the AGENT's cancel/fail state, so a
+	// cancelled agent took the normal-completion path (metrics digest,
+	// title refine, session persist) and cancel semantics were lost.
+	if !m.shellOwnedLoading {
+		m.runCanceled = false
+		m.runFailed = false
+	}
 
 	if hadShellOutput && shellOutputID != "" {
 		if broker := m.tunnelEventBroker(); broker != nil {

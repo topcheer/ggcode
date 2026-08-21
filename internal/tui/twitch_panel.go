@@ -386,14 +386,10 @@ func (m *Model) clearTwitchChannel(adapterName string) tea.Cmd {
 		if m.imManager == nil {
 			return twitchBindResultMsg{}
 		}
-		ws := m.currentWorkspacePath()
-		if bindings, err := m.imManager.ListBindings(); err == nil {
-			for _, b := range bindings {
-				if b.Adapter == adapterName && b.Workspace == ws {
-					_ = m.imManager.UnbindAdapter(adapterName)
-					break
-				}
-			}
+		// #915: was UnbindAdapter with swallowed error + false 'cleared' -
+		// the #898/#905 family fix missed Twitch. Clear channel fields only.
+		if err := m.imManager.ClearChannelByAdapter(adapterName); err != nil {
+			return twitchBindResultMsg{err: err}
 		}
 		return twitchBindResultMsg{message: m.t("panel.twitch.message.cleared")}
 	}
