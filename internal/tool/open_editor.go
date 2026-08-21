@@ -136,7 +136,10 @@ func detectEditor() string {
 	// 1. ggcode-specific override
 	for _, key := range []string{"GGCODE_EDITOR", "GID_EDITOR"} {
 		if v := os.Getenv(key); v != "" {
-			return v
+			// #857: same Fields[0] strip as VISUAL/EDITOR below — values like
+			// "code --wait" are documented usage; returning them verbatim made
+			// the highest-priority override the one that breaks.
+			return strings.Fields(v)[0]
 		}
 	}
 	// 2. Standard env vars

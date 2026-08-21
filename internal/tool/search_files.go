@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -119,9 +120,16 @@ func (t SearchFiles) gitGrepSearch(ctx context.Context, args struct {
 	cmd.Dir = args.Directory
 	out, err := cmd.Output()
 	if err != nil {
-		// git grep returns exit code 1 when no matches found
-		if len(out) == 0 {
+		// git grep returns exit code 1 when no matches found.
+		// #863: exit 128 with empty stdout means git rejected the PATTERN
+		// (e.g. Go-only (?i)/(?s) syntax vs -E ERE) — the repo was not
+		// searched. Returning ok=true here produced false 'no matches'.
+		// Fall through to the Go regexp search instead.
+		if ee, ok := err.(*exec.ExitError); ok && ee.ExitCode() == 1 {
 			return nil, 0, true // in git repo, just no results
+		}
+		if len(out) == 0 {
+			return nil, 0, false // pattern rejected or git failure: use fallback
 		}
 	}
 

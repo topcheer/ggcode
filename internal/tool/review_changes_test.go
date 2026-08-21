@@ -89,8 +89,13 @@ func TestDetectCommentBlocks_Detects(t *testing.T) {
 		path: "main.go",
 		addedLines: []reviewDiffLine{
 			{1, "//	if err != nil {"},
+			// #860: a gap in FILE line numbers (context line in between) must
+			// split the block; lines must be file-adjacent to count as one.
 			{2, "//		return fmt.Errorf(\"bad\")"},
 			{3, "//	for i := 0; i < 10; i++ {"},
+			{4, "//		_ = i"},
+			{5, "//	}"},
+			{6, "//}"},
 		},
 	}
 	findings := detectCommentBlocks(file)

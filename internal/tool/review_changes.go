@@ -147,22 +147,11 @@ func getReviewDiff(ctx context.Context, dir, scope string) (string, error) {
 	case "unstaged":
 		return runReviewGit(ctx, dir, "diff", "--no-color")
 	default:
-		// "all" - combine staged and unstaged
-		staged, err := runReviewGit(ctx, dir, "diff", "--cached", "--no-color")
-		if err != nil {
-			return "", err
-		}
-		unstaged, err := runReviewGit(ctx, dir, "diff", "--no-color")
-		if err != nil {
-			return "", err
-		}
-		if staged == "" {
-			return unstaged, nil
-		}
-		if unstaged == "" {
-			return staged, nil
-		}
-		return staged + "\n" + unstaged, nil
+		// "all" — staged + unstaged combined. #860: a partially staged file
+		// (staged, then edited further) appears in BOTH diffs, double-counting
+		// its changes and duplicating findings. `git diff HEAD` is the single
+		// authoritative source for the full working-tree delta.
+		return runReviewGit(ctx, dir, "diff", "HEAD", "--no-color")
 	}
 }
 
@@ -276,6 +265,7 @@ func detectCommentBlocks(file *reviewDiffFile) []DiffIssue {
 	var findings []DiffIssue
 	consecutive := 0
 	startLine := 0
+	prevLineNum := 0
 
 	for _, dl := range file.addedLines {
 		isCommentedCode := false
@@ -286,10 +276,26 @@ func detectCommentBlocks(file *reviewDiffFile) []DiffIssue {
 			}
 		}
 		if isCommentedCode {
+			// #860: "consecutive" must mean adjacent IN THE FILE (lineNum
+			// contiguous), not adjacent in the added-lines slice — scattered
+			// comment lines separated by context lines were flagged as blocks.
+			if consecutive > 0 && dl.lineNum != prevLineNum+1 {
+				if consecutive >= 3 {
+					findings = append(findings, DiffIssue{
+						File:     file.path,
+						Line:     startLine,
+						Severity: "warning",
+						Category: "commented-code",
+						Message:  fmt.Sprintf("Commented-out code block (%d lines) - remove dead code", consecutive),
+					})
+				}
+				consecutive = 0
+			}
 			if consecutive == 0 {
 				startLine = dl.lineNum
 			}
 			consecutive++
+			prevLineNum = dl.lineNum
 		} else {
 			if consecutive >= 3 {
 				findings = append(findings, DiffIssue{

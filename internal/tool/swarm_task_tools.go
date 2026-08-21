@@ -256,9 +256,15 @@ func (t SwarmTaskClaimTool) Execute(_ context.Context, input json.RawMessage) (R
 	}
 
 	inProgress := task.TaskStatus(task.StatusInProgress)
+	// #861: without ExpectedStatus the claim is an unconditional overwrite:
+	// claiming a completed task regresses it, and two racing claims both
+	// succeed (silent ownership steal). Conditional-update is exactly what
+	// Manager.Update's ExpectedStatus exists for.
+	pending := task.TaskStatus(task.StatusPending)
 	updated, err := tm.Update(args.TaskID, task.UpdateOptions{
-		Status: &inProgress,
-		Owner:  &args.Owner,
+		Status:         &inProgress,
+		Owner:          &args.Owner,
+		ExpectedStatus: &pending,
 	})
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil

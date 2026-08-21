@@ -81,7 +81,8 @@ run:
 			Path: "Dockerfile",
 			Content: fmt.Sprintf(`FROM golang:1.23-alpine AS builder
 WORKDIR /app
-COPY go.mod go.sum ./
+# #865: fresh scaffold has no dependencies, so no go.sum exists — COPY go.mod only.
+COPY go.mod ./
 RUN go mod download
 COPY . .
 RUN go build -o /%s ./%s
@@ -172,7 +173,8 @@ func tsTemplate(name, rootDir string, ci, docker bool) []scaffoldFile {
 			Content: fmt.Sprintf(`FROM node:20-alpine
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci
+# #865: no package-lock.json is generated, so npm ci fails on a fresh scaffold.
+RUN npm install
 COPY . .
 RUN npm run build
 CMD ["node", "dist/index.js"]
@@ -313,12 +315,14 @@ edition = "2021"
 	if docker {
 		files = append(files, scaffoldFile{
 			Path: "Dockerfile",
-			Content: `FROM rust:1.78-slim
+			Content: fmt.Sprintf(`FROM rust:1.78-slim
 WORKDIR /app
 COPY . .
 RUN cargo build --release
-CMD ["./target/release/REPLACE_WITH_CRATE_NAME"]
-`,
+# #865: interpolate the crate name (binary is sanitizeRustName(name)); the
+# raw placeholder made docker run fail with executable not found.
+CMD ["./target/release/%s"]
+`, sanitizeRustName(name)),
 		})
 	}
 

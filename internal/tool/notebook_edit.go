@@ -121,14 +121,35 @@ func (t NotebookEdit) Execute(ctx context.Context, input json.RawMessage) (Resul
 		if err := json.Unmarshal(cells[idx], &cell); err != nil {
 			return Result{IsError: true, Content: fmt.Sprintf("error parsing cell %d: %v", idx, err)}, nil
 		}
+		// #854: omitted source deserializes to "" and would silently wipe
+		// the cell's content — require it explicitly.
+		if args.Source == "" {
+			return Result{IsError: true, Content: "source is required for replace operation (omitting it would wipe the cell content)"}, nil
+		}
 		sourceJSON, _ := json.Marshal(sourceToLines(args.Source))
 		cell["source"] = sourceJSON
-		cell["outputs"] = json.RawMessage("[]")
-		cell["execution_count"] = json.RawMessage("null")
+		// #853: outputs/execution_count are forbidden on markdown/raw cells
+		// (nbformat schema) — mirror the add branch's cell_type handling.
+		var cellType string
+		if ctRaw, ok := cell["cell_type"]; ok {
+			_ = json.Unmarshal(ctRaw, &cellType)
+		}
+		if cellType == "code" || cellType == "" {
+			cell["outputs"] = json.RawMessage("[]")
+			cell["execution_count"] = json.RawMessage("null")
+		} else {
+			delete(cell, "outputs")
+			delete(cell, "execution_count")
+		}
 		updatedCell, _ := json.Marshal(cell)
 		cells[idx] = updatedCell
 
 	case "add":
+		// #854: same silent-wipe guard as replace — an add without source
+		// creates an empty cell that overwrites nothing but reports success.
+		if args.Source == "" {
+			return Result{IsError: true, Content: "source is required for add operation"}, nil
+		}
 		cellType := args.CellType
 		if cellType == "" {
 			cellType = "code"

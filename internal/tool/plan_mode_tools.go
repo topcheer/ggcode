@@ -56,7 +56,11 @@ func (t EnterPlanModeTool) Execute(_ context.Context, _ json.RawMessage) (Result
 
 	// Remember the current mode (by asking the switcher what it has)
 	// before switching to plan mode, so exit_plan_mode can restore it.
-	previous := t.Switcher.RememberMode(permission.PlanMode)
+	// #858: RememberMode saves its ARGUMENT as the mode to restore — passing
+	// the TARGET mode meant plan->exit always restored the hardcoded fallback
+	// on daemon/desktop. Query the real current mode instead.
+	current := t.Switcher.Mode()
+	previous := t.Switcher.RememberMode(current)
 
 	t.Switcher.SetMode(permission.PlanMode)
 

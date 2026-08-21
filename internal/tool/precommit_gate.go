@@ -30,6 +30,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -103,9 +104,11 @@ func precommitBuildCheck(ctx context.Context, dir string) string {
 		return ""
 	}
 
-	if checkCtx.Err() == context.DeadlineExceeded {
-		debug.Log("precommit-gate", "build check timed out after %v: %s", precommitBuildTimeout, cmd)
-		// Timeout doesn't mean the build is broken — just slow. Don't warn.
+	// #859: any aborted context (timeout AND parent cancellation, e.g. user
+	// interrupt) leaves the build result indeterminate — a non-nil err here
+	// does not prove the code fails to compile. Don't warn on either.
+	if checkCtx.Err() != nil {
+		debug.Log("precommit-gate", "build check aborted (ctx: %v): %s", checkCtx.Err(), cmd)
 		return ""
 	}
 
@@ -297,7 +300,9 @@ func isBuildErrorLine(line string) bool {
 	}
 
 	// Python: "SyntaxError", "ImportError", "NameError", etc.
-	if strings.Contains(lower, "error:") && !strings.Contains(lower, "0 errors") {
+	// #859: bare Contains("0 errors") also swallowed "Found 10 errors in N
+	// files." — require a digit boundary before "0 errors".
+	if strings.Contains(lower, "error:") && !regexp.MustCompile(`\b0 errors`).MatchString(lower) {
 		return true
 	}
 

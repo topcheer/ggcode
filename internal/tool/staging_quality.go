@@ -201,8 +201,11 @@ func checkStagingFile(path string) []StagingIssue {
 	}
 
 	// 3. Build artifact directories.
+	// #867: HasPrefix on repo-root-relative paths never matched nested
+	// monorepo artifacts ("web/dist/...", "packages/app/node_modules/...").
+	// Segment-wise match: prefix must start a path segment anywhere.
 	for _, d := range buildArtifactDirs {
-		if strings.HasPrefix(lower, d.prefix) {
+		if hasPathPrefixSegment(lower, d.prefix) {
 			issues = append(issues, StagingIssue{
 				Path: path, Category: "build-artifact", Reason: d.reason,
 			})
@@ -212,7 +215,7 @@ func checkStagingFile(path string) []StagingIssue {
 
 	// 4. Vendored dependency directories.
 	for _, d := range vendoredDirs {
-		if strings.HasPrefix(lower, d.prefix) {
+		if hasPathPrefixSegment(lower, d.prefix) {
 			issues = append(issues, StagingIssue{
 				Path: path, Category: "vendored", Reason: d.reason,
 			})
@@ -293,4 +296,32 @@ func formatStagingIssues(issues []StagingIssue) string {
 		"and adding them to .gitignore if not already present.")
 
 	return b.String()
+}
+
+// hasPathPrefixSegment reports whether prefix starts a path segment anywhere
+// in path: at the root, or immediately after a '/'. The match must end at a
+// segment boundary too (end of path or '/'), so ".coverage" does not match
+// ".coveragerc" (#867).
+func hasPathPrefixSegment(path, prefix string) bool {
+	for i := 0; i < len(path); i++ {
+		if i > 0 && path[i-1] != '/' {
+			continue
+		}
+		if !strings.HasPrefix(path[i:], prefix) {
+			continue
+		}
+		// Directory prefixes already end in '/': the segment boundary is
+		// built into the prefix (e.g. "dist/" matching "dist/bundle.js" --
+		// end points just past the '/', at the next segment's start).
+		// File-like prefixes (".coverage") need an explicit boundary so
+		// ".coveragerc" does not match.
+		if strings.HasSuffix(prefix, "/") {
+			return true
+		}
+		end := i + len(prefix)
+		if end == len(path) || path[end] == '/' {
+			return true
+		}
+	}
+	return false
 }

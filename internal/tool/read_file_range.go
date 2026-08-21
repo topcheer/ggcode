@@ -56,10 +56,14 @@ func readFileRangeWithOptions(content string, offset, limit int, opts readFileRa
 		if endIdx > totalLines {
 			endIdx = totalLines
 		}
-	} else if startIdx == 0 {
-		// No limit specified and starting from beginning: cap at defaultLimit.
-		if endIdx > opts.defaultLimit {
-			endIdx = opts.defaultLimit
+	} else {
+		// No limit specified: cap at defaultLimit in BOTH branches (#855).
+		// Previously the cap only applied when startIdx==0, so an offset read
+		// without limit dumped the entire file remainder, contradicting the
+		// doc ('capped at maxOutputLines') and the streaming variant.
+		endIdx = startIdx + opts.defaultLimit
+		if endIdx > totalLines {
+			endIdx = totalLines
 		}
 	}
 

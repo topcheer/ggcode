@@ -24,6 +24,19 @@ var subAgentBlockedTools = []string{
 	"teammate_shutdown",
 	"team_create",
 	"team_delete",
+	// #864: swarm/team board + messaging tools were missing — a sub-agent
+	// could inject tasks into the shared board, message arbitrary teammates,
+	// and trigger other agents' approval loops (live-verified by re-review).
+	"swarm_task_create",
+	"swarm_task_claim",
+	"swarm_task_complete",
+	"swarm_task_list",
+	"teammate_results",
+	"teammate_list",
+	"send_message",
+	"lanchat",
+	"a2a_remote",
+	"a2a_send_task",
 }
 
 // SpawnAgentTool implements the spawn_agent tool.

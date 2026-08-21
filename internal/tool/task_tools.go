@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/topcheer/ggcode/internal/task"
 )
@@ -89,17 +91,26 @@ func (t TaskCreateTool) Execute(_ context.Context, input json.RawMessage) (Resul
 		return Result{IsError: true, Content: "subject is required"}, nil
 	}
 	if len(args.Subject) > maxTaskSubjectLen {
-		return Result{IsError: true, Content: fmt.Sprintf("subject too long: %d chars (max %d). Use a shorter title.", len(args.Subject), maxTaskSubjectLen)}, nil
+		// #866: rune-count, not bytes — CJK subjects were rejected at half
+		// the documented length.
+		return Result{IsError: true, Content: fmt.Sprintf("subject too long: %d chars (max %d). Use a shorter title.", utf8.RuneCountInString(args.Subject), maxTaskSubjectLen)}, nil
 	}
 
 	created := t.Manager.Create(args.Subject, args.Description, args.ActiveForm, args.Metadata)
 
 	// Apply dependency links if provided
 	if len(args.AddBlocks) > 0 || len(args.AddBlockedBy) > 0 {
-		t.Manager.Update(created.ID, task.UpdateOptions{
+		// #866: a nonexistent dependency ID leaves the task with zero links;
+		// discarding the error made agents schedule on dependencies that
+		// were never established. Propagate, and return the UPDATED snapshot.
+		updated, err := t.Manager.Update(created.ID, task.UpdateOptions{
 			AddBlocks:    args.AddBlocks,
 			AddBlockedBy: args.AddBlockedBy,
 		})
+		if err != nil {
+			return Result{IsError: true, Content: fmt.Sprintf("task created but dependency linking failed: %v", err)}, nil
+		}
+		created = updated
 	}
 
 	out, _ := json.Marshal(created)
@@ -189,8 +200,9 @@ func (t TaskListTool) Execute(_ context.Context, _ json.RawMessage) (Result, err
 	if len(tasks) == 0 {
 		return Result{Content: "No tasks.\n"}, nil
 	}
-	// Sort by ID
-	sort.Slice(tasks, func(i, j int) bool { return tasks[i].ID < tasks[j].ID })
+	// Sort by ID numerically (#866): string sort scrambled 11+ tasks
+	// (task-1, task-10, task-11, task-2, ...), diverging from creation order.
+	sort.Slice(tasks, func(i, j int) bool { return taskIDLess(tasks[i].ID, tasks[j].ID) })
 
 	var sb strings.Builder
 	for _, tk := range tasks {
@@ -454,4 +466,30 @@ func (t TaskOutputTool) Execute(_ context.Context, input json.RawMessage) (Resul
 	}
 
 	return Result{Content: output}, nil
+}
+
+// taskIDLess orders task IDs numerically ("task-2" < "task-10"), unlike a
+// plain string compare which scrambles lists once IDs reach double digits (#866).
+func taskIDLess(a, b string) bool {
+	ai, aok := splitTaskID(a)
+	bi, bok := splitTaskID(b)
+	if aok && bok {
+		if ai != bi {
+			return ai < bi
+		}
+		return a < b
+	}
+	return a < b
+}
+
+func splitTaskID(id string) (int, bool) {
+	idx := strings.LastIndex(id, "-")
+	if idx < 0 {
+		return 0, false
+	}
+	n, err := strconv.Atoi(id[idx+1:])
+	if err != nil {
+		return 0, false
+	}
+	return n, true
 }

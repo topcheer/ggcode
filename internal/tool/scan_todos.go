@@ -439,8 +439,11 @@ func parseGitBlame(output []byte) map[int]blameLineInfo {
 				date = time.Unix(unixTime, 0)
 			}
 		}
-		if strings.HasPrefix(line, "author-mail ") {
-			// End of author metadata for this entry
+		if strings.HasPrefix(line, "author-tz ") {
+			// End of author metadata for this entry (#862): porcelain emits
+			// author -> author-mail -> author-time -> author-tz; storing at
+			// author-mail left date permanently zero (author-time unseen yet),
+			// killing Age/stale_days. author-tz is the last author field.
 			if currentLine > 0 {
 				result[currentLine] = blameLineInfo{author: author, date: date}
 			}

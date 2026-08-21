@@ -16,6 +16,19 @@ func TestSubAgentBlockedTools(t *testing.T) {
 		"teammate_shutdown": true,
 		"team_create":       true,
 		"team_delete":       true,
+		// #864: swarm board + messaging tools are now blocked too - a
+		// sub-agent must not manipulate the shared task board, message
+		// teammates, or trigger other agents' approval loops.
+		"swarm_task_create":   true,
+		"swarm_task_claim":    true,
+		"swarm_task_complete": true,
+		"swarm_task_list":     true,
+		"teammate_results":    true,
+		"teammate_list":       true,
+		"send_message":        true,
+		"lanchat":             true,
+		"a2a_remote":          true,
+		"a2a_send_task":       true,
 	}
 	for _, name := range subAgentBlockedTools {
 		if !expected[name] {
