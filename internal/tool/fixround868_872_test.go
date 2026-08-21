@@ -5,6 +5,7 @@ package tool
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -18,9 +19,13 @@ func TestShellCompatAnchoredTokens(t *testing.T) {
 	if diagnoseShellCompat("ls tools/", "", "") != "" {
 		t.Fatal("'ls tools/' falsely diagnosed as GNU ls issue")
 	}
-	got := diagnoseShellCompat("du --max-depth 1 /var", "", "")
-	if !strings.Contains(got, "du -d") {
-		t.Fatalf("real du --max-depth not diagnosed: %q", got)
+	// Positive assertion is platform-gated: diagnoseShellCompat is a no-op
+	// on Linux (GNU commands are native there), so CI runners expect "".
+	if runtime.GOOS != "linux" {
+		got := diagnoseShellCompat("du --max-depth 1 /var", "", "")
+		if !strings.Contains(got, "du -d") {
+			t.Fatalf("real du --max-depth not diagnosed: %q", got)
+		}
 	}
 }
 
