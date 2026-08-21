@@ -84,7 +84,12 @@ func inferCommitType(msg string) string {
 		return "perf"
 	case msgContainsAny(lower, "config", "dependenc", "build", "version", "bump", "upgrade"):
 		return "chore"
-	case msgContainsAny(lower, "ci", "pipeline", "deploy", "release"):
+	case msgContainsAny(lower, "pipeline", "deploy", "release", "ci pipeline"):
+		return "ci"
+	case msgWordBoundary(lower, "ci"):
+		// #823: the bare 'ci' substring matched common English words
+		// ('efficient', 'parsing'→no, but 'sourcing'/'special' style hits);
+		// require it as a standalone word.
 		return "ci"
 	default:
 		return "feat"
@@ -92,6 +97,11 @@ func inferCommitType(msg string) string {
 }
 
 // msgContainsAny reports whether s contains any of the given substrings.
+// msgWordBoundary reports whether word appears as a standalone word (#823).
+func msgWordBoundary(s, word string) bool {
+	return regexp.MustCompile(`\b` + regexp.QuoteMeta(word) + `\b`).MatchString(s)
+}
+
 func msgContainsAny(s string, subs ...string) bool {
 	for _, sub := range subs {
 		if strings.Contains(s, sub) {
@@ -139,7 +149,11 @@ func categorizeFile(path string) FileCategory {
 		"test_", "_test.py", ".spec.rb", "_spec.rb", "_test.rs",
 	}
 	for _, sfx := range testSuffixes {
-		if strings.Contains(lower, sfx) {
+		// #823: Contains misrouted 'pkg/latest_report.go' and
+		// 'src/attest_helper.py' to CatTest; every other category uses
+		// suffix semantics already.
+		if strings.HasSuffix(lower, sfx) ||
+			(strings.HasPrefix(sfx, "test_") && (strings.HasPrefix(lower, "test_") || strings.Contains(lower, "/test_"))) {
 			return CatTest
 		}
 	}

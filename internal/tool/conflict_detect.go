@@ -37,9 +37,10 @@ const conflictMarkerEnd = ">>>>>>>"
 type ConflictRegion struct {
 	StartLine int    // line number (1-based) of the "<<<<<<<" marker
 	MidLine   int    // line number of the "=======" separator
-	EndLine   int    // line number of the ">>>>>>>" marker
+	EndLine   int    // line number of the ">>>>>>>" marker (0 = unclosed)
 	Branch1   string // label after <<<<<<< (e.g. "HEAD")
 	Branch2   string // label after >>>>>>> (e.g. "feature/foo")
+	Unclosed  bool   // #827: no closing >>>>>>> marker was found
 }
 
 // maxConflictRegions caps the number of conflict regions reported to avoid
@@ -95,6 +96,9 @@ func DetectMergeConflicts(content string) []ConflictRegion {
 
 	// Handle unclosed conflict region
 	if current != nil {
+		// #827: EndLine==0 marks an unclosed region — the old output rendered
+		// 'lines 2-0', self-contradictory.
+		current.Unclosed = true
 		regions = appendConflictRegion(regions, *current)
 	}
 
@@ -122,11 +126,16 @@ func FormatConflictWarning(regions []ConflictRegion) string {
 
 	if n == 1 {
 		r := regions[0]
+		// #827: render an unclosed region honestly instead of 'lines 2-0'.
+		rangeText := fmt.Sprintf("lines %d-%d", r.StartLine, r.EndLine)
+		if r.Unclosed || r.EndLine == 0 {
+			rangeText = fmt.Sprintf("line %d (unclosed conflict marker)", r.StartLine)
+		}
 		sb.WriteString(fmt.Sprintf(
-			"\n\n[WARNING] This file contains an unresolved merge conflict (lines %d-%d). "+
+			"\n\n[WARNING] This file contains an unresolved merge conflict (%s). "+
 				"Resolve the conflict before editing — editing across conflict markers can corrupt the file. "+
 				"Conflict between: %s vs %s.",
-			r.StartLine, r.EndLine,
+			rangeText,
 			conflictLabel(r.Branch1), conflictLabel(r.Branch2),
 		))
 	} else {

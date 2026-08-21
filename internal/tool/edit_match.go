@@ -646,8 +646,19 @@ func lenientRecountRaw(content, rawOld, transform string) (int, []int) {
 		return 0, nil
 	}
 	trimmedOld := make([]string, 0, strings.Count(probe, "\n")+1)
+	// #821: the counting pass previously trimmed BOTH sides on every line,
+	// but trailing-whitespace-tolerant semantics only ignore TRAILING ws —
+	// leading indentation is significant. A second block differing only in
+	// indent was falsely counted, rejecting a correct unique edit as
+	// ambiguous. Mirror the transform's actual semantics (rstrip-only)
+	// unless the transform itself is the fully-trim fuzzy form.
+	rstripOnly := strings.Contains(transform, "trailing-whitespace-tolerant")
 	for _, l := range strings.Split(probe, "\n") {
-		trimmedOld = append(trimmedOld, strings.TrimSpace(l))
+		if rstripOnly {
+			trimmedOld = append(trimmedOld, strings.TrimRight(l, " \t"))
+		} else {
+			trimmedOld = append(trimmedOld, strings.TrimSpace(l))
+		}
 	}
 	fileLines := strings.Split(content, "\n")
 	nOld := len(trimmedOld)
@@ -656,7 +667,13 @@ func lenientRecountRaw(content, rawOld, transform string) (int, []int) {
 	for start := 0; start+nOld <= len(fileLines); start++ {
 		matched := true
 		for j := range trimmedOld {
-			if strings.TrimSpace(fileLines[start+j]) != trimmedOld[j] {
+			var cand string
+			if rstripOnly {
+				cand = strings.TrimRight(fileLines[start+j], " \t")
+			} else {
+				cand = strings.TrimSpace(fileLines[start+j])
+			}
+			if cand != trimmedOld[j] {
 				matched = false
 				break
 			}

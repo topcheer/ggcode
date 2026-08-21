@@ -2,6 +2,7 @@ package tool
 
 import (
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -91,7 +92,29 @@ var criticalFileCategories = []criticalFileCategory{
 	// --- Container / deployment files ---
 	{
 		matchFn: func(base, _ string) bool {
-			return base == "Dockerfile" || strings.HasPrefix(strings.ToLower(base), "dockerfile.")
+			// #828: the bare 'dockerfile.' prefix matched dockerfile.py/.md/.js
+			// — source or doc files masquerading as Dockerfiles. Constrain to
+			// real Dockerfile variants (extension-less suffixes used in
+			// multi-stage builds, e.g. Dockerfile.web, Dockerfile.linux).
+			lower := strings.ToLower(base)
+			if base == "Dockerfile" {
+				return true
+			}
+			if !strings.HasPrefix(lower, "dockerfile.") {
+				return false
+			}
+			ext := lower[len("dockerfile."):]
+			switch ext {
+			case "base", "dev", "prod", "production", "development", "local",
+				"linux", "windows", "alpine", "debian", "web", "api", "app",
+				"test", "stage", "staging", "build":
+				return true
+			}
+			// Numeric suffixes (Dockerfile.v2) are also legitimate.
+			if _, err := strconv.Atoi(ext); err == nil {
+				return true
+			}
+			return false
 		},
 		warning: "Dockerfile defines the container image build. " +
 			"After modifying, verify the image builds with `docker build .` (or `docker build -t test .`).",

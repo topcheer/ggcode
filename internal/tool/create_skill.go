@@ -123,6 +123,13 @@ func (t CreateSkillTool) Execute(ctx context.Context, input json.RawMessage) (Re
 	}
 
 	skillFile := filepath.Join(skillsDir, name, "SKILL.md")
+	// #822: checkDuplicate only queries CommandMgr (nil-tolerant, blind to
+	// files skipped at load e.g. malformed frontmatter). A disk check is the
+	// real guard — without it a user-authored SKILL.md was silently
+	// destroyed on create.
+	if _, err := os.Stat(skillFile); err == nil {
+		return Result{IsError: true, Content: fmt.Sprintf("skill %q already exists on disk. Use a different name or delete the existing skill first.", name)}, nil
+	}
 	markdown := buildSkillMarkdown(name, desc, args.WhenToUse, args.AllowedTools, args.RequiresTools, args.Dependencies, args.Context, body)
 	if err := os.MkdirAll(filepath.Dir(skillFile), 0o755); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("cannot create skill directory: %v", err)}, nil

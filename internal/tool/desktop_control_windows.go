@@ -167,20 +167,37 @@ func keyEventInput(vk uint16, flags uint32) winINPUT {
 }
 
 // absCoord converts a logical pixel coordinate to the 0..65535 normalized
-// range SendInput expects with MOUSEEVENTF_ABSOLUTE|VIRTUALDESK.
-func absCoord(v int32, total int32) int32 {
+// range SendInput expects with MOUSEEVENTF_ABSOLUTE|VIRTUALDESK, anchored
+// at the virtual screen ORIGIN (#818): the VIRTUALDESK space starts at the
+// virtual screen top-left, so multi-monitor layouts with a negative origin
+// (left-side monitor) must subtract it before normalizing.
+func absCoord(v, origin, total int32) int32 {
 	if total <= 0 {
 		return 0
 	}
-	return int32((int64(v) * 65535) / int64(total))
+	rel := v - origin
+	if rel < 0 {
+		rel = 0
+	}
+	if rel > total {
+		rel = total
+	}
+	return int32((int64(rel) * 65535) / int64(total))
 }
 
-func screenSpan() (w, h int32) {
-	// GetSystemMetrics(SM_CXVIRTUALSCREEN=76, SM_CYVIRTUALSCREEN=79)
+// virtualScreen returns the virtual screen origin and size.
+// #818: the old screenSpan passed index 76 (SM_XVIRTUALSCREEN = virtual
+// screen ORIGIN x) as the WIDTH; width is 78 (SM_CXVIRTUALSCREEN). Even
+// single-monitor clicks landed at garbage normalized coordinates.
+func virtualScreen() (vsx, vsy, vsw, vsh int32) {
 	p := user32.NewProc("GetSystemMetrics")
-	cx, _, _ := p.Call(76)
-	cy, _, _ := p.Call(79)
-	return int32(cx), int32(cy)
+	// SM_XVIRTUALSCREEN=76, SM_YVIRTUALSCREEN=77 (origin)
+	// SM_CXVIRTUALSCREEN=78, SM_CYVIRTUALSCREEN=79 (size)
+	x, _, _ := p.Call(76)
+	y, _, _ := p.Call(77)
+	w, _, _ := p.Call(78)
+	h, _, _ := p.Call(79)
+	return int32(x), int32(y), int32(w), int32(h)
 }
 
 func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error) {
@@ -395,10 +412,10 @@ func getForegroundWindow() uintptr {
 // the darwin backend) ──
 
 func winClick(ctx context.Context, x, y int, button string, count int) (Result, error) {
-	sw, sh := screenSpan()
+	vsx, vsy, vsw, vsh := virtualScreen()
 	var inputs []winINPUT
 	inputs = append(inputs, mouseEventInput(mouseAbsolute|mouseVirtualDesk|mouseMove,
-		absCoord(int32(x), sw), absCoord(int32(y), sh)))
+		absCoord(int32(x), vsx, vsw), absCoord(int32(y), vsy, vsh)))
 	btn := uint32(mouseLeftDown)
 	btnUp := uint32(mouseLeftUp)
 	if button == "right" {
@@ -420,7 +437,7 @@ func winClick(ctx context.Context, x, y int, button string, count int) (Result, 
 
 // winMouseButtonEvent posts a single button-down or -up event at (x,y).
 func winMouseButtonEvent(ctx context.Context, x, y int, button string, down bool) (Result, error) {
-	sw, sh := screenSpan()
+	vsx, vsy, vsw, vsh := virtualScreen()
 	btn := uint32(mouseLeftDown)
 	btnUp := uint32(mouseLeftUp)
 	switch button {
@@ -440,7 +457,7 @@ func winMouseButtonEvent(ctx context.Context, x, y int, button string, down bool
 	}
 	inputs := []winINPUT{
 		mouseEventInput(mouseAbsolute|mouseVirtualDesk|mouseMove,
-			absCoord(int32(x), sw), absCoord(int32(y), sh)),
+			absCoord(int32(x), vsx, vsw), absCoord(int32(y), vsy, vsh)),
 		mouseEventInput(event, 0, 0),
 	}
 	if err := sendInput(inputs); err != nil {
@@ -502,9 +519,9 @@ func winHoldKey(ctx context.Context, p desktopParams) (Result, error) {
 }
 
 func winMove(ctx context.Context, x, y int) (Result, error) {
-	sw, sh := screenSpan()
+	vsx, vsy, vsw, vsh := virtualScreen()
 	inputs := []winINPUT{mouseEventInput(mouseAbsolute|mouseVirtualDesk|mouseMove,
-		absCoord(int32(x), sw), absCoord(int32(y), sh))}
+		absCoord(int32(x), vsx, vsw), absCoord(int32(y), vsy, vsh))}
 	if err := sendInput(inputs); err != nil {
 		return Result{}, err
 	}
@@ -512,13 +529,13 @@ func winMove(ctx context.Context, x, y int) (Result, error) {
 }
 
 func winDrag(ctx context.Context, x, y, toX, toY int) (Result, error) {
-	sw, sh := screenSpan()
+	vsx, vsy, vsw, vsh := virtualScreen()
 	inputs := []winINPUT{
 		mouseEventInput(mouseAbsolute|mouseVirtualDesk|mouseMove,
-			absCoord(int32(x), sw), absCoord(int32(y), sh)),
+			absCoord(int32(x), vsx, vsw), absCoord(int32(y), vsy, vsh)),
 		mouseEventInput(mouseLeftDown, 0, 0),
 		mouseEventInput(mouseAbsolute|mouseVirtualDesk|mouseMove,
-			absCoord(int32(toX), sw), absCoord(int32(toY), sh)),
+			absCoord(int32(toX), vsx, vsw), absCoord(int32(toY), vsy, vsh)),
 		mouseEventInput(mouseLeftUp, 0, 0),
 	}
 	if err := sendInput(inputs); err != nil {
@@ -550,10 +567,10 @@ func winModifierClick(ctx context.Context, x, y int, modifierSpec string) (Resul
 	if err != nil {
 		return Result{}, err
 	}
-	sw, sh := screenSpan()
+	vsx, vsy, vsw, vsh := virtualScreen()
 	var inputs []winINPUT
 	inputs = append(inputs, mouseEventInput(mouseAbsolute|mouseVirtualDesk|mouseMove,
-		absCoord(int32(x), sw), absCoord(int32(y), sh)))
+		absCoord(int32(x), vsx, vsw), absCoord(int32(y), vsy, vsh)))
 	for _, m := range mods {
 		inputs = append(inputs, keyEventInput(winVK[m], 0))
 	}

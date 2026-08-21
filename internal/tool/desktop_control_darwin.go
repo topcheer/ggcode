@@ -514,14 +514,18 @@ tell application "System Events"
 	// Click the top-level menu bar item to open its menu.
 	sb.WriteString(fmt.Sprintf("      click menu bar item %s\n", applescriptQuote(parts[0])))
 	// Walk down: each level is "menu item X of menu X of <parent chain> of menu bar item P1".
-	// Clicking an intermediate menu item opens its submenu; the final click selects.
+	// Clicking an intermediate submenu item opens the next menu; the final
+	// click selects. #819: a submenu is named after its PARENT item (System
+	// Events), so 'menu %s' must carry parts[depth-1], not parts[depth] —
+	// the old self-named chain referenced a nonexistent menu and every
+	// depth>=2 selection failed with -1728.
 	for depth := 1; depth < len(parts); depth++ {
 		var chain strings.Builder
 		chain.WriteString(fmt.Sprintf("menu item %s of menu %s",
-			applescriptQuote(parts[depth]), applescriptQuote(parts[depth])))
+			applescriptQuote(parts[depth]), applescriptQuote(parts[depth-1])))
 		for j := depth - 1; j >= 1; j-- {
 			chain.WriteString(fmt.Sprintf(" of menu item %s of menu %s",
-				applescriptQuote(parts[j]), applescriptQuote(parts[j])))
+				applescriptQuote(parts[j]), applescriptQuote(parts[j-1])))
 		}
 		chain.WriteString(fmt.Sprintf(" of menu bar item %s", applescriptQuote(parts[0])))
 		sb.WriteString(fmt.Sprintf("      click %s\n", chain.String()))

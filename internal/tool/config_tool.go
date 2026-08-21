@@ -116,8 +116,20 @@ func (t ConfigTool) Execute(_ context.Context, input json.RawMessage) (Result, e
 }
 
 func configSetDisplayValue(setting, value string) string {
+	// #825: the old Contains("token") masked max_tokens/context_tokens —
+	// plain numeric settings echoed '(secret stored securely)'. Whitelist
+	// known secret-bearing key shapes instead of substring matching.
 	lower := strings.ToLower(setting)
-	if lower == "api_key" || strings.HasPrefix(lower, "api_key.") || strings.Contains(lower, "api_key") || strings.Contains(lower, "token") || strings.Contains(lower, "secret") || strings.Contains(lower, "password") {
+	secretKeys := []string{"api_key", "auth_token", "access_token", "refresh_token",
+		"client_secret", "secret_key", "private_key", "password", "passwd", "token"}
+	for _, k := range secretKeys {
+		if strings.HasPrefix(lower, k+".") || lower == k || strings.HasSuffix(lower, "."+k) ||
+			strings.Contains(lower, "_"+k+"_") {
+			return "(secret stored securely)"
+		}
+	}
+	// Explicit compound forms like api_key_openai / github_api_key.
+	if strings.Contains(lower, "api_key") || strings.Contains(lower, "auth_token") {
 		return "(secret stored securely)"
 	}
 	return value

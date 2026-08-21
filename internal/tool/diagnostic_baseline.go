@@ -193,6 +193,7 @@ func formatNewDiagnostics(newDiags []lsp.Diagnostic, resolvedCount int) string {
 	if len(newDiags) > 0 {
 		var errors []string
 		var warnings []string
+		var infos []string
 		for _, d := range newDiags {
 			msg := strings.TrimSpace(d.Message)
 			if msg == "" {
@@ -200,14 +201,22 @@ func formatNewDiagnostics(newDiags []lsp.Diagnostic, resolvedCount int) string {
 			}
 			line := d.Range.Start.Line + 1
 			formatted := fmt.Sprintf("  L%d: %s", line, msg)
-			if d.Severity <= 1 {
+			// #820: severity 0 (omitted, per LSP spec) means the server could
+			// not classify — treat as error (safer for the post-edit gate);
+			// 3 (Info) / 4 (Hint) were silently dropped, losing gopls's
+			// 'imported and not used' (an Info) — the most valuable post-edit
+			// signal. Render them now.
+			switch d.Severity {
+			case 1, 0:
 				errors = append(errors, formatted)
-			} else if d.Severity == 2 {
+			case 2:
 				warnings = append(warnings, formatted)
+			case 3, 4:
+				infos = append(infos, formatted)
 			}
 		}
 
-		if len(errors) > 0 || len(warnings) > 0 {
+		if len(errors) > 0 || len(warnings) > 0 || len(infos) > 0 {
 			b.WriteString("\n\n[New Diagnostics — introduced by this edit]\n")
 			if len(errors) > 0 {
 				b.WriteString(fmt.Sprintf("New errors (%d):\n", len(errors)))
@@ -240,7 +249,26 @@ func formatNewDiagnostics(newDiags []lsp.Diagnostic, resolvedCount int) string {
 					b.WriteString(fmt.Sprintf("  ... and %d more\n", len(warnings)-5))
 				}
 			}
-			b.WriteString("Fix these new issues to ensure the code compiles correctly.")
+			if len(infos) > 0 {
+				if len(errors) > 0 || len(warnings) > 0 {
+					b.WriteString("\n")
+				}
+				b.WriteString(fmt.Sprintf("New info/hints (%d):\n", len(infos)))
+				shown := infos
+				if len(shown) > 5 {
+					shown = shown[:5]
+				}
+				for _, w := range shown {
+					b.WriteString(w)
+					b.WriteString("\n")
+				}
+				if len(infos) > 5 {
+					b.WriteString(fmt.Sprintf("  ... and %d more\n", len(infos)-5))
+				}
+			}
+			if len(errors) > 0 || len(warnings) > 0 {
+				b.WriteString("Fix these new issues to ensure the code compiles correctly.")
+			}
 		}
 	}
 

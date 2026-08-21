@@ -178,6 +178,11 @@ func (t EditFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 	writeData := []byte(newContent)
 	writeData, fmtChanged := formatGoBytes(args.FilePath, writeData)
 	if err := atomicWriteFile(args.FilePath, writeData, 0644); err != nil {
+		// #824: the write failed — the file on disk is unchanged, so the
+		// baseline captured above must not survive (its own comment: "used
+		// when an edit is skipped or fails"). A stale baseline misattributes
+		// diagnostics on later edits.
+		ClearDiagnosticBaseline(args.FilePath)
 		return Result{IsError: true, Content: fmt.Sprintf("error writing file: %v", err)}, nil
 	}
 

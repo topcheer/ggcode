@@ -33,11 +33,14 @@ var debugStmtPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`\bconsole\.log\(`),
 	regexp.MustCompile(`\bconsole\.debug\(`),
 	// Python
+	// #826: language-gated below — \bprint\( fired on 'logger.print(x)'
+	// in .go files and every non-Python text.
 	regexp.MustCompile(`\bprint\(`),
 	regexp.MustCompile(`\bpprint\.pprint\(`),
 	regexp.MustCompile(`\bpprint\.pformat\(`),
 	// Ruby
-	regexp.MustCompile(`\bbinding\.pry\b`),
+	// #826: binding.pry removed from this list — it also lives in
+	// debuggerPatterns and produced two findings for one line.
 	regexp.MustCompile(`\bbinding\.irb\b`),
 	// Java/Kotlin/Scala
 	regexp.MustCompile(`\bSystem\.out\.println\(`),
@@ -53,6 +56,15 @@ var debugStmtPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`\bfprintf\s*\(\s*stderr\b`),
 }
 
+// pythonOnlyPattern marks the Python-only debug patterns that must not
+// fire on non-Python files (#826). Matched by pattern string — regexp
+// pointers are not stable across compilations.
+var pythonOnlyPattern = map[string]bool{
+	`\bprint\(`:           true,
+	`\bpprint\.pprint\(`:  true,
+	`\bpprint\.pformat\(`: true,
+}
+
 // debuggerPatterns matches debugger/breakpoint statements.
 var debuggerPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`\bpdb\.set_trace\(\)`),
@@ -61,6 +73,9 @@ var debuggerPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`^\s*debugger;\s*$`),
 	regexp.MustCompile(`\bbinding\.pry\b`),
 }
+
+// pythonFileRe gates Python-only debug patterns by file path (#826).
+var pythonFileRe = regexp.MustCompile(`\.py$|/python/|python`)
 
 // todoPattern matches TODO/FIXME/HACK/XXX in added lines.
 var todoPattern = regexp.MustCompile(`(?i)\b(TODO|FIXME|HACK|XXX|BUG|WORKAROUND)\b`)
@@ -201,6 +216,11 @@ func ScanStagedDiffForIssues(diffOutput string) []DiffIssue {
 
 		// 4. Debug print statements.
 		for _, pat := range debugStmtPatterns {
+			// #826: Python-only patterns must not fire on non-Python files
+			// ('logger.print(x)' in Go is not a debug print).
+			if pythonOnlyPattern[pat.String()] && !pythonFileRe.MatchString(currentFile) {
+				continue
+			}
 			if pat.MatchString(addedContent) {
 				issues = append(issues, DiffIssue{
 					File:     currentFile,
