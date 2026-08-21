@@ -34,7 +34,7 @@ func (m *onboardModel) View() tea.View {
 	}
 
 	header := lipgloss.NewStyle().Bold(true).Render(m.tr("title"))
-	stepLabel := fmt.Sprintf("[%d/6]", int(m.step)+1)
+	stepLabel := fmt.Sprintf("[%d/%d]", int(m.step)+1, int(onboardStepDone)+1) // #909: IM step rendered [7/6]
 
 	top := lipgloss.NewStyle().
 		Width(m.width).

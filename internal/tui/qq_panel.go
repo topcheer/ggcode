@@ -570,10 +570,14 @@ func (m Model) qqAdapterStatus(state *im.AdapterState) string {
 	if status == "" {
 		status = m.t("panel.qq.status.unknown")
 	}
+	// #909: same #887-family bug — both branches returned the same value.
 	if state.Healthy {
 		return status
 	}
-	return status
+	if strings.TrimSpace(state.LastError) != "" {
+		return state.LastError
+	}
+	return status + " (offline)"
 }
 
 func qqStatePtr(state im.AdapterState) *im.AdapterState {

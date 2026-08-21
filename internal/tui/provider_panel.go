@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -531,7 +532,9 @@ func providerPanelEndpointBodyRows(endpointCount int) int {
 }
 
 func providerPanelEndpointHeight(endpointCount int) int {
-	return max(3, providerPanelEndpointBodyRows(endpointCount)+1-2)
+	// #909: the old -2 always clipped the bottom two list rows (body renders
+	// count+2 rows; container gave bodyRows-1 with MaxHeight(bodyRows-2)).
+	return max(3, providerPanelEndpointBodyRows(endpointCount)+1)
 }
 
 func providerPanelModelHeight(filterEnabled bool) int {
@@ -1345,14 +1348,25 @@ func isLocalBaseURL(baseURL string) bool {
 	u := strings.TrimSpace(baseURL)
 	u = strings.TrimPrefix(u, "http://")
 	u = strings.TrimPrefix(u, "https://")
+	// #906: IndexByte(u, ':') hits index 0 for '::1' and index 1 for
+	// '[::1]' — both IPv6 branches were dead. Use net.SplitHostPort/
+	// url.Parse semantics instead of manual slicing.
 	host := u
-	if i := strings.IndexByte(u, ':'); i >= 0 {
-		host = u[:i]
-	}
-	if i := strings.IndexByte(u, '/'); i >= 0 && i < len(host) {
+	if i := strings.IndexByte(u, '/'); i >= 0 {
 		host = host[:i]
 	}
-	return host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "[::1]"
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h // strip :port (SplitHostPort also unbrackets [::1])
+	} else if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+		host = host[1 : len(host)-1] // bracketed host without port
+	} else if strings.Count(host, ":") > 1 {
+		// #906: bare IPv6 with port ('::1:11434') — SplitHostPort rejects
+		// it (too many colons); strip the last colon-group as the port.
+		if i := strings.LastIndexByte(host, ':'); i >= 0 {
+			host = host[:i]
+		}
+	}
+	return host == "localhost" || host == "127.0.0.1" || host == "::1"
 }
 
 func providerHasUsableCredential(vendor, endpoint string, ep config.EndpointConfig, vc config.VendorConfig, panel *providerPanelState) bool {

@@ -319,8 +319,17 @@ func (m *onboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.modelLoading = false
 			if len(msg.models) > 0 {
 				m.allModels = msg.models
+				// #907: do NOT truncate the selection source here — the old
+				// [:20] cap meant models 21+ could never be filtered to or
+				// selected (and the later success path replaced the list whole,
+				// making the selectable set inconsistent between runs).
 				m.models = msg.models
 				m.applyModelFilter()
+			} else if len(m.allModels) == 0 && strings.TrimSpace(m.customFields[3].Value()) == "" {
+				// #907: discovery failed and no model entered — the comment
+				// promised an error but nothing ever wrote one (custom_err_model
+				// was a dead key in all 10 locales).
+				m.err = m.tr("custom_err_model")
 			}
 		}
 		return m, nil

@@ -231,10 +231,9 @@ func (m *onboardModel) startModelSelection() tea.Cmd {
 		m.models = []string{"default"}
 	}
 
-	// Show first 20 for display, but keep allModels as the full list
-	if len(m.models) > 20 {
-		m.models = m.models[:20]
-	}
+	// #907: keep the FULL list as the filter/selection source — the old
+	// [:20] cap on m.models made models 21+ unselectable. applyModelFilter
+	// caps the visible window instead.
 	m.applyModelFilter()
 
 	for i, idx := range m.modelFiltered {

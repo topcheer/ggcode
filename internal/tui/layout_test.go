@@ -1172,8 +1172,10 @@ func TestProviderPanelRendersSelectedVendorEnvVar(t *testing.T) {
 
 func TestProviderPanelEndpointSectionKeepsTightHeight(t *testing.T) {
 	height := providerPanelEndpointHeight(2)
-	if height != 3 {
-		t.Fatalf("expected endpoint section height 3 after lifting models, got %d", height)
+	// #909: the old -2 clipped the bottom two rows (count=2 rendered 4
+	// body lines but the container capped at 2). bodyRows(2)=4, +1 header.
+	if height != 5 {
+		t.Fatalf("expected endpoint section height 5 (fits all 4 body lines), got %d", height)
 	}
 }
 

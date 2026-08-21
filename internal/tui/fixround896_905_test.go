@@ -49,3 +49,31 @@ func TestLanchatApprovalIdxClamp(t *testing.T) {
 		t.Fatalf("clamp failed: %d", idx)
 	}
 }
+
+// TestIsLocalBaseURLIPv6 (#906): both IPv6 forms must be recognized local.
+func TestIsLocalBaseURLIPv6(t *testing.T) {
+	local := []string{
+		"http://[::1]:11434",
+		"http://::1:11434",
+		"http://localhost:11434",
+		"http://127.0.0.1:11434",
+	}
+	for _, u := range local {
+		if !isLocalBaseURL(u) {
+			t.Errorf("isLocalBaseURL(%q) = false, want true", u)
+		}
+	}
+	if isLocalBaseURL("http://example.com:11434") {
+		t.Error("remote host judged local")
+	}
+}
+
+// TestShortSessionID (#908): short remote IDs must not panic.
+func TestShortSessionID(t *testing.T) {
+	if got := shortSessionID("abc"); got != "abc" {
+		t.Fatalf("short id mangled: %q", got)
+	}
+	if got := shortSessionID("0123456789abcdef"); got != "0123456789ab" {
+		t.Fatalf("long id not truncated: %q", got)
+	}
+}

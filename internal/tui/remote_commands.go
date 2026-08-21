@@ -362,7 +362,14 @@ func (d tuiSlashDeps) GitDiff(args []string) (string, error) {
 	cmd := exec.Command("git", gitArgs...)
 	cmd.Dir = workingDirFromModel(d.m)
 	out, err := cmd.CombinedOutput()
-	if err != nil && len(out) == 0 {
+	if err != nil {
+		// #909: with stderr captured, git's usage text used to be returned
+		// to the IM user as the diff body. Fail loudly unless it is a real
+		// diff despite non-zero exit (e.g. --exit-code usage).
+		trimmed := strings.TrimRight(string(out), "\n")
+		if strings.HasPrefix(trimmed, "diff ") {
+			return trimmed, nil
+		}
 		return "", fmt.Errorf("git diff: %v", err)
 	}
 	trimmed := strings.TrimRight(string(out), "\n")

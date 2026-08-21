@@ -37,6 +37,16 @@ type pcSessionListMsg struct {
 	sessions []im.PCSessionInfo
 }
 
+// shortSessionID truncates a remote-supplied session ID for display.
+// #908: IDs come from the a2a peer with no protocol length guarantee —
+// naive [:12] panicked the render loop on short IDs.
+func shortSessionID(id string) string {
+	if len(id) > 12 {
+		return id[:12]
+	}
+	return id
+}
+
 func (m *Model) openPCPanel() {
 	m.pcPanel = &pcPanelState{}
 }
@@ -83,7 +93,7 @@ func (m Model) renderPCPanel() string {
 			case "active":
 				stateIcon = "*"
 			}
-			labels[i] = fmt.Sprintf(" %s %s %s  %s  participants:%d", indicator, stateIcon, s.SessionID[:12], mode, s.ParticipantCount)
+			labels[i] = fmt.Sprintf(" %s %s %s  %s  participants:%d", indicator, stateIcon, shortSessionID(s.SessionID), mode, s.ParticipantCount)
 		}
 		body = append(body, labels...)
 
@@ -334,7 +344,7 @@ func (m *Model) pcRenewSessionCmd(sessionID string) tea.Cmd {
 		if err := adapter.RenewSession(context.Background(), sessionID); err != nil {
 			return pcResultMsg{err: err}
 		}
-		return pcResultMsg{message: fmt.Sprintf("Session %s renewed", sessionID[:12])}
+		return pcResultMsg{message: fmt.Sprintf("Session %s renewed", shortSessionID(sessionID))}
 	}
 }
 
@@ -350,7 +360,7 @@ func (m *Model) pcCloseSessionCmd(sessionID string) tea.Cmd {
 		if err := adapter.CloseSession(sessionID); err != nil {
 			return pcResultMsg{err: err}
 		}
-		return pcResultMsg{message: fmt.Sprintf("Session %s closed", sessionID[:12])}
+		return pcResultMsg{message: fmt.Sprintf("Session %s closed", shortSessionID(sessionID))}
 	}
 }
 
@@ -368,7 +378,7 @@ func (m *Model) pcBindSessionCmd(session im.PCSessionInfo) tea.Cmd {
 		if err != nil {
 			return pcResultMsg{err: err}
 		}
-		return pcResultMsg{message: fmt.Sprintf("Bound to session %s", session.SessionID[:12])}
+		return pcResultMsg{message: fmt.Sprintf("Bound to session %s", shortSessionID(session.SessionID))}
 	}
 }
 
