@@ -131,14 +131,20 @@ var shellCompatPatterns = []shellCompatPattern{
 	// --- du --max-depth (GNU) ---
 	{
 		match: func(cmd, out string) bool {
-			return strings.Contains(cmd, "du") && strings.Contains(cmd, "--max-depth")
+			// #868: anchor to the du COMMAND (not substrings like "gradle",
+			// "tools/") - same token-anchoring style as sibling patterns.
+			isDu := strings.HasPrefix(cmd, "du ") || strings.Contains(cmd, " du ") || cmd == "du"
+			return isDu && strings.Contains(cmd, "--max-depth")
 		},
 		fix: "du --max-depth is GNU-only. On macOS/BSD use: du -d N -h (e.g., du -d 1 -h for depth 1)",
 	},
 	// --- ls with GNU long options ---
 	{
 		match: func(cmd, out string) bool {
-			return strings.Contains(cmd, "ls") && (strings.Contains(cmd, "--color") || strings.Contains(cmd, "--group-directories"))
+			// #868: anchor to the ls command; tokens containing "ls" as a
+			// substring (e.g. "tools", "curls") must not trigger.
+			isLs := strings.HasPrefix(cmd, "ls ") || strings.Contains(cmd, " ls ") || cmd == "ls"
+			return isLs && (strings.Contains(cmd, "--color") || strings.Contains(cmd, "--group-directories"))
 		},
 		fix: "ls --color and --group-directories are GNU-only. On macOS/BSD use: ls -G (color), CLICOLOR=1 ls, or exa/eza if installed",
 	},
@@ -152,10 +158,17 @@ var shellCompatPatterns = []shellCompatPattern{
 	// --- mktemp template differences ---
 	{
 		match: func(cmd, out string) bool {
-			return strings.Contains(cmd, "mktemp") && strings.Contains(out, "mktemp: too few") ||
-				(strings.Contains(cmd, "mktemp") && !strings.Contains(cmd, "-t") && !strings.Contains(cmd, "-d") && strings.Contains(out, "error"))
+			// #868: require mktemp-specific diagnostics, not any 'error' text:
+			// failed commands routinely have 'error' in stderr, and BSD mktemp
+			// ACCEPTS a template without -t (live-verified on macOS).
+			if !strings.Contains(cmd, "mktemp") {
+				return false
+			}
+			return strings.Contains(out, "mktemp: too few") ||
+				strings.Contains(out, "mktemp: illegal option") ||
+				strings.Contains(out, "mktemp: no such file")
 		},
-		fix: "BSD mktemp requires -t prefix or uses different template syntax. Use: mktemp -t prefix (macOS/BSD) or mktemp -d -t prefix for directories",
+		fix: "GNU and BSD mktemp differ. Portable forms: mktemp (file), mktemp -d (directory), or mktemp /tmp/prefix.XXXXXX (template works on both GNU and macOS)",
 	},
 }
 

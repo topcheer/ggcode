@@ -203,18 +203,28 @@ func (t ScaffoldProject) writeScaffoldFiles(args scaffoldArgs, files []scaffoldF
 
 	for _, f := range files {
 		fullPath := filepath.Join(args.OutputDir, f.Path)
-		if t.tryWriteFile(fullPath, f.Content) {
+		// #870: distinguish exists/sandbox/io so a half-created scaffold is
+		// reported as the failure it is, not '(already exist)'.
+		ok, reason := t.tryWriteFile(fullPath, f.Content)
+		if ok {
 			defaultFileTracker.RecordRead(fullPath)
 			result.Files = append(result.Files, scaffoldFileResult{Path: f.Path, Status: "created"})
 			result.Created++
 		} else {
-			result.Files = append(result.Files, scaffoldFileResult{Path: f.Path, Status: "skipped"})
+			status := "skipped (already exists)"
+			switch reason {
+			case "sandbox":
+				status = "failed (outside sandbox)"
+			case "io":
+				status = "failed (I/O error)"
+			}
+			result.Files = append(result.Files, scaffoldFileResult{Path: f.Path, Status: status})
 			result.Skipped++
 		}
 	}
 
 	if result.Skipped > 0 {
-		result.Summary = fmt.Sprintf("Scaffolded %s project %q: %d files created, %d skipped (already exist)",
+		result.Summary = fmt.Sprintf("Scaffolded %s project %q: %d files created, %d not created (already exist or failed - see per-file status)",
 			args.Language, args.ProjectName, result.Created, result.Skipped)
 	} else {
 		result.Summary = fmt.Sprintf("Scaffolded %s project %q: %d files created",
@@ -223,19 +233,24 @@ func (t ScaffoldProject) writeScaffoldFiles(args scaffoldArgs, files []scaffoldF
 	return result
 }
 
-// tryWriteFile attempts to write a single file. Returns false if the file
-// already exists, is outside the sandbox, or any I/O error occurs.
-func (t ScaffoldProject) tryWriteFile(fullPath, content string) bool {
+// tryWriteFile attempts to write a single file. Returns (true, "") on
+// success; on failure returns false plus a reason: "exists", "sandbox",
+// or "io" (#870: callers previously labeled every skip 'already exist',
+// hiding permission/IO failures behind a harmless-sounding message).
+func (t ScaffoldProject) tryWriteFile(fullPath, content string) (bool, string) {
 	if t.SandboxCheck != nil && !t.SandboxCheck(fullPath) {
-		return false
+		return false, "sandbox"
 	}
 	if _, err := os.Stat(fullPath); err == nil {
-		return false // file already exists
+		return false, "exists" // file already exists
 	}
 	if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
-		return false
+		return false, "io"
 	}
-	return os.WriteFile(fullPath, []byte(content), 0644) == nil
+	if err := os.WriteFile(fullPath, []byte(content), 0644); err != nil {
+		return false, "io"
+	}
+	return true, ""
 }
 
 // inputHasField checks whether a JSON input has a specific field set.

@@ -46,30 +46,40 @@ func exportSkill(cmd *commands.Command, outputPath string) (*SkillManifest, stri
 		return exportSingleFileSkill(cmd, outputPath)
 	}
 
-	// Directory-based skill: walk the directory and bundle all files.
-	entries, err := os.ReadDir(skillDir)
-	if err != nil {
-		return nil, "", fmt.Errorf("cannot read skill directory %s: %w", skillDir, err)
-	}
-
+	// Directory-based skill: walk the directory recursively and bundle ALL
+	// files (#869: ReadDir + IsDir-skip silently dropped subdirectories like
+	// templates/, scripts/, assets/ - the export reported success but the
+	// bundle could never round-trip a skill with companion directories).
 	var files []string
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		name := e.Name()
-		// Skip hidden files and lock files.
-		if strings.HasPrefix(name, ".") || name == "go.sum" {
-			continue
-		}
-		info, err := e.Info()
+	walkErr := filepath.WalkDir(skillDir, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
-			continue
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(skillDir, p)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		// Skip hidden files and lock files (any depth).
+		base := filepath.Base(rel)
+		if strings.HasPrefix(base, ".") || base == "go.sum" {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return nil
 		}
 		if info.Size() > MaxSkillBundleSize {
-			return nil, "", fmt.Errorf("file %s is too large (%d bytes, max %d)", name, info.Size(), MaxSkillBundleSize)
+			return fmt.Errorf("file %s is too large (%d bytes, max %d)", rel, info.Size(), MaxSkillBundleSize)
 		}
-		files = append(files, name)
+		files = append(files, rel)
+		return nil
+	})
+	if walkErr != nil {
+		return nil, "", walkErr
 	}
 
 	if len(files) == 0 {
@@ -180,17 +190,23 @@ func importSkill(sourcePath, destDir string) (*SkillManifest, string, error) {
 	}
 
 	for name, data := range files {
-		// Security: prevent path traversal -- only allow simple filenames.
-		cleanName := filepath.Base(name)
-		if cleanName != name || strings.Contains(name, "..") {
+		// Security: prevent path traversal - allow relative subpaths
+		// (skills may carry templates/, scripts/ companion dirs, #869),
+		// but reject absolute paths, parent refs, and any component
+		// traversal.
+		clean := filepath.ToSlash(filepath.Clean(name))
+		if clean != name || strings.HasPrefix(clean, "/") || strings.HasPrefix(clean, "../") || clean == ".." || strings.Contains(clean, "/../") {
 			return nil, "", fmt.Errorf("refusing to extract file with unsafe path: %s", name)
 		}
-		if cleanName == manifestFileName {
+		if filepath.Base(clean) == manifestFileName {
 			continue // already parsed
 		}
-		outPath := filepath.Join(skillDir, cleanName)
+		outPath := filepath.Join(skillDir, filepath.FromSlash(clean))
+		if err := os.MkdirAll(filepath.Dir(outPath), 0755); err != nil {
+			return nil, "", fmt.Errorf("cannot create directory for %s: %w", clean, err)
+		}
 		if err := os.WriteFile(outPath, data, 0644); err != nil {
-			return nil, "", fmt.Errorf("cannot write %s: %w", cleanName, err)
+			return nil, "", fmt.Errorf("cannot write %s: %w", clean, err)
 		}
 	}
 

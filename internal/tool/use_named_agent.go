@@ -178,22 +178,18 @@ func (t UseNamedAgentTool) Execute(ctx context.Context, input json.RawMessage) (
 	tools := t.Tools
 	runCtx := t.Manager.RootContext()
 
-	// Use template system prompt as agentType so SystemPromptBuilder can use it
-	// But actually we want to fully override the system prompt — so we pass
-	// the template's system_prompt directly via a custom builder
+	// #872: the comment and the create_namedagent schema both promise a
+	// FULL system-prompt override ('Complete system prompt defining the
+	// subagent's role') - honor it: when the template defines a prompt, it
+	// REPLACES the standard builder output instead of being diluted by it.
 	customBuilder := func(task, agentType string) string {
-		// Prepend the template's system prompt to the standard builder output
-		standard := ""
-		if t.SystemPromptBuilder != nil {
-			standard = t.SystemPromptBuilder(task, agentType)
-		}
 		if tmpl.SystemPrompt != "" {
-			if standard != "" {
-				return tmpl.SystemPrompt + "\n\n" + standard
-			}
 			return tmpl.SystemPrompt
 		}
-		return standard
+		if t.SystemPromptBuilder != nil {
+			return t.SystemPromptBuilder(task, agentType)
+		}
+		return ""
 	}
 
 	safego.Go("tool.useNamedAgent", func() {

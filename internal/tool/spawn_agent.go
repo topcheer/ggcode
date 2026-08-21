@@ -206,7 +206,10 @@ func (t SpawnAgentTool) Execute(ctx context.Context, input json.RawMessage) (Res
 	runCtx := t.Manager.RootContext()
 
 	// Capture model and subagent_type for the runner config
-	model := args.Model
+	// #872: trim once and use the trimmed value everywhere — validation
+	// checked TrimSpace(args.Model) but RunnerConfig received the raw value,
+	// so " glm-5 " passed validation then failed at the provider.
+	model := strings.TrimSpace(args.Model)
 	subagentType := args.SubagentType
 
 	// Launch the sub-agent in a goroutine

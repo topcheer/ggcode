@@ -128,7 +128,16 @@ func (t SkillTool) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	if t.OnSkillUsed != nil {
 		t.OnSkillUsed(ref)
 	}
-	if cmd.LoadedFrom == commands.LoadedFromMCP && t.Runtime != nil {
+	if cmd.LoadedFrom == commands.LoadedFromMCP {
+		// #871: with no MCP runtime injected (disconnected / not configured),
+		// falling through to the inline branch Expand()s the placeholder
+		// command and injects contentless metadata as if it were the skill.
+		// Error out explicitly instead.
+		if t.Runtime == nil {
+			msg := "MCP runtime unavailable: this skill was loaded from an MCP server whose runtime is not available in the current session. Reconnect the MCP server or use a local skill."
+			t.notifySkillCompleted(cmd, SkillExecutionModeMCP, Result{IsError: true, Content: msg}, nil)
+			return Result{IsError: true, Content: "skill '" + cmd.Name + "' requires the MCP runtime, which is unavailable"}, nil
+		}
 		result, _ := t.executeMCPPromptSkill(ctx, cmd.Name, strings.TrimSpace(args.Args))
 		t.notifySkillCompleted(cmd, SkillExecutionModeMCP, result, nil)
 		return result, nil
