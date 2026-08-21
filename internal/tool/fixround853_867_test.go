@@ -27,13 +27,26 @@ func notebookExec(t *testing.T, tool NotebookEdit, rawArgs string) (Result, erro
 	return tool.Execute(context.Background(), json.RawMessage(rawArgs))
 }
 
+// notebookArgs builds a JSON object, marshalling values correctly so Windows
+// paths with backslashes stay valid JSON escapes (a raw `+path+` concat
+// produces invalid escape sequences like \U on Windows and would make every
+// guard here fail before exercising the notebook semantics it pins).
+func notebookArgs(t *testing.T, kv map[string]any) string {
+	t.Helper()
+	b, err := json.Marshal(kv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
 // TestNotebookReplaceMarkdownStripsOutputs (#853): replacing a markdown cell
 // must not write outputs/execution_count (nbformat forbids them on non-code
 // cells).
 func TestNotebookReplaceMarkdownStripsOutputs(t *testing.T) {
 	path := writeTestNotebook(t, `{"cells":[{"cell_type":"markdown","source":["# Old"],"metadata":{}}],"metadata":{},"nbformat":4}`)
 	tool := NotebookEdit{}
-	res, err := notebookExec(t, tool, `{"notebook_path":"`+path+`","operation":"replace","cell_number":0,"source":"# New heading","description":"test"}`)
+	res, err := notebookExec(t, tool, notebookArgs(t, map[string]any{"notebook_path": path, "operation": "replace", "cell_number": 0, "source": "# New heading", "description": "test"}))
 	if err != nil || res.IsError {
 		t.Fatalf("replace failed: %v %s", err, res.Content)
 	}
@@ -59,7 +72,7 @@ func TestNotebookReplaceMarkdownStripsOutputs(t *testing.T) {
 func TestNotebookReplaceRequiresSource(t *testing.T) {
 	path := writeTestNotebook(t, `{"cells":[{"cell_type":"code","source":["print(1)"],"metadata":{}}],"metadata":{},"nbformat":4}`)
 	tool := NotebookEdit{}
-	res, err := notebookExec(t, tool, `{"notebook_path":"`+path+`","operation":"replace","cell_number":0,"source":"","description":"test"}`)
+	res, err := notebookExec(t, tool, notebookArgs(t, map[string]any{"notebook_path": path, "operation": "replace", "cell_number": 0, "source": "", "description": "test"}))
 	if err != nil {
 		t.Fatal(err)
 	}
