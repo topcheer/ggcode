@@ -400,8 +400,6 @@ func (m Model) discordBindingLabels(entries []discordBindingEntry) []string {
 		switch {
 		case entry.Disabled:
 			status = m.t("panel.discord.entry.disabled")
-		case entry.Disabled:
-			status = m.t("panel.discord.entry.disabled")
 		case entry.Muted:
 			status = m.t("panel.discord.entry.muted")
 		case entry.OccupiedBy != "" && entry.OccupiedBy == currentWS:
@@ -489,10 +487,15 @@ func (m Model) discordAdapterStatus(state *im.AdapterState) string {
 	if status == "" {
 		status = m.t("panel.discord.status.unknown")
 	}
+	// #887: both branches previously returned the same value — offline
+	// adapters showed "running". Mirror wecom's online/LastError pattern.
 	if state.Healthy {
 		return status
 	}
-	return status
+	if strings.TrimSpace(state.LastError) != "" {
+		return state.LastError
+	}
+	return status + " (offline)"
 }
 
 func discordStatePtr(state im.AdapterState) *im.AdapterState {

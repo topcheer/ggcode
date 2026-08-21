@@ -55,7 +55,22 @@ func (m *Model) handleDebugCommand(parts []string) tea.Cmd {
 	ts := time.Now().Format("20060102-150405")
 	suffix := "all"
 	if category != "" {
-		suffix = category
+		// #888: the user-supplied category is concatenated into a filename
+		// and filepath.Join resolves '..' — '/debug export ../../evil'
+		// wrote outside the exports dir. Strip everything that could form
+		// a path or invalid filename characters.
+		sanitized := filepath.Base(category)
+		sanitized = strings.Map(func(r rune) rune {
+			switch r {
+			case '/', '\\', ':', '*', '?', '"', '<', '>', '|', 0:
+				return -1
+			}
+			return r
+		}, sanitized)
+		if sanitized == "" || sanitized == "." || sanitized == ".." {
+			sanitized = "all"
+		}
+		suffix = sanitized
 	}
 	filename := fmt.Sprintf("debug-%s-%s.log", ts, suffix)
 	path := filepath.Join(exportDir, filename)

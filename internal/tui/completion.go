@@ -29,12 +29,17 @@ func ParseMentions(input string, workDir string) (string, []Mention, error) {
 	var mentions []Mention
 	cleaned := input
 
-	// Find all @path tokens
+	// Find all @path tokens.
+	// #886: searchFrom tracks how far we've consumed — advancing past a
+	// SKIPPED token (lone '@' or over-cap) must not re-find the same '@'
+	// on the next iteration (naive continue loops forever).
+	searchFrom := 0
 	for {
-		idx := strings.Index(cleaned, mentionPrefix)
+		idx := strings.Index(cleaned[searchFrom:], mentionPrefix)
 		if idx < 0 {
 			break
 		}
+		idx += searchFrom
 
 		// Extract the path token (until whitespace or end)
 		rest := cleaned[idx+1:]
@@ -44,7 +49,21 @@ func ParseMentions(input string, workDir string) (string, []Mention, error) {
 		}
 		token := rest[:end]
 		if token == "" {
-			break
+			// #886: a lone '@' (followed by whitespace) previously executed
+			// break, terminating the whole parse loop — every later valid
+			// mention in the message was silently dropped. Skip past it.
+			searchFrom = idx + 1
+			continue
+		}
+
+		// #886: cap check must run BEFORE the deletion — the 6th+ @file token
+		// was removed from the outgoing message AND not injected, silently
+		// tampering with user input despite the comment promising it is kept.
+		if len(mentions) >= maxMentions {
+			// Keep the remaining @mention text in the message: skip resolution
+			// but leave the token intact.
+			searchFrom = idx + 1 + len(token)
+			continue
 		}
 
 		// Remove from cleaned input
@@ -53,11 +72,7 @@ func ParseMentions(input string, workDir string) (string, []Mention, error) {
 			removeLen++ // trailing whitespace
 		}
 		cleaned = cleaned[:idx] + cleaned[idx+removeLen:]
-
-		if len(mentions) >= maxMentions {
-			// Keep the remaining @mention text in the message
-			continue
-		}
+		searchFrom = idx
 
 		// Resolve path
 		fullPath := filepath.Join(workDir, token)
@@ -66,9 +81,12 @@ func ParseMentions(input string, workDir string) (string, []Mention, error) {
 			continue
 		}
 
-		// Prevent path traversal: resolved path must stay within workDir
+		// Prevent path traversal: resolved path must stay within workDir.
+		// #889: rel=='..' or a '../' component escapes; '..hidden.go' does
+		// NOT — the old HasPrefix(rel, "..") over-matched and silently
+		// dropped such legitimate filenames.
 		rel, err := filepath.Rel(workDir, absPath)
-		if err != nil || strings.HasPrefix(rel, "..") {
+		if err != nil || rel == ".." || strings.HasPrefix(rel, "../") {
 			debug.Log("completion", "@mention path traversal blocked: %s -> %s", token, absPath)
 			continue
 		}
@@ -288,6 +306,9 @@ var SlashCommands = []string{
 	"/cron",
 	"/title",
 	"/search",
+	// #889: these have descriptions/placeholders (and real handlers) but
+	// were missing from the list, so Tab completion never offered them.
+	"/redo", "/notify", "/export-trace",
 }
 
 // SlashCommandDescriptions provides short descriptions for slash commands.

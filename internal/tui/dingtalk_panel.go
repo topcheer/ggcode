@@ -81,6 +81,9 @@ func (m Model) renderDingtalkPanel() string {
 		status := m.t("panel.dingtalk.entry.available")
 		if entry.Disabled {
 			status = m.t("panel.dingtalk.entry.disabled")
+		} else if entry.Muted {
+			// #887: details ignored Muted (list shows it, details said "available")
+			status = m.t("panel.dingtalk.entry.muted")
 		} else if entry.OccupiedBy != "" {
 			status = m.t("panel.dingtalk.entry.bound")
 		}
@@ -398,8 +401,6 @@ func (m Model) dingtalkBindingLabels(entries []dingtalkBindingEntry) []string {
 		switch {
 		case entry.Disabled:
 			status = m.t("panel.dingtalk.entry.disabled")
-		case entry.Disabled:
-			status = m.t("panel.dingtalk.entry.disabled")
 		case entry.Muted:
 			status = m.t("panel.dingtalk.entry.muted")
 		case entry.OccupiedBy != "" && entry.OccupiedBy == currentWS:
@@ -487,10 +488,17 @@ func (m Model) dingtalkAdapterStatus(state *im.AdapterState) string {
 	if status == "" {
 		status = m.t("panel.dingtalk.status.unknown")
 	}
+	// #887: both branches previously returned the same value — a
+	// disconnected adapter (Healthy=false, Status="running") showed
+	// "running". Mirror wecom: healthy = raw status, else LastError/
+	// offline indicator.
 	if state.Healthy {
 		return status
 	}
-	return status
+	if strings.TrimSpace(state.LastError) != "" {
+		return state.LastError
+	}
+	return status + " (offline)"
 }
 
 func dingtalkStatePtr(state im.AdapterState) *im.AdapterState {
