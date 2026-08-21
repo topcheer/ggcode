@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -41,11 +42,11 @@ func NewProjectAutoMemory(workingDir string) *AutoMemory {
 
 // SaveMemory saves a memory entry to ~/.ggcode/memory/{key}.md.
 func (am *AutoMemory) SaveMemory(key, content string) error {
-	// Sanitize key for use as filename
-	safe := sanitizeKey(key)
-	if safe == "" {
-		safe = "untitled"
-	}
+	// #775: sanitizeKey is not injective ("a/b"/"a.b"/"a b" all -> "a-b";
+	// pure-CJK keys -> "" -> untitled.md, so ALL Chinese memories shared one
+	// file and silently overwrote each other). disambiguateKey appends a short
+	// stable hash for keys whose sanitization collides.
+	safe := disambiguateKey(key, sanitizeKey(key))
 	path := filepath.Join(am.dir, safe+".md")
 	return os.WriteFile(path, []byte(content), 0644)
 }
@@ -255,4 +256,32 @@ func sanitizeKey(key string) string {
 		safe = strings.ReplaceAll(safe, "--", "-")
 	}
 	return strings.Trim(safe, "-")
+}
+
+// disambiguateKey makes the sanitized filename injective on the original
+// key: clean ASCII keys keep their readable form; anything containing other
+// characters (spaces, punctuation, CJK) gets a short stable hash suffix so
+// distinct keys never map to the same file (#775).
+func disambiguateKey(key, safe string) string {
+	if safe == "" {
+		// Pure non-ASCII key (e.g. Chinese): keep "untitled" readable base,
+		// hash still separates different keys.
+		safe = "untitled"
+	}
+	injective := true
+	for _, r := range key {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+		default:
+			injective = false
+		}
+		if !injective {
+			break
+		}
+	}
+	if injective {
+		return safe
+	}
+	sum := sha256.Sum256([]byte(key))
+	return fmt.Sprintf("%s-%x", safe, sum[:4])
 }

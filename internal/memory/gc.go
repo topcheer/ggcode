@@ -72,10 +72,9 @@ func (am *AutoMemory) GarbageCollect() GCStats {
 // DeleteMemory removes a single memory entry by key. Returns an error if the
 // file does not exist or cannot be removed.
 func (am *AutoMemory) DeleteMemory(key string) error {
-	safe := sanitizeKey(key)
-	if safe == "" {
-		safe = "untitled"
-	}
+	// #775: must resolve the filename exactly like SaveMemory, otherwise the
+	// hash-suffixed file written for a non-injective key can never be deleted.
+	safe := disambiguateKey(key, sanitizeKey(key))
 	path := filepath.Join(am.dir, safe+".md")
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return fmt.Errorf("memory %q not found", key)

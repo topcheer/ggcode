@@ -4,6 +4,7 @@ package mcp
 
 import (
 	"os/exec"
+	"strconv"
 	"syscall"
 )
 
@@ -19,11 +20,17 @@ func configureMCPCommandProcess(cmd *exec.Cmd) {
 	}
 }
 
-// killProcessGroup kills the process on Windows.
-// Windows uses taskkill for process tree cleanup, but cmd.Process.Kill
-// is the safest portable option without additional dependencies.
+// killProcessGroup kills the process tree on Windows.
+// #774: cmd.Process.Kill() only terminates the direct child. stdio MCP
+// servers are usually npx/uvx wrapper shims -- the real node.exe/python.exe
+// is a grandchild that survived every kill and leaked on each reconnect,
+// holding the pipe write-end and stalling teardown. taskkill /T walks the
+// tree and is built into every Windows; fall back to Kill if it fails.
 func killProcessGroup(cmd *exec.Cmd) {
 	if cmd == nil || cmd.Process == nil {
+		return
+	}
+	if err := exec.Command("taskkill", "/T", "/F", "/PID", strconv.Itoa(cmd.Process.Pid)).Run(); err == nil {
 		return
 	}
 	_ = cmd.Process.Kill()

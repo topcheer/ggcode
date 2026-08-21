@@ -102,6 +102,10 @@ func NewUDPTransport(port int, mcastAddr string, hub udpHandler, nodeID, apiKey 
 					_ = pconn.JoinGroup(&iface, ma)
 				}
 				t.mcastConn = pc.(*net.UDPConn)
+				// #776: store the resolved group address -- the fallback sender
+				// (writeLoop) needs it for WriteToUDP; it was resolved, used, and
+				// dropped here, so the fallback always wrote to a nil address.
+				t.mcastAddr = ma
 
 				// Dedicated send socket bound to 0.0.0.0:0 for multicast writes.
 				// Writing on the receive socket can interfere with the read loop
@@ -186,11 +190,6 @@ func (t *UDPTransport) readLoop(conn *net.UDPConn, label string) {
 				debug.Log("lanchat-udp", "%s read error: %v", label, err)
 				continue
 			}
-		}
-
-		// Self-filter: skip our own multicast packets by source port
-		if label == "multicast" && t.listenPort > 0 && remoteAddr.Port == t.listenPort {
-			continue
 		}
 
 		data := make([]byte, n)
