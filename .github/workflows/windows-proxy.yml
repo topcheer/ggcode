@@ -165,4 +165,4 @@ jobs:
 
       - name: Table tests (all platforms)
         shell: pwsh
-        run: go test -tags goolm -count=1 -run "PAC|SmartProxy" ./internal/util/
+        run: go test -tags goolm -count=1 -run "PAC|SmartProxy|Directive" ./internal/util/
