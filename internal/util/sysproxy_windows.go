@@ -15,6 +15,7 @@ import (
 
 	"github.com/mattn/go-ieproxy"
 	"github.com/saucelabs/forwarder/pac"
+	"golang.org/x/net/http/httpproxy"
 )
 
 // Windows system-proxy + PAC support (#761).
@@ -69,6 +70,32 @@ type pacState struct {
 	resultCache sync.Map
 }
 
+// staticSystemProxy resolves the registry static proxy (ProxyEnable /
+// ProxyServer / ProxyOverride) for a single request, mirroring
+// ieproxy's staticProxy but never consulting the auto-config entry.
+// Returns (nil, nil) when the static proxy is disabled.
+func staticSystemProxy(req *http.Request) (*url.URL, error) {
+	conf := ieproxy.GetConf()
+	if conf.Automatic.Active || !conf.Static.Active || req.URL == nil {
+		return nil, nil
+	}
+	cfg := httpproxy.Config{
+		HTTPSProxy: protocolFallback(conf.Static.Protocols, "https"),
+		HTTPProxy:  protocolFallback(conf.Static.Protocols, "http"),
+		NoProxy:    conf.Static.NoProxy,
+	}
+	return cfg.ProxyFunc()(req.URL)
+}
+
+// protocolFallback returns the per-protocol static proxy, falling back to
+// the protocol-less default entry ("http=...;https=..." vs "host:port").
+func protocolFallback(m map[string]string, proto string) string {
+	if v, ok := m[proto]; ok {
+		return v
+	}
+	return m[""]
+}
+
 var thePAC pacState
 
 func buildWindowsProxyFunc() func(*http.Request) (*url.URL, error) {
@@ -78,10 +105,13 @@ func buildWindowsProxyFunc() func(*http.Request) (*url.URL, error) {
 			return u, err
 		}
 
-		// 2. Static system proxy. ieproxy.GetProxyFunc reads the registry
-		// (ProxyEnable/ProxyServer/ProxyOverride) and handles per-protocol
-		// formats; it returns (nil, nil) for direct when disabled.
-		if u, err := ieproxy.GetProxyFunc()(req); err == nil && u != nil {
+		// 2. Static system proxy. Read the registry conf ourselves and
+		// build an httpproxy.Config only from the static entry. We must NOT
+		// use ieproxy.GetProxyFunc() here: when AutoConfig is active it
+		// resolves PAC itself via WinHTTP and returns scheme-less URLs
+		// (&url.URL{Host: ...}), which both short-circuits our own PAC
+		// engine below (dead code) and mis-handles SOCKS directives.
+		if u, err := staticSystemProxy(req); err == nil && u != nil {
 			return u, nil
 		}
 
