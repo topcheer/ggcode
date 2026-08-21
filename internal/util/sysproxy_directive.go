@@ -37,7 +37,15 @@ func ProxyURLFromDirective(directive string) *url.URL {
 	case strings.HasPrefix(upper, "SOCKS5 "), strings.HasPrefix(upper, "SOCKS "):
 		// PAC "SOCKS" means SOCKS4 per spec but is universally served by
 		// SOCKS5-capable servers; map both to socks5 (SOCKS4 is extinct).
-		return parseHostPortDirective(d[len("SOCKS5 "):], "socks5")
+		// NB: slice by the prefix actually present -- "SOCKS5 " is 7 chars
+		// but "SOCKS " is 6, a fixed [len("SOCKS5 "):] used to eat the
+		// first host byte for plain-SOCKS directives ("SOCKS 10.0.0.1"
+		// became host 0.0.0.1).
+		rest := d[6:]
+		if strings.HasPrefix(upper, "SOCKS5 ") {
+			rest = d[7:]
+		}
+		return parseHostPortDirective(rest, "socks5")
 	case strings.HasPrefix(upper, "SOCKS4 "):
 		return nil // no stdlib socks4 dialer
 	default:
