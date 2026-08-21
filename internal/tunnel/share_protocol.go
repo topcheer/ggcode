@@ -330,7 +330,12 @@ func refreshIssuedShareSession(ctx context.Context, relayURL string, server Shar
 	}
 	updatedServer = server
 	if refreshed.ProtocolVersion != 0 {
-		updatedServer.ProtocolVersion = refreshed.ProtocolVersion
+		// #922: issuance enforces the RequiredShareProtocolVersion floor but
+		// refresh accepted any non-zero value - a buggy relay could silently
+		// downgrade the protocol on refresh.
+		if refreshed.ProtocolVersion >= RequiredShareProtocolVersion {
+			updatedServer.ProtocolVersion = refreshed.ProtocolVersion
+		}
 	}
 	if shareMode := strings.TrimSpace(refreshed.ShareMode); shareMode != "" {
 		updatedServer.ShareMode = shareMode

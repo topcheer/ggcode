@@ -161,10 +161,17 @@ func (m *Model) wecomAdapterStatus(state *im.AdapterState) string {
 	if state == nil {
 		return m.t("panel.wecom.status.not_started")
 	}
+	// #922: check Status first - the adapter publishes (false,'connecting','')
+	// during a normal reconnect, which showed as generic 'unknown'; and a
+	// stale LastError used to hide an active reconnect (whatsapp checks
+	// Status first).
+	if status := strings.TrimSpace(state.Status); status != "" && status != "connected" {
+		return status
+	}
 	if state.Healthy {
 		return "online"
 	}
-	if state.LastError != "" {
+	if strings.TrimSpace(state.LastError) != "" {
 		return state.LastError
 	}
 	return m.t("panel.wecom.status.unknown")
@@ -390,14 +397,11 @@ func (m *Model) clearWeComChannel(adapterName string) tea.Cmd {
 		if m.imManager == nil {
 			return wecomBindResultMsg{}
 		}
-		ws := m.currentWorkspacePath()
-		if bindings, err := m.imManager.ListBindings(); err == nil {
-			for _, b := range bindings {
-				if b.Adapter == adapterName && b.Workspace == ws {
-					_ = m.imManager.UnbindAdapter(adapterName)
-					break
-				}
-			}
+		// #918: was UnbindAdapter (deletes the binding for ALL workspaces)
+		// with swallowed error + false 'cleared' - the #898/#905 family fix
+		// missed wecom. Clear channel fields only, keep the binding.
+		if err := m.imManager.ClearChannelByAdapter(adapterName); err != nil {
+			return wecomBindResultMsg{err: err}
 		}
 		return wecomBindResultMsg{message: m.t("panel.wecom.message.cleared")}
 	}

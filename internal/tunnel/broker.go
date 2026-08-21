@@ -724,6 +724,12 @@ func (b *Broker) resetSession() string {
 	}
 	b.nextEvent.Store(0)
 	b.clientProjectionSeeded.Store(false)
+	// #919: stale projection hash leaked into the NEW session's
+	// active_session - reconnecting clients always missed and full-reset
+	// replayed on every reconnect after a session switch.
+	b.projectionHashCacheMu.Lock()
+	b.projectionHashCache = ""
+	b.projectionHashCacheMu.Unlock()
 	return b.sessionID
 }
 
@@ -812,6 +818,10 @@ func (b *Broker) BindSession(sessionID string) bool {
 		}
 		b.nextEvent.Store(0)
 		b.clientProjectionSeeded.Store(false)
+		// #919: see resetSession - clear the stale projection hash.
+		b.projectionHashCacheMu.Lock()
+		b.projectionHashCache = ""
+		b.projectionHashCacheMu.Unlock()
 	} else if b.sessionGeneration == 0 {
 		b.sessionGeneration = 1
 	}

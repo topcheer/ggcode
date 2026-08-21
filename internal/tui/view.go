@@ -288,7 +288,11 @@ func (m Model) isAnyPanelOpen() bool {
 		m.signalPanel != nil || m.ircPanel != nil ||
 		m.nostrPanel != nil || m.twitchPanel != nil ||
 		m.whatsappPanel != nil || m.streamPanel != nil ||
-		m.skillsPanel != nil || m.hooksPanel != nil
+		m.skillsPanel != nil || m.hooksPanel != nil ||
+		// #922: renderContextPanel renders these four - the config-scope
+		// indicator never showed when they were open.
+		m.statsPanel != nil || m.knightPanel != nil ||
+		m.inspectorPanel != nil || m.lanChatPanel != nil
 }
 
 func (m Model) currentSelection() (string, string, string) {

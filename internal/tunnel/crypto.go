@@ -15,8 +15,15 @@ type Crypto struct {
 	aead cipher.AEAD
 }
 
-// NewCrypto creates a Crypto instance from a hex-encoded token (32+ hex chars = 16+ byte key).
-// The token hex string is decoded to bytes and used directly as AES-128/256 key.
+// NewCrypto creates a Crypto instance from a token string (32+ chars = 16+ byte key).
+// #921 CONTRACT CORRECTION: the token string is used as RAW BYTES (NOT hex-
+// decoded as earlier docs claimed). A hex-looking token (e.g. randomHex(32) =
+// 64 chars) therefore yields a key over the 16-symbol hex alphabet; the first
+// 32 bytes are used directly as the AES-256 key. All ggcode endpoints share
+// this derivation, so interop is intact; third parties must implement THIS
+// scheme (or both sides must migrate to hex-decoding/KDF together).
+// Length policy: <16 bytes -> argon2id-derived 32-byte key; 16/24/32 -> used
+// directly; >32 -> truncated to 32 (intermediate lengths 17-31 also truncate).
 func NewCrypto(tokenHex string) (*Crypto, error) {
 	// Decode hex token to get key bytes
 	key := []byte(tokenHex)

@@ -105,6 +105,10 @@ func (m Model) renderWechatPanel() string {
 					stateStr = lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Render(" ●")
 				case "waiting_for_auth":
 					stateStr = lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render(" ○")
+				case "connecting":
+					// #922: a normal initial connection showed as a red failure
+					// dot - the adapter publishes 'connecting' with empty LastError.
+					stateStr = lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render(" ◐")
 				default:
 					stateStr = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Render(" ○")
 				}
@@ -328,6 +332,13 @@ func (m *Model) handleWechatQRPollMsg(msg wechatQRPollMsg) (Model, tea.Cmd) {
 		return *m, nil
 	}
 
+	// #922: check msg.err BEFORE the switch - error paths carried
+	// status '' which routed to 'case "wait", ""', making the default's
+	// err branch unreachable dead code (silent infinite re-poll on 5xx).
+	if msg.err != nil {
+		panel.message = fmt.Sprintf("Poll error: %v", msg.err)
+		return *m, m.pollWechatQRStatus(panel.qrcodeToken)
+	}
 	switch msg.status {
 	case "confirmed":
 		panel.authPhase = "confirmed"

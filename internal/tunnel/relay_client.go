@@ -744,7 +744,22 @@ func (rc *RelayClient) enqueueRaw(data []byte) error {
 		return nil
 	case <-rc.stopCh:
 		return fmt.Errorf("relay client closed")
+	// #920: during a long relay outage both pumps have exited and nothing
+	// drains sendCh (cap 256) - enqueueRaw used to block forever, stalling
+	// the broker's senderLoop while outbound kept growing unbounded,
+	// contradicting the documented backpressure design. Bounded wait:
+	// callers treat this like a closed client and the queue discipline
+	// (drop-oldest at the broker) decides what survives.
+	case <-time.After(rc.enqueueTimeout()):
+		return fmt.Errorf("relay client send queue stalled (relay disconnected?)")
 	}
+}
+
+// enqueueTimeout bounds how long enqueueRaw waits for a drained send queue.
+// Generous enough that a healthy-but-slow relay never trips it; short
+// enough that a prolonged outage surfaces as an error instead of a stall.
+func (rc *RelayClient) enqueueTimeout() time.Duration {
+	return 30 * time.Second
 }
 
 func (rc *RelayClient) OnMessage(fn func(msg GatewayMessage)) {
