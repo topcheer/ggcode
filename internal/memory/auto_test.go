@@ -97,3 +97,51 @@ func TestSanitizeKey(t *testing.T) {
 		}
 	}
 }
+
+// TestDisambiguateKey guards #775: distinct keys must never map to the same
+// memory file. sanitizeKey alone collapses "a/b"/"a.b"/"a b" to "a-b" and pure
+// CJK keys to "" (-> untitled), silently overwriting memories.
+func TestDisambiguateKey(t *testing.T) {
+	// Clean ASCII keys keep the readable form.
+	if got := disambiguateKey("build-process", sanitizeKey("build-process")); got != "build-process" {
+		t.Errorf("clean key should stay readable, got %q", got)
+	}
+	// Colliding sanitizations must diverge via the hash suffix.
+	seen := map[string]string{}
+	for _, key := range []string{"a/b", "a.b", "a b", "a-b"} {
+		got := disambiguateKey(key, sanitizeKey(key))
+		if prev, dup := seen[got]; dup {
+			t.Errorf("keys %q and %q collided on file %q", prev, key, got)
+		}
+		seen[got] = key
+	}
+	// Pure-CJK keys must not share untitled.md either.
+	cn1 := disambiguateKey("构建流程", sanitizeKey("构建流程"))
+	cn2 := disambiguateKey("发版流程", sanitizeKey("发版流程"))
+	if cn1 == cn2 {
+		t.Errorf("distinct CJK keys share one file %q -- silent overwrite regression", cn1)
+	}
+	if !strings.HasPrefix(cn1, "untitled-") {
+		t.Errorf("CJK key should keep untitled-<hash> form, got %q", cn1)
+	}
+}
+
+// TestSaveAndDeleteRoundTripNonInjective guards the #775 Save/Delete path
+// alignment: a memory saved under a non-injective key must be deletable by
+// the same key (DeleteMemory previously resolved the filename differently).
+func TestSaveAndDeleteRoundTripNonInjective(t *testing.T) {
+	dir := t.TempDir()
+	am := &AutoMemory{dir: dir}
+	if err := am.SaveMemory("hello world", "content-1"); err != nil {
+		t.Fatalf("SaveMemory: %v", err)
+	}
+	if err := am.SaveMemory("release flow", "content-2"); err != nil {
+		t.Fatalf("SaveMemory: %v", err)
+	}
+	if err := am.DeleteMemory("hello world"); err != nil {
+		t.Fatalf("DeleteMemory must resolve the same file SaveMemory wrote: %v", err)
+	}
+	if err := am.DeleteMemory("release flow"); err != nil {
+		t.Fatalf("DeleteMemory second: %v", err)
+	}
+}
