@@ -817,7 +817,15 @@ func (h *OAuthHandler) StartAuthFlow(ctx context.Context) (string, error) {
 		clientID = h.state.clientRegistration.ClientID
 	}
 	redirectURI := h.state.redirectURI
-	scopes := h.state.protectedResourceMeta.ScopesSupported
+	// #772: protectedResourceMeta is nil for legacy credentials (empty
+	// oauth_resource) and for lazy refresh discovery paths -- hydrateState
+	// fills it only when OAuthResource is set, while NeedsDiscovery only
+	// checks authorizationServerMeta. GetScopes already guards this exact
+	// nil case; this deref made every 401 panic and permanently break OAuth.
+	var scopes []string
+	if h.state.protectedResourceMeta != nil {
+		scopes = h.state.protectedResourceMeta.ScopesSupported
+	}
 	h.mu.Unlock()
 
 	if authEndpoint == "" {

@@ -42,6 +42,18 @@ func newSemanticMemoryStore(path string) *semanticMemoryStore {
 	return &semanticMemoryStore{path: path}
 }
 
+// semanticMemoryPathMu serializes read-modify-write cycles per path across
+// store instances. Each call site constructs a fresh store (#769), so the
+// per-instance mutex guarded nothing -- concurrent scheduler-goroutine and
+// user-command paths could interleave their read/append/rewrite cycles and
+// silently drop entries.
+var semanticMemoryPathMu sync.Map // path -> *sync.Mutex
+
+func semanticMemoryPathLock(path string) *sync.Mutex {
+	mu, _ := semanticMemoryPathMu.LoadOrStore(path, &sync.Mutex{})
+	return mu.(*sync.Mutex)
+}
+
 // Append persists a new entry, truncating overly long summaries and capping
 // the file at maxSemanticMemoryEntries (oldest entries dropped).
 func (s *semanticMemoryStore) Append(entry SemanticMemoryEntry) error {
@@ -64,10 +76,18 @@ func (s *semanticMemoryStore) Append(entry SemanticMemoryEntry) error {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	pathMu := semanticMemoryPathLock(s.path)
+	pathMu.Lock()
+	defer pathMu.Unlock()
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
 		return err
 	}
-	entries, _ := readSemanticMemoryEntries(s.path)
+	entries, readErr := readSemanticMemoryEntries(s.path)
+	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+		// #769: on a real read failure (IO error, bufio.ErrTooLong) the old
+		// code proceeded with nil and the rewrite below wiped all history.
+		return fmt.Errorf("semantic memory: read %s: %w", s.path, readErr)
+	}
 	entries = append(entries, entry)
 	if len(entries) > maxSemanticMemoryEntries {
 		entries = entries[len(entries)-maxSemanticMemoryEntries:]
@@ -86,6 +106,16 @@ func (s *semanticMemoryStore) Append(entry SemanticMemoryEntry) error {
 
 // Recent returns at most limit most-recent entries (newest first).
 func (s *semanticMemoryStore) Recent(limit int) ([]SemanticMemoryEntry, error) {
+	if s == nil || s.path == "" {
+		return nil, nil
+	}
+	pathMu := semanticMemoryPathLock(s.path)
+	pathMu.Lock()
+	defer pathMu.Unlock()
+	return s.recentLocked(limit)
+}
+
+func (s *semanticMemoryStore) recentLocked(limit int) ([]SemanticMemoryEntry, error) {
 	if s == nil || s.path == "" {
 		return nil, nil
 	}

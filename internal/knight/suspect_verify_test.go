@@ -191,10 +191,10 @@ func TestSuspect2_ActiveSkillsErrorIsCurrentlyUnreachable(t *testing.T) {
 
 // --- Suspect 3a: cross-scope duplicate false positive ---------------------
 
-// TestSuspect3a_CrossScopeSameNameAutoRejected proves that a GLOBAL staging
-// skill named identically to a PROJECT active skill is deleted as a
-// "duplicate" on the first review cycle — despite scopes being disjoint
-// namespaces (promoter.Promote itself is scope-aware and would never collide).
+// TestSuspect3a_CrossScopeSameNameAutoRejected guards #766: a GLOBAL
+// staging skill named identically to a PROJECT active skill must SURVIVE
+// review — scopes are disjoint namespaces (promoter.Promote is scope-aware).
+// Before the fix, CheckDuplicate ignored scope and deleted it in one cycle.
 func TestSuspect3a_CrossScopeSameNameAutoRejected(t *testing.T) {
 	homeDir, projDir := verifyDirs(t)
 	// Active PROJECT skill "deploy".
@@ -221,22 +221,36 @@ func TestSuspect3a_CrossScopeSameNameAutoRejected(t *testing.T) {
 
 	k.reviewStagingSkills(context.Background())
 
-	if _, err := os.Stat(stagingPath); !os.IsNotExist(err) {
-		t.Fatal("global staging 'deploy' was deleted as duplicate of project active 'deploy' — cross-scope false positive CONFIRMED")
+	// #766 fixed: cross-scope same-name staging skill must survive.
+	if _, err := os.Stat(stagingPath); err != nil {
+		t.Fatalf("global staging 'deploy' was deleted despite disjoint scope from project active 'deploy': %v", err)
 	}
-	// The project active skill must be untouched (the deletion was pure loss).
+	// The project active skill must be untouched.
 	activePath := filepath.Join(projDir, ".ggcode", "skills", "deploy", "SKILL.md")
 	if _, err := os.Stat(activePath); err != nil {
 		t.Fatalf("project active skill should still exist: %v", err)
+	}
+	// Same-scope same-name staging is a legal REVISION (stagingUpdatesActiveSkill
+	// routes it to explicit review), so it must NOT be auto-deleted either.
+	revPath, err := k.promoter.WriteStaging("deploy", "project", stagingContent)
+	if err != nil {
+		t.Fatalf("WriteStaging revision: %v", err)
+	}
+	for i := 1; i <= knightStagingMaxValidationFails+1; i++ {
+		k.reviewStagingSkills(context.Background())
+	}
+	if _, err := os.Stat(revPath); err != nil {
+		t.Fatalf("same-scope revision staging 'deploy' auto-deleted — revisions must await explicit review, not auto-reject: %v", err)
 	}
 }
 
 // --- Suspect 3b: trivial-pattern substring false positive -----------------
 
-// TestSuspect3b_TrivialPatternSubstringKillsLegitSkill proves that a perfectly
-// reasonable rule ("Never edit a file without reading it first") trips the
-// "edit a file" trivial substring and, after knightStagingMaxValidationFails
-// (3) consecutive review cycles, the staging file is auto-deleted.
+// TestSuspect3b_TrivialPatternSubstringKillsLegitSkill guards #767: a
+// reasonable rule ("Never edit a file without reading it first") tripping the
+// "edit a file" trivial substring must NOT invalidate the skill. Before the
+// fix it was a hard Error and knightStagingMaxValidationFails (3) consecutive
+// review cycles auto-deleted the staging file.
 func TestSuspect3b_TrivialPatternSubstringKillsLegitSkill(t *testing.T) {
 	homeDir, projDir := verifyDirs(t)
 	k := New(config.KnightConfig{Enabled: true, TrustLevel: "staged"}, homeDir, projDir, nil)
@@ -253,29 +267,26 @@ func TestSuspect3b_TrivialPatternSubstringKillsLegitSkill(t *testing.T) {
 		t.Fatalf("expected exactly 1 staging skill, err=%v n=%d", err, len(staging))
 	}
 	vr := ValidateSkill(staging[0])
-	if vr.Valid {
-		t.Fatal("expected validation failure from the trivial substring; skill unexpectedly valid")
+	// #767 fixed: the substring hit is a Warning, not a fatal Error.
+	if !vr.Valid {
+		t.Fatalf("legitimate skill must stay valid despite trivial-substring hit, errors: %v", vr.Errors)
 	}
 	foundTrivial := false
-	for _, e := range vr.Errors {
-		if strings.Contains(e, "too generic/trivial") {
+	for _, w := range vr.Warnings {
+		if strings.Contains(w, "basic tool usage") {
 			foundTrivial = true
 		}
 	}
 	if !foundTrivial {
-		t.Fatalf("expected the trivial-pattern error, got: %v", vr.Errors)
+		t.Fatalf("expected the trivial-pattern warning, got warnings: %v", vr.Warnings)
 	}
 
-	// Cycle the scheduler: after 3 consecutive failures the file is deleted.
+	// Cycle the scheduler past the auto-reject threshold: the file must
+	// survive because warnings never count toward stagingFailCount.
 	for i := 1; i <= knightStagingMaxValidationFails; i++ {
 		k.reviewStagingSkills(context.Background())
-		if i < knightStagingMaxValidationFails {
-			if _, err := os.Stat(stagingPath); err != nil {
-				t.Fatalf("cycle %d: staging file deleted too early (threshold=%d)", i, knightStagingMaxValidationFails)
-			}
-		}
 	}
-	if _, err := os.Stat(stagingPath); !os.IsNotExist(err) {
-		t.Fatal("staging file still exists after 3 consecutive validation failures — auto-reject did not fire")
+	if _, err := os.Stat(stagingPath); err != nil {
+		t.Fatalf("staging file deleted after %d cycles of warnings-only validation — auto-reject must not fire on warnings: %v", knightStagingMaxValidationFails, err)
 	}
 }

@@ -89,12 +89,23 @@ func (si *SkillIndex) Scan() ([]*SkillEntry, error) {
 	si.mu.RUnlock()
 
 	var entries []*SkillEntry
+	var firstErr error
 	seen := make(map[string]struct{}, 4)
 	scan := func(dir, scope string, staging bool) {
 		if !markSkillDirSeen(seen, dir) {
 			return
 		}
-		found, _ := si.scanDir(dir, scope, staging)
+		found, err := si.scanDir(dir, scope, staging)
+		if err != nil {
+			// #770: propagate scan failures instead of caching an empty
+			// result -- a transient ReadDir error used to yield "no active
+			// skills", and CheckDuplicate on an empty list then promoted a
+			// duplicate skill. Caller retries; the 30s cache below is skipped.
+			if firstErr == nil {
+				firstErr = err
+			}
+			return
+		}
 		entries = append(entries, found...)
 	}
 
@@ -109,6 +120,10 @@ func (si *SkillIndex) Scan() ([]*SkillEntry, error) {
 
 	// Project staging skills
 	scan(si.projectStaging, "project", true)
+
+	if firstErr != nil {
+		return entries, firstErr
+	}
 
 	// Cache result
 	si.mu.Lock()

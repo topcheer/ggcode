@@ -1543,7 +1543,11 @@ func (h *Hub) handleUDPEnvelope(env udpEnvelope, remoteAddr net.Addr) {
 		debug.Log("lanchat", "received leave from %s (%s)", p.NodeID, p.HumanNick)
 		h.mu.Lock()
 		if existing, ok := h.peers[p.NodeID]; ok {
-			existing.LastSeen = time.Now().Add(-offlineNotifyDelay * 2).UnixNano()
+			// #765: LastSeen is second-granularity everywhere else (written
+			// with .Unix(), read with time.Unix(p.LastSeen, 0)). Writing
+			// UnixNano here made time.Since always negative -> the peer never
+			// went stale, never got cleaned up (ghost-online forever).
+			existing.LastSeen = time.Now().Add(-offlineNotifyDelay * 2).Unix()
 			existing.lastOfflineTime = time.Now().UnixNano()
 			h.peers[p.NodeID] = existing
 		}

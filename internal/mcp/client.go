@@ -1765,18 +1765,21 @@ func (c *Client) readHeaderFramedMessage(ctx context.Context) (interface{}, erro
 		default:
 		}
 
-		line, err := reader.ReadString('\n')
+		// #771: the raw ReadString had no size cap -- a runaway stdio server
+		// (or even '\r'-flushed spinner output) grew the buffer unboundedly. All
+		// sibling framing paths already cap lines; legal headers are tiny.
+		line, err := readBoundedLine(reader, maxNDJSONLineLength)
 		if err != nil {
 			return nil, c.withStderr(fmt.Errorf("reading header: %w", err))
 		}
-		line = strings.TrimSpace(line)
-		if line == "" {
+		trimmed := strings.TrimSpace(string(line))
+		if trimmed == "" {
 			if contentLength >= 0 {
 				break
 			}
 			continue
 		}
-		parts := strings.SplitN(line, ":", 2)
+		parts := strings.SplitN(trimmed, ":", 2)
 		if len(parts) != 2 {
 			continue
 		}

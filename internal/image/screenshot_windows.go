@@ -40,6 +40,20 @@ func buildWindowsScreenshotScript(outPath string, opts ScreenshotOptions) string
 	var sb strings.Builder
 	sb.WriteString("Add-Type -AssemblyName System.Windows.Forms\n")
 	sb.WriteString("Add-Type -AssemblyName System.Drawing\n")
+	// #763: powershell.exe is DPI-unaware by default, so GetWindowRect /
+	// Screen.Bounds / CopyFromScreen all operate in virtualized 96-DPI
+	// logical coordinates -- blurry window/full-screen captures and
+	// mispositioned regions on scaled displays. Declare DPI awareness so the
+	// whole chain works in physical pixels.
+	sb.WriteString(`Add-Type @'
+using System.Runtime.InteropServices;
+public class Win32Dpi {
+    [DllImport("user32.dll")]
+    public static extern bool SetProcessDPIAware();
+}
+'@
+[Win32Dpi]::SetProcessDPIAware() | Out-Null
+`)
 
 	if opts.Window != "" {
 		q := escapePowerShell(opts.Window)

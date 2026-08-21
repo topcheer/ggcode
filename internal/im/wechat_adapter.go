@@ -278,6 +278,13 @@ func (a *WechatAdapter) run(ctx context.Context) {
 				a.publishState(false, "error", errMsg)
 				debug.Log("wechat", "adapter=%s error: %v", a.name, err)
 			}
+		} else {
+			// #760: a successful (long-)poll is the healthy path; without
+			// resetting, attempt grows monotonically and every normal cycle
+			// accumulates up to 60s+jitter of artificial delay (~95s total).
+			// Same pattern already fixed in slack/whatsapp adapters.
+			attempt = 0
+			continue
 		}
 		delay := backoffs[min(attempt, len(backoffs)-1)]
 		attempt++

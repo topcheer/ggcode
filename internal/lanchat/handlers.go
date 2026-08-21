@@ -20,7 +20,9 @@ func MountHandlers(mux *http.ServeMux, hub *Hub, tcpPort int) {
 	mux.HandleFunc("/lanchat/presence", auth(hub.handlePresence))
 	mux.HandleFunc("/lanchat/participants", auth(hub.handleParticipantQuery))
 	if hub.attachments != nil {
-		mux.HandleFunc("/lanchat/attach/", hub.attachments.HandleAttachmentDownload)
+		// #768: every other /lanchat/* endpoint is behind auth(); the raw
+		// registration here let any LAN host fetch an attachment by UUID.
+		mux.HandleFunc("/lanchat/attach/", auth(hub.attachments.HandleAttachmentDownload))
 	}
 
 	// Start UDP transport on the same port as TCP for fallback delivery.

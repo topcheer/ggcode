@@ -261,14 +261,24 @@ func parseInstallOptions(args []string) ([]string, installOptions, error) {
 
 func parseInstallMapValue(raw, flag string) (string, string, error) {
 	trimmed := strings.TrimSpace(raw)
+	// #773: --header values legitimately contain '=' (base64 padding, Basic
+	// credentials, presigned tokens); cutting on '=' first silently produced
+	// key="X-Api-Key: abc", value="=" and wrote a broken auth config. For
+	// headers, cut on the first ':' (RFC separator) and only fall back to '='.
+	if flag == "--header" {
+		if key, value, ok := strings.Cut(trimmed, ":"); ok && strings.TrimSpace(key) != "" {
+			return strings.TrimSpace(key), strings.TrimSpace(value), nil
+		}
+		if key, value, ok := strings.Cut(trimmed, "="); ok && strings.TrimSpace(key) != "" {
+			return strings.TrimSpace(key), value, nil
+		}
+		return "", "", fmt.Errorf("expected KEY: VALUE after --header")
+	}
 	if key, value, ok := strings.Cut(trimmed, "="); ok && strings.TrimSpace(key) != "" {
 		return strings.TrimSpace(key), value, nil
 	}
 	if key, value, ok := strings.Cut(trimmed, ":"); ok && strings.TrimSpace(key) != "" {
 		return strings.TrimSpace(key), strings.TrimSpace(value), nil
-	}
-	if flag == "--header" {
-		return "", "", fmt.Errorf("expected KEY: VALUE after --header")
 	}
 	return "", "", fmt.Errorf("expected KEY=VALUE after --env")
 }

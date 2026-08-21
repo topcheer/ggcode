@@ -418,6 +418,15 @@ func (a *whatsappAdapter) connectAndServe(ctx context.Context) error {
 		return err
 	}
 	a.storeContainer = container
+	// #761: every early return below (GetAllDevices / both Connect paths)
+	// used to leak the sqlite pool; reconnectLoop retries indefinitely, so a
+	// locked/Corrupt DB exhausted fds within hours. Defer-close once.
+	containerClosed := false
+	defer func() {
+		if !containerClosed {
+			_ = container.Close()
+		}
+	}()
 
 	devices, err := container.GetAllDevices(ctx)
 	if err != nil {
@@ -447,7 +456,10 @@ func (a *whatsappAdapter) connectAndServe(ctx context.Context) error {
 		// No session — need QR login
 		debug.Log("whatsapp", "adapter %q: no session, requesting QR code", a.name)
 		a.publishState(false, "pairing", "scan QR code with WhatsApp")
-		qrChan, _ := a.client.GetQRChannel(ctx)
+		qrChan, qrErr := a.client.GetQRChannel(ctx)
+		if qrErr != nil {
+			debug.Log("whatsapp", "adapter %q: get QR channel: %v", a.name, qrErr)
+		}
 		if err := a.client.Connect(); err != nil {
 			debug.Log("whatsapp", "adapter %q: connect: %v", a.name, err)
 			return err
@@ -489,6 +501,7 @@ func (a *whatsappAdapter) connectAndServe(ctx context.Context) error {
 		}
 		if a.storeContainer != nil {
 			_ = a.storeContainer.Close()
+			containerClosed = true
 		}
 		return nil
 	case err := <-done:
@@ -497,6 +510,7 @@ func (a *whatsappAdapter) connectAndServe(ctx context.Context) error {
 		}
 		if a.storeContainer != nil {
 			_ = a.storeContainer.Close()
+			containerClosed = true
 		}
 		return err
 	}

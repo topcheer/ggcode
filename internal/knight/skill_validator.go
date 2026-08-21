@@ -160,8 +160,15 @@ func (r *ValidationResult) checkSemanticQuality(body string) {
 	}
 	for _, pat := range trivialPatterns {
 		if strings.Contains(lower, pat) {
-			r.Errors = append(r.Errors, "skill content is too generic/trivial: must teach a specific behavioral rule, not describe basic tool usage")
-			return
+			// #767: substring hits on common English phrases ("edit a file",
+			// "read file contents", "search for patterns") inside perfectly
+			// legitimate skills (e.g. a safety rule "Never edit a file without
+			// reading it first") used to be a hard Error: Valid=false, and 3
+			// consecutive ticks auto-deleted the file. Word presence is not
+			// triviality -- downgrade to a warning like the specificity check
+			// below, and never let it alone trigger auto-reject.
+			r.Warnings = append(r.Warnings, "skill content mentions basic tool usage (\""+pat+"\") without teaching a specific behavioral rule")
+			break
 		}
 	}
 
@@ -195,6 +202,13 @@ func CheckDuplicate(entry *SkillEntry, existing []*SkillEntry) bool {
 	for _, e := range existing {
 		if e.Staging {
 			continue // don't compare with other staging skills
+		}
+		// #766: skills with the same name in different scopes are legal
+		// (findSkillByRef's multi-match error implies coexistence). Without
+		// the scope check, a global staging candidate named like an active
+		// project skill was rejected as duplicate and deleted in one tick.
+		if e.Scope != entry.Scope {
+			continue
 		}
 		// Exact name match
 		if strings.ToLower(e.Name) == name {

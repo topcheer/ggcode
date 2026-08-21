@@ -168,20 +168,25 @@ func listDisplaysWlrrandr() ([]DisplayInfo, error) {
 	var displays []DisplayInfo
 	idx := 0
 	var current DisplayInfo
-	for _, line := range strings.Split(string(out), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
+	for _, rawLine := range strings.Split(string(out), "\n") {
+		// #764: keep the raw line -- indentation IS the structure (indented
+		// lines are Position:/Mode: sub-fields of the display above). The old
+		// TrimSpace-then-HasPrefix(" ") check was always false, so every
+		// sub-line became a phantom display and Mode parsing was dead code.
+		if strings.TrimSpace(rawLine) == "" {
 			continue
 		}
-		if !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") {
+		indented := strings.HasPrefix(rawLine, " ") || strings.HasPrefix(rawLine, "\t")
+		if !indented {
 			if current.Name != "" {
 				idx++
 				current.Index = idx
 				displays = append(displays, current)
 			}
-			current = DisplayInfo{Name: line}
+			current = DisplayInfo{Name: strings.TrimSpace(rawLine)}
 			continue
 		}
+		line := strings.TrimSpace(rawLine)
 		if strings.HasPrefix(line, "Mode:") {
 			fields := strings.Fields(line)
 			for _, f := range fields {
@@ -190,6 +195,18 @@ func listDisplaysWlrrandr() ([]DisplayInfo, error) {
 					if len(parts) == 2 {
 						current.Width, _ = strconv.Atoi(parts[0])
 						current.Height, _ = strconv.Atoi(parts[1])
+					}
+				}
+			}
+		} else if strings.HasPrefix(line, "Position:") {
+			// #764 secondary: parse X/Y offset so multi-monitor regions are right.
+			fields := strings.Fields(line)
+			for _, f := range fields {
+				if strings.Contains(f, ",") {
+					parts := strings.Split(strings.TrimSuffix(f, ","), ",")
+					if len(parts) == 2 {
+						current.X, _ = strconv.Atoi(parts[0])
+						current.Y, _ = strconv.Atoi(parts[1])
 					}
 				}
 			}
@@ -262,7 +279,10 @@ func buildScrotCommand(outPath string, opts ScreenshotOptions) *exec.Cmd {
 	args := []string{"-z"}
 	if opts.Region != nil {
 		r := opts.Region
-		args = append(args, "-a", fmt.Sprintf("%d,%d,%d,%d", r.X, r.Y, r.X+r.Width, r.Y+r.Height))
+		// #762: scrot -a takes X,Y,W,H (width/height), not bottom-right
+		// coordinates. Passing X+W/Y+H overshot every region and fell off
+		// multi-monitor edges; X=Y=0 masked it in the full-screen test path.
+		args = append(args, "-a", fmt.Sprintf("%d,%d,%d,%d", r.X, r.Y, r.Width, r.Height))
 	}
 	if opts.Window != "" {
 		// #555: prefer the resolved window ID (exact title match first via
