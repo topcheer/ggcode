@@ -501,10 +501,14 @@ func (m Model) tgAdapterStatus(state *im.AdapterState) string {
 	if status == "" {
 		status = m.t("panel.tg.status.unknown")
 	}
+	// #914: both branches returned the same value (#887 family).
 	if state.Healthy {
 		return status
 	}
-	return status
+	if strings.TrimSpace(state.LastError) != "" {
+		return state.LastError
+	}
+	return status + " (offline)"
 }
 
 func tgStatePtr(state im.AdapterState) *im.AdapterState {

@@ -176,7 +176,7 @@ func (m Model) renderImpersonatePanel() string {
 	body = append(body, sectionStyle.Render(" Identity Presets"))
 	body = append(body, "")
 
-	maxVisible := 16 // doubled for full-height panel
+	maxVisible := impMaxVisible // #900/#914: single source - was a local hardcoded 16 while scroll math used 8
 	start, end := panel.scrollOffset, panel.scrollOffset+maxVisible
 	if end > len(panel.presets) {
 		end = len(panel.presets)
@@ -291,8 +291,11 @@ func (m *Model) handleImpersonatePanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) 
 	case "down", "j":
 		if panel.section == impSectionPresets && panel.cursor < len(panel.presets)-1 {
 			panel.cursor++
-			if panel.cursor >= panel.scrollOffset+8 {
-				panel.scrollOffset = panel.cursor - 7
+			// #900/#914: scroll math MUST match the render window (impMaxVisible)
+			// - the old +8/-7 pair scrolled at row 9 leaving half the window
+			// permanently blank.
+			if panel.cursor >= panel.scrollOffset+impMaxVisible {
+				panel.scrollOffset = panel.cursor - impMaxVisible + 1
 			}
 			m.syncImpersonateVersionToCursor()
 		}
@@ -329,7 +332,15 @@ func (m *Model) handleImpersonatePanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) 
 
 	case "d":
 		if panel.section == impSectionHeaders && len(panel.customHeaders) > 0 {
-			panel.customHeaders = panel.customHeaders[1:]
+			// #900/#914: blind [1:] always deleted the FIRST (alphabetical)
+			// header and persisted the damage via SaveImpersonation. Delete
+			// the entry being edited when editing, else the first.
+			idx := 0
+			if panel.editingHeader >= 0 && panel.editingHeader < len(panel.customHeaders) {
+				idx = panel.editingHeader
+				panel.editingHeader = -1
+			}
+			panel.customHeaders = append(panel.customHeaders[:idx], panel.customHeaders[idx+1:]...)
 		}
 		return *m, nil
 

@@ -48,7 +48,25 @@ func newStreamPanel(cfg stream.StreamConfig) *streamPanelState {
 }
 
 func (p *streamPanelState) totalItems() int {
-	return len(p.targets) + len(stream.Presets) + 1 // +1 for "Custom"
+	// #912: count only RENDERED preset rows - added presets are skipped in
+	// render, so counting them left an invisible cursor slot (Enter said
+	// 'already added' on an empty-looking row).
+	visible := 0
+	for _, preset := range stream.Presets {
+		added := false
+		for _, t := range p.targets {
+			// Same predicate as render and Enter (ID or Name) - render used to
+			// check ID only, hiding the row while Enter still refused it.
+			if t.Name == preset.ID || t.Name == preset.Name {
+				added = true
+				break
+			}
+		}
+		if !added {
+			visible++
+		}
+	}
+	return len(p.targets) + visible + 1 // +1 for "Custom"
 }
 
 // --- View ---
@@ -358,10 +376,10 @@ func (m *Model) renderStreamPanelLeft() string {
 	lines = append(lines, dimColor.Render("── Add ──"))
 
 	for i, preset := range stream.Presets {
-		// Skip if already added
+		// Skip if already added (same ID||Name predicate as Enter/totalItems)
 		found := false
 		for _, t := range p.targets {
-			if t.Name == preset.ID {
+			if t.Name == preset.ID || t.Name == preset.Name {
 				found = true
 				break
 			}

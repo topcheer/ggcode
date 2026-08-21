@@ -489,10 +489,15 @@ func (m Model) slackAdapterStatus(state *im.AdapterState) string {
 	if status == "" {
 		status = m.t("panel.slack.status.unknown")
 	}
+	// #913: both branches returned the same value (#887 family) - a
+	// revoked-token adapter showed a stale generic status.
 	if state.Healthy {
 		return status
 	}
-	return status
+	if strings.TrimSpace(state.LastError) != "" {
+		return state.LastError
+	}
+	return status + " (offline)"
 }
 
 func slackStatePtr(state im.AdapterState) *im.AdapterState {

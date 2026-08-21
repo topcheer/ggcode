@@ -29,8 +29,10 @@ func (m *Model) handleRulesCommand() tea.Cmd {
 
 	rules := rs.Rules()
 	if len(rules) == 0 {
+		// #913: was a truncated fragment ('after each run. They help...');
+		// restore the full sentence.
 		m.chatWriteSystem(nextSystemID(),
-			"after each run. They help the agent avoid repeating mistakes.")
+			"No rules saved yet. Rules capture lessons from previous runs and are applied after each run. They help the agent avoid repeating mistakes.")
 		return nil
 	}
 

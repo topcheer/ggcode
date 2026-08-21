@@ -56,6 +56,13 @@ func (m *Model) streamStart(targets []string) (string, bool) {
 	cfg.ExpandEnv()
 	cfg.ApplyDefaults()
 
+	// #912: the panel path validates before Start but the slash path never
+	// did - a config whose targets are all enabled:false reported 'started'
+	// with an empty name list (success-shaped lie).
+	if err := cfg.Validate(); err != nil {
+		return fmt.Sprintf("stream: %v", err), false
+	}
+
 	// Filter to specific targets if named
 	if len(targets) > 0 {
 		want := make(map[string]bool)

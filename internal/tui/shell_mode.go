@@ -155,7 +155,10 @@ func (m *Model) appendShellChunk(chunk string) {
 
 func (m *Model) startShellCommand(command string) tea.Cmd {
 	ctx, cancel := context.WithCancel(context.Background())
-	m.cancelFunc = cancel
+	// #910: never touch m.cancelFunc here - it holds the AGENT run's
+	// cancel; overwriting it made Esc cancel the shell while the agent
+	// became permanently uncancellable. Shell gets its own field.
+	m.shellCancelFunc = cancel
 	m.activeShellRunID++
 	runID := m.activeShellRunID
 

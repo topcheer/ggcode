@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/topcheer/ggcode/internal/cost"
 
@@ -123,8 +124,10 @@ func sessionRecap(ses *session.Session, now time.Time) string {
 	// Last user message preview.
 	if ses.Preview != "" {
 		preview := ses.Preview
-		if len(preview) > 120 {
-			preview = preview[:120] + "..."
+		// #913: byte-slicing at 120 split CJK runes mid-character and
+		// rendered mojibake; truncate on rune boundaries.
+		if utf8.RuneCountInString(preview) > 120 {
+			preview = string([]rune(preview)[:120]) + "..."
 		}
 		preview = strings.ReplaceAll(preview, "\n", " ")
 		parts = append(parts, "Last: \""+preview+"\"")

@@ -107,6 +107,13 @@ func (m *Model) cancelActiveRun() {
 		m.pushTunnelToolResult(tool.ID, tool.ToolName, "Cancelled", true)
 	}
 	m.pushTunnelCancel()
+	// #910: when a shell command owns the loading state, Esc must cancel the
+	// SHELL's context - not the agent's cancelFunc (which would discard the
+	// agent's output while leaving it uncancellable).
+	if m.shellOwnedLoading && m.shellCancelFunc != nil {
+		m.shellCancelFunc()
+		return
+	}
 	if m.cancelFunc != nil {
 		m.cancelFunc()
 	}

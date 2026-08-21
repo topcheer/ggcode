@@ -119,6 +119,7 @@ type Model struct {
 	agent                   *agent.Agent
 	program                 *tea.Program
 	cancelFunc              func()
+	shellCancelFunc         func() // #910: shell-run cancel, kept separate from the agent's cancelFunc
 	policy                  permission.PermissionPolicy
 	spinner                 *ToolSpinner
 	history                 []string

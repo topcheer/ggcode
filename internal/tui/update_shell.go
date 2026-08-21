@@ -34,7 +34,7 @@ func (m Model) handleShellCommandDoneMsg(msg shellCommandDoneMsg) (Model, tea.Cm
 		m.statusToolName = ""
 		m.statusToolArg = ""
 		m.statusToolCount = 0
-		m.cancelFunc = nil
+		m.shellCancelFunc = nil // #910
 		m.spinner.Stop()
 	}
 

@@ -207,19 +207,59 @@ func (m *Model) handleSkillsPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	return *m, nil
 }
 
+// groupedSkillsFlat returns the page skills flattened in RENDER order
+// (Bundled, Project, User, Plugin, MCP, Legacy), the single source shared
+// by the panel highlight loop and toggleSelectedSkill (#911).
+func groupedSkillsFlat(pageSkills []*commands.Command) []*commands.Command {
+	groups := map[string][]*commands.Command{
+		"Bundled skills": {}, "Project skills": {}, "User skills": {},
+		"Plugin skills": {}, "MCP skills": {}, "Legacy commands": {},
+	}
+	for _, skill := range pageSkills {
+		switch {
+		case skill.LoadedFrom == commands.LoadedFromBundled || skill.Source == commands.SourceBundled:
+			groups["Bundled skills"] = append(groups["Bundled skills"], skill)
+		case skill.LoadedFrom == commands.LoadedFromPlugin || skill.Source == commands.SourcePlugin:
+			groups["Plugin skills"] = append(groups["Plugin skills"], skill)
+		case skill.LoadedFrom == commands.LoadedFromMCP || skill.Source == commands.SourceMCP:
+			groups["MCP skills"] = append(groups["MCP skills"], skill)
+		case skill.LoadedFrom == commands.LoadedFromCommands:
+			groups["Legacy commands"] = append(groups["Legacy commands"], skill)
+		case skill.Source == commands.SourceProject:
+			groups["Project skills"] = append(groups["Project skills"], skill)
+		default:
+			groups["User skills"] = append(groups["User skills"], skill)
+		}
+	}
+	flat := make([]*commands.Command, 0, len(pageSkills))
+	for _, title := range []string{"Bundled skills", "Project skills", "User skills", "Plugin skills", "MCP skills", "Legacy commands"} {
+		flat = append(flat, groups[title]...)
+	}
+	return flat
+}
+
 // toggleSelectedSkill toggles the Enabled state of the currently selected skill.
 // Builtin skills cannot be disabled.
 func (m *Model) toggleSelectedSkill() {
 	if m.skillsPanel == nil || m.commandMgr == nil {
 		return
 	}
+	// #911: the cursor indexes the RENDER order (grouped), but this used
+	// to index m.listSkills() directly (usage-score order) - the toggle
+	// flipped the WRONG skill. Build the same grouped flat list.
 	skills := m.listSkills()
-	start := m.skillsPanel.page * skillsPerPage
-	idx := start + m.skillsPanel.cursor
-	if idx < 0 || idx >= len(skills) {
+	pageCount := skillsPageCount(len(skills))
+	page := clampSkillsPage(m.skillsPanel.page, pageCount)
+	start := page * skillsPerPage
+	end := start + skillsPerPage
+	if end > len(skills) {
+		end = len(skills)
+	}
+	flat := groupedSkillsFlat(skills[start:end])
+	if m.skillsPanel.cursor < 0 || m.skillsPanel.cursor >= len(flat) {
 		return
 	}
-	skill := skills[idx]
+	skill := flat[m.skillsPanel.cursor]
 	if skill.IsBuiltin() {
 		return // cannot disable builtin skills
 	}

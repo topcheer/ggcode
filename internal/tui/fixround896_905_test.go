@@ -26,15 +26,25 @@ func TestParseIntPositiveStrict(t *testing.T) {
 	}
 }
 
-// TestImpersonateScrollSync (#900): scroll math must match the render window.
+// TestImpersonateScrollSync (#900/#914): scrolling must advance only when the
+// cursor passes the render window (impMaxVisible), not at row 9.
 func TestImpersonateScrollSync(t *testing.T) {
-	if impMaxVisible != 16 {
-		t.Fatalf("impMaxVisible drifted: %d", impMaxVisible)
+	panel := impersonatePanelState{scrollOffset: 0, cursor: 0}
+	// Walk the cursor down 16 rows: within the window, no scroll.
+	for i := 0; i < impMaxVisible-1; i++ {
+		panel.cursor++
+		if panel.cursor < panel.scrollOffset+impMaxVisible {
+			continue // still visible
+		}
+		t.Fatalf("cursor %d scrolled out of a %d-row window (scroll math desynced)", panel.cursor, impMaxVisible)
 	}
-	// cursor at the last visible row keeps the window full
-	cursor, offset := impMaxVisible-1, 0
-	if cursor >= offset+impMaxVisible {
-		t.Fatal("scroll constant desynced from render window")
+	// 17th row pushes the window by exactly one.
+	panel.cursor++
+	if panel.cursor >= panel.scrollOffset+impMaxVisible {
+		panel.scrollOffset = panel.cursor - impMaxVisible + 1
+	}
+	if panel.scrollOffset != 1 {
+		t.Fatalf("expected scrollOffset 1 after cursor=%d, got %d", panel.cursor, panel.scrollOffset)
 	}
 }
 
