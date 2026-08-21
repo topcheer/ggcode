@@ -119,7 +119,8 @@ func (c *CommandTool) Execute(ctx context.Context, input json.RawMessage) (tool.
 	// Set platform-specific process attributes and cancel behavior.
 	// On unix: creates a new process group (Setpgid) and overrides cmd.Cancel
 	// to kill the entire group so orphaned grandchildren don't hold pipes open.
-	// On Windows: no-op (CommandContext already handles cancellation correctly).
+	// On Windows: overrides cmd.Cancel to taskkill /T /F the whole process
+	// tree for the same reason (wrapper shims leave grandchildren behind).
 	setupProcessGroupCancel(cmd)
 
 	// Cap combined output at 1MB to prevent OOM from misbehaving plugins.
