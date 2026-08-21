@@ -84,6 +84,10 @@ func main() {
 				fmt.Printf("→ VERIFY REGISTER %s ***\n", nick)
 
 			case "register":
+				if len(os.Args) < 4 {
+					fmt.Fprintln(os.Stderr, "usage: irc_register <password> register <email>")
+					return
+				}
 				email := os.Args[3]
 				fmt.Fprintf(conn, "PRIVMSG NickServ :REGISTER %s %s\r\n", password, email)
 				fmt.Printf("→ REGISTER *** ***\n")

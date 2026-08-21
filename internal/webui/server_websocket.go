@@ -94,6 +94,37 @@ func (s *Server) handleChatWS(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
+	// #927: half-open TCP connections (WiFi drop, NAT expiry - no FIN/RST)
+	// kept the read loop blocked forever, leaking the subscription and
+	// silently dropping events after writeCh filled. Heartbeat: pongs renew
+	// the read deadline; a 30s ping ticker probes liveness; a missed
+	// deadline fails ReadMessage and takes the existing cleanup path.
+	const (
+		wsReadTimeout  = 90 * time.Second
+		wsPingInterval = 30 * time.Second
+	)
+	conn.SetReadDeadline(time.Now().Add(wsReadTimeout))
+	conn.SetPongHandler(func(string) error {
+		conn.SetReadDeadline(time.Now().Add(wsReadTimeout))
+		return nil
+	})
+	pingDone := make(chan struct{})
+	defer close(pingDone)
+	safego.Go("webui.ws.pingLoop", func() {
+		ticker := time.NewTicker(wsPingInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(5*time.Second)); err != nil {
+					return
+				}
+			case <-pingDone:
+				return
+			}
+		}
+	})
+
 	// Dedicated write goroutine to serialize all WS writes.
 	// Gorilla WebSocket requires read and write to be on different goroutines
 	// and all writes serialized. This channel achieves both.

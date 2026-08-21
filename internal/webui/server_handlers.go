@@ -319,6 +319,16 @@ func (s *Server) handleEndpointDetail(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "endpoint not found")
 			return
 		}
+		// #925: GET detail returned the stored api_key in plaintext -
+		// mask like every other read route (has_api_key boolean).
+		if raw, err := json.Marshal(ep); err == nil {
+			var m map[string]interface{}
+			if json.Unmarshal(raw, &m) == nil {
+				sanitizeMap(m)
+				writeJSON(w, m)
+				return
+			}
+		}
 		writeJSON(w, ep)
 
 	case http.MethodPut:
@@ -415,6 +425,21 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 				e.Runtime = &st
 			}
 			entries[i] = e
+		}
+		// #925: route through the same sanitize semantics as /api/config -
+		// the verbatim struct returned env/headers/oauth_client_secret
+		// (frequently carrying API keys) in cleartext.
+		if raw, err := json.Marshal(entries); err == nil {
+			var arr []interface{}
+			if json.Unmarshal(raw, &arr) == nil {
+				for _, item := range arr {
+					if sub, ok := item.(map[string]interface{}); ok {
+						sanitizeMap(sub)
+					}
+				}
+				writeJSON(w, arr)
+				return
+			}
 		}
 		writeJSON(w, entries)
 

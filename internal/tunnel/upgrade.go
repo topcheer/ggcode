@@ -225,11 +225,17 @@ func (m *UpgradeManager) runUpgrade(signalCh chan SignalMessage) {
 	// #923: every early-exit path MUST clear p2pNegotiating + trigger
 	// recovery replay, or a transient factory/startNeg failure permanently
 	// suppresses replay (events missed during negotiation never sync).
+	// #926: capture the generation ONCE here (before ctx setup) so the
+	// staleness check compares against the run's start generation - the
+	// parameterless version compared the field with itself (always false).
+	m.mu.Lock()
+	negGen := m.generation
+	m.mu.Unlock()
 	failAndRevert := func(reason string) {
 		debug.Log("tunnel", "upgrade: reverting to relay (%s)", reason)
 		m.broker.p2pNegotiating.Store(false)
 		m.broker.TriggerReplayNow()
-		if !m.staleGenLocked() {
+		if !m.staleGen(negGen) {
 			m.setState(UpgradeFailed)
 		}
 	}
@@ -384,13 +390,15 @@ func (m *UpgradeManager) stateLocked() UpgradeState {
 	return m.state
 }
 
-// staleGenLocked reports whether the manager generation has moved on since
-// the caller captured it (#923: shared by runUpgrade's failAndRevert).
-func (m *UpgradeManager) staleGenLocked() bool {
+// staleGen reports whether the manager generation has moved on since the
+// caller captured it at runUpgrade start (#926: the previous parameterless
+// version captured and compared the same field - always false AND an
+// unlocked second read racing Restart's increment).
+func (m *UpgradeManager) staleGen(gen uint64) bool {
 	m.mu.Lock()
-	gen := m.generation
+	cur := m.generation
 	m.mu.Unlock()
-	return gen != m.generation
+	return cur != gen
 }
 
 func (m *UpgradeManager) notifyState() {

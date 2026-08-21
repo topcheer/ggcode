@@ -65,7 +65,12 @@ func (Mercurial) Checkout(ctx context.Context, dir, branch string, create bool, 
 		if startPoint != "" {
 			args = append(args, "-r", startPoint)
 		}
-		return runVCSCmd(ctx, dir, "hg", args...)
+		if out, err := runVCSCmd(ctx, dir, "hg", args...); err != nil {
+			return out, err
+		}
+		// #928: creating the bookmark alone left the working copy on the old
+		// revision - the interface contract says Checkout switches TO it.
+		return runVCSCmd(ctx, dir, "hg", "update", branch)
 	}
 	return runVCSCmd(ctx, dir, "hg", "update", branch)
 }
