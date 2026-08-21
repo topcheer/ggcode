@@ -72,6 +72,11 @@ type gateRule struct {
 	// #814: evaluate ONLY against the quote/heredoc-inert form — the shell
 	// never executes quoted interiors or heredoc bodies as command args.
 	quotedInert bool
+	// #813: path prefixes that are legitimate (macOS/Windows temp caches);
+	// matched text containing these is rewritten inert before matching, so
+	// `rm -rf /var/folders/.../T/cache` stops hitting the /var root rule
+	// while `rm -rf /var` itself still Blocks.
+	benignPrefixes []string
 }
 
 type cleanRule struct {
@@ -111,8 +116,10 @@ func NewCommandGate() *CommandGate {
 		// F/R/P elements across quotes (`grep 'rm -rf /etc/hosts' README.md`,
 		// script-writing heredocs).
 		{kind: "catastrophic", desc: "recursive force delete of root/critical directory", quotedInert: true,
-			pattern: regexp.MustCompile(`(?i)\brm\s+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*|--recursive\s+--force|--force\s+--recursive)\s+(/(\s|$)|~/|/home/?|/Users/?|/etc/?|/var/?|/usr/?|/bin/?|/sbin/?|/lib/?|/boot/?|System|Applications|/dev/)`)},
+			benignPrefixes: []string{"/var/folders", "/private/var/folders", "/tmp/"},
+			pattern:        regexp.MustCompile(`(?i)\brm\s+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*|--recursive\s+--force|--force\s+--recursive)\s+(/(\s|$)|~/|/home/?|/Users/?|/etc/?|/var/?|/usr/?|/bin/?|/sbin/?|/lib/?|/boot/?|System|Applications|/dev/)`)},
 		{kind: "catastrophic", desc: "recursive force delete (alternate flag order)", quotedInert: true,
+			benignPrefixes: []string{"/var/folders", "/private/var/folders", "/tmp/"},
 			// Long-flag alternation uses literal --recursive/--force: inside a
 			// raw string the old \\-\\- form only matched a literal backslash
 			// before each dash, so the long-flag branch was dead code (#384).
@@ -294,6 +301,9 @@ func (g *CommandGate) Check(cmd string) GateResult {
 		target := matchCmd
 		if rule.quotedInert {
 			target = inertCmd
+		}
+		for _, bp := range rule.benignPrefixes {
+			target = strings.ReplaceAll(target, bp, "/benign/")
 		}
 		if rule.pattern.MatchString(target) {
 			return GateResult{
