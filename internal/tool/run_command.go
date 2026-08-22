@@ -327,6 +327,7 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 	progressFn, _ := ctx.Value(ToolProgressKey{}).(ToolProgressFunc)
 
 	var stdout, stderr bytes.Buffer
+	var pwOut, pwErr *streamingProgressWriter
 	if progressFn != nil {
 		// Wrap with streaming progress writer for real-time TUI updates.
 		// The streamingProgressWriter writes to both the buffer and the tee.
@@ -334,8 +335,8 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 		if t.OutputTee != nil {
 			tee = t.OutputTee
 		}
-		pwOut := newStreamingProgressWriter(&stdout, tee, progressFn)
-		pwErr := newStreamingProgressWriter(&stderr, tee, progressFn)
+		pwOut = newStreamingProgressWriter(&stdout, tee, progressFn)
+		pwErr = newStreamingProgressWriter(&stderr, tee, progressFn)
 		cmd.Stdout = pwOut
 		cmd.Stderr = pwErr
 	} else if t.OutputTee != nil {
@@ -379,6 +380,20 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 	}
 
 	err = cmd.Run()
+
+	// Flush any output that landed inside the last 300ms throttle window:
+	// Write() only buffers lines while throttled, so a command finishing
+	// mid-window would never emit its final tail (the streaming view would
+	// silently miss the last burst). The terminal-state SetResult replaces
+	// the body afterwards, so this only affects the last streaming frame.
+	if progressFn != nil {
+		if pwOut != nil {
+			pwOut.flush()
+		}
+		if pwErr != nil {
+			pwErr.flush()
+		}
+	}
 
 	output := util.StripANSI(stdout.String())
 	errOutput := util.StripANSI(stderr.String())
@@ -778,6 +793,30 @@ func (w *streamingProgressWriter) Write(p []byte) (int, error) {
 
 	w.progress("", "run_command", sb.String())
 	return n, nil
+}
+
+// flush forces one final progress emission of the tail, bypassing the
+// 300ms throttle. Call after the command exits so the last throttled
+// window of output is not lost from the streaming view.
+func (w *streamingProgressWriter) flush() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if len(w.lines) == 0 {
+		return
+	}
+	tail := w.lines
+	if len(tail) > 5 {
+		tail = tail[len(tail)-5:]
+	}
+	var sb strings.Builder
+	sb.WriteString("[...] ")
+	for i, line := range tail {
+		if i > 0 {
+			sb.WriteString("\n")
+		}
+		sb.WriteString(line)
+	}
+	w.progress("", "run_command", sb.String())
 }
 
 // commandEnvOverrides are environment variables injected into every command
