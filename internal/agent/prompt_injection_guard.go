@@ -58,7 +58,13 @@ var injectionPatterns = []string{
 	"ignore the above instructions",
 	"disregard all previous",
 	"disregard your instructions",
-	"you are now in",
+	// #937: anchored to imperative-verb phrases only. The bare "you are
+	// now in" flagged any narrative text ("You are now in the main worktree
+	// directory", vim/tmux tutorial echoes) as an injection attack.
+	"you are now in a",
+	"you are now in maint",
+	"you are now in developer",
+	"you are now in chat",
 	"new instructions:",
 	"override your system prompt",
 	"override system prompt",
@@ -69,7 +75,11 @@ var injectionPatterns = []string{
 	"[system prompt]",
 	"system: you are now",
 	"system: ignore",
-	"### system",
+	// #937: newline-anchored like the H2 sibling below - the bare
+	// "### system" matched every '### System Requirements/Architecture/
+	// Design' heading in technical docs. Matches only a bare 'system' H3
+	// heading (line start) with nothing after it on that line.
+	"### system\n",
 	"## system\n",
 	"important: ignore",
 	"override your previous",

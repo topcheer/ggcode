@@ -53,6 +53,9 @@ func work(wg *sync.WaitGroup) {
 }
 
 func TestCheckWaitGroup_DoneWithoutAdd(t *testing.T) {
+	// #938: a function RECEIVING *sync.WaitGroup that only calls Done/Wait
+	// is the canonical worker/waiter split - Add() lives in the spawner,
+	// invisible to function-granularity analysis. Must NOT warn.
 	new := `package main
 import "sync"
 func work(wg *sync.WaitGroup) {
@@ -62,9 +65,27 @@ func work(wg *sync.WaitGroup) {
 	wg.Wait()
 }`
 	warnings := checkWaitGroupMisuse("work.go", "", new)
-	if len(warnings) == 0 {
-		t.Fatal("expected Done-without-Add warning, got none")
+	for _, w := range warnings {
+		if strings.Contains(w, "Add() is never called") {
+			t.Errorf("worker taking wg as param must not warn (#938 canonical shape), got: %s", w)
+		}
 	}
+}
+
+// #938: Done-without-Add still warns when the function OWNS the WaitGroup
+// (declared locally, not received as a parameter) - there is no spawner
+// elsewhere that could call Add().
+func TestCheckWaitGroup_DoneWithoutAddLocalWG(t *testing.T) {
+	new := `package main
+import "sync"
+func work() {
+	var wg sync.WaitGroup
+	go func() {
+		defer wg.Done()
+	}()
+	wg.Wait()
+}`
+	warnings := checkWaitGroupMisuse("work.go", "", new)
 	found := false
 	for _, w := range warnings {
 		if strings.Contains(w, "Add() is never called") {
@@ -73,7 +94,7 @@ func work(wg *sync.WaitGroup) {
 		}
 	}
 	if !found {
-		t.Errorf("expected 'Add() never called' warning, got: %v", warnings)
+		t.Errorf("locally-declared wg with Done but no Add must still warn, got: %v", warnings)
 	}
 }
 

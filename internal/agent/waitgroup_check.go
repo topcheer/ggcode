@@ -132,13 +132,41 @@ func findWaitGroupMisuse(src string) []wgMisuseInfo {
 		if !ok || fn.Body == nil {
 			continue
 		}
-		issues = append(issues, analyzeWGFunc(fn.Body)...)
+		issues = append(issues, analyzeWGFunc(fn)...)
 	}
 	return issues
 }
 
-// analyzeWGFunc checks a single function body for WaitGroup misuse patterns.
-func analyzeWGFunc(body *ast.BlockStmt) []wgMisuseInfo {
+// wgParamType reports whether the function receives a *sync.WaitGroup
+// (or a type whose name ends in WaitGroup) as a parameter. #938: the
+// canonical worker pattern (pkg.go.dev/sync#WaitGroup) takes wg as a
+// parameter and calls only Done() in the worker - Add() lives in the
+// spawner. Function-granularity analysis cannot see the caller, so this
+// shape must not be flagged.
+func wgParamType(fn *ast.FuncDecl) bool {
+	if fn.Type == nil || fn.Type.Params == nil {
+		return false
+	}
+	for _, p := range fn.Type.Params.List {
+		// *sync.WaitGroup / sync.WaitGroup / *MyWaitGroup
+		if star, ok := p.Type.(*ast.StarExpr); ok {
+			if sel, ok := star.X.(*ast.SelectorExpr); ok && strings.HasSuffix(sel.Sel.Name, "WaitGroup") {
+				return true
+			}
+			if id, ok := star.X.(*ast.Ident); ok && strings.HasSuffix(id.Name, "WaitGroup") {
+				return true
+			}
+		}
+		if sel, ok := p.Type.(*ast.SelectorExpr); ok && strings.HasSuffix(sel.Sel.Name, "WaitGroup") {
+			return true
+		}
+	}
+	return false
+}
+
+// analyzeWGFunc checks a single function for WaitGroup misuse patterns.
+func analyzeWGFunc(fn *ast.FuncDecl) []wgMisuseInfo {
+	body := fn.Body
 	stats := collectWGStats(body)
 	var issues []wgMisuseInfo
 
@@ -155,8 +183,12 @@ func analyzeWGFunc(body *ast.BlockStmt) []wgMisuseInfo {
 	}
 
 	// Pattern 2: Done() present but Add() never called in this function.
+	// #938: exempt the canonical worker shape - a function RECEIVING a
+	// *sync.WaitGroup parameter only calls Done(); Add() lives in the
+	// spawner, which function-granularity analysis cannot see. This exact
+	// shape is the pkg.go.dev/sync#WaitGroup documented example.
 	donePresent := stats.doneBare > 0 || stats.doneDefer > 0
-	if donePresent && stats.addTotal == 0 {
+	if donePresent && stats.addTotal == 0 && !wgParamType(fn) {
 		issues = append(issues, wgMisuseInfo{
 			pattern: "WaitGroup Done() is called but Add() is never called " +
 				"in this function. Without Add(1) the counter stays at 0: " +
