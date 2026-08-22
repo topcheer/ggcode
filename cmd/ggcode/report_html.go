@@ -415,7 +415,7 @@ window.__DATA__ = ` + jsonData + `;
     const pct = (t.calls / maxToolCalls * 100).toFixed(0);
     const failRate = t.calls > 0 ? (t.failures/t.calls*100).toFixed(0) : 0;
     const failColor = failRate > 0 ? 'var(--red)' : 'var(--text-dim)';
-    return '<div class="tool-row"><span class="tool-name">'+t.name+'</span>' +
+    return '<div class="tool-row"><span class="tool-name">'+esc(String(t.name))+'</span>' +
       '<div class="tool-bar"><div class="tool-bar-fill" style="width:'+pct+'%"></div></div>' +
       '<span class="tool-stat">'+t.calls+' calls</span>' +
       '<span class="tool-stat" style="color:'+failColor+'">'+(failRate>0?failRate+'% fail':'ok')+'</span></div>';
@@ -708,7 +708,7 @@ window.__DATA__ = ` + jsonData + `;
       const pct = (t.calls/maxCalls*100).toFixed(0);
       const failRate = t.calls>0 ? (t.failures/t.calls*100).toFixed(0) : 0;
       const failColor = failRate > 0 ? 'var(--red)' : 'var(--text-dim)';
-      return '<div class="tool-row"><span class="tool-name">'+t.name+'</span>' +
+      return '<div class="tool-row"><span class="tool-name">'+esc(String(t.name))+'</span>' +
         '<div class="tool-bar"><div class="tool-bar-fill" style="width:'+pct+'%"></div></div>' +
         '<span class="tool-stat">'+t.calls+'x</span>' +
         '<span class="tool-stat">'+fmtMs(t.avgMs)+'</span>' +
