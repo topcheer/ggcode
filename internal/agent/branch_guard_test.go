@@ -153,6 +153,39 @@ func TestCheckBranchGuard_NilGuard(t *testing.T) {
 	}
 }
 
+// TestCheckBranchGuard_TransientFailureDoesNotLatch pins the #698 (adjacent)
+// contract: when branch determination FAILS (non-git dir, git lock contention),
+// the fired latch must NOT be set. Latching on failure permanently silenced
+// the advisory for the rest of the run -- exactly what the #698 comment
+// promises cannot happen.
+func TestCheckBranchGuard_TransientFailureDoesNotLatch(t *testing.T) {
+	// t.TempDir() is not a git repo -- getCurrentBranch fails, returns "".
+	dir := t.TempDir()
+	a := &Agent{
+		workingDir:  dir,
+		branchGuard: newBranchGuardState(),
+	}
+
+	hint := a.checkBranchGuard()
+	if hint != "" {
+		t.Errorf("expected no warning when branch cannot be determined, got: %s", hint)
+	}
+	if a.branchGuard.fired {
+		t.Fatal("fired latch set despite failed branch determination -- transient failure permanently silences the advisory for the rest of the run")
+	}
+
+	// Recovery: once the branch becomes determinable (e.g. transient git lock
+	// cleared), the next check must still be able to warn on a protected branch.
+	a.branchGuard.cachedBranch = "main"
+	hint2 := a.checkBranchGuard()
+	if hint2 == "" {
+		t.Error("expected protected branch warning after branch determination recovered")
+	}
+	if !containsSubstr(hint2, "PROTECTED BRANCH") {
+		t.Errorf("expected warning to contain 'PROTECTED BRANCH', got: %s", hint2)
+	}
+}
+
 func TestCheckBranchGuard_NoWorkingDir(t *testing.T) {
 	a := &Agent{
 		workingDir:  "",

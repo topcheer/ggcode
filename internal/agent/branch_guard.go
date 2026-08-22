@@ -126,8 +126,11 @@ func (a *Agent) checkBranchGuard() string {
 
 	// #698 (adjacent): only latch "fired" once the branch was actually
 	// determined — a transient getCurrentBranch failure used to permanently
-	// silence the advisory for the rest of the run.
-	a.branchGuard.fired = true
+	// silence the advisory for the rest of the run (the latch was set
+	// unconditionally even when branch determination returned "").
+	if branch != "" {
+		a.branchGuard.fired = true
+	}
 
 	if !isProtectedBranch(branch) {
 		return ""
