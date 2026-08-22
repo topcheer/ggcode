@@ -45,6 +45,14 @@ func isOnPath(dir string) bool {
 			return true
 		}
 	}
-	_, err := exec.LookPath("ggcode")
-	return err == nil
+	// #933: the fallback used to return true if ANY ggcode existed on PATH -
+	// installing to a custom -dir while an old /usr/local/bin/ggcode exists
+	// suppressed the not-on-PATH warning and the user silently ran the stale
+	// binary. Only count it when LookPath resolves INTO the install dir.
+	if found, err := exec.LookPath("ggcode"); err == nil {
+		if abs, err := filepath.Abs(found); err == nil {
+			return filepath.Clean(abs) == dir
+		}
+	}
+	return false
 }

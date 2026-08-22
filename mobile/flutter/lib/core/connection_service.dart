@@ -171,7 +171,10 @@ class ShareConnectionDescriptor {
           final parts = ticket.split('.');
           if (parts.isNotEmpty) {
             var payload = parts[0];
-            payload += '=' * (4 - payload.length % 4);
+            // #932: '(4 - len%4)' appends 4 '=' when len%4==0, producing a
+            // swallowed FormatException and an empty roomId. ((4 - len%4) % 4)
+            // appends zero padding in that case.
+            payload += '=' * ((4 - payload.length % 4) % 4);
             final decoded = jsonDecode(utf8.decode(base64Url.decode(payload)));
             if (decoded is Map && decoded['room_id'] != null) {
               roomId = decoded['room_id'] as String;
@@ -738,6 +741,17 @@ class ConnectionService {
           _decryptErrorCount++;
           if (_decryptErrorCount <= 3) {
             _errorController.add('Decrypt error (#$_decryptErrorCount): $e');
+          }
+          // #931: past 3 consecutive failures the old code silently
+          // dropped every subsequent message while still showing connected
+          // (key desync = connected-but-deaf). Escalate to a full reconnect
+          // so key exchange re-runs.
+          if (_decryptErrorCount >= 3) {
+            debugPrint(
+                '[connection] 3+ decrypt failures, forcing reconnect for key re-exchange');
+            _decryptErrorCount = 0;
+            _forceReconnect();
+            return;
           }
         }
         break;

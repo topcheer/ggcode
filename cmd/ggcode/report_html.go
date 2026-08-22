@@ -473,9 +473,9 @@ window.__DATA__ = ` + jsonData + `;
 
   // === Sessions table ===
   const cols = [
-    { key: 'title', label: 'Title', sort: s => s.title || s.id.slice(0,8), display: s => s.title || s.id.slice(0,8) },
-    { key: 'workspace', label: 'Workspace', sort: s => { const p=s.workspace||''; return p.split('/').pop()||p||'-'; }, display: s => { const p=s.workspace||''; return p.split('/').pop()||p||'-'; } },
-    { key: 'model', label: 'Model', sort: s => s.model || '-', display: s => s.model || '-' },
+    { key: 'title', label: 'Title', sort: s => s.title || s.id.slice(0,8), display: s => esc(String(s.title || s.id.slice(0,8))) },
+    { key: 'workspace', label: 'Workspace', sort: s => { const p=s.workspace||''; return p.split('/').pop()||p||'-'; }, display: s => { const p=s.workspace||''; return esc(String(p.split('/').pop()||p||'-')); } },
+    { key: 'model', label: 'Model', sort: s => s.model || '-', display: s => esc(String(s.model || '-')) },
     { key: 'createdAt', label: 'Created', sort: s => new Date(s.createdAt).getTime(), display: s => { try { return new Date(s.createdAt).toLocaleString(); } catch(e) { return s.createdAt; } } },
     { key: 'msgCount', label: 'Msgs', sort: s => s.msgCount, display: s => s.msgCount },
     { key: 'llmCalls', label: 'LLM', sort: s => s.llmCalls, display: s => s.llmCalls },
@@ -802,7 +802,7 @@ window.__DATA__ = ` + jsonData + `;
   document.getElementById('slowestTools').innerHTML =
     slowTools.slice(0, 10).map((t,i) =>
       '<div class="tool-row"><span class="tool-name" style="min-width:30px;color:var(--text-dim)">'+(i+1)+'</span>' +
-      '<span class="tool-name">'+t.name+'</span>' +
+      '<span class="tool-name">'+esc(String(t.name))+'</span>' +
       '<span class="tool-stat">'+fmtMs(t.avgMs)+'</span>' +
       '<span class="tool-stat muted">'+t.calls+'x</span></div>'
     ).join('') || '<div class="muted">No data</div>';

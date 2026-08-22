@@ -303,7 +303,8 @@ class ConnectionStore {
       if (idx >= 0) {
         // Preserve original ID so markAlive/markDead can find it
         final origId = _connections[idx].id;
-        _connections[idx] = conn.copyWith();
+        // #932: the intermediate conn.copyWith() assignment was a dead store
+        // (immediately overwritten below) - removed.
         _connections[idx] = StoredConnection(
           id: origId,
           url: conn.url.isNotEmpty ? conn.url : _connections[idx].url,
@@ -324,8 +325,12 @@ class ConnectionStore {
           lastConnectedAt: conn.lastConnectedAt ?? _connections[idx].lastConnectedAt,
         );
         if (conn.active) {
+          // #932: demote by the PRESERVED id (entry keeps origId, so
+          // comparing against the incoming conn.id missed the stored
+          // entry - a future .active consumer could see zero active rows).
+          final storedId = _connections[idx].id;
           _connections = _connections
-              .map((c) => c.id != conn.id && c.active ? c.copyWith(active: false) : c)
+              .map((c) => c.id != storedId && c.active ? c.copyWith(active: false) : c)
               .toList();
         }
         await save();

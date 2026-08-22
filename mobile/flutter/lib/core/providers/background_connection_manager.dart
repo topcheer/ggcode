@@ -43,7 +43,10 @@ class BackgroundConnectionManager extends Notifier<void> {
 
     _wireService(sessionId, svc);
     await svc.connect();
-    _liveSessionIds.add(sessionId);
+    // #931: do NOT add to _liveSessionIds here - connect() never throws
+    // even on permanent failure, so expired rooms showed live and were
+    // skipped by reconnect logic. The connected callback in _wireService
+    // is the single source of truth for liveness.
   }
 
   void _wireService(String sessionId, ConnectionService svc) {

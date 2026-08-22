@@ -61,9 +61,27 @@ class SecureTokenStorage {
   /// SharedPreferences to avoid blocking the UI.
   static const _timeout = Duration(seconds: 3);
 
+  /// #931: a single transient Keychain error used to set _secureAvailable
+  /// false permanently - auth_ticket + 30-day renew_token then lived in
+  /// plaintext SharedPreferences for the whole process lifetime. Instead
+  /// of abandoning encryption forever, retry secure storage after this
+  /// window; a successful read/write re-enables it (the OK paths already
+  /// set _secureAvailable = true).
+  static const _secureRetryAfter = Duration(minutes: 5);
+  DateTime _secureRetryAt = DateTime.fromMillisecondsSinceEpoch(0);
+
+  /// Whether secure storage should be attempted right now.
+  bool get _shouldTrySecure =>
+      _secureAvailable || DateTime.now().isAfter(_secureRetryAt);
+
+  void _degradeSecure() {
+    _secureAvailable = false;
+    _secureRetryAt = DateTime.now().add(_secureRetryAfter);
+  }
+
   /// Generic read with timeout fallback to SharedPreferences.
   Future<String?> _readSecure(String key, String fallbackKey) async {
-    if (!_secureAvailable) {
+    if (!_shouldTrySecure) {
       final prefs = await SharedPreferences.getInstance();
       return prefs.getString(fallbackKey);
     }
@@ -74,12 +92,12 @@ class SecureTokenStorage {
       return result;
     } on TimeoutException {
       debugPrint('[secure_storage] Keychain timed out, falling back to SharedPreferences');
-      _secureAvailable = false;
+      _degradeSecure();
       final prefs = await SharedPreferences.getInstance();
       return prefs.getString(fallbackKey);
     } catch (e) {
       debugPrint('[secure_storage] read error: $e, falling back to SharedPreferences');
-      _secureAvailable = false;
+      _degradeSecure();
       final prefs = await SharedPreferences.getInstance();
       return prefs.getString(fallbackKey);
     }
@@ -87,7 +105,7 @@ class SecureTokenStorage {
 
   /// Generic write with timeout fallback to SharedPreferences.
   Future<void> _writeSecure(String key, String value, String fallbackKey) async {
-    if (!_secureAvailable) {
+    if (!_shouldTrySecure) {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(fallbackKey, value);
       return;
@@ -98,12 +116,12 @@ class SecureTokenStorage {
       _secureAvailable = true;
     } on TimeoutException {
       debugPrint('[secure_storage] Keychain timed out on write, falling back to SharedPreferences');
-      _secureAvailable = false;
+      _degradeSecure();
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(fallbackKey, value);
     } catch (e) {
       debugPrint('[secure_storage] write error: $e, falling back to SharedPreferences');
-      _secureAvailable = false;
+      _degradeSecure();
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(fallbackKey, value);
     }

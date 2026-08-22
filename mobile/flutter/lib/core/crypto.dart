@@ -132,6 +132,13 @@ class ShareKeyExchangeState {
     );
     final secretKey = await _aesGcm.newSecretKeyFromBytes(digest.bytes);
     final combined = base64Decode(ciphertext);
+    // #932: same <16 guard as decryptData - a malformed ciphertext used to
+    // raise a raw RangeError from sublist and the key exchange never
+    // completed with no diagnosable error.
+    if (combined.length < 16) {
+      throw FormatException(
+          'invalid room key ciphertext: ${combined.length} bytes (min 16)');
+    }
     final cipherBytes = combined.sublist(0, combined.length - 16);
     final macBytes = combined.sublist(combined.length - 16);
     final secretBox = crypto.SecretBox(

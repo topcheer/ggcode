@@ -226,8 +226,14 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
     final idx = state.indexWhere((m) => m.id == messageId);
     if (idx < 0) return;
     // Only advance status forward: sending → delivered → acknowledged.
+    // #932: failed (index 3) ranked above acknowledged under a raw index
+    // monotonicity check, so a timed-out message could never advance to
+    // delivered/acknowledged even when the late ack arrived. Rank
+    // explicitly; failed CAN advance when a real ack shows up (retries
+    // use new IDs, so this only fires for the original).
     final current = state[idx].status;
-    if (status.index <= current.index) return;
+    int rank(MessageStatus s) => s == MessageStatus.failed ? 0 : s.index + 1;
+    if (rank(status) <= rank(current) && !(current == MessageStatus.failed && status != MessageStatus.sending)) return;
     state = [
       for (int i = 0; i < state.length; i++)
         if (i == idx) state[i].copyWith(status: status) else state[i],

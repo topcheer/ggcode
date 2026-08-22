@@ -697,7 +697,14 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         if (!_resumeCompleted) {
           _beginSnapshotSync();
         }
-        _markProjectionAuthoritative();
+        // #931: only mark the projection authoritative AFTER at least one
+        // snapshot event applied - marking on the reset itself could
+        // persist an EMPTY projection over the cached full session when the
+        // 15s safety timeout fired before any event arrived.
+        final snapEvents = msg.data?['events'];
+        if (snapEvents is List && snapEvents.isNotEmpty) {
+          _markProjectionAuthoritative();
+        }
         if (msg.sessionId != null && msg.sessionId!.isNotEmpty) {
           _sessionId = msg.sessionId!;
         }
