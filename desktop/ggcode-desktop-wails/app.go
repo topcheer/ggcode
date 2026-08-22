@@ -1001,7 +1001,11 @@ func (a *App) SendMessageWithImages(userMsg string, images []PastedImage) error 
 					}
 					if !strings.Contains(meta, ";base64") && !strings.HasPrefix(meta, "base64") {
 						// URL-encoded (percent-encoded) payload, not base64.
-						raw, _ := url.QueryUnescape(data[idx+1:])
+						// #936: PathUnescape, NOT QueryUnescape - data URIs follow
+						// RFC 3986/2397 percent-encoding where '+' is a LITERAL plus;
+						// the form-encoding semantics of QueryUnescape silently turned
+						// 'Foo+Bar' into 'Foo Bar' and corrupted binary payloads.
+						raw, _ := url.PathUnescape(data[idx+1:])
 						if raw == "" {
 							continue
 						}
@@ -2523,9 +2527,17 @@ func (a *App) tunnelSnapshot() tunnel.BrokerSnapshot {
 
 	// Populate model/provider from config
 	if cfg, err := wailskit.LoadConfigForWorkspace(a.workDir); err == nil {
-		snapshot.SessionInfo.Provider = cfg.Vendor
-		snapshot.SessionInfo.Model = cfg.Model
+		// #935: resolve through the endpoint chain - raw cfg.Vendor/cfg.Model
+		// are often empty/stale when the active selection lives in vendor
+		// endpoint state (mobile snapshot showed an empty model).
 		snapshot.SessionInfo.Mode = cfg.DefaultMode
+		if resolved, rerr := cfg.ResolveActiveEndpoint(); rerr == nil && resolved != nil {
+			snapshot.SessionInfo.Provider = resolved.VendorName
+			snapshot.SessionInfo.Model = resolved.Model
+		} else {
+			snapshot.SessionInfo.Provider = cfg.Vendor
+			snapshot.SessionInfo.Model = cfg.Model
+		}
 	}
 
 	chat := a.chat // #457: single-read snapshot

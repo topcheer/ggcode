@@ -91,6 +91,7 @@ require (
 	github.com/lucasb-eyer/go-colorful v1.4.0 // indirect
 	github.com/mailru/easyjson v0.9.0 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
+	github.com/mattn/go-ieproxy v0.0.12 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mattn/go-runewidth v0.0.23 // indirect
 	github.com/microcosm-cc/bluemonday v1.0.27 // indirect
@@ -126,6 +127,7 @@ require (
 	github.com/rs/zerolog v1.35.0 // indirect
 	github.com/samber/lo v1.49.1 // indirect
 	github.com/sashabaranov/go-openai v1.41.2 // indirect
+	github.com/saucelabs/forwarder v1.6.1 // indirect
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e // indirect
 	github.com/tidwall/gjson v1.18.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
@@ -150,7 +152,7 @@ require (
 	go.mau.fi/util v0.9.8 // indirect
 	go.mau.fi/whatsmeow v0.0.0-20260504140538-51dcc5e33be0 // indirect
 	go.opencensus.io v0.24.0 // indirect
-	go.uber.org/multierr v1.10.0 // indirect
+	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.26.0 // indirect
 	golang.org/x/arch v0.15.0 // indirect
 	golang.org/x/crypto v0.51.0 // indirect
