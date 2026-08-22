@@ -18,15 +18,25 @@
 #   mark <path>...         record the current blob SHA for each path - call this
 #                          ONLY after a full-file review, not after a diff skim.
 #   prune                  drop ledger entries for files deleted from the repo
+#   reset                  start a NEW epoch: archive the current ledger and begin
+#                          a fresh full-review cycle from zero. Call when the cycle
+#                          reaches 100% so the next sweep re-reviews everything.
 #
-# Scopes (deterministic long-tail sweep; diff-window review stays full-scope):
+# Tracked sources: non-test *.go plus mobile/flutter *.dart (generated *.g.dart
+# and test files excluded).
+## Scopes (deterministic long-tail sweep; diff-window review stays full-scope):
 #   cron-2: next '^(internal/agent/|desktop/)' 5
 #   cron-1: next '!^(internal/agent/|desktop/)' 5   (the complement)
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
-LEDGER=.ggcode/review-ledger.txt
+EPOCH_FILE=.ggcode/review-epoch.txt
+EPOCH=$(cat "$EPOCH_FILE" 2>/dev/null || echo 1)
+LEDGER=.ggcode/review-ledger.e${EPOCH}.txt
 
-all_files() { git ls-files -s -- '*.go' | grep -v '_test\.go$' || true; }
+all_files() {
+  { git ls-files -s -- '*.go' | grep -v '_test\.go$' || true;
+    git ls-files -s -- 'mobile/flutter/**/*.dart' | grep -vE '(\.g\.dart$|_test\.dart$)' || true; }
+}
 
 case "${1:-status}" in
   status)
@@ -39,7 +49,10 @@ case "${1:-status}" in
     unreviewed=$(comm -13 "$td/led" "$td/cur" | wc -l | tr -d ' ')
     pct=0
     [ "$total" -gt 0 ] && pct=$(( reviewed * 100 / total ))
-    echo "total=$total reviewed=$reviewed ($pct%) stale-or-deleted=$gone unreviewed=$unreviewed"
+    echo "epoch=$EPOCH total=$total reviewed=$reviewed ($pct%) stale-or-deleted=$gone unreviewed=$unreviewed"
+    if [ "$unreviewed" -eq 0 ] && [ "$gone" -eq 0 ]; then
+      echo "CYCLE COMPLETE: epoch $EPOCH at 100% - run 'reset' to start the next full-review cycle from zero."
+    fi
     rm -rf "$td"
     ;;
   next)
@@ -92,8 +105,15 @@ case "${1:-status}" in
     mv "$LEDGER.tmp" "$LEDGER"
     rm -rf "$td"
     ;;
+  reset)
+    # Start the next full-review cycle from zero. Archives the completed epoch.
+    next=$(( EPOCH + 1 ))
+    if [ -f "$LEDGER" ]; then :; else touch "$LEDGER"; fi
+    echo "$next" > "$EPOCH_FILE"
+    echo "epoch $EPOCH archived at $LEDGER; starting epoch $next from zero ($(all_files | wc -l | tr -d ' ') files)."
+    ;;
   *)
-    echo "usage: $0 {status|next <egrep> [n]|mark <path>...|prune}" >&2
+    echo "usage: $0 {status|next <egrep> [n]|mark <path>...|prune|reset}" >&2
     exit 2
     ;;
 esac
