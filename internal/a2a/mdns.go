@@ -5,6 +5,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/safego"
@@ -238,8 +239,11 @@ func sanitizeMDNSName(name string) string {
 	// invalid broadcast name.
 	name = strings.ReplaceAll(name, "/", "-")
 	name = strings.ReplaceAll(name, "\\", "-")
-	if len(name) > 63 {
-		name = name[:63]
+	// #934: rune-safe truncation - byte slicing at 63 cut CJK names
+	// mid-rune, producing invalid-UTF-8 mDNS names that strict resolvers
+	// (Avahi/Bonjour) reject, breaking LAN discovery for i18n users.
+	if utf8.RuneCountInString(name) > 63 {
+		name = string([]rune(name)[:63])
 	}
 	return name
 }

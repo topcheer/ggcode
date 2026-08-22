@@ -2301,7 +2301,7 @@ a2a:
 func TestClientNegotiateAuthNoSecurity(t *testing.T) {
 	client := NewClient("http://example.com", "")
 	// Simulate discovered card with no security
-	client.card = &AgentCard{Name: "test"}
+	client.card.Store(&AgentCard{Name: "test"})
 	if err := client.NegotiateAuth(); err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
@@ -2312,14 +2312,14 @@ func TestClientNegotiateAuthNoSecurity(t *testing.T) {
 
 func TestClientNegotiateAuthAPIKey(t *testing.T) {
 	client := NewClient("http://example.com", "my-key")
-	client.card = &AgentCard{
+	client.card.Store(&AgentCard{
 		SecuritySchemes: map[string]Security{
 			"apiKeyScheme": {Type: "apiKey", Location: "header", Name: "X-API-Key"},
 		},
 		Security: []map[string][]string{
 			{"apiKeyScheme": {}},
 		},
-	}
+	})
 	if err := client.NegotiateAuth(); err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
@@ -2330,14 +2330,14 @@ func TestClientNegotiateAuthAPIKey(t *testing.T) {
 
 func TestClientNegotiateAuthBearerToken(t *testing.T) {
 	client := NewClient("http://example.com", "", WithBearerToken("test-token"))
-	client.card = &AgentCard{
+	client.card.Store(&AgentCard{
 		SecuritySchemes: map[string]Security{
 			"oauth2": {Type: "oauth2"},
 		},
 		Security: []map[string][]string{
 			{"oauth2": {}},
 		},
-	}
+	})
 	if err := client.NegotiateAuth(); err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
@@ -2348,14 +2348,14 @@ func TestClientNegotiateAuthBearerToken(t *testing.T) {
 
 func TestClientNegotiateAuthNoMatchingCredential(t *testing.T) {
 	client := NewClient("http://example.com", "") // no key, no token
-	client.card = &AgentCard{
+	client.card.Store(&AgentCard{
 		SecuritySchemes: map[string]Security{
 			"oauth2": {Type: "oauth2"},
 		},
 		Security: []map[string][]string{
 			{"oauth2": {}},
 		},
-	}
+	})
 	err := client.NegotiateAuth()
 	if err == nil {
 		t.Fatal("expected error for missing credential")
@@ -2535,14 +2535,14 @@ func TestServerMultiAuth(t *testing.T) {
 
 func TestClientNegotiateAuthOIDCScheme(t *testing.T) {
 	client := NewClient("http://example.com", "", WithBearerToken("oidc-token"))
-	client.card = &AgentCard{
+	client.card.Store(&AgentCard{
 		SecuritySchemes: map[string]Security{
 			"oidc": {Type: "openIdConnect"},
 		},
 		Security: []map[string][]string{
 			{"oidc": {}},
 		},
-	}
+	})
 	if err := client.NegotiateAuth(); err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
@@ -2554,7 +2554,7 @@ func TestClientNegotiateAuthOIDCScheme(t *testing.T) {
 func TestClientNegotiateAuthMultiScheme(t *testing.T) {
 	// Server supports both apiKey and oauth2; client has apiKey
 	client := NewClient("http://example.com", "my-key")
-	client.card = &AgentCard{
+	client.card.Store(&AgentCard{
 		SecuritySchemes: map[string]Security{
 			"apiKeyScheme": {Type: "apiKey"},
 			"oauth2":       {Type: "oauth2"},
@@ -2563,7 +2563,7 @@ func TestClientNegotiateAuthMultiScheme(t *testing.T) {
 			{"apiKeyScheme": {}},
 			{"oauth2": {}},
 		},
-	}
+	})
 	if err := client.NegotiateAuth(); err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
@@ -2575,7 +2575,7 @@ func TestClientNegotiateAuthMultiScheme(t *testing.T) {
 func TestClientNegotiateAuthMultiSchemeFallback(t *testing.T) {
 	// Server supports apiKey and oauth2; client only has bearer token
 	client := NewClient("http://example.com", "", WithBearerToken("token"))
-	client.card = &AgentCard{
+	client.card.Store(&AgentCard{
 		SecuritySchemes: map[string]Security{
 			"apiKeyScheme": {Type: "apiKey"},
 			"oauth2":       {Type: "oauth2"},
@@ -2584,7 +2584,7 @@ func TestClientNegotiateAuthMultiSchemeFallback(t *testing.T) {
 			{"apiKeyScheme": {}},
 			{"oauth2": {}},
 		},
-	}
+	})
 	if err := client.NegotiateAuth(); err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}

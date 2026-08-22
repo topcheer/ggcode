@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/safego"
@@ -28,7 +29,7 @@ type Client struct {
 	baseURL    string
 	apiKey     string
 	httpClient *http.Client
-	card       *AgentCard // cached agent card (nil until discovered)
+	card       atomic.Pointer[AgentCard] // #934: cached agent card (nil until discovered); atomic - MCPBridgeTools shares one Client across bridge tools called concurrently by external MCP clients
 
 	// mu protects all auth-related fields below from concurrent access.
 	mu            sync.RWMutex
@@ -119,12 +120,12 @@ func (c *Client) Discover(ctx context.Context) (*AgentCard, error) {
 		return nil, fmt.Errorf("a2a discover: decode: %w", err)
 	}
 
-	c.card = &card
+	c.card.Store(&card)
 	return &card, nil
 }
 
 // Card returns the cached agent card (nil if Discover hasn't been called).
-func (c *Client) Card() *AgentCard { return c.card }
+func (c *Client) Card() *AgentCard { return c.card.Load() }
 
 // NegotiateAuth reads the Agent Card's securitySchemes and prepares the
 // appropriate authentication mechanism.
@@ -142,12 +143,13 @@ func (c *Client) Card() *AgentCard { return c.card }
 // Returns an error if the server requires an auth mechanism the client
 // hasn't been configured for.
 func (c *Client) NegotiateAuth() error {
-	if c.card == nil {
+	card := c.card.Load()
+	if card == nil {
 		return fmt.Errorf("a2a: NegotiateAuth called before Discover")
 	}
 
 	// No security requirements → nothing to do
-	if len(c.card.Security) == 0 && len(c.card.SecuritySchemes) == 0 {
+	if len(card.Security) == 0 && len(card.SecuritySchemes) == 0 {
 		c.mu.Lock()
 		c.authMethod = ""
 		c.mu.Unlock()
@@ -155,9 +157,9 @@ func (c *Client) NegotiateAuth() error {
 	}
 
 	// Try to match client capabilities with server requirements
-	for _, req := range c.card.Security {
+	for _, req := range card.Security {
 		for schemeName := range req {
-			scheme, ok := c.card.SecuritySchemes[schemeName]
+			scheme, ok := card.SecuritySchemes[schemeName]
 			if !ok {
 				continue
 			}
@@ -206,17 +208,17 @@ func (c *Client) NegotiateAuth() error {
 			return nil
 		}
 		return fmt.Errorf("a2a: server requires bearer/oauth2 but client only has an apiKey (server schemes: %v); use WithBearerToken or WithTokenProvider",
-			schemeNames(c.card.SecuritySchemes))
+			schemeNames(c.card.Load().SecuritySchemes))
 	}
 
 	return fmt.Errorf("a2a: server requires authentication but client has no matching credential (schemes: %v)",
-		schemeNames(c.card.SecuritySchemes))
+		schemeNames(c.card.Load().SecuritySchemes))
 }
 
 // cardDeclaresAPIKey reports whether the discovered AgentCard declares any
 // apiKey security scheme (fix #257).
 func (c *Client) cardDeclaresAPIKey() bool {
-	for _, scheme := range c.card.SecuritySchemes {
+	for _, scheme := range c.card.Load().SecuritySchemes {
 		if scheme.Type == "apiKey" {
 			return true
 		}

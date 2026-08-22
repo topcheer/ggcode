@@ -29,14 +29,14 @@ func pagetokenTestPost(url string, body []byte) (*http.Response, error) {
 // fallback deferred the failure to the first request's 401.
 func TestClientNegotiateAuthAPIKeyFallbackRejected(t *testing.T) {
 	client := NewClient("http://example.com", "some-key")
-	client.card = &AgentCard{
+	client.card.Store(&AgentCard{
 		SecuritySchemes: map[string]Security{
 			"oauth2": {Type: "oauth2"},
 		},
 		Security: []map[string][]string{
 			{"oauth2": {}},
 		},
-	}
+	})
 	err := client.NegotiateAuth()
 	if err == nil {
 		t.Fatal("expected negotiation error for apiKey client vs bearer-only server")
@@ -50,14 +50,14 @@ func TestClientNegotiateAuthAPIKeyFallbackRejected(t *testing.T) {
 // against a server declaring only an http bearer scheme.
 func TestClientNegotiateAuthAPIKeyFallbackBearerOnly(t *testing.T) {
 	client := NewClient("http://example.com", "some-key")
-	client.card = &AgentCard{
+	client.card.Store(&AgentCard{
 		SecuritySchemes: map[string]Security{
 			"bearer": {Type: "http"},
 		},
 		Security: []map[string][]string{
 			{"bearer": {}},
 		},
-	}
+	})
 	if err := client.NegotiateAuth(); err == nil {
 		t.Fatal("expected negotiation error for apiKey client vs bearer-only server")
 	}
@@ -67,14 +67,14 @@ func TestClientNegotiateAuthAPIKeyFallbackBearerOnly(t *testing.T) {
 // declare an apiKey scheme, the pre-configured apiKey fallback stays valid.
 func TestClientNegotiateAuthAPIKeyStillOKWhenDeclared(t *testing.T) {
 	client := NewClient("http://example.com", "some-key")
-	client.card = &AgentCard{
+	client.card.Store(&AgentCard{
 		SecuritySchemes: map[string]Security{
 			"apiKeyScheme": {Type: "apiKey", Location: "header", Name: "X-API-Key"},
 		},
 		Security: []map[string][]string{
 			{"apiKeyScheme": {}},
 		},
-	}
+	})
 	if err := client.NegotiateAuth(); err != nil {
 		t.Fatalf("expected apiKey fallback to be accepted, got: %v", err)
 	}

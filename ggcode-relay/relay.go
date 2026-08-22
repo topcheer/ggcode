@@ -639,7 +639,12 @@ func (p *peer) onActiveSession(msg relayMessage) {
 
 	sessionID := msg.SessionID
 	var wsPath, provName, mdlName string
-	if sessionID == "" || true {
+	// #934: mobile sends workspace metadata in active_session Data even
+	// when SessionID is set - the parse must be UNCONDITIONAL (the old
+	// 'if sessionID == "" || true' debug leftover was always-true but
+	// coincidentally correct; removing the condition outright would have
+	// broken metadata sync).
+	{
 		var data struct {
 			SessionID     string `json:"session_id"`
 			WorkspacePath string `json:"workspace_path"`

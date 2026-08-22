@@ -191,7 +191,14 @@ func (m *modelCatalogManager) recordFailure(attemptedAt time.Time, sourceSHA str
 	}
 	state := m.loadStatus()
 	state.SourceRef = modelCatalogSourceRef
-	if strings.TrimSpace(sourceSHA) != "" {
+	// #934: NEVER advance SourceSHA on failure - the fetch failed after
+	// fetchBranchSHA, so the snapshot still holds the OLD SHA's data.
+	// Advancing it made the next refresh take the 'no change' early exit
+	// (and even clear LastError), serving stale metadata indefinitely with
+	// Ready=true. SourceSHA only moves on a fully successful refresh (or,
+	// when no snapshot exists at all, recording the attempted SHA is
+	// harmless and helps diagnostics).
+	if strings.TrimSpace(sourceSHA) != "" && m.snapshot.Load() == nil {
 		state.SourceSHA = strings.TrimSpace(sourceSHA)
 	}
 	state.LastAttemptAt = attemptedAt
