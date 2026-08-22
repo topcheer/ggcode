@@ -46,58 +46,59 @@ class SecureTokenStorage {
   /// use SharedPreferences immediately, avoiding 3s timeout timers
   /// that leak into widget tests.
   static void disableForTesting() {
-    final s = SecureTokenStorage._(storage: const FlutterSecureStorage());
-    s._secureAvailable = false;
+    final s = SecureTokenStorage._(storage: const FlutterSecureStorage())
+      .._disabledForTest = true;
     _instance = s;
   }
 
   final FlutterSecureStorage _storage;
 
-  /// Whether secure storage has been confirmed working.
-  /// After first successful read/write, we skip the timeout guard.
-  bool _secureAvailable = true;
-
   /// Timeout for secure storage operations. If exceeded, falls back to
   /// SharedPreferences to avoid blocking the UI.
   static const _timeout = Duration(seconds: 3);
 
-  /// #931: a single transient Keychain error used to set _secureAvailable
-  /// false permanently - auth_ticket + 30-day renew_token then lived in
-  /// plaintext SharedPreferences for the whole process lifetime. Instead
-  /// of abandoning encryption forever, retry secure storage after this
-  /// window; a successful read/write re-enables it (the OK paths already
-  /// set _secureAvailable = true).
+  /// #931/#931-followup: a single transient Keychain error used to set a
+  /// PROCESS-GLOBAL _secureAvailable=false - one session's failure degraded
+  /// every other session's tokens to plaintext (cross-session leak) and the
+  /// disableForTesting() bypass produced 3s timeout timers that hung widget
+  /// tests. Health state is now tracked PER STORAGE KEY (each key namespace
+  /// = an independent session-storage unit): one key's transient failure
+  /// never degrades another. A successful read/write re-enables that key.
   static const _secureRetryAfter = Duration(minutes: 5);
-  DateTime _secureRetryAt = DateTime.fromMillisecondsSinceEpoch(0);
 
-  /// Whether secure storage should be attempted right now.
-  bool get _shouldTrySecure =>
-      _secureAvailable || DateTime.now().isAfter(_secureRetryAt);
+  final Map<String, DateTime> _degradedUntilByKey = {};
+  bool _disabledForTest = false;
 
-  void _degradeSecure() {
-    _secureAvailable = false;
-    _secureRetryAt = DateTime.now().add(_secureRetryAfter);
+  /// Whether secure storage should be attempted for this key right now.
+  bool _shouldTrySecureFor(String key) {
+    if (_disabledForTest) return false;
+    final retryAt = _degradedUntilByKey[key];
+    return retryAt == null || DateTime.now().isAfter(retryAt);
+  }
+
+  void _degradeSecureFor(String key) {
+    _degradedUntilByKey[key] = DateTime.now().add(_secureRetryAfter);
   }
 
   /// Generic read with timeout fallback to SharedPreferences.
   Future<String?> _readSecure(String key, String fallbackKey) async {
-    if (!_shouldTrySecure) {
+    if (!_shouldTrySecureFor(key)) {
       final prefs = await SharedPreferences.getInstance();
       return prefs.getString(fallbackKey);
     }
     try {
       final result = await _storage.read(key: key).timeout(_timeout);
       debugPrint('[secure_storage] Keychain read OK: $key');
-      _secureAvailable = true;
+      _degradedUntilByKey.remove(key); // success re-enables
       return result;
     } on TimeoutException {
       debugPrint('[secure_storage] Keychain timed out, falling back to SharedPreferences');
-      _degradeSecure();
+      _degradeSecureFor(key);
       final prefs = await SharedPreferences.getInstance();
       return prefs.getString(fallbackKey);
     } catch (e) {
       debugPrint('[secure_storage] read error: $e, falling back to SharedPreferences');
-      _degradeSecure();
+      _degradeSecureFor(key);
       final prefs = await SharedPreferences.getInstance();
       return prefs.getString(fallbackKey);
     }
@@ -105,7 +106,7 @@ class SecureTokenStorage {
 
   /// Generic write with timeout fallback to SharedPreferences.
   Future<void> _writeSecure(String key, String value, String fallbackKey) async {
-    if (!_shouldTrySecure) {
+    if (!_shouldTrySecureFor(key)) {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(fallbackKey, value);
       return;
@@ -113,15 +114,15 @@ class SecureTokenStorage {
     try {
       await _storage.write(key: key, value: value).timeout(_timeout);
       debugPrint('[secure_storage] Keychain write OK: $key');
-      _secureAvailable = true;
+      _degradedUntilByKey.remove(key); // success re-enables
     } on TimeoutException {
       debugPrint('[secure_storage] Keychain timed out on write, falling back to SharedPreferences');
-      _degradeSecure();
+      _degradeSecureFor(key);
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(fallbackKey, value);
     } catch (e) {
       debugPrint('[secure_storage] write error: $e, falling back to SharedPreferences');
-      _degradeSecure();
+      _degradeSecureFor(key);
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(fallbackKey, value);
     }
