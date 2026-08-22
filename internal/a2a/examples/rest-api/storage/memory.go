@@ -215,7 +215,7 @@ func matchesFilter(p *model.Product, f *model.ListProductsFilter) bool {
 
 // sortProducts sorts the slice in place according to sortBy and sortDir.
 func sortProducts(products []*model.Product, sortBy, sortDir string) {
-	less := func(i, j int) bool {
+	asc := func(i, j int) bool {
 		var less bool
 		switch sortBy {
 		case "name":
@@ -229,10 +229,17 @@ func sortProducts(products []*model.Product, sortBy, sortDir string) {
 		default:
 			less = products[i].CreatedAt.Before(products[j].CreatedAt)
 		}
-		if sortDir == "desc" {
-			return !less
-		}
 		return less
+	}
+	// #939: descending must REVERSE THE INDICES, not negate the result.
+	// '!less' turns strict '<' into '>=' (less(i,i)=true), violating
+	// sort.Slice's strict-weak-ordering contract - correct output today is
+	// a pdqsort coincidence, not a guarantee.
+	var less func(i, j int) bool
+	if sortDir == "desc" {
+		less = func(i, j int) bool { return asc(j, i) }
+	} else {
+		less = asc
 	}
 	sort.Slice(products, less)
 }
