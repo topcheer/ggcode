@@ -207,42 +207,16 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 	// instead of waiting for a stale-read error on the next edit_file.
 	mtimeSnapshot := defaultFileTracker.SnapshotTracked()
 
-	// === Safety gate — Allow/Ask/Block (runs regardless of autopilot) ===
 	gate := NewCommandGate()
-	gateResult := gate.Check(args.Command)
-	if gateResult.IsBlocked() {
-		debug.Log("run_command", "BLOCKED: %s", gateResult.Reason)
-		return Result{IsError: true, Content: gateResult.Reason}, nil
+	var cleanedCmd, preWarn string
+	cleanedCmd, preWarn, blocked := t.applyCommandGate(gate, args.Command)
+	if blocked != "" {
+		return Result{IsError: true, Content: blocked}, nil
 	}
-	if gateResult.NeedsConfirmation() {
-		// In Bypass/Autopilot mode, Ask is automatically downgraded to Allow.
-		// These modes assume the user trusts the agent — the command is
-		// still logged as a warning for audit purposes.
-		if t.isBypassMode() {
-			debug.Log("run_command", "ASK→ALLOW (bypass mode): %s", gateResult.Reason)
-		} else {
-			debug.Log("run_command", "ASK: %s", gateResult.Reason)
-			// Return as error with special prefix — the caller (agent loop)
-			// will interpret this as "needs user permission" and prompt.
-			return Result{IsError: true, Content: "⚠️ " + gateResult.Reason}, nil
-		}
+	if cleanedCmd != "" {
+		args.Command = cleanedCmd
 	}
-	if len(gateResult.Warnings) > 0 {
-		for _, w := range gateResult.Warnings {
-			debug.Log("run_command", "WARNING: %s", w)
-		}
-	}
-	// Surface interactive-command warnings to the agent via the result content
-	// so it can self-correct before the timeout fires.
-	var preWarning string
-	if interactive := gate.InteractiveCommandWarning(args.Command); interactive != "" {
-		preWarning = "[Interactive command warning] " + interactive + "\n\n"
-	}
-	// Use cleaned command if modifications were made
-	if gateResult.CleanedCmd != "" && gateResult.CleanedCmd != args.Command {
-		debug.Log("run_command", "cleaned command: %s → %s", args.Command, gateResult.CleanedCmd)
-		args.Command = gateResult.CleanedCmd
-	}
+	preWarning := preWarn
 
 	if args.Timeout <= 0 {
 		args.Timeout = int(defaultCommandTimeout / time.Second)
@@ -424,25 +398,7 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 		if t.OnPostExec != nil {
 			t.OnPostExec(exitCode, err)
 		}
-		diagnostic := diagnoseCommandFailure(sb.String(), errOutput)
-		summary := summarizeCommandOutput(args.Command, sb.String())
-		var msg string
-		if summary != "" {
-			msg = summary + sb.String()
-		} else {
-			msg = sb.String()
-		}
-		msg += fmt.Sprintf("\nCommand failed: %v", err)
-		if diagnostic != "" {
-			msg += "\n" + diagnostic
-		}
-		if compatHint := diagnoseShellCompat(args.Command, sb.String(), errOutput); compatHint != "" {
-			msg += "\n" + compatHint
-		}
-		if exitIntel := interpretExitCode(exitCode); exitIntel != "" {
-			msg += "\n" + exitIntel
-		}
-		return Result{IsError: true, Content: preWarning + msg}, nil
+		return Result{IsError: true, Content: preWarning + t.buildFailureMessage(args.Command, sb.String(), errOutput, err, exitCode)}, nil
 	}
 
 	if t.OnPostExec != nil {
@@ -725,6 +681,69 @@ func snapshotJobLines(job *CommandJob, n int) string {
 		sb.WriteString(util.StripANSI(line))
 	}
 	return sb.String()
+}
+
+// applyCommandGate runs the Allow/Ask/Block gate and interactive-command
+// warnings for one command. Returns (cleanedCmd, preExecutionWarning,
+// blockedReason): blockedReason non-empty means the caller must return it
+// verbatim as an error result; cleanedCmd replaces the command when the
+// gate normalized it; preExecutionWarning is prefixed to the final result
+// content so the agent can self-correct.
+func (t RunCommand) applyCommandGate(gate *CommandGate, command string) (cleanedCmd, preWarning, blocked string) {
+	gateResult := gate.Check(command)
+	if gateResult.IsBlocked() {
+		debug.Log("run_command", "BLOCKED: %s", gateResult.Reason)
+		return "", "", gateResult.Reason
+	}
+	if gateResult.NeedsConfirmation() {
+		// In Bypass/Autopilot mode, Ask is automatically downgraded to Allow.
+		// These modes assume the user trusts the agent — the command is
+		// still logged as a warning for audit purposes.
+		if t.isBypassMode() {
+			debug.Log("run_command", "ASK→ALLOW (bypass mode): %s", gateResult.Reason)
+		} else {
+			debug.Log("run_command", "ASK: %s", gateResult.Reason)
+			// Caller returns this verbatim — the agent loop interprets the
+			// prefix as "needs user permission" and prompts.
+			return "", "", "⚠️ " + gateResult.Reason
+		}
+	}
+	for _, w := range gateResult.Warnings {
+		debug.Log("run_command", "WARNING: %s", w)
+	}
+	// Surface interactive-command warnings via the result content so the
+	// agent can self-correct before the timeout fires.
+	if interactive := gate.InteractiveCommandWarning(command); interactive != "" {
+		preWarning = "[Interactive command warning] " + interactive + "\n\n"
+	}
+	if gateResult.CleanedCmd != "" && gateResult.CleanedCmd != command {
+		debug.Log("run_command", "cleaned command: %s → %s", command, gateResult.CleanedCmd)
+		cleanedCmd = gateResult.CleanedCmd
+	}
+	return cleanedCmd, preWarning, ""
+}
+
+// buildFailureMessage assembles the error-path result body: combined output,
+// optional structured summary, the raw failure, and layered diagnostics
+// (root-cause hint, shell-compat hint, exit-code interpretation).
+func (t RunCommand) buildFailureMessage(command, combinedOutput, errOutput string, err error, exitCode int) string {
+	var msg string
+	if summary := summarizeCommandOutput(command, combinedOutput); summary != "" {
+		msg = summary + combinedOutput
+	} else {
+		msg = combinedOutput
+	}
+	msg += fmt.Sprintf("\nCommand failed: %v", err)
+	if diagnostic := diagnoseCommandFailure(combinedOutput, errOutput); diagnostic != "" {
+		msg += "\n" + diagnostic
+	}
+	if compatHint := diagnoseShellCompat(command, combinedOutput, errOutput); compatHint != "" {
+		msg += "\n" + compatHint
+	}
+	if exitIntel := interpretExitCode(exitCode); exitIntel != "" {
+		msg += "\n" + exitIntel
+	}
+	return msg
 }
 
 // streamingProgressWriter wraps an io.Writer and pushes the last 5 lines
