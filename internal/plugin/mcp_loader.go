@@ -316,47 +316,76 @@ func (m *MCPPlugin) startReconnectWatcher(client *mcp.Client) {
 			case <-time.After(delay):
 			}
 			debug.Log("mcp-reconnect", "server=%s reconnect attempt %d", m.cfg.Name, attempt+1)
-			// Mark as disconnected
-			m.mu.Lock()
-			oldAdapter := m.adapter
-			m.adapter = nil
-			m.connected = false
-			m.client = nil
-			m.status = MCPStatusPending
-			m.mu.Unlock()
-			// Unregister old tools so stale definitions don't linger
-			if oldAdapter != nil && m.registry != nil {
-				for _, tn := range oldAdapter.ToolNames() {
-					m.registry.Unregister(tn)
-				}
-			}
-			// Attempt reconnection
-			adapter, err := m.Connect(ctx)
-			if err == nil && adapter != nil {
-				debug.Log("mcp-reconnect", "server=%s reconnected successfully", m.cfg.Name)
-				// Re-register tools if we have a registry reference
-				if m.registry != nil {
-					if regErr := adapter.RegisterTools(m.registry); regErr != nil {
-						debug.Log("mcp-reconnect", "server=%s tool re-registration failed: %v", m.cfg.Name, regErr)
-					}
-				}
+			if m.attemptReconnect(ctx) {
 				return
 			}
-			if err != nil {
-				m.mu.Lock()
-				m.status = MCPStatusFailed
-				m.lastError = normalizeMCPError(err)
-				m.mu.Unlock()
-				debug.Log("mcp-reconnect", "server=%s attempt %d failed: %v", m.cfg.Name, attempt+1, err)
+		}
+		// Fast backoff exhausted (~37s). A server that is merely slow to come
+		// back (npx cold download, heavy startup under load, system restart)
+		// must not leave its tools permanently unregistered for the rest of
+		// the session — the old behavior gave up here with MCPStatusFailed and
+		// no recovery path short of restarting ggcode. Enter a slow cooldown
+		// re-probe loop: retry every mcpReconnectCooldown until the server
+		// returns or the watcher is cancelled. Status stays Failed between
+		// probes so the UI still shows the outage; each probe flips it to
+		// Pending so a successful recovery reads correctly.
+		debug.Log("mcp-reconnect", "server=%s all fast retries exhausted, entering cooldown re-probe every %s", m.cfg.Name, mcpReconnectCooldown)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(mcpReconnectCooldown):
+			}
+			if m.attemptReconnect(ctx) {
+				debug.Log("mcp-reconnect", "server=%s recovered via cooldown re-probe", m.cfg.Name)
+				return
 			}
 		}
-		// All retries exhausted
-		debug.Log("mcp-reconnect", "server=%s all reconnect attempts exhausted", m.cfg.Name)
-		m.mu.Lock()
-		m.status = MCPStatusFailed
-		m.lastError = "server crashed and auto-reconnect failed after all retries"
-		m.mu.Unlock()
 	})
+}
+
+// mcpReconnectCooldown is the interval between reconnect probes once the
+// fast exponential backoff (2/5/10/20s) has been exhausted. Slow enough to
+// stay cheap on a genuinely dead server, frequent enough that a server which
+// needed a minute to start is back well within a typical working session.
+const mcpReconnectCooldown = 60 * time.Second
+
+// attemptReconnect performs one reconnect cycle: mark disconnected, drop
+// stale tool registrations, reconnect, and re-register tools on success.
+// Returns true when the server is back and its tools are available again.
+func (m *MCPPlugin) attemptReconnect(ctx context.Context) bool {
+	// Mark as disconnected
+	m.mu.Lock()
+	oldAdapter := m.adapter
+	m.adapter = nil
+	m.connected = false
+	m.client = nil
+	m.status = MCPStatusPending
+	m.mu.Unlock()
+	// Unregister old tools so stale definitions don't linger
+	if oldAdapter != nil && m.registry != nil {
+		for _, tn := range oldAdapter.ToolNames() {
+			m.registry.Unregister(tn)
+		}
+	}
+	// Attempt reconnection
+	adapter, err := m.Connect(ctx)
+	if err == nil && adapter != nil {
+		debug.Log("mcp-reconnect", "server=%s reconnected successfully", m.cfg.Name)
+		// Re-register tools if we have a registry reference
+		if m.registry != nil {
+			if regErr := adapter.RegisterTools(m.registry); regErr != nil {
+				debug.Log("mcp-reconnect", "server=%s tool re-registration failed: %v", m.cfg.Name, regErr)
+			}
+		}
+		return true
+	}
+	m.mu.Lock()
+	m.status = MCPStatusFailed
+	m.lastError = normalizeMCPError(err)
+	m.mu.Unlock()
+	debug.Log("mcp-reconnect", "server=%s reconnect attempt failed: %v", m.cfg.Name, err)
+	return false
 }
 
 func discoverCapabilities(ctx context.Context, client *mcp.Client) ([]mcp.ToolDefinition, []string, []string, error) {
