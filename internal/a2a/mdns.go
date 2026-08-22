@@ -239,11 +239,20 @@ func sanitizeMDNSName(name string) string {
 	// invalid broadcast name.
 	name = strings.ReplaceAll(name, "/", "-")
 	name = strings.ReplaceAll(name, "\\", "-")
-	// #934: rune-safe truncation - byte slicing at 63 cut CJK names
-	// mid-rune, producing invalid-UTF-8 mDNS names that strict resolvers
-	// (Avahi/Bonjour) reject, breaking LAN discovery for i18n users.
-	if utf8.RuneCountInString(name) > 63 {
-		name = string([]rune(name)[:63])
+	// #934: the mDNS label budget is 63 BYTES (RFC wire format), but
+	// truncation must land on rune boundaries - byte slicing cut CJK names
+	// mid-rune, producing invalid UTF-8 that strict resolvers (Avahi/
+	// Bonjour) reject. Take the longest rune-aligned prefix that fits the
+	// byte budget.
+	if len(name) > 63 {
+		var b strings.Builder
+		for _, r := range name {
+			if b.Len()+utf8.RuneLen(r) > 63 {
+				break
+			}
+			b.WriteRune(r)
+		}
+		name = b.String()
 	}
 	return name
 }

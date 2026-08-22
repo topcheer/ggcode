@@ -3,7 +3,9 @@ package a2a
 import (
 	"net"
 	"os"
+	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // --- PreferredIP ---
@@ -103,6 +105,22 @@ func TestSanitizeMDNSNameMaxLength(t *testing.T) {
 	result := sanitizeMDNSName(long)
 	if len(result) > 63 {
 		t.Errorf("result length %d exceeds 63", len(result))
+	}
+}
+
+// #934: byte-slicing at 63 cut CJK names mid-rune (invalid UTF-8 that
+// strict resolvers reject). Truncation must land on rune boundaries.
+func TestSanitizeMDNSNameCJKRuneBoundary(t *testing.T) {
+	long := strings.Repeat("好", 100) // 100 runes, 300 bytes
+	result := sanitizeMDNSName(long)
+	if len(result) > 63 {
+		t.Errorf("result length %d exceeds 63", len(result))
+	}
+	if !utf8.ValidString(result) {
+		t.Errorf("truncated name is not valid UTF-8: %q", result)
+	}
+	if n := utf8.RuneCountInString(result); n > 63 {
+		t.Errorf("rune count %d exceeds 63", n)
 	}
 }
 
