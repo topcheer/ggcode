@@ -31,7 +31,7 @@ type MCPServerInfo struct {
 
 // loadSessionScopedConfig loads the config matching the active chat session's
 // scope (#248). When a session is bound to a workspace that has its own
-// ggcode.yaml, MCP servers live in that workspace's mcp_servers.yaml — the
+// ggcode.yaml, MCP servers live in that workspace's mcp_servers.yaml - the
 // same file the session's mcpManager reads. Otherwise the global config is
 // used. Without this, Add/Remove/List would touch the global file while the
 // session runs workspace servers, so changes never took effect (and removals
@@ -63,7 +63,7 @@ func loadSessionScopedConfigFor(chat *ChatBridge) (*config.Config, error) {
 func ListMCPServers() ([]MCPServerInfo, error) {
 	// #458: snapshot the bridge ONCE and thread it through both the config
 	// load and the status lookup. The old code read activeChatBridge twice
-	// independently — a switchWorkspace in between spliced OLD workspace
+	// independently - a switchWorkspace in between spliced OLD workspace
 	// yaml config with NEW workspace connection state.
 	globalMu.RLock()
 	chatSnap := activeChatBridge
@@ -164,18 +164,23 @@ func ForceReauthMCPServer(name string) bool {
 // mcp_servers.yaml (interactive_core.go: NewMCPHotReload(config.ConfigDir())),
 // so workspace-scoped writes from AddMCPServer are invisible to it (#498).
 // Without this explicit reload, an edited or newly added workspace server
-// never takes effect in the running session — and even the UI's Reconnect
+// never takes effect in the running session - and even the UI's Reconnect
 // button cannot fix it, because MCPPlugin.Connect short-circuits on the
 // cached adapter while the plugin's own cfg is stale. Reload rebuilds
-// changed/new plugins from the fresh list, computing the same merged server
-// set a watcher-triggered reload would (MergeStartupServers is idempotent
-// for already-persisted Claude-migrated servers).
+// changed/new plugins from the fresh list.
+//
+// NOTE: no MergeStartupServers here (or in the watcher's checkAndReload).
+// The old claim that it is "idempotent for already-persisted Claude-migrated
+// servers" only held while the entry stayed in the ggcode list - after a
+// DELETE the same-name entry from a Claude source (.mcp.json /
+// ~/.claude.json) was re-merged on every reload, so an unload never stuck.
+// Startup migration (interactive_core.go) remains the single merge point;
+// callers pass the full persisted list, so nothing is lost by skipping it.
 func reloadSessionMCPServers(chat *ChatBridge, servers []config.MCPServerConfig) {
 	if chat == nil || chat.mcpManager == nil {
 		return
 	}
-	merged, _ := mcp.MergeStartupServers(chat.WorkingDir(), servers)
-	chat.mcpManager.Reload(context.Background(), merged)
+	chat.mcpManager.Reload(context.Background(), servers)
 }
 
 // AddMCPServer adds a new MCP server configuration.
@@ -270,7 +275,7 @@ func AddMCPServer(values map[string]string) error {
 	if err := cfg.SaveMCPServers(); err != nil {
 		return err
 	}
-	// #498: propagate immediately — for workspace-scoped sessions the global-
+	// #498: propagate immediately - for workspace-scoped sessions the global-
 	// file watcher never sees this write, so without an explicit Reload the
 	// running session keeps the old connection (or never learns about a new
 	// server) until restart. Symmetric with RemoveMCPServer's #408 Disconnect.
@@ -280,9 +285,9 @@ func AddMCPServer(values map[string]string) error {
 
 // RemoveMCPServer removes an MCP server by name from the active session's
 // scope: the workspace mcp_servers.yaml when bound to a workspace (else
-// global), AND — when the name is provided by a Claude migration file
+// global), AND - when the name is provided by a Claude migration file
 // (.mcp.json / ~/.claude.json / ~/.claude/mcp.json) instead of or in addition
-// to the yaml — that origin file too (#606). Without the origin cleanup the
+// to the yaml - that origin file too (#606). Without the origin cleanup the
 // remove path had two dead-ends: merged-only servers failed with "not found"
 // even though their tools were live, and removing a yaml copy was resurrected
 // by the merge that reloadSessionMCPServers (and every startup) re-runs.
@@ -317,7 +322,7 @@ func RemoveMCPServer(name string) error {
 	}
 	// Symmetric with SetMCPServerEnabled(false): disconnect immediately
 	// instead of waiting for the ~2s hot-reload poll (which may also miss
-	// workspace-scoped yaml changes) — without this the removed server's
+	// workspace-scoped yaml changes) - without this the removed server's
 	// tools stayed callable during the window (#408). Uses chatSnap to
 	// ensure Disconnect targets the same session whose config we just saved.
 	// The reload then pushes the freshly-persisted state through the same
@@ -349,7 +354,7 @@ func effectiveSessionServers(chat *ChatBridge, cfg *config.Config) []config.MCPS
 
 // removeMigratedMCPServer deletes the named server from every Claude
 // migration file that provides it (.mcp.json / ~/.claude.json /
-// ~/.claude/mcp.json — the same sources mcp.MergeStartupServers reads, kept
+// ~/.claude/mcp.json - the same sources mcp.MergeStartupServers reads, kept
 // in sync via claudeMigrationPaths). Other top-level keys of the file are
 // preserved byte-exactly via json.RawMessage round-tripping. Returns true
 // when at least one file was rewritten.
@@ -477,7 +482,7 @@ func parseShellArgs(s string) ([]string, error) {
 			inQuote = ch
 			seenChar = true
 		case ' ', '\t', '\n', '\r':
-			// Explicit empty args ("") are meaningful CLI values — the old
+			// Explicit empty args ("") are meaningful CLI values - the old
 			// current.Len()>0 guard dropped them, shifting every later arg
 			// (#203).
 			if seenChar {

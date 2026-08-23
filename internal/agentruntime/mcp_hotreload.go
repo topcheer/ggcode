@@ -11,7 +11,6 @@ import (
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
-	"github.com/topcheer/ggcode/internal/mcp"
 	"github.com/topcheer/ggcode/internal/plugin"
 	"github.com/topcheer/ggcode/internal/safego"
 )
@@ -148,9 +147,17 @@ func (w *MCPHotReload) checkAndReload(ctx context.Context) {
 	// Scope-resolved list (#497): workspace sessions reload from their own
 	// mcp_servers.yaml; global sessions from the global file — matching the
 	// manager's initial set computation instead of clobbering it.
+	//
+	// NOTE: deliberately NO MergeStartupServers here. The startup merge
+	// (interactive_core.go) is a one-time migration of Claude sources
+	// (.mcp.json / ~/.claude.json). Re-running it on every reload turned
+	// those sources into "forced-present" entries: deleting a server that
+	// also exists in a Claude source was resurrected on the next poll
+	// (mergeServers only dedupes entries still present in the ggcode list;\t// a deleted name is re-added from the source). Deletion — via config
+	// tool or manual file edit — must take effect; .mcp.json additions
+	// still land on next startup's migration.
 	servers := w.resolveScopeMCPServers()
-	mergedServers, _ := mcp.MergeStartupServers(w.workingDir, servers)
-	w.manager.Reload(ctx, mergedServers)
+	w.manager.Reload(ctx, servers)
 }
 
 // watchedPaths returns every path currently under watch: the global file
