@@ -753,10 +753,21 @@ type streamingProgressWriter struct {
 	buf      *bytes.Buffer
 	extra    io.Writer
 	progress ToolProgressFunc
-	lines    []string // rolling buffer of recent lines
+	// pending accumulates raw chunks since the last emission. ANSI
+	// stripping and line splitting are deferred to emit time: they used
+	// to run per chunk at PIPE-READ rate, so high-volume commands (builds,
+	// installs) burned CPU in the pipe-pump goroutines and the resulting
+	// GC pressure stalled the TUI render thread (typing/spinner jank).
+	pending  []byte
+	lastBody string // most recent emitted tail (flush re-emits)
 	lastEmit time.Time
 	mu       sync.Mutex
 }
+
+// maxPendingProgress bounds the raw chunk backlog between throttled
+// emissions. Only the tail is shown, so older bytes are droppable; a
+// runaway command must not grow memory unbounded.
+const maxPendingProgress = 16 * 1024
 
 func newStreamingProgressWriter(buf *bytes.Buffer, extra io.Writer, progress ToolProgressFunc) *streamingProgressWriter {
 	return &streamingProgressWriter{
@@ -775,30 +786,43 @@ func (w *streamingProgressWriter) Write(p []byte) (int, error) {
 		w.extra.Write(p)
 	}
 
-	// Track lines for progress streaming.
 	w.mu.Lock()
-	text := util.StripANSI(string(p))
-	for _, line := range strings.Split(text, "\n") {
-		if line == "" {
-			continue
-		}
-		w.lines = append(w.lines, line)
-		if len(w.lines) > 20 {
-			w.lines = w.lines[len(w.lines)-20:]
-		}
+	w.pending = append(w.pending, p...)
+	if len(w.pending) > maxPendingProgress {
+		// Keep only the tail.
+		w.pending = w.pending[len(w.pending)-maxPendingProgress:]
 	}
 
-	// Throttle progress emission to 300ms.
-	if time.Since(w.lastEmit) < 300*time.Millisecond {
+	// Throttle progress emission to 300ms. The FIRST write emits
+	// immediately (lastEmit zero) so output starts scrolling at once;
+	// within a window, chunks just accumulate into pending.
+	if !w.lastEmit.IsZero() && time.Since(w.lastEmit) < 300*time.Millisecond {
 		w.mu.Unlock()
 		return n, nil
 	}
 	w.lastEmit = time.Now()
+	body := w.emitTailLocked()
+	w.lastBody = body
+	w.mu.Unlock()
 
-	// Emit last 5 lines.
-	tail := w.lines
-	if len(tail) > 5 {
-		tail = tail[len(tail)-5:]
+	w.progress("", "run_command", body)
+	return n, nil
+}
+
+// emitTailLocked drains pending into the "[...] last-5-lines" body
+// (must hold w.mu). Processing happens here, not per chunk.
+func (w *streamingProgressWriter) emitTailLocked() string {
+	text := util.StripANSI(string(w.pending))
+	w.pending = w.pending[:0]
+	var tail []string
+	for _, line := range strings.Split(text, "\n") {
+		if line == "" {
+			continue
+		}
+		tail = append(tail, line)
+		if len(tail) > 5 {
+			tail = tail[len(tail)-5:]
+		}
 	}
 	var sb strings.Builder
 	sb.WriteString("[...] ")
@@ -808,10 +832,7 @@ func (w *streamingProgressWriter) Write(p []byte) (int, error) {
 		}
 		sb.WriteString(line)
 	}
-	w.mu.Unlock()
-
-	w.progress("", "run_command", sb.String())
-	return n, nil
+	return sb.String()
 }
 
 // flush forces one final progress emission of the tail, bypassing the
@@ -820,22 +841,18 @@ func (w *streamingProgressWriter) Write(p []byte) (int, error) {
 func (w *streamingProgressWriter) flush() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if len(w.lines) == 0 {
+	if len(w.pending) == 0 {
+		// Unconditional tail emission (legacy semantics): with nothing
+		// new since the last emit, re-emit the last body so callers that
+		// flush after command exit always get a final event.
+		if w.lastBody != "" {
+			w.progress("", "run_command", w.lastBody)
+		}
 		return
 	}
-	tail := w.lines
-	if len(tail) > 5 {
-		tail = tail[len(tail)-5:]
-	}
-	var sb strings.Builder
-	sb.WriteString("[...] ")
-	for i, line := range tail {
-		if i > 0 {
-			sb.WriteString("\n")
-		}
-		sb.WriteString(line)
-	}
-	w.progress("", "run_command", sb.String())
+	body := w.emitTailLocked()
+	w.lastBody = body
+	w.progress("", "run_command", body)
 }
 
 // commandEnvOverrides are environment variables injected into every command

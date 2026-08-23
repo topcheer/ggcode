@@ -151,13 +151,60 @@ func (r *REPL) RegisterCallbacks() {
 			r.sendProgramMsgs(verifyResultMsg{result: result})
 		},
 	)
+	// Coalesce tool-progress sends: latest-wins per toolID, flushed on a
+	// 120ms ticker. Every direct program.Send of toolProgressMsg triggered
+	// a full Bubble Tea Update+View on the main thread; with per-writer
+	// 300ms throttling across stdout/stderr and N parallel tools, the
+	// message rate saturated the render loop during command execution -
+	// typing felt laggy and spinner animation stuttered. Bounding renders
+	// to ~8/sec keeps live output smooth while leaving headroom for input.
+	coalesce := &toolProgressCoalescer{
+		send: r.sendProgramMsgs,
+		next: make(map[string]toolProgressMsg),
+	}
 	r.agent.SetToolProgressCallback(func(toolID, toolName, output string) {
-		r.sendProgramMsgs(toolProgressMsg{
-			toolID:   toolID,
-			toolName: toolName,
-			output:   output,
-		})
+		coalesce.stage(toolID, toolName, output)
 	})
+	safego.Go("tui.toolProgressCoalescer", coalesce.run)
+}
+
+// toolProgressCoalescer bounds main-thread renders from streaming tools.
+type toolProgressCoalescer struct {
+	mu   sync.Mutex
+	send func(msgs ...tea.Msg)
+	next map[string]toolProgressMsg
+}
+
+func (c *toolProgressCoalescer) stage(toolID, toolName, output string) {
+	c.mu.Lock()
+	c.next[toolID] = toolProgressMsg{
+		toolID:   toolID,
+		toolName: toolName,
+		output:   output,
+	}
+	c.mu.Unlock()
+}
+
+// run drains staged updates to the TUI at a fixed 120ms cadence. Runs for
+// the REPL's lifetime; sends after the program quits are no-ops
+// (sendProgramMsgs guards a nil program).
+func (c *toolProgressCoalescer) run() {
+	ticker := time.NewTicker(120 * time.Millisecond)
+	defer ticker.Stop()
+	for range ticker.C {
+		c.mu.Lock()
+		if len(c.next) == 0 {
+			c.mu.Unlock()
+			continue
+		}
+		msgs := make([]tea.Msg, 0, len(c.next))
+		for _, m := range c.next {
+			msgs = append(msgs, m)
+		}
+		c.next = make(map[string]toolProgressMsg)
+		c.mu.Unlock()
+		c.send(msgs...)
+	}
 }
 
 func (r *REPL) SetLanChatHub(hub *lanchat.Hub) {
