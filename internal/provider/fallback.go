@@ -17,6 +17,11 @@ const (
 	FailoverTriggerQuota    FailoverTrigger = "quota_exhausted"
 	FailoverTriggerAuth     FailoverTrigger = "auth_error"
 	FailoverTriggerRepeated FailoverTrigger = "repeated_failures"
+	// FailoverTriggerBack fires when the FALLBACK (active side) failed hard
+	// and the wrapper switched back to the primary. Without this, a fallback
+	// hitting its own quota/auth limit left the app permanently unusable —
+	// every call errored with no recovery path short of manual /model.
+	FailoverTriggerBack FailoverTrigger = "fallback_failed_back_to_primary"
 )
 
 // failoverThreshold is the number of consecutive transient failures on the
@@ -116,7 +121,14 @@ func shouldFailover(err error) (bool, FailoverTrigger) {
 
 // maybeFailover checks the error and decides whether to activate failover.
 // Returns the error to return to the caller (nil if we should retry via fallback)
-// and true if a retry on the fallback is possible.
+// and true if a retry on the other provider is possible.
+//
+// Bidirectional (#936): when the FALLBACK is the active side and it fails
+// hard (quota/auth/sustained transient), the wrapper switches BACK to the
+// primary and grants a retry there. The sides ping-pong across calls — each
+// individual call still bounds itself to one switch (active attempt + one
+// retry on the other side), so a both-down outage costs two failed requests
+// per call rather than an infinite in-call loop.
 //
 // Must NOT be called under f.mu — this function acquires the write lock.
 func (f *FallbackProvider) maybeFailover(err error, failed Provider) (error, bool) {
@@ -162,7 +174,7 @@ func (f *FallbackProvider) maybeFailover(err error, failed Provider) (error, boo
 		trigger = FailoverTriggerRepeated
 	}
 
-	// Activate failover.
+	// Activate failover (or switch back, #936).
 	f.mu.Lock()
 	alreadyFailed := f.failedOver.Load()
 	if !alreadyFailed {
@@ -182,9 +194,27 @@ func (f *FallbackProvider) maybeFailover(err error, failed Provider) (error, boo
 
 	// Already failed over. If the caller's failed attempt was against the
 	// PRIMARY (it read active before failover activated), it has never
-	// touched the fallback and still deserves one retry (fix #164). Only
-	// deny the retry when the failed call was already on the fallback.
+	// touched the fallback and still deserves one retry (fix #164).
 	if failed == f.primary {
+		return err, true
+	}
+	// The failed call was on the FALLBACK and it failed hard. Switch back to
+	// the primary (#936): a fallback that exhausted its own quota/auth must
+	// not strand the session — the primary may have recovered since the
+	// original failover (quotas reset, auth refreshed, transient outage
+	// over). The caller retries on the primary; if it still fails, the next
+	// call ping-pongs again — availability over stickiness.
+	if failed == f.fallback {
+		f.mu.Lock()
+		f.failedOver.Store(false)
+		debug.Log("provider", "failover back to primary: %s (trigger=%s, error=%v)", f.description, trigger, err)
+		if f.notify != nil {
+			notify := f.notify
+			f.mu.Unlock()
+			notify(FailoverTriggerBack, err)
+		} else {
+			f.mu.Unlock()
+		}
 		return err, true
 	}
 	return err, false
@@ -195,6 +225,15 @@ func (f *FallbackProvider) Name() string {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	return f.activeLocked().Name()
+}
+
+// otherThan returns the provider that is NOT the given one (must hold no
+// lock; both fields are immutable after construction).
+func (f *FallbackProvider) otherThan(p Provider) Provider {
+	if p == f.fallback {
+		return f.primary
+	}
+	return f.fallback
 }
 
 // Chat sends a non-streaming request, failing over on permanent errors.
@@ -215,13 +254,12 @@ func (f *FallbackProvider) Chat(ctx context.Context, messages []Message, tools [
 		return nil, err
 	}
 
-	// Retry on the fallback.
-	f.mu.RLock()
-	fallback := f.fallback
-	f.mu.RUnlock()
+	// Retry on the other provider (fallback after a primary failure, or back
+	// on the primary after the fallback failed — #936).
+	other := f.otherThan(active)
 
-	debug.Log("provider", "Chat failover retry on %s", fallback.Name())
-	resp2, err2 := fallback.Chat(ctx, messages, tools)
+	debug.Log("provider", "Chat failover retry on %s", other.Name())
+	resp2, err2 := other.Chat(ctx, messages, tools)
 	if err2 == nil {
 		f.consecutiveFail.Store(0)
 		return resp2, nil
@@ -261,13 +299,12 @@ func (f *FallbackProvider) ChatStream(ctx context.Context, messages []Message, t
 		return nil, err
 	}
 
-	// Retry on the fallback.
-	f.mu.RLock()
-	fallback := f.fallback
-	f.mu.RUnlock()
+	// Retry on the other provider (#936: may be back on the primary when
+	// the fallback was the side that failed).
+	other := f.otherThan(active)
 
-	debug.Log("provider", "ChatStream failover retry on %s", fallback.Name())
-	stream2, err2 := fallback.ChatStream(ctx, messages, tools)
+	debug.Log("provider", "ChatStream failover retry on %s", other.Name())
+	stream2, err2 := other.ChatStream(ctx, messages, tools)
 	if err2 == nil {
 		f.consecutiveFail.Store(0)
 		return stream2, nil
@@ -332,11 +369,9 @@ func (f *FallbackProvider) watchStreamForFailover(ctx context.Context, failed Pr
 				// `&& !f.failedOver.Load()` gate made this branch dead code —
 				// canRetry=true always co-occurs with failedOver=true (#390).
 				if canRetry {
-					f.mu.RLock()
-					fallback := f.fallback
-					f.mu.RUnlock()
-					debug.Log("provider", "ChatStream async-error failover on %s", fallback.Name())
-					stream2, err2 := fallback.ChatStream(ctx, messages, tools)
+					other := f.otherThan(failed)
+					debug.Log("provider", "ChatStream async-error failover on %s", other.Name())
+					stream2, err2 := other.ChatStream(ctx, messages, tools)
 					if err2 == nil {
 						// Drain the failed stream and relay the fallback's.
 						// #602(R2): the drain must be cancellable too — a
@@ -357,7 +392,7 @@ func (f *FallbackProvider) watchStreamForFailover(ctx context.Context, failed Pr
 						}()
 						if !send(StreamEvent{
 							Type: StreamEventSystem,
-							Text: fmt.Sprintf("primary provider failed (%v); failing over to %s", ev.Error, fallback.Name()),
+							Text: fmt.Sprintf("active provider failed (%v); failing over to %s", ev.Error, other.Name()),
 						}) {
 							return
 						}

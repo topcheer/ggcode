@@ -253,9 +253,49 @@ func TestFallback_StalePrimaryRetriesOnFallbackAfterConcurrentFailover(t *testin
 	}
 
 	// Conversely, a request that failed against the fallback itself (read
-	// active after failover) must NOT be granted another retry.
+	// active after failover) now switches BACK to the primary (#936): a
+	// fallback hitting its own quota/auth limit must not strand the session.
+	// The old single-direction semantics denied this retry, leaving the app
+	// unusable once the fallback's quota ran out.
 	_, canRetry = fp.maybeFailover(err, fallback)
-	if canRetry {
-		t.Fatal("failed call against fallback must not be retried again")
+	if !canRetry {
+		t.Fatal("failed call against fallback must switch back to primary and grant a retry")
+	}
+	if fp.HasFailedOver() {
+		t.Fatal("failedOver must be cleared when switching back to the primary")
+	}
+
+	// The ping-pong is bounded per call, not unbounded: after switching back
+	// to primary, a subsequent hard primary failure fails over to fallback
+	// again — but each individual Chat call performs at most one switch.
+	_, canRetry = fp.maybeFailover(err, primary)
+	if !canRetry {
+		t.Fatal("primary failure after switch-back must fail over to fallback again")
+	}
+	if !fp.HasFailedOver() {
+		t.Fatal("failedOver must be re-set when the primary fails again")
+	}
+}
+
+// TestFallback_FallbackQuotaFailsBackToPrimary verifies the full Chat-path
+// behavior (#936): once failed over, a fallback quota failure transparently
+// retries on the primary instead of returning an error.
+func TestFallback_FallbackQuotaFailsBackToPrimary(t *testing.T) {
+	primary := &mockProvider{name: "primary"}
+	fallback := &mockProvider{name: "fallback", chatErr: errors.New("insufficient_quota: quota exceeded")}
+	fp := NewFallbackProvider(primary, fallback, "primary -> fallback")
+
+	// Simulate an earlier failover: active side is the fallback.
+	fp.failedOver.Store(true)
+
+	resp, err := fp.Chat(context.Background(), nil, nil)
+	if err != nil {
+		t.Fatalf("fallback quota failure must retry on primary, got error: %v", err)
+	}
+	if resp == nil {
+		t.Fatal("expected a response from the primary retry")
+	}
+	if fp.HasFailedOver() {
+		t.Fatal("failover state must be back on the primary after the switch")
 	}
 }

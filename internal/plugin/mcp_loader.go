@@ -74,6 +74,9 @@ type MCPPlugin struct {
 	// reconnectCancel stops the auto-reconnect watcher goroutine.
 	reconnectCancel context.CancelFunc
 
+	// healthCancel stops the WS health-probe goroutine.
+	healthCancel context.CancelFunc
+
 	// registry holds a reference to the tool registry for re-registering
 	// tools after auto-reconnect.
 	registry *tool.Registry
@@ -109,6 +112,82 @@ func (m *MCPPlugin) SetSamplingHandler(h mcp.SamplingHandler) {
 // Must be called before Connect.
 func (m *MCPPlugin) SetElicitationHandler(h mcp.ElicitationHandler) {
 	m.elicitationHandler = h
+}
+
+// startWSHealthProbe launches a periodic health probe for WebSocket MCP
+// servers. Unlike stdio, WS has no process-exit signal, and unlike HTTP,
+// the connection is stateful — a dropped TCP connection leaves the tools
+// registered but every call failing with a websocket write error until the
+// session restarts. The probe sends a lightweight ListTools request every
+// interval; a connection-level failure triggers the standard reconnect
+// path (attemptReconnect), which unregisters stale tools and re-registers
+// them once the server is back.
+func (m *MCPPlugin) startWSHealthProbe(client *mcp.Client) {
+	if !strings.EqualFold(strings.TrimSpace(m.cfg.Type), "ws") &&
+		!strings.EqualFold(strings.TrimSpace(m.cfg.Type), "websocket") {
+		return // stdio has the process watcher; http is per-request stateless
+	}
+	// One probe loop per plugin: cancel any previous one (reconnect creates
+	// a new client, and the old probe would otherwise watch a dead client).
+	if m.healthCancel != nil {
+		m.healthCancel()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	m.healthCancel = cancel
+
+	safego.Go("plugin.mcp.wsHealthProbe", func() {
+		ticker := time.NewTicker(wsHealthProbeInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+			// Skip when disconnected — the reconnect watcher owns recovery
+			// in that state; probing would double-reconnect.
+			m.mu.RLock()
+			connected := m.connected && m.client == client
+			m.mu.RUnlock()
+			if !connected {
+				continue
+			}
+			probeCtx, probeCancel := context.WithTimeout(ctx, 30*time.Second)
+			_, err := client.ListTools(probeCtx)
+			probeCancel()
+			if err == nil {
+				continue
+			}
+			if !isWSConnError(err) {
+				continue // server-level error (e.g. capability gate) — not a transport drop
+			}
+			debug.Log("mcp-ws-health", "server=%s transport dropped (%v), reconnecting", m.cfg.Name, err)
+			m.attemptReconnect(context.Background())
+			// attemptReconnect swapped in a fresh client with its own probe
+			// (startWSHealthProbe runs again from Connect); this loop is done.
+			return
+		}
+	})
+}
+
+// wsHealthProbeInterval is how often the WS health probe pings the server.
+// Long enough to stay idle-cheap, short enough that an unnoticed dead
+// connection doesn't waste many agent calls.
+const wsHealthProbeInterval = 60 * time.Second
+
+// isWSConnError reports whether an error indicates the WebSocket transport
+// itself is broken (as opposed to a server-returned application error).
+func isWSConnError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "websocket") ||
+		strings.Contains(msg, "connection closed") ||
+		strings.Contains(msg, "broken pipe") ||
+		strings.Contains(msg, "connection reset") ||
+		strings.Contains(msg, "use of closed") ||
+		strings.Contains(msg, "eof")
 }
 
 // Connect initializes the MCP server, discovers tools, and returns an adapter.
@@ -182,6 +261,7 @@ func (m *MCPPlugin) Connect(ctx context.Context) (*mcp.Adapter, error) {
 	m.resources = resources
 	m.setupNotificationHandler(client)
 	m.startReconnectWatcher(client)
+	m.startWSHealthProbe(client)
 	return m.adapter, nil
 }
 
@@ -485,6 +565,11 @@ func (m *MCPPlugin) Close() error {
 	if m.reconnectCancel != nil {
 		m.reconnectCancel()
 		m.reconnectCancel = nil
+	}
+	// Stop the WS health probe
+	if m.healthCancel != nil {
+		m.healthCancel()
+		m.healthCancel = nil
 	}
 	m.mu.Lock()
 	if m.client == nil {
