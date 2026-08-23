@@ -15,14 +15,13 @@ import (
 // Regression: deleting an MCP server that also exists in a Claude migration
 // source (.mcp.json) must NOT be resurrected by the hot-reload watcher.
 //
-// The watcher's checkAndReload used to run MergeStartupServers on every
-// reload. mergeServers only dedupes Claude-source entries whose name is
-// still present in the ggcode list; once the user deletes the entry, the
-// same-name .mcp.json server is re-merged on the next poll - the delete
-// never sticks and the process keeps running (user-visible: "MCP 卸载不掉").
-//
-// Fix: checkAndReload feeds the scope-resolved file list to Reload directly;
-// the startup migration in interactive_core.go remains the single merge point.
+// #980 updated the contract: checkAndReload now runs the same tombstone-aware
+// merge the startup path runs (MergeStartupServersWithDeleted), replacing the
+// old yaml-only push. Deletion is expressed the way the panel records it —
+// the yaml entry is removed AND the name is tombstoned in mcp_deleted.yaml.
+// The watcher's merge filters tombstoned names, so the delete sticks even
+// though the .mcp.json source still provides the server (user-visible:
+// "MCP 卸载不掉" stays fixed under the new merge semantics).
 func TestMCPHotReloadDeletedServerNotResurrectedFromClaudeSource(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -52,11 +51,14 @@ func TestMCPHotReloadDeletedServerNotResurrectedFromClaudeSource(t *testing.T) {
 	w.Start(ctx)
 	defer func() { /* goroutine exits with test process */ }()
 
-	// User deletes the server from the persisted file.
+	// User deletes the server the way the panel does (#980/#979 semantics):
+	// yaml entry removed AND tombstone recorded so the watcher's merge will
+	// not re-import it from the Claude source.
 	time.Sleep(20 * time.Millisecond)
 	if err := os.WriteFile(wsPath, []byte("servers: []\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	writeMCPDeleted(t, globalDir, []string{"shared-srv"})
 
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {

@@ -11,6 +11,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/mcp"
 	"github.com/topcheer/ggcode/internal/plugin"
 	"github.com/topcheer/ggcode/internal/safego"
 )
@@ -21,6 +22,7 @@ import (
 // writes (e.g. editors that write via temp file + rename).
 type MCPHotReload struct {
 	mcpPath    string // path to the GLOBAL mcp_servers.yaml (always watched)
+	configDir  string // dir holding mcp_deleted.yaml tombstones (#980)
 	workingDir string // for MergeStartupServers
 	manager    *plugin.MCPManager
 	// watched holds per-path watch state (#521): every watched file is
@@ -43,6 +45,7 @@ type watchState struct {
 func NewMCPHotReload(configDir, workingDir string, mgr *plugin.MCPManager) *MCPHotReload {
 	return &MCPHotReload{
 		mcpPath:    config.MCPServersPath(configDir),
+		configDir:  configDir,
 		workingDir: workingDir,
 		manager:    mgr,
 		watched:    make(map[string]*watchState),
@@ -148,16 +151,23 @@ func (w *MCPHotReload) checkAndReload(ctx context.Context) {
 	// mcp_servers.yaml; global sessions from the global file — matching the
 	// manager's initial set computation instead of clobbering it.
 	//
-	// NOTE: deliberately NO MergeStartupServers here. The startup merge
-	// (interactive_core.go) is a one-time migration of Claude sources
-	// (.mcp.json / ~/.claude.json). Re-running it on every reload turned
-	// those sources into "forced-present" entries: deleting a server that
-	// also exists in a Claude source was resurrected on the next poll
-	// (mergeServers only dedupes entries still present in the ggcode list;\t// a deleted name is re-added from the source). Deletion — via config
-	// tool or manual file edit — must take effect; .mcp.json additions
-	// still land on next startup's migration.
+	// #980: the reload input is the SAME merged set the runtime runs at
+	// startup (yaml ∪ project .mcp.json ∪ ~/.claude.json, via
+	// MergeStartupServersWithDeleted) — the identical contract as
+	// wailskit's reloadSessionMCPServers. The watcher used to push the
+	// yaml-only scope list, so any panel write to the yaml re-kicked every
+	// Claude-migrated server from the running session within one poll (~2s).
+	// The old "no merge here, or deletes resurrect" premise is replaced by
+	// deletion tombstones: panel Remove records the name in mcp_deleted.yaml
+	// and the merge filters tombstoned names, so user deletions still stick
+	// while .mcp.json additions land without waiting for a restart. Manual
+	// yaml-only deletes of a .mcp.json-provided server now mirror startup
+	// migration semantics (re-imported) — deletion is authoritative only via
+	// the panel / tombstone path.
 	servers := w.resolveScopeMCPServers()
-	w.manager.Reload(ctx, servers)
+	deleted := config.LoadMCPDeleted(w.configDir)
+	merged, _ := mcp.MergeStartupServersWithDeleted(w.workingDir, servers, deleted)
+	w.manager.Reload(ctx, merged)
 }
 
 // watchedPaths returns every path currently under watch: the global file
