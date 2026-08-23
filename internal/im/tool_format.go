@@ -29,7 +29,7 @@ func formatToolCallText(tc *ToolCallInfo) string {
 		if cmd == "" {
 			cmd = tc.Detail
 		}
-		return fmt.Sprintf("⚡ %s:\n```\n%s\n```", imLabel(lang, "run_command"), cmd)
+		return fmt.Sprintf("⚡ %s:\n%s", imLabel(lang, "run_command"), imCodeBlock(cmd))
 	case "read_file":
 		path := extractFilePathFromArgs(args)
 		if path == "" {
@@ -273,6 +273,9 @@ func formatToolCallText(tc *ToolCallInfo) string {
 		if task == "" {
 			task = tc.Detail
 		}
+		if task != "" {
+			return fmt.Sprintf("🚀 %s: %s", imLabel(lang, "spawn_agent"), truncateRunes(compactSingleLine(task), 60, "..."))
+		}
 		return fmt.Sprintf("🚀 %s", imLabel(lang, "spawn_agent"))
 	case "wait_agent":
 		return fmt.Sprintf("⏳ %s", imLabel(lang, "wait_agent"))
@@ -382,9 +385,9 @@ func formatToolResultText(tr *ToolResultInfo) string {
 	if output != "" {
 		if tr.CallNotified {
 			// Only show the result output, no tool name header
-			return fmt.Sprintf("```\n%s\n```", output)
+			return imCodeBlock(output)
 		}
-		return fmt.Sprintf("🔧 %s\n```\n%s\n```", pretty, output)
+		return fmt.Sprintf("🔧 %s\n%s", pretty, imCodeBlock(output))
 	}
 	return fmt.Sprintf("🔧 %s", pretty)
 }
@@ -624,14 +627,17 @@ func formatSpecialIMToolResult(tr *ToolResultInfo) (bool, string) {
 		if tr.IsError {
 			return true, formatIMErrorResult(tr)
 		}
+		// LSP tools → hidden (result is structured data consumed by LLM).
+		// Must be checked BEFORE the MCP heuristic below: every lsp_* tool
+		// name contains "_" and would otherwise be captured as an MCP tool,
+		// flooding IM with one "🔧 Lsp X(...)" message per call (#971).
+		if strings.HasPrefix(tr.ToolName, "lsp_") {
+			return true, ""
+		}
 		// Check for MCP-style tool names (contain underscores or dots)
 		if strings.Contains(tr.ToolName, "_") || strings.Contains(tr.ToolName, ".") {
 			return true, formatIMMCPToolResult(tr)
 		}
-	}
-	// LSP tools → hidden (result is structured data consumed by LLM)
-	if strings.HasPrefix(tr.ToolName, "lsp_") {
-		return true, ""
 	}
 	return false, ""
 }
@@ -666,7 +672,7 @@ func defaultOutboundText(event OutboundEvent) string {
 		if event.Approval == nil {
 			return ""
 		}
-		return fmt.Sprintf("[approval] %s\n%s", event.Approval.ToolName, event.Approval.Input)
+		return fmt.Sprintf("[approval] %s\n%s", event.Approval.ToolName, redactResult(event.Approval.Input))
 	case OutboundEventApprovalResult:
 		if event.Result == nil {
 			return ""

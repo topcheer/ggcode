@@ -157,10 +157,10 @@ func TestTGOutboundText(t *testing.T) {
 		{"tool_result_empty_with_cmd", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "bash", Args: `{"command":"echo ok"}`, Result: ""}}, "✅\n```\necho ok\n```"},
 		{"tool_result_listdir", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "list_directory", Args: `{"path":"src"}`, Result: "main.go\ntypes.go"}}, "📂 src (2 items)"},
 		{"tool_result_listdir_empty", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "list_directory", Args: `{"path":"empty"}`, Result: ""}}, "📂 empty (0 items)"},
-		{"tool_result_glob", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "glob", Args: `{"pattern":"**/*.go"}`, Result: "main.go\ntypes.go\nutils.go"}}, "🔍 `**/*.go` — 3 matches"},
-		{"tool_result_glob_empty", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "glob", Args: `{"pattern":"*.xyz"}`, Result: ""}}, "🔍 `*.xyz` — 0 matches"},
-		{"tool_result_search", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "search_files", Args: `{"pattern":"TODO"}`, Result: "main.go:1:TODO fix\nutils.go:5:TODO refactor"}}, "🔍 `TODO` — 2 matches"},
-		{"tool_result_search_empty", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "search_files", Args: `{"pattern":"NONEXIST"}`, Result: ""}}, "🔍 `NONEXIST` — 0 matches"},
+		{"tool_result_glob", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "glob", Args: `{"pattern":"**/*.go"}`, Result: "main.go\ntypes.go\nutils.go"}}, "🔍 `**/*.go` — 3 处匹配"},
+		{"tool_result_glob_empty", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "glob", Args: `{"pattern":"*.xyz"}`, Result: ""}}, "🔍 `*.xyz` — 0 处匹配"},
+		{"tool_result_search", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "search_files", Args: `{"pattern":"TODO"}`, Result: "main.go:1:TODO fix\nutils.go:5:TODO refactor"}}, "🔍 `TODO` — 2 处匹配"},
+		{"tool_result_search_empty", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "search_files", Args: `{"pattern":"NONEXIST"}`, Result: ""}}, "🔍 `NONEXIST` — 0 处匹配"},
 		{"unknown", OutboundEvent{Kind: "unknown"}, ""},
 	}
 	for _, tc := range tests {
