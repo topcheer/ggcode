@@ -4543,6 +4543,15 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 				thinkingAcc.onSignature(event.ThinkingSignature)
 			}
 		case provider.StreamEventToolCallChunk:
+			// #937: a tool-call delta is generated output like any text/reasoning
+			// delta. Pure tool turns (no text, no reasoning - the common case in
+			// agentic loops) must count toward TTFT, otherwise they record 0 and
+			// skew per-turn and digest averages; "0" also became ambiguous
+			// (no-output vs tool-turn).
+			if !hasFirstToken {
+				firstTokenTime = time.Now()
+				hasFirstToken = true
+			}
 			onEvent(event)
 		case provider.StreamEventToolCallDone:
 			// Close thinking window if open
