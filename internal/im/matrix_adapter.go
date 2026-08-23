@@ -509,16 +509,32 @@ func (a *matrixAdapter) checkIsDMViaAPI(ctx context.Context, roomID string) bool
 	if a.client == nil {
 		return false
 	}
+	// Authoritative source: m.direct account data (same semantics as
+	// fetchDMRooms). A room marked there IS a DM regardless of membership.
+	var dmMap map[string][]string
+	if err := a.client.GetAccountData(ctx, "m.direct", &dmMap); err == nil {
+		for _, rooms := range dmMap {
+			for _, rid := range rooms {
+				if rid == roomID {
+					debug.Log("matrix", "adapter=%s room=%s is DM via m.direct account data", a.name, roomID)
+					return true
+				}
+			}
+		}
+	} else {
+		debug.Log("matrix", "adapter=%s m.direct lookup room=%s error: %v", a.name, roomID, err)
+	}
+	// Heuristic fallback: exactly 2 joined members. Deliberately NOT cached -
+	// a 2-member room may be a small group rather than a DM, and permanently
+	// caching it as DM would bypass the mention gate irrevocably and could be
+	// induced by anyone inviting the bot into a 2-person room (issue #961).
 	members, err := a.client.JoinedMembers(ctx, id.RoomID(roomID))
 	if err != nil {
 		debug.Log("matrix", "adapter=%s checkIsDMViaAPI room=%s error: %v", a.name, roomID, err)
 		return false
 	}
 	if len(members.Joined) == 2 {
-		a.mu.Lock()
-		a.dmRooms[roomID] = true
-		a.mu.Unlock()
-		debug.Log("matrix", "adapter=%s room=%s detected as DM via API (2 members)", a.name, roomID)
+		debug.Log("matrix", "adapter=%s room=%s looks like DM (2 members, heuristic, not cached)", a.name, roomID)
 		return true
 	}
 	debug.Log("matrix", "adapter=%s room=%s API: %d members", a.name, roomID, len(members.Joined))

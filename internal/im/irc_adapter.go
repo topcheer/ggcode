@@ -60,6 +60,12 @@ type ircAdapter struct {
 	conn      net.Conn
 	connected bool
 	closed    bool
+
+	// writeMu serializes raw writes to conn. a.mu (RLock) does not serialize
+	// concurrent writers, and three goroutines (read loop, keepalive, send path)
+	// can call sendRaw concurrently - interleaved partial writes produce
+	// malformed IRC lines and server disconnects (issue #960).
+	writeMu sync.Mutex
 }
 
 func newIRCAdapter(name string, _ config.IMConfig, adapterCfg config.IMAdapterConfig, mgr *Manager) (*ircAdapter, error) {
@@ -445,21 +451,23 @@ func (a *ircAdapter) handlePRIVMSG(ctx context.Context, msg *ircMessage) {
 		channelID = senderNick
 	}
 
-	// Ignore messages from ourselves
+	// Ignore messages from ourselves (IRC nicks are case-insensitive, RFC 2812)
 	a.mu.RLock()
 	currentNick := a.nick
 	a.mu.RUnlock()
-	if senderNick == currentNick {
+	if strings.EqualFold(senderNick, currentNick) {
 		return
 	}
 
-	// Mention gating for channels (not DMs)
+	// Mention gating for channels (not DMs).
+	// IRC nick comparison is case-insensitive per RFC 2812 casemapping,
+	// so mention matching and self-echo filtering must be too (issue #960).
 	if !isDM {
 		// Check if we were mentioned
-		if !strings.Contains(text, currentNick) {
+		if !ircTextContainsNick(text, currentNick) {
 			return
 		}
-		text = strings.ReplaceAll(text, currentNick, "")
+		text = ircRemoveNick(text, currentNick)
 		text = strings.Join(strings.Fields(text), " ")
 		if text == "" {
 			return
@@ -551,12 +559,47 @@ func (a *ircAdapter) sendRaw(line string) error {
 	if c == nil {
 		return fmt.Errorf("not connected")
 	}
+	// Serialize writes across the three concurrent writer goroutines
+	// (read loop PONG/NICK/JOIN, keepalive PING, SendMessage PRIVMSG).
+	// RLock does not serialize; without this mutex two writers can interleave
+	// partial writes into malformed IRC lines (issue #960).
+	a.writeMu.Lock()
+	defer a.writeMu.Unlock()
 	_, err := fmt.Fprintf(c, "%s\r\n", line)
 	return err
 }
 
 func splitIRCMessage(text string, maxLen int) []string {
 	return splitMessageRunes(text, maxLen, false, true, true)
+}
+
+// ircTextContainsNick reports whether text mentions nick, case-insensitive
+// per IRC RFC 2812 casemapping (issue #960: servers may render the nick in a
+// different case than configured, e.g. "Bot" vs configured "bot").
+func ircTextContainsNick(text, nick string) bool {
+	if nick == "" {
+		return false
+	}
+	return strings.Contains(strings.ToLower(text), strings.ToLower(nick))
+}
+
+// ircRemoveNick strips occurrences of nick from text (case-insensitive) so the
+// mention itself does not leak into the message forwarded to the agent.
+func ircRemoveNick(text, nick string) string {
+	if nick == "" {
+		return text
+	}
+	lower := strings.ToLower(text)
+	lowerNick := strings.ToLower(nick)
+	for {
+		idx := strings.Index(lower, lowerNick)
+		if idx < 0 {
+			break
+		}
+		text = text[:idx] + text[idx+len(nick):]
+		lower = lower[:idx] + lower[idx+len(lowerNick):]
+	}
+	return text
 }
 
 // TriggerTyping — IRC has no typing indicator.

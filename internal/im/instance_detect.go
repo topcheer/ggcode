@@ -134,6 +134,9 @@ func (d *InstanceDetect) IsPrimary() bool {
 		if info.UUID == d.info.UUID {
 			continue // ourselves
 		}
+		if !d.checkAlive(info.PID) {
+			continue // crashed leftover PID file - skip (align with ListInstances)
+		}
 		if info.StartedAt.Before(d.info.StartedAt) {
 			return false // someone started before us
 		}
