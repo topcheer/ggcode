@@ -107,6 +107,17 @@ func (s *consensusState) recordFiring(detectorName string) {
 	}
 }
 
+// recordFirings logs multiple detector firings at once. Convenience wrapper
+// for call sites that aggregate several detectors per tool result (#952).
+func (s *consensusState) recordFirings(detectorNames ...string) {
+	if s == nil {
+		return
+	}
+	for _, n := range detectorNames {
+		s.recordFiring(n)
+	}
+}
+
 // check returns a consensus alert if multiple distinct detectors fired within
 // the recent window, indicating systemic failure. Returns empty string otherwise.
 func (s *consensusState) check() string {
@@ -197,36 +208,29 @@ func (s *consensusState) scanAndCheck(content string) string {
 		"[Empty Search Spiral",
 		"[Error Regression",
 		"[Circular Reasoning",
-		"[Contradiction Detected",
-		"[Ungrounded Reflection",
-		"[Action Hedging",
-		"[Scope Creep",
-		"[Premature Abstraction",
-		"[Plan Abandonment",
-		"[Tool Target Mismatch",
-		"[Premature Commitment",
-		"[Diagnostic Disconnect",
-		"[Failure Mode",
-		"[Tool Fallback",
-		"[Error Cascade",
-		"[File Freshness",
-		"[Tool Thermal",
-		"[Cache Efficiency",
-		"[Pressure Forecaster",
-		"[Prompt Ops",
-		"[Change Reconcile",
-		"[Error Compound",
-		"[Temporal Blindness",
-		"[Deferred Work",
-		"[Expired Read",
-		"[Action Annihilate",
-		"[Assumption Track",
-		"[Futile Cycle",
 	}
 	for _, tag := range detectorTags {
 		if strings.Contains(content, tag) {
 			s.recordFiring(strings.TrimPrefix(tag, "["))
 		}
+	}
+	return s.check()
+}
+
+// checkOnly runs the consensus check WITHOUT scanning content (#952). Used by
+// the agent loop, where firings are recorded explicitly via recordFiring /
+// recordFirings at each detector call site: the content scan was both fragile
+// (its baseline-offset window missed every detector whose guidance is appended
+// before the window starts — failureMode, errorCascade, ...) and a
+// false-positive vector (#147: raw tool output containing tag literals).
+//
+// Removed dead scan entries: "[Tool Fallback" (guidance is emitted as
+// "[fallback ...", never matching), "[Fix Cascade" (emits "[HYPOTHESIS
+// LOCK-IN WARNING]"), and "[Failure Mode" / "[Error Cascade" (now recorded
+// explicitly before the old scan window started, so they could never match).
+func (s *consensusState) checkOnly() string {
+	if s == nil {
+		return ""
 	}
 	return s.check()
 }

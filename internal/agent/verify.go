@@ -489,17 +489,23 @@ func (a *Agent) injectRulesIntoResult(toolName string, args json.RawMessage, res
 //
 // retryCount is the number of sync verify retries already consumed (0 on the
 // first check). The method returns:
-//   - (false, nil)  — verification passed or no verification needed; proceed to return
-//   - (true,  nil)  — verification failed, errors injected; continue the loop
-//   - (false, nil)  — verification failed but budget exhausted; proceed to return
-func (a *Agent) syncVerifyAndGate(ctx context.Context, runStats *RunStats, retryCount int) (shouldContinue bool) {
+//   - (false, true)  — verification PASSED; proceed to return, skip async verify
+//   - (true,  false) — verification failed, errors injected; continue the loop
+//   - (false, false) — verification not needed, no command, or budget exhausted;
+//     proceed to return (async verify may still run for reporting)
+//
+// #953: the passed flag distinguishes "passed" from "budget exhausted / not
+// needed". The caller uses it to skip redundant async verify whenever
+// verification passes — including passes on a retry round after auto-repair
+// (the old design only skipped first-attempt passes).
+func (a *Agent) syncVerifyAndGate(ctx context.Context, runStats *RunStats, retryCount int) (shouldContinue, passed bool) {
 	workingDir := a.WorkingDir()
 	if workingDir == "" {
-		return false
+		return false, false
 	}
 
 	if !codeChangedInRun(runStats) {
-		return false
+		return false, false
 	}
 
 	// Determine verification command — deterministic first, then LLM.
@@ -512,7 +518,7 @@ func (a *Agent) syncVerifyAndGate(ctx context.Context, runStats *RunStats, retry
 	}
 	if cmd == "" {
 		debug.Log("verify", "sync: no verification command determined")
-		return false
+		return false, false
 	}
 
 	if retryCount == 0 {
@@ -534,7 +540,7 @@ func (a *Agent) syncVerifyAndGate(ctx context.Context, runStats *RunStats, retry
 		a.runLintAfterBuild(ctx, workingDir)
 		debug.Log("verify", "sync: lint completed in %s", time.Since(lintStart))
 		a.verifyResult(*result)
-		return false // proceed to return — caller skips async verify
+		return false, true // proceed to return — caller skips async verify
 	}
 
 	// Verification failed.
@@ -560,7 +566,7 @@ func (a *Agent) syncVerifyAndGate(ctx context.Context, runStats *RunStats, retry
 	if retryCount >= maxSyncVerifyRetries {
 		debug.Log("verify", "sync: budget exhausted (%d/%d), proceeding to return", retryCount, maxSyncVerifyRetries)
 		a.verifyProgress(fmt.Sprintf("Verification still failing after %d attempts — please review manually.", maxSyncVerifyRetries+1))
-		return false
+		return false, false
 	}
 
 	// Budget remains — inject errors into context and signal continue.
@@ -600,5 +606,5 @@ func (a *Agent) syncVerifyAndGate(ctx context.Context, runStats *RunStats, retry
 		}},
 	})
 
-	return true // continue the loop for auto-repair
+	return true, false // continue the loop for auto-repair
 }

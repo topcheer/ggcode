@@ -2679,14 +2679,18 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// the user must say "fix the build" after every failed change.
 			syncPassed := false
 			if codeChangedInRun(runStats) && a.currentMode() != permission.PlanMode && ctx.Err() == nil {
-				if a.syncVerifyAndGate(ctx, runStats, syncVerifyRetries) {
+				// #953: syncVerifyAndGate now reports whether verification PASSED,
+				// not merely whether it ran. A pass on a retry round (build failed,
+				// agent repaired, round 2 passed) also skips the redundant async
+				// verify — the old `syncVerifyRetries == 0` condition only skipped
+				// first-attempt passes and re-ran the full build/test in the defer.
+				if shouldContinue, passed := a.syncVerifyAndGate(ctx, runStats, syncVerifyRetries); shouldContinue {
 					syncVerifyRetries++
 					debug.Log("agent", "Iteration %d: sync verify failed, auto-repairing (retry %d/%d)", i+1, syncVerifyRetries, maxSyncVerifyRetries)
 					continue
+				} else if passed {
+					syncPassed = true
 				}
-				// Sync verify ran (passed or budget exhausted).
-				// If it passed on the first attempt, skip redundant async verify.
-				syncPassed = syncVerifyRetries == 0
 			}
 			if syncPassed {
 				debug.Log("agent", "sync verify passed, skipping async verify")
@@ -3585,6 +3589,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				})
 				msgs = a.contextManager.Messages()
 			}
+			// #952: capture the ORIGINAL content length BEFORE the detector chain
+			// (errorClassifier at errorClassifier below through consensus). Guidance
+			// appended by detectors flows into token-waste metering at record time —
+			// metering the polluted string double-counts guidance tokens in both the
+			// waste numerator and denominator (#553 residual: the old capture point
+			// sat after the chain, so an original 1-token result was recorded as 19).
+			originalContentLen := len(result.Content)
 			// Error classifier: immediate type-specific guidance on the first
 			// occurrence of each error category (AgentDebug-inspired).
 			// Fires before error-streak so the agent gets targeted feedback
@@ -3663,6 +3674,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Classifies each error into transient/structural/systemic and
 			// injects high-level strategy when a dominant mode emerges.
 			if modeGuidance := a.failureMode.recordResult(tc.Name, result.IsError, result.Content); modeGuidance != "" {
+				// #952: this guidance is appended BEFORE the consensus scan window
+				// starts (see consensusBaseline), so record the firing explicitly —
+				// the content scan below would otherwise never see this detector.
+				a.crossDetectorConsensus.recordFiring("Failure Mode")
 				if result.Content != "" {
 					result.Content = result.Content + "\n\n" + modeGuidance
 				} else {
@@ -3673,6 +3688,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// resource (file path or symbol), inject root-cause-first guidance.
 			if result.IsError {
 				if cascadeGuidance := a.errorCascade.recordError(tc.Name, result.Content); cascadeGuidance != "" {
+					// #952: same as failureMode above — this guidance precedes the
+					// consensus scan window; record the firing explicitly.
+					a.crossDetectorConsensus.recordFiring("Error Cascade")
 					if result.Content != "" {
 						result.Content = result.Content + "\n\n" + cascadeGuidance
 					} else {
@@ -4053,7 +4071,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				}
 			}
 			// Futile cycle: track reads vs writes to detect circular exploration.
-			if fileEditingTools[tc.Name] {
+			// #953: a FAILED edit produced no state mutation — recording it as a
+			// write resets the epoch, so the legitimate re-read the agent performs
+			// to recover a correct anchor (edit_fail_recovery's own advice) looks
+			// like a futile re-read loop (Jaccard=1.0). Only successful edits count,
+			// matching the !result.IsError style of the checks below (#495).
+			if fileEditingTools[tc.Name] && !result.IsError {
 				a.futileCycle.recordWrite()
 			} else if readPaths := extractFilePathsFromArgs(tc.Arguments, tc.Name); len(readPaths) > 0 {
 				// #500: batch-aware — multi_file_read carries N paths but the
@@ -4114,10 +4137,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// tool I/O so we can detect ungrounded references later.
 			// Tool result redundancy: detect when result content substantially
 			// overlaps with a prior result still in context (AgentDiet waste).
-			// #147: baseline content length BEFORE any detector guidance is
-			// appended below. The consensus scanner uses this to scan only
-			// injected guidance segments, never raw file content.
-			consensusBaseline := len(result.Content)
 			if trMsg := a.toolResultRedundancy.recordResult(tc.Name, result.Content, i+1); trMsg != "" {
 				if result.Content != "" {
 					result.Content = result.Content + "\n\n" + trMsg
@@ -4126,6 +4145,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				}
 			}
 			if cascadeGuidance := a.fixCascadeCheckCommand(tc.Name, tc.Arguments, result.IsError); cascadeGuidance != "" {
+				// #952: explicit firing record (the old content scan could never
+				// match - this detector's guidance header is "[HYPOTHESIS LOCK-IN
+				// WARNING]", not the stale "[Fix Cascade" tag).
+				a.crossDetectorConsensus.recordFiring("Fix Cascade")
 				if result.Content != "" {
 					result.Content = result.Content + "\n\n" + cascadeGuidance
 				} else {
@@ -4146,6 +4169,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Convergence lock: detect post-verification unnecessary edits.
 			// Fires when the agent continues editing after its changes verified.
 			if convergenceGuidance := a.convergenceCheck(); convergenceGuidance != "" {
+				a.crossDetectorConsensus.recordFiring("Convergence Lock")
 				if result.Content != "" {
 					result.Content = result.Content + "\n\n" + convergenceGuidance
 				} else {
@@ -4168,13 +4192,14 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					result.Content = refactorGuidance
 				}
 			}
-			// Cross-detector consensus: record detector firings and check for
-			// co-occurrence. IMPORTANT (#147): scan ONLY the guidance appended by
-			// detectors in this block (consensusBaseline marks the content length
-			// before any detector guidance was appended), NOT the raw tool result
-			// content. Scanning raw content caused false consensus alerts whenever
-			// the agent read detector source/test files that contain tag literals.
-			if consensusGuidance := a.crossDetectorConsensus.scanAndCheck(result.Content[consensusBaseline:]); consensusGuidance != "" {
+			// Cross-detector consensus: check for co-occurrence of detector
+			// firings. #952: every detector in the chain above now records its
+			// firing EXPLICITLY via recordFiring when it returns guidance, so no
+			// content scanning is needed here. The old baseline-offset scan
+			// (#147) both missed every detector appended before the scan window
+			// (failureMode, errorCascade, ...) and risked false positives on raw
+			// tool output containing tag literals.
+			if consensusGuidance := a.crossDetectorConsensus.checkOnly(); consensusGuidance != "" {
 				if result.Content != "" {
 					result.Content = result.Content + "\n\n" + consensusGuidance
 				} else {
@@ -4243,11 +4268,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 			// Apply coalesced guidance hints to the tool result content.
 			// Both vision and non-vision paths share the same hint assembly logic.
-			// Capture the ORIGINAL content length FIRST (#553): the hints appended
-			// below flow into token-waste metering at record time — metering the
-			// polluted string double-counts hint tokens in both the waste numerator
-			// and denominator (probe: an original 1-token result recorded as 19).
-			originalContentLen := len(result.Content)
+			// originalContentLen was captured BEFORE the detector chain above (#952,
+			// #553 residual) so detector guidance never inflates waste metering.
 			a.applyToolResultGuidance(&result, loopGuidance, searchParamHint, redundancyHint, equivHint, overuseHint)
 			if len(result.Images) > 0 && a.SupportsVision() {
 				imgs := make([]provider.ContentImage, len(result.Images))
