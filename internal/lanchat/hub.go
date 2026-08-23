@@ -835,7 +835,7 @@ func (h *Hub) sendPresence(peer Participant) {
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-API-Key", communityKey)
+	req.Header.Set("X-API-Key", h.APIKey())
 
 	resp, err := h.httpClient.Do(req)
 	if err != nil {
@@ -1143,7 +1143,7 @@ func (h *Hub) postToPeer(ctx context.Context, endpoint string, msg Message) erro
 		return fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-API-Key", communityKey)
+	req.Header.Set("X-API-Key", h.APIKey())
 
 	resp, err := h.httpClient.Do(req)
 	if err != nil {
@@ -1180,7 +1180,7 @@ func (h *Hub) broadcastNickChange(newNick, newRole, newTeam string) {
 			url := strings.TrimRight(peer.Endpoint, "/") + "/lanchat/nick"
 			req, _ := http.NewRequest(http.MethodPost, url, bytes.NewReader(data))
 			req.Header.Set("Content-Type", "application/json")
-			req.Header.Set("X-API-Key", communityKey)
+			req.Header.Set("X-API-Key", h.APIKey())
 			resp, err := h.httpClient.Do(req)
 			if err != nil {
 				return
@@ -1434,7 +1434,7 @@ func (h *Hub) sendReceipt(originalMsg Message, status, reason string) {
 	data, _ := json.Marshal(r)
 	req, _ := http.NewRequest(http.MethodPost, url, bytes.NewReader(data))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-API-Key", communityKey)
+	req.Header.Set("X-API-Key", h.APIKey())
 	resp, err := h.httpClient.Do(req)
 	if err != nil {
 		return
@@ -1643,7 +1643,7 @@ func (h *Hub) postToPeerWithFallback(ctx context.Context, endpoint string, msgTy
 
 	env := udpEnvelope{
 		Type:     msgType,
-		APIKey:   communityKey,
+		APIKey:   h.APIKey(),
 		FromNode: h.nodeID,
 		Payload:  payloadData,
 	}
@@ -1707,7 +1707,7 @@ func (h *Hub) postToPeerTCPDirect(ctx context.Context, endpoint string, msgType 
 		return fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-API-Key", communityKey)
+	req.Header.Set("X-API-Key", h.APIKey())
 	resp, err := h.httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("POST to %s: %w", endpoint, err)
