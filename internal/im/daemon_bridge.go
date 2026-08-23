@@ -36,6 +36,13 @@ type pendingInterruption struct {
 	Content []provider.ContentBlock
 }
 
+// approvalReply carries an approval decision plus the always-allow flag
+// computed by RouteInboundText for "a"/"always"/"总是允许" replies (#943).
+type approvalReply struct {
+	Decision permission.Decision
+	Always   bool
+}
+
 type DaemonBridge struct {
 	manager         *Manager
 	emitter         *IMEmitter
@@ -51,7 +58,7 @@ type DaemonBridge struct {
 	mu                   sync.Mutex
 	cancelFunc           context.CancelFunc
 	pendingAsk           *pendingAskUser
-	pendingApproval      chan permission.Decision // non-nil when waiting for IM approval reply
+	pendingApproval      chan approvalReply // non-nil when waiting for IM approval reply
 	pendingInterruptions []pendingInterruption
 	interactiveMsgIDs    map[string]string // adapter → platform msg ID (for callback correlation)
 	multiSelectChosen    map[string]bool   // accumulated multi-select choices (choice value → selected)
@@ -414,7 +421,10 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 	b.mu.Unlock()
 	if route.Kind == InboundRouteApproval {
 		if approvalCh != nil {
-			approvalCh <- route.Decision
+			// #943: send the full route (Decision + AlwaysAllow) — the old
+			// permission.Decision-only channel silently dropped the always-allow
+			// semantics computed by RouteInboundText, degrading "a" to one-shot "y".
+			approvalCh <- approvalReply{Decision: route.Decision, Always: route.AlwaysAllow}
 			b.mu.Lock()
 			if b.pendingApproval == approvalCh { // #655: compare-then-clear — a concurrent reply for the NEXT question must not be wiped
 				b.pendingApproval = nil
@@ -434,7 +444,14 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 	if route.Kind == InboundRouteAskUser {
 		if pending != nil {
 			resp := BuildAskUserResponseFromText(pending.request, route.Text)
-			pending.response <- resp
+			// #944: non-blocking send, mirroring the interactive callback path
+			// (L175-178). A second concurrent sender after the buffer is full
+			// would otherwise block forever when HandleAskUser exits via ctx.Done()
+			// without draining — leaking the adapter receive goroutine.
+			select {
+			case pending.response <- resp:
+			default:
+			}
 			b.mu.Lock()
 			if b.pendingAsk == pending { // #655: compare-then-clear, not blind wipe
 				b.pendingAsk = nil
@@ -595,21 +612,30 @@ func (b *DaemonBridge) handleApproval(ctx context.Context, toolName string, inpu
 	}
 
 	// Create a channel and register it so IM replies can resolve it.
-	ch := make(chan permission.Decision, 1)
+	// #943: carries approvalReply (Decision + Always) so "always" replies can
+	// establish a persistent grant instead of a one-shot allow.
+	ch := make(chan approvalReply, 1)
 	b.mu.Lock()
 	b.pendingApproval = ch
 	b.mu.Unlock()
-
 	debug.Log("daemon", "approval: waiting for IM reply on tool=%s", toolName)
 
 	select {
-	case decision := <-ch:
-		debug.Log("daemon", "approval: received %v for tool=%s", decision, toolName)
+	case reply := <-ch:
+		decision := reply.Decision
+		debug.Log("daemon", "approval: received %v (always=%v) for tool=%s", decision, reply.Always, toolName)
+		if reply.Always && decision == permission.Allow {
+			persistAlwaysAllowGrant(b.agent, toolName, input)
+		}
 		// Send result confirmation back to IM
 		var resultMsg string
 		decisionStr := "deny"
 		if decision == permission.Allow {
-			decisionStr = "allow"
+			if reply.Always {
+				decisionStr = "always"
+			} else {
+				decisionStr = "allow"
+			}
 		}
 		if lang == "zh-CN" || lang == "zh" {
 			resultMsg = FormatApprovalResult(ToolLangZhCN, toolName, decisionStr)
@@ -629,6 +655,28 @@ func (b *DaemonBridge) handleApproval(ctx context.Context, toolName string, inpu
 		b.mu.Unlock()
 		return permission.Deny
 	}
+}
+
+// persistAlwaysAllowGrant establishes a persistent always-allow grant on the
+// agent's ConfigPolicy after an "a"/"always" IM reply (#943). Mirrors the TUI
+// and desktop ChatBridge paths: fine-grained command pattern for command
+// tools, tool-level override otherwise. No-op when no agent or a non-Config
+// policy is attached.
+func persistAlwaysAllowGrant(ag *agent.Agent, toolName, input string) {
+	if ag == nil {
+		return
+	}
+	p, ok := ag.PermissionPolicy().(*permission.ConfigPolicy)
+	if !ok {
+		return
+	}
+	if cmd := permission.ExtractCommandFromInput(input); cmd != "" {
+		if pattern := permission.CommandPrefixToPattern(cmd); pattern != "" {
+			p.AllowCommandPattern(pattern)
+			return
+		}
+	}
+	p.SetOverride(toolName, permission.Allow)
 }
 
 // formatToolInline renders a concise one-line tool summary for approval prompts.

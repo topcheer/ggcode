@@ -2,6 +2,7 @@ package im
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -14,6 +15,7 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/tool"
+	toolpkg "github.com/topcheer/ggcode/internal/tool"
 )
 
 type daemonBridgeMetricsProvider struct {
@@ -634,7 +636,7 @@ func TestDaemonApproval_IMReply(t *testing.T) {
 	bridge := &DaemonBridge{manager: mgr, emitter: emitter}
 
 	// Simulate pending approval
-	ch := make(chan permission.Decision, 1)
+	ch := make(chan approvalReply, 1)
 	bridge.mu.Lock()
 	bridge.pendingApproval = ch
 	bridge.mu.Unlock()
@@ -650,9 +652,12 @@ func TestDaemonApproval_IMReply(t *testing.T) {
 
 	// Should have received Allow on the channel
 	select {
-	case decision := <-ch:
-		if decision != permission.Allow {
-			t.Errorf("expected Allow, got %v", decision)
+	case reply := <-ch:
+		if reply.Decision != permission.Allow {
+			t.Errorf("expected Allow, got %v", reply.Decision)
+		}
+		if reply.Always {
+			t.Errorf("plain 'y' reply must not set Always")
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for approval decision")
@@ -672,7 +677,7 @@ func TestDaemonApproval_DenyReply(t *testing.T) {
 	emitter := NewIMEmitter(mgr, "en", t.TempDir())
 	bridge := &DaemonBridge{manager: mgr, emitter: emitter}
 
-	ch := make(chan permission.Decision, 1)
+	ch := make(chan approvalReply, 1)
 	bridge.mu.Lock()
 	bridge.pendingApproval = ch
 	bridge.mu.Unlock()
@@ -686,9 +691,9 @@ func TestDaemonApproval_DenyReply(t *testing.T) {
 	}
 
 	select {
-	case decision := <-ch:
-		if decision != permission.Deny {
-			t.Errorf("expected Deny, got %v", decision)
+	case reply := <-ch:
+		if reply.Decision != permission.Deny {
+			t.Errorf("expected Deny, got %v", reply.Decision)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out")
@@ -718,7 +723,7 @@ func TestDaemonSlashCommandWinsOverPendingApproval(t *testing.T) {
 	emitter := NewIMEmitter(mgr, "en", t.TempDir())
 	bridge := &DaemonBridge{manager: mgr, emitter: emitter}
 
-	ch := make(chan permission.Decision, 1)
+	ch := make(chan approvalReply, 1)
 	bridge.mu.Lock()
 	bridge.pendingApproval = ch
 	bridge.mu.Unlock()
@@ -732,13 +737,159 @@ func TestDaemonSlashCommandWinsOverPendingApproval(t *testing.T) {
 	}
 
 	select {
-	case decision := <-ch:
-		t.Fatalf("expected slash command not to resolve approval, got %v", decision)
+	case reply := <-ch:
+		t.Fatalf("expected slash command not to resolve approval, got %v", reply)
 	default:
 	}
 	bridge.mu.Lock()
 	defer bridge.mu.Unlock()
 	if bridge.pendingApproval == nil {
 		t.Fatal("expected pending approval to remain after slash command")
+	}
+}
+
+// TestDaemonApproval_AlwaysReplyCarriesAlwaysFlag (#943) verifies that an "a"
+// (always) IM reply carries the AlwaysAllow flag through the daemon approval
+// channel instead of degrading to a one-shot allow.
+func TestDaemonApproval_AlwaysReplyCarriesAlwaysFlag(t *testing.T) {
+	mgr := NewManager()
+	emitter := NewIMEmitter(mgr, "en", t.TempDir())
+	bridge := &DaemonBridge{manager: mgr, emitter: emitter}
+
+	ch := make(chan approvalReply, 1)
+	bridge.mu.Lock()
+	bridge.pendingApproval = ch
+	bridge.mu.Unlock()
+
+	err := bridge.SubmitInboundMessage(context.Background(), InboundMessage{
+		Text:     "a",
+		Envelope: Envelope{Adapter: "test", Platform: PlatformQQ},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case reply := <-ch:
+		if reply.Decision != permission.Allow {
+			t.Errorf("expected Allow, got %v", reply.Decision)
+		}
+		if !reply.Always {
+			t.Error("expected Always=true for 'a' reply - always-allow semantics were dropped (#943)")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out")
+	}
+}
+
+// TestDaemonApproval_HandleApprovalAlwaysPersistsGrant (#943) verifies that
+// handleApproval, upon receiving an Always reply, persists the grant on the
+// agent's ConfigPolicy (tool-level override for non-command tools) so future
+// calls of the same tool no longer prompt.
+func TestDaemonApproval_HandleApprovalAlwaysPersistsGrant(t *testing.T) {
+	mgr := NewManager()
+	emitter := NewIMEmitter(mgr, "en", t.TempDir())
+
+	prov := &daemonBridgeMetricsProvider{}
+	registry := tool.NewRegistry()
+	ag := agent.NewAgent(prov, registry, "test", 1)
+	sandboxDir := t.TempDir()
+	policy := permission.NewConfigPolicyWithMode(nil, []string{sandboxDir}, permission.SupervisedMode)
+	ag.SetPermissionPolicy(policy)
+
+	bridge := NewDaemonBridge(mgr, ag, emitter, nil, nil)
+
+	var decision permission.Decision
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		decision = bridge.handleApproval(context.Background(), "write_file", `{"path":"`+sandboxDir+`/x.txt","content":"x"}`)
+	}()
+
+	// Wait for the pending approval channel to be registered, then reply "always".
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		bridge.mu.Lock()
+		ch := bridge.pendingApproval
+		bridge.mu.Unlock()
+		if ch != nil {
+			ch <- approvalReply{Decision: permission.Allow, Always: true}
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	<-done
+
+	if decision != permission.Allow {
+		t.Fatalf("expected Allow, got %v", decision)
+	}
+	// The always-allow grant must be persisted: a subsequent write_file check
+	// must not return Ask (it previously would, since Always was dropped).
+	probePath := sandboxDir + "/x.txt"
+	if d, err := policy.Check("write_file", json.RawMessage(`{"path":"`+probePath+`","content":"x"}`)); err == nil && d == permission.Ask {
+		t.Error("expected write_file to be auto-allowed after 'always' reply - grant was not persisted (#943)")
+	}
+}
+
+// TestDaemonAskUser_DoubleSenderDoesNotBlock (#944) verifies that two
+// concurrent text replies to the same pending ask_user do not block forever
+// when HandleAskUser exits via ctx.Done() without draining the 1-buffered
+// response channel. Previously the second sender blocked permanently.
+func TestDaemonAskUser_DoubleSenderDoesNotBlock(t *testing.T) {
+	mgr := NewManager()
+	emitter := NewIMEmitter(mgr, "en", t.TempDir())
+	bridge := &DaemonBridge{manager: mgr, emitter: emitter}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_, _ = bridge.HandleAskUser(ctx, toolpkg.AskUserRequest{
+			Title: "Q",
+			Questions: []toolpkg.AskUserQuestion{
+				{ID: "q1", Title: "Name?", Kind: toolpkg.AskUserKindText},
+			},
+		})
+	}()
+
+	// Wait until pendingAsk is registered.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		bridge.mu.Lock()
+		p := bridge.pendingAsk
+		bridge.mu.Unlock()
+		if p != nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	msg := InboundMessage{Text: "answer", Envelope: Envelope{Adapter: "a1", Platform: PlatformQQ}}
+
+	// First reply fills the 1-buffered channel; second reply must not block
+	// even though HandleAskUser will exit via ctx.Done() without draining.
+	senderDone := make(chan struct{}, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			_ = bridge.SubmitInboundMessage(context.Background(), msg)
+			senderDone <- struct{}{}
+		}()
+	}
+
+	// Give senders a moment to reach the send, then cancel the ask context
+	// (HandleAskUser exits via ctx.Done without draining).
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	wg.Wait()
+
+	// Both senders must complete promptly (non-blocking send, #944).
+	for i := 0; i < 2; i++ {
+		select {
+		case <-senderDone:
+		case <-time.After(2 * time.Second):
+			t.Fatal("second ask_user sender blocked - non-blocking send missing (#944)")
+		}
 	}
 }
