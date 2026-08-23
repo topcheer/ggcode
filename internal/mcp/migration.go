@@ -59,10 +59,12 @@ func mergeServers(explicit []config.MCPServerConfig, sources []migrationSource, 
 	usedSigs := make(map[string]string, len(explicit))
 
 	for _, server := range explicit {
-		if deletedSet[strings.TrimSpace(server.Name)] {
-			// Tombstoned in the explicit list too (stale in-memory copy).
-			continue
-		}
+		// NOTE: no tombstone filter here, deliberately. The explicit list is
+		// ggcode's own yaml: RemoveMCPServer already removed the name from it
+		// at delete time, so a name appearing here again is an explicit
+		// re-add (panel Add via UpsertMCPServer, which also clears the
+		// tombstone, or a manual yaml edit) and must win over the tombstone.
+		// Tombstones only guard the migration-source side below.
 		cfg := server
 		if strings.TrimSpace(cfg.Source) == "" {
 			cfg.Source = "ggcode"

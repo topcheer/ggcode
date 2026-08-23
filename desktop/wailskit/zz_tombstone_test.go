@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -106,4 +107,47 @@ func TestReaddingClearedTombstoneRevivesServer(t *testing.T) {
 	if !issue606ListHas(t, "revive") {
 		t.Fatal("re-added server should be visible (tombstone must clear on Upsert)")
 	}
+}
+
+// Manually re-adding a tombstoned name to mcp_servers.yaml (bypassing the
+// panel's UpsertMCPServer, so the tombstone file still lists the name) must
+// still show the server: the explicit yaml list is an intentional re-add and
+// wins over the tombstone. Tombstones only guard the migration-source side.
+func TestManualYAMLReaddWinsOverTombstone(t *testing.T) {
+	mcpTestHome(t)
+	ws := t.TempDir()
+	if err := os.WriteFile(filepath.Join(ws, "ggcode.yaml"), []byte("vendor: zai\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	setActiveChatBridge(t, ws)
+
+	if err := AddMCPServer(map[string]string{
+		"name":    "manual",
+		"type":    "stdio",
+		"command": "node",
+		"args":    "manual.js",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := RemoveMCPServer("manual"); err != nil {
+		t.Fatal(err)
+	}
+
+	// User hand-edits mcp_servers.yaml to bring the name back, WITHOUT the
+	// panel (so mcp_deleted.yaml still contains "manual").
+	wsMCP := filepath.Join(ws, "mcp_servers.yaml")
+	if err := os.WriteFile(wsMCP, []byte("- name: manual\n  type: stdio\n  command: node\n  args: [manual.js]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	servers, err := ListMCPServers()
+	if err != nil {
+		t.Fatalf("ListMCPServers: %v", err)
+	}
+	for _, s := range servers {
+		if s.Name == "manual" && strings.TrimSpace(s.Command) != "" {
+			return // visible with config: explicit re-add won
+		}
+	}
+	t.Fatal("manually re-added yaml server hidden by stale tombstone")
 }

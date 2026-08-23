@@ -170,6 +170,12 @@ func TestDefaultSystemPromptEncouragesBatchingAndSparseTodoWrites(t *testing.T) 
 	}
 }
 
+func TestDefaultSystemPromptDiscouragesRushing(t *testing.T) {
+	if !contains(DefaultSystemPrompt, "Do not rush progress; make each step solid") {
+		t.Fatal("expected DefaultSystemPrompt to state the do-not-rush principle")
+	}
+}
+
 func TestLoad_NonExistent(t *testing.T) {
 	withTestHome(t)
 	cfg, err := Load("/nonexistent/path/ggcode.yaml")
