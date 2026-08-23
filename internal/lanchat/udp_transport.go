@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"sync"
 	"time"
@@ -24,6 +25,16 @@ type udpHandler interface {
 
 // maxFragmentEntries caps the fragment reassembly map to prevent unbounded growth.
 const maxFragmentEntries = 256
+
+// maxUDPDecompressed caps the decompressed size of any UDP payload. LAN chat
+// messages are small; without a cap a ~60KB high-ratio gzip datagram can expand
+// to GBs of memory before the auth gate ever sees the envelope — a no-key LAN
+// DoS (#991).
+const maxUDPDecompressed = 4 * 1024 * 1024
+
+// udpAckWaitFn returns the per-attempt ACK wait used by SendUnicast. Tests
+// override it to shrink retry exhaustion below the default 2s×3 (#991).
+var udpAckWaitFn = func() time.Duration { return udpACKTimeout }
 
 // UDPTransport listens for UDP datagrams (both unicast and multicast) and
 // dispatches them to the Hub. It also provides methods for sending UDP
@@ -262,6 +273,7 @@ func (t *UDPTransport) SendUnicast(ctx context.Context, addr *net.UDPAddr, env u
 	if env.FragmentID == "" {
 		env.FragmentID = fmt.Sprintf("udp-%d", time.Now().UnixNano())
 	}
+	ackTimeout := udpAckWaitFn()
 
 	// Marshal the envelope to bytes (this is the canonical payload)
 	payloadBytes, err := json.Marshal(env)
@@ -276,32 +288,54 @@ func (t *UDPTransport) SendUnicast(ctx context.Context, addr *net.UDPAddr, env u
 	// as base64 chunks, preserving the compression end-to-end.
 	fragments := splitFragments(compressed, env.FragmentID, env.APIKey, env.FromNode, env.Type)
 
+	var sendErr error
 	for _, frag := range fragments {
 		fragData, _ := json.Marshal(frag)
-		// Send with retry + ACK wait (per-fragment ACK for reliability)
+		// Send with retry + ACK wait (per-fragment ACK for reliability).
+		// Track the final ACK state: if any fragment exhausts all attempts
+		// without an ACK, return an error so the hub's multicast fallback
+		// fires instead of a silent nil that reports false delivery (#991).
+		ackID := frag.FragmentID
+		if frag.IsFragment {
+			ackID = fmt.Sprintf("%s-%d", frag.FragmentID, frag.FragmentSeq)
+		}
+		acked := false
 		for attempt := 0; attempt <= udpMaxRetries; attempt++ {
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
 			default:
 			}
+			// Register the ACK waiter BEFORE writing: on a LAN the RTT can be
+			// under 1ms, so an ACK arriving between WriteToUDP and registration
+			// would be dropped and the fragment needlessly retransmitted (#991).
+			ch := t.registerACK(ackID)
 			if _, err := t.conn.WriteToUDP(fragData, addr); err != nil {
+				t.unregisterACK(ackID)
 				debug.Log("lanchat-udp", "unicast send error attempt %d: %v", attempt+1, err)
 				continue
 			}
-			// Wait for ACK for each fragment
-			ackID := frag.FragmentID
-			if frag.IsFragment {
-				ackID = fmt.Sprintf("%s-%d", frag.FragmentID, frag.FragmentSeq)
+			select {
+			case <-ch:
+				acked = true
+			case <-time.After(ackTimeout):
+			case <-ctx.Done():
+				t.unregisterACK(ackID)
+				return ctx.Err()
 			}
-			if t.waitForACK(ackID, udpACKTimeout) {
-				break // ACK received, move to next fragment
+			t.unregisterACK(ackID)
+			if acked {
+				break
 			}
 			debug.Log("lanchat-udp", "unicast ACK timeout attempt %d for %s", attempt+1, ackID)
 		}
+		if !acked {
+			sendErr = fmt.Errorf("udp unicast: fragment %s to %s not ACKed after %d attempts", ackID, addr, udpMaxRetries+1)
+			break
+		}
 	}
 
-	return nil
+	return sendErr
 }
 
 // SendMulticast sends an envelope via UDP multicast (no ACK).
@@ -394,7 +428,10 @@ func splitFragments(data []byte, fragID, apiKey, fromNode, msgType string) []udp
 	return fragments
 }
 
-// decompressIfGzipped checks for gzip magic bytes and decompresses.
+// decompressIfGzipped checks for gzip magic bytes and decompresses, capped at
+// maxUDPDecompressed bytes. Oversized payloads are dropped (nil) so callers
+// fail the parse — the cap removes the gzip-bomb DoS vector on both the
+// datagram and fragment-reassembly paths (#991).
 func decompressIfGzipped(data []byte) []byte {
 	if len(data) < 2 || data[0] != 0x1f || data[1] != 0x8b {
 		return data // not gzip
@@ -404,11 +441,17 @@ func decompressIfGzipped(data []byte) []byte {
 		return data
 	}
 	defer gz.Close()
-	var buf bytes.Buffer
-	if _, err := buf.ReadFrom(gz); err != nil {
+	// Read max+1 bytes: LimitReader only reveals an overrun once the (max+1)-th
+	// byte is read, so len(out) > max is the definitive oversize test (#991).
+	out, err := io.ReadAll(io.LimitReader(gz, maxUDPDecompressed+1))
+	if err != nil {
 		return data
 	}
-	return buf.Bytes()
+	if len(out) > maxUDPDecompressed {
+		debug.Log("lanchat-udp", "decompressed UDP payload exceeds %d bytes, dropping", maxUDPDecompressed)
+		return nil
+	}
+	return out
 }
 
 // registerACK creates a channel for tracking an ACK for the given message ID.
@@ -442,20 +485,6 @@ func (t *UDPTransport) unregisterACK(msgID string) {
 	t.ackMu.Lock()
 	delete(t.acks, msgID)
 	t.ackMu.Unlock()
-}
-
-// waitForACK blocks until an ACK for the given message ID is received or
-// the timeout expires. Uses a channel-based registry for deterministic delivery.
-func (t *UDPTransport) waitForACK(msgID string, timeout time.Duration) bool {
-	ch := t.registerACK(msgID)
-	defer t.unregisterACK(msgID)
-
-	select {
-	case <-ch:
-		return true
-	case <-time.After(timeout):
-		return false
-	}
 }
 
 // handleFragment collects fragments and reassembles when complete.

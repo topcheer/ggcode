@@ -1266,6 +1266,11 @@ func (h *Hub) persistMessage(msg Message) {
 func (h *Hub) HandleIncomingMessage(msg Message) {
 	h.mu.Lock()
 
+	// Captured under the lock, consumed after unlock: the session-store
+	// append is a disk write that can take seconds on a slow volume, and
+	// running it under h.mu stalls every other hub operation (#991).
+	var persistSession string
+
 	// Cross-transport ID dedup (#987): TCP retries (postToPeerWithRetry) and
 	// the TCP→UDP fallback can deliver the same message ID twice, and the
 	// old per-transport checks (self-node filter on TCP, hasMessageLocked on
@@ -1291,7 +1296,9 @@ func (h *Hub) HandleIncomingMessage(msg Message) {
 		if len(h.messages) > maxHistoryPerSession*2 {
 			h.messages = h.messages[len(h.messages)-maxHistoryPerSession:]
 		}
-		h.persistMessage(msg)
+		if h.store != nil {
+			persistSession = h.sessionID // append after unlock (#991)
+		}
 	} else {
 		// Index @agent messages by ID: they never enter h.messages, but
 		// NotifyAgentComplete still needs to resolve them after a manually
@@ -1323,6 +1330,15 @@ func (h *Hub) HandleIncomingMessage(msg Message) {
 	}
 
 	h.mu.Unlock()
+
+	// #991: session-store append moved outside h.mu — a slow disk write here
+	// used to hold the hub lock for seconds. Synchronous (not safego.Go) so
+	// store append order is preserved for this ingress path.
+	if persistSession != "" {
+		if err := h.store.Append(persistSession, msg); err != nil {
+			debug.Log("lanchat", "persist message: %v", err)
+		}
+	}
 
 	// All side effects (receipts, UI callbacks, auto-approve fan-out) are
 	// dispatched after the lock is released.
