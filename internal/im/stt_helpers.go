@@ -20,7 +20,10 @@ func buildSTTWithFallback(global config.IMSTTConfig, extra map[string]interface{
 		primary = imstt.NewOpenAICompatible(sttCfg.BaseURL, sttCfg.APIKey, sttCfg.Model, sttCfg.Provider)
 	}
 
-	local := imstt.NewLocalWhisper("", "", "")
+	// LocalModel is the ggml-*.bin path used when the local binary is
+	// whisper.cpp (issue #969); empty keeps auto-detection. For the
+	// openai-whisper CLI it falls back to the default "turbo" model.
+	local := imstt.NewLocalWhisper("", global.LocalModel, "")
 	if local.Available() {
 		debug.Log("im", "local whisper available, using as %s", func() string {
 			if primary != nil {

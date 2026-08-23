@@ -458,6 +458,10 @@ im:
   #   base_url: https://api.openai.com/v1
   #   api_key: ${OPENAI_API_KEY}
   #   model: whisper-1
+  #   # Path to a ggml-*.bin model for local whisper.cpp fallback STT.
+  #   # Auto-detected from common locations when omitted; required only if
+  #   # the local binary is whisper.cpp and no model is found automatically.
+  #   local_model: /path/to/ggml-base.en-q5_1.bin
 
   adapters:
     # QQ — requires a running QQ bot gateway

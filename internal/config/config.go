@@ -334,10 +334,11 @@ type IMStreamingConfig struct {
 }
 
 type IMSTTConfig struct {
-	Provider string `yaml:"provider,omitempty" json:"provider,omitempty"`
-	BaseURL  string `yaml:"base_url,omitempty" json:"base_url,omitempty"`
-	APIKey   string `yaml:"api_key,omitempty" json:"api_key,omitempty"`
-	Model    string `yaml:"model,omitempty" json:"model,omitempty"`
+	Provider   string `yaml:"provider,omitempty" json:"provider,omitempty"`
+	BaseURL    string `yaml:"base_url,omitempty" json:"base_url,omitempty"`
+	APIKey     string `yaml:"api_key,omitempty" json:"api_key,omitempty"`
+	Model      string `yaml:"model,omitempty" json:"model,omitempty"`
+	LocalModel string `yaml:"local_model,omitempty" json:"local_model,omitempty"`
 }
 
 type IMAdapterConfig struct {
