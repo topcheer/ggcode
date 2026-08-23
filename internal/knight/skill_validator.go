@@ -249,9 +249,13 @@ func isAllowedCreatedBy(createdBy string) bool {
 }
 
 func hasSection(lines []string, heading string) bool {
+	// #985: prefix match instead of whole-line equality so common heading
+	// variants like "## Steps:" or "## Steps Overview" are not misrejected
+	// as missing. Headings like "## Pipeline - 5 steps" that do not start
+	// with the canonical prefix still do not match (accepted boundary).
 	want := strings.ToLower(strings.TrimSpace(heading))
 	for _, line := range lines {
-		if strings.ToLower(strings.TrimSpace(line)) == want {
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(line)), want) {
 			return true
 		}
 	}
@@ -264,7 +268,11 @@ func hasActionableSteps(lines []string) bool {
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "#") {
-			inSteps = strings.EqualFold(trimmed, "## Steps")
+			// #985: prefix match (case-insensitive) to stay consistent with
+			// hasSection — "## Steps Overview" etc. must count as the steps
+			// section here too, otherwise valid variant headings pass the
+			// presence check but fail the actionable-steps check.
+			inSteps = strings.HasPrefix(strings.ToLower(trimmed), "## steps")
 			continue
 		}
 		if inSteps && stepPattern.MatchString(trimmed) {

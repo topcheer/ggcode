@@ -606,7 +606,13 @@ func (k *Knight) promoteStagingEntry(s *SkillEntry) error {
 		return fmt.Errorf("skill %q failed validation: %s", s.Name, result.Errors)
 	}
 
-	active, _ := k.index.ActiveSkills()
+	active, err := k.index.ActiveSkills()
+	if err != nil {
+		// #985: propagate index read failures instead of silently skipping
+		// the duplicate guard (active=nil made CheckDuplicate always false
+		// and let a same-name skill overwrite the existing active one).
+		return fmt.Errorf("read active skills for duplicate check: %w", err)
+	}
 	if CheckDuplicate(s, active) && !stagingUpdatesActiveSkill(s, active) {
 		return fmt.Errorf("skill %q duplicates an existing skill", s.Name)
 	}
