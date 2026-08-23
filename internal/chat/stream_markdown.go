@@ -44,6 +44,9 @@ type streamRenderCache struct {
 	// shifts every block and defeats the per-block cache, so it moves only
 	// in coarse hysteresis steps; between advances chunks cache-hit.
 	trimStart int
+	// blockCut is the sticky index of the first retained block after the
+	// document-level window drop (same hysteresis rationale).
+	blockCut int
 }
 
 func renderStreamingMarkdown(text string, width int, cache *streamRenderCache) (string, streamRenderCache) {
@@ -89,17 +92,33 @@ func renderStreamingMarkdown(text string, width int, cache *streamRenderCache) (
 	// the truncated form so the cache comparison below stays consistent.
 	blocks[len(blocks)-1] = capStreamingBlock(blocks[len(blocks)-1])
 
-	// Document-level streaming window: drop LEADING blocks (whole units, so
-	// the per-block cache comparison stays valid) until the retained total
-	// is within maxStreamingTotalLines. This bounds the per-chunk join /
-	// prefix-stitch / height-measure cost to the window instead of the full
-	// accumulated document. The hidden-count marker is kept OUT of the
-	// cached block slice: it changes every chunk, and a differing first
-	// block would zero out the cache reuse below and re-render the whole
-	// window per chunk.
-	blocks, hiddenMarker := trimLeadingBlocks(blocks)
-	if trimStart > 0 && hiddenMarker == "" {
-		hiddenMarker = fmt.Sprintf("... (%d earlier lines hidden while streaming)", trimStart)
+	// Document-level streaming window, sticky like the pre-parse trim.
+	// Dropping leading blocks bounds the per-chunk join / prefix-stitch /
+	// height-measure cost to the window, but a cut that follows the tail
+	// every chunk shifts blocks[0] and zeroes the per-block cache (found by
+	// TestStreamingWindowStickyTrimKeepsCacheReuse: the first version
+	// re-rendered the whole window per chunk). The block cut advances only
+	// when the overflow exceeds a quarter of the budget, mirroring both the
+	// pre-parse trim and List.trimLocked hysteresis.
+	blockCut := 0
+	if cache != nil && cache.width == width {
+		blockCut = cache.blockCut
+	}
+	desiredCut := leadingBlockCut(blocks, maxStreamingTotalLines)
+	if desiredCut-blockCut >= maxStreamingTotalLines/4 || desiredCut < blockCut {
+		blockCut = desiredCut
+	}
+	// Marker counts hidden lines from BOTH trims, computed before slicing.
+	// It changes per chunk (grows), which is fine: it is concatenated
+	// OUTSIDE the cached block slice so it never breaks cache comparison.
+	hiddenLines := trimStart
+	for i := 0; i < blockCut; i++ {
+		hiddenLines += strings.Count(blocks[i], "\n") + 1
+	}
+	blocks = blocks[blockCut:]
+	var hiddenMarker string
+	if hiddenLines > 0 {
+		hiddenMarker = fmt.Sprintf("... (%d earlier lines hidden while streaming)", hiddenLines)
 	}
 
 	next := streamRenderCache{
@@ -108,6 +127,7 @@ func renderStreamingMarkdown(text string, width int, cache *streamRenderCache) (
 		blocks:    append([]string(nil), blocks...),
 		rendered:  make([]string, len(blocks)),
 		trimStart: trimStart,
+		blockCut:  blockCut,
 	}
 
 	reuse := 0
@@ -153,38 +173,26 @@ func trimLeadingLines(s string, n int) string {
 	return s
 }
 
-// trimLeadingBlocks drops whole leading blocks until the retained blocks
-// fit within maxStreamingTotalLines, returning the retained suffix and a
-// human-readable marker describing how many lines were hidden ("" when
-// nothing was dropped). Dropping whole blocks (never splitting one) keeps
-// the per-block cache comparison in renderStreamingMarkdown valid: between
-// drop events the retained suffix is byte-identical, so rendered forms
-// stay cached. A drop shifts the suffix start and invalidates the cache
-// once per drop event - accepted, since drops are rare (hundreds of lines
-// of new content apart).
-func trimLeadingBlocks(blocks []string) (suffix []string, marker string) {
+// leadingBlockCut returns the smallest index into blocks such that the
+// retained suffix (blocks[idx:]) totals at most maxLines lines. Returns 0
+// when the whole slice already fits.
+func leadingBlockCut(blocks []string, maxLines int) int {
 	total := 0
 	for _, b := range blocks {
 		total += strings.Count(b, "\n") + 1
 	}
-	if total <= maxStreamingTotalLines || len(blocks) <= 1 {
-		return blocks, ""
+	if total <= maxLines {
+		return 0
 	}
-	// Find the largest suffix whose line total stays within the budget.
 	kept := 0
-	cut := 0
 	for i := len(blocks) - 1; i > 0; i-- {
 		n := strings.Count(blocks[i], "\n") + 1
-		if kept+n > maxStreamingTotalLines {
-			cut = i + 1
-			break
+		if kept+n > maxLines {
+			return i + 1
 		}
 		kept += n
 	}
-	if cut <= 0 {
-		return blocks, ""
-	}
-	return blocks[cut:], fmt.Sprintf("... (%d earlier lines hidden while streaming)", total-kept)
+	return 0
 }
 
 // capStreamingBlock truncates an oversized growing block to its last
