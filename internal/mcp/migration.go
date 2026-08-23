@@ -21,14 +21,23 @@ type migrationSource struct {
 }
 
 func MergeStartupServers(workingDir string, explicit []config.MCPServerConfig) ([]config.MCPServerConfig, []string) {
-	return mergeServers(explicit, knownClaudeSources(workingDir))
+	return mergeServers(explicit, knownClaudeSources(workingDir), nil)
+}
+
+// MergeStartupServersWithDeleted is MergeStartupServers with deletion
+// tombstones: names the user explicitly deleted are filtered out of BOTH
+// the explicit list and the migrated sources, so a Claude source file
+// rewritten behind our back (e.g. Pen.app re-adding its registration)
+// cannot resurrect them.
+func MergeStartupServersWithDeleted(workingDir string, explicit []config.MCPServerConfig, deleted []string) ([]config.MCPServerConfig, []string) {
+	return mergeServers(explicit, knownClaudeSources(workingDir), deleted)
 }
 
 func PersistUserClaudeServers(cfg *config.Config) ([]string, bool, error) {
 	if cfg == nil {
 		return nil, false, fmt.Errorf("config is nil")
 	}
-	merged, warnings := mergeServers(cfg.MCPServers, knownUserClaudeSources())
+	merged, warnings := mergeServers(cfg.MCPServers, knownUserClaudeSources(), cfg.DeletedMCPServers)
 	if !sameServerSet(cfg.MCPServers, merged) {
 		cfg.MCPServers = merged
 		if err := cfg.Save(); err != nil {
@@ -39,13 +48,21 @@ func PersistUserClaudeServers(cfg *config.Config) ([]string, bool, error) {
 	return warnings, false, nil
 }
 
-func mergeServers(explicit []config.MCPServerConfig, sources []migrationSource) ([]config.MCPServerConfig, []string) {
+func mergeServers(explicit []config.MCPServerConfig, sources []migrationSource, deleted []string) ([]config.MCPServerConfig, []string) {
+	deletedSet := make(map[string]bool, len(deleted))
+	for _, name := range deleted {
+		deletedSet[strings.TrimSpace(name)] = true
+	}
 	merged := make([]config.MCPServerConfig, 0, len(explicit))
 	warnings := make([]string, 0)
 	usedNames := make(map[string]string, len(explicit))
 	usedSigs := make(map[string]string, len(explicit))
 
 	for _, server := range explicit {
+		if deletedSet[strings.TrimSpace(server.Name)] {
+			// Tombstoned in the explicit list too (stale in-memory copy).
+			continue
+		}
 		cfg := server
 		if strings.TrimSpace(cfg.Source) == "" {
 			cfg.Source = "ggcode"
@@ -64,6 +81,10 @@ func mergeServers(explicit []config.MCPServerConfig, sources []migrationSource) 
 			continue
 		}
 		for _, server := range servers {
+			if deletedSet[strings.TrimSpace(server.Name)] {
+				// User deleted this name; do not resurrect from migration sources.
+				continue
+			}
 			if owner, exists := usedNames[server.Name]; exists {
 				warnings = append(warnings, fmt.Sprintf("warning: skipped migrated MCP server %s from %s (name already provided by %s)", server.Name, source.Source, owner))
 				continue

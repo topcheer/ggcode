@@ -30,6 +30,41 @@ func MCPServersPath(configDir string) string {
 	return externalFilePath(configDir, "mcp_servers")
 }
 
+// MCPDeletedPath returns the path to mcp_deleted.yaml (deletion tombstones).
+func MCPDeletedPath(configDir string) string {
+	return externalFilePath(configDir, "mcp_deleted")
+}
+
+// LoadMCPDeleted reads the tombstone list from mcp_deleted.yaml.
+func LoadMCPDeleted(configDir string) []string {
+	data, err := os.ReadFile(MCPDeletedPath(configDir))
+	if err != nil {
+		return nil
+	}
+	var names []string
+	if err := yaml.Unmarshal(data, &names); err != nil {
+		return nil
+	}
+	return names
+}
+
+// SaveMCPDeleted writes the tombstone list to mcp_deleted.yaml. An empty
+// list removes the file.
+func SaveMCPDeleted(configDir string, names []string) error {
+	path := MCPDeletedPath(configDir)
+	if len(names) == 0 {
+		if fileExists(path) {
+			return os.Remove(path)
+		}
+		return nil
+	}
+	out, err := yaml.Marshal(names)
+	if err != nil {
+		return err
+	}
+	return writeSecureConfigFile(path, out)
+}
+
 // loadExternalSections loads vendors, im, and mcp_servers from their respective
 // standalone files if they exist. If the files don't exist but the data is
 // present in the main config file, it auto-migrates them out.
@@ -77,6 +112,11 @@ func loadExternalSections(cfg *Config, mainConfigPath string) {
 	} else if hasMainSection(mainConfigPath, "mcp_servers") {
 		migrateSectionToExternal(mainConfigPath, configDir, "mcp_servers")
 	}
+
+	// --- MCP deletion tombstones ---
+	// Deleted names must survive config reloads so a Claude source file
+	// rewritten behind our back cannot resurrect them via the merge.
+	cfg.DeletedMCPServers = LoadMCPDeleted(configDir)
 }
 
 // saveExternalSections writes vendors, im, and mcp_servers to their respective

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/auth"
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/util"
 )
 
@@ -263,6 +264,9 @@ func (c *Config) UpsertMCPServer(server MCPServerConfig) (replaced bool) {
 	if c == nil {
 		return false
 	}
+	// Explicit re-add revives the name: clear its deletion tombstone so the
+	// merge no longer filters it out.
+	c.clearMCPDeleted(server.Name)
 	for i, existing := range c.MCPServers {
 		if existing.Name != server.Name {
 			continue
@@ -332,9 +336,57 @@ func (c *Config) RemoveMCPServer(name string) bool {
 			continue
 		}
 		c.MCPServers = append(c.MCPServers[:i], c.MCPServers[i+1:]...)
+		c.recordMCPDeleted(name)
 		return true
 	}
 	return false
+}
+
+// RecordMCPDeleted is the exported tombstone entry point for surfaces that
+// delete servers which exist only in migration sources (never in the yaml):
+// cfg.RemoveMCPServer records internally, but returns false for those names
+// and never reaches it.
+func (c *Config) RecordMCPDeleted(name string) { c.recordMCPDeleted(name) }
+
+// recordMCPDeleted appends name to the deletion tombstones and persists them
+// so a Claude source file rewritten behind our back (e.g. Pen.app re-adding
+// its registration) cannot resurrect the server via merge. Callers that
+// already persist separately (RemoveMCPServer paths save the server list
+// right after) still get the tombstone file written here immediately.
+func (c *Config) recordMCPDeleted(name string) {
+	if c == nil || strings.TrimSpace(name) == "" {
+		return
+	}
+	for _, existing := range c.DeletedMCPServers {
+		if existing == name {
+			return
+		}
+	}
+	c.DeletedMCPServers = append(c.DeletedMCPServers, name)
+	if err := SaveMCPDeleted(c.externalConfigDir(), c.DeletedMCPServers); err != nil {
+		debug.Log("config", "failed to save mcp tombstones: %v", err)
+	}
+}
+
+// clearMCPDeleted removes name from the tombstones (re-adding a server
+// revives it) and persists the change.
+func (c *Config) clearMCPDeleted(name string) {
+	if c == nil {
+		return
+	}
+	kept := c.DeletedMCPServers[:0]
+	for _, existing := range c.DeletedMCPServers {
+		if existing != name {
+			kept = append(kept, existing)
+		}
+	}
+	if len(kept) == len(c.DeletedMCPServers) {
+		return // nothing removed
+	}
+	c.DeletedMCPServers = kept
+	if err := SaveMCPDeleted(c.externalConfigDir(), c.DeletedMCPServers); err != nil {
+		debug.Log("config", "failed to save mcp tombstones: %v", err)
+	}
 }
 
 // SaveMCPServers persists the current c.MCPServers slice to mcp_servers.yaml.

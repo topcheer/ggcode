@@ -53,7 +53,7 @@ func BuildInteractiveRuntimeCore(cfg *config.Config, workingDir string, policy p
 		return nil, err
 	}
 
-	mergedServers, _ := mcp.MergeStartupServers(workingDir, cfg.MCPServers)
+	mergedServers, _ := mcp.MergeStartupServersWithDeleted(workingDir, cfg.MCPServers, cfg.DeletedMCPServers)
 	mcpMgr := plugin.NewMCPManager(mergedServers, registry)
 	_ = registry.Register(tool.ListMCPCapabilitiesTool{Runtime: mcpMgr})
 	_ = registry.Register(tool.GetMCPPromptTool{Runtime: mcpMgr})

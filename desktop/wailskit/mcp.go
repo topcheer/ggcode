@@ -159,8 +159,8 @@ func ForceReauthMCPServer(name string) bool {
 	return chat.mcpManager.ForceReauth(name)
 }
 
-// reloadSessionMCPServers pushes a freshly-loaded server list into the
-// session's MCP manager. The hot-reload watcher only polls the GLOBAL
+// reloadSessionMCPServers pushes the effective server list for the session
+// into the session's MCP manager. The hot-reload watcher only polls the GLOBAL
 // mcp_servers.yaml (interactive_core.go: NewMCPHotReload(config.ConfigDir())),
 // so workspace-scoped writes from AddMCPServer are invisible to it (#498).
 // Without this explicit reload, an edited or newly added workspace server
@@ -169,18 +169,25 @@ func ForceReauthMCPServer(name string) bool {
 // cached adapter while the plugin's own cfg is stale. Reload rebuilds
 // changed/new plugins from the fresh list.
 //
-// NOTE: no MergeStartupServers here (or in the watcher's checkAndReload).
-// The old claim that it is "idempotent for already-persisted Claude-migrated
-// servers" only held while the entry stayed in the ggcode list - after a
-// DELETE the same-name entry from a Claude source (.mcp.json /
-// ~/.claude.json) was re-merged on every reload, so an unload never stuck.
-// Startup migration (interactive_core.go) remains the single merge point;
-// callers pass the full persisted list, so nothing is lost by skipping it.
-func reloadSessionMCPServers(chat *ChatBridge, servers []config.MCPServerConfig) {
-	if chat == nil || chat.mcpManager == nil {
+// #979: the list pushed must be the SAME merged set the runtime runs at
+// startup (BuildInteractiveRuntimeCore -> mcp.MergeStartupServers: yaml ∪
+// project .mcp.json ∪ ~/.claude.json). MCPManager.Reload has replace
+// semantics, so passing the yaml-only cfg.MCPServers silently disconnected
+// every Claude-migrated server from the running session on ANY Add/Remove.
+// The merge is in-memory only (merge never persists to the yaml), which is
+// safe for Remove because the caller has already deleted the name from
+// every origin file (#606) - the merge cannot resurrect what no file
+// provides anymore.
+func reloadSessionMCPServers(chat *ChatBridge, cfg *config.Config) {
+	if chat == nil || chat.mcpManager == nil || cfg == nil {
 		return
 	}
-	chat.mcpManager.Reload(context.Background(), servers)
+	workDir := ""
+	if chat != nil {
+		workDir = chat.WorkingDir()
+	}
+	merged, _ := mcp.MergeStartupServersWithDeleted(workDir, cfg.MCPServers, cfg.DeletedMCPServers)
+	chat.mcpManager.Reload(context.Background(), merged)
 }
 
 // AddMCPServer adds a new MCP server configuration.
@@ -247,26 +254,38 @@ func AddMCPServer(values map[string]string) error {
 		serverCfg.Args = args
 	}
 
-	// Parse env_ prefixed keys into env map
+	// Parse env_ prefixed keys into env map.
+	// #979: an explicitly-cleared env must survive the len guard below: the
+	// form sends env_clear=1 when the user deleted every env row, and the
+	// patch layer (patchMCPServerConfig) defines "empty non-nil map =
+	// cleared". Without the sentinel, a form with zero env_* keys produced a
+	// nil Env ("not provided" -> keep old value), so stale credentials
+	// silently resurrected on save.
+	envClear := isTruthyFormFlag(values["env_clear"])
 	env := make(map[string]string)
 	for k, v := range values {
-		if len(k) > 4 && k[:4] == "env_" {
+		if len(k) > 4 && k[:4] == "env_" && k != "env_clear" {
 			env[k[4:]] = v
 		}
 	}
 	if len(env) > 0 {
 		serverCfg.Env = env
+	} else if envClear {
+		serverCfg.Env = map[string]string{} // non-nil empty: explicit clear
 	}
 
-	// Parse headers_ prefixed keys into headers map
+	// Parse headers_ prefixed keys into headers map (same #979 semantics).
+	headersClear := isTruthyFormFlag(values["headers_clear"])
 	headers := make(map[string]string)
 	for k, v := range values {
-		if len(k) > 8 && k[:8] == "headers_" {
+		if len(k) > 8 && k[:8] == "headers_" && k != "headers_clear" {
 			headers[k[8:]] = v
 		}
 	}
 	if len(headers) > 0 {
 		serverCfg.Headers = headers
+	} else if headersClear {
+		serverCfg.Headers = map[string]string{} // non-nil empty: explicit clear
 	}
 
 	cfg.UpsertMCPServer(serverCfg)
@@ -275,11 +294,11 @@ func AddMCPServer(values map[string]string) error {
 	if err := cfg.SaveMCPServers(); err != nil {
 		return err
 	}
-	// #498: propagate immediately - for workspace-scoped sessions the global-
-	// file watcher never sees this write, so without an explicit Reload the
-	// running session keeps the old connection (or never learns about a new
-	// server) until restart. Symmetric with RemoveMCPServer's #408 Disconnect.
-	reloadSessionMCPServers(chatSnap, cfg.MCPServers)
+	// #498/#979: propagate immediately with the merge-equivalent set - for
+	// workspace-scoped sessions the global-file watcher never sees this
+	// write, and a yaml-only list would kick .mcp.json servers out of the
+	// running session (Reload is replace-semantics).
+	reloadSessionMCPServers(chatSnap, cfg)
 	return nil
 }
 
@@ -320,17 +339,23 @@ func RemoveMCPServer(name string) error {
 	if !removedYaml && !removedOrigin {
 		return fmt.Errorf("MCP server %q not found", name)
 	}
+	// Tombstone the name: external apps rewrite their Claude registrations
+	// behind our back; without the tombstone the merge re-imports the name on
+	// the next panel read and it "comes back" as an unconfigured row.
+	// removeMigratedMCPServer cleaned the origin files, so this is the only
+	// remaining resurrect path. Re-adding via UpsertMCPServer clears it.
+	cfg.RecordMCPDeleted(name)
 	// Symmetric with SetMCPServerEnabled(false): disconnect immediately
 	// instead of waiting for the ~2s hot-reload poll (which may also miss
 	// workspace-scoped yaml changes) - without this the removed server's
 	// tools stayed callable during the window (#408). Uses chatSnap to
 	// ensure Disconnect targets the same session whose config we just saved.
-	// The reload then pushes the freshly-persisted state through the same
-	// merge the runtime uses; since every origin of the name has been
-	// removed from disk, the merge cannot resurrect it (#606).
+	// The reload then pushes the merge-equivalent set (yaml ∪ .mcp.json);
+	// since every origin of the name has been removed from disk, the merge
+	// cannot resurrect it (#606), while other migrated servers survive (#979).
 	if chatSnap != nil && chatSnap.mcpManager != nil {
 		_ = chatSnap.mcpManager.Disconnect(name)
-		reloadSessionMCPServers(chatSnap, cfg.MCPServers)
+		reloadSessionMCPServers(chatSnap, cfg)
 	}
 	return nil
 }
@@ -348,7 +373,7 @@ func effectiveSessionServers(chat *ChatBridge, cfg *config.Config) []config.MCPS
 	if chat != nil {
 		workDir = chat.WorkingDir()
 	}
-	merged, _ := mcp.MergeStartupServers(workDir, cfg.MCPServers)
+	merged, _ := mcp.MergeStartupServersWithDeleted(workDir, cfg.MCPServers, cfg.DeletedMCPServers)
 	return merged
 }
 
@@ -429,6 +454,18 @@ func claudeMigrationPaths(workDir string) []string {
 		)
 	}
 	return paths
+}
+
+// isTruthyFormFlag interprets a form-sent boolean-ish flag value. The desktop
+// form protocol is map[string]string, so any of "1"/"true"/"yes"/"on"
+// (case-insensitive) enables the flag; anything else (including missing)
+// leaves it off.
+func isTruthyFormFlag(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
 }
 
 // parseShellArgs splits a command-line argument string with quote awareness.
