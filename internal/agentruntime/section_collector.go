@@ -31,6 +31,14 @@ const (
 	// sectionIdleInterval is used when the last refresh produced no changes.
 	// This reduces idle-time I/O (git status, git log, etc.) by 3x.
 	sectionIdleInterval = 30 * time.Second
+
+	// firstRefreshBudget bounds how long startup waits for the synchronous
+	// first refresh on slow filesystems (e.g. NFS mounts with many entries).
+	// Individual section scans (project overview, symbol maps) perform one
+	// readdir/stat network round-trip per entry and can take minutes there.
+	// Past the budget the TUI starts with empty sections; the background
+	// refresh loop fills the cache shortly after.
+	firstRefreshBudget = 5 * time.Second
 )
 
 // SectionCollector holds cached prompt sections refreshed by a background goroutine.
@@ -86,8 +94,21 @@ func InitGlobalSectionCollector(workingDir string) {
 		stop:    make(chan struct{}),
 		done:    make(chan struct{}),
 	}
-	// Synchronous first refresh so values are ready for the initial prompt.
-	sc.refresh()
+	// Synchronous first refresh so values are ready for the initial prompt,
+	// but bounded: on slow filesystems (NFS with large directories) the scans
+	// can take minutes, which would delay the TUI indefinitely. Past the
+	// budget, startup proceeds with empty sections and the refresh goroutine
+	// keeps filling the cache in the background.
+	refreshDone := make(chan struct{})
+	go func() {
+		sc.refresh()
+		close(refreshDone)
+	}()
+	select {
+	case <-refreshDone:
+	case <-time.After(firstRefreshBudget):
+		debug.Log("agentruntime", "section collector first refresh exceeded %s (slow filesystem?); starting with empty sections", firstRefreshBudget)
+	}
 	sc.Start()
 	globalSectionCollector = sc
 }
@@ -166,16 +187,44 @@ func (sc *SectionCollector) Snapshot() sectionSnapshot {
 func (sc *SectionCollector) refresh() {
 	start := time.Now()
 
-	overview := projectOverviewSection(sc.working)
-	modified := computeModifiedFilesSection(sc.working)
-	commands := projectCommandsSection(sc.working)
-	toolchain := toolchainSection(sc.working)
-	symbols := buildGoPackageSymbolsSection(sc.working)
-	symbols += buildTSSymbolsSection(sc.working)
-	symbols += buildPythonSymbolsSection(sc.working)
-	deps := buildPackageDepsSection(sc.working)
-	recentCommits := computeRecentCommitsSection(sc.working)
+	// Sections are independent — collect them concurrently so total refresh
+	// time is the slowest section (MAX) rather than the sum. On slow
+	// filesystems each scan is dominated by readdir/stat round-trips.
+	var (
+		overview, modified, commands, toolchain, symbols, deps, recentCommits string
+		wg                                                                    sync.WaitGroup
+	)
+	wg.Add(7)
+	go func() { defer wg.Done(); overview = projectOverviewSection(sc.working) }()
+	go func() { defer wg.Done(); modified = computeModifiedFilesSection(sc.working) }()
+	go func() { defer wg.Done(); commands = projectCommandsSection(sc.working) }()
+	go func() { defer wg.Done(); toolchain = toolchainSection(sc.working) }()
+	go func() {
+		defer wg.Done()
+		symbols = buildGoPackageSymbolsSection(sc.working)
+		symbols += buildTSSymbolsSection(sc.working)
+		symbols += buildPythonSymbolsSection(sc.working)
+	}()
+	go func() { defer wg.Done(); deps = buildPackageDepsSection(sc.working) }()
+	go func() { defer wg.Done(); recentCommits = computeRecentCommitsSection(sc.working) }()
 
+	// The background loop and Stop() must never deadlock on a hung section:
+	// the goroutines write shared locals and exit on their own. But refresh()
+	// itself must not block forever waiting for them — wait with a generous
+	// cap so the loop keeps its cadence even on pathological mounts.
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+		sc.store(overview, modified, commands, toolchain, symbols, deps, recentCommits, start)
+	case <-time.After(10 * time.Minute):
+		debug.Log("agentruntime", "section collector refresh hung >10m; skipping update")
+	}
+}
+
+// store writes the freshly collected sections into the cache and updates
+// idle tracking. Called with all section values ready.
+func (sc *SectionCollector) store(overview, modified, commands, toolchain, symbols, deps, recentCommits string, start time.Time) {
 	sc.mu.Lock()
 	sc.overview = overview
 	sc.modified = modified
@@ -184,20 +233,10 @@ func (sc *SectionCollector) refresh() {
 	sc.symbols = symbols
 	sc.deps = deps
 	sc.recentCommits = recentCommits
-	sc.mu.Unlock()
 
 	// Check if anything actually changed
 	currentSig := overview + "\x00" + modified + "\x00" + commands + "\x00" +
 		toolchain + "\x00" + symbols + "\x00" + deps + "\x00" + recentCommits
-
-	sc.mu.Lock()
-	sc.overview = overview
-	sc.modified = modified
-	sc.commands = commands
-	sc.toolchain = toolchain
-	sc.symbols = symbols
-	sc.deps = deps
-	sc.recentCommits = recentCommits
 
 	if currentSig == sc.lastSnapshot {
 		sc.idle = true
