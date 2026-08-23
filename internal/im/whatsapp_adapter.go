@@ -44,6 +44,7 @@ func init() {
 const (
 	waMaxTextLen    = 65536                  // Official: WhatsApp personal accounts support up to 65,536 characters per text message
 	waInterMsgDelay = 300 * time.Millisecond // Conservative inter-chunk delay to avoid WhatsApp rate limiting
+	waDedupMaxSize  = 1000                   // inbound msgid dedup cap, mirrors wecomDedupMaxSize (#974)
 )
 
 var waBackoffs = []time.Duration{
@@ -86,11 +87,9 @@ type whatsappAdapter struct {
 	name    string
 	manager *Manager
 
-	storeContainer *sqlstore.Container
-	client         *whatsmeow.Client
-	device         *store.Device
-	storeDir       string
-	proxy          string
+	client   *whatsmeow.Client
+	storeDir string
+	proxy    string
 
 	mu        sync.RWMutex
 	connected bool
@@ -99,6 +98,10 @@ type whatsappAdapter struct {
 	// runWG tracks the run goroutine(s) started by Start so shutdown paths
 	// (and tests) can wait for them to finish writing session state (#603).
 	runWG sync.WaitGroup
+
+	// seen deduplicates inbound messages by msgid — reconnects and offline
+	// history sync can redeliver the same message (#974). Guarded by a.mu.
+	seen map[string]time.Time
 
 	// QR code for TUI display (set during pairing, cleared after connect)
 	lastQR      string
@@ -122,6 +125,7 @@ func newWhatsAppAdapter(name string, _ config.IMConfig, adapterCfg config.IMAdap
 		manager:  mgr,
 		storeDir: storeDir,
 		proxy:    proxy,
+		seen:     make(map[string]time.Time),
 	}, nil
 }
 
@@ -151,8 +155,11 @@ func (l *waDebugLogger) Sub(module string) waLog.Logger {
 func (a *whatsappAdapter) Name() string { return a.name }
 
 func (a *whatsappAdapter) Send(ctx context.Context, binding ChannelBinding, event OutboundEvent) error {
-	if a.client == nil || !a.Connected() {
-		return nil
+	client := a.currentClient()
+	if client == nil || !a.Connected() {
+		// #974: returning nil here reported success during disconnect windows
+		// while the message was silently dropped.
+		return fmt.Errorf("whatsapp %q: not connected, outbound dropped", a.name)
 	}
 	content := defaultOutboundText(event)
 	if content == "" {
@@ -175,7 +182,7 @@ func (a *whatsappAdapter) Send(ctx context.Context, binding ChannelBinding, even
 	// Extract images from text and send them as WhatsApp image messages.
 	images, remainingText := ExtractImagesFromText(content)
 	for i, img := range images {
-		if err := a.sendExtractedImage(ctx, jid, img); err != nil {
+		if err := a.sendExtractedImage(ctx, client, jid, img); err != nil {
 			debug.Log("whatsapp", "adapter %q: image send failed [%d/%d]: %v", a.name, i+1, len(images), err)
 		}
 	}
@@ -191,7 +198,7 @@ func (a *whatsappAdapter) Send(ctx context.Context, binding ChannelBinding, even
 	debug.Log("whatsapp", "adapter %q: outbound target=%s chunks=%d images=%d len=%d", a.name, target, len(chunks), len(images), len(text))
 	for i, chunk := range chunks {
 		msg := &waE2E.Message{Conversation: proto.String(chunk)}
-		_, err := a.client.SendMessage(ctx, jid, msg)
+		_, err := client.SendMessage(ctx, jid, msg)
 		if err != nil {
 			debug.Log("whatsapp", "adapter %q: send chunk %d/%d failed: %v", a.name, i+1, len(chunks), err)
 			return fmt.Errorf("whatsapp %q: send chunk %d: %w", a.name, i+1, err)
@@ -209,7 +216,7 @@ func (a *whatsappAdapter) Send(ctx context.Context, binding ChannelBinding, even
 }
 
 // sendExtractedImage dispatches image sending based on the image kind.
-func (a *whatsappAdapter) sendExtractedImage(ctx context.Context, jid types.JID, img ExtractedImage) error {
+func (a *whatsappAdapter) sendExtractedImage(ctx context.Context, client *whatsmeow.Client, jid types.JID, img ExtractedImage) error {
 	switch img.Kind {
 	case "url":
 		if IsLocalFilePath(img.Data) {
@@ -217,7 +224,7 @@ func (a *whatsappAdapter) sendExtractedImage(ctx context.Context, jid types.JID,
 			if err != nil {
 				return fmt.Errorf("read local image: %w", err)
 			}
-			return a.sendImageByUpload(ctx, jid, data, "")
+			return a.sendImageByUpload(ctx, client, jid, data, "")
 		}
 		// Download remote URL
 		req, err := http.NewRequestWithContext(ctx, "GET", img.Data, nil)
@@ -236,7 +243,7 @@ func (a *whatsappAdapter) sendExtractedImage(ctx context.Context, jid types.JID,
 		if err != nil {
 			return fmt.Errorf("read image data: %w", err)
 		}
-		return a.sendImageByUpload(ctx, jid, data, "")
+		return a.sendImageByUpload(ctx, client, jid, data, "")
 	case "data_url":
 		parts := strings.SplitN(img.Data, ",", 2)
 		if len(parts) < 2 {
@@ -246,15 +253,15 @@ func (a *whatsappAdapter) sendExtractedImage(ctx context.Context, jid types.JID,
 		if err != nil {
 			return fmt.Errorf("invalid base64 in data URL: %w", err)
 		}
-		return a.sendImageByUpload(ctx, jid, data, "")
+		return a.sendImageByUpload(ctx, client, jid, data, "")
 	default:
 		return fmt.Errorf("unknown image kind: %s", img.Kind)
 	}
 }
 
 // sendImageByUpload uploads image data to WhatsApp servers and sends as ImageMessage.
-func (a *whatsappAdapter) sendImageByUpload(ctx context.Context, jid types.JID, data []byte, caption string) error {
-	uploaded, err := a.client.Upload(ctx, data, whatsmeow.MediaImage)
+func (a *whatsappAdapter) sendImageByUpload(ctx context.Context, client *whatsmeow.Client, jid types.JID, data []byte, caption string) error {
+	uploaded, err := client.Upload(ctx, data, whatsmeow.MediaImage)
 	if err != nil {
 		return fmt.Errorf("whatsapp upload image: %w", err)
 	}
@@ -272,7 +279,7 @@ func (a *whatsappAdapter) sendImageByUpload(ctx context.Context, jid types.JID, 
 		imgMsg.Caption = proto.String(caption)
 	}
 
-	_, err = a.client.SendMessage(ctx, jid, &waE2E.Message{ImageMessage: imgMsg})
+	_, err = client.SendMessage(ctx, jid, &waE2E.Message{ImageMessage: imgMsg})
 	if err != nil {
 		return fmt.Errorf("whatsapp send image: %w", err)
 	}
@@ -320,7 +327,8 @@ func (a *whatsappAdapter) ChatID() string { return "" }
 // ---------------------------------------------------------------------------
 
 func (a *whatsappAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding) error {
-	if a.client == nil {
+	client := a.currentClient()
+	if client == nil {
 		return nil
 	}
 	target := binding.ChannelID
@@ -331,7 +339,7 @@ func (a *whatsappAdapter) TriggerTyping(ctx context.Context, binding ChannelBind
 	if err != nil {
 		return err
 	}
-	err = a.client.SendChatPresence(ctx, jid, types.ChatPresenceComposing, types.ChatPresenceMediaText)
+	err = client.SendChatPresence(ctx, jid, types.ChatPresenceComposing, types.ChatPresenceMediaText)
 	if err != nil {
 		debug.Log("whatsapp", "adapter %q: typing failed: %v", a.name, err)
 	}
@@ -417,7 +425,8 @@ func (a *whatsappAdapter) connectAndServe(ctx context.Context) error {
 		a.publishState(false, "error", fmt.Sprintf("store: %v", err))
 		return err
 	}
-	a.storeContainer = container
+	// #974: the storeContainer/device struct fields were removed — the
+	// container lives as a local here and is closed exactly once on return.
 	// #761: every early return below (GetAllDevices / both Connect paths)
 	// used to leak the sqlite pool; reconnectLoop retries indefinitely, so a
 	// locked/Corrupt DB exhausted fds within hours. Defer-close once.
@@ -434,13 +443,14 @@ func (a *whatsappAdapter) connectAndServe(ctx context.Context) error {
 		a.publishState(false, "error", fmt.Sprintf("devices: %v", err))
 		return err
 	}
+	var device *store.Device
 	if len(devices) > 0 {
-		a.device = devices[0]
+		device = devices[0]
 	} else {
-		a.device = container.NewDevice()
+		device = container.NewDevice()
 	}
 
-	client := whatsmeow.NewClient(a.device, &waDebugLogger{prefix: "client"})
+	client := whatsmeow.NewClient(device, &waDebugLogger{prefix: "client"})
 	client.AddEventHandler(a.eventHandler())
 	// Publish under a.mu: Stop() reads a.client concurrently and an
 	// unsynchronized write/read pair is a DATA RACE (#603).
@@ -452,15 +462,15 @@ func (a *whatsappAdapter) connectAndServe(ctx context.Context) error {
 	a.sessionDone = done
 	a.mu.Unlock()
 
-	if a.client.Store.ID == nil {
+	if client.Store.ID == nil {
 		// No session — need QR login
 		debug.Log("whatsapp", "adapter %q: no session, requesting QR code", a.name)
 		a.publishState(false, "pairing", "scan QR code with WhatsApp")
-		qrChan, qrErr := a.client.GetQRChannel(ctx)
+		qrChan, qrErr := client.GetQRChannel(ctx)
 		if qrErr != nil {
 			debug.Log("whatsapp", "adapter %q: get QR channel: %v", a.name, qrErr)
 		}
-		if err := a.client.Connect(); err != nil {
+		if err := client.Connect(); err != nil {
 			debug.Log("whatsapp", "adapter %q: connect: %v", a.name, err)
 			return err
 		}
@@ -476,12 +486,15 @@ func (a *whatsappAdapter) connectAndServe(ctx context.Context) error {
 					a.mu.Unlock()
 					// Publish state with QR code so TUI can display it
 					a.publishState(false, "pairing", "scan QR code with WhatsApp")
+				} else {
+					// #974: don't silently swallow non-code QR channel events.
+					debug.Log("whatsapp", "adapter %q: QR channel event %q", a.name, evt.Event)
 				}
 			}
 		}
 	} else {
 		debug.Log("whatsapp", "adapter %q: connecting with saved session", a.name)
-		if err := a.client.Connect(); err != nil {
+		if err := client.Connect(); err != nil {
 			debug.Log("whatsapp", "adapter %q: connect: %v", a.name, err)
 			return err
 		}
@@ -494,23 +507,25 @@ func (a *whatsappAdapter) connectAndServe(ctx context.Context) error {
 		}
 		a.mu.Unlock()
 	}()
+	// Disconnect via snapshot — a.client may be nil'd concurrently by
+	// markLoggedOut / Stop (#974 asymmetric-lock fix).
+	teardown := func() {
+		if c := a.currentClient(); c != nil {
+			c.Disconnect()
+		}
+	}
 	select {
 	case <-ctx.Done():
-		if a.client != nil {
-			a.client.Disconnect()
-		}
-		if a.storeContainer != nil {
-			_ = a.storeContainer.Close()
-			containerClosed = true
-		}
+		teardown()
 		return nil
 	case err := <-done:
-		if a.client != nil {
-			a.client.Disconnect()
-		}
-		if a.storeContainer != nil {
-			_ = a.storeContainer.Close()
+		teardown()
+		if err != nil && waTerminal(err) {
+			// LoggedOut: close the sqlite container BEFORE deleting the DB
+			// files — Windows refuses to unlink open files (#974).
+			_ = container.Close()
 			containerClosed = true
+			a.removeStoreDB()
 		}
 		return err
 	}
@@ -528,19 +543,21 @@ func (a *whatsappAdapter) eventHandler() func(interface{}) {
 			a.connected = true
 			a.lastQR = "" // clear QR after successful connect
 			a.mu.Unlock()
+			// Snapshot under lock: Send/publishState run concurrently (#974).
+			client := a.currentClient()
 			jid := ""
-			if a.client != nil && a.client.Store.ID != nil {
-				jid = a.client.Store.ID.String()
+			if client != nil && client.Store.ID != nil {
+				jid = client.Store.ID.String()
 			}
 			debug.Log("whatsapp", "adapter %q: connected (jid=%s)", a.name, jid)
 			a.publishState(true, "connected", "")
 
-			if a.client != nil {
-				if a.client.Store.PushName == "" {
-					a.client.Store.PushName = "ggcode"
+			if client != nil {
+				if client.Store.PushName == "" {
+					client.Store.PushName = "ggcode"
 				}
 				// Mark ourselves as available so the server starts pushing messages.
-				if err := a.client.SendPresence(context.Background(), types.PresenceAvailable); err != nil {
+				if err := client.SendPresence(context.Background(), types.PresenceAvailable); err != nil {
 					debug.Log("whatsapp", "adapter %q: send presence available failed: %v", a.name, err)
 				} else {
 					debug.Log("whatsapp", "adapter %q: presence set to available", a.name)
@@ -555,7 +572,7 @@ func (a *whatsappAdapter) eventHandler() func(interface{}) {
 						appstate.WAPatchCriticalBlock,
 						appstate.WAPatchCriticalUnblockLow,
 					} {
-						if err := a.client.FetchAppState(ctx, name, false, false); err != nil {
+						if err := client.FetchAppState(ctx, name, false, false); err != nil {
 							debug.Log("whatsapp", "adapter %q: fetch app state %s failed: %v", a.name, name, err)
 						} else {
 							debug.Log("whatsapp", "adapter %q: fetched app state %s", a.name, name)
@@ -573,20 +590,12 @@ func (a *whatsappAdapter) eventHandler() func(interface{}) {
 			a.signalSessionDone(fmt.Errorf("whatsapp disconnected"))
 
 		case *events.LoggedOut:
-			a.mu.Lock()
-			a.connected = false
-			a.mu.Unlock()
 			debug.Log("whatsapp", "adapter %q: logged out: %s", a.name, v.Reason)
-			// Clear device reference so next start creates fresh device
-			a.device = nil
-			// Remove the database so next start generates a new QR code
-			dbPath := filepath.Join(a.storeDir, "whatsmeow.db")
-			_ = os.Remove(dbPath)
-			_ = os.Remove(dbPath + "-wal")
-			_ = os.Remove(dbPath + "-shm")
-			debug.Log("whatsapp", "adapter %q: device cleared, will re-pair on next start", a.name)
+			a.markLoggedOut()
 			a.publishState(false, "logged_out", "need re-pairing")
 			a.signalSessionDone(errWhatsAppLoggedOut)
+			// DB file removal happens in connectAndServe after the container is
+			// closed — deleting an open sqlite file fails on Windows (#974).
 
 		case *events.PairSuccess:
 			debug.Log("whatsapp", "adapter %q: paired (JID: %s)", a.name, v.ID)
@@ -629,6 +638,19 @@ func (a *whatsappAdapter) signalSessionDone(err error) {
 	select {
 	case done <- err:
 	default:
+		// Buffer full: upgrade a non-terminal signal to a terminal one so a
+		// preceding Disconnected cannot mask LoggedOut (#974) — event handlers
+		// run sequentially on whatsmeow's dispatch goroutine, so this is safe.
+		if waTerminal(err) {
+			select {
+			case <-done:
+			default:
+			}
+			select {
+			case done <- err:
+			default:
+			}
+		}
 	}
 }
 
@@ -637,6 +659,32 @@ func (a *whatsappAdapter) signalSessionDone(err error) {
 // ---------------------------------------------------------------------------
 
 func (a *whatsappAdapter) handleInbound(msg *events.Message) {
+	// #974 (high): whatsmeow's event layer does NOT filter our own outgoing
+	// messages — multi-device SyncMessage echoes arrive with IsFromMe=true.
+	// Without this check a bound master's own messages re-enter the agent as
+	// user input, causing ghost self-replies. Standard bridge/bot behavior is
+	// to drop them.
+	if msg.Info.IsFromMe {
+		return
+	}
+	// #974: reconnects and offline history sync can redeliver the same msgid;
+	// dedup like signal/slack/wecom do.
+	a.mu.Lock()
+	if _, dup := a.seen[msg.Info.ID]; dup {
+		a.mu.Unlock()
+		return
+	}
+	a.seen[msg.Info.ID] = time.Now()
+	if len(a.seen) > waDedupMaxSize {
+		cutoff := time.Now().Add(-5 * time.Minute)
+		for k, t := range a.seen {
+			if t.Before(cutoff) {
+				delete(a.seen, k)
+			}
+		}
+	}
+	a.mu.Unlock()
+
 	text := ""
 	if conv := msg.Message.GetConversation(); conv != "" {
 		text = conv
@@ -703,14 +751,18 @@ func (a *whatsappAdapter) handleInbound(msg *events.Message) {
 }
 
 func (a *whatsappAdapter) replyToChat(chatID, text string) error {
-	if a.client == nil || text == "" {
+	if text == "" {
 		return nil
+	}
+	client := a.currentClient()
+	if client == nil {
+		return fmt.Errorf("whatsapp %q: not connected", a.name)
 	}
 	jid, err := types.ParseJID(chatID)
 	if err != nil {
 		return err
 	}
-	_, err = a.client.SendMessage(context.Background(), jid, &waE2E.Message{
+	_, err = client.SendMessage(context.Background(), jid, &waE2E.Message{
 		Conversation: proto.String(text),
 	})
 	if err != nil {
@@ -730,10 +782,10 @@ func (a *whatsappAdapter) publishState(healthy bool, status, lastErr string) {
 		return
 	}
 	contactURI := ""
-	if a.client != nil && a.client.Store.ID != nil {
+	if client := a.currentClient(); client != nil && client.Store.ID != nil {
 		// JID.User is the phone number (e.g. "8613800138000")
 		// wa.me deep link: https://wa.me/{phone}
-		contactURI = "https://wa.me/" + a.client.Store.ID.User
+		contactURI = "https://wa.me/" + client.Store.ID.User
 	}
 	a.mu.RLock()
 	qr := a.lastQR
@@ -749,6 +801,40 @@ func (a *whatsappAdapter) publishState(healthy bool, status, lastErr string) {
 		QRCode:     qr,
 		UpdatedAt:  time.Now(),
 	})
+}
+
+// currentClient returns a lock-protected snapshot of the client pointer.
+// The pointer itself is always safe to dereference: publish (connectAndServe)
+// and clear (markLoggedOut) writes happen under a.mu, so every read site must
+// go through this snapshot instead of touching a.client directly (#974).
+func (a *whatsappAdapter) currentClient() *whatsmeow.Client {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.client
+}
+
+// markLoggedOut clears the client and connected flag (idempotent). Called
+// from the LoggedOut event handler; safe to call again from other paths.
+func (a *whatsappAdapter) markLoggedOut() {
+	a.mu.Lock()
+	client := a.client
+	a.client = nil
+	a.connected = false
+	a.mu.Unlock()
+	if client != nil {
+		client.Disconnect()
+	}
+}
+
+// removeStoreDB deletes the whatsmeow sqlite store so the next start pairs
+// fresh. Call only AFTER the container is closed — Windows refuses to unlink
+// open files (#974).
+func (a *whatsappAdapter) removeStoreDB() {
+	dbPath := filepath.Join(a.storeDir, "whatsmeow.db")
+	_ = os.Remove(dbPath)
+	_ = os.Remove(dbPath + "-wal")
+	_ = os.Remove(dbPath + "-shm")
+	debug.Log("whatsapp", "adapter %q: store removed, will re-pair on next start", a.name)
 }
 
 // chunkWARunes delegates to the shared splitMessageRunes with balanced

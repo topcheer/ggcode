@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -50,13 +51,25 @@ type wecomAdapter struct {
 	groupPolicy    string   // "open", "allowlist", "disabled"
 	groupAllowFrom []string // Group allowlist
 
-	mu          sync.RWMutex
-	ws          *websocket.Conn
-	writeMu     sync.Mutex // protects websocket writes (gorilla/websocket not concurrent-safe)
-	connected   bool
-	closed      bool
-	seen        map[string]time.Time // message dedup
-	replyReqIDs map[string]string    // msgid → req_id for respond_msg replies
+	mu            sync.RWMutex
+	ws            *websocket.Conn
+	writeMu       sync.Mutex // protects websocket writes (gorilla/websocket not concurrent-safe)
+	connected     bool
+	closed        bool
+	seen          map[string]time.Time // message dedup
+	replyReqIDs   map[string]string    // msgid → req_id for respond_msg replies
+	replyReqOrder []string             // insertion order of replyReqIDs for oldest-first eviction (#974); guarded by mu
+
+	// pendingAcks maps an outbound req_id → buffered ack-waiter channel.
+	// Registered by writeAndAwait, resolved (LoadAndDelete) by
+	// dispatchPayload when the server's ack frame arrives (#974). Previously
+	// outbound WriteJSON success was treated as delivery success, so async
+	// rejections (errcode 45009 etc.) were silently dropped.
+	pendingAcks sync.Map
+
+	// ackTimeout overrides wecomRequestTimeout for outbound ack waits;
+	// zero means default. Tests set a short value. Guarded by mu.
+	ackTimeout time.Duration
 }
 
 func newWeComAdapter(name string, _ config.IMConfig, adapterCfg config.IMAdapterConfig, mgr *Manager) (*wecomAdapter, error) {
@@ -142,6 +155,11 @@ func (a *wecomAdapter) run(ctx context.Context) {
 		if err := a.connectAndServe(ctx); err != nil {
 			a.publishState(false, "error", err.Error())
 			debug.Log("wecom", "adapter=%s error: %v", a.name, err)
+		} else {
+			// Clean exit (ctx cancelled / ws closed by us): reset the backoff
+			// so a future start is not penalized by stale attempt counts
+			// (#974, mirrors whatsapp run()).
+			attempt = 0
 		}
 		a.mu.RLock()
 		isClosed := a.closed
@@ -332,6 +350,19 @@ func (a *wecomAdapter) heartbeatLoop(ctx context.Context) {
 }
 
 func (a *wecomAdapter) dispatchPayload(ctx context.Context, payload map[string]any) {
+	// Outbound ack frames first: a payload whose req_id matches a pending
+	// outbound request resolves that waiter (#974). Server acks echo the
+	// req_id WE generated ("send-…", "respond…" prefixes), so this can never
+	// swallow an inbound callback frame — those carry server-generated ids.
+	if reqID := payloadReqID(payload); reqID != "" {
+		if v, ok := a.pendingAcks.LoadAndDelete(reqID); ok {
+			if ch, ok := v.(chan error); ok {
+				ch <- wecomAckError(reqID, payload) // buffered(1); waiter may be gone
+			}
+			return
+		}
+	}
+
 	cmd, _ := payload["cmd"].(string)
 
 	switch cmd {
@@ -378,11 +409,13 @@ func (a *wecomAdapter) handleMessage(ctx context.Context, payload map[string]any
 	reqID := payloadReqID(payload)
 	if reqID != "" {
 		a.replyReqIDs[msgID] = reqID
-		if len(a.replyReqIDs) > wecomDedupMaxSize {
-			for k := range a.replyReqIDs {
-				delete(a.replyReqIDs, k)
-				break
-			}
+		a.replyReqOrder = append(a.replyReqOrder, msgID)
+		// Evict oldest-first instead of a random map entry (#974): random
+		// eviction could drop exactly the req_id we are about to reply to.
+		for len(a.replyReqIDs) > wecomDedupMaxSize && len(a.replyReqOrder) > 0 {
+			oldest := a.replyReqOrder[0]
+			a.replyReqOrder = a.replyReqOrder[1:]
+			delete(a.replyReqIDs, oldest)
 		}
 	}
 	a.mu.Unlock()
@@ -738,13 +771,6 @@ func (a *wecomAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding
 
 // sendRespond sends via aibot_respond_msg — shows as a reply bubble in WeCom.
 func (a *wecomAdapter) sendRespond(chatID, replyReqID, text string) error {
-	a.mu.RLock()
-	ws := a.ws
-	a.mu.RUnlock()
-	if ws == nil {
-		return fmt.Errorf("WeCom: not connected")
-	}
-
 	// stream msgtype renders plain text only — strip markdown formatting
 	text = stripMarkdown(text)
 
@@ -760,11 +786,11 @@ func (a *wecomAdapter) sendRespond(chatID, replyReqID, text string) error {
 			},
 		},
 	}
-	a.writeMu.Lock()
-	err := ws.WriteJSON(respondMsg)
-	a.writeMu.Unlock()
-	if err != nil {
-		// Fall back to proactive send on respond failure
+	if err := a.writeAndAwaitAck(replyReqID, respondMsg); err != nil {
+		// Fall back to proactive send on respond failure (reply quota hit,
+		// stream window closed, transport error). #974: the fallback now
+		// verifies its OWN ack too, so a genuinely lost message surfaces
+		// as an error to the caller instead of being silently dropped.
 		debug.Log("wecom", "adapter=%s respond_msg failed: %v, falling back to send_msg", a.name, err)
 		return a.sendProactive(chatID, text)
 	}
@@ -773,16 +799,10 @@ func (a *wecomAdapter) sendRespond(chatID, replyReqID, text string) error {
 
 // sendProactive sends via aibot_send_msg — a standalone message.
 func (a *wecomAdapter) sendProactive(chatID, text string) error {
-	a.mu.RLock()
-	ws := a.ws
-	a.mu.RUnlock()
-	if ws == nil {
-		return fmt.Errorf("WeCom: not connected")
-	}
-
+	reqID := newWeComReqID("send")
 	sendMsg := map[string]any{
 		"cmd":     wecomCmdSend,
-		"headers": map[string]any{"req_id": newWeComReqID("send")},
+		"headers": map[string]any{"req_id": reqID},
 		"body": map[string]any{
 			"chatid":  chatID,
 			"msgtype": "markdown",
@@ -791,9 +811,7 @@ func (a *wecomAdapter) sendProactive(chatID, text string) error {
 			},
 		},
 	}
-	a.writeMu.Lock()
-	defer a.writeMu.Unlock()
-	return ws.WriteJSON(sendMsg)
+	return a.writeAndAwaitAck(reqID, sendMsg)
 }
 
 // sendText is a convenience wrapper used for pairing replies (no inbound to correlate).
@@ -825,8 +843,74 @@ func (a *wecomAdapter) publishState(healthy bool, status, lastErr string) {
 
 // --- Helpers ---
 
+// wecomReqSeq guarantees req_id uniqueness even when two sends land on the
+// same nanosecond — req_ids now key the pending-ack table, so collisions
+// would cross-deliver acks (#974).
+var wecomReqSeq atomic.Uint64
+
 func newWeComReqID(prefix string) string {
-	return fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano())
+	return fmt.Sprintf("%s-%d-%d", prefix, time.Now().UnixNano(), wecomReqSeq.Add(1))
+}
+
+// ackWait returns the outbound ack timeout, defaulting to
+// wecomRequestTimeout (the constant was previously dead — declared but never
+// used; it now bounds every outbound ack wait, #974).
+func (a *wecomAdapter) ackWait() time.Duration {
+	a.mu.RLock()
+	d := a.ackTimeout
+	a.mu.RUnlock()
+	if d <= 0 {
+		return wecomRequestTimeout
+	}
+	return d
+}
+
+// writeAndAwaitAck writes frame to the websocket and blocks until the
+// server's ack frame with the same req_id arrives (resolved by
+// dispatchPayload) or the ack timeout elapses (#974). A non-nil return
+// means the message was NOT confirmed delivered: transport failure, an
+// errcode!=0 rejection, or ack timeout.
+func (a *wecomAdapter) writeAndAwaitAck(reqID string, frame map[string]any) error {
+	a.mu.RLock()
+	ws := a.ws
+	a.mu.RUnlock()
+	if ws == nil {
+		return fmt.Errorf("WeCom: not connected")
+	}
+
+	ch := make(chan error, 1)
+	a.pendingAcks.Store(reqID, ch)
+	defer a.pendingAcks.Delete(reqID)
+
+	a.writeMu.Lock()
+	err := ws.WriteJSON(frame)
+	a.writeMu.Unlock()
+	if err != nil {
+		return fmt.Errorf("WeCom: write %s: %w", frame["cmd"], err)
+	}
+
+	timeout := a.ackWait()
+	select {
+	case err := <-ch:
+		return err
+	case <-time.After(timeout):
+		return fmt.Errorf("WeCom: no ack for req_id=%s within %v", reqID, timeout)
+	}
+}
+
+// wecomAckError converts a server ack frame into an error when errcode!=0,
+// mirroring the subscribe-ack check (#974).
+func wecomAckError(reqID string, payload map[string]any) error {
+	body, _ := payload["body"].(map[string]any)
+	if body == nil {
+		return nil
+	}
+	errcode, _ := body["errcode"].(float64)
+	if errcode == 0 {
+		return nil
+	}
+	errmsg, _ := body["errmsg"].(string)
+	return fmt.Errorf("WeCom: req_id=%s rejected: errcode=%d %s", reqID, int64(errcode), strings.TrimSpace(errmsg))
 }
 
 func payloadReqID(payload map[string]any) string {
