@@ -75,14 +75,23 @@ func (p *Promoter) Promote(entry *SkillEntry) error {
 	}
 
 	// Remove staging file
-	if err := os.Remove(entry.Path); err != nil {
-		// Non-fatal
-		debug.Log("knight", "remove staging: %v", err)
+	if err := removeStagingSkill(entry.Path); err != nil {
+		return err
 	}
 
 	// Write changelog entry
 	p.appendChangelog("promote", entry.Name, entry.Scope, entry.Path)
 
+	return nil
+}
+
+// removeStagingSkill deletes the staging copy after a successful promote.
+// A missing file is treated as success (idempotent); any other failure is
+// returned so callers do not end up with both staging and active copies.
+func removeStagingSkill(path string) error {
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove staging skill: %w", err)
+	}
 	return nil
 }
 
@@ -293,10 +302,24 @@ func (p *Promoter) listSnapshots(name string) ([]string, error) {
 	if err := validateSkillName(name); err != nil {
 		return nil, err
 	}
-	pattern := filepath.Join(p.projectDir, ".ggcode", "skills-snapshots", name+".*.md")
-	matches, err := filepath.Glob(pattern)
+	snapDir := filepath.Join(p.projectDir, ".ggcode", "skills-snapshots")
+	// Skill names may contain dots (e.g. "a" and "a.b"), and a glob like
+	// name+".*.md" would match snapshots of every dotted-prefixed sibling.
+	// Match strictly against the "<name>.YYYYMMDD-HHMMSS.md" layout instead.
+	snapPattern := regexp.MustCompile(`^` + regexp.QuoteMeta(name) + `\.\d{8}-\d{6}\.md$`)
+	des, err := os.ReadDir(snapDir)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
 		return nil, err
+	}
+	matches := make([]string, 0, len(des))
+	for _, de := range des {
+		if de.IsDir() || !snapPattern.MatchString(de.Name()) {
+			continue
+		}
+		matches = append(matches, filepath.Join(snapDir, de.Name()))
 	}
 	sort.Strings(matches)
 	return matches, nil

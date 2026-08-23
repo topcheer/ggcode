@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/provider"
-	"github.com/topcheer/ggcode/internal/util"
 )
 
 const (
@@ -77,24 +76,24 @@ func (k *Knight) appendSkillScenario(entry SkillScenarioLogEntry) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}
-	entries, err := readSkillScenarios(path)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
+	line, err := json.Marshal(entry)
+	if err != nil {
 		return err
 	}
-	entries = append(entries, entry)
-	if len(entries) > maxSkillScenarioEntries {
-		entries = entries[len(entries)-maxSkillScenarioEntries:]
+	// Append a single line instead of read-modify-write rewriting the whole
+	// file: concurrent writers (e.g. TUI + daemon finishing the same project)
+	// previously overwrote each other's entries. The size cap is enforced on
+	// read by readSkillScenarios. O_APPEND is supported on all platforms Go
+	// supports, including Windows.
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	if err != nil {
+		return err
 	}
-	var b strings.Builder
-	for _, e := range entries {
-		line, err := json.Marshal(e)
-		if err != nil {
-			return err
-		}
-		b.Write(line)
-		b.WriteByte('\n')
+	if _, err := f.Write(append(line, '\n')); err != nil {
+		f.Close()
+		return err
 	}
-	return util.AtomicWriteFile(path, []byte(b.String()), 0600)
+	return f.Close()
 }
 
 func (k *Knight) formatRecentSkillScenariosForEval(limit int) string {
@@ -204,6 +203,11 @@ func readSkillScenarios(path string) ([]SkillScenarioLogEntry, error) {
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, err
+	}
+	// The append path no longer rewrites the file to enforce the ring cap,
+	// so keep only the most recent entries when reading.
+	if len(entries) > maxSkillScenarioEntries {
+		entries = entries[len(entries)-maxSkillScenarioEntries:]
 	}
 	return entries, nil
 }
