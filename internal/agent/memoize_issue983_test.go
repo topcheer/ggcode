@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -129,5 +130,45 @@ func TestIssue983StreamErrorPreservesAssistantText(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("streamed assistant text was discarded on terminal stream error; messages: %+v", a.Messages())
+	}
+}
+
+// TestIssue983AgentLoopKeepsMemoPristine is the integration companion to
+// TestIssue983MemoHitDoesNotRestackCachedPrefix: instead of simulating the
+// loop at the memo level, it drives the REAL agent loop (agent.go ~L3117
+// `!memoHit` guard) through a full RunStream with the same read-only tool
+// called twice with identical arguments. The second call must be served from
+// a memo hit; if the put guard ever regresses to an unconditional write-back,
+// the entry stored in toolMemo is the annotated ("[cached ...]") copy and
+// this test goes red where the memo-level simulation cannot.
+func TestIssue983AgentLoopKeepsMemoPristine(t *testing.T) {
+	registry := tool.NewRegistry()
+	if err := registry.Register(mockTool{name: "grep", result: tool.Result{Content: "match: unique-marker-983"}}); err != nil {
+		t.Fatalf("register mock tool: %v", err)
+	}
+	args := json.RawMessage(`{"pattern":"unique-marker-983"}`)
+	mp := &mockProvider{
+		streamEvents: [][]provider.StreamEvent{
+			{{Type: provider.StreamEventToolCallDone, Tool: provider.ToolCallDelta{ID: "tc1", Name: "grep", Arguments: args}}},
+			{{Type: provider.StreamEventToolCallDone, Tool: provider.ToolCallDelta{ID: "tc2", Name: "grep", Arguments: args}}},
+			{{Type: provider.StreamEventText, Text: "done"}},
+		},
+	}
+	a := NewAgent(mp, registry, "sys", 10)
+	if err := a.RunStream(t.Context(), "start", func(provider.StreamEvent) {}); err != nil {
+		t.Fatalf("RunStream failed: %v", err)
+	}
+
+	// The double call left an entry; after the hit was annotated and (per the
+	// fix) NOT re-put, the stored copy must still be the pristine result.
+	final, hit := a.toolMemo.get("grep", []byte(args))
+	if !hit {
+		t.Fatal("expected memo entry for the double grep call")
+	}
+	if strings.Count(final.Content, "[cached") != 0 {
+		t.Fatalf("agent loop wrote the annotated copy back into toolMemo (L3117 !memoHit regressed): %q", final.Content)
+	}
+	if !strings.Contains(final.Content, "unique-marker-983") {
+		t.Fatalf("memo content lost the original result: %q", final.Content)
 	}
 }
