@@ -68,6 +68,12 @@ func (m *Manager) StartBindingWatcher() {
 
 	debug.Log("im", "binding watcher: started for session=%s workspace=%s", sessionID, workspace)
 
+	// Capture the poll interval BEFORE spawning: tests (and future callers)
+	// may reassign the package-level var while a previous watcher goroutine is
+	// still between spawn and its first read — a data race under -race. The
+	// captured local is immutable for this watcher's lifetime.
+	interval := bindingWatcherInterval
+
 	safego.Go("im.binding-watcher", func() {
 		var lastMod time.Time
 		var lastSize int64
@@ -78,7 +84,7 @@ func (m *Manager) StartBindingWatcher() {
 			bindPath = fps.path
 		}
 
-		ticker := time.NewTicker(bindingWatcherInterval)
+		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 
 		for {

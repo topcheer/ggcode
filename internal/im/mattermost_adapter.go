@@ -29,11 +29,14 @@ const (
 	mattermostAPIVersion        = "api/v4"
 	mattermostConnectTimeout    = 20 * time.Second
 	mattermostHeartbeatPeriod   = 30 * time.Second
-	mattermostWSReadTimeout     = mattermostHeartbeatPeriod + 30*time.Second
 	mattermostDedupMaxSize      = 1000
 	mattermostRequestTimeout    = 30 * time.Second
 	mattermostInterMsgDelay     = 200 * time.Millisecond // Small delay between multi-chunk sends to avoid overwhelming self-hosted servers
 )
+
+// mattermostWSReadTimeout is a var so tests can shorten it (deadline
+// renewal can then be exercised in milliseconds instead of 60s).
+var mattermostWSReadTimeout = mattermostHeartbeatPeriod + 30*time.Second
 
 type mattermostAdapter struct {
 	name    string
@@ -181,8 +184,10 @@ func (a *mattermostAdapter) connectAndServe(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("auth: %w", err)
 	}
+	a.mu.Lock()
 	a.botUserID, _ = me["id"].(string)
 	a.botUsername, _ = me["username"].(string)
+	a.mu.Unlock()
 	debug.Log("mattermost", "adapter=%s authenticated as @%s (%s)", a.name, a.botUsername, a.botUserID)
 
 	// Fetch first team for ContactURI deep link
@@ -283,6 +288,11 @@ func (a *mattermostAdapter) connectAndServe(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("ws read: %w", err)
 		}
+		// Renew the read deadline on every successful read. The heartbeat reply
+		// is an application-level JSON text frame (not a WS pong), so the
+		// PongHandler never fires — without this the absolute deadline set at
+		// connect time expires ~60s in and forces a reconnect loop (#963).
+		wsConn.SetReadDeadline(time.Now().Add(mattermostWSReadTimeout))
 		var event map[string]any
 		if err := json.Unmarshal(msgBytes, &event); err != nil {
 			continue
@@ -342,6 +352,18 @@ func (a *mattermostAdapter) handleWSEvent(ctx context.Context, event map[string]
 			if t.Before(cutoff) {
 				delete(a.seen, k)
 			}
+		}
+		// Burst within the 5-minute window can still leave the map oversized;
+		// evict oldest entries until back under the cap (#963).
+		for len(a.seen) > mattermostDedupMaxSize {
+			oldestKey := ""
+			var oldestTime time.Time
+			for k, t := range a.seen {
+				if oldestKey == "" || t.Before(oldestTime) {
+					oldestKey, oldestTime = k, t
+				}
+			}
+			delete(a.seen, oldestKey)
 		}
 	}
 	a.mu.Unlock()
@@ -432,19 +454,27 @@ func (a *mattermostAdapter) handleWSEvent(ctx context.Context, event map[string]
 
 func (a *mattermostAdapter) hasMention(text string) bool {
 	lower := strings.ToLower(text)
-	if strings.Contains(lower, "@"+strings.ToLower(a.botUsername)) {
-		return true
-	}
-	if strings.Contains(lower, "@"+strings.ToLower(a.botUserID)) {
-		return true
+	// Word-boundary match: bot name "al" must not fire on "@alex" (#963).
+	for _, id := range []string{a.botUsername, a.botUserID} {
+		if id == "" {
+			continue
+		}
+		re := regexp.MustCompile(`(?i)@` + regexp.QuoteMeta(id) + `\b`)
+		if re.MatchString(lower) {
+			return true
+		}
 	}
 	return false
 }
 
 func (a *mattermostAdapter) stripMention(text string) string {
-	// Strip @bot_username and @bot_user_id mentions
+	// Strip @bot_username and @bot_user_id mentions, with word boundary so a
+	// short bot name ("al") doesn't carve text out of "@alex" (#963).
 	for _, pattern := range []string{a.botUsername, a.botUserID} {
-		re := regexp.MustCompile(`(?i)@` + regexp.QuoteMeta(pattern))
+		if pattern == "" {
+			continue
+		}
+		re := regexp.MustCompile(`(?i)@` + regexp.QuoteMeta(pattern) + `\b`)
 		text = re.ReplaceAllString(text, "")
 	}
 	return strings.TrimSpace(text)
@@ -523,16 +553,19 @@ func (a *mattermostAdapter) sendTextWithFiles(ctx context.Context, channelID, ro
 		if rootID != "" && a.replyMode == "thread" {
 			payload["root_id"] = rootID
 		}
+		// Attach file_ids to the first chunk only. This MUST happen BEFORE
+		// apiPostCtx serializes and sends the payload — writing it after the
+		// call only mutates the local map, leaving the files uploaded but never
+		// attached to any post (orphaned on the server) (#963).
+		if i == 0 && len(fileIDs) > 0 {
+			payload["file_ids"] = fileIDs
+		}
 		result, err := a.apiPostCtx(ctx, "posts", payload)
 		if err != nil {
 			return fmt.Errorf("Mattermost send chunk %d/%d: %w", i+1, len(chunks), err)
 		}
 		// If this is the first chunk in a thread and we have no rootID yet,
 		// use the new post's ID as root for subsequent chunks.
-		// Attach file_ids to the first chunk only
-		if i == 0 && len(fileIDs) > 0 {
-			payload["file_ids"] = fileIDs
-		}
 		if rootID == "" && len(chunks) > 1 && i == 0 {
 			if newID, ok := result["id"].(string); ok && newID != "" {
 				rootID = newID
@@ -730,7 +763,9 @@ func (a *mattermostAdapter) fetchTeamInfo(ctx context.Context) {
 	}
 	for _, t := range teams {
 		if slug, ok := t["name"].(string); ok && slug != "" {
+			a.mu.Lock()
 			a.teamName = slug
+			a.mu.Unlock()
 			debug.Log("mattermost", "adapter=%s team=%s", a.name, slug)
 			return
 		}

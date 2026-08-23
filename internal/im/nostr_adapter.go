@@ -3,6 +3,7 @@ package im
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -154,7 +155,8 @@ func (a *nostrAdapter) relayLoop(ctx context.Context, relayURL string) {
 			return
 		}
 
-		if err := a.connectRelay(ctx, relayURL); err != nil {
+		err := a.connectRelay(ctx, relayURL)
+		if err != nil {
 			debug.Log("nostr", "adapter=%s relay=%s error: %v", a.name, relayURL, err)
 			a.publishState(false, "error", fmt.Sprintf("%s: %v", relayURL, err))
 		}
@@ -164,13 +166,30 @@ func (a *nostrAdapter) relayLoop(ctx context.Context, relayURL string) {
 			return
 		case <-time.After(jitterDuration(backoff)):
 		}
-		if backoff < nostrMaxBackoff {
-			backoff *= 2
-			if backoff > nostrMaxBackoff {
-				backoff = nostrMaxBackoff
-			}
+		backoff = nostrBackoffNext(backoff, err)
+	}
+}
+
+// errNostrServed marks a relay session that ended AFTER a successful connect
+// and subscribe (watchdog timeout, subscription closed by the relay). The
+// relay was healthy, so the reconnect backoff must reset instead of doubling
+// (#964 — same lesson as the mattermost adapter, #388/#389).
+var errNostrServed = errors.New("nostr: relay session served before disconnect")
+
+// nostrBackoffNext returns the backoff for the next reconnect attempt after a
+// relay session ended with err. Clean/serve-phase exits reset to the short
+// initial delay; connect-phase failures double up to the cap (#964).
+func nostrBackoffNext(backoff time.Duration, err error) time.Duration {
+	if err == nil || errors.Is(err, errNostrServed) {
+		return nostrReconnectBackoff
+	}
+	if backoff < nostrMaxBackoff {
+		backoff *= 2
+		if backoff > nostrMaxBackoff {
+			backoff = nostrMaxBackoff
 		}
 	}
+	return backoff
 }
 
 func (a *nostrAdapter) connectRelay(ctx context.Context, relayURL string) error {
@@ -248,7 +267,9 @@ func (a *nostrAdapter) connectRelay(ctx context.Context, relayURL string) error 
 			return nil
 		case evt, ok := <-sub.Events:
 			if !ok {
-				return fmt.Errorf("subscription closed")
+				// Relay closed a previously-healthy subscription — serve-phase
+				// exit, tagged so relayLoop resets the backoff (#964).
+				return fmt.Errorf("subscription closed: %w", errNostrServed)
 			}
 			if evt != nil {
 				a.handleEvent(ctx, evt)
@@ -260,7 +281,9 @@ func (a *nostrAdapter) connectRelay(ctx context.Context, relayURL string) error 
 			watchdog.Reset(nostrWatchdogTimeout)
 		case <-watchdog.C:
 			debug.Log("nostr", "adapter=%s watchdog timeout on %s, forcing reconnect", a.name, relayURL)
-			return fmt.Errorf("watchdog: no activity within %s", nostrWatchdogTimeout)
+			// Serve-phase exit from a healthy connection — tagged for backoff
+			// reset (#964).
+			return fmt.Errorf("watchdog: no activity within %s: %w", nostrWatchdogTimeout, errNostrServed)
 		}
 	}
 }
@@ -395,15 +418,25 @@ func (a *nostrAdapter) sendNostrDM(ctx context.Context, recipientPubKey, text st
 			break // signing key error: will fail for every chunk
 		}
 
-		// Publish to all connected relays
+		// Publish to all connected relays. If every relay is down (conns empty)
+		// we must return an error, NOT nil — the caller (sendWithTimeout)
+		// treats nil as delivered and skips its retry loop, silently dropping
+		// the message (#964).
 		a.mu.RLock()
 		conns := make([]*nostr.Relay, len(a.relayConns))
 		copy(conns, a.relayConns)
 		a.mu.RUnlock()
+		if len(conns) == 0 {
+			lastErr = fmt.Errorf("no relay connections")
+			break
+		}
 
 		for _, relay := range conns {
 			if err := relay.Publish(ctx, evt); err != nil {
 				debug.Log("nostr", "adapter=%s publish to %s failed: %v", a.name, relay.URL, err)
+				// Record the failure so an all-relay-failure send surfaces an
+				// error to the caller instead of reporting success (#964).
+				lastErr = fmt.Errorf("publish to %s: %w", relay.URL, err)
 			}
 		}
 		// Inter-chunk delay to avoid relay rate-limiting (skip after last chunk).
