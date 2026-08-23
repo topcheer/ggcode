@@ -431,7 +431,7 @@ type P2PConfig struct {
 // failures, and "off" disables all notifications.
 type NotificationConfig struct {
 	Mode           string `yaml:"mode,omitempty" json:"mode,omitempty"`                                 // all|long|errors|off (default: long)
-	Bell           bool   `yaml:"bell,omitempty" json:"bell,omitempty"`                                 // terminal bell (\x07)
+	Bell           *bool  `yaml:"bell,omitempty" json:"bell,omitempty"`                                 // terminal bell (\x07); nil = default on, explicit false disables (#959)
 	Desktop        bool   `yaml:"desktop,omitempty" json:"desktop,omitempty"`                           // OS desktop notification
 	MinDuration    int    `yaml:"min_duration_sec,omitempty" json:"min_duration_sec,omitempty"`         // minimum run seconds before "long" fires (default: 3)
 	InputBellDelay int    `yaml:"input_bell_delay_sec,omitempty" json:"input_bell_delay_sec,omitempty"` // seconds to wait before alerting on pending input (default: 5, negative = off)
@@ -470,14 +470,15 @@ func (n NotificationConfig) EffectiveInputBellDelay() int {
 	return n.InputBellDelay
 }
 
-// ShouldBell reports whether terminal bell is enabled. Defaults to true.
+// ShouldBell reports whether terminal bell is enabled. Defaults to true
+// when Bell is nil (unset). An explicit bell:false disables the bell even
+// with desktop notifications off — the pre-*bool zero-value trap of #959
+// made bell:false + desktop:false fall through to "on".
 func (n NotificationConfig) ShouldBell() bool {
-	// Explicit opt-in for bell — but default is true for backward compat.
-	// If neither Bell nor Desktop is set, bell defaults to on.
-	if n.Bell || n.Desktop {
-		return n.Bell
+	if n.Bell != nil {
+		return *n.Bell
 	}
-	return true // backward-compatible default
+	return true // backward-compatible default: unset = on
 }
 
 // FallbackConfig configures one automatic provider/model failover level.
@@ -1096,7 +1097,13 @@ func Load(path string) (*Config, error) {
 	if !skipAuto {
 		if _, has := raw["system_prompt"]; has {
 			delete(raw, "system_prompt")
-			if rewriteErr := rewriteYAML(path, raw); rewriteErr != nil {
+			// #959: hold the in-process config lock while rewriting, matching
+			// api_keys.go and config_save.go (cross-process safety is still
+			// provided by writeSecureConfigFile's atomic write).
+			unlock := lockConfigFile(path)
+			rewriteErr := rewriteYAML(path, raw)
+			unlock()
+			if rewriteErr != nil {
 				debug.Log("config", "failed to rewrite config after removing system_prompt: %v", rewriteErr)
 			}
 		}
@@ -1700,17 +1707,43 @@ func mergeDefaultEndpoints(cfg, defaults *Config) {
 		"perplexity": "perplexity",
 	}
 	if agVC, ok := cfg.Vendors["ai-gateway"]; ok {
+		if agVC.Endpoints == nil {
+			agVC.Endpoints = map[string]EndpointConfig{}
+		}
 		for oldVendor, epName := range gatewayVendors {
-			if oldVC, exists := cfg.Vendors[oldVendor]; exists {
-				if _, hasEP := agVC.Endpoints[epName]; !hasEP {
-					for _, ep := range oldVC.Endpoints {
-						agVC.Endpoints[epName] = ep
-					}
-				}
-				delete(cfg.Vendors, oldVendor)
+			oldVC, exists := cfg.Vendors[oldVendor]
+			if !exists {
+				continue
 			}
+			if _, hasEP := agVC.Endpoints[epName]; !hasEP {
+				for _, ep := range oldVC.Endpoints {
+					agVC.Endpoints[epName] = ep
+				}
+			}
+			carryGatewayVendorKey(&agVC, epName, oldVC.APIKey)
+			delete(cfg.Vendors, oldVendor)
 		}
 		cfg.Vendors["ai-gateway"] = agVC
+	}
+}
+
+// carryGatewayVendorKey (#959) preserves a legacy gateway vendor's
+// vendor-level API key when that vendor is merged into ai-gateway, so the
+// migration cannot irreversibly drop credentials. Endpoint-level placement
+// preserves per-vendor keys when several gateway vendors coexist; only when
+// the target endpoint does not exist at all does the key fall back to the
+// ai-gateway vendor-level key. Existing keys are never overwritten.
+func carryGatewayVendorKey(agVC *VendorConfig, epName, oldKey string) {
+	if oldKey == "" {
+		return
+	}
+	ep, hasEP := agVC.Endpoints[epName]
+	switch {
+	case hasEP && ep.APIKey == "":
+		ep.APIKey = oldKey
+		agVC.Endpoints[epName] = ep
+	case !hasEP && agVC.APIKey == "":
+		agVC.APIKey = oldKey
 	}
 }
 

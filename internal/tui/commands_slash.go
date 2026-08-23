@@ -827,7 +827,8 @@ func (m *Model) handleNotifyCommand(args []string) tea.Cmd {
 				m.chatListScrollToBottom()
 				return nil
 			}
-			m.config.Notifications.Bell = parseOnOff(args[i+1])
+			bell := parseOnOff(args[i+1])
+			m.config.Notifications.Bell = &bell
 			changed = true
 			i += 2
 		case "desktop":

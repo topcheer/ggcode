@@ -20,35 +20,35 @@ func TestOnCompletionMode(t *testing.T) {
 	}{
 		{
 			name:     "off mode never notifies",
-			cfg:      config.NotificationConfig{Mode: "off", Bell: true},
+			cfg:      config.NotificationConfig{Mode: "off", Bell: bellPtr(true)},
 			duration: 10 * time.Second,
 			failed:   false,
 			wantMode: "off",
 		},
 		{
 			name:     "errors mode skips success",
-			cfg:      config.NotificationConfig{Mode: "errors", Bell: true},
+			cfg:      config.NotificationConfig{Mode: "errors", Bell: bellPtr(true)},
 			duration: 10 * time.Second,
 			failed:   false,
 			wantMode: "errors",
 		},
 		{
 			name:     "long mode skips short runs",
-			cfg:      config.NotificationConfig{Mode: "long", Bell: true},
+			cfg:      config.NotificationConfig{Mode: "long", Bell: bellPtr(true)},
 			duration: 1 * time.Second,
 			failed:   false,
 			wantMode: "long",
 		},
 		{
 			name:     "long mode fires for long runs",
-			cfg:      config.NotificationConfig{Mode: "long", Bell: true},
+			cfg:      config.NotificationConfig{Mode: "long", Bell: bellPtr(true)},
 			duration: 10 * time.Second,
 			failed:   false,
 			wantMode: "long",
 		},
 		{
 			name:     "all mode always fires",
-			cfg:      config.NotificationConfig{Mode: "all", Bell: true},
+			cfg:      config.NotificationConfig{Mode: "all", Bell: bellPtr(true)},
 			duration: 0,
 			failed:   false,
 			wantMode: "all",
@@ -71,10 +71,10 @@ func TestOnCompletionDoesNotPanic(t *testing.T) {
 	configs := []config.NotificationConfig{
 		{},
 		{Mode: "off"},
-		{Mode: "all", Bell: true, Desktop: true},
+		{Mode: "all", Bell: bellPtr(true), Desktop: true},
 		{Mode: "errors", Desktop: true},
 		{Mode: "long", MinDuration: 0},
-		{Mode: "unknown", Bell: true},
+		{Mode: "unknown", Bell: bellPtr(true)},
 	}
 	for _, cfg := range configs {
 		OnCompletion(cfg, 5*time.Second, true, "test")
@@ -121,11 +121,12 @@ func TestShouldBell(t *testing.T) {
 		cfg  config.NotificationConfig
 		want bool
 	}{
-		{config.NotificationConfig{}, true},               // backward compat default (nothing set)
-		{config.NotificationConfig{Bell: true}, true},     // explicit on
-		{config.NotificationConfig{Desktop: true}, false}, // desktop configured, bell not → bell off
-		{config.NotificationConfig{Bell: true, Desktop: true}, true},
-		{config.NotificationConfig{Bell: false, Desktop: true}, false}, // both configured, bell off
+		{config.NotificationConfig{}, true},                      // nil = backward compat default on
+		{config.NotificationConfig{Bell: bellPtr(true)}, true},   // explicit on
+		{config.NotificationConfig{Bell: bellPtr(false)}, false}, // explicit off (#959)
+		{config.NotificationConfig{Desktop: true}, true},         // bell unset → default on
+		{config.NotificationConfig{Bell: bellPtr(true), Desktop: true}, true},
+		{config.NotificationConfig{Bell: bellPtr(false), Desktop: true}, false}, // explicit off wins over desktop
 	}
 	for _, tt := range tests {
 		if got := tt.cfg.ShouldBell(); got != tt.want {
