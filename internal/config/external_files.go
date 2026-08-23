@@ -98,7 +98,13 @@ func loadExternalSections(cfg *Config, mainConfigPath string) {
 	// --- IM ---
 	if fileExists(imPath) {
 		if im := loadIMFile(imPath); im != nil {
-			cfg.IM = *im
+			// #981: field-level merge, mirroring mergeVendors (#559). Previously a
+			// whole-replace (`cfg.IM = *im`) let an empty or comment-only im.yaml
+			// (which parses to a non-nil zero-value IMConfig) silently wipe an im
+			// section still present in the main config (pre-migration layouts),
+			// disabling IM with no log. Non-zero external fields win; zero-value
+			// external fields keep the base value.
+			cfg.IM = mergeIMExternal(cfg.IM, *im)
 		}
 	} else if hasMainSection(mainConfigPath, "im") {
 		migrateSectionToExternal(mainConfigPath, configDir, "im")
@@ -488,9 +494,149 @@ func mergeEndpointConfig(base, ext EndpointConfig) EndpointConfig {
 	return base
 }
 
+// mergeIMExternal merges an external im.yaml definition on top of the base
+// (main-config or default) IMConfig. Non-zero external fields win; zero-value
+// external fields keep the base value — the same field-level precedence
+// mergeVendors uses (#559). An empty or comment-only im.yaml parses to a
+// zero-value IMConfig and therefore leaves the base untouched (#981).
+// Limitation (shared with mergeVendors): a bare `enabled: false` in the
+// external file cannot clear a base `enabled: true` because false is the zero
+// value; disable by removing the im section or the file instead.
+func mergeIMExternal(base, ext IMConfig) IMConfig {
+	if ext.ActiveSessionPolicy != "" {
+		base.ActiveSessionPolicy = ext.ActiveSessionPolicy
+	}
+	if ext.RequireLocalSession != nil {
+		base.RequireLocalSession = ext.RequireLocalSession
+	}
+	if ext.OutputMode != "" {
+		base.OutputMode = ext.OutputMode
+	}
+	if ext.Enabled {
+		base.Enabled = ext.Enabled
+	}
+	base.Streaming = mergeIMStreamingConfig(base.Streaming, ext.Streaming)
+	base.STT = mergeIMSTTConfig(base.STT, ext.STT)
+	if ext.Adapters != nil {
+		if base.Adapters == nil {
+			base.Adapters = make(map[string]IMAdapterConfig)
+		}
+		for name, extA := range ext.Adapters {
+			cur, exists := base.Adapters[name]
+			if !exists {
+				base.Adapters[name] = extA
+				continue
+			}
+			base.Adapters[name] = mergeIMAdapterConfig(cur, extA)
+		}
+	}
+	return base
+}
+
+// mergeIMStreamingConfig merges external streaming settings into the base;
+// non-zero external fields win.
+func mergeIMStreamingConfig(base, ext IMStreamingConfig) IMStreamingConfig {
+	if ext.Enabled {
+		base.Enabled = ext.Enabled
+	}
+	if ext.Transport != "" {
+		base.Transport = ext.Transport
+	}
+	if ext.EditIntervalSec > 0 {
+		base.EditIntervalSec = ext.EditIntervalSec
+	}
+	if ext.BufferThreshold > 0 {
+		base.BufferThreshold = ext.BufferThreshold
+	}
+	if ext.Cursor != "" {
+		base.Cursor = ext.Cursor
+	}
+	return base
+}
+
+// mergeIMSTTConfig merges external STT settings into the base; non-zero
+// external fields win.
+func mergeIMSTTConfig(base, ext IMSTTConfig) IMSTTConfig {
+	if ext.Provider != "" {
+		base.Provider = ext.Provider
+	}
+	if ext.BaseURL != "" {
+		base.BaseURL = ext.BaseURL
+	}
+	if ext.APIKey != "" {
+		base.APIKey = ext.APIKey
+	}
+	if ext.Model != "" {
+		base.Model = ext.Model
+	}
+	if ext.LocalModel != "" {
+		base.LocalModel = ext.LocalModel
+	}
+	return base
+}
+
+// mergeIMAdapterConfig merges an external adapter definition into the base;
+// non-zero external fields win, maps are merged key-level (external values
+// win on key collision), non-empty external slices replace base slices.
+func mergeIMAdapterConfig(base, ext IMAdapterConfig) IMAdapterConfig {
+	if ext.Enabled {
+		base.Enabled = ext.Enabled
+	}
+	if ext.Platform != "" {
+		base.Platform = ext.Platform
+	}
+	if ext.Transport != "" {
+		base.Transport = ext.Transport
+	}
+	if ext.Command != "" {
+		base.Command = ext.Command
+	}
+	if len(ext.Args) > 0 {
+		base.Args = ext.Args
+	}
+	if ext.Env != nil {
+		if base.Env == nil {
+			base.Env = make(map[string]string)
+		}
+		for k, v := range ext.Env {
+			base.Env[k] = v
+		}
+	}
+	if len(ext.AllowFrom) > 0 {
+		base.AllowFrom = ext.AllowFrom
+	}
+	if ext.OutputMode != "" {
+		base.OutputMode = ext.OutputMode
+	}
+	if len(ext.Targets) > 0 {
+		base.Targets = ext.Targets
+	}
+	if ext.Extra != nil {
+		if base.Extra == nil {
+			base.Extra = make(map[string]interface{})
+		}
+		for k, v := range ext.Extra {
+			base.Extra[k] = v
+		}
+	}
+	return base
+}
+
 // migrateSectionToExternal extracts a section from the main config file
 // and writes it to a standalone external file, then removes it from the main file.
 func migrateSectionToExternal(mainConfigPath, configDir, section string) {
+	// #981: hold the config file lock across the whole sequence (read main →
+	// write external file → rewrite main), matching the system_prompt removal
+	// in Load() (config.go). Critically the raw map must be read WHILE holding
+	// the lock: previously both writes ran unlocked against a raw snapshot
+	// taken before, so with multi-process first-run migrations the later
+	// writer rewrote the main file from a stale snapshot and silently
+	// dropped the earlier process's other field changes. Locking the full
+	// read-merge-delete-write window means only our section key is deleted
+	// from a fresh read and concurrent field edits survive.
+	unlock := lockConfigFile(mainConfigPath)
+	defer unlock()
+
 	data, err := os.ReadFile(mainConfigPath)
 	if err != nil {
 		return
