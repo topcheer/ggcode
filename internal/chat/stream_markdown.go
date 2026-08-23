@@ -23,11 +23,27 @@ var streamMarkdown = goldmark.New(goldmark.WithExtensions(extension.GFM))
 // always render in full (streaming=false path).
 const maxStreamingBlockLines = 400
 
+// maxStreamingTotalLines caps the WHOLE document during streaming, not just
+// the last block. The per-block cache avoids re-PARSING stable blocks, but
+// every chunk still re-JOINED and re-MEASURED the full accumulated text
+// (join ~30KB, prefix-stitch every line, measure every line height) -
+// profile: 8.6ms/frame, 5.6MB and 150K allocs per chunk on a 30KB reply,
+// with Height+Render at ~39% of samples. Keeping only the trailing ~600
+// lines makes per-chunk cost proportional to the window, not the document.
+// Finished items render in full; scroll-up mid-stream sees the same
+// "(earlier lines hidden while streaming)" affordance the block cap uses.
+const maxStreamingTotalLines = 600
+
 type streamRenderCache struct {
 	width    int
 	source   string
 	blocks   []string
 	rendered []string
+	// trimStart is the sticky line offset where the pre-parse trim last
+	// cut the document (see renderStreamingMarkdown). Advancing the cut
+	// shifts every block and defeats the per-block cache, so it moves only
+	// in coarse hysteresis steps; between advances chunks cache-hit.
+	trimStart int
 }
 
 func renderStreamingMarkdown(text string, width int, cache *streamRenderCache) (string, streamRenderCache) {
@@ -37,10 +53,34 @@ func renderStreamingMarkdown(text string, width int, cache *streamRenderCache) (
 	// next chunk, so during code-block streaming every chunk missed the
 	// cache and re-rendered every block (#184).
 	rawSource := mdpkg.Normalize(text)
-	normalized := mdpkg.Normalize(closeOpenFences(text))
+
+	// Pre-parse document trim with a STICKY boundary. goldmark parses the
+	// FULL accumulated text every chunk (24% of samples on a 35K-line
+	// reply) even though only the trailing window can influence the
+	// display. But naively keeping the last N lines shifts the cut by one
+	// line per chunk, which shifts every parsed block and zeroes the
+	// per-block cache below - the whole window would re-render per chunk
+	// (bench-verified: no gain). So the cut advances only when the
+	// overflow exceeds a quarter of the budget (same hysteresis idea as
+	// List.trimLocked), keeping blocks byte-stable between advances.
+	trimStart := 0
+	if cache != nil && cache.width == width {
+		trimStart = cache.trimStart
+	}
+	docLines := strings.Count(text, "\n") + 1
+	budget := maxStreamingTotalLines * 3
+	minStart := docLines - budget
+	if minStart < 0 {
+		minStart = 0
+	}
+	if minStart-trimStart >= budget/4 || minStart < trimStart {
+		trimStart = minStart
+	}
+	trimmed := trimLeadingLines(text, trimStart)
+	normalized := mdpkg.Normalize(closeOpenFences(trimmed))
 	blocks := splitMarkdownBlocks(normalized)
 	if len(blocks) == 0 {
-		return "", streamRenderCache{width: width, source: rawSource}
+		return "", streamRenderCache{width: width, source: rawSource, trimStart: trimStart}
 	}
 
 	// Cap the growing tail block: only the last block changes between
@@ -49,11 +89,25 @@ func renderStreamingMarkdown(text string, width int, cache *streamRenderCache) (
 	// the truncated form so the cache comparison below stays consistent.
 	blocks[len(blocks)-1] = capStreamingBlock(blocks[len(blocks)-1])
 
+	// Document-level streaming window: drop LEADING blocks (whole units, so
+	// the per-block cache comparison stays valid) until the retained total
+	// is within maxStreamingTotalLines. This bounds the per-chunk join /
+	// prefix-stitch / height-measure cost to the window instead of the full
+	// accumulated document. The hidden-count marker is kept OUT of the
+	// cached block slice: it changes every chunk, and a differing first
+	// block would zero out the cache reuse below and re-render the whole
+	// window per chunk.
+	blocks, hiddenMarker := trimLeadingBlocks(blocks)
+	if trimStart > 0 && hiddenMarker == "" {
+		hiddenMarker = fmt.Sprintf("... (%d earlier lines hidden while streaming)", trimStart)
+	}
+
 	next := streamRenderCache{
-		width:    width,
-		source:   rawSource,
-		blocks:   append([]string(nil), blocks...),
-		rendered: make([]string, len(blocks)),
+		width:     width,
+		source:    rawSource,
+		blocks:    append([]string(nil), blocks...),
+		rendered:  make([]string, len(blocks)),
+		trimStart: trimStart,
 	}
 
 	reuse := 0
@@ -71,11 +125,66 @@ func renderStreamingMarkdown(text string, width int, cache *streamRenderCache) (
 		next.rendered[i] = mdpkg.Render(blocks[i], width)
 	}
 
+	if hiddenMarker != "" {
+		return hiddenMarker + "\n\n" + strings.Join(next.rendered, "\n\n"), next
+	}
 	return strings.Join(next.rendered, "\n\n"), next
 }
 
 func normalizeStreamingMarkdown(text string) string {
 	return mdpkg.Normalize(closeOpenFences(text))
+}
+
+// trimLeadingLines drops the first n lines of s (no-op when n <= 0).
+// Cheap byte-scan; no split of the full string.
+func trimLeadingLines(s string, n int) string {
+	if n <= 0 || s == "" {
+		return s
+	}
+	seen := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\n' {
+			seen++
+			if seen >= n {
+				return s[i+1:]
+			}
+		}
+	}
+	return s
+}
+
+// trimLeadingBlocks drops whole leading blocks until the retained blocks
+// fit within maxStreamingTotalLines, returning the retained suffix and a
+// human-readable marker describing how many lines were hidden ("" when
+// nothing was dropped). Dropping whole blocks (never splitting one) keeps
+// the per-block cache comparison in renderStreamingMarkdown valid: between
+// drop events the retained suffix is byte-identical, so rendered forms
+// stay cached. A drop shifts the suffix start and invalidates the cache
+// once per drop event - accepted, since drops are rare (hundreds of lines
+// of new content apart).
+func trimLeadingBlocks(blocks []string) (suffix []string, marker string) {
+	total := 0
+	for _, b := range blocks {
+		total += strings.Count(b, "\n") + 1
+	}
+	if total <= maxStreamingTotalLines || len(blocks) <= 1 {
+		return blocks, ""
+	}
+	// Find the largest suffix whose line total stays within the budget.
+	kept := 0
+	cut := 0
+	for i := len(blocks) - 1; i > 0; i-- {
+		n := strings.Count(blocks[i], "\n") + 1
+		if kept+n > maxStreamingTotalLines {
+			cut = i + 1
+			break
+		}
+		kept += n
+	}
+	if cut <= 0 {
+		return blocks, ""
+	}
+	return blocks[cut:], fmt.Sprintf("... (%d earlier lines hidden while streaming)", total-kept)
 }
 
 // capStreamingBlock truncates an oversized growing block to its last
@@ -92,7 +201,7 @@ func capStreamingBlock(block string) string {
 	drop := len(lines) - maxStreamingBlockLines
 	kept := lines[drop:]
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "… (%d earlier lines hidden while streaming)\n\n", drop)
+	fmt.Fprintf(&sb, "... (%d earlier lines hidden while streaming)\n\n", drop)
 	// If truncation removed the opening fence of a code block, the kept
 	// closing fence would instead OPEN a new never-closed block and mangle
 	// the streaming display. Re-open the fence to keep markdown valid.
@@ -110,7 +219,7 @@ func capStreamingBlock(block string) string {
 //
 // Deliberately NOT full CommonMark: like closeOpenFences, it counts any
 // ``` / ~~~ prefix line as a toggle (ignoring the "closing fence must be
-// >= opener length" rule). The two functions MUST stay mirror-identical —
+// >= opener length" rule). The two functions MUST stay mirror-identical -
 // a divergence here would desync truncation from fence-closing. Misfires
 // are benign: a longer fence closes a shorter opener per CommonMark, so a
 // spurious ``` prepend still yields balanced, valid markdown.
@@ -188,7 +297,7 @@ func extractBlockMarkdown(node ast.Node, source []byte) string {
 			sb.Write(v.Value)
 		case *ast.Link:
 			// Links have a Text child with the link text and an attribute
-			// with the URL. We only need the text — the child walk handles it.
+			// with the URL. We only need the text - the child walk handles it.
 		}
 		return ast.WalkContinue, nil
 	})
