@@ -33,6 +33,10 @@ func TestLLMTurnMetricsPureToolTurn(t *testing.T) {
 // (text, reasoning, or tool chunk) stamps TTFT; later kinds must not move it.
 func TestLLMTurnMetricsFirstDeltaWins(t *testing.T) {
 	m := newLLMTurnMetrics()
+	// Sleep before the first delta: coarse-clock CI runners (see
+	// PureToolTurn above) can round a sub-tick elapsed to 0, making TTFT 0
+	// and failing the positive assertion below even though stamping worked.
+	time.Sleep(2 * time.Millisecond)
 	m.markReasoning("think")
 	m.markText("hello") // later, must not re-stamp
 	m.markToolChunk()   // even later
