@@ -114,18 +114,61 @@ type dingtalkAdapter struct {
 	appSecret  string
 	httpClient *http.Client
 
-	mu            sync.RWMutex
-	writeMu       sync.Mutex // protects websocket writes
-	accessToken   string
-	tokenExpire   time.Time
-	ws            *websocket.Conn
-	connected     bool
-	cancel        context.CancelFunc
-	lastWebhook   string          // Latest sessionWebhook from callback
-	lastRobotCode string          // Latest robotCode from callback
-	lastConvID    string          // Latest conversationId from callback (for reactions)
-	lastMsgID     string          // Latest msgId from callback (for reactions)
-	reactedMsgs   map[string]bool // Dedup: messages already reacted to
+	mu          sync.RWMutex
+	writeMu     sync.Mutex // protects websocket writes
+	accessToken string
+	tokenExpire time.Time
+	ws          *websocket.Conn
+	connected   bool
+	cancel      context.CancelFunc
+
+	// callbacks caches per-user (staffId-keyed) callback routing context so
+	// Send/TriggerTyping always address the binding's user instead of a global
+	// "most recent callback" that any unbound user could hijack (#948).
+	// Guarded by cacheMu. Lazily initialized; nil map reads are safe.
+	cacheMu   sync.RWMutex
+	callbacks map[string]dingtalkCallbackContext
+
+	reactedMsgs map[string]bool // Dedup: messages already reacted to
+}
+
+// dingtalkCallbackContext captures routing info from one inbound bot callback,
+// keyed by the sender's staffId (== binding.ChannelID).
+type dingtalkCallbackContext struct {
+	webhook   string
+	robotCode string
+	convID    string
+	msgID     string
+}
+
+// recordCallbackContext stores the callback context under the sender's
+// channel (staffId). Writing before binding validation is safe because the
+// cache is only ever read back keyed by a bound user's ChannelID (#948).
+func (a *dingtalkAdapter) recordCallbackContext(channelID string, c dingtalkCallbackContext) {
+	if channelID == "" {
+		return
+	}
+	a.cacheMu.Lock()
+	if a.callbacks == nil {
+		a.callbacks = make(map[string]dingtalkCallbackContext)
+	}
+	a.callbacks[channelID] = c
+	// Trim to prevent unbounded growth
+	if len(a.callbacks) > 100 {
+		for k := range a.callbacks {
+			delete(a.callbacks, k)
+			break
+		}
+	}
+	a.cacheMu.Unlock()
+}
+
+// callbackContext returns the cached routing context for a user, if any.
+func (a *dingtalkAdapter) callbackContext(channelID string) (dingtalkCallbackContext, bool) {
+	a.cacheMu.RLock()
+	c, ok := a.callbacks[channelID]
+	a.cacheMu.RUnlock()
+	return c, ok
 }
 
 func newDingtalkAdapter(name string, mgr *Manager, adapterCfg config.IMAdapterConfig) (*dingtalkAdapter, error) {
@@ -195,6 +238,7 @@ func (a *dingtalkAdapter) run(ctx context.Context) {
 
 	backoffs := []time.Duration{3 * time.Second, 5 * time.Second, 10 * time.Second, 30 * time.Second}
 	attempt := 0
+	var delay time.Duration
 
 	for {
 		select {
@@ -225,7 +269,9 @@ func (a *dingtalkAdapter) run(ctx context.Context) {
 			debug.Log("dingtalk", "adapter=%s error: %v", a.name, err)
 			a.publishState(false, "error", err.Error())
 		}
-		delay, attempt := backoffFor(err, attempt, backoffs)
+		// NOTE: must assign (=), not declare (:=) — := would shadow the loop-scoped
+		// attempt and freeze the backoff at backoffs[0] forever (#946).
+		delay, attempt = backoffFor(err, attempt, backoffs)
 		debug.Log("dingtalk", "adapter=%s reconnecting in %v (attempt %d)", a.name, delay, attempt)
 
 		select {
@@ -348,9 +394,13 @@ func (a *dingtalkAdapter) handleDataFrame(ctx context.Context, conn *websocket.C
 
 	switch {
 	case frame.Type == dingtalkSubCallback && topic == dingtalkBotCallbackTopic:
-		// Bot message callback — process and ACK
-		a.processBotCallback(ctx, frame)
+		// Bot message callback — ACK first, then process asynchronously (#949).
+		// Synchronous processing would run the full agent turn inside the WS
+		// read goroutine; a long run (>wsReadTimeout) starves the read loop and
+		// causes reconnect flapping. Redelivery/concurrency races are absorbed
+		// by the manager-level seenMessages dedup (runtime.go HandleInbound).
 		a.sendFrameResponse(conn, frame, dfStatusOK, "")
+		safego.Go("im.dingtalk.botCallback", func() { a.processBotCallback(ctx, frame) })
 
 	case frame.Type == dingtalkSubCallback && topic == dingtalkCardCallbackTopic:
 		// Card callback — ACK only for now
@@ -395,13 +445,7 @@ func (a *dingtalkAdapter) processBotCallback(ctx context.Context, frame dingtalk
 
 	// Strip @bot mention prefix
 
-	// Cache webhook, robotCode, conversationId, msgId for Send/reactions
-	a.mu.Lock()
-	a.lastWebhook = callbackData.SessionWebhook
-	a.lastRobotCode = callbackData.RobotCode
-	a.lastConvID = callbackData.ConversationID
-	a.lastMsgID = callbackData.MsgID
-	a.mu.Unlock()
+	// Strip @bot mention prefix
 	atPrefix := "@" + callbackData.RobotCode + " "
 	text = strings.TrimPrefix(text, atPrefix)
 	text = strings.TrimSpace(text)
@@ -413,6 +457,16 @@ func (a *dingtalkAdapter) processBotCallback(ctx context.Context, frame dingtalk
 	if channelID == "" {
 		channelID = callbackData.SenderID
 	}
+
+	// Cache webhook/robotCode/convID/msgId keyed by the sender's staffId so
+	// Send/TriggerTyping always address this user — never the most recent
+	// callback globally (#948).
+	a.recordCallbackContext(channelID, dingtalkCallbackContext{
+		webhook:   callbackData.SessionWebhook,
+		robotCode: callbackData.RobotCode,
+		convID:    callbackData.ConversationID,
+		msgID:     callbackData.MsgID,
+	})
 
 	senderID := channelID
 
@@ -655,12 +709,15 @@ func (a *dingtalkAdapter) Send(ctx context.Context, binding ChannelBinding, even
 	// be broken mid-block across chunks, or the renderer will misinterpret content.
 	chunks := SplitMarkdown(content, PlatformLimits[PlatformDingTalk])
 
-	// Try sessionWebhook first (from the most recent callback).
-	// This is the recommended way to reply in DingTalk.
-	a.mu.RLock()
-	webhook := a.lastWebhook
-	robotCode := a.lastRobotCode
-	a.mu.RUnlock()
+	// Try the sessionWebhook cached for THIS binding's user (staffId). Never use
+	// another user's webhook — delivery is always addressed by binding (#948).
+	// A cache miss falls through to the REST API fallback below.
+	webhook := ""
+	robotCode := ""
+	if ctxInfo, ok := a.callbackContext(binding.ChannelID); ok {
+		webhook = ctxInfo.webhook
+		robotCode = ctxInfo.robotCode
+	}
 
 	for i, chunk := range chunks {
 		// Rate limit: DingTalk allows max 20 msgs/min per robot.
@@ -983,9 +1040,15 @@ func redactSecret(value string) string {
 // providing visual feedback that the bot received the message and is processing.
 // Uses DingTalk's robot messageReactions API.
 func (a *dingtalkAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding) error {
+	// Reaction target is looked up per binding user, not from the most recent
+	// global callback (#948).
+	convID := ""
+	msgID := ""
+	if ctxInfo, ok := a.callbackContext(binding.ChannelID); ok {
+		convID = ctxInfo.convID
+		msgID = ctxInfo.msgID
+	}
 	a.mu.RLock()
-	convID := a.lastConvID
-	msgID := a.lastMsgID
 	token := a.accessToken
 	a.mu.RUnlock()
 

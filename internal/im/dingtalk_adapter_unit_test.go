@@ -540,17 +540,17 @@ func TestDingtalkTriggerTyping_DeduplicatesPerMessage(t *testing.T) {
 		name:        "test",
 		accessToken: "fake-token",
 		reactedMsgs: make(map[string]bool),
-		lastConvID:  "cid123",
-		lastMsgID:   "mid456",
 		httpClient:  &http.Client{Timeout: 5 * time.Second},
 	}
+	// Per-user callback context keyed by staffId (#948).
+	a.recordCallbackContext("staff1", dingtalkCallbackContext{convID: "cid123", msgID: "mid456"})
 	// First call marks the message as reacted
-	_ = a.TriggerTyping(context.Background(), ChannelBinding{})
+	_ = a.TriggerTyping(context.Background(), ChannelBinding{ChannelID: "staff1"})
 	if !a.reactedMsgs["mid456"] {
 		t.Error("expected mid456 to be marked as reacted")
 	}
 	// Second call should be a no-op (dedup)
-	_ = a.TriggerTyping(context.Background(), ChannelBinding{})
+	_ = a.TriggerTyping(context.Background(), ChannelBinding{ChannelID: "staff1"})
 	// Should still only have one entry
 	if len(a.reactedMsgs) != 1 {
 		t.Errorf("expected 1 reacted message, got %d", len(a.reactedMsgs))
