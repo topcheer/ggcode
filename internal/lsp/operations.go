@@ -144,16 +144,25 @@ func parseWorkspaceEdit(raw json.RawMessage) []FileEdit {
 		return nil
 	}
 	grouped := make(map[string][]TextEdit)
+	seen := make(map[string]struct{})
+	appendEdit := func(path string, edit TextEdit) {
+		key := path + "|" + editKey(edit)
+		if _, dup := seen[key]; dup {
+			return
+		}
+		seen[key] = struct{}{}
+		grouped[path] = append(grouped[path], edit)
+	}
 	for uri, edits := range edit.Changes {
 		path := uriToPath(uri)
 		for _, e := range edits {
-			grouped[path] = append(grouped[path], TextEdit{Range: toRange(e.Range), NewText: e.NewText})
+			appendEdit(path, TextEdit{Range: toRange(e.Range), NewText: e.NewText})
 		}
 	}
 	for _, change := range edit.DocumentChanges {
 		path := uriToPath(change.TextDocument.URI)
 		for _, e := range change.Edits {
-			grouped[path] = append(grouped[path], TextEdit{Range: toRange(e.Range), NewText: e.NewText})
+			appendEdit(path, TextEdit{Range: toRange(e.Range), NewText: e.NewText})
 		}
 	}
 	paths := make([]string, 0, len(grouped))
@@ -169,6 +178,16 @@ func parseWorkspaceEdit(raw json.RawMessage) []FileEdit {
 		out = append(out, FileEdit{Path: path, Edits: grouped[path]})
 	}
 	return out
+}
+
+// editKey builds a dedup key for a TextEdit: range start/end positions plus
+// the replacement text. Servers that populate both WorkspaceEdit.changes and
+// WorkspaceEdit.documentChanges with the same edit must not produce duplicates.
+func editKey(edit TextEdit) string {
+	return fmt.Sprintf("%d:%d-%d:%d:%s",
+		edit.Range.Start.Line, edit.Range.Start.Character,
+		edit.Range.End.Line, edit.Range.End.Character,
+		edit.NewText)
 }
 
 func parseCodeActions(raw json.RawMessage) []CodeAction {

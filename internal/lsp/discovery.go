@@ -250,6 +250,11 @@ func scanWorkspaceExtensions(workspace string) map[string]struct{} {
 		if err != nil {
 			return nil
 		}
+		if path == filepath.Clean(workspace) {
+			// Never skip the workspace root itself, even if its base name
+			// (e.g. ".work", "vendor", "build") matches the skip list.
+			return nil
+		}
 		if d.IsDir() {
 			name := d.Name()
 			if shouldSkipDir(name) {

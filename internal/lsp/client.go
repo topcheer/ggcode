@@ -1167,6 +1167,18 @@ func (c *stdioClient) call(ctx context.Context, method string, params any, out a
 	ch := make(chan rpcEnvelope, 1)
 	c.mu.Lock()
 	c.pending[rpcIDKey(idRaw)] = ch
+	// Re-check failed while still holding mu to close the TOCTOU window:
+	// readLoop may have set failed (under failMu) and drained pending via
+	// failPending between the fail-fast check above and this registration.
+	// No code path takes failMu while holding mu, so mu→failMu nesting is safe.
+	c.failMu.Lock()
+	failedNow := c.failed
+	c.failMu.Unlock()
+	if failedNow {
+		delete(c.pending, rpcIDKey(idRaw))
+		c.mu.Unlock()
+		return fmt.Errorf("lsp: session terminated (server crashed or protocol error)")
+	}
 	c.mu.Unlock()
 	if err := c.write(rpcEnvelope{JSONRPC: "2.0", ID: idRaw, Method: method, Params: rawParams}); err != nil {
 		c.mu.Lock()
