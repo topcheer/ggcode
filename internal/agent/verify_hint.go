@@ -318,12 +318,13 @@ func verifyCommandAvailable(command string) bool {
 
 	// #941: for scripts run via bash/sh, check the script path instead — must
 	// run BEFORE the unconditional-true switch below, which previously made
-	// this branch unreachable dead code.
+	// this branch unreachable dead code. Shell flags (e.g. "sh -c 'cmd'")
+	// are not script paths, so only non-flag arguments get the fileExists check.
 	if primary == "bash" || primary == "sh" {
-		if len(parts) > 1 {
+		if len(parts) > 1 && !strings.HasPrefix(parts[1], "-") {
 			return fileExists(parts[1])
 		}
-		return true // bare shell, always available
+		return true // bare shell or flag-only invocation, always available
 	}
 
 	// Shell builtins and wrappers that are always available.

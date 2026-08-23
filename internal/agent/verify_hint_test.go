@@ -82,7 +82,8 @@ func TestVerifyCommandAvailable(t *testing.T) {
 		{"make build", true},                // make is assumed available
 		{"", false},                         // empty command
 		{"nonexistent_tool_xyz arg", false}, // tool not in PATH
-		{"bash /tmp/script.sh", true},       // bash is a shell
+		{"bash /definitely/not/a/real/script_xyz123.sh", false}, // #941: bash script path checked, missing → unavailable
+		{"bash /etc/hosts", true},                               // #941: existing script path → available
 	}
 	for _, tt := range tests {
 		got := verifyCommandAvailable(tt.cmd)
