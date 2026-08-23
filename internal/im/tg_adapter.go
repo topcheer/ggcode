@@ -43,7 +43,7 @@ const (
 	tgSetReactionPath   = "/bot%s/setMessageReaction"
 	tgSendPhotoPath     = "/bot%s/sendPhoto"
 	tgGetMePath         = "/bot%s/getMe"
-	tgGetFileBase       = "https://api.telegram.org/file/bot%s/%s"
+	tgGetFileBase       = "/file/bot%s/%s"
 	tgGetFilePath       = "/bot%s/getFile"
 )
 
@@ -126,6 +126,11 @@ func (a *tgAdapter) run(ctx context.Context) {
 		}
 		if err := a.connectAndServe(ctx); err != nil {
 			a.publishState(false, "error", err.Error())
+		} else {
+			// Reset backoff after a clean serve cycle (aligned with the
+			// nostr/mattermost adapters) so one blip after hours of stable
+			// polling does not wait the full 60s backoff again.
+			attempt = 0
 		}
 		delay := backoffs[min(attempt, len(backoffs)-1)]
 		attempt++
@@ -464,11 +469,15 @@ func (a *tgAdapter) downloadTGFile(ctx context.Context, fileID string) ([]byte, 
 	if err != nil {
 		return nil, "", err
 	}
-	filePath, _ := result["file_path"].(string)
+	// apiRequest's out parameter receives the FULL Telegram payload, so
+	// file_path lives under the nested "result" object (same shape as the
+	// getMe/pollUpdates consumers).
+	resultMap, _ := result["result"].(map[string]any)
+	filePath, _ := resultMap["file_path"].(string)
 	if filePath == "" {
 		return nil, "", fmt.Errorf("Telegram file_path is empty for file_id %s", fileID)
 	}
-	downloadURL := fmt.Sprintf(tgGetFileBase, a.botToken, filePath)
+	downloadURL := a.apiBase + fmt.Sprintf(tgGetFileBase, a.botToken, filePath)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
 	if err != nil {
 		return nil, "", err
@@ -622,13 +631,16 @@ func (a *tgAdapter) formatMessages(text string) ([]tgmd.Message, error) {
 	if a.parseMode == "" {
 		return tgmd.ConvertAndSplit(text, tgmd.WithMaxMessageLen(tgMaxTextLen)), nil
 	}
-	// Legacy mode: manual split, wrap each chunk in a plain Message
+	// Legacy mode: escape FIRST, then split. Escaping can double the length
+	// (18 special chars each gain a backslash), so splitting before escaping
+	// can produce chunks up to 8192 runes that Telegram rejects with
+	// 400 "message is too long" (issue #970).
+	if a.parseMode == "MarkdownV2" {
+		text = EscapeMarkdownV2(text)
+	}
 	chunks := splitTGMessage(text, tgMaxTextLen)
 	msgs := make([]tgmd.Message, len(chunks))
 	for i, chunk := range chunks {
-		if a.parseMode == "MarkdownV2" {
-			chunk = EscapeMarkdownV2(chunk)
-		}
 		msgs[i] = tgmd.Message{Text: chunk}
 	}
 	return msgs, nil
@@ -719,10 +731,7 @@ func (a *tgAdapter) sendPhotoByURL(ctx context.Context, chatID, imageURL, captio
 				body["caption"] = cap
 			}
 		} else {
-			if a.parseMode == "MarkdownV2" {
-				cap = EscapeMarkdownV2(cap)
-			}
-			body["caption"] = cap
+			body["caption"] = a.legacyCaption(cap)
 			body["parse_mode"] = a.parseMode
 		}
 	}
@@ -777,10 +786,7 @@ func (a *tgAdapter) sendPhotoByUpload(ctx context.Context, chatID string, data [
 				}
 			}
 		} else {
-			if a.parseMode == "MarkdownV2" {
-				cap = EscapeMarkdownV2(cap)
-			}
-			if err := writer.WriteField("caption", cap); err != nil {
+			if err := writer.WriteField("caption", a.legacyCaption(cap)); err != nil {
 				return fmt.Errorf("write caption: %w", err)
 			}
 			if err := writer.WriteField("parse_mode", a.parseMode); err != nil {
@@ -1311,9 +1317,37 @@ func parseInt(s string) (int64, error) {
 		if ch < '0' || ch > '9' {
 			return 0, fmt.Errorf("non-digit character")
 		}
+		if n > (1<<63-1-int64(ch-'0'))/10 {
+			return 0, fmt.Errorf("integer overflow")
+		}
 		n = n*10 + int64(ch-'0')
 	}
 	return n, nil
+}
+
+// legacyCaption prepares a photo caption for legacy parse modes: it escapes
+// MarkdownV2 FIRST and then truncates, so escaping cannot push the caption
+// past Telegram's 1024-char limit (issue #970).
+func (a *tgAdapter) legacyCaption(cap string) string {
+	if a.parseMode == "MarkdownV2" {
+		cap = EscapeMarkdownV2(cap)
+	}
+	return truncateTGRunes(cap, 1024)
+}
+
+// truncateTGRunes truncates s to at most max runes. If the cut lands right
+// after a MarkdownV2 escape backslash, the dangling backslash is dropped so
+// the result remains valid escaped text.
+func truncateTGRunes(s string, max int) string {
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	r = r[:max]
+	for len(r) > 0 && r[len(r)-1] == '\\' {
+		r = r[:len(r)-1]
+	}
+	return string(r)
 }
 
 // tgEntitiesToRaw converts tgmd.Entity slices to Telegram API's
@@ -1418,14 +1452,9 @@ func (a *tgAdapter) SendInteractive(ctx context.Context, binding ChannelBinding,
 		body["parse_mode"] = a.parseMode
 	}
 
-	resp, err := a.apiRequest(ctx, http.MethodPost, path, body, nil)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
 	var respData map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&respData); err != nil {
-		return "", nil
+	if _, err := a.apiRequest(ctx, http.MethodPost, path, body, &respData); err != nil {
+		return "", err
 	}
 
 	// Extract message_id from response
