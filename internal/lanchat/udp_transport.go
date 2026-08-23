@@ -208,9 +208,17 @@ func (t *UDPTransport) processDatagram(data []byte, remoteAddr *net.UDPAddr, sou
 		return
 	}
 
-	// Auth check: accept the configured key OR the built-in community key
-	// (community key is always valid for zero-config LAN Chat, same as TCP)
-	if env.APIKey != t.apiKey && env.APIKey != communityKey {
+	// Auth check, mirroring the TCP AuthMiddleware (#986 semantics):
+	// zero-config (no custom key) accepts only the community key; a
+	// configured custom key rejects the well-known community key entirely
+	// (#989 - the old unconditional "|| communityKey" branch let any LAN
+	// host inject a custom-key hub with a community-key envelope).
+	if t.apiKey == "" || t.apiKey == communityKey {
+		if env.APIKey != communityKey {
+			debug.Log("lanchat-udp", "%s: auth failed from %s", source, remoteAddr)
+			return
+		}
+	} else if env.APIKey != t.apiKey {
 		debug.Log("lanchat-udp", "%s: auth failed from %s", source, remoteAddr)
 		return
 	}

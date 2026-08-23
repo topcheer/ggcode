@@ -27,7 +27,10 @@ func MountHandlers(mux *http.ServeMux, hub *Hub, tcpPort int) {
 
 	// Start UDP transport on the same port as TCP for fallback delivery.
 	if tcpPort > 0 {
-		udp, err := NewUDPTransport(tcpPort, udpMulticastAddr, hub, hub.NodeID(), communityKey)
+		// #989: pass the hub's EFFECTIVE key (hub.APIKey()), not the hardcoded
+		// community key - a custom-key node's UDP fallback envelopes must carry
+		// the custom key or peers running the same key reject them (#988 sibling).
+		udp, err := NewUDPTransport(tcpPort, udpMulticastAddr, hub, hub.NodeID(), hub.APIKey())
 		if err != nil {
 			debug.Log("lanchat", "UDP transport not started (port %d): %v", tcpPort, err)
 			return
