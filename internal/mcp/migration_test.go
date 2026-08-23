@@ -129,3 +129,65 @@ func TestPersistUserClaudeServers_SkipsProjectMCPFile(t *testing.T) {
 		t.Fatalf("expected no config file to be written, stat err=%v", err)
 	}
 }
+
+// Tombstone semantics at the merge layer: tombstoned names are filtered from
+// migration sources (the external-app resurrect path) but an explicit yaml
+// entry with a tombstoned name is an intentional re-add and must survive.
+func TestMergeStartupServersWithDeleted_TombstoneSemantics(t *testing.T) {
+	tmp := t.TempDir()
+	home := filepath.Join(tmp, "home")
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+
+	claudeJSON := `{"mcpServers":{"pen-app":{"type":"stdio","command":"/Pen.app/mcp-server"},"other":{"type":"stdio","command":"node","args":["other.js"]}}}`
+	if err := os.WriteFile(filepath.Join(home, ".claude.json"), []byte(claudeJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	explicit := []config.MCPServerConfig{{Name: "pen-app", Command: "node", Args: []string{"re-added.js"}}}
+	merged, _ := MergeStartupServersWithDeleted(tmp, explicit, []string{"pen-app"})
+
+	var penApp, other *config.MCPServerConfig
+	for i := range merged {
+		if merged[i].Name == "pen-app" {
+			penApp = &merged[i]
+		}
+		if merged[i].Name == "other" {
+			other = &merged[i]
+		}
+	}
+	if penApp == nil {
+		t.Fatal("explicit re-added pen-app must survive its tombstone")
+	}
+	if len(penApp.Args) != 1 || penApp.Args[0] != "re-added.js" {
+		t.Fatalf("explicit entry must keep its own config, got %+v", penApp)
+	}
+	if penApp.Migrated {
+		t.Fatal("explicit entry must not be replaced by the migrated source entry")
+	}
+	if other == nil {
+		t.Fatal("non-tombstoned migration-source server must still merge in")
+	}
+}
+
+// Without tombstones the same source entry merges (control for the test above).
+func TestMergeStartupServers_NoDeleted_MigratesNormally(t *testing.T) {
+	tmp := t.TempDir()
+	home := filepath.Join(tmp, "home")
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+
+	claudeJSON := `{"mcpServers":{"pen-app":{"type":"stdio","command":"/Pen.app/mcp-server"}}}`
+	if err := os.WriteFile(filepath.Join(home, ".claude.json"), []byte(claudeJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	merged, _ := MergeStartupServers(tmp, nil)
+	if len(merged) != 1 || merged[0].Name != "pen-app" || !merged[0].Migrated {
+		t.Fatalf("expected pen-app to migrate without tombstone, got %+v", merged)
+	}
+}
