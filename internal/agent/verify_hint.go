@@ -243,10 +243,20 @@ func detectBuildSystem(workingDir string) string {
 			// Check for a verify/ci/test task
 			if data, err := os.ReadFile(tf); err == nil {
 				content := string(data)
+				// #940: task names are YAML keys at line start (after indentation);
+				// anchor per-line like the Makefile/Justfile branches above so that
+				// "integration-test:" / "docker-build:" / "image: node:latest" no
+				// longer satisfy the bare-contains check for "test:" / "build:".
 				for _, task := range []string{"verify-ci", "ci", "verify", "test", "build"} {
-					// YAML task names appear as keys under "tasks:" section
-					if strings.Contains(content, task+":") {
-						return "task " + task
+					taskKey := task + ":"
+					for _, line := range strings.Split(content, "\n") {
+						trimmed := strings.TrimLeft(line, " \t")
+						if strings.HasPrefix(trimmed, "#") {
+							continue
+						}
+						if strings.HasPrefix(trimmed, taskKey) {
+							return "task " + task
+						}
 					}
 				}
 			}
@@ -306,22 +316,20 @@ func verifyCommandAvailable(command string) bool {
 	}
 	primary := parts[0]
 
-	// Shell builtins and wrappers that are always available.
-	switch primary {
-	case "bash", "sh", "source":
-		return true
-	}
-
-	// For scripts run via bash/sh, check the script path instead.
+	// #941: for scripts run via bash/sh, check the script path instead — must
+	// run BEFORE the unconditional-true switch below, which previously made
+	// this branch unreachable dead code.
 	if primary == "bash" || primary == "sh" {
 		if len(parts) > 1 {
 			return fileExists(parts[1])
 		}
+		return true // bare shell, always available
 	}
 
-	// `make` is assumed available if detectBuildSystem found a Makefile.
-	if primary == "make" {
-		return commandAvailable("make")
+	// Shell builtins and wrappers that are always available.
+	switch primary {
+	case "source":
+		return true
 	}
 
 	return commandAvailable(primary)
@@ -338,6 +346,14 @@ func hasMakeTarget(makefileContent, target string) bool {
 			continue
 		}
 		if strings.HasPrefix(trimmed, targetPrefix) {
+			// #941: "test:=foo" / "test::=foo" are variable assignments, not
+			// rules — the comment above promised this exclusion but the check
+			// was missing, creating phantom targets → make exits 2 (not 127) →
+			// false verification failure.
+			rest := trimmed[len(targetPrefix):]
+			if strings.HasPrefix(rest, "=") || strings.HasPrefix(rest, ":=") {
+				continue
+			}
 			return true
 		}
 	}
