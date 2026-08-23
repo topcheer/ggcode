@@ -302,24 +302,7 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 
 	var stdout, stderr bytes.Buffer
 	var pwOut, pwErr *streamingProgressWriter
-	if progressFn != nil {
-		// Wrap with streaming progress writer for real-time TUI updates.
-		// The streamingProgressWriter writes to both the buffer and the tee.
-		var tee io.Writer
-		if t.OutputTee != nil {
-			tee = t.OutputTee
-		}
-		pwOut = newStreamingProgressWriter(&stdout, tee, progressFn)
-		pwErr = newStreamingProgressWriter(&stderr, tee, progressFn)
-		cmd.Stdout = pwOut
-		cmd.Stderr = pwErr
-	} else if t.OutputTee != nil {
-		cmd.Stdout = io.MultiWriter(&stdout, t.OutputTee)
-		cmd.Stderr = io.MultiWriter(&stderr, t.OutputTee)
-	} else {
-		cmd.Stdout = &stdout
-		cmd.Stderr = &stderr
-	}
+	pwOut, pwErr = t.wireCommandOutput(cmd, &stdout, &stderr, progressFn)
 
 	// GUI commands: start and return immediately.
 	if isGUI {
@@ -869,4 +852,31 @@ var commandEnvOverrides = []string{
 // so the overrides replace any user-set TERM, NO_COLOR, COLUMNS, or CI values.
 func normalizedCommandEnv() []string {
 	return append(os.Environ(), commandEnvOverrides...)
+}
+
+// wireCommandOutput attaches stdout/stderr capture to cmd with the best
+// available pipeline: streaming progress writers (live TUI tail + tee +
+// buffer) when a progress callback exists, plain tee+buffer otherwise, or
+// buffer-only. Returns the progress writers (nil, nil when progress is off)
+// so the caller can flush them after exit.
+func (t *RunCommand) wireCommandOutput(cmd *exec.Cmd, stdout, stderr *bytes.Buffer, progressFn ToolProgressFunc) (*streamingProgressWriter, *streamingProgressWriter) {
+	if progressFn != nil {
+		var tee io.Writer
+		if t.OutputTee != nil {
+			tee = t.OutputTee
+		}
+		pwOut := newStreamingProgressWriter(stdout, tee, progressFn)
+		pwErr := newStreamingProgressWriter(stderr, tee, progressFn)
+		cmd.Stdout = pwOut
+		cmd.Stderr = pwErr
+		return pwOut, pwErr
+	}
+	if t.OutputTee != nil {
+		cmd.Stdout = io.MultiWriter(stdout, t.OutputTee)
+		cmd.Stderr = io.MultiWriter(stderr, t.OutputTee)
+		return nil, nil
+	}
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	return nil, nil
 }
