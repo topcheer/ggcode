@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/debug"
 )
 
 // Budget tracks daily token consumption for Knight.
@@ -36,7 +37,10 @@ type usageRecord struct {
 
 // NewBudget creates a Budget tracker. Data is stored under dir/knight/.
 func NewBudget(dir string, cfg config.KnightConfig) *Budget {
-	if cfg.DailyTokenBudget < 0 || (cfg.DailyTokenBudget == 0 && !cfg.HasExplicitDailyTokenBudget()) {
+	if cfg.DailyTokenBudget < 0 {
+		debug.Log("knight", "ignoring negative knight daily_token_budget %d, falling back to default %d", cfg.DailyTokenBudget, 5_000_000)
+		cfg.DailyTokenBudget = 5_000_000
+	} else if cfg.DailyTokenBudget == 0 && !cfg.HasExplicitDailyTokenBudget() {
 		cfg.DailyTokenBudget = 5_000_000
 	}
 	return &Budget{

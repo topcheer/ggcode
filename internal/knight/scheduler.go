@@ -67,8 +67,11 @@ type Knight struct {
 
 	// Session dedup — persists across ticks, survives analyzer recreation
 	analyzedSessions map[string]time.Time // session ID → time of last analysis
-	notifiedStaging  map[string]bool      // tracks staging skills already notified to avoid spam
-	stagingFailCount map[string]int       // consecutive validation failure count per staging skill
+	// analysisInFlight guards analyzeRecentSessions against concurrent
+	// same-process runs (tick loop vs PerformSkillAnalysis, issue #977).
+	analysisInFlight bool
+	notifiedStaging  map[string]bool // tracks staging skills already notified to avoid spam
+	stagingFailCount map[string]int  // consecutive validation failure count per staging skill
 }
 
 const (
@@ -964,9 +967,7 @@ func (k *Knight) evaluateAutoPromoteCandidate(ctx context.Context, entry *SkillE
 				continue
 			}
 			if (e.Scope + ":" + e.Name) == overlap.WorstActiveRef {
-				if body, err := readSkillContent(e.Path); err == nil {
-					baselineBody = string(body)
-				}
+				baselineBody = baselineReplayBody(e)
 				break
 			}
 		}
@@ -1146,7 +1147,7 @@ func parseAutoPromoteEvalOutput(output string) (bool, string) {
 }
 
 func parseAutoPromoteEvalDecision(output string) autoPromoteEvalDecision {
-	decision := autoPromoteEvalDecision{RawOutput: output}
+	decision := autoPromoteEvalDecision{RawOutput: truncateEvalRawOutput(output)}
 	for _, line := range strings.Split(output, "\n") {
 		line = strings.TrimSpace(line)
 		lower := strings.ToLower(line)
@@ -1189,6 +1190,26 @@ func parseAutoPromoteEvalDecision(output string) autoPromoteEvalDecision {
 // analyzeRecentSessions scans recent session history for reusable patterns.
 // High-score candidates are refined via LLM and written to staging.
 func (k *Knight) analyzeRecentSessions(ctx context.Context) error {
+	// In-process mutual exclusion between the tick loop and the exported
+	// PerformSkillAnalysis entry point (issue #977): without it both paths can
+	// pass the analyzedSessions eligibility check before either records its
+	// result — the window spans the whole LLM analysis — double-analyzing the
+	// same sessions and double-spending the skill-generation budget. The
+	// loser skips this round; the next tick retries.
+	k.mu.Lock()
+	if k.analysisInFlight {
+		k.mu.Unlock()
+		debug.Log("knight", "session analysis already in progress, skipping duplicate run")
+		return nil
+	}
+	k.analysisInFlight = true
+	k.mu.Unlock()
+	defer func() {
+		k.mu.Lock()
+		k.analysisInFlight = false
+		k.mu.Unlock()
+	}()
+
 	analyzer := NewSessionAnalyzer(k)
 	result := &AnalysisResult{}
 	if k.store != nil {

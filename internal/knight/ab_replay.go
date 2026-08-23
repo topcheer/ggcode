@@ -26,6 +26,29 @@ type ABReplayResult struct {
 	TopMatchedTasks     []string
 }
 
+// abReplayFingerprint builds the similarity fingerprint text from a skill's
+// name, description, and body. Both the candidate side and the baseline side
+// of the A/B replay must use the same construction so Delta is not skewed by
+// trigger words present in only one side's name/description (issue #977).
+func abReplayFingerprint(name, description, body string) string {
+	return strings.Join([]string{name, description, body}, "\n")
+}
+
+// baselineReplayBody builds the baseline fingerprint text for an active
+// skill entry: name + description + file body, mirroring abReplayFingerprint
+// used for the candidate. Name and description are kept even when the body
+// cannot be read so the A/B comparison stays symmetric.
+func baselineReplayBody(e *SkillEntry) string {
+	if e == nil {
+		return ""
+	}
+	body := ""
+	if b, err := readSkillContent(e.Path); err == nil {
+		body = string(b)
+	}
+	return abReplayFingerprint(e.Name, e.Meta.Description, body)
+}
+
 // computeABReplayScore evaluates how well candidateBody (plus name and
 // description) matches the recent scenario tasks compared to baselineBody.
 //
@@ -36,7 +59,7 @@ func computeABReplayScore(candidate *SkillEntry, candidateBody string, baselineB
 	if candidate == nil || len(scenarios) == 0 {
 		return res
 	}
-	candText := strings.Join([]string{candidate.Name, candidate.Meta.Description, candidateBody}, "\n")
+	candText := abReplayFingerprint(candidate.Name, candidate.Meta.Description, candidateBody)
 	candTokens := tokenizeForSimilarity(candText)
 	baseTokens := tokenizeForSimilarity(baselineBody)
 
