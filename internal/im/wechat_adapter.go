@@ -9,10 +9,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
@@ -28,6 +30,19 @@ const (
 	ilinkSendMessagePath   = "/ilink/bot/sendmessage"
 	ilinkLongPollTimeoutMs = 35000
 )
+
+// iLink reply-window limits (#973). WechatDefaultOutputMode's comment
+// documented these but Send never enforced them.
+const (
+	wechatMaxChunksPerSend = 5               // iLink: ~5 reply messages max per inbound
+	wechatContextTokenTTL  = 24 * time.Hour  // iLink: context_token expiry after last inbound
+	wechatSeenMsgTTL       = 5 * time.Minute // inbound dedup window (tg adapter parity)
+	wechatSeenMsgCapacity  = 512             // bound memory for the dedup map
+)
+
+// wechatTruncateNotice is appended to the last chunk when output exceeds the
+// per-inbound chunk cap, so the truncation is visible to the user.
+const wechatTruncateNotice = "\n\n[消息过长，已截断]"
 
 // iLink message item types
 const (
@@ -83,7 +98,8 @@ type WechatAdapter struct {
 	mu        sync.RWMutex
 	connected bool
 	botToken  string
-	cursor    string // get_updates_buf cursor
+	cursor    string              // get_updates_buf cursor
+	seen      map[int64]time.Time // inbound message dedup (#973), guarded by mu
 }
 
 // ilinkQRCodeResponse is the response from get_bot_qrcode.
@@ -180,6 +196,7 @@ func newWechatAdapter(name string, imCfg config.IMConfig, adapterCfg config.IMAd
 		lpClient:   util.NewInsecureAwareClient(40 * time.Second),
 		baseURL:    baseURL,
 		botToken:   botToken,
+		seen:       make(map[int64]time.Time),
 	}, nil
 }
 
@@ -251,7 +268,11 @@ func (a *WechatAdapter) PollQRCodeStatus(ctx context.Context, qrcode string) (st
 	return result.Status, result.BotToken, nil
 }
 
-// SetBotToken updates the bot token (after QR scan) and starts the message loop.
+// SetBotToken updates the bot token (after QR scan). It does NOT start the
+// message loop — the QR flow in tui/wechat_panel.go rebuilds the adapter via
+// AddIMAdapter + StartNamedAdapter instead. (#973: the comment used to claim
+// it "starts the message loop", which was never true; kept because it is a
+// trivial setter, but no production caller currently wires it up.)
 func (a *WechatAdapter) SetBotToken(token string) {
 	a.mu.Lock()
 	a.botToken = token
@@ -379,15 +400,17 @@ func (a *WechatAdapter) pollLoop(ctx context.Context) error {
 }
 
 func (a *WechatAdapter) handleMessage(ctx context.Context, msg ilinkMessage) {
-	// Extract text from items
-	var textParts []string
-	for _, item := range msg.ItemList {
-		if item.Type == ilinkItemText && item.TextItem != nil {
-			textParts = append(textParts, item.TextItem.Text)
-		}
-	}
-	text := strings.Join(textParts, "\n")
+	text := wechatMessageText(msg)
 	debug.Log("wechat", "adapter=%s handleMessage: from=%s to=%s items=%d text=%q context_token=%q", a.name, msg.FromUserID, msg.ToUserID, len(msg.ItemList), text, msg.ContextToken)
+
+	// #973: the cursor is memory-only (at-most-once), so the server may
+	// redeliver the same message after a reconnect; skip duplicates before
+	// they reach pairing/routing (same mutex+TTL pattern as the tg adapter).
+	if a.seenMessageID(msg.MessageID) {
+		debug.Log("wechat", "adapter=%s handleMessage: duplicate message_id=%d, skipping", a.name, msg.MessageID)
+		return
+	}
+
 	if strings.TrimSpace(text) == "" {
 		debug.Log("wechat", "adapter=%s handleMessage: empty text, skipping", a.name)
 		return
@@ -399,13 +422,13 @@ func (a *WechatAdapter) handleMessage(ctx context.Context, msg ilinkMessage) {
 		channelID = msg.GroupID
 	}
 
-	// Persist context_token into the channel binding.
-	// Per iLink protocol, context_token is required for every sendmessage.
-	// Each inbound message provides a fresh token; update the binding so
-	// the token survives restarts and is available to Send.
-	if a.manager != nil && msg.ContextToken != "" {
-		a.manager.UpdateBindingContextToken(a.name, msg.ContextToken)
-	}
+	// #973 (pre-auth token poisoning): do NOT persist msg.ContextToken into
+	// the binding here. This update used to run BEFORE the channel check in
+	// HandleInbound, so ANY WeChat user who could message the bot overwrote
+	// the authorized session's context_token — the authorized session's next
+	// reply then carried a stranger's token and was rejected by the server.
+	// The token is now persisted only AFTER authorization passes: on pairing
+	// success (below) or when HandleInbound accepts the inbound.
 
 	inbound := InboundMessage{
 		Envelope: Envelope{
@@ -429,40 +452,86 @@ func (a *WechatAdapter) handleMessage(ctx context.Context, msg ilinkMessage) {
 		a.publishState(false, "warning", err.Error())
 	}
 	if pairingResult.Consumed {
-		_ = a.sendTextToUser(ctx, channelID, pairingResult.ReplyText)
-		if err := a.manager.NotifyPreviousBindingReplaced(ctx, pairingResult); err != nil {
-			debug.Log("wechat", "adapter=%s notify previous channel: %v", a.name, err)
-		}
+		a.replyToPairing(ctx, channelID, msg, pairingResult)
 		return
 	}
 
 	// 2. Normal inbound routing
 	if err := a.manager.HandleInbound(ctx, inbound); err != nil {
 		if err == ErrInboundChannelDenied {
-			debug.Log("wechat", "adapter=%s unauthorized inbound channel=%s", a.name, channelID)
-			_ = a.sendTextToUser(ctx, channelID, UnauthorizedMessage(a.manager.Language()))
+			a.replyUnauthorized(ctx, channelID, msg)
 			return
 		}
 		if err != ErrNoChannelBound {
 			debug.Log("wechat", "adapter=%s handle inbound error: %v", a.name, err)
 		}
+		return
+	}
+	// #973: authorized inbound (HandleInbound's channel check passed) — now
+	// persist the fresh context_token so Send replies carry a valid token.
+	if a.manager != nil && msg.ContextToken != "" {
+		a.manager.UpdateBindingContextToken(a.name, msg.ContextToken)
 	}
 }
 
-// sendTextToUser sends a plain text reply to a WeChat user/group.
-func (a *WechatAdapter) sendTextToUser(ctx context.Context, toUserID, content string) error {
+// wechatMessageText joins the text items of an iLink message into one string.
+func wechatMessageText(msg ilinkMessage) string {
+	var textParts []string
+	for _, item := range msg.ItemList {
+		if item.Type == ilinkItemText && item.TextItem != nil {
+			textParts = append(textParts, item.TextItem.Text)
+		}
+	}
+	return strings.Join(textParts, "\n")
+}
+
+// replyToPairing sends the pairing outcome reply and notifies a replaced
+// channel. #973: only a SUCCESSFUL pairing (Bound=true) authorizes this
+// channel — the fresh context_token is persisted then; challenge/wrong-code
+// replies come from not-yet-authorized users and must not touch the binding
+// token.
+func (a *WechatAdapter) replyToPairing(ctx context.Context, channelID string, msg ilinkMessage, pairingResult PairingResult) {
+	if pairingResult.Bound && msg.ContextToken != "" {
+		a.manager.UpdateBindingContextToken(a.name, msg.ContextToken)
+	}
+	if err := a.sendTextToUser(ctx, channelID, pairingResult.ReplyText, msg.ContextToken); err != nil {
+		debug.Log("wechat", "adapter=%s pairing reply to=%s failed: %v", a.name, channelID, err)
+	}
+	if err := a.manager.NotifyPreviousBindingReplaced(ctx, pairingResult); err != nil {
+		debug.Log("wechat", "adapter=%s notify previous channel: %v", a.name, err)
+	}
+}
+
+// replyUnauthorized sends the channel-denied notice to the stranger. The
+// reply carries the STRANGER's own context_token (tokens are per-conversation;
+// the binding token belongs to the authorized channel and must not be used to
+// route to anyone else).
+func (a *WechatAdapter) replyUnauthorized(ctx context.Context, channelID string, msg ilinkMessage) {
+	debug.Log("wechat", "adapter=%s unauthorized inbound channel=%s", a.name, channelID)
+	if err := a.sendTextToUser(ctx, channelID, UnauthorizedMessage(a.manager.Language()), msg.ContextToken); err != nil {
+		debug.Log("wechat", "adapter=%s unauthorized-reply to=%s failed: %v", a.name, channelID, err)
+	}
+}
+
+// sendTextToUser sends a plain text reply to a WeChat user/group. It uses
+// the context_token from the inbound message that triggered the reply —
+// iLink tokens are per-conversation, so replying to user X must carry X's
+// token, never the authorized binding's token (which belongs to another
+// conversation). #973: empty bot_token or empty content used to return nil
+// silently, making pairing instructions and unauthorized-rejection notices
+// vanish without a trace; both now return an explicit error (logged).
+func (a *WechatAdapter) sendTextToUser(ctx context.Context, toUserID, content, contextToken string) error {
 	a.mu.RLock()
 	token := a.botToken
 	a.mu.RUnlock()
 
-	if token == "" || strings.TrimSpace(content) == "" {
-		return nil
+	if token == "" {
+		debug.Log("wechat", "adapter=%s sendTextToUser to=%s skipped: no bot_token", a.name, toUserID)
+		return fmt.Errorf("wechat adapter %q: cannot reply to %s: no bot_token configured", a.name, toUserID)
 	}
-
-	// Read context_token from persisted binding (set by UpdateBindingContextToken).
-	var contextToken string
-	if a.manager != nil {
-		contextToken = a.manager.GetBindingContextToken(a.name)
+	if strings.TrimSpace(content) == "" {
+		debug.Log("wechat", "adapter=%s sendTextToUser to=%s skipped: empty content", a.name, toUserID)
+		return fmt.Errorf("wechat adapter %q: reply to %s is empty", a.name, toUserID)
 	}
 
 	debug.Log("wechat", "adapter=%s sendTextToUser to=%s context_token=%s text_len=%d",
@@ -544,6 +613,20 @@ func (a *WechatAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 		return fmt.Errorf("wechat adapter %q: no bot_token", a.name)
 	}
 
+	// #973: enforce the token age limit the header comment documented. iLink
+	// context_tokens expire after ~24h; sending with a stale token is a
+	// guaranteed server-side rejection. There is no proactive refresh API —
+	// the only refresh path is a fresh inbound from the authorized channel —
+	// so fail visibly with an actionable message instead. A zero timestamp
+	// (legacy binding persisted before the field existed) is treated as
+	// unknown-age and allowed through; the server remains the source of truth.
+	if contextToken != "" && !binding.ContextTokenUpdatedAt.IsZero() {
+		if age := time.Since(binding.ContextTokenUpdatedAt); age > wechatContextTokenTTL {
+			debug.Log("wechat", "adapter=%s Send: context_token expired (age=%s)", a.name, age.Truncate(time.Minute))
+			return fmt.Errorf("wechat adapter %q: context_token expired (age %s > %s); send a message to the bot to refresh it", a.name, age.Truncate(time.Minute), wechatContextTokenTTL)
+		}
+	}
+
 	// WeChat iLink API renders plain text only — strip markdown syntax so
 	// users don't see raw **bold**, # headings, or `code` backticks.
 	text := stripMarkdown(strings.TrimSpace(a.outboundText(event)))
@@ -560,6 +643,19 @@ func (a *WechatAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 	// Split long messages — WeChat iLink API has a ~2048 byte limit per message.
 	// Without splitting, long messages get silently truncated or rejected.
 	chunks := SplitMessageForPlatform(text, PlatformWechat)
+	// #973: iLink caps passive replies at ~5 messages per inbound. Cap the
+	// chunk count and make the truncation visible via a notice on the last
+	// chunk, instead of sending chunks the server silently drops past quota
+	// (user saw partial replies with no indication anything was lost).
+	if len(chunks) > wechatMaxChunksPerSend {
+		origChunks := len(chunks)
+		last := chunks[wechatMaxChunksPerSend-1]
+		if maxBytes := PlatformLimits[PlatformWechat]; maxBytes > 0 && len(last)+len(wechatTruncateNotice) > maxBytes {
+			last = truncateWechatBytes(last, maxBytes-len(wechatTruncateNotice))
+		}
+		chunks = append(chunks[:wechatMaxChunksPerSend-1], last+wechatTruncateNotice)
+		debug.Log("wechat", "adapter=%s Send: capped %d chunks to %d with truncation notice", a.name, origChunks, wechatMaxChunksPerSend)
+	}
 	for i, chunk := range chunks {
 		if err := a.sendSingleChunk(ctx, token, toUserID, contextToken, chunk); err != nil {
 			debug.Log("wechat", "adapter=%s chunk %d/%d failed: %v", a.name, i+1, len(chunks), err)
@@ -633,6 +729,63 @@ func (a *WechatAdapter) sendSingleChunk(ctx context.Context, token, toUserID, co
 		return fmt.Errorf("sendmessage error: ret=%d errcode=%d errmsg=%s", sendResp.Ret, sendResp.ErrCode, sendResp.ErrMsg)
 	}
 	return nil
+}
+
+// seenMessageID reports whether this inbound message ID was already handled
+// recently, marking it seen (#973 redelivery dedup; mutex+TTL+capacity, same
+// pattern as the tg adapter's seenUpdate).
+func (a *WechatAdapter) seenMessageID(msgID int64) bool {
+	if msgID == 0 {
+		return false
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.seen == nil {
+		a.seen = make(map[int64]time.Time)
+	}
+	now := time.Now()
+	if len(a.seen) >= wechatSeenMsgCapacity {
+		for id, seenAt := range a.seen {
+			if now.Sub(seenAt) > wechatSeenMsgTTL {
+				delete(a.seen, id)
+			}
+		}
+		// Still over capacity (burst of unique IDs inside the TTL window):
+		// drop the oldest half rather than grow without bound.
+		if len(a.seen) >= wechatSeenMsgCapacity {
+			type aged struct {
+				id int64
+				t  time.Time
+			}
+			entries := make([]aged, 0, len(a.seen))
+			for id, t := range a.seen {
+				entries = append(entries, aged{id, t})
+			}
+			sort.Slice(entries, func(i, j int) bool { return entries[i].t.Before(entries[j].t) })
+			for _, e := range entries[:len(entries)/2] {
+				delete(a.seen, e.id)
+			}
+		}
+	}
+	if _, ok := a.seen[msgID]; ok {
+		return true
+	}
+	a.seen[msgID] = now
+	return false
+}
+
+// truncateWechatBytes cuts s to at most maxBytes on a UTF-8 rune boundary.
+func truncateWechatBytes(s string, maxBytes int) string {
+	if maxBytes <= 0 {
+		return ""
+	}
+	if len(s) <= maxBytes {
+		return s
+	}
+	for maxBytes > 0 && !utf8.RuneStart(s[maxBytes]) {
+		maxBytes--
+	}
+	return s[:maxBytes]
 }
 
 // setCommonHeaders sets the required iLink headers.
