@@ -231,3 +231,111 @@ func TestServerFromName(t *testing.T) {
 		}
 	}
 }
+
+// Regression: '_' and '-' must be treated as token separators. Treating them
+// as token characters collapsed "mcp__github__search_commits" into a single
+// opaque token, killing the nameMatched signal for every MCP tool.
+func TestRelevanceTokenize_SplitsUnderscoreAndHyphen(t *testing.T) {
+	tokens := relevanceTokenize("mcp__github__search_commits")
+	want := map[string]bool{"github": true, "search": true, "commits": true}
+	for _, tok := range tokens {
+		if want[tok] {
+			delete(want, tok)
+		}
+	}
+	if len(want) > 0 {
+		t.Errorf("missing expected tokens %v, got %v", want, tokens)
+	}
+	for _, tok := range tokens {
+		if strings.Contains(tok, "_") {
+			t.Errorf("token %q still contains underscore", tok)
+		}
+	}
+	tokens = relevanceTokenize("web-reader")
+	if len(tokens) != 2 || tokens[0] != "web" || tokens[1] != "reader" {
+		t.Errorf("hyphen should split tokens, got %v", tokens)
+	}
+}
+
+// Regression: "mcp" is a stop word. Otherwise any user message mentioning
+// "MCP" matches every MCP tool's name tokens and keeps them all alive.
+func TestRelevanceTokenize_MCPIsStopWord(t *testing.T) {
+	tokens := relevanceTokenize("ggcode mcp 误触发")
+	for _, tok := range tokens {
+		if tok == "mcp" {
+			t.Errorf("token %q should be filtered as a stop word", tok)
+		}
+	}
+}
+
+// Regression: a casual message with one generic English word must not keep
+// irrelevant MCP tools with large descriptions alive (the old 0.05 threshold
+// let a single generic description word pass).
+func TestRelevanceFilter_GenericWordDoesNotKeepIrrelevantMCP(t *testing.T) {
+	defs := make([]provider.ToolDefinition, 0, 34)
+	// 31 builtins: total tool count must exceed minToolsToActivate (30)
+	// for filtering to engage.
+	for i := 0; i < 31; i++ {
+		defs = append(defs, makeToolDef("builtin_"+string(rune('a'+i)), "A builtin tool"))
+	}
+	defs = append(defs, makeToolDef(
+		"mcp__weather__get_forecast",
+		"Get the weather forecast for a city including temperature humidity wind and precipitation data",
+	))
+	defs = append(defs, makeToolDef(
+		"mcp__calendar__create_event",
+		"Create a calendar event with title start time end time and attendee list",
+	))
+	defs = append(defs, makeToolDef(
+		"mcp__music__play_track",
+		"Play a music track by artist name album or playlist",
+	))
+
+	f := NewRelevanceFilter()
+	// Casual chat mentioning only generic API words.
+	result := f.Filter(defs, "帮我解析一下这个 file 的 create 逻辑")
+
+	names := make(map[string]bool, len(result))
+	for _, d := range result {
+		names[d.Name] = true
+	}
+	for _, name := range []string{"mcp__weather__get_forecast", "mcp__calendar__create_event", "mcp__music__play_track"} {
+		if names[name] {
+			t.Errorf("irrelevant tool %q should be pruned by generic-word-only context", name)
+		}
+	}
+}
+
+// Regression: name-token matches keep the RIGHT tool. With '_' now a
+// separator, "github issue" in the context matches the name tokens of the
+// github tool even though its description shares no words.
+func TestRelevanceFilter_NameMatchKeepsRightServer(t *testing.T) {
+	defs := make([]provider.ToolDefinition, 0, 34)
+	// 30 builtins: total tool count must exceed minToolsToActivate (30)
+	// for filtering to engage.
+	for i := 0; i < 30; i++ {
+		defs = append(defs, makeToolDef("builtin_"+string(rune('a'+i)), "A builtin tool"))
+	}
+	defs = append(defs, makeToolDef(
+		"mcp__github__search_issues",
+		"Search issues using natural-language semantic matching",
+	))
+	defs = append(defs, makeToolDef(
+		"mcp__railway__list_services",
+		"List all services in the deployment environment",
+	))
+
+	f := NewRelevanceFilter()
+	result := f.Filter(defs, "find the github issue about login failure")
+
+	names := make(map[string]bool, len(result))
+	for _, d := range result {
+		names[d.Name] = true
+	}
+	if !names["mcp__github__search_issues"] {
+		t.Error("github tool should be kept via name-token match")
+	}
+	if names["mcp__railway__list_services"] {
+		t.Error("railway tool is irrelevant to a github query and should be pruned")
+	}
+}

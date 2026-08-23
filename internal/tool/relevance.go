@@ -29,8 +29,11 @@ const (
 	minToolsToActivate = 30
 
 	// mcpScoreThreshold is the minimum relevance score (0.0–1.0) for an MCP
-	// tool to be included when filtering is active.
-	mcpScoreThreshold = 0.05
+	// tool to be included when filtering is active. 0.12 means a tool with a
+	// ~20-token description needs at least 2-3 overlapping tokens (or one
+	// tool-name token match, which carries a +0.15 boost) to survive — a
+	// single generic description word no longer keeps a tool alive.
+	mcpScoreThreshold = 0.12
 
 	// maxMCPTools is the maximum number of MCP tools to include per server
 	// when filtering is active. This prevents a single server from dominating.
@@ -251,7 +254,13 @@ func relevanceTokenize(text string) []string {
 	}
 
 	for _, r := range text {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' || r == '-' {
+		// NOTE: '_' and '-' are treated as separators, NOT token characters.
+		// Treating them as token chars collapsed names like
+		// "mcp__github__search_commits" into one opaque token, which made the
+		// nameMatched boost in scoreTool dead code for every MCP tool and left
+		// scoring entirely at the mercy of generic description words — the
+		// primary cause of irrelevant MCP tools surviving the filter.
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
 			sb.WriteRune(r)
 		} else {
 			flush()
@@ -275,6 +284,16 @@ func isStopWord(s string) bool {
 		"do", "does", "did", "have", "has", "had", "get", "got",
 		"about", "into", "out", "up", "down", "all", "any", "some", "over",
 		"use", "using", "used", "tool", "action", "perform", "via", "parameter":
+		return true
+	}
+	// "mcp" appears in every MCP tool name; keeping it would make any user
+	// message that merely mentions "MCP" match every MCP tool's name tokens.
+	// The rest are generic API verbs/nouns that appear in most tool
+	// descriptions and carry no discrimination signal.
+	switch s {
+	case "mcp",
+		"list", "get", "create", "update", "delete", "remove",
+		"fetch", "query", "data", "info", "name", "id", "file", "files":
 		return true
 	}
 	return false
