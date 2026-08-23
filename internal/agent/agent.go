@@ -164,7 +164,6 @@ type Agent struct {
 	exportGuard                *exportGuardState                     // breaking change detection for exported Go symbols (regression guard)
 	hubPackageGuard            *hubPackageState                      // per-edit blast-radius awareness for high fan-in packages
 	artifactGuard              *generatedArtifactState               // generated artifact / lock file edit warning
-	toolFilter                 *tool.RelevanceFilter                 // dynamic MCP tool pruning based on conversation relevance
 	fulfillmentGate            *fulfillmentGateState                 // pre-completion coverage verification (request-vs-work match)
 	ambiguityPoint             *ambiguityPointState                  // pre-run intent disambiguation (ambiguity detection in user request)
 	companionGuard             *companionGuardState                  // companion test file coverage check (unedited paired tests)
@@ -391,7 +390,6 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		verifyRegression:       newVerifyRegressionState(),
 		selfCorrectionGate:     newSelfCorrectionGateState(),
 		lastGoodCheckpoint:     newLastGoodCheckpoint(),
-		toolFilter:             tool.NewRelevanceFilter(),
 		latencyTracker:         NewLatencyTracker(),
 		toolSequence:           newToolSequenceValidator(),
 		adaptiveSampling:       newAdaptiveSamplingState(),
@@ -1506,7 +1504,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.searchParamGuard.reset()
 	a.toolRedundancy.reset()
 	a.toolSequence.reset()
-	a.toolFilter = tool.NewRelevanceFilter()
 	a.resetTransientRetryBudget()
 	a.compoundingFailure.reset()
 	a.toolDiversity.reset()
@@ -1963,15 +1960,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		var samplingPrev float64 = 0
 		_ = samplingApplied
 		_ = samplingPrev
-		// Dynamic tool pruning: filter out low-relevance MCP tools to reduce
-		// context overhead and improve tool-selection accuracy. Only activates
-		// when total tool count exceeds a threshold. Pass context pressure so
-		// tool descriptions are trimmed more aggressively as context fills up.
-		var ctxPressure float64
-		if cw := a.contextManager.ContextWindow(); cw > 0 {
-			ctxPressure = float64(a.contextManager.TokenCount()) / float64(cw)
-		}
-		activeToolDefs := a.toolFilter.FilterWithPressure(toolDefs, tool.ExtractContextFromMessages(msgs, 6), ctxPressure)
+		// No tool filtering or description trimming: dynamic pruning was
+		// removed (it destabilized the tool list mid-run and misfired on CJK
+		// contexts), and description truncation misleads the model into
+		// guessing tool behavior from names. All registered tools are sent
+		// with their full, unmodified descriptions.
+		activeToolDefs := toolDefs
 		resp, textBuf, toolCalls, truncated, policyBlocked, err := a.streamChatResponse(ctx, a.ensureMessagesSendable(msgs), activeToolDefs, onEvent)
 		if samplingApplied >= 0 {
 			a.restoreSampling(samplingPrev)
