@@ -2040,6 +2040,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// deterministic analysis. Guidance is injected into the context
 		// manager as a low-priority system note.
 		if cacheGuidance := a.cacheEffMonitor.record(resp.Usage); cacheGuidance != "" {
+			// Record the firing explicitly: this guidance is injected via
+			// injectGuidance (not appended to tool results), so it is invisible
+			// to crossDetectorConsensus without this call (#952 regression
+			// follow-up).
+			a.crossDetectorConsensus.recordFiring("Cache Efficiency")
 			a.injectGuidance(cacheGuidance)
 			debug.Log("cache-efficiency", "injecting cache bust storm guidance at iteration %d", i+1)
 		}
@@ -2431,6 +2436,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// external grounding degrades performance.
 			if ugrMsg := a.ungroundedReflect.recordIteration(i+1, len(toolCalls) > 0, len(assistantText)); ugrMsg != "" {
 				debug.Log("agent", "Iteration %d: ungrounded reflection detector triggered", i+1)
+				// Record the firing explicitly: this guidance is injected via
+				// contextManager (not appended to tool results), so the consensus
+				// detector chain never sees it — without this the detector is
+				// invisible to crossDetectorConsensus (#952 regression follow-up).
+				a.crossDetectorConsensus.recordFiring("Ungrounded Reflection")
 				a.contextManager.Add(provider.Message{
 					Role: "user",
 					Content: []provider.ContentBlock{{
