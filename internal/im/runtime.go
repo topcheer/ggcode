@@ -744,6 +744,10 @@ func (m *Manager) HandleInbound(ctx context.Context, msg InboundMessage) error {
 	}
 	// Defer binding persistence to a single call at the end, instead of
 	// persisting twice (once for ChannelID, once for LastInboundMessageID).
+	// #967: keep a pre-mutation snapshot so a persist failure can roll the
+	// in-memory binding back to match the store (mutation-before-persist used
+	// to leave memory ahead of disk with no recovery).
+	orig := *binding
 	needPersist := false
 	if binding.ChannelID == "" && strings.TrimSpace(msg.Envelope.ChannelID) != "" {
 		newChannelID := strings.TrimSpace(msg.Envelope.ChannelID)
@@ -751,7 +755,12 @@ func (m *Manager) HandleInbound(ctx context.Context, msg InboundMessage) error {
 		changed = true
 		needPersist = true
 	}
-	if binding.ChannelID != "" && msg.Envelope.ChannelID != binding.ChannelID {
+	// #967: the write above persists a TRIMMED ChannelID; this check must
+	// compare the trimmed inbound value too, otherwise a platform channel ID
+	// with surrounding whitespace is permanently denied after the first
+	// message (binding fixed to the trimmed value, comparison uses the raw
+	// envelope value) - only ClearChannel could recover.
+	if binding.ChannelID != "" && strings.TrimSpace(msg.Envelope.ChannelID) != binding.ChannelID {
 		rollbackDedup()
 		m.mu.Unlock()
 		return ErrInboundChannelDenied
@@ -767,6 +776,13 @@ func (m *Manager) HandleInbound(ctx context.Context, msg InboundMessage) error {
 	// Single persist call covering both ChannelID and LastInboundMessageID changes.
 	if needPersist && m.bindingStore != nil {
 		if err := m.persistBinding(*binding); err != nil {
+			// #967: roll back the in-memory mutations above so memory matches
+			// the unchanged store entry.
+			binding.ChannelID = orig.ChannelID
+			binding.LastInboundMessageID = orig.LastInboundMessageID
+			binding.LastInboundAt = orig.LastInboundAt
+			binding.PassiveReplyCount = orig.PassiveReplyCount
+			binding.PassiveReplyStartedAt = orig.PassiveReplyStartedAt
 			rollbackDedup()
 			m.mu.Unlock()
 			return err
@@ -1090,9 +1106,15 @@ func fanOutSend(ctx context.Context, targets []emitTarget, event OutboundEvent) 
 		sink := t.sink
 		safego.Go("im.runtime.fanOut", func() {
 			defer wg.Done()
-			// Check if context is already cancelled before sending
+			// Check if context is already cancelled before sending.
+			// #967: record the drop instead of returning silently - Emit must
+			// not report success when every send was discarded by cancellation
+			// (semantics parity with SendDirect's missing-sink error).
 			select {
 			case <-ctx.Done():
+				errsMu.Lock()
+				errs = append(errs, fmt.Errorf("%s: %w", binding.Adapter, ctx.Err()))
+				errsMu.Unlock()
 				return
 			default:
 			}

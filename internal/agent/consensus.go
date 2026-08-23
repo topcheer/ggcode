@@ -82,6 +82,15 @@ func (s *consensusState) reset() {
 	s.currentStep = 0
 }
 
+// recordFirings logs multiple detector firings at once. Convenience wrapper
+// (kept for the batch-loop call sites and #952 tests) delegating to
+// recordFiring per name.
+func (s *consensusState) recordFirings(detectorNames ...string) {
+	for _, n := range detectorNames {
+		s.recordFiring(n)
+	}
+}
+
 // recordFiring logs that a named detector produced guidance.
 // This should be called whenever ANY detector's check() returns non-empty.
 func (s *consensusState) recordFiring(detectorName string) {
@@ -104,17 +113,6 @@ func (s *consensusState) recordFiring(detectorName string) {
 			}
 		}
 		s.firings = kept
-	}
-}
-
-// recordFirings logs multiple detector firings at once. Convenience wrapper
-// for call sites that aggregate several detectors per tool result (#952).
-func (s *consensusState) recordFirings(detectorNames ...string) {
-	if s == nil {
-		return
-	}
-	for _, n := range detectorNames {
-		s.recordFiring(n)
 	}
 }
 
@@ -179,42 +177,6 @@ func (s *consensusState) check() string {
 	}
 
 	return guidance
-}
-
-// scanAndCheck scans tool result content for detector tag signatures (e.g.
-// "[Error Rush", "[Strategy Fixation"), records each detected firing, then
-// checks for cross-detector consensus. Returns consensus guidance if triggered.
-// This avoids modifying 30+ individual .check() call sites in the agent loop.
-func (s *consensusState) scanAndCheck(content string) string {
-	if s == nil {
-		return ""
-	}
-	// Known detector tag prefixes that appear in bracketed guidance headers.
-	detectorTags := []string{
-		"[Error Rush",
-		"[Strategy Fixation",
-		"[Correction Spiral",
-		"[Error Strategy Loop",
-		"[Hardcoded Output",
-		"[Bare Edit Streak",
-		"[Fix Cascade",
-		"[Recurring Error",
-		"[Stalled Convergence",
-		"[Convergence Lock",
-		"[Tunnel Vision",
-		"[Analysis Paralysis",
-		"[Tool Call Economy",
-		"[Context Footprint",
-		"[Empty Search Spiral",
-		"[Error Regression",
-		"[Circular Reasoning",
-	}
-	for _, tag := range detectorTags {
-		if strings.Contains(content, tag) {
-			s.recordFiring(strings.TrimPrefix(tag, "["))
-		}
-	}
-	return s.check()
 }
 
 // checkOnly runs the consensus check WITHOUT scanning content (#952). Used by

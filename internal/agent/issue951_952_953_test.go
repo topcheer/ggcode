@@ -142,7 +142,8 @@ func TestConsensusRecordFiringsAndCheckOnly(t *testing.T) {
 	// land on the same step, mirroring the batch-loop pattern where several
 	// detectors fire for one tool result.
 	s.recordFiring("Failure Mode")
-	s.recordFirings("Error Cascade", "Convergence Lock")
+	s.recordFiring("Error Cascade")
+	s.recordFiring("Convergence Lock")
 
 	got := s.checkOnly()
 	if got == "" {
@@ -153,30 +154,25 @@ func TestConsensusRecordFiringsAndCheckOnly(t *testing.T) {
 	}
 }
 
-func TestConsensusScanAndCheckDropsDeadTags(t *testing.T) {
+func TestConsensusLiveDetectorsBelowAndAtThreshold(t *testing.T) {
 	s := newConsensusState()
 
-	// #952: "[Tool Fallback" (guidance never uses that header), "[Failure Mode"
-	// and "[Error Cascade" (now recorded explicitly before the old scan window
-	// started) were removed from the scan list. Raw content containing them
-	// must not record firings.
-	content := "[Tool Fallback] something [Failure Mode] else [Error Cascade] here"
-	if got := s.scanAndCheck(content); got != "" {
-		t.Fatalf("dead tags must not trigger consensus, got: %s", got)
-	}
-	if len(s.firings) != 0 {
-		t.Fatalf("dead tags must not record firings, got %d: %#v", len(s.firings), s.firings)
-	}
+	// #952 follow-up: scanAndCheck and its dead-tag list were removed;
+	// live detectors record explicitly. Raw content can no longer record
+	// firings at all, so the dead-tag concern is moot.
 
-	// Live tags still work through the scan path (kept for compatibility).
-	if got := s.scanAndCheck("[Error Rush] panic coding [Tunnel Vision] narrow focus"); got != "" {
+	// Live detectors still work through the explicit recordFiring path.
+	s.recordFiring("Error Rush")
+	s.recordFiring("Tunnel Vision")
+	if got := s.checkOnly(); got != "" {
 		// Two detectors is below the threshold of 3 — no alert expected.
 		t.Fatalf("two live tags are below threshold, expected no alert, got: %s", got)
 	}
-	// Third scan crosses the threshold of 3 distinct detectors within the
-	// window; the alert is returned by this scanAndCheck call itself (its
-	// internal check fires the alert and enters cooldown).
-	if got := s.scanAndCheck("[Analysis Paralysis] stuck"); got == "" {
+	// Third firing crosses the threshold of 3 distinct detectors within the
+	// window; the alert is returned by this checkOnly call itself (it fires
+	// the alert and enters cooldown).
+	s.recordFiring("Analysis Paralysis")
+	if got := s.checkOnly(); got == "" {
 		t.Fatal("three live tags across scans should trigger consensus")
 	}
 }

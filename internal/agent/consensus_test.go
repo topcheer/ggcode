@@ -139,40 +139,6 @@ func TestConsensusState_RepeatAlertContainsRecurring(t *testing.T) {
 	}
 }
 
-func TestConsensusState_ScanAndCheck(t *testing.T) {
-	s := newConsensusState()
-	// Simulate tool result content containing 3 detector tags
-	content := "Build error occurred.\n\n" +
-		"[Error Rush / Panic Coding] You are issuing edits after errors.\n\n" +
-		"[Tunnel Vision] You've touched only 2 files in 15 iterations.\n\n" +
-		"[Analysis Paralysis] 8 exploration calls detected."
-
-	msg := s.scanAndCheck(content)
-	if msg == "" {
-		t.Fatal("expected consensus alert from scanAndCheck with 3 tags")
-	}
-	if !strings.Contains(msg, "Systemic Failure") {
-		t.Errorf("expected systemic failure message, got: %s", msg)
-	}
-}
-
-func TestConsensusState_ScanAndCheck_BelowThreshold(t *testing.T) {
-	s := newConsensusState()
-	content := "Build error.\n\n[Error Rush] Some warning.\n\n[Tunnel Vision] Another."
-	msg := s.scanAndCheck(content)
-	if msg != "" {
-		t.Errorf("expected no alert with only 2 tags, got: %s", msg)
-	}
-}
-
-func TestConsensusState_ScanAndCheck_NilSafe(t *testing.T) {
-	var s *consensusState
-	msg := s.scanAndCheck("[Error Rush] test")
-	if msg != "" {
-		t.Errorf("expected empty from nil state, got: %s", msg)
-	}
-}
-
 func TestConsensusState_DeduplicatesSameDetector(t *testing.T) {
 	s := newConsensusState()
 	// Same detector fires 5 times, but only counts as 1 distinct
@@ -184,32 +150,7 @@ func TestConsensusState_DeduplicatesSameDetector(t *testing.T) {
 	}
 }
 
-// #147: raw tool-result content containing detector tag literals (e.g. when
-// the agent READS detector source files) must NOT count as firings. The fix is
-// at the call site (agent.go passes result.Content[consensusBaseline:] — only
-// the guidance appended by detectors). This test simulates that wiring: with
-// baseline slicing, tags in raw file content are excluded; scanning the full
-// content (old behavior) would have fired.
-func TestConsensusState_RawContentNotCounted(t *testing.T) {
-	// Raw file content full of tag literals (detector source code).
-	rawContent := `[Error Rush] foo
-[Strategy Fixation] bar
-[Circular Reasoning] baz
-[Deferred Work] qux`
-	baseline := len(rawContent)
-
-	// New behavior: caller passes only content after the baseline. The one
-	// real detector firing below is below the 3-detector threshold.
-	content := rawContent + "\n\n[Error Rush] Editing after 2 consecutive error(s) without analysis."
-	s := newConsensusState()
-	if got := s.scanAndCheck(content[baseline:]); got != "" {
-		t.Fatalf("expected no consensus alert with baseline slicing, got: %s", got)
-	}
-
-	// Old behavior (scanning full content) would have counted 4+ tags —
-	// confirm the hazard the baseline fix eliminates.
-	s2 := newConsensusState()
-	if got := s2.scanAndCheck(content); got == "" {
-		t.Fatal("sanity check failed: full-content scan should have fired pre-fix behavior")
-	}
-}
+// scanAndCheck and its baseline-slicing tests (incl. the #147 raw-content
+// hazard simulation) were removed with the function itself in the #952
+// follow-up cleanup: firings are recorded explicitly via recordFiring at each
+// detector call site, so there is no content scan left to test.

@@ -87,6 +87,20 @@ func (m *Manager) UnbindChannel(workspace string) error {
 			}
 		}
 	}
+	// #967: cascade stopAdapter for any in-memory binding of this workspace,
+	// same as UnbindSession (#719) - deleting the persisted binding alone left
+	// the adapter goroutine/connection alive, delivering messages that hit
+	// ErrNoChannelBound until instance exit.
+	for name, b := range m.currentBindings {
+		if normalizeWorkspace(b.Workspace) == workspace {
+			m.stopAdapter(name)
+		}
+	}
+	for name, b := range m.disabledBindings {
+		if normalizeWorkspace(b.Workspace) == workspace {
+			m.stopAdapter(name)
+		}
+	}
 	// Clear matching entries from currentBindings
 	for name, b := range m.currentBindings {
 		if normalizeWorkspace(b.Workspace) == workspace {
@@ -122,6 +136,9 @@ func (m *Manager) DeleteBinding(adapter, workspace string) error {
 		m.mu.Unlock()
 		return err
 	}
+	// #967: cascade stopAdapter $1 - a deleted
+	// binding must not leave a live adapter delivering ErrNoChannelBound noise.
+	m.stopAdapter(adapter)
 	delete(m.currentBindings, adapter)
 	// #434: purge any DISABLED entry for this adapter too, so a deleted
 	// binding cannot resurrect via EnableAll/EnableBinding (ghost binding).
@@ -230,6 +247,9 @@ func (m *Manager) UnbindAdapter(adapterName string) error {
 			}
 		}
 	}
+	// #967: cascade stopAdapter (#719 parity with UnbindSession) even when no
+	// persisted binding existed (idempotent no-op path).
+	m.stopAdapter(adapterName)
 	delete(m.currentBindings, adapterName)
 	// #434: purge any DISABLED entry for this adapter too (ghost-binding
 	// prevention, same as DeleteBinding).
@@ -331,6 +351,17 @@ func (m *Manager) EnableBinding(adapterName string) error {
 		m.mu.Unlock()
 		return ErrNoChannelBound
 	}
+	// #967 ownership guard, same rule as UnmuteBinding/UnmuteAll (#689/#693):
+	// enabling a binding rewrites LastSessionID (the claim below), which must
+	// not silently hijack a channel owned by another LIVE session. A DEAD
+	// foreign owner (crash orphan) is still recoverable via takeover.
+	switch m.bindingOwnershipLocked(binding) {
+	case ownershipForeignLive:
+		m.mu.Unlock()
+		return fmt.Errorf("adapter %q is owned by another live session (last=%s); enable denied (disable elsewhere first or rebind to take over)", adapterName, binding.LastSessionID)
+	case ownershipForeignDead:
+		debug.Log("im", "EnableBinding: dead-owner takeover of %s from dead session=%s", adapterName, binding.LastSessionID)
+	}
 	copy := *binding
 	// Claim this binding for our session.
 	if m.session != nil {
@@ -354,7 +385,13 @@ func (m *Manager) EnableBinding(adapterName string) error {
 	// Persist: claim this binding for our session.
 	if store != nil && workspace != "" {
 		if err := store.UpdateSessionID(workspace, adapterName, sessionID); err != nil {
+			// #967: a swallowed claim error reports success while memory and
+			// store diverge (another instance can steal the channel on its next
+			// reload, causing enable->stolen->mute flapping). Propagate like the
+			// #719 restart failure above.
 			debug.Log("im", "EnableBinding: failed to set LastSessionID for %s: %v", adapterName, err)
+			m.syncInstanceActiveChannels()
+			return fmt.Errorf("enable adapter %s: ownership claim failed: %w", adapterName, err)
 		}
 	}
 	if onRestart != nil {
@@ -478,7 +515,11 @@ func (m *Manager) UnmuteBinding(adapterName string) error {
 	// Persist: claim this binding for our session.
 	if store != nil && workspace != "" {
 		if err := store.UpdateSessionID(workspace, adapterName, sessionID); err != nil {
+			// #967: same rationale as EnableBinding - a swallowed claim error
+			// leaves memory claiming ownership the store does not reflect.
 			debug.Log("im", "UnmuteBinding: failed to set LastSessionID for %s: %v", adapterName, err)
+			m.syncInstanceActiveChannels()
+			return fmt.Errorf("unmute adapter %s: ownership claim failed: %w", adapterName, err)
 		}
 	}
 	if onRestart != nil {
@@ -640,39 +681,97 @@ func (m *Manager) DisableAll() (int, error) {
 		names = append(names, name)
 		count++
 	}
+	workspace := ""
+	if m.session != nil {
+		workspace = m.session.Workspace
+	}
+	store := m.bindingStore
 	snapshot, cb := m.snapshotAndCallbackLocked()
 	m.mu.Unlock()
 	if cb != nil {
 		cb(snapshot)
+	}
+	// #967: clear LastSessionID for every disabled binding, mirroring
+	// DisableBinding ("so other sessions can claim this adapter"). Without
+	// this the channel stays locked to this instance until it exits.
+	if store != nil && workspace != "" {
+		for _, name := range names {
+			if err := store.UpdateSessionID(workspace, name, ""); err != nil {
+				debug.Log("im", "DisableAll: failed to clear LastSessionID for %s: %v", name, err)
+			}
+		}
 	}
 	debug.Log("im", "DisableAll: disabled %d adapters: %v", count, names)
 	return count, nil
 }
 
 // EnableAll re-enables all disabled bindings.
+//
+// #967: each enabled binding goes through the SAME claim path as
+// EnableBinding, including the #689/#693 ownership guard — a binding owned by
+// another LIVE session is skipped (stays disabled), everything else is
+// re-claimed for this session both in memory and in the store.
 func (m *Manager) EnableAll() (int, error) {
 	m.mu.Lock()
 	var toRestart []string
+	var toClaim []string
+	var skipped []string
 	count := 0
 	for name, binding := range m.disabledBindings {
+		switch m.bindingOwnershipLocked(binding) {
+		case ownershipForeignLive:
+			// Same #689/#693 rule as UnmuteAll: EnableAll must not become a
+			// back door that grabs a live foreign owner's channel.
+			debug.Log("im", "EnableAll: skipping %s owned by live session=%s", name, binding.LastSessionID)
+			skipped = append(skipped, name)
+			continue
+		case ownershipForeignDead:
+			binding.LastSessionID = m.session.SessionID // implies m.session != nil
+		}
 		copy := *binding
+		if m.session != nil {
+			copy.LastSessionID = m.session.SessionID
+		}
 		m.currentBindings[name] = &copy
 		delete(m.disabledBindings, name)
 		toRestart = append(toRestart, name)
+		toClaim = append(toClaim, name)
 		count++
 	}
 	onRestart := m.onRestart
+	workspace := ""
+	sessionID := ""
+	if m.session != nil {
+		workspace = m.session.Workspace
+		sessionID = m.session.SessionID
+	}
+	store := m.bindingStore
 	snapshot, cb := m.snapshotAndCallbackLocked()
 	m.mu.Unlock()
 	if cb != nil {
 		cb(snapshot)
 	}
+	// #967: persist the claim for every enabled binding (EnableBinding parity).
+	for _, name := range toClaim {
+		if store != nil && workspace != "" {
+			if err := store.UpdateSessionID(workspace, name, sessionID); err != nil {
+				debug.Log("im", "EnableAll: failed to set LastSessionID for %s: %v", name, err)
+			}
+		}
+	}
+	var restartErrs []error
 	for _, name := range toRestart {
 		if onRestart != nil {
 			if err := onRestart(name); err != nil {
 				debug.Log("im", "enable-all restart adapter %s: %v", name, err)
+				// #719: propagate restart failures instead of reporting success.
+				restartErrs = append(restartErrs, fmt.Errorf("adapter %s: %w", name, err))
 			}
 		}
+	}
+	_ = skipped
+	if len(restartErrs) > 0 {
+		return count, fmt.Errorf("enable-all restart failed: %w", errors.Join(restartErrs...))
 	}
 	return count, nil
 }
@@ -833,9 +932,15 @@ func (m *Manager) RecordPassiveReply(workspace, messageID string, sentAt time.Ti
 		if b.PassiveReplyStartedAt.IsZero() {
 			b.PassiveReplyStartedAt = sentAt
 		}
+		// #967: snapshot before mutating so a persist failure can roll back
+		// the counter (WeChat passive quota window would otherwise drift
+		// ahead of what the store reflects).
+		oldCount, oldStart := b.PassiveReplyCount, b.PassiveReplyStartedAt
 		b.PassiveReplyCount++
 		if m.bindingStore != nil {
 			if err := m.persistBinding(*b); err != nil {
+				b.PassiveReplyCount = oldCount
+				b.PassiveReplyStartedAt = oldStart
 				m.mu.Unlock()
 				return err
 			}
