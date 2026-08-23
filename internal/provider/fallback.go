@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
 )
@@ -22,6 +23,10 @@ const (
 	// hitting its own quota/auth limit left the app permanently unusable —
 	// every call errored with no recovery path short of manual /model.
 	FailoverTriggerBack FailoverTrigger = "fallback_failed_back_to_primary"
+	// FailoverTriggerPrimaryRecovered fires when the background recovery
+	// prober found the primary healthy again and switched back proactively —
+	// no failure on the fallback side was needed.
+	FailoverTriggerPrimaryRecovered FailoverTrigger = "primary_recovered"
 )
 
 // failoverThreshold is the number of consecutive transient failures on the
@@ -52,6 +57,11 @@ type FallbackProvider struct {
 	mu              sync.RWMutex
 	failedOver      atomic.Bool
 	consecutiveFail atomic.Int32
+
+	// probeCancel stops the primary-recovery prober (nil when not running).
+	probeCancel context.CancelFunc
+	// probeInterval overrides the probe tick (tests only; 0 = default).
+	probeInterval time.Duration
 
 	// notify is called when a failover occurs, so the UI can inform the user.
 	// It receives the trigger reason and the error that caused it.
@@ -89,6 +99,7 @@ func (f *FallbackProvider) HasFailedOver() bool {
 // Reset clears the failover state, returning to the primary provider.
 // Called when the user manually switches models/providers.
 func (f *FallbackProvider) Reset() {
+	f.stopPrimaryProber()
 	f.failedOver.Store(false)
 	f.consecutiveFail.Store(0)
 }
@@ -179,6 +190,7 @@ func (f *FallbackProvider) maybeFailover(err error, failed Provider) (error, boo
 	alreadyFailed := f.failedOver.Load()
 	if !alreadyFailed {
 		f.failedOver.Store(true)
+		f.startPrimaryProberLocked()
 		debug.Log("provider", "failover activated: %s (trigger=%s, error=%v)", f.description, trigger, err)
 		if f.notify != nil {
 			// Copy callback under lock to avoid race with SetFailoverNotify.
@@ -207,6 +219,7 @@ func (f *FallbackProvider) maybeFailover(err error, failed Provider) (error, boo
 	if failed == f.fallback {
 		f.mu.Lock()
 		f.failedOver.Store(false)
+		f.stopPrimaryProberLocked()
 		debug.Log("provider", "failover back to primary: %s (trigger=%s, error=%v)", f.description, trigger, err)
 		if f.notify != nil {
 			notify := f.notify
@@ -234,6 +247,99 @@ func (f *FallbackProvider) otherThan(p Provider) Provider {
 		return f.primary
 	}
 	return f.fallback
+}
+
+// defaultPrimaryProbeInterval is how often the recovery prober checks the
+// primary while the fallback is active. A real (tiny) request is the only
+// reliable health signal — quota/auth state lives server-side, so this
+// cannot be inferred locally. 60s bounds wasted probe tokens while still
+// switching back within a minute of recovery in the common case.
+const defaultPrimaryProbeInterval = 60 * time.Second
+
+// primaryProbeTimeout bounds a single probe request.
+const primaryProbeTimeout = 15 * time.Second
+
+// startPrimaryProberLocked launches the background primary-recovery prober
+// (must hold f.mu). Idempotent: a prober is already running is a no-op.
+// The prober pings the primary on a ticker; the first successful probe
+// switches back to the primary proactively — the user does not have to wait
+// for the fallback to fail too, and probe cost stops the moment we return.
+func (f *FallbackProvider) startPrimaryProberLocked() {
+	if f.probeCancel != nil {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	f.probeCancel = cancel
+	interval := f.probeInterval
+	if interval <= 0 {
+		interval = defaultPrimaryProbeInterval
+	}
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+			if !f.failedOver.Load() {
+				// Someone else already switched back (manual Reset, fallback
+				// failure path) — retire this prober.
+				f.stopPrimaryProber()
+				return
+			}
+			if !f.probePrimary(ctx) {
+				continue
+			}
+			f.mu.Lock()
+			if f.failedOver.Load() {
+				f.failedOver.Store(false)
+				f.consecutiveFail.Store(0)
+				f.stopPrimaryProberLocked()
+				debug.Log("provider", "primary recovered, switching back: %s", f.description)
+				var notify func(FailoverTrigger, error)
+				if f.notify != nil {
+					notify = f.notify
+				}
+				f.mu.Unlock()
+				if notify != nil {
+					notify(FailoverTriggerPrimaryRecovered, nil)
+				}
+			} else {
+				f.stopPrimaryProberLocked()
+				f.mu.Unlock()
+			}
+			return
+		}
+	}()
+}
+
+// stopPrimaryProber cancels and clears the prober (safe unlocked).
+func (f *FallbackProvider) stopPrimaryProber() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.stopPrimaryProberLocked()
+}
+
+// stopPrimaryProberLocked cancels and clears the prober (must hold f.mu).
+func (f *FallbackProvider) stopPrimaryProberLocked() {
+	if f.probeCancel != nil {
+		f.probeCancel()
+		f.probeCancel = nil
+	}
+}
+
+// probePrimary sends one minimal Chat request to the primary. A nil error
+// is the only health signal we trust (quota/auth state is server-side).
+func (f *FallbackProvider) probePrimary(ctx context.Context) bool {
+	f.mu.RLock()
+	p := f.primary
+	f.mu.RUnlock()
+	pctx, cancel := context.WithTimeout(ctx, primaryProbeTimeout)
+	defer cancel()
+	_, err := p.Chat(pctx, []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "ping"}}}}, nil)
+	return err == nil
 }
 
 // Chat sends a non-streaming request, failing over on permanent errors.
@@ -609,8 +715,15 @@ func (f *FallbackProvider) CloneWithModel(model string) Provider {
 	fallbackClone := fc.CloneWithModel(model)
 	clone := NewFallbackProvider(primaryClone, fallbackClone, f.description)
 	clone.SetFailoverNotify(f.notifySnapshot())
+	clone.probeInterval = f.probeInterval
 	if f.failedOver.Load() {
 		clone.failedOver.Store(true)
+		// The clone inherits the failed-over state, so it must also inherit
+		// the recovery prober — otherwise a subagent's clone would never
+		// proactively switch back when the primary recovers.
+		clone.mu.Lock()
+		clone.startPrimaryProberLocked()
+		clone.mu.Unlock()
 	}
 	return clone
 }
