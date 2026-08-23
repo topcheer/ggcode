@@ -22,38 +22,18 @@ func CaptureScreen(opts ScreenshotOptions) (ScreenshotResult, error) {
 
 	applyDelay(opts.DelayMs)
 
-	rawPath, cleanup := createTempScreenshotPath(opts)
+	rawPath, cleanup, err := createTempScreenshotPath(opts)
+	if err != nil {
+		return ScreenshotResult{}, err
+	}
 	defer cleanup()
 
-	// #555: window capture support varies by tool. Previously grim and
-	// gnome-screenshot silently captured the FULL screen when opts.Window was
-	// set. Now grim resolves the window geometry via hyprctl, and tools that
-	// cannot target a window by title fail with an explicit, actionable error
-	// instead of returning the wrong image.
-	if opts.Window != "" {
-		switch tool {
-		case "grim":
-			region, err := resolveLinuxWindowRegion(opts.Window)
-			if err != nil {
-				return ScreenshotResult{}, fmt.Errorf(
-					"window capture with grim: %w (grim window capture requires hyprctl; alternatives: scrot or imagemagick import on X11)", err)
-			}
-			opts.Window = ""
-			opts.Region = &region
-		case "gnome-screenshot":
-			return ScreenshotResult{}, fmt.Errorf(
-				"gnome-screenshot cannot capture a specific window by title; use grim with hyprctl, scrot, or imagemagick (import) for window capture")
-		}
-	}
-
-	// #555: best-effort display selection. Most tools below cannot select an
-	// output by index, so translate the 1-based display index into a region
-	// covering that output (geometry from xrandr/wlr-randr). Region and Window
-	// take precedence. Resolution failure falls back to the default output.
-	if opts.Window == "" && opts.Region == nil && opts.Display > 1 {
-		if region, err := linuxDisplayBounds(opts.Display); err == nil {
-			opts.Region = &region
-		}
+	// Normalize options for the detected tool: translate unsupported modes
+	// (window, multi-display) into what the tool can do, or reject them with
+	// an explicit, actionable error (#555, #975).
+	opts, err = prepareLinuxCaptureOpts(tool, opts)
+	if err != nil {
+		return ScreenshotResult{}, err
 	}
 
 	var cmd *exec.Cmd
@@ -84,6 +64,49 @@ func CaptureScreen(opts ScreenshotOptions) (ScreenshotResult, error) {
 		result.SavedPath = opts.OutputPath
 	}
 	return result, nil
+}
+
+// prepareLinuxCaptureOpts normalizes opts for the detected tool:
+//
+//   - Window capture (#555): grim resolves the window geometry via hyprctl
+//     into a Region; tools that cannot target a window by title fail with an
+//     explicit, actionable error instead of returning the wrong image.
+//   - gnome-screenshot limits (#975): no CLI region capture and no per-output
+//     selection, so Display>1/Region fail explicitly (same treatment).
+//   - Best-effort display selection (#555): most tools cannot select an
+//     output by index, so translate the 1-based display index into a region
+//     covering that output (geometry from xrandr/wlr-randr). Region and
+//     Window take precedence; resolution failure falls back to the default
+//     output.
+func prepareLinuxCaptureOpts(tool string, opts ScreenshotOptions) (ScreenshotOptions, error) {
+	if opts.Window != "" {
+		switch tool {
+		case "grim":
+			region, err := resolveLinuxWindowRegion(opts.Window)
+			if err != nil {
+				return opts, fmt.Errorf(
+					"window capture with grim: %w (grim window capture requires hyprctl; alternatives: scrot or imagemagick import on X11)", err)
+			}
+			opts.Window = ""
+			opts.Region = &region
+		case "gnome-screenshot":
+			return opts, fmt.Errorf(
+				"gnome-screenshot cannot capture a specific window by title; use grim with hyprctl, scrot, or imagemagick (import) for window capture")
+		}
+	}
+
+	if tool == "gnome-screenshot" {
+		if err := gnomeScreenshotUnsupportedOpts(opts); err != nil {
+			return opts, err
+		}
+	}
+
+	if opts.Window == "" && opts.Region == nil && opts.Display > 1 {
+		if region, err := linuxDisplayBounds(opts.Display); err == nil {
+			opts.Region = &region
+		}
+	}
+	return opts, nil
 }
 
 func detectLinuxScreenshotTool() string {
@@ -165,59 +188,7 @@ func listDisplaysWlrrandr() ([]DisplayInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("wlr-randr failed: %w", err)
 	}
-	var displays []DisplayInfo
-	idx := 0
-	var current DisplayInfo
-	for _, rawLine := range strings.Split(string(out), "\n") {
-		// #764: keep the raw line -- indentation IS the structure (indented
-		// lines are Position:/Mode: sub-fields of the display above). The old
-		// TrimSpace-then-HasPrefix(" ") check was always false, so every
-		// sub-line became a phantom display and Mode parsing was dead code.
-		if strings.TrimSpace(rawLine) == "" {
-			continue
-		}
-		indented := strings.HasPrefix(rawLine, " ") || strings.HasPrefix(rawLine, "\t")
-		if !indented {
-			if current.Name != "" {
-				idx++
-				current.Index = idx
-				displays = append(displays, current)
-			}
-			current = DisplayInfo{Name: strings.TrimSpace(rawLine)}
-			continue
-		}
-		line := strings.TrimSpace(rawLine)
-		if strings.HasPrefix(line, "Mode:") {
-			fields := strings.Fields(line)
-			for _, f := range fields {
-				if strings.Contains(f, "x") {
-					parts := strings.Split(f, "x")
-					if len(parts) == 2 {
-						current.Width, _ = strconv.Atoi(parts[0])
-						current.Height, _ = strconv.Atoi(parts[1])
-					}
-				}
-			}
-		} else if strings.HasPrefix(line, "Position:") {
-			// #764 secondary: parse X/Y offset so multi-monitor regions are right.
-			fields := strings.Fields(line)
-			for _, f := range fields {
-				if strings.Contains(f, ",") {
-					parts := strings.Split(strings.TrimSuffix(f, ","), ",")
-					if len(parts) == 2 {
-						current.X, _ = strconv.Atoi(parts[0])
-						current.Y, _ = strconv.Atoi(parts[1])
-					}
-				}
-			}
-		}
-	}
-	if current.Name != "" {
-		idx++
-		current.Index = idx
-		displays = append(displays, current)
-	}
-	return displays, nil
+	return parseWlrrandrOutput(string(out)), nil
 }
 
 // ListWindows returns capturable windows on Linux using wmctrl.
@@ -229,29 +200,9 @@ func ListWindows() ([]WindowInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("wmctrl failed: %w", err)
 	}
-	var windows []WindowInfo
-	for _, line := range strings.Split(string(out), "\n") {
-		if len(line) < 10 {
-			continue
-		}
-		fields := strings.SplitN(line, " ", 5)
-		if len(fields) < 5 {
-			continue
-		}
-		id, _ := strconv.ParseInt(fields[0], 0, 64)
-		clsParts := strings.SplitN(fields[2], ".", 2)
-		app := fields[2]
-		if len(clsParts) > 0 {
-			app = clsParts[len(clsParts)-1]
-		}
-		title := fields[4]
-		windows = append(windows, WindowInfo{
-			ID:    int(id),
-			App:   app,
-			Title: title,
-		})
-	}
-	return windows, nil
+	// #975: parse the padded fixed-width columns with strings.Fields, not a
+	// single-space SplitN (which broke App/Title alignment and dropped lines).
+	return parseWmctrlOutput(string(out)), nil
 }
 
 func buildGrimCommand(outPath string, opts ScreenshotOptions) *exec.Cmd {
@@ -265,16 +216,13 @@ func buildGrimCommand(outPath string, opts ScreenshotOptions) *exec.Cmd {
 }
 
 func buildGnomeScreenshotCommand(outPath string, opts ScreenshotOptions) *exec.Cmd {
-	args := []string{"-f", outPath}
-	// #555: pass the requested display through when its name can be resolved.
-	if opts.Display > 1 {
-		if name, err := linuxDisplayName(opts.Display); err == nil {
-			args = append([]string{"--display=" + name}, args...)
-		}
-	}
-	return exec.Command("gnome-screenshot", args...)
+	// #975: no --display= is passed anymore. The flag is a GDK/X11 connection
+	// name (host:D.S like ":0"), not an xrandr output name — passing "HDMI-A-1"
+	// made gnome-screenshot fail with "cannot open display". Display/Region
+	// requests are rejected earlier by gnomeScreenshotUnsupportedOpts.
+	_ = opts
+	return exec.Command("gnome-screenshot", "-f", outPath)
 }
-
 func buildScrotCommand(outPath string, opts ScreenshotOptions) *exec.Cmd {
 	args := []string{"-z"}
 	if opts.Region != nil {
@@ -398,22 +346,6 @@ func linuxDisplayBounds(index int) (ScreenshotRegion, error) {
 		return ScreenshotRegion{}, fmt.Errorf("display %d geometry unknown", index)
 	}
 	return ScreenshotRegion{X: d.X, Y: d.Y, Width: d.Width, Height: d.Height}, nil
-}
-
-// linuxDisplayName resolves a 1-based display index to its output name
-// (e.g. "HDMI-A-1") for tools like gnome-screenshot --display=NAME.
-func linuxDisplayName(index int) (string, error) {
-	displays, err := ListDisplays()
-	if err != nil {
-		return "", err
-	}
-	if index < 1 || index > len(displays) {
-		return "", fmt.Errorf("display %d not found (%d displays)", index, len(displays))
-	}
-	if displays[index-1].Name == "" {
-		return "", fmt.Errorf("display %d name unknown", index)
-	}
-	return displays[index-1].Name, nil
 }
 
 // Guard against unused import warnings on some build paths.

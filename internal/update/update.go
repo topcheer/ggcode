@@ -397,7 +397,10 @@ func (s *Service) httpClient() *http.Client {
 	if s.HTTPClient != nil {
 		return s.HTTPClient
 	}
-	return http.DefaultClient
+	// Fall back to the install package default (bounded Timeout) instead of
+	// http.DefaultClient (Timeout == 0): a half-open or black-holed mirror
+	// must not hang /update forever (#976).
+	return install.DefaultHTTPClient()
 }
 
 func helperBinaryName() string {

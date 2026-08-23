@@ -13,7 +13,10 @@ import (
 func CaptureScreen(opts ScreenshotOptions) (ScreenshotResult, error) {
 	applyDelay(opts.DelayMs)
 
-	rawPath, cleanup := createTempScreenshotPath(opts)
+	rawPath, cleanup, err := createTempScreenshotPath(opts)
+	if err != nil {
+		return ScreenshotResult{}, err
+	}
 	defer cleanup()
 
 	script := buildWindowsScreenshotScript(rawPath, opts)
@@ -44,16 +47,9 @@ func buildWindowsScreenshotScript(outPath string, opts ScreenshotOptions) string
 	// Screen.Bounds / CopyFromScreen all operate in virtualized 96-DPI
 	// logical coordinates -- blurry window/full-screen captures and
 	// mispositioned regions on scaled displays. Declare DPI awareness so the
-	// whole chain works in physical pixels.
-	sb.WriteString(`Add-Type @'
-using System.Runtime.InteropServices;
-public class Win32Dpi {
-    [DllImport("user32.dll")]
-    public static extern bool SetProcessDPIAware();
-}
-'@
-[Win32Dpi]::SetProcessDPIAware() | Out-Null
-`)
+	// whole chain works in physical pixels. The snippet is shared with
+	// ListDisplays (#976) so both coordinate spaces stay physical pixels.
+	sb.WriteString(windowsDpiAwarenessSnippet)
 
 	if opts.Window != "" {
 		q := escapePowerShell(opts.Window)
@@ -68,10 +64,17 @@ public class Win32 {
     public struct RECT { public int Left, Top, Right, Bottom; }
     [DllImport("user32.dll")]
     public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+    [DllImport("dwmapi.dll")]
+    public static extern int DwmGetWindowAttribute(IntPtr hWnd, int attr, out RECT rect, int size);
 }
 '@
 $rect = New-Object Win32+RECT
-[Win32]::GetWindowRect($p.MainWindowHandle, [ref]$rect) | Out-Null
+# DWMWA_EXTENDED_FRAME_BOUNDS (9) returns the *visible* window rect;
+# GetWindowRect includes the invisible resize borders (~7px per side on
+# Win10/11). Fall back to GetWindowRect when DWM is unavailable (#976).
+if ([Win32]::DwmGetWindowAttribute($p.MainWindowHandle, 9, [ref]$rect, 16) -ne 0) {
+  [Win32]::GetWindowRect($p.MainWindowHandle, [ref]$rect) | Out-Null
+}
 $w = $rect.Right - $rect.Left
 $h = $rect.Bottom - $rect.Top
 $bmp = New-Object System.Drawing.Bitmap($w, $h)
@@ -119,23 +122,9 @@ $g.CopyFromScreen($rect.Left, $rect.Top, 0, 0, $bmp.Size)
 
 // ListDisplays returns display information on Windows.
 func ListDisplays() ([]DisplayInfo, error) {
-	script := `
-Add-Type -AssemblyName System.Windows.Forms
-$screens = [System.Windows.Forms.Screen]::AllScreens
-$result = @()
-for ($i = 0; $i -lt $screens.Length; $i++) {
-  $s = $screens[$i]
-  $result += [PSCustomObject]@{
-    index = $i + 1
-    is_primary = $s.Primary
-    width = $s.Bounds.Width
-    height = $s.Bounds.Height
-    x = $s.Bounds.X
-    y = $s.Bounds.Y
-  }
-}
-$result | ConvertTo-Json -Compress
-`
+	// #976: the script must declare DPI awareness before querying AllScreens;
+	// see buildWindowsListDisplaysScript.
+	script := buildWindowsListDisplaysScript()
 	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", script)
 	out, err := cmd.Output()
 	if err != nil {

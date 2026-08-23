@@ -8,6 +8,7 @@ import (
 	_ "image/png"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -176,15 +177,204 @@ func resizeImage(src image.Image, maxW int) image.Image {
 	return dst
 }
 
-// createTempScreenshotPath creates a temp or output file path.
-func createTempScreenshotPath(opts ScreenshotOptions) (string, func()) {
+// createTempScreenshotPath creates a temp or output file path. The error is
+// returned to the caller: a broken TMPDIR used to be swallowed, making the
+// screenshot tool write "screenshot.png" into the process CWD while cleanup
+// removed a non-existent dir and left the stray file behind (#975).
+func createTempScreenshotPath(opts ScreenshotOptions) (string, func(), error) {
 	if opts.OutputPath != "" {
-		return opts.OutputPath, func() {}
+		return opts.OutputPath, func() {}, nil
 	}
-	tmpDir, _ := os.MkdirTemp("", "ggcode-screenshot-*")
+	tmpDir, err := os.MkdirTemp("", "ggcode-screenshot-*")
+	if err != nil {
+		return "", func() {}, fmt.Errorf("creating temp screenshot dir: %w", err)
+	}
 	ext := "png"
 	if strings.ToLower(opts.Format) == "jpeg" {
 		ext = "jpg"
 	}
-	return filepath.Join(tmpDir, "screenshot."+ext), func() { os.RemoveAll(tmpDir) }
+	return filepath.Join(tmpDir, "screenshot."+ext), func() { os.RemoveAll(tmpDir) }, nil
+}
+
+// parseWmctrlOutput parses `wmctrl -lx` output, whose five columns (window
+// ID, desktop, hostname, WM_CLASS, title) are padded with spaces: the desktop
+// column is right-aligned (" 0" vs "-1"), and the class column is padded to
+// a fixed width, so titles are preceded by runs of spaces. A single-space
+// SplitN(line, " ", 5) therefore produced an empty App (double space between
+// ID and desktop), mixed class padding into the Title, or dropped lines with
+// fewer than 5 chunks entirely. Fields-based column access fixes the columns
+// and the title is sliced from the original line so interior spacing survives
+// (#975).
+func parseWmctrlOutput(out string) []WindowInfo {
+	var windows []WindowInfo
+	for _, line := range strings.Split(out, "\n") {
+		if w, ok := parseWmctrlLine(line); ok {
+			windows = append(windows, w)
+		}
+	}
+	return windows
+}
+
+func parseWmctrlLine(line string) (WindowInfo, bool) {
+	line = strings.TrimSuffix(line, "\r")
+	fields := strings.Fields(line)
+	if len(fields) < 5 {
+		return WindowInfo{}, false
+	}
+	id, err := strconv.ParseUint(fields[0], 0, 64)
+	if err != nil {
+		return WindowInfo{}, false
+	}
+	// WM_CLASS column is "instance.class"; keep the class part (same
+	// semantics as before, now reading the correct column).
+	clsParts := strings.SplitN(fields[3], ".", 2)
+	app := clsParts[len(clsParts)-1]
+	// Titles may contain any spacing, so take them from the original line at
+	// the offset of the 5th column instead of from the field split; strip the
+	// class column's trailing padding.
+	title := strings.TrimRight(line[wmctrlTitleOffset(line):], " \t")
+	return WindowInfo{ID: int(id), App: app, Title: title}, true
+}
+
+// wmctrlTitleOffset returns the byte offset of the 5th column (the title) in
+// a wmctrl -lx line, skipping the run of padding spaces before it.
+func wmctrlTitleOffset(line string) int {
+	const titleColumn = 4 // 0-based index of the title column
+	idx := 0
+	for i := 0; i < titleColumn; i++ {
+		for idx < len(line) && (line[idx] == ' ' || line[idx] == '\t') {
+			idx++
+		}
+		for idx < len(line) && line[idx] != ' ' && line[idx] != '\t' {
+			idx++
+		}
+	}
+	for idx < len(line) && (line[idx] == ' ' || line[idx] == '\t') {
+		idx++
+	}
+	return idx
+}
+
+// parseWlrrandrOutput parses `wlr-randr` output. Structure: an output name
+// header line, then indented property lines, and under an indented "Modes:"
+// header a block of deeper-indented mode lines such as
+//
+//	1920x1080 px, 60.000000 Hz (preferred, current)
+//
+// The old parser looked for lines starting with "Mode:", which never matches
+// ("Modes:" has an "s"), leaving Width/Height at 0 — so linuxDisplayBounds
+// always failed with "geometry unknown" and multi-display selection on
+// Wayland silently fell back to a full-screen capture (#975). Mode lines are
+// now recognized by their shape; the (current) mode wins, falling back to
+// (preferred), then the first listed mode.
+func parseWlrrandrOutput(out string) []DisplayInfo {
+	var displays []DisplayInfo
+	idx := 0
+	var current DisplayInfo
+	var mode wlrModePick
+	flush := func() {
+		if current.Name == "" {
+			return
+		}
+		idx++
+		current.Index = idx
+		current.Width = mode.width
+		current.Height = mode.height
+		displays = append(displays, current)
+	}
+	for _, rawLine := range strings.Split(out, "\n") {
+		// #764: keep the raw line -- indentation IS the structure (indented
+		// lines are sub-fields of the display above).
+		if strings.TrimSpace(rawLine) == "" {
+			continue
+		}
+		indented := strings.HasPrefix(rawLine, " ") || strings.HasPrefix(rawLine, "\t")
+		if !indented {
+			flush()
+			current = DisplayInfo{Name: strings.TrimSpace(rawLine)}
+			mode = wlrModePick{}
+			continue
+		}
+		line := strings.TrimSpace(rawLine)
+		if strings.HasPrefix(line, "Position:") {
+			// #764 secondary: parse X/Y offset so multi-monitor regions are right.
+			for _, f := range strings.Fields(line) {
+				if strings.Contains(f, ",") {
+					parts := strings.Split(strings.TrimSuffix(f, ","), ",")
+					if len(parts) == 2 {
+						current.X, _ = strconv.Atoi(parts[0])
+						current.Y, _ = strconv.Atoi(parts[1])
+					}
+				}
+			}
+			continue
+		}
+		if w, h, isCurrent, isPreferred, ok := parseWlrrandrModeLine(line); ok {
+			mode.offer(w, h, isCurrent, isPreferred)
+		}
+	}
+	flush()
+	return displays
+}
+
+// parseWlrrandrModeLine recognizes a mode entry like
+// "1920x1080 px, 60.000000 Hz (preferred, current)". Requiring a leading
+// WxH token followed by a px token keeps "Modes:" headers and lines like
+// "Physical size: 340x190 mm" out.
+func parseWlrrandrModeLine(line string) (w, h int, isCurrent, isPreferred bool, ok bool) {
+	fields := strings.Fields(line)
+	if len(fields) < 2 || !strings.HasPrefix(fields[1], "px") {
+		return 0, 0, false, false, false
+	}
+	parts := strings.Split(fields[0], "x")
+	if len(parts) != 2 {
+		return 0, 0, false, false, false
+	}
+	var errW, errH error
+	w, errW = strconv.Atoi(parts[0])
+	h, errH = strconv.Atoi(parts[1])
+	if errW != nil || errH != nil || w <= 0 || h <= 0 {
+		return 0, 0, false, false, false
+	}
+	isCurrent = strings.Contains(line, "current")
+	isPreferred = strings.Contains(line, "preferred")
+	return w, h, isCurrent, isPreferred, true
+}
+
+// wlrModePick tracks the best mode seen for one output: (current) wins over
+// (preferred), which wins over the first listed mode.
+type wlrModePick struct {
+	width, height      int
+	current, preferred bool
+	seen               bool
+}
+
+func (p *wlrModePick) offer(w, h int, isCurrent, isPreferred bool) {
+	if !p.seen {
+		*p = wlrModePick{width: w, height: h, current: isCurrent, preferred: isPreferred, seen: true}
+		return
+	}
+	if p.current {
+		return // the active mode always wins
+	}
+	if isCurrent || (isPreferred && !p.preferred) {
+		*p = wlrModePick{width: w, height: h, current: isCurrent, preferred: isPreferred, seen: true}
+	}
+}
+
+// gnomeScreenshotUnsupportedOpts reports an error when opts needs a
+// capability gnome-screenshot does not expose on the command line: it cannot
+// capture a region non-interactively, and --display expects a GDK/X11
+// connection name (host:D.S like ":0"), not an xrandr/wlr-randr output name,
+// so per-output selection is impossible too. Failing explicitly mirrors the
+// existing window-capture treatment instead of silently capturing the full
+// screen (#975).
+func gnomeScreenshotUnsupportedOpts(opts ScreenshotOptions) error {
+	if opts.Display > 1 {
+		return fmt.Errorf("gnome-screenshot cannot select a display by index; use grim (Wayland) or scrot/import (X11) for per-display capture")
+	}
+	if opts.Region != nil {
+		return fmt.Errorf("gnome-screenshot cannot capture a region non-interactively; use grim -g, scrot -a, or import -crop for region capture")
+	}
+	return nil
 }

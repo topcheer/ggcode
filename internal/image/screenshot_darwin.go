@@ -14,7 +14,10 @@ import (
 func CaptureScreen(opts ScreenshotOptions) (ScreenshotResult, error) {
 	applyDelay(opts.DelayMs)
 
-	rawPath, cleanup := createTempScreenshotPath(opts)
+	rawPath, cleanup, err := createTempScreenshotPath(opts)
+	if err != nil {
+		return ScreenshotResult{}, err
+	}
 	defer cleanup()
 
 	args := []string{"-x"} // silent
