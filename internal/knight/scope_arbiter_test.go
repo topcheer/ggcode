@@ -35,8 +35,10 @@ When changing exported APIs, run ` + "`go vet ./...`" + ` before pushing.`,
 			wantSubs: "internal/",
 		},
 		{
-			name:     "make-target-flagged",
-			body:     "Run `make verify-ci` before declaring success.",
+			name: "make-target-flagged",
+			// #982: make detection is line-anchored; inline prose mention
+			// alone does not hit, the command form does.
+			body:     "Build gate:\n\n```make\nmake verify-ci\n```\nbefore declaring success.",
 			wantHit:  true,
 			wantSubs: "make",
 		},

@@ -43,26 +43,38 @@ func scopeDowngradeReason(projDir, content string) string {
 	}
 
 	// 3. Project-relative paths under common roots (cmd/, internal/, pkg/, src/, app/).
+	// #982: check EVERY occurrence of the root, not just the first one — a body
+	// can mention "cmd/" mid-sentence (no path char after) and later reference
+	// "cmd/foo" as a real path; the first-only check silently missed that.
 	relRoots := []string{"cmd/", "internal/", "pkg/", "src/", "app/"}
 	for _, root := range relRoots {
-		idx := strings.Index(body, root)
-		if idx < 0 {
-			continue
-		}
-		// Heuristic: only flag if a path segment follows (e.g. internal/knight, cmd/foo).
-		rest := body[idx+len(root):]
-		if rest == "" {
-			continue
-		}
-		next := rest[0]
-		if isPathChar(next) {
-			return "skill body references project-relative path under " + root
+		search := 0
+		for {
+			idx := strings.Index(lower[search:], root)
+			if idx < 0 {
+				break
+			}
+			idx += search
+			// Heuristic: only flag if a path segment follows (e.g. internal/knight, cmd/foo).
+			rest := lower[idx+len(root):]
+			if rest != "" && isPathChar(rest[0]) {
+				return "skill body references project-relative path under " + root
+			}
+			search = idx + len(root)
 		}
 	}
 
 	// 4. Custom command tokens that look project-specific (e.g. `make foo`, `./script.sh`).
-	if regexp.MustCompile(`(?m)\bmake\s+[a-z][a-z0-9_-]{2,}`).FindString(lower) != "" {
-		return "skill body invokes a project-specific make target"
+	// #982: the old pattern `(?m)\bmake\s+...` was unanchored, so prose like
+	// "make sure", "make the result" or "I just have a URL - make something"
+	// matched anywhere in a sentence and wrongly downgraded global skills.
+	// Now the target must start a line (allowing leading whitespace, which is
+	// how the command appears in fenced blocks), and common English words that
+	// follow "make" in imperative prose are whitelisted out.
+	for _, m := range makeCmdTargetRe.FindAllStringSubmatch(lower, -1) {
+		if !makeProseStopword(m[1]) {
+			return "skill body invokes a project-specific make target"
+		}
 	}
 	// Project-local scripts: must look like a real script path (contain a slash after ./
 	// and end in a script-like suffix or have multiple path segments).
@@ -76,6 +88,22 @@ func scopeDowngradeReason(projDir, content string) string {
 	return ""
 }
 
+// makeCmdTargetRe matches a make invocation that starts a line (optionally
+// indented, as inside a fenced code block). Capturing group 1 is the target.
+var makeCmdTargetRe = regexp.MustCompile(`(?m)^[ \t]*make[ \t]+([a-z][a-z0-9_-]*)`)
+
+// makeProseStopwords are words that commonly follow "make" in imperative
+// English prose ("make sure", "make the result", "make something", ...).
+// A line-initial "make <stopword>" is treated as prose, not a build command.
+var makeProseStopwords = map[string]bool{
+	"sure": true, "the": true, "this": true, "that": true, "it": true,
+	"sense": true, "changes": true, "something": true, "note": true, "use": true,
+}
+
+func makeProseStopword(target string) bool {
+	return makeProseStopwords[target]
+}
+
 // stripFrontmatterForScopeCheck removes the leading YAML frontmatter so that
 // name/description fields (which often duplicate the basename) don't cause
 // false positives in the scope arbiter.
@@ -84,12 +112,36 @@ func stripFrontmatterForScopeCheck(content string) string {
 	if !strings.HasPrefix(trimmed, "---") {
 		return content
 	}
-	rest := trimmed[3:]
-	end := strings.Index(rest, "\n---")
-	if end < 0 {
+	// Skip the opening delimiter line, then scan for a standalone "---" line.
+	// #982: the old `strings.Index(rest, "\n---")` truncated early when a
+	// frontmatter VALUE contained "---" as a prefix (e.g. "note: ---text");
+	// the delimiter must be a whole line, not a substring.
+	nl := strings.IndexByte(trimmed, '\n')
+	if nl < 0 {
 		return content
 	}
-	return rest[end+4:]
+	rest := trimmed[nl+1:]
+	offset := 0
+	for offset <= len(rest) {
+		lineEnd := strings.IndexByte(rest[offset:], '\n')
+		var line string
+		if lineEnd < 0 {
+			line = rest[offset:]
+		} else {
+			line = rest[offset : offset+lineEnd]
+		}
+		if strings.TrimRight(line, " \t\r") == "---" {
+			if lineEnd < 0 {
+				return ""
+			}
+			return rest[offset+lineEnd+1:]
+		}
+		if lineEnd < 0 {
+			return content
+		}
+		offset += lineEnd + 1
+	}
+	return content
 }
 
 // genericProjectBasename returns true when the basename is too generic to be a

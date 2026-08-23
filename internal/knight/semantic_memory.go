@@ -35,7 +35,6 @@ const (
 
 type semanticMemoryStore struct {
 	path string
-	mu   sync.Mutex
 }
 
 func newSemanticMemoryStore(path string) *semanticMemoryStore {
@@ -43,10 +42,17 @@ func newSemanticMemoryStore(path string) *semanticMemoryStore {
 }
 
 // semanticMemoryPathMu serializes read-modify-write cycles per path across
-// store instances. Each call site constructs a fresh store (#769), so the
+// store instances. Each call site constructs a fresh store (#769), so a
 // per-instance mutex guarded nothing -- concurrent scheduler-goroutine and
 // user-command paths could interleave their read/append/rewrite cycles and
 // silently drop entries.
+//
+// #982: the per-instance s.mu was removed entirely. Append used to take
+// s.mu then pathMu, while Recent took pathMu then s.mu (via recentLocked) --
+// a classic AB-BA inversion between two stores on the same path. The path
+// mutex is the single serialization point: it is keyed by the file path, so
+// all stores targeting the same JSONL file (the only case where mutual
+// exclusion matters) are already serialized by pathMu alone.
 var semanticMemoryPathMu sync.Map // path -> *sync.Mutex
 
 func semanticMemoryPathLock(path string) *sync.Mutex {
@@ -74,8 +80,7 @@ func (s *semanticMemoryStore) Append(entry SemanticMemoryEntry) error {
 	}
 	entry.Summary = truncateSanitized(entry.Summary, maxSemanticSummaryRunes)
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	// #982: single lock (pathMu) — see semanticMemoryPathMu comment.
 	pathMu := semanticMemoryPathLock(s.path)
 	pathMu.Lock()
 	defer pathMu.Unlock()
@@ -119,8 +124,7 @@ func (s *semanticMemoryStore) recentLocked(limit int) ([]SemanticMemoryEntry, er
 	if s == nil || s.path == "" {
 		return nil, nil
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	// #982: no per-instance lock here (caller Recent already holds pathMu).
 	entries, err := readSemanticMemoryEntries(s.path)
 	if err != nil {
 		return nil, err
