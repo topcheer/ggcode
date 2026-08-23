@@ -19,6 +19,26 @@ import (
 	"github.com/topcheer/ggcode/internal/safego"
 )
 
+// Bounds for the #987 ID-index structures on Hub. h.messages doubles as
+// the message-existence index, but @agent direct messages are deliberately
+// excluded from it — so dedup and post-run receipt lookup need their own
+// bounded ID indexes.
+const (
+	// seenMsgCap bounds the cross-transport message-ID dedup set. TCP
+	// retries and TCP→UDP fallback re-deliver within seconds; a window of
+	// 512 recent IDs is far beyond what double delivery needs.
+	seenMsgCap = 512
+	// recentAgentMsgCap bounds the @agent message ID index consulted by
+	// NotifyAgentComplete after a manually approved agent run finishes.
+	recentAgentMsgCap = 256
+	// maxPendingApprovals bounds pendingApproval so daemon-mode hubs with
+	// no human to approve cannot grow it without limit.
+	maxPendingApprovals = 100
+	// pendingApprovalTTL is how long an unapproved @agent DM stays queued
+	// before it expires (sender gets a rejected receipt).
+	pendingApprovalTTL = 10 * time.Minute
+)
+
 // Hub is the core LAN chat coordinator. It manages participants, sends and
 // receives messages, tracks receipts, and queues agent-direct messages for
 // host approval.
@@ -69,6 +89,20 @@ type Hub struct {
 
 	// pending agent-direct messages awaiting host approval
 	pendingApproval []PendingAgentMsg
+
+	// seenMsgIDs is the cross-transport dedup set of message IDs already
+	// handled (#987). Both the TCP handler and the UDP envelope path
+	// converge on HandleIncomingMessage, which consults this set — the old
+	// per-transport checks never covered @agent messages because those are
+	// excluded from h.messages.
+	seenMsgIDs   map[string]bool
+	seenMsgOrder []string // FIFO eviction order, bounded by seenMsgCap
+
+	// recentAgentMsgs indexes recently received @agent direct messages by
+	// ID so NotifyAgentComplete can resolve sender info after a manual
+	// approval finishes — those messages never enter h.messages (#987).
+	recentAgentMsgs     map[string]Message
+	recentAgentMsgOrder []string // FIFO eviction order, bounded by recentAgentMsgCap
 
 	// attachments manager (nil = attachments disabled)
 	attachments *AttachmentManager
@@ -172,6 +206,8 @@ func NewHub(nodeID, mode, endpoint, apiKey string, store *Store, ws WorkspaceMet
 		approvalPolicies: policies,
 		notifiedNicks:    make(map[string]bool),
 		peerHealthMap:    make(map[string]*peerHealth),
+		seenMsgIDs:       make(map[string]bool),
+		recentAgentMsgs:  make(map[string]Message),
 		httpClient: &http.Client{
 			Timeout: 2 * time.Second, // LAN: if TCP doesn't connect in 2s, it's down
 		},
@@ -1206,6 +1242,19 @@ func (h *Hub) persistMessage(msg Message) {
 func (h *Hub) HandleIncomingMessage(msg Message) {
 	h.mu.Lock()
 
+	// Cross-transport ID dedup (#987): TCP retries (postToPeerWithRetry) and
+	// the TCP→UDP fallback can deliver the same message ID twice, and the
+	// old per-transport checks (self-node filter on TCP, hasMessageLocked on
+	// UDP) never covered @agent messages — a duplicate auto-approved @agent
+	// DM would be injected into the agent loop twice. Dedup every message
+	// here, at the single ingress both transports converge on.
+	if h.seenMsgIDs[msg.ID] {
+		h.mu.Unlock()
+		debug.Log("lanchat", "drop duplicate message %s from %s (double delivery)", msg.ID, msg.FromNodeID)
+		return
+	}
+	h.markSeenLocked(msg.ID)
+
 	// Check if this is an @agent direct message
 	needsApproval := msg.IsDirectToAgent() && msg.ToNodeID == h.nodeID
 
@@ -1219,6 +1268,13 @@ func (h *Hub) HandleIncomingMessage(msg Message) {
 			h.messages = h.messages[len(h.messages)-maxHistoryPerSession:]
 		}
 		h.persistMessage(msg)
+	} else {
+		// Index @agent messages by ID: they never enter h.messages, but
+		// NotifyAgentComplete still needs to resolve them after a manually
+		// approved agent run finishes so the completed receipt goes out
+		// (#987). Without this index the lookup always failed and the
+		// remote sender's DM stayed "processing" forever.
+		h.recordAgentMsgLocked(msg)
 	}
 
 	// Determine approval action based on policy or agent-to-agent auto-approve.
@@ -1244,7 +1300,12 @@ func (h *Hub) HandleIncomingMessage(msg Message) {
 	}
 
 	// Only queue for manual approval if not auto-handled
+	var evicted []evictedPending
 	if needsApproval && !autoApproved && !autoRejected {
+		// Bound the queue first: expire stale entries past the TTL and
+		// enforce the capacity cap so unattended (daemon) hubs cannot
+		// accumulate pending approvals forever (#987).
+		evicted = h.prunePendingApprovalsLocked()
 		pending := PendingAgentMsg{Message: msg, Received: time.Now()}
 		h.pendingApproval = append(h.pendingApproval, pending)
 	}
@@ -1254,6 +1315,13 @@ func (h *Hub) HandleIncomingMessage(msg Message) {
 	approvalCb := h.onApprovalReq
 	inboundDMCb := h.onInboundDM
 	h.mu.Unlock()
+
+	// Notify senders whose pending approvals expired or were dropped by
+	// the capacity cap (#987) — previously they stayed "pending" forever.
+	for _, ev := range evicted {
+		e := ev
+		safego.Go("lanchat.sendReceipt", func() { h.sendReceipt(e.msg, StatusRejected, e.reason) })
+	}
 
 	// Fire onMessage callback for regular messages only.
 	// Agent-directed messages are injected into the agent loop (via
@@ -1526,16 +1594,23 @@ func (h *Hub) SetOnInboundDM(cb func(fromNodeID string)) {
 // automatically inside the onAutoApprove callback wrapper.
 func (h *Hub) NotifyAgentComplete(messageID string) {
 	h.mu.RLock()
-	// Find the message in history to get sender info
+	// Resolve the message. @agent direct messages are deliberately absent
+	// from h.messages, so consult the dedicated ID index first (#987);
+	// fall back to history for regular messages.
 	var msg *Message
-	for i := range h.messages {
-		if h.messages[i].ID == messageID {
-			msg = &h.messages[i]
-			break
+	if m, ok := h.recentAgentMsgs[messageID]; ok {
+		msg = &m
+	} else {
+		for i := range h.messages {
+			if h.messages[i].ID == messageID {
+				msg = &h.messages[i]
+				break
+			}
 		}
 	}
 	h.mu.RUnlock()
 	if msg == nil {
+		debug.Log("lanchat", "NotifyAgentComplete: message %s not found, no completed receipt sent", messageID)
 		return
 	}
 	safego.Go("lanchat.sendReceipt", func() { h.sendReceipt(*msg, StatusCompleted, "") })
@@ -1779,6 +1854,84 @@ func (h *Hub) handleNickChangeData(nc NickChange) {
 		newNick := nc.HumanNick
 		safego.Go("lanchat.onNickChange", func() { callback(nodeID, oldNick, newNick) })
 	}
+}
+
+// markSeenLocked records msgID in the cross-transport dedup set, evicting
+// the oldest ID once seenMsgCap is reached (must hold h.mu).
+func (h *Hub) markSeenLocked(msgID string) {
+	if h.seenMsgIDs == nil {
+		h.seenMsgIDs = make(map[string]bool)
+	}
+	if h.seenMsgIDs[msgID] {
+		return
+	}
+	h.seenMsgIDs[msgID] = true
+	h.seenMsgOrder = append(h.seenMsgOrder, msgID)
+	if len(h.seenMsgOrder) > seenMsgCap {
+		evict := h.seenMsgOrder[0]
+		h.seenMsgOrder = h.seenMsgOrder[1:]
+		delete(h.seenMsgIDs, evict)
+	}
+}
+
+// recordAgentMsgLocked indexes an @agent-directed message by ID so
+// NotifyAgentComplete can resolve it later (must hold h.mu).
+func (h *Hub) recordAgentMsgLocked(msg Message) {
+	if h.recentAgentMsgs == nil {
+		h.recentAgentMsgs = make(map[string]Message)
+	}
+	if _, exists := h.recentAgentMsgs[msg.ID]; exists {
+		return
+	}
+	h.recentAgentMsgs[msg.ID] = msg
+	h.recentAgentMsgOrder = append(h.recentAgentMsgOrder, msg.ID)
+	if len(h.recentAgentMsgOrder) > recentAgentMsgCap {
+		evict := h.recentAgentMsgOrder[0]
+		h.recentAgentMsgOrder = h.recentAgentMsgOrder[1:]
+		delete(h.recentAgentMsgs, evict)
+	}
+}
+
+// evictedPending is a pending approval removed by pruning, kept so the
+// sender can be notified after the lock is released.
+type evictedPending struct {
+	msg    Message
+	reason string
+}
+
+// prunePendingApprovalsLocked removes entries older than pendingApprovalTTL
+// and enforces the maxPendingApprovals cap (dropping oldest first). Returns
+// the removed messages with the reason, so callers can send rejected
+// receipts after unlocking (must hold h.mu).
+func (h *Hub) prunePendingApprovalsLocked() []evictedPending {
+	now := time.Now()
+	kept := h.pendingApproval[:0]
+	var removed []evictedPending
+	for _, p := range h.pendingApproval {
+		if now.Sub(p.Received) > pendingApprovalTTL {
+			debug.Log("lanchat", "pending approval %s from %s expired after %s", p.Message.ID, p.Message.FromNick, pendingApprovalTTL)
+			removed = append(removed, evictedPending{
+				msg:    p.Message,
+				reason: fmt.Sprintf("pending approval expired after %s", pendingApprovalTTL),
+			})
+			continue
+		}
+		kept = append(kept, p)
+	}
+	h.pendingApproval = kept
+
+	// Capacity cap: drop oldest first. The check runs BEFORE the caller
+	// appends the new entry, so the queue stays at or below the cap.
+	for len(h.pendingApproval) >= maxPendingApprovals {
+		oldest := h.pendingApproval[0]
+		h.pendingApproval = h.pendingApproval[1:]
+		debug.Log("lanchat", "pending approval queue full (cap %d), dropping oldest %s from %s", maxPendingApprovals, oldest.Message.ID, oldest.Message.FromNick)
+		removed = append(removed, evictedPending{
+			msg:    oldest.Message,
+			reason: fmt.Sprintf("pending approval queue full (cap %d), oldest dropped", maxPendingApprovals),
+		})
+	}
+	return removed
 }
 
 // hasMessageLocked checks if a message ID already exists (must be called with lock held).
