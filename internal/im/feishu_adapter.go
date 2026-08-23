@@ -599,6 +599,15 @@ func (a *feishuAdapter) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Verify the verification token when configured (#955). Previously this
+	// config was dead (never checked), leaving an unauthenticated callback
+	// surface when encrypt_key was not set.
+	if !a.webhookTokenValid(payload) {
+		debug.Log("feishu", "adapter=%s webhook verification token mismatch", a.name)
+		http.Error(w, "token mismatch", http.StatusUnauthorized)
+		return
+	}
+
 	// Handle URL verification challenge
 	if challenge, ok := payload["challenge"].(string); ok {
 		resp := map[string]any{
@@ -654,6 +663,24 @@ func (a *feishuAdapter) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+// webhookTokenValid checks the Verification Token when one is configured.
+// Feishu includes the app's Verification Token as header.token on every
+// event and card callback. When no token is configured, verification is
+// disabled and all requests pass (backwards compatibility).
+func (a *feishuAdapter) webhookTokenValid(payload map[string]any) bool {
+	if a.verifyToken == "" {
+		return true
+	}
+	token := ""
+	if header, ok := payload["header"].(map[string]any); ok {
+		token, _ = header["token"].(string)
+	}
+	if token == "" {
+		token, _ = payload["token"].(string)
+	}
+	return token == a.verifyToken
 }
 
 func (a *feishuAdapter) verifySignature(timestamp, nonce, body, signature string) bool {
@@ -733,18 +760,50 @@ func parseUnixSeconds(ts string) (time.Time, error) {
 
 // handleCardAction processes Feishu card action callbacks (button clicks).
 // Card action triggers arrive via the webhook with event_type "card.action.trigger".
+// Card 2.0 callback payload layout (#955):
+//
+//	{
+//	  "header": {"event_type": "card.action.trigger", ...},
+//	  "event": {
+//	    "operator": {"union_id": "...", "open_id": "..."},
+//	    "token": "...",
+//	    "action": {
+//	      "value": {"choice": "1", ...},
+//	      "tag": "button"
+//	    },
+//	    "context": {
+//	      "open_message_id": "om_...",
+//	      "open_chat_id": "oc_..."
+//	    }
+//	  }
+//	}
+//
+// Previously the code read action/operator/context from the payload top
+// level, which never matches the real envelope, so 100% of card callbacks
+// were dropped after the webhook had already replied 200 (unrecoverable).
 func (a *feishuAdapter) handleCardAction(ctx context.Context, payload map[string]any) {
 	if a.manager == nil {
 		return
 	}
 
-	// Extract action value from the callback
-	action, _ := payload["action"].(map[string]any)
-	if action == nil {
-		return
+	// Card action fields are nested under "event". Fall back to the payload
+	// top level for tolerance against older/alternate envelopes.
+	event, _ := payload["event"].(map[string]any)
+	lookup := func(key string) (map[string]any, bool) {
+		if event != nil {
+			if v, ok := event[key].(map[string]any); ok {
+				return v, true
+			}
+		}
+		v, ok := payload[key].(map[string]any)
+		return v, ok
 	}
 
 	// The button value contains {"choice": "1"} etc.
+	action, _ := lookup("action")
+	if action == nil {
+		return
+	}
 	value, _ := action["value"].(map[string]any)
 	if value == nil {
 		return
@@ -754,12 +813,20 @@ func (a *feishuAdapter) handleCardAction(ctx context.Context, payload map[string
 		return
 	}
 
-	// Extract sender info
-	userID, _ := action["open_id"].(string)
-	senderName := ""
+	// Sender: operator.open_id (falls back to operator at top level).
+	openID := ""
+	if operator, ok := lookup("operator"); ok {
+		openID, _ = operator["open_id"].(string)
+	}
 
-	// Try to get message context from the action
-	messageID, _ := action["message_id"].(string)
+	// Message context: context.open_message_id / open_chat_id.
+	messageID, chatID := "", ""
+	if actionCtx, ok := lookup("context"); ok {
+		messageID, _ = actionCtx["open_message_id"].(string)
+		chatID, _ = actionCtx["open_chat_id"].(string)
+	}
+
+	debug.Log("feishu", "adapter=%s card action: choice=%s openID=%s msgID=%s", a.name, choice, openID, messageID)
 
 	a.manager.HandleInteractiveCallback(InteractiveCallback{
 		MessageID: messageID,
@@ -768,9 +835,8 @@ func (a *feishuAdapter) handleCardAction(ctx context.Context, payload map[string
 		Envelope: Envelope{
 			Adapter:    a.name,
 			Platform:   PlatformFeishu,
-			ChannelID:  "", // filled from action context if available
-			SenderID:   userID,
-			SenderName: senderName,
+			ChannelID:  chatID,
+			SenderID:   openID,
 			MessageID:  messageID,
 			ReceivedAt: time.Now(),
 		},

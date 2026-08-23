@@ -25,9 +25,12 @@ type IMEmitter struct {
 	language string // "zh-CN" or "en"
 	workDir  string // project working directory for path relativization
 
-	// mu protects lastStatus and outputMode from concurrent access.
-	// These fields are read from the agent stream callback goroutine and
+	// mu protects lastStatus, outputMode, state, and typing from concurrent
+	// access. These fields are read from the agent stream callback goroutine and
 	// written from the TUI event loop or IM slash-command handler goroutine.
+	// state and typing are lazily initialized; without the lock, two concurrent
+	// emit paths could each install their own state (leaking a dispatcher
+	// goroutine) and TriggerTyping raced on typing.lastTrigger (#954).
 	mu         sync.Mutex
 	lastStatus string // dedup status messages
 	outputMode string // verbose, quiet, summary (default: verbose)
@@ -175,10 +178,13 @@ func (e *IMEmitter) EmitEvent(event OutboundEvent) {
 	default:
 		// Don't log every emit — extremely noisy for tool_result events
 	}
+	e.mu.Lock()
 	if e.state == nil {
 		e.state = newIMEmitterState()
 	}
-	e.state.enqueue(e.manager, event, "")
+	st := e.state
+	e.mu.Unlock()
+	st.enqueue(e.manager, event, "")
 	e.TriggerTyping()
 }
 
@@ -299,11 +305,12 @@ func (e *IMEmitter) EmitUserTextExcept(text, excludeAdapter string) {
 	}
 	e.mu.Lock()
 	e.lastStatus = ""
-	e.mu.Unlock()
 	if e.state == nil {
 		e.state = newIMEmitterState()
 	}
-	e.state.enqueue(e.manager, OutboundEvent{
+	st := e.state
+	e.mu.Unlock()
+	st.enqueue(e.manager, OutboundEvent{
 		Kind: OutboundEventText,
 		Text: echoText,
 	}, excludeAdapter)
@@ -406,16 +413,36 @@ func (e *IMEmitter) TriggerTyping() {
 		return
 	}
 	now := time.Now()
+	e.mu.Lock()
 	if e.typing == nil {
 		e.typing = &imTypingKeeper{interval: imTypingKeepaliveInterval}
 	}
 	if now.Sub(e.typing.lastTrigger) < e.typing.interval {
+		e.mu.Unlock()
 		return
 	}
 	e.typing.lastTrigger = now
+	e.mu.Unlock()
 	safego.Go("im.emitter.typing", func() {
 		e.manager.TriggerTyping(context.Background())
 	})
+}
+
+// Close shuts down the emitter's dispatcher goroutine, draining any buffered
+// events. Previously the state-level close() existed but nothing called it,
+// so the dispatcher goroutine leaked for the process lifetime (#603, #954).
+// After Close, further emissions re-initialize a fresh state lazily.
+func (e *IMEmitter) Close() {
+	if e == nil {
+		return
+	}
+	e.mu.Lock()
+	st := e.state
+	e.state = nil
+	e.mu.Unlock()
+	if st != nil {
+		st.close()
+	}
 }
 
 // Language returns the emitter's configured language.

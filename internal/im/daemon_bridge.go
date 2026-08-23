@@ -309,9 +309,13 @@ func (b *DaemonBridge) tryQueueOrBeginRun(content []provider.ContentBlock, logPr
 		b.pendingInterruptions = append(b.pendingInterruptions, pendingInterruption{Content: content})
 		return nil, true
 	}
-	// Begin run slot (inline of beginRunSlot logic)
+	// Begin run slot (inline of beginRunSlot logic).
+	// NOTE: do NOT clear pendingInterruptions here. Messages queued while a
+	// previous run was finishing (the finishRunSlot → next-begin window) are
+	// legitimate queued input; wiping them silently dropped already-ACKed IM
+	// messages (#942). runQueuedLoop drains the queue after the current
+	// content completes, so ordering is preserved.
 	ctx, cancel := context.WithCancel(context.Background())
-	b.pendingInterruptions = b.pendingInterruptions[:0]
 	// Nil-agent guard: bare DaemonBridges (tests, partial setup, or the
 	// pre-agent wiring window) must not SIGSEGV here. Log and treat as a
 	// queued interruption that will be drained once an agent is attached.
