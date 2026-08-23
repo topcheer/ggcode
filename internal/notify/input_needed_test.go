@@ -15,17 +15,17 @@ func TestOnInputNeededMode(t *testing.T) {
 	}{
 		{
 			name:    "off mode skips notification",
-			cfg:     config.NotificationConfig{Mode: "off", Bell: true},
+			cfg:     config.NotificationConfig{Mode: "off", Bell: bellPtr(true)},
 			summary: "test",
 		},
 		{
 			name:    "long mode notifies on input",
-			cfg:     config.NotificationConfig{Mode: "long", Bell: true},
+			cfg:     config.NotificationConfig{Mode: "long", Bell: bellPtr(true)},
 			summary: "Approval needed: run_command",
 		},
 		{
 			name:    "all mode notifies on input",
-			cfg:     config.NotificationConfig{Mode: "all", Bell: true},
+			cfg:     config.NotificationConfig{Mode: "all", Bell: bellPtr(true)},
 			summary: "Question needed",
 		},
 		{
@@ -35,7 +35,7 @@ func TestOnInputNeededMode(t *testing.T) {
 		},
 		{
 			name:    "empty summary uses default",
-			cfg:     config.NotificationConfig{Mode: "all", Bell: true},
+			cfg:     config.NotificationConfig{Mode: "all", Bell: bellPtr(true)},
 			summary: "",
 		},
 	}
@@ -52,10 +52,10 @@ func TestOnInputNeededDoesNotPanic(t *testing.T) {
 	configs := []config.NotificationConfig{
 		{},
 		{Mode: "off"},
-		{Mode: "all", Bell: true, Desktop: true},
+		{Mode: "all", Bell: bellPtr(true), Desktop: true},
 		{Mode: "errors", Desktop: true},
-		{Mode: "long", Bell: false, Desktop: false},
-		{Mode: "unknown", Bell: true},
+		{Mode: "long", Bell: bellPtr(false), Desktop: false},
+		{Mode: "unknown", Bell: bellPtr(true)},
 	}
 	for _, cfg := range configs {
 		OnInputNeeded(cfg, "test")
@@ -67,7 +67,7 @@ func TestOnInputNeededVsOnCompletion(t *testing.T) {
 	// OnInputNeeded should not check duration — it always fires if mode allows.
 	// OnCompletion in "long" mode skips short runs. This verifies the behavioral
 	// difference: input-needed should fire even for 0 duration.
-	cfg := config.NotificationConfig{Mode: "long", Bell: true}
+	cfg := config.NotificationConfig{Mode: "long", Bell: bellPtr(true)}
 	OnInputNeeded(cfg, "approval needed")
 	OnCompletion(cfg, 0, false, "test") // should be suppressed by long mode
 	// Both should complete without panic.
