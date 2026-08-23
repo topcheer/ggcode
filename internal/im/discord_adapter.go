@@ -29,12 +29,13 @@ const (
 	discordAPIBase         = "https://discord.com/api/v10"
 	discordGatewayBotPath  = "/gateway/bot"
 	discordMaxTextLen      = 2000
-	discordIdentifyIntents = (1 << 0) | (1 << 9) | (1 << 10) | (1 << 12) // Guilds=1, GuildMessages=512, MessageContent=1024, DirectMessages=4096 = 5625
+	discordIdentifyIntents = (1 << 0) | (1 << 9) | (1 << 10) | (1 << 12) | (1 << 15) // Guilds=1, GuildMessages=512, GuildMessageReactions=1024, DirectMessages=4096, MessageContent=32768 = 38401
 
 	// Discord Gateway opcodes
 	discordOpDispatch       = 0
 	discordOpHeartbeat      = 1
 	discordOpIdentify       = 2
+	discordOpResume         = 6
 	discordOpReconnect      = 7
 	discordOpInvalidSession = 9
 	discordOpHello          = 10
@@ -172,7 +173,12 @@ func (a *discordAdapter) connectAndServe(ctx context.Context) error {
 
 	a.mu.Lock()
 	a.ws = conn
-	a.sequence = 0
+	// Keep sequence across reconnects so RESUME (op 6) can replay from the
+	// last processed event; it is only cleared for a brand-new session with
+	// no stored session ID (#947).
+	if a.sessionID == "" {
+		a.sequence = 0
+	}
 	a.mu.Unlock()
 
 	heartbeatCtx, heartbeatCancel := context.WithCancel(ctx)
@@ -212,51 +218,82 @@ func (a *discordAdapter) connectAndServe(ctx context.Context) error {
 				}
 			}
 			safego.Go("im.discord.heartbeat", func() { a.heartbeatLoop(heartbeatCtx, conn, interval) })
-			a.sendIdentify(conn)
+			// Resume the previous session when possible so Discord replays events
+			// missed during the disconnect window; otherwise IDENTIFY a new
+			// session (#947, Gateway v10 semantics).
+			a.mu.RLock()
+			sid, seq := a.sessionID, a.sequence
+			a.mu.RUnlock()
+			if sid != "" {
+				debug.Log("discord", "adapter=%s sending RESUME session=%s seq=%d", a.name, sid, seq)
+				a.sendResume(conn, sid, seq)
+			} else {
+				a.sendIdentify(conn)
+			}
 
 		case discordOpHeartbeatACK:
 			// acknowledged
 
 		case discordOpDispatch:
 			t, _ := payload["t"].(string)
-			if t == "READY" {
-				d, _ := payload["d"].(map[string]any)
-				if d != nil {
-					sid, _ := d["session_id"].(string)
-					var botID string
-					if user, _ := d["user"].(map[string]any); user != nil {
-						botID, _ = user["id"].(string)
-					}
-					a.mu.Lock()
-					a.sessionID = sid
-					a.botUserID = botID
-					a.connected = true
-					a.mu.Unlock()
-				}
-				a.publishState(true, "connected", "")
-				debug.Log("discord", "adapter=%s connected", a.name)
-			} else if t == "MESSAGE_CREATE" {
-				d, _ := payload["d"].(map[string]any)
-				if d != nil {
-					a.handleMessage(ctx, d)
-				}
-			} else if t == "INTERACTION_CREATE" {
-				d, _ := payload["d"].(map[string]any)
-				if d != nil {
-					a.handleInteraction(ctx, d)
-				}
-			}
+			d, _ := payload["d"].(map[string]any)
+			a.handleGatewayDispatch(ctx, t, d)
 
 		case discordOpReconnect:
 			debug.Log("discord", "adapter=%s gateway requested reconnect", a.name)
 			return fmt.Errorf("gateway requested reconnect")
 
 		case discordOpInvalidSession:
-			debug.Log("discord", "adapter=%s invalid session", a.name)
+			// d is a bool: true → the session is still resumable, keep
+			// sessionID/sequence and retry RESUME on the next connection;
+			// false → the session is dead, drop them so the next connection
+			// falls back to a fresh IDENTIFY (#947).
+			resumable, _ := payload["d"].(bool)
 			a.mu.Lock()
-			a.sessionID = ""
+			if !resumable {
+				a.sessionID = ""
+				a.sequence = 0
+			}
 			a.mu.Unlock()
-			return fmt.Errorf("invalid session")
+			debug.Log("discord", "adapter=%s invalid session (resumable=%v)", a.name, resumable)
+			return fmt.Errorf("invalid session (resumable=%v)", resumable)
+		}
+	}
+}
+
+// handleGatewayDispatch routes op 0 DISPATCH events by gateway event type.
+func (a *discordAdapter) handleGatewayDispatch(ctx context.Context, t string, d map[string]any) {
+	switch t {
+	case "READY":
+		if d != nil {
+			sid, _ := d["session_id"].(string)
+			var botID string
+			if user, _ := d["user"].(map[string]any); user != nil {
+				botID, _ = user["id"].(string)
+			}
+			a.mu.Lock()
+			a.sessionID = sid
+			a.botUserID = botID
+			a.connected = true
+			a.mu.Unlock()
+		}
+		a.publishState(true, "connected", "")
+		debug.Log("discord", "adapter=%s connected", a.name)
+	case "RESUMED":
+		// Resume accepted: the server replays missed dispatches after
+		// this event. Mirror the READY handling (#947).
+		a.mu.Lock()
+		a.connected = true
+		a.mu.Unlock()
+		a.publishState(true, "connected", "")
+		debug.Log("discord", "adapter=%s session resumed", a.name)
+	case "MESSAGE_CREATE":
+		if d != nil {
+			a.handleMessage(ctx, d)
+		}
+	case "INTERACTION_CREATE":
+		if d != nil {
+			a.handleInteraction(ctx, d)
 		}
 	}
 }
@@ -272,6 +309,24 @@ func (a *discordAdapter) sendIdentify(conn *websocket.Conn) {
 				"browser": "ggcode",
 				"device":  "ggcode",
 			},
+		},
+	}
+	data, _ := json.Marshal(payload)
+	a.writeMu.Lock()
+	_ = conn.WriteMessage(websocket.TextMessage, data)
+	a.writeMu.Unlock()
+}
+
+// sendResume sends Gateway op 6 RESUME with the stored session ID and last
+// sequence number so the server replays events missed while disconnected
+// (Discord Gateway v10 session resume semantics, #947).
+func (a *discordAdapter) sendResume(conn *websocket.Conn, sessionID string, seq int) {
+	payload := map[string]any{
+		"op": discordOpResume,
+		"d": map[string]any{
+			"token":      a.token,
+			"session_id": sessionID,
+			"seq":        seq,
 		},
 	}
 	data, _ := json.Marshal(payload)
@@ -336,6 +391,10 @@ func (a *discordAdapter) handleMessage(ctx context.Context, d map[string]any) {
 	}
 
 	if content == "" && len(attachments) == 0 {
+		// Observability for server-side filtering: e.g. a missing/unverified
+		// MESSAGE_CONTENT intent makes Discord strip guild message content,
+		// which previously vanished here with zero trace (#945).
+		debug.Log("discord", "adapter=%s drop contentless message channel=%s sender=%s msg=%s (empty content+attachments; check MESSAGE_CONTENT intent for guild messages)", a.name, channelID, senderID, messageID)
 		return
 	}
 
