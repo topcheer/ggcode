@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -644,22 +645,22 @@ var verifyCommands = map[string]bool{
 
 // isVerifyCommand checks whether a command string looks like a build/test/verify
 // command by matching against known verify command substrings.
+// #950: handles env-var assignment prefixes ("GOFLAGS=-p=1 make ...") and
+// compound commands ("cd /app && go test ./...") - any matching segment counts.
 func isVerifyCommand(cmd string) bool {
 	cmdLower := strings.ToLower(strings.TrimSpace(cmd))
 	if cmdLower == "" {
 		return false
 	}
-	// Direct substring match against known verify commands.
-	for prefix := range verifyCommands {
-		if strings.HasPrefix(cmdLower, prefix+" ") || cmdLower == prefix {
-			return true
-		}
+	if isVerifyCommandSegment(cmdLower) {
+		return true
 	}
-	// Also match "make <target>" / "just <recipe>" / "task <task>" patterns.
-	words := strings.Fields(cmdLower)
-	if len(words) > 0 {
-		if words[0] == "make" || words[0] == "just" || words[0] == "task" {
-			return true
+	// Compound command: check each &&-separated, then ; / |-separated segment.
+	for _, andSeg := range strings.Split(cmdLower, "&&") {
+		for _, seg := range splitCompoundCommand(andSeg) {
+			if isVerifyCommandSegment(seg) {
+				return true
+			}
 		}
 	}
 	return false
@@ -726,6 +727,54 @@ func stripLeadingShellComment(s string) string {
 			return ""
 		}
 	}
+}
+
+// envAssignPrefix matches a leading environment-variable assignment such as
+// "GOFLAGS=-p=1 " or "CGO_ENABLED=0 " (#950).
+var envAssignPrefix = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=\S*\s+`)
+
+// stripEnvAssignments removes leading env-var assignment prefixes from a
+// command string so prefix-anchored verify matchers see the actual command
+// (#950: "GOFLAGS=\"-p=1\" make verify-ci" must be recognized as make).
+func stripEnvAssignments(cmd string) string {
+	for {
+		next := envAssignPrefix.ReplaceAllString(cmd, "")
+		if next == cmd {
+			return cmd
+		}
+		cmd = next
+	}
+}
+
+// splitCompoundCommand splits a shell command on && / ; / | separators
+// (quote context is not tracked - build/verify commands in practice don't
+// quote these operators; worst case a segment is checked and mismatches).
+func splitCompoundCommand(cmd string) []string {
+	return strings.FieldsFunc(cmd, func(r rune) bool {
+		return r == ';' || r == '|'
+	})
+}
+
+// isVerifyCommandSegment reports whether a single shell segment (env
+// assignments stripped) is a verify command. Splitting on '&' is handled by
+// the caller via strings.Split on "&&".
+func isVerifyCommandSegment(seg string) bool {
+	seg = strings.ToLower(strings.TrimSpace(stripEnvAssignments(seg)))
+	if seg == "" {
+		return false
+	}
+	for prefix := range verifyCommands {
+		if strings.HasPrefix(seg, prefix+" ") || seg == prefix {
+			return true
+		}
+	}
+	words := strings.Fields(seg)
+	if len(words) > 0 {
+		if words[0] == "make" || words[0] == "just" || words[0] == "task" {
+			return true
+		}
+	}
+	return false
 }
 
 // funcLevelCoverageNudge generates a function-level coverage hint showing
