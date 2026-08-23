@@ -2010,6 +2010,19 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				}
 				continue
 			}
+			// #983: terminal stream error (cancellation or fatal provider
+			// error) — preserve the assistant text already streamed so a
+			// resumed session doesn't lose the partial turn. Pure text only:
+			// partial tool_use blocks are correctly discarded for pairing
+			// integrity. Mirrors the policyBlocked handling above, which keeps
+			// resp.Message for the same reason (the old behavior "discarded
+			// everything already streamed" and was considered a defect).
+			if strings.TrimSpace(textBuf) != "" {
+				a.contextManager.Add(provider.Message{
+					Role:    "assistant",
+					Content: []provider.ContentBlock{provider.TextBlock(textBuf)},
+				})
+			}
 			// User cancellation: return the original error (which wraps
 			// context.Canceled) so callers can detect it with errors.Is.
 			// Converting to a friendly string would break the error chain.
@@ -2984,8 +2997,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// earlier in this run (and the underlying resource hasn't changed), return the
 			// cached result. This prevents redundant re-execution after tool-result clearing.
 			var result tool.Result
+			memoHit := false
 			if memoResult, hit := a.toolMemo.get(tc.Name, tc.Arguments); hit {
 				result = memoResult
+				memoHit = true
 				// Annotate cache hits so the model knows this is cached content, not a
 				// fresh execution. After tool-result clearing replaces old results with
 				// placeholders, the model re-calls the tool and gets identical content back.
@@ -3094,7 +3109,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				}
 			}
 			// Store result in memoization cache for read-only tools.
-			if speculativeSafeTools[tc.Name] && !result.IsError {
+			// #983: skip the put on a memo hit — the cached entry already holds
+			// the pristine result, and re-putting the annotated copy (with the
+			// "[cached ...]" prefix and any appended hints) would stack one
+			// prefix per repeated call and make the "identical content"
+			// annotation literally false from the second layer on.
+			if speculativeSafeTools[tc.Name] && !result.IsError && !memoHit {
 				a.toolMemo.put(tc.Name, tc.Arguments, result)
 			}
 			// Track files read during this run so the unread-edit guard
