@@ -125,6 +125,13 @@ type Hub struct {
 	// approval policies: key = peer's human_nick (stable across restarts)
 	approvalPolicies map[string]string // "always" | "never" | ""(ask)
 
+	// approvalPoliciesLoaded records whether approval-policies.json was
+	// loaded successfully (missing file counts as loaded — empty is a valid
+	// state). When false the file exists but is corrupt/unreadable, so
+	// SetApprovalPolicy must not persist its in-memory (incomplete) map
+	// back to disk or the persisted policies would be wiped (#990).
+	approvalPoliciesLoaded bool
+
 	// requireAgentApproval disables auto-approval of agent-role @agent DMs
 	// (lanchat.require_approval_for_agents). Default false preserves the
 	// agent-to-agent collaboration design (#986).
@@ -182,32 +189,40 @@ func NewHub(nodeID, mode, endpoint, apiKey string, store *Store, ws WorkspaceMet
 	baseNick := RandomNick()
 	nick := baseNick + "_" + DefaultRole
 
-	// Load persisted approval policies (keyed by peer nick)
-	policies, _ := LoadApprovalPolicies(store.dir)
+	// Load persisted approval policies (keyed by peer nick). A missing file
+	// is an empty-but-valid state; a corrupt file keeps the hub running with
+	// no policies and blocks write-back so the file is not wiped (#990).
+	policies, err := LoadApprovalPolicies(store.dir)
+	policiesLoaded := err == nil
+	if err != nil {
+		policies = map[string]string{}
+		debug.Log("lanchat", "approval policies in %s not loaded (refusing to overwrite on save): %v", store.dir, err)
+	}
 
 	return &Hub{
-		nodeID:           nodeID,
-		humanNick:        nick,
-		agentNick:        AgentNick(nick),
-		role:             DefaultRole,
-		team:             DefaultTeam,
-		mode:             mode,
-		endpoint:         endpoint,
-		apiKey:           apiKey,
-		workspace:        ws.Workspace,
-		projectName:      ws.ProjectName,
-		languages:        ws.Languages,
-		frameworks:       ws.Frameworks,
-		hasGit:           ws.HasGit,
-		hasTests:         ws.HasTests,
-		peers:            make(map[string]*Participant),
-		receipts:         make(map[string]Receipt),
-		store:            store,
-		approvalPolicies: policies,
-		notifiedNicks:    make(map[string]bool),
-		peerHealthMap:    make(map[string]*peerHealth),
-		seenMsgIDs:       make(map[string]bool),
-		recentAgentMsgs:  make(map[string]Message),
+		nodeID:                 nodeID,
+		humanNick:              nick,
+		agentNick:              AgentNick(nick),
+		role:                   DefaultRole,
+		team:                   DefaultTeam,
+		mode:                   mode,
+		endpoint:               endpoint,
+		apiKey:                 apiKey,
+		workspace:              ws.Workspace,
+		projectName:            ws.ProjectName,
+		languages:              ws.Languages,
+		frameworks:             ws.Frameworks,
+		hasGit:                 ws.HasGit,
+		hasTests:               ws.HasTests,
+		peers:                  make(map[string]*Participant),
+		receipts:               make(map[string]Receipt),
+		store:                  store,
+		approvalPolicies:       policies,
+		approvalPoliciesLoaded: policiesLoaded,
+		notifiedNicks:          make(map[string]bool),
+		peerHealthMap:          make(map[string]*peerHealth),
+		seenMsgIDs:             make(map[string]bool),
+		recentAgentMsgs:        make(map[string]Message),
 		httpClient: &http.Client{
 			Timeout: 2 * time.Second, // LAN: if TCP doesn't connect in 2s, it's down
 		},
@@ -236,6 +251,15 @@ func (h *Hub) SetHTTPTimeout(d time.Duration) {
 
 func (h *Hub) SetSessionID(baseDir, sessionID string) {
 	if sessionID == "" || baseDir == "" {
+		return
+	}
+	// sessionID is embedded into a filesystem path (sessions/<id>/...).
+	// Production IDs are UUIDs, but future callers (resume --session, IM
+	// bindings) may pass user-controlled values, so reject anything that
+	// could escape the sessions directory (#990). Keep the previous store
+	// on rejection.
+	if strings.ContainsAny(sessionID, `\/`) || strings.Contains(sessionID, "..") {
+		debug.Log("lanchat", "rejecting unsafe sessionID %q (path separator or parent traversal)", sessionID)
 		return
 	}
 	sessionDir := filepath.Join(baseDir, "sessions", sessionID)
@@ -1568,14 +1592,23 @@ func (h *Hub) SetApprovalPolicy(peerNick string, policy string) {
 	}
 	h.mu.Unlock()
 
-	// Persist outside lock
+	// Persist outside lock. If the on-disk file was never loaded
+	// successfully (corrupt JSON), writing back would silently wipe the
+	// user's persisted policies with the in-memory (incomplete) map, so
+	// refuse the write-back (#990); the in-memory policy still applies for
+	// this run.
 	if dir != "" {
 		h.mu.RLock()
+		loaded := h.approvalPoliciesLoaded
 		policies := make(map[string]string, len(h.approvalPolicies))
 		for k, v := range h.approvalPolicies {
 			policies[k] = v
 		}
 		h.mu.RUnlock()
+		if !loaded {
+			debug.Log("lanchat", "approval policies not persisted: %s was never loaded successfully, refusing to overwrite", dir)
+			return
+		}
 		_ = SaveApprovalPolicies(dir, policies)
 	}
 }
