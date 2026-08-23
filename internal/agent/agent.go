@@ -4509,30 +4509,16 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 	}
 	var thinkingAcc thinkingAccumulator
 	// Metric tracking — records timestamps during streaming, fires onMetric on Done.
-	llmStartTime := time.Now()
-	var firstTokenTime time.Time
-	var thinkStartTime time.Time
-	var thinkDuration time.Duration
-	hasFirstToken := false
+	turnMetrics := newLLMTurnMetrics()
 	for event := range stream {
 		switch event.Type {
 		case provider.StreamEventText:
-			if !hasFirstToken && event.Text != "" {
-				firstTokenTime = time.Now()
-				hasFirstToken = true
-			}
+			turnMetrics.markText(event.Text)
 			onEvent(event)
 			textBuf.WriteString(event.Text)
 			assistantTextBuf.WriteString(event.Text)
 		case provider.StreamEventReasoning:
-			if !hasFirstToken && event.Text != "" {
-				firstTokenTime = time.Now()
-				hasFirstToken = true
-			}
-			// Track thinking duration
-			if event.Text != "" && thinkStartTime.IsZero() {
-				thinkStartTime = time.Now()
-			}
+			turnMetrics.markReasoning(event.Text)
 			// Forward to UI for streaming display (GUI uses it for collapsible reasoning panel).
 			onEvent(event)
 			if event.Text != "" {
@@ -4543,22 +4529,11 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 				thinkingAcc.onSignature(event.ThinkingSignature)
 			}
 		case provider.StreamEventToolCallChunk:
-			// #937: a tool-call delta is generated output like any text/reasoning
-			// delta. Pure tool turns (no text, no reasoning - the common case in
-			// agentic loops) must count toward TTFT, otherwise they record 0 and
-			// skew per-turn and digest averages; "0" also became ambiguous
-			// (no-output vs tool-turn).
-			if !hasFirstToken {
-				firstTokenTime = time.Now()
-				hasFirstToken = true
-			}
+			// #937: tool-call deltas count toward TTFT (see llmTurnMetrics).
+			turnMetrics.markToolChunk()
 			onEvent(event)
 		case provider.StreamEventToolCallDone:
-			// Close thinking window if open
-			if !thinkStartTime.IsZero() {
-				thinkDuration += time.Since(thinkStartTime)
-				thinkStartTime = time.Time{}
-			}
+			turnMetrics.closeThinkWindow()
 			flushText()
 			onEvent(event)
 			toolCalls = append(toolCalls, event.Tool)
@@ -4569,28 +4544,8 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 			}
 			truncated = event.Truncated
 			policyBlocked = event.PolicyBlocked
-			// Close thinking window if open
-			if !thinkStartTime.IsZero() {
-				thinkDuration += time.Since(thinkStartTime)
-				thinkStartTime = time.Time{}
-			}
 			// Fire LLM metric
-			now := time.Now()
-			ttft := time.Duration(0)
-			if !firstTokenTime.IsZero() {
-				ttft = firstTokenTime.Sub(llmStartTime)
-			}
-			a.emitMetric(metrics.MetricEvent{
-				Timestamp:    now,
-				Type:         "llm",
-				TTFT:         ttft,
-				ThinkTime:    thinkDuration,
-				Duration:     now.Sub(llmStartTime),
-				InputTokens:  usage.InputTokens,
-				OutputTokens: usage.OutputTokens,
-				CacheRead:    usage.CacheRead,
-				CacheWrite:   usage.CacheWrite,
-			})
+			a.emitMetric(turnMetrics.emit(usage))
 			onEvent(event)
 			// Proactive rate-limit check: if the provider exposes rate-limit
 			// info and quotas are critical, emit a system warning event so
