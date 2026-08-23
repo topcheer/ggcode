@@ -1282,21 +1282,9 @@ func (h *Hub) HandleIncomingMessage(msg Message) {
 	// proof of identity — human-role @agent DMs always go through the manual
 	// gate unless the operator explicitly set an "always" policy for the
 	// sender (#986). Daemon mode no longer auto-approves human DMs.
-	autoApproved := false
-	autoRejected := false
+	autoApproved, autoRejected := false, false
 	if needsApproval {
-		if msg.FromRole == RoleAgent && !h.requireAgentApproval {
-			// Agent-to-agent messages are auto-approved — no human intervention
-			// needed — unless lanchat.require_approval_for_agents opts out (#986).
-			autoApproved = true
-		} else {
-			policy := h.approvalPolicies[msg.FromNick]
-			if policy == "always" {
-				autoApproved = true
-			} else if policy == "never" {
-				autoRejected = true
-			}
-		}
+		autoApproved, autoRejected = h.decideAutoApprovalLocked(msg)
 	}
 
 	// Only queue for manual approval if not auto-handled
@@ -1310,18 +1298,57 @@ func (h *Hub) HandleIncomingMessage(msg Message) {
 		h.pendingApproval = append(h.pendingApproval, pending)
 	}
 
-	autoApproveCb := h.onAutoApprove
-	callback := h.onMessage
-	approvalCb := h.onApprovalReq
-	inboundDMCb := h.onInboundDM
 	h.mu.Unlock()
 
+	// All side effects (receipts, UI callbacks, auto-approve fan-out) are
+	// dispatched after the lock is released.
+	h.dispatchInboundReceipts(msg, needsApproval, autoApproved, autoRejected, evicted)
+}
+
+// decideAutoApprovalLocked returns whether an @agent direct message is
+// auto-approved or auto-rejected by sender policy. FromRole is peer-supplied
+// JSON, so it is treated as a routing hint, not proof of identity —
+// human-role @agent DMs always go through the manual gate unless the operator
+// explicitly set an "always" policy for the sender (#986). Daemon mode no
+// longer auto-approves human DMs. Must be called with h.mu held.
+func (h *Hub) decideAutoApprovalLocked(msg Message) (autoApproved, autoRejected bool) {
+	if msg.FromRole == RoleAgent && !h.requireAgentApproval {
+		// Agent-to-agent messages are auto-approved — no human intervention
+		// needed — unless lanchat.require_approval_for_agents opts out (#986).
+		return true, false
+	}
+	policy := h.approvalPolicies[msg.FromNick]
+	if policy == "always" {
+		return true, false
+	}
+	if policy == "never" {
+		return false, true
+	}
+	return false, false
+}
+
+// dispatchInboundReceipts performs every post-unlock side effect of an
+// accepted inbound (non-duplicate) message: rejected receipts for evicted
+// pending approvals, the onMessage / onInboundDM UI callbacks, and the
+// delivered/pending/approved/rejected receipt sequence for direct messages.
+// Extracted from HandleIncomingMessage (#987) so the ingress path stays
+// auditable. Callbacks are re-read under RLock following the HandleReceipt
+// pattern — setters are registration-time calls, so the tiny window between
+// the main unlock and this read is benign.
+func (h *Hub) dispatchInboundReceipts(msg Message, needsApproval, autoApproved, autoRejected bool, evicted []evictedPending) {
 	// Notify senders whose pending approvals expired or were dropped by
 	// the capacity cap (#987) — previously they stayed "pending" forever.
 	for _, ev := range evicted {
 		e := ev
 		safego.Go("lanchat.sendReceipt", func() { h.sendReceipt(e.msg, StatusRejected, e.reason) })
 	}
+
+	h.mu.RLock()
+	callback := h.onMessage
+	autoApproveCb := h.onAutoApprove
+	approvalCb := h.onApprovalReq
+	inboundDMCb := h.onInboundDM
+	h.mu.RUnlock()
 
 	// Fire onMessage callback for regular messages only.
 	// Agent-directed messages are injected into the agent loop (via
