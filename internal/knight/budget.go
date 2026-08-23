@@ -35,17 +35,31 @@ type usageRecord struct {
 	Total  int       `json:"total"`
 }
 
+// defaultKnightDailyTokenBudget is the fallback daily total applied when the
+// config value is negative or unset (explicit 0 means unlimited and is kept).
+const defaultKnightDailyTokenBudget = 5_000_000
+
+// normalizeDailyTokenBudget returns the effective daily token budget for a
+// KnightConfig. Negative values are ignored and unset (non-explicit) zero
+// values fall back to defaultKnightDailyTokenBudget. Budget and the
+// bucket-level guardrail must both derive their total from this helper so
+// their caps stay consistent (issue #978).
+func normalizeDailyTokenBudget(cfg config.KnightConfig) int {
+	if cfg.DailyTokenBudget < 0 {
+		debug.Log("knight", "ignoring negative knight daily_token_budget %d, falling back to default %d", cfg.DailyTokenBudget, defaultKnightDailyTokenBudget)
+		return defaultKnightDailyTokenBudget
+	}
+	if cfg.DailyTokenBudget == 0 && !cfg.HasExplicitDailyTokenBudget() {
+		return defaultKnightDailyTokenBudget
+	}
+	return cfg.DailyTokenBudget
+}
+
 // NewBudget creates a Budget tracker. Data is stored under dir/knight/.
 func NewBudget(dir string, cfg config.KnightConfig) *Budget {
-	if cfg.DailyTokenBudget < 0 {
-		debug.Log("knight", "ignoring negative knight daily_token_budget %d, falling back to default %d", cfg.DailyTokenBudget, 5_000_000)
-		cfg.DailyTokenBudget = 5_000_000
-	} else if cfg.DailyTokenBudget == 0 && !cfg.HasExplicitDailyTokenBudget() {
-		cfg.DailyTokenBudget = 5_000_000
-	}
 	return &Budget{
 		dir:   filepath.Join(dir, "knight"),
-		daily: cfg.DailyTokenBudget,
+		daily: normalizeDailyTokenBudget(cfg),
 	}
 }
 

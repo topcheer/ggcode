@@ -91,10 +91,16 @@ const (
 // New creates a new Knight instance.
 func New(cfg config.KnightConfig, homeDir, projDir string, store session.Store) *Knight {
 	knightDir := filepath.Join(homeDir, ".ggcode")
+	// Both the total budget and the bucket-level guardrail must derive their
+	// daily total from the same normalization path so bucket caps stay in
+	// sync with the effective total (issue #978). Passing raw
+	// cfg.DailyTokenBudget here left buckets at 0 (unlimited) under the
+	// default config, silently defeating eval/analysis isolation.
+	dailyTotal := normalizeDailyTokenBudget(cfg)
 	return &Knight{
 		cfg:              cfg,
 		budget:           NewBudget(knightDir, cfg),
-		bucketBudget:     newBucketBudget(cfg.DailyTokenBudget),
+		bucketBudget:     newBucketBudget(dailyTotal),
 		index:            NewSkillIndex(homeDir, projDir),
 		promoter:         NewPromoter(homeDir, projDir),
 		usage:            NewUsageTracker(filepath.Join(projDir, ".ggcode", "skill-usage.json")),

@@ -73,8 +73,14 @@ func (q *CandidateQueue) Upsert(candidate SkillCandidate) error {
 	return q.saveLocked(items)
 }
 
-// Remove deletes a candidate from the queue if present.
+// Remove deletes a candidate from the queue if present. The candidate name
+// is sanitized the same way as Upsert so a caller passing a raw (unsanitized)
+// name still targets the stored key. If no stored entry matches, the queue is
+// left unchanged and the miss is logged via debug.Log — current callers
+// discard the return on benign paths, and silent tolerance hid key mismatches
+// (issue #978).
 func (q *CandidateQueue) Remove(candidate SkillCandidate) error {
+	candidate.Name = sanitizeCandidateName(candidate.Name)
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	items, err := q.loadLocked()
@@ -83,11 +89,16 @@ func (q *CandidateQueue) Remove(candidate SkillCandidate) error {
 	}
 	key := formatSkillRef(candidate.Scope, candidate.Name)
 	filtered := items[:0]
+	removed := false
 	for _, item := range items {
 		if formatSkillRef(item.Scope, item.Name) == key {
+			removed = true
 			continue
 		}
 		filtered = append(filtered, item)
+	}
+	if !removed {
+		debug.Log("knight", "candidate queue Remove: no entry matched %s (queue already clean)", key)
 	}
 	return q.saveLocked(filtered)
 }
