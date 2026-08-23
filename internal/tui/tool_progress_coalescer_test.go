@@ -117,3 +117,86 @@ func TestToolProgressCoalescerEmptyTick(t *testing.T) {
 	}
 	_ = time.Millisecond // keep time import stable if asserts evolve
 }
+
+// TestToolProgressCoalescerTunnelAppendMerge: subagent tunnel chunks for
+// the same agent must concatenate in arrival order (append semantics, not
+// latest-wins) - consumers append per message, so dropping chunks would
+// corrupt the tunnel transcript.
+func TestToolProgressCoalescerTunnelAppendMerge(t *testing.T) {
+	var mu sync.Mutex
+	var batch []tea.Msg
+	c := &toolProgressCoalescer{
+		send: func(msgs ...tea.Msg) {
+			mu.Lock()
+			batch = append(batch, msgs...)
+			mu.Unlock()
+		},
+		next:       make(map[string]toolProgressMsg),
+		appendNext: make(map[string]subAgentTunnelStreamTextMsg),
+		appendReas: make(map[string]subAgentTunnelReasoningMsg),
+	}
+	for _, s := range []string{"Hello", " ", "world", "!"} {
+		c.stageTunnelText("agent-7", s)
+	}
+	c.stageTunnelText("agent-8", "other")
+	c.stageTunnelReasoning("agent-7", "think")
+
+	// Drain (same code the ticker runs).
+	c.mu.Lock()
+	msgs := make([]tea.Msg, 0, len(c.next)+len(c.appendNext)+len(c.appendReas))
+	for _, m := range c.appendReas {
+		msgs = append(msgs, m)
+	}
+	for _, m := range c.appendNext {
+		msgs = append(msgs, m)
+	}
+	c.appendNext = make(map[string]subAgentTunnelStreamTextMsg)
+	c.appendReas = make(map[string]subAgentTunnelReasoningMsg)
+	c.mu.Unlock()
+	c.send(msgs...)
+
+	mu.Lock()
+	defer mu.Unlock()
+	var text7, text8, reas7 string
+	for _, m := range batch {
+		switch v := m.(type) {
+		case subAgentTunnelStreamTextMsg:
+			if v.AgentID == "agent-7" {
+				text7 = v.Text
+			} else if v.AgentID == "agent-8" {
+				text8 = v.Text
+			}
+		case subAgentTunnelReasoningMsg:
+			reas7 = v.Text
+		}
+	}
+	if text7 != "Hello world!" {
+		t.Fatalf("agent-7 chunks must append in order, got %q", text7)
+	}
+	if text8 != "other" {
+		t.Fatalf("agent-8 text isolated, got %q", text8)
+	}
+	if reas7 != "think" {
+		t.Fatalf("reasoning preserved, got %q", reas7)
+	}
+}
+
+// TestToolProgressCoalescerEmptyGuards: staging with empty agentID or text
+// must be a no-op (no phantom messages on flush).
+func TestToolProgressCoalescerEmptyGuards(t *testing.T) {
+	c := &toolProgressCoalescer{
+		send:       func(msgs ...tea.Msg) {},
+		next:       make(map[string]toolProgressMsg),
+		appendNext: make(map[string]subAgentTunnelStreamTextMsg),
+		appendReas: make(map[string]subAgentTunnelReasoningMsg),
+	}
+	c.stageTunnelText("", "text")
+	c.stageTunnelText("agent", "")
+	c.stageTunnelReasoning("", "r")
+	c.stageTunnelReasoning("agent", "")
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.appendNext) != 0 || len(c.appendReas) != 0 {
+		t.Fatalf("empty guards failed: %+v %+v", c.appendNext, c.appendReas)
+	}
+}

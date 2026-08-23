@@ -48,6 +48,10 @@ import (
 
 // REPL connects the agent to the TUI model.
 type REPL struct {
+	// streamCoalescer bounds renders from all high-frequency stream
+	// sources (tool progress, subagent tunnel text/reasoning). Created
+	// once with the first stream producer registration.
+	streamCoalescer     *toolProgressCoalescer
 	model               Model
 	agent               *agent.Agent
 	program             *tea.Program
@@ -159,9 +163,12 @@ func (r *REPL) RegisterCallbacks() {
 	// typing felt laggy and spinner animation stuttered. Bounding renders
 	// to ~8/sec keeps live output smooth while leaving headroom for input.
 	coalesce := &toolProgressCoalescer{
-		send: r.sendProgramMsgs,
-		next: make(map[string]toolProgressMsg),
+		send:       r.sendProgramMsgs,
+		next:       make(map[string]toolProgressMsg),
+		appendNext: make(map[string]subAgentTunnelStreamTextMsg),
+		appendReas: make(map[string]subAgentTunnelReasoningMsg),
 	}
+	r.streamCoalescer = coalesce
 	r.agent.SetToolProgressCallback(func(toolID, toolName, output string) {
 		coalesce.stage(toolID, toolName, output)
 	})
@@ -169,10 +176,20 @@ func (r *REPL) RegisterCallbacks() {
 }
 
 // toolProgressCoalescer bounds main-thread renders from streaming tools.
+//
+// It supports two merge modes per key:
+//   - replace (toolProgressMsg): latest snapshot wins - correct for
+//     tail-style updates where the producer already holds the full body.
+//   - append (tunnel stream text/reasoning): chunks concatenate in arrival
+//     order - required because consumers append per message and producer
+//     deltas are irreducible.
 type toolProgressCoalescer struct {
 	mu   sync.Mutex
 	send func(msgs ...tea.Msg)
 	next map[string]toolProgressMsg
+	// appendNext accumulates tunnel chunks per agentID between flushes.
+	appendNext map[string]subAgentTunnelStreamTextMsg
+	appendReas map[string]subAgentTunnelReasoningMsg
 }
 
 func (c *toolProgressCoalescer) stage(toolID, toolName, output string) {
@@ -185,6 +202,34 @@ func (c *toolProgressCoalescer) stage(toolID, toolName, output string) {
 	c.mu.Unlock()
 }
 
+// stageTunnelText buffers a subagent tunnel text chunk for the next flush.
+// Chunks for the same agent concatenate; N parallel streaming subagents
+// collapse to at most N renders per flush tick instead of one per token.
+func (c *toolProgressCoalescer) stageTunnelText(agentID, text string) {
+	if agentID == "" || text == "" {
+		return
+	}
+	c.mu.Lock()
+	m := c.appendNext[agentID]
+	m.AgentID = agentID
+	m.Text += text
+	c.appendNext[agentID] = m
+	c.mu.Unlock()
+}
+
+// stageTunnelReasoning buffers a reasoning chunk, same append semantics.
+func (c *toolProgressCoalescer) stageTunnelReasoning(agentID, text string) {
+	if agentID == "" || text == "" {
+		return
+	}
+	c.mu.Lock()
+	m := c.appendReas[agentID]
+	m.AgentID = agentID
+	m.Text += text
+	c.appendReas[agentID] = m
+	c.mu.Unlock()
+}
+
 // run drains staged updates to the TUI at a fixed 120ms cadence. Runs for
 // the REPL's lifetime; sends after the program quits are no-ops
 // (sendProgramMsgs guards a nil program).
@@ -193,15 +238,26 @@ func (c *toolProgressCoalescer) run() {
 	defer ticker.Stop()
 	for range ticker.C {
 		c.mu.Lock()
-		if len(c.next) == 0 {
+		if len(c.next) == 0 && len(c.appendNext) == 0 && len(c.appendReas) == 0 {
 			c.mu.Unlock()
 			continue
 		}
-		msgs := make([]tea.Msg, 0, len(c.next))
+		msgs := make([]tea.Msg, 0, len(c.next)+len(c.appendNext)+len(c.appendReas))
 		for _, m := range c.next {
 			msgs = append(msgs, m)
 		}
+		// Reasoning before text, mirroring buildBatchedStreamMessages:
+		// the TUI expands the reasoning block first, then collapses it
+		// when the text chunk arrives.
+		for _, m := range c.appendReas {
+			msgs = append(msgs, m)
+		}
+		for _, m := range c.appendNext {
+			msgs = append(msgs, m)
+		}
 		c.next = make(map[string]toolProgressMsg)
+		c.appendNext = make(map[string]subAgentTunnelStreamTextMsg)
+		c.appendReas = make(map[string]subAgentTunnelReasoningMsg)
 		c.mu.Unlock()
 		c.send(msgs...)
 	}
@@ -741,11 +797,26 @@ func (r *REPL) SetSubAgentManager(mgr *subagent.Manager, prov provider.Provider,
 			},
 		)
 	})
+	// Subagent tunnel streams bypass the 80ms batch ticker that the main
+	// assistant stream gets in submit.go - each provider delta went
+	// straight to program.Send (one full Update+View per token). With N
+	// parallel streaming subagents this was an unbounded render rate and
+	// the second major source of TUI jank. Route through the coalescer:
+	// chunks append per agentID, flushed at the coalescer's 120ms cadence.
+	if r.streamCoalescer == nil {
+		r.streamCoalescer = &toolProgressCoalescer{
+			send:       r.sendProgramMsgs,
+			next:       make(map[string]toolProgressMsg),
+			appendNext: make(map[string]subAgentTunnelStreamTextMsg),
+			appendReas: make(map[string]subAgentTunnelReasoningMsg),
+		}
+		safego.Go("tui.toolProgressCoalescer", r.streamCoalescer.run)
+	}
 	mgr.SetOnStreamText(func(agentID, text string) {
-		r.sendProgramMsgs(subAgentTunnelStreamTextMsg{AgentID: agentID, Text: text})
+		r.streamCoalescer.stageTunnelText(agentID, text)
 	})
 	mgr.SetOnReasoning(func(agentID, text string) {
-		r.sendProgramMsgs(subAgentTunnelReasoningMsg{AgentID: agentID, Text: text})
+		r.streamCoalescer.stageTunnelReasoning(agentID, text)
 	})
 	mgr.SetOnToolCall(func(agentID, toolID, toolName, displayName, args, detail string) {
 		r.sendProgramMsgs(subAgentTunnelToolCallMsg{
