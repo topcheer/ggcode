@@ -57,28 +57,7 @@ func renderStreamingMarkdown(text string, width int, cache *streamRenderCache) (
 	// cache and re-rendered every block (#184).
 	rawSource := mdpkg.Normalize(text)
 
-	// Pre-parse document trim with a STICKY boundary. goldmark parses the
-	// FULL accumulated text every chunk (24% of samples on a 35K-line
-	// reply) even though only the trailing window can influence the
-	// display. But naively keeping the last N lines shifts the cut by one
-	// line per chunk, which shifts every parsed block and zeroes the
-	// per-block cache below - the whole window would re-render per chunk
-	// (bench-verified: no gain). So the cut advances only when the
-	// overflow exceeds a quarter of the budget (same hysteresis idea as
-	// List.trimLocked), keeping blocks byte-stable between advances.
-	trimStart := 0
-	if cache != nil && cache.width == width {
-		trimStart = cache.trimStart
-	}
-	docLines := strings.Count(text, "\n") + 1
-	budget := maxStreamingTotalLines * 3
-	minStart := docLines - budget
-	if minStart < 0 {
-		minStart = 0
-	}
-	if minStart-trimStart >= budget/4 || minStart < trimStart {
-		trimStart = minStart
-	}
+	trimStart := stickyTrimStart(text, cache, width)
 	trimmed := trimLeadingLines(text, trimStart)
 	normalized := mdpkg.Normalize(closeOpenFences(trimmed))
 	blocks := splitMarkdownBlocks(normalized)
@@ -92,29 +71,7 @@ func renderStreamingMarkdown(text string, width int, cache *streamRenderCache) (
 	// the truncated form so the cache comparison below stays consistent.
 	blocks[len(blocks)-1] = capStreamingBlock(blocks[len(blocks)-1])
 
-	// Document-level streaming window, sticky like the pre-parse trim.
-	// Dropping leading blocks bounds the per-chunk join / prefix-stitch /
-	// height-measure cost to the window, but a cut that follows the tail
-	// every chunk shifts blocks[0] and zeroes the per-block cache (found by
-	// TestStreamingWindowStickyTrimKeepsCacheReuse: the first version
-	// re-rendered the whole window per chunk). The block cut advances only
-	// when the overflow exceeds a quarter of the budget, mirroring both the
-	// pre-parse trim and List.trimLocked hysteresis.
-	blockCut := 0
-	if cache != nil && cache.width == width {
-		blockCut = cache.blockCut
-	}
-	desiredCut := leadingBlockCut(blocks, maxStreamingTotalLines)
-	if desiredCut-blockCut >= maxStreamingTotalLines/4 || desiredCut < blockCut {
-		blockCut = desiredCut
-	}
-	// Marker counts hidden lines from BOTH trims, computed before slicing.
-	// It changes per chunk (grows), which is fine: it is concatenated
-	// OUTSIDE the cached block slice so it never breaks cache comparison.
-	hiddenLines := trimStart
-	for i := 0; i < blockCut; i++ {
-		hiddenLines += strings.Count(blocks[i], "\n") + 1
-	}
+	blockCut, hiddenLines := stickyBlockCut(blocks, trimStart, cache, width)
 	blocks = blocks[blockCut:]
 	var hiddenMarker string
 	if hiddenLines > 0 {
@@ -171,6 +128,57 @@ func trimLeadingLines(s string, n int) string {
 		}
 	}
 	return s
+}
+
+// stickyTrimStart computes the pre-parse line cut for the streaming
+// window. goldmark parses the FULL accumulated text every chunk (24% of
+// samples on a 35K-line reply) even though only the trailing window can
+// influence the display. But naively keeping the last N lines shifts the
+// cut by one line per chunk, which shifts every parsed block and zeroes
+// the per-block cache in renderStreamingMarkdown - the whole window would
+// re-render per chunk (bench-verified: no gain). So the cut advances only
+// when the overflow exceeds a quarter of the budget (same hysteresis idea
+// as List.trimLocked), keeping blocks byte-stable between advances.
+// Returns 0 (no trim) until the document exceeds the 3x budget.
+func stickyTrimStart(text string, cache *streamRenderCache, width int) int {
+	trimStart := 0
+	if cache != nil && cache.width == width {
+		trimStart = cache.trimStart
+	}
+	docLines := strings.Count(text, "\n") + 1
+	budget := maxStreamingTotalLines * 3
+	minStart := docLines - budget
+	if minStart < 0 {
+		minStart = 0
+	}
+	if minStart-trimStart >= budget/4 || minStart < trimStart {
+		trimStart = minStart
+	}
+	return trimStart
+}
+
+// stickyBlockCut computes the document-level block window cut and the
+// total hidden-line count (pre-parse trim + dropped blocks), sticky like
+// stickyTrimStart: a cut that follows the tail every chunk shifts
+// blocks[0] and zeroes the per-block cache (found by
+// TestStreamingWindowStickyTrimKeepsCacheReuse: the first version
+// re-rendered the whole window per chunk). The cut advances only when the
+// overflow exceeds a quarter of the budget. hiddenLines is computed
+// BEFORE the caller slices blocks, counting lines in the dropped prefix.
+func stickyBlockCut(blocks []string, trimStart int, cache *streamRenderCache, width int) (cut, hiddenLines int) {
+	blockCut := 0
+	if cache != nil && cache.width == width {
+		blockCut = cache.blockCut
+	}
+	desiredCut := leadingBlockCut(blocks, maxStreamingTotalLines)
+	if desiredCut-blockCut >= maxStreamingTotalLines/4 || desiredCut < blockCut {
+		blockCut = desiredCut
+	}
+	hidden := trimStart
+	for i := 0; i < blockCut; i++ {
+		hidden += strings.Count(blocks[i], "\n") + 1
+	}
+	return blockCut, hidden
 }
 
 // leadingBlockCut returns the smallest index into blocks such that the
