@@ -6,6 +6,7 @@ import (
 	"crypto/md5"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -47,7 +48,10 @@ const (
 	qqUploadCacheTTL        = 30 * time.Minute
 )
 
-var qqMentionPrefix = regexp.MustCompile(`^@\S+\s*`)
+// qqMentionPrefix strips the leading bot mention from GROUP_AT message
+// content. QQ sends the mention as `<@!openid>` (group) or `<@userid>` (guild)
+// rather than a plain `@name`, so both forms must be handled (#966).
+var qqMentionPrefix = regexp.MustCompile(`^(?:<@!?\S+>|@\S+)\s*`)
 
 type qqAdapter struct {
 	name             string
@@ -191,14 +195,17 @@ func (a *qqAdapter) connectAndServe(ctx context.Context) error {
 	a.connected = false
 	a.mu.Unlock()
 	a.publishState(false, "handshaking", "")
+	// Close exactly the connection this call dialed. a.ws may already have
+	// been swapped by a concurrent Close()/reconnect, and closing whatever
+	// a.ws currently points at could kill a fresher connection's window (#966).
 	defer func() {
 		a.mu.Lock()
 		a.connected = false
-		if a.ws != nil {
-			_ = a.ws.Close()
+		if a.ws == conn {
+			a.ws = nil
 		}
-		a.ws = nil
 		a.mu.Unlock()
+		conn.Close()
 	}()
 
 	heartbeatCtx, heartbeatCancel := context.WithCancel(ctx)
@@ -215,6 +222,12 @@ func (a *qqAdapter) connectAndServe(ctx context.Context) error {
 			return fmt.Errorf("read QQ gateway: %s", qqCloseReason(err))
 		}
 		if err := a.handleGatewayPayload(ctx, data); err != nil {
+			// op 7 / op 9 ask for a reconnect: return immediately so run() redials
+			// and the retained session makes HELLO send RESUME instead of a fresh
+			// IDENTIFY (#966).
+			if errors.Is(err, errQQReconnect) {
+				return err
+			}
 			a.publishState(false, "warning", err.Error())
 		}
 	}
@@ -242,23 +255,26 @@ func (a *qqAdapter) Send(ctx context.Context, binding ChannelBinding, event Outb
 
 	// Extract images from text and send them as rich media (msg_type: 7)
 	images, remainingText := ExtractImagesFromText(content)
-	var lastMsgID string
+	// Single monotonically increasing msg_seq cursor shared by images and text
+	// chunks. For passive replies msg_id+msg_seq is the server-side dedup key:
+	// every outbound request within one Send must consume a unique seq, else
+	// QQ silently drops it as a duplicate (#966).
+	seq := replySeq
+	consumedSeqs := 0
 	for i, img := range images {
 		b64, err := a.resolveImageSource(ctx, img)
 		if err != nil {
 			debug.Log("qq", "adapter=%s image resolve failed [%d/%d]: %v", a.name, i+1, len(images), err)
 			continue
 		}
-		useReplyTo := replyTo
-		useReplySeq := replySeq
-		if lastMsgID != "" {
-			useReplyTo = lastMsgID
-			useReplySeq = 0
-		}
-		if err := a.sendImageFromBase64(ctx, chatType, channelID, b64, useReplyTo, useReplySeq); err != nil {
+		// Each successfully sent image consumes one seq slot; failures do not
+		// (the server never saw them).
+		if err := a.sendImageFromBase64(ctx, chatType, channelID, b64, replyTo, seq); err != nil {
 			debug.Log("qq", "adapter=%s image send failed [%d/%d]: %v", a.name, i+1, len(images), err)
 			continue
 		}
+		seq++
+		consumedSeqs++
 		debug.Log("qq", "adapter=%s image sent [%d/%d]", a.name, i+1, len(images))
 	}
 
@@ -280,29 +296,23 @@ func (a *qqAdapter) Send(ctx context.Context, binding ChannelBinding, event Outb
 				select {
 				case <-time.After(qqInterMessageDelay):
 				case <-ctx.Done():
+					a.recordPassiveReplies(binding, replyTo, consumedSeqs)
 					return ctx.Err()
 				}
 			}
-			useReplyTo := replyTo
-			useReplySeq := replySeq + i // increment seq per chunk to avoid QQ dedup
-			if lastMsgID != "" {
-				useReplyTo = lastMsgID
-				useReplySeq = i
-			}
-			deliveredReplyTo, err := a.sendTextMessage(ctx, path, chatType, chunk, useReplyTo, useReplySeq)
-			if err != nil {
+			// Chunks continue the shared seq cursor (NOT the chunk index) so they
+			// never reuse a seq burned by an image or an earlier chunk (#966).
+			if _, err := a.sendTextMessage(ctx, path, chatType, chunk, replyTo, seq); err != nil {
+				a.recordPassiveReplies(binding, replyTo, consumedSeqs)
 				return err
 			}
-			if deliveredReplyTo != "" && lastMsgID == "" {
-				lastMsgID = deliveredReplyTo
-			}
+			seq++
+			consumedSeqs++
 		}
 	}
 
-	if lastMsgID != "" {
-		a.recordPassiveReply(binding, lastMsgID)
-	}
-	debug.Log("qq", "adapter=%s outbound delivered kind=%s channel=%s images=%d", a.name, event.Kind, channelID, len(images))
+	a.recordPassiveReplies(binding, replyTo, consumedSeqs)
+	debug.Log("qq", "adapter=%s outbound delivered kind=%s channel=%s images=%d seqs_consumed=%d", a.name, event.Kind, channelID, len(images), consumedSeqs)
 	return nil
 }
 
@@ -437,14 +447,7 @@ func (a *qqAdapter) heartbeatLoop(ctx context.Context) {
 			// Don't log routine heartbeats — extremely noisy
 			if err := a.writeJSON(payload); err != nil {
 				debug.Log("qq", "adapter=%s heartbeat write error: %v", a.name, err)
-				// Close the WebSocket to unblock ReadMessage in the main loop,
-				// which triggers the reconnect cycle.
-				a.mu.RLock()
-				ws := a.ws
-				a.mu.RUnlock()
-				if ws != nil {
-					ws.Close()
-				}
+				a.closeWS()
 				return
 			}
 		}
@@ -467,15 +470,16 @@ func (a *qqAdapter) handleGatewayPayload(ctx context.Context, raw []byte) error 
 	eventType, _ := payload["t"].(string)
 	switch op {
 	case 10:
-		debug.Log("qq", "adapter=%s gateway hello", a.name)
-		if d, ok := payload["d"].(map[string]any); ok {
-			if intervalMS, ok := intValue(d["heartbeat_interval"]); ok && intervalMS > 0 {
-				a.mu.Lock()
-				a.heartbeatEvery = time.Duration(float64(intervalMS)*0.8) * time.Millisecond
-				a.mu.Unlock()
-			}
-		}
-		return a.sendIdentify()
+		return a.handleHello(payload)
+	case 7:
+		// Server-requested reconnect: drop the connection at once but keep
+		// sessionID/lastSeq so the next HELLO sends RESUME (op 6) and missed
+		// events are replayed instead of being lost to a fresh session (#966).
+		debug.Log("qq", "adapter=%s gateway requested reconnect (op 7)", a.name)
+		a.closeWS()
+		return errQQReconnect
+	case 9:
+		return a.handleInvalidSession(payload)
 	case 11:
 		// Don't log routine heartbeat acks
 		return nil
@@ -494,6 +498,16 @@ func (a *qqAdapter) handleGatewayPayload(ctx context.Context, raw []byte) error 
 					a.publishState(true, "connected", "")
 				}
 			}
+			return nil
+		}
+		if eventType == "RESUMED" {
+			// Gateways that dispatch RESUMED after a successful op 6 resume:
+			// mirror READY's connected transition (#966).
+			debug.Log("qq", "adapter=%s gateway session resumed", a.name)
+			a.mu.Lock()
+			a.connected = true
+			a.mu.Unlock()
+			a.publishState(true, "connected", "")
 			return nil
 		}
 		switch eventType {
@@ -806,6 +820,96 @@ func (a *qqAdapter) sendIdentify() error {
 	return a.writeJSON(payload)
 }
 
+// sendResume requests session resumption (op 6) so the gateway replays events
+// missed during the disconnect window instead of starting a fresh session,
+// where those events would be silently lost (#966).
+func (a *qqAdapter) sendResume() error {
+	a.mu.RLock()
+	sid, seq := a.sessionID, a.lastSeq
+	a.mu.RUnlock()
+	if sid == "" {
+		return a.sendIdentify()
+	}
+	token, err := a.ensureToken(context.Background())
+	if err != nil {
+		return err
+	}
+	debug.Log("qq", "adapter=%s send resume session=%s seq=%d", a.name, sid, seq)
+	payload := map[string]any{
+		"op": 6,
+		"d": map[string]any{
+			"token":      "QQBot " + token,
+			"session_id": sid,
+			"seq":        seq,
+		},
+	}
+	if err := a.writeJSON(payload); err != nil {
+		return err
+	}
+	// QQ does not reliably dispatch an explicit RESUMED event after a successful
+	// resume, so optimistically mark connected. An invalid resume triggers op 9,
+	// which clears the session (d=false) and forces a fresh IDENTIFY.
+	a.mu.Lock()
+	a.connected = true
+	a.mu.Unlock()
+	a.publishState(true, "connected", "")
+	return nil
+}
+
+// handleHello processes op 10 (HELLO): adopts the heartbeat interval, then
+// resumes the stored session when possible so the gateway replays events
+// missed during the disconnect window; otherwise IDENTIFYs fresh (#966).
+func (a *qqAdapter) handleHello(payload map[string]any) error {
+	debug.Log("qq", "adapter=%s gateway hello", a.name)
+	if d, ok := payload["d"].(map[string]any); ok {
+		if intervalMS, ok := intValue(d["heartbeat_interval"]); ok && intervalMS > 0 {
+			a.mu.Lock()
+			a.heartbeatEvery = time.Duration(float64(intervalMS)*0.8) * time.Millisecond
+			a.mu.Unlock()
+		}
+	}
+	a.mu.RLock()
+	sid := a.sessionID
+	a.mu.RUnlock()
+	if sid != "" {
+		return a.sendResume()
+	}
+	return a.sendIdentify()
+}
+
+// handleInvalidSession processes op 9: d is a bool — true means the session is
+// still resumable (retry RESUME on the next connection), false means it is
+// dead and the next connection must IDENTIFY fresh (#966).
+func (a *qqAdapter) handleInvalidSession(payload map[string]any) error {
+	resumable, _ := payload["d"].(bool)
+	a.mu.Lock()
+	a.connected = false
+	if !resumable {
+		a.sessionID = ""
+		a.lastSeq = 0
+	}
+	a.mu.Unlock()
+	debug.Log("qq", "adapter=%s invalid session (resumable=%v)", a.name, resumable)
+	a.closeWS()
+	return errQQReconnect
+}
+
+// errQQReconnect tells the serve loop the connection must be re-established
+// (op 7 reconnect / op 9 invalid session). run() then dials a fresh gateway;
+// the next HELLO sends RESUME or IDENTIFY based on retained session state.
+var errQQReconnect = errors.New("qq gateway reconnect requested")
+
+// closeWS closes the current websocket, if any, to unblock ReadMessage in the
+// serve loop and trigger the reconnect cycle in run().
+func (a *qqAdapter) closeWS() {
+	a.mu.RLock()
+	ws := a.ws
+	a.mu.RUnlock()
+	if ws != nil {
+		ws.Close()
+	}
+}
+
 func (a *qqAdapter) writeJSON(v any) error {
 	a.mu.RLock()
 	ws := a.ws
@@ -956,17 +1060,24 @@ func (a *qqAdapter) refreshTokenOnce(ctx context.Context) (string, error) {
 		return "", err
 	}
 	defer resp.Body.Close()
-	var data map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+	respBody, err := util.ReadAll(resp.Body, util.ReadLimitGeneral)
+	if err != nil {
 		return "", err
+	}
+	// Check the HTTP status before JSON parsing so non-JSON error pages (HTML
+	// 502s etc.) surface the real failure instead of a confusing decode error
+	// (#966).
+	if resp.StatusCode >= 400 {
+		return "", fmt.Errorf("QQ token request failed [%d]: %s", resp.StatusCode, truncateStr(strings.TrimSpace(string(respBody)), 200))
+	}
+	var data map[string]any
+	if err := json.Unmarshal(respBody, &data); err != nil {
+		return "", fmt.Errorf("parse QQ token response [%d]: %w", resp.StatusCode, err)
 	}
 	accessToken := strings.TrimSpace(stringFromAny(data["access_token"]))
 	expiresIn, err := parseQQExpiresIn(data["expires_in"])
 	if err != nil {
 		return "", err
-	}
-	if resp.StatusCode >= 400 {
-		return "", fmt.Errorf("QQ token request failed [%d]: %v", resp.StatusCode, data)
 	}
 	if accessToken == "" {
 		return "", fmt.Errorf("QQ token response missing access_token [%d]: %v", resp.StatusCode, data)
@@ -1144,6 +1255,19 @@ func (a *qqAdapter) recordPassiveReply(binding ChannelBinding, replyTo string) {
 	}
 	if err := a.manager.RecordPassiveReply(binding.Workspace, replyTo, time.Now()); err != nil && err != ErrNoChannelBound {
 		debug.Log("qq", "adapter=%s record passive reply failed: %v", a.name, err)
+	}
+}
+
+// recordPassiveReplies advances the passive-reply quota counter by the number
+// of msg_seq slots actually consumed by this Send (images + text chunks). The
+// server bills one passive reply per msg_seq, so undercounting makes the next
+// Send reuse an already-consumed seq and get deduplicated away (#966).
+func (a *qqAdapter) recordPassiveReplies(binding ChannelBinding, replyTo string, count int) {
+	if count <= 0 {
+		return
+	}
+	for range count {
+		a.recordPassiveReply(binding, replyTo)
 	}
 }
 
