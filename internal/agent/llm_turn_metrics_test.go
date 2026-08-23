@@ -59,8 +59,13 @@ func TestLLMTurnMetricsEmptyDeltasDontStamp(t *testing.T) {
 func TestLLMTurnMetricsThinkWindowAccumulates(t *testing.T) {
 	m := newLLMTurnMetrics()
 	m.markReasoning("first think")
+	// Sleep before closing each window: time.Since can round sub-tick
+	// durations to 0 on coarse-clock CI runners (see PureToolTurn above),
+	// which would make both windows measure ~0 and ThinkTime fail <= 0.
+	time.Sleep(2 * time.Millisecond)
 	m.closeThinkWindow()
 	m.markReasoning("second think")
+	time.Sleep(2 * time.Millisecond)
 	ev := m.emit(provider.TokenUsage{})
 	if ev.ThinkTime <= 0 {
 		t.Fatalf("two think cycles must accumulate positive think time, got %v", ev.ThinkTime)
