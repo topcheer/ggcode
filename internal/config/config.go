@@ -283,6 +283,7 @@ type Config struct {
 	OutputStyle        string                     `yaml:"output_style,omitempty" json:"output_style,omitempty"`
 	Notifications      NotificationConfig         `yaml:"notifications,omitempty" json:"notifications,omitempty"`
 	Fallback           FallbackConfig             `yaml:"fallback,omitempty" json:"fallback,omitempty"`
+	Fallbacks          []FallbackConfig           `yaml:"fallbacks,omitempty" json:"fallbacks,omitempty"`
 	FilePath           string                     `yaml:"-" json:"-"`
 	ProtectedPaths     []string                   `yaml:"protected_paths,omitempty" json:"protected_paths,omitempty"`
 	FirstRun           bool                       `yaml:"-" json:"-"`
@@ -479,7 +480,7 @@ func (n NotificationConfig) ShouldBell() bool {
 	return true // backward-compatible default
 }
 
-// FallbackConfig configures automatic provider/model failover.
+// FallbackConfig configures one automatic provider/model failover level.
 // When the primary provider fails with a permanent error (quota exhaustion,
 // auth failure) or sustained transient errors, requests are transparently
 // rerouted to the configured fallback vendor/endpoint/model.
@@ -493,6 +494,23 @@ type FallbackConfig struct {
 // IsConfigured reports whether the fallback has enough info to be usable.
 func (f FallbackConfig) IsConfigured() bool {
 	return f.Enabled && f.Vendor != "" && f.Model != ""
+}
+
+// FallbackChain returns the ordered failover chain: the legacy single
+// `fallback` entry first (backward compatibility), then each configured
+// entry of `fallbacks` in listed order (earlier = higher priority).
+// Entries that are not enabled or lack vendor/model are skipped.
+func (c *Config) FallbackChain() []FallbackConfig {
+	var chain []FallbackConfig
+	if c.Fallback.IsConfigured() {
+		chain = append(chain, c.Fallback)
+	}
+	for _, fb := range c.Fallbacks {
+		if fb.IsConfigured() {
+			chain = append(chain, fb)
+		}
+	}
+	return chain
 }
 
 // HasAuth returns true if at least one authentication mechanism is configured.

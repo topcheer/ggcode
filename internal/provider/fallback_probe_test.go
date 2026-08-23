@@ -51,17 +51,17 @@ func TestFallback_ProactivePrimaryRecovery(t *testing.T) {
 	if err != nil || resp == nil {
 		t.Fatalf("triggering call must succeed via the fallback retry: %v", err)
 	}
-	if !fp.HasFailedOver() {
+	if fp.activeIdx.Load() != 1 {
 		t.Fatal("quota failure must activate failover")
 	}
 
 	// Wait for the prober to notice the recovered primary and switch back.
 	deadline := time.Now().Add(3 * time.Second)
-	for fp.HasFailedOver() && time.Now().Before(deadline) {
+	for fp.activeIdx.Load() != 0 && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	if fp.HasFailedOver() {
-		t.Fatal("prober must switch back to a recovered primary")
+		t.Fatal("prober must switch back to the recovered primary")
 	}
 
 	// Subsequent traffic flows through the primary again.
@@ -85,8 +85,8 @@ func TestFallback_ProberStopsWhenNotFailedOver(t *testing.T) {
 
 	// Manual Reset() after activation must also retire the prober.
 	fp.mu.Lock()
-	fp.failedOver.Store(true)
-	fp.startPrimaryProberLocked()
+	fp.activeIdx.Store(1)
+	fp.startRecoveryProberLocked()
 	fp.mu.Unlock()
 	fp.Reset()
 	if fp.HasFailedOver() {

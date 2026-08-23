@@ -2,6 +2,7 @@ package agentruntime
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/config"
@@ -131,29 +132,47 @@ func SyncVendorEndpointToGlobal(cfg *config.Config, vendor, endpoint string) {
 	}
 }
 
-// wrapWithFallback creates a FallbackProvider wrapping the primary provider.
-// If the fallback endpoint cannot be resolved (missing vendor/endpoint/API key),
-// the primary is returned unwrapped — failover is best-effort, never blocking.
+// wrapWithFallback creates a failover wrapper around the primary provider.
+// Supports a priority-ordered chain: the legacy single `fallback` entry
+// first, then each `fallbacks` list entry in order (earlier = higher
+// priority). If an entry cannot be resolved it is skipped - failover is
+// best-effort, never blocking. With no usable fallback entries the primary
+// is returned unwrapped.
 func wrapWithFallback(cfg *config.Config, primary provider.Provider, primaryResolved *config.ResolvedEndpoint) provider.Provider {
-	fbResolved, err := cfg.ResolveEndpoint(cfg.Fallback.Vendor, cfg.Fallback.Endpoint)
-	if err != nil {
-		debug.Log("provider", "fallback disabled: cannot resolve %s/%s: %v", cfg.Fallback.Vendor, cfg.Fallback.Endpoint, err)
+	var fallbacks []provider.Provider
+	var descs []string
+
+	appendEntry := func(fb config.FallbackConfig) {
+		fbResolved, err := cfg.ResolveEndpoint(fb.Vendor, fb.Endpoint)
+		if err != nil {
+			debug.Log("provider", "fallback skipped: cannot resolve %s/%s: %v", fb.Vendor, fb.Endpoint, err)
+			return
+		}
+		if fbResolved.APIKey == "" {
+			debug.Log("provider", "fallback skipped: no API key for %s/%s", fb.Vendor, fb.Endpoint)
+			return
+		}
+		// Override model from fallback config.
+		fbResolved.Model = fb.Model
+		fbProv, err := provider.NewProvider(fbResolved)
+		if err != nil {
+			debug.Log("provider", "fallback skipped: cannot create provider: %v", err)
+			return
+		}
+		fallbacks = append(fallbacks, fbProv)
+		descs = append(descs, fmt.Sprintf("%s/%s/%s", fbResolved.VendorID, fbResolved.EndpointID, fbResolved.Model))
+	}
+
+	for _, fb := range cfg.FallbackChain() {
+		appendEntry(fb)
+	}
+	if len(fallbacks) == 0 {
 		return primary
 	}
-	if fbResolved.APIKey == "" {
-		debug.Log("provider", "fallback disabled: no API key for %s/%s", cfg.Fallback.Vendor, cfg.Fallback.Endpoint)
-		return primary
-	}
-	// Override model from fallback config.
-	fbResolved.Model = cfg.Fallback.Model
-	fbProv, err := provider.NewProvider(fbResolved)
-	if err != nil {
-		debug.Log("provider", "fallback disabled: cannot create provider: %v", err)
-		return primary
-	}
-	desc := fmt.Sprintf("%s/%s/%s -> %s/%s/%s",
-		primaryResolved.VendorID, primaryResolved.EndpointID, primaryResolved.Model,
-		fbResolved.VendorID, fbResolved.EndpointID, fbResolved.Model)
-	debug.Log("provider", "fallback enabled: %s", desc)
-	return provider.NewFallbackProvider(primary, fbProv, desc)
+
+	chain := append([]provider.Provider{primary}, fallbacks...)
+	primaryDesc := fmt.Sprintf("%s/%s/%s", primaryResolved.VendorID, primaryResolved.EndpointID, primaryResolved.Model)
+	desc := strings.Join(append([]string{primaryDesc}, descs...), " -> ")
+	debug.Log("provider", "fallback chain enabled: %s", desc)
+	return provider.NewCascadeProvider(chain, desc)
 }

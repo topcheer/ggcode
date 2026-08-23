@@ -245,9 +245,9 @@ func TestFallback_StalePrimaryRetriesOnFallbackAfterConcurrentFailover(t *testin
 	// active=primary and its Chat call failed; only afterwards does another
 	// goroutine activate failover. Test maybeFailover directly with the
 	// provider the caller actually called (the primary).
-	fp.failedOver.Store(true)
+	fp.activeIdx.Store(1)
 	err := errors.New("insufficient_quota: quota exceeded")
-	_, canRetry := fp.maybeFailover(err, primary)
+	_, canRetry := fp.maybeFailover(err, 0)
 	if !canRetry {
 		t.Fatal("stale-primary caller (failed call was against primary) must be granted a fallback retry")
 	}
@@ -257,7 +257,7 @@ func TestFallback_StalePrimaryRetriesOnFallbackAfterConcurrentFailover(t *testin
 	// fallback hitting its own quota/auth limit must not strand the session.
 	// The old single-direction semantics denied this retry, leaving the app
 	// unusable once the fallback's quota ran out.
-	_, canRetry = fp.maybeFailover(err, fallback)
+	_, canRetry = fp.maybeFailover(err, 1)
 	if !canRetry {
 		t.Fatal("failed call against fallback must switch back to primary and grant a retry")
 	}
@@ -268,7 +268,7 @@ func TestFallback_StalePrimaryRetriesOnFallbackAfterConcurrentFailover(t *testin
 	// The ping-pong is bounded per call, not unbounded: after switching back
 	// to primary, a subsequent hard primary failure fails over to fallback
 	// again — but each individual Chat call performs at most one switch.
-	_, canRetry = fp.maybeFailover(err, primary)
+	_, canRetry = fp.maybeFailover(err, 0)
 	if !canRetry {
 		t.Fatal("primary failure after switch-back must fail over to fallback again")
 	}
@@ -286,7 +286,7 @@ func TestFallback_FallbackQuotaFailsBackToPrimary(t *testing.T) {
 	fp := NewFallbackProvider(primary, fallback, "primary -> fallback")
 
 	// Simulate an earlier failover: active side is the fallback.
-	fp.failedOver.Store(true)
+	fp.activeIdx.Store(1)
 
 	resp, err := fp.Chat(context.Background(), nil, nil)
 	if err != nil {

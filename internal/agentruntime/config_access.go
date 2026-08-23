@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -104,6 +105,32 @@ func (a *configAccess) Get(key string) (string, error) {
 	case strings.HasPrefix(key, "im.adapters."):
 		return a.getIMAdapter(strings.TrimPrefix(key, "im.adapters."))
 
+	// --- Provider fallback chain ---
+	case key == "fallback":
+		b, err := json.Marshal(a.cfg.Fallback)
+		if err != nil {
+			return "", err
+		}
+		return string(b), nil
+	case strings.HasPrefix(key, "fallback."):
+		return a.getFallbackField(a.cfg.Fallback, strings.TrimPrefix(key, "fallback."))
+	case key == "fallbacks":
+		b, err := json.Marshal(a.cfg.Fallbacks)
+		if err != nil {
+			return "", err
+		}
+		return string(b), nil
+	case strings.HasPrefix(key, "fallbacks."):
+		m := fallbacksIndexRe.FindStringSubmatch(key)
+		if m == nil {
+			return "", fmt.Errorf("invalid fallbacks key: %q (expected fallbacks.<N>[.<field>])", key)
+		}
+		idx, err := strconv.Atoi(m[1])
+		if err != nil || idx < 0 || idx >= len(a.cfg.Fallbacks) {
+			return "", fmt.Errorf("fallbacks index out of range: %q (chain has %d entries)", key, len(a.cfg.Fallbacks))
+		}
+		return a.getFallbackField(a.cfg.Fallbacks[idx], m[2])
+
 	// --- A2A ---
 	case key == "a2a.disabled":
 		return strconv.FormatBool(a.cfg.A2A.Disabled), nil
@@ -196,6 +223,20 @@ func (a *configAccess) Set(key, value string) error {
 		return a.saveAndPatch("im.output_mode", value)
 	case strings.HasPrefix(key, "im.adapters."):
 		return a.setIMAdapterPath(strings.TrimPrefix(key, "im.adapters."), value)
+
+	// --- Provider fallback chain ---
+	case strings.HasPrefix(key, "fallback."):
+		return a.setFallbackField(&a.cfg.Fallback, strings.TrimPrefix(key, "fallback."), value)
+	case key == "fallbacks":
+		return a.setFallbacksList(value)
+	case strings.HasPrefix(key, "fallbacks."):
+		m := fallbacksIndexRe.FindStringSubmatch(key)
+		if m == nil {
+			return fmt.Errorf("invalid fallbacks key: %q (expected fallbacks.<N>[.<field>] or fallbacks.append)", key)
+		}
+		return a.setFallbacksIndexed(m[1], m[2], value)
+	case key == "fallbacks.append":
+		return a.appendFallbackEntry(value)
 
 	// --- A2A ---
 	case key == "a2a.disabled":
@@ -1147,4 +1188,108 @@ func (a *configAccess) discoverModels(key string) (string, error) {
 
 	b, _ := json.MarshalIndent(models, "", "  ")
 	return string(b), nil
+}
+
+// --- Provider fallback chain access ---
+//
+// Keys:
+//   fallback                    read whole legacy entry (JSON)
+//   fallback.<field>            read/write legacy entry field (enabled/vendor/endpoint/model)
+//   fallbacks                   read whole chain / write as JSON array (replaces)
+//   fallbacks.<N>               read chain entry N (JSON)
+//   fallbacks.<N>.<field>       write chain entry N field
+//   fallbacks.append            append a JSON entry to the chain
+
+// fallbacksIndexRe matches "fallbacks.<N>" and "fallbacks.<N>.<field>".
+var fallbacksIndexRe = regexp.MustCompile(`^fallbacks\.(\d+)(?:\.([a-z_]+))?$`)
+
+// getFallbackField reads one field of a fallback entry.
+func (a *configAccess) getFallbackField(fb config.FallbackConfig, field string) (string, error) {
+	switch field {
+	case "enabled":
+		return strconv.FormatBool(fb.Enabled), nil
+	case "vendor":
+		return fb.Vendor, nil
+	case "endpoint":
+		return fb.Endpoint, nil
+	case "model":
+		return fb.Model, nil
+	case "":
+		b, err := json.Marshal(fb)
+		if err != nil {
+			return "", err
+		}
+		return string(b), nil
+	default:
+		return "", fmt.Errorf("unknown fallback field: %q (enabled/vendor/endpoint/model)", field)
+	}
+}
+
+// setFallbackField writes one field of the legacy single fallback entry.
+func (a *configAccess) setFallbackField(fb *config.FallbackConfig, field, value string) error {
+	switch field {
+	case "enabled":
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("invalid enabled: %w", err)
+		}
+		fb.Enabled = b
+	case "vendor":
+		fb.Vendor = value
+	case "endpoint":
+		fb.Endpoint = value
+	case "model":
+		fb.Model = value
+	default:
+		return fmt.Errorf("unknown fallback field: %q (enabled/vendor/endpoint/model)", field)
+	}
+	return a.saveAndPatch("fallback."+field, value)
+}
+
+// setFallbacksList replaces the whole fallbacks list from a JSON array.
+func (a *configAccess) setFallbacksList(value string) error {
+	var list []config.FallbackConfig
+	if err := json.Unmarshal([]byte(value), &list); err != nil {
+		return fmt.Errorf("fallbacks must be a JSON array of entries: %w", err)
+	}
+	a.cfg.Fallbacks = list
+	return a.saveAndPatch("fallbacks", value)
+}
+
+// setFallbacksIndexed writes one field of chain entry idxStr.
+func (a *configAccess) setFallbacksIndexed(idxStr, field, value string) error {
+	idx, err := strconv.Atoi(idxStr)
+	if err != nil || idx < 0 || idx >= len(a.cfg.Fallbacks) {
+		return fmt.Errorf("fallbacks index out of range: %q (chain has %d entries)", idxStr, len(a.cfg.Fallbacks))
+	}
+	fb := &a.cfg.Fallbacks[idx]
+	switch field {
+	case "enabled":
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("invalid enabled: %w", err)
+		}
+		fb.Enabled = b
+	case "vendor":
+		fb.Vendor = value
+	case "endpoint":
+		fb.Endpoint = value
+	case "model":
+		fb.Model = value
+	case "":
+		return fmt.Errorf("fallbacks.<N> writes are not supported; use fallbacks.<N>.<field>")
+	default:
+		return fmt.Errorf("unknown fallback field: %q (enabled/vendor/endpoint/model)", field)
+	}
+	return a.saveAndPatch("fallbacks."+idxStr+"."+field, value)
+}
+
+// appendFallbackEntry appends one JSON entry to the fallbacks chain.
+func (a *configAccess) appendFallbackEntry(value string) error {
+	var fb config.FallbackConfig
+	if err := json.Unmarshal([]byte(value), &fb); err != nil {
+		return fmt.Errorf("fallbacks.append must be a JSON entry object: %w", err)
+	}
+	a.cfg.Fallbacks = append(a.cfg.Fallbacks, fb)
+	return a.saveAndPatch("fallbacks.append", value)
 }

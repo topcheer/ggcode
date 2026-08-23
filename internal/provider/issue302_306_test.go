@@ -51,18 +51,17 @@ func TestClassifyLLMError_OverflowNotAuthQuota(t *testing.T) {
 func TestMaybeFailover_CanceledNotCounted(t *testing.T) {
 	f := &FallbackProvider{
 		consecutiveFail: atomic.Int32{},
-		failedOver:      atomic.Bool{},
 	}
 	// simulate 5 consecutive cancellations
 	for i := 0; i < 5; i++ {
-		_, retry := f.maybeFailover(context.Canceled, nil)
+		_, retry := f.maybeFailover(context.Canceled, 0)
 		if retry {
 			t.Fatalf("cancellation offered fallback retry")
 		}
 		if f.consecutiveFail.Load() != 0 {
 			t.Fatalf("cancellation incremented consecutiveFail to %d", f.consecutiveFail.Load())
 		}
-		if f.failedOver.Load() {
+		if f.activeIdx.Load() != 0 {
 			t.Fatalf("cancellation triggered sticky failover")
 		}
 	}
