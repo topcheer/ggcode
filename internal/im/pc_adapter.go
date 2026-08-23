@@ -15,6 +15,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/util"
 )
 
@@ -85,6 +86,12 @@ type pcAdapter struct {
 	httpClient *http.Client
 
 	mu sync.RWMutex
+
+	// connectMu serializes relay connection attempts. Without it, the
+	// RLock-check / Lock-write window in ensureConnected lets concurrent
+	// Send calls each dial their own connection; the loser is overwritten
+	// and leaks its ReadLoop + Heartbeat goroutines and WS handle. #965
+	connectMu sync.Mutex
 
 	// Context
 	ctx context.Context
@@ -165,13 +172,30 @@ func (a *pcAdapter) Name() string { return a.name }
 
 func (a *pcAdapter) Start(ctx context.Context) {
 	debug.Log("pc", "adapter=%s start provider=%s (lazy connect)", a.name, a.providerID)
+	a.mu.Lock()
 	a.ctx = ctx
+	a.mu.Unlock()
 	a.loadSessionsFromStore()
-	a.publishState(false, "disconnected", "")
+	// "idle", not "disconnected": PublishAdapterState treats disconnected
+	// as a terminal state and would drop every later "connecting"/"connected"
+	// update, freezing the UI at disconnected. Lazy adapters are idle until
+	// the first connection attempt.
+	a.publishState(false, "idle", "")
 }
 
-// Close is a no-op for PC adapter — it uses lazy connections.
-func (a *pcAdapter) Close() error { return nil }
+// Close disposes the relay client if one is connected. The PC adapter uses
+// lazy connections, so in the common case there is nothing to tear down.
+func (a *pcAdapter) Close() error {
+	a.mu.Lock()
+	client := a.client
+	a.client = nil
+	a.mu.Unlock()
+	if client != nil {
+		client.Dispose()
+	}
+	a.publishState(false, "disconnected", "")
+	return nil
+}
 
 func (a *pcAdapter) saveSessionsToStore() {
 	if a.sessionStore == nil {
@@ -328,22 +352,33 @@ func (a *pcAdapter) Send(ctx context.Context, binding ChannelBinding, event Outb
 
 // ensureConnected connects to the relay if not already connected.
 func (a *pcAdapter) ensureConnected(ctx context.Context) error {
-	a.mu.RLock()
-	client := a.client
-	a.mu.RUnlock()
-	if client != nil {
+	if client := a.currentClient(); client != nil && client.isAlive() {
+		return nil
+	}
+
+	// Serialize connection attempts (see connectMu comment). A second
+	// caller blocks here instead of racing to dial its own connection.
+	a.connectMu.Lock()
+	defer a.connectMu.Unlock()
+
+	// Re-check after acquiring connectMu: another goroutine may have
+	// finished connecting while we were waiting.
+	if client := a.currentClient(); client != nil && client.isAlive() {
 		return nil
 	}
 
 	a.publishState(false, "connecting", "")
 
 	wsURL := pcResolveRelayWSURL(a.relayBaseURL)
-	client = newPCRelayClient(wsURL, a.providerID)
+	client := newPCRelayClient(wsURL, a.providerID)
 	client.onFrame = a.handleRelayFrame
 	client.onSessionClosed = a.handleSessionClosed
 	client.onError = func(msg string) {
 		debug.Log("pc", "relay error: %s", msg)
 		a.publishState(true, "error", msg)
+	}
+	client.onDisconnected = func(reason string) {
+		a.handleRelayDisconnected(client, reason)
 	}
 
 	if err := client.Connect(ctx); err != nil {
@@ -353,12 +388,93 @@ func (a *pcAdapter) ensureConnected(ctx context.Context) error {
 	}
 
 	a.mu.Lock()
+	// Defensive: if a stale client somehow survived, dispose it rather than
+	// leaking its goroutines.
+	if old := a.client; old != nil && old != client {
+		old.Dispose()
+	}
 	a.client = client
 	a.mu.Unlock()
 
 	a.publishState(true, "connected", "")
 	debug.Log("pc", "adapter=%s connected to relay", a.name)
 	return nil
+}
+
+// currentClient returns the installed relay client (may be nil).
+func (a *pcAdapter) currentClient() *pcRelayClient {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.client
+}
+
+// handleRelayDisconnected is invoked from a relay client's ReadLoop when the
+// connection dies. It clears the dead client so ensureConnected stops
+// short-circuiting on a stale pointer, publishes the disconnect, and kicks
+// off a background reconnect with backoff. #965
+func (a *pcAdapter) handleRelayDisconnected(client *pcRelayClient, reason string) {
+	a.mu.Lock()
+	if a.client != client {
+		// A newer client already took over (or this one was never installed
+		// because its Connect failed) — nothing to clean up.
+		a.mu.Unlock()
+		return
+	}
+	a.client = nil
+	ctx := a.ctx
+	a.mu.Unlock()
+
+	debug.Log("pc", "adapter=%s relay disconnected: %s", a.name, reason)
+	// Healthy=false + reason in LastError, but status "reconnecting" rather
+	// than "disconnected": Manager.PublishAdapterState treats disconnected
+	// as terminal and would drop the eventual "connected" update, freezing
+	// the UI at disconnected forever even after a successful reconnect.
+	a.publishState(false, "reconnecting", reason)
+
+	if ctx != nil && ctx.Err() != nil {
+		return
+	}
+	safego.Go("im.pc.reconnect", func() { a.reconnectLoop(ctx) })
+}
+
+// reconnectLoop retries the relay connection with exponential backoff,
+// starting at pcInitialReconnectDelay and capped at pcMaxReconnectDelay.
+// It exits as soon as any caller (including itself) establishes a live
+// connection, or when the adapter context is done.
+func (a *pcAdapter) reconnectLoop(ctx context.Context) {
+	delay := pcInitialReconnectDelay
+	for attempt := 1; ; attempt++ {
+		if ctx != nil && ctx.Err() != nil {
+			debug.Log("pc", "adapter=%s reconnect loop stopped: adapter context done", a.name)
+			return
+		}
+		if client := a.currentClient(); client != nil && client.isAlive() {
+			debug.Log("pc", "adapter=%s relay reconnected (attempt %d)", a.name, attempt)
+			return
+		}
+		if err := a.ensureConnected(context.Background()); err == nil {
+			debug.Log("pc", "adapter=%s relay reconnected (attempt %d)", a.name, attempt)
+			return
+		} else {
+			debug.Log("pc", "adapter=%s reconnect attempt %d failed: %v", a.name, attempt, err)
+		}
+
+		timer := time.NewTimer(delay)
+		var done <-chan struct{}
+		if ctx != nil {
+			done = ctx.Done()
+		}
+		select {
+		case <-timer.C:
+		case <-done:
+			timer.Stop()
+			return
+		}
+		delay *= 2
+		if delay > pcMaxReconnectDelay {
+			delay = pcMaxReconnectDelay
+		}
+	}
 }
 
 func (a *pcAdapter) handleRelayFrame(sessionID string, envelope *pcEncryptedEnvelope) {
@@ -649,6 +765,11 @@ func (a *pcAdapter) RenewSession(ctx context.Context, sessionID string) error {
 	sess, ok := a.GetSession(sessionID)
 	if ok {
 		expiresAt, _ := time.Parse(time.RFC3339, resp.ExpiresAt)
+		if expiresAt.IsZero() {
+			// Guard against zero-value overwrites that would expire the
+			// session immediately (mirrors CreateSession). #965
+			expiresAt = time.Now().Add(time.Duration(a.sessionTTLMs) * time.Millisecond)
+		}
 		sess.mu.Lock()
 		sess.ExpiresAt = expiresAt
 		sess.mu.Unlock()
