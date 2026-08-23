@@ -32,6 +32,7 @@ const (
 	slackInterMsgDelay  = 500 * time.Millisecond // Slack allows ~1 msg/sec/channel; 500ms is safe with burst tolerance
 	slackWSPingInterval = 60 * time.Second       // AWS API Gateway idle timeout is 10min; ping every 60s
 	slackWSReadTimeout  = 90 * time.Second       // ping interval + 30s grace
+	slackDedupMaxSize   = 1000                   // mirrors signalDedupMaxSize (#968)
 )
 
 // Slack mrkdwn link format: [text](url) → <url|text>
@@ -67,6 +68,11 @@ type slackAdapter struct {
 	connected   bool
 	ws          *websocket.Conn
 	reactionAck reactionAckState
+
+	// seen dedups inbound messages by "channel:ts" (#968): Socket Mode
+	// delivery is at-least-once (unacked redelivery, reconnect replay),
+	// and without it the same message produced duplicate agent replies.
+	seen map[string]time.Time
 }
 
 func newSlackAdapter(name string, imCfg config.IMConfig, adapterCfg config.IMAdapterConfig, mgr *Manager) (*slackAdapter, error) {
@@ -84,6 +90,7 @@ func newSlackAdapter(name string, imCfg config.IMConfig, adapterCfg config.IMAda
 		httpClient: util.NewInsecureAwareClient(30 * time.Second),
 		botToken:   botToken,
 		appToken:   appToken,
+		seen:       make(map[string]time.Time),
 	}
 	adapter.stt = buildSTTWithFallback(imCfg.STT, adapterCfg.Extra, resolveSlackSTTConfig)
 	return adapter, nil
@@ -244,15 +251,15 @@ func (a *slackAdapter) connectAndServe(ctx context.Context) error {
 
 		msgType, _ := envelope["type"].(string)
 		envelopeID, _ := envelope["envelope_id"].(string)
-		acceptsResp := envelope["accepts_response_payload"] == true
 
-		// Acknowledge the envelope
-		if envelopeID != "" && acceptsResp {
-			ack := map[string]any{
-				"envelope_id": envelopeID,
-			}
-			ackData, _ := json.Marshal(ack)
-			_ = conn.WriteMessage(websocket.TextMessage, ackData)
+		// Acknowledge the envelope (#968): Slack requires an ack for EVERY
+		// envelope carrying an envelope_id, otherwise it redelivers. The old
+		// condition also required accepts_response_payload==true, but that
+		// flag only governs whether the ack response MAY carry a payload -
+		// for message/app_mention envelopes it is commonly false, so most
+		// events went unacked and redelivery was the norm.
+		if ack, ok := slackAckForEnvelope(envelopeID); ok {
+			_ = conn.WriteMessage(websocket.TextMessage, ack)
 		}
 
 		if msgType == "events_api" {
@@ -275,6 +282,22 @@ func (a *slackAdapter) connectAndServe(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+// slackAckForEnvelope builds the Socket Mode ack frame for an envelope.
+// Slack requires every envelope with an envelope_id to be acked or it gets
+// redelivered; accepts_response_payload only decides whether the ack MAY
+// carry a payload body, not whether an ack is required (#968). We never
+// attach a payload, so the flag is irrelevant here.
+func slackAckForEnvelope(envelopeID string) ([]byte, bool) {
+	if envelopeID == "" {
+		return nil, false
+	}
+	ack, err := json.Marshal(map[string]any{"envelope_id": envelopeID})
+	if err != nil {
+		return nil, false
+	}
+	return ack, true
 }
 
 func (a *slackAdapter) authTest(ctx context.Context) error {
@@ -376,6 +399,14 @@ func (a *slackAdapter) handleMessage(ctx context.Context, event map[string]any) 
 		return
 	}
 
+	// Dedup by (channel, ts) (#968): Socket Mode delivery is at-least-once -
+	// unacked envelopes are redelivered and reconnect windows can replay
+	// events. Without this the same message produced duplicate agent replies.
+	if !a.markSeenDedup(channel, ts) {
+		debug.Log("slack", "adapter=%s dedup drop channel=%s ts=%s", a.name, channel, ts)
+		return
+	}
+
 	// Process file attachments (images, files, audio)
 	attachments, voiceText := a.processSlackAttachments(ctx, event)
 	if voiceText != "" {
@@ -414,6 +445,11 @@ func (a *slackAdapter) handleMessage(ctx context.Context, event map[string]any) 
 		Attachments: attachments,
 	}
 
+	if a.manager == nil {
+		// nil manager only occurs in unit-test constructions; pairing and
+		// inbound dispatch both require it (#968, mirrors the signal guard).
+		return
+	}
 	pairingResult, err := a.manager.HandlePairingInbound(inbound)
 	if err != nil && err != ErrNoSessionBound {
 		a.publishState(false, "warning", err.Error())
@@ -449,6 +485,31 @@ func (a *slackAdapter) handleMessage(ctx context.Context, event map[string]any) 
 // Slack represents user mentions as "<@U123>" (or "<@U123|display name>")
 // literal tokens. Only the bot's own ID is removed; mentions of other users
 // are meaningful and preserved (#540).
+// markSeenDedup records an inbound "channel:ts" and reports whether this is
+// the first delivery (#968). Mirrors the signal adapter's seen[ts] dedup:
+// mutex-guarded, TTL-evicted, size-capped.
+func (a *slackAdapter) markSeenDedup(channel, ts string) bool {
+	if channel == "" || ts == "" {
+		return true
+	}
+	key := channel + ":" + ts
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if _, dup := a.seen[key]; dup {
+		return false
+	}
+	a.seen[key] = time.Now()
+	if len(a.seen) > slackDedupMaxSize {
+		cutoff := time.Now().Add(-5 * time.Minute)
+		for k, t := range a.seen {
+			if t.Before(cutoff) {
+				delete(a.seen, k)
+			}
+		}
+	}
+	return true
+}
+
 func (a *slackAdapter) stripBotMention(text string) string {
 	a.mu.RLock()
 	botID := a.botUserID
@@ -910,7 +971,15 @@ func (a *slackAdapter) sendExtractedImage(ctx context.Context, channelID, thread
 
 // uploadFile uploads a file to a Slack channel via multipart/form-data.
 func (a *slackAdapter) uploadFile(ctx context.Context, channelID, threadTS, filename string, data []byte, comment string) error {
-	url := slackAPIBase + "/files.upload"
+	// Respect the apiBase test override like every other call site (#968).
+	// NOTE: files.upload v1 is deprecated in favor of the
+	// files.getUploadURLExternal + files.completeUploadForeign flow; that
+	// migration is a larger change and is intentionally out of scope here.
+	baseURL := slackAPIBase
+	if a.apiBase != "" {
+		baseURL = a.apiBase
+	}
+	url := baseURL + "/files.upload"
 
 	var buf bytes.Buffer
 	writer := multipart.NewWriter(&buf)
@@ -1275,6 +1344,7 @@ func (a *slackAdapter) handleInteractive(ctx context.Context, payload map[string
 
 	message, _ := payload["message"].(map[string]any)
 	messageTs, _ := message["ts"].(string)
+	threadTS, _ := message["thread_ts"].(string)
 
 	if a.manager != nil {
 		a.manager.HandleInteractiveCallback(InteractiveCallback{
@@ -1285,6 +1355,7 @@ func (a *slackAdapter) handleInteractive(ctx context.Context, payload map[string
 				Adapter:    a.name,
 				Platform:   PlatformSlack,
 				ChannelID:  channelID,
+				ThreadID:   threadTS,
 				SenderID:   senderID,
 				SenderName: senderName,
 				MessageID:  messageTs,

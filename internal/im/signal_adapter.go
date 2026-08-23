@@ -267,7 +267,7 @@ func (a *signalAdapter) sseLoop(ctx context.Context) error {
 		resp.Body.Close()
 		if err != nil {
 			// #432: oversized-body / read errors must back off like every
-			// other error path in this loop — a bare continue hot-looped the
+			// other error path in this loop - a bare continue hot-looped the
 			// CPU and the signal-cli/proxy server when the endpoint kept
 			// returning huge bodies.
 			debug.Log("signal", "adapter=%s receive read error: %v", a.name, err)
@@ -291,7 +291,15 @@ func (a *signalAdapter) sseLoop(ctx context.Context) error {
 
 		var envelopes []map[string]any
 		if err := json.Unmarshal(body, &envelopes); err != nil {
-			// Empty array or non-JSON — just loop again
+			// #432/#968: a non-JSON body (e.g. a proxy injecting an HTML error
+			// page) must back off like every other error path in this loop -
+			// a bare continue hot-looped the CPU and the server.
+			debug.Log("signal", "adapter=%s receive parse error: %v", a.name, err)
+			select {
+			case <-time.After(5 * time.Second):
+			case <-ctx.Done():
+				return nil
+			}
 			continue
 		}
 
@@ -341,6 +349,16 @@ func (a *signalAdapter) processEnvelope(ctx context.Context, raw map[string]any)
 				}
 				// Genuine Note to Self
 				isNoteToSelf = true
+				// Set source fields so sender extraction works (#968): the sync
+				// envelope carries no sourceNumber/sourceName, so sender extraction
+				// below yielded "" and every Note to Self message was silently
+				// dropped. Mirrors the group sync branch below.
+				if _, ok := raw["sourceNumber"]; !ok {
+					raw["sourceNumber"] = a.account
+				}
+				if _, ok := raw["sourceName"]; !ok {
+					raw["sourceName"] = "Me"
+				}
 				raw["dataMessage"] = sentMsg
 			} else if groupInfo != nil {
 				// Sync of a message sent to a group from another device
@@ -359,8 +377,6 @@ func (a *signalAdapter) processEnvelope(ctx context.Context, raw map[string]any)
 					raw["sourceName"] = "Me"
 				}
 				// Not our sent message — treat as inbound group message
-				isGroupSync = true
-				raw["dataMessage"] = sentMsg
 			}
 		}
 		if !isNoteToSelf && !isGroupSync {
@@ -380,10 +396,10 @@ func (a *signalAdapter) processEnvelope(ctx context.Context, raw map[string]any)
 		return
 	}
 
-	// Self-message filtering (but allow Note to Self and group sync)
-	// Note-to-self and group sync messages are handled by syncMessage logic above
-	_ = isNoteToSelf
-	_ = isGroupSync
+	// Self-message filtering (#968): Note to Self and group sync messages
+	// legitimately originate from this account (sent from another device).
+	// Track the flag so the allowed-users check below can exempt them.
+	selfOriginated := (isNoteToSelf || isGroupSync) && sender == a.account
 
 	// Get dataMessage (or editMessage)
 	dataMessage, _ := raw["dataMessage"].(map[string]any)
@@ -424,8 +440,10 @@ func (a *signalAdapter) processEnvelope(ctx context.Context, raw map[string]any)
 	groupID, _ := groupInfo["groupId"].(string)
 	isGroup := groupID != ""
 
-	// Allowed users check
-	if len(a.allowedUsers) > 0 && !entryMatches(a.allowedUsers, sender) {
+	// Allowed users check - self-originated sync messages bypass the filter,
+	// otherwise a restricted allowed_users list would drop the account's own
+	// Note to Self / group sync messages (#968).
+	if !selfOriginated && len(a.allowedUsers) > 0 && !entryMatches(a.allowedUsers, sender) {
 		debug.Log("signal", "adapter=%s user %s not in allowed list", a.name, sender)
 		return
 	}
@@ -670,7 +688,11 @@ func (a *signalAdapter) TriggerTyping(ctx context.Context, binding ChannelBindin
 		payload["recipient"] = chatID
 	}
 	body, _ := json.Marshal(payload)
-	req, err := http.NewRequest("PUT", a.baseURL+"/v1/typing-indicator/"+url.PathEscape(a.account), bytes.NewReader(body))
+	// Propagate ctx so the request cannot outlive the caller (#968).
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	req, err := http.NewRequestWithContext(ctx, "PUT", a.baseURL+"/v1/typing-indicator/"+url.PathEscape(a.account), bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
