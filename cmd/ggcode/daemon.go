@@ -957,6 +957,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 				chatStore,
 				lanchat.DetectWorkspaceMeta(workingDir),
 			)
+			lanchatHub.SetRequireAgentApproval(cfg.LanChat.RequireApprovalForAgents)
 			lanchatHub.SetAttachments(lanchat.NewAttachmentManager())
 			lanchat.MountHandlers(a2aSrv.Mux(), lanchatHub, a2aSrv.Port())
 

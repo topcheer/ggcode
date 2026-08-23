@@ -391,6 +391,12 @@ type SwarmConfig struct {
 // Set via `config set lanchat.dm_cooldown 300s`.
 type LanChatConfig struct {
 	DMCooldown time.Duration `yaml:"dm_cooldown" json:"dm_cooldown"` // default: 150s
+
+	// RequireApprovalForAgents disables auto-approval of @agent DMs that
+	// self-report FromRole "agent". Default false keeps agent-to-agent
+	// collaboration zero-friction; set true to gate every @agent DM behind
+	// manual approval (#986).
+	RequireApprovalForAgents bool `yaml:"require_approval_for_agents,omitempty" json:"require_approval_for_agents,omitempty"`
 }
 
 // EffectiveDMCooldown returns the configured DM cooldown, or 150s if zero/unset.

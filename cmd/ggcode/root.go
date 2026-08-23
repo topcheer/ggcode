@@ -796,6 +796,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 			chatStore,
 			lanchat.DetectWorkspaceMeta(workingDir),
 		)
+		lanchatHub.SetRequireAgentApproval(cfg.LanChat.RequireApprovalForAgents)
 		lanchatHub.SetAttachments(lanchat.NewAttachmentManager())
 		lanchat.MountHandlers(a2aServer.Mux(), lanchatHub, a2aServer.Port())
 		// Sync peers from A2A registry

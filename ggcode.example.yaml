@@ -732,7 +732,9 @@ plugins:
 #   # mDNS discovery is always on — no configuration needed.
 #   # ggcode uses a built-in community key (ggcode-lan-a2a-v1) that lets
 #   # any ggcode instance on the same network connect automatically.
-#   # Set your own api_key for real security (all team members must share it).
+#   # NOTE: the community key only works while NO custom api_key is set.
+#   # Setting your own api_key disables community-key access entirely;
+#   # all team members must then share the custom key (#986).
 #
 #   # Authentication — multiple schemes can be enabled simultaneously.
 #   # Server advertises enabled schemes in the agent card; clients auto-negotiate.

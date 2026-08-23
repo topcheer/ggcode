@@ -91,6 +91,11 @@ type Hub struct {
 	// approval policies: key = peer's human_nick (stable across restarts)
 	approvalPolicies map[string]string // "always" | "never" | ""(ask)
 
+	// requireAgentApproval disables auto-approval of agent-role @agent DMs
+	// (lanchat.require_approval_for_agents). Default false preserves the
+	// agent-to-agent collaboration design (#986).
+	requireAgentApproval bool
+
 	// notifiedNicks tracks human nicks that have already been announced as
 	// "is online" to the UI. This prevents duplicate notifications when the
 	// same user restarts their process (new NodeID, same nick) or when
@@ -1216,17 +1221,21 @@ func (h *Hub) HandleIncomingMessage(msg Message) {
 		h.persistMessage(msg)
 	}
 
-	// Determine approval action based on policy, daemon mode, or agent-to-agent auto-approve
+	// Determine approval action based on policy or agent-to-agent auto-approve.
+	// FromRole is peer-supplied JSON, so it is treated as a routing hint, not
+	// proof of identity — human-role @agent DMs always go through the manual
+	// gate unless the operator explicitly set an "always" policy for the
+	// sender (#986). Daemon mode no longer auto-approves human DMs.
 	autoApproved := false
 	autoRejected := false
 	if needsApproval {
-		if msg.FromRole == RoleAgent {
-			// Agent-to-agent messages are always auto-approved — no human intervention needed
+		if msg.FromRole == RoleAgent && !h.requireAgentApproval {
+			// Agent-to-agent messages are auto-approved — no human intervention
+			// needed — unless lanchat.require_approval_for_agents opts out (#986).
 			autoApproved = true
 		} else {
 			policy := h.approvalPolicies[msg.FromNick]
-			if policy == "always" || h.mode == "daemon" {
-				// Auto-approve: daemon mode defaults to approve, or explicit policy
+			if policy == "always" {
 				autoApproved = true
 			} else if policy == "never" {
 				autoRejected = true
@@ -1488,10 +1497,18 @@ func (h *Hub) GetApprovalPolicies() map[string]string {
 }
 
 // SetOnAutoApprove registers the callback invoked when a message is auto-approved
-// (by policy or daemon mode). The host uses this to inject the message into the agent loop.
+// (by policy or agent-to-agent). The host uses this to inject the message into the agent loop.
 func (h *Hub) SetOnAutoApprove(cb func(Message)) {
 	h.mu.Lock()
 	h.onAutoApprove = cb
+	h.mu.Unlock()
+}
+
+// SetRequireAgentApproval disables auto-approval of agent-role @agent DMs.
+// Wired from lanchat.require_approval_for_agents (#986). Default false.
+func (h *Hub) SetRequireAgentApproval(require bool) {
+	h.mu.Lock()
+	h.requireAgentApproval = require
 	h.mu.Unlock()
 }
 

@@ -8,12 +8,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/util"
 )
 
 // UsageTracker tracks skill usage for Knight's lifecycle management.
 // Persists to a JSON file in the project's .ggcode/ directory.
-// Uses a dirty flag to batch disk writes — only saves when data changed
+// Uses a dirty flag to batch disk writes - only saves when data changed
 // and at most once per writeInterval.
 type UsageTracker struct {
 	mu            sync.Mutex
@@ -298,13 +299,26 @@ func (ut *UsageTracker) ensureLoaded() {
 	if ut.loaded {
 		return
 	}
-	ut.loaded = true
-
 	data, err := os.ReadFile(ut.path)
 	if err != nil {
+		// A genuinely new file is a legal empty state. Any other failure
+		// (permissions, lock contention, transient I/O) keeps loaded=false so
+		// the next access retries instead of permanently giving up - and so
+		// saveLocked refuses to overwrite history it never read (#986).
+		if os.IsNotExist(err) {
+			ut.loaded = true
+		} else {
+			debug.Log("knight.usage", "read %s failed (will retry, refusing overwrite): %v", ut.path, err)
+		}
 		return
 	}
-	json.Unmarshal(data, &ut.data)
+	if err := json.Unmarshal(data, &ut.data); err != nil {
+		// Corrupt JSON: keep loaded=false. Overwriting the file now would
+		// silently destroy the usage history on disk (#986).
+		debug.Log("knight.usage", "parse %s failed (refusing overwrite): %v", ut.path, err)
+		return
+	}
+	ut.loaded = true
 }
 
 // markDirty flags data as needing persistence. Saves immediately if enough
@@ -317,6 +331,15 @@ func (ut *UsageTracker) markDirty() {
 }
 
 func (ut *UsageTracker) saveLocked() {
+	if !ut.loaded {
+		// The file exists on disk but was never successfully read (permission,
+		// lock, or corruption). Writing now would replace the entire history
+		// with only the in-memory (new) entries. Preserving history takes
+		// priority over persisting new data - skip the save and retry the
+		// load on the next access (#986).
+		debug.Log("knight.usage", "save skipped: %s never loaded successfully; refusing to overwrite history", ut.path)
+		return
+	}
 	data, err := json.MarshalIndent(ut.data, "", "  ")
 	if err != nil {
 		return

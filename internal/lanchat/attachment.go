@@ -114,6 +114,34 @@ func (am *AttachmentManager) cleanup() {
 	}
 }
 
+// inlineSafeMIMEs lists MIME types considered safe to render inline in a
+// browser. The attachment MIME type is peer-supplied, so anything outside
+// this list is served as a forced download instead of being rendered.
+// text/html and image/svg+xml are deliberately excluded (active content).
+var inlineSafeMIMEs = map[string]bool{
+	"text/plain":       true,
+	"text/markdown":    true,
+	"text/csv":         true,
+	"application/json": true,
+	"image/png":        true,
+	"image/jpeg":       true,
+	"image/gif":        true,
+	"image/webp":       true,
+	"application/pdf":  true,
+}
+
+// sanitizeAttachmentName makes a peer-supplied filename safe for use inside
+// a Content-Disposition quoted-string: control characters, quotes, and
+// backslashes are replaced so the header cannot be escaped (#986).
+func sanitizeAttachmentName(name string) string {
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r == '"' || r == '\\' {
+			return '_'
+		}
+		return r
+	}, name)
+}
+
 // HandleAttachmentDownload serves an attachment by ID via HTTP.
 func (am *AttachmentManager) HandleAttachmentDownload(w http.ResponseWriter, r *http.Request) {
 	// Extract ID from path: /lanchat/attach/{id}
@@ -130,8 +158,19 @@ func (am *AttachmentManager) HandleAttachmentDownload(w http.ResponseWriter, r *
 		return
 	}
 
-	w.Header().Set("Content-Type", att.mimeType)
-	w.Header().Set("Content-Disposition", "inline; filename=\""+att.name+"\"")
+	// Always prevent MIME sniffing: the Content-Type below comes from a peer
+	// and must not be re-interpreted by the browser (#986).
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	name := sanitizeAttachmentName(att.name)
+	if inlineSafeMIMEs[att.mimeType] {
+		w.Header().Set("Content-Type", att.mimeType)
+		w.Header().Set("Content-Disposition", "inline; filename=\""+name+"\"")
+	} else {
+		// Untrusted MIME type: never render inline - force a download with the
+		// sanitized filename so the browser cannot execute peer content (#986).
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Disposition", "attachment; filename=\""+name+"\"")
+	}
 	w.Write(att.data)
 }
 

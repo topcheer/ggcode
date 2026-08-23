@@ -180,10 +180,12 @@ ggcode instance A (mDNS broadcast)  ←→  ggcode instance B (mDNS broadcast)
   liveness is determined solely by successful presence probes.
 - **Transport**: Direct HTTP between instances (not through a relay server).
 - **Authentication**: Built-in community API key (`ggcode-lan-a2a-v1`) for
-  zero-config trust between ggcode instances. LAN Chat **always** uses this
-  community key for peer-to-peer communication, regardless of any configured
-  A2A auth methods (API keys, OAuth2, OIDC, mTLS). This ensures that any two
-  ggcode instances on the same LAN can communicate without coordination.
+  zero-config trust between ggcode instances. The community key is accepted
+  **only while no custom A2A API key is configured** - once you set
+  `a2a.auth.api_key`, the well-known community key is rejected and all peers
+  must present your configured key (#986). This keeps out-of-the-box
+  instances interoperable without letting a public constant bypass an
+  operator-configured secret.
 - **Privacy**: Messages stay on your LAN — nothing goes through external servers.
 
 ## Desktop GUI
@@ -218,14 +220,34 @@ a2a:
 
 ### Authentication
 
-LAN Chat always uses the built-in community key (`ggcode-lan-a2a-v1`) for
-all peer-to-peer communication. This is hardcoded and cannot be overridden —
-it ensures any two ggcode instances on the same LAN can always communicate
-regardless of their individual A2A authentication configuration.
+LAN Chat uses the built-in community key (`ggcode-lan-a2a-v1`) **only when no
+custom A2A API key is configured** (zero-config mode). In that mode any two
+ggcode instances on the same LAN can communicate without coordination.
+
+**Setting `a2a.auth.api_key` disables the community key** (#986): the
+community key is a published constant, so it must never be allowed to bypass
+an operator-configured secret. After configuring a custom key, every peer,
+including LAN Chat peers, must present that key in the `X-API-Key` header.
+All team members must share the custom key.
 
 If you configure custom A2A auth (e.g., `a2a.auth.api_key`, OAuth2, mTLS),
-those settings only affect A2A protocol (agent delegation, tool calls), not
-LAN Chat messaging.
+those settings affect A2A protocol (agent delegation, tool calls) and, for
+API keys, LAN Chat authentication as described above.
+
+### Agent message approval
+
+@agent direct messages that self-report `FromRole: agent` are auto-approved
+by default (agent-to-agent collaboration). To require manual approval for
+every @agent DM, including agent-role ones, set:
+
+```yaml
+lanchat:
+  require_approval_for_agents: true
+```
+
+Human-role @agent DMs always require manual approval unless the sender has an
+explicit "always" approval policy. Daemon mode no longer auto-approves
+human-role @agent DMs (#986).
 
 ## Anti-Noise Guidelines
 
