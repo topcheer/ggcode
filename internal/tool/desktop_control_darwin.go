@@ -301,9 +301,19 @@ eUp?.post(tap: .cghidEventTap)
 `, x, y, toX, toY, steps, intervalMs))
 }
 
+// scrollPixelsPerStep converts the schema's "steps" contract into CGEvent
+// pixels. #1003: the shared schema defines amount as "number of steps"
+// (Windows sends +-120 per step, X11 repeats one click per step), but macOS
+// CGEvent units:.pixel consumed amount raw - a default scroll of 1 pixel was
+// imperceptible against native wheel lines of hundreds of pixels, and agents
+// retried with bigger amounts that stayed sub-visible. 40px/step matches a
+// typical smooth-scrolling line height, so N steps move roughly the same
+// content distance on every platform.
+const scrollPixelsPerStep = 40
+
 // mouseScroll scrolls at (x,y) in the given direction via Swift CGEvent.
 func mouseScroll(ctx context.Context, x, y int, direction string, amount int) (Result, error) {
-	yDelta := amount
+	yDelta := amount * scrollPixelsPerStep
 	if direction == "down" {
 		yDelta = -yDelta
 	}
