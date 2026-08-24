@@ -813,7 +813,7 @@ func isUnsupportedDiagnosticMethodError(err error) bool {
 		strings.Contains(text, "textdocument/diagnostic failed")
 }
 
-func startClient(ctx context.Context, workspace string, resolved ResolvedServer) (*stdioClient, error) {
+func startClient(ctx context.Context, workspace string, resolved ResolvedServer, notificationHandler func(method string, params json.RawMessage)) (*stdioClient, error) {
 	cmd := exec.Command(resolved.Binary, resolved.Args...)
 	cmd.Dir = workspace
 	cmd.Env = serverLaunchEnv(resolved.Binary)
@@ -825,13 +825,20 @@ func startClient(ctx context.Context, workspace string, resolved ResolvedServer)
 	if err != nil {
 		return nil, err
 	}
+	// The notification handler must be installed before readLoop starts.
+	// csharp-ls (and other fast servers) can emit notifications (e.g. the
+	// "Finished loading solution" logMessage that gates awaitProjectReady)
+	// during the initialize handshake — before startClient returns. Without
+	// an early handler, readLoop silently drops those ID-less messages and
+	// the ready signal is lost for the lifetime of the session.
 	client := &stdioClient{
-		cmd:      cmd,
-		stdin:    stdin,
-		reader:   bufio.NewReader(stdout),
-		waitErr:  make(chan error, 1),
-		resolved: resolved,
-		pending:  make(map[string]chan rpcEnvelope),
+		cmd:                 cmd,
+		stdin:               stdin,
+		reader:              bufio.NewReader(stdout),
+		waitErr:             make(chan error, 1),
+		resolved:            resolved,
+		pending:             make(map[string]chan rpcEnvelope),
+		notificationHandler: notificationHandler,
 	}
 	cmd.Stderr = &client.stderr
 	if err := cmd.Start(); err != nil {
@@ -985,6 +992,19 @@ func (c *stdioClient) close() {
 			_ = c.cmd.Process.Kill()
 		}
 	}
+}
+
+// isFailed reports whether readLoop has exited unexpectedly, i.e. the
+// underlying server process is dead or the protocol stream is broken and
+// every subsequent call/notify on this client is guaranteed to fail.
+// Reads failed under failMu, matching the write side in readLoop.
+func (c *stdioClient) isFailed() bool {
+	if c == nil {
+		return true
+	}
+	c.failMu.Lock()
+	defer c.failMu.Unlock()
+	return c.failed
 }
 
 func (c *stdioClient) readLoop() {

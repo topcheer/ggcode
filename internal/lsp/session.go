@@ -93,32 +93,45 @@ func (m *sessionManager) acquire(ctx context.Context, workspace string, resolved
 		safego.Go("lsp.reapIdle", func() { m.reapIdle() })
 	})
 	key := workspace + "\x00" + resolved.Binary + "\x00" + strings.Join(resolved.Args, "\x1f")
+	var session *sessionClient
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if existing := m.sessions[key]; existing != nil && !existing.isClosed() {
-		existing.touch()
-		return existing, nil
+		// A cached session whose server process died is worse than no
+		// session: call() would fail fast (#992) while touch() below keeps
+		// refreshing lastUsed, so reapIdle would never evict it and this
+		// workspace+binary stays effectively unusable for LSP until the
+		// caller stops using it for >=2 minutes. Evict and rebuild instead.
+		if existing.client == nil || existing.client.isFailed() {
+			delete(m.sessions, key)
+			stale := existing
+			safego.Go("lsp.evictFailedSession", func() { stale.close() })
+		} else {
+			existing.touch()
+			return existing, nil
+		}
 	}
-	client, err := startClient(ctx, workspace, resolved)
-	if err != nil {
-		return nil, err
-	}
-	session := &sessionClient{
+	// The notification handler is created before startClient so it is
+	// installed prior to the initialize handshake (see startClient comment).
+	// markProjectReady below races benignly with notifications arriving
+	// during the handshake — sync.Once makes first close win.
+	session = &sessionClient{
 		workspace:             workspace,
 		resolved:              resolved,
-		client:                client,
 		readySignal:           make(chan struct{}),
 		docs:                  make(map[string]documentState),
 		diagnostics:           make(map[string]diagnosticsState),
 		pullDiagnosticsUsable: true,
 		lastUsed:              time.Now(),
 	}
+	client, err := startClient(ctx, workspace, resolved, session.handleNotification)
+	if err != nil {
+		return nil, err
+	}
+	session.client = client
 	if !session.shouldRetryEmptyResults() {
 		session.markProjectReady()
 	}
-	client.mu.Lock()
-	client.notificationHandler = session.handleNotification
-	client.mu.Unlock()
 	m.sessions[key] = session
 	return session, nil
 }
