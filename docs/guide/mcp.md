@@ -82,7 +82,7 @@ mcp_servers:
     read_only: true
 ```
 
-When `read_only: true`, ggcode blocks any MCP tool whose name contains a write/create/delete/execute keyword, including: `write`, `edit`, `delete`, `remove`, `create`, `update`, `insert`, `set`, `put`, `post`, `patch`, `execute`, `run`, `exec`, `shell`, `move`, `rename`, `upload`, `install`, `deploy`. Read-only tools such as `read`, `get`, `list`, `search`, `fetch`, `query`, `stat`, and `show` are still allowed. Blocked tool calls return an error result explaining that the server is in read-only mode.
+When `read_only: true`, ggcode blocks any MCP tool whose name matches a write/create/delete/execute keyword: short roots (`set`, `put`, `post`, `run`, `exec`, `edit`, `move`) must match a whole underscore- or camelCase-delimited word segment (`set_value`, `setValue` blocked; `get_dataset` allowed), while longer keywords (`write`, `delete`, `create`, `update`, `insert`, `patch`, `execute`, `shell`, `rename`, `upload`, `install`, `deploy`, `upsert`) match anywhere in the name. Read-only tools such as `read`, `get`, `list`, `search`, `fetch`, `query`, `stat`, and `show` are still allowed. Blocked tool calls return an error result explaining that the server is in read-only mode.
 
 ## Dynamic Tool Refresh
 

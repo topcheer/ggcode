@@ -43,15 +43,38 @@ var writeKeywords = []string{
 // "dataset", "run" in "truncate", "put" in "output").
 func containsShortRoot(kw string) bool { return len(kw) <= 4 }
 
+// camelToSnake inserts underscores at uppercase boundaries so camelCase
+// write names ("setValue") segment-match the same roots as their snake_case
+// twins ("set_value") - #997. Lowercases as it goes. Read names split
+// harmlessly ("getDataset" -> "get_dataset", "PostgresQuery" ->
+// "postgres_query" - no short-root segment), so this does not reintroduce
+// the #996 false-positive class. Runs of capitals ("HTTPExec") fragment
+// per letter but long keywords still match by substring, staying blocked.
+func camelToSnake(s string) string {
+	var b strings.Builder
+	for i, r := range s {
+		if r >= 'A' && r <= 'Z' {
+			if i > 0 {
+				b.WriteByte('_')
+			}
+			b.WriteRune(r + ('a' - 'A'))
+		} else {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
 // isWriteToolName checks whether the given MCP tool name indicates a
 // write-type operation (create, update, delete, execute, etc.).
 // Returns true if the tool should be blocked in read-only mode.
 //
-// The name is split on underscores; short-root keywords (<= 4 chars) match
-// only a complete segment ("set_value" matches, "get_dataset" does not),
-// longer keywords match inside segments ("upsert_value", "execute_query").
+// The name is camel-normalized then split on underscores; short-root
+// keywords (<= 4 chars) match only a complete segment ("set_value" and
+// "setValue" match, "get_dataset" does not), longer keywords match
+// inside segments ("upsert_value", "execute_query").
 func isWriteToolName(name string) bool {
-	segments := strings.Split(strings.ToLower(name), "_")
+	segments := strings.Split(camelToSnake(name), "_")
 	for _, kw := range writeKeywords {
 		if containsShortRoot(kw) {
 			for _, seg := range segments {
