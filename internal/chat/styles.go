@@ -154,111 +154,110 @@ const toolHeaderMaxRenderWidth = 120
 
 func (s Styles) ToolHeader(status ToolStatus, name string, width int, params ...string) string {
 	icon := s.ToolIconStyle(status)
-	toolName := s.ToolName.Render(name)
 	paramStr := strings.Join(params, " ")
 
-	prefix := fmt.Sprintf("%s %s ", icon, toolName)
-	prefixW := lipgloss.Width(prefix)
-
-	// Width is a hard invariant (see the avail<1 clamp below): the icon +
-	// tool-name prefix itself must fit too. On narrow terminals a long tool
-	// name (run_command = 15 cols + icon) already exceeds width, and every
-	// continuation line indents by prefixW - so the whole header block
-	// would be wider than width, desynchronizing Height()'s visual-line
-	// count from Render()'s physical lines. Truncate the name at rune
-	// boundaries, keeping at least the icon.
-	if prefixW > width && width > 0 {
-		// Budget the NAME so the final prefix leaves 1 column for params:
-		// prefix = icon(1 visible col + styling) + space + name + space.
-		// Derive from the measured icon width, not assumptions about the
-		// styled string; leave 3 fixed cols (2 spaces + 1 params col).
-		avail := width - lipgloss.Width(icon) - 3
-		if avail < 1 {
-			// Degenerate: icon alone barely fits; drop the name entirely
-			// and trim the trailing space so even the icon honors width.
-			prefix = strings.TrimSuffix(icon, " ")
-			if lipgloss.Width(prefix) > width {
-				prefix = ""
-			}
-		} else {
-			const suffix = "..."
-			// Budget the truncation suffix INSIDE avail: the emitted name is
-			// kept-runes + suffix, so both must fit or the prefix overflows
-			// width again (first attempt reserved nothing and re-broke the
-			// invariant at width 12).
-			if avail <= len(suffix) {
-				prefix = strings.TrimSuffix(icon, " ")
-			} else {
-				avail -= len(suffix)
-				runes := []rune(name)
-				w := 0
-				cut := len(runes)
-				for i, r := range runes {
-					rw := runewidth.RuneWidth(r)
-					if w+rw > avail {
-						cut = i
-						break
-					}
-					w += rw
-				}
-				short := string(runes[:cut])
-				if cut < len(runes) {
-					short += suffix
-				}
-				prefix = fmt.Sprintf("%s %s ", icon, s.ToolName.Render(short))
-			}
-		}
-		prefixW = lipgloss.Width(prefix)
-	}
-
-	// Cap params at max render width
-	if lipgloss.Width(prefix+paramStr) > toolHeaderMaxRenderWidth {
-		avail := toolHeaderMaxRenderWidth - prefixW - 1 // 1 for "…"
-		if avail < 10 {
-			avail = 10
-		}
-		// Truncate by visual width, no word-break — just cut at rune boundary
-		runes := []rune(paramStr)
-		w := 0
-		cut := len(runes)
-		for i, r := range runes {
-			rw := runewidth.RuneWidth(r)
-			if w+rw > avail {
-				cut = i
-				break
-			}
-			w += rw
-		}
-		paramStr = string(runes[:cut]) + "…"
-	}
+	prefix, prefixW := s.toolHeaderPrefix(icon, name, width)
+	paramStr = capHeaderParams(paramStr, prefixW)
 
 	fullLine := prefix + paramStr
 	if lipgloss.Width(fullLine) <= width {
 		return fullLine
 	}
+	return wrapHeaderParams(prefix, paramStr, prefixW, width)
+}
 
-	// Word-wrap params onto continuation lines aligned with prefix
+// toolNameTruncSuffix is appended to a tool name truncated for narrow headers.
+const toolNameTruncSuffix = "..."
+
+// truncateRunesByWidth returns the byte length of the longest prefix of s
+// whose accumulated rune width stays within maxW.
+func truncateRunesByWidth(s string, maxW int) int {
+	w := 0
+	for i, r := range s {
+		rw := runewidth.RuneWidth(r)
+		if w+rw > maxW {
+			return i
+		}
+		w += rw
+	}
+	return len(s)
+}
+
+// toolHeaderPrefix builds the "icon name " prefix, honoring the width
+// invariant even in narrow terminals: a long tool name (run_command = 15
+// cols + icon) can exceed width outright, and every continuation line
+// indents by prefixW - so the whole header block would be wider than
+// width, desynchronizing Height()'s visual-line count from Render()'s
+// physical lines. The name truncates at rune boundaries with the "..."
+// suffix budgeted INSIDE the remaining width (the suffix was initially
+// forgotten and re-broke the invariant at width 12); at degenerate widths
+// only the icon survives.
+func (s Styles) toolHeaderPrefix(icon, name string, width int) (prefix string, prefixW int) {
+	prefix = fmt.Sprintf("%s %s ", icon, s.ToolName.Render(name))
+	prefixW = lipgloss.Width(prefix)
+	if prefixW <= width || width <= 0 {
+		return prefix, prefixW
+	}
+	// Budget the NAME so the final prefix leaves 1 column for params:
+	// icon + space + name + space. Derive from the measured icon width,
+	// not assumptions about the styled string; 3 fixed cols (2 spaces +
+	// 1 params col).
+	avail := width - lipgloss.Width(icon) - 3
+	if avail <= len(toolNameTruncSuffix) {
+		// Degenerate: no room for a truncated name; icon only (trimmed of
+		// trailing space; empty when even that overflows).
+		prefix = strings.TrimSuffix(icon, " ")
+		if lipgloss.Width(prefix) > width {
+			prefix = ""
+		}
+		return prefix, lipgloss.Width(prefix)
+	}
+	avail -= len(toolNameTruncSuffix)
+	cut := truncateRunesByWidth(name, avail)
+	short := name[:cut]
+	if cut < len(name) {
+		short += toolNameTruncSuffix
+	}
+	prefix = fmt.Sprintf("%s %s ", icon, s.ToolName.Render(short))
+	return prefix, lipgloss.Width(prefix)
+}
+
+// capHeaderParams shortens params for the wide-terminal one-line display
+// cap (toolHeaderMaxRenderWidth). Note: this cap may exceed a NARROW
+// terminal's width - the invariant for narrow terminals is enforced by
+// wrapHeaderParams below.
+func capHeaderParams(paramStr string, prefixW int) string {
+	if lipgloss.Width(paramStr)+prefixW <= toolHeaderMaxRenderWidth {
+		return paramStr
+	}
+	avail := toolHeaderMaxRenderWidth - prefixW - 1 // 1 for "…"
+	if avail < 10 {
+		avail = 10
+	}
+	// Truncate by visual width, no word-break — just cut at rune boundary
+	cut := truncateRunesByWidth(paramStr, avail)
+	return paramStr[:cut] + "…"
+}
+
+// wrapHeaderParams word-wraps params onto continuation lines aligned with
+// the header prefix. Width is a hard invariant, not a preference:
+// measureHeightWidth counts ceil(visualWidth/width) while List.Render
+// emits physical lines, so a line wider than width desynchronizes the two
+// and the viewport drifts (content floats mid-screen, blank space below).
+// The old `if avail < 10 { avail = 10 }` clamp INFLATED past width in
+// narrow terminals; emit at most one rune in the degenerate case.
+func wrapHeaderParams(prefix, paramStr string, prefixW, width int) string {
 	indent := strings.Repeat(" ", prefixW)
 	var lines []string
 	remaining := paramStr
 	first := true
 	for remaining != "" {
-		var linePrefix string
-		var avail int
+		linePrefix := indent
 		if first {
 			linePrefix = prefix
-			avail = width - prefixW
 			first = false
-		} else {
-			linePrefix = indent
-			avail = width - prefixW
 		}
-		// Width is a hard invariant, not a preference: measureHeightWidth
-		// counts ceil(visualWidth/width) while List.Render emits physical
-		// lines, so a line wider than width desynchronizes the two and the
-		// viewport drifts (content floats mid-screen, blank space below).
-		// The old `if avail < 10 { avail = 10 }` clamp INFLATED past width in
-		// narrow terminals. Emit at most one rune in the degenerate case.
+		avail := width - prefixW
 		if avail < 1 {
 			avail = 1
 		}
