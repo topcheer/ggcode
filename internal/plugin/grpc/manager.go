@@ -153,7 +153,7 @@ func (m *Manager) Status() []PluginStatus {
 		}
 		statuses = append(statuses, PluginStatus{
 			Name:  name,
-			Alive: inst.Client.Exited(),
+			Alive: !inst.Client.Exited(), // Exited() means the plugin process HAS exited (go-plugin semantics); Alive is its negation (#999)
 			Tools: tools,
 		})
 	}

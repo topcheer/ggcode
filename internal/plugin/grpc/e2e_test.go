@@ -197,7 +197,24 @@ func TestEndToEnd_PluginStatus(t *testing.T) {
 		t.Errorf("expected 'greet' in tools, got %v", statuses[0].Tools)
 	}
 
+	// #999: Alive must be TRUE while the plugin process runs (go-plugin's
+	// Exited() reports the opposite, and the old code copied it straight
+	// through - inverting the semantics). Before the fix this loaded
+	// plugin reported Alive=false.
+	if !statuses[0].Alive {
+		t.Error("expected Alive=true for a freshly loaded, running plugin")
+	}
+
 	mgr.Shutdown()
+
+	// Shutdown clears the plugin map entirely, so the post-shutdown
+	// Alive=false state is not observable via Status() - the semantic
+	// inversion is fully pinned by the Alive=true assertion above
+	// (the old bug reported false for a RUNNING plugin).
+	after := mgr.Status()
+	if len(after) != 0 {
+		t.Errorf("expected 0 statuses after Shutdown (map cleared), got %d", len(after))
+	}
 }
 
 func lookupTool(registry *tool.Registry, name string) tool.Tool {
