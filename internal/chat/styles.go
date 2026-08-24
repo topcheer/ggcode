@@ -160,6 +160,57 @@ func (s Styles) ToolHeader(status ToolStatus, name string, width int, params ...
 	prefix := fmt.Sprintf("%s %s ", icon, toolName)
 	prefixW := lipgloss.Width(prefix)
 
+	// Width is a hard invariant (see the avail<1 clamp below): the icon +
+	// tool-name prefix itself must fit too. On narrow terminals a long tool
+	// name (run_command = 15 cols + icon) already exceeds width, and every
+	// continuation line indents by prefixW - so the whole header block
+	// would be wider than width, desynchronizing Height()'s visual-line
+	// count from Render()'s physical lines. Truncate the name at rune
+	// boundaries, keeping at least the icon.
+	if prefixW > width && width > 0 {
+		// Budget the NAME so the final prefix leaves 1 column for params:
+		// prefix = icon(1 visible col + styling) + space + name + space.
+		// Derive from the measured icon width, not assumptions about the
+		// styled string; leave 3 fixed cols (2 spaces + 1 params col).
+		avail := width - lipgloss.Width(icon) - 3
+		if avail < 1 {
+			// Degenerate: icon alone barely fits; drop the name entirely
+			// and trim the trailing space so even the icon honors width.
+			prefix = strings.TrimSuffix(icon, " ")
+			if lipgloss.Width(prefix) > width {
+				prefix = ""
+			}
+		} else {
+			const suffix = "..."
+			// Budget the truncation suffix INSIDE avail: the emitted name is
+			// kept-runes + suffix, so both must fit or the prefix overflows
+			// width again (first attempt reserved nothing and re-broke the
+			// invariant at width 12).
+			if avail <= len(suffix) {
+				prefix = strings.TrimSuffix(icon, " ")
+			} else {
+				avail -= len(suffix)
+				runes := []rune(name)
+				w := 0
+				cut := len(runes)
+				for i, r := range runes {
+					rw := runewidth.RuneWidth(r)
+					if w+rw > avail {
+						cut = i
+						break
+					}
+					w += rw
+				}
+				short := string(runes[:cut])
+				if cut < len(runes) {
+					short += suffix
+				}
+				prefix = fmt.Sprintf("%s %s ", icon, s.ToolName.Render(short))
+			}
+		}
+		prefixW = lipgloss.Width(prefix)
+	}
+
 	// Cap params at max render width
 	if lipgloss.Width(prefix+paramStr) > toolHeaderMaxRenderWidth {
 		avail := toolHeaderMaxRenderWidth - prefixW - 1 // 1 for "…"
@@ -202,8 +253,14 @@ func (s Styles) ToolHeader(status ToolStatus, name string, width int, params ...
 			linePrefix = indent
 			avail = width - prefixW
 		}
-		if avail < 10 {
-			avail = 10
+		// Width is a hard invariant, not a preference: measureHeightWidth
+		// counts ceil(visualWidth/width) while List.Render emits physical
+		// lines, so a line wider than width desynchronizes the two and the
+		// viewport drifts (content floats mid-screen, blank space below).
+		// The old `if avail < 10 { avail = 10 }` clamp INFLATED past width in
+		// narrow terminals. Emit at most one rune in the degenerate case.
+		if avail < 1 {
+			avail = 1
 		}
 		fit, rest := splitAtWidth(remaining, avail)
 		lines = append(lines, linePrefix+fit)
@@ -270,6 +327,19 @@ func FormatBody(content string, width int, maxLines int) (string, bool) {
 	if content == "" {
 		return "", false
 	}
+
+	// Normalize carriage returns BEFORE any line processing. Windows tool
+	// output is CRLF and progress-bar tools (npm/gradle/docker) rewrite the
+	// line with a bare CR. Both left a stray '\r' inside an emitted line:
+	// lipgloss.Width counts it as zero-width so the height math looked
+	// right, but the terminal moves the cursor to column 0 mid-line,
+	// mangling borders (most visible on Windows) and desynchronizing the
+	// physical-line split from the visual-line count - the scroll offsets
+	// then drift, showing content floating mid-screen with blank space
+	// below. Treating CR as a line break feeds both cases through the
+	// normal wrap/cap machinery.
+	content = strings.ReplaceAll(content, "\r\n", "\n")
+	content = strings.ReplaceAll(content, "\r", "\n")
 
 	// Split into lines, then wrap each line that exceeds visual width.
 	var wrapped []string
