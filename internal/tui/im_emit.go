@@ -162,7 +162,13 @@ func (m *Model) emitIMQuestionnaireSummary(req toolpkg.AskUserRequest, resp tool
 		if answer != "" {
 			sb.WriteString(fmt.Sprintf("  → %s\n", answer))
 		} else {
-			sb.WriteString("  → _未回答_\n")
+			// #1010: language-aware label (this summary goes to IM channels;
+			// the hardcoded Chinese leaked into English-locale messages).
+			unanswered := "_Unanswered_"
+			if m.imToolLanguage() == im.ToolLangZhCN {
+				unanswered = "_未回答_"
+			}
+			sb.WriteString("  → " + unanswered + "\n")
 		}
 	}
 	m.emitIMAskUser(strings.TrimSpace(sb.String()))
