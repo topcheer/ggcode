@@ -192,6 +192,16 @@ func (rs *RuleStore) AddRule(r Rule) {
 	if r.HitCount == 0 {
 		r.HitCount = 1
 	}
+	// #1008: Category comes straight from LLM JSON output, where the
+	// prompt's enum (build/test/git/convention/security) is only a soft
+	// constraint - variants like "Build", "lint" or " build " slip through.
+	// Go switch is case-sensitive and categoryMatchesTool defaults to
+	// false, so a non-canonical category made the rule never match any
+	// tool: preventive injection silently dead, /rules counted it but
+	// never listed it, and it still accrued HitCount to squeeze canonical
+	// rules out of the 60-slot LRU. Normalize (trim + lower) and fall back
+	// to "convention" for anything unrecognized.
+	r.Category = normalizeRuleCategory(r.Category)
 
 	// Check for semantic duplicates before adding.
 	for i := range rs.rules {
@@ -439,6 +449,22 @@ func (rs *RuleStore) MatchingRulesForTool(toolName, args string) []Rule {
 		}
 	}
 	return result
+}
+
+// normalizeRuleCategory canonicalizes a rule category coming from LLM JSON
+// output: trim, lowercase, and fall back to "convention" for anything not
+// in the canonical set. #1008: without this, variants like "Build"/"lint"/
+// " build " never matched any tool (categoryMatchesTool default->false),
+// silently killing preventive injection while /rules counted but never
+// listed them.
+func normalizeRuleCategory(cat string) string {
+	cat = strings.ToLower(strings.TrimSpace(cat))
+	switch cat {
+	case "build", "test", "git", "convention", "security":
+		return cat
+	default:
+		return "convention"
+	}
 }
 
 func categoryMatchesTool(category, toolName string) bool {

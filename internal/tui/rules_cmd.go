@@ -60,6 +60,23 @@ func (m *Model) handleRulesCommand() tea.Cmd {
 		}
 	}
 
+	// #1008: legacy stores may still hold non-canonical categories (rules
+	// saved before AddRule started normalizing). Render them under "other"
+	// instead of counting them in Total but silently hiding them.
+	for _, cat := range []string{"build", "test", "git", "convention", "security"} {
+		delete(categories, cat)
+	}
+	for cat, catRules := range categories {
+		b.WriteString(fmt.Sprintf("### other (%d, category %q)\n\n", len(catRules), cat))
+		for _, r := range catRules {
+			b.WriteString(fmt.Sprintf("- **%s** (hits: %d)\n", r.Rule, r.HitCount))
+			if r.FixHint != "" {
+				b.WriteString(fmt.Sprintf("  - Fix: %s\n", r.FixHint))
+			}
+			b.WriteString(fmt.Sprintf("  - Pattern: `%s`\n\n", r.MatchPattern))
+		}
+	}
+
 	b.WriteString("---\n")
 	b.WriteString(fmt.Sprintf("Storage: %s/.ggcode/agent-rules.json\n", workingDir))
 
