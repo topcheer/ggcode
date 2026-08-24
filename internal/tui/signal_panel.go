@@ -542,14 +542,14 @@ func (m *Model) clearSigChannel(adapterName string) tea.Cmd {
 		if m.imManager == nil {
 			return signalBindResultMsg{}
 		}
-		ws := m.currentWorkspacePath()
-		if bindings, err := m.imManager.ListBindings(); err == nil {
-			for _, b := range bindings {
-				if b.Adapter == adapterName && b.Workspace == ws {
-					_ = m.imManager.UnbindAdapter(adapterName)
-					break
-				}
-			}
+		// #1009: this was the UNBIND path mislabeled as "clear channel" (the
+		// whole workspace binding was deleted, including bindings of other
+		// workspaces sharing the adapter) and reported success even when no
+		// binding matched (#898/#905 pattern, missed during that sweep).
+		// Clear channel fields only; surface not-found instead of a false
+		// "cleared".
+		if err := m.imManager.ClearChannelByAdapter(adapterName); err != nil {
+			return signalBindResultMsg{err: err}
 		}
 		return signalBindResultMsg{message: m.t("panel.signal.message.cleared")}
 	}
