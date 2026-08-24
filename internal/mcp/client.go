@@ -666,13 +666,27 @@ func (c *Client) sendRequestUnlocked(req Request, ctx context.Context) (*Respons
 		// sendHTTP now locks c.mu only for short state snapshot/write-backs.
 		return c.sendHTTP(ctx, req)
 	default: // stdio
+		// #994: register the waiter BEFORE the request hits the wire, mirroring
+		// the WS path (Bug A, #523). The old ordering (write under c.mu, then
+		// register inside readResponseWithCancel) left an unlocked gap between
+		// write completion and registration: a concurrent caller's read loop
+		// could consume our response and deliverResponse would find no waiter
+		// ("dropping response with unknown ID"), leaving this request to
+		// idle-wait the full mcpRequestTimeout and — as the sole waiter — Abort
+		// the shared connection other callers were still using.
+		var waiter chan *Response
+		if req.ID != nil {
+			waiter = make(chan *Response, 1)
+			c.registerWaiter(req.ID, waiter)
+			defer c.unregisterWaiter(req.ID, waiter)
+		}
 		c.mu.Lock()
 		if err := c.writeMessageUnlocked(req); err != nil {
 			c.mu.Unlock()
 			return nil, fmt.Errorf("mcp[%s]: write message: %w", c.name, err)
 		}
 		c.mu.Unlock()
-		return c.readResponseWithCancel(ctx, req.ID)
+		return c.readResponseWithWaiter(ctx, req.ID, waiter)
 	}
 }
 
@@ -707,19 +721,33 @@ func (c *Client) sendNotification(ctx context.Context, notif Notification) error
 }
 
 func (c *Client) readResponseWithCancel(ctx context.Context, reqID *ID) (*Response, error) {
-	type result struct {
-		resp *Response
-		err  error
-	}
-	// Register the waiter SYNCHRONOUSLY, before the read goroutine starts
-	// (fix #156): another caller holding readMu may read our response as
-	// soon as our request hits the wire, so the waiter must already be
-	// registered by the time this function is entered post-write.
+	// #994: the real request path now registers the waiter in
+	// sendRequestUnlocked BEFORE the write; this self-registering legacy
+	// entry remains for direct callers (tests) that already own a request.
 	var waiter chan *Response
 	if reqID != nil {
 		waiter = make(chan *Response, 1)
 		c.registerWaiter(reqID, waiter)
+		defer c.unregisterWaiter(reqID, waiter)
 	}
+	return c.readResponseWithWaiter(ctx, reqID, waiter)
+}
+
+// readResponseWithWaiter is the stdio read phase for a waiter the caller
+// registered BEFORE writing the request (#994, same ordering rule as the WS
+// path in sendWSUnlocked). Unregistration is idempotent (unregisterWaiter
+// matches on the channel) and happens on three paths: caller-side defer in
+// sendRequestUnlocked, the ctx.Done early-unregister below (#652), and the
+// read goroutine's defer.
+func (c *Client) readResponseWithWaiter(ctx context.Context, reqID *ID, waiter chan *Response) (*Response, error) {
+	type result struct {
+		resp *Response
+		err  error
+	}
+	// The waiter is registered SYNCHRONOUSLY by the caller before the write
+	// (fix #156, tightened by #994): another caller holding readMu may read
+	// our response as soon as our request hits the wire, so the waiter must
+	// already be in c.waiters by the time the write completes.
 	done := make(chan result, 1)
 	safego.Go("mcp.client.readResponse", func() {
 		if waiter != nil {
@@ -1069,6 +1097,12 @@ func (c *Client) sendWSUnlocked(ctx context.Context, req Request) (*Response, er
 	if c.closed.Load() {
 		c.mu.Unlock()
 		return nil, fmt.Errorf("mcp[%s]: connection closed", c.name)
+	}
+	// #994: wsConn may legitimately be nil here (sendWSNotification checks the
+	// same state under c.mu); dereferencing it panicked with no safego recovery.
+	if c.wsConn == nil {
+		c.mu.Unlock()
+		return nil, fmt.Errorf("mcp[%s]: websocket connection not established", c.name)
 	}
 	if deadline, ok := ctx.Deadline(); ok {
 		_ = c.wsConn.SetWriteDeadline(deadline)
@@ -1565,6 +1599,12 @@ func (c *Client) respondToServerRequestWS(req *Request) error {
 	// writes"); this server-request response path must not violate it.
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	// #994: align with sendWSNotification's nil guard — respondToServerRequestWS
+	// runs off the WS read loop where wsConn can already be nil (torn down), and
+	// a nil WriteMessage panics inside a goroutine safego cannot make safe.
+	if c.wsConn == nil {
+		return fmt.Errorf("mcp[%s]: websocket connection not established", c.name)
+	}
 	return c.wsConn.WriteMessage(websocket.TextMessage, data)
 }
 
