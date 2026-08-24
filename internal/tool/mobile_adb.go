@@ -287,8 +287,18 @@ func (a *androidBackend) logs(ctx context.Context, device, pkg string, lines int
 		// to the unfiltered fallback. Query the pid first, then filter by it.
 		pidArgs := adbDeviceArgs(device)
 		pidArgs = append(pidArgs, "shell", "pidof", pkg)
-		_, outPid, _ := runCommand(ctx, 5*time.Second, a.adbPath, pidArgs...)
+		// #1005: runCommand returns (stdout, stderr, error) - #847 wrote the
+		// receive order backwards, so pidof's PID output (stdout) was
+		// discarded and the almost-always-empty stderr became the pid,
+		// making every package-filtered logs call fail with a false
+		// "app is not running" error. Also take the first PID when pidof
+		// returns several space-separated pids for multi-process apps
+		// (logcat --pid= accepts exactly one).
+		outPid, _, _ := runCommand(ctx, 5*time.Second, a.adbPath, pidArgs...)
 		pid := strings.TrimSpace(outPid)
+		if fields := strings.Fields(pid); len(fields) > 0 {
+			pid = fields[0]
+		}
 		if pid != "" {
 			args = append(args, "shell", "logcat", "-d", "--pid="+pid, "-t", strconv.Itoa(lines))
 		} else {
