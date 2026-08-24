@@ -81,24 +81,30 @@ func UserFacingErrorLang(err error, lang string) string {
 	// distinguish them to give the user actionable guidance.
 	if hasHTTPStatus(err, http.StatusTooManyRequests) {
 		l429 := strings.ToLower(err.Error())
-		if strings.Contains(l429, "coding plan") ||
-			strings.Contains(l429, "usage limit") ||
-			strings.Contains(l429, "使用上限") ||
-			strings.Contains(l429, "套餐已到期") ||
-			strings.Contains(l429, "package has expired") ||
-			strings.Contains(l429, "insufficient balance") ||
-			strings.Contains(l429, "余额不足") ||
-			strings.Contains(l429, "欠费") ||
-			strings.Contains(l429, "quota exceeded") ||
-			strings.Contains(l429, "quotaexceeded") ||
-			strings.Contains(l429, "exceeded your current quota") ||
-			strings.Contains(l429, "额度已用完") ||
-			strings.Contains(l429, "额度耗尽") ||
-			strings.Contains(l429, "配额超限") ||
-			strings.Contains(l429, "配额耗尽") ||
-			strings.Contains(l429, "allocated quota") ||
-			strings.Contains(l429, "公平使用") ||
-			strings.Contains(l429, "fair usage") {
+		// #1000: Anthropic's recoverable 5-hour/weekly window limit also
+		// contains a bare "usage limit" — reuse the #528 exclusion so it
+		// falls through to the transient /retry hint instead of telling
+		// the user their quota is permanently gone. MiniMax-style truly
+		// permanent messages carry no window markers and stay matched.
+		if !isAnthropicWindowLimit(l429) &&
+			(strings.Contains(l429, "coding plan") ||
+				strings.Contains(l429, "usage limit") ||
+				strings.Contains(l429, "使用上限") ||
+				strings.Contains(l429, "套餐已到期") ||
+				strings.Contains(l429, "package has expired") ||
+				strings.Contains(l429, "insufficient balance") ||
+				strings.Contains(l429, "余额不足") ||
+				strings.Contains(l429, "欠费") ||
+				strings.Contains(l429, "quota exceeded") ||
+				strings.Contains(l429, "quotaexceeded") ||
+				strings.Contains(l429, "exceeded your current quota") ||
+				strings.Contains(l429, "额度已用完") ||
+				strings.Contains(l429, "额度耗尽") ||
+				strings.Contains(l429, "配额超限") ||
+				strings.Contains(l429, "配额耗尽") ||
+				strings.Contains(l429, "allocated quota") ||
+				strings.Contains(l429, "公平使用") ||
+				strings.Contains(l429, "fair usage")) {
 			if zh {
 				return "API 额度已用完或套餐已过期。请前往服务商页面查看额度状态、续订或充值后重试"
 			}
@@ -231,25 +237,27 @@ func UserFacingErrorLang(err error, lang string) string {
 	// Covers Kimi (access_terminated), ZAI/GLM (coding plan 1308-1321),
 	// Aliyun (allocated quota), Volcengine Ark (QuotaExceeded),
 	// MiniMax (usage limit), Xiaomi MiMo (额度耗尽), OpenAI (quota).
-	if strings.Contains(lower, "access_terminated") ||
-		strings.Contains(lower, "usage limit") ||
-		strings.Contains(lower, "billing cycle") ||
-		strings.Contains(lower, "quota exceeded") ||
-		strings.Contains(lower, "quotaexceeded") ||
-		strings.Contains(lower, "使用上限") ||
-		strings.Contains(lower, "套餐已到期") ||
-		strings.Contains(lower, "package has expired") ||
-		strings.Contains(lower, "insufficient balance") ||
-		strings.Contains(lower, "余额不足") ||
-		strings.Contains(lower, "欠费") ||
-		strings.Contains(lower, "额度已用完") ||
-		strings.Contains(lower, "额度耗尽") ||
-		strings.Contains(lower, "配额超限") ||
-		strings.Contains(lower, "配额耗尽") ||
-		strings.Contains(lower, "allocated quota") ||
-		strings.Contains(lower, "公平使用") ||
-		strings.Contains(lower, "fair usage") ||
-		strings.Contains(lower, "coding plan") {
+	// #1000: same Anthropic window-limit exclusion as the 429 branch above.
+	if !isAnthropicWindowLimit(lower) &&
+		(strings.Contains(lower, "access_terminated") ||
+			strings.Contains(lower, "usage limit") ||
+			strings.Contains(lower, "billing cycle") ||
+			strings.Contains(lower, "quota exceeded") ||
+			strings.Contains(lower, "quotaexceeded") ||
+			strings.Contains(lower, "使用上限") ||
+			strings.Contains(lower, "套餐已到期") ||
+			strings.Contains(lower, "package has expired") ||
+			strings.Contains(lower, "insufficient balance") ||
+			strings.Contains(lower, "余额不足") ||
+			strings.Contains(lower, "欠费") ||
+			strings.Contains(lower, "额度已用完") ||
+			strings.Contains(lower, "额度耗尽") ||
+			strings.Contains(lower, "配额超限") ||
+			strings.Contains(lower, "配额耗尽") ||
+			strings.Contains(lower, "allocated quota") ||
+			strings.Contains(lower, "公平使用") ||
+			strings.Contains(lower, "fair usage") ||
+			strings.Contains(lower, "coding plan")) {
 		if zh {
 			return "API 额度已用完或套餐已过期。请前往服务商页面查看额度状态、续订或充值后重试"
 		}
