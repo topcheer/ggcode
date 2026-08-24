@@ -48,8 +48,11 @@ func containsShortRoot(kw string) bool { return len(kw) <= 4 }
 // twins ("set_value") - #997. Lowercases as it goes. Read names split
 // harmlessly ("getDataset" -> "get_dataset", "PostgresQuery" ->
 // "postgres_query" - no short-root segment), so this does not reintroduce
-// the #996 false-positive class. Runs of capitals ("HTTPExec") fragment
-// per letter but long keywords still match by substring, staying blocked.
+// the #996 false-positive class. ALL-CAPS names fragment per letter
+// ("DELETE_FILE" -> "d_e_l_e_t_e_..."), which is why isWriteToolName
+// additionally substring-checks long keywords against the plain-lowercased
+// name (#998) - the fragmenting alone would let "DELETE_FILE" through
+// while "delete_file" stays blocked.
 func camelToSnake(s string) string {
 	var b strings.Builder
 	for i, r := range s {
@@ -71,9 +74,13 @@ func camelToSnake(s string) string {
 //
 // The name is camel-normalized then split on underscores; short-root
 // keywords (<= 4 chars) match only a complete segment ("set_value" and
-// "setValue" match, "get_dataset" does not), longer keywords match
-// inside segments ("upsert_value", "execute_query").
+// "setValue" match, "get_dataset" does not). Long keywords match inside
+// segments AND against the plain-lowercased original name - the latter
+// catches ALL-CAPS REST-style tools ("DELETE_FILE", "EXEC", "PUT"...
+// well, PUT is short - but "DELETE_FILE"/"EXECUTE_QUERY") that fragment
+// into single-letter segments under camelToSnake (#998).
 func isWriteToolName(name string) bool {
+	plain := strings.ToLower(name)
 	segments := strings.Split(camelToSnake(name), "_")
 	for _, kw := range writeKeywords {
 		if containsShortRoot(kw) {
@@ -82,7 +89,7 @@ func isWriteToolName(name string) bool {
 					return true
 				}
 			}
-		} else if strings.Contains(strings.Join(segments, "_"), kw) {
+		} else if strings.Contains(strings.Join(segments, "_"), kw) || strings.Contains(plain, kw) {
 			return true
 		}
 	}
