@@ -645,6 +645,25 @@ func lenientRecountRaw(content, rawOld, transform string) (int, []int) {
 	if probe == "" {
 		return 0, nil
 	}
+	// #1004: byte-exact transforms must recount under their own matching
+	// semantics, not full TrimSpace. crlf-converted is a pure LF->CRLF byte
+	// substitution and line-numbers-stripped only strips the "digits\t"
+	// prefix — in both, leading indentation is significant (same reasoning
+	// as #821's rstrip-only fix), so a TrimSpace recount folds away indent
+	// differences and rejects a genuinely unique edit as ambiguous with a
+	// misleading "blocks differ only in whitespace" error.
+	// crlf-converted: content keeps the file's original CRLF bytes, so the
+	// LF-only probe must be converted before counting (count 0 would
+	// fail-open and silently edit the first of several collisions).
+	if strings.Contains(transform, "crlf-converted") {
+		return strings.Count(content, strings.ReplaceAll(probe, "\n", "\r\n")), nil
+	}
+	// line-numbers-stripped: count against a prefix-stripped copy of the
+	// file, line-aligned, mirroring the transform's own matching form.
+	if strings.Contains(transform, "line-numbers-stripped") {
+		strippedFile := stripAllLineNumberPrefixes(content)
+		return strings.Count(strippedFile, probe), nil
+	}
 	trimmedOld := make([]string, 0, strings.Count(probe, "\n")+1)
 	// #821: the counting pass previously trimmed BOTH sides on every line,
 	// but trailing-whitespace-tolerant semantics only ignore TRAILING ws —
