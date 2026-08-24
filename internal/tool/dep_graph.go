@@ -307,7 +307,13 @@ func processGoFile(fset *token.FileSet, path, modRoot, modulePath string, graph 
 
 	for _, imp := range f.Imports {
 		impPath := strings.Trim(imp.Path.Value, `"`)
-		if !strings.HasPrefix(impPath, modulePath) || impPath == pkgPath {
+		// #1002: require a "/" (or exact) module boundary — a bare prefix
+		// match pulls in prefix-colliding external packages (module
+		// k8s.io/api must not claim k8s.io/apimachinery imports).
+		if impPath != modulePath && !strings.HasPrefix(impPath, modulePath+"/") {
+			continue
+		}
+		if impPath == pkgPath {
 			continue
 		}
 		node.Imports = append(node.Imports, impPath)

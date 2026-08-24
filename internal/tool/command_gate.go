@@ -766,10 +766,23 @@ func isBareREPL(bin string, args []string) bool {
 		"-e": true, "--eval": true,
 		"-m": true,
 	}
+	// #1001: exit-type flags — the command prints and exits immediately
+	// (version/help probes are among the most common agent invocations and
+	// previously earned a false "will wait for stdin indefinitely" warning).
+	// These are NOT run-once code flags: REPL-type flags like python -u/-I
+	// still drop into the REPL and must keep the warning.
+	exitFlags := map[string]bool{
+		"-V": true, "-v": true, "--version": true,
+		"-h": true, "--help": true,
+		"--check": true, "-?": true,
+	}
 	// If any argument is a non-interactive flag or a file path (not starting
 	// with -), the REPL will run one-shot, not hang.
 	for _, a := range args {
 		if nonInteractiveFlags[a] {
+			return false
+		}
+		if exitFlags[a] {
 			return false
 		}
 		// A positional argument that looks like a file (has a dot, or is a
