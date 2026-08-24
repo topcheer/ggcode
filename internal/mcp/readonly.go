@@ -73,18 +73,28 @@ func camelToSnake(s string) string {
 // Returns true if the tool should be blocked in read-only mode.
 //
 // The name is camel-normalized then split on underscores; short-root
-// keywords (<= 4 chars) match only a complete segment ("set_value" and
-// "setValue" match, "get_dataset" does not). Long keywords match inside
-// segments AND against the plain-lowercased original name - the latter
-// catches ALL-CAPS REST-style tools ("DELETE_FILE", "EXEC", "PUT"...
-// well, PUT is short - but "DELETE_FILE"/"EXECUTE_QUERY") that fragment
-// into single-letter segments under camelToSnake (#998).
+// keywords (<= 4 chars) match only a complete segment in EITHER the
+// camel-normalized segments or the plain-lowercased segments: camel
+// catches "setValue", plain catches underscored ALL-CAPS twins like
+// "SET_VALUE" (-> "set_value" -> [set value]) that camelToSnake would
+// fragment per letter, while "GET_DATASET" ([get dataset]) stays allowed
+// - the #996 root-collision class is immune because the match is still
+// whole-segment, never substring. Long keywords match inside segments
+// AND against the plain-lowercased name, catching ALL-CAPS REST-style
+// tools ("DELETE_FILE", "EXECUTE_QUERY") that fragment under
+// camelToSnake (#998).
 func isWriteToolName(name string) bool {
 	plain := strings.ToLower(name)
 	segments := strings.Split(camelToSnake(name), "_")
+	plainSegments := strings.Split(plain, "_")
 	for _, kw := range writeKeywords {
 		if containsShortRoot(kw) {
 			for _, seg := range segments {
+				if seg == kw {
+					return true
+				}
+			}
+			for _, seg := range plainSegments {
 				if seg == kw {
 					return true
 				}
