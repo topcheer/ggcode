@@ -186,8 +186,19 @@ func (t *BaseToolItem) RenderBody(width int) string {
 	}
 
 	if t.isError {
-		// Word-wrap the error so measureHeight counts the correct number of lines
-		lines := wrapLines(t.result, width)
+		// Normalize like FormatBody (#995): the error path previously fed
+		// raw output straight into wrapLines, bypassing both the CR
+		// normalization (10a9b217) and TAB expansion (bf7fb660) defenses.
+		// Width libraries count '\t' as 0-1 cols while terminals advance
+		// to 8-col tab stops, so tab-indented compiler errors (go build,
+		// gofmt diffs, ls -l) measured narrow, never wrapped, and rendered
+		// past the width invariant - scroll offsets desynced. Stray CRs
+		// (Windows CRLF command output) broke the physical-line split the
+		// same way as the normal-body path fixed earlier.
+		body := strings.ReplaceAll(t.result, "\r\n", "\n")
+		body = strings.ReplaceAll(body, "\r", "\n")
+		body = expandTabs(body)
+		lines := wrapLines(body, width)
 		return t.styles.ErrorStyle.Render(strings.Join(lines, "\n"))
 	}
 
