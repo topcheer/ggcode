@@ -420,7 +420,13 @@ func parseGitBlame(output []byte) map[int]blameLineInfo {
 
 	for _, line := range lines {
 		// Header lines: "hash origLine finalLine"
-		if len(line) > 0 && line[0] >= '0' && line[0] <= '9' || line[0] >= 'a' && line[0] <= 'f' {
+		// #1006: git blame --line-porcelain output ends with \n, so Split
+		// always yields a trailing empty line. && binds tighter than ||, so
+		// the old form evaluated the 'a'-'f' clause on line[0] without the
+		// length guard - a guaranteed index-out-of-range panic that crashed
+		// the whole process (no recover on this path). Guard first, then
+		// group the two character ranges explicitly.
+		if len(line) > 0 && ((line[0] >= '0' && line[0] <= '9') || (line[0] >= 'a' && line[0] <= 'f')) {
 			parts := strings.Fields(line)
 			if len(parts) >= 3 {
 				fmt.Sscanf(parts[2], "%d", &currentLine)

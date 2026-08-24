@@ -208,8 +208,13 @@ testpaths = ["tests"]
 	})
 
 	files = append(files, scaffoldFile{
-		Path:    pkgName + "/__init__.py",
-		Content: fmt.Sprintf(`"""%s package."""\n`, name),
+		Path: pkgName + "/__init__.py",
+		// #1007: a backquoted Go string is a RAW string - the old form's \n
+		// was a literal backslash+n, so every generated __init__.py ended
+		// with two junk bytes after the docstring and `import` failed with
+		// SyntaxError 100% of the time. Interpreted string makes \n a real
+		// newline.
+		Content: fmt.Sprintf("\"\"\"%s package.\"\"\"\n", name),
 	})
 
 	files = append(files, scaffoldFile{
