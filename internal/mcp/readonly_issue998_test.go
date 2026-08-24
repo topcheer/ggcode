@@ -8,10 +8,11 @@ import "testing"
 // plain-lowercased name. Same name differing only in case must not bypass
 // the gate (DELETE_FILE vs delete_file).
 //
-// Known limitation, accepted per #998 scope: ALL-CAPS SHORT-root names
-// WITHOUT underscores (SETVALUE, EXEC, PUT) stay uncatchable - plain
+// Known limitation, accepted per #998 scope: concatenated ALL-CAPS
+// SHORT-root names (SETVALUE, SETVALUE_TOOL) stay uncatchable - plain
 // substring checks on short roots would re-flag get_dataset/asset_search
-// (#996 regression). Underscored ALL-CAPS twins (SET_VALUE, RUN_JOB) ARE
+// (#996 regression). Bare and underscored forms (EXEC, SET_VALUE) ARE
+// caught via plain segments. Full closure needs readOnlyHint. Underscored ALL-CAPS twins (SET_VALUE, RUN_JOB) ARE
 // caught since the short-root segment match also runs on the
 // plain-lowercased segments. readOnlyHint annotations remain the
 // follow-up for full coverage.
