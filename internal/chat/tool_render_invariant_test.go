@@ -56,6 +56,31 @@ func TestFormatBodyCRNormalization(t *testing.T) {
 	}
 }
 
+func TestFormatBodyTabExpansion(t *testing.T) {
+	// "a\tb\tc" measures 3 cols but terminals render 17 (8-col stops) - a
+	// 14-col drift that broke borders and Height/physical-line sync. After
+	// expansion no '\t' may survive and alignment must be column-tracked.
+	out := FormatBodyPlain("a\tb\tc", 60, 0)
+	if strings.ContainsRune(out, '\t') {
+		t.Fatalf("tab survived expansion: %q", out)
+	}
+	// git status style: leading + mid-line tabs
+	out = FormatBodyPlain("M\tinternal/chat/styles.go\n??\tzz.go", 60, 0)
+	if strings.ContainsRune(out, '\t') {
+		t.Fatalf("tabs survived expansion: %q", out)
+	}
+	// Column tracking: a tab after 1 char pads to col 4 (3 spaces), after
+	// 4 chars pads to col 8 (4 spaces).
+	if got := expandTabs("a\tb"); got != "a   b" {
+		t.Fatalf("expandTabs col tracking wrong: %q", got)
+	}
+	if got := expandTabs("abcd\te"); got != "abcd    e" {
+		t.Fatalf("expandTabs stop boundary wrong: %q", got)
+	}
+	// Wide chars: column tracking uses visual columns... runes here are all
+	// narrow; CJK alignment is best-effort by rune count (documented).
+}
+
 func TestFormatBodyWideLinesInvariant(t *testing.T) {
 	cases := []struct {
 		name  string

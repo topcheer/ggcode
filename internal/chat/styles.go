@@ -317,6 +317,40 @@ func truncateTailByWidth(s string, maxW int) string {
 	return ""
 }
 
+// tabStop is the column multiple that TAB characters expand to. Terminals
+// advance to the next 8-col stop by default, but the absolute stop size
+// does not matter for correctness - only that measurement and terminal
+// agree, which expansion to ANY fixed stop guarantees. 4 keeps tab-aligned
+// columns (git status, ls -l) reasonably narrow after wrapping.
+const tabStop = 4
+
+// expandTabs replaces every '\t' with spaces up to the next tabStop
+// column, tracked per line (a tab's width depends on the current column).
+func expandTabs(s string) string {
+	if !strings.ContainsRune(s, '\t') {
+		return s
+	}
+	var sb strings.Builder
+	col := 0
+	for _, r := range s {
+		switch r {
+		case '\t':
+			n := tabStop - col%tabStop
+			for i := 0; i < n; i++ {
+				sb.WriteByte(' ')
+			}
+			col += n
+		case '\n':
+			sb.WriteRune(r)
+			col = 0
+		default:
+			sb.WriteRune(r)
+			col++
+		}
+	}
+	return sb.String()
+}
+
 // ToolBodyMaxLines is the maximum number of body lines shown before truncation.
 const ToolBodyMaxLines = 10
 
@@ -340,6 +374,15 @@ func FormatBody(content string, width int, maxLines int) (string, bool) {
 	// normal wrap/cap machinery.
 	content = strings.ReplaceAll(content, "\r\n", "\n")
 	content = strings.ReplaceAll(content, "\r", "\n")
+
+	// Expand TABs to spaces: width libraries count '\t' as ONE column but
+	// terminals advance the cursor to the next 8-column tab stop, so
+	// "a\tb\tc" measures 3 cols and renders 17 - a per-line drift of up to
+	// 7x(tab count) columns that breaks the width invariant (borders, and
+	// Height() vs physical-line desync) on common bash output (git status,
+	// ls, compiler alignment all emit tabs). Expanding to a fixed 4-col
+	// stop makes measurement and terminal agree exactly.
+	content = expandTabs(content)
 
 	// Split into lines, then wrap each line that exceeds visual width.
 	var wrapped []string
