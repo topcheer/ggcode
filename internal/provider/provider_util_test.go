@@ -116,15 +116,21 @@ func TestUserFacingError_ZAICodingPlan(t *testing.T) {
 		}
 	})
 
-	// ZAI English variant
+	// ZAI English variant. #1000: this wording ("usage limit ... limit will
+	// reset") is indistinguishable from Anthropic's recoverable 5-hour
+	// window and the behavior layer (#528) already classifies it as a
+	// transient rate limit; the display layer now follows the same ruling
+	// instead of contradicting it. Users still get the /retry hint; the
+	// ZAI-specific 1308-1321 code forms (Chinese subtests above) keep the
+	// quota guidance.
 	t.Run("english_coding_plan", func(t *testing.T) {
 		err := &openai.APIError{
 			HTTPStatusCode: 429,
 			Message:        "Usage limit reached for 5 hour. Your limit will reset at 2025-01-01 05:00:00",
 		}
 		result := UserFacingErrorLang(err, "en")
-		if !strings.Contains(strings.ToLower(result), "quota") {
-			t.Errorf("expected 'quota' for ZAI English, got %q", result)
+		if !strings.Contains(strings.ToLower(result), "rate limited") {
+			t.Errorf("expected transient /retry hint for ZAI English (aligned with #528 behavior layer), got %q", result)
 		}
 	})
 
