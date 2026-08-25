@@ -457,20 +457,27 @@ func (a *signalAdapter) processEnvelope(ctx context.Context, raw map[string]any)
 		text = renderSignalMentions(text, mentions)
 	}
 
-	// Mention gating for groups
+	// Mention gating for groups. Structured mentions (official Signal
+	// clients) render as "@Name" with the E.164 number only in the mentions
+	// array, so the text scan alone would silently drop an explicit bot
+	// mention — check the structured mentions first (#1018).
 	if isGroup && a.requireMention {
-		hasMention := strings.Contains(text, a.account)
+		hasMention := signalMentionsAccount(dataMessage["mentions"], a.account)
 		if !hasMention {
-			// Check if bot phone number mentioned without +
-			if strings.Contains(text, a.account[1:]) {
-				hasMention = true
-			}
+			hasMention = strings.Contains(text, a.account) ||
+				(len(a.account) > 1 && strings.Contains(text, a.account[1:]))
 		}
 		if !hasMention {
 			debug.Log("signal", "adapter=%s ignoring group message (no mention)", a.name)
 			return
 		}
 		text = stripSignalMention(text, a.account)
+		// The rendered "@Name" placeholder of a structured mention is not
+		// covered by stripSignalMention (number-based); drop the leading
+		// "@" if mention presence came from the mentions array.
+		if signalMentionsAccount(dataMessage["mentions"], a.account) {
+			text = strings.TrimSpace(strings.TrimPrefix(text, "@"))
+		}
 	}
 
 	if strings.TrimSpace(text) == "" {
@@ -667,9 +674,16 @@ func (a *signalAdapter) resolveImageBytes(ctx context.Context, img ExtractedImag
 		if err != nil {
 			return nil, "", "", fmt.Errorf("decode data URL: %w", err)
 		}
+		// RFC 2397 data URLs are not required to carry a ";" parameter
+		// (e.g. "data:image/png,..." with URL-encoded data). Guard the slice
+		// so a missing ";" falls back instead of panicking (#1018).
 		mime := "image/png"
-		if strings.Contains(parts[0], "image/") {
-			mime = strings.TrimPrefix(parts[0][:strings.Index(parts[0], ";")], "data:")
+		header := parts[0]
+		if idx := strings.Index(header, ";"); idx > 0 {
+			header = header[:idx]
+		}
+		if m := strings.TrimPrefix(header, "data:"); strings.HasPrefix(m, "image/") {
+			mime = m
 		}
 		return data, mime, "image" + signalMIMEExt(mime), nil
 
@@ -690,6 +704,25 @@ func (a *signalAdapter) resolveImageBytes(ctx context.Context, img ExtractedImag
 	default:
 		return nil, "", "", fmt.Errorf("unknown image kind: %s", img.Kind)
 	}
+}
+
+// signalMentionsAccount reports whether the envelope's structured mentions
+// array contains the given E.164 account number (#1018).
+func signalMentionsAccount(raw any, account string) bool {
+	mentions, ok := raw.([]any)
+	if !ok || account == "" {
+		return false
+	}
+	for _, m := range mentions {
+		mention, ok := m.(map[string]any)
+		if !ok {
+			continue
+		}
+		if number, _ := mention["number"].(string); number == account {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *signalAdapter) sendText(ctx context.Context, chatID, text string) error {

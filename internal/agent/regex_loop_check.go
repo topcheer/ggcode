@@ -47,6 +47,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"path/filepath"
 	"strings"
 )
@@ -62,7 +63,15 @@ var regexCompileFuncs = map[string]bool{
 // regexLoopIssue records a single regex-compile-in-loop occurrence.
 type regexLoopIssue struct {
 	funcName string // e.g., "regexp.MustCompile"
+	pattern  string // source text of the pattern argument (fingerprint)
 	pos      token.Pos
+}
+
+// fingerprint identifies a compile-in-loop instance by function + pattern
+// expression, independent of position (positions shift across edits, so the
+// delta comparison must be instance-based, not count-based #1017).
+func (i regexLoopIssue) fingerprint() string {
+	return i.funcName + "|" + i.pattern
 }
 
 // checkRegexLoop detects regexp.Compile/MustCompile/CompilePOSIX/MustCompilePOSIX
@@ -81,11 +90,27 @@ func checkRegexLoop(filePath, oldContent, newContent string) []string {
 		return nil
 	}
 
-	// Delta: subtract patterns already present in old content.
+	// Delta: subtract patterns already present in old content by fingerprint
+	// set difference, NOT count comparison. Count comparison both under-
+	// reports (replacing OLD1/OLD2 with NEW1/NEW2 keeps counts equal, so newly
+	// introduced patterns pass silently) and over-reports (an added instance
+	// makes untouched old instances count as "new") (#1017).
 	if strings.TrimSpace(oldContent) != "" {
-		oldIssues := findRegexInLoops(filePath, oldContent)
-		if len(oldIssues) > 0 && len(oldIssues) >= len(newIssues) {
-			return nil
+		oldFPs := make(map[string]bool)
+		for _, oi := range findRegexInLoops(filePath, oldContent) {
+			oldFPs[oi.fingerprint()] = true
+		}
+		if len(oldFPs) > 0 {
+			fresh := newIssues[:0]
+			for _, ni := range newIssues {
+				if !oldFPs[ni.fingerprint()] {
+					fresh = append(fresh, ni)
+				}
+			}
+			newIssues = fresh
+			if len(newIssues) == 0 {
+				return nil
+			}
 		}
 	}
 
@@ -133,6 +158,11 @@ func findRegexInLoops(filename, src string) []regexLoopIssue {
 
 	var results []regexLoopIssue
 
+	// The outer Inspect visits nested loop statements after already scanning
+	// them as part of the enclosing loop body, so the same call is reached
+	// twice with the same position — dedup by pos (#1017).
+	seenPos := make(map[token.Pos]bool)
+
 	ast.Inspect(file, func(n ast.Node) bool {
 		var body *ast.BlockStmt
 		switch node := n.(type) {
@@ -157,8 +187,17 @@ func findRegexInLoops(filename, src string) []regexLoopIssue {
 			}
 			name := callFuncName(call)
 			if regexCompileFuncs[name] {
+				if seenPos[call.Pos()] {
+					return true
+				}
+				seenPos[call.Pos()] = true
+				pattern := ""
+				if len(call.Args) > 0 {
+					pattern = types.ExprString(call.Args[0])
+				}
 				results = append(results, regexLoopIssue{
 					funcName: name,
+					pattern:  pattern,
 					pos:      call.Pos(),
 				})
 			}
