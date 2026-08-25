@@ -75,7 +75,7 @@ func TestWrapLines(t *testing.T) {
 func TestWrapLinesMultibyte(t *testing.T) {
 	t.Run("pure CJK no panic", func(t *testing.T) {
 		// Pure Chinese text, each rune is ~2 cells wide.
-		// Small width forces multiple wraps — must not panic.
+		// Small width forces multiple wraps - must not panic.
 		text := "你好世界这是一段用于测试多字节文字换行的中文文本内容"
 		lines := wrapLines(text, 10)
 		if len(lines) < 2 {
@@ -137,7 +137,7 @@ func TestUserItemRender(t *testing.T) {
 	if !strings.Contains(rendered, "hello world") {
 		t.Fatalf("expected content in render, got: %s", rendered)
 	}
-	// Prefix is now styled with ANSI — check for the icon character
+	// Prefix is now styled with ANSI - check for the icon character
 	if !strings.Contains(rendered, "❯") {
 		t.Fatalf("expected ❯ icon in render, got: %s", rendered)
 	}
@@ -260,7 +260,7 @@ func TestToolElapsedTimer(t *testing.T) {
 	if !strings.Contains(firstLine, "Bash") {
 		t.Fatalf("expected tool name in render: %s", firstLine)
 	}
-	// Elapsed should be empty (< 1s since just created) — no timer shown yet
+	// Elapsed should be empty (< 1s since just created) - no timer shown yet
 	// but after manually setting startedAt to the past, timer should appear
 	item.startedAt = time.Now().Add(-5 * time.Second)
 	rendered = stripTestAnsi(item.Render(80))
@@ -711,7 +711,7 @@ func stripTestAnsi(s string) string {
 func TestToolHeaderShowsParams(t *testing.T) {
 	styles := DefaultStyles()
 
-	// BashToolItem — should show command in header
+	// BashToolItem - should show command in header
 	bash := NewBashToolItem("t1", "Bash", "go build ./...", StatusSuccess, styles)
 	bash.SetResult("ok", false)
 	rendered := bash.Render(80)
@@ -724,7 +724,7 @@ func TestToolHeaderShowsParams(t *testing.T) {
 		t.Fatalf("BashToolItem first line should contain 'Bash', got: %q", clean)
 	}
 
-	// FileToolItem — should show path in header
+	// FileToolItem - should show path in header
 	file := NewFileToolItem("t2", "Read", "internal/config/config.go", StatusSuccess, styles, "en", "", "read_file")
 	rendered2 := file.Render(80)
 	firstLine2 := strings.SplitN(rendered2, "\n", 2)[0]
@@ -733,7 +733,7 @@ func TestToolHeaderShowsParams(t *testing.T) {
 		t.Fatalf("FileToolItem first line should contain file path, got: %q", clean2)
 	}
 
-	// Generic tool — should show query/pattern or fallback to truncated input
+	// Generic tool - should show query/pattern or fallback to truncated input
 	generic := NewGenericToolItem("t3", "SomeTool", StatusRunning, `target: fix the bug, scope: full`, styles)
 	rendered3 := generic.Render(80)
 	firstLine3 := strings.SplitN(rendered3, "\n", 2)[0]
@@ -754,7 +754,7 @@ func TestToolHeaderShowsParams(t *testing.T) {
 // (after adding prefix padding) does not exceed the available width.
 // If a line's visual width exceeds the viewport width, the terminal will
 // auto-wrap it, creating extra visual lines that measureHeight() doesn't
-// count — causing scroll-position miscalculation and content overflow.
+// count - causing scroll-position miscalculation and content overflow.
 func TestVisualWidthDoesNotExceedViewport(t *testing.T) {
 	styles := DefaultStyles()
 
@@ -823,6 +823,13 @@ func testVisualWidthForItemType(t *testing.T, styles Styles, text string, width 
 }
 
 func TestMeasureHeightWidth(t *testing.T) {
+	// Contract (see measureHeightWidth doc): height is the EXACT physical
+	// \n-delimited line count - identical to what List.Render slices via
+	// splitVisualLines. Width-wrapping is NOT predicted here; producers
+	// (FormatBody, ToolHeader, markdown, wrapLines) pre-wrap and are held
+	// to the width invariant by tool_render_invariant_test.go. Predicting
+	// wrapped rows here caused Height()/Render() divergence: viewport ghost
+	// height -> blank rows below content and panel borders pushed off-screen.
 	cases := []struct {
 		s     string
 		width int
@@ -831,8 +838,8 @@ func TestMeasureHeightWidth(t *testing.T) {
 		{"hello", 80, 1},
 		{"hello\nworld", 80, 2},
 		{"", 80, 1},
-		{"abcdefghijklmnopqrstuvwxyz", 10, 3},
-		{"aaaa\nabcdefghijklmnopqrstuvwxyz", 10, 4},
+		{"abcdefghijklmnopqrstuvwxyz", 10, 1},
+		{"aaaa\nabcdefghijklmnopqrstuvwxyz", 10, 2},
 		{"hello\n", 80, 1},
 		{"abcdefghijklmnopqrstuvwxyz", 0, 1},
 		{"\n\n", 80, 2},
@@ -841,6 +848,31 @@ func TestMeasureHeightWidth(t *testing.T) {
 		got := measureHeightWidth(c.s, c.width)
 		if got != c.want {
 			t.Errorf("measureHeightWidth(%q, %d) = %d, want %d", c.s, c.width, got, c.want)
+		}
+	}
+}
+
+// Height() must equal the number of lines List.Render actually emits for
+// the same rendered string, at every width. This is the invariant that
+// prevents ghost-height blank regions in the viewport.
+func TestMeasureHeightWidthEqualsSplitVisualLines(t *testing.T) {
+	cases := []string{
+		"hello",
+		"hello\nworld",
+		"hello\nworld\n",
+		"a\nb\nc\n",
+		"",
+		"\n",
+		"\n\n\n",
+		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"aaaa\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		strings.Repeat("x", 500),
+	}
+	for _, s := range cases {
+		for _, w := range []int{0, 1, 10, 80, 200} {
+			if measureHeightWidth(s, w) != len(splitVisualLines(s)) {
+				t.Errorf("measureHeightWidth(%q, %d) != len(splitVisualLines(...))", s, w)
+			}
 		}
 	}
 }
