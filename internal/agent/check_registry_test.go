@@ -214,6 +214,27 @@ func TestAllChecksRegistered(t *testing.T) {
 		t.Errorf("expected at least 20 registered checks, got %d", len(allChecks))
 	}
 
+	// #1020: a length floor cannot detect a specific check silently going
+	// missing (fc5c4aad stripped regex-loop/nplus1-loop undetected for 15
+	// days). Pin the names whose absence would resurrect that failure mode.
+	mustRegistered := []string{
+		"regex-loop", "nplus1-loop", // #1020 revival
+		"binary-corruption", "merge-conflict-markers", // #601 delta gates
+		"nil-map-write", "append-ignored", // #499 revival class
+	}
+	for _, name := range mustRegistered {
+		found := false
+		for _, c := range allChecks {
+			if c.Name == name {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("check %q is not registered (silent-strip regression)", name)
+		}
+	}
+
 	// Verify no duplicate names
 	seen := make(map[string]bool)
 	for _, c := range allChecks {
