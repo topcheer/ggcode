@@ -36,7 +36,7 @@ func PushTunnelSwarmEvent(
 		broker.PushSubagentStatus(ev.TeammateID, tunnel.StatusRunning, ev.CurrentTool)
 
 	case "teammate_tool_result":
-		broker.PushSubagentToolResult(ev.TeammateID, ev.ToolID, ev.CurrentTool, "", "", ev.ToolArgs, ev.IsError)
+		broker.PushSubagentToolResult(ev.TeammateID, ev.ToolID, ev.CurrentTool, "", "", ev.Result, ev.IsError)
 
 	case "teammate_text":
 		msgID := fmt.Sprintf("tm-%s", ev.TeammateID)

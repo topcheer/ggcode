@@ -444,6 +444,11 @@ func executeTask(
 				IsError:  event.IsError,
 			})
 			if onEvent != nil {
+				// #1012: the result text belongs in Result - it was written to
+				// ToolArgs (which the Event doc says is for teammate_tool_call
+				// arguments), leaving desktop consumers reading an empty Result.
+				// The two tunnel consumers read ToolArgs "wrongly" in the same
+				// way, cancelling out; they are fixed together here.
 				onEvent(Event{
 					Type:         "teammate_tool_result",
 					TeamID:       team.ID,
@@ -451,7 +456,7 @@ func executeTask(
 					TeammateName: tm.Name,
 					CurrentTool:  lastToolName,
 					ToolID:       event.Tool.ID,
-					ToolArgs:     event.Result,
+					Result:       event.Result,
 					IsError:      event.IsError,
 					Timestamp:    time.Now(),
 				})

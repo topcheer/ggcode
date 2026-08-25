@@ -146,7 +146,7 @@ func (m Model) handleAgentDoneMsg(msg agentDoneMsg) (Model, tea.Cmd) {
 	notify.OnCompletion(notifCfg, runDur, wasFailed, summary)
 	if !wasCanceled && !wasFailed {
 		m.persistFullSessionMessages()
-		m.maybeRefineSessionTitle()
+		m.maybeRefineSessionTitle(doneToolCount)
 	}
 	// Fire an armed agent-requested restart now that the turn's tool results
 	// and trailing text are persisted (#347). Fires for canceled/failed runs
@@ -286,7 +286,7 @@ func (m Model) handleAgentErrMsg(msg agentErrMsg) (Model, tea.Cmd) {
 // If the initial title was generic (e.g., "hi", "help"), it tries to derive a
 // better title from the first user message or the agent's activity summary.
 // User-set titles (via /title) are never overridden.
-func (m Model) maybeRefineSessionTitle() {
+func (m Model) maybeRefineSessionTitle(toolCount int) {
 	if m.session == nil || m.sessionStore == nil {
 		return
 	}
@@ -322,7 +322,7 @@ func (m Model) maybeRefineSessionTitle() {
 	}
 
 	// Build a brief summary of what the agent did.
-	agentSummary := m.buildAgentTitleSummary()
+	agentSummary := m.buildAgentTitleSummary(toolCount)
 
 	newTitle := agentruntime.RefineTitleAfterRun(m.session.Title, firstUserMsg, agentSummary)
 	if newTitle == "" || newTitle == m.session.Title {
@@ -344,9 +344,13 @@ func (m Model) maybeRefineSessionTitle() {
 
 // buildAgentTitleSummary creates a brief description of the agent's activity
 // for use as a fallback title when the user message is too generic.
-func (m Model) buildAgentTitleSummary() string {
-	if m.statusToolCount > 0 {
-		return fmt.Sprintf("Agent task (%d tool calls)", m.statusToolCount)
+// #1013: takes the captured pre-reset tool count - reading m.statusToolCount
+// here was dead code (#917 pattern, missed spot): the only caller chain runs
+// after handleAgentDoneMsg already zeroed the field, so the '(N tool calls)'
+// fallback never fired.
+func (m Model) buildAgentTitleSummary(toolCount int) string {
+	if toolCount > 0 {
+		return fmt.Sprintf("Agent task (%d tool calls)", toolCount)
 	}
 	return ""
 }

@@ -848,7 +848,7 @@ func (m *Model) pushSwarmTunnelEvent(ev swarm.Event) {
 
 	case "teammate_tool_result":
 		broker.PushReasoningDone(subagentTunnelReasoningMsgID(ev.TeammateID))
-		broker.PushSubagentToolResult(ev.TeammateID, ev.ToolID, ev.CurrentTool, "", "", ev.ToolArgs, ev.IsError)
+		broker.PushSubagentToolResult(ev.TeammateID, ev.ToolID, ev.CurrentTool, "", "", ev.Result, ev.IsError)
 
 	case "teammate_reasoning":
 		if chunk := tunnel.NormalizeReasoningChunk(ev.Result); chunk != "" {
