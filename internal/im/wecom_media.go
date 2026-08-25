@@ -157,6 +157,36 @@ func (a *wecomAdapter) sendWecomImageMsg(chatID, mediaID string) error {
 	return a.writeAndAwaitAck(payloadReqID(frame), frame)
 }
 
+// wecomDownloadImage fetches an http(s) image URL with bounds and
+// content-type checks; returns data and a filename from the URL.
+func wecomDownloadImage(ctx context.Context, rawURL string) ([]byte, string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, "", fmt.Errorf("create request: %w", err)
+	}
+	resp, err := imageDownloadClient.Do(req)
+	if err != nil {
+		return nil, "", fmt.Errorf("download image: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, "", fmt.Errorf("download image: HTTP %d", resp.StatusCode)
+	}
+	data, err := imagepkg.ReadLimited(resp.Body, wecomMaxImageBytes)
+	if err != nil {
+		return nil, "", fmt.Errorf("read image response: %w", err)
+	}
+	if !strings.HasPrefix(resp.Header.Get("Content-Type"), "image/") &&
+		!strings.HasPrefix(imagepkg.DetectMIME(data), "image/") {
+		return nil, "", fmt.Errorf("content is not an image")
+	}
+	name := "image.png"
+	if u := strings.LastIndexByte(rawURL, '/'); u >= 0 && u+1 < len(rawURL) {
+		name = rawURL[u+1:]
+	}
+	return data, name, nil
+}
+
 // wecomResolveImageBytes turns an ExtractedImage into raw bytes (WeCom needs
 // bytes for the chunked upload; URLs must be downloaded first).
 func (a *wecomAdapter) wecomResolveImageBytes(ctx context.Context, img ExtractedImage) ([]byte, string, error) {
@@ -180,31 +210,7 @@ func (a *wecomAdapter) wecomResolveImageBytes(ctx context.Context, img Extracted
 			}
 			return data, filepath.Base(img.Data), nil
 		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, img.Data, nil)
-		if err != nil {
-			return nil, "", fmt.Errorf("create request: %w", err)
-		}
-		resp, err := imageDownloadClient.Do(req)
-		if err != nil {
-			return nil, "", fmt.Errorf("download image: %w", err)
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			return nil, "", fmt.Errorf("download image: HTTP %d", resp.StatusCode)
-		}
-		data, err := imagepkg.ReadLimited(resp.Body, wecomMaxImageBytes)
-		if err != nil {
-			return nil, "", fmt.Errorf("read image response: %w", err)
-		}
-		if !strings.HasPrefix(resp.Header.Get("Content-Type"), "image/") &&
-			!strings.HasPrefix(imagepkg.DetectMIME(data), "image/") {
-			return nil, "", fmt.Errorf("content is not an image")
-		}
-		name := "image.png"
-		if u := strings.LastIndexByte(img.Data, '/'); u >= 0 && u+1 < len(img.Data) {
-			name = img.Data[u+1:]
-		}
-		return data, name, nil
+		return wecomDownloadImage(ctx, img.Data)
 
 	default:
 		return nil, "", fmt.Errorf("unknown image kind: %s", img.Kind)

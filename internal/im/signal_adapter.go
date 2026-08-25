@@ -623,6 +623,38 @@ func signalMIMEExt(mime string) string {
 	}
 }
 
+// signalDownloadImage fetches an http(s) image URL with bounds and
+// content-type checks; returns data, mime, and a filename from the URL path.
+func (a *signalAdapter) signalDownloadImage(ctx context.Context, rawURL string) ([]byte, string, string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, "", "", fmt.Errorf("create request: %w", err)
+	}
+	resp, err := a.conn.Do(req)
+	if err != nil {
+		return nil, "", "", fmt.Errorf("download image: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, "", "", fmt.Errorf("download image: HTTP %d", resp.StatusCode)
+	}
+	data, err := imagepkg.ReadLimited(resp.Body, imagepkg.MaxSize)
+	if err != nil {
+		return nil, "", "", fmt.Errorf("read image response: %w", err)
+	}
+	mime := resp.Header.Get("Content-Type")
+	if !strings.HasPrefix(mime, "image/") {
+		mime = imagepkg.DetectMIME(data)
+	}
+	if !strings.HasPrefix(mime, "image/") {
+		return nil, "", "", fmt.Errorf("content is not an image: %s", mime)
+	}
+	if u, perr := url.Parse(rawURL); perr == nil && u.Path != "" && u.Path != "/" {
+		return data, mime, filepath.Base(u.Path), nil
+	}
+	return data, mime, "image" + signalMIMEExt(mime), nil
+}
+
 // resolveImageBytes turns an ExtractedImage into raw bytes plus a filename.
 func (a *signalAdapter) resolveImageBytes(ctx context.Context, img ExtractedImage) ([]byte, string, string, error) {
 	switch img.Kind {
@@ -653,33 +685,7 @@ func (a *signalAdapter) resolveImageBytes(ctx context.Context, img ExtractedImag
 			}
 			return data, decoded.MIME, filepath.Base(img.Data), nil
 		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, img.Data, nil)
-		if err != nil {
-			return nil, "", "", fmt.Errorf("create request: %w", err)
-		}
-		resp, err := a.conn.Do(req)
-		if err != nil {
-			return nil, "", "", fmt.Errorf("download image: %w", err)
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			return nil, "", "", fmt.Errorf("download image: HTTP %d", resp.StatusCode)
-		}
-		data, err := imagepkg.ReadLimited(resp.Body, imagepkg.MaxSize)
-		if err != nil {
-			return nil, "", "", fmt.Errorf("read image response: %w", err)
-		}
-		mime := resp.Header.Get("Content-Type")
-		if !strings.HasPrefix(mime, "image/") {
-			mime = imagepkg.DetectMIME(data)
-		}
-		if !strings.HasPrefix(mime, "image/") {
-			return nil, "", "", fmt.Errorf("content is not an image: %s", mime)
-		}
-		if u, perr := url.Parse(img.Data); perr == nil && u.Path != "" && u.Path != "/" {
-			return data, mime, filepath.Base(u.Path), nil
-		}
-		return data, mime, "image" + signalMIMEExt(mime), nil
+		return a.signalDownloadImage(ctx, img.Data)
 
 	default:
 		return nil, "", "", fmt.Errorf("unknown image kind: %s", img.Kind)
