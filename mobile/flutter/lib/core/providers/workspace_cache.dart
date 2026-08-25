@@ -745,8 +745,8 @@ class _WorkspaceCacheSqlStore {
         continue;
       }
       upsertSession(record);
-      final sessionKey =
-          _sessionCacheKey(record.workspaceKey, record.sessionId);
+      // #1025: snapshot prefs key follows the session's own id.
+      final sessionKey = record.sessionId;
       final snapshotRaw = prefs.getString(_snapshotStorageKey(sessionKey));
       if (snapshotRaw == null || snapshotRaw.isEmpty) {
         continue;
@@ -1176,7 +1176,8 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
         lastUpdatedAt: DateTime.now(),
       );
       final sessions = Map<String, CachedSessionRecord>.from(state.sessions);
-      final key = _sessionCacheKey(updated.workspaceKey, updated.sessionId);
+      // #1025: state.sessions keys are pure sessionIds.
+      final key = updated.sessionId;
       sessions[key] = updated;
       state = state.copyWith(sessions: sessions);
       _dirtySessions.add(key);
@@ -1595,8 +1596,10 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
       final sessions = _store!.loadSessions();
       final sessionMap = <String, CachedSessionRecord>{};
       for (final s in sessions) {
-        final key = '${s.workspaceKey}|${s.sessionId}';
-        sessionMap[key] = s;
+        // #1025: single key scheme (pure sessionId) matching the runtime
+        // writers (registerLiveSession :1626). The old 'ws|sid' key made
+        // every post-reload lookup silently recreate a fresh record.
+        sessionMap[s.sessionId] = s;
       }
       state = state.copyWith(
         initialized: true,
@@ -2038,8 +2041,7 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
     if (!ref.mounted) return;
     final selectedSession = state.selectedSessionId == null
         ? null
-        : state.sessions[_sessionCacheKey(
-            state.selectedWorkspaceKey ?? '', state.selectedSessionId!)];
+        : state.sessions[state.selectedSessionId!];
     final payload = {
       'selected_workspace_key': state.selectedWorkspaceKey,
       'selected_session_id': state.selectedSessionId,
@@ -2190,8 +2192,9 @@ String _displayNameFromKey(String key) {
   }
 }
 
-String _sessionCacheKey(String workspaceKey, String sessionId) =>
-    '$workspaceKey::$sessionId';
+// #1025: _sessionCacheKey removed - state.sessions uses pure sessionIds
+// uniformly (value records carry workspaceKey), so the mixed 'ws|sid' /
+// 'ws::sid' key schemes that caused silent lookup misses are gone.
 
 String _snapshotStorageKey(String sessionKey) =>
     '$_workspaceSnapshotPrefix${base64UrlEncode(utf8.encode(sessionKey)).replaceAll('=', '')}';

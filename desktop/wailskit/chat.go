@@ -2810,7 +2810,13 @@ func (b *ChatBridge) RequestApproval(ctx context.Context, requestID, toolName, i
 		b.OnStreamEvent("approval:request", raw)
 	}
 
-	return b.interactions.AwaitApproval(context.WithoutCancel(ctx), req)
+	// #1023: WithoutCancel means ctx.Done() never fires, so a lost mobile
+	// response (tunnel dropped mid-approval) blocked the agent tool call
+	// forever with no feedback. Bound the wait; timeout resolves to Deny
+	// via the existing ctx.Done() branch in AwaitApproval.
+	approvalCtx, cancelApproval := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Minute)
+	defer cancelApproval()
+	return b.interactions.AwaitApproval(approvalCtx, req)
 }
 
 // RequestAskUser blocks until the user (desktop or mobile) responds to a

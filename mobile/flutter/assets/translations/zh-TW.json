@@ -82,6 +82,7 @@
   "approval.deny": "拒絕",
   "approval.allow": "允許",
   "approval.always_allow": "總是允許",
+  "approval.send_failed_reconnect": "審批未發送 - 連線已斷開，請重連後重試。",
   "connect.button_connect": "連接",
   "connect.live_badge": "實時",
   "chat.live": "實時",

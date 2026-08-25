@@ -80,6 +80,7 @@
   "approval.deny": "Deny",
   "approval.allow": "Allow",
   "approval.always_allow": "Always Allow",
+  "approval.send_failed_reconnect": "Approval not sent - connection lost. Reconnect and try again.",
   "common.cancel": "Cancel",
   "common.clear": "Clear",
   "connect.button_connect": "Connect",

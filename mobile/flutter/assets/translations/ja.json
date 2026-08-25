@@ -87,6 +87,7 @@
   "approval.deny": "拒否",
   "approval.allow": "許可",
   "approval.always_allow": "常に許可",
+  "approval.send_failed_reconnect": "承認は送信されませんでした - 接続が切断されました。再接続して再試行してください。",
   "chat.copy_text": "テキストをコピー",
   "chat.copied": "コピーしました",
   "chat.select_all": "すべて選択",

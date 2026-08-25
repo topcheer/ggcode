@@ -87,6 +87,7 @@
   "approval.deny": "거부",
   "approval.allow": "허용",
   "approval.always_allow": "항상 허용",
+  "approval.send_failed_reconnect": "승인이 전송되지 않았습니다 - 연결이 끊어졌습니다. 다시 연결 후 시도하세요.",
   "chat.copy_text": "텍스트 복사",
   "chat.copied": "복사됨",
   "chat.select_all": "모두 선택",

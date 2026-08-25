@@ -5,12 +5,19 @@ import '../../core/providers/session_provider.dart';
 import '../../core/l10n/app_localizations.dart';
 import '../../core/theme/app_theme.dart';
 
-class ApprovalSheet extends ConsumerWidget {
+class ApprovalSheet extends ConsumerStatefulWidget {
   final ApprovalInfo approval;
   const ApprovalSheet({super.key, required this.approval});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<ApprovalSheet> createState() => _ApprovalSheetState();
+}
+
+class _ApprovalSheetState extends ConsumerState<ApprovalSheet> {
+  bool _responded = false;
+
+  @override
+  Widget build(BuildContext context) {
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       padding: const EdgeInsets.all(12),
@@ -39,7 +46,7 @@ class ApprovalSheet extends ConsumerWidget {
           ),
           const SizedBox(height: 8),
           Text(
-            approval.toolName,
+            widget.approval.toolName,
             style: TextStyle(
                 color: AppColors.textPrimary, fontWeight: FontWeight.w600),
           ),
@@ -52,9 +59,9 @@ class ApprovalSheet extends ConsumerWidget {
               borderRadius: BorderRadius.circular(6),
             ),
             child: Text(
-              approval.input.length > 300
-                  ? '${approval.input.substring(0, 300)}...'
-                  : approval.input,
+              widget.approval.input.length > 300
+                  ? '${widget.approval.input.substring(0, 300)}...'
+                  : widget.approval.input,
               style: TextStyle(
                   color: AppColors.textSecondary, fontSize: 12, fontFamily: 'monospace'),
             ),
@@ -93,9 +100,23 @@ class ApprovalSheet extends ConsumerWidget {
   }
 
   void _respond(WidgetRef ref, String decision) {
+    // #1023: guard against multi-tap same-frame duplicate responses
+    // (host is first-wins, this only avoids redundant messages).
+    if (_responded) return;
+    // #1023: when the tunnel is down the send is a silent no-op
+    // (_socket?.add on a null socket) and the user would believe the
+    // tool call was approved while the host blocks forever. Keep the
+    // sheet visible and surface the failure instead of clearing it.
+    if (ref.read(connectionProvider).status != ConnectionStatus.connected) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(t('approval.send_failed_reconnect')),
+      ));
+      return;
+    }
+    _responded = true;
     ref.read(connectionProvider.notifier).send({
       'type': 'approval_response',
-      'data': {'id': approval.id, 'decision': decision},
+      'data': {'id': widget.approval.id, 'decision': decision},
     });
     ref.read(approvalProvider.notifier).set(null);
   }

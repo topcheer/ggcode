@@ -87,6 +87,7 @@
   "approval.deny": "Denegar",
   "approval.allow": "Permitir",
   "approval.always_allow": "Permitir siempre",
+  "approval.send_failed_reconnect": "Aprobación no enviada - conexión perdida. Reconecta e inténtalo de nuevo.",
   "chat.copy_text": "Copiar texto",
   "chat.copied": "Copiado",
   "chat.select_all": "Seleccionar todo",

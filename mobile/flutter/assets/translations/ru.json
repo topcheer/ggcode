@@ -87,6 +87,7 @@
   "approval.deny": "Отклонить",
   "approval.allow": "Разрешить",
   "approval.always_allow": "Всегда разрешать",
+  "approval.send_failed_reconnect": "Одобрение не отправлено — соединение потеряно. Переподключитесь и попробуйте снова.",
   "chat.copy_text": "Копировать текст",
   "chat.copied": "Скопировано",
   "chat.select_all": "Выбрать всё",

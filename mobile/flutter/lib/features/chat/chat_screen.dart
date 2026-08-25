@@ -69,7 +69,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
   void _scrollToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scrollController.hasClients && !_disposed) {
-        _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+        final pos = _scrollController.position;
+        // #1024: only follow the stream when already near the bottom.
+        // Without this guard every streaming text chunk yanks the user
+        // back to the bottom while reading history (and cross-tab
+        // chunks did the same to an idle tab).
+        if (pos.maxScrollExtent - pos.pixels <= 120) {
+          _scrollController.jumpTo(pos.maxScrollExtent);
+        }
       }
     });
   }
