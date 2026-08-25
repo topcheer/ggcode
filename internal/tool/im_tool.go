@@ -67,12 +67,51 @@ type IMTool struct {
 func (t IMTool) Name() string { return "im" }
 
 func (t IMTool) Description() string {
-	return "Manage IM adapters (Telegram, Discord, Slack, DingTalk, Feishu, etc.) and send messages to bound channels. " +
+	// Registered unconditionally in builtin.go, but many workspaces have no
+	// IM configured: shrink the description instead of advertising actions
+	// and platforms that cannot work (generic descriptions waste context and
+	// invite calls against nonexistent adapters).
+	if t.Manager == nil {
+		return "Manage IM adapters and send messages to bound IM channels. " +
+			"No IM manager is available in this session (IM not configured or not started yet)."
+	}
+	snap := t.Manager.Snapshot()
+	bound := make([]IMChannelBinding, 0, len(snap.CurrentBindings))
+	bound = append(bound, snap.CurrentBindings...)
+	if len(snap.DisabledBindings) > 0 {
+		bound = append(bound, snap.DisabledBindings...)
+	}
+	if len(bound) == 0 {
+		return "Manage IM adapters and send messages to bound IM channels. " +
+			"No IM adapter is bound in this workspace yet. Bind one from the IM panel (or send it a message) before using this tool."
+	}
+
+	// List only the adapters that actually exist here, with per-adapter
+	// media capability, so the LLM knows which target names are real and
+	// whether send_file uploads media or degrades to path text.
+	mediaCapable := map[string]bool{
+		"qq": true, "telegram": true, "discord": true, "feishu": true,
+		"matrix": true, "whatsapp": true, "slack": true, "mattermost": true,
+	}
+	var sb strings.Builder
+	sb.WriteString("Manage IM adapters and send messages to bound IM channels in this workspace. " +
 		"Actions: status, mute/unmute, disable/enable, send, send_file. " +
-		"mute drops connection but keeps binding for fast restore; disable moves binding to disabled state. " +
-		"send with auto_start=true auto-enables a muted adapter (checks for conflicts first). " +
-		"send_file pushes a local file (e.g. a screenshot) to the bound channel: image files are uploaded as media on all media-capable adapters (qq/telegram/discord/feishu/matrix/whatsapp/slack/mattermost); other file types are sent as the file path text. " +
-		"Always allowed in every permission mode."
+		"Adapters here: ")
+	for i, b := range bound {
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		sb.WriteString(b.Adapter)
+		if mediaCapable[strings.ToLower(b.Platform)] {
+			sb.WriteString(" (" + b.Platform + ", media upload)")
+		} else {
+			sb.WriteString(" (" + b.Platform + ", text only)")
+		}
+	}
+	sb.WriteString(". mute drops connection but keeps binding for fast restore; disable moves binding to disabled state. " +
+		"send_file pushes a local image file as media on media-capable adapters (other files arrive as path text). " +
+		"Always allowed in every permission mode.")
+	return sb.String()
 }
 
 func (t IMTool) Parameters() json.RawMessage {
