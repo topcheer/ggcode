@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -443,10 +442,9 @@ func sanitizeMap(m map[string]interface{}) {
 		default:
 			// #1021: credential-bearing keys inside adapter Extra maps
 			// (bot_token, signing_secret, token, ...) leaked plaintext even on
-			// this nominally sanitized route. Substring rule mirrors the im
-			// package's isDingTalkSensitiveKey precedent.
-			lower := strings.ToLower(key)
-			if strings.Contains(lower, "token") || strings.Contains(lower, "secret") {
+			// this nominally sanitized route. Shared predicate with the IM
+			// route masking (sensitiveExtraKey).
+			if sensitiveExtraKey(key) {
 				if str, ok := val.(string); ok && str != "" {
 					m[key] = "***"
 				} else {
