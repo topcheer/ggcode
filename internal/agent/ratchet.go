@@ -303,9 +303,13 @@ func (rs *RuleStore) DeduplicateRules() int {
 		for j := range kept {
 			sim := ruleSimilarity(kept[j], rs.rules[i])
 			if sim >= 0.55 {
-				// Merge into the kept rule: sum hit counts, keep latest LastSeen
+				// Merge into the kept rule: sum hit counts, keep latest LastSeen.
+				// #1011: the previous unconditional assignment ran BEFORE this
+				// comparison, making the After check dead (both sides equal) and
+				// silently inverting the semantics to last-wins - a stale
+				// duplicate's LastSeen overwrote the kept rule's fresh one,
+				// tanking recency-weighted scores and eviction order.
 				kept[j].HitCount += rs.rules[i].HitCount
-				kept[j].LastSeen = rs.rules[i].LastSeen
 				if rs.rules[i].LastSeen.After(kept[j].LastSeen) {
 					kept[j].LastSeen = rs.rules[i].LastSeen
 				}
