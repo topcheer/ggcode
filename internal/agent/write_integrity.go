@@ -151,6 +151,20 @@ func registerAllChecks() {
 		// unit-tested detector with zero wiring (third instance of the
 		// #328/#330 dead-detector class).
 		{Name: "append-ignored", Langs: []Language{LangGo}, Run: sliceCheck(checkAppendIgnored)},
+		// #1020: re-registered per the #508/#516 revival precedent. Both were
+		// fc5c4aad-stripped as advisory perf checks — but silently: no
+		// tombstone entry and docs still claimed registration, so #1017's
+		// delta fix landed on dead code. regex-loop's elimination rationale
+		// (re-reporting old instances on every edit, cf. deltaGateNew above)
+		// was resolved by #1017's fingerprint set difference; nplus1-loop is
+		// delta-aware by construction. Advisory class: a few warnings at
+		// most, no context-budget blowout.
+		{Name: "regex-loop", Langs: []Language{LangGo}, Run: func(ctx CheckContext) []string {
+			return checkRegexLoop(ctx.FilePath, ctx.OldContent, ctx.NewContent)
+		}},
+		{Name: "nplus1-loop", Langs: []Language{LangGo}, Run: func(ctx CheckContext) []string {
+			return checkNPlus1Loop(ctx.FilePath, ctx.OldContent, ctx.NewContent)
+		}},
 		// #503: there is deliberately NO "assertion-weakening" entry here.
 		// checkAssertionWeakening (born 3129668f, unregistered by the
 		// fc5c4aad critical-only refactor) was DELETED, not resurrected:

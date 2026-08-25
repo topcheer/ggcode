@@ -77,7 +77,7 @@ AST-based analysis:
 
 - `internal/agent/regex_loop_check.go` - check implementation (172 lines)
 - `internal/agent/regex_loop_check_test.go` - 12 tests, all passing
-- `internal/agent/write_integrity.go` - 1 line registration
+- `internal/agent/write_integrity.go` - registered in `registerAllChecks()` ("regex-loop" entry; fc5c4aad silently stripped it and #1020 re-registered per the #508/#516 revival precedent)
 
 ## Design Decisions
 

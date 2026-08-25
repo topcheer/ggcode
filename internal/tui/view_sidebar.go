@@ -20,6 +20,18 @@ import (
 	"github.com/topcheer/ggcode/internal/version"
 )
 
+// sidebarShortID truncates an ID to 8 chars without panicking on short IDs
+// (#1019). The sidebar renders A2A task IDs whose generator currently
+// guarantees >= 21 bytes, but this View()-path slice must stay defensive —
+// a shorter ID scheme or future remote-task ingestion would crash the whole
+// TUI otherwise. Same guard idiom as knight_panel.go / root.go.
+func sidebarShortID(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
+}
+
 func (m Model) renderSidebar() string {
 	if tracker := m.renderSidebarTaskTracker(); tracker != "" {
 		return tracker
@@ -230,11 +242,11 @@ func (m Model) renderSidebarA2ASection() string {
 		for _, t := range tasks {
 			if len(tasks) > 3 {
 				rows = append(rows, m.renderSidebarDetailRow(
-					"  "+t.ID[:8], string(t.Status.State), width,
+					"  "+sidebarShortID(t.ID), string(t.Status.State), width,
 				))
 			} else {
 				rows = append(rows, m.renderSidebarDetailRow(
-					fmt.Sprintf("  %s [%s]", t.ID[:8], t.Skill), string(t.Status.State), width,
+					fmt.Sprintf("  %s [%s]", sidebarShortID(t.ID), t.Skill), string(t.Status.State), width,
 				))
 			}
 		}

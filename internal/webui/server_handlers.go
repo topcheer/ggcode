@@ -500,13 +500,77 @@ func (s *Server) handleMCPDetail(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{"status": "deleted"})
 }
 
+// maskIMConfig returns a deep copy of cfg with adapter credentials masked
+// (#1021): Env deleted and Extra token/secret keys masked, mirroring
+// sanitizeMap. PUT restores originals via the "__unchanged__" sentinel
+// (same pattern as the vendor endpoint editor), so masking the read side
+// never writes "***" literals back into the config file.
+func maskIMConfig(cfg config.IMConfig) config.IMConfig {
+	out := cfg
+	out.Adapters = make(map[string]config.IMAdapterConfig, len(cfg.Adapters))
+	for name, a := range cfg.Adapters {
+		if len(a.Env) > 0 {
+			a.Env = map[string]string{"__masked__": ""} // presence marker
+		}
+		if len(a.Extra) > 0 {
+			masked := make(map[string]interface{}, len(a.Extra))
+			for k, v := range a.Extra {
+				if s, ok := v.(string); ok && sensitiveExtraKey(k) && s != "" {
+					masked[k] = "__unchanged__"
+				} else {
+					masked[k] = v
+				}
+			}
+			a.Extra = masked
+		}
+		out.Adapters[name] = a
+	}
+	return out
+}
+
+func maskIMAdapter(a config.IMAdapterConfig) config.IMAdapterConfig {
+	return maskIMConfig(config.IMConfig{Adapters: map[string]config.IMAdapterConfig{"": a}}).Adapters[""]
+}
+
+// sensitiveExtraKey matches credential-bearing adapter Extra keys (#1021),
+// aligned with the im package's isDingTalkSensitiveKey substring rule.
+func sensitiveExtraKey(key string) bool {
+	lower := strings.ToLower(key)
+	return strings.Contains(lower, "token") || strings.Contains(lower, "secret") ||
+		strings.Contains(lower, "password")
+}
+
+// restoreMaskedIMCredentials copies masked fields back from prev: any Env
+// presence marker or "__unchanged__" Extra sentinel reverts to the stored
+// value so a full-replace PUT cannot persist masks (#1021).
+func restoreMaskedIMCredentials(prev, next config.IMConfig) config.IMConfig {
+	for name, a := range next.Adapters {
+		old, ok := prev.Adapters[name]
+		if !ok {
+			continue
+		}
+		if _, masked := a.Env["__masked__"]; masked && len(old.Env) > 0 {
+			a.Env = old.Env
+		}
+		for k, v := range a.Extra {
+			if s, ok := v.(string); ok && s == "__unchanged__" && sensitiveExtraKey(k) {
+				if oldV, ok := old.Extra[k]; ok {
+					a.Extra[k] = oldV
+				}
+			}
+		}
+		next.Adapters[name] = a
+	}
+	return next
+}
+
 // GET/PUT /api/im -- IM config
 func (s *Server) handleIM(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		s.mu.RLock()
 		defer s.mu.RUnlock()
-		writeJSON(w, s.cfg.IM)
+		writeJSON(w, maskIMConfig(s.cfg.IM)) // #1021: mask like every other read route
 	case http.MethodPut:
 		var im config.IMConfig
 		if err := readJSON(r, &im); err != nil {
@@ -515,7 +579,7 @@ func (s *Server) handleIM(w http.ResponseWriter, r *http.Request) {
 		}
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		s.cfg.IM = im
+		s.cfg.IM = restoreMaskedIMCredentials(s.cfg.IM, im) // #1021 sentinel restore
 		if err := s.saveConfig(); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -572,7 +636,7 @@ func (s *Server) handleIMAdapters(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	writeJSON(w, s.cfg.IM.Adapters)
+	writeJSON(w, maskIMConfig(s.cfg.IM).Adapters) // #1021: mask like every other read route
 }
 
 // GET/POST/PUT/DELETE /api/im/adapters/{name}
@@ -592,7 +656,7 @@ func (s *Server) handleIMAdapterDetail(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "adapter not found")
 			return
 		}
-		writeJSON(w, adapter)
+		writeJSON(w, maskIMAdapter(adapter)) // #1021: mask like every other read route
 
 	case http.MethodPost, http.MethodPut:
 		var adapter config.IMAdapterConfig
@@ -602,6 +666,12 @@ func (s *Server) handleIMAdapterDetail(w http.ResponseWriter, r *http.Request) {
 		}
 		s.mu.Lock()
 		defer s.mu.Unlock()
+		if prev, ok := s.cfg.IM.Adapters[name]; ok {
+			// #1021: restore sentinel-masked fields from the stored adapter
+			single := config.IMConfig{Adapters: map[string]config.IMAdapterConfig{name: prev}}
+			wrapped := config.IMConfig{Adapters: map[string]config.IMAdapterConfig{name: adapter}}
+			adapter = restoreMaskedIMCredentials(single, wrapped).Adapters[name]
+		}
 		if err := s.cfg.AddIMAdapter(name, adapter); err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return

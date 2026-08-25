@@ -87,9 +87,10 @@ func (Jujutsu) IsClean(ctx context.Context, dir string) (bool, error) {
 	return strings.Contains(out, "The working copy has no changes"), nil
 }
 
-// Checkout switches to an existing bookmark or creates a new one.
-// jj uses bookmarks (similar to git branches); the working copy follows
-// automatically when you switch.
+// Checkout switches to an existing bookmark or creates a new one and
+// switches to it. `jj bookmark set X` MOVES the bookmark to the current
+// working-copy commit (@) — it is not a switch and would rewrite a possibly
+// shared bookmark (#1022). The switch semantics map to `jj new X`.
 func (Jujutsu) Checkout(ctx context.Context, dir, branch string, create bool, startPoint string) (string, error) {
 	if create {
 		args := []string{"bookmark", "create", branch}
@@ -100,11 +101,13 @@ func (Jujutsu) Checkout(ctx context.Context, dir, branch string, create bool, st
 		if err != nil {
 			return out, err
 		}
-		// Also set the new bookmark as the current working copy target.
-		_, _ = runVCSCmd(ctx, dir, "jj", "bookmark", "set", branch)
-		return out, nil
+		// #1022: switch the working copy to the new bookmark — previously a
+		// follow-up `bookmark set` moved it to @, silently undoing -r startPoint.
+		// Mirrors the hg.go #928 fix (create at revision, then update to it).
+		switchOut, err := runVCSCmd(ctx, dir, "jj", "new", branch)
+		return out + "\n" + switchOut, err
 	}
-	return runVCSCmd(ctx, dir, "jj", "bookmark", "set", branch)
+	return runVCSCmd(ctx, dir, "jj", "new", branch)
 }
 
 // Ensure Jujutsu satisfies VCS at compile time.

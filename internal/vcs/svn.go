@@ -29,9 +29,11 @@ func (Subversion) Log(ctx context.Context, dir string, count int) (string, error
 	if count <= 0 {
 		count = 10
 	}
-	// Use -r 1:HEAD with -l to get most recent commits. Plain `svn log`
-	// in a working copy may not show recently committed revisions reliably.
-	return runVCSCmd(ctx, dir, "svn", "log", "-r", "1:HEAD", "-l", strconv.Itoa(count))
+	// #1022: -r X:Y sets the traversal direction and -l N stops after N
+	// entries — 1:HEAD walked from the OLDEST revision, silently returning
+	// r1..rN instead of the newest N (interface contract: recent history).
+	// HEAD:1 walks newest-first.
+	return runVCSCmd(ctx, dir, "svn", "log", "-r", "HEAD:1", "-l", strconv.Itoa(count))
 }
 
 func (Subversion) Add(ctx context.Context, dir string, files []string) (string, error) {
