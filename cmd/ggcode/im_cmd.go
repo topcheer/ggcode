@@ -542,7 +542,7 @@ Examples:
   ggcode im config add my-qq --platform qq --extra app_id=cli_xxx --extra app_secret=sss --extra token=xxx
   ggcode im config add my-feishu --platform feishu --extra app_id=cli_xxx --extra app_secret=sss
   ggcode im config add my-tg --platform telegram --extra token=123456:ABC
-  ggcode im config add my-ding --platform dingtalk --extra client_id=xxx --extra client_secret=sss
+  ggcode im config add my-ding --platform dingtalk --extra app_key=xxx --extra app_secret=sss
   ggcode im config add my-discord --platform discord --extra token=Bot xxx
   ggcode im config add my-slack --platform slack --extra bot_token=xoxb-xxx --extra app_token=xapp-xxx`,
 		Args: cobra.MaximumNArgs(1),
@@ -986,7 +986,7 @@ func imConfigAddWizard(out io.Writer) (string, string, []string, error) {
 	case "feishu":
 		requiredExtras = []string{"app_id", "app_secret"}
 	case "dingtalk":
-		requiredExtras = []string{"client_id", "client_secret"}
+		requiredExtras = []string{"app_key", "app_secret"}
 	case "discord":
 		requiredExtras = []string{"token"}
 	case "slack":

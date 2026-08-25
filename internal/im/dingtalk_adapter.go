@@ -172,12 +172,13 @@ func (a *dingtalkAdapter) callbackContext(channelID string) (dingtalkCallbackCon
 }
 
 func newDingtalkAdapter(name string, mgr *Manager, adapterCfg config.IMAdapterConfig) (*dingtalkAdapter, error) {
-	appKeyVal, _ := adapterCfg.Extra["app_key"]
-	appSecretVal, _ := adapterCfg.Extra["app_secret"]
-	appKey := strings.TrimSpace(fmt.Sprintf("%v", appKeyVal))
-	appSecret := strings.TrimSpace(fmt.Sprintf("%v", appSecretVal))
-	if appKey == "" || appKey == "<nil>" || appSecret == "" || appSecret == "<nil>" {
-		return nil, fmt.Errorf("dingtalk adapter requires app_key and app_secret")
+	// #1027: accept both key spellings - the CLI wizard/help historically
+	// wrote client_id/client_secret while the adapter reads app_key/app_secret,
+	// producing configs that could never start.
+	appKey := stringValue(adapterCfg.Extra, "app_key", "client_id")
+	appSecret := stringValue(adapterCfg.Extra, "app_secret", "client_secret")
+	if appKey == "" || appSecret == "" {
+		return nil, fmt.Errorf("dingtalk adapter requires app_key and app_secret (aliases: client_id/client_secret)")
 	}
 	return &dingtalkAdapter{
 		name:        name,

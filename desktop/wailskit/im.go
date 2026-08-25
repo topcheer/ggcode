@@ -378,13 +378,20 @@ func TestIMConnection(name string) error {
 		if !ok {
 			return fmt.Errorf("missing required field %q (%s)", field.Key, field.Label)
 		}
+		// #1026: yaml `bot_token:` (no value) keeps the key but stores a nil
+		// interface - fmt.Sprintf("%v", nil) yields "<nil>", a non-empty
+		// string, so empty credentials passed the required check and Test
+		// Connection reported success until the adapter failed at startup.
+		if val == nil {
+			return fmt.Errorf("required field %q (%s) is empty", field.Key, field.Label)
+		}
 		// Normalize to string. #591: a hand-written ggcode.yaml like
 		// `appid: 123456789` parses as int (yaml.v3), and the previous
 		// val.(string) assertion misreported a populated field as "empty
 		// or invalid", sending users hunting for a problem that wasn't
 		// there. fmt %v keeps string values verbatim.
 		strVal := fmt.Sprintf("%v", val)
-		if strVal == "" {
+		if strVal == "" || strVal == "<nil>" {
 			return fmt.Errorf("required field %q (%s) is empty or invalid", field.Key, field.Label)
 		}
 	}
