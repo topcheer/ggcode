@@ -61,3 +61,26 @@ func TestSignalMentionsAccount(t *testing.T) {
 		t.Fatal("empty account must not match")
 	}
 }
+
+// TestSignalGateGroupMention covers the three gating paths end to end at the
+// helper level: structured mention passes, raw text number passes, and a
+// message without any mention is dropped.
+func TestSignalGateGroupMention(t *testing.T) {
+	a := &signalAdapter{account: "+15551234567"}
+
+	mentions := []any{map[string]any{"name": "Bot", "number": "+15551234567"}}
+	text, drop := a.gateGroupMention("do the thing", map[string]any{"mentions": mentions})
+	if drop || text != "do the thing" {
+		t.Fatalf("structured mention: drop=%v text=%q", drop, text)
+	}
+
+	text, drop = a.gateGroupMention("hey +15551234567 run tests", map[string]any{})
+	if drop || strings.Contains(text, "+15551234567") {
+		t.Fatalf("text mention: drop=%v text=%q", drop, text)
+	}
+
+	_, drop = a.gateGroupMention("no mention here", map[string]any{})
+	if !drop {
+		t.Fatal("message without mention must be dropped")
+	}
+}

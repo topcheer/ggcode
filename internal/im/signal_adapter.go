@@ -457,26 +457,13 @@ func (a *signalAdapter) processEnvelope(ctx context.Context, raw map[string]any)
 		text = renderSignalMentions(text, mentions)
 	}
 
-	// Mention gating for groups. Structured mentions (official Signal
-	// clients) render as "@Name" with the E.164 number only in the mentions
-	// array, so the text scan alone would silently drop an explicit bot
-	// mention — check the structured mentions first (#1018).
+	// Mention gating for groups (#1018).
 	if isGroup && a.requireMention {
-		hasMention := signalMentionsAccount(dataMessage["mentions"], a.account)
-		if !hasMention {
-			hasMention = strings.Contains(text, a.account) ||
-				(len(a.account) > 1 && strings.Contains(text, a.account[1:]))
-		}
-		if !hasMention {
+		var drop bool
+		text, drop = a.gateGroupMention(text, dataMessage)
+		if drop {
 			debug.Log("signal", "adapter=%s ignoring group message (no mention)", a.name)
 			return
-		}
-		text = stripSignalMention(text, a.account)
-		// The rendered "@Name" placeholder of a structured mention is not
-		// covered by stripSignalMention (number-based); drop the leading
-		// "@" if mention presence came from the mentions array.
-		if signalMentionsAccount(dataMessage["mentions"], a.account) {
-			text = strings.TrimSpace(strings.TrimPrefix(text, "@"))
 		}
 	}
 
@@ -704,6 +691,29 @@ func (a *signalAdapter) resolveImageBytes(ctx context.Context, img ExtractedImag
 	default:
 		return nil, "", "", fmt.Errorf("unknown image kind: %s", img.Kind)
 	}
+}
+
+// gateGroupMention enforces requireMention for group messages. It consults
+// the structured mentions array first (official Signal clients render an
+// "@Name" placeholder whose E.164 number only appears in mentions, so a
+// text-only scan would silently drop an explicit bot mention #1018), then
+// falls back to scanning the text for the account number. Returns the
+// mention-stripped text and whether the message must be dropped.
+func (a *signalAdapter) gateGroupMention(text string, dataMessage map[string]any) (string, bool) {
+	structured := signalMentionsAccount(dataMessage["mentions"], a.account)
+	hasMention := structured ||
+		strings.Contains(text, a.account) ||
+		(len(a.account) > 1 && strings.Contains(text, a.account[1:]))
+	if !hasMention {
+		return text, true
+	}
+	text = stripSignalMention(text, a.account)
+	// stripSignalMention is number-based; a structured mention leaves a
+	// rendered "@Name" placeholder whose leading "@" must go too.
+	if structured {
+		text = strings.TrimSpace(strings.TrimPrefix(text, "@"))
+	}
+	return text, false
 }
 
 // signalMentionsAccount reports whether the envelope's structured mentions
