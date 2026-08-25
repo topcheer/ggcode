@@ -36,6 +36,17 @@ type ExtractedImage struct {
 	Data string // URL, base64 data URL, or local file path
 }
 
+// appendImage trims, dedupes, and appends an extracted image. Returns
+// false when the payload is empty or already seen.
+func appendImage(images []ExtractedImage, seen map[string]bool, kind, data string) ([]ExtractedImage, bool) {
+	data = strings.TrimSpace(data)
+	if data == "" || seen[data] {
+		return images, false
+	}
+	seen[data] = true
+	return append(images, ExtractedImage{Kind: kind, Data: data}), true
+}
+
 // ExtractImagesFromText finds markdown images, bare image URLs, and data URLs in text.
 // Returns extracted images and the text with image references replaced by their alt text
 // (for markdown images) or removed (for bare URLs and data URLs). Line breaks are preserved.
@@ -50,15 +61,11 @@ func ExtractImagesFromText(text string) ([]ExtractedImage, string) {
 			continue
 		}
 		imgURL := strings.TrimSpace(m[2])
-		if imgURL == "" || seen[imgURL] {
-			continue
-		}
-		seen[imgURL] = true
 		kind := "url"
 		if strings.HasPrefix(imgURL, "data:image/") {
 			kind = "data_url"
 		}
-		images = append(images, ExtractedImage{Kind: kind, Data: imgURL})
+		images, _ = appendImage(images, seen, kind, imgURL)
 	}
 	// Replace markdown images with just the alt text (preserve meaningful content)
 	text = markdownImageRe.ReplaceAllString(text, "$1")
@@ -69,12 +76,8 @@ func ExtractImagesFromText(text string) ([]ExtractedImage, string) {
 		if len(m) < 2 {
 			continue
 		}
-		imgURL := strings.TrimSpace(m[1])
-		if imgURL == "" || seen[imgURL] {
-			continue
-		}
-		seen[imgURL] = true
-		images = append(images, ExtractedImage{Kind: "url", Data: imgURL})
+		url := strings.TrimSpace(m[1])
+		images, _ = appendImage(images, seen, "url", url)
 	}
 	// Remove matched bare URLs from text
 	text = bareImageURLRe.ReplaceAllString(text, " ")
@@ -85,12 +88,8 @@ func ExtractImagesFromText(text string) ([]ExtractedImage, string) {
 		if len(m) < 2 {
 			continue
 		}
-		dataURL := strings.TrimSpace(m[1])
-		if dataURL == "" || seen[dataURL] {
-			continue
-		}
-		seen[dataURL] = true
-		images = append(images, ExtractedImage{Kind: "data_url", Data: dataURL})
+		dataURL := m[1]
+		images, _ = appendImage(images, seen, "data_url", dataURL)
 	}
 	text = dataURLRe.ReplaceAllString(text, "")
 
@@ -100,15 +99,9 @@ func ExtractImagesFromText(text string) ([]ExtractedImage, string) {
 	// "url" case to read and upload local files.
 	localMatches := localImagePathRe.FindAllString(text, -1)
 	for _, p := range localMatches {
-		path := strings.TrimSpace(p)
-		if path == "" || seen[path] {
-			continue
+		if IsLocalFilePath(p) {
+			images, _ = appendImage(images, seen, "url", p)
 		}
-		if !IsLocalFilePath(path) {
-			continue
-		}
-		seen[path] = true
-		images = append(images, ExtractedImage{Kind: "url", Data: path})
 	}
 	// Remove matched local paths from text (the image itself is sent as media).
 	text = localImagePathRe.ReplaceAllString(text, " ")
