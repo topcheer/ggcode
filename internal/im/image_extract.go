@@ -13,6 +13,16 @@ var (
 	bareImageURLRe  = regexp.MustCompile(`(?i)(?:^|[\s(])(https?://[^\s)"'<>?#]+\.(?:png|jpe?g|gif|webp)(?:\?[^\s"'<>]*)?)`)
 	dataURLRe       = regexp.MustCompile(`(?i)(data:image/(?:png|jpe?g|gif|webp);base64,[A-Za-z0-9+/=]+)`)
 
+	// localImagePathRe matches bare local image file paths in prose:
+	// Unix absolute (/tmp/shot.png, requires at least one directory level),
+	// relative (./shot.png, ../out/shot.png), and Windows (C:\Users\x\shot.png).
+	// Extracted as Kind "url": every adapter's sendExtractedImage already
+	// routes IsLocalFilePath payloads to local-file upload, so no per-adapter
+	// changes are needed. Bare names without a directory component
+	// ("shot.png") are deliberately NOT matched - too easy to be prose
+	// mentions rather than real paths (false-positive guard).
+	localImagePathRe = regexp.MustCompile(`(?i)(?:(?:/[\w.@\-]+)+|\.{1,2}/(?:[\w.@\-]+/)*[\w.@\-]*|[A-Za-z]:[\\/](?:[\w.@\-]+[\\/])*[\w.@\-]*)\.(?:png|jpe?g|gif|webp)\b`)
+
 	// imageDownloadClient is used by adapters to download images from URLs.
 	// It has an explicit 60s timeout to prevent slow servers from blocking
 	// the send path indefinitely. Context cancellation provides a secondary
@@ -83,6 +93,25 @@ func ExtractImagesFromText(text string) ([]ExtractedImage, string) {
 		images = append(images, ExtractedImage{Kind: "data_url", Data: dataURL})
 	}
 	text = dataURLRe.ReplaceAllString(text, "")
+
+	// 4. Extract bare local image paths (agent tool output pattern: absolute
+	// paths like /tmp/shot.png). Emitted as Kind "url" because all adapter
+	// sendExtractedImage implementations branch on IsLocalFilePath within the
+	// "url" case to read and upload local files.
+	localMatches := localImagePathRe.FindAllString(text, -1)
+	for _, p := range localMatches {
+		path := strings.TrimSpace(p)
+		if path == "" || seen[path] {
+			continue
+		}
+		if !IsLocalFilePath(path) {
+			continue
+		}
+		seen[path] = true
+		images = append(images, ExtractedImage{Kind: "url", Data: path})
+	}
+	// Remove matched local paths from text (the image itself is sent as media).
+	text = localImagePathRe.ReplaceAllString(text, " ")
 
 	text = strings.TrimSpace(text)
 
