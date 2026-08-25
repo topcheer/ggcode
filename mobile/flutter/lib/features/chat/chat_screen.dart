@@ -66,15 +66,17 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     }
   }
 
-  void _scrollToBottom() {
+  void _scrollToBottom({bool force = false}) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scrollController.hasClients && !_disposed) {
         final pos = _scrollController.position;
         // #1024: only follow the stream when already near the bottom.
         // Without this guard every streaming text chunk yanks the user
         // back to the bottom while reading history (and cross-tab
-        // chunks did the same to an idle tab).
-        if (pos.maxScrollExtent - pos.pixels <= 120) {
+        // chunks did the same to an idle tab). force covers history
+        // backfill (0 -> N in one shot), which lands at the bottom by
+        // chat-app convention - the guard alone left it stuck at the top.
+        if (force || pos.maxScrollExtent - pos.pixels <= 120) {
           _scrollController.jumpTo(pos.maxScrollExtent);
         }
       }
@@ -182,7 +184,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
 
     // Auto-scroll on message changes
     ref.listen<List<ChatMessage>>(displayedMessagesProvider, (prev, next) {
-      _scrollToBottom();
+      // #1024: history backfill (empty -> N in one shot) lands at the
+      // bottom by convention; incremental streaming chunks only follow
+      // when already near the bottom.
+      final isBackfill = prev == null || (prev.isEmpty && next.length > 1);
+      _scrollToBottom(force: isBackfill);
     });
 
     final showTabs = _tabIds.length > 1 && _tabController != null;
