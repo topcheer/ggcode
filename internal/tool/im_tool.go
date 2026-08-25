@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -66,9 +68,10 @@ func (t IMTool) Name() string { return "im" }
 
 func (t IMTool) Description() string {
 	return "Manage IM adapters (Telegram, Discord, Slack, DingTalk, Feishu, etc.) and send messages to bound channels. " +
-		"Actions: status, mute/unmute, disable/enable, send. " +
+		"Actions: status, mute/unmute, disable/enable, send, send_file. " +
 		"mute drops connection but keeps binding for fast restore; disable moves binding to disabled state. " +
 		"send with auto_start=true auto-enables a muted adapter (checks for conflicts first). " +
+		"send_file pushes a local file (e.g. a screenshot) to the bound channel: image files are uploaded as media on all media-capable adapters (qq/telegram/discord/feishu/matrix/whatsapp/slack/mattermost); other file types are sent as the file path text. " +
 		"Always allowed in every permission mode."
 }
 
@@ -78,7 +81,7 @@ func (t IMTool) Parameters() json.RawMessage {
 		"properties": {
 			"action": {
 				"type": "string",
-				"enum": ["status", "mute", "unmute", "disable", "enable", "send"],
+				"enum": ["status", "mute", "unmute", "disable", "enable", "send", "send_file"],
 				"description": "The action to perform."
 			},
 			"adapter": {
@@ -91,8 +94,16 @@ func (t IMTool) Parameters() json.RawMessage {
 			},
 			"auto_start": {
 				"type": "boolean",
-				"description": "(send only) If true, automatically unmute/enable a muted/disabled adapter before sending. Default: false. When true, checks for multi-instance conflicts first.",
+				"description": "(send/send_file) If true, automatically unmute/enable a muted/disabled adapter before sending. Default: false. When true, checks for multi-instance conflicts first.",
 				"default": false
+			},
+			"path": {
+				"type": "string",
+				"description": "(send_file only) Absolute path to the local file to push (e.g. /tmp/screenshot.png)."
+			},
+			"caption": {
+				"type": "string",
+				"description": "(send_file only) Optional one-line caption sent alongside the file."
 			}
 		},
 		"required": ["action"]
@@ -109,6 +120,8 @@ func (t IMTool) Execute(ctx context.Context, input json.RawMessage) (Result, err
 		Adapter   string `json:"adapter"`
 		Message   string `json:"message"`
 		AutoStart bool   `json:"auto_start"`
+		Path      string `json:"path"`
+		Caption   string `json:"caption"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
@@ -130,8 +143,10 @@ func (t IMTool) Execute(ctx context.Context, input json.RawMessage) (Result, err
 		return t.doEnable(adapter)
 	case "send":
 		return t.doSend(ctx, adapter, args.Message, args.AutoStart)
+	case "send_file":
+		return t.doSendFile(ctx, adapter, args.Path, args.Caption, args.AutoStart)
 	default:
-		return Result{IsError: true, Content: fmt.Sprintf("unknown action %q. Valid actions: status, mute, unmute, disable, enable, send", action)}, nil
+		return Result{IsError: true, Content: fmt.Sprintf("unknown action %q. Valid actions: status, mute, unmute, disable, enable, send, send_file", action)}, nil
 	}
 }
 
@@ -411,6 +426,74 @@ func (t IMTool) sendAndReport(ctx context.Context, adapter, channelID, message s
 		return Result{IsError: true, Content: fmt.Sprintf("failed to send message via %q: %v", adapter, err)}, nil
 	}
 	return Result{Content: fmt.Sprintf("Message sent via %s (channel: %s).", adapter, truncateStr(channelID, 30))}, nil
+}
+
+// sendFileMaxBytes caps the file size accepted by send_file. Image uploads
+// are already capped at image.MaxSize (20MB) inside the adapters; non-image
+// files travel as path text and need no cap, but validating early gives the
+// LLM an immediate, actionable error instead of an adapter-side failure.
+const sendFileMaxBytes = 20 * 1024 * 1024
+
+// sendFileImageExts lists extensions that every media-capable adapter
+// (qq/telegram/discord/feishu/matrix/whatsapp/slack/mattermost) can upload
+// as rich media today. Other extensions are delivered as the file path text.
+var sendFileImageExts = map[string]bool{
+	".png": true, ".jpg": true, ".jpeg": true, ".gif": true, ".webp": true,
+}
+
+// doSendFile pushes a local file to a bound IM channel. The file path is
+// sent as the message text: media-capable adapters extract image paths via
+// ExtractImagesFromText and upload them as rich media (the extraction layer
+// added local-path support for exactly this flow); non-image files arrive
+// as a clickable path line, which is the honest cross-platform baseline.
+// Reuses doSend's full activation/health/multi-instance-conflict pipeline.
+func (t IMTool) doSendFile(ctx context.Context, adapter, path, caption string, autoStart bool) (Result, error) {
+	path = strings.TrimSpace(path)
+	if adapter == "" {
+		return Result{IsError: true, Content: "adapter name is required for send_file action"}, nil
+	}
+	if path == "" {
+		return Result{IsError: true, Content: "file path is required for send_file action"}, nil
+	}
+	if !filepath.IsAbs(path) {
+		return Result{IsError: true, Content: fmt.Sprintf("path %q must be absolute (e.g. /tmp/screenshot.png)", path)}, nil
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("file not accessible: %v", err)}, nil
+	}
+	if info.IsDir() {
+		return Result{IsError: true, Content: fmt.Sprintf("%q is a directory; send_file pushes a single file", path)}, nil
+	}
+	if info.Size() > sendFileMaxBytes {
+		return Result{IsError: true, Content: fmt.Sprintf("file is %d bytes; send_file caps at %d bytes", info.Size(), sendFileMaxBytes)}, nil
+	}
+
+	ext := strings.ToLower(filepath.Ext(path))
+	delivery := "file path (this adapter has no media upload)"
+	if sendFileImageExts[ext] {
+		delivery = "image media upload"
+	}
+
+	// Caption first, path on its own line: the extractor matches paths that
+	// follow whitespace/newlines, so the path must not be glued to CJK text.
+	var sb strings.Builder
+	if c := strings.TrimSpace(caption); c != "" {
+		sb.WriteString(c + "\n")
+	}
+	sb.WriteString(path)
+	note := ""
+	if !sendFileImageExts[ext] {
+		note = fmt.Sprintf(" Note: %s files are delivered as the file path text; only images (png/jpg/jpeg/gif/webp) are uploaded as media.", strings.TrimPrefix(ext, "."))
+	}
+	res, err := t.doSend(ctx, adapter, sb.String(), autoStart)
+	if err != nil || res.IsError {
+		return res, err
+	}
+	if res.Content != "" {
+		res.Content = fmt.Sprintf("File sent via %s (%s).%s", adapter, delivery, note)
+	}
+	return res, nil
 }
 
 func firstNonEmptyStr(a, b string) string {
