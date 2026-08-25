@@ -188,6 +188,24 @@ func TestIssue585_TestIMConnectionValidatesRequiredFields(t *testing.T) {
 	}
 	t.Logf("Expected error for empty bot_token: %v", err)
 
+	// #1026: yaml `bot_token:` (no value) keeps the key with a nil interface
+	// value - previously fmt.Sprintf("%v", nil) produced non-empty "<nil>"
+	// and the required check passed, so Test Connection showed success.
+	cfg.IM.Adapters["telegram-nil-token"] = config.IMAdapterConfig{
+		Enabled:  true,
+		Platform: "telegram",
+		Extra:    map[string]interface{}{"bot_token": nil}, // yaml null
+	}
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	err = TestIMConnection("telegram-nil-token")
+	if err == nil {
+		t.Error("TestIMConnection should fail when required field bot_token is yaml null (#1026)")
+	}
+	t.Logf("Expected error for nil bot_token: %v", err)
+
 	// Test bogus token (non-empty but invalid) - should PASS field validation
 	// (connectivity validation requires actual adapter runtime)
 	cfg.IM.Adapters["telegram-bogus-token"] = config.IMAdapterConfig{
