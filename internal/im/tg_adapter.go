@@ -747,6 +747,15 @@ func (a *tgAdapter) sendPhotoByURL(ctx context.Context, chatID, imageURL, captio
 
 // sendPhotoByUpload sends a photo by uploading file data via multipart/form-data.
 func (a *tgAdapter) sendPhotoByUpload(ctx context.Context, chatID string, data []byte, filename, caption, replyTo string) error {
+	// Telegram Bot API caps multipart photos at 10MB (documents allow 50MB,
+	// but this adapter sends photos only). The extraction layer allows up to
+	// 20MB, so reject locally with a clear message instead of letting the API
+	// return an opaque error after the full upload.
+	const maxPhotoBytes = 10 << 20
+	if len(data) > maxPhotoBytes {
+		return fmt.Errorf("photo is %d bytes; Telegram sendPhoto limit is %d bytes, use a smaller image", len(data), maxPhotoBytes)
+	}
+
 	path := fmt.Sprintf(tgSendPhotoPath, a.botToken)
 	u := a.apiBase + path
 

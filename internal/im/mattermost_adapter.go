@@ -790,18 +790,23 @@ func (a *mattermostAdapter) resolveImageToBytes(ctx context.Context, img Extract
 		}
 		return data, decoded.MIME, nil
 
-	case "local":
-		data, err := os.ReadFile(img.Data)
-		if err != nil {
-			return nil, "", fmt.Errorf("read local image: %w", err)
-		}
-		decoded, err := imagepkg.Decode(data)
-		if err != nil {
-			return nil, "", fmt.Errorf("decode local image: %w", err)
-		}
-		return data, decoded.MIME, nil
-
 	case "url":
+		// #1016: ExtractImagesFromText emits local paths as Kind "url"; route
+		// them to local read instead of an HTTP request that would fail with
+		// "unsupported protocol scheme" (the old case "local" below was dead -
+		// no extractor ever emitted Kind "local").
+		if IsLocalFilePath(img.Data) {
+			data, err := os.ReadFile(img.Data)
+			if err != nil {
+				return nil, "", fmt.Errorf("read local image: %w", err)
+			}
+			decoded, err := imagepkg.Decode(data)
+			if err != nil {
+				return nil, "", fmt.Errorf("decode local image: %w", err)
+			}
+			return data, decoded.MIME, nil
+		}
+
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, img.Data, nil)
 		if err != nil {
 			return nil, "", fmt.Errorf("create request: %w", err)

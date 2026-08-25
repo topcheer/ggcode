@@ -1517,6 +1517,14 @@ func (a *feishuAdapter) sendExtractedImage(ctx context.Context, chatID string, i
 
 // uploadImage uploads an image to Feishu and returns the image_key.
 func (a *feishuAdapter) uploadImage(ctx context.Context, data []byte, filename string) (string, error) {
+	// Feishu im/v1/images caps message images at 10MB. The extraction layer
+	// allows up to 20MB, so reject locally with a clear message instead of
+	// getting an opaque server error after the full upload.
+	const maxImageBytes = 10 << 20
+	if len(data) > maxImageBytes {
+		return "", fmt.Errorf("image is %d bytes; Feishu image upload limit is %d bytes, use a smaller image", len(data), maxImageBytes)
+	}
+
 	a.mu.RLock()
 	token := a.token
 	a.mu.RUnlock()
