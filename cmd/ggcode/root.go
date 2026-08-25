@@ -792,7 +792,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 			a2aRegistry.SelfID(),
 			chatMode,
 			a2aServer.Endpoint(),
-			cfg.A2A.EffectiveAPIKey(),
+			cfg.LanChat.EffectiveAPIKey(), // #1015: lanchat key decoupled from a2a.auth.api_key
 			chatStore,
 			lanchat.DetectWorkspaceMeta(workingDir),
 		)

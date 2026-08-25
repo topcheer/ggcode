@@ -224,15 +224,21 @@ LAN Chat uses the built-in community key (`ggcode-lan-a2a-v1`) **only when no
 custom A2A API key is configured** (zero-config mode). In that mode any two
 ggcode instances on the same LAN can communicate without coordination.
 
-**Setting `a2a.auth.api_key` disables the community key** (#986): the
-community key is a published constant, so it must never be allowed to bypass
-an operator-configured secret. After configuring a custom key, every peer,
-including LAN Chat peers, must present that key in the `X-API-Key` header.
-All team members must share the custom key.
+**Setting `lanchat.api_key` disables the community key for LAN Chat** (#986,
+#1015): the community key is a published constant, so it must never be allowed
+to bypass an operator-configured secret. After configuring a custom LAN Chat
+key, every peer must present that key in the `X-API-Key` header; all team
+members must share it.
 
-If you configure custom A2A auth (e.g., `a2a.auth.api_key`, OAuth2, mTLS),
-those settings affect A2A protocol (agent delegation, tool calls) and, for
-API keys, LAN Chat authentication as described above.
+`a2a.auth.api_key` gates A2A protocol traffic only (agent delegation, tool
+calls). It does NOT affect LAN Chat authentication (#1015): nodes with a
+configured A2A key remain visible to zero-config LAN Chat peers. To restrict
+LAN Chat itself, set a dedicated key:
+
+```yaml
+lanchat:
+  api_key: "my-team-lan-secret"
+```
 
 ### Agent message approval
 

@@ -953,7 +953,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 				a2aReg.SelfID(),
 				"daemon",
 				a2aSrv.Endpoint(),
-				cfg.A2A.EffectiveAPIKey(),
+				cfg.LanChat.EffectiveAPIKey(), // #1015: lanchat key decoupled from a2a.auth.api_key
 				chatStore,
 				lanchat.DetectWorkspaceMeta(workingDir),
 			)

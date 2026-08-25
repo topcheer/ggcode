@@ -3455,7 +3455,7 @@ func (b *ChatBridge) startA2A(cfg *config.Config, ag *agent.Agent, reg *tool.Reg
 		a2aReg.SelfID(),
 		"gui",
 		srv.Endpoint(),
-		cfg.A2A.EffectiveAPIKey(),
+		cfg.LanChat.EffectiveAPIKey(), // #1015: lanchat key decoupled from a2a.auth.api_key
 		chatStore,
 		lanchat.DetectWorkspaceMeta(b.workingDir),
 	)

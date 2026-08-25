@@ -397,6 +397,13 @@ type LanChatConfig struct {
 	// collaboration zero-friction; set true to gate every @agent DM behind
 	// manual approval (#986).
 	RequireApprovalForAgents bool `yaml:"require_approval_for_agents,omitempty" json:"require_approval_for_agents,omitempty"`
+
+	// APIKey is a DEDICATED lanchat peer-authentication key. It is decoupled
+	// from a2a.auth.api_key (#1015): that key gates A2A task traffic only.
+	// Unset (default) keeps zero-config LAN Chat interop via the well-known
+	// community key. Set it to restrict LAN Chat to peers sharing the key —
+	// nodes without it (including zero-config ones) are rejected 401 (#986).
+	APIKey string `yaml:"api_key,omitempty" json:"api_key,omitempty"`
 }
 
 // EffectiveDMCooldown returns the configured DM cooldown, or 150s if zero/unset.
@@ -405,6 +412,17 @@ func (c LanChatConfig) EffectiveDMCooldown() time.Duration {
 		return 150 * time.Second
 	}
 	return c.DMCooldown
+}
+
+// EffectiveAPIKey returns the dedicated lanchat key, or the well-known
+// community key when unset — lanchat never inherits a2a.auth.api_key
+// (#1015): configuring an A2A task key must not silently lock the LAN
+// Chat discovery layer out of zero-config interop.
+func (c LanChatConfig) EffectiveAPIKey() string {
+	if c.APIKey == "" {
+		return DefaultA2AAPIKey
+	}
+	return c.APIKey
 }
 
 // DefaultA2AAPIKey is a well-known key baked into every ggcode binary.
