@@ -356,6 +356,12 @@ func (a *wecomAdapter) dispatchPayload(ctx context.Context, payload map[string]a
 	// swallow an inbound callback frame — those carry server-generated ids.
 	if reqID := payloadReqID(payload); reqID != "" {
 		if v, ok := a.pendingAcks.LoadAndDelete(reqID); ok {
+			// Frame-carrying waiters (media upload) get the full ack body so they
+			// can extract response fields like upload_id / media_id.
+			if fch, ok := v.(chan map[string]any); ok {
+				fch <- payload // buffered(1); waiter may be gone
+				return
+			}
 			if ch, ok := v.(chan error); ok {
 				ch <- wecomAckError(reqID, payload) // buffered(1); waiter may be gone
 			}
@@ -686,6 +692,21 @@ func (a *wecomAdapter) Send(ctx context.Context, binding ChannelBinding, event O
 	text := a.outboundText(event)
 	if text == "" {
 		return nil
+	}
+
+	// Images first (chunked upload + msgtype=image), then the remaining text.
+	// Extraction failures degrade to a text notice instead of dropping the
+	// whole reply.
+	images, remainder := ExtractImagesFromText(text)
+	for _, img := range images {
+		if err := a.sendWecomImage(ctx, chatID, img); err != nil {
+			debug.Log("wecom", "adapter=%s image to %s failed: %v (continuing with text)", a.name, chatID, err)
+			remainder = strings.TrimSpace(remainder + "\n[image failed: " + err.Error() + "]")
+		}
+	}
+	text = remainder
+	if strings.TrimSpace(text) == "" && len(images) > 0 {
+		return nil // images carried the content
 	}
 
 	// Split long messages instead of truncating — losing content is worse UX

@@ -627,15 +627,38 @@ func (a *WechatAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 		}
 	}
 
+	toUserID := binding.ChannelID
+
 	// WeChat iLink API renders plain text only — strip markdown syntax so
 	// users don't see raw **bold**, # headings, or `code` backticks.
 	text := stripMarkdown(strings.TrimSpace(a.outboundText(event)))
-	if text == "" {
-		debug.Log("wechat", "adapter=%s Send skipped: outboundText returned empty for kind=%s", a.name, event.Kind)
-		return nil
+
+	// Image pass: the iLink protocol carries images as item type 2 with a
+	// public image_url (no upload API), so only http(s) URLs can be sent as
+	// real images. Local paths and data URLs degrade to a visible notice.
+	images, remainder := ExtractImagesFromText(text)
+	text = stripMarkdown(strings.TrimSpace(remainder))
+	sentImage := false
+	for _, img := range images {
+		url := wechatImageURL(img)
+		if url == "" {
+			debug.Log("wechat", "adapter=%s image kind=%s not deliverable via iLink (needs public URL), skipped", a.name, img.Kind)
+			continue
+		}
+		if err := a.sendSingleImage(ctx, token, toUserID, contextToken, url); err != nil {
+			debug.Log("wechat", "adapter=%s image %s failed: %v", a.name, url, err)
+			continue
+		}
+		sentImage = true
 	}
 
-	toUserID := binding.ChannelID
+	if text == "" {
+		if sentImage || len(images) == 0 {
+			debug.Log("wechat", "adapter=%s Send skipped: outboundText returned empty for kind=%s", a.name, event.Kind)
+			return nil
+		}
+		text = "[image sent above]" // images carried the content
+	}
 
 	debug.Log("wechat", "adapter=%s Send to=%s context_token=%s text_len=%d kind=%s",
 		a.name, toUserID, truncateStr(contextToken, 12), len(text), event.Kind)
@@ -672,6 +695,67 @@ func (a *WechatAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 	}
 
 	debug.Log("wechat", "adapter=%s sendmessage OK to=%s chunks=%d", a.name, toUserID, len(chunks))
+	return nil
+}
+
+// wechatImageURL returns the deliverable image URL for an ExtractedImage, or
+// "" when the iLink protocol cannot carry it (it needs a public http(s) URL;
+// there is no upload API, so local paths and data URLs are undeliverable).
+func wechatImageURL(img ExtractedImage) string {
+	if img.Kind != "url" {
+		return ""
+	}
+	if strings.HasPrefix(img.Data, "http://") || strings.HasPrefix(img.Data, "https://") {
+		return img.Data
+	}
+	return ""
+}
+
+// sendSingleImage sends one image via the iLink sendmessage API using item
+// type 2 (image_item carries a public image_url the client renders).
+func (a *WechatAdapter) sendSingleImage(ctx context.Context, token, toUserID, contextToken, imageURL string) error {
+	items := []ilinkItem{
+		{Type: ilinkItemImage, ImageItem: &ilinkImageItem{ImageURL: imageURL}},
+	}
+	outMsg := ilinkSendMessageRequest{
+		Msg: ilinkOutboundMessage{
+			ToUserID:     toUserID,
+			ClientID:     generateWechatClientID(),
+			MessageType:  ilinkMsgTypeBot,
+			MessageState: ilinkMsgStateFinish,
+			ContextToken: contextToken,
+			ItemList:     items,
+		},
+		BaseInfo: ilinkBaseInfo{ChannelVersion: "2.0.0"},
+	}
+
+	bodyJSON, err := json.Marshal(outMsg)
+	if err != nil {
+		return fmt.Errorf("marshal image sendmessage: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.baseURL+ilinkSendMessagePath, bytes.NewReader(bodyJSON))
+	if err != nil {
+		return fmt.Errorf("create image sendmessage request: %w", err)
+	}
+	a.setCommonHeaders(req, token)
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("send image: %w", err)
+	}
+	defer resp.Body.Close()
+	respData, _ := util.ReadAll(resp.Body, util.ReadLimitGeneral)
+
+	var result struct {
+		ErrCode int    `json:"errcode"`
+		ErrMsg  string `json:"errmsg"`
+	}
+	if err := json.Unmarshal(respData, &result); err != nil {
+		return fmt.Errorf("parse image sendmessage response: %w", err)
+	}
+	if result.ErrCode != 0 {
+		return fmt.Errorf("WeChat image send [%d]: %s", result.ErrCode, result.ErrMsg)
+	}
+	debug.Log("wechat", "adapter=%s image sendmessage OK url=%s", a.name, imageURL)
 	return nil
 }
 

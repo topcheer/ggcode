@@ -93,6 +93,7 @@ func (t IMTool) Description() string {
 	mediaCapable := map[string]bool{
 		"qq": true, "telegram": true, "discord": true, "feishu": true,
 		"matrix": true, "whatsapp": true, "slack": true, "mattermost": true,
+		"signal": true, "wecom": true, "wechat": true,
 	}
 	var sb strings.Builder
 	sb.WriteString("Manage IM adapters and send messages to bound IM channels in this workspace. " +
@@ -475,8 +476,10 @@ func (t IMTool) sendAndReport(ctx context.Context, adapter, channelID, message s
 const sendFileMaxBytes = 20 * 1024 * 1024
 
 // sendFileImageExts lists extensions that every media-capable adapter
-// (qq/telegram/discord/feishu/matrix/whatsapp/slack/mattermost) can upload
-// as rich media today. Other extensions are delivered as the file path text.
+// (qq/telegram/discord/feishu/matrix/whatsapp/slack/mattermost/signal/wecom/
+// wechat) can upload as rich media today. Other extensions are delivered as
+// the file path text. (wechat only carries public http(s) image URLs, so
+// local-path images degrade to path text there.)
 var sendFileImageExts = map[string]bool{
 	".png": true, ".jpg": true, ".jpeg": true, ".gif": true, ".webp": true,
 }

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -565,7 +566,124 @@ func (a *signalAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 	if chatID == "" {
 		chatID = binding.TargetID
 	}
-	return a.sendText(ctx, chatID, signalMarkdown(defaultOutboundText(event)))
+	if chatID == "" {
+		return nil
+	}
+
+	// Images first, then the remaining text - same ordering as the other
+	// media adapters. Extraction failures degrade to a text notice instead of
+	// dropping the whole reply.
+	raw := defaultOutboundText(event)
+	images, remainder := ExtractImagesFromText(raw)
+	for _, img := range images {
+		if err := a.sendExtractedImage(ctx, chatID, img); err != nil {
+			debug.Log("signal", "adapter=%s image to %s failed: %v (continuing with text)", a.name, chatID, err)
+			remainder = strings.TrimSpace(remainder + "\n[image failed: " + err.Error() + "]")
+		}
+	}
+	return a.sendText(ctx, chatID, signalMarkdown(remainder))
+}
+
+// sendExtractedImage resolves one extracted image and sends it as a Signal
+// attachment via /v2/send base64_attachments (signal-cli-rest-api accepts
+// "data:<mime>;filename=<name>;base64,<data>" entries).
+func (a *signalAdapter) sendExtractedImage(ctx context.Context, chatID string, img ExtractedImage) error {
+	data, mime, filename, err := a.resolveImageBytes(ctx, img)
+	if err != nil {
+		return err
+	}
+	att := "data:" + mime + ";filename=" + filename + ";base64," + base64.StdEncoding.EncodeToString(data)
+
+	payload := map[string]any{
+		"number":             a.account,
+		"message":            "",
+		"base64_attachments": []string{att},
+	}
+	applySignalRecipient(payload, chatID)
+
+	respBody, err := a.postSignalSend(ctx, payload)
+	if err != nil {
+		return err
+	}
+	trackSignalTimestamp(respBody, a.addSentTimestamp)
+	return nil
+}
+
+// signalMIMEExt maps an image MIME type to a file extension.
+func signalMIMEExt(mime string) string {
+	switch {
+	case strings.Contains(mime, "jpeg") || strings.Contains(mime, "jpg"):
+		return ".jpg"
+	case strings.Contains(mime, "gif"):
+		return ".gif"
+	case strings.Contains(mime, "webp"):
+		return ".webp"
+	default:
+		return ".png"
+	}
+}
+
+// resolveImageBytes turns an ExtractedImage into raw bytes plus a filename.
+func (a *signalAdapter) resolveImageBytes(ctx context.Context, img ExtractedImage) ([]byte, string, string, error) {
+	switch img.Kind {
+	case "data_url":
+		parts := strings.SplitN(img.Data, ",", 2)
+		if len(parts) < 2 {
+			return nil, "", "", fmt.Errorf("invalid data URL")
+		}
+		data, err := base64.StdEncoding.DecodeString(parts[1])
+		if err != nil {
+			return nil, "", "", fmt.Errorf("decode data URL: %w", err)
+		}
+		mime := "image/png"
+		if strings.Contains(parts[0], "image/") {
+			mime = strings.TrimPrefix(parts[0][:strings.Index(parts[0], ";")], "data:")
+		}
+		return data, mime, "image" + signalMIMEExt(mime), nil
+
+	case "url":
+		if IsLocalFilePath(img.Data) {
+			data, err := os.ReadFile(img.Data)
+			if err != nil {
+				return nil, "", "", fmt.Errorf("read local image: %w", err)
+			}
+			decoded, err := imagepkg.Decode(data)
+			if err != nil {
+				return nil, "", "", fmt.Errorf("decode local image: %w", err)
+			}
+			return data, decoded.MIME, filepath.Base(img.Data), nil
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, img.Data, nil)
+		if err != nil {
+			return nil, "", "", fmt.Errorf("create request: %w", err)
+		}
+		resp, err := a.conn.Do(req)
+		if err != nil {
+			return nil, "", "", fmt.Errorf("download image: %w", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return nil, "", "", fmt.Errorf("download image: HTTP %d", resp.StatusCode)
+		}
+		data, err := imagepkg.ReadLimited(resp.Body, imagepkg.MaxSize)
+		if err != nil {
+			return nil, "", "", fmt.Errorf("read image response: %w", err)
+		}
+		mime := resp.Header.Get("Content-Type")
+		if !strings.HasPrefix(mime, "image/") {
+			mime = imagepkg.DetectMIME(data)
+		}
+		if !strings.HasPrefix(mime, "image/") {
+			return nil, "", "", fmt.Errorf("content is not an image: %s", mime)
+		}
+		if u, perr := url.Parse(img.Data); perr == nil && u.Path != "" && u.Path != "/" {
+			return data, mime, filepath.Base(u.Path), nil
+		}
+		return data, mime, "image" + signalMIMEExt(mime), nil
+
+	default:
+		return nil, "", "", fmt.Errorf("unknown image kind: %s", img.Kind)
+	}
 }
 
 func (a *signalAdapter) sendText(ctx context.Context, chatID, text string) error {
@@ -606,68 +724,94 @@ func (a *signalAdapter) sendText(ctx context.Context, chatID, text string) error
 			continue
 		}
 
-		// Send with rate-limit retry loop (shared pattern).
-		var respBody []byte
-		sent := false
-		for attempt := 0; attempt <= maxRateLimitRetries; attempt++ {
-			req, err := http.NewRequestWithContext(ctx, "POST", a.baseURL+endpoint, bytes.NewReader(body))
-			if err != nil {
-				lastErr = err
-				break
-			}
-			req.Header.Set("Content-Type", "application/json")
-
-			resp, err := a.conn.Do(req)
-			if err != nil {
-				lastErr = fmt.Errorf("Signal send: %w", err)
-				debug.Log("signal", "adapter=%s send error to %s: %v", a.name, chatID, err)
-				break // non-retryable transport error
-			}
-
-			// Handle HTTP 429 (Too Many Requests) with Retry-After backoff.
-			if resp.StatusCode == http.StatusTooManyRequests {
-				resp.Body.Close()
-				if attempt < maxRateLimitRetries {
-					delay := parseRetryAfter(resp)
-					debug.Log("signal", "adapter=%s rate-limited (429) to %s, retry %d/%d in %v",
-						a.name, chatID, attempt+1, maxRateLimitRetries, delay)
-					if err := sleepRetry(ctx, delay); err != nil {
-						return err
-					}
-					continue
-				}
-				lastErr = rateLimitExhausted("Signal")
-				break
-			}
-
-			// Error-body probe: bounded read, truncation acceptable here
-			// (only used for diagnostics), but go through ReadLimited for a
-			// consistent pattern (#405).
-			respBody, _ = imagepkg.ReadLimited(resp.Body, 4096)
-			resp.Body.Close()
-
-			if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
-				lastErr = fmt.Errorf("Signal send status %d: %s", resp.StatusCode, string(respBody))
-				debug.Log("signal", "adapter=%s send error to %s: %s", a.name, chatID, string(respBody))
-				break
-			}
-
-			// Success
-			sent = true
-			break
+		respBody, sendErr := a.postSignalBody(ctx, endpoint, body)
+		if sendErr != nil {
+			lastErr = sendErr
+			debug.Log("signal", "adapter=%s send error to %s: %v", a.name, chatID, sendErr)
+			continue
 		}
-
 		// Track sent timestamp for echo suppression
-		if sent {
-			var result struct {
-				Timestamp int64 `json:"timestamp"`
-			}
-			if json.Unmarshal(respBody, &result) == nil && result.Timestamp > 0 {
-				a.addSentTimestamp(result.Timestamp)
-			}
-		}
+		trackSignalTimestamp(respBody, a.addSentTimestamp)
 	}
 	return lastErr
+}
+
+// applySignalRecipient fills the recipient fields of a /v2/send payload for
+// the given chatID (direct number or "group:" prefixed group ID).
+func applySignalRecipient(payload map[string]any, chatID string) {
+	if strings.HasPrefix(chatID, "group:") {
+		// signal-cli-rest-api double-base64-encodes group IDs:
+		// the groupId from receive is single-encoded, we need to encode it again
+		// and prefix with "group."
+		rawGroupID := chatID[6:]
+		doubleEncoded := base64.StdEncoding.EncodeToString([]byte(rawGroupID))
+		payload["recipients"] = []string{"group." + doubleEncoded}
+	} else {
+		payload["recipients"] = []string{chatID}
+	}
+}
+
+// trackSignalTimestamp extracts the send timestamp from a response body for
+// echo suppression.
+func trackSignalTimestamp(respBody []byte, add func(int64)) {
+	var result struct {
+		Timestamp int64 `json:"timestamp"`
+	}
+	if json.Unmarshal(respBody, &result) == nil && result.Timestamp > 0 {
+		add(result.Timestamp)
+	}
+}
+
+// postSignalSend marshals the payload and POSTs it to /v2/send.
+func (a *signalAdapter) postSignalSend(ctx context.Context, payload map[string]any) ([]byte, error) {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("Signal send marshal: %w", err)
+	}
+	return a.postSignalBody(ctx, "/v2/send", body)
+}
+
+// postSignalBody POSTs one request to the signal-cli-rest-api with the
+// shared 429 rate-limit retry loop. Returns the response body on 2xx.
+func (a *signalAdapter) postSignalBody(ctx context.Context, endpoint string, body []byte) ([]byte, error) {
+	var lastErr error
+	for attempt := 0; attempt <= maxRateLimitRetries; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, "POST", a.baseURL+endpoint, bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := a.conn.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("Signal send: %w", err)
+		}
+
+		// Handle HTTP 429 (Too Many Requests) with Retry-After backoff.
+		if resp.StatusCode == http.StatusTooManyRequests {
+			resp.Body.Close()
+			if attempt < maxRateLimitRetries {
+				delay := parseRetryAfter(resp)
+				if err := sleepRetry(ctx, delay); err != nil {
+					return nil, err
+				}
+				continue
+			}
+			return nil, rateLimitExhausted("Signal")
+		}
+
+		// Error-body probe: bounded read, truncation acceptable here
+		// (only used for diagnostics), but go through ReadLimited for a
+		// consistent pattern (#405).
+		respBody, _ := imagepkg.ReadLimited(resp.Body, 4096)
+		resp.Body.Close()
+
+		if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("Signal send status %d: %s", resp.StatusCode, string(respBody))
+		}
+		return respBody, nil
+	}
+	return nil, lastErr
 }
 
 // TriggerTyping sends a Signal typing indicator.
