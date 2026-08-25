@@ -94,11 +94,27 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     _tabController?.removeListener(_onTabChange);
     _tabController?.dispose();
 
+    // Preserve the selected tab's identity across the rebuild: capture the id
+    // at the old index, find its new position, and start the new controller
+    // there. Without initialIndex the controller starts at 0 while
+    // _currentTab keeps the stale index, desyncing the TabBar highlight from
+    // the displayed message list (#1016).
+    String? selectedId;
+    if (_currentTab >= 0 && _currentTab < _tabIds.length) {
+      selectedId = _tabIds[_currentTab];
+    }
+    int newIndex = newIds.indexOf(selectedId ?? '');
+    if (newIndex < 0) newIndex = 0;
+
     _tabIds = newIds;
     _tabNames = newNames;
-    _tabController = TabController(length: _tabIds.length, vsync: this);
+    _tabController = TabController(
+      length: _tabIds.length,
+      initialIndex: newIndex,
+      vsync: this,
+    );
     _tabController!.addListener(_onTabChange);
-
+    _currentTab = newIndex;
     if (_currentTab >= _tabIds.length) {
       _currentTab = _tabIds.length - 1;
     }

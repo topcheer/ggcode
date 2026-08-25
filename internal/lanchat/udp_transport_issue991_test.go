@@ -54,9 +54,11 @@ func TestIssue991GzipBombDroppedBeforeAllocation(t *testing.T) {
 		t.Fatalf("dial transport: %v", err)
 	}
 	defer sender.Close()
-	if _, err := sender.Write(bomb); err != nil {
-		t.Fatalf("write bomb: %v", err)
-	}
+	// Feed the bomb straight into the datagram parser. Writing it through a
+	// real socket fails with EMSGSIZE on OSes whose max UDP datagram is small
+	// (macOS net.inet.udp.maxdgram defaults to 9216), and the property under
+	// test is the decompression cap, not the socket layer.
+	udp.processDatagram(bomb, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 65001}, "udp-test")
 
 	select {
 	case id := <-got:
