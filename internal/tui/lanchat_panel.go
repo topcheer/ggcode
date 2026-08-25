@@ -130,6 +130,26 @@ func (m *Model) SetLanChatHub(hub *lanchat.Hub, sendMsg func(tea.Msg)) {
 	)
 }
 
+// sanitizeLanChatDisplay strips terminal control characters from
+// peer-supplied display text. TAB/CR/LF/ESC and other C0 controls either
+// render as zero-width in lipgloss (breaking padding math) or act on the
+// terminal itself (tab-stop jumps, line splits) - both shatter panel
+// borders (#1014). Non-printable runes are dropped; printable text incl.
+// CJK/emoji passes through untouched.
+func sanitizeLanChatDisplay(s string) string {
+	if !strings.ContainsFunc(s, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		if r >= 0x20 && r != 0x7f {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
 func (m *Model) closeLanChatPanel() {
 	m.lanChatPanel = nil
 }
@@ -248,26 +268,34 @@ func (m *Model) handleLanChatPanelUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// The Hub already processed the peer before firing the callback.
 		// Calling UpdatePeers([single_peer]) would mark all OTHER peers
 		// as "not seen" and trigger mass offline callbacks.
-		nick := msg.participant.HumanNick
+		nick := sanitizeLanChatDisplay(msg.participant.HumanNick)
 		if nick == "" {
 			nick = "(unknown)"
 		}
-		ep := msg.participant.Endpoint
+		ep := sanitizeLanChatDisplay(msg.participant.Endpoint)
 		// Trim http:// prefix for display
 		ep = strings.TrimPrefix(ep, "http://")
 		ep = strings.TrimPrefix(ep, "https://")
 		// Include workspace/project name if available
 		wsInfo := ""
-		if msg.participant.ProjectName != "" {
-			wsInfo = fmt.Sprintf(" · %s", msg.participant.ProjectName)
-		} else if msg.participant.Workspace != "" {
-			parts := strings.Split(msg.participant.Workspace, "/")
+		if pn := sanitizeLanChatDisplay(msg.participant.ProjectName); pn != "" {
+			wsInfo = fmt.Sprintf(" · %s", pn)
+		} else if ws := sanitizeLanChatDisplay(msg.participant.Workspace); ws != "" {
+			parts := strings.Split(ws, "/")
 			if len(parts) > 0 {
 				wsInfo = fmt.Sprintf(" · %s", parts[len(parts)-1])
 			}
 		}
 		if len(msg.participant.Languages) > 0 {
-			wsInfo += fmt.Sprintf(" [%s]", strings.Join(msg.participant.Languages, ","))
+			clean := make([]string, 0, len(msg.participant.Languages))
+			for _, l := range msg.participant.Languages {
+				if c := sanitizeLanChatDisplay(l); c != "" {
+					clean = append(clean, c)
+				}
+			}
+			if len(clean) > 0 {
+				wsInfo += fmt.Sprintf(" [%s]", strings.Join(clean, ","))
+			}
 		}
 		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("[LAN Chat] %s is online (from %s)%s", nick, ep, wsInfo))
 		return m, nil

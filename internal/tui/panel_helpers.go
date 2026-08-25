@@ -64,6 +64,22 @@ func normalizePanelLines(lines []string, height int) []string {
 }
 
 func padPanelLine(line string, width int) string {
+	// #1014: defense in depth - expand control characters that slipped past
+	// upstream sanitizers into spaces BEFORE measuring; lipgloss counts them
+	// as width 0 while the terminal expands TABs to tab stops, so a padded
+	// line could still land past the border column.
+	if strings.ContainsFunc(line, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+		var b strings.Builder
+		b.Grow(len(line))
+		for _, r := range line {
+			if r < 0x20 || r == 0x7f {
+				b.WriteByte(' ')
+			} else {
+				b.WriteRune(r)
+			}
+		}
+		line = b.String()
+	}
 	visible := lipgloss.Width(line)
 	if visible >= width {
 		return line
