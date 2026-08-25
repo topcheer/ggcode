@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -480,6 +481,15 @@ var sendFileImageExts = map[string]bool{
 	".png": true, ".jpg": true, ".jpeg": true, ".gif": true, ".webp": true,
 }
 
+// sendFileExamplePath keeps the "must be absolute" hint honest on every
+// platform: Windows users get a drive-letter example instead of /tmp/...
+var sendFileExamplePath = func() string {
+	if runtime.GOOS == "windows" {
+		return `C:\Users\me\Pictures\screenshot.png`
+	}
+	return "/tmp/screenshot.png"
+}()
+
 // doSendFile pushes a local file to a bound IM channel. The file path is
 // sent as the message text: media-capable adapters extract image paths via
 // ExtractImagesFromText and upload them as rich media (the extraction layer
@@ -494,8 +504,11 @@ func (t IMTool) doSendFile(ctx context.Context, adapter, path, caption string, a
 	if path == "" {
 		return Result{IsError: true, Content: "file path is required for send_file action"}, nil
 	}
-	if !filepath.IsAbs(path) {
-		return Result{IsError: true, Content: fmt.Sprintf("path %q must be absolute (e.g. /tmp/screenshot.png)", path)}, nil
+	// Accept both native absolute paths and Unix-style drive-rooted paths
+	// ("/tmp/x.png" resolves to the current drive root on Windows); mirrors
+	// the permission/sandbox.go precedent for cross-platform path checks.
+	if !filepath.IsAbs(path) && !strings.HasPrefix(path, "/") {
+		return Result{IsError: true, Content: fmt.Sprintf("path %q must be absolute (e.g. %s)", path, sendFileExamplePath)}, nil
 	}
 	info, err := os.Stat(path)
 	if err != nil {
