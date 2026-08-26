@@ -424,9 +424,11 @@ func (s *Server) handleMessageSend(w http.ResponseWriter, r *http.Request, req *
 		t, _ := s.handler.GetTask(task.ID)
 		writeRPCResult(w, req.ID, t)
 	case <-timer.C:
+		// #1090: use -32001 to match stream/resubscribe, include task ID in Data
 		writeRPCError(w, req.ID, &JSONRPCError{
-			Code:    -32060,
+			Code:    -32001,
 			Message: "task timed out",
+			Data:    fmt.Sprintf("task %s: use tasks/get to check status", task.ID),
 		})
 	case <-r.Context().Done():
 		// Client disconnected — let the task continue in background.
@@ -660,7 +662,18 @@ func (s *Server) handleTaskResubscribe(w http.ResponseWriter, r *http.Request, r
 	// Wait for terminal state using notification channel.
 	done := s.handler.GetTaskDone(params.ID)
 	if done == nil {
-		// Already terminal.
+		// Already terminal. #1088: the task finished between GetTask and GetTaskDone
+		// (race window where updateStatus closed the channel). Emit artifacts here
+		// too, matching the pattern from handleMessageStream (#565 D).
+		t, _ := s.handler.GetTask(params.ID)
+		for _, art := range t.Artifacts {
+			s.sendSSE(w, flusher, req.ID, TaskArtifactUpdateEvent{
+				TaskID:    t.ID,
+				Artifact:  art,
+				LastChunk: true,
+			})
+		}
+		s.sendSSE(w, flusher, req.ID, TaskStatusUpdateEvent{TaskID: t.ID, Status: t.Status, Final: t.Status.State.IsTerminal()})
 		return
 	}
 
@@ -885,6 +898,7 @@ func (s *Server) rebuildSecuritySchemes() {
 	if s.tokenValidator != nil {
 		schemes["bearer"] = Security{
 			Type:        "http",
+			Scheme:      "bearer", // #1089: A2A spec 4.5 requires "scheme" for type=http
 			Description: "Bearer token authentication (OAuth2 / OIDC)",
 		}
 		security = append(security, map[string][]string{"bearer": {}})
