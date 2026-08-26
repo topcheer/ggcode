@@ -237,15 +237,21 @@ func extractExportedSymbols(file *ast.File) []exportSymbol {
 					}
 				case *ast.ValueSpec:
 					// const or var
+					// Issue #1092: record type signature to detect type changes
 					kind := "var"
 					if d.Tok == token.CONST {
 						kind = "const"
 					}
 					for _, name := range s.Names {
 						if name.IsExported() {
+							sig := ""
+							if s.Type != nil {
+								sig = normalizeType(s.Type)
+							}
 							syms = append(syms, exportSymbol{
-								Name: name.Name,
-								Kind: kind,
+								Name:      name.Name,
+								Kind:      kind,
+								Signature: sig,
 							})
 						}
 					}
@@ -280,9 +286,10 @@ func normalizeFuncSignature(ft *ast.FuncType) string {
 // funcSignatureWithReceiver creates a fingerprint that includes receiver type.
 // Used for method signatures to distinguish between value and pointer receivers.
 // Issue #1043(c): value vs pointer receivers must be different.
+// Issue #1092: remove len(recv.List[0].Names) > 0 check to detect unnamed receivers.
 func funcSignatureWithReceiver(recv *ast.FieldList, ft *ast.FuncType) string {
 	recvPrefix := ""
-	if recv != nil && len(recv.List) > 0 && len(recv.List[0].Names) > 0 {
+	if recv != nil && len(recv.List) > 0 {
 		recvType := normalizeType(recv.List[0].Type)
 		if _, ok := recv.List[0].Type.(*ast.StarExpr); ok {
 			recvPrefix = "ptr-recv:" + recvType

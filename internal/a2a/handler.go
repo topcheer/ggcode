@@ -2,7 +2,6 @@ package a2a
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -328,15 +327,15 @@ func (h *TaskHandler) execute(ctx context.Context, t *Task, perm *SkillPermissio
 
 	switch t.Skill {
 	case SkillFileSearch, SkillGitOps, SkillCommandExec:
-		// If agent is available, use agent for all skills (smarter routing).
-		// Fall back to direct tool execution only if no agent.
 		// Use the latest user message (not History[0]) so that follow-up
 		// messages in input-required flows are actually delivered.
 		lastIdx := len(t.History) - 1
-		if h.agent != nil && len(t.History) > 0 {
-			result, err = h.executeAgent(ctx, perm, t.Skill, t.History[lastIdx])
-		} else if len(t.History) > 0 {
-			result, err = h.executeDirectTool(ctx, perm, t.Skill, t.History[lastIdx])
+		if len(t.History) > 0 {
+			if h.agent == nil {
+				err = fmt.Errorf("agent required for skill %s", t.Skill)
+			} else {
+				result, err = h.executeAgent(ctx, perm, t.Skill, t.History[lastIdx])
+			}
 		} else {
 			err = fmt.Errorf("no message history for skill %s", t.Skill)
 		}
@@ -412,38 +411,6 @@ func (h *TaskHandler) execute(ctx context.Context, t *Task, perm *SkillPermissio
 }
 
 // executeDirectTool runs a tool directly without spinning up a full agent loop.
-func (h *TaskHandler) executeDirectTool(ctx context.Context, perm *SkillPermission, skill string, msg Message) (string, error) {
-	text := extractText(msg)
-	if text == "" {
-		return "", fmt.Errorf("empty input")
-	}
-
-	if h.registry == nil {
-		return "", fmt.Errorf("no tool registry available")
-	}
-
-	// Pick the best tool for the skill.
-	toolName := pickToolForSkill(skill, text)
-
-	// Enforce permission whitelist (nil/empty = all tools allowed).
-	if !isToolAllowed(toolName, perm.AllowedTools) {
-		return "", fmt.Errorf("skill %s is not allowed to use tool %s", skill, toolName)
-	}
-
-	t, ok := h.registry.Get(toolName)
-	if !ok {
-		return "", fmt.Errorf("tool %s not found", toolName)
-	}
-
-	input := buildToolInput(toolName, text)
-	result, err := t.Execute(ctx, input)
-	if err != nil {
-		return "", err
-	}
-
-	return result.Content, nil
-}
-
 // executeAgent runs a full agent loop with restricted permissions.
 func (h *TaskHandler) executeAgent(ctx context.Context, perm *SkillPermission, skill string, msg Message) (string, error) {
 	text := extractText(msg)
@@ -867,17 +834,16 @@ func (h *TaskHandler) WorkspaceMetadata() WorkspaceMeta {
 // SkillPermission defines what a skill can do.
 type SkillPermission struct {
 	AllowedTools  []string // nil = all tools allowed
-	ReadOnly      bool
-	MaxIterations int // 0 = unlimited
+	MaxIterations int      // 0 = unlimited
 }
 
 var skillPermissions = map[string]*SkillPermission{
-	SkillFileSearch:  {AllowedTools: []string{"read_file", "list_directory", "search_files", "glob", "code_search"}, ReadOnly: true, MaxIterations: 0},
-	SkillGitOps:      {AllowedTools: []string{"git_status", "git_diff", "git_log"}, ReadOnly: true, MaxIterations: 0},
-	SkillCommandExec: {AllowedTools: []string{"run_command"}, ReadOnly: false, MaxIterations: 0},
-	SkillCodeEdit:    {AllowedTools: []string{"read_file", "write_file", "edit_file", "search_files"}, ReadOnly: false, MaxIterations: 0},
-	SkillCodeReview:  {AllowedTools: []string{"read_file", "list_directory", "search_files", "git_diff"}, ReadOnly: true, MaxIterations: 0},
-	SkillFullTask:    {AllowedTools: nil, ReadOnly: false, MaxIterations: 0}, // nil = all tools, 0 = unlimited
+	SkillFileSearch:  {AllowedTools: []string{"read_file", "list_directory", "search_files", "glob", "code_search"}, MaxIterations: 0},
+	SkillGitOps:      {AllowedTools: []string{"git_status", "git_diff", "git_log"}, MaxIterations: 0},
+	SkillCommandExec: {AllowedTools: []string{"run_command"}, MaxIterations: 0},
+	SkillCodeEdit:    {AllowedTools: []string{"read_file", "write_file", "edit_file", "search_files"}, MaxIterations: 0},
+	SkillCodeReview:  {AllowedTools: []string{"read_file", "list_directory", "search_files", "git_diff"}, MaxIterations: 0},
+	SkillFullTask:    {AllowedTools: nil, MaxIterations: 0}, // nil = all tools, 0 = unlimited
 }
 
 // ---------------------------------------------------------------------------
@@ -931,55 +897,6 @@ func truncateText(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen-3] + "..."
-}
-
-func pickToolForSkill(skill string, input string) string {
-	switch skill {
-	case SkillFileSearch:
-		if strings.Contains(input, "*") || strings.Contains(input, ".") {
-			return "glob"
-		}
-		return "search_files"
-	case SkillGitOps:
-		input = strings.ToLower(input)
-		if strings.Contains(input, "diff") {
-			return "git_diff"
-		}
-		if strings.Contains(input, "log") {
-			return "git_log"
-		}
-		return "git_status"
-	case SkillCommandExec:
-		return "run_command"
-	default:
-		return "search_files"
-	}
-}
-
-func buildToolInput(toolName, text string) json.RawMessage {
-	switch toolName {
-	case "search_files":
-		input, _ := json.Marshal(map[string]interface{}{"pattern": text, "max_results": 50})
-		return input
-	case "glob":
-		input, _ := json.Marshal(map[string]interface{}{"pattern": text})
-		return input
-	case "git_status", "git_diff", "git_log":
-		input, _ := json.Marshal(map[string]interface{}{})
-		return input
-	case "run_command":
-		input, _ := json.Marshal(map[string]interface{}{"command": text})
-		return input
-	case "list_directory":
-		input, _ := json.Marshal(map[string]interface{}{"path": "."})
-		return input
-	case "read_file":
-		input, _ := json.Marshal(map[string]interface{}{"path": text})
-		return input
-	default:
-		input, _ := json.Marshal(map[string]interface{}{"query": text})
-		return input
-	}
 }
 
 func buildAgentPrompt(skill string, text string) string {
