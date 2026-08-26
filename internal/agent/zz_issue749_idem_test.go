@@ -37,6 +37,7 @@ func TestShellMutatesSources(t *testing.T) {
 		"git apply p.diff", "go mod tidy", "GOFLAGS=x go mod tidy",
 		"# format\ngofmt -w .", "cd pkg && gofmt -w .",
 		"go fmt ./...", // #1028: wraps gofmt -l -w, rewrites in place
+		"go fmt",       // #1028 follow-up: bare form rewrites cwd packages too
 	}
 	no := []string{"go build ./...", "gofmt -l .", "cat go.mod", "sed -n 1p f.go", "", "gofmt "}
 	for _, c := range yes {

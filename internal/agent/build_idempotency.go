@@ -267,6 +267,13 @@ func shellMutatesSources(cmd string) bool {
 			return true
 		}
 	}
+	// #1028 follow-up: bare `go fmt` (no args) also rewrites the current
+	// directory's packages in place; the "go fmt " pattern above requires a
+	// trailing space. It is cacheable (HasPrefix "go fmt"), so without this
+	// the cache-hit note would be false for it too.
+	if lower == "go fmt" {
+		return true
+	}
 	return false
 }
 
