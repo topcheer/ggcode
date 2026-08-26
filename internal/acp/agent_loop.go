@@ -111,7 +111,16 @@ func NewAgentLoop(
 		// #1085: Even in bypass/autopilot mode, respect the three hard security doors
 		// (extremely dangerous commands, network exfiltration, sensitive path redirects).
 		// Let the policy decide first; only Allow can skip client approval.
-		decision, _ := policy.Check(toolName, json.RawMessage(input))
+		//
+		// #1093: consult the agent's CURRENT policy, not the `policy` local
+		// captured here - applyModePolicy swaps the policy via SetPermissionPolicy
+		// on SetMode, and a stale AutoMode closure let auto-allowed tools skip
+		// client approval even after switching to supervised mode.
+		currentPolicy := al.agent.PermissionPolicy()
+		if currentPolicy == nil {
+			currentPolicy = policy
+		}
+		decision, _ := currentPolicy.Check(toolName, json.RawMessage(input))
 		if decision == permission.Allow {
 			return permission.Allow
 		}

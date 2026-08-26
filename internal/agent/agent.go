@@ -636,6 +636,15 @@ func (a *Agent) SetApprovalHandler(fn ApprovalFunc) {
 	a.onApproval = fn
 }
 
+// ApprovalHandler returns the currently installed approval handler (nil if
+// none). Used by the ACP agent loop tests to verify the handler consults the
+// CURRENT permission policy rather than a stale captured one (#1093).
+func (a *Agent) ApprovalHandler() ApprovalFunc {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.onApproval
+}
+
 // SetInterruptionHandler sets a callback that drains user guidance arriving mid-run.
 func (a *Agent) SetInterruptionHandler(fn func() string) {
 	a.mu.Lock()
