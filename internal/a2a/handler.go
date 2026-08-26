@@ -199,9 +199,10 @@ func (h *TaskHandler) Handle(ctx context.Context, skill string, input Message, e
 
 	active := 0
 	for _, t := range h.tasks {
-		// Exclude InputRequired from concurrent count - it is a pseudo-terminal
-		// state that does not consume execution capacity. Fixes #1077.
-		if !t.Status.IsTerminal() && t.Status.State != TaskStateInputRequired {
+		// Exclude InputRequired and AuthRequired from concurrent count - they
+		// are pseudo-terminal states that do not consume execution capacity.
+		// Fixes #1077; AuthRequired aligned per #1107.
+		if !t.Status.IsTerminal() && t.Status.State != TaskStateInputRequired && t.Status.State != TaskStateAuthRequired {
 			active++
 		}
 	}
@@ -941,7 +942,8 @@ func (h *TaskHandler) cleanupExpiredTasksLocked() {
 		// Clean up abandoned input-required tasks that haven't been updated
 		// within maxInputRequiredAge. These are not terminal but if the client
 		// disconnected without follow-up, they leak memory forever.
-		if t.Status.State == TaskStateInputRequired && now.Sub(t.UpdatedAt) > maxInputRequiredAge {
+		// #1107: auth-required is pseudo-terminal the same way - include it.
+		if (t.Status.State == TaskStateInputRequired || t.Status.State == TaskStateAuthRequired) && now.Sub(t.UpdatedAt) > maxInputRequiredAge {
 			delete(h.tasks, id)
 			delete(h.cancels, id)
 		}

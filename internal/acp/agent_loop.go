@@ -693,7 +693,12 @@ func (al *AgentLoop) setupAskUserHandler() {
 		}
 
 		result, err := al.transport.SendRequest(
-			context.Background(),
+			// #1105: pass the run ctx (not context.Background()) so Stop()/
+			// user cancellation aborts the questionnaire wait - the other
+			// requestPermission-family handlers already do this, and the
+			// transport honors ctx.Done since #1046. Without it a cancelled
+			// run could block up to the 5-minute questionnaire timeout.
+			ctx,
 			"session/request_permission",
 			RequestPermissionRequest{
 				SessionID: al.session.ID,

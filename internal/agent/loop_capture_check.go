@@ -15,8 +15,9 @@ package agent
 //	    }()
 //	}
 //
-// Even in Go 1.22+ (where range loop vars are per-iteration), the for-init
-// pattern still has the shared-variable issue when targeting older Go versions.
+// In Go 1.22+ both range and for-init loop variables are per-iteration
+// (#1108: for-init coverage follows the Go 1.22 release notes), so the
+// shared-variable warning only applies when targeting older Go versions.
 // Additionally, the code may be ported to older Go versions, making this a
 // latent bug.
 //
@@ -59,8 +60,14 @@ func checkGoModVersion() {
 	}
 	goModVersionChecked = true
 
-	// Read go.mod file in the current directory or parent directories
-	dir := "."
+	// Read go.mod file in the current directory or parent directories.
+	// #1108: start from the absolute working dir - filepath.Dir(".") == "."
+	// terminates the walk immediately, so the upward search only worked
+	// when cwd happened to be the module root.
+	dir, err := os.Getwd()
+	if err != nil {
+		return
+	}
 	for {
 		path := filepath.Join(dir, "go.mod")
 		if content, err := os.ReadFile(path); err == nil {
@@ -151,9 +158,13 @@ func checkLoopVarCapture(filePath, oldContent, newContent string) []string {
 func formatLoopCaptureWarning(inst loopCaptureInstance) string {
 	fixHint := " Pass it as a parameter: go func(item T) { use(item) }(item), or rebind: item := item before the closure."
 	if inst.kind == "goroutine" {
-		// Issue #1100: suppress "classic gotcha" warning for range loops in Go 1.22+
+		// Issue #1100/#1108: suppress "classic gotcha" warning for loop
+		// captures in Go 1.22+ - per-iteration semantics cover BOTH range
+		// variables and for-init declared variables per the Go 1.22 release
+		// notes ("both those declared by the init statement and those
+		// declared by range").
 		rangeWarning := "all goroutines may see the last iteration's value (classic Go gotcha)."
-		if inst.loopType == "range" && isGo122Plus {
+		if isGo122Plus {
 			rangeWarning = "may still be a bug if the closure is delayed or saved for later use."
 		}
 		return fmt.Sprintf(

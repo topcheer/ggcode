@@ -444,6 +444,13 @@ func (c *Client) promptInternal(
 			return pr, nil
 		case rpc := <-promptRespCh:
 			if rpc.err != nil {
+				// #1106: rpc-layer errors (timeouts, parse failures) must
+				// also send session/cancel - the agent-side run keeps
+				// executing otherwise and its stale session/update stream
+				// pollutes the next prompt. Aligned with the ctx.Done and
+				// idle-timeout exit branches. sendCancel is fire-and-forget
+				// and idempotent.
+				c.sendCancel(sessionID)
 				c.promptMu.Lock()
 				c.clearPromptStateLocked()
 				c.promptMu.Unlock()

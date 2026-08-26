@@ -253,9 +253,12 @@ const (
 )
 
 // IsTerminal returns true for states that cannot transition further.
+// #1107: TaskStateAuthRequired is NOT terminal per the A2A spec - listing
+// it here froze the task forever (done closed, transitions blocked, cancel
+// and continueTask both refused). It is pseudo-terminal like input-required.
 func (s TaskState) IsTerminal() bool {
 	switch s {
-	case TaskStateCompleted, TaskStateFailed, TaskStateCanceled, TaskStateRejected, TaskStateAuthRequired:
+	case TaskStateCompleted, TaskStateFailed, TaskStateCanceled, TaskStateRejected:
 		return true
 	}
 	return false
@@ -284,6 +287,8 @@ type Task struct {
 	UpdatedAt time.Time       `json:"updatedAt"`
 
 	// done is closed when the task reaches a terminal state (completed, failed, canceled, rejected).
+	// auth-required and input-required are pseudo-terminal (#1107): done is
+	// NOT closed for them so the task stays resumable.
 	// Not serialized — used for in-process notification only.
 	done chan struct{} `json:"-"`
 }
