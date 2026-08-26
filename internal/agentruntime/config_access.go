@@ -16,6 +16,7 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // configAccess implements tool.ConfigAccess backed by *config.Config.
@@ -1139,7 +1140,7 @@ func (a *configAccess) listSectionCore() string {
 	return fmt.Sprintf("== Core ==\n  vendor: %s\n  endpoint: %s\n  model: %s\n  language: %s\n  default_mode: %s\n  max_iterations: %d\n  session_token_budget: %d\n  extra_prompt: %s\n  probe_context: %v\n",
 		a.cfg.Vendor, a.cfg.Endpoint, a.cfg.Model, a.cfg.Language,
 		a.cfg.DefaultMode, a.cfg.MaxIterations, a.cfg.SessionTokenBudget,
-		truncate(a.cfg.ExtraPrompt, 80), a.cfg.ProbeContext)
+		util.Truncate(a.cfg.ExtraPrompt, 80), a.cfg.ProbeContext)
 }
 
 func (a *configAccess) listSectionAPIKey() string {
@@ -1178,7 +1179,7 @@ func (a *configAccess) listSectionMCP() string {
 		if srv.URL != "" {
 			cmd = srv.URL
 		}
-		sb.WriteString(fmt.Sprintf("  %s: %s\n", srv.Name, truncate(cmd, 60)))
+		sb.WriteString(fmt.Sprintf("  %s: %s\n", srv.Name, util.Truncate(cmd, 60)))
 	}
 	return sb.String()
 }
@@ -1372,12 +1373,9 @@ func (a *configAccess) reloadProvider() {
 	}
 }
 
-func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
-}
+// truncate was removed in #1030: its byte-sliced s[:maxLen] could split a
+// multi-byte rune and inject invalid UTF-8 into config tool output. Both call
+// sites now use the rune-safe util.Truncate (same family as #1029/#745).
 
 // ============================================================================
 // Model Discovery
