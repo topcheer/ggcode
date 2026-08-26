@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/config"
@@ -50,6 +51,12 @@ type ConfigHotReload struct {
 	interval    time.Duration
 
 	baselines map[string]fileBaseline
+
+	// polling (guarded by mu) is true while pollOnce runs. It lets tests
+	// observe that the poll loop has quiesced after ctx cancel, so temp-dir
+	// cleanup does not race an in-flight config.Load rewriting the file.
+	mu      sync.Mutex
+	polling bool
 }
 
 type fileBaseline struct {
@@ -102,6 +109,15 @@ func (w *ConfigHotReload) Start(ctx context.Context) {
 }
 
 func (w *ConfigHotReload) pollOnce() {
+	w.mu.Lock()
+	w.polling = true
+	w.mu.Unlock()
+	defer func() {
+		w.mu.Lock()
+		w.polling = false
+		w.mu.Unlock()
+	}()
+
 	changed := false
 	for _, p := range w.watchedFiles() {
 		cur := snapshotFile(p)

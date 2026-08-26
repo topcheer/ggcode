@@ -175,4 +175,19 @@ func TestConfigHotReload_ConcurrentAccessUnderRefresh(t *testing.T) {
 	}()
 	<-done
 	cancel()
+
+	// Start's poll loop may still be inside a pollOnce (config.Load and the
+	// api-key migration can rewrite ggcode.yaml on disk) when the test ends.
+	// t.TempDir's RemoveAll then races that write and fails with
+	// "directory not empty". Wait until the loop has quiesced before cleanup.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		w.mu.Lock()
+		idle := !w.polling
+		w.mu.Unlock()
+		if idle {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
 }
