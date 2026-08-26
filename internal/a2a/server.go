@@ -480,11 +480,12 @@ func (s *Server) handleMessageStream(w http.ResponseWriter, r *http.Request, req
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 
-	// Send initial status.
+	// Send current task status (not hardcoded working). #1073
+	t, _ := s.handler.GetTask(task.ID)
 	s.sendSSE(w, flusher, req.ID, TaskStatusUpdateEvent{
 		TaskID: task.ID,
-		Status: TaskStatus{State: TaskStateWorking, Timestamp: time.Now()},
-		Final:  false,
+		Status: t.Status,
+		Final:  t.Status.State.IsTerminal(),
 	})
 
 	// Wait for task to reach terminal state.
@@ -611,8 +612,13 @@ func (s *Server) handleTaskCancel(w http.ResponseWriter, req *JSONRPCRequest) {
 		return
 	}
 
-	// Fetch fresh snapshot AFTER cancellation.
-	result, _ := s.handler.GetTask(params.ID)
+	// Fetch fresh snapshot AFTER cancellation. #1075
+	result, ok := s.handler.GetTask(params.ID)
+	if !ok {
+		// Task was deleted after cancellation (race with cleanupExpiredTasksLocked).
+		writeRPCError(w, req.ID, ErrTaskNotFound)
+		return
+	}
 	writeRPCResult(w, req.ID, result)
 }
 
@@ -779,7 +785,12 @@ func (s *Server) handlePushConfigGet(w http.ResponseWriter, req *JSONRPCRequest)
 	cfg, ok := s.pushConfigs[params.ID]
 	s.pushMu.RUnlock()
 	if !ok {
-		writeRPCError(w, req.ID, ErrTaskNotFound)
+		// Config lookup failure is not a task error - use InvalidParams. #1076
+		writeRPCError(w, req.ID, &JSONRPCError{
+			Code:    -32602, // InvalidParams
+			Message: "Invalid params",
+			Data:    fmt.Sprintf("push config not found: %s", params.ID),
+		})
 		return
 	}
 	writeRPCResult(w, req.ID, cfg)
@@ -902,7 +913,8 @@ func (s *Server) SetHandler(h *TaskHandler) {
 }
 
 // firePushNotifications sends HTTP POST callbacks to all registered push
-// configs for the given task.
+// configs for the given task. Implements failure counting, exponential backoff,
+// and automatic disabling of dead endpoints. Fixes #1074.
 func (s *Server) firePushNotifications(taskID string, payload StreamResponse) {
 	s.pushMu.RLock()
 	configs := make([]PushNotificationConfig, 0)
@@ -933,13 +945,32 @@ func (s *Server) firePushNotifications(taskID string, payload StreamResponse) {
 	}
 
 	for _, cfg := range configs {
-		url := cfg.URL
-		token := cfg.Token
+		// Check if config is disabled or waiting for backoff.
+		s.pushMu.RLock()
+		configCopy := cfg
+		s.pushMu.RUnlock()
+
+		if configCopy.Disabled {
+			debug.Log("a2a.push", "skipping disabled config %s", configCopy.ID)
+			continue
+		}
+
+		now := time.Now()
+		if now.Before(configCopy.NextDeliveryAfter) {
+			debug.Log("a2a.push", "skipping config %s (backoff until %v)", configCopy.ID, configCopy.NextDeliveryAfter)
+			continue
+		}
+
+		url := configCopy.URL
+		token := configCopy.Token
+		configID := configCopy.ID
+
 		safego.Go("a2a.pushNotify", func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 			if err != nil {
+				s.recordPushFailure(configID, err.Error())
 				debug.Log("a2a", "push request error: %v", err)
 				return
 			}
@@ -952,14 +983,17 @@ func (s *Server) firePushNotifications(taskID string, payload StreamResponse) {
 			// (http.DefaultClient followed redirects to internal targets).
 			resp, err := s.pushClient.Do(req)
 			if err != nil {
+				s.recordPushFailure(configID, err.Error())
 				debug.Log("a2a", "push delivery error: %v", err)
 				return
 			}
 			io.Copy(io.Discard, resp.Body) // drain for connection reuse
 			resp.Body.Close()
 			if resp.StatusCode >= 400 {
+				s.recordPushFailure(configID, fmt.Sprintf("HTTP %d", resp.StatusCode))
 				debug.Log("a2a", "push to %s failed: HTTP %d", url, resp.StatusCode)
 			} else {
+				s.recordPushSuccess(configID)
 				debug.Log("a2a", "push delivered to %s: %d", url, resp.StatusCode)
 			}
 		})
@@ -989,6 +1023,57 @@ func writeRPCError(w http.ResponseWriter, id json.RawMessage, rpcErr *JSONRPCErr
 		ID:    normalizeResponseID(id),
 		Error: rpcErr,
 	})
+}
+
+// Constants for push notification health tracking. Fixes #1074.
+const (
+	maxPushFailuresBeforeDisable = 5
+	initialPushBackoff           = 10 * time.Second
+	maxPushBackoff               = 10 * time.Minute
+)
+
+// recordPushFailure updates failure count and backoff for a push config.
+// Implements exponential backoff and disables after max failures. Fixes #1074.
+func (s *Server) recordPushFailure(configID string, reason string) {
+	s.pushMu.Lock()
+	defer s.pushMu.Unlock()
+	cfg, ok := s.pushConfigs[configID]
+	if !ok {
+		return
+	}
+	cfg.ConsecutiveFailures++
+	if cfg.ConsecutiveFailures >= maxPushFailuresBeforeDisable {
+		cfg.Disabled = true
+		debug.Log("a2a.push", "disabled push config %s after %d failures (last: %s)",
+			configID, cfg.ConsecutiveFailures, reason)
+	} else {
+		backoff := time.Duration(int(initialPushBackoff.Seconds())<<cfg.ConsecutiveFailures) * time.Second
+		if backoff > maxPushBackoff {
+			backoff = maxPushBackoff
+		}
+		cfg.NextDeliveryAfter = time.Now().Add(backoff)
+		debug.Log("a2a.push", "push config %s failure %d/%d, backoff %v (reason: %s)",
+			configID, cfg.ConsecutiveFailures, maxPushFailuresBeforeDisable, backoff, reason)
+	}
+	s.pushConfigs[configID] = cfg
+}
+
+// recordPushSuccess resets failure count and backoff for a push config. Fixes #1074.
+func (s *Server) recordPushSuccess(configID string) {
+	s.pushMu.Lock()
+	defer s.pushMu.Unlock()
+	cfg, ok := s.pushConfigs[configID]
+	if !ok {
+		return
+	}
+	wasDisabled := cfg.Disabled
+	cfg.ConsecutiveFailures = 0
+	cfg.NextDeliveryAfter = time.Time{}
+	cfg.Disabled = false
+	s.pushConfigs[configID] = cfg
+	if wasDisabled {
+		debug.Log("a2a.push", "re-enabled push config %s on successful delivery", configID)
+	}
 }
 
 // normalizeResponseID maps an absent request id to JSON null for response

@@ -199,7 +199,9 @@ func (h *TaskHandler) Handle(ctx context.Context, skill string, input Message, e
 
 	active := 0
 	for _, t := range h.tasks {
-		if !t.Status.IsTerminal() {
+		// Exclude InputRequired from concurrent count - it is a pseudo-terminal
+		// state that does not consume execution capacity. Fixes #1077.
+		if !t.Status.IsTerminal() && t.Status.State != TaskStateInputRequired {
 			active++
 		}
 	}
@@ -256,6 +258,15 @@ func (h *TaskHandler) continueTask(ctx context.Context, taskID string, input Mes
 		return nil, fmt.Errorf("task %s is not in input-required state (current: %s)", taskID, task.Status.State)
 	}
 
+	// Check permissions BEFORE mutating state to avoid rollback on failure.
+	// If skill lookup fails, we return early without leaving the task in Working
+	// state with an unclosed done channel. Fixes #1078.
+	perm, ok := skillPermissions[task.Skill]
+	if !ok {
+		h.mu.Unlock()
+		return nil, fmt.Errorf("unknown skill: %s", task.Skill)
+	}
+
 	// Append the new user message to history.
 	task.History = append(task.History, input)
 
@@ -280,11 +291,6 @@ func (h *TaskHandler) continueTask(ctx context.Context, taskID string, input Mes
 	gen := h.installCancelLocked(taskID, cancel)
 	h.mu.Unlock()
 
-	perm, ok := skillPermissions[task.Skill]
-	if !ok {
-		return nil, fmt.Errorf("unknown skill: %s", task.Skill)
-	}
-
 	// Resume execution. Pass the newly installed generation (see execute call
 	// in handleSendMessageSend for the ownership rationale).
 	safego.Go("a2a.execute", func() { h.execute(taskCtx, task, perm, gen) })
@@ -299,6 +305,23 @@ func (h *TaskHandler) continueTask(ctx context.Context, taskID string, input Mes
 
 func (h *TaskHandler) execute(ctx context.Context, t *Task, perm *SkillPermission, installedGen uint64) {
 	h.updateStatus(t, TaskStateWorking, "")
+
+	// Recover from panics to avoid leaking the task in Working state.
+	// Without this, safego.Recover silently swallows panics and the task
+	// remains Working forever, leaking a concurrency slot. Fixes #1080.
+	defer func() {
+		if r := recover(); r != nil {
+			debug.Log("a2a", "execute goroutine panic: %v", r)
+			h.updateStatus(t, TaskStateFailed, fmt.Sprintf("internal error: %v", r))
+			h.mu.Lock()
+			if t.done != nil {
+				close(t.done)
+				t.done = nil
+			}
+			h.mu.Unlock()
+			h.cleanupCancelIf(t.ID, installedGen)
+		}
+	}()
 
 	var result string
 	var err error

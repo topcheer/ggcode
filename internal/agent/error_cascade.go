@@ -107,8 +107,12 @@ type errorCascadeState struct {
 	// roots maps rootKey → list of errors associated with that root.
 	roots map[string][]cascadeEntry
 
-	// fired tracks which root keys have already triggered guidance.
-	fired map[string]bool
+	// firedTier tracks the highest tier already reported per root key.
+	// #1082: a boolean fired map made the hard (4) and abort (5) escalation
+	// tiers unreachable - the soft tier (3) fired first and permanently
+	// silenced the root, so catastrophic trajectories (5-10+ errors on one
+	// root) got a single mild hint. Tiers re-arm only by crossing HIGHER.
+	firedTier map[string]int
 
 	// totalErrors counts all errors recorded this run.
 	totalErrors int
@@ -116,8 +120,8 @@ type errorCascadeState struct {
 
 func newErrorCascadeState() *errorCascadeState {
 	return &errorCascadeState{
-		roots: make(map[string][]cascadeEntry),
-		fired: make(map[string]bool),
+		roots:     make(map[string][]cascadeEntry),
+		firedTier: make(map[string]int),
 	}
 }
 
@@ -125,7 +129,7 @@ func (e *errorCascadeState) reset() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.roots = make(map[string][]cascadeEntry)
-	e.fired = make(map[string]bool)
+	e.firedTier = make(map[string]int)
 	e.totalErrors = 0
 }
 
@@ -270,15 +274,25 @@ func (e *errorCascadeState) recordError(toolName, content string) string {
 
 	count := len(e.roots[rootKey])
 
-	// Check if this root has crossed a threshold and hasn't fired yet.
-	if e.fired[rootKey] {
+	// #1082: tier escalation - fire when crossing into a HIGHER tier than
+	// the last one reported for this root (soft=1, hard=2, abort=3).
+	var tier int
+	switch {
+	case count >= cascadeAbortThreshold:
+		tier = 3
+	case count >= cascadeHardThreshold:
+		tier = 2
+	case count >= cascadeSoftThreshold:
+		tier = 1
+	}
+	if tier <= e.firedTier[rootKey] {
 		return ""
 	}
 
 	var guidance string
-	switch {
-	case count >= cascadeAbortThreshold:
-		e.fired[rootKey] = true
+	switch tier {
+	case 3:
+		e.firedTier[rootKey] = tier
 		guidance = fmt.Sprintf(
 			"[Error Cascade: ABORT] %d tool failures share root cause %s '%s'. "+
 				"The current approach is not working -- every operation touching this "+
@@ -289,8 +303,8 @@ func (e *errorCascadeState) recordError(toolName, content string) string {
 				"environment issue.",
 			count, rootType, rootKey, rootType, rootKey, rootType,
 		)
-	case count >= cascadeHardThreshold:
-		e.fired[rootKey] = true
+	case 2:
+		e.firedTier[rootKey] = tier
 		guidance = fmt.Sprintf(
 			"[Error Cascade: ROOT CAUSE] %d tool failures share root cause %s '%s'. "+
 				"These are NOT independent errors -- they all stem from the same "+
@@ -299,8 +313,8 @@ func (e *errorCascadeState) recordError(toolName, content string) string {
 				"missing import, incorrect type, renamed symbol, or file corruption.",
 			count, rootType, rootKey, rootType, rootKey,
 		)
-	case count >= cascadeSoftThreshold:
-		e.fired[rootKey] = true
+	case 1:
+		e.firedTier[rootKey] = tier
 		guidance = fmt.Sprintf(
 			"[Error Cascade] %d tool failures share root cause %s '%s'. "+
 				"Multiple errors are clustering around this %s -- they likely share "+
@@ -352,5 +366,8 @@ func (e *errorCascadeState) evictMinRoot(rootKey string) {
 	}
 	if evictKey != "" && evictKey != rootKey {
 		delete(e.roots, evictKey)
+		// #1082-B2: clear the fired-tier residue too, or an evicted root that
+		// re-accumulates 3 errors stays permanently silent.
+		delete(e.firedTier, evictKey)
 	}
 }

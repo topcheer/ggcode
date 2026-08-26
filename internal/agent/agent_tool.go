@@ -352,7 +352,7 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 		return a.executeFileTool(ctx, t, tc, env)
 	}
 	if tc.Name == "undo_edit" {
-		return a.executeUndoEdit(ctx, tc)
+		return a.executeUndoEdit(ctx, tc, env)
 	}
 
 	// Sync working directory for tools that have a WorkingDir field.
@@ -1491,7 +1491,33 @@ func simGCD(a, b int) int {
 // executeUndoEdit handles the undo_edit tool by routing to the checkpoint manager.
 // Supports three actions: "undo" (revert last edit), "list" (show checkpoints),
 // and "revert" (roll back to a specific checkpoint by ID).
-func (a *Agent) executeUndoEdit(ctx context.Context, tc provider.ToolCallDelta) tool.Result {
+// executeUndoEdit runs the undo_edit tool. #1083: post-tool-use hooks must
+// run here too - undo/revert restore file contents on disk (checkpoint
+// restore -> AtomicWriteFile/os.Remove), so user hooks like format-on-save,
+// audit logging, or notifications must observe the change. The generic
+// post-hook block in executeTool is unreachable because undo_edit returns
+// early, and neither of its specialized siblings (executeFileTool/
+// executeMultiFileTool) skips the post stage.
+func (a *Agent) executeUndoEdit(ctx context.Context, tc provider.ToolCallDelta, env hooks.HookEnv) tool.Result {
+	result := a.executeUndoEditInner(ctx, tc)
+
+	a.mu.RLock()
+	hookCfg := a.hookConfig
+	a.mu.RUnlock()
+	postEnv := env
+	postEnv.ToolSuccess = !result.IsError
+	if result.IsError {
+		postEnv.ToolError = truncateString(result.Content, 500)
+	}
+	postEnv.ToolResult = truncateString(result.Content, 4096)
+	postResult := hooks.RunPostHooks(hookCfg.PostToolUse, postEnv)
+	if postResult.Output != "" {
+		result.Content += "\n" + postResult.Output
+	}
+	return result
+}
+
+func (a *Agent) executeUndoEditInner(ctx context.Context, tc provider.ToolCallDelta) tool.Result {
 	a.mu.Lock()
 	cpMgr := a.checkpoints
 	a.mu.Unlock()

@@ -256,6 +256,29 @@ func (a *Agent) checkGitDestructive(toolName string, args json.RawMessage) strin
 		}
 	case "git_reset", "git_stash", "git_revert", "git_checkout":
 		patterns = detectDestructiveInGitTool(toolName, args)
+	case "file_ops":
+		// #1084: file_ops delete with recursive=true runs os.RemoveAll - the
+		// first-party equivalent of `rm -rf`. Without this branch an agent
+		// could trivially (and naturally, preferring first-party tools) bypass
+		// the shell-command rm -rf warning entirely.
+		var m struct {
+			Operations []struct {
+				Action    string `json:"action"`
+				Recursive bool   `json:"recursive"`
+			} `json:"operations"`
+		}
+		if err := json.Unmarshal(args, &m); err == nil {
+			for _, op := range m.Operations {
+				if op.Action == "delete" && op.Recursive {
+					patterns = append(patterns, destructivePattern{
+						name:        "rm_rf",
+						severity:    "critical",
+						description: "file_ops recursive delete force-deletes a directory tree without confirmation (os.RemoveAll). This is extremely dangerous and can destroy entire project directories.",
+						suggestion:  "Be very specific about paths. Consider moving to a temp directory instead of deleting. Never recursively delete root, home, or project root paths.",
+					})
+				}
+			}
+		}
 	}
 
 	if len(patterns) == 0 {

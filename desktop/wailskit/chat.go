@@ -2680,19 +2680,29 @@ func (b *ChatBridge) bindTunnelProjectionSession() {
 }
 
 func (b *ChatBridge) CurrentTunnelStatus() tunnel.StatusData {
-	if b.cancel != nil {
+	// #1081: b.cancel must be read under b.mu - this runs on tunnel broker
+	// network goroutines (remote/mobile snapshot requests) concurrently with
+	// run start/stop writers; IsWorking() does the same check under lock.
+	b.mu.Lock()
+	busy := b.cancel != nil
+	b.mu.Unlock()
+	if busy {
 		return tunnel.StatusData{Status: tunnel.StatusBusy}
 	}
 	return tunnel.StatusData{Status: tunnel.StatusIdle}
 }
 
 func (b *ChatBridge) CurrentTunnelActivity() string {
+	// #1081: read b.cancel under lock (see CurrentTunnelStatus).
+	b.mu.Lock()
+	processing := b.cancel != nil
+	b.mu.Unlock()
 	switch {
 	case b.interactions != nil && b.interactions.ApprovalCount() > 0:
 		return "approval"
 	case b.interactions != nil && b.interactions.AskUserCount() > 0:
 		return "ask_user"
-	case b.cancel != nil:
+	case processing:
 		return "processing"
 	default:
 		return ""

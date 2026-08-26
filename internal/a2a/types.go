@@ -456,6 +456,9 @@ type TaskSubscriptionParams struct {
 // ---------------------------------------------------------------------------
 
 // PushNotificationConfig describes a callback endpoint for task notifications.
+// PushNotificationConfig configures HTTP webhook callbacks for task events.
+// Health tracking fields (ConsecutiveFailures, NextDeliveryAfter, Disabled) are
+// updated by firePushNotifications to implement failure backoff and disable dead endpoints.
 type PushNotificationConfig struct {
 	TaskID         string              `json:"taskId,omitempty"`
 	ID             string              `json:"id"`
@@ -463,6 +466,14 @@ type PushNotificationConfig struct {
 	Token          string              `json:"token,omitempty"`
 	Authentication *AuthenticationInfo `json:"authentication,omitempty"`
 	Metadata       json.RawMessage     `json:"metadata,omitempty"`
+
+	// Health tracking fields (not persisted, runtime-only).
+	// ConsecutiveFailures counts consecutive delivery failures.
+	ConsecutiveFailures int `json:"consecutiveFailures,omitempty"`
+	// NextDeliveryAfter is when the next delivery attempt is allowed (exponential backoff).
+	NextDeliveryAfter time.Time `json:"nextDeliveryAfter,omitempty"`
+	// Disabled indicates the config is permanently disabled due to repeated failures.
+	Disabled bool `json:"disabled,omitempty"`
 }
 
 // AuthenticationInfo carries credentials for push notification callbacks.

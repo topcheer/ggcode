@@ -147,10 +147,22 @@ func TestErrorCascade_SoftThreshold(t *testing.T) {
 		t.Errorf("guidance missing root key %q: %q", root, g)
 	}
 
-	// Fourth error: already fired, should not re-fire.
+	// Fourth error (#1082): crossing into the HARD tier must escalate to
+	// ROOT CAUSE guidance instead of staying silent (the old boolean fired
+	// gate made tiers 4/5 dead code).
+	g = s.recordError("grep", `error in "internal/agent/agent.go"`)
+	if g == "" || !strings.Contains(g, "ROOT CAUSE") {
+		t.Errorf("expected ROOT CAUSE escalation at 4th error, got %q", g)
+	}
+	// Same tier again (5th error crosses abort): 5 >= cascadeAbortThreshold.
+	g = s.recordError("grep", `error in "internal/agent/agent.go"`)
+	if g == "" || !strings.Contains(g, "ABORT") {
+		t.Errorf("expected ABORT escalation at 5th error, got %q", g)
+	}
+	// Sixth error: same (highest) tier, no re-fire.
 	g = s.recordError("grep", `error in "internal/agent/agent.go"`)
 	if g != "" {
-		t.Errorf("expected no re-fire after soft guidance, got %q", g)
+		t.Errorf("expected no re-fire after abort tier, got %q", g)
 	}
 }
 
@@ -174,10 +186,16 @@ func TestErrorCascade_HardThreshold(t *testing.T) {
 	}
 	_ = lastGuidance
 
-	// Since it already fired at threshold 3, the 4th should not re-fire.
+	// #1082: the loop above recorded 4 errors (soft tier fired on the 3rd).
+	// The next error is the 5th and must escalate straight to ABORT.
 	g := s.recordError("run_command", `error in "internal/util/util.go"`)
+	if g == "" || !strings.Contains(g, "ABORT") {
+		t.Errorf("expected ABORT escalation at 5th error, got %q", g)
+	}
+	// 6th error: same (highest) tier, no re-fire.
+	g = s.recordError("run_command", `error in "internal/util/util.go"`)
 	if g != "" {
-		t.Errorf("expected no re-fire after fired=true, got %q", g)
+		t.Errorf("expected no re-fire after abort tier, got %q", g)
 	}
 }
 
