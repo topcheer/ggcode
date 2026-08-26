@@ -74,6 +74,8 @@ func DetectMergeConflicts(content string) []ConflictRegion {
 			// Start of a new conflict region
 			if current != nil {
 				// Previous conflict was not properly closed — record it as-is
+				// Fix #1041(b): set Unclosed flag to eliminate state inconsistency
+				current.Unclosed = true
 				regions = appendConflictRegion(regions, *current)
 			}
 			current = &ConflictRegion{
@@ -145,9 +147,14 @@ func FormatConflictWarning(regions []ConflictRegion) string {
 			n,
 		))
 		for _, r := range regions {
+			// Fix #1041(a): render unclosed regions honestly, not 'Lines X-0'
+			rangeText := fmt.Sprintf("Lines %d-%d", r.StartLine, r.EndLine)
+			if r.Unclosed || r.EndLine == 0 {
+				rangeText = fmt.Sprintf("Line %d (unclosed conflict marker)", r.StartLine)
+			}
 			sb.WriteString(fmt.Sprintf(
-				"\n  - Lines %d-%d: %s vs %s",
-				r.StartLine, r.EndLine,
+				"\n  - %s: %s vs %s",
+				rangeText,
 				conflictLabel(r.Branch1), conflictLabel(r.Branch2),
 			))
 		}

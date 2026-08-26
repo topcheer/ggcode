@@ -1309,6 +1309,45 @@ func TestRunStreamAutopilotContinuesAfterPartialProgressUpdate(t *testing.T) {
 	}
 }
 
+// TestRunStreamAutopilotSurvivesEmptyStrategistResponse guards against #1036:
+// a strategist Chat call returning zero text blocks (content-filtered /
+// 200-empty provider soft failure) is an anomaly, not a "goal achieved"
+// signal. The run must continue (default continuation guidance injected)
+// instead of clearing the goal and returning early with all completion
+// gates skipped.
+func TestRunStreamAutopilotSurvivesEmptyStrategistResponse(t *testing.T) {
+	mp := &mockProvider{
+		chatResponses: []*provider.ChatResponse{
+			// [0] stream 1: partial progress
+			{Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("Finished the first module; two modules remain.")}}},
+			// [1] Chat strategist: EMPTY response (no text blocks) - simulates
+			// a content-filtered or malformed provider response.
+			{Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{}}},
+			// [2] stream 2: agent continues after injected continuation guidance
+			{Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("Completed the remaining modules and verified the build.")}}},
+			// [3] Chat strategist: goal achieved
+			{Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("<GOAL_ACHIEVED/>\nAll modules done.")}}},
+		},
+	}
+
+	a := NewAgent(mp, tool.NewRegistry(), "", 3)
+	a.SetPermissionPolicy(permission.NewConfigPolicyWithMode(nil, []string{"."}, permission.AutopilotMode))
+	a.SetAutopilotGoal("finish all modules")
+
+	if err := a.RunStream(context.Background(), "finish all modules", func(event provider.StreamEvent) {}); err != nil {
+		t.Fatalf("RunStream failed: %v", err)
+	}
+
+	// With the old hard-stop behavior the run ended right after the empty
+	// strategist response (1 stream call). Continuing proves the fix.
+	if mp.streamCalls != 2 {
+		t.Fatalf("expected 2 stream calls (agent survived empty strategist response), got %d", mp.streamCalls)
+	}
+	if mp.chatCalls != 2 {
+		t.Fatalf("expected 2 strategist Chat calls, got %d", mp.chatCalls)
+	}
+}
+
 // TestRunStreamAutopilotDoesNotStopWhenStrategistMentionsMarkerButContinues
 // guards against the false-stop bug: the strategist must emit the exact
 // <GOAL_ACHIEVED/> marker to stop the agent. Merely discussing the concept

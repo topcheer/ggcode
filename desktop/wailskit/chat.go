@@ -2846,7 +2846,12 @@ func (b *ChatBridge) RequestAskUser(ctx context.Context, requestID string, req t
 		b.OnStreamEvent("ask_user:request", raw)
 	}
 
-	return b.interactions.AwaitAskUser(context.WithoutCancel(ctx), request)
+	// #1023/#1039: WithoutCancel means ctx.Done() never fires, so a lost
+	// mobile response (tunnel dropped / app closed mid-question) blocked the
+	// agent tool call forever. Bound the wait exactly like RequestApproval.
+	askCtx, cancelAsk := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Minute)
+	defer cancelAsk()
+	return b.interactions.AwaitAskUser(askCtx, request)
 }
 
 // RespondApproval delivers a desktop-originated approval decision to the
@@ -2925,11 +2930,26 @@ func (b *ChatBridge) HandleMobileApprovalResponse(data tunnel.ApprovalResponseDa
 		return
 	}
 	agentruntime.ResolveTunnelApproval(data.Decision, req.ToolName, func(toolName string) {
-		if b.agent != nil {
-			if p, ok := b.agent.PermissionPolicy().(*permission.ConfigPolicy); ok {
-				p.SetOverride(toolName, permission.Allow)
+		if b.agent == nil {
+			return
+		}
+		p, ok := b.agent.PermissionPolicy().(*permission.ConfigPolicy)
+		if !ok {
+			return
+		}
+		// #1038: fine-grained command-pattern grant, aligned with the desktop
+		// RespondApproval / TUI / IM paths. The old SetOverride(toolName, Allow)
+		// blanket-allowed the ENTIRE tool (e.g. every future run_command),
+		// significantly broader than the same always-allow button on desktop,
+		// which only grants the extracted command prefix ("git diff*").
+		if cmd := permission.ExtractCommandFromInput(req.Input); cmd != "" {
+			if pattern := permission.CommandPrefixToPattern(cmd); pattern != "" {
+				p.AllowCommandPattern(pattern)
+				return
 			}
 		}
+		// Non-command tool or unextractable input: fall back to tool-level.
+		p.SetOverride(toolName, permission.Allow)
 	})
 
 	// Push result to mobile (for relay persistence)

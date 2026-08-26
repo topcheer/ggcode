@@ -2509,11 +2509,24 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					continue
 				} else {
 					// Strategist returned empty guidance (not complete, not error).
-					// This can happen with content-filtered or malformed API responses.
-					debug.Log("agent", "Iteration %d: strategist returned empty guidance", i+1)
-					onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: "[Strategist returned no guidance — autopilot stopping]"})
-					a.ClearAutopilotGoal()
-					return nil
+					// This is an anomaly signal (content-filtered or malformed API
+					// response), NOT a "goal achieved" signal. The old behavior
+					// (#1036) cleared the goal and returned nil on a single empty
+					// response - silently ending the run as "complete" while
+					// skipping every completion gate below. Instead, inject a
+					// default continuation guidance and keep going; the existing
+					// strategistNoProgressCount cap above force-terminates if
+					// this recurs, so no infinite-loop risk.
+					debug.Log("agent", "Iteration %d: strategist returned empty guidance; continuing autonomously", i+1)
+					onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: "[Strategist returned no guidance - continuing autonomously]"})
+					a.contextManager.Add(provider.Message{
+						Role: "user",
+						Content: []provider.ContentBlock{{
+							Type: "text",
+							Text: "Continue the task autonomously: check remaining work, run build/tests to verify, then finish and summarize what was completed.",
+						}},
+					})
+					continue
 				}
 			} else if a.currentMode() == permission.AutopilotMode && a.hasAutopilotGoal() && !a.strategistBudgetAnnounced {
 				// Strategist call budget exhausted. Inject a one-time guidance

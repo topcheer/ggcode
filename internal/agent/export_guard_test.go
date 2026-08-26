@@ -321,3 +321,170 @@ const NewMaxRetries = 10
 		t.Errorf("expected DefaultConfig removed, got: %+v", symbols)
 	}
 }
+
+// TestExportGuard_StructFieldDeletion tests Issue #1043(b): deleting a struct field
+// should trigger breaking change detection.
+func TestExportGuard_StructFieldDeletion(t *testing.T) {
+	initial := `package service
+
+type Config struct {
+	Timeout int
+	MaxSize int64
+}
+`
+	dir := setupExportGuardRepo(t, initial)
+
+	// Delete the MaxSize field.
+	edited := `package service
+
+type Config struct {
+	Timeout int
+}
+`
+	goFile := filepath.Join(dir, "service.go")
+	if err := os.WriteFile(goFile, []byte(edited), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	old := gitHeadExportSymbols(dir, "service.go")
+	current := parseExportedSymbols(goFile)
+	changes := diffExportSymbols(old, current)
+
+	if len(changes) == 0 {
+		t.Fatal("expected breaking change for struct field deletion, got none")
+	}
+	found := false
+	for _, c := range changes {
+		if c.Symbol == "Config" && c.Kind == "signature-changed" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected Config signature changed due to field deletion, got: %+v", changes)
+	}
+}
+
+// TestExportGuard_TypeParamChange tests Issue #1043(c): adding/removing type parameters
+// should trigger breaking change detection.
+func TestExportGuard_TypeParamChange(t *testing.T) {
+	initial := `package service
+
+func Process[T any](input T) error {
+	return nil
+}
+`
+	dir := setupExportGuardRepo(t, initial)
+
+	// Remove type parameter - now requires a concrete string type.
+	edited := `package service
+
+func Process(input string) error {
+	return nil
+}
+`
+	goFile := filepath.Join(dir, "service.go")
+	if err := os.WriteFile(goFile, []byte(edited), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	old := gitHeadExportSymbols(dir, "service.go")
+	current := parseExportedSymbols(goFile)
+	changes := diffExportSymbols(old, current)
+
+	if len(changes) == 0 {
+		t.Fatal("expected breaking change for type parameter removal, got none")
+	}
+	if changes[0].Kind != "signature-changed" {
+		t.Errorf("expected signature-changed, got %s", changes[0].Kind)
+	}
+}
+
+// TestExportGuard_ReceiverValueToPointer tests Issue #1043(c): changing receiver
+// from value to pointer should trigger breaking change detection.
+func TestExportGuard_ReceiverValueToPointer(t *testing.T) {
+	initial := `package service
+
+type Handler struct{}
+
+func (h Handler) Serve(data string) error {
+	return nil
+}
+`
+	dir := setupExportGuardRepo(t, initial)
+
+	// Change receiver from value to pointer.
+	edited := `package service
+
+type Handler struct{}
+
+func (h *Handler) Serve(data string) error {
+	return nil
+}
+`
+	goFile := filepath.Join(dir, "service.go")
+	if err := os.WriteFile(goFile, []byte(edited), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	old := gitHeadExportSymbols(dir, "service.go")
+	current := parseExportedSymbols(goFile)
+	changes := diffExportSymbols(old, current)
+
+	if len(changes) == 0 {
+		t.Fatal("expected breaking change for receiver value→pointer, got none")
+	}
+	found := false
+	for _, c := range changes {
+		if c.Symbol == "Handler.Serve" && c.Kind == "signature-changed" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected Handler.Serve signature changed, got: %+v", changes)
+	}
+}
+
+// TestExportGuard_ReceiverPointerToValue tests Issue #1043(c): changing receiver
+// from pointer to value should trigger breaking change detection.
+func TestExportGuard_ReceiverPointerToValue(t *testing.T) {
+	initial := `package service
+
+type Handler struct{}
+
+func (h *Handler) Serve(data string) error {
+	return nil
+}
+`
+	dir := setupExportGuardRepo(t, initial)
+
+	// Change receiver from pointer to value.
+	edited := `package service
+
+type Handler struct{}
+
+func (h Handler) Serve(data string) error {
+	return nil
+}
+`
+	goFile := filepath.Join(dir, "service.go")
+	if err := os.WriteFile(goFile, []byte(edited), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	old := gitHeadExportSymbols(dir, "service.go")
+	current := parseExportedSymbols(goFile)
+	changes := diffExportSymbols(old, current)
+
+	if len(changes) == 0 {
+		t.Fatal("expected breaking change for receiver pointer→value, got none")
+	}
+	found := false
+	for _, c := range changes {
+		if c.Symbol == "Handler.Serve" && c.Kind == "signature-changed" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected Handler.Serve signature changed, got: %+v", changes)
+	}
+}

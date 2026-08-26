@@ -287,6 +287,41 @@ func TestErrorCascade_MaxRootsAllowSingleCluster(t *testing.T) {
 	}
 }
 
+func TestErrorCascade_GenericNounStopList(t *testing.T) {
+	s := newErrorCascadeState()
+
+	// Issue #1040: Generic nouns like "file", "command", "flag" should NOT
+	// trigger cascade detection. Multiple errors with different directories
+	// but the same generic noun should be treated as different roots.
+
+	// Three ENOENT errors in different directories - "no such file or directory"
+	// would match "file" in the stop list, so they should NOT cascade.
+	s.recordError("read_file", "open /tmp/dir1/config.txt: no such file or directory")
+	s.recordError("read_file", "open /tmp/dir2/data.log: no such file or directory")
+	g := s.recordError("grep", "open /tmp/dir3/cache.db: no such file or directory")
+	if g != "" {
+		t.Errorf("expected no cascade for generic noun 'file' across different directories, got %q", g)
+	}
+
+	// Test "unknown command" - should not cascade.
+	s.reset()
+	s.recordError("run_command", "unknown command: buildx")
+	s.recordError("run_command", "unknown command: compose")
+	g = s.recordError("run_command", "unknown command: registry")
+	if g != "" {
+		t.Errorf("expected no cascade for generic noun 'command', got %q", g)
+	}
+
+	// Test "unknown flag" - should not cascade.
+	s.reset()
+	s.recordError("run_command", "unknown flag: --verbose")
+	s.recordError("run_command", "unknown flag: --debug")
+	g = s.recordError("run_command", "unknown flag: --trace")
+	if g != "" {
+		t.Errorf("expected no cascade for generic noun 'flag', got %q", g)
+	}
+}
+
 func TestIsEditingTool(t *testing.T) {
 	editTools := []string{"edit_file", "multi_edit_file", "multi_file_edit", "write_file", "notebook_edit"}
 	for _, tool := range editTools {

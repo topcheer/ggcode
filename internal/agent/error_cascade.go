@@ -176,9 +176,10 @@ func extractCascadeRoot(toolName, content string) (string, cascadeRootType) {
 	// Strategy 4: Extract symbol names from undefined/undeclared errors.
 	if matches := symbolRe.FindStringSubmatch(content); len(matches) > 1 {
 		sym := strings.TrimSpace(matches[1])
-		// Filter out common false positives (single letters, keywords).
-		if len(sym) >= 3 && !isGoKeyword(sym) {
-			return strings.ToLower(sym), cascadeRootSymbol
+		symLower := strings.ToLower(sym)
+		// Filter out common false positives (single letters, keywords, generic nouns).
+		if len(sym) >= 3 && !isGoKeyword(sym) && !cascadeSymbolStopList[symLower] {
+			return symLower, cascadeRootSymbol
 		}
 	}
 
@@ -227,6 +228,18 @@ func isGoKeyword(s string) bool {
 		"case": true, "default": true, "defer": true, "go": true,
 	}
 	return keywords[strings.ToLower(s)]
+}
+
+// cascadeSymbolStopList filters out generic nouns that are too broad to be
+// meaningful cascade roots. Words like "file", "command", "flag" appear in many
+// unrelated error messages (e.g., "no such file or directory", "unknown command")
+// and cause false clustering when multiple different errors share the same generic
+// word. These are rejected as symbol roots to avoid misleading cascade guidance.
+var cascadeSymbolStopList = map[string]bool{
+	"file": true, "files": true, "directory": true, "directories": true,
+	"command": true, "flag": true, "option": true, "module": true,
+	"package": true, "task": true, "tool": true, "user": true,
+	"host": true, "name": true, "path": true, "symbol": true, "type": true,
 }
 
 // recordError records a tool error and returns cascade guidance if a cascade

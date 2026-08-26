@@ -1,5 +1,23 @@
 package agent
 
+// ═══ TOMBSTONE (#1042): DEAD CODE — zero production call sites ═══
+//
+// checkExitPath is never invoked: write_integrity.go and every registration
+// table in this package have no exit-path entry (verified by call-site audit).
+// Per the #328/#330/#499 dead-detector convention this file is kept with a
+// tombstone rather than deleted, and must NOT be wired into the write-integrity
+// registry as-is.
+//
+// If resurrected, fix this latent defect FIRST:
+//
+//  filterExitPathDelta uses message keys that embed line numbers (e.g.,
+//  "redundant-else@L42", "deep-nesting@L15"). When edits shift lines, the
+//  same issue appears at a new line number, bypassing delta filtering. The key
+//  must be line-number invariant — either count issues by kind, or encode
+//  kind+function+ordinal to survive line shifts before wiring this check.
+//
+// ═══ END TOMBSTONE ═══
+
 // Exit Path & Early Return Intelligence (Check #57)
 //
 // Problem: AI coding agents frequently produce Go code with control flow

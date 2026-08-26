@@ -333,6 +333,8 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 	}
 
 	// Pre-tool-use hooks
+	// Run once here for all tools - do NOT repeat in executeMultiFileTool/executeFileTool
+	// Fix #1035: file-edit tools route to specialized functions but hooks should run exactly once
 	preResult := hooks.RunPreHooks(hookCfg.PreToolUse, env)
 	if !preResult.Allowed {
 		return tool.Result{Content: preResult.Output, IsError: true}
@@ -431,10 +433,7 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 	a.mu.RLock()
 	hookCfg := a.hookConfig
 	a.mu.RUnlock()
-	preResult := hooks.RunPreHooks(hookCfg.PreToolUse, env)
-	if !preResult.Allowed {
-		return tool.Result{Content: preResult.Output, IsError: true}
-	}
+	// PreToolUse hook already run in executeTool - do NOT duplicate here (#1035)
 
 	// Pre-write dry-run validation: check all planned edits for fatal errors
 	// before any file is written. Blocks the entire batch if any file has a
@@ -655,10 +654,7 @@ func (a *Agent) executeFileTool(ctx context.Context, t tool.Tool, tc provider.To
 	a.mu.RLock()
 	hookCfg2 := a.hookConfig
 	a.mu.RUnlock()
-	preResult := hooks.RunPreHooks(hookCfg2.PreToolUse, env)
-	if !preResult.Allowed {
-		return tool.Result{Content: preResult.Output, IsError: true}
-	}
+	// PreToolUse hook already run in executeTool - do NOT duplicate here (#1035)
 
 	// Execute the actual tool (with panic recovery)
 	fileStart := time.Now()

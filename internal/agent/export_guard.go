@@ -106,13 +106,17 @@ func (a *Agent) checkExportGuard(filePath string) string {
 		// breaking changes it exists to catch.
 		return ""
 	}
-	a.exportGuard.checked[abs] = true
 
 	newSyms := parseExportedSymbols(abs)
 	if newSyms == nil {
 		// Current file unparseable — other guards will catch syntax errors.
+		// Do NOT burn the marker here (#1043): if parsing fails now but
+		// succeeds later (after a syntax fix), we want to check again.
 		return ""
 	}
+	// Issue #1043(a): Only burn the once-per-run marker after successful
+	// parsing. If parsing fails, the guard should retry on subsequent edits.
+	a.exportGuard.checked[abs] = true
 
 	changes := diffExportSymbols(oldSyms, newSyms)
 	if len(changes) == 0 {
@@ -186,10 +190,13 @@ func extractExportedSymbols(file *ast.File) []exportSymbol {
 				strings.HasPrefix(name, "Fuzz") {
 				continue // test helpers
 			}
-			sig := normalizeFuncSignature(d.Type)
+
+			// Issue #1043(c): use funcSignatureWithReceiver for methods
+			// to include receiver type (value vs pointer) in the fingerprint.
 			if d.Recv != nil && len(d.Recv.List) > 0 {
 				recvType := receiverTypeName(d.Recv.List[0].Type)
 				if recvType != "" {
+					sig := funcSignatureWithReceiver(d.Recv, d.Type)
 					syms = append(syms, exportSymbol{
 						Name:      recvType + "." + name,
 						Kind:      "method",
@@ -197,6 +204,7 @@ func extractExportedSymbols(file *ast.File) []exportSymbol {
 					})
 				}
 			} else {
+				sig := normalizeFuncSignature(d.Type)
 				syms = append(syms, exportSymbol{
 					Name:      name,
 					Kind:      "func",
@@ -216,8 +224,10 @@ func extractExportedSymbols(file *ast.File) []exportSymbol {
 							kind = "interface"
 							// Bug B fix: record method set fingerprint for interfaces
 							signature = extractInterfaceMethodFingerprint(ifaceType)
-						} else if _, ok := s.Type.(*ast.StructType); ok {
+						} else if structType, ok := s.Type.(*ast.StructType); ok {
 							kind = "struct"
+							// Issue #1043(b): record field set fingerprint for structs
+							signature = extractStructFieldFingerprint(structType)
 						}
 						syms = append(syms, exportSymbol{
 							Name:      s.Name.Name,
@@ -248,20 +258,78 @@ func extractExportedSymbols(file *ast.File) []exportSymbol {
 }
 
 // normalizeFuncSignature creates a string fingerprint of a function's signature
-// (parameter and result types) so that signature changes can be detected.
+// (type parameters, receiver, parameter and result types) so that signature
+// changes can be detected.
 // e.g., func Foo(a int, b string) error → "(int,string)(error)"
+// With receiver: func (r *MyType) Foo() error → "ptr-recv:MyType()()()"
 func normalizeFuncSignature(ft *ast.FuncType) string {
+	// Issue #1043(c): include type parameters
+	typeParams := ""
+	if ft.TypeParams != nil && len(ft.TypeParams.List) > 0 {
+		typeParams = normalizeFieldList(ft.TypeParams)
+	}
+
 	params := normalizeFieldList(ft.Params)
 	results := ""
 	if ft.Results != nil {
 		results = normalizeFieldList(ft.Results)
 	}
-	return fmt.Sprintf("(%s)(%s)", params, results)
+	return fmt.Sprintf("<%s>(%s)(%s)", typeParams, params, results)
+}
+
+// funcSignatureWithReceiver creates a fingerprint that includes receiver type.
+// Used for method signatures to distinguish between value and pointer receivers.
+// Issue #1043(c): value vs pointer receivers must be different.
+func funcSignatureWithReceiver(recv *ast.FieldList, ft *ast.FuncType) string {
+	recvPrefix := ""
+	if recv != nil && len(recv.List) > 0 && len(recv.List[0].Names) > 0 {
+		recvType := normalizeType(recv.List[0].Type)
+		if _, ok := recv.List[0].Type.(*ast.StarExpr); ok {
+			recvPrefix = "ptr-recv:" + recvType
+		} else {
+			recvPrefix = "val-recv:" + recvType
+		}
+	}
+	sig := normalizeFuncSignature(ft)
+	if recvPrefix != "" {
+		return recvPrefix + ":" + sig
+	}
+	return sig
+}
+
+// normalizeType converts an AST type expression to a normalized string representation.
+// Used for struct fields and receiver types in fingerprint generation.
+func normalizeType(expr ast.Expr) string {
+	// Handle basic types and qualified identifiers
+	if ident, ok := expr.(*ast.Ident); ok {
+		return ident.Name
+	}
+	if selector, ok := expr.(*ast.SelectorExpr); ok {
+		if xIdent, ok := selector.X.(*ast.Ident); ok {
+			return xIdent.Name + "." + selector.Sel.Name
+		}
+	}
+	// Handle pointer types: strip the * prefix
+	if star, ok := expr.(*ast.StarExpr); ok {
+		return "*" + normalizeType(star.X)
+	}
+	// Handle slice types
+	if array, ok := expr.(*ast.ArrayType); ok {
+		return "[]" + normalizeType(array.Elt)
+	}
+	// Handle map types
+	if mp, ok := expr.(*ast.MapType); ok {
+		return "map[" + normalizeType(mp.Key) + "]" + normalizeType(mp.Value)
+	}
+	// For complex types (chan, func, struct, interface), return a simplified placeholder
+	// TODO(#1043): Expand support for full type fidelity if needed.
+	return "complex"
 }
 
 // extractInterfaceMethodFingerprint creates a sorted string fingerprint of all
 // method names and signatures in an interface. Used by Bug B fix to detect
 // when methods are added or removed from exported interfaces.
+// Issue #1043(c): now uses funcSignatureWithReceiver to include receiver info.
 func extractInterfaceMethodFingerprint(ifaceType *ast.InterfaceType) string {
 	if ifaceType.Methods == nil {
 		return ""
@@ -271,6 +339,8 @@ func extractInterfaceMethodFingerprint(ifaceType *ast.InterfaceType) string {
 	for _, field := range ifaceType.Methods.List {
 		if ft, ok := field.Type.(*ast.FuncType); ok && len(field.Names) > 0 {
 			for _, name := range field.Names {
+				// Issue #1043(c): interface methods have no receiver field,
+				// but we still use the unified signature for consistency
 				sig := normalizeFuncSignature(ft)
 				methods = append(methods, name.Name+":"+sig)
 			}
@@ -278,6 +348,29 @@ func extractInterfaceMethodFingerprint(ifaceType *ast.InterfaceType) string {
 	}
 	sort.Strings(methods)
 	return strings.Join(methods, "|")
+}
+
+// extractStructFieldFingerprint creates a sorted string fingerprint of all
+// exported field names and types in a struct. Used by Issue #1043(b) to detect
+// when fields are added, removed, or renamed from exported structs.
+// TODO(#1043): Handle embedded struct/interface fields (anonymous fields).
+func extractStructFieldFingerprint(structType *ast.StructType) string {
+	if structType.Fields == nil {
+		return ""
+	}
+
+	var fields []string
+	for _, field := range structType.Fields.List {
+		// Process named fields (skip anonymous/embedded fields for now)
+		for _, name := range field.Names {
+			if name.IsExported() {
+				ty := normalizeType(field.Type)
+				fields = append(fields, name.Name+":"+ty)
+			}
+		}
+	}
+	sort.Strings(fields)
+	return strings.Join(fields, "|")
 }
 
 // normalizeFieldList extracts a comma-separated type string from an AST
