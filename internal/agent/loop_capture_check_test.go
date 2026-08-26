@@ -230,3 +230,85 @@ func process(a, b, c, d []int) {
 		t.Fatalf("expected max 3 warnings, got %d", len(warnings))
 	}
 }
+
+// TestCheckLoopVarCapture_Issue1100_DeltaKeyWithFuncName tests that delta
+// suppression uses funcName+varName+kind+loopType to distinguish multiple
+// capture points in the same function.
+func TestCheckLoopVarCapture_Issue1100_DeltaKeyWithFuncName(t *testing.T) {
+	old := `package main
+
+func process(items []int) {
+	for _, item := range items {
+		go func() {
+			println(item)
+		}()
+	}
+}
+`
+
+	// Add a second capture point for the same variable in the same function
+	// With old delta key (varName+kind+loopType), this would be suppressed
+	// With new delta key including funcName, this should still be suppressed
+	new := `package main
+
+func process(items []int) {
+	for _, item := range items {
+		go func() {
+			println(item)
+		}()
+	}
+	for _, item := range items {
+		defer func() {
+			println(item)
+		}()
+	}
+}
+`
+	warnings := checkLoopVarCapture("example.go", old, new)
+	// Both capture points existed in different forms before editing
+	// The second one (defer) is new, so we expect 1 warning
+	if len(warnings) != 1 {
+		t.Fatalf("Issue #1100: expected 1 warning (new defer capture), got %d: %v", len(warnings), warnings)
+	}
+	if !strings.Contains(warnings[0], "deferred") {
+		t.Fatalf("Issue #1100: expected defer capture warning, got: %v", warnings[0])
+	}
+}
+
+// TestCheckLoopVarCapture_Issue1100_DifferentFuncTriggersDelta tests that
+// the same capture pattern in a different function triggers a warning.
+func TestCheckLoopVarCapture_Issue1100_DifferentFuncTriggersDelta(t *testing.T) {
+	old := `package main
+
+func process(items []int) {
+	for _, item := range items {
+		go func() {
+			println(item)
+		}()
+	}
+}
+`
+
+	new := `package main
+
+func process(items []int) {
+	for _, item := range items {
+		go func() {
+			println(item)
+		}()
+	}
+}
+
+func handle(items []int) {
+	for _, item := range items {
+		go func() {
+			println(item)
+		}()
+	}
+}
+`
+	warnings := checkLoopVarCapture("example.go", old, new)
+	if len(warnings) != 1 {
+		t.Fatalf("Issue #1100: expected 1 warning (new function), got %d: %v", len(warnings), warnings)
+	}
+}

@@ -285,9 +285,80 @@ func TestCheckLockWithoutUnlock_SyntaxErrorSkips(t *testing.T) {
 	new := `package main
 
 func broken( {
-`
+	`
 	warnings := checkLockWithoutUnlock("test.go", "", new)
 	if len(warnings) != 0 {
 		t.Fatalf("expected 0 warnings for unparseable file, got %d", len(warnings))
+	}
+}
+
+// TestCheckLockWithoutUnlock_Issue1099_ContentAnchorDelta tests that delta
+// suppression uses content anchors (funcName+receiver+method) instead of
+// position strings, so adding lines before the lock doesn't cause false positives.
+func TestCheckLockWithoutUnlock_Issue1099_ContentAnchorDelta(t *testing.T) {
+	// Old content has a lock-without-unlock at line 10
+	old := `package main
+
+import "sync"
+
+func worker(mu *sync.Mutex) {
+	mu.Lock()
+	doWork()
+}
+
+func helper() {
+	helperWork()
+}
+`
+
+	// New content adds lines at the top, shifting lock to line 13
+	// The lock pattern (same funcName+receiver+method) should be recognized as delta
+	new := `package main
+// New comment line
+// Another comment
+
+import "sync"
+
+func worker(mu *sync.Mutex) {
+	mu.Lock()
+	doWork()
+}
+
+func helper() {
+	helperWork()
+}
+`
+	warnings := checkLockWithoutUnlock("test.go", old, new)
+	if len(warnings) != 0 {
+		t.Fatalf("Issue #1099: expected 0 warnings (content anchor delta should recognize same lock), got %d: %v", len(warnings), warnings)
+	}
+}
+
+// TestCheckLockWithoutUnlock_Issue1099_DifferentFuncNameTriggersDelta tests that
+// changing the function name triggers a new warning (proves content anchor works).
+func TestCheckLockWithoutUnlock_Issue1099_DifferentFuncNameTriggersDelta(t *testing.T) {
+	old := `package main
+
+import "sync"
+
+func worker(mu *sync.Mutex) {
+	mu.Lock()
+	doWork()
+}
+`
+
+	// Renamed function: the content anchor (funcName) changes
+	new := `package main
+
+import "sync"
+
+func workerV2(mu *sync.Mutex) {
+	mu.Lock()
+	doWork()
+}
+`
+	warnings := checkLockWithoutUnlock("test.go", old, new)
+	if len(warnings) != 1 {
+		t.Fatalf("Issue #1099: expected 1 warning (funcName changed), got %d: %v", len(warnings), warnings)
 	}
 }

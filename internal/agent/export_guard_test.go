@@ -488,3 +488,136 @@ func (h Handler) Serve(data string) error {
 		t.Errorf("expected Handler.Serve signature changed, got: %+v", changes)
 	}
 }
+
+// TestExportGuard_Issue1101_ChannelDirection tests Issue #1101 #3: changing
+// channel direction (chan vs chan<- vs <-chan) should trigger breaking change.
+func TestExportGuard_Issue1101_ChannelDirection(t *testing.T) {
+	initial := `package service
+
+type Worker struct {
+	Jobs chan int
+}
+`
+	dir := setupExportGuardRepo(t, initial)
+
+	// Change from bidirectional to send-only.
+	edited := `package service
+
+type Worker struct {
+	Jobs chan<- int
+}
+`
+	goFile := filepath.Join(dir, "service.go")
+	if err := os.WriteFile(goFile, []byte(edited), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	old := gitHeadExportSymbols(dir, "service.go")
+	current := parseExportedSymbols(goFile)
+	changes := diffExportSymbols(old, current)
+
+	if len(changes) == 0 {
+		t.Fatal("Issue #1101 #3: expected breaking change for channel direction change, got none")
+	}
+}
+
+// TestExportGuard_Issue1101_ArrayLength tests Issue #1101 #C: changing array
+// length ([5]int vs [10]int) should trigger breaking change.
+func TestExportGuard_Issue1101_ArrayLength(t *testing.T) {
+	initial := `package service
+
+type Buffer struct {
+	Data [5]byte
+}
+`
+	dir := setupExportGuardRepo(t, initial)
+
+	// Change array length.
+	edited := `package service
+
+type Buffer struct {
+	Data [10]byte
+}
+`
+	goFile := filepath.Join(dir, "service.go")
+	if err := os.WriteFile(goFile, []byte(edited), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	old := gitHeadExportSymbols(dir, "service.go")
+	current := parseExportedSymbols(goFile)
+	changes := diffExportSymbols(old, current)
+
+	if len(changes) == 0 {
+		t.Fatal("Issue #1101 #C: expected breaking change for array length change, got none")
+	}
+}
+
+// TestExportGuard_Issue1101_InterfaceEmbeddedType tests Issue #1101 #5: changing
+// an embedded interface type should trigger breaking change.
+func TestExportGuard_Issue1101_InterfaceEmbeddedType(t *testing.T) {
+	initial := `package service
+
+import "io"
+
+type Handler interface {
+	io.Reader
+}
+`
+	dir := setupExportGuardRepo(t, initial)
+
+	// Change embedded interface.
+	edited := `package service
+
+import "io"
+
+type Handler interface {
+	io.Writer
+}
+`
+	goFile := filepath.Join(dir, "service.go")
+	if err := os.WriteFile(goFile, []byte(edited), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	old := gitHeadExportSymbols(dir, "service.go")
+	current := parseExportedSymbols(goFile)
+	changes := diffExportSymbols(old, current)
+
+	if len(changes) == 0 {
+		t.Fatal("Issue #1101 #5: expected breaking change for embedded interface change, got none")
+	}
+}
+
+// TestExportGuard_Issue1101_StructEmbeddedField tests Issue #1101 #B: changing
+// an embedded struct field should trigger breaking change.
+func TestExportGuard_Issue1101_StructEmbeddedField(t *testing.T) {
+	initial := `package service
+
+import "sync"
+
+type Server struct {
+	sync.Mutex
+}
+`
+	dir := setupExportGuardRepo(t, initial)
+
+	// Remove embedded field.
+	edited := `package service
+
+type Server struct {
+}
+`
+	goFile := filepath.Join(dir, "service.go")
+	if err := os.WriteFile(goFile, []byte(edited), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	old := gitHeadExportSymbols(dir, "service.go")
+	current := parseExportedSymbols(goFile)
+	changes := diffExportSymbols(old, current)
+
+	if len(changes) == 0 {
+		t.Fatal("Issue #1101 #B: expected breaking change for embedded struct removal, got none")
+	}
+}

@@ -42,16 +42,70 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
 	"path/filepath"
 	"strings"
 )
 
+// Issue #1100: read go.mod to detect Go version for range loop semantics.
+// Go 1.22+ uses per-iteration range variables, so the "classic gotcha" warning
+// should be suppressed for range loops when using Go 1.22+.
+var goModVersionChecked bool
+var isGo122Plus bool
+
+func checkGoModVersion() {
+	if goModVersionChecked {
+		return
+	}
+	goModVersionChecked = true
+
+	// Read go.mod file in the current directory or parent directories
+	dir := "."
+	for {
+		path := filepath.Join(dir, "go.mod")
+		if content, err := os.ReadFile(path); err == nil {
+			// Parse go version line (e.g., "go 1.22.0" or "go 1.26.2")
+			lines := strings.Split(string(content), "\n")
+			for _, line := range lines {
+				line = strings.TrimSpace(line)
+				if strings.HasPrefix(line, "go ") {
+					version := strings.TrimPrefix(line, "go ")
+					parts := strings.Split(version, ".")
+					if len(parts) >= 2 {
+						major := strings.TrimSpace(parts[0])
+						minor := strings.TrimSpace(parts[1])
+						if major == "1" {
+							// Compare minor version: 22+ means Go 1.22+
+							if len(minor) > 0 && minor[0] >= '2' && len(minor) >= 2 && minor[0:2] >= "22" {
+								isGo122Plus = true
+							}
+						} else if major >= "2" {
+							// Go 2.0+ definitely has per-iteration range variables
+							isGo122Plus = true
+						}
+					}
+					break
+				}
+			}
+			break
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+}
+
 // loopCaptureInstance represents a detected loop variable capture issue.
+// Issue #1100: added funcName for finer-grained delta key to avoid collapsing
+// multiple capture points into one warning.
 type loopCaptureInstance struct {
 	posStr   string // position of the function literal
 	varName  string // captured loop variable name
 	loopType string // "range" or "for"
 	kind     string // "goroutine" or "defer"
+	funcName string // containing function name for delta key
 }
 
 // checkLoopVarCapture performs AST-based loop variable capture detection on
@@ -67,12 +121,18 @@ func checkLoopVarCapture(filePath, oldContent, newContent string) []string {
 		return nil
 	}
 
+	// Issue #1100: check go.mod version to suppress range warnings for Go 1.22+
+	checkGoModVersion()
+
 	oldSet := collectLoopCaptureIssues(oldContent)
 	newInstances := findLoopCaptureIssues(newContent)
 
 	var warnings []string
 	for _, inst := range newInstances {
-		key := inst.varName + inst.kind + inst.loopType
+		// Issue #1100: use funcName+varName+kind+loopType as delta key
+		// instead of just varName+kind+loopType to avoid collapsing
+		// multiple capture points in the same function.
+		key := inst.funcName + "|" + inst.varName + "|" + inst.kind + "|" + inst.loopType
 		if oldSet[key] {
 			continue
 		}
@@ -86,14 +146,20 @@ func checkLoopVarCapture(filePath, oldContent, newContent string) []string {
 }
 
 // formatLoopCaptureWarning converts a loopCaptureInstance into a warning string.
+// Issue #1100: for range loops with Go 1.22+, the warning is downgraded
+// since range variables are per-iteration.
 func formatLoopCaptureWarning(inst loopCaptureInstance) string {
 	fixHint := " Pass it as a parameter: go func(item T) { use(item) }(item), or rebind: item := item before the closure."
 	if inst.kind == "goroutine" {
+		// Issue #1100: suppress "classic gotcha" warning for range loops in Go 1.22+
+		rangeWarning := "all goroutines may see the last iteration's value (classic Go gotcha)."
+		if inst.loopType == "range" && isGo122Plus {
+			rangeWarning = "may still be a bug if the closure is delayed or saved for later use."
+		}
 		return fmt.Sprintf(
 			"Loop variable '%s' captured in goroutine at %s inside %s loop: "+
-				"all goroutines may see the last iteration's value (classic Go gotcha)."+
-				"%s",
-			inst.varName, inst.posStr, inst.loopType, fixHint)
+				"%s%s",
+			inst.varName, inst.posStr, inst.loopType, rangeWarning, fixHint)
 	}
 	return fmt.Sprintf(
 		"Loop variable '%s' captured in deferred closure at %s inside %s loop: "+
@@ -120,14 +186,16 @@ func findLoopCaptureIssues(src string) []loopCaptureInstance {
 		if !ok || fn.Body == nil {
 			continue
 		}
-		instances = append(instances, analyzeLoopsForCapture(fset, fn.Body)...)
+		funcName := fn.Name.Name
+		instances = append(instances, analyzeLoopsForCapture(fset, funcName, fn.Body)...)
 	}
 	return instances
 }
 
 // analyzeLoopsForCapture walks a function body looking for for/range loops
 // and checks their bodies for loop variable capture in closures.
-func analyzeLoopsForCapture(fset *token.FileSet, body *ast.BlockStmt) []loopCaptureInstance {
+// Issue #1100: added funcName parameter for delta key generation.
+func analyzeLoopsForCapture(fset *token.FileSet, funcName string, body *ast.BlockStmt) []loopCaptureInstance {
 	var instances []loopCaptureInstance
 
 	ast.Inspect(body, func(node ast.Node) bool {
@@ -157,7 +225,7 @@ func analyzeLoopsForCapture(fset *token.FileSet, body *ast.BlockStmt) []loopCapt
 			if rebound[v] {
 				continue
 			}
-			instances = append(instances, findCaptureInBody(fset, loopBody, v, loopType)...)
+			instances = append(instances, findCaptureInBody(fset, funcName, loopBody, v, loopType)...)
 		}
 		return true
 	})
@@ -235,7 +303,8 @@ func scanRebindAssignment(as *ast.AssignStmt, target, result map[string]bool) {
 
 // findCaptureInBody searches a loop body for go/defer function literals that
 // capture the given loop variable without passing it as a parameter.
-func findCaptureInBody(fset *token.FileSet, body *ast.BlockStmt, varName, loopType string) []loopCaptureInstance {
+// Issue #1100: added funcName parameter for delta key generation.
+func findCaptureInBody(fset *token.FileSet, funcName string, body *ast.BlockStmt, varName, loopType string) []loopCaptureInstance {
 	var instances []loopCaptureInstance
 
 	ast.Inspect(body, func(node ast.Node) bool {
@@ -256,6 +325,7 @@ func findCaptureInBody(fset *token.FileSet, body *ast.BlockStmt, varName, loopTy
 				varName:  varName,
 				loopType: loopType,
 				kind:     kind,
+				funcName: funcName,
 			})
 		}
 		return true
@@ -313,6 +383,7 @@ func identReferenced(node ast.Node, name string) bool {
 
 // collectLoopCaptureIssues parses old content and returns a set of existing
 // loop capture issue signatures for delta-aware suppression.
+// Issue #1100: use funcName+varName+kind+loopType as delta key.
 func collectLoopCaptureIssues(src string) map[string]bool {
 	if strings.TrimSpace(src) == "" {
 		return nil
@@ -320,7 +391,9 @@ func collectLoopCaptureIssues(src string) map[string]bool {
 	instances := findLoopCaptureIssues(src)
 	result := make(map[string]bool, len(instances))
 	for _, inst := range instances {
-		result[inst.varName+inst.kind+inst.loopType] = true
+		// Issue #1100: use funcName+varName+kind+loopType as delta key
+		key := inst.funcName + "|" + inst.varName + "|" + inst.kind + "|" + inst.loopType
+		result[key] = true
 	}
 	return result
 }

@@ -54,10 +54,13 @@ var lockMethodNames = map[string]string{
 }
 
 // lockWithoutUnlockInstance represents a detected lock-without-unlock pattern.
+// Issue #1099: delta key uses content anchor (funcName+receiver+method) instead of
+// position to avoid false positives when file edits shift line numbers.
 type lockWithoutUnlockInstance struct {
 	receiver string // the variable/expression that .Lock() was called on
 	method   string // the lock method name (Lock, RLock, TryLock)
-	posStr   string // human-readable position string
+	funcName string // containing function name for delta key
+	posStr   string // human-readable position string for warning display
 }
 
 // checkLockWithoutUnlock performs AST-based deadlock detection on Go source.
@@ -81,21 +84,27 @@ func checkLockWithoutUnlock(filePath, oldContent, newContent string) []string {
 		return nil
 	}
 
-	// Delta check: compare against old content positions (fix #142).
-	var oldPos map[string]bool
+	// Delta check: compare against old content using content anchors (funcName+receiver+method).
+	// Issue #1099: using position strings causes false positives when file edits shift line numbers.
+	var oldKeys map[string]bool
 	if strings.TrimSpace(oldContent) != "" {
 		for _, iss := range findLocksWithoutUnlock(oldContent) {
-			if oldPos == nil {
-				oldPos = make(map[string]bool)
+			if oldKeys == nil {
+				oldKeys = make(map[string]bool)
 			}
-			oldPos[iss.posStr] = true
+			// Use content anchor (funcName+receiver+method) instead of position
+			key := iss.funcName + "|" + iss.receiver + "|" + iss.method
+			oldKeys[key] = true
 		}
 	}
 
 	var warnings []string
 	for _, inst := range newInstances {
-		if oldPos != nil && oldPos[inst.posStr] {
-			continue
+		if oldKeys != nil {
+			key := inst.funcName + "|" + inst.receiver + "|" + inst.method
+			if oldKeys[key] {
+				continue
+			}
 		}
 		unlockMethod := lockMethodNames[inst.method]
 		warnings = append(warnings, fmt.Sprintf(
@@ -136,6 +145,7 @@ func findLocksWithoutUnlock(src string) []lockWithoutUnlockInstance {
 			continue
 		}
 
+		funcName := fn.Name.Name
 		locks := findLockCalls(fn)
 		if len(locks) == 0 {
 			continue
@@ -149,6 +159,7 @@ func findLocksWithoutUnlock(src string) []lockWithoutUnlockInstance {
 			instances = append(instances, lockWithoutUnlockInstance{
 				receiver: lock.receiver,
 				method:   lock.method,
+				funcName: funcName,
 				posStr:   fset.Position(lock.pos).String(),
 			})
 		}
