@@ -54,7 +54,25 @@ func (s *barrierStore) Load(id string) (*session.Session, error) {
 // command path via PerformSkillAnalysis) never analyze the same session
 // twice: the in-flight guard must make exactly one of them do the work.
 func TestAnalyzeRecentSessionsInFlightMutualExclusion(t *testing.T) {
-	dir := t.TempDir()
+	// Not t.TempDir(): the JSONL store schedules a background runMaintenance
+	// goroutine (store.go scheduleMaintenanceLocked) that rewrites index and
+	// session files under the sessions dir. When the test finishes before
+	// maintenance does, t.TempDir's RemoveAll races it and fails with
+	// "unlinkat ... directory not empty" (observed on CI). A retried removal
+	// tolerates the async writer without weakening the test's assertion.
+	dir, err := os.MkdirTemp("", "knight-issue977-")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	t.Cleanup(func() {
+		deadline := time.Now().Add(3 * time.Second)
+		for {
+			if err := os.RemoveAll(dir); err == nil || time.Now().After(deadline) {
+				return
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	})
 	homeDir := filepath.Join(dir, "home")
 	projDir := filepath.Join(dir, "project")
 	storeDir := filepath.Join(homeDir, ".ggcode", "sessions")
