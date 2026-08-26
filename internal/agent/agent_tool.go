@@ -98,11 +98,7 @@ func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolC
 	// tool call is dramatically slower than its established baseline, so it
 	// can self-optimize (narrow scope, use offset/limit, etc.).
 	if latencyHint := a.latencyTracker.RecordAndCheck(tc.Name, toolDur); latencyHint != "" {
-		if result.Content != "" {
-			result.Content = result.Content + "\n\n" + latencyHint
-		} else {
-			result.Content = latencyHint
-		}
+		a.appendGuidance(&result, latencyHint)
 	}
 
 	// Tool affinity learning: record outcomes for predictive recommendations (sa-126)

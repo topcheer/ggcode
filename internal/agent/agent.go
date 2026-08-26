@@ -2976,11 +2976,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				a.recordTodoStalenessUpdate(i+1, todoCount)
 				// Check for silent todo item removal (contract drop).
 				if hint := a.checkTodoDrop(tc.Arguments); hint != "" {
-					if result.Content != "" {
-						result.Content = result.Content + "\n\n" + hint
-					} else {
-						result.Content = hint
-					}
+					a.appendGuidance(&result, hint)
 				}
 			}
 			// File-editing tools invalidate the speculative cache: any
@@ -3061,18 +3057,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					a.fileFreshness.recordRead(p)
 					a.readHash.recordReadHash(p)
 					if hint := a.redundantRead.checkRedundantRead(p, readArgsHaveWindow(tc.Arguments)); hint != "" {
-						if result.Content != "" {
-							result.Content = result.Content + "\n\n" + hint
-						} else {
-							result.Content = hint
-						}
+						a.appendGuidance(&result, hint)
 					}
 					if hint := a.patchExhaust.recordRead(p); hint != "" {
-						if result.Content != "" {
-							result.Content = result.Content + "\n\n" + hint
-						} else {
-							result.Content = hint
-						}
+						a.appendGuidance(&result, hint)
 					}
 				}
 			}
@@ -3102,11 +3090,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					// Catches sub-second edits that mtime misses and suppresses false
 					// positives from touch/NFS. Mirrors the #168 ordering precedent.
 					if hint := a.readHash.validateContentAtEdit(p, extractOldTextLen(tc.Name, tc.Arguments)); hint != "" {
-						if result.Content != "" {
-							result.Content = result.Content + "\n\n" + hint
-						} else {
-							result.Content = hint
-						}
+						a.appendGuidance(&result, hint)
 					}
 					a.fileFreshness.recordWrite(p)
 					a.readHash.recordWriteHash(p)
@@ -3125,79 +3109,47 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					a.diminishingRecordEdit(tc.Name, tc.Arguments)
 					// Overcorrection cascade: track edit size vs error severity.
 					if ocHint := a.overcorrectionRecordEdit(tc.Name, tc.Arguments); ocHint != "" {
-						if result.Content != "" {
-							result.Content = result.Content + "\n\n" + ocHint
-						} else {
-							result.Content = ocHint
-						}
+						a.appendGuidance(&result, ocHint)
 					}
 					// Fix cascade: track edits for wrong-hypothesis lock-in detection.
 					a.fixCascade.recordEdit()
 					// Error regression: track edits for negative progress detection.
 					a.errRegression.recordEdit()
 					if hint := a.unreadEdit.checkUnreadEdit(p); hint != "" {
-						if result.Content != "" {
-							result.Content = result.Content + "\n\n" + hint
-						} else {
-							result.Content = hint
-						}
+						a.appendGuidance(&result, hint)
 					}
 					// Stale-read detection: warn when the file was modified on
 					// disk since the last read (external edit, git pull, etc.).
 					if hint := a.unreadEdit.checkStaleRead(p); hint != "" {
-						if result.Content != "" {
-							result.Content = result.Content + "\n\n" + hint
-						} else {
-							result.Content = hint
-						}
+						a.appendGuidance(&result, hint)
 					}
 					// Expired-read detection: warn when the agent edits a file
 					// it previously read, marking the prior read as expired.
 					if hint := a.expiredRead.recordEdit(p); hint != "" {
-						if result.Content != "" {
-							result.Content = result.Content + "\n\n" + hint
-						} else {
-							result.Content = hint
-						}
+						a.appendGuidance(&result, hint)
 					}
 					// Export guard: detect breaking changes to exported Go symbols
 					// (removed functions, changed signatures) by comparing against
 					// git HEAD. Fires once per file per run.
 					if hint := a.checkExportGuard(p); hint != "" {
-						if result.Content != "" {
-							result.Content = result.Content + "\n\n" + hint
-						} else {
-							result.Content = hint
-						}
+						a.appendGuidance(&result, hint)
 					}
 					// Hub package guard: per-edit blast-radius awareness for
 					// widely-imported packages. Complements export_guard by
 					// providing scale context even for non-breaking edits.
 					if hint := a.checkHubPackage(p); hint != "" {
-						if result.Content != "" {
-							result.Content = result.Content + "\n\n" + hint
-						} else {
-							result.Content = hint
-						}
+						a.appendGuidance(&result, hint)
 					}
 					// Generated artifact guard: warn when editing lock files,
 					// generated code, vendored files, or files with DO NOT EDIT
 					// headers. Suggests the correct regeneration command.
 					if hint := a.artifactGuard.checkGeneratedArtifact(p); hint != "" {
-						if result.Content != "" {
-							result.Content = result.Content + "\n\n" + hint
-						} else {
-							result.Content = hint
-						}
+						a.appendGuidance(&result, hint)
 					}
 					// Branch guard: warn once per run when editing on a protected
 					// branch (main, master, develop, release/*).
 					if hint := a.checkBranchGuard(); hint != "" {
-						if result.Content != "" {
-							result.Content = result.Content + "\n\n" + hint
-						} else {
-							result.Content = hint
-						}
+						a.appendGuidance(&result, hint)
 					}
 				}
 			}
@@ -3209,11 +3161,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				a.convergenceRecordEditError()
 				for _, p := range extractEditFilePaths(tc.Name, tc.Arguments) {
 					if hint := a.editFailRecovery.recordEditFailure(p); hint != "" {
-						if result.Content != "" {
-							result.Content = result.Content + "\n\n" + hint
-						} else {
-							result.Content = hint
-						}
+						a.appendGuidance(&result, hint)
 					}
 				}
 			}
@@ -3222,11 +3170,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// is also edited by another call in the same batch, inject a warning
 			// so the model understands why edits may fail and how to consolidate.
 			if warn, ok := batchConflictWarnings[idx]; ok {
-				if result.Content != "" {
-					result.Content = result.Content + "\n\n" + warn
-				} else {
-					result.Content = warn
-				}
+				a.appendGuidance(&result, warn)
 			}
 			if result.IsError {
 				debug.Log("agent", "tool result ERROR: tool=%s output=%s", tc.Name, util.Truncate(result.Content, 200))
@@ -3252,22 +3196,14 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// old_text anchors in edit_file, massive write_file content) and
 			// inject a context-efficiency hint. Fires at most once per run.
 			if argSizeHint := a.checkArgSizeGuard(tc.Name, tc.Arguments); argSizeHint != "" {
-				if result.Content != "" {
-					result.Content = result.Content + "\n\n" + argSizeHint
-				} else {
-					result.Content = argSizeHint
-				}
+				a.appendGuidance(&result, argSizeHint)
 			}
 			// Tool call sequence validator: detect cross-iteration anti-patterns
 			// (e.g., full read then targeted re-read, sequential individual reads
 			// instead of batch, list_directory then glob on same dir). Each
 			// pattern type fires at most once per run.
 			if seqHint := a.toolSequence.record(tc, i+1); seqHint != "" {
-				if result.Content != "" {
-					result.Content = result.Content + "\n\n" + seqHint
-				} else {
-					result.Content = seqHint
-				}
+				a.appendGuidance(&result, seqHint)
 			}
 			// Orphaned background command tracking: record start_command jobs
 			// and mark output checks. Detects forgotten background processes.
@@ -3468,11 +3404,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// patterns and suggests using cheaper models for routine work.
 			// Research basis: 2025-2026 AI Agent trends (Deloitte, Machine Learning Mastery)
 			if hmGuidance := a.heterogeneousModel.recordToolCall(tc.Name, i+1); hmGuidance != "" {
-				if result.Content != "" {
-					result.Content = result.Content + "\n\n" + hmGuidance
-				} else {
-					result.Content = hmGuidance
-				}
+				a.appendGuidance(&result, hmGuidance)
 			}
 			// Plan drift capture: when exit_plan_mode fires, extract plan items
 			// for later drift detection (spec-driven development tracking).
@@ -3502,11 +3434,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			} else {
 				rKey := extractErrorResourceKey(tc.Name, tc.Arguments)
 				if silentMsg := a.silentError.recordToolAction(tc.Name, rKey); silentMsg != "" {
-					if result.Content != "" {
-						result.Content = result.Content + "\n\n" + silentMsg
-					} else {
-						result.Content = silentMsg
-					}
+					a.appendGuidance(&result, silentMsg)
 				}
 			}
 			if tc.Name == "run_command" || tc.Name == "start_command" {
@@ -3559,53 +3487,33 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			if result.IsError {
 				if catGuidance := a.errorClassifier.classifyToolError(tc.Name, result.Content); catGuidance.Name != "" {
 					g := fmt.Sprintf("[Error guidance: %s] %s", catGuidance.Name, catGuidance.Guidance)
-					if result.Content != "" {
-						result.Content = result.Content + "\n\n" + g
-					} else {
-						result.Content = g
-					}
+					a.appendGuidance(&result, g)
 				}
 			}
 			// Tool error fallback chain: on tool failure, inject actionable
 			// alternative strategy suggestions. Fires once per tool per run.
 			if result.IsError {
 				if fallbackHint := a.toolFallbackCheck(tc.Name, result.Content); fallbackHint != "" {
-					if result.Content != "" {
-						result.Content = result.Content + "\n\n" + fallbackHint
-					} else {
-						result.Content = fallbackHint
-					}
+					a.appendGuidance(&result, fallbackHint)
 				}
 			}
 			// Shell-to-native tool suggestion: when the agent uses run_command
 			// for something a native tool does better (cat, grep, git log, etc.),
 			// suggest the native tool for richer output and better integration.
 			if nativeHint := a.shellNativeHint.maybeShellNativeHint(tc.Name, tc.Arguments); nativeHint != "" {
-				if result.Content != "" {
-					result.Content = result.Content + "\n\n" + nativeHint
-				} else {
-					result.Content = nativeHint
-				}
+				a.appendGuidance(&result, nativeHint)
 			}
 			// Error-streak detection: if consecutive tool calls are failing,
 			// inject strategic guidance to break the cycle.
 			if errorGuidance := a.errorStreakCheck(result.IsError, tc.Name); errorGuidance != "" {
-				if result.Content != "" {
-					result.Content = result.Content + "\n\n" + errorGuidance
-				} else {
-					result.Content = errorGuidance
-				}
+				a.appendGuidance(&result, errorGuidance)
 			}
 			// Compounding failure detection: sliding-window cross-tool failure
 			// rate analysis. Catches interleaved fail-succeed-fail patterns that
 			// consecutive-error detection cannot (any success resets the streak).
 			a.compoundingFailure.recordResult(tc.Name, result.IsError)
 			if compoundingGuidance := a.compoundingFailure.check(); compoundingGuidance != "" {
-				if result.Content != "" {
-					result.Content = result.Content + "\n\n" + compoundingGuidance
-				} else {
-					result.Content = compoundingGuidance
-				}
+				a.appendGuidance(&result, compoundingGuidance)
 			}
 			// Diagnostic-action disconnect detection: when a tool result contains
 			// diagnostic content (errors, undefined symbols, etc.), track whether
@@ -3620,11 +3528,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// IsError does not capture, preventing the agent from claiming
 			// success when the tool output contradicts that interpretation.
 			if claimGuidance := a.claimVerify.check(tc.Name, result.Content, result.IsError); claimGuidance != "" {
-				if result.Content != "" {
-					result.Content = result.Content + "\n\n" + claimGuidance
-				} else {
-					result.Content = claimGuidance
-				}
+				a.appendGuidance(&result, claimGuidance)
 			}
 			// Failure mode classification: meta-level strategy guidance.
 			// Classifies each error into transient/structural/systemic and
@@ -3634,11 +3538,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				// starts (see consensusBaseline), so record the firing explicitly —
 				// the content scan below would otherwise never see this detector.
 				a.crossDetectorConsensus.recordFiring("Failure Mode")
-				if result.Content != "" {
-					result.Content = result.Content + "\n\n" + modeGuidance
-				} else {
-					result.Content = modeGuidance
-				}
+				a.appendGuidance(&result, modeGuidance)
 			}
 			// Error cascade detection: when multiple errors share a common root
 			// resource (file path or symbol), inject root-cause-first guidance.
@@ -3647,22 +3547,14 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					// #952: same as failureMode above — this guidance precedes the
 					// consensus scan window; record the firing explicitly.
 					a.crossDetectorConsensus.recordFiring("Error Cascade")
-					if result.Content != "" {
-						result.Content = result.Content + "\n\n" + cascadeGuidance
-					} else {
-						result.Content = cascadeGuidance
-					}
+					a.appendGuidance(&result, cascadeGuidance)
 				}
 			}
 			// Error propagation chain: detect degraded (non-error but empty/
 			// truncated/null) outputs that subsequent steps build on without
 			// verifying, causing silent compounding failures.
 			if propGuidance := a.errorPropagate.recordResult(tc.Name, result.Content, result.IsError); propGuidance != "" {
-				if result.Content != "" {
-					result.Content = result.Content + "\n\n" + propGuidance
-				} else {
-					result.Content = propGuidance
-				}
+				a.appendGuidance(&result, propGuidance)
 			}
 			// Scope drift: track productive file edits for semantic scope creep.
 			a.scopeDriftRecord(tc.Name, extractFileHint(tc.Name, tc.Arguments))
@@ -3677,46 +3569,26 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			if scopeGuidance := a.scopeDriftCheck(); scopeGuidance != "" {
 				// Mark that a drift warning fired, so drift recurrence can track behavior.
 				a.driftRecurrenceMarkWarn(runStats.Iterations)
-				if result.Content != "" {
-					result.Content = result.Content + "\n\n" + scopeGuidance
-				} else {
-					result.Content = scopeGuidance
-				}
+				a.appendGuidance(&result, scopeGuidance)
 			}
 			// Drift recurrence: check if the agent continued the warned pattern.
 			if recurrenceGuidance := a.driftRecurrenceCheck(); recurrenceGuidance != "" {
-				if result.Content != "" {
-					result.Content = result.Content + "\n\n" + recurrenceGuidance
-				} else {
-					result.Content = recurrenceGuidance
-				}
+				a.appendGuidance(&result, recurrenceGuidance)
 			}
 			// Overseer: deterministic trajectory analysis (SICA-inspired).
 			// Detects tool spam, read-only stall, stuck-on-file, error escalation, and drift.
 			if overseerGuidance := a.overseerCheck(tc.Name, result.IsError, extractFileHint(tc.Name, tc.Arguments), runStats.Iterations); overseerGuidance != "" {
-				if result.Content != "" {
-					result.Content = result.Content + "\n\n" + overseerGuidance
-				} else {
-					result.Content = overseerGuidance
-				}
+				a.appendGuidance(&result, overseerGuidance)
 			}
 			// Repetition tracker: semantic-level detection of failed edit clusters.
 			// Catches near-miss loops that exact-match loop detection misses.
 			if repetitionGuidance := a.repetitionCheckEdit(tc.Name, tc.Arguments, result.IsError); repetitionGuidance != "" {
-				if result.Content != "" {
-					result.Content = result.Content + "\n\n" + repetitionGuidance
-				} else {
-					result.Content = repetitionGuidance
-				}
+				a.appendGuidance(&result, repetitionGuidance)
 			}
 			// Also check read-edit-fail cycles for read_file calls.
 			if tc.Name == "read_file" || tc.Name == "multi_file_read" {
 				if readGuidance := a.repetitionCheckRead(extractFileHint(tc.Name, tc.Arguments)); readGuidance != "" {
-					if result.Content != "" {
-						result.Content = result.Content + "\n\n" + readGuidance
-					} else {
-						result.Content = readGuidance
-					}
+					a.appendGuidance(&result, readGuidance)
 				}
 			}
 			// Trajectory confidence: record result and check for early warning.
@@ -3727,19 +3599,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Causal attribution: on failures, trace backward to the likely causal edit.
 			if result.IsError || looksLikeFailure(result.Content) {
 				if causalHint := a.causalAttribution.attributeFailure(result.Content); causalHint != "" {
-					if result.Content != "" {
-						result.Content = result.Content + "\n\n" + causalHint
-					} else {
-						result.Content = causalHint
-					}
+					a.appendGuidance(&result, causalHint)
 				}
 			}
 			if confidenceGuidance := a.confidence.maybeIntervene(); confidenceGuidance != "" {
-				if result.Content != "" {
-					result.Content = result.Content + "\n\n" + confidenceGuidance
-				} else {
-					result.Content = confidenceGuidance
-				}
+				a.appendGuidance(&result, confidenceGuidance)
 			}
 			// Verification debt: track unverified modifications (SAUP-inspired).
 			// Detects when the agent stacks edits without building/testing.
@@ -3759,18 +3623,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// evidence gathering before the first edit.
 			a.prematureCommit.recordExploration(tc.Name, extractFileHint(tc.Name, tc.Arguments))
 			if debtGuidance := a.verifDebt.maybeWarn(); debtGuidance != "" {
-				if result.Content != "" {
-					result.Content = result.Content + "\n\n" + debtGuidance
-				} else {
-					result.Content = debtGuidance
-				}
+				a.appendGuidance(&result, debtGuidance)
 			}
 			if abandonGuidance := a.editAbandon.maybeWarn(); abandonGuidance != "" {
-				if result.Content != "" {
-					result.Content = result.Content + "\n\n" + abandonGuidance
-				} else {
-					result.Content = abandonGuidance
-				}
+				a.appendGuidance(&result, abandonGuidance)
 			}
 			// File churn detection: track repeated edits to the same file.
 			// Each re-edit signals an invalidated assumption about the file.
@@ -3785,11 +3641,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				// related code) leads to incorrect patches in 20-27% of cases.
 				pcMsg := a.prematureCommit.checkFirstEdit(extractEditedPaths(tc))
 				if pcMsg != "" {
-					if result.Content != "" {
-						result.Content = result.Content + "\n\n" + pcMsg
-					} else {
-						result.Content = pcMsg
-					}
+					a.appendGuidance(&result, pcMsg)
 				}
 				if cg := func() string {
 					if !shouldRunDetector(detectorTierRoutine, i+1) {
@@ -3797,11 +3649,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					}
 					return a.fileChurn.check()
 				}(); cg != "" {
-					if result.Content != "" {
-						result.Content = result.Content + "\n\n" + cg
-					} else {
-						result.Content = cg
-					}
+					a.appendGuidance(&result, cg)
 				}
 				// Edit oscillation detection: track content signature reversals.
 				// Convergence Detection (agentpatterns.ai, 2026) identifies
@@ -3814,11 +3662,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					}
 					return a.editOscillation.check()
 				}(); om != "" {
-					if result.Content != "" {
-						result.Content = result.Content + "\n\n" + om
-					} else {
-						result.Content = om
-					}
+					a.appendGuidance(&result, om)
 				}
 			}
 			// Tunnel vision detection: warn when the agent has done many
@@ -3830,11 +3674,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				}
 				return a.tunnelVision.check(runStats.Iterations)
 			}(); tv != "" {
-				if result.Content != "" {
-					result.Content = result.Content + "\n\n" + tv
-				} else {
-					result.Content = tv
-				}
+				a.appendGuidance(&result, tv)
 			}
 			// Tunnel vision detection: warn when the agent has done many
 			// iterations but only touched a few files (under-exploration).
@@ -3862,11 +3702,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// addressing the root cause. This catches the #1 agent failure mode
 			// (incremental edits that don't fix the underlying problem).
 			if recurringGuidance := a.recurringErrorCheckCommand(tc.Name, tc.Arguments, result.Content, result.IsError); recurringGuidance != "" {
-				if result.Content != "" {
-					result.Content = result.Content + "\n\n" + recurringGuidance
-				} else {
-					result.Content = recurringGuidance
-				}
+				a.appendGuidance(&result, recurringGuidance)
 			}
 			// Fix cascade detection: tracks edit->verify->fail cycles regardless
 			// of specific errors. Detects wrong-hypothesis lock-in where each
@@ -3874,18 +3710,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Stalled convergence: track error counts across verifications
 			// to detect diminishing returns (convergence plateau).
 			if stalledGuidance := a.stalledConvergenceCheckCommand(tc.Name, tc.Arguments, result.Content, result.IsError); stalledGuidance != "" {
-				if result.Content != "" {
-					result.Content = result.Content + "\n\n" + stalledGuidance
-				} else {
-					result.Content = stalledGuidance
-				}
+				a.appendGuidance(&result, stalledGuidance)
 			}
 			if regressionGuidance := a.errorRegressionCheckCommand(tc.Name, tc.Arguments, result.Content, result.IsError); regressionGuidance != "" {
-				if result.Content != "" {
-					result.Content = result.Content + "\n\n" + regressionGuidance
-				} else {
-					result.Content = regressionGuidance
-				}
+				a.appendGuidance(&result, regressionGuidance)
 			}
 			// Error compounding risk: track all error signals across the run.
 			// Computes geometric compounding probability to detect systemic risk.
@@ -3917,11 +3745,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				}
 				// Check new content for patterns matching previously-fixed errors.
 				if faGuidance := a.fixAmnesia.checkContentAgainstFixed("", fp, result.Content); faGuidance != "" {
-					if result.Content != "" {
-						result.Content = result.Content + "\n\n" + faGuidance
-					} else {
-						result.Content = faGuidance
-					}
+					a.appendGuidance(&result, faGuidance)
 				}
 			}
 			// Correction spiral: track edits and verify results to detect
@@ -4023,11 +3847,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				// Post-edit re-read check: warn if re-reading shortly after edit.
 				// First path only — each hint appends, N hints would spam.
 				if hint := a.expiredRead.checkPostEditReread(readPaths[0]); hint != "" {
-					if result.Content != "" {
-						result.Content = result.Content + "\n\n" + hint
-					} else {
-						result.Content = hint
-					}
+					a.appendGuidance(&result, hint)
 				}
 				// Search-result invalidation: record search-type tool results
 				// for later invalidation detection on file edits.
@@ -4037,11 +3857,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			if isWTMutatingTool(tc.Name) && !result.IsError {
 				if wtMsg := a.wtInvalidation.checkMutation(tc.Name, string(tc.Arguments)); wtMsg != "" {
 					debug.Log("agent", "Iteration %d: working-tree invalidation detector triggered", i+1)
-					if result.Content != "" {
-						result.Content = result.Content + "\n\n" + wtMsg
-					} else {
-						result.Content = wtMsg
-					}
+					a.appendGuidance(&result, wtMsg)
 				}
 			}
 			if fileEditingTools[tc.Name] && !result.IsError {
@@ -4051,11 +3867,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				// search/lsp results, warn that those results are now stale.
 				if editPath := extractFilePathFromArgs(tc.Name, tc.Arguments); editPath != "" {
 					if siMsg := a.searchInvalidation.checkEditInvalidation(editPath); siMsg != "" {
-						if result.Content != "" {
-							result.Content = result.Content + "\n\n" + siMsg
-						} else {
-							result.Content = siMsg
-						}
+						a.appendGuidance(&result, siMsg)
 					}
 				}
 				a.editPropagation.recordEdit(tc.Name, string(tc.Arguments))
@@ -4069,59 +3881,35 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Tool result redundancy: detect when result content substantially
 			// overlaps with a prior result still in context (AgentDiet waste).
 			if trMsg := a.toolResultRedundancy.recordResult(tc.Name, result.Content, i+1); trMsg != "" {
-				if result.Content != "" {
-					result.Content = result.Content + "\n\n" + trMsg
-				} else {
-					result.Content = trMsg
-				}
+				a.appendGuidance(&result, trMsg)
 			}
 			if cascadeGuidance := a.fixCascadeCheckCommand(tc.Name, tc.Arguments, result.IsError); cascadeGuidance != "" {
 				// #952: explicit firing record (the old content scan could never
 				// match - this detector's guidance header is "[HYPOTHESIS LOCK-IN
 				// WARNING]", not the stale "[Fix Cascade" tag).
 				a.crossDetectorConsensus.recordFiring("Fix Cascade")
-				if result.Content != "" {
-					result.Content = result.Content + "\n\n" + cascadeGuidance
-				} else {
-					result.Content = cascadeGuidance
-				}
+				a.appendGuidance(&result, cascadeGuidance)
 			}
 			// Post-edit verification hint: after successful source-code edits,
 			// periodically suggest running the build command to verify changes.
 			if !result.IsError {
 				if verifyHint := a.postEditVerifyHint(tc.Name, tc.Arguments); verifyHint != "" {
-					if result.Content != "" {
-						result.Content = result.Content + "\n\n" + verifyHint
-					} else {
-						result.Content = verifyHint
-					}
+					a.appendGuidance(&result, verifyHint)
 				}
 			}
 			// Convergence lock: detect post-verification unnecessary edits.
 			// Fires when the agent continues editing after its changes verified.
 			if convergenceGuidance := a.convergenceCheck(); convergenceGuidance != "" {
 				a.crossDetectorConsensus.recordFiring("Convergence Lock")
-				if result.Content != "" {
-					result.Content = result.Content + "\n\n" + convergenceGuidance
-				} else {
-					result.Content = convergenceGuidance
-				}
+				a.appendGuidance(&result, convergenceGuidance)
 			}
 			// Diminishing edit: detect polish-spiral (progressively smaller edits).
 			if diminishingGuidance := a.diminishingCheck(); diminishingGuidance != "" {
-				if result.Content != "" {
-					result.Content = result.Content + "\n\n" + diminishingGuidance
-				} else {
-					result.Content = diminishingGuidance
-				}
+				a.appendGuidance(&result, diminishingGuidance)
 			}
 			// Premature refactoring: detect unverified code restructuring.
 			if refactorGuidance := a.prematureRefactorCheck(); refactorGuidance != "" {
-				if result.Content != "" {
-					result.Content = result.Content + "\n\n" + refactorGuidance
-				} else {
-					result.Content = refactorGuidance
-				}
+				a.appendGuidance(&result, refactorGuidance)
 			}
 			// Cross-detector consensus: check for co-occurrence of detector
 			// firings. #952: every detector in the chain above now records its
@@ -4131,11 +3919,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// (failureMode, errorCascade, ...) and risked false positives on raw
 			// tool output containing tag literals.
 			if consensusGuidance := a.crossDetectorConsensus.checkOnly(); consensusGuidance != "" {
-				if result.Content != "" {
-					result.Content = result.Content + "\n\n" + consensusGuidance
-				} else {
-					result.Content = consensusGuidance
-				}
+				a.appendGuidance(&result, consensusGuidance)
 			}
 			// Collect follow-up messages from tools (e.g., inline skills).
 			if len(result.FollowUpMessages) > 0 {

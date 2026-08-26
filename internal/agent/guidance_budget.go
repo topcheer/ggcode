@@ -39,7 +39,7 @@ const (
 	// guidanceBudgetPerTurn is the maximum number of non-critical guidance
 	// messages injected per agent iteration. When this cap is reached,
 	// subsequent advisory guidance is suppressed.
-	guidanceBudgetPerTurn = 5
+	guidanceBudgetPerTurn = 2
 )
 
 // #441: critical classification uses ONLY the head tag (extractHintTag)
