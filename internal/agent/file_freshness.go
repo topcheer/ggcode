@@ -78,9 +78,12 @@ type fileFreshnessSentinel struct {
 	// Populated by recordRead via the shared tracking in unreadEditState.
 	readMtimes map[string]time.Time
 
-	// agentWritten tracks files the agent created/edited itself.
-	// These are excluded -- the agent knows their latest content.
-	agentWritten map[string]bool
+	// writeMtimes maps normalized file path → mtime when the agent wrote it.
+	// Used to exempt files modified by the agent itself from stale detection.
+	// Issue #1055: changed from boolean agentWritten to mtime tracking so that
+	// external changes (formatters, concurrent edits) AFTER the agent's write
+	// are still detected.
+	writeMtimes map[string]time.Time
 
 	// notified tracks files we've already sent a stale notification for.
 	// Each file is notified at most once per run.
@@ -92,16 +95,16 @@ type fileFreshnessSentinel struct {
 
 func newFileFreshnessSentinel() *fileFreshnessSentinel {
 	return &fileFreshnessSentinel{
-		readMtimes:   make(map[string]time.Time),
-		agentWritten: make(map[string]bool),
-		notified:     make(map[string]bool),
+		readMtimes:  make(map[string]time.Time),
+		writeMtimes: make(map[string]time.Time),
+		notified:    make(map[string]bool),
 	}
 }
 
 // reset clears all state for a new run.
 func (s *fileFreshnessSentinel) reset() {
 	s.readMtimes = make(map[string]time.Time)
-	s.agentWritten = make(map[string]bool)
+	s.writeMtimes = make(map[string]time.Time)
 	s.notified = make(map[string]bool)
 	s.lastCheckIter = 0
 }
@@ -121,21 +124,30 @@ func (s *fileFreshnessSentinel) recordRead(path string) {
 	} else {
 		s.readMtimes[n] = info.ModTime()
 	}
-	// If the agent reads a file after writing it, clear the agentWritten flag
+	// If the agent reads a file after writing it, clear the writeMtime entry
 	// since the read refreshes the agent's understanding.
-	delete(s.agentWritten, n)
+	delete(s.writeMtimes, n)
 	// Clear any prior stale notification for this file -- the agent has
 	// re-read it, so it is now up to date.
 	delete(s.notified, n)
 }
 
-// recordWrite marks a file as agent-created/edited. These files are excluded
-// from stale checks because the agent knows their latest content.
+// recordWrite records the mtime when the agent writes a file. Files modified
+// by the agent at the same or later time than the read are exempt from stale
+// detection. Issue #1055: changed from boolean to mtime tracking so that
+// external changes AFTER the agent's write (e.g., formatters, concurrent edits)
+// are still detected.
 func (s *fileFreshnessSentinel) recordWrite(path string) {
 	if path == "" {
 		return
 	}
-	s.agentWritten[normalizePath(path)] = true
+	n := normalizePath(path)
+	info, err := os.Stat(path)
+	if err != nil {
+		s.writeMtimes[n] = time.Now()
+	} else {
+		s.writeMtimes[n] = info.ModTime()
+	}
 }
 
 // maybeCheckStaleFiles runs the proactive freshness check at iteration
@@ -156,10 +168,6 @@ func (s *fileFreshnessSentinel) maybeCheckStaleFiles(iteration int) string {
 
 	var changed []string
 	for path, readAt := range s.readMtimes {
-		// Skip files the agent itself wrote after reading.
-		if s.agentWritten[path] {
-			continue
-		}
 		// Skip files already notified about.
 		if s.notified[path] {
 			continue
@@ -168,6 +176,13 @@ func (s *fileFreshnessSentinel) maybeCheckStaleFiles(iteration int) string {
 		info, err := os.Stat(path)
 		if err != nil {
 			continue // File may not exist (e.g., temp file, deleted externally)
+		}
+
+		// Issue #1055: skip files modified by the agent itself (write mtime >= read mtime)
+		// but DO detect external changes AFTER the agent's write (current mtime > write mtime)
+		writeAt, ok := s.writeMtimes[path]
+		if ok && info.ModTime().Equal(writeAt) || (ok && info.ModTime().Before(writeAt)) {
+			continue
 		}
 
 		if info.ModTime().After(readAt) {

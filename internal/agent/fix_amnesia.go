@@ -72,19 +72,6 @@ type faErrorCategory struct {
 // These are checked against NEW file content after writes/edits.
 var faErrorCategories = []faErrorCategory{
 	{
-		category: "nil-deref-after-nil-check",
-		label:    "nil pointer used after nil check without guarding",
-		// Pattern: if x != nil { ... } followed later by x.Method() outside the guard
-		// Simplified: look for `err != nil` then bare usage of the value without nil check
-		contentPattern: regexp.MustCompile(`(?m)(?:if\s+\w+\s*[,=]\s*\w+\s*!=\s*nil\s*\{[^}]*\}|err\s*!?=\s*nil[^{]*\{[^}]*\})[^}]*\.\w+\s*\(`),
-	},
-	{
-		category: "unchecked-error",
-		label:    "error return value ignored (discarded without checking)",
-		// Looks for function calls that return errors but whose result is discarded
-		contentPattern: regexp.MustCompile(`(?m)^\s*\w+\([^)]*\)\s*$`),
-	},
-	{
 		category: "missing-import",
 		label:    "used a package symbol without importing the package",
 		// #754: contentPattern nil -- detection is content-aware via
@@ -118,11 +105,6 @@ var faErrorCategories = []faErrorCategory{
 		category:       "map-concurrent-write",
 		label:          "map written without mutex in concurrent context",
 		contentPattern: regexp.MustCompile(`(?m)go\s+func\s*\([^)]*\)\s*\{[^}]*\w+\[`),
-	},
-	{
-		category:       "unclosed-resource",
-		label:          "resource opened without defer-close",
-		contentPattern: regexp.MustCompile(`(?m)(?:os\.Open|os\.Create|http\.Get|net\.Dial)\([^)]*\)`),
 	},
 }
 
@@ -306,7 +288,8 @@ func extractFilePathFromError(errMsg string) string {
 
 // faStdlibPkgs lists the common stdlib packages checked by the
 // missing-import content analysis (#754).
-var faStdlibPkgs = []string{"fmt", "os", "io", "net", "http", "sync", "time", "errors", "strings", "strconv", "bytes", "context", "encoding/json"}
+// Issue #1057: using full import paths (e.g., "net/http" not just "http").
+var faStdlibPkgs = []string{"fmt", "os", "io", "io/ioutil", "net/http", "net", "sync", "time", "errors", "strings", "strconv", "bytes", "context", "encoding/json"}
 
 // contentMatchesCategory reports whether new content exhibits the error
 // category. Categories without a pattern (unused-variable/unused-import)

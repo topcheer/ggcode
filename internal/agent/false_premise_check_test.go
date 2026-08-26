@@ -61,6 +61,33 @@ func TestFalsePremise_BuildSuccessContradiction(t *testing.T) {
 	}
 }
 
+func TestFalsePremise_PanicKilledFatalPreservedThroughUnrelatedSuccess(t *testing.T) {
+	// Issue #1045: test failure records (panic, signal:killed, fatal error)
+	// must NOT be cleared by unrelated command successes. The P331 tool-level
+	// clearing would wrongly discard them - we now require command-level matching.
+	f := newFalsePremiseState()
+
+	// Record a test failure (panic)
+	f.recordToolResult("run_command", "panic: runtime error: invalid memory address", true)
+
+	// Record an unrelated successful command (e.g., file list)
+	f.recordToolResult("run_command", "file1.go\nfile2.go\nfile3.go", false)
+
+	// The panic should still be tracked - the successful command is unrelated
+	if len(f.recentErrors) == 0 {
+		t.Fatal("expected panic error to be preserved after unrelated success")
+	}
+
+	// Now a build success claim should still trigger the warning
+	msg := f.checkFalsePremise("The build passed and tests are green.")
+	if msg == "" {
+		t.Fatal("expected warning despite unrelated success - panic still recorded")
+	}
+	if !strings.Contains(msg, "build/test success") {
+		t.Errorf("expected build/test success in message, got: %s", msg)
+	}
+}
+
 func TestFalsePremise_FoundResultsContradiction(t *testing.T) {
 	f := newFalsePremiseState()
 	f.recordToolResult("grep", "no matches found", true)
@@ -113,6 +140,25 @@ func TestFalsePremise_NoErrorNoWarning(t *testing.T) {
 	msg := f.checkFalsePremise("The build passed and everything works.")
 	if msg != "" {
 		t.Errorf("expected no warning when no tool errors tracked, got: %s", msg)
+	}
+}
+
+func TestFalsePremise_NoWarningForEmptyAssistantText(t *testing.T) {
+	// Issue #1044: empty assistant text (e.g., reasoning-only tool_use rounds)
+	// must NOT be treated as a success claim. The P6 empty-output logic applies
+	// to COMMAND OUTPUT, not to assistant declarative text.
+	f := newFalsePremiseState()
+	f.recordToolResult("run_command", "exit status 1: build failed", true)
+
+	// Empty or whitespace-only assistant text should not trigger a warning
+	msg := f.checkFalsePremise("")
+	if msg != "" {
+		t.Errorf("expected no warning for empty assistant text, got: %s", msg)
+	}
+
+	msg = f.checkFalsePremise("   \t\n  ")
+	if msg != "" {
+		t.Errorf("expected no warning for whitespace-only assistant text, got: %s", msg)
 	}
 }
 

@@ -145,8 +145,11 @@ func (f *futileCycleState) maybeWarn(iteration int) string {
 
 			debug.Log("futile_cycle", "warning at iter %d: Jaccard=%.2f, %d shared files", iteration, jaccard, len(overlapFiles))
 
+			// Issue #1054: message no longer claims "without edits" - the classic cycle
+			// (read A,B,C → edit → read A,B,C again) is normal post-edit context refresh,
+			// not a futile loop. The actual futile pattern is repeated read-only epochs.
 			return fmt.Sprintf(
-				"[futile-cycle] Re-reading same files (%s) without edits. Act on existing knowledge or explore new files.",
+				"[futile-cycle] Re-reading same files (%s) in a similar pattern. Act on existing knowledge or explore new files.",
 				sample,
 			)
 		}

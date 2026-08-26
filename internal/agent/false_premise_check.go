@@ -82,7 +82,10 @@ var buildVerifyToolPrefixes = map[string]bool{
 
 // buildVerifyErrorRe identifies build/test/lint failures inside command-tool
 // error snippets — the records that command-granular clearing preserves.
-var buildVerifyErrorRe = regexp.MustCompile(`(?i)(build\s+fail|compil(e|ation)\s+(error|fail)|test.*(fail|panic)|FAIL\s|lint.*(error|fail)|exit\s+status\s+[1-9]|exit\s+code\s+[1-9])`)
+var buildVerifyErrorRe = regexp.MustCompile(`(?i)(build\s+fail|compil(e|ation)\s+(error|fail)|test.*(fail|panic)|FAIL\s|panic:|signal:\s+killed|fatal error:|lint.*(error|fail)|exit\s+status\s+[1-9]|exit\s+code\s+[1-9])`)
+
+// Issue #1045: buildVerifyErrorRe now matches panic/signal:killed/fatal error patterns
+// to preserve test failure records through unrelated command successes.
 
 // buildErrorRe identifies build-specific errors (excluding test failures)
 // for distinguishing build-only failures from test failures (#593 P6).
@@ -168,8 +171,12 @@ func (f *falsePremiseState) checkFalsePremise(assistantText string) string {
 		// Aligned with branch 4: acknowledging the earlier error means the claim
 		// is grounded, not confabulated (#331).
 		// Issue #593 P6: check if error was build-only to allow empty output.
+		// Issue #1044: empty assistant text (e.g., reasoning-only tool_use rounds) must NOT
+		// be treated as a success claim. The P6 empty-output logic applies to COMMAND OUTPUT
+		// (run_command stdout), not to assistant declarative text.
 		isBuildOnly := buildErrorRe.MatchString(err.errorSnippet)
-		if fpIsBuildTestTool(err.toolName) && matchesBuildSuccessClaim(lowered, isBuildOnly) && !acknowledgesError(lowered) {
+		if fpIsBuildTestTool(err.toolName) && strings.TrimSpace(lowered) != "" &&
+			matchesBuildSuccessClaim(lowered, isBuildOnly) && !acknowledgesError(lowered) {
 			err.matched = true
 			found = append(found, buildContradiction(err, "build/test success",
 				"Re-run the build/test command and report the actual result."))
