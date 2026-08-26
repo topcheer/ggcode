@@ -456,6 +456,11 @@ type SessionUpdate struct {
 
 	// Plan fields
 	Plan *Plan `json:"plan,omitempty"`
+
+	// StopReason: set by standard-compliant third-party agents that finish a
+	// prompt via session/update with a terminal stopReason instead of the
+	// non-standard session/prompt_complete notification (#1053).
+	StopReason StopReason `json:"stopReason,omitempty"`
 }
 
 // Session update type constants.

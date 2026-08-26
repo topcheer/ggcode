@@ -174,18 +174,21 @@ func (c *Client) Start(ctx context.Context) error {
 	stdinPipe, err := cmd.StdinPipe()
 	if err != nil {
 		cancelProc()
+		c.abandonStartDone() // #1051: readLoop never starts; close done so Close() cannot hang
 		return fmt.Errorf("creating stdin pipe for %s: %w", c.def.Def.Name, err)
 	}
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
 		stdinPipe.Close()
 		cancelProc()
+		c.abandonStartDone() // #1051
 		return fmt.Errorf("creating stdout pipe for %s: %w", c.def.Def.Name, err)
 	}
 
 	if err := cmd.Start(); err != nil {
 		stdinPipe.Close()
 		cancelProc()
+		c.abandonStartDone() // #1051
 		return fmt.Errorf("starting process %s: %w", c.def.Def.Name, err)
 	}
 
@@ -499,6 +502,21 @@ func (c *Client) promptInternal(
 }
 
 // Close sends session/close (if session exists) and kills the process.
+// abandonStartDone closes the pre-Start done channel after an early Start
+// failure (#1051). The channel created by NewClient is otherwise only closed
+// by readLoop's defer, which never runs on these paths - so Close() blocked
+// on <-done forever (ClientManager.CloseAll amplified this across agents).
+// The channel is nil'ed so a later Close skips the wait and a later Start
+// rebuilds it.
+func (c *Client) abandonStartDone() {
+	c.mu.Lock()
+	if c.done != nil {
+		close(c.done)
+		c.done = nil
+	}
+	c.mu.Unlock()
+}
+
 func (c *Client) Close() error {
 	c.mu.Lock()
 	sessionID := c.sessionID
@@ -772,6 +790,18 @@ func (c *Client) writeError(id interface{}, code int, message string) error {
 
 // ---------- session/update ----------
 
+// terminalStopReason reports whether the given session/update stopReason
+// ends the prompt loop (#1053). Non-terminal values (tool_use keeps the loop
+// alive; empty means no signal at all) do not complete the prompt.
+func terminalStopReason(r StopReason) bool {
+	switch r {
+	case StopReasonEndTurn, StopReasonMaxTurns, StopReasonMaxTokens,
+		StopReasonCancelled, StopReasonError:
+		return true
+	}
+	return false
+}
+
 func (c *Client) handleSessionUpdate(req *JSONRPCRequest) {
 	var notif SessionNotification
 	if err := json.Unmarshal(req.Params, &notif); err != nil {
@@ -837,6 +867,18 @@ func (c *Client) handleSessionUpdate(req *JSONRPCRequest) {
 		}
 	}
 	onEvent := c.promptOnEvent
+	// #1053: standard-compliant third-party agents signal prompt completion
+	// with a terminal stopReason on session/update (the ggcode agent adds
+	// session/prompt_complete on top; others do not). Without this feed the
+	// client never noticed completion and the 5-minute idle timer sent a
+	// cancel to a finished agent plus a timeout error for a successful task.
+	if terminalStopReason(notif.Update.StopReason) &&
+		c.activePromptID != "" && notif.SessionID == c.activePromptID && c.promptDone != nil {
+		select {
+		case c.promptDone <- PromptResponse{StopReason: notif.Update.StopReason}:
+		default:
+		}
+	}
 	c.promptMu.Unlock()
 	for _, event := range emitted {
 		if onEvent != nil {

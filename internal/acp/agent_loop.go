@@ -343,14 +343,28 @@ func (al *AgentLoop) ExecutePrompt(ctx context.Context, prompt []ContentBlock) e
 		return fmt.Errorf("agent execution: %w", err)
 	}
 
-	// Store assistant message in session for persistence
+	// Store assistant message in session for persistence.
+	// #1048: tool_result blocks must NOT ride inside the assistant message:
+	// the merged assistant+tool_result shape is an illegal request structure
+	// for the Anthropic API after restore (tool results belong in a follow-up
+	// user-role message). Split them so persisted sessions replay legally.
 	var assistantContent []ContentBlock
+	var toolResultBlocks []ContentBlock
 	if assistantText != "" {
 		assistantContent = append(assistantContent, ContentBlock{Type: "text", Text: assistantText})
 	}
-	assistantContent = append(assistantContent, toolCalls...)
+	for _, tc := range toolCalls {
+		if tc.Type == "tool_result" {
+			toolResultBlocks = append(toolResultBlocks, tc)
+		} else {
+			assistantContent = append(assistantContent, tc)
+		}
+	}
 	if len(assistantContent) > 0 {
 		al.session.AddMessage("assistant", assistantContent)
+	}
+	if len(toolResultBlocks) > 0 {
+		al.session.AddMessage("user", toolResultBlocks)
 	}
 
 	// Persist session to disk
