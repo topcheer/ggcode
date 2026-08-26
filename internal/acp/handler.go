@@ -822,6 +822,13 @@ func (h *Handler) handleSessionResume(params json.RawMessage) (interface{}, erro
 	}
 
 	h.sessionsMu.Lock()
+	// #1056: Check if an agent loop is already running for this session.
+	// If so, refuse the resume to prevent double goroutine driving the
+	// same session, which would bypass the #1033 TryBeginRun guard.
+	if _, exists := h.sessions[req.SessionID]; exists {
+		h.sessionsMu.Unlock()
+		return nil, fmt.Errorf("session %s already active: cannot resume", req.SessionID)
+	}
 	h.sessions[req.SessionID] = session
 	// Register the workspace dir so cleanupEmptySessions can manage the
 	// resumed session like a session/new one (previously skipped on resume).
