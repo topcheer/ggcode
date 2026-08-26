@@ -285,18 +285,8 @@ func detectBuildSystem(workingDir string) string {
 	if fileExists(filepath.Join(workingDir, "Cargo.toml")) && commandAvailable("cargo") {
 		return "cargo build"
 	}
-	if fileExists(filepath.Join(workingDir, "package.json")) && commandAvailable("npm") {
-		// package.json without a "build" script (docs sites, library packages)
-		// makes "npm run build" fail with "Missing script" (exit 1) - that is NOT
-		// a code failure but was captured as one, triggering pointless
-		// auto-repair loops. Only offer commands whose script actually exists;
-		// otherwise fall through so the (now gated) LLM oracle can decide.
-		if packageJSONHasScript(workingDir, "build") {
-			return "npm run build"
-		}
-		if packageJSONHasScript(workingDir, "test") {
-			return "npm test"
-		}
+	if cmd := detectNpmCommand(workingDir); cmd != "" {
+		return cmd
 	}
 	if fileExists(filepath.Join(workingDir, "CMakeLists.txt")) && commandAvailable("cmake") {
 		return "cmake --build build"
@@ -315,6 +305,26 @@ func detectBuildSystem(workingDir string) string {
 func commandAvailable(binary string) bool {
 	_, err := exec.LookPath(binary)
 	return err == nil
+}
+
+// detectNpmCommand returns the npm verification command for workingDir, or ""
+// when npm is unavailable or package.json defines neither a "build" nor a
+// "test" script. package.json without a "build" script (docs sites, library
+// packages) makes "npm run build" fail with "Missing script" (exit 1) - that
+// is NOT a code failure but was captured as one, triggering pointless
+// auto-repair loops. Only offer commands whose script actually exists;
+// otherwise fall through so the (now gated) LLM oracle can decide.
+func detectNpmCommand(workingDir string) string {
+	if !fileExists(filepath.Join(workingDir, "package.json")) || !commandAvailable("npm") {
+		return ""
+	}
+	if packageJSONHasScript(workingDir, "build") {
+		return "npm run build"
+	}
+	if packageJSONHasScript(workingDir, "test") {
+		return "npm test"
+	}
+	return ""
 }
 
 // packageJSONHasScript reports whether package.json in workingDir defines the
