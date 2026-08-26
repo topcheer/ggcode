@@ -663,6 +663,12 @@ func (c *Client) readLoop(ctx context.Context) {
 				// #1052: Fail all pending requests so prompt waiters don't hang
 				// until their 5-minute timeout expires.
 				c.transport.FailAllPending(io.EOF)
+				// #1087 F3: Clear state on EOF to allow recovery
+				c.mu.Lock()
+				c.running = false
+				c.sessionID = ""
+				c.sessionCWD = ""
+				c.mu.Unlock()
 				return
 			}
 			c.recordActivity("transport read error=%s", summarizeError(err))
@@ -670,6 +676,12 @@ func (c *Client) readLoop(ctx context.Context) {
 			debug.Log("acp-client", "agent %q read error: %v", c.def.Def.Name, err)
 			// #1052: Fail all pending requests on any read error.
 			c.transport.FailAllPending(err)
+			// #1087 F3: Clear state on read error to allow recovery
+			c.mu.Lock()
+			c.running = false
+			c.sessionID = ""
+			c.sessionCWD = ""
+			c.mu.Unlock()
 			return
 		}
 
@@ -681,7 +693,17 @@ func (c *Client) readLoop(ctx context.Context) {
 
 		// Request/notification FROM the agent
 		if req != nil {
-			c.handleAgentRequest(ctx, req)
+			// #1087 F1: Handle blocking requests (permission, FS) asynchronously
+			// to prevent head-of-line blocking of other pending responses.
+			if req.Method == "session/request_permission" ||
+				req.Method == "fs/read_text_file" ||
+				req.Method == "fs/write_text_file" {
+				safego.Go("acp.handleAgentRequest.async", func() {
+					c.handleAgentRequest(ctx, req)
+				})
+			} else {
+				c.handleAgentRequest(ctx, req)
+			}
 		}
 	}
 }
@@ -1232,6 +1254,9 @@ func (c *Client) handlePermission(ctx context.Context, req *JSONRPCRequest) {
 	}
 	c.recordActivity("sent session/request_permission %s", summarizePermissionResponseActivity(resp))
 	_ = c.writeResponse(req.ID, resp)
+	// #1087 F2: Reset idle timer after approval completes to prevent
+	// false timeout during long approval waits (Desktop path can wait up to 15min).
+	c.notePromptActivity()
 }
 
 func (c *Client) permissionRequestResponse(ctx context.Context, params RequestPermissionRequest, rawParams json.RawMessage) (RequestPermissionResponse, error) {

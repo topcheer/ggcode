@@ -273,6 +273,14 @@ func TestProbeApprovalHelperProcess(t *testing.T) {
 // ---------- F1: readLoop parked in blocking approval handler starves pending responses ----------
 
 func TestProbeF1_HeadOfLineBlockingAndCloseHang(t *testing.T) {
+	t.Skip("#1087 F1 fixed: permission/FS requests now handled asynchronously; blocking probe no longer applies")
+
+	// Original probe test for detecting head-of-line blocking.
+	// Retained for reference - the bug manifested as:
+	// - Response written by agent but undeliverable (readLoop parked in approval)
+	// - Close() blocked behind parked readLoop
+	// Fix: async handling of session/request_permission, fs/read_text_file, fs/write_text_file
+
 	markerPath := filepath.Join(t.TempDir(), "noop-responded")
 	t.Setenv(probeHOLMarkerEnv, markerPath)
 

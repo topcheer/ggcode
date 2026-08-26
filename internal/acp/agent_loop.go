@@ -108,21 +108,19 @@ func NewAgentLoop(
 
 	// Route tool approvals through ACP permission request to Client
 	a.SetApprovalHandler(func(ctx context.Context, toolName string, input string) permission.Decision {
-		// In auto mode (default), allow safe operations automatically;
-		// only ask the Client for dangerous tools
-		mode := al.Mode()
-		if mode == "bypass" || mode == "autopilot" {
+		// #1085: Even in bypass/autopilot mode, respect the three hard security doors
+		// (extremely dangerous commands, network exfiltration, sensitive path redirects).
+		// Let the policy decide first; only Allow can skip client approval.
+		decision, _ := policy.Check(toolName, json.RawMessage(input))
+		if decision == permission.Allow {
 			return permission.Allow
 		}
-		if mode == "auto" {
-			// Auto mode: let the policy decide. If it says Ask, escalate to Client.
-			decision, _ := policy.Check(toolName, json.RawMessage(input))
-			if decision == permission.Allow {
-				return permission.Allow
-			}
-			// Deny or Ask → ask the Client
+		// Deny or Ask → ask the Client (or respect Deny)
+		if decision == permission.Deny {
+			return permission.Deny
 		}
 
+		// Ask case: request approval from Client (supervised/auto/bypass/autopilot all reach here)
 		approved, err := al.RequestPermission(ctx, "tool_use",
 			ToolCallUpdate{
 				Title: fmt.Sprintf("Execute tool: %s", toolName),
@@ -465,6 +463,8 @@ func toolKind(toolName string) string {
 }
 
 // acpToProviderContent converts ACP ContentBlocks to provider ContentBlocks.
+// #1086: Preserve tool_use/tool_result blocks during conversation restore.
+// This mirrors providerToACPMessage which stores all fields to disk.
 func acpToProviderContent(blocks []ContentBlock) []provider.ContentBlock {
 	out := make([]provider.ContentBlock, 0, len(blocks))
 	for _, b := range blocks {
@@ -473,6 +473,24 @@ func acpToProviderContent(blocks []ContentBlock) []provider.ContentBlock {
 			out = append(out, provider.TextBlock(b.Text))
 		case "image":
 			out = append(out, provider.ImageBlock(b.ImageMIME, b.ImageData))
+		case "tool_use":
+			// #1086: Preserve tool_use block with all fields
+			out = append(out, provider.ContentBlock{
+				Type:     "tool_use",
+				ToolName: b.ToolName,
+				ToolID:   b.ToolID,
+				Input:    b.Input,
+				IsError:  b.IsError,
+			})
+		case "tool_result":
+			// #1086: Preserve tool_result block with all fields
+			out = append(out, provider.ContentBlock{
+				Type:     "tool_result",
+				ToolName: b.ToolName,
+				ToolID:   b.ToolID,
+				Output:   b.Output,
+				IsError:  b.IsError,
+			})
 		default:
 			if b.Text != "" {
 				out = append(out, provider.TextBlock(b.Text))
