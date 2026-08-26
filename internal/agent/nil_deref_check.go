@@ -151,11 +151,33 @@ func findNilDerefsInFunc(fset *token.FileSet, body *ast.BlockStmt) []nilDerefIns
 	var instances []nilDerefInstance
 
 	var walk func(n ast.Node)
+	// #1070: Track block depth to implement block-scoped nilRisk clearing.
+	// The top-level function body has depth 0; nested blocks (including
+	// brother blocks like separate { } blocks) have depth > 0.
+	blockDepth := 0
+
 	walk = func(n ast.Node) {
 		if n == nil {
 			return
 		}
 		ast.Inspect(n, func(node ast.Node) bool {
+			// #1070: Track block depth and clear nilRisk when entering
+			// nested blocks to prevent leakage between brother blocks.
+			// The top-level function body (depth 0) retains risk state;
+			// nested blocks (depth >= 1) start with a clean state.
+			if _, ok := node.(*ast.BlockStmt); ok {
+				if blockDepth > 0 {
+					// Entering a nested block: clear nilRisk to prevent
+					// leakage from brother blocks with same variable names.
+					for k := range nilRisk {
+						delete(nilRisk, k)
+					}
+				}
+				blockDepth++
+				defer func() { blockDepth-- }()
+				return true
+			}
+
 			// Error-check if statements get scoped handling (#238).
 			if is, ok := node.(*ast.IfStmt); ok {
 				walkErrorCheckIf(is, nilRisk, walk)
@@ -254,12 +276,24 @@ func isNonNullAssignExpr(e ast.Expr) bool {
 
 // walkErrorCheckIf handles an if statement whose condition compares an error
 // variable against nil, applying the scope-transfer semantics of fix #238.
+// #1067: Walks Init statement (e.g., if v, err := f(); cond) to detect
+// dereferences before the condition is evaluated.
+// #1068: Walks Cond expression to detect dereferences inside conditions
+// that are not nil checks (e.g., if v.Field > 0 && err == nil).
 // It also recognizes explicit value-nil guards (#533): a terminating
 // `if v == nil` body proves v non-nil afterwards, and `v != nil` bodies are
 // safe. Non-nil-check if statements are walked with unchanged risk state.
 func walkErrorCheckIf(is *ast.IfStmt, nilRisk map[string]nilRiskEntry, walk func(ast.Node)) {
+	// #1067: Walk Init statement first (e.g., if v, err := f(); cond)
+	if is.Init != nil {
+		walk(is.Init)
+	}
+
 	bin, ok := is.Cond.(*ast.BinaryExpr)
 	if !ok || (bin.Op != token.EQL && bin.Op != token.NEQ) {
+		// #1068: Walk Cond for non-nil-check conditions to catch
+		// dereferences like "if v.Field > 0 && err == nil"
+		walk(is.Cond)
 		walk(is.Body)
 		walk(is.Else)
 		return
@@ -487,7 +521,10 @@ func detectNilDeref(fset *token.FileSet, n ast.Node, nilRisk map[string]nilRiskE
 			if entry, risk := nilRisk[x.Name]; risk && !entry.cleared {
 				pos := fset.Position(node.Pos())
 				instances = append(instances, nilDerefInstance{
-					posStr:  fmt.Sprintf("%s:%d", filepath.Base(pos.Filename), pos.Line),
+					// #1069: Include variable name in delta key to distinguish
+					// different variables on the same line and prevent
+					// re-reporting when comments move.
+					posStr:  fmt.Sprintf("%s:%d:%s", filepath.Base(pos.Filename), pos.Line, x.Name),
 					varName: x.Name,
 				})
 				_ = entry
@@ -501,7 +538,10 @@ func detectNilDeref(fset *token.FileSet, n ast.Node, nilRisk map[string]nilRiskE
 			if entry, risk := nilRisk[x.Name]; risk && !entry.cleared {
 				pos := fset.Position(node.Pos())
 				instances = append(instances, nilDerefInstance{
-					posStr:  fmt.Sprintf("%s:%d", filepath.Base(pos.Filename), pos.Line),
+					// #1069: Include variable name in delta key to distinguish
+					// different variables on the same line and prevent
+					// re-reporting when comments move.
+					posStr:  fmt.Sprintf("%s:%d:%s", filepath.Base(pos.Filename), pos.Line, x.Name),
 					varName: x.Name,
 				})
 				_ = entry
@@ -515,7 +555,10 @@ func detectNilDeref(fset *token.FileSet, n ast.Node, nilRisk map[string]nilRiskE
 			if entry, risk := nilRisk[x.Name]; risk && !entry.cleared {
 				pos := fset.Position(node.Pos())
 				instances = append(instances, nilDerefInstance{
-					posStr:  fmt.Sprintf("%s:%d", filepath.Base(pos.Filename), pos.Line),
+					// #1069: Include variable name in delta key to distinguish
+					// different variables on the same line and prevent
+					// re-reporting when comments move.
+					posStr:  fmt.Sprintf("%s:%d:%s", filepath.Base(pos.Filename), pos.Line, x.Name),
 					varName: x.Name,
 				})
 				_ = entry

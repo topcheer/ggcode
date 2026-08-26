@@ -165,6 +165,13 @@ func registerAllChecks() {
 		{Name: "nplus1-loop", Langs: []Language{LangGo}, Run: func(ctx CheckContext) []string {
 			return checkNPlus1Loop(ctx.FilePath, ctx.OldContent, ctx.NewContent)
 		}},
+		// #1065: interface-design - detects anti-patterns in interface design
+		// (fat interfaces, non-idiomatic naming, returning any/interface{},
+		// unexported methods, single implementation). Fully implemented +
+		// unit tested with delta-aware detection.
+		{Name: "interface-design", Langs: []Language{LangGo}, Run: func(ctx CheckContext) []string {
+			return checkInterfaceDesign(ctx)
+		}},
 		// #503: there is deliberately NO "assertion-weakening" entry here.
 		// checkAssertionWeakening (born 3129668f, unregistered by the
 		// fc5c4aad critical-only refactor) was DELETED, not resurrected:

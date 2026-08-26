@@ -452,3 +452,107 @@ func TestInterfaceDesign_NilGoAST(t *testing.T) {
 		t.Errorf("expected no warnings when AST is nil, got %v", w)
 	}
 }
+
+// #1066: Test that generic receivers are handled correctly.
+// A single-implementation interface with a generic receiver method
+// should NOT be flagged as a false positive.
+func TestInterfaceDesign_GenericReceiver(t *testing.T) {
+	oldCode := `package main
+
+type MyType[T any] struct{}
+
+func (m *MyType[T]) Method() {}
+
+type MyInterface interface {
+	Method()
+}
+
+type MyImpl struct{}
+
+func (m *MyImpl) Method() {}
+`
+
+	newCode := `package main
+
+type MyType[T any] struct{}
+
+func (m *MyType[T]) Method() {}
+
+type MyInterface interface {
+	Method()
+}
+
+type MyImpl struct{}
+
+func (m *MyImpl) Method() {}
+
+type AnotherImpl[T any] struct{}
+
+func (a *AnotherImpl[T]) Method() {}
+`
+
+	// Adding a new implementation (AnotherImpl) to a single-impl interface
+	// should NOT trigger a false positive when the receiver is generic
+	ctx := idMakeCtx("example.go", oldCode, newCode)
+	warnings := checkInterfaceDesign(ctx)
+
+	// Should not report "interface has only 1 implementation" for MyInterface
+	// because AnotherImpl has a generic receiver and idRecvTypeName should
+	// preserve the "AnotherImpl[T]" form
+	hasSingleImplWarning := false
+	for _, w := range warnings {
+		if strings.Contains(w, "only 1 implementation") {
+			hasSingleImplWarning = true
+			break
+		}
+	}
+	if hasSingleImplWarning {
+		t.Errorf("expected no single-implementation warning when generic receiver is present (#1066), got: %v", warnings)
+	}
+}
+
+// #1066: Test that non-generic single-impl interface is still detected.
+// This verifies the fix doesn't break the original functionality.
+func TestInterfaceDesign_NonGenericSingleImpl(t *testing.T) {
+	oldCode := `package main
+
+type MyInterface interface {
+	Method()
+}
+
+type MyImpl struct{}
+
+func (m *MyImpl) Method() {}
+`
+
+	newCode := `package main
+
+type MyInterface interface {
+	Method()
+}
+
+type MyImpl struct{}
+
+func (m *MyImpl) Method() {}
+
+type NewImpl struct{}
+
+func (n *NewImpl) Method() {}
+`
+
+	// Adding a new non-generic implementation should still work
+	ctx := idMakeCtx("example.go", oldCode, newCode)
+	warnings := checkInterfaceDesign(ctx)
+
+	// MyInterface now has 2 implementations, should NOT warn
+	hasSingleImplWarning := false
+	for _, w := range warnings {
+		if strings.Contains(w, "only 1 implementation") {
+			hasSingleImplWarning = true
+			break
+		}
+	}
+	if hasSingleImplWarning {
+		t.Errorf("expected no warning when interface has 2 implementations, got: %v", warnings)
+	}
+}

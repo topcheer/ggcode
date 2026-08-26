@@ -523,3 +523,175 @@ func use() {
 		t.Fatalf("expected warning about variable 'v', got: %s", result)
 	}
 }
+
+// #1067: Test that IfStmt.Init is walked for dereferences.
+// The pattern "if v, err := f(); v.Field > 0" should detect
+// the dereference of v in the Init before the condition is evaluated.
+func TestCheckNilDerefAfterError_IfStmtInit(t *testing.T) {
+	code := `package main
+
+import "fmt"
+
+type Result struct {
+	Field int
+}
+
+func process() (*Result, error) {
+	return nil, fmt.Errorf("fail")
+}
+
+func use() {
+	// BUG: v.Field is dereferenced in Init before err is checked
+	if v, err := process(); v.Field > 0 {
+		fmt.Println(v.Field)
+	}
+	_ = err
+}
+`
+	result := checkNilDerefAfterError("test.go", "", code)
+	if result == "" {
+		t.Fatal("expected warning for dereference in IfStmt.Init (#1067)")
+	}
+	if !strings.Contains(result, "v") {
+		t.Fatalf("expected warning about variable 'v', got: %s", result)
+	}
+}
+
+// #1068: Test that non-nil-check IfStmt.Cond is walked.
+// The pattern "if v.Field > 0 && err == nil" should detect
+// the dereference of v in the Cond.
+func TestCheckNilDerefAfterError_IfStmtCond(t *testing.T) {
+	code := `package main
+
+import "fmt"
+
+type Result struct {
+	Field int
+}
+
+func process() (*Result, error) {
+	return nil, fmt.Errorf("fail")
+}
+
+func use() {
+	v, err := process()
+	// BUG: v.Field is dereferenced in Cond before err is checked
+	if v.Field > 0 && err == nil {
+		fmt.Println(v.Field)
+	}
+}
+`
+	result := checkNilDerefAfterError("test.go", "", code)
+	if result == "" {
+		t.Fatal("expected warning for dereference in IfStmt.Cond (#1068)")
+	}
+	if !strings.Contains(result, "v") {
+		t.Fatalf("expected warning about variable 'v', got: %s", result)
+	}
+}
+
+// #1069: Test that delta key includes variable name.
+// Verify that two different variables on the same line are tracked separately.
+func TestCheckNilDerefAfterError_DeltaKeyVariableName(t *testing.T) {
+	oldCode := `package main
+
+import "fmt"
+
+type Result struct{ Field string }
+
+func get() (*Result, error) { return nil, nil }
+
+func use() {
+	r, err := get()
+	_ = err
+}
+`
+	newCode := `package main
+
+import "fmt"
+
+type Result struct{ Field string }
+
+func get() (*Result, error) { return nil, nil }
+
+func use() {
+	r, err := get()
+	fmt.Println(r.Field) // BUG: new dereference
+	_ = err
+}
+`
+	// Old code has no dereference, new code has dereference of r
+	result := checkNilDerefAfterError("test.go", oldCode, newCode)
+	if result == "" {
+		t.Fatal("expected warning for new dereference (#1069)")
+	}
+	if !strings.Contains(result, "r") {
+		t.Fatalf("expected warning about variable 'r', got: %s", result)
+	}
+
+	// Now test that a different variable on the same line is tracked separately
+	code2 := `package main
+
+import "fmt"
+
+type Result struct{ Field string }
+
+func get() (*Result, error) { return nil, nil }
+
+func use() {
+	s, err := get()
+	fmt.Println(s.Field) // Different variable, should also warn
+	_ = err
+}
+`
+	result2 := checkNilDerefAfterError("test.go", oldCode, code2)
+	if result2 == "" {
+		t.Fatal("expected warning for different variable 's' on same line (#1069)")
+	}
+	if !strings.Contains(result2, "s") {
+		t.Fatalf("expected warning about variable 's', got: %s", result2)
+	}
+}
+
+// #1070: Test that nilRisk map is block-scoped.
+// Brother blocks with same variable names should not leak risk state.
+func TestCheckNilDerefAfterError_BlockScopedNilRisk(t *testing.T) {
+	code := `package main
+
+import "fmt"
+
+type Result struct{ Field string }
+
+func get1() (*Result, error) { return nil, fmt.Errorf("fail1") }
+func get2() (*Result, error) { return &Result{Field: "ok"}, nil }
+
+func use() {
+	{  // Block 1: v is nil-risk
+		v, err := get1()
+		fmt.Println(v.Field) // BUG: v may be nil
+		_ = err
+	}
+	{  // Block 2: different v, not nil-risk (block-scoped)
+		v, err := get2()
+		if err != nil {
+			return
+		}
+		fmt.Println(v.Field) // SAFE: different v in brother block
+	}
+}
+`
+	result := checkNilDerefAfterError("test.go", "", code)
+	if result == "" {
+		t.Fatal("expected warning in first block (#1070)")
+	}
+	// Should warn about v in first block but not second (they're separate)
+	// The delta key includes line number, so we get one warning
+	if !strings.Contains(result, "v") {
+		t.Fatalf("expected warning about variable 'v', got: %s", result)
+	}
+	// Count warnings - should only warn once for the first block
+	warnCount := strings.Count(result, "[nil-deref-after-error]")
+	if warnCount != 1 {
+		t.Fatalf("expected 1 warning, got %d: %s", warnCount, result)
+	}
+}

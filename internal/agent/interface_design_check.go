@@ -41,9 +41,11 @@ package agent
 //     time, before the developer even runs a linter.
 
 import (
+	"bytes"
 	"fmt"
 	"go/ast"
 	"go/parser"
+	"go/printer"
 	"go/token"
 	"path/filepath"
 	"strings"
@@ -477,6 +479,8 @@ func idResultsReturnAny(results []*ast.Field) bool {
 }
 
 // idRecvTypeName extracts the receiver type name, stripping pointer indirection.
+// Handles generic receivers like `func (f *Foo[T]) M()` by preserving the
+// IndexExpr form (Foo[T]) instead of returning empty string (#1066).
 func idRecvTypeName(expr ast.Expr) string {
 	if star, ok := expr.(*ast.StarExpr); ok {
 		expr = star.X
@@ -484,7 +488,23 @@ func idRecvTypeName(expr ast.Expr) string {
 	if ident, ok := expr.(*ast.Ident); ok {
 		return ident.Name
 	}
+	// #1066: Handle generic receivers like *Foo[T] or Foo[T]
+	if index, ok := expr.(*ast.IndexExpr); ok {
+		return gofmtExpr(index) // returns "Foo[T]" for idFuncKey
+	}
 	return ""
+}
+
+// gofmtExpr formats an AST expression back to Go source code.
+// Used for generic receiver names like "Foo[T]" (#1066).
+func gofmtExpr(expr ast.Expr) string {
+	var buf bytes.Buffer
+	fset := token.NewFileSet()
+	p := printer.Config{Mode: printer.UseSpaces, Tabwidth: 8}
+	if err := p.Fprint(&buf, fset, expr); err != nil {
+		return ""
+	}
+	return buf.String()
 }
 
 // idFuncKey generates a unique key for a function (receiver type + name).
