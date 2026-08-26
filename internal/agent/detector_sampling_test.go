@@ -1,9 +1,6 @@
 package agent
 
-import (
-	"strings"
-	"testing"
-)
+import "testing"
 
 func TestShouldRunDetector(t *testing.T) {
 	tests := []struct {
@@ -64,40 +61,5 @@ func TestSamplingReduction(t *testing.T) {
 	// Routine: ~33% (7/20 for i%3==1: 1,4,7,10,13,16,19)
 	if routineCount != 7 {
 		t.Errorf("routine tier: expected 7 executions, got %d", routineCount)
-	}
-}
-
-// TestSamplingDoesNotMissWindowedBursts (issue #312): a burst of 10
-// same-category tool calls landing entirely on non-sampled iterations must
-// still trigger guidance at the next sampled check, even after the sliding
-// window has been flushed by subsequent diverse calls.
-func TestSamplingDoesNotMissWindowedBursts(t *testing.T) {
-	d := newDiversityState()
-
-	// Simulate the agent loop: recordCall runs every iteration; check is
-	// gated to sampled iterations (i%3 == 1).
-	var fired string
-	for i := 1; i <= 20 && fired == ""; i++ {
-		if i <= 10 {
-			// Burst of 10 edit_file calls (iterations 1-10).
-			d.recordCall("edit_file")
-		} else {
-			// Window flushed with diverse calls so any non-sticky
-			// implementation would lose the burst.
-			if i%2 == 0 {
-				d.recordCall("read_file")
-			} else {
-				d.recordCall("grep")
-			}
-		}
-		if shouldRunDetector(detectorTierRoutine, i) {
-			fired = d.check()
-		}
-	}
-	if fired == "" {
-		t.Fatal("burst of 10 edit calls on non-sampled phases was never reported")
-	}
-	if !strings.Contains(fired, "edit") {
-		t.Errorf("guidance should mention edit category: %s", fired)
 	}
 }

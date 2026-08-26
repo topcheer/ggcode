@@ -1,8 +1,6 @@
 package agent
 
 import (
-	"encoding/json"
-	"strings"
 	"testing"
 )
 
@@ -121,63 +119,3 @@ func TestCorrectionSpiral_WiringGateShape(t *testing.T) {
 
 // The issue's exact scenario: 30 productive iterations, then pure shell
 // exploration (cat/ls/git log) — must trigger last-mile stall.
-func TestMomentumLoss_ShellExplorationTriggersStall(t *testing.T) {
-	m := newMomentumLossState()
-	maxIter := 50
-	// Iterations 1-30: 2 edits each.
-	for it := 1; it <= 30; it++ {
-		m.startIteration(it)
-		m.recordToolCall("edit_file", nil)
-		m.recordToolCall("edit_file", nil)
-	}
-	// Iterations 31-40: pure shell exploration.
-	for it := 31; it <= 40; it++ {
-		m.startIteration(it)
-		m.recordToolCall("run_command", json.RawMessage(`{"command":"cat internal/agent/agent.go"}`))
-		m.recordToolCall("run_command", json.RawMessage(`{"command":"git log --oneline -5"}`))
-		m.recordToolCall("run_command", json.RawMessage(`{"command":"rg TODO internal/"}`))
-	}
-	msg := m.checkMomentumLoss(maxIter)
-	if msg == "" {
-		t.Fatal("late-phase shell exploration must trigger last-mile stall (#492): detector was blind on the shell channel")
-	}
-	if !strings.Contains(msg, "momentum") && !strings.Contains(msg, "stall") {
-		t.Fatalf("unexpected message: %s", msg)
-	}
-}
-
-func TestMomentumLoss_VerifyCommandsStayProductive(t *testing.T) {
-	m := newMomentumLossState()
-	maxIter := 50
-	for it := 1; it <= 30; it++ {
-		m.startIteration(it)
-		m.recordToolCall("edit_file", nil)
-	}
-	for it := 31; it <= 40; it++ {
-		m.startIteration(it)
-		m.recordToolCall("run_command", json.RawMessage(`{"command":"go test ./..."}`))
-	}
-	if msg := m.checkMomentumLoss(maxIter); msg != "" {
-		t.Fatalf("genuine verify commands are productive — no stall must fire, got: %s", msg)
-	}
-}
-
-func TestMomentumLoss_ObservationalClassifier(t *testing.T) {
-	for _, cmd := range []string{
-		"cat x.go", "ls -la", "head -20 f", "tail -5 f", "pwd",
-		"rg pattern .", "grep foo dir", "find . -name x", "ag TODO",
-		"git log --oneline", "git diff HEAD", "git show abc", "git status", "git blame f.go",
-	} {
-		if !mlIsObservationalCommand(cmd) {
-			t.Errorf("%q must be observational", cmd)
-		}
-	}
-	for _, cmd := range []string{
-		"go test ./...", "go build ./...", "make verify", "git add .", "git commit -m x",
-		"npm test", "cargo build", "",
-	} {
-		if mlIsObservationalCommand(cmd) {
-			t.Errorf("%q must NOT be observational (productive/unknown stays productive)", cmd)
-		}
-	}
-}

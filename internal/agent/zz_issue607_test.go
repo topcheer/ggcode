@@ -112,7 +112,7 @@ func TestIssue607_B2_ToolResultHintsRespectBudget(t *testing.T) {
 	// budget must start suppressing.
 	for i := 0; i < guidanceBudgetPerTurn; i++ {
 		res := &tool.Result{Content: "ok"}
-		a.applyToolResultGuidance(res, "", "[advisory-"+string(rune('a'+i))+"] hint number "+string(rune('a'+i)), "", "", "")
+		a.applyToolResultGuidance(res, "", "[advisory-"+string(rune('a'+i))+"] hint number "+string(rune('a'+i)), "", "")
 		if !strings.Contains(res.Content, "[advisory-") {
 			t.Fatalf("result %d: advisory hint unexpectedly suppressed before budget cap; content=%q", i, res.Content)
 		}
@@ -120,7 +120,7 @@ func TestIssue607_B2_ToolResultHintsRespectBudget(t *testing.T) {
 
 	// Next result in the SAME turn must be suppressed by the budget.
 	res := &tool.Result{Content: "ok"}
-	a.applyToolResultGuidance(res, "", "[advisory-over] should be suppressed", "", "", "")
+	a.applyToolResultGuidance(res, "", "[advisory-over] should be suppressed", "", "")
 	if strings.Contains(res.Content, "[advisory-over]") {
 		t.Errorf("tool-result hint bypassed per-turn budget cap (B2); content=%q", res.Content)
 	}
@@ -133,11 +133,11 @@ func TestIssue607_B2_CriticalHintPassesExhaustedBudget(t *testing.T) {
 	a := issue607Agent()
 	for i := 0; i < guidanceBudgetPerTurn; i++ {
 		res := &tool.Result{Content: "ok"}
-		a.applyToolResultGuidance(res, "", "[advisory-"+string(rune('a'+i))+"] filler", "", "", "")
+		a.applyToolResultGuidance(res, "", "[advisory-"+string(rune('a'+i))+"] filler", "", "")
 	}
 	// Critical hint still injects even with the budget exhausted.
 	res := &tool.Result{Content: "ok"}
-	a.applyToolResultGuidance(res, "[CRITICAL] critical failure detected", "", "", "", "")
+	a.applyToolResultGuidance(res, "[CRITICAL] critical failure detected", "", "", "")
 	if !strings.Contains(res.Content, "[CRITICAL]") {
 		t.Error("critical hint suppressed by exhausted budget; want bypass")
 	}
@@ -157,7 +157,7 @@ func TestIssue607_B3_ConflictHintCountsTowardCap(t *testing.T) {
 	// total injections across the turn.
 	a.applyToolResultGuidance(res, "",
 		"[analysis-paralysis] ACT NOW: make your best-guess edit.",
-		"[explore-expand] Explore more to understand before editing.", "", "")
+		"[explore-expand] Explore more to understand before editing.", "")
 
 	injectedMsgs := a.guidanceBudget.injected
 	if injectedMsgs > guidanceBudgetPerTurn {
@@ -175,7 +175,7 @@ func TestIssue607_B3_MetaHintDedupedAcrossResults(t *testing.T) {
 
 	// First result in the turn: the hint is injected.
 	res1 := &tool.Result{Content: "ok"}
-	a.applyToolResultGuidance(res1, "", conflict, "", "", "")
+	a.applyToolResultGuidance(res1, "", conflict, "", "")
 	if !strings.Contains(res1.Content, "[analysis-paralysis]") {
 		t.Fatalf("first result: expected advisory hint; content=%q", res1.Content)
 	}
@@ -184,7 +184,7 @@ func TestIssue607_B3_MetaHintDedupedAcrossResults(t *testing.T) {
 	// duplicate tag must be suppressed (cross-result dedup).
 	for i := 2; i <= 3; i++ {
 		res := &tool.Result{Content: "ok"}
-		a.applyToolResultGuidance(res, "", conflict, "", "", "")
+		a.applyToolResultGuidance(res, "", conflict, "", "")
 		if strings.Contains(res.Content, "[analysis-paralysis]") {
 			t.Errorf("result %d: duplicate hint repeated across tool results; content=%q", i, res.Content)
 		}
@@ -202,7 +202,7 @@ func TestIssue607_B3_ConflictDetectionStripsCoalescedSummaries(t *testing.T) {
 	res := &tool.Result{Content: "ok"}
 	a.applyToolResultGuidance(res, "",
 		"[analysis-paralysis] ACT NOW: make your best-guess edit.",
-		"[explore-expand] Explore more to understand before editing.", "", "")
+		"[explore-expand] Explore more to understand before editing.", "")
 	if strings.Contains(res.Content, "[guidance-conflict]") {
 		t.Errorf("pseudo-conflict fabricated from [guidance-coalesced] summary: %q", res.Content)
 	}
@@ -251,7 +251,7 @@ func TestIssue607_B3_ConflictHintDoesNotExceedCap(t *testing.T) {
 	res := &tool.Result{Content: "ok"}
 	a.applyToolResultGuidance(res, "",
 		"[analysis-paralysis] ACT NOW: make your best-guess edit.",
-		"[explore-expand] Explore more to understand before editing.", "", "")
+		"[explore-expand] Explore more to understand before editing.", "")
 
 	messages := strings.Count(res.Content, "\n\n")
 	// content "ok" + N injected hints => N-1 separators of the hints

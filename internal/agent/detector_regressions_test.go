@@ -111,29 +111,3 @@ func TestSerialReadUnknownToolNeutral(t *testing.T) {
 		t.Error("known mutating tool (edit_file) must set mutation")
 	}
 }
-
-// --- #467: tool storm requires consecutive iterations ---
-
-func TestToolStormSkippedIterationsNoWarn(t *testing.T) {
-	s := newToolStormState()
-	// Tool calls at iterations 1,3,5,7 (pure-analysis rounds between) —
-	// NOT a storm (#467).
-	for _, iter := range []int{1, 3, 5, 7} {
-		s.recordReasoning("")
-		s.recordToolCall("read_file", iter)
-	}
-	if msg := s.maybeWarn(); msg != "" {
-		t.Errorf("expected no storm warning for interleaved iterations, got: %s", msg)
-	}
-
-	// Consecutive iterations with DIVERSE tools and thin reasoning —
-	// a real storm window (fresh state).
-	s2 := newToolStormState()
-	for i, tool := range []string{"run_command", "read_file", "grep", "glob"} {
-		s2.recordReasoning("")
-		s2.recordToolCall(tool, 10+i)
-	}
-	if msg := s2.maybeWarn(); msg == "" {
-		t.Error("expected storm warning for consecutive iterations")
-	}
-}

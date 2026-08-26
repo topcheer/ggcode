@@ -90,8 +90,9 @@ func TestIssue639_MultiFileWriteCounted(t *testing.T) {
 	}
 }
 
-// Defect 2c: single canonical mutation-tool list — error_rush, momentum_loss,
-// and solution_fixation must agree on which tools are file mutations.
+// Defect 2c: single canonical mutation-tool list — error_rush and
+// solution_fixation must agree on which tools are file mutations.
+// (momentum_loss removed in guidance-noise cleanup batch 1.)
 func TestIssue639_CanonicalMutationToolListConsistency(t *testing.T) {
 	want := []string{
 		"edit_file", "write_file", "multi_edit_file", "multi_file_edit",
@@ -103,9 +104,6 @@ func TestIssue639_CanonicalMutationToolListConsistency(t *testing.T) {
 		}
 		if !errorRushIsMutation(tool) {
 			t.Errorf("error_rush mutation list missing %s (list drift)", tool)
-		}
-		if !momentumProductiveTools[tool] {
-			t.Errorf("momentum_loss productive list missing %s (list drift)", tool)
 		}
 	}
 	if isAgentMutationEditTool("run_command") || isAgentMutationEditTool("read_file") {

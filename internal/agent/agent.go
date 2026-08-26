@@ -5,6 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"slices"
+	"strings"
+	"sync"
+	"time"
+
 	"github.com/topcheer/ggcode/internal/checkpoint"
 	ctxpkg "github.com/topcheer/ggcode/internal/context"
 	"github.com/topcheer/ggcode/internal/debug"
@@ -15,11 +21,6 @@ import (
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/tool"
 	"github.com/topcheer/ggcode/internal/util"
-	"os"
-	"slices"
-	"strings"
-	"sync"
-	"time"
 )
 
 // DiffConfirmFunc is called before a file write to request user confirmation.
@@ -140,7 +141,6 @@ type Agent struct {
 	editAbandon                *editAbandonState                     // edit abandonment detection (PASTE/LLMCompiler-inspired attention-shift tracking)
 	toolCallBudget             *toolCallBudget                       // per-session tool invocation limit (action-level guardrail)
 	commandCache               *commandCache                         // deterministic build/test command result caching
-	emptySearch                *emptySearchState                     // empty search spiral detection (futile search guidance)
 	postEditVerify             postEditVerifyState                   // tracks source-code edits to inject periodic verification hints
 	planner                    *planState                            // agent-side auto task decomposition (Devin/Claude Code-inspired)
 	todoStaleness              *todoStalenessState                   // mid-run stale todo detection (plan abandonment awareness)
@@ -209,18 +209,15 @@ type Agent struct {
 	orphanFile                 *orphanFileState                      // orphaned new file integration detection (new source files never wired into existing code)
 	cfDep                      *cfDepState                           // counterfactual dependency detection (dependent tool calls in same batch)
 	guidanceBudget             guidanceBudget                        // per-turn guidance injection limiter (caps context pollution from detector alerts)
-	toolStorm                  *toolStormState                       // tool call storm detection (diverse tools fired without reasoning)
 	reasoningRedund            *reasoningRedundancyState             // reasoning redundancy detection (consecutive text-only overthinking)
 	queryConverge              *queryConvergeState                   // query convergence failure detection (repeated similar searches without action)
 	serialRead                 *serialReadState                      // sequential read serialization detection (cross-turn single-read batching opportunity)
 	strategyFixation           *strategyFixationState                // strategy fixation detection (same file edited N times with failed verifications -- approach-level failure)
 	errorRush                  *errorRushState                       // error rush / panic coding detection (blind-fixing after consecutive errors without diagnosis)
-	targetScatter              *targetScatterState                   // target scatter detection (world model miscalibration - unfocused investigation across many unrelated files)
 	attentionFragment          *attentionFragmentState               // attention fragmentation detection (CLT extraneous load from rapid directory context-switching)
 	errorCompound              *errorCompoundState                   // error compounding risk detector (systemic trajectory reliability)
 	fixAmnesia                 *fixAmnesiaState                      // fix amnesia detector (cross-file error pattern recurrence after prior fix)
 	correctionSpiral           *correctionSpiralState                // correction spiral detector (error severity escalation across fixes)
-	wastedExplore              *wastedExploreState                   // wasted exploration detection (search results never acted upon)
 	toolResultRedundancy       *toolResultRedundancyState            // tool result redundancy detection (overlapping content across calls)
 	tunnelVision               *tunnelVisionState                    // tunnel vision detection (narrow file scope / under-exploration)
 	prematureCommit            *prematureCommitState                 // premature commitment detection (insufficient evidence before first edit)
@@ -247,17 +244,14 @@ type Agent struct {
 	ruleStore                  *RuleStore                            // cached rule store for hot-path rule injection (avoids per-tool disk I/O)
 	ruleInjectCount            map[string]int                        // per-rule injection counter for dedup (caps repetitive hints)
 	approvalMemory             *permission.ApprovalMemory            // session-level learned approval patterns (auto-approve after N repeats)
-	toolDiversity              *diversityState                       // tool diversity stagnation detection (strategy imbalance awareness)
 	fileChurn                  *churnState                           // file churn detection (invalidated assumption awareness)
 	editOscillation            *oscillationState                     // edit oscillation detection (semantic back-and-forth awareness)
 	silentError                *silentErrorState                     // silent error advancement detection (unaddressed error proceeding)
-	toolOveruse                *toolOveruseState                     // tool overuse / self-awareness detection (unnecessary tool calls for known info)
 	phantomVerify              *phantomVerifyState                   // phantom verification detection (category-specific verification claims without matching commands)
 	redundantReverify          *redundantReverifyState               // redundant re-verification detection (same verification cmd re-run without file edits)
 	truncClaim                 *truncClaimState                      // truncated output completeness fallacy detection (claims after truncated results)
 	circularReasoning          *circularReasoningState               // circular reasoning detection (tautological justification)
 	contradiction              *contradictionState                   // cross-turn contradiction detection (root-cause reversals)
-	ungroundedReflect          *ungroundedReflectionState            // ungrounded reflection detector (text-only thinking loops)
 	actionHedging              *actionHedgingState                   // action hedging detection (verbalized uncertainty during mutations)
 	scopeCreep                 *scopeCreepState                      // scope creep detection (unsolicited changes beyond request)
 	prematureAbstr             *prematureAbstrState                  // premature abstraction detection (over-engineering within task scope)
@@ -281,7 +275,6 @@ type Agent struct {
 	trajIntel                  *trajIntelState                       // post-run trajectory intelligence extraction
 	strategyStagnation         *strategyStagnationState              // strategy stagnation detection (same-tool+target retries after failure)
 	iterPressure               *iterPressureState                    // iteration pressure degradation detection (verify/edit ratio drop near budget limit)
-	momentumLoss               *momentumLossState                    // late-phase productivity collapse detection (last-mile stall)
 	diminishingEdit            *diminishingEditState                 // polish-spiral detection (diminishing edit substance)
 	overcorrection             *overcorrectionState                  // overcorrection cascade detection (disproportionate fix size)
 	prematureRefactor          *prematureRefactorState               // premature refactoring detection (unverified code restructuring awareness)
@@ -343,7 +336,6 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		editAbandon:            newEditAbandonState(),
 		toolCallBudget:         newToolCallBudget(),
 		commandCache:           newCommandCache(),
-		emptySearch:            newEmptySearchState(),
 		errorClassifier:        NewErrorClassifier(),
 		planner:                newPlanState(),
 		todoStaleness:          newTodoStalenessState(),
@@ -418,7 +410,6 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		orphanFile:             newOrphanFileState(),
 		cfDep:                  newCFDepState(),
 		serialRead:             newSerialReadState(),
-		toolStorm:              newToolStormState(),
 		outcomeMisattrib:       newOutcomeMisattribState(),
 		reasoningRedund:        newReasoningRedundancyState(),
 		queryConverge:          newQueryConvergeState(),
@@ -426,7 +417,6 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		errorCompound:          newErrorCompoundState(),
 		fixAmnesia:             newFixAmnesiaState(),
 		correctionSpiral:       newCorrectionSpiralState(),
-		wastedExplore:          newWastedExploreState(),
 		toolResultRedundancy:   newToolResultRedundancyState(),
 		selfMod:                newSelfModState(),
 		tunnelVision:           newTunnelVisionState(),
@@ -437,17 +427,14 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		prematureSuccess:       newPrematureSuccessState(),
 		strategyFixation:       newStrategyFixationState(),
 		errorRush:              newErrorRushState(),
-		targetScatter:          newTargetScatterState(),
 		attentionFragment:      newAttentionFragmentState(),
 		recklessExec:           newRecklessExecState(),
 		irrevGate:              newIrrevGateState(),
 		verifyDebt:             newVerifyDebtState(),
 		editPropagation:        newEditPropagationState(),
-		toolDiversity:          newDiversityState(),
 		fileChurn:              newChurnState(),
 		editOscillation:        newOscillationState(),
 		silentError:            newSilentErrorState(),
-		toolOveruse:            newToolOveruseState(),
 		phantomVerify:          newPhantomVerifyState(),
 		redundantReverify:      newRedundantReverifyState(),
 		solutionFixation:       newSolutionFixationState(),
@@ -455,7 +442,6 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		truncClaim:             newTruncClaimState(),
 		circularReasoning:      newCircularReasoningState(),
 		contradiction:          newContradictionState(),
-		ungroundedReflect:      newUngroundedReflectionState(),
 		actionHedging:          newActionHedgingState(),
 		scopeCreep:             newScopeCreepState(),
 		prematureAbstr:         newPrematureAbstrState(),
@@ -468,7 +454,6 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		mindlessAction:         newMindlessActionState(),
 		strategyStagnation:     newStrategyStagnationState(),
 		iterPressure:           newIterPressureState(maxIter),
-		momentumLoss:           newMomentumLossState(),
 		diminishingEdit:        newDiminishingEditState(),
 		overcorrection:         newOvercorrectionState(),
 		prematureRefactor:      newPrematureRefactorState(),
@@ -1208,7 +1193,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.orphanFile.reset()
 	a.cfDep.reset()
 	a.expiredRead.reset()
-	a.resetWastedExplore()
 	// Convergence lock must reset per run so post-verification edit drift
 	// counters don't leak across runs (issue #341).
 	a.resetConvergenceLock()
@@ -1232,36 +1216,34 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	if a.iterPressure != nil {
 		a.iterPressure.reset(a.maxIter)
 	}
-	if a.momentumLoss != nil {
-		a.momentumLoss.reset()
-		a.diminishingEdit.reset()
-		a.overcorrection.reset()
-		a.prematureRefactor.reset()
-		a.errorCompound.reset()
-		a.correctionSpiral.reset()
-		a.bareEditStreak.reset()
-		a.editCoverage.reset()
-		a.prematureSuccess.reset()
-		a.strategyFixation.reset()
-		a.targetScatter.reset()
-		a.errorRush.reset()
-		a.phantomVerify.reset()
-		if a.recklessExec != nil {
-			a.recklessExec.reset()
-		}
-		if a.irrevGate != nil {
-			a.irrevGate.reset()
-		}
-		a.subgoalTrack.reset()
-		a.futileCycle.reset()
-		a.toolResultRedundancy.reset()
-		a.verifyDebt.reset()
-		a.editPropagation.reset()
-		a.successDeclare.reset()
-		a.criteriaDrift.reset()
-		a.reasonAction.reset()
-		a.attemptBrief.reset()
+	// (removed: momentum/target-scatter resets — detectors deleted batch 1)
+	a.diminishingEdit.reset()
+	a.overcorrection.reset()
+	a.prematureRefactor.reset()
+	a.errorCompound.reset()
+	a.correctionSpiral.reset()
+	a.bareEditStreak.reset()
+	a.editCoverage.reset()
+	a.prematureSuccess.reset()
+	a.strategyFixation.reset()
+
+	a.errorRush.reset()
+	a.phantomVerify.reset()
+	if a.recklessExec != nil {
+		a.recklessExec.reset()
 	}
+	if a.irrevGate != nil {
+		a.irrevGate.reset()
+	}
+	a.subgoalTrack.reset()
+	a.futileCycle.reset()
+	a.toolResultRedundancy.reset()
+	a.verifyDebt.reset()
+	a.editPropagation.reset()
+	a.successDeclare.reset()
+	a.criteriaDrift.reset()
+	a.reasonAction.reset()
+	a.attemptBrief.reset()
 	defer func() {
 		// Mark the run as completed in the journal (crash detection cleanup).
 		// This runs for all exit paths: success, error, and cancellation.
@@ -1464,7 +1446,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.editAbandon.reset()
 	a.toolCallBudget.reset()
 	a.toolCallBudget.SetDefaultBudget(deriveDefaultBudget(a.maxIter))
-	a.emptySearch.reset()
+
 	// Reset the unread-file edit tracker so each run starts fresh.
 	a.unreadEdit.reset()
 	a.expiredRead.reset()
@@ -1506,12 +1488,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.toolSequence.reset()
 	a.resetTransientRetryBudget()
 	a.compoundingFailure.reset()
-	a.toolDiversity.reset()
+
 	a.fileChurn.reset()
 	a.editOscillation.reset()
 	a.silentError.reset()
-	a.toolOveruse.reset()
-	a.toolStorm.reset()
+
 	a.serialRead.reset()
 	a.toolEff.reset()
 	a.reasoningRedund.reset()
@@ -1530,7 +1511,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		a.tokenWasteBudget.reset()
 	}
 	a.mindlessAction.reset()
-	a.ungroundedReflect.reset()
+
 	a.strategyStagnation.reset()
 	a.infoScent.reset()
 	a.causalAttribution.reset()
@@ -1711,13 +1692,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.injectGuidance(thermalMsg)
 			msgs = a.contextManager.Messages()
 		}
-		// Momentum loss detection: track per-iteration productivity and
-		// warn when late-phase productivity collapses after early progress.
-		a.momentumLoss.startIteration(i + 1)
-		if momentumMsg := a.momentumLoss.checkMomentumLoss(a.maxIter); momentumMsg != "" {
-			a.injectGuidance(momentumMsg)
-			msgs = a.contextManager.Messages()
-		}
 		// Error compounding risk: compute geometric compounding probability
 		// and warn when accumulated errors make the trajectory unreliable.
 		if ecMsg := a.errorCompound.maybeWarn(i + 1); ecMsg != "" {
@@ -1778,10 +1752,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		}
 		// Wasted exploration detection: nudge the agent when previous
 		// search results containing file paths were never acted upon.
-		if wastedExploreMsg := a.maybeWarnWastedExplore(i + 1); wastedExploreMsg != "" {
-			a.injectGuidance(wastedExploreMsg)
-			msgs = a.contextManager.Messages()
-		}
 		// Information scent decay detection: nudge when consecutive
 		// exploration calls yield diminishing novel information.
 		if scentMsg := a.infoScent.maybeWarn(i + 1); scentMsg != "" {
@@ -1799,14 +1769,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		}
 		if bgOrphanMsg := a.maybeWarnBgOrphan(i + 1); bgOrphanMsg != "" {
 			a.injectGuidance(bgOrphanMsg)
-			msgs = a.contextManager.Messages()
-		}
-		// Tool call storm detection: when diverse tools are fired in
-		// rapid succession without interleaved reasoning, inject a
-		// guidance nudge to pause and synthesize (test-time scaling).
-		if stormMsg := a.toolStorm.maybeWarn(); stormMsg != "" {
-			debug.Log("agent", "Iteration %d: tool call storm detected", i+1)
-			a.injectGuidance(stormMsg)
 			msgs = a.contextManager.Messages()
 		}
 		// Reasoning redundancy detection: consecutive text-only iterations with
@@ -1842,13 +1804,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// arXiv 2026; AgentDiet, FSE 2026).
 		if erMsg := a.errorRush.check(); erMsg != "" {
 			a.injectGuidance(erMsg)
-			msgs = a.contextManager.Messages()
-		}
-		// Target scatter: detect world model miscalibration -- the agent
-		// examines many unrelated files without converging, indicating it
-		// does not know where to look (Qwen-AgentWorld 2026; SICA NeurIPS 2025).
-		if tsMsg := a.targetScatter.check(); tsMsg != "" {
-			a.injectGuidance(tsMsg)
 			msgs = a.contextManager.Messages()
 		}
 		// Attention fragmentation: detect rapid directory context-switching
@@ -2141,7 +2096,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// models that write tool calls in prose instead of structured tool_use blocks).
 			// Nudge the model to use proper tool call format and retry.
 			assistantText := textBuf
-			a.toolStorm.recordReasoning(assistantText)
 			a.constraintViolation.recordReasoning(assistantText, i+1)
 			a.reasoningRedund.recordReasoning(assistantText, false)
 			// History error accumulation: check if assistant text addresses
@@ -2434,25 +2388,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					Content: []provider.ContentBlock{{
 						Type: "text",
 						Text: mindlessActionWarning(a.mindlessAction.streak),
-					}},
-				})
-			}
-			// Ungrounded reflection detector: detect consecutive iterations
-			// with substantial text but no tool calls (overthinking loops).
-			// Research (2024-2025) shows intrinsic self-correction without
-			// external grounding degrades performance.
-			if ugrMsg := a.ungroundedReflect.recordIteration(i+1, len(toolCalls) > 0, len(assistantText)); ugrMsg != "" {
-				debug.Log("agent", "Iteration %d: ungrounded reflection detector triggered", i+1)
-				// Record the firing explicitly: this guidance is injected via
-				// contextManager (not appended to tool results), so the consensus
-				// detector chain never sees it — without this the detector is
-				// invisible to crossDetectorConsensus (#952 regression follow-up).
-				a.crossDetectorConsensus.recordFiring("Ungrounded Reflection")
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: ugrMsg,
 					}},
 				})
 			}
@@ -2917,7 +2852,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.toolCallBudget.record()
 			a.toolThermal.recordToolCall(tc.Name)
 			a.iterPressure.recordToolCall(tc.Name, i+1)
-			a.momentumLoss.recordToolCall(tc.Name, tc.Arguments)
 			extractPathsFromToolCall(tc.Name, tc.Arguments, runStats)
 			// Check for consecutive duplicate tool calls (loop detection).
 			// If detected, inject a guidance message into the tool result.
@@ -2962,11 +2896,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Tool overuse / self-awareness detection: warn when the agent
 			// calls tools to retrieve information it already has (read-after-
 			// write, unchanged dir re-list, trivial env commands).
-			var overuseHint string
-			if hint := a.toolOveruse.maybeWarn(tc.Name, string(tc.Arguments), i+1); hint != "" {
-				overuseHint = hint
-				debug.Log("agent", "Iteration %d: tool overuse detected for %s", i+1, tc.Name)
-			}
 			// Check for project memory but defer injection
 			if mc, mf, mt := a.pendingProjectMemoryForTool(tc); len(mf) > 0 && strings.TrimSpace(mc) != "" {
 				if deferredMemoryContent == "" {
@@ -3397,7 +3326,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 			// Tool call storm tracking: record each tool call to detect
 			// diverse-tool bursts without interleaved reasoning.
-			a.toolStorm.recordToolCall(tc.Name, i+1)
 			a.serialRead.recordToolCall(tc.Name)
 			a.reasoningRedund.recordReasoning("", true) // tool call breaks text-only streak
 			// Verification coverage gap: detect edits across multiple packages
@@ -3520,7 +3448,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Wasted exploration tracking: record search tool results and
 			// file path consumption. Detects searches whose results were
 			// never acted upon.
-			a.recordWastedExploreToolCall(tc.Name, tc.Arguments, result.Content, i+1)
 			// Self-modification safety: check write tool calls for targets
 			// that modify the agent's own infrastructure (config, memory,
 			// hooks, permissions, system prompts).
@@ -3845,22 +3772,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					result.Content = abandonGuidance
 				}
 			}
-			// Tool diversity stagnation: detect when one tool category dominates
-			// recent calls (strategy imbalance). AgentForesight-inspired leading
-			// indicator of trajectory failure.
-			a.toolDiversity.recordCall(tc.Name)
-			if dg := func() string {
-				if !shouldRunDetector(detectorTierRoutine, i+1) {
-					return ""
-				}
-				return a.toolDiversity.check()
-			}(); dg != "" {
-				if result.Content != "" {
-					result.Content = result.Content + "\n\n" + dg
-				} else {
-					result.Content = dg
-				}
-			}
 			// File churn detection: track repeated edits to the same file.
 			// Each re-edit signals an invalidated assumption about the file.
 			if isEditTool(tc.Name) {
@@ -3927,13 +3838,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 			// Tunnel vision detection: warn when the agent has done many
 			// iterations but only touched a few files (under-exploration).
-			if emptyGuidance := a.emptySearch.recordResult(tc.Name, result.Content, result.IsError, extractFileHint(tc.Name, tc.Arguments)); emptyGuidance != "" {
-				if result.Content != "" {
-					result.Content = result.Content + "\n\n" + emptyGuidance
-				} else {
-					result.Content = emptyGuidance
-				}
-			}
 			// Agentic abstention detection: track negative environment signals
 			// (not found, unavailable) to detect untimely continuation.
 			// Silent degradation propagation: record degraded tool results for
@@ -4066,8 +3970,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 			// Error rush: track error-to-action dynamics for panic coding detection.
 			a.errorRush.recordToolCall(tc.Name, result.Content, result.IsError)
-			// Target scatter: track diagnostic tool targets for world model calibration detection.
-			a.targetScatter.recordToolCall(tc.Name, string(tc.Arguments))
 			// Attention fragmentation: track directory switches for CLT extraneous load detection.
 			var afArgs map[string]interface{}
 			if len(tc.Arguments) > 0 {
@@ -4270,7 +4172,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// recovery read_file after a failed edit received false-premise
 			// "trust the content from your edit" guidance that contradicts
 			// edit_fail_recovery's own recommendation.
-			a.toolOveruse.recordWriteResult(tc.Name, string(tc.Arguments), i+1, !result.IsError)
 			// Repetitive-line compression: collapse consecutive identical or
 			// template-similar lines (common in build/test/install output) before
 			// the size-based guard. This may prevent truncation entirely for
@@ -4299,7 +4200,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Both vision and non-vision paths share the same hint assembly logic.
 			// originalContentLen was captured BEFORE the detector chain above (#952,
 			// #553 residual) so detector guidance never inflates waste metering.
-			a.applyToolResultGuidance(&result, loopGuidance, searchParamHint, redundancyHint, equivHint, overuseHint)
+			a.applyToolResultGuidance(&result, loopGuidance, searchParamHint, redundancyHint, equivHint)
 			if len(result.Images) > 0 && a.SupportsVision() {
 				imgs := make([]provider.ContentImage, len(result.Images))
 				for i, ri := range result.Images {
@@ -4325,7 +4226,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			if tc.Name == "read_file" || tc.Name == "multi_file_read" {
 				pathsRead = extractReadFilePaths(tc.Name, tc.Arguments)
 			}
-			isRedundant := redundancyHint != "" || overuseHint != ""
+			isRedundant := redundancyHint != ""
 			if a.tokenWasteBudget != nil {
 				a.tokenWasteBudget.recordToolResultLen(tc.Name, result.Content, originalContentLen, result.IsError, isRedundant, pathsRead)
 			}
