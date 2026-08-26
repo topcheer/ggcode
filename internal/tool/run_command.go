@@ -354,6 +354,14 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 	output := util.StripANSI(stdout.String())
 	errOutput := util.StripANSI(stderr.String())
 
+	return t.finalizeCommandResult(args.Command, preWarning, output, errOutput, err, mtimeSnapshot), nil
+}
+
+// finalizeCommandResult assembles the tool Result after cmd.Run() returns:
+// truncation (head+tail), STDERR sectioning, failure diagnostics with exit
+// code, mtime-diff file-change notices, and the structured build/test
+// summary prefix. Inputs are the already-stripped stdout/stderr strings.
+func (t RunCommand) finalizeCommandResult(command, preWarning, output, errOutput string, runErr error, mtimeSnapshot map[string]time.Time) Result {
 	// Truncate output if too large — keep both head and tail.
 	// For most commands (tests, builds, lints), the important info is at the
 	// end (error messages, test results). Keeping only the head would lose it.
@@ -372,15 +380,15 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 		sb.WriteString(errOutput)
 	}
 
-	if err != nil {
+	if runErr != nil {
 		exitCode := -1
-		if ee, ok := err.(*exec.ExitError); ok {
+		if ee, ok := runErr.(*exec.ExitError); ok {
 			exitCode = ee.ExitCode()
 		}
 		if t.OnPostExec != nil {
-			t.OnPostExec(exitCode, err)
+			t.OnPostExec(exitCode, runErr)
 		}
-		return Result{IsError: true, Content: preWarning + t.buildFailureMessage(args.Command, sb.String(), errOutput, err, exitCode)}, nil
+		return Result{IsError: true, Content: preWarning + t.buildFailureMessage(command, sb.String(), errOutput, runErr, exitCode)}
 	}
 
 	if t.OnPostExec != nil {
@@ -390,18 +398,18 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 	fileChanges := detectChangedFilesFromCommand(mtimeSnapshot)
 
 	if sb.Len() == 0 {
-		return Result{Content: preWarning + "Command completed with no output." + fileChanges}, nil
+		return Result{Content: preWarning + "Command completed with no output." + fileChanges}
 	}
 
 	// Build/test output intelligence: prepend structured summary when available
 	// so the agent sees actionable results first, reducing context consumption
 	// for large test/build outputs.
-	summary := summarizeCommandOutput(args.Command, sb.String())
+	summary := summarizeCommandOutput(command, sb.String())
 	if summary != "" {
-		return Result{Content: preWarning + summary + sb.String() + fileChanges}, nil
+		return Result{Content: preWarning + summary + sb.String() + fileChanges}
 	}
 
-	return Result{Content: preWarning + sb.String() + fileChanges}, nil
+	return Result{Content: preWarning + sb.String() + fileChanges}
 }
 
 // truncateMiddle keeps the first 40% and last 50% of output, inserting a
