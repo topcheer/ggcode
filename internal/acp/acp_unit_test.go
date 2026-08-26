@@ -343,7 +343,7 @@ func TestTransportSendRequestTimeout(t *testing.T) {
 	transport := NewTransport(r, io.Discard)
 	defer r.Close()
 
-	_, err := transport.SendRequest("test/method", nil, 50*time.Millisecond)
+	_, err := transport.SendRequest(context.Background(), "test/method", nil, 50*time.Millisecond)
 	if err == nil {
 		t.Error("expected timeout error")
 	}
@@ -367,7 +367,7 @@ func TestTransportSendRequestNilParams(t *testing.T) {
 		transport.DeliverResponse(&JSONRPCResponse{ID: float64(1), RawResult: json.RawMessage(`"ok"`)})
 	}()
 
-	result, err := transport.SendRequest("test/method", nil, 2*time.Second)
+	result, err := transport.SendRequest(context.Background(), "test/method", nil, 2*time.Second)
 	if err != nil {
 		t.Fatalf("SendRequest error: %v", err)
 	}

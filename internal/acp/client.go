@@ -560,7 +560,7 @@ func (c *Client) Close() error {
 
 // sendRequest sends a JSON-RPC request via the transport and waits for response.
 func (c *Client) sendRequest(method string, params interface{}, timeout time.Duration) (json.RawMessage, error) {
-	result, err := c.transport.SendRequest(method, params, timeout)
+	result, err := c.transport.SendRequest(context.Background(), method, params, timeout)
 	if err == nil {
 		return result, nil
 	}
@@ -642,11 +642,16 @@ func (c *Client) readLoop(ctx context.Context) {
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				debug.Log("acp-client", "agent %q process EOF", c.def.Def.Name)
+				// #1052: Fail all pending requests so prompt waiters don't hang
+				// until their 5-minute timeout expires.
+				c.transport.FailAllPending(io.EOF)
 				return
 			}
 			c.recordActivity("transport read error=%s", summarizeError(err))
 			c.setReadErr(err)
 			debug.Log("acp-client", "agent %q read error: %v", c.def.Def.Name, err)
+			// #1052: Fail all pending requests on any read error.
+			c.transport.FailAllPending(err)
 			return
 		}
 

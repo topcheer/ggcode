@@ -54,7 +54,10 @@ func TestFileFreshnessSentinel_DetectsExternalChange(t *testing.T) {
 	}
 }
 
-func TestFileFreshnessSentinel_SkipsAgentWrittenFiles(t *testing.T) {
+func TestFileFreshnessSentinel_DetectsExternalChangeAfterAgentWrite(t *testing.T) {
+	// Issue #1055: after the agent writes a file, external changes (formatters,
+	// concurrent edits) should still be detected. Changed from permanent
+	// agentWritten exemption to mtime-based comparison.
 	s := newFileFreshnessSentinel()
 
 	dir := t.TempDir()
@@ -64,12 +67,16 @@ func TestFileFreshnessSentinel_SkipsAgentWrittenFiles(t *testing.T) {
 	s.recordRead(f)
 	s.recordWrite(f) // Agent wrote it after reading
 
+	// External modification with a future mtime (e.g., formatter, another agent)
 	future := time.Now().Add(5 * time.Second)
 	os.Chtimes(f, future, future)
 
 	msg := s.maybeCheckStaleFiles(1)
-	if msg != "" {
-		t.Fatalf("expected empty message for agent-written file, got %q", msg)
+	if msg == "" {
+		t.Fatal("expected stale notification after external change to agent-written file")
+	}
+	if !containsFreshness(msg, "changed on disk") {
+		t.Errorf("expected 'changed on disk' in message, got: %s", msg)
 	}
 }
 
@@ -176,7 +183,7 @@ func TestFileFreshnessSentinel_Reset(t *testing.T) {
 
 	s.reset()
 
-	if len(s.readMtimes) != 0 || len(s.agentWritten) != 0 || len(s.notified) != 0 {
+	if len(s.readMtimes) != 0 || len(s.writeMtimes) != 0 || len(s.notified) != 0 {
 		t.Fatal("reset should clear all maps")
 	}
 }
@@ -203,7 +210,7 @@ func TestFileFreshnessSentinel_EmptyPath(t *testing.T) {
 	s := newFileFreshnessSentinel()
 	s.recordRead("")  // should be no-op
 	s.recordWrite("") // should be no-op
-	if len(s.readMtimes) != 0 || len(s.agentWritten) != 0 {
+	if len(s.readMtimes) != 0 || len(s.writeMtimes) != 0 {
 		t.Fatal("empty path should be ignored")
 	}
 }

@@ -83,7 +83,10 @@ func NewAgentLoop(
 
 	// --- Checkpoint manager ---
 	a.SetCheckpointManager(checkpoint.NewManager(50))
-	tool.SetPreWriteHook(tool.CheckpointSaver(a.CheckpointManager()))
+	// #1047: the pre-write checkpoint hook is registered per ExecutePrompt run
+	// (see ExecutePrompt) instead of the package global - the global was
+	// overwritten by every NewAgentLoop, so with concurrent ACP sessions the
+	// last-initialized loop received every session's checkpoint callbacks.
 
 	// --- Default mode: auto ---
 	defaultMode := "auto"
@@ -291,6 +294,13 @@ func (al *AgentLoop) ExecutePrompt(ctx context.Context, prompt []ContentBlock) e
 		cancel()
 	}()
 
+	// #1047: scope the pre-write checkpoint hook to this run so concurrent
+	// sessions do not overwrite each other's hook (package-global
+	// last-writer-wins hijacked checkpoints to the newest loop). Tools only
+	// execute within ExecutePrompt, so run scope covers all writes.
+	removePreWriteHook := tool.AddPreWriteHook(tool.CheckpointSaver(al.agent.CheckpointManager()))
+	defer removePreWriteHook()
+
 	// Convert ACP ContentBlocks to provider ContentBlocks
 	providerContent := acpToProviderContent(prompt)
 
@@ -433,7 +443,7 @@ func toolKind(toolName string) string {
 	case "read_file", "list_directory", "search_files", "glob", "grep", "code_search",
 		"git_status", "git_diff", "git_log":
 		return "read"
-	case "write_file", "edit_file", "multi_edit", "diff_apply":
+	case "write_file", "edit_file", "multi_edit_file", "batch_replace", "diff_apply":
 		return "write"
 	default:
 		return "execute"
@@ -473,6 +483,11 @@ func providerToACPMessage(msgs []provider.Message) []Message {
 				Input:    b.Input,
 				Output:   b.Output,
 				IsError:  b.IsError,
+				// #1071: image fields must survive the roundtrip - dropping them
+				// produced empty image blocks that vision providers reject with
+				// a request-level 400 after compaction/restore.
+				ImageMIME: b.ImageMIME,
+				ImageData: b.ImageData,
 			})
 		}
 		out = append(out, Message{Role: m.Role, Content: blocks})
@@ -483,7 +498,7 @@ func providerToACPMessage(msgs []provider.Message) []Message {
 // ReadFile reads a file, using the Client's FS capability if available.
 func (al *AgentLoop) ReadFile(ctx context.Context, path string) (string, error) {
 	if al.clientCaps.FS != nil && al.clientCaps.FS.ReadTextFile {
-		return al.requestClientReadFile(path)
+		return al.requestClientReadFile(ctx, path)
 	}
 	absPath := path
 	if !filepath.IsAbs(absPath) {
@@ -499,7 +514,7 @@ func (al *AgentLoop) ReadFile(ctx context.Context, path string) (string, error) 
 // WriteFile writes a file, using the Client's FS capability if available.
 func (al *AgentLoop) WriteFile(ctx context.Context, path, content string) error {
 	if al.clientCaps.FS != nil && al.clientCaps.FS.WriteTextFile {
-		return al.requestClientWriteFile(path, content)
+		return al.requestClientWriteFile(ctx, path, content)
 	}
 	absPath := path
 	if !filepath.IsAbs(absPath) {
@@ -520,6 +535,7 @@ func (al *AgentLoop) RequestPermission(ctx context.Context, permType string, too
 	}
 
 	result, err := al.transport.SendRequest(
+		ctx,
 		"session/request_permission",
 		RequestPermissionRequest{
 			SessionID: al.session.ID,
@@ -541,8 +557,9 @@ func (al *AgentLoop) RequestPermission(ctx context.Context, permType string, too
 }
 
 // requestClientReadFile requests the Client to read a file via fs/read_text_file.
-func (al *AgentLoop) requestClientReadFile(path string) (string, error) {
+func (al *AgentLoop) requestClientReadFile(ctx context.Context, path string) (string, error) {
 	result, err := al.transport.SendRequest(
+		ctx,
 		"fs/read_text_file",
 		FSReadTextFileParams{Path: path},
 		30*time.Second,
@@ -559,8 +576,9 @@ func (al *AgentLoop) requestClientReadFile(path string) (string, error) {
 }
 
 // requestClientWriteFile requests the Client to write a file via fs/write_text_file.
-func (al *AgentLoop) requestClientWriteFile(path, content string) error {
+func (al *AgentLoop) requestClientWriteFile(ctx context.Context, path, content string) error {
 	result, err := al.transport.SendRequest(
+		ctx,
 		"fs/write_text_file",
 		FSWriteTextFileParams{Path: path, Content: content},
 		30*time.Second,
@@ -634,6 +652,7 @@ func (al *AgentLoop) setupAskUserHandler() {
 		}
 
 		result, err := al.transport.SendRequest(
+			context.Background(),
 			"session/request_permission",
 			RequestPermissionRequest{
 				SessionID: al.session.ID,

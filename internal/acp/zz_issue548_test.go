@@ -247,7 +247,7 @@ func TestIssue548FailAllPendingFailsWaiter(t *testing.T) {
 	errCh := make(chan error, 1)
 	go func() {
 		defer wg.Done()
-		_, err := transport.SendRequest("session/request_permission", map[string]any{}, 5*time.Minute)
+		_, err := transport.SendRequest(context.Background(), "session/request_permission", map[string]any{}, 5*time.Minute)
 		errCh <- err
 	}()
 

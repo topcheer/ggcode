@@ -171,6 +171,7 @@ func TestE2EPermissionRequestResponse(t *testing.T) {
 	go func() {
 		defer close(done)
 		result, sendErr = agentTransport.SendRequest(
+			context.Background(),
 			"session/request_permission",
 			RequestPermissionRequest{
 				SessionID: "test-session",
@@ -249,6 +250,7 @@ func TestE2EPermissionDenied(t *testing.T) {
 	go func() {
 		defer close(done)
 		result, sendErr = agentTransport.SendRequest(
+			context.Background(),
 			"session/request_permission",
 			RequestPermissionRequest{
 				SessionID: "test-session",
@@ -312,6 +314,7 @@ func TestE2EFSReadFileViaClient(t *testing.T) {
 	go func() {
 		defer close(done)
 		result, sendErr = agentTransport.SendRequest(
+			context.Background(),
 			"fs/read_text_file",
 			FSReadTextFileParams{Path: "/remote/project/main.go"},
 			5*time.Second,
@@ -370,6 +373,7 @@ func TestE2ESendRequestTimeout(t *testing.T) {
 	go func() {
 		defer close(done)
 		_, _ = agentTransport.SendRequest(
+			context.Background(),
 			"session/request_permission",
 			PermissionRequestParams{SessionID: "test"},
 			200*time.Millisecond, // short timeout
@@ -855,7 +859,7 @@ func TestACPPermissionStallHelperProcess(t *testing.T) {
 				t.Fatalf("write session/prompt response: %v", err)
 			}
 			go func() {
-				_, _ = transport.SendRequest("session/request_permission", RequestPermissionRequest{
+				_, _ = transport.SendRequest(context.Background(), "session/request_permission", RequestPermissionRequest{
 					SessionID: "session-permission-helper",
 					ToolCall: &ToolCallUpdate{
 						ToolCallID: "perm-1",

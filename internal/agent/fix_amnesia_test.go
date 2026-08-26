@@ -8,23 +8,21 @@ import (
 func TestFixAmnesia_BasicDetection(t *testing.T) {
 	d := newFixAmnesiaState()
 
-	// Simulate: nil dereference error observed in fileA.go
-	d.recordErrorObserved("nil-deref-after-nil-check", "/src/fileA.go")
+	// Issue #1059: using defer-in-loop instead of removed nil-deref-after-nil-check
+	d.recordErrorObserved("defer-in-loop", "/src/fileA.go")
 	d.recordFileEdited("/src/fileA.go") // #754: observed errors only arm after a successful edit
 	// Now check content in fileB.go that matches the pattern
-	// The pattern looks for nil check followed by method call outside guard
 	content := `
-if err != nil {
-    return err
+for i := 0; i < 10; i++ {
+	defer f.Close()
 }
-result.Method()
 `
 	got := d.checkContentAgainstFixed("/src/fileA.go", "/src/fileB.go", content)
 	if got == "" {
 		t.Error("expected fix amnesia warning, got empty")
 	}
-	if !strings.Contains(got, "nil pointer") {
-		t.Errorf("expected 'nil pointer' in warning, got: %s", got)
+	if !strings.Contains(got, "defer") {
+		t.Errorf("expected 'defer' in warning, got: %s", got)
 	}
 	if !strings.Contains(got, "fileA.go") {
 		t.Errorf("expected reference to fileA.go, got: %s", got)
@@ -36,13 +34,13 @@ result.Method()
 
 func TestFixAmnesia_SameFileNoWarning(t *testing.T) {
 	d := newFixAmnesiaState()
-	d.recordErrorObserved("nil-deref-after-nil-check", "/src/fileA.go")
+	// Issue #1059: using defer-in-loop instead of removed nil-deref-after-nil-check
+	d.recordErrorObserved("defer-in-loop", "/src/fileA.go")
 	d.recordFileEdited("/src/fileA.go") // #754: observed errors only arm after a successful edit
 	content := `
-if err != nil {
-    return err
+for i := 0; i < 10; i++ {
+	defer f.Close()
 }
-result.Method()
 `
 	// Same file should not trigger (fixing the same file, not amnesia)
 	got := d.checkContentAgainstFixed("/src/fileA.go", "/src/fileA.go", content)
@@ -56,10 +54,9 @@ func TestFixAmnesia_NoPriorFixNoWarning(t *testing.T) {
 
 	// No prior error observed — should not trigger
 	content := `
-if err != nil {
-    return err
+for i := 0; i < 10; i++ {
+	defer f.Close()
 }
-result.Method()
 `
 	got := d.checkContentAgainstFixed("", "/src/fileB.go", content)
 	if got != "" {
@@ -69,10 +66,10 @@ result.Method()
 
 func TestFixAmnesia_DifferentCategoryNoWarning(t *testing.T) {
 	d := newFixAmnesiaState()
-	// Observed nil-deref fix
-	d.recordErrorObserved("nil-deref-after-nil-check", "/src/fileA.go")
+	// Issue #1059: using defer-in-loop instead of removed nil-deref-after-nil-check
+	d.recordErrorObserved("defer-in-loop", "/src/fileA.go")
 	d.recordFileEdited("/src/fileA.go") // #754: observed errors only arm after a successful edit
-	// Content does NOT match nil-deref pattern
+	// Content does NOT match defer-in-loop pattern
 	content := `package main
 func main() {
 	fmt.Println("hello")
@@ -88,14 +85,16 @@ func TestFixAmnesia_MaxWarnings(t *testing.T) {
 	d := newFixAmnesiaState()
 	d.maxWarnings = 1
 
-	// First trigger
-	d.recordErrorObserved("nil-deref-after-nil-check", "/src/fileA.go")
-	d.recordFileEdited("/src/fileA.go") // #754: observed errors only arm after a successful edit	d.recordErrorObserved("defer-in-loop", "/src/fileC.go")\n	d.recordFileEdited("/src/fileC.go") // #754: observed errors only arm after a successful edit
+	// First trigger (Issue #1059: defer-in-loop replaced removed nil-deref category)
+	d.recordErrorObserved("defer-in-loop", "/src/fileA.go")
+	d.recordFileEdited("/src/fileA.go") // #754: observed errors only arm after a successful edit
+	// Second category armed in a different file
+	d.recordErrorObserved("map-concurrent-write", "/src/fileC.go")
+	d.recordFileEdited("/src/fileC.go") // #754: observed errors only arm after a successful edit
 	content := `
-if err != nil {
-    return err
+for i := 0; i < 10; i++ {
+	defer f.Close()
 }
-result.Method()
 `
 	// First should warn
 	got1 := d.checkContentAgainstFixed("/src/fileA.go", "/src/fileB.go", content)
@@ -105,8 +104,8 @@ result.Method()
 
 	// Second category should not warn because maxWarnings=1
 	content2 := `
-for i := 0; i < 10; i++ {
-	defer f.Close()
+go func() {
+	m[key] = 1
 }
 `
 	got2 := d.checkContentAgainstFixed("/src/fileC.go", "/src/fileD.go", content2)
@@ -118,13 +117,12 @@ for i := 0; i < 10; i++ {
 func TestFixAmnesia_AlreadyWarnedCategory(t *testing.T) {
 	d := newFixAmnesiaState()
 
-	d.recordErrorObserved("nil-deref-after-nil-check", "/src/fileA.go")
+	d.recordErrorObserved("defer-in-loop", "/src/fileA.go")
 	d.recordFileEdited("/src/fileA.go") // #754: observed errors only arm after a successful edit
 	content := `
-if err != nil {
-    return err
+for i := 0; i < 10; i++ {
+	defer f.Close()
 }
-result.Method()
 `
 	// First trigger
 	got1 := d.checkContentAgainstFixed("/src/fileA.go", "/src/fileB.go", content)

@@ -2,6 +2,7 @@ package acp
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -143,7 +144,9 @@ func (t *Transport) ReadAnyMessage() (*JSONRPCRequest, *JSONRPCResponse, error) 
 // SendRequest sends a JSON-RPC request to the Client and waits for the response.
 // This is used for Agent→Client requests like session/request_permission and fs/read_text_file.
 // Returns the raw response result or an error.
-func (t *Transport) SendRequest(method string, params interface{}, timeout time.Duration) (json.RawMessage, error) {
+// If ctx is cancelled before the response arrives, the pending request is failed.
+// #1046: Added ctx parameter to respect session/cancel cancellation.
+func (t *Transport) SendRequest(ctx context.Context, method string, params interface{}, timeout time.Duration) (json.RawMessage, error) {
 	id := t.nextID.Add(1)
 
 	// Register pending response channel before sending
@@ -195,6 +198,8 @@ func (t *Transport) SendRequest(method string, params interface{}, timeout time.
 		return resp.RawResult, nil
 	case <-timer.C:
 		return nil, fmt.Errorf("timeout waiting for client response to %s", method)
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
 }
 
