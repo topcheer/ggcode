@@ -330,3 +330,254 @@ func TestTruncateForLog(t *testing.T) {
 		t.Errorf("expected length 80, got %d", len(got))
 	}
 }
+
+// #1098 Bug 1: word boundaries - should NOT flag variables like tokenCount, maxTokens
+func TestCheckLoggingIntel_WordBoundariesNoFalsePositive(t *testing.T) {
+	tests := []struct {
+		name     string
+		content  string
+		wantWarn bool
+	}{
+		{
+			name: "tokenCount should NOT trigger",
+			content: `package counter
+
+import "log"
+
+func report() {
+	tokenCount := 42
+	maxTokens := 1000
+	log.Printf("tokens: %d/%d", tokenCount, maxTokens)
+}
+`,
+			wantWarn: false,
+		},
+		{
+			name: "actual token var SHOULD trigger",
+			content: `package auth
+
+import "log"
+
+func login() {
+	token := "abc123"
+	log.Printf("token: %s", token)
+}
+`,
+			wantWarn: true,
+		},
+		{
+			name: "tokenizerCount should NOT trigger",
+			content: `package parser
+
+import "log"
+
+func parse() {
+	tokenizerCount := 5
+	log.Printf("using %d tokenizers", tokenizerCount)
+}
+`,
+			wantWarn: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			warnings := checkLoggingIntel("test.go", "", tt.content)
+			hasWarn := len(warnings) > 0
+			if hasWarn != tt.wantWarn {
+				t.Errorf("checkLoggingIntel() warnings=%v, wantWarn=%v", warnings, tt.wantWarn)
+			}
+		})
+	}
+}
+
+// #1098 Bug 2: init() filtering - log.Fatal in init() should NOT be flagged
+func TestCheckLoggingIntel_InitFuncNotFlagged(t *testing.T) {
+	tests := []struct {
+		name     string
+		content  string
+		wantWarn bool
+	}{
+		{
+			name: "log.Fatal in init() should NOT trigger",
+			content: `package config
+
+import "log"
+
+func init() {
+	if os.Getenv("API_KEY") == "" {
+		log.Fatal("API_KEY required")
+	}
+}
+`,
+			wantWarn: false,
+		},
+		{
+			name: "log.Fatal in regular func SHOULD trigger",
+			content: `package lib
+
+import "log"
+
+func process() {
+	if err != nil {
+		log.Fatal("process failed")
+	}
+}
+`,
+			wantWarn: true,
+		},
+		{
+			name: "log.Fatal in init() but also in regular func - regular func triggers",
+			content: `package main
+
+import "log"
+
+func init() {
+	if missing {
+		log.Fatal("missing config")
+	}
+}
+
+func main() {
+	if err != nil {
+		log.Fatal("error")  // this SHOULD trigger (but main is exempt anyway)
+	}
+}
+`,
+			wantWarn: false, // main package is exempt
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			warnings := checkLoggingIntel("test.go", "", tt.content)
+			hasWarn := len(warnings) > 0
+			if hasWarn != tt.wantWarn {
+				t.Errorf("checkLoggingIntel() warnings=%v, wantWarn=%v", warnings, tt.wantWarn)
+			}
+		})
+	}
+}
+
+// #1098 Bug 3: comment stripping - comments should not trigger false positives
+func TestCheckLoggingIntel_CommentStripping(t *testing.T) {
+	tests := []struct {
+		name     string
+		content  string
+		wantWarn bool
+	}{
+		{
+			name: "comment about log.Fatal should NOT trigger",
+			content: `package lib
+
+// do NOT call log.Fatal() in library code
+// log.Fatal is only for main packages
+
+func process() {
+	// log.Fatal("bad")  // commented out, should not trigger
+	return nil
+}
+`,
+			wantWarn: false,
+		},
+		{
+			name: "license header + log.Fatal in non-main should trigger",
+			content: `// Copyright 2024 Example Corp
+// Licensed under MIT
+
+package lib
+
+import "log"
+
+func process() {
+	log.Fatal("should trigger")
+}
+`,
+			wantWarn: true,
+		},
+		{
+			name: "multi-line comment with sensitive names",
+			content: `package util
+
+/*
+ * This function handles password reset
+ * Do NOT log the password directly
+ */
+
+func reset(pw string) {
+	// safe logging
+	log.Printf("reset for user")
+}
+`,
+			wantWarn: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			warnings := checkLoggingIntel("test.go", "", tt.content)
+			hasWarn := len(warnings) > 0
+			if hasWarn != tt.wantWarn {
+				t.Errorf("checkLoggingIntel() warnings=%v, wantWarn=%v", warnings, tt.wantWarn)
+			}
+		})
+	}
+}
+
+// #1098 Bug 3: test stripGoComments helper
+func TestStripGoComments(t *testing.T) {
+	tests := []struct {
+		input  string
+		expect string
+	}{
+		{
+			input:  "// single line comment\nfunc f() {}",
+			expect: "\nfunc f() {}",
+		},
+		{
+			input:  "/* multi\nline */func f() {}",
+			expect: "func f() {}",
+		},
+		{
+			input:  "func f() { // comment\n}",
+			expect: "func f() { \n}",
+		},
+		{
+			input:  "// comment 1\n// comment 2\nfunc f() {}",
+			expect: "\n\nfunc f() {}",
+		},
+	}
+	for _, tt := range tests {
+		got := stripGoComments(tt.input)
+		if got != tt.expect {
+			t.Errorf("stripGoComments(%q) = %q, want %q", tt.input, got, tt.expect)
+		}
+	}
+}
+
+// #1098 Bug 2: test stripInitFuncs helper
+func TestStripInitFuncs(t *testing.T) {
+	tests := []struct {
+		input  string
+		expect string
+	}{
+		{
+			input:  "func init() { log.Fatal(\"config\") }",
+			expect: "",
+		},
+		{
+			input:  "func init() {\n\tsetup()\n}\nfunc main() {}",
+			expect: "\nfunc main() {}",
+		},
+		{
+			input:  "func other() {}\nfunc init() { f() }",
+			expect: "func other() {}\n",
+		},
+	}
+	for _, tt := range tests {
+		got := stripInitFuncs(tt.input)
+		if got != tt.expect {
+			t.Errorf("stripInitFuncs(%q) = %q, want %q", tt.input, got, tt.expect)
+		}
+	}
+}

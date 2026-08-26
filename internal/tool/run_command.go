@@ -479,7 +479,8 @@ func (t RunCommand) executeWithAutoBackground(ctx context.Context, cancel contex
 
 	// Stream job output in real-time during the wait period.
 	// Poll every 300ms, pushing the last 5 lines to the TUI via progressFn.
-	streamJobOutput(job, delay, progressFn)
+	// #1097: pass ctx for proper cancellation.
+	streamJobOutput(ctx, job, delay, progressFn)
 	snap := t.JobManager.snapshot(job)
 	snapshot = &snap
 	if snapshot.Status == CommandJobRunning {
@@ -602,11 +603,13 @@ func diagnoseCommandFailure(stdout, stderr string) string {
 
 // streamJobOutput polls a running command job's output and pushes the last
 // 5 lines to the TUI via the progress callback. Polls every 300ms for
-// near-real-time streaming. Returns when the job finishes or the delay expires.
-func streamJobOutput(job *CommandJob, delay time.Duration, progressFn ToolProgressFunc) {
+// near-real-time streaming. Returns when the job finishes, ctx is canceled,
+// or the delay expires. #1097: added ctx.Done() for proper cancellation.
+func streamJobOutput(ctx context.Context, job *CommandJob, delay time.Duration, progressFn ToolProgressFunc) {
 	if progressFn == nil {
 		// No progress callback — fall back to simple wait.
-		_ = waitForCommandJob(context.Background(), job, delay)
+		// #1097: pass ctx instead of Background for proper cancellation.
+		_ = waitForCommandJob(ctx, job, delay)
 		return
 	}
 
@@ -616,6 +619,13 @@ func streamJobOutput(job *CommandJob, delay time.Duration, progressFn ToolProgre
 	defer ticker.Stop()
 
 	for {
+		// #1097: check if caller canceled the context.
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
 		// Read current output snapshot.
 		snap := snapshotJobLines(job, 5)
 		if snap != "" {
@@ -633,6 +643,9 @@ func streamJobOutput(job *CommandJob, delay time.Duration, progressFn ToolProgre
 		}
 
 		select {
+		case <-ctx.Done():
+			// #1097: caller canceled, exit immediately.
+			return
 		case <-job.done:
 			// Final read after job completes.
 			snap := snapshotJobLines(job, 5)

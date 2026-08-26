@@ -61,13 +61,15 @@ var logIntelExemptDirs = []string{
 
 // sensitiveLogVarPattern matches variable names that are likely to contain
 // sensitive data. These are the same naming conventions used by security
-// scanners. The pattern matches identifiers containing password, secret,
+// scanners. The pattern matches IDENTIFIERS containing password, secret,
 // token, apiKey, api_key, credential, etc. (case-insensitive).
+// #1098 Bug 1: added word boundaries (\b) to avoid matching substrings
+// like tokenCount, maxTokens, tokenizerCount, etc.
 var sensitiveLogVarPattern = regexp.MustCompile(
-	`(?i)(password|passwd|secret|token|apikey|api_key|accesskey|access_key|` +
+	`\b(?i)(password|passwd|secret|token|apikey|api_key|accesskey|access_key|` +
 		`credential|privatekey|private_key|authheader|auth_header|bearer|` +
 		`sessionkey|session_key|clientsecret|client_secret|refreshtoken|` +
-		`refresh_token)`,
+		`refresh_token)\b`,
 )
 
 // goLogCallRe matches Go log package calls that accept format strings or
@@ -90,7 +92,9 @@ var jsConsoleSensitiveRe = regexp.MustCompile(
 )
 
 // packageClauseRe checks if a Go file belongs to package main.
-var packageMainRe = regexp.MustCompile(`^\s*package\s+main\b`)
+// #1098 Bug 3: strip comments first to handle files with license headers.
+// Uses (?m) for multiline mode so ^ matches after comment lines.
+var packageMainRe = regexp.MustCompile(`(?m)^\s*package\s+main\b`)
 
 // loggingIntelInstance represents one detected logging anti-pattern.
 type loggingIntelInstance struct {
@@ -335,21 +339,28 @@ func truncateForLog(s string, maxLen int) string {
 }
 
 // findFatalInLib finds log.Fatal/Panic calls in non-main Go packages.
+// #1098 Bug 2: implemented init() filtering and comment stripping.
+// Strips comments before matching to avoid false positives from comments.
 func findFatalInLib(src, ext, filePath string) []loggingIntelInstance {
 	if ext != ".go" {
 		return nil
 	}
 
+	// Strip comments to avoid false positives from comments containing
+	// log.Fatal references (e.g., "// do NOT call log.Fatal()")
+	stripped := stripGoComments(src)
+
 	// If this is package main, Fatal/Panic is acceptable
-	if packageMainRe.MatchString(src) {
+	if packageMainRe.MatchString(stripped) {
 		return nil
 	}
 
-	// Skip init() functions - log.Fatal in init() is a common pattern
-	// for failing fast on misconfiguration. Only flag Fatal in regular
-	// function bodies.
+	// #1098 Bug 2: extract and exclude init() functions - log.Fatal in
+	// init() is a common pattern for failing fast on misconfiguration.
+	// Only flag Fatal in regular function bodies.
+	stripped = stripInitFuncs(stripped)
 
-	matches := goFatalInLibRe.FindAllString(src, -1)
+	matches := goFatalInLibRe.FindAllString(stripped, -1)
 	var results []loggingIntelInstance
 	for range matches {
 		results = append(results, loggingIntelInstance{
@@ -362,6 +373,62 @@ func findFatalInLib(src, ext, filePath string) []loggingIntelInstance {
 		})
 	}
 	return results
+}
+
+// #1098 Bug 2: stripGoComments removes single-line and multi-line Go comments
+// from source code to avoid false positives from comment text.
+func stripGoComments(src string) string {
+	var result strings.Builder
+	inSingleLineComment := false
+	inMultiLineComment := false
+
+	for i := 0; i < len(src); i++ {
+		if inSingleLineComment {
+			if src[i] == '\n' {
+				inSingleLineComment = false
+				result.WriteByte(src[i])
+			}
+			continue
+		}
+
+		if inMultiLineComment {
+			if i+1 < len(src) && src[i] == '*' && src[i+1] == '/' {
+				inMultiLineComment = false
+				i++ // skip the closing '/'
+				continue
+			}
+			continue
+		}
+
+		// Check for comment start
+		if i+1 < len(src) && src[i] == '/' {
+			if src[i+1] == '/' {
+				inSingleLineComment = true
+				i++ // skip the second '/'
+				continue
+			}
+			if src[i+1] == '*' {
+				inMultiLineComment = true
+				i++ // skip the '*'
+				continue
+			}
+		}
+
+		// Not in a comment, copy the character
+		result.WriteByte(src[i])
+	}
+
+	return result.String()
+}
+
+// #1098 Bug 2: stripInitFuncs removes init() function bodies from Go source code
+// so log.Fatal inside init() is not flagged. Uses a simple regex-based approach
+// that removes everything between "func init()" and the matching closing brace.
+func stripInitFuncs(src string) string {
+	// This regex matches "func init()" followed by any content until
+	// the matching closing brace (balanced brace handling is simplified here)
+	re := regexp.MustCompile(`func\s+init\s*\(\s*\)\s*\{[^}]*\}`)
+	return re.ReplaceAllString(src, "")
 }
 
 // countSensitiveLogArgs returns the count of sensitive-log-arg patterns.
