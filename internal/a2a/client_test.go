@@ -157,7 +157,7 @@ func TestHistoryBoundsExecute(t *testing.T) {
 			defer cancel()
 
 			// This should not panic; it should set the task to failed with an error.
-			handler.execute(ctx, task, perm)
+			handler.execute(ctx, task, perm, 0)
 
 			// Verify the task ended in a failed state with the expected error message.
 			if task.Status.State != TaskStateFailed {

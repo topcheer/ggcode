@@ -545,6 +545,8 @@ func (h *TaskHandler) updateStatus(t *Task, state TaskState, message string) {
 			eventType = "fail"
 		case TaskStateCanceled:
 			eventType = "cancel"
+		case TaskStateInputRequired:
+			eventType = "input-required"
 		}
 		if eventType != "" {
 			msg := TaskEventMessage{
@@ -566,6 +568,8 @@ func (h *TaskHandler) updateStatus(t *Task, state TaskState, message string) {
 				msg.Error = message
 			case "cancel":
 				msg.Message = fmt.Sprintf("A2A task canceled [%s]", t.Skill)
+			case "input-required":
+				msg.Message = fmt.Sprintf("A2A task waiting for input [%s]", t.Skill)
 			}
 			// Call async to avoid deadlock (callback may call back into handler).
 			msgCopy := msg
@@ -732,12 +736,16 @@ func (h *TaskHandler) CancelTask(id string) error {
 		safego.Go("a2a.taskEvent", func() { eventFn(msg) })
 	}
 	if pushFn != nil {
-		pushFn(taskID, StreamResponse{
-			StatusUpdate: &TaskStatusUpdateEvent{
-				TaskID: taskID,
-				Status: snapshot.Status,
-				Final:  true,
-			},
+		// Async per #1049: same DNS blocking issue as #1031 updateStatus.
+		// Snapshot before async: taskID, snapshot.Status, and Final are fixed.
+		safego.Go("a2a.pushNotify", func() {
+			pushFn(taskID, StreamResponse{
+				StatusUpdate: &TaskStatusUpdateEvent{
+					TaskID: taskID,
+					Status: snapshot.Status,
+					Final:  true,
+				},
+			})
 		})
 	}
 	return nil
@@ -745,14 +753,16 @@ func (h *TaskHandler) CancelTask(id string) error {
 
 // RequestInput puts a task into input-required state and returns.
 // The caller should then wait for the client to send a follow-up message.
+// Notifies push subscribers and onTaskEvent callbacks (per #1050).
 func (h *TaskHandler) RequestInput(id string, prompt string) error {
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	t, ok := h.tasks[id]
 	if !ok {
+		h.mu.Unlock()
 		return fmt.Errorf("task not found: %s", id)
 	}
 	if t.Status.State != TaskStateWorking {
+		h.mu.Unlock()
 		return fmt.Errorf("can only request input from working state, current: %s", t.Status.State)
 	}
 	t.Status = TaskStatus{State: TaskStateInputRequired, Timestamp: time.Now()}
@@ -775,7 +785,37 @@ func (h *TaskHandler) RequestInput(id string, prompt string) error {
 		close(t.done)
 		t.done = nil
 	}
-	debug.Log("a2a", "task %s → input-required", t.ID)
+	// Snapshot under the lock, fire outside it (callbacks may re-enter).
+	taskID := t.ID
+	skill := t.Skill
+	snapshot := t.Snapshot()
+	eventFn := h.onTaskEvent
+	pushFn := h.pushNotifier
+	h.mu.Unlock()
+	debug.Log("a2a", "task %s → input-required", taskID)
+
+	// Notify onTaskEvent (async, avoids callback under lock).
+	if eventFn != nil {
+		msg := TaskEventMessage{
+			Type:    "input-required",
+			TaskID:  taskID,
+			Skill:   skill,
+			Message: fmt.Sprintf("A2A task waiting for input [%s]", skill),
+		}
+		safego.Go("a2a.taskEvent", func() { eventFn(msg) })
+	}
+	// Notify push subscribers (async per #1050, same DNS blocking issue as #1031).
+	if pushFn != nil {
+		safego.Go("a2a.pushNotify", func() {
+			pushFn(taskID, StreamResponse{
+				StatusUpdate: &TaskStatusUpdateEvent{
+					TaskID: taskID,
+					Status: snapshot.Status,
+					Final:  false,
+				},
+			})
+		})
+	}
 	return nil
 }
 
