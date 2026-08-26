@@ -40,7 +40,7 @@ type verifyDebtState struct {
 const (
 	verifyDebtWarn1 = 7  // first warning: moderate risk
 	verifyDebtWarn2 = 12 // second warning: high risk
-	verifyDebtMax   = 3  // max warnings per run
+	verifyDebtMax   = 1  // max warnings per run
 )
 
 func newVerifyDebtState() *verifyDebtState {

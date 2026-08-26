@@ -127,12 +127,12 @@ func TestConstraintAmnesiaState_MaybeWarn_MaxWarnings(t *testing.T) {
 	if msg1 == "" {
 		t.Fatal("expected first warning")
 	}
-	// Second warning
+	// Second warning is suppressed (1 per run, batch 2 guidance-noise cleanup)
 	msg2 := s.maybeWarn(constraintReminderMinIterations + 5)
-	if msg2 == "" {
-		t.Fatal("expected second warning")
+	if msg2 != "" {
+		t.Fatalf("expected second warning to be suppressed, got: %s", msg2)
 	}
-	// Third should be suppressed
+	// Third should also be suppressed
 	msg3 := s.maybeWarn(constraintReminderMinIterations + 10)
 	if msg3 != "" {
 		t.Errorf("expected third warning to be suppressed, got: %s", msg3)

@@ -117,7 +117,7 @@ func (q *queryConvergeState) maybeWarn(iteration int) string {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
-	if q.warned || q.warnCount >= 2 {
+	if q.warned || q.warnCount >= 1 {
 		return ""
 	}
 

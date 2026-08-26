@@ -97,14 +97,14 @@ func TestEditPropagation_MaxWarnings(t *testing.T) {
 		t.Fatal("expected first warning")
 	}
 
-	// Second call: should not warn again (max 2 per run, but need 7 for escalation)
+	// Second call: suppressed (1 per run, batch 2 guidance-noise cleanup)
 	s.recordEdit("edit_file", `{"file_path":"/e.go"}`)
 	s.recordEdit("edit_file", `{"file_path":"/f.go"}`)
 	s.recordEdit("edit_file", `{"file_path":"/g.go"}`)
 
 	msg2 := s.maybeWarn(5)
-	if msg2 == "" {
-		t.Fatal("expected second warning at escalation")
+	if msg2 != "" {
+		t.Fatalf("expected second warning to be suppressed, got: %s", msg2)
 	}
 
 	// Third call: should be suppressed

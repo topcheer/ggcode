@@ -51,7 +51,7 @@ const (
 	futileOverlapThreshold = 0.7
 
 	// futileMaxWarnings: cap warnings per run to avoid noise.
-	futileMaxWarnings = 2
+	futileMaxWarnings = 1
 
 	// futileMaxEpochs: retain this many epochs for comparison.
 	futileMaxEpochs = 3

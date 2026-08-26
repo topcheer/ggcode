@@ -80,7 +80,7 @@ const (
 	scentWindowSize     = 4    // track last 4 exploration calls
 	scentDecayThreshold = 0.25 // <25% novel paths = depleted
 	scentMinConsecutive = 3    // need 3+ consecutive low-novelty calls
-	scentMaxInjections  = 2    // max warnings per run
+	scentMaxInjections  = 1    // max warnings per run
 	scentMinPaths       = 2    // ignore calls with <2 paths (noise)
 )
 

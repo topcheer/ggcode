@@ -30,7 +30,7 @@ type bareEditStreakState struct {
 
 const (
 	bareEditStreakThreshold = 5 // warn after 5 consecutive unverified mutations
-	bareEditStreakMaxWarns  = 3 // cap warnings per run
+	bareEditStreakMaxWarns  = 1 // cap warnings per run
 	bareEditStreakRewarnGap = 3 // re-warn only after streak grows by 3 more
 )
 

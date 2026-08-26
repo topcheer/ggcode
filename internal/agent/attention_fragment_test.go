@@ -101,16 +101,17 @@ func TestAttentionFragment_MaxWarnings(t *testing.T) {
 		t.Fatal("expected first warning")
 	}
 
-	// Add more calls to trigger re-warning.
+	// Second attempt is capped at 1 per run (batch 2 guidance-noise cleanup;
+	// a fresh warning is possible only after compaction resets the counter).
 	for _, d := range dirs {
 		s.recordToolCall("read_file", map[string]interface{}{"file_path": d})
 	}
 	msg2 := s.analyze()
-	if msg2 == "" {
-		t.Fatal("expected second warning after refire gap")
+	if msg2 != "" {
+		t.Errorf("expected no second warning (max=%d), got: %s", afMaxWarnings, msg2)
 	}
 
-	// Third attempt should be capped.
+	// Third attempt should also be capped.
 	for _, d := range dirs {
 		s.recordToolCall("read_file", map[string]interface{}{"file_path": d})
 	}

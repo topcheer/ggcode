@@ -56,7 +56,7 @@ const (
 	propagationWarn2 = 7
 
 	// propagationMaxWarnings: max warnings per run.
-	propagationMaxWarnings = 2
+	propagationMaxWarnings = 1
 
 	// propagationMaxTracked: max distinct file paths to track (memory bound).
 	propagationMaxTracked = 60

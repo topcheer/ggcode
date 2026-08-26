@@ -56,7 +56,7 @@ const (
 	constraintReminderMinIterations = 12
 
 	// constraintMaxWarnings: max reminders per run to avoid noise.
-	constraintMaxWarnings = 2
+	constraintMaxWarnings = 1
 
 	// constraintMaxTracked: max constraints to track (bounded memory).
 	constraintMaxTracked = 8

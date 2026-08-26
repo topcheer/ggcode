@@ -60,7 +60,7 @@ type errorRushState struct {
 
 const (
 	errorRushConsecutiveThreshold = 2   // 2+ consecutive errors before checking
-	errorRushMaxTotalWarns        = 2   // cap total warnings per run
+	errorRushMaxTotalWarns        = 1   // cap total warnings per run
 	errorSnippetMaxLen            = 200 // max chars of error output to include in guidance
 )
 

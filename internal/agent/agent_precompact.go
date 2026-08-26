@@ -253,6 +253,11 @@ func (a *Agent) consumeReadyPreCompact(onEvent func(provider.StreamEvent)) bool 
 		}
 		applied, newTokens := snapshotMgr.ApplyCompactResult(pc.snapshot, pc.result)
 		debug.Log("precompact", "READY consumed applied=%t tokens=%d startTok=%d result.changed=%t result.msgs=%d", applied, newTokens, pc.startTok, pc.result.Changed, len(pc.result.Messages))
+		if applied {
+			// Batch 2: guidance injection counters reset after compaction
+			// (the injected guidance text was compacted away).
+			a.resetGuidanceCounters()
+		}
 		if !applied {
 			reason := "unknown"
 			liveShrunk := false

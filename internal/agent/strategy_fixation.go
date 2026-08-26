@@ -47,7 +47,7 @@ type strategyFixationState struct {
 const (
 	strategyFixationEditThreshold = 3 // 3+ edits to the same file triggers analysis
 	strategyFixationFailThreshold = 2 // with 2+ associated failed verifications
-	strategyFixationMaxTotalWarns = 2 // cap total warnings per run
+	strategyFixationMaxTotalWarns = 1 // cap total warnings per run
 )
 
 func newStrategyFixationState() *strategyFixationState {

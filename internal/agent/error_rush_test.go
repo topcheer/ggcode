@@ -98,14 +98,14 @@ func TestErrorRushState_MaxWarns(t *testing.T) {
 		t.Fatal("expected first warning")
 	}
 
-	// Second rush
+	// Second rush -- suppressed (1 per run, batch 2 guidance-noise cleanup)
 	s.recordToolCall("run_command", "error 3", true)
 	s.recordToolCall("run_command", "error 4", true)
 	s.recordToolCall("edit_file", "ok", false)
 
 	msg2 := s.check()
-	if msg2 == "" {
-		t.Fatal("expected second warning")
+	if msg2 != "" {
+		t.Fatalf("expected second warning to be suppressed, got: %s", msg2)
 	}
 
 	// Third rush -- should be capped
@@ -149,16 +149,14 @@ func TestErrorRushState_RepeatWarningEscalates(t *testing.T) {
 		t.Logf("first warning: %s", msg1)
 	}
 
-	// Second rush
+	// Second rush -- suppressed (1 per run, batch 2 guidance-noise cleanup).
+	// Escalation wording is no longer reachable in a single run.
 	s.recordToolCall("run_command", "error 3", true)
 	s.recordToolCall("run_command", "error 4", true)
 	s.recordToolCall("edit_file", "ok", false)
 	msg2 := s.check()
-	if msg2 == "" {
-		t.Fatal("expected second warning")
-	}
-	if !strings.Contains(msg2, "STOP editing") {
-		t.Errorf("repeat warning should escalate with STOP editing, got: %s", msg2)
+	if msg2 != "" {
+		t.Fatalf("expected second warning to be suppressed, got: %s", msg2)
 	}
 }
 

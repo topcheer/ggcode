@@ -75,7 +75,7 @@ const (
 	// window before the detector fires (avoids firing on 2-dir alternation).
 	afMinUniqueDirs = 4
 	// afMaxWarnings caps how many times this detector warns per run.
-	afMaxWarnings = 2
+	afMaxWarnings = 1
 	// afRefireGap requires this many new calls before re-warning.
 	afRefireGap = 8
 )

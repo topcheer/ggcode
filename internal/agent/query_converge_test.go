@@ -64,17 +64,17 @@ func TestQueryConvergeWarnCap(t *testing.T) {
 	if msg1 := q.maybeWarn(4); msg1 == "" {
 		t.Fatal("expected first warning")
 	}
-	// Second warning should also fire (cap is 2)
+	// Second warning suppressed (1 per run, batch 2 guidance-noise cleanup)
 	q.warned = false
 	q.recordToolCall("grep", `{"pattern":"authentication login"}`, 5)
 	q.recordToolCall("grep", `{"pattern":"auth login handler"}`, 6)
-	if msg2 := q.maybeWarn(7); msg2 == "" {
-		t.Fatal("expected second warning")
+	if msg2 := q.maybeWarn(7); msg2 != "" {
+		t.Fatalf("expected second warning to be suppressed, got: %s", msg2)
 	}
-	if q.warnCount != 2 {
-		t.Fatalf("expected warnCount=2, got %d", q.warnCount)
+	if q.warnCount != 1 {
+		t.Fatalf("expected warnCount=1, got %d", q.warnCount)
 	}
-	// Third should not fire (cap reached)
+	// Third should also not fire
 	q.warned = false
 	if msg3 := q.maybeWarn(8); msg3 != "" {
 		t.Fatalf("expected no third warning, got: %s", msg3)

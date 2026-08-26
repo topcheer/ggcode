@@ -64,11 +64,12 @@ func TestInfoScent_MaxInjections(t *testing.T) {
 		t.Fatal("expected first warning")
 	}
 
-	// Advance past cooldown (4 iterations) and try again
+	// Advance past cooldown (4 iterations) and try again -- suppressed
+	// (1 per run, batch 2 guidance-noise cleanup).
 	s.recordExploration("grep", `{}`, "a.go\nb.go", 9)
 	msg2 := s.maybeWarn(9)
-	if msg2 == "" {
-		t.Fatal("expected second warning")
+	if msg2 != "" {
+		t.Fatalf("expected second warning to be suppressed, got: %s", msg2)
 	}
 
 	// Third should be suppressed

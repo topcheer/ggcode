@@ -109,6 +109,7 @@ func (a *Agent) tryReactiveCompact(ctx context.Context, onEvent func(provider.St
 
 	if a.consumeReadyPreCompact(nil) {
 		debug.Log("agent", "reactive compact: consumed completed precompact")
+		a.resetGuidanceCounters()
 		onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: "[Context compressed via pre-compact] "})
 		if retries != nil {
 			*retries = *retries + 1
@@ -150,6 +151,7 @@ func (a *Agent) tryReactiveCompact(ctx context.Context, onEvent func(provider.St
 		return false
 	}
 	debug.Log("agent", "reactive compact: conversation compacted successfully")
+	a.resetGuidanceCounters()
 	newTokens := a.contextManager.TokenCount()
 	onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: fmt.Sprintf("[Context compressed (%d → %d tokens), retrying...] ", tokens, newTokens)})
 	// Fire on_compaction hooks (fire-and-forget).

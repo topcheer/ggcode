@@ -199,14 +199,14 @@ func TestStrategyFixation_MaxWarnsCap(t *testing.T) {
 		t.Fatal("expected first warning")
 	}
 
-	// Second file would trigger but we've capped total warns... actually the cap is 2
+	// Second file suppressed (1 per run, batch 2 guidance-noise cleanup)
 	s.recordEdit("/b.go")
 	s.recordEdit("/b.go")
 	s.recordEdit("/b.go")
 	s.recordVerification("run_command", "error in b.go", true)
 	s.recordVerification("run_command", "error in b.go", true)
-	if msg2 := s.check(); msg2 == "" {
-		t.Fatal("expected second warning (cap is 2)")
+	if msg2 := s.check(); msg2 != "" {
+		t.Fatalf("expected second warning to be suppressed, got: %s", msg2)
 	}
 
 	// Third file should NOT trigger (cap reached)

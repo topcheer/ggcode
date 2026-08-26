@@ -93,15 +93,16 @@ func TestVerifyDebt_MaxWarnings(t *testing.T) {
 	if msg := s.maybeWarn(1); msg != "" {
 		t.Fatalf("expected no repeat warning at debt=7, got: %q", msg)
 	}
-	// Increase debt to high-risk threshold
+	// Escalation warning suppressed (1 per run, batch 2 guidance-noise
+	// cleanup; debt escalation remains visible in state, not as a second
+	// guidance injection).
 	for i := 0; i < verifyDebtWarn2-verifyDebtWarn1; i++ {
 		s.recordSourceEdit()
 	}
-	// High-risk warning should fire
-	if msg := s.maybeWarn(2); msg == "" {
-		t.Fatal("expected high-risk warning at debt=12")
+	if msg := s.maybeWarn(2); msg != "" {
+		t.Fatalf("expected high-risk escalation to be suppressed (1 per run), got: %q", msg)
 	}
-	// Repeated call at debt=12 should NOT warn again
+	// Repeated call should also not warn
 	if msg := s.maybeWarn(2); msg != "" {
 		t.Fatalf("expected no repeat warning at debt=12, got: %q", msg)
 	}

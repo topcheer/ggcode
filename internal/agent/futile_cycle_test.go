@@ -109,15 +109,16 @@ func TestFutileCycle_MaxWarnings(t *testing.T) {
 		t.Fatal("expected first warning")
 	}
 
-	// Trigger again with a new epoch
+	// Second epoch: suppressed (1 per run, batch 2 guidance-noise cleanup;
+	// fresh warning only after compaction resets the counter).
 	f.recordWrite()
 	for i := 0; i < 5; i++ {
 		f.recordRead("src/file" + string(rune('a'+i)) + ".go")
 	}
 
 	msg2 := f.maybeWarn(10)
-	if msg2 == "" {
-		t.Fatal("expected second warning")
+	if msg2 != "" {
+		t.Fatalf("expected second warning to be suppressed, got: %s", msg2)
 	}
 
 	// Third should be suppressed (max 2)
