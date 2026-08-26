@@ -121,3 +121,33 @@ func TestVerifyExtractErrorLines_DetectedPatterns(t *testing.T) {
 		}
 	}
 }
+
+func TestExecuteVerifyCommand_PytestNoTestsSkips(t *testing.T) {
+	a := &Agent{
+		workingDir: ".",
+	}
+	// pytest exits 5 when no tests are collected ("no tests ran"). That is
+	// "nothing to verify", not a code defect - must be a skip, not a failure
+	// that would inject errors and trigger auto-repair loops.
+	result := a.executeVerifyCommand(context.Background(), "python3 -m pytest --co -q /tmp/definitely-no-tests-here-xyz 2>/dev/null || exit 5")
+	if !result.Passed {
+		t.Errorf("expected pass (skip) for pytest no-tests exit 5, got errors: %v", result.Errors)
+	}
+	if !strings.Contains(result.Output, "skipped") {
+		t.Errorf("expected output to mention 'skipped', got: %s", result.Output)
+	}
+}
+
+func TestExecuteVerifyCommand_NpmMissingScriptStillFails(t *testing.T) {
+	a := &Agent{
+		workingDir: ".",
+	}
+	// Guard the isNonFailureExit whitelist: exit 1 from npm (missing script
+	// or real failure) is NOT whitelisted at executeVerifyCommand level.
+	// The npm missing-script case is handled earlier by packageJSONHasScript
+	// in detectBuildSystem, so any npm failure that reaches here is real.
+	result := a.executeVerifyCommand(context.Background(), "npm run definitely-missing-script-xyz")
+	if result.Passed {
+		t.Error("npm missing-script at execute level should surface as failure (handled upstream by detection)")
+	}
+}
