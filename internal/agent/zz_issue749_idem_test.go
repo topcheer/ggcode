@@ -36,8 +36,9 @@ func TestShellMutatesSources(t *testing.T) {
 		"gofmt -w .", "goimports -w ./cmd", "sed -i 's/a/b/' f.go",
 		"git apply p.diff", "go mod tidy", "GOFLAGS=x go mod tidy",
 		"# format\ngofmt -w .", "cd pkg && gofmt -w .",
+		"go fmt ./...", // #1028: wraps gofmt -l -w, rewrites in place
 	}
-	no := []string{"go build ./...", "gofmt -l .", "cat go.mod", "sed -n 1p f.go", ""}
+	no := []string{"go build ./...", "gofmt -l .", "cat go.mod", "sed -n 1p f.go", "", "gofmt "}
 	for _, c := range yes {
 		if !shellMutatesSources(c) {
 			t.Errorf("shellMutatesSources(%q) = false, want true", c)
