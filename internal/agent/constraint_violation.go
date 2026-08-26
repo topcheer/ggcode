@@ -62,6 +62,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
 // cvLeaveAloneRe matches "leave X alone" / "leaving X alone" phrasing where
@@ -163,10 +164,9 @@ func (s *constraintViolationState) checkToolCall(toolName string, args map[strin
 		violated, detail := cvCheckViolation(c, path)
 		if violated {
 			s.warnings++
-			excerpt := c.excerpt
-			if len(excerpt) > cvExcerptLen {
-				excerpt = excerpt[:cvExcerptLen] + "..."
-			}
+			// #1029: c.excerpt comes from cvExtractExcerpt which already caps
+			// at cvExcerptLen runes, so this dead re-truncation (span is always
+			// <= 70 bytes, never > 100) is removed.
 			msg := fmt.Sprintf(
 				"[Self-Declared Constraint Violation] In iteration %d you declared: %q\n"+
 					"but your current tool call (%s) targets '%s', which %s.\n"+
@@ -174,7 +174,7 @@ func (s *constraintViolationState) checkToolCall(toolName string, args map[strin
 					"tool target to comply with your constraint, or explicitly revise the "+
 					"constraint with justification if the scope legitimately needs expansion.\n"+
 					"(Research basis: AgentRx arXiv:2602.02475 -- step-level constraint violation tracking)",
-				c.iter, excerpt, toolName, path, detail)
+				c.iter, c.excerpt, toolName, path, detail)
 			return msg
 		}
 	}
@@ -467,9 +467,16 @@ func cvExtractPathAfter(lowerText string, offset int) string {
 // cvExtractExcerpt extracts a human-readable excerpt from the original text
 // around the given position.
 func cvExtractExcerpt(text string, pos, length int) string {
+	// #1029: back the start up to a rune boundary -- the unconditional
+	// pos-10 byte slice can split a multi-byte rune and leak invalid UTF-8
+	// into the warning text.
 	start := pos - 10
 	if start < 0 {
 		start = 0
+	} else {
+		for start > 0 && !utf8.RuneStart(text[start]) {
+			start--
+		}
 	}
 	end := pos + length
 	if end > len(text) {
@@ -479,7 +486,13 @@ func cvExtractExcerpt(text string, pos, length int) string {
 	// Clean up newlines for display.
 	excerpt = strings.ReplaceAll(excerpt, "\n", " ")
 	if len(excerpt) > cvExcerptLen {
-		excerpt = excerpt[:cvExcerptLen] + "..."
+		// #1029: rune-safe truncation.
+		runes := []rune(excerpt)
+		cut := cvExcerptLen
+		if cut > len(runes) {
+			cut = len(runes)
+		}
+		excerpt = string(runes[:cut]) + "..."
 	}
 	return excerpt
 }

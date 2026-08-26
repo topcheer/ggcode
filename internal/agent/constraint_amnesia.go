@@ -115,9 +115,16 @@ func extractConstraints(text string) []string {
 		matches := pat.FindAllString(text, -1)
 		for _, m := range matches {
 			excerpt := strings.TrimSpace(m)
-			// Normalize and truncate.
+			// Normalize and truncate. #1029: rune-safe truncation -- byte slicing
+			// here could split a multi-byte CJK/emoji rune and inject invalid UTF-8
+			// into the reminder text (same family as #934).
 			if len(excerpt) > constraintExcerptLen {
-				excerpt = excerpt[:constraintExcerptLen] + "..."
+				runes := []rune(excerpt)
+				cut := constraintExcerptLen
+				if cut > len(runes) {
+					cut = len(runes)
+				}
+				excerpt = string(runes[:cut]) + "..."
 			}
 			// Deduplicate by first 40 chars (fuzzy).
 			key := strings.ToLower(excerpt)
