@@ -290,7 +290,7 @@ func (c *Client) initialize(ctx context.Context) error {
 		},
 	}
 
-	result, err := c.sendRequest("initialize", initParams, 30*time.Second)
+	result, err := c.sendRequest(ctx, "initialize", initParams, 30*time.Second)
 	if err != nil {
 		return fmt.Errorf("initialize request: %w", err)
 	}
@@ -325,7 +325,7 @@ func (c *Client) NewSession(ctx context.Context, cwd string) error {
 		MCPServers: mcpServers,
 	}
 
-	result, err := c.sendRequest("session/new", params, 30*time.Second)
+	result, err := c.sendRequest(ctx, "session/new", params, 30*time.Second)
 	if err != nil {
 		return fmt.Errorf("session/new for %s: %w", c.def.Def.Name, err)
 	}
@@ -407,7 +407,7 @@ func (c *Client) promptInternal(
 	}
 	promptRespCh := make(chan promptRequestResult, 1)
 	safego.Go("acp.sendPromptRequest", func() {
-		result, err := c.sendRequest("session/prompt", promptReq, c.promptReqTime)
+		result, err := c.sendRequest(ctx, "session/prompt", promptReq, c.promptReqTime)
 		if err != nil {
 			promptRespCh <- promptRequestResult{err: err}
 			return
@@ -577,8 +577,8 @@ func (c *Client) Close() error {
 }
 
 // sendRequest sends a JSON-RPC request via the transport and waits for response.
-func (c *Client) sendRequest(method string, params interface{}, timeout time.Duration) (json.RawMessage, error) {
-	result, err := c.transport.SendRequest(context.Background(), method, params, timeout)
+func (c *Client) sendRequest(ctx context.Context, method string, params interface{}, timeout time.Duration) (json.RawMessage, error) {
+	result, err := c.transport.SendRequest(ctx, method, params, timeout)
 	if err == nil {
 		return result, nil
 	}
@@ -596,7 +596,7 @@ func (c *Client) closeSession(sessionID string) {
 	if c.transport == nil || sessionID == "" {
 		return
 	}
-	_, _ = c.sendRequest("session/close", CloseSessionRequest{SessionID: sessionID}, defaultCloseSessionTimeout)
+	_, _ = c.sendRequest(context.Background(), "session/close", CloseSessionRequest{SessionID: sessionID}, defaultCloseSessionTimeout)
 }
 
 func (c *Client) annotateTimeoutError(err error, activity string) error {

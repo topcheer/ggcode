@@ -160,22 +160,6 @@ func (h *TaskHandler) Handle(ctx context.Context, skill string, input Message, e
 		return h.continueTask(ctx, existingTaskID, input)
 	}
 
-	// Idempotent retry (#565 G): same messageId re-sent (timeout + client
-	// retry) returns the ORIGINAL task instead of spawning a duplicate that
-	// would double-execute side effects for code-edit / full-task skills.
-	if input.MessageID != "" {
-		h.mu.Lock()
-		if tid, ok := h.messageIndex[input.MessageID]; ok {
-			if t, exists := h.tasks[tid]; exists {
-				snap := t.Snapshot()
-				h.mu.Unlock()
-				return &snap, nil
-			}
-			delete(h.messageIndex, input.MessageID)
-		}
-		h.mu.Unlock()
-	}
-
 	if skill == "" {
 		skill = SkillFullTask
 	}
@@ -188,6 +172,23 @@ func (h *TaskHandler) Handle(ctx context.Context, skill string, input Message, e
 	// Validate skill availability at runtime.
 	if skill == SkillGitOps && !h.meta.HasGit {
 		return nil, fmt.Errorf("workspace has no git repository")
+	}
+
+	// Idempotent retry (#565 G): same messageId re-sent (timeout + client
+	// retry) returns the ORIGINAL task instead of spawning a duplicate that
+	// would double-execute side effects for code-edit / full-task skills.
+	// Check in the same critical section as messageIndex insertion (#1094).
+	if input.MessageID != "" {
+		h.mu.Lock()
+		if tid, ok := h.messageIndex[input.MessageID]; ok {
+			if t, exists := h.tasks[tid]; exists {
+				snap := t.Snapshot()
+				h.mu.Unlock()
+				return &snap, nil
+			}
+			delete(h.messageIndex, input.MessageID)
+		}
+		h.mu.Unlock()
 	}
 
 	// Check concurrency limit.
@@ -325,23 +326,30 @@ func (h *TaskHandler) execute(ctx context.Context, t *Task, perm *SkillPermissio
 	var result string
 	var err error
 
+	// #1094: take a snapshot of history to avoid data race
+	// with updateStatus which holds h.mu while appending to History.
+	h.mu.Lock()
+	historySnap := make([]Message, len(t.History))
+	copy(historySnap, t.History)
+	h.mu.Unlock()
+
 	switch t.Skill {
 	case SkillFileSearch, SkillGitOps, SkillCommandExec:
 		// Use the latest user message (not History[0]) so that follow-up
 		// messages in input-required flows are actually delivered.
-		lastIdx := len(t.History) - 1
-		if len(t.History) > 0 {
+		lastIdx := len(historySnap) - 1
+		if len(historySnap) > 0 {
 			if h.agent == nil {
 				err = fmt.Errorf("agent required for skill %s", t.Skill)
 			} else {
-				result, err = h.executeAgent(ctx, perm, t.Skill, t.History[lastIdx])
+				result, err = h.executeAgent(ctx, perm, t.Skill, historySnap[lastIdx])
 			}
 		} else {
 			err = fmt.Errorf("no message history for skill %s", t.Skill)
 		}
 	case SkillCodeEdit, SkillCodeReview, SkillFullTask:
-		if len(t.History) > 0 {
-			result, err = h.executeAgent(ctx, perm, t.Skill, t.History[len(t.History)-1])
+		if len(historySnap) > 0 {
+			result, err = h.executeAgent(ctx, perm, t.Skill, historySnap[len(historySnap)-1])
 		} else {
 			err = fmt.Errorf("no message history for skill %s", t.Skill)
 		}

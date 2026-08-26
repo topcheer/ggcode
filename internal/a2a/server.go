@@ -426,7 +426,7 @@ func (s *Server) handleMessageSend(w http.ResponseWriter, r *http.Request, req *
 	case <-timer.C:
 		// #1090: use -32001 to match stream/resubscribe, include task ID in Data
 		writeRPCError(w, req.ID, &JSONRPCError{
-			Code:    -32001,
+			Code:    -32060,
 			Message: "task timed out",
 			Data:    fmt.Sprintf("task %s: use tasks/get to check status", task.ID),
 		})
@@ -530,7 +530,7 @@ func (s *Server) handleMessageStream(w http.ResponseWriter, r *http.Request, req
 		}
 		s.sendSSE(w, flusher, req.ID, TaskStatusUpdateEvent{TaskID: t.ID, Status: t.Status, Final: t.Status.State.IsTerminal()})
 	case <-timer.C:
-		s.sendSSEError(w, flusher, req.ID, -32001, "task timed out")
+		s.sendSSEError(w, flusher, req.ID, -32060, "task timed out")
 	case <-r.Context().Done():
 		// Client disconnected mid-task: events emitted after this point are
 		// unrecoverable — there is no event buffer/replay, so anything the
@@ -665,7 +665,10 @@ func (s *Server) handleTaskResubscribe(w http.ResponseWriter, r *http.Request, r
 		// Already terminal. #1088: the task finished between GetTask and GetTaskDone
 		// (race window where updateStatus closed the channel). Emit artifacts here
 		// too, matching the pattern from handleMessageStream (#565 D).
-		t, _ := s.handler.GetTask(params.ID)
+		t, ok := s.handler.GetTask(params.ID)
+		if !ok {
+			return
+		}
 		for _, art := range t.Artifacts {
 			s.sendSSE(w, flusher, req.ID, TaskArtifactUpdateEvent{
 				TaskID:    t.ID,
@@ -686,7 +689,11 @@ func (s *Server) handleTaskResubscribe(w http.ResponseWriter, r *http.Request, r
 
 	select {
 	case <-done:
-		t, _ := s.handler.GetTask(params.ID)
+		t, ok := s.handler.GetTask(params.ID)
+		if !ok {
+			// Task was cleaned up before we could read it (#1094).
+			return
+		}
 		// #565 D: resubscribe previously only sent the terminal status — any
 		// artifacts produced while disconnected were permanently invisible.
 		// Emit them now, then the terminal status.
@@ -699,7 +706,7 @@ func (s *Server) handleTaskResubscribe(w http.ResponseWriter, r *http.Request, r
 		}
 		s.sendSSE(w, flusher, req.ID, TaskStatusUpdateEvent{TaskID: t.ID, Status: t.Status, Final: t.Status.State.IsTerminal()})
 	case <-timer.C:
-		s.sendSSEError(w, flusher, req.ID, -32001, "task timed out")
+		s.sendSSEError(w, flusher, req.ID, -32060, "task timed out")
 	case <-r.Context().Done():
 		// Client disconnected again — events produced during this gap are
 		// not replayed (no event buffer); final state remains available via

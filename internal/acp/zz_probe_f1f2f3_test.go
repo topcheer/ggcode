@@ -312,7 +312,7 @@ func TestProbeF1_HeadOfLineBlockingAndCloseHang(t *testing.T) {
 	}
 	reqCh := make(chan reqResult, 1)
 	go func() {
-		_, err := c.sendRequest("probe/noop", map[string]any{}, 700*time.Millisecond)
+		_, err := c.sendRequest(context.Background(), "probe/noop", map[string]any{}, 700*time.Millisecond)
 		reqCh <- reqResult{err: err}
 	}()
 

@@ -45,11 +45,11 @@ func TestIssue1089_BearerSchemeHasSchemeField(t *testing.T) {
 // This is a code structure test verifying the fix exists in handleMessageSend.
 // See server.go lines 426-432 where timeout error uses -32001 with task ID.
 func TestIssue1090_TimeoutErrorConsistency(t *testing.T) {
-	// #1090: Verify timeout error code is -32001 and Data contains task ID
+	// #1090: Verify timeout error code is -32060 and Data contains task ID
 	// This is a code structure test - the fix is in server.go handleMessageSend
 	// line ~426-432.
 
 	// The actual timeout behavior is tested in integration tests.
 	// This test exists to document the fix location.
-	t.Skip("#1090 fix verified in server.go: handleMessageSend timeout uses -32001 with task ID in Data")
+	t.Skip("#1090 fix verified in server.go: handleMessageSend timeout uses -32060 with task ID in Data")
 }

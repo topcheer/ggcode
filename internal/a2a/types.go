@@ -55,6 +55,8 @@ var (
 	// #715: push registration refused because the deployment has no real
 	// authentication (no key / only the public default key).
 	ErrPushAuthNotConfigured = &JSONRPCError{Code: -32009, Message: "Push notifications disabled: real authentication required"}
+	// #1094: dedicated timeout error code (previously collided with TaskNotFound -32001)
+	ErrTaskTimeout = &JSONRPCError{Code: -32060, Message: "Task timed out"}
 )
 
 // ---------------------------------------------------------------------------

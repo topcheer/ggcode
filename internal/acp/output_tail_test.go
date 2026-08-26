@@ -1,6 +1,7 @@
 package acp
 
 import (
+	"context"
 	"io"
 	"strings"
 	"testing"
@@ -31,7 +32,7 @@ func TestClientSendRequestTimeoutIncludesRecentStderr(t *testing.T) {
 	if _, err := client.stderrTail.Write([]byte("network timeout\nstack line")); err != nil {
 		t.Fatalf("Write stderr tail: %v", err)
 	}
-	_, err := client.sendRequest("session/prompt", nil, 10*time.Millisecond)
+	_, err := client.sendRequest(context.Background(), "session/prompt", nil, 10*time.Millisecond)
 	if err == nil {
 		t.Fatal("expected timeout error")
 	}
@@ -49,7 +50,7 @@ func TestClientSendRequestTimeoutIncludesRecentActivity(t *testing.T) {
 	client.activity.Add("recv session/request_permission title=Run kind=execute options=2")
 	client.activity.Add("session/update tool_call id=call-5 title=Run kind=execute")
 
-	_, err := client.sendRequest("session/prompt", nil, 10*time.Millisecond)
+	_, err := client.sendRequest(context.Background(), "session/prompt", nil, 10*time.Millisecond)
 	if err == nil {
 		t.Fatal("expected timeout error")
 	}
