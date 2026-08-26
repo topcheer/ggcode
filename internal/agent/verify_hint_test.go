@@ -46,12 +46,33 @@ func TestDetectBuildSystem(t *testing.T) {
 	// Node (only if npm is installed).
 	nodeDir := filepath.Join(tmp, "nodeproject")
 	os.MkdirAll(nodeDir, 0755)
-	os.WriteFile(filepath.Join(nodeDir, "package.json"), []byte("{}"), 0644)
+	// package.json WITH a build script -> deterministic npm run build.
+	os.WriteFile(filepath.Join(nodeDir, "package.json"), []byte(`{"scripts":{"build":"tsc"}}`), 0644)
 	if cmd := detectBuildSystem(nodeDir); cmd != "npm run build" {
 		if commandAvailable("npm") {
 			t.Errorf("expected 'npm run build', got %q", cmd)
 		}
 		// else: npm not installed, skip is correct behavior
+	}
+
+	// package.json WITHOUT a build script (docs site / library package):
+	// "npm run build" fails with "Missing script" (exit 1) which is not a
+	// code failure - detection must fall through instead of offering it.
+	noScriptDir := filepath.Join(tmp, "noscriptproject")
+	os.MkdirAll(noScriptDir, 0755)
+	os.WriteFile(filepath.Join(noScriptDir, "package.json"), []byte("{}"), 0644)
+	if cmd := detectBuildSystem(noScriptDir); cmd != "" {
+		t.Errorf("expected no command for package.json without build script, got %q", cmd)
+	}
+
+	// package.json with only a test script -> npm test.
+	testOnlyDir := filepath.Join(tmp, "testonlyproject")
+	os.MkdirAll(testOnlyDir, 0755)
+	os.WriteFile(filepath.Join(testOnlyDir, "package.json"), []byte(`{"scripts":{"test":"jest"}}`), 0644)
+	if cmd := detectBuildSystem(testOnlyDir); cmd != "npm test" {
+		if commandAvailable("npm") {
+			t.Errorf("expected 'npm test', got %q", cmd)
+		}
 	}
 
 	// Empty working dir.
@@ -466,5 +487,46 @@ func TestPropagationExtractPaths_BatchReplace(t *testing.T) {
 	paths := propagationExtractPaths(args)
 	if len(paths) != 3 {
 		t.Fatalf("expected 3 paths from batch_replace, got %d: %v", len(paths), paths)
+	}
+}
+
+func TestRunTouchedCode(t *testing.T) {
+	cases := []struct {
+		name  string
+		stats *RunStats
+		want  bool
+	}{
+		{"nil stats defaults to verify", nil, true},
+		{"no files edited defaults to verify", &RunStats{}, true},
+		{"docs only", &RunStats{FilesEdited: []string{"README.md", "docs/guide.md"}}, false},
+		{"mixed docs and code", &RunStats{FilesEdited: []string{"README.md", "main.go"}}, true},
+		{"go source", &RunStats{FilesEdited: []string{"cmd/x/main.go"}}, true},
+		{"go mod manifest", &RunStats{FilesEdited: []string{"go.mod"}}, true},
+		{"package.json manifest", &RunStats{FilesEdited: []string{"package.json"}}, true},
+		{"markdown notes only", &RunStats{FilesEdited: []string{"notes.md", "TODO.txt"}}, false},
+	}
+	for _, c := range cases {
+		if got := runTouchedCode(c.stats); got != c.want {
+			t.Errorf("%s: runTouchedCode = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestIsNonFailureExit(t *testing.T) {
+	// 127 (command not found) is always a skip for any command.
+	if !isNonFailureExit("anything", 127) {
+		t.Error("exit 127 should be non-failure")
+	}
+	// pytest exit 5 (no tests collected) is a skip - not a code defect.
+	if !isNonFailureExit("python -m pytest", 5) {
+		t.Error("pytest exit 5 should be non-failure")
+	}
+	// Exit 5 from non-pytest commands is NOT whitelisted (could be real).
+	if isNonFailureExit("npm test", 5) {
+		t.Error("exit 5 from non-pytest command should be a failure")
+	}
+	// Real failures stay failures.
+	if isNonFailureExit("go build ./...", 1) || isNonFailureExit("go test ./...", 2) {
+		t.Error("real failure exit codes must not be classified as non-failure")
 	}
 }

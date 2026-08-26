@@ -286,7 +286,17 @@ func detectBuildSystem(workingDir string) string {
 		return "cargo build"
 	}
 	if fileExists(filepath.Join(workingDir, "package.json")) && commandAvailable("npm") {
-		return "npm run build"
+		// package.json without a "build" script (docs sites, library packages)
+		// makes "npm run build" fail with "Missing script" (exit 1) - that is NOT
+		// a code failure but was captured as one, triggering pointless
+		// auto-repair loops. Only offer commands whose script actually exists;
+		// otherwise fall through so the (now gated) LLM oracle can decide.
+		if packageJSONHasScript(workingDir, "build") {
+			return "npm run build"
+		}
+		if packageJSONHasScript(workingDir, "test") {
+			return "npm test"
+		}
 	}
 	if fileExists(filepath.Join(workingDir, "CMakeLists.txt")) && commandAvailable("cmake") {
 		return "cmake --build build"
@@ -305,6 +315,70 @@ func detectBuildSystem(workingDir string) string {
 func commandAvailable(binary string) bool {
 	_, err := exec.LookPath(binary)
 	return err == nil
+}
+
+// packageJSONHasScript reports whether package.json in workingDir defines the
+// named script. npm exits 1 with "Missing script: <name>" when the script is
+// absent, which the verifier must not misread as a code failure.
+func packageJSONHasScript(workingDir, script string) bool {
+	data, err := os.ReadFile(filepath.Join(workingDir, "package.json"))
+	if err != nil {
+		return false
+	}
+	var pkg struct {
+		Scripts map[string]string `json:"scripts"`
+	}
+	if err := json.Unmarshal(data, &pkg); err != nil {
+		return false
+	}
+	_, ok := pkg.Scripts[script]
+	return ok
+}
+
+// codeFileExtensions lists file suffixes that indicate real source code.
+var codeFileExtensions = map[string]bool{
+	".go": true, ".rs": true, ".py": true, ".js": true, ".mjs": true, ".cjs": true,
+	".ts": true, ".tsx": true, ".jsx": true, ".java": true, ".rb": true, ".c": true,
+	".cc": true, ".cpp": true, ".h": true, ".hpp": true, ".swift": true, ".kt": true,
+	".cs": true, ".php": true, ".lua": true, ".dart": true, ".zig": true,
+	".ex": true, ".exs": true, ".scala": true, ".m": true, ".mm": true,
+}
+
+// codeFileBasenames lists build-manifest filenames that count as "code" for
+// verification gating purposes.
+var codeFileBasenames = map[string]bool{
+	"Makefile": true, "makefile": true, "GNUmakefile": true,
+	"go.mod": true, "go.sum": true, "package.json": true,
+	"Cargo.toml": true, "CMakeLists.txt": true, "pyproject.toml": true,
+	"setup.py": true, "Taskfile.yml": true, "Taskfile.yaml": true,
+	"Justfile": true, "justfile": true, "mix.exs": true, "Gemfile": true,
+}
+
+// isCodeFilePath reports whether a path looks like source code or a build
+// manifest rather than prose/docs/notes.
+func isCodeFilePath(path string) bool {
+	if codeFileExtensions[strings.ToLower(filepath.Ext(path))] {
+		return true
+	}
+	return codeFileBasenames[filepath.Base(path)]
+}
+
+// runTouchedCode reports whether the run edited any file that looks like
+// source code. It gates the LLM verify-command fallback: in workspaces with
+// no build system where only docs/notes were edited, the oracle has nothing
+// to anchor on and hallucinates commands whose failures trigger pointless
+// auto-repair loops. Unknown stats (nil or empty FilesEdited) default to
+// true so verification is never silently skipped.
+func runTouchedCode(runStats *RunStats) bool {
+	if runStats == nil || len(runStats.FilesEdited) == 0 {
+		return true
+	}
+	for _, f := range runStats.FilesEdited {
+		if isCodeFilePath(f) {
+			return true
+		}
+	}
+	return false
 }
 
 // verifyCommandAvailable checks if the command's primary binary is available.

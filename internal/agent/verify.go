@@ -66,6 +66,14 @@ func (a *Agent) asyncVerify(ctx context.Context, runStats *RunStats) {
 	// First try deterministic detection — no LLM call needed.
 	cmd := detectBuildSystem(workingDir)
 	if cmd == "" {
+		// Non-code workspace: no build system detected and only non-code
+		// files (docs/notes) were edited. Skip verification instead of asking
+		// the LLM oracle, which would hallucinate a command whose failure
+		// pollutes the context and triggers auto-repair loops.
+		if !runTouchedCode(runStats) {
+			debug.Log("verify", "async: skipping - no build system and only non-code files edited")
+			return
+		}
 		a.verifyProgress("Determining verification command…")
 		cmd = a.llmDecideVerifyCommand(ctx)
 	} else {
@@ -358,11 +366,13 @@ func (a *Agent) executeVerifyCommand(ctx context.Context, command string) *Verif
 	}
 
 	if err != nil {
-		// Defense-in-depth: if somehow the binary was available per
-		// LookPath but the shell still returned exit code 127, treat it
-		// as "tool unavailable" rather than a code failure.
-		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 127 {
-			debug.Log("verify", "skipping: exit 127 (command not found): %s", command)
+		// Defense-in-depth: classify "tooling absent / nothing to verify"
+		// exits as skip rather than code failure:
+		//   127 - command not found (binary vanished despite LookPath)
+		//   5   - pytest "no tests collected" (project simply has no tests;
+		//         was misread as a failure and triggered auto-repair loops)
+		if exitErr, ok := err.(*exec.ExitError); ok && isNonFailureExit(command, exitErr.ExitCode()) {
+			debug.Log("verify", "skipping: non-failure exit %d: %s", exitErr.ExitCode(), command)
 			return &VerifyResult{
 				Command: command,
 				Passed:  true,
@@ -381,6 +391,18 @@ func (a *Agent) executeVerifyCommand(ctx context.Context, command string) *Verif
 	}
 
 	return result
+}
+
+// isNonFailureExit reports whether a command's exit code means "nothing to
+// verify / tooling absent" rather than "the code is broken". Treating these
+// as failures injects bogus errors and spins auto-repair loops in projects
+// that simply lack tests or the toolchain.
+func isNonFailureExit(command string, code int) bool {
+	if code == 127 {
+		return true // command not found
+	}
+	// pytest exit 5: no tests were collected - not a code defect.
+	return code == 5 && strings.Contains(command, "pytest")
 }
 
 // extractErrorLines pulls likely error lines from build/test output.
@@ -511,6 +533,13 @@ func (a *Agent) syncVerifyAndGate(ctx context.Context, runStats *RunStats, retry
 	// Determine verification command — deterministic first, then LLM.
 	cmd := detectBuildSystem(workingDir)
 	if cmd == "" {
+		// Same non-code gate as asyncVerify: without a build system and with
+		// only docs/notes edited, the LLM oracle would hallucinate a command;
+		// skip verification rather than risk a bogus failure-injection loop.
+		if !runTouchedCode(runStats) {
+			debug.Log("verify", "sync: skipping - no build system and only non-code files edited")
+			return false, false
+		}
 		a.verifyProgress("Determining verification command…")
 		start := time.Now()
 		cmd = a.llmDecideVerifyCommand(ctx)
