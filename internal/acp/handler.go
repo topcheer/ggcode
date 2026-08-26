@@ -426,13 +426,22 @@ func (h *Handler) handleSessionPrompt(params json.RawMessage) (interface{}, erro
 			},
 		})
 		// Persist session after prompt execution
+		// #1096: Check if session is still registered before saving.
+		// If the session was closed while the prompt was running, do not
+		// resurrect it by saving it to disk. This prevents closed sessions
+		// from appearing in session/list or creating orphan files.
 		h.sessionsMu.RLock()
+		_, stillActive := h.sessions[promptParams.SessionID]
 		sDir := h.workspaceDirs[promptParams.SessionID]
 		h.sessionsMu.RUnlock()
-		if sDir == "" {
-			sDir = h.sessionsDir
-		}
-		if saveErr := session.Save(sDir); saveErr != nil {
+		if !stillActive {
+			debug.Log("acp", "session %s was closed during prompt, skipping save", promptParams.SessionID)
+		} else if sDir == "" {
+			// Session is active but has no workspace dir (should not happen
+			// with current initialization logic). Skip save to avoid creating
+			// orphan files in the root sessionsDir.
+			debug.Log("acp", "session %s has no workspace dir, skipping save", promptParams.SessionID)
+		} else if saveErr := session.Save(sDir); saveErr != nil {
 			debug.Log("acp", "failed to save session: %v", saveErr)
 		}
 		// Clean up MCP connections
@@ -474,6 +483,17 @@ func (h *Handler) handleSessionLoad(params json.RawMessage) (interface{}, error)
 	var loadParams SessionLoadParams
 	if err := json.Unmarshal(params, &loadParams); err != nil {
 		return nil, fmt.Errorf("invalid session/load params: %w", err)
+	}
+
+	// #1095: Check if an agent loop is already running for this session.
+	// If so, refuse the load to prevent double goroutine driving the
+	// same session, which would bypass the #1033 TryBeginRun guard.
+	// This mirrors the guard added to session/resume in #1056.
+	h.sessionsMu.RLock()
+	_, exists := h.sessions[loadParams.SessionID]
+	h.sessionsMu.RUnlock()
+	if exists {
+		return nil, fmt.Errorf("session %s already active: cannot load", loadParams.SessionID)
 	}
 
 	// Load session from disk

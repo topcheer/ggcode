@@ -381,6 +381,10 @@ func registerAllChecks() {
 		// hosts (OWASP A02:2021). Complements insecure-patterns (TLS bypass).
 		// Fully implemented + unit tested.
 		{Name: "http-plaintext", Severity: SeverityCritical, Run: sliceCheck(checkHTTPPlaintext)},
+		// #1098: logging-intel - detects sensitive variables in log arguments
+		// and log.Fatal/Panic in non-main packages. Fixes 3 false-positive bugs:
+		// word boundary regex, init() filtering, comment stripping. Fully implemented + unit tested.
+		{Name: "logging-intel", Langs: []Language{LangGo, LangJSTS}, Severity: SeverityCritical, Run: sliceCheck(checkLoggingIntel)},
 
 		// --- Security: supply chain (#330) ---
 		{Name: "dep-major-bump", Severity: SeverityCritical, Run: stringCheck(checkBreakingChangeDepAsString)}, // all langs: self-filters by manifest filename

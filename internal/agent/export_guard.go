@@ -305,7 +305,9 @@ func funcSignatureWithReceiver(recv *ast.FieldList, ft *ast.FuncType) string {
 }
 
 // normalizeType converts an AST type expression to a normalized string representation.
-// Used for struct fields and receiver types in fingerprint generation.
+// Used for struct fields, receiver types, and type spec signatures.
+// Issue #1101: expand support for chan, func, interface, struct types
+// instead of returning "complex" placeholder.
 func normalizeType(expr ast.Expr) string {
 	// Handle basic types and qualified identifiers
 	if ident, ok := expr.(*ast.Ident); ok {
@@ -322,21 +324,54 @@ func normalizeType(expr ast.Expr) string {
 	}
 	// Handle slice types
 	if array, ok := expr.(*ast.ArrayType); ok {
-		return "[]" + normalizeType(array.Elt)
+		if array.Len == nil {
+			return "[]" + normalizeType(array.Elt)
+		}
+		// Issue #1101 #C: preserve array length
+		return "[" + exprString(array.Len) + "]" + normalizeType(array.Elt)
 	}
 	// Handle map types
 	if mp, ok := expr.(*ast.MapType); ok {
 		return "map[" + normalizeType(mp.Key) + "]" + normalizeType(mp.Value)
 	}
-	// For complex types (chan, func, struct, interface), return a simplified placeholder
-	// TODO(#1043): Expand support for full type fidelity if needed.
-	return "complex"
+	// Issue #1101 #3: Handle channel types with direction
+	if chanType, ok := expr.(*ast.ChanType); ok {
+		prefix := "chan "
+		if chanType.Dir == ast.SEND {
+			prefix = "chan<- "
+		} else if chanType.Dir == ast.RECV {
+			prefix = "<-chan "
+		}
+		return prefix + normalizeType(chanType.Value)
+	}
+	// Issue #1101 #2: Handle function types
+	if fnType, ok := expr.(*ast.FuncType); ok {
+		return "func" + normalizeFuncSignature(fnType)
+	}
+	// Issue #1101 #5: Handle interface types
+	if iface, ok := expr.(*ast.InterfaceType); ok {
+		fingerprint := extractInterfaceMethodFingerprint(iface)
+		if fingerprint != "" {
+			return "interface{" + fingerprint + "}"
+		}
+		return "interface{}"
+	}
+	// Issue #1101 #B: Handle struct types
+	if structType, ok := expr.(*ast.StructType); ok {
+		fingerprint := extractStructFieldFingerprint(structType)
+		if fingerprint != "" {
+			return "struct{" + fingerprint + "}"
+		}
+		return "struct{}"
+	}
+	return "unknown"
 }
 
 // extractInterfaceMethodFingerprint creates a sorted string fingerprint of all
 // method names and signatures in an interface. Used by Bug B fix to detect
 // when methods are added or removed from exported interfaces.
 // Issue #1043(c): now uses funcSignatureWithReceiver to include receiver info.
+// Issue #1101 #5: add support for embedded interfaces.
 func extractInterfaceMethodFingerprint(ifaceType *ast.InterfaceType) string {
 	if ifaceType.Methods == nil {
 		return ""
@@ -344,12 +379,21 @@ func extractInterfaceMethodFingerprint(ifaceType *ast.InterfaceType) string {
 
 	var methods []string
 	for _, field := range ifaceType.Methods.List {
-		if ft, ok := field.Type.(*ast.FuncType); ok && len(field.Names) > 0 {
-			for _, name := range field.Names {
-				// Issue #1043(c): interface methods have no receiver field,
-				// but we still use the unified signature for consistency
-				sig := normalizeFuncSignature(ft)
-				methods = append(methods, name.Name+":"+sig)
+		if len(field.Names) > 0 {
+			// Regular method declaration
+			if ft, ok := field.Type.(*ast.FuncType); ok {
+				for _, name := range field.Names {
+					// Issue #1043(c): interface methods have no receiver field,
+					// but we still use the unified signature for consistency
+					sig := normalizeFuncSignature(ft)
+					methods = append(methods, name.Name+":"+sig)
+				}
+			}
+		} else {
+			// Issue #1101 #5: handle embedded interface types
+			// e.g., type Foo interface { io.Reader; BarMethod() }
+			if embeddedType := normalizeType(field.Type); embeddedType != "" {
+				methods = append(methods, "embed:"+embeddedType)
 			}
 		}
 	}
@@ -360,7 +404,7 @@ func extractInterfaceMethodFingerprint(ifaceType *ast.InterfaceType) string {
 // extractStructFieldFingerprint creates a sorted string fingerprint of all
 // exported field names and types in a struct. Used by Issue #1043(b) to detect
 // when fields are added, removed, or renamed from exported structs.
-// TODO(#1043): Handle embedded struct/interface fields (anonymous fields).
+// Issue #1101 #B: add support for embedded struct/interface fields.
 func extractStructFieldFingerprint(structType *ast.StructType) string {
 	if structType.Fields == nil {
 		return ""
@@ -368,11 +412,21 @@ func extractStructFieldFingerprint(structType *ast.StructType) string {
 
 	var fields []string
 	for _, field := range structType.Fields.List {
-		// Process named fields (skip anonymous/embedded fields for now)
-		for _, name := range field.Names {
-			if name.IsExported() {
-				ty := normalizeType(field.Type)
-				fields = append(fields, name.Name+":"+ty)
+		// Issue #1101 #B: handle embedded fields (field.Names is empty)
+		// e.g., type Foo struct { Mutex; Name string }
+		if len(field.Names) > 0 {
+			// Regular named fields
+			for _, name := range field.Names {
+				if name.IsExported() {
+					ty := normalizeType(field.Type)
+					fields = append(fields, name.Name+":"+ty)
+				}
+			}
+		} else {
+			// Embedded anonymous field
+			ty := normalizeType(field.Type)
+			if ty != "" {
+				fields = append(fields, "embed:"+ty)
 			}
 		}
 	}
@@ -403,6 +457,7 @@ func normalizeFieldList(fl *ast.FieldList) string {
 }
 
 // exprString converts an AST expression to a simplified type string.
+// Issue #1101: add support for channel direction and array length.
 func exprString(expr ast.Expr) string {
 	switch e := expr.(type) {
 	case *ast.Ident:
@@ -412,11 +467,24 @@ func exprString(expr ast.Expr) string {
 	case *ast.SelectorExpr:
 		return exprString(e.X) + "." + e.Sel.Name
 	case *ast.ArrayType:
-		return "[]" + exprString(e.Elt)
+		if e.Len == nil {
+			// Slice: []T
+			return "[]" + exprString(e.Elt)
+		}
+		// Issue #1101 #C: preserve array length for detection
+		// Array: [N]T (e.g., [5]int)
+		return "[" + exprString(e.Len) + "]" + exprString(e.Elt)
 	case *ast.MapType:
 		return "map[" + exprString(e.Key) + "]" + exprString(e.Value)
 	case *ast.ChanType:
-		return "chan " + exprString(e.Value)
+		// Issue #1101 #3: preserve channel direction
+		prefix := "chan "
+		if e.Dir == ast.SEND {
+			prefix = "chan<- "
+		} else if e.Dir == ast.RECV {
+			prefix = "<-chan "
+		}
+		return prefix + exprString(e.Value)
 	case *ast.FuncType:
 		return "func" + normalizeFuncSignature(e)
 	case *ast.InterfaceType:
@@ -425,6 +493,9 @@ func exprString(expr ast.Expr) string {
 		return "struct{}"
 	case *ast.Ellipsis:
 		return "..." + exprString(e.Elt)
+	case *ast.BasicLit:
+		// For array length literals (e.g., "5")
+		return e.Value
 	default:
 		return "expr"
 	}
@@ -455,7 +526,11 @@ func diffExportSymbols(old, new []exportSymbol) []breakingChange {
 				Kind:   "removed",
 				Detail: oldSym.Kind,
 			})
-		} else if oldSym.Signature != "" && newSym.Signature != "" && oldSym.Signature != newSym.Signature {
+		} else if oldSym.Signature != newSym.Signature && (oldSym.Signature != "" || newSym.Signature != "") {
+			// Issue #1101 #B: a fingerprint that empties out (e.g. a struct
+			// losing its last/embedded field) or appears (interface gaining
+			// its first method) is a real signature change. Only two empty
+			// signatures (kinds that never record one) count as unchanged.
 			changes = append(changes, breakingChange{
 				Symbol: oldSym.Name,
 				Kind:   "signature-changed",

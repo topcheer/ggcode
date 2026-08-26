@@ -29,7 +29,11 @@ func TestIssue669DeliverResponseLogsStringID(t *testing.T) {
 	dropped := &JSONRPCResponse{ID: "abc-123"}
 	tr.DeliverResponse(dropped)
 
-	entries := debug.RingHistory(50, "acp")
+	// Use a large window: background goroutines from earlier tests may
+	// still be emitting entries into the shared ring between our
+	// DeliverResponse call and this read, evicting our entry from a
+	// small window (observed as cross-test flake in full-suite runs).
+	entries := debug.RingHistory(2000, "acp")
 	found := false
 	for _, e := range entries {
 		if strings.Contains(e.Message, "non-numeric id") && strings.Contains(e.Message, "abc-123") {
