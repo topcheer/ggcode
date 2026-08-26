@@ -606,6 +606,10 @@ func workspaceSessionsDir(baseDir, cwd string) string {
 }
 
 // loadSessionFromWorkspaces searches workspace subdirectories for a session.
+// The session's SaveDir is set to the workspace directory its file was found
+// in, so subsequent Save calls overwrite the original file (the resume path
+// previously left saveDir "" — Save then joined "" into a relative path and
+// wrote <id>.json into the process CWD while the real file went stale).
 func (h *Handler) loadSessionFromWorkspaces(sessionID string) (*Session, error) {
 	entries, err := os.ReadDir(h.sessionsDir)
 	if err != nil {
@@ -615,8 +619,10 @@ func (h *Handler) loadSessionFromWorkspaces(sessionID string) (*Session, error) 
 		if !entry.IsDir() {
 			continue
 		}
-		s, err := LoadSession(filepath.Join(h.sessionsDir, entry.Name()), sessionID)
+		wsDir := filepath.Join(h.sessionsDir, entry.Name())
+		s, err := LoadSession(wsDir, sessionID)
 		if err == nil {
+			s.SetSaveDir(wsDir)
 			return s, nil
 		}
 	}
@@ -806,7 +812,6 @@ func (h *Handler) handleSessionResume(params json.RawMessage) (interface{}, erro
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	_ = ctx
 	session.SetCancel(cancel)
 
 	// Connect MCP servers if provided
@@ -818,6 +823,9 @@ func (h *Handler) handleSessionResume(params json.RawMessage) (interface{}, erro
 
 	h.sessionsMu.Lock()
 	h.sessions[req.SessionID] = session
+	// Register the workspace dir so cleanupEmptySessions can manage the
+	// resumed session like a session/new one (previously skipped on resume).
+	h.workspaceDirs[req.SessionID] = session.SaveDir()
 	h.sessionsMu.Unlock()
 
 	modes := getDefaultSessionModeState()

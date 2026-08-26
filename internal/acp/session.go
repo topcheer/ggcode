@@ -119,6 +119,24 @@ func (s *Session) EndRun() {
 	s.mu.Unlock()
 }
 
+// validSessionID reports whether id matches the format produced by
+// generateSessionID: 32 lowercase hex chars. Session IDs are used to build
+// filesystem paths ("<dir>/<id>.json"); rejecting any other form blocks path
+// traversal via client-supplied session/resume IDs and hostile "id" fields
+// stored inside session files (which would otherwise redirect Save).
+func validSessionID(id string) bool {
+	if len(id) != 32 {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
 // generateSessionID creates a random session identifier.
 func generateSessionID() string {
 	b := make([]byte, 16)
@@ -146,6 +164,9 @@ func (s *Session) HasMessages() bool {
 // Save persists the session to disk.
 // If the session has no conversation history, the file is deleted (or not created).
 func (s *Session) Save(dir string) error {
+	if !validSessionID(s.ID) {
+		return fmt.Errorf("invalid session id %q: refusing to write outside the session store", s.ID)
+	}
 	s.mu.Lock()
 	hasMessages := len(s.conversation) > 0
 	s.mu.Unlock()
@@ -194,6 +215,11 @@ func (s *Session) Save(dir string) error {
 
 // LoadSession loads a session from disk.
 func LoadSession(dir, id string) (*Session, error) {
+	// id is client-supplied on the session/resume path; validate it so
+	// "../../etc/foo" cannot escape dir via filepath.Join cleaning.
+	if !validSessionID(id) {
+		return nil, fmt.Errorf("invalid session id %q", id)
+	}
 	path := filepath.Join(dir, id+".json")
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -202,6 +228,11 @@ func LoadSession(dir, id string) (*Session, error) {
 	var sd SessionData
 	if err := json.Unmarshal(data, &sd); err != nil {
 		return nil, fmt.Errorf("decoding session: %w", err)
+	}
+	// The id field inside the file feeds Save()'s path on later turns; a
+	// hand-edited/hostile file must not smuggle a traversal payload in.
+	if !validSessionID(sd.ID) {
+		return nil, fmt.Errorf("session file contains invalid id %q", sd.ID)
 	}
 	return &Session{
 		ID:           sd.ID,

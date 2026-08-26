@@ -1154,6 +1154,120 @@ func TestHandlerSessionResumeWithSavedSession(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Handler: session/resume must wire persistence back to the workspace dir
+// ---------------------------------------------------------------------------
+
+// Regression: handleSessionResume previously left the loaded session's
+// saveDir as "" (handleSessionNew sets it, the resume path did not). The
+// post-prompt Save in AgentLoop.ExecutePrompt then joined "" into a relative
+// path, dumping <id>.json into the process CWD while the real workspace file
+// never advanced — a resume→extend→resume cycle silently lost every turn
+// after the resume.
+func TestHandlerSessionResumeSetsSaveDirAndWorkspaceDir(t *testing.T) {
+	validCWD := t.TempDir()
+	baseDir := t.TempDir()
+
+	session := NewSession(validCWD, nil)
+	session.AddMessage("user", []ContentBlock{{Type: "text", Text: "hello"}})
+	sessionDir := workspaceSessionsDir(baseDir, validCWD)
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Save(sessionDir); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	transport := NewTransport(strings.NewReader(""), &buf)
+	h := NewHandler(&config.Config{}, tool.NewRegistry(), transport, nil)
+	h.sessionsDir = baseDir
+
+	paramsJSON, _ := json.Marshal(ResumeSessionRequest{SessionID: session.ID, CWD: validCWD})
+	if _, err := h.handleSessionResume(paramsJSON); err != nil {
+		t.Fatalf("handleSessionResume error: %v", err)
+	}
+
+	h.sessionsMu.RLock()
+	resumed, ok := h.sessions[session.ID]
+	registeredDir := h.workspaceDirs[session.ID]
+	h.sessionsMu.RUnlock()
+	if !ok {
+		t.Fatal("resumed session not registered in h.sessions")
+	}
+	if resumed.SaveDir() != sessionDir {
+		t.Errorf("SaveDir() = %q, want workspace dir %q", resumed.SaveDir(), sessionDir)
+	}
+	if registeredDir != sessionDir {
+		t.Errorf("workspaceDirs[%s] = %q, want %q", session.ID, registeredDir, sessionDir)
+	}
+
+	// Simulate the post-prompt persistence call with a foreign process CWD:
+	// the write must land in the workspace dir, not the CWD.
+	origWd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(origWd)
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	resumed.AddMessage("assistant", []ContentBlock{{Type: "text", Text: "world"}})
+	if err := resumed.Save(resumed.SaveDir()); err != nil {
+		t.Fatalf("post-resume Save error: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(sessionDir, session.ID+".json"))
+	if err != nil {
+		t.Fatalf("workspace session file missing after post-resume save: %v", err)
+	}
+	if !strings.Contains(string(data), "world") {
+		t.Error("workspace session file does not contain the new turn")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Session ID validation (path traversal via client-supplied IDs)
+// ---------------------------------------------------------------------------
+
+// Regression: LoadSession joined the client-supplied session/resume ID into
+// a filesystem path without validation, so "../../etc/foo" escaped the
+// sessions directory via filepath.Join cleaning.
+func TestLoadSessionRejectsPathTraversalID(t *testing.T) {
+	dir := t.TempDir()
+	for _, bad := range []string{
+		"../../../etc/passwd",
+		"..\\..\\windows",
+		"nonexistent-id",
+		"",
+		strings.Repeat("a", 31),
+		strings.ToUpper(strings.Repeat("a", 32)),
+	} {
+		if _, err := LoadSession(dir, bad); err == nil {
+			t.Errorf("LoadSession(%q) succeeded, want rejection", bad)
+		}
+	}
+}
+
+// A session file whose inner "id" field is hostile must be rejected too —
+// that field feeds Save()'s path on later turns.
+func TestLoadSessionRejectsHostileInnerID(t *testing.T) {
+	dir := t.TempDir()
+	content := `{"id": "../../evil", "cwd": "/tmp", "messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]}`
+	path := filepath.Join(dir, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadSession(dir, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"); err == nil {
+		t.Error("LoadSession accepted file with hostile inner id, want rejection")
+	}
+}
+
+func TestValidSessionIDFormat(t *testing.T) {
+	if !validSessionID(generateSessionID()) {
+		t.Error("generateSessionID output rejected by validSessionID")
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Handler: connectMCPServers with empty list
 // ---------------------------------------------------------------------------
 
