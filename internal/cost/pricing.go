@@ -3,6 +3,7 @@ package cost
 import (
 	"encoding/json"
 	"strings"
+	"sync"
 )
 
 // PricingType indicates how a model is billed.
@@ -207,7 +208,12 @@ var subscriptionVendors = map[string]string{
 // verifiable from each provider's official pricing page.
 //
 // For per-token pricing, users can configure custom rates via Merge().
-func DefaultPricingTable() PricingTable {
+// defaultPricingTable caches the built-in table. DefaultPricingTable() sits
+// on hot paths (estimateSessionCost walks every UsageHistory entry per View
+// frame); rebuilding the nested maps per call cost 316MB of allocations per
+// frame on long sessions — the root cause of the "long session renders
+// sluggish" regression.
+var defaultPricingTable = sync.OnceValue(func() PricingTable {
 	return PricingTable{
 		// Z.ai: both coding plan (subscription) and standard API (per-token).
 		// The coding plan endpoints (cn-coding-*, global-coding-*) are subscription.
@@ -247,6 +253,13 @@ func DefaultPricingTable() PricingTable {
 			"glm-4.5-air": {Type: PricingFree, Plan: "Zhipu Free Tier"},
 		},
 	}
+})
+
+// DefaultPricingTable returns the cached built-in pricing table. Callers
+// must treat the returned map as read-only; use Merge() to derive modified
+// copies.
+func DefaultPricingTable() PricingTable {
+	return defaultPricingTable()
 }
 
 // IsSubscriptionVendor returns the plan name if the vendor is entirely

@@ -129,6 +129,7 @@ type Model struct {
 	inputBellFired          bool // true when delayed input bell already fired
 	session                 *session.Session
 	sessionStore            session.Store
+	costCache               *sessionCostCache // shared pointer — survives Model copies
 	imManager               *im.Manager
 	streamManager           *stream.Manager
 	streamPanel             *streamPanelState
@@ -544,6 +545,7 @@ func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 		tunnelMainStream:       &tunnelMainStreamState{},
 		tunnelShareBootstrap:   &tunnelShareBootstrapState{},
 		streamViewState:        &streamViewStateData{},
+		costCache:              &sessionCostCache{},
 		terminalTitleWriter:    newTerminalTitleWriter(),
 		tmuxClient:             tmuxClient,
 		tmuxManager:            tmux.SharedManager(tmuxWorkspace),

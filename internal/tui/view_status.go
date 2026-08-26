@@ -3,10 +3,12 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	lipgloss "charm.land/lipgloss/v2"
 	"github.com/topcheer/ggcode/internal/cost"
+	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/util"
 )
 
@@ -374,6 +376,59 @@ func (m Model) contextUsageHint() string {
 	return lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Render(label)
 }
 
+// sessionCostCache memoizes the per-View aggregation over UsageHistory.
+// Model is copied by value through Update/View, so the cache lives behind a
+// shared pointer (same pattern as streamViewState). UsageHistory is
+// append-only (model.go appendUsageRecord + store.Load); the entry count is
+// a sufficient invalidation key.
+type sessionCostCache struct {
+	mu    sync.Mutex
+	sid   string              // session ID when computed
+	n     int                 // len(UsageHistory) when computed
+	cost  float64             // aggregated USD cost
+	usage provider.TokenUsage // fallback aggregation when TokenUsage is zero
+}
+
+// sessionCostSnapshot returns the cached (cost, fallbackUsage) for the
+// current session and history length, recomputing only when the session
+// changes or the history grew.
+func (m *Model) sessionCostSnapshot() (float64, provider.TokenUsage) {
+	if m.session == nil {
+		return 0, provider.TokenUsage{}
+	}
+	if m.costCache == nil {
+		m.costCache = &sessionCostCache{}
+	}
+	c := m.costCache
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.sid == m.session.ID && c.n == len(m.session.UsageHistory) {
+		return c.cost, c.usage
+	}
+	var total float64
+	var agg provider.TokenUsage
+	for _, entry := range m.session.UsageHistory {
+		agg = agg.Add(entry.Usage)
+		if entry.Usage.Total() == 0 {
+			continue
+		}
+		rate := resolveRate(entry.Vendor, entry.Endpoint, entry.Model)
+		if !rate.IsKnown() || !rate.IsMetered() {
+			continue
+		}
+		u := entry.Usage
+		total += float64(u.InputTokens)*rate.InputPerM/1e6 +
+			float64(u.OutputTokens)*rate.OutputPerM/1e6 +
+			float64(u.CacheRead)*rate.CacheReadPerM/1e6 +
+			float64(u.CacheWrite)*rate.CacheWritePerM/1e6
+	}
+	c.sid = m.session.ID
+	c.n = len(m.session.UsageHistory)
+	c.cost = total
+	c.usage = agg
+	return total, agg
+}
+
 // sessionCostHint returns a compact session cost + token summary for the
 // composer hints bar. Shows "$0.04 · 45K tok" so users always know their
 // spending without typing /cost. Color codes by cost tier for quick scanning.
@@ -385,11 +440,10 @@ func (m Model) sessionCostHint() string {
 	if usage.Total() == 0 {
 		usage = m.sidebarSessionUsage()
 	}
-	// Fallback: aggregate from UsageHistory if session-level total is still 0.
+	// Fallback: aggregate from UsageHistory if session-level total is still 0
+	// (aggregation is cached — see sessionCostSnapshot).
 	if usage.Total() == 0 && len(m.session.UsageHistory) > 0 {
-		for _, entry := range m.session.UsageHistory {
-			usage = usage.Add(entry.Usage)
-		}
+		_, usage = m.sessionCostSnapshot()
 	}
 	totalTokens := usage.Total()
 	if totalTokens == 0 {
@@ -428,21 +482,7 @@ func (m Model) estimateSessionCost() float64 {
 	if m.session == nil {
 		return 0
 	}
-	var total float64
-	for _, entry := range m.session.UsageHistory {
-		if entry.Usage.Total() == 0 {
-			continue
-		}
-		rate := resolveRate(entry.Vendor, entry.Endpoint, entry.Model)
-		if !rate.IsKnown() || !rate.IsMetered() {
-			continue
-		}
-		u := entry.Usage
-		total += float64(u.InputTokens)*rate.InputPerM/1e6 +
-			float64(u.OutputTokens)*rate.OutputPerM/1e6 +
-			float64(u.CacheRead)*rate.CacheReadPerM/1e6 +
-			float64(u.CacheWrite)*rate.CacheWritePerM/1e6
-	}
+	total, _ := m.sessionCostSnapshot()
 
 	// Fallback: if no UsageHistory entries, use session-level aggregate.
 	if total == 0 && m.session.TokenUsage.Total() > 0 {
