@@ -257,6 +257,7 @@ func shellMutatesSources(cmd string) bool {
 	lower := strings.ToLower(cmd)
 	for _, pat := range []string{
 		"gofmt -w", "gofmt -l -w", "goimports -w",
+		"go fmt ", // #1028: `go fmt` rewrites files in place (wraps gofmt -l -w); missing here made the cache-hit note "no source files have changed" literally false
 		"sed -i", "git apply", "patch -p",
 		"go mod tidy", "go mod get", "go get ",
 		"gofumpt -w", "prettier --write", "eslint --fix",

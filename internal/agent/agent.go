@@ -3100,12 +3100,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// stale PASS after a bad patch (false green light). Reuse the
 			// #749 shellMutatesSources heuristic; FP cost is one lost cache
 			// reuse, FN cost is executing on wrong results.
-			if (tc.Name == "run_command" || tc.Name == "start_command") && !result.IsError {
+			// #1028: a failed compound command can still have mutated sources
+			// (e.g. `sed -i ... && make lint` -- sed rewrote the file, make failed).
+			// The side effects already happened, so the IsError gate must not
+			// skip invalidation here; a stale "no source files have changed"
+			// cache hit would be actively wrong. FP cost: one lost cache reuse.
+			if tc.Name == "run_command" || tc.Name == "start_command" {
 				if cmd, _ := parseRunCommandArgs(tc.Arguments); shellMutatesSources(cmd) {
 					a.speculator.invalidateCache()
 					a.toolMemo.invalidateTTLBased()
 					a.commandCache.invalidate()
-					debug.Log("agent", "shell source mutation %q: invalidated command/speculator/memo caches", cmd)
+					debug.Log("agent", "shell source mutation %q (failed cmd included): invalidated command/speculator/memo caches", cmd)
 				}
 			}
 			// Store result in memoization cache for read-only tools.
