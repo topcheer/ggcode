@@ -3,6 +3,8 @@ package chat
 import (
 	"strings"
 	"testing"
+
+	"charm.land/lipgloss/v2"
 )
 
 // simulateTerminalTabExpand mimics how a terminal renders TAB characters:
@@ -79,6 +81,42 @@ func TestIssue995ErrorBodyStillWraps(t *testing.T) {
 	for _, line := range strings.Split(plain, "\n") {
 		if utf8Len(line) > 40 {
 			t.Errorf("plain error line not wrapped: %d cols", utf8Len(line))
+		}
+	}
+}
+
+// TestSystemItemTabWidthInvariant pins the #995 tab-expansion contract for
+// SystemItem: verification results embed raw build/test output whose fields
+// are TAB-separated ("FAIL\tpkg", "ok\tpkg 0.5s"). lipgloss.Width counts '\t'
+// as 0 columns, so without expansion those lines measure as fitting the
+// viewport but the terminal advances to the next tab stop and wraps them -
+// one more displayed line than Height() counted, corrupting the viewport
+// during verification (ghost blank rows, lost panel border).
+func TestSystemItemTabWidthInvariant(t *testing.T) {
+	st := DefaultStyles()
+	msgs := []string{
+		"Running verification: `make verify-ci`…",
+		"❌ [Verification failed: `go test ./...`]\n```\nFAIL\tgithub.com/topcheer/ggcode/internal/agent [build failed]\nok\tgithub.com/topcheer/ggcode/internal/chat\t0.6s\n```",
+		"✅ [Verification passed: `go build ./...`]",
+	}
+	for _, msg := range msgs {
+		for _, w := range []int{30, 40, 60, 80, 120} {
+			it := NewSystemItem("id", msg, st)
+			r := it.Render(w)
+			h := it.Height(w)
+			phys := len(splitVisualLines(r))
+			if h != phys {
+				t.Errorf("width=%d: Height=%d != physical=%d", w, h, phys)
+			}
+			for i, ln := range strings.Split(r, "\n") {
+				if vw := lipgloss.Width(ln); vw > w {
+					shown := ln
+					if len(shown) > 50 {
+						shown = shown[:50]
+					}
+					t.Errorf("width=%d line %d overflows: %d > %d: %q", w, i, vw, w, shown)
+				}
+			}
 		}
 	}
 }

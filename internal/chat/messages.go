@@ -343,11 +343,14 @@ func (s *SystemItem) Render(width int) string {
 		contentWidth = 10
 	}
 
-	// Wrap each paragraph to the available content width so that lines
-	// (including the leading prefix/indent) never exceed the viewport.
-	// Without this, long system messages overflow the terminal width,
-	// causing invisible auto-wrap lines that measureHeight() doesn't count
-	// and the virtual list renders too many items.
+	// Expand TABs to spaces before wrapping: lipgloss.Width counts '\t' as
+	// 0 columns, so a tab-separated line (go test output: "FAIL\tpkg",
+	// "ok\tpkg", git status, ls -l) measures as fitting the width but the
+	// terminal advances to the next tab stop and auto-wraps - one more
+	// displayed line than Height() counted. Verification results embed raw
+	// build/test output and hit this constantly (#995 fixed the same bug
+	// for tool items; system messages carrying verify output were missed).
+	s.text = expandTabs(s.text)
 	textLines := wrapLines(s.text, contentWidth)
 	var sb strings.Builder
 	for i, line := range textLines {
