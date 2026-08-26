@@ -31,6 +31,7 @@ type Server struct {
 	mux            *http.ServeMux // exposed for additional route mounting
 	port           int
 	done           chan struct{}
+	doneOnce       sync.Once                         // #1110: guarantees close(done) exactly once - Stop before Start must not block
 	pushConfigs    map[string]PushNotificationConfig // by ID
 	pushMu         sync.RWMutex
 	tokenValidator *auth.TokenValidator // OAuth2/OIDC token validation
@@ -175,7 +176,7 @@ func (s *Server) Start() error {
 		if err := s.server.Serve(ln); err != nil && err != http.ErrServerClosed {
 			debug.Log("a2a", "server error: %v", err)
 		}
-		close(s.done)
+		s.doneOnce.Do(func() { close(s.done) })
 	})
 
 	debug.Log("a2a", "server listening on %s (card: %s/.well-known/agent.json)",
@@ -213,6 +214,11 @@ func (s *Server) AgentCard() AgentCard {
 
 // Stop gracefully shuts down the server.
 func (s *Server) Stop() {
+	// #1110: close done unconditionally (idempotent) so Stop() returns even
+	// when Start() was never called - CLI startup cleanup paths (OAuth2/OIDC/
+	// mTLS validation failures in cmd/ggcode/root.go) call Stop before Start
+	// and used to block forever waiting on a channel nobody closes.
+	s.doneOnce.Do(func() { close(s.done) })
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = s.server.Shutdown(ctx)
@@ -421,8 +427,14 @@ func (s *Server) handleMessageSend(w http.ResponseWriter, r *http.Request, req *
 
 	select {
 	case <-done:
-		t, _ := s.handler.GetTask(task.ID)
-		writeRPCResult(w, req.ID, t)
+		// #1111: honor GetTask's ok return - the task can be swept by
+		// cleanupExpiredTasksLocked between done closing and this read;
+		// serializing a nil task would emit result:null (protocol violation).
+		if t, ok := s.handler.GetTask(task.ID); ok {
+			writeRPCResult(w, req.ID, t)
+		} else {
+			writeRPCError(w, req.ID, ErrTaskNotFound)
+		}
 	case <-timer.C:
 		// #1090: use -32001 to match stream/resubscribe, include task ID in Data
 		writeRPCError(w, req.ID, &JSONRPCError{
@@ -518,7 +530,13 @@ func (s *Server) handleMessageStream(w http.ResponseWriter, r *http.Request, req
 
 	select {
 	case <-done:
-		t, _ := s.handler.GetTask(task.ID)
+		// #1111: same defensive ok check as send/resubscribe (#1094) - the
+		// task may be swept before this read; t.Artifacts would nil-panic.
+		t, ok := s.handler.GetTask(task.ID)
+		if !ok {
+			s.sendSSEError(w, flusher, req.ID, ErrTaskNotFound.Code, ErrTaskNotFound.Message)
+			return
+		}
 		// #565 D: emit artifact events before the terminal status so the
 		// streamed result matches the card's declared streaming capability.
 		for _, art := range t.Artifacts {
