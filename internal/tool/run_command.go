@@ -1,7 +1,6 @@
 package tool
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -300,9 +299,9 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 	// Extract progress callback for streaming (if available).
 	progressFn, _ := ctx.Value(ToolProgressKey{}).(ToolProgressFunc)
 
-	var stdout, stderr bytes.Buffer
+	var stdout, stderr = newBoundedOutputWriter(2 * maxOutputSize), newBoundedOutputWriter(2 * maxOutputSize)
 	var pwOut, pwErr *streamingProgressWriter
-	pwOut, pwErr = t.wireCommandOutput(cmd, &stdout, &stderr, progressFn)
+	pwOut, pwErr = t.wireCommandOutput(cmd, stdout, stderr, progressFn)
 
 	// GUI commands: start and return immediately.
 	if isGUI {
@@ -733,7 +732,7 @@ func (t RunCommand) buildFailureMessage(command, combinedOutput, errOutput strin
 // of output to the TUI via a progress callback. Used for the direct cmd.Run()
 // path (no JobManager) to provide real-time streaming.
 type streamingProgressWriter struct {
-	buf      *bytes.Buffer
+	buf      io.Writer
 	extra    io.Writer
 	progress ToolProgressFunc
 	// pending accumulates raw chunks since the last emission. ANSI
@@ -752,7 +751,7 @@ type streamingProgressWriter struct {
 // runaway command must not grow memory unbounded.
 const maxPendingProgress = 16 * 1024
 
-func newStreamingProgressWriter(buf *bytes.Buffer, extra io.Writer, progress ToolProgressFunc) *streamingProgressWriter {
+func newStreamingProgressWriter(buf io.Writer, extra io.Writer, progress ToolProgressFunc) *streamingProgressWriter {
 	return &streamingProgressWriter{
 		buf:      buf,
 		extra:    extra,
@@ -854,12 +853,17 @@ func normalizedCommandEnv() []string {
 	return append(os.Environ(), commandEnvOverrides...)
 }
 
-// wireCommandOutput attaches stdout/stderr capture to cmd with the best
+// wireCommandOutput attaches stdout/stderr capture to the cmd with the best
 // available pipeline: streaming progress writers (live TUI tail + tee +
 // buffer) when a progress callback exists, plain tee+buffer otherwise, or
 // buffer-only. Returns the progress writers (nil, nil when progress is off)
 // so the caller can flush them after exit.
-func (t *RunCommand) wireCommandOutput(cmd *exec.Cmd, stdout, stderr *bytes.Buffer, progressFn ToolProgressFunc) (*streamingProgressWriter, *streamingProgressWriter) {
+//
+// Buffers are boundedOutputWriter (not bytes.Buffer): command output volume
+// is untrusted and raw buffers grew to gigabytes on heavy builds, slowing
+// the whole process via memory pressure. Retention cap mirrors the
+// post-run truncateMiddle budget (maxOutputSize per stream).
+func (t *RunCommand) wireCommandOutput(cmd *exec.Cmd, stdout, stderr *boundedOutputWriter, progressFn ToolProgressFunc) (*streamingProgressWriter, *streamingProgressWriter) {
 	if progressFn != nil {
 		var tee io.Writer
 		if t.OutputTee != nil {
