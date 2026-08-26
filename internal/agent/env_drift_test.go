@@ -28,7 +28,9 @@ func TestEnvDrift_AllVarsSet(t *testing.T) {
 
 func TestEnvDrift_MissingVars(t *testing.T) {
 	dir := t.TempDir()
-	writeEnvFile(t, dir, ".env.example", "DATABASE_URL=postgresql://localhost\nAPI_KEY=secret\nREDIS_URL=redis://localhost\n")
+	// API_KEY/REDIS_URL use empty template values (no default) so they count
+	// as required; DATABASE_URL carries a default and must be skipped (#1034).
+	writeEnvFile(t, dir, ".env.example", "DATABASE_URL=postgresql://localhost\nAPI_KEY=\nREDIS_URL=\n")
 	writeEnvFile(t, dir, ".env", "DATABASE_URL=postgresql://localhost\n")
 
 	s := newEnvDriftState()
@@ -49,7 +51,7 @@ func TestEnvDrift_MissingVars(t *testing.T) {
 
 func TestEnvDrift_FiresOncePerRun(t *testing.T) {
 	dir := t.TempDir()
-	writeEnvFile(t, dir, ".env.example", "MISSING_VAR=value\n")
+	writeEnvFile(t, dir, ".env.example", "MISSING_VAR=\n")
 
 	s := newEnvDriftState()
 	msg1 := s.check(dir)
@@ -64,7 +66,7 @@ func TestEnvDrift_FiresOncePerRun(t *testing.T) {
 
 func TestEnvDrift_ResetClearsFired(t *testing.T) {
 	dir := t.TempDir()
-	writeEnvFile(t, dir, ".env.example", "MISSING_VAR=value\n")
+	writeEnvFile(t, dir, ".env.example", "MISSING_VAR=\n")
 
 	s := newEnvDriftState()
 	_ = s.check(dir)
@@ -91,7 +93,7 @@ func TestEnvDrift_VarsInShellEnvCount(t *testing.T) {
 
 func TestEnvDrift_CommentedVarsSkipped(t *testing.T) {
 	dir := t.TempDir()
-	writeEnvFile(t, dir, ".env.example", "# COMMENTED_VAR=value\nREAL_MISSING=value\n")
+	writeEnvFile(t, dir, ".env.example", "# COMMENTED_VAR=value\nREAL_MISSING=\n")
 
 	s := newEnvDriftState()
 	msg := s.check(dir)
@@ -108,7 +110,7 @@ func TestEnvDrift_CommentedVarsSkipped(t *testing.T) {
 
 func TestEnvDrift_ExportSyntax(t *testing.T) {
 	dir := t.TempDir()
-	writeEnvFile(t, dir, ".env.example", "export FOO=bar\nexport BAZ=qux\n")
+	writeEnvFile(t, dir, ".env.example", "export FOO=bar\nexport BAZ=\n")
 	writeEnvFile(t, dir, ".env", "export FOO=mybar\n")
 
 	s := newEnvDriftState()
@@ -124,11 +126,32 @@ func TestEnvDrift_ExportSyntax(t *testing.T) {
 	}
 }
 
+func TestEnvDrift_DefaultedVarsSkipped(t *testing.T) {
+	dir := t.TempDir()
+	// #1034: vars with non-empty defaults are not required from the user;
+	// only truly unset vars (empty / "" / '') are reported.
+	writeEnvFile(t, dir, ".env.example", "LOG_LEVEL=info\nDB_URL=postgres://localhost\nAPI_KEY=\n")
+
+	s := newEnvDriftState()
+	msg := s.check(dir)
+	if msg == "" {
+		t.Fatal("expected non-empty message for API_KEY")
+	}
+	if !strings.Contains(msg, "API_KEY") {
+		t.Errorf("API_KEY should be in message, got: %s", msg)
+	}
+	for _, skipped := range []string{"LOG_LEVEL", "DB_URL"} {
+		if strings.Contains(msg, skipped) {
+			t.Errorf("%s has a default and should be skipped, got: %s", skipped, msg)
+		}
+	}
+}
+
 func TestEnvDrift_LargeNumberOfVars(t *testing.T) {
 	dir := t.TempDir()
 	content := ""
 	for i := 0; i < 15; i++ {
-		content += "VAR_" + string(rune('A'+i)) + "_TEST=value\n"
+		content += "VAR_" + string(rune('A'+i)) + "_TEST=\n"
 	}
 	writeEnvFile(t, dir, ".env.example", content)
 
@@ -200,8 +223,8 @@ func TestIsValidEnvName(t *testing.T) {
 
 func TestEnvDrift_TemplateFilePriority(t *testing.T) {
 	dir := t.TempDir()
-	writeEnvFile(t, dir, ".env.example", "FROM_EXAMPLE=value\n")
-	writeEnvFile(t, dir, ".env.template", "FROM_TEMPLATE=value\n")
+	writeEnvFile(t, dir, ".env.example", "FROM_EXAMPLE=\n")
+	writeEnvFile(t, dir, ".env.template", "FROM_TEMPLATE=\n")
 
 	s := newEnvDriftState()
 	msg := s.check(dir)

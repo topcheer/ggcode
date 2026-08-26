@@ -30,7 +30,13 @@ type AgentLoop struct {
 	session    *Session
 	clientCaps ClientCapabilities
 	agent      *agent.Agent
+	// cancelMu guards cancel: Stop() may be called from any goroutine
+	// concurrently with ExecutePrompt's assignment (e.g. session/cancel vs a
+	// new prompt racing on a cached loop). Without the mutex this is a data
+	// race and Stop can observe nil or a stale cancel func (#1033).
+	cancelMu   sync.Mutex
 	cancel     context.CancelFunc
+	cancelGen  uint64 // generation of the installed cancel (guards stale clears)
 	modeMu     sync.Mutex
 	mode       string // permission mode: "supervised", "auto", "bypass", "autopilot"
 	modeLocked bool   // true once the Client explicitly set a mode via session/set_mode
@@ -268,8 +274,22 @@ func (al *AgentLoop) applyModePolicy(mode string) {
 // Stream events are converted to ACP session/update notifications.
 func (al *AgentLoop) ExecutePrompt(ctx context.Context, prompt []ContentBlock) error {
 	ctx, cancel := context.WithCancel(ctx)
+	al.cancelMu.Lock()
+	al.cancelGen++
+	myGen := al.cancelGen
 	al.cancel = cancel
-	defer cancel()
+	al.cancelMu.Unlock()
+	defer func() {
+		// Clear only if this run's cancel is still installed (generation
+		// check): a newer run may have replaced it, and funcs cannot be
+		// compared directly in Go.
+		al.cancelMu.Lock()
+		if al.cancelGen == myGen {
+			al.cancel = nil
+		}
+		al.cancelMu.Unlock()
+		cancel()
+	}()
 
 	// Convert ACP ContentBlocks to provider ContentBlocks
 	providerContent := acpToProviderContent(prompt)
@@ -333,8 +353,11 @@ func (al *AgentLoop) ExecutePrompt(ctx context.Context, prompt []ContentBlock) e
 
 // Stop cancels the current agent execution.
 func (al *AgentLoop) Stop() {
-	if al.cancel != nil {
-		al.cancel()
+	al.cancelMu.Lock()
+	cancel := al.cancel
+	al.cancelMu.Unlock()
+	if cancel != nil {
+		cancel()
 	}
 }
 

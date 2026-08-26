@@ -379,6 +379,14 @@ func (h *Handler) handleSessionPrompt(params json.RawMessage) (interface{}, erro
 	}
 
 	loop := h.agentLoopForSession(session)
+	// Busy guard (#1033): if a prompt is already running on this session's
+	// cached loop, reject instead of letting two goroutines concurrently
+	// drive the same AgentLoop (data race on loop state + interleaved agent
+	// output). ACP prompts are async (response via session/update), so the
+	// client should wait for prompt_complete or cancel before re-prompting.
+	if !session.TryBeginRun() {
+		return nil, fmt.Errorf("session %s already has a prompt in flight; wait for session/prompt_complete or send session/cancel first", promptParams.SessionID)
+	}
 	// Re-apply any explicitly-set permission mode so it survives loop
 	// recreation between prompts (prevents silent revert to "auto").
 	h.sessionsMu.RLock()
@@ -393,6 +401,7 @@ func (h *Handler) handleSessionPrompt(params json.RawMessage) (interface{}, erro
 
 	safego.Go("acp.handler.agentLoop", func() {
 		defer cancel()
+		defer session.EndRun() // release the prompt busy guard (#1033)
 		defer func() {
 			// Clean up agent loop reference when done. The session's explicitly-set
 			// mode (h.sessionModes) intentionally survives so the next prompt

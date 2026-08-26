@@ -128,6 +128,11 @@ func (e *envDriftState) check(workingDir string) string {
 	// Find missing vars
 	var missing []string
 	for _, v := range exampleVars {
+		// Per the module contract (design constraint above): vars carrying a
+		// non-empty default in the template are not required from the user -\n		// only truly unset vars (empty / "" / '') count as missing (#1034).
+		if v.hasDefault {
+			continue
+		}
 		if !actualVars[v.name] {
 			missing = append(missing, v.name)
 		}

@@ -574,14 +574,24 @@ func (h *TaskHandler) updateStatus(t *Task, state TaskState, message string) {
 	}
 
 	// Fire push notification callbacks (independent of onTaskEvent).
+	// Async per #1031: the production notifier (server.firePushNotifications)
+	// runs validatePushCallbackURL - DNS resolution with a 3s timeout per
+	// config — before delivery. Calling it synchronously under h.mu blocks
+	// every task operation (GetTask/ListTasks/CancelTask/new runs) for up to
+	// 3s x N on each status transition. Same async pattern as onTaskEvent
+	// above and CancelTask's snapshot-then-fire.
 	if pn := h.pushNotifier; pn != nil {
 		snapshot := t.Snapshot()
-		pn(t.ID, StreamResponse{
-			StatusUpdate: &TaskStatusUpdateEvent{
-				TaskID: t.ID,
-				Status: snapshot.Status,
-				Final:  state.IsTerminal(),
-			},
+		taskID := t.ID
+		final := state.IsTerminal()
+		safego.Go("a2a.pushNotify", func() {
+			pn(taskID, StreamResponse{
+				StatusUpdate: &TaskStatusUpdateEvent{
+					TaskID: taskID,
+					Status: snapshot.Status,
+					Final:  final,
+				},
+			})
 		})
 	}
 }

@@ -209,6 +209,18 @@ func (c *Client) Start(ctx context.Context) error {
 		cancelProc()
 		_ = killACPProcess(cmd)
 		_ = cmd.Wait()
+		// Wait for the readLoop to fully exit before clearing state (#1032).
+		// Without this, a retried Start() installs a new transport while the
+		// old readLoop is still running: the old loop then dereferences
+		// c.transport after we nil it (panic window) or races the new
+		// generation's readLoop for message delivery. Close() already waits
+		// for the same reason - see its comment.
+		c.mu.Lock()
+		done := c.done // capture current readLoop's done channel
+		c.mu.Unlock()
+		if done != nil {
+			<-done
+		}
 		c.mu.Lock()
 		c.cancelRead = nil
 		c.cancelProc = nil

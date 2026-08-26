@@ -23,6 +23,8 @@ type Session struct {
 
 	conversation []Message
 	mu           sync.Mutex
+
+	runActive bool // prompt busy guard (#1033): one in-flight prompt per session
 }
 
 // Message represents a single conversation message within a session.
@@ -95,6 +97,26 @@ func (s *Session) DoCancel() {
 	if cancel != nil {
 		cancel()
 	}
+}
+
+// TryBeginRun attempts to mark the session as having a prompt in flight.
+// Returns false if another prompt is already running (#1033): the handler
+// must reject the new prompt instead of concurrently driving the same loop.
+func (s *Session) TryBeginRun() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.runActive {
+		return false
+	}
+	s.runActive = true
+	return true
+}
+
+// EndRun releases the prompt busy guard set by TryBeginRun.
+func (s *Session) EndRun() {
+	s.mu.Lock()
+	s.runActive = false
+	s.mu.Unlock()
 }
 
 // generateSessionID creates a random session identifier.
