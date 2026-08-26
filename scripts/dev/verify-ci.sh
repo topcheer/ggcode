@@ -31,6 +31,12 @@ GOMEMLIMIT="${VERIFY_CI_MEMLIMIT:-2GiB}"
 # reported. GOMAXPROCS caps every downstream go command in one knob. Override
 # via VERIFY_CI_GOMAXPROCS on roomier machines.
 export GOMAXPROCS="${VERIFY_CI_GOMAXPROCS:-2}"
+# Package-level parallelism: `go test ./...` defaults -p to core count;
+# on memory-constrained dev machines (macOS under memory pressure) the
+# parallel test binaries spike peak RSS and get OOM-killed with a bare
+# "signal: killed" before any real failure is reported. Must be the
+# -p=1 equals form: GOFLAGS="-p 1" is rejected by go (non-flag "1").
+export GOFLAGS="${GOFLAGS:--p=1}"
 # Set VERIFY_CI_FULL=1 to also run cross-compile, desktop, and frontend checks.
 FULL="${VERIFY_CI_FULL:-0}"
 
