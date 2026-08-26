@@ -49,6 +49,19 @@ func Renderer(wrap int) *glamour.TermRenderer {
 
 // Render renders markdown text to ANSI with the given wrap width.
 func Render(text string, wrap int) string {
+	// Normalize terminal control characters BEFORE glamour sees them:
+	// measurement libraries (runewidth) count '\t' as ~0 columns and '\r'
+	// as zero-width, but the terminal expands tabs to their stop column and
+	// a bare CR (progress bars) rewinds the cursor - lines that measure as
+	// fitting the wrap width get re-wrapped or mangled by the terminal,
+	// desynchronizing item Height() from displayed lines (#995 class).
+	// Glamour's own word-wrap also measures with the same width library, so
+	// tabs inside code blocks silently violate the width invariant here too.
+	if strings.ContainsRune(text, '\r') {
+		text = strings.ReplaceAll(text, "\r\n", "\n")
+		text = strings.ReplaceAll(text, "\r", "\n")
+	}
+	text = strings.ReplaceAll(text, "\t", "    ")
 	text = Normalize(text)
 	renderer := Renderer(wrap)
 	if renderer == nil {

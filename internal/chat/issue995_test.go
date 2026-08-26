@@ -120,3 +120,69 @@ func TestSystemItemTabWidthInvariant(t *testing.T) {
 		}
 	}
 }
+
+// TestWrapLinesChokePointNormalization pins the choke-point contract inside
+// wrapLines itself: every producer (UserItem, SystemItem, agent plan/field
+// renderers, FormatBody) funnels raw content through here, so CR and TAB
+// must be normalized at this level regardless of which caller forgot.
+// Measurement libraries count these as zero/near-zero width while terminals
+// expand them (tab stops) or rewind the cursor (bare CR progress bars),
+// desynchronizing Height() from displayed lines.
+func TestWrapLinesChokePointNormalization(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		w    int
+	}{
+		{"bare CR becomes newline", "progress 50%\rprogress 99%", 40},
+		{"CRLF normalized", "line one\r\nline two", 40},
+		{"tab expanded", "FAIL\tgithub.com/x/y", 20},
+		{"tabs in code", "func main() {\n\treturn\n}", 20},
+		{"mixed", "ok\tpkg\t0.5s\rFAIL\tpkg2", 30},
+	}
+	for _, c := range cases {
+		got := wrapLines(c.in, c.w)
+		for i, ln := range got {
+			if strings.ContainsRune(ln, '\t') {
+				t.Errorf("%s: line %d still contains TAB: %q", c.name, i, ln)
+			}
+			if strings.ContainsRune(ln, '\r') {
+				t.Errorf("%s: line %d still contains CR: %q", c.name, i, ln)
+			}
+			if vw := lipgloss.Width(ln); vw > c.w {
+				t.Errorf("%s: line %d width %d > %d: %q", c.name, i, vw, c.w, ln)
+			}
+		}
+	}
+}
+
+// TestUserItemTabAndCRInvariant covers UserItem, the one bare-wrapping
+// producer that had no normalization at all before the choke-point fix:
+// pasted code with TAB indentation and CR-terminated lines must not produce
+// lines wider than the viewport.
+func TestUserItemTabAndCRInvariant(t *testing.T) {
+	st := DefaultStyles()
+	texts := []string{
+		"func main() {\n\tif true {\n\t\tfmt.Println(\"hi\")\n\t}\n}",
+		"npm output\rdone\r100%",
+		"M\tinternal/chat/messages.go\n??\tnew.go",
+	}
+	for _, txt := range texts {
+		for _, w := range []int{30, 40, 60, 80} {
+			it := NewUserItem("id", txt, st)
+			r := it.Render(w)
+			if h, phys := it.Height(w), len(splitVisualLines(r)); h != phys {
+				t.Errorf("width=%d: Height=%d != physical=%d", w, h, phys)
+			}
+			for i, ln := range strings.Split(r, "\n") {
+				if vw := lipgloss.Width(ln); vw > w {
+					shown := ln
+					if len(shown) > 50 {
+						shown = shown[:50]
+					}
+					t.Errorf("width=%d line %d overflows: %d > %d: %q", w, i, vw, w, shown)
+				}
+			}
+		}
+	}
+}

@@ -99,7 +99,23 @@ func (u *UserItem) Height(width int) int {
 }
 
 // wrapLines does simple word wrapping at the given width.
+//
+// Choke-point normalization: measurement libraries (runewidth/lipgloss)
+// count '\t' as 0-1 columns and '\r' as zero-width, but a terminal advances
+// tabs to their stop column and a bare CR returns the cursor to column 0.
+// Any producer reaching this function with raw control characters would
+// measure lines as fitting the width while the terminal wraps or mangles
+// them - desynchronizing Height() from displayed lines (#995 class: ghost
+// blank rows, lost panel borders). Normalizing here makes every caller
+// (UserItem, SystemItem, agent plan/field renderers, FormatBody) safe by
+// construction; producers with their own pipeline (FormatBody) normalize
+// first and re-normalization is an idempotent no-op.
 func wrapLines(text string, width int) []string {
+	if strings.ContainsRune(text, '\r') {
+		text = strings.ReplaceAll(text, "\r\n", "\n")
+		text = strings.ReplaceAll(text, "\r", "\n")
+	}
+	text = expandTabs(text)
 	var result []string
 	for _, paragraph := range strings.Split(text, "\n") {
 		if paragraph == "" {
@@ -343,14 +359,11 @@ func (s *SystemItem) Render(width int) string {
 		contentWidth = 10
 	}
 
-	// Expand TABs to spaces before wrapping: lipgloss.Width counts '\t' as
-	// 0 columns, so a tab-separated line (go test output: "FAIL\tpkg",
-	// "ok\tpkg", git status, ls -l) measures as fitting the width but the
-	// terminal advances to the next tab stop and auto-wraps - one more
-	// displayed line than Height() counted. Verification results embed raw
-	// build/test output and hit this constantly (#995 fixed the same bug
-	// for tool items; system messages carrying verify output were missed).
-	s.text = expandTabs(s.text)
+	// TAB/CR control normalization happens inside wrapLines (choke point):
+	// tab-separated build/test output ("FAIL\tpkg") and CR-rewritten progress
+	// lines otherwise measure as fitting while the terminal wraps them,
+	// desyncing Height() from displayed lines. See #995 and the SystemItem
+	// verify-output viewport corruption.
 	textLines := wrapLines(s.text, contentWidth)
 	var sb strings.Builder
 	for i, line := range textLines {
