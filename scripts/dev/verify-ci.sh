@@ -143,7 +143,24 @@ wait_for_memory() {
 #   high (>=10GiB):                -p 4  -parallel 4  GOMAXPROCS=4
 # The mem-gate threshold scales with the tier: starting -p 4 safely needs more
 # headroom than starting -p 1.
+# Load cap: free memory measured at selection time does not account for what
+# concurrent agent workloads are ABOUT to allocate. On shared machines the
+# same co-tenant builds that spike memory mid-run show up as elevated load
+# average first, so the 1-minute load is used to cap the tier: >=6 caps at
+# mid (-p 2), >=12 caps at safe (-p 1). This only ever lowers a tier, never
+# raises one - an idle machine behaves exactly as before.
 VC_P=1; VC_PARALLEL=1; VC_GOMAXPROCS=1; VC_MEM_GATE_MB=1500
+vc_load_1m() {
+  # Portable 1-minute load average: Linux /proc/loadavg, macOS sysctl, then
+  # uptime as last resort. Prints a single float or nothing.
+  if [ -r /proc/loadavg ]; then
+    head -1 /proc/loadavg 2>/dev/null | awk '{print $1; exit}'
+  elif sysctl -n vm.loadavg >/dev/null 2>&1; then
+    sysctl -n vm.loadavg 2>/dev/null | awk '{print $2; exit}'
+  elif command -v uptime >/dev/null 2>&1; then
+    uptime 2>/dev/null | sed -n 's/.*load averages\{0,1\}: *\([0-9.]*\).*/\1/p'
+  fi
+}
 pick_tier() {
   local avail; avail="$(effective_avail_mb 2>/dev/null || true)"
   # Tier-4 headroom raised from 8192MiB to 10240MiB: -p 4 workers each hold
@@ -158,8 +175,18 @@ pick_tier() {
   else
     VC_P=1; VC_PARALLEL=1; VC_GOMAXPROCS=1; VC_MEM_GATE_MB=1500
   fi
+  local load; load="$(vc_load_1m)"
+  if [ -n "${load}" ]; then
+    local cap
+    cap="$(awk -v l="${load}" 'BEGIN { if (l >= 12) print 1; else if (l >= 6) print 2; else print 4 }')"
+    if [ "${VC_P}" -gt "${cap}" ]; then
+      VC_P="${cap}"; VC_PARALLEL="${cap}"; VC_GOMAXPROCS="${cap}"
+      [ "${VC_P}" -le 1 ] && VC_MEM_GATE_MB=1500 || VC_MEM_GATE_MB=2048
+      echo "[verify-ci] load cap applied (load ${load} -> -p ${VC_P})"
+    fi
+  fi
   export GOMAXPROCS="${VC_GOMAXPROCS}"
-  echo "[verify-ci] concurrency tier: -p ${VC_P} -parallel ${VC_PARALLEL} GOMAXPROCS=${VC_GOMAXPROCS} (avail ${avail:-?}MiB)"
+  echo "[verify-ci] concurrency tier: -p ${VC_P} -parallel ${VC_PARALLEL} GOMAXPROCS=${VC_GOMAXPROCS} (avail ${avail:-?}MiB, load ${load:-?})"
 }
 # downgrade_tier: halve concurrency (floor 1) after an OOM kill; retrying at
 # the same concurrency under the same pressure just burns attempts.
