@@ -148,6 +148,47 @@ func processMore(items []string) []string {
 	}
 }
 
+func TestCheckMissingPrealloc_SameVarNameDifferentFunc(t *testing.T) {
+	// #1145: two functions declaring the same local slice name. The delta
+	// used a set keyed on varName only, so func A's pre-existing violation
+	// masked func B's brand-new one and the new warning was silently dropped.
+	oldSrc := `package main
+func collectA(items []int) []int {
+	var results []int
+	for _, item := range items {
+		results = append(results, item)
+	}
+	return results
+}`
+	newSrc := `package main
+func collectA(items []int) []int {
+	var results []int
+	for _, item := range items {
+		results = append(results, item)
+	}
+	return results
+}
+func collectB(items []string) []string {
+	results := []string{}
+	for _, s := range items {
+		results = append(results, s)
+	}
+	return results
+}`
+	warnings := checkMissingPrealloc("test.go", oldSrc, newSrc)
+	// The new func B violation must survive the delta even though the
+	// varName "results" already existed in old content.
+	if len(warnings) == 0 {
+		t.Fatal("expected 1 delta warning for new same-named append-in-loop")
+	}
+	if len(warnings) > 1 {
+		t.Fatalf("expected exactly 1 delta warning (old one suppressed), got %d: %v", len(warnings), warnings)
+	}
+	if !strings.Contains(warnings[0], "results") {
+		t.Errorf("expected warning to reference 'results', got: %v", warnings[0])
+	}
+}
+
 func TestCheckMissingPrealloc_NoLoopNoWarning(t *testing.T) {
 	src := `package main
 func process(item int) []int {

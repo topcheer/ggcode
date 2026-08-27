@@ -91,20 +91,28 @@ func checkMapPrealloc(filePath, oldContent, newContent string) []string {
 	}
 
 	// Delta: subtract patterns already present in old content.
+	// #1145: count-based matching per (varName, sourceLen), not a set-subtract
+	// on p.String() (varName only). Different functions commonly declare the
+	// same map name, so a name-only set key masked brand-new violations
+	// behind pre-existing ones in sibling functions.
 	if strings.TrimSpace(oldContent) != "" {
 		oldAST, _ := parser.ParseFile(token.NewFileSet(), filePath, oldContent, 0)
 		if oldAST != nil {
 			oldPatterns := findMissingMapPrealloc(oldAST, token.NewFileSet())
 			if len(oldPatterns) > 0 {
-				oldSet := make(map[string]bool)
+				oldCounts := make(map[string]int)
 				for _, p := range oldPatterns {
-					oldSet[p.String()] = true
+					oldCounts[p.varName+"|"+p.sourceLen]++
 				}
+				matched := make(map[string]int, len(oldCounts))
 				var delta []mapPreallocWarning
 				for _, p := range newPatterns {
-					if !oldSet[p.String()] {
-						delta = append(delta, p)
+					key := p.varName + "|" + p.sourceLen
+					if matched[key] < oldCounts[key] {
+						matched[key]++
+						continue // pairs with an existing old instance
 					}
+					delta = append(delta, p)
 				}
 				newPatterns = delta
 			}

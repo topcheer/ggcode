@@ -77,20 +77,30 @@ func checkMissingPrealloc(filePath, oldContent, newContent string) []string {
 	}
 
 	// Delta: subtract patterns already present in old content.
+	// #1145: the delta must be COUNT-based per varName, not a set-subtract on
+	// p.String() (which carries only the variable name). Two different
+	// functions commonly declare the same local name (`results`, `items`,
+	// `warnings`), so a set key on varName let func A's pre-existing
+	// violation mask func B's brand-new one: the new warning was silently
+	// subtracted. Matching at most oldCount[varName] instances keeps every
+	// genuinely new violation while still suppressing unchanged ones.
 	if strings.TrimSpace(oldContent) != "" {
 		oldAST, _ := parser.ParseFile(token.NewFileSet(), filePath, oldContent, 0)
 		if oldAST != nil {
 			oldPatterns := findMissingPrealloc(oldAST, token.NewFileSet())
 			if len(oldPatterns) > 0 {
-				oldSet := make(map[string]bool)
+				oldCounts := make(map[string]int)
 				for _, p := range oldPatterns {
-					oldSet[p.String()] = true
+					oldCounts[p.varName]++
 				}
+				matched := make(map[string]int, len(oldCounts))
 				var delta []preallocWarning
 				for _, p := range newPatterns {
-					if !oldSet[p.String()] {
-						delta = append(delta, p)
+					if matched[p.varName] < oldCounts[p.varName] {
+						matched[p.varName]++
+						continue // pairs with an existing old instance
 					}
+					delta = append(delta, p)
 				}
 				newPatterns = delta
 			}

@@ -4,6 +4,44 @@ import (
 	"testing"
 )
 
+func TestMapPrealloc_SameVarNameDifferentFunc(t *testing.T) {
+	// #1145: two functions declaring the same map name. The delta used a set
+	// keyed on varName only, so func A's pre-existing violation masked func
+	// B's brand-new one and the new warning was silently dropped.
+	oldSrc := `package main
+type Item struct { Key string; Val int }
+func buildA(items []Item) map[string]int {
+	m := make(map[string]int)
+	for _, item := range items {
+		m[item.Key] = item.Val
+	}
+	return m
+}`
+	newSrc := `package main
+type Item struct { Key string; Val int }
+func buildA(items []Item) map[string]int {
+	m := make(map[string]int)
+	for _, item := range items {
+		m[item.Key] = item.Val
+	}
+	return m
+}
+func buildB(items []Item) map[string]int {
+	m := make(map[string]int)
+	for _, item := range items {
+		m[item.Key] = item.Val
+	}
+	return m
+}`
+	warnings := checkMapPrealloc("test.go", oldSrc, newSrc)
+	if len(warnings) != 1 {
+		t.Fatalf("expected exactly 1 delta warning for new same-named map loop, got %d: %v", len(warnings), warnings)
+	}
+	if !strContains(warnings[0], "Map preallocation") {
+		t.Errorf("unexpected warning: %s", warnings[0])
+	}
+}
+
 func TestMapPrealloc_RangeLoop(t *testing.T) {
 	code := `package main
 type Item struct { Key string; Val int }
