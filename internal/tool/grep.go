@@ -191,6 +191,12 @@ func (t Grep) Execute(ctx context.Context, input json.RawMessage) (Result, error
 	if args.HeadLimit == 0 && args.OutputMode == "content" {
 		args.HeadLimit = 250
 	}
+	// files_with_matches/count: same protection as content mode (500 files,
+	// matching glob's cap). Set here so BOTH the rg path and the Go fallback
+	// formatters honor it - CI environments without ripgrep take the fallback.
+	if args.HeadLimit == 0 && (args.OutputMode == "files_with_matches" || args.OutputMode == "count") {
+		args.HeadLimit = maxFilesWithMatches
+	}
 
 	// Validate regex
 	flags := ""
@@ -699,6 +705,9 @@ func formatFilesWithMatches(matchedFiles map[string]bool, args grepArgs) Result 
 		sb.WriteString(p)
 		sb.WriteByte('\n')
 	}
+	if total > end {
+		fmt.Fprintf(&sb, "\n(showing %d-%d of %d files; pass head_limit to raise the cap or narrow the pattern/glob)", start+1, end, total)
+	}
 	fmt.Fprintf(&sb, "\n%d file(s) matched", total)
 	return Result{Content: sb.String()}
 }
@@ -730,6 +739,9 @@ func formatCount(fileCounts map[string]int, args grepArgs) Result {
 	for _, p := range paths {
 		c := fileCounts[p]
 		fmt.Fprintf(&sb, "%s: %d\n", p, c)
+	}
+	if total > end {
+		fmt.Fprintf(&sb, "\n(showing %d-%d of %d files; pass head_limit to raise the cap or narrow the pattern/glob)", start+1, end, total)
 	}
 	fmt.Fprintf(&sb, "\n%d file(s), %d match(es) total", total, totalMatches)
 	return Result{Content: sb.String()}

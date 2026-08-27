@@ -394,8 +394,10 @@ func TestGrepFilesModeCappedWithHint(t *testing.T) {
 	if err != nil || res.IsError {
 		t.Fatalf("execute failed: err=%v isErr=%v content=%s", err, res.IsError, res.Content)
 	}
-	if !strings.Contains(res.Content, "showing first 500 of 600 files") {
-		t.Errorf("expected cap hint 'showing first 500 of 600 files', got tail: ...%s", tail(res.Content, 200))
+	// Hint wording differs slightly between the rg path ("first 500 of 600")
+	// and the Go fallback ("1-500 of 600", which supports offset); accept both.
+	if !strings.Contains(res.Content, "500 of 600 files") || !strings.Contains(res.Content, "head_limit") {
+		t.Errorf("expected cap hint mentioning '500 of 600 files' + head_limit, got tail: ...%s", tail(res.Content, 200))
 	}
 	if !strings.Contains(res.Content, "600 file(s) matched") {
 		t.Errorf("total count must still be reported, got: ...%s", tail(res.Content, 120))
