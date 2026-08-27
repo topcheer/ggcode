@@ -1,5 +1,7 @@
 package auth
 
+import "fmt"
+
 // ---------------------------------------------------------------------------
 // OAuth2/OIDC Provider Presets
 // ---------------------------------------------------------------------------
@@ -112,7 +114,12 @@ func ResolveA2AAuth(provider, clientID, issuerURL, scopes string) (authorizeURL,
 
 	preset := ResolveProviderPreset(provider)
 	if preset == nil {
-		return "", "", "", "", nil // unknown provider, skip auth
+		// Issue #1174: an unknown provider name (e.g. a typo like "gihub") must
+		// fail fast with an explicit error. Silently skipping auth here dropped
+		// the whole auth block - including user-supplied client_id and
+		// issuer_url - and downgraded the server to public API key auth with
+		// no warning at all.
+		return "", "", "", "", fmt.Errorf("a2a auth: unknown provider %q (known providers: github, google, auth0, azure); fix the provider name or leave it empty and set client_id + issuer_url", provider)
 	}
 
 	resolvedScopes = scopes
@@ -127,6 +134,25 @@ func ResolveA2AAuth(provider, clientID, issuerURL, scopes string) (authorizeURL,
 	}
 
 	return preset.AuthorizeURL, preset.TokenURL, resolvedClientID, resolvedScopes, nil
+}
+
+// ResolveA2AIssuerURL derives the issuer URL used for token validation
+// (issue #1175). An explicitly configured issuer_url always wins. Otherwise
+// the preset's OIDC discovery URL is used - the token endpoint must never be
+// used as an issuer: it is not a valid issuer for JWT checks and appending
+// /.well-known/openid-configuration to it yields a 404, which broke JWT
+// signature refresh, issuer whitelisting, and opaque introspection all at
+// once. Presets without OIDC support (e.g. github) return "" and callers
+// must fail fast instead of fabricating a URL from TokenURL.
+func ResolveA2AIssuerURL(provider, issuerURL string) string {
+	if issuerURL != "" {
+		return issuerURL
+	}
+	p := ResolveProviderPreset(provider)
+	if p == nil {
+		return ""
+	}
+	return p.OIDCDiscovery
 }
 
 func stringsJoin(ss []string, sep string) string {

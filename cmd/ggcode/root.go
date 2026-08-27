@@ -1283,12 +1283,27 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 	// Wire OAuth2/OIDC token validation if configured
 	if cfg.A2A.Auth.OAuth2 != nil {
 		oc := cfg.A2A.Auth.OAuth2
-		_, _, clientID, _, _ := auth.ResolveA2AAuth(oc.Provider, oc.ClientID, oc.IssuerURL, oc.Scopes)
-		issuerURL := oc.IssuerURL
-		if issuerURL == "" && oc.Provider != "" {
-			if p := auth.ResolveProviderPreset(oc.Provider); p != nil {
-				issuerURL = p.TokenURL
-			}
+		// Issue #1174: propagate the resolve error - an unknown provider name
+		// must abort startup instead of silently disabling token validation.
+		_, _, clientID, _, err := auth.ResolveA2AAuth(oc.Provider, oc.ClientID, oc.IssuerURL, oc.Scopes)
+		if err != nil {
+			srv.Stop()
+			return nil, nil, nil, fmt.Errorf("a2a oauth2: %w", err)
+		}
+		// Issue #1174: refuse to silently run without token validation when an
+		// oauth2 auth block is present but resolves to nothing (fail-open
+		// downgrade to the public default API key would otherwise be invisible).
+		if clientID == "" {
+			srv.Stop()
+			return nil, nil, nil, fmt.Errorf("a2a oauth2: no client_id resolved (set client_id, or a provider with a default)")
+		}
+		// Issue #1175: derive the issuer from the OIDC discovery URL, never
+		// from the token endpoint - TokenURL is not a valid issuer and makes
+		// every validation path fail with per-request 401s.
+		issuerURL := auth.ResolveA2AIssuerURL(oc.Provider, oc.IssuerURL)
+		if issuerURL == "" {
+			srv.Stop()
+			return nil, nil, nil, fmt.Errorf("a2a oauth2: no issuer available for provider %q (preset has no OIDC discovery URL); set issuer_url explicitly", oc.Provider)
 		}
 		if issuerURL != "" && clientID != "" {
 			tv, err := auth.NewTokenValidator(clientID, issuerURL,
@@ -1304,12 +1319,21 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 	}
 	if cfg.A2A.Auth.OIDC != nil {
 		oc := cfg.A2A.Auth.OIDC
-		_, _, clientID, _, _ := auth.ResolveA2AAuth(oc.Provider, oc.ClientID, oc.IssuerURL, oc.Scopes)
-		issuerURL := oc.IssuerURL
-		if issuerURL == "" && oc.Provider != "" {
-			if p := auth.ResolveProviderPreset(oc.Provider); p != nil && p.OIDCDiscovery != "" {
-				issuerURL = p.OIDCDiscovery
-			}
+		// Issue #1174: propagate the resolve error instead of discarding it.
+		_, _, clientID, _, err := auth.ResolveA2AAuth(oc.Provider, oc.ClientID, oc.IssuerURL, oc.Scopes)
+		if err != nil {
+			srv.Stop()
+			return nil, nil, nil, fmt.Errorf("a2a oidc: %w", err)
+		}
+		// Issue #1174: fail fast when the oidc block resolves to nothing.
+		if clientID == "" {
+			srv.Stop()
+			return nil, nil, nil, fmt.Errorf("a2a oidc: no client_id resolved (set client_id, or a provider with a default)")
+		}
+		issuerURL := auth.ResolveA2AIssuerURL(oc.Provider, oc.IssuerURL)
+		if issuerURL == "" {
+			srv.Stop()
+			return nil, nil, nil, fmt.Errorf("a2a oidc: no issuer available for provider %q; set issuer_url explicitly", oc.Provider)
 		}
 		if issuerURL != "" && clientID != "" {
 			tv, err := auth.NewTokenValidator(clientID, issuerURL,
