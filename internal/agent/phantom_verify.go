@@ -96,22 +96,318 @@ var phantomClaimPatterns = map[string][]*regexp.Regexp{
 	},
 }
 
-// phantomCommandPatterns maps verification category to command/arg patterns that
-// count as ACTUALLY running that verification type.
-var phantomCommandPatterns = map[string]*regexp.Regexp{
-	phantomCatBuild: regexp.MustCompile(`(?i)\b(go\s+build|make\s+build|make|npm\s+run\s+build|cargo\s+build|cmake|gcc|clang|tsc\b|typescript|\.build|build\s+command)\b`),
-	phantomCatTest:  regexp.MustCompile(`(?i)\b(go\s+test|make\s+test|npm\s+test|yarn\s+test|pytest|cargo\s+test|jest|mocha|\.test\.|test\s+command)\b`),
-	phantomCatLint:  regexp.MustCompile(`(?i)\b(go\s+vet|golangci|eslint|flake8|pylint|ruff|rubocop|clang-tidy|shellcheck|lint|make\s+lint)\b`),
-	// #1150: test commands also satisfy compile and typecheck categories:
-	// "go test ./..." compiles every tested package (a compile failure yields
-	// "build failed"), so a passing test run strictly implies successful
-	// compilation and type checking. This also holds for cargo test and
-	// pytest. Without these entries, an already-verified statement such as
-	// "the code compiles cleanly" after a green go test would be misflagged.
-	phantomCatCompile: regexp.MustCompile(`(?i)\b(go\s+build|go\s+test|gcc|clang|cc\b|make\b|cmake|cargo\s+build|cargo\s+test|npm\s+run\s+build|tsc\b|compile|pytest)\b`),
-	// #1150: same reasoning as phantomCatCompile above.
-	phantomCatTypecheck: regexp.MustCompile(`(?i)\b(go\s+vet|go\s+build|go\s+test|tsc\b|--noEmit|mypy|pyright|flow\s+check|typecheck|cargo\s+test|pytest)\b`),
-	phantomCatCI:        regexp.MustCompile(`(?i)\bci_status\b`), // #593 P3: CI checks count as verification
+// Verification command classification (issue #1159)
+//
+// Categories are armed from a tokenized command string instead of substring
+// regexes over the raw text. Two disciplines are ported from
+// premature_success.go so both detectors agree on what counts as a
+// verification run:
+//
+//  1. Build-system target whitelists (issue #350): make, npm/yarn/pnpm/bun,
+//     mvn, gradle and cmake arm categories only when invoked with a
+//     whitelisted verify target. A bare "make", hygiene targets
+//     ("make clean") and service scripts ("npm run dev") arm nothing.
+//  2. Command-position matching (issue #553, extends #593 P4): category
+//     keywords are recognized only as the first token of a shell segment
+//     or immediately after a known runner prefix. Argument text such as
+//     grep -n "go test" main.go must not arm anything.
+//
+// Known limitation shared with psIsVerifyCommand: commands wrapped inside an
+// inner quoted shell string (sh -c "go test ./...") are not recognized,
+// because quoted arguments do not tokenize into sub-commands.
+
+// phantomVerifyTargetCategories maps a normalized whitelisted verify target
+// name to the phantom categories it grounds (issue #350 discipline).
+func phantomVerifyTargetCategories(target string) []string {
+	switch strings.ToLower(target) {
+	case "test", "tests", "e2e", "integration", "integration-test", "integrationtest":
+		return []string{phantomCatTest}
+	case "build":
+		return []string{phantomCatBuild, phantomCatCompile}
+	case "lint":
+		return []string{phantomCatLint}
+	case "typecheck":
+		return []string{phantomCatTypecheck}
+	}
+	return nil
+}
+
+func phantomArmsTarget(targets map[string]bool, target string) []string {
+	if !targets[strings.ToLower(target)] {
+		return nil
+	}
+	return phantomVerifyTargetCategories(target)
+}
+
+// phantomPlainVerbs arms categories when the token itself occupies command
+// position (segment head, or right after a runner or python -m prefix).
+var phantomPlainVerbs = map[string][]string{
+	"pytest":              {phantomCatTest},
+	"jest":                {phantomCatTest},
+	"mocha":               {phantomCatTest},
+	"eslint":              {phantomCatLint},
+	"flake8":              {phantomCatLint},
+	"pylint":              {phantomCatLint},
+	"ruff":                {phantomCatLint},
+	"rubocop":             {phantomCatLint},
+	"golangci":            {phantomCatLint},
+	"golangci-lint":       {phantomCatLint},
+	"clang-tidy":          {phantomCatLint},
+	"shellcheck":          {phantomCatLint},
+	"lint":                {phantomCatLint},
+	"typecheck":           {phantomCatTypecheck},
+	"tsc":                 {phantomCatBuild, phantomCatCompile, phantomCatTypecheck},
+	"mypy":                {phantomCatTypecheck},
+	"pyright":             {phantomCatTypecheck},
+	"gcc":                 {phantomCatBuild, phantomCatCompile},
+	"clang":               {phantomCatBuild, phantomCatCompile},
+	"cc":                  {phantomCatCompile},
+	"g++":                 {phantomCatCompile},
+	"run_command":         nil,
+	"start_command":       nil,
+	"wait_command":        nil,
+	"read_command_output": nil,
+	"task_output":         nil,
+	"ci_status":           {phantomCatCI}, // #593 P3: CI checks count as verification
+}
+
+// phantomRunners are tokens whose following token occupies command position
+// as a subcommand (issue #553), mirroring psRunnerPrefixes in
+// premature_success.go. The phantom command tools are included so their
+// names never break pairing when recordToolCall falls back to concatenating
+// them before the command (non-JSON payloads).
+var phantomRunners = map[string]bool{
+	"go":                  true,
+	"cargo":               true,
+	"uv":                  true,
+	"poetry":              true,
+	"npx":                 true,
+	"bunx":                true,
+	"dotnet":              true,
+	"deno":                true,
+	"ruby":                true,
+	"bundle":              true,
+	"flutter":             true,
+	"dart":                true,
+	"python":              true,
+	"python3":             true,
+	"swift":               true,
+	"time":                true,
+	"sudo":                true,
+	"env":                 true,
+	"timeout":             true,
+	"nice":                true,
+	"xargs":               true,
+	"verbose":             true,
+	"run":                 true,
+	"make":                true,
+	"gmake":               true,
+	"mingw32-make":        true,
+	"npm":                 true,
+	"yarn":                true,
+	"pnpm":                true,
+	"bun":                 true,
+	"mvn":                 true,
+	"mvnw":                true,
+	"gradle":              true,
+	"gradlew":             true,
+	"./gradlew":           true,
+	"cmake":               true,
+	"run_command":         true,
+	"start_command":       true,
+	"wait_command":        true,
+	"read_command_output": true,
+	"task_output":         true,
+}
+
+// phantomRunnerVerbs maps "<runner> <subcommand>" pairs for generic tool
+// runners. Build-system dispatchers (make/npm/mvn/...) are resolved against
+// their own whitelists instead and therefore do not appear here. "run" maps
+// conservatively so wrappers like "time npm run test" stay recognized.
+var phantomRunnerVerbs = map[string]map[string][]string{
+	"go": {
+		"build": {phantomCatBuild, phantomCatCompile, phantomCatTypecheck},
+		"test":  {phantomCatTest},
+		"vet":   {phantomCatLint, phantomCatTypecheck},
+	},
+	"cargo": {
+		"build": {phantomCatBuild, phantomCatCompile},
+		"test":  {phantomCatTest},
+	},
+	"run": {
+		"test":      {phantomCatTest},
+		"build":     {phantomCatBuild, phantomCatCompile},
+		"lint":      {phantomCatLint},
+		"typecheck": {phantomCatTypecheck},
+	},
+}
+
+// phantomSegmentOps split shell segments (#553). Flags and assignments are
+// ignored, matching psCommandPositionTokens semantics.
+func phantomIsSegmentOp(tok string) bool {
+	return tok == "|" || tok == "||" || tok == "&&" || tok == ";"
+}
+
+// phantomArmMake handles a segment headed by a make-family binary: the first
+// non-flag, non-assignment word is the target and only whitelisted targets
+// count (issue #350).
+func phantomArmMake(seg []string, cats map[string]bool) {
+	for _, t := range seg[1:] {
+		if strings.HasPrefix(t, "-") || strings.Contains(t, "=") {
+			continue
+		}
+		for _, c := range phantomArmsTarget(makeVerifyTargets, t) {
+			cats[c] = true
+		}
+	}
+}
+
+// phantomArmNpmScript resolves npm/yarn/pnpm/bun script scripts. Handled
+// unconditionally: these families never fall back to keyword matching (#350).
+func phantomArmNpmScript(seg []string, cats map[string]bool) {
+	scriptIdx := 1
+	if len(seg) < 2 {
+		return
+	}
+	if seg[1] == "run" {
+		if len(seg) < 3 {
+			return
+		}
+		scriptIdx = 2
+	}
+	for _, c := range phantomArmsTarget(npmVerifyScripts, seg[scriptIdx]) {
+		cats[c] = true
+	}
+}
+
+// phantomArmMvn scans maven phases for whitelisted verify phases (#350).
+func phantomArmMvn(seg []string, cats map[string]bool) {
+	for _, t := range seg[1:] {
+		for _, c := range phantomArmsTarget(mvnVerifyPhases, t) {
+			cats[c] = true
+		}
+	}
+}
+
+// phantomArmGradle scans gradle tasks against the whitelist (#350).
+func phantomArmGradle(seg []string, cats map[string]bool) {
+	for _, t := range seg[1:] {
+		if strings.HasPrefix(t, "-") {
+			continue
+		}
+		for _, c := range phantomArmsTarget(gradleVerifyTasks, t) {
+			cats[c] = true
+		}
+	}
+}
+
+// phantomArmGeneric applies command-position matching to one shell segment
+// that was not dispatched to a build-system whitelist family.
+func phantomArmGeneric(seg []string, cats map[string]bool) {
+	prevRunner := false
+	prevDashM := false // python -m pytest / python3 -m flake8
+	for i, t := range seg {
+		cmdPos := i == 0 || prevRunner || prevDashM
+		prevToken := ""
+		if i > 0 {
+			prevToken = seg[i-1]
+		}
+		switch prevToken {
+		case "make", "gmake", "mingw32-make":
+			for _, c := range phantomArmsTarget(makeVerifyTargets, t) {
+				cats[c] = true
+			}
+		case "npm", "yarn", "pnpm", "bun":
+			for _, c := range phantomArmsTarget(npmVerifyScripts, t) {
+				cats[c] = true
+			}
+		case "mvn", "mvnw":
+			for _, c := range phantomArmsTarget(mvnVerifyPhases, t) {
+				cats[c] = true
+			}
+		case "gradle", "gradlew", "./gradlew":
+			for _, c := range phantomArmsTarget(gradleVerifyTasks, t) {
+				cats[c] = true
+			}
+		case "cmake":
+			if cmakeVerifyTargets[t] || strings.HasPrefix(t, "--target=") {
+				cats[phantomCatBuild] = true
+				cats[phantomCatCompile] = true
+			}
+		default:
+			if verbs := phantomRunnerVerbs[prevToken]; cmdPos || prevRunner || prevDashM {
+				for _, c := range verbs[t] {
+					cats[c] = true
+				}
+			}
+			if cs := phantomPlainVerbs[t]; len(cs) > 0 && cmdPos {
+				for _, c := range cs {
+					cats[c] = true
+				}
+			}
+		}
+		prevRunner = phantomRunners[t]
+		prevDashM = t == "-m"
+	}
+}
+
+// phantomQuotedRe matches single- or double-quoted shell spans. Their
+// contents are documentation/search arguments, not commands (issue #553):
+// `grep -rn "go test" .` or `echo 'run go test later'` must not arm the
+// test category just because the words sit next to the runner verb "go"
+// after whitespace tokenization. Mirrors premature_success.go behavior,
+// where quoted inner strings are not recognized as sub-commands.
+var phantomQuotedRe = regexp.MustCompile(`"[^"]*"|'[^']*'`)
+
+// phantomArmSegment dispatches one shell segment to its build-system family
+// handler and reports whether a whitelist family claimed it (issue #350).
+// Unclaimed segments fall through to generic command-position matching.
+func phantomArmSegment(seg []string, cats map[string]bool) bool {
+	switch seg[0] {
+	case "make", "gmake", "mingw32-make":
+		phantomArmMake(seg, cats)
+	case "npm", "yarn", "pnpm", "bun":
+		phantomArmNpmScript(seg, cats)
+	case "mvn", "mvnw":
+		phantomArmMvn(seg, cats)
+	case "gradle", "gradlew", "./gradlew":
+		phantomArmGradle(seg, cats)
+	case "cmake":
+		for _, t := range seg[1:] {
+			if cmakeVerifyTargets[t] || strings.HasPrefix(t, "--target=") {
+				cats[phantomCatBuild] = true
+				cats[phantomCatCompile] = true
+			}
+		}
+	default:
+		return false
+	}
+	return true
+}
+
+// phantomArmCategories classifies cmdStr into verification categories and
+// records the result in cats (issue #1159). See the classification block
+// comment above for the enforced disciplines.
+func phantomArmCategories(cmdStr string, cats map[string]bool) {
+	tokens := strings.Fields(strings.ToLower(phantomQuotedRe.ReplaceAllString(cmdStr, " ")))
+	for i := 0; i < len(tokens); {
+		j := i
+		for j < len(tokens) && !phantomIsSegmentOp(tokens[j]) {
+			j++
+		}
+		seg := tokens[i:j]
+		if len(seg) > 0 && !phantomArmSegment(seg, cats) {
+			phantomArmGeneric(seg, cats)
+		}
+		i = j + 1 // skip the operator token itself
+	}
+
+	// issue #1150: passing tests compile and type-check every exercised
+	// package, so a test run satisfies those two categories as well.
+	if cats[phantomCatTest] {
+		cats[phantomCatCompile] = true
+		cats[phantomCatTypecheck] = true
+	}
 }
 
 // phantomCommandTools are tools whose "command" parameter should be checked
@@ -162,14 +458,14 @@ func (s *phantomVerifyState) reset() {
 // a FAILED verification must not arm the category (issue #593 P3).
 func (s *phantomVerifyState) recordToolCall(toolName string, toolInput string, isError bool) {
 	// Failed verifications do not count as having run a successful verification
-	// — they should not arm categories (issue #593 P3, aligned with #350 fix).
+	// - they should not arm categories (issue #593 P3, aligned with #350 fix).
 	if isError {
 		return
 	}
 
 	// Only check the "command" parameter for command execution tools (issue #593 P1).
 	// For file content tools (write_file, edit_file, etc.), we do NOT check the
-	// full arguments JSON — that would false-positive on content like
+	// full arguments JSON - that would false-positive on content like
 	// "notes about go test conventions" in the file being written.
 	var cmdStr string
 	if phantomCommandTools[toolName] {
@@ -187,11 +483,10 @@ func (s *phantomVerifyState) recordToolCall(toolName string, toolInput string, i
 		cmdStr = toolName
 	}
 
-	for cat, re := range phantomCommandPatterns {
-		if re.MatchString(cmdStr) {
-			s.categoriesRun[cat] = true
-		}
-	}
+	// Structural classification (issue #1159): whitelisted build-system
+	// targets and command-position keyword matching instead of substring
+	// regexes over the raw command text.
+	phantomArmCategories(cmdStr, s.categoriesRun)
 }
 
 // extractCommandArg extracts the "command" field value from a JSON arguments
