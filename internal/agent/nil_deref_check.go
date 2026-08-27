@@ -381,6 +381,16 @@ func processAssignment(assign *ast.AssignStmt, nilRisk map[string]nilRiskEntry) 
 		return
 	}
 
+	// #1166: comma-ok assignments are not error-return assignments. In
+	// `v, e := m[name]`, `v, e := x.(*T)` and `v, e := <-ch` the second
+	// return value is a bool, so an error-named receiver does not make
+	// the first value nil-risk. Skipping the mark also avoids the
+	// un-clearable false positive: the advisory path only recognizes
+	// `e == nil` / `e != nil` comparisons, never `if !e`.
+	if isCommaOkRhs(assign) {
+		return
+	}
+
 	// The non-error LHS values are nil-risk, associated with this error variable.
 	for i := 0; i < len(assign.Lhs)-1; i++ {
 		ident, ok := assign.Lhs[i].(*ast.Ident)
@@ -393,6 +403,23 @@ func processAssignment(assign *ast.AssignStmt, nilRisk map[string]nilRiskEntry) 
 			errName: errName.Name,
 		}
 	}
+}
+
+// isCommaOkRhs reports whether the assignment has the two-value comma-ok
+// shape (#1166): exactly two receivers and a single RHS expression of the
+// forms that yield (value, ok) - map index, type assertion, or channel
+// receive. Parenthesized expressions are unwrapped.
+func isCommaOkRhs(assign *ast.AssignStmt) bool {
+	if len(assign.Lhs) != 2 || len(assign.Rhs) != 1 {
+		return false
+	}
+	switch e := ast.Unparen(assign.Rhs[0]).(type) {
+	case *ast.IndexExpr, *ast.TypeAssertExpr:
+		return true
+	case *ast.UnaryExpr:
+		return e.Op == token.ARROW // channel receive
+	}
+	return false
 }
 
 // clearReassignedRisk permanently clears the nil risk of a variable that is

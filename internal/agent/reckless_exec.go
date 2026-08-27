@@ -43,6 +43,7 @@ package agent
 
 import (
 	"fmt"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -91,8 +92,9 @@ func (s *recklessExecState) recordReadTool(toolName, args string) {
 		return
 	}
 	for _, path := range recklessExtractPaths(toolName, args) {
+		key := recklessPathKey(path)
 		if len(s.readFiles) < recklessMaxTracked {
-			s.readFiles[path] = true
+			s.readFiles[key] = true
 		}
 	}
 }
@@ -105,13 +107,16 @@ func (s *recklessExecState) recordEditTool(toolName, args string) bool {
 	}
 
 	for _, path := range recklessExtractPaths(toolName, args) {
-		if s.editFiles[path] {
+		key := recklessPathKey(path)
+		if s.editFiles[key] {
 			continue // already tracked
 		}
-		s.editFiles[path] = true
+		s.editFiles[key] = true
 
-		// Check if this file was previously explored
-		if !s.readFiles[path] {
+		// Check if this file was previously explored (#1169: compare
+		// normalized forms so an absolute read and a relative edit of the
+		// same file count as explored).
+		if !s.wasExplored(key) {
 			s.unexplored++
 		}
 	}
@@ -150,6 +155,50 @@ func recklessIsExplorationTool(name string) bool {
 		"lsp_incoming_calls", "lsp_outgoing_calls", "lsp_prepare_call_hierarchy",
 		"git_show", "git_diff", "git_blame", "git_log":
 		return true
+	}
+	return false
+}
+
+// recklessPathKey normalizes a path for comparison (issue #1169). It
+// follows the readValidityKey pattern from read_validity_check.go (fix
+// #557): trim whitespace and apply filepath.Clean so read and edit calls
+// carrying the same path in different textual forms (./ prefixes, redundant
+// separators) compare equal.
+func recklessPathKey(p string) string {
+	return filepath.Clean(strings.TrimSpace(p))
+}
+
+// wasExplored reports whether the path was previously read, comparing
+// normalized keys. An exact match wins; otherwise a unique suffix match
+// tolerates absolute-vs-relative form differences (issue #1169, following
+// the readValidityKey suffix scan of fix #557/#627). Multiple distinct
+// suffix candidates are treated as unexplored: ambiguity means we cannot
+// prove the file was read.
+func (s *recklessExecState) wasExplored(path string) bool {
+	if s.readFiles[path] {
+		return true
+	}
+	match := ""
+	for k := range s.readFiles {
+		if recklessSuffixMatch(k, path) {
+			if match != "" {
+				return false // ambiguous: multiple distinct candidates
+			}
+			match = k
+		}
+	}
+	return match != ""
+}
+
+// recklessSuffixMatch reports whether one normalized path is the other
+// extended by a directory boundary, i.e. they refer to the same file
+// differing only in how much of the directory prefix is spelled out.
+func recklessSuffixMatch(a, b string) bool {
+	if len(a) > len(b) {
+		return strings.HasSuffix(a, b) && a[len(a)-len(b)-1] == '/'
+	}
+	if len(b) > len(a) {
+		return strings.HasSuffix(b, a) && b[len(b)-len(a)-1] == '/'
 	}
 	return false
 }

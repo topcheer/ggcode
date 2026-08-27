@@ -5,7 +5,7 @@ package agent
 // Research basis: SonarQube rule S107 (function-parameter-count), CodeClimate
 // "Too Many Parameters" engine, and Clean Code (Robert Martin) all flag functions
 // with too many parameters as a maintainability risk. Functions with >5 parameters
-// are harder to understand, test, and call correctly — parameter order confusion
+// are harder to understand, test, and call correctly - parameter order confusion
 // and missing arguments are common bug sources.
 //
 // This check fills a gap in ggcode's quality intelligence: while we have
@@ -146,13 +146,14 @@ func findExcessiveParams(src string) []paramCountInstance {
 			if ok {
 				instances = append(instances, inst)
 			}
-		case *ast.AssignStmt:
-			for _, e := range node.Rhs {
-				if lit, ok := e.(*ast.FuncLit); ok {
-					if inst := inspectFuncLit(lit, fset); inst != nil {
-						instances = append(instances, *inst)
-					}
-				}
+		// #1171: inspect every function literal wherever it appears -
+		// var declarations, call arguments, go/defer statements - not only
+		// direct RHS elements of `:=` assignments. ast.Inspect descends
+		// into nested literals individually, so removing the old
+		// AssignStmt branch avoids double counting.
+		case *ast.FuncLit:
+			if inst := inspectFuncLit(node, fset); inst != nil {
+				instances = append(instances, *inst)
 			}
 		}
 		return true
