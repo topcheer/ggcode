@@ -95,7 +95,7 @@ func (t Grep) Parameters() json.RawMessage {
 		},
 		"head_limit": {
 			"type": "integer",
-			"description": "Limit output to first N entries. Default 250. Use 0 for unlimited.",
+			"description": "Limit output to first N entries. Defaults: 250 in content mode, 500 in files_with_matches/count modes (a trailing summary shows how many were withheld). Use a large value deliberately if you truly need more.",
 			"minimum": 0
 		},
 		"offset": {
@@ -124,6 +124,10 @@ func (t Grep) Parameters() json.RawMessage {
 }
 
 // grepArgs holds all parsed arguments.
+// maxFilesWithMatches caps files_with_matches/count output when no explicit
+// head_limit is given. Matches glob's maxGlobResults convention.
+const maxFilesWithMatches = 500
+
 type grepArgs struct {
 	Pattern        string `json:"pattern"`
 	Path           string `json:"path"`
@@ -395,9 +399,25 @@ func formatGrepOutput(output string, args grepArgs) (Result, error) {
 		sort.SliceStable(sortedLines, func(i, j int) bool {
 			return pathDepth(sortedLines[i]) < pathDepth(sortedLines[j])
 		})
+		// Cap file-list output: without this, a broad pattern in a large repo
+		// dumps thousands of lines into context (files mode has no head_limit
+		// default, unlike content mode's 250). 500 matches glob's cap. The
+		// trailing summary tells the agent how much was withheld so it can
+		// narrow the pattern or raise head_limit deliberately.
+		limit := args.HeadLimit
+		if limit <= 0 {
+			limit = maxFilesWithMatches
+		}
+		shown := len(sortedLines)
+		if shown > limit {
+			sortedLines = sortedLines[:limit]
+		}
 		for _, l := range sortedLines {
 			sb.WriteString(l)
 			sb.WriteByte('\n')
+		}
+		if total > limit {
+			fmt.Fprintf(&sb, "\n(showing first %d of %d files; pass head_limit to raise the cap or narrow the pattern/glob)", limit, total)
 		}
 	}
 	if args.OutputMode == "files_with_matches" {

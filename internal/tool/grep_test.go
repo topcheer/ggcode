@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -374,4 +375,41 @@ func countNonEmptyLines(s string) int {
 		}
 	}
 	return n
+}
+
+// TestGrepFilesModeCappedWithHint pins the files_with_matches output cap: broad
+// patterns must not flood context, and the withheld count must be surfaced so
+// the agent can narrow or raise head_limit deliberately (truncation audit fix).
+func TestGrepFilesModeCappedWithHint(t *testing.T) {
+	// 600 files in a fake tree > maxFilesWithMatches (500)
+	dir := t.TempDir()
+	for i := 0; i < 600; i++ {
+		name := filepath.Join(dir, fmt.Sprintf("f%03d.txt", i))
+		if err := os.WriteFile(name, []byte("needle\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	res, err := Grep{}.Execute(context.Background(), json.RawMessage(
+		`{"pattern":"needle","path":"`+filepath.ToSlash(dir)+`","output_mode":"files_with_matches"}`))
+	if err != nil || res.IsError {
+		t.Fatalf("execute failed: err=%v isErr=%v content=%s", err, res.IsError, res.Content)
+	}
+	if !strings.Contains(res.Content, "showing first 500 of 600 files") {
+		t.Errorf("expected cap hint 'showing first 500 of 600 files', got tail: ...%s", tail(res.Content, 200))
+	}
+	if !strings.Contains(res.Content, "600 file(s) matched") {
+		t.Errorf("total count must still be reported, got: ...%s", tail(res.Content, 120))
+	}
+	// Count body lines: exactly 500 file lines, not 600.
+	got := strings.Count(res.Content, ".txt")
+	if got != 500 {
+		t.Errorf("expected 500 file lines in body, got %d", got)
+	}
+}
+
+func tail(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[len(s)-n:]
 }
