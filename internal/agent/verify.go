@@ -499,6 +499,16 @@ func (a *Agent) SetAutoVerify(enabled bool) {
 	a.mu.Unlock()
 }
 
+// AutoVerifyEnabled reports whether the post-loop automatic verification
+// pass is enabled for this agent. Subagent invariant tests rely on it:
+// only the main interactive/pipe agents are ever wired to the config, so
+// every other agent instance must report false.
+func (a *Agent) AutoVerifyEnabled() bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.autoVerify
+}
+
 // --- Rule injection into tool results ---
 
 // maxRuleInjectPerSession caps how many times the same rule can be injected
