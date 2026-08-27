@@ -99,11 +99,18 @@ var phantomClaimPatterns = map[string][]*regexp.Regexp{
 // phantomCommandPatterns maps verification category to command/arg patterns that
 // count as ACTUALLY running that verification type.
 var phantomCommandPatterns = map[string]*regexp.Regexp{
-	phantomCatBuild:     regexp.MustCompile(`(?i)\b(go\s+build|make\s+build|make|npm\s+run\s+build|cargo\s+build|cmake|gcc|clang|tsc\b|typescript|\.build|build\s+command)\b`),
-	phantomCatTest:      regexp.MustCompile(`(?i)\b(go\s+test|make\s+test|npm\s+test|yarn\s+test|pytest|cargo\s+test|jest|mocha|\.test\.|test\s+command)\b`),
-	phantomCatLint:      regexp.MustCompile(`(?i)\b(go\s+vet|golangci|eslint|flake8|pylint|ruff|rubocop|clang-tidy|shellcheck|lint|make\s+lint)\b`),
-	phantomCatCompile:   regexp.MustCompile(`(?i)\b(go\s+build|gcc|clang|cc\b|make\b|cmake|cargo\s+build|npm\s+run\s+build|tsc\b|compile)\b`),
-	phantomCatTypecheck: regexp.MustCompile(`(?i)\b(go\s+vet|go\s+build|tsc\b|--noEmit|mypy|pyright|flow\s+check|typecheck)\b`),
+	phantomCatBuild: regexp.MustCompile(`(?i)\b(go\s+build|make\s+build|make|npm\s+run\s+build|cargo\s+build|cmake|gcc|clang|tsc\b|typescript|\.build|build\s+command)\b`),
+	phantomCatTest:  regexp.MustCompile(`(?i)\b(go\s+test|make\s+test|npm\s+test|yarn\s+test|pytest|cargo\s+test|jest|mocha|\.test\.|test\s+command)\b`),
+	phantomCatLint:  regexp.MustCompile(`(?i)\b(go\s+vet|golangci|eslint|flake8|pylint|ruff|rubocop|clang-tidy|shellcheck|lint|make\s+lint)\b`),
+	// #1150: test commands also satisfy compile and typecheck categories:
+	// "go test ./..." compiles every tested package (a compile failure yields
+	// "build failed"), so a passing test run strictly implies successful
+	// compilation and type checking. This also holds for cargo test and
+	// pytest. Without these entries, an already-verified statement such as
+	// "the code compiles cleanly" after a green go test would be misflagged.
+	phantomCatCompile: regexp.MustCompile(`(?i)\b(go\s+build|go\s+test|gcc|clang|cc\b|make\b|cmake|cargo\s+build|cargo\s+test|npm\s+run\s+build|tsc\b|compile|pytest)\b`),
+	// #1150: same reasoning as phantomCatCompile above.
+	phantomCatTypecheck: regexp.MustCompile(`(?i)\b(go\s+vet|go\s+build|go\s+test|tsc\b|--noEmit|mypy|pyright|flow\s+check|typecheck|cargo\s+test|pytest)\b`),
 	phantomCatCI:        regexp.MustCompile(`(?i)\bci_status\b`), // #593 P3: CI checks count as verification
 }
 

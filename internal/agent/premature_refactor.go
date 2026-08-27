@@ -169,11 +169,13 @@ func isRefactoringContent(oldText, newText string) bool {
 		return false
 	}
 
-	// Check for refactoring keywords in the new text — whole-word only and
+	// Check for refactoring keywords in the new text - whole-word only,
 	// comment-line-excluded (#487 F2: bare substring matching fired on
 	// extractTargets / os.Rename / abstractHandler identifiers, and comment
 	// prose like "optimize later" describes intent without restructuring
-	// anything).
+	// anything). #1152 tightens the boundaries further: qualified/method
+	// access (os.Rename, df.rename, x.rename()) and bare call sites
+	// (rename(...) are APIs being invoked, not restructuring intent.
 	newLower := strings.ToLower(prStripCommentLines(newText))
 	for _, kw := range refactoringKeywords {
 		if prContainsWord(newLower, kw) {
@@ -308,6 +310,14 @@ func prStripCommentLines(s string) string {
 // prContainsWord reports whether s contains kw as a whole word: the bytes
 // adjacent to an occurrence must not be word characters. "extractTargets"
 // does not contain the word "extract"; "extract the helper" does (#487 F2).
+//
+// #1152 extends the boundary rules for code shapes that reuse refactoring
+// words as API names:
+//   - '.' immediately before the keyword marks qualified/method access
+//     (os.Rename(, df.rename, x.rename()): a call site in application code,
+//     not restructuring intent about this edit;
+//   - '(' immediately after the keyword marks a call expression
+//     (rename(...) invokes some function named rename; it is not prose).
 func prContainsWord(s, kw string) bool {
 	if kw == "" {
 		return false
@@ -316,10 +326,15 @@ func prContainsWord(s, kw string) bool {
 		if s[i:i+len(kw)] != kw {
 			continue
 		}
-		if i > 0 && prIsWordByte(s[i-1]) {
+		// Left neighbor: a word byte denies fragments like unrename; a '.'
+		// denies qualified forms like foo.rename and os.Rename (#1152).
+		if i > 0 && (prIsWordByte(s[i-1]) || s[i-1] == '.') {
 			continue
 		}
-		if i+len(kw) < len(s) && prIsWordByte(s[i+len(kw)]) {
+		end := i + len(kw)
+		// Right neighbor: a word byte denies identifiers like extractTargets;
+		// a '(' denies call forms like bare rename( or x.rename((#1152).
+		if end < len(s) && (prIsWordByte(s[end]) || s[end] == '(') {
 			continue
 		}
 		return true
@@ -327,6 +342,9 @@ func prContainsWord(s, kw string) bool {
 	return false
 }
 
+// prIsWordByte reports whether c can appear inside an identifier or
+// all-caps abbreviation (#487 F2). The qualifier '.' and the call marker
+// '(' are handled by prContainsWord's adjacency rules instead (#1152).
 func prIsWordByte(c byte) bool {
 	return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
 }

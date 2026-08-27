@@ -131,18 +131,103 @@ var verifyTools = map[string]bool{
 // Aliased to the canonical sourceMutatingTools superset (#738).
 var psEditTools = sourceMutatingTools
 
+// psJobRecord captures what agent-side bookkeeping knows about one
+// background command job started via start_command (#1153): whether its
+// originating command qualifies as a verification action, and the raw
+// command text for failure attribution.
+type psJobRecord struct {
+	isVerify bool
+	cmd      string
+}
+
+// psMaxTrackedJobs caps the job-id registry so long sessions cannot grow it
+// without bound (#1153). Oldest entries are evicted arbitrarily.
+const psMaxTrackedJobs = 64
+
 // prematureSuccessState tracks edits and verification across a run.
 type prematureSuccessState struct {
 	mu                  sync.Mutex
-	editsSinceVerify    int  // edits made since last verification
-	everVerified        bool // has any verification been done this run?
-	lastVerifyFailed    bool // last verification command errored (#350)
+	backgroundJobs      map[string]psJobRecord // start_command registry keyed by job_id (#1153)
+	editsSinceVerify    int                    // edits made since last verification
+	everVerified        bool                   // has any verification been done this run?
+	lastVerifyFailed    bool                   // last verification command errored (#350)
 	lastVerifyFailedCmd string
 	guidanceFired       int // how many times guidance was injected
 }
 
 func newPrematureSuccessState() *prematureSuccessState {
-	return &prematureSuccessState{}
+	return &prematureSuccessState{backgroundJobs: make(map[string]psJobRecord)}
+}
+
+// psExtractJobID parses the "Job ID:" header emitted by the tool layer's
+// formatCommandJobSnapshot rendering, linking a start_command RESULT to its
+// registry key (#1153). Returns "" when absent.
+func psExtractJobID(content string) string {
+	for _, ln := range strings.Split(content, "\n") {
+		ln = strings.TrimSpace(ln)
+		if v, ok := strings.CutPrefix(ln, "Job ID: "); ok && strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
+}
+
+// psParseJobStatus returns the lowercased first token of the "Status:"
+// header of a command-job snapshot rendering, "" when absent (#1153).
+func psParseJobStatus(content string) string {
+	for _, ln := range strings.Split(content, "\n") {
+		ln = strings.TrimSpace(ln)
+		if !strings.HasPrefix(ln, "Status: ") {
+			continue
+		}
+		st := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(ln, "Status: ")))
+		if idx := strings.IndexAny(st, " \t"); idx >= 0 {
+			st = st[:idx]
+		}
+		return st
+	}
+	return ""
+}
+
+// psTerminalVerifyOutcome classifies snapshot status against the underlying
+// JOB result (#1153): passed is true only for "completed"; failed /
+// cancelled / timed_out are explicit failures. The tools' IsError describes
+// whether the wait/read ACTION succeeded, not the job itself, so running
+// and unknown values are indeterminate and callers change nothing.
+func psTerminalVerifyOutcome(status string) (terminal bool, passed bool) {
+	switch status {
+	case "completed":
+		return true, true
+	case "failed", "cancelled", "timed_out", "timeout", "timedout":
+		return true, false
+	default:
+		return false, false
+	}
+}
+
+// psMarkVerifiedLocked records a passing verification outcome (#350/#595).
+// Caller must hold p.mu.
+func (p *prematureSuccessState) psMarkVerifiedLocked() {
+	p.editsSinceVerify = 0
+	p.everVerified = true
+	p.lastVerifyFailed = false
+	p.lastVerifyFailedCmd = ""
+}
+
+// psRegisterJobLocked adds a freshly started background job to the registry
+// keyed by job_id so later waits/reads can be attributed (#1153). Registry
+// size is capped at psMaxTrackedJobs.
+func (p *prematureSuccessState) psRegisterJobLocked(jobID, cmd string) {
+	if p.backgroundJobs == nil {
+		p.backgroundJobs = make(map[string]psJobRecord)
+	}
+	p.backgroundJobs[jobID] = psJobRecord{isVerify: psIsVerifyCommand(cmd), cmd: cmd}
+	for len(p.backgroundJobs) > psMaxTrackedJobs {
+		for k := range p.backgroundJobs {
+			delete(p.backgroundJobs, k)
+			break
+		}
+	}
 }
 
 func (p *prematureSuccessState) reset() {
@@ -157,9 +242,17 @@ func (p *prematureSuccessState) reset() {
 
 // recordToolCall updates state based on tool calls. isError is the tool
 // result's IsError flag (#350): a FAILED verification must not clear the
-// edit counter — a subsequent success claim then contradicts an observed
+// edit counter - a subsequent success claim would contradict an observed
 // failure, which is worse than claiming success without verifying at all.
-func (p *prematureSuccessState) recordToolCall(toolName string, args map[string]interface{}, isError bool) {
+// resultContent is the tool result text, used to correlate background jobs
+// (#1153).
+//
+// Background-job semantics (#1153): start_command only REGISTERS a job
+// (launching is not an outcome, mirroring correctionSpiral excluding
+// start_command from recordVerifyResult); wait_command / read_command_output
+// / task_output are attributed through their job_id, and grading comes from
+// the rendered job Status rather than IsError, which describes the action.
+func (p *prematureSuccessState) recordToolCall(toolName string, args map[string]interface{}, isError bool, resultContent string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -168,32 +261,72 @@ func (p *prematureSuccessState) recordToolCall(toolName string, args map[string]
 		return
 	}
 
-	if verifyTools[toolName] {
-		// For run_command and start_command, check if the command is actually
-		// a verify command (#595).
-		if toolName == "run_command" || toolName == "start_command" {
-			cmd, _ := args["command"].(string)
-			if !psIsVerifyCommand(cmd) {
-				return
-			}
-		}
-		if isError {
-			// Failed verification: do NOT reset the edit counter and do not
-			// count it as a passing verification. Record it so a later success
-			// claim can be flagged as contradicting an observed failure (#350).
-			p.lastVerifyFailed = true
-			if cmd, ok := args["command"].(string); ok {
-				p.lastVerifyFailedCmd = cmd
-			}
+	switch {
+	case toolName == "run_command":
+		cmd, _ := args["command"].(string)
+		if !psIsVerifyCommand(cmd) {
 			return
 		}
-		// Successful verification: clear edit counter and failure state.
-		// wait_command, task_output, read_command_output success results
-		// count as verification completion (#595).
-		p.editsSinceVerify = 0
-		p.everVerified = true
-		p.lastVerifyFailed = false
-		p.lastVerifyFailedCmd = ""
+		// For run_command, IsError reflects the command's own failure.
+		if isError {
+			p.lastVerifyFailed = true
+			p.lastVerifyFailedCmd = cmd
+			return
+		}
+		p.psMarkVerifiedLocked()
+
+	case toolName == "start_command":
+		// Launching never counts as verifying or failing (#1153): keep the
+		// counters untouched, exactly like correctionSpiral excludes
+		// start_command from recordVerifyResult. Only register the job so a
+		// later wait/read can be attributed.
+		if isError {
+			return
+		}
+		jobID := psExtractJobID(resultContent)
+		if jobID == "" {
+			return
+		}
+		cmd, _ := args["command"].(string)
+		p.psRegisterJobLocked(jobID, cmd)
+
+	case toolName == "wait_command" || toolName == "read_command_output" || toolName == "task_output":
+		jobID, _ := args["job_id"].(string)
+		if jobID == "" {
+			jobID, _ = args["task_id"].(string)
+		}
+		rec, tracked := p.backgroundJobs[jobID]
+		if !tracked || !rec.isVerify {
+			// An unregistered or non-verify job finishing says nothing about
+			// the task under development (#1153): conservatively leave
+			// editsSinceVerify and failure markers exactly as they are.
+			return
+		}
+		terminal, passed := psTerminalVerifyOutcome(psParseJobStatus(resultContent))
+		if !terminal {
+			// Still running (poll timeout) or unparsable status (#1153).
+			return
+		}
+		// Consumed once terminal so repeated waits do not re-grade.
+		delete(p.backgroundJobs, jobID)
+		if passed {
+			p.psMarkVerifiedLocked()
+			return
+		}
+		p.lastVerifyFailed = true
+		if rec.cmd != "" {
+			p.lastVerifyFailedCmd = rec.cmd
+		} else {
+			p.lastVerifyFailedCmd = "background job " + jobID
+		}
+
+	case verifyTools[toolName]: // ci_status and future members
+		if isError {
+			p.lastVerifyFailed = true
+			p.lastVerifyFailedCmd = ""
+			return
+		}
+		p.psMarkVerifiedLocked()
 	}
 }
 

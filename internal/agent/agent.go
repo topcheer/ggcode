@@ -3799,7 +3799,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.bareEditStreak.recordToolCall(tc.Name, string(tc.Arguments))
 			// Green build illusion: track source modifications, builds, and tests.
 			// Premature success claim: track edits and verification commands.
-			a.prematureSuccess.recordToolCall(tc.Name, psArgs, result.IsError)
+			a.prematureSuccess.recordToolCall(tc.Name, psArgs, result.IsError, result.Content) // #1153
 			// Phantom verification: track which verification categories were
 			// actually run, ignoring failures (issue #593 P3).
 			a.phantomVerify.recordToolCall(tc.Name, string(tc.Arguments), result.IsError)

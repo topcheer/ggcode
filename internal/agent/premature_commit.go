@@ -150,22 +150,26 @@ func (s *prematureCommitState) checkFirstEdit(editPaths []string) string {
 		return ""
 	}
 
-	// Check if the agent read files beyond the edit targets.
-	readBeyondEdit := false
+	// Count distinct files read beyond the edit targets (#1151). The old
+	// heuristic combined "at least 1 beyond-target read" with a total-read
+	// cutoff of 3 (which included edit-target reads), deviating from the
+	// documented rule in both directions: under-exempting when few but all-
+	// beyond-target files were read, and over-exempting when many target
+	// files padded the total.
 	editSet := make(map[string]bool)
 	for _, ep := range editPaths {
 		editSet[normalizeFilePath(ep)] = true
 	}
+	countBeyond := 0
 	for fr := range s.filesRead {
 		if !editSet[fr] {
-			readBeyondEdit = true
-			break
+			countBeyond++
 		}
 	}
 
 	// If the agent explored at least 2 files beyond the edit target, consider
-	// it sufficient even without search tools.
-	if readBeyondEdit && len(s.filesRead) >= 3 {
+	// it sufficient even without search tools (#1151).
+	if countBeyond >= 2 {
 		return ""
 	}
 
