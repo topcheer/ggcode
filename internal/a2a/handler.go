@@ -211,8 +211,18 @@ func (h *TaskHandler) Handle(ctx context.Context, skill string, input Message, e
 		return nil, fmt.Errorf("too many concurrent tasks (%d/%d)", active, h.maxTasks)
 	}
 
+	// Create cancellable context and install its cancel entry BEFORE publishing
+	// the task, in the same critical section. Publishing first (the old order)
+	// opened a window where CancelTask saw the task in h.tasks, marked it
+	// Canceled, but found no entry in h.cancels — taskCtx was never cancelled
+	// and the execute goroutine ran the full skill (with side effects) on a
+	// task the client had already seen as canceled.
+	taskID := generateID()
+	taskCtx, cancel := context.WithTimeout(context.Background(), h.timeout)
+	gen := h.installCancelLocked(taskID, cancel)
+
 	task := &Task{
-		ID:        generateID(),
+		ID:        taskID,
 		ContextID: generateID(),
 		Status:    TaskStatus{State: TaskStateSubmitted, Timestamp: time.Now()},
 		Skill:     skill,
@@ -224,12 +234,6 @@ func (h *TaskHandler) Handle(ctx context.Context, skill string, input Message, e
 	if input.MessageID != "" {
 		h.messageIndex[input.MessageID] = task.ID
 	}
-	h.mu.Unlock()
-
-	// Create cancellable context for this task.
-	taskCtx, cancel := context.WithTimeout(context.Background(), h.timeout)
-	h.mu.Lock()
-	gen := h.installCancelLocked(task.ID, cancel)
 	h.mu.Unlock()
 
 	// Execute asynchronously. Pass the installed generation so the goroutine

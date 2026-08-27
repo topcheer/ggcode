@@ -596,7 +596,16 @@ func (c *Client) Close() error {
 
 // sendRequest sends a JSON-RPC request via the transport and waits for response.
 func (c *Client) sendRequest(ctx context.Context, method string, params interface{}, timeout time.Duration) (json.RawMessage, error) {
-	result, err := c.transport.SendRequest(ctx, method, params, timeout)
+	// Snapshot the transport under the lock, like writeNotification et al.
+	// Close() nils c.transport after waiting only for the readLoop to exit;
+	// the prompt-send goroutine (acp.sendPromptRequest) can still be entering
+	// or parked in SendRequest at that point. Reading c.transport bare raced
+	// Close and nil-derefed the interface.
+	transport := c.transportSnapshot()
+	if transport == nil {
+		return nil, fmt.Errorf("acp: transport closed")
+	}
+	result, err := transport.SendRequest(ctx, method, params, timeout)
 	if err == nil {
 		return result, nil
 	}
