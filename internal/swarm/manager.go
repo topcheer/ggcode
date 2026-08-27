@@ -491,15 +491,30 @@ func (m *Manager) CancelAll() {
 	}
 
 	// Wait for all teammates' idle-runner goroutines to actually exit (with timeout).
+	// Per-teammate timeout budget (cron-2 review finding): a single shared
+	// timer let the first stuck teammate's timeout return immediately and
+	// abandon every later teammate in the list - including ones that had
+	// already exited and only needed their done signal consumed. Each channel
+	// now gets its own window; after the first expiry we stop blocking and
+	// only drain already-done channels non-blockingly, so the total worst
+	// case stays bounded at ~one timeout instead of N.
 	if len(doneChs) > 0 {
-		timeout := time.NewTimer(swarmCancelTimeout)
-		defer timeout.Stop()
+		timedOut := false
 		for _, ch := range doneChs {
+			if timedOut {
+				select {
+				case <-ch:
+				default:
+				}
+				continue
+			}
+			timer := time.NewTimer(swarmCancelTimeout)
 			select {
 			case <-ch:
-			case <-timeout.C:
-				return
+			case <-timer.C:
+				timedOut = true
 			}
+			timer.Stop()
 		}
 	}
 }

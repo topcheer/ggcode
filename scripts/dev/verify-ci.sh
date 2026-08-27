@@ -366,7 +366,12 @@ run_with_oom_retry() {
 # waiting is its only path to a green run. Override with
 # VERIFY_CI_SKIP_MEM_GATE=1.
 if [ "${VERIFY_CI_SKIP_MEM_GATE:-0}" != "1" ]; then
-  _avail="$(avail_mem_mb)"
+  # effective_avail_mb, not avail_mem_mb: the file-wide contract above requires
+  # every mem-gate check to respect the cgroup limit - on containerized runners
+  # host-level free memory stays high while the cgroup is exhausted, and gating
+  # on the host number let tier selection skip the downgrade and walk straight
+  # into cgroup OOM kills.
+  _avail="$(effective_avail_mb)"
   if [ -n "${_avail}" ] && [ "${_avail}" -lt "${VC_MEM_GATE_MB}" ]; then
     echo "[verify-ci] low available memory (${_avail}MiB < ${VC_MEM_GATE_MB}MiB); downgrading to tier 1"
     if [ "${VC_PINNED:-0}" != "1" ]; then
