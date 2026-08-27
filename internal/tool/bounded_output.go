@@ -45,7 +45,10 @@ func newBoundedOutputWriter(cap int) *boundedOutputWriter {
 	}
 }
 
-// Write implements io.Writer with bounded retention.
+// Write implements io.Writer with bounded retention. All cut points are
+// snapped to UTF-8 rune boundaries: a byte-level cut in the middle of a
+// multi-byte character (CJK, emoji) produces invalid UTF-8 fragments that
+// render as garbage in the TUI downstream.
 func (w *boundedOutputWriter) Write(p []byte) (int, error) {
 	n := len(p)
 	w.mu.Lock()
@@ -58,7 +61,11 @@ func (w *boundedOutputWriter) Write(p []byte) (int, error) {
 			w.head.Write(p)
 			return n, nil
 		}
-		w.head.Write(p[:room])
+		cut := snapForwardToRune(p, room)
+		w.head.Write(p[:cut])
+		// Bytes of a split rune dropped here are counted as overflow so the
+		// omitted-byte marker stays truthful.
+		w.overflow += int64(room - cut)
 		p = p[room:]
 	}
 
@@ -67,10 +74,23 @@ func (w *boundedOutputWriter) Write(p []byte) (int, error) {
 	w.tail = append(w.tail, p...)
 	if excess := len(w.tail) - 2*w.tailCap; excess > 0 {
 		w.overflow += int64(excess)
-		// Keep the newest tailCap bytes.
-		w.tail = append(w.tail[:0], w.tail[len(w.tail)-w.tailCap:]...)
+		// Keep the newest tailCap bytes, snapped forward to a rune boundary.
+		start := len(w.tail) - w.tailCap
+		snap := snapForwardToRune(w.tail, start)
+		w.overflow += int64(snap - start)
+		w.tail = append(w.tail[:0], w.tail[snap:]...)
 	}
 	return n, nil
+}
+
+// snapForwardToRune advances index i past any UTF-8 continuation bytes
+// (0b10xxxxxx) so that i lands on a rune start. Bounded to 3 bytes (the
+// longest possible partial sequence) to stay O(1).
+func snapForwardToRune(b []byte, i int) int {
+	for k := 0; k < 3 && i < len(b) && b[i]&0xC0 == 0x80; k++ {
+		i++
+	}
+	return i
 }
 
 // String reconstructs the retained output: head + marker + tail.

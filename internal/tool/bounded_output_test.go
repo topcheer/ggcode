@@ -1,10 +1,12 @@
 package tool
 
 import (
+	"bytes"
 	"fmt"
 	"strings"
 	"sync"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestBoundedOutputWriter_SmallOutputUnchanged(t *testing.T) {
@@ -90,4 +92,56 @@ func BenchmarkBoundedOutputWriter_HeavyStream(b *testing.B) {
 		}
 		_ = w.String()
 	}
+}
+
+// TestBoundedOutputWriterRuneSafeHeadCut: a multi-byte char straddling the
+// headCap boundary must not be split - the head cut snaps back to a rune
+// start and the dropped bytes are counted as overflow.
+func TestBoundedOutputWriterRuneSafeHeadCut(t *testing.T) {
+	// 3-byte CJK rune; headCap = 8. Write 7 ASCII bytes then force the cut
+	// mid-rune: 7 + first 1 byte of a 3-byte rune lands at exactly 8.
+	w := newBoundedOutputWriter(16) // headCap = 8
+	cjk := []byte("中")              // 3 bytes
+	w.Write([]byte("1234567"))      // 7 bytes
+	w.Write(append(append([]byte{}, cjk...), []byte("tail...")...))
+	out := w.String()
+	if !utf8.ValidString(out) {
+		t.Errorf("head cut split a rune, invalid UTF-8: %q", out)
+	}
+	if !strings.HasPrefix(out, "1234567") {
+		t.Errorf("head bytes lost, got %q", out)
+	}
+}
+
+// TestBoundedOutputWriterRuneSafeTailCompaction: tail compaction (2x tailCap)
+// must snap forward past continuation bytes instead of slicing mid-rune.
+func TestBoundedOutputWriterRuneSafeTailCompaction(t *testing.T) {
+	const capBytes = 4096 // min clamp, tailCap = 2048
+	w := newBoundedOutputWriter(capBytes)
+	// Feed enough CJK text that compaction fires many times, at effectively
+	// random byte alignments.
+	chunk := bytes.Repeat([]byte("中文输出"), 2000) // 4 runes x 3 bytes = 12 bytes, repeated
+	for len(chunk) > 0 {
+		n := 997 // awkward prime chunk size to vary alignment per Write
+		if n > len(chunk) {
+			n = len(chunk)
+		}
+		w.Write(chunk[:n])
+		chunk = chunk[n:]
+	}
+	out := w.String()
+	if !utf8.ValidString(out) {
+		t.Errorf("tail compaction split a rune, invalid UTF-8 near cut: %q", lastRunes(out, 20))
+	}
+	if !strings.Contains(out, "bytes of intermediate output dropped") {
+		t.Errorf("expected overflow marker, got tail: %q", lastRunes(out, 80))
+	}
+}
+
+func lastRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[len(r)-n:])
 }
