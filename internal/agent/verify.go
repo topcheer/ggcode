@@ -47,6 +47,10 @@ const maxSyncVerifyRetries = 3
 // available for the next user turn. No automatic retry — the user decides what
 // to do with the failure.
 func (a *Agent) asyncVerify(ctx context.Context, runStats *RunStats) {
+	if !a.autoVerify {
+		debug.Log("verify", "post-loop auto-verification disabled; in-loop verification is mandated by the system prompt")
+		return
+	}
 	mode := a.currentMode()
 	if mode == permission.PlanMode {
 		return
@@ -487,6 +491,14 @@ func extractText(msg provider.Message) string {
 	return ""
 }
 
+// SetAutoVerify enables/disables the post-loop automatic verification pass.
+// Disabled by default; wired from config verify.auto_after_run.
+func (a *Agent) SetAutoVerify(enabled bool) {
+	a.mu.Lock()
+	a.autoVerify = enabled
+	a.mu.Unlock()
+}
+
 // --- Rule injection into tool results ---
 
 // maxRuleInjectPerSession caps how many times the same rule can be injected
@@ -575,6 +587,10 @@ func (a *Agent) injectRulesIntoResult(toolName string, args json.RawMessage, res
 // verification passes — including passes on a retry round after auto-repair
 // (the old design only skipped first-attempt passes).
 func (a *Agent) syncVerifyAndGate(ctx context.Context, runStats *RunStats, retryCount int) (shouldContinue, passed bool) {
+	if !a.autoVerify {
+		debug.Log("verify", "post-loop auto-verification disabled; in-loop verification is mandated by the system prompt")
+		return false, false
+	}
 	workingDir := a.WorkingDir()
 	if workingDir == "" {
 		return false, false

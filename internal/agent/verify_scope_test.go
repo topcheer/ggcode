@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -63,5 +64,46 @@ func TestBuildVerifyOraclePromptCapsFileList(t *testing.T) {
 		if !strings.Contains(prompt, d) {
 			t.Errorf("overflow summary missing dir %q", d)
 		}
+	}
+}
+
+// TestPostLoopVerifyDisabledByDefault pins the off-by-default contract: the
+// post-loop verification pass must NOT run unless explicitly opted in via
+// verify.auto_after_run. The system prompt already mandates in-loop scoped
+// verification; a second whole-pass at loop end duplicated it and its
+// failure injection could loop the agent on phantom errors.
+func TestPostLoopVerifyDisabledByDefault(t *testing.T) {
+	a := NewAgent(nil, nil, "", 10)
+
+	var progress []string
+	a.SetVerifyCallbacks(func(s string) { progress = append(progress, s) }, nil)
+
+	rs := &RunStats{FilesEdited: []string{"x/y.go"}}
+	a.syncVerifyAndGate(context.Background(), rs, 0) // must be a silent no-op
+	a.asyncVerify(context.Background(), rs)
+
+	if len(progress) != 0 {
+		t.Errorf("default-off must short-circuit before any progress, got: %v", progress)
+	}
+}
+
+// TestPostLoopVerifyOptInRestoresBehavior: with SetAutoVerify(true) the pass
+// engages (progress fires) even without a provider or build system - the
+// oracle simply decides nothing and the run skips cleanly.
+func TestPostLoopVerifyOptInRestoresBehavior(t *testing.T) {
+	dir := t.TempDir()
+	a := NewAgent(nil, nil, "", 10)
+	a.SetWorkingDir(dir)
+	a.SetAutoVerify(true)
+
+	var progress []string
+	a.SetVerifyCallbacks(func(s string) { progress = append(progress, s) }, nil)
+
+	rs := &RunStats{FilesEdited: []string{"x/y.go"}, ToolCalls: map[string]int{"edit_file": 1}}
+	a.syncVerifyAndGate(context.Background(), rs, 0)
+	a.asyncVerify(context.Background(), rs)
+
+	if len(progress) == 0 {
+		t.Error("opt-in must re-engage post-loop verification")
 	}
 }

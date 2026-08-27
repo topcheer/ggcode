@@ -282,6 +282,7 @@ type Config struct {
 	Impersonation     ImpersonationConfig        `yaml:"impersonation,omitempty" json:"impersonation,omitempty"`
 	KnightConfig      KnightConfig               `yaml:"knight,omitempty" json:"knight,omitempty"`
 	Swarm             SwarmConfig                `yaml:"swarm,omitempty" json:"swarm,omitempty"`
+	Verify            VerifyConfig               `yaml:"verify,omitempty" json:"verify,omitempty"`
 	A2A               A2AConfig                  `yaml:"a2a,omitempty" json:"a2a,omitempty"`
 	LanChat           LanChatConfig              `yaml:"lanchat,omitempty" json:"lanchat,omitempty"`
 	Stream            stream.StreamConfig        `yaml:"stream,omitempty" json:"stream,omitempty"`
@@ -377,7 +378,17 @@ type SubAgentConfig struct {
 	ShowOutput    bool          `yaml:"show_output"`
 }
 
-// SwarmConfig holds swarm/team multi-agent configuration.
+// VerifyConfig controls the post-loop automatic verification pass.
+// Disabled by default: the system prompt already mandates that the model
+// verifies its own changes inside the loop (scoped to what changed), which
+// current models do reliably; a second whole-pass at loop end duplicated
+// that work, added wall-clock latency, and its failure injection could loop
+// the agent on phantom errors (e.g. whole-repo pipelines exceeding the
+// verify budget). Opt in for weaker models that tend to claim success
+// without testing.
+type VerifyConfig struct {
+	AutoAfterRun bool `yaml:"auto_after_run" json:"auto_after_run"` // run build/test verification after the agent loop
+}
 type SwarmConfig struct {
 	MaxTeammatesPerTeam int           `yaml:"max_teammates_per_team"` // default: 16
 	TeammateTimeout     time.Duration `yaml:"teammate_timeout"`       // default: 0 (no timeout, run until task completes)
