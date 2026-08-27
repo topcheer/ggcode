@@ -44,6 +44,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 const (
@@ -144,7 +145,11 @@ func savePerfBaseline(workingDir string, runs []perfBaselineEntry) {
 		debug.Log("perf-baseline", "failed to marshal: %v", err)
 		return
 	}
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	// #1167: write via temp file + rename so a concurrent session never
+	// observes a truncated or half-written baseline (which would silently
+	// disable regression detection) and a failed write never leaves a
+	// partial file behind. Same pattern as ratchet.go save().
+	if err := util.AtomicWriteFile(path, data, 0644); err != nil {
 		debug.Log("perf-baseline", "failed to write: %v", err)
 	}
 }

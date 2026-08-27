@@ -426,8 +426,17 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 						debug.Log("anthropic", "message_start usage: input_tokens=%d output_tokens=%d cache_read=%d cache_write=%d",
 							event.Message.Usage.InputTokens, event.Message.Usage.OutputTokens,
 							event.Message.Usage.CacheReadInputTokens, event.Message.Usage.CacheCreationInputTokens)
-						cacheWriteTokens = int(event.Message.Usage.CacheCreationInputTokens)
-						cacheReadTokens = int(event.Message.Usage.CacheReadInputTokens)
+						// #1168: same non-zero guard for cache counters - a
+						// duplicate or out-of-order message_start (retried or
+						// resumed stream) carrying a zeroed Usage must not
+						// wipe cache tokens already accumulated via
+						// message_delta, matching the #722 inputTokens guard.
+						if event.Message.Usage.CacheCreationInputTokens > 0 {
+							cacheWriteTokens = int(event.Message.Usage.CacheCreationInputTokens)
+						}
+						if event.Message.Usage.CacheReadInputTokens > 0 {
+							cacheReadTokens = int(event.Message.Usage.CacheReadInputTokens)
+						}
 					}
 				}
 
