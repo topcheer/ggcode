@@ -134,7 +134,7 @@ require (
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
 	github.com/tkrajina/go-reflector v0.5.8 // indirect
-	github.com/topcheer/ggcode-acp-go v0.1.5 // indirect
+	github.com/topcheer/ggcode-acp-go v0.1.6 // indirect
 	github.com/topcheer/mdns v1.2.1 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
