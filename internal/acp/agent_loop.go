@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -193,6 +194,8 @@ func NewAgentLoop(
 	al.loadProjectMemory()
 
 	// --- AskUser handler: route through ACP permission request ---
+	// #1116: handlers are stored per session on a registry-level dispatcher
+	// instead of overwriting a shared SetHandler slot.
 	al.setupAskUserHandler()
 
 	return al
@@ -344,6 +347,12 @@ func (al *AgentLoop) ExecutePrompt(ctx context.Context, prompt []ContentBlock) e
 			})
 		}
 	}
+
+	// #1116: tag the run context with this loop's session ID so ask_user can
+	// dispatch to THIS loop's handler even when other sessions have loops
+	// created later. Without the tag, every ask_user call from this session
+	// would resolve against whichever loop was constructed last.
+	ctx = context.WithValue(ctx, acpAskUserSessionKey{}, al.session.ID)
 
 	err := al.agent.RunStreamWithContent(ctx, providerContent, onEvent)
 	if err != nil {
@@ -632,7 +641,137 @@ func (al *AgentLoop) requestClientWriteFile(ctx context.Context, path, content s
 	return nil
 }
 
-// setupAskUserHandler wires up the ask_user tool to route through ACP
+// acpAskUserSessionKey is the context key that tags a prompt run with its ACP
+// session ID so ask_user dispatch finds the originating loop (#1116).
+type acpAskUserSessionKey struct{}
+
+// acpAskUserMu serializes dispatcher installation across concurrent AgentLoop
+// constructors (#1116).
+var acpAskUserMu sync.Mutex
+
+// acpAskUserSession wraps the ask_user slot in a shared tool registry so each
+// AgentLoop carries its own handler keyed by session ID (#1116).
+//
+// The previously installed *tool.AskUserTool singleton has exactly one
+// handler slot; every NewAgentLoop called SetHandler and the last-created
+// loop won, mis-routing session A's questions into session B's UI.
+// The dispatcher delegates schema methods to the base singleton (unchanged
+// prompts/metadata) and dispatches execution by the session ID carried on
+// the run context (tagged in ExecutePrompt).
+type acpAskUserSession struct {
+	mu       sync.RWMutex
+	handlers map[string]tool.AskUserHandler
+	base     *tool.AskUserTool
+}
+
+func newACPAskUserSession(base *tool.AskUserTool) *acpAskUserSession {
+	return &acpAskUserSession{
+		handlers: make(map[string]tool.AskUserHandler),
+		base:     base,
+	}
+}
+
+func (s *acpAskUserSession) setHandler(sessionID string, h tool.AskUserHandler) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.handlers[sessionID] = h
+}
+
+func (s *acpAskUserSession) handlerFor(ctx context.Context) (tool.AskUserHandler, bool) {
+	sessionID, _ := ctx.Value(acpAskUserSessionKey{}).(string)
+	if sessionID == "" {
+		return nil, false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	h, ok := s.handlers[sessionID]
+	return h, ok
+}
+
+func (s *acpAskUserSession) Name() string { return s.base.Name() }
+
+// sessionIDOf extracts the #1116 run-context session tag, if any.
+func sessionIDOf(ctx context.Context) string {
+	id, _ := ctx.Value(acpAskUserSessionKey{}).(string)
+	return id
+}
+
+func (s *acpAskUserSession) Description() string { return s.base.Description() }
+
+func (s *acpAskUserSession) Parameters() json.RawMessage { return s.base.Parameters() }
+
+// Execute mirrors tool.AskUserTool.Execute's normalization/post-processing,
+// then routes to the per-session handler (#1116). Duplicated here because
+// AskUserTool internals are unexported and internal/tool is out of scope.
+func (s *acpAskUserSession) Execute(ctx context.Context, input json.RawMessage) (tool.Result, error) {
+	var req tool.AskUserRequest
+	if err := json.Unmarshal(input, &req); err != nil {
+		return tool.Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
+	}
+	handler, ok := s.handlerFor(ctx)
+	if !ok {
+		tag := sessionIDOf(ctx)
+		if tag == "" {
+			// No session tag on the context: defer to the singleton's legacy
+			// default handler so callers that bypass ExecutePrompt keep their
+			// pre-#1116 behavior.
+			return s.base.Execute(ctx, input)
+		}
+		// Tagged but no handler registered for this session (cancelled or
+		// unknown): fail cleanly - traffic must never leak to another
+		// session's default (#1116).
+		return tool.Result{IsError: true, Content: fmt.Sprintf("ask_user has no handler for ACP session %q", tag)}, nil
+	}
+	resp, err := handler(ctx, req)
+	if err != nil {
+		return tool.Result{IsError: true, Content: fmt.Sprintf("ask_user failed: %v", err)}, nil
+	}
+	if strings.TrimSpace(resp.Status) == "" {
+		resp.Status = tool.AskUserStatusSubmitted
+	}
+	if strings.TrimSpace(resp.Title) == "" {
+		resp.Title = req.Title
+	}
+	if resp.QuestionCount == 0 {
+		resp.QuestionCount = len(req.Questions)
+	}
+	if resp.AnsweredCount == 0 && len(resp.Answers) > 0 {
+		for _, answer := range resp.Answers {
+			if answer.Answered {
+				resp.AnsweredCount++
+			}
+		}
+	}
+	data, err := json.MarshalIndent(resp, "", "  ")
+	if err != nil {
+		return tool.Result{IsError: true, Content: fmt.Sprintf("marshal ask_user response: %v", err)}, nil
+	}
+	return tool.Result{Content: string(data)}, nil
+}
+
+// ensureAskUserDispatcher installs the per-session dispatcher under the
+// registry's ask_user name (replacing the plain singleton once), returning
+// the active dispatcher (#1116).
+func ensureAskUserDispatcher(registry *tool.Registry, base *tool.AskUserTool) *acpAskUserSession {
+	acpAskUserMu.Lock()
+	defer acpAskUserMu.Unlock()
+
+	cur, _ := registry.Get("ask_user")
+	if disp, ok := cur.(*acpAskUserSession); ok {
+		return disp
+	}
+	disp := newACPAskUserSession(base)
+	if !registry.Unregister("ask_user") {
+		return nil
+	}
+	if err := registry.Register(disp); err != nil {
+		// Best effort restore of the original singleton slot.
+		_ = registry.Register(base)
+		return nil
+	}
+	return disp
+}
+
 // session/request_permission. For single/multi choice questions, the choices
 // are mapped to PermissionOption entries. For text questions, we provide
 // Submit/Cancel options (the IDE may support freeform text in the permission UI).
@@ -641,12 +780,19 @@ func (al *AgentLoop) setupAskUserHandler() {
 	if !ok {
 		return
 	}
-	askUser, ok := askTool.(*tool.AskUserTool)
-	if !ok {
+	// #1116: accept either the raw singleton (first construction) or an
+	// already-installed per-session dispatcher (loop rebuilds reuse it).
+	var base *tool.AskUserTool
+	switch t := askTool.(type) {
+	case *tool.AskUserTool:
+		base = t
+	case *acpAskUserSession:
+		base = t.base
+	default:
 		return
 	}
 
-	askUser.SetHandler(func(ctx context.Context, req tool.AskUserRequest) (tool.AskUserResponse, error) {
+	handler := func(ctx context.Context, req tool.AskUserRequest) (tool.AskUserResponse, error) {
 		// Build permission options from the first question's choices
 		var options []PermissionOption
 		var question tool.AskUserQuestion
@@ -777,5 +923,21 @@ func (al *AgentLoop) setupAskUserHandler() {
 		}
 
 		return resp, nil
-	})
+	}
+
+	// #1116: register the handler keyed by THIS session's ID instead of
+	// overwriting the shared tool singleton blindly. With >=2 concurrent
+	// sessions the old SetHandler-per-loop scheme let the last-created loop
+	// capture every session's ask_user traffic (same last-writer-wins class
+	// as #1047). The base singleton also keeps this handler as a legacy
+	// default so untagged callers (paths outside ExecutePrompt) keep their
+	// pre-#1116 behavior.
+	disp := ensureAskUserDispatcher(al.registry, base)
+	if disp == nil {
+		debug.Log("acp", "ask_user dispatcher installation failed for session %s", al.session.ID)
+		return
+	}
+	disp.setHandler(al.session.ID, handler)
+	base.SetHandler(handler)
+	debug.Log("acp", "ask_user handler registered for session %s", al.session.ID)
 }

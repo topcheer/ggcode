@@ -24,7 +24,7 @@ import (
 type Server struct {
 	handler        *TaskHandler
 	card           AgentCard
-	cardMu         sync.RWMutex    // guards card (read in HTTP handlers, written by setters) #565 C
+	cardMu         sync.RWMutex    // guards card AND extendedCard (read in HTTP handlers, written by setters) #565 C #1114
 	extendedCard   json.RawMessage // optional extended agent card
 	apiKeys        []string
 	server         *http.Server
@@ -491,11 +491,34 @@ func (s *Server) handleMessageStream(w http.ResponseWriter, r *http.Request, req
 	w.Header().Set("Connection", "keep-alive")
 
 	// Send current task status (not hardcoded working). #1073
-	t, _ := s.handler.GetTask(task.ID)
+	// #1113: honor GetTask's ok - the task can be swept between Handle
+	// returning and this read (same race family as #1094/#1111); the
+	// unconditional deref below would nil-panic the handler goroutine.
+	t, ok := s.getTaskOrSSEError(w, flusher, req.ID, task.ID)
+	if !ok {
+		return
+	}
+	// #1115: if the task is ALREADY terminal here (messageId dedup-retry of
+	// a completed task, or execution finished before this handler reached
+	// the subscription point), emit artifacts plus exactly ONE final status
+	// and stop. Falling through would re-send both from the done==nil
+	// branch below, producing a duplicate final:true - the A2A stream
+	// terminator - which strict clients reject.
+	if t.Status.State.IsTerminal() {
+		for _, art := range t.Artifacts {
+			s.sendSSE(w, flusher, req.ID, TaskArtifactUpdateEvent{
+				TaskID:    t.ID,
+				Artifact:  art,
+				LastChunk: true,
+			})
+		}
+		s.sendSSE(w, flusher, req.ID, TaskStatusUpdateEvent{TaskID: t.ID, Status: t.Status, Final: true})
+		return
+	}
 	s.sendSSE(w, flusher, req.ID, TaskStatusUpdateEvent{
 		TaskID: task.ID,
 		Status: t.Status,
-		Final:  t.Status.State.IsTerminal(),
+		Final:  false, // non-terminal: guaranteed by the branch above
 	})
 
 	// Wait for task to reach terminal state.
@@ -505,11 +528,14 @@ func (s *Server) handleMessageStream(w http.ResponseWriter, r *http.Request, req
 	}
 	done := s.handler.GetTaskDone(task.ID)
 	if done == nil {
-		// Already terminal. #565 D: the task finished before this handler
-		// reached the subscription point (Handle runs synchronously), so the
-		// <-done path below never runs — emit artifacts here too or a
-		// fast-completing task would stream a bare terminal status.
-		t, _ := s.handler.GetTask(task.ID)
+		// Task reached terminal between the non-terminal status event above
+		// and this read. #565 D: emit artifacts here too or a fast-completing
+		// task would stream a bare terminal status. #1113: honor ok - the
+		// sweep race applies at this second read as well.
+		t, ok := s.getTaskOrSSEError(w, flusher, req.ID, task.ID)
+		if !ok {
+			return
+		}
 		for _, art := range t.Artifacts {
 			s.sendSSE(w, flusher, req.ID, TaskArtifactUpdateEvent{
 				TaskID:    t.ID,
@@ -528,9 +554,8 @@ func (s *Server) handleMessageStream(w http.ResponseWriter, r *http.Request, req
 	case <-done:
 		// #1111: same defensive ok check as send/resubscribe (#1094) - the
 		// task may be swept before this read; t.Artifacts would nil-panic.
-		t, ok := s.handler.GetTask(task.ID)
+		t, ok := s.getTaskOrSSEError(w, flusher, req.ID, task.ID)
 		if !ok {
-			s.sendSSEError(w, flusher, req.ID, ErrTaskNotFound.Code, ErrTaskNotFound.Message)
 			return
 		}
 		// #565 D: emit artifact events before the terminal status so the
@@ -859,19 +884,27 @@ func (s *Server) handlePushConfigDelete(w http.ResponseWriter, req *JSONRPCReque
 // ---------------------------------------------------------------------------
 
 func (s *Server) handleGetExtendedCard(w http.ResponseWriter, req *JSONRPCRequest) {
-	if len(s.extendedCard) == 0 {
+	// #1114: read under cardMu - SetExtendedCard (hot config setter) can
+	// swap the card concurrently with this HTTP read; the unsynchronized
+	// pair was a direct `go test -race` hit.
+	s.cardMu.RLock()
+	card := s.extendedCard
+	s.cardMu.RUnlock()
+	if len(card) == 0 {
 		writeRPCError(w, req.ID, ErrExtendedCardNotConfigured)
 		return
 	}
 	var result interface{}
-	json.Unmarshal(s.extendedCard, &result)
+	json.Unmarshal(card, &result)
 	writeRPCResult(w, req.ID, result)
 }
 
 // SetExtendedCard sets the optional extended agent card content.
 func (s *Server) SetExtendedCard(card json.RawMessage) {
-	s.extendedCard = card
+	// #1114: guard the extendedCard write with cardMu as well - the setter
+	// can run concurrently with handleGetExtendedCard reads.
 	s.cardMu.Lock()
+	s.extendedCard = card
 	if len(card) > 0 {
 		s.card.Capabilities.ExtendedAgentCard = true
 	}
@@ -1038,6 +1071,20 @@ func (s *Server) firePushNotifications(taskID string, payload StreamResponse) {
 // ---------------------------------------------------------------------------
 // Response helpers
 // ---------------------------------------------------------------------------
+
+// getTaskOrSSEError fetches the task for an SSE response; on a sweep miss
+// (the #1094/#1111/#1113 race family: cleanupExpiredTasksLocked can delete
+// a terminal task between completion signaling and a later read) it emits
+// the TaskNotFound SSE error and reports ok=false. Without this the
+// unconditional derefs would nil-panic the handler goroutine.
+func (s *Server) getTaskOrSSEError(w http.ResponseWriter, flusher http.Flusher, reqID json.RawMessage, taskID string) (*Task, bool) {
+	t, ok := s.handler.GetTask(taskID)
+	if !ok {
+		s.sendSSEError(w, flusher, reqID, ErrTaskNotFound.Code, ErrTaskNotFound.Message)
+		return nil, false
+	}
+	return t, true
+}
 
 // writeTaskResultOrNotFound writes the task as the JSON-RPC result, or the
 // ErrTaskNotFound error when GetTask reports the task was swept (the

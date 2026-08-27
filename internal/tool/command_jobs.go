@@ -23,6 +23,13 @@ const (
 	// clamp before multiplying anywhere a seconds value enters Duration math.
 	maxCommandTimeoutSeconds = 86400 // one day
 	maxCommandLogLines       = 400
+	// #1118: the ring buffer bounded only line COUNT, so a single pathological
+	// line (e.g. a multi-MB minified JSON blob) was stored unbounded and
+	// streamed back in full on every read_command_output/wait_command poll.
+	// Cap each buffered line's bytes at ingestion, and cap total formatted
+	// output at the snapshot/format layer.
+	maxCommandLineBytes     = 8 * 1024
+	maxCommandSnapshotBytes = 64 * 1024
 )
 
 type CommandJobStatus string
@@ -387,7 +394,9 @@ func (j *CommandJob) appendOutput(chunk string) {
 		j.partial = ""
 		parts = parts[:len(parts)-1]
 	} else {
-		j.partial = parts[len(parts)-1]
+		// #1118: an unterminated streaming line accumulates into partial;
+		// cap it too or a no-newline dump flows back whole via snapshot().
+		j.partial = truncateJobLine(parts[len(parts)-1])
 		parts = parts[:len(parts)-1]
 	}
 	for _, line := range parts {
@@ -435,6 +444,10 @@ func (j *CommandJob) finish(status CommandJobStatus, errText string) {
 
 func (j *CommandJob) addLineLocked(line string) {
 	j.TotalLines++
+	// #1118: bound per-line bytes so one oversized line cannot push megabytes
+	// into agent context through later snapshots. Line-count semantics
+	// (TotalLines / BufferedFrom sliding window) are unchanged.
+	line = truncateJobLine(line)
 	if len(j.Lines) == maxCommandLogLines {
 		j.Lines = j.Lines[1:]
 		j.BufferedFrom++
@@ -498,6 +511,35 @@ func selectCommandLines(lines []string, bufferedFrom, tailLines, sinceLine int) 
 	return append([]string(nil), selected...), truncated
 }
 
+// truncateJobLine bounds a single buffered command-output line to
+// maxCommandLineBytes (#1118). It keeps head and tail in the spirit of
+// truncateMiddle so callers still see the line start plus the most recent
+// bytes (where errors usually live), split by a clearly recognizable marker.
+func truncateJobLine(line string) string {
+	if len(line) <= maxCommandLineBytes {
+		return line
+	}
+	headEnd := util.SnapToRuneStart(line, maxCommandLineBytes/2)
+	tailStart := util.SnapToRuneStart(line, len(line)-maxCommandLineBytes/4)
+	if headEnd >= tailStart {
+		tailStart = headEnd
+	}
+	omitted := len(line) - ((headEnd) + (len(line) - tailStart))
+	marker := fmt.Sprintf("\n... [truncated: %d of %d bytes omitted - single-line cap %d bytes] ...\n", omitted, len(line), maxCommandLineBytes)
+	return line[:headEnd] + marker + line[tailStart:]
+}
+
+// capCommandOutputText bounds fully rendered command output at the
+// snapshot/format layer (#1118), reusing truncateMiddle semantics so both
+// ends stay visible. Applied to job snapshots and formatting helpers that
+// aggregate many (already per-line-capped) lines.
+func capCommandOutputText(s, label string) string {
+	if len(s) > maxCommandSnapshotBytes {
+		return truncateMiddle(s, maxCommandSnapshotBytes, label)
+	}
+	return s
+}
+
 func formatCommandJobSnapshot(snapshot CommandJobSnapshot, includeLines bool) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Job ID: %s\n", snapshot.ID))
@@ -526,7 +568,9 @@ func formatCommandJobSnapshot(snapshot CommandJobSnapshot, includeLines bool) st
 			}
 		}
 	}
-	return strings.TrimRight(sb.String(), "\n")
+	// #1118: total byte ceiling over the rendered snapshot; per-line caps
+	// alone still allowed up to maxCommandLogLines x maxCommandLineBytes.
+	return strings.TrimRight(capCommandOutputText(sb.String(), "background job output"), "\n")
 }
 
 func summarizeCommandProgress(result string) string {

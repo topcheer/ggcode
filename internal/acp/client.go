@@ -201,10 +201,21 @@ func (c *Client) Start(ctx context.Context) error {
 
 	// Start read loop
 	readCtx, cancelRead := context.WithCancel(context.Background())
+	// #1117: cancel any prior generation's read context BEFORE overwriting
+	// c.cancelRead. If a previous Start's readLoop returned via EOF/read
+	// error it historically left its ctx uncancelled; a later Start then
+	// overwrote c.cancelRead and the stale ctx leaked together with every
+	// async handleAgentRequest goroutine spawned on it (a Desktop approval
+	// can block up to 15 min). The read-loop defer added below covers this
+	// case directly; this overwrite-guard is defensive for any future path
+	// that abandons a generation without running the defer.
+	if c.cancelRead != nil {
+		c.cancelRead()
+	}
 	c.cancelRead = cancelRead
 	c.done = make(chan struct{})
 	c.mu.Unlock()
-	safego.Go("acp.readLoop", func() { c.readLoop(readCtx) })
+	c.spawnReadLoop(readCtx, cancelRead)
 
 	// Perform initialize handshake
 	if err := c.initialize(ctx); err != nil {
@@ -652,6 +663,18 @@ func (c *Client) getReadErr() error {
 }
 
 // ---------- read loop ----------
+
+// spawnReadLoop launches the read loop with a caller-side guarantee that its
+// generation's readCtx is cancelled whenever the loop exits (#1117). The old
+// inline safego.Go wiring cancelled the ctx only via Stop()/Close(); EOF and
+// read-error returns from readLoop never called cancelRead, so once a later
+// Start() overwrote c.cancelRead the orphaned context leaked.
+func (c *Client) spawnReadLoop(readCtx context.Context, cancelRead context.CancelFunc) {
+	safego.Go("acp.readLoop", func() {
+		defer cancelRead() // #1117: release this generation even on EOF/read-error return
+		c.readLoop(readCtx)
+	})
+}
 
 func (c *Client) readLoop(ctx context.Context) {
 	defer close(c.done)

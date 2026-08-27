@@ -528,7 +528,10 @@ func commandSnapshotOutput(snapshot CommandJobSnapshot) string {
 	if sb.Len() == 0 {
 		return "Command completed with no output."
 	}
-	return sb.String()
+	// #1118: job snapshots had no total-output byte cap; reuse truncateMiddle
+	// semantics here so the auto-background return path cannot stream the full
+	// ring buffer (up to 400 x per-line cap) into agent context.
+	return capCommandOutputText(sb.String(), "command output")
 }
 
 // Clone returns an independent copy of this tool for use by a different agent.
