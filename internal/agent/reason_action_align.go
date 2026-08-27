@@ -135,9 +135,15 @@ const raAlignmentWindow = 3
 // categories, gets the multi-intent exemption (issue #1162): such intents are
 // fulfilled by executing ANY of the listed intentions across the window and
 // are never escalated to a categorical-mismatch warning.
+// ";" is deliberately absent (#1176): a bare semicolon is ordinary punctuation
+// that appears inside code snippets, URLs, and plain prose far more often
+// than in explicitly sequenced plans, so including it exempted nearly every
+// turn that contained intent phrases and pushed the detector to systematic
+// false negatives. Prose that truly sequences with a semicolon ("verify X;
+// then commit") still matches "then".
 var raCoordinationMarkers = []string{
 	"first", "then", "next", "before", "after that",
-	"afterwards", "step 1", "step 2", ";",
+	"afterwards", "step 1", "step 2",
 }
 
 // raPendingIntent tracks a stated intent whose category did not match any
