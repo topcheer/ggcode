@@ -501,6 +501,23 @@ func notifyErrorBody(data json.RawMessage) string {
 	return "An error occurred"
 }
 
+// teardownChatBridge tears down the active chat bridge and its owned
+// resources before the workspace/chat layer is rebuilt (#1183). Shared by
+// switchWorkspace and CompleteOnboard: re-running onboarding without this
+// cleanup leaked the previous bridge's JSONL session lock, A2A server
+// port, tunnel share, and IM adapters, and left OnStreamEvent wired so the
+// frontend received doubled events from old and new bridges.
+func (a *App) teardownChatBridge() {
+	a.stopShare()
+	a.stopIMAdapters()
+	if a.chat != nil {
+		a.chat.Cancel()
+		a.chat.Close()
+		a.chat = nil
+		wailskit.SetChatBridge(nil)
+	}
+}
+
 func (a *App) switchWorkspace(dir string) error {
 	dir = strings.TrimSpace(dir)
 	if dir == "" {
@@ -513,14 +530,8 @@ func (a *App) switchWorkspace(dir string) error {
 		return fmt.Errorf("workspace directory does not exist: %s", dir)
 	}
 
-	a.stopShare()
-	a.stopIMAdapters()
-	if a.chat != nil {
-		a.chat.Cancel()
-		a.chat.Close()
-		a.chat = nil
-		wailskit.SetChatBridge(nil)
-	}
+	// #1183: reuse the shared teardown path (share/IM/bridge close).
+	a.teardownChatBridge()
 	// chdir is guaranteed to succeed because we verified the dir above.
 	a.workDir = dir
 	_ = os.Chdir(dir)
@@ -592,7 +603,12 @@ func (a *App) CompleteOnboard(vendor, endpoint, model, apiKey string) error {
 			return err
 		}
 	}
-	// Reload chat bridge with new config
+	// Reload chat bridge with new config. #1183: tear down the previous
+	// bridge first - re-running onboarding used to call initWorkspace
+	// directly, leaking the old bridge's JSONL session lock, A2A server
+	// port, tunnel share and IM adapters, and double-emitting events from
+	// both the old and new bridge.
+	a.teardownChatBridge()
 	return a.initWorkspace(a.workDir)
 }
 
