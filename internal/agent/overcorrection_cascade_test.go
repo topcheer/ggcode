@@ -110,6 +110,40 @@ func TestOvercorrectionMaxWarn(t *testing.T) {
 	}
 }
 
+func TestOvercorrectionSmallEditKeepsPendingErr(t *testing.T) {
+	// A sub-minimum edit is deemed too small to assess, so it must not
+	// consume the pending error anchor: a later assessable edit following a
+	// small edit should still be recorded against the original severity.
+	s := newOvercorrectionState()
+	s.pendingErr = severitySevere
+
+	// Small edit: no warning, and pendingErr must survive.
+	hint := s.recordEdit(overcorrectionMinEditBytes-1, "a.go")
+	if hint != "" {
+		t.Fatalf("small edit should never warn, got: %s", hint)
+	}
+	if s.pendingErr != severitySevere {
+		t.Fatalf("small edit must not consume pendingErr, got %v", s.pendingErr)
+	}
+
+	// Large edit afterwards must still be recorded as an entry (assessed
+	// against the preserved severe severity), not silently dropped by the
+	// pendingErr==severityNone early return.
+	hint = s.recordEdit(20000, "a.go")
+	if s.pendingErr != severityNone {
+		t.Fatalf("assessable edit should consume pendingErr, got %v", s.pendingErr)
+	}
+	found := false
+	for _, e := range s.entries {
+		if e.editSize == 20000 && e.errorSeverity == severitySevere {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("large edit after small edit should be recorded with severe severity")
+	}
+}
+
 func TestOvercorrectionReset(t *testing.T) {
 	s := newOvercorrectionState()
 	s.pendingErr = severityTrivial

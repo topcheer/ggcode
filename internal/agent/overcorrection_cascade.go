@@ -172,13 +172,15 @@ func (s *overcorrectionState) recordEdit(size int, filePath string) string {
 		return ""
 	}
 
-	// Clear the pending error regardless (this edit addresses it)
 	errSev := s.pendingErr
-	s.pendingErr = severityNone
-	s.stepsSinceError = 0
 
-	// Edits below minimum size are never overcorrections
+	// Edits below minimum size are never overcorrections. They must NOT
+	// consume the pending error either: an edit the detector itself deems too
+	// small to assess must not destroy the attribution anchor a later,
+	// assessable edit needs. Only reset the step counter so the error can
+	// still expire via the stale-error path.
 	if size < overcorrectionMinEditBytes {
+		s.stepsSinceError = 0
 		s.entries = append(s.entries, overcorrectionEntry{
 			errorSeverity: errSev,
 			editSize:      size,
@@ -188,6 +190,9 @@ func (s *overcorrectionState) recordEdit(size int, filePath string) string {
 		s.trimWindow()
 		return ""
 	}
+
+	// Assessable edit: this edit addresses the pending error, consume it.
+	s.pendingErr = severityNone
 
 	overcorrected := isOvercorrection(errSev, size)
 
