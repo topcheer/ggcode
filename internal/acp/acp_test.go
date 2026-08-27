@@ -691,7 +691,7 @@ func TestHandlerSessionSetMode(t *testing.T) {
 	// Set mode
 	modeParams := SessionSetModeParams{SessionID: sessionID, Mode: "bypass"}
 	modeParamsJSON, _ := json.Marshal(modeParams)
-	_, err := h.handleSessionSetMode(modeParamsJSON)
+	_, err = h.handleSessionSetMode(modeParamsJSON)
 	if err != nil {
 		t.Fatalf("handleSessionSetMode error: %v", err)
 	}
