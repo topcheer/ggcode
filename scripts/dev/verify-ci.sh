@@ -122,16 +122,17 @@ effective_avail_mb() {
   fi
 }
 
-# wait_for_memory: block until available memory recovers (>=1500 MiB) or a
-# 120s cap elapses. Philosophy: forward progress at tier 1 beats waiting.
-# Monitored/caller-timed runs die by wall-clock just as surely as by OOM,
-# so this is a short breather for a transient spike to pass - never a long
-# stall. The 10min predecessor caused exactly that stall: under sustained
-# co-tenant pressure the run spent its whole life sleeping in gates and was
-# killed for slowness with the same bare "signal: killed".
+# wait_for_memory: block until available memory recovers (>=1500 MiB) or the
+# given cap (default 120s) elapses. Returns as soon as pressure clears.
+# Caps are chosen by the caller's tier philosophy: while downgrades remain,
+# forward progress at a lower tier beats waiting (short cap); once at the
+# tier-1 floor with memory still short, proceeding is near-certain death,
+# so patience (long cap) is the only survival strategy under SUSTAINED
+# co-tenant storms - transient spikes clear in seconds either way.
 wait_for_memory() {
+  local max_wait="${1:-120}"
   local waited=0 avail
-  while [ "${waited}" -lt 120 ]; do
+  while [ "${waited}" -lt "${max_wait}" ]; do
     avail="$(effective_avail_mb)"
     if [ -z "${avail}" ] || [ "${avail}" -ge 1500 ]; then
       return 0
@@ -295,20 +296,23 @@ run_with_oom_retry() {
   log="$(mktemp -t verifyci)"
   backoff=20
   for attempt in 1 2 3 4 5; do
-    # Gate before EVERY attempt (incl. the first): on shared machines a
-    # concurrent agent workload can spike memory between checks. Under
-    # pressure the answer is DOWNGRADE AND GO, not wait - tier 1 needs only
-    # ~1.5GiB, which fits almost any momentary state; stalling for pressure
-    # to clear costs wall-clock the caller may not have. Cheap no-op when
-    # memory is plentiful.
+    # Gate before EVERY attempt (incl. the first). Tier-aware patience:
+    #   - tier > 1 and memory short: DOWNGRADE AND GO - a lower tier needs
+    #     less memory, so forward progress is safer than waiting.
+    #   - already at tier 1 and memory short: proceeding is near-certain
+    #     death (single vet/test processes still need GiBs), so wait LONG
+    # for the sustained co-tenant storm to pass. Cheap no-op otherwise.
     if [ "${VERIFY_CI_SKIP_MEM_GATE:-0}" != "1" ]; then
       _avail="$(effective_avail_mb)"
       if [ -n "${_avail}" ] && [ "${_avail}" -lt "${VC_MEM_GATE_MB}" ]; then
-        echo "[verify-ci] ${desc}: low available memory (${_avail}MiB < ${VC_MEM_GATE_MB}MiB) before attempt ${attempt}; downgrading concurrency and proceeding"
-        if [ "${VC_PINNED:-0}" != "1" ]; then
+        if [ "${VC_PINNED:-0}" != "1" ] && [ "${VC_P}" -gt 1 ]; then
+          echo "[verify-ci] ${desc}: low available memory (${_avail}MiB < ${VC_MEM_GATE_MB}MiB) before attempt ${attempt}; downgrading concurrency and proceeding"
           while [ "${VC_P}" -gt 1 ]; do downgrade_tier; done
+          wait_for_memory 120
+        else
+          echo "[verify-ci] ${desc}: low available memory (${_avail}MiB < ${VC_MEM_GATE_MB}MiB) at tier 1 before attempt ${attempt}; waiting up to 10min for the storm to pass"
+          wait_for_memory 600
         fi
-        wait_for_memory
       fi
     fi
     if "$@" >"${log}" 2>&1; then
@@ -324,11 +328,20 @@ run_with_oom_retry() {
         rm -f "${log}"
         return 1
       fi
-      echo "[verify-ci] ${desc} was OOM-killed (attempt ${attempt}/5); downgrading concurrency and proceeding (avail=$(avail_mem_mb 2>/dev/null || echo '?')MiB)"
+      echo "[verify-ci] ${desc} was OOM-killed (attempt ${attempt}/5); downgrading concurrency (avail=$(avail_mem_mb 2>/dev/null || echo '?')MiB)"
       if [ "${VC_PINNED:-0}" != "1" ]; then
         downgrade_tier
       fi
-      wait_for_memory
+      # Tier-aware patience after a kill: at tier 1 there is nothing left to
+      # downgrade into - the process footprint itself exceeds free memory,
+      # so waiting out the storm (long) is the only strategy that changes
+      # the outcome; above tier 1 the downgrade plus a short breather (120s)
+      # suffices for transient spikes.
+      if [ "${VC_P}" -eq 1 ]; then
+        wait_for_memory 600
+      else
+        wait_for_memory 120
+      fi
       sleep "${backoff}"
       # Cap backoff growth at 60s: under sustained pressure the previous
       # 20->60->180->540s ladder alone burned ~15min of wall-clock, which a
@@ -346,18 +359,20 @@ run_with_oom_retry() {
 }
 
 # Startup memory gate: on shared machines the run may start while memory
-# pressure is already high. Forward progress beats waiting: downgrade to
-# tier 1 immediately and go - tier 1 fits ~1.5GiB, so only a near-exhausted
-# machine stalls at all, and only briefly (120s cap). Override with
+# pressure is already high. Tier-aware patience (same philosophy as the
+# per-attempt gate): downgrade to tier 1 first - lower tiers need less
+# memory - and only when already at the floor, wait out a sustained storm
+# (long cap); a near-exhausted machine cannot run even tier-1 vet, so
+# waiting is its only path to a green run. Override with
 # VERIFY_CI_SKIP_MEM_GATE=1.
 if [ "${VERIFY_CI_SKIP_MEM_GATE:-0}" != "1" ]; then
   _avail="$(avail_mem_mb)"
   if [ -n "${_avail}" ] && [ "${_avail}" -lt "${VC_MEM_GATE_MB}" ]; then
-    echo "[verify-ci] low available memory (${_avail}MiB < ${VC_MEM_GATE_MB}MiB); downgrading to tier 1 and proceeding"
+    echo "[verify-ci] low available memory (${_avail}MiB < ${VC_MEM_GATE_MB}MiB); downgrading to tier 1"
     if [ "${VC_PINNED:-0}" != "1" ]; then
       while [ "${VC_P}" -gt 1 ]; do downgrade_tier; done
     fi
-    wait_for_memory
+    wait_for_memory 600
   fi
 fi
 
