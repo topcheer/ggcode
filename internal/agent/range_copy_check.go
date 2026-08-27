@@ -22,10 +22,18 @@ package agent
 // semantics for range VALUES were NOT changed. The bug persists in all Go
 // versions including 1.26+.
 //
-// The only exception: if the slice element type is a POINTER (*T), then the
-// range value is a copy of the pointer, and modifying *through* the pointer
-// does affect the original. Without full type information we use heuristics
-// to reduce false positives for pointer slices.
+// Pointer-element exception, syntax-level best effort (#1157): when the
+// range expression ITSELF reveals pointer elements -- composite literals
+// typed []*T or map[K]*T, or make([]*T, ...) / append calls carrying that
+// shape -- writes through the range value DO reach the original collection
+// and no warning is issued. Bare identifiers hide the element type, so those
+// ranges keep the default warning behavior even when the true element type
+// is *T; this false-positive class is accepted because full accuracy needs
+// go/types analysis, not syntax alone.
+//
+// STATUS: this detector is currently NOT registered in the write-integrity
+// check registry (dormant since the fc5c4aad critical-only trim). The notes
+// above describe its behavior for a future revival.
 //
 // Competitor analysis:
 //   - Claude Code: no inline detection
@@ -39,6 +47,8 @@ package agent
 // variable (e.g., `item.Field = ...`). Also detect address-of (&item) passed
 // to functions, which is another sign of the copy misunderstanding.
 // Delta-aware: only flags patterns newly introduced by this edit.
+// Ranges whose expression is syntactically inferable as holding pointers
+// (see the pointer-element exception above) are skipped entirely (#1157).
 
 import (
 	"fmt"
@@ -136,6 +146,13 @@ func findRangeCopyMods(filename, src string) []rangeCopyInfo {
 
 		valueVarName := valueIdent.Name
 
+		// Pointer-element collections such as []*T propagate mutations made
+		// through the range value, so suppress reporting for shapes the AST
+		// lets us infer confidently (#1157).
+		if rangeExprHasPointerElems(forStmt.X) {
+			return true
+		}
+
 		// Walk the body looking for field modifications and address-of patterns.
 		ast.Inspect(forStmt.Body, func(bodyNode ast.Node) bool {
 			if field := findRangeFieldAssign(bodyNode, valueVarName); field != "" {
@@ -198,6 +215,54 @@ func isRangeValueAddrOf(bodyNode ast.Node, valueVarName string) bool {
 		if ok && ident.Name == valueVarName {
 			return true
 		}
+	}
+	return false
+}
+
+// rangeExprHasPointerElems reports whether a range expression is syntactically
+// inferable as holding POINTER elements (#1157): a composite literal typed
+// []T / [N]T / map[K]T with *T in the element or value position, a make call
+// constructing such a type, or an append call whose leading slice operand has
+// that shape (including nested make/append forms). Mutating fields through
+// range values of pointer-element collections reaches the original data, so
+// such loops must not be warned about. Uninferable expressions (bare
+// identifiers, no shape available at syntax level) return false, preserving
+// the original warning behavior.
+func rangeExprHasPointerElems(expr ast.Expr) bool {
+	switch e := ast.Unparen(expr).(type) {
+	case *ast.CompositeLit:
+		return typeExprHasPointerElem(e.Type)
+	case *ast.CallExpr:
+		ident, ok := ast.Unparen(e.Fun).(*ast.Ident)
+		if !ok {
+			return false
+		}
+		switch ident.Name {
+		case "make":
+			if len(e.Args) > 0 {
+				return typeExprHasPointerElem(e.Args[0])
+			}
+		case "append":
+			if len(e.Args) > 0 {
+				// Covers append([]*T{...}, ...) and nested forms like
+				// append(make([]*T, 0, n), ...).
+				return rangeExprHasPointerElems(e.Args[0])
+			}
+		}
+	}
+	return false
+}
+
+// typeExprHasPointerElem reports whether a type expression declares POINTER
+// values: [N]*T, []*T, or map[K]*T. Keys and length expressions do not matter.
+func typeExprHasPointerElem(typeExpr ast.Expr) bool {
+	switch t := ast.Unparen(typeExpr).(type) {
+	case *ast.ArrayType:
+		_, ok := ast.Unparen(t.Elt).(*ast.StarExpr)
+		return ok
+	case *ast.MapType:
+		_, ok := ast.Unparen(t.Value).(*ast.StarExpr)
+		return ok
 	}
 	return false
 }

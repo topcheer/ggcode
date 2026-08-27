@@ -3,6 +3,7 @@ package agent
 import (
 	"strings"
 	"sync"
+	"unicode"
 
 	"github.com/topcheer/ggcode/internal/debug"
 )
@@ -213,27 +214,79 @@ func extractJSONStringFieldQC(json, field string) string {
 	return b.String()
 }
 
+// qcIsCJK reports whether r belongs to one of the CJK writing systems that
+// are treated as connected text during tokenization (#1156). ASCII word
+// boundaries do not exist inside CJK runs, so CJK runes must participate in
+// tokens instead of acting as separators.
+func qcIsCJK(r rune) bool {
+	return unicode.In(r, unicode.Han, unicode.Hiragana, unicode.Katakana, unicode.Hangul)
+}
+
 // qcTokenize converts a query string into a set of lowercase tokens.
+//
+// ASCII alphanumeric runs become whole-word tokens as before. Consecutive
+// CJK text becomes overlapping rune bigrams (#1156):
+//   - character-wise tokens would be discarded by the short-token rule and
+//     would lose shared-prefix information between related queries;
+//   - whole-run tokens would collapse unrelated queries sharing any prefix
+//     into identical sets.
+//
+// A lone single-rune CJK run keeps its rune so minimal CJK queries stay
+// visible instead of producing an empty token set. Mixed CJK/ASCII queries
+// contribute tokens from both scripts.
 func qcTokenize(s string) map[string]bool {
-	s = strings.ToLower(s)
-	// Split on non-alphanumeric
-	fields := strings.FieldsFunc(s, func(r rune) bool {
-		return !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_')
-	})
-	tokens := make(map[string]bool, len(fields))
-	for _, f := range fields {
-		if len(f) <= 1 {
-			continue
+	tokens := make(map[string]bool)
+	var word strings.Builder
+	var cjkRun []rune
+
+	flushWord := func() {
+		if word.Len() == 0 {
+			return
+		}
+		w := word.String()
+		word.Reset()
+		if len(w) <= 1 {
+			return
 		}
 		// Skip very common stop words
-		switch f {
+		switch w {
 		case "the", "and", "for", "with", "that", "this", "from", "into",
 			"are", "was", "not", "but", "all", "can", "has", "have",
 			"will", "your", "youre", "find", "search":
-			continue
+			return
 		}
-		tokens[f] = true
+		tokens[w] = true
 	}
+	flushCJK := func() {
+		switch len(cjkRun) {
+		case 0:
+		case 1:
+			// Keep the single rune so one-character CJK queries still enter
+			// the query window instead of being dropped entirely.
+			tokens[string(cjkRun)] = true
+		default:
+			for i := 0; i+1 < len(cjkRun); i++ {
+				tokens[string(cjkRun[i:i+2])] = true
+			}
+		}
+		cjkRun = cjkRun[:0]
+	}
+
+	for _, r := range strings.ToLower(s) {
+		switch {
+		case (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_':
+			flushCJK()
+			word.WriteRune(r)
+		case qcIsCJK(r):
+			flushWord()
+			cjkRun = append(cjkRun, r)
+		default:
+			flushWord()
+			flushCJK()
+		}
+	}
+	flushWord()
+	flushCJK()
 	return tokens
 }
 
