@@ -6,6 +6,7 @@ package acp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -20,6 +21,16 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
+// sessionNewParams builds session/new params with the cwd properly
+// JSON-escaped, so Windows temp dirs (C:\Users\...) yield valid JSON —
+// fmt.Sprintf with raw backslashes produces invalid \U escapes.
+func sessionNewParams(cwd string) []byte {
+	b, _ := json.Marshal(struct {
+		CWD string `json:"CWD"`
+	}{CWD: cwd})
+	return b
+}
+
 // ---------- #1095: session/load active session guard ----------
 
 func TestIssue1095_SessionLoadRefusesActiveSession(t *testing.T) {
@@ -29,7 +40,7 @@ func TestIssue1095_SessionLoadRefusesActiveSession(t *testing.T) {
 	h.initialized = true
 
 	// Create and activate a new session
-	createResp, err := h.handleSessionNew([]byte(fmt.Sprintf(`{"CWD":"%s"}`, tmpDir)))
+	createResp, err := h.handleSessionNew(sessionNewParams(tmpDir))
 	if err != nil {
 		t.Fatalf("session/new: %v", err)
 	}
@@ -80,7 +91,7 @@ func TestIssue1095_SessionLoadResumesClosedSession(t *testing.T) {
 	h.initialized = true
 
 	// Create and close a session
-	createResp, err := h.handleSessionNew([]byte(fmt.Sprintf(`{"CWD":"%s"}`, tmpDir)))
+	createResp, err := h.handleSessionNew(sessionNewParams(tmpDir))
 	if err != nil {
 		t.Fatalf("session/new: %v", err)
 	}
@@ -143,7 +154,7 @@ func TestIssue1096_PromptDoesNotSaveAfterClose(t *testing.T) {
 	h.initialized = true
 
 	// Create a session
-	createResp, err := h.handleSessionNew([]byte(fmt.Sprintf(`{"CWD":"%s"}`, tmpDir)))
+	createResp, err := h.handleSessionNew(sessionNewParams(tmpDir))
 	if err != nil {
 		t.Fatalf("session/new: %v", err)
 	}
@@ -193,7 +204,7 @@ func TestIssue1096_PromptSavesWhenSessionStillActive(t *testing.T) {
 	h.sessionsDir = tmpDir
 
 	// Create a session
-	createResp, err := h.handleSessionNew([]byte(fmt.Sprintf(`{"CWD":"%s"}`, tmpDir)))
+	createResp, err := h.handleSessionNew(sessionNewParams(tmpDir))
 	if err != nil {
 		t.Fatalf("session/new: %v", err)
 	}
@@ -231,7 +242,7 @@ func TestIssue1096_PromptDoesNotCreateOrphanInRootDir(t *testing.T) {
 	h.sessionsDir = tmpDir
 
 	// Create a session
-	createResp, err := h.handleSessionNew([]byte(fmt.Sprintf(`{"CWD":"%s"}`, tmpDir)))
+	createResp, err := h.handleSessionNew(sessionNewParams(tmpDir))
 	if err != nil {
 		t.Fatalf("session/new: %v", err)
 	}
