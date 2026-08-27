@@ -200,6 +200,36 @@ func raHasCoordinationMarker(lowerText string) bool {
 	return false
 }
 
+// raIsWordByte reports whether b is an ASCII word byte (letter, digit or
+// underscore), matching Go regexp \b semantics (issue #1178).
+func raIsWordByte(b byte) bool {
+	return b == '_' ||
+		(b >= 'a' && b <= 'z') ||
+		(b >= 'A' && b <= 'Z') ||
+		(b >= '0' && b <= '9')
+}
+
+// raContainsWordBoundary reports whether phrase occurs in text with word
+// boundaries on both sides: the bytes immediately before and after the match
+// must not be ASCII word bytes (issue #1178). Non-ASCII bytes (CJK prose,
+// accented letters) count as boundaries, keeping matching lenient for
+// multilingual text. Callers pass lower-cased text and phrases.
+func raContainsWordBoundary(text, phrase string) bool {
+	for i := 0; i+len(phrase) <= len(text); i++ {
+		if text[i:i+len(phrase)] != phrase {
+			continue
+		}
+		if i > 0 && raIsWordByte(text[i-1]) {
+			continue // match starts mid-word
+		}
+		if end := i + len(phrase); end < len(text) && raIsWordByte(text[end]) {
+			continue // match ends mid-word: "fix" inside "fixate"
+		}
+		return true
+	}
+	return false
+}
+
 // extractRAIntents scans assistant text for reasoning intent statements and
 // returns the set of cognitive categories the agent verbalized.
 func extractRAIntents(text string) []raCategory {
@@ -207,7 +237,9 @@ func extractRAIntents(text string) []raCategory {
 	found := make(map[raCategory]bool)
 	for cat, phrases := range raIntentPatterns {
 		for _, p := range phrases {
-			if strings.Contains(lower, p) {
+			// Issue #1178: word-boundary match so "let me fix" cannot hit
+			// "let me fixate" and fabricate a category.
+			if raContainsWordBoundary(lower, p) {
 				found[cat] = true
 				break
 			}
@@ -224,10 +256,12 @@ func extractRAIntents(text string) []raCategory {
 }
 
 // findRAIntentPhrase returns the first matching intent phrase for a category.
+// Uses word-boundary matching for consistency with extractRAIntents (#1178):
+// a category found by extractRAIntents must always yield its phrase here.
 func findRAIntentPhrase(text string, cat raCategory) string {
 	lower := strings.ToLower(text)
 	for _, p := range raIntentPatterns[cat] {
-		if strings.Contains(lower, p) {
+		if raContainsWordBoundary(lower, p) {
 			return p
 		}
 	}
@@ -264,7 +298,13 @@ func (s *reasonActionState) checkAlignment(assistantText string, toolCalls []too
 		return hint
 	}
 
-	if len(statedCats) == 0 || len(actionCats) == 0 {
+	// Issue #1177: a statement turn with no (categorized) tool calls must
+	// still register its intents in the tolerance window. The previous
+	// len(actionCats) == 0 guard dropped pure-text statement turns entirely,
+	// so the intent was never pending and a categorically conflicting action
+	// in a later turn could never escalate (structural cross-turn miss).
+	// The statedCats check stays: recordRAIntents iterates statedCats.
+	if len(statedCats) == 0 {
 		return ""
 	}
 
@@ -291,12 +331,28 @@ func raClassifyActions(toolCalls []toolCallInfo) map[raCategory][]string {
 
 // resolveRAPending silently fulfills pending intents whose category matched an
 // action this turn (issue #1162 temporal tolerance, no immediate-turn rule).
+// Issue #1177: for intents still unfulfilled, this turn may be where a
+// categorically conflicting action first materializes; record it on the
+// pending so a later expiry can escalate. Cross-turn conflicts previously
+// left conflictCat == raCatNone and were dropped silently at expiry.
 // Caller must hold s.mu.
 func (s *reasonActionState) resolveRAPending(actionCats map[raCategory][]string) {
 	kept := s.pending[:0]
 	for _, p := range s.pending {
 		if _, fulfilled := actionCats[p.cat]; fulfilled {
 			continue
+		}
+		// Issue #1177: capture a cross-turn conflict for an unfulfilled intent
+		// that has no recorded conflict yet, so escalateExpiredPending can
+		// produce a concrete warning when the tolerance window closes.
+		if p.conflictCat == raCatNone {
+			for actionCat, tools := range actionCats {
+				if isCategoricalMismatch(p.cat, actionCat) {
+					p.conflictCat = actionCat
+					p.conflictTool = tools[0]
+					break
+				}
+			}
 		}
 		kept = append(kept, p)
 	}
