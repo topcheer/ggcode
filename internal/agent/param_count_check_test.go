@@ -76,11 +76,17 @@ func another(x, y, z int, w, v string, u bool) {}
 }
 
 func TestCheckExcessiveParams_SkipsTestFunctions(t *testing.T) {
-	warnings := checkExcessiveParams("test.go", "", `package main
+	// #1187: the Test/Benchmark name exemption applies only to _test.go
+	// files. go test never compiles such functions from production code, so
+	// a Test-prefixed func in a non-test file IS checked.
+	src := `package main
 func TestMyFunc(t, ctx, cfg, db, logger, client struct{}) {}
-`)
-	if len(warnings) != 0 {
-		t.Errorf("expected 0 warnings for test function, got %d", len(warnings))
+`
+	if warnings := checkExcessiveParams("foo_test.go", "", src); len(warnings) != 0 {
+		t.Errorf("expected 0 warnings for test-file test function, got %d", len(warnings))
+	}
+	if warnings := checkExcessiveParams("test.go", "", src); len(warnings) == 0 {
+		t.Error("expected 1 warning for Test-prefixed function in production file")
 	}
 }
 

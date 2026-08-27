@@ -40,6 +40,10 @@ package agent
 //     the code that follows the guard
 //   - Only flags dereference via selector (x.Field), index (x[idx]), star (*x),
 //     or method call (x.Method()) - not simple variable reads
+//   - Models && short-circuit evaluation (fix #1185): conjuncts following a
+//     `v != nil` or `err == nil` conjunct, and the if body, only execute when
+//     the guard holds, so they are not flagged (matches staticcheck SA5011,
+//     which also stays silent on this idiom)
 //   - Skips test files (panics in tests are less critical)
 
 import (
@@ -65,19 +69,51 @@ type nilDerefCtx struct {
 	fnName string
 }
 
-// collectOldNilDerefIndex parses oldContent and returns the key sets of every
-// nil-deref instance already present before the edit (#1128, extended by
-// #1179). exact holds position-independent keys (fnName|path|var); suffix
-// holds name-independent keys (path|var) used as a fallback when a rename or
-// extraction changed the function name component. Keys from a file that fails
-// to parse are treated as absent, matching the previous inline behavior.
+// collectOldNilDerefIndex parses oldContent and returns one suppression
+// token per nil-deref instance present before the edit (#1128, #1179, #1186):
+// each token carries the exact key (fnName|path|var) and the rename-tolerant
+// suffix key (path|var). Keys from a file that fails to parse are treated as
+// absent, matching the previous inline behavior.
 type nilDerefDeltaIndex struct {
-	exact  map[string]bool
-	suffix map[string]bool
+	// instances holds ONE token per old-content finding (#1186): a plain
+	// set keyed by suffix would silently absorb a second, genuinely new
+	// same-shape instance in a different function. Each new instance consumes
+	// at most one token - exact key first, suffix key as fallback - so N old
+	// findings can suppress at most N new ones.
+	instances []oldNilDerefToken
+}
+
+// oldNilDerefToken is one consumable suppression token built from an
+// old-content nil-deref instance (#1186).
+type oldNilDerefToken struct {
+	key       string
+	suffixKey string
+	used      bool
+}
+
+// matchOldNilDeref consumes one unconsumed old token for inst: prefer the
+// exact key (same function), fall back to the rename-tolerant suffix key
+// (#1179). Returns false when no token remains - inst is genuinely new.
+func (idx *nilDerefDeltaIndex) matchOldNilDeref(inst nilDerefInstance) bool {
+	for i := range idx.instances {
+		t := &idx.instances[i]
+		if !t.used && t.key == inst.key {
+			t.used = true
+			return true
+		}
+	}
+	for i := range idx.instances {
+		t := &idx.instances[i]
+		if !t.used && t.suffixKey == inst.suffixKey {
+			t.used = true
+			return true
+		}
+	}
+	return false
 }
 
 func collectOldNilDerefIndex(filePath, oldContent string) nilDerefDeltaIndex {
-	idx := nilDerefDeltaIndex{exact: make(map[string]bool), suffix: make(map[string]bool)}
+	idx := nilDerefDeltaIndex{}
 	if strings.TrimSpace(oldContent) == "" {
 		return idx
 	}
@@ -92,8 +128,7 @@ func collectOldNilDerefIndex(filePath, oldContent string) nilDerefDeltaIndex {
 			continue
 		}
 		for _, inst := range findNilDerefsInFunc(oldFset, fn) {
-			idx.exact[inst.key] = true
-			idx.suffix[inst.suffixKey] = true
+			idx.instances = append(idx.instances, oldNilDerefToken{key: inst.key, suffixKey: inst.suffixKey})
 		}
 	}
 	return idx
@@ -145,11 +180,14 @@ func checkNilDerefAfterError(filePath, oldContent, newContent string) string {
 	// the finding itself is unchanged, which re-reported pre-existing
 	// instances as new. Fall back to the name-independent suffix key so
 	// renamed code stays suppressed; a pattern absent from the old content
-	// still reports as genuinely new.
+	// still reports as genuinely new. Suppression is token-based, not
+	// set-based (#1186): each old finding suppresses at most one new
+	// instance, so a same-shape addition in a different function is never
+	// silently absorbed.
 	oldIdx := collectOldNilDerefIndex(filePath, oldContent)
 	var newInstances []nilDerefInstance
 	for _, inst := range instances {
-		if oldIdx.exact[inst.key] || oldIdx.suffix[inst.suffixKey] {
+		if oldIdx.matchOldNilDeref(inst) {
 			continue
 		}
 		newInstances = append(newInstances, inst)
@@ -523,8 +561,15 @@ func walkErrorCheckIf(is *ast.IfStmt, nilRisk map[string]nilRiskEntry, walk func
 
 	bin, ok := is.Cond.(*ast.BinaryExpr)
 	if !ok || (bin.Op != token.EQL && bin.Op != token.NEQ) {
+		if ok && bin.Op == token.LAND {
+			// #1185: `v != nil && v.Field != ""` is the canonical Go nil
+			// guard; && short-circuits so conjuncts after the guard (and the
+			// if body) only evaluate when it holds.
+			walkLandCondIf(is, nilRisk, walk)
+			return
+		}
 		// #1068: Walk Cond for non-nil-check conditions to catch
-		// dereferences like "if v.Field > 0 && err == nil"
+		// dereferences like "if v.Field > 0 || err == nil"
 		walk(is.Cond)
 		walk(is.Body)
 		walk(is.Else)
@@ -551,6 +596,89 @@ func walkErrorCheckIf(is *ast.IfStmt, nilRisk map[string]nilRiskEntry, walk func
 		errName = ident.Name
 	}
 	applyErrNilScopeSemantics(is, bin.Op, errName, nilRisk, walk)
+}
+
+// splitLandConjuncts flattens a left-associative && chain into its conjuncts
+// in source order. Parenthesized groups are unwrapped: && is associative, so
+// grouping does not change which guards protect which later conjuncts.
+func splitLandConjuncts(e ast.Expr) []ast.Expr {
+	var out []ast.Expr
+	var rec func(ast.Expr)
+	rec = func(x ast.Expr) {
+		switch t := x.(type) {
+		case *ast.BinaryExpr:
+			if t.Op == token.LAND {
+				rec(t.X)
+				rec(t.Y)
+				return
+			}
+			out = append(out, t)
+		case *ast.ParenExpr:
+			rec(t.X)
+		default:
+			out = append(out, x)
+		}
+	}
+	rec(e)
+	return out
+}
+
+// walkLandCondIf evaluates an if whose condition is an && chain with
+// short-circuit semantics (#1185). Conjuncts are evaluated in source order
+// under every guard that precedes them; a `v != nil` conjunct suppresses v's
+// nil-risk for later conjuncts, and an `err == nil` conjunct suppresses every
+// variable linked to that error. Suppression extends into the if body (the
+// guards provably hold there) and is restored afterwards. The else branch
+// proves nothing - NOT(a && b) permits any conjunct to be false - so risk
+// stays active there. `||` conditions are NOT short-circuit guards for this
+// purpose: `v.Field != "" || v != nil` still evaluates v.Field with v at risk
+// and keeps the existing #1068 reporting.
+func walkLandCondIf(is *ast.IfStmt, nilRisk map[string]nilRiskEntry, walk func(ast.Node)) {
+	var restore []func()
+	suppress := func(name string) {
+		if _, risky := nilRisk[name]; !risky {
+			return
+		}
+		setVarCleared(nilRisk, name, true)
+		restore = append(restore, func() { setVarCleared(nilRisk, name, false) })
+	}
+	for _, conjunct := range splitLandConjuncts(is.Cond) {
+		walk(conjunct) // evaluate under the guards accumulated so far
+		bin, ok := ast.Unparen(conjunct).(*ast.BinaryExpr)
+		if !ok {
+			continue
+		}
+		switch bin.Op {
+		case token.NEQ:
+			// `v != nil` proves v non-nil from here on. (An `err != nil`
+			// conjunct proves nothing safe: values stay at risk.)
+			if v := valueNilCheckedVar(bin, nilRisk); v != "" {
+				suppress(v)
+			}
+		case token.EQL:
+			// `err == nil` proves every value returned alongside it non-nil
+			// for the remaining conjuncts and the body.
+			errName := ""
+			if x, ok := bin.X.(*ast.Ident); ok && isErrIdent(x) && isNilIdent(bin.Y) {
+				errName = x.Name
+			} else if y, ok := bin.Y.(*ast.Ident); ok && isErrIdent(y) && isNilIdent(bin.X) {
+				errName = y.Name
+			}
+			if errName == "" {
+				break
+			}
+			for k, e := range nilRisk {
+				if e.errName == errName {
+					suppress(k) // setVarCleared only rewrites existing keys; safe during range
+				}
+			}
+		}
+	}
+	walk(is.Body) // condition guards hold inside the body
+	for i := len(restore) - 1; i >= 0; i-- {
+		restore[i]() // deletions made inside the body persist (#238 semantics)
+	}
+	walk(is.Else) // else proves nothing about the conjuncts
 }
 
 // applyErrNilScopeSemantics implements the #238/#281/#533 scope-transfer

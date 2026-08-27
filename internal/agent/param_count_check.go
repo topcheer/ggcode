@@ -77,7 +77,12 @@ func checkExcessiveParams(filePath, oldContent, newContent string) []string {
 	}
 
 	// Delta-aware: only flag newly introduced instances (fix #142).
-	newInstances := findExcessiveParams(newContent)
+	// #1187: the Test*/Benchmark* name exemption applies only to _test.go
+	// files - go test only ever compiles such functions from _test.go, so a
+	// Test-prefixed function in production code (TestMatch, TestIMConnection,
+	// ...) must still be checked.
+	isTestFile := strings.HasSuffix(filePath, "_test.go")
+	newInstances := findExcessiveParams(newContent, isTestFile)
 	if len(newInstances) == 0 {
 		return nil
 	}
@@ -89,7 +94,7 @@ func checkExcessiveParams(filePath, oldContent, newContent string) []string {
 	// only the surplus over the old count is reported as new.
 	var oldCounts map[string]int
 	if strings.TrimSpace(oldContent) != "" {
-		for _, iss := range findExcessiveParams(oldContent) {
+		for _, iss := range findExcessiveParams(oldContent, isTestFile) {
 			if oldCounts == nil {
 				oldCounts = make(map[string]int)
 			}
@@ -130,11 +135,11 @@ func checkExcessiveParams(filePath, oldContent, newContent string) []string {
 	return warnings
 }
 
-func countExcessiveParams(src string) int {
-	return len(findExcessiveParams(src))
+func countExcessiveParams(src string, isTestFile bool) int {
+	return len(findExcessiveParams(src, isTestFile))
 }
 
-func findExcessiveParams(src string) []paramCountInstance {
+func findExcessiveParams(src string, isTestFile bool) []paramCountInstance {
 	if strings.TrimSpace(src) == "" {
 		return nil
 	}
@@ -150,7 +155,7 @@ func findExcessiveParams(src string) []paramCountInstance {
 	ast.Inspect(file, func(n ast.Node) bool {
 		switch node := n.(type) {
 		case *ast.FuncDecl:
-			inst, ok := inspectFuncDecl(node, fset)
+			inst, ok := inspectFuncDecl(node, fset, isTestFile)
 			if ok {
 				instances = append(instances, inst)
 			}
@@ -172,8 +177,13 @@ func findExcessiveParams(src string) []paramCountInstance {
 
 // inspectFuncDecl checks a named function declaration for excessive params.
 // Returns the instance and true if it should be flagged.
-func inspectFuncDecl(fn *ast.FuncDecl, fset *token.FileSet) (paramCountInstance, bool) {
-	if fn.Name == nil || isTestOrBenchFunction(fn.Name.Name) {
+func inspectFuncDecl(fn *ast.FuncDecl, fset *token.FileSet, isTestFile bool) (paramCountInstance, bool) {
+	if fn.Name == nil {
+		return paramCountInstance{}, false
+	}
+	// #1187: exempt Test/Benchmark names only in _test.go files; production
+	// code with such names (health probes, connection testers) stays checked.
+	if isTestFile && isTestOrBenchFunction(fn.Name.Name) {
 		return paramCountInstance{}, false
 	}
 

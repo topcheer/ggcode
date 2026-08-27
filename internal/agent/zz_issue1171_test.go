@@ -48,7 +48,7 @@ func Assign1171() {
 
 // All six-param literal shapes are detected exactly once each.
 func TestIssue1171_FuncLiteralFormsDetected(t *testing.T) {
-	insts := findExcessiveParams(issue1171Src)
+	insts := findExcessiveParams(issue1171Src, false)
 	var forms []string
 	for _, inst := range insts {
 		forms = append(forms, strings.Join(inst.params, ","))
@@ -75,7 +75,7 @@ func Go() {
 	defer func(a, b, c, d, e int) {}()
 }
 `
-	if got := countExcessiveParams(src); got != 0 {
+	if got := countExcessiveParams(src, false); got != 0 {
 		t.Fatalf("got %d instances, want 0", got)
 	}
 }
@@ -93,7 +93,7 @@ func Outer() {
 	_ = h
 }
 `
-	if got := countExcessiveParams(src); got != 2 {
+	if got := countExcessiveParams(src, false); got != 2 {
 		t.Fatalf("got %d instances, want 2", got)
 	}
 }
