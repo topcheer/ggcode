@@ -175,7 +175,22 @@ echo "[verify-ci] running tests (main module, unit only)"
 # -parallel 1: same rationale as the Makefile `test` target - packages using
 # t.Parallel() still spike peak RSS when many test funcs run concurrently on
 # memory-constrained machines; run one test func at a time.
-run_with_oom_retry "go test" env GOMEMLIMIT="${GOMEMLIMIT}" GOGC=50 go test -tags goolm -p 1 -parallel 1 -timeout 300s ./cmd/... ./internal/...
+#
+# Chunked per top-level dir: a single `go test ./cmd/... ./internal/...` is one
+# long serial retry unit; under sustained memory pressure from concurrent agent
+# workloads on shared machines an OOM kill deep into the run burns the whole
+# 3-attempt budget and verify-ci dies with a bare "signal: killed". Per-dir
+# chunks shrink the retry unit - each chunk gets its own OOM budget and
+# completed chunks are kept by the go test result cache, so a kill mid-suite
+# only re-runs the affected chunk, not the whole 10+ minute serial pass.
+test_chunks="./cmd"
+# module path github.com/topcheer/ggcode/internal/<subdir> -> <subdir> is field 5
+for _subdir in $(go list -tags goolm ./internal/... 2>/dev/null | cut -d/ -f5 | sort -u); do
+  [ -n "${_subdir}" ] && test_chunks="${test_chunks} ./internal/${_subdir}"
+done
+for chunk in ${test_chunks}; do
+  run_with_oom_retry "go test ${chunk}" env GOMEMLIMIT="${GOMEMLIMIT}" GOGC=50 go test -tags goolm -p 1 -parallel 1 -timeout 300s "${chunk}/..." || exit 1
+done
 
 echo "[verify-ci] core checks passed"
 
