@@ -71,22 +71,21 @@ var outcomeSuccessClaimRe = regexp.MustCompile(
 	`(?i)\b(?:done|fixed|resolved|solved|works?\s+(?:correctly|as\s+expected|now)|all\s+(?:set|good|passing|tests?\s+(?:pass|are\s+passing))|verified\s+(?:that\s+)?(?:it|this|everything)\s+works|successfully\s+(?:completed|implemented|fixed|updated)|everything\s+(?:looks?|is)\s+(?:good|correct|fine)|the\s+(?:fix|change|test|build)\s+(?:works?|passes?|is\s+correct)|no\s+(?:issues?|problems?|errors?))\b`,
 )
 
-// Tools whose results contain verifiable pass/fail signals.
+// Tools whose results carry verifiable pass/fail semantics of the agent's
+// own actions (build/test/lint command output, explicit git operation
+// results, compiler diagnostics).
+// #1139: Content-returning read-class tools (read_file, grep, glob,
+// search_files, lsp_hover, lsp_definition, lsp_references) were removed
+// from this set. Their output is EXTERNAL CONTENT, not an outcome of the
+// agent's own work, so scanning it for bare words like "error" or "fail"
+// misfires whenever the agent merely reads ordinary Go source that contains
+// error-handling code (e.g. "return fmt.Errorf(...)") and then says 'done'.
 var outcomeVerifiableTools = map[string]bool{
 	"run_command":         true,
 	"start_command":       true,
 	"read_command_output": true,
 	"git_commit":          true,
-	"git_diff":            true,
-	"git_status":          true,
-	"grep":                true,
-	"search_files":        true,
-	"glob":                true,
-	"read_file":           true,
 	"lsp_diagnostics":     true,
-	"lsp_hover":           true,
-	"lsp_definition":      true,
-	"lsp_references":      true,
 }
 
 // Corrective tools that invalidate a misattribution check (if used

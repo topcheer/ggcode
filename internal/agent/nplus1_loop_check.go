@@ -15,18 +15,9 @@ package agent
 // O(n^2) string concatenation. N+1 I/O in loops is arguably MORE impactful
 // because:
 //   - Each I/O call has network/disk latency (1-100ms per call)
-//   - N=100 items × 10ms = 1 second of latency
+//   - N=100 items x 10ms = 1 second of latency
 //   - It exhausts connection pools and file descriptors
 //   - It's the #1 performance complaint in production web apps
-//
-// Competitor analysis:
-//   - Claude Code: no detection (relies on external profilers)
-//   - Cursor: may catch via language server diagnostics, but not N+1 patterns
-//   - Cline/OpenHands: reactive only - caught by load testing
-//   - Aider: no detection
-//   - go vet: does not flag I/O in loops
-//   - staticcheck: does not flag I/O in loops
-//   - gocritic: no N+1 detection
 //
 // Detection approach: AST-based analysis. Find for/range/for-condition
 // loops, then scan their bodies for calls to known I/O functions:
@@ -35,6 +26,18 @@ package agent
 //   - File I/O: os.ReadFile, os.WriteFile, ioutil.ReadFile, os.Open
 //   - Redis: rdb.Get, rdb.Set, rdb.HGet
 // The check is delta-aware (only fires if the loop or I/O call is new).
+//
+// Fixes applied:
+//   - #1135: method-suffix matching restricted. Precise SQL/HTTP method
+//     names (Query/QueryRow/Exec/...Context) keep broad matching; generic
+//     names (Get/Save/Delete/Do/Find/...) additionally require the receiver
+//     identifier to carry a storage/HTTP signal, so pure in-memory calls
+//     such as cache.Get or registry.Find no longer report false positives.
+//   - #1136: delta keys are position-independent (function name plus a
+//     normalized rendering of the call subtree), following the #1128 fix in
+//     nil_deref_check.go; token.Pos is kept for display only.
+//   - #1137: findIOInLoops traverses loops in a single pass and de-duplicates
+//     visited call sites, so a nested-loop call is counted exactly once.
 
 import (
 	"fmt"
@@ -45,28 +48,15 @@ import (
 	"strings"
 )
 
-// ioCallPatterns maps I/O function patterns to human-readable descriptions.
-// These are matched against the call expression's function name.
-var ioCallPatterns = map[string]string{
-	// Database operations (GORM, sqlx, database/sql)
-	".Query":    "database query",
-	".QueryRow": "database query",
-	".Exec":     "database exec",
-	".Get":      "database Get",
-	".Select":   "database Select",
-	".Find":     "database Find",
-	".First":    "database First",
-	".Where":    "database Where (GORM)",
-	".Create":   "database Create (GORM)",
-	".Update":   "database Update (GORM)",
-	".Delete":   "database Delete (GORM)",
-	".Save":     "database Save (GORM)",
-
-	// HTTP client operations
+// ioExactPatterns maps fully qualified I/O function names to human-readable
+// descriptions. These are matched exactly against the call expression's
+// dotted name (e.g. "http.Get", "os.ReadFile"), independent of receiver
+// heuristics (#1135).
+var ioExactPatterns = map[string]string{
+	// HTTP package-level helpers
 	"http.Get":  "HTTP request",
 	"http.Post": "HTTP request",
 	"http.Head": "HTTP request",
-	".Do":       "HTTP request (client.Do)",
 
 	// File I/O
 	"os.ReadFile":      "file read",
@@ -74,12 +64,46 @@ var ioCallPatterns = map[string]string{
 	"ioutil.ReadFile":  "file read",
 	"ioutil.WriteFile": "file write",
 	"os.Open":          "file open",
+}
 
-	// Redis operations
-	".HGet":  "Redis HGet",
-	".HSet":  "Redis HSet",
-	".HMGet": "Redis HMGet",
-	".HMSet": "Redis HMSet",
+// ioPreciseMethodPatterns maps method suffixes that are precise enough to
+// indicate database access on any receiver (#1135). These method names carry
+// little ambiguity, so broad suffix matching is retained.
+var ioPreciseMethodPatterns = map[string]string{
+	".Query":           "database query",
+	".QueryRow":        "database query",
+	".QueryContext":    "database query",
+	".QueryRowContext": "database query",
+	".Exec":            "database exec",
+	".ExecContext":     "database exec",
+	".GetWithContext":  "HTTP request",
+}
+
+// ioGenericMethodPatterns maps common method suffixes that are ambiguous on
+// their own (#1135). They only fire when the receiver identifier carries a
+// storage/HTTP signal (see ioReceiverSignals), preventing false positives on
+// pure in-memory calls like cache.Get or registry.Find.
+var ioGenericMethodPatterns = map[string]string{
+	".Get":    "database Get",
+	".Select": "database Select",
+	".Find":   "database Find",
+	".First":  "database First",
+	".Where":  "database Where (GORM)",
+	".Create": "database Create (GORM)",
+	".Update": "database Update (GORM)",
+	".Delete": "database Delete (GORM)",
+	".Save":   "database Save (GORM)",
+	".Do":     "HTTP request (client.Do)",
+	".HGet":   "Redis HGet",
+	".HSet":   "Redis HSet",
+	".HMGet":  "Redis HMGet",
+	".HMSet":  "Redis HMSet",
+}
+
+// ioReceiverSignals are substrings that, when present in the lowercased
+// receiver identifier, mark it as database/Redis/HTTP related (#1135).
+var ioReceiverSignals = []string{
+	"db", "sql", "gorm", "xorm", "mongo", "redis", "http", "conn", "coll",
 }
 
 // checkNPlus1Loop detects I/O operations inside for/range loops, which is
@@ -113,21 +137,30 @@ func checkNPlus1Loop(filePath, oldContent, newContent string) []string {
 	}
 
 	// Delta: subtract patterns already present in old content.
+	//
+	// #1136: keys are position-independent (function name plus normalized
+	// call text), so inserting lines above the code no longer makes old and
+	// new keys diverge and re-warn. This follows the #1128/#1119 fix in
+	// nil_deref_check.go. Matching is count-based: adding a second identical
+	// call still produces exactly one new warning.
 	if oldAST != nil {
-		oldPatterns := findIOInLoops(oldAST)
-		if len(oldPatterns) > 0 {
-			oldSet := make(map[string]bool)
-			for _, p := range oldPatterns {
-				oldSet[p.String()] = true
-			}
-			var delta []ioLoopPattern
-			for _, p := range newPatterns {
-				if !oldSet[p.String()] {
-					delta = append(delta, p)
-				}
-			}
-			newPatterns = delta
+		budget := make(map[string]int)
+		for _, p := range newPatterns {
+			budget[p.String()]++
 		}
+		for _, p := range findIOInLoops(oldAST) {
+			if c := budget[p.String()]; c > 0 {
+				budget[p.String()] = c - 1
+			}
+		}
+		var delta []ioLoopPattern
+		for _, p := range newPatterns {
+			if budget[p.String()] > 0 {
+				budget[p.String()]--
+				delta = append(delta, p)
+			}
+		}
+		newPatterns = delta
 	}
 
 	if len(newPatterns) == 0 {
@@ -156,31 +189,59 @@ func checkNPlus1Loop(filePath, oldContent, newContent string) []string {
 
 // ioLoopPattern represents a detected I/O call inside a loop.
 type ioLoopPattern struct {
-	pos    token.Pos
+	pos    token.Pos // display only (#1136); excluded from identity
 	ioType string
+	key    string // position-independent identity (#1136)
 }
 
+// String returns the delta key for this pattern. Position-independent by
+// construction (#1136).
 func (p ioLoopPattern) String() string {
-	return fmt.Sprintf("%s@%d", p.ioType, p.pos)
+	return p.key
 }
 
-// findIOInLoops walks the AST and finds I/O calls inside for/range loops.
+// loopSite pairs a loop body with the name of the enclosing function, used to
+// build position-independent delta keys (#1136).
+type loopSite struct {
+	body   *ast.BlockStmt
+	fnName string
+}
+
+// findIOInLoops walks the AST in a single pass and finds I/O calls inside
+// for/range loops.
+//
+// #1137: the previous implementation used two Inspect sweeps (one per loop
+// form) plus a nested Inspect over every loop body encountered during the
+// outer sweep, so a call nested K levels deep was visited up to K times and
+// duplicated into the warning budget. Here loops are collected once and each
+// call site is de-duplicated via a visited set keyed by the call's AST node,
+// guaranteeing exactly one report per distinct I/O call site.
 func findIOInLoops(file *ast.File) []ioLoopPattern {
-	var patterns []ioLoopPattern
+	var sites []loopSite
 
+	// Single sweep: collect every loop root (nested loops are collected when
+	// reached; each root is scanned exactly once below).
 	ast.Inspect(file, func(n ast.Node) bool {
-		forStmt, ok := n.(*ast.ForStmt)
-		if !ok {
-			return true
+		switch v := n.(type) {
+		case *ast.ForStmt:
+			if v.Body != nil {
+				sites = append(sites, loopSite{body: v.Body})
+			}
+		case *ast.RangeStmt:
+			if v.Body != nil {
+				sites = append(sites, loopSite{body: v.Body})
+			}
 		}
+		return true
+	})
 
-		// Walk the body of this for loop looking for I/O calls.
-		if forStmt.Body == nil {
-			return true
-		}
+	patterns := make([]ioLoopPattern, 0, len(sites))
+	visited := make(map[*ast.CallExpr]bool) // #1137: one report per call site
 
-		ast.Inspect(forStmt.Body, func(inner ast.Node) bool {
-			// Don't descend into nested function literals — their loops
+	for _, site := range sites {
+		site.fnName = ioEnclosingFuncName(file, site.body.Pos())
+		ast.Inspect(site.body, func(inner ast.Node) bool {
+			// Don't descend into nested function literals - their loops
 			// are separate scopes and the I/O may be properly batched
 			// via goroutines/channels.
 			if _, isFuncLit := inner.(*ast.FuncLit); isFuncLit {
@@ -190,74 +251,82 @@ func findIOInLoops(file *ast.File) []ioLoopPattern {
 			if !ok {
 				return true
 			}
-
-			ioType := identifyIOCall(call)
-			if ioType != "" {
-				patterns = append(patterns, ioLoopPattern{
-					pos:    call.Pos(),
-					ioType: ioType,
-				})
-			}
-			return true
-		})
-
-		return true
-	})
-
-	// Also check range statements (which are ForStmt with Range == true in some
-	// cases, or represented differently). In Go AST, range loops are *ast.RangeStmt.
-	ast.Inspect(file, func(n ast.Node) bool {
-		rangeStmt, ok := n.(*ast.RangeStmt)
-		if !ok {
-			return true
-		}
-
-		if rangeStmt.Body == nil {
-			return true
-		}
-
-		ast.Inspect(rangeStmt.Body, func(inner ast.Node) bool {
-			if _, isFuncLit := inner.(*ast.FuncLit); isFuncLit {
-				return false
-			}
-			call, ok := inner.(*ast.CallExpr)
-			if !ok {
+			if visited[call] {
 				return true
 			}
+			visited[call] = true
 
 			ioType := identifyIOCall(call)
 			if ioType != "" {
 				patterns = append(patterns, ioLoopPattern{
 					pos:    call.Pos(),
 					ioType: ioType,
+					key: fmt.Sprintf("%s|%s|%s", ioType, site.fnName,
+						ioNormalizeCallText(call)),
 				})
 			}
 			return true
 		})
-
-		return true
-	})
+	}
 
 	return patterns
 }
 
+// ioEnclosingFuncName returns the name of the innermost FuncDecl containing
+// pos, or "_" when the position is not inside a named function.
+func ioEnclosingFuncName(file *ast.File, pos token.Pos) string {
+	name := "_"
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
+			continue
+		}
+		if fn.Pos() <= pos && pos <= fn.End() {
+			name = fn.Name.Name
+			break
+		}
+	}
+	return name
+}
+
 // identifyIOCall checks if a call expression matches a known I/O pattern.
 // Returns a description string if matched, "" otherwise.
+//
+// #1135: matching is tiered.
+//   - Exact dotted names (http.Get, os.ReadFile) match as before.
+//   - Precise SQL/HTTP method suffixes (Query/QueryRow/Exec/...Context)
+//     keep broad receiver-independent matching.
+//   - Generic method suffixes (Get/Save/Delete/Do/Find/...) require the
+//     receiver identifier to carry a storage/HTTP signal, so pure in-memory
+//     receivers such as cache, lru or registry no longer trigger warnings.
 func identifyIOCall(call *ast.CallExpr) string {
 	name := callFuncName(call)
 	if name == "" {
 		return ""
 	}
 
-	// Check exact matches first (e.g., "http.Get", "os.ReadFile").
-	if desc, ok := ioCallPatterns[name]; ok {
+	// Exact matches first (e.g. "http.Get", "os.ReadFile").
+	if desc, ok := ioExactPatterns[name]; ok {
 		return desc
 	}
 
-	// Check suffix matches for method calls (e.g., ".Query" matches
-	// "db.Query", "tx.Query", "repo.Query").
-	for suffix, desc := range ioCallPatterns {
-		if strings.HasPrefix(suffix, ".") && strings.HasSuffix(name, suffix) {
+	if _, isSelector := call.Fun.(*ast.SelectorExpr); !isSelector {
+		return ""
+	}
+
+	// Precise method names: unambiguous SQL/HTTP verbs.
+	for suffix, desc := range ioPreciseMethodPatterns {
+		if strings.HasSuffix(name, suffix) {
+			return desc
+		}
+	}
+
+	// Generic method names: require a storage/HTTP receiver signal (#1135).
+	for suffix, desc := range ioGenericMethodPatterns {
+		if !strings.HasSuffix(name, suffix) {
+			continue
+		}
+		if ioHasReceiverSignal(call.Fun.(*ast.SelectorExpr).X) {
 			return desc
 		}
 	}
@@ -265,49 +334,135 @@ func identifyIOCall(call *ast.CallExpr) string {
 	return ""
 }
 
-// callFuncName extracts a readable name from a call expression's Fun field.
-// For selector expressions (x.Y), returns "x.Y". For simple identifiers,
-// returns the name. For more complex expressions, returns "".
-func callFuncName(call *ast.CallExpr) string {
-	switch fn := call.Fun.(type) {
+// ioHasReceiverSignal reports whether the base identifier of the receiver
+// expression carries a database/Redis/HTTP signal (#1135). A bare receiver
+// such as cache, lru or registry yields false, silencing in-memory FP calls.
+func ioHasReceiverSignal(recv ast.Expr) bool {
+	name := ioReceiverIdentifier(recv)
+	if name == "" {
+		return false
+	}
+	lower := strings.ToLower(name)
+	for _, sig := range ioReceiverSignals {
+		if strings.Contains(lower, sig) {
+			return true
+		}
+	}
+	return false
+}
+
+// ioReceiverIdentifier extracts a meaningful identifier from a receiver
+// expression for signal matching (#1135). Plain identifiers are returned as
+// is; selector receivers fall back to their field name (e.g. cfg.MyDB gives
+// "MyDB"), parenthesized/pointer expressions unwrap.
+func ioReceiverIdentifier(expr ast.Expr) string {
+	switch v := expr.(type) {
 	case *ast.Ident:
-		return fn.Name
+		return v.Name
+	case *ast.ParenExpr:
+		return ioReceiverIdentifier(v.X)
+	case *ast.StarExpr:
+		return ioReceiverIdentifier(v.X)
 	case *ast.SelectorExpr:
-		// Try to get the receiver as a string.
-		var receiver string
-		switch x := fn.X.(type) {
-		case *ast.Ident:
-			receiver = x.Name
-		case *ast.SelectorExpr:
-			// Package.Qualified.Type (e.g., http.Client.Get)
-			receiver = selectorString(x)
-		default:
-			// Complex receiver — just use the field name.
-			return "." + fn.Sel.Name
-		}
-		if receiver != "" {
-			return receiver + "." + fn.Sel.Name
-		}
-		return "." + fn.Sel.Name
+		return v.Sel.Name
 	default:
 		return ""
 	}
 }
 
-// selectorString converts a selector expression to a dotted string.
-func selectorString(sel *ast.SelectorExpr) string {
-	var parts []string
-	var current ast.Node = sel
-	for {
-		s, ok := current.(*ast.SelectorExpr)
-		if !ok {
-			break
+// callFuncName returns the dotted function name of a call expression,
+// e.g. "db.Query", "http.Get", "myclient.Post". Returns "" when the callee
+// is not a plain identifier or selector chain.
+func callFuncName(call *ast.CallExpr) string {
+	switch fn := call.Fun.(type) {
+	case *ast.Ident:
+		return fn.Name
+	case *ast.SelectorExpr:
+		parts := make([]string, 0, 4)
+		ioAppendSelectorParts(&parts, fn)
+		return strings.Join(parts, ".")
+	default:
+		return ""
+	}
+}
+
+// ioAppendSelectorParts flattens a selector chain into dot-joined parts.
+func ioAppendSelectorParts(parts *[]string, expr *ast.SelectorExpr) {
+	switch x := expr.X.(type) {
+	case *ast.Ident:
+		*parts = append(*parts, x.Name)
+	case *ast.SelectorExpr:
+		ioAppendSelectorParts(parts, x)
+	}
+	*parts = append(*parts, expr.Sel.Name)
+}
+
+// ioNormalizeCallText renders a call expression as position-independent text
+// (#1136). Byte offsets, formatting width and neighboring comments are all
+// ignored - the same call keeps the same key regardless of where lines move.
+func ioNormalizeCallText(call *ast.CallExpr) string {
+	var b strings.Builder
+	ioAppendNormalized(&b, call)
+	return b.String()
+}
+
+// ioAppendNormalized writes a canonical structural rendering of the AST node.
+func ioAppendNormalized(b *strings.Builder, n ast.Node) {
+	switch v := n.(type) {
+	case *ast.Ident:
+		b.WriteString(v.Name)
+	case *ast.BasicLit:
+		b.WriteString(v.Kind.String())
+		b.WriteByte(':')
+		b.WriteString(v.Value)
+	case *ast.SelectorExpr:
+		ioAppendNormalized(b, v.X)
+		b.WriteByte('.')
+		b.WriteString(v.Sel.Name)
+	case *ast.ParenExpr:
+		b.WriteByte('(')
+		ioAppendNormalized(b, v.X)
+		b.WriteByte(')')
+	case *ast.StarExpr:
+		b.WriteByte('*')
+		ioAppendNormalized(b, v.X)
+	case *ast.UnaryExpr:
+		b.WriteString(v.Op.String())
+		ioAppendNormalized(b, v.X)
+	case *ast.BinaryExpr:
+		ioAppendNormalized(b, v.X)
+		b.WriteString(v.Op.String())
+		ioAppendNormalized(b, v.Y)
+	case *ast.IndexExpr:
+		ioAppendNormalized(b, v.X)
+		b.WriteByte('[')
+		ioAppendNormalized(b, v.Index)
+		b.WriteByte(']')
+	case *ast.KeyValueExpr:
+		ioAppendNormalized(b, v.Key)
+		b.WriteByte(':')
+		ioAppendNormalized(b, v.Value)
+	case *ast.Ellipsis:
+		b.WriteString("...")
+		if v.Elt != nil {
+			ioAppendNormalized(b, v.Elt)
 		}
-		parts = append([]string{s.Sel.Name}, parts...)
-		current = s.X
+	case *ast.CompositeLit:
+		b.WriteString("composite{}")
+	case *ast.CallExpr:
+		ioAppendNormalized(b, v.Fun)
+		b.WriteByte('(')
+		for i, arg := range v.Args {
+			if i > 0 {
+				b.WriteByte(',')
+			}
+			ioAppendNormalized(b, arg)
+		}
+		if v.Ellipsis != token.NoPos {
+			b.WriteString("...")
+		}
+		b.WriteByte(')')
+	default:
+		fmt.Fprintf(b, "<%T>", n)
 	}
-	if ident, ok := current.(*ast.Ident); ok {
-		parts = append([]string{ident.Name}, parts...)
-	}
-	return strings.Join(parts, ".")
 }

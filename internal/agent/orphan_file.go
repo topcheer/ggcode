@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -114,8 +115,7 @@ func (o *orphanFileState) recordToolCall(toolName, argsJSON string, iteration in
 		// mark as integrated. Only edits to source files or builds do.
 
 	case "edit_file", "multi_edit_file", "multi_file_edit", "batch_replace":
-		// An edit to any file typically indicates integration work
-		o.integrated = true
+		o.recordEditIntegration(argsJSON)
 
 	case "run_command":
 		low := strings.ToLower(argsJSON)
@@ -189,4 +189,68 @@ func extractFilePathOrArg(argsJSON, toolName string) string {
 		return argsJSON[start : start+end]
 	}
 	return ""
+}
+
+// recordEditIntegration decides whether an edit-style tool call counts as
+// integration of tracked new files (#1138). An edit whose target is one of
+// the newly created files themselves is iterative refinement (write ->
+// edit -> edit polish loop), NOT integration. Integration must come from
+// edits to OTHER (existing) files that add imports/references/build wiring.
+// When target paths cannot be parsed from the arguments, the call falls
+// back to legacy behavior and marks integration.
+func (o *orphanFileState) recordEditIntegration(argsJSON string) {
+	paths := extractEditPathsOrArg(argsJSON)
+	if len(paths) == 0 {
+		o.integrated = true
+		return
+	}
+	for _, p := range paths {
+		if !o.isTrackedNewFile(p) {
+			o.integrated = true
+			return
+		}
+	}
+}
+
+// isTrackedNewFile reports whether path refers to a newly created source
+// file currently tracked by this state (#1138). Paths are compared exactly
+// and by base name to tolerate relative/absolute variation.
+func (o *orphanFileState) isTrackedNewFile(path string) bool {
+	for _, f := range o.newFiles {
+		if f == path || filepath.Base(f) == filepath.Base(path) {
+			return true
+		}
+	}
+	return false
+}
+
+// extractEditPathsOrArg extracts candidate target file paths from edit-style
+// tool call arguments (#1138). It covers edit_file/multi_edit_file
+// ("file_path"), multi_file_edit/batch_replace ("files": [{"path": ...}]),
+// and falls back to plain "path" keys.
+func extractEditPathsOrArg(argsJSON string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, key := range []string{"file_path", "path"} {
+		needle := `"` + key + `":"`
+		pos := 0
+		for {
+			idx := strings.Index(argsJSON[pos:], needle)
+			if idx < 0 {
+				break
+			}
+			start := pos + idx + len(needle)
+			endRel := strings.Index(argsJSON[start:], `"`)
+			if endRel <= 0 {
+				break
+			}
+			path := argsJSON[start : start+endRel]
+			if path != "" && !seen[path] {
+				seen[path] = true
+				out = append(out, path)
+			}
+			pos = start + endRel
+		}
+	}
+	return out
 }
