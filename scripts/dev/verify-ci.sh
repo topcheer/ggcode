@@ -24,23 +24,15 @@ unset ZAI_MODEL
 # ── Config ────────────────────────────────────────────────────────────────
 # Default GOMEMLIMIT matches GitHub CI (2GiB). Override via VERIFY_CI_MEMLIMIT.
 GOMEMLIMIT="${VERIFY_CI_MEMLIMIT:-2GiB}"
-# Cap build/test parallelism: `go build` and `go mod download` default -p to
-# the machine core count; on shared/constrained runners the parallel
-# compilation of large packages spikes peak RSS past the cgroup/OS limit and
-# the toolchain gets OOM-killed ("signal: killed") before any code issue is
-# reported. GOMAXPROCS caps every downstream go command in one knob. Override
-# via VERIFY_CI_GOMAXPROCS on roomier machines.
-# Default 1 (not 2): the Go compiler is internally parallel per package even
-# with -p 1; on shared machines with concurrent agent workloads GOMAXPROCS=2
-# still reproduced the "signal: killed" OOM during compilation of the largest
-# packages (internal/agent, cmd/ggcode). 1 trades wall-clock for reliability.
-export GOMAXPROCS="${VERIFY_CI_GOMAXPROCS:-1}"
-# Package-level parallelism: `go test ./...` defaults -p to core count;
-# on memory-constrained dev machines (macOS under memory pressure) the
-# parallel test binaries spike peak RSS and get OOM-killed with a bare
-# "signal: killed" before any real failure is reported. Must be the
-# -p=1 equals form: GOFLAGS="-p 1" is rejected by go (non-flag "1").
-export GOFLAGS="${GOFLAGS:--p=1}"
+# NOTE: build/vet/test concurrency is NOT pinned here anymore. A fixed
+# -p 1 -parallel 1 GOMAXPROCS=1 mode is safe under memory pressure but ~10x
+# slower; on a roomy machine a cold-cache run then exceeds the caller's own
+# timeout and gets SIGKILLed with an identical bare "signal: killed" — the
+# same symptom the OOM mitigations were built for, reproduced by a different
+# cause (timeout kill, not OS OOM). Concurrency is picked adaptively from LIVE
+# available memory (pick_tier below) and auto-downgraded on every OOM kill
+# inside run_with_oom_retry. GOMEMLIMIT stays as the per-process soft cap, so
+# even the highest tier bounds each compile/test worker.
 # Set VERIFY_CI_FULL=1 to also run cross-compile, desktop, and frontend checks.
 FULL="${VERIFY_CI_FULL:-0}"
 
@@ -66,7 +58,7 @@ avail_mem_mb() {
 # max wait elapses. Returns as soon as pressure clears.
 wait_for_memory() {
   local waited=0 avail
-  while [ "${waited}" -lt 180 ]; do
+  while [ "${waited}" -lt 600 ]; do
     avail="$(avail_mem_mb)"
     if [ -z "${avail}" ] || [ "${avail}" -ge 1500 ]; then
       return 0
@@ -77,27 +69,70 @@ wait_for_memory() {
   return 0
 }
 
+# pick_tier: set build/vet/test concurrency from live available memory.
+#   low  (<3GiB avail or unknown): -p 1  -parallel 1  GOMAXPROCS=1 (safe mode)
+#   mid  (3-8GiB):                 -p 2  -parallel 2  GOMAXPROCS=2
+#   high (>=8GiB):                 -p 4  -parallel 4  GOMAXPROCS=4
+# The mem-gate threshold scales with the tier: starting -p 4 safely needs more
+# headroom than starting -p 1.
+VC_P=1; VC_PARALLEL=1; VC_GOMAXPROCS=1; VC_MEM_GATE_MB=1500
+pick_tier() {
+  local avail; avail="$(avail_mem_mb 2>/dev/null || true)"
+  if [ -n "${avail}" ] && [ "${avail}" -ge 8192 ]; then
+    VC_P=4; VC_PARALLEL=4; VC_GOMAXPROCS=4; VC_MEM_GATE_MB=3072
+  elif [ -n "${avail}" ] && [ "${avail}" -ge 3072 ]; then
+    VC_P=2; VC_PARALLEL=2; VC_GOMAXPROCS=2; VC_MEM_GATE_MB=2048
+  else
+    VC_P=1; VC_PARALLEL=1; VC_GOMAXPROCS=1; VC_MEM_GATE_MB=1500
+  fi
+  export GOMAXPROCS="${VC_GOMAXPROCS}"
+  echo "[verify-ci] concurrency tier: -p ${VC_P} -parallel ${VC_PARALLEL} GOMAXPROCS=${VC_GOMAXPROCS} (avail ${avail:-?}MiB)"
+}
+# downgrade_tier: halve concurrency (floor 1) after an OOM kill; retrying at
+# the same concurrency under the same pressure just burns attempts.
+downgrade_tier() {
+  if [ "${VC_P}" -gt 1 ]; then
+    VC_P=$((VC_P / 2)); VC_PARALLEL=$((VC_PARALLEL / 2)); VC_GOMAXPROCS=$((VC_GOMAXPROCS / 2))
+    export GOMAXPROCS="${VC_GOMAXPROCS}"
+    echo "[verify-ci] concurrency downgraded to -p ${VC_P} -parallel ${VC_PARALLEL} GOMAXPROCS=${VC_GOMAXPROCS}"
+  fi
+}
+if [ -n "${VERIFY_CI_GOMAXPROCS:-}" ]; then
+  # Manual pin (existing override knob): value applies to -p, -parallel and
+  # GOMAXPROCS alike; OOM kills will NOT downgrade below it.
+  VC_P="${VERIFY_CI_GOMAXPROCS}"; VC_PARALLEL="${VERIFY_CI_GOMAXPROCS}"; VC_GOMAXPROCS="${VERIFY_CI_GOMAXPROCS}"
+  VC_PINNED=1
+  export GOMAXPROCS="${VC_GOMAXPROCS}"
+  echo "[verify-ci] concurrency pinned by VERIFY_CI_GOMAXPROCS=${VC_GOMAXPROCS}"
+else
+  VC_PINNED=0
+  pick_tier
+fi
+
 # run_with_oom_retry <desc> <cmd...>
 # Runs cmd; if it is OOM-killed ("signal: killed" or exit 137), waits for the
 # system memory pressure on shared machines to actually subside (polling
-# available RAM, not a blind sleep), then retries — up to 3 attempts with
+# available RAM, not a blind sleep), then retries — up to 5 attempts with
 # escalating backoff. A bare OOM kill carries no code signal; real errors
 # still fail immediately with the original exit code.
+# 5 attempts (was 3): sustained pressure from concurrent agent workloads on
+# shared machines can outlast 3 attempts x 3min waits; the larger budget only
+# costs wall-clock under pressure and never changes the pass/fail verdict.
 run_with_oom_retry() {
   local desc="$1"; shift
   local log status attempt backoff
   log="$(mktemp -t verifyci)"
   backoff=20
-  for attempt in 1 2 3; do
+  for attempt in 1 2 3 4 5; do
     # Gate before EVERY attempt (incl. the first): on shared machines a
     # concurrent agent workload can spike memory between the startup gate and
     # this step; proceeding into the spike gets the first attempt killed.
-    # Waiting here (up to 3min) converts the spike into a delayed first run
+    # Waiting here (up to 10min) converts the spike into a delayed first run
     # instead of a burned attempt. Cheap no-op when memory is plentiful.
     if [ "${VERIFY_CI_SKIP_MEM_GATE:-0}" != "1" ]; then
       _avail="$(avail_mem_mb)"
-      if [ -n "${_avail}" ] && [ "${_avail}" -lt 1500 ]; then
-        echo "[verify-ci] ${desc}: low available memory (${_avail}MiB) before attempt ${attempt}; waiting up to 3min for pressure to subside"
+      if [ -n "${_avail}" ] && [ "${_avail}" -lt "${VC_MEM_GATE_MB}" ]; then
+        echo "[verify-ci] ${desc}: low available memory (${_avail}MiB < ${VC_MEM_GATE_MB}MiB) before attempt ${attempt}; waiting for pressure to subside"
         wait_for_memory
       fi
     fi
@@ -108,13 +143,16 @@ run_with_oom_retry() {
     fi
     status=$?
     if grep -q "signal: killed" "${log}" || [ "${status}" -eq 137 ]; then
-      if [ "${attempt}" -eq 3 ]; then
-        echo "[verify-ci] ${desc} was OOM-killed 3 times; giving up"
+      if [ "${attempt}" -eq 5 ]; then
+        echo "[verify-ci] ${desc} was OOM-killed 5 times; giving up"
         cat "${log}"
         rm -f "${log}"
         return 1
       fi
-      echo "[verify-ci] ${desc} was OOM-killed (attempt ${attempt}/3); waiting up to 3min for memory pressure to subside (avail=$(avail_mem_mb 2>/dev/null || echo '?')MiB)"
+      echo "[verify-ci] ${desc} was OOM-killed (attempt ${attempt}/5); downgrading concurrency and waiting for memory pressure to subside (avail=$(avail_mem_mb 2>/dev/null || echo '?')MiB)"
+      if [ "${VC_PINNED:-0}" != "1" ]; then
+        downgrade_tier
+      fi
       wait_for_memory
       sleep "${backoff}"
       backoff=$((backoff * 3))
@@ -129,13 +167,13 @@ run_with_oom_retry() {
 
 # Startup memory gate: on shared machines with concurrent agent workloads the
 # run may start while memory pressure is already high; waiting here (up to
-# 3min) lets that pressure clear BEFORE the first heavy go command runs, so a
+# 10min) lets that pressure clear BEFORE the first heavy go command runs, so a
 # kill lands inside run_with_oom_retry (retryable) instead of on an unwrapped
 # step (fatal). Override with VERIFY_CI_SKIP_MEM_GATE=1.
 if [ "${VERIFY_CI_SKIP_MEM_GATE:-0}" != "1" ]; then
   _avail="$(avail_mem_mb)"
-  if [ -n "${_avail}" ] && [ "${_avail}" -lt 1500 ]; then
-    echo "[verify-ci] low available memory (${_avail}MiB); waiting up to 3min for pressure to subside"
+  if [ -n "${_avail}" ] && [ "${_avail}" -lt "${VC_MEM_GATE_MB}" ]; then
+    echo "[verify-ci] low available memory (${_avail}MiB < ${VC_MEM_GATE_MB}MiB); waiting up to 10min for pressure to subside"
     wait_for_memory
   fi
 fi
@@ -158,7 +196,7 @@ echo "[verify-ci] building ggcode"
 # -p 1 on build too: parallel compilation of large packages (desktop/wailskit,
 # internal/agent) spikes peak RSS past GOMEMLIMIT on shared machines and gets
 # OOM-killed ("signal: killed") - same rationale as the -p 1 on vet/test below.
-run_with_oom_retry "go build" env GOMEMLIMIT="${GOMEMLIMIT}" GOGC=50 go build -p 1 -tags goolm -o /tmp/ggcode ./cmd/ggcode
+run_with_oom_retry "go build" env GOMEMLIMIT="${GOMEMLIMIT}" GOGC=50 go build -p "${VC_P}" -tags goolm -o /tmp/ggcode ./cmd/ggcode
 
 echo "[verify-ci] running go vet"
 # -p 1: vet defaults to -p=GOMAXPROCS; on shared/constrained runners the
@@ -167,7 +205,7 @@ echo "[verify-ci] running go vet"
 # before any code issue is reported. Same rationale as the -p 1 on go test
 # below. -p 2 still reproduced the OOM kill on shared machines, so 1 is the
 # default; override via VERIFY_CI_VET_P.
-run_with_oom_retry "go vet" env GOMEMLIMIT="${GOMEMLIMIT}" GOGC=50 go vet -tags goolm -p "${VERIFY_CI_VET_P:-1}" ./...
+run_with_oom_retry "go vet" env GOMEMLIMIT="${GOMEMLIMIT}" GOGC=50 go vet -tags goolm -p "${VERIFY_CI_VET_P:-${VC_P}}" ./...
 
 echo "[verify-ci] running tests (main module, unit only)"
 # NOTE: do NOT use the "integration" tag here - integration tests (e.g. browser
@@ -189,7 +227,7 @@ for _subdir in $(go list -tags goolm ./internal/... 2>/dev/null | cut -d/ -f5 | 
   [ -n "${_subdir}" ] && test_chunks="${test_chunks} ./internal/${_subdir}"
 done
 for chunk in ${test_chunks}; do
-  run_with_oom_retry "go test ${chunk}" env GOMEMLIMIT="${GOMEMLIMIT}" GOGC=50 go test -tags goolm -p 1 -parallel 1 -timeout 300s "${chunk}/..." || exit 1
+  run_with_oom_retry "go test ${chunk}" env GOMEMLIMIT="${GOMEMLIMIT}" GOGC=50 go test -tags goolm -p "${VC_P}" -parallel "${VC_PARALLEL}" -timeout 300s "${chunk}/..." || exit 1
 done
 
 echo "[verify-ci] core checks passed"
