@@ -44,16 +44,51 @@ export GOFLAGS="${GOFLAGS:--p=1}"
 # Set VERIFY_CI_FULL=1 to also run cross-compile, desktop, and frontend checks.
 FULL="${VERIFY_CI_FULL:-0}"
 
+# avail_mem_mb: best-effort available system memory in MiB (0 if unknown).
+# macOS: vm_stat free+inactive+speculative pages. Linux: /proc/meminfo MemAvailable.
+avail_mem_mb() {
+  if command -v vm_stat >/dev/null 2>&1; then
+    vm_stat | awk '
+      /page size of/ { ps = $8 }
+      /^Pages free/ { free = $3 }
+      /^Pages inactive/ { inact = $3 }
+      /^Pages speculative/ { spec = $3 }
+      END {
+        gsub(/\./, "", free); gsub(/\./, "", inact); gsub(/\./, "", spec)
+        if (ps + 0 > 0) printf "%d", (free + inact + spec) * ps / 1048576
+      }'
+  elif [ -r /proc/meminfo ]; then
+    awk '/^MemAvailable:/ { printf "%d", $2 / 1024 }' /proc/meminfo
+  fi
+}
+
+# wait_for_memory: block until available memory recovers (>=1500 MiB) or
+# max wait elapses. Returns as soon as pressure clears.
+wait_for_memory() {
+  local waited=0 avail
+  while [ "${waited}" -lt 180 ]; do
+    avail="$(avail_mem_mb)"
+    if [ -z "${avail}" ] || [ "${avail}" -ge 1500 ]; then
+      return 0
+    fi
+    sleep 10
+    waited=$((waited + 10))
+  done
+  return 0
+}
+
 # run_with_oom_retry <desc> <cmd...>
 # Runs cmd; if it is OOM-killed ("signal: killed" or exit 137), waits for the
-# transient memory pressure on shared machines to subside and retries once.
-# A bare OOM kill carries no code signal — retrying once converts an
-# environmental flake into a pass while still failing on real errors twice.
+# system memory pressure on shared machines to actually subside (polling
+# available RAM, not a blind sleep), then retries — up to 3 attempts with
+# escalating backoff. A bare OOM kill carries no code signal; real errors
+# still fail immediately with the original exit code.
 run_with_oom_retry() {
   local desc="$1"; shift
-  local log status attempt
+  local log status attempt backoff
   log="$(mktemp -t verifyci)"
-  for attempt in 1 2; do
+  backoff=20
+  for attempt in 1 2 3; do
     if "$@" >"${log}" 2>&1; then
       cat "${log}"
       rm -f "${log}"
@@ -61,17 +96,22 @@ run_with_oom_retry() {
     fi
     status=$?
     if grep -q "signal: killed" "${log}" || [ "${status}" -eq 137 ]; then
-      echo "[verify-ci] ${desc} was OOM-killed (attempt ${attempt}/2); cooling down 15s for memory pressure to subside"
-      sleep 15
+      if [ "${attempt}" -eq 3 ]; then
+        echo "[verify-ci] ${desc} was OOM-killed 3 times; giving up"
+        cat "${log}"
+        rm -f "${log}"
+        return 1
+      fi
+      echo "[verify-ci] ${desc} was OOM-killed (attempt ${attempt}/3); waiting up to 3min for memory pressure to subside (avail=$(avail_mem_mb 2>/dev/null || echo '?')MiB)"
+      wait_for_memory
+      sleep "${backoff}"
+      backoff=$((backoff * 3))
       continue
     fi
     cat "${log}"
     rm -f "${log}"
     return "${status}"
   done
-  echo "[verify-ci] ${desc} was OOM-killed twice; giving up"
-  cat "${log}"
-  rm -f "${log}"
   return 1
 }
 
@@ -99,7 +139,7 @@ echo "[verify-ci] running go vet"
 # before any code issue is reported. Same rationale as the -p 1 on go test
 # below. -p 2 still reproduced the OOM kill on shared machines, so 1 is the
 # default; override via VERIFY_CI_VET_P.
-run_with_oom_retry "go vet" env GOMEMLIMIT="${GOMEMLIMIT}" go vet -tags goolm -p "${VERIFY_CI_VET_P:-1}" ./...
+run_with_oom_retry "go vet" env GOMEMLIMIT="${GOMEMLIMIT}" GOGC=50 go vet -tags goolm -p "${VERIFY_CI_VET_P:-1}" ./...
 
 echo "[verify-ci] running tests (main module, unit only)"
 # NOTE: do NOT use the "integration" tag here - integration tests (e.g. browser
