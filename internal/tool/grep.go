@@ -2,7 +2,6 @@ package tool
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -321,19 +320,36 @@ func (t Grep) rgSearch(ctx context.Context, args grepArgs, re *regexp.Regexp) (R
 	cmd.Env = append(os.Environ(), "GIT_PAGER=cat")
 	out, err := cmd.Output()
 	if err != nil {
-		if len(out) == 0 {
-			return Result{Content: "No matches found."}, nil
+		if res, handled := rgExitResult(err); handled {
+			return res, nil
 		}
-		// rg returns exit code 1 for no matches, 2 for errors
-		if bytes.Contains(out, []byte("Error")) || bytes.Contains(out, []byte("error")) {
-			// Fall through and try to use what we got
-			if len(out) == 0 {
-				return Result{IsError: true, Content: fmt.Sprintf("ripgrep error: %s", string(out))}, nil
-			}
-		}
+		// exit 1: no matches; fall through so formatGrepOutput renders the
+		// standard no-matches result with search hints
 	}
 
 	return formatGrepOutput(string(out), args)
+}
+
+// rgExitResult classifies a ripgrep execution error. It returns
+// handled=true with a ready Result for real failures (exit 2+ such as a bad
+// glob, permission denied, or unknown --type; spawn/IO failures like a
+// missing binary or cancelled context) and handled=false for exit 1, which
+// is rg's legitimate "no matches" signal that must render as an empty
+// result, not an error. Previously an unconditional len(out)==0 branch
+// misreported real errors as "No matches found." and its nested len(out)==0
+// check was unreachable dead code.
+func rgExitResult(err error) (Result, bool) {
+	if exitErr, ok := err.(*exec.ExitError); ok {
+		if exitErr.ExitCode() >= 2 {
+			msg := strings.TrimSpace(string(exitErr.Stderr))
+			if msg == "" {
+				msg = err.Error()
+			}
+			return Result{IsError: true, Content: "ripgrep error: " + msg}, true
+		}
+		return Result{}, false
+	}
+	return Result{IsError: true, Content: fmt.Sprintf("ripgrep failed to run: %v", err)}, true
 }
 
 func formatGrepOutput(output string, args grepArgs) (Result, error) {
@@ -388,15 +404,39 @@ func formatGrepOutput(output string, args grepArgs) (Result, error) {
 	var sb strings.Builder
 	totalCount := 0
 	if args.OutputMode == "count" {
+		// count mode previously had no output cap at all on the rg path (the
+		// Go fallback applies offset+head_limit), so a broad pattern in a
+		// large repo dumped an unbounded per-file count list into context.
+		// Mirror the files_with_matches discipline: honor offset for
+		// pagination and cap the list at head_limit (default 500), with a
+		// trailing summary of what was withheld. totalCount still sums every
+		// file so the "total" stays truthful.
 		for _, l := range lines {
-			sb.WriteString(l)
-			sb.WriteByte('\n')
 			if idx := strings.LastIndex(l, ":"); idx >= 0 {
 				var n int
 				if _, err := fmt.Sscanf(l[idx+1:], "%d", &n); err == nil {
 					totalCount += n
 				}
 			}
+		}
+		start := args.Offset
+		if start > total {
+			start = total
+		}
+		limit := args.HeadLimit
+		if limit <= 0 {
+			limit = maxFilesWithMatches
+		}
+		end := total
+		if start+limit < end {
+			end = start + limit
+		}
+		for _, l := range lines[start:end] {
+			sb.WriteString(l)
+			sb.WriteByte('\n')
+		}
+		if total > end || start > 0 {
+			fmt.Fprintf(&sb, "\n(showing %d-%d of %d files; use offset/head_limit to page or narrow the pattern)", start+1, end, total)
 		}
 	} else {
 		// files_with_matches: sort by path depth (shorter paths first = closer to root)
@@ -405,25 +445,29 @@ func formatGrepOutput(output string, args grepArgs) (Result, error) {
 		sort.SliceStable(sortedLines, func(i, j int) bool {
 			return pathDepth(sortedLines[i]) < pathDepth(sortedLines[j])
 		})
-		// Cap file-list output: without this, a broad pattern in a large repo
-		// dumps thousands of lines into context (files mode has no head_limit
-		// default, unlike content mode's 250). 500 matches glob's cap. The
-		// trailing summary tells the agent how much was withheld so it can
-		// narrow the pattern or raise head_limit deliberately.
+		// Pagination parity with content mode: rg previously ignored offset
+		// here (the Go fallback supports it), so paging on rg-equipped
+		// machines always returned the first page. Honor offset before the
+		// cap, and keep the 500 default cap with its withheld-count hint.
+		start := args.Offset
+		if start > total {
+			start = total
+		}
 		limit := args.HeadLimit
 		if limit <= 0 {
 			limit = maxFilesWithMatches
 		}
-		shown := len(sortedLines)
-		if shown > limit {
-			sortedLines = sortedLines[:limit]
+		end := total
+		if start+limit < end {
+			end = start + limit
 		}
-		for _, l := range sortedLines {
+		shown := sortedLines[start:end]
+		for _, l := range shown {
 			sb.WriteString(l)
 			sb.WriteByte('\n')
 		}
-		if total > limit {
-			fmt.Fprintf(&sb, "\n(showing first %d of %d files; pass head_limit to raise the cap or narrow the pattern/glob)", limit, total)
+		if total > end || start > 0 {
+			fmt.Fprintf(&sb, "\n(showing %d-%d of %d files; use offset/head_limit to page or narrow the pattern/glob)", start+1, end, total)
 		}
 	}
 	if args.OutputMode == "files_with_matches" {
