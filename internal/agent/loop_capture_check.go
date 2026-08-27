@@ -270,12 +270,9 @@ func analyzeLoopsForCapture(fset *token.FileSet, funcName string, body *ast.Bloc
 			return true
 		}
 
-		rebound := collectReboundVars(loopBody, loopVars)
+		reboundAt := collectReboundVars(loopBody, loopVars)
 		for _, v := range loopVars {
-			if rebound[v] {
-				continue
-			}
-			instances = append(instances, findCaptureInBody(fset, funcName, loopBody, v, loopType)...)
+			instances = append(instances, findCaptureInBody(fset, funcName, loopBody, v, loopType, reboundAt)...)
 		}
 		return true
 	})
@@ -313,26 +310,50 @@ func forLoopVars(fs *ast.ForStmt) []string {
 	return vars
 }
 
-// collectReboundVars detects v := v rebindings at the top level of a loop
-// body. If a loop variable is rebound before use, captures of it are safe.
-func collectReboundVars(body *ast.BlockStmt, loopVars []string) map[string]bool {
+// collectReboundVars detects v := v rebindings anywhere in the loop body,
+// including statements nested inside if/switch/for blocks, and records the
+// earliest source position of each rebinding.
+// Issue #1132: only the top level of the loop body was scanned before, so
+// rebindings written inside nested blocks were missed and code that had
+// been correctly rebound was still reported as capturing the loop variable.
+// A rebinding only makes a capture safe when the capture appears AFTER it,
+// so the returned map is checked per capture point, not per loop:
+// "item := item" placed after a "go func(){...}()" changes nothing for
+// that goroutine.
+// Function literal bodies are deliberately not descended into: a binding
+// inside one closure scopes to that closure alone, and an in-closure
+// "v := v" still reads the shared loop variable at goroutine start time,
+// so it must not silence sibling closures that share the loop variable.
+func collectReboundVars(body *ast.BlockStmt, loopVars []string) map[string]token.Pos {
 	target := make(map[string]bool)
 	for _, v := range loopVars {
 		target[v] = true
 	}
-	result := make(map[string]bool)
-	for _, stmt := range body.List {
-		as, ok := stmt.(*ast.AssignStmt)
-		if !ok || as.Tok != token.DEFINE {
-			continue
+	result := make(map[string]token.Pos)
+	record := func(name string, pos token.Pos) {
+		if prev, ok := result[name]; !ok || pos < prev {
+			result[name] = pos
 		}
-		scanRebindAssignment(as, target, result)
 	}
+	ast.Inspect(body, func(n ast.Node) bool {
+		if _, ok := n.(*ast.FuncLit); ok {
+			// Closure-local declarations do not affect other closures
+			// that still share the loop variable (#1132).
+			return false
+		}
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || as.Tok != token.DEFINE {
+			return true
+		}
+		scanRebindAssignment(as, target, record)
+		return true
+	})
 	return result
 }
 
-// scanRebindAssignment checks a single assignment for v := v rebinding.
-func scanRebindAssignment(as *ast.AssignStmt, target, result map[string]bool) {
+// scanRebindAssignment checks a single assignment for v := v rebinding and
+// reports matched names with their declaration positions.
+func scanRebindAssignment(as *ast.AssignStmt, target map[string]bool, record func(name string, pos token.Pos)) {
 	for i, lhs := range as.Lhs {
 		if i >= len(as.Rhs) {
 			return
@@ -346,7 +367,7 @@ func scanRebindAssignment(as *ast.AssignStmt, target, result map[string]bool) {
 			continue
 		}
 		if lhsID.Name == rhsID.Name && target[lhsID.Name] {
-			result[lhsID.Name] = true
+			record(lhsID.Name, lhsID.Pos())
 		}
 	}
 }
@@ -354,7 +375,7 @@ func scanRebindAssignment(as *ast.AssignStmt, target, result map[string]bool) {
 // findCaptureInBody searches a loop body for go/defer function literals that
 // capture the given loop variable without passing it as a parameter.
 // Issue #1100: added funcName parameter for delta key generation.
-func findCaptureInBody(fset *token.FileSet, funcName string, body *ast.BlockStmt, varName, loopType string) []loopCaptureInstance {
+func findCaptureInBody(fset *token.FileSet, funcName string, body *ast.BlockStmt, varName, loopType string, reboundAt map[string]token.Pos) []loopCaptureInstance {
 	var instances []loopCaptureInstance
 
 	ast.Inspect(body, func(node ast.Node) bool {
@@ -368,8 +389,18 @@ func findCaptureInBody(fset *token.FileSet, funcName string, body *ast.BlockStmt
 			return true
 		}
 
-		// Flag if the variable is referenced inside the closure body.
-		if identReferenced(fl.Body, varName) {
+		// Safe if the variable was rebound before this closure (#1132).
+		// Capture points written before the rebinding still read the
+		// shared loop variable, so they keep being flagged.
+		if p, ok := reboundAt[varName]; ok && fl.Pos() > p {
+			return true
+		}
+
+		// Flag if the closure really captures the outer loop variable.
+		// Issue #1133: plain-name matching treated same-name identifiers
+		// declared inside the closure itself as captures of the loop
+		// variable, warning on code go vet considers clean.
+		if closureCapturesVar(fl.Body, varName) {
 			instances = append(instances, loopCaptureInstance{
 				posStr:   fset.Position(fl.Pos()).String(),
 				varName:  varName,
@@ -414,21 +445,76 @@ func collectFuncLitParams(fl *ast.FuncLit) map[string]bool {
 	return result
 }
 
-// identReferenced checks if an identifier with the given name appears anywhere
-// in the AST subtree.
-func identReferenced(node ast.Node, name string) bool {
-	found := false
-	ast.Inspect(node, func(n ast.Node) bool {
-		if found {
+// closureCapturesVar reports whether references to name inside flBody point
+// at the outer loop variable rather than at a locally declared one.
+// Issue #1133: identical-name declarations inside the closure shadow the
+// outer loop variable, so they must not be counted as captures.
+// Approximation: a reference counts as a capture when no same-name
+// declaration exists in the closure body, or when it appears before the
+// earliest such declaration; resolving the exact binding would require
+// type-checked scopes, which is out of scope for this edit-time heuristic.
+func closureCapturesVar(flBody ast.Node, name string) bool {
+	declPos := firstShadowDeclPos(flBody, name)
+	captured := false
+	ast.Inspect(flBody, func(n ast.Node) bool {
+		if captured {
 			return false
 		}
 		if id, ok := n.(*ast.Ident); ok && id.Name == name {
-			found = true
-			return false
+			if declPos == token.NoPos || id.Pos() < declPos {
+				captured = true
+			}
+		}
+		return !captured
+	})
+	return captured
+}
+
+// firstShadowDeclPos returns the earliest source position where name is
+// declared inside body, or token.NoPos when no such declaration exists.
+// Covered shadow forms (#1133): := assignments, var/const specs, range
+// clause defines, and parameters of function literals at any nesting depth.
+func firstShadowDeclPos(body ast.Node, name string) token.Pos {
+	declPos := token.NoPos
+	register := func(pos token.Pos) {
+		if declPos == token.NoPos || pos < declPos {
+			declPos = pos
+		}
+	}
+	ast.Inspect(body, func(n ast.Node) bool {
+		var declared []*ast.Ident
+		switch node := n.(type) {
+		case *ast.AssignStmt:
+			if node.Tok == token.DEFINE {
+				for _, lhs := range node.Lhs {
+					if id, ok := lhs.(*ast.Ident); ok {
+						declared = append(declared, id)
+					}
+				}
+			}
+		case *ast.ValueSpec:
+			declared = node.Names
+		case *ast.RangeStmt:
+			for _, expr := range []ast.Expr{node.Key, node.Value} {
+				if id, ok := expr.(*ast.Ident); ok {
+					declared = append(declared, id)
+				}
+			}
+		case *ast.FuncType:
+			if node.Params != nil {
+				for _, field := range node.Params.List {
+					declared = append(declared, field.Names...)
+				}
+			}
+		}
+		for _, id := range declared {
+			if id.Name == name {
+				register(id.Pos())
+			}
 		}
 		return true
 	})
-	return found
+	return declPos
 }
 
 // collectLoopCaptureIssues parses old content and returns a set of existing

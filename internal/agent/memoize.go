@@ -21,7 +21,11 @@ import (
 //
 // Invalidation strategy:
 //   - File-based tools (read_file): check file mtime AND size (#1104) - if unchanged, result is fresh
-//   - Directory tools (list_directory, glob): check directory mtime
+//   - Directory tools (list_directory): check directory mtime AND size, plus a
+//     short TTL backstop (#1125) - in-place child-file edits (gofmt -w,
+//     echo >> file) only update the child's mtime, and most filesystems do not
+//     refresh the parent directory's mtime or size, so the snapshot signals
+//     stay equal while listed child sizes are already stale
 //   - Search tools (grep, search_files): 30s TTL (results may change as files are edited)
 //   - LSP tools: 15s TTL (LSP server state changes as code is edited)
 //   - Git read tools: 10s TTL (working tree changes)
@@ -40,14 +44,21 @@ const (
 	memoizeSearchTTL  = 30 * time.Second
 	memoizeLSPTTL     = 15 * time.Second
 	memoizeGitTTL     = 10 * time.Second
+	// memoizeDirListTTL bounds directory-listing entries (#1125). Directory
+	// mtime/size alone cannot detect in-place edits of child files because
+	// mutating a child does not touch the parent directory's metadata on
+	// most filesystems, so the listing needs a short maximum age regardless
+	// of the fast-path signals.
+	memoizeDirListTTL = 5 * time.Second
 )
 
 type memoEntry struct {
 	result    tool.Result
 	createdAt time.Time
-	mtime     time.Time // file modification time at time of execution (for file-based tools)
-	path      string    // file/dir path for mtime invalidation (empty = TTL-only)
-	size      int64     // file size at capture time (#1104): catches same-tick edits on coarse-mtime filesystems
+	mtime     time.Time     // file modification time at time of execution (for file-based tools)
+	path      string        // file/dir path for mtime invalidation (empty = TTL-only)
+	size      int64         // file size at capture time (#1104): catches same-tick edits on coarse-mtime filesystems
+	maxAge    time.Duration // #1125: hard upper bound on entry freshness (0 = unbounded; used for dir listings whose mtime cannot observe child edits)
 }
 
 type toolMemo struct {
@@ -155,6 +166,17 @@ func (m *toolMemo) get(toolName string, args []byte) (tool.Result, bool) {
 		}
 	}
 
+	// #1125: maxAge is a hard backstop layered on top of whichever primary
+	// strategy applied above. For directory listings the primary signals
+	// (parent dir mtime/size) are blind to in-place child-file edits, so the
+	// listing must expire purely by age even when every stat comparison
+	// still matches.
+	if entry.maxAge > 0 && time.Since(entry.createdAt) > entry.maxAge {
+		m.removeLocked(k)
+		m.misses++
+		return tool.Result{}, false
+	}
+
 	// Move to end of LRU order.
 	m.touchLocked(k)
 	m.hits++
@@ -198,6 +220,14 @@ func (m *toolMemo) put(toolName string, args []byte, result tool.Result) {
 			entry.mtime = info.ModTime()
 			entry.size = info.Size() // #1104: record size alongside mtime
 		}
+	}
+
+	// #1125: directory listings get a short TTL backstop on top of the dir
+	// mtime/size fast path - in-place edits of child files (gofmt -w, echo >>)
+	// leave the parent directory's metadata untouched on most filesystems, so
+	// without an age bound the stale listing would be served indefinitely.
+	if toolName == "list_directory" {
+		entry.maxAge = memoizeDirListTTL
 	}
 
 	m.entries[k] = entry

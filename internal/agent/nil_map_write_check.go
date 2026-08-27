@@ -31,9 +31,13 @@ package agent
 //
 // False positive mitigation:
 //   - Only flags maps declared in the SAME function (not params or receivers)
-//   - If the map is assigned via make() or a map literal anywhere before the write,
-//     it is NOT flagged
+//   - If the map is assigned via make() or a map literal BEFORE a write,
+//     that write is NOT flagged (#1129: statement order matters - collecting
+//     and clearing nil-risk independently of position suppressed zero-risk
+//     judgments for real write-before-make panics)
 //   - If the map is reassigned from another map (which may be initialized), NOT flagged
+//   - #1130: assigning nil back (m = nil) revokes initialization, so writes
+//     after a re-nil are flagged again
 //   - Delta-aware: only flags patterns newly introduced by this edit
 
 import (
@@ -49,7 +53,7 @@ import (
 type nilMapWriteInstance struct {
 	posStr   string // human-readable position
 	mapName  string // variable name of the nil map
-	funcName string // enclosing function — map variable names are function-scoped,
+	funcName string // enclosing function - map variable names are function-scoped,
 	// so the delta key must include it to distinguish same-named maps in
 	// different functions (#222)
 }
@@ -104,7 +108,7 @@ func checkNilMapWrite(filePath, oldContent, newContent string) string {
 	}
 
 	// Build a set of old fingerprints for dedup: funcName + mapName. A bare
-	// mapName key suppresses same-named maps across different functions —
+	// mapName key suppresses same-named maps across different functions -
 	// they are independent variables, so a newly introduced nil-map write
 	// in a new function must still be flagged (#222).
 	oldSet := make(map[string]bool, len(oldInstances))
@@ -154,37 +158,31 @@ func findNilMapWritesInFunc(fset *token.FileSet, fn *ast.FuncDecl) []nilMapWrite
 }
 
 // collectNilRiskMaps finds var m map[K]V declarations (without initializer)
-// and returns the set of variable names that are nil-risk.
+// and returns the set of variable names that START the function as nil-risk.
+// #1129: initialization effects are applied by findUninitializedMapWrites in
+// statement order; removing nil-risk here (order-independently) caused
+// genuine write-before-make panics to be silently cleared.
 func collectNilRiskMaps(body *ast.BlockStmt) map[string]bool {
 	nilMaps := make(map[string]bool)
 	ast.Inspect(body, func(n ast.Node) bool {
-		switch decl := n.(type) {
-		case *ast.AssignStmt:
-			if decl.Tok == token.ASSIGN {
-				for _, lhs := range decl.Lhs {
-					if ident, ok := lhs.(*ast.Ident); ok {
-						if isMakeMapCall(decl.Rhs) || isMapLiteral(decl.Rhs) {
-							delete(nilMaps, ident.Name)
-						}
-					}
-				}
+		decl, ok := n.(*ast.DeclStmt)
+		if !ok {
+			return true
+		}
+		genDecl, ok := decl.Decl.(*ast.GenDecl)
+		if !ok || genDecl.Tok != token.VAR {
+			return true
+		}
+		for _, spec := range genDecl.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
 			}
-		case *ast.DeclStmt:
-			genDecl, ok := decl.Decl.(*ast.GenDecl)
-			if !ok || genDecl.Tok != token.VAR {
-				return true
-			}
-			for _, spec := range genDecl.Specs {
-				vs, ok := spec.(*ast.ValueSpec)
-				if !ok {
-					continue
-				}
-				if vs.Type != nil {
-					if _, isMap := vs.Type.(*ast.MapType); isMap && len(vs.Values) == 0 {
-						for _, name := range vs.Names {
-							if name.Name != "_" {
-								nilMaps[name.Name] = true
-							}
+			if vs.Type != nil {
+				if _, isMap := vs.Type.(*ast.MapType); isMap && len(vs.Values) == 0 {
+					for _, name := range vs.Names {
+						if name.Name != "_" {
+							nilMaps[name.Name] = true
 						}
 					}
 				}
@@ -195,20 +193,45 @@ func collectNilRiskMaps(body *ast.BlockStmt) map[string]bool {
 	return nilMaps
 }
 
-// findUninitializedMapWrites tracks initialization state and flags writes
-// to nil-risk maps that haven't been initialized yet.
+// findUninitializedMapWrites walks statements strictly in source order and
+// flags writes to nil-risk maps that are not yet initialized at the write
+// site. (#1129) Initialization is granted or revoked at the assignment that
+// performs it, so write-before-make panics stay visible while ordinary
+// make-then-write flows stay silent.
+// (#1130) An explicit m = nil revoke makes subsequent writes risky again.
 func findUninitializedMapWrites(fset *token.FileSet, body *ast.BlockStmt, nilMaps map[string]bool) []nilMapWriteInstance {
 	initialized := make(map[string]bool)
 	var instances []nilMapWriteInstance
 	ast.Inspect(body, func(n ast.Node) bool {
 		switch node := n.(type) {
 		case *ast.AssignStmt:
-			for _, lhs := range node.Lhs {
-				if ident, ok := lhs.(*ast.Ident); ok && nilMaps[ident.Name] {
-					if node.Tok == token.ASSIGN && len(node.Rhs) > 0 {
-						initialized[ident.Name] = true
+			for i, lhs := range node.Lhs {
+				ident, ok := lhs.(*ast.Ident)
+				if !ok || !nilMaps[ident.Name] {
+					// Still honor index writes through non-trivial LHS below.
+					if idx, isIdx := lhs.(*ast.IndexExpr); isIdx {
+						instances = append(instances, checkNilMapWriteInstance(fset, idx, nilMaps, initialized)...)
 					}
+					continue
 				}
+				if node.Tok != token.ASSIGN || i >= len(node.Rhs) {
+					continue
+				}
+				rhs := node.Rhs[i]
+				switch {
+				case isNilExpr(rhs):
+					// #1130: m = nil resets the variable to its nil zero
+					// value; later writes must be risky again.
+					delete(initialized, ident.Name)
+				case isMakeMapCall([]ast.Expr{rhs}) || isMapLiteral([]ast.Expr{rhs}):
+					initialized[ident.Name] = true
+				default:
+					// Reassigned from some other expression (function call,
+					// another variable): assume it may hold a valid map.
+					initialized[ident.Name] = true
+				}
+			}
+			for _, lhs := range node.Lhs {
 				if idx, ok := lhs.(*ast.IndexExpr); ok {
 					instances = append(instances, checkNilMapWriteInstance(fset, idx, nilMaps, initialized)...)
 				}
@@ -221,6 +244,18 @@ func findUninitializedMapWrites(fset *token.FileSet, body *ast.BlockStmt, nilMap
 		return true
 	})
 	return instances
+}
+
+// isNilExpr reports whether e is the untyped nil literal (optionally inside
+// parentheses). Used by the #1130 revoke path.
+func isNilExpr(e ast.Expr) bool {
+	switch t := e.(type) {
+	case *ast.Ident:
+		return t.Name == "nil"
+	case *ast.ParenExpr:
+		return isNilExpr(t.X)
+	}
+	return false
 }
 
 // checkNilMapWriteInstance returns a warning instance if the index expression
@@ -237,13 +272,17 @@ func checkNilMapWriteInstance(fset *token.FileSet, idx *ast.IndexExpr, nilMaps, 
 	}}
 }
 
-// deduplicateByMapName keeps only the first occurrence per map name.
+// deduplicateByMapName collapses repeat hits for the same write site.
+// #1130: the key includes the position so a second panic-capable site on a
+// different line (e.g. a write after m = nil revoked initialization) is
+// still reported instead of being silently merged into the first one.
 func deduplicateByMapName(instances []nilMapWriteInstance) []nilMapWriteInstance {
 	seen := make(map[string]bool)
 	var deduped []nilMapWriteInstance
 	for _, inst := range instances {
-		if !seen[inst.mapName] {
-			seen[inst.mapName] = true
+		k := inst.mapName + "\x00" + inst.posStr
+		if !seen[k] {
+			seen[k] = true
 			deduped = append(deduped, inst)
 		}
 	}

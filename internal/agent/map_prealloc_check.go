@@ -405,18 +405,30 @@ func scanForMapWrite(body *ast.BlockStmt, loopPos token.Pos, decls map[string]*m
 	return result
 }
 
-// hasConditionalSkip returns true if the loop body contains top-level
-// if/guard statements that might conditionally skip map entries.
-// This is a conservative check to reduce false positives.
+// hasConditionalSkip returns true if the loop body contains if/guard
+// statements that might conditionally skip map entries. This is a
+// conservative check to reduce false positives.
+// #1126: recursion now matches scanForMapWrite - conditional writes can sit
+// inside nested blocks/if branches, so only a full-depth traversal detects
+// every shape that could skip entries. Function literals are skipped:
+// their bodies execute in another scope and cannot gate loop iterations.
 func hasConditionalSkip(body *ast.BlockStmt) bool {
 	if body == nil {
 		return false
 	}
-	for _, stmt := range body.List {
-		switch stmt.(type) {
-		case *ast.IfStmt, *ast.SwitchStmt, *ast.TypeSwitchStmt, *ast.SelectStmt:
-			return true
+	skip := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if skip || n == nil {
+			return false
 		}
-	}
-	return false
+		switch n.(type) {
+		case *ast.IfStmt, *ast.SwitchStmt, *ast.TypeSwitchStmt, *ast.SelectStmt:
+			skip = true
+			return false
+		case *ast.FuncLit:
+			return false
+		}
+		return true
+	})
+	return skip
 }

@@ -53,8 +53,15 @@ import (
 
 // nilDerefInstance represents a detected nil-dereference-after-error pattern.
 type nilDerefInstance struct {
-	posStr  string // human-readable position
+	posStr  string // human-readable position (display only)
+	key     string // #1128: position-independent delta key (fn:name:deref text)
 	varName string // variable dereferenced without nil check
+}
+
+// nilDerefCtx carries per-function context used to build delta keys (#1128).
+type nilDerefCtx struct {
+	fset   *token.FileSet
+	fnName string
 }
 
 // checkNilDerefAfterError detects pointer dereferences before nil-error checks
@@ -81,15 +88,16 @@ func checkNilDerefAfterError(filePath, oldContent, newContent string) string {
 		if !ok || fn.Body == nil {
 			continue
 		}
-		instances = append(instances, findNilDerefsInFunc(fset, fn.Body)...)
+		instances = append(instances, findNilDerefsInFunc(fset, fn)...)
 	}
 
 	if len(instances) == 0 {
 		return ""
 	}
 
-	// Delta: count instances in old content and track their positions.
-	oldPositions := make(map[string]bool)
+	// Delta: track the position-independent keys of instances already present in
+	// old content (#1128: keys are stable across line insertions above).
+	oldKeys := make(map[string]bool)
 	if strings.TrimSpace(oldContent) != "" {
 		oldFset := token.NewFileSet()
 		oldFile, oldErr := parser.ParseFile(oldFset, filePath, oldContent, parser.AllErrors)
@@ -99,8 +107,8 @@ func checkNilDerefAfterError(filePath, oldContent, newContent string) string {
 				if !ok || fn.Body == nil {
 					continue
 				}
-				for _, inst := range findNilDerefsInFunc(oldFset, fn.Body) {
-					oldPositions[inst.posStr] = true
+				for _, inst := range findNilDerefsInFunc(oldFset, fn) {
+					oldKeys[inst.key] = true
 				}
 			}
 		}
@@ -109,7 +117,7 @@ func checkNilDerefAfterError(filePath, oldContent, newContent string) string {
 	// Filter to only NEW instances (not present in old content).
 	var newInstances []nilDerefInstance
 	for _, inst := range instances {
-		if !oldPositions[inst.posStr] {
+		if !oldKeys[inst.key] {
 			newInstances = append(newInstances, inst)
 		}
 	}
@@ -143,64 +151,216 @@ type nilRiskEntry struct {
 // is treated as cleared (the safe idiom `v, err := f(); if err == nil { v.Field }`
 // must not warn), while inside an `if err != nil` body the risk remains (a
 // dereference there is genuinely dangerous). After the statement the prior
-// risk state is restored — except when the err != nil body terminates
+// risk state is restored - except when the err != nil body terminates
 // (returns or panics), in which case code past the guard implies err == nil.
-func findNilDerefsInFunc(fset *token.FileSet, body *ast.BlockStmt) []nilDerefInstance {
-	// nilRisk maps variable name to its risk entry (position + associated error var).
-	nilRisk := make(map[string]nilRiskEntry)
-	var instances []nilDerefInstance
+// nilDerefWalker carries the per-function state shared by the recursive
+// statement walker introduced for #1127 (block-scoped risk bookkeeping).
+type nilDerefWalker struct {
+	ctx       *nilDerefCtx
+	nilRisk   map[string]nilRiskEntry
+	instances []nilDerefInstance
+}
 
-	var walk func(n ast.Node)
-	// #1070: Track block depth to implement block-scoped nilRisk clearing.
-	// The top-level function body has depth 0; nested blocks (including
-	// brother blocks like separate { } blocks) have depth > 0.
-	blockDepth := 0
-
-	walk = func(n ast.Node) {
-		if n == nil {
-			return
-		}
-		ast.Inspect(n, func(node ast.Node) bool {
-			// #1070: Track block depth and clear nilRisk when entering
-			// nested blocks to prevent leakage between brother blocks.
-			// The top-level function body (depth 0) retains risk state;
-			// nested blocks (depth >= 1) start with a clean state.
-			if _, ok := node.(*ast.BlockStmt); ok {
-				if blockDepth > 0 {
-					// Entering a nested block: clear nilRisk to prevent
-					// leakage from brother blocks with same variable names.
-					for k := range nilRisk {
-						delete(nilRisk, k)
-					}
-				}
-				blockDepth++
-				defer func() { blockDepth-- }()
-				return true
-			}
-
-			// Error-check if statements get scoped handling (#238).
-			if is, ok := node.(*ast.IfStmt); ok {
-				walkErrorCheckIf(is, nilRisk, walk)
-				return false // handled; do not descend generically
-			}
-
-			// Track assignments: v, err := f()
-			if assign, ok := node.(*ast.AssignStmt); ok {
-				processAssignment(assign, nilRisk)
-				return true
-			}
-
-			// Detect dereferences of nil-risk variables
-			if inst := detectNilDeref(fset, node, nilRisk); inst != nil {
-				instances = append(instances, inst...)
-			}
-
-			return true
-		})
+func findNilDerefsInFunc(fset *token.FileSet, fn *ast.FuncDecl) []nilDerefInstance {
+	fnName := "<anonymous>"
+	if fn.Name != nil {
+		fnName = fn.Name.Name
 	}
-	walk(body)
+	w := &nilDerefWalker{
+		ctx:     &nilDerefCtx{fset: fset, fnName: fnName},
+		nilRisk: make(map[string]nilRiskEntry),
+	}
+	w.walk(fn.Body)
+	return w.instances
+}
 
-	return instances
+// evalVisit inspects a subtree that cannot introduce new statements:
+// it records dereferences and routes function literals back into the
+// statement walker so closure bodies keep their own block scoping.
+func (w *nilDerefWalker) evalVisit(n ast.Node) {
+	if n == nil {
+		return
+	}
+	ast.Inspect(n, func(node ast.Node) bool {
+		if lit, ok := node.(*ast.FuncLit); ok {
+			w.walk(lit.Body)
+			return false
+		}
+		if inst := detectNilDeref(w.ctx, node, w.nilRisk); inst != nil {
+			w.instances = append(w.instances, inst...)
+		}
+		return true
+	})
+}
+
+// walkExpressionStatements handles statement kinds whose children are plain
+// expressions or declarations - none of them contain nested blocks, so a
+// single flat visit suffices for each. Includes the assignment risk
+// bookkeeping from processAssignment. Returns whether st was recognized.
+// (Extracted from walk during the #1127 rework.)
+func (w *nilDerefWalker) walkExpressionStatements(st ast.Node) bool {
+	switch s := st.(type) {
+	case *ast.AssignStmt:
+		processAssignment(s, w.nilRisk)
+		// The old flat visitor descended through LHS expressions as
+		// well (*p = v, cfg.hosts[i] = h); keep inspecting them.
+		for _, lhs := range s.Lhs {
+			w.evalVisit(lhs)
+		}
+		for _, rhs := range s.Rhs {
+			w.evalVisit(rhs)
+		}
+	case *ast.ExprStmt:
+		w.evalVisit(s.X)
+	case *ast.SendStmt:
+		w.evalVisit(s.Chan)
+		w.evalVisit(s.Value)
+	case *ast.IncDecStmt:
+		w.evalVisit(s.X)
+	case *ast.GoStmt:
+		w.evalVisit(s.Call)
+	case *ast.DeferStmt:
+		w.evalVisit(s.Call)
+	case *ast.ReturnStmt:
+		for _, res := range s.Results {
+			w.evalVisit(res)
+		}
+	case *ast.DeclStmt:
+		w.evalVisit(s.Decl)
+	default:
+		return false
+	}
+	return true
+}
+
+// walk dispatches n recursively. Block statements get explicit enter/exit
+// pairing, which a linear visitor cannot provide.
+func (w *nilDerefWalker) walk(n ast.Node) {
+	if n == nil {
+		return
+	}
+
+	// #1127 (issue 1070 follow-up): implement block-scoped risk state
+	// with explicit enter/exit pairing. Variables bound inside a nested
+	// block are not visible outside it, so risk entries created inside
+	// must not leak into following statements (the brother-block leak).
+	// A defer placed inside the ast.Inspect callback fires when that
+	// callback returns - not when the block ends - so the previous
+	// depth counter never advanced and its clearing was dead code.
+	// Mutations to entries that existed on entry (report-once deletions,
+	// permanent clears from terminating #533 guards) deliberately
+	// persist; only freshly added bindings are rolled back on exit.
+	if blk, ok := n.(*ast.BlockStmt); ok {
+		existed := make(map[string]bool, len(w.nilRisk))
+		for name := range w.nilRisk {
+			existed[name] = true
+		}
+		for _, st := range blk.List {
+			w.walk(st)
+		}
+		for name := range w.nilRisk {
+			if !existed[name] {
+				delete(w.nilRisk, name)
+			}
+		}
+		return
+	}
+
+	// Error-check if statements get scoped handling (#238). Their Init
+	// and branch pieces re-enter walk() and therefore inherit block
+	// scoping automatically.
+	if is, ok := n.(*ast.IfStmt); ok {
+		walkErrorCheckIf(is, w.nilRisk, w.walk)
+		return
+	}
+
+	if w.walkExpressionStatements(n) {
+		return
+	}
+
+	// Compound statements: recurse into each sub-piece in source order,
+	// routing condition/case expressions through evalVisit and their
+	// embedded blocks back through walk().
+	switch s := n.(type) {
+	case *ast.LabeledStmt:
+		w.walk(s.Stmt)
+	case *ast.ForStmt:
+		w.walk(s.Init)
+		w.evalVisit(s.Cond)
+		w.walk(s.Post)
+		w.walk(s.Body)
+	case *ast.RangeStmt:
+		w.evalVisit(s.Key)
+		w.evalVisit(s.Value)
+		w.evalVisit(s.X)
+		w.walk(s.Body)
+	case *ast.SwitchStmt:
+		w.walk(s.Init)
+		w.evalVisit(s.Tag)
+		w.walk(s.Body)
+	case *ast.TypeSwitchStmt:
+		w.walk(s.Init)
+		w.walk(s.Assign)
+		w.walk(s.Body)
+	case *ast.SelectStmt:
+		w.walk(s.Body)
+	case *ast.CaseClause:
+		for _, e := range s.List {
+			w.evalVisit(e)
+		}
+		for _, stmt := range s.Body {
+			w.walk(stmt)
+		}
+	case *ast.CommClause:
+		w.walk(s.Comm)
+		for _, stmt := range s.Body {
+			w.walk(stmt)
+		}
+	default:
+		w.evalVisit(n)
+	}
+}
+
+// derefPathText renders the chain rooted at e as a position-independent
+// token sequence used by the #1128 delta key. Traversal walks inward from
+// the dereference site to its base; '/' separates levels. Recognized chain
+// shapes continue inward; anything opaque contributes '?'.
+func derefPathText(e ast.Expr) string {
+	parts := make([]string, 0, 4)
+	cur := e
+	for depth := 0; cur != nil && depth < 64; depth++ {
+		switch t := cur.(type) {
+		case *ast.SelectorExpr:
+			parts = append(parts, "."+t.Sel.Name)
+			cur = t.X
+		case *ast.IndexExpr:
+			parts = append(parts, "[..]")
+			cur = t.X
+		case *ast.StarExpr:
+			parts = append(parts, "*")
+			cur = t.X
+		case *ast.ParenExpr:
+			cur = t.X
+		case *ast.Ident:
+			parts = append(parts, t.Name)
+			cur = nil
+		default:
+			parts = append(parts, "?")
+			cur = nil
+		}
+	}
+	// Reverse into text order: base first, outer dereference last.
+	for i, j := 0, len(parts)-1; i < j; i, j = i+1, j-1 {
+		parts[i], parts[j] = parts[j], parts[i]
+	}
+	return strings.Join(parts, "/")
+}
+
+// nilDerefKey builds the position-independent delta key (#1128): function
+// name, normalized dereference path, variable name. Line numbers are
+// excluded so inserting lines above cannot resurrect a suppressed warning.
+func nilDerefKey(ctx *nilDerefCtx, node ast.Expr, varName string) string {
+	return ctx.fnName + "|" + derefPathText(node) + "|" + varName
 }
 
 // processAssignment marks variables as nil-risk when they come from multi-return
@@ -239,7 +399,7 @@ func processAssignment(assign *ast.AssignStmt, nilRisk map[string]nilRiskEntry) 
 // reassigned alone (`v = ...`, #533) when the RHS is provably non-nil: an
 // address-of expression (`&S{...}`) or a `new(T)` call. Assignment of `nil`,
 // reads of the variable itself (`v = v.Next`), and ordinary calls keep the
-// risk — they can still produce nil.
+// risk - they can still produce nil.
 func clearReassignedRisk(assign *ast.AssignStmt, nilRisk map[string]nilRiskEntry) {
 	if len(assign.Lhs) != 1 {
 		return
@@ -264,7 +424,7 @@ func clearReassignedRisk(assign *ast.AssignStmt, nilRisk map[string]nilRiskEntry
 // the RHS of a pointer assignment.
 func isNonNullAssignExpr(e ast.Expr) bool {
 	switch v := e.(type) {
-	case *ast.UnaryExpr: // &S{...} / &T{} — composite address, never nil
+	case *ast.UnaryExpr: // &S{...} / &T{} - composite address, never nil
 		return v.Op == token.AND
 	case *ast.CallExpr: // new(T)
 		if id, ok := v.Fun.(*ast.Ident); ok {
@@ -343,14 +503,14 @@ func applyErrNilScopeSemantics(is *ast.IfStmt, op token.Token, errName string, n
 	}
 
 	switch op {
-	case token.EQL: // if err == nil { ... } — value is safe inside the body
+	case token.EQL: // if err == nil { ... } - value is safe inside the body
 		suppressSaved()
 		walk(is.Body)
 		unsuppressSaved()
 		if is.Else != nil { // else implies err != nil: risk applies
 			walk(is.Else)
 		}
-	case token.NEQ: // if err != nil { ... } — value is still at risk inside
+	case token.NEQ: // if err != nil { ... } - value is still at risk inside
 		walk(is.Body)
 		thenTerminates := ifBodyTerminates(is.Body)
 		if thenTerminates {
@@ -510,8 +670,11 @@ func isErrIdent(e ast.Expr) bool {
 	return looksLikeError(ident.Name)
 }
 
-// detectNilDeref checks if a node dereferences a nil-risk variable.
-func detectNilDeref(fset *token.FileSet, n ast.Node, nilRisk map[string]nilRiskEntry) []nilDerefInstance {
+// detectNilDeref checks if a node dereferences a nil-risk variable. The
+// per-function ctx supplies both the file set and the enclosing function
+// name used to build the #1128 delta key.
+func detectNilDeref(ctx *nilDerefCtx, n ast.Node, nilRisk map[string]nilRiskEntry) []nilDerefInstance {
+	fset := ctx.fset
 	var instances []nilDerefInstance
 
 	switch node := n.(type) {
@@ -521,10 +684,11 @@ func detectNilDeref(fset *token.FileSet, n ast.Node, nilRisk map[string]nilRiskE
 			if entry, risk := nilRisk[x.Name]; risk && !entry.cleared {
 				pos := fset.Position(node.Pos())
 				instances = append(instances, nilDerefInstance{
-					// #1069: Include variable name in delta key to distinguish
-					// different variables on the same line and prevent
-					// re-reporting when comments move.
+					// #1069/#1128: posStr stays line-anchored for display;
+					// the position-independent key prevents re-reporting
+					// after insertions above (#1128).
 					posStr:  fmt.Sprintf("%s:%d:%s", filepath.Base(pos.Filename), pos.Line, x.Name),
+					key:     nilDerefKey(ctx, node.X, x.Name),
 					varName: x.Name,
 				})
 				_ = entry
@@ -538,10 +702,9 @@ func detectNilDeref(fset *token.FileSet, n ast.Node, nilRisk map[string]nilRiskE
 			if entry, risk := nilRisk[x.Name]; risk && !entry.cleared {
 				pos := fset.Position(node.Pos())
 				instances = append(instances, nilDerefInstance{
-					// #1069: Include variable name in delta key to distinguish
-					// different variables on the same line and prevent
-					// re-reporting when comments move.
+					// #1128: same key scheme as SelectorExpr.
 					posStr:  fmt.Sprintf("%s:%d:%s", filepath.Base(pos.Filename), pos.Line, x.Name),
+					key:     nilDerefKey(ctx, node.X, x.Name),
 					varName: x.Name,
 				})
 				_ = entry
@@ -555,10 +718,9 @@ func detectNilDeref(fset *token.FileSet, n ast.Node, nilRisk map[string]nilRiskE
 			if entry, risk := nilRisk[x.Name]; risk && !entry.cleared {
 				pos := fset.Position(node.Pos())
 				instances = append(instances, nilDerefInstance{
-					// #1069: Include variable name in delta key to distinguish
-					// different variables on the same line and prevent
-					// re-reporting when comments move.
+					// #1128: same key scheme as SelectorExpr.
 					posStr:  fmt.Sprintf("%s:%d:%s", filepath.Base(pos.Filename), pos.Line, x.Name),
+					key:     nilDerefKey(ctx, node.X, x.Name),
 					varName: x.Name,
 				})
 				_ = entry
