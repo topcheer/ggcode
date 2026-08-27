@@ -3191,6 +3191,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					}
 				}
 			}
+			// Overcorrection cascade: record error signals for proportionality
+			// analysis. Must run on the pristine result content - moved above
+			// injectRulesIntoResult so injected learned-rule text can never
+			// re-classify as a diagnostic error and self-trigger the recorder
+			// (issue #1141).
+			a.overcorrectionRecordError(tc.Name, result.Content, result.IsError)
 			result.Content = a.injectRulesIntoResult(tc.Name, tc.Arguments, result.Content)
 			// Batch edit conflict warning: if this tool call targets a file that
 			// is also edited by another call in the same batch, inject a warning
@@ -3208,8 +3214,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// information-tool results for integration checking against the next
 			// assistant text (TRACE cross-step evidence, issue #341).
 			a.integrationRecordToolResult(tc.Name, result.Content)
-			// Overcorrection cascade: record error signals for proportionality analysis.
-			a.overcorrectionRecordError(tc.Name, result.Content, result.IsError)
 			// Overcorrection cascade: increment step counter for non-edit tools
 			// so stale errors expire (#104).
 			if !isEditTool(tc.Name) {

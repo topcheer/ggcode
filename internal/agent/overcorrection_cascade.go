@@ -49,6 +49,7 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 
@@ -312,23 +313,54 @@ func classifyErrorSeverity(toolName string, content string) errorSeverity {
 	}
 }
 
+// diagnosticWarningRe anchors 'warning:' to real compiler/linter diagnostic
+// shapes (issue #1141). It matches only:
+//   - positional output such as "util.go:27:2: warning: unused import",
+//     "main.c:41:9: warning: implicit declaration of function 'f'";
+//   - a line that begins with the bare marker "warning:" (bare-line form).
+//
+// Prose without either anchor - README text like "We prefer using the
+// Makefile", install hints like "Consider restarting your shell", titles like
+// "Warning: behavior changed" embedded mid-sentence or in headings after other
+// text on the same line - no longer classifies a SUCCESSFUL command result as
+// carrying an error.
+//
+// Missing a real diagnostic here is fail-safe: it only skips recording a
+// pending trivial error, whereas a false match corrupts the next edit's
+// overcorrection verdict (#1141).
+var diagnosticWarningRe = regexp.MustCompile(
+	`(?im)(?:[^\s]+\.[a-zA-Z][a-zA-Z0-9]{0,7}:\d+:\d+:[ \t]+|^[ \t]*)warning:`,
+)
+
 // classifyDiagnosticSeverity detects non-error diagnostic signals in successful results.
 // For example, a passing build may still contain warnings (unused import, etc.)
+//
+// Issue #1141: previously this performed lowercase substring matching with
+// loosely-worded patterns ("prefer", "consider", "should be", bare
+// "warning:"), which flagged benign successful command output and set a
+// pending error that later poisoned unrelated large edits. The list below is
+// restricted to unambiguous tool/linter phrases; "warning:" requires the
+// diagnostic-format anchoring in diagnosticWarningRe.
 func classifyDiagnosticSeverity(toolName string, content string) errorSeverity {
 	if toolName != "run_command" && toolName != "start_command" {
 		return severityNone
 	}
 	c := strings.ToLower(content)
-	// Common lint warning patterns that indicate trivial issues
+	// Common lint warning patterns that indicate trivial issues. Keep this
+	// list narrow and phrase-specific (#1141): generic English words are
+	// matched by ordinary prose in successful command output.
 	for _, pattern := range []string{
 		"unused import", "unused variable", "declared but not used",
+		"declared and not used",
 		"missing newline", "format specifier", "ineffectual assignment",
-		"deprecated:", "warning:", "lint:", "gosimple", "staticcheck",
-		"prefer", "consider", "should be",
+		"deprecated:", "lint:", "gosimple", "staticcheck",
 	} {
 		if strings.Contains(c, pattern) {
 			return severityTrivial
 		}
+	}
+	if diagnosticWarningRe.MatchString(content) {
+		return severityTrivial
 	}
 	return severityNone
 }
