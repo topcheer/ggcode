@@ -46,62 +46,88 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 // Issue #1100: read go.mod to detect Go version for range loop semantics.
 // Go 1.22+ uses per-iteration range variables, so the "classic gotcha" warning
 // should be suppressed for range loops when using Go 1.22+.
-var goModVersionChecked bool
-var isGo122Plus bool
+//
+// #1123: the version is resolved from the EDITED FILE's directory, not the
+// process cwd - in multi-module workspaces (go.work) or when the agent edits
+// files outside its working directory, the two can belong to different
+// modules and the cwd-based lookup applied the wrong module's semantics.
+// Results are cached per directory under a mutex (also removing the previous
+// unsynchronized package-global bool's data race).
+var (
+	goModVersionMu    sync.Mutex
+	goMod122PlusCache = make(map[string]bool)
+)
 
-func checkGoModVersion() {
-	if goModVersionChecked {
-		return
-	}
-	goModVersionChecked = true
-
-	// Read go.mod file in the current directory or parent directories.
-	// #1108: start from the absolute working dir - filepath.Dir(".") == "."
-	// terminates the walk immediately, so the upward search only worked
-	// when cwd happened to be the module root.
-	dir, err := os.Getwd()
+// go122PlusFor reports whether the module containing filePath declares
+// go 1.22 or newer. Unresolvable cases conservatively return false (old
+// semantics) so genuine capture bugs keep being flagged.
+func go122PlusFor(filePath string) bool {
+	abs, err := filepath.Abs(filePath)
 	if err != nil {
-		return
+		abs = filePath
 	}
+	dir := filepath.Dir(abs)
+
+	goModVersionMu.Lock()
+	if v, ok := goMod122PlusCache[dir]; ok {
+		goModVersionMu.Unlock()
+		return v
+	}
+	goModVersionMu.Unlock()
+
+	v := detectGo122Plus(dir)
+
+	goModVersionMu.Lock()
+	goMod122PlusCache[dir] = v
+	goModVersionMu.Unlock()
+	return v
+}
+
+// detectGo122Plus walks up from dir looking for a go.mod and reports whether
+// it declares go 1.22 or newer. The upward walk is bounded by the filesystem
+// root, so it terminates even when no go.mod exists.
+func detectGo122Plus(dir string) bool {
 	for {
-		path := filepath.Join(dir, "go.mod")
-		if content, err := os.ReadFile(path); err == nil {
-			// Parse go version line (e.g., "go 1.22.0" or "go 1.26.2")
-			lines := strings.Split(string(content), "\n")
-			for _, line := range lines {
-				line = strings.TrimSpace(line)
-				if strings.HasPrefix(line, "go ") {
-					version := strings.TrimPrefix(line, "go ")
-					parts := strings.Split(version, ".")
-					if len(parts) >= 2 {
-						major := strings.TrimSpace(parts[0])
-						minor := strings.TrimSpace(parts[1])
-						if major == "1" {
-							// Compare minor version: 22+ means Go 1.22+
-							if len(minor) > 0 && minor[0] >= '2' && len(minor) >= 2 && minor[0:2] >= "22" {
-								isGo122Plus = true
-							}
-						} else if major >= "2" {
-							// Go 2.0+ definitely has per-iteration range variables
-							isGo122Plus = true
-						}
-					}
-					break
-				}
-			}
-			break
+		if content, err := os.ReadFile(filepath.Join(dir, "go.mod")); err == nil {
+			return goModDeclares122Plus(content)
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			break
+			return false
 		}
 		dir = parent
 	}
+}
+
+// goModDeclares122Plus scans go.mod content for the first "go <version>"
+// directive and reports whether that version is 1.22 or newer (or Go 2+).
+func goModDeclares122Plus(content []byte) bool {
+	for _, line := range strings.Split(string(content), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "go ") {
+			continue
+		}
+		parts := strings.Fields(strings.TrimPrefix(line, "go "))
+		if len(parts) == 0 {
+			return false
+		}
+		nums := strings.Split(parts[0], ".")
+		major, minor := nums[0], ""
+		if len(nums) > 1 {
+			minor = nums[1]
+		}
+		if major != "1" {
+			return major >= "2" // Go 2+ has per-iteration loop variables
+		}
+		return len(minor) >= 2 && minor >= "22" // e.g. "9" < "22", "22" >= "22"
+	}
+	return false
 }
 
 // loopCaptureInstance represents a detected loop variable capture issue.
@@ -128,8 +154,9 @@ func checkLoopVarCapture(filePath, oldContent, newContent string) []string {
 		return nil
 	}
 
-	// Issue #1100: check go.mod version to suppress range warnings for Go 1.22+
-	checkGoModVersion()
+	// Issue #1100 / #1123: resolve Go version from the edited file's own
+	// module so the downgrade decision matches the file's semantics.
+	is122 := go122PlusFor(filePath)
 
 	oldSet := collectLoopCaptureIssues(oldContent)
 	newInstances := findLoopCaptureIssues(newContent)
@@ -143,7 +170,7 @@ func checkLoopVarCapture(filePath, oldContent, newContent string) []string {
 		if oldSet[key] {
 			continue
 		}
-		warnings = append(warnings, formatLoopCaptureWarning(inst))
+		warnings = append(warnings, formatLoopCaptureWarning(inst, is122))
 	}
 
 	if len(warnings) > 3 {
@@ -155,7 +182,9 @@ func checkLoopVarCapture(filePath, oldContent, newContent string) []string {
 // formatLoopCaptureWarning converts a loopCaptureInstance into a warning string.
 // Issue #1100: for range loops with Go 1.22+, the warning is downgraded
 // since range variables are per-iteration.
-func formatLoopCaptureWarning(inst loopCaptureInstance) string {
+// #1123: the 1.22+ flag is a parameter (resolved per edited file) instead of
+// the former process-cwd global.
+func formatLoopCaptureWarning(inst loopCaptureInstance, is122 bool) string {
 	fixHint := " Pass it as a parameter: go func(item T) { use(item) }(item), or rebind: item := item before the closure."
 	if inst.kind == "goroutine" {
 		// Issue #1100/#1108: suppress "classic gotcha" warning for loop
@@ -164,7 +193,7 @@ func formatLoopCaptureWarning(inst loopCaptureInstance) string {
 		// notes ("both those declared by the init statement and those
 		// declared by range").
 		rangeWarning := "all goroutines may see the last iteration's value (classic Go gotcha)."
-		if isGo122Plus {
+		if is122 {
 			rangeWarning = "may still be a bug if the closure is delayed or saved for later use."
 		}
 		return fmt.Sprintf(
@@ -178,7 +207,7 @@ func formatLoopCaptureWarning(inst loopCaptureInstance) string {
 	// so asserting "will use the variable's final value" is factually
 	// wrong for every flagged case in a 1.22+ module.
 	deferWarning := "the deferred call will use the variable's final value, not the value at defer time."
-	if isGo122Plus {
+	if is122 {
 		deferWarning = "Go 1.22+ captures a per-iteration variable here, so this is usually safe; " +
 			"defers still accumulate until function exit - watch memory and execution order."
 	}
