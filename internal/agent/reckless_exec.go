@@ -1,5 +1,7 @@
 package agent
 
+import "os"
+
 // reckless_exec.go -- Reckless Execution Detector
 //
 // Research basis:
@@ -193,12 +195,16 @@ func (s *recklessExecState) wasExplored(path string) bool {
 // recklessSuffixMatch reports whether one normalized path is the other
 // extended by a directory boundary, i.e. they refer to the same file
 // differing only in how much of the directory prefix is spelled out.
+// Both inputs come from recklessPathKey (filepath.Clean), so the boundary
+// separator is the platform's os.PathSeparator ('/' on Unix, '\\' on
+// Windows). Hardcoding '/' broke every absolute-vs-relative suffix match
+// on Windows (issue #1169 follow-up).
 func recklessSuffixMatch(a, b string) bool {
 	if len(a) > len(b) {
-		return strings.HasSuffix(a, b) && a[len(a)-len(b)-1] == '/'
+		return strings.HasSuffix(a, b) && a[len(a)-len(b)-1] == os.PathSeparator
 	}
 	if len(b) > len(a) {
-		return strings.HasSuffix(b, a) && b[len(b)-len(a)-1] == '/'
+		return strings.HasSuffix(b, a) && b[len(b)-len(a)-1] == os.PathSeparator
 	}
 	return false
 }
