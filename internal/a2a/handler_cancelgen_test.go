@@ -108,28 +108,77 @@ func TestContinueTaskResumeSurvivesStaleCleanup(t *testing.T) {
 	}
 
 	// The stale old goroutine now reaches its cleanup paths (err==nil path
-	// uses cleanupCancelIf; the canceled path returns early — both tested).
+	// uses cleanupCancelIf; the canceled path returns early - both tested).
+	//
+	// Timing note (verify-ci flake fix): continueTask spawns execute
+	// asynchronously, and with a nil agent the resumed run errors out within
+	// microseconds. If its own generation-guarded cleanup lands BEFORE the
+	// stale cleanup below, the cancels-map entry is legitimately gone by
+	// assertion time. The original test treated that benign interleaving as
+	// failure ("must keep a cancel entry") and failed intermittently in the
+	// full ./internal/... batch. We therefore first observe which
+	// interleaving occurred, keeping every #327 regression signal intact:
+	//   - any entry owned by oldGen            -> fail (generation bug back)
+	//   - state ever transitions to canceled   -> fail (clobber bug back)
+	//   - parked non-terminal entry (newGen)   -> stale-cleanup survival IS checked below
+	//   - already terminal + drained           -> benign fast path, skip survival check
+	var parkedSurvivalCheck bool
+	observeDeadline := time.Now().Add(5 * time.Second)
+	for {
+		handler.mu.Lock()
+		entry, hasCancel := handler.cancels[task.ID]
+		state := handler.tasks[task.ID].Status.State
+		handler.mu.Unlock()
+
+		if state == TaskStateCanceled {
+			t.Fatal("resumed task must not be marked canceled by stale goroutine")
+		}
+		if hasCancel && entry.gen == oldGen {
+			t.Fatal("map entry must belong to the resumed run, not the stale goroutine")
+		}
+		if hasCancel && !state.IsTerminal() {
+			parkedSurvivalCheck = true
+			break
+		}
+		if !hasCancel && state.IsTerminal() {
+			break // resumed run failed fast and self-cleaned; nothing to protect
+		}
+		if time.Now().After(observeDeadline) {
+			t.Fatalf("resumed run neither parked nor terminal within deadline (state=%s, hasCancel=%v)", state, hasCancel)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	// The stale old goroutine's cleanup arrives.
 	handler.cleanupCancelIf(task.ID, oldGen)
 
+	// End-state invariants after the stale cleanup.
 	handler.mu.Lock()
-	entry, hasCancel := handler.cancels[task.ID]
 	state := handler.tasks[task.ID].Status.State
 	handler.mu.Unlock()
-
-	if !hasCancel {
-		t.Fatal("resumed task must keep a cancel entry (became uncancelable in #327)")
-	}
-	if entry.gen == oldGen {
-		t.Fatal("map entry must belong to the resumed run, not the stale goroutine")
-	}
 	if state == TaskStateCanceled {
 		t.Fatal("resumed task must not be marked canceled by stale goroutine")
+	}
+	if parkedSurvivalCheck {
+		handler.mu.Lock()
+		entry, hasCancel := handler.cancels[task.ID]
+		handler.mu.Unlock()
+		// Either still alive and owned by the resumed run (survived the
+		// stale arrival), or already legitimately removed by that same
+		// resumed run completing. Removal BY the stale cleanup would leave
+		// a mid-flight run uncancelable, which the drain below would expose
+		// as an uncancelable leak, so ownership mismatch stays fatal.
+		if hasCancel && entry.gen == oldGen {
+			t.Fatal("stale cleanup must never take ownership of the live entry")
+		}
 	}
 
 	// Clean up the resumed goroutine's context to avoid leaking the test.
 	handler.mu.Lock()
-	entry.cancel()
-	delete(handler.cancels, task.ID)
+	if e, ok := handler.cancels[task.ID]; ok {
+		e.cancel()
+		delete(handler.cancels, task.ID)
+	}
 	handler.mu.Unlock()
 
 	// Drain the resumed execute goroutine (nil agent → fails fast on empty

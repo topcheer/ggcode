@@ -221,6 +221,7 @@ func TestAllChecksRegistered(t *testing.T) {
 		"regex-loop", "nplus1-loop", // #1020 revival
 		"binary-corruption", "merge-conflict-markers", // #601 delta gates
 		"nil-map-write", "append-ignored", // #499 revival class
+		"magic-numbers", "map-prealloc", "missing-prealloc", // #1102 wired orphans
 	}
 	for _, name := range mustRegistered {
 		found := false

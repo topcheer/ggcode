@@ -3004,7 +3004,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// File-editing tools invalidate the speculative cache: any
 			// pre-executed read_file/grep results for edited files are now
 			// stale. Clear the cache to prevent serving outdated content.
-			if (fileEditingTools[tc.Name] || gitFileModifyingTools[tc.Name] || tc.Name == "notebook_edit") && !result.IsError {
+			// #1104: undo_edit is included - checkpoint restore rewrites the
+			// file, and without invalidation the next read could be served
+			// from the memoize/speculator/command caches describing the
+			// pre-undo state. See mutatesSourceTree in verify_hint.go.
+			if mutatesSourceTree(tc.Name) && !result.IsError {
 				a.speculator.invalidateCache()
 				// Git whole-tree operations (checkout, reset, revert) change
 				// potentially all files at once. They need nuclear invalidation:

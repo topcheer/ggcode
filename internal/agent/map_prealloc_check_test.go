@@ -219,3 +219,113 @@ func indexOf(s, sub string) int {
 	}
 	return -1
 }
+
+// Issue #1103 regression: two functions sharing a bare variable name must
+// stay isolated. fA declares a hintless map but never populates it; fB
+// populates a SLICE named m. The old whole-file bare-name index matched fB's
+// loop writes against fA's map declaration and emitted a harmful "preallocate
+// your slice" suggestion.
+func TestMapPrealloc_NoCrossFunctionCollision(t *testing.T) {
+	code := `package main
+type Row struct { A int }
+
+func fA() {
+	m := make(map[string]int)
+	_ = m
+}
+
+func fB(rows []Row) {
+	m := make([]int, 0)
+	for _, r := range rows {
+		m = append(m, r.A)
+	}
+	_ = m
+}`
+	warnings := checkMapPrealloc("test.go", "", code)
+	if len(warnings) != 0 {
+		t.Fatalf("expected zero warnings for cross-function name collision, got: %v", warnings)
+	}
+}
+
+// Same-name isolation must not regress detection when decl and loop share a
+// function unit.
+func TestMapPrealloc_SameFunctionStillDetected(t *testing.T) {
+	code := `package main
+type Item struct { Key string }
+func insert(items []Item) map[string]bool {
+	m := make(map[string]bool)
+	for _, it := range items {
+		m[it.Key] = true
+	}
+	return m
+}`
+	warnings := checkMapPrealloc("test.go", "", code)
+	if len(warnings) == 0 {
+		t.Fatal("expected warning for same-function hintless map populate")
+	}
+}
+
+// Package-level maps remain visible to loops in any function of the file,
+// unless the local scope shadows the name with a parameter.
+func TestMapPrealloc_PackageLevelMapStillDetected(t *testing.T) {
+	code := `package main
+var cache = make(map[string]bool)
+
+type Item struct { Key string }
+func insert(items []Item) {
+	for _, it := range items {
+		cache[it.Key] = true
+	}
+}`
+	warnings := checkMapPrealloc("test.go", "", code)
+	if len(warnings) == 0 {
+		t.Fatal("expected warning for package-level hintless map populated in a loop")
+	}
+	if !strContains(warnings[0], "len(items)") {
+		t.Errorf("expected len(items) size hint, got: %s", warnings[0])
+	}
+}
+
+func TestMapPrealloc_ParameterShadowSuppressesPackageMap(t *testing.T) {
+	code := `package main
+var cache = make(map[string]bool)
+
+type Item struct { Key string }
+func insert(cache map[string]bool, items []Item) {
+	for _, it := range items {
+		cache[it.Key] = true
+	}
+}`
+	warnings := checkMapPrealloc("test.go", "", code)
+	if len(warnings) != 0 {
+		t.Fatalf("parameter shadowing the package-level map must not warn, got: %v", warnings)
+	}
+}
+
+// Closures are analyzed as their own units: part is warned inside its own
+// scope exactly once, and total (declared outside, written nowhere) must not
+// be misattributed from the closure's loop.
+func TestMapPrealloc_ClosureUnit(t *testing.T) {
+	code := `package main
+type Item struct { Key string; Val int }
+
+func run(items []Item, cb func(map[string]int)) map[string]int {
+	total := make(map[string]int)
+	fn := func() {
+		part := make(map[string]int)
+		for _, it := range items {
+			part[it.Key] = it.Val
+		}
+		cb(part)
+	}
+	fn()
+	return total
+}`
+	warnings := checkMapPrealloc("test.go", "", code)
+	if len(warnings) != 1 {
+		t.Fatalf("expected exactly 1 warning for closure-local map, got %d: %v", len(warnings), warnings)
+	}
+	if !strContains(warnings[0], `"part"`) {
+		t.Errorf("expected the warning about part, got: %s", warnings[0])
+	}
+}

@@ -20,7 +20,7 @@ import (
 // replaces old results with placeholders, and the agent re-calls the tool.
 //
 // Invalidation strategy:
-//   - File-based tools (read_file): check file mtime - if unchanged, result is fresh
+//   - File-based tools (read_file): check file mtime AND size (#1104) - if unchanged, result is fresh
 //   - Directory tools (list_directory, glob): check directory mtime
 //   - Search tools (grep, search_files): 30s TTL (results may change as files are edited)
 //   - LSP tools: 15s TTL (LSP server state changes as code is edited)
@@ -28,6 +28,12 @@ import (
 //
 // This is complementary to speculative execution (predicts next call) and
 // parallel pre-execution (pre-runs all read-only tools in a batch).
+
+// #1104 gap 1: on coarse-granularity filesystems (ext3/HFS+/NFS/FAT32,
+// 1-2s ticks) an edit performed right after a cached read can produce the
+// SAME ModTime as the entry snapshot, so mtime equality alone stale-serves
+// pre-edit content. Entries therefore also record the file size at capture
+// time and are invalidated when either signal drifts.
 
 const (
 	memoizeMaxEntries = 50 // bounded LRU
@@ -41,6 +47,7 @@ type memoEntry struct {
 	createdAt time.Time
 	mtime     time.Time // file modification time at time of execution (for file-based tools)
 	path      string    // file/dir path for mtime invalidation (empty = TTL-only)
+	size      int64     // file size at capture time (#1104): catches same-tick edits on coarse-mtime filesystems
 }
 
 type toolMemo struct {
@@ -129,6 +136,15 @@ func (m *toolMemo) get(toolName string, args []byte) (tool.Result, bool) {
 			m.misses++
 			return tool.Result{}, false
 		}
+		// #1104: equal mtimes do not prove freshness on coarse-granularity
+		// filesystems - an edit inside the same tick leaves ModTime frozen.
+		// A size mismatch catches every content change that alters length;
+		// treat it as a miss too.
+		if info.Size() != entry.size {
+			m.removeLocked(k)
+			m.misses++
+			return tool.Result{}, false
+		}
 	} else {
 		// TTL-based invalidation.
 		ttl := m.getTTL(toolName)
@@ -180,6 +196,7 @@ func (m *toolMemo) put(toolName string, args []byte, result tool.Result) {
 	if path != "" {
 		if info, err := os.Stat(path); err == nil {
 			entry.mtime = info.ModTime()
+			entry.size = info.Size() // #1104: record size alongside mtime
 		}
 	}
 

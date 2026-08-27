@@ -423,6 +423,18 @@ func registerAllChecks() {
 		// preceding terminating statements or impossible branches. Fully
 		// implemented + unit tested.
 		{Name: "unreachable-code", Langs: []Language{LangGo}, Run: sliceCheck(checkUnreachableCode)},
+		// #1102: magic-numbers - flags numeric literals newly introduced by
+		// this write (delta-aware: literal counts in old content are
+		// subtracted). Skips tests and type conversions on its own.
+		{Name: "magic-numbers", Langs: []Language{LangGo}, Run: stringCheck(checkMagicNumbers)},
+		// #1102: map-prealloc - hintless make(map[K]V) populated inside a loop.
+		// Function-scoped per #1103: declarations only correlate with loops in
+		// the same function unit, so no cross-function slice/map name reuse FP.
+		// Delta-aware via its own old-content comparison.
+		{Name: "map-prealloc", Langs: []Language{LangGo}, Run: sliceCheck(checkMapPrealloc)},
+		// #1102: missing-prealloc - zero-capacity slices appended in loops,
+		// now function-scoped per #1103 alongside the map detector. Delta-aware.
+		{Name: "missing-prealloc", Langs: []Language{LangGo}, Run: sliceCheck(checkMissingPrealloc)},
 		// #571: test-isolation — detects global state mutations in test files
 		// (os.Setenv, mutating package-level vars) that cause test pollution.
 		// Fully implemented + unit tested.

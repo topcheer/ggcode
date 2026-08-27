@@ -100,6 +100,19 @@ var packageMainRe = regexp.MustCompile(`(?m)^\s*package\s+main\b`)
 type loggingIntelInstance struct {
 	category string // "sensitive_log_arg" or "fatal_in_library"
 	detail   string // human-readable description
+	line     int    // 1-based line in stripped source; disambiguates fatal-family instances whose details are identical (#1109 Item B)
+}
+
+// contentKey returns a stable identity key for the content-anchored delta
+// comparison (#1109 Item B, mirroring the #1099 approach in
+// lock_without_unlock_check.go). Fatal-family instances all share one detail
+// string with no positional info, so their captured line breaks the tie;
+// sensitive-log instances already embed line number and code excerpt.
+func (li loggingIntelInstance) contentKey() string {
+	if li.line > 0 {
+		return fmt.Sprintf("%s|%d", li.category, li.line)
+	}
+	return li.category + "|" + li.detail
 }
 
 // checkLoggingIntel detects logging anti-patterns introduced by this edit.
@@ -135,33 +148,53 @@ func checkLoggingIntel(filePath, oldContent, newContent string) []string {
 		scanOld = scanOld[:maxLogScanLen]
 	}
 
-	oldSensitive := countSensitiveLogArgs(scanOld, ext)
-	oldFatal := countFatalInLib(scanOld, ext, filePath)
+	// #1109 Item B: compare by instance identity keys (content anchors), not
+	// by ordered-prefix position, so deleting one old instance while adding
+	// two new ones flags both additions.
+	sensitiveOldKeys := collectContentKeys(findSensitiveLogArgs(scanOld, ext))
+	fatalOldKeys := collectContentKeys(findFatalInLib(scanOld, ext, filePath))
 	newSensitive := findSensitiveLogArgs(scanNew, ext)
 	newFatal := findFatalInLib(scanNew, ext, filePath)
 
 	var warnings []string
 
-	// Sensitive log args: flag only newly introduced instances
-	if len(newSensitive) > oldSensitive {
-		start := oldSensitive
-		for i := start; i < len(newSensitive) && len(warnings) < maxLogIntelWarnings; i++ {
-			warnings = append(warnings, newSensitive[i].detail)
-		}
-	}
+	// Sensitive log args: flag only instances NEW relative to old keys.
+	warnings = warnNewInstances(newSensitive, sensitiveOldKeys, warnings)
 
-	// Fatal in library: flag only newly introduced instances
-	if len(newFatal) > oldFatal {
-		start := oldFatal
-		for i := start; i < len(newFatal) && len(warnings) < maxLogIntelWarnings; i++ {
-			warnings = append(warnings, newFatal[i].detail)
-		}
-	}
+	// Fatal in library: same content-anchored delta (#1109 Item B).
+	warnings = warnNewInstances(newFatal, fatalOldKeys, warnings)
 
 	if len(warnings) > 0 {
 		debug.Log("logging-intel", "detected %d logging anti-pattern(s) in %s", len(warnings), filePath)
 	}
 
+	return warnings
+}
+
+// collectContentKeys builds the identity-key set for a list of instances
+// (#1109 Item B). Keys anchor each instance by content so the old/new delta
+// survives deletions and reordering.
+func collectContentKeys(insts []loggingIntelInstance) map[string]bool {
+	keys := make(map[string]bool, len(insts))
+	for _, inst := range insts {
+		keys[inst.contentKey()] = true
+	}
+	return keys
+}
+
+// warnNewInstances appends details for instances whose content key did NOT
+// exist before the edit (#1109 Item B). Stops once maxLogIntelWarnings is
+// reached.
+func warnNewInstances(newInsts []loggingIntelInstance, oldKeys map[string]bool, warnings []string) []string {
+	for i := range newInsts {
+		if len(warnings) >= maxLogIntelWarnings {
+			break
+		}
+		if oldKeys[newInsts[i].contentKey()] {
+			continue
+		}
+		warnings = append(warnings, newInsts[i].detail)
+	}
 	return warnings
 }
 
@@ -192,6 +225,12 @@ func findSensitiveLogArgs(src, ext string) []loggingIntelInstance {
 
 // findGoSensitiveLogArgs finds Go log calls with sensitive variable arguments.
 func findGoSensitiveLogArgs(src string) []loggingIntelInstance {
+	// #1109 Item A2: strip comments before matching. A log.Printf wrapped in a
+	// block comment previously produced a sensitive_log_arg false positive;
+	// single-line // cases were already safe thanks to the ^\s* line anchor.
+	// stripGoComments preserves newlines so reported line numbers stay valid.
+	src = stripGoComments(src)
+
 	lines := strings.Split(src, "\n")
 	var results []loggingIntelInstance
 
@@ -360,11 +399,16 @@ func findFatalInLib(src, ext, filePath string) []loggingIntelInstance {
 	// Only flag Fatal in regular function bodies.
 	stripped = stripInitFuncs(stripped)
 
-	matches := goFatalInLibRe.FindAllString(stripped, -1)
+	// #1109 Item B: capture offsets so each instance carries a distinguishable
+	// line key. Fatal details are otherwise all identical, making them
+	// indistinguishable in the content-anchored delta.
+	offsets := goFatalInLibRe.FindAllStringIndex(stripped, -1)
 	var results []loggingIntelInstance
-	for range matches {
+	for _, off := range offsets {
+		line := 1 + strings.Count(stripped[:off[0]], "\n")
 		results = append(results, loggingIntelInstance{
 			category: "fatal_in_library",
+			line:     line,
 			detail: "[LOGGING WARNING] log.Fatal/log.Panic in non-main package. " +
 				"Calling log.Fatal in a library terminates the entire process " +
 				"without giving callers a chance to handle the error. " +
@@ -377,58 +421,122 @@ func findFatalInLib(src, ext, filePath string) []loggingIntelInstance {
 
 // #1098 Bug 2: stripGoComments removes single-line and multi-line Go comments
 // from source code to avoid false positives from comment text.
+// #1109 Item A1: string, rune, and raw-string literals are tracked with a
+// state machine so comment markers inside string values (e.g. URLs like
+// "http://example.com" or template placeholders like "/* x */") no longer
+// start a bogus comment region that silently swallows real log.Fatal code
+// after it (under-reporting).
+// #1109 Item A2: newlines consumed inside comments are preserved so line
+// numbers reported downstream stay aligned with the original source.
 func stripGoComments(src string) string {
 	var result strings.Builder
-	inSingleLineComment := false
-	inMultiLineComment := false
-
+	result.Grow(len(src))
 	for i := 0; i < len(src); i++ {
-		if inSingleLineComment {
-			if src[i] == '\n' {
-				inSingleLineComment = false
-				result.WriteByte(src[i])
+		switch c := src[i]; {
+		case c == '"' || c == '\'' || c == '`':
+			i = consumeGoString(src, i, &result) - 1
+		case c == '/' && i+1 < len(src) && src[i+1] == '/':
+			rest := strings.IndexByte(src[i+2:], '\n')
+			if rest < 0 {
+				i = len(src) // line comment runs to EOF: drop silently
+			} else {
+				i += 2 + rest
+				result.WriteByte('\n') // preserve the line break (#1109 Item A2)
 			}
-			continue
+		case c == '/' && i+1 < len(src) && src[i+1] == '*':
+			end := consumeGoBlockComment(src, i, &result)
+			if end < 0 {
+				i = len(src) // unterminated comment: drop the remainder
+			} else {
+				i = end - 1
+			}
+		default:
+			result.WriteByte(c)
 		}
-
-		if inMultiLineComment {
-			if i+1 < len(src) && src[i] == '*' && src[i+1] == '/' {
-				inMultiLineComment = false
-				i++ // skip the closing '/'
-				continue
-			}
-			continue
-		}
-
-		// Check for comment start
-		if i+1 < len(src) && src[i] == '/' {
-			if src[i+1] == '/' {
-				inSingleLineComment = true
-				i++ // skip the second '/'
-				continue
-			}
-			if src[i+1] == '*' {
-				inMultiLineComment = true
-				i++ // skip the '*'
-				continue
-			}
-		}
-
-		// Not in a comment, copy the character
-		result.WriteByte(src[i])
 	}
-
 	return result.String()
 }
 
-// #1098 Bug 2: stripInitFuncs removes init() function bodies from Go source code
-// so log.Fatal inside init() is not flagged. Uses a simple regex-based approach
-// that removes everything between "func init()" and the matching closing brace.
+// consumeGoString copies the string/rune/raw-string literal starting at
+// src[i] (which must be a quote character) verbatim into out and returns the
+// index just past its closing quote, or len(src) if unterminated
+// (#1109 Item A1).
+func consumeGoString(src string, i int, out *strings.Builder) int {
+	quote := src[i]
+	raw := quote == '`' // backtick raw string - escapes carry no meaning
+	out.WriteByte(quote)
+	for j := i + 1; j < len(src); j++ {
+		out.WriteByte(src[j])
+		if !raw && src[j] == '\\' && j+1 < len(src) {
+			j++
+			out.WriteByte(src[j]) // escaped pair travels together
+			continue
+		}
+		if src[j] == quote {
+			return j + 1
+		}
+	}
+	return len(src)
+}
+
+// consumeGoBlockComment skips a /* */ comment beginning at the '/' in src[i],
+// writing interior newlines to out so line numbers stay aligned (#1109 Item
+// A2). Returns the index just past the closing '*/', or -1 if unterminated.
+func consumeGoBlockComment(src string, i int, out *strings.Builder) int {
+	for j := i + 2; j < len(src); j++ {
+		switch src[j] {
+		case '\n':
+			out.WriteByte('\n')
+		case '*':
+			if j+1 < len(src) && src[j+1] == '/' {
+				return j + 2
+			}
+		}
+	}
+	return -1
+}
+
+// initFuncDeclRe matches the start of an init() function declaration up to its
+// opening brace.
+var initFuncDeclRe = regexp.MustCompile(`func\s+init\s*\(\s*\)\s*\{`)
+
+// #1098 Bug 2 / #1109 Item C: stripInitFuncs removes init() function bodies
+// from Go source code so log.Fatal inside init() is not flagged. Uses balanced
+// brace scanning: the previous regex `[^}]*\}` stopped at the FIRST closing
+// brace, truncating bodies that contain nested blocks (e.g. if statements) and
+// leaving log.Fatal calls after those blocks unstripped (fail-fast false
+// positives).
 func stripInitFuncs(src string) string {
-	// This regex matches "func init()" followed by any content until
-	// the matching closing brace (balanced brace handling is simplified here)
-	re := regexp.MustCompile(`func\s+init\s*\(\s*\)\s*\{[^}]*\}`)
-	return re.ReplaceAllString(src, "")
+	var b strings.Builder
+	b.Grow(len(src))
+	writePos := 0
+	removedUntil := 0
+	for _, loc := range initFuncDeclRe.FindAllStringSubmatchIndex(src, -1) {
+		start := loc[0]
+		openBrace := loc[1] - 1 // '{' is the last character of the match
+		if start < removedUntil {
+			continue // candidate sits inside an already removed init body
+		}
+		depth := 1
+		j := openBrace + 1
+		for j < len(src) && depth > 0 {
+			switch src[j] {
+			case '{':
+				depth++
+			case '}':
+				depth--
+			}
+			j++
+		}
+		if depth != 0 {
+			continue // unterminated init body - leave untouched
+		}
+		b.WriteString(src[writePos:start])
+		writePos = j
+		removedUntil = j
+	}
+	b.WriteString(src[writePos:])
+	return b.String()
 }
 
 // countSensitiveLogArgs returns the count of sensitive-log-arg patterns.

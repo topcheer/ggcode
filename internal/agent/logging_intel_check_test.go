@@ -535,8 +535,10 @@ func TestStripGoComments(t *testing.T) {
 			expect: "\nfunc f() {}",
 		},
 		{
+			// #1109 Item A2: newlines inside block comments are preserved so
+			// reported line numbers stay aligned with the original source.
 			input:  "/* multi\nline */func f() {}",
-			expect: "func f() {}",
+			expect: "\nfunc f() {}",
 		},
 		{
 			input:  "func f() { // comment\n}",

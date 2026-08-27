@@ -238,3 +238,51 @@ func TestCheckMissingPrealloc_EmptyContent(t *testing.T) {
 		t.Fatalf("expected no warnings for empty content, got: %v", warnings)
 	}
 }
+
+// Issue #1103 regression: fA leaves a zero-capacity declaration on the
+// books; fB uses a DIFFERENT s that arrives as a parameter and fills it.
+// The old file-wide bare-name index matched fB's loop writes against fA's
+// declaration and emitted a misattributed suggestion about fB's parameter.
+func TestCheckMissingPrealloc_NoCrossFunctionCollision(t *testing.T) {
+	src := `package main
+
+type Pair struct { K, V int }
+
+func fA() {
+	s := make([]int, 0)
+	_ = s
+}
+
+func fB(pairs []Pair, s []string) {
+	for _, p := range pairs {
+		s = append(s, string(rune(p.V)))
+	}
+	_ = s
+}
+`
+	warnings := checkMissingPrealloc("test.go", "", src)
+	if len(warnings) != 0 {
+		t.Fatalf("expected zero warnings for cross-function name collision, got: %v", warnings)
+	}
+}
+
+// Scoped collection must not suppress same-function detection.
+func TestCheckMissingPrealloc_SameFunctionStillDetected(t *testing.T) {
+	src := `package main
+
+func collect(n int) []int {
+	out := make([]int, 0)
+	for i := 0; i < n; i++ {
+		out = append(out, i)
+	}
+	return out
+}
+`
+	warnings := checkMissingPrealloc("test.go", "", src)
+	if len(warnings) == 0 {
+		t.Fatal("expected missing-prealloc warning for same-function populate")
+	}
+	if !strings.Contains(warnings[0], "out") {
+		t.Errorf("expected warning about out, got: %s", warnings[0])
+	}
+}

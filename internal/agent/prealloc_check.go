@@ -125,39 +125,124 @@ type zeroCapSliceDecl struct {
 }
 
 // findMissingPrealloc scans the AST for append-in-loop without preallocation.
+// #1103: declaration collection and loop scanning are correlated per
+// function unit (top-level FuncDecl or nested FuncLit). A unit only ever
+// consults declarations visible from that unit - its own locals plus
+// package-level vars - so a same-named slice appended in one function can no
+// longer satisfy an unrelated loop's append in another function.
 func findMissingPrealloc(file *ast.File, fset *token.FileSet) []preallocWarning {
-	// Phase 1: Collect all zero-capacity slice declarations by walking
-	// the entire file tree. This catches both top-level and function-local
-	// var declarations (GenDecl inside BlockStmt) and short declarations
-	// (x := []T{} inside AssignStmt).
-	decls := make(map[string]*zeroCapSliceDecl)
+	pkgDecls := make(map[string]*zeroCapSliceDecl)
+	for _, vs := range packageVarSpecs(file) {
+		addValueSpecSliceDecls(vs, pkgDecls)
+	}
+
+	var warnings []preallocWarning
+	seenLoopWarn := make(map[string]bool)
+
+	scanUnit := func(body *ast.BlockStmt) {
+		// Visible declarations: package-level zero-cap slices plus this
+		// unit's own local declarations.
+		decls := make(map[string]*zeroCapSliceDecl, len(pkgDecls)+4)
+		for k, v := range pkgDecls {
+			decls[k] = v
+		}
+		collectFuncSliceDecls(body, decls)
+		if len(decls) == 0 {
+			return
+		}
+
+		unitWarned := make(map[string]bool)
+		onLoop := func(loopBody *ast.BlockStmt, loopPos token.Pos) {
+			loopLine := fset.Position(loopPos).Line
+			for _, w := range scanForAppend(loopBody, decls, loopLine) {
+				key := fmt.Sprintf("%d:%s", loopLine, w.varName)
+				if unitWarned[w.varName] || seenLoopWarn[key] {
+					continue // one warning per variable per unit and per loop site
+				}
+				unitWarned[w.varName] = true
+				seenLoopWarn[key] = true
+				warnings = append(warnings, w)
+			}
+		}
+		aSTInspectLoops(body, onLoop)
+	}
 
 	ast.Inspect(file, func(n ast.Node) bool {
+		switch fn := n.(type) {
+		case *ast.FuncDecl:
+			if fn.Body != nil {
+				scanUnit(fn.Body)
+			}
+		case *ast.FuncLit:
+			if fn.Body != nil {
+				scanUnit(fn.Body) // closures form their own unit (#1103)
+			}
+		}
+		return true
+	})
+
+	return warnings
+}
+
+// packageVarSpecs returns the ValueSpecs of package-level var declarations.
+func packageVarSpecs(file *ast.File) []*ast.ValueSpec {
+	var specs []*ast.ValueSpec
+	for _, d := range file.Decls {
+		gd, ok := d.(*ast.GenDecl)
+		if !ok || gd.Tok != token.VAR {
+			continue
+		}
+		for _, spec := range gd.Specs {
+			if vs, ok := spec.(*ast.ValueSpec); ok {
+				specs = append(specs, vs)
+			}
+		}
+	}
+	return specs
+}
+
+// addValueSpecSliceDecls records zero-capacity slice declarations found in a
+// single value spec into decls.
+func addValueSpecSliceDecls(vs *ast.ValueSpec, decls map[string]*zeroCapSliceDecl) {
+	for i, name := range vs.Names {
+		if vs.Type != nil {
+			// var x []T - check if type is a slice.
+			if _, isSlice := vs.Type.(*ast.ArrayType); isSlice {
+				if i < len(vs.Values) {
+					decls[name.Name] = analyzeInitExpr(name.Name, name.Pos(), vs.Values[i])
+				} else {
+					decls[name.Name] = &zeroCapSliceDecl{
+						name: name.Name, pos: name.Pos(), hasMakeCapacity: false,
+					}
+				}
+			}
+		} else if i < len(vs.Values) {
+			if d := analyzeInitExpr(name.Name, name.Pos(), vs.Values[i]); d != nil {
+				decls[name.Name] = d
+			}
+		}
+	}
+}
+
+// collectFuncSliceDecls records zero-capacity slice declarations local to a
+// function unit body: function-local var GenDecls and short defines.
+// Nested function literals are pruned - closures are analyzed as their own
+// units so their internal names never leak into the enclosing scope (#1103).
+func collectFuncSliceDecls(body *ast.BlockStmt, decls map[string]*zeroCapSliceDecl) {
+	if body == nil {
+		return
+	}
+	ast.Inspect(body, func(n ast.Node) bool {
 		switch node := n.(type) {
+		case *ast.FuncLit:
+			return false
 		case *ast.GenDecl:
 			if node.Tok != token.VAR {
 				return true
 			}
 			for _, spec := range node.Specs {
-				vs, ok := spec.(*ast.ValueSpec)
-				if !ok {
-					continue
-				}
-				for i, name := range vs.Names {
-					if vs.Type != nil {
-						// var x []T - check if type is a slice.
-						if _, isSlice := vs.Type.(*ast.ArrayType); isSlice {
-							if i < len(vs.Values) {
-								decls[name.Name] = analyzeInitExpr(name.Name, name.Pos(), vs.Values[i])
-							} else {
-								decls[name.Name] = &zeroCapSliceDecl{
-									name: name.Name, pos: name.Pos(), hasMakeCapacity: false,
-								}
-							}
-						}
-					} else if i < len(vs.Values) {
-						decls[name.Name] = analyzeInitExpr(name.Name, name.Pos(), vs.Values[i])
-					}
+				if vs, ok := spec.(*ast.ValueSpec); ok {
+					addValueSpecSliceDecls(vs, decls)
 				}
 			}
 		case *ast.AssignStmt:
@@ -176,32 +261,24 @@ func findMissingPrealloc(file *ast.File, fset *token.FileSet) []preallocWarning 
 		}
 		return true
 	})
+}
 
-	if len(decls) == 0 {
-		return nil
-	}
-
-	// Phase 2: Find for/range loops containing append to zero-cap slices.
-	var warnings []preallocWarning
-	ast.Inspect(file, func(n ast.Node) bool {
+// aSTInspectLoops invokes fn for every for/range loop lexically inside body,
+// including loops located in nested closures.
+func aSTInspectLoops(body *ast.BlockStmt, fn func(loopBody *ast.BlockStmt, loopPos token.Pos)) {
+	ast.Inspect(body, func(n ast.Node) bool {
 		switch loop := n.(type) {
 		case *ast.ForStmt:
-			if loop.Body == nil {
-				return true
+			if loop.Body != nil {
+				fn(loop.Body, loop.Pos())
 			}
-			loopLine := fset.Position(loop.Pos()).Line
-			warnings = append(warnings, scanForAppend(loop.Body, decls, loopLine)...)
 		case *ast.RangeStmt:
-			if loop.Body == nil {
-				return true
+			if loop.Body != nil {
+				fn(loop.Body, loop.Pos())
 			}
-			loopLine := fset.Position(loop.Pos()).Line
-			warnings = append(warnings, scanForAppend(loop.Body, decls, loopLine)...)
 		}
 		return true
 	})
-
-	return warnings
 }
 
 // scanForAppend walks a statement list looking for append() calls assigned
@@ -279,7 +356,7 @@ func scanForAppend(body *ast.BlockStmt, decls map[string]*zeroCapSliceDecl, loop
 			// Check the first arg of append matches the LHS variable.
 			if len(call.Args) > 0 {
 				if argIdent, ok := call.Args[0].(*ast.Ident); ok && argIdent.Name == ident.Name {
-					if decl, exists := decls[ident.Name]; exists && !decl.hasMakeCapacity && !seen[ident.Name] {
+					if decl, exists := decls[ident.Name]; exists && decl != nil && !decl.hasMakeCapacity && !seen[ident.Name] {
 						seen[ident.Name] = true
 						warnings = append(warnings, preallocWarning{
 							varName:  ident.Name,

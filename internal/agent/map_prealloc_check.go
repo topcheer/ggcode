@@ -24,8 +24,10 @@ package agent
 //   - prealloc linter: only covers slices, not maps
 //   - Claude Code / Cursor / Cline / OpenHands / Aider: no detection
 //
-// Detection approach: AST-based, delta-aware. Find for/range loops where:
+// Detection approach: AST-based, delta-aware, function-scoped. Find for/range
+// loops where:
 //  1. A map is declared via make(map[K]V) without a size hint (single arg)
+//     inside the same function unit as the loop
 //  2. Inside the loop body, the map is written to (map[key] = value)
 //  3. The range expression iterates a slice/array whose len() is known
 //     at declaration time (same variable name or make immediately before loop)
@@ -35,6 +37,12 @@ package agent
 //   - Skip if the loop body has a conditional (if/guard) that might skip entries
 //   - Skip if the range source is a channel (unknown size)
 //   - Skip test files
+//   - #1103: skip when the hintless map declaration belongs to a different
+//     function than the loop. Each function unit is scanned against only its
+//     own declarations, so a same-named slice populated by a loop in another
+//     function can no longer be mistaken for a cross-file-scope map write.
+//     Package-level hintless maps remain visible to all functions, but
+//     parameter names shadow them and sized make() rebinds suppress them.
 
 import (
 	"fmt"
@@ -128,56 +136,65 @@ type mapDeclInfo struct {
 
 // findMissingMapPrealloc scans the AST for map-population-in-loop patterns
 // where the map lacks a size hint.
+//
+// #1103: analysis is performed per function unit (top-level FuncDecl and
+// nested FuncLit). A unit only correlates loop writes against declarations
+// reachable from that unit - its own locals plus package-level vars - so
+// declarations in sibling functions never satisfy a loop in another one.
 func findMissingMapPrealloc(file *ast.File, fset *token.FileSet) []mapPreallocWarning {
-	// Phase 1: Collect all map declarations without size hints.
-	decls := make(map[string]*mapDeclInfo)
-	collectMapDecls(file, decls)
-	if len(decls) == 0 {
-		return nil
+	pkgDecls := packageHintlessMaps(file)
+
+	var warnings []mapPreallocWarning
+
+	// scanUnit checks one function body: declarations and loops are both
+	// taken from the same lexical region.
+	scanUnit := func(body *ast.BlockStmt, fnType *ast.FuncType) {
+		// Visible declarations: package-level hintless maps plus this
+		// unit's own local make(map[K]V) bindings.
+		binds := make(map[string]*mapDeclInfo, len(pkgDecls)+4)
+		for k, v := range pkgDecls {
+			binds[k] = v
+		}
+		collectLocalMapBinds(body, binds)
+		if fnType != nil {
+			excludeShadowedBinds(fnType.Params, body, binds)
+		} else {
+			excludeShadowedBinds(nil, body, binds)
+		}
+
+		// One warning per variable name within a unit, mirroring the
+		// historical per-file suppression.
+		unitWarned := make(map[string]bool)
+
+		onLoop := func(loopBody *ast.BlockStmt, loopPos token.Pos, sourceName string, knownRange bool) {
+			for _, m := range scanForMapWrite(loopBody, loopPos, binds) {
+				if unitWarned[m] {
+					continue
+				}
+				unitWarned[m] = true
+				hint := "expectedSize"
+				if knownRange && sourceName != "" {
+					hint = "len(" + sourceName + ")"
+				}
+				warnings = append(warnings, mapPreallocWarning{
+					varName:   m,
+					loopLine:  fset.Position(loopPos).Line,
+					sourceLen: hint,
+				})
+			}
+		}
+		scanUnitLoops(body, onLoop)
 	}
 
-	// Phase 2: Find for/range loops that write to hintless maps.
-	var warnings []mapPreallocWarning
-	seen := make(map[string]bool)
-
 	ast.Inspect(file, func(n ast.Node) bool {
-		switch loop := n.(type) {
-		case *ast.RangeStmt:
-			if loop.Body == nil {
-				return true
+		switch fn := n.(type) {
+		case *ast.FuncDecl:
+			if fn.Body != nil {
+				scanUnit(fn.Body, fn.Type)
 			}
-			loopLine := fset.Position(loop.Pos()).Line
-			sourceName := getRangeSourceName(loop.X)
-			if sourceName == "" {
-				return true
-			}
-			hintExpr := "len(" + sourceName + ")"
-			for _, m := range scanForMapWrite(loop.Body, decls) {
-				if !seen[m] {
-					seen[m] = true
-					warnings = append(warnings, mapPreallocWarning{
-						varName:   m,
-						loopLine:  loopLine,
-						sourceLen: hintExpr,
-					})
-				}
-			}
-		case *ast.ForStmt:
-			if loop.Body == nil {
-				return true
-			}
-			loopLine := fset.Position(loop.Pos()).Line
-			// For C-style for loops, we can't know the source size reliably.
-			// Use "expectedSize" as placeholder guidance.
-			for _, m := range scanForMapWrite(loop.Body, decls) {
-				if !seen[m] {
-					seen[m] = true
-					warnings = append(warnings, mapPreallocWarning{
-						varName:   m,
-						loopLine:  loopLine,
-						sourceLen: "expectedSize",
-					})
-				}
+		case *ast.FuncLit:
+			if fn.Body != nil {
+				scanUnit(fn.Body, fn.Type)
 			}
 		}
 		return true
@@ -186,11 +203,16 @@ func findMissingMapPrealloc(file *ast.File, fset *token.FileSet) []mapPreallocWa
 	return warnings
 }
 
-// collectMapDecls walks the AST and records map variables created via
-// make(map[K]V) with only one argument (no size hint).
-func collectMapDecls(file *ast.File, decls map[string]*mapDeclInfo) {
-	ast.Inspect(file, func(n ast.Node) bool {
+// collectLocalMapBinds adds hintless map bindings declared by short defines
+// and var declarations directly inside a function unit body. Function
+// literals within the body constitute their own units; descending into them
+// would leak closure-internal names outward (issue #1103), so that branch is
+// pruned.
+func collectLocalMapBinds(body *ast.BlockStmt, binds map[string]*mapDeclInfo) {
+	ast.Inspect(body, func(n ast.Node) bool {
 		switch node := n.(type) {
+		case *ast.FuncLit:
+			return false // nested closure: analyzed as its own unit
 		case *ast.GenDecl:
 			if node.Tok != token.VAR {
 				return true
@@ -201,10 +223,11 @@ func collectMapDecls(file *ast.File, decls map[string]*mapDeclInfo) {
 					continue
 				}
 				for i, name := range vs.Names {
-					if i < len(vs.Values) {
-						if info := analyzeMapInit(name.Name, name.Pos(), vs.Values[i]); info != nil {
-							decls[name.Name] = info
-						}
+					if i >= len(vs.Values) {
+						continue
+					}
+					if info := analyzeMapInit(name.Name, name.Pos(), vs.Values[i]); info != nil {
+						binds[name.Name] = info
 					}
 				}
 			}
@@ -218,12 +241,85 @@ func collectMapDecls(file *ast.File, decls map[string]*mapDeclInfo) {
 					continue
 				}
 				if info := analyzeMapInit(ident.Name, ident.Pos(), node.Rhs[i]); info != nil {
-					decls[ident.Name] = info
+					binds[ident.Name] = info
 				}
 			}
 		}
 		return true
 	})
+}
+
+// excludeShadowedBinds drops candidate bindings whose bare name can refer to
+// a different value inside the unit: parameters shadow package-level maps by
+// name, and a same-name assignment of an already-sized make(map[K]V, n)
+// means the write belongs to the sized variable (issue #1103 conservatism -
+// under-detection is preferred over a harmful slice-to-map rewrite hint).
+func excludeShadowedBinds(params *ast.FieldList, body *ast.BlockStmt, binds map[string]*mapDeclInfo) {
+	if len(binds) == 0 {
+		return
+	}
+	if params != nil {
+		for _, field := range params.List {
+			for _, pname := range field.Names {
+				delete(binds, pname.Name)
+			}
+		}
+	}
+	if body == nil {
+		return
+	}
+	for _, stmt := range body.List {
+		assign, ok := stmt.(*ast.AssignStmt)
+		if !ok {
+			continue
+		}
+		for i, rhs := range assign.Rhs {
+			call, ok := rhs.(*ast.CallExpr)
+			if !ok || len(call.Args) != 2 {
+				continue
+			}
+			mt, ok := call.Args[0].(*ast.MapType)
+			if !ok || mt == nil {
+				continue
+			}
+			fn, ok := call.Fun.(*ast.Ident)
+			if !ok || fn.Name != "make" {
+				continue
+			}
+			if i < len(assign.Lhs) {
+				if ident, ok := assign.Lhs[i].(*ast.Ident); ok {
+					delete(binds, ident.Name)
+				}
+			}
+		}
+	}
+}
+
+// packageHintlessMaps collects package-level var declarations initialized
+// with make(map[K]V) without a size hint. These names are file-wide state
+// and stay eligible for every function's loops.
+func packageHintlessMaps(file *ast.File) map[string]*mapDeclInfo {
+	binds := make(map[string]*mapDeclInfo)
+	for _, d := range file.Decls {
+		gd, ok := d.(*ast.GenDecl)
+		if !ok || gd.Tok != token.VAR {
+			continue
+		}
+		for _, spec := range gd.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for i, name := range vs.Names {
+				if i < len(vs.Values) {
+					if info := analyzeMapInit(name.Name, name.Pos(), vs.Values[i]); info != nil {
+						binds[name.Name] = info
+					}
+				}
+			}
+		}
+	}
+	return binds
 }
 
 // analyzeMapInit checks if an initialization expression is make(map[K]V)
@@ -267,9 +363,40 @@ func getRangeSourceName(expr ast.Expr) string {
 	return ""
 }
 
+// onLoopFn receives each loop discovered in a unit: its body block, position,
+// rendered range source (empty when unknown), and whether the range source
+// supports a reliable len() hint.
+type onLoopFn func(loopBody *ast.BlockStmt, loopPos token.Pos, sourceName string, knownRange bool)
+
+// scanUnitLoops invokes fn for every for/range loop lexically inside body,
+// including loops located in nested closures (closure loops still consult
+// the enclosing unit's visible declarations conservatively).
+func scanUnitLoops(body *ast.BlockStmt, fn onLoopFn) {
+	ast.Inspect(body, func(n ast.Node) bool {
+		switch loop := n.(type) {
+		case *ast.RangeStmt:
+			if loop.Body == nil {
+				return true
+			}
+			sourceName := getRangeSourceName(loop.X)
+			fn(loop.Body, loop.Pos(), sourceName, true)
+		case *ast.ForStmt:
+			if loop.Body == nil {
+				return true
+			}
+			// For C-style for loops we cannot know the source size
+			// reliably; expectedSize is placeholder guidance.
+			fn(loop.Body, loop.Pos(), "", false)
+		}
+		return true
+	})
+}
+
 // scanForMapWrite searches a loop body for map write operations
 // (map[key] = value) and returns the names of hintless maps that are written.
-func scanForMapWrite(body *ast.BlockStmt, decls map[string]*mapDeclInfo) []string {
+// A binding qualifies only when it was declared textually before the loop
+// (#1103: declarations collected from the same function unit as the loop).
+func scanForMapWrite(body *ast.BlockStmt, loopPos token.Pos, decls map[string]*mapDeclInfo) []string {
 	var result []string
 	found := make(map[string]bool)
 
@@ -287,7 +414,8 @@ func scanForMapWrite(body *ast.BlockStmt, decls map[string]*mapDeclInfo) []strin
 			if !ok {
 				continue
 			}
-			if _, exists := decls[ident.Name]; exists && !found[ident.Name] {
+			info, exists := decls[ident.Name]
+			if exists && info.pos < loopPos && !found[ident.Name] {
 				// Check if the loop body has conditionals that might skip entries.
 				// If we find an if statement at the top level of the body,
 				// be conservative and skip this warning.

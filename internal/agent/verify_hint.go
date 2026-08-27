@@ -149,6 +149,24 @@ var gitWholeTreeTools = map[string]bool{
 	"git_revert":   true, // creates new commit undoing prior changes
 }
 
+// mutatesSourceTree reports whether executing toolName may rewrite
+// working-tree files and therefore must invalidate the speculative,
+// memoize, and command caches.
+//
+// #1104: undo_edit restores prior file content from checkpoints (a real
+// disk write) yet lived outside every existing mutation set, so stale
+// grep/LSP/git_diff/command entries survived an undo. It is extended here
+// rather than added to the canonical sourceMutatingTools superset, whose
+// exact 9-tool membership is pinned by the #737/#153 sync assertions;
+// cache gating only needs "may touch the tree", which this predicate owns.
+// Notebook edits flow through the canonical superset.
+func mutatesSourceTree(toolName string) bool {
+	if fileEditingTools[toolName] || gitFileModifyingTools[toolName] || gitWholeTreeTools[toolName] {
+		return true
+	}
+	return toolName == "undo_edit"
+}
+
 // sourceCodeExtensions maps file extensions to whether they're compiled/interpreted code.
 var sourceCodeExtensions = map[string]bool{
 	".go":    true,
