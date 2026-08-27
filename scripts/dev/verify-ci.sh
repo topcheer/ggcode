@@ -89,6 +89,18 @@ run_with_oom_retry() {
   log="$(mktemp -t verifyci)"
   backoff=20
   for attempt in 1 2 3; do
+    # Gate before EVERY attempt (incl. the first): on shared machines a
+    # concurrent agent workload can spike memory between the startup gate and
+    # this step; proceeding into the spike gets the first attempt killed.
+    # Waiting here (up to 3min) converts the spike into a delayed first run
+    # instead of a burned attempt. Cheap no-op when memory is plentiful.
+    if [ "${VERIFY_CI_SKIP_MEM_GATE:-0}" != "1" ]; then
+      _avail="$(avail_mem_mb)"
+      if [ -n "${_avail}" ] && [ "${_avail}" -lt 1500 ]; then
+        echo "[verify-ci] ${desc}: low available memory (${_avail}MiB) before attempt ${attempt}; waiting up to 3min for pressure to subside"
+        wait_for_memory
+      fi
+    fi
     if "$@" >"${log}" 2>&1; then
       cat "${log}"
       rm -f "${log}"
@@ -115,6 +127,19 @@ run_with_oom_retry() {
   return 1
 }
 
+# Startup memory gate: on shared machines with concurrent agent workloads the
+# run may start while memory pressure is already high; waiting here (up to
+# 3min) lets that pressure clear BEFORE the first heavy go command runs, so a
+# kill lands inside run_with_oom_retry (retryable) instead of on an unwrapped
+# step (fatal). Override with VERIFY_CI_SKIP_MEM_GATE=1.
+if [ "${VERIFY_CI_SKIP_MEM_GATE:-0}" != "1" ]; then
+  _avail="$(avail_mem_mb)"
+  if [ -n "${_avail}" ] && [ "${_avail}" -lt 1500 ]; then
+    echo "[verify-ci] low available memory (${_avail}MiB); waiting up to 3min for pressure to subside"
+    wait_for_memory
+  fi
+fi
+
 # ── Main module (mirrors .github/workflows/ci.yml) ────────────────────────
 echo "[verify-ci] checking gofmt cleanliness"
 if ! test -z "$(gofmt -l ./cmd ./internal)"; then
@@ -124,7 +149,10 @@ if ! test -z "$(gofmt -l ./cmd ./internal)"; then
 fi
 
 echo "[verify-ci] downloading modules"
-go mod download
+# Wrapped: mod download/extract spikes RSS on large go.sum sets and is killed
+# with a bare "signal: killed" under memory pressure — same class as the
+# build/vet/test steps below.
+run_with_oom_retry "go mod download" env GOMEMLIMIT="${GOMEMLIMIT}" GOGC=50 go mod download
 
 echo "[verify-ci] building ggcode"
 # -p 1 on build too: parallel compilation of large packages (desktop/wailskit,
@@ -158,9 +186,10 @@ if [ "${FULL}" = "1" ]; then
   for target in "linux/amd64" "windows/amd64"; do
     os="${target%%/*}"
     arch="${target##*/}"
-    if ! CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" GOMEMLIMIT="${GOMEMLIMIT}" go build -tags goolm ./cmd/ggcode 2>/tmp/cross-build.err; then
-      echo "[verify-ci:full] cross-compile FAILED for ${os}/${arch}:"
-      cat /tmp/cross-build.err
+    # Wrapped (same OOM-retry class as core steps): cross-compilation of the
+    # full dependency graph spikes peak RSS identically to the native build.
+    if ! run_with_oom_retry "cross-compile ${os}/${arch}" env CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" GOMEMLIMIT="${GOMEMLIMIT}" GOGC=50 go build -tags goolm ./cmd/ggcode; then
+      echo "[verify-ci:full] cross-compile FAILED for ${os}/${arch}"
       exit 1
     fi
   done
@@ -178,13 +207,13 @@ if [ "${FULL}" = "1" ]; then
     fi
 
     echo "[verify-ci:desktop] downloading modules"
-    (cd "${desktop_dir}" && go mod download)
+    (cd "${desktop_dir}" && run_with_oom_retry "desktop go mod download" env GOMEMLIMIT="${GOMEMLIMIT}" GOGC=50 go mod download)
 
     echo "[verify-ci:desktop] running go vet"
-    (cd "${desktop_dir}" && CGO_ENABLED=1 go vet -tags goolm ./...)
+    (cd "${desktop_dir}" && run_with_oom_retry "desktop go vet" env CGO_ENABLED=1 GOMEMLIMIT="${GOMEMLIMIT}" GOGC=50 go vet -tags goolm ./...)
 
     echo "[verify-ci:desktop] running tests"
-    (cd "${desktop_dir}" && CGO_ENABLED=1 GOMEMLIMIT="${GOMEMLIMIT}" go test -tags goolm -count=1 -timeout 120s ./...)
+    (cd "${desktop_dir}" && run_with_oom_retry "desktop go test" env CGO_ENABLED=1 GOMEMLIMIT="${GOMEMLIMIT}" GOGC=50 go test -tags goolm -count=1 -timeout 120s ./...)
   fi
 
   # ── Frontend Vitest (no CGO needed) ───────────────────────────────────────
