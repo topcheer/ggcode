@@ -64,7 +64,7 @@ func (t SpawnAgentTool) currentProvider() provider.Provider {
 func (t SpawnAgentTool) Name() string { return "spawn_agent" }
 
 func (t SpawnAgentTool) Description() string {
-	return "Spawn a one-shot sub-agent run to work on an independent task. Put the full task and needed context in the initial request; do not assume the run will accept later work via send_message. Returns an agent_id. Use wait_agent or list_agents to poll status and retrieve the eventual result."
+	return "Spawn a one-shot sub-agent run to work on an independent task. Put the full task and needed context in the initial request; do not assume the run will accept later work via send_message. Returns an agent_id. Use wait_agent or list_agents to poll status and retrieve the eventual result. At most 16 sub-agents may run concurrently (config: sub_agents.max_concurrent); spawns beyond the limit are rejected until earlier runs complete."
 }
 
 func (t SpawnAgentTool) Parameters() json.RawMessage {

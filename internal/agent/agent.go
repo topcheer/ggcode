@@ -3197,6 +3197,21 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// re-classify as a diagnostic error and self-trigger the recorder
 			// (issue #1141).
 			a.overcorrectionRecordError(tc.Name, result.Content, result.IsError)
+			// False premise detection: record tool errors for later contradiction
+			// analysis against assistant success claims.
+			//
+			// Tool output integration monitor: extract high-signal tokens from
+			// information-tool results for integration checking against the next
+			// assistant text (TRACE cross-step evidence, issue #341).
+			//
+			// Both must run on the PRISTINE result content - moved above
+			// injectRulesIntoResult so injected learned-rule text is never
+			// recorded as an error snippet (its build-fail phrasing would poison
+			// isBuildTestError and the #546/#593 supersede logic) nor mined as
+			// "evidence" tokens the next assistant turn will never echo,
+			// mirroring the same invariant as issue #1141 (issue #1165).
+			a.falsePremise.recordToolResult(tc.Name, result.Content, result.IsError)
+			a.integrationRecordToolResult(tc.Name, result.Content)
 			result.Content = a.injectRulesIntoResult(tc.Name, tc.Arguments, result.Content)
 			// Batch edit conflict warning: if this tool call targets a file that
 			// is also edited by another call in the same batch, inject a warning
@@ -3207,13 +3222,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			if result.IsError {
 				debug.Log("agent", "tool result ERROR: tool=%s output=%s", tc.Name, util.Truncate(result.Content, 200))
 			}
-			// False premise detection: record tool errors for later contradiction
-			// analysis against assistant success claims.
-			a.falsePremise.recordToolResult(tc.Name, result.Content, result.IsError)
-			// Tool output integration monitor: extract high-signal tokens from
-			// information-tool results for integration checking against the next
-			// assistant text (TRACE cross-step evidence, issue #341).
-			a.integrationRecordToolResult(tc.Name, result.Content)
 			// Overcorrection cascade: increment step counter for non-edit tools
 			// so stale errors expire (#104).
 			if !isEditTool(tc.Name) {

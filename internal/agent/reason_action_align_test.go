@@ -7,6 +7,20 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
+// raDriveToMismatch feeds the state repeated turns of the same text and
+// conflicting tool until either a warning fires or maxTurns elapse. The
+// temporal tolerance window (#1162) means a stale intent can only be flagged
+// after raAlignmentWindow unfulfilled turns, so callers must drive the state.
+func raDriveToMismatch(t *testing.T, s *reasonActionState, text, tool string, maxTurns int) string {
+	t.Helper()
+	for i := 0; i < maxTurns; i++ {
+		if hint := s.checkAlignment(text, []toolCallInfo{{Name: tool}}); hint != "" {
+			return hint
+		}
+	}
+	return ""
+}
+
 func TestReasonAction_AlignedVerify(t *testing.T) {
 	s := newReasonActionState()
 	// Stated: "let me verify" + actual: run_command => aligned
@@ -19,11 +33,11 @@ func TestReasonAction_AlignedVerify(t *testing.T) {
 
 func TestReasonAction_MismatchVerifyVsFix(t *testing.T) {
 	s := newReasonActionState()
-	// Stated: "let me verify" but actual: edit_file => categorical mismatch
-	hint := s.checkAlignment("Let me verify the fix works.",
-		[]toolCallInfo{{Name: "edit_file"}})
+	// Stated: "let me verify" but only ever edit_file => categorical mismatch
+	// escalates after the tolerance window closes (#1162).
+	hint := raDriveToMismatch(t, s, "Let me verify the fix works.", "edit_file", raAlignmentWindow+2)
 	if hint == "" {
-		t.Fatal("expected warning for verify-stated but fix-action mismatch")
+		t.Fatal("expected warning for persistent verify-stated but fix-action-only run")
 	}
 	if !strings.Contains(hint, "verify") || !strings.Contains(hint, "edit_file") {
 		t.Fatalf("warning should mention verify and edit_file, got: %s", hint)
@@ -32,9 +46,8 @@ func TestReasonAction_MismatchVerifyVsFix(t *testing.T) {
 
 func TestReasonAction_MismatchUnderstandVsFix(t *testing.T) {
 	s := newReasonActionState()
-	// Stated: "let me understand" but actual: edit_file => mismatch
-	hint := s.checkAlignment("Let me understand the data flow in this module.",
-		[]toolCallInfo{{Name: "edit_file"}})
+	hint := raDriveToMismatch(t, s, "Let me understand the data flow in this module.",
+		"edit_file", raAlignmentWindow+2)
 	if hint == "" {
 		t.Fatal("expected warning for understand-stated but fix-action mismatch")
 	}
@@ -42,8 +55,8 @@ func TestReasonAction_MismatchUnderstandVsFix(t *testing.T) {
 
 func TestReasonAction_MismatchUnderstandVsDeploy(t *testing.T) {
 	s := newReasonActionState()
-	hint := s.checkAlignment("I need to understand the deployment setup.",
-		[]toolCallInfo{{Name: "git_commit"}})
+	hint := raDriveToMismatch(t, s, "I need to understand the deployment setup.",
+		"git_commit", raAlignmentWindow+2)
 	if hint == "" {
 		t.Fatal("expected warning for understand-stated but deploy-action mismatch")
 	}
@@ -51,8 +64,8 @@ func TestReasonAction_MismatchUnderstandVsDeploy(t *testing.T) {
 
 func TestReasonAction_MismatchVerifyVsSearch(t *testing.T) {
 	s := newReasonActionState()
-	hint := s.checkAlignment("Let me verify the test results.",
-		[]toolCallInfo{{Name: "grep"}})
+	hint := raDriveToMismatch(t, s, "Let me verify the test results.",
+		"grep", raAlignmentWindow+2)
 	if hint == "" {
 		t.Fatal("expected warning for verify-stated but search-action mismatch")
 	}
@@ -97,21 +110,21 @@ func TestReasonAction_NoToolCalls(t *testing.T) {
 
 func TestReasonAction_MaxWarnings(t *testing.T) {
 	s := newReasonActionState()
-	// First mismatch
-	hint1 := s.checkAlignment("Let me verify the fix.",
-		[]toolCallInfo{{Name: "edit_file"}})
+	// First mismatch: escalate after the tolerance window (#1162).
+	hint1 := raDriveToMismatch(t, s, "Let me verify the fix.",
+		"edit_file", raAlignmentWindow+2)
 	if hint1 == "" {
 		t.Fatal("expected first warning")
 	}
-	// Second mismatch
-	hint2 := s.checkAlignment("Let me verify again.",
-		[]toolCallInfo{{Name: "write_file"}})
+	// Second mismatch with a different stated/action pair.
+	hint2 := raDriveToMismatch(t, s, "Let me confirm the outcome again.",
+		"write_file", raAlignmentWindow+4)
 	if hint2 == "" {
 		t.Fatal("expected second warning")
 	}
-	// Third should be suppressed
-	hint3 := s.checkAlignment("Let me verify once more.",
-		[]toolCallInfo{{Name: "edit_file"}})
+	// Third should be suppressed by the per-run budget.
+	hint3 := raDriveToMismatch(t, s, "Let me confirm once more.",
+		"edit_file", raAlignmentWindow+4)
 	if hint3 != "" {
 		t.Fatal("expected third warning to be suppressed")
 	}
@@ -119,8 +132,10 @@ func TestReasonAction_MaxWarnings(t *testing.T) {
 
 func TestReasonAction_Reset(t *testing.T) {
 	s := newReasonActionState()
-	_ = s.checkAlignment("Let me verify the fix.",
-		[]toolCallInfo{{Name: "edit_file"}})
+	if raDriveToMismatch(t, s, "Let me verify the fix.", "edit_file",
+		raAlignmentWindow+2) == "" {
+		t.Fatal("expected one warning before reset")
+	}
 	if s.warnings != 1 {
 		t.Fatalf("expected 1 warning, got %d", s.warnings)
 	}
@@ -131,12 +146,18 @@ func TestReasonAction_Reset(t *testing.T) {
 	if len(s.mismatches) != 0 {
 		t.Fatalf("expected 0 mismatches after reset, got %d", len(s.mismatches))
 	}
+	if len(s.pending) != 0 {
+		t.Fatalf("expected 0 pending intents after reset, got %d", len(s.pending))
+	}
 }
 
 func TestReasonAction_MaybeWarnReasonAction(t *testing.T) {
 	a := &Agent{reasonAction: newReasonActionState()}
-	hint := a.maybeWarnReasonAction("Let me verify the build passes.",
-		[]provider.ToolCallDelta{{Name: "edit_file"}})
+	var hint string
+	for i := 0; i < raAlignmentWindow+2 && hint == ""; i++ {
+		hint = a.maybeWarnReasonAction("Let me verify the build passes.",
+			[]provider.ToolCallDelta{{Name: "edit_file"}})
+	}
 	if hint == "" {
 		t.Fatal("expected alignment warning from agent method")
 	}

@@ -372,14 +372,14 @@ type IMTargetConfig struct {
 
 // SubAgentConfig holds sub-agent configuration.
 type SubAgentConfig struct {
-	MaxConcurrent int           `yaml:"max_concurrent"`
+	MaxConcurrent int           `yaml:"max_concurrent"` // default: 16 - max simultaneously running sub-agents
 	Timeout       time.Duration `yaml:"timeout"`
 	ShowOutput    bool          `yaml:"show_output"`
 }
 
 // SwarmConfig holds swarm/team multi-agent configuration.
 type SwarmConfig struct {
-	MaxTeammatesPerTeam int           `yaml:"max_teammates_per_team"` // default: 5
+	MaxTeammatesPerTeam int           `yaml:"max_teammates_per_team"` // default: 16
 	TeammateTimeout     time.Duration `yaml:"teammate_timeout"`       // default: 0 (no timeout, run until task completes)
 	InboxSize           int           `yaml:"inbox_size"`             // default: 32
 	PollInterval        time.Duration `yaml:"poll_interval"`          // default: 1s — how often idle teammates check the task board

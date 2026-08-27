@@ -124,6 +124,35 @@ func raToolCategory(toolName string) raCategory {
 	}
 }
 
+// raAlignmentWindow is the temporal tolerance (in tool-call turns) granted to
+// a stated intent before it may escalate to a misalignment warning: an action
+// mentioned in reasoning counts as aligned if it lands within this many
+// subsequent turns (issue #1162).
+const raAlignmentWindow = 3
+
+// raCoordinationMarkers mark explicitly sequenced multi-step plans ("first X,
+// then Y"). Text containing any of these, or stating 2+ distinct intent
+// categories, gets the multi-intent exemption (issue #1162): such intents are
+// fulfilled by executing ANY of the listed intentions across the window and
+// are never escalated to a categorical-mismatch warning.
+var raCoordinationMarkers = []string{
+	"first", "then", "next", "before", "after that",
+	"afterwards", "step 1", "step 2", ";",
+}
+
+// raPendingIntent tracks a stated intent whose category did not match any
+// action category on the turn it was verbalized. It resolves silently when a
+// matching action appears within raAlignmentWindow turns (#1162); otherwise it
+// escalates to a warning unless the multi-intent exemption applies.
+type raPendingIntent struct {
+	cat          raCategory
+	phrase       string
+	expiresAt    int // turn number at which the tolerance window closes
+	conflictCat  raCategory
+	conflictTool string
+	exempt       bool // multi-intent/sequential plan: expiry drops silently
+}
+
 // raMismatch describes a single alignment gap.
 type raMismatch struct {
 	statedCategory raCategory
@@ -135,8 +164,10 @@ type raMismatch struct {
 // reasonActionState tracks alignment mismatches across the run.
 type reasonActionState struct {
 	mu         sync.Mutex
+	steps      int // tool-call turns observed, drives the tolerance window (#1162)
 	warnings   int
 	mismatches []raMismatch
+	pending    []raPendingIntent
 }
 
 func newReasonActionState() *reasonActionState {
@@ -146,8 +177,21 @@ func newReasonActionState() *reasonActionState {
 func (s *reasonActionState) reset() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.steps = 0
 	s.warnings = 0
 	s.mismatches = nil
+	s.pending = nil
+}
+
+// raHasCoordinationMarker reports whether the text marks an explicitly
+// sequenced multi-step plan (issue #1162 multi-intent exemption).
+func raHasCoordinationMarker(lowerText string) bool {
+	for _, m := range raCoordinationMarkers {
+		if strings.Contains(lowerText, m) {
+			return true
+		}
+	}
+	return false
 }
 
 // extractRAIntents scans assistant text for reasoning intent statements and
@@ -185,8 +229,12 @@ func findRAIntentPhrase(text string, cat raCategory) string {
 }
 
 // checkAlignment compares stated reasoning categories to the actual tool call
-// categories. Returns a mismatch if the dominant stated intent has no matching
-// action, AND the actual action falls in a significantly different category.
+// categories. A stated intent whose category has no matching action this turn
+// is NOT flagged immediately: it enters a tolerance window of
+// raAlignmentWindow turns (issue #1162) during which a matching action from
+// any later turn resolves it silently. Only an intent that stays unfulfilled
+// for the whole window escalates to a warning, and intents belonging to an
+// explicitly sequenced multi-intent plan are exempt from escalation entirely.
 func (s *reasonActionState) checkAlignment(assistantText string, toolCalls []toolCallInfo) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -194,15 +242,37 @@ func (s *reasonActionState) checkAlignment(assistantText string, toolCalls []too
 	if s.warnings >= raMaxWarnings {
 		return ""
 	}
-	if len(toolCalls) == 0 {
-		return ""
-	}
 
+	s.steps++
+
+	actionCats := raClassifyActions(toolCalls)
 	statedCats := extractRAIntents(assistantText)
-	if len(statedCats) == 0 {
+
+	// Earlier-turn intents fulfilled by any matching action category on this
+	// turn resolve silently (issue #1162, no immediate-turn requirement).
+	s.resolveRAPending(actionCats)
+
+	// Only strictly single intents left unfulfilled for the whole window are
+	// reported; exempt ones drop silently (issue #1162).
+	if hint := s.escalateExpiredPending(); hint != "" {
+		return hint
+	}
+
+	if len(statedCats) == 0 || len(actionCats) == 0 {
 		return ""
 	}
 
+	// Multi-intent exemption (issue #1162): 2+ distinct stated categories, or
+	// explicit sequencing markers in the text.
+	multiIntent := len(statedCats) >= 2 || raHasCoordinationMarker(strings.ToLower(assistantText))
+
+	s.recordRAIntents(assistantText, statedCats, actionCats, multiIntent)
+	return ""
+}
+
+// raClassifyActions maps this turn's tool calls to their cognitive categories,
+// keeping the tool names per category for concrete mismatch reports.
+func raClassifyActions(toolCalls []toolCallInfo) map[raCategory][]string {
 	actionCats := make(map[raCategory][]string)
 	for _, tc := range toolCalls {
 		cat := raToolCategory(tc.Name)
@@ -210,30 +280,87 @@ func (s *reasonActionState) checkAlignment(assistantText string, toolCalls []too
 			actionCats[cat] = append(actionCats[cat], tc.Name)
 		}
 	}
-	if len(actionCats) == 0 {
-		return ""
-	}
+	return actionCats
+}
 
+// resolveRAPending silently fulfills pending intents whose category matched an
+// action this turn (issue #1162 temporal tolerance, no immediate-turn rule).
+// Caller must hold s.mu.
+func (s *reasonActionState) resolveRAPending(actionCats map[raCategory][]string) {
+	kept := s.pending[:0]
+	for _, p := range s.pending {
+		if _, fulfilled := actionCats[p.cat]; fulfilled {
+			continue
+		}
+		kept = append(kept, p)
+	}
+	s.pending = kept
+}
+
+// escalateExpiredPending expires intents whose tolerance window closed. An
+// exempt (multi-intent/sequential plan) intent or one without a recorded
+// categorical conflict drops silently; a strictly single-intent statement that
+// never materialized is reported. Returns the first escalated warning, if any.
+// Caller must hold s.mu.
+func (s *reasonActionState) escalateExpiredPending() string {
+	for i := 0; i < len(s.pending); i++ {
+		p := s.pending[i]
+		if s.steps < p.expiresAt {
+			continue
+		}
+		s.pending = append(s.pending[:i], s.pending[i+1:]...)
+		i--
+		if p.exempt || p.conflictCat == raCatNone {
+			continue
+		}
+		mm := raMismatch{
+			statedCategory: p.cat,
+			actionCategory: p.conflictCat,
+			intentPhrase:   p.phrase,
+			toolName:       p.conflictTool,
+		}
+		s.mismatches = append(s.mismatches, mm)
+		s.warnings++
+		return formatRAWarning(mm)
+	}
+	return ""
+}
+
+// recordRAIntents stores newly stated intents that have no matching action
+// into the tolerance window instead of firing immediately. Caller must hold
+// s.mu.
+func (s *reasonActionState) recordRAIntents(assistantText string, statedCats []raCategory, actionCats map[raCategory][]string, multiIntent bool) {
 	for _, statedCat := range statedCats {
 		if _, hasMatch := actionCats[statedCat]; hasMatch {
 			continue
 		}
-		for actionCat, tools := range actionCats {
-			if isCategoricalMismatch(statedCat, actionCat) {
-				phrase := findRAIntentPhrase(assistantText, statedCat)
-				mm := raMismatch{
-					statedCategory: statedCat,
-					actionCategory: actionCat,
-					intentPhrase:   phrase,
-					toolName:       tools[0],
-				}
-				s.mismatches = append(s.mismatches, mm)
-				s.warnings++
-				return formatRAWarning(mm)
+		duplicate := false
+		for _, p := range s.pending {
+			if p.cat == statedCat {
+				duplicate = true
+				break
 			}
 		}
+		if duplicate {
+			continue
+		}
+		pending := raPendingIntent{
+			cat:       statedCat,
+			phrase:    findRAIntentPhrase(assistantText, statedCat),
+			expiresAt: s.steps + raAlignmentWindow,
+			exempt:    multiIntent,
+		}
+		// Remember the first categorically-conflicting action observed while
+		// the statement is outstanding so the eventual warning is concrete.
+		for actionCat, tools := range actionCats {
+			if isCategoricalMismatch(statedCat, actionCat) {
+				pending.conflictCat = actionCat
+				pending.conflictTool = tools[0]
+				break
+			}
+		}
+		s.pending = append(s.pending, pending)
 	}
-	return ""
 }
 
 // isCategoricalMismatch returns true when the stated reasoning category and the

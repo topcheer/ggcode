@@ -408,8 +408,8 @@ func TestManager_ListTeamBoardsIncludesTasksAndTeammates(t *testing.T) {
 
 func TestManager_DefaultConfig(t *testing.T) {
 	m, _ := testManager(t)
-	if m.cfg.MaxTeammatesPerTeam != 8 {
-		t.Errorf("expected default max 8, got %d", m.cfg.MaxTeammatesPerTeam)
+	if m.cfg.MaxTeammatesPerTeam != 16 {
+		t.Errorf("expected default max 16, got %d", m.cfg.MaxTeammatesPerTeam)
 	}
 	if m.cfg.TeammateTimeout != 0 {
 		t.Errorf("expected default timeout 0 (no timeout), got %v", m.cfg.TeammateTimeout)

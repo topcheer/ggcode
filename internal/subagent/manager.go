@@ -41,7 +41,7 @@ type AgentEvent struct {
 const maxAgentEvents = 400
 
 // Sub-agent concurrency is limited by Manager.maxConcurrent (from
-// cfg.MaxConcurrent, default 5). Each sub-agent consumes a goroutine, an LLM
+// cfg.MaxConcurrent, default 16). Each sub-agent consumes a goroutine, an LLM
 // API connection, and context window tokens; the limit prevents an agent
 // from spawning dozens of sub-agents in parallel, exhausting API rate
 // limits and memory.
@@ -392,7 +392,7 @@ type Manager struct {
 	lastNotify   time.Time                                                                         // throttle: last time onUpdate was called
 	nextID       int
 	// maxConcurrent is the configured concurrency limit (cfg.MaxConcurrent,
-	// default 5). Spawn's early-reject check uses this instead of a hardcoded
+	// default 16). Spawn's early-reject check uses this instead of a hardcoded
 	// constant so the semaphore capacity and the Spawn check never diverge
 	// when the user configures max_concurrent > 5 (#226).
 	maxConcurrent int
@@ -430,7 +430,7 @@ type Manager struct {
 func NewManager(cfg config.SubAgentConfig) *Manager {
 	max := cfg.MaxConcurrent
 	if max <= 0 {
-		max = 5
+		max = 16
 	}
 	timeout := cfg.Timeout
 	if timeout <= 0 {
