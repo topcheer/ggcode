@@ -676,10 +676,16 @@ func TestHandlerSessionSetMode(t *testing.T) {
 	h := NewHandler(cfg, registry, transport, nil)
 	h.initialized = true
 
-	// Create a session first
-	newParams := SessionNewParams{CWD: "/tmp"}
+	// Create a session first. Use t.TempDir() so the CWD exists on every
+	// platform: validateCWD stats the directory, and "/tmp" does not exist
+	// on Windows (this unchecked-assertion panic used to kill the whole
+	// acp test binary, swallowing all later test results).
+	newParams := SessionNewParams{CWD: t.TempDir()}
 	newParamsJSON, _ := json.Marshal(newParams)
-	newResult, _ := h.handleSessionNew(newParamsJSON)
+	newResult, err := h.handleSessionNew(newParamsJSON)
+	if err != nil {
+		t.Fatalf("handleSessionNew error: %v", err)
+	}
 	sessionID := newResult.(SessionNewResult).SessionID
 
 	// Set mode
@@ -812,10 +818,14 @@ func TestHandlerSessionSetConfigOption(t *testing.T) {
 	h := NewHandler(cfg, registry, transport, nil)
 	h.initialized = true
 
-	// Create a session
-	newParams := SessionNewParams{CWD: "/tmp"}
+	// Create a session. Use t.TempDir() so the CWD exists on every platform:
+	// validateCWD stats the directory, and "/tmp" does not exist on Windows.
+	newParams := SessionNewParams{CWD: t.TempDir()}
 	newParamsJSON, _ := json.Marshal(newParams)
-	newResult, _ := h.handleSessionNew(newParamsJSON)
+	newResult, err := h.handleSessionNew(newParamsJSON)
+	if err != nil {
+		t.Fatalf("handleSessionNew error: %v", err)
+	}
 	sessionID := newResult.(SessionNewResult).SessionID
 
 	// Set config option
