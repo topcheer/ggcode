@@ -305,12 +305,19 @@ func (a *Agent) maybeInjectPerfRegression() {
 
 	// Check the last few completed runs for sustained regression.
 	// A single bad run could be an outlier; sustained regression is real.
+	// #1148: only successful runs vote - computeMedianBaseline excludes
+	// failed runs (Success=false from iteration exhaustion, stream errors,
+	// user cancels) because they skew high on iterations/duration/errors;
+	// comparing failed-run metrics against a successful-run median is an
+	// invalid cross-population contrast that systematically crossed every
+	// regression threshold after any two consecutive failures.
 	recent := a.perfBaseline.historical
-	start := len(recent) - 3
-	if start < 0 {
-		start = 0
+	var recent3 []perfBaselineEntry
+	for i := len(recent) - 1; i >= 0 && len(recent3) < 3; i-- {
+		if recent[i].Success {
+			recent3 = append(recent3, recent[i])
+		}
 	}
-	recent3 := recent[start:]
 	if len(recent3) < 3 {
 		return // not enough recent data
 	}
