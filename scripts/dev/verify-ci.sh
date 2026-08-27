@@ -44,6 +44,37 @@ export GOFLAGS="${GOFLAGS:--p=1}"
 # Set VERIFY_CI_FULL=1 to also run cross-compile, desktop, and frontend checks.
 FULL="${VERIFY_CI_FULL:-0}"
 
+# run_with_oom_retry <desc> <cmd...>
+# Runs cmd; if it is OOM-killed ("signal: killed" or exit 137), waits for the
+# transient memory pressure on shared machines to subside and retries once.
+# A bare OOM kill carries no code signal — retrying once converts an
+# environmental flake into a pass while still failing on real errors twice.
+run_with_oom_retry() {
+  local desc="$1"; shift
+  local log status attempt
+  log="$(mktemp -t verifyci)"
+  for attempt in 1 2; do
+    if "$@" >"${log}" 2>&1; then
+      cat "${log}"
+      rm -f "${log}"
+      return 0
+    fi
+    status=$?
+    if grep -q "signal: killed" "${log}" || [ "${status}" -eq 137 ]; then
+      echo "[verify-ci] ${desc} was OOM-killed (attempt ${attempt}/2); cooling down 15s for memory pressure to subside"
+      sleep 15
+      continue
+    fi
+    cat "${log}"
+    rm -f "${log}"
+    return "${status}"
+  done
+  echo "[verify-ci] ${desc} was OOM-killed twice; giving up"
+  cat "${log}"
+  rm -f "${log}"
+  return 1
+}
+
 # ── Main module (mirrors .github/workflows/ci.yml) ────────────────────────
 echo "[verify-ci] checking gofmt cleanliness"
 if ! test -z "$(gofmt -l ./cmd ./internal)"; then
@@ -59,7 +90,7 @@ echo "[verify-ci] building ggcode"
 # -p 1 on build too: parallel compilation of large packages (desktop/wailskit,
 # internal/agent) spikes peak RSS past GOMEMLIMIT on shared machines and gets
 # OOM-killed ("signal: killed") - same rationale as the -p 1 on vet/test below.
-GOMEMLIMIT="${GOMEMLIMIT}" GOGC=50 go build -p 1 -tags goolm -o /tmp/ggcode ./cmd/ggcode
+run_with_oom_retry "go build" env GOMEMLIMIT="${GOMEMLIMIT}" GOGC=50 go build -p 1 -tags goolm -o /tmp/ggcode ./cmd/ggcode
 
 echo "[verify-ci] running go vet"
 # -p 1: vet defaults to -p=GOMAXPROCS; on shared/constrained runners the
@@ -68,7 +99,7 @@ echo "[verify-ci] running go vet"
 # before any code issue is reported. Same rationale as the -p 1 on go test
 # below. -p 2 still reproduced the OOM kill on shared machines, so 1 is the
 # default; override via VERIFY_CI_VET_P.
-GOMEMLIMIT="${GOMEMLIMIT}" go vet -tags goolm -p "${VERIFY_CI_VET_P:-1}" ./...
+run_with_oom_retry "go vet" env GOMEMLIMIT="${GOMEMLIMIT}" go vet -tags goolm -p "${VERIFY_CI_VET_P:-1}" ./...
 
 echo "[verify-ci] running tests (main module, unit only)"
 # NOTE: do NOT use the "integration" tag here - integration tests (e.g. browser
@@ -76,7 +107,7 @@ echo "[verify-ci] running tests (main module, unit only)"
 # -parallel 1: same rationale as the Makefile `test` target - packages using
 # t.Parallel() still spike peak RSS when many test funcs run concurrently on
 # memory-constrained machines; run one test func at a time.
-GOMEMLIMIT="${GOMEMLIMIT}" GOGC=50 go test -tags goolm -p 1 -parallel 1 -timeout 300s ./cmd/... ./internal/...
+run_with_oom_retry "go test" env GOMEMLIMIT="${GOMEMLIMIT}" GOGC=50 go test -tags goolm -p 1 -parallel 1 -timeout 300s ./cmd/... ./internal/...
 
 echo "[verify-ci] core checks passed"
 
