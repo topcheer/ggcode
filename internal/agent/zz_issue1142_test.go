@@ -84,10 +84,22 @@ func TestPcFingerprint_PositionIndependent(t *testing.T) {
 	if a.pcFingerprint() == c.pcFingerprint() {
 		t.Error("different param counts must produce different fingerprints")
 	}
+	// #1184 changed the fingerprint identity from parameter NAMES to
+	// parameter TYPES: a pure rename of an already-flagged function's
+	// params must keep the fingerprint stable (same smell, nothing new
+	// introduced), while a type change still differentiates.
 	d := paramCountInstance{funcName: "f", pos: a.pos, count: 6,
 		params: []string{"x", "b", "c", "d", "e", "f"}}
-	if a.pcFingerprint() == d.pcFingerprint() {
-		t.Error("different params must produce different fingerprints")
+	if a.pcFingerprint() != d.pcFingerprint() {
+		t.Errorf("pure param rename must not change fingerprint (#1184): %q vs %q",
+			a.pcFingerprint(), d.pcFingerprint())
+	}
+	e := paramCountInstance{funcName: "f", pos: a.pos, count: 6,
+		paramTs: []string{"int", "int", "int", "int", "int", "int"}}
+	f2 := paramCountInstance{funcName: "f", pos: a.pos, count: 6,
+		paramTs: []string{"int", "int", "int", "int", "int", "string"}}
+	if e.pcFingerprint() == f2.pcFingerprint() {
+		t.Error("different param types must produce different fingerprints (#1184)")
 	}
 }
 

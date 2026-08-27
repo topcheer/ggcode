@@ -43,20 +43,28 @@ type paramCountInstance struct {
 	pos      token.Position
 	count    int
 	params   []string
-	recvType string // receiver type text ("*Server" etc); empty for plain funcs and literals
+	paramTs  []string // per-param TYPE text; keys the fingerprint (#1184)
+	recvType string   // receiver type text ("*Server" etc); empty for plain funcs and literals
 }
 
 // pcFingerprint keys an instance for delta suppression (fix #1142). It uses
-// normalized content text (receiver TYPE + function name + parameter names),
-// NOT the line:column position - inserting a comment line above a function
-// must not re-report the pre-existing function as newly introduced. Pattern
-// follows pathTraversalInstance.ptFingerprint.
+// normalized content text (receiver TYPE + function name + parameter TYPES
+// + count), NOT the line:column position - inserting a comment line above a
+// function must not re-report the pre-existing function as newly introduced.
+// Pattern follows pathTraversalInstance.ptFingerprint.
 //
 // The receiver TYPE (not the variable name) is part of the key (#1149):
 // (s *Server) handle and (s *Client) handle are different functions and must
 // not collide just because both receivers are named `s`.
+//
+// Parameter NAMES are deliberately excluded from the key (#1184): the smell
+// (too many params, SonarQube S107) is identical before and after a pure
+// parameter rename, so name-based keys made every renamed param miss its
+// old entry and re-reported the pre-existing instance as newly introduced -
+// the same delta-contract violation family as #1179. Types + count carry
+// the whole semantic identity of the smell; display still uses names.
 func (i paramCountInstance) pcFingerprint() string {
-	norm := strings.Join(i.params, ",")
+	norm := strings.Join(i.paramTs, ",")
 	return fmt.Sprintf("%s[%s]|%d|%s", i.recvType, i.funcName, i.count, norm)
 }
 
@@ -179,10 +187,13 @@ func inspectFuncDecl(fn *ast.FuncDecl, fset *token.FileSet) (paramCountInstance,
 	}
 
 	var params []string
+	var paramTs []string
 	if fn.Recv != nil {
 		params = append(params, paramNames(fn.Recv)...)
+		paramTs = append(paramTs, paramTypes(fn.Recv)...)
 	}
 	params = append(params, paramNames(fn.Type.Params)...)
+	paramTs = append(paramTs, paramTypes(fn.Type.Params)...)
 
 	return paramCountInstance{
 		funcName: fn.Name.Name,
@@ -190,6 +201,7 @@ func inspectFuncDecl(fn *ast.FuncDecl, fset *token.FileSet) (paramCountInstance,
 		pos:      fset.Position(fn.Pos()),
 		count:    count,
 		params:   params,
+		paramTs:  paramTs,
 	}, true
 }
 
@@ -213,6 +225,7 @@ func inspectFuncLit(lit *ast.FuncLit, fset *token.FileSet) *paramCountInstance {
 		pos:      fset.Position(lit.Pos()),
 		count:    count,
 		params:   paramNames(lit.Type.Params),
+		paramTs:  paramTypes(lit.Type.Params),
 	}
 }
 
@@ -255,6 +268,36 @@ func paramNames(fields *ast.FieldList) []string {
 		}
 	}
 	return names
+}
+
+// paramTypes returns one TYPE text per parameter (#1184): each name
+// occurrence in a grouped field ("a, b int") contributes the field's type,
+// and unnamed parameters contribute their type directly. This is the
+// rename-stable identity used by pcFingerprint, unlike paramNames (display
+// only). Prealloc: len is an upper bound of entries per field list.
+func paramTypes(fields *ast.FieldList) []string {
+	if fields == nil {
+		return nil
+	}
+	n := 0
+	for _, f := range fields.List {
+		if len(f.Names) == 0 {
+			n++
+		} else {
+			n += len(f.Names)
+		}
+	}
+	ts := make([]string, 0, n)
+	for _, f := range fields.List {
+		if len(f.Names) == 0 {
+			ts = append(ts, typeString(f.Type))
+			continue
+		}
+		for range f.Names {
+			ts = append(ts, typeString(f.Type))
+		}
+	}
+	return ts
 }
 
 // typeString produces a short type name for display.
