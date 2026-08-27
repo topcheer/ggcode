@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -63,27 +64,34 @@ func (a *Agent) asyncVerify(ctx context.Context, runStats *RunStats) {
 
 	a.verifyProgress("Running verification…")
 
-	// First try deterministic detection — no LLM call needed.
-	cmd := detectBuildSystem(workingDir)
+	// Diff-scoped verification (generic, any language/ecosystem): the files
+	// changed in this run are known, so ask the verification oracle to pick
+	// the NARROWEST command that verifies exactly those files. Language
+	// knowledge lives in the model, not in hardcoded ecosystem switches -
+	// this works for Go, Python, JS, Rust, or any project. The deterministic
+	// whole-repo command (make verify-ci et al) is only a fallback: running a
+	// full CI pipeline after every small edit made the inner loop spend most
+	// of its wall-clock verifying, and often exceeded the 120s budget.
+	cmd := ""
+	if len(runStats.FilesEdited) > 0 {
+		a.verifyProgress("Choosing scoped verification…")
+		cmd = a.llmDecideVerifyCommand(ctx, runStats.FilesEdited)
+	}
 	if cmd == "" {
-		// Non-code workspace: no build system detected and only non-code
-		// files (docs/notes) were edited. Skip verification instead of asking
-		// the LLM oracle, which would hallucinate a command whose failure
-		// pollutes the context and triggers auto-repair loops.
-		if !runTouchedCode(runStats) {
+		cmd = detectBuildSystem(workingDir)
+	}
+	if cmd == "" {
+		// Oracle was already tried (with the changed-file list) when files were
+		// known; without a build system and with only non-code edits there is
+		// nothing left to try - skip rather than hallucinate a command whose
+		// failure pollutes the context and triggers auto-repair loops.
+		if len(runStats.FilesEdited) == 0 && !runTouchedCode(runStats) {
 			debug.Log("verify", "async: skipping - no build system and only non-code files edited")
 			return
 		}
-		a.verifyProgress("Determining verification command…")
-		cmd = a.llmDecideVerifyCommand(ctx)
-	} else {
-		debug.Log("verify", "using deterministic command: %s", cmd)
-	}
-	if cmd == "" {
-		debug.Log("verify", "LLM decided no verification needed")
+		debug.Log("verify", "async: no verification command determined")
 		return
 	}
-
 	a.verifyProgress(fmt.Sprintf("Running `%s`…", cmd))
 	result := a.executeVerifyCommand(ctx, cmd)
 
@@ -225,9 +233,55 @@ func buildVerifyContext(workingDir string) string {
 	return "Project context:\n" + strings.Join(hints, "\n")
 }
 
+// buildVerifyOraclePrompt constructs the verification oracle's system text:
+// scoping rules plus the run's changed-file list (capped at 40 entries,
+// overflow summarized by directory so the model still sees the blast radius
+// without flooding the call).
+func buildVerifyOraclePrompt(changedFiles []string) string {
+	sysText := `You are a verification oracle. Given the files changed in this run and the recent conversation, determine the single most appropriate build/test/lint command to verify EXACTLY those changes. Output ONLY the command (no explanation, no markdown fences). If no verification is needed or possible, output exactly "SKIP".
+
+Scoping rules - verification must be proportional to the change:
+- Prefer the NARROWEST command that exercises the changed code: package- or directory-scoped test selectors (e.g. ` + "`go test ./internal/foo/...`" + `), related-test finders (e.g. ` + "`jest --findRelatedTests <changed files>`" + `, ` + "`vitest related <files>`" + `), or the specific changed test files (e.g. ` + "`pytest tests/test_changed.py`" + `).
+- Include the project's required build flags (build tags, env) if the project context below documents them.
+- Whole-repo commands (CI pipelines, ` + "`make verify-ci`" + `, ` + "`go test ./...`" + `, ` + "`npm test`" + ` run-everything) are ONLY appropriate when the change genuinely affects the whole repo (root config, build system files, dependency manifests). Never choose them for ordinary code edits.
+- Docs/markdown-only changes need no verification: answer SKIP.`
+
+	if len(changedFiles) == 0 {
+		return sysText
+	}
+	const maxListed = 40
+	listed := changedFiles
+	summary := ""
+	if len(listed) > maxListed {
+		dirs := map[string]bool{}
+		for _, f := range listed[maxListed:] {
+			dirs[filepath.Dir(f)] = true
+		}
+		listed = listed[:maxListed]
+		dsl := make([]string, 0, len(dirs))
+		for d := range dirs {
+			dsl = append(dsl, d+"/")
+		}
+		sort.Strings(dsl)
+		summary = fmt.Sprintf("\n  ... and %d more files under: %s", len(changedFiles)-maxListed, strings.Join(dsl, ", "))
+	}
+	sysText += "\n\nFiles changed in this run:\n"
+	for _, f := range listed {
+		sysText += "  - " + f + "\n"
+	}
+	return sysText + summary
+}
+
 // llmDecideVerifyCommand asks the LLM to output a single verification command
-// based on what it just did. Returns empty string if no verification is needed.
-func (a *Agent) llmDecideVerifyCommand(ctx context.Context) string {
+// for the CHANGED FILES of the current run. Returns empty string if no
+// verification is needed or the oracle is unavailable.
+//
+// The oracle is explicitly instructed to scope the command to the changed
+// files (package/dir-level test selectors, related-test finders) and to
+// avoid whole-repo commands unless the change genuinely warrants them.
+// This keeps inner-loop verification proportional to the change: a one-file
+// edit gets a one-package test run, not the full CI pipeline.
+func (a *Agent) llmDecideVerifyCommand(ctx context.Context, changedFiles []string) string {
 	a.mu.RLock()
 	prov := a.provider
 	a.mu.RUnlock()
@@ -251,7 +305,7 @@ func (a *Agent) llmDecideVerifyCommand(ctx context.Context) string {
 	// the oracle gets project memory (GGCODE.md, which documents required
 	// build flags) + build system hints (Makefile targets, detected ecosystem).
 	workingDir := a.WorkingDir()
-	sysText := `You are a verification oracle. Based on the recent conversation, determine the single most appropriate build/test/lint command to verify the changes made. Output ONLY the command (no explanation, no markdown fences). If no verification is needed or possible, output exactly "SKIP".`
+	sysText := buildVerifyOraclePrompt(changedFiles)
 
 	// Include project memory excerpt (build/validation instructions)
 	fullSys := a.SystemPrompt()
@@ -530,22 +584,31 @@ func (a *Agent) syncVerifyAndGate(ctx context.Context, runStats *RunStats, retry
 		return false, false
 	}
 
-	// Determine verification command — deterministic first, then LLM.
-	cmd := detectBuildSystem(workingDir)
+	// Determine verification command — scoped oracle first (it knows which
+	// files changed and can pick a proportional command for any ecosystem),
+	// deterministic whole-repo detection as fallback.
+	cmd := ""
+	if len(runStats.FilesEdited) > 0 {
+		a.verifyProgress("Choosing scoped verification…")
+		start := time.Now()
+		cmd = a.llmDecideVerifyCommand(ctx, runStats.FilesEdited)
+		debug.Log("verify", "sync: oracle chose verify command in %s: %q", time.Since(start), cmd)
+	}
+	if cmd == "" {
+		cmd = detectBuildSystem(workingDir)
+		if cmd != "" {
+			debug.Log("verify", "sync: oracle empty, using deterministic command: %s", cmd)
+		}
+	}
 	if cmd == "" {
 		// Same non-code gate as asyncVerify: without a build system and with
-		// only docs/notes edited, the LLM oracle would hallucinate a command;
-		// skip verification rather than risk a bogus failure-injection loop.
-		if !runTouchedCode(runStats) {
+		// only docs/notes edited, nothing left to try - skip rather than risk
+		// a bogus failure-injection loop. (The oracle already ran if any files
+		// were known.)
+		if len(runStats.FilesEdited) == 0 && !runTouchedCode(runStats) {
 			debug.Log("verify", "sync: skipping - no build system and only non-code files edited")
 			return false, false
 		}
-		a.verifyProgress("Determining verification command…")
-		start := time.Now()
-		cmd = a.llmDecideVerifyCommand(ctx)
-		debug.Log("verify", "sync: LLM decided verify command in %s: %q", time.Since(start), cmd)
-	}
-	if cmd == "" {
 		debug.Log("verify", "sync: no verification command determined")
 		return false, false
 	}
