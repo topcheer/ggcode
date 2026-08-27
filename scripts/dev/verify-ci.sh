@@ -170,6 +170,37 @@ downgrade_tier() {
     echo "[verify-ci] concurrency downgraded to -p ${VC_P} -parallel ${VC_PARALLEL} GOMAXPROCS=${VC_GOMAXPROCS}"
   fi
 }
+
+# ── Single-instance lock ─────────────────────────────────────────────────
+# On shared machines several agents (and the verification harness itself)
+# may launch verify-ci at once. Two full suites at tier 4 stack their
+# GOMEMLIMIT peaks (~4GiB+ combined) and OOM-kill each other with a bare
+# "signal: killed" before any per-chunk retry can help. Serialize instead:
+# a second invocation waits for the first to finish, then runs uncontended.
+# Fail-open after 10min so a wedged holder cannot block verification forever.
+VC_LOCK_DIR="${TMPDIR:-/tmp}/ggcode-verify-ci.lock"
+VC_LOCK_WAITED=0
+while ! mkdir "${VC_LOCK_DIR}" 2>/dev/null; do
+  # Recover a stale lock whose owner process no longer exists.
+  _lock_pid="$(cat "${VC_LOCK_DIR}/pid" 2>/dev/null || true)"
+  if [ -n "${_lock_pid}" ] && ! kill -0 "${_lock_pid}" 2>/dev/null; then
+    echo "[verify-ci] removing stale verify-ci lock from dead pid ${_lock_pid}"
+    rm -rf "${VC_LOCK_DIR}"
+    continue
+  fi
+  if [ "${VC_LOCK_WAITED}" -ge 600 ]; then
+    echo "[verify-ci] lock still held after 10min; proceeding without serialization"
+    break
+  fi
+  if [ "${VC_LOCK_WAITED}" -eq 0 ]; then
+    echo "[verify-ci] another verify-ci run is active; waiting for it to finish (up to 10min)"
+  fi
+  sleep 10
+  VC_LOCK_WAITED=$((VC_LOCK_WAITED + 10))
+done
+trap 'rm -rf "${VC_LOCK_DIR}" 2>/dev/null || true' EXIT
+echo $$ > "${VC_LOCK_DIR}/pid" 2>/dev/null || true
+
 if [ -n "${VERIFY_CI_GOMAXPROCS:-}" ]; then
   # Manual pin (existing override knob): value applies to -p, -parallel and
   # GOMAXPROCS alike; OOM kills will NOT downgrade below it.
