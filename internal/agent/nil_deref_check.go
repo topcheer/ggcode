@@ -64,6 +64,46 @@ type nilDerefCtx struct {
 	fnName string
 }
 
+// collectOldNilDerefKeys parses oldContent and returns the position-independent
+// keys of every nil-deref instance already present before the edit (#1128).
+// Keys from a file that fails to parse are treated as absent, matching the
+// previous inline behavior.
+func collectOldNilDerefKeys(filePath, oldContent string) map[string]bool {
+	oldKeys := make(map[string]bool)
+	if strings.TrimSpace(oldContent) == "" {
+		return oldKeys
+	}
+	oldFset := token.NewFileSet()
+	oldFile, oldErr := parser.ParseFile(oldFset, filePath, oldContent, parser.AllErrors)
+	if oldErr != nil {
+		return oldKeys
+	}
+	for _, decl := range oldFile.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
+			continue
+		}
+		for _, inst := range findNilDerefsInFunc(oldFset, fn) {
+			oldKeys[inst.key] = true
+		}
+	}
+	return oldKeys
+}
+
+// formatNilDerefReport renders the warning text for newly introduced
+// nil-deref instances.
+func formatNilDerefReport(instances []nilDerefInstance) string {
+	var b strings.Builder
+	b.WriteString("[nil-deref-after-error] Pointers dereferenced before error check - may panic:\n")
+	for _, inst := range instances {
+		b.WriteString(fmt.Sprintf("  - %s: '%s' is dereferenced before an 'if err != nil' check. "+
+			"When the error is non-nil, functions often return nil for the primary value. "+
+			"Add `if err != nil { return err }` before using '%s'.\n",
+			inst.posStr, inst.varName, inst.varName))
+	}
+	return b.String()
+}
+
 // checkNilDerefAfterError detects pointer dereferences before nil-error checks
 // in Go code. Delta-aware: only flags NEW instances introduced by this edit.
 func checkNilDerefAfterError(filePath, oldContent, newContent string) string {
@@ -82,7 +122,6 @@ func checkNilDerefAfterError(filePath, oldContent, newContent string) string {
 	}
 
 	var instances []nilDerefInstance
-
 	for _, decl := range file.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
 		if !ok || fn.Body == nil {
@@ -91,30 +130,9 @@ func checkNilDerefAfterError(filePath, oldContent, newContent string) string {
 		instances = append(instances, findNilDerefsInFunc(fset, fn)...)
 	}
 
-	if len(instances) == 0 {
-		return ""
-	}
-
-	// Delta: track the position-independent keys of instances already present in
-	// old content (#1128: keys are stable across line insertions above).
-	oldKeys := make(map[string]bool)
-	if strings.TrimSpace(oldContent) != "" {
-		oldFset := token.NewFileSet()
-		oldFile, oldErr := parser.ParseFile(oldFset, filePath, oldContent, parser.AllErrors)
-		if oldErr == nil {
-			for _, decl := range oldFile.Decls {
-				fn, ok := decl.(*ast.FuncDecl)
-				if !ok || fn.Body == nil {
-					continue
-				}
-				for _, inst := range findNilDerefsInFunc(oldFset, fn) {
-					oldKeys[inst.key] = true
-				}
-			}
-		}
-	}
-
-	// Filter to only NEW instances (not present in old content).
+	// Delta: drop instances whose key already exists in old content (#1128:
+	// keys are stable across line insertions above).
+	oldKeys := collectOldNilDerefKeys(filePath, oldContent)
 	var newInstances []nilDerefInstance
 	for _, inst := range instances {
 		if !oldKeys[inst.key] {
@@ -125,16 +143,7 @@ func checkNilDerefAfterError(filePath, oldContent, newContent string) string {
 	if len(newInstances) == 0 {
 		return ""
 	}
-
-	var b strings.Builder
-	b.WriteString("[nil-deref-after-error] Pointers dereferenced before error check - may panic:\n")
-	for _, inst := range newInstances {
-		b.WriteString(fmt.Sprintf("  - %s: '%s' is dereferenced before an 'if err != nil' check. "+
-			"When the error is non-nil, functions often return nil for the primary value. "+
-			"Add `if err != nil { return err }` before using '%s'.\n",
-			inst.posStr, inst.varName, inst.varName))
-	}
-	return b.String()
+	return formatNilDerefReport(newInstances)
 }
 
 // nilRiskEntry tracks a nil-risk variable and its associated error variable.
@@ -251,18 +260,7 @@ func (w *nilDerefWalker) walk(n ast.Node) {
 	// permanent clears from terminating #533 guards) deliberately
 	// persist; only freshly added bindings are rolled back on exit.
 	if blk, ok := n.(*ast.BlockStmt); ok {
-		existed := make(map[string]bool, len(w.nilRisk))
-		for name := range w.nilRisk {
-			existed[name] = true
-		}
-		for _, st := range blk.List {
-			w.walk(st)
-		}
-		for name := range w.nilRisk {
-			if !existed[name] {
-				delete(w.nilRisk, name)
-			}
-		}
+		w.walkBlock(blk)
 		return
 	}
 
@@ -278,9 +276,14 @@ func (w *nilDerefWalker) walk(n ast.Node) {
 		return
 	}
 
-	// Compound statements: recurse into each sub-piece in source order,
-	// routing condition/case expressions through evalVisit and their
-	// embedded blocks back through walk().
+	w.walkCompound(n)
+}
+
+// walkCompound recurses into compound statements piece by piece in source
+// order, routing condition/case expressions through evalVisit and their
+// embedded blocks back through walk(). Unrecognized nodes fall back to
+// evalVisit.
+func (w *nilDerefWalker) walkCompound(n ast.Node) {
 	switch s := n.(type) {
 	case *ast.LabeledStmt:
 		w.walk(s.Stmt)
@@ -318,6 +321,24 @@ func (w *nilDerefWalker) walk(n ast.Node) {
 		}
 	default:
 		w.evalVisit(n)
+	}
+}
+
+// walkBlock runs the statements of blk under block-scoped risk bookkeeping:
+// entries bound inside the block are removed on exit; mutations to entries
+// that already existed on entry persist (see walk for the full rationale).
+func (w *nilDerefWalker) walkBlock(blk *ast.BlockStmt) {
+	existed := make(map[string]bool, len(w.nilRisk))
+	for name := range w.nilRisk {
+		existed[name] = true
+	}
+	for _, st := range blk.List {
+		w.walk(st)
+	}
+	for name := range w.nilRisk {
+		if !existed[name] {
+			delete(w.nilRisk, name)
+		}
 	}
 }
 
