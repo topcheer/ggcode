@@ -413,8 +413,8 @@ func (s *Server) handleMessageSend(w http.ResponseWriter, r *http.Request, req *
 	done := s.handler.GetTaskDone(task.ID)
 	if done == nil {
 		// Task already terminal (e.g., immediate rejection).
-		t, _ := s.handler.GetTask(task.ID)
-		writeRPCResult(w, req.ID, t)
+		// #1111: same sweep window as the done branch below.
+		writeTaskResultOrNotFound(w, req.ID, s.handler, task.ID)
 		return
 	}
 
@@ -430,11 +430,7 @@ func (s *Server) handleMessageSend(w http.ResponseWriter, r *http.Request, req *
 		// #1111: honor GetTask's ok return - the task can be swept by
 		// cleanupExpiredTasksLocked between done closing and this read;
 		// serializing a nil task would emit result:null (protocol violation).
-		if t, ok := s.handler.GetTask(task.ID); ok {
-			writeRPCResult(w, req.ID, t)
-		} else {
-			writeRPCError(w, req.ID, ErrTaskNotFound)
-		}
+		writeTaskResultOrNotFound(w, req.ID, s.handler, task.ID)
 	case <-timer.C:
 		// #1090: use -32001 to match stream/resubscribe, include task ID in Data
 		writeRPCError(w, req.ID, &JSONRPCError{
@@ -1042,6 +1038,19 @@ func (s *Server) firePushNotifications(taskID string, payload StreamResponse) {
 // ---------------------------------------------------------------------------
 // Response helpers
 // ---------------------------------------------------------------------------
+
+// writeTaskResultOrNotFound writes the task as the JSON-RPC result, or the
+// ErrTaskNotFound error when GetTask reports the task was swept (the
+// #1094/#1111 race family: cleanupExpiredTasksLocked can delete a terminal
+// task between completion signaling and this read). Serializing the nil
+// task would emit a protocol-violating result:null.
+func writeTaskResultOrNotFound(w http.ResponseWriter, id json.RawMessage, h *TaskHandler, taskID string) {
+	if t, ok := h.GetTask(taskID); ok {
+		writeRPCResult(w, id, t)
+		return
+	}
+	writeRPCError(w, id, ErrTaskNotFound)
+}
 
 func writeRPCResult(w http.ResponseWriter, id json.RawMessage, result interface{}) {
 	w.Header().Set("Content-Type", "application/json")
