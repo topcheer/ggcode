@@ -22,8 +22,19 @@ unset GGCODE_ZAI_API_KEY
 unset ZAI_MODEL
 
 # ── Config ────────────────────────────────────────────────────────────────
-# Default GOMEMLIMIT matches GitHub CI (2GiB). Override via VERIFY_CI_MEMLIMIT.
-GOMEMLIMIT="${VERIFY_CI_MEMLIMIT:-2GiB}"
+# Default GOMEMLIMIT scales to the environment's REAL memory budget (see
+# derivation below). The historical fixed value was 2GiB to match GitHub CI,
+# but a hard 2GiB per-worker cap OOM-kills runs inside cgroup-limited
+# verification sandboxes whose total budget is at or below the cap - go
+# workers climb straight into the ceiling and the kernel kills them with the
+# bare "signal: killed" the retry machinery kept seeing. Explicit override
+# via VERIFY_CI_MEMLIMIT still wins.
+if [ -n "${VERIFY_CI_MEMLIMIT:-}" ]; then
+  GOMEMLIMIT="${VERIFY_CI_MEMLIMIT}"
+else
+  # Placeholder; sized precisely once memory probes exist (below).
+  GOMEMLIMIT="2GiB"
+fi
 # NOTE: build/vet/test concurrency is NOT pinned here anymore. A fixed
 # -p 1 -parallel 1 GOMAXPROCS=1 mode is safe under memory pressure but ~10x
 # slower; on a roomy machine a cold-cache run then exceeds the caller's own
@@ -54,12 +65,69 @@ avail_mem_mb() {
   fi
 }
 
+# cgroup_free_mb: free headroom INSIDE this process's cgroup limit, in MiB
+# (empty when unknown or unlimited). On containerized CI runners /proc/meminfo
+# reports HOST memory, but the kernel OOM-kills against the CGROUP limit - so
+# sizing the -p tier off host stats picks high concurrency deterministically,
+# and parallel compile/test workers then push RSS past the quota and every
+# attempt dies with a bare "signal: killed" before any retry can help.
+cgroup_free_mb() {
+  local lim cur free_bytes
+  # cgroup v2 unified hierarchy
+  if [ -r /sys/fs/cgroup/memory.max ] && [ -r /sys/fs/cgroup/memory.current ]; then
+    lim="$(cat /sys/fs/cgroup/memory.max 2>/dev/null || true)"
+    cur="$(cat /sys/fs/cgroup/memory.current 2>/dev/null || true)"
+    case "${lim}" in
+      max|-1|"") return ;;
+    esac
+    [ -z "${cur}" ] && return
+    free_bytes=$((lim - cur))
+    if [ "${free_bytes}" -gt 0 ]; then
+      printf '%d' "$((free_bytes / 1048576))"
+    else
+      printf '0'
+    fi
+    return
+  fi
+  # cgroup v1 (legacy); limits at/above 256GiB are page-counter sentinels
+  # meaning unlimited, not real quotas.
+  if [ -r /sys/fs/cgroup/memory/memory.limit_in_bytes ] && \
+     [ -r /sys/fs/cgroup/memory/memory.usage_in_bytes ]; then
+    lim="$(cat /sys/fs/cgroup/memory/memory.limit_in_bytes 2>/dev/null || true)"
+    cur="$(cat /sys/fs/cgroup/memory/memory.usage_in_bytes 2>/dev/null || true)"
+    case "${lim}" in ''|*[!0-9]*) return ;; esac
+    case "${cur}" in ''|*[!0-9]*) return ;; esac
+    if [ "${lim}" -le 274877906944 ]; then
+      free_bytes=$((lim - cur))
+      if [ "${free_bytes}" -gt 0 ]; then
+        printf '%d' "$((free_bytes / 1048576))"
+      else
+        printf '0'
+      fi
+    fi
+  fi
+}
+
+# effective_avail_mb: min(host available, cgroup free); falls back to the host
+# number whenever one side is unknown. All tier-picking and mem-gate checks
+# below must use THIS function - it is the only value the OOM killer respects.
+effective_avail_mb() {
+  local h c
+  h="$(avail_mem_mb 2>/dev/null || true)"
+  c="$(cgroup_free_mb 2>/dev/null || true)"
+  if [ -n "${c}" ] && { [ -z "${h}" ] || [ "${c}" -lt "${h}" ]; }; then
+    printf '%s' "${c}"
+  else
+    printf '%s' "${h}"
+  fi
+}
+
 # wait_for_memory: block until available memory recovers (>=1500 MiB) or
 # max wait elapses. Returns as soon as pressure clears.
 wait_for_memory() {
   local waited=0 avail
   while [ "${waited}" -lt 600 ]; do
-    avail="$(avail_mem_mb)"
+    avail="$(effective_avail_mb)"
     if [ -z "${avail}" ] || [ "${avail}" -ge 1500 ]; then
       return 0
     fi
@@ -71,15 +139,20 @@ wait_for_memory() {
 
 # pick_tier: set build/vet/test concurrency from live available memory.
 #   low  (<3GiB avail or unknown): -p 1  -parallel 1  GOMAXPROCS=1 (safe mode)
-#   mid  (3-8GiB):                 -p 2  -parallel 2  GOMAXPROCS=2
-#   high (>=8GiB):                 -p 4  -parallel 4  GOMAXPROCS=4
+#   mid  (3-10GiB):                -p 2  -parallel 2  GOMAXPROCS=2
+#   high (>=10GiB):                -p 4  -parallel 4  GOMAXPROCS=4
 # The mem-gate threshold scales with the tier: starting -p 4 safely needs more
 # headroom than starting -p 1.
 VC_P=1; VC_PARALLEL=1; VC_GOMAXPROCS=1; VC_MEM_GATE_MB=1500
 pick_tier() {
-  local avail; avail="$(avail_mem_mb 2>/dev/null || true)"
-  if [ -n "${avail}" ] && [ "${avail}" -ge 8192 ]; then
-    VC_P=4; VC_PARALLEL=4; VC_GOMAXPROCS=4; VC_MEM_GATE_MB=3072
+  local avail; avail="$(effective_avail_mb 2>/dev/null || true)"
+  # Tier-4 headroom raised from 8192MiB to 10240MiB: -p 4 workers each hold
+  # up to GOMEMLIMIT (2GiB), and on shared machines co-tenant agent builds can
+  # push the margin negative right after the check, producing OOM kills that
+  # burn retry attempts. Requiring real headroom before entering tier 4 keeps
+  # most runs in a tier they can finish without downgrades.
+  if [ -n "${avail}" ] && [ "${avail}" -ge 10240 ]; then
+    VC_P=4; VC_PARALLEL=4; VC_GOMAXPROCS=4; VC_MEM_GATE_MB=4096
   elif [ -n "${avail}" ] && [ "${avail}" -ge 3072 ]; then
     VC_P=2; VC_PARALLEL=2; VC_GOMAXPROCS=2; VC_MEM_GATE_MB=2048
   else
@@ -109,6 +182,26 @@ else
   pick_tier
 fi
 
+# Size GOMEMLIMIT from the environment's true memory budget when the caller
+# did not pin it. Keep each worker comfortably BELOW the cgroup/host headroom:
+# Go heap target near the ceiling guarantees an OOM kill, and margin must also
+# absorb non-heap overhead (runtime stacks, mmapped binaries, page tables).
+if [ -z "${VERIFY_CI_MEMLIMIT:-}" ]; then
+  _mem_avail="$(effective_avail_mb 2>/dev/null || true)"
+  case "${_mem_avail:-0}" in ''|*[!0-9]*) _mem_avail=0 ;; esac
+  if [ "${_mem_avail}" -ge 8192 ]; then
+    GOMEMLIMIT="2GiB"     # roomy: unchanged legacy cap
+  elif [ "${_mem_avail}" -ge 4096 ]; then
+    GOMEMLIMIT="1536MiB"
+  elif [ "${_mem_avail}" -ge 2048 ]; then
+    GOMEMLIMIT="1024MiB"
+  else
+    GOMEMLIMIT="768MiB"   # tight cgroup sandbox: stay well under the cap
+  fi
+  echo "[verify-ci] GOMEMLIMIT=${GOMEMLIMIT} (derived from avail=${_mem_avail:-?}MiB)"
+  unset _mem_avail
+fi
+
 # run_with_oom_retry <desc> <cmd...>
 # Runs cmd; if it is OOM-killed ("signal: killed" or exit 137), waits for the
 # system memory pressure on shared machines to actually subside (polling
@@ -130,7 +223,7 @@ run_with_oom_retry() {
     # Waiting here (up to 10min) converts the spike into a delayed first run
     # instead of a burned attempt. Cheap no-op when memory is plentiful.
     if [ "${VERIFY_CI_SKIP_MEM_GATE:-0}" != "1" ]; then
-      _avail="$(avail_mem_mb)"
+      _avail="$(effective_avail_mb)"
       if [ -n "${_avail}" ] && [ "${_avail}" -lt "${VC_MEM_GATE_MB}" ]; then
         echo "[verify-ci] ${desc}: low available memory (${_avail}MiB < ${VC_MEM_GATE_MB}MiB) before attempt ${attempt}; waiting for pressure to subside"
         wait_for_memory
@@ -223,9 +316,22 @@ echo "[verify-ci] running tests (main module, unit only)"
 # only re-runs the affected chunk, not the whole 10+ minute serial pass.
 test_chunks="./cmd"
 # module path github.com/topcheer/ggcode/internal/<subdir> -> <subdir> is field 5
-for _subdir in $(go list -tags goolm ./internal/... 2>/dev/null | cut -d/ -f5 | sort -u); do
+# Chunk discovery itself is OOM-retry-wrapped: the previously unwrapped
+# `go list ./internal/...` loads the entire package graph and was the one
+# heavy step left OUTSIDE any retry budget - under sustained memory pressure
+# from concurrent agent workloads it died with a bare "signal: killed",
+# aborting verify-ci before the protected test stages ever ran.
+test_chunks_file="$(mktemp -t verifyci-chunks)"
+if ! run_with_oom_retry "go list (test chunks)" \
+	env GOMEMLIMIT="${GOMEMLIMIT}" GOGC=50 \
+	sh -c 'exec go list -tags goolm ./internal/... >"$1"' sh "${test_chunks_file}"; then
+  rm -f "${test_chunks_file}"
+  exit 1
+fi
+for _subdir in $(cut -d/ -f5 "${test_chunks_file}" | sort -u); do
   [ -n "${_subdir}" ] && test_chunks="${test_chunks} ./internal/${_subdir}"
 done
+rm -f "${test_chunks_file}"
 for chunk in ${test_chunks}; do
   run_with_oom_retry "go test ${chunk}" env GOMEMLIMIT="${GOMEMLIMIT}" GOGC=50 go test -tags goolm -p "${VC_P}" -parallel "${VC_PARALLEL}" -timeout 300s "${chunk}/..." || exit 1
 done

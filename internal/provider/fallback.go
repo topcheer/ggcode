@@ -439,14 +439,21 @@ func (f *FallbackProvider) ChatStream(ctx context.Context, messages []Message, t
 
 	// Retry on the (possibly advanced) active provider (#936 wrap-around).
 	f.mu.RLock()
+	newIdx := int(f.activeIdx.Load())
 	other := f.activeLocked()
 	f.mu.RUnlock()
 
 	debug.Log("provider", "ChatStream failover retry on %s", other.Name())
 	stream2, err2 := other.ChatStream(ctx, messages, tools)
 	if err2 == nil {
-		f.consecutiveFail.Store(0)
-		return stream2, nil
+		// #1164: watch the retried stream exactly like the primary path above.
+		// Bundled providers return their channel immediately and surface
+		// quota/auth failures as async error events - a bare return here
+		// dropped chained failover for the entire retry (a failed-over call
+		// stuck on an async-broken second provider never reached the next
+		// one). The watcher's resetOnSuccess carries the success-time counter
+		// reset instead of an eager Store(0), keeping primary-path semantics.
+		return f.watchStreamForFailover(ctx, newIdx, stream2, messages, tools), nil
 	}
 	// #454: same root-cause preservation as Chat - join both errors so the
 	// primary's quota/auth cause is not masked by the fallback's network error.
@@ -563,9 +570,17 @@ func (f *FallbackProvider) watchStreamForFailover(ctx context.Context, failedIdx
 							}
 						}
 					}
-					// Fallback stream could not even start - surface the
-					// original error.
-					if !send(ev) {
+					// Fallback stream could not even start. #1163: preserve
+					// BOTH root causes like the sync Chat/ChatStream paths do
+					// with errors.Join - silently dropping the fallback's own
+					// sync-start failure misreported the root cause (the
+					// consumer saw the primary's stale error) and skewed
+					// failover accounting for a call whose replacement never ran.
+					evOut := ev
+					if err2 != nil {
+						evOut.Error = errors.Join(ev.Error, err2)
+					}
+					if !send(evOut) {
 						return
 					}
 					continue
