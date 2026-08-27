@@ -91,8 +91,8 @@ Write-Host "  Installer URLs: $($urls -join ', ')"
 & $wingetCreate update $PackageId --version $releaseVersion --urls $urls --out $manifestDir --token $GitHubToken
 
 if ($LASTEXITCODE -ne 0) {
-    Write-Warning "Base manifest generation failed."
-    exit 0
+    Write-Host "::Error::Base manifest generation failed (exit $LASTEXITCODE). This never self-heals - going red so the release is visibly missing its winget PR."
+    exit 1
 }
 
 # --- Step 2: Patch the generated installer YAML with missing top-level fields ---
@@ -191,11 +191,34 @@ Write-Host "Step 3: Submitting manifest from $yamlDir to winget-pkgs..."
 if ($LASTEXITCODE -eq 0) {
     Write-Host "Manifest submitted successfully!"
 } else {
-    Write-Warning "Manifest submission failed (exit code $LASTEXITCODE)."
-    Write-Host "  Dumping patched YAML for debugging:"
-    Write-Host "  ---"
-    Get-Content $installerFile.FullName | ForEach-Object { Write-Host "  $_" }
-    Write-Host "  ---"
+    # v1.3.219/v1.3.220 both silently failed here: winget-create's internal
+    # fork sync gave up ("The forked repository could not be synced with the
+    # upstream commits") when the fork lagged upstream, the warning was
+    # swallowed by exit 0, and the release stayed green with no PR. Recover
+    # the known-good way (merge-upstream + retry once), and go RED if it
+    # still fails so releases never silently skip winget again.
+    Write-Warning "Manifest submission failed (exit code $LASTEXITCODE). Re-syncing fork and retrying once..."
+    # Stagger: the desktop and CLI winget jobs sync the same fork in
+    # parallel; give a concurrent sync time to finish first.
+    Start-Sleep -Seconds 20
+    try {
+        $syncHeaders = @{ Authorization = "token $GitHubToken"; Accept = "application/vnd.github+json" }
+        Invoke-RestMethod -Uri "https://api.github.com/repos/topcheer/winget-pkgs/merge-upstream" -Method Post -Headers $syncHeaders -Body (@{ branch = "master" } | ConvertTo-Json) -ErrorAction Stop | Out-Null
+        Write-Host "Fork re-synced. Retrying submission..."
+    } catch {
+        Write-Warning "Fork re-sync failed: $_"
+    }
+    & $wingetCreate submit $yamlDir --token $GitHubToken --no-open
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "Manifest submitted successfully on retry!"
+    } else {
+        Write-Host "::Error::Manifest submission failed twice (last exit code $LASTEXITCODE). Winget PR NOT created - manual backfill (winget-backfill.yml) required."
+        Write-Host "  Dumping patched YAML for debugging:"
+        Write-Host "  ---"
+        Get-Content $installerFile.FullName | ForEach-Object { Write-Host "  $_" }
+        Write-Host "  ---"
+        exit 1
+    }
 }
 
 exit 0
