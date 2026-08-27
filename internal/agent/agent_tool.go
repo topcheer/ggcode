@@ -30,7 +30,7 @@ func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolC
 		return tool.Result{Content: err.Error(), IsError: true}
 	}
 
-	// Don't log permission check — permission decision below is sufficient
+	// Don't log permission check - permission decision below is sufficient
 	a.mu.RLock()
 	policy := a.policy
 	onApproval := a.onApproval
@@ -49,7 +49,7 @@ func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolC
 					"To proceed:\n"+
 					"1. If this is a file write, ensure the path is within the workspace\n"+
 					"2. Ask the user to switch to a more permissive mode (Shift+Tab) or approve the specific operation\n"+
-					"3. Do NOT retry the same operation — it will be denied again", tc.Name),
+					"3. Do NOT retry the same operation - it will be denied again", tc.Name),
 				IsError: true,
 			}
 		case permission.Ask:
@@ -57,7 +57,7 @@ func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolC
 			// pattern 3+ times, auto-approve to reduce prompt fatigue.
 			if a.approvalMemory != nil && a.approvalMemory.ShouldAutoApprove(tc.Name, tc.Arguments) {
 				debug.Log("approval-memory", "auto-approved %s (learned pattern)", tc.Name)
-				// Fall through to execution — treated as Allow.
+				// Fall through to execution - treated as Allow.
 				break
 			}
 			if onApproval != nil {
@@ -71,7 +71,7 @@ func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolC
 						IsError: true,
 					}
 				}
-				// User approved — record for future auto-approval.
+				// User approved - record for future auto-approval.
 				if a.approvalMemory != nil {
 					a.approvalMemory.RecordApproval(tc.Name, tc.Arguments)
 				}
@@ -102,7 +102,7 @@ func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolC
 	}
 
 	// Tool affinity learning: record outcomes for predictive recommendations (sa-126)
-	// Fire tool metric (non-blocking — caller must handle asynchronously).
+	// Fire tool metric (non-blocking - caller must handle asynchronously).
 	errMsg := ""
 	if result.IsError {
 		errMsg = truncateString(result.Content, 200)
@@ -250,7 +250,7 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 	// quotes, or surrounding markdown fences. When this happens, every
 	// downstream pre-processor (CoerceArguments, ValidateRequiredParams, etc.)
 	// silently bails out on json.Unmarshal failure, and the tool itself fails
-	// with a confusing "invalid input" error — wasting a full agent iteration.
+	// with a confusing "invalid input" error - wasting a full agent iteration.
 	//
 	// RepairJSON is a no-op for already-valid JSON (fast path via json.Valid).
 	// It is already applied in the OpenAI streaming path (provider layer), but
@@ -282,6 +282,17 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 		tc.Arguments = enumCorrected
 	}
 
+	// Description fallback: "description" is a UI-only activity label for most
+	// tools, yet weak models routinely omit it. Rejecting the whole call over a
+	// cosmetic label wastes a full LLM round-trip, so when the schema requires
+	// an activity-label description and the model omitted it, inject a derived
+	// fallback and proceed. Semantic description args (create_skill, cmd_snippet
+	// save, ...) are NOT auto-filled - see InjectDescriptionFallback.
+	if withFallback := tool.InjectDescriptionFallback(t.Parameters(), tc.Arguments, tc.Name); !bytes.Equal(withFallback, tc.Arguments) {
+		debug.Log("agent", "injected fallback description label for tool %s", tc.Name)
+		tc.Arguments = withFallback
+	}
+
 	// Schema-aware required-parameter validation: catches missing required
 	// fields before tool execution, giving the model a clear error message
 	// instead of a confusing downstream failure. This complements
@@ -309,7 +320,7 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 
 	// Git destructive operation detection: inspect shell commands and git_*
 	// tool calls for irreversible operations (reset --hard, force push, clean
-	// -fd, rm -rf, etc.). Advisory only — injects a warning but does not block.
+	// -fd, rm -rf, etc.). Advisory only - injects a warning but does not block.
 	destructiveWarning := a.checkGitDestructive(tc.Name, tc.Arguments)
 
 	// Strip unknown parameters: some models hallucinate extra parameters that
@@ -598,7 +609,7 @@ func (a *Agent) safeExecute(t tool.Tool, ctx context.Context, args json.RawMessa
 			if r := recover(); r != nil {
 				debug.Log("agent", "PANIC recovered in tool %s: %v\n%s", t.Name(), r, runtimedebug.Stack())
 				ch <- execResult{tool.Result{
-					Content: fmt.Sprintf("tool %s panicked: %v — this is a bug, please report it", t.Name(), r),
+					Content: fmt.Sprintf("tool %s panicked: %v - this is a bug, please report it", t.Name(), r),
 					IsError: true,
 				}, nil}
 			}
@@ -699,7 +710,7 @@ func (a *Agent) executeFileTool(ctx context.Context, t tool.Tool, tc provider.To
 
 	// Post-write hardcoded credential detection (#601 W2): previously this
 	// site ran checkHardcodedSecrets directly AND the "hardcoded-secret"
-	// registry entry ran it again — same check, same input, two copies of
+	// registry entry ran it again - same check, same input, two copies of
 	// every warning, with the registry copy subject to the
 	// maxIntegrityWarnings cap and the direct copy not (behavior drifted with
 	// registration order). The registry (wired in #334/#341) is now the
@@ -738,7 +749,7 @@ func (a *Agent) executeFileTool(ctx context.Context, t tool.Tool, tc provider.To
 // fileExisted (the fourth return value) reports whether the target file existed
 // on disk before the tool call; it is false only when write_file creates a new
 // file. The checkpoint layer needs it to distinguish "created file" from
-// "edited a pre-existing empty file" — OldContent=="" alone cannot (issue #554 B/C).
+// "edited a pre-existing empty file" - OldContent=="" alone cannot (issue #554 B/C).
 func (a *Agent) computeFileChange(tc provider.ToolCallDelta) (filePath, oldContent, newContent string, fileExisted bool, err error) {
 	fileExisted = true // assume present; write_file on a missing path flips it to false
 	switch tc.Name {
@@ -755,14 +766,14 @@ func (a *Agent) computeFileChange(tc provider.ToolCallDelta) (filePath, oldConte
 		filePath = args.FilePath
 		data, err := os.ReadFile(filePath)
 		if err != nil {
-			// File may not exist yet — that's OK for write_file, but edit_file needs it
+			// File may not exist yet - that's OK for write_file, but edit_file needs it
 			return "", "", "", false, fmt.Errorf("cannot read file: %w", err)
 		}
 		oldContent = string(data)
 		// #601 W1: the simulated edit must mirror the REAL edit_file tool's
 		// semantics (replace_all, line-number anchors, fuzzy matching, the
 		// uniqueness guard). This simulation feeds dry-run validation, diff
-		// preview, and checkpoint snapshots — a divergence lets real writes
+		// preview, and checkpoint snapshots - a divergence lets real writes
 		// escape downstream detectors (nil-map-write, sql-injection, ...) and
 		// corrupts undo data.
 		newContent, err = simulateEditFile(oldContent, args.OldText, args.NewText, args.ReplaceAll)
@@ -782,7 +793,7 @@ func (a *Agent) computeFileChange(tc provider.ToolCallDelta) (filePath, oldConte
 		filePath = args.Path
 		data, err := os.ReadFile(filePath)
 		if err != nil {
-			// File does not exist yet — this write creates it. Capture that
+			// File does not exist yet - this write creates it. Capture that
 			// fact so the checkpoint can undo by removing the file instead of
 			// writing back an empty buffer (issue #554 B).
 			if os.IsNotExist(err) {
@@ -808,7 +819,7 @@ func replaceFirst(s, old, new string) string {
 }
 
 // ---------------------------------------------------------------------------
-// #601 W1: edit_file simulation — a faithful port of the real tool's
+// #601 W1: edit_file simulation - a faithful port of the real tool's
 // replacement semantics (internal/tool/edit_file.go + edit_match.go).
 // The sim-prefixed helpers are kept semantically identical to their
 // internal/tool counterparts so that simulateEditFile(content, ...) and
@@ -837,15 +848,15 @@ func simulateEditFile(content, oldText, newText string, replaceAll bool) (string
 	}
 	count := strings.Count(content, mr.canonical)
 	if !replaceAll && count > 1 && !mr.anchored {
-		return "", fmt.Errorf("old_text found %d times in file — must be unique. Add 1-3 lines of surrounding context to disambiguate, copy the exact numbered lines from read_file to anchor the intended occurrence, or set replace_all=true to replace every occurrence", count)
+		return "", fmt.Errorf("old_text found %d times in file - must be unique. Add 1-3 lines of surrounding context to disambiguate, copy the exact numbered lines from read_file to anchor the intended occurrence, or set replace_all=true to replace every occurrence", count)
 	}
 	// #604 T2 mirror: the real edit_file re-counts under lenient semantics
 	// when a fallback transform folded semantically-duplicate blocks into
-	// one canonical match — the simulation must refuse identically or it
+	// one canonical match - the simulation must refuse identically or it
 	// diverges from the tool (the #601 dual-side lock exists for this).
 	if !replaceAll && !mr.anchored && count <= 1 {
 		if loose, _ := tool.LenientRecount(content, oldText, mr.transform); loose > 1 {
-			return "", fmt.Errorf("old_text matched %d times in file under whitespace-tolerant matching — must be unique. Add context to disambiguate or set replace_all=true", loose)
+			return "", fmt.Errorf("old_text matched %d times in file under whitespace-tolerant matching - must be unique. Add context to disambiguate or set replace_all=true", loose)
 		}
 	}
 	if mr.transform != "" {
