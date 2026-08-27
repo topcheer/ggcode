@@ -772,9 +772,40 @@ func ensureAskUserDispatcher(registry *tool.Registry, base *tool.AskUserTool) *a
 	return disp
 }
 
-// session/request_permission. For single/multi choice questions, the choices
-// are mapped to PermissionOption entries. For text questions, we provide
-// Submit/Cancel options (the IDE may support freeform text in the permission UI).
+// #1140: askUserPermissionOptions maps one question's choices to
+// session/request_permission PermissionOption entries. Single/multi choice
+// questions present their choices; any other shape falls back to OK/Cancel.
+func askUserPermissionOptions(question tool.AskUserQuestion) []PermissionOption {
+	var options []PermissionOption
+	switch question.Kind {
+	case tool.AskUserKindSingle, tool.AskUserKindMulti:
+		for _, choice := range question.Choices {
+			options = append(options, PermissionOption{
+				OptionID: choice.ID,
+				Name:     choice.Label,
+				Kind:     PermissionOptionAllowOnce,
+			})
+		}
+		if len(options) == 0 {
+			options = []PermissionOption{
+				{OptionID: "ok", Name: "OK", Kind: PermissionOptionAllowOnce},
+				{OptionID: "cancel", Name: "Cancel", Kind: PermissionOptionRejectOnce},
+			}
+		}
+
+	default:
+		options = []PermissionOption{
+			{OptionID: "ok", Name: "OK", Kind: PermissionOptionAllowOnce},
+			{OptionID: "cancel", Name: "Cancel", Kind: PermissionOptionRejectOnce},
+		}
+	}
+	return options
+}
+
+// setupAskUserHandler wires the ACP-side ask_user implementation. Every
+// question in a batch is round-tripped through session/request_permission
+// (#1140); text questions error out up front so the LLM falls back to plain
+// text, matching the pre-#1140 contract for single text questions.
 func (al *AgentLoop) setupAskUserHandler() {
 	askTool, ok := al.registry.Get("ask_user")
 	if !ok {
@@ -793,133 +824,85 @@ func (al *AgentLoop) setupAskUserHandler() {
 	}
 
 	handler := func(ctx context.Context, req tool.AskUserRequest) (tool.AskUserResponse, error) {
-		// Build permission options from the first question's choices
-		var options []PermissionOption
-		var question tool.AskUserQuestion
+		// #1140: process every question in the batch. The schema allows
+		// minItems:1 with no upper bound and the TUI path renders one tab per
+		// question, so multi-question batches are a product contract. The old
+		// code only round-tripped req.Questions[0] through the IDE permission
+		// UI while still reporting QuestionCount=N, silently dropping questions
+		// 2..N behind a fake success signal. Each question now gets its own
+		// session/request_permission round trip; answers are aggregated in
+		// question order so AnsweredCount matches QuestionCount.
 
-		if len(req.Questions) > 0 {
-			question = req.Questions[0]
-		}
-
-		// Build title from request title or first question prompt
 		title := req.Title
-		if title == "" && question.Prompt != "" {
-			title = question.Prompt
+		if len(req.Questions) > 0 && title == "" && req.Questions[0].Prompt != "" {
+			title = req.Questions[0].Prompt
 		}
 
-		switch question.Kind {
-		case tool.AskUserKindSingle, tool.AskUserKindMulti:
-			// Map choices to permission options
-			for _, choice := range question.Choices {
-				options = append(options, PermissionOption{
-					OptionID: choice.ID,
-					Name:     choice.Label,
-					Kind:     PermissionOptionAllowOnce,
-				})
-			}
-			if len(options) == 0 {
-				options = []PermissionOption{
-					{OptionID: "ok", Name: "OK", Kind: PermissionOptionAllowOnce},
-					{OptionID: "cancel", Name: "Cancel", Kind: PermissionOptionRejectOnce},
-				}
-			}
-
-		case tool.AskUserKindText, "":
-			// Text question — offer Submit/Cancel
-			options = []PermissionOption{
-				{OptionID: "submit", Name: "Submit", Kind: PermissionOptionAllowOnce},
-				{OptionID: "cancel", Name: "Cancel", Kind: PermissionOptionRejectOnce},
-			}
-
-		default:
-			options = []PermissionOption{
-				{OptionID: "ok", Name: "OK", Kind: PermissionOptionAllowOnce},
-				{OptionID: "cancel", Name: "Cancel", Kind: PermissionOptionRejectOnce},
-			}
-		}
-
-		result, err := al.transport.SendRequest(
-			// #1105: pass the run ctx (not context.Background()) so Stop()/
-			// user cancellation aborts the questionnaire wait - the other
-			// requestPermission-family handlers already do this, and the
-			// transport honors ctx.Done since #1046. Without it a cancelled
-			// run could block up to the 5-minute questionnaire timeout.
-			ctx,
-			"session/request_permission",
-			RequestPermissionRequest{
-				SessionID: al.session.ID,
-				ToolCall: &ToolCallUpdate{
-					Title: title,
-					Kind:  ToolKindExecute,
-				},
-				Options: options,
-			},
-			5*time.Minute,
-		)
-		if err != nil {
-			return tool.AskUserResponse{}, fmt.Errorf("ask_user permission request: %w", err)
-		}
-
-		var response RequestPermissionResponse
-		if err := json.Unmarshal(result, &response); err != nil {
-			return tool.AskUserResponse{}, fmt.Errorf("ask_user parse response: %w", err)
-		}
-
-		// Build AskUserResponse from permission response
 		resp := tool.AskUserResponse{
 			Status:        tool.AskUserStatusSubmitted,
 			Title:         title,
 			QuestionCount: len(req.Questions),
 		}
 
-		if response.Outcome.Outcome == "cancelled" || response.Outcome.Outcome == "rejected" {
-			return tool.AskUserResponse{}, fmt.Errorf(
-				"ask_user: the user dismissed the question in the IDE. " +
-					"Please ask the user directly in your response text instead.",
-			)
-		}
+		// #1140 + #1116 compatibility: every question gets its own round trip,
+		// and an EMPTY batch still performs exactly one attempt with the
+		// zero-value question shape - mirroring the pre-#1140 single-trip flow
+		// that issue1116's guard relies on for aborted-wait error surfacing.
+		total := max(len(req.Questions), 1)
+		for i := 0; i < total; i++ {
+			var question tool.AskUserQuestion
+			if i < len(req.Questions) {
+				question = req.Questions[i]
+			}
+			options := askUserOptionsFor(question)
 
-		// User selected an option
-		selectedID := ""
-		if response.Outcome.SelectedOption != nil {
-			selectedID = string(response.Outcome.SelectedOption.OptionID)
-		}
+			result, err := al.sendAskUserPermission(ctx, title, options)
+			if err != nil {
+				return tool.AskUserResponse{}, fmt.Errorf("ask_user permission request for question %q: %w", question.ID, err)
+			}
 
-		switch question.Kind {
-		case tool.AskUserKindSingle:
-			resp.Answers = append(resp.Answers, tool.AskUserAnswer{
-				ID:                question.ID,
-				Title:             question.Title,
-				Kind:              tool.AskUserKindSingle,
-				CompletionStatus:  tool.AskUserCompletionAnswered,
-				AnswerMode:        tool.AskUserAnswerModeSelectionOnly,
-				Answered:          true,
-				SelectedChoiceIDs: []string{selectedID},
-				SelectedChoices:   []string{selectedID},
-			})
-			resp.AnsweredCount = 1
+			var response RequestPermissionResponse
+			if err := json.Unmarshal(result, &response); err != nil {
+				return tool.AskUserResponse{}, fmt.Errorf("ask_user parse response for question %q: %w", question.ID, err)
+			}
 
-		case tool.AskUserKindMulti:
-			// Permission options only allow single selection, treat as single
-			resp.Answers = append(resp.Answers, tool.AskUserAnswer{
-				ID:                question.ID,
-				Title:             question.Title,
-				Kind:              tool.AskUserKindSingle,
-				CompletionStatus:  tool.AskUserCompletionAnswered,
-				AnswerMode:        tool.AskUserAnswerModeSelectionOnly,
-				Answered:          true,
-				SelectedChoiceIDs: []string{selectedID},
-				SelectedChoices:   []string{selectedID},
-			})
-			resp.AnsweredCount = 1
+			selectedID, ok := requestPermissionSelectedID(response)
+			if !ok {
+				// User dismissed the modal - fail loudly instead of faking success.
+				return tool.AskUserResponse{}, fmt.Errorf(
+					"ask_user: the user dismissed the question in the IDE. " +
+						"Please ask the user directly in your response text instead.",
+				)
+			}
 
-		case tool.AskUserKindText, "":
-			// Text question — IDE permission UI doesn't support freeform text input.
-			// Return an error so the LLM falls back to asking in plain text.
-			return tool.AskUserResponse{}, fmt.Errorf(
-				"ask_user: the IDE does not support text input for this question. " +
-					"Please ask the user directly in your response text instead.",
-			)
+			switch question.Kind {
+			case tool.AskUserKindSingle, tool.AskUserKindMulti:
+				// Permission options only allow single selection - multi
+				// questions degrade to single-choice answers (#1140).
+				resp.Answers = append(resp.Answers, tool.AskUserAnswer{
+					ID:                question.ID,
+					Title:             question.Title,
+					Kind:              tool.AskUserKindSingle,
+					CompletionStatus:  tool.AskUserCompletionAnswered,
+					AnswerMode:        tool.AskUserAnswerModeSelectionOnly,
+					Answered:          true,
+					SelectedChoiceIDs: []string{selectedID},
+					SelectedChoices:   []string{selectedID},
+				})
+				resp.AnsweredCount++
+
+			case tool.AskUserKindText, "":
+				// Text question - IDE permission UI doesn't support freeform
+				// text input. Return an error so the LLM falls back to asking
+				// in plain text (pre-#1140 contract preserved per question;
+				// #1140 names the offending question so batches never fail
+				// silently either way).
+				return tool.AskUserResponse{}, fmt.Errorf(
+					"ask_user: the IDE does not support text input for question %q (%s). "+
+						"Please ask the user directly in your response text instead.",
+					question.ID, question.Title,
+				)
+			}
 		}
 
 		return resp, nil
@@ -940,4 +923,65 @@ func (al *AgentLoop) setupAskUserHandler() {
 	disp.setHandler(al.session.ID, handler)
 	base.SetHandler(handler)
 	debug.Log("acp", "ask_user handler registered for session %s", al.session.ID)
+}
+
+// sendAskUserPermission performs one ask_user permission round trip on the
+// loop transport (session/request_permission). Extracted per-question by the
+// #1140 batch fix to keep setupAskUserHandler readable.
+func (al *AgentLoop) sendAskUserPermission(ctx context.Context, title string, options []PermissionOption) (json.RawMessage, error) {
+	return al.transport.SendRequest(
+		// #1105: pass the run ctx (not context.Background()) so Stop()/
+		// user cancellation aborts the questionnaire wait - the other
+		// requestPermission-family handlers already do this, and the
+		// transport honors ctx.Done since #1046. Without it a cancelled
+		// run could block up to the 5-minute questionnaire timeout.
+		ctx,
+		"session/request_permission",
+		RequestPermissionRequest{
+			SessionID: al.session.ID,
+			ToolCall: &ToolCallUpdate{
+				Title: title,
+				Kind:  ToolKindExecute,
+			},
+			Options: options,
+		},
+		5*time.Minute,
+	)
+}
+
+// askUserOptionsFor maps a question kind to its permission modal options.
+// Single/multi questions show their own choices (#1140 per-question options);
+// text questions keep the pre-#1140 Submit/Cancel wire contract; unknown
+// kinds degrade to OK/Cancel.
+func askUserOptionsFor(question tool.AskUserQuestion) []PermissionOption {
+	switch question.Kind {
+	case tool.AskUserKindSingle, tool.AskUserKindMulti:
+		return askUserPermissionOptions(question)
+	case tool.AskUserKindText, "":
+		// Text question - offer Submit/Cancel (the IDE may support
+		// freeform text in the permission UI).
+		return []PermissionOption{
+			{OptionID: "submit", Name: "Submit", Kind: PermissionOptionAllowOnce},
+			{OptionID: "cancel", Name: "Cancel", Kind: PermissionOptionRejectOnce},
+		}
+	default:
+		return []PermissionOption{
+			{OptionID: "ok", Name: "OK", Kind: PermissionOptionAllowOnce},
+			{OptionID: "cancel", Name: "Cancel", Kind: PermissionOptionRejectOnce},
+		}
+	}
+}
+
+// requestPermissionSelectedID reports whether the user picked an option and
+// returns its wire id. cancelled/rejected outcomes yield ok=false so callers
+// fail loudly instead of faking success (#1140).
+func requestPermissionSelectedID(resp RequestPermissionResponse) (string, bool) {
+	switch resp.Outcome.Outcome {
+	case "cancelled", "rejected":
+		return "", false
+	}
+	if resp.Outcome.SelectedOption != nil {
+		return string(resp.Outcome.SelectedOption.OptionID), true
+	}
+	return "", false
 }
