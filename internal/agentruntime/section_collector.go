@@ -2,6 +2,7 @@ package agentruntime
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -12,14 +13,14 @@ import (
 // package symbols, project commands) and caches the results in memory.
 //
 // When the system prompt is rebuilt (e.g. on user message submit), it reads
-// these pre-computed values instantly — zero I/O on the UI thread.
+// these pre-computed values instantly - zero I/O on the UI thread.
 //
 // Design:
 //   - Start launches a goroutine that refreshes every refreshInterval.
 //   - The first refresh runs synchronously in Start so values are available
 //     immediately for the initial prompt build.
 //   - RefreshNow triggers an immediate refresh (useful after file saves).
-//   - If a refresh is slow, the previous cached value remains in use —
+//   - If a refresh is slow, the previous cached value remains in use -
 //     prompt construction is never blocked.
 
 const (
@@ -60,11 +61,37 @@ type SectionCollector struct {
 
 	stop chan struct{}
 	done chan struct{}
+
+	// loopStarted is flipped exactly once by Start; Stop consults it so a
+	// collector whose loop never ran does not wait forever on done (#1154).
+	loopStarted atomic.Bool
+
+	// stopped makes Stop idempotent: concurrent callers each run through
+	// their own close attempt, but only the first one closes the channel.
+	// Before this guard, two goroutines calling Stop on the same instance
+	// panicked on "close of closed channel" (#1154, desktop multi-ChatBridge).
+	stopped sync.Once
 }
 
 // globalSectionCollector is the default collector for the interactive REPL.
 // Sub-agent and teammate prompts also read from it.
-var globalSectionCollector *SectionCollector
+// Access is serialized by globalCollectorMu (#1154): Init runs on the TUI main
+// goroutine, StopGlobalSectionCollector fires from session teardown, and
+// GlobalSectionSnapshot is read from background prompt builders.
+var (
+	globalCollectorMu sync.Mutex
+
+	globalSectionCollector *SectionCollector
+)
+
+// newSectionCollector builds a collector with its lifecycle channels ready.
+func newSectionCollector(workingDir string) *SectionCollector {
+	return &SectionCollector{
+		working: workingDir,
+		stop:    make(chan struct{}),
+		done:    make(chan struct{}),
+	}
+}
 
 // sectionSnapshot is an immutable point-in-time copy of all cached sections.
 type sectionSnapshot struct {
@@ -79,21 +106,18 @@ type sectionSnapshot struct {
 
 // InitGlobalSectionCollector creates the global collector for workingDir,
 // performs one synchronous refresh, then starts the background refresh loop.
-// It is safe to call multiple times — subsequent calls are no-ops if the
-// working directory matches.
+// It is safe to call multiple times - subsequent calls are no-ops if the
+// working directory matches - and safe for concurrent callers (#1154).
 func InitGlobalSectionCollector(workingDir string) {
-	if globalSectionCollector != nil && globalSectionCollector.working == workingDir {
+	// Fast path: an initialized collector already serves this directory.
+	globalCollectorMu.Lock()
+	if cur := globalSectionCollector; cur != nil && cur.working == workingDir {
+		globalCollectorMu.Unlock()
 		return
 	}
-	// Stop any previous collector.
-	if globalSectionCollector != nil {
-		globalSectionCollector.Stop()
-	}
-	sc := &SectionCollector{
-		working: workingDir,
-		stop:    make(chan struct{}),
-		done:    make(chan struct{}),
-	}
+	globalCollectorMu.Unlock()
+
+	sc := newSectionCollector(workingDir)
 	// Synchronous first refresh so values are ready for the initial prompt,
 	// but bounded: on slow filesystems (NFS with large directories) the scans
 	// can take minutes, which would delay the TUI indefinitely. Past the
@@ -110,27 +134,55 @@ func InitGlobalSectionCollector(workingDir string) {
 		debug.Log("agentruntime", "section collector first refresh exceeded %s (slow filesystem?); starting with empty sections", firstRefreshBudget)
 	}
 	sc.Start()
+
+	// Swap under lock (#1154), capturing the instance being replaced in the
+	// same critical section so a concurrent Stop/Snapshot observes either the
+	// old or the new collector - never a torn state. The displaced instance is
+	// shut down after installation so snapshot readers always see a live
+	// collector; lingering Stop work happens outside the lock.
+	globalCollectorMu.Lock()
+	old := globalSectionCollector
 	globalSectionCollector = sc
+	globalCollectorMu.Unlock()
+	if old != nil {
+		old.Stop()
+	}
 }
 
 // StopGlobalSectionCollector stops the background goroutine.
 func StopGlobalSectionCollector() {
-	if globalSectionCollector != nil {
-		globalSectionCollector.Stop()
-		globalSectionCollector = nil
+	// Detach first so readers converge on "not initialized", then stop the
+	// detached instance outside the lock (#1154). Stop itself is idempotent,
+	// so overlap with a racing Init that re-installs an instance cannot
+	// double-close anything.
+	globalCollectorMu.Lock()
+	cur := globalSectionCollector
+	globalSectionCollector = nil
+	globalCollectorMu.Unlock()
+	if cur != nil {
+		cur.Stop()
 	}
 }
 
 // Start launches the background refresh loop. The first refresh must have
 // been called by the caller (InitGlobalSectionCollector does this).
+// Repeat calls are no-ops (#1154): exactly one loop goroutine may exist,
+// otherwise two loops would race to close done.
 func (sc *SectionCollector) Start() {
+	if !sc.loopStarted.CompareAndSwap(false, true) {
+		return
+	}
 	go sc.loop()
 }
 
-// Stop signals the background loop to exit and waits for it.
+// Stop signals the background loop to exit and waits for it. Concurrent or
+// repeated calls are safe (#1154): the close happens exactly once, and waiting
+// on done is safe because a channel close releases every waiter.
 func (sc *SectionCollector) Stop() {
-	close(sc.stop)
-	<-sc.done
+	sc.stopped.Do(func() { close(sc.stop) })
+	if sc.loopStarted.Load() {
+		<-sc.done
+	}
 }
 
 // loop runs the periodic refresh until Stop is called.
@@ -187,7 +239,7 @@ func (sc *SectionCollector) Snapshot() sectionSnapshot {
 func (sc *SectionCollector) refresh() {
 	start := time.Now()
 
-	// Sections are independent — collect them concurrently so total refresh
+	// Sections are independent - collect them concurrently so total refresh
 	// time is the slowest section (MAX) rather than the sum. On slow
 	// filesystems each scan is dominated by readdir/stat round-trips.
 	var (
@@ -210,7 +262,7 @@ func (sc *SectionCollector) refresh() {
 
 	// The background loop and Stop() must never deadlock on a hung section:
 	// the goroutines write shared locals and exit on their own. But refresh()
-	// itself must not block forever waiting for them — wait with a generous
+	// itself must not block forever waiting for them - wait with a generous
 	// cap so the loop keeps its cadence even on pathological mounts.
 	done := make(chan struct{})
 	go func() { wg.Wait(); close(done) }()
@@ -252,8 +304,14 @@ func (sc *SectionCollector) store(overview, modified, commands, toolchain, symbo
 // If no collector has been initialized (e.g. in tests or pipe mode), it
 // returns zero values and the caller falls back to direct computation.
 func GlobalSectionSnapshot() (sectionSnapshot, bool) {
-	if globalSectionCollector == nil {
+	// Copy the pointer under lock (#1154); the per-instance state read below
+	// is separately guarded by the collector's own RWMutex, so holding only
+	// the global mutex here avoids serializing readers behind slow snapshots.
+	globalCollectorMu.Lock()
+	sc := globalSectionCollector
+	globalCollectorMu.Unlock()
+	if sc == nil {
 		return sectionSnapshot{}, false
 	}
-	return globalSectionCollector.Snapshot(), true
+	return sc.Snapshot(), true
 }

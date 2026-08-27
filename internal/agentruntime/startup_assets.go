@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/debug"
@@ -109,8 +110,11 @@ func BuildSkillsSystemPromptWithPromptRefs(skills []*commands.Command) (string, 
 			}
 			desc += when
 		}
-		if len(desc) > maxDescChars {
-			desc = desc[:maxDescChars-1] + "..."
+		// Rune-safe truncation (#1155): slicing by byte landed in the middle
+		// of multi-byte runes for CJK descriptions, emitting invalid UTF-8
+		// that strict providers reject with HTTP 400. Reuse truncateRunes.
+		if utf8.RuneCountInString(desc) > maxDescChars {
+			desc = truncateRunes(desc, maxDescChars, "...")
 		}
 		line := fmt.Sprintf("- %s: %s", name, desc)
 		if total+len(line)+1 > maxChars {
