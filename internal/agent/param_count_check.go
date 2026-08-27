@@ -24,6 +24,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"strings"
 )
 
@@ -42,16 +43,21 @@ type paramCountInstance struct {
 	pos      token.Position
 	count    int
 	params   []string
+	recvType string // receiver type text ("*Server" etc); empty for plain funcs and literals
 }
 
 // pcFingerprint keys an instance for delta suppression (fix #1142). It uses
-// normalized content text (function name + parameter names/types), NOT the
-// line:column position - inserting a comment line above a function must not
-// re-report the pre-existing function as newly introduced. Pattern follows
-// pathTraversalInstance.ptFingerprint.
+// normalized content text (receiver TYPE + function name + parameter names),
+// NOT the line:column position - inserting a comment line above a function
+// must not re-report the pre-existing function as newly introduced. Pattern
+// follows pathTraversalInstance.ptFingerprint.
+//
+// The receiver TYPE (not the variable name) is part of the key (#1149):
+// (s *Server) handle and (s *Client) handle are different functions and must
+// not collide just because both receivers are named `s`.
 func (i paramCountInstance) pcFingerprint() string {
 	norm := strings.Join(i.params, ",")
-	return fmt.Sprintf("%s|%d|%s", i.funcName, i.count, norm)
+	return fmt.Sprintf("%s[%s]|%d|%s", i.recvType, i.funcName, i.count, norm)
 }
 
 func checkExcessiveParams(filePath, oldContent, newContent string) []string {
@@ -68,13 +74,18 @@ func checkExcessiveParams(filePath, oldContent, newContent string) []string {
 		return nil
 	}
 
-	var oldKeys map[string]bool
+	// Delta suppression is multiset/count-based, not set-based (#1149): a
+	// plain set merges N colliding old instances (same fingerprint - e.g. two
+	// anonymous literals with identical params) into one entry and silently
+	// absorbs a NEW (N+1)-th instance. Each old occurrence consumes one match;
+	// only the surplus over the old count is reported as new.
+	var oldCounts map[string]int
 	if strings.TrimSpace(oldContent) != "" {
 		for _, iss := range findExcessiveParams(oldContent) {
-			if oldKeys == nil {
-				oldKeys = make(map[string]bool)
+			if oldCounts == nil {
+				oldCounts = make(map[string]int)
 			}
-			oldKeys[iss.pcFingerprint()] = true
+			oldCounts[iss.pcFingerprint()]++
 		}
 	}
 
@@ -84,7 +95,8 @@ func checkExcessiveParams(filePath, oldContent, newContent string) []string {
 		// Delta-suppress pre-existing instances by content fingerprint so a
 		// pure line shift (comment insertion above) stays silent (#1142).
 		key := inst.pcFingerprint()
-		if oldKeys != nil && oldKeys[key] {
+		if oldCounts[key] > 0 {
+			oldCounts[key]--
 			continue
 		}
 		newCount++
@@ -173,10 +185,20 @@ func inspectFuncDecl(fn *ast.FuncDecl, fset *token.FileSet) (paramCountInstance,
 
 	return paramCountInstance{
 		funcName: fn.Name.Name,
+		recvType: recvTypeText(fn.Recv), // #1149: type, not the variable name
 		pos:      fset.Position(fn.Pos()),
 		count:    count,
 		params:   params,
 	}, true
+}
+
+// recvTypeText renders the receiver type ("*Server", "Client") for the
+// delta fingerprint (#1149). Empty for nil receivers.
+func recvTypeText(recv *ast.FieldList) string {
+	if recv == nil || len(recv.List) == 0 || recv.List[0].Type == nil {
+		return ""
+	}
+	return types.ExprString(recv.List[0].Type)
 }
 
 // inspectFuncLit checks an anonymous function literal for excessive params.
