@@ -198,3 +198,12 @@ func TestSpawnAgentRejectsUnknownTools(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 }
+
+// TestSpawnAgentDescriptionDocumentsLimit ensures the tool description keeps
+// documenting the concurrency cap so the LLM knows spawns beyond it reject.
+func TestSpawnAgentDescriptionDocumentsLimit(t *testing.T) {
+	desc := SpawnAgentTool{}.Description()
+	if !strings.Contains(desc, "16 sub-agents") {
+		t.Errorf("spawn_agent description must document the 16-concurrent limit, got: %s", desc)
+	}
+}

@@ -605,3 +605,13 @@ func TestSubAgentResultSizeCap(t *testing.T) {
 		t.Errorf("expected capped result to be %d bytes, got %d", maxSubAgentResultBytes, len(capped))
 	}
 }
+
+// TestDefaultMaxConcurrentIs16 pins the sub-agent concurrency default. The
+// spawn_agent tool description promises "at most 16 sub-agents may run
+// concurrently" - if this default changes, the tool text must change too.
+func TestDefaultMaxConcurrentIs16(t *testing.T) {
+	m := NewManager(config.SubAgentConfig{})
+	if m.maxConcurrent != 16 {
+		t.Errorf("default maxConcurrent = %d, want 16 (also update spawn_agent description if intentional)", m.maxConcurrent)
+	}
+}

@@ -250,3 +250,12 @@ func TestTeamToolDescriptionsClarifyTeammateLifecycleAndResults(t *testing.T) {
 		t.Fatalf("teammate_results teammate_id schema should clarify latest-result semantics: %s", params)
 	}
 }
+
+// TestTeammateSpawnDescriptionDocumentsLimit ensures the tool description
+// keeps documenting the per-team cap so the LLM knows the spawn ceiling.
+func TestTeammateSpawnDescriptionDocumentsLimit(t *testing.T) {
+	desc := TeammateSpawnTool{}.Description()
+	if !strings.Contains(desc, "16 teammates") {
+		t.Errorf("teammate_spawn description must document the 16-per-team limit, got: %s", desc)
+	}
+}
