@@ -63,10 +63,24 @@ func loadProbeCache() {
 		debug.Log("probe", "cache parse error: %v", err)
 		return
 	}
+	// Migration: entries below the 128K minimum tier were written by the old
+	// estimate-based inference, which bottomed out at 64K whenever an overflow
+	// error carried no parseable number. Drop them — legitimate sub-128K
+	// windows are re-seeded instantly from the known-model table or
+	// rediscovered by the background probe.
+	dropped := 0
+	minTier := contextOverflowTiers[len(contextOverflowTiers)-1]
+	for k, v := range m {
+		if v < minTier {
+			delete(m, k)
+			dropped++
+		}
+	}
 	probeCacheMu.Lock()
 	probeCache = m
 	probeCacheMu.Unlock()
-	debug.Log("probe", "loaded %d entries from %s", len(m), path)
+	debug.Log("probe", "loaded %d entries from %s (dropped %d sub-%d legacy entries)",
+		len(m), path, dropped, minTier)
 }
 
 func saveProbeCache() {
@@ -130,30 +144,39 @@ var contextOverflowTiers = []int{
 	256_000,   // 256K
 	200_000,   // 200K — Claude 3.5/4
 	168_000,   // 168K
-	128_000,   // 128K — default fallback
-	64_000,    // 64K  — minimum tier
+	128_000,   // 128K — MINIMUM tier. Sub-128K windows are never inferred
+	//        by tier matching; only exact provider-reported
+	//        numbers may set them (see InferContextWindowFromError).
 }
 
 // matchOverflowTier returns the largest contextOverflowTiers entry that is <=
-// tokenCount. Returns 64_000 (minimum tier) if tokenCount is smaller than all
-// tiers.
+// tokenCount. Returns 0 when tokenCount is smaller than every tier — callers
+// must NOT substitute a floor value: the old 64K floor let a fuzzy local
+// token estimate permanently shrink healthy 128K+ windows.
 func matchOverflowTier(tokenCount int) int {
 	for _, tier := range contextOverflowTiers {
 		if tier <= tokenCount {
 			return tier
 		}
 	}
-	return contextOverflowTiers[len(contextOverflowTiers)-1]
+	return 0
 }
 
 // InferContextWindowFromError is called when a context overflow error is
 // received. It attempts to determine the model's actual context window:
 //
-//   - First, tries to parse an exact limit from the error message.
-//   - If that fails, uses currentTokenCount as an upper-bound estimate.
-//   - Matches the result to the nearest tier from contextOverflowTiers.
-//   - If the inferred tier is strictly smaller than currentMaxTokens, updates
-//     the context manager via setMaxTokens and persists to the probe cache.
+//   - Parses the EXACT limit from the error message. This is required: an
+//     overflow error without a number is not evidence of the real limit, and
+//     the old fallback (matching the local token estimate against tiers)
+//     shrank healthy windows to the 64K minimum tier whenever the estimate
+//     undercounted, then persisted the bogus value. Window resets now happen
+//     ONLY on precise numbers.
+//   - Matches the exact value to the largest tier from contextOverflowTiers
+//     that does not exceed it (e.g. 200019 → 200000).
+//   - If the parsed value is below every tier (sub-128K model), trusts the
+//     provider's precise number as-is instead of snapping up to 128K.
+//   - If the inferred window is strictly smaller than currentMaxTokens,
+//     updates via setMaxTokens and persists to the probe cache.
 //
 // Returns the inferred context window (0 if no update was needed/possible).
 func InferContextWindowFromError(
@@ -167,33 +190,34 @@ func InferContextWindowFromError(
 		return 0
 	}
 
-	// Step 1: try to extract exact value from error message.
+	// Step 1: extract the exact limit from the error message. Without a
+	// precise number we refuse to update — guessing is what caused permanent
+	// 64K window shrinkage before.
 	exactWindow := parseContextWindowFromError(err)
-
-	// Step 2: determine the estimate to match against.
-	estimate := exactWindow
-	if estimate == 0 {
-		// No exact value — the current token count is a lower bound for the
-		// actual limit (the request exceeded it). Use it as-is for matching.
-		estimate = currentTokenCount
-	}
-	if estimate <= 0 {
+	if exactWindow <= 0 {
+		debug.Log("probe", "overflow inference: no exact window in error, refusing to guess (tokens=%d, current=%d, key=%s)",
+			currentTokenCount, currentMaxTokens, probeKey)
 		return 0
 	}
 
-	// Step 3: match to nearest tier.
-	tier := matchOverflowTier(estimate)
+	// Step 2: normalize to a tier (e.g. 200019 → 200000). Values below the
+	// smallest tier keep their exact value — they are precise provider
+	// numbers, not tier guesses.
+	tier := matchOverflowTier(exactWindow)
+	if tier == 0 {
+		tier = exactWindow
+	}
 
-	// Step 4: only update if we'd be reducing the context window.
-	if tier == 0 || tier >= currentMaxTokens {
+	// Step 3: only update if we'd be reducing the context window.
+	if tier >= currentMaxTokens {
 		debug.Log("probe", "overflow inference: tier=%d >= current=%d, no update needed",
 			tier, currentMaxTokens)
 		return 0
 	}
 
-	// Step 5: apply and persist.
-	debug.Log("probe", "overflow inference: parsed=%d estimate=%d tier=%d (was %d, key=%s)",
-		exactWindow, estimate, tier, currentMaxTokens, probeKey)
+	// Step 4: apply and persist.
+	debug.Log("probe", "overflow inference: parsed=%d tier=%d (was %d, key=%s)",
+		exactWindow, tier, currentMaxTokens, probeKey)
 	setMaxTokens(tier)
 	SetProbeCache(probeKey, tier)
 	return tier
@@ -205,18 +229,23 @@ func InferContextWindowFromError(
 // limit from an API error message. Many providers include the limit in
 // their error responses.
 var contextLimitPatterns = []*regexp.Regexp{
-	// "maximum context length is N" / "max context length: N"
-	regexp.MustCompile(`(?i)maximum context length\W+(\d+)`),
-	// "N tokens > M maximum" (Anthropic style — we want M)
-	regexp.MustCompile(`(?i)(\d+)\s*tokens?\s*>\s*(\d+)\s*maximum`),
-	// "exceeds ... (N)" (Gemini style)
-	regexp.MustCompile(`(?i)exceeds.*?\((\d+)\)`),
-	// "limit of N tokens" / "limit: N"
-	regexp.MustCompile(`(?i)limit\W+(?:of\s+)?(\d+)`),
+	// "maximum context length is N" / "max context length: N" / "max context length N"
+	regexp.MustCompile(`(?i)maximum context length\D+(\d+)`),
+	// "N tokens > M maximum" / "N tokens > M tokens maximum" (Anthropic style — we want M)
+	regexp.MustCompile(`(?i)(\d+)\s*tokens?\s*>\s*(\d+)(?:\s*tokens?)?\s*maximum`),
+	// "requested N tokens, maximum is M" (Anthropic #303 style — we want M)
+	regexp.MustCompile(`(?i)maximum is\s+(\d+)`),
+	// "exceeds ... (N tokens)" / "exceeds ... (N)" (Gemini style)
+	regexp.MustCompile(`(?i)exceeds.*?\((\d+)[^)]*\)`),
+	// "token limit: N" / "context limit N" — the token-context prefix keeps
+	// rate-limit errors ("rate limit: 60000/min") from parsing.
+	regexp.MustCompile(`(?i)(?:token|context|prompt|input)\s+limit\W+(\d+)`),
+	// "limit of N tokens" / "limit: N tokens" — requires the tokens suffix
+	regexp.MustCompile(`(?i)limit\W+(?:of\s+)?(\d+)\s*tokens?`),
 	// "maximum of N tokens"
-	regexp.MustCompile(`(?i)maximum of\s+(\d+)`),
-	// "model.*max.*N" (generic)
-	regexp.MustCompile(`(?i)model.*?max\w*\W+(\d+)`),
+	regexp.MustCompile(`(?i)maximum of\s+(\d+)\s*tokens?`),
+	// "model ... max ... N tokens" (generic; requires the tokens suffix)
+	regexp.MustCompile(`(?i)model.*?max\w*\W+(\d+)\s*tokens?`),
 }
 
 func parseContextWindowFromError(err error) int {
