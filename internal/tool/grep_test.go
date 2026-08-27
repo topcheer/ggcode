@@ -341,8 +341,13 @@ func TestFormatCountReportsGlobalTotalsWithPagination(t *testing.T) {
 	if !containsAny(content, "10 file(s)") || !containsAny(content, "100 match(es)") {
 		t.Fatalf("expected global totals '10 file(s), 100 match(es) total', got:\n%s", content)
 	}
-	if lines := countNonEmptyLines(content); lines != 3+1 { // 3 file lines + summary
-		t.Fatalf("expected 3 listed files + summary, got %d lines:\n%s", lines, content)
+	// Truncated output carries the withheld-count hint line (cap feature),
+	// so expected lines are: 3 file lines + hint + summary.
+	if lines := countNonEmptyLines(content); lines != 3+2 {
+		t.Fatalf("expected 3 listed files + hint + summary, got %d lines:\n%s", lines, content)
+	}
+	if !containsAny(content, "showing 1-3 of 10 files") {
+		t.Fatalf("expected withheld-count hint for truncated listing, got:\n%s", content)
 	}
 	if !containsAny(content, "a.go: 15") || !containsAny(content, "c.go: 10") || containsAny(content, "d.go:") {
 		t.Fatalf("expected only first-page files a,b,c listed, got:\n%s", content)
