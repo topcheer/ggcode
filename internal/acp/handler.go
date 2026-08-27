@@ -866,6 +866,13 @@ func (h *Handler) handleSessionResume(params json.RawMessage) (interface{}, erro
 }
 
 // handleSetConfigOption sets a configuration option for a session.
+// #1145: the "mode" option follows the same semantics as session/set_mode -
+// the requested value is validated against the declared select options,
+// persisted in h.sessionModes so it survives loop recreation between prompts,
+// and applied to the active agent loop when one is running. Only echoing the
+// value back would silently ignore permission downgrades such as
+// auto -> supervised and let destructive commands run unconfirmed.
+// Non-mode config options keep their previous echo-only behavior.
 func (h *Handler) handleSetConfigOption(params json.RawMessage) (interface{}, error) {
 	var req SetSessionConfigOptionRequest
 	if err := json.Unmarshal(params, &req); err != nil {
@@ -873,17 +880,41 @@ func (h *Handler) handleSetConfigOption(params json.RawMessage) (interface{}, er
 	}
 
 	h.sessionsMu.Lock()
-	_, ok := h.sessions[req.SessionID]
-	// Mode change is handled by the agent loop config
+	session, ok := h.sessions[req.SessionID]
+	loop := h.agentLoops[req.SessionID]
 	h.sessionsMu.Unlock()
+	if !ok {
+		return nil, fmt.Errorf("session not found: %s", req.SessionID)
+	}
+
+	if req.ConfigID == "mode" {
+		// #1145: reject values that were never declared in the select options
+		// instead of echoing them back as if accepted.
+		valid := false
+		for _, m := range getDefaultSessionModeState().Modes {
+			if SessionConfigValueId(m.ID) == req.Value {
+				valid = true
+				break
+			}
+		}
+		if !valid {
+			return nil, fmt.Errorf("invalid value %q for config option \"mode\"", string(req.Value))
+		}
+		// Mirror handleSessionSetMode: persist under the sessions lock first,
+		// then apply to the active loop outside the lock.
+		h.sessionsMu.Lock()
+		h.sessionModes[req.SessionID] = string(req.Value)
+		h.sessionsMu.Unlock()
+		if loop != nil {
+			loop.SetMode(string(req.Value))
+		}
+		debug.Log("acp", "session %s mode changed to %s via set_config_option", session.ID, string(req.Value))
+	}
 
 	configOpts := getDefaultConfigOptions()
-	if ok {
-		// Update the current value for mode
-		for i := range configOpts {
-			if configOpts[i].ID == req.ConfigID {
-				configOpts[i].CurrentValue = req.Value
-			}
+	for i := range configOpts {
+		if configOpts[i].ID == req.ConfigID {
+			configOpts[i].CurrentValue = req.Value
 		}
 	}
 
