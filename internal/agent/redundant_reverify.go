@@ -57,8 +57,9 @@ type redundantReverifyState struct {
 type reverifyRun struct {
 	toolName    string
 	iteration   int
-	editsSince  int  // file modifications since this verification ran
-	resultError bool // did the last run produce an error?
+	editsSince  int    // file modifications since this verification ran
+	resultError bool   // did the last run produce an error?
+	signature   string // normalized command fingerprint (issue #1173)
 }
 
 // isVerificationCommand checks if a tool name + arguments constitutes a
@@ -101,6 +102,30 @@ var reverifyTextToolFirstWords = map[string]bool{
 	"man": true, "which": true, "type": true, "find": true, "ls": true,
 }
 
+func firstPipelineSegment(args string) string {
+	seg := args
+	for _, sep := range []string{"|", ";", "&&", "||"} {
+		if i := strings.Index(seg, sep); i >= 0 {
+			seg = seg[:i]
+		}
+	}
+	return seg
+}
+
+// verificationSignature returns a normalized fingerprint of the first pipeline
+// segment of a verification command (issue #1173). Two commands in the same
+// category are only redundant when this fingerprint matches: `go test
+// ./internal/agent/` and `go test ./internal/config/` must never be treated as
+// idempotent re-runs of each other.
+func verificationSignature(args string) string {
+	fields := strings.Fields(firstPipelineSegment(args))
+	// Skip the same crude env prefixes that classification skips.
+	for len(fields) > 0 && strings.HasPrefix(fields[0], "$(") {
+		fields = fields[1:]
+	}
+	return strings.ToLower(strings.Join(fields, " "))
+}
+
 func (s *redundantReverifyState) classifyVerificationCommand(toolName, args string) string {
 	// #343: only command-executing tools can perform verification.
 	if toolName != "run_command" && toolName != "start_command" {
@@ -108,13 +133,7 @@ func (s *redundantReverifyState) classifyVerificationCommand(toolName, args stri
 	}
 	// Take the first pipeline segment's first word: if the command itself is a
 	// text operation, any "go test" mention is data, not execution.
-	firstSeg := args
-	for _, sep := range []string{"|", ";", "&&", "||"} {
-		if i := strings.Index(firstSeg, sep); i >= 0 {
-			firstSeg = firstSeg[:i]
-		}
-	}
-	fields := strings.Fields(firstSeg)
+	fields := strings.Fields(firstPipelineSegment(args))
 	for len(fields) > 0 && strings.HasPrefix(fields[0], "$(") { // skip env prefixes crudely
 		fields = fields[1:]
 	}
@@ -140,6 +159,10 @@ func (s *redundantReverifyState) recordToolCall(toolName, args string, iteration
 	if cat == "" {
 		return ""
 	}
+	// Issue #1173: redundancy requires an identical normalized command, not
+	// just the same category. Verification of a different scope or target
+	// produces new information and must never be flagged.
+	sig := verificationSignature(args)
 
 	prev := s.lastRun[cat]
 
@@ -149,12 +172,14 @@ func (s *redundantReverifyState) recordToolCall(toolName, args string, iteration
 		iteration:   iteration,
 		editsSince:  0,
 		resultError: resultError,
+		signature:   sig,
 	}
 
-	// Check for redundancy: previous run of same category exists, no edits
-	// since, and the previous run was NOT an error (errors may need re-runs
-	// after diagnosis even without edits, so we only flag successful re-runs).
-	if prev != nil && prev.editsSince == 0 && !prev.resultError {
+	// Check for redundancy: previous run of same category AND same command
+	// exists, no edits since, and the previous run was NOT an error (errors
+	// may need re-runs after diagnosis even without edits, so we only flag
+	// successful re-runs).
+	if prev != nil && prev.editsSince == 0 && !prev.resultError && prev.signature == sig {
 		if s.warnings >= redundantReverifyMaxWarnings {
 			return ""
 		}

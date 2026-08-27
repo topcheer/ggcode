@@ -78,6 +78,12 @@ type recurringErrorState struct {
 	// firedLevels maps fingerprint → highest guidance level already fired.
 	// Prevents re-firing the same level for the same fingerprint.
 	firedLevels map[string]int
+
+	// lastFingerprint is the fingerprint of the most recently recorded error
+	// (issue #1172). It lets recordBuildError tell a brand-new error (which
+	// sets the count baseline) apart from a blind re-run of the same error
+	// without any edit in between (which must not inflate the count).
+	lastFingerprint string
 }
 
 func newRecurringErrorState() *recurringErrorState {
@@ -93,6 +99,7 @@ func (r *recurringErrorState) reset() {
 	r.fingerprintCounts = make(map[string]int)
 	r.editsSinceLastError = 0
 	r.firedLevels = make(map[string]int)
+	r.lastFingerprint = ""
 }
 
 // recordEdit increments the edit counter. Called after a successful file edit.
@@ -114,16 +121,27 @@ func (r *recurringErrorState) recordBuildError(output string) string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	r.fingerprintCounts[fp]++
-	count := r.fingerprintCounts[fp]
-
-	// Only count as a meaningful recurrence if edits happened between
-	// occurrences. If editsSinceLastError == 0, the agent just re-ran the
-	// build without changing anything — that's a loop_detect issue, not ours.
+	// Issue #1172: re-running the same error WITHOUT any edit in between is a
+	// consecutive-duplicate already handled by loop_detect; it must not
+	// inflate the fingerprint count, because inflated counts skip the soft
+	// level and jump straight to hard guidance with a false cycle count.
+	// A brand-new error (or one after reset) always establishes the count
+	// baseline. Only edit-separated recurrences grow the count.
 	hadEdits := r.editsSinceLastError > 0
 	r.editsSinceLastError = 0 // reset for the next interval
 
-	if !hadEdits || count < recurringSoftThreshold {
+	isNewError := fp != r.lastFingerprint
+	if isNewError {
+		r.lastFingerprint = fp
+	}
+
+	if hadEdits || isNewError {
+		r.fingerprintCounts[fp]++
+	}
+	count := r.fingerprintCounts[fp]
+
+	if !hadEdits {
+		// No-edit re-run: silent regardless of count (no new occurrence).
 		return ""
 	}
 

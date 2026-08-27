@@ -177,10 +177,11 @@ func (s *overcorrectionState) recordEdit(size int, filePath string) string {
 	// Edits below minimum size are never overcorrections. They must NOT
 	// consume the pending error either: an edit the detector itself deems too
 	// small to assess must not destroy the attribution anchor a later,
-	// assessable edit needs. Only reset the step counter so the error can
-	// still expire via the stale-error path.
+	// assessable edit needs. Leave stepsSinceError untouched (issue #1170):
+	// resetting it here would keep a stale error alive forever by wiping the
+	// expiry progress, so small edits are simply non-events for the counter
+	// and only recordNonEditStep advances it toward overcorrectionMaxErrorAge.
 	if size < overcorrectionMinEditBytes {
-		s.stepsSinceError = 0
 		s.entries = append(s.entries, overcorrectionEntry{
 			errorSeverity: errSev,
 			editSize:      size,
@@ -208,14 +209,21 @@ func (s *overcorrectionState) recordEdit(size int, filePath string) string {
 		return ""
 	}
 
-	// Count consecutive recent overcorrections
+	// Count consecutive recent overcorrections. Small edits (below
+	// overcorrectionMinEditBytes) are non-events by design and must NOT break
+	// the cascade streak (issue #1170): interleaving a 1-line fix between two
+	// genuine overcorrections is the common real-world cascade shape. Only an
+	// assessable, non-overcorrected edit ends the streak.
 	consecutiveOver := 0
 	for i := len(s.entries) - 1; i >= 0; i-- {
 		if s.entries[i].overcorrected {
 			consecutiveOver++
-		} else {
-			break
+			continue
 		}
+		if s.entries[i].editSize < overcorrectionMinEditBytes {
+			continue
+		}
+		break
 	}
 
 	// Suppress if already warned enough
