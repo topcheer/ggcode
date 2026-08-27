@@ -744,10 +744,16 @@ func TestHandlerSessionClose(t *testing.T) {
 	h := NewHandler(cfg, registry, transport, nil)
 	h.initialized = true
 
-	// Create a session first
-	newParams := SessionNewParams{CWD: "/tmp"}
+	// Create a session first. Use t.TempDir() so the CWD exists on every
+	// platform: validateCWD stats the directory, and "/tmp" does not exist
+	// on Windows (the unchecked assertion below used to panic and kill the
+	// whole acp test binary).
+	newParams := SessionNewParams{CWD: t.TempDir()}
 	newParamsJSON, _ := json.Marshal(newParams)
-	newResult, _ := h.handleSessionNew(newParamsJSON)
+	newResult, newErr := h.handleSessionNew(newParamsJSON)
+	if newErr != nil {
+		t.Fatalf("handleSessionNew error: %v", newErr)
+	}
 	sessionID := newResult.(SessionNewResult).SessionID
 
 	// Close it
