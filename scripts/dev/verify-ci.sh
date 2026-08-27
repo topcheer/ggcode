@@ -122,11 +122,16 @@ effective_avail_mb() {
   fi
 }
 
-# wait_for_memory: block until available memory recovers (>=1500 MiB) or
-# max wait elapses. Returns as soon as pressure clears.
+# wait_for_memory: block until available memory recovers (>=1500 MiB) or a
+# 120s cap elapses. Philosophy: forward progress at tier 1 beats waiting.
+# Monitored/caller-timed runs die by wall-clock just as surely as by OOM,
+# so this is a short breather for a transient spike to pass - never a long
+# stall. The 10min predecessor caused exactly that stall: under sustained
+# co-tenant pressure the run spent its whole life sleeping in gates and was
+# killed for slowness with the same bare "signal: killed".
 wait_for_memory() {
   local waited=0 avail
-  while [ "${waited}" -lt 600 ]; do
+  while [ "${waited}" -lt 120 ]; do
     avail="$(effective_avail_mb)"
     if [ -z "${avail}" ] || [ "${avail}" -ge 1500 ]; then
       return 0
@@ -204,7 +209,10 @@ downgrade_tier() {
 # GOMEMLIMIT peaks (~4GiB+ combined) and OOM-kill each other with a bare
 # "signal: killed" before any per-chunk retry can help. Serialize instead:
 # a second invocation waits for the first to finish, then runs uncontended.
-# Fail-open after 10min so a wedged holder cannot block verification forever.
+# Fail-open after 5min so a wedged or slow holder cannot cost the caller
+# more wall-clock than a contended run would (the tier gates below make a
+# fail-open double-run self-regulating: both suites downgrade under the
+# mutual memory/load pressure).
 VC_LOCK_DIR="${TMPDIR:-/tmp}/ggcode-verify-ci.lock"
 VC_LOCK_WAITED=0
 while ! mkdir "${VC_LOCK_DIR}" 2>/dev/null; do
@@ -215,12 +223,24 @@ while ! mkdir "${VC_LOCK_DIR}" 2>/dev/null; do
     rm -rf "${VC_LOCK_DIR}"
     continue
   fi
-  if [ "${VC_LOCK_WAITED}" -ge 600 ]; then
-    echo "[verify-ci] lock still held after 10min; proceeding without serialization"
+  # A holder that never wrote a pid file (killed in the mkdir->echo window;
+  # SIGKILL fires no traps) is unrecoverable by pid - fall back to lock age.
+  # A healthy holder writes pid within milliseconds, so a lock dir older
+  # than 30s with no pid file is definitively orphaned.
+  if [ -z "${_lock_pid}" ]; then
+    _lock_age=$(( $(date +%s) - $(stat -f %m "${VC_LOCK_DIR}" 2>/dev/null || stat -c %Y "${VC_LOCK_DIR}" 2>/dev/null || echo 0) ))
+    if [ "${_lock_age}" -ge 30 ]; then
+      echo "[verify-ci] removing orphan verify-ci lock (no pid file, age ${_lock_age}s)"
+      rm -rf "${VC_LOCK_DIR}"
+      continue
+    fi
+  fi
+  if [ "${VC_LOCK_WAITED}" -ge 300 ]; then
+    echo "[verify-ci] lock still held after 5min; proceeding without serialization"
     break
   fi
   if [ "${VC_LOCK_WAITED}" -eq 0 ]; then
-    echo "[verify-ci] another verify-ci run is active; waiting for it to finish (up to 10min)"
+    echo "[verify-ci] another verify-ci run is active; waiting for it to finish (up to 5min)"
   fi
   sleep 10
   VC_LOCK_WAITED=$((VC_LOCK_WAITED + 10))
@@ -276,14 +296,18 @@ run_with_oom_retry() {
   backoff=20
   for attempt in 1 2 3 4 5; do
     # Gate before EVERY attempt (incl. the first): on shared machines a
-    # concurrent agent workload can spike memory between the startup gate and
-    # this step; proceeding into the spike gets the first attempt killed.
-    # Waiting here (up to 10min) converts the spike into a delayed first run
-    # instead of a burned attempt. Cheap no-op when memory is plentiful.
+    # concurrent agent workload can spike memory between checks. Under
+    # pressure the answer is DOWNGRADE AND GO, not wait - tier 1 needs only
+    # ~1.5GiB, which fits almost any momentary state; stalling for pressure
+    # to clear costs wall-clock the caller may not have. Cheap no-op when
+    # memory is plentiful.
     if [ "${VERIFY_CI_SKIP_MEM_GATE:-0}" != "1" ]; then
       _avail="$(effective_avail_mb)"
       if [ -n "${_avail}" ] && [ "${_avail}" -lt "${VC_MEM_GATE_MB}" ]; then
-        echo "[verify-ci] ${desc}: low available memory (${_avail}MiB < ${VC_MEM_GATE_MB}MiB) before attempt ${attempt}; waiting for pressure to subside"
+        echo "[verify-ci] ${desc}: low available memory (${_avail}MiB < ${VC_MEM_GATE_MB}MiB) before attempt ${attempt}; downgrading concurrency and proceeding"
+        if [ "${VC_PINNED:-0}" != "1" ]; then
+          while [ "${VC_P}" -gt 1 ]; do downgrade_tier; done
+        fi
         wait_for_memory
       fi
     fi
@@ -300,13 +324,18 @@ run_with_oom_retry() {
         rm -f "${log}"
         return 1
       fi
-      echo "[verify-ci] ${desc} was OOM-killed (attempt ${attempt}/5); downgrading concurrency and waiting for memory pressure to subside (avail=$(avail_mem_mb 2>/dev/null || echo '?')MiB)"
+      echo "[verify-ci] ${desc} was OOM-killed (attempt ${attempt}/5); downgrading concurrency and proceeding (avail=$(avail_mem_mb 2>/dev/null || echo '?')MiB)"
       if [ "${VC_PINNED:-0}" != "1" ]; then
         downgrade_tier
       fi
       wait_for_memory
       sleep "${backoff}"
-      backoff=$((backoff * 3))
+      # Cap backoff growth at 60s: under sustained pressure the previous
+      # 20->60->180->540s ladder alone burned ~15min of wall-clock, which a
+      # caller-timed run pays for with its life.
+      if [ "${backoff}" -lt 60 ]; then
+        backoff=$((backoff * 3))
+      fi
       continue
     fi
     cat "${log}"
@@ -316,15 +345,18 @@ run_with_oom_retry() {
   return 1
 }
 
-# Startup memory gate: on shared machines with concurrent agent workloads the
-# run may start while memory pressure is already high; waiting here (up to
-# 10min) lets that pressure clear BEFORE the first heavy go command runs, so a
-# kill lands inside run_with_oom_retry (retryable) instead of on an unwrapped
-# step (fatal). Override with VERIFY_CI_SKIP_MEM_GATE=1.
+# Startup memory gate: on shared machines the run may start while memory
+# pressure is already high. Forward progress beats waiting: downgrade to
+# tier 1 immediately and go - tier 1 fits ~1.5GiB, so only a near-exhausted
+# machine stalls at all, and only briefly (120s cap). Override with
+# VERIFY_CI_SKIP_MEM_GATE=1.
 if [ "${VERIFY_CI_SKIP_MEM_GATE:-0}" != "1" ]; then
   _avail="$(avail_mem_mb)"
   if [ -n "${_avail}" ] && [ "${_avail}" -lt "${VC_MEM_GATE_MB}" ]; then
-    echo "[verify-ci] low available memory (${_avail}MiB < ${VC_MEM_GATE_MB}MiB); waiting up to 10min for pressure to subside"
+    echo "[verify-ci] low available memory (${_avail}MiB < ${VC_MEM_GATE_MB}MiB); downgrading to tier 1 and proceeding"
+    if [ "${VC_PINNED:-0}" != "1" ]; then
+      while [ "${VC_P}" -gt 1 ]; do downgrade_tier; done
+    fi
     wait_for_memory
   fi
 fi
