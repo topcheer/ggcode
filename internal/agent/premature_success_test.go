@@ -8,7 +8,7 @@ func TestPrematureSuccess_EditWithoutVerifyThenClaim(t *testing.T) {
 	s := newPrematureSuccessState()
 
 	// Agent edits a file (no verification)
-	s.recordToolCall("edit_file", map[string]interface{}{"file_path": "/foo.go"}, false)
+	s.recordToolCall("edit_file", map[string]interface{}{"file_path": "/foo.go"}, false, "")
 
 	// Agent claims success without verifying
 	hint := s.checkSuccessClaim("The issue is fixed. All tests pass now.")
@@ -24,8 +24,8 @@ func TestPrematureSuccess_VerifiedThenClaim_NoFire(t *testing.T) {
 	s := newPrematureSuccessState()
 
 	// Agent edits, then verifies
-	s.recordToolCall("edit_file", map[string]interface{}{"file_path": "/foo.go"}, false)
-	s.recordToolCall("run_command", map[string]interface{}{"command": "go test ./..."}, false)
+	s.recordToolCall("edit_file", map[string]interface{}{"file_path": "/foo.go"}, false, "")
+	s.recordToolCall("run_command", map[string]interface{}{"command": "go test ./..."}, false, "")
 
 	// Claims success - should NOT fire because verification was done
 	hint := s.checkSuccessClaim("All tests pass. Done!")
@@ -47,9 +47,9 @@ func TestPrematureSuccess_NoEdits_NoFire(t *testing.T) {
 func TestPrematureSuccess_NonVerifyCommand_NoReset(t *testing.T) {
 	s := newPrematureSuccessState()
 
-	s.recordToolCall("edit_file", map[string]interface{}{"file_path": "/foo.go"}, false)
+	s.recordToolCall("edit_file", map[string]interface{}{"file_path": "/foo.go"}, false, "")
 	// Non-verify command should NOT reset editsSinceVerify
-	s.recordToolCall("run_command", map[string]interface{}{"command": "ls -la"}, false)
+	s.recordToolCall("run_command", map[string]interface{}{"command": "ls -la"}, false, "")
 
 	hint := s.checkSuccessClaim("The issue is resolved.")
 	if hint == "" {
@@ -60,7 +60,7 @@ func TestPrematureSuccess_NonVerifyCommand_NoReset(t *testing.T) {
 func TestPrematureSuccess_ConditionalClaim_NoFire(t *testing.T) {
 	s := newPrematureSuccessState()
 
-	s.recordToolCall("edit_file", map[string]interface{}{"file_path": "/foo.go"}, false)
+	s.recordToolCall("edit_file", map[string]interface{}{"file_path": "/foo.go"}, false, "")
 
 	hint := s.checkSuccessClaim("If all tests pass, the task is complete.")
 	if hint != "" {
@@ -71,7 +71,7 @@ func TestPrematureSuccess_ConditionalClaim_NoFire(t *testing.T) {
 func TestPrematureSuccess_MaxFires(t *testing.T) {
 	s := newPrematureSuccessState()
 
-	s.recordToolCall("edit_file", nil, false)
+	s.recordToolCall("edit_file", nil, false, "")
 	hint1 := s.checkSuccessClaim("The issue is fixed.")
 	if hint1 == "" {
 		t.Fatal("first claim should fire")
@@ -86,7 +86,7 @@ func TestPrematureSuccess_MaxFires(t *testing.T) {
 func TestPrematureSuccess_Reset(t *testing.T) {
 	s := newPrematureSuccessState()
 
-	s.recordToolCall("edit_file", nil, false)
+	s.recordToolCall("edit_file", nil, false, "")
 	_ = s.checkSuccessClaim("Done!")
 	s.reset()
 
@@ -98,8 +98,8 @@ func TestPrematureSuccess_Reset(t *testing.T) {
 func TestPrematureSuccess_MultiEditCounts(t *testing.T) {
 	s := newPrematureSuccessState()
 
-	s.recordToolCall("multi_edit_file", map[string]interface{}{"file_path": "/foo.go"}, false)
-	s.recordToolCall("multi_file_edit", map[string]interface{}{}, false)
+	s.recordToolCall("multi_edit_file", map[string]interface{}{"file_path": "/foo.go"}, false, "")
+	s.recordToolCall("multi_file_edit", map[string]interface{}{}, false, "")
 
 	if s.editsSinceVerify != 2 {
 		t.Fatalf("expected editsSinceVerify=2, got %d", s.editsSinceVerify)
@@ -158,7 +158,7 @@ func TestPsIsVerifyCommand(t *testing.T) {
 func TestPrematureSuccess_NoSessionVerifyHint(t *testing.T) {
 	s := newPrematureSuccessState()
 
-	s.recordToolCall("edit_file", nil, false)
+	s.recordToolCall("edit_file", nil, false, "")
 	hint := s.checkSuccessClaim("The implementation is complete.")
 
 	if hint == "" {
@@ -191,16 +191,16 @@ func psContainsStr(s, substr string) bool {
 // silencing the detector for the entire run after one hygiene call.
 func TestPsHygieneCommandDoesNotReset(t *testing.T) {
 	s := newPrematureSuccessState()
-	s.recordToolCall("edit_file", map[string]interface{}{"file_path": "/foo.go"}, false)
-	s.recordToolCall("run_command", map[string]interface{}{"command": "make clean"}, false)
+	s.recordToolCall("edit_file", map[string]interface{}{"file_path": "/foo.go"}, false, "")
+	s.recordToolCall("run_command", map[string]interface{}{"command": "make clean"}, false, "")
 
 	if hint := s.checkSuccessClaim("The issue is fixed."); hint == "" {
 		t.Fatal("make clean must not count as verification; success claim should fire")
 	}
 
 	s2 := newPrematureSuccessState()
-	s2.recordToolCall("edit_file", map[string]interface{}{"file_path": "/foo.go"}, false)
-	s2.recordToolCall("run_command", map[string]interface{}{"command": "npm run dev"}, false)
+	s2.recordToolCall("edit_file", map[string]interface{}{"file_path": "/foo.go"}, false, "")
+	s2.recordToolCall("run_command", map[string]interface{}{"command": "npm run dev"}, false, "")
 
 	if hint := s2.checkSuccessClaim("The issue is fixed."); hint == "" {
 		t.Fatal("npm run dev must not count as verification; success claim should fire")
@@ -212,8 +212,8 @@ func TestPsHygieneCommandDoesNotReset(t *testing.T) {
 // observed failure and must fire a stronger contradiction warning.
 func TestPsFailedVerifyDoesNotReset(t *testing.T) {
 	s := newPrematureSuccessState()
-	s.recordToolCall("edit_file", map[string]interface{}{"file_path": "/foo.go"}, false)
-	s.recordToolCall("run_command", map[string]interface{}{"command": "make test"}, true) // FAILED
+	s.recordToolCall("edit_file", map[string]interface{}{"file_path": "/foo.go"}, false, "")
+	s.recordToolCall("run_command", map[string]interface{}{"command": "make test"}, true, "") // FAILED
 
 	if s.editsSinceVerify != 1 {
 		t.Fatalf("failed verification must not reset edit counter, got %d", s.editsSinceVerify)
@@ -231,9 +231,9 @@ func TestPsFailedVerifyDoesNotReset(t *testing.T) {
 
 	// A subsequent PASSING verification clears the failure state.
 	s2 := newPrematureSuccessState()
-	s2.recordToolCall("edit_file", nil, false)
-	s2.recordToolCall("run_command", map[string]interface{}{"command": "make test"}, true)
-	s2.recordToolCall("run_command", map[string]interface{}{"command": "make test"}, false) // passes now
+	s2.recordToolCall("edit_file", nil, false, "")
+	s2.recordToolCall("run_command", map[string]interface{}{"command": "make test"}, true, "")
+	s2.recordToolCall("run_command", map[string]interface{}{"command": "make test"}, false, "") // passes now
 	if s2.lastVerifyFailed {
 		t.Fatal("passing verification must clear lastVerifyFailed")
 	}

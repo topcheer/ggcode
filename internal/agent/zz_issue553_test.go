@@ -76,9 +76,9 @@ func TestIssue553_C_VerifyTokenMustBeInCommandPosition(t *testing.T) {
 // after `grep -n test main.go`, an unverified success claim must still fire.
 func TestIssue553_C_E2E_GrepFilenameDoesNotArmEverVerified(t *testing.T) {
 	s := newPrematureSuccessState()
-	s.recordToolCall("edit_file", map[string]interface{}{"file_path": "/foo.go"}, false)
+	s.recordToolCall("edit_file", map[string]interface{}{"file_path": "/foo.go"}, false, "")
 	// Probe command: "test" is grep's filename argument, not verification.
-	s.recordToolCall("run_command", map[string]interface{}{"command": "grep -n test main.go"}, false)
+	s.recordToolCall("run_command", map[string]interface{}{"command": "grep -n test main.go"}, false, "")
 
 	if s.everVerified {
 		t.Fatal("grep with 'test' filename argument must NOT set everVerified")
