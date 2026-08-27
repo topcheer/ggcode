@@ -172,11 +172,21 @@ func formatLoopCaptureWarning(inst loopCaptureInstance) string {
 				"%s%s",
 			inst.varName, inst.posStr, inst.loopType, rangeWarning, fixHint)
 	}
+	// #1112: defer branch needs the same Go 1.22+ downgrade as the
+	// goroutine branch (#1100/#1108) - the detector only flags variables
+	// declared in the loop clause, and those are per-iteration on 1.22+,
+	// so asserting "will use the variable's final value" is factually
+	// wrong for every flagged case in a 1.22+ module.
+	deferWarning := "the deferred call will use the variable's final value, not the value at defer time."
+	if isGo122Plus {
+		deferWarning = "Go 1.22+ captures a per-iteration variable here, so this is usually safe; " +
+			"defers still accumulate until function exit - watch memory and execution order."
+	}
+	deferHint := " Evaluate now if you need defer-time semantics: defer func() { use(item) }(item)."
 	return fmt.Sprintf(
 		"Loop variable '%s' captured in deferred closure at %s inside %s loop: "+
-			"the deferred call will use the variable's final value, not the value at defer time."+
-			"%s",
-		inst.varName, inst.posStr, inst.loopType, fixHint)
+			"%s%s",
+		inst.varName, inst.posStr, inst.loopType, deferWarning, deferHint)
 }
 
 // findLoopCaptureIssues parses Go source and returns all loop capture issues.
