@@ -123,6 +123,20 @@ type ChatBridge struct {
 	// Idempotency guard for finishRun
 	finished bool
 
+	// #1181: watermark of how many of this run's AddedSinceRunStart messages
+	// have already been appended to ses.Messages by an earlier
+	// persistRunMessages call. A duplicate finisher (interleaved Cancel
+	// race) persists only the tail produced after the winner's persist
+	// instead of dropping it or duplicating messages.
+	persistedRunCount int
+
+	// #1181: serializes persistRunMessages against concurrent finishers.
+	persistMu sync.Mutex
+
+	// #1182: tunnel push seam (defaults to TunnelHost.PushStreamEvent). Tests
+	// inject a blocking push to prove emit no longer holds b.mu across it.
+	tunnelPush func(provider.StreamEvent)
+
 	// IM round accumulator for emitter (mirrors Fyne agentBridge.imRound)
 	imRound agentruntime.IMRoundState
 
@@ -465,7 +479,8 @@ func (b *ChatBridge) sendMessageData(data tunnel.MessageData, source string, exc
 	ctx, cancel := context.WithCancel(context.Background())
 	b.cancel = cancel
 	b.cancelled = false
-	b.finished = false // reset per-run finish guard (#223)
+	b.finished = false      // reset per-run finish guard (#223)
+	b.persistedRunCount = 0 // #1181: fresh persist watermark per run
 	b.usageTurnIndex++
 	// #522: bump the generation at EVERY run start, not just SendContent
 	// (setRunPersistSnapshot was the only bump site). Without this, a
@@ -682,6 +697,14 @@ func (b *ChatBridge) finishRun(err error) {
 	b.mu.Lock()
 	if b.finished {
 		b.mu.Unlock()
+		// #1181: this finisher lost the finished race to an earlier finisher
+		// (e.g. a Cancel issued after SendContent claimed the run generation
+		// but before this run began streaming). The winner already emitted
+		// run_done, but messages produced by this run after the winner's
+		// persist must not be dropped from the session (JSONL loss).
+		// persistRunMessages is watermark-guarded so nothing already
+		// persisted is duplicated.
+		b.persistRunMessages()
 		return
 	}
 	b.finished = true
@@ -1280,6 +1303,11 @@ func (b *ChatBridge) ensureSession() error {
 // With per-message persistence (SetPersistHandler), each message is already
 // written to JSONL at Add() time. This only updates ses.Messages for rendering.
 func (b *ChatBridge) persistRunMessages() {
+	// #1181: serialize concurrent finishers so two overlapping persists
+	// cannot both read the same watermark and append duplicate messages.
+	b.persistMu.Lock()
+	defer b.persistMu.Unlock()
+
 	b.mu.Lock()
 	// #270: append to the run-start session snapshot, not the write-time
 	// b.currentSes — a mid-run session switch must not pull this run's
@@ -1291,6 +1319,7 @@ func (b *ChatBridge) persistRunMessages() {
 	}
 	cur := b.currentSes
 	ag := b.agent
+	skip := b.persistedRunCount // #1181: prefix already persisted by an earlier finisher
 	b.mu.Unlock()
 
 	if ses == nil || ag == nil {
@@ -1301,18 +1330,30 @@ func (b *ChatBridge) persistRunMessages() {
 	}
 
 	runAdded := ag.AddedSinceRunStart()
-
-	var newMsgs []provider.Message
-	if len(runAdded) > 0 && runAdded[0].Role == "user" {
-		newMsgs = runAdded[1:]
-	} else {
-		newMsgs = runAdded
-	}
+	newMsgs := runMessagesToPersist(runAdded, skip)
 
 	b.mu.Lock()
 	ses.Messages = append(ses.Messages, newMsgs...)
 	ses.UpdatedAt = time.Now()
+	b.persistedRunCount = len(runAdded) // #1181: advance the watermark (seed user message included)
 	b.mu.Unlock()
+}
+
+// runMessagesToPersist returns the messages still to be appended for this
+// run. First persist (skip == 0) drops the seed user message (written at
+// run start); subsequent persists (#1181 watermark) return only the tail
+// after what an earlier finisher already appended.
+func runMessagesToPersist(runAdded []provider.Message, skip int) []provider.Message {
+	if skip > 0 {
+		if skip > len(runAdded) {
+			skip = len(runAdded)
+		}
+		return runAdded[skip:]
+	}
+	if len(runAdded) > 0 && runAdded[0].Role == "user" {
+		return runAdded[1:]
+	}
+	return runAdded
 }
 
 func (b *ChatBridge) StartNewSession() (string, error) {
@@ -2346,13 +2387,21 @@ func (b *ChatBridge) emit(ev provider.StreamEvent) {
 		b.OnStreamEvent(eventType, raw)
 	}
 
-	// Push to tunnel via unified TunnelHost. Lock held while dereferencing:
-	// InitAgent may swap b.tunnelHost mid-stream (zz_issue522 overlap).
+	// Push to tunnel via unified TunnelHost. #1182: MUST NOT hold b.mu
+	// across the push. PushStreamEvent can block inside the broker's
+	// projection-sync wait, while the mobile reconnect path's snapshot
+	// provider (CurrentTunnelStatus) needs b.mu on the way back in - holding
+	// it here created an AB-BA deadlock that permanently froze the desktop,
+	// including Cancel, after a mobile disconnect/reconnect.
 	b.mu.Lock()
-	if th := b.tunnelHost; th != nil {
+	push := b.tunnelPush
+	th := b.tunnelHost
+	b.mu.Unlock()
+	if push != nil {
+		push(ev)
+	} else if th != nil {
 		th.PushStreamEvent(ev)
 	}
-	b.mu.Unlock()
 }
 
 func (b *ChatBridge) CurrentSessionHistory() []SessionMessage {
@@ -3696,16 +3745,20 @@ func (b *ChatBridge) stopA2A() {
 		b.a2aServer = nil
 	}
 	// Unregister A2A tools so they don't reference a stopped server/registry.
-	if b.a2aRemoteTool != nil {
-		b.registry.Unregister(b.a2aRemoteTool.Name())
-		b.a2aRemoteTool = nil
+	// #1183: guard a nil registry - Close() must stay safe on bridges whose
+	// A2A stack never initialized (e.g. teardown of a freshly created bridge).
+	if b.registry != nil {
+		if b.a2aRemoteTool != nil {
+			b.registry.Unregister(b.a2aRemoteTool.Name())
+			b.a2aRemoteTool = nil
+		}
+		// Unregister MCP bridge tools so they don't reference a stopped server/registry.
+		for _, name := range []string{"a2a_discover", "a2a_send_task", "a2a_get_task", "a2a_list_tasks", "a2a_cancel_task"} {
+			b.registry.Unregister(name)
+		}
+		// Unregister lanchat tool so it doesn't reference a stopped hub.
+		b.registry.Unregister("lanchat")
 	}
-	// Unregister MCP bridge tools so they don't reference a stopped server/registry.
-	for _, name := range []string{"a2a_discover", "a2a_send_task", "a2a_get_task", "a2a_list_tasks", "a2a_cancel_task"} {
-		b.registry.Unregister(name)
-	}
-	// Unregister lanchat tool so it doesn't reference a stopped hub.
-	b.registry.Unregister("lanchat")
 }
 
 // syncLanChatPeers pulls A2A registry instances and pushes them to the lanchat hub.
@@ -4202,11 +4255,23 @@ func (b *ChatBridge) SendContent(content []provider.ContentBlock) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	b.cancel = cancel
 	b.cancelled = false
-	b.finished = false // reset per-run finish guard (#223)
+	b.finished = false      // reset per-run finish guard (#223)
+	b.persistedRunCount = 0 // #1181: fresh persist watermark per run
 	b.usageTurnIndex++
 	b.startDesktopTurnLocked() // #514: open a real desktop turn — without it run_done carries the previous turn's (or empty) turn_id and liveHistory appends this run's reply onto the stale turn's assistant message
 	b.startTime = time.Now()
 	b.runSes = b.currentSes // #270: persist-path snapshot, same critical section as b.cancel
+	// #1181: claim run generation and finish ownership HERE, in the same
+	// critical section that installs b.cancel. The previous flow bumped the
+	// generation later via setRunPersistSnapshot (after InitAgent), leaving a
+	// window where a Cancel issued before the bump finished against the OLD
+	// generation: both finishers passed the superseded/finished guards in
+	// the wrong order — double run_done, and the real run's
+	// persistRunMessages was skipped (messages lost from JSONL).
+	b.runGeneration++
+	b.activeRunGen = b.runGeneration // this run owns the finish path
+	b.persistSession = b.currentSes  // #489: bind this run's persist target up front
+	runGen := b.runGeneration        // captured at claim time, used for emitIfCurrent below
 	b.mu.Unlock()
 
 	// Notify LAN Chat peers that our agent is now busy
@@ -4287,10 +4352,20 @@ func (b *ChatBridge) SendContent(content []provider.ContentBlock) error {
 	// run snapshot so persist paths target it (#270).
 	b.mu.Lock()
 	b.runSes = b.currentSes
+	// #1181: do NOT bump runGeneration here anymore — this run claimed
+	// ownership at entry. Re-bumping via setRunPersistSnapshot stole the
+	// finish path: when a Cancel raced between entry and this point, the
+	// cancelled run finished against the OLD generation while this re-bump
+	// re-claimed ownership, so both finishers emitted run_done and the real
+	// run's persist was skipped. Only refresh the persist target while this
+	// run is still the owner (nothing superseded it mid-init).
+	if b.activeRunGen == runGen {
+		b.persistSession = b.currentSes
+	}
 	b.mu.Unlock()
-	// #489: bind THIS run's persist target (snapshot + generation).
-	b.setRunPersistSnapshot()
-	runGen := b.currentRunGeneration() // #504: see emitIfCurrent
+	if cur := b.currentRunGeneration(); cur != runGen { // #504: superseded during init — guard emits against the new generation
+		runGen = cur
+	}
 
 	if b.currentSes != nil {
 		msg := provider.Message{Role: "user", Content: content}

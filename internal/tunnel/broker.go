@@ -1918,11 +1918,29 @@ func (b *Broker) endProjectionSync() {
 	b.projectionMu.Unlock()
 }
 
+var projectionSyncWaitTimeout = 10 * time.Second
+
 func (b *Broker) waitProjectionSync() {
 	b.projectionMu.Lock()
-	for b.projectionSyncing {
+	if !b.projectionSyncing {
+		b.projectionMu.Unlock()
+		return
+	}
+	// #1182: bound the wait. A sync wedged behind another lock (reconnect
+	// AB-BA against the frontend bridge mutex) previously blocked every
+	// producer forever; wake up after the timeout and proceed degraded
+	// (possible interleave during replay) instead of a permanent stall.
+	timedOut := false
+	timer := time.AfterFunc(projectionSyncWaitTimeout, func() {
+		b.projectionMu.Lock()
+		timedOut = true
+		b.projectionMu.Unlock()
+		b.projectionCond.Broadcast()
+	})
+	for b.projectionSyncing && !timedOut {
 		b.projectionCond.Wait()
 	}
+	timer.Stop()
 	b.projectionMu.Unlock()
 }
 
