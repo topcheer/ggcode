@@ -2449,7 +2449,9 @@ func (a *App) StartShare() (*ShareInfo, error) {
 	// for all frontends. It handles session creation, broker setup,
 	// SetSessionInfo, PrepareOnlineShare, and AnnounceActiveSession.
 	chat := a.chat // #457: single-read snapshot
-	if a.chat == nil {
+	// #1161: check the snapshot itself. Re-reading a.chat races a concurrent
+	// switchWorkspace and can nil a bridge we are about to use.
+	if chat == nil {
 		return nil, fmt.Errorf("chat not initialized")
 	}
 	th := chat.GetTunnelHost()
@@ -2480,7 +2482,10 @@ func (a *App) StartShare() (*ShareInfo, error) {
 	}
 
 	// Wire share commands (OnCommand handler, language switching, ask_user approval)
-	if a.chat != nil && result.Broker != nil {
+	// #1161: bind through the entry snapshot. Re-reading the field here could
+	// attach commands to an already-closed bridge after a workspace switch,
+	// silently routing all mobile commands into the dead bridge.
+	if result.Broker != nil {
 		chat.BindShareCommands(result.Broker, func(language string) {
 			c, _ := wailskit.LoadConfigForWorkspace(a.workDir)
 			if c != nil {
@@ -2541,7 +2546,8 @@ func (a *App) tunnelSnapshot() tunnel.BrokerSnapshot {
 	}
 
 	chat := a.chat // #457: single-read snapshot
-	if a.chat == nil {
+	// #1161: check the snapshot itself - same TOCTOU pattern as StartShare.
+	if chat == nil {
 		snapshot.Status = tunnel.StatusData{Status: tunnel.StatusIdle}
 		return snapshot
 	}

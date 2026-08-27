@@ -778,8 +778,17 @@ func (c *Config) PatchIMAdapter(name string, patch func(adapter map[string]inter
 	defer unlock()
 
 	raw := map[string]interface{}{}
-	if data, err := os.ReadFile(imPath); err == nil {
-		yaml.Unmarshal(data, &raw)
+	data, err := os.ReadFile(imPath)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("reading im config %s: %w", imPath, err)
+	}
+	if len(data) > 0 {
+		// #1160: a corrupted im.yaml must abort the patch. Swallowing this
+		// error used to rewrite the whole file from an empty structure,
+		// irreversibly dropping every existing adapter.
+		if err := yaml.Unmarshal(data, &raw); err != nil {
+			return fmt.Errorf("parsing im config %s: %w", imPath, err)
+		}
 	}
 
 	adaptersRaw, _ := raw["adapters"].(map[string]interface{})
@@ -811,8 +820,18 @@ func (c *Config) patchExternalFile(section string, patch func(raw map[string]int
 	defer unlock()
 
 	raw := map[string]interface{}{}
-	if data, err := os.ReadFile(path); err == nil {
-		yaml.Unmarshal(data, &raw)
+	data, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		// Match patchConfigFile: propagate read errors instead of treating
+		// every failure like a missing file (#1160).
+		return fmt.Errorf("reading %s: %w", section, err)
+	}
+	if len(data) > 0 {
+		// #1160: a corrupted external file must abort the patch instead of
+		// being silently replaced by a file containing only the new entry.
+		if err := yaml.Unmarshal(data, &raw); err != nil {
+			return fmt.Errorf("parsing %s: %w", section, err)
+		}
 	}
 
 	patch(raw)

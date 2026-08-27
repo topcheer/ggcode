@@ -201,10 +201,18 @@ func NewChatBridge() (*ChatBridge, error) {
 }
 
 func (b *ChatBridge) GetTeamBoard() []swarm.TeamBoardSnapshot {
-	if b == nil || b.swarmMgr == nil {
+	if b == nil {
 		return []swarm.TeamBoardSnapshot{}
 	}
-	return b.swarmMgr.ListTeamBoards()
+	// zz_issue522 race-hardening: swarmMgr is rebuilt by InitAgent while
+	// frontend polling can call this concurrently.
+	b.mu.Lock()
+	swarms := b.swarmMgr
+	b.mu.Unlock()
+	if swarms == nil {
+		return []swarm.TeamBoardSnapshot{}
+	}
+	return swarms.ListTeamBoards()
 }
 
 func shouldEmitSwarmBoardUpdate(eventType string) bool {
@@ -218,7 +226,9 @@ func shouldEmitSwarmBoardUpdate(eventType string) bool {
 
 // SetTunnelHost sets the unified tunnel host from InteractiveRuntimeCore.Tunnel.
 func (b *ChatBridge) SetTunnelHost(th *agentruntime.TunnelHost) {
+	b.mu.Lock()
 	b.tunnelHost = th
+	b.mu.Unlock()
 }
 
 // WorkingDir returns the current workspace directory.
@@ -228,7 +238,10 @@ func (b *ChatBridge) WorkingDir() string {
 
 // GetTunnelHost returns the tunnel host (for StartShare).
 func (b *ChatBridge) GetTunnelHost() *agentruntime.TunnelHost {
-	return b.tunnelHost
+	b.mu.Lock()
+	th := b.tunnelHost
+	b.mu.Unlock()
+	return th
 }
 
 func (b *ChatBridge) startDesktopTurnLocked() (turnID, assistantID string) {
@@ -638,11 +651,17 @@ func (b *ChatBridge) Cancel() {
 	// cancelActiveRun() which calls subAgentMgr.CancelAll() + swarmMgr.CancelAll().
 	// Without this, sub-agents continue running in the background after the user
 	// cancels the main task, consuming tokens with no way to stop them.
-	if b.subAgentMgr != nil {
-		b.subAgentMgr.CancelAll()
+	// Capture the managers under the bridge lock: SendHiddenText rebuilds
+	// them from InitAgent while Cancel unwinds (zz_issue522 overlaps by design).
+	b.mu.Lock()
+	subAgents := b.subAgentMgr
+	swarms := b.swarmMgr
+	b.mu.Unlock()
+	if subAgents != nil {
+		subAgents.CancelAll()
 	}
-	if b.swarmMgr != nil {
-		b.swarmMgr.CancelAll()
+	if swarms != nil {
+		swarms.CancelAll()
 	}
 
 	// Notify frontend to close dialogs
@@ -1529,14 +1548,21 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 	}
 	// Start all background services (MCP connections, etc.)
 	core.StartBackgroundServices()
-	// Close old tunnel host (stops any active share) before setting new one
-	if b.tunnelHost != nil {
-		b.tunnelHost.Close()
-	}
+	// Snapshot the previous host under the bridge lock: SendHiddenText can
+	// re-run InitAgent while a concurrent Cancel()/finishRun() still reads
+	// b.tunnelHost (zz_issue522 overlaps the two by design).
+	b.mu.Lock()
+	oldHost := b.tunnelHost
 	// Set unified tunnel host for mobile streaming
 	b.tunnelHost = core.Tunnel
-	if b.currentSes != nil {
-		b.bindSessionIntegrations(b.currentSes)
+	currentSes := b.currentSes
+	b.mu.Unlock()
+	// Close stays outside the lock because host callbacks may re-enter b.mu.
+	if oldHost != nil {
+		oldHost.Close()
+	}
+	if currentSes != nil {
+		b.bindSessionIntegrations(currentSes)
 	}
 	autoMem := core.AutoMemory
 	projectAutoMem := core.ProjectAutoMem
@@ -1591,7 +1617,7 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 		}, task, agentType)
 	}
 
-	b.subAgentMgr = agentruntime.NewSubAgentManager(b.cfg.SubAgents, b.registry, p, func() provider.Provider {
+	subAgents := agentruntime.NewSubAgentManager(b.cfg.SubAgents, b.registry, p, func() provider.Provider {
 		if b.agent != nil {
 			return b.agent.Provider()
 		}
@@ -1606,9 +1632,17 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 		}
 		return nil
 	}, b.workingDir, func(usage provider.TokenUsage) { b.recordSessionUsage(usage, "subagent") }, agentFactory, subAgentPromptBuilder)
+	// Guarded one-time store: readers on other goroutines lock b.mu.
+	b.mu.Lock()
+	b.subAgentMgr = subAgents
+	b.mu.Unlock()
 	_ = b.registry.Register(agentruntime.NewSkillTool(commandMgr, mcpMgr, p, b.registry, agentFactory, b.workingDir, func(usage provider.TokenUsage) { b.recordSessionUsage(usage, "subagent") }, subAgentPromptBuilder))
 	_ = b.registry.Register(tool.CreateSkillTool{CommandMgr: commandMgr, WorkingDir: b.workingDir})
-	agentruntime.RegisterDelegateTool(b.registry, b.acpClientMgr, func() *subagent.Manager { return b.subAgentMgr }, b.workingDir, func() string {
+	agentruntime.RegisterDelegateTool(b.registry, b.acpClientMgr, func() *subagent.Manager {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		return b.subAgentMgr
+	}, b.workingDir, func() string {
 		if b.agent != nil {
 			return b.agent.WorkingDir()
 		}
@@ -1616,7 +1650,7 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 	})
 
 	// Forward sub-agent events to frontend
-	b.subAgentMgr.SetOnStreamText(func(agentID, text string) {
+	subAgents.SetOnStreamText(func(agentID, text string) {
 		if b.OnStreamEvent == nil {
 			return
 		}
@@ -1624,7 +1658,7 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 		b.OnStreamEvent("subagent_text", raw)
 		agentruntime.PushTunnelSubagentText(b.currentTunnelBroker, agentID, text)
 	})
-	b.subAgentMgr.SetOnReasoning(func(agentID, text string) {
+	subAgents.SetOnReasoning(func(agentID, text string) {
 		if b.OnStreamEvent == nil {
 			agentruntime.PushTunnelSubagentReasoning(b.currentTunnelBroker, agentID, text)
 			return
@@ -1633,7 +1667,7 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 		b.OnStreamEvent("subagent_reasoning", raw)
 		agentruntime.PushTunnelSubagentReasoning(b.currentTunnelBroker, agentID, text)
 	})
-	b.subAgentMgr.SetOnToolCall(func(agentID, toolID, toolName, displayName, args, detail string) {
+	subAgents.SetOnToolCall(func(agentID, toolID, toolName, displayName, args, detail string) {
 		if displayName == "" {
 			pres := tool.DescribeTool(toolName, args)
 			displayName = pres.DisplayName
@@ -1648,7 +1682,7 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 		}
 		agentruntime.PushTunnelSubagentToolCall(b.currentTunnelBroker, agentID, toolID, toolName, displayName, args, detail)
 	})
-	b.subAgentMgr.SetOnToolResult(func(agentID, toolID, toolName, displayName, detail, result string, isError bool) {
+	subAgents.SetOnToolResult(func(agentID, toolID, toolName, displayName, detail, result string, isError bool) {
 		if displayName == "" {
 			pres := tool.DescribeTool(toolName, "")
 			displayName = pres.DisplayName
@@ -1666,7 +1700,7 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 	})
 
 	// Notify frontend when a sub-agent completes
-	b.subAgentMgr.SetOnComplete(func(sa *subagent.SubAgent) {
+	subAgents.SetOnComplete(func(sa *subagent.SubAgent) {
 		if b.OnStreamEvent != nil {
 			raw, _ := json.Marshal(map[string]interface{}{
 				"agentID": sa.ID,
@@ -1692,8 +1726,11 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 		}
 		return cloned
 	}
-	b.swarmMgr = agentruntime.NewSwarmManager(b.cfg.Swarm, p, b.registry, nil, swarmFactory, toolBuilder)
-	b.swarmMgr.SetSystemPromptBuilder(func(name, teamName, wd string) string {
+	swarms := agentruntime.NewSwarmManager(b.cfg.Swarm, p, b.registry, nil, swarmFactory, toolBuilder)
+	b.mu.Lock()
+	b.swarmMgr = swarms
+	b.mu.Unlock()
+	swarms.SetSystemPromptBuilder(func(name, teamName, wd string) string {
 		return agentruntime.BuildTeammateSystemPrompt(agentruntime.SubAgentPromptContext{
 			Cfg:              b.cfg,
 			WorkingDir:       wd,
@@ -1706,10 +1743,10 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 		}, name, teamName)
 	})
 
-	b.registry.Register(tool.SendMessageTool{Manager: b.subAgentMgr, SwarmMgr: b.swarmMgr})
+	b.registry.Register(tool.SendMessageTool{Manager: subAgents, SwarmMgr: swarms})
 
 	// Forward swarm events to frontend AND mobile tunnel (mirrors Fyne line 605-698)
-	b.swarmMgr.SetOnUpdate(func(ev swarm.Event) {
+	swarms.SetOnUpdate(func(ev swarm.Event) {
 		// Push to frontend
 		if b.OnStreamEvent != nil {
 			if ev.TeamID != "" && shouldEmitSwarmBoardUpdate(ev.Type) {
@@ -1759,7 +1796,7 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 			_ = broker
 			agentruntime.PushTunnelSwarmEvent(
 				b.currentTunnelBroker,
-				b.swarmMgr,
+				swarms,
 				ev,
 				func(toolName, args string) string {
 					pres := tool.DescribeTool(toolName, args)
@@ -2179,10 +2216,13 @@ func (b *ChatBridge) CompleteMCPOAuth(ctx context.Context, serverName string) er
 }
 
 func (b *ChatBridge) subagentPanelTitle(agentID string) string {
-	if b.subAgentMgr == nil {
+	b.mu.Lock()
+	mgr := b.subAgentMgr
+	b.mu.Unlock()
+	if mgr == nil {
 		return agentID
 	}
-	snap, ok := b.subAgentMgr.SnapshotByID(agentID)
+	snap, ok := mgr.SnapshotByID(agentID)
 	if !ok {
 		return agentID
 	}
@@ -2306,10 +2346,13 @@ func (b *ChatBridge) emit(ev provider.StreamEvent) {
 		b.OnStreamEvent(eventType, raw)
 	}
 
-	// Push to tunnel via unified TunnelHost
-	if b.tunnelHost != nil {
-		b.tunnelHost.PushStreamEvent(ev)
+	// Push to tunnel via unified TunnelHost. Lock held while dereferencing:
+	// InitAgent may swap b.tunnelHost mid-stream (zz_issue522 overlap).
+	b.mu.Lock()
+	if th := b.tunnelHost; th != nil {
+		th.PushStreamEvent(ev)
 	}
+	b.mu.Unlock()
 }
 
 func (b *ChatBridge) CurrentSessionHistory() []SessionMessage {
@@ -2629,8 +2672,9 @@ func (b *ChatBridge) AttachTunnelBroker(broker *tunnel.Broker) {
 			model = resolved.Model
 			vendorName = resolved.VendorName
 		}
-		if b.tunnelHost != nil {
-			b.tunnelHost.SetSessionInfo(tunnel.SessionInfoData{
+		b.mu.Lock()
+		if th := b.tunnelHost; th != nil {
+			th.SetSessionInfo(tunnel.SessionInfoData{
 				Title:     currentSes.Title,
 				Workspace: b.workingDir,
 				Model:     model,
@@ -2639,29 +2683,41 @@ func (b *ChatBridge) AttachTunnelBroker(broker *tunnel.Broker) {
 				Language:  cfg.Language,
 			})
 		}
+		b.mu.Unlock()
 	}
 
 	// Delegate ALL negotiation to TunnelHost.PrepareOnlineShare:
 	// SendSessionInfo, BindSession, SetReplayProvider, SetAuthorityEpoch,
 	// Replay/Snapshot, AnnounceActiveSession.
-	if b.tunnelHost != nil {
-		b.tunnelHost.AttachOnlineBroker(broker)
-		if currentSes != nil {
-			b.tunnelHost.BindSession(currentSes, b.sessionStore)
+	b.mu.Lock()
+	th := b.tunnelHost
+	store := b.sessionStore
+	cur := currentSes
+	b.mu.Unlock()
+	if th != nil {
+		th.AttachOnlineBroker(broker)
+		if cur != nil {
+			th.BindSession(cur, store)
 		}
-		b.tunnelHost.PrepareOnlineShare(broker)
+		th.PrepareOnlineShare(broker)
 	}
 }
 
 func (b *ChatBridge) DetachTunnelBroker() {
-	if b.tunnelHost != nil {
-		b.tunnelHost.DetachOnlineBroker()
+	b.mu.Lock()
+	th := b.tunnelHost
+	b.mu.Unlock()
+	if th != nil {
+		th.DetachOnlineBroker()
 	}
 }
 
 func (b *ChatBridge) currentTunnelBroker() *tunnel.Broker {
-	if b.tunnelHost != nil {
-		if pb := b.tunnelHost.ProjectionBroker(); pb != nil {
+	b.mu.Lock()
+	th := b.tunnelHost
+	b.mu.Unlock()
+	if th != nil {
+		if pb := th.ProjectionBroker(); pb != nil {
 			return pb
 		}
 	}
@@ -2727,15 +2783,21 @@ func (b *ChatBridge) flushTunnelTextStream(broker *tunnel.Broker, force bool) {}
 func (b *ChatBridge) resetTunnelRoundState() {}
 
 func (b *ChatBridge) currentSessionTunnelAuthorityEpoch() uint64 {
-	if b.tunnelHost != nil {
-		return b.tunnelHost.AuthorityEpoch()
+	b.mu.Lock()
+	th := b.tunnelHost
+	b.mu.Unlock()
+	if th != nil {
+		return th.AuthorityEpoch()
 	}
 	return 1
 }
 
 func (b *ChatBridge) CurrentSessionTunnelEvents() []tunnel.GatewayMessage {
-	if b.tunnelHost != nil {
-		return b.tunnelHost.TunnelEvents()
+	b.mu.Lock()
+	th := b.tunnelHost
+	b.mu.Unlock()
+	if th != nil {
+		return th.TunnelEvents()
 	}
 	return nil
 }
@@ -2777,13 +2839,15 @@ func (b *ChatBridge) nextTunnelRequestID() string {
 }
 
 func (b *ChatBridge) ResetCurrentSessionTunnelLedger() {
-	if b.tunnelHost == nil {
+	b.mu.Lock()
+	th := b.tunnelHost
+	ses0 := b.currentSes
+	b.mu.Unlock()
+	if th == nil {
 		return
 	}
-	store := b.tunnelHost.ProjectionStore()
-	b.mu.Lock()
-	ses := b.currentSes
-	b.mu.Unlock()
+	store := th.ProjectionStore()
+	ses := ses0
 	if ses == nil || store == nil {
 		return
 	}
@@ -3406,6 +3470,16 @@ func (b *ChatBridge) startA2A(cfg *config.Config, ag *agent.Agent, reg *tool.Reg
 	// Stop any existing A2A server from a previous setupAgent call.
 	b.stopA2A()
 
+	// #1161 test determinism: startA2A binds real sockets and launches mDNS
+	// discovery goroutines. Package tests that reconstruct bridges through
+	// InitAgent would otherwise leak those goroutines into unrelated later
+	// tests and trip -race after their assertions completed. TestMain sets
+	// GGCODE_WAILSKIT_DISABLE_A2A=1 so wailskit tests stay hermetic; normal
+	// app operation never sees this variable and behaves unchanged.
+	if os.Getenv("GGCODE_WAILSKIT_DISABLE_A2A") == "1" {
+		return
+	}
+
 	if cfg.A2A.Disabled {
 		return
 	}
@@ -3670,11 +3744,16 @@ func (b *ChatBridge) Close() {
 
 	// Cancel all running sub-agents and swarm teammates before shutdown.
 	// Without this, closing the app orphans all background work.
-	if b.subAgentMgr != nil {
-		b.subAgentMgr.CancelAll()
+	// zz_issue522 race-hardening: capture under b.mu (InitAgent overlap).
+	b.mu.Lock()
+	subAgents := b.subAgentMgr
+	swarms := b.swarmMgr
+	b.mu.Unlock()
+	if subAgents != nil {
+		subAgents.CancelAll()
 	}
-	if b.swarmMgr != nil {
-		b.swarmMgr.CancelAll()
+	if swarms != nil {
+		swarms.CancelAll()
 	}
 
 	// Clean up ephemeral empty session before shutting down.
