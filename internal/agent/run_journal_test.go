@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -178,6 +179,15 @@ func TestFormatCrashRecoveryMessage(t *testing.T) {
 	}
 	if msg[:16] != "[Crash Recovery]" {
 		t.Errorf("message should start with [Crash Recovery], got: %s", msg[:20])
+	}
+	// #1123: the message must not assert "crashed or killed" as fact - the
+	// detection only proves the run did not exit cleanly (deliberate stops
+	// included). Factual wording only.
+	if strings.Contains(msg, "crashed or killed") {
+		t.Errorf("message must not assert crash cause as fact, got: %s", msg)
+	}
+	if !strings.Contains(msg, "did not exit cleanly") {
+		t.Errorf("message should state the factual observation, got: %s", msg)
 	}
 }
 

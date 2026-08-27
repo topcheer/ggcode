@@ -223,7 +223,12 @@ func FormatCrashRecoveryMessage(info *CrashRecoveryInfo) string {
 	ageStr := formatDuration(time.Duration(info.AgeHours * float64(time.Hour)))
 
 	return fmt.Sprintf(
-		"[Crash Recovery] Your previous session was interrupted unexpectedly (crashed or killed) "+
+		// #1123: the detection signal (journal State=running + dead PID) only
+		// proves the run did not exit cleanly. Asserting "crashed or killed"
+		// mis-characterizes deliberate Ctrl+C / terminal close / reboot stops
+		// and pushes the agent toward needless defensive git inspection.
+		"[Crash Recovery] Your previous session did not exit cleanly "+
+			"(aborted, crashed, or the terminal closed are all possible) "+
 			"approximately %s ago. The last task was: %q. "+
 			"Review any uncommitted file changes with git status or git diff before continuing, "+
 			"as some edits from the interrupted run may be incomplete.",
