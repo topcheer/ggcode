@@ -53,12 +53,12 @@ import (
 // Go 1.22+ uses per-iteration range variables, so the "classic gotcha" warning
 // should be suppressed for range loops when using Go 1.22+.
 //
-// #1123: the version is resolved from the EDITED FILE's directory, not the
-// process cwd - in multi-module workspaces (go.work) or when the agent edits
-// files outside its working directory, the two can belong to different
-// modules and the cwd-based lookup applied the wrong module's semantics.
-// Results are cached per directory under a mutex (also removing the previous
-// unsynchronized package-global bool's data race).
+// #1123 (duplicate #1122): the version is resolved from the EDITED FILE's
+// directory, not the process cwd - in multi-module workspaces (go.work) or
+// when the agent edits files outside its working directory, the two can
+// belong to different modules and the cwd-based lookup applied the wrong
+// module's semantics. Results are cached per directory under a mutex (also
+// removing the previous unsynchronized package-global bool's data race).
 var (
 	goModVersionMu    sync.Mutex
 	goMod122PlusCache = make(map[string]bool)
@@ -154,8 +154,8 @@ func checkLoopVarCapture(filePath, oldContent, newContent string) []string {
 		return nil
 	}
 
-	// Issue #1100 / #1123: resolve Go version from the edited file's own
-	// module so the downgrade decision matches the file's semantics.
+	// Issue #1100 / #1123 (dup #1122): resolve Go version from the edited
+	// file's own module so the downgrade decision matches the file's semantics.
 	is122 := go122PlusFor(filePath)
 
 	oldSet := collectLoopCaptureIssues(oldContent)

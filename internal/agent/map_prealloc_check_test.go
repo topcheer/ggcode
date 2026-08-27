@@ -265,9 +265,11 @@ func insert(items []Item) map[string]bool {
 	}
 }
 
-// Package-level maps remain visible to loops in any function of the file,
-// unless the local scope shadows the name with a parameter.
-func TestMapPrealloc_PackageLevelMapStillDetected(t *testing.T) {
+// Issue #1121: package-level var maps are no longer candidates - they act
+// as registries/caches accumulated across calls, so a per-loop size hint is
+// not meaningful. Loops writing them stay silent; function-local behavior is
+// unchanged.
+func TestMapPrealloc_PackageLevelMapNotDetected(t *testing.T) {
 	code := `package main
 var cache = make(map[string]bool)
 
@@ -278,11 +280,8 @@ func insert(items []Item) {
 	}
 }`
 	warnings := checkMapPrealloc("test.go", "", code)
-	if len(warnings) == 0 {
-		t.Fatal("expected warning for package-level hintless map populated in a loop")
-	}
-	if !strContains(warnings[0], "len(items)") {
-		t.Errorf("expected len(items) size hint, got: %s", warnings[0])
+	if len(warnings) != 0 {
+		t.Fatalf("package-level hintless map must not warn since #1121, got: %v", warnings)
 	}
 }
 

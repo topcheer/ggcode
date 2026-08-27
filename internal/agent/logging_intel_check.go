@@ -76,8 +76,14 @@ var sensitiveLogVarPattern = regexp.MustCompile(
 // key-value arguments. Captures the full call expression for argument analysis.
 // Matches: log.Printf, log.Println, log.Print, log.Fatalf, log.Panicf, etc.
 // Also matches structured logger patterns: logger.Info, log.Error, slog.Info
+// #1120: the previous (?m)^\s* line-start anchor only fired when the call was
+// the first statement on a physical line, silently missing `defer log.Printf`,
+// single-line `if cond { log.Printf }` bodies, and semicolon-chained calls.
+// The \b prefix uses the same word-boundary strategy as goFatalInLibRe above;
+// it still rejects receiver tails like `bot.log.Printf` (no boundary between
+// two word characters).
 var goLogCallRe = regexp.MustCompile(
-	`(?m)^\s*(?:log|logger|slog|logr|zap)\.[A-Z]\w*\s*\(`,
+	`\b(?:log|logger|slog|logr|zap)\.[A-Z]\w*\s*\(`,
 )
 
 // goFatalInLibRe matches log.Fatal/log.Panic family calls in Go.
@@ -99,20 +105,8 @@ var packageMainRe = regexp.MustCompile(`(?m)^\s*package\s+main\b`)
 // loggingIntelInstance represents one detected logging anti-pattern.
 type loggingIntelInstance struct {
 	category string // "sensitive_log_arg" or "fatal_in_library"
-	detail   string // human-readable description
-	line     int    // 1-based line in stripped source; disambiguates fatal-family instances whose details are identical (#1109 Item B)
-}
-
-// contentKey returns a stable identity key for the content-anchored delta
-// comparison (#1109 Item B, mirroring the #1099 approach in
-// lock_without_unlock_check.go). Fatal-family instances all share one detail
-// string with no positional info, so their captured line breaks the tie;
-// sensitive-log instances already embed line number and code excerpt.
-func (li loggingIntelInstance) contentKey() string {
-	if li.line > 0 {
-		return fmt.Sprintf("%s|%d", li.category, li.line)
-	}
-	return li.category + "|" + li.detail
+	detail   string // human-readable description (carries display-only line info)
+	key      string // position-insensitive content anchor used by the old/new delta (#1119)
 }
 
 // checkLoggingIntel detects logging anti-patterns introduced by this edit.
@@ -173,11 +167,13 @@ func checkLoggingIntel(filePath, oldContent, newContent string) []string {
 
 // collectContentKeys builds the identity-key set for a list of instances
 // (#1109 Item B). Keys anchor each instance by content so the old/new delta
-// survives deletions and reordering.
+// survives deletions and reordering. Since #1119 the keys carry no positional
+// component, so purely cosmetic edits (comment inserted above a call) keep
+// retained instances silent.
 func collectContentKeys(insts []loggingIntelInstance) map[string]bool {
 	keys := make(map[string]bool, len(insts))
 	for _, inst := range insts {
-		keys[inst.contentKey()] = true
+		keys[normalizeLogCallKey(inst)] = true
 	}
 	return keys
 }
@@ -190,7 +186,7 @@ func warnNewInstances(newInsts []loggingIntelInstance, oldKeys map[string]bool, 
 		if len(warnings) >= maxLogIntelWarnings {
 			break
 		}
-		if oldKeys[newInsts[i].contentKey()] {
+		if oldKeys[normalizeLogCallKey(newInsts[i])] {
 			continue
 		}
 		warnings = append(warnings, newInsts[i].detail)
@@ -235,34 +231,38 @@ func findGoSensitiveLogArgs(src string) []loggingIntelInstance {
 	var results []loggingIntelInstance
 
 	for lineNum, line := range lines {
-		if !goLogCallRe.MatchString(line) {
-			continue
-		}
-		// Extract the arguments portion (between first '(' and matching ')')
-		args := extractGoCallArgs(line)
-		if args == "" {
-			continue
-		}
-		// Check if any sensitive variable name appears in the arguments
-		matches := sensitiveLogVarPattern.FindAllString(args, -1)
-		if len(matches) == 0 {
-			continue
-		}
-		// Filter out false positives: sensitive word appearing in a
-		// string literal context that is NOT a format specifier target.
-		// We only flag when the sensitive name appears as a bare identifier
-		// (variable reference), not inside a quoted string.
-		if hasSensitiveVarRef(args, matches) {
-			results = append(results, loggingIntelInstance{
-				category: "sensitive_log_arg",
-				detail: fmt.Sprintf(
-					"[LOGGING WARNING] Sensitive variable in log call at line %d: "+
-						"`%s` passes sensitive data (%s) to a log function. "+
-						"Logging sensitive runtime values (passwords, tokens, API keys) "+
-						"is a data-exfiltration risk (OWASP A09:2021). Remove the "+
-						"sensitive variable from log arguments or redact it before logging.",
-					lineNum+1, truncateForLog(line, 80), strings.Join(matches, ", ")),
-			})
+		// #1120: without the ^\s* anchor, unrelated statements can share the
+		// physical line, so argument extraction must start at EACH matched
+		// call's own '(' instead of the first parenthesis on the line.
+		for _, loc := range goLogCallRe.FindAllStringIndex(line, -1) {
+			args := extractGoCallArgsAt(line, loc[1]-1)
+			if args == "" {
+				continue
+			}
+			// Check if any sensitive variable name appears in the arguments
+			matches := sensitiveLogVarPattern.FindAllString(args, -1)
+			if len(matches) == 0 {
+				continue
+			}
+			// Filter out false positives: sensitive word appearing in a
+			// string literal context that is NOT a format specifier target.
+			// We only flag when the sensitive name appears as a bare identifier
+			// (variable reference), not inside a quoted string.
+			if hasSensitiveVarRef(args, matches) {
+				results = append(results, loggingIntelInstance{
+					category: "sensitive_log_arg",
+					// #1119: args feed the position-insensitive identity key; line
+					// numbers stay display-only inside detail.
+					key: args,
+					detail: fmt.Sprintf(
+						"[LOGGING WARNING] Sensitive variable in log call at line %d: "+
+							"`%s` passes sensitive data (%s) to a log function. "+
+							"Logging sensitive runtime values (passwords, tokens, API keys) "+
+							"is a data-exfiltration risk (OWASP A09:2021). Remove the "+
+							"sensitive variable from log arguments or redact it before logging.",
+						lineNum+1, truncateForLog(line, 80), strings.Join(matches, ", ")),
+				})
+			}
 		}
 	}
 
@@ -288,6 +288,8 @@ func findJSSensitiveLogArgs(src string) []loggingIntelInstance {
 			if hasSensitiveVarRef(args, sensitiveMatches) {
 				results = append(results, loggingIntelInstance{
 					category: "sensitive_log_arg",
+					// #1119: position-insensitive key anchor, same as the Go path.
+					key: m[1] + "(" + args + ")",
 					detail: fmt.Sprintf(
 						"[LOGGING WARNING] Sensitive variable in console.%s at line %d: "+
 							"passes sensitive data (%s) to console output. "+
@@ -346,6 +348,121 @@ func stripStringLiterals(s string) string {
 	return b.String()
 }
 
+// maxLogInstKeyLen caps the normalized key length so pathological call sites
+// cannot produce unbounded map entries (#1119).
+const maxLogInstKeyLen = 192
+
+// normalizeLogCallKey returns the position-insensitive identity key for a
+// detected instance (#1119). The previous keys embedded line numbers - fatal
+// used category|line and sensitive_log_arg carried an inline "line %d" in the
+// detail - so adding one comment line above the call shifted every later line
+// number and re-flagged all retained instances as new. Now line information
+// lives only in the human-readable detail. Mirrors the loop_capture delta-key
+// precedent (funcName|varName|kind|loopType, no position component):
+//   - fatal_in_library: keyed by the normalized call expression, so identical
+//     Fatal calls at any line stay one identity, while genuinely different
+//     call sites (different verb or message) remain distinguishable.
+//   - sensitive_log_arg: the args are canonicalized (whitespace and number
+//     literals folded, string contents spacing-normalized) so formatting
+//     churn cannot split one logical instance into two identities.
+func normalizeLogCallKey(inst loggingIntelInstance) string {
+	k := normalizeCallText(inst.key)
+	if len(k) > maxLogInstKeyLen {
+		k = k[:maxLogInstKeyLen]
+	}
+	return inst.category + "|" + k
+}
+
+// normalizeCallText canonicalizes a call-expression fragment for identity
+// purposes (#1119): whitespace and number literals are folded away, while
+// string literal contents are kept but spacing-normalized via
+// normalizeLiteralText - the message words are what distinguishes one call
+// site from another (#1109B legacy behavior), yet pure layout edits must not
+// create a new identity. String skipping reuses consumeGoString so escape
+// sequences and raw strings are handled exactly like everywhere else here.
+func normalizeCallText(call string) string {
+	var b strings.Builder
+	var buf strings.Builder
+	b.Grow(len(call))
+	for i := 0; i < len(call); i++ {
+		c := call[i]
+		switch {
+		case c == '"' || c == '\'' || c == '`':
+			buf.Reset()
+			i = consumeGoString(call, i, &buf) - 1
+			b.WriteString(normalizeLiteralText(buf.String()))
+		case c <= ' ': // fold whitespace away
+		case c >= '0' && c <= '9':
+			b.WriteByte('0')
+			for i+1 < len(call) && call[i+1] >= '0' && call[i+1] <= '9' {
+				i++
+			}
+		default:
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
+}
+
+// normalizeLiteralText collapses ALL whitespace inside a consumed Go string
+// literal and wraps it in a positional-safe {S:...} marker. Escaped sequences
+// have already been resolved by consumeGoString. Words survive so different
+// messages keep different identities.
+func normalizeLiteralText(s string) string {
+	var b strings.Builder
+	b.WriteString("{S:")
+	prevDigit := false
+	for _, r := range s {
+		if r <= ' ' {
+			continue // every whitespace run vanishes
+		}
+		if r >= '0' && r <= '9' {
+			if !prevDigit {
+				b.WriteByte('0')
+				prevDigit = true
+			}
+			continue
+		}
+		prevDigit = false
+		b.WriteRune(r)
+	}
+	b.WriteByte('}')
+	return b.String()
+}
+
+// extractGoCallArgsAt extracts the argument text of a call whose opening
+// parenthesis sits exactly at openIdx (the '(' character itself), balancing
+// nested parentheses. String literals are skipped wholesale via consumeGoString
+// so a parenthesis or quote inside a message cannot desynchronize the depth
+// count (#1120: needed because matches are no longer line-start anchored;
+// comments were already stripped upstream).
+func extractGoCallArgsAt(src string, openIdx int) string {
+	if openIdx < 0 || openIdx >= len(src) || src[openIdx] != '(' {
+		return ""
+	}
+	var sink strings.Builder
+	depth := 1
+	i := openIdx + 1
+	for ; i < len(src); i++ {
+		c := src[i]
+		if c == '"' || c == '\'' || c == '`' {
+			sink.Reset()
+			i = consumeGoString(src, i, &sink) - 1 // jump past the literal
+			continue
+		}
+		switch c {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return src[openIdx+1 : i]
+			}
+		}
+	}
+	return ""
+}
+
 // extractGoCallArgs extracts the content between the first '(' and the
 // matching ')' in a line. Handles nested parens.
 func extractGoCallArgs(line string) string {
@@ -399,16 +516,18 @@ func findFatalInLib(src, ext, filePath string) []loggingIntelInstance {
 	// Only flag Fatal in regular function bodies.
 	stripped = stripInitFuncs(stripped)
 
-	// #1109 Item B: capture offsets so each instance carries a distinguishable
-	// line key. Fatal details are otherwise all identical, making them
-	// indistinguishable in the content-anchored delta.
+	// #1119: iterate occurrences without threading any offset-derived value
+	// into the DETAIL. Each instance carries its own normalized call text as
+	// the identity key: identical Fatals at any line share one identity (so an
+	// inserted comment cannot resurrect them), while genuinely different calls
+	// stay distinguishable (#1109B legacy expectations).
 	offsets := goFatalInLibRe.FindAllStringIndex(stripped, -1)
 	var results []loggingIntelInstance
 	for _, off := range offsets {
-		line := 1 + strings.Count(stripped[:off[0]], "\n")
+		args := extractGoCallArgsAt(stripped, off[1]-1)
 		results = append(results, loggingIntelInstance{
 			category: "fatal_in_library",
-			line:     line,
+			key:      stripped[off[0]:off[1]-1] + "(" + args + ")",
 			detail: "[LOGGING WARNING] log.Fatal/log.Panic in non-main package. " +
 				"Calling log.Fatal in a library terminates the entire process " +
 				"without giving callers a chance to handle the error. " +
@@ -506,8 +625,16 @@ var initFuncDeclRe = regexp.MustCompile(`func\s+init\s*\(\s*\)\s*\{`)
 // brace, truncating bodies that contain nested blocks (e.g. if statements) and
 // leaving log.Fatal calls after those blocks unstripped (fail-fast false
 // positives).
+// #1124: brace counting must ignore string literals. A raw '}' inside a
+// message such as "config: }" terminated the scan early and leaked the rest of
+// the init body (including its own log.Fatal) back into the analyzed source;
+// a '{' inside a string wedged the counter above zero forever, swallowing the
+// remainder of the file (dropping genuine log.Fatal calls). Comments were
+// already stripped upstream, so only quoted literals need masking; the jump
+// reuses consumeGoString for uniform escape and raw-string handling.
 func stripInitFuncs(src string) string {
 	var b strings.Builder
+	var sink strings.Builder
 	b.Grow(len(src))
 	writePos := 0
 	removedUntil := 0
@@ -520,10 +647,14 @@ func stripInitFuncs(src string) string {
 		depth := 1
 		j := openBrace + 1
 		for j < len(src) && depth > 0 {
-			switch src[j] {
-			case '{':
+			switch c := src[j]; {
+			case c == '"' || c == '\'' || c == '`':
+				sink.Reset()
+				j = consumeGoString(src, j, &sink) // skip literal wholesale
+				continue                           // j already points past it
+			case c == '{':
 				depth++
-			case '}':
+			case c == '}':
 				depth--
 			}
 			j++

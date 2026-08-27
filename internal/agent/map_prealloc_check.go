@@ -41,8 +41,10 @@ package agent
 //     function than the loop. Each function unit is scanned against only its
 //     own declarations, so a same-named slice populated by a loop in another
 //     function can no longer be mistaken for a cross-file-scope map write.
-//     Package-level hintless maps remain visible to all functions, but
-//     parameter names shadow them and sized make() rebinds suppress them.
+//   - #1121: skip package-level var maps entirely when assembling candidate
+//     declarations. Such maps are registries/caches accumulated across many
+//     calls, so no single loop's len(source) is a meaningful size hint and
+//     per-loop "add a size hint" advice cannot be implemented there.
 
 import (
 	"fmt"
@@ -139,22 +141,19 @@ type mapDeclInfo struct {
 //
 // #1103: analysis is performed per function unit (top-level FuncDecl and
 // nested FuncLit). A unit only correlates loop writes against declarations
-// reachable from that unit - its own locals plus package-level vars - so
-// declarations in sibling functions never satisfy a loop in another one.
+// reachable from that unit - its own locals - so declarations in sibling
+// functions never satisfy a loop in another one.
+// #1121: package-level var maps are excluded from candidates entirely;
+// registry/cache accumulation semantics make a one-shot size hint wrong.
 func findMissingMapPrealloc(file *ast.File, fset *token.FileSet) []mapPreallocWarning {
-	pkgDecls := packageHintlessMaps(file)
-
 	var warnings []mapPreallocWarning
 
 	// scanUnit checks one function body: declarations and loops are both
 	// taken from the same lexical region.
 	scanUnit := func(body *ast.BlockStmt, fnType *ast.FuncType) {
-		// Visible declarations: package-level hintless maps plus this
-		// unit's own local make(map[K]V) bindings.
-		binds := make(map[string]*mapDeclInfo, len(pkgDecls)+4)
-		for k, v := range pkgDecls {
-			binds[k] = v
-		}
+		// Visible declarations: this unit's own local make(map[K]V)
+		// bindings only (#1121: package-level var maps are not warned).
+		binds := make(map[string]*mapDeclInfo, 4)
 		collectLocalMapBinds(body, binds)
 		if fnType != nil {
 			excludeShadowedBinds(fnType.Params, body, binds)
@@ -250,10 +249,11 @@ func collectLocalMapBinds(body *ast.BlockStmt, binds map[string]*mapDeclInfo) {
 }
 
 // excludeShadowedBinds drops candidate bindings whose bare name can refer to
-// a different value inside the unit: parameters shadow package-level maps by
-// name, and a same-name assignment of an already-sized make(map[K]V, n)
-// means the write belongs to the sized variable (issue #1103 conservatism -
-// under-detection is preferred over a harmful slice-to-map rewrite hint).
+// a different value inside the unit: a parameter shadows same-named bindings
+// collected from inner blocks, and a same-name assignment of an already-sized
+// make(map[K]V, n) means the write belongs to the sized variable (issue
+// #1103 conservatism - under-detection is preferred over a harmful
+// slice-to-map rewrite hint).
 func excludeShadowedBinds(params *ast.FieldList, body *ast.BlockStmt, binds map[string]*mapDeclInfo) {
 	if len(binds) == 0 {
 		return
@@ -293,33 +293,6 @@ func excludeShadowedBinds(params *ast.FieldList, body *ast.BlockStmt, binds map[
 			}
 		}
 	}
-}
-
-// packageHintlessMaps collects package-level var declarations initialized
-// with make(map[K]V) without a size hint. These names are file-wide state
-// and stay eligible for every function's loops.
-func packageHintlessMaps(file *ast.File) map[string]*mapDeclInfo {
-	binds := make(map[string]*mapDeclInfo)
-	for _, d := range file.Decls {
-		gd, ok := d.(*ast.GenDecl)
-		if !ok || gd.Tok != token.VAR {
-			continue
-		}
-		for _, spec := range gd.Specs {
-			vs, ok := spec.(*ast.ValueSpec)
-			if !ok {
-				continue
-			}
-			for i, name := range vs.Names {
-				if i < len(vs.Values) {
-					if info := analyzeMapInit(name.Name, name.Pos(), vs.Values[i]); info != nil {
-						binds[name.Name] = info
-					}
-				}
-			}
-		}
-	}
-	return binds
 }
 
 // analyzeMapInit checks if an initialization expression is make(map[K]V)
