@@ -172,6 +172,13 @@ func registerAllChecks() {
 		{Name: "interface-design", Langs: []Language{LangGo}, Run: func(ctx CheckContext) []string {
 			return checkInterfaceDesign(ctx)
 		}},
+		// #1142: param-count - SonarQube S107 excessive parameter count
+		// (6+ including receiver). Fully implemented + unit tested; previously
+		// dead code with zero wiring. Delta-aware via content fingerprint
+		// (function name + normalized params), position-independent.
+		{Name: "param-count", Langs: []Language{LangGo}, Run: func(ctx CheckContext) []string {
+			return checkExcessiveParams(ctx.FilePath, ctx.OldContent, ctx.NewContent)
+		}},
 		// #503: there is deliberately NO "assertion-weakening" entry here.
 		// checkAssertionWeakening (born 3129668f, unregistered by the
 		// fc5c4aad critical-only refactor) was DELETED, not resurrected:

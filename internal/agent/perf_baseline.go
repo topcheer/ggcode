@@ -315,25 +315,30 @@ func (a *Agent) maybeInjectPerfRegression() {
 		return // not enough recent data
 	}
 
-	// Count how many of the last 3 runs exceeded regression thresholds.
-	regressionHits := 0
-	var worstMetric string
+	// Count how many of the last 3 runs exceeded regression thresholds,
+	// bucketed per metric. Consensus requires at least 2 of 3 recent runs to
+	// regress on the SAME metric -- cross-metric votes (run1 hits iterations,
+	// run2 hits duration) must not pass the gate (#1143).
+	metricCounts := make(map[string]int)
 	for _, r := range recent3 {
-		hit, metric := checkSingleRunRegression(r, mid)
-		if hit {
-			regressionHits++
-			worstMetric = metric
+		if _, metric := checkSingleRunRegression(r, mid); metric != "" {
+			metricCounts[metric]++
 		}
 	}
 
-	// Require at least 2 of 3 recent runs to show regression on the same metric.
-	if regressionHits < 2 {
+	worstMetric := pickConsensusPerfMetric(metricCounts)
+	if worstMetric == "" {
+		debug.Log("perf-baseline", "regression candidates did not reach %d-run same-metric consensus", perfRegressionConsensusRuns)
 		return
 	}
 
+	// Build the warning from a run that actually regressed on worstMetric --
+	// the most severe one -- instead of blindly using the latest run (#1143).
+	hitRun := selectWorstPerfHit(recent3, mid, worstMetric)
+
 	a.perfBaseline.warnCount++
-	msg := formatPerfRegressionWarning(worstMetric, mid, recent3[len(recent3)-1])
-	debug.Log("perf-baseline", "regression detected: %d/3 recent runs regressed on %s", regressionHits, worstMetric)
+	msg := formatPerfRegressionWarning(worstMetric, mid, hitRun)
+	debug.Log("perf-baseline", "regression detected: %d/3 recent runs regressed on %s", metricCounts[worstMetric], worstMetric)
 
 	a.contextManager.Add(provider.Message{
 		Role: "user",
@@ -355,8 +360,9 @@ func checkSingleRunRegression(run, baseline perfBaselineEntry) (bool, string) {
 	if baseline.DurationSec > 10 && run.DurationSec > int(float64(baseline.DurationSec)*perfRegressionFactor) {
 		return true, "duration"
 	}
-	// Error rate regression: 2x baseline error count
-	if baseline.Errors >= 0 && run.Errors > 0 && baseline.ToolCalls > 0 {
+	// Error rate regression: 2x baseline error count.
+	// #1143: removed the always-true "baseline.Errors >= 0" guard.
+	if baseline.ToolCalls > 0 && run.Errors > 0 && run.ToolCalls > 0 {
 		baseRate := float64(baseline.Errors) / float64(baseline.ToolCalls)
 		runRate := float64(run.Errors) / float64(run.ToolCalls)
 		if baseRate == 0 && runRate > 0.05 {
@@ -376,6 +382,66 @@ func checkSingleRunRegression(run, baseline perfBaselineEntry) (bool, string) {
 		return true, "compaction"
 	}
 	return false, ""
+}
+
+// perfRegressionConsensusRuns is how many of the recent runs must regress on
+// the SAME metric before a warning fires (#1143).
+const perfRegressionConsensusRuns = 2
+
+// perfMetricOrder lists regression metrics in the evaluation priority used by
+// checkSingleRunRegression, keeping worst-metric selection deterministic
+// when multiple metrics reach consensus (#1143).
+var perfMetricOrder = []string{"iterations", "duration", "error_rate", "context_usage", "compaction"}
+
+// pickConsensusPerfMetric returns a metric whose hit count reaches
+// perfRegressionConsensusRuns across recent runs, preferring metrics earlier
+// in perfMetricOrder when several qualify. Empty result means no metric
+// reached same-metric consensus, so no warning should fire (#1143).
+func pickConsensusPerfMetric(hitCounts map[string]int) string {
+	for _, m := range perfMetricOrder {
+		if hitCounts[m] >= perfRegressionConsensusRuns {
+			return m
+		}
+	}
+	return ""
+}
+
+// selectWorstPerfHit picks, among the recent runs that regressed on the given
+// metric, the run with the most severe (largest) observed value for that
+// metric. Falls back to the latest run defensively; normal callers gate on
+// same-metric consensus first, so at least one hit always exists (#1143).
+func selectWorstPerfHit(runs []perfBaselineEntry, baseline perfBaselineEntry, metric string) perfBaselineEntry {
+	worst := runs[len(runs)-1]
+	bestVal := -1
+	for _, r := range runs {
+		if _, m := checkSingleRunRegression(r, baseline); m != metric {
+			continue
+		}
+		if v := perfMetricValue(r, metric); v > bestVal {
+			bestVal = v
+			worst = r
+		}
+	}
+	return worst
+}
+
+// perfMetricValue extracts the observed value of a regression metric from a
+// single run entry (#1143).
+func perfMetricValue(entry perfBaselineEntry, metric string) int {
+	switch metric {
+	case "iterations":
+		return entry.Iterations
+	case "duration":
+		return entry.DurationSec
+	case "error_rate":
+		return entry.Errors
+	case "context_usage":
+		return entry.ContextPeak
+	case "compaction":
+		return entry.Compactions
+	default:
+		return 0
+	}
 }
 
 // formatPerfRegressionWarning builds a concise advisory message.

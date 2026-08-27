@@ -44,6 +44,16 @@ type paramCountInstance struct {
 	params   []string
 }
 
+// pcFingerprint keys an instance for delta suppression (fix #1142). It uses
+// normalized content text (function name + parameter names/types), NOT the
+// line:column position - inserting a comment line above a function must not
+// re-report the pre-existing function as newly introduced. Pattern follows
+// pathTraversalInstance.ptFingerprint.
+func (i paramCountInstance) pcFingerprint() string {
+	norm := strings.Join(i.params, ",")
+	return fmt.Sprintf("%s|%d|%s", i.funcName, i.count, norm)
+}
+
 func checkExcessiveParams(filePath, oldContent, newContent string) []string {
 	if !strings.HasSuffix(filePath, ".go") {
 		return nil
@@ -58,20 +68,23 @@ func checkExcessiveParams(filePath, oldContent, newContent string) []string {
 		return nil
 	}
 
-	var oldPos map[string]bool
+	var oldKeys map[string]bool
 	if strings.TrimSpace(oldContent) != "" {
 		for _, iss := range findExcessiveParams(oldContent) {
-			if oldPos == nil {
-				oldPos = make(map[string]bool)
+			if oldKeys == nil {
+				oldKeys = make(map[string]bool)
 			}
-			oldPos[iss.pos.String()] = true
+			oldKeys[iss.pcFingerprint()] = true
 		}
 	}
 
 	var warnings []string
 	newCount := 0
 	for _, inst := range newInstances {
-		if oldPos != nil && oldPos[inst.pos.String()] {
+		// Delta-suppress pre-existing instances by content fingerprint so a
+		// pure line shift (comment insertion above) stays silent (#1142).
+		key := inst.pcFingerprint()
+		if oldKeys != nil && oldKeys[key] {
 			continue
 		}
 		newCount++

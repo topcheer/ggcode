@@ -41,6 +41,7 @@ package agent
 //     legitimate "I ran tests, they pass" sequences are not flagged.
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -186,22 +187,20 @@ func (s *phantomVerifyState) recordToolCall(toolName string, toolInput string, i
 	}
 }
 
-// extractCommandArg attempts to extract the "command" field value from a
-// JSON arguments string. Returns empty string if parsing fails.
+// extractCommandArg extracts the "command" field value from a JSON arguments
+// string by decoding the JSON properly (#1144). The previous naive quote scan
+// truncated commands at the first escaped quote (\"), producing a wrong but
+// non-empty string that bypassed the empty-string fallback in recordToolCall.
+// Returns empty string on parse failure or missing field, preserving the
+// caller's fallback semantics.
 func extractCommandArg(argsJSON string) string {
-	// Simple heuristic: look for "command":"..." pattern in the JSON.
-	// This avoids full JSON parsing for performance.
-	const prefix = `"command":"`
-	idx := strings.Index(argsJSON, prefix)
-	if idx == -1 {
+	var args struct {
+		Command string `json:"command"`
+	}
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return ""
 	}
-	start := idx + len(prefix)
-	end := strings.Index(argsJSON[start:], `"`)
-	if end == -1 {
-		return ""
-	}
-	return argsJSON[start : start+end]
+	return args.Command
 }
 
 // detectPhantomClaims scans assistant text and returns verification-outcome claims
