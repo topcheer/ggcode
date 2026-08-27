@@ -1169,25 +1169,44 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		// Expose runtime status via /api/status
 		repl.SetWorkingDir(workingDir)
 		webuiSrv.SetStatusFn(repl.RuntimeStatus)
-		// Write port file for external process discovery
+
+		// Port file management (issue #1189):
+		// For new sessions, write port file after real session ID is created.
+		// For resumed sessions, write immediately with actual ID.
 		actualSessionID := resumeID
 		if actualSessionID == "__new__" || actualSessionID == "" {
-			// Session hasn't been created yet — REPL will create it.
-			// Use empty string; runfile.Write handles it.
 			actualSessionID = ""
 		}
-		runfile.Write(runfile.PortFile{
-			Addr:      actualAddr,
-			Token:     webuiSrv.Token(),
-			PID:       os.Getpid(),
-			SessionID: actualSessionID,
-			Workspace: workingDir,
-			Mode:      cfg.DefaultMode,
-		})
-		defer runfile.Remove(actualSessionID)
+		// Store initial session ID for cleanup tracking
+		repl.SetInitialSessionID(actualSessionID, cfg.DefaultMode)
+
+		// Write port file if we have a real session ID (resumed sessions)
+		if actualSessionID != "" {
+			if err := runfile.Write(runfile.PortFile{
+				Addr:      actualAddr,
+				Token:     webuiSrv.Token(),
+				PID:       os.Getpid(),
+				SessionID: actualSessionID,
+				Workspace: workingDir,
+				Mode:      cfg.DefaultMode,
+			}); err != nil {
+				debug.Log("root", "failed to write port file for session %s: %v", actualSessionID, err)
+			}
+		}
+
+		// Register callback to rewrite port file when first real session ID is created
+		// (for new sessions where actualSessionID was empty above)
+		repl.SetSessionCreatedCallback(repl.HandleSessionCreated)
+
+		// Defer removal using the tracked session ID (updates when real ID is set)
+		defer func() {
+			runfile.Remove(repl.CurrentSessionID())
+		}()
+
 		// Ensure cleanup on syscall.Exec restart (defers don't fire on exec)
 		repl.SetPreExecCleanup(func() {
-			runfile.Remove(resumeID)
+			// Use the session ID at time of exec (may have been updated)
+			runfile.Remove(repl.CurrentSessionID())
 			if lanchatHub != nil {
 				lanchatHub.Close()
 			}

@@ -35,6 +35,7 @@ import (
 	"github.com/topcheer/ggcode/internal/plugin"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/restart"
+	"github.com/topcheer/ggcode/internal/runfile"
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/subagent"
@@ -79,6 +80,9 @@ type REPL struct {
 	cronScheduler       *cron.Scheduler
 	currentSessionMu    sync.RWMutex
 	currentSession      *session.Session // thread-safe, updated by setCurrentSession
+	// Port file management (issue #1189)
+	initialSessionID string // session ID used for initial port file write (empty for new sessions)
+	portFileMode     string // startup permission mode from config
 }
 
 // NewREPL creates a new REPL with optional permission policy.
@@ -657,6 +661,67 @@ func (r *REPL) recordMetric(ev metrics.MetricEvent) {
 func (r *REPL) SetWebUIReadyAddr(addr, token string) {
 	r.webuiAddr = addr
 	r.webuiToken = token
+}
+
+// SetInitialSessionID sets the session ID used for the initial port file write
+// (issue #1189). For new sessions this is empty; for resumed sessions it's the
+// actual ID. Used to track which file to remove on exit.
+func (r *REPL) SetInitialSessionID(sessionID, mode string) {
+	r.initialSessionID = sessionID
+	r.portFileMode = mode
+}
+
+// CurrentSessionID returns the session ID currently tracked for port file cleanup.
+// For new sessions, this updates from empty to the real ID when the session is created.
+func (r *REPL) CurrentSessionID() string {
+	return r.initialSessionID
+}
+
+// SetSessionCreatedCallback registers a callback that fires when the first real session
+// ID is set (issue #1189). The callback is invoked with the new session ID.
+func (r *REPL) SetSessionCreatedCallback(cb func(sessionID string)) {
+	r.model.SetSessionCreatedCallback(cb)
+}
+
+// HandleSessionCreated is the callback implementation that rewrites the port file
+// when a real session ID is set (issue #1189).
+func (r *REPL) HandleSessionCreated(sessionID string) {
+	r.onSessionCreated(sessionID)
+}
+
+// onSessionCreated is called when the first real session ID is set (issue #1189).
+// It rewrites the port file with the actual session ID, replacing the placeholder
+// written at startup. It also updates the cleanup key to match.
+func (r *REPL) onSessionCreated(sessionID string) {
+	if r.webuiAddr == "" {
+		// No WebUI started, nothing to rewrite
+		return
+	}
+	// Remove the placeholder port file (if any) before writing the real one
+	if r.initialSessionID != "" && r.initialSessionID != sessionID {
+		// For resumed sessions, the initial ID was already correct
+		return
+	}
+	if r.initialSessionID == "" {
+		// Placeholder case: remove any stale __new__ file (legacy safety)
+		runfile.Remove("__new__")
+	}
+	// Write the real port file
+	pf := runfile.PortFile{
+		Addr:      r.webuiAddr,
+		Token:     r.webuiToken,
+		PID:       os.Getpid(),
+		SessionID: sessionID,
+		Workspace: r.workingDir,
+		Mode:      r.portFileMode,
+	}
+	if err := runfile.Write(pf); err != nil {
+		debug.Log("repl", "onSessionCreated: failed to write port file for session %s: %v", sessionID, err)
+	} else {
+		debug.Log("repl", "onSessionCreated: wrote port file for session %s (replacing placeholder)", sessionID)
+	}
+	// Update the cleanup key so defer removes the correct file
+	r.initialSessionID = sessionID
 }
 
 // SetSystemPromptRebuilder sets a callback that rebuilds the full system prompt

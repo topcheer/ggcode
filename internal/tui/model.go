@@ -295,15 +295,19 @@ type Model struct {
 	// session. The REPL registers this to update its thread-safe currentSession
 	// pointer so persistHandler/checkpointHandler write to the correct JSONL file.
 	sessionUpdateCallback func(ses *session.Session)
-	remoteInboundAdapter  string // adapter name that sent the current remote inbound message (for per-channel echo suppression)
-	clipboardLoader       func() (imageAttachedMsg, error)
-	clipboardWriter       func(string) error
-	urlOpener             func(string) error
-	webuiBridge           WebUIEventBroadcaster
-	updateSvc             *update.Service
-	updateInfo            update.CheckResult
-	updateError           string
-	systemPromptRebuilder func() string // rebuilds and returns the full system prompt
+	// sessionCreatedCallback is called once when the first real session ID is set
+	// (i.e., not empty). Used to rewrite port file with the actual session ID
+	// after startup when it was initially written with a placeholder.
+	sessionCreatedCallback func(sessionID string)
+	remoteInboundAdapter   string // adapter name that sent the current remote inbound message (for per-channel echo suppression)
+	clipboardLoader        func() (imageAttachedMsg, error)
+	clipboardWriter        func(string) error
+	urlOpener              func(string) error
+	webuiBridge            WebUIEventBroadcaster
+	updateSvc              *update.Service
+	updateInfo             update.CheckResult
+	updateError            string
+	systemPromptRebuilder  func() string // rebuilds and returns the full system prompt
 
 	// Mobile tunnel
 	tunnelHost                *agentruntime.TunnelHost // unified tunnel management
@@ -828,6 +832,13 @@ func (m *Model) SetCronScheduler(s *cron.Scheduler) {
 	m.cronScheduler = s
 }
 
+// SetSessionCreatedCallback registers a callback that fires once when the first
+// real session ID is set (issue #1189). Used to rewrite port file with the
+// actual session ID after startup.
+func (m *Model) SetSessionCreatedCallback(cb func(sessionID string)) {
+	m.sessionCreatedCallback = cb
+}
+
 func (m *Model) SetSession(ses *session.Session, store session.Store) {
 	m.session = ses
 	m.sessionStore = store
@@ -836,6 +847,14 @@ func (m *Model) SetSession(ses *session.Session, store session.Store) {
 	// JSONL file even after /clear switches to a new session.
 	if m.sessionUpdateCallback != nil {
 		m.sessionUpdateCallback(ses)
+	}
+	// Notify port file writer (issue #1189): fire once when first real session ID
+	// is set, so we can rewrite the port file with the actual session ID instead
+	// of the placeholder used at startup.
+	if m.sessionCreatedCallback != nil && ses.ID != "" {
+		m.sessionCreatedCallback(ses.ID)
+		// Fire only once: clear the callback after first invocation
+		m.sessionCreatedCallback = nil
 	}
 	// Propagate session ID to agent so todos are scoped to this session.
 	if m.agent != nil {
