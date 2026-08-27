@@ -30,7 +30,11 @@ GOMEMLIMIT="${VERIFY_CI_MEMLIMIT:-2GiB}"
 # the toolchain gets OOM-killed ("signal: killed") before any code issue is
 # reported. GOMAXPROCS caps every downstream go command in one knob. Override
 # via VERIFY_CI_GOMAXPROCS on roomier machines.
-export GOMAXPROCS="${VERIFY_CI_GOMAXPROCS:-2}"
+# Default 1 (not 2): the Go compiler is internally parallel per package even
+# with -p 1; on shared machines with concurrent agent workloads GOMAXPROCS=2
+# still reproduced the "signal: killed" OOM during compilation of the largest
+# packages (internal/agent, cmd/ggcode). 1 trades wall-clock for reliability.
+export GOMAXPROCS="${VERIFY_CI_GOMAXPROCS:-1}"
 # Package-level parallelism: `go test ./...` defaults -p to core count;
 # on memory-constrained dev machines (macOS under memory pressure) the
 # parallel test binaries spike peak RSS and get OOM-killed with a bare
@@ -69,7 +73,10 @@ GOMEMLIMIT="${GOMEMLIMIT}" go vet -tags goolm -p "${VERIFY_CI_VET_P:-1}" ./...
 echo "[verify-ci] running tests (main module, unit only)"
 # NOTE: do NOT use the "integration" tag here - integration tests (e.g. browser
 # tests that spawn Chrome) are too heavy for CI and will OOM.
-GOMEMLIMIT="${GOMEMLIMIT}" GOGC=50 go test -tags goolm -p 1 -timeout 300s ./cmd/... ./internal/...
+# -parallel 1: same rationale as the Makefile `test` target - packages using
+# t.Parallel() still spike peak RSS when many test funcs run concurrently on
+# memory-constrained machines; run one test func at a time.
+GOMEMLIMIT="${GOMEMLIMIT}" GOGC=50 go test -tags goolm -p 1 -parallel 1 -timeout 300s ./cmd/... ./internal/...
 
 echo "[verify-ci] core checks passed"
 
