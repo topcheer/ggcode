@@ -92,18 +92,32 @@ type perfBaselineData struct {
 
 // perfBaselineState tracks whether the regression warning has fired this session.
 type perfBaselineState struct {
-	warnCount   int
-	historical  []perfBaselineEntry // loaded once at session start
-	baselineMid perfBaselineEntry   // computed median of historical runs
-	hasBaseline bool
+	warnCount int
+	// #1180: session-level once-only flag. reset() runs on every user turn
+	// and used to clear warnCount alone, so the same regression warning was
+	// re-injected as a full user message on every subsequent turn - breaking
+	// the "at most once per session" contract. This flag survives reset().
+	warnedThisSession bool
+	historical        []perfBaselineEntry // loaded once per run start
+	baselineMid       perfBaselineEntry   // computed median of historical runs
+	hasBaseline       bool
 }
 
 func newPerfBaselineState() *perfBaselineState {
 	return &perfBaselineState{}
 }
 
+// reset() re-arms per-user-turn bookkeeping. #1180: it must NOT re-enable
+// the regression warning (warnedThisSession survives), so the once-per-session
+// contract holds across turns. It DOES drop the frozen in-memory snapshot
+// (historical/baselineMid/hasBaseline) so the next run reloads fresh data from
+// disk instead of replaying a stale conclusion; #1167's atomic write keeps
+// that reload safe against concurrent writers.
 func (p *perfBaselineState) reset() {
 	p.warnCount = 0
+	p.hasBaseline = false
+	p.historical = nil
+	p.baselineMid = perfBaselineEntry{}
 }
 
 // perfBaselinePath returns the full path to the baseline file.
@@ -288,7 +302,7 @@ func (a *Agent) maybeInjectPerfRegression() {
 	if a.perfBaseline == nil {
 		return
 	}
-	if a.perfBaseline.warnCount >= perfBaselineMaxWarns {
+	if a.perfBaseline.warnCount >= perfBaselineMaxWarns || a.perfBaseline.warnedThisSession {
 		return
 	}
 
@@ -349,6 +363,7 @@ func (a *Agent) maybeInjectPerfRegression() {
 	hitRun := selectWorstPerfHit(recent3, mid, worstMetric)
 
 	a.perfBaseline.warnCount++
+	a.perfBaseline.warnedThisSession = true // #1180: once per session, across resets
 	msg := formatPerfRegressionWarning(worstMetric, mid, hitRun)
 	debug.Log("perf-baseline", "regression detected: %d/3 recent runs regressed on %s", metricCounts[worstMetric], worstMetric)
 

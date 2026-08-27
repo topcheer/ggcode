@@ -53,9 +53,10 @@ import (
 
 // nilDerefInstance represents a detected nil-dereference-after-error pattern.
 type nilDerefInstance struct {
-	posStr  string // human-readable position (display only)
-	key     string // #1128: position-independent delta key (fn:name:deref text)
-	varName string // variable dereferenced without nil check
+	posStr    string // human-readable position (display only)
+	key       string // #1128: position-independent delta key (fnName|path|var)
+	suffixKey string // #1179: rename-tolerant fallback key (path|var, no fnName)
+	varName   string // variable dereferenced without nil check
 }
 
 // nilDerefCtx carries per-function context used to build delta keys (#1128).
@@ -64,19 +65,26 @@ type nilDerefCtx struct {
 	fnName string
 }
 
-// collectOldNilDerefKeys parses oldContent and returns the position-independent
-// keys of every nil-deref instance already present before the edit (#1128).
-// Keys from a file that fails to parse are treated as absent, matching the
-// previous inline behavior.
-func collectOldNilDerefKeys(filePath, oldContent string) map[string]bool {
-	oldKeys := make(map[string]bool)
+// collectOldNilDerefIndex parses oldContent and returns the key sets of every
+// nil-deref instance already present before the edit (#1128, extended by
+// #1179). exact holds position-independent keys (fnName|path|var); suffix
+// holds name-independent keys (path|var) used as a fallback when a rename or
+// extraction changed the function name component. Keys from a file that fails
+// to parse are treated as absent, matching the previous inline behavior.
+type nilDerefDeltaIndex struct {
+	exact  map[string]bool
+	suffix map[string]bool
+}
+
+func collectOldNilDerefIndex(filePath, oldContent string) nilDerefDeltaIndex {
+	idx := nilDerefDeltaIndex{exact: make(map[string]bool), suffix: make(map[string]bool)}
 	if strings.TrimSpace(oldContent) == "" {
-		return oldKeys
+		return idx
 	}
 	oldFset := token.NewFileSet()
 	oldFile, oldErr := parser.ParseFile(oldFset, filePath, oldContent, parser.AllErrors)
 	if oldErr != nil {
-		return oldKeys
+		return idx
 	}
 	for _, decl := range oldFile.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
@@ -84,10 +92,11 @@ func collectOldNilDerefKeys(filePath, oldContent string) map[string]bool {
 			continue
 		}
 		for _, inst := range findNilDerefsInFunc(oldFset, fn) {
-			oldKeys[inst.key] = true
+			idx.exact[inst.key] = true
+			idx.suffix[inst.suffixKey] = true
 		}
 	}
-	return oldKeys
+	return idx
 }
 
 // formatNilDerefReport renders the warning text for newly introduced
@@ -131,13 +140,19 @@ func checkNilDerefAfterError(filePath, oldContent, newContent string) string {
 	}
 
 	// Delta: drop instances whose key already exists in old content (#1128:
-	// keys are stable across line insertions above).
-	oldKeys := collectOldNilDerefKeys(filePath, oldContent)
+	// keys are stable across line insertions above). #1179: a rename or
+	// extraction changes the function-name component of the exact key while
+	// the finding itself is unchanged, which re-reported pre-existing
+	// instances as new. Fall back to the name-independent suffix key so
+	// renamed code stays suppressed; a pattern absent from the old content
+	// still reports as genuinely new.
+	oldIdx := collectOldNilDerefIndex(filePath, oldContent)
 	var newInstances []nilDerefInstance
 	for _, inst := range instances {
-		if !oldKeys[inst.key] {
-			newInstances = append(newInstances, inst)
+		if oldIdx.exact[inst.key] || oldIdx.suffix[inst.suffixKey] {
+			continue
 		}
+		newInstances = append(newInstances, inst)
 	}
 
 	if len(newInstances) == 0 {
@@ -380,8 +395,17 @@ func derefPathText(e ast.Expr) string {
 // nilDerefKey builds the position-independent delta key (#1128): function
 // name, normalized dereference path, variable name. Line numbers are
 // excluded so inserting lines above cannot resurrect a suppressed warning.
+// #1179: because the function name changes on rename/extraction, the delta
+// filter also consults nilDerefSuffixKey as a fallback.
 func nilDerefKey(ctx *nilDerefCtx, node ast.Expr, varName string) string {
 	return ctx.fnName + "|" + derefPathText(node) + "|" + varName
+}
+
+// nilDerefSuffixKey builds the rename-tolerant fallback key (#1179): the
+// normalized dereference path and variable name without any function-name
+// component, so suppression survives a pure rename or extraction.
+func nilDerefSuffixKey(node ast.Expr, varName string) string {
+	return derefPathText(node) + "|" + varName
 }
 
 // processAssignment marks variables as nil-risk when they come from multi-return
@@ -735,9 +759,10 @@ func detectNilDeref(ctx *nilDerefCtx, n ast.Node, nilRisk map[string]nilRiskEntr
 					// #1069/#1128: posStr stays line-anchored for display;
 					// the position-independent key prevents re-reporting
 					// after insertions above (#1128).
-					posStr:  fmt.Sprintf("%s:%d:%s", filepath.Base(pos.Filename), pos.Line, x.Name),
-					key:     nilDerefKey(ctx, node.X, x.Name),
-					varName: x.Name,
+					posStr:    fmt.Sprintf("%s:%d:%s", filepath.Base(pos.Filename), pos.Line, x.Name),
+					key:       nilDerefKey(ctx, node.X, x.Name),
+					suffixKey: nilDerefSuffixKey(node.X, x.Name),
+					varName:   x.Name,
 				})
 				_ = entry
 				delete(nilRisk, x.Name) // report once
@@ -751,9 +776,10 @@ func detectNilDeref(ctx *nilDerefCtx, n ast.Node, nilRisk map[string]nilRiskEntr
 				pos := fset.Position(node.Pos())
 				instances = append(instances, nilDerefInstance{
 					// #1128: same key scheme as SelectorExpr.
-					posStr:  fmt.Sprintf("%s:%d:%s", filepath.Base(pos.Filename), pos.Line, x.Name),
-					key:     nilDerefKey(ctx, node.X, x.Name),
-					varName: x.Name,
+					posStr:    fmt.Sprintf("%s:%d:%s", filepath.Base(pos.Filename), pos.Line, x.Name),
+					key:       nilDerefKey(ctx, node.X, x.Name),
+					suffixKey: nilDerefSuffixKey(node.X, x.Name),
+					varName:   x.Name,
 				})
 				_ = entry
 				delete(nilRisk, x.Name)
@@ -767,9 +793,10 @@ func detectNilDeref(ctx *nilDerefCtx, n ast.Node, nilRisk map[string]nilRiskEntr
 				pos := fset.Position(node.Pos())
 				instances = append(instances, nilDerefInstance{
 					// #1128: same key scheme as SelectorExpr.
-					posStr:  fmt.Sprintf("%s:%d:%s", filepath.Base(pos.Filename), pos.Line, x.Name),
-					key:     nilDerefKey(ctx, node.X, x.Name),
-					varName: x.Name,
+					posStr:    fmt.Sprintf("%s:%d:%s", filepath.Base(pos.Filename), pos.Line, x.Name),
+					key:       nilDerefKey(ctx, node.X, x.Name),
+					suffixKey: nilDerefSuffixKey(node.X, x.Name),
+					varName:   x.Name,
 				})
 				_ = entry
 				delete(nilRisk, x.Name)
