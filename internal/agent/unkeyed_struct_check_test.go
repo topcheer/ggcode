@@ -142,12 +142,136 @@ func main() {
 	_ = h
 }`
 	warnings := checkUnkeyedStruct("header.go", "", src)
-	// Qualified type (http.Header) should be flagged since it's likely a struct.
+	// Qualified type (http.Header) is still flagged, but with hedged wording
+	// because the underlying kind cannot be confirmed without type checking.
 	if len(warnings) == 0 {
 		t.Fatal("expected warning for qualified type unkeyed init")
 	}
 	if !strings.Contains(warnings[0], "http.Header") {
 		t.Errorf("expected 'http.Header' in warning, got: %s", warnings[0])
+	}
+	if !strings.Contains(warnings[0], "Possible unkeyed") {
+		t.Errorf("expected hedged wording for unconfirmed qualified type, got: %s", warnings[0])
+	}
+	if strings.Contains(warnings[0], "Field1") {
+		t.Errorf("hedged warning must not suggest keyed form (http.Header is a map; compile error): %s", warnings[0])
+	}
+}
+
+// TestUnkeyedStruct_QualifiedNonStructHedged pins #1216: a qualified name may
+// be an array/slice/map/basic alias (pkg.Ints = []int), so positional elements
+// are valid Go. The warning must hedge and must NOT suggest a keyed literal
+// form, which would not compile for those kinds.
+func TestUnkeyedStruct_QualifiedNonStructHedged(t *testing.T) {
+	src := `package main
+
+func f() {
+	_ = pkg.Ints{1, 2, 3}
+}`
+	warnings := checkUnkeyedStruct("ints.go", "", src)
+	if len(warnings) == 0 {
+		t.Fatal("expected hedged warning for qualified unkeyed literal")
+	}
+	w := warnings[0]
+	if !strings.Contains(w, "Possible unkeyed") {
+		t.Errorf("expected hedged wording, got: %s", w)
+	}
+	if strings.Contains(w, "Field1") {
+		t.Errorf("heuristic warning must not suggest keyed form (compile error for array/slice/map kinds): %s", w)
+	}
+	if !strings.Contains(w, "array/slice/map") {
+		t.Errorf("expected hedge mentioning non-struct kinds, got: %s", w)
+	}
+}
+
+// TestUnkeyedStruct_ConfirmedStructKeepsStrongWording pins the other half of
+// #1216: structs declared in the same file are confirmed, so the actionable
+// keyed-form suggestion is retained for them.
+func TestUnkeyedStruct_ConfirmedStructKeepsStrongWording(t *testing.T) {
+	src := `package main
+
+type Config struct {
+	Host string
+	Port int
+}
+
+func f() {
+	_ = Config{"a", 8080}
+}`
+	warnings := checkUnkeyedStruct("config.go", "", src)
+	if len(warnings) == 0 {
+		t.Fatal("expected warning for confirmed struct unkeyed init")
+	}
+	if !strings.Contains(warnings[0], "Field1") {
+		t.Errorf("confirmed struct warning should keep keyed-form suggestion, got: %s", warnings[0])
+	}
+}
+
+// TestUnkeyedStruct_NewSameKeyLiteral pins the multiset delta (#1215):
+// adding a SECOND unkeyed literal of the same type and element count
+// (copy-paste pattern) must be flagged. Set-membership delta filtered it as
+// "pre-existing" because the key (type + element count) matched.
+func TestUnkeyedStruct_NewSameKeyLiteral(t *testing.T) {
+	oldSrc := `package main
+
+type Config struct {
+	Host string
+	Port int
+	TLS  bool
+}
+
+func f() {
+	c := Config{"a", 8080, false}
+	_ = c
+}`
+	newSrc := oldSrc + `
+
+func g() {
+	c := Config{"b", 9090, true}
+	_ = c
+}`
+	warnings := checkUnkeyedStruct("config.go", oldSrc, newSrc)
+	if len(warnings) == 0 {
+		t.Fatal("new same-type same-count literal must be flagged (multiset delta, not set membership)")
+	}
+	if len(warnings) != 1 {
+		t.Fatalf("expected exactly 1 warning (the newly added literal), got %d: %v", len(warnings), warnings)
+	}
+	if strings.Contains(warnings[0], "L6:") {
+		t.Errorf("should not flag the pre-existing f() literal, got: %s", warnings[0])
+	}
+}
+
+// TestUnkeyedStruct_LineShiftNoReflag pins the multiset invariance under
+// line drift: inserting unrelated comment lines above identical literals
+// keeps every per-key count unchanged, so nothing is re-flagged.
+func TestUnkeyedStruct_LineShiftNoReflag(t *testing.T) {
+	oldSrc := `package main
+
+type Config struct {
+	Host string
+	Port int
+}
+
+func f() {
+	_ = Config{"a", 8080}
+}`
+	newSrc := `package main
+
+// unrelated comment added above
+
+// another one
+type Config struct {
+	Host string
+	Port int
+}
+
+func f() {
+	_ = Config{"a", 8080}
+}`
+	warnings := checkUnkeyedStruct("config.go", oldSrc, newSrc)
+	if len(warnings) != 0 {
+		t.Errorf("line shift must not re-flag existing literal, got: %v", warnings)
 	}
 }
 

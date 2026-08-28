@@ -60,9 +60,14 @@ are positional (no `*ast.KeyValueExpr`).
 4. For each composite:
    - Resolve the type name (handles `Ident` and `SelectorExpr`)
    - If the type is locally declared as a struct, confirm via field map
-   - For qualified types (e.g., `http.Header`), flag if all elements are unkeyed
+   - For qualified types (e.g., `http.Header`), flag with hedged wording if
+     all elements are unkeyed; the kind cannot be confirmed without full
+     type resolution, so no keyed-form suggestion is given (it would be a
+     compile error for array/slice/map kinds)
    - Skip structs with <=1 field (trivially correct)
-5. Delta-aware: filter out issues that existed in old content
+5. Delta-aware: filter out issues that existed in old content (per-key
+   multiset count difference, so same-type same-count copy-paste additions
+   are still caught)
 
 ### Files
 - `internal/agent/unkeyed_struct_check.go` -- check implementation (230 lines)
@@ -71,12 +76,17 @@ are positional (no `*ast.KeyValueExpr`).
 
 ### Key design decisions
 - **Delta-aware**: Uses `typeName:fieldCount` as dedup key (not line number)
-  so line shifts from unrelated edits don't break delta filtering
+  so line shifts from unrelated edits don't break delta filtering. Filtering
+  is a per-key multiset count difference (not set membership), so adding a
+  second same-type same-element-count literal is still reported (#1215)
 - **Field count handling**: Uses `structFieldCount()` helper that correctly
   counts multi-name fields (`A, B, C int` = 3 fields, not 1)
 - **Qualified types**: For cross-package types (e.g., `http.Header{...}`),
-  flags if all elements are positional, since we can't do full type resolution
-  without importing the package
+  flags with hedged wording if all elements are positional. The warning
+  never suggests a keyed literal form because the qualified name may be an
+  array/slice/map/basic alias, for which such a suggestion would be a
+  compile error (#1216). Full `go/types` resolution remains the root fix
+  (deferred as too costly for write-time advisory)
 - **Warning cap**: Max 4 warnings + truncation notice
 - **Test file skip**: Test files use positional init commonly for mocks
 
@@ -84,12 +94,15 @@ are positional (no `*ast.KeyValueExpr`).
 All functions are under 15.
 
 ## Test Coverage
-14 tests covering:
+18 tests covering:
 - Basic unkeyed detection
 - Keyed init is OK
 - Delta-awareness (old content filtering)
 - Slice/map init excluded
-- Qualified type detection
+- Qualified type detection (hedged wording, no keyed-form suggestion)
+- Confirmed struct keeps strong wording
+- Same-type same-count literal addition flagged (multiset delta)
+- Line-shift no-reflag
 - Small struct (1 field) skip
 - Empty content
 - Non-Go file skip

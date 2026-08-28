@@ -56,6 +56,11 @@ type unkeyedIssue struct {
 	line       int
 	typeName   string
 	fieldCount int
+	// heuristic marks a qualified cross-package type that could not be
+	// confirmed as a struct without full type checking (#1216). Such issues
+	// get hedged warning wording that never suggests a keyed literal form,
+	// because for array/slice/map kinds that suggestion is a compile error.
+	heuristic bool
 }
 
 // checkUnkeyedStruct detects unkeyed struct initialization in Go code.
@@ -77,18 +82,28 @@ func checkUnkeyedStruct(filePath, oldContent, newContent string) []string {
 	}
 
 	// Delta-aware: subtract issues present in old content.
+	//
+	// Multiset (per-key count) comparison, not set membership: copy-pasting a
+	// same-type, same-element-count literal produces an identical key, so a
+	// set would swallow the newly added second instance (#1215; same family
+	// as the #1214 unchecked-assert fix). Counts are invariant under pure
+	// line shifts, preserving the no-reflag guarantee for unrelated edits.
 	if strings.TrimSpace(oldContent) != "" {
 		oldIssues := findUnkeyedStructs(filePath, oldContent)
 		if len(oldIssues) > 0 {
-			oldSet := make(map[string]bool, len(oldIssues))
+			oldCounts := make(map[string]int, len(oldIssues))
 			for _, oi := range oldIssues {
-				oldSet[unkeyedIssueKey(oi)] = true
+				oldCounts[unkeyedIssueKey(oi)]++
 			}
+			seen := make(map[string]int)
 			filtered := newIssues[:0]
 			for _, ni := range newIssues {
-				if !oldSet[unkeyedIssueKey(ni)] {
-					filtered = append(filtered, ni)
+				key := unkeyedIssueKey(ni)
+				seen[key]++
+				if seen[key] <= oldCounts[key] {
+					continue // matched against a pre-existing instance
 				}
+				filtered = append(filtered, ni)
 			}
 			newIssues = filtered
 		}
@@ -108,6 +123,12 @@ func unkeyedIssueKey(i unkeyedIssue) string {
 }
 
 // buildUnkeyedWarnings converts issues into human-readable warning strings.
+//
+// Confirmed structs get the actionable keyed-form suggestion. Heuristic hits
+// (qualified cross-package types that could not be resolved without full
+// type checking) get hedged wording WITHOUT a keyed-form example: for array,
+// slice, map, or basic-alias kinds, positional elements are valid (or the
+// only) form, and suggesting field names would be a compile error (#1216).
 func buildUnkeyedWarnings(issues []unkeyedIssue) []string {
 	var warnings []string
 	for i, issue := range issues {
@@ -116,6 +137,14 @@ func buildUnkeyedWarnings(issues []unkeyedIssue) []string {
 				"...and %d more unkeyed struct initialization(s) omitted",
 				len(issues)-unkeyedMaxWarnings))
 			break
+		}
+		if issue.heuristic {
+			warnings = append(warnings, fmt.Sprintf(
+				"Possible unkeyed struct initialization at L%d: %s{%d positional values}. "+
+					"If %s is a struct type, prefer initializing by field name - positional struct init breaks silently if fields are reordered or added. "+
+					"If it is an array/slice/map, positional elements are valid Go; disregard.",
+				issue.line, issue.typeName, issue.fieldCount, issue.typeName))
+			continue
 		}
 		warnings = append(warnings, fmt.Sprintf(
 			"Unkeyed struct initialization at L%d: %s{%d positional values}. "+
@@ -208,14 +237,18 @@ func analyzeComposite(comp *ast.CompositeLit, fset *token.FileSet, structTypes m
 
 	// Only flag types we know are structs (declared in this file).
 	_, isStruct := structTypes[typeName]
+	heuristic := false
 	if !isStruct {
-		// Could be a struct from another package (e.g., pkg.Type{...}).
-		// We can't confirm without full type checking, so we check the
-		// heuristic: if ALL elements are non-keyvalue expressions, it's
-		// likely positional struct init.
+		// Could be a struct from another package (e.g., pkg.Type{...}), but
+		// it could equally be an array/slice/map/basic alias whose positional
+		// elements are valid Go. Without full type checking we cannot tell
+		// the kinds apart, so qualified names are still flagged but marked
+		// heuristic: the warning hedges and never suggests a keyed form,
+		// which would not compile for non-struct kinds (#1216).
 		if !isQualifiedTypeName(typeName) {
 			return unkeyedIssue{}, false
 		}
+		heuristic = true
 	}
 
 	// Check if all elements are positional (no KeyValueExpr).
@@ -236,6 +269,7 @@ func analyzeComposite(comp *ast.CompositeLit, fset *token.FileSet, structTypes m
 		line:       pos.Line,
 		typeName:   typeName,
 		fieldCount: len(comp.Elts),
+		heuristic:  heuristic,
 	}, true
 }
 
