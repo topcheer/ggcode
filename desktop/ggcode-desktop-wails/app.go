@@ -1776,16 +1776,17 @@ func (a *App) SetGlobalHotkeyEnabled(enabled bool) error {
 		a.dc.SetGlobalHotkey(false)
 		a.removeGlobalHotkey()
 		if err := a.dc.Save(); err != nil {
-			// Persist failed: if the hotkey was previously enabled, re-register it
-			// so the OS state stays consistent with what the UI will show after
-			// rolling back the in-memory flag. Symmetric with the enable branch's
-			// "undo the live registration" rollback.
+			// Persist failed: restore in-memory flag first, then if the hotkey was
+			// previously enabled, re-register it so the OS state stays consistent.
+			// Symmetric with the enable branch's "undo the live registration" rollback.
+			// #1200: flag MUST be restored before initGlobalHotkey() because the latter
+			// checks IsGlobalHotkeyEnabled() and no-ops if false.
+			a.dc.SetGlobalHotkey(oldEnabled)
 			if oldEnabled {
 				if reRegErr := a.initGlobalHotkey(); reRegErr != nil {
 					debug.Log("desktop", "re-registration of previously-enabled global hotkey failed after Save rollback: %v", reRegErr)
 				}
 			}
-			a.dc.SetGlobalHotkey(oldEnabled)
 			debug.Log("desktop", "persist global-hotkey failed: %v", err)
 			return fmt.Errorf("persist global hotkey setting: %w", err)
 		}

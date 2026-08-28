@@ -3449,7 +3449,8 @@ func (b *ChatBridge) SendHiddenText(text string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	b.cancel = cancel
 	b.cancelled = false
-	b.finished = false // reset per-run finish guard (#223)
+	b.finished = false      // reset per-run finish guard (#223)
+	b.persistedRunCount = 0 // #1201: fresh persist watermark per run
 	b.usageTurnIndex++
 	// #522: same generation bump as sendMessageData — hidden runs (LAN
 	// chat injection, deferred drains) previously reused the cancelled
