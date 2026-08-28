@@ -73,7 +73,7 @@ type matrixAdapter struct {
 	// Dedup
 	seen map[string]time.Time
 
-	// First sync flag — ignore events from initial sync
+	// First sync flag - ignore events from initial sync
 	didFirstSync atomic.Bool
 
 	// Transaction ID counter for send
@@ -189,7 +189,7 @@ func (a *matrixAdapter) run(ctx context.Context) {
 		}
 
 		// #432: after a HEALTHY connection (sync stayed up for a while),
-		// the next failure is a fresh transient — reset backoff like the
+		// the next failure is a fresh transient - reset backoff like the
 		// Discord adapter's #389 fix instead of resuming the accumulated
 		// 60s wait after hours of stable connectivity.
 		if time.Since(startedAt) >= 60*time.Second {
@@ -220,7 +220,7 @@ func (a *matrixAdapter) runOnce(ctx context.Context) error {
 		return fmt.Errorf("client init: %w", err)
 	}
 	// #433: a.client/a.userID are read concurrently by Send/sendImage/
-	// TriggerTyping on other goroutines — writes must hold a.mu.
+	// TriggerTyping on other goroutines - writes must hold a.mu.
 	a.mu.Lock()
 	a.client = client
 	a.mu.Unlock()
@@ -728,14 +728,14 @@ func (a *matrixAdapter) resolveImageToBytes(ctx context.Context, img ExtractedIm
 }
 
 // matrixRetryAfterMaxMS caps server-provided retry_after_ms values (#664).
-// 24h in milliseconds — a sane upper bound for a homeserver backoff.
+// 24h in milliseconds - a sane upper bound for a homeserver backoff.
 const matrixRetryAfterMaxMS = 24 * 60 * 60 * 1000
 
 // matrixRetryAfter converts a server-provided retry_after_ms value (already
 // verified > 0 by the caller) into a Duration, clamping to
 // matrixRetryAfterMaxMS BEFORE the float→Duration multiplication. Without
 // the clamp, retry_after_ms above ~9.22e12 (or +Inf) wraps to a large
-// negative duration, and time.After(negative) fires immediately — a zero-
+// negative duration, and time.After(negative) fires immediately - a zero-
 // delay hammering that ignores the server's backoff signal (bounded by
 // matrixMaxRetries, but still 4 rapid hits per send).
 func matrixRetryAfter(msFloat float64) time.Duration {
@@ -747,7 +747,7 @@ func matrixRetryAfter(msFloat float64) time.Duration {
 
 // sendImage uploads image data to the Matrix homeserver and sends an m.image event.
 func (a *matrixAdapter) sendImage(ctx context.Context, roomID, threadID string, data []byte, mimeType string) error {
-	// #433: snapshot the client under the read lock — reconnect writes it.
+	// #433: snapshot the client under the read lock - reconnect writes it.
 	a.mu.RLock()
 	client := a.client
 	a.mu.RUnlock()
@@ -1009,13 +1009,25 @@ func (s *cryptoStateStore) GetRoomJoinedOrInvitedMembers(ctx context.Context, ro
 
 // --- Helpers ---
 
-var matrixReplyFallbackRegex = regexp.MustCompile(`(?m)^>.*\n`)
-
+// stripMatrixReplyFallback removes the rich-reply fallback quote block from
+// the TOP of a reply body, per the Matrix spec: the fallback is the leading
+// run of ">" lines plus the blank-line separator that follows it. Body
+// content after the separator - including the user's own blockquotes and
+// code fences containing ">" lines - is preserved verbatim (#1222).
 func stripMatrixReplyFallback(body string) string {
-	stripped := matrixReplyFallbackRegex.ReplaceAllString(body, "")
-	// Remove the blank line that follows the fallback
-	stripped = strings.TrimPrefix(stripped, "\n")
-	return strings.TrimSpace(stripped)
+	lines := strings.Split(body, "\n")
+	i := 0
+	for i < len(lines) && strings.HasPrefix(lines[i], ">") {
+		i++
+	}
+	// Keep the body as-is when there is no leading fallback block, when the
+	// block is not terminated by the spec's blank-line separator, or when
+	// nothing follows the separator (indistinguishable from a plain quote
+	// message, so nothing is stripped).
+	if i == 0 || i >= len(lines) || strings.TrimSpace(lines[i]) != "" {
+		return strings.TrimSpace(body)
+	}
+	return strings.TrimSpace(strings.Join(lines[i+1:], "\n"))
 }
 
 // minimal json import for fetchDMRooms

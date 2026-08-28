@@ -1,6 +1,6 @@
 package agent
 
-// User Sentiment Detection — Negative Feedback Course Correction
+// User Sentiment Detection - Negative Feedback Course Correction
 //
 // Research basis: Studies in conversational AI and coding assistant UX show that
 // detecting user frustration and corrective signals is critical for maintaining
@@ -36,10 +36,10 @@ package agent
 //
 //   3. STATE RESET: when strong negative feedback is detected, resets the
 //      monitoring systems (overseer, repetition tracker, etc.) because the
-//      user's correction invalidates the previous trajectory — those systems
+//      user's correction invalidates the previous trajectory - those systems
 //      would otherwise carry stale "progress" data from the rejected approach.
 //
-// All operations are pure string matching and counter increments — no I/O,
+// All operations are pure string matching and counter increments - no I/O,
 // no blocking, no external dependencies.
 
 import (
@@ -93,14 +93,33 @@ const (
 	negCatRedirection = "redirection" // "instead", "actually", "I meant"
 )
 
+// sentimentPositiveWhitelist lists phrases that look negative to the word
+// matcher but are actually positive/neutral acknowledgements (#1223).
+// "no problem" / "no worries" / "not bad" all contain bare rejection words
+// ("no", "bad") yet mean the opposite; technical how-to questions like
+// "how do I stop the daemon" contain "stop" without any frustration intent.
+// A first line containing any of these phrases is never classified as
+// negative feedback.
+var sentimentPositiveWhitelist = []string{
+	"no problem", "no worries", "no issues", "no issue",
+	"not bad", "not too bad", "looks good", "looks great", "looks fine",
+	"all good", "well done", "good job", "nice work", "great work",
+	"perfect", "excellent", "awesome", "thank you", "thanks",
+	"how do i stop", "how to stop", "how can i stop", "how do you stop",
+	"how do i restart", "how to restart",
+}
+
 // negFeedbackPatterns maps patterns to categories. Matching is case-insensitive
 // and checks for word boundaries to avoid false positives (e.g., "now" matching
-// "no"). Patterns are ordered by priority — earlier matches take precedence.
+// "no"). Patterns are ordered by priority - earlier matches take precedence.
 var negFeedbackPatterns = []struct {
 	patterns []string
 	category string
 }{
 	// Rejection: direct negation of agent's work.
+	// #1223: bare "no"/"bad" remain here deliberately - the positive whitelist
+	// above neutralizes the opposite-meaning phrases ("no problem", "not bad")
+	// before these patterns are consulted.
 	{[]string{"no", "nope", "wrong", "incorrect", "not right", "not what", "not correct",
 		"that's wrong", "thats wrong", "this is wrong", "bad", "doesn't work",
 		"doesnt work", "didnt work", "didn't work", "broken", "still broken",
@@ -114,8 +133,12 @@ var negFeedbackPatterns = []struct {
 		"start over", "try again", "redo"},
 		negCatRedirection},
 	// Frustration: emotional signals.
+	// #1223: "why are you" narrowed to "why are you doing"/"why do you keep" -
+	// the generic form matched technical questions like "why are you using a
+	// mutex here?". How-to-stop questions are whitelist phrases above.
 	{[]string{"stop", "ugh", "wtf", "this is frustrating", "frustrating",
-		"why are you", "you keep", "stop doing", "stop trying",
+		"why are you doing", "why do you keep", "why do you still",
+		"you keep", "stop doing", "stop trying",
 		"i said", "as i said", "like i said", "i already told",
 		"are you listening", "read my message", "pay attention",
 		"this doesn't make sense", "this doesnt make sense",
@@ -132,7 +155,7 @@ var negFeedbackPatterns = []struct {
 //     negative signal. Short messages are more likely to be reactive feedback.
 //  2. REDIRECTION KEYWORDS anywhere: these indicate course correction
 //     regardless of message length.
-//  3. MULTI-LINE messages are NOT treated as pure negative feedback —
+//  3. MULTI-LINE messages are NOT treated as pure negative feedback -
 //     the user is likely providing detailed context, even if they express
 //     some frustration. Only treat as negative if the FIRST line is a
 //     clear rejection/frustration signal.
@@ -142,7 +165,7 @@ func detectNegativeFeedback(message string) string {
 		return ""
 	}
 
-	// Analyze only the first line for multi-line messages — the first line
+	// Analyze only the first line for multi-line messages - the first line
 	// captures the reactive sentiment; subsequent lines usually contain context.
 	firstLine := message
 	if idx := strings.IndexByte(message, '\n'); idx >= 0 {
@@ -151,6 +174,17 @@ func detectNegativeFeedback(message string) string {
 
 	lower := strings.ToLower(firstLine)
 	isShort := len(firstLine) < 100
+
+	// Positive-phrase whitelist (#1223): checked before any negative pattern.
+	// Phrases like "no problem" / "not bad" contain bare rejection words but
+	// express satisfaction; classifying them as rejection injected guidance
+	// that contradicted the user and, on the third consecutive hit, forced an
+	// unnecessary ask_user interruption.
+	for _, w := range sentimentPositiveWhitelist {
+		if wordContains(lower, w) {
+			return ""
+		}
+	}
 
 	// Check patterns in priority order.
 	for _, group := range negFeedbackPatterns {
@@ -293,7 +327,7 @@ func tailoredSuffix(category string, _ bool) string {
 //
 // Rationale: the overseer, repetition tracker, scope drift, and other monitoring
 // systems accumulate trajectory data across iterations. When the user explicitly
-// rejects the agent's approach, that trajectory data becomes stale — it reflects
+// rejects the agent's approach, that trajectory data becomes stale - it reflects
 // work that was wrong. Resetting ensures these systems start fresh with the
 // corrected approach, avoiding false "drift" or "stuck" alerts triggered by
 // the now-irrelevant previous trajectory.

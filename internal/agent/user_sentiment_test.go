@@ -102,6 +102,30 @@ func TestDetectNegativeFeedback_MultiLine(t *testing.T) {
 	}
 }
 
+// TestDetectNegativeFeedback_PositivePhrases pins #1223: affirmative
+// acknowledgements that contain bare rejection words ("no problem", "not bad")
+// and technical how-to questions ("how do I stop...") must NOT be classified
+// as negative feedback - consecutive misreads used to force an unnecessary
+// ask_user interruption and wipe legitimate monitoring state.
+func TestDetectNegativeFeedback_PositivePhrases(t *testing.T) {
+	positives := []string{
+		"no problem, looks good to me",
+		"not bad at all",
+		"no worries",
+		"looks good, no issues",
+		"all good, well done",
+		"great work, thank you",
+		// Technical questions, not frustration.
+		"why are you using a mutex here?",
+		"how do I stop the daemon?",
+	}
+	for _, msg := range positives {
+		if got := detectNegativeFeedback(msg); got != "" {
+			t.Errorf("detectNegativeFeedback(%q) = %q, want empty", msg, got)
+		}
+	}
+}
+
 func TestUserSentimentState_Escalation(t *testing.T) {
 	s := newUserSentimentState()
 

@@ -137,6 +137,25 @@ func TestStripMatrixReplyFallback(t *testing.T) {
 			input: "> <@user:example.org> Original",
 			want:  "> <@user:example.org> Original",
 		},
+		// #1222: only the TOP fallback block is stripped; the user's own
+		// blockquotes and code fences after the separator stay verbatim.
+		{
+			name:  "body quote preserved",
+			input: "> <@user:example.org> Original\n\nMy reply:\n> my own quote\nsee this",
+			want:  "My reply:\n> my own quote\nsee this",
+		},
+		{
+			name:  "code fence preserved",
+			input: "> <@user:example.org> Original\n\nOutput:\n```sh\n$ grep '^>' file\n```",
+			want:  "Output:\n```sh\n$ grep '^>' file\n```",
+		},
+		// No blank-line separator after the leading quote block: per spec
+		// this is not a reply fallback, so nothing is stripped.
+		{
+			name:  "no separator keeps body",
+			input: "> quoted line\nstill body",
+			want:  "> quoted line\nstill body",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

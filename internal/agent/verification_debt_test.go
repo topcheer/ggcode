@@ -145,6 +145,8 @@ func TestIsVerificationCommand(t *testing.T) {
 		"cargo test",
 		"pytest -v",
 		"go vet ./...",
+		// Env-prefixed verification commands stay recognized.
+		"GOFLAGS=-p=1 go test ./...",
 	}
 	for _, cmd := range verifyCmds {
 		if !isVerificationCommand(cmd) {
@@ -156,6 +158,21 @@ func TestIsVerificationCommand(t *testing.T) {
 		"ls -la",
 		"cat file.txt",
 		"git status",
+		// #1224: noun/prefix misfires - none of these verify anything, yet
+		// the old anywhere-token / trimmed-prefix matching classified them as
+		// verification and silently reset the edit-abandonment detector.
+		"rm -rf build",
+		"mkdir test",
+		"ls test",
+		"cat build",
+		"mv x check",
+		"cd test && ./run.sh",
+		"cargo clean",
+		"cargo fmt",
+		"yarn install",
+		"yarn remove lodash",
+		"makefile-parser input.mk",
+		"git commit -m \"now go test passes\"",
 	}
 	for _, cmd := range nonVerifyCmds {
 		if isVerificationCommand(cmd) {

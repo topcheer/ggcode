@@ -312,3 +312,37 @@ func TestSplitIRCMessage(t *testing.T) {
 		t.Errorf("space-split rejoined mismatch")
 	}
 }
+
+// TestIRCRemoveNick_UnicodeSafety pins #1221: nick removal must not corrupt
+// text or panic when case mapping changes byte lengths (cross-string byte
+// indexing used to slice the original string with offsets computed on a
+// lowercased copy).
+func TestIRCRemoveNick_UnicodeSafety(t *testing.T) {
+	// Turkish dotted capital I (U+0130) shrinks under ToLower.
+	got := ircRemoveNick("İşsel #test kanalı bot selam", "bot")
+	if got != "İşsel #test kanalı selam" {
+		t.Errorf("Turkish text corrupted: %q", got)
+	}
+	// Kelvin sign (U+212A) also shrinks under case mapping.
+	got = ircRemoveNick("K bot hello", "bot")
+	if got != "K hello" {
+		t.Errorf("Kelvin text corrupted: %q", got)
+	}
+	// Expanding case mapping (Ⱥ U+023A): the old implementation panicked with
+	// an out-of-range slice, permanently killing the adapter goroutine.
+	expanding := strings.Repeat("Ⱥ", 30)
+	got = ircRemoveNick(expanding+" bot hi", "bot")
+	if got != expanding+" hi" {
+		t.Errorf("expanding text corrupted: %q", got)
+	}
+	// Punctuation attached to the mention is dropped with it.
+	got = ircRemoveNick("bot: run the tests", "bot")
+	if got != "run the tests" {
+		t.Errorf("punctuated mention not removed cleanly: %q", got)
+	}
+	// Case-insensitive matching preserved.
+	got = ircRemoveNick("BOT hello Bot", "bot")
+	if got != "hello" {
+		t.Errorf("case-insensitive removal broken: %q", got)
+	}
+}

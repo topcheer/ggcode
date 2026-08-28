@@ -104,8 +104,11 @@ var verificationDebtTools = map[string]debtAction{
 func classifyDebtAction(toolName, args string) debtAction {
 	if action, ok := verificationDebtTools[toolName]; ok {
 		if action == debtVerifying && toolName == "run_command" {
-			// Only count as verification if it's actually a build/test/lint command
-			if !isVerificationCommand(args) {
+			// Only count as verification if it's actually a build/test/lint command.
+			// #1224: args is the raw JSON envelope; extract the command string
+			// before lexical matching (previously the anywhere-token matching
+			// accidentally matched marker tokens inside the JSON wrapper).
+			if !isVerificationCommand(eaExtractCommand(args)) {
 				return debtNeutral
 			}
 		}
@@ -116,38 +119,57 @@ func classifyDebtAction(toolName, args string) debtAction {
 
 // isVerificationCommand checks if a run_command argument string represents
 // a verification action (build, test, vet, lint, typecheck).
-// Uses token-based matching for single-word patterns to avoid false matches
-// like "check" matching "checkout" or "test" matching "testfile".
+//
+// #1224: aligned with coverageIsVerifyCommand's lexical structure (first
+// token = command runner, subsequent tokens = verify markers). The previous
+// anywhere-token and trimmed-prefix matching granted verification credit to
+// non-verification commands: "rm -rf build" (noun "build"), "yarn install",
+// "cargo clean", "makefile-parser" (bare-word prefix), and "git commit -m
+// 'now go test passes'" (Contains inside a commit message) all returned true,
+// silently resetting the edit-abandonment detector (#354 family).
 func isVerificationCommand(args string) bool {
-	lower := strings.ToLower(args)
-	tokens := strings.Fields(lower)
-	singleWordMarkers := []string{"build", "test", "vet", "lint", "typecheck", "tsc", "check", "compile", "pytest", "jest", "mypy", "flake8", "eslint", "prettier", "gradle"}
-	multiWordMarkers := []string{"go test", "go build", "go vet", "cargo build", "cargo test", "npm run", "dotnet test", "dotnet build"}
-	prefixMarkers := []string{"make ", "cargo ", "yarn ", "pnpm ", "mvn ", "sbt "}
+	tokens := strings.Fields(strings.ToLower(args))
+	// Skip leading env-var assignments (GOFLAGS="-p=1" go test ./...).
+	i := 0
+	for i < len(tokens) && strings.Contains(tokens[i], "=") {
+		i++
+	}
+	if i >= len(tokens) {
+		return false
+	}
+	first := tokens[i]
+	rest := tokens[i+1:]
 
-	// Check single-word markers as complete tokens
-	for _, t := range tokens {
-		for _, m := range singleWordMarkers {
-			if t == m {
+	// Direct verification tools: the runner itself verifies (pytest -v, jest,
+	// mypy, eslint, ...). No marker token required.
+	switch first {
+	case "pytest", "jest", "mypy", "flake8", "eslint", "prettier", "tsc",
+		"typecheck", "golangci-lint", "staticcheck", "ruff":
+		return true
+	}
+
+	// Runner commands: require an explicit verify marker among the remaining
+	// tokens, so "cargo clean"/"cargo fmt"/"yarn install"/"yarn remove" stay
+	// non-verification while "go test"/"make verify-ci"/"npm run build" hit.
+	switch first {
+	case "go", "make", "npm", "yarn", "pnpm", "cargo", "mvn", "gradle",
+		"./gradlew", "dotnet", "tox", "nox":
+	default:
+		return false
+	}
+	verifyMarkers := []string{
+		"test", "build", "vet", "check", "lint", "verify", "clippy",
+		"e2e", "compile", "typecheck", "tsc",
+	}
+	for _, f := range rest {
+		f = strings.TrimPrefix(f, "run:") // npm/yarn "run:test"
+		f = strings.TrimSuffix(f, ";")
+		for _, m := range verifyMarkers {
+			if f == m || strings.HasPrefix(f, m+"-") || strings.HasPrefix(f, m+"_") {
 				return true
 			}
 		}
 	}
-
-	// Check multi-word markers as substrings (specific enough)
-	for _, m := range multiWordMarkers {
-		if strings.Contains(lower, m) {
-			return true
-		}
-	}
-
-	// Check prefix markers (make/cargo/yarn/etc followed by any subcommand)
-	for _, m := range prefixMarkers {
-		if strings.HasPrefix(lower, strings.TrimSpace(m)) { // changed to trimmed prefix
-			return true
-		}
-	}
-
 	return false
 }
 

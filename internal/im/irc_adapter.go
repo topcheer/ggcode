@@ -447,7 +447,7 @@ func (a *ircAdapter) handlePRIVMSG(ctx context.Context, msg *ircMessage) {
 	channelID := target
 	isDM := !strings.HasPrefix(target, "#") && !strings.HasPrefix(target, "&")
 	if isDM {
-		// DM — target is our nick, sender is the user
+		// DM - target is our nick, sender is the user
 		channelID = senderNick
 	}
 
@@ -525,7 +525,7 @@ func (a *ircAdapter) sendIRCMessage(ctx context.Context, target, text string) er
 	if text == "" || target == "" {
 		return nil
 	}
-	// Split by newlines first — each line is a separate PRIVMSG.
+	// Split by newlines first - each line is a separate PRIVMSG.
 	// The delay applies between ALL messages (not just chunks within a line),
 	// so a multi-line message doesn't burst all lines at once.
 	sent := false
@@ -585,24 +585,36 @@ func ircTextContainsNick(text, nick string) bool {
 
 // ircRemoveNick strips occurrences of nick from text (case-insensitive) so the
 // mention itself does not leak into the message forwarded to the agent.
+//
+// #1221: word-based EqualFold matching. The previous implementation located
+// the nick in strings.ToLower(text) but sliced the ORIGINAL string with those
+// byte offsets; Unicode case mappings that change byte length (İ U+0130,
+// K U+212A shrink; Ⱥ U+023A grows) shifted the offsets, corrupting the text
+// or panicking with out-of-range slices - remotely triggerable by any channel
+// user, permanently killing the adapter's run goroutine. EqualFold compares
+// case-insensitively without building a second string, so no cross-string
+// byte indexing exists at all.
 func ircRemoveNick(text, nick string) string {
 	if nick == "" {
 		return text
 	}
-	lower := strings.ToLower(text)
-	lowerNick := strings.ToLower(nick)
-	for {
-		idx := strings.Index(lower, lowerNick)
-		if idx < 0 {
-			break
+	var b strings.Builder
+	for _, field := range strings.Fields(text) {
+		// Punctuation commonly attached to a mention ("bot:" / "bot,") is
+		// trimmed for the comparison so the whole token is dropped cleanly.
+		core := strings.Trim(field, ".,:;!?<>\"'()[]")
+		if strings.EqualFold(core, nick) {
+			continue
 		}
-		text = text[:idx] + text[idx+len(nick):]
-		lower = lower[:idx] + lower[idx+len(lowerNick):]
+		if b.Len() > 0 {
+			b.WriteByte(' ')
+		}
+		b.WriteString(field)
 	}
-	return text
+	return b.String()
 }
 
-// TriggerTyping — IRC has no typing indicator.
+// TriggerTyping - IRC has no typing indicator.
 func (a *ircAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding) error {
 	return nil
 }

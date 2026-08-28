@@ -449,6 +449,12 @@ func registerAllChecks() {
 		// #571: unkeyed-struct — detects struct initialization without field names
 		// (fragile, error-prone, violates Go idioms). Fully implemented + unit tested.
 		{Name: "unkeyed-struct", Langs: []Language{LangGo}, Run: sliceCheck(checkUnkeyedStruct)},
+		// #1219: unused-param - detects function parameters never referenced in
+		// the function body (dead code / copy-paste residue). Previously
+		// implemented but never registered (dead code). Now registered with
+		// delta-aware and scope-aware (parser object resolution) semantics.
+		// Fully implemented + unit tested.
+		{Name: "unused-param", Langs: []Language{LangGo}, Run: sliceCheck(checkUnusedParam)},
 		// #571: unicode-check — detects problematic Unicode characters (smart quotes,
 		// non-breaking space, zero-width chars) that break compilation or cause bugs.
 		// #1217: gated to code languages - prose files (.md/.txt map to LangAny)

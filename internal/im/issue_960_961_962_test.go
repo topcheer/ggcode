@@ -190,7 +190,10 @@ func TestIRCMentionCaseInsensitive(t *testing.T) {
 	if strings.Contains(strings.ToLower(got), "bot") {
 		t.Fatalf("mention should be stripped case-insensitively, got %q", got)
 	}
-	if strings.Join(strings.Fields(got), " ") != "hey : check this" {
+	// #1221: word-based removal drops the mention token together with its
+	// attached punctuation ("BOT:" goes as a whole) instead of leaving a
+	// dangling colon behind.
+	if strings.Join(strings.Fields(got), " ") != "hey check this" {
 		t.Fatalf("unexpected remainder %q", got)
 	}
 }
