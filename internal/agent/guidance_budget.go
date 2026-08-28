@@ -41,11 +41,14 @@ const (
 	// subsequent advisory guidance is suppressed.
 	guidanceBudgetPerTurn = 2
 
-	// guidanceBudgetBytesPerTurn caps the total bytes of tool-result hints
-	// appended per iteration (#1197: a single failing bash result could stack
-	// critical-tagged hints without limit - count-based caps alone cannot stop
-	// byte-level flooding). Critical hints bypass the count cap but still
-	// charge against this byte cap.
+	// guidanceBudgetBytesPerTurn caps the total bytes of guidance injected per
+	// iteration across BOTH paths: tool-result hints (appendGuidance →
+	// allowDeduped) and iteration-level detector guidance (injectGuidance)
+	// (#1197: a single failing bash result could stack critical-tagged hints
+	// without limit - count-based caps alone cannot stop byte-level flooding;
+	// #1206: the two paths must share one pool symmetrically - gate AND charge
+	// - or tool-hint bytes silently starve detector guidance and vice versa).
+	// Critical hints bypass the count cap but still charge this byte cap.
 	guidanceBudgetBytesPerTurn = 2048
 )
 
@@ -60,8 +63,10 @@ const (
 type guidanceBudget struct {
 	injected   int
 	suppressed int
-	// appendedBytes is the total size of tool-result hint text appended this
-	// iteration (#1197 byte-level flood cap; see guidanceBudgetBytesPerTurn).
+	// appendedBytes is the total size of guidance text injected this iteration
+	// (#1197 byte-level flood cap; see guidanceBudgetBytesPerTurn). Both the
+	// tool-result hint path (allowDeduped) and injectGuidance charge against it
+	// (#1206 symmetry fix).
 	appendedBytes int
 	// seenHintTags records tags of tool-result hints already injected this
 	// turn (#607 B3: cross-result dedup - the same meta-hint must not be
@@ -171,6 +176,12 @@ func (a *Agent) injectGuidance(text string) bool {
 			a.guidanceBudget.suppressed)
 		return false
 	}
+	// #1206: a successful injection must charge the shared byte pool exactly
+	// like the tool-result hint path does - previously injectGuidance was
+	// gated by the byte cap but never charged it, so tool-hint bytes could
+	// silently starve iteration-level detector guidance (and unlimited
+	// iteration injections never filled the pool for tool hints either).
+	a.guidanceBudget.chargeBytes(len(text))
 	a.contextManager.Add(provider.Message{
 		Role: "user",
 		Content: []provider.ContentBlock{{
