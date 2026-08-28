@@ -466,6 +466,15 @@ func (f *FallbackProvider) ChatStream(ctx context.Context, messages []Message, t
 // output must not be retried). When failover activates before output, the
 // next provider's stream replaces the remainder of this one.
 func (f *FallbackProvider) watchStreamForFailover(ctx context.Context, failedIdx int, stream <-chan StreamEvent, messages []Message, tools []ToolDefinition) <-chan StreamEvent {
+	return f.watchStreamForFailoverHops(ctx, failedIdx, stream, messages, tools, len(f.chain))
+}
+
+// watchStreamForFailoverHops is watchStreamForFailover with a hop budget.
+// hopsLeft bounds how many more async failovers this stream may chain: every
+// async hop advances the chain, so after len(chain) hops each provider has
+// had one chance for this call — beyond that the error is relayed instead of
+// recursing through a fully-broken chain forever (#1244).
+func (f *FallbackProvider) watchStreamForFailoverHops(ctx context.Context, failedIdx int, stream <-chan StreamEvent, messages []Message, tools []ToolDefinition, hopsLeft int) <-chan StreamEvent {
 	out := make(chan StreamEvent)
 	go func() {
 		defer close(out)
@@ -514,8 +523,13 @@ func (f *FallbackProvider) watchStreamForFailover(ctx context.Context, failedIdx
 				// earlier advancement (#164 retry-once). The old
 				// `&& !f.failedOver.Load()` gate made this branch dead code -
 				// canRetry=true always co-occurs with an advancement (#390).
-				if canRetry {
+				// #1244: hopsLeft bounds the chain (see wrapper). Before this, the
+				// replacement stream was relayed bare — a second provider failing
+				// async pre-output terminated the chain here, so P→B both
+				// async-broken never reached C even though the chain had it.
+				if canRetry && hopsLeft > 0 {
 					f.mu.RLock()
+					newIdx2 := int(f.activeIdx.Load())
 					other := f.activeLocked()
 					f.mu.RUnlock()
 					debug.Log("provider", "ChatStream async-error failover on %s", other.Name())
@@ -544,9 +558,13 @@ func (f *FallbackProvider) watchStreamForFailover(ctx context.Context, failedIdx
 						}) {
 							return
 						}
+						// #1244: the replacement stream gets the SAME async-error
+						// failover treatment (recursively, one hop cheaper) instead
+						// of the bare relay loop this used to be.
+						watched := f.watchStreamForFailoverHops(ctx, newIdx2, stream2, messages, tools, hopsLeft-1)
 						for {
 							select {
-							case ev2, ok := <-stream2:
+							case ev2, ok := <-watched:
 								if !ok {
 									resetOnSuccess()
 									return
@@ -558,7 +576,8 @@ func (f *FallbackProvider) watchStreamForFailover(ctx context.Context, failedIdx
 								// consecutiveFail, so stale counts prematurely
 								// failed over a healthy primary (#376 semantics).
 								// Mirrors the primary-stream rule at the bottom of
-								// this loop.
+								// this loop. System notices from deeper hops still
+								// count as non-output.
 								if ev2.Type != StreamEventError {
 									sawOutput = sawOutput || ev2.Type != StreamEventSystem
 								}

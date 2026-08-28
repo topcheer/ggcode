@@ -238,10 +238,19 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 	var cmdCtx context.Context
 	var cancel context.CancelFunc
 	if t.JobManager != nil || isGUI {
-		// Managed background jobs and detached GUI apps outlive this tool
-		// call, so their context must not derive from the request context or
-		// be deferred here.
-		cmdCtx, cancel = context.WithTimeout(context.Background(), time.Duration(args.Timeout)*time.Second)
+		if isGUI {
+			// #1245: a detached GUI app must not carry a timeout timer at
+			// all. The timer is armed at creation and fires independently of
+			// Wait, so `code`/`cursor` still running 30 minutes later were
+			// process-group SIGKILLed. Plain WithCancel: the only thing that
+			// can ever fire is guiWait's cancel after the app process exits.
+			cmdCtx, cancel = context.WithCancel(context.Background())
+		} else {
+			// Managed background jobs outlive this tool call, so their
+			// context must not derive from the request context or be
+			// deferred here — but they keep the timeout clock (#568 scope).
+			cmdCtx, cancel = context.WithTimeout(context.Background(), time.Duration(args.Timeout)*time.Second)
+		}
 	} else {
 		cmdCtx, cancel = context.WithTimeout(ctx, time.Duration(args.Timeout)*time.Second)
 		defer cancel()
@@ -311,10 +320,10 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 			cancel()
 			return Result{IsError: true, Content: fmt.Sprintf("failed to start GUI command: %v", err)}, nil
 		}
-		// Detach — don't wait for exit. The guiWait goroutine owns cancel: the
-		// timeout clock only fires after the app process has actually exited,
-		// so a long-lived GUI app is never killed by the tool call returning
-		// (#568).
+		// Detach — don't wait for exit. The guiWait goroutine owns cancel and
+		// fires it after the app process exits; GUI apps carry no timeout
+		// clock at all, so a long-lived editor is never killed by the tool
+		// call returning (#568) nor by a delayed timer (#1245).
 		safego.Go("tool.runCommand.guiWait", func() {
 			_ = cmd.Wait()
 			cancel()

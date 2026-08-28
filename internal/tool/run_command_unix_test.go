@@ -140,3 +140,44 @@ func testRunCommandContextCancelStopsDetachedDescendants(t *testing.T, ignoreTer
 		t.Fatalf("expected detached child lookup to return ESRCH, got %v", err)
 	}
 }
+
+// TestRunCommand_GUIAppNotKilledByTimeoutTimer pins #1245: GUI-detached
+// commands must carry no timeout timer at all. The old code armed a
+// WithTimeout at cmdCtx creation; the timer fired independently of Wait and
+// process-group-SIGKILLed long-lived GUI apps (editors) at the timeout —
+// even though the comment claimed otherwise. With "sleep" masquerading as a
+// GUI command, the child must outlive the 1s timeout.
+func TestRunCommand_GUIAppNotKilledByTimeoutTimer(t *testing.T) {
+	// Make isGUICommand treat "sleep" as a GUI launcher for this test.
+	guiCommands = append(guiCommands, "sleep")
+	defer func() { guiCommands = guiCommands[:len(guiCommands)-1] }()
+
+	rc := RunCommand{WorkingDir: t.TempDir()}
+	input := json.RawMessage(`{"command": "sleep 30", "timeout": 1}`)
+
+	result, err := rc.Execute(context.Background(), input)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	var pid int
+	if _, scanErr := fmt.Sscanf(result.Content, "GUI application launched (pid %d).", &pid); scanErr != nil {
+		t.Fatalf("unexpected result (GUI branch not taken?): %q", result.Content)
+	}
+	t.Cleanup(func() {
+		_ = syscall.Kill(pid, syscall.SIGKILL)
+		_ = syscall.Kill(-pid, syscall.SIGKILL) // process group
+	})
+
+	// Old behavior: timer SIGKILLs at ~1s (timeout) + ~100ms grace.
+	// Surviving past 2.5s proves no armed timer exists.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := syscall.Kill(pid, 0); err != nil {
+			t.Fatalf("GUI child pid %d died before 2.5s (killed by the timeout timer?): %v", pid, err)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if err := syscall.Kill(pid, 0); err != nil {
+		t.Fatalf("GUI child pid %d must still be alive at 2.5s: %v", pid, err)
+	}
+}
