@@ -223,6 +223,50 @@ func TestToolEffTracker_TruncationAdvisory(t *testing.T) {
 	}
 }
 
+// TestIssue1208_TruncationMarkerAnchoring verifies that the MCP/plugin
+// truncation-marker variants are anchored to the bracketed forms the tool
+// layer actually emits. Successful read_file/run_command results whose
+// CONTENT merely mentions the phrases mid-line (e.g. reading this repo's own
+// source, which contains "mcp result truncated" in tool_effectiveness.go)
+// must NOT be classified as poor results (#1208, regression of #358).
+func TestIssue1208_TruncationMarkerAnchoring(t *testing.T) {
+	// File/command content that mentions markers without the bracketed
+	// advisory form - all successful, none poor.
+	benign := []string{
+		// source code that contains the unanchored phrases (this repo!)
+		`strings.Contains(lower, "mcp result truncated") ||`,
+		`// mcp resource truncated handling`,
+		`# docs: output truncated at 1MB in the plugin layer`,
+		// command output mentioning truncation of something else
+		`archive.log: output truncated at request of sender`,
+	}
+	for _, content := range benign {
+		if isPoorResult("read_file", content) {
+			t.Errorf("isPoorResult(read_file, %q) = true, want false (unanchored mention)", content)
+		}
+		if isPoorResult("run_command", content) {
+			t.Errorf("isPoorResult(run_command, %q) = true, want false (unanchored mention)", content)
+		}
+	}
+
+	// Actual tool-layer emitted forms - all poor.
+	emitted := []string{
+		"\n\n[... MCP result truncated: 9000 bytes total, showing first 4000 ...]",
+		"\n\n[... MCP resource truncated: 9000 bytes total, showing first 4000 ...]",
+		"\n...[output truncated at 1MB]",
+		"... [LSP output truncated]",
+		"[output truncated]",
+		"[result too large]",
+		"[max results reached]",
+		"[... truncated: 200 lines]",
+	}
+	for _, content := range emitted {
+		if !isPoorResult("read_file", content) {
+			t.Errorf("isPoorResult(read_file, %q) = false, want true (emitted advisory)", content)
+		}
+	}
+}
+
 func TestToolEffTracker_PerToolIsolation(t *testing.T) {
 	tr := newToolEffTracker()
 

@@ -134,9 +134,9 @@ func isPoorResult(toolName, content string) bool {
 		strings.Contains(lower, "[result too large]") ||
 		strings.Contains(lower, "[max results reached]") ||
 		strings.Contains(lower, "[lsp output truncated]") ||
-		strings.Contains(lower, "mcp result truncated") ||
-		strings.Contains(lower, "mcp resource truncated") ||
-		strings.Contains(lower, "output truncated at") ||
+		strings.Contains(lower, "[... mcp result truncated:") ||
+		strings.Contains(lower, "[... mcp resource truncated:") ||
+		strings.Contains(lower, "[output truncated at") ||
 		strings.Contains(lower, "[... truncated:") ||
 		strings.HasPrefix(lower, "output truncated") ||
 		strings.HasPrefix(lower, "result too large") ||
