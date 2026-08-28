@@ -416,23 +416,26 @@ func (a *WechatAdapter) handleMessage(ctx context.Context, msg ilinkMessage) {
 	// "empty text, skipping" while the message was consumed by the seen-dedup.
 	// To the user the bot simply never reacted, and resending hit the same
 	// wall. Reply with an explicit notice instead of dropping silently.
-	if unsupported := wechatUnsupportedItemKind(msg); unsupported != 0 {
-		notice := "[暂不支持语音消息，请发送文字]"
-		if unsupported == ilinkItemVideo {
-			notice = "[暂不支持视频消息，请发送文字]"
-		}
-		debug.Log("wechat", "adapter=%s unsupported item type=%d from=%s, replying notice", a.name, unsupported, msg.FromUserID)
-		channelID := msg.FromUserID
-		if msg.GroupID != "" {
-			channelID = msg.GroupID
-		}
-		if err := a.sendTextToUser(ctx, channelID, notice, msg.ContextToken); err != nil {
-			debug.Log("wechat", "adapter=%s unsupported-type notice to=%s failed: %v", a.name, channelID, err)
-		}
-		return
-	}
-
+	// Quality-review correction: the notice must ONLY fire when the message
+	// carries no usable text — mixed items (voice + transcribed/accompanying
+	// text) route the text normally; intercepting them dropped usable content
+	// behind an "unsupported" notice.
 	if strings.TrimSpace(text) == "" {
+		if unsupported := wechatUnsupportedItemKind(msg); unsupported != 0 {
+			notice := "[暂不支持语音消息，请发送文字]"
+			if unsupported == ilinkItemVideo {
+				notice = "[暂不支持视频消息，请发送文字]"
+			}
+			debug.Log("wechat", "adapter=%s unsupported item type=%d from=%s, replying notice", a.name, unsupported, msg.FromUserID)
+			channelID := msg.FromUserID
+			if msg.GroupID != "" {
+				channelID = msg.GroupID
+			}
+			if err := a.sendTextToUser(ctx, channelID, notice, msg.ContextToken); err != nil {
+				debug.Log("wechat", "adapter=%s unsupported-type notice to=%s failed: %v", a.name, channelID, err)
+			}
+			return
+		}
 		debug.Log("wechat", "adapter=%s handleMessage: empty text, skipping", a.name)
 		return
 	}

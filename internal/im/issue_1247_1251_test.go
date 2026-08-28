@@ -302,3 +302,37 @@ func TestWechatSendMultiImageSpacing(t *testing.T) {
 		t.Fatalf("2-image send completed in %v; expected >= ~1s of inter-image spacing (#1250)", elapsed)
 	}
 }
+
+// TestWechatVoiceWithTextRoutesText pins the #1251 quality-review correction:
+// a mixed message (voice item + text item, e.g. voice-with-transcription)
+// must route its usable text normally — the unsupported notice only fires
+// when the message carries no text at all. The first fix attempt
+// intercepted these and dropped the text behind the notice.
+func TestWechatVoiceWithTextRoutesText(t *testing.T) {
+	mgr, bridge := newWechatTestManager(t, "u1")
+	adapter, sent := newWechatTestAdapter(t, mgr, nil)
+
+	adapter.handleMessage(context.Background(), ilinkMessage{
+		MessageID:   44,
+		FromUserID:  "u1",
+		ToUserID:    "bot",
+		MessageType: ilinkMsgTypeUser,
+		ItemList: []ilinkItem{
+			{Type: ilinkItemVoice},
+			{Type: ilinkItemText, TextItem: &ilinkTextItem{Text: "语音附带的文字说明"}},
+		},
+	})
+
+	bridge.mu.Lock()
+	n := len(bridge.messages)
+	bridge.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("mixed voice+text message: text must be routed, got %d inbound", n)
+	}
+	if got := bridge.last().Text; got != "语音附带的文字说明" {
+		t.Fatalf("routed text = %q", got)
+	}
+	if cnt := len(*sent); cnt != 0 {
+		t.Fatalf("mixed message with usable text must NOT trigger the unsupported notice, got %d sends", cnt)
+	}
+}
