@@ -937,3 +937,125 @@ func TestParseTestFuncNamesMultiJava(t *testing.T) {
 		t.Error("missing testDeleteUser")
 	}
 }
+
+// TestIssue1204_DartControlFlowFiltering verifies that control-flow keywords
+// are filtered out from Dart function extraction.
+func TestIssue1204_DartControlFlowFiltering(t *testing.T) {
+	dir := t.TempDir()
+	srcFile := filepath.Join(dir, "test.dart")
+	// Contains control-flow statements that might match the regex
+	content := `void foo() {}
+void bar() {}
+
+// Control flow that should NOT be extracted
+if (x) {}
+for (final y in list) {}
+while (z) {}
+switch (v) {}
+`
+	os.WriteFile(srcFile, []byte(content), 0o644)
+
+	funcs := parseExportedFuncsMulti(srcFile)
+	names := make(map[string]bool)
+	for _, f := range funcs {
+		names[f.DisplayName] = true
+	}
+
+	// Should find foo and bar
+	if !names["foo"] {
+		t.Error("expected foo")
+	}
+	if !names["bar"] {
+		t.Error("expected bar")
+	}
+
+	// Should NOT find control-flow keywords
+	keywords := []string{"if", "for", "while", "switch"}
+	for _, kw := range keywords {
+		if names[kw] {
+			t.Errorf("keyword %q should be filtered out", kw)
+		}
+	}
+}
+
+// TestIssue1204_TypeScriptControlFlowFiltering verifies that control-flow keywords
+// are filtered out from TypeScript function extraction.
+func TestIssue1204_TypeScriptControlFlowFiltering(t *testing.T) {
+	dir := t.TempDir()
+	srcFile := filepath.Join(dir, "test.ts")
+	content := `export function foo() {}
+export function bar() {}
+
+// Control flow that should NOT be extracted
+if (x) {}
+for (const y of list) {}
+while (z) {}
+switch (v) {}
+`
+	os.WriteFile(srcFile, []byte(content), 0o644)
+
+	funcs := parseExportedFuncsMulti(srcFile)
+	names := make(map[string]bool)
+	for _, f := range funcs {
+		names[f.DisplayName] = true
+	}
+
+	// Should find foo and bar
+	if !names["foo"] {
+		t.Error("expected foo")
+	}
+	if !names["bar"] {
+		t.Error("expected bar")
+	}
+
+	// Should NOT find control-flow keywords
+	keywords := []string{"if", "for", "while", "switch"}
+	for _, kw := range keywords {
+		if names[kw] {
+			t.Errorf("keyword %q should be filtered out", kw)
+		}
+	}
+}
+
+// TestIssue1204_TokenBoundaryMatching verifies that function-to-test matching
+// uses contiguous token-boundary matching: "GetUser" normalizes to tokens
+// [get user], which "test_get_user" contains contiguously. "delete_user"
+// covers nothing (its tokens [delete user] contain no function sequence).
+func TestIssue1204_TokenBoundaryMatching(t *testing.T) {
+	dir := t.TempDir()
+	srcFile := filepath.Join(dir, "api.ts")
+	content := `export function GetUser(): string { return "y"; }
+export function SaveUser(): string { return "z"; }
+`
+	os.WriteFile(srcFile, []byte(content), 0o644)
+
+	testFile := filepath.Join(dir, "api.test.ts")
+	testContent := `test("test_get_user", () => {});     // SHOULD cover GetUser ([test get user])
+test("delete_user", () => {});       // Should NOT match anything
+`
+	os.WriteFile(testFile, []byte(testContent), 0o644)
+
+	untested := untestedExportedFuncsMulti(dir, "api.ts")
+
+	// GetUser should be tested (contiguous [get user] in test_get_user)
+	foundGetUser := false
+	for _, name := range untested {
+		if name == "GetUser" {
+			foundGetUser = true
+		}
+	}
+	if foundGetUser {
+		t.Error("GetUser should be tested (matched by test_get_user)")
+	}
+
+	// SaveUser should be untested (no contiguous [save user] sequence)
+	foundSaveUser := false
+	for _, name := range untested {
+		if name == "SaveUser" {
+			foundSaveUser = true
+		}
+	}
+	if !foundSaveUser {
+		t.Error("SaveUser should be untested")
+	}
+}

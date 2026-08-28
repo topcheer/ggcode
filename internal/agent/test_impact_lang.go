@@ -381,6 +381,28 @@ var dartLangProfile = langProfile{
 	SkipFuncNames: dartSkipFunc,
 }
 
+// controlFlowKeywords is a set of control-flow and reserved keywords that
+// should never be treated as function names by regex-based extraction.
+// This is used to filter false positives from TS and Dart function regexes.
+var controlFlowKeywords = map[string]bool{
+	"if": true, "for": true, "while": true, "switch": true,
+	"catch": true, "else": true, "do": true, "try": true,
+	"return": true, "new": true, "delete": true, "await": true,
+	"yield": true, "match": true, "loop": true, "when": true,
+	"case": true, "break": true, "continue": true, "throw": true,
+	"finally": true, "async": true, "class": true, "interface": true,
+	"type": true, "enum": true, "import": true, "export": true,
+	"from": true, "const": true, "let": true, "var": true,
+	"function": true, "void": true, "bool": true, "int": true,
+	"double": true, "String": true, "dynamic": true, "Object": true,
+}
+
+// isControlFlowKeyword returns true if the name is a control-flow keyword or
+// reserved word that should not be treated as a function name.
+func isControlFlowKeyword(name string) bool {
+	return controlFlowKeywords[name]
+}
+
 // allLangProfiles returns all supported language profiles in priority order
 // (most popular first for detection).
 func allLangProfiles() []langProfile {
@@ -599,6 +621,12 @@ func parseExportedFuncsMulti(filePath string) []exportedFuncInfo {
 		if profile.SkipFuncNames != nil && profile.SkipFuncNames.MatchString(name) {
 			continue
 		}
+		// For TypeScript and Dart, filter out control-flow keywords
+		// that are accidentally captured by the function regex.
+		// See issue #1204.
+		if (profile.Name == "typescript" || profile.Name == "dart") && isControlFlowKeyword(name) {
+			continue
+		}
 		funcs = append(funcs, exportedFuncInfo{
 			DisplayName: name,
 			IsMethod:    false,
@@ -747,21 +775,31 @@ func untestedExportedFuncsMulti(workingDir, srcFile string) []string {
 	}
 
 	// For non-Go languages, matching test names to function names is
-	// heuristic. We check if the function name appears in any test name
-	// (case-insensitive substring match), since naming conventions vary.
-	testNameLowers := make(map[string]bool, len(testFuncs))
+	// heuristic. We use token-boundary matching: a function is considered
+	// tested if its camelCase/snake_case name (normalized into lowercase
+	// tokens) appears as a CONTIGUOUS token subsequence of a normalized
+	// test name. This avoids false positives like function "Get" being
+	// matched by test "test_user_settings" (single "get" token absent),
+	// while "test_get_user" still covers "GetUser". See issue #1204.
+	testSeqs := make([]string, 0, len(testFuncs))
 	for name := range testFuncs {
-		testNameLowers[strings.ToLower(name)] = true
+		tokens := tokenizeHintName(name)
+		if len(tokens) > 0 {
+			testSeqs = append(testSeqs, " "+strings.Join(tokens, " ")+" ")
+		}
 	}
 
 	var untested []string
 	for _, f := range funcs {
-		funcLower := strings.ToLower(f.DisplayName)
+		funcTokens := tokenizeHintName(f.DisplayName)
 		matched := false
-		for testName := range testNameLowers {
-			if strings.Contains(testName, funcLower) {
-				matched = true
-				break
+		if len(funcTokens) > 0 {
+			want := " " + strings.Join(funcTokens, " ") + " "
+			for _, seq := range testSeqs {
+				if strings.Contains(seq, want) {
+					matched = true
+					break
+				}
 			}
 		}
 		if !matched {
@@ -769,6 +807,43 @@ func untestedExportedFuncsMulti(workingDir, srcFile string) []string {
 		}
 	}
 	return untested
+}
+
+// camelToSnakeLower converts camelCase/PascalCase to lowercase snake_case
+// ("GetUser" -> "get_user"). Boundaries are inserted before an uppercase
+// letter that follows a lowercase letter or digit.
+func camelToSnakeLower(s string) string {
+	var b strings.Builder
+	runes := []rune(s)
+	for i, r := range runes {
+		if r >= 'A' && r <= 'Z' {
+			if i > 0 && !(runes[i-1] >= 'A' && runes[i-1] <= 'Z') {
+				b.WriteByte('_')
+			}
+			b.WriteRune(r + ('a' - 'A'))
+		} else {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// tokenizeHintName normalizes a function or test name into lowercase tokens:
+// camelCase unfolded to snake_case, all separators (_ - space . :) treated as
+// token boundaries (#1204).
+func tokenizeHintName(name string) []string {
+	normalized := strings.ToLower(camelToSnakeLower(name))
+	normalized = strings.ReplaceAll(normalized, "-", "_")
+	normalized = strings.ReplaceAll(normalized, " ", "_")
+	normalized = strings.ReplaceAll(normalized, ".", "_")
+	normalized = strings.ReplaceAll(normalized, ":", "_")
+	var tokens []string
+	for _, tok := range strings.Split(normalized, "_") {
+		if tok != "" {
+			tokens = append(tokens, tok)
+		}
+	}
+	return tokens
 }
 
 // funcLevelCoverageGapsMulti analyzes changed files (any language) and returns
