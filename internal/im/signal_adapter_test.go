@@ -270,7 +270,8 @@ func TestNewSignalAdapter_TriggerTyping(t *testing.T) {
 		},
 	}
 	a, _ := newSignalAdapter("test", config.IMConfig{}, adapterCfg, nil)
-	// TriggerTyping should work (won't error without connection, just fails silently)
+	// TriggerTyping must not error without a relay connection: delivery is
+	// advisory, failures only surface in debug logs (#1239).
 	_ = a.TriggerTyping(nil, ChannelBinding{ChannelID: "+0987654321"})
 }
 

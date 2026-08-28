@@ -1118,3 +1118,18 @@ func TestManager_UpdateBindingContextToken(t *testing.T) {
 		t.Errorf("after update: got %q, want %q", got, "token-456")
 	}
 }
+
+// TestClaimUnclaimedBindingsNilStoreNoPanic pins #1235's refactor: the
+// nil-store / no-session early returns must hold with the lock-snapshot
+// prologue (previously the reads happened before the lock; the snapshot
+// must not introduce a panic path for uninitialized managers).
+func TestClaimUnclaimedBindingsNilStoreNoPanic(t *testing.T) {
+	m := NewManager()
+	// No session, no store: must return cleanly.
+	m.claimUnclaimedBindings("sess-1")
+
+	// Store set but no session bound: workspace snapshot is empty, must
+	// still return cleanly without claiming.
+	m.bindingStore = NewMemoryBindingStore()
+	m.claimUnclaimedBindings("sess-1")
+}
