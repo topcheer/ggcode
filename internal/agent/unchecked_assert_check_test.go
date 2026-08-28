@@ -245,6 +245,23 @@ func TestCheckUncheckedTypeAssert_NewDifferentAssertion(t *testing.T) {
 	}
 }
 
+// TestCheckUncheckedTypeAssert_NewSameTextAssertion pins the multiset delta:
+// adding a SECOND unchecked assertion with identical expression text (e.g.
+// copy-pasted into another handler) must be reported. Set-membership delta
+// filtered it as "pre-existing" because the fingerprint matched.
+func TestCheckUncheckedTypeAssert_NewSameTextAssertion(t *testing.T) {
+	oldSrc := "package main\nfunc handleA(x interface{}) { e := x.(*MyError); _ = e }\n"
+	newSrc := "package main\nfunc handleA(x interface{}) { e := x.(*MyError); _ = e }\n" +
+		"func handleB(x interface{}) { e := x.(*MyError); _ = e }\n"
+	w := checkUncheckedTypeAssert("t.go", oldSrc, newSrc)
+	if len(w) == 0 {
+		t.Fatal("new same-text assertion must be flagged (multiset delta, not set membership)")
+	}
+	if !strings.Contains(w[0], "1 unchecked type assertion") {
+		t.Errorf("expected exactly 1 newly introduced assertion, got: %s", w[0])
+	}
+}
+
 // TestCheckUncheckedTypeAssert_ComplexExprFingerprints pins fix #176:
 // getA().(int) and getB().(int) must produce distinct fingerprints so a
 // swap-in of a different complex-X assertion is still detected.

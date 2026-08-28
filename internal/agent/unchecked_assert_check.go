@@ -60,24 +60,30 @@ func checkUncheckedTypeAssert(filePath, oldContent, newContent string) []string 
 	oldAsserts := findUncheckedAsserts(filePath, oldContent)
 	newAsserts := findUncheckedAsserts(filePath, newContent)
 
-	// Delta: use content fingerprints, not count comparison.
-	// An agent can fix one assert and introduce another — count stays the same
-	// but the new assert is still a problem. Compare actual content.
-	oldSet := make(map[string]bool)
+	// Delta: per-expression multiset (count) comparison — neither plain set
+	// membership nor a raw total count. Set membership swallows a NEW
+	// same-text assertion (two handlers each asserting x.(*MyError) in one
+	// file: the second is filtered as "pre-existing"). A raw total count
+	// misses fix-one-add-another swaps. Per-expression count difference
+	// catches both, and a pure line shift keeps every count unchanged, so the
+	// #157 no-reflag guarantee is preserved.
+	oldCounts := make(map[string]int)
 	for _, a := range oldAsserts {
-		oldSet[assertFingerprint(a)] = true
+		oldCounts[assertFingerprint(a)]++
 	}
-	var newOnly []uncheckedAssertInfo
+	newCounts := make(map[string]int)
 	for _, a := range newAsserts {
-		if !oldSet[assertFingerprint(a)] {
-			newOnly = append(newOnly, a)
+		newCounts[assertFingerprint(a)]++
+	}
+	introduced := 0
+	for fp, n := range newCounts {
+		if d := n - oldCounts[fp]; d > 0 {
+			introduced += d
 		}
 	}
-	if len(newOnly) == 0 {
+	if introduced == 0 {
 		return nil
 	}
-
-	introduced := len(newOnly)
 	noun := "unchecked type assertion"
 	if introduced > 1 {
 		noun = "unchecked type assertions"
