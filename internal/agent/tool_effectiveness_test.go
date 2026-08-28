@@ -211,6 +211,45 @@ func TestIsPoorResult(t *testing.T) {
 	}
 }
 
+// TestIssue1211_EditRejectionPhrasesScopedToEditTools verifies the
+// edit-rejection phrases ("old_text not found", "no changes applied", ...)
+// only classify results as poor for the edit tools that emit them. Reading
+// file/command CONTENT that contains the phrases (e.g. this repository's own
+// source) is payload, not a rejection (#1211).
+func TestIssue1211_EditRejectionPhrasesScopedToEditTools(t *testing.T) {
+	// Content containing the phrases - payload for non-edit tools.
+	benign := []string{
+		`strings.Contains(lower, "old_text not found") ||`,
+		`// CHANGELOG: fixed "no changes applied" bug (#999)`,
+		`docs: no modifications were needed for this release`,
+		`error output says: file already exists; use edit (historical log)`,
+	}
+	for _, content := range benign {
+		// Non-search, non-edit tools: the phrases are pure payload (#1211
+		// scope). Search tools (grep/git_diff) have their own short-result
+		// empty heuristics and are intentionally not asserted here.
+		for _, tool := range []string{"read_file", "run_command", "multi_file_read"} {
+			if isPoorResult(tool, content) {
+				t.Errorf("isPoorResult(%q, %q) = true, want false (payload mention)", tool, content)
+			}
+		}
+	}
+
+	// Actual edit-tool rejections - still poor.
+	for _, content := range []string{
+		"old_text not found in /path/file.go",
+		"no changes applied: old_text matches existing content",
+		"no modifications were made",
+		"file already exists; use edit_file instead",
+	} {
+		for _, tool := range []string{"edit_file", "multi_edit_file", "write_file"} {
+			if !isPoorResult(tool, content) {
+				t.Errorf("isPoorResult(%q, %q) = false, want true (edit rejection)", tool, content)
+			}
+		}
+	}
+}
+
 func TestToolEffTracker_TruncationAdvisory(t *testing.T) {
 	tr := newToolEffTracker()
 

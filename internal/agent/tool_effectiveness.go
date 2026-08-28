@@ -112,6 +112,17 @@ func (t *toolEffTracker) reset() {
 	t.firedCount = make(map[string]int)
 }
 
+// editResultTools are the tools whose failure phrasing ("old_text not
+// found", "no changes applied", ...) is a genuine rejection result. The
+// edit-rejection branch of isPoorResult is scoped to these (#1211): the
+// phrases are substrings that routinely appear in file/command content read
+// by other tools, where they are payload, not status.
+var editResultTools = map[string]bool{
+	"edit_file":       true,
+	"multi_edit_file": true,
+	"write_file":      true,
+}
+
 // isPoorResult checks if a non-error result is still effectively a failure
 // (e.g., empty search results, truncated output with advisory).
 func isPoorResult(toolName, content string) bool {
@@ -150,15 +161,20 @@ func isPoorResult(toolName, content string) bool {
 		strings.HasPrefix(lower, "max results reached") {
 		return true
 	}
-	// Edit/write rejections. Anchored to tool-result phrasing: git_status
+	// Edit/write rejections. Scoped to the edit tools that actually emit
+	// these rejection messages (#1211): applying them to arbitrary tools
+	// made read_file on content that CONTAINS the phrases (e.g. this
+	// repository's own source, changelogs) count as failures. git_status
 	// legitimately reports "No changes." on a clean tree and knowledge_graph
-	// idempotently reports "already exists" — both are successes, not poor
+	// idempotently reports "already exists" - both are successes, not poor
 	// results. Only match the edit-tool rejection forms (#358).
-	if strings.Contains(lower, "old_text not found") ||
-		strings.Contains(lower, "no changes applied") ||
-		strings.Contains(lower, "no modifications were") ||
-		strings.Contains(lower, "file already exists; use edit") {
-		return true
+	if editResultTools[toolName] {
+		if strings.Contains(lower, "old_text not found") ||
+			strings.Contains(lower, "no changes applied") ||
+			strings.Contains(lower, "no modifications were") ||
+			strings.Contains(lower, "file already exists; use edit") {
+			return true
+		}
 	}
 	return false
 }
