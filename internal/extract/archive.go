@@ -108,6 +108,13 @@ func (e *archiveExtractor) Extract(data []byte) (TextResult, error) {
 					buf.WriteString(line)
 					buf.WriteByte('\n')
 				}
+			} else {
+				// #1205: defensive — if nested extraction returned empty (e.g.,
+				// unsupported format, depth exceeded), emit a visible marker rather
+				// than a bare empty section. The header "--- name (size) ---" was
+				// already written, so without this the entry looks like an empty
+				// archive, which is indistinguishable from a true empty archive.
+				fmt.Fprintf(&buf, "[Nested archive content not available]\n")
 			}
 			continue
 		}
@@ -191,6 +198,14 @@ const (
 // document format that cannot be parsed from a truncated prefix.
 func zipNeedsFullData(name string) bool {
 	ext := extOf(name)
+	// #1205: .tar.xz, .rar, .7z are treated as archive extensions by
+	// isArchiveExt, but they have no extraction implementation for nested
+	// archives. extractArchiveContentDepth returns a marker based on the
+	// extension alone, so we don't need to buffer their full content.
+	// Demote them to preview budget to avoid wasting 1MB per entry.
+	if ext == ".tar.xz" || ext == ".rar" || ext == ".7z" {
+		return false
+	}
 	if isArchiveExt(ext) {
 		return true
 	}
@@ -399,13 +414,21 @@ func extractArchiveContentDepth(data []byte, ext string, depth int) string {
 		subFmt = "tar.gz"
 	case ".tar.bz2":
 		subFmt = "tar.bz2"
+	// #1205: unsupported nested formats (.tar.xz, .rar, .7z) must produce
+	// a visible marker instead of returning empty (which would leave a bare
+	// header with no content, indistinguishable from an empty archive).
+	case ".tar.xz", ".rar", ".7z":
+		return fmt.Sprintf("[Unsupported nested archive format: %s]", ext)
 	default:
 		return ""
 	}
 	e := &archiveExtractor{subFormat: subFmt, depth: depth}
 	result, err := e.Extract(data)
 	if err != nil {
-		return ""
+		// #1205: extraction errors on supported nested formats must surface
+		// a visible marker, not return empty. Without this, corrupt nested
+		// ZIPs silently vanish from the archive inventory.
+		return fmt.Sprintf("[Extraction failed: %v]", err)
 	}
 	return result.Text
 }
