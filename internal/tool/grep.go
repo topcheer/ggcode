@@ -14,7 +14,9 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/safego"
 )
 
@@ -233,53 +235,86 @@ func (t Grep) Execute(ctx context.Context, input json.RawMessage) (Result, error
 // ── rg (ripgrep) path ────────────────────────────────────────────
 
 var (
-	rgPath   string
-	rgOnce   sync.Once
-	rgTrying atomic.Bool // prevent concurrent install attempts
+	rgPath      atomic.Value // stores *string (nil means not found)
+	rgLastCheck atomic.Int64 // Unix timestamp of last detection attempt
+	rgTrying    atomic.Bool  // prevent concurrent install attempts
 )
 
+// rgRecheckWindow is how long to wait before re-probing after a failed detection.
+// Made variable for testing; default 5 minutes in production.
+var rgRecheckWindow = 5 * time.Minute
+
+// rgAvailable checks if ripgrep is available. Uses atomic.Value for thread-safe
+// path storage and timestamp-gated re-probing to allow retrying after failed
+// initial detection (e.g., if user installs rg manually).
 func rgAvailable() bool {
-	rgOnce.Do(func() {
-		p, err := exec.LookPath("rg")
-		if err == nil {
-			rgPath = p
-			return
-		}
-		// Try silent async install (fire and forget)
-		if rgTrying.CompareAndSwap(false, true) {
-			safego.Go("tool.grep.installRG", installRG)
-		}
-	})
-	return rgPath != ""
+	// Fast path: if we have a cached path, return it
+	if ptr := rgPath.Load(); ptr != nil {
+		return true
+	}
+
+	// Check if we should retry detection (only if last check failed)
+	now := time.Now().Unix()
+	last := rgLastCheck.Load()
+	if last > 0 && now-last < int64(rgRecheckWindow.Seconds()) {
+		// Too soon to retry
+		return false
+	}
+
+	// Attempt detection
+	rgLastCheck.Store(now)
+	p, err := exec.LookPath("rg")
+	if err == nil {
+		rgPath.Store(&p)
+		return true
+	}
+
+	// Try silent async install (fire and forget)
+	if rgTrying.CompareAndSwap(false, true) {
+		safego.Go("tool.grep.installRG", installRG)
+	}
+	return false
 }
 
-// installRG attempts to install ripgrep silently. On success, sets rgPath
-// so subsequent calls to rgAvailable will find it.
+// installRG attempts to install ripgrep silently. On success, sets rgPath atomically.
+// Logs failures via debug.Log instead of discarding output.
 func installRG() {
 	defer rgTrying.Store(false)
 
 	var cmd *exec.Cmd
+	var mgr string
 	switch {
 	case hasCommand("brew"):
 		cmd = exec.Command("brew", "install", "ripgrep")
+		mgr = "brew"
 	case hasCommand("cargo"):
 		cmd = exec.Command("cargo", "install", "ripgrep")
+		mgr = "cargo"
 	case hasCommand("pip"):
 		cmd = exec.Command("pip", "install", "ripgrep")
+		mgr = "pip"
 	case hasCommand("pip3"):
 		cmd = exec.Command("pip3", "install", "ripgrep")
+		mgr = "pip3"
 	default:
 		return
 	}
-	cmd.Stdout = nil
-	cmd.Stderr = nil
-	_ = cmd.Run()
 
-	// Check if it worked
-	p, err := exec.LookPath("rg")
-	if err == nil {
-		rgPath = p
+	// Run install and capture any errors
+	if err := cmd.Run(); err != nil {
+		debug.Log("grep", "ripgrep install via %s failed: %v", mgr, err)
+		return
 	}
+
+	// Check if it worked (pip may install outside PATH)
+	p, err := exec.LookPath("rg")
+	if err != nil {
+		debug.Log("grep", "ripgrep install via %s succeeded but 'rg' not found in PATH (may need PATH update)", mgr)
+		return
+	}
+
+	rgPath.Store(&p)
+	debug.Log("grep", "ripgrep installed successfully via %s at %s", mgr, p)
 }
 
 func hasCommand(name string) bool {
@@ -329,7 +364,13 @@ func (t Grep) rgSearch(ctx context.Context, args grepArgs, re *regexp.Regexp) (R
 
 	rgArgs = append(rgArgs, "--", args.Pattern, args.Path)
 
-	cmd := exec.CommandContext(ctx, rgPath, rgArgs...)
+	ptr := rgPath.Load()
+	if ptr == nil {
+		// Should not happen: rgAvailable() returns true only when rgPath is set
+		return Result{IsError: true, Content: "ripgrep path not available"}, nil
+	}
+	path := ptr.(*string)
+	cmd := exec.CommandContext(ctx, *path, rgArgs...)
 	cmd.Env = append(os.Environ(), "GIT_PAGER=cat")
 	out, err := cmd.Output()
 	if err != nil {
