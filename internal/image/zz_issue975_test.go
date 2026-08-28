@@ -222,3 +222,64 @@ func TestCreateTempScreenshotPathSuccess(t *testing.T) {
 		t.Errorf("cleanup left temp dir %q behind", filepath.Dir(rawPath))
 	}
 }
+
+// TestParseWlrrandrOutputScaleToLogical pins #1258: wlr-randr Position is
+// logical while Modes "WxH px" is physical; the physical size must be divided
+// by the parsed Scale so grim -g receives a logical box. Two 3840x2160
+// scale=2 outputs: each screen is 1920x1080 logical, second at 1920,0.
+func TestParseWlrrandrOutputScaleToLogical(t *testing.T) {
+	out := "" +
+		"HEADLESS-1 (focused)\n" +
+		"  Position: 0,0\n" +
+		"  Transform: normal\n" +
+		"  Scale: 2.000000\n" +
+		"  Modes:\n" +
+		"    3840x2160 px, 60.000000 Hz (preferred, current)\n" +
+		"HEADLESS-2\n" +
+		"  Position: 1920,0\n" +
+		"  Transform: normal\n" +
+		"  Scale: 2.000000\n" +
+		"  Modes:\n" +
+		"    3840x2160 px, 60.000000 Hz (preferred, current)\n"
+	displays := parseWlrrandrOutput(out)
+	if len(displays) != 2 {
+		t.Fatalf("expected 2 displays, got %d", len(displays))
+	}
+	for i, d := range displays {
+		if d.Width != 1920 || d.Height != 1080 {
+			t.Fatalf("#1258: display %d logical size = %dx%d, want 1920x1080 (physical 3840x2160 / scale 2)", i+1, d.Width, d.Height)
+		}
+	}
+	if displays[1].X != 1920 || displays[1].Y != 0 {
+		t.Fatalf("logical position = %d,%d, want 1920,0", displays[1].X, displays[1].Y)
+	}
+}
+
+// TestParseWlrrandrOutputNoScaleUnchanged: scale=1 output keeps physical ==
+// logical sizes byte-for-byte (no accidental division).
+func TestParseWlrrandrOutputNoScaleUnchanged(t *testing.T) {
+	out := "" +
+		"HEADLESS-1\n" +
+		"  Position: 0,0\n" +
+		"  Modes:\n" +
+		"    1920x1080 px, 60.000000 Hz (preferred, current)\n"
+	displays := parseWlrrandrOutput(out)
+	if len(displays) != 1 || displays[0].Width != 1920 || displays[0].Height != 1080 {
+		t.Fatalf("scale-less output must stay 1920x1080, got %+v", displays)
+	}
+}
+
+// TestParseWlrrandrOutputFractionalScale: 2560x1600 at scale 1.25 → 2048x1280
+// logical (rounding to nearest).
+func TestParseWlrrandrOutputFractionalScale(t *testing.T) {
+	out := "" +
+		"HEADLESS-1\n" +
+		"  Position: 0,0\n" +
+		"  Scale: 1.250000\n" +
+		"  Modes:\n" +
+		"    2560x1600 px, 60.000000 Hz (preferred, current)\n"
+	displays := parseWlrrandrOutput(out)
+	if len(displays) != 1 || displays[0].Width != 2048 || displays[0].Height != 1280 {
+		t.Fatalf("fractional scale: want 2048x1280, got %+v", displays)
+	}
+}

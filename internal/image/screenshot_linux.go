@@ -43,7 +43,11 @@ func CaptureScreen(opts ScreenshotOptions) (ScreenshotResult, error) {
 	case "gnome-screenshot":
 		cmd = buildGnomeScreenshotCommand(rawPath, opts)
 	case "scrot":
-		cmd = buildScrotCommand(rawPath, opts)
+		scrotCmd, err := buildScrotCommand(rawPath, opts)
+		if err != nil {
+			return ScreenshotResult{}, err
+		}
+		cmd = scrotCmd
 	case "import":
 		cmd = buildImportCommand(rawPath, opts)
 	default:
@@ -223,7 +227,7 @@ func buildGnomeScreenshotCommand(outPath string, opts ScreenshotOptions) *exec.C
 	_ = opts
 	return exec.Command("gnome-screenshot", "-f", outPath)
 }
-func buildScrotCommand(outPath string, opts ScreenshotOptions) *exec.Cmd {
+func buildScrotCommand(outPath string, opts ScreenshotOptions) (*exec.Cmd, error) {
 	args := []string{"-z"}
 	if opts.Region != nil {
 		r := opts.Region
@@ -233,16 +237,21 @@ func buildScrotCommand(outPath string, opts ScreenshotOptions) *exec.Cmd {
 		args = append(args, "-a", fmt.Sprintf("%d,%d,%d,%d", r.X, r.Y, r.Width, r.Height))
 	}
 	if opts.Window != "" {
-		// #555: prefer the resolved window ID (exact title match first via
-		// wmctrl) over "-u" (focused window), which may not be the requested one.
-		if wid, err := matchLinuxWindowID(opts.Window); err == nil {
-			args = append(args, "-i", fmt.Sprintf("0x%x", wid))
-		} else {
-			args = append(args, "-u") // focused window fallback
+		// #555: resolve the title to a concrete window ID via wmctrl.
+		// #1259: a resolution failure used to silently append "-u" (the
+		// CURRENTLY FOCUSED window) — the agent asked for "Firefox", got a
+		// screenshot of the terminal, and reasoned from the wrong image with
+		// a success status. Fail explicitly like the grim path instead; there
+		// is no "focused window" request semantic that could justify -u.
+		wid, err := matchLinuxWindowID(opts.Window)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"window capture with scrot: %w (scrot window capture requires wmctrl; alternatives: grim with hyprctl, or imagemagick import)", err)
 		}
+		args = append(args, "-i", fmt.Sprintf("0x%x", wid))
 	}
 	args = append(args, outPath)
-	return exec.Command("scrot", args...)
+	return exec.Command("scrot", args...), nil
 }
 
 func buildImportCommand(outPath string, opts ScreenshotOptions) *exec.Cmd {

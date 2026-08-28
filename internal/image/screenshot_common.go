@@ -6,6 +6,7 @@ import (
 	"image"
 	_ "image/jpeg"
 	_ "image/png"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -272,14 +273,30 @@ func parseWlrrandrOutput(out string) []DisplayInfo {
 	idx := 0
 	var current DisplayInfo
 	var mode wlrModePick
+	scale := 1.0
 	flush := func() {
 		if current.Name == "" {
 			return
 		}
 		idx++
 		current.Index = idx
-		current.Width = mode.width
-		current.Height = mode.height
+		// #1258: wlr-randr's "Position" is the global-layout LOGICAL
+		// coordinate, but the Modes "WxH px" is PHYSICAL pixels — the scale
+		// factor only shows up as the ratio between them (wlr-randr does not
+		// convert). The physical W/H used to go straight into DisplayInfo
+		// next to the logical X/Y, and that mixed box was handed to `grim -g`,
+		// which expects logical coordinates: with two 3840x2160 scale=2
+		// outputs the second screen produced "1920,0,3840x2160" — double the
+		// logical extent, capturing the wrong area with no error. Convert
+		// physical mode size to logical by dividing by the parsed Scale.
+		if scale > 0 && scale != 1 {
+			current.Width = int(math.Round(float64(mode.width) / scale))
+			current.Height = int(math.Round(float64(mode.height) / scale))
+		} else {
+			current.Width = mode.width
+			current.Height = mode.height
+		}
+		scale = 1.0
 		displays = append(displays, current)
 	}
 	for _, rawLine := range strings.Split(out, "\n") {
@@ -306,6 +323,14 @@ func parseWlrrandrOutput(out string) []DisplayInfo {
 						current.Y, _ = strconv.Atoi(parts[1])
 					}
 				}
+			}
+			continue
+		}
+		// #1258: "  Scale: 2.000000" — physical-to-logical divisor for this
+		// output; applied to the picked mode in flush().
+		if strings.HasPrefix(line, "Scale:") {
+			if v, err := strconv.ParseFloat(strings.TrimSpace(strings.TrimPrefix(line, "Scale:")), 64); err == nil && v > 0 {
+				scale = v
 			}
 			continue
 		}

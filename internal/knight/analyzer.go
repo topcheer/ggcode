@@ -43,33 +43,28 @@ func NewSessionAnalyzer(k *Knight) *SessionAnalyzer {
 func isTempDir(path string) bool {
 	base := strings.ToLower(filepath.Base(path))
 
-	// Cross-platform temp directory detection
-	// Normalize path separators for consistent checking
+	// #1260: this used to substring-match "/tmp/", "/temp/" and
+	// Contains(base, "tmp") — real project paths with tmp/temp segments
+	// (e.g. /home/user/tmp/work, tmp_project) were misjudged as test
+	// environments, silently DISABLING the workspace filter: every other
+	// project's session became eligible, cross-project conversations were
+	// extracted as skill candidates, and nothing logged why. Only the exact
+	// os.TempDir prefix (respects $TMPDIR / %TEMP%, covers /tmp and
+	// /var/folders) plus the deliberate knight-/test- name markers remain.
 	normalized := filepath.ToSlash(path)
-
-	// Unix/macOS temp paths
-	if strings.Contains(normalized, "/tmp/") || strings.HasPrefix(normalized, "/tmp/") ||
-		strings.Contains(normalized, "/var/folders/") {
-		return true
-	}
-
-	// Windows temp paths
-	if strings.Contains(normalized, "/temp/") || strings.Contains(normalized, "/tmp/") {
-		return true
-	}
-
-	// Check against os.TempDir() (respects $TMPDIR, %TEMP%, etc.)
 	if tempDir := os.TempDir(); tempDir != "" {
-		// Compare normalized paths
-		normalizedTemp := filepath.ToSlash(tempDir)
-		if strings.HasPrefix(normalized, normalizedTemp+"/") || normalized == normalizedTemp {
+		// #1260 review: darwin's os.TempDir() (TMPDIR) ends with "/", which
+		// made the naive normalizedTemp+"/" prefix a double slash and never
+		// matched — the deleted /var/folders/ substring branch had been
+		// silently compensating. Normalize the trailing slash away.
+		normalizedTemp := strings.TrimSuffix(filepath.ToSlash(tempDir), "/")
+		if normalizedTemp != "" && (strings.HasPrefix(normalized, normalizedTemp+"/") || normalized == normalizedTemp) {
 			return true
 		}
 	}
 
-	// Name-based heuristics
-	return strings.HasPrefix(base, "knight-") || strings.HasPrefix(base, "test-") ||
-		strings.Contains(base, "tmp")
+	// Name-based heuristics (exact prefixes only — no substring matches)
+	return strings.HasPrefix(base, "knight-") || strings.HasPrefix(base, "test-")
 }
 
 // AnalysisResult holds the outcome of a session analysis.
