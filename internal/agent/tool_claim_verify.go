@@ -126,6 +126,52 @@ var claimVerifyPatterns = []claimVerifyPattern{
 	{"no results", "Search returned no results. Do not claim something was found."},
 }
 
+// claimVerifyContentCmds lists shell commands whose stdout is file/data
+// payload rather than execution status. When the command the agent ran is
+// composed solely of these, its output is content by construction, so status
+// patterns inside it are data mentions, not failure signals (issue #1207,
+// extending the #739 semantic boundary to the command-tool path).
+var claimVerifyContentCmds = map[string]bool{
+	"grep": true, "egrep": true, "fgrep": true, "rg": true, "ag": true,
+	"cat": true, "head": true, "tail": true, "less": true, "more": true,
+	"bat": true, "type": true, "findstr": true, "awk": true, "sed": true,
+	"cut": true, "sort": true, "uniq": true, "wc": true, "nl": true,
+	"strings": true, "jq": true, "column": true, "fmt": true,
+}
+
+// isContentRetrievalCommand reports whether every stage of the command
+// pipeline is a content-retrieval command. Compound commands with && || ;
+// and pipes are split; if ANY segment runs a non-content command (go test,
+// make, ...), the whole command is treated as status-bearing so genuine
+// failure signals are still caught (conservative in the true-positive
+// direction).
+func isContentRetrievalCommand(cmd string) bool {
+	if strings.TrimSpace(cmd) == "" {
+		return false
+	}
+	// Split on pipeline and sequence operators.
+	r := strings.NewReplacer("|", "\n", "&&", "\n", "||", "\n", ";", "\n")
+	for _, seg := range strings.Split(r.Replace(cmd), "\n") {
+		fields := strings.Fields(seg)
+		if len(fields) == 0 {
+			continue
+		}
+		name := fields[0]
+		// Strip env-var assignments (FOO=bar cmd) and path prefixes.
+		for strings.Contains(name, "=") && len(fields) > 1 {
+			fields = fields[1:]
+			name = fields[0]
+		}
+		if i := strings.LastIndex(name, "/"); i >= 0 {
+			name = name[i+1:]
+		}
+		if !claimVerifyContentCmds[name] {
+			return false
+		}
+	}
+	return true
+}
+
 // checkClaimVerify scans a tool result for commonly misinterpreted failure
 // signals and returns guidance if a risk is detected. Returns "" if no issue
 // or if the injection cap has been reached.
@@ -134,7 +180,13 @@ var claimVerifyPatterns = []claimVerifyPattern{
 // command-execution tools, where Content is the command's own output. For
 // content-bearing tools, Content is arbitrary user/file data, so only the
 // tool's own zero-result meta-status line is checked.
-func (c *claimVerifyState) check(toolName, content string, isError bool) string {
+//
+// Command-tool boundary (issue #1207): for content-retrieval commands
+// (grep/cat/rg/head/...), stdout IS file content — e.g. `grep -n 'fail:'
+// foo_test.go` on a successful match prints source lines containing "fail:"
+// and must not trigger a semantically inverted "Do not claim this command
+// succeeded" advisory. Such commands skip the status-pattern scan entirely.
+func (c *claimVerifyState) check(toolName, content string, isError bool, cmd string) string {
 	if c.injections >= claimVerifyMaxInjections {
 		return ""
 	}
@@ -163,6 +215,13 @@ func (c *claimVerifyState) check(toolName, content string, isError bool) string 
 			debug.Log("claim_verify", "zero-result meta-status detected: tool=%s", toolName)
 			return "[Verify] Search returned no matches. Do not claim results were found. Re-read the tool output carefully before proceeding."
 		}
+		return ""
+	}
+
+	// Command-execution tools: content-retrieval pipelines (grep/cat/...) print
+	// file data as stdout, so status patterns in the output are payload
+	// mentions, not failure signals (#1207).
+	if isContentRetrievalCommand(cmd) {
 		return ""
 	}
 

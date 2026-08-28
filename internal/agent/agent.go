@@ -3590,7 +3590,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Catches "exit code 1" in output, panics, "no results", etc. that
 			// IsError does not capture, preventing the agent from claiming
 			// success when the tool output contradicts that interpretation.
-			if claimGuidance := a.claimVerify.check(tc.Name, result.Content, result.IsError); claimGuidance != "" {
+			if claimGuidance := a.claimVerify.check(tc.Name, result.Content, result.IsError, extractCommandFromToolCall(tc.Arguments)); claimGuidance != "" {
 				a.appendGuidance(&result, claimGuidance)
 			}
 			// Failure mode classification: meta-level strategy guidance.
