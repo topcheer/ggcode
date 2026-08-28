@@ -61,8 +61,12 @@ type slackAdapter struct {
 	appToken   string
 	botUserID  string
 	teamID     string
-	apiBase    string // override for tests
-	stt        imstt.Transcriber
+	// botID is this app's own bot id, captured from auth.test. Bot-posted
+	// message events carry bot_id instead of user, so the user-based
+	// self-filter never matched them (#1236).
+	botID   string
+	apiBase string // override for tests
+	stt     imstt.Transcriber
 
 	mu          sync.RWMutex
 	connected   bool
@@ -334,6 +338,7 @@ func (a *slackAdapter) authTest(ctx context.Context) error {
 	}
 	a.mu.Lock()
 	a.botUserID, _ = result["user_id"].(string)
+	a.botID, _ = result["bot_id"].(string)
 	a.mu.Unlock()
 	debug.Log("slack", "adapter=%s auth OK botUserID=%s", a.name, a.botUserID)
 	return nil
@@ -379,12 +384,20 @@ func (a *slackAdapter) appsConnectionsOpen(ctx context.Context) (string, error) 
 }
 
 func (a *slackAdapter) handleMessage(ctx context.Context, event map[string]any) {
-	// Skip bot's own messages
+	// Skip bot's own messages. #1236: bot-posted events (chat.postMessage,
+	// files.upload) carry bot_id and NO user field, so the userID comparison
+	// below never matched them; file_share events (whitelisted) fed the agent
+	// its own images as fresh user input.
 	userID, _ := event["user"].(string)
+	eventBotID, _ := event["bot_id"].(string)
 	a.mu.RLock()
 	botID := a.botUserID
+	ownBotID := a.botID
 	a.mu.RUnlock()
 	if userID == botID {
+		return
+	}
+	if ownBotID != "" && eventBotID == ownBotID {
 		return
 	}
 
@@ -1253,7 +1266,14 @@ func (a *slackAdapter) SendInteractive(ctx context.Context, binding ChannelBindi
 	}
 
 	blocks := []map[string]any{textBlock, actionsBlock}
-	url := slackAPIBase + "/chat.postMessage"
+	// Respect the apiBase test override like every other call site (#968) —
+	// SendInteractive was the one path still pinned to the production URL,
+	// which is also why its missing ratelimited retry went unnoticed (#1237).
+	baseURL := slackAPIBase
+	if a.apiBase != "" {
+		baseURL = a.apiBase
+	}
+	url := baseURL + "/chat.postMessage"
 	body := map[string]any{
 		"channel": channelID,
 		"blocks":  blocks,
@@ -1298,6 +1318,20 @@ func (a *slackAdapter) SendInteractive(ctx context.Context, binding ChannelBindi
 		resp.Body.Close()
 		if ok, _ := result["ok"].(bool); !ok {
 			errMsg, _ := result["error"].(string)
+			// #1237: Slack also signals rate limiting as ok=false with
+			// error "ratelimited" inside a 200 body (no Retry-After header
+			// in this form). sendChannelMessage already retries this shape;
+			// the interactive path is the twin that was missed, silently
+			// dropping approval questionnaires while ask_user waited
+			// forever for a callback that never came.
+			if errMsg == "ratelimited" && attempt < maxRateLimitRetries {
+				debug.Log("slack", "adapter=%s interactive ratelimited (200 body), retrying (attempt %d/%d)",
+					a.name, attempt+1, maxRateLimitRetries)
+				if err := sleepRetry(ctx, defaultRetryDelay); err != nil {
+					return "", err
+				}
+				continue
+			}
 			return "", fmt.Errorf("Slack chat.postMessage: %s", errMsg)
 		}
 		// Extract ts (message ID)

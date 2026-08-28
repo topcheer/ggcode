@@ -215,10 +215,24 @@ func (m *Manager) RegisterInstance(workspace string, sessionID string) (*Instanc
 // This implements the "first launch claims all" behavior: after one round of
 // launches, every adapter is assigned to a session.
 func (m *Manager) claimUnclaimedBindings(sessionID string) {
-	if sessionID == "" || m.bindingStore == nil || m.session == nil {
+	if sessionID == "" {
 		return
 	}
-	bindings, err := m.bindingStore.ListByWorkspace(m.session.Workspace)
+	// #1235: snapshot the session pointer and store under the lock. Reading
+	// them unlocked raced concurrent BindSession/SetBindingStore writers on
+	// desktop's parallel Wails events (a real data race even though the
+	// mainstream call sites are sequential).
+	m.mu.Lock()
+	store := m.bindingStore
+	var workspace string
+	if m.session != nil {
+		workspace = m.session.Workspace
+	}
+	m.mu.Unlock()
+	if store == nil || workspace == "" {
+		return
+	}
+	bindings, err := store.ListByWorkspace(workspace)
 	if err != nil {
 		debug.Log("im", "claimUnclaimedBindings: ListByWorkspace error: %v", err)
 		return

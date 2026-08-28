@@ -315,6 +315,17 @@ func (m *Manager) DisableBinding(adapterName string) error {
 		m.mu.Unlock()
 		return ErrNoChannelBound
 	}
+	// #1233: same ownership guard as EnableBinding — clearing LastSessionID
+	// below must not silently wipe another LIVE instance's persisted claim
+	// (the disable-all backdoor in single-path form). Dead owners are still
+	// recoverable via takeover.
+	switch m.bindingOwnershipLocked(binding) {
+	case ownershipForeignLive:
+		m.mu.Unlock()
+		return fmt.Errorf("adapter %q is owned by another live session (last=%s); disable denied (disable it on the owning instance or rebind to take over)", adapterName, binding.LastSessionID)
+	case ownershipForeignDead:
+		debug.Log("im", "DisableBinding: dead-owner takeover of %s from dead session=%s", adapterName, binding.LastSessionID)
+	}
 	cp := *binding
 	m.disabledBindings[adapterName] = &cp
 	delete(m.currentBindings, adapterName)
@@ -668,12 +679,28 @@ func (m *Manager) UnmuteAll() (int, error) {
 	return count, nil
 }
 
-// DisableAll disables all active (non-muted, non-disabled) bindings.
+// DisableAll disables all ACTIVE (non-muted) bindings owned by this
+// session. #1233: muted bindings — where #689/#693 park foreign-owned
+// channels — are left untouched, and an unmuted binding that turns out to
+// be foreign-live is skipped (same guard as UnmuteAll), so disable-all can
+// no longer clear another live instance's claim and let a third instance
+// hijack the channel.
 func (m *Manager) DisableAll() (int, error) {
 	m.mu.Lock()
 	count := 0
 	var names []string
 	for name, binding := range m.currentBindings {
+		if binding.Muted {
+			// Not active; muted foreign-owned bindings stay parked here.
+			continue
+		}
+		switch m.bindingOwnershipLocked(binding) {
+		case ownershipForeignLive:
+			debug.Log("im", "DisableAll: skipping %s owned by live session=%s", name, binding.LastSessionID)
+			continue
+		case ownershipForeignDead:
+			debug.Log("im", "DisableAll: dead-owner takeover of %s from dead session=%s", name, binding.LastSessionID)
+		}
 		cp := *binding
 		m.disabledBindings[name] = &cp
 		delete(m.currentBindings, name)
@@ -702,6 +729,10 @@ func (m *Manager) DisableAll() (int, error) {
 		}
 	}
 	debug.Log("im", "DisableAll: disabled %d adapters: %v", count, names)
+	// #1234: every other binding mutation ends with this sync — without it
+	// the HasActiveChannels snapshot stays stale and other instances'
+	// im_send auto_start gating acts on outdated state.
+	m.syncInstanceActiveChannels()
 	return count, nil
 }
 
@@ -770,6 +801,9 @@ func (m *Manager) EnableAll() (int, error) {
 		}
 	}
 	_ = skipped
+	// #1234: keep the HasActiveChannels snapshot in sync like every other
+	// binding mutation (see DeleteBinding's #434 invariant note).
+	m.syncInstanceActiveChannels()
 	if len(restartErrs) > 0 {
 		return count, fmt.Errorf("enable-all restart failed: %w", errors.Join(restartErrs...))
 	}

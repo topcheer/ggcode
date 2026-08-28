@@ -494,14 +494,20 @@ func (a *signalAdapter) processEnvelope(ctx context.Context, raw map[string]any)
 	if a.manager != nil {
 		pairingResult, err := a.manager.HandlePairingInbound(msg)
 		debug.Log("signal", "adapter=%s pairing: consumed=%v bound=%v err=%v", a.name, pairingResult.Consumed, pairingResult.Bound, err)
+		// #1238: pairing errors do NOT flip Healthy. The SSE loop keeps
+		// delivering messages regardless, but nothing ever re-publishes
+		// connected state (sseLoop retries forever without re-entering
+		// connectAndServe), so a single pairing hiccup showed the channel as
+		// offline in every status surface until process restart. Align with
+		// nostr/whatsapp: log only.
 		if err != nil && err != ErrNoSessionBound {
-			a.publishState(false, "warning", err.Error())
+			debug.Log("signal", "adapter=%s pairing error (connection unaffected): %v", a.name, err)
 		}
 		if pairingResult.Consumed {
 			// Auto-add first paired group to allowlist
 			_ = a.sendText(ctx, chatID, pairingResult.ReplyText)
 			if err := a.manager.NotifyPreviousBindingReplaced(ctx, pairingResult); err != nil {
-				a.publishState(false, "warning", err.Error())
+				debug.Log("signal", "adapter=%s notify previous binding failed: %v", a.name, err)
 			}
 			return
 		}
@@ -872,13 +878,18 @@ func (a *signalAdapter) TriggerTyping(ctx context.Context, binding ChannelBindin
 	if chatID == "" {
 		return nil
 	}
-	payload := map[string]any{
-		"number": a.account,
-	}
+	// #1239: signal-cli-rest-api's TypingIndicatorRequest only has a
+	// Recipient field — the groupId body field never existed, so group typing
+	// silently 400'd (and the unchecked status code hid it). Group recipients
+	// use the same "group." + double-encoded form as sendText.
+	recipient := chatID
 	if strings.HasPrefix(chatID, "group:") {
-		payload["groupId"] = chatID[6:]
-	} else {
-		payload["recipient"] = chatID
+		rawGroupID := chatID[6:]
+		recipient = "group." + base64.StdEncoding.EncodeToString([]byte(rawGroupID))
+	}
+	payload := map[string]any{
+		"number":    a.account,
+		"recipient": recipient,
 	}
 	body, _ := json.Marshal(payload)
 	// Propagate ctx so the request cannot outlive the caller (#968).
@@ -894,7 +905,13 @@ func (a *signalAdapter) TriggerTyping(ctx context.Context, binding ChannelBindin
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	defer resp.Body.Close()
+	// #1239: surface non-2xx in debug logs (the previous silent nil return
+	// is exactly why the broken group payload survived — the 400 was
+	// invisible).
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		debug.Log("signal", "adapter=%s typing-indicator for %s: HTTP %d", a.name, chatID, resp.StatusCode)
+	}
 	return nil
 }
 
