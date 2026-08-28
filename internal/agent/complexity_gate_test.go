@@ -245,10 +245,11 @@ func TestIsComplexityHotspot(t *testing.T) {
 	}{
 		{"healthy", 5, 20, 2, false},
 		{"high complexity", 25, 30, 3, true},
-		{"too long", 5, 100, 2, true},
+		{"long but linear is normal", 5, 100, 2, false},
+		{"too long", 5, 130, 2, true},
 		{"too nested", 5, 20, 7, true},
-		{"at threshold", 15, 50, 3, true},
-		{"just under", 14, 79, 5, false},
+		{"at threshold", 20, 50, 3, true},
+		{"just under", 19, 119, 5, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
