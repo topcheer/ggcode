@@ -99,72 +99,76 @@ func Analyze(dir string, opts Options) (*Report, error) {
 		return nil, fmt.Errorf("cannot access path %q: %w", dir, err)
 	}
 
+	if !info.IsDir() {
+		return analyzeSingleFile(dir, opts)
+	}
+
 	var allFuncs []FuncMetrics
 	var fileSummaries []FileSummary
 	filesScanned := 0
 
-	if !info.IsDir() {
-		// Skip generated files — same policy as the directory walk below, so a
-		// caller explicitly analyzing a single generated file (.pb.go etc.) does
-		// not get advisories about generator output (#1202).
-		if isGenerated(dir) {
-			return buildReport(dir, nil, nil, 0, opts), nil
-		}
-		// Single file analysis
-		funcs, err := analyzeFile(dir)
-		if err != nil {
-			return nil, err
-		}
-		allFuncs = append(allFuncs, funcs...)
-		filesScanned = 1
-		if len(funcs) > 0 {
-			fileSummaries = append(fileSummaries, summarizeFile(dir, funcs))
-		}
-	} else {
-		excludeSet := make(map[string]bool)
-		for _, d := range opts.ExcludeDirs {
-			excludeSet[d] = true
-		}
+	excludeSet := make(map[string]bool)
+	for _, d := range opts.ExcludeDirs {
+		excludeSet[d] = true
+	}
 
-		err = filepath.Walk(dir, func(path string, fi os.FileInfo, err error) error {
-			if err != nil {
-				return nil // skip unreadable paths
-			}
-			if fi.IsDir() {
-				name := filepath.Base(path)
-				if excludeSet[name] {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			if !strings.HasSuffix(path, ".go") {
-				return nil
-			}
-			// Skip generated files
-			if isGenerated(path) {
-				return nil
-			}
-			if opts.MaxFiles > 0 && filesScanned >= opts.MaxFiles {
+	err = filepath.Walk(dir, func(path string, fi os.FileInfo, err error) error {
+		if err != nil {
+			return nil // skip unreadable paths
+		}
+		if fi.IsDir() {
+			name := filepath.Base(path)
+			if excludeSet[name] {
 				return filepath.SkipDir
 			}
-
-			funcs, err := analyzeFile(path)
-			if err != nil {
-				return nil // skip unparseable files
-			}
-			allFuncs = append(allFuncs, funcs...)
-			filesScanned++
-			if len(funcs) > 0 {
-				fileSummaries = append(fileSummaries, summarizeFile(path, funcs))
-			}
 			return nil
-		})
-		if err != nil {
-			return nil, err
 		}
+		if !strings.HasSuffix(path, ".go") {
+			return nil
+		}
+		// Skip generated files
+		if isGenerated(path) {
+			return nil
+		}
+		if opts.MaxFiles > 0 && filesScanned >= opts.MaxFiles {
+			return filepath.SkipDir
+		}
+
+		funcs, err := analyzeFile(path)
+		if err != nil {
+			return nil // skip unparseable files
+		}
+		allFuncs = append(allFuncs, funcs...)
+		filesScanned++
+		if len(funcs) > 0 {
+			fileSummaries = append(fileSummaries, summarizeFile(path, funcs))
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	return buildReport(dir, allFuncs, fileSummaries, filesScanned, opts), nil
+}
+
+// analyzeSingleFile handles the single-file path of Analyze. Generated files
+// are skipped - same policy as the directory walk - so a caller explicitly
+// analyzing a single generated file (.pb.go etc.) does not get advisories
+// about generator output (#1202).
+func analyzeSingleFile(path string, opts Options) (*Report, error) {
+	if isGenerated(path) {
+		return buildReport(path, nil, nil, 0, opts), nil
+	}
+	funcs, err := analyzeFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var fileSummaries []FileSummary
+	if len(funcs) > 0 {
+		fileSummaries = append(fileSummaries, summarizeFile(path, funcs))
+	}
+	return buildReport(path, funcs, fileSummaries, 1, opts), nil
 }
 
 // analyzeFile parses a single Go file and extracts function metrics.

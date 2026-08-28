@@ -129,8 +129,58 @@ func (a *Agent) checkComplexityGate(runStats *RunStats) string {
 	}
 
 	workingDir := a.WorkingDir()
+	allHotspots, newKeys := a.collectComplexityHotspots(goFiles, workingDir)
 
-	var allHotspots []codehealth.FuncMetrics
+	if len(allHotspots) == 0 {
+		debug.Log("complexity-gate", "passed: no new critical complexity in %d edited Go file(s)", len(goFiles))
+		return ""
+	}
+
+	if a.complexityGate.reported == nil {
+		a.complexityGate.reported = make(map[string]bool)
+	}
+	for _, key := range newKeys {
+		a.complexityGate.reported[key] = true
+	}
+	a.complexityGate.fires++
+
+	// Cap the number of warnings.
+	reported := allHotspots
+	if len(reported) > maxComplexityGateWarnings {
+		reported = reported[:maxComplexityGateWarnings]
+	}
+
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf(
+		"Code quality advisory: %d function(s) in your edited files have high complexity. "+
+			"Consider refactoring before finalizing:\n",
+		len(allHotspots),
+	))
+	for _, fn := range reported {
+		parts := []string{fmt.Sprintf("complexity=%d", fn.Complexity)}
+		if fn.Length > complexityGateMaxLength {
+			parts = append(parts, fmt.Sprintf("length=%d lines", fn.Length))
+		}
+		if fn.NestingDepth > complexityGateMaxNesting {
+			parts = append(parts, fmt.Sprintf("nesting=%d", fn.NestingDepth))
+		}
+		b.WriteString(fmt.Sprintf("- %s (%s): %s\n", fn.Function, filepath.Base(fn.File), strings.Join(parts, ", ")))
+	}
+	if len(allHotspots) > len(reported) {
+		b.WriteString(fmt.Sprintf("... and %d more\n", len(allHotspots)-len(reported)))
+	}
+	b.WriteString("\nThese are advisory - refactoring is recommended but not required for completion.")
+
+	debug.Log("complexity-gate", "fired: %d hotspot(s) in %d file(s)", len(allHotspots), len(goFiles))
+	return b.String()
+}
+
+// collectComplexityHotspots scans the edited Go files and returns the hotspot
+// functions that warrant an advisory, plus their dedup keys. Filtering layers:
+// generated-file skip, threshold check (isComplexityHotspot), git-baseline
+// regression check, and per-session dedup (#1202).
+func (a *Agent) collectComplexityHotspots(goFiles []string, workingDir string) ([]codehealth.FuncMetrics, []string) {
+	allHotspots := make([]codehealth.FuncMetrics, 0, len(goFiles))
 	var newKeys []string
 	for _, relPath := range goFiles {
 		absPath := relPath
@@ -183,49 +233,7 @@ func (a *Agent) checkComplexityGate(runStats *RunStats) string {
 			newKeys = append(newKeys, key)
 		}
 	}
-
-	if len(allHotspots) == 0 {
-		debug.Log("complexity-gate", "passed: no new critical complexity in %d edited Go file(s)", len(goFiles))
-		return ""
-	}
-
-	if a.complexityGate.reported == nil {
-		a.complexityGate.reported = make(map[string]bool)
-	}
-	for _, key := range newKeys {
-		a.complexityGate.reported[key] = true
-	}
-	a.complexityGate.fires++
-
-	// Cap the number of warnings.
-	reported := allHotspots
-	if len(reported) > maxComplexityGateWarnings {
-		reported = reported[:maxComplexityGateWarnings]
-	}
-
-	var b strings.Builder
-	b.WriteString(fmt.Sprintf(
-		"Code quality advisory: %d function(s) in your edited files have high complexity. "+
-			"Consider refactoring before finalizing:\n",
-		len(allHotspots),
-	))
-	for _, fn := range reported {
-		parts := []string{fmt.Sprintf("complexity=%d", fn.Complexity)}
-		if fn.Length > complexityGateMaxLength {
-			parts = append(parts, fmt.Sprintf("length=%d lines", fn.Length))
-		}
-		if fn.NestingDepth > complexityGateMaxNesting {
-			parts = append(parts, fmt.Sprintf("nesting=%d", fn.NestingDepth))
-		}
-		b.WriteString(fmt.Sprintf("- %s (%s): %s\n", fn.Function, filepath.Base(fn.File), strings.Join(parts, ", ")))
-	}
-	if len(allHotspots) > len(reported) {
-		b.WriteString(fmt.Sprintf("... and %d more\n", len(allHotspots)-len(reported)))
-	}
-	b.WriteString("\nThese are advisory - refactoring is recommended but not required for completion.")
-
-	debug.Log("complexity-gate", "fired: %d hotspot(s) in %d file(s)", len(allHotspots), len(goFiles))
-	return b.String()
+	return allHotspots, newKeys
 }
 
 // hotspotWorsened reports whether fn exceeds base on any threshold dimension.
