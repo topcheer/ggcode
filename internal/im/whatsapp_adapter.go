@@ -181,15 +181,35 @@ func (a *whatsappAdapter) Send(ctx context.Context, binding ChannelBinding, even
 
 	// Extract images from text and send them as WhatsApp image messages.
 	images, remainingText := ExtractImagesFromText(content)
+	sentImage := false
+	failedImages := 0
 	for i, img := range images {
 		if err := a.sendExtractedImage(ctx, client, jid, img); err != nil {
+			failedImages++
 			debug.Log("whatsapp", "adapter %q: image send failed [%d/%d]: %v", a.name, i+1, len(images), err)
+			continue
+		}
+		sentImage = true
+		// #1256: space every delivered image (waInterMsgDelay, same intent as
+		// the text chunks) - multi-image bursts tripped rate limiting and the
+		// failures were silently absorbed. This also spaces the last image
+		// from the first text chunk below.
+		select {
+		case <-time.After(waInterMsgDelay):
+		case <-ctx.Done():
+			return ctx.Err()
 		}
 	}
 
 	// Send remaining text
 	text := markdownToWhatsApp(remainingText)
 	if text == "" {
+		if failedImages > 0 && !sentImage && len(images) > 0 {
+			// #1256: every image failed and there is no text to deliver -
+			// returning nil told the caller the send succeeded while nothing
+			// reached the user (the old path only logged).
+			return fmt.Errorf("whatsapp %q: all %d image(s) failed to send", a.name, len(images))
+		}
 		debug.Log("whatsapp", "adapter %q: outbound target=%s images=%d (text empty after extraction)", a.name, target, len(images))
 		return nil
 	}
@@ -197,18 +217,19 @@ func (a *whatsappAdapter) Send(ctx context.Context, binding ChannelBinding, even
 	chunks := chunkWARunes(text, waMaxTextLen)
 	debug.Log("whatsapp", "adapter %q: outbound target=%s chunks=%d images=%d len=%d", a.name, target, len(chunks), len(images), len(text))
 	for i, chunk := range chunks {
-		msg := &waE2E.Message{Conversation: proto.String(chunk)}
-		_, err := client.SendMessage(ctx, jid, msg)
-		if err != nil {
-			debug.Log("whatsapp", "adapter %q: send chunk %d/%d failed: %v", a.name, i+1, len(chunks), err)
-			return fmt.Errorf("whatsapp %q: send chunk %d: %w", a.name, i+1, err)
-		}
-		if i < len(chunks)-1 {
+		if i > 0 || sentImage {
+			// #1256: also space the image→text transition, not just text→text.
 			select {
 			case <-time.After(waInterMsgDelay):
 			case <-ctx.Done():
 				return ctx.Err()
 			}
+		}
+		msg := &waE2E.Message{Conversation: proto.String(chunk)}
+		_, err := client.SendMessage(ctx, jid, msg)
+		if err != nil {
+			debug.Log("whatsapp", "adapter %q: send chunk %d/%d failed: %v", a.name, i+1, len(chunks), err)
+			return fmt.Errorf("whatsapp %q: send chunk %d: %w", a.name, i+1, err)
 		}
 	}
 	debug.Log("whatsapp", "adapter %q: outbound delivered target=%s chunks=%d images=%d", a.name, target, len(chunks), len(images))
@@ -658,6 +679,25 @@ func (a *whatsappAdapter) signalSessionDone(err error) {
 // Inbound
 // ---------------------------------------------------------------------------
 
+// whatsappMediaCaption extracts the plain-text caption from a media message
+// (#1257). Media bodies themselves are out of scope (no download pipeline);
+// the caption is delivered so the user's accompanying instruction survives.
+func whatsappMediaCaption(m *waE2E.Message) string {
+	if m == nil {
+		return ""
+	}
+	if img := m.GetImageMessage(); img != nil {
+		return img.GetCaption()
+	}
+	if vid := m.GetVideoMessage(); vid != nil {
+		return vid.GetCaption()
+	}
+	if doc := m.GetDocumentMessage(); doc != nil {
+		return doc.GetCaption()
+	}
+	return ""
+}
+
 func (a *whatsappAdapter) handleInbound(msg *events.Message) {
 	// #974 (high): whatsmeow's event layer does NOT filter our own outgoing
 	// messages — multi-device SyncMessage echoes arrive with IsFromMe=true.
@@ -690,6 +730,13 @@ func (a *whatsappAdapter) handleInbound(msg *events.Message) {
 		text = conv
 	} else if ext := msg.Message.GetExtendedTextMessage(); ext != nil {
 		text = ext.GetText()
+	}
+	// #1257: media messages carry their accompanying text in Caption fields
+	// (ImageMessage/VideoMessage/DocumentMessage) - GetConversation is empty
+	// for them, so "screenshot + this error how to fix" messages were dropped
+	// entirely. The caption is plain text and needs no download pipeline.
+	if strings.TrimSpace(text) == "" {
+		text = whatsappMediaCaption(msg.Message)
 	}
 	text = strings.TrimSpace(text)
 

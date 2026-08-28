@@ -461,12 +461,16 @@ func (a *wecomAdapter) handleMessage(ctx context.Context, payload map[string]any
 	if text == "" && quoteText != "" {
 		text = quoteText
 	}
-	if text == "" {
+	// #1252: attachments must be extracted BEFORE the emptiness check - the
+	// old `text == "" → return` sat in front of extractAttachments, so pure
+	// media messages (image/file/voice without any text) were dropped
+	// entirely: the attachment code below was unreachable dead code on this
+	// path and neither pairing nor HandleInbound ever saw the message.
+	attachments := a.extractAttachments(body)
+	if text == "" && len(attachments) == 0 {
+		debug.Log("wecom", "adapter=%s handleMessage: no text and no attachments, skipping", a.name)
 		return
 	}
-
-	// Extract attachments
-	attachments := a.extractAttachments(body)
 
 	msg := InboundMessage{
 		Envelope: Envelope{
@@ -486,7 +490,12 @@ func (a *wecomAdapter) handleMessage(ctx context.Context, payload map[string]any
 		pairingResult, err := a.manager.HandlePairingInbound(msg)
 		debug.Log("wecom", "adapter=%s pairing: consumed=%v bound=%v err=%v", a.name, pairingResult.Consumed, pairingResult.Bound, err)
 		if err != nil && err != ErrNoSessionBound {
-			a.publishState(false, "warning", err.Error())
+			// #1255: message-level pairing errors do not flip the adapter state
+			// (#1238/#1243/#1248 family, 4th instance): connected is published
+			// only once on websocket login and nothing re-publishes it while the
+			// connection lives, so one transient store hiccup pinned a healthy
+			// adapter at warning until the next reconnect. Log only.
+			debug.Log("wecom", "adapter=%s pairing error (websocket unaffected): %v", a.name, err)
 		}
 		if pairingResult.Consumed {
 			_ = a.sendText(ctx, chatID, pairingResult.ReplyText)
@@ -585,6 +594,33 @@ func (a *wecomAdapter) extractAttachments(body map[string]any) []Attachment {
 					Kind:       AttachmentImage,
 					DataBase64: b64,
 				})
+			}
+		}
+	}
+
+	// #1253: mixed messages carry per-item msgtypes - each image item must be
+	// collected the same way a top-level image is, or "text + screenshot"
+	// compositions delivered the text while the screenshot silently vanished
+	// (neither in text nor in attachments).
+	if strings.EqualFold(msgType, "mixed") {
+		if mixed, _ := body["mixed"].(map[string]any); mixed != nil {
+			if items, _ := mixed["msg_item"].([]any); items != nil {
+				for _, item := range items {
+					itemMap, _ := item.(map[string]any)
+					if itemMap == nil || !strings.EqualFold(jsonStringField(itemMap, "msgtype"), "image") {
+						continue
+					}
+					img, _ := itemMap["image"].(map[string]any)
+					if img == nil {
+						continue
+					}
+					if url := jsonStringField(img, "url"); url != "" {
+						attachments = append(attachments, Attachment{Kind: AttachmentImage, URL: url})
+					}
+					if b64 := jsonStringField(img, "base64"); b64 != "" {
+						attachments = append(attachments, Attachment{Kind: AttachmentImage, DataBase64: b64})
+					}
+				}
 			}
 		}
 	}
@@ -698,10 +734,22 @@ func (a *wecomAdapter) Send(ctx context.Context, binding ChannelBinding, event O
 	// Extraction failures degrade to a text notice instead of dropping the
 	// whole reply.
 	images, remainder := ExtractImagesFromText(text)
+	sentImage := false
 	for _, img := range images {
 		if err := a.sendWecomImage(ctx, chatID, img); err != nil {
 			debug.Log("wecom", "adapter=%s image to %s failed: %v (continuing with text)", a.name, chatID, err)
 			remainder = strings.TrimSpace(remainder + "\n[image failed: " + err.Error() + "]")
+			continue
+		}
+		sentImage = true
+		// #1254: the official limit is ~30 uploads/min per bot - back-to-back
+		// multi-image replies tripped 45009 and the remaining uploads failed.
+		// Space every delivered image like the text chunks below; this also
+		// spaces the last image from the first text chunk (firstProactive gate).
+		select {
+		case <-time.After(wecomInterMsgDelay):
+		case <-ctx.Done():
+			return ctx.Err()
 		}
 	}
 	text = remainder
@@ -736,7 +784,10 @@ func (a *wecomAdapter) Send(ctx context.Context, binding ChannelBinding, event O
 		if hasReply && i == 0 {
 			continue // already sent via respond_msg
 		}
-		if !firstProactive {
+		// #1254: the very first proactive chunk must also wait when images
+		// were just uploaded (same rate-limit domain); plain first-chunk sends
+		// without images stay immediate.
+		if !firstProactive || sentImage {
 			select {
 			case <-time.After(wecomInterMsgDelay):
 			case <-ctx.Done():

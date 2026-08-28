@@ -22,6 +22,9 @@ type fakeWeComServer struct {
 	frames   []map[string]any
 	mediaID  string // returned by finish
 	initFail bool
+	// chunkDrops: drop the ack for the first N upload-chunk frames (#1254
+	// retry test) - the adapter must re-send the idempotent chunk.
+	chunkDrops int
 }
 
 func newFakeWeComServer(t *testing.T) *fakeWeComServer {
@@ -58,6 +61,16 @@ func newFakeWeComServer(t *testing.T) *fakeWeComServer {
 					ack["errmsg"] = "media size out of range"
 				} else {
 					ack["body"] = map[string]any{"upload_id": "UP1"}
+				}
+			case wecomCmdUploadChunk:
+				f.mu.Lock()
+				drop := f.chunkDrops > 0
+				if drop {
+					f.chunkDrops--
+				}
+				f.mu.Unlock()
+				if drop {
+					continue // no ack: simulates a lost chunk ack
 				}
 			case wecomCmdUploadFinish:
 				ack["body"] = map[string]any{"type": "image", "media_id": f.mediaID, "created_at": "1700000000"}

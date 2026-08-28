@@ -34,6 +34,11 @@ const (
 
 	wecomMaxImageBytes = 10 << 20 // official image cap
 	wecomChunkBytes    = 512 << 10
+
+	// #1254: chunk uploads are idempotent (official docs) - retry a failed
+	// chunk ack instead of wasting the init + all previous chunks.
+	wecomChunkAckRetries = 3
+	wecomChunkRetryDelay = 500 * time.Millisecond
 )
 
 // writeAndAwaitAckFrame is writeAndAwaitAck for commands whose ack body
@@ -117,8 +122,25 @@ func (a *wecomAdapter) wecomUploadMedia(ctx context.Context, data []byte, filena
 				"base64_data": base64.StdEncoding.EncodeToString(data[i*wecomChunkBytes : end]),
 			},
 		}
-		if _, err := a.writeAndAwaitAckFrame(payloadReqID(chunkFrame), chunkFrame); err != nil {
-			return "", fmt.Errorf("WeCom upload chunk %d/%d: %w", i+1, totalChunks, err)
+		// #1254: the chunk command is idempotent per the official docs, so a
+		// single ack failure no longer aborts the whole upload (init + all
+		// prior chunks wasted). Retry a few times with spacing before giving up.
+		var ackErr error
+		for attempt := 1; attempt <= wecomChunkAckRetries; attempt++ {
+			_, ackErr = a.writeAndAwaitAckFrame(payloadReqID(chunkFrame), chunkFrame)
+			if ackErr == nil {
+				break
+			}
+			if attempt < wecomChunkAckRetries {
+				select {
+				case <-time.After(wecomChunkRetryDelay):
+				case <-ctx.Done():
+					return "", ctx.Err()
+				}
+			}
+		}
+		if ackErr != nil {
+			return "", fmt.Errorf("WeCom upload chunk %d/%d (after %d attempts): %w", i+1, totalChunks, wecomChunkAckRetries, ackErr)
 		}
 		if ctx.Err() != nil {
 			return "", ctx.Err()
