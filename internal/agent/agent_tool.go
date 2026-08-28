@@ -23,6 +23,30 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
+// permissionDeniedMessage renders the policy-deny result for the model
+// (#1209). The current permission mode is included so the model can
+// attribute the denial correctly: in plan mode every non-readonly tool is
+// denied, and without the mode in the message the model misattributes the
+// failures to its own parameters and enters a degenerate retry loop.
+// switch_mode is always allowed (IsAlwaysAllowedTool), so it is the
+// self-rescue channel in autonomous sessions where no user is watching —
+// the old "ask the user to press Shift+Tab" advice was dead-end guidance
+// there.
+func (a *Agent) permissionDeniedMessage(toolName string) string {
+	mode := a.currentMode()
+	var b strings.Builder
+	fmt.Fprintf(&b, "Permission denied for tool %q. The operation was blocked by the permission policy (current mode: %s).\n", toolName, mode)
+	if mode == permission.PlanMode {
+		b.WriteString("Plan mode is read-only: writes, shell commands, and other non-readonly tools are denied until the mode changes. " +
+			"If you did not intend to operate in plan mode, call switch_mode to restore the previous mode (e.g. \"auto\"), or present your plan via exit_plan_mode.\n")
+	}
+	b.WriteString("To proceed:\n" +
+		"1. If this is a file write, ensure the path is within the workspace\n" +
+		"2. Ask the user to switch to a more permissive mode (Shift+Tab) or approve the specific operation\n" +
+		"3. Do NOT retry the same operation - it will be denied again")
+	return b.String()
+}
+
 // executeToolWithPermission checks the permission policy before executing a tool.
 // If the policy returns Ask, the approval handler is consulted interactively.
 func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolCallDelta) tool.Result {
@@ -45,11 +69,7 @@ func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolC
 		switch decision {
 		case permission.Deny:
 			return tool.Result{
-				Content: fmt.Sprintf("Permission denied for tool %q. The operation was blocked by the permission policy.\n"+
-					"To proceed:\n"+
-					"1. If this is a file write, ensure the path is within the workspace\n"+
-					"2. Ask the user to switch to a more permissive mode (Shift+Tab) or approve the specific operation\n"+
-					"3. Do NOT retry the same operation - it will be denied again", tc.Name),
+				Content: a.permissionDeniedMessage(tc.Name),
 				IsError: true,
 			}
 		case permission.Ask:

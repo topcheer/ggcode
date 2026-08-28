@@ -184,7 +184,7 @@ func (a *Agent) usePreExecutedWithPermission(ctx context.Context, tc provider.To
 		switch decision {
 		case permission.Deny:
 			return tool.Result{
-				Content: fmt.Sprintf("Permission denied for tool %q. The operation was blocked by the permission policy.", tc.Name),
+				Content: a.permissionDeniedMessage(tc.Name),
 				IsError: true,
 			}
 		case permission.Ask:
