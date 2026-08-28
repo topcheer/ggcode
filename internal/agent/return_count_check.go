@@ -39,8 +39,18 @@ const (
 
 type returnCountInstance struct {
 	funcName string
+	recvType string // receiver type text ("*Server" etc); empty for plain funcs (#1193)
 	pos      token.Position
 	count    int
+}
+
+// rcFingerprint keys an instance for delta suppression (fix #157, #1193).
+// The receiver TYPE is part of the key: (s *Server) handle and (c *Client)
+// handle are different functions whose identical bare names must not collide,
+// silently absorbing a NEW same-named method as pre-existing (#1193, same
+// family as the param_count_check #1149 fix).
+func (i returnCountInstance) rcFingerprint() string {
+	return i.recvType + "|" + i.funcName
 }
 
 func checkExcessiveReturns(filePath, oldContent, newContent string) []string {
@@ -51,28 +61,39 @@ func checkExcessiveReturns(filePath, oldContent, newContent string) []string {
 		return nil
 	}
 
+	// #1193: the Test*/Benchmark* name exemption applies only to _test.go
+	// files - go test only ever compiles such functions from _test.go, so a
+	// Test-prefixed business function in production code (TestConnection, ...)
+	// must still be checked. Mirrors the param_count_check #1187 fix.
+	isTestFile := strings.HasSuffix(filePath, "_test.go")
+
 	// Delta-aware: only flag newly introduced instances (fix #142).
-	newInstances := findExcessiveReturns(newContent)
+	newInstances := findExcessiveReturns(newContent, isTestFile)
 	if len(newInstances) == 0 {
 		return nil
 	}
 
-	var oldPos map[string]bool
+	// Count-based (multiset) delta suppression: two same-fingerprint old
+	// instances must each consume one match, otherwise a NEW (N+1)-th instance
+	// is silently absorbed (#1193, same family as param_count_check #1149).
+	var oldCounts map[string]int
 	if strings.TrimSpace(oldContent) != "" {
-		for _, iss := range findExcessiveReturns(oldContent) {
-			if oldPos == nil {
-				oldPos = make(map[string]bool)
+		for _, iss := range findExcessiveReturns(oldContent, isTestFile) {
+			if oldCounts == nil {
+				oldCounts = make(map[string]int)
 			}
-			// Fingerprint on function name, not position: line shifts above a
-			// function must not re-flag pre-existing issues (fix #157).
-			oldPos[iss.funcName] = true
+			// Fingerprint on receiver type + function name, not position: line
+			// shifts above a function must not re-flag pre-existing issues
+			// (fix #157, #1193).
+			oldCounts[iss.rcFingerprint()]++
 		}
 	}
 
 	var warnings []string
 	newCount := 0
 	for _, inst := range newInstances {
-		if oldPos != nil && oldPos[inst.funcName] {
+		if oldCounts[inst.rcFingerprint()] > 0 {
+			oldCounts[inst.rcFingerprint()]--
 			continue
 		}
 		newCount++
@@ -98,11 +119,11 @@ func checkExcessiveReturns(filePath, oldContent, newContent string) []string {
 	return warnings
 }
 
-func countExcessiveReturns(src string) int {
-	return len(findExcessiveReturns(src))
+func countExcessiveReturns(src string, isTestFile bool) int {
+	return len(findExcessiveReturns(src, isTestFile))
 }
 
-func findExcessiveReturns(src string) []returnCountInstance {
+func findExcessiveReturns(src string, isTestFile bool) []returnCountInstance {
 	if strings.TrimSpace(src) == "" {
 		return nil
 	}
@@ -121,8 +142,10 @@ func findExcessiveReturns(src string) []returnCountInstance {
 			return true
 		}
 
-		// Skip test functions - table-driven tests legitimately use many returns.
-		if strings.HasPrefix(fn.Name.Name, "Test") || strings.HasPrefix(fn.Name.Name, "Benchmark") {
+		// #1193: skip test functions only in _test.go files - table-driven
+		// tests legitimately use many returns, but a Test-prefixed function
+		// in production code is regular business logic and stays checked.
+		if isTestFile && isTestOrBenchFunction(fn.Name.Name) {
 			return true
 		}
 
@@ -135,6 +158,7 @@ func findExcessiveReturns(src string) []returnCountInstance {
 			pos := fset.Position(fn.Pos())
 			instances = append(instances, returnCountInstance{
 				funcName: fn.Name.Name,
+				recvType: recvTypeText(fn.Recv), // #1193: receiver type, not variable name
 				pos:      pos,
 				count:    count,
 			})

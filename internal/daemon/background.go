@@ -176,7 +176,7 @@ func CheckExistingDaemon(workingDir string) (int, error) {
 	// later hand the PID to an unrelated process — which would then block
 	// daemon startup forever with a false "already running". Verify the
 	// process identity before trusting the PID file (#412).
-	if !daemonIdentityMatches(info.PID) {
+	if !daemonIdentityMatches(info.PID, workingDir) {
 		debug.Log("daemon", "PID %d alive but not a ggcode daemon (recycled PID); cleaning stale PID file %s", info.PID, pidPath)
 		_ = os.Remove(pidPath)
 		return 0, nil
@@ -189,15 +189,15 @@ func CheckExistingDaemon(workingDir string) (int, error) {
 // set by ForkIntoBackground (argv[0] is rewritten to "ggcode[dirname]").
 //
 // When the command line cannot be inspected (unsupported platform,
-// permission denied), we do NOT blindly return true. Instead, we check:
-//  1. Whether the process is still alive (signal 0)
-//  2. Whether the PID file is stale (older than 24h)
-//
-// This allows self-healing when cmdline is unavailable but the daemon
-// has clearly been gone for a long time (#574 Bug C). PID reuse concerns
-// (#412/#431) are mitigated by the 24h expiry threshold and the fact that
-// we only clean up when the process is actually dead.
-func daemonIdentityMatches(pid int) bool {
+// permission denied), we fall back to verifying the process is still alive
+// (signal 0). The caller has already read a structurally valid PID file that
+// we ourselves wrote (WritePIDFile in ForkIntoBackground), which — combined
+// with a live process — is strong evidence the daemon is real. There is
+// deliberately NO mtime-based staleness check here (#1196): the PID file is
+// written exactly once at daemon start, so its mtime equals the start time
+// and a 24h threshold would wrongly evict healthy long-running daemons,
+// delete their PID files, and allow double daemons.
+func daemonIdentityMatches(pid int, workingDir string) bool {
 	var cmdline string
 	if testProcessCmdline != nil {
 		cmdline = testProcessCmdline(pid)
@@ -220,8 +220,13 @@ func daemonIdentityMatches(pid int) bool {
 		return base == "ggcode" || strings.HasPrefix(base, "ggcode-")
 	}
 
-	// Cmdline unavailable: fall back to aliveness + mtime expiry check.
-	// First verify the process is actually alive.
+	// Cmdline unavailable: fall back to an aliveness check. The PID file the
+	// caller read (keyed to workingDir) plus a live process is the strongest
+	// evidence available in this fallback path; conservatively accept it.
+	// The old 24h-mtime "safety valve" was removed (#1196): it derived the
+	// PID file path from $PWD instead of the caller's workingDir (wrong file)
+	// and punished healthy daemons that had simply been running for over 24h.
+	_ = workingDir // reserved for future per-workspace identity checks
 	proc, err := os.FindProcess(pid)
 	if err != nil {
 		// PID not found: process doesn't exist.
@@ -234,32 +239,9 @@ func daemonIdentityMatches(pid int) bool {
 		return false
 	}
 
-	// Process is alive but cmdline is unavailable. Check mtime to detect stale
-	// PID files from crashed daemons. If the file is older than 24h, assume
-	// the PID has been recycled and clean it up. This is a safety valve for
-	// the rare case where cmdline inspection permanently fails.
-	pidPath, err := PIDFilePath(os.Getenv("PWD"))
-	if err != nil {
-		// Can't resolve PID file path; conservative: assume it's a daemon.
-		debug.Log("daemon", "daemonIdentityMatches: cannot resolve PID file path for mtime check, assuming alive")
-		return true
-	}
-	info, err := os.Stat(pidPath)
-	if err != nil {
-		// PID file doesn't exist; this shouldn't happen here (we're called after
-		// ReadPIDFile succeeded), but treat conservatively.
-		debug.Log("daemon", "daemonIdentityMatches: PID file stat error, assuming alive: %v", err)
-		return true
-	}
-	age := time.Since(info.ModTime())
-	if age > 24*time.Hour {
-		debug.Log("daemon", "daemonIdentityMatches: PID %d alive but PID file is %v old; assuming recycled PID and stale", pid, age.Round(time.Hour))
-		return false
-	}
-
-	// Process is alive and PID file is recent (<24h). Conservatively accept it.
-	// PID reuse risk exists but is mitigated by the 24h threshold.
-	debug.Log("daemon", "daemonIdentityMatches: PID %d alive, PID file age %v, assuming daemon (cmdline unavailable)", pid, age.Round(time.Minute))
+	// Process is alive and the PID file we (or a previous run of this code)
+	// wrote for this working directory names it. Accept it as the daemon.
+	debug.Log("daemon", "daemonIdentityMatches: PID %d alive, PID file present; assuming daemon (cmdline unavailable)", pid)
 	return true
 }
 

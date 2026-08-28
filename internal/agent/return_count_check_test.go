@@ -106,7 +106,9 @@ func TestMyFunc(t int) int {
 	return 0
 }
 `
-	warnings := checkExcessiveReturns("test.go", "", src)
+	// #1193: the Test/Benchmark exemption only applies to _test.go files, so this
+	// test must use a _test.go path to exercise the exemption.
+	warnings := checkExcessiveReturns("file_test.go", "", src)
 	if len(warnings) != 0 {
 		t.Errorf("expected 0 warnings for test function, got %d", len(warnings))
 	}

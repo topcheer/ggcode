@@ -37,6 +37,7 @@ import (
 	"fmt"
 	"go/ast"
 	"go/parser"
+	"go/printer"
 	"go/token"
 	"path/filepath"
 	"strings"
@@ -80,13 +81,108 @@ type resourceLeak struct {
 	varName      string
 	resourceHint string
 	pos          token.Pos
+	sig          string // normalized source text of the acquisition call (#1192)
+}
+
+// resourceLeakDeltaIndex holds one consumable suppression token per leak
+// present in the old content (#1192, modeled on nilDerefDeltaIndex/#1186):
+// exact-key first, rename-tolerant suffix key as fallback, and each old token
+// suppresses at most one new instance so a set of same-shape tokens can never
+// absorb a genuinely new leak in a different function.
+type resourceLeakDeltaIndex struct {
+	tokens []oldResourceLeakToken
+}
+
+// oldResourceLeakToken is one consumable suppression token for a pre-existing
+// leak (#1192).
+type oldResourceLeakToken struct {
+	key       string // fnName|varName (exact)
+	suffixKey string // acquisitionCallSig|varName (fnName-independent)
+	oldFnName string // to verify the old name vanished on fallback match
+	used      bool
+}
+
+// matchOldResourceLeak consumes one unconsumed old token for the given new
+// leak: prefer the exact fnName|varName key; fall back to the rename-tolerant
+// suffix key only when the token's old function name no longer exists in the
+// new file (pure function rename, #1192). Returns false when no token remains.
+func (idx *resourceLeakDeltaIndex) matchOldResourceLeak(inst resourceLeak, fnName string, newFnNames map[string]bool) bool {
+	exact := fnName + "|" + inst.varName
+	for i := range idx.tokens {
+		t := &idx.tokens[i]
+		if !t.used && t.key == exact {
+			t.used = true
+			return true
+		}
+	}
+	suffix := inst.sig + "|" + inst.varName
+	for i := range idx.tokens {
+		t := &idx.tokens[i]
+		if t.used || t.suffixKey != suffix {
+			continue
+		}
+		// Rename fallback (#1192): the old function name must have disappeared
+		// from the new file; if it still exists, this is a new same-shape
+		// instance elsewhere and must be reported.
+		if newFnNames[t.oldFnName] {
+			continue
+		}
+		t.used = true
+		return true
+	}
+	return false
+}
+
+// collectOldResourceLeakIndex parses oldContent and returns one token per
+// leak present before the edit (#1192). Uses the same exemption rules
+// (cleanup + ownership transfer) as the new-content pass for consistency.
+func collectOldResourceLeakIndex(filePath, oldContent string) resourceLeakDeltaIndex {
+	idx := resourceLeakDeltaIndex{}
+	if strings.TrimSpace(oldContent) == "" {
+		return idx
+	}
+	oldFset := token.NewFileSet()
+	oldFile, oldErr := parser.ParseFile(oldFset, filePath, oldContent, 0)
+	if oldErr != nil || oldFile == nil {
+		return idx
+	}
+	for _, decl := range oldFile.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
+			continue
+		}
+		acquired := findResourceAcquisitions(fn)
+		if len(acquired) == 0 {
+			continue
+		}
+		fnName := "<anonymous>"
+		if fn.Name != nil {
+			fnName = fn.Name.Name
+		}
+		cleanedVars := findCleanupCalls(fn)
+		for _, acq := range acquired {
+			if _, cleaned := cleanedVars[acq.varName]; cleaned {
+				continue
+			}
+			if ownershipTransferred(fn, acq.varName) {
+				continue
+			}
+			idx.tokens = append(idx.tokens, oldResourceLeakToken{
+				key:       fnName + "|" + acq.varName,
+				suffixKey: acq.sig + "|" + acq.varName,
+				oldFnName: fnName,
+			})
+		}
+	}
+	return idx
 }
 
 // checkResourceLeaks performs AST-based resource leak detection on Go source.
 // Returns warnings for resources acquired without corresponding cleanup calls.
 // Delta-aware: parses oldContent and suppresses pre-existing (unchanged)
 // acquisitions so unrelated edits do not re-warn and squeeze out the single
-// maxIntegrityWarnings slot (#221).
+// maxIntegrityWarnings slot (#221). Rename-tolerant since #1192: a pure
+// function rename no longer re-reports an existing leak.
 //
 // Parameters:
 //   - filePath: path of the written file (used for language detection)
@@ -106,32 +202,15 @@ func checkResourceLeaks(filePath, oldContent, src string) []string {
 		return nil
 	}
 
-	// Delta: collect fingerprints of pre-existing leaks (funcName|varName).
-	oldFPs := map[string]bool{}
-	if strings.TrimSpace(oldContent) != "" {
-		oldFset := token.NewFileSet()
-		oldFile, oldErr := parser.ParseFile(oldFset, filePath, oldContent, 0)
-		if oldErr == nil && oldFile != nil {
-			for _, decl := range oldFile.Decls {
-				fn, ok := decl.(*ast.FuncDecl)
-				if !ok || fn.Body == nil {
-					continue
-				}
-				acquired := findResourceAcquisitions(fn)
-				if len(acquired) == 0 {
-					continue
-				}
-				cleanedVars := findCleanupCalls(fn)
-				for _, acq := range acquired {
-					if _, cleaned := cleanedVars[acq.varName]; !cleaned {
-						fnName := "<anonymous>"
-						if fn.Name != nil {
-							fnName = fn.Name.Name
-						}
-						oldFPs[fnName+"|"+acq.varName] = true
-					}
-				}
-			}
+	// Delta: collect one consumable token per pre-existing leak (#221, #1192).
+	oldIdx := collectOldResourceLeakIndex(filePath, oldContent)
+
+	// Function names present in the new content: the rename fallback must
+	// only fire when the old function name has disappeared (#1192).
+	newFnNames := map[string]bool{}
+	for _, decl := range file.Decls {
+		if fn, ok := decl.(*ast.FuncDecl); ok && fn.Name != nil {
+			newFnNames[fn.Name.Name] = true
 		}
 	}
 
@@ -142,33 +221,48 @@ func checkResourceLeaks(filePath, oldContent, src string) []string {
 		if !ok || fn.Body == nil {
 			continue
 		}
-
-		acquired := findResourceAcquisitions(fn)
-		if len(acquired) == 0 {
-			continue
-		}
-
-		fnName := "<anonymous>"
-		if fn.Name != nil {
-			fnName = fn.Name.Name
-		}
-
-		cleanedVars := findCleanupCalls(fn)
-		for _, acq := range acquired {
-			if _, cleaned := cleanedVars[acq.varName]; cleaned {
-				continue
-			}
-			if oldFPs[fnName+"|"+acq.varName] {
-				continue // pre-existing leak, already warned before this edit
-			}
-			warnings = append(warnings, fmt.Sprintf(
-				"Possible resource leak: %s acquired (variable %s at %s) but no defer .Close() "+
-					"or cleanup call found in the same function. Add `defer %s.Close()` immediately "+
-					"after the assignment to prevent file descriptor / goroutine / memory leaks.",
-				acq.resourceHint, acq.varName, fset.Position(acq.pos), acq.varName))
-		}
+		warnings = append(warnings, newResourceLeakWarnings(fn, fset, &oldIdx, newFnNames)...)
 	}
 
+	return warnings
+}
+
+// newResourceLeakWarnings flags resources acquired in fn that have no cleanup
+// call, no ownership transfer (#1191), and no matching pre-existing token in
+// the delta index (#1192).
+func newResourceLeakWarnings(fn *ast.FuncDecl, fset *token.FileSet, oldIdx *resourceLeakDeltaIndex, newFnNames map[string]bool) []string {
+	acquired := findResourceAcquisitions(fn)
+	if len(acquired) == 0 {
+		return nil
+	}
+
+	fnName := "<anonymous>"
+	if fn.Name != nil {
+		fnName = fn.Name.Name
+	}
+
+	var warnings []string
+	cleanedVars := findCleanupCalls(fn)
+	for _, acq := range acquired {
+		if _, cleaned := cleanedVars[acq.varName]; cleaned {
+			continue
+		}
+		// #1191: acquire-and-return / ownership-transfer idiom -- the
+		// caller (or callee) owns the resource and closes it.
+		if ownershipTransferred(fn, acq.varName) {
+			continue
+		}
+		if oldIdx.matchOldResourceLeak(acq, fnName, newFnNames) {
+			continue // pre-existing leak (possibly renamed), already warned
+		}
+		warnings = append(warnings, fmt.Sprintf(
+			"Possible resource leak: %s acquired (variable %s at %s) but no defer .Close() "+
+				"or cleanup call found in the same function. Verify ownership: if this function "+
+				"retains the resource, add `defer %s.Close()` immediately after the assignment; "+
+				"if %s is returned or handed off to a caller/callee, that side is responsible for "+
+				"closing it.",
+			acq.resourceHint, acq.varName, fset.Position(acq.pos), acq.varName, acq.varName))
+	}
 	return warnings
 }
 
@@ -207,12 +301,78 @@ func findResourceAcquisitions(fn *ast.FuncDecl) []resourceLeak {
 				varName:      varName,
 				resourceHint: acq.resourceHint,
 				pos:          call.Pos(),
+				sig:          nodeSignature(call),
 			})
 		}
 		return true
 	})
 
 	return leaks
+}
+
+// nodeSignature renders an AST node back to normalized source text; identical
+// acquisition calls produce identical signatures regardless of surrounding
+// formatting or enclosing function name (#1192 rename-tolerant delta key).
+func nodeSignature(n ast.Node) string {
+	var b strings.Builder
+	if err := printer.Fprint(&b, token.NewFileSet(), n); err != nil {
+		return ""
+	}
+	return b.String()
+}
+
+// ownershipTransferred reports whether the resource variable escapes the
+// function (#1191): it appears in any return statement expression, or is
+// passed as an argument to another function call (acquire-and-return /
+// acquire-and-hand-off idiom). In both cases the caller or callee owns the
+// resource and is responsible for closing it.
+func ownershipTransferred(fn *ast.FuncDecl, varName string) bool {
+	base := varName
+	if i := strings.Index(base, "."); i >= 0 {
+		base = base[:i]
+	}
+	transferred := false
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		if transferred {
+			return false
+		}
+		switch node := n.(type) {
+		case *ast.ReturnStmt:
+			for _, res := range node.Results {
+				if exprReferencesIdent(res, base) {
+					transferred = true
+					return false
+				}
+			}
+		case *ast.CallExpr:
+			for _, arg := range node.Args {
+				if exprReferencesIdent(arg, base) {
+					transferred = true
+					return false
+				}
+			}
+		}
+		return true
+	})
+	return transferred
+}
+
+// exprReferencesIdent reports whether e contains an identifier with the given
+// name (used to detect the resource variable escaping via return or call
+// argument, #1191).
+func exprReferencesIdent(e ast.Expr, name string) bool {
+	found := false
+	ast.Inspect(e, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		if id, ok := n.(*ast.Ident); ok && id.Name == name {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
 }
 
 // matchResourceCall checks if a call expression matches a known resource

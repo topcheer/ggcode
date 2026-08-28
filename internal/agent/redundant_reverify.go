@@ -112,17 +112,81 @@ func firstPipelineSegment(args string) string {
 	return seg
 }
 
-// verificationSignature returns a normalized fingerprint of the first pipeline
-// segment of a verification command (issue #1173). Two commands in the same
-// category are only redundant when this fingerprint matches: `go test
-// ./internal/agent/` and `go test ./internal/config/` must never be treated as
-// idempotent re-runs of each other.
-func verificationSignature(args string) string {
-	fields := strings.Fields(firstPipelineSegment(args))
-	// Skip the same crude env prefixes that classification skips.
-	for len(fields) > 0 && strings.HasPrefix(fields[0], "$(") {
-		fields = fields[1:]
+// reverifySegmentSeps splits a shell command line into its individual command
+// segments (issue #1190). || and && must be matched before the bare |.
+var reverifySegmentSeps = regexp.MustCompile(`\|\||&&|[|;]`)
+
+// commandSegments returns the non-empty command segments of a shell line.
+func commandSegments(args string) []string {
+	var segs []string
+	for _, seg := range reverifySegmentSeps.Split(args, -1) {
+		if s := strings.TrimSpace(seg); s != "" {
+			segs = append(segs, s)
+		}
 	}
+	return segs
+}
+
+// reverifyEnvAssignRe matches leading environment-assignment prefix tokens
+// like FOO=1 that do not change the verification identity (issue #1190).
+var reverifyEnvAssignRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
+
+// stripLeadingPrefixes removes command prefixes that do not alter the
+// verification target: $(...) expansions (which may span several
+// whitespace-split tokens), `cd X` directory changes, and FOO=1 env
+// assignments (issue #1190).
+func stripLeadingPrefixes(fields []string) []string {
+	for len(fields) > 0 {
+		if strings.HasPrefix(fields[0], "$(") {
+			// Consume the whole expansion: tokens up to and including the
+			// first one containing the closing ')'.
+			for len(fields) > 0 {
+				first := fields[0]
+				fields = fields[1:]
+				if strings.Contains(first, ")") {
+					break
+				}
+			}
+			continue
+		}
+		if fields[0] == "cd" && len(fields) >= 2 {
+			fields = fields[2:]
+			continue
+		}
+		if reverifyEnvAssignRe.MatchString(fields[0]) {
+			fields = fields[1:]
+			continue
+		}
+		break
+	}
+	return fields
+}
+
+// verificationSignature returns a normalized fingerprint of the verification
+// command (issues #1173, #1190). The fingerprint is taken from the FIRST
+// command segment that actually matches a verification verb, not blindly the
+// first segment: `cd internal/agent && go test ./agentruntime/` previously
+// fingerprinted as "cd internal/agent", so a subsequent
+// `cd internal/agent && go test ./auth/` collided and was wrongly flagged as
+// a redundant re-run. Leading cd/env/$(...) prefixes are stripped from the
+// chosen segment. If no segment matches, the full args are used as fallback.
+func verificationSignature(args string) string {
+	chosen := ""
+	for _, seg := range commandSegments(args) {
+		for _, re := range reverifyCmdPatterns {
+			if re.MatchString(seg) {
+				chosen = seg
+				break
+			}
+		}
+		if chosen != "" {
+			break
+		}
+	}
+	if chosen == "" {
+		chosen = args // fallback: no segment matched a known verb
+	}
+	fields := stripLeadingPrefixes(strings.Fields(chosen))
 	return strings.ToLower(strings.Join(fields, " "))
 }
 

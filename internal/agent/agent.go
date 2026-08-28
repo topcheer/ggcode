@@ -2955,6 +2955,20 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Check memoization cache: if a read-only tool was called with identical args
 			// earlier in this run (and the underlying resource hasn't changed), return the
 			// cached result. This prevents redundant re-execution after tool-result clearing.
+			// Secret-redaction write guard (#1195): a file-write tool whose
+			// arguments contain [REDACTED:*] markers would destroy the real
+			// secret stored in the target file. Block before any cache or
+			// execution path; the error result carries remediation guidance.
+			if redactWarn := checkRedactedInWrite(tc.Name, string(tc.Arguments)); redactWarn != "" {
+				toolResults = append(toolResults, provider.ToolResultNamedBlock(tc.ID, tc.Name, redactWarn, true))
+				onEvent(provider.StreamEvent{
+					Type:    provider.StreamEventToolResult,
+					Tool:    tc,
+					Result:  redactWarn,
+					IsError: true,
+				})
+				continue
+			}
 			var result tool.Result
 			memoHit := false
 			if memoResult, hit := a.toolMemo.get(tc.Name, tc.Arguments); hit {
@@ -2994,6 +3008,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				// for reuse when the same command is called again without file changes.
 				a.storeCommandResult(tc.Name, tc.Arguments, result)
 			}
+			// Secret redaction (#1195): mask secret values in external-content
+			// tool results BEFORE any recorder, cache annotation, context append,
+			// or session-history persistence sees them. Applies uniformly to all
+			// result paths above (memo/speculative/pre-executed/command-cache/execute).
+			result.Content = redactSecrets(tc.Name, result.Content)
 			// Record the tool call for speculative pattern learning.
 			a.speculator.recordObservation(tc.Name)
 			// Track todo_write usage for the agent-side planner: once the

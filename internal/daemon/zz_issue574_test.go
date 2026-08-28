@@ -80,7 +80,7 @@ func TestIssue574C_DaemonIdentityMatchesDeadProcessReturnsFalse(t *testing.T) {
 
 	// For a dead PID, daemonIdentityMatches should return false even with
 	// empty cmdline (it checks signal-0 internally).
-	if daemonIdentityMatches(deadPid) {
+	if daemonIdentityMatches(deadPid, t.TempDir()) {
 		t.Fatal("REGRESSION: daemonIdentityMatches returned true for dead PID with empty cmdline (#574-C)")
 	}
 }
@@ -115,14 +115,18 @@ func TestIssue574C_DaemonIdentityMatchesLiveProcessRecentFileReturnsTrue(t *test
 	t.Cleanup(func() { testProcessCmdline = orig })
 
 	// With live process + recent PID file, should return true.
-	if !daemonIdentityMatches(child.Pid) {
+	if !daemonIdentityMatches(child.Pid, workDir) {
 		t.Fatal("daemonIdentityMatches should return true for live process with recent PID file")
 	}
 }
 
-// C: daemonIdentityMatches with empty cmdline and stale PID file (>24h)
-// should return false (self-healing path).
-func TestIssue574C_DaemonIdentityMatchesStaleFileReturnsFalse(t *testing.T) {
+// C (#1196 supersession): daemonIdentityMatches with empty cmdline and a
+// live process must return true REGARDLESS of PID file age. The 24h mtime
+// "safety valve" was removed in #1196: the PID file is written once at
+// daemon start, so mtime == start time and an age threshold wrongly evicts
+// healthy daemons that have been running for over 24h (leading to double
+// daemons after the PID file was deleted).
+func TestIssue574C_DaemonIdentityMatchesLiveProcessOldFileReturnsTrue(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	workDir := t.TempDir()
 	t.Setenv("PWD", workDir)
@@ -153,9 +157,9 @@ func TestIssue574C_DaemonIdentityMatchesStaleFileReturnsFalse(t *testing.T) {
 	testProcessCmdline = func(int) string { return "" }
 	t.Cleanup(func() { testProcessCmdline = orig })
 
-	// With stale PID file (>24h), should return false even if process is alive.
-	if daemonIdentityMatches(child.Pid) {
-		t.Fatal("REGRESSION: daemonIdentityMatches should return false for stale PID file (#574-C)")
+	// Live process: must be accepted as a daemon even with an old PID file.
+	if !daemonIdentityMatches(child.Pid, workDir) {
+		t.Fatal("REGRESSION: live daemon with >24h-old PID file wrongly judged stale (#1196)")
 	}
 }
 
@@ -228,7 +232,7 @@ func TestIssue574C_CleanupDaemonRemovesDeadProcessPIDFile(t *testing.T) {
 	// The key fix is in daemonIdentityMatches which should return false for dead PIDs.
 
 	// Verify daemonIdentityMatches correctly identifies dead process.
-	if daemonIdentityMatches(deadPid) {
+	if daemonIdentityMatches(deadPid, t.TempDir()) {
 		t.Fatal("REGRESSION: daemonIdentityMatches should return false for dead process (#574-C)")
 	}
 }

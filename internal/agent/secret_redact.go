@@ -137,9 +137,14 @@ func redactSecrets(toolName, content string) string {
 	}
 
 	redacted := content
+	// #1195: the scan WINDOW is capped at 256KB for CPU protection, but the
+	// RETURNED content is not: silently dropping the tail made completeness
+	// depend on whether the first 256KB happened to contain a secret, and
+	// broke later edit_file anchors targeting the tail. Redact the scanned
+	// prefix, keep the unscanned tail verbatim, and declare it in the notice.
+	unscanned := ""
 	if len(redacted) > maxRedactScanLen {
-		// Truncate scan window for CPU protection. Secrets beyond 256KB are
-		// unlikely and scanning the full content would waste CPU.
+		unscanned = redacted[maxRedactScanLen:]
 		redacted = redacted[:maxRedactScanLen]
 	}
 	count := 0
@@ -181,6 +186,10 @@ func redactSecrets(toolName, content string) string {
 		return content
 	}
 
-	debug.Log("secret-redact", "masked %d secret(s) in tool=%s content_len=%d", count, toolName, len(content))
-	return fmt.Sprintf(redactionNotice, count) + redacted
+	debug.Log("secret-redact", "masked %d secret(s) in tool=%s content_len=%d unscanned_tail=%d", count, toolName, len(content), len(unscanned))
+	notice := fmt.Sprintf(redactionNotice, count)
+	if unscanned != "" {
+		notice += "[NOTE: only the first 256KB of this output was scanned for secrets; the remainder is included verbatim and unscanned.]\n\n"
+	}
+	return notice + redacted + unscanned
 }

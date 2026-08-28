@@ -3,6 +3,7 @@ package agent
 import (
 	"strings"
 	"sync"
+	"unicode"
 
 	"github.com/topcheer/ggcode/internal/debug"
 )
@@ -50,16 +51,58 @@ func (r *reversibilityState) recordSafetySignal(toolName, args string) {
 
 	switch toolName {
 	case "run_command":
-		lower := strings.ToLower(args)
-		if strings.Contains(lower, "test") || strings.Contains(lower, "go test") {
+		tokens := commandTokens(args)
+		if hasCommandToken(tokens, "test", "pytest") {
 			r.testsRan = true
 		}
-		if strings.Contains(lower, "build") || strings.Contains(lower, "go build") || strings.Contains(lower, "make") {
+		if hasCommandToken(tokens, "build", "make") {
 			r.buildRan = true
 		}
 	case "git_add", "git_commit":
 		r.stagingSeen = true
 	}
+}
+
+// commandTokens strips the leading '# ' description comment that run_command
+// args carry, lowercases the remainder, and splits it into word tokens.
+// Splitting happens on whitespace AND on JSON-wrapper punctuation
+// ({}[]":,;) so that when the raw args are a JSON envelope like
+// `{"command":"make verify-ci"}` the embedded words are still visible.
+// Path/flag punctuation (- . / _) is deliberately NOT a separator so
+// "releases/latest", "Makefile" and "latest-build.txt" stay single tokens
+// and cannot trigger false positives (#1194). A bare "test" token already
+// covers the "go test", "npm test" and "make test" subcommand forms, so no
+// separate bigram checks are needed.
+func commandTokens(args string) []string {
+	cmd := args
+	if strings.HasPrefix(cmd, "#") {
+		if idx := strings.IndexByte(cmd, '\n'); idx >= 0 {
+			cmd = cmd[idx+1:]
+		} else {
+			cmd = ""
+		}
+	}
+	cut := func(r rune) bool {
+		switch r {
+		case '{', '}', '[', ']', '"', ':', ',', ';':
+			return true
+		}
+		return unicode.IsSpace(r)
+	}
+	return strings.FieldsFunc(strings.ToLower(cmd), cut)
+}
+
+// hasCommandToken reports whether any command token equals one of the given
+// words (exact, word-boundary match; never a substring match).
+func hasCommandToken(tokens []string, words ...string) bool {
+	for _, tok := range tokens {
+		for _, w := range words {
+			if tok == w {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // checkPreAction evaluates whether a high-stakes tool call should trigger
@@ -119,7 +162,7 @@ func (r *reversibilityState) checkPreAction(toolName, args string) string {
 }
 
 func isGitPush(s string) bool {
-	return strings.Contains(s, "git push") || strings.Contains(s, "git push")
+	return strings.Contains(s, "git push")
 }
 
 func isDestructiveGit(s string) bool {
