@@ -451,8 +451,12 @@ func registerAllChecks() {
 		{Name: "unkeyed-struct", Langs: []Language{LangGo}, Run: sliceCheck(checkUnkeyedStruct)},
 		// #571: unicode-check — detects problematic Unicode characters (smart quotes,
 		// non-breaking space, zero-width chars) that break compilation or cause bugs.
-		// Fully implemented + unit tested.
-		{Name: "unicode-check", Run: stringCheck(checkUnicodeChars)},
+		// #1217: gated to code languages - prose files (.md/.txt map to LangAny)
+		// legitimately use curly quotes and fullwidth punctuation per CJK
+		// typography standards, so an error-level ASCII replacement directive
+		// there actively corrupts content. CJK-context downgrading inside code
+		// files is handled inside the check itself.
+		{Name: "unicode-check", Langs: []Language{LangGo, LangPython, LangJSTS, LangMarkup, LangConfig, LangRuby, LangJava}, Run: stringCheck(checkUnicodeChars)},
 
 		// --- Go correctness: reward-hacking / test quality (#571) ---
 		// #571: hardcoded-output — detects input-to-output memorization

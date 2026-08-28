@@ -102,6 +102,10 @@ type charFinding struct {
 	confusable unicodeConfusable
 	count      int // newly introduced count
 	firstLine  int // 1-based line number of first occurrence
+	// allInCJK is true when EVERY introduced instance of this character sits
+	// on a line containing CJK script (#1217). Such instances are treated as
+	// legitimate CJK typography rather than broken ASCII delimiters.
+	allInCJK bool
 }
 
 // checkUnicodeChars detects problematic Unicode characters INTRODUCED by
@@ -133,50 +137,115 @@ func scanUnicodeDelta(oldContent, newContent string) []charFinding {
 	var findings []charFinding
 	findingMap := make(map[rune]int) // rune -> index in findings
 
-	lineNum := 1
-	for _, r := range newContent {
-		if r == '\n' {
-			lineNum++
-			continue
+	// Line-oriented scan (#1217): visible punctuation introduced on a line
+	// that also contains CJK script is overwhelmingly likely to be legitimate
+	// Chinese/Japanese/Korean typography (quotes per GB/T 15834, fullwidth
+	// parens, dashes, ellipsis) inside prose, comments, or string literals,
+	// whereas a broken ASCII delimiter shows up on otherwise pure-ASCII
+	// lines. Per-finding allInCJK drives the wording downgrade in
+	// formatUnicodeFindings; invisible characters are exempt.
+	for i, line := range strings.Split(newContent, "\n") {
+		lineHasCJK := false
+		for _, r := range line {
+			if isCJKRune(r) {
+				lineHasCJK = true
+				break
+			}
 		}
-		info, ok := unicodeCharMap[r]
-		if !ok {
-			continue
-		}
-		// Skip if this instance was pre-existing (not introduced by this edit).
-		if oldCounts[r] > 0 {
-			oldCounts[r]--
-			continue
-		}
-		// Record newly introduced problematic character.
-		if idx, exists := findingMap[r]; exists {
-			findings[idx].count++
-		} else {
-			findingMap[r] = len(findings)
-			findings = append(findings, charFinding{
-				confusable: info,
-				count:      1,
-				firstLine:  lineNum,
-			})
+		for _, r := range line {
+			info, ok := unicodeCharMap[r]
+			if !ok {
+				continue
+			}
+			// Skip if this instance was pre-existing (not introduced by this edit).
+			if oldCounts[r] > 0 {
+				oldCounts[r]--
+				continue
+			}
+			// Record newly introduced problematic character.
+			if idx, exists := findingMap[r]; exists {
+				findings[idx].count++
+				if !lineHasCJK {
+					findings[idx].allInCJK = false
+				}
+			} else {
+				findingMap[r] = len(findings)
+				findings = append(findings, charFinding{
+					confusable: info,
+					count:      1,
+					firstLine:  i + 1,
+					allInCJK:   lineHasCJK,
+				})
+			}
 		}
 	}
 	return findings
 }
 
+// isCJKRune reports whether r belongs to a CJK script (Han, Hiragana,
+// Katakana, Hangul). Lines containing CJK script are treated as prose /
+// comment / string-literal content for Unicode severity purposes: curly
+// quotes and fullwidth punctuation there are standard CJK typography (e.g.
+// GB/T 15834 for Chinese), not broken ASCII delimiters (#1217). Fullwidth
+// forms (U+FF00-U+FFEF) are deliberately NOT included - they are the
+// flagged characters themselves and must not self-certify their line.
+func isCJKRune(r rune) bool {
+	switch {
+	case r >= 0x4E00 && r <= 0x9FFF: // CJK Unified Ideographs
+		return true
+	case r >= 0x3400 && r <= 0x4DBF: // CJK Extension A
+		return true
+	case r >= 0x3040 && r <= 0x30FF: // Hiragana + Katakana
+		return true
+	case r >= 0xAC00 && r <= 0xD7AF: // Hangul syllables
+		return true
+	case r >= 0xF900 && r <= 0xFAFF: // CJK Compatibility Ideographs
+		return true
+	}
+	return false
+}
+
+// isInvisibleUnicode reports whether the problematic character is invisible
+// (or renders as plain whitespace). Such characters are never legitimate
+// typography - not even in CJK text, which uses U+3000 for spacing - so
+// they keep their removal directive regardless of line context (#1217).
+func isInvisibleUnicode(r rune) bool {
+	switch r {
+	case '\u00a0', '\u200b', '\u200c', '\u200d', '\u2060', '\ufeff':
+		return true
+	}
+	return false
+}
+
 // formatUnicodeFindings renders a human-readable warning string from
 // the detected findings, prioritizing errors over warnings.
 func formatUnicodeFindings(filePath string, findings []charFinding) string {
-	// Separate errors from warnings for prioritized messaging.
-	var errs, warns []charFinding
+	// #1217: a finding is "context-cleared" when every introduced instance
+	// sits on a line containing CJK script AND the character is visible.
+	// Curly quotes, dashes, and fullwidth punctuation are standard CJK
+	// typography (GB/T 15834) inside strings, comments, and prose, so they
+	// must not carry an error-tier ASCII replacement directive. Invisible
+	// characters (zero-width, BOM, NBSP) are never legitimate and stay
+	// actionable regardless of context.
+	cleared := func(f charFinding) bool {
+		return f.allInCJK && !isInvisibleUnicode(f.confusable.rune)
+	}
+
+	// Separate errors, warnings, and CJK-context notes for prioritized
+	// messaging: actionable findings first, downgraded ones last.
+	var errs, warns, cjkNotes []charFinding
 	for _, f := range findings {
-		if f.confusable.severity == "error" {
+		switch {
+		case cleared(f):
+			cjkNotes = append(cjkNotes, f)
+		case f.confusable.severity == "error":
 			errs = append(errs, f)
-		} else {
+		default:
 			warns = append(warns, f)
 		}
 	}
 
-	// Prioritize errors, then warnings, cap at maxUnicodeWarnings.
+	// Prioritize errors, then warnings, then CJK notes, cap at maxUnicodeWarnings.
 	selected := append([]charFinding{}, errs...)
 	if len(selected) < maxUnicodeWarnings {
 		remaining := maxUnicodeWarnings - len(selected)
@@ -184,6 +253,13 @@ func formatUnicodeFindings(filePath string, findings []charFinding) string {
 			warns = warns[:remaining]
 		}
 		selected = append(selected, warns...)
+	}
+	if len(selected) < maxUnicodeWarnings {
+		remaining := maxUnicodeWarnings - len(selected)
+		if len(cjkNotes) > remaining {
+			cjkNotes = cjkNotes[:remaining]
+		}
+		selected = append(selected, cjkNotes...)
 	} else {
 		selected = selected[:maxUnicodeWarnings]
 	}
@@ -193,10 +269,16 @@ func formatUnicodeFindings(filePath string, findings []charFinding) string {
 		totalIntroduced += f.count
 	}
 
+	actionable := len(errs) + len(warns)
+
 	var b strings.Builder
 	b.WriteString("[Problematic Unicode characters detected]")
 	b.WriteString(fmt.Sprintf("\n%d problematic Unicode character(s) introduced by this edit in %s.", totalIntroduced, filePath))
-	b.WriteString("\nThese characters cause invisible compilation errors or subtle bugs:")
+	if actionable > 0 {
+		b.WriteString("\nThese characters cause invisible compilation errors or subtle bugs:")
+	} else {
+		b.WriteString("\nAll introduced instances sit on lines containing CJK script:")
+	}
 
 	for _, f := range selected {
 		b.WriteString(fmt.Sprintf("\n  - %s", formatCharFinding(f)))
@@ -205,13 +287,23 @@ func formatUnicodeFindings(filePath string, findings []charFinding) string {
 	if len(findings) > len(selected) {
 		b.WriteString(fmt.Sprintf("\n  ...and %d more character type(s).", len(findings)-len(selected)))
 	}
-	b.WriteString("\nReplace these with their ASCII equivalents and re-write the file.")
+	if actionable > 0 {
+		b.WriteString("\nReplace these with their ASCII equivalents and re-write the file.")
+	} else {
+		b.WriteString("\nIf these sit inside string literals, comments, or prose they are standard CJK punctuation - keep them as-is; only replace instances that took the place of actual code delimiters.")
+	}
 	return b.String()
 }
 
 // formatCharFinding renders a single character finding as a one-liner.
 func formatCharFinding(f charFinding) string {
 	name := f.confusable.name
+	if f.allInCJK && !isInvisibleUnicode(f.confusable.rune) {
+		// #1217: CJK-script context - never direct ASCII replacement, which
+		// would corrupt legitimate Chinese/Japanese/Korean punctuation.
+		return fmt.Sprintf("%dx %s (U+%04X), first at line %d - CJK context: standard CJK typography if inside a string, comment, or prose; only a problem if it replaced a code delimiter",
+			f.count, name, f.confusable.rune, f.firstLine)
+	}
 	if f.confusable.ascii != 0 {
 		name = fmt.Sprintf("%s (U+%04X), replace with '%c'", name, f.confusable.rune, f.confusable.ascii)
 	} else {

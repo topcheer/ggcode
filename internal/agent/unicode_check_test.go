@@ -202,3 +202,74 @@ func TestCheckUnicodeChars_IntegrationWithWriteIntegrity(t *testing.T) {
 		t.Errorf("should have integrity check header, got: %s", result)
 	}
 }
+
+// TestCheckUnicodeChars_CJKContextDowngraded pins #1217: smart quotes and
+// fullwidth punctuation introduced on lines containing CJK script (Chinese
+// comments, strings, prose) must NOT carry an ASCII replacement directive -
+// they are standard CJK typography and replacing them corrupts content.
+func TestCheckUnicodeChars_CJKContextDowngraded(t *testing.T) {
+	old := ""
+	new_ := "s := \"x\"\n// 注释里的“中文引号”（全角括号）——省略号…\n"
+
+	result := checkUnicodeChars("main.go", old, new_)
+	if result == "" {
+		t.Fatal("expected advisory note for CJK-context punctuation")
+	}
+	if strings.Contains(result, "Replace these with their ASCII equivalents") {
+		t.Errorf("must not demand ASCII replacement for CJK-context punctuation: %s", result)
+	}
+	if !strings.Contains(result, "CJK") {
+		t.Errorf("expected CJK context note, got: %s", result)
+	}
+	if !strings.Contains(result, "keep them as-is") {
+		t.Errorf("expected keep-as-is guidance, got: %s", result)
+	}
+}
+
+// TestCheckUnicodeChars_CJKInvisibleStillFlagged pins the invisible-char
+// exemption of #1217: zero-width characters on CJK lines are never
+// legitimate typography and keep their removal directive.
+func TestCheckUnicodeChars_CJKInvisibleStillFlagged(t *testing.T) {
+	result := checkUnicodeChars("main.go", "", "注释\u200b内容\n")
+	if result == "" {
+		t.Fatal("expected warning for zero-width char on CJK line")
+	}
+	if !strings.Contains(result, "remove it") {
+		t.Errorf("invisible chars must keep removal directive even in CJK context: %s", result)
+	}
+}
+
+// TestCheckUnicodeChars_MixedContextKeepsError: the same character type on
+// both a CJK line and a pure-ASCII line stays actionable - any non-CJK
+// instance (likely a broken delimiter) keeps the replacement directive.
+func TestCheckUnicodeChars_MixedContextKeepsError(t *testing.T) {
+	new_ := "// 中文“引号”\nx := “broken”\n"
+	result := checkUnicodeChars("main.go", "", new_)
+	if result == "" {
+		t.Fatal("expected warning")
+	}
+	if !strings.Contains(result, "Replace these with their ASCII equivalents") {
+		t.Errorf("pure-ASCII-line instances must keep replacement directive: %s", result)
+	}
+}
+
+// TestUnicodeCheck_ExcludesProseFiles pins the #1217 registration gate:
+// unicode-check must not apply to LangAny (prose: .md/.txt), where curly
+// quotes and fullwidth punctuation are legitimate typography.
+func TestUnicodeCheck_ExcludesProseFiles(t *testing.T) {
+	for _, c := range allChecks {
+		if c.Name != "unicode-check" {
+			continue
+		}
+		if c.appliesTo(LangAny) {
+			t.Error("unicode-check must not apply to LangAny (prose files)")
+		}
+		for _, lang := range []Language{LangGo, LangPython, LangJSTS, LangMarkup, LangConfig, LangRuby, LangJava} {
+			if !c.appliesTo(lang) {
+				t.Errorf("unicode-check must still apply to code language %d", lang)
+			}
+		}
+		return
+	}
+	t.Fatal("unicode-check not found in registry")
+}
