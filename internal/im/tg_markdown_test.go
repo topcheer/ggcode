@@ -200,3 +200,41 @@ func TestEscapeMarkdownV2_Parentheses(t *testing.T) {
 		t.Fatalf("expected %q, got %q", want, got)
 	}
 }
+
+// TestEscapeMarkdownV2_LinkURLParensAndBackslash pins #1246: the URL part
+// of a MarkdownV2 inline link/image must escape ')' and '\' per the Bot API
+// spec - a raw ')' (Wikipedia-style URLs) failed the WHOLE message with
+// 400 "character ')' is reserved".
+func TestEscapeMarkdownV2_LinkURLParensAndBackslash(t *testing.T) {
+	cases := []struct {
+		name, in, want string
+	}{
+		{
+			name: "link with parenthesized URL",
+			in:   "[Go](https://en.wikipedia.org/wiki/Go_(programming_language))",
+			want: "[Go](https://en.wikipedia.org/wiki/Go_(programming_language\\))",
+		},
+		{
+			name: "image with parenthesized URL",
+			in:   "![alt](https://example.com/file_(1).png)",
+			want: "![alt](https://example.com/file_(1\\).png)",
+		},
+		{
+			name: "URL with backslash",
+			in:   "[x](https://example.com/a\\b)",
+			want: "[x](https://example.com/a\\\\b)",
+		},
+		{
+			name: "plain URL untouched",
+			in:   "[Go](https://go.dev/)",
+			want: "[Go](https://go.dev/)",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := EscapeMarkdownV2(tc.in); got != tc.want {
+				t.Fatalf("EscapeMarkdownV2(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}

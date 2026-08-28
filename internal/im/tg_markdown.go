@@ -123,9 +123,8 @@ func escapeLine(b *strings.Builder, line string) {
 					b.WriteString("![")
 					escapeText(b, line[altStart:altEnd])
 					b.WriteString("](")
-					// URL: escape special chars that would break the link syntax
 					urlEnd := end - 1 // before the closing ')'
-					b.WriteString(line[altEnd+2 : urlEnd+1])
+					escapeMDV2LinkURL(b, line[altEnd+2:urlEnd+1])
 					b.WriteString(")")
 					i = end + 1
 					continue
@@ -143,7 +142,7 @@ func escapeLine(b *strings.Builder, line string) {
 					escapeText(b, line[i+1:altEnd])
 					b.WriteString("](")
 					urlEnd := end - 1
-					b.WriteString(line[altEnd+2 : urlEnd+1])
+					escapeMDV2LinkURL(b, line[altEnd+2:urlEnd+1])
 					b.WriteString(")")
 					i = end + 1
 					continue
@@ -161,6 +160,21 @@ func escapeLine(b *strings.Builder, line string) {
 }
 
 // escapeText escapes special characters in plain text content (inside bold/italic/etc).
+// escapeMDV2LinkURL escapes exactly what Telegram's MarkdownV2 spec requires
+// inside the (...) part of an inline link: "all ')' and '\' must be escaped
+// with the preceding '\' character" (Bot API docs). A raw ')' would end the
+// link early and the dangling ')' then fails the WHOLE message with
+// 400 "character ')' is reserved" - Wikipedia-style parenthesized URLs are
+// the common trigger (#1246). Everything else in the URL stays as-is.
+func escapeMDV2LinkURL(b *strings.Builder, url string) {
+	for i := 0; i < len(url); i++ {
+		if url[i] == ')' || url[i] == '\\' {
+			b.WriteByte('\\')
+		}
+		b.WriteByte(url[i])
+	}
+}
+
 func escapeText(b *strings.Builder, text string) {
 	for i := 0; i < len(text); i++ {
 		c := text[i]
@@ -201,10 +215,22 @@ func findLinkEnd(line string, bracketStart int) int {
 		return -1
 	}
 
-	// Find closing )
-	parenEnd := strings.IndexByte(line[bracketEnd+2:], ')')
-	if parenEnd < 0 {
-		return -1
+	// Find the closing ) with BALANCED paren matching (#1246): a plain
+	// IndexByte ended the link at the first ')' - truncating every
+	// parenthesized URL (Wikipedia's ...Go_(programming_language)) so the
+	// link lost its closing paren and the stray ')' escaped into trailing
+	// text. A ')' only closes the link when no unmatched '(' precedes it.
+	depth := 0
+	for i := bracketEnd + 2; i < len(line); i++ {
+		switch line[i] {
+		case '(':
+			depth++
+		case ')':
+			if depth == 0 {
+				return i
+			}
+			depth--
+		}
 	}
-	return bracketEnd + 2 + parenEnd
+	return -1
 }
