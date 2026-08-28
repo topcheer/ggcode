@@ -23,7 +23,11 @@ import (
 // The debt accumulator provides a complementary signal to postEditVerify:
 //   - postEditVerify: fires every 3 edits, resets on ANY build attempt
 //   - verifyDebt:     accumulates continuously, only clears on green build,
-//     fires escalating warnings at higher thresholds (7, 12)
+//     fires ONE warning per run when debt crosses the moderate threshold
+//     (7); if the first crossing already lands at 12+ the single warning
+//     uses the high-risk wording (once-per-run: batch 2 guidance-noise
+//     cleanup, 83be1c99). Gradual escalation beyond the first warning was
+//     intentionally dropped with that cap.
 //
 // Zero LLM cost. Non-blocking. Thread-safe.
 type verifyDebtState struct {
@@ -32,8 +36,7 @@ type verifyDebtState struct {
 	totalEdits        int    // total source edits this run
 	totalGreenBuilds  int    // total successful verification commands this run
 	lastGreenBuildCmd string // last successful verify command
-	warningsIssued    int    // warnings issued this run (cap at 3)
-	lastWarnDebt      int    // debt level at last warning (to avoid repeated moderate warnings)
+	warningsIssued    int    // warnings issued this run (cap at 1)
 }
 
 // verifyDebt thresholds for escalating warnings.
@@ -73,12 +76,14 @@ func (s *verifyDebtState) recordVerifyCommand(cmd string, failed bool) {
 }
 
 // maybeWarn returns a guidance string when accumulated verification debt
-// crosses warning thresholds. Called at iteration start.
+// crosses the warning threshold. Called at iteration start.
 //
-// Escalation:
-//   - 7+ edits: moderate risk, remind to verify
+// Single warning per run (#1228: once-per-run is the design since the
+// batch 2 guidance-noise cleanup; the moderate (7) and high-risk (12)
+// wordings select which message the ONE warning uses - the first crossing
+// picks by current debt level):
+//   - 7-11 edits: moderate risk, remind to verify
 //   - 12+ edits: high risk, emphasize compounding failure probability
-//   - Capped at verifyDebtMax warnings per run
 func (s *verifyDebtState) maybeWarn(iteration int) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -92,24 +97,7 @@ func (s *verifyDebtState) maybeWarn(iteration int) string {
 		return ""
 	}
 
-	// Only increment warning counter when debt crosses a new threshold,
-	// not on every call with the same debt level. This prevents moderate
-	// warnings at debt=7 from consuming the entire cap before the
-	// high-risk warning at debt=12 can fire.
-	if debt >= verifyDebtWarn2 {
-		// High-risk threshold: only fire if we haven't already warned at this level
-		if s.lastWarnDebt >= verifyDebtWarn2 {
-			return ""
-		}
-	} else {
-		// Moderate threshold: only fire if we haven't already warned at moderate
-		if s.lastWarnDebt >= verifyDebtWarn1 {
-			return ""
-		}
-	}
-
 	s.warningsIssued++
-	s.lastWarnDebt = debt
 
 	var msg string
 	if debt >= verifyDebtWarn2 {
