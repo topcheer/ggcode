@@ -69,9 +69,10 @@ type Knight struct {
 	analyzedSessions map[string]time.Time // session ID → time of last analysis
 	// analysisInFlight guards analyzeRecentSessions against concurrent
 	// same-process runs (tick loop vs PerformSkillAnalysis, issue #977).
-	analysisInFlight bool
-	notifiedStaging  map[string]bool // tracks staging skills already notified to avoid spam
-	stagingFailCount map[string]int  // consecutive validation failure count per staging skill
+	analysisInFlight  bool
+	notifiedStaging   map[string]bool      // tracks staging skills already notified to avoid spam
+	stagingFailCount  map[string]int       // consecutive validation failure count per staging skill
+	evalCooldownUntil map[string]time.Time // #1265: LLM-eval cooldown per skill name
 }
 
 const (
@@ -84,8 +85,14 @@ const (
 	knightMaxGeneratedSkills        = 3
 	knightMaxGenFailures            = 3 // abandon candidate after this many consecutive generation failures
 	knightStagingMaxValidationFails = 3 // auto-reject after N consecutive validation failures
-	knightPromptIgnoredThreshold    = 5 // shown this many times with zero explicit use → improve trigger copy
-	knightPromptOutcomeMinSamples   = 3 // enough weak run outcomes to consider noisy prompt guidance
+	// #1265: after an LLM auto-promote evaluation concludes no (or errors),
+	// re-running the same 3-turn evaluation every 5-minute tick burns the
+	// eval bucket daily on the same candidate with the same context. A
+	// failed candidate goes on cooldown; PASS clears it (conditions may
+	// change when the skill or baselines are revised).
+	knightEvalRetryCooldown       = 24 * time.Hour
+	knightPromptIgnoredThreshold  = 5 // shown this many times with zero explicit use → improve trigger copy
+	knightPromptOutcomeMinSamples = 3 // enough weak run outcomes to consider noisy prompt guidance
 )
 
 // New creates a new Knight instance.
@@ -98,21 +105,22 @@ func New(cfg config.KnightConfig, homeDir, projDir string, store session.Store) 
 	// default config, silently defeating eval/analysis isolation.
 	dailyTotal := normalizeDailyTokenBudget(cfg)
 	return &Knight{
-		cfg:              cfg,
-		budget:           NewBudget(knightDir, cfg),
-		bucketBudget:     newBucketBudget(dailyTotal),
-		index:            NewSkillIndex(homeDir, projDir),
-		promoter:         NewPromoter(homeDir, projDir),
-		usage:            NewUsageTracker(filepath.Join(projDir, ".ggcode", "skill-usage.json")),
-		queue:            NewCandidateQueue(filepath.Join(projDir, ".ggcode", "knight-candidate-queue.json")),
-		rejects:          newRejectFeedbackStore(filepath.Join(projDir, ".ggcode", "knight-reject-feedback.jsonl")),
-		emitGate:         newEmitThrottle(0),
-		store:            store,
-		homeDir:          homeDir,
-		projDir:          projDir,
-		notifiedStaging:  make(map[string]bool),
-		stagingFailCount: make(map[string]int),
-		analyzedSessions: make(map[string]time.Time),
+		cfg:               cfg,
+		budget:            NewBudget(knightDir, cfg),
+		bucketBudget:      newBucketBudget(dailyTotal),
+		index:             NewSkillIndex(homeDir, projDir),
+		promoter:          NewPromoter(homeDir, projDir),
+		usage:             NewUsageTracker(filepath.Join(projDir, ".ggcode", "skill-usage.json")),
+		queue:             NewCandidateQueue(filepath.Join(projDir, ".ggcode", "knight-candidate-queue.json")),
+		rejects:           newRejectFeedbackStore(filepath.Join(projDir, ".ggcode", "knight-reject-feedback.jsonl")),
+		emitGate:          newEmitThrottle(0),
+		store:             store,
+		homeDir:           homeDir,
+		projDir:           projDir,
+		notifiedStaging:   make(map[string]bool),
+		stagingFailCount:  make(map[string]int),
+		evalCooldownUntil: make(map[string]time.Time),
+		analyzedSessions:  make(map[string]time.Time),
 	}
 }
 
@@ -808,7 +816,14 @@ func (k *Knight) reviewStagingSkills(ctx context.Context) {
 		return
 	}
 
-	active, _ := k.index.ActiveSkills()
+	active, activeErr := k.index.ActiveSkills()
+	if activeErr != nil {
+		// #1266: with an empty active list the duplicate guard below passes
+		// vacuously (CheckDuplicate(s, nil) is always false) and the revision
+		// check misses real twins - defer staging review to the next tick.
+		debug.Log("knight", "reviewStagingSkills: active index unavailable: %v", activeErr)
+		return
+	}
 
 	for _, s := range staging {
 		result := ValidateSkill(s)
@@ -862,6 +877,15 @@ func (k *Knight) reviewStagingSkills(ctx context.Context) {
 					k.emitReportKeyed(fmt.Sprintf("📝 Skill candidate requires review: %s\n%s\nReason: %s\n👉 /knight approve %s to promote / /knight reject %s to decline",
 						s.Name, s.Meta.Description, reason, s.Name, s.Name), s.Name, EmitSeverityActionRequired)
 				}
+				continue
+			}
+			if until, ok := k.evalCooldownUntil[s.Name]; ok && time.Now().Before(until) {
+				// #1265: the LLM already evaluated this candidate recently and
+				// concluded no (or the runner errored) - the same context re-runs
+				// to the same verdict. Skip until the cooldown expires; the
+				// user-facing review notice was already emitted once
+				// (markStagingNotified dedups).
+				debug.Log("knight", "skill %s: LLM eval cooldown active until %s, skipping re-evaluation", s.Name, until.Format(time.RFC3339))
 				continue
 			}
 			if allowed, reason := k.evaluateAutoPromoteCandidate(ctx, s); !allowed {
@@ -952,7 +976,18 @@ func (k *Knight) evaluateAutoPromoteCandidate(ctx context.Context, entry *SkillE
 	}
 	// Deterministic rule-based overlap check. Run before invoking the LLM so
 	// that an obviously redundant candidate doesn't burn eval-bucket tokens.
-	active, _ := k.index.ActiveSkills()
+	active, activeErr := k.index.ActiveSkills()
+	if activeErr != nil {
+		// #1266: an empty active list disables the overlap gate vacuously
+		// (same #985 family) - conservatively block promotion this tick
+		// instead of letting an unvetted candidate through.
+		reason := fmt.Sprintf("active skill index unavailable, deferring evaluation: %v", activeErr)
+		k.appendAutoPromoteEval(entry, autoPromoteEvalDecision{
+			Rationale:   reason,
+			FailureMode: "index_error",
+		})
+		return false, reason
+	}
 	overlap := computeRuleBasedOverlap(entry, string(content), active, func(e *SkillEntry) string {
 		body, _ := readSkillContent(e.Path)
 		return string(body)
@@ -1073,6 +1108,9 @@ Staged skill:
 			RawOutput:   result.Output,
 			FailureMode: "runner_error",
 		})
+		// #1265: the expensive LLM run already burned and produced nothing -
+		// cooldown so the next ticks don't repeat it with the same context.
+		k.evalCooldownUntil[entry.Name] = time.Now().Add(knightEvalRetryCooldown)
 		return false, fmt.Sprintf("scenario evaluation failed: %v", result.Error)
 	}
 	decision := parseAutoPromoteEvalDecision(result.Output)
@@ -1091,8 +1129,14 @@ Staged skill:
 		if decision.Rationale == "" {
 			decision.Rationale = "scenario evaluation did not approve auto-promotion"
 		}
+		// #1265: the LLM evaluated and declined - re-running with identical
+		// context every tick is the structural eval-bucket drain; cooldown.
+		k.evalCooldownUntil[entry.Name] = time.Now().Add(knightEvalRetryCooldown)
 		return false, decision.Rationale
 	}
+	// Approved: clear any cooldown (baselines or the skill may have changed
+	// since the declining verdict).
+	delete(k.evalCooldownUntil, entry.Name)
 	return true, ""
 }
 
@@ -1240,8 +1284,17 @@ func (k *Knight) analyzeRecentSessions(ctx context.Context) error {
 		return nil
 	}
 
-	active, _ := k.index.ActiveSkills()
-	staging, _ := k.index.StagingSkills()
+	active, err := k.index.ActiveSkills()
+	if err != nil {
+		// #1266: isKnownCandidate(nil) returns false for everything - known
+		// skills would be regenerated (duplicate LLM generation + staging
+		// churn). Abort the tick instead.
+		return fmt.Errorf("knight: active skill index unavailable while staging candidates: %w", err)
+	}
+	staging, err := k.index.StagingSkills()
+	if err != nil {
+		return fmt.Errorf("knight: staging skill index unavailable while staging candidates: %w", err)
+	}
 
 	// Process candidates: only converged candidates become staging writes.
 	var reported []SkillCandidate

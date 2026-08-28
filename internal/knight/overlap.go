@@ -69,8 +69,18 @@ func computeRuleBasedOverlap(candidate *SkillEntry, candidateBody string, active
 	return decision
 }
 
+// minNameAffixLen is the shortest shared prefix/suffix (slug chars) that
+// still counts as a name similarity (#1264): "go" vs "golang" share only 2
+// and "test" vs "latest" share only 4 - both used to flip nameMatch and
+// hard-floor Jaccard at 0.6, unconditionally blocking auto-promotion of
+// unrelated skills. Genuine revisions share near-complete names
+// ("golang-ci" vs "golang" share 6, "go-verify" vs "verify" share 6).
+const minNameAffixLen = 5
+
 // nameSimilar returns true if two skill names match exactly (case-insensitive)
-// or share a substantial slug-level prefix/suffix.
+// or share a substantial slug-level prefix/suffix (#1264: at least
+// minNameAffixLen chars - short affixes like go/golang or test/latest are
+// coincidental, not similarity).
 func nameSimilar(a, b string) bool {
 	a = strings.ToLower(strings.TrimSpace(a))
 	b = strings.ToLower(strings.TrimSpace(b))
@@ -80,11 +90,17 @@ func nameSimilar(a, b string) bool {
 	if a == b {
 		return true
 	}
-	if strings.HasPrefix(a, b) || strings.HasPrefix(b, a) {
-		return true
+	shorter := len(a)
+	if len(b) < shorter {
+		shorter = len(b)
 	}
-	if strings.HasSuffix(a, b) || strings.HasSuffix(b, a) {
-		return true
+	if shorter >= minNameAffixLen {
+		if strings.HasPrefix(a, b) || strings.HasPrefix(b, a) {
+			return true
+		}
+		if strings.HasSuffix(a, b) || strings.HasSuffix(b, a) {
+			return true
+		}
 	}
 	return false
 }

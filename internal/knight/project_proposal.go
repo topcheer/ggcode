@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"os/exec"
+
 	"github.com/topcheer/ggcode/internal/util"
 )
 
@@ -31,6 +33,47 @@ type ProjectImprovementProposal struct {
 }
 
 var projectProposalSlugPattern = regexp.MustCompile(`[^a-z0-9._-]+`)
+
+// countStatusDiff counts status lines present in exactly one of the two
+// porcelain snapshots (set difference both ways) for the violation message.
+func countStatusDiff(before, after string) int {
+	bs := map[string]bool{}
+	for _, l := range strings.Split(before, "\n") {
+		if l != "" {
+			bs[l] = true
+		}
+	}
+	as := map[string]bool{}
+	for _, l := range strings.Split(after, "\n") {
+		if l != "" {
+			as[l] = true
+		}
+	}
+	n := 0
+	for l := range bs {
+		if !as[l] {
+			n++
+		}
+	}
+	for l := range as {
+		if !bs[l] {
+			n++
+		}
+	}
+	return n
+}
+
+// gitStatusSnapshot returns the working-tree status of dir as porcelain
+// lines, or "" when git is unavailable or dir is not a repository (in that
+// case the post-run comparison degenerates to a no-op and the prompt rules
+// remain the only guard).
+func gitStatusSnapshot(dir string) string {
+	out, err := exec.Command("git", "-C", dir, "status", "--porcelain").Output()
+	if err != nil {
+		return ""
+	}
+	return string(out)
+}
 
 func (k *Knight) GenerateProjectImprovementProposal(ctx context.Context, goal string) (ProjectImprovementProposal, TaskResult, error) {
 	goal = strings.TrimSpace(goal)
@@ -60,6 +103,14 @@ Return Markdown with these sections:
 ## Validation Plan
 ## Risks and Rollback`, goal)
 
+	// #1261: the "do not modify the project" guardrail used to live in the
+	// prompt only, while the factory injected the full interactive tool
+	// registry - a real unauthorized-write path. Snapshot the working tree
+	// before and after the run; any drift means the LLM wrote despite the
+	// rules, so the proposal is discarded and the violation surfaced loudly
+	// (no automatic rollback - reverting user-visible state automatically
+	// from a background agent would be its own hazard).
+	treeBefore := gitStatusSnapshot(k.projDir)
 	result := k.RunTaskWithTurns(ctx, "project-improvement-proposal", prompt, factory, 6)
 	if result.Error != nil {
 		return ProjectImprovementProposal{}, result, result.Error
@@ -67,6 +118,14 @@ Return Markdown with these sections:
 	content := strings.TrimSpace(result.Output)
 	if content == "" {
 		return ProjectImprovementProposal{}, result, fmt.Errorf("knight: proposal output is empty")
+	}
+	// Compare BEFORE writing our own proposal artifact below - knight's own
+	// .ggcode write is expected and must not trip the guardrail.
+	if treeAfter := gitStatusSnapshot(k.projDir); treeAfter != treeBefore {
+		diffLines := countStatusDiff(treeBefore, treeAfter)
+		return ProjectImprovementProposal{}, result, fmt.Errorf(
+			"knight: READ-ONLY GUARDRAIL VIOLATED: the proposal task modified the working tree (%d changed status line(s)); run `git status` / `git diff` to review. Proposal discarded",
+			diffLines)
 	}
 	proposal, err := k.writeProjectImprovementProposal(goal, content)
 	if err != nil {

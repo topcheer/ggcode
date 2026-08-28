@@ -102,11 +102,26 @@ func (k *Knight) RunTaskWithTurns(ctx context.Context, taskName, prompt string, 
 
 // buildKnightSystemPrompt creates a system prompt for Knight tasks.
 func buildKnightSystemPrompt(taskName string) string {
+	// #1261: the generic "use the appropriate tools to create content" rule
+	// below directly contradicted the proposal prompt's "do NOT modify the
+	// project" instruction - and with the full interactive tool registry
+	// injected, an LLM following the system prompt over the task prompt had a
+	// real unauthorized-write path. Proposal tasks now get an explicit
+	// read-only rule at system-prompt level (plus the post-run git check in
+	// project_proposal.go, which catches violations regardless of adherence).
+	readOnlyRules := ""
+	if strings.Contains(taskName, "proposal") {
+		readOnlyRules = `
+READ-ONLY TASK: this is a proposal task.
+- Do NOT modify, create, or delete any file in the project.
+- Do NOT use edit_file, write_file, multi_edit_file, file_ops, or mutating run_command / git commands.
+- Read-only inspection only. Your only output is the proposal document.`
+	}
 	return fmt.Sprintf(`You are Knight, a background agent that helps maintain and improve the project.
 You run autonomously without direct user interaction.
 
 Current task: %s
-
+%s
 Rules:
 - Be thorough but concise
 - If you discover issues, describe them clearly
@@ -117,5 +132,5 @@ Rules:
 For skill-generation tasks specifically:
 - Your LAST message must be the complete skill document starting with ---
 - Do NOT output any analysis, summary, or explanation after the skill document
-- Do NOT output any text before the --- frontmatter in your final message`, taskName)
+	- Do NOT output any text before the --- frontmatter in your final message`, taskName, readOnlyRules)
 }

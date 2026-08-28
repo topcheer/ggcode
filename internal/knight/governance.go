@@ -73,8 +73,18 @@ func (k *Knight) RunGovernanceAudit(window time.Duration) (SkillGovernanceAudit,
 	if window <= 0 {
 		window = 30 * 24 * time.Hour
 	}
-	active, _ := k.index.ActiveSkills()
-	staging, _ := k.index.StagingSkills()
+	active, err := k.index.ActiveSkills()
+	if err != nil {
+		// #1262: Scan() failures must not surface as "0 skills, healthy" -
+		// that is exactly the empty-list illusion #770 banned for the index
+		// paths. Propagate so the caller shows an error instead of a fake
+		// clean report.
+		return SkillGovernanceAudit{}, fmt.Errorf("knight: governance audit: active skill index unavailable: %w", err)
+	}
+	staging, err := k.index.StagingSkills()
+	if err != nil {
+		return SkillGovernanceAudit{}, fmt.Errorf("knight: governance audit: staging skill index unavailable: %w", err)
+	}
 	now := time.Now()
 	cutoff := now.Add(-window)
 	audit := SkillGovernanceAudit{
@@ -233,7 +243,37 @@ func (k *Knight) findOverlapRecommendations(active []*SkillEntry) []SkillActionR
 			contentByRef[formatSkillRef(entry.Scope, entry.Name)] = string(body)
 		}
 	}
+	// #1263: two different active entries declaring the same (scope, name)
+	// is duplicate registration - the exact condition the pairwise check
+	// below cannot report, because computeRuleBasedOverlap deliberately
+	// self-skips same-scope-same-name comparisons (that skip exists for the
+	// staging-revision flow, where a staging skill rewrites its active twin).
+	// Detect it up front from the raw entry list.
+	type dupEntryRef struct{ ref, path string }
+	byName := make(map[string][]dupEntryRef, len(active))
+	for _, entry := range active {
+		if entry == nil {
+			continue
+		}
+		key := strings.ToLower(entry.Scope) + "\x00" + strings.ToLower(entry.Name)
+		byName[key] = append(byName[key], dupEntryRef{ref: formatSkillRef(entry.Scope, entry.Name), path: entry.Path})
+	}
 	var overlaps []overlapCandidate
+	for _, group := range byName {
+		if len(group) < 2 {
+			continue
+		}
+		paths := make([]string, 0, len(group))
+		for _, d := range group {
+			paths = append(paths, d.path)
+		}
+		overlaps = append(overlaps, overlapCandidate{
+			refA:       group[0].ref,
+			refB:       group[1].ref,
+			similarity: 1.0,
+			reason:     fmt.Sprintf("duplicate registration: same name declared in %d entries (%s)", len(group), strings.Join(paths, ", ")),
+		})
+	}
 	for i := 0; i < len(active); i++ {
 		if active[i] == nil {
 			continue
