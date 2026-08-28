@@ -76,6 +76,12 @@ type twitchAdapter struct {
 	conn      net.Conn
 	connected bool
 	closed    bool
+	// writeMu serializes socket writes (#1249): sendRaw only held mu.RLock
+	// while writing, but four real callers (read-loop PONG/PRIVMSG, keepalive
+	// PING, Send, Close QUIT) can race. net.Conn does not guarantee line
+	// atomicity, so a long PRIVMSG crossing a PING packet interleaved into a
+	// corrupt IRC line and a server disconnect. mu stays for conn lifecycle.
+	writeMu sync.Mutex
 
 	// stopCh is closed by Close() and wakes the backoff sleep, so a Close()
 	// issued during the reconnect window cannot leave the adapter running
@@ -410,6 +416,16 @@ func (a *twitchAdapter) handleIRCLine(ctx context.Context, msg *ircMessage, tags
 		debug.Log("twitch", "adapter=%s NOTICE: %s", a.name, msg.Trailing)
 	case "PRIVMSG":
 		a.handlePRIVMSG(ctx, msg, tags)
+	case "WHISPER":
+		// Twitch delivers DMs as WHISPER commands (we CAP REQ'd
+		// twitch.tv/commands), NOT as PRIVMSG addressed to our nick — the
+		// isDM branch inside handlePRIVMSG was dead code on Twitch and every
+		// inbound DM was silently dropped here, pairing included (#1247).
+		// A WHISPER's Params[0] is OUR nick (no # prefix), so routing it
+		// through handlePRIVMSG activates the DM path: channelID=senderNick,
+		// no channel mention gating.
+		debug.Log("twitch", "adapter=%s inbound WHISPER from %s", a.name, msg.Prefix)
+		a.handlePRIVMSG(ctx, msg, tags)
 	}
 	return false
 }
@@ -566,7 +582,11 @@ func (a *twitchAdapter) handlePairing(ctx context.Context, ircMsg InboundMessage
 	pairingResult, err := a.manager.HandlePairingInbound(ircMsg)
 	debug.Log("twitch", "adapter=%s pairing: consumed=%v bound=%v err=%v", a.name, pairingResult.Consumed, pairingResult.Bound, err)
 	if err != nil && err != ErrNoSessionBound {
-		a.publishState(false, "warning", err.Error())
+		// #1248: message-level errors do not flip the adapter state - connected
+		// is only published once on IRC login and nothing re-publishes it
+		// while the connection lives, so one transient pairing hiccup pinned a
+		// healthy adapter at warning forever. Log only (#1238/#1243 family).
+		debug.Log("twitch", "adapter=%s pairing error (IRC unaffected): %v", a.name, err)
 	}
 	if !pairingResult.Consumed {
 		return false
@@ -577,7 +597,8 @@ func (a *twitchAdapter) handlePairing(ctx context.Context, ircMsg InboundMessage
 		debug.Log("twitch", "adapter=%s pairing reply to %s failed: %v", a.name, channelID, err)
 	}
 	if err := a.manager.NotifyPreviousBindingReplaced(ctx, pairingResult); err != nil {
-		a.publishState(false, "warning", err.Error())
+		// #1248: same message-level downgrade as above.
+		debug.Log("twitch", "adapter=%s notify previous binding failed: %v", a.name, err)
 	}
 	return true
 }
@@ -685,20 +706,23 @@ func (a *twitchAdapter) defaultDialIRC(addr string) (net.Conn, error) {
 // ---------------------------------------------------------------------------
 
 // sendWhisper delivers a DM through the Helix API. target is the recipient's
-// login (nick). Failures are reported via publishState so they are visible to
-// the user instead of silently lost (issue #972).
+// login (nick). Failures are returned to the caller (who logs them) — they
+// must NOT flip the adapter state: Helix hiccups are independent of the IRC
+// connection, and connected is only re-published after a reconnect, so a
+// warning was sticky forever (#1248; visibility retained from #972 via the
+// returned error + debug logs).
 func (a *twitchAdapter) sendWhisper(ctx context.Context, recipientLogin, text string) error {
 	recipientLogin = strings.TrimPrefix(strings.TrimSpace(recipientLogin), "#")
 	ids, err := a.helixResolveUserIDs(ctx, a.nick, recipientLogin)
 	if err != nil {
-		a.publishState(false, "warning", "Twitch DM via Helix failed (resolve user): "+err.Error())
+		debug.Log("twitch", "adapter=%s DM via Helix failed (resolve user): %v", a.name, err)
 		return fmt.Errorf("whisper resolve %s: %w", recipientLogin, err)
 	}
 	fromID, okFrom := ids[strings.ToLower(a.nick)]
 	toID, okTo := ids[strings.ToLower(recipientLogin)]
 	if !okFrom || !okTo {
 		err := fmt.Errorf("could not resolve Twitch user id for whisper (self=%v recipient=%v)", okFrom, okTo)
-		a.publishState(false, "warning", "Twitch DM via Helix failed: "+err.Error())
+		debug.Log("twitch", "adapter=%s DM via Helix failed: %v", a.name, err)
 		return err
 	}
 
@@ -717,7 +741,7 @@ func (a *twitchAdapter) sendWhisper(ctx context.Context, recipientLogin, text st
 				}
 			}
 			if err := a.helixSendWhisper(ctx, fromID, toID, chunk); err != nil {
-				a.publishState(false, "warning", "Twitch DM via Helix failed: "+err.Error())
+				debug.Log("twitch", "adapter=%s DM via Helix failed: %v", a.name, err)
 				return fmt.Errorf("whisper to %s: %w", recipientLogin, err)
 			}
 			sent = true
@@ -852,6 +876,11 @@ func (a *twitchAdapter) sendRaw(line string) error {
 	if c == nil {
 		return fmt.Errorf("not connected")
 	}
+	// #1249: serialize writes — read-loop PONGs, keepalive PINGs, Sends and
+	// the Close QUIT all race here; an interleaved write corrupts the IRC
+	// line and the server drops the connection.
+	a.writeMu.Lock()
+	defer a.writeMu.Unlock()
 	_, err := fmt.Fprintf(c, "%s\r\n", line)
 	return err
 }

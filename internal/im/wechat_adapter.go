@@ -411,6 +411,27 @@ func (a *WechatAdapter) handleMessage(ctx context.Context, msg ilinkMessage) {
 		return
 	}
 
+	// #1251: voice/video messages have no iLink mapping (no upload API, no
+	// STT path) — the text below comes out empty and the old flow logged
+	// "empty text, skipping" while the message was consumed by the seen-dedup.
+	// To the user the bot simply never reacted, and resending hit the same
+	// wall. Reply with an explicit notice instead of dropping silently.
+	if unsupported := wechatUnsupportedItemKind(msg); unsupported != 0 {
+		notice := "[暂不支持语音消息，请发送文字]"
+		if unsupported == ilinkItemVideo {
+			notice = "[暂不支持视频消息，请发送文字]"
+		}
+		debug.Log("wechat", "adapter=%s unsupported item type=%d from=%s, replying notice", a.name, unsupported, msg.FromUserID)
+		channelID := msg.FromUserID
+		if msg.GroupID != "" {
+			channelID = msg.GroupID
+		}
+		if err := a.sendTextToUser(ctx, channelID, notice, msg.ContextToken); err != nil {
+			debug.Log("wechat", "adapter=%s unsupported-type notice to=%s failed: %v", a.name, channelID, err)
+		}
+		return
+	}
+
 	if strings.TrimSpace(text) == "" {
 		debug.Log("wechat", "adapter=%s handleMessage: empty text, skipping", a.name)
 		return
@@ -472,6 +493,17 @@ func (a *WechatAdapter) handleMessage(ctx context.Context, msg ilinkMessage) {
 	if a.manager != nil && msg.ContextToken != "" {
 		a.manager.UpdateBindingContextToken(a.name, msg.ContextToken)
 	}
+}
+
+// wechatUnsupportedItemKind reports the first voice/video item type present
+// in the message, or 0 if none (#1251 — these have no inbound mapping).
+func wechatUnsupportedItemKind(msg ilinkMessage) int {
+	for _, item := range msg.ItemList {
+		if item.Type == ilinkItemVoice || item.Type == ilinkItemVideo {
+			return item.Type
+		}
+	}
+	return 0
 }
 
 // wechatMessageText joins the text items of an iLink message into one string.
@@ -639,17 +671,28 @@ func (a *WechatAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 	images, remainder := ExtractImagesFromText(text)
 	text = stripMarkdown(strings.TrimSpace(remainder))
 	sentImage := false
+	attempted := 0
 	for _, img := range images {
 		url := wechatImageURL(img)
 		if url == "" {
 			debug.Log("wechat", "adapter=%s image kind=%s not deliverable via iLink (needs public URL), skipped", a.name, img.Kind)
 			continue
 		}
+		attempted++
 		if err := a.sendSingleImage(ctx, token, toUserID, contextToken, url); err != nil {
 			debug.Log("wechat", "adapter=%s image %s failed: %v", a.name, url, err)
 			continue
 		}
 		sentImage = true
+		// #1250: match the text-chunk path's spacing — iLink is a passive-reply
+		// window protocol that is rate sensitive (5 msgs/inbound); back-to-back
+		// image POSTs asked for throttling the same way the chunks do. This
+		// also spaces the last image from the first text chunk.
+		select {
+		case <-time.After(500 * time.Millisecond):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 
 	if text == "" {
@@ -657,7 +700,13 @@ func (a *WechatAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 			debug.Log("wechat", "adapter=%s Send skipped: outboundText returned empty for kind=%s", a.name, event.Kind)
 			return nil
 		}
-		text = "[image sent above]" // images carried the content
+		// #1250: every image failed or was undeliverable — the old "[image
+		// sent above]" placeholder claimed success while the images were
+		// lost, misleading both the user and the agent. Fail honestly.
+		if attempted > 0 {
+			return fmt.Errorf("wechat: all %d image(s) failed to send via iLink", attempted)
+		}
+		return fmt.Errorf("wechat: %d image(s) not deliverable via iLink (need public URLs)", len(images))
 	}
 
 	debug.Log("wechat", "adapter=%s Send to=%s context_token=%s text_len=%d kind=%s",

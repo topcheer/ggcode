@@ -361,9 +361,11 @@ func TestTwitchDMViaHelixAPI(t *testing.T) {
 	}
 }
 
-// TestTwitchDMHelixFailurePublishesState verifies a Helix failure is surfaced
-// via publishState instead of being silently dropped.
-func TestTwitchDMHelixFailurePublishesState(t *testing.T) {
+// TestTwitchDMHelixFailureNoStickyWarning verifies that a Helix DM failure
+// is returned to the caller but does NOT publish a warning adapter state
+// (#1248): connected is only published once on IRC login, so any
+// message-level warning was sticky forever while IRC kept working.
+func TestTwitchDMHelixFailureNoStickyWarning(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"message":"missing scope"}`, http.StatusForbidden)
 	}))
@@ -386,11 +388,8 @@ func TestTwitchDMHelixFailurePublishesState(t *testing.T) {
 	mgr.mu.RLock()
 	state, ok := mgr.adapters[adapter.name]
 	mgr.mu.RUnlock()
-	if !ok {
-		t.Fatal("no state published on Helix failure")
-	}
-	if !strings.Contains(state.LastError, "whisper") && !strings.Contains(state.LastError, "Helix") {
-		t.Fatalf("expected whisper/Helix error in state, got %q", state.LastError)
+	if ok && state.Status == "warning" {
+		t.Fatalf("#1248: message-level Helix failure must not pin a sticky warning state, got %+v", state)
 	}
 }
 
