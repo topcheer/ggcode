@@ -90,6 +90,7 @@ type toolEffTracker struct {
 	mu         sync.Mutex
 	calls      map[string][]toolEffEntry // tool name -> recent results (sliding window)
 	errors     map[string]int            // tool name -> total errors
+	successes  map[string]int            // tool name -> total successful calls (successful = !isError && !isPoorResult)
 	totals     map[string]int            // tool name -> total calls
 	firedCount map[string]int            // tool name -> guidance fires this run
 }
@@ -98,6 +99,7 @@ func newToolEffTracker() *toolEffTracker {
 	return &toolEffTracker{
 		calls:      make(map[string][]toolEffEntry),
 		errors:     make(map[string]int),
+		successes:  make(map[string]int),
 		totals:     make(map[string]int),
 		firedCount: make(map[string]int),
 	}
@@ -108,6 +110,7 @@ func (t *toolEffTracker) reset() {
 	defer t.mu.Unlock()
 	t.calls = make(map[string][]toolEffEntry)
 	t.errors = make(map[string]int)
+	t.successes = make(map[string]int)
 	t.totals = make(map[string]int)
 	t.firedCount = make(map[string]int)
 }
@@ -190,6 +193,9 @@ func (t *toolEffTracker) recordCall(toolName, content string, isError bool) stri
 	if isError {
 		t.errors[toolName]++
 	}
+	if successful {
+		t.successes[toolName]++
+	}
 
 	// Append to sliding window
 	entry := toolEffEntry{successful: successful}
@@ -257,6 +263,11 @@ func (t *toolEffTracker) buildGuidance(toolName string, rate float64, successes,
 }
 
 // summary returns a brief effectiveness summary for logging/debugging.
+// Success accounting matches recordCall's window semantics (#1213):
+// successful = !isError && !isPoorResult. Previously the rate here was
+// (total-errors)/total, silently discarding poor results and reporting 100%
+// for a tool whose every call was a non-error failure (e.g. repeated empty
+// searches).
 func (t *toolEffTracker) summary() string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -267,10 +278,10 @@ func (t *toolEffTracker) summary() string {
 
 	var parts []string
 	for name, total := range t.totals {
-		errs := t.errors[name]
-		rate := float64(total-errs) / float64(total)
+		succ := t.successes[name]
+		rate := float64(succ) / float64(total)
 		if total > 0 && rate < toolEffThreshold {
-			parts = append(parts, fmt.Sprintf("%s: %d/%d (%.0f%%)", name, total-errs, total, rate*100))
+			parts = append(parts, fmt.Sprintf("%s: %d/%d (%.0f%%)", name, succ, total, rate*100))
 		}
 	}
 	if len(parts) == 0 {

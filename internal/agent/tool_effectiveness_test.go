@@ -188,6 +188,37 @@ func TestToolEffTracker_Summary(t *testing.T) {
 	}
 }
 
+// TestIssue1213_SummaryCountsPoorResults verifies summary()'s success rate
+// matches recordCall's semantics: successful = !isError && !isPoorResult.
+// A tool whose every call was a non-error failure (repeated empty searches)
+// must be reported as low effectiveness, not hidden behind a
+// (total-errors)/total computation that reported 100% (#1213).
+func TestIssue1213_SummaryCountsPoorResults(t *testing.T) {
+	tr := newToolEffTracker()
+
+	// 8 empty-search results: isError=false but isPoorResult=true.
+	for i := 0; i < 8; i++ {
+		tr.recordCall("grep", "no matches found", false)
+	}
+
+	s := tr.summary()
+	if !strings.Contains(s, "grep") {
+		t.Fatalf("summary must report poor-result-only tool, got: %q", s)
+	}
+	if !strings.Contains(s, "0/8") {
+		t.Errorf("summary should show 0/8 successes, got: %s", s)
+	}
+
+	// Control: a genuinely successful tool stays out of the summary.
+	tr2 := newToolEffTracker()
+	for i := 0; i < 8; i++ {
+		tr2.recordCall("grep", "file.go:1:match", false)
+	}
+	if s2 := tr2.summary(); s2 != "" {
+		t.Errorf("all-success tool should not appear in summary, got: %q", s2)
+	}
+}
+
 func TestIsPoorResult(t *testing.T) {
 	tests := []struct {
 		tool    string
