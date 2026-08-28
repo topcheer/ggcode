@@ -54,6 +54,13 @@ type SkillIndex struct {
 	cache     []*SkillEntry
 	cacheTime time.Time
 	cacheTTL  time.Duration
+	// #1269: bumped by every Invalidate. A Scan goroutine captures the epoch
+	// before its (lock-free) disk walk and only publishes the result into the
+	// cache if the epoch is unchanged - otherwise an Invalidate that fired
+	// mid-scan would be lost: the stale scan result would overwrite the
+	// freshly-invalidated cache and keep serving pre-promote/reject state for
+	// up to the 30s TTL.
+	epoch uint64
 }
 
 // Default index cache TTL — avoid re-scanning disk on every call.
@@ -76,6 +83,7 @@ func (si *SkillIndex) Invalidate() {
 	defer si.mu.Unlock()
 	si.cache = nil
 	si.cacheTime = time.Time{}
+	si.epoch++
 }
 
 // Scan returns all discovered skills (active + staging), using cache when fresh.
@@ -86,6 +94,10 @@ func (si *SkillIndex) Scan() ([]*SkillEntry, error) {
 		si.mu.RUnlock()
 		return cached, nil
 	}
+	// #1269: remember which cache generation this scan belongs to. If an
+	// Invalidate fires during the disk walk below, the epoch moves and the
+	// stale write-back is discarded instead of resurrecting old state.
+	scanEpoch := si.epoch
 	si.mu.RUnlock()
 
 	var entries []*SkillEntry
@@ -125,10 +137,14 @@ func (si *SkillIndex) Scan() ([]*SkillEntry, error) {
 		return entries, firstErr
 	}
 
-	// Cache result
+	// Cache result, but only if no Invalidate fired mid-scan (#1269). The
+	// caller still gets the freshly-scanned entries either way - only the
+	// cache publish is conditional.
 	si.mu.Lock()
-	si.cache = entries
-	si.cacheTime = time.Now()
+	if si.epoch == scanEpoch {
+		si.cache = entries
+		si.cacheTime = time.Now()
+	}
 	si.mu.Unlock()
 
 	return entries, nil

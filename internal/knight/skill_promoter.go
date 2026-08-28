@@ -55,8 +55,14 @@ func (p *Promoter) Promote(entry *SkillEntry) error {
 	// Snapshot existing skill if present
 	if _, err := os.Stat(targetPath); err == nil {
 		if snapErr := p.createSnapshot(entry.Name, targetPath); snapErr != nil {
-			// Non-fatal: log but continue
-			debug.Log("knight", "snapshot warning: %v", snapErr)
+			// #1267: this used to be a debug.Log-and-continue - the
+			// AtomicWriteFile below then overwrote the old active version with
+			// NO copy left anywhere (staging holds the NEW content, the snapshot
+			// write failed), making the old version permanently unrecoverable
+			// and Rollback impossible (no snapshots listed). Refuse to promote
+			// without a rollback point; the caller surfaces the error and can
+			// retry once the snapshot dir is writable.
+			return fmt.Errorf("promote %q aborted: snapshot of existing active version failed (refusing to overwrite without a rollback point): %w", entry.Name, snapErr)
 		}
 	}
 
@@ -176,7 +182,12 @@ func (p *Promoter) Rollback(entry *SkillEntry) error {
 
 	if _, err := os.Stat(entry.Path); err == nil {
 		if snapErr := p.createSnapshot(entry.Name, entry.Path); snapErr != nil {
-			debug.Log("knight", "rollback snapshot warning: %v", snapErr)
+			// #1267 (rollback variant): same data-loss class as Promote - the
+			// AtomicWriteFile below would replace the current content with the
+			// snapshot's older version while the pre-rollback snapshot (the ONLY
+			// copy of the current version) failed to write. Abort instead of
+			// silently losing the current version.
+			return fmt.Errorf("rollback %q aborted: pre-rollback snapshot of current version failed (refusing to overwrite without a backup): %w", entry.Name, snapErr)
 		}
 	}
 
@@ -258,8 +269,26 @@ func (p *Promoter) createSnapshot(name, activePath string) error {
 		return err
 	}
 
-	snapPath := filepath.Join(snapDir, name+"."+time.Now().Format("20060102-150405")+".md")
-	return util.AtomicWriteFile(snapPath, data, 0644)
+	// #1268: the timestamp used to be second-precision - two snapshots of
+	// the same skill in one second (eval-script promote→rollback chains,
+	// retry loops) produced identical paths and AtomicWriteFile overwrote the
+	// earlier one, losing a version. Microsecond extension keeps each path
+	// unique; listSnapshots matches \d{6,12} and fixed-width digits sort
+	// chronologically (legacy 6-digit snapshots sort before any 12-digit one
+	// of the same second, which is also correct).
+	t := time.Now()
+	base := name + "." + t.Format("20060102-150405")
+	micros := t.Nanosecond() / 1000
+	for i := 0; ; i++ {
+		cand := fmt.Sprintf("%s%06d", base, (micros+i)%1_000_000)
+		snapPath := filepath.Join(snapDir, cand+".md")
+		if _, err := os.Stat(snapPath); os.IsNotExist(err) {
+			return util.AtomicWriteFile(snapPath, data, 0644)
+		}
+		if i >= 64 {
+			return fmt.Errorf("snapshot path collision storm for %s", name)
+		}
+	}
 }
 
 // changelogEntry is one record in the skills changelog.
@@ -306,7 +335,7 @@ func (p *Promoter) listSnapshots(name string) ([]string, error) {
 	// Skill names may contain dots (e.g. "a" and "a.b"), and a glob like
 	// name+".*.md" would match snapshots of every dotted-prefixed sibling.
 	// Match strictly against the "<name>.YYYYMMDD-HHMMSS.md" layout instead.
-	snapPattern := regexp.MustCompile(`^` + regexp.QuoteMeta(name) + `\.\d{8}-\d{6}\.md$`)
+	snapPattern := regexp.MustCompile(`^` + regexp.QuoteMeta(name) + `\.\d{8}-\d{6,12}\.md$`)
 	des, err := os.ReadDir(snapDir)
 	if err != nil {
 		if os.IsNotExist(err) {
