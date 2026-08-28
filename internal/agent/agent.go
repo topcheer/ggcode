@@ -114,7 +114,17 @@ type Agent struct {
 	// works"), which current models handle well; the post-loop pass duplicated
 	// that work and its failure-injection could loop the agent on phantom
 	// errors. Opt-in via config verify.auto_after_run for weaker models.
-	autoVerify                bool
+	autoVerify bool
+
+	// claimsSupervision enables the four success-claim heuristic detectors
+	// (premature_success, success_declare, unverified_claim, phantom_verify).
+	// Default false: they inject guidance derived from lexical matching of
+	// intermediate-state text ("done"/"tests pass"-style phrases vs absent
+	// verify commands). Current models, with the system prompt already mandating
+	// in-loop scoped verification, find these injections pure noise; the
+	// heuristics also fire on legitimate claims. Opt-in via config
+	// verify.claims_supervision for weaker models.
+	claimsSupervision         bool
 	hookConfig                hooks.HookConfig
 	workingDir                string
 	sessionID                 string // current session ID; determines todo file path
@@ -180,6 +190,7 @@ type Agent struct {
 	complexityGate            *complexityGateState                  // post-completion code complexity quality gate
 	changeReconcile           *changeReconcileState                 // pre-completion git diff reconciliation (unexpected side-effect detection)
 	claimVerify               *claimVerifyState                     // tool output misinterpretation detection (AgentRx-inspired)
+	permDenyStreak            *permDenyStreakState                  // consecutive permission-deny mode guard (#1210)
 	diffSummary               *diffSummaryState                     // pre-completion holistic change summary for self-review
 	commitHint                *commitHintState                      // post-completion commit reminder for uncommitted changes
 	verifyRegression          *verifyRegressionState                // cross-run error diff: detects correction-induced regressions
@@ -385,6 +396,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		complexityGate:         newComplexityGateState(),
 		changeReconcile:        newChangeReconcileState(),
 		claimVerify:            newClaimVerifyState(),
+		permDenyStreak:         newPermDenyStreakState(),
 		diffSummary:            newDiffSummaryState(),
 		commitHint:             newCommitHintState(),
 		verifyRegression:       newVerifyRegressionState(),
@@ -1551,6 +1563,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	// by the agent's tool calls. Also resets the gate for the new run.
 	a.changeReconcile.reset()
 	a.claimVerify.reset()
+	a.permDenyStreak.reset()
 	a.crossFileImpact.reset()
 	a.diffSummary.reset()
 	a.commitHint.reset()
@@ -1748,10 +1761,15 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.injectGuidance(sgMsg)
 			msgs = a.contextManager.Messages()
 		}
-		if sdMsg := a.successDeclare.maybeWarn(i + 1); sdMsg != "" {
-			debug.Log("agent", "Iteration %d: premature success declaration detected", i+1)
-			a.injectGuidance(sdMsg)
-			msgs = a.contextManager.Messages()
+		// Success-declaration calibration detector is gated behind
+		// claimsSupervision (default off): lexical success-phrase heuristics on
+		// intermediate states inject noise current models don't need.
+		if a.claimsSupervision {
+			if sdMsg := a.successDeclare.maybeWarn(i + 1); sdMsg != "" {
+				debug.Log("agent", "Iteration %d: premature success declaration detected", i+1)
+				a.injectGuidance(sdMsg)
+				msgs = a.contextManager.Messages()
+			}
 		}
 		if cdMsg := a.criteriaDrift.maybeWarn(i + 1); cdMsg != "" {
 			debug.Log("agent", "Iteration %d: success criteria drift detected", i+1)
@@ -2197,14 +2215,19 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// this is a primary cause of AI-generated PR rejection.
 			// Premature success claim: detect edits without verification
 			// followed by success declaration text.
-			if psHint := a.prematureSuccess.checkSuccessClaim(assistantText); psHint != "" {
-				debug.Log("agent", "Iteration %d: premature success claim detected (edits without verification)", i+1)
-				a.injectGuidance(psHint)
-				// Feed the compounded-uncertainty accumulator: an unverified
-				// success claim is a 1.5-unit epistemic risk event (#484 — this
-				// channel was declared in the accumulator's weights but never
-				// wired, so the documented 4-channel design only ever saw 2).
-				a.recordUncertainty("unverified_success", weightUnverifiedSucc)
+			// Premature success claim: gated behind claimsSupervision (see field
+			// comment) - lexical heuristics over intermediate states are noise for
+			// models that already verify in-loop per the system prompt mandate.
+			if a.claimsSupervision {
+				if psHint := a.prematureSuccess.checkSuccessClaim(assistantText); psHint != "" {
+					debug.Log("agent", "Iteration %d: premature success claim detected (edits without verification)", i+1)
+					a.injectGuidance(psHint)
+					// Feed the compounded-uncertainty accumulator: an unverified
+					// success claim is a 1.5-unit epistemic risk event (#484 — this
+					// channel was declared in the accumulator's weights but never
+					// wired, so the documented 4-channel design only ever saw 2).
+					a.recordUncertainty("unverified_success", weightUnverifiedSucc)
+				}
 			}
 			// Verification outcome disconnect: detect verification failures
 			// that the agent advances past without addressing. Behavioral
@@ -2212,9 +2235,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Phantom verification: detect category-specific verification claims
 			// ("tests pass", "build compiles") without a matching verification
 			// command in the trajectory. Process supervision gap (AgentPro, EMNLP 2025).
-			if pvHint := a.maybeWarnPhantomVerify(assistantText); pvHint != "" {
-				debug.Log("agent", "Iteration %d: phantom verification detector found unverified category claims", i+1)
-				a.injectGuidance(pvHint)
+			// Phantom verification: gated behind claimsSupervision (default off,
+			// see field comment) - same success-claim lexical family.
+			if a.claimsSupervision {
+				if pvHint := a.maybeWarnPhantomVerify(assistantText); pvHint != "" {
+					debug.Log("agent", "Iteration %d: phantom verification detector found unverified category claims", i+1)
+					a.injectGuidance(pvHint)
+				}
 			}
 			// Narrative-evidence decoupling: detect when the agent's text claims
 			// directly contradict the actual content of recent tool outputs
@@ -2610,16 +2637,21 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				// the agent's response claims verification results ("tests pass",
 				// "build succeeds") without having actually run verification
 				// commands. Zero-LLM-cost heuristic.
-				if claimMsg := a.checkUnverifiedClaim(textBuf, runStats); claimMsg != "" {
-					debug.Log("agent", "Iteration %d: unverified success claim detected, injecting reminder", i+1)
-					a.contextManager.Add(provider.Message{
-						Role: "user",
-						Content: []provider.ContentBlock{{
-							Type: "text",
-							Text: claimMsg,
-						}},
-					})
-					continue
+				// Unverified success claim detection: gated behind claimsSupervision
+				// (default off, see field comment) - lexical claim-vs-command cross-
+				// reference over intermediate states is noise for current models.
+				if a.claimsSupervision {
+					if claimMsg := a.checkUnverifiedClaim(textBuf, runStats); claimMsg != "" {
+						debug.Log("agent", "Iteration %d: unverified success claim detected, injecting reminder", i+1)
+						a.contextManager.Add(provider.Message{
+							Role: "user",
+							Content: []provider.ContentBlock{{
+								Type: "text",
+								Text: claimMsg,
+							}},
+						})
+						continue
+					}
 				}
 				// Companion file guard: before returning, check if the agent
 				// edited source files that have existing test companions but
@@ -3592,6 +3624,14 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// success when the tool output contradicts that interpretation.
 			if claimGuidance := a.claimVerify.check(tc.Name, result.Content, result.IsError, extractCommandFromToolCall(tc.Arguments)); claimGuidance != "" {
 				a.appendGuidance(&result, claimGuidance)
+			}
+			// Permission-deny streak guard: a run of consecutive policy denials
+			// usually means the agent is operating in an unintended permission
+			// mode (e.g. dropped into plan mode without realizing it). Name the
+			// mode and the self-rescue path instead of letting the model burn
+			// context on denied retries (#1210).
+			if modeGuard := a.permDenyStreak.record(a.currentMode(), result); modeGuard != "" {
+				a.appendGuidance(&result, modeGuard)
 			}
 			// Failure mode classification: meta-level strategy guidance.
 			// Classifies each error into transient/structural/systemic and
