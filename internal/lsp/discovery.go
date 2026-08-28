@@ -406,7 +406,9 @@ func resolveWorkspaceToolFallback(candidates []string, workspace string) (displa
 
 func resolveRustAnalyzerFallback() (display string, command string, ok bool) {
 	if _, err := exec.LookPath("rustup"); err == nil {
-		out, err := exec.Command("rustup", "which", "rust-analyzer").Output()
+		rustupWhich := exec.Command("rustup", "which", "rust-analyzer")
+		detachConsole(rustupWhich)
+		out, err := rustupWhich.Output()
 		if err == nil {
 			path := strings.TrimSpace(string(out))
 			if executableExists(path) {
@@ -478,7 +480,9 @@ func resolveNodeBinaryFallback(candidates []string, workspace string) (display s
 		}
 	}
 	if _, err := exec.LookPath("npm"); err == nil {
-		out, err := exec.Command("npm", "config", "get", "prefix").Output()
+		npmPrefix := exec.Command("npm", "config", "get", "prefix")
+		detachConsole(npmPrefix)
+		out, err := npmPrefix.Output()
 		if err == nil {
 			prefix := strings.TrimSpace(string(out))
 			if prefix != "" && prefix != "undefined" && prefix != "null" {
@@ -1080,6 +1084,7 @@ func ensureCSharpCompatSolution(workspace string) string {
 	newSln := exec.Command("dotnet", "new", "sln", "-f", "sln", "-n", "csharp-ls", "-o", compatDir, "--force")
 	newSln.Dir = workspace
 	newSln.Env = env
+	detachConsole(newSln)
 	if err := newSln.Run(); err != nil {
 		return ""
 	}
@@ -1087,6 +1092,7 @@ func ensureCSharpCompatSolution(workspace string) string {
 	addProjects := exec.Command("dotnet", args...)
 	addProjects.Dir = workspace
 	addProjects.Env = env
+	detachConsole(addProjects)
 	if err := addProjects.Run(); err != nil {
 		return ""
 	}
