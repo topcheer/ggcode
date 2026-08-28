@@ -499,6 +499,24 @@ func (a *Agent) SetAutoVerify(enabled bool) {
 	a.mu.Unlock()
 }
 
+// SetClaimsSupervision enables/disables the success-claim heuristic
+// detector family (premature_success, success_declare, unverified_claim,
+// phantom_verify). Disabled by default; wired from config
+// verify.claims_supervision.
+func (a *Agent) SetClaimsSupervision(enabled bool) {
+	a.mu.Lock()
+	a.claimsSupervision = enabled
+	a.mu.Unlock()
+}
+
+// ClaimsSupervisionEnabled reports whether the success-claim heuristic
+// detector family is enabled. Default false.
+func (a *Agent) ClaimsSupervisionEnabled() bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.claimsSupervision
+}
+
 // AutoVerifyEnabled reports whether the post-loop automatic verification
 // pass is enabled for this agent. Subagent invariant tests rely on it:
 // only the main interactive/pipe agents are ever wired to the config, so

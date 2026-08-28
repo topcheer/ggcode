@@ -388,6 +388,14 @@ type SubAgentConfig struct {
 // without testing.
 type VerifyConfig struct {
 	AutoAfterRun bool `yaml:"auto_after_run" json:"auto_after_run"` // run build/test verification after the agent loop
+
+	// ClaimsSupervision re-enables the success-claim heuristic detectors
+	// (premature success declarations, unverified/phantom verification claims).
+	// Default off: these injections are derived from lexical matching of
+	// intermediate-state text and add noise for models that already verify
+	// their changes in-loop per the system prompt mandate. Opt in only for
+	// models that habitually claim success without testing.
+	ClaimsSupervision bool `yaml:"claims_supervision" json:"claims_supervision"` // enable success-claim heuristic detectors
 }
 type SwarmConfig struct {
 	MaxTeammatesPerTeam int           `yaml:"max_teammates_per_team"` // default: 16

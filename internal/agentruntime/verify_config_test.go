@@ -21,6 +21,24 @@ func TestSubagentNeverEnablesPostLoopVerify(t *testing.T) {
 	if sub.AutoVerifyEnabled() {
 		t.Fatal("fresh agent must default to post-loop verification disabled")
 	}
+	if sub.ClaimsSupervisionEnabled() {
+		t.Fatal("fresh agent must default to claims-supervision detectors disabled")
+	}
+
+	// Claims supervision: opt-in config re-enables the family on the agent
+	// the applier is pointed at, and only that agent.
+	claimsOn := &config.Config{}
+	claimsOn.Verify.ClaimsSupervision = true
+	supervised := agent.NewAgent(nil, nil, "", 10)
+	ApplyVerifyConfigToAgent(supervised, claimsOn)
+	if !supervised.ClaimsSupervisionEnabled() {
+		t.Fatal("applier must enable claims supervision when verify.claims_supervision=true")
+	}
+	unsupervised := agent.NewAgent(nil, nil, "", 10)
+	ApplyVerifyConfigToAgent(unsupervised, nil) // nil cfg: no change
+	if unsupervised.ClaimsSupervisionEnabled() {
+		t.Fatal("claims supervision must stay off without opt-in")
+	}
 
 	// Opt-in config exists in the workspace...
 	cfg := &config.Config{}
