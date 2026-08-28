@@ -137,6 +137,13 @@ func isPoorResult(toolName, content string) bool {
 		strings.Contains(lower, "[... mcp result truncated:") ||
 		strings.Contains(lower, "[... mcp resource truncated:") ||
 		strings.Contains(lower, "[output truncated at") ||
+		// run_command truncateMiddle head+tail marker: "... [N lines
+		// omitted - output truncated, showing tail] ..." (and the stderr
+		// variant). The "truncated, showing tail]" tail is unique to that
+		// marker; output_compress's "[N similar lines omitted]" (agent-side
+		// redundancy compression of guidance lines) must NOT match - that
+		// output is not degraded. Found in #1208 review.
+		strings.Contains(lower, "truncated, showing tail]") ||
 		strings.Contains(lower, "[... truncated:") ||
 		strings.HasPrefix(lower, "output truncated") ||
 		strings.HasPrefix(lower, "result too large") ||

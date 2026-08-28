@@ -239,6 +239,9 @@ func TestIssue1208_TruncationMarkerAnchoring(t *testing.T) {
 		`# docs: output truncated at 1MB in the plugin layer`,
 		// command output mentioning truncation of something else
 		`archive.log: output truncated at request of sender`,
+		// output_compress's agent-side redundancy marker - guidance lines
+		// collapsed, output NOT degraded (must not be classified poor)
+		`[3 similar lines omitted]`,
 	}
 	for _, content := range benign {
 		if isPoorResult("read_file", content) {
@@ -259,6 +262,10 @@ func TestIssue1208_TruncationMarkerAnchoring(t *testing.T) {
 		"[result too large]",
 		"[max results reached]",
 		"[... truncated: 200 lines]",
+		// run_command truncateMiddle head+tail markers (run_command.go),
+		// stdout and stderr variants - found in #1208 review.
+		"... [42 lines omitted — output truncated, showing tail] ...",
+		"STDERR:\n... [7 lines omitted — stderr truncated, showing tail] ...",
 	}
 	for _, content := range emitted {
 		if !isPoorResult("read_file", content) {
