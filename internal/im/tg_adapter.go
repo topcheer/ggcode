@@ -266,6 +266,10 @@ func (a *tgAdapter) handleUpdate(ctx context.Context, update map[string]any) {
 	}
 
 	text := strings.TrimSpace(stringFromAny(msg["text"]))
+	// #1240: photo/document media carry accompanying text in caption, not
+	// text — without merging, "看这个报错截图，是 panic 了" lost its
+	// instruction half and the agent only saw the image.
+	caption := strings.TrimSpace(stringFromAny(msg["caption"]))
 	if chatType == "group" || chatType == "supergroup" {
 		a.mu.RLock()
 		botUN := a.botUsername
@@ -275,6 +279,16 @@ func (a *tgAdapter) handleUpdate(ctx context.Context, update map[string]any) {
 		// (botUN="dev" turned "@devops" into "ops" and
 		// "dev@devtools.com" into "devtools.com") (#540).
 		text = tgStripBotMention(text, botUN, msg["entities"])
+		if caption != "" {
+			caption = tgStripBotMention(caption, botUN, msg["caption_entities"])
+		}
+	}
+	if caption != "" {
+		if text != "" {
+			text += "\n\n" + caption
+		} else {
+			text = caption
+		}
 	}
 
 	attachments, voiceText := a.processAttachments(ctx, msg)
@@ -304,14 +318,18 @@ func (a *tgAdapter) handleUpdate(ctx context.Context, update map[string]any) {
 
 	pairingResult, err := a.manager.HandlePairingInbound(inbound)
 	if err != nil && err != ErrNoSessionBound {
-		a.publishState(false, "warning", err.Error())
+		// #1243: message-level errors do not flip the state to warning - the
+		// poll loop keeps running but nothing ever re-publishes connected, so
+		// one transient hiccup showed a permanent warning while messages
+		// flowed fine. Log only (same fix family as signal #1238).
+		debug.Log("tg", "adapter=%s pairing error (polling unaffected): %v", a.name, err)
 	}
 	if pairingResult.Consumed {
 		if sendErr := a.sendReplyText(ctx, chatID, msgID, pairingResult.ReplyText); sendErr != nil {
-			a.publishState(false, "warning", sendErr.Error())
+			debug.Log("tg", "adapter=%s pairing reply failed: %v", a.name, sendErr)
 		}
 		if err := a.manager.NotifyPreviousBindingReplaced(ctx, pairingResult); err != nil {
-			a.publishState(false, "warning", err.Error())
+			debug.Log("tg", "adapter=%s notify previous binding failed: %v", a.name, err)
 		}
 		return
 	}
@@ -329,7 +347,9 @@ func (a *tgAdapter) handleUpdate(ctx context.Context, update map[string]any) {
 			debug.Log("tg", "adapter=%s failed to notify sender of delivery error: %v", a.name, sendErr)
 		}
 		if err != ErrNoChannelBound {
-			a.publishState(false, "warning", err.Error())
+			// #1243: message-level warning without a recovery path (see
+			// pairing above) - debug log only.
+			debug.Log("tg", "adapter=%s inbound processing error: %v", a.name, err)
 		}
 	}
 }
@@ -565,6 +585,16 @@ func (a *tgAdapter) Send(ctx context.Context, binding ChannelBinding, event Outb
 	for i, img := range images {
 		if err := a.sendExtractedImage(ctx, channelID, img, ""); err != nil {
 			debug.Log("tg", "adapter=%s image send failed [%d/%d]: %v", a.name, i+1, len(images), err)
+			continue
+		}
+		// #1242: every delivered photo must respect the ~1 msg/s per-chat
+		// limit — back-to-back multi-image replies and the photo→text
+		// transition otherwise burst past it and Telegram 429s the send
+		// (silently dropping the rest of the images).
+		select {
+		case <-time.After(tgInterMessageDelay):
+		case <-ctx.Done():
+			return ctx.Err()
 		}
 	}
 
@@ -637,6 +667,11 @@ func (a *tgAdapter) formatMessages(text string) ([]tgmd.Message, error) {
 	// 400 "message is too long" (issue #970).
 	if a.parseMode == "MarkdownV2" {
 		text = EscapeMarkdownV2(text)
+	} else if a.parseMode == "HTML" {
+		// #1241: legacy HTML mode passed text through unescaped — any <, > or
+		// & (code snippets, comparisons) made Telegram reject the whole
+		// message with 400 "can't parse entities".
+		text = tgEscapeHTML(text)
 	}
 	chunks := splitTGMessage(text, tgMaxTextLen)
 	msgs := make([]tgmd.Message, len(chunks))
@@ -759,97 +794,118 @@ func (a *tgAdapter) sendPhotoByUpload(ctx context.Context, chatID string, data [
 	path := fmt.Sprintf(tgSendPhotoPath, a.botToken)
 	u := a.apiBase + path
 
-	var buf bytes.Buffer
-	writer := multipart.NewWriter(&buf)
+	// #1242: multipart uploads previously bypassed apiRequest's 429 handling
+	// entirely — a rate-limited sendPhoto failed hard and the caller's image
+	// loop dropped it silently. The body is rebuilt per attempt because a
+	// consumed bytes.Buffer cannot be reused.
+	for attempt := 0; attempt <= maxRateLimitRetries; attempt++ {
+		var buf bytes.Buffer
+		writer := multipart.NewWriter(&buf)
 
-	if err := writer.WriteField("chat_id", chatID); err != nil {
-		return fmt.Errorf("write chat_id: %w", err)
-	}
-
-	part, err := writer.CreateFormFile("photo", filename)
-	if err != nil {
-		return fmt.Errorf("create form file: %w", err)
-	}
-	if _, err := part.Write(data); err != nil {
-		return fmt.Errorf("write photo data: %w", err)
-	}
-
-	if caption != "" {
-		cap := caption
-		if len([]rune(cap)) > 1024 {
-			cap = string([]rune(cap)[:1024])
+		if err := writer.WriteField("chat_id", chatID); err != nil {
+			return fmt.Errorf("write chat_id: %w", err)
 		}
-		if a.parseMode == "" {
-			msg := tgmd.Convert(cap)
-			if len(msg.Entities) > 0 {
-				if err := writer.WriteField("caption", msg.Text); err != nil {
-					return fmt.Errorf("write caption: %w", err)
-				}
-				entitiesJSON, _ := json.Marshal(tgEntitiesToRaw(msg.Entities))
-				if err := writer.WriteField("caption_entities", string(entitiesJSON)); err != nil {
-					return fmt.Errorf("write caption_entities: %w", err)
+
+		part, err := writer.CreateFormFile("photo", filename)
+		if err != nil {
+			return fmt.Errorf("create form file: %w", err)
+		}
+		if _, err := part.Write(data); err != nil {
+			return fmt.Errorf("write photo data: %w", err)
+		}
+
+		if caption != "" {
+			cap := caption
+			if len([]rune(cap)) > 1024 {
+				cap = string([]rune(cap)[:1024])
+			}
+			if a.parseMode == "" {
+				msg := tgmd.Convert(cap)
+				if len(msg.Entities) > 0 {
+					if err := writer.WriteField("caption", msg.Text); err != nil {
+						return fmt.Errorf("write caption: %w", err)
+					}
+					entitiesJSON, _ := json.Marshal(tgEntitiesToRaw(msg.Entities))
+					if err := writer.WriteField("caption_entities", string(entitiesJSON)); err != nil {
+						return fmt.Errorf("write caption_entities: %w", err)
+					}
+				} else {
+					if err := writer.WriteField("caption", cap); err != nil {
+						return fmt.Errorf("write caption: %w", err)
+					}
 				}
 			} else {
-				if err := writer.WriteField("caption", cap); err != nil {
+				if err := writer.WriteField("caption", a.legacyCaption(cap)); err != nil {
 					return fmt.Errorf("write caption: %w", err)
 				}
-			}
-		} else {
-			if err := writer.WriteField("caption", a.legacyCaption(cap)); err != nil {
-				return fmt.Errorf("write caption: %w", err)
-			}
-			if err := writer.WriteField("parse_mode", a.parseMode); err != nil {
-				return fmt.Errorf("write parse_mode: %w", err)
+				if err := writer.WriteField("parse_mode", a.parseMode); err != nil {
+					return fmt.Errorf("write parse_mode: %w", err)
+				}
 			}
 		}
-	}
 
-	if strings.TrimSpace(replyTo) != "" {
-		replyToID, perr := parseInt(replyTo)
-		if perr == nil && replyToID != 0 {
-			if err := writer.WriteField("reply_to_message_id", strconv.FormatInt(replyToID, 10)); err != nil {
-				return fmt.Errorf("write reply_to_message_id: %w", err)
+		if strings.TrimSpace(replyTo) != "" {
+			replyToID, perr := parseInt(replyTo)
+			if perr == nil && replyToID != 0 {
+				if err := writer.WriteField("reply_to_message_id", strconv.FormatInt(replyToID, 10)); err != nil {
+					return fmt.Errorf("write reply_to_message_id: %w", err)
+				}
 			}
 		}
-	}
 
-	if err := writer.Close(); err != nil {
-		return fmt.Errorf("close multipart writer: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, &buf)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", writer.FormDataContentType())
-
-	resp, err := a.httpClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	respData, err := util.ReadAll(resp.Body, util.ReadLimitGeneral)
-	if err != nil {
-		return err
-	}
-
-	var payload map[string]any
-	if err := json.Unmarshal(respData, &payload); err != nil && len(respData) > 0 {
-		return fmt.Errorf("Telegram sendPhoto parse error [%d]: %s", resp.StatusCode, strings.TrimSpace(string(respData)))
-	}
-	if resp.StatusCode >= 400 {
-		desc := strings.TrimSpace(stringFromAny(payload["description"]))
-		if desc == "" {
-			desc = http.StatusText(resp.StatusCode)
+		if err := writer.Close(); err != nil {
+			return fmt.Errorf("close multipart writer: %w", err)
 		}
-		return fmt.Errorf("Telegram sendPhoto [%d]: %s", resp.StatusCode, desc)
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, &buf)
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Content-Type", writer.FormDataContentType())
+
+		resp, err := a.httpClient.Do(req)
+		if err != nil {
+			return err
+		}
+
+		// Handle HTTP 429 with the same retry_after semantics as apiRequest
+		// (#1242): Telegram returns {"ok":false,"error_code":429,
+		// "parameters":{"retry_after":N}} with N in seconds.
+		if resp.StatusCode == http.StatusTooManyRequests && attempt < maxRateLimitRetries {
+			retryAfter := tgExtractRetryAfter(resp)
+			resp.Body.Close()
+			debug.Log("tg", "adapter=%s sendPhoto rate-limited (429), retry %d/%d after %v",
+				a.name, attempt+1, maxRateLimitRetries, retryAfter)
+			if err := sleepRetry(ctx, retryAfter); err != nil {
+				return err
+			}
+			continue
+		}
+
+		respData, err := util.ReadAll(resp.Body, util.ReadLimitGeneral)
+		resp.Body.Close()
+		if err != nil {
+			return err
+		}
+
+		var payload map[string]any
+		if err := json.Unmarshal(respData, &payload); err != nil && len(respData) > 0 {
+			return fmt.Errorf("Telegram sendPhoto parse error [%d]: %s", resp.StatusCode, strings.TrimSpace(string(respData)))
+		}
+		if resp.StatusCode >= 400 {
+			desc := strings.TrimSpace(stringFromAny(payload["description"]))
+			if desc == "" {
+				desc = http.StatusText(resp.StatusCode)
+			}
+			return fmt.Errorf("Telegram sendPhoto [%d]: %s", resp.StatusCode, desc)
+		}
+		if ok, _ := payload["ok"].(bool); !ok {
+			desc := strings.TrimSpace(stringFromAny(payload["description"]))
+			return fmt.Errorf("Telegram sendPhoto not ok: %s", desc)
+		}
+		return nil
 	}
-	if ok, _ := payload["ok"].(bool); !ok {
-		desc := strings.TrimSpace(stringFromAny(payload["description"]))
-		return fmt.Errorf("Telegram sendPhoto not ok: %s", desc)
-	}
-	return nil
+	return rateLimitExhausted("Telegram")
 }
 
 // TriggerTyping sends a "typing" chat action to the Telegram chat.
@@ -1340,8 +1396,21 @@ func parseInt(s string) (int64, error) {
 func (a *tgAdapter) legacyCaption(cap string) string {
 	if a.parseMode == "MarkdownV2" {
 		cap = EscapeMarkdownV2(cap)
+	} else if a.parseMode == "HTML" {
+		// #1241: same HTML escaping as formatMessages for photo captions.
+		cap = tgEscapeHTML(cap)
 	}
 	return truncateTGRunes(cap, 1024)
+}
+
+// tgEscapeHTML escapes exactly the three characters Telegram's legacy HTML
+// parse mode treats as markup. html.EscapeString would also escape quotes,
+// turning plain prose into &quot; noise.
+func tgEscapeHTML(s string) string {
+	s = strings.ReplaceAll(s, "&", "&amp;")
+	s = strings.ReplaceAll(s, "<", "&lt;")
+	s = strings.ReplaceAll(s, ">", "&gt;")
+	return s
 }
 
 // truncateTGRunes truncates s to at most max runes. If the cut lands right
