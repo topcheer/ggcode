@@ -2,6 +2,7 @@ package im
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -321,5 +322,31 @@ func TestNostrEventSerialization(t *testing.T) {
 	}
 	if !ok {
 		t.Error("signature should be valid")
+	}
+}
+
+// TestNostrFoldChunk pins #1225's multi-chunk semantics: partial success on
+// a chunk suppresses ITS error, but never erases the sticky error of an
+// earlier fully-failed chunk (which is undelivered data, #964).
+func TestNostrFoldChunk(t *testing.T) {
+	e1 := fmt.Errorf("publish to r1: boom")
+	e2 := fmt.Errorf("publish to r2: bang")
+
+	// Fresh state, partial success: no error surfaces.
+	if got := nostrFoldChunk(nil, 1, e1); got != nil {
+		t.Errorf("partial success on clean state: got %v, want nil", got)
+	}
+	// Fresh state, zero success: error surfaces (#964).
+	if got := nostrFoldChunk(nil, 0, e1); got == nil {
+		t.Error("zero success on clean state: want error")
+	}
+	// Earlier chunk fully failed, later chunk partially succeeds: the sticky
+	// error MUST survive (regression: `lastErr = nil` erased it).
+	if got := nostrFoldChunk(e1, 1, e2); got == nil {
+		t.Error("delivered chunk erased an earlier chunk's total failure")
+	}
+	// Earlier chunk failed, later chunk also fully fails: still an error.
+	if got := nostrFoldChunk(e1, 0, e2); got == nil {
+		t.Error("consecutive total failures must surface an error")
 	}
 }

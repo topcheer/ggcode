@@ -396,12 +396,12 @@ func (a *nostrAdapter) sendNostrDM(ctx context.Context, recipientPubKey, text st
 		return fmt.Errorf("ECDH: %w", err)
 	}
 
-	var lastErr error
+	var hardErr error
 	for i, chunk := range chunks {
 		encrypted, err := nip04.Encrypt(chunk, sharedSecret)
 		if err != nil {
 			// Encryption error is also recipient-level
-			lastErr = fmt.Errorf("NIP-04 encrypt: %w", err)
+			hardErr = fmt.Errorf("NIP-04 encrypt: %w", err)
 			break
 		}
 
@@ -414,7 +414,7 @@ func (a *nostrAdapter) sendNostrDM(ctx context.Context, recipientPubKey, text st
 			Content:   encrypted,
 		}
 		if err := evt.Sign(a.privKey); err != nil {
-			lastErr = fmt.Errorf("sign: %w", err)
+			hardErr = fmt.Errorf("sign: %w", err)
 			break // signing key error: will fail for every chunk
 		}
 
@@ -427,17 +427,16 @@ func (a *nostrAdapter) sendNostrDM(ctx context.Context, recipientPubKey, text st
 		copy(conns, a.relayConns)
 		a.mu.RUnlock()
 		if len(conns) == 0 {
-			lastErr = fmt.Errorf("no relay connections")
+			hardErr = fmt.Errorf("no relay connections")
 			break
 		}
 
 		success := 0
+		var relayErr error
 		for _, relay := range conns {
 			if err := relay.Publish(ctx, evt); err != nil {
 				debug.Log("nostr", "adapter=%s publish to %s failed: %v", a.name, relay.URL, err)
-				// Record the failure so an all-relay-failure send surfaces an
-				// error to the caller instead of reporting success (#964).
-				lastErr = fmt.Errorf("publish to %s: %w", relay.URL, err)
+				relayErr = fmt.Errorf("publish to %s: %w", relay.URL, err)
 				continue
 			}
 			success++
@@ -446,10 +445,12 @@ func (a *nostrAdapter) sendNostrDM(ctx context.Context, recipientPubKey, text st
 		// delivered. Surfacing a partial failure as an error makes the caller
 		// resend the whole message, and re-encryption (random IV) produces a
 		// new event ID the recipient's dedupe cannot catch: the user receives
-		// duplicate DMs. Only zero-success (or no connections at all) errors.
-		if success > 0 {
-			lastErr = nil
-		}
+		// duplicate DMs. Only a zero-success chunk (or no connections at
+		// all) errors. The error is STICKY: a later delivered chunk must
+		// never erase an earlier chunk's total failure - that chunk is
+		// undelivered data, and returning nil would silently drop it (the
+		// #964 class the original patch regressed for multi-chunk sends).
+		hardErr = nostrFoldChunk(hardErr, success, relayErr)
 		// Inter-chunk delay to avoid relay rate-limiting (skip after last chunk).
 		if i < len(chunks)-1 {
 			select {
@@ -459,7 +460,20 @@ func (a *nostrAdapter) sendNostrDM(ctx context.Context, recipientPubKey, text st
 			}
 		}
 	}
-	return lastErr
+	return hardErr
+}
+
+// nostrFoldChunk folds one chunk's publish outcome into the send error
+// state. A zero-success chunk sets a sticky error (the chunk is undelivered
+// data, #964); a partial-success chunk counts as delivered and never clears
+// an error recorded by an earlier chunk (#1225: the previous per-chunk
+// `lastErr = nil` erasure silently dropped fully-failed chunks in
+// multi-chunk sends).
+func nostrFoldChunk(hardErr error, success int, relayErr error) error {
+	if success == 0 && relayErr != nil {
+		return relayErr
+	}
+	return hardErr
 }
 
 func (a *nostrAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding) error {
