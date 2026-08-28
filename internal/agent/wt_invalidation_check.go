@@ -43,7 +43,7 @@ package agent
 //
 // Design:
 //   - Zero LLM cost -- pure set tracking + heuristic matching
-//   - Fires at most once per run (the warning is cumulative)
+//   - Fires at most maxWTInvalidationWarnings (2) times per run
 //   - Non-blocking: hint appended to tool result, execution proceeds
 //   - Tracks both read paths and time-sequence to provide specific guidance
 
@@ -69,43 +69,45 @@ const (
 // wtInvalidationState tracks file reads and detects cross-file
 // invalidation when git state-changing operations modify the working tree.
 type wtInvalidationState struct {
-	// readFiles tracks normalized paths of files read in this run.
-	// Keyed by path, value is the tool call sequence number of the read.
-	readFiles map[string]int
+	// readFiles tracks normalized paths of files read in this run (set
+	// semantics; a re-read refreshes freshness but does not grow the set).
+	readFiles map[string]bool
 
 	// warnedCount tracks how many invalidation warnings fired this run.
 	warnedCount int
 
-	// lastReadCount tracks the count of reads at the time of the last
-	// git mutation, to avoid double-warning if the agent does multiple
-	// git ops without new reads in between.
-	lastMutationReadCount int
+	// readsSinceWarning counts read EVENTS since the last mutation
+	// warning - re-reads included (#1232: the previous suppression
+	// compared set size, so an agent that obeyed the warning and re-read
+	// the same files got zero further protection while its just-refreshed
+	// caches went stale on the next mutation).
+	readsSinceWarning int
 }
 
 // newWTInvalidationState creates a fresh working-tree invalidation tracker.
 func newWTInvalidationState() *wtInvalidationState {
 	return &wtInvalidationState{
-		readFiles: make(map[string]int),
+		readFiles: make(map[string]bool),
 	}
 }
 
 // reset clears all tracking state (called at the start of a new user turn).
 func (w *wtInvalidationState) reset() {
-	w.readFiles = make(map[string]int)
+	w.readFiles = make(map[string]bool)
 	w.warnedCount = 0
-	w.lastMutationReadCount = 0
+	w.readsSinceWarning = 0
 }
 
-// recordRead tracks a file path read by the agent.
+// recordRead tracks a file path read by the agent. Every call is a read
+// EVENT: re-reading a path refreshes its cached freshness and therefore
+// counts toward the since-warning suppression reset (#1232).
 func (w *wtInvalidationState) recordRead(path string) {
 	normalized := normalizeWTPath(path)
 	if normalized == "" {
 		return
 	}
-	// Only store first read sequence for each path.
-	if _, exists := w.readFiles[normalized]; !exists {
-		w.readFiles[normalized] = len(w.readFiles) + 1
-	}
+	w.readFiles[normalized] = true
+	w.readsSinceWarning++
 }
 
 // isWTMutatingTool returns true if the tool name is a git state-changing
@@ -245,13 +247,15 @@ func (w *wtInvalidationState) checkMutation(toolName string, argsJSON string) st
 	if len(w.readFiles) < minReadsBeforeWarning {
 		return ""
 	}
-	// If no new reads since last mutation warning, don't repeat.
-	if len(w.readFiles) <= w.lastMutationReadCount {
+	// If no read events since the last mutation warning, don't repeat:
+	// consecutive git operations with zero reads in between are noise.
+	// Re-reads of already-seen paths DO count as events (#1232).
+	if w.readsSinceWarning == 0 {
 		return ""
 	}
 
 	w.warnedCount++
-	w.lastMutationReadCount = len(w.readFiles)
+	w.readsSinceWarning = 0
 
 	// Build a short list of affected paths for the warning.
 	var paths []string

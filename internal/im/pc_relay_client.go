@@ -48,16 +48,16 @@ type pcRelayClient struct {
 	readyCh chan struct{}
 
 	// Request-response matching
-	pendingCreates  map[string]chan *pcRelaySessionCreated
-	pendingRenewals map[string]chan *pcRelaySessionRenewed
+	pendingCreates  map[string]chan *pcCreateResult
+	pendingRenewals map[string]chan *pcRenewResult
 }
 
 func newPCRelayClient(wsURL, providerID string) *pcRelayClient {
 	return &pcRelayClient{
 		wsURL:           wsURL,
 		providerID:      providerID,
-		pendingCreates:  make(map[string]chan *pcRelaySessionCreated),
-		pendingRenewals: make(map[string]chan *pcRelaySessionRenewed),
+		pendingCreates:  make(map[string]chan *pcCreateResult),
+		pendingRenewals: make(map[string]chan *pcRenewResult),
 	}
 }
 
@@ -181,8 +181,8 @@ func (c *pcRelayClient) Dispose() {
 	for _, ch := range c.pendingRenewals {
 		close(ch)
 	}
-	c.pendingCreates = make(map[string]chan *pcRelaySessionCreated)
-	c.pendingRenewals = make(map[string]chan *pcRelaySessionRenewed)
+	c.pendingCreates = make(map[string]chan *pcCreateResult)
+	c.pendingRenewals = make(map[string]chan *pcRenewResult)
 	c.mu.Unlock()
 
 	// Unblock the ReadLoop (both via ctx and by closing the socket).
@@ -280,7 +280,7 @@ func (c *pcRelayClient) CreateSession(ctx context.Context, ttlMS *int, label str
 		GroupMode: groupMode,
 	}
 
-	ch := make(chan *pcRelaySessionCreated, 1)
+	ch := make(chan *pcCreateResult, 1)
 	c.mu.Lock()
 	c.pendingCreates[requestID] = ch
 	c.mu.Unlock()
@@ -299,7 +299,14 @@ func (c *pcRelayClient) CreateSession(ctx context.Context, ttlMS *int, label str
 		if !ok {
 			return nil, fmt.Errorf("relay client disposed during create_session")
 		}
-		return resp, nil
+		// #1229: a relay rejection arrives as a result carrying the relay's
+		// own code/message instead of a closed channel, so callers see the
+		// real reason (e.g. session_limit_exceeded) rather than the
+		// misleading fixed "disposed" text.
+		if resp.err != nil {
+			return nil, resp.err
+		}
+		return resp.sess, nil
 	case <-time.After(pcRequestTimeout):
 		return nil, fmt.Errorf("create_session timed out after %s", pcRequestTimeout)
 	case <-ctx.Done():
@@ -317,7 +324,7 @@ func (c *pcRelayClient) RenewSession(ctx context.Context, sessionID string, ttlM
 		TTLMS:     ttlMS,
 	}
 
-	ch := make(chan *pcRelaySessionRenewed, 1)
+	ch := make(chan *pcRenewResult, 1)
 	c.mu.Lock()
 	c.pendingRenewals[requestID] = ch
 	c.mu.Unlock()
@@ -336,7 +343,10 @@ func (c *pcRelayClient) RenewSession(ctx context.Context, sessionID string, ttlM
 		if !ok {
 			return nil, fmt.Errorf("relay client disposed during renew_session")
 		}
-		return resp, nil
+		if resp.err != nil {
+			return nil, resp.err
+		}
+		return resp.renewed, nil
 	case <-time.After(pcRequestTimeout):
 		return nil, fmt.Errorf("renew_session timed out after %s", pcRequestTimeout)
 	case <-ctx.Done():
@@ -376,6 +386,19 @@ func (c *pcRelayClient) CloseApp(sessionID, appID, reason string) error {
 	return c.writeJSON(msg)
 }
 
+// pcCreateResult carries a create_session reply to the waiting caller:
+// either the relay's session payload or the relay's rejection error (#1229).
+type pcCreateResult struct {
+	sess *pcRelaySessionCreated
+	err  error
+}
+
+// pcRenewResult carries a renew_session reply to the waiting caller.
+type pcRenewResult struct {
+	renewed *pcRelaySessionRenewed
+	err     error
+}
+
 func (c *pcRelayClient) handleMessage(data []byte) error {
 	// Peek at the type field
 	var peek struct {
@@ -409,7 +432,7 @@ func (c *pcRelayClient) handleMessage(data []byte) error {
 		c.mu.Lock()
 		ch, ok := c.pendingCreates[msg.RequestID]
 		if ok {
-			ch <- &msg
+			ch <- &pcCreateResult{sess: &msg}
 			delete(c.pendingCreates, msg.RequestID)
 		}
 		c.mu.Unlock()
@@ -422,7 +445,7 @@ func (c *pcRelayClient) handleMessage(data []byte) error {
 		c.mu.Lock()
 		ch, ok := c.pendingRenewals[msg.RequestID]
 		if ok {
-			ch <- &msg
+			ch <- &pcRenewResult{renewed: &msg}
 			delete(c.pendingRenewals, msg.RequestID)
 		}
 		c.mu.Unlock()
@@ -452,16 +475,35 @@ func (c *pcRelayClient) handleMessage(data []byte) error {
 		}
 		debug.Log("pc", "relay error code=%s message=%s session=%s request=%s",
 			msg.Code, msg.Message, msg.SessionID, msg.RequestID)
-		// Forward to pending requests if applicable
+		// Forward to pending requests if applicable. The relay's code and
+		// message travel WITH the result (#1229): closing the channel made
+		// every relay rejection indistinguishable from a local dispose, so
+		// users chased phantom local state instead of the real relay-side
+		// reason (quota/limit/TTL rejections are unretryable and must be
+		// reported as such).
+		createErr := fmt.Errorf("relay rejected create_session: %s: %s", msg.Code, msg.Message)
+		renewErr := fmt.Errorf("relay rejected renew_session: %s: %s", msg.Code, msg.Message)
 		c.mu.Lock()
 		if msg.RequestID != "" {
 			if ch, ok := c.pendingCreates[msg.RequestID]; ok {
-				close(ch)
+				ch <- &pcCreateResult{err: createErr}
 				delete(c.pendingCreates, msg.RequestID)
 			}
 			if ch, ok := c.pendingRenewals[msg.RequestID]; ok {
-				close(ch)
+				ch <- &pcRenewResult{err: renewErr}
 				delete(c.pendingRenewals, msg.RequestID)
+			}
+		} else {
+			// No request id: the relay did not say which request failed.
+			// Fail ALL pending waiters with the relay error instead of
+			// leaving them to a 30s timeout (#1229 amplifier).
+			for id, ch := range c.pendingCreates {
+				ch <- &pcCreateResult{err: createErr}
+				delete(c.pendingCreates, id)
+			}
+			for id, ch := range c.pendingRenewals {
+				ch <- &pcRenewResult{err: renewErr}
+				delete(c.pendingRenewals, id)
 			}
 		}
 		c.mu.Unlock()

@@ -208,3 +208,30 @@ func TestWTInvalidation_ErrorResult(t *testing.T) {
 // TestWTInvalidation_ExtractReadPath / ExtractMultiReadPaths were removed
 // along with the dead helpers (#500): read tracking is batch-aware via
 // extractFilePathsFromArgs and is covered by the agent-loop wiring.
+
+// TestWTInvalidation_RereadCountsAsNewRead pins #1232: re-reading the SAME
+// paths after a warning is a compliant refresh and must re-arm the detector
+// for the next mutation. The previous set-size suppression stayed silent
+// (re-reads did not grow the set), leaving just-refreshed caches unprotected.
+func TestWTInvalidation_RereadCountsAsNewRead(t *testing.T) {
+	w := newWTInvalidationState()
+
+	w.recordRead("a.go")
+	w.recordRead("b.go")
+	if msg := w.checkMutation("git_reset", `{}`); msg == "" {
+		t.Fatal("expected first warning after initial reads")
+	}
+
+	// Agent obeys the warning and re-reads the same files.
+	w.recordRead("a.go")
+	w.recordRead("b.go")
+	if msg := w.checkMutation("git_stash", `{"message":"x"}`); msg == "" {
+		t.Fatal("expected second warning after compliant re-reads (re-reads are read events)")
+	}
+
+	// Max warnings reached: further mutations stay silent regardless.
+	w.recordRead("c.go")
+	if msg := w.checkMutation("git_checkout", `{}`); msg != "" {
+		t.Errorf("expected suppression after max warnings, got: %s", msg)
+	}
+}

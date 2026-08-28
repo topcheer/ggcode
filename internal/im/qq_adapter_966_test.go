@@ -526,3 +526,59 @@ func TestQQRefreshTokenSurfacesHTTPStatusFirst(t *testing.T) {
 		t.Fatalf("error must not be a decode error, got: %v", err)
 	}
 }
+
+// TestQQStripMentionPrefixBothEventTypes pins #1231: the guild AT event
+// must strip its `<@userid>` mention just like the group AT event.
+func TestQQStripMentionPrefixBothEventTypes(t *testing.T) {
+	cases := []struct {
+		event string
+		in    string
+		want  string
+	}{
+		{"GROUP_AT_MESSAGE_CREATE", "<@!openid123> help me", "help me"},
+		{"GUILD_AT_MESSAGE_CREATE", "<@userid456> check this error", "check this error"},
+		{"GUILD_AT_MESSAGE_CREATE", "<@!botid> 帮我看看", "帮我看看"},
+		// Non-AT events keep content verbatim.
+		{"C2C_MESSAGE_CREATE", "<@userid456> raw", "<@userid456> raw"},
+	}
+	for _, c := range cases {
+		if got := qqStripMentionPrefix(c.event, c.in); got != c.want {
+			t.Errorf("qqStripMentionPrefix(%s, %q) = %q, want %q", c.event, c.in, got, c.want)
+		}
+	}
+}
+
+// TestQQSendImageRateLimitGap pins #1230: every delivered message (images
+// included) must be spaced by qqInterMessageDelay; a 2-image + 1-chunk send
+// requires at least the img->img and img->text gaps.
+func TestQQSendImageRateLimitGap(t *testing.T) {
+	adapter, sent := newQQSendTestAdapter(t)
+	img1 := tinyPNGBase64(t, 255, 0, 0)
+	img2 := tinyPNGBase64(t, 0, 255, 0)
+	content := "![a](data:image/png;base64," + img1 + ") ![b](data:image/png;base64," + img2 + ") hello"
+	binding := ChannelBinding{
+		Workspace:            "ws",
+		ChannelID:            "group-1",
+		LastInboundMessageID: "msg-7",
+		PassiveReplyCount:    1,
+	}
+	start := time.Now()
+	if err := adapter.Send(context.Background(), binding, OutboundEvent{Kind: OutboundEventText, Text: content}); err != nil {
+		t.Fatalf("Send returned error: %v", err)
+	}
+	elapsed := time.Since(start)
+	// Lower bound with margin for loaded CI runners: >= 75% of two gaps.
+	minElapsed := qqInterMessageDelay * 2 * 3 / 4
+	if elapsed < minElapsed {
+		t.Errorf("multi-image send completed in %v; expected >= %v of inter-message spacing (QQ 5 msg/s limit, #1230)", elapsed, minElapsed)
+	}
+	msgs := 0
+	for _, r := range *sent {
+		if _, ok := r.Body["msg_type"]; ok {
+			msgs++
+		}
+	}
+	if msgs != 3 {
+		t.Fatalf("expected 3 message sends (2 images + 1 text), got %d", msgs)
+	}
+}

@@ -280,3 +280,72 @@ func TestPCAdapterEnsureConnectedConcurrentSingleConnection(t *testing.T) {
 		t.Fatal("no client installed after concurrent connect")
 	}
 }
+
+// TestPCRelayErrorCarriesCodeToPendingWaiter pins #1229: a relay:error
+// reply must deliver the relay's code/message to the waiting caller, not a
+// closed channel that reads as the fixed (and misleading) "disposed" text.
+func TestPCRelayErrorCarriesCodeToPendingWaiter(t *testing.T) {
+	c := newPCRelayClient("ws://unused", "test-provider")
+	ch := make(chan *pcCreateResult, 1)
+	c.mu.Lock()
+	c.pendingCreates["req-1"] = ch
+	c.mu.Unlock()
+
+	data := `{"type":"relay:error","requestId":"req-1","code":"session_limit_exceeded","message":"too many sessions"}`
+	if err := c.handleMessage([]byte(data)); err != nil {
+		t.Fatalf("handleMessage: %v", err)
+	}
+
+	select {
+	case r := <-ch:
+		if r == nil || r.err == nil {
+			t.Fatalf("expected error result, got %#v", r)
+		}
+		if !strings.Contains(r.err.Error(), "session_limit_exceeded") || !strings.Contains(r.err.Error(), "too many sessions") {
+			t.Errorf("relay error must carry code+message, got: %v", r.err)
+		}
+	default:
+		t.Fatal("no result delivered to pending waiter")
+	}
+	c.mu.Lock()
+	_, stillPending := c.pendingCreates["req-1"]
+	c.mu.Unlock()
+	if stillPending {
+		t.Error("pending entry must be removed after error delivery")
+	}
+}
+
+// TestPCRelayErrorNoRequestIDBroadcasts pins #1229's amplifier: a relay
+// error without requestId must fail ALL pending waiters instead of leaving
+// them to the 30s timeout.
+func TestPCRelayErrorNoRequestIDBroadcasts(t *testing.T) {
+	c := newPCRelayClient("ws://unused", "test-provider")
+	chC := make(chan *pcCreateResult, 1)
+	chR := make(chan *pcRenewResult, 1)
+	c.mu.Lock()
+	c.pendingCreates["req-a"] = chC
+	c.pendingRenewals["req-b"] = chR
+	c.mu.Unlock()
+
+	data := `{"type":"relay:error","code":"quota_exceeded","message":"provider quota exhausted"}`
+	if err := c.handleMessage([]byte(data)); err != nil {
+		t.Fatalf("handleMessage: %v", err)
+	}
+
+	select {
+	case r := <-chC:
+		if r == nil || r.err == nil || !strings.Contains(r.err.Error(), "quota_exceeded") {
+			t.Errorf("create waiter must receive broadcast error, got %#v", r)
+		}
+	default:
+		t.Fatal("create waiter starved")
+	}
+	select {
+	case r := <-chR:
+		if r == nil || r.err == nil || !strings.Contains(r.err.Error(), "quota_exceeded") {
+			t.Errorf("renew waiter must receive broadcast error, got %#v", r)
+		}
+	default:
+		t.Fatal("renew waiter starved")
+	}
+}

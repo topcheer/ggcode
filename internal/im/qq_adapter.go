@@ -48,10 +48,22 @@ const (
 	qqUploadCacheTTL        = 30 * time.Minute
 )
 
-// qqMentionPrefix strips the leading bot mention from GROUP_AT message
-// content. QQ sends the mention as `<@!openid>` (group) or `<@userid>` (guild)
+// qqMentionPrefix strips the leading bot mention from AT message content.
+// QQ sends the mention as `<@!openid>` (group) or `<@userid>` (guild)
 // rather than a plain `@name`, so both forms must be handled (#966).
 var qqMentionPrefix = regexp.MustCompile(`^(?:<@!?\S+>|@\S+)\s*`)
+
+// qqStripMentionPrefix removes the leading bot mention for AT-message event
+// types. Applied to BOTH GROUP_AT_MESSAGE_CREATE and GUILD_AT_MESSAGE_CREATE
+// (#1231: the regex handled both forms but the dispatch gate only stripped
+// the group variant, leaking `<@userid> ` garbage into the agent prompt for
+// guild mentions).
+func qqStripMentionPrefix(eventType, text string) string {
+	if eventType == "GROUP_AT_MESSAGE_CREATE" || eventType == "GUILD_AT_MESSAGE_CREATE" {
+		return strings.TrimSpace(qqMentionPrefix.ReplaceAllString(text, ""))
+	}
+	return text
+}
 
 type qqAdapter struct {
 	name             string
@@ -269,6 +281,11 @@ func (a *qqAdapter) Send(ctx context.Context, binding ChannelBinding, event Outb
 		}
 		// Each successfully sent image consumes one seq slot; failures do not
 		// (the server never saw them).
+		// #1230: rate limit across ALL outbound messages. QQ's 5 msg/s limit
+		// counts every send regardless of msg_type, so a delivered image must
+		// also be followed by the inter-message delay - back-to-back multi-image
+		// replies and the image->text transition otherwise burst past the cap
+		// and the server silently drops them.
 		if err := a.sendImageFromBase64(ctx, chatType, channelID, b64, replyTo, seq); err != nil {
 			debug.Log("qq", "adapter=%s image send failed [%d/%d]: %v", a.name, i+1, len(images), err)
 			continue
@@ -276,6 +293,12 @@ func (a *qqAdapter) Send(ctx context.Context, binding ChannelBinding, event Outb
 		seq++
 		consumedSeqs++
 		debug.Log("qq", "adapter=%s image sent [%d/%d]", a.name, i+1, len(images))
+		select {
+		case <-time.After(qqInterMessageDelay):
+		case <-ctx.Done():
+			a.recordPassiveReplies(binding, replyTo, consumedSeqs)
+			return ctx.Err()
+		}
 	}
 
 	// Send remaining text (images stripped), split into chunks for QQ's message length limit.
@@ -291,8 +314,10 @@ func (a *qqAdapter) Send(ctx context.Context, binding ChannelBinding, event Outb
 			chunks = SplitMessageForPlatform(remainingText, PlatformQQ)
 		}
 		for i, chunk := range chunks {
-			// Rate limit: max 5 messages/second per channel.
-			if i > 0 {
+			// Rate limit: max 5 messages/second per channel. Also delay before
+			// the FIRST chunk when images were sent in this Send - the last image
+			// and the first text otherwise go back-to-back (#1230).
+			if i > 0 || consumedSeqs > 0 {
 				select {
 				case <-time.After(qqInterMessageDelay):
 				case <-ctx.Done():
@@ -545,9 +570,7 @@ func (a *qqAdapter) handleMessageEvent(ctx context.Context, eventType string, pa
 	debug.Log("qq", "adapter=%s inbound event=%s channel=%s sender=%s", a.name, eventType, channelID, senderID)
 	a.rememberChatType(channelID, chatType)
 	text := strings.TrimSpace(stringFromAny(payload["content"]))
-	if eventType == "GROUP_AT_MESSAGE_CREATE" {
-		text = strings.TrimSpace(qqMentionPrefix.ReplaceAllString(text, ""))
-	}
+	text = qqStripMentionPrefix(eventType, text)
 	attachments, voiceText := a.processAttachments(ctx, payload)
 	if strings.TrimSpace(voiceText) != "" {
 		if text != "" {
