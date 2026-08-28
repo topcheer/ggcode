@@ -21,6 +21,7 @@ func FormatPeersInfo(hub *Hub, workspace string) string {
 
 	type peerEntry struct {
 		name      string
+		nodeID    string
 		workspace string
 		role      string
 		team      string
@@ -46,6 +47,7 @@ func FormatPeersInfo(hub *Hub, workspace string) string {
 		}
 		peers = append(peers, peerEntry{
 			name:      name,
+			nodeID:    p.NodeID,
 			workspace: p.Workspace,
 			role:      p.Role,
 			team:      p.Team,
@@ -94,8 +96,8 @@ func FormatPeersInfo(hub *Hub, workspace string) string {
 		if model == "" {
 			model = "-"
 		}
-		return fmt.Sprintf("- %s (%s) — %s [team=%s, role=%s, langs=%s, model=%s]",
-			p.name, p.workspace, status, p.team, p.role, langs, model)
+		return fmt.Sprintf("- %s (%s) id=%s — %s [team=%s, role=%s, langs=%s, model=%s]",
+			p.name, p.workspace, p.nodeID, status, p.team, p.role, langs, model)
 	}
 
 	var sameWSBusy, sameWSIdle, others []peerEntry
@@ -147,6 +149,7 @@ func FormatPeersInfo(hub *Hub, workspace string) string {
 		sb.WriteString("- When you finish a task someone asked for: DM them the result (one concise message, no \"done?\" pings).\n")
 	} else {
 		sb.WriteString("- For cross-workspace questions: DM the specific person (action='send'). For task delegation: use a2a_remote.\n")
+		sb.WriteString("- Two peers may share the same nickname - when nicks collide, address the DM by node_id (id=... above) instead of nick.\n")
 		sb.WriteString("- Check agent_busy before messaging — busy agents will see your message after their current task.\n")
 	}
 

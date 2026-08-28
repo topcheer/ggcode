@@ -629,10 +629,19 @@ func Diagnostics(ctx context.Context, workspace, path string) ([]Diagnostic, err
 				"textDocument": map[string]any{"uri": docURI},
 			}, &raw); err == nil {
 				session.setPullDiagnosticsSupport(true)
-				if parsed := parseDocumentDiagnostics(raw); len(parsed) > 0 {
+				// #1274: an empty pull result IS a valid answer (clean file).
+				// The old len(parsed) > 0 gate let clean-file queries fall
+				// through to the published-diagnostics poll and eat the full
+				// publishedDiagnosticsWait (up to 500ms) on servers that
+				// support pull but never publish - a per-edit synchronous
+				// latency tax. Return the pull answer (empty included);
+				// publish-backed servers keep the wait below as fallback for
+				// unsupported/failed pulls only.
+				parsed := parseDocumentDiagnostics(raw)
+				if len(parsed) > 0 {
 					session.setPublishedDiagnostics(docURI, parsed)
-					return parsed, nil
 				}
+				return parsed, nil
 			} else if isUnsupportedDiagnosticMethodError(err) {
 				session.setPullDiagnosticsSupport(false)
 			} else {

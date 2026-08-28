@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/topcheer/ggcode/internal/config"
 )
@@ -85,16 +86,35 @@ var builtinServerSpecs = []serverSpec{
 
 // serverOverrides holds optional user-configured overrides keyed by language ID.
 // Set via SetServerOverrides at startup from config.LSPServers.
-var serverOverrides map[string]config.LSPServerConfig
+// #1273: written whenever a runtime core is built (daemon per-task dispatch,
+// desktop multi-session re-init) while discovery reads it on hot paths
+// (post-edit diagnostics goroutines, session starts). Unsynchronized Go map
+// access is a fatal, unrecoverable crash - guard with a mutex.
+var (
+	serverOverridesMu sync.RWMutex
+	serverOverrides   map[string]config.LSPServerConfig
+)
+
+// lookupServerOverride returns the configured override for langID (#1273
+// read side; empty ok means none).
+func lookupServerOverride(langID string) (config.LSPServerConfig, bool) {
+	serverOverridesMu.RLock()
+	defer serverOverridesMu.RUnlock()
+	ov, ok := serverOverrides[langID]
+	return ov, ok
+}
 
 // SetServerOverrides configures custom LSP server binary paths and arguments.
-// Pass the config.LSPServers map (or nil to clear overrides).
 func SetServerOverrides(overrides map[string]config.LSPServerConfig) {
+	serverOverridesMu.Lock()
+	defer serverOverridesMu.Unlock()
 	serverOverrides = overrides
 }
 
 // ServerOverrides returns the currently configured server overrides.
 func ServerOverrides() map[string]config.LSPServerConfig {
+	serverOverridesMu.RLock()
+	defer serverOverridesMu.RUnlock()
 	return serverOverrides
 }
 
@@ -170,7 +190,7 @@ func ResolveServerForFile(workspace, path string) (ResolvedServer, bool) {
 			continue
 		}
 		// Check user-configured override first.
-		if ov, ok := serverOverrides[spec.id]; ok && ov.Binary != "" {
+		if ov, ok := lookupServerOverride(spec.id); ok && ov.Binary != "" {
 			return ResolvedServer{
 				LanguageID:  languageIDForFile(spec.id, path),
 				DisplayName: spec.displayName,

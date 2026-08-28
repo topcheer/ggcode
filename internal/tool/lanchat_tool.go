@@ -401,12 +401,27 @@ func dedupStrings(in []string) []string {
 //     active peer (the peer may have restarted with a new NodeID).
 //
 // If no match is found for any identifier, returns nil.
-func (t LanChatTool) resolveRecipients(ids []string) []string {
+// joinNodeIDs renders a node-id set deterministically for ambiguity errors.
+func joinNodeIDs(set map[string]bool) string {
+	ids := make([]string, 0, len(set))
+	for id := range set {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return strings.Join(ids, ", ")
+}
+
+func (t LanChatTool) resolveRecipients(ids []string) ([]string, []string) {
 	participants := t.Hub.Participants()
 
 	// Build lookup maps (case-insensitive)
 	byNodeID := make(map[string]string) // lower(nodeID) -> nodeID
-	byNick := make(map[string]string)   // lower(nick) -> nodeID
+	// #1272: nick -> set of DISTINCT nodeIDs. Two instances sharing a nick
+	// (common with default, unchanged nicknames) used to make the map build
+	// silently keep the LAST writer, DMing the wrong peer with no warning.
+	// A nick claimed by more than one node is ambiguous and must error out
+	// with the candidate node_ids instead of a coin-flip delivery.
+	byNick := make(map[string]map[string]bool) // lower(nick) -> {nodeID}
 	byPrefix := make([]struct{ nick, id string }, 0)
 
 	// Also build team+role index for archive fallback
@@ -422,7 +437,10 @@ func (t LanChatTool) resolveRecipients(ids []string) []string {
 				continue
 			}
 			lower := strings.ToLower(nick)
-			byNick[lower] = p.NodeID
+			if byNick[lower] == nil {
+				byNick[lower] = make(map[string]bool)
+			}
+			byNick[lower][p.NodeID] = true
 			byPrefix = append(byPrefix, struct{ nick, id string }{lower, p.NodeID})
 		}
 		if p.Team != "" && p.Role != "" {
@@ -435,6 +453,7 @@ func (t LanChatTool) resolveRecipients(ids []string) []string {
 
 	var unresolved []string
 	var resolved []string
+	var ambiguous []string
 	seen := make(map[string]bool)
 	for _, raw := range ids {
 		raw = strings.TrimSpace(raw)
@@ -451,27 +470,37 @@ func (t LanChatTool) resolveRecipients(ids []string) []string {
 			}
 			continue
 		}
-		// 2. Exact nick
-		if id, ok := byNick[lower]; ok {
-			if !seen[id] {
-				resolved = append(resolved, id)
-				seen[id] = true
+		// 2. Exact nick - #1272: ambiguous when multiple distinct nodes claim it
+		if idSet, ok := byNick[lower]; ok {
+			if len(idSet) > 1 {
+				ambiguous = append(ambiguous, fmt.Sprintf("%q matches %d peers with the same nick: %s - address by node_id instead",
+					raw, len(idSet), joinNodeIDs(idSet)))
+				continue
+			}
+			for id := range idSet {
+				if !seen[id] {
+					resolved = append(resolved, id)
+					seen[id] = true
+				}
 			}
 			continue
 		}
-		// 3. Prefix match (first wins)
-		found := false
+		// 3. Prefix match - #1272: the old "first wins" break delivered to an
+		// arbitrary peer when the prefix matched several; require uniqueness.
+		var prefixHits []string
 		for _, entry := range byPrefix {
-			if strings.HasPrefix(entry.nick, lower) {
-				if !seen[entry.id] {
-					resolved = append(resolved, entry.id)
-					seen[entry.id] = true
-				}
-				found = true
-				break
+			if strings.HasPrefix(entry.nick, lower) && !seen[entry.id] {
+				seen[entry.id] = true // dedupe multi-nick peers within this scan
+				prefixHits = append(prefixHits, entry.id)
 			}
 		}
-		if found {
+		if len(prefixHits) == 1 {
+			resolved = append(resolved, prefixHits[0])
+			continue
+		}
+		if len(prefixHits) > 1 {
+			ambiguous = append(ambiguous, fmt.Sprintf("%q is a prefix of %d nicknames: %s - use a longer prefix or a node_id",
+				raw, len(prefixHits), strings.Join(prefixHits, ", ")))
 			continue
 		}
 
@@ -505,7 +534,7 @@ func (t LanChatTool) resolveRecipients(ids []string) []string {
 		// If nothing matched, skip silently - caller handles empty result
 	}
 
-	return resolved
+	return resolved, ambiguous
 }
 
 func (t LanChatTool) doList(teamFilter string) Result {
@@ -597,7 +626,15 @@ func (t LanChatTool) doSend(ctx context.Context, content string, toNodeIDs []str
 	// "dd_dev_agent") or partial nicks (e.g. "dd") as the 'to' value.
 	// We try exact node_id match first, then exact nick match, then
 	// prefix match (nick starts with the given string).
-	resolved := t.resolveRecipients(toNodeIDs)
+	resolved, ambiguous := t.resolveRecipients(toNodeIDs)
+	if len(ambiguous) > 0 {
+		// #1272: refuse coin-flip delivery - surface the candidates so the
+		// caller (agent or human) can re-address by node_id from action='list'.
+		hint := t.doList("")
+		return Result{IsError: true, Content: fmt.Sprintf(
+			"ambiguous recipient(s):\n%s\nUse action='list' and address by node_id.\n%s",
+			strings.Join(ambiguous, "\n"), hint.Content)}, nil
+	}
 	if len(resolved) == 0 {
 		// No matches at all - show available participants to help
 		hint := t.doList("")
