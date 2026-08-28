@@ -22,6 +22,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -52,14 +53,16 @@ var importGraphCache struct {
 // goModulePath reads go.mod and extracts the module import path.
 // Returns "" if go.mod doesn't exist or can't be parsed.
 func goModulePath(workingDir string) string {
-	data, err := os.ReadFile(filepath.Join(workingDir, "go.mod"))
+	goModPath := filepath.Join(workingDir, "go.mod")
+	data, err := os.ReadFile(goModPath)
 	if err != nil {
 		return ""
 	}
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "module ") {
-			return strings.TrimSpace(strings.TrimPrefix(line, "module "))
+			result := strings.TrimSpace(strings.TrimPrefix(line, "module "))
+			return result
 		}
 	}
 	return ""
@@ -175,7 +178,7 @@ func runGoList(workingDir string) (map[string][]string, string) {
 
 	cmd := exec.CommandContext(ctx, "go", args...)
 	cmd.Dir = workingDir
-	out, err := cmd.Output()
+	combined, err := cmd.CombinedOutput()
 	if err != nil {
 		debug.Log("test-impact", "go list failed in %s: %v", workingDir, err)
 		return nil, ""
@@ -183,11 +186,11 @@ func runGoList(workingDir string) (map[string][]string, string) {
 
 	modPath := goModulePath(workingDir)
 	if modPath == "" {
-		return nil, ""
+		// Don't return early, continue with graph building
 	}
 
 	graph := make(map[string][]string)
-	for _, line := range strings.Split(string(out), "\n") {
+	for _, line := range strings.Split(string(combined), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
@@ -207,56 +210,109 @@ func runGoList(workingDir string) (map[string][]string, string) {
 }
 
 // transitiveImporters returns package directories (relative to workingDir,
-// slash-separated) within the same module that directly import any of the
+// slash-separated) within the same module that transitively import any of the
 // given changed package directories. This expands the test scope beyond just
 // the changed packages to include their downstream consumers — the core of
 // transitive test impact analysis.
 //
-// For example, if internal/agent changed and internal/chat imports it, then
-// internal/chat's tests should also run because they exercise the changed code.
+// The function uses a BFS closure: starting from changed packages, it repeatedly
+// adds all module-internal packages that import anything in the current target
+// set until a fixpoint is reached. This ensures that multi-level dependency chains
+// are fully traversed (e.g., A→B→C where C changed: A imports B, B imports C → A
+// is included).
+//
+// For example, if internal/util changed, internal/safego imports util, and
+// internal/agent imports safego (but not util directly), then internal/agent's
+// tests should also run because they are affected by the change to util via
+// the intermediate dependency.
 //
 // Returns nil if the import graph can't be built or no importers are found.
 func transitiveImporters(workingDir string, changedDirs []string) []string {
 	graph, modPath := buildImportGraph(workingDir)
-	if graph == nil || modPath == "" || len(changedDirs) == 0 {
+	if graph == nil || len(changedDirs) == 0 {
 		return nil
 	}
 
-	// Build target set: modPath/dir for each changed dir.
+	// Build initial target set: modPath/dir for each changed dir.
 	targets := make(map[string]bool, len(changedDirs))
 	for _, d := range changedDirs {
-		targets[modPath+"/"+filepath.ToSlash(d)] = true
+		targetPath := modPath + "/" + filepath.ToSlash(d)
+		targets[targetPath] = true
 	}
+	debug.Log("test-impact", "transitiveImporters: initial targets=%v", targets)
 
-	// Scan all packages to find direct importers of any target.
+	// BFS closure: repeatedly add importers of current targets until fixpoint.
 	seen := make(map[string]bool)
-	var importers []string
-	for pkgPath, imports := range graph {
-		for _, imp := range imports {
-			if targets[imp] && !seen[pkgPath] {
-				seen[pkgPath] = true
-				// Convert import path to relative directory.
-				relDir := strings.TrimPrefix(pkgPath, modPath+"/")
-				if relDir != pkgPath { // ensure it's in the module
-					importers = append(importers, filepath.ToSlash(relDir))
+	iteration := 0
+	for len(targets) > 0 {
+		iteration++
+		debug.Log("test-impact", "transitiveImporters: iteration %d, targets=%d", iteration, len(targets))
+		// Find all packages that import any target in the current set.
+		newTargets := make(map[string]bool)
+		for pkgPath, imports := range graph {
+			// Skip if already in the transitive set.
+			if seen[pkgPath] {
+				continue
+			}
+			// Skip packages that are already in targets (changed packages or previously added).
+			if targets[pkgPath] {
+				continue
+			}
+			// Check if this package imports any target.
+			for _, imp := range imports {
+				if targets[imp] {
+					debug.Log("test-impact", "transitiveImporters: found importer %s imports %s", pkgPath, imp)
+					newTargets[pkgPath] = true
+					// Add to seen (all packages in the graph are in the module).
+					seen[pkgPath] = true
+					debug.Log("test-impact", "transitiveImporters: marked seen %s", pkgPath)
+					break
 				}
-				break
 			}
 		}
+		debug.Log("test-impact", "transitiveImporters: iteration %d found %d new importers", iteration, len(newTargets))
+		// Add newly discovered importers to targets for the next iteration.
+		for pkgPath := range newTargets {
+			targets[pkgPath] = true
+		}
+		// If no new importers were found, we've reached fixpoint.
+		if len(newTargets) == 0 {
+			break
+		}
 	}
+	debug.Log("test-impact", "transitiveImporters: BFS complete, seen=%d packages", len(seen))
 
-	if len(importers) == 0 {
+	if len(seen) == 0 {
 		return nil
 	}
+
+	// Collect importers in sorted order for determinism.
+	importers := make([]string, 0, len(seen))
+	for pkgPath := range seen {
+		relDir := strings.TrimPrefix(pkgPath, modPath+"/")
+		// Ensure the package is in the module (relDir should be different from pkgPath
+		// unless the module path is empty or the package is outside the module).
+		if relDir != pkgPath && relDir != "" {
+			importers = append(importers, filepath.ToSlash(relDir))
+		} else {
+			debug.Log("test-impact", "transitiveImporters: skipping %s (relDir=%s)", pkgPath, relDir)
+		}
+	}
 	sort.Strings(importers)
+	debug.Log("test-impact", "transitiveImporters: result=%v", importers)
 	return importers
 }
 
 // impactScopedTestCommandWithDeps builds a `go test` command that covers all
-// changed Go packages AND their direct importers (downstream consumers).
+// changed Go packages AND their transitive importers (downstream consumers).
 // This is the enhanced version of impactScopedTestCommand — it uses the import
 // graph to expand the test scope, ensuring that packages affected by the change
 // (not just the changed packages themselves) have their tests run.
+//
+// The function preserves all changed directories unconditionally; importer
+// directories fill the remaining slots up to a 20-package cap. If truncation
+// occurs, the suffix indicates how many importers were omitted (e.g., "# +5
+// importers omitted").
 //
 // Falls back to impactScopedTestCommand if the import graph can't be built.
 func impactScopedTestCommandWithDeps(workingDir string) string {
@@ -288,24 +344,58 @@ func impactScopedTestCommandWithDeps(workingDir string) string {
 		return impactScopedTestCommand(workingDir)
 	}
 
-	// Cap at 20 packages to avoid generating an unwieldy command line.
+	// Build changedSet for quick lookup.
+	changedSet := make(map[string]bool, len(changedDirs))
+	for _, d := range changedDirs {
+		changedSet[d] = true
+	}
+
+	// Convert allDirs to a sorted list for deterministic output.
 	dirList := make([]string, 0, len(allDirs))
 	for d := range allDirs {
 		dirList = append(dirList, d)
 	}
 	sort.Strings(dirList)
-	capped := false
-	if len(dirList) > 20 {
-		dirList = dirList[:20]
-		capped = true
+
+	// Separate changed dirs and importers to preserve changed dirs unconditionally.
+	// Cap at 20 packages: changed dirs are always included, importers fill remaining slots.
+	var changedInList, importersInList []string
+	for _, d := range dirList {
+		if changedSet[d] {
+			changedInList = append(changedInList, d)
+		} else {
+			importersInList = append(importersInList, d)
+		}
 	}
 
-	parts := make([]string, len(dirList))
-	for i, d := range dirList {
+	// Build final list: always include all changed dirs, then add importers up to cap.
+	finalList := make([]string, 0, len(changedInList))
+	finalList = append(finalList, changedInList...)
+
+	remainingCap := 20 - len(changedInList)
+	var omittedImporters int
+	if remainingCap > 0 && len(importersInList) > 0 {
+		// Importers are already sorted from the earlier sort.Strings(dirList).
+		if len(importersInList) > remainingCap {
+			finalList = append(finalList, importersInList[:remainingCap]...)
+			omittedImporters = len(importersInList) - remainingCap
+		} else {
+			finalList = append(finalList, importersInList...)
+		}
+	} else if len(importersInList) > 0 {
+		// No cap remaining but we have importers.
+		omittedImporters = len(importersInList)
+	}
+
+	parts := make([]string, len(finalList))
+	for i, d := range finalList {
 		parts[i] = "./" + d + "/"
 	}
 	cmd := "go test " + strings.Join(parts, " ")
-	if capped {
+	if omittedImporters > 0 {
+		cmd += fmt.Sprintf(" # +%d importers omitted", omittedImporters)
+	} else if len(allDirs) > 20 {
+		// Fallback for edge cases: all changed, no importers, but still truncated.
 		cmd += " # +more"
 	}
 
