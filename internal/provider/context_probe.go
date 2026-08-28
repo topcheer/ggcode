@@ -51,6 +51,13 @@ func probeCachePath() string {
 	return filepath.Join(config.ConfigDir(), "state", "context_windows.json")
 }
 
+const probeCacheVersion = 2
+
+type probeCacheData struct {
+	Version int            `json:"version"`
+	Entries map[string]int `json:"entries"`
+}
+
 func loadProbeCache() {
 	path := probeCachePath()
 	data, err := os.ReadFile(path)
@@ -58,29 +65,68 @@ func loadProbeCache() {
 		debug.Log("probe", "no cache file at %s: %v", path, err)
 		return
 	}
-	var m map[string]int
-	if err := json.Unmarshal(data, &m); err != nil {
+
+	// Try to unmarshal as versioned cache format
+	var cache probeCacheData
+	if err := json.Unmarshal(data, &cache); err == nil && cache.Version > 0 {
+		// New format: check version and apply migration if needed
+		if cache.Version < probeCacheVersion {
+			debug.Log("probe", "cache migration: v%d → v%d", cache.Version, probeCacheVersion)
+			dropped := applyCacheMigration(&cache)
+			cache.Version = probeCacheVersion
+			saveProbeCacheData(cache)
+			probeCacheMu.Lock()
+			probeCache = cache.Entries
+			probeCacheMu.Unlock()
+			debug.Log("probe", "loaded %d entries from %s (dropped %d legacy entries)",
+				len(cache.Entries), path, dropped)
+			return
+		}
+		// Current version: use as-is
+		probeCacheMu.Lock()
+		probeCache = cache.Entries
+		probeCacheMu.Unlock()
+		debug.Log("probe", "loaded %d entries from %s", len(cache.Entries), path)
+		return
+	}
+
+	// Legacy format (plain map[string]int) - migrate
+	debug.Log("probe", "legacy cache format detected, migrating to v%d", probeCacheVersion)
+	var legacyMap map[string]int
+	if err := json.Unmarshal(data, &legacyMap); err != nil {
 		debug.Log("probe", "cache parse error: %v", err)
 		return
 	}
-	// Migration: entries below the 128K minimum tier were written by the old
-	// estimate-based inference, which bottomed out at 64K whenever an overflow
-	// error carried no parseable number. Drop them — legitimate sub-128K
-	// windows are re-seeded instantly from the known-model table or
-	// rediscovered by the background probe.
+	// Build new cache structure from legacy map (pre-allocate to avoid rehashes)
+	entries := make(map[string]int, len(legacyMap))
+	for k, v := range legacyMap {
+		entries[k] = v
+	}
+	cache = probeCacheData{
+		Version: probeCacheVersion,
+		Entries: entries,
+	}
+	dropped := applyCacheMigration(&cache)
+	saveProbeCacheData(cache)
+	probeCacheMu.Lock()
+	probeCache = cache.Entries
+	probeCacheMu.Unlock()
+	debug.Log("probe", "loaded %d entries from %s (dropped %d legacy entries)",
+		len(cache.Entries), path, dropped)
+}
+
+// applyCacheMigration drops entries below the minimum tier (128K) that were
+// written by the old estimate-based inference. Returns count of dropped entries.
+func applyCacheMigration(cache *probeCacheData) int {
 	dropped := 0
-	minTier := contextOverflowTiers[len(contextOverflowTiers)-1]
-	for k, v := range m {
+	minTier := contextOverflowTiers[len(contextOverflowTiers)-1] // 128K
+	for k, v := range cache.Entries {
 		if v < minTier {
-			delete(m, k)
+			delete(cache.Entries, k)
 			dropped++
 		}
 	}
-	probeCacheMu.Lock()
-	probeCache = m
-	probeCacheMu.Unlock()
-	debug.Log("probe", "loaded %d entries from %s (dropped %d sub-%d legacy entries)",
-		len(m), path, dropped, minTier)
+	return dropped
 }
 
 func saveProbeCache() {
@@ -91,7 +137,15 @@ func saveProbeCache() {
 	}
 	probeCacheMu.RUnlock()
 
-	data, err := json.MarshalIndent(snap, "", "  ")
+	cache := probeCacheData{
+		Version: probeCacheVersion,
+		Entries: snap,
+	}
+	saveProbeCacheData(cache)
+}
+
+func saveProbeCacheData(cache probeCacheData) {
+	data, err := json.MarshalIndent(cache, "", "  ")
 	if err != nil {
 		debug.Log("probe", "cache marshal error: %v", err)
 		return
@@ -104,7 +158,7 @@ func saveProbeCache() {
 	if err := util.AtomicWriteFile(path, data, 0o644); err != nil {
 		debug.Log("probe", "cache save error: %v", err)
 	} else {
-		debug.Log("probe", "cache saved %d entries to %s", len(snap), path)
+		debug.Log("probe", "cache saved %d entries to %s", len(cache.Entries), path)
 	}
 }
 
@@ -472,8 +526,9 @@ func trySimpleProbe(ctx context.Context, p Provider) int {
 }
 
 // tryTierProbe sends a message padded to approximately `tier` tokens.
-// Since simple probe already succeeded, any failure here is almost certainly
-// a context overflow. No keyword matching — any error = overflow.
+// Returns: >0 = found context limit in error, 0 = inconclusive/retry, -1 = abort.
+// Like trySimpleProbe, classifies errors to distinguish transient failures
+// (rate limits, 5xx, network) from genuine context overflow.
 func tryTierProbe(ctx context.Context, p Provider, tier int) int {
 	padding := strings.Repeat("a ", tier)
 
@@ -498,16 +553,57 @@ func tryTierProbe(ctx context.Context, p Provider, tier int) int {
 		return 0
 	}
 
-	debug.Log("probe", "tier %dK FAILED in %s: %s", tier/1000, elapsed, err.Error())
-
-	// Try to extract exact limit from error message
+	// Check if error contains context limit info first
 	if w := parseContextWindowFromError(err); w > 0 {
 		debug.Log("probe", "tier %dK overflow — extracted exact limit=%dK from error", tier/1000, w/1000)
 		return w
 	}
 
-	// Overflow but no exact value — try next lower tier
-	debug.Log("probe", "tier %dK overflow (no exact value) — trying next tier", tier/1000)
+	// Classify the error to distinguish transient failures from overflow
+	errMsg := strings.ToLower(err.Error())
+
+	// Check for genuine context overflow indicators first
+	if IsContextOverflowError(err) {
+		// Context overflow but couldn't parse exact value — try next lower tier
+		debug.Log("probe", "tier %dK FAILED in %s: context overflow (no exact value) — trying next tier", tier/1000, elapsed)
+		return 0
+	}
+
+	// Non-context errors: classify using existing errclass helpers
+	// Auth errors → abort probing entirely
+	if containsAny(errMsg, authKeywords) || containsAnyAnchored(errMsg, authStatusPatterns) {
+		debug.Log("probe", "tier %dK FAILED in %s: auth error (aborting all probing): %v", tier/1000, elapsed, err)
+		return -1
+	}
+
+	// Rate limit errors → inconclusive, may retry this tier
+	if containsAny(errMsg, rateLimitKeywords) || isRateLimitStatusHit(errMsg) {
+		debug.Log("probe", "tier %dK FAILED in %s: rate limit (inconclusive, may retry): %v", tier/1000, elapsed, err)
+		return 0
+	}
+
+	// Network errors → inconclusive, may retry this tier
+	if containsAny(errMsg, networkKeywords) {
+		debug.Log("probe", "tier %dK FAILED in %s: network error (inconclusive, may retry): %v", tier/1000, elapsed, err)
+		return 0
+	}
+
+	// 5xx errors → inconclusive, may retry this tier
+	if strings.Contains(errMsg, " 5") && (containsAny(errMsg, []string{"500", "502", "503", "504", "529"}) ||
+		containsAnyAnchored(errMsg, []string{" 500 ", " 500,", " 500\n", " 502 ", " 502,", " 502\n",
+			" 503 ", " 503,", " 503\n", " 504 ", " 504,", " 504\n", " 529 ", " 529,", " 529\n"})) {
+		debug.Log("probe", "tier %dK FAILED in %s: 5xx error (inconclusive, may retry): %v", tier/1000, elapsed, err)
+		return 0
+	}
+
+	// Timeout errors → inconclusive, may retry this tier
+	if strings.Contains(errMsg, "timeout") || strings.Contains(errMsg, "deadline") {
+		debug.Log("probe", "tier %dK FAILED in %s: timeout (inconclusive, may retry): %v", tier/1000, elapsed, err)
+		return 0
+	}
+
+	// Unknown error — log and treat as inconclusive to avoid permanent shrinkage
+	debug.Log("probe", "tier %dK FAILED in %s: unknown error (inconclusive, may retry): %v", tier/1000, elapsed, err)
 	return 0
 }
 
