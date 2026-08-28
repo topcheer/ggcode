@@ -214,16 +214,33 @@ func CheckDuplicate(entry *SkillEntry, existing []*SkillEntry) bool {
 		if strings.ToLower(e.Name) == name {
 			return true
 		}
-		// High description similarity (simple substring check)
+		// High description similarity: near-verbatim duplicates only.
+		// #1271: this used to be a one-way substring Contains (>20 chars
+		// each) - a short generic phrase ("capture failures with retry", 26
+		// chars) inside ANY longer description flagged the skill as a
+		// duplicate, and the auto-staging loop then rejected AND deleted the
+		// legitimate new skill (irreversible). Token-set Jaccard instead:
+		// near-verbatim copies (paraphrase-level token overlap >= 0.75) are
+		// still caught, while a short phrase embedded in an unrelated long
+		// description scores ~|short|/|long| and passes.
 		existingDesc := strings.ToLower(e.Meta.Description)
 		if len(desc) > 20 && len(existingDesc) > 20 {
-			// Check if either description contains the other
-			if strings.Contains(desc, existingDesc) || strings.Contains(existingDesc, desc) {
+			if jaccardSimilarity(tokenSet(desc), tokenSet(existingDesc)) >= 0.75 {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+// tokenSet splits a lowercase description into a deduplicated word set
+// for Jaccard comparison (#1271).
+func tokenSet(desc string) map[string]struct{} {
+	set := make(map[string]struct{})
+	for _, w := range strings.Fields(desc) {
+		set[w] = struct{}{}
+	}
+	return set
 }
 
 // readSkillContent reads the full content of a skill file.

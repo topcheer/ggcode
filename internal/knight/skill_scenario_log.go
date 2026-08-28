@@ -2,6 +2,7 @@ package knight
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,13 +11,19 @@ import (
 	"strings"
 	"time"
 
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 const (
 	maxSkillScenarioEntries = 200
 	maxSkillScenarioTaskLen = 2000
 	maxSkillScenarioErrLen  = 500
+	// #1270: compaction trigger. ~2.5KB/entry x 200 kept entries ~= 500KB
+	// steady state; rotating at 1MB gives ~200 appends of headroom between
+	// compactions.
+	skillScenarioRotateBytes = 1 << 20
 )
 
 type SkillScenarioLogEntry struct {
@@ -93,7 +100,45 @@ func (k *Knight) appendSkillScenario(entry SkillScenarioLogEntry) error {
 		f.Close()
 		return err
 	}
-	return f.Close()
+	if err := f.Close(); err != nil {
+		return err
+	}
+	// #1270: the size cap used to live only on the read path, so the jsonl
+	// grew without bound on disk (the in-memory view was trimmed but the
+	// file never shrank, and every read scanned the whole file). Rotate on
+	// the write side: past 1MB, rewrite the file to the most recent
+	// maxSkillScenarioEntries. A concurrent appender racing the rewrite can
+	// lose its line (appends land on the replaced inode) - acceptable for an
+	// advisory eval-context log, bounded to a couple of entries per rotation.
+	if info, err := os.Stat(path); err == nil && info.Size() > skillScenarioRotateBytes {
+		if err := k.compactSkillScenarioLog(path); err != nil {
+			debug.Log("knight", "scenario log compaction failed: %v", err)
+		}
+	}
+	return nil
+}
+
+// compactSkillScenarioLog rewrites the scenario log to its newest
+// maxSkillScenarioEntries lines (#1270). readSkillScenarios applies the same
+// cap on its returned view, so the rewrite trims to the newest window.
+func (k *Knight) compactSkillScenarioLog(path string) error {
+	// readSkillScenarios returns chronological (append) order already
+	// trimmed to the newest maxSkillScenarioEntries window - exactly the
+	// bytes the compacted file should hold.
+	entries, err := readSkillScenarios(path)
+	if err != nil {
+		return err
+	}
+	var buf bytes.Buffer
+	for _, e := range entries {
+		line, err := json.Marshal(e)
+		if err != nil {
+			continue // malformed entry: drop instead of failing rotation
+		}
+		buf.Write(line)
+		buf.WriteByte('\n')
+	}
+	return util.AtomicWriteFile(path, buf.Bytes(), 0600)
 }
 
 func (k *Knight) formatRecentSkillScenariosForEval(limit int) string {
