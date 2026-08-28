@@ -43,6 +43,7 @@ package agent
 // no blocking, no external dependencies.
 
 import (
+	"bytes"
 	"fmt"
 	"strings"
 	"sync"
@@ -175,21 +176,18 @@ func detectNegativeFeedback(message string) string {
 	lower := strings.ToLower(firstLine)
 	isShort := len(firstLine) < 100
 
-	// Positive-phrase whitelist (#1223): checked before any negative pattern.
-	// Phrases like "no problem" / "not bad" contain bare rejection words but
-	// express satisfaction; classifying them as rejection injected guidance
-	// that contradicted the user and, on the third consecutive hit, forced an
-	// unnecessary ask_user interruption.
-	for _, w := range sentimentPositiveWhitelist {
-		if wordContains(lower, w) {
-			return ""
-		}
-	}
+	// Positive-phrase masking (#1223, refined by #1227): whitelist phrases
+	// like "no problem" / "not bad" contain bare rejection words but express
+	// satisfaction. Rather than short-circuiting the whole line - which hid
+	// genuine negative signals in mixed messages like "thanks, but still
+	// broken" and wrongly reset the escalation counter - the matched phrases
+	// are blanked out and the negative patterns then scan what remains.
+	scanText := maskPositivePhrases(lower)
 
 	// Check patterns in priority order.
 	for _, group := range negFeedbackPatterns {
 		for _, pat := range group.patterns {
-			if wordContains(lower, pat) {
+			if wordContains(scanText, pat) {
 				// All categories only trigger for short messages to avoid
 				// false positives in detailed technical messages. A long
 				// message with "actually" mid-sentence is context, not
@@ -202,6 +200,48 @@ func detectNegativeFeedback(message string) string {
 	}
 
 	return ""
+}
+
+// maskPositivePhrases blanks out word-bounded occurrences of every
+// whitelist phrase in text, returning the text with those spans replaced by
+// spaces. Blanking keeps surrounding word boundaries intact (spaces are
+// non-alphanumeric), so leftover negative-signal words are still matched by
+// wordContains on the returned text (#1227).
+func maskPositivePhrases(text string) string {
+	b := []byte(text)
+	for _, w := range sentimentPositiveWhitelist {
+		for {
+			idx := wordIndexIn(b, w)
+			if idx < 0 {
+				break
+			}
+			for i := idx; i < idx+len(w); i++ {
+				b[i] = ' '
+			}
+		}
+	}
+	return string(b)
+}
+
+// wordIndexIn returns the start of the first word-bounded occurrence of
+// pattern in b, or -1. Boundary semantics mirror wordContains.
+func wordIndexIn(b []byte, pattern string) int {
+	pb := []byte(pattern)
+	for from := 0; from+len(pb) <= len(b); {
+		rel := bytes.Index(b[from:], pb)
+		if rel < 0 {
+			return -1
+		}
+		idx := from + rel
+		beforeOK := idx == 0 || !isAlnum(b[idx-1])
+		afterIdx := idx + len(pb)
+		afterOK := afterIdx >= len(b) || !isAlnum(b[afterIdx])
+		if beforeOK && afterOK {
+			return idx
+		}
+		from = idx + 1
+	}
+	return -1
 }
 
 // wordContains checks if text contains the pattern as a standalone word

@@ -126,6 +126,28 @@ func TestDetectNegativeFeedback_PositivePhrases(t *testing.T) {
 	}
 }
 
+// TestDetectNegativeFeedback_MixedSentiment pins #1227: positive phrases mask
+// only themselves; genuine negative signals elsewhere on the same line are
+// still detected. The previous whole-line short-circuit hid "thanks, but
+// still broken" and wrongly reset the escalation counter.
+func TestDetectNegativeFeedback_MixedSentiment(t *testing.T) {
+	tests := []struct {
+		msg  string
+		want string
+	}{
+		{"thanks, but still broken", negCatRejection},
+		{"no problem, but wrong file", negCatRejection},
+		{"looks good, but tests are failing", negCatRejection},
+		{"thanks for nothing, this is garbage", negCatFrustration},
+	}
+	for _, tt := range tests {
+		got := detectNegativeFeedback(tt.msg)
+		if got != tt.want {
+			t.Errorf("detectNegativeFeedback(%q) = %q, want %q", tt.msg, got, tt.want)
+		}
+	}
+}
+
 func TestUserSentimentState_Escalation(t *testing.T) {
 	s := newUserSentimentState()
 
