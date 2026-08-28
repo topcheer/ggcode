@@ -1189,7 +1189,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.companionGuard.reset()
 	a.specGaming.reset()
 	a.scopeNarrow.reset()
-	a.complexityGate.reset()
 	a.crossDetectorConsensus.reset()
 	a.taintInfluence.reset()
 	a.perfBaseline.reset()
@@ -1494,7 +1493,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.companionGuard.reset()
 	a.specGaming.reset()
 	a.scopeNarrow.reset()
-	a.complexityGate.reset()
 	a.verifyRegression.reset()
 	a.resetSelfCorrectionGate()
 	a.argSizeGuardFires = 0

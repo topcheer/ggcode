@@ -398,15 +398,25 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 
 	// Append fallback hint for tool errors - context-aware alternative
 	// tool suggestions that save 1-2 wasted agent iterations.
+	// #1197: routed through appendGuidance (budget + tag dedup) instead of a
+	// direct Content += - the direct append bypassed the per-turn guidance
+	// budget and duplicated the agent.go toolFallbackCheck pathway, stacking
+	// an extra unbudgeted hint onto every failing result.
 	if result.IsError {
 		if hint := toolFallbackHint(t.Name(), result.Content); hint != "" {
-			result.Content += hint
+			// Trim the hint's leading newline: appendGuidance inserts its own
+			// "\n\n" separator, which would otherwise yield a triple newline.
+			a.appendGuidance(&result, strings.TrimLeft(hint, "\n"))
 		}
 	}
 
-	// Append destructive git operation warning (if any was detected pre-execution)
+	// Append destructive git operation warning (if any was detected pre-execution).
+	// #1197 (follow-up): also routed through appendGuidance - it was the last
+	// detector hint still direct-appended, invisible to the guidance budget.
+	// It is critical-tagged ([git-destructive]) so it still bypasses the count
+	// cap; only dedup + byte limits apply.
 	if destructiveWarning != "" {
-		result.Content += destructiveWarning
+		a.appendGuidance(&result, destructiveWarning)
 	}
 
 	// Prompt injection defense: sanitize tool results that may contain

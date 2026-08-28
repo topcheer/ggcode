@@ -64,14 +64,23 @@ func ComplexFunc(a, b, c, d int) int {
 	if a > 100 {
 		return 6
 	}
-	if b > 100 {
-		return 7
+		if b > 100 {
+			return 7
+		}
+		if c > 100 {
+			return 8
+		}
+		if d > 100 {
+			return 9
+		}
+		if d > 200 && a > 200 {
+			return 10
+		}
+		if d < 0 && b < 0 {
+			return 11
+		}
+		return 0
 	}
-	if c > 100 {
-		return 8
-	}
-	return 0
-}
 `
 	if err := os.WriteFile(goFile, []byte(content), 0644); err != nil {
 		t.Fatal(err)
@@ -154,14 +163,23 @@ func ComplexFunc(a, b, c, d int) int {
 	if a > 100 {
 		return 6
 	}
-	if b > 100 {
-		return 7
+		if b > 100 {
+			return 7
+		}
+		if c > 100 {
+			return 8
+		}
+		if d > 100 {
+			return 9
+		}
+		if d > 200 && a > 200 {
+			return 10
+		}
+		if d < 0 && b < 0 {
+			return 11
+		}
+		return 0
 	}
-	if c > 100 {
-		return 8
-	}
-	return 0
-}
 `
 	if err := os.WriteFile(goFile, []byte(content), 0644); err != nil {
 		t.Fatal(err)
@@ -193,14 +211,6 @@ func TestComplexityGate_TestFilesSkipped(t *testing.T) {
 	}
 	if msg := a.checkComplexityGate(stats); msg != "" {
 		t.Fatalf("expected empty for test files, got: %s", msg)
-	}
-}
-
-func TestComplexityGateState_Reset(t *testing.T) {
-	s := &complexityGateState{fired: true}
-	s.reset()
-	if s.fired {
-		t.Fatal("fired should be false after reset")
 	}
 }
 
