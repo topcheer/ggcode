@@ -25,16 +25,26 @@ package agent
 //   - Zero-LLM-cost: uses deterministic AST analysis (go/parser + go/ast)
 //   - Non-blocking: advisory warnings, doesn't prevent completion
 //   - Scoped: only scans files the agent actually edited
-//   - Bounded: fires at most once per SESSION (not per run) - the advisory is
-//     identical text, so re-injecting it every turn is pure context noise
-//     (user-reported: fired on virtually every turn in legacy-heavy files)
+//   - Diff-baselined (#1202): compares each hotspot against its metrics in the
+//     last committed revision (git HEAD). Pre-existing legacy hotspots the agent
+//     did not worsen are NOT reported - this prevents scope creep where a
+//     one-line edit in a legacy file steers the agent into refactoring
+//     unrelated pre-existing code. When no baseline is available (not a git
+//     repo), the gate falls back to reporting all hotspots.
+//   - Per-function dedup (#1202): already-reported hotspots are remembered by
+//     file+function key, so the same advisory text is never re-injected, while
+//     a NEW regression in a different file/function still fires later in the
+//     session (the old global one-shot fired flag suppressed everything after
+//     the first advisory). Bounded by maxComplexityGateFires per session.
 //   - Threshold-based: only flags CRITICAL severity (complexity > 20, or
 //     extreme length/nesting). Legacy files full of complexity-15 functions
 //     must not trigger advisories that steer the agent into refactoring
 //     unrelated pre-existing code (scope creep).
 
 import (
+	"bytes"
 	"fmt"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -43,9 +53,14 @@ import (
 )
 
 const (
-	// maxComplexityGateWarnings caps the number of functions reported to avoid
-	// flooding the agent's context with excessive output.
+	// maxComplexityGateWarnings caps the number of functions reported per
+	// advisory to avoid flooding the agent's context with excessive output.
 	maxComplexityGateWarnings = 5
+
+	// maxComplexityGateFires caps how many separate advisories the gate may
+	// inject over the whole session (#1202: per-function dedup replaced the
+	// global fired flag; this cap keeps the total bounded).
+	maxComplexityGateFires = 3
 
 	// complexityGateThreshold is the minimum cyclomatic complexity that triggers
 	// a warning. Set to 20 - codehealth "high" severity - so only genuinely
@@ -60,29 +75,51 @@ const (
 
 	// complexityGateMaxNesting flags functions exceeding this nesting depth.
 	complexityGateMaxNesting = 5
+
+	// complexityGateAnalyzeThreshold and complexityGateAnalyzeMaxFuncs control
+	// the codehealth.Analyze call. The analyze threshold is set to 1 (and the
+	// function cap very high) so TopFunctions returns ALL functions, letting
+	// isComplexityHotspot apply the real three-threshold check below (#1202:
+	// with the analyze threshold equal to the complexity threshold, the length
+	// and nesting branches were dead code - buildReport pre-filters
+	// TopFunctions by complexity before they could ever match).
+	complexityGateAnalyzeThreshold = 1
+	complexityGateAnalyzeMaxFuncs  = 1000
 )
 
-// complexityGateState tracks whether the gate has already fired. Deliberately
-// SESSION-scoped: reset() was removed from the per-turn path - a fired gate
-// stays fired for the agent's lifetime so the same advisory text is never
-// re-injected on subsequent turns editing the same legacy file.
+// complexityGateState dedupes already-reported hotspots. Deliberately
+// SESSION-scoped: hotspots are remembered by file+function key for the agent's
+// lifetime, so identical advisories are never re-injected, while genuinely new
+// regressions elsewhere still fire (#1202).
 type complexityGateState struct {
-	fired bool
+	// reported maps relPath + ":" + funcName of hotspots already named in a
+	// previous advisory.
+	reported map[string]bool
+	// fires counts advisories injected this session.
+	fires int
 }
 
 func newComplexityGateState() *complexityGateState {
 	return &complexityGateState{}
 }
 
+// complexityBaselineFn resolves the pre-edit baseline metrics for a file.
+// Returns the HEAD-revision function metrics keyed by function name and
+// whether a baseline is available at all. Package-level so tests can inject.
+var complexityBaselineFn = gitBaselineMetrics
+
 // checkComplexityGate runs after build verification passes to detect quality
-// regressions in edited Go files. Returns a non-empty message if critical
-// complexity issues are found that warrant a quality advisory.
+// regressions the agent introduced in edited Go files. Returns a non-empty
+// message if critical complexity issues are found that warrant a quality
+// advisory.
 //
-// The gate analyzes ONLY files in runStats.FilesEdited that have .go extension,
-// and ONLY reports functions exceeding severity thresholds. It fires at most
-// once per session (the state is never reset between user turns).
+// The gate analyzes ONLY files in runStats.FilesEdited that have .go extension
+// (excluding tests and generated files), ONLY reports functions exceeding
+// severity thresholds, and only reports functions that are new or worsened
+// relative to the git HEAD baseline. Each hotspot is reported at most once per
+// session; the advisory count is capped at maxComplexityGateFires.
 func (a *Agent) checkComplexityGate(runStats *RunStats) string {
-	if a.complexityGate.fired {
+	if a.complexityGate.fires >= maxComplexityGateFires {
 		return ""
 	}
 
@@ -94,15 +131,25 @@ func (a *Agent) checkComplexityGate(runStats *RunStats) string {
 	workingDir := a.WorkingDir()
 
 	var allHotspots []codehealth.FuncMetrics
+	var newKeys []string
 	for _, relPath := range goFiles {
 		absPath := relPath
 		if !filepath.IsAbs(absPath) && workingDir != "" {
 			absPath = filepath.Join(workingDir, relPath)
 		}
 
+		// Generated code is out of scope (#1202): advisories on generator
+		// output (".pb.go", "Code generated" markers) cannot be acted on by
+		// the agent and only add noise.
+		if codehealth.IsGenerated(absPath) {
+			debug.Log("complexity-gate", "skipping generated file %s", relPath)
+			continue
+		}
+
 		// Analyze the single file - codehealth.Analyze supports file paths.
 		opts := codehealth.DefaultOptions()
-		opts.ThresholdComplexity = complexityGateThreshold
+		opts.ThresholdComplexity = complexityGateAnalyzeThreshold
+		opts.MaxFunctions = complexityGateAnalyzeMaxFuncs
 		report, err := codehealth.Analyze(absPath, opts)
 		if err != nil {
 			debug.Log("complexity-gate", "failed to analyze %s: %v", relPath, err)
@@ -112,21 +159,43 @@ func (a *Agent) checkComplexityGate(runStats *RunStats) string {
 			continue
 		}
 
+		// Resolve the pre-edit baseline: hotspots the agent did not introduce
+		// or worsen must not be reported (scope-creep misattribution, #1202).
+		baseline, hasBaseline := complexityBaselineFn(absPath, workingDir)
+
 		for _, fn := range report.TopFunctions {
-			if isComplexityHotspot(fn) {
-				// Use relative path for cleaner output.
-				fn.File = relPath
-				allHotspots = append(allHotspots, fn)
+			if !isComplexityHotspot(fn) {
+				continue
 			}
+			if hasBaseline {
+				if base, ok := baseline[fn.Function]; ok && !hotspotWorsened(fn, base) {
+					// Pre-existing legacy hotspot, unchanged by the agent.
+					continue
+				}
+			}
+			key := relPath + ":" + fn.Function
+			if a.complexityGate.reported[key] {
+				continue
+			}
+			// Use relative path for cleaner output.
+			fn.File = relPath
+			allHotspots = append(allHotspots, fn)
+			newKeys = append(newKeys, key)
 		}
 	}
 
 	if len(allHotspots) == 0 {
-		debug.Log("complexity-gate", "passed: no critical complexity in %d edited Go file(s)", len(goFiles))
+		debug.Log("complexity-gate", "passed: no new critical complexity in %d edited Go file(s)", len(goFiles))
 		return ""
 	}
 
-	a.complexityGate.fired = true
+	if a.complexityGate.reported == nil {
+		a.complexityGate.reported = make(map[string]bool)
+	}
+	for _, key := range newKeys {
+		a.complexityGate.reported[key] = true
+	}
+	a.complexityGate.fires++
 
 	// Cap the number of warnings.
 	reported := allHotspots
@@ -159,6 +228,67 @@ func (a *Agent) checkComplexityGate(runStats *RunStats) string {
 	return b.String()
 }
 
+// hotspotWorsened reports whether fn exceeds base on any threshold dimension.
+// Equal-or-better metrics mean the agent did not introduce a regression.
+func hotspotWorsened(fn, base codehealth.FuncMetrics) bool {
+	return fn.Complexity > base.Complexity ||
+		fn.Length > base.Length ||
+		fn.NestingDepth > base.NestingDepth
+}
+
+// gitBaselineMetrics returns the function metrics of the file's last committed
+// revision (git HEAD), keyed by function name. The second return is false when
+// no baseline can be established (not a git repository, or git failure) - in
+// that case the caller falls back to reporting all hotspots.
+//
+// A file present on disk but not in HEAD (newly created, untracked) yields an
+// empty baseline with available=true: every function in it counts as new.
+func gitBaselineMetrics(absPath, workingDir string) (map[string]codehealth.FuncMetrics, bool) {
+	if workingDir == "" {
+		return nil, false
+	}
+	out, err := exec.Command("git", "-C", workingDir, "rev-parse", "--is-inside-work-tree").Output()
+	if err != nil || strings.TrimSpace(string(out)) != "true" {
+		debug.Log("complexity-gate", "no git baseline for %s (not a repo: %v)", absPath, err)
+		return nil, false
+	}
+
+	rel := absPath
+	if r, rerr := filepath.Rel(workingDir, absPath); rerr == nil && !strings.HasPrefix(r, "..") {
+		rel = r
+	}
+	// The "./" prefix makes git resolve the path relative to the -C directory
+	// rather than the repository root.
+	spec := "HEAD:./" + filepath.ToSlash(rel)
+	var stderr bytes.Buffer
+	cmd := exec.Command("git", "-C", workingDir, "show", spec)
+	cmd.Stderr = &stderr
+	content, err := cmd.Output()
+	if err != nil {
+		msg := stderr.String()
+		if strings.Contains(msg, "does not exist in") || strings.Contains(msg, "exists on disk, but not in") {
+			// Untracked/new file: empty baseline, everything is new.
+			return map[string]codehealth.FuncMetrics{}, true
+		}
+		debug.Log("complexity-gate", "baseline unavailable for %s: %v (%s)", rel, err, strings.TrimSpace(msg))
+		return nil, false
+	}
+
+	report, err := codehealth.AnalyzeSource(rel, content, codehealth.Options{
+		ThresholdComplexity: complexityGateAnalyzeThreshold,
+		MaxFunctions:        complexityGateAnalyzeMaxFuncs,
+	})
+	if err != nil {
+		debug.Log("complexity-gate", "failed to parse HEAD revision of %s: %v", rel, err)
+		return nil, false
+	}
+	baseline := make(map[string]codehealth.FuncMetrics, len(report.TopFunctions))
+	for _, fn := range report.TopFunctions {
+		baseline[fn.Function] = fn
+	}
+	return baseline, true
+}
+
 // isComplexityHotspot returns true if a function exceeds any quality threshold.
 func isComplexityHotspot(fn codehealth.FuncMetrics) bool {
 	return fn.Complexity >= complexityGateThreshold ||
@@ -167,7 +297,9 @@ func isComplexityHotspot(fn codehealth.FuncMetrics) bool {
 }
 
 // filterGoSourceFiles returns paths from the list that are .go files, excluding
-// test files (_test.go) and generated files.
+// test files (_test.go). Generated files are excluded separately in
+// checkComplexityGate once an absolute path (and therefore filesystem access)
+// is available.
 func filterGoSourceFiles(paths []string) []string {
 	var result []string
 	for _, p := range paths {

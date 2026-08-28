@@ -104,6 +104,12 @@ func Analyze(dir string, opts Options) (*Report, error) {
 	filesScanned := 0
 
 	if !info.IsDir() {
+		// Skip generated files — same policy as the directory walk below, so a
+		// caller explicitly analyzing a single generated file (.pb.go etc.) does
+		// not get advisories about generator output (#1202).
+		if isGenerated(dir) {
+			return buildReport(dir, nil, nil, 0, opts), nil
+		}
 		// Single file analysis
 		funcs, err := analyzeFile(dir)
 		if err != nil {
@@ -163,15 +169,34 @@ func Analyze(dir string, opts Options) (*Report, error) {
 
 // analyzeFile parses a single Go file and extracts function metrics.
 func analyzeFile(path string) ([]FuncMetrics, error) {
+	return analyzeSource(path, nil)
+}
+
+// analyzeSource extracts function metrics from Go source content. When src is
+// nil the file at filename is read from disk; otherwise src is parsed directly
+// (used by AnalyzeSource for baseline comparisons that must not touch disk).
+//
+// Note: the disk read is explicit rather than relying on parser.ParseFile's
+// nil-src convention - a typed-nil []byte passed as ParseFile's `any` src
+// parameter is a NON-nil interface, which makes the parser use the (empty)
+// content instead of reading the file.
+func analyzeSource(filename string, src []byte) ([]FuncMetrics, error) {
+	if src == nil {
+		data, err := os.ReadFile(filename)
+		if err != nil {
+			return nil, err
+		}
+		src = data
+	}
 	fset := token.NewFileSet()
-	src, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
+	parsed, err := parser.ParseFile(fset, filename, src, parser.ParseComments)
 	if err != nil {
 		return nil, err
 	}
 
 	var results []FuncMetrics
 
-	for _, decl := range src.Decls {
+	for _, decl := range parsed.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
 		if !ok {
 			continue
@@ -187,7 +212,7 @@ func analyzeFile(path string) ([]FuncMetrics, error) {
 		name := funcName(fn)
 
 		metrics := FuncMetrics{
-			File:       path,
+			File:       filename,
 			Function:   name,
 			Line:       startPos.Line,
 			EndLine:    endPos.Line,
@@ -428,6 +453,35 @@ func buildReport(path string, funcs []FuncMetrics, files []FileSummary, filesSca
 
 	return r
 }
+
+// AnalyzeSource analyzes in-memory Go source content with the same semantics
+// as single-file Analyze. filename is used only for metric attribution.
+// Exported so callers (e.g. the agent complexity gate) can compute baseline
+// metrics for a previous file revision without writing it to disk (#1202).
+func AnalyzeSource(filename string, src []byte, opts Options) (*Report, error) {
+	if opts.MaxFunctions <= 0 {
+		opts.MaxFunctions = 20
+	}
+	if opts.ThresholdComplexity <= 0 {
+		opts.ThresholdComplexity = 11
+	}
+	if len(opts.ExcludeDirs) == 0 {
+		opts.ExcludeDirs = []string{"vendor", "testdata", ".git"}
+	}
+	funcs, err := analyzeSource(filename, src)
+	if err != nil {
+		return nil, err
+	}
+	var fileSummaries []FileSummary
+	if len(funcs) > 0 {
+		fileSummaries = append(fileSummaries, summarizeFile(filename, funcs))
+	}
+	return buildReport(filename, funcs, fileSummaries, 1, opts), nil
+}
+
+// IsGenerated reports whether the Go file at path looks auto-generated
+// (by filename convention or a leading "Code generated" marker).
+func IsGenerated(path string) bool { return isGenerated(path) }
 
 // isGenerated checks if a Go file is auto-generated.
 func isGenerated(path string) bool {
