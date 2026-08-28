@@ -124,6 +124,75 @@ func TestTypeSwitchExhaustive_NonGoFile(t *testing.T) {
 	}
 }
 
+// TestIssue1212_SecondSwitchInSameFuncReported verifies that adding a SECOND
+// default-less type switch to a function that already has one is reported.
+// The old funcName-only dedup key made both switches share a key, so the new
+// one silently deduped away (#1212 direction 1).
+func TestIssue1212_SecondSwitchInSameFuncReported(t *testing.T) {
+	oldSrc := `package x
+type A struct{}
+type B struct{}
+func f(v interface{}) {
+	switch v := v.(type) {
+	case *A:
+	case *B:
+	}
+	_ = v
+}
+`
+	newSrc := `package x
+type A struct{}
+type B struct{}
+func f(v interface{}) {
+	switch v := v.(type) {
+	case *A:
+	case *B:
+	}
+	switch v := v.(type) {
+	case *A:
+	case *B:
+	}
+	_ = v
+}
+`
+	warnings := checkTypeSwitchExhaustive("test.go", oldSrc, newSrc)
+	if len(warnings) != 1 {
+		t.Fatalf("expected 1 warning for newly added second switch, got %d: %v", len(warnings), warnings)
+	}
+}
+
+// TestIssue1212_RenameDoesNotReReport verifies that renaming a function
+// without touching its switch does not re-report the pre-existing switch
+// (#1212 direction 2). Relative-line keys are rename-stable.
+func TestIssue1212_RenameDoesNotReReport(t *testing.T) {
+	oldSrc := `package x
+type A struct{}
+type B struct{}
+func f(v interface{}) {
+	switch v := v.(type) {
+	case *A:
+	case *B:
+	}
+	_ = v
+}
+`
+	newSrc := `package x
+type A struct{}
+type B struct{}
+func handleValueWithLongerName(v interface{}) {
+	switch v := v.(type) {
+	case *A:
+	case *B:
+	}
+	_ = v
+}
+`
+	warnings := checkTypeSwitchExhaustive("test.go", oldSrc, newSrc)
+	if len(warnings) != 0 {
+		t.Fatalf("expected 0 warnings for pure rename, got %d: %v", len(warnings), warnings)
+	}
+}
+
 func TestTypeSwitchExhaustive_TestFile(t *testing.T) {
 	src := `package x
 type A struct{}

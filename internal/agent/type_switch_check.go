@@ -44,12 +44,13 @@ import (
 	"go/parser"
 	"go/token"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
 // typeSwitchIssue represents one detected type switch exhaustiveness problem.
 type typeSwitchIssue struct {
-	key     string // dedup key: type-switch:pos
+	key     string // dedup key: type-switch:<line relative to enclosing func decl>
 	message string
 }
 
@@ -125,13 +126,13 @@ func findTypeSwitchIssues(file *ast.File, fset *token.FileSet) []typeSwitchIssue
 		if !ok || fn.Body == nil {
 			continue
 		}
-		funcName := tsFuncName(fn)
+		funcLine := fset.Position(fn.Pos()).Line
 		ast.Inspect(fn.Body, func(node ast.Node) bool {
 			ts, ok := node.(*ast.TypeSwitchStmt)
 			if !ok {
 				return true
 			}
-			issue := analyzeTypeSwitch(ts, fset, funcName)
+			issue := analyzeTypeSwitch(ts, fset, funcLine)
 			if issue != nil {
 				issues = append(issues, *issue)
 			}
@@ -141,17 +142,10 @@ func findTypeSwitchIssues(file *ast.File, fset *token.FileSet) []typeSwitchIssue
 	return issues
 }
 
-// tsFuncName extracts the function name from a FuncDecl for use as a
-// stable delta-dedup key.
-func tsFuncName(fn *ast.FuncDecl) string {
-	if fn.Name != nil {
-		return fn.Name.Name
-	}
-	return ""
-}
-
 // analyzeTypeSwitch checks a single type switch for exhaustiveness.
-func analyzeTypeSwitch(ts *ast.TypeSwitchStmt, fset *token.FileSet, funcName string) *typeSwitchIssue {
+// funcLine is the declaration line of the enclosing function, used to make
+// the dedup key position-relative (see below).
+func analyzeTypeSwitch(ts *ast.TypeSwitchStmt, fset *token.FileSet, funcLine int) *typeSwitchIssue {
 	caseCount := 0
 	hasDefault := false
 
@@ -175,8 +169,18 @@ func analyzeTypeSwitch(ts *ast.TypeSwitchStmt, fset *token.FileSet, funcName str
 	}
 
 	pos := fset.Position(ts.Pos())
+	// Dedup key is the switch's line RELATIVE to the enclosing function's
+	// declaration line (#1212). Keying on funcName alone made a second
+	// switch added to the same function dedup away (silent miss) and a pure
+	// function rename re-report the same switch (false positive).
+	// Relative line handles all three: a rename keeps lines; insertions
+	// ABOVE the function shift funcLine and the switch equally; a newly
+	// added second switch inside the function lands on a different relative
+	// line. Insertions between funcLine and the switch still re-key
+	// (inherent to position-based dedup, bounded by the advisory nature of
+	// this detector).
 	return &typeSwitchIssue{
-		key: "type-switch:" + funcName,
+		key: "type-switch:" + strconv.Itoa(pos.Line-funcLine),
 		message: fmt.Sprintf(
 			"Type switch at %s has %d case(s) but no default branch: "+
 				"unknown concrete types will silently fall through, potentially returning zero-values or skipping critical logic. "+
