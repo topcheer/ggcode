@@ -39,6 +39,7 @@ func (m *Model) queuePendingSubmission(text string) {
 	m.pendingImages = nil
 	chatID := nextChatID()
 	m.lastQueuedChatID = chatID
+	m.queuedChatIDs = append(m.queuedChatIDs, chatID)
 	count := m.pending.enqueueWithImages(text, imgs)
 	debug.Log("tui", "queuePendingSubmission: count=%d text=%s imgs=%d", count, util.Truncate(text, 100), len(imgs))
 	if count == 0 {
@@ -66,6 +67,14 @@ func (m *Model) dequeueLastVisible() (text string, imgs []imageAttachedMsg, ok b
 	// Remove the chat bubble for this queued message.
 	if m.lastQueuedChatID != "" {
 		m.chatList.RemoveByID(m.lastQueuedChatID)
+		// Keep queuedChatIDs in sync so a later restorePendingInput does not
+		// call RemoveByID on an already-removed bubble (harmless, but noisy).
+		for i := len(m.queuedChatIDs) - 1; i >= 0; i-- {
+			if m.queuedChatIDs[i] == m.lastQueuedChatID {
+				m.queuedChatIDs = append(m.queuedChatIDs[:i], m.queuedChatIDs[i+1:]...)
+				break
+			}
+		}
 		m.lastQueuedChatID = ""
 	}
 	debug.Log("tui", "dequeueLastVisible: dequeued text=%s", util.Truncate(text, 100))
@@ -210,7 +219,25 @@ func (m *Model) shutdownAll() {
 }
 
 func (m *Model) restorePendingInput() {
+	// Remove the rendered chat bubbles for queued messages before restoring
+	// them to the input box. Without this the bubble stayed in the chat list
+	// AND the text reappeared in the composer — a double display — and the
+	// bubble text was silently lost if the user typed over the restored draft.
+	for _, id := range m.queuedChatIDs {
+		if id != "" {
+			m.chatList.RemoveByID(id)
+		}
+	}
+	m.queuedChatIDs = nil
+	m.lastQueuedChatID = ""
 	pending := m.pending.consumeVisiblePrefix()
+	// Hidden submissions (cron/remote-injected) are intentionally NOT restored
+	// to the input box (they are machine-originated). They stay queued and are
+	// drained by the next submitPendingSubmissionCmd; log so the drop window
+	// is at least observable.
+	if hidden := m.pendingSubmissionCount(); hidden > 0 {
+		debug.Log("tui", "restorePendingInput: %d hidden submission(s) remain queued for next run", hidden)
+	}
 	pending = strings.TrimSpace(pending)
 	draft := strings.TrimSpace(m.input.Value())
 	switch {

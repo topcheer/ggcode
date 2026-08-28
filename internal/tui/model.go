@@ -90,7 +90,8 @@ type Model struct {
 	chatList                *chat.List // virtual-scrolling conversation list
 	chatStyles              chat.Styles
 	cronScheduler           *cron.Scheduler
-	lastQueuedChatID        string // chat item ID of last visible queued msg (for de-queue removal)
+	lastQueuedChatID        string   // chat item ID of last visible queued msg (for de-queue removal)
+	queuedChatIDs           []string // chat item IDs of all queued-msg bubbles (for restorePendingInput cleanup)
 	shellMode               bool
 	shellRunning            bool // true while a $ shell command is executing (independent of agent loading)
 	shellOwnedLoading       bool // true when shell set m.loading (agent wasn't running)
