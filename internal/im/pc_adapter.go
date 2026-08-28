@@ -603,6 +603,21 @@ func (a *pcAdapter) handleUserMessage(sessionID string, payload pcPayload) {
 		result, err := a.manager.HandlePairingInbound(msg)
 		if err == nil && result.Consumed {
 			debug.Log("pc", "pairing handled message session=%s", sessionID)
+			// #1226: surface the pairing outcome to the user, matching the
+			// other adapters (nostr pattern). Without this, a wrong code
+			// looked like a swallowed message, users retried blindly, and the
+			// 5-strike blacklist (#719) fired with zero feedback.
+			if strings.TrimSpace(result.ReplyText) != "" {
+				a.sendPayload(sessionID, pcSess, pcPayload{
+					"kind":      pcKindSystemMessage,
+					"messageId": pcBuildMessageID("pair"),
+					"text":      result.ReplyText,
+					"sentAt":    pcNowISO(),
+				})
+			}
+			if nerr := a.manager.NotifyPreviousBindingReplaced(context.Background(), result); nerr != nil {
+				debug.Log("pc", "notify previous binding replaced failed: %v", nerr)
+			}
 			return
 		}
 		if err := a.manager.HandleInbound(context.Background(), msg); err != nil {

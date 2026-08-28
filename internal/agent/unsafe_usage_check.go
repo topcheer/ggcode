@@ -70,21 +70,23 @@ func checkUnsafeUsage(filePath, oldContent, newContent string) []string {
 		return nil
 	}
 
-	oldSet := collectUnsafeIssues(oldContent)
+	oldCount := countUnsafeIssues(oldContent)
 	newInstances := findUnsafeIssues(newContent)
 
+	// #1218: multiset counting per category|detail. The detail for
+	// pointer-arith / stored-uintptr is a fixed constant, so a set-based key
+	// collided across every instance of the same category: once a file held
+	// one pointer-arith, any number of NEW pointer-arith expressions were
+	// silently swallowed. Counting (same #1214/#1215 precedent) reports the
+	// delta while pure line moves and re-saves stay silent.
 	var warnings []string
-	reported := make(map[string]bool, len(oldSet))
-	for k, v := range oldSet {
-		reported[k] = v
-	}
-
+	seen := make(map[string]int, len(oldCount))
 	for _, inst := range newInstances {
 		key := inst.category + "|" + inst.detail
-		if reported[key] {
-			continue
+		seen[key]++
+		if seen[key] <= oldCount[key] {
+			continue // matched against a pre-existing instance
 		}
-		reported[key] = true
 		warnings = append(warnings, formatUnsafeWarning(inst))
 		if len(warnings) >= 3 {
 			break
@@ -254,16 +256,16 @@ func isUintptrOfUnsafePointer(expr ast.Expr) bool {
 	return ok && isUnsafePointerCall(inner)
 }
 
-// collectUnsafeIssues parses old content and returns a set of existing unsafe
-// issue signatures for delta-aware suppression.
-func collectUnsafeIssues(src string) map[string]bool {
+// countUnsafeIssues parses old content and returns per-key counts of existing
+// unsafe usage signatures for delta-aware suppression (#1218: counts, not a
+// set - same-category instances must be individually subtractable).
+func countUnsafeIssues(src string) map[string]int {
 	if strings.TrimSpace(src) == "" {
 		return nil
 	}
-	instances := findUnsafeIssues(src)
-	result := make(map[string]bool, len(instances))
-	for _, inst := range instances {
-		result[inst.category+"|"+inst.detail] = true
+	counts := make(map[string]int)
+	for _, inst := range findUnsafeIssues(src) {
+		counts[inst.category+"|"+inst.detail]++
 	}
-	return result
+	return counts
 }

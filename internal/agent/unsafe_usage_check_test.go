@@ -23,6 +23,42 @@ func offset(p unsafe.Pointer, n int) unsafe.Pointer {
 	}
 }
 
+// TestCheckUnsafeUsage_DeltaSameCategory pins #1218: the delta key for
+// pointer-arith is a category-level constant, so a set-based key swallowed
+// any NEW same-category instance once the file already held one. Multiset
+// counting must report the delta while unchanged content stays silent.
+func TestCheckUnsafeUsage_DeltaSameCategory(t *testing.T) {
+	oldSrc := `package main
+
+import "unsafe"
+
+func offsetA(p unsafe.Pointer, n int) unsafe.Pointer {
+	return unsafe.Pointer(uintptr(p) + uintptr(n))
+}
+`
+	newSrc := `package main
+
+import "unsafe"
+
+func offsetA(p unsafe.Pointer, n int) unsafe.Pointer {
+	return unsafe.Pointer(uintptr(p) + uintptr(n))
+}
+
+func offsetB(p unsafe.Pointer, n int) unsafe.Pointer {
+	return unsafe.Pointer(uintptr(p) - uintptr(n))
+}
+`
+	warnings := checkUnsafeUsage("same.go", oldSrc, newSrc)
+	if len(warnings) == 0 {
+		t.Fatal("expected a warning for the newly added second pointer-arith, got none")
+	}
+	// Unchanged re-save: pre-existing instance must stay silent.
+	warnings = checkUnsafeUsage("same.go", oldSrc, oldSrc)
+	if len(warnings) != 0 {
+		t.Fatalf("expected 0 warnings on unchanged content, got: %v", warnings)
+	}
+}
+
 func TestCheckUnsafeUsage_PointerArithSub(t *testing.T) {
 	src := `package main
 

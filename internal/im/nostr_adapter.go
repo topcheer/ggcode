@@ -431,13 +431,24 @@ func (a *nostrAdapter) sendNostrDM(ctx context.Context, recipientPubKey, text st
 			break
 		}
 
+		success := 0
 		for _, relay := range conns {
 			if err := relay.Publish(ctx, evt); err != nil {
 				debug.Log("nostr", "adapter=%s publish to %s failed: %v", a.name, relay.URL, err)
 				// Record the failure so an all-relay-failure send surfaces an
 				// error to the caller instead of reporting success (#964).
 				lastErr = fmt.Errorf("publish to %s: %w", relay.URL, err)
+				continue
 			}
+			success++
+		}
+		// #1225: at least one relay accepted this chunk - treat it as
+		// delivered. Surfacing a partial failure as an error makes the caller
+		// resend the whole message, and re-encryption (random IV) produces a
+		// new event ID the recipient's dedupe cannot catch: the user receives
+		// duplicate DMs. Only zero-success (or no connections at all) errors.
+		if success > 0 {
+			lastErr = nil
 		}
 		// Inter-chunk delay to avoid relay rate-limiting (skip after last chunk).
 		if i < len(chunks)-1 {
