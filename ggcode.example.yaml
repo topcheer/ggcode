@@ -535,6 +535,19 @@ max_iterations: 0
 # Warnings at 80% and 95%, hard stop at 100%.
 # tool_call_budget: 0
 
+# Post-loop verification and success-claim supervision. Both are OFF by
+# default: the system prompt already requires the model to verify its own
+# changes inside the loop (scoped to what changed), which current models
+# do reliably. Enable these only for weaker models that claim success
+# without testing.
+# verify:
+#   # Run build/test verification after the agent loop finishes editing.
+#   auto_after_run: false
+#   # Re-enable the success-claim heuristic detectors (premature success
+#   # declarations, unverified/phantom verification claims). Their lexical
+#   # intermediate-state matching is noise for models that verify in-loop.
+#   claims_supervision: false
+
 # Per-tool permission rules: ask (prompt user), allow (auto-approve), deny (block)
 tool_permissions:
   read_file: allow
