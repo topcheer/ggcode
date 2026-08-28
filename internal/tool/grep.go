@@ -173,6 +173,19 @@ func (t Grep) Execute(ctx context.Context, input json.RawMessage) (Result, error
 
 	args.normalizeAliases()
 
+	// Panic guard: offset/head_limit come straight from model-generated JSON.
+	// The pagination sites slice with lines[start:end] and only clamp the
+	// UPPER bound, so a negative offset (typo like offset:-1, or an
+	// underflowed computed value) panics the whole CLI process with
+	// "slice bounds out of range". Normalize once here; offset 0 behaves as
+	// no offset, head_limit 0 keeps its "unlimited" meaning.
+	if args.Offset < 0 {
+		args.Offset = 0
+	}
+	if args.HeadLimit < 0 {
+		args.HeadLimit = 0
+	}
+
 	if args.Pattern == "" {
 		return Result{IsError: true, Content: "pattern is required"}, nil
 	}

@@ -667,14 +667,19 @@ func (r *REPL) SetWebUIReadyAddr(addr, token string) {
 // (issue #1189). For new sessions this is empty; for resumed sessions it's the
 // actual ID. Used to track which file to remove on exit.
 func (r *REPL) SetInitialSessionID(sessionID, mode string) {
+	r.currentSessionMu.Lock()
 	r.initialSessionID = sessionID
 	r.portFileMode = mode
+	r.currentSessionMu.Unlock()
 }
 
 // CurrentSessionID returns the session ID currently tracked for port file cleanup.
 // For new sessions, this updates from empty to the real ID when the session is created.
 func (r *REPL) CurrentSessionID() string {
-	return r.initialSessionID
+	r.currentSessionMu.RLock()
+	id := r.initialSessionID
+	r.currentSessionMu.RUnlock()
+	return id
 }
 
 // SetSessionCreatedCallback registers a callback that fires when the first real session
@@ -697,12 +702,17 @@ func (r *REPL) onSessionCreated(sessionID string) {
 		// No WebUI started, nothing to rewrite
 		return
 	}
-	// Remove the placeholder port file (if any) before writing the real one
-	if r.initialSessionID != "" && r.initialSessionID != sessionID {
+	// initialSessionID is written by SetInitialSessionID (startup goroutine)
+	// and read here from the session-callback goroutine: guard with the same
+	// mutex as the rest of the current-session state.
+	r.currentSessionMu.RLock()
+	initial := r.initialSessionID
+	r.currentSessionMu.RUnlock()
+	if initial != "" && initial != sessionID {
 		// For resumed sessions, the initial ID was already correct
 		return
 	}
-	if r.initialSessionID == "" {
+	if initial == "" {
 		// Placeholder case: remove any stale __new__ file (legacy safety)
 		runfile.Remove("__new__")
 	}
@@ -721,7 +731,9 @@ func (r *REPL) onSessionCreated(sessionID string) {
 		debug.Log("repl", "onSessionCreated: wrote port file for session %s (replacing placeholder)", sessionID)
 	}
 	// Update the cleanup key so defer removes the correct file
+	r.currentSessionMu.Lock()
 	r.initialSessionID = sessionID
+	r.currentSessionMu.Unlock()
 }
 
 // SetSystemPromptRebuilder sets a callback that rebuilds the full system prompt
