@@ -1200,8 +1200,15 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 				// allMessages. On long sessions (>500 msgs, >24h span) the
 				// window filtered out last_msg_id itself, silently dropping
 				// the messages between it and the summary via the fallback.
+				//
+				// The search must span the ENTIRE list, not summaryMsgIdx+1..:
+				// with async precompact the summary message is persisted AFTER
+				// last_msg_id in the file. A summary-anchored search never found
+				// last_msg_id and fell into the post-summary fallback below,
+				// dropping the messages that arrived between last_msg_id and
+				// the summary (the TOCTOU extras kept verbatim after compaction).
 				extraStart := -1
-				for i := summaryMsgIdx + 1; i < len(postCPEntries); i++ {
+				for i := 0; i < len(postCPEntries); i++ {
 					entry := postCPEntries[i]
 					if entry.recType == "message" && entry.record.Message != nil && entry.record.Message.ID == lastCpLastMsgID {
 						extraStart = i + 1 // start AFTER last_msg_id
@@ -1217,9 +1224,17 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 					// allMessages[extraStart:] panic (bounds out of range) or
 					// silently restore the wrong context slice.
 					for _, entry := range postCPEntries[extraStart:] {
-						if entry.recType == "message" && entry.record.Message != nil && entry.record.Message.ID != lastCpSummaryMsgID {
-							ses.ContextMessages = append(ses.ContextMessages, *entry.record.Message)
+						if entry.recType != "message" || entry.record.Message == nil {
+							continue
 						}
+						// Skip the current summary (by ID) and stale summary notes
+						// from earlier compactions that can sit between last_msg_id
+						// and EOF under async precompact ordering — their content is
+						// already folded into the current summary.
+						if entry.record.Message.ID == lastCpSummaryMsgID || isSummaryNoteMessage(entry.record.Message) {
+							continue
+						}
+						ses.ContextMessages = append(ses.ContextMessages, *entry.record.Message)
 					}
 				} else {
 					// Fallback: checkpoint last_msg_id not found in allMessages.
@@ -1271,15 +1286,28 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 			ses.CostJSON = []byte(e.record.CostJSON)
 		}
 	}
-	// If no checkpoint, ContextMessages = Messages (all messages go to agent).
+	// If no checkpoint, ContextMessages = last MaxContextMessages messages.
 	// Cap at MaxContextMessages to prevent loading tens of thousands of messages
 	// (which can be 2M+ tokens) into the LLM context on restore. The full message
 	// history remains in ses.Messages for TUI rendering; only the agent context
 	// is truncated to the most recent messages.
+	//
+	// ⚠ Build from the UNWINDOWED postCPEntries, never from ses.Messages:
+	// under time-windowed loading (fullLoad=false) ses.Messages holds only the
+	// render window (messages within RecentMessageWindow of the last message).
+	// Slicing that here handed the agent a few-KB stub for every checkpoint-less
+	// session older than the window — the "old session reloads with only a few K
+	// left" bug. The render window is for the TUI, not for the LLM context.
 	if len(ses.ContextMessages) == 0 {
-		if len(ses.Messages) > MaxContextMessages {
-			omitted := len(ses.Messages) - MaxContextMessages
-			start := len(ses.Messages) - MaxContextMessages
+		var unwindowed []provider.Message
+		for _, entry := range postCPEntries {
+			if entry.recType == "message" && entry.record.Message != nil {
+				unwindowed = append(unwindowed, *entry.record.Message)
+			}
+		}
+		if len(unwindowed) > MaxContextMessages {
+			omitted := len(unwindowed) - MaxContextMessages
+			start := len(unwindowed) - MaxContextMessages
 			// Avoid starting the context with an orphan tool_result or tool_use.
 			// If the first message at the truncation boundary is a user
 			// tool_result, extend backward to include its paired assistant
@@ -1287,7 +1315,7 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 			// LLM APIs require tool_use and tool_result to appear as a pair;
 			// leaving half of the pair at the start of context causes validation
 			// errors on the next agent turn.
-			for start > 0 && isOrphanToolMessage(ses.Messages[start]) {
+			for start > 0 && isOrphanToolMessage(unwindowed[start]) {
 				start--
 				omitted--
 			}
@@ -1299,11 +1327,11 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 			// family as the render-window anchor bug (#601), with the LLM as
 			// the victim instead of the TUI. Clamp the window start so the most
 			// recent user message stays inside.
-			if lastUser := lastDialogueIndex(ses.Messages); lastUser >= 0 && start > lastUser {
+			if lastUser := lastDialogueIndex(unwindowed); lastUser >= 0 && start > lastUser {
 				omitted -= start - lastUser
 				start = lastUser
 			}
-			ses.ContextMessages = ses.Messages[start:]
+			ses.ContextMessages = unwindowed[start:]
 			// Prepend a system note so the agent knows earlier context was truncated,
 			// rather than silently losing the conversation beginning.
 			ses.ContextMessages = append([]provider.Message{{
@@ -1314,7 +1342,7 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 				}},
 			}}, ses.ContextMessages...)
 		} else {
-			ses.ContextMessages = ses.Messages
+			ses.ContextMessages = unwindowed
 		}
 	}
 
@@ -3073,6 +3101,22 @@ func (s *JSONLStore) backfillTimestamps(sessionID string) {
 // Using content fingerprint for ALL messages would incorrectly merge
 // distinct messages that happen to have identical content (e.g. a user
 // sending "continue" twice, or two identical build outputs).
+// isSummaryNoteMessage reports whether m is a compaction summary note (a
+// system message whose text starts with the summary marker). Used to keep
+// stale summaries from earlier compactions out of the restored context when
+// async precompact persists them after the latest checkpoint's last_msg_id.
+func isSummaryNoteMessage(m *provider.Message) bool {
+	if m == nil || m.Role != "system" {
+		return false
+	}
+	for _, b := range m.Content {
+		if b.Type == "text" && strings.HasPrefix(b.Text, "[Previous conversation summary]") {
+			return true
+		}
+	}
+	return false
+}
+
 func dedupMessageRecords(records []jsonlRecord) []jsonlRecord {
 	if len(records) <= 1 {
 		return records
