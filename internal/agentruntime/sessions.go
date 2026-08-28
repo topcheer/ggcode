@@ -8,6 +8,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/agent"
 	ctxpkg "github.com/topcheer/ggcode/internal/context"
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/session"
 )
@@ -252,7 +253,7 @@ func RestoreSessionIntoAgent(agentInst *agent.Agent, ses *session.Session) (comp
 	}
 
 	// ContextMessages is already the checkpoint-aware slice: it contains
-	// [summary_msg, ...post-checkpoint messages]. Load ALL of them — do NOT
+	// [summary_msg, ...post-checkpoint messages]. Load ALL of them -- do NOT
 	// slice by CheckpointMessageCount (that would skip the entire context).
 	//
 	// The legacy code that needed CheckpointMessageCount slicing was for the
@@ -270,14 +271,41 @@ func RestoreSessionIntoAgent(agentInst *agent.Agent, ses *session.Session) (comp
 	// accurate than local estimation and replaces the old checkpoint-tokens
 	// approach. The first real LLM call after restore will refine it via
 	// RecordUsage. Fall back to CheckpointTokens if no usage history exists.
+	//
+	// Stale-baseline clamp (under-direction only): the last usage entry
+	// measured the context as it stood at the END of the previous run.
+	// Session reload reconstructs a DIFFERENT context slice (post-compaction
+	// summary + tail, or the unwindowed tail for checkpoint-less sessions),
+	// so the recorded usage can grossly UNDER-report what was just restored
+	// -- e.g. a session last saved by a buggy build (few-K stub context)
+	// keeps showing few-K usage after a fixed reload. When the recorded
+	// measurement is far BELOW the calibrated estimate of the restored
+	// messages, trust the estimate. The over-direction is deliberately NOT
+	// clamped: the local estimator can legitimately under-price CJK content,
+	// and a real measurement larger than the estimate must keep winning
+	// (see TestRestoreSessionWithCheckpoint). RecordUsage corrects the
+	// baseline on the first real call either way.
 	if cm, ok := agentInst.ContextManager().(*ctxpkg.Manager); ok {
+		cand := 0
 		if n := len(ses.UsageHistory); n > 0 {
 			last := ses.UsageHistory[n-1]
 			if last.Usage.InputTokens > 0 {
-				cm.SetCheckpointBaseline(last.Usage.InputTokens + last.Usage.OutputTokens)
+				cand = last.Usage.InputTokens + last.Usage.OutputTokens
 			}
-		} else if ses.CheckpointTokens > 0 {
-			cm.SetCheckpointBaseline(ses.CheckpointTokens)
+		}
+		if cand == 0 && ses.CheckpointTokens > 0 {
+			cand = ses.CheckpointTokens
+		}
+		// Estimate of exactly the restored slice. No baseline has been set
+		// yet on a fresh agent, so TokenCount() is the calibrated local
+		// estimate here.
+		if est := agentInst.ContextManager().TokenCount(); est > 0 && cand > 0 && cand < est/2 {
+			debug.Log("agentruntime", "restore baseline stale (under-reports restored context): usage=%d vs restored estimate=%d for session %s -- using estimate",
+				cand, est, ses.ID)
+			cand = est
+		}
+		if cand > 0 {
+			cm.SetCheckpointBaseline(cand)
 		}
 	}
 

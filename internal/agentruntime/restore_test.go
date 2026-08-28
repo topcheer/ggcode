@@ -1,6 +1,7 @@
 package agentruntime
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/topcheer/ggcode/internal/agent"
@@ -142,4 +143,76 @@ func TestRestoreNilAgent(t *testing.T) {
 	// Should not panic.
 	_, _, _ = RestoreSessionIntoAgent(nil, &session.Session{ID: "test"})
 	_, _, _ = RestoreSessionIntoAgent(&agent.Agent{}, nil)
+}
+
+// TestRestoreSessionStaleUsageBaselineClamped pins the under-direction
+// stale-baseline clamp: when the last recorded usage grossly under-reports
+// the restored context (e.g. the session was last saved by a build whose
+// reload produced a few-K stub), the restore must fall back to the
+// calibrated estimate of the restored messages instead of the stale
+// measurement -- otherwise the TUI keeps showing few-K context usage after
+// the context itself was fixed.
+func TestRestoreSessionStaleUsageBaselineClamped(t *testing.T) {
+	reg := tool.NewRegistry()
+	ag := agent.NewAgent(nil, reg, "system", 10)
+
+	// Large restored context: 60 messages x ~500 ASCII chars ≈ 30K chars →
+	// local estimate in the several-thousand-token range.
+	msgs := make([]provider.Message, 60)
+	for i := range msgs {
+		text := strings.Repeat("a", 500)
+		role := "user"
+		if i%2 == 1 {
+			role = "assistant"
+		}
+		msgs[i] = provider.Message{
+			Role:    role,
+			Content: []provider.ContentBlock{{Type: "text", Text: text}},
+		}
+	}
+
+	ses := &session.Session{
+		ID:              "stale-usage-session",
+		ContextMessages: msgs,
+		UsageHistory: []session.UsageEntry{{
+			Usage: provider.TokenUsage{InputTokens: 2000, OutputTokens: 300},
+		}},
+	}
+
+	RestoreSessionIntoAgent(ag, ses)
+
+	tokens := ag.ContextManager().TokenCount()
+	// The stale usage baseline (2300) is far below the restored estimate;
+	// the clamp must keep the display at the estimate, not the stub value.
+	if tokens <= 2300 {
+		t.Fatalf("stale usage baseline not clamped: TokenCount()=%d, want > 2300 (calibrated estimate of restored context)", tokens)
+	}
+}
+
+// TestRestoreSessionFreshUsageBaselineKept verifies the clamp does NOT fire
+// when the last usage is consistent with the restored context -- the real
+// measurement still wins (accuracy over estimation).
+func TestRestoreSessionFreshUsageBaselineKept(t *testing.T) {
+	reg := tool.NewRegistry()
+	ag := agent.NewAgent(nil, reg, "system", 10)
+
+	msgs := []provider.Message{
+		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: strings.Repeat("a", 500)}}},
+		{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: strings.Repeat("b", 500)}}},
+	}
+
+	ses := &session.Session{
+		ID:              "fresh-usage-session",
+		ContextMessages: msgs,
+		UsageHistory: []session.UsageEntry{{
+			Usage: provider.TokenUsage{InputTokens: 400, OutputTokens: 100},
+		}},
+	}
+
+	RestoreSessionIntoAgent(ag, ses)
+
+	// 500 is within 2x of the ~250-token estimate: measurement must be kept.
+	if got := ag.ContextManager().TokenCount(); got != 500 {
+		t.Fatalf("consistent usage baseline should be kept: TokenCount()=%d, want 500", got)
+	}
 }
