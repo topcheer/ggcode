@@ -34,21 +34,50 @@ type ProjectImprovementProposal struct {
 
 var projectProposalSlugPattern = regexp.MustCompile(`[^a-z0-9._-]+`)
 
+// filterKnightBookkeeping drops porcelain status lines whose path is inside
+// `.ggcode/` — knight's own bookkeeping domain (budget usage jsonl appended
+// per LLM call DURING the run, staging/queue/semantic-memory writes from the
+// background tick racing a user-initiated proposal). Most repos are unaffected
+// (.ggcode gitignored or collapsed into one `?? .ggcode/` line that appends
+// cannot change), but repos where `.ggcode/` was committed list new jsonl
+// files line-by-line, and the proposal's own budget recording would trip the
+// guardrail. Paths outside `.ggcode/` keep full protection.
+func filterKnightBookkeeping(snapshot string) string {
+	var kept []string
+	for _, line := range strings.Split(snapshot, "\n") {
+		if line == "" {
+			continue
+		}
+		// porcelain: "XY <path>" (or "XY <orig> -> <path>"); strip the 2-char
+		// status plus space, keep quoting intact for paths with spaces.
+		rest := line
+		if len(rest) > 3 {
+			rest = rest[3:]
+		}
+		if after := strings.TrimPrefix(rest, "\""); strings.HasPrefix(after, ".ggcode/") {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.Join(kept, "\n")
+}
+
 // countStatusDiff counts status lines present in exactly one of the two
 // porcelain snapshots (set difference both ways) for the violation message.
+// Bookkeeping-domain lines are filtered out first (#1261 review: the
+// proposal's own budget/usage appends must not read as violations).
 func countStatusDiff(before, after string) int {
-	bs := map[string]bool{}
-	for _, l := range strings.Split(before, "\n") {
-		if l != "" {
-			bs[l] = true
+	drop := func(s string) map[string]bool {
+		m := map[string]bool{}
+		for _, l := range strings.Split(filterKnightBookkeeping(s), "\n") {
+			if l != "" {
+				m[l] = true
+			}
 		}
+		return m
 	}
-	as := map[string]bool{}
-	for _, l := range strings.Split(after, "\n") {
-		if l != "" {
-			as[l] = true
-		}
-	}
+	bs := drop(before)
+	as := drop(after)
 	n := 0
 	for l := range bs {
 		if !as[l] {
@@ -120,9 +149,11 @@ Return Markdown with these sections:
 		return ProjectImprovementProposal{}, result, fmt.Errorf("knight: proposal output is empty")
 	}
 	// Compare BEFORE writing our own proposal artifact below - knight's own
-	// .ggcode write is expected and must not trip the guardrail.
-	if treeAfter := gitStatusSnapshot(k.projDir); treeAfter != treeBefore {
-		diffLines := countStatusDiff(treeBefore, treeAfter)
+	// .ggcode write is expected and must not trip the guardrail. Both sides
+	// are filtered to the non-bookkeeping domain (#1261 review).
+	treeAfter := filterKnightBookkeeping(gitStatusSnapshot(k.projDir))
+	if treeAfter != filterKnightBookkeeping(treeBefore) {
+		diffLines := countStatusDiff(treeBefore, gitStatusSnapshot(k.projDir))
 		return ProjectImprovementProposal{}, result, fmt.Errorf(
 			"knight: READ-ONLY GUARDRAIL VIOLATED: the proposal task modified the working tree (%d changed status line(s)); run `git status` / `git diff` to review. Proposal discarded",
 			diffLines)

@@ -119,3 +119,26 @@ func TestEvalRetryCooldownConstant(t *testing.T) {
 		t.Fatal("#1265: evalCooldownUntil map must be initialized")
 	}
 }
+
+// TestFilterKnightBookkeeping pins the #1261 review fix: status lines inside
+// .ggcode/ (knight's own bookkeeping - budget jsonl appended per LLM call
+// during the run, tick-raced staging/memory writes) must not trip the
+// read-only guardrail; paths outside .ggcode/ keep full protection.
+func TestFilterKnightBookkeeping(t *testing.T) {
+	before := " M main.go\n?? .ggcode/\n"
+	after := " M main.go\n?? .ggcode/\n?? .ggcode/knight/usage-2026-08-29.jsonl\n"
+	// The new bookkeeping line alone must NOT count as a violation.
+	if n := countStatusDiff(before, after); n != 0 {
+		t.Fatalf("bookkeeping-only drift must not count as violation, got %d", n)
+	}
+	// A real project-file change outside .ggcode/ still counts.
+	violating := after + " M src/app.go\n"
+	if n := countStatusDiff(before, violating); n != 1 {
+		t.Fatalf("project-file drift must count, got %d", n)
+	}
+	// Quoted .ggcode paths (spaces etc.) are filtered too.
+	quoted := "?? \".ggcode/my dir/file\"\n"
+	if filterKnightBookkeeping(quoted) != "" {
+		t.Fatalf("quoted .ggcode path must be filtered, got %q", filterKnightBookkeeping(quoted))
+	}
+}
