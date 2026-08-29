@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	runtimedebug "runtime/debug"
+	"strconv"
 	"strings"
 	"time"
 
@@ -297,10 +298,40 @@ func tryClaimPendingTask(
 				debug.Log("swarm", "teammate %s task %s permanently failed (%s): %v",
 					tm.ID, claimed.ID, fc, taskErr)
 			} else {
-				// Transient error — revert to pending so another teammate can retry.
-				pending := task.StatusPending
-				owner := ""
-				tmMgr.Update(claimed.ID, task.UpdateOptions{Status: &pending, Owner: &owner})
+				// Transient error — revert to pending so another teammate can
+				// retry, BUT capped (#1295): without a limit, a poison task
+				// (one that deterministically hits the same 5xx/EOF/DNS/timeout)
+				// was re-claimed every tick forever, burning a full LLM
+				// retry+fallback chain per attempt and starving later tasks.
+				attempts := 0
+				if v, ok := claimed.Metadata["retry_attempts"]; ok {
+					if n, err := strconv.Atoi(v); err == nil {
+						attempts = n
+					}
+				}
+				attempts++
+				if attempts >= maxTransientTaskRetries {
+					completed := task.StatusCompleted
+					errMsg := util.Truncate(taskErr.Error(), 200)
+					tmMgr.Update(claimed.ID, task.UpdateOptions{
+						Status: &completed,
+						Metadata: map[string]string{
+							"permanent_error": "max_retries_exceeded",
+							"error":           errMsg,
+							"retry_attempts":  strconv.Itoa(attempts),
+						},
+					})
+					debug.Log("swarm", "teammate %s task %s exceeded %d transient retries, parking as completed(max_retries): %v",
+						tm.ID, claimed.ID, maxTransientTaskRetries, taskErr)
+				} else {
+					pending := task.StatusPending
+					owner := ""
+					tmMgr.Update(claimed.ID, task.UpdateOptions{
+						Status:   &pending,
+						Owner:    &owner,
+						Metadata: map[string]string{"retry_attempts": strconv.Itoa(attempts)},
+					})
+				}
 			}
 		} else {
 			completed := task.StatusCompleted
@@ -327,6 +358,10 @@ func tryClaimPendingTask(
 		return
 	}
 }
+
+// maxTransientTaskRetries caps how many times a transiently-failing task
+// bounces back to pending before it is parked (#1295).
+const maxTransientTaskRetries = 3
 
 // buildTaskPrompt constructs the agent prompt from a task.
 func buildTaskPrompt(tk task.Task) string {
