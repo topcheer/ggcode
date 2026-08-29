@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"embed"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -96,12 +97,19 @@ func main() {
 	defer func() {
 		if r := recover(); r != nil {
 			path := agent.WriteCrashLog("desktop", r)
-			// Restore the real stderr BEFORE printing: log output is piped to
-			// debug.Log at this point and os.Exit below never drains the pipe,
-			// so a log.Printf here would be silently lost (review finding:
-			// crash would leave no visible trace).
-			log.SetOutput(os.Stderr)
-			log.Printf("ggcode desktop crashed: %v (panic log: %s)", r, path)
+			// Write the crash note straight to fd 2 — the REAL stderr.
+			// os.Stderr was replaced with the pipe write end by
+			// redirectStderr (which never saves the original), so a
+			// log.Printf / os.Stderr write lands in the pipe whose reader
+			// goroutine only feeds the in-memory debug ring — and the
+			// os.Exit below kills the process before anything drains it,
+			// so the note vanished (#1314; the "restore" a previous fix
+			// claimed never existed). fd 2 itself is untouched by the
+			// redirect and remains visible to the parent/launch context,
+			// next to the durable ~/.ggcode/crash/ log written above.
+			if f := os.NewFile(2, "/dev/stderr"); f != nil {
+				fmt.Fprintf(f, "ggcode desktop crashed: %v (panic log: %s)\n", r, path)
+			}
 			os.Exit(1)
 		}
 	}()
