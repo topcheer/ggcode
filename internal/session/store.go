@@ -2849,7 +2849,13 @@ func (s *JSONLStore) backfillIDs(sessionID string, updates map[string]provider.M
 	// window vs O_APPEND writers, same as migrateMessageIDs).
 	unlock, lockErr := lockSessionFile(path)
 	if lockErr != nil {
-		debug.Log("session", "backfillIDs: session lock unavailable: %v", lockErr)
+		// #1291: a failed lock means another process (daemon vs TUI/desktop
+		// sharing the session dir) most likely holds it mid-append. Writing
+		// anyway would rename-over their pending lines — persistent message
+		// loss with no error on either side. Fail SAFE like appendRecordLines
+		// does: skip this backfill (idempotent, retried on next Load).
+		debug.Log("session", "backfillIDs: session lock unavailable, skipping: %v", lockErr)
+		return
 	}
 	defer func() {
 		if unlock != nil {
@@ -2971,7 +2977,10 @@ func (s *JSONLStore) backfillTimestamps(sessionID string) {
 	// window vs O_APPEND writers, same as migrateMessageIDs).
 	unlock, lockErr := lockSessionFile(path)
 	if lockErr != nil {
-		debug.Log("session", "backfillTimestamps: session lock unavailable: %v", lockErr)
+		// #1291: same safe-side choice as backfillIDs — a held lock means a
+		// concurrent appender; rewriting the file now would drop its lines.
+		debug.Log("session", "backfillTimestamps: session lock unavailable, skipping: %v", lockErr)
+		return
 	}
 	defer func() {
 		if unlock != nil {
