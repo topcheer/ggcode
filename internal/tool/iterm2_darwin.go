@@ -225,7 +225,7 @@ tell application "iTerm"
 		end tell
 		return id of newSession
 	end tell
-end tell`, lookup, targetSpec, splitCmd, escapeShellSingleQuote(wd), escapeAS(command))
+end tell`, lookup, targetSpec, splitCmd, escapeAS(escapeShellSingleQuote(wd)), escapeAS(command))
 	} else {
 		script = fmt.Sprintf(`
 tell application "iTerm"
@@ -237,7 +237,7 @@ tell application "iTerm"
 		end tell
 		return id of newSession
 	end tell
-end tell`, lookup, targetSpec, splitCmd, escapeShellSingleQuote(wd))
+end tell`, lookup, targetSpec, splitCmd, escapeAS(escapeShellSingleQuote(wd)))
 	}
 
 	out, err := runAppleScript(script)
@@ -275,7 +275,7 @@ tell application "iTerm"
 		end tell
 		return id of current session of newTab
 	end tell
-end tell`, escapeShellSingleQuote(wd), escapeAS(command))
+end tell`, escapeAS(escapeShellSingleQuote(wd)), escapeAS(command))
 	} else {
 		script = `
 tell application "iTerm"
@@ -311,7 +311,7 @@ tell application "iTerm"
 		write text "cd '%s' && %s"
 	end tell
 	return id of current session of newWindow
-end tell`, escapeShellSingleQuote(wd), escapeAS(command))
+end tell`, escapeAS(escapeShellSingleQuote(wd)), escapeAS(command))
 	} else {
 		script = `
 tell application "iTerm"

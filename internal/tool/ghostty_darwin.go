@@ -261,7 +261,7 @@ func (g *GhosttyTool) executeSplit(terminalID, direction string, size int, comma
 		// arguments') and a crafted working_dir executed as-is. Match the
 		// iTerm2 implementation: single-quote with shell escaping.
 		cmdPart = fmt.Sprintf(`
-	input text "cd '%s' && %s" to newTerm`, escapeShellSingleQuote(wd), escapeAS(command))
+	input text "cd '%s' && %s" to newTerm`, escapeAS(escapeShellSingleQuote(wd)), escapeAS(command))
 	}
 
 	script := fmt.Sprintf(`
@@ -298,7 +298,7 @@ tell application "Ghostty"
 	set term to focused terminal of newTab
 	input text "cd '%s' && %s" to term
 	return id of term
-end tell`, escapeShellSingleQuote(wd), escapeAS(command))
+end tell`, escapeAS(escapeShellSingleQuote(wd)), escapeAS(command))
 	} else {
 		script = `
 tell application "Ghostty"
@@ -331,7 +331,7 @@ tell application "Ghostty"
 	set term to focused terminal of selected tab of newWindow
 	input text "cd '%s' && %s" to term
 	return id of term
-end tell`, escapeShellSingleQuote(wd), escapeAS(command))
+end tell`, escapeAS(escapeShellSingleQuote(wd)), escapeAS(command))
 	} else {
 		script = `
 tell application "Ghostty"
