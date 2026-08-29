@@ -581,8 +581,15 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 					}
 
 					if resp.Usage != nil {
-						parsedUsage := openAIUsage(*resp.Usage)
-						usage = &parsedUsage
+						// #1286: relays (one-api/new-api compat layers) may send a
+						// protocol-legal all-zero usage chunk at end of stream. A bare
+						// overwrite cleared previously accumulated usage AND suppressed
+						// the estimation fallback (usage non-nil but zero), silently
+						// zeroing cost/budget/compaction stats. Mirror anthropic.go's
+						// #722/#1168 guard: zero fields never clobber accumulated
+						// values, and an all-zero chunk never materializes a usage
+						// (fallback estimation stays available).
+						usage = applyOpenAIUsage(usage, *resp.Usage)
 					}
 
 					if len(resp.Choices) == 0 {
@@ -726,6 +733,34 @@ func openAIUsage(usage openai.Usage) TokenUsage {
 		parsed.CacheRead = usage.PromptTokensDetails.CachedTokens
 	}
 	return parsed
+}
+
+// applyOpenAIUsage merges an incoming stream usage chunk into the
+// accumulated usage with anthropic-style zero guards (#1286): zero fields
+// never overwrite non-zero accumulated values, and an all-zero chunk leaves
+// cur unchanged (nil stays nil so the estimation fallback can still run).
+func applyOpenAIUsage(cur *TokenUsage, u openai.Usage) *TokenUsage {
+	parsed := openAIUsage(u)
+	if parsed.InputTokens == 0 && parsed.OutputTokens == 0 && parsed.CacheRead == 0 {
+		if cur == nil {
+			return nil // all-zero: do not materialize, keep fallback available
+		}
+		return cur
+	}
+	if cur == nil {
+		return &parsed
+	}
+	if parsed.InputTokens > 0 {
+		cur.InputTokens = parsed.InputTokens
+		cur.PromptTokensTotal = parsed.PromptTokensTotal
+	}
+	if parsed.OutputTokens > 0 {
+		cur.OutputTokens = parsed.OutputTokens
+	}
+	if parsed.CacheRead > 0 {
+		cur.CacheRead = parsed.CacheRead
+	}
+	return cur
 }
 
 func (p *OpenAIProvider) CountTokens(ctx context.Context, messages []Message) (int, error) {
