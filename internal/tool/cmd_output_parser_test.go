@@ -305,3 +305,21 @@ func TestIsGoBuildCommandWordBoundary(t *testing.T) {
 		}
 	}
 }
+
+// #1315: non-verbose all-pass runs (plain `go test ./...` without -v)
+// emit only "ok pkg" lines — the summary must carry the package count,
+// not an empty "[Result Summary]" shell.
+func TestSummarizeCommandOutput_GoTestNonVerboseAllPass(t *testing.T) {
+	output := `ok  	example.com/foo	0.045s
+ok  	example.com/bar	0.120s
+ok  	example.com/baz/sub	1.5s
+`
+	summary := summarizeCommandOutput("go test ./...", output)
+
+	if !strings.Contains(summary, "PASSED: 3 package(s)") {
+		t.Errorf("expected PASSED: 3 package(s), got:\n%s", summary)
+	}
+	if strings.Contains(summary, "test(s)") {
+		t.Errorf("verbose test count leaked into non-verbose summary:\n%s", summary)
+	}
+}

@@ -219,6 +219,21 @@ func summarizeGoTestOutput(output string) string {
 		if skipCount > 0 {
 			sb.WriteString(fmt.Sprintf(", skipped: %d", skipCount))
 		}
+		if okPkgCount > 0 {
+			sb.WriteString(fmt.Sprintf(", ok: %d package(s)", okPkgCount))
+		}
+		sb.WriteString("\n")
+	} else if okPkgCount > 0 {
+		// Non-verbose all-pass run (#1315): only 'ok pkg' lines, no
+		// verbose --- PASS lines. Without this branch the summary was
+		// the bare "[Result Summary]" header — okPkgCount fed the
+		// emptiness gate (#806) but no branch consumed it, so the most
+		// common case (go test ./... without -v) produced an empty
+		// shell exactly where package-level overview was needed.
+		sb.WriteString(fmt.Sprintf("PASSED: %d package(s)", okPkgCount))
+		if skipCount > 0 {
+			sb.WriteString(fmt.Sprintf(", skipped: %d", skipCount))
+		}
 		sb.WriteString("\n")
 	}
 
