@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/util"
 	runtimedebug "runtime/debug"
 )
@@ -109,7 +110,7 @@ func (s *Scheduler) startPatrol() {
 		interval = defaultPatrolInterval
 	}
 
-	go func() {
+	go safego.Run("cron.scheduler.patrol", func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
@@ -120,7 +121,7 @@ func (s *Scheduler) startPatrol() {
 				s.patrolCheck()
 			}
 		}
-	}()
+	})
 }
 
 // patrolCheck scans all active jobs against the wall clock. If a job's

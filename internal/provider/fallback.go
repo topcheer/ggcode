@@ -549,7 +549,7 @@ func (f *FallbackProvider) watchStreamForFailoverHops(ctx context.Context, faile
 						// plain `for range stream` lived until the producer
 						// closed, adding one parked goroutine per cancelled
 						// turn.
-						go func() {
+						go safego.Run("provider.fallback.drain", func() {
 							for {
 								select {
 								case _, ok := <-stream:
@@ -560,7 +560,7 @@ func (f *FallbackProvider) watchStreamForFailoverHops(ctx context.Context, faile
 									return
 								}
 							}
-						}()
+						})
 						if !send(StreamEvent{
 							Type: StreamEventSystem,
 							Text: fmt.Sprintf("active provider failed (%v); failing over to %s", ev.Error, other.Name()),

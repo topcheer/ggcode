@@ -5,16 +5,31 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
+	"fmt"
 	"net/http"
+	"os"
 	"strings"
+	"time"
+
+	"github.com/topcheer/ggcode/internal/debug"
 )
 
 // generateAuthToken creates a cryptographically random 32-byte hex string.
+//
+// crypto/rand.Read is documented to effectively never fail on supported
+// platforms (the kernel getrandom/getentropy paths block-until-ready rather
+// than error). If it somehow does, we must not panic: NewServer runs inside
+// CLI/daemon startup, and a panic here would kill the whole process. Fall
+// back to a hash of coarse process entropy instead - weaker than CSPRNG
+// output, but the alternative (crash, or running with an empty token that
+// requireAuth treats as "auth disabled") is strictly worse. The fallback is
+// logged loudly for diagnosis.
 func generateAuthToken() string {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
-		// Fallback should never happen with crypto/rand
-		panic("webui: failed to generate auth token: " + err.Error())
+		fallback := sha256.Sum256([]byte(fmt.Sprintf("ggcode-webui-fallback:%d:%d:%d", os.Getpid(), time.Now().UnixNano(), len(b))))
+		debug.Log("webui", "WARNING: crypto/rand failed (%v); using weak fallback auth token", err)
+		return hex.EncodeToString(fallback[:])
 	}
 	return hex.EncodeToString(b)
 }

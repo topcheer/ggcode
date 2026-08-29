@@ -456,6 +456,13 @@ echo "[verify-ci] running go vet"
 # default; override via VERIFY_CI_VET_P.
 run_with_oom_retry "go vet" env GOMEMLIMIT="${GOMEMLIMIT}" GOGC=50 go vet -tags goolm -p "${VERIFY_CI_VET_P:-${VC_P}}" ./...
 
+echo "[verify-ci] running goroutine protection check"
+# Panic-safety gate (see 55eb91c1 for the v1.3.224 crash audit that motivated
+# it): every `go` launch must be safego-protected (Go/Run/defer Recover, or a
+# hand-rolled defer recover) or explicitly allowlisted with a justification.
+# AST-based, no build - cheap enough to always run.
+go run ./scripts/dev/goroutine_check.go ./internal ./cmd ./desktop
+
 echo "[verify-ci] running tests (main module, unit only)"
 # NOTE: do NOT use the "integration" tag here - integration tests (e.g. browser
 # tests that spawn Chrome) are too heavy for CI and will OOM.

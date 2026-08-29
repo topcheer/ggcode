@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 // scanResult holds the parsed data from one session JSONL file.
@@ -201,22 +203,22 @@ func scanAllSessions(sessionsDir string) ([]*scanResult, error) {
 	ch := make(chan fileResult, len(paths))
 
 	for i, path := range paths {
-		go func(idx int, p string) {
-			sr, err := scanSessionFile(p)
+		go safego.Run("cmd.reportScan.file", func() {
+			sr, err := scanSessionFile(path)
 			if err != nil || sr == nil {
-				ch <- fileResult{idx: idx, sr: nil}
+				ch <- fileResult{idx: i, sr: nil}
 				return
 			}
 			if sr.meta.ID == "" {
-				sr.meta.ID = strings.TrimSuffix(filepath.Base(p), ".jsonl")
+				sr.meta.ID = strings.TrimSuffix(filepath.Base(path), ".jsonl")
 			}
 			if sr.meta.CreatedAt.IsZero() {
-				if info, err := os.Stat(p); err == nil {
+				if info, err := os.Stat(path); err == nil {
 					sr.meta.CreatedAt = info.ModTime()
 				}
 			}
-			ch <- fileResult{idx: idx, sr: sr}
-		}(i, path)
+			ch <- fileResult{idx: i, sr: sr}
+		})
 	}
 
 	for range paths {

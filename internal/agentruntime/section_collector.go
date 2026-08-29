@@ -177,7 +177,7 @@ func (sc *SectionCollector) Start() {
 	if !sc.loopStarted.CompareAndSwap(false, true) {
 		return
 	}
-	go sc.loop()
+	go safego.Run("agentruntime.sectionCollector.loop", sc.loop)
 }
 
 // Stop signals the background loop to exit and waits for it. Concurrent or
@@ -281,7 +281,7 @@ func (sc *SectionCollector) refresh() {
 	// itself must not block forever waiting for them - wait with a generous
 	// cap so the loop keeps its cadence even on pathological mounts.
 	done := make(chan struct{})
-	go func() { wg.Wait(); close(done) }()
+	go safego.Run("section.waitAndClose", func() { wg.Wait(); close(done) })
 	select {
 	case <-done:
 		sc.store(overview, modified, commands, toolchain, symbols, deps, recentCommits, start)

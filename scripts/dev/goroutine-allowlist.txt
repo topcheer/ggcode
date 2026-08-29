@@ -1,0 +1,23 @@
+# goroutine_check allowlist: launches that are intentionally NOT wrapped in
+# safego, with justifications. Keep this list SHORT - new code should use
+# safego.Go / safego.Run / defer safego.Recover, not extend this file.
+
+# Definition point: safego.Go is literally `go Run(name, fn)` - wrapping it
+# in itself would recurse. Run() carries the actual recover.
+internal/safego/safego.go
+
+# Single os.File.Write + send to a buffered(chan,1) under a select with
+# timeout - zero panic surface; blocking is bounded by the caller's ctx.
+internal/mcp/client.go
+
+# Single cmd.Wait() to reap a launched child - no shared state, no parse.
+internal/tool/desktop_control_linux.go
+
+# stderr capture pumps installed at process start (io.Pipe read loop +
+# debug.Log). Panic-free by construction; run before safego would add value.
+cmd/ggcode/main.go
+desktop/ggcode-desktop-wails/main.go
+
+# Single os.Stdin.Read + send to buffered(chan,1), raced by a select with
+# timeout - the standard cancellable-read idiom.
+cmd/ggcode/pipe.go
