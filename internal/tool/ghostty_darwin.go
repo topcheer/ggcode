@@ -290,13 +290,15 @@ func (g *GhosttyTool) executeNewTab(command, workingDir string) Result {
 
 	var script string
 	if strings.TrimSpace(command) != "" {
+		// #1324: same fix as #832/executeSplit — working_dir needs
+		// shell-level single-quoting, not just AppleScript escaping.
 		script = fmt.Sprintf(`
 tell application "Ghostty"
 	set newTab to new tab in window 1
 	set term to focused terminal of newTab
-	input text "cd %s && %s" to term
+	input text "cd '%s' && %s" to term
 	return id of term
-end tell`, escapeAS(wd), escapeAS(command))
+end tell`, escapeShellSingleQuote(wd), escapeAS(command))
 	} else {
 		script = `
 tell application "Ghostty"
@@ -322,13 +324,14 @@ func (g *GhosttyTool) executeNewWindow(command, workingDir string) Result {
 
 	var script string
 	if strings.TrimSpace(command) != "" {
+		// #1324: same fix as #832/executeSplit — shell-level quoting.
 		script = fmt.Sprintf(`
 tell application "Ghostty"
 	set newWindow to new window
 	set term to focused terminal of selected tab of newWindow
-	input text "cd %s && %s" to term
+	input text "cd '%s' && %s" to term
 	return id of term
-end tell`, escapeAS(wd), escapeAS(command))
+end tell`, escapeShellSingleQuote(wd), escapeAS(command))
 	} else {
 		script = `
 tell application "Ghostty"
