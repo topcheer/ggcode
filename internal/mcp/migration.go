@@ -195,9 +195,14 @@ func normalizedTransport(transport string) string {
 }
 
 func serverSignature(cfg config.MCPServerConfig) string {
-	switch normalizedTransport(cfg.Type) {
+	normalized := normalizedTransport(cfg.Type)
+	switch normalized {
 	case "http", "ws": // #1276: ws is URL-identified like http
-		return cfg.Type + ":" + strings.TrimSpace(cfg.URL)
+		// Prefix with the NORMALIZED transport: an explicit yaml entry with
+		// Type: "HTTP" and a migrated lowercase "http" entry describe the
+		// same server and must collide for dedup (review of #1276 caught
+		// cfg.Type leaking the raw case here).
+		return normalized + ":" + strings.TrimSpace(cfg.URL)
 	default:
 		parts := append([]string{strings.TrimSpace(cfg.Command)}, cfg.Args...)
 		data, _ := json.Marshal(parts)

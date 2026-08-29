@@ -96,3 +96,25 @@ func TestMigrationWSSignatureDistinct(t *testing.T) {
 		t.Fatalf("ws signature must be ws-prefixed, got %q", serverSignature(ws))
 	}
 }
+
+// TestMigrationSignatureCaseInsensitive pins the #1276 review follow-up: an
+// explicit yaml entry with Type "HTTP"/"Ws" (any case) and a migrated
+// lowercase entry must produce the same signature so dedup still works.
+func TestMigrationSignatureCaseInsensitive(t *testing.T) {
+	pairs := [][2]config.MCPServerConfig{
+		{
+			{Type: "HTTP", URL: "https://x/mcp"},
+			{Type: "http", URL: "https://x/mcp"},
+		},
+		{
+			{Type: "Ws", URL: "wss://x/mcp"},
+			{Type: "ws", URL: "wss://x/mcp"},
+		},
+	}
+	for i, p := range pairs {
+		if serverSignature(p[0]) != serverSignature(p[1]) {
+			t.Fatalf("pair %d: case-variant types must yield identical signatures: %q vs %q",
+				i, serverSignature(p[0]), serverSignature(p[1]))
+		}
+	}
+}
