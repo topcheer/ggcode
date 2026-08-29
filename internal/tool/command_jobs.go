@@ -83,6 +83,11 @@ type CommandJobManager struct {
 	mu     sync.Mutex
 	nextID int
 	jobs   map[string]*CommandJob
+	// finishedOrder records job IDs in completion order so finished jobs
+	// can be evicted oldest-first (#1318: completed jobs used to live in
+	// the map forever - unbounded memory plus ever-growing list_commands
+	// output over long sessions).
+	finishedOrder []string
 
 	// outputTee is an optional writer that receives a copy of all command
 	// stdout/stderr in real time. Set per-call by StartCommandTool.
@@ -329,6 +334,55 @@ func (m *CommandJobManager) waitForJob(ctx context.Context, cmd *exec.Cmd, job *
 	default:
 		job.finish(CommandJobCompleted, "")
 	}
+	// Record completion and evict the oldest finished jobs beyond the
+	// retention cap (#1318). forget() may already have removed this job
+	// (run_command quick path) - recordFinish tolerates that.
+	m.mu.Lock()
+	m.recordFinishLocked(job)
+	m.evictFinishedLocked()
+	m.mu.Unlock()
+}
+
+// maxFinishedJobs caps how many terminal jobs stay readable after
+// completion. The most recent ones remain available for late
+// read_command_output / wait_command polling; older ones are dropped.
+const maxFinishedJobs = 20
+
+func (m *CommandJobManager) recordFinishLocked(job *CommandJob) {
+	if _, ok := m.jobs[job.ID]; !ok {
+		return // already forgotten
+	}
+	m.finishedOrder = append(m.finishedOrder, job.ID)
+}
+
+// evictFinishedLocked drops the oldest terminal jobs while more than
+// maxFinishedJobs remain. Running jobs are never evicted.
+func (m *CommandJobManager) evictFinishedLocked() {
+	finished := 0
+	for _, id := range m.finishedOrder {
+		if j, ok := m.jobs[id]; ok && j.isTerminal() {
+			finished++
+		}
+	}
+	for _, id := range m.finishedOrder {
+		if finished <= maxFinishedJobs {
+			break
+		}
+		j, ok := m.jobs[id]
+		if !ok || !j.isTerminal() {
+			continue
+		}
+		delete(m.jobs, id)
+		finished--
+	}
+	// Compact the order slice: drop IDs no longer in the map.
+	kept := m.finishedOrder[:0]
+	for _, id := range m.finishedOrder {
+		if _, ok := m.jobs[id]; ok {
+			kept = append(kept, id)
+		}
+	}
+	m.finishedOrder = kept
 }
 
 func (m *CommandJobManager) get(id string) (*CommandJob, error) {
@@ -412,6 +466,15 @@ func (j *CommandJob) flushPartial() {
 	}
 	j.addLineLocked(j.partial)
 	j.partial = ""
+}
+
+// isTerminal reports whether the job has reached a terminal status.
+// Lock discipline: finish() writes Status under j.mu, so callers holding
+// only the manager lock must read through here (#1318 eviction path).
+func (j *CommandJob) isTerminal() bool {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.Status != CommandJobRunning
 }
 
 func (j *CommandJob) finish(status CommandJobStatus, errText string) {

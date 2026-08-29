@@ -2,6 +2,7 @@ package tool
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -265,5 +266,57 @@ func TestSnapshotTotalLinesExcludesPartial(t *testing.T) {
 
 	if _, err := mgr.Stop(started.ID); err != nil {
 		t.Fatalf("stop: %v", err)
+	}
+}
+
+// #1318: completed jobs lived in the manager map forever (forget() only
+// covered run_command quick paths) - unbounded memory plus ever-growing
+// list_commands output. Terminal jobs are now capped at maxFinishedJobs,
+// evicted oldest-first; running jobs are never evicted.
+func TestCommandJobs_FinishedJobEviction(t *testing.T) {
+	m := NewCommandJobManager(t.TempDir())
+
+	total := maxFinishedJobs + 10
+	for i := 0; i < total; i++ {
+		job := m.newJob(fmt.Sprintf("echo %d", i), time.Minute, func() {})
+		// Simulate completion through the real finish path.
+		job.finish(CommandJobCompleted, "")
+		m.mu.Lock()
+		m.recordFinishLocked(job)
+		m.evictFinishedLocked()
+		m.mu.Unlock()
+	}
+
+	m.mu.Lock()
+	count := len(m.jobs)
+	m.mu.Unlock()
+	if count != maxFinishedJobs {
+		t.Fatalf("expected %d retained finished jobs, got %d", maxFinishedJobs, count)
+	}
+	// The most RECENT jobs must survive; the oldest must be gone.
+	if _, err := m.get("cmd-1"); err == nil {
+		t.Error("oldest finished job should have been evicted")
+	}
+	if _, err := m.get(fmt.Sprintf("cmd-%d", total)); err != nil {
+		t.Errorf("newest finished job must be retained: %v", err)
+	}
+}
+
+// Running jobs must never be evicted even when many finished ones churn.
+func TestCommandJobs_RunningJobNeverEvicted(t *testing.T) {
+	m := NewCommandJobManager(t.TempDir())
+	runner := m.newJob("sleep 100", time.Minute, func() {})
+
+	for i := 1; i <= maxFinishedJobs+5; i++ {
+		job := m.newJob("quick", time.Minute, func() {})
+		job.finish(CommandJobCompleted, "")
+		m.mu.Lock()
+		m.recordFinishLocked(job)
+		m.evictFinishedLocked()
+		m.mu.Unlock()
+	}
+
+	if _, err := m.get(runner.ID); err != nil {
+		t.Fatalf("running job evicted: %v", err)
 	}
 }
