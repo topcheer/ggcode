@@ -20,6 +20,7 @@ import (
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
+	"github.com/chromedp/chromedp/kb"
 
 	"github.com/topcheer/ggcode/internal/safego"
 )
@@ -1149,9 +1150,11 @@ func (b *Browser) doPress(ctx context.Context, profile, session, key string, hea
 
 	lowerKey := strings.ToLower(key)
 
-	// Map all supported keys to their CDP key names for KeyEvent dispatch.
-	// KeyEvent sends directly to the Input domain — it targets the focused
-	// element without needing a CSS selector.
+	// Map all supported keys for KeyEvent dispatch. Named keys MUST use the
+	// kb package's private-use rune constants (#1312): KeyEvent feeds its
+	// argument through kb.Encode per rune, and passing the ASCII name
+	// ("ArrowDown") typed the literal text into the focused element instead
+	// of pressing the key — 27 key events of garbage, reported as success.
 	var cdpKeyName string
 	if mapped, ok := keyMap[lowerKey]; ok {
 		cdpKeyName = mapped
@@ -1160,23 +1163,23 @@ func (b *Browser) doPress(ctx context.Context, profile, session, key string, hea
 	} else {
 		switch lowerKey {
 		case "arrowup":
-			cdpKeyName = "ArrowUp"
+			cdpKeyName = kb.ArrowUp
 		case "arrowdown":
-			cdpKeyName = "ArrowDown"
+			cdpKeyName = kb.ArrowDown
 		case "arrowleft":
-			cdpKeyName = "ArrowLeft"
+			cdpKeyName = kb.ArrowLeft
 		case "arrowright":
-			cdpKeyName = "ArrowRight"
+			cdpKeyName = kb.ArrowRight
 		case "delete":
-			cdpKeyName = "Delete"
+			cdpKeyName = kb.Delete
 		case "home":
-			cdpKeyName = "Home"
+			cdpKeyName = kb.Home
 		case "end":
-			cdpKeyName = "End"
+			cdpKeyName = kb.End
 		case "pageup":
-			cdpKeyName = "PageUp"
+			cdpKeyName = kb.PageUp
 		case "pagedown":
-			cdpKeyName = "PageDown"
+			cdpKeyName = kb.PageDown
 		default:
 			return Result{IsError: true, Content: fmt.Sprintf("unsupported key: %s (supported: Enter, Tab, Escape, Backspace, Delete, Space, ArrowUp/Down/Left/Right, Home, End, PageUp, PageDown, or single characters)", key)}, nil
 		}
