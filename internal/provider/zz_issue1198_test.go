@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -303,8 +304,8 @@ func TestIssue1198_LegacyCacheMigration(t *testing.T) {
 	if !containsJSONString(dataStr, "version") {
 		t.Error("cache file was not upgraded to include version field")
 	}
-	if !containsJSONString(dataStr, `"version": 2`) {
-		t.Error("cache file version is not 2 after migration")
+	if !containsJSONString(dataStr, fmt.Sprintf(`"version": %d`, probeCacheVersion)) {
+		t.Error("cache file version is not current after migration")
 	}
 }
 
@@ -348,14 +349,14 @@ func TestIssue1198_CacheVersionDowngrade(t *testing.T) {
 		t.Errorf("good model entry incorrect after migration: got %d, want 200000", goodModel)
 	}
 
-	// Verify version was updated to 2
+	// Verify version was updated to the current one
 	data, err := os.ReadFile(cachePath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	dataStr := string(data)
-	if !containsJSONString(dataStr, `"version": 2`) {
-		t.Error("cache version was not updated from 1 to 2")
+	if !containsJSONString(dataStr, fmt.Sprintf(`"version": %d`, probeCacheVersion)) {
+		t.Error("cache version was not updated by migration")
 	}
 }
 

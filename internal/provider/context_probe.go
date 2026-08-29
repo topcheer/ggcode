@@ -51,7 +51,7 @@ func probeCachePath() string {
 	return filepath.Join(config.ConfigDir(), "state", "context_windows.json")
 }
 
-const probeCacheVersion = 2
+const probeCacheVersion = 3
 
 type probeCacheData struct {
 	Version int            `json:"version"`
@@ -72,7 +72,7 @@ func loadProbeCache() {
 		// New format: check version and apply migration if needed
 		if cache.Version < probeCacheVersion {
 			debug.Log("probe", "cache migration: v%d → v%d", cache.Version, probeCacheVersion)
-			dropped := applyCacheMigration(&cache)
+			dropped := applyCacheMigration(cache.Version, &cache)
 			cache.Version = probeCacheVersion
 			saveProbeCacheData(cache)
 			probeCacheMu.Lock()
@@ -106,7 +106,7 @@ func loadProbeCache() {
 		Version: probeCacheVersion,
 		Entries: entries,
 	}
-	dropped := applyCacheMigration(&cache)
+	dropped := applyCacheMigration(0, &cache) // legacy: run every migration step
 	saveProbeCacheData(cache)
 	probeCacheMu.Lock()
 	probeCache = cache.Entries
@@ -117,16 +117,56 @@ func loadProbeCache() {
 
 // applyCacheMigration drops entries below the minimum tier (128K) that were
 // written by the old estimate-based inference. Returns count of dropped entries.
-func applyCacheMigration(cache *probeCacheData) int {
+func applyCacheMigration(fromVersion int, cache *probeCacheData) int {
 	dropped := 0
-	minTier := contextOverflowTiers[len(contextOverflowTiers)-1] // 128K
-	for k, v := range cache.Entries {
-		if v < minTier {
-			delete(cache.Entries, k)
-			dropped++
+	if fromVersion < 2 {
+		minTier := contextOverflowTiers[len(contextOverflowTiers)-1] // 128K
+		for k, v := range cache.Entries {
+			if v < minTier {
+				delete(cache.Entries, k)
+				dropped++
+			}
+		}
+	}
+	if fromVersion < 3 {
+		// #1287: entries poisoned by the old over-broad prefix table (Phase 1b
+		// sync-wrote the family legacy window for unlisted variants, e.g.
+		// qwen3-coder-plus -> 131072 instead of 256K+). The lookup fix stops
+		// NEW poisoning but Phase 1 (cache HIT) runs first and serves stale
+		// poison forever. Drop entries whose model part belongs to a narrowed
+		// family and no longer matches the table — the background probe
+		// re-measures and re-caches. Deleting a genuinely-probed value costs
+		// one re-probe; keeping poison costs a 2x-underestimated window.
+		for k := range cache.Entries {
+			model := k
+			if idx := strings.LastIndex(k, "|"); idx >= 0 {
+				model = k[idx+1:]
+			}
+			if lookupKnownRetiredFamilyHijack(model) {
+				delete(cache.Entries, k)
+				dropped++
+			}
 		}
 	}
 	return dropped
+}
+
+// lookupKnownRetiredFamilyHijack reports whether model is an unlisted variant
+// of a bare family name whose prefix-match retirement (#782/#1287) means the
+// cached value under it can no longer be trusted: the model starts with a
+// retired family name, the NEW known table returns 0 for it (falls through to
+// probe), and the model is not itself protected by an earlier specific entry
+// (which the lookup already honors — returning 0 here means it did not).
+func lookupKnownRetiredFamilyHijack(model string) bool {
+	if LookupKnownModelContextWindow(model) != 0 {
+		return false // still covered by the table (exact or legitimate prefix)
+	}
+	for _, fam := range []string{"gpt-4", "qwen3", "glm-4", "deepseek-chat", "deepseek-v3"} {
+		if strings.HasPrefix(strings.ToLower(model), fam) {
+			return true
+		}
+	}
+	return false
 }
 
 func saveProbeCache() {

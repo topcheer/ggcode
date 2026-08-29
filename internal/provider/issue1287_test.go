@@ -7,7 +7,13 @@ package provider
 // sessions). Bare family names are now exact-only; qwen3-coder gets a
 // 0-window blocker entry forcing the probe.
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/topcheer/ggcode/internal/config"
+)
 
 func TestIssue1287_GLM4ExactOnly(t *testing.T) {
 	if got := LookupKnownModelContextWindow("glm-4"); got != 128_000 {
@@ -63,5 +69,69 @@ func TestIssue1287_GPT4ExactMigration(t *testing.T) {
 	}
 	if got := LookupKnownModelContextWindow("gpt-4o-2024-08-06"); got != 128_000 {
 		t.Fatalf("gpt-4o dated variant must keep prefix match: %d", got)
+	}
+}
+
+// TestIssue1287_ProbeCachePoisonPurged: entries solidified by the OLD
+// prefix table (Phase 1b sync-writes) must be dropped by the v3 cache
+// migration — Phase 1 (cache HIT) runs before every other check, so stale
+// poison would otherwise shadow the fix forever.
+func TestIssue1287_ProbeCachePoisonPurged(t *testing.T) {
+	// Direct unit check of the predicate.
+	for _, poisoned := range []string{"qwen3-coder-plus", "deepseek-chat-v3.2", "glm-4.6", "gpt-4-32k"} {
+		if !lookupKnownRetiredFamilyHijack(poisoned) {
+			t.Fatalf("%s must be treated as a retired-family hijack victim", poisoned)
+		}
+	}
+	for _, keep := range []string{"qwen3-235b-a22b", "glm-4-plus", "gpt-4o", "deepseek-r1", "claude-sonnet-4", "mystery-model"} {
+		if lookupKnownRetiredFamilyHijack(keep) {
+			t.Fatalf("%s must NOT be dropped (table-covered or unrelated)", keep)
+		}
+	}
+	// End-to-end: a v2 cache file with poisoned + good entries migrates to
+	// v3 dropping only the poisoned ones.
+	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	_ = dir
+	v2JSON := `{
+  "version": 2,
+  "entries": {
+    "zhipu|https://api.z.ai|glm-4.6": 128000,
+    "zhipu|https://api.z.ai|glm-4-plus": 128000,
+    "alibaba|https://x|qwen3-coder-plus": 131072,
+    "alibaba|https://x|qwen3-235b-a22b": 131072,
+    "deepseek|https://x|deepseek-chat-v3.2": 64000,
+    "openai|https://x|gpt-4o": 128000
+  }
+}`
+	path := filepath.Join(config.ConfigDir(), "state", "context_windows.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(v2JSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	probeCacheMu.Lock()
+	probeCache = nil
+	probeLoaded = false
+	probeCacheMu.Unlock()
+
+	if got := LookupProbeCache("zhipu|https://api.z.ai|glm-4.6"); got != 0 {
+		t.Fatalf("poisoned glm-4.6 entry survived v3 migration: %d", got)
+	}
+	if got := LookupProbeCache("alibaba|https://x|qwen3-coder-plus"); got != 0 {
+		t.Fatalf("poisoned qwen3-coder-plus entry survived: %d", got)
+	}
+	if got := LookupProbeCache("deepseek|https://x|deepseek-chat-v3.2"); got != 0 {
+		t.Fatalf("poisoned deepseek-chat-v3.2 entry survived: %d", got)
+	}
+	for _, keepKey := range []string{
+		"zhipu|https://api.z.ai|glm-4-plus",
+		"alibaba|https://x|qwen3-235b-a22b",
+		"openai|https://x|gpt-4o",
+	} {
+		if got := LookupProbeCache(keepKey); got == 0 {
+			t.Fatalf("legitimate entry %s was wrongly dropped by migration", keepKey)
+		}
 	}
 }
