@@ -225,3 +225,30 @@ func TestFileGuardSymlinkBypass(t *testing.T) {
 		t.Errorf("normal write blocked: %s", msg)
 	}
 }
+
+// Companion to TestFileGuardSymlinkBypass that does not depend on symlink
+// support (t.Skipf there leaves the fix uncovered on Windows without
+// developer mode). When the judged path is outside the working dir, relPath
+// falls back to the OS-native absolute path; on Windows its '\' separators
+// made the dir-prefix component match fail open (#1322 follow-up).
+func TestFileGuard_DirPrefixOutsideWorkingDir(t *testing.T) {
+	root := t.TempDir()
+	ws := filepath.Join(root, "ws")
+	if err := os.MkdirAll(ws, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	g := NewFileGuard(nil) // default patterns include ".git/"
+
+	// Path outside ws containing a .git component: Rel(ws, ...) starts with
+	// "..", so IsProtected judges the absolute (OS-native) path.
+	outside := filepath.Join(root, "other", ".git", "config")
+	protected, _ := g.IsProtected(outside, ws)
+	if !protected {
+		t.Error("expected .git/ component outside working dir to stay protected")
+	}
+	// Control: non-protected outside path is allowed.
+	plain := filepath.Join(root, "other", "notes.txt")
+	if protected, _ := g.IsProtected(plain, ws); protected {
+		t.Error("plain outside path must not be protected")
+	}
+}
