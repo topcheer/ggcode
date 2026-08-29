@@ -53,6 +53,11 @@ type Client struct {
 	abortOnce         sync.Once
 	nextID            atomic.Int64
 	closed            atomic.Bool
+	// #1275: hang-watchdog state. lastReadProgress is bumped (unix nano)
+	// after every successfully parsed stdio message; hangWatchdogArmed
+	// dedupes the watchdog across concurrent request timeouts.
+	lastReadProgress  atomic.Int64
+	hangWatchdogArmed atomic.Bool
 	oauthHandler      *OAuthHandler
 
 	// processExit is closed when the stdio server process exits unexpectedly
@@ -801,9 +806,51 @@ func (c *Client) readResponseWithWaiter(ctx context.Context, reqID *ID, waiter c
 		// Other waiters are active: return this request's ctx error now. The
 		// read goroutine still owns readMu and unwinds on its own once the
 		// server responds or the shared connection is torn down later.
+		//
+		// #1275: "later" used to mean never under sustained traffic — every
+		// subsequent request kept a waiter registered, so no timeout ever saw
+		// itself as the last waiter and the Abort path stayed permanently
+		// blocked: parked read goroutines accumulated and the hung connection
+		// never healed. Arm the hang watchdog: if the connection reads NO
+		// message at all during the grace window while requests are still
+		// waiting, it is hung (not merely slow — a live server reads messages
+		// constantly), and Abort heals it for everyone.
+		c.armHangWatchdog()
 		return nil, c.withStderr(fmt.Errorf("mcp[%s]: request cancelled while %d other request(s) in flight, connection kept: %w",
 			c.name, c.waiterCountExcluding(waiter), ctx.Err()))
 	}
+}
+
+// hungServerAbortGrace is how long the #1275 watchdog waits for ANY read
+// progress on a stdio connection that still has waiters before declaring it
+// hung and aborting. A live-but-slow server keeps reading messages (progress
+// bumps disarm the watchdog); 10s without a single byte parsed with requests
+// pending is a hang.
+const hungServerAbortGrace = 10 * time.Second
+
+// armHangWatchdog starts (once) the #1275 hang watchdog. It snapshots the
+// read-progress counter, waits the grace period, and aborts the connection
+// iff NO progress was made AND requests are still waiting. Abort is
+// idempotent (abortOnce) and safe when the connection is already gone.
+func (c *Client) armHangWatchdog() {
+	if !c.hangWatchdogArmed.CompareAndSwap(false, true) {
+		return // one watchdog at a time
+	}
+	progressAtArm := c.lastReadProgress.Load()
+	safego.Go("mcp.client.hangWatchdog", func() {
+		defer c.hangWatchdogArmed.Store(false)
+		time.Sleep(hungServerAbortGrace)
+		if c.closed.Load() {
+			return // already torn down normally; nothing to heal
+		}
+		if c.lastReadProgress.Load() == progressAtArm && c.waiterCountExcluding(nil) > 0 {
+			// Hung: zero messages parsed during the entire grace window while
+			// requests were still waiting. Abort unwinds every goroutine parked on
+			// readMu or blocked in a raw body read (the only way to interrupt a
+			// pipe read is closing it) and lets auto-reconnect restore service.
+			c.Abort()
+		}
+	})
 }
 
 // hasOtherWaiters reports whether any request other than the one owning the
@@ -1621,6 +1668,9 @@ func (c *Client) readResponse(ctx context.Context, reqID *ID, waiter chan *Respo
 		if err != nil {
 			return nil, fmt.Errorf("mcp[%s]: read message: %w", c.name, err)
 		}
+		// #1275: any successfully parsed message proves the connection is
+		// alive; the hang watchdog compares this counter to detect hangs.
+		c.lastReadProgress.Store(time.Now().UnixNano())
 		switch typed := msg.(type) {
 		case *Response:
 			// #562 Bug D: null/absent-ID responses are unattributable (they are
