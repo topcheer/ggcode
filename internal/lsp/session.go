@@ -14,7 +14,14 @@ import (
 	"github.com/topcheer/ggcode/internal/safego"
 )
 
-const sessionIdleTTL = 2 * time.Minute
+// sessionIdleTTL controls how long an idle LSP session (and its server
+// process) is kept alive. Server cold starts dominate per-edit latency on
+// Windows: gopls/tsserver load the full project graph on startup (10-60s on
+// large repos). A 2-minute TTL meant ordinary reading/thinking gaps evicted
+// the session and the next edit re-paid the whole cold start. 10 minutes
+// keeps sessions warm across typical agent turn gaps; reapIdle still reclaims
+// genuinely abandoned sessions every 30s.
+const sessionIdleTTL = 10 * time.Minute
 const csharpWarmupRetryDelay = 400 * time.Millisecond
 const csharpWarmupRetryAttempts = 8
 const publishedDiagnosticsWait = 500 * time.Millisecond

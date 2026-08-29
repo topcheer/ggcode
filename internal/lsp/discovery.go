@@ -382,13 +382,10 @@ func resolveServerBinary(spec serverSpec, workspace string) (string, bool) {
 	return "", false
 }
 
-func resolveManagedBinary(spec serverSpec, workspace string) (display string, command string, ok bool) {
-	if display, ok = firstAvailableBinary(spec.binaries); ok {
-		return display, display, true
-	}
-	if display, command, ok = resolveWorkspaceToolFallback(spec.binaries, workspace); ok {
-		return display, command, true
-	}
+// probeExternalToolchain runs the toolchain-spawning fallback probes for a
+// spec. Callers must go through cachedExternalProbe, which memoizes results
+// (including negatives) to avoid re-spawning npm/rustup/dotnet per edit.
+func probeExternalToolchain(spec serverSpec, workspace string) (display string, command string, ok bool) {
 	switch spec.id {
 	case "rust":
 		return resolveRustAnalyzerFallback()
@@ -406,6 +403,16 @@ func resolveManagedBinary(spec serverSpec, workspace string) (display string, co
 	default:
 		return "", "", false
 	}
+}
+
+func resolveManagedBinary(spec serverSpec, workspace string) (display string, command string, ok bool) {
+	if display, ok = firstAvailableBinary(spec.binaries); ok {
+		return display, display, true
+	}
+	if display, command, ok = resolveWorkspaceToolFallback(spec.binaries, workspace); ok {
+		return display, command, true
+	}
+	return cachedExternalProbe(spec, workspace)
 }
 
 func resolveWorkspaceToolFallback(candidates []string, workspace string) (display string, command string, ok bool) {
