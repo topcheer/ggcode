@@ -40,6 +40,10 @@ func TestServerOverridesConcurrentReadWrite(t *testing.T) {
 					t.Error("lookupServerOverride must see the configured go override")
 					return
 				}
+				// #1284: ResolveServerForWorkspace used to bare-read the map
+				// (the one site the #1273 fix missed); exercise it under the
+				// concurrent writer so -race guards this path too.
+				_, _ = ResolveServerForWorkspace(t.TempDir())
 			}
 		}()
 	}

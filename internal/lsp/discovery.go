@@ -217,8 +217,11 @@ func ResolveServerForWorkspace(workspace string) (ResolvedServer, bool) {
 		if !lang.Available {
 			continue
 		}
-		// Check user-configured override first.
-		if ov, ok := serverOverrides[lang.ID]; ok && ov.Binary != "" {
+		// Check user-configured override first (#1284: this was the one bare
+		// serverOverrides[lang.ID] read left behind by the #1273 mutex fix;
+		// ResolveServerForFile got the accessor, this symmetric function
+		// didn't, racing SetServerOverrides on -race and beyond).
+		if ov, ok := lookupServerOverride(lang.ID); ok && ov.Binary != "" {
 			return ResolvedServer{
 				LanguageID:  lang.ID,
 				DisplayName: lang.DisplayName,
