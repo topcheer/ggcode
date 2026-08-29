@@ -77,11 +77,12 @@ func mergeServers(explicit []config.MCPServerConfig, sources []migrationSource, 
 	}
 
 	for _, source := range sources {
-		servers, err := loadClaudeServers(source)
+		servers, srcWarnings, err := loadClaudeServers(source)
 		if err != nil {
 			warnings = append(warnings, fmt.Sprintf("warning: failed to read %s MCP servers: %v", source.Source, err))
 			continue
 		}
+		warnings = append(warnings, srcWarnings...)
 		for _, server := range servers {
 			if deletedSet[strings.TrimSpace(server.Name)] {
 				// User deleted this name; do not resurrect from migration sources.
@@ -123,22 +124,23 @@ func knownUserClaudeSources() []migrationSource {
 	}
 }
 
-func loadClaudeServers(source migrationSource) ([]config.MCPServerConfig, error) {
+func loadClaudeServers(source migrationSource) ([]config.MCPServerConfig, []string, error) {
 	data, err := os.ReadFile(source.Path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, nil, nil
 		}
-		return nil, err
+		return nil, nil, err
 	}
 	var parsed claudeConfigFile
 	if err := json.Unmarshal(data, &parsed); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if len(parsed.MCPServers) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	servers := make([]config.MCPServerConfig, 0, len(parsed.MCPServers))
+	var warnings []string
 	for name, cfg := range parsed.MCPServers {
 		cfg.Name = name
 		cfg.Type = normalizedTransport(cfg.Type)
@@ -156,21 +158,32 @@ func loadClaudeServers(source migrationSource) ([]config.MCPServerConfig, error)
 		cfg.Source = source.Source
 		cfg.OriginPath = source.Path
 		cfg.Migrated = true
+		// #1276: every dropped entry must be VISIBLE - the old switch dropped
+		// ws (fully supported by client+install!) and sse (unsupported) with a
+		// bare default:continue, and even the stdio/http field checks failed
+		// silently: users migrated, saw "success", and the server was simply
+		// gone. Warnings name the entry, the transport, and the reason.
 		switch cfg.Type {
 		case "stdio":
 			if strings.TrimSpace(cfg.Command) == "" {
+				warnings = append(warnings, fmt.Sprintf("warning: skipped MCP server %q from %s (stdio transport requires a command)", cfg.Name, source.Source))
 				continue
 			}
-		case "http":
+		case "http", "ws":
+			// ws is a first-class transport (install.go accepts stdio|http|ws,
+			// client.go runs a full WS implementation) - it used to fall into
+			// default:continue and vanish. Same URL requirement as http.
 			if strings.TrimSpace(cfg.URL) == "" {
+				warnings = append(warnings, fmt.Sprintf("warning: skipped MCP server %q from %s (%s transport requires a URL)", cfg.Name, source.Source, cfg.Type))
 				continue
 			}
 		default:
+			warnings = append(warnings, fmt.Sprintf("warning: skipped MCP server %q from %s (unsupported transport %q; supported: stdio, http, ws)", cfg.Name, source.Source, cfg.Type))
 			continue
 		}
 		servers = append(servers, cfg)
 	}
-	return servers, nil
+	return servers, warnings, nil
 }
 
 func normalizedTransport(transport string) string {
@@ -183,8 +196,8 @@ func normalizedTransport(transport string) string {
 
 func serverSignature(cfg config.MCPServerConfig) string {
 	switch normalizedTransport(cfg.Type) {
-	case "http":
-		return "http:" + strings.TrimSpace(cfg.URL)
+	case "http", "ws": // #1276: ws is URL-identified like http
+		return cfg.Type + ":" + strings.TrimSpace(cfg.URL)
 	default:
 		parts := append([]string{strings.TrimSpace(cfg.Command)}, cfg.Args...)
 		data, _ := json.Marshal(parts)
