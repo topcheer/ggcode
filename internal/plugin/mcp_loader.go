@@ -828,11 +828,15 @@ func (m *MCPManager) connectOne(ctx context.Context, p *MCPPlugin) {
 	connectCtx, cancel := context.WithTimeout(ctx, m.connectTimeoutFor(p))
 	defer cancel()
 	p.markPending()
-	// #1285: p.registry was written lock-free here while Close/watcher
-	// paths read plugin fields under p.mu — same-field races are fatal
-	// direction; take the lock for the assignment.
+	// #1285 follow-up: connectOne is the manager's explicit "this plugin is
+	// wanted" signal (ConnectAll / Retry / Reconnect / fresh install). It
+	// must clear the closed flag set by a previous Close() - otherwise the
+	// UI Disconnect -> Reconnect cycle was permanently rejected by the
+	// #1285 closed guard. Watcher-driven attemptReconnect deliberately does
+	// NOT clear it: only a human/manager intent revives a closed plugin.
 	p.mu.Lock()
 	p.registry = m.registry
+	p.closed = false
 	p.mu.Unlock()
 	m.emitUpdate()
 	debug.Log("mcp-connect", "start server=%s timeout=%v", p.Name(), m.connectTimeoutFor(p))

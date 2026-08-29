@@ -12,9 +12,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/mcp"
+	"github.com/topcheer/ggcode/internal/tool"
 )
 
 func issue1285MockServer(t *testing.T) *httptest.Server {
@@ -80,4 +82,47 @@ func TestIssue1285_ConnectAfterCloseFails(t *testing.T) {
 	if _, err := p.Connect(context.Background()); err == nil {
 		t.Fatal("#1285: Connect on a closed plugin must fail, not adopt a new client")
 	}
+}
+
+// TestIssue1285_DisconnectThenReconnect: the manager-level Disconnect ->
+// Reconnect cycle must keep working. The first #1285 fix left `closed` set
+// forever, so the UI's Reconnect was permanently rejected ("closed during
+// connect"); connectOne now clears the flag as the manager's explicit
+// revive signal.
+func TestIssue1285_DisconnectThenReconnect(t *testing.T) {
+	server := issue1285MockServer(t)
+	manager := NewMCPManager([]config.MCPServerConfig{{
+		Name: "cycle-http", Type: "http", URL: server.URL,
+	}}, tool.NewRegistry())
+	manager.ConnectAll(context.Background())
+	if infos := manager.Snapshot(); len(infos) != 1 || infos[0].Status != MCPStatusConnected {
+		t.Fatalf("expected connected, got %+v", infos)
+	}
+	if !manager.Disconnect("cycle-http") {
+		t.Fatal("Disconnect must find the server")
+	}
+	// Disconnect is async; wait for the teardown to land (status leaves
+	// connected) so we test the steady post-Close state, not a race.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if infos := manager.Snapshot(); len(infos) == 1 && infos[0].Status != MCPStatusConnected {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if infos := manager.Snapshot(); len(infos) != 1 || infos[0].Status == MCPStatusConnected {
+		t.Fatalf("expected disconnected status, got %+v", infos)
+	}
+	// The user changes their mind and reconnects from the UI.
+	if !manager.Reconnect("cycle-http") {
+		t.Fatal("Reconnect must find the server")
+	}
+	deadline = time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if infos := manager.Snapshot(); len(infos) == 1 && infos[0].Status == MCPStatusConnected {
+			return // success
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("#1285 regression: Disconnect -> Reconnect did not reach connected, state %+v", manager.Snapshot())
 }
