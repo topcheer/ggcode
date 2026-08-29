@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 )
 
 type LayoutPane struct {
@@ -105,14 +104,25 @@ func saveWorkspaceState(path, workspace string, panes []Pane, layouts map[string
 		return fmt.Errorf("create tmux pane store directory: %w", err)
 	}
 	// Use temp+rename for atomic write — os.WriteFile truncates first,
-	// concurrent readers could see empty/partial JSON.
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, append(data, '\n'), 0o644); err != nil {
-		_ = os.Remove(tmp)
+	// concurrent readers could see empty/partial JSON. Unique temp name
+	// (#1313): the fixed path+".tmp" let one process rename away another
+	// process's half-written temp file.
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp*")
+	if err != nil {
+		return fmt.Errorf("create tmux pane store temp: %w", err)
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(append(data, '\n')); err != nil {
+		tmp.Close()
+		_ = os.Remove(tmpName)
 		return fmt.Errorf("write tmux pane store: %w", err)
 	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("close tmux pane store temp: %w", err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		_ = os.Remove(tmpName)
 		return fmt.Errorf("rename tmux pane store: %w", err)
 	}
 	return nil
@@ -156,12 +166,12 @@ func readPaneStore(path string) (paneStoreFile, error) {
 	return store, nil
 }
 
-// storeLocks serializes read-modify-write on the shared pane store file.
-// Multiple workspace Managers share the same file path but have
-// independent mutexes — this package-level lock ensures atomicity.
-var storeLocks sync.Mutex
-
-func lockTmuxStore(_ string) (func(), error) {
-	storeLocks.Lock()
-	return func() { storeLocks.Unlock() }, nil
+// lockTmuxStore serializes read-modify-write on the shared pane store
+// file across PROCESSES (#1313). The previous implementation was a
+// package-level sync.Mutex that ignored path — fine for multiple in-process
+// Managers, useless for two ggcode terminals saving the shared
+// ~/.ggcode/tmux-panes.json concurrently (last writer's full-file rewrite
+// silently dropped the other's workspace panes).
+func lockTmuxStore(path string) (func(), error) {
+	return lockStoreFileCrossProc(path)
 }
