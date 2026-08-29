@@ -244,6 +244,38 @@ func matchDoubleStar(pattern, name string) (bool, error) {
 	return matched2 && err2 == nil, nil
 }
 
+// resolveSymlinkPrefix resolves symlinks for the longest existing prefix
+// of path (mirrors permission.sandbox resolvePath semantics). Used so the
+// file guard judges the path the write will ACTUALLY land on, not just
+// the lexical one (#1322: a workspace-internal symlink to ../.git used
+// to bypass the .git/ protection because only the lexical path was
+// matched while the sandbox layer resolved and allowed it).
+func resolveSymlinkPrefix(path string) string {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return filepath.Clean(resolved)
+	}
+	dir, remaining := path, ""
+	for {
+		if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+			if remaining != "" {
+				return filepath.Join(filepath.Clean(resolved), remaining)
+			}
+			return filepath.Clean(resolved)
+		}
+		base := filepath.Base(dir)
+		if remaining == "" {
+			remaining = base
+		} else {
+			remaining = filepath.Join(base, remaining)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return path // reached root without resolution
+		}
+		dir = parent
+	}
+}
+
 // CheckWritePath is called by write tools (write_file, edit_file, etc.)
 // before writing. Returns an error message if the path is protected,
 // or empty string if the write is allowed.
@@ -253,6 +285,15 @@ func (g *FileGuard) CheckWritePath(path, workingDir string) string {
 		abs = path
 	}
 	protected, pattern := g.IsProtected(abs, workingDir)
+	if !protected {
+		// #1322: also judge the symlink-resolved destination — os.WriteFile
+		// follows symlinks, so lnk/config pointing at ../.git/config must
+		// hit the .git/ protection even though the lexical path does not.
+		resolved := resolveSymlinkPrefix(abs)
+		if resolved != abs {
+			protected, pattern = g.IsProtected(resolved, workingDir)
+		}
+	}
 	if !protected {
 		return ""
 	}

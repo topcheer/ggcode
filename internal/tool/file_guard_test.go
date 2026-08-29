@@ -185,3 +185,43 @@ func TestFileGuard_DeepNestedPath(t *testing.T) {
 		t.Error("expected deep .git path to be protected")
 	}
 }
+
+// #1322: workspace-internal symlinks bypassed the guard. A symlink
+// lnk -> ../.git inside the workspace passes the sandbox (resolved path
+// still in workspace) but writes land in .git/. The guard must judge
+// the symlink-resolved destination too.
+func TestFileGuardSymlinkBypass(t *testing.T) {
+	// Root with the protected sibling dirs.
+	root := t.TempDir()
+	ws := filepath.Join(root, "ws")
+	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".env"), []byte("k=v"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(ws, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	g := NewFileGuard(nil) // default protected paths (.env*, .git/)
+
+	// Case 1: symlink to the .git directory; write via lnk/config.
+	if err := os.Symlink(filepath.Join(root, ".git"), filepath.Join(ws, "lnk")); err != nil {
+		t.Skipf("symlinks unsupported: %v", err)
+	}
+	if msg := g.CheckWritePath(filepath.Join(ws, "lnk", "config"), ws); msg == "" {
+		t.Error("write via symlink into .git must be blocked")
+	}
+	// Case 2: symlink to a protected file directly.
+	if err := os.Symlink(filepath.Join(root, ".env"), filepath.Join(ws, "lnk2")); err != nil {
+		t.Fatal(err)
+	}
+	if msg := g.CheckWritePath(filepath.Join(ws, "lnk2"), ws); msg == "" {
+		t.Error("write via symlink to .env must be blocked")
+	}
+	// Control: plain workspace write stays allowed.
+	if msg := g.CheckWritePath(filepath.Join(ws, "normal.go"), ws); msg != "" {
+		t.Errorf("normal write blocked: %s", msg)
+	}
+}
