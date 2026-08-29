@@ -52,3 +52,30 @@ func TestHasSecretPattern(t *testing.T) {
 		t.Error("OpenAI key should trigger secret pattern")
 	}
 }
+
+// #1289: bare fine-grained PAT text must be masked. The detection layer
+// (secretdetect.go #793) got the github_pat_ pattern but this display list
+// had drifted - gh[pousr]_ does not match github_pat_, so the token was
+// pushed verbatim to IM / TUI / desktop session exports.
+func TestRedactForDisplay_GitHubFineGrainedPAT(t *testing.T) {
+	token := "github_pat_" + strings.Repeat("A1b2C3d4E5f6G7h8I9j0", 4) + "Zz" // 82 chars after prefix
+	if len(token) != len("github_pat_")+82 {
+		t.Fatalf("test fixture malformed: %d chars", len(token))
+	}
+	out := RedactForDisplay("token: " + token + " here")
+	if strings.Contains(out, token) {
+		t.Fatalf("fine-grained PAT leaked: %q", out)
+	}
+	// Classic forms still masked (no regression).
+	classic := "ghp_" + strings.Repeat("x", 40)
+	out = RedactForDisplay("key " + classic)
+	if strings.Contains(out, classic) {
+		t.Fatalf("classic PAT leaked: %q", out)
+	}
+	// Too-short github_pat_ fragments are NOT masked (precision).
+	short := "github_pat_" + strings.Repeat("a", 40)
+	out = RedactForDisplay("x " + short)
+	if !strings.Contains(out, short) {
+		t.Fatalf("short fragment wrongly masked: %q", out)
+	}
+}

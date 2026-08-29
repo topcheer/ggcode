@@ -29,6 +29,11 @@ var displaySecretPatterns = []struct {
 	{"gcp_api_key", regexp.MustCompile(`\b(AIza[0-9A-Za-z_\-]{35})\b`)},
 	{"azure_key", regexp.MustCompile(`(?i)azure[_-]?(?:account|storage)[_-]?key["'\s:=]+([A-Za-z0-9+/=]{86,88})`)},
 	{"github_token", regexp.MustCompile(`\b(gh[pousr]_[A-Za-z0-9]{36,255})\b`)},
+	// #1289: fine-grained PAT, same shape as secretdetect.go's
+	// github_fine_grained_token (#793) - the detection layer got the
+	// pattern but this display list drifted. Keep the two in sync when
+	// adding formats; bare github_pat_ text is not matched by gh[pousr]_.
+	{"github_fine_grained_token", regexp.MustCompile(`\b(github_pat_[0-9A-Za-z_]{82})\b`)},
 	{"gitlab_token", regexp.MustCompile(`\b(glpat-[A-Za-z0-9_\-]{20})\b`)},
 	{"slack_token", regexp.MustCompile(`\b(xox[bpras]-[A-Za-z0-9-]{10,72})\b`)},
 	{"stripe_key", regexp.MustCompile(`\b((?:sk|pk|rk)_(?:test_|live_)?[A-Za-z0-9]{24,})\b`)},
