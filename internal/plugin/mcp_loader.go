@@ -58,10 +58,13 @@ type MCPPlugin struct {
 	mu            sync.RWMutex
 	connected     bool
 	awaitingOAuth bool
-	status        MCPStatus
-	lastError     string
-	prompts       []string
-	resources     []string
+	// closed is set once Close() has run (#1285): watchers must not start
+	// and reconnect cycles must not resurrect the plugin afterwards.
+	closed    bool
+	status    MCPStatus
+	lastError string
+	prompts   []string
+	resources []string
 
 	// forceReauthPending signals Connect() to call ForceReauth on the new
 	// OAuthHandler so it skips the canonical (shared) credential fallback.
@@ -162,7 +165,10 @@ func (m *MCPPlugin) startWSHealthProbe(client *mcp.Client) {
 				continue // server-level error (e.g. capability gate) — not a transport drop
 			}
 			debug.Log("mcp-ws-health", "server=%s transport dropped (%v), reconnecting", m.cfg.Name, err)
-			m.attemptReconnect(context.Background())
+			// #1285: pass the PROBE ctx, not context.Background() — a probe
+			// cancelled by Close must not resurrect the plugin from beyond the
+			// grave with an uncancellable Background dial.
+			m.attemptReconnect(ctx)
 			// attemptReconnect swapped in a fresh client with its own probe
 			// (startWSHealthProbe runs again from Connect); this loop is done.
 			return
@@ -243,6 +249,12 @@ func (m *MCPPlugin) Connect(ctx context.Context) (*mcp.Adapter, error) {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.closed {
+		// #1285: Close() completed while this Connect was dialing. Taking
+		// the connection would leak a client + watcher nothing can cancel.
+		_ = client.Close()
+		return nil, fmt.Errorf("mcp server %q closed during connect", m.cfg.Name)
+	}
 	if m.adapter != nil {
 		_ = client.Close()
 		return m.adapter, nil
@@ -436,6 +448,13 @@ const mcpReconnectCooldown = 60 * time.Second
 func (m *MCPPlugin) attemptReconnect(ctx context.Context) bool {
 	// Mark as disconnected
 	m.mu.Lock()
+	if m.closed {
+		// #1285: Close() won this race — the plugin is unloaded; starting a
+		// reconnect here would spawn an unstoppable watcher against a server
+		// the user explicitly removed.
+		m.mu.Unlock()
+		return false
+	}
 	oldAdapter := m.adapter
 	m.adapter = nil
 	m.connected = false
@@ -451,6 +470,29 @@ func (m *MCPPlugin) attemptReconnect(ctx context.Context) bool {
 	// Attempt reconnection
 	adapter, err := m.Connect(ctx)
 	if err == nil && adapter != nil {
+		// #1285: Close may have run while Connect was dialing (TOCTOU). If
+		// so, the freshly connected client + its watcher must NOT survive:
+		// unregister and drop it, never re-register tools (ghost tools).
+		m.mu.Lock()
+		if m.closed {
+			client := m.client
+			m.client = nil
+			m.adapter = nil
+			m.connected = false
+			m.status = MCPStatusPending
+			m.mu.Unlock()
+			if m.registry != nil {
+				for _, tn := range adapter.ToolNames() {
+					m.registry.Unregister(tn)
+				}
+			}
+			if client != nil {
+				_ = client.Close()
+			}
+			debug.Log("mcp-reconnect", "server=%s closed during reconnect; dropping fresh connection", m.cfg.Name)
+			return false
+		}
+		m.mu.Unlock()
 		debug.Log("mcp-reconnect", "server=%s reconnected successfully", m.cfg.Name)
 		// Re-register tools if we have a registry reference
 		if m.registry != nil {
@@ -561,17 +603,24 @@ func (m *MCPPlugin) Info() MCPServerInfo {
 }
 
 func (m *MCPPlugin) Close() error {
-	// Stop the auto-reconnect watcher first
+	// #1285: every field below is written by startReconnectWatcher /
+	// startWSHealthProbe under m.mu (Connect holds the lock when starting
+	// them), so Close MUST take the same lock — the old lock-free read-call-
+	// nil raced a concurrent Connect: Close's cancel landed on the OLD value,
+	// the new watcher's cancel overwrote it, and nothing could ever stop
+	// that watcher again (eternal 60s reconnect storms against an unloaded
+	// server). closed also marks the plugin as gone so late attemptReconnect
+	// cycles cannot resurrect it.
+	m.mu.Lock()
+	m.closed = true
 	if m.reconnectCancel != nil {
 		m.reconnectCancel()
 		m.reconnectCancel = nil
 	}
-	// Stop the WS health probe
 	if m.healthCancel != nil {
 		m.healthCancel()
 		m.healthCancel = nil
 	}
-	m.mu.Lock()
 	if m.client == nil {
 		m.adapter = nil
 		m.connected = false
@@ -779,7 +828,12 @@ func (m *MCPManager) connectOne(ctx context.Context, p *MCPPlugin) {
 	connectCtx, cancel := context.WithTimeout(ctx, m.connectTimeoutFor(p))
 	defer cancel()
 	p.markPending()
+	// #1285: p.registry was written lock-free here while Close/watcher
+	// paths read plugin fields under p.mu — same-field races are fatal
+	// direction; take the lock for the assignment.
+	p.mu.Lock()
 	p.registry = m.registry
+	p.mu.Unlock()
 	m.emitUpdate()
 	debug.Log("mcp-connect", "start server=%s timeout=%v", p.Name(), m.connectTimeoutFor(p))
 	if err := p.RegisterTools(connectCtx, m.registry); err != nil {
