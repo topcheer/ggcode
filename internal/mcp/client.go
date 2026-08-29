@@ -58,7 +58,13 @@ type Client struct {
 	// dedupes the watchdog across concurrent request timeouts.
 	lastReadProgress  atomic.Int64
 	hangWatchdogArmed atomic.Bool
-	oauthHandler      *OAuthHandler
+	// hangAbort marks a teardown initiated by the #1275 watchdog (as opposed
+	// to user Close/Abort). procWatch still closes processExit for watchdog
+	// teardowns so the plugin reconnect watcher can restore service - a user
+	// abort stays silent, but a hung-server abort is exactly the situation
+	// auto-reconnect exists for.
+	hangAbort    atomic.Bool
+	oauthHandler *OAuthHandler
 
 	// processExit is closed when the stdio server process exits unexpectedly
 	// (i.e., not via Close/Abort). Consumers can use this for auto-reconnect.
@@ -229,11 +235,14 @@ func (c *Client) Start(ctx context.Context) error {
 		// observe process teardown without calling Wait() again (concurrent
 		// exec.Cmd.Wait is a data race — #292).
 		close(c.procWaitDone)
-		// Only signal unexpected exit if we haven't been closed by the user.
-		if !c.closed.Load() {
+		// Signal teardown to watchers when the exit was NOT user-initiated
+		// (#1275 review): user Close/Abort stays silent, but a hang-watchdog
+		// abort sets hangAbort first - a torn-down hung server is exactly
+		// what auto-reconnect exists to recover from.
+		if !c.closed.Load() || c.hangAbort.Load() {
 			c.closed.Store(true)
 			close(c.processExit)
-			debug.Log("mcp-procwatch", "server=%s process exited unexpectedly", c.name)
+			debug.Log("mcp-procwatch", "server=%s process exited (watchdog=%v)", c.name, c.hangAbort.Load())
 		}
 	})
 
@@ -847,7 +856,11 @@ func (c *Client) armHangWatchdog() {
 			// Hung: zero messages parsed during the entire grace window while
 			// requests were still waiting. Abort unwinds every goroutine parked on
 			// readMu or blocked in a raw body read (the only way to interrupt a
-			// pipe read is closing it) and lets auto-reconnect restore service.
+			// pipe read is closing it). hangAbort makes procWatch close
+			// processExit, so the plugin reconnect watcher restores service
+			// (#1275 review: a plain Abort is treated as user-initiated and
+			// stays silent).
+			c.hangAbort.Store(true)
 			c.Abort()
 		}
 	})

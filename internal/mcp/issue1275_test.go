@@ -80,3 +80,42 @@ func TestHungStdioServerWatchdogAborts(t *testing.T) {
 	}
 	t.Fatalf("hung connection was not aborted within %v despite persistent waiters", hungServerAbortGrace)
 }
+
+// TestHangAbortSignalsProcessExit pins the #1275 review fix: a watchdog
+// abort must close processExit so the plugin reconnect watcher can restore
+// service, while a user-initiated Abort stays silent (pre-existing design).
+func TestHangAbortSignalsProcessExit(t *testing.T) {
+	c := NewClient("hang-exit", "sleep", []string{"30"})
+	if err := c.Start(context.Background()); err != nil {
+		t.Skipf("cannot start sleep command: %v", err)
+	}
+
+	// Simulate the watchdog path: hang flag first, then Abort.
+	c.hangAbort.Store(true)
+	c.Abort()
+
+	select {
+	case <-c.ProcessExit():
+		// Watchdog teardown surfaced to reconnect watchers.
+	case <-time.After(5 * time.Second):
+		t.Fatal("hang-watchdog abort must close processExit for reconnect watchers")
+	}
+}
+
+// TestUserAbortStaysSilent pins the counter-semantics: a plain (user)
+// Abort must NOT close processExit - reconnect watchers only react to
+// unexpected or watchdog-initiated exits.
+func TestUserAbortStaysSilent(t *testing.T) {
+	c := NewClient("user-abort", "sleep", []string{"30"})
+	if err := c.Start(context.Background()); err != nil {
+		t.Skipf("cannot start sleep command: %v", err)
+	}
+	c.Abort()
+
+	select {
+	case <-c.ProcessExit():
+		t.Fatal("user Abort must not close processExit (reconnect would fight deliberate teardown)")
+	case <-time.After(1500 * time.Millisecond):
+		// Silent as designed.
+	}
+}
