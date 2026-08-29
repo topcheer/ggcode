@@ -131,14 +131,23 @@ func TestLanchatAlwaysAllowed(t *testing.T) {
 }
 
 func TestIMToolAlwaysAllowed(t *testing.T) {
-	// im must be allowed in every permission mode without approval
+	// im BENIGN ACTIONS must be allowed in every permission mode without
+	// approval (#1283: the blanket always-allow was removed; only local
+	// adapter-management actions stay on the fast path).
 	imInput := json.RawMessage(`{"action":"status"}`)
 	for _, mode := range ValidPermissionModes {
 		policy := NewConfigPolicyWithMode(nil, []string{"."}, mode)
 		d, err := policy.Check("im", imInput)
 		if err != nil || d != Allow {
-			t.Errorf("%s: im should be Allow, got %v err=%v", mode.String(), d, err)
+			t.Errorf("%s: im status should be Allow, got %v err=%v", mode.String(), d, err)
 		}
+	}
+	// The exfiltrating actions must NOT be blanket-allowed anymore: in plan
+	// mode (strict read-only) send_file must not come back Allow.
+	plan := NewConfigPolicyWithMode(nil, []string{"."}, PlanMode)
+	sendFile := json.RawMessage(`{"action":"send_file","path":"/tmp/secret.png"}`)
+	if d, _ := plan.Check("im", sendFile); d == Allow {
+		t.Errorf("PlanMode: im send_file must not be blanket-Allow since #1283")
 	}
 }
 
