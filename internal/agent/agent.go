@@ -1170,7 +1170,14 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	defer func() {
 		if r := recover(); r != nil {
 			path := WriteCrashLog("agent", r)
-			err = fmt.Errorf("agent run panicked: %v (stack saved to %s)", r, path)
+			// Preserve any pre-panic error: "first failed, THEN panicked while
+			// unwinding" is a real composite (e.g. a defer panicking after an
+			// error return); overwriting it would hide the root cause.
+			if err != nil {
+				err = fmt.Errorf("agent run panicked: %v (prior error: %v; stack saved to %s)", r, err, path)
+			} else {
+				err = fmt.Errorf("agent run panicked: %v (stack saved to %s)", r, path)
+			}
 		}
 	}()
 	// Stop any background cache-keepalive pings — the user is sending a new
@@ -1290,6 +1297,15 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	defer func() {
 		// Mark the run as completed in the journal (crash detection cleanup).
 		// This runs for all exit paths: success, error, and cancellation.
+		//
+		// CAVEAT (panic-containment review): this defer takes a.mu below. If a
+		// panic fired while a.mu was already held, this Lock deadlocks and the
+		// outer recover defer (RunStreamWithContent top) never runs - the
+		// process dies instead of converting the panic to an error. Known
+		// trade-off: serializing stats through the mutex is the existing
+		// contract, and lock-holding panics in the loop body are rare (the
+		// loop's own critical sections are tiny). If crash logs ever show a
+		// hang here, MarkCompleted must move off the agent mutex.
 		MarkCompleted(sid, err == nil, runStats.Iterations, len(runStats.FilesEdited))
 		runStats.finalize(err)
 		a.mu.Lock()

@@ -32,14 +32,35 @@ const crashLogDir = "crash"
 // Failures to write are swallowed and reported in the returned string - the
 // caller is on a panic path and must not fail again.
 func WriteCrashLog(component string, val any) string {
+	// Sanitize the component into a filename fragment: it is an exported API
+	// and a "../../x" component would otherwise escape the crash dir.
+	component = filepath.Base(filepath.Clean(component))
 	dir := filepath.Join(config.ConfigDir(), crashLogDir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Sprintf("<crash log not written: %v>", err)
 	}
 	name := fmt.Sprintf("%s-%s.log", component, time.Now().Format("20060102-150405"))
 	path := filepath.Join(dir, name)
-	body := fmt.Sprintf("time:      %s\ncomponent: %s\npanic:     %v\n\n%s\n",
-		time.Now().Format(time.RFC3339), component, val, debug.Stack())
+	// Guard the %v formatting: a panic value whose String()/Error() itself
+	// panics would re-panic HERE, inside this recover-adjacent helper, and
+	// replace the original panic - losing containment entirely.
+	panicText := func() (out string) {
+		defer func() {
+			if recover() != nil {
+				out = fmt.Sprintf("<unprintable %T>", val)
+			}
+		}()
+		return fmt.Sprintf("%v", val)
+	}()
+	// Cap the stack: a runaway recursion recovered late can produce a
+	// multi-hundred-MB dump that would OOM the crash path itself.
+	stack := debug.Stack()
+	const maxStack = 1 << 20 // 1 MiB
+	if len(stack) > maxStack {
+		stack = stack[:maxStack]
+	}
+	body := fmt.Sprintf("time:      %s\ncomponent: %s\npanic:     %s\n\n%s\n",
+		time.Now().Format(time.RFC3339), component, panicText, stack)
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		return fmt.Sprintf("<crash log not written: %v>", err)
 	}

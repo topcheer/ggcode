@@ -96,6 +96,11 @@ func main() {
 	defer func() {
 		if r := recover(); r != nil {
 			path := agent.WriteCrashLog("desktop", r)
+			// Restore the real stderr BEFORE printing: log output is piped to
+			// debug.Log at this point and os.Exit below never drains the pipe,
+			// so a log.Printf here would be silently lost (review finding:
+			// crash would leave no visible trace).
+			log.SetOutput(os.Stderr)
 			log.Printf("ggcode desktop crashed: %v (panic log: %s)", r, path)
 			os.Exit(1)
 		}

@@ -115,6 +115,12 @@ func main() {
 	defer func() {
 		if r := recover(); r != nil {
 			path := agent.WriteCrashLog("cli", r)
+			// Flush the debug ring BEFORE exiting: os.Exit skips the
+			// defer debug.Close() below (LIFO: this defer runs first), and the
+			// ring holds the last pre-panic log lines - the most valuable
+			// diagnostics. close() is idempotent, so the deferred one after is
+			// harmless.
+			debug.Close()
 			if origStderr != nil {
 				os.Stderr = origStderr
 			}

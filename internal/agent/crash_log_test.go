@@ -38,8 +38,10 @@ func TestWriteCrashLog(t *testing.T) {
 func TestWriteCrashLogNilValue(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
-	// panic(nil) surfaces as nil recovered value on modern Go - must not
-	// itself panic inside the crash path.
+	// A nil panic VALUE must not itself panic inside the crash path. (Note:
+	// Go 1.21+ converts actual panic(nil) calls to *runtime.PanicNilError,
+	// so recover() never yields a bare nil in practice - this guards the
+	// direct-call contract of WriteCrashLog.)
 	path := WriteCrashLog("test", nil)
 	if strings.HasPrefix(path, "<") {
 		t.Fatalf("nil panic value must still produce a log, got %q", path)
