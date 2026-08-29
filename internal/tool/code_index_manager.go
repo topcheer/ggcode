@@ -748,6 +748,25 @@ func (m *CodeIndexManager) rebuildDirty(reason string) {
 		return
 	}
 
+	// #1317-A: Search/FilePathFuzzy grab the index pointer under RLock and
+	// then read idx.df without any lock. Mutating the shared index in place
+	// below raced those readers — concurrent map read/write is a fatal,
+	// unrecoverable process crash. The old comment claimed "we'll mutate a
+	// copy" but no copy existed. Clone the shell (docs slice + df map);
+	// individual doc tf maps are never mutated (replacement assigns whole
+	// docs), so a shallow element copy suffices. Readers keep the old,
+	// now-immutable pointer; m.index swap below is the only publish point.
+	clone := &bm25Index{
+		docs:      make([]bm25Doc, len(idx.docs)),
+		df:        make(map[string]int, len(idx.df)),
+		avgLength: idx.avgLength,
+	}
+	copy(clone.docs, idx.docs)
+	for t, n := range idx.df {
+		clone.df[t] = n
+	}
+	idx = clone
+
 	debug.Log("codeindex", "%s incremental: %d files changed", reason, len(dirty))
 	start := time.Now()
 
@@ -773,6 +792,15 @@ func (m *CodeIndexManager) rebuildDirty(reason string) {
 			if di, ok := docIdx[relPath]; ok {
 				m.removeDocFromIndex(idx, di)
 				delete(docIdx, relPath)
+				// #1317-B: removeDocFromIndex swaps the tail doc into slot
+				// di — the tail doc's docIdx entry is now stale. Without
+				// this fix a later replaceDocInIndex(idx, staleIdx, ...)
+				// wrote past the truncated slice (panic in this unrecovered
+				// background goroutine = process crash) or replaced the
+				// wrong doc (silent index corruption).
+				if di < len(idx.docs) {
+					docIdx[idx.docs[di].path] = di
+				}
 				removed++
 			}
 			continue
