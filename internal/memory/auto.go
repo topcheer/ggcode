@@ -268,18 +268,14 @@ func disambiguateKey(key, safe string) string {
 		// hash still separates different keys.
 		safe = "untitled"
 	}
-	injective := true
-	for _, r := range key {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
-		default:
-			injective = false
-		}
-		if !injective {
-			break
-		}
-	}
-	if injective {
+	// #1279: injective means sanitize(key) == key VERBATIM. The old charset
+	// loop passed keys like "a--b" or "-build-" as injective even though
+	// sanitizeKey folds "--"→"-" and trims edges - so "a--b" and "a-b"
+	// both landed on a-b.md and the later write silently overwrote the
+	// earlier (#775's "distinct keys never map to the same file" promise).
+	// Comparing against the folded result catches every mutation: charset
+	// replacements, dash collapses, and edge trims all change the string.
+	if safe == key {
 		return safe
 	}
 	sum := sha256.Sum256([]byte(key))

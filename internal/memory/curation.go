@@ -84,8 +84,13 @@ var twoDigitPattern = regexp.MustCompile(`^\d{2}$`)
 // These are always stripped regardless of position.
 var versionPattern = regexp.MustCompile(`^(r\d+|cycle\d+|summary)$`)
 
-// monthDayPattern matches jul6, jul10, aug1 etc.
-var monthDayPattern = regexp.MustCompile(`^[a-z]{3}\d+$`)
+// monthDayPattern matches jul6, jul10, aug1 etc. #1278: restricted to REAL
+// month abbreviations - the old `^[a-z]{3}\d+$` swallowed semantic
+// segments like gen2, web2, app1, ver2, and the collision made
+// perf-gen2-analysis / perf-gen3-analysis share one dedup key, so GC
+// physically deleted the loser. A 4-letter "sept5" no longer strips
+// either (safe direction: no grouping, no deletion).
+var monthDayPattern = regexp.MustCompile(`^(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[1-9]\d?$`)
 
 // dedupKeyFor returns the dedup key for a memory key by stripping
 // embedded date and version suffixes. This groups related entries
@@ -96,7 +101,7 @@ func dedupKeyFor(key string) string {
 	skippingDate := false // consuming YYYY-MM-DD or YYYY-MM
 	afterDate := false    // past the date, skip version/monthday segments
 
-	for _, part := range parts {
+	for i, part := range parts {
 		// Version segments (r1, cycle2, summary) always stripped
 		if versionPattern.MatchString(part) {
 			continue
@@ -115,8 +120,12 @@ func dedupKeyFor(key string) string {
 			}
 			afterDate = false // non-version segment = real content
 		}
-		// Check if this part starts a date (4-digit year)
-		if yearPattern.MatchString(part) {
+		// Check if this part starts a date (4-digit year). #1278: a bare
+		// 4-digit segment is frequently a port/size (8080, 2048) - only treat
+		// it as a year when a plausible MM/DD segment actually follows,
+		// otherwise port-8080-config / port-9090-config collapsed to
+		// port-config and GC deleted the loser.
+		if yearPattern.MatchString(part) && i+1 < len(parts) && twoDigitPattern.MatchString(parts[i+1]) {
 			skippingDate = true
 			continue
 		}

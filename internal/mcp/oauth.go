@@ -113,7 +113,15 @@ type OAuthHandler struct {
 	httpClient *http.Client
 	store      *auth.Store
 
-	mu                sync.Mutex
+	mu sync.Mutex
+	// refreshMu serializes token refreshes for this handler (#1277): the
+	// HTTP refresh + state save ran unlocked, so concurrent requests that
+	// both saw a near-expiry token raced two refreshes against a
+	// rotation-with-grace server - the interleaved store saves could persist
+	// an already-revoked refresh token, silently and permanently killing the
+	// login. Note: must NOT be h.mu, which refreshToken takes internally for
+	// state snapshots (deadlock).
+	refreshMu         sync.Mutex
 	state             *oauthState
 	callbackCh        chan oauthCallbackResult
 	callbackSrv       *http.Server
@@ -270,8 +278,23 @@ func (h *OAuthHandler) GetAccessToken(ctx context.Context) (string, error) {
 	if !info.IsExpired() {
 		return info.AccessToken, nil
 	}
-	// Token is near-expiry or expired. Try refresh if we have a refresh token.
+	// Token is near-expiry or expired. Try refresh if we have a refresh
+	// token.
 	if info.RefreshToken != "" {
+		// #1277: one refresher at a time. After acquiring, RE-DERIVE the
+		// stored info - a concurrent caller may have completed a refresh
+		// while we waited, in which case its fresh access token (and rotated
+		// refresh token, already persisted by the winner) is ours to reuse.
+		// Re-refreshing with the pre-wait refresh token would replay a
+		// possibly-revoked credential against a rotation server.
+		h.refreshMu.Lock()
+		defer h.refreshMu.Unlock()
+		if latest, _, err := h.loadStoredInfo(); err == nil && latest != nil {
+			if !latest.IsExpired() {
+				return latest.AccessToken, nil
+			}
+			info = latest
+		}
 		newInfo, err := h.refreshToken(ctx, info.RefreshToken)
 		if err == nil && newInfo != nil {
 			return newInfo.AccessToken, nil

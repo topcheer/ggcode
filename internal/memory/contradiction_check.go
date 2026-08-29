@@ -101,8 +101,12 @@ func (am *AutoMemory) CheckContradiction(key, content string) ContradictionCheck
 	var cc ContradictionCheck
 
 	for _, m := range metas {
-		// Skip comparing against the same key (self-update case).
-		if m.Key == sanitizeKey(key) {
+		// Skip comparing against the same key (self-update case). m.Key is
+		// the DISK filename (disambiguateKey output), so compare against the
+		// same derivation - the old sanitizeKey(key) never matched keys that
+		// got a hash suffix (CJK/spaces/dots), making every self-update of
+		// such keys warn "contradicts itself" (#1280).
+		if m.Key == disambiguateKey(key, sanitizeKey(key)) {
 			continue
 		}
 
