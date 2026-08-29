@@ -30,6 +30,7 @@ package tool
 import (
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -62,6 +63,10 @@ func (g CommitGroup) TotalLines() int {
 	return total
 }
 
+// diffDevNullHeader matches the "+++ /dev/null" marker of a deleted file.
+// Lives here (not diff_scan.go) because only parseFileChanges consumes it.
+var diffDevNullHeader = regexp.MustCompile(`^\+\+\+\s+/dev/null`)
+
 // parseFileChanges extracts per-file change info from a unified diff.
 // Unlike parseDiffStats (which returns aggregate counts), this returns
 // structured per-file data needed for intelligent grouping.
@@ -75,8 +80,18 @@ func parseFileChanges(diffOutput string) []FileChangeInfo {
 	currentAdd := 0
 	currentDel := 0
 	newLineNum := 0
+	// Last "--- a/path" header seen; a following "+++ /dev/null" means
+	// the file was DELETED - the only place its path survives in the diff
+	// (#1319: deleted files dropped out of partition plans entirely).
+	lastOldFile := ""
 
 	flush := func() {
+		// Reset counters even on the empty-file early return (#1319: the
+		// early return leaked pending -N lines into the next parsed file,
+		// inflating e.g. +5/-2 to +5/-22 when a deletion preceded it).
+		add, del := currentAdd, currentDel
+		currentAdd = 0
+		currentDel = 0
 		if currentFile == "" {
 			return
 		}
@@ -85,8 +100,8 @@ func parseFileChanges(diffOutput string) []FileChangeInfo {
 			Category:  categorizeFile(currentFile),
 			Dir:       filepath.Dir(currentFile),
 			Base:      filepath.Base(currentFile),
-			Additions: currentAdd,
-			Deletions: currentDel,
+			Additions: add,
+			Deletions: del,
 		}
 		if fc.Dir == "." {
 			fc.Dir = ""
@@ -100,10 +115,23 @@ func parseFileChanges(diffOutput string) []FileChangeInfo {
 		if m := diffFileHeader.FindStringSubmatch(line); m != nil {
 			flush()
 			currentFile = m[1]
+			lastOldFile = ""
 			newLineNum = 0
 			continue
 		}
-		if diffOldFileHeader.MatchString(line) {
+		// Deleted file: "--- a/path" followed by "+++ /dev/null". The
+		// +++ line does not match diffFileHeader (no b/ prefix), so the
+		// old path from the --- header is the only source (#1319:
+		// deleted files used to drop out of partition plans entirely).
+		if diffDevNullHeader.MatchString(line) && lastOldFile != "" {
+			flush()
+			currentFile = lastOldFile
+			lastOldFile = ""
+			newLineNum = 0
+			continue
+		}
+		if m := diffOldFileHeader.FindStringSubmatch(line); m != nil {
+			lastOldFile = m[1]
 			continue
 		}
 		if m := diffHunkHeader.FindStringSubmatch(line); m != nil {

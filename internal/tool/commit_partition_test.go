@@ -294,3 +294,50 @@ func TestSuggestCommitPartition_LargeGroupTruncation(t *testing.T) {
 		t.Errorf("expected truncation indicator for >5 files in group: %s", s)
 	}
 }
+
+// #1319: deleted files ("--- a/path" + "+++ /dev/null") dropped out of the
+// partition plan entirely, and their -N lines leaked into the next parsed
+// file (handler.go +5/-2 plus deleted dead.go -20 inflated to +5/-22).
+func TestParseFileChanges_DeletedFileAndNoLeak(t *testing.T) {
+	diff := "diff --git a/internal/agent/handler.go b/internal/agent/handler.go\n" +
+		"--- a/internal/agent/handler.go\n" +
+		"+++ b/internal/agent/handler.go\n" +
+		"@@ -10,7 +10,12 @@ func before() {\n" +
+		"+line1\n+line2\n+line3\n+line4\n+line5\n-old1\n-old2\n" +
+		"diff --git a/internal/agent/dead.go b/internal/agent/dead.go\n" +
+		"deleted file mode 100644\n" +
+		"--- a/internal/agent/dead.go\n" +
+		"+++ /dev/null\n" +
+		"@@ -1,20 +0,0 @@\n" +
+		"-gone1\n-gone2\n" +
+		"diff --git a/docs/guide.md b/docs/guide.md\n" +
+		"--- a/docs/guide.md\n" +
+		"+++ b/docs/guide.md\n" +
+		"@@ -1,1 +1,2 @@\n" +
+		"+docline\n"
+
+	files := parseFileChanges(diff)
+	byPath := map[string]FileChangeInfo{}
+	for _, f := range files {
+		byPath[f.Path] = f
+	}
+	if len(files) != 3 {
+		t.Fatalf("expected 3 files incl. deletion, got %d: %+v", len(files), files)
+	}
+	dead, ok := byPath["internal/agent/dead.go"]
+	if !ok {
+		t.Fatal("deleted file missing from partition plan (#1319 main defect)")
+	}
+	if dead.Deletions != 2 || dead.Additions != 0 {
+		t.Errorf("deleted file counts wrong: +%d/-%d", dead.Additions, dead.Deletions)
+	}
+	handler := byPath["internal/agent/handler.go"]
+	if handler.Additions != 5 || handler.Deletions != 2 {
+		t.Errorf("handler.go counts polluted by deletion leak: +%d/-%d (want +5/-2)",
+			handler.Additions, handler.Deletions)
+	}
+	guide := byPath["docs/guide.md"]
+	if guide.Additions != 1 || guide.Deletions != 0 {
+		t.Errorf("guide.md counts wrong: +%d/-%d", guide.Additions, guide.Deletions)
+	}
+}
