@@ -56,6 +56,16 @@ func (t GitRevert) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	if args.Commit == "" {
 		return Result{IsError: true, Content: "commit is required"}, nil
 	}
+	// #1325: our own conflict guidance says "run 'git revert --continue'",
+	// and the natural LLM mapping is calling this tool again with
+	// commit="--continue" - which git parses as an option, committing or
+	// discarding the sequencer's staged changes. Reject option-looking
+	// values and point at the shell tool ("--" separator does not help:
+	// sequencer subcommands are not revs).
+	if strings.HasPrefix(args.Commit, "-") {
+		return Result{IsError: true, Content: fmt.Sprintf(
+			"commit %q looks like a git option; this tool only reverts commits. To continue or abort an in-progress revert, use the shell tool: git revert --continue / --abort", args.Commit)}, nil
+	}
 
 	dir := resolveDir(args.Path, t.WorkingDir)
 
