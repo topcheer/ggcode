@@ -19,8 +19,9 @@ import (
 )
 
 type modelDiscoveryResponse struct {
-	Data   []modelDiscoveryEntry `json:"data"`
-	Models []modelDiscoveryEntry `json:"models"`
+	Data          []modelDiscoveryEntry `json:"data"`
+	Models        []modelDiscoveryEntry `json:"models"`
+	NextPageToken string                `json:"nextPageToken"` // gemini pagination (#1288)
 }
 
 type modelDiscoveryEntry struct {
@@ -95,32 +96,48 @@ func DiscoverModels(ctx context.Context, resolved *config.ResolvedEndpoint) ([]s
 }
 
 func discoverModelsFromURL(ctx context.Context, client *http.Client, endpointURL string, resolved *config.ResolvedEndpoint) ([]string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpointURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("building request %s: %w", endpointURL, err)
-	}
-	req.Header.Set("Accept", "application/json")
-	switch resolved.Protocol {
-	case "anthropic":
-		req.Header.Set("x-api-key", strings.TrimSpace(resolved.APIKey))
-		req.Header.Set("anthropic-version", "2023-06-01")
-	case "gemini":
-		query := req.URL.Query()
-		query.Set("key", strings.TrimSpace(resolved.APIKey))
-		req.URL.RawQuery = query.Encode()
-		req.Header.Set("x-goog-api-key", strings.TrimSpace(resolved.APIKey))
-	case "copilot":
-		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(resolved.APIKey))
-		req.Header.Set("User-Agent", "ggcode")
-	default:
-		if hasUsableAPIKey(resolved.APIKey) {
+	// #1288: gemini ListModels defaults to pageSize=50 and paginates via
+	// nextPageToken; the registry has far more than 50 public entries. Ask
+	// for 1000 per page AND follow the token so the discovery list is not
+	// silently truncated and solidified into the 6h cache.
+	buildRequest := func(pageToken string) (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpointURL, nil)
+		if err != nil {
+			return nil, fmt.Errorf("building request %s: %w", endpointURL, err)
+		}
+		req.Header.Set("Accept", "application/json")
+		switch resolved.Protocol {
+		case "anthropic":
+			req.Header.Set("x-api-key", strings.TrimSpace(resolved.APIKey))
+			req.Header.Set("anthropic-version", "2023-06-01")
+		case "gemini":
+			query := req.URL.Query()
+			query.Set("key", strings.TrimSpace(resolved.APIKey))
+			query.Set("pageSize", "1000")
+			if pageToken != "" {
+				query.Set("pageToken", pageToken)
+			}
+			req.URL.RawQuery = query.Encode()
+			req.Header.Set("x-goog-api-key", strings.TrimSpace(resolved.APIKey))
+		case "copilot":
 			req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(resolved.APIKey))
+			req.Header.Set("User-Agent", "ggcode")
+		default:
+			if hasUsableAPIKey(resolved.APIKey) {
+				req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(resolved.APIKey))
+			}
 		}
+		for key, values := range vendorSpecificAuthHeaders(resolved.BaseURL, resolved.APIKey) {
+			for _, value := range values {
+				req.Header.Set(key, value)
+			}
+		}
+		return req, nil
 	}
-	for key, values := range vendorSpecificAuthHeaders(resolved.BaseURL, resolved.APIKey) {
-		for _, value := range values {
-			req.Header.Set(key, value)
-		}
+
+	req, err := buildRequest("")
+	if err != nil {
+		return nil, err
 	}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -140,6 +157,37 @@ func discoverModelsFromURL(ctx context.Context, client *http.Client, endpointURL
 	var payload modelDiscoveryResponse
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 		return nil, fmt.Errorf("decode %s: %w", endpointURL, err)
+	}
+
+	// #1288: follow gemini pagination. Guards: hard page cap and a
+	// repeated-token circuit breaker (a broken relay echoing the same
+	// nextPageToken forever must not spin the loop).
+	if resolved.Protocol == "gemini" {
+		const maxPages = 50
+		seenTokens := map[string]struct{}{payload.NextPageToken: {}}
+		for page := 1; payload.NextPageToken != "" && page < maxPages; page++ {
+			token := payload.NextPageToken
+			_ = resp.Body.Close()
+			pageReq, perr := buildRequest(token)
+			if perr != nil {
+				return nil, perr
+			}
+			pageResp, perr := client.Do(pageReq)
+			if perr != nil {
+				return nil, fmt.Errorf("GET %s (page %d): %w", endpointURL, page+1, perr)
+			}
+			resp = pageResp
+			var pagePayload modelDiscoveryResponse
+			if derr := json.NewDecoder(pageResp.Body).Decode(&pagePayload); derr != nil {
+				return nil, fmt.Errorf("decode %s (page %d): %w", endpointURL, page+1, derr)
+			}
+			payload.Models = append(payload.Models, pagePayload.Models...)
+			payload.NextPageToken = pagePayload.NextPageToken
+			if _, dup := seenTokens[payload.NextPageToken]; dup || payload.NextPageToken == "" {
+				break
+			}
+			seenTokens[payload.NextPageToken] = struct{}{}
+		}
 	}
 
 	entries := payload.Data
