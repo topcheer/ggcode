@@ -567,6 +567,13 @@ ObjC.import('AppKit');
       try { name = elem.name(); } catch(e) {}
       var desc = "";
       try { desc = elem.description(); } catch(e) {}
+      // #1321 (snapshotUI parity with findElement): static text often
+      // only exists in AXValue while AXTitle stays empty.
+      var value = "";
+      try {
+        var v = elem.value();
+        if (typeof v === "string") value = v;
+      } catch(e) {}
 
       var frame = null;
       try {
@@ -581,7 +588,7 @@ ObjC.import('AppKit');
       try { enabled = elem.enabled(); } catch(e) {}
 
       var path = parentPath + "/" + (role || "?");
-      var label = name || desc || "";
+      var label = name || desc || value || "";
 
       if (frame || label) {
         results.push({
@@ -635,7 +642,14 @@ ObjC.import('AppKit');
       try { name = elem.name(); } catch(e) {}
       var desc = "";
       try { desc = elem.description(); } catch(e) {}
-      var label = (name + " " + desc).toLowerCase();
+      // #1321: static text lives in AXValue, AXTitle is often empty -
+      // without this, find_element by visible text returns nothing.
+      var value = "";
+      try {
+        var v = elem.value();
+        if (typeof v === "string") value = v;
+      } catch(e) {}
+      var label = (name + " " + desc + " " + value).toLowerCase();
 
       if (label.indexOf(search.toLowerCase()) >= 0) {
         var frame = null;
@@ -648,7 +662,7 @@ ObjC.import('AppKit');
         } catch(e) {}
         results.push({
           role: role || "",
-          label: name || desc || "",
+          label: name || desc || value || "",
           frame: frame,
           depth: depth
         });
