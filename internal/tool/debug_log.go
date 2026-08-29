@@ -116,6 +116,32 @@ func (t DebugLogTool) doRead(lines int, category string) (Result, error) {
 	return Result{Content: b.String()}, nil
 }
 
+// sanitizeLogNamePart makes a user-supplied filter (category/keyword) safe
+// to embed in an export filename (#1320): raw parts were joined into the
+// path, so a keyword like "../../../etc/foo" escaped the temp dir and
+// truncated-arbitrary-path-wrote a .log file. Strips path separators,
+// parent refs, and control/null bytes; keeps it readable.
+func sanitizeLogNamePart(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r == '/' || r == '\\' || r < 0x20 || r == 0x7f:
+			b.WriteRune('_')
+		default:
+			b.WriteRune(r)
+		}
+	}
+	out := b.String()
+	// Collapse any surviving traversal-ish sequences.
+	for strings.Contains(out, "..") {
+		out = strings.ReplaceAll(out, "..", "_")
+	}
+	if out == "" {
+		out = "_"
+	}
+	return out
+}
+
 func (t DebugLogTool) doExport(lines int, category, keyword string) (Result, error) {
 	// For export, allow up to 2000 lines
 	if lines > 2000 {
@@ -151,15 +177,18 @@ func (t DebugLogTool) doExport(lines int, category, keyword string) (Result, err
 	ts := time.Now().Format("20060102-150405")
 	filename := fmt.Sprintf("ggcode-debug-%s", ts)
 	if category != "" {
-		filename += "-" + category
+		filename += "-" + sanitizeLogNamePart(category)
 	}
 	if keyword != "" {
-		filename += "-" + keyword
+		filename += "-" + sanitizeLogNamePart(keyword)
 	}
 	filename += ".log"
 
 	tmpDir := os.TempDir()
-	path := filepath.Join(tmpDir, filename)
+	// Defense in depth (#1320): the sanitized parts can no longer carry
+	// path separators or "..", but Base() guarantees the final name stays
+	// inside tmpDir even if a future edit reintroduces traversal.
+	path := filepath.Join(tmpDir, filepath.Base(filename))
 
 	f, err := os.Create(path)
 	if err != nil {
