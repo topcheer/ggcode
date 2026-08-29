@@ -7,10 +7,15 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/safego"
 )
+
+// ffmpegGracefulExitTimeout is how long Stop() waits after stdin EOF for
+// ffmpeg to flush its tail frames + FLV trailer before killing it (#1292).
+const ffmpegGracefulExitTimeout = 5 * time.Second
 
 // Encoder wraps an FFmpeg subprocess that encodes raw RGBA frames into FLV.
 type Encoder struct {
@@ -24,7 +29,10 @@ type Encoder struct {
 	stdin   io.WriteCloser
 	stdout  io.ReadCloser
 	running bool
-	mu      sync.Mutex
+	// exitCh is closed by the monitor goroutine once ffmpeg has exited and
+	// been reaped (#1292). Stop waits on it (bounded) instead of killing.
+	exitCh chan struct{}
+	mu     sync.Mutex
 }
 
 // NewEncoder creates a new encoder for the given resolution and quality.
@@ -86,6 +94,28 @@ func (e *Encoder) Start() error {
 
 	e.running = true
 
+	// #1292: single owner for cmd.Wait — reaps the process on ANY exit path
+	// (crash, OOM, EOF graceful finish), clearing running so IsRunning stops
+	// reporting a dead/zombie encoder as alive, and closing stdout to unblock
+	// fan-out readers stuck in Read.
+	cmd := e.cmd
+	exitCh := make(chan struct{})
+	e.exitCh = exitCh
+	safego.Go("stream.encoderMonitor", func() {
+		err := cmd.Wait()
+		debug.Log("stream", "ffmpeg exited: %v", err)
+		e.mu.Lock()
+		e.running = false
+		stdout := e.stdout
+		e.stdout = nil
+		e.exitCh = nil
+		e.mu.Unlock()
+		if stdout != nil {
+			_ = stdout.Close()
+		}
+		close(exitCh)
+	})
+
 	// Monitor stderr in background — log any errors
 	safego.Go("stream.encoderStderr", func() {
 		scanner := bufio.NewScanner(stderrPipe)
@@ -115,30 +145,36 @@ func (e *Encoder) Read(p []byte) (int, error) {
 }
 
 // Stop signals the encoder to finish and waits for the process to exit.
+// #1292: the previous version closed stdin (EOF) but then IMMEDIATELY
+// closed stdout and Killed the process — the Kill almost always landed
+// before ffmpeg could flush tail frames and the FLV trailer, truncating
+// every recording on every normal stop, and the early stdout close fed
+// ffmpeg an EPIPE on its output side. Now: stdin EOF, then a bounded wait
+// for the monitor-goroutine reap; Kill only on timeout.
 func (e *Encoder) Stop() error {
 	e.mu.Lock()
-	defer e.mu.Unlock()
-	if !e.running {
-		return nil
-	}
+	ch := e.exitCh
+	wasRunning := e.running
 	e.running = false
+	stdin := e.stdin
+	e.stdin = nil
+	cmd := e.cmd
+	e.mu.Unlock()
 
-	// Close stdin to signal EOF to ffmpeg
-	if e.stdin != nil {
-		e.stdin.Close()
+	if ch == nil {
+		return nil // never started, or already fully stopped and reaped
 	}
-
-	// Close stdout to unblock any readers
-	if e.stdout != nil {
-		e.stdout.Close()
+	if wasRunning && stdin != nil {
+		_ = stdin.Close() // EOF: ffmpeg flushes and exits on its own
 	}
-
-	// Kill the process if still running
-	if e.cmd != nil && e.cmd.Process != nil {
-		e.cmd.Process.Kill()
-		e.cmd.Wait()
+	select {
+	case <-ch:
+	case <-time.After(ffmpegGracefulExitTimeout):
+		if cmd != nil && cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		<-ch // monitor reaps promptly after Kill
 	}
-
 	return nil
 }
 
