@@ -26,6 +26,9 @@ func (p *stubDenyPolicy) AllowedPathForTool(toolName, path string) bool {
 }
 func (p *stubDenyPolicy) AllowCommandPattern(pattern string)                        {}
 func (p *stubDenyPolicy) SetOverride(toolName string, decision permission.Decision) {}
+func (p *stubDenyPolicy) BlocksAutoApprove(toolName string, input json.RawMessage) bool {
+	return false
+}
 
 // TestIssue1209_DenyMessageIncludesModeAttribution verifies that the
 // policy-deny result names the current permission mode and, in plan mode,

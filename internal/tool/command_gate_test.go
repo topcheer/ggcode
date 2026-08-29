@@ -551,6 +551,9 @@ func (m *mockPolicy) AllowedPath(path string) bool                              
 func (m *mockPolicy) AllowedPathForTool(toolName, path string) bool             { return true }
 func (m *mockPolicy) SetOverride(toolName string, decision permission.Decision) {}
 func (m *mockPolicy) AllowCommandPattern(pattern string)                        {}
+func (m *mockPolicy) BlocksAutoApprove(toolName string, input json.RawMessage) bool {
+	return false
+}
 
 func newBypassPolicy() *mockPolicy     { return &mockPolicy{mode: permission.BypassMode} }
 func newSupervisedPolicy() *mockPolicy { return &mockPolicy{mode: permission.SupervisedMode} }

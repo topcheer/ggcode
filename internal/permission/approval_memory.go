@@ -3,6 +3,7 @@ package permission
 import (
 	"encoding/json"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 
@@ -53,6 +54,9 @@ type approvalEntry struct {
 type ApprovalMemory struct {
 	mu    sync.RWMutex
 	store map[string]*approvalEntry
+	// lastMode is the permission mode the current entries were learned
+	// under; EnsureModeScope resets on change (#1281).
+	lastMode PermissionMode
 }
 
 // NewApprovalMemory creates a new approval memory store.
@@ -106,14 +110,52 @@ func commandSignature(cmd string) string {
 	if strings.ContainsAny(cmd, ";|&\n$`") || strings.Contains(cmd, "$(") {
 		return cmd + ":no-auto-approve:chained"
 	}
+	// #1281: shell redirections are side-effect channels. `echo x > a` and
+	// `echo x > ~/.bashrc` previously shared the `echo x` key, so approving
+	// the former three times auto-executed the latter — a persistence-path
+	// write with no prompt. Fold every redirection TARGET into the signature
+	// so a different destination is a different key (and #777's chaining
+	// rejection stays intact for the operators themselves).
+	if strings.Contains(cmd, ">") || strings.Contains(cmd, "<") {
+		return cmd + ":redirect"
+	}
 	tokens := strings.Fields(cmd)
 	if len(tokens) == 0 {
 		return ""
+	}
+	// #1281: the two-token key was too wide for flag-carrying commands —
+	// `git push origin main` approved, then `git push origin master --force`
+	// and `git push origin --delete main` matched the same `git push` key.
+	// Any argument that changes WHAT the command destroys or where it pushes
+	// (--force, --delete, --hard, -f, refspecs on push, ...) must widen the
+	// signature to the full command so the variant needs its own approval.
+	if commandHasDestructiveFlag(tokens) {
+		return strings.Join(tokens, " ")
 	}
 	if len(tokens) >= 2 {
 		return tokens[0] + " " + tokens[1]
 	}
 	return tokens[0]
+}
+
+// commandHasDestructiveFlag reports whether any token is a flag/argument
+// class that makes a command materially more destructive than its bare
+// verb-argument form (#1281). Not exhaustive — it is a one-way ratchet: when
+// in doubt the signature widens (full command), never narrows.
+func commandHasDestructiveFlag(tokens []string) bool {
+	for _, tok := range tokens[1:] {
+		t := strings.ToLower(strings.TrimLeft(tok, "-"))
+		switch t {
+		case "force", "f", "hard", "delete", "d", "recursive", "r",
+			"force-push", "ignore-errors", "no-preserve-root":
+			return true
+		}
+		// refspecs like master:..main or :branch (push --delete shorthand)
+		if strings.Contains(tok, ":..") || strings.HasPrefix(tok, ":") {
+			return true
+		}
+	}
+	return false
 }
 
 // MakeKey creates the tracking key from a tool name and its input arguments.
@@ -134,15 +176,24 @@ func MakeKey(toolName string, input json.RawMessage) (string, bool) {
 		}
 	}
 
-	// For multi-file tools, use the first file's directory.
+	// For multi-file tools, sign EVERY file path (#1281: the first-file-only
+	// key let multi_file_write/push_files batches ride one approval - every
+	// non-first file bypassed human review entirely).
 	if v, ok := m["files"]; ok {
 		var files []map[string]json.RawMessage
 		if json.Unmarshal(v, &files) == nil && len(files) > 0 {
-			if rawPath, ok := files[0]["path"]; ok {
-				var s string
-				if json.Unmarshal(rawPath, &s) == nil && s != "" {
-					return toolName + ":" + pathSignature(s), true
+			sigs := make([]string, 0, len(files))
+			for _, f := range files {
+				if rawPath, ok := f["path"]; ok {
+					var s string
+					if json.Unmarshal(rawPath, &s) == nil && s != "" {
+						sigs = append(sigs, pathSignature(s))
+					}
 				}
+			}
+			if len(sigs) > 0 {
+				sort.Strings(sigs)
+				return toolName + ":" + strings.Join(sigs, ","), true
 			}
 		}
 	}
@@ -158,6 +209,22 @@ func MakeKey(toolName string, input json.RawMessage) (string, bool) {
 	}
 
 	return toolName, true
+}
+
+// EnsureModeScope resets the learned approvals whenever the permission mode
+// changes (#1281: the doc comment always claimed "Reset on mode switch" but
+// no caller existed - approvals learned in bypass/autopilot survived into
+// supervised and vice versa, silently changing what auto-approved).
+func (am *ApprovalMemory) EnsureModeScope(mode PermissionMode) {
+	if am == nil {
+		return
+	}
+	am.mu.Lock()
+	defer am.mu.Unlock()
+	if am.lastMode != mode {
+		am.lastMode = mode
+		am.store = make(map[string]*approvalEntry)
+	}
 }
 
 // ShouldAutoApprove returns true if the (tool, input) pattern has been

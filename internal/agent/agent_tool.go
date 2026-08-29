@@ -73,9 +73,19 @@ func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolC
 				IsError: true,
 			}
 		case permission.Ask:
+			// Mode-scoped memory (#1281): approvals learned under another
+			// permission mode must not survive a mode switch.
+			if a.approvalMemory != nil && policy != nil {
+				a.approvalMemory.EnsureModeScope(policy.Mode())
+			}
 			// Check learned approval memory: if the user has approved this
 			// pattern 3+ times, auto-approve to reduce prompt fatigue.
-			if a.approvalMemory != nil && a.approvalMemory.ShouldAutoApprove(tc.Name, tc.Arguments) {
+			// #1281: a memory hit is NOT authoritative for dangerous commands
+			// or exfiltration - danger detectors outrank learned patterns
+			// (the old path let `git push origin main` x3 later auto-run
+			// `git push origin master --force`, same two-token key).
+			if a.approvalMemory != nil && a.approvalMemory.ShouldAutoApprove(tc.Name, tc.Arguments) &&
+				!(policy != nil && policy.BlocksAutoApprove(tc.Name, tc.Arguments)) {
 				debug.Log("approval-memory", "auto-approved %s (learned pattern)", tc.Name)
 				// Fall through to execution - treated as Allow.
 				break

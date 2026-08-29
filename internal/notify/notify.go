@@ -1,7 +1,7 @@
 // Package notify provides cross-platform agent completion notifications.
 //
 // Research basis: Anthropic's 2026 Agentic Coding Trends Report identifies
-// "scaling human-agent oversight" as a top trend — developers manage multiple
+// "scaling human-agent oversight" as a top trend - developers manage multiple
 // concurrent agent sessions and need reliable alerts when long-running tasks
 // finish. Claude Code, Cursor, and Windsurf all provide configurable
 // completion notifications. This package centralizes notification logic so
@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os/exec"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/config"
@@ -72,7 +73,7 @@ func OnCompletion(cfg config.NotificationConfig, duration time.Duration, failed 
 // OnInputNeeded fires a notification when the agent is blocked waiting for
 // user input (approval, diff confirmation, or an interactive question).
 //
-// Unlike OnCompletion — which fires immediately when a run ends —
+// Unlike OnCompletion - which fires immediately when a run ends —
 // OnInputNeeded is designed to be called on a delay: the TUI schedules a
 // tick after InputBellDelay seconds. If the user hasn't responded by then,
 // the notification fires, alerting users who have switched to another window
@@ -116,17 +117,24 @@ func fireDesktop(title, body string) {
 
 	switch runtime.GOOS {
 	case "darwin":
-		// AppleScript display notification — no external dependencies.
+		// AppleScript display notification - no external dependencies.
 		script := fmt.Sprintf(`display notification %q with title %q`, body, title)
 		cmd = exec.Command("osascript", "-e", script)
 	case "linux":
 		// notify-send is available on most desktop Linux distributions.
 		cmd = exec.Command("notify-send", title, body)
 	case "windows":
-		// PowerShell toast notification — available on Windows 10+.
+		// PowerShell toast notification - available on Windows 10+.
+		// #1282: title/body are attacker-influenceable (e.g. approval
+		// questionnaire titles reach here via OnInputNeeded). Inside a
+		// single-quoted PowerShell string, the ONLY escape is doubling the
+		// quote ('' = literal ') - a raw quote closed the string and allowed
+		// arbitrary statement injection (`x'; Remove-Item ...; $n.BalloonTipText='`).
+		psTitle := strings.ReplaceAll(title, "'", "''")
+		psBody := strings.ReplaceAll(body, "'", "''")
 		psScript := fmt.Sprintf(
 			`[System.Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms'); $n=New-Object System.Windows.Forms.NotifyIcon; $n.BalloonTipTitle='%s'; $n.BalloonTipText='%s'; $n.Visible=$true; $n.ShowBalloonTip(5000)`,
-			title, body,
+			psTitle, psBody,
 		)
 		cmd = exec.Command("powershell", "-NoProfile", "-Command", psScript)
 	default:

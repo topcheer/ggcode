@@ -34,6 +34,11 @@ type PermissionPolicy interface {
 	// regardless of the tool-level policy. Used for run_command specifically.
 	IsDangerous(command string) bool
 
+	// BlocksAutoApprove reports whether a tool call must NOT be auto-approved
+	// from learned approval memory (#1281): dangerous commands and network
+	// exfiltration always need a human, even when the pattern was learned.
+	BlocksAutoApprove(toolName string, input json.RawMessage) bool
+
 	// AllowedPath returns true if the given file path is within the sandbox.
 	AllowedPath(path string) bool
 

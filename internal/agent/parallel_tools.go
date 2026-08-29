@@ -188,8 +188,12 @@ func (a *Agent) usePreExecutedWithPermission(ctx context.Context, tc provider.To
 				IsError: true,
 			}
 		case permission.Ask:
-			// Check learned approval memory first.
-			if a.approvalMemory != nil && a.approvalMemory.ShouldAutoApprove(tc.Name, tc.Arguments) {
+			// Mode-scoped memory + danger re-check, mirroring agent_tool.go (#1281).
+			if a.approvalMemory != nil && policy != nil {
+				a.approvalMemory.EnsureModeScope(policy.Mode())
+			}
+			if a.approvalMemory != nil && a.approvalMemory.ShouldAutoApprove(tc.Name, tc.Arguments) &&
+				!(policy != nil && policy.BlocksAutoApprove(tc.Name, tc.Arguments)) {
 				debug.Log("approval-memory", "auto-approved %s (learned pattern, parallel)", tc.Name)
 				break
 			}

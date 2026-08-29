@@ -127,10 +127,16 @@ func IsReadOnlyTool(name string) bool {
 // IsAlwaysAllowedTool returns true if the tool is safe to run without approval
 // in ALL permission modes, including plan mode. These are tools that have no
 // side effects on the local filesystem or system state — they communicate with
-// external services (LAN Chat, IM) or are purely informational.
+// external services (LAN Chat) or are purely informational.
+// #1283: "im" was removed from this list — im send_file reads and uploads
+// ARBITRARY local files to IM channels (prompt injection in plan mode could
+// exfiltrate screenshots/credential images with zero approval, and a user's
+// explicit tools.im deny rule was bypassed because this check ran first).
+// Benign im actions (status/mute/unmute/enable/disable) are still
+// fast-pathed, action-aware, in Check.
 func IsAlwaysAllowedTool(name string) bool {
 	switch name {
-	case "lanchat", "switch_mode", "im", "runtime":
+	case "lanchat", "switch_mode", "runtime":
 		return true
 	}
 	return false

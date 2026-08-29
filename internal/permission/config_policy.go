@@ -94,6 +94,14 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 	if IsAlwaysAllowedTool(toolName) {
 		return Allow, nil
 	}
+	// #1283: im is no longer blanket-approved — only its side-effect-free
+	// actions stay on the fast path. send/send_file must flow through the
+	// normal pipeline (deny rules first, then mode policy: plan denies,
+	// supervised asks) because send_file uploads arbitrary local files to
+	// external IM channels.
+	if toolName == "im" && imActionIsBenign(input) {
+		return Allow, nil
+	}
 	switch toolName {
 	case "ask_user", "save_memory", "delete_memory":
 		return Allow, nil
@@ -345,9 +353,43 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 	return Ask, nil
 }
 
+// imActionIsBenign reports whether an im tool call performs only local,
+// side-effect-free adapter management (#1283). Anything that can move data
+// out of the machine (send, send_file) or an unknown/missing action is NOT
+// benign — fail closed toward the normal approval pipeline.
+func imActionIsBenign(input json.RawMessage) bool {
+	var m struct {
+		Action string `json:"action"`
+	}
+	if err := json.Unmarshal(input, &m); err != nil {
+		return false
+	}
+	switch m.Action {
+	case "status", "mute", "unmute", "enable", "disable":
+		return true
+	}
+	return false
+}
+
 // IsDangerous returns true if the command is inherently dangerous.
 func (p *ConfigPolicy) IsDangerous(command string) bool {
 	return p.detector.IsDangerous(command)
+}
+
+// BlocksAutoApprove reports whether a tool call must NOT be auto-approved
+// from learned approval memory even when the pattern matches (#1281):
+// dangerous commands (danger-level detectors) and network exfiltration
+// always need a human in the loop. Consulted at the memory-hit site before
+// treating a learned approval as an Allow.
+func (p *ConfigPolicy) BlocksAutoApprove(toolName string, input json.RawMessage) bool {
+	if isCommandTool(toolName) {
+		for _, cmd := range extractCommandsForTool(toolName, input) {
+			if p.detector.IsDangerous(cmd) || IsNetworkExfiltrate(cmd) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // AllowedPath returns true if the path is within the sandbox.

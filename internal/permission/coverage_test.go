@@ -589,15 +589,22 @@ func TestIsReadOnlyTool_AllTools(t *testing.T) {
 // ============================================================================
 
 func TestIsAlwaysAllowedTool_All(t *testing.T) {
-	// Always allowed tools
+	// Always allowed tools. #1283: "im" removed - send_file uploads
+	// arbitrary local files to IM channels; only its benign actions are
+	// fast-pathed action-aware in ConfigPolicy.Check.
 	alwaysAllowed := []string{
-		"lanchat", "switch_mode", "im", "runtime",
+		"lanchat", "switch_mode", "runtime",
 	}
 
 	for _, tool := range alwaysAllowed {
 		if !IsAlwaysAllowedTool(tool) {
 			t.Errorf("IsAlwaysAllowedTool(%q) should be true", tool)
 		}
+	}
+
+	// im must NOT be blanket-approved anymore (#1283)
+	if IsAlwaysAllowedTool("im") {
+		t.Errorf("IsAlwaysAllowedTool(\"im\") should be false since #1283")
 	}
 
 	// Other tools should not be always allowed
