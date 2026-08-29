@@ -133,43 +133,58 @@ func buildImportGraph(workingDir string) (map[string][]string, string) {
 		return importGraphCache.data.graph, importGraphCache.data.modPath
 	}
 
-	// If no cache exists yet, do NOT block the caller — return nil and
-	// trigger a background build. The next call (after the background build
-	// completes) will have the cached graph. This prevents the verify hint
-	// path from stalling on `go list` for 1-3 seconds on first invocation.
+	// Kick a background build for BOTH the cold case and the stale case.
+	// #1296: previously the stale case just returned the old graph and the
+	// comment claimed a refresh would happen "on next tick" - but the next
+	// tick hit the exact same branches, so the graph was frozen for the
+	// process lifetime and new imports never entered the analysis.
+	kickImportGraphRebuildLocked(workingDir)
+
+	// If no usable cache exists, do NOT block the caller - return nil; the
+	// next call after the background build lands will see the graph. This
+	// prevents the verify-hint path from stalling on `go list` for 1-3s.
 	if importGraphCache.data.graph == nil || importGraphCache.dir != workingDir {
-		// Kick off background build (deduplicated via building flag).
-		if !importGraphCache.building {
-			importGraphCache.building = true
-			importGraphCache.dir = workingDir
-			go func() {
-				// The building flag must reset even when runGoList or the graph
-				// assembly panics, or every later call skips the rebuild forever.
-				defer func() {
-					importGraphCache.Lock()
-					importGraphCache.building = false
-					importGraphCache.Unlock()
-				}()
-				defer safego.Recover("agent.testImpact.build")
-				graph, modPath := runGoList(workingDir)
-				importGraphCache.Lock()
-				if graph != nil {
-					importGraphCache.data = importGraphEntry{
-						graph:   graph,
-						modPath: modPath,
-						builtAt: time.Now(),
-					}
-					debug.Log("test-impact", "import graph built in background: %d packages in %s", len(graph), workingDir)
-				}
-				importGraphCache.Unlock()
-			}()
-		}
 		return nil, ""
 	}
 
-	// Cache exists but is stale — return stale data immediately and refresh
-	// in the background on next tick. This avoids blocking on every TTL expiry.
+	// Cache exists but is stale - return stale data immediately; the
+	// refresh was already kicked above.
 	return importGraphCache.data.graph, importGraphCache.data.modPath
+}
+
+// kickImportGraphRebuildLocked starts a deduplicated background `go list`
+// build for workingDir. Callers must hold importGraphCache.
+func kickImportGraphRebuildLocked(workingDir string) {
+	if importGraphCache.building {
+		return
+	}
+	importGraphCache.building = true
+	go func() {
+		// The building flag must reset even when runGoList or the graph
+		// assembly panics, or every later call skips the rebuild forever.
+		defer func() {
+			importGraphCache.Lock()
+			importGraphCache.building = false
+			importGraphCache.Unlock()
+		}()
+		defer safego.Recover("agent.testImpact.build")
+		graph, modPath := runGoList(workingDir)
+		importGraphCache.Lock()
+		if graph != nil {
+			// #1296: bind dir to the data ONLY on success. Writing it at
+			// build START poisoned the cache on failure: dir=new + old graph
+			// meant a different workingDir (worktree/submodule switch in the
+			// same process) served the previous directory's graph as fresh.
+			importGraphCache.data = importGraphEntry{
+				graph:   graph,
+				modPath: modPath,
+				builtAt: time.Now(),
+			}
+			importGraphCache.dir = workingDir
+			debug.Log("test-impact", "import graph built in background: %d packages in %s", len(graph), workingDir)
+		}
+		importGraphCache.Unlock()
+	}()
 }
 
 // runGoList executes `go list ./...` and builds the import graph.
@@ -178,7 +193,11 @@ func runGoList(workingDir string) (map[string][]string, string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	args := []string{"list", "-f", "{{.ImportPath}}\x01{{join .Imports \",\"}}"}
+	// #1296: include TestImports and XTestImports edges - the TIA's most
+	// typical case is "library changed, run downstream packages' TESTS",
+	// and a package that only imports the changed package from its _test.go
+	// files was invisible to the old .Imports-only template.
+	args := []string{"list", "-f", "{{.ImportPath}}\x01{{join .Imports \",\"}}\x02{{join .TestImports \",\"}}\x03{{join .XTestImports \",\"}}"}
 	if tags := detectGoBuildTags(workingDir); len(tags) > 0 {
 		args = append(args, "-tags", strings.Join(tags, ","))
 	}
@@ -208,13 +227,35 @@ func runGoList(workingDir string) (map[string][]string, string) {
 			continue
 		}
 		importPath := parts[0]
-		if len(parts) == 2 && parts[1] != "" {
-			graph[importPath] = strings.Split(parts[1], ",")
-		} else {
-			graph[importPath] = nil
+		var imports []string
+		if len(parts) == 2 {
+			// #1296: merge Imports + TestImports + XTestImports (the graph
+			// feeds "who is affected by a change here", so test-only edges
+			// belong in the closure just as much as regular ones).
+			fields := strings.Split(parts[1], "\x02")
+			imports = appendNonEmpty(imports, strings.Split(fields[0], ","))
+			if len(fields) > 1 {
+				sub := strings.SplitN(fields[1], "\x03", 2)
+				imports = appendNonEmpty(imports, strings.Split(sub[0], ","))
+				if len(sub) > 1 {
+					imports = appendNonEmpty(imports, strings.Split(sub[1], ","))
+				}
+			}
 		}
+		graph[importPath] = imports
 	}
 	return graph, modPath
+}
+
+// appendNonEmpty appends the non-empty trimmed elements of src to dst.
+func appendNonEmpty(dst []string, src []string) []string {
+	for _, s := range src {
+		s = strings.TrimSpace(s)
+		if s != "" {
+			dst = append(dst, s)
+		}
+	}
+	return dst
 }
 
 // transitiveImporters returns package directories (relative to workingDir,
@@ -399,7 +440,14 @@ func impactScopedTestCommandWithDeps(workingDir string) string {
 	for i, d := range finalList {
 		parts[i] = "./" + d + "/"
 	}
-	cmd := "go test " + strings.Join(parts, " ")
+	// #1296: keep go list and go test tag semantics symmetric - a project
+	// gated by build tags (e.g. goolm across the whole tree) made the bare
+	// command fail loudly, sending the agent after a guaranteed failure.
+	cmd := "go test"
+	if tags := detectGoBuildTags(workingDir); len(tags) > 0 {
+		cmd += " -tags " + strings.Join(tags, ",")
+	}
+	cmd += " " + strings.Join(parts, " ")
 	if omittedImporters > 0 {
 		cmd += fmt.Sprintf(" # +%d importers omitted", omittedImporters)
 	} else if len(allDirs) > 20 {
