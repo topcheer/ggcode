@@ -1158,6 +1158,21 @@ func estimateToolDefinitionOverhead(defs []provider.ToolDefinition) int {
 // RunStreamWithContent runs the agent loop and emits UI events for complete model turns.
 func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.ContentBlock, onEvent func(provider.StreamEvent)) (err error) {
 	debug.Log("agent", "RunStreamWithContent START content_blocks=%d", len(content))
+	// Main-goroutine panic containment (1b of the v1.3.224 crash follow-up).
+	// Registered FIRST so it unwinds LAST (defer LIFO): the function's other
+	// defers (journal MarkCompleted, stats finalize, session persistence) all
+	// run normally during unwinding, then this converts the panic into a
+	// returned error - callers (TUI submit, pipe mode) already render err
+	// paths, so the session survives a panicking run instead of dying with
+	// the process. The stack goes to ~/.ggcode/crash/ for diagnosis.
+	// Lock-free by necessity: during unwinding the agent's mutexes may be
+	// held by the panicking frames.
+	defer func() {
+		if r := recover(); r != nil {
+			path := WriteCrashLog("agent", r)
+			err = fmt.Errorf("agent run panicked: %v (stack saved to %s)", r, path)
+		}
+	}()
 	// Stop any background cache-keepalive pings — the user is sending a new
 	// message, so the cache will be refreshed naturally by this request.
 	// Write run-start journal entry for crash detection. If the process dies

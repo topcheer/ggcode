@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/wailsapp/wails/v2"
@@ -86,6 +87,20 @@ func redirectStderr() {
 var assets embed.FS
 
 func main() {
+	// Top-level panic containment (1a of the v1.3.224 crash follow-up):
+	// the Wails run loop, tray callbacks and any non-safego path panic here
+	// previously took the whole desktop app down with nothing on disk.
+	// Crash log goes to ~/.ggcode/crash/; stderr is a pipe to debug.Log at
+	// this point, so the crash note also goes to the debug ring for
+	// post-mortem (desktop has no terminal to print to).
+	defer func() {
+		if r := recover(); r != nil {
+			path := agent.WriteCrashLog("desktop", r)
+			log.Printf("ggcode desktop crashed: %v (panic log: %s)", r, path)
+			os.Exit(1)
+		}
+	}()
+
 	// Redirect os.Stderr at the file descriptor level to prevent
 	// third-party libraries from corrupting terminal output.
 	redirectStderr()

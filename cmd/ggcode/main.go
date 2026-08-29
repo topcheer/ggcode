@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
@@ -105,6 +106,22 @@ func shouldRedirectStderr(args []string) bool {
 }
 
 func main() {
+	// Top-level panic containment (1a of the v1.3.224 crash follow-up):
+	// every launched goroutine is safego-protected, but this main goroutine
+	// (cobra execution, TUI event loop via tea.Run) was bare - a panic here
+	// died with nothing on disk. Registered BEFORE defer debug.Close() so it
+	// unwinds first (LIFO): write the crash log, restore stderr, exit
+	// nonzero. os.Exit skips remaining defers by design on a crash path.
+	defer func() {
+		if r := recover(); r != nil {
+			path := agent.WriteCrashLog("cli", r)
+			if origStderr != nil {
+				os.Stderr = origStderr
+			}
+			fmt.Fprintf(os.Stderr, "ggcode crashed: %v\npanic log: %s\nPlease report this with the log file if it repeats.\n", r, path)
+			os.Exit(1)
+		}
+	}()
 	defer debug.Close()
 
 	// Redirect os.Stderr at the file descriptor level. This catches ALL
