@@ -181,7 +181,7 @@ func (t FileOps) Execute(ctx context.Context, input json.RawMessage) (Result, er
 			out.Errors++
 		default:
 			// Unknown status (e.g. panic mid-op recovered with a zero-value
-			// result whose Status is "") — count it as an error so the
+			// result whose Status is "") - count it as an error so the
 			// summary never claims success for an unaccounted op.
 			out.Errors++
 		}
@@ -297,32 +297,80 @@ func isCrossDeviceError(err error) bool {
 	return strings.Contains(msg, "cross-device") || strings.Contains(msg, "EXDEV")
 }
 
-// copyRecursive copies a file or directory tree from src to dst.
-// Used as a fallback when os.Rename fails due to cross-device constraints.
-func copyRecursive(src, dst string) error {
-	info, err := os.Stat(src)
-	if err != nil {
-		return err
-	}
-	if info.IsDir() {
-		if err := os.MkdirAll(dst, info.Mode()); err != nil {
-			return err
-		}
-		entries, err := os.ReadDir(src)
+// copyDirEntry copies one child of a directory tree during copyDirTree.
+// Symlinks are recreated as symlinks (os.Symlink) instead of followed
+// (#1323: Stat followed ancestor-pointing links into infinite recursion
+// - unbounded disk writes or an unrecoverable stack-overflow fatal).
+// A dangling link yields a plain skip note rather than a ReadFile error.
+// maxCopyDepth bounds pathological directory nesting during recursive
+// copy (#1323 defense-in-depth alongside cycle detection).
+const maxCopyDepth = 64
+
+func copyDirEntry(src, dst string, info os.FileInfo, depth int, visited map[string]bool) error {
+	if info.Mode()&os.ModeSymlink != 0 {
+		target, err := os.Readlink(src)
 		if err != nil {
 			return err
 		}
-		for _, entry := range entries {
-			if err := copyRecursive(filepath.Join(src, entry.Name()), filepath.Join(dst, entry.Name())); err != nil {
-				return err
-			}
-		}
-		return nil
+		return os.Symlink(target, dst)
 	}
-	// Regular file (or symlink: we copy the target content).
+	if info.IsDir() {
+		return copyDirTree(src, dst, info, depth, visited)
+	}
 	data, err := os.ReadFile(src)
 	if err != nil {
 		return err
 	}
 	return os.WriteFile(dst, data, info.Mode())
+}
+
+// copyDirTree copies one directory level. Realpath-based cycle detection
+// (#1323) guards against directory symlink loops that survive even Lstat
+// handling at the entry level (e.g. bind-mount-like constructs); a depth
+// cap bounds pathological trees.
+func copyDirTree(src, dst string, info os.FileInfo, depth int, visited map[string]bool) error {
+	if depth > maxCopyDepth {
+		return fmt.Errorf("copy: directory tree exceeds depth limit of %d at %s", maxCopyDepth, src)
+	}
+	real, err := filepath.EvalSymlinks(src)
+	if err != nil {
+		return err
+	}
+	if visited[real] {
+		return fmt.Errorf("copy: symlink cycle detected at %s (already copied %s)", src, real)
+	}
+	visited[real] = true
+	defer delete(visited, real)
+
+	if err := os.MkdirAll(dst, info.Mode()); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		child := filepath.Join(src, entry.Name())
+		childInfo, err := os.Lstat(child) // Lstat: do not follow symlinks (#1323)
+		if err != nil {
+			return err
+		}
+		if err := copyDirEntry(child, filepath.Join(dst, entry.Name()), childInfo, depth+1, visited); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// copyRecursive copies a file or directory tree from src to dst.
+// Used as a fallback when os.Rename fails due to cross-device constraints.
+func copyRecursive(src, dst string) error {
+	info, err := os.Lstat(src)
+	if err != nil {
+		return err
+	}
+	if info.IsDir() {
+		return copyDirTree(src, dst, info, 0, make(map[string]bool))
+	}
+	return copyDirEntry(src, dst, info, 0, nil)
 }

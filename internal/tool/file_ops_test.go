@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestFileOps_DeleteFile(t *testing.T) {
@@ -414,4 +415,50 @@ func mustJSON(t *testing.T, v any) json.RawMessage {
 		t.Fatal(err)
 	}
 	return data
+}
+
+// #1323: copyRecursive followed symlinks (Stat) with no cycle detection;
+// a link pointing back at an ancestor recursed forever - unbounded disk
+// writes or an unrecoverable stack-overflow fatal on cross-device move.
+func TestCopyRecursiveSymlinkCycle(t *testing.T) {
+	root := t.TempDir()
+	src := filepath.Join(root, "src")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "f.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Ancestor-pointing link inside the tree.
+	if err := os.Symlink(src, filepath.Join(src, "loop")); err != nil {
+		t.Skipf("symlinks unsupported: %v", err)
+	}
+	// Parent link too (.. style).
+	if err := os.Symlink(root, filepath.Join(src, "up")); err != nil {
+		t.Fatal(err)
+	}
+
+	dst := filepath.Join(root, "dst")
+	done := make(chan error, 1)
+	go func() { done <- copyRecursive(src, dst) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("cycle copy failed: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("copyRecursive did not terminate - symlink cycle infinite recursion")
+	}
+	// Symlinks must be recreated as links, not materialized copies.
+	fi, err := os.Lstat(filepath.Join(dst, "loop"))
+	if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("loop link not recreated as symlink: %v", err)
+	}
+	target, err := os.Readlink(filepath.Join(dst, "loop"))
+	if err != nil || target != src {
+		t.Errorf("loop link target wrong: %q err=%v", target, err)
+	}
+	if data, _ := os.ReadFile(filepath.Join(dst, "f.txt")); string(data) != "x" {
+		t.Error("regular file content lost")
+	}
 }
