@@ -140,8 +140,25 @@ func (e *Encoder) WriteFrame(data []byte) error {
 
 // Read reads encoded FLV data from the encoder stdout.
 // Implements io.Reader for fan-out consumers.
+// #1294: the monitor goroutine sets e.stdout = nil after reaping ffmpeg.
+// Snapshot the reader under the lock (never hold the lock across the
+// blocking read — the monitor needs it to shut down) and fail cleanly
+// once nil. A racing nil read here was a data race + nil-deref panic in
+// the broadcaster, which safego swallowed into a silent dead stream.
 func (e *Encoder) Read(p []byte) (int, error) {
-	return e.stdout.Read(p)
+	e.mu.Lock()
+	stdout := e.stdout
+	e.mu.Unlock()
+	if stdout == nil {
+		return 0, io.EOF
+	}
+	n, err := stdout.Read(p)
+	if err != nil {
+		// Process exited (monitor closed stdout): surface EOF so the
+		// broadcaster loop terminates on the reader, not only on stopCh.
+		return n, err
+	}
+	return n, nil
 }
 
 // Stop signals the encoder to finish and waits for the process to exit.

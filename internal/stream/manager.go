@@ -113,19 +113,27 @@ func (m *Manager) Stop() {
 	}
 
 	m.running = false
-	close(m.stopCh)
 
-	// Stop all targets
-	for _, t := range m.targets {
-		t.Stop()
-	}
-
-	// Stop encoder
+	// #1293: stop the ENCODER FIRST. The broadcaster is the sole reader of
+	// the encoder's stdout; closing stopCh first makes it exit immediately,
+	// leaving ffmpeg's flush (stdin EOF -> tail frames + FLV trailer)
+	// writing into a full pipe with no reader - it blocks, hits the 5s
+	// grace timeout, and gets Killed, truncating the recording exactly as
+	// #1292 intended to fix. With the encoder reaped first, the broadcaster
+	// drains the flush, then sees EOF and exits on its own; stopCh remains
+	// as a belt-and-braces signal for the no-encoder case.
 	m.encoderMu.RLock()
 	enc := m.encoder
 	m.encoderMu.RUnlock()
 	if enc != nil {
 		enc.Stop()
+	}
+
+	close(m.stopCh)
+
+	// Stop all targets
+	for _, t := range m.targets {
+		t.Stop()
 	}
 
 	// stopped
