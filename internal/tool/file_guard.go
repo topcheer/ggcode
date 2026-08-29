@@ -112,12 +112,18 @@ func matchProtectedPattern(relPath, slashPath, pattern string) bool {
 			relPath+"/" == prefix {
 			return true
 		}
-		// Match as any path component (e.g. ".git/" matches "subdir/.git/refs")
+		// Match as any path component (e.g. ".git/" matches "subdir/.git/refs").
+		// #1322 (Windows): when the judged path is outside the working dir,
+		// relPath falls back to the absolute path, which keeps OS-native
+		// separators - on Windows that is '\' so splitting by "/" alone finds
+		// no components and the guard silently fails OPEN. Check the
+		// ToSlash-normalized slashPath components too.
 		dirName := strings.TrimSuffix(pat, "/")
-		segments := strings.Split(relPath, "/")
-		for _, seg := range segments {
-			if seg == dirName {
-				return true
+		for _, p := range []string{relPath, slashPath} {
+			for _, seg := range strings.Split(p, "/") {
+				if seg == dirName {
+					return true
+				}
 			}
 		}
 		return false
