@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
@@ -80,6 +81,11 @@ func expandURLsWithOpts(ctx context.Context, input string, allowPrivate bool) st
 	resCh := make(chan indexedResult, len(urls))
 	for i, u := range urls {
 		go func(idx int, rawURL string) {
+			// fetchURLContent walks the HTTP stack and StripHTML over fully
+			// untrusted page content - a parser panic here must not kill the
+			// TUI. On panic no result is sent; the collector's deadline
+			// (fetchTimeout+5s) bounds the wait for this slot.
+			defer safego.Recover("tui.urlExpand.fetch")
 			text, err := fetchURLContent(ctx, rawURL, allowPrivate)
 			resCh <- indexedResult{idx: idx, res: fetchResult{url: rawURL, text: text, err: err}}
 		}(i, u)

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 // FailoverTrigger is the reason a failover was activated.
@@ -283,6 +284,10 @@ func (f *FallbackProvider) startRecoveryProberLocked() {
 		interval = defaultProbeInterval
 	}
 	go func() {
+		// The prober autonomously drives a full provider Chat call every
+		// interval against a known-degraded endpoint; malformed relay
+		// responses must degrade the probe, not kill the process.
+		defer safego.Recover("provider.fallback.recoveryProber")
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
@@ -477,7 +482,11 @@ func (f *FallbackProvider) watchStreamForFailover(ctx context.Context, failedIdx
 func (f *FallbackProvider) watchStreamForFailoverHops(ctx context.Context, failedIdx int, stream <-chan StreamEvent, messages []Message, tools []ToolDefinition, hopsLeft int) <-chan StreamEvent {
 	out := make(chan StreamEvent)
 	go func() {
+		// defer order (LIFO): Recover is registered after the close defer,
+		// so on panic it runs first and out is still closed - the consumer
+		// sees a terminated stream instead of a hung channel.
 		defer close(out)
+		defer safego.Recover("provider.fallback.streamWatcher")
 		sawOutput := false
 		resetOnSuccess := func() {
 			if sawOutput {

@@ -231,6 +231,11 @@ func extractJSONStringFieldBrief(raw, key string) string {
 
 func truncateBrief(s string, max int) string {
 	s = strings.TrimSpace(s)
+	if max < 4 {
+		// Cannot fit an ellipsis; defensive against future callers passing
+		// tiny/negative budgets (s[:max-3] would slice out of range).
+		return s
+	}
 	if len(s) > max {
 		return s[:max-3] + "..."
 	}

@@ -1084,9 +1084,9 @@ func (rr *replRestartRequester) RequestRestart(debugMode bool) {
 	}
 	// Arm the restart. The tool result is persisted synchronously in the agent
 	// loop before this goroutine runs, so arming immediately is safe.
-	go func() {
+	go safego.Run("tui.restart.arm", func() {
 		rr.repl.sendProgramMsgs(armRestartMsg{debug: debugMode})
-	}()
+	})
 }
 
 // SetSendMessageTool registers the send_message tool for agent communication.

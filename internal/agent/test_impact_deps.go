@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 const importGraphTTL = 5 * time.Minute
@@ -142,9 +143,16 @@ func buildImportGraph(workingDir string) (map[string][]string, string) {
 			importGraphCache.building = true
 			importGraphCache.dir = workingDir
 			go func() {
+				// The building flag must reset even when runGoList or the graph
+				// assembly panics, or every later call skips the rebuild forever.
+				defer func() {
+					importGraphCache.Lock()
+					importGraphCache.building = false
+					importGraphCache.Unlock()
+				}()
+				defer safego.Recover("agent.testImpact.build")
 				graph, modPath := runGoList(workingDir)
 				importGraphCache.Lock()
-				importGraphCache.building = false
 				if graph != nil {
 					importGraphCache.data = importGraphEntry{
 						graph:   graph,

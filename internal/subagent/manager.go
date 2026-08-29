@@ -726,6 +726,16 @@ func (m *Manager) Cancel(id string) bool {
 }
 
 // closeDone closes the done channel if not already closed. Caller must hold sa.mu.
+// CurrentStatus returns the agent's status under its lock. Status is
+// mutated from multiple goroutines (Cancel/Complete/watchdog); readers
+// outside the package must use this accessor instead of reading the field
+// directly - a bare read races with locked writes.
+func (sa *SubAgent) CurrentStatus() Status {
+	sa.mu.Lock()
+	defer sa.mu.Unlock()
+	return sa.Status
+}
+
 func (sa *SubAgent) closeDone() {
 	if sa.done != nil {
 		select {

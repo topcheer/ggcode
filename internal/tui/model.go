@@ -672,7 +672,7 @@ func policyMode(policy permission.PermissionPolicy) permission.PermissionMode {
 
 func (m Model) Init() tea.Cmd {
 	// Clean up stale temp images from previous sessions (best-effort).
-	go cleanupOldTempImages()
+	go safego.Run("tui.cleanupTempImages", cleanupOldTempImages)
 
 	cmds := []tea.Cmd{
 		func() tea.Msg { return textarea.Blink() },

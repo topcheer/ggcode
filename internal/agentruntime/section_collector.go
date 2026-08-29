@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 // SectionCollector runs a background goroutine that periodically collects
@@ -125,8 +126,12 @@ func InitGlobalSectionCollector(workingDir string) {
 	// keeps filling the cache in the background.
 	refreshDone := make(chan struct{})
 	go func() {
+		// LIFO: Recover (registered last) runs first on panic, so the close
+		// below still executes and the startup select never blocks past the
+		// budget on a panicking refresh.
+		defer close(refreshDone)
+		defer safego.Recover("agentruntime.sectionCollector.firstRefresh")
 		sc.refresh()
-		close(refreshDone)
 	}()
 	select {
 	case <-refreshDone:
@@ -190,6 +195,10 @@ func (sc *SectionCollector) Stop() {
 // sectionIdleInterval to reduce idle-time I/O.
 func (sc *SectionCollector) loop() {
 	defer close(sc.done)
+	// Registered after the close defer, so on a panic Recover runs first
+	// (LIFO) and sc.done is still closed - Stop() cannot deadlock on a
+	// crashed loop.
+	defer safego.Recover("agentruntime.sectionCollector.loop")
 	interval := sectionRefreshInterval
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -200,7 +209,10 @@ func (sc *SectionCollector) loop() {
 		case <-ticker.C:
 			sc.refresh()
 			newInterval := sectionRefreshInterval
-			if sc.idle {
+			sc.mu.RLock()
+			idle := sc.idle
+			sc.mu.RUnlock()
+			if idle {
 				newInterval = sectionIdleInterval
 			}
 			if newInterval != interval {
@@ -215,7 +227,7 @@ func (sc *SectionCollector) loop() {
 // Call this after file edits or git operations to get fresh data without
 // waiting for the next tick.
 func (sc *SectionCollector) RefreshNow() {
-	go sc.refresh()
+	go safego.Run("agentruntime.sectionCollector.refreshNow", sc.refresh)
 }
 
 // Snapshot returns a point-in-time copy of all cached sections.
@@ -247,18 +259,22 @@ func (sc *SectionCollector) refresh() {
 		wg                                                                    sync.WaitGroup
 	)
 	wg.Add(7)
-	go func() { defer wg.Done(); overview = projectOverviewSection(sc.working) }()
-	go func() { defer wg.Done(); modified = computeModifiedFilesSection(sc.working) }()
-	go func() { defer wg.Done(); commands = projectCommandsSection(sc.working) }()
-	go func() { defer wg.Done(); toolchain = toolchainSection(sc.working) }()
-	go func() {
+	// Each section goroutine runs under safego.Run: a panic in one section's
+	// parsing (go.mod / git output / directory walk over untrusted trees)
+	// must degrade that section, not kill the process. wg.Done still fires
+	// (deferred inside fn) so refresh's bounded wait is unaffected.
+	go safego.Run("section.overview", func() { defer wg.Done(); overview = projectOverviewSection(sc.working) })
+	go safego.Run("section.modified", func() { defer wg.Done(); modified = computeModifiedFilesSection(sc.working) })
+	go safego.Run("section.commands", func() { defer wg.Done(); commands = projectCommandsSection(sc.working) })
+	go safego.Run("section.toolchain", func() { defer wg.Done(); toolchain = toolchainSection(sc.working) })
+	go safego.Run("section.symbols", func() {
 		defer wg.Done()
 		symbols = buildGoPackageSymbolsSection(sc.working)
 		symbols += buildTSSymbolsSection(sc.working)
 		symbols += buildPythonSymbolsSection(sc.working)
-	}()
-	go func() { defer wg.Done(); deps = buildPackageDepsSection(sc.working) }()
-	go func() { defer wg.Done(); recentCommits = computeRecentCommitsSection(sc.working) }()
+	})
+	go safego.Run("section.deps", func() { defer wg.Done(); deps = buildPackageDepsSection(sc.working) })
+	go safego.Run("section.recentCommits", func() { defer wg.Done(); recentCommits = computeRecentCommitsSection(sc.working) })
 
 	// The background loop and Stop() must never deadlock on a hung section:
 	// the goroutines write shared locals and exit on their own. But refresh()
