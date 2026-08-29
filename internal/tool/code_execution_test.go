@@ -267,3 +267,33 @@ func TestCodeExecution_WriteToolsExcluded(t *testing.T) {
 		t.Errorf("expected write_file to be inaccessible, got: %s", result.Content)
 	}
 }
+
+// #1316: a runaway console.log loop must be interrupted as soon as the
+// captured output hits the 1MB hard cap - not accumulate host memory for
+// the full 30s timeout window (the VM is process-embedded, so an
+// unbounded Builder was an unbounded host allocation).
+func TestCodeExecution_RunawayConsoleLogInterrupted(t *testing.T) {
+	reg := NewRegistry()
+	ce := CodeExecution{Registry: reg}
+
+	start := time.Now()
+	result, err := ce.Execute(context.Background(), json.RawMessage(
+		`{"code": "while (true) { console.log('xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'); }"}`))
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("unexpected tool error: %v", err)
+	}
+	// The loop MUST fail: either the interrupt surfaced as an execution
+	// error or the result is an error result with the limit message.
+	if !result.IsError {
+		t.Fatalf("expected error result from runaway loop, got: %.200s", result.Content)
+	}
+	if !strings.Contains(result.Content, "bytes limit") {
+		t.Errorf("expected stdout-limit message, got: %.200s", result.Content)
+	}
+	// Interrupt must fire at the 1MB cap, far below the 30s timeout.
+	if elapsed > 10*time.Second {
+		t.Fatalf("interrupt took %v - cap not enforced during execution", elapsed)
+	}
+}

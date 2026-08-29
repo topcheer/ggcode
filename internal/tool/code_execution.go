@@ -124,6 +124,14 @@ const codeExecTimeout = 30 * time.Second
 // model writes a tight loop with console.log.
 const maxStdoutLen = 256 * 1024 // 256 KB
 
+// maxStdoutHardLen is enforced DURING execution (#1316): once captured
+// output exceeds it, the VM is interrupted immediately. The old flow only
+// truncated at maxStdoutLen after Execute returned, so a
+// `while(true)console.log(...)` loop kept appending to the Builder for the
+// full 30s timeout window - GBs of host memory - in a process-embedded
+// (non-subprocess) VM with no isolation.
+const maxStdoutHardLen = 1 << 20 // 1 MB
+
 func (c CodeExecution) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
 	var args struct {
 		Code string `json:"code"`
@@ -189,19 +197,27 @@ func (c CodeExecution) runCode(ctx context.Context, code string) (*execResult, e
 	// Inject console object.
 	consoleObj := vm.NewObject()
 	consoleObj.Set("log", func(call goja.FunctionCall) goja.Value {
-		writeConsoleOutput(&stdout, call.Arguments)
+		if writeConsoleOutput(&stdout, call.Arguments) {
+			vm.Interrupt(fmt.Sprintf("console output exceeded %d bytes limit", maxStdoutHardLen))
+		}
 		return goja.Undefined()
 	})
 	consoleObj.Set("error", func(call goja.FunctionCall) goja.Value {
-		writeConsoleOutput(&stdout, call.Arguments)
+		if writeConsoleOutput(&stdout, call.Arguments) {
+			vm.Interrupt(fmt.Sprintf("console output exceeded %d bytes limit", maxStdoutHardLen))
+		}
 		return goja.Undefined()
 	})
 	consoleObj.Set("warn", func(call goja.FunctionCall) goja.Value {
-		writeConsoleOutput(&stdout, call.Arguments)
+		if writeConsoleOutput(&stdout, call.Arguments) {
+			vm.Interrupt(fmt.Sprintf("console output exceeded %d bytes limit", maxStdoutHardLen))
+		}
 		return goja.Undefined()
 	})
 	consoleObj.Set("info", func(call goja.FunctionCall) goja.Value {
-		writeConsoleOutput(&stdout, call.Arguments)
+		if writeConsoleOutput(&stdout, call.Arguments) {
+			vm.Interrupt(fmt.Sprintf("console output exceeded %d bytes limit", maxStdoutHardLen))
+		}
 		return goja.Undefined()
 	})
 	vm.Set("console", consoleObj)
@@ -342,7 +358,14 @@ func (c CodeExecution) runCode(ctx context.Context, code string) (*execResult, e
 }
 
 // writeConsoleOutput appends formatted arguments to the stdout builder.
-func writeConsoleOutput(stdout *strings.Builder, args []goja.Value) {
+// It returns true when the captured output has reached the hard cap
+// (#1316): callers must then vm.Interrupt so a tight console.log loop
+// cannot accumulate host memory for the whole timeout window.
+func writeConsoleOutput(stdout *strings.Builder, args []goja.Value) (overflow bool) {
+	// Already at/over the cap: append nothing further.
+	if stdout.Len() >= maxStdoutHardLen {
+		return true
+	}
 	for i, arg := range args {
 		if i > 0 {
 			stdout.WriteString(" ")
@@ -368,6 +391,7 @@ func writeConsoleOutput(stdout *strings.Builder, args []goja.Value) {
 		}
 	}
 	stdout.WriteString("\n")
+	return stdout.Len() >= maxStdoutHardLen
 }
 
 // resolvePromise creates a resolved goja Promise with the given value.
