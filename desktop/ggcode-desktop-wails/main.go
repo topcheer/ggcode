@@ -20,6 +20,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options/mac"
 	"github.com/wailsapp/wails/v2/pkg/options/windows"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
+	goruntime "runtime"
 )
 
 // appInstance holds a reference to the running App for tray callbacks.
@@ -158,11 +159,23 @@ func main() {
 		OnBeforeClose: func(ctx context.Context) (prevent bool) {
 			// Close-to-tray: hide the window instead of quitting.
 			// The user can re-open via the tray icon or fully quit via tray menu.
-			// Only intercept the first close attempt; a second close within 3s
-			// actually quits (to avoid trapping users who don't want tray mode).
+			//
+			// Non-macOS: initSystemTray is a no-op (tray_other.go) - there is
+			// NO tray icon to re-open or quit from, so intercepting here would
+			// strand the window with no exit path. Quit for real instead.
+			if goruntime.GOOS != "darwin" {
+				return false
+			}
+			// Intercept only the FIRST close attempt of a visible window.
+			// The original 3s double-close window was unreachable in practice:
+			// the first close HIDES the window, so a second click requires a
+			// tray re-open (>3s) and got intercepted again - X could never
+			// quit. Now: first X hides to tray; any subsequent X (after the
+			// user re-opens) quits deterministically. handleTrayNewSession
+			// re-arms the flag so each re-open gets exactly one hide.
 			now := time.Now()
-			if prev := app.lastCloseAttempt.Load(); prev != nil && now.Sub(*prev) < 3*time.Second {
-				// Double close within 3s -> actually quit
+			if app.lastCloseAttempt.Load() != nil {
+				// Second close attempt -> actually quit
 				return false
 			}
 			app.lastCloseAttempt.Store(&now) // #700: atomic (4 goroutines touch this)
