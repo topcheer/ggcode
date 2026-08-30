@@ -177,6 +177,19 @@ func discoverModelsFromURL(ctx context.Context, client *http.Client, endpointURL
 				return nil, fmt.Errorf("GET %s (page %d): %w", endpointURL, page+1, perr)
 			}
 			resp = pageResp
+			// #1338: check the status BEFORE decoding. A 429/500 on page 2+
+			// returns a JSON error body that decodes cleanly into an empty
+			// payload (nil models, empty token) - the loop then "succeeded"
+			// with page-1 models only and the truncated list got cached to
+			// disk for 6h. Mirror the first-page check exactly.
+			if pageResp.StatusCode < 200 || pageResp.StatusCode >= 300 {
+				body, _ := io.ReadAll(io.LimitReader(pageResp.Body, 512))
+				detail := strings.TrimSpace(string(body))
+				if detail == "" {
+					return nil, fmt.Errorf("GET %s (page %d): status %d", endpointURL, page+1, pageResp.StatusCode)
+				}
+				return nil, fmt.Errorf("GET %s (page %d): status %d: %s", endpointURL, page+1, pageResp.StatusCode, detail)
+			}
 			var pagePayload modelDiscoveryResponse
 			if derr := json.NewDecoder(pageResp.Body).Decode(&pagePayload); derr != nil {
 				return nil, fmt.Errorf("decode %s (page %d): %w", endpointURL, page+1, derr)
