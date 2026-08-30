@@ -954,6 +954,21 @@ type cryptoStateStore struct {
 	adapter *matrixAdapter
 }
 
+// GetHistoryVisibility satisfies the mautrix v0.30 crypto.StateStore
+// interface. The OlmMachine uses it to decide key-sharing scope; unknown
+// rooms fall back to Matrix's default ("shared"), matching mautrix's own
+// DefaultHistoryVisibility handling.
+func (s *cryptoStateStore) GetHistoryVisibility(ctx context.Context, roomID id.RoomID) (*event.HistoryVisibilityEventContent, error) {
+	if s.adapter.client == nil {
+		return &event.HistoryVisibilityEventContent{HistoryVisibility: event.HistoryVisibilityShared}, nil
+	}
+	var hv event.HistoryVisibilityEventContent
+	if err := s.adapter.client.StateEvent(ctx, roomID, event.StateHistoryVisibility, "", &hv); err != nil || hv.HistoryVisibility == "" {
+		return &event.HistoryVisibilityEventContent{HistoryVisibility: event.HistoryVisibilityShared}, nil
+	}
+	return &hv, nil
+}
+
 func (s *cryptoStateStore) IsEncrypted(ctx context.Context, roomID id.RoomID) (bool, error) {
 	if s.adapter.client == nil {
 		return false, nil
