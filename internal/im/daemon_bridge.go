@@ -1290,16 +1290,29 @@ func (b *DaemonBridge) Subscribe(fn func(provider.StreamEvent)) func() {
 	})
 
 	b.eventSubMu.Lock()
-	defer b.eventSubMu.Unlock()
 	b.eventSubs = append(b.eventSubs, sub)
 	idx := len(b.eventSubs) - 1
+	b.eventSubMu.Unlock()
 	return func() {
+		// #1303: detach and close under the lock, then wait for the
+		// forwarder to drain OUTSIDE it - draining executes the subscriber
+		// callback up to 256 times synchronously; waiting on it while
+		// holding the write lock stalls every broadcastEvent RLock, which
+		// sits on the agent's synchronous emit path. A permanently blocked
+		// callback would have deadlocked ALL subscribers forever.
 		b.eventSubMu.Lock()
-		defer b.eventSubMu.Unlock()
-		if b.eventSubs[idx] != nil {
-			close(b.eventSubs[idx].ch)
-			<-b.eventSubs[idx].done // wait for drain
-			b.eventSubs[idx] = nil
+		sub := b.eventSubs[idx]
+		b.eventSubs[idx] = nil
+		if sub != nil {
+			close(sub.ch)
+		}
+		b.eventSubMu.Unlock()
+		if sub != nil {
+			select {
+			case <-sub.done:
+			case <-time.After(5 * time.Second):
+				debug.Log("daemon-bridge", "webchat subscriber drain timed out after close")
+			}
 		}
 	}
 }
