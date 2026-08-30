@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -401,5 +402,54 @@ func TestSwarmTaskToolDescriptionsClarifyAssignmentFlow(t *testing.T) {
 	completeDesc := SwarmTaskCompleteTool{}.Description()
 	if !strings.Contains(completeDesc, "updates board state only") || !strings.Contains(completeDesc, "teammate_results") {
 		t.Fatalf("swarm_task_complete description should clarify board/output separation, got %q", completeDesc)
+	}
+}
+
+// #1343: claim must refuse tasks directly assigned to a different
+// teammate (poller-parity guard) while allowing the assignee itself.
+func TestSwarmTaskClaimRejectsAssignedToOther(t *testing.T) {
+	mgr := swarmTestManager(t)
+	team := mgr.CreateTeam("team-a", "leader")
+	createTool := SwarmTaskCreateTool{Manager: mgr}
+	ci, _ := json.Marshal(map[string]interface{}{"team_id": team.ID, "subject": "assigned task"})
+	cr, _ := createTool.Execute(context.Background(), ci)
+	var created struct {
+		ID string `json:"id"`
+	}
+	json.Unmarshal([]byte(cr.Content), &created)
+	tm, err := mgr.EnsureTaskManager(team.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tt := tm.Create("assigned task", "do it", "tm-2", map[string]string{"assignee": "tm-2"})
+	if tt.ID == "" {
+		t.Fatal("setup: no task created")
+	}
+
+	tool := SwarmTaskClaimTool{Manager: mgr}
+	input := func(owner string) json.RawMessage {
+		return json.RawMessage(fmt.Sprintf(`{"team_id":%q,"task_id":%q,"owner":%q,"description":"x"}`, team.ID, tt.ID, owner))
+	}
+
+	// Another teammate must be rejected.
+	res, err := tool.Execute(context.Background(), input("tm-3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected claim rejection for task assigned to tm-2, got: %s", res.Content)
+	}
+	updated, _ := tm.Get(tt.ID)
+	if updated.Status == task.StatusInProgress {
+		t.Fatal("rejected claim must not move the task to in_progress")
+	}
+
+	// The assignee itself (and unassigned tasks) still claim normally.
+	res, err = tool.Execute(context.Background(), input("tm-2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError {
+		t.Fatalf("assignee claim should succeed, got: %s", res.Content)
 	}
 }

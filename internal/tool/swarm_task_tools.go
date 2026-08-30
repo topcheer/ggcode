@@ -255,12 +255,23 @@ func (t SwarmTaskClaimTool) Execute(_ context.Context, input json.RawMessage) (R
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
 
-	inProgress := task.TaskStatus(task.StatusInProgress)
+	// #1343: tasks created with an assignee are direct-delivered to that
+	// teammate's inbox. The poller (idle_runner) already skips them; the
+	// claim tool must enforce the same rule so another teammate's agent
+	// cannot steal a directly-assigned pending task and run it twice.
+	if existing, ok := tm.Get(args.TaskID); ok {
+		if assignee := existing.Metadata["assignee"]; assignee != "" && assignee != args.Owner {
+			return Result{IsError: true, Content: fmt.Sprintf(
+				"task %s is directly assigned to %s (direct-delivered to their inbox); do not claim it",
+				args.TaskID, assignee)}, nil
+		}
+	}
 	// #861: without ExpectedStatus the claim is an unconditional overwrite:
 	// claiming a completed task regresses it, and two racing claims both
 	// succeed (silent ownership steal). Conditional-update is exactly what
 	// Manager.Update's ExpectedStatus exists for.
 	pending := task.TaskStatus(task.StatusPending)
+	inProgress := task.TaskStatus(task.StatusInProgress)
 	updated, err := tm.Update(args.TaskID, task.UpdateOptions{
 		Status:         &inProgress,
 		Owner:          &args.Owner,
