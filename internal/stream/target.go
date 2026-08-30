@@ -143,6 +143,12 @@ func (t *Target) Connect() (io.Writer, error) {
 	}
 
 	if err := t.cmd.Start(); err != nil {
+		// #1304 R2: StdinPipe succeeded, so the pipe fd is ours to close -
+		// without this a failed Start (binary replaced between check and
+		// exec, EMFILE) leaked the fd and the next Connect overwrote the
+		// old reference. Mirror command_jobs.go's Start-failure handling.
+		_ = stdin.Close()
+		t.stdin = nil
 		t.lastError = err.Error()
 		t.setState(TargetError)
 		return nil, fmt.Errorf("target %s: start: %w", t.name, err)
@@ -158,6 +164,29 @@ func (t *Target) Connect() (io.Writer, error) {
 			}
 		})
 	}
+
+	// #1304 R1: reap the target ffmpeg when it exits on its own (network
+	// drop, stream key rejected). Without this monitor every
+	// "disconnect -> reconnect" cycle left a zombie because Connect
+	// overwrites t.cmd and only Stop/Manager.Stop ever called Wait.
+	// This goroutine is now the ONLY waiter; Stop() kills and relies on
+	// it to reap (concurrent cmd.Wait is unsafe).
+	monCmd := t.cmd
+	monName := t.name
+	safego.Go("stream.targetMonitor", func() {
+		werr := monCmd.Wait()
+		t.mu.Lock()
+		if t.state == TargetLive {
+			if werr != nil {
+				t.lastError = fmt.Sprintf("ffmpeg exited: %v", werr)
+			} else {
+				t.lastError = "ffmpeg exited"
+			}
+			t.setState(TargetError)
+		}
+		t.mu.Unlock()
+		debug.Log("stream", "target %s ffmpeg exited: %v", monName, werr)
+	})
 
 	t.startedAt = time.Now()
 	t.bytesSent = 0
@@ -181,9 +210,10 @@ func (t *Target) Stop() {
 	if t.stdin != nil {
 		t.stdin.Close()
 	}
+	// #1304: Kill only - the targetMonitor goroutine owns Wait (concurrent
+	// cmd.Wait would race it and one call would error).
 	if t.cmd != nil && t.cmd.Process != nil {
-		t.cmd.Process.Kill()
-		t.cmd.Wait()
+		_ = t.cmd.Process.Kill()
 	}
 }
 
