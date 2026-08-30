@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -360,5 +361,47 @@ func TestDiscoverModelsExpandsEnvRefKey(t *testing.T) {
 	}
 	if len(models) != 2 {
 		t.Errorf("expected 2 models, got %d: %v", len(models), models)
+	}
+}
+
+// #1338: pagination pages 2+ did not check the HTTP status. A 429/500 there
+// returns a JSON error body that decodes cleanly into an empty payload, so
+// the loop "succeeded" with page-1 models only - silent truncation that then
+// got cached to disk for 6h. Page 2 must now surface the error and cache
+// nothing.
+func TestDiscoverModelsGeminiPaginationPage2Error(t *testing.T) {
+	resetModelDiscoveryCacheForTests(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("pageToken") == "" {
+			// Page 1: fine, but more pages exist.
+			_, _ = w.Write([]byte(`{"models":[{"name":"models/gemini-2.5-pro"}],"nextPageToken":"tok-2"}`))
+			return
+		}
+		// Page 2: Google-style JSON error body with a non-2xx status.
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":{"code":429,"message":"Resource exhausted"}}`))
+	}))
+	defer server.Close()
+
+	_, err := DiscoverModels(context.Background(), &config.ResolvedEndpoint{
+		EndpointID:   "api",
+		EndpointName: "Gemini API",
+		Protocol:     "gemini",
+		BaseURL:      server.URL,
+		APIKey:       "gemini-key",
+	})
+	if err == nil {
+		t.Fatal("expected error from failing page 2, got nil (silent truncation)")
+	}
+	if !strings.Contains(err.Error(), "page 2") || !strings.Contains(err.Error(), "429") {
+		t.Errorf("error should name page 2 and status 429, got: %v", err)
+	}
+	// Nothing may be cached from the failed discovery.
+	modelDiscoveryCacheMu.Lock()
+	cached := len(modelDiscoveryCache)
+	modelDiscoveryCacheMu.Unlock()
+	if cached != 0 {
+		t.Errorf("failed discovery must not populate the cache, got %d entries", cached)
 	}
 }
