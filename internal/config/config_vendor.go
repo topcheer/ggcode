@@ -83,10 +83,22 @@ func (c *Config) ResolveEndpointSelection(vendor, endpoint, model string) (*Reso
 			if info.IsExpired() && strings.TrimSpace(info.RefreshToken) != "" {
 				refreshed, refreshErr := auth.RefreshClaudeToken(context.Background(), info.RefreshToken)
 				if refreshErr == nil && refreshed != nil {
-					_ = auth.DefaultStore().Save(refreshed)
+					// #1300: Save errors were discarded. Anthropic rotates the
+					// refresh token on each refresh, so a failed Save leaves the
+					// OLD (now server-side invalidated) refresh token on disk -
+					// the next refresh gets invalid_grant with no self-healing
+					// path. Surface the error so the caller/user can re-auth.
+					if saveErr := auth.DefaultStore().Save(refreshed); saveErr != nil {
+						debug.Log("config", "claude oauth: token refreshed but persisting failed (refresh token may be lost on restart): %v", saveErr)
+					}
 					apiKey = strings.TrimSpace(refreshed.AccessToken)
 				} else {
-					apiKey = strings.TrimSpace(info.AccessToken)
+					// #1300: do NOT silently fall back to the known-expired
+					// access token - downstream requests would 401 and mask the
+					// real cause (refresh failure). Fail loudly to trigger
+					// re-authentication.
+					debug.Log("config", "claude oauth: token refresh failed (re-authentication required): %v", refreshErr)
+					return nil, fmt.Errorf("claude oauth token refresh failed (run /login to re-authenticate): %w", refreshErr)
 				}
 			} else {
 				apiKey = strings.TrimSpace(info.AccessToken)
