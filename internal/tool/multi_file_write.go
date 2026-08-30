@@ -287,7 +287,9 @@ func (t MultiFileWrite) Execute(ctx context.Context, input json.RawMessage) (Res
 	// contract. This prevents partial state from leaking to disk.
 	if mode == "atomic" && failed > 0 && written > 0 {
 		restored := 0
-		for _, r := range results {
+		var rollbackErrs []string
+		for i := range results {
+			r := &results[i]
 			if r.Status != "written" {
 				continue
 			}
@@ -295,18 +297,33 @@ func (t MultiFileWrite) Execute(ctx context.Context, input json.RawMessage) (Res
 			if !ok {
 				continue
 			}
+			// #1331: rollback errors were silently discarded - a failed
+			// restore (disk full, permission change) left new content on
+			// disk while the summary still claimed all-or-nothing.
 			if snap.existed {
-				_ = atomicWriteFile(r.Path, snap.content, 0o644)
+				if err := atomicWriteFile(r.Path, snap.content, 0o644); err != nil {
+					rollbackErrs = append(rollbackErrs, fmt.Sprintf("%s: restore failed: %v", r.Path, err))
+				}
 				restored++
 			} else {
-				_ = os.Remove(r.Path)
+				if err := os.Remove(r.Path); err != nil && !os.IsNotExist(err) {
+					rollbackErrs = append(rollbackErrs, fmt.Sprintf("%s: remove failed: %v", r.Path, err))
+				}
 				restored++
 			}
 			defaultFileTracker.RecordWrite(r.Path)
+			// #1331: keep per-file detail consistent with the summary - a
+			// "written" line under a "written=0" summary contradicts itself.
+			r.Status = "rolled_back"
 		}
 		written = 0 // all rolled back
 		// Recount failed: all non-skipped files are effectively failed.
 		failed = len(args.Files) - skipped
+		if len(rollbackErrs) > 0 {
+			sbWarning := fmt.Sprintf("atomic rollback INCOMPLETE - %d file(s) could not be restored; disk state is NOT all-or-nothing:\n%s",
+				len(rollbackErrs), strings.Join(rollbackErrs, "\n"))
+			return Result{IsError: true, Content: "[multi_file_write] " + sbWarning}, nil
+		}
 	}
 
 	// Build summary.
@@ -316,6 +333,8 @@ func (t MultiFileWrite) Execute(ctx context.Context, input json.RawMessage) (Res
 		switch r.Status {
 		case "written":
 			sb.WriteString(fmt.Sprintf("  ✓ %s (%d bytes)\n", r.Path, r.Bytes))
+		case "rolled_back":
+			sb.WriteString(fmt.Sprintf("  ↩ %s (rolled back)\n", r.Path))
 		case "error":
 			sb.WriteString(fmt.Sprintf("  ✗ %s: %s\n", r.Path, r.Error))
 		case "skipped":

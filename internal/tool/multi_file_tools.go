@@ -602,24 +602,36 @@ func applyAtomicPlans(ctx context.Context, plans []PlannedFileEdit) (string, err
 	written := make([]PlannedFileEdit, 0, len(plans))
 	for _, plan := range plans {
 		if ctx.Err() != nil {
-			for i := len(written) - 1; i >= 0; i-- {
-				_ = atomicWriteFile(written[i].Path, []byte(written[i].OldContent), 0644)
-				// Rollback rewrote the file; its mtime changed again.
-				defaultFileTracker.RecordWrite(written[i].Path)
+			// #1331: surface rollback failures instead of discarding them.
+			if err := rollbackPlans(written); err != nil {
+				return plan.Path, fmt.Errorf("cancelled (rollback incomplete: %v)", err)
 			}
 			return plan.Path, fmt.Errorf("cancelled")
 		}
 		writeData, _ := formatGoBytes(plan.Path, []byte(plan.NewContent))
 		if err := atomicWriteFile(plan.Path, writeData, 0644); err != nil {
-			for i := len(written) - 1; i >= 0; i-- {
-				_ = atomicWriteFile(written[i].Path, []byte(written[i].OldContent), 0644)
-				defaultFileTracker.RecordWrite(written[i].Path)
+			if rerr := rollbackPlans(written); rerr != nil {
+				return plan.Path, fmt.Errorf("error writing file: %v (rollback incomplete: %v)", err, rerr)
 			}
 			return plan.Path, fmt.Errorf("error writing file: %v", err)
 		}
 		written = append(written, plan)
 	}
 	return "", nil
+}
+
+// rollbackPlans restores already-applied plans to their old content and
+// reports any restore failure (#1331: errors were silently discarded).
+func rollbackPlans(written []PlannedFileEdit) error {
+	var firstErr error
+	for i := len(written) - 1; i >= 0; i-- {
+		if err := atomicWriteFile(written[i].Path, []byte(written[i].OldContent), 0644); err != nil && firstErr == nil {
+			firstErr = fmt.Errorf("%s: %v", written[i].Path, err)
+		}
+		// Rollback rewrote the file; its mtime changed again.
+		defaultFileTracker.RecordWrite(written[i].Path)
+	}
+	return firstErr
 }
 
 func formatMultiFileReadFileBlock(path, text string) string {
