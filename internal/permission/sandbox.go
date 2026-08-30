@@ -40,6 +40,15 @@ func NewPathSandbox(allowedDirs []string) *PathSandbox {
 		}
 		normalized = append(normalized, resolved)
 	}
+	// #1311 S4: a NON-EMPTY allowedDirs whose every entry failed to
+	// resolve produced an empty normalized list, and Allowed() then took
+	// the "no restrictions" branch - fail-open, contradicting #573-F's
+	// fail-closed treatment of the empty-with-getwd-failure case above.
+	// Deny everything instead: the operator asked for restrictions.
+	if len(normalized) == 0 {
+		debug.Log("permission", "PathSandbox: all %d allowedDirs failed to resolve; sandbox will fail closed", len(allowedDirs))
+		return &PathSandbox{getwdFailed: true}
+	}
 	return &PathSandbox{allowedDirs: normalized}
 }
 

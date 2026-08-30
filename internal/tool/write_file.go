@@ -116,6 +116,15 @@ func (t WriteFile) Execute(ctx context.Context, input json.RawMessage) (Result, 
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return Result{IsError: true, Content: fmt.Sprintf("error creating parent directory: %v", err)}, nil
 		}
+		// #1311 S3: narrow the parent-directory symlink TOCTOU window.
+		// MkdirAll follows symlinks; if the parent chain was swapped for a
+		// link pointing outside the sandbox between the SandboxCheck above
+		// and here, the fresh dirs landed outside. Re-resolve and re-check
+		// the final path before any bytes are written (the file-level
+		// rename semantics already prevent replacing an existing link).
+		if t.SandboxCheck != nil && !t.SandboxCheck(args.Path) {
+			return Result{IsError: true, Content: "Error: path not allowed by sandbox policy (parent directory changed)"}, nil
+		}
 	}
 
 	// Check if file already exists (for overwrite awareness)
