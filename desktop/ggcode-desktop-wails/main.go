@@ -124,6 +124,9 @@ func main() {
 	log.SetFlags(0)
 
 	app := NewApp()
+	// System tray (energye/systray) must start before wails.Run; it parks
+	// in its own goroutine and never touches the main thread.
+	go app.runSystemTray()
 	appInstance = app
 	shutdownSignals := make(chan os.Signal, 1)
 	signal.Notify(shutdownSignals, os.Interrupt, syscall.SIGTERM)
@@ -166,13 +169,15 @@ func main() {
 			if goruntime.GOOS != "darwin" {
 				return false
 			}
-			// Intercept only the FIRST close attempt of a visible window.
-			// The original 3s double-close window was unreachable in practice:
-			// the first close HIDES the window, so a second click requires a
-			// tray re-open (>3s) and got intercepted again - X could never
-			// quit. Now: first X hides to tray; any subsequent X (after the
-			// user re-opens) quits deterministically. handleTrayNewSession
-			// re-arms the flag so each re-open gets exactly one hide.
+			// X always hides to tray: every re-show path (tray Show /
+			// New Session, hotkey, Dock reopen, SetWindowFocused) re-arms
+			// the flag, so the next X hides again by design. Quitting is via
+			// the tray right-click menu (Quit GGCode) or Cmd+Q - the tray is
+			// always visible, so there is always an exit path. The
+			// second-attempt early-return below only fires when the window
+			// was re-shown WITHOUT going through a flag-clearing path (e.g.
+			// a native unhide racing the frontend focus event), where
+			// quitting on X is the safe fallback rather than trapping.
 			now := time.Now()
 			if app.lastCloseAttempt.Load() != nil {
 				// Second close attempt -> actually quit
