@@ -185,6 +185,18 @@ func saveProbeCache() {
 }
 
 func saveProbeCacheData(cache probeCacheData) {
+	path := probeCachePath()
+	// #1337: same lost-update shape as the cron store - hold a cross-process
+	// lock around the read-merge-write cycle so two processes' saves don't
+	// erase each other's disk-only entries. Degrade to unlocked on lock
+	// failure: the merge still reduces loss.
+	var unlock func()
+	if lock, err := util.FileLock(path + ".flock"); err == nil {
+		unlock = lock
+		defer unlock()
+	} else {
+		debug.Log("probe", "cache lock unavailable: %v", err)
+	}
 	// #1309 P2: this cache is shared across processes (TUI + desktop +
 	// daemon over one ~/.ggcode) but loaded once per process. Writing the
 	// in-memory snapshot verbatim erased entries another process had
@@ -208,7 +220,6 @@ func saveProbeCacheData(cache probeCacheData) {
 		debug.Log("probe", "cache marshal error: %v", err)
 		return
 	}
-	path := probeCachePath()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		debug.Log("probe", "cache mkdir error: %v", err)
 		return

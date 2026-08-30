@@ -291,6 +291,20 @@ func (s *Scheduler) save() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// #1337: the merge below only narrowed the lost-update window; two
+	// processes doing ReadFile→merge→AtomicWriteFile concurrently still
+	// lost the last writer's foreign jobs. Hold a cross-process lock for
+	// the whole read-merge-write cycle (same pattern as the session
+	// index). Degrade to unlocked save if the lock file can't be opened -
+	// the merge still reduces loss; total failure would break persistence.
+	var unlock func()
+	if lock, err := util.FileLock(s.storePath + ".flock"); err == nil {
+		unlock = lock
+		defer unlock()
+	} else {
+		debug.Log("cron", "save: cross-process lock unavailable for %s: %v", s.storePath, err)
+	}
+
 	jobs := make([]jobJSON, 0)
 	for _, j := range s.jobs {
 		if !j.Recurring {
