@@ -283,7 +283,11 @@ func (b *iosBackend) scaleForDevice(device string) (int, int) {
 		return 1, 1
 	}
 	// Logical size from simctl device list JSON.
-	_, out, _ := runCommand(context.Background(), 10*time.Second, "xcrun", "simctl", "list", "devices", "--json")
+	// #1329: receive order was inverted (_, out, _) which captured stderr
+	// and discarded stdout - simctl prints JSON to stdout, so scale always
+	// fell back to (1,1) and Retina taps landed 2-3x off target (#842
+	// silently dead). Same shape as the #1005 logs bug.
+	out, _, _ := runCommand(context.Background(), 10*time.Second, "xcrun", "simctl", "list", "devices", "--json")
 	var list struct {
 		Devices map[string][]struct {
 			UDID string `json:"udid"`
