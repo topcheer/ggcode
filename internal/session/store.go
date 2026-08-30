@@ -1575,7 +1575,15 @@ func (s *JSONLStore) pruneInvalidIndexEntries(idx []indexEntry) ([]indexEntry, b
 			continue
 		}
 		if !ses.HasUserInteraction() {
-			_ = os.Remove(s.sessionPath(e.ID))
+			// #1307 E3: a failed Remove (permission, read-only mount, Windows
+			// file-in-use) must NOT evict the index entry - otherwise the
+			// on-disk file becomes an orphan that List() hides forever. Keep
+			// the entry so the next repair pass retries the delete.
+			if rmErr := os.Remove(s.sessionPath(e.ID)); rmErr != nil && !os.IsNotExist(rmErr) {
+				debug.Log("session", "pruneInvalidIndexEntries: remove failed for %s, keeping index entry: %v", e.ID, rmErr)
+				validIdx = append(validIdx, e)
+				continue
+			}
 			cleaned = true
 			continue
 		}
@@ -2799,8 +2807,15 @@ func appendRecordLines(path string, recs []jsonlRecord) error {
 	// fails -> continue). We hold the session lock here, so terminate the
 	// torn line before appending.
 	if err := terminateTornTail(f); err != nil {
-		// Non-fatal: a failed check must not block appends entirely.
-		debug.Log("session", "appendRecordLines: torn-tail check failed for %s: %v", path, err)
+		// #1307 E2: appending onto an unterminated torn tail would FUSE the
+		// new record onto the crash residue - load then drops BOTH lines
+		// (unmarshal-fail -> continue), and because the fused line ends with
+		// \n the torn-tail check can never repair it later. Fail the append
+		// instead: the caller keeps the record and can retry, nothing is
+		// silently lost. The check only fails on genuine I/O errors
+		// (Stat/ReadAt/Write), where the append itself would likely fail too.
+		f.Close()
+		return fmt.Errorf("torn-tail check for %s: %w", path, err)
 	}
 	if _, err := f.Write(buf.Bytes()); err != nil {
 		f.Close()
