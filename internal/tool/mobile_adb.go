@@ -244,10 +244,16 @@ func (a *androidBackend) typeText(ctx context.Context, device, ref, text string,
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	// adb input text doesn't handle spaces well, use %s
-	escapedText := strings.ReplaceAll(text, " ", "%s")
+	// #1330: modern adb (shell v2) joins args and runs them through the
+	// device-side /bin/sh, so metacharacters (;, $(), backticks, |, &&)
+	// executed as shell on the device. Single-quote the whole text with
+	// POSIX escaping (' -> '"'"'); %s stays as the input-command space
+	// convention (it is inside the quotes, shell-inert, and input text
+	// decodes it back to a space).
+	shellSafe := "'" + strings.ReplaceAll(text, "'", `'"'"'`) + "'"
+	shellSafe = strings.ReplaceAll(shellSafe, " ", "%s")
 	args := adbDeviceArgs(device)
-	args = append(args, "shell", "input", "text", escapedText)
+	args = append(args, "shell", "input", "text", shellSafe)
 	_, stderr, err := runCommand(ctx, 10*time.Second, a.adbPath, args...)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("type failed: %v\n%s", err, stderr)}, nil
