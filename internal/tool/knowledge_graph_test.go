@@ -290,10 +290,6 @@ func mustMarshal(m map[string]interface{}) json.RawMessage {
 // #1327: update branch assigned Type unconditionally while nt defaults
 // to "note" - a partial update (id+title, no type) silently reclassified
 // decision/entity nodes as note and the next save persisted it.
-
-// #1327: update branch assigned Type unconditionally while nt defaults
-// to "note" - a partial update (id+title, no type) silently reclassified
-// decision/entity nodes as note and the next save persisted it.
 func TestKnowledgeGraphPartialUpdatePreservesType(t *testing.T) {
 	tool, _ := newKGTool(t)
 
