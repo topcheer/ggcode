@@ -158,3 +158,37 @@ func TestDiagnoseShellCompatFormat(t *testing.T) {
 		t.Errorf("expected alternative tool suggestion, got: %s", got)
 	}
 }
+
+// #1342/#868: find/head patterns must anchor to the command word - bare
+// substring matching fires on "refind-printf" or paths containing "find".
+func TestShellCompatFindHeadAnchoring(t *testing.T) {
+	noise := []string{
+		"echo refind-printf-usage",
+		"cat ./findings/report-printf.txt",
+		"cat forehead-data -n -5",
+		"grep -r printf docs/findings index.md -n -1",
+	}
+	for _, cmd := range noise {
+		for _, p := range shellCompatPatterns {
+			if p.match(cmd, "") {
+				t.Errorf("pattern fired on non-command noise %q", cmd)
+			}
+		}
+	}
+	signal := []string{"find . -name '*.go' -printf '%p'", "head -n -5 file.txt"}
+	hit1, hit2 := false, false
+	for _, p := range shellCompatPatterns {
+		if p.match(signal[0], "") {
+			hit1 = true
+		}
+		if p.match(signal[1], "") {
+			hit2 = true
+		}
+	}
+	if !hit1 {
+		t.Error("anchored find pattern no longer matches real 'find -printf'")
+	}
+	if !hit2 {
+		t.Error("anchored head pattern no longer matches real 'head -n -N'")
+	}
+}

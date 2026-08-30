@@ -51,6 +51,7 @@ func exportSkill(cmd *commands.Command, outputPath string) (*SkillManifest, stri
 	// templates/, scripts/, assets/ - the export reported success but the
 	// bundle could never round-trip a skill with companion directories).
 	var files []string
+	var total int64
 	walkErr := filepath.WalkDir(skillDir, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -74,6 +75,13 @@ func exportSkill(cmd *commands.Command, outputPath string) (*SkillManifest, stri
 		}
 		if info.Size() > MaxSkillBundleSize {
 			return fmt.Errorf("file %s is too large (%d bytes, max %d)", rel, info.Size(), MaxSkillBundleSize)
+		}
+		// #1341: symmetric total cap with import (readBundle). Without it
+		// an exported multi-file bundle could exceed the import-side
+		// compressed-stream limit and fail to round-trip.
+		total += info.Size()
+		if total > MaxSkillBundleSize {
+			return fmt.Errorf("skill directory total size %d exceeds max %d", total, MaxSkillBundleSize)
 		}
 		files = append(files, rel)
 		return nil
@@ -129,17 +137,30 @@ func exportSingleFileSkill(cmd *commands.Command, outputPath string) (*SkillMani
 	return manifest, outputPath, nil
 }
 
-func writeBundle(outputPath string, manifest *SkillManifest, baseDir string, files []string) error {
+func writeBundle(outputPath string, manifest *SkillManifest, baseDir string, files []string) (err error) {
 	f, err := os.Create(outputPath)
 	if err != nil {
 		return fmt.Errorf("cannot create output file: %w", err)
 	}
-	defer f.Close()
+	defer func() {
+		if cerr := f.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+	}()
 
 	gw := gzip.NewWriter(f)
-	defer gw.Close()
 	tw := tar.NewWriter(gw)
-	defer tw.Close()
+	// #1341: gzip/tar buffer internally - a full disk only surfaces at
+	// Close. Capture Close errors explicitly (reverse order) so a
+	// truncated bundle is never reported as a successful export.
+	defer func() {
+		if cerr := tw.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+		if cerr := gw.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+	}()
 
 	// Write manifest.json first.
 	manifestData, _ := json.MarshalIndent(manifest, "", "  ")
@@ -262,6 +283,7 @@ func readBundle(reader io.Reader) (*SkillManifest, map[string][]byte, error) {
 	tw := tar.NewReader(gw)
 	files := make(map[string][]byte)
 	var manifest *SkillManifest
+	var total int64
 
 	for {
 		header, err := tw.Next()
@@ -288,6 +310,15 @@ func readBundle(reader io.Reader) (*SkillManifest, map[string][]byte, error) {
 		}
 		if int64(len(data)) > MaxSkillBundleSize {
 			return nil, nil, fmt.Errorf("bundle exceeds max size of %d bytes", MaxSkillBundleSize)
+		}
+		// #1341: cumulative decompressed cap. The compressed-stream
+		// LimitedReader (16MB) does NOT bound total decompressed bytes: a
+		// ~1000x-compressible gzip bomb (all-zero tar entries, each under
+		// the per-file cap) could otherwise expand to tens of GB resident
+		// in the files map. #import:<url> makes this remotely deliverable.
+		total += int64(len(data))
+		if total > MaxSkillBundleSize {
+			return nil, nil, fmt.Errorf("bundle total decompressed size exceeds %d bytes", MaxSkillBundleSize)
 		}
 
 		if name == manifestFileName {

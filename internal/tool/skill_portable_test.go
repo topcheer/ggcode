@@ -2,9 +2,13 @@ package tool
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/topcheer/ggcode/internal/commands"
@@ -223,5 +227,51 @@ func TestSkillDirFromPath(t *testing.T) {
 	got = skillDirFromPath("")
 	if got != "" {
 		t.Errorf("expected empty for empty input, got %q", got)
+	}
+}
+
+// #1341: the compressed-stream LimitedReader does not bound total
+// decompressed bytes. A gzip bomb (many all-zero tar entries, each under
+// the per-file cap) must be rejected by the cumulative cap, not expand
+// into the files map.
+func TestImportSkill_GzipBombRejected(t *testing.T) {
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gw)
+
+	// Manifest first, then many ~1MB zero entries. Total decompressed
+	// far exceeds MaxSkillBundleSize but compressed size stays tiny.
+	manifest, _ := json.Marshal(&SkillManifest{Name: "bomb", Version: "1"})
+	hdr := &tar.Header{Name: "manifest.json", Mode: 0o644, Size: int64(len(manifest))}
+	if err := tw.WriteHeader(hdr); err != nil {
+		t.Fatal(err)
+	}
+	tw.Write(manifest)
+	chunk := make([]byte, 1024*1024)
+	for i := 0; i < 40; i++ { // 40MB decompressed total
+		hdr := &tar.Header{Name: fmt.Sprintf("blob%d.bin", i), Mode: 0o644, Size: int64(len(chunk))}
+		if err := tw.WriteHeader(hdr); err != nil {
+			t.Fatal(err)
+		}
+		tw.Write(chunk)
+	}
+	tw.Close()
+	gw.Close()
+
+	if len(buf.Bytes()) > 1024*1024 {
+		t.Fatalf("test setup: bomb should compress small, got %d bytes", len(buf.Bytes()))
+	}
+
+	_, _, err := importSkill("nosuch.ggskill", t.TempDir())
+	if err == nil {
+		t.Fatal("expected error for missing file (sanity)")
+	}
+	// Direct readBundle check: cumulative cap must fire.
+	m, files, err := readBundle(bytes.NewReader(buf.Bytes()))
+	if err == nil {
+		t.Fatalf("expected gzip bomb rejection, got manifest=%v files=%d", m != nil, len(files))
+	}
+	if !strings.Contains(err.Error(), "total decompressed size") {
+		t.Fatalf("expected cumulative-cap error, got: %v", err)
 	}
 }

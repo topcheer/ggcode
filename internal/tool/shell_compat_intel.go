@@ -97,7 +97,10 @@ var shellCompatPatterns = []shellCompatPattern{
 	// --- find -printf (GNU only) ---
 	{
 		match: func(cmd, out string) bool {
-			return (strings.Contains(cmd, "find") && strings.Contains(cmd, "-printf")) ||
+			// #1342/#868: anchor to the find command itself - a bare Contains
+			// matches any 'find' substring (refind-printf, ./findings/...).
+			isFind := strings.HasPrefix(cmd, "find ") || strings.Contains(cmd, " find ") || cmd == "find"
+			return (isFind && strings.Contains(cmd, "-printf")) ||
 				strings.Contains(out, "find: -printf: unknown primary") ||
 				strings.Contains(out, "find: unknown predicate `-printf'")
 		},
@@ -106,8 +109,11 @@ var shellCompatPatterns = []shellCompatPattern{
 	// --- head -n -N (GNU negative offset) ---
 	{
 		match: func(cmd, out string) bool {
+			// #1342/#868: anchor to the head command (forehead, path
+			// components containing 'head' must not trigger).
+			isHead := strings.HasPrefix(cmd, "head ") || strings.Contains(cmd, " head ") || cmd == "head"
 			return strings.Contains(out, "head: illegal line count -- -") ||
-				(strings.Contains(cmd, "head") && strings.Contains(cmd, "-n -"))
+				(isHead && strings.Contains(cmd, "-n -"))
 		},
 		fix: "head -n -N (drop last N lines) is GNU-only. On macOS/BSD use: head -n $(( $(wc -l < file) - N )) file  or  sed '$d' file (drop last line)",
 	},
