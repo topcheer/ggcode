@@ -167,6 +167,15 @@ func (p *GeminiProvider) Chat(ctx context.Context, messages []Message, tools []T
 	if len(resp.Candidates) > 0 && resp.Candidates[0].FinishReason == genai.FinishReasonMaxTokens {
 		p.cap.OnTruncated()
 	}
+	// #1301: prompt-level safety blocks arrive with no candidates at all -
+	// surface them as an error instead of returning an empty reply.
+	if pf := resp.PromptFeedback; pf != nil && pf.BlockReason != genai.BlockedReasonUnspecified && len(resp.Candidates) == 0 {
+		reason := string(pf.BlockReason)
+		if pf.BlockReasonMessage != "" {
+			reason = pf.BlockReasonMessage
+		}
+		return nil, fmt.Errorf("gemini chat: prompt blocked by input safety filter: %s", reason)
+	}
 
 	content, usage := p.convertResponse(resp)
 	return &ChatResponse{
@@ -264,6 +273,21 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 				}
 
 				if len(resp.Candidates) == 0 || resp.Candidates[0].Content == nil {
+					// #1301: input-side safety blocks carry NO candidates and
+					// NO finishReason - the reason lives in the top-level
+					// promptFeedback.blockReason. Without this check a blocked
+					// prompt streamed an empty "success" reply (Done with
+					// PolicyBlocked=false) and the agent spun on nothing.
+					if pf := resp.PromptFeedback; pf != nil && pf.BlockReason != genai.BlockedReasonUnspecified {
+						reason := string(pf.BlockReason)
+						if pf.BlockReasonMessage != "" {
+							reason = pf.BlockReasonMessage
+						}
+						debug.Log("gemini", "stream prompt blocked by policy: %s", reason)
+						ch <- StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Blocked by input safety filter: %s] ", reason)}
+						policyBlocked = true
+						truncated = true
+					}
 					// Nothing to stream from this chunk; emit the finish notice
 					// (if any) so fully blocked responses still surface the reason.
 					if finishNotice != "" {
