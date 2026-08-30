@@ -44,6 +44,16 @@ var displaySecretPatterns = []struct {
 	// Assignment-style: key=value or key: value
 	{"assignment_secret", regexp.MustCompile(
 		`(?i)((?:api[_-]?key|secret|token|passwd|password|auth[_-]?token|access[_-]?token|private[_-]?key|client[_-]?secret)["'\s]*[:=]\s*["']?)([A-Za-z0-9+/=_\-]{20,})(["']?)`)},
+	// #1306: seven formats that existed ONLY in the detection layer
+	// (secretdetect.go) - third drift recurrence after #1289. Mirrors the
+	// detection patterns so TUI/IM/desktop redaction covers them.
+	{"aws_secret_access_key", regexp.MustCompile(`(?i)(aws_secret_access_key["'\s:=]+)([A-Za-z0-9/+=]{40})`)},
+	{"azure_account_key_conn", regexp.MustCompile(`(AccountKey=)([A-Za-z0-9+/=]{50,})`)},
+	{"npm_token", regexp.MustCompile(`\b(npm_[0-9A-Za-z]{36})\b`)},
+	{"pypi_token", regexp.MustCompile(`\b(pypi-AgEIcHlwaW5p[A-Za-z0-9\-_]{50,})\b`)},
+	{"docker_pat", regexp.MustCompile(`\b(dckr_pat_[0-9A-Za-z\-_]{27})\b`)},
+	{"twilio_key", regexp.MustCompile(`\b(SK[0-9a-fA-F]{32})\b`)},
+	{"db_conn_password", regexp.MustCompile(`(?i)((?:postgres|postgresql|mongodb|mysql|redis|amqp)://[^:/\s@"']+:[^@\s"']{6,}@)`)},
 }
 
 // maskValue masks the middle portion of a secret for display.

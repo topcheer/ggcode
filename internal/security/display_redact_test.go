@@ -79,3 +79,37 @@ func TestRedactForDisplay_GitHubFineGrainedPAT(t *testing.T) {
 		t.Fatalf("short fragment wrongly masked: %q", out)
 	}
 }
+
+// #1306: seven formats lived only in the detection layer (secretdetect.go)
+// - display redaction drifted for the third time (#1289 pattern). Each must
+// now be masked in RedactForDisplay output.
+//
+// Tokens are constructed at runtime: the shapes must be realistic enough to
+// exercise the regexes, but literal secrets in source trip GitHub push
+// protection (this very test was blocked once).
+func TestRedactForDisplayCoversDetectionLayerFormats(t *testing.T) {
+	rep := func(s string, n int) string { return strings.Repeat(s, n) }
+	cases := []struct {
+		name  string
+		input string
+	}{
+		{"npm", "token npm_" + rep("aB1", 12) + " end"}, // 36 chars
+		{"pypi", "pypi-AgEIcHlwaW5p" + rep("aB1", 18)},  // >=50 chars
+		{"docker", "dckr_pat_" + rep("aB1", 9)},         // 27 chars
+		{"twilio", "auth SK" + rep("a1", 16)},           // 32 hex
+		{"postgres", "postgres://admin:" + rep("x9", 4) + "@db.example.com:5432/prod"},
+		{"aws_secret", "aws_secret_access_key = " + rep("aB1", 13) + "a"}, // 40 chars
+		{"azure", "DefaultEndpointsProtocol=https;AccountName=x;AccountKey=" + rep("aB1", 17) + "==;EndpointSuffix=core.windows.net"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := RedactForDisplay(tc.input)
+			if got == tc.input {
+				t.Errorf("secret not masked: %q", got)
+			}
+			if !strings.Contains(got, "***") {
+				t.Errorf("expected masked output, got %q", got)
+			}
+		})
+	}
+}
