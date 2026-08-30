@@ -251,7 +251,7 @@ func (s *httpServer) handleSend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Track user message count
-	s.adapter.metrics.UserMessages++
+	s.adapter.metrics.IncUserMessages()
 
 	// Respond immediately so the caller (eval SSE consumer) can proceed
 	w.Header().Set("Content-Type", "application/json")

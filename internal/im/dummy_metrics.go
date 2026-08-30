@@ -7,11 +7,18 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
 // EvalMetrics collects quantitative metrics during an evaluation session.
+// #1302: written concurrently by agent event goroutines (RecordEvent via
+// fanOutSend) and HTTP handlers (Reset, UserMessages), read by /status
+// (Snapshot) - every method now holds mu, and Snapshot deep-copies maps so
+// callers never race the originals.
 type EvalMetrics struct {
+	mu sync.Mutex
+
 	SessionStart time.Time
 	SessionEnd   time.Time
 
@@ -55,6 +62,8 @@ func NewEvalMetrics() *EvalMetrics {
 
 // RecordEvent updates metrics based on an outbound event.
 func (m *EvalMetrics) RecordEvent(event OutboundEvent) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	switch event.Kind {
 	case OutboundEventToolResult:
 		if event.ToolRes == nil {
@@ -89,8 +98,19 @@ func (m *EvalMetrics) RecordEvent(event OutboundEvent) {
 	}
 }
 
+// IncUserMessages increments the user-message counter under the lock
+// (#1302: HTTP handlers previously incremented the field directly,
+// racing Snapshot's read).
+func (m *EvalMetrics) IncUserMessages() {
+	m.mu.Lock()
+	m.UserMessages++
+	m.mu.Unlock()
+}
+
 // Reset clears all per-task metrics while keeping session-level fields.
 func (m *EvalMetrics) Reset() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.UserMessages = 0
 	m.AskUserCount = 0
 	m.AskUserLatencyMs = make(map[string]int64)
@@ -111,11 +131,21 @@ func (m *EvalMetrics) Reset() {
 
 // Snapshot returns a copy of current metrics as a map.
 func (m *EvalMetrics) Snapshot() map[string]interface{} {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	toolCalls := make(map[string]int, len(m.ToolCalls))
+	for k, v := range m.ToolCalls {
+		toolCalls[k] = v
+	}
+	toolErrorsBy := make(map[string]int, len(m.ToolErrorsByTool))
+	for k, v := range m.ToolErrorsByTool {
+		toolErrorsBy[k] = v
+	}
 	return map[string]interface{}{
 		"total_tool_calls": m.TotalToolCalls,
-		"tool_calls":       m.ToolCalls,
+		"tool_calls":       toolCalls,
 		"tool_errors":      m.ToolErrors,
-		"tool_errors_by":   m.ToolErrorsByTool,
+		"tool_errors_by":   toolErrorsBy,
 		"rework_count":     m.ReworkCount,
 		"rounds":           m.Rounds,
 		"ask_user_count":   m.AskUserCount,
@@ -130,6 +160,8 @@ func (m *EvalMetrics) Snapshot() map[string]interface{} {
 
 // WriteCSV appends a metrics row to a CSV file.
 func (m *EvalMetrics) WriteCSV(path string, runID, phase, mode string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return err
