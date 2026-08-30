@@ -315,3 +315,32 @@ func TestApplyLSPFileEdits_NoWarningForSingleFile(t *testing.T) {
 		t.Fatalf("expected normal output, got:\n%s", result)
 	}
 }
+
+// #1328: sort.Slice was unstable for same-offset zero-length inserts
+// (comparator returns false both ways), so same-offset inserts could be
+// reversed; overlapping edits spliced silently-corrupt output. Both the
+// LSP array-order rule and overlap rejection are pinned here.
+func TestApplyTextEditsSameOffsetOrder(t *testing.T) {
+	edits := []lsp.TextEdit{
+		{Range: lsp.Range{Start: lsp.Position{Line: 1, Character: 1}, End: lsp.Position{Line: 1, Character: 1}}, NewText: "A"},
+		{Range: lsp.Range{Start: lsp.Position{Line: 1, Character: 1}, End: lsp.Position{Line: 1, Character: 1}}, NewText: "B"},
+		{Range: lsp.Range{Start: lsp.Position{Line: 1, Character: 1}, End: lsp.Position{Line: 1, Character: 1}}, NewText: "C"},
+	}
+	got, n, err := applyTextEdits("xy\n", edits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 3 || got != "ABCxy\n" {
+		t.Errorf("same-offset inserts must apply in array order: got %q (n=%d)", got, n)
+	}
+}
+
+func TestApplyTextEditsRejectsOverlap(t *testing.T) {
+	edits := []lsp.TextEdit{
+		{Range: lsp.Range{Start: lsp.Position{Line: 1, Character: 2}, End: lsp.Position{Line: 1, Character: 5}}, NewText: "X"},
+		{Range: lsp.Range{Start: lsp.Position{Line: 1, Character: 3}, End: lsp.Position{Line: 1, Character: 6}}, NewText: "Y"},
+	}
+	if _, _, err := applyTextEdits("abcdef\n", edits); err == nil {
+		t.Fatal("overlapping edits must be rejected, got nil error")
+	}
+}

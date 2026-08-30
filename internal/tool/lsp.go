@@ -891,9 +891,10 @@ func applyTextEdits(content string, edits []lsp.TextEdit) (string, int, error) {
 		start   int
 		end     int
 		newText string
+		idx     int // original array order for same-offset tiebreak (#1328)
 	}
 	repls := make([]replacement, 0, len(edits))
-	for _, edit := range edits {
+	for i, edit := range edits {
 		start, err := offsetForPosition(content, edit.Range.Start)
 		if err != nil {
 			return "", 0, err
@@ -905,14 +906,32 @@ func applyTextEdits(content string, edits []lsp.TextEdit) (string, int, error) {
 		if end < start {
 			return "", 0, fmt.Errorf("invalid edit range %v", edit.Range)
 		}
-		repls = append(repls, replacement{start: start, end: end, newText: edit.NewText})
+		repls = append(repls, replacement{start: start, end: end, newText: edit.NewText, idx: i})
 	}
+	// Descending by start so each splice uses offsets still valid against
+	// the original content. #1328: ties must be deterministic and match the
+	// LSP rule that same-offset inserts apply in array order - splicing
+	// back-to-front means the LATER array element must be spliced FIRST
+	// (its text then ends up after the earlier one), hence idx descending
+	// as the final tiebreak. Longer ranges first when starts are equal so
+	// the nested edit's offsets stay valid.
 	sort.Slice(repls, func(i, j int) bool {
-		if repls[i].start == repls[j].start {
+		if repls[i].start != repls[j].start {
+			return repls[i].start > repls[j].start
+		}
+		if repls[i].end != repls[j].end {
 			return repls[i].end > repls[j].end
 		}
-		return repls[i].start > repls[j].start
+		return repls[i].idx > repls[j].idx
 	})
+	// #1328: overlapping edits used to splice silently-corrupt the result
+	// (each offset is only valid against the ORIGINAL content). Reject.
+	for k := 1; k < len(repls); k++ {
+		if repls[k-1].start < repls[k].end {
+			return "", 0, fmt.Errorf("overlapping edits detected (edit #%d range [%d,%d) overlaps edit #%d end %d) - refusing to apply",
+				repls[k-1].idx, repls[k-1].start, repls[k-1].end, repls[k].idx, repls[k].end)
+		}
+	}
 	next := content
 	for _, repl := range repls {
 		next = next[:repl.start] + repl.newText + next[repl.end:]
