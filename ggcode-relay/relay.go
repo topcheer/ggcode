@@ -32,6 +32,10 @@ const (
 	relayRestartReason           = "relay_restarting"
 	relayShutdownNoticeDelay     = 500 * time.Millisecond
 	relayShutdownTimeout         = 5 * time.Second
+	// replayTruncationHeadroom keeps this many slots free in sendCh while
+	// replaying a resume backlog so live-forward traffic (which shares the
+	// same channel) still fits after the replay loop ends.
+	replayTruncationHeadroom = 64
 )
 
 // ─── Wire protocol ───
@@ -249,11 +253,17 @@ type peer struct {
 
 func newPeer(h *hub, room *room, role string, conn *websocket.Conn) *peer {
 	return &peer{
-		hub:    h,
-		room:   room,
-		role:   role,
-		conn:   conn,
-		sendCh: make(chan []byte, 512),
+		hub:  h,
+		room: room,
+		role: role,
+		conn: conn,
+		// #1347: 2048 buffer (61ec10e2 reduced 10000->512 to guard against
+		// goroutine starvation, but the blocking grace it guarded was removed
+		// in the same commit - every send is non-blocking now, so the small
+		// buffer only triggers premature "slow client" 1013 kills during
+		// resume replays on slow links). 2048 * ~1-8KB ~= 2-16MB peak per
+		// slow peer, bounded and transient.
+		sendCh: make(chan []byte, 2048),
 		done:   make(chan struct{}),
 	}
 }
@@ -838,9 +848,25 @@ func (p *peer) finishResume(clientID string, h *hub) {
 	p.room.mu.Unlock()
 
 	p.send(ack)
+	// #1347: drain-aware replay. Dumping the whole backlog into sendRaw
+	// (non-blocking) fills the buffer mid-replay and trips the "slow
+	// client" 1013 kill - on an actively-producing session the client's
+	// per-round progress never catches up with new production, so it
+	// starves forever. Instead, stop feeding the replay once the buffer
+	// is nearly full: the events stay in history and the client resumes
+	// from its ACKed cursor on the next round with monotonic progress
+	// (no kill, no lost frames). Live-forward continues via sendRaw's
+	// normal path once replay finishes below.
+	sent := 0
 	for _, ev := range replay {
+		if len(p.sendCh) >= cap(p.sendCh)-replayTruncationHeadroom {
+			log.Printf("[relay] replay deferred room=%s client=%s sent=%d/%d — buffer nearly full, client resumes from ACK cursor",
+				shortToken(p.room.token), p.clientID, sent, len(replay))
+			break
+		}
 		h.traceRoomEvent("replay_send", p.room.token, p.clientID, ev, "mode="+mode)
 		p.sendRaw(ev.raw)
+		sent++
 	}
 	p.room.notifyServerClientConnectedLocked(p.protocolVersion, true)
 	p.room.sendMu.Unlock()
