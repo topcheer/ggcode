@@ -1724,12 +1724,32 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
           '[connection] provider status=$status generation=$generation '
           'session=$_sessionId lastEvent=$_lastAppliedEventId',
         );
+        var effectiveStatus = status;
+        // #1344 (residual): a demoted background service for the SAME
+        // session may still be connected and streaming events into the
+        // workspace cache (messages keep flowing) while this foreground
+        // service was kicked by the relay duplicate-connection guard.
+        // Reporting 'disconnected' then is a lie the user can see; keep
+        // the connected status so the pill matches reality. Introduced
+        // by the multi-session split (6bb8710d) which decoupled the
+        // message path (cache) from the status path (foreground only).
+        if (status == ConnectionStatus.disconnected &&
+            _sessionId.isNotEmpty &&
+            ref
+                .read(backgroundConnectionProvider.notifier)
+                .isLive(_sessionId)) {
+          debugPrint(
+            '[connection] foreground disconnected but background service '
+            'for session=$_sessionId is live - keeping connected status',
+          );
+          effectiveStatus = ConnectionStatus.connected;
+        }
         state = state.copyWith(
-          status: status,
+          status: effectiveStatus,
           sessionReady:
-              status == ConnectionStatus.connected && state.sessionReady,
+              effectiveStatus == ConnectionStatus.connected && state.sessionReady,
         );
-        if (status == ConnectionStatus.connected) {
+        if (effectiveStatus == ConnectionStatus.connected) {
           // Mark connection as alive for app-restart recovery
           debugPrint('[connection] markAlive check: _currentConnection=${_currentConnection?.id} session=${_currentConnection?.sessionId}');
           if (_currentConnection != null) {
