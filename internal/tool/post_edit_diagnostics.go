@@ -265,22 +265,30 @@ func formatDiagnostics(diagnostics []lsp.Diagnostic) string {
 
 	var errors []string
 	var warnings []string
+	var infos []string
 	for _, d := range diagnostics {
-		// LSP severity: 1=Error, 2=Warning, 3=Information, 4=Hint
+		// LSP severity: 1=Error, 2=Warning, 3=Information, 4=Hint.
+		// #1332: mirror the #820 baseline-path classification (0 as Error,
+		// 3/4 as Info) - the fallback path (new .go files never capture a
+		// baseline) dropped Info diagnostics, hiding gopls "imported and not
+		// used" (an actual compile blocker reported at Info severity).
 		msg := strings.TrimSpace(d.Message)
 		if msg == "" {
 			continue
 		}
 		line := d.Range.Start.Line + 1 // 0-based to 1-based
 		formatted := fmt.Sprintf("  L%d: %s", line, msg)
-		if d.Severity <= 1 {
+		switch d.Severity {
+		case 0, 1:
 			errors = append(errors, formatted)
-		} else if d.Severity == 2 {
+		case 2:
 			warnings = append(warnings, formatted)
+		case 3, 4:
+			infos = append(infos, formatted)
 		}
 	}
 
-	if len(errors) == 0 && len(warnings) == 0 {
+	if len(errors) == 0 && len(warnings) == 0 && len(infos) == 0 {
 		return ""
 	}
 
@@ -314,6 +322,22 @@ func formatDiagnostics(diagnostics []lsp.Diagnostic) string {
 		}
 		if len(warnings) > 5 {
 			b.WriteString(fmt.Sprintf("  ... and %d more\n", len(warnings)-5))
+		}
+	}
+	if len(infos) > 0 {
+		if len(errors) > 0 || len(warnings) > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString(fmt.Sprintf("Info (%d):\n", len(infos)))
+		shown := infos
+		if len(shown) > 5 {
+			shown = shown[:5]
+		}
+		for _, w := range shown {
+			b.WriteString(w + "\n")
+		}
+		if len(infos) > 5 {
+			b.WriteString(fmt.Sprintf("  ... and %d more\n", len(infos)-5))
 		}
 	}
 	b.WriteString("Fix these issues to ensure the code compiles correctly.")

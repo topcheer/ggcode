@@ -1,6 +1,7 @@
 package tool
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/topcheer/ggcode/internal/lsp"
@@ -51,13 +52,18 @@ func TestFormatDiagnostics_NoErrors(t *testing.T) {
 		t.Fatalf("expected empty for nil diagnostics, got %q", result)
 	}
 
-	// Info and hints should be suppressed.
+	// #1332: info/hint now render (aligned with the #820 baseline path) -
+	// gopls reports "imported and not used" at Info severity and it is a
+	// compile blocker; the fallback path must not hide it.
 	result = formatDiagnostics([]lsp.Diagnostic{
 		{Severity: 3, Message: "some info", Range: lsp.Range{Start: lsp.Position{Line: 0}}},
 		{Severity: 4, Message: "some hint", Range: lsp.Range{Start: lsp.Position{Line: 1}}},
 	})
-	if result != "" {
-		t.Fatalf("expected empty for info/hint diagnostics, got %q", result)
+	if !strings.Contains(result, "some info") || !strings.Contains(result, "some hint") {
+		t.Fatalf("expected info/hint diagnostics to render, got %q", result)
+	}
+	if strings.Contains(result, "Errors") || strings.Contains(result, "Warnings") {
+		t.Fatalf("info-only diagnostics must not render error/warning sections, got %q", result)
 	}
 }
 
