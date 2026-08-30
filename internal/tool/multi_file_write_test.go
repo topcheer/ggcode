@@ -176,31 +176,32 @@ func TestMultiFileWrite_PartialSuccess(t *testing.T) {
 func TestMultiFileWrite_AtomicRollback(t *testing.T) {
 	dir := t.TempDir()
 	goodPath := filepath.Join(dir, "good.txt")
-	sandboxedPath := filepath.Join(dir, "bad.txt")
+	blockedPath := filepath.Join(dir, "blocked.txt")
+	// A directory at the target path makes the WRITE phase fail (after
+	// good.txt is already written), which is what actually exercises the
+	// rollback path - a sandbox denial happens at planning time, before
+	// anything is on disk (#1331 follow-up).
+	if err := os.Mkdir(blockedPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
 
 	input, _ := json.Marshal(map[string]any{
 		"mode": "atomic",
 		"files": []map[string]string{
 			{"path": goodPath, "content": "ok"},
-			{"path": sandboxedPath, "content": "denied"},
+			{"path": blockedPath, "content": "denied"},
 		},
 	})
 
-	// Sandbox denies only sandboxedPath.
-	tool := MultiFileWrite{SandboxCheck: func(path string) bool {
-		return path != sandboxedPath
-	}}
+	tool := MultiFileWrite{SandboxCheck: func(path string) bool { return true }}
 	result, _ := tool.Execute(context.Background(), input)
 	if !result.IsError {
 		t.Error("atomic mode with failures should set IsError")
 	}
 
-	// Neither file should exist in atomic mode.
+	// good.txt was written then rolled back.
 	if _, err := os.Stat(goodPath); !os.IsNotExist(err) {
 		t.Error("good file should not exist after atomic failure")
-	}
-	if _, err := os.Stat(sandboxedPath); !os.IsNotExist(err) {
-		t.Error("bad file should not exist after atomic failure")
 	}
 
 	// #1331: summary and per-file detail must not contradict each other -
