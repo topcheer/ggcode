@@ -403,11 +403,12 @@ func persistModelDiscoveryCacheLocked() error {
 	if err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	// #1309 P1: was a FIXED path+".tmp" + os.WriteFile - two processes
+	// persisting concurrently interleaved on the same temp name (one's
+	// O_TRUNC zeroed the other's in-flight content) and the rename could
+	// publish a truncated file. AtomicWriteFile uses a unique temp + fsync,
+	// the project standard for cache files.
+	return util.AtomicWriteFile(path, data, 0o600)
 }
 
 func modelDiscoveryCachePath() string {

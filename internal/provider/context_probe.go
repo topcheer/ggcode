@@ -185,6 +185,24 @@ func saveProbeCache() {
 }
 
 func saveProbeCacheData(cache probeCacheData) {
+	// #1309 P2: this cache is shared across processes (TUI + desktop +
+	// daemon over one ~/.ggcode) but loaded once per process. Writing the
+	// in-memory snapshot verbatim erased entries another process had
+	// probed and saved since our load - probes then repeated (real API
+	// cost). Re-read the file and keep disk-only entries before writing.
+	if data, err := os.ReadFile(probeCachePath()); err == nil {
+		var onDisk probeCacheData
+		if json.Unmarshal(data, &onDisk) == nil {
+			merged := make(map[string]int, len(cache.Entries)+len(onDisk.Entries))
+			for k, v := range onDisk.Entries {
+				merged[k] = v
+			}
+			for k, v := range cache.Entries {
+				merged[k] = v // ours win for keys we know
+			}
+			cache.Entries = merged
+		}
+	}
 	data, err := json.MarshalIndent(cache, "", "  ")
 	if err != nil {
 		debug.Log("probe", "cache marshal error: %v", err)
