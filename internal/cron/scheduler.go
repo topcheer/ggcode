@@ -1,6 +1,8 @@
 package cron
 
 import (
+	crand "crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -351,6 +353,18 @@ func (s *Scheduler) save() error {
 	return nil
 }
 
+// cronIDSuffix returns 4 random bytes hex-encoded, making scheduler job
+// IDs unique across processes sharing a store file (#1308).
+func cronIDSuffix() string {
+	var b [4]byte
+	if _, err := crand.Read(b[:]); err != nil {
+		// Fall back to time-based uniqueness; collision odds across
+		// processes remain negligible for the fallback path.
+		return fmt.Sprintf("%x", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b[:])
+}
+
 // Create adds a new scheduled job and returns its snapshot.
 // The cron expression is a standard 5-field format:
 //
@@ -380,7 +394,11 @@ func (s *Scheduler) Create(cronExpr, prompt string, recurring bool, queueIfBusy 
 
 	s.mu.Lock()
 	s.nextID++
-	id := fmt.Sprintf("cron-%d", s.nextID)
+	// #1308: bare "cron-<n>" collides across processes (each counts from
+	// 1), so a foreign job with the same numeric suffix was silently
+	// overwritten on merge. Append a random suffix for global uniqueness;
+	// the numeric prefix keeps Load's max-ID scan working.
+	id := fmt.Sprintf("cron-%d-%s", s.nextID, cronIDSuffix())
 	job := &Job{
 		ID:          id,
 		CronExpr:    cronExpr,

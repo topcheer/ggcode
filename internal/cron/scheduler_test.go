@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -19,8 +20,9 @@ func TestCreateEveryNMinutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if job.ID != "cron-1" {
-		t.Errorf("expected cron-1, got %s", job.ID)
+	// #1308: IDs are "cron-<n>-<rand>" for cross-process uniqueness.
+	if !strings.HasPrefix(job.ID, "cron-1-") {
+		t.Errorf("expected cron-1-<rand>, got %s", job.ID)
 	}
 	if job.CronExpr != "*/5 * * * *" {
 		t.Errorf("unexpected cron expr: %s", job.CronExpr)
@@ -418,5 +420,77 @@ func TestWorkspaceKeyDeterministic(t *testing.T) {
 	k3 := workspaceKey("/Users/user/projects/other")
 	if k1 == k3 {
 		t.Error("different dirs should produce different keys")
+	}
+}
+
+// #1308: the store file is shared across processes; a save from a stale
+// snapshot used to rewrite the whole file and silently erase jobs another
+// process had created. save() must now preserve on-disk recurring jobs this
+// process has never seen - while our own deleted jobs stay deleted.
+func TestSaveMergesForeignJobs(t *testing.T) {
+	storePath, _ := withTestStore(t)
+
+	// Process A loads, creates one job, saves.
+	a := NewScheduler(nil, storePath)
+	a.Load()
+	if _, err := a.Create("*/5 * * * *", "ours", true, false); err != nil {
+		t.Fatal(err)
+	}
+
+	// Process B loads A's job, then A creates a second job behind B's back.
+	b := NewScheduler(nil, storePath)
+	b.Load()
+	if _, err := a.Create("*/10 * * * *", "foreign-to-B", true, false); err != nil {
+		t.Fatal(err)
+	}
+
+	// B saves (e.g. pausing its own job) from a snapshot that predates the
+	// second job - the merge must keep it.
+	if _, err := b.Create("*/15 * * * *", "bs-own", true, false); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(storePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ss sessionStore
+	if err := json.Unmarshal(data, &ss); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, j := range ss.Jobs {
+		got[j.Prompt] = true
+	}
+	for _, want := range []string{"ours", "foreign-to-B", "bs-own"} {
+		if !got[want] {
+			t.Errorf("job %q lost after foreign-process save; store now: %v", want, got)
+		}
+	}
+
+	// Deleting our own job must still persist (not resurrected by merge).
+	b.mu.Lock()
+	var oursID string
+	for id, j := range b.jobs {
+		if j.Prompt == "ours" {
+			oursID = id
+		}
+	}
+	b.mu.Unlock()
+	if oursID == "" {
+		t.Fatal("job \"ours\" not found in B")
+	}
+	if _, err := b.DeleteWithError(oursID); err != nil {
+		t.Fatal(err)
+	}
+	data, _ = os.ReadFile(storePath)
+	ss = sessionStore{}
+	if err := json.Unmarshal(data, &ss); err != nil {
+		t.Fatal(err)
+	}
+	for _, j := range ss.Jobs {
+		if j.Prompt == "ours" {
+			t.Error("deleted own job resurrected by merge")
+		}
 	}
 }

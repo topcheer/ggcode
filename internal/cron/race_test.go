@@ -24,10 +24,13 @@ func TestNoDoubleFireOnConcurrentUpdate(t *testing.T) {
 	s := NewScheduler(enqueue, "")
 
 	// Create a job. Initial NextFire is the next 5-minute slot.
-	_, err := s.Create("*/5 * * * *", "test prompt", true, false)
+	// #1308: IDs carry a random suffix (cross-process uniqueness) - capture
+	// the real ID instead of hardcoding "cron-1".
+	created, err := s.Create("*/5 * * * *", "test prompt", true, false)
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
+	jobID := created.ID
 
 	// Override NextFire to fire immediately, then reschedule.
 	s.mu.Lock()
@@ -43,7 +46,7 @@ func TestNoDoubleFireOnConcurrentUpdate(t *testing.T) {
 	// While the callback is in the enqueue window, call Update with a
 	// real cronExpr to reschedule far in the future (bumps generation).
 	futureCron := "0 0 1 1 *" // Jan 1st — far in the future
-	s.Update("cron-1", &futureCron, nil, nil)
+	s.Update(jobID, &futureCron, nil, nil)
 
 	// Wait for everything to settle.
 	time.Sleep(300 * time.Millisecond)
@@ -69,10 +72,11 @@ func TestGenerationPreventsOrphanedReschedule(t *testing.T) {
 	}
 
 	s := NewScheduler(enqueue, "")
-	_, err := s.Create("*/5 * * * *", "test", true, false)
+	created, err := s.Create("*/5 * * * *", "test", true, false)
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
+	jobID := created.ID // #1308: IDs carry a random suffix - capture it
 
 	// Schedule to fire immediately.
 	s.mu.Lock()
@@ -111,7 +115,7 @@ func TestGenerationPreventsOrphanedReschedule(t *testing.T) {
 
 	// Verify the job's timer in s.timers is the replacement (far future).
 	s.mu.Lock()
-	timer := s.timers["cron-1"]
+	timer := s.timers[jobID]
 	s.mu.Unlock()
 	if timer == nil {
 		t.Error("expected replacement timer to exist")
