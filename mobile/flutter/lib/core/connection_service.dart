@@ -946,6 +946,27 @@ class ConnectionService {
     if (_resumeHelloSent || _clientId.isEmpty || _socket == null) {
       return;
     }
+    // #1344: on a RECONNECT the pending cursor may be stale/null (the
+    // first sendResumeHello poisons _pendingResume* before the provider
+    // finished restoring its cursor, and _resetHandshakeState never
+    // re-arms). Flushing it here would force relay-side full_history
+    // replay of thousands of events, which then tears the socket down
+    // again - the "connected for one second" loop. Skip the synchronous
+    // flush and let the provider's status listener send an armed
+    // resume_hello with fresh cursors (it runs right after this and now
+    // wins the _resumeHelloSent latch). A genuinely fresh install (no
+    // session state at all) still sends the empty hello via that path.
+    final sessionEmpty =
+        _pendingResumeSessionId == null || _pendingResumeSessionId!.isEmpty;
+    final eventEmpty =
+        _pendingResumeLastEventId == null || _pendingResumeLastEventId!.isEmpty;
+    if (_everConnected && sessionEmpty && eventEmpty) {
+      debugPrint(
+        '[connection] deferring resume_hello: reconnect without cursor, '
+        'waiting for provider arming',
+      );
+      return;
+    }
     sendResumeHello(
       clientId: _clientId,
       sessionId: _pendingResumeSessionId,

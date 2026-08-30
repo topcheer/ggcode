@@ -440,6 +440,22 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       }
     }
 
+    // #1344: arm the resume cursor BEFORE the first connect. Without
+    // this, the service's synchronous flush on relay 'connected' sends
+    // the cursor-less pending (poisoned when a prior sendResumeHello ran
+    // before async cursor restore finished), forcing relay-side
+    // full_history replay. With fresh cursors armed here the first
+    // hello is already incremental; reconnects are additionally guarded
+    // by _flushPendingResumeHello's reconnect gate.
+    if (_sessionId.isNotEmpty || _lastDurableEventId.isNotEmpty) {
+      localService.armResumeHello(
+        clientId: _clientId,
+        sessionId: _sessionId.isNotEmpty ? _sessionId : null,
+        lastEventId: _lastDurableEventId.isNotEmpty ? _lastDurableEventId : null,
+        messageType: _lastDurableEventId.isNotEmpty ? 'resume_from' : 'resume_hello',
+      );
+    }
+
     _bindService(localService, generation, url);
     // Resume strategy is handled in _bindService() when the service
     // reaches connected status — single source of truth, no double send.
