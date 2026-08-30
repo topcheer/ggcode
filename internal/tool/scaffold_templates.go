@@ -103,6 +103,9 @@ func tsTemplate(name, rootDir string, ci, docker bool) []scaffoldFile {
 
 	files = append(files, scaffoldFile{
 		Path: "package.json",
+		// #1335: devDependencies were empty while scripts referenced
+		// tsc/ts-node/jest/eslint - nothing installed, CI red even after
+		// install. Declare the dev toolchain the scripts expect.
 		Content: fmt.Sprintf(`{
   "name": "%s",
   "version": "1.0.0",
@@ -114,7 +117,17 @@ func tsTemplate(name, rootDir string, ci, docker bool) []scaffoldFile {
     "test": "jest",
     "lint": "eslint src/"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "@jest/globals": "^29.7.0",
+    "@types/jest": "^29.5.13",
+    "@types/node": "^20.14.0",
+    "eslint": "^9.11.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.2.5",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.6.2"
+  }
 }
 `, name, name),
 	})
@@ -192,9 +205,13 @@ func pythonTemplate(name, rootDir string, ci, docker bool) []scaffoldFile {
 
 	files = append(files, scaffoldFile{
 		Path: "pyproject.toml",
+		// #1334: build-backend was an invalid mashup
+		// ("setuptools.backends._legacy:_Backend") of the two legal values -
+		// pip install -e . failed 100%. Use the standard backend plus explicit
+		// package discovery so flat-layout tests/ does not trip auto-discovery.
 		Content: fmt.Sprintf(`[build-system]
 requires = ["setuptools>=64"]
-build-backend = "setuptools.backends._legacy:_Backend"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "%s"
@@ -202,9 +219,15 @@ version = "0.1.0"
 description = "%s"
 requires-python = ">=3.10"
 
+[tool.setuptools.packages.find]
+include = ["%s*"]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-`, name, name),
+`, name, name, pkgName),
 	})
 
 	files = append(files, scaffoldFile{
@@ -531,7 +554,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - run: npm ci
+      # #1335: no package-lock.json is generated on a fresh scaffold, so
+      # 'npm ci' aborts with EUSAGE (#865 fixed only the Dockerfile).
+      - run: npm install
       - run: npm run lint
       - run: npm test
 `
@@ -556,7 +581,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - run: pip install -e ".[dev]" || pip install -e .
+      - run: pip install -e ".[dev]"
       - run: pytest
 `
 }

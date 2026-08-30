@@ -58,6 +58,12 @@ type Scheduler struct {
 	generations map[string]uint64    // job ID -> generation counter to detect stale timers
 	lastEnqueue map[string]time.Time // job ID -> last enqueue timestamp (dedup guard)
 	storePath   string               // path to this session's JSON file
+	// knownIDs tracks every recurring job ID this process has ever seen
+	// (loaded or created). save() uses it to distinguish "deleted here"
+	// from "created by another process": on-disk entries with unknown IDs
+	// are preserved instead of being clobbered by our full-file rewrite
+	// (#1308).
+	knownIDs map[string]bool
 
 	// Wall-clock patrol (issue #311): time.AfterFunc timers use the
 	// monotonic clock, which does not advance while the machine sleeps
@@ -83,7 +89,9 @@ func NewScheduler(enqueue func(prompt string, queueIfBusy bool), storePath strin
 		enqueue = func(string, bool) {}
 	}
 	s := &Scheduler{
+		nextID:      0,
 		jobs:        make(map[string]*Job),
+		knownIDs:    make(map[string]bool),
 		enqueue:     enqueue,
 		timers:      make(map[string]*time.Timer),
 		generations: make(map[string]uint64),
@@ -248,6 +256,7 @@ func (s *Scheduler) Load() {
 			job.NextFire = next
 		}
 		s.jobs[job.ID] = job
+		s.knownIDs[job.ID] = true // #1308: seen here - don't merge it back on save
 		// Track max ID to avoid collisions with new jobs.
 		var n int
 		fmt.Sscanf(job.ID, "cron-%d", &n)
@@ -296,9 +305,34 @@ func (s *Scheduler) save() error {
 		})
 	}
 
+	// #1308: this file is shared across processes (TUI resume + desktop can
+	// bind the same session); the session lock does NOT cover it. A plain
+	// full-file rewrite from a stale in-memory snapshot silently erased jobs
+	// another process had just created. Merge instead: preserve on-disk
+	// recurring jobs whose IDs this process has never seen (ours, including
+	// deleted ones, are knownIDs and stay authoritative).
+	if data, err := os.ReadFile(s.storePath); err == nil {
+		var onDisk sessionStore
+		if json.Unmarshal(data, &onDisk) == nil {
+			inMemory := make(map[string]bool, len(jobs))
+			for _, j := range jobs {
+				inMemory[j.ID] = true
+			}
+			for _, jj := range onDisk.Jobs {
+				if jj.Recurring && !inMemory[jj.ID] && !s.knownIDs[jj.ID] {
+					jobs = append(jobs, jj)
+				}
+			}
+		}
+	}
+
 	if len(jobs) == 0 {
 		// Remove the file when no recurring jobs remain.
-		os.Remove(s.storePath)
+		// #1308: surface (rather than ignore) a failed removal so the
+		// operator can see the store file is stale.
+		if err := os.Remove(s.storePath); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove cron store %s: %w", s.storePath, err)
+		}
 		return nil
 	}
 
@@ -357,6 +391,7 @@ func (s *Scheduler) Create(cronExpr, prompt string, recurring bool, queueIfBusy 
 		NextFire:    next,
 	}
 	s.jobs[id] = job
+	s.knownIDs[id] = true // #1308: seen here - don't merge it back on save
 	s.mu.Unlock()
 
 	s.scheduleJob(job)
