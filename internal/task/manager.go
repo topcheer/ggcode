@@ -163,7 +163,11 @@ func (m *Manager) Update(taskID string, opts UpdateOptions) (Task, error) {
 		if !m.hasTask(blockID) {
 			return Task{}, fmt.Errorf("blocked task %q not found", blockID)
 		}
-		if m.wouldCreateCycle(blockID, taskID) {
+		// #1297: args were swapped. wouldCreateCycle(start, target) checks
+		// whether target is reachable from start's BlockedBy chain; adding
+		// "taskID blocks blockID" creates a cycle iff taskID is already
+		// transitively blocked by blockID, i.e. wouldCreateCycle(taskID, blockID).
+		if m.wouldCreateCycle(taskID, blockID) {
 			return Task{}, fmt.Errorf("circular dependency detected: task %q is (transitively) blocked by task %q — cannot add block %q → %q", taskID, blockID, taskID, blockID)
 		}
 	}
@@ -174,7 +178,9 @@ func (m *Manager) Update(taskID string, opts UpdateOptions) (Task, error) {
 		if !m.hasTask(depID) {
 			return Task{}, fmt.Errorf("blocking task %q not found", depID)
 		}
-		if m.wouldCreateCycle(taskID, depID) {
+		// #1297: adding "depID blocks taskID" - cycle iff depID is already
+		// transitively blocked by taskID.
+		if m.wouldCreateCycle(depID, taskID) {
 			return Task{}, fmt.Errorf("circular dependency detected adding blocked-by %q", depID)
 		}
 	}
@@ -198,6 +204,12 @@ func (m *Manager) Update(taskID string, opts UpdateOptions) (Task, error) {
 
 	// Add block relationships (validated above; now safe to apply)
 	for _, blockID := range opts.AddBlocks {
+		// #1297: re-check against evolving state - earlier iterations of
+		// this loop add reverse links that earlier edges' validations did
+		// not see (the pre-validation loop judged each edge in isolation).
+		if m.wouldCreateCycle(taskID, blockID) {
+			return Task{}, fmt.Errorf("circular dependency detected: adding block %q → %q would close a cycle", taskID, blockID)
+		}
 		if !contains(t.Blocks, blockID) {
 			t.Blocks = append(t.Blocks, blockID)
 		}
@@ -215,8 +227,10 @@ func (m *Manager) Update(taskID string, opts UpdateOptions) (Task, error) {
 			return Task{}, fmt.Errorf("blocker task %q not found", blockerID)
 		}
 		// Cycle detection: if taskID is already (transitively) blocking
-		// blockerID, adding blockerID→taskID would create a cycle.
-		if m.wouldCreateCycle(taskID, blockerID) {
+		// blockerID... #1297: args were swapped here too. Adding
+		// "blockerID blocks taskID" closes a cycle iff blockerID is
+		// already transitively blocked by taskID.
+		if m.wouldCreateCycle(blockerID, taskID) {
 			return Task{}, fmt.Errorf("circular dependency detected: task %q already (transitively) blocks task %q — cannot add blockedBy %q → %q", blockerID, taskID, taskID, blockerID)
 		}
 		if !contains(t.BlockedBy, blockerID) {

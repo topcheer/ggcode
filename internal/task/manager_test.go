@@ -148,3 +148,47 @@ func TestBlockNonexistent(t *testing.T) {
 		t.Error("expected error for nonexistent blocked task")
 	}
 }
+
+// #1297: all three wouldCreateCycle call sites had swapped args, so a
+// real 3-node cycle passed validation and persisted - idle_runner's
+// single-level check then deadlocked every task in the cycle forever.
+func TestUpdateCycleDetectionNotSwapped(t *testing.T) {
+	// Repro 1 (AddBlockedBy path): A blocks B, B blocks C, then
+	// A blocked-by C closes the cycle A→B→C→A - must be rejected.
+	m := NewManager()
+	a := m.Create("A", "", "", nil).ID
+	b := m.Create("B", "", "", nil).ID
+	c := m.Create("C", "", "", nil).ID
+	if _, err := m.Update(b, UpdateOptions{AddBlockedBy: []string{a}}); err != nil {
+		t.Fatalf("A blocks B: %v", err)
+	}
+	if _, err := m.Update(c, UpdateOptions{AddBlockedBy: []string{b}}); err != nil {
+		t.Fatalf("B blocks C: %v", err)
+	}
+	if _, err := m.Update(a, UpdateOptions{AddBlockedBy: []string{c}}); err == nil {
+		t.Fatal("cycle A→B→C→A via AddBlockedBy must be rejected (swapped-args bug)")
+	}
+
+	// Repro 2 (AddBlocks path): same cycle built with AddBlocks.
+	m2 := NewManager()
+	a2 := m2.Create("A", "", "", nil).ID
+	b2 := m2.Create("B", "", "", nil).ID
+	c2 := m2.Create("C", "", "", nil).ID
+	if _, err := m2.Update(a2, UpdateOptions{AddBlocks: []string{b2}}); err != nil {
+		t.Fatalf("A blocks B: %v", err)
+	}
+	if _, err := m2.Update(b2, UpdateOptions{AddBlocks: []string{c2}}); err != nil {
+		t.Fatalf("B blocks C: %v", err)
+	}
+	if _, err := m2.Update(c2, UpdateOptions{AddBlocks: []string{a2}}); err == nil {
+		t.Fatal("cycle via AddBlocks must be rejected (swapped-args bug)")
+	}
+
+	// Sanity: legitimate edges still accepted.
+	m3 := NewManager()
+	x := m3.Create("X", "", "", nil).ID
+	y := m3.Create("Y", "", "", nil).ID
+	if _, err := m3.Update(y, UpdateOptions{AddBlockedBy: []string{x}}); err != nil {
+		t.Fatalf("legit edge rejected: %v", err)
+	}
+}
