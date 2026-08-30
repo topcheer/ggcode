@@ -192,3 +192,35 @@ func TestUpdateCycleDetectionNotSwapped(t *testing.T) {
 		t.Fatalf("legit edge rejected: %v", err)
 	}
 }
+
+// #1345: an Update whose addBlocks+addBlockedBy combination forms a
+// cross-array cycle must fail BEFORE any mutation - the old code wrote
+// the AddBlocks edges (and Status) first and only detected the cycle in
+// the AddBlockedBy apply loop, leaving partial state behind.
+func TestUpdateCrossArrayCycleNotModified(t *testing.T) {
+	m := NewManager()
+	m.Create("X", "", "", nil) // task-1
+	m.Create("B", "", "", nil) // task-2
+
+	inProgress := TaskStatus(StatusInProgress)
+	_, err := m.Update("task-1", UpdateOptions{
+		Status:       &inProgress,
+		AddBlocks:    []string{"task-2"},
+		AddBlockedBy: []string{"task-2"},
+	})
+	if err == nil {
+		t.Fatal("expected cross-array cycle rejection")
+	}
+
+	x, _ := m.Get("task-1")
+	if len(x.Blocks) != 0 {
+		t.Errorf("task-1 must be unmodified on error, got blocks=%v", x.Blocks)
+	}
+	if x.Status != StatusPending {
+		t.Errorf("task-1 status must stay pending on error, got %s", x.Status)
+	}
+	b, _ := m.Get("task-2")
+	if len(b.BlockedBy) != 0 {
+		t.Errorf("task-2 must be unmodified on error, got blockedBy=%v", b.BlockedBy)
+	}
+}

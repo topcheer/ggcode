@@ -183,6 +183,15 @@ func (m *Manager) Update(taskID string, opts UpdateOptions) (Task, error) {
 		if m.wouldCreateCycle(depID, taskID) {
 			return Task{}, fmt.Errorf("circular dependency detected adding blocked-by %q", depID)
 		}
+		// #1345: cross-array cycle. If depID is also in AddBlocks, the
+		// apply phase writes "taskID blocks depID" first (depID.BlockedBy
+		// gains taskID) and only then detects that this blockedBy edge
+		// closes a 2-cycle - after partial mutation, violating the
+		// "error = not modified" contract. "X blocks B" and "B blocks X"
+		// is always a cycle, so reject up front.
+		if contains(opts.AddBlocks, depID) {
+			return Task{}, fmt.Errorf("circular dependency detected: task %q cannot both block and be blocked by task %q", taskID, depID)
+		}
 	}
 
 	// All validation passed — apply mutations.

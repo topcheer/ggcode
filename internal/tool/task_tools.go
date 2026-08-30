@@ -90,9 +90,10 @@ func (t TaskCreateTool) Execute(_ context.Context, input json.RawMessage) (Resul
 	if strings.TrimSpace(args.Subject) == "" {
 		return Result{IsError: true, Content: "subject is required"}, nil
 	}
-	if len(args.Subject) > maxTaskSubjectLen {
-		// #866: rune-count, not bytes — CJK subjects were rejected at half
-		// the documented length.
+	if utf8.RuneCountInString(args.Subject) > maxTaskSubjectLen {
+		// #866/#1346: rune-count, not bytes — CJK subjects were rejected
+		// at less than half the documented length. The gate below used
+		// len() (bytes) while the message already reported runes.
 		return Result{IsError: true, Content: fmt.Sprintf("subject too long: %d chars (max %d). Use a shorter title.", utf8.RuneCountInString(args.Subject), maxTaskSubjectLen)}, nil
 	}
 
