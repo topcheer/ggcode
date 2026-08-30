@@ -38,6 +38,34 @@ const (
 	replayTruncationHeadroom = 64
 )
 
+// ─── #1347 LOCKED INVARIANTS — DO NOT "OPTIMIZE" ───────────────────
+//
+// These three invariants work together to keep slow mobile clients
+// converging on an actively-producing session. Commit 61ec10e2 broke
+// invariant (1) by "optimizing" the buffer down to 512 and, in the
+// process, starved every mobile client for weeks (issue #1347: relay
+// killed the client mid-replay on every resume; per-round ACK progress
+// never caught up with 30s of new production). Regression tests
+// TestFinishResumeTruncatesReplayWhenBufferFull,
+// TestFinishResumeFullBacklogWhenBufferEmpty and
+// TestSendChCapacityFloor lock all three — if you change any of them,
+// re-derive the starvation math in #1347 first.
+//
+//  1. sendCh capacity >= 1024 (see newPeer): with every send
+//     non-blocking, a small buffer's ONLY effect is premature "slow
+//     client" 1013 kills during resume replays. Never shrink it below
+//     the floor without reintroducing a bounded blocking grace in
+//     sendRaw instead.
+//  2. sendRaw stays fully non-blocking: no sender may ever block on
+//     sendCh, or one slow peer stalls room-wide broadcast under
+//     room.sendMu.
+//  3. finishResume truncates the replay when the buffer is near full
+//     (drain-aware): the backlog stays in history and the client
+//     resumes from its ACKed cursor next round with monotonic progress.
+//     Never replace this with "dump everything and let the kill path
+//     clean up" — that IS the starvation loop.
+// ─── END LOCKED INVARIANTS ──────────────────────────────────────────
+
 // ─── Wire protocol ───
 
 type relayMessage struct {
@@ -257,12 +285,14 @@ func newPeer(h *hub, room *room, role string, conn *websocket.Conn) *peer {
 		room: room,
 		role: role,
 		conn: conn,
-		// #1347: 2048 buffer (61ec10e2 reduced 10000->512 to guard against
-		// goroutine starvation, but the blocking grace it guarded was removed
-		// in the same commit - every send is non-blocking now, so the small
-		// buffer only triggers premature "slow client" 1013 kills during
-		// resume replays on slow links). 2048 * ~1-8KB ~= 2-16MB peak per
-		// slow peer, bounded and transient.
+		// #1347 LOCKED INVARIANT 1: buffer floor 2048. 61ec10e2 reduced this
+		// from 10000 to 512 ("goroutine starvation") but removed the blocking
+		// grace in the same commit — with every send non-blocking the small
+		// buffer only caused premature "slow client" 1013 kills during
+		// resume replays on slow links, starving mobile clients (#1347).
+		// 2048 * ~1-8KB ~= 2-16MB transient peak per slow peer, bounded.
+		// TestSendChCapacityFloor enforces the floor — see the LOCKED
+		// INVARIANTS block above the consts before touching this.
 		sendCh: make(chan []byte, 2048),
 		done:   make(chan struct{}),
 	}
@@ -297,6 +327,12 @@ func (p *peer) trySend(msg relayMessage) bool {
 // never stall the whole room for 2s × N. Events are already persisted to
 // history before sendRaw, so a dropped live-forward is recoverable via
 // cursor-based replay on reconnect.
+// #1347 LOCKED INVARIANT 2: sendRaw stays fully non-blocking. No sender
+// may ever block on sendCh — a blocking send here (even with a bounded
+// grace) stalls room-wide broadcast under room.sendMu for one slow peer.
+// The "goroutine starvation" concern that motivated 61ec10e2's blocking
+// grace is void precisely BECAUSE this function never blocks. See the
+// LOCKED INVARIANTS block above the consts.
 func (p *peer) sendRaw(raw []byte) {
 	select {
 	case p.sendCh <- raw:
@@ -848,7 +884,7 @@ func (p *peer) finishResume(clientID string, h *hub) {
 	p.room.mu.Unlock()
 
 	p.send(ack)
-	// #1347: drain-aware replay. Dumping the whole backlog into sendRaw
+	// #1347 LOCKED INVARIANT 3: drain-aware replay. Dumping the whole backlog into sendRaw
 	// (non-blocking) fills the buffer mid-replay and trips the "slow
 	// client" 1013 kill - on an actively-producing session the client's
 	// per-round progress never catches up with new production, so it

@@ -1392,3 +1392,16 @@ drained:
 		t.Fatalf("expected full backlog %d+ack, got %d", backlog, seen-1)
 	}
 }
+
+// #1347 LOCKED INVARIANT 1: the per-peer send buffer must stay at or
+// above 1024 slots. 61ec10e2 "optimized" it from 10000 to 512 and, with
+// every send non-blocking, the small buffer's only effect was premature
+// "slow client" 1013 kills during resume replays - starving every
+// actively-producing session's mobile client for weeks. This test makes
+// a silent capacity regression fail CI instead of production.
+func TestSendChCapacityFloor(t *testing.T) {
+	p := newPeer(nil, newRoom("token"), "client", nil)
+	if cap(p.sendCh) < 1024 {
+		t.Fatalf("sendCh capacity %d below locked floor 1024 (see #1347 LOCKED INVARIANTS in relay.go)", cap(p.sendCh))
+	}
+}
