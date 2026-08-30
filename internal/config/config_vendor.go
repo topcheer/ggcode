@@ -89,7 +89,15 @@ func (c *Config) ResolveEndpointSelection(vendor, endpoint, model string) (*Reso
 					// the next refresh gets invalid_grant with no self-healing
 					// path. Surface the error so the caller/user can re-auth.
 					if saveErr := auth.DefaultStore().Save(refreshed); saveErr != nil {
-						debug.Log("config", "claude oauth: token refreshed but persisting failed (refresh token may be lost on restart): %v", saveErr)
+						// #1336: returning the error (not just logging) makes the
+						// failure visible to the 27+ ResolveActiveEndpoint callers
+						// that key off the returned error to trigger re-auth.
+						// The in-memory token would keep THIS session alive while
+						// disk holds the server-side invalidated old refresh token:
+						// after restart the only outcome is invalid_grant and a
+						// forced /login anyway - fail now, while the user is present.
+						debug.Log("config", "claude oauth: token refreshed but persisting failed (refresh token lost on restart): %v", saveErr)
+						return nil, fmt.Errorf("claude oauth: refreshed token could not be persisted (disk/permission error); re-authenticate before restarting: %w", saveErr)
 					}
 					apiKey = strings.TrimSpace(refreshed.AccessToken)
 				} else {
