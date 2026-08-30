@@ -6,6 +6,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	toolpkg "github.com/topcheer/ggcode/internal/tool"
 )
 
 func TestIMEmitterNil(t *testing.T) {
@@ -286,5 +288,71 @@ func TestIMEmitterEmitTextRedactsSecrets(t *testing.T) {
 	}
 	if !strings.Contains(got, "the key is") {
 		t.Errorf("non-secret text mangled: %q", got)
+	}
+}
+
+// #1333: EmitUserTextExcept enqueues directly and bypassed the EmitEvent
+// choke point - a secret the user pasted on one channel was forwarded
+// verbatim to other bound adapters. Must go through redactOutbound.
+func TestIMEmitterEmitUserTextExceptRedactsSecrets(t *testing.T) {
+	mgr := NewManager()
+	sink := &namedCaptureSink{name: "qq"}
+	mgr.RegisterSink(sink)
+	mgr.currentBindings["qq"] = &ChannelBinding{Adapter: "qq", ChannelID: "ch1"}
+
+	e := NewIMEmitter(mgr, "en", "/tmp")
+	e.EmitUserTextExcept("my token sk-ant-api03-AbCdEf1234567890abcdef use it", "telegram")
+
+	time.Sleep(150 * time.Millisecond)
+
+	events := sink.events()
+	if len(events) == 0 {
+		t.Fatal("expected at least one echo event")
+	}
+	got := events[len(events)-1].Text
+	if strings.Contains(got, "sk-ant-api03-AbCdEf") {
+		t.Errorf("secret leaked via user echo to other adapters: %q", got)
+	}
+	if !strings.Contains(got, "my token") {
+		t.Errorf("non-secret echo text mangled: %q", got)
+	}
+}
+
+// #1333: EmitAskUserInteractive sends cardText/fallbackText via manager
+// paths that bypass EmitEvent. Question text quoting a secret (e.g. after
+// read_file on .env) must be redacted before leaving the machine.
+func TestIMEmitterAskUserInteractiveRedactsSecrets(t *testing.T) {
+	mgr := NewManager()
+	sink := &namedCaptureSink{name: "qq"}
+	mgr.RegisterSink(sink)
+	mgr.currentBindings["qq"] = &ChannelBinding{Adapter: "qq", ChannelID: "ch1"}
+
+	e := NewIMEmitter(mgr, "en", "/tmp")
+	q := toolpkg.AskUserQuestion{
+		ID:    "q1",
+		Title: "Confirm key sk-ant-api03-AbCdEf1234567890abcdef",
+		Choices: []toolpkg.AskUserChoice{
+			{Label: "Yes"}, {Label: "No"},
+		},
+	}
+	fallback := "Confirm key sk-ant-api03-ZzZzZz0987654321zyxwvu yes?"
+	e.EmitAskUserInteractive(q.Title, q, fallback)
+
+	time.Sleep(150 * time.Millisecond)
+
+	events := sink.events()
+	if len(events) == 0 {
+		t.Fatal("expected fallback event on non-interactive sink")
+	}
+	got := events[len(events)-1].Text
+	if strings.Contains(got, "sk-ant-api03-ZzZzZz") {
+		t.Errorf("secret leaked via ask_user fallback: %q", got)
+	}
+	if !strings.Contains(got, "Confirm key") {
+		t.Errorf("non-secret fallback text mangled: %q", got)
+	}
+	// The helper itself must sanitize title text too.
+	if out := e.redactOutbound(q.Title); strings.Contains(out, "sk-ant-api03-AbCdEf") {
+		t.Errorf("redactOutbound left secret in ask_user title: %q", out)
 	}
 }
