@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -200,5 +201,22 @@ func TestMultiFileWrite_AtomicRollback(t *testing.T) {
 	}
 	if _, err := os.Stat(sandboxedPath); !os.IsNotExist(err) {
 		t.Error("bad file should not exist after atomic failure")
+	}
+
+	// #1331: summary and per-file detail must not contradict each other -
+	// rolled-back files render as "rolled_back" lines under written=0,
+	// never as "✓ ... written" lines.
+	if !strings.Contains(result.Content, "written=0") {
+		t.Errorf("summary should report written=0, got: %s", result.Content)
+	}
+	if strings.Contains(result.Content, "✓") {
+		t.Errorf("rolled-back detail must not render as written: %s", result.Content)
+	}
+	if !strings.Contains(result.Content, "rolled back") {
+		t.Errorf("rolled-back file should be marked in detail: %s", result.Content)
+	}
+	// Successful rollback must NOT claim INCOMPLETE.
+	if strings.Contains(result.Content, "INCOMPLETE") {
+		t.Errorf("successful rollback wrongly reported as incomplete: %s", result.Content)
 	}
 }
