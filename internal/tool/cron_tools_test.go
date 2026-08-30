@@ -362,15 +362,16 @@ func TestCronUpdateTool_InvalidCronExpr(t *testing.T) {
 
 	createTool := CronCreateTool{Scheduler: s}
 	createTool.Execute(context.Background(), json.RawMessage(`{"cron":"*/5 * * * *","prompt":"test"}`))
+	jobID := firstJobID(t, s) // #1308: IDs carry a random suffix
 
 	updateTool := CronUpdateTool{Scheduler: s}
-	result, _ := updateTool.Execute(context.Background(), json.RawMessage(`{"jobId":"cron-1","cron":"invalid expr"}`))
+	result, _ := updateTool.Execute(context.Background(), json.RawMessage(`{"jobId":"`+jobID+`","cron":"invalid expr"}`))
 	if !result.IsError {
 		t.Error("expected error for invalid cron expression")
 	}
 
 	// Original should be unchanged
-	got, _ := s.Get("cron-1")
+	got, _ := s.Get(jobID)
 	if got.CronExpr != "*/5 * * * *" {
 		t.Errorf("cron expression should be unchanged after failed update, got %q", got.CronExpr)
 	}
@@ -392,27 +393,28 @@ func TestCronPauseResumeTool(t *testing.T) {
 
 	createTool := CronCreateTool{Scheduler: s}
 	createTool.Execute(context.Background(), json.RawMessage(`{"cron":"*/5 * * * *","prompt":"test","recurring":true}`))
+	jobID := firstJobID(t, s) // #1308: IDs carry a random suffix
 
 	// Pause
 	pauseTool := CronPauseTool{Scheduler: s}
-	result, _ := pauseTool.Execute(context.Background(), json.RawMessage(`{"jobId":"cron-1"}`))
+	result, _ := pauseTool.Execute(context.Background(), json.RawMessage(`{"jobId":"`+jobID+`"}`))
 	if result.IsError {
 		t.Fatalf("pause failed: %s", result.Content)
 	}
 
-	got, _ := s.Get("cron-1")
+	got, _ := s.Get(jobID)
 	if !got.Paused {
 		t.Error("expected Paused=true after pause")
 	}
 
 	// Resume
 	resumeTool := CronResumeTool{Scheduler: s}
-	result, _ = resumeTool.Execute(context.Background(), json.RawMessage(`{"jobId":"cron-1"}`))
+	result, _ = resumeTool.Execute(context.Background(), json.RawMessage(`{"jobId":"`+jobID+`"}`))
 	if result.IsError {
 		t.Fatalf("resume failed: %s", result.Content)
 	}
 
-	got, _ = s.Get("cron-1")
+	got, _ = s.Get(jobID)
 	if got.Paused {
 		t.Error("expected Paused=false after resume")
 	}
@@ -462,19 +464,20 @@ func TestCronPauseResume_Idempotent(t *testing.T) {
 
 	createTool := CronCreateTool{Scheduler: s}
 	createTool.Execute(context.Background(), json.RawMessage(`{"cron":"*/5 * * * *","prompt":"test","recurring":true}`))
+	jobID := firstJobID(t, s) // #1308: IDs carry a random suffix
 
 	// Double pause should be fine
 	pauseTool := CronPauseTool{Scheduler: s}
-	pauseTool.Execute(context.Background(), json.RawMessage(`{"jobId":"cron-1"}`))
-	result, _ := pauseTool.Execute(context.Background(), json.RawMessage(`{"jobId":"cron-1"}`))
+	pauseTool.Execute(context.Background(), json.RawMessage(`{"jobId":"`+jobID+`"}`))
+	result, _ := pauseTool.Execute(context.Background(), json.RawMessage(`{"jobId":"`+jobID+`"}`))
 	if result.IsError {
 		t.Error("double pause should not error")
 	}
 
 	// Double resume should be fine
 	resumeTool := CronResumeTool{Scheduler: s}
-	resumeTool.Execute(context.Background(), json.RawMessage(`{"jobId":"cron-1"}`))
-	result, _ = resumeTool.Execute(context.Background(), json.RawMessage(`{"jobId":"cron-1"}`))
+	resumeTool.Execute(context.Background(), json.RawMessage(`{"jobId":"`+jobID+`"}`))
+	result, _ = resumeTool.Execute(context.Background(), json.RawMessage(`{"jobId":"`+jobID+`"}`))
 	if result.IsError {
 		t.Error("double resume should not error")
 	}
@@ -514,12 +517,13 @@ func TestCronGetTool_ShowsPausedState(t *testing.T) {
 
 	createTool := CronCreateTool{Scheduler: s}
 	createTool.Execute(context.Background(), json.RawMessage(`{"cron":"*/5 * * * *","prompt":"test","recurring":true}`))
+	jobID := firstJobID(t, s) // #1308: IDs carry a random suffix
 
 	pauseTool := CronPauseTool{Scheduler: s}
-	pauseTool.Execute(context.Background(), json.RawMessage(`{"jobId":"cron-1"}`))
+	pauseTool.Execute(context.Background(), json.RawMessage(`{"jobId":"`+jobID+`"}`))
 
 	getTool := CronGetTool{Scheduler: s}
-	result, _ := getTool.Execute(context.Background(), json.RawMessage(`{"jobId":"cron-1"}`))
+	result, _ := getTool.Execute(context.Background(), json.RawMessage(`{"jobId":"`+jobID+`"}`))
 	if !strings.Contains(result.Content, "paused") {
 		t.Errorf("result should show 'paused' state, got: %s", result.Content)
 	}
@@ -542,4 +546,16 @@ func TestCronGetTool_NilScheduler(t *testing.T) {
 	if !result.IsError {
 		t.Error("expected error for nil scheduler")
 	}
+}
+
+// firstJobID returns the ID of the scheduler's first job. #1308: job IDs
+// carry a random suffix (cross-process uniqueness), so tests must capture
+// the real ID instead of hardcoding "cron-1".
+func firstJobID(t *testing.T, s *cron.Scheduler) string {
+	t.Helper()
+	jobs := s.List()
+	if len(jobs) == 0 {
+		t.Fatal("no jobs created")
+	}
+	return jobs[0].ID
 }
