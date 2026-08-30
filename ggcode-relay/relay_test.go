@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1305,4 +1307,88 @@ func eventIDs(events []roomEvent) []string {
 func TestMain(m *testing.M) {
 	// Set a temp HOME so DB path doesn't collide.
 	os.Exit(m.Run())
+}
+
+// #1347: when the client's send buffer is nearly full, finishResume must
+// stop feeding the replay backlog instead of pushing every event through
+// the non-blocking sendRaw (which would trigger the "slow client" 1013
+// kill mid-replay and starve actively-producing sessions). Truncated
+// events stay in history and resume from the ACKed cursor next round.
+func TestFinishResumeTruncatesReplayWhenBufferFull(t *testing.T) {
+	r := newRoom("token")
+	r.sessionID = "sess-1"
+	const backlog = 100
+	r.history = make([]roomEvent, backlog)
+	for i := range r.history {
+		r.history[i] = roomEvent{eventID: fmt.Sprintf("ev-%09d", i+1)}
+	}
+	client := newPeer(nil, r, "client", nil)
+	client.clientID = "client-1"
+	client.protocolVersion = shareProtocolV3
+	client.waitingForKeyReady = true
+
+	// Simulate a slow client: fill the buffer to just below capacity so
+	// only the headroom slots remain.
+	for len(client.sendCh) < cap(client.sendCh) {
+		client.sendCh <- []byte(`{"type":"filler"}`)
+	}
+
+	client.finishResume("client-1", &hub{})
+
+	// Drain everything the replay managed to enqueue and verify it stayed
+	// within the headroom bound (ack + at most replayTruncationHeadroom-1
+	// events) and that the connection was NOT killed: closeWithReason
+	// closes p.done, so a live done channel proves no 1013.
+	seen := 0
+	for {
+		select {
+		case raw := <-client.sendCh:
+			if !bytes.Contains(raw, []byte(`"filler"`)) {
+				seen++ // resume_ack or a replayed event
+			}
+		default:
+			goto drained
+		}
+	}
+drained:
+	if seen > replayTruncationHeadroom+1 { // +1 for the resume_ack
+		t.Fatalf("replay overflowed headroom: enqueued %d messages (headroom %d)", seen, replayTruncationHeadroom)
+	}
+	select {
+	case <-client.done:
+		t.Fatal("client must not be killed when replay is truncated")
+	default:
+	}
+}
+
+// Sanity: with a drained buffer the full backlog flows through.
+func TestFinishResumeFullBacklogWhenBufferEmpty(t *testing.T) {
+	r := newRoom("token")
+	r.sessionID = "sess-1"
+	const backlog = 50
+	r.history = make([]roomEvent, backlog)
+	for i := range r.history {
+		r.history[i] = roomEvent{eventID: fmt.Sprintf("ev-%09d", i+1)}
+	}
+	client := newPeer(nil, r, "client", nil)
+	client.clientID = "client-1"
+	client.protocolVersion = shareProtocolV3
+	client.waitingForKeyReady = true
+	client.cursor = "" // full replay from the top
+
+	client.finishResume("client-1", &hub{})
+
+	seen := 0
+	for {
+		select {
+		case <-client.sendCh:
+			seen++
+		default:
+			goto drained
+		}
+	}
+drained:
+	if seen != backlog+1 { // +1 resume_ack
+		t.Fatalf("expected full backlog %d+ack, got %d", backlog, seen-1)
+	}
 }
