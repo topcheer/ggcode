@@ -98,8 +98,17 @@ func writePlatformScript(req Request) (string, error) {
 }
 
 func winEscape(s string) string {
-	// Escape double quotes for batch files.
-	s = strings.ReplaceAll(s, `"`, `\"`)
+	// #1310: this value is spliced into a .cmd batch file and finally
+	// parsed by cmd.exe, where a backslash is a LITERAL character, not an
+	// escape - `\"` inside a quoted string closed the quote early and
+	// shifted the whole command line whenever an arg contained a double
+	// quote (e.g. --prompt "say \"hi\""). Doubling the quote keeps cmd's
+	// quoting state balanced AND the child's argv parser
+	// (CommandLineToArgvW) reads "" inside a quoted arg as one literal
+	// quote. Percent also expands inside quotes in batch files (%VAR%),
+	// so double it to pass a literal % through.
+	s = strings.ReplaceAll(s, `"`, `""`)
+	s = strings.ReplaceAll(s, `%`, `%%`)
 	return `"` + s + `"`
 }
 
