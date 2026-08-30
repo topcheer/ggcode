@@ -22,6 +22,17 @@ const (
 	lockfileFailImmediately = 0x00000001
 )
 
+// #1305: byte offset where the holder's PID is stored. LockFileEx locks
+// byte 0 only; on Windows byte-range locks are MANDATORY, so reading
+// offset 0 from another handle fails with ERROR_LOCK_VIOLATION and the
+// holder PID came back 0 every time. Storing the PID outside the locked
+// byte keeps diagnostics readable through a separate handle (same fix as
+// internal/knight/lock_windows.go).
+const (
+	lockPIDOffset = 32
+	lockPIDMaxLen = 16
+)
+
 // TryAcquireSessionLock attempts to acquire an exclusive lock on the
 // session's lock file. Returns a *SessionLock where Acquired()==true
 // on success, or Acquired()==false if another process already holds it.
@@ -45,10 +56,13 @@ func TryAcquireSessionLock(storeDir, sessionID string) (*SessionLock, error) {
 		}, nil
 	}
 
-	f.Truncate(0)
-	f.Seek(0, 0)
-	f.WriteString(strconv.FormatInt(int64(os.Getpid()), 10))
-	f.Sync()
+	// #1305: write the PID OUTSIDE the locked byte (offset 32) so a second
+	// process can read it through its own handle without hitting the
+	// mandatory byte-range lock. Byte 0 stays locked as the lock itself.
+	var buf [lockPIDMaxLen]byte
+	n := copy(buf[:], []byte(strconv.FormatInt(int64(os.Getpid()), 10)))
+	_, _ = f.WriteAt(buf[:n], lockPIDOffset)
+	_ = f.Sync()
 
 	return &SessionLock{
 		storeDir:  storeDir,
@@ -121,11 +135,15 @@ func IsSessionLocked(storeDir, sessionID string) bool {
 }
 
 func readLockPIDFromFile(f *os.File) int {
-	data, err := os.ReadFile(f.Name())
-	if err != nil {
+	// #1305: ReadAt at the PID offset - a plain ReadFile from offset 0
+	// always touched the locked byte 0 and failed with
+	// ERROR_LOCK_VIOLATION, so the holder PID was permanently 0.
+	var buf [lockPIDMaxLen]byte
+	n, err := f.ReadAt(buf[:], lockPIDOffset)
+	if err != nil && n == 0 {
 		return 0
 	}
-	return parsePID(data)
+	return parsePID(buf[:n])
 }
 
 func lockFileEx(handle syscall.Handle, flags, reserved uint32, length uint32, offset uint32) error {
