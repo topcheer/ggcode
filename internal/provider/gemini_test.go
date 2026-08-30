@@ -286,6 +286,14 @@ data: {"candidates":[{"finishReason":"SAFETY"}],"usageMetadata":{"promptTokenCou
 
 `,
 		},
+		{
+			// #1301: input-side block - no candidates, no finishReason,
+			// reason only in top-level promptFeedback.blockReason.
+			name: "promptFeedback block without candidates",
+			stream: `data: {"promptFeedback":{"blockReason":"SAFETY"},"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":0}}
+
+`,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
