@@ -157,6 +157,13 @@ func (e *IMEmitter) EmitEvent(event OutboundEvent) {
 	// Relativize absolute paths in all output text
 	event.Text = e.relativizePaths(event.Text)
 	event.Status = e.relativizePaths(event.Status)
+	// #1299: agent final replies carried secrets in cleartext to IM -
+	// tool results were redacted (redactResult) but OutboundEventText
+	// went straight to adapters, and IM is an outbound boundary (leaves
+	// this machine for Telegram/Discord/DingTalk servers). Redact at
+	// this single choke point so every emitter path is covered.
+	event.Text = redactResult(event.Text)
+	event.Status = redactResult(event.Status)
 	if event.ToolRes != nil {
 		event.ToolRes.Args = e.relativizePaths(event.ToolRes.Args)
 		event.ToolRes.Result = e.relativizePaths(event.ToolRes.Result)

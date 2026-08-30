@@ -261,3 +261,30 @@ func (s *namedCaptureSink) reset() {
 }
 
 var _ Sink = (*namedCaptureSink)(nil)
+
+// #1299: final assistant replies went out to IM adapters unredacted -
+// only tool results were masked. EmitText must redact secrets (this
+// covers all adapter paths since everything funnels through EmitEvent).
+func TestIMEmitterEmitTextRedactsSecrets(t *testing.T) {
+	mgr := NewManager()
+	sink := &namedCaptureSink{name: "qq"}
+	mgr.RegisterSink(sink)
+	mgr.currentBindings["qq"] = &ChannelBinding{Adapter: "qq", ChannelID: "ch1"}
+
+	e := NewIMEmitter(mgr, "en", "/tmp")
+	_ = e.EmitText("the key is sk-ant-api03-AbCdEf1234567890abcdef ok")
+
+	time.Sleep(150 * time.Millisecond)
+
+	events := sink.events()
+	if len(events) == 0 {
+		t.Fatal("expected at least one event")
+	}
+	got := events[len(events)-1].Text
+	if strings.Contains(got, "sk-ant-api03-AbCdEf") {
+		t.Errorf("secret leaked to IM sink: %q", got)
+	}
+	if !strings.Contains(got, "the key is") {
+		t.Errorf("non-secret text mangled: %q", got)
+	}
+}
