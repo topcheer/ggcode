@@ -176,7 +176,12 @@ func (t *Target) Connect() (io.Writer, error) {
 	safego.Go("stream.targetMonitor", func() {
 		werr := monCmd.Wait()
 		t.mu.Lock()
-		if t.state == TargetLive {
+		// #1339: guard with a cmd identity check, not just state. After
+		// Stop() -> quick Connect() this monitor may return late from
+		// Wait() while a NEW ffmpeg (assigned by Connect) is already
+		// live; without the check we would mark the healthy new session
+		// as TargetError with the dead process's exit status.
+		if t.state == TargetLive && t.cmd == monCmd {
 			if werr != nil {
 				t.lastError = fmt.Sprintf("ffmpeg exited: %v", werr)
 			} else {

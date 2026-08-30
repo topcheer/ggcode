@@ -61,3 +61,45 @@ func TestTargetMonitorReapsExitedFFmpeg(t *testing.T) {
 		t.Fatal("Stop blocked after monitor already reaped the process")
 	}
 }
+
+// #1339: after Stop() -> quick Connect(), a late-returning monitor for the
+// OLD ffmpeg must not flip the healthy NEW session to TargetError. The
+// monitor callback must verify t.cmd == monCmd, not just state == Live.
+func TestTargetMonitorStaleCmdDoesNotKillNewSession(t *testing.T) {
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "ffmpeg")
+	script := "#!/bin/sh\n" +
+		"case \"$1\" in\n" +
+		"  -version) echo 'ffmpeg version 6.1.2 fake'; exit 0;;\n" +
+		"  *) exec sleep 30;;\n" + // stay alive until killed
+		"esac\n"
+	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	target := NewTarget("test", "rtmp://example.invalid/app/key")
+	if _, err := target.Connect(); err != nil {
+		t.Fatalf("first Connect: %v", err)
+	}
+	target.Stop() // kills the first ffmpeg; its monitor's Wait returns soon
+
+	// Reconnect before the old monitor necessarily ran its callback.
+	if _, err := target.Connect(); err != nil {
+		t.Fatalf("second Connect: %v", err)
+	}
+	if target.State() != TargetLive {
+		t.Fatalf("new session should be Live, got %v", target.State())
+	}
+
+	// Give the old monitor's late Wait() callback ample time to fire. The
+	// new session must remain Live (old cmd identity check) and writable.
+	time.Sleep(500 * time.Millisecond)
+	if got := target.State(); got != TargetLive {
+		t.Fatalf("stale monitor corrupted new session: state=%v lastError=%q", got, target.Status().LastError)
+	}
+	if _, err := target.Write([]byte("flvdata")); err != nil {
+		t.Fatalf("new session should still be writable: %v", err)
+	}
+	target.Stop()
+}

@@ -1570,3 +1570,47 @@ func TestSessionPathSanitization(t *testing.T) {
 		t.Errorf("valid id resolved to %q, want %q", got, good)
 	}
 }
+
+// #1340: migrateMessageIDs must NOT proceed with an unlocked read->tmp->rename
+// when the cross-process session lock is held elsewhere - the rename would
+// silently drop concurrent appends. With the lock held by a "foreign" holder,
+// migration retries briefly then skips (no error, file untouched).
+func TestMigrateMessageIDsSkipsWhenLockHeld(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "ggcode_migrate_lock_*")
+	defer os.RemoveAll(dir)
+
+	store, err := NewJSONLStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ses := NewSession("zai", "ep", "model")
+	path := filepath.Join(dir, ses.ID+".jsonl")
+	content := []byte("{\"type\":\"meta\",\"session_id\":\"" + ses.ID + "\",\"title\":\"t\"}\n" +
+		"{\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"hello\"}]}}\n")
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate an unacquirable lock: the .flock sidecar path is occupied by
+	// a directory, so open fails instantly (lockIndexFile uses a BLOCKING
+	// flock - holding a real lock here would hang migrate forever instead
+	// of exercising the error path).
+	if err := os.Mkdir(path+".flock", 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	before, _ := os.ReadFile(path)
+	migrated, err := store.migrateMessageIDs(ses.ID)
+
+	if err != nil {
+		t.Fatalf("migration under foreign lock must skip without error, got %v", err)
+	}
+	if migrated != 0 {
+		t.Fatalf("expected 0 migrations when lock held, got %d", migrated)
+	}
+	after, _ := os.ReadFile(path)
+	if string(before) != string(after) {
+		t.Fatal("session file must be untouched when migration is skipped")
+	}
+}

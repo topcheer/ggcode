@@ -2396,9 +2396,24 @@ func (s *JSONLStore) migrateMessageIDs(id string) (int, error) {
 	// #558 D: hold the cross-process session lock across the entire
 	// read -> tmp -> rename cycle so a concurrent O_APPEND writer in another
 	// process cannot slip an append into the gap that the rename would drop.
-	unlock, lockErr := lockSessionFile(path)
+	// #1340: if the lock is unavailable after retries, ABORT the migration
+	// (load from the original file) rather than proceeding unlocked - the
+	// rename would silently drop concurrent appends, and the fast-path
+	// marker would make the loss permanent. Mirrors appendRecordLines.
+	var unlock func()
+	var lockErr error
+	for i := 0; i < 3; i++ {
+		unlock, lockErr = lockSessionFile(path)
+		if lockErr == nil {
+			break
+		}
+		if i < 2 {
+			time.Sleep(time.Duration(10*(1<<i)) * time.Millisecond)
+		}
+	}
 	if lockErr != nil {
-		debug.Log("session", "migrateMessageIDs: session lock unavailable: %v", lockErr)
+		debug.Log("session", "migrateMessageIDs: failed to acquire session lock after 3 retries, skipping migration: %v", lockErr)
+		return 0, nil //nolint:nilerr // migration is best-effort; skipping is safe, proceeding unlocked is not
 	}
 	defer func() {
 		if unlock != nil {
