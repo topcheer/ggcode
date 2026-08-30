@@ -58,10 +58,6 @@ export function DrainLogStream() {
   return window['go']['main']['App']['DrainLogStream']();
 }
 
-export function DrainStreamEvents() {
-  return window['go']['main']['App']['DrainStreamEvents']();
-}
-
 export function ExportSessionAsJSON(arg1) {
   return window['go']['main']['App']['ExportSessionAsJSON'](arg1);
 }

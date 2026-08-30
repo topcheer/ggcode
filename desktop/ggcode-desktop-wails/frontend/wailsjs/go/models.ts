@@ -299,20 +299,6 @@ export namespace main {
 	        this.qrCodeBase64 = source["qrCodeBase64"];
 	    }
 	}
-	export class StreamEventEnvelope {
-	    type: string;
-	    data: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new StreamEventEnvelope(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.type = source["type"];
-	        this.data = source["data"];
-	    }
-	}
 
 }
 
@@ -634,6 +620,7 @@ export namespace wailskit {
 	    label: string;
 	    placeholder: string;
 	    secret?: boolean;
+	    required?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new IMPlatformField(source);
@@ -645,6 +632,7 @@ export namespace wailskit {
 	        this.label = source["label"];
 	        this.placeholder = source["placeholder"];
 	        this.secret = source["secret"];
+	        this.required = source["required"];
 	    }
 	}
 	export class IMPlatformMeta {
