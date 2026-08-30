@@ -184,7 +184,13 @@ func (t *KnowledgeGraphTool) doAdd(s *kgStore, p *kgParams) (Result, error) {
 
 	now := time.Now()
 	if ex, ok := s.Nodes[id]; ok {
-		ex.Type = nt
+		// #1327: Type had no non-empty guard (Title/Content/Tags/Status all
+		// do) - a partial update carrying id+title but no type silently
+		// reclassified decision/entity nodes as note, and the next save
+		// persisted the demotion.
+		if p.Type != "" {
+			ex.Type = nt
+		}
 		if p.Title != "" {
 			ex.Title = p.Title
 		}

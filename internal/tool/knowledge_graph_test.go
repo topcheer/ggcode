@@ -286,3 +286,38 @@ func mustMarshal(m map[string]interface{}) json.RawMessage {
 	b, _ := json.Marshal(m)
 	return b
 }
+
+// #1327: update branch assigned Type unconditionally while nt defaults
+// to "note" - a partial update (id+title, no type) silently reclassified
+// decision/entity nodes as note and the next save persisted it.
+
+// #1327: update branch assigned Type unconditionally while nt defaults
+// to "note" - a partial update (id+title, no type) silently reclassified
+// decision/entity nodes as note and the next save persisted it.
+func TestKnowledgeGraphPartialUpdatePreservesType(t *testing.T) {
+	tool, _ := newKGTool(t)
+
+	add := `{"action":"add","id":"d1","title":"Use context pinning","type":"decision","content":"decided"}`
+	if r, err := tool.Execute(context.Background(), json.RawMessage(add)); err != nil || r.IsError {
+		t.Fatalf("add: %v %s", err, r.Content)
+	}
+	// Partial update carrying id+title+status but NO type.
+	upd := `{"action":"add","id":"d1","title":"Use context pinning v2","status":"superseded"}`
+	if r, err := tool.Execute(context.Background(), json.RawMessage(upd)); err != nil || r.IsError {
+		t.Fatalf("update: %v %s", err, r.Content)
+	}
+	r, _ := tool.Execute(context.Background(), json.RawMessage(`{"action":"list"}`))
+	if !contains(r.Content, "[decision] (1)") {
+		t.Errorf("partial update demoted node type: %s", r.Content)
+	}
+
+	// Explicit type change still works.
+	chg := `{"action":"add","id":"d1","title":"Use context pinning v2","type":"note"}`
+	if r, err := tool.Execute(context.Background(), json.RawMessage(chg)); err != nil || r.IsError {
+		t.Fatalf("explicit change: %v %s", err, r.Content)
+	}
+	r, _ = tool.Execute(context.Background(), json.RawMessage(`{"action":"list"}`))
+	if !contains(r.Content, "[note] (1)") {
+		t.Errorf("explicit type change not applied: %s", r.Content)
+	}
+}
