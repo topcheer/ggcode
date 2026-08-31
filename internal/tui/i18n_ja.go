@@ -12,7 +12,7 @@ func jaCatalog(key string) string {
 	case "agents.idle":
 		return "アイドル"
 	case "agents.running":
-		return "実行中"
+		return "%d 実行中"
 	case "cron.firing":
 		return "実行中"
 	case "activity.idle":
@@ -252,7 +252,7 @@ func jaCatalog(key string) string {
 	case "follow.hint":
 		return "  ↑↓←→ 切替  Esc 閉じる"
 	case "status.tools_used":
-		return "ツール使用"
+		return "ツール %d 回使用"
 	case "tool.done":
 		return "完了"
 	case "tool.failed":
@@ -290,7 +290,9 @@ func jaCatalog(key string) string {
 	case "interrupted":
 		return "中断されました"
 	case "lang.current":
-		return "現在の言語"
+		// #1372: en baseline takes the language name; keep the verb so the
+		// argument is not silently dropped if this key is wired up.
+		return "現在の言語: %s"
 	case "lang.invalid":
 		return "無効な言語"
 	case "lang.switch":
@@ -542,7 +544,9 @@ func jaCatalog(key string) string {
 	case "command.provider_current":
 		return "現在のベンダー: %s（エンドポイント: %s、モデル: %s）\n利用可能なベンダー: %s\n利用可能なエンドポイント: %s\n使用法: /provider [ベンダー] [エンドポイント]\n\n"
 	case "command.allow_set":
-		return "%s を %s に設定しました"
+		// #1372: en baseline (i18n_command.go) takes ONE %%s; the old ja text
+		// had two, so commands.go:398's single arg printed %!s(MISSING).
+		return "✓ %s を永久許可に設定しました\n\n"
 	case "command.custom":
 		return "カスタムコマンド"
 	case "command.mention_error":
@@ -580,7 +584,9 @@ func jaCatalog(key string) string {
 	case "checkpoint.undo_failed":
 		return "チェックポイントのロールバックに失敗: %v"
 	case "checkpoint.undid":
-		return "チェックポイント %d にロールバックしました"
+		// #1372: call site passes three STRINGS (tool, file, id); the old
+		// ja %d coerced the first to a number and dropped the other two.
+		return "%s を取り消しました（%s・チェックポイント %s）\n"
 	case "checkpoint.none":
 		return "チェックポイントがありません"
 	case "files.disabled":
@@ -690,7 +696,7 @@ func jaCatalog(key string) string {
 	case "update.up_to_date":
 		return "最新です"
 	case "update.available":
-		return "更新が利用可能"
+		return "更新が利用可能: %s"
 	case "update.current":
 		return "現在: %s (最新: %s)"
 	case "update.unknown":
@@ -1158,9 +1164,11 @@ func jaCatalog(key string) string {
 		return "複数回の拒否により、このチャネルはブラックリストに登録されました。"
 
 	default:
-		if v, ok := lookupModuleCatalog(LangEnglish, key); ok {
-			return v
-		}
-		return key
+		// #1372: delegate to enCatalog instead of only probing module
+		// catalogs - enCatalog's own default covers the main switch AND
+		// module fallback, so keys missing from ja (39 of them: hooks.*,
+		// trace.*, slash.*) show English instead of the raw key. Same
+		// pattern ko already uses (nested delegation is safe).
+		return enCatalog(key)
 	}
 }
