@@ -55,26 +55,32 @@ func (a *App) runSystemTray() {
 
 // trayHelperCandidates returns where the helper binary may live: next to
 // the current executable (bundled), or in the module build dir (dev).
+//
+// #1350: no PATH fallback by design - exec'ing whatever "trayhelper"
+// happens to be on PATH would run an unknown binary with the app's socket
+// path as argv[1]. Bundled-next-to-exe is the only supported production
+// layout (the release script builds the helper into Contents/MacOS/);
+// when it is absent the tray stays disabled with a debug log rather than
+// guessing. The third candidate previously joined to
+// <exe-dir>/Contents/MacOS/trayhelper - inside a bundle the exe already
+// lives in Contents/MacOS, so that resolved to a dead nested path.
 func trayHelperCandidates() []string {
 	exe, err := os.Executable()
-	if err == nil {
-		dir := filepath.Dir(exe)
-		yield := []string{
-			filepath.Join(dir, "trayhelper"),
-			filepath.Join(dir, "..", "trayhelper"),
-			filepath.Join(dir, "Contents", "MacOS", "trayhelper"),
-		}
-		found := make([]string, 0, len(yield))
-		for _, p := range yield {
-			if st, err := os.Stat(p); err == nil && !st.IsDir() {
-				found = append(found, p)
-			}
-		}
-		if len(found) > 0 {
-			return found
+	if err != nil {
+		return nil
+	}
+	dir := filepath.Dir(exe)
+	yield := []string{
+		filepath.Join(dir, "trayhelper"),
+		filepath.Join(dir, "..", "trayhelper"),
+	}
+	found := make([]string, 0, len(yield))
+	for _, p := range yield {
+		if st, err := os.Stat(p); err == nil && !st.IsDir() {
+			found = append(found, p)
 		}
 	}
-	return []string{"trayhelper"} // PATH fallback
+	return found
 }
 
 func (a *App) spawnTrayHelper() {

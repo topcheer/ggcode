@@ -75,6 +75,18 @@ CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 \
   wails build -tags goolm -ldflags "${LDFLAGS}" -platform darwin/arm64 -skipbindings
 mv "${WAILS_DIR}/build/bin/GGCode Desktop.app" "${WAILS_DIR}/build/bin/${APP_NAME}-arm64.app" 2>/dev/null || true
 
+# Build the out-of-process tray helper into each arch bundle (#1350).
+# wails build only compiles the main package (the helper is exec'd, never
+# imported), so without this step the tray is silently dead in production.
+echo "  Building trayhelper (amd64)..."
+CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 \
+  go build -tags goolm -ldflags "${LDFLAGS}" \
+  -o "${WAILS_DIR}/build/bin/${APP_NAME}-amd64.app/Contents/MacOS/trayhelper" ./trayhelper
+echo "  Building trayhelper (arm64)..."
+CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 \
+  go build -tags goolm -ldflags "${LDFLAGS}" \
+  -o "${WAILS_DIR}/build/bin/${APP_NAME}-arm64.app/Contents/MacOS/trayhelper" ./trayhelper
+
 popd >/dev/null
 
 # Create universal binary from the two .app bundles
@@ -92,6 +104,22 @@ lipo -create \
   "${ARM64_APP}/${EXEC_PATH}" \
   -output "${UNIVERSAL_APP}/${EXEC_PATH}"
 chmod 0755 "${UNIVERSAL_APP}/${EXEC_PATH}"
+
+# Merge the tray helper into a universal binary too (#1350) and expose it
+# for the bare-binary channel alongside the main executables.
+HELPER_PATH="Contents/MacOS/trayhelper"
+if [[ -f "${AMD64_APP}/${HELPER_PATH}" && -f "${ARM64_APP}/${HELPER_PATH}" ]]; then
+  lipo -create \
+    "${AMD64_APP}/${HELPER_PATH}" \
+    "${ARM64_APP}/${HELPER_PATH}" \
+    -output "${UNIVERSAL_APP}/${HELPER_PATH}"
+  chmod 0755 "${UNIVERSAL_APP}/${HELPER_PATH}"
+  cp "${AMD64_APP}/${HELPER_PATH}" "${OUTPUT_DIR}/trayhelper_${PACKAGE_VERSION}_darwin_amd64"
+  cp "${ARM64_APP}/${HELPER_PATH}" "${OUTPUT_DIR}/trayhelper_${PACKAGE_VERSION}_darwin_arm64"
+  echo "  Bundled universal trayhelper into .app and extracted per-arch copies"
+else
+  echo "  WARNING: trayhelper missing from arch bundles - tray will be disabled in production (#1350)" >&2
+fi
 
 # Also extract arch-specific bare binaries for Homebrew formula
 cp "${AMD64_APP}/${EXEC_PATH}" "${OUTPUT_DIR}/ggcode-desktop_${PACKAGE_VERSION}_darwin_amd64"
