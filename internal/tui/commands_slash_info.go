@@ -1,6 +1,7 @@
 package tui
 
 import (
+	stdctx "context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -440,50 +441,59 @@ func (m *Model) handleDiffCommand(parts []string) tea.Cmd {
 	if len(parts) > 1 {
 		args = append(args, parts[1:]...)
 	}
+	workDir := workingDirFromModel(m)
+	// #1366-A: run git in the returned tea.Cmd, not in the Update loop. The
+	// old synchronous CombinedOutput froze the whole TUI for seconds on a
+	// large monorepo diff (pattern: handleTitleCommand's "TUI event loop
+	// must not block"). A timeout bounds pathological repos; results come
+	// back as a streamMsg like the other async handlers.
+	return func() tea.Msg {
+		ctx, cancel := stdctx.WithTimeout(stdctx.Background(), 15*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "git", args...)
+		cmd.Dir = workDir
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			return streamMsg(fmt.Sprintf("git diff error: %v", err))
+		}
 
-	cmd := exec.Command("git", args...)
-	cmd.Dir = workingDirFromModel(m)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("git diff error: %v", err))
-		return nil
-	}
+		result := strings.TrimSpace(string(output))
+		if result == "" {
+			return streamMsg("No changes detected (working tree clean).")
+		}
 
-	result := strings.TrimSpace(string(output))
-	if result == "" {
-		m.chatWriteSystem(nextSystemID(), "No changes detected (working tree clean).")
-		return nil
-	}
-
-	// Truncate very large diffs. When truncating, prepend a --stat summary
-	// so the user can see which files changed even if the full diff is cut off.
-	maxLines := 200
-	lines := strings.Split(result, "\n")
-	if len(lines) > maxLines {
-		// Get the stat summary for context
-		statArgs := []string{"diff", "--stat"}
-		// Preserve user-specified flags like --cached
-		for _, p := range parts[1:] {
-			if strings.HasPrefix(p, "--") {
-				statArgs = append(statArgs, p)
+		// Truncate very large diffs. When truncating, prepend a --stat summary
+		// so the user can see which files changed even if the full diff is cut off.
+		maxLines := 200
+		lines := strings.Split(result, "\n")
+		if len(lines) > maxLines {
+			// Get the stat summary for context
+			statArgs := []string{"diff", "--stat"}
+			// Preserve the user's flags (--cached, ...) AND positional file
+			// arguments: #1366-B dropped the file path, so "/diff big.go"
+			// showed big.go's truncated diff followed by a WHOLE-REPO stat
+			// summary that misleads about the repo's state.
+			for _, p := range parts[1:] {
+				if p != "diff" && p != "--stat" {
+					statArgs = append(statArgs, p)
+				}
 			}
-		}
-		statCmd := exec.Command("git", statArgs...)
-		statCmd.Dir = workingDirFromModel(m)
-		statOutput, statErr := statCmd.CombinedOutput()
+			statCmd := exec.CommandContext(ctx, "git", statArgs...)
+			statCmd.Dir = workDir
+			statOutput, statErr := statCmd.CombinedOutput()
 
-		var sb strings.Builder
-		if statErr == nil && strings.TrimSpace(string(statOutput)) != "" {
-			sb.WriteString(strings.TrimSpace(string(statOutput)))
-			sb.WriteString("\n\n")
+			var sb strings.Builder
+			if statErr == nil && strings.TrimSpace(string(statOutput)) != "" {
+				sb.WriteString(strings.TrimSpace(string(statOutput)))
+				sb.WriteString("\n\n")
+			}
+			sb.WriteString(strings.Join(lines[:maxLines], "\n"))
+			sb.WriteString(fmt.Sprintf("\n\n... (%d more lines, run /diff <file> to narrow)", len(lines)-maxLines))
+			result = sb.String()
 		}
-		sb.WriteString(strings.Join(lines[:maxLines], "\n"))
-		sb.WriteString(fmt.Sprintf("\n\n... (%d more lines, run /diff <file> to narrow)", len(lines)-maxLines))
-		result = sb.String()
+
+		return streamMsg("```\n" + result + "\n```")
 	}
-
-	m.chatWriteSystem(nextSystemID(), "```\n"+result+"\n```")
-	return nil
 }
 
 // handleHooksCommand opens the hooks configuration panel.
@@ -546,7 +556,15 @@ func (m *Model) handleCostCommand(args []string) tea.Cmd {
 		return nil
 	}
 
+	// #1366-C: snapshot usage fields under the session mutex. The write
+	// side (recordSessionUsage, streaming callbacks on a background
+	// goroutine) holds this lock; reading without it is a data race that
+	// trips -race when /cost is pressed during streaming.
+	mu := m.sessionMutex()
+	mu.Lock()
 	usage := m.session.TokenUsage
+	history := append([]session.UsageEntry(nil), m.session.UsageHistory...)
+	mu.Unlock()
 	if usage.Total() == 0 {
 		usage = m.sidebarSessionUsage()
 	}
@@ -566,7 +584,7 @@ func (m *Model) handleCostCommand(args []string) tea.Cmd {
 	groups := map[string]*modelGroup{}
 	var groupOrder []string
 
-	for _, entry := range m.session.UsageHistory {
+	for _, entry := range history {
 		key := entry.Vendor + "/" + entry.Model
 		g, ok := groups[key]
 		if !ok {
