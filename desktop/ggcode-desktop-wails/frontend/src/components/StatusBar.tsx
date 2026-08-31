@@ -24,7 +24,7 @@ export function StatusBar({ onContextToggle, data, zoom, onZoomIn, onZoomOut, on
     contextUsed: 0,
     contextTotal: 0,
     usagePercent: 0,
-    remainingPercent: 0,
+    compactRemainingPercent: 0,
     inputTokens: 0,
     outputTokens: 0,
     cacheRead: 0,

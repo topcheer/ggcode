@@ -88,7 +88,7 @@ export interface StatusBarData {
   contextUsed: number
   contextTotal: number
   usagePercent: number
-  remainingPercent: number
+  compactRemainingPercent: number
   inputTokens: number
   outputTokens: number
   cacheRead: number

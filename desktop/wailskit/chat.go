@@ -3194,15 +3194,15 @@ func (b *ChatBridge) currentUsagePayload() map[string]interface{} {
 	defer b.mu.Unlock()
 
 	payload := map[string]interface{}{
-		"inputTokens":      0,
-		"outputTokens":     0,
-		"cacheRead":        0,
-		"cacheWrite":       0,
-		"cacheHit":         0,
-		"contextUsed":      0,
-		"contextTotal":     0,
-		"usagePercent":     0,
-		"remainingPercent": 0,
+		"inputTokens":             0,
+		"outputTokens":            0,
+		"cacheRead":               0,
+		"cacheWrite":              0,
+		"cacheHit":                0,
+		"contextUsed":             0,
+		"contextTotal":            0,
+		"usagePercent":            0,
+		"compactRemainingPercent": 0,
 	}
 	if b.currentSes != nil {
 		usage := b.currentSes.UsageForEndpoint(b.currentSes.Vendor, b.currentSes.Endpoint)
@@ -3219,7 +3219,14 @@ func (b *ChatBridge) currentUsagePayload() map[string]interface{} {
 			payload["contextUsed"] = display.UsedTokens
 			payload["contextTotal"] = display.MaxTokens
 			payload["usagePercent"] = display.UsagePercent
-			payload["remainingPercent"] = display.RemainingPercent
+			// #1401: RemainingPercent is measured against the AUTO-COMPACT
+			// THRESHOLD, not the context window. The bare key name made the
+			// frontend render "Remaining 50%" while the true window headroom
+			// was 87.5% (max=200k/threshold=50k/used=25k) - users judged
+			// remaining context by the wrong denominator. The TUI sidebar
+			// says "until compact" for the same number; the key now carries
+			// the qualifier so the frontend must label it correctly.
+			payload["compactRemainingPercent"] = display.RemainingPercent
 		}
 	}
 	return payload

@@ -335,7 +335,7 @@ interface StatusBarState {
   contextUsed: number
   contextTotal: number
   usagePercent: number
-  remainingPercent: number
+  compactRemainingPercent: number
   inputTokens: number
   outputTokens: number
   cacheRead: number
@@ -684,7 +684,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
   const [historyLoading, setHistoryLoading] = useState(false)
   const [agentElapsed, setAgentElapsed] = useState(0) // seconds since agent started working
   const [statusBar, setStatusBar] = useState<StatusBarState>({
-    vendor: '', model: '', mode: 'auto', effort: 'auto', contextUsed: 0, contextTotal: 0, usagePercent: 0, remainingPercent: 0, inputTokens: 0, outputTokens: 0, cacheRead: 0, cacheWrite: 0, cacheHit: 0, status: 'ready',
+    vendor: '', model: '', mode: 'auto', effort: 'auto', contextUsed: 0, contextTotal: 0, usagePercent: 0, compactRemainingPercent: 0, inputTokens: 0, outputTokens: 0, cacheRead: 0, cacheWrite: 0, cacheHit: 0, status: 'ready',
   })
   const [modelPickerOpen, setModelPickerOpen] = useState(false)
   const [availableModels, setAvailableModels] = useState<string[]>([])
@@ -1354,7 +1354,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
             contextUsed: p?.contextUsed ?? s.contextUsed,
             contextTotal: p?.contextTotal ?? s.contextTotal,
             usagePercent: p?.usagePercent ?? s.usagePercent,
-            remainingPercent: p?.remainingPercent ?? s.remainingPercent,
+            compactRemainingPercent: p?.compactRemainingPercent ?? s.compactRemainingPercent,
           }))
           break
         }
@@ -1549,7 +1549,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
             contextTotal: info.contextTotal ?? info.contextWindow ?? 0,
             contextUsed: info.contextUsed ?? s.contextUsed,
             usagePercent: info.usagePercent ?? s.usagePercent,
-            remainingPercent: info.remainingPercent ?? s.remainingPercent,
+            compactRemainingPercent: info.compactRemainingPercent ?? s.compactRemainingPercent,
           }))
         }
       } catch {
