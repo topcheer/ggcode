@@ -832,6 +832,10 @@ func (m *Model) handleKnightCommand(parts []string) tea.Cmd {
 			}
 			switch action {
 			case "approve":
+				// #1363 note: this path only transitions proposal STATUS - it
+				// never calls PromoteStaging (verified in project_proposal.go),
+				// so the global-skill --confirm-global gate above (direct
+				// /knight approve) does not apply here.
 				p, err := m.knight.ApproveProposal(id, note)
 				if err != nil {
 					m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Error: %v", err))
@@ -891,8 +895,22 @@ func (m *Model) handleKnightCommand(parts []string) tea.Cmd {
 			return nil
 		}
 		name := parts[2]
+		// #1363: global-scope promotion needs an explicit second step - a
+		// warning that is followed by immediate effect in the same keypress
+		// is not a confirmation gate. Global skills inject into the system
+		// prompt of EVERY project on this machine.
 		if entry, err := m.knight.FindStagingSkill(name); err == nil && entry != nil && entry.Scope == "global" {
-			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("⚠️  '%s' is GLOBAL scope — it will affect every project on this machine.", name))
+			confirmed := false
+			for _, p := range parts[3:] {
+				if p == "--confirm-global" {
+					confirmed = true
+				}
+			}
+			if !confirmed {
+				m.chatWriteSystem(nextSystemID(), fmt.Sprintf("⚠️ '%s' is GLOBAL scope — it will affect every project on this machine.", name))
+				m.chatWriteSystem(nextSystemID(), "Not promoted. Re-run with --confirm-global to proceed: /knight approve "+name+" --confirm-global")
+				return nil
+			}
 		}
 		if err := m.knight.PromoteStaging(name); err != nil {
 			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Error: %v", err))
