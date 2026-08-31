@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 )
 
 // WarpTool lets the agent manage Warp terminal panes, tabs, and windows
@@ -128,7 +129,7 @@ func (w *WarpTool) Execute(ctx context.Context, input json.RawMessage) (Result, 
 
 	menuItem, isMenu := menuActions[action]
 	if isMenu {
-		result := w.clickMenu(menuItem)
+		result := w.clickMenu(ctx, menuItem)
 		// If a command was provided and the action creates a new surface, type the command
 		if result.IsError == false && args.Command != "" {
 			surfaceActions := map[string]bool{
@@ -142,8 +143,24 @@ func (w *WarpTool) Execute(ctx context.Context, input json.RawMessage) (Result, 
 			}
 			if surfaceActions[action] {
 				// Brief delay to let the new surface get focus
-				w.executeInput(args.Command)
-				w.executeSendKey("enter", "")
+				// #1348: the surface was created but typing/enter failures were
+				// silently discarded - the LLM believed the command had run.
+				// Surface was created (menu click succeeded), so degrade to a
+				// warning appended to the result instead of a bare error.
+				typeRes := w.executeInput(ctx, args.Command)
+				enterRes := Result{}
+				if !typeRes.IsError {
+					enterRes = w.executeSendKey(ctx, "enter", "")
+				}
+				if typeRes.IsError {
+					result.Content = fmt.Sprintf("%s\nWARNING: surface created, but typing the command failed: %s - command NOT executed", result.Content, typeRes.Content)
+					result.IsError = true
+				} else if enterRes.IsError {
+					result.Content = fmt.Sprintf("%s\nWARNING: command typed, but pressing enter failed: %s - command NOT submitted", result.Content, enterRes.Content)
+					result.IsError = true
+				} else {
+					result.Content = fmt.Sprintf("%s\ncommand typed and submitted in new surface", result.Content)
+				}
 			}
 		}
 		return result, nil
@@ -151,9 +168,9 @@ func (w *WarpTool) Execute(ctx context.Context, input json.RawMessage) (Result, 
 
 	switch action {
 	case "input":
-		return w.executeInput(args.Text), nil
+		return w.executeInput(ctx, args.Text), nil
 	case "send_key":
-		return w.executeSendKey(args.Key, args.Modifiers), nil
+		return w.executeSendKey(ctx, args.Key, args.Modifiers), nil
 	default:
 		return Result{IsError: true, Content: fmt.Sprintf("unsupported warp action %q", args.Action)}, nil
 	}
@@ -163,6 +180,20 @@ func (w *WarpTool) Execute(ctx context.Context, input json.RawMessage) (Result, 
 
 func warpAvailable() bool {
 	return os.Getenv("TERM_PROGRAM") == "WarpTerminal"
+}
+
+// warpSleep pauses briefly (letting a new surface gain focus) while
+// remaining cancellable: an automation-permission dialog can hang the
+// osascript child, and the tool call must not outlive its context (#1348).
+func warpSleep(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // ── Utility (shared) ────────────────────────────────────────────────────────
