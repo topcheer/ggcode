@@ -166,3 +166,33 @@ func TestAtomicWriteFile_EmptyData(t *testing.T) {
 		t.Errorf("expected empty file, got %d bytes", len(data))
 	}
 }
+
+// TestAtomicWriteFileFollowsSymlink pins #1359: writing through a symlink
+// must update the real TARGET and leave the link intact. The old temp+rename
+// replaced the link with a regular file (target stale, repo forked).
+func TestAtomicWriteFileFollowsSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "real.txt")
+	if err := os.WriteFile(target, []byte("REAL"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link.txt")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := AtomicWriteFile(link, []byte("NEW"), 0o644); err != nil {
+		t.Fatalf("AtomicWriteFile through symlink: %v", err)
+	}
+
+	if fi, err := os.Lstat(link); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("symlink was replaced by a regular file (lstat err=%v)", err)
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "NEW" {
+		t.Fatalf("real target not updated: %q", string(got))
+	}
+}
