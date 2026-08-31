@@ -497,3 +497,64 @@ func TestTodoWrite_AllowsMultipleInProgress(t *testing.T) {
 		t.Fatalf("multiple in_progress should be allowed, got error: %s", result.Content)
 	}
 }
+
+// TestParseDDGResultsIgnoresStructuralWrappers pins #1352: structural
+// wrappers (class="results" container, result__extras blocks) must not be
+// parsed as result blocks, and each result must appear exactly once.
+func TestParseDDGResultsIgnoresStructuralWrappers(t *testing.T) {
+	html := `<div id="links" class="results">
+	<div class="result results_links results_links_deep web-result">
+		<h2><a class="result__a" href="https://one.example">Result One</a></h2>
+		<a class="result__snippet">Snippet one</a>
+		<div class="result__extras"><div class="result__extras__url">one.example</div></div>
+	</div>
+	<div class="result results_links results_links_deep web-result">
+		<h2><a class="result__a" href="https://two.example">Result Two</a></h2>
+		<a class="result__snippet">Snippet two</a>
+		<div class="result__extras"><div class="result__extras__url">two.example</div></div>
+	</div>
+	<div class="result results_links results_links_deep web-result">
+		<h2><a class="result__a" href="https://three.example">Result Three</a></h2>
+		<a class="result__snippet">Snippet three</a>
+	</div>
+</div>`
+
+	// max=3: with the old class="result[^"]*" pattern the wrappers ate
+	// slots and titles duplicated down to ~1/3 of the requested count.
+	results := parseDDGResults(html, 3)
+	if len(results) != 3 {
+		t.Fatalf("expected 3 unique results, got %d: %+v", len(results), results)
+	}
+	seen := map[string]bool{}
+	for _, r := range results {
+		if seen[r.Title] {
+			t.Errorf("duplicate result title %q", r.Title)
+		}
+		seen[r.Title] = true
+	}
+	for i, want := range []string{"Result One", "Result Two", "Result Three"} {
+		if results[i].Title != want {
+			t.Errorf("results[%d].Title = %q, want %q", i, results[i].Title, want)
+		}
+	}
+}
+
+// TestParseDDGResultsBlockTruncation pins the block-bounds half of #1352:
+// an extras block that leaks in must not swallow the next result's title.
+func TestParseDDGResultsBlockTruncation(t *testing.T) {
+	// A lone extras div (no result__a of its own) followed by a real
+	// result: without truncation the extras block matched the real
+	// result's title and duplicated it.
+	html := `<div class="result__extras__url">stray.example</div>
+	<div class="result">
+		<a class="result__a" href="https://real.example">Real Result</a>
+	</div>`
+
+	results := parseDDGResults(html, 5)
+	if len(results) != 1 {
+		t.Fatalf("expected exactly 1 result, got %d: %+v", len(results), results)
+	}
+	if results[0].Title != "Real Result" {
+		t.Errorf("expected 'Real Result', got %q", results[0].Title)
+	}
+}

@@ -218,13 +218,21 @@ func parseDDGResults(htmlBody string, max int) []searchResult {
 	reSnippet := regexp.MustCompile(`(?is)<a[^>]+class="result__snippet"[^>]*>(.*?)</a>`)
 	reHref := regexp.MustCompile(`href="([^"]+)"`)
 
-	resultBlocks := regexp.MustCompile(`(?is)<div[^>]+class="result[^"]*"[^>]*>`)
+	// #1352: the class value needs a boundary after "result" - the old
+	// pattern class="result[^"]*" also matched structural wrappers
+	// (class="results", class="result__extras", class="result__extras__url"),
+	// so pseudo-blocks consumed result slots and duplicated titles.
+	resultBlocks := regexp.MustCompile(`(?is)<div[^>]+class="result[\s"][^>]*>`)
 	indices := resultBlocks.FindAllStringIndex(htmlBody, max)
 
 	var results []searchResult
-	for _, idx := range indices {
+	for i, idx := range indices {
+		// Limit block to next result div or end (the comment claimed this
+		// but it was never implemented - blocks ran to document end).
 		block := htmlBody[idx[0]:]
-		// Limit block to next result div or end
+		if i+1 < len(indices) {
+			block = htmlBody[idx[0]:indices[i+1][0]]
+		}
 		if len(results) >= max {
 			break
 		}
