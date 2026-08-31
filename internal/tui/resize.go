@@ -58,6 +58,13 @@ func (m *Model) relayoutAfterSidebarChange() {
 	}
 	m.input.SetWidth(inputWidth)
 	m.viewport.SetSize(m.mainColumnWidth(), m.calcViewportHeight())
+	// #1390: handleResize also runs these three syncs - chatList caches
+	// items BY WIDTH, so skipping them left the conversation panel
+	// rendering at the pre-toggle width (misaligned wrap/truncation) and
+	// the stats/questionnaire panels stale until the next WindowSizeMsg.
+	m.syncQuestionnaireInputWidth()
+	m.syncConversationViewport()
+	m.syncStatsPanelViewport(false)
 }
 
 func (m *Model) calcViewportHeight() int {
