@@ -1,11 +1,13 @@
 package tui
 
 import (
+	"context"
+	"strings"
+	"sync"
+
 	tea "charm.land/bubbletea/v2"
 	"github.com/topcheer/ggcode/internal/agentruntime"
 	"github.com/topcheer/ggcode/internal/util"
-	"strings"
-	"sync"
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/safego"
@@ -215,6 +217,67 @@ func (m *Model) shutdownAll() {
 	}
 	if m.cmdPaneMgr != nil {
 		m.cmdPaneMgr.Close()
+	}
+	// #1364: knight adhoc tasks (LLM-backed, formerly context.Background)
+	// must die with the session - otherwise they keep billing and running
+	// tool side effects invisibly after exit.
+	m.cancelKnightTasks()
+}
+
+type knightTaskHandle struct {
+	cancel context.CancelFunc
+}
+
+// knightCancelSet holds live knight task handles. Lives behind a pointer
+// on Model: Model is passed by value everywhere in the TUI, so the mutex
+// must not be a Model field (go vet copylocks).
+type knightCancelSet struct {
+	mu      sync.Mutex
+	handles []*knightTaskHandle
+}
+
+// registerKnightTask tracks a knight task's cancel for shutdown; returns a
+// handle (pointer identity - funcs are not comparable) the task uses to
+// deregister itself when it finishes.
+func (m *Model) registerKnightTask() (context.Context, *knightTaskHandle) {
+	if m.knightTasks == nil {
+		m.knightTasks = &knightCancelSet{}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	h := &knightTaskHandle{cancel: cancel}
+	m.knightTasks.mu.Lock()
+	m.knightTasks.handles = append(m.knightTasks.handles, h)
+	m.knightTasks.mu.Unlock()
+	return ctx, h
+}
+
+// releaseKnightTask drops a finished task from the shutdown set. O(n) on a
+// tiny list (at most a couple of concurrent knight tasks).
+func (m *Model) releaseKnightTask(h *knightTaskHandle) {
+	if m.knightTasks == nil {
+		return
+	}
+	m.knightTasks.mu.Lock()
+	for i, cur := range m.knightTasks.handles {
+		if cur == h {
+			m.knightTasks.handles = append(m.knightTasks.handles[:i], m.knightTasks.handles[i+1:]...)
+			break
+		}
+	}
+	m.knightTasks.mu.Unlock()
+}
+
+// cancelKnightTasks cancels every live knight task (shutdown path).
+func (m *Model) cancelKnightTasks() {
+	if m.knightTasks == nil {
+		return
+	}
+	m.knightTasks.mu.Lock()
+	handles := m.knightTasks.handles
+	m.knightTasks.handles = nil
+	m.knightTasks.mu.Unlock()
+	for _, h := range handles {
+		h.cancel()
 	}
 }
 

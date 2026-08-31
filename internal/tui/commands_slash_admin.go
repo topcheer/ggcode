@@ -789,7 +789,10 @@ func (m *Model) handleKnightCommand(parts []string) tea.Cmd {
 		m.statusToolArg = util.Truncate(goal, 80)
 		m.statusToolCount = 1
 		return func() tea.Msg {
-			result, err := m.knight.RunAdhocTask(context.Background(), goal)
+			// #1364: cancellable at shutdown instead of context.Background.
+			taskCtx, handle := m.registerKnightTask()
+			defer m.releaseKnightTask(handle)
+			result, err := m.knight.RunAdhocTask(taskCtx, goal)
 			return knightTaskResultMsg{
 				Goal:   goal,
 				Result: result,
@@ -814,7 +817,10 @@ func (m *Model) handleKnightCommand(parts []string) tea.Cmd {
 		m.statusToolArg = util.Truncate(goal, 80)
 		m.statusToolCount = 1
 		return func() tea.Msg {
-			proposal, result, err := m.knight.GenerateProjectImprovementProposal(context.Background(), goal)
+			// #1364: cancellable at shutdown instead of context.Background.
+			taskCtx, handle := m.registerKnightTask()
+			defer m.releaseKnightTask(handle)
+			proposal, result, err := m.knight.GenerateProjectImprovementProposal(taskCtx, goal)
 			return knightProjectProposalResultMsg{
 				Goal:     goal,
 				Proposal: proposal,

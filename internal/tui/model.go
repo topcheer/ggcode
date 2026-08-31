@@ -166,38 +166,44 @@ type Model struct {
 	lastMetricDigestTurn    int
 	metricCollectorFlush    func()
 	knight                  *knight.Knight
-	mcpManager              mcpManager
-	mode                    permission.PermissionMode
-	configSaveScope         string // "global" or "instance" — where config panel saves go
-	pendingDiffConfirm      *DiffConfirmMsg
-	pendingQuestionnaire    *questionnaireState
-	modelPanel              *modelPanelState
-	providerPanel           *providerPanelState
-	qqPanel                 *qqPanelState
-	tgPanel                 *tgPanelState
-	pcPanel                 *pcPanelState
-	discordPanel            *discordPanelState
-	feishuPanel             *feishuPanelState
-	slackPanel              *slackPanelState
-	dingtalkPanel           *dingtalkPanelState
-	wechatPanel             *wechatPanelState
-	wecomPanel              *wecomPanelState
-	mattermostPanel         *mattermostPanelState
-	matrixPanel             *matrixPanelState
-	signalPanel             *signalPanelState
-	ircPanel                *ircPanelState
-	nostrPanel              *nostrPanelState
-	twitchPanel             *twitchPanelState
-	whatsappPanel           *whatsappPanelState
-	imPanel                 *imPanelState
-	mcpPanel                *mcpPanelState
-	pendingDeviceCodes      []deviceCodeInfo
-	skillsPanel             *skillsPanelState
-	statsPanel              *statsPanelState
-	hooksPanel              *hooksPanelState
-	inspectorPanel          *inspectorPanelState
-	swarmMgr                *swarm.Manager
-	acpClientMgr            *acpclient.ClientManager
+	// #1364: knight adhoc tasks (run/propose) previously launched on
+	// context.Background - uncancellable and invisible to shutdownAll, so
+	// they kept burning LLM calls after the user exited. Pointer-held set:
+	// Model is passed by value all over the TUI, so it must not gain a
+	// sync.Mutex field (go vet copylocks fires on every one of them).
+	knightTasks          *knightCancelSet
+	mcpManager           mcpManager
+	mode                 permission.PermissionMode
+	configSaveScope      string // "global" or "instance" — where config panel saves go
+	pendingDiffConfirm   *DiffConfirmMsg
+	pendingQuestionnaire *questionnaireState
+	modelPanel           *modelPanelState
+	providerPanel        *providerPanelState
+	qqPanel              *qqPanelState
+	tgPanel              *tgPanelState
+	pcPanel              *pcPanelState
+	discordPanel         *discordPanelState
+	feishuPanel          *feishuPanelState
+	slackPanel           *slackPanelState
+	dingtalkPanel        *dingtalkPanelState
+	wechatPanel          *wechatPanelState
+	wecomPanel           *wecomPanelState
+	mattermostPanel      *mattermostPanelState
+	matrixPanel          *matrixPanelState
+	signalPanel          *signalPanelState
+	ircPanel             *ircPanelState
+	nostrPanel           *nostrPanelState
+	twitchPanel          *twitchPanelState
+	whatsappPanel        *whatsappPanelState
+	imPanel              *imPanelState
+	mcpPanel             *mcpPanelState
+	pendingDeviceCodes   []deviceCodeInfo
+	skillsPanel          *skillsPanelState
+	statsPanel           *statsPanelState
+	hooksPanel           *hooksPanelState
+	inspectorPanel       *inspectorPanelState
+	swarmMgr             *swarm.Manager
+	acpClientMgr         *acpclient.ClientManager
 
 	impersonatePanel       *impersonatePanelState
 	lanChatPanel           *lanChatPanelState
