@@ -68,10 +68,21 @@ func (m *Model) calcViewportHeight() int {
 	return h
 }
 
-// composerCursorEnd moves the cursor to the very end of the textarea value.
+// composerCursorEnd moves the cursor to the very end of the textarea value
+// and scrolls the viewport to follow it.
+//
+// Why View() before MoveToEnd: SetValue's internal repositionView runs while
+// the viewport still holds the previous content, so its ScrollDown clamps
+// against the old line count and the tail of long text stays clipped (CJK
+// text hits this fast: soft-wrap only fits ~7 full-width runes per line at
+// narrow widths, so 10 wrapped lines arrive at ~70 chars). Rendering once
+// first syncs the viewport content; MoveToEnd then scrolls so the cursor -
+// and the text being typed - is visible. Without this, restored drafts
+// (pending input, history recall) appear truncated in the composer while the
+// full value is silently sent on submit.
 func composerCursorEnd(ta *textarea.Model) {
-	val := ta.Value()
-	ta.SetValue(val)
+	ta.View()
+	ta.MoveToEnd()
 }
 
 // inputCursor returns the absolute byte offset of the cursor in the textarea value.

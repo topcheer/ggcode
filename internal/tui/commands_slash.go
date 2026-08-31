@@ -399,6 +399,9 @@ func (m Model) handleHistoryUp() (tea.Model, tea.Cmd) {
 	if m.historyIdx > 0 {
 		m.historyIdx--
 		m.input.SetValue(m.history[m.historyIdx])
+		// Long recalled entries (CJK soft-wraps fast) would otherwise render
+		// with the tail clipped below the MaxHeight viewport.
+		composerCursorEnd(&m.input)
 	}
 	return m, nil
 }
