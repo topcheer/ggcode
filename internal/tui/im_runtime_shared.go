@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -46,10 +47,36 @@ func (m *Model) ensureCurrentWorkspaceIMManager(unavailableErr, disabledErr stri
 	return nil
 }
 
+type imEnsureGuard struct {
+	mu       sync.Mutex
+	starting bool
+}
+
 func (m *Model) ensureStartedCurrentWorkspaceIMRuntime(unavailableErr, disabledErr string, autoEnable bool) error {
-	if m.imManager != nil {
+	// #1379-A: a failed adapter start used to leave imManager set, so
+	// every later call returned nil at the top guard - fake success,
+	// never retried, SetBridge skipped, only a process restart recovered.
+	// Roll the manager back on failure so the next call retries the whole
+	// chain. #1379-D: a starting flag collapses concurrent Cmd goroutines
+	// into one InitRuntime+Start (duplicate instance registrations
+	// otherwise).
+	if m.imEnsure == nil {
+		m.imEnsure = &imEnsureGuard{}
+	}
+	m.imEnsure.mu.Lock()
+	if m.imManager != nil || m.imEnsure.starting {
+		// starting: another goroutine is mid-start; its result applies.
+		m.imEnsure.mu.Unlock()
 		return nil
 	}
+	m.imEnsure.starting = true
+	m.imEnsure.mu.Unlock()
+	defer func() {
+		m.imEnsure.mu.Lock()
+		m.imEnsure.starting = false
+		m.imEnsure.mu.Unlock()
+	}()
+
 	if err := m.ensureCurrentWorkspaceIMManager(unavailableErr, disabledErr, autoEnable); err != nil {
 		return err
 	}
@@ -57,6 +84,9 @@ func (m *Model) ensureStartedCurrentWorkspaceIMRuntime(unavailableErr, disabledE
 		return nil
 	}
 	if _, err := im.StartCurrentBindingAdapter(context.Background(), m.config.IM, m.imManager); err != nil {
+		// Roll back: without this the next call sees imManager != nil and
+		// short-circuits to fake success forever.
+		m.SetIMManager(nil)
 		return fmt.Errorf("starting current workspace IM adapter: %w", err)
 	}
 	m.imManager.SetBridge(newTUIIMBridge(func() *tea.Program { return m.program }))

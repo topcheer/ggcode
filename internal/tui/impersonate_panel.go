@@ -41,6 +41,7 @@ type impersonatePanelState struct {
 	headerValueInput textinput.Model
 	section          impSection
 	message          string
+	persistFailed    bool // #1379-C: last SaveImpersonation failed
 	scrollOffset     int
 }
 
@@ -341,6 +342,11 @@ func (m *Model) handleImpersonatePanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) 
 				panel.editingHeader = -1
 			}
 			panel.customHeaders = append(panel.customHeaders[:idx], panel.customHeaders[idx+1:]...)
+			// #1379-B: the local delete never reached applyImpersonateSettings
+			// (the 'a' path at :387 does) - panel showed the header gone while
+			// provider global state, runtime-injected headers and config all
+			// kept it; reopening the panel resurrected the deletion.
+			return *m, m.applyImpersonateSettings()
 		}
 		return *m, nil
 
@@ -424,19 +430,25 @@ func (m *Model) applyImpersonatePreset() (Model, tea.Cmd) {
 	panel.currentPreset = preset.ID
 
 	// Apply and persist
-	m.applyImpersonateSettings()
+	applyCmd := m.applyImpersonateSettings()
 
 	presetPtr := &preset
 	if preset.ID == "none" {
 		presetPtr = nil
 	}
-	if presetPtr == nil {
-		panel.message = "cleared impersonation"
-	} else {
-		panel.message = fmt.Sprintf("set identity: %s", preset.DisplayName)
+	// #1379-C: only announce success when persistence succeeded -
+	// applyImpersonateSettings writes the failure into panel.message, and
+	// the old unconditional overwrite replaced it with a fake success line
+	// while SetActiveImpersonation had already switched the runtime.
+	if !panel.persistFailed {
+		if presetPtr == nil {
+			panel.message = "cleared impersonation"
+		} else {
+			panel.message = fmt.Sprintf("set identity: %s", preset.DisplayName)
+		}
 	}
 
-	return *m, nil
+	return *m, applyCmd
 }
 
 func (m *Model) applyImpersonateSettings() tea.Cmd {
@@ -468,7 +480,10 @@ func (m *Model) applyImpersonateSettings() tea.Cmd {
 	}
 	if err := m.config.SaveImpersonation(impCfg); err != nil {
 		panel.message = fmt.Sprintf("config write failed: %v", err)
+		panel.persistFailed = true
+		return nil
 	}
+	panel.persistFailed = false
 
 	return nil
 }

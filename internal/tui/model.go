@@ -166,6 +166,9 @@ type Model struct {
 	lastMetricDigestTurn    int
 	metricCollectorFlush    func()
 	knight                  *knight.Knight
+	// #1379: IM-runtime ensure guard. Pointer-held: Model is passed by
+	// value all over the TUI (go vet copylocks forbids a bare mutex).
+	imEnsure *imEnsureGuard
 	// #1364: knight adhoc tasks (run/propose) previously launched on
 	// context.Background - uncancellable and invisible to shutdownAll, so
 	// they kept burning LLM calls after the user exited. Pointer-held set:
