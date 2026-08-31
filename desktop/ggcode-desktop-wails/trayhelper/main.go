@@ -39,6 +39,13 @@ func main() {
 			time.Sleep(100 * time.Millisecond)
 		}
 	}
+	// #1351: all retries exhausted - the main app (or its socket dir) is
+	// gone. Exit instead of running a ghost tray: the socket-death watcher
+	// below only starts when conn != nil, so without this early exit a
+	// racing respawn leaves an orphan icon that responds to nothing.
+	if conn == nil {
+		os.Exit(1)
+	}
 	send := func(line string) {
 		if conn == nil {
 			return

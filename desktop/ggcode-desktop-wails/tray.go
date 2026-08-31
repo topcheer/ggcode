@@ -18,9 +18,15 @@ import (
 )
 
 var (
-	traySockOnce  sync.Once
-	traySockPath  string
-	trayHelperCmd *exec.Cmd
+	traySockOnce sync.Once
+	// trayMu guards traySockPath / trayHelperCmd / trayShuttingDown.
+	// The reaper goroutine reads them while removeSystemTray (called from
+	// the shutdown path) writes them - unlocked access was a data race that
+	// let the reaper respawn a helper mid-shutdown (#1351).
+	trayMu           sync.Mutex
+	traySockPath     string
+	trayHelperCmd    *exec.Cmd
+	trayShuttingDown bool
 )
 
 func (a *App) runSystemTray() {
@@ -91,11 +97,21 @@ func (a *App) spawnTrayHelper() {
 		}
 		trayHelperCmd = cmd
 		safego.Go("tray-helper-reaper", func() {
-			// Restart the helper if it ever dies unexpectedly (not when the
-			// app is shutting down).
-			if err := cmd.Wait(); err != nil && traySockPath != "" && a.ctx != nil && a.ctx.Err() == nil {
-				debug.Log("desktop", "tray: helper exited (%v), restarting", err)
-				a.spawnTrayHelper()
+			// Restart the helper if it dies unexpectedly - never during or
+			// after shutdown. #1351: the old guard read traySockPath unlocked
+			// (data race with removeSystemTray) and relied on a.ctx cancel
+			// that the shutdown path never performs, so a Kill-during-teardown
+			// could slip past all guards and respawn an orphan helper.
+			// cmd.Wait also reaps the killed process (no zombie).
+			if err := cmd.Wait(); err != nil {
+				trayMu.Lock()
+				shutdown := trayShuttingDown
+				path := traySockPath
+				trayMu.Unlock()
+				if !shutdown && path != "" && a.ctx != nil && a.ctx.Err() == nil {
+					debug.Log("desktop", "tray: helper exited (%v), restarting", err)
+					a.spawnTrayHelper()
+				}
 			}
 		})
 		return
@@ -122,11 +138,24 @@ func (a *App) serveTrayConn(conn net.Conn) {
 func (a *App) removeSystemTray() {
 	// Closing the socket makes the helper exit (and remove its status
 	// item); also kill it outright in case it is mid-retry-dial.
-	if trayHelperCmd != nil && trayHelperCmd.Process != nil {
-		trayHelperCmd.Process.Kill()
-	}
+	//
+	// #1351: set the shutdown flag and clear the sock path BEFORE Kill so
+	// the reaper woken by the kill observes the torn-down state under the
+	// same mutex and does not respawn mid-teardown. The reaper's cmd.Wait
+	// reaps the killed process.
+	trayMu.Lock()
+	trayShuttingDown = true
+	cmd := trayHelperCmd
+	dir := ""
 	if traySockPath != "" {
-		os.RemoveAll(filepath.Dir(traySockPath))
+		dir = filepath.Dir(traySockPath)
 		traySockPath = ""
+	}
+	trayMu.Unlock()
+	if cmd != nil && cmd.Process != nil {
+		cmd.Process.Kill()
+	}
+	if dir != "" {
+		os.RemoveAll(dir)
 	}
 }
