@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/topcheer/ggcode/internal/util"
 )
@@ -101,12 +102,20 @@ func (t WebFetch) Execute(ctx context.Context, input json.RawMessage) (Result, e
 	client := &http.Client{Timeout: 30 * time.Second}
 
 	if !t.AllowPrivate {
-		var transport *http.Transport
+		// #1353: build the SSRF-guarded dialer on the transport that
+		// WrapTransport RETURNS (its single Clone). The old flow cloned
+		// DefaultTransport here and WrapTransport cloned again - two
+		// Transports per fetch, the first instantly garbage.
+		var base *http.Transport
 		if dt, ok := http.DefaultTransport.(*http.Transport); ok {
-			transport = dt.Clone()
+			base = dt
 		} else {
-			transport = &http.Transport{}
+			base = &http.Transport{}
 		}
+		transport := util.WrapTransport(base)
+		// The per-fetch transport owns a connection pool nobody will reuse
+		// (a fresh one is built next call) - drain idle fds when done.
+		defer transport.CloseIdleConnections()
 
 		// When a proxy is configured (HTTP_PROXY/HTTPS_PROXY), the custom
 		// DialContext receives the proxy address (often localhost/internal)
@@ -129,9 +138,11 @@ func (t WebFetch) Execute(ctx context.Context, input json.RawMessage) (Result, e
 				return origDial(dialCtx, network, dialAddr)
 			}
 		}
-		client.Transport = util.WrapTransport(transport)
+		client.Transport = transport
 	} else {
-		client.Transport = util.WrapTransport(nil)
+		transport := util.WrapTransport(nil)
+		defer transport.CloseIdleConnections()
+		client.Transport = transport
 	}
 
 	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
@@ -179,22 +190,29 @@ func (t WebFetch) Execute(ctx context.Context, input json.RawMessage) (Result, e
 	// Strip HTML first to reduce byte count before truncation check
 	text := stripHTML(string(body))
 
-	// Optimize: use bytes operations instead of double rune conversion
-	// This reduces memory allocations for large responses
+	// #1353: truncate by RUNES, not bytes. The old byte-based slice could
+	// cut a multi-byte CJK rune in half (invalid UTF-8) and, for Chinese
+	// pages, 20000 bytes is only ~6600 chars - contradicting the tool
+	// description's "20000 chars" and the rune-based error path below.
+	// The old "avoid double rune conversion" comment optimized away
+	// correctness; one conversion here is fine (single-shot, off hot path).
 	const maxWebFetchChars = 20000 // Reduced from 50000 based on 2025 efficiency research
-	if len(text) > maxWebFetchChars {
-		// Find a safe truncation point (end of sentence or line) to avoid cutting mid-word
+	if utf8.RuneCountInString(text) > maxWebFetchChars {
+		runes := []rune(text)
+		// Find a safe truncation point (end of sentence or line) to avoid
+		// cutting mid-word.
 		cutoff := maxWebFetchChars
-		if cutoff < len(text) {
-			// Try to truncate at a sentence boundary
-			for i := cutoff; i > cutoff-200 && i > 0; i-- {
-				if text[i] == '.' || text[i] == '\n' {
-					cutoff = i + 1
-					break
-				}
+		for i := cutoff; i > cutoff-200 && i > 0; i-- {
+			if runes[i] == '.' || runes[i] == '\n' {
+				cutoff = i + 1
+				break
 			}
-			text = text[:cutoff] + "\n\n... [truncated: " + fmt.Sprintf("%d/%d chars", len(text), maxWebFetchChars) + " shown]"
 		}
+		shown := cutoff
+		if shown > len(runes) {
+			shown = len(runes)
+		}
+		text = string(runes[:shown]) + "\n\n... [truncated: " + fmt.Sprintf("%d/%d chars", shown, len(runes)) + " shown]"
 	}
 
 	// Include final URL if redirected (helpful for shortened URLs, etc.)
