@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -551,5 +552,52 @@ func TestListWorktree_NonGitRepo(t *testing.T) {
 	}
 	if !result.IsError {
 		t.Error("expected error for non-git directory")
+	}
+}
+
+// TestExitWorktree_DirtyWithoutForceRefused pins #1356: removing a dirty
+// worktree WITHOUT discard_changes must be refused by git itself (no
+// unconditional --force), while discard_changes=true still removes it.
+// Uses a real git repo so the force-gating actually round-trips to git.
+func TestExitWorktree_DirtyWithoutForceRefused(t *testing.T) {
+	dir := initTestGitRepo(t)
+	enter := EnterWorktree{WorkingDir: dir}
+	res, err := enter.Execute(context.Background(), json.RawMessage(`{"name":"dirty-wt"}`))
+	if err != nil || res.IsError {
+		t.Fatalf("enter failed: %v %s", err, res.Content)
+	}
+	wtPath := dir + "/.ggcode/worktrees/dirty-wt"
+	defer func() {
+		cleanup := exec.Command("git", "worktree", "remove", "--force", wtPath)
+		cleanup.Dir = dir
+		cleanup.Run()
+	}()
+
+	// Dirty the worktree AFTER entering, bypassing the tool's own porcelain
+	// pre-check as closely as a parallel writer would.
+	if err := os.WriteFile(filepath.Join(wtPath, "dirty.txt"), []byte("concurrent write"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// The porcelain check should refuse first - same observable contract.
+	exit := ExitWorktree{WorkingDir: wtPath}
+	res, err = exit.Execute(context.Background(), json.RawMessage(`{"action":"remove"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected refusal for dirty worktree without discard_changes, got: %s", res.Content)
+	}
+
+	// discard_changes=true must still remove it (--force restored).
+	res, err = exit.Execute(context.Background(), json.RawMessage(`{"action":"remove","discard_changes":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError {
+		t.Fatalf("expected removal with discard_changes=true, got: %s", res.Content)
+	}
+	if _, err := os.Stat(wtPath); !os.IsNotExist(err) {
+		t.Error("worktree directory still exists after forced removal")
 	}
 }
