@@ -74,3 +74,21 @@ func TestComposerCursorEnd(t *testing.T) {
 		t.Errorf("cursor after composerCursorEnd = %d, want 11", got)
 	}
 }
+
+func TestComposerCursorEndCJKMultiline(t *testing.T) {
+	// CJK multiline: cursor must land at the byte end of the value and the
+	// scroll must follow it (tail visible). Guards the composerCursorEnd
+	// View()+MoveToEnd() rework - see cjk_repro_test.go for the full story.
+	ta := textarea.New()
+	ta.Focus()
+	ta.SetHeight(5)
+	val := "第一行\n第二行\n结尾"
+	ta.SetValue(val)
+	composerCursorEnd(&ta)
+	if got := inputCursor(&ta); got != len(val) {
+		t.Errorf("cursor after composerCursorEnd = %d, want %d", got, len(val))
+	}
+	if row := ta.Line(); row != ta.LineCount()-1 {
+		t.Errorf("cursor row = %d, want last line %d", row, ta.LineCount()-1)
+	}
+}
