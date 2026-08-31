@@ -204,9 +204,13 @@ func (m *Model) handleLanChatPanelUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 				fromNick = "(unknown)"
 			}
 			m.lanChatUnread++
-			// Track last sender for # chat mode pre-fill
+			// Track last sender for # chat mode pre-fill. #1381-A: this is
+			// the SENDER (FromRole) - storing ToRole made the # reply pick the
+			// wrong @nick suffix: an agent DM (From=agent/To=human) stored
+			// "human" and the reply mention missed, broadcasts stored "" and
+			// never got the suffix at all.
 			m.lanChatLastSenderNick = msg.msg.FromNick
-			m.lanChatLastSenderRole = msg.msg.ToRole
+			m.lanChatLastSenderRole = msg.msg.FromRole
 			m.lanChatLastSenderNodeID = msg.msg.FromNodeID
 			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("[LAN Chat] %s: %s — # to reply", fromNick, msg.msg.Content))
 		}
@@ -487,6 +491,9 @@ func (m Model) handleLanChatSend() (Model, tea.Cmd) {
 	if text == "" {
 		return m, nil
 	}
+	// Fresh send: drop the previous attempt's notice (errors below set
+	// it anew when applicable).
+	p.notice = ""
 
 	// Handle /nick command
 	if strings.HasPrefix(text, "/nick ") {
@@ -521,7 +528,11 @@ func (m Model) handleLanChatSend() (Model, tea.Cmd) {
 					if mention == part.AgentNick {
 						role = lanchat.RoleAgent
 					}
-					m.lanChatHub.SendDirect(context.Background(), part.NodeID, role, content, nil)
+					// #1381-B: surface delivery failure in the panel - the input was
+					// already cleared at :485, a dropped error meant silent loss.
+					if err := m.lanChatHub.SendDirect(context.Background(), part.NodeID, role, content, nil); err != nil {
+						p.notice = fmt.Sprintf("send to %s failed: %v", mention, err)
+					}
 					return m, nil
 				}
 			}
@@ -534,7 +545,12 @@ func (m Model) handleLanChatSend() (Model, tea.Cmd) {
 	}
 
 	// Team-scoped broadcast (default: your own team)
-	m.lanChatBroadcastTeam(context.Background(), text)
+	// #1381-B: lanChatBroadcastTeam returns the first delivery error since
+	// #1362 - a dropped return here silently lost team broadcasts from the
+	// panel path.
+	if err := m.lanChatBroadcastTeam(context.Background(), text); err != nil {
+		p.notice = fmt.Sprintf("broadcast failed: %v", err)
+	}
 	return m, nil
 }
 
@@ -700,6 +716,12 @@ func (m *Model) renderLanChatPanel() string {
 	}
 	body = append(body, inputStyle.Render(hint))
 	body = append(body, fmt.Sprintf("> %s_", p.input))
+	// #1381-C: p.notice was write-only - "Unknown @mention" and every
+	// send error set it but the renderer never showed it, stacking with
+	// the mis-routed # replies into fully silent failures.
+	if p.notice != "" {
+		body = append(body, "", lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Render(p.notice))
+	}
 
 	return m.renderContextBox("/chat - LAN Chat", strings.Join(body, "\n"), lipgloss.Color("11"))
 }
