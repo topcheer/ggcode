@@ -40,11 +40,14 @@ func (m Model) handleShellCommandDoneMsg(msg shellCommandDoneMsg) (Model, tea.Cm
 
 	wasCanceled := m.runCanceled
 	wasFailed := m.runFailed
-	// #915: only the run that OWNS these flags may clear them - a shell
-	// command finishing used to zero the AGENT's cancel/fail state, so a
-	// cancelled agent took the normal-completion path (metrics digest,
-	// title refine, session persist) and cancel semantics were lost.
-	if !m.shellOwnedLoading {
+	// #915/#1391-A: only the run that OWNS these flags may clear them.
+	// The condition was inverted (!shellOwnedLoading): the shell clearing
+	// ran exactly when the SHELL did NOT own the run - wiping the AGENT's
+	// cancel/fail state, sending a cancelled agent down the normal-
+	// completion path (duplicate session persist, metrics digest, swallowed
+	// pending restore). commit 652104df's message states the intended
+	// semantics: clear ONLY when the shell owns the run.
+	if m.shellOwnedLoading {
 		m.runCanceled = false
 		m.runFailed = false
 	}

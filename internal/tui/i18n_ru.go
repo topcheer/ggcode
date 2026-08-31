@@ -1188,6 +1188,8 @@ func ruCatalog(key string) string {
 	// --- Shell ---
 	case "shell.empty":
 		return "Команда оболочки пуста."
+	case "shell.already_running":
+		return "Команда shell уже выполняется - дождитесь или Esc для отмены."
 
 	// --- LAN Chat ---
 	case "lanchat.unavailable":

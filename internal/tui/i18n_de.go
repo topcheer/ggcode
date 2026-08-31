@@ -1197,6 +1197,8 @@ Maus:
 	// --- Shell ---
 	case "shell.empty":
 		return "Shell-Befehl ist leer."
+	case "shell.already_running":
+		return "Ein Shell-Befehl laeuft bereits - warten oder mit Esc abbrechen."
 
 	// --- LAN Chat ---
 	case "lanchat.unavailable":

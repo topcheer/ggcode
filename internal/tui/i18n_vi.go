@@ -1099,6 +1099,8 @@ Chuột:
 		return " Đích lưu: %s%s  [Ctrl+T chuyển đổi]"
 	case "shell.empty":
 		return "Lệnh shell trống."
+	case "shell.already_running":
+		return "Da co lenh shell dang chay - cho hoan thanh hoac Esc de huy."
 	case "lanchat.unavailable":
 		return "LAN Chat không khả dụng."
 	case "reflect.no_agent":

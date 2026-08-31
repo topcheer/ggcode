@@ -1140,6 +1140,8 @@ func jaCatalog(key string) string {
 		return " 保存先: %s%s  [Ctrl+T 切替]"
 	case "shell.empty":
 		return "シェルコマンドが空です"
+	case "shell.already_running":
+		return "シェルコマンドが実行中です - 完了を待つか Esc でキャンセルしてください。"
 	case "lanchat.unavailable":
 		return "LAN Chat は利用できません"
 	case "reflect.no_agent":

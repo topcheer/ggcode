@@ -1274,6 +1274,8 @@ Mouse:
 		return " Save target: %s%s  [Ctrl+T toggle]"
 	case "shell.empty":
 		return "Shell command is empty."
+	case "shell.already_running":
+		return "A shell command is already running - wait for it to finish or Esc to cancel."
 	case "lanchat.unavailable":
 		return "LAN Chat is not available."
 	case "reflect.no_agent":

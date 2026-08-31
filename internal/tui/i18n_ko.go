@@ -1032,6 +1032,8 @@ func koCatalog(key string) string {
 		return " 저장 대상: %s%s  [Ctrl+T 전환]"
 	case "shell.empty":
 		return "쉘 명령이 비어 있습니다."
+	case "shell.already_running":
+		return "셸 명령이 이미 실행 중입니다 - 완료를 기다리거나 Esc로 취소하세요."
 	case "lanchat.unavailable":
 		return "LAN Chat을 사용할 수 없습니다."
 	case "reflect.no_agent":

@@ -799,6 +799,8 @@ func ptCatalog(key string) string {
 	// ── Shell ─────────────────────────────────────────────────────
 	case "shell.empty":
 		return "Comando shell está vazio."
+	case "shell.already_running":
+		return "Um comando shell ja esta em execucao - aguarde ou Esc para cancelar."
 
 	// ── Slash command descriptions ────────────────────────────────
 	case "slash.allow":

@@ -1100,6 +1100,8 @@ Souris:
 		return " Sauvegardér vers: %s%s  [Ctrl+T basculer]"
 	case "shell.empty":
 		return "La commande shell est vide."
+	case "shell.already_running":
+		return "Une commande shell est deja en cours - attendez ou Esc pour annuler."
 	case "lanchat.unavailable":
 		return "LAN Chat n'est pas disponible."
 	case "reflect.no_agent":

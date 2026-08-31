@@ -1279,6 +1279,8 @@ func zhCatalog(key string) string {
 		return " 保存目标：%s%s  [Ctrl+T 切换]"
 	case "shell.empty":
 		return "Shell 命令为空。"
+	case "shell.already_running":
+		return "已有 shell 命令在运行——等待完成或按 Esc 取消。"
 	case "lanchat.unavailable":
 		return "局域网聊天不可用。"
 	case "reflect.no_agent":

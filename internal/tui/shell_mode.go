@@ -85,6 +85,15 @@ func (m *Model) submitShellCommand(command string, addToHistory bool) tea.Cmd {
 		m.chatWriteSystem(nextSystemID(), m.t("shell.empty"))
 		return nil
 	}
+	// #1391-B: no re-entry while a shell command is already running. A
+	// second submission used to overwrite shellCancelFunc (the first
+	// process became uncancellable - watch/tail -f leaked for real) and
+	// bump activeShellRunID so the first run's stream/done messages were
+	// RunID-filtered away (output silently lost).
+	if m.shellRunning {
+		m.chatWriteSystem(nextSystemID(), m.t("shell.already_running"))
+		return nil
+	}
 	if addToHistory {
 		m.history = append(m.history, "$ "+command)
 		m.historyIdx = len(m.history)
@@ -99,8 +108,13 @@ func (m *Model) submitShellCommand(command string, addToHistory bool) tea.Cmd {
 	})
 	m.appendUserMessage("$ " + command)
 	m.shellRunning = true
-	m.runCanceled = false
-	m.runFailed = false
+	// #1391-A: same ownership rule as update_shell - only clear the agent's
+	// cancel/fail state when this shell run actually owns the run (agent
+	// idle). When the agent is busy, its flags are not ours to touch.
+	if !m.loading {
+		m.runCanceled = false
+		m.runFailed = false
+	}
 	// Only manage loading/status if agent is not already running.
 	// When agent is busy, shell runs independently without touching shared state.
 	if !m.loading {

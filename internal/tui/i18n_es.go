@@ -1100,6 +1100,8 @@ Raton:
 		return " Guardar en: %s%s  [Ctrl+T alternar]"
 	case "shell.empty":
 		return "El comando de shell está vacío."
+	case "shell.already_running":
+		return "Ya hay un comando en ejecucion - espera o pulsa Esc para cancelar."
 	case "lanchat.unavailable":
 		return "LAN Chat no está disponible."
 	case "reflect.no_agent":
