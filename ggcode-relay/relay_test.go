@@ -744,6 +744,9 @@ func TestPeerOnAckUpdatesCursor(t *testing.T) {
 	h := newHub(nil)
 	p := newPeer(h, r, "client", nil)
 	p.clientID = "client-1"
+	// #1354: acks are only honored from the peer that currently owns the
+	// client_id mapping.
+	r.clientsByID["client-1"] = p
 
 	p.onAck(relayMessage{EventID: "ev-000000100"}, h)
 
@@ -765,6 +768,8 @@ func TestPeerOnAckPersistsToDB(t *testing.T) {
 	h := newHub(store)
 	p := newPeer(h, r, "client", nil)
 	p.clientID = "client-1"
+	// #1354: ownership registration (see above).
+	r.clientsByID["client-1"] = p
 
 	p.onAck(relayMessage{EventID: "ev-000000100"}, h)
 
@@ -777,6 +782,40 @@ func TestPeerOnAckPersistsToDB(t *testing.T) {
 	}
 	if cursor != "ev-000000100" {
 		t.Fatalf("expected persisted cursor ev-000000100, got %s", cursor)
+	}
+}
+
+// TestPeerOnAckRejectsSupersededAndRegressed pins #1354: an ack from a
+// superseded connection (no longer the clientsByID holder) is dropped, and
+// a valid holder's ack never moves the cursor backward (event ids are
+// zero-padded ordinals, so lexicographic compare is event order).
+func TestPeerOnAckRejectsSupersededAndRegressed(t *testing.T) {
+	r := newRoom("token")
+	h := newHub(nil)
+	old := newPeer(h, r, "client", nil)
+	old.clientID = "client-1"
+	cur := newPeer(h, r, "client", nil)
+	cur.clientID = "client-1"
+	r.clientsByID["client-1"] = cur
+	cur.cursor = "ev-000000150"
+	old.cursor = "ev-000000150"
+
+	// Stale ack from the superseded (evicted) connection: dropped.
+	old.onAck(relayMessage{EventID: "ev-000000100"}, h)
+	if old.cursor != "ev-000000150" {
+		t.Fatalf("superseded peer cursor moved: %s", old.cursor)
+	}
+
+	// Regressed ack from the CURRENT holder: also refused.
+	cur.onAck(relayMessage{EventID: "ev-000000120"}, h)
+	if cur.cursor != "ev-000000150" {
+		t.Fatalf("cursor regressed: %s", cur.cursor)
+	}
+
+	// Forward ack from the current holder: accepted.
+	cur.onAck(relayMessage{EventID: "ev-000000200"}, h)
+	if cur.cursor != "ev-000000200" {
+		t.Fatalf("forward ack not accepted: %s", cur.cursor)
 	}
 }
 

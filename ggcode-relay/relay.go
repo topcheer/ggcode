@@ -800,9 +800,20 @@ func (p *peer) onResume(msg relayMessage, h *hub) {
 		loadedCursor = cursor
 	}
 
+	var superseded *peer
 	p.room.sendMu.Lock()
 	p.room.mu.Lock()
 	p.clientID = msg.ClientID
+	// #1354: when a newer connection resumes with the same client_id,
+	// detach the OLD peer - previously the map overwrite left it in
+	// room.clients receiving fanout (double delivery to one client until
+	// the read deadline noticed). Captured under the lock; closed after
+	// unlocking so the close-frame write (1s deadline) never blocks the
+	// room. detachFromRoom's existing clientsByID[p]==p guard keeps the
+	// teardown of the old peer from deleting the NEW mapping.
+	if old, ok := p.room.clientsByID[msg.ClientID]; ok && old != p {
+		superseded = old
+	}
 	p.room.clientsByID[msg.ClientID] = p
 	if msg.Type == "resume_from" {
 		p.cursor = msg.LastEventID
@@ -844,6 +855,13 @@ func (p *peer) onResume(msg relayMessage, h *hub) {
 
 	p.send(activeSession)
 	p.room.sendMu.Unlock()
+
+	if superseded != nil {
+		log.Printf("[relay] resume superseded old connection: room=%s client=%s", shortToken(p.room.token), msg.ClientID)
+		safego.Go("relay.supersede-peer", func() {
+			superseded.closeWithReason(4001, "connection superseded by newer resume")
+		})
+	}
 
 	log.Printf("[relay] resume waiting for key exchange: room=%s client=%s cursor=%s authority_epoch=%d",
 		shortToken(p.room.token), msg.ClientID, p.cursor, authorityEpoch)
@@ -988,6 +1006,22 @@ func (p *peer) onAck(msg relayMessage, h *hub) {
 		return
 	}
 	p.room.mu.Lock()
+	// #1354: validate the acking connection still owns the client_id.
+	// A superseded peer lingering on a half-open TCP can deliver stale
+	// (earlier) event_acks; accepting them regressed p.cursor and the
+	// unconditional upsert below overwrote the persisted cursor, so the
+	// next resume replayed already-acked events.
+	if holder, ok := p.room.clientsByID[p.clientID]; !ok || holder != p {
+		p.room.mu.Unlock()
+		log.Printf("[relay] dropping stale ack from superseded connection: room=%s client=%s event=%s", shortToken(p.room.token), p.clientID, msg.EventID)
+		return
+	}
+	// Event IDs are zero-padded ordinals ("ev-%09d"), so lexicographic
+	// order is event order - the cursor must only move forward.
+	if p.cursor != "" && msg.EventID <= p.cursor {
+		p.room.mu.Unlock()
+		return
+	}
 	p.cursor = msg.EventID
 	// Read sessionID under the same lock: bindRoomSession writes it with
 	// room.mu held, and this cursor is persisted with the sessionID — an
