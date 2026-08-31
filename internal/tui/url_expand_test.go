@@ -149,3 +149,32 @@ func TestExpandURLsTimeout(t *testing.T) {
 		t.Errorf("expected marker with error, got: %s", result)
 	}
 }
+
+// TestExtractURLsCJKAndParens pins #1397: CJK text glued to a URL must not
+// be swallowed into the match, and Wikipedia-style parenthesized paths must
+// survive intact while prose parens are stripped.
+func TestExtractURLsCJKAndParens(t *testing.T) {
+	// A: CJK suffix stays OUT of the URL.
+	got := extractURLs("看 https://example.com/docs这个文档")
+	if len(got) != 1 || got[0] != "https://example.com/docs" {
+		t.Fatalf("CJK swallowed or wrong extraction: %#v", got)
+	}
+
+	// B: balanced parens (Wikipedia) survive whole.
+	got = extractURLs("see https://en.wikipedia.org/wiki/Python_(programming_language) now")
+	if len(got) != 1 || got[0] != "https://en.wikipedia.org/wiki/Python_(programming_language)" {
+		t.Fatalf("paren path truncated: %#v", got)
+	}
+
+	// B2: prose closing paren is stripped (prose case).
+	got = extractURLs("(see https://example.com/page)")
+	if len(got) != 1 || got[0] != "https://example.com/page" {
+		t.Fatalf("prose paren not stripped: %#v", got)
+	}
+
+	// Regression: trailing sentence punctuation still stripped.
+	got = extractURLs("go to https://example.com/a, then rest.")
+	if len(got) != 1 || got[0] != "https://example.com/a" {
+		t.Fatalf("punctuation handling regressed: %#v", got)
+	}
+}

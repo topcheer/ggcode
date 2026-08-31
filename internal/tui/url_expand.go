@@ -29,7 +29,45 @@ const (
 // It avoids matching URLs inside markdown link syntax [text](url) to prevent
 // double-processing — the URL inside parentheses is still captured, but we
 // deduplicate by URL string.
-var urlPattern = regexp.MustCompile(`https?://[^\s<>"')\]]+[^\s<>"')\].,;:!?]`)
+//
+// #1397: the body charset is now ASCII-only (printable ASCII minus
+// delimiters). The old negated class [^\s<>"')\]] admitted EVERYTHING else -
+// including CJK: "看 https://example.com/docs这个文档" extracted
+// "...docs这个文档", and the doomed fetch injected a 404/error page into
+// the context. URLs do not contain non-ASCII in practice (IRIs are
+// percent-encoded on copy). Balanced parentheses are handled separately
+// below (Wikipedia-style paths need them, but a trailing ')' in prose like
+// "(see https://x.com)" must not be captured).
+var urlPattern = regexp.MustCompile(`https?://[!-~]+`)
+
+// trimURLTail strips trailing punctuation from a raw match. Parenthesis
+// balancing (#1397-B): a trailing ')' is KEPT when the parentheses balance
+// or '(' leads (the pair is part of the path, e.g. Wikipedia
+// Python_(programming_language)); when ')' leads, the surplus trailing one
+// belongs to prose ("(see https://example.com)") and is stripped - then the
+// re-check loop may strip more.
+func trimURLTail(u string) string {
+	for len(u) > 0 {
+		last := u[len(u)-1]
+		switch {
+		case last == ')':
+			open := strings.Count(u, "(")
+			closes := strings.Count(u, ")")
+			if open >= closes {
+				// balanced or '(' surplus: ')' closes a path '(' - keep it
+				return u
+			}
+			// ')' surplus: trailing one is prose
+			u = u[:len(u)-1]
+			continue
+		case strings.IndexByte(".,;:!?", last) >= 0:
+			u = u[:len(u)-1]
+			continue
+		}
+		return u
+	}
+	return u
+}
 
 // urlExpandAllowPrivate is a test-only override to bypass SSRF protection
 // when testing with httptest (127.0.0.1) servers.
@@ -148,8 +186,8 @@ func extractURLs(input string) []string {
 	seen := make(map[string]bool)
 	var urls []string
 	for _, u := range matches {
-		// Normalize trailing punctuation that regex may have captured
-		u = strings.TrimRight(u, ".,;:!?)")
+		// Normalize trailing punctuation / prose parens (#1397)
+		u = trimURLTail(u)
 		if seen[u] {
 			continue
 		}
