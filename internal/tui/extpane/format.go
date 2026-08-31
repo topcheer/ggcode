@@ -79,9 +79,55 @@ func formatDone(isError bool) string {
 		cGray, ts, cReset)
 }
 
+// stripAnsi removes ANSI escape sequences (CSI and two-byte ESC variants).
+// Local copy: extpane cannot import the tui package's stripAnsiForChat
+// (import cycle). Used BEFORE truncation so a boundary cut can never leave
+// a partial CSI that swallows following text (#1368).
+func stripAnsi(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	inEscape := false
+	sawBracket := false
+	for _, c := range s {
+		if !inEscape {
+			if c == '\x1b' {
+				inEscape = true
+				sawBracket = false
+			} else {
+				b.WriteRune(c)
+			}
+			continue
+		}
+		// inside an escape sequence
+		if !sawBracket {
+			if c == '[' {
+				sawBracket = true
+			} else {
+				inEscape = false // two-byte ESC sequence (e.g. \x1bM)
+				b.WriteRune(c)
+			}
+			continue
+		}
+		// CSI: ends at a final byte in @-~ (0x40-0x7E)
+		if c >= 0x40 && c <= 0x7E {
+			inEscape = false
+		}
+	}
+	return b.String()
+}
+
 // compactPreview trims and truncates a string for inline display.
 // UTF-8 aware: never cuts in the middle of a rune.
+//
+// #1368: order matters - ANSI strip and newline replacement run BEFORE the
+// 100-byte truncation. The old order truncated first, so (a) each "\n"
+// expanded to " ↵ " (+4 bytes) AFTER the size check, blowing the cap ~5x on
+// blank-line-heavy output, and (b) a CSI sequence cut at the boundary left
+// a partial escape whose following bytes the terminal ate as parameters.
 func compactPreview(s string) string {
+	s = stripAnsi(s)
+	s = strings.ReplaceAll(s, "\r", "")
+	s = strings.ReplaceAll(s, "\n", " ↵ ")
 	s = strings.TrimSpace(s)
 	if len(s) > 100 {
 		cut := 97
@@ -90,7 +136,5 @@ func compactPreview(s string) string {
 		}
 		s = s[:cut] + "..."
 	}
-	s = strings.ReplaceAll(s, "\n", " ↵ ")
-	s = strings.ReplaceAll(s, "\r", "")
 	return s
 }
