@@ -92,3 +92,23 @@ func TestComposerCursorEndCJKMultiline(t *testing.T) {
 		t.Errorf("cursor row = %d, want last line %d", row, ta.LineCount()-1)
 	}
 }
+
+// TestRelayoutAfterSidebarChangeNoPanic pins #1390: the sidebar-toggle
+// relayout must run the full sync set (chatList caches items by width).
+// chat.List's width is unexported, so the direct width assertion lives in
+// code review; here we pin the observable contract - mainColumnWidth
+// shifts with the toggle and relayout completes without panic on a model
+// wired like production (chatList, questionnaire and stats present).
+func TestRelayoutAfterSidebarChangeNoPanic(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(140, 40)
+
+	wide := m.mainColumnWidth()
+	m.sidebarVisible = !m.sidebarVisible
+	m.relayoutAfterSidebarChange()
+	narrow := m.mainColumnWidth()
+
+	if wide == narrow {
+		t.Fatalf("mainColumnWidth should differ across sidebar states: %d == %d", wide, narrow)
+	}
+}
