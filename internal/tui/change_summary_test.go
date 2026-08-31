@@ -99,3 +99,31 @@ func TestShortenPathBoundary(t *testing.T) {
 		t.Errorf("outside path not kept absolute: %q", got)
 	}
 }
+
+// TestApplyTodoWriteIdenticalAfterClear pins #1360: an IDENTICAL todo_write
+// after chatReset (/clear) must rebuild the missing chat card. chatReset
+// empties chatList but keeps todoSnapshot, so the diff is empty - the
+// no-changes branch used to skip card creation entirely.
+func TestApplyTodoWriteIdenticalAfterClear(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(120, 40)
+
+	raw := `{"todos":[{"id":"1","content":"first","status":"in_progress"},{"id":"2","content":"second","status":"pending"}]}`
+	// First write: card created, snapshot populated.
+	m.applyTodoWrite(ToolStatusMsg{ToolName: "todo_write", RawArgs: raw})
+	if m.chatList.FindByID(todoToolItemID) == nil {
+		t.Fatal("first todo_write did not create the chat card")
+	}
+
+	// /clear empties the chat, keeps the snapshot.
+	m.chatReset()
+	if m.chatList.FindByID(todoToolItemID) != nil {
+		t.Fatal("chatReset did not clear the card (precondition)")
+	}
+
+	// IDENTICAL re-write: diff is empty, but the card must come back.
+	m.applyTodoWrite(ToolStatusMsg{ToolName: "todo_write", RawArgs: raw})
+	if m.chatList.FindByID(todoToolItemID) == nil {
+		t.Fatal("identical todo_write after /clear did not rebuild the chat card (#1360)")
+	}
+}
