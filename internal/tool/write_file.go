@@ -199,6 +199,13 @@ func (t WriteFile) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	msg += scanAndWarn(args.Path, string(writeData))
 	msg += criticalFileWarning(args.Path)
 	msg += blindWriteWarning(args.Path)
+	// #1358: record our own write like edit_file/multi_edit do - the
+	// temp+rename produces a new mtime, so without this the NEXT write's
+	// CheckStale misreports "modified externally since last read" on every
+	// read->write->write sequence. Placed AFTER blindWriteWarning so the
+	// first blind overwrite still warns (HasBeenSeen is read-vs-written
+	// agnostic) while subsequent writes are no longer misreported stale.
+	defaultFileTracker.RecordWrite(args.Path)
 	msg += compactDiff(oldContent, string(writeData))
 	msg += syntaxCheck(args.Path, writeData)
 	msg += postEditDiagnostics(t.WorkingDir, args.Path)

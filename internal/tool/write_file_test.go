@@ -170,3 +170,31 @@ func TestWriteFileSandboxRecheckAfterMkdirAll(t *testing.T) {
 		t.Error("bytes landed outside the sandbox")
 	}
 }
+
+// TestWriteFile_SecondWriteNotFlaggedStale pins #1358: write_file must
+// RecordWrite its own writes (like edit_file does). Without it, the
+// temp+rename's new mtime made the SECOND write in a read->write->write
+// sequence misreport "modified externally since last read".
+func TestWriteFile_SecondWriteNotFlaggedStale(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "seq.txt")
+	os.WriteFile(path, []byte("v0"), 0o644)
+
+	// read -> write #1 -> write #2: the exact sequence from the issue.
+	defaultFileTracker.RecordRead(path)
+	wf := WriteFile{WorkingDir: tmp}
+	mk := func(c string) json.RawMessage {
+		b, _ := json.Marshal(map[string]string{"path": path, "content": c})
+		return b
+	}
+	if res, err := wf.Execute(context.Background(), mk("v1")); err != nil || res.IsError {
+		t.Fatalf("write #1 failed: %v %s", err, res.Content)
+	}
+	res, err := wf.Execute(context.Background(), mk("v2"))
+	if err != nil || res.IsError {
+		t.Fatalf("write #2 must succeed without stale misreport (#1358): %v %s", err, res.Content)
+	}
+	if strings.Contains(res.Content, "modified externally") {
+		t.Fatalf("second write flagged as externally modified: %s", res.Content)
+	}
+}
