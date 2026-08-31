@@ -59,6 +59,7 @@ type Manager struct {
 	panes    map[string]*ExtPane
 	creating map[string]bool // prevents duplicate EnsurePane for same agent
 	failed   map[string]bool // permanently failed — never retry CreateTab
+	retries  map[string]int  // #1369: transient-failure retry budget per agent
 	mu       sync.Mutex
 	stopCh   chan struct{}
 	stopOnce sync.Once
@@ -75,6 +76,10 @@ type Manager struct {
 // maxPanes is the hard cap on concurrent tabs. Prevents runaway creation.
 const maxPanes = 10
 
+// maxCreateRetries bounds transient-failure retries before the agent's
+// panes go permanently dark (#1369: one timeout used to do that instantly).
+const maxCreateRetries = 3
+
 // NewManager creates a Manager, auto-detecting the best available backend.
 // Priority: tmux > iTerm2 > Kitty. Returns a Manager with a nil backend
 // if no terminal is suitable (all operations become no-ops).
@@ -90,6 +95,7 @@ func NewManager() *Manager {
 		panes:       make(map[string]*ExtPane),
 		creating:    make(map[string]bool),
 		failed:      make(map[string]bool),
+		retries:     make(map[string]int),
 		stopCh:      make(chan struct{}),
 		sem:         make(chan struct{}, maxConcurrentOps),
 		tmpDir:      tmpDir,
@@ -164,12 +170,27 @@ func (m *Manager) EnsurePane(agentID, name, kind string) {
 	m.creating[agentID] = true
 	m.mu.Unlock()
 
-	// Cleanup helper on failure: mark as permanently failed so we never retry.
+	// Failure helpers. #1369: the old single fail() marked EVERY failure
+	// permanently ("never retry") - a one-off CreateTab timeout or transient
+	// log-file error disabled the agent's panels for the whole TUI session,
+	// silently dropping all WriteText/WriteToolCall. Permanent is now
+	// reserved for runaway-protection (tab may exist despite the error);
+	// transient failures get a bounded retry via retryBudget.
 	fail := func(format string, args ...any) {
 		debug.Logf(format, args...)
 		m.mu.Lock()
 		delete(m.creating, agentID)
-		m.failed[agentID] = true // permanent — never retry CreateTab
+		m.retries[agentID]++
+		if m.retries[agentID] >= maxCreateRetries {
+			m.failed[agentID] = true // exhausted - permanent
+		}
+		m.mu.Unlock()
+	}
+	failPermanent := func(format string, args ...any) {
+		debug.Logf(format, args...)
+		m.mu.Lock()
+		delete(m.creating, agentID)
+		m.failed[agentID] = true // runaway protection - never retry
 		m.mu.Unlock()
 	}
 
@@ -197,7 +218,8 @@ func (m *Manager) EnsurePane(agentID, name, kind string) {
 	defer cancel()
 	tabID, err := m.backend.CreateTab(ctx, title, logPath)
 	if err != nil {
-		fail("extpane: create tab failed for %s: %v", agentID, err)
+		// #1369: tab MAY exist despite the error (runaway) - permanent.
+		failPermanent("extpane: create tab failed for %s: %v", agentID, err)
 		f.Close()
 		os.Remove(logPath)
 		return

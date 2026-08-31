@@ -21,7 +21,13 @@ func newITerm2Backend() *iterm2Backend {
 	// Capture our own session ID at init so we never accidentally close ggcode's tab.
 	// Best-effort: if this fails, selfSessionID stays empty and CloseTab won't have
 	// the self-guard, but the Manager-level failed/maxPanes guards still apply.
-	out, err := runOsa(context.Background(), `tell application "iTerm2" to return id of current session of current window`)
+	// #1369/#894: 3s timeout like the tmux sibling — this runs on the TUI
+	// startup synchronous path (NewManager→newModel); a busy/restarting
+	// iTerm2 or a pending Automation-permission dialog would otherwise
+	// block model construction forever.
+	probeCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	out, err := runOsa(probeCtx, `tell application "iTerm2" to return id of current session of current window`)
 	if err == nil {
 		b.selfSessionID = strings.TrimSpace(out)
 	}
@@ -33,7 +39,12 @@ func (i *iterm2Backend) Name() string { return "iterm2" }
 // CreateTab creates a new iTerm2 tab running `tail -f`.
 func (i *iterm2Backend) CreateTab(ctx context.Context, title, logfile string) (string, error) {
 	safeTitle := sanitizeAS(title)
-	tailCmd := fmt.Sprintf("tail -f '%s'", logfile)
+	// #1369 side-fix: a log path containing ' (apostrophed parent dir or
+	// teammate name) breaks the AppleScript literal and the panel dies,
+	// which stacks with the permanent-failure path. Escape like Go:
+	safeLog := strings.ReplaceAll(logfile, "\\", "\\\\")
+	safeLog = strings.ReplaceAll(safeLog, "'", "\\'")
+	tailCmd := fmt.Sprintf("tail -f '%s'", safeLog)
 	safeCmd := sanitizeAS(tailCmd)
 	// Capture session ID via a variable instead of "current session of newTab"
 	// which may not work reliably across iTerm2 versions.
