@@ -66,18 +66,17 @@ func ParseMentions(input string, workDir string) (string, []Mention, error) {
 			continue
 		}
 
-		// Remove from cleaned input
-		removeLen := 1 + len(token)
-		if end < len(rest) {
-			removeLen++ // trailing whitespace
-		}
-		cleaned = cleaned[:idx] + cleaned[idx+removeLen:]
-		searchFrom = idx
-
-		// Resolve path
+		// Resolve path FIRST, remove the token only when the reference
+		// actually resolves. #1365: the old order removed the token before
+		// validating, so in mixed messages ("compare @good.go and @typo.go")
+		// the failing reference silently vanished from the message with no
+		// [Referenced files] entry - the agent never learned the user had
+		// pointed at a second file. Failed references now stay in the text
+		// verbatim, which also tells the model the path did not resolve.
 		fullPath := filepath.Join(workDir, token)
 		absPath, err := filepath.Abs(fullPath)
 		if err != nil {
+			searchFrom = idx + 1 + len(token)
 			continue
 		}
 
@@ -88,13 +87,24 @@ func ParseMentions(input string, workDir string) (string, []Mention, error) {
 		rel, err := filepath.Rel(workDir, absPath)
 		if err != nil || rel == ".." || strings.HasPrefix(rel, "../") {
 			debug.Log("completion", "@mention path traversal blocked: %s -> %s", token, absPath)
+			searchFrom = idx + 1 + len(token)
 			continue
 		}
 
 		info, err := os.Stat(absPath)
 		if err != nil {
+			searchFrom = idx + 1 + len(token)
 			continue
 		}
+
+		// Resolved: now it is safe to strip the token from the cleaned
+		// message (the content will arrive via [Referenced files]).
+		removeLen := 1 + len(token)
+		if end < len(rest) {
+			removeLen++ // trailing whitespace
+		}
+		cleaned = cleaned[:idx] + cleaned[idx+removeLen:]
+		searchFrom = idx
 
 		mentions = append(mentions, Mention{
 			Path:  absPath,
