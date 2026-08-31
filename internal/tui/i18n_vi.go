@@ -897,7 +897,7 @@ func viCatalog(key string) string {
 	case "panel.qq.create_hint":
 		return "Enter tạo bot • Esc hủy"
 	case "panel.qq.actions_hint":
-		return "j/k di chuyển • Enter hoặc b liên kết bot • c liên kết kênh • x hủy liên kết kênh • u hủy liên kết bot • i tạo bot • Esc đóng"
+		return "j/k di chuyển • d tắt/bật • Enter hoặc b liên kết bot • c liên kết kênh • x hủy liên kết kênh • u hủy liên kết bot • i tạo bot • e sửa cấu hình • q hiện QR • Esc đóng"
 	case "panel.qq.bind_channel":
 		return "Liên kết kênh"
 	case "panel.qq.scan_hint":

@@ -1038,7 +1038,7 @@ func zhCatalog(key string) string {
 	case "panel.qq.create_hint":
 		return "Enter 创建机器人 • Esc 取消"
 	case "panel.qq.actions_hint":
-		return "j/k 移动 • Enter 或 b 绑定机器人 • c 绑定渠道 • x 解绑渠道 • u 解绑机器人 • i 创建机器人 • Esc 关闭"
+		return "j/k 移动 • d 禁用/启用 • Enter 或 b 绑定机器人 • c 绑定渠道 • x 解绑渠道 • u 解绑机器人 • i 创建机器人 • e 编辑配置 • q 显示二维码 • Esc 关闭"
 	case "panel.qq.bind_channel":
 		return "绑定渠道"
 	case "panel.qq.scan_hint":

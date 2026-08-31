@@ -1036,7 +1036,7 @@ func enCatalog(key string) string {
 	case "panel.qq.create_hint":
 		return "Enter create bot • Esc cancel"
 	case "panel.qq.actions_hint":
-		return "j/k move • Enter or b bind bot • c bind channel • x unbind channel • u unbind bot • i create bot • Esc close"
+		return "j/k move • d disable/enable • Enter or b bind bot • c bind channel • x unbind channel • u unbind bot • i create bot • e edit config • q show QR • Esc close"
 	case "panel.qq.bind_channel":
 		return "Bind Channel"
 	case "panel.qq.scan_hint":

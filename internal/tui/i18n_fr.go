@@ -897,7 +897,7 @@ func frCatalog(key string) string {
 	case "panel.qq.create_hint":
 		return "Enter créer bot • Esc annulér"
 	case "panel.qq.actions_hint":
-		return "j/k déplacer • Enter ou b lier bot • c lier canal • x délier canal • u délier bot • i créer bot • Esc fermér"
+		return "j/k déplacer • d désactiver/activer • Enter ou b lier bot • c lier canal • x délier canal • u délier bot • i créer bot • e modifier config • q afficher QR • Esc fermér"
 	case "panel.qq.bind_channel":
 		return "Lier Canal"
 	case "panel.qq.scan_hint":

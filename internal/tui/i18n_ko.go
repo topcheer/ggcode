@@ -903,7 +903,7 @@ func koCatalog(key string) string {
 	case "panel.qq.create_hint":
 		return "Enter 봇 생성 • Esc 취소"
 	case "panel.qq.actions_hint":
-		return "j/k 이동 • Enter 또는 b 봇 바인딩 • c 채널 바인딩 • x 채널 언바인딩"
+		return "j/k 이동 • d 비활성/활성 • Enter 또는 b 봇 바인딩 • c 채널 바인딩 • x 채널 언바인딩 • u 봇 언바인딩 • i 봇 생성 • e 구성 편집 • q QR 표시 • Esc 닫기"
 	case "panel.qq.bind_channel":
 		return "채널 바인딩"
 	case "panel.qq.scan_hint":

@@ -981,7 +981,7 @@ func deCatalog(key string) string {
 	case "panel.qq.create_hint":
 		return "Enter Bot erstellen • Esc abbrechen"
 	case "panel.qq.actions_hint":
-		return "j/k bewegen • Enter oder b Bot binden • c Kanal binden • x Kanal lösen • u Bot lösen • i Bot erstellen • Esc schließen"
+		return "j/k bewegen • d deaktivieren/aktivieren • Enter oder b Bot binden • c Kanal binden • x Kanal lösen • u Bot lösen • i Bot erstellen • e Konfig bearbeiten • q QR zeigen • Esc schließen"
 	case "panel.qq.bind_channel":
 		return "Kanal binden"
 	case "panel.qq.scan_hint":

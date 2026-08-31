@@ -1200,7 +1200,7 @@ func ptCatalog(key string) string {
 
 	// ── Panel: QQ ────────────────────────────────────────────────
 	case "panel.qq.actions_hint":
-		return "j/k mover • Enter ou b vincular bot • c vincular canal • x desvincular canal • u desvincular bot • i criar bot • Esc fechar"
+		return "j/k mover • d desativar/ativar • Enter ou b vincular bot • c vincular canal • x desvincular canal • u desvincular bot • i criar bot • e editar config • q mostrar QR • Esc fechar"
 	case "panel.qq.adapter":
 		return "Adaptador: %s"
 	case "panel.qq.available":

@@ -195,6 +195,10 @@ func TestQQPanelBindUsesCurrentDirectoryTargetByDefault(t *testing.T) {
 
 func TestQQPanelRenderCreateHint(t *testing.T) {
 	m := NewModel(nil, nil)
+	// #1374: the actions hint now carries d/e/q keys and is longer - give
+	// the panel a realistic width or the hint line wraps the assertions
+	// out of the rendered output.
+	m.handleResize(160, 50)
 	m.SetConfig(&config.Config{
 		IM: config.IMConfig{
 			Adapters: map[string]config.IMAdapterConfig{

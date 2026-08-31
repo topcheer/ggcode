@@ -973,7 +973,7 @@ func ruCatalog(key string) string {
 	case "panel.qq.create_hint":
 		return "Enter создать бота • Esc отмена"
 	case "panel.qq.actions_hint":
-		return "j/k перемещение • Enter или b привязать бота • c привязать канал • x отвязать канал • u отвязать бота • i создать бота • Esc закрыть"
+		return "j/k перемещение • d откл./вкл. • Enter или b привязать бота • c привязать канал • x отвязать канал • u отвязать бота • i создать бота • e правка конфигурации • q показать QR • Esc закрыть"
 	case "panel.qq.bind_channel":
 		return "Привязать канал"
 	case "panel.qq.scan_hint":

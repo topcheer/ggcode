@@ -938,7 +938,7 @@ func jaCatalog(key string) string {
 	case "panel.qq.create_hint":
 		return "Enter でBot作成 • Esc でキャンセル"
 	case "panel.qq.actions_hint":
-		return "j/k 移動 • Enter または b でBotバインド • c でチャネルバインド • x でチャネルバインド解除 • u でBotバインド解除 • i でBot作成 • Esc で閉じる"
+		return "j/k 移動 • d 無効/有効 • Enter または b でBotバインド • c でチャネルバインド • x でチャネルバインド解除 • u でBotバインド解除 • i でBot作成 • e 設定編集 • q QR表示 • Esc で閉じる"
 	case "panel.qq.bind_channel":
 		return "チャネルをバインド"
 	case "panel.qq.scan_hint":

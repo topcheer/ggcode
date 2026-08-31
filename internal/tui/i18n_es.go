@@ -897,7 +897,7 @@ func esCatalog(key string) string {
 	case "panel.qq.create_hint":
 		return "Enter crear bot • Esc cancelar"
 	case "panel.qq.actions_hint":
-		return "j/k mover • Enter o b vincular bot • c vincular canal • x desvincular canal • u desvincular bot • i crear bot • Esc cerrar"
+		return "j/k mover • d desactivar/activar • Enter o b vincular bot • c vincular canal • x desvincular canal • u desvincular bot • i crear bot • e editar config • q mostrar QR • Esc cerrar"
 	case "panel.qq.bind_channel":
 		return "Vincular Canal"
 	case "panel.qq.scan_hint":
