@@ -97,15 +97,24 @@ func probeStdout() bool {
 	}
 
 	// Set non-blocking
-	_ = fdSetFlags(fd, flags|0x800) // O_NONBLOCK
-	defer fdSetFlags(fd, flags)     // restore
+	if err := fdSetFlags(fd, flags|0x800); err != nil { // O_NONBLOCK
+		// #1389-A: surface the failure instead of proceeding with flags
+		// half-set (the old code ignored this AND the restore error).
+		return true // cannot probe safely - assume alive
+	}
+	defer func() {
+		if rerr := fdSetFlags(fd, flags); rerr != nil {
+			debug.Log("stdout-health", "restore fd flags failed: %v", rerr)
+		}
+	}()
 
-	// Try writing a no-op ANSI sequence (cursor position report response
-	// that doesn't change display). This is 0 bytes of visible output.
-	probe := []byte{}
-	_, err = os.Stdout.Write(probe)
-
-	if err != nil {
+	// Probe with a NON-EMPTY harmless write. #1389-A: the old probe wrote
+	// []byte{} - Go's internal/poll.FD.Write short-circuits empty buffers
+	// to (0, nil) WITHOUT issuing write(2), so a dead fd (SSH drop, closed
+	// terminal) still probed "alive" and the monitor was a placebo.
+	// ESC[0m (SGR reset) is invisible on any terminal and 4 bytes long.
+	probe := []byte("\x1b[0m")
+	if _, err := os.Stdout.Write(probe); err != nil {
 		// Write failed — stdout is dead
 		return false
 	}

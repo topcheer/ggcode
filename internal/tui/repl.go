@@ -1883,18 +1883,31 @@ func (r *REPL) loadSession(id string) {
 	// This is critical for the /restart path: execRestart releases the lock
 	// before syscall.Exec, and the new process enters via loadSession with
 	// --resume <id>. Without re-acquiring here, the session is left unlocked.
-	if r.sessionLock != nil {
-		r.sessionLock.Release()
-		r.sessionLock = nil
-	}
+	// #1389-B: acquire the NEW lock BEFORE releasing the old one (the
+	// switchSessionLock pattern at :338). The old order released first,
+	// then on TryAcquire failure merely logged and continued UNLOCKED -
+	// the /restart window let a concurrent --resume instance grab the lock
+	// mid-gap, and two processes then appended to the same JSONL.
+	var newLock *session.SessionLock
 	if storeDir, dirErr := session.DefaultDir(); dirErr == nil {
 		if lock, lockErr := session.TryAcquireSessionLock(storeDir, ses.ID); lockErr == nil && lock != nil && lock.Acquired() {
-			r.sessionLock = lock
+			newLock = lock
 			debug.Log("repl", "loadSession: acquired lock on session %s", ses.ID)
 		} else if lock != nil && !lock.Acquired() {
 			pid := lock.HolderPID()
-			debug.Log("repl", "loadSession: session %s is locked by PID %d", ses.ID, pid)
+			debug.Log("repl", "loadSession: session %s is locked by PID %d; continuing WITHOUT lock (restore path - execRestart released for this successor)", ses.ID, pid)
 		}
+	}
+	if newLock != nil {
+		if r.sessionLock != nil {
+			r.sessionLock.Release()
+		}
+		r.sessionLock = newLock
+	} else if r.sessionLock != nil {
+		// Keep the old lock rather than none: it at least serializes THIS
+		// process's exit path, and releasing it would widen the gap the
+		// old code left fully open.
+		debug.Log("repl", "loadSession: keeping previous lock (new session lock unavailable)")
 	}
 
 	compacted, beforeTokens, afterTokens := agentruntime.RestoreSessionIntoAgent(r.agent, ses)
