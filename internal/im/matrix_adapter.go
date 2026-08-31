@@ -963,7 +963,21 @@ func (s *cryptoStateStore) GetHistoryVisibility(ctx context.Context, roomID id.R
 		return &event.HistoryVisibilityEventContent{HistoryVisibility: event.HistoryVisibilityShared}, nil
 	}
 	var hv event.HistoryVisibilityEventContent
-	if err := s.adapter.client.StateEvent(ctx, roomID, event.StateHistoryVisibility, "", &hv); err != nil || hv.HistoryVisibility == "" {
+	if err := s.adapter.client.StateEvent(ctx, roomID, event.StateHistoryVisibility, "", &hv); err != nil {
+		// #1355: fail CLOSED, aligned with mautrix's own crypto store
+		// (encryptmegolm.go returns the error on state fetch failure).
+		// Returning "shared" on a transient error marked joined/invited
+		// rooms SharedHistory=true; that flag then rides MSC3061
+		// shared_history room keys, key forwards and key backups for the
+		// outbound session's whole lifetime (~7 days / 100 messages) with
+		// no correction path. The message fails to encrypt now and the
+		// caller retries - correct beats silently over-sharing.
+		return nil, err
+	}
+	if hv.HistoryVisibility == "" {
+		// The state fetch SUCCEEDED but the room has no visibility event
+		// (or empty content): Matrix's documented default IS "shared" -
+		// a legitimate default, not an error path.
 		return &event.HistoryVisibilityEventContent{HistoryVisibility: event.HistoryVisibilityShared}, nil
 	}
 	return &hv, nil
