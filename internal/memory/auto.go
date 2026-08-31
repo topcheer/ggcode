@@ -51,6 +51,24 @@ func (am *AutoMemory) SaveMemory(key, content string) error {
 	return os.WriteFile(path, []byte(content), 0644)
 }
 
+// LoadKey reads a single memory key's content (#1388). LoadAll merges EVERY
+// active key - callers that only own one key (e.g. reflection's
+// run-insights) must not use it: the merged text re-enters their own key on
+// save and cross-pollutes unrelated memories into every prompt injection.
+// Returns ("", nil) when the key has no file yet (first write).
+func (am *AutoMemory) LoadKey(key string) (string, error) {
+	safe := disambiguateKey(key, sanitizeKey(key))
+	path := filepath.Join(am.dir, safe+".md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	return string(data), nil
+}
+
 // LoadIndex loads all memory file keys and returns a formatted index (titles
 // only) plus the list of file paths. Applies curation filtering (expiry +
 // dedup) so the system prompt only shows active memories.

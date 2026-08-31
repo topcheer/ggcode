@@ -42,8 +42,20 @@ func setupReflection(a *agent.Agent) {
 		}
 
 		key := "run-insights"
-		existing, _, err := autoMem.LoadAll()
-		if err == nil && existing != "" {
+		// #1388: LoadAll merges EVERY active memory key ("### {key}" per
+		// entry) - using it here ingested all unrelated memories into
+		// run-insights on every reflection, duplicating them in prompt
+		// injection (original key + run-insights copy). Single-key load.
+		existing, err := autoMem.LoadKey(key)
+		if err != nil {
+			// #1388 side-fix: a read error used to be swallowed and the save
+			// below then OVERWROTE the accumulated insights with the fresh
+			// batch (narrow window, but silent loss). Abort this round - the
+			// next reflection retries; old accumulation stays intact.
+			debug.Log("tui", "reflection: failed to load existing insights, skipping save: %v", err)
+			return
+		}
+		if existing != "" {
 			insights = agent.MergeInsights(existing, insights)
 		}
 

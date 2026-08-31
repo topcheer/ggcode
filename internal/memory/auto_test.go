@@ -145,3 +145,34 @@ func TestSaveAndDeleteRoundTripNonInjective(t *testing.T) {
 		t.Fatalf("DeleteMemory second: %v", err)
 	}
 }
+
+// TestLoadKeySingleKeyIsolation pins #1388: LoadKey must return ONLY the
+// requested key's content - the reflection loop previously used LoadAll
+// (every active key merged) and re-saved the merge into its own key,
+// cross-polluting unrelated memories into every prompt injection.
+func TestLoadKeySingleKeyIsolation(t *testing.T) {
+	am := NewAutoMemory()
+	dir := t.TempDir()
+	am.dir = dir
+
+	if err := am.SaveMemory("mine", "MY CONTENT ONLY"); err != nil {
+		t.Fatal(err)
+	}
+	if err := am.SaveMemory("other", "UNRELATED MEMORY"); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := am.LoadKey("mine")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "MY CONTENT ONLY" {
+		t.Fatalf("LoadKey leaked other keys or wrong content: %q", got)
+	}
+
+	// Missing key: empty, not an error (first-write case).
+	got, err = am.LoadKey("never-saved")
+	if err != nil || got != "" {
+		t.Fatalf("missing key should be (\"\", nil), got (%q, %v)", got, err)
+	}
+}
