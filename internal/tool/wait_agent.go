@@ -62,6 +62,13 @@ func (t WaitAgentTool) Execute(ctx context.Context, input json.RawMessage) (Resu
 
 	wait := 30 * time.Second
 	if args.WaitSeconds > 0 {
+		// #1349: cap aligned with the sleep tool's 30-minute maximum.
+		// Without it an LLM passing 86400 blocks the agent loop for 24h -
+		// the only escape hatches are ctx cancellation or the child agent
+		// reaching a terminal state.
+		if args.WaitSeconds > 1800 {
+			return Result{IsError: true, Content: fmt.Sprintf("wait_seconds %d exceeds maximum of 1800 (30 minutes); wait in shorter increments and re-poll instead", args.WaitSeconds)}, nil
+		}
 		wait = time.Duration(args.WaitSeconds) * time.Second
 	}
 
