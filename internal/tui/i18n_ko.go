@@ -1,7 +1,10 @@
 package tui
 
 // Korean translations for TUI i18n.
-// All 722 keys translated. Untranslated patterns fall back to enCatalog.
+// ~523 keys translated here; keys missing from this catalog fall back to
+// enCatalog via the default branch below (that fallback is why partial
+// coverage is safe). #1373: the old header claimed "All 722 keys
+// translated", which was false on both counts.
 
 func koCatalog(key string) string {
 	switch key {
@@ -14,7 +17,7 @@ func koCatalog(key string) string {
 	case "agents.idle":
 		return "대기 중"
 	case "agents.running":
-		return "실행 중"
+		return "%d개 실행 중"
 	case "cron.firing":
 		return "실행 중"
 	case "activity.idle":
@@ -254,7 +257,7 @@ func koCatalog(key string) string {
 	case "follow.hint":
 		return "  ↑↓←→ 전환  Esc 닫기"
 	case "status.tools_used":
-		return "도구 사용"
+		return "도구 %d회 사용"
 	case "tool.done":
 		return "완료"
 	case "tool.failed":
@@ -292,13 +295,13 @@ func koCatalog(key string) string {
 	case "interrupted":
 		return "중단됨"
 	case "lang.current":
-		return "현재 언어"
+		return "현재 언어: %s\n/lang 로 대화형 선택, /lang <en|zh-CN> 로 직접 전환합니다.\n%s\n\n"
 	case "lang.invalid":
-		return "잘못된 언어"
+		return "지원되지 않는 언어: %s\n%s\n\n"
 	case "lang.switch":
-		return "언어 전환"
+		return "언어 전환됨: %s\n\n"
 	case "lang.selection.current":
-		return "현재 언어"
+		return "  현재: %s"
 	case "lang.selection.hint":
 		return "언어를 선택하세요"
 	case "lang.first_use.title":
@@ -308,7 +311,7 @@ func koCatalog(key string) string {
 	case "lang.first_use.hint":
 		return " Tab/j/k 이동 • Enter 확인 • e/z 단축키"
 	case "mode.current":
-		return "현재 모드"
+		return "현재 모드: %s\n사용법: /mode <supervised|plan|auto|bypass|autopilot>\n  supervised  규칙이 없는 도구는 확인 후 실행\n  plan        읽기 전용 탐색; 쓰기와 명령 거부\n  auto        안전한 작업 허용, 위험 작업 거부\n  bypass      거의 모든 것 허용; 치명적 작업만 차단\n  autopilot   bypass + 되묻는 질문에도 계속 진행\n\n"
 	case "mode.persist_failed":
 		return "모드 설정 저장 실패: %v"
 	case "input.placeholder":
@@ -458,7 +461,7 @@ func koCatalog(key string) string {
 	case "panel.model.refresh.builtin_loaded":
 		return "내장 모델 로드됨."
 	case "command.unknown":
-		return "알 수 없는 명령"
+		return "알 수 없는 명령: %s\n"
 	case "command.retry_empty":
 		return "재시도할 이전 제출이 없습니다."
 	case "command.retry_busy":
@@ -554,7 +557,7 @@ func koCatalog(key string) string {
 	case "files.none":
 		return "이 세션에서 에이전트가 수정한 파일이 없습니다.\n\n"
 	case "files.title":
-		return "파일"
+		return "에이전트가 수정한 파일 (%d개 파일, %d회 편집):\n\n"
 	case "files.item":
 		return "  %s  %d회 편집  마지막: %s%s\n"
 	case "files.hint":
@@ -656,7 +659,7 @@ func koCatalog(key string) string {
 	case "update.up_to_date":
 		return "최신 버전입니다"
 	case "update.available":
-		return "업데이트 가능"
+		return "업데이트 가능: %s"
 	case "update.current":
 		return "현재: %s (최신: %s)"
 	case "update.unknown":
@@ -722,13 +725,15 @@ func koCatalog(key string) string {
 	case "agent.usage":
 		return "사용법: /agent <id> 또는 /agent cancel <id>\n\n"
 	case "agent.cancelled":
-		return "에이전트가 취소되었습니다"
+		// #1373: en baseline takes the agent id - the verb-less ko text
+		// silently dropped it in Sprintf.
+		return "하위 에이전트 %s 취소됨\n\n"
 	case "agent.cancel_failed":
 		return "%s을(를) 취소할 수 없습니다 (찾을 수 없거나 실행 중이 아님)\n\n"
 	case "agent.not_found":
 		return "서브에이전트 %s을(를) 찾을 수 없습니다\n\n"
 	case "agent.title":
-		return "에이전트"
+		return "에이전트: %s\n상태: %s\n작업: %s\n"
 	case "agent.result":
 		return "결과: %s\n"
 	case "agent.error":
@@ -1050,79 +1055,79 @@ func koCatalog(key string) string {
 	case "pairing.blacklisted":
 		return "이 채널은 여러 번 거부되어 블랙리스트에 추가되었습니다."
 	case "help.text":
-		return `Available commands:
+		return `사용 가능한 명령:
 
-Session & History:
-  /help, /?          Show this help message
-  /sessions          List all saved sessions
-  /resume <id>       Resume a previous session
-  /export <id>       Export session to markdown file
-  /clear             Clear conversation history
-  /compact           Compress conversation history (manual)
-  /undo              Undo the last file edit (checkpoint rollback)
-  /checkpoints       List all file edit checkpoints
-  /regenerate        Discard last response and regenerate (alias: /regen)
-  /branch            Fork current conversation into a new session (alias: /fork)
+세션 & 기록:
+  /help, /?          이 도움말 표시
+  /sessions          저장된 모든 세션 목록
+  /resume <id>       이전 세션 이어서 진행
+  /export <id>       세션을 마크다운 파일로 내보내기
+  /clear             대화 기록 지우기
+  /compact           대화 기록 압축 (수동)
+  /undo              마지막 파일 편집 되돌리기 (체크포인트 롤백)
+  /checkpoints       모든 파일 편집 체크포인트 목록
+  /regenerate        마지막 응답 버리고 다시 생성 (별칭: /regen)
+  /branch            현재 대화를 새 세션으로 분기 (별칭: /fork)
 
-Model & Provider:
-  /model [name]      Open model panel or switch directly
-  /provider [vendor] Open provider manager
-  /mode <mode>       Set agent mode (supervised|plan|auto|bypass|autopilot)
+모델 & 프로바이더:
+  /model [name]      모델 패널 열기 또는 직접 전환
+  /provider [vendor] 프로바이더 관리자 열기
+  /mode <mode>       에이전트 모드 설정 (supervised|plan|auto|bypass|autopilot)
 
-Development:
-  /diff [opts]       Show git diff in chat (--cached, --stat, <file>)
-  /review [opts]     AI code review of current changes (--cached, --staged)
-  /copy              Copy last assistant response to clipboard
-  /cost              Show session token usage and estimated cost
-  /context           Show context window usage breakdown
-  /hooks             Show configured hooks
-  /init              Generate GGCODE.md from the current project
-  /todo              View todo list
-  /todo clear        Clear todo list
+개발:
+  /diff [opts]       채팅에 git diff 표시 (--cached, --stat, <file>)
+  /review [opts]     현재 변경사항 AI 코드 리뷰 (--cached, --staged)
+  /copy              마지막 어시스턴트 응답을 클립보드로 복사
+  /cost              세션 토큰 사용량 및 예상 비용 표시
+  /context           컨텍스트 윈도우 사용량 내역 표시
+  /hooks             설정된 훅 표시
+  /init              현재 프로젝트에서 GGCODE.md 생성
+  /todo              할 일 목록 보기
+  /todo clear        할 일 목록 지우기
 
-Integrations:
-  /im                Open unified IM channels panel
-  /mcp               Show connected MCP servers and tools
-  /plugins           List loaded plugins and their tools
-  /skills            Browse available skills
-  /memory            Show loaded memory files
-  /agents            List sub-agents
-  /cron <sub>        Manage scheduled jobs (list|get|pause|resume|pauseall|resumeall)
+통합:
+  /im                통합 IM 채널 패널 열기
+  /mcp               연결된 MCP 서버와 도구 표시
+  /plugins           로드된 플러그인과 도구 목록
+  /skills            사용 가능한 스킬 탐색
+  /memory            로드된 메모리 파일 표시
+  /agents            하위 에이전트 목록
+  /cron <sub>        예약 작업 관리 (list|get|pause|resume|pauseall|resumeall)
 
-System:
-  /lang [code]       Choose or switch interface language
-  /config            Show current configuration
-  /config set <k> <v> Set a config value
-  /status            Show current status
-  /update            Update ggcode to the latest release
-  /restart           Restart ggcode (picks up latest binary)
-  /bug               Report a bug with diagnostics
-  /exit, /quit       Exit ggcode
+시스템:
+  /lang [code]       인터페이스 언어 선택 또는 전환
+  /config            현재 구성 표시
+  /config set <k> <v> 구성 값 설정
+  /status            현재 상태 표시
+  /update            ggcode를 최신 릴리스로 업데이트
+  /restart           ggcode 재시작 (최신 바이너리 적용)
+  /bug               진단 정보와 함께 버그 신고
+  /exit, /quit       ggcode 종료
 
-Keyboard shortcuts:
-  Tab                Cycle autocomplete or approval choices
-  Shift+Tab          Reverse cycle autocomplete, otherwise toggle permission mode
-  Ctrl+R             Toggle sidebar
-  Ctrl+N/P           New/previous session
-  Ctrl+T             Open tunnel (mobile sharing)
-  Enter              Send message / apply current selection
-  Esc                Cancel autocomplete / exit idle shell mode
-  Up/Down            Browse command history (or autocomplete)
-  PgUp/PgDn          Scroll conversation output
-  Ctrl+C             Cancel current activity, otherwise clear input then press again to exit
-  Ctrl+D             Exit immediately
-  Ctrl+A / Ctrl+E    Move cursor to start / end of line
-  Ctrl+K             Delete from cursor to end of line
-  Ctrl+U             Delete from start of line to cursor
-  Ctrl+W             Delete word before cursor
-  Ctrl+Backspace     Remove last attached image
-  Shift+Enter        Insert newline (Ctrl+J or Alt+Enter in tmux)
-  $ / !              Enter shell mode
-  #                  Enter LAN Chat quick-send mode
+키보드 단축키:
+  Tab                자동완성 또는 승인 선택 항목 순환
+  Shift+Tab         자동완성 역방향 순환, 그 외에는 권한 모드 전환
+  Ctrl+R             사이드바 전환
+  Ctrl+N/P           새 세션 / 이전 세션
+  Ctrl+T             터널 열기 (모바일 공유)
+  Enter              메시지 전송 / 현재 선택 적용
+  Esc                자동완성 취소 / 셸 모드 종료
+  Up/Down            명령 기록 탐색 (또는 자동완성)
+  PgUp/PgDn          대화 출력 스크롤
+  Ctrl+C             현재 작업 취소, 입력이 비어 있으면 다시 눌러 종료
+  Ctrl+D             즉시 종료
+  Ctrl+A / Ctrl+E    줄 시작 / 끝으로 커서 이동
+  Ctrl+K             커서부터 줄 끝까지 삭제
+  Ctrl+U             줄 시작부터 커서까지 삭제
+  Ctrl+W             커서 앞 단어 삭제
+  Ctrl+Backspace     마지막 첨부 이미지 제거
+  Shift+Enter        줄 바꿈 삽입 (tmux에서는 Ctrl+J 또는 Alt+Enter)
+  $ / !              셸 모드 진입
+  #                  LAN 채팅 빠른 전송 모드 진입
 
-Mouse:
-  Option+drag / Shift+drag  Select text to copy (bypasses app mouse capture)
-  Mouse wheel               Scroll conversation output`
+마우스:
+  Option+드래그 / Shift+드래그  텍스트 선택하여 복사 (앱 마우스 캡처 우회)
+  마우스 휠                      대화 출력 스크롤`
 	default:
 		return enCatalog(key)
 	}
