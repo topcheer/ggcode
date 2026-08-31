@@ -37,5 +37,9 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-          cache: true
+          # Format only runs gofmt; it never downloads modules. With cache
+          # enabled its post step races the Test job and saves an empty
+          # module-cache stub under the shared go.sum key, poisoning it
+          # (cache entries are immutable per key). Only Test seeds the cache.
+          cache: false
       - run: test -z "$(gofmt -l .)"
