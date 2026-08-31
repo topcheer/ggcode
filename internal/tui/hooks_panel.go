@@ -104,8 +104,13 @@ func (m *Model) saveHooksConfig(cfg hooks.HookConfig) {
 	if m.config != nil {
 		m.config.Hooks = cfg
 		if err := m.config.Save(); err != nil {
+			// #1371: silent debug.Log failures left users believing their
+			// hooks were saved - surface it in the panel status line.
+			m.hooksPanel.message = "save failed: " + fmt.Sprintf("%v", err)
 			debug.Log("tui", "saveHooksConfig: config save failed: %v", err)
+			return
 		}
+		m.hooksPanel.message = ""
 	}
 }
 
@@ -393,7 +398,11 @@ func (m *Model) handleHooksEditKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 
 	default:
 		// Regular character input
-		if len(msg.String()) == 1 && msg.String()[0] >= 32 {
+		// #1371: rune-based check - the old len()==1 is a BYTE length,
+		// always false for CJK (3 bytes) so Chinese hook names/match
+		// patterns could not be typed; msg.String()[0] compared a multi-
+		// byte FIRST byte against 32, doubly wrong.
+		if runes := []rune(msg.String()); len(runes) == 1 && runes[0] >= 32 {
 			m.appendHookEditChar(msg.String())
 		}
 	}
@@ -424,32 +433,32 @@ func (m *Model) appendHookEditChar(ch string) {
 }
 
 func (m *Model) deleteHookEditChar() {
+	// #1371: rune-aware deletion. Byte-slicing [:len-1] cut a multi-byte
+	// rune in half when editing PRE-FILLED CJK values (typed input was
+	// ASCII-only because of the filter, but editFields loads arbitrary
+	// config-file content), leaving invalid UTF-8 that could be saved
+	// back into the config.
+	trimLastRune := func(s string) string {
+		if s == "" {
+			return s
+		}
+		r := []rune(s)
+		return string(r[:len(r)-1])
+	}
 	p := m.hooksPanel
 	f := &p.editFields
 	switch p.fieldIdx {
 	case 0:
-		if len(f.match) > 0 {
-			f.match = f.match[:len(f.match)-1]
-		}
+		f.match = trimLastRune(f.match)
 	case 1:
-		if len(f.matchMode) > 0 {
-			f.matchMode = f.matchMode[:len(f.matchMode)-1]
-		}
+		f.matchMode = trimLastRune(f.matchMode)
 	case 2:
-		if len(f.hookType) > 0 {
-			f.hookType = f.hookType[:len(f.hookType)-1]
-		}
+		f.hookType = trimLastRune(f.hookType)
 	case 3:
-		if len(f.command) > 0 {
-			f.command = f.command[:len(f.command)-1]
-		}
+		f.command = trimLastRune(f.command)
 	case 4:
-		if len(f.url) > 0 {
-			f.url = f.url[:len(f.url)-1]
-		}
+		f.url = trimLastRune(f.url)
 	case 5:
-		if len(f.secret) > 0 {
-			f.secret = f.secret[:len(f.secret)-1]
-		}
+		f.secret = trimLastRune(f.secret)
 	}
 }
