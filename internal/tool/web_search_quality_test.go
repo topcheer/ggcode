@@ -1,6 +1,7 @@
 package tool
 
 import (
+	"fmt"
 	"testing"
 )
 
@@ -9,7 +10,7 @@ func TestAssessSearchResults_SpamFiltering(t *testing.T) {
 		{Title: "Go Tutorial", URL: "https://w3schools.com/go", Snippet: "Learn Go"},
 		{Title: "Go Docs", URL: "https://go.dev/doc/", Snippet: "Official Go documentation"},
 	}
-	out := assessSearchResults("go tutorial", results)
+	out := assessSearchResults("go tutorial", results, nil)
 	if len(out) != 1 {
 		t.Fatalf("expected 1 result after spam filter, got %d", len(out))
 	}
@@ -44,7 +45,7 @@ func TestAssessSearchResults_TypeTagPrepended(t *testing.T) {
 	results := []searchResult{
 		{Title: "Go Repo", URL: "https://github.com/golang/go", Snippet: "The Go repo"},
 	}
-	out := assessSearchResults("go repo", results)
+	out := assessSearchResults("go repo", results, nil)
 	if len(out) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(out))
 	}
@@ -60,7 +61,7 @@ func TestAssessSearchResults_DomainDeduplication(t *testing.T) {
 		{Title: "Result 3", URL: "https://stackoverflow.com/q/3", Snippet: "answer 3"},
 		{Title: "Result 4", URL: "https://go.dev/doc", Snippet: "go docs"},
 	}
-	out := assessSearchResults("answer", results)
+	out := assessSearchResults("answer", results, nil)
 	// StackOverflow should be capped at maxResultsPerDomain (2)
 	soCount := 0
 	for _, r := range out {
@@ -78,7 +79,7 @@ func TestAssessSearchResults_RelevanceScoring(t *testing.T) {
 		{Title: "Unrelated Article", URL: "https://example.com/a", Snippet: "Something about cats"},
 		{Title: "Go context package guide", URL: "https://example.com/b", Snippet: "context.Background usage in Go"},
 	}
-	out := assessSearchResults("go context package", results)
+	out := assessSearchResults("go context package", results, nil)
 	// The more relevant result should be ranked first
 	if len(out) != 2 {
 		t.Fatalf("expected 2 results, got %d", len(out))
@@ -89,7 +90,7 @@ func TestAssessSearchResults_RelevanceScoring(t *testing.T) {
 }
 
 func TestAssessSearchResults_EmptyInput(t *testing.T) {
-	out := assessSearchResults("anything", nil)
+	out := assessSearchResults("anything", nil, nil)
 	if len(out) != 0 {
 		t.Errorf("expected 0 results for nil input, got %d", len(out))
 	}
@@ -179,9 +180,34 @@ func TestAssessSearchResults_DiversityAfterDedup(t *testing.T) {
 		{Title: "B1", URL: "https://other.com/1", Snippet: "test b"},
 		{Title: "B2", URL: "https://other.com/2", Snippet: "test b"},
 	}
-	out := assessSearchResults("test", results)
+	out := assessSearchResults("test", results, nil)
 	// Should be maxResultsPerDomain (2) from example.com + 2 from other.com = 4
 	if len(out) != 4 {
 		t.Errorf("expected 4 results after dedup, got %d", len(out))
+	}
+}
+
+// TestAssessSearchResultsAllowedDomainExemptFromDedup pins #1357: the user's
+// explicit allowed_domains must override the per-domain diversity cap - a
+// single-domain filter previously left only maxResultsPerDomain=2 results
+// no matter how many were requested or prefetched.
+func TestAssessSearchResultsAllowedDomainExemptFromDedup(t *testing.T) {
+	var results []searchResult
+	for i := 0; i < 8; i++ {
+		results = append(results, searchResult{
+			Title:   fmt.Sprintf("Python doc page %d", i),
+			URL:     fmt.Sprintf("https://docs.python.org/3/library/page%d.html", i),
+			Snippet: "python documentation page",
+		})
+	}
+	out := assessSearchResults("python stdlib", results, []string{"docs.python.org"})
+	if len(out) != 8 {
+		t.Fatalf("expected all 8 allowed-domain results to survive the dedup cap, got %d", len(out))
+	}
+
+	// Without the exemption the diversity cap applies as before.
+	out = assessSearchResults("python stdlib", results, nil)
+	if len(out) != maxResultsPerDomain {
+		t.Fatalf("expected diversity cap of %d without exemption, got %d", maxResultsPerDomain, len(out))
 	}
 }

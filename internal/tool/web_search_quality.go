@@ -68,7 +68,17 @@ type scoredResult struct {
 // spam filtering, type classification, relevance scoring, domain
 // deduplication, stable sort by score. Returns results with type tags
 // prepended to titles.
-func assessSearchResults(query string, results []searchResult) []searchResult {
+// assessSearchResults applies quality heuristics. #1357: domains in
+// allowedDomains are exempt from the per-domain diversity cap - the user
+// explicitly constrained results to those domains, so capping them back
+// down to maxResultsPerDomain would silently override an explicit user
+// constraint (single-domain site: filters queries to 2 results and wastes
+// the 3x prefetch the caller deliberately did to compensate for filtering).
+func assessSearchResults(query string, results []searchResult, allowedDomains []string) []searchResult {
+	allowed := make(map[string]bool, len(allowedDomains))
+	for _, d := range allowedDomains {
+		allowed[strings.TrimPrefix(strings.ToLower(strings.TrimSpace(d)), "www.")] = true
+	}
 	if len(results) == 0 {
 		return results
 	}
@@ -104,7 +114,7 @@ func assessSearchResults(query string, results []searchResult) []searchResult {
 	sort.SliceStable(scored, func(i, j int) bool {
 		return scored[i].score > scored[j].score
 	})
-	scored = deduplicateByDomain(scored)
+	scored = deduplicateByDomain(scored, allowed)
 
 	// Convert back to searchResult with type tag in title
 	out := make([]searchResult, len(scored))
@@ -291,8 +301,9 @@ func isSpamDomain(domain string) bool {
 // deduplicateByDomain caps the number of results from the same domain.
 // Keeps the highest-scoring results per domain. #884: input must already
 // be score-sorted (the caller sorts before deduping) so "first N per domain"
-// equals "highest-scoring N per domain".
-func deduplicateByDomain(scored []scoredResult) []scoredResult {
+// equals "highest-scoring N per domain". #1357: domains in the exempt set
+// (the user's explicit allowed_domains) are not capped.
+func deduplicateByDomain(scored []scoredResult, exempt map[string]bool) []scoredResult {
 	if len(scored) <= maxResultsPerDomain {
 		return scored
 	}
@@ -306,7 +317,7 @@ func deduplicateByDomain(scored []scoredResult) []scoredResult {
 			continue
 		}
 		normalizedDomain := strings.TrimPrefix(sr.domain, "www.")
-		if domainCount[normalizedDomain] < maxResultsPerDomain {
+		if exempt[normalizedDomain] || domainCount[normalizedDomain] < maxResultsPerDomain {
 			domainCount[normalizedDomain]++
 			result = append(result, sr)
 		}
