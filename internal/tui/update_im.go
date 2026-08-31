@@ -188,7 +188,12 @@ func (m Model) handleSignalQRCodeMsg(msg signalQRCodeMsg) (Model, tea.Cmd) {
 	if m.signalPanel != nil {
 		m.signalPanel.qrFetching = false
 		if msg.err != nil {
+			// #1375-B: qrError was write-only - the field was never read
+			// anywhere, so a failed QR fetch left the panel unchanged with
+			// no overlay and no message. Mirror it into the rendered
+			// message line (and keep the field for future retry logic).
 			m.signalPanel.qrError = msg.err.Error()
+			m.signalPanel.message = m.t("panel.signal.qr_fetch_failed") + ": " + msg.err.Error()
 		} else {
 			m.signalPanel.qrCode = msg.qr
 			// Open QR overlay for user to scan device pairing code

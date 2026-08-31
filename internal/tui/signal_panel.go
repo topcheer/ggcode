@@ -104,9 +104,10 @@ func (m *Model) installSignalDaemon() tea.Cmd {
 		time.Sleep(3 * time.Second)
 		checkErr := im.CheckSignalDaemon("")
 		if checkErr != nil {
-			return signalBindResultMsg{message: "Docker container started. Daemon may need a few seconds to become ready. Press r to re-check."}
+			// #1375-D: through m.t() like the rest of the file.
+			return signalBindResultMsg{message: m.t("panel.signal.message.installed_pending")}
 		}
-		return signalBindResultMsg{message: "signal-cli-rest-api installed and running. Press q to generate QR code."}
+		return signalBindResultMsg{message: m.t("panel.signal.message.installed_running")}
 	}
 }
 
@@ -360,12 +361,16 @@ func (m *Model) handleSignalPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		panel.daemonOK = nil
 		return *m, checkSignalDaemonCmd()
 	case "q", "Q":
+		// #1375-A: silent no-op when the daemon is down made q feel
+		// broken - the qr_no_daemon key existed in both languages with
+		// zero callers. Surface it via the panel message line.
 		if panel.daemonOK != nil && *panel.daemonOK {
 			panel.qrFetching = true
 			panel.qrError = ""
 			panel.qrCode = ""
 			return *m, fetchSignalQRCmd("")
 		}
+		panel.message = m.t("panel.signal.qr_no_daemon")
 	case "i", "I":
 		panel.createMode = true
 		panel.createInput = ""

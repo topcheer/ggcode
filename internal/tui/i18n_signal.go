@@ -63,7 +63,10 @@ func enSignalModule() map[string]string {
 		"panel.signal.qr_fetching":               "Fetching QR code...",
 		"panel.signal.qr_scan_hint":              "Scan this QR code with Signal app: Settings > Linked devices > +",
 		"panel.signal.qr_retry_hint":             "Press q to retry",
+		"panel.signal.qr_fetch_failed":           "QR fetch failed",
 		"panel.signal.qr_no_daemon":              "Daemon not running. Install with 'd' first.",
+		"panel.signal.message.installed_pending": "Docker container started. Daemon may need a few seconds to become ready. Press r to re-check.",
+		"panel.signal.message.installed_running": "signal-cli-rest-api installed and running. Press q to generate QR code.",
 		"panel.signal.qr_press_q":                "Press q to generate QR code for device linking",
 	}
 }
@@ -127,7 +130,10 @@ func zhSignalModule() map[string]string {
 		"panel.signal.qr_fetching":               "获取二维码中...",
 		"panel.signal.qr_scan_hint":              "用 Signal 扫码: 设置 > 已链接设备 > +",
 		"panel.signal.qr_retry_hint":             "按 q 重试",
+		"panel.signal.qr_fetch_failed":           "二维码获取失败",
 		"panel.signal.qr_no_daemon":              "守护进程未运行，请先按 d 安装",
+		"panel.signal.message.installed_pending": "Docker 容器已启动，守护进程可能需要几秒钟就绪，按 r 重新检查。",
+		"panel.signal.message.installed_running": "signal-cli-rest-api 已安装并运行，按 q 生成二维码。",
 		"panel.signal.qr_press_q":                "按 q 生成设备链接二维码",
 	}
 }
