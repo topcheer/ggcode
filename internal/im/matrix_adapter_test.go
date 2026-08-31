@@ -1,12 +1,18 @@
 package im
 
 import (
+	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
 	"unicode/utf8"
 
 	"github.com/topcheer/ggcode/internal/config"
+	"maunium.net/go/mautrix"
+	"maunium.net/go/mautrix/event"
 )
 
 func TestNewMatrixAdapter_MissingHomeserver(t *testing.T) {
@@ -292,5 +298,52 @@ func TestMatrixAdapter_DMRoomDetection(t *testing.T) {
 	}
 	if a.dmRooms["!group:example.org"] {
 		t.Error("group room should not be DM")
+	}
+}
+
+// TestMatrixGetHistoryVisibilityFailsClosed pins #1355: a state-fetch error
+// must propagate (mautrix-aligned fail-closed), never fall back to "shared" -
+// the SharedHistory flag rides room keys/key backup for the whole outbound
+// session lifetime with no correction path.
+func TestMatrixGetHistoryVisibilityFailsClosed(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	mc, err := mautrix.NewClient(srv.URL, "", "test-token")
+	if err != nil {
+		t.Skipf("cannot build matrix client in test env: %v", err)
+	}
+	store := &cryptoStateStore{adapter: &matrixAdapter{client: mc}}
+
+	if _, err := store.GetHistoryVisibility(context.Background(), "!room:example.org"); err == nil {
+		t.Fatal("expected state-fetch error to propagate (fail-closed), got nil")
+	}
+}
+
+// TestMatrixGetHistoryVisibilityDefaultsToShared pins the OTHER half of
+// #1355: a successful fetch with no visibility event content returns
+// Matrix's documented default ("shared") - a default, not an error.
+func TestMatrixGetHistoryVisibilityDefaultsToShared(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// State event exists but content carries no visibility field.
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{}`)
+	}))
+	defer srv.Close()
+
+	mc, err := mautrix.NewClient(srv.URL, "", "test-token")
+	if err != nil {
+		t.Skipf("cannot build matrix client in test env: %v", err)
+	}
+	store := &cryptoStateStore{adapter: &matrixAdapter{client: mc}}
+
+	hv, err := store.GetHistoryVisibility(context.Background(), "!room:example.org")
+	if err != nil {
+		t.Fatalf("empty-content success path must not error: %v", err)
+	}
+	if hv.HistoryVisibility != event.HistoryVisibilityShared {
+		t.Fatalf("expected default shared, got %q", hv.HistoryVisibility)
 	}
 }
