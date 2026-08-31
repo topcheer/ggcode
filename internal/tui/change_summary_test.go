@@ -74,3 +74,28 @@ func TestDiffCountChanges(t *testing.T) {
 		t.Errorf("CountChanges returned 0,0 for different content")
 	}
 }
+
+// TestShortenPathBoundary pins #1361: prefix matches need real path
+// boundaries - /Users/alicebox must not render as ~box (alice's home), and
+// a working-dir file named ..hidden.go must not be misjudged as outside.
+func TestShortenPathBoundary(t *testing.T) {
+	t.Setenv("HOME", "/Users/alice")
+
+	// Same-prefix sibling of home: must NOT shorten.
+	if got := shortenPath("/Users/alicebox/x.go", ""); got != "/Users/alicebox/x.go" {
+		t.Errorf("sibling dir shortened to nonexistent path: %q", got)
+	}
+	// Real home child: still shortens.
+	if got := shortenPath("/Users/alice/proj/main.go", ""); got != "~/proj/main.go" {
+		t.Errorf("home child not shortened: %q", got)
+	}
+
+	// Dot-prefixed file inside the working dir: relative, not absolute.
+	if got := shortenPath("/work/repo/..hidden.go", "/work/repo"); got != "..hidden.go" {
+		t.Errorf("dotfile inside working dir misjudged as outside: %q", got)
+	}
+	// A REAL parent escape still falls through to home/absolute display.
+	if got := shortenPath("/work/other/x.go", "/work/repo"); got != "/work/other/x.go" {
+		t.Errorf("outside path not kept absolute: %q", got)
+	}
+}

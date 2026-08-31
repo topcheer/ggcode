@@ -175,13 +175,19 @@ func accumulateRunChanges(cps []checkpoint.Checkpoint, runID string, runFiles ma
 // shortenPath converts an absolute path to a project-relative one for display.
 func shortenPath(absPath, workingDir string) string {
 	if workingDir != "" {
-		if rel, err := filepath.Rel(workingDir, absPath); err == nil && !strings.HasPrefix(rel, "..") {
+		// #1361: `..` alone must not match `..hidden.go` - a dot-prefixed
+		// file INSIDE the working dir was misjudged as outside and fell
+		// through to absolute-path display.
+		if rel, err := filepath.Rel(workingDir, absPath); err == nil && rel != ".." && !strings.HasPrefix(rel, "../") {
 			return rel
 		}
 	}
 	// Fall back to ~ if under home.
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		if strings.HasPrefix(absPath, home) {
+		// #1361: home=/Users/alice also prefix-matched /Users/alicebox/x.go
+		// and rendered ~box/x.go - a path that does not exist. Require a
+		// real boundary: the exact home dir or a separator after it.
+		if absPath == home || strings.HasPrefix(absPath, home+string(os.PathSeparator)) {
 			return "~" + absPath[len(home):]
 		}
 	}
