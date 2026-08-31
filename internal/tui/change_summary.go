@@ -178,7 +178,10 @@ func shortenPath(absPath, workingDir string) string {
 		// #1361: `..` alone must not match `..hidden.go` - a dot-prefixed
 		// file INSIDE the working dir was misjudged as outside and fell
 		// through to absolute-path display.
-		if rel, err := filepath.Rel(workingDir, absPath); err == nil && rel != ".." && !strings.HasPrefix(rel, "../") {
+		// filepath.Rel uses os.PathSeparator ('..' + '\' on Windows), so a
+		// hardcoded "../" prefix never matched there and outside paths on
+		// the same volume leaked through as relative "..\..." displays.
+		if rel, err := filepath.Rel(workingDir, absPath); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
 			return rel
 		}
 	}
