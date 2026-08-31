@@ -213,6 +213,15 @@ func (m *Model) applyTodoWrite(ts ToolStatusMsg) string {
 	}
 
 	if len(changes) == 0 {
+		// #1360: an identical re-write after /clear must still (re)create the
+		// chat card. chatReset empties chatList but keeps todoSnapshot, so the
+		// diff is empty and this branch used to skip chatUpdateTodoItem -
+		// which is exactly the path that rebuilds a missing card (FindByID
+		// miss -> Append). Without it the sidebar (snapshot-driven) showed
+		// tasks while the chat area had no card, until some future change.
+		if len(todos) > 0 && m.chatList != nil && m.chatList.FindByID(todoToolItemID) == nil {
+			m.chatUpdateTodoItem(todos)
+		}
 		if m.activeTodo != nil {
 			return localizeTodoFocus(m.currentLanguage(), m.activeTodo.Content)
 		}
