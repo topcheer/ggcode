@@ -106,7 +106,13 @@ func (m *Model) submitChatMessage(text string) {
 					if mention == part.AgentNick {
 						role = lanchat.RoleAgent
 					}
-					m.lanChatHub.SendDirect(context.Background(), part.NodeID, role, content, nil)
+					// #1362: a just-offline peer (stale Online snapshot) or a broken
+					// pipe fails silently if the error is dropped - the echo below
+					// then shows a delivery that never happened.
+					if err := m.lanChatHub.SendDirect(context.Background(), part.NodeID, role, content, nil); err != nil {
+						m.chatWriteSystem(nextSystemID(), fmt.Sprintf("[DM → %s] send failed: %v", mention, err))
+						return
+					}
 					m.chatWriteUser(nextSystemID(), fmt.Sprintf("[DM → %s] %s", mention, content))
 					return
 				}
@@ -119,13 +125,19 @@ func (m *Model) submitChatMessage(text string) {
 	}
 
 	// Team-scoped broadcast (default: your own team)
-	m.lanChatBroadcastTeam(context.Background(), text)
+	// #1362: surface delivery failure instead of unconditionally echoing
+	// success - the recipients never saw the message.
+	if err := m.lanChatBroadcastTeam(context.Background(), text); err != nil {
+		m.chatWriteSystem(nextSystemID(), "[Broadcast] send failed: "+err.Error())
+		return
+	}
 	m.chatWriteUser(nextSystemID(), "[Broadcast] "+text)
 }
 
 // lanChatBroadcastTeam sends a message to all online members of the sender's own team.
 // Falls back to global broadcast if the team has no other online members.
-func (m *Model) lanChatBroadcastTeam(ctx context.Context, content string) {
+// Returns the first delivery error so the caller can report it (#1362).
+func (m *Model) lanChatBroadcastTeam(ctx context.Context, content string) error {
 	hub := m.lanChatHub
 	myTeam := hub.Team()
 	if myTeam == "" {
@@ -134,6 +146,7 @@ func (m *Model) lanChatBroadcastTeam(ctx context.Context, content string) {
 
 	selfNodeID := hub.NodeID()
 	participants := hub.Participants()
+	var firstErr error
 
 	var sent int
 	for _, p := range participants {
@@ -143,12 +156,15 @@ func (m *Model) lanChatBroadcastTeam(ctx context.Context, content string) {
 		// #878: team broadcasts are human-facing — target the participant's
 		// HUMAN panel like the DM path does, not unconditionally the agent
 		// (which triggered agent approval loops and left panels empty).
-		hub.SendDirect(ctx, p.NodeID, lanchat.RoleHuman, content, nil)
+		if err := hub.SendDirect(ctx, p.NodeID, lanchat.RoleHuman, content, nil); err != nil {
+			firstErr = err
+		}
 		sent++
 	}
 
 	// If no team members found, fall back to global broadcast
 	if sent == 0 {
-		hub.SendBroadcast(ctx, content, nil)
+		return hub.SendBroadcast(ctx, content, nil)
 	}
+	return firstErr
 }
