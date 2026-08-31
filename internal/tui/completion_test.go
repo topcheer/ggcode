@@ -294,3 +294,27 @@ func TestDetectSlashCommandNoPanic(t *testing.T) {
 		DetectSlashCommand("你好世界", cursor)
 	}
 }
+
+// TestParseMentions_FailedRefStaysInMessage pins #1365: in a mixed message
+// the failing reference must remain verbatim in the cleaned text (the old
+// order deleted the token before validating, silently erasing it), while
+// the good reference resolves and is stripped as before.
+func TestParseMentions_FailedRefStaysInMessage(t *testing.T) {
+	tmp := t.TempDir()
+	good := filepath.Join(tmp, "good.go")
+	os.WriteFile(good, []byte("package main"), 0o644)
+
+	cleaned, mentions, err := ParseMentions("compare @good.go and @typo.go please", tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mentions) != 1 || mentions[0].Path != good {
+		t.Fatalf("expected exactly the good mention, got %+v", mentions)
+	}
+	if !strings.Contains(cleaned, "@typo.go") {
+		t.Fatalf("failed reference must stay in the message, got: %q", cleaned)
+	}
+	if strings.Contains(cleaned, "@good.go") {
+		t.Fatalf("resolved reference should be stripped, got: %q", cleaned)
+	}
+}
