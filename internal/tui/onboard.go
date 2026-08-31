@@ -57,6 +57,12 @@ const (
 
 type discoverResultMsg struct {
 	models []string
+	// #1385-B: generation token - which discovery request this result is
+	// from. Onboard is re-entrant (Esc back to Endpoint, re-enter, second
+	// DiscoverModels): without a token a late OLD result (network jitter)
+	// overwrote the list from the NEW endpoint and the picked model was
+	// invalid for the BaseURL actually configured.
+	gen uint64
 }
 
 type onboardIMChannel struct {
@@ -105,7 +111,10 @@ type onboardModel struct {
 	apiKeyInput    textinput.Model
 	epFocus        endpointFocus
 
-	modelCursor   int
+	modelCursor int
+	// #1385-B: discovery generation token - bumped on every
+	// startModelSelection; results carrying an older gen are stale.
+	discoverGen   uint64
 	models        []string
 	allModels     []string
 	modelFilter   textinput.Model
@@ -315,6 +324,11 @@ func (m *onboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case discoverResultMsg:
+		// #1385-B: stale responses are dropped whole (list AND loading flag
+		// both belong to the newer generation).
+		if msg.gen != m.discoverGen {
+			return m, nil
+		}
 		if m.step == onboardStepModel {
 			m.modelLoading = false
 			if len(msg.models) > 0 {
@@ -325,12 +339,30 @@ func (m *onboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// making the selectable set inconsistent between runs).
 				m.models = msg.models
 				m.applyModelFilter()
-			} else if len(m.allModels) == 0 && strings.TrimSpace(m.customFields[3].Value()) == "" {
-				// #907: discovery failed and no model entered — the comment
-				// promised an error but nothing ever wrote one (custom_err_model
-				// was a dead key in all 10 locales).
+				// #1385 side-fix: a deeper cursor from the pre-discovery list
+				// could point past the new list - clamp so the first render has
+				// a valid highlight.
+				if m.modelCursor >= len(m.models) {
+					m.modelCursor = len(m.models) - 1
+				}
+				if m.modelCursor < 0 {
+					m.modelCursor = 0
+				}
+			} else if isPlaceholderModelList(m.allModels) && strings.TrimSpace(m.customFields[3].Value()) == "" {
+				// #1385-A: the old guard (len(m.allModels)==0) was unreachable -
+				// every path guarantees >=1 element, and the "default" placeholder
+				// made it PERMANENTLY true that the list was non-empty. Detect the
+				// placeholder instead: discovery failed, no manual model, the list
+				// is just the sentinel - that is the real error case.
 				m.err = m.tr("custom_err_model")
 			}
+		} else {
+			// #1385-C: the result arrived while the user already moved on
+			// (fast enter into Optional). The old code dropped the whole message
+			// INCLUDING the loading reset - returning to the Model step showed
+			// an eternal spinner with no retry path. Clear the flag; the list
+			// update stays skipped (stale UI).
+			m.modelLoading = false
 		}
 		return m, nil
 
@@ -470,4 +502,12 @@ func (m *onboardModel) buildCustomResolved() *config.ResolvedEndpoint {
 		APIKey:       apiKey,
 		Model:        model,
 	}
+}
+
+// isPlaceholderModelList reports whether the model list is only the
+// "default" sentinel that startModelSelection installs when discovery has
+// not (yet) produced a real list (#1385-A). Used to detect the real error
+// case: discovery failed AND the user typed no manual model.
+func isPlaceholderModelList(models []string) bool {
+	return len(models) == 1 && models[0] == "default"
 }

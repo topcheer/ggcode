@@ -190,6 +190,9 @@ func (m *onboardModel) startModelSelection() tea.Cmd {
 	m.step = onboardStepModel
 	m.modelCursor = 0
 	m.modelLoading = true
+	// #1385-B: new generation - late results from an earlier discovery
+	// (older endpoint selection) carry a stale gen and get dropped.
+	m.discoverGen++
 
 	// For custom providers, build resolved from custom fields
 	if m.selectedVendor.ID == "" {
@@ -206,12 +209,13 @@ func (m *onboardModel) startModelSelection() tea.Cmd {
 			m.applyModelFilter()
 
 			resolved := m.customResolved
+			gen := m.discoverGen
 			return func() tea.Msg {
 				models, err := provider.DiscoverModels(context.Background(), resolved)
 				if err != nil || len(models) == 0 {
-					return discoverResultMsg{models: nil}
+					return discoverResultMsg{models: nil, gen: gen}
 				}
-				return discoverResultMsg{models: models}
+				return discoverResultMsg{models: models, gen: gen}
 			}
 		}
 		m.modelLoading = false
@@ -246,12 +250,13 @@ func (m *onboardModel) startModelSelection() tea.Cmd {
 
 	resolved := m.buildResolved()
 	if resolved != nil {
+		gen := m.discoverGen
 		return func() tea.Msg {
 			models, err := provider.DiscoverModels(context.Background(), resolved)
 			if err != nil || len(models) == 0 {
-				return discoverResultMsg{models: nil}
+				return discoverResultMsg{models: nil, gen: gen}
 			}
-			return discoverResultMsg{models: models}
+			return discoverResultMsg{models: models, gen: gen}
 		}
 	}
 	m.modelLoading = false
