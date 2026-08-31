@@ -191,8 +191,19 @@ func (t ExitWorktree) Execute(ctx context.Context, input json.RawMessage) (Resul
 	branchOut, _ := branchCmd.Output()
 	branchName := strings.TrimSpace(string(branchOut))
 
-	// Remove the worktree
-	rmCmd := exec.CommandContext(ctx, "git", "worktree", "remove", "--force", worktreePath)
+	// Remove the worktree. #1356: --force only when the caller explicitly
+	// authorized discarding. Passing it unconditionally disabled git's own
+	// dirty-refusal protection at all times, leaving only the status check
+	// above - a real TOCTOU window in this multi-agent/parallel-tool
+	// codebase, where a concurrent write landing between check and remove
+	// was silently destroyed. Without --force, git checks-and-removes
+	// atomically and its "contains modified or untracked files" error
+	// covers untracked files too.
+	forceArgs := []string{}
+	if args.DiscardChanges {
+		forceArgs = []string{"--force"}
+	}
+	rmCmd := exec.CommandContext(ctx, "git", append(append([]string{"worktree", "remove"}, forceArgs...), worktreePath)...)
 	if mainRepoRoot != "" {
 		rmCmd.Dir = mainRepoRoot
 	} else {
