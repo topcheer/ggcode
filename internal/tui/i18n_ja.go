@@ -294,11 +294,11 @@ func jaCatalog(key string) string {
 		// argument is not silently dropped if this key is wired up.
 		return "現在の言語: %s"
 	case "lang.invalid":
-		return "無効な言語"
+		return "サポートされていない言語: %s\n%s\n\n"
 	case "lang.switch":
-		return "言語を切り替え"
+		return "言語を切り替えました: %s\n\n"
 	case "lang.selection.current":
-		return "現在の言語"
+		return " 現在の言語: %s"
 	case "lang.selection.hint":
 		return "言語を選択してください"
 	case "lang.first_use.title":
@@ -308,7 +308,7 @@ func jaCatalog(key string) string {
 	case "lang.first_use.hint":
 		return " Tab/j/k 移動 • Enter 確認 • e/z ショートカット"
 	case "mode.current":
-		return "現在のモード"
+		return "現在のモード: %s\n使用法: /mode <supervised|plan|auto|bypass|autopilot>\n  supervised  ツールに明示的なルールがない場合に確認\n  plan        読み取り専用探索; 書き込みとコマンドを拒否\n  auto        安全な操作を許可、危険な操作を拒否\n  bypass      ほぼすべて許可; 重要な操作のみ停止\n  autopilot   bypass + モデルが質問しても継続\n\n"
 	case "mode.persist_failed":
 		return "モード設定の保存に失敗しました: %v"
 	case "input.placeholder":
@@ -494,7 +494,7 @@ func jaCatalog(key string) string {
 	case "panel.model.refresh.builtin_loaded":
 		return "内蔵モデルを読み込みました。"
 	case "command.unknown":
-		return "不明なコマンド"
+		return "不明なコマンド: %s\n"
 	case "command.retry_empty":
 		return "再試行する前回の送信がありません。"
 	case "command.retry_busy":
@@ -548,7 +548,7 @@ func jaCatalog(key string) string {
 		// had two, so commands.go:398's single arg printed %!s(MISSING).
 		return "✓ %s を永久許可に設定しました\n\n"
 	case "command.custom":
-		return "カスタムコマンド"
+		return "カスタムコマンド /%s:\n"
 	case "command.mention_error":
 		return "メンション展開エラー: %v"
 	case "session.list_failed":
@@ -566,7 +566,7 @@ func jaCatalog(key string) string {
 	case "session.list.hint":
 		return "\n/resume <ID> でセッションを再開できます\n\n"
 	case "session.new":
-		return "新しいセッション"
+		return "新しいセッション: %s\n\n"
 	case "session.resume":
 		return "セッションを再開しました: %s — %s（%d メッセージ）\n\n"
 	case "session.resume_failed":
@@ -594,15 +594,15 @@ func jaCatalog(key string) string {
 	case "files.none":
 		return "このセッションでエージェントによって変更されたファイルはありません。\n\n"
 	case "files.title":
-		return "ファイル"
+		return "エージェントが変更したファイル (%d ファイル, %d 編集):\n\n"
 	case "files.item":
 		return "  %s  %d 回編集  最終: %s%s\n"
 	case "files.hint":
 		return "ファイルを選択"
 	case "checkpoint.list.title":
-		return "チェックポイント一覧"
+		return "チェックポイント (%d):\n\n"
 	case "checkpoint.list.item":
-		return "チェックポイント %d: %s (%dファイル変更)"
+		return "  %d. %s  %s  %s  %s\n"
 	case "checkpoint.list.hint":
 		return "チェックポイントを選択してロールバック (Esc でキャンセル)"
 	case "memory.auto_unavailable":
@@ -648,25 +648,25 @@ func jaCatalog(key string) string {
 	case "todo.parse_failed":
 		return "TODOのパースエラー: %v\n\n"
 	case "todo.title":
-		return "TODO"
+		return "TODOリスト:\n%s\n\n"
 	case "bug.title":
 		return "バグレポート情報"
 	case "bug.version":
-		return "バージョン"
+		return "バージョン: %s\n"
 	case "bug.os":
-		return "OS"
+		return "OS: %s %s\n"
 	case "bug.go":
-		return "Goバージョン"
+		return "Go: %s\n"
 	case "bug.provider":
-		return "プロバイダ"
+		return "プロバイダ: %s\n"
 	case "bug.model":
-		return "モデル"
+		return "モデル: %s\n"
 	case "bug.session":
-		return "セッションID"
+		return "セッション: %s (%d メッセージ)\n"
 	case "bug.mcp":
-		return "MCPサーバ"
+		return "MCPサーバ: %d\n"
 	case "bug.last_error":
-		return "最後のエラー"
+		return "最後のエラー: %s\n"
 	case "bug.hint":
 		return "上記の情報をバグレポートに添付してください"
 	case "config.usage":
@@ -754,23 +754,23 @@ func jaCatalog(key string) string {
 	case "agents.none":
 		return "アクティブなサブエージェントがありません"
 	case "agents.title":
-		return "サブエージェント"
+		return "%d 個のサブエージェント:\n"
 	case "agents.item":
 		return "  %s [%s]%s - %s\n"
 	case "agents.hint":
 		return "タブでサブエージェントを選択、Enter で送信"
 	case "agent.usage":
-		return "%s: %d ターン, %d ツールコール, %s トークン使用, %s経過"
+		return "使用法: /agent <id> または /agent cancel <id>\n\n"
 	case "agent.cancelled":
-		return "エージェントがキャンセルされました"
+		return "サブエージェント %s をキャンセルしました\n\n"
 	case "agent.cancel_failed":
-		return "エージェントのキャンセルに失敗: %v"
+		return "エージェントのキャンセルに失敗: %s"
 	case "agent.not_found":
 		return "エージェント %s が見つかりません"
 	case "agent.title":
-		return "エージェント"
+		return "エージェント: %s\nステータス: %s\nタスク: %s\n"
 	case "agent.result":
-		return "サブエージェント %s が完了しました: %s"
+		return "結果: %s\n"
 	case "agent.error":
 		return "エージェントエラー: %v"
 	case "slash.help":

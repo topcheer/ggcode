@@ -6,6 +6,7 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -158,4 +159,46 @@ func findMissingKeys(baseline, target map[string]bool) map[string]bool {
 		}
 	}
 	return missing
+}
+
+// TestI18NVerbConsistency pins #1415: the completeness test only compared
+// KEY sets (and only logged), never format-verb counts - ~25 ja templates
+// shipped with fewer verbs than their en originals, so every parameterized
+// system message rendered %!(EXTRA ...) garbage in Japanese.
+func TestI18NVerbConsistency(t *testing.T) {
+	en := parseCatalogCases(t, "i18n_en.go")
+	for _, lang := range []string{"i18n_zh.go", "i18n_ja.go", "i18n_ko.go", "i18n_es.go", "i18n_fr.go", "i18n_de.go", "i18n_ru.go", "i18n_pt.go", "i18n_vi.go"} {
+		cat := parseCatalogCases(t, lang)
+		for key, enVal := range en {
+			lv, ok := cat[key]
+			if !ok {
+				continue // key coverage is the completeness test's job
+			}
+			if verbCounts(enVal) != verbCounts(lv) {
+				t.Errorf("%s %q: verb counts differ - lang=%q en=%q", lang, key, verbCounts(lv), verbCounts(enVal))
+			}
+		}
+	}
+}
+
+func parseCatalogCases(t *testing.T, filename string) map[string]string {
+	t.Helper()
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		t.Fatalf("read %s: %v", filename, err)
+	}
+	re := regexp.MustCompile(`(?m)^\tcase "([^"]+)":\n\t\treturn "((?:[^"\\]|\\.)*)"`)
+	entries := map[string]string{}
+	for _, m := range re.FindAllStringSubmatch(string(data), -1) {
+		entries[m[1]] = m[2]
+	}
+	return entries
+}
+
+// verbCounts returns a sorted multiset signature of the format verbs.
+func verbCounts(s string) string {
+	re := regexp.MustCompile(`%[a-zA-Z]`)
+	vs := re.FindAllString(s, -1)
+	sort.Strings(vs)
+	return strings.Join(vs, ",")
 }
