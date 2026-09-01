@@ -60,7 +60,7 @@ func trimURLTail(u string) string {
 			// ')' surplus: trailing one is prose
 			u = u[:len(u)-1]
 			continue
-		case strings.IndexByte(".,;:!?", last) >= 0:
+		case strings.IndexByte(".,;:!?\"'>]", last) >= 0:
 			u = u[:len(u)-1]
 			continue
 		}

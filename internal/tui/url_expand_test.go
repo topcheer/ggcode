@@ -178,3 +178,24 @@ func TestExtractURLsCJKAndParens(t *testing.T) {
 		t.Fatalf("punctuation handling regressed: %#v", got)
 	}
 }
+
+// TestExtractURLsClosingDelimiters pins #1419 (a #1397 regression): the
+// [!-~] body charset admitted closing delimiters the old negated class
+// excluded, so URLs were fetched with a trailing " ' > or ] verbatim -
+// doomed fetches injecting 404/error pages into context. They are now
+// stripped by trimURLTail like trailing punctuation.
+func TestExtractURLsClosingDelimiters(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{`看 "https://example.com/docs" 这段`, "https://example.com/docs"},
+		{`'https://example.com/b'`, "https://example.com/b"},
+		{"<https://example.com/markdown>", "https://example.com/markdown"},
+		{"[link] https://example.com/l]", "https://example.com/l"},
+		{`(see https://example.com/x)`, "https://example.com/x"},
+	}
+	for _, c := range cases {
+		got := extractURLs(c.in)
+		if len(got) != 1 || got[0] != c.want {
+			t.Errorf("extractURLs(%q) = %#v, want [%q]", c.in, got, c.want)
+		}
+	}
+}
