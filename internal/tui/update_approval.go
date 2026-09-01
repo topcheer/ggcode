@@ -15,6 +15,19 @@ import (
 
 // handleApprovalMsg handles the corresponding message case.
 func (m Model) handleApprovalMsg(msg ApprovalMsg) (Model, tea.Cmd) {
+	// #1395-A: a second approval (main agent + ACP external agents run
+	// concurrently, repl.go wires both) used to overwrite pendingApproval
+	// unconditionally - the first request's Response channel was lost (its
+	// agent goroutine blocked until ctx timeout -> Deny) and the tunnel
+	// approval ID was reassigned (mobile users' answer to the OLD id was
+	// silently filtered). Mirror handleAskUserMsg: deny the pending one,
+	// register the newcomer.
+	if m.pendingApproval != nil && m.pendingApproval.Response != nil {
+		stale := *m.pendingApproval
+		safego.Go("tui.model.displaceApproval", func() {
+			stale.Response <- permission.Deny
+		})
+	}
 	if m.mode == permission.AutopilotMode {
 		m.pendingApproval = &msg
 		return m, m.handleApproval(permission.Allow)

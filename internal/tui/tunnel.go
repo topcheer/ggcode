@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -284,7 +285,11 @@ func (m *Model) startTunnel(generation uint64) tea.Cmd {
 		// Forward-declare broker so OnCommand closure can reference it.
 		// result.Broker is set after StartShare returns, but OnCommand
 		// is invoked later (when mobile sends commands), so it's safe.
-		var shareResult *agentruntime.ShareResult
+		// #1395-B: OnCommand runs on the broker relay/RTC goroutine while
+		// this goroutine writes shareResult AFTER StartShare returns - but the
+		// broker registers OnCommand INSIDE StartShare (before the write), so
+		// the window is real (P2P upgrade etc). Atomic instead of raw pointer.
+		var shareResult atomic.Pointer[agentruntime.ShareResult]
 		result, err := m.tunnelHost.StartShare(agentruntime.ShareConfig{
 			Workspace: m.fullWorkingDirectory(),
 			Model:     m.activeModel,
@@ -297,8 +302,8 @@ func (m *Model) startTunnel(generation uint64) tea.Cmd {
 			},
 			OnCommand: func(cmd tunnel.GatewayMessage) {
 				var b *tunnel.Broker
-				if shareResult != nil {
-					b = shareResult.Broker
+				if r := shareResult.Load(); r != nil {
+					b = r.Broker
 				}
 				m.handleTunnelClientCommand(generation, b, cmd)
 			},
@@ -308,7 +313,7 @@ func (m *Model) startTunnel(generation uint64) tea.Cmd {
 				}
 			},
 		})
-		shareResult = result
+		shareResult.Store(result)
 		if err != nil {
 			return tunnelStartMsg{generation: generation, err: err}
 		}
