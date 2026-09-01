@@ -35,12 +35,9 @@ static int gcPollDockAction() {
 import "C"
 
 import (
-	"os"
 	"time"
 
-	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/safego"
-	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // initSystemTray installs the Dock-reopen handler and its poller. The tray
@@ -66,30 +63,6 @@ func (a *App) initSystemTray() {
 	})
 }
 
-func (a *App) handleTrayShow() {
-	debug.Log("desktop", "tray: show window")
-	a.lastCloseAttempt.Store(nil) // #700: atomic (4 goroutines touch this)
-	if a.ctx == nil {
-		return
-	}
-	runtime.WindowShow(a.ctx)
-	a.enqueueUIEvent("tray:show", nil)
-}
-
-func (a *App) handleTrayNewSession() {
-	debug.Log("desktop", "tray: new session")
-	a.lastCloseAttempt.Store(nil) // #700: atomic (4 goroutines touch this)
-	if a.ctx == nil {
-		return
-	}
-	runtime.WindowShow(a.ctx)
-	a.enqueueUIEvent("tray:new-session", nil)
-}
-
-func (a *App) handleTrayQuit() {
-	debug.Log("desktop", "tray: quit")
-	if a.ctx != nil {
-		a.shutdown(a.ctx)
-	}
-	os.Exit(0)
-}
+// handleTrayShow / handleTrayNewSession / handleTrayQuit moved to tray.go:
+// they are pure Wails runtime calls with no platform coupling, and the
+// socket dispatch in serveTrayConn compiles on every platform.

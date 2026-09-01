@@ -79,11 +79,11 @@ mv "${WAILS_DIR}/build/bin/GGCode Desktop.app" "${WAILS_DIR}/build/bin/${APP_NAM
 # wails build only compiles the main package (the helper is exec'd, never
 # imported), so without this step the tray is silently dead in production.
 echo "  Building trayhelper (amd64)..."
-CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 \
+CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 \
   go build -tags goolm -ldflags "${LDFLAGS}" \
   -o "${WAILS_DIR}/build/bin/${APP_NAME}-amd64.app/Contents/MacOS/trayhelper" ./trayhelper
 echo "  Building trayhelper (arm64)..."
-CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 \
+CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 \
   go build -tags goolm -ldflags "${LDFLAGS}" \
   -o "${WAILS_DIR}/build/bin/${APP_NAME}-arm64.app/Contents/MacOS/trayhelper" ./trayhelper
 

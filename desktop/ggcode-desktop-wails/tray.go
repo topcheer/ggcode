@@ -16,6 +16,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/safego"
+	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 var (
@@ -194,6 +195,38 @@ func (a *App) serveTrayConn(conn net.Conn) {
 			a.handleTrayQuit()
 		}
 	}
+}
+
+// Tray action handlers. Pure Wails runtime calls - no platform coupling.
+// They used to live in tray_darwin.go, which made the Windows and Linux
+// builds fail on the serveTrayConn dispatch (undefined methods) - the
+// release matrix caught what host-platform CI could not.
+func (a *App) handleTrayShow() {
+	debug.Log("desktop", "tray: show window")
+	a.lastCloseAttempt.Store(nil) // #700: atomic (4 goroutines touch this)
+	if a.ctx == nil {
+		return
+	}
+	runtime.WindowShow(a.ctx)
+	a.enqueueUIEvent("tray:show", nil)
+}
+
+func (a *App) handleTrayNewSession() {
+	debug.Log("desktop", "tray: new session")
+	a.lastCloseAttempt.Store(nil) // #700: atomic (4 goroutines touch this)
+	if a.ctx == nil {
+		return
+	}
+	runtime.WindowShow(a.ctx)
+	a.enqueueUIEvent("tray:new-session", nil)
+}
+
+func (a *App) handleTrayQuit() {
+	debug.Log("desktop", "tray: quit")
+	if a.ctx != nil {
+		a.shutdown(a.ctx)
+	}
+	os.Exit(0)
 }
 
 // removeSystemTray tears the tray down during shutdown (both platforms).
