@@ -93,7 +93,13 @@ func (s *ProjectionStore) Append(msg GatewayMessage) error {
 	if len(state.Events) > ProjectionReplayLimit {
 		state.Events = append([]GatewayMessage(nil), state.Events[len(state.Events)-ProjectionReplayLimit:]...)
 	}
-	return s.saveLocked(state)
+	if err := s.saveLocked(state); err != nil {
+		// #1400-A: same poison-eviction as CutAuthority - the appended event
+		// must not linger in cache while disk kept the pre-append truth.
+		delete(s.cache, sessionID)
+		return err
+	}
+	return nil
 }
 
 func (s *ProjectionStore) ReplayEvents(sessionID string) ([]GatewayMessage, error) {
@@ -147,6 +153,12 @@ func (s *ProjectionStore) CutAuthority(sessionID string) (uint64, error) {
 	state.Activity = nil
 	state.Events = nil
 	if err := s.saveLocked(state); err != nil {
+		// #1400-A: the in-memory state above was already mutated - keeping it
+		// in cache leaves memory/disk split (memory has the cut, disk the
+		// pre-cut history; a later successful Append would then persist the
+		// promoted epoch OVER the old events). Evict so the next load rebuilds
+		// from disk truth.
+		delete(s.cache, sessionID)
 		return 0, err
 	}
 	return state.AuthorityEpoch, nil

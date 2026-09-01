@@ -1960,7 +1960,15 @@ func (m *Model) prepareCurrentSessionTunnelLedger() {
 	// Tunnel events are no longer persisted to session JSONL.
 	// Only cut authority in the projection store to reset the ledger.
 	if projectionStore != nil {
-		if epoch, err := projectionStore.CutAuthority(ses.ID); err == nil {
+		epoch, cutErr := projectionStore.CutAuthority(ses.ID)
+		// #1400-A: the old `if err == nil` swallowed failures silently -
+		// the brokers kept stamping the OLD epoch while the store's cache
+		// had the cut (memory/disk split). Log loudly so the split is
+		// diagnosable; brokers only update on success (a failed cut means
+		// the on-disk authority is still the old one).
+		if cutErr != nil {
+			debug.Log("tui", "cut authority failed for session %s: %v (brokers keep previous epoch)", ses.ID, cutErr)
+		} else {
 			if m.tunnelEventBroker() != nil {
 				m.tunnelEventBroker().SetAuthorityEpoch(epoch)
 			}
