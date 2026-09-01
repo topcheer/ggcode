@@ -105,26 +105,34 @@ class SecureTokenStorage {
   }
 
   /// Generic write with timeout fallback to SharedPreferences.
-  Future<void> _writeSecure(String key, String value, String fallbackKey) async {
+  /// Returns true when the value landed in the SECURE store; false when a
+  /// fallback path was taken. #1421-A: migration callers MUST NOT delete
+  /// the legacy source unless this returns true - the fallback writes the
+  /// same legacy key the migration then removed, destroying the only
+  /// persisted copy (Keychain empty + prefs empty).
+  Future<bool> _writeSecure(String key, String value, String fallbackKey) async {
     if (!_shouldTrySecureFor(key)) {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(fallbackKey, value);
-      return;
+      return false;
     }
     try {
       await _storage.write(key: key, value: value).timeout(_timeout);
       debugPrint('[secure_storage] Keychain write OK: $key');
       _degradedUntilByKey.remove(key); // success re-enables
+      return true;
     } on TimeoutException {
       debugPrint('[secure_storage] Keychain timed out on write, falling back to SharedPreferences');
       _degradeSecureFor(key);
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(fallbackKey, value);
+      return false;
     } catch (e) {
       debugPrint('[secure_storage] write error: $e, falling back to SharedPreferences');
       _degradeSecureFor(key);
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(fallbackKey, value);
+      return false;
     }
   }
 
@@ -143,11 +151,18 @@ class SecureTokenStorage {
     final prefs = await SharedPreferences.getInstance();
     raw = prefs.getString(_legacyConnectionsKey);
     if (raw != null && raw.isNotEmpty) {
-      await _writeSecure(_connectionsKey, raw, _legacyConnectionsKey);
-      try {
-        await prefs.remove(_legacyConnectionsKey);
-      } catch (_) {}
-      debugPrint('[secure_storage] migrated connections from SharedPreferences');
+      final secured = await _writeSecure(_connectionsKey, raw, _legacyConnectionsKey);
+      // #1421-A: delete the legacy copy ONLY after the Keychain write
+      // SUCCEEDED. When _writeSecure fell back, it wrote the very same
+      // legacy key - removing it here destroyed the only persisted copy.
+      if (secured) {
+        try {
+          await prefs.remove(_legacyConnectionsKey);
+        } catch (_) {}
+        debugPrint('[secure_storage] migrated connections from SharedPreferences');
+      } else {
+        debugPrint('[secure_storage] connections kept in legacy store (secure write degraded) - will retry migration later');
+      }
     }
     return raw;
   }
@@ -182,11 +197,15 @@ class SecureTokenStorage {
       final legacy = prefs.getStringList(_legacyHistoryKey);
       if (legacy != null && legacy.isNotEmpty) {
         raw = jsonEncode(legacy);
-        await _writeSecure(_historyKey, raw, _legacyHistoryKey);
-        try {
-          await prefs.remove(_legacyHistoryKey);
-        } catch (_) {}
-        debugPrint('[secure_storage] migrated URL history from SharedPreferences');
+        final secured = await _writeSecure(_historyKey, raw, _legacyHistoryKey);
+        // #1421-A: same rule as connections - never delete the source on
+        // a degraded (fallback) write.
+        if (secured) {
+          try {
+            await prefs.remove(_legacyHistoryKey);
+          } catch (_) {}
+          debugPrint('[secure_storage] migrated URL history from SharedPreferences');
+        }
         return legacy;
       }
       return [];
