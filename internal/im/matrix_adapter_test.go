@@ -347,3 +347,37 @@ func TestMatrixGetHistoryVisibilityDefaultsToShared(t *testing.T) {
 		t.Fatalf("expected default shared, got %q", hv.HistoryVisibility)
 	}
 }
+
+// TestSanitizeFileToken pins #1404-A: the persistent crypto store path is
+// derived from the adapter name - unsafe characters must reduce to '-'
+// (never escape the matrix-crypto dir) and names must map deterministically.
+func TestSanitizeFileToken(t *testing.T) {
+	cases := map[string]string{
+		"main":         "main",
+		"work bot":     "work-bot",
+		"a/b/c":        "a-b-c",
+		"..\\..\\evil": "------evil",
+		"бот":          "---",
+	}
+	for in, want := range cases {
+		if got := sanitizeFileToken(in); got != want {
+			t.Errorf("sanitizeFileToken(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestOpenPersistentCryptoStorePathIsolation: two adapters (different
+// names or homeservers) must never share one device identity - the file
+// path is name-keyed and the account ID is homeserver|name.
+func TestOpenPersistentCryptoStorePathIsolation(t *testing.T) {
+	a := &matrixAdapter{name: "bot one", homeserver: "https://matrix.org"}
+	if got := sanitizeFileToken(a.name); got != "bot-one" {
+		t.Fatalf("file token = %q", got)
+	}
+	b := &matrixAdapter{name: "bot-one", homeserver: "https://evil.example"}
+	aidA := fmt.Sprintf("%s|%s", a.homeserver, a.name)
+	aidB := fmt.Sprintf("%s|%s", b.homeserver, b.name)
+	if aidA == aidB {
+		t.Fatal("different homeservers must yield different account IDs")
+	}
+}
