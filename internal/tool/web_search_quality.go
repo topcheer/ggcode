@@ -75,9 +75,15 @@ type scoredResult struct {
 // constraint (single-domain site: filters queries to 2 results and wastes
 // the 3x prefetch the caller deliberately did to compensate for filtering).
 func assessSearchResults(query string, results []searchResult, allowedDomains []string) []searchResult {
+	// #1406-B: the exemption set used a weaker normalization than
+	// filterByDomain (no scheme/path/trailing-dot stripping), so an agent
+	// passing "https://example.com" or "example.com." passed the filter but
+	// missed the exemption key - #1357's single-domain guarantee silently
+	// regressed (5 results cut to 2, 3x prefetch wasted). One normalization
+	// for both sides.
 	allowed := make(map[string]bool, len(allowedDomains))
-	for _, d := range allowedDomains {
-		allowed[strings.TrimPrefix(strings.ToLower(strings.TrimSpace(d)), "www.")] = true
+	for _, d := range normalizeDomains(allowedDomains) {
+		allowed[d] = true
 	}
 	if len(results) == 0 {
 		return results

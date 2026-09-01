@@ -601,3 +601,24 @@ func TestExitWorktree_DirtyWithoutForceRefused(t *testing.T) {
 		t.Error("worktree directory still exists after forced removal")
 	}
 }
+
+// TestExitWorktreeRejectsInvalidAction pins #1406-A: every non-"keep"
+// value - typos like "exit"/"close" (beyond distance-2 enum correction)
+// AND a missing action (json.Unmarshal does not enforce required) - used
+// to fall through to the destructive remove branch (worktree deleted +
+// git branch -D). Fail closed now.
+func TestExitWorktreeRejectsInvalidAction(t *testing.T) {
+	tw := ExitWorktree{WorkingDir: t.TempDir()}
+	for _, action := range []string{"", "exit", "close", "delete", "KEEP"} {
+		res, err := tw.Execute(context.Background(), json.RawMessage(`{"action":"`+action+`"}`))
+		if err != nil {
+			t.Fatalf("action %q: unexpected err: %v", action, err)
+		}
+		if !res.IsError {
+			t.Errorf("action %q must fail closed, got success: %s", action, res.Content)
+		}
+		if !strings.Contains(res.Content, "keep") || !strings.Contains(res.Content, "remove") {
+			t.Errorf("action %q: error should name the valid values: %s", action, res.Content)
+		}
+	}
+}

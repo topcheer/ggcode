@@ -145,6 +145,20 @@ func (t ExitWorktree) Execute(ctx context.Context, input json.RawMessage) (Resul
 	if err := json.Unmarshal(input, &args); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
 	}
+	// #1406-A: 'keep' vs remove used to be decided by a single =="keep"
+	// check - every OTHER value, including a typo ('exit', 'close' - both
+	// beyond CoerceEnumValues' distance-2 correction) AND a MISSING action
+	// (json.Unmarshal does not enforce required), fell through to REMOVE:
+	// worktree deleted + 'git branch -D'. Missing parameter meant delete.
+	// Fail closed now: only the two spelled-out values act, anything else
+	// is a parameter error (with a near-miss suggestion when one exists).
+	if args.Action != "keep" && args.Action != "remove" {
+		msg := fmt.Sprintf("invalid action %q: must be 'keep' or 'remove'. Refusing to default to the destructive 'remove'.", args.Action)
+		if s := suggestClosestEnum(args.Action, []json.RawMessage{json.RawMessage(`"keep"`), json.RawMessage(`"remove"`)}); s != "" {
+			msg += fmt.Sprintf(" Did you mean %s?", s)
+		}
+		return Result{IsError: true, Content: msg}, nil
+	}
 
 	// Find git root
 	gitRoot, err := findGitRoot(ctx, t.WorkingDir)
