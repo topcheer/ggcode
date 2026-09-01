@@ -5,6 +5,7 @@ package tunnel
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -168,5 +169,34 @@ func TestBuildProjectionReplayKeepsNewerTailStatusAfterOlderBootstrap(t *testing
 	}
 	if replay[3].Type != EventActivity || string(replay[3].Data) != `{"activity":""}` {
 		t.Fatalf("expected newer empty activity to survive replay, got %#v", replay[3])
+	}
+}
+
+// TestProjectionStoreCacheEvictedOnSaveFailure pins #1400-A: a failed save
+// must evict the session from cache - the in-memory state (cut authority /
+// appended event) was already mutated, and keeping it split memory from
+// disk until the next successful write persisted the promoted state over
+// the old history. Inject a save failure by pointing the store at a
+// directory whose parent is a FILE (rename fails deterministically).
+func TestProjectionStoreCacheEvictedOnSaveFailure(t *testing.T) {
+	dir := t.TempDir()
+	blocker := filepath.Join(dir, "blocker")
+	os.WriteFile(blocker, []byte("x"), 0o644)
+
+	s := &ProjectionStore{dir: filepath.Join(blocker, "sub"), cache: map[string]*projectionFile{}}
+
+	if _, err := s.CutAuthority("sess-evict"); err == nil {
+		t.Fatal("expected CutAuthority to fail against blocked dir")
+	}
+	// The mutated state must NOT linger in cache.
+	if _, ok := s.cache["sess-evict"]; ok {
+		t.Fatal("cache retains session after save failure (#1400)")
+	}
+	// Append path: same contract.
+	if err := s.Append(GatewayMessage{SessionID: "sess-evict", EventID: "ev-000000001", Type: EventText}); err == nil {
+		t.Fatal("expected Append to fail against blocked dir")
+	}
+	if _, ok := s.cache["sess-evict"]; ok {
+		t.Fatal("cache retains session after Append save failure (#1400)")
 	}
 }
