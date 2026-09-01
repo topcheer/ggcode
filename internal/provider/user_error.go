@@ -284,10 +284,44 @@ func UserFacingErrorLang(err error, lang string) string {
 		return "Request failed: " + msg
 	}
 
+	// Blind-spot fallback: no category recognized and no strippable SDK
+	// prefix. Surface the raw error instead of hiding it — the generic
+	// message alone is undiagnosable. IsBlindSpotError matches this branch.
 	if zh {
-		return "请求失败，请稍后重试"
+		return fallbackErrMsgZh + "。原始错误：" + truncateRawError(raw)
 	}
-	return "Request failed. Please retry shortly"
+	return fallbackErrMsgEn + " Raw error: " + truncateRawError(raw)
+}
+
+const (
+	// fallbackErrMsgZh/En are the blind-spot fallback stems.
+	// UserFacingErrorLang appends the raw error after them;
+	// IsBlindSpotError detects this branch by prefix match.
+	fallbackErrMsgZh = "请求失败，请稍后重试"
+	fallbackErrMsgEn = "Request failed. Please retry shortly"
+)
+
+// blindSpotRawLimit caps the raw error text embedded in the user-facing
+// message: enough to diagnose, short enough not to flood the chat panel.
+const blindSpotRawLimit = 400
+
+func truncateRawError(raw string) string {
+	if len(raw) <= blindSpotRawLimit {
+		return raw
+	}
+	return raw[:blindSpotRawLimit] + "…(truncated)"
+}
+
+// IsBlindSpotError reports whether err fell through every category in
+// UserFacingErrorLang — an unrecognized error shape. Callers use this to
+// auto-enable file logging and auto-retry, since the generic message alone
+// gives the user nothing to act on.
+func IsBlindSpotError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := UserFacingErrorLang(err, "zh-CN")
+	return strings.HasPrefix(msg, fallbackErrMsgZh)
 }
 
 // hasHTTPStatus checks whether err (or any wrapped error) carries the given

@@ -159,8 +159,13 @@ func (m Model) handleAgentDoneMsg(msg agentDoneMsg) (Model, tea.Cmd) {
 		}
 		return m, firePendingRestartCmd()
 	}
-	if !wasCanceled && !wasFailed && m.pendingSubmissionCount() > 0 {
-		return m, m.submitPendingSubmissionCmd()
+	if !wasCanceled && !wasFailed {
+		// Successful run: restore the full blind-spot auto-retry budget
+		// for the next failure.
+		m.resetBlindSpotRetry()
+		if m.pendingSubmissionCount() > 0 {
+			return m, m.submitPendingSubmissionCmd()
+		}
 	}
 	return m, nil
 
@@ -207,6 +212,10 @@ func (m Model) handleErrMsg(msg errMsg) (Model, tea.Cmd) {
 	m.pushTunnelStatus(tunnel.StatusIdle, "")
 	m.pushTunnelCurrentActivity()
 	m.chatWriteSystem(nextSystemID(), formatUserFacingError(m.currentLanguage(), msg.err))
+	// Blind-spot errors: expose raw cause, enable file logging, and
+	// schedule an auto-retry of the same submission. Merged into the final
+	// return - an early return would skip notify + persist below.
+	retryCmd := m.maybeBlindSpotRetry(msg.err)
 	m.chatListFollowOutput()
 	// Fire notification for error completion.
 	notifCfg := config.NotificationConfig{}
@@ -219,7 +228,7 @@ func (m Model) handleErrMsg(msg errMsg) (Model, tea.Cmd) {
 	}
 	notify.OnCompletion(notifCfg, runDur, true, "Agent run failed with an error.")
 	m.persistFullSessionMessages()
-	return m, nil
+	return m, retryCmd
 
 }
 
@@ -266,6 +275,10 @@ func (m Model) handleAgentErrMsg(msg agentErrMsg) (Model, tea.Cmd) {
 	m.pushTunnelCurrentActivity()
 	m.chatWriteSystem(nextSystemID(), formatUserFacingError(m.currentLanguage(), msg.Err))
 	m.emitIMText(formatUserFacingError(m.currentLanguage(), msg.Err))
+	// Blind-spot errors: expose raw cause, enable file logging, and
+	// schedule an auto-retry of the same submission. Merged into the final
+	// return - an early return would skip notify + persist below.
+	retryCmd := m.maybeBlindSpotRetry(msg.Err)
 	m.chatListFollowOutput()
 	// Fire notification for agent error completion.
 	notifCfg := config.NotificationConfig{}
@@ -278,7 +291,7 @@ func (m Model) handleAgentErrMsg(msg agentErrMsg) (Model, tea.Cmd) {
 	}
 	notify.OnCompletion(notifCfg, runDur, true, "Agent run failed with an error.")
 	m.persistFullSessionMessages()
-	return m, nil
+	return m, retryCmd
 
 }
 

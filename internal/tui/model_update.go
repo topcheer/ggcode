@@ -365,6 +365,9 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 	case agentErrMsg:
 		return m.handleAgentErrMsg(msg)
 
+	case blindSpotRetryMsg:
+		return m, m.handleBlindSpotRetryMsg(msg)
+
 	case knightTaskResultMsg:
 		// #902: empty case left the spinner forever and agentBusy stuck —
 		// every later submission queued behind a dead /knight run.

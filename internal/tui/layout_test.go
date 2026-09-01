@@ -19,6 +19,7 @@ import (
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/markdown"
 	"github.com/topcheer/ggcode/internal/permission"
@@ -2297,25 +2298,55 @@ func TestAgentErrMsgFormatsAnthropicSerializationFailure(t *testing.T) {
 }
 
 func TestAgentErrMsgFormatsGenericChatFailureWithoutDoublePrefix(t *testing.T) {
+	// Blind-spot contract (updated): an unrecognized error now EMBEDS the
+	// raw error text and schedules an auto-retry instead of hiding the
+	// cause behind "Request failed. Please retry shortly". The old contract
+	// (strip "chat error:" prefix) is superseded - visibility is the point.
+	t.Cleanup(func() {
+		// maybeBlindSpotRetry force-enables file logging globally; undo so
+		// later tests in this package don't inherit live sinks.
+		debug.Close()
+		os.Unsetenv("GGCODE_DEBUG")
+	})
+
 	m := newTestModel()
 	m.loading = true
 	m.activeAgentRunID = 9
+	m.lastUserSubmission = "hello"
 
-	next, _ := m.Update(agentErrMsg{
+	next, cmd := m.Update(agentErrMsg{
 		RunID: 9,
 		Err:   errors.New("chat error: upstream timeout"),
 	})
 	m = next.(Model)
 
 	output := renderedOutput(&m)
-	// UserFacingError returns a generic English message for unrecognized errors
-	// (test model defaults to English language).
-	// Verify that internal "chat error:" prefix is stripped from the output.
-	if strings.Contains(output, "chat error:") {
-		t.Fatalf("expected internal chat error prefix to be removed, got %q", output)
-	}
-	if !strings.Contains(output, "Request failed") {
+	// The chat panel soft-wraps at spaces and interleaves ANSI codes, so
+	// strip escapes and normalize whitespace before substring checks.
+	norm := regexp.MustCompile(`\s+`).ReplaceAllString(stripANSIForTest(output), " ")
+	// Generic failure message still present.
+	if !strings.Contains(norm, "Request failed") {
 		t.Fatalf("expected generic failure message, got %q", output)
+	}
+	// Raw cause is now visible (the whole point of the blind-spot rework).
+	if !strings.Contains(norm, "upstream timeout") {
+		t.Fatalf("expected raw error text to be visible, got %q", output)
+	}
+	// No doubled "Error:" prefix from formatUserFacingError wrapping.
+	if strings.Contains(norm, "Error: Error:") {
+		t.Fatalf("expected no double error prefix, got %q", output)
+	}
+	// Debug file logging was force-enabled with a visible path notice
+	// (either the retry countdown's "Debug logs:" or the standalone notice).
+	if !strings.Contains(norm, "Debug log") {
+		t.Fatalf("expected debug logging notice, got %q", output)
+	}
+	// A retry was scheduled (cmd non-nil) and the counter advanced.
+	if cmd == nil {
+		t.Fatalf("expected auto-retry cmd to be scheduled")
+	}
+	if m.blindSpotRetries != 1 {
+		t.Fatalf("expected blindSpotRetries=1, got %d", m.blindSpotRetries)
 	}
 }
 

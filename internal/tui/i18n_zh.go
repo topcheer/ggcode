@@ -526,6 +526,16 @@ func zhCatalog(key string) string {
 		return "未知命令：%s\n"
 	case "command.retry_empty":
 		return "没有可重试的上一次提交。"
+	case "error.blindspot_retry":
+		return "检测到无法识别的错误，%d 秒后自动重试（%d/%d）。调试日志：%s"
+	case "error.blindspot_retry_exhausted":
+		return "自动重试已达上限（%d/%d），停止重试。调试日志：%s"
+	case "error.blindspot_log_enabled":
+		return "检测到无法识别的错误。已自动开启调试日志：%s"
+	case "error.blindspot_log_only":
+		return "检测到无法识别的错误。调试日志（已开启）：%s"
+	case "error.blindspot_log_failed":
+		return "（调试日志文件不可用）"
 	case "command.retry_busy":
 		return "Agent 正在运行，请等待当前任务完成后再重试。"
 	case "command.edit_empty":

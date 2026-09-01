@@ -282,13 +282,17 @@ type Model struct {
 	// persistFullSessionMessages() to only append NEW messages.
 	// ⚠️ Must be updated whenever messages are appended to disk outside of
 	// persistFullSessionMessages() (e.g. submitMessage).
-	persistedMsgCount     int
-	projectMemoryLoading  bool
-	runCanceled           bool
-	runFailed             bool
-	runStartTime          time.Time // when the current agent run started (for bell timing)
-	subAgentsCanceling    bool      // true while async CancelAll() is in progress after user cancel
-	lastUserSubmission    string    // last non-slash user prompt, for /retry
+	persistedMsgCount    int
+	projectMemoryLoading bool
+	runCanceled          bool
+	runFailed            bool
+	runStartTime         time.Time // when the current agent run started (for bell timing)
+	subAgentsCanceling   bool      // true while async CancelAll() is in progress after user cancel
+	lastUserSubmission   string    // last non-slash user prompt, for /retry
+	// Blind-spot (unrecognized error) auto-retry: counters survive Model
+	// copies because handler methods run on the value receiver's parent.
+	blindSpotRetries int // attempts used for the current submission
+
 	activeAgentRunID      int
 	activeShellRunID      int
 	shellCommandSubmitter func(command string, addToHistory bool) tea.Cmd
