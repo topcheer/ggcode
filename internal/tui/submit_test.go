@@ -93,3 +93,25 @@ func TestPersistAttachedImageWritesStableFile(t *testing.T) {
 		t.Fatal("expected persisted image data to match source bytes")
 	}
 }
+
+// TestRestorePendingImagesMsgHandler pins #1393-A: the ExpandMentions
+// failure path sends captured attachments home via restorePendingImagesMsg;
+// Update appends them back to pendingImages. RunID-gated: a stale message
+// from an aborted run must NOT interleave into a newer run's state.
+func TestRestorePendingImagesMsgHandler(t *testing.T) {
+	m := newTestModel()
+	m.activeAgentRunID = 7
+	imgs := []imageAttachedMsg{{sourcePath: "shot.png"}}
+
+	// Same-run message restores.
+	m2, _ := m.Update(restorePendingImagesMsg{RunID: 7, Images: imgs})
+	if got := m2.(Model).pendingImages; len(got) != 1 || got[0].sourcePath != "shot.png" {
+		t.Fatalf("images not restored: %#v", got)
+	}
+
+	// Stale-run message is dropped.
+	m3, _ := m.Update(restorePendingImagesMsg{RunID: 6, Images: imgs})
+	if got := m3.(Model).pendingImages; len(got) != 0 {
+		t.Fatalf("stale-run restore interleaved: %#v", got)
+	}
+}
