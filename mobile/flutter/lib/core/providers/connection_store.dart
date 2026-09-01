@@ -397,7 +397,16 @@ class ConnectionStore {
     _connections.removeWhere((c) {
       // Keep if permanently failed (already handled by clearFailed)
       if (c.permanentlyFailed) return false; // will be cleaned separately
-      // Remove if last connected before cutoff
+      // #1418-A: NEVER reap a connection that was alive when the app last
+      // ran. lastConnectedAt only refreshes on persisted EVENTS - an idle
+      // overnight connection (alive, no events for 6h+) used to be deleted
+      // on next launch TOGETHER WITH its renew_token URL, silently killing
+      // the 30-day auto-reconnect contract (relay share_auth.go renews
+      // defaultShareRenewTTL = 30d). Stale-alive is re-evaluated when the
+      // store loads / relays actually fail - reaping by wall-clock idle
+      // alone is wrong.
+      if (c.alive) return false;
+      // Remove if last connected before cutoff (and it was not alive)
       final lastConnected = c.lastConnectedAt ?? c.createdAt;
       return lastConnected.isBefore(cutoff);
     });

@@ -2030,6 +2030,12 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
   /// The old foreground service is demoted to background (not disposed).
   /// Messages from cache are loaded into UI immediately.
   void adoptService(ConnectionService svc, String sessionId, String url) {
+    // #1418-B: invalidate any in-flight connect() before rebinding. Without
+    // this bump the adopt shares its generation with the pending connect -
+    // when that connect's stale check passes it demotes THIS service back
+    // to background and hijacks the foreground (disconnect L487 /
+    // leaveSession L505 already bump for exactly this reason).
+    _nextConnectionGeneration();
     // Demote current foreground service to background (not dispose!)
     demoteToBackground();
 
