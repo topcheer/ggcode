@@ -211,3 +211,22 @@ func TestAssessSearchResultsAllowedDomainExemptFromDedup(t *testing.T) {
 		t.Fatalf("expected diversity cap of %d without exemption, got %d", maxResultsPerDomain, len(out))
 	}
 }
+
+// TestAssessSearchResultsExemptionNormalization pins #1406-B: an agent
+// passing "https://example.com" (or "example.com.") as an allowed domain
+// passed filterByDomain but MISSED the exemption key (weaker normalization
+// than the filter), so #1357's single-domain guarantee silently regressed
+// - 5 same-domain results cut to 2 despite the 3x prefetch. Both sides
+// share normalizeDomains now.
+func TestAssessSearchResultsExemptionNormalization(t *testing.T) {
+	results := make([]searchResult, 5)
+	for i := range results {
+		results[i] = searchResult{Title: fmt.Sprintf("r%d", i), URL: fmt.Sprintf("https://example.com/page%d", i)}
+	}
+	for _, domain := range []string{"https://example.com", "example.com.", "example.com"} {
+		out := assessSearchResults("q", results, []string{domain})
+		if len(out) != 5 {
+			t.Errorf("allowedDomains=%q: exemption missed, got %d results (want 5)", domain, len(out))
+		}
+	}
+}
