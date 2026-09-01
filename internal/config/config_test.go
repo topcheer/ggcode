@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/topcheer/ggcode/internal/auth"
@@ -1700,5 +1701,79 @@ func TestResolveEndpointSetVendorAPIKeyThenResolve(t *testing.T) {
 	}
 	if resolved.APIKey != "sk-vendor-input-key" {
 		t.Errorf("expected expanded vendor key, got %q", resolved.APIKey)
+	}
+}
+
+func TestNormalizedConfigLanguage(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		// Chinese variants
+		{"zh", "zh-CN"},
+		{"zh-CN", "zh-CN"},
+		{"zh_HANS", "zh-CN"},
+		{"cn", "zh-CN"},
+		// Traditional Chinese
+		{"zh-TW", "zh-TW"},
+		{"zh_HK", "zh-TW"},
+		{"tw", "zh-TW"},
+		// French variants incl. POSIX locale with codeset suffix
+		{"fr", "fr"},
+		{"fr-FR", "fr"},
+		{"french", "fr"},
+		{"fr_FR.UTF-8", "fr"},
+		// Other languages
+		{"ja", "ja"},
+		{"ko-KR", "ko"},
+		{"es", "es"},
+		{"de-DE", "de"},
+		{"ru", "ru"},
+		{"pt-BR", "pt"},
+		{"vi", "vi"},
+		// Unknown falls back to English
+		{"", "en"},
+		{"xx", "en"},
+		{"klingon", "en"},
+	}
+	for _, tc := range cases {
+		if got := normalizedConfigLanguage(tc.in); got != tc.want {
+			t.Errorf("normalizedConfigLanguage(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestBuildReplyLanguageGuidance(t *testing.T) {
+	cases := []struct {
+		lang    string
+		wantSub string
+	}{
+		{"zh", "Simplified Chinese"},
+		{"zh-TW", "Traditional Chinese"},
+		{"fr", "French"},
+		{"fr-FR", "French"},
+		{"de", "German"},
+		{"ja", "Japanese"},
+		{"ko", "Korean"},
+		{"es", "Spanish"},
+		{"ru", "Russian"},
+		{"pt", "Portuguese"},
+		{"vi", "Vietnamese"},
+		{"", "English"},
+		{"unknown-lang", "English"},
+	}
+	for _, tc := range cases {
+		got := buildReplyLanguageGuidance(tc.lang)
+		if got == "" {
+			t.Errorf("buildReplyLanguageGuidance(%q) returned empty", tc.lang)
+			continue
+		}
+		if !strings.Contains(got, tc.wantSub) {
+			t.Errorf("buildReplyLanguageGuidance(%q) = %q, want substring %q", tc.lang, got, tc.wantSub)
+		}
+		// Every guidance must preserve the per-turn override rule.
+		if !strings.Contains(got, "follow the user's current request") {
+			t.Errorf("buildReplyLanguageGuidance(%q) missing per-turn override clause: %q", tc.lang, got)
+		}
 	}
 }

@@ -21,3 +21,9 @@ desktop/ggcode-desktop-wails/main.go
 # Single os.Stdin.Read + send to buffered(chan,1), raced by a select with
 # timeout - the standard cancellable-read idiom.
 cmd/ggcode/pipe.go
+
+# Separate-process tray helper: one bounded conn.Read loop whose only job is
+# systray.Quit() on socket death. It lives outside the main module and a
+# panic here only kills the 100-line helper, whose death the main app already
+# handles (lock-guarded respawn with backoff, #1403).
+desktop/ggcode-desktop-wails/trayhelper/main.go

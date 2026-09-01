@@ -1666,19 +1666,60 @@ func summarizeNames(names []string, limit int) string {
 	return fmt.Sprintf("%s (+%d more)", strings.Join(head, ", "), len(names)-limit)
 }
 
+// replyLanguageNames maps normalized language codes to their English names
+// for the reply-language guidance. Must stay in sync with the TUI language
+// list (internal/tui/i18n.go languageOptionsFor).
+var replyLanguageNames = map[string]string{
+	"zh-CN": "Simplified Chinese",
+	"zh-TW": "Traditional Chinese",
+	"ja":    "Japanese",
+	"ko":    "Korean",
+	"es":    "Spanish",
+	"fr":    "French",
+	"de":    "German",
+	"ru":    "Russian",
+	"pt":    "Portuguese",
+	"vi":    "Vietnamese",
+}
+
 func buildReplyLanguageGuidance(language string) string {
-	switch normalizedConfigLanguage(language) {
-	case "zh-CN":
-		return "- Default to Simplified Chinese for user-facing replies because the configured interface language is Simplified Chinese.\n- If the user's current request clearly asks in another language or explicitly requests a different reply language, follow the user's current request for that turn."
-	default:
-		return "- Default to English for user-facing replies because the configured interface language is English.\n- If the user's current request clearly asks in another language or explicitly requests a different reply language, follow the user's current request for that turn."
+	normalized := normalizedConfigLanguage(language)
+	name, ok := replyLanguageNames[normalized]
+	if !ok {
+		name = "English"
 	}
+	return fmt.Sprintf("- Default to %s for user-facing replies because the configured interface language is %s.\n- If the user's current request clearly asks in another language or explicitly requests a different reply language, follow the user's current request for that turn.", name, name)
 }
 
 func normalizedConfigLanguage(language string) string {
-	switch strings.ToLower(strings.TrimSpace(language)) {
-	case "zh", "zh-cn", "zh_hans", "zh-hans", "cn", "zh-sg":
+	norm := strings.ToLower(strings.TrimSpace(language))
+	// Strip POSIX codeset suffix (fr_FR.UTF-8) and normalize _ to -,
+	// mirroring the TUI layer's normalizeLanguage.
+	if i := strings.IndexByte(norm, '.'); i >= 0 {
+		norm = norm[:i]
+	}
+	norm = strings.ReplaceAll(norm, "_", "-")
+	switch norm {
+	case "zh", "zh-cn", "zh-hans", "cn", "zh-sg":
 		return "zh-CN"
+	case "zh-tw", "zh-hant", "zh-hk", "zh-mo", "tw":
+		return "zh-TW"
+	case "ja", "ja-jp", "japanese", "jp":
+		return "ja"
+	case "ko", "ko-kr", "korean", "kr":
+		return "ko"
+	case "es", "es-es", "spanish":
+		return "es"
+	case "fr", "fr-fr", "french":
+		return "fr"
+	case "de", "de-de", "german":
+		return "de"
+	case "ru", "ru-ru", "russian":
+		return "ru"
+	case "pt", "pt-br", "pt-pt", "portuguese":
+		return "pt"
+	case "vi", "vi-vn", "vietnamese":
+		return "vi"
 	default:
 		return "en"
 	}
