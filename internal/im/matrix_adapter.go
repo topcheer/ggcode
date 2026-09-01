@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -22,6 +23,8 @@ import (
 
 	imagepkg "github.com/topcheer/ggcode/internal/image"
 
+	"go.mau.fi/util/dbutil"
+
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/safego"
@@ -32,6 +35,11 @@ const (
 	matrixMaxMessageLen = 60000 // Synapse default max_event_size is 100KB; 60K leaves room for event JSON metadata
 	matrixSyncTimeout   = 30000
 	matrixCryptoDBName  = "matrix-crypto.db"
+	// matrixCryptoPickleKey encrypts crypto material at rest in the
+	// SQLite store. Device-identity continuity, not secrecy against the
+	// local user, is the goal (#1404-A); a fixed key keeps the store
+	// portable across restarts without a new secrets bootstrap path.
+	matrixCryptoPickleKey = "ggcode-matrix-crypto-v1"
 
 	// matrixInterMessageDelay is the delay between consecutive messages to the
 	// same room. Most Matrix homeservers rate-limit at ~1 message/second/user.
@@ -309,8 +317,59 @@ func (a *matrixAdapter) runOnce(ctx context.Context) error {
 	return nil
 }
 
+// openPersistentCryptoStore opens the SQLite-backed crypto store so the
+// Olm device identity, sessions and Megolm room keys survive reconnects
+// and restarts (#1404-A). The file is keyed by adapter name under the
+// workspace config dir; accountID is derived from homeserver+name so two
+// adapters never share a device identity.
+func (a *matrixAdapter) openPersistentCryptoStore() (crypto.Store, error) {
+	dir := filepath.Join(config.ConfigDir(), "matrix-crypto")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, fmt.Errorf("create crypto state dir: %w", err)
+	}
+	dbPath := filepath.Join(dir, fmt.Sprintf("%s.db", sanitizeFileToken(a.name)))
+	uri := fmt.Sprintf("sqlite3://file:%s?_txlock=immediate", dbPath)
+	db, err := dbutil.NewWithDialect(uri, "sqlite3")
+	if err != nil {
+		return nil, fmt.Errorf("open crypto db %s: %w", dbPath, err)
+	}
+	accountID := fmt.Sprintf("%s|%s", a.homeserver, a.name)
+	deviceID := a.client.DeviceID
+	return crypto.NewSQLCryptoStore(db, nil, accountID, deviceID, []byte(matrixCryptoPickleKey)), nil
+}
+
+// sanitizeFileToken reduces an adapter name to a filename-safe token.
+func sanitizeFileToken(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	return b.String()
+}
+
 func (a *matrixAdapter) setupCrypto(ctx context.Context) error {
-	store := crypto.NewMemoryStore(nil)
+	// #1404-A: this used to be crypto.NewMemoryStore(nil) - a fresh Olm
+	// device identity on EVERY runOnce re-entry (any transient sync error
+	// backing off, not just process restarts). Consequences: peers had to
+	// re-verify the "new" device (Element warns on unverified devices and
+	// may withhold messages), and offline-period Megolm sessions were
+	// undecryptable with no key-forwarding state - messages failed to
+	// decrypt and were silently dropped (debug.Log + return). The
+	// matrixCryptoDBName constant existed unused - persistence was planned
+	// but never landed. SQLite-backed SQLCryptoStore now keeps the device
+	// identity, sessions and sync token across restarts/reconnects; when
+	// the state file cannot be opened we fall back to MemoryStore rather
+	// than losing the adapter entirely.
+	store, err := a.openPersistentCryptoStore()
+	if err != nil {
+		debug.Log("matrix", "adapter=%s persistent crypto store unavailable (%v) - falling back to in-memory (E2EE identity will rotate on reconnect)", a.name, err)
+		store = crypto.NewMemoryStore(nil)
+	}
 
 	mach := crypto.NewOlmMachine(a.client, nil, store, &cryptoStateStore{adapter: a})
 
