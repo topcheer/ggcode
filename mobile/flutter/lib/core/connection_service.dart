@@ -817,7 +817,23 @@ class ConnectionService {
         'client_id': _clientId,
       });
     } catch (error) {
+      // #1413-A: the old catch only pushed to _errorController - the
+      // _keyExchangeReady completer was left pending forever, so every
+      // sendEncrypted awaited a future that never completed: sends hung
+      // silently while the WebSocket stayed healthy (heartbeats fine) and
+      // the UI kept showing connected. Complete with the error and drop
+      // the connection state so the user-visible status reflects reality.
+      final ready = _keyExchangeReady;
+      if (ready != null && !ready.isCompleted) {
+        ready.completeError(StateError('Key exchange failed: $error'));
+      }
       _errorController.add('Share key exchange failed: $error');
+      // Drop to the same disconnected state the other failure paths use
+      // (see connect()'s error handling): the UI must not keep showing
+      // connected while every send is silently hanging.
+      _statusController.add(ConnectionStatus.disconnected);
+      _socket?.close();
+      _socket = null;
     }
   }
 
@@ -1044,7 +1060,15 @@ class ConnectionService {
 
     final ready = _keyExchangeReady;
     if (ready != null && !ready.isCompleted) {
-      await ready.future;
+      // #1413-A: no timeout meant a peer that never answers the key
+      // exchange (version mismatch / malicious relay / corrupt data)
+      // parked here forever - silent no-response sends until a manual
+      // reconnect. 30s bounded wait; the error path above now also
+      // completes the future so this fires only on true silence.
+      await ready.future.timeout(
+        const Duration(seconds: 30),
+        onTimeout: () => throw TimeoutException('Key exchange timed out'),
+      );
     }
     final crypto = _crypto;
     if (crypto == null) {
