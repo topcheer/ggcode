@@ -41,9 +41,16 @@ func (i *iterm2Backend) CreateTab(ctx context.Context, title, logfile string) (s
 	safeTitle := sanitizeAS(title)
 	// #1369 side-fix: a log path containing ' (apostrophed parent dir or
 	// teammate name) breaks the AppleScript literal and the panel dies,
-	// which stacks with the permanent-failure path. Escape like Go:
+	// which stacks with the permanent-failure path.
+	// #1414-A: the original fix escaped ' as \' - correct for the
+	// AppleScript layer but then the whole command string goes through
+	// `write text` into a POSIX SHELL, where backslash inside single
+	// quotes is literal: tail -f '...O\'Brien...' closed the quote at
+	// the apostrophe and the trailing quote never closed - unexpected
+	// EOF, tail never ran, the tab sat dead. Shell-correct escaping is
+	// '\'' (close quote, escaped apostrophe, reopen).
 	safeLog := strings.ReplaceAll(logfile, "\\", "\\\\")
-	safeLog = strings.ReplaceAll(safeLog, "'", "\\'")
+	safeLog = strings.ReplaceAll(safeLog, "'", "'\\''")
 	tailCmd := fmt.Sprintf("tail -f '%s'", safeLog)
 	safeCmd := sanitizeAS(tailCmd)
 	// Capture session ID via a variable instead of "current session of newTab"

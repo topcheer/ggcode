@@ -86,31 +86,52 @@ func formatDone(isError bool) string {
 func stripAnsi(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
-	inEscape := false
-	sawBracket := false
+	const (
+		statePlain  = iota
+		stateEsc    // saw ESC, deciding CSI vs two-byte
+		stateCsi    // inside CSI [... final @-~
+		stateOsc    // #1414-B: inside OSC ] ... BEL/ST
+		stateOscEsc // OSC saw ESC: ST (\) ends, else stay
+	)
+	st := statePlain
 	for _, c := range s {
-		if !inEscape {
+		switch st {
+		case statePlain:
 			if c == '\x1b' {
-				inEscape = true
-				sawBracket = false
+				st = stateEsc
 			} else {
 				b.WriteRune(c)
 			}
-			continue
-		}
-		// inside an escape sequence
-		if !sawBracket {
+		case stateEsc:
 			if c == '[' {
-				sawBracket = true
+				st = stateCsi
+			} else if c == ']' {
+				// OSC: ESC ] ... terminated by BEL or ST (ESC \).
+				// #1414-B: the old code fell through to the two-byte
+				// branch here - ']' was emitted and the OSC BODY (titles,
+				// hyperlink URLs) plus BEL leaked verbatim into the
+				// preview pane as invisible control bytes.
+				st = stateOsc
 			} else {
-				inEscape = false // two-byte ESC sequence (e.g. \x1bM)
+				st = statePlain // two-byte ESC sequence (e.g. \x1bM)
 				b.WriteRune(c)
 			}
-			continue
-		}
-		// CSI: ends at a final byte in @-~ (0x40-0x7E)
-		if c >= 0x40 && c <= 0x7E {
-			inEscape = false
+		case stateCsi:
+			if c >= 0x40 && c <= 0x7E {
+				st = statePlain
+			}
+		case stateOsc:
+			if c == '\x07' { // BEL terminator
+				st = statePlain
+			} else if c == '\x1b' {
+				st = stateOscEsc
+			}
+		case stateOscEsc:
+			if c == '\\' { // ST terminator
+				st = statePlain
+			} else {
+				st = stateOsc // not ST; keep consuming OSC body
+			}
 		}
 	}
 	return b.String()
