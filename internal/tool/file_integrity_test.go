@@ -375,3 +375,47 @@ func TestStaleReadHint_AfterWriteNotStale(t *testing.T) {
 		t.Errorf("expected empty hint after RecordWrite, got %q", hint)
 	}
 }
+
+// TestNormalizePathResolvesSymlinkAliases pins #1408: the tracker keyed
+// modtimes by LEXICAL path, so reading /real/a.txt and writing /link/a.txt
+// (or the reverse) bypassed the stale check - silently overwriting external
+// modifications, exactly what #1358/#881 exist to prevent.
+func TestNormalizePathResolvesSymlinkAliases(t *testing.T) {
+	dir := t.TempDir()
+	real := filepath.Join(dir, "real.txt")
+	if err := os.WriteFile(real, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link.txt")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if normalizePath(real) != normalizePath(link) {
+		t.Fatalf("alias must normalize to one key: real=%q link=%q", normalizePath(real), normalizePath(link))
+	}
+}
+
+// TestCheckStaleThroughAlias: an external modification via one alias must
+// be detected when writing through the other (previously false).
+func TestCheckStaleThroughAlias(t *testing.T) {
+	dir := t.TempDir()
+	real := filepath.Join(dir, "real.txt")
+	if err := os.WriteFile(real, []byte("v1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link.txt")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+
+	tracker := NewFileIntegrityTracker()
+	tracker.RecordRead(real) // read via real path
+
+	// External modification through the ALIAS path.
+	if err := os.WriteFile(link, []byte("v2-external"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if stale, _ := tracker.CheckStale(real); !stale {
+		t.Fatal("stale check via real path missed external modification through alias (#1408)")
+	}
+}

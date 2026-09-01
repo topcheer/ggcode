@@ -45,7 +45,19 @@ func normalizePath(path string) string {
 	if err != nil {
 		return filepath.Clean(path)
 	}
-	return filepath.Clean(abs)
+	abs = filepath.Clean(abs)
+	// #1408: without EvalSymlinks the tracker keyed its modtimes map by
+	// LEXICAL path, so aliases of the same file bypassed every protection
+	// sharing this key space (stale check, blind-write warning, external-
+	// modification detection): read /real/a.txt then write /link/a.txt
+	// silently overwrote external modifications - exactly what #1358/#881
+	// exist to prevent. macOS system aliases (/tmp -> /private/tmp) trigger
+	// this whenever an agent mixes spellings across turns. Fallback keeps
+	// the lexical path when the file does not exist yet (first write).
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		return resolved
+	}
+	return abs
 }
 
 // RecordRead records the current mtime of a file after it has been successfully
