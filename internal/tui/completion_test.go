@@ -318,3 +318,19 @@ func TestParseMentions_FailedRefStaysInMessage(t *testing.T) {
 		t.Fatalf("resolved reference should be stripped, got: %q", cleaned)
 	}
 }
+
+// TestCompleteMentionRejectsTraversal pins #1411-B: '@../' used to walk
+// ABOVE workDir and list parent directories (filename/structure leak),
+// and the '@../foo' candidates were then rejected by ParseMentions (#889)
+// - completion offered what parsing ate back. Both sides refuse now.
+func TestCompleteMentionRejectsTraversal(t *testing.T) {
+	dir := t.TempDir()
+	// Parent contains entries that would leak if listed.
+	os.WriteFile(filepath.Join(filepath.Dir(dir), "leaked-secret.txt"), []byte(""), 0o644)
+
+	for _, prefix := range []string{"../", "../../", "../"} {
+		if got := CompleteMention(prefix, dir, nil); len(got) != 0 {
+			t.Errorf("CompleteMention(%q) must return no completions, got %v", prefix, got)
+		}
+	}
+}
