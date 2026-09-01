@@ -199,3 +199,24 @@ func TestExtractURLsClosingDelimiters(t *testing.T) {
 		}
 	}
 }
+
+// TestMaskAPIKey pins #1410: the byte-length gate + rune-count arithmetic
+// computed negative Repeat counts for multi-byte keys (15 bytes / 5 runes)
+// and panicked the TUI. All measures are runes now.
+func TestMaskAPIKey(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"", "****"},
+		{"short", "****"},          // 5 runes
+		{"12345678", "****"},       // exactly 8 runes
+		{"123456789", "1234*6789"}, // 9 runes
+		{"0123456789abcdef", "0123********cdef"},
+		{"密密密密密", "****"},              // 15 bytes / 5 runes - used to panic
+		{"ab中文de", "****"},             // 9 bytes / 6 runes - used to panic
+		{"12345678中文字", "1234***8中文字"}, // 11 runes: first 4 + 3 stars + last 4 (incl. '8')
+	}
+	for _, c := range cases {
+		if got := maskAPIKey(c.in); got != c.want {
+			t.Errorf("maskAPIKey(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}

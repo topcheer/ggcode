@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/atotto/clipboard"
@@ -20,6 +21,20 @@ import (
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
 	"github.com/topcheer/ggcode/internal/util"
 )
+
+// maskAPIKey renders an API key for display: first 4 + stars + last 4
+// runes when long enough, otherwise a fixed mask.
+// #1410: the gate used BYTE length while the arithmetic used RUNE count -
+// multi-byte values (e.g. 15-byte/5-rune keys) computed a negative Repeat
+// count and panicked, crashing the whole TUI (bubbletea Update has no
+// recover). Both measures are runes now.
+func maskAPIKey(key string) string {
+	runes := []rune(key)
+	if utf8.RuneCountInString(key) <= 8 {
+		return "****"
+	}
+	return string(runes[:4]) + strings.Repeat("*", len(runes)-8) + string(runes[len(runes)-4:])
+}
 
 func (m Model) handleModeSwitch() (tea.Model, tea.Cmd) {
 	oldMode := m.mode
@@ -423,10 +438,7 @@ func (m *Model) handleConfigCommand(parts []string) tea.Cmd {
 			if vendorScoped {
 				scope = "vendor " + m.config.Vendor
 			}
-			masked := "****"
-			if len(apiKeyValue) > 8 {
-				masked = string([]rune(apiKeyValue)[:4]) + strings.Repeat("*", len([]rune(apiKeyValue))-8) + string([]rune(apiKeyValue)[len([]rune(apiKeyValue))-4:])
-			}
+			masked := maskAPIKey(apiKeyValue)
 			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("\u2713 API key set for %s: %s", scope, masked))
 			if err := m.reloadActiveProvider(); err != nil {
 				m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Provider reload: %s", err))
@@ -1212,10 +1224,7 @@ func (m *Model) handleConfigAddEndpoint(args []string) tea.Cmd {
 
 	msg := fmt.Sprintf("\u2713 Added endpoint %q to vendor %q (protocol=%s, base_url=%s)", name, vendor, protocol, baseURL)
 	if apiKey != "" {
-		masked := "****"
-		if len(apiKey) > 8 {
-			masked = string([]rune(apiKey)[:4]) + strings.Repeat("*", len([]rune(apiKey))-8) + string([]rune(apiKey)[len([]rune(apiKey))-4:])
-		}
+		masked := maskAPIKey(apiKey)
 		msg += fmt.Sprintf(", apikey=%s", masked)
 	}
 	m.chatWriteSystem(nextSystemID(), msg)
