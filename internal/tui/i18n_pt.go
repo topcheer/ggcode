@@ -238,7 +238,11 @@ func ptCatalog(key string) string {
 	case "command.model_switched":
 		return "Modelo alterado para: %s (fornecedor: %s)"
 	case "command.model_current":
-		return "Modelo atual: %s (fornecedor: %s)"
+		// #1416: the pt translation dropped the 3rd verb (available-models
+		// list) - the only catalog of 9 with 2 instead of 3 %s. Both callers
+		// (commands.go, remote_commands.go) pass 3 args, so pt users got
+		// `%!(EXTRA string=...)` garbage and lost the whole model list.
+		return "Modelo atual: %s (fornecedor: %s)\nModelos disponíveis: %s\nUse /model para abrir o painel de modelos ou /model <nome-do-modelo> para alternar diretamente.\n\n"
 	case "command.allow_set":
 		return "✓ %s agora é sempre permitido"
 

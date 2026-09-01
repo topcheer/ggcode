@@ -263,6 +263,11 @@ func (m Model) renderSignalPanel() string {
 		body = append(body, "", m.renderIMEditInput(&panel.editState))
 	}
 
+	if panel.qrFetching {
+		// #1416-B: qr_fetching had zero consumers - the network round-trip
+		// showed nothing at all (#1375's "silent paths speak" leftover).
+		body = append(body, "", lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.signal.qr_fetching")))
+	}
 	if panel.message != "" {
 		body = append(body, "", lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render(" "+panel.message))
 	}
@@ -364,7 +369,14 @@ func (m *Model) handleSignalPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		// #1375-A: silent no-op when the daemon is down made q feel
 		// broken - the qr_no_daemon key existed in both languages with
 		// zero callers. Surface it via the panel message line.
-		if panel.daemonOK != nil && *panel.daemonOK {
+		// #1416-B: distinguish daemonOK==nil (check still in flight) from
+		// false (not running) - a fresh panel + immediate q used to report
+		// "Daemon not running" and steer the user into a needless reinstall.
+		if panel.daemonOK == nil {
+			panel.message = m.t("panel.signal.daemon_checking")
+			return *m, nil
+		}
+		if *panel.daemonOK {
 			panel.qrFetching = true
 			panel.qrError = ""
 			panel.qrCode = ""
