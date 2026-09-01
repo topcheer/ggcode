@@ -293,7 +293,7 @@ func (m *Model) restorePendingInput() {
 	}
 	m.queuedChatIDs = nil
 	m.lastQueuedChatID = ""
-	pending := m.pending.consumeVisiblePrefix()
+	pending, restoredImgs := m.pending.consumeVisiblePrefix()
 	// Hidden submissions (cron/remote-injected) are intentionally NOT restored
 	// to the input box (they are machine-originated). They stay queued and are
 	// drained by the next submitPendingSubmissionCmd; log so the drop window
@@ -312,6 +312,13 @@ func (m *Model) restorePendingInput() {
 		m.input.SetValue(draft)
 	default:
 		m.input.SetValue(pending + "\n\n" + draft)
+	}
+	// #1411: restore the queued screenshots alongside the text - the
+	// placeholder bubbles were removed above, so without this the images
+	// were silently gone.
+	if len(restoredImgs) > 0 {
+		m.pendingImages = append(m.pendingImages, restoredImgs...)
+		debug.Log("tui", "restorePendingInput: restored %d image(s) from cancelled queue", len(restoredImgs))
 	}
 	composerCursorEnd(&m.input)
 }
@@ -487,22 +494,34 @@ func (q *pendingQueue) consume() string {
 	return text
 }
 
-func (q *pendingQueue) consumeVisiblePrefix() string {
+// consumeVisiblePrefix drains all visible (non-hidden, non-meta) queued
+// items and returns their combined text AND images. #1411: the images
+// were silently dropped here - only popLastVisible and consumeDetailed
+// preserved them - so Esc-cancel restore gave back the text while the
+// attached screenshots vanished (placeholder bubble removed too, no hint).
+func (q *pendingQueue) consumeVisiblePrefix() (string, []imageAttachedMsg) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	queue := q.ensureQueueLocked()
 	items := queue.ConsumePrefix(func(item agentruntime.PendingMessage[*tunnel.MessageData]) bool {
 		return !item.Hidden && item.Meta == nil
 	})
+	// Collect images from ALL consumed items (q.items holds pre-consume
+	// state; same pattern as consumeDetailed).
+	consumedCount := len(items)
+	var allImgs []imageAttachedMsg
+	for i := 0; i < consumedCount && i < len(q.items); i++ {
+		allImgs = append(allImgs, q.items[i].Images...)
+	}
 	q.syncItemsFromQueueLocked(queue)
 	if len(items) == 0 {
-		return ""
+		return "", allImgs
 	}
 	parts := make([]string, 0, len(items))
 	for _, item := range items {
 		parts = append(parts, item.Text)
 	}
-	return strings.TrimSpace(strings.Join(parts, "\n\n"))
+	return strings.TrimSpace(strings.Join(parts, "\n\n")), allImgs
 }
 
 func (q *pendingQueue) consumeDetailed() (string, bool, *tunnel.MessageData, []imageAttachedMsg) {

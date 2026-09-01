@@ -189,6 +189,15 @@ func CompleteMention(prefix string, workDir string, fuzzyFallback FuzzyFileSearc
 		partial = filepath.Base(fullPath)
 	}
 
+	// #1411-B: reject traversal. "@../" used filepath.Join to walk ABOVE
+	// workDir and list parent directories (filename/structure leak), and
+	// the candidates it produced (@../foo) were then REJECTED by
+	// ParseMentions (#889 rejects rel=="..") - "completion offers what
+	// parsing eats back". Guard here so both sides agree.
+	if rel, err := filepath.Rel(workDir, dir); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return nil
+	}
+
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil
