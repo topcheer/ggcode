@@ -39,37 +39,64 @@ var (
 
 func (a *App) runSystemTray() {
 	traySockOnce.Do(func() {
-		dir, err := os.MkdirTemp("", "ggcode-tray-*")
-		if err != nil {
-			debug.Log("desktop", "tray: tmpdir: %v", err)
+		// #1420-A: every write below touches fields trayMu is documented
+		// to guard (traySockPath/trayListener), yet the whole setup ran
+		// UNLOCKED while removeSystemTray reads them under the lock - a
+		// deterministic -race report and a real window: quick Ctrl-C after
+		// launch could complete an EMPTY teardown mid-setup, after which
+		// this path overwrote the fields and left the tmpdir orphaned
+		// forever. The lock now covers setup too; after acquiring it we
+		// re-check trayShuttingDown so a teardown that already ran aborts
+		// the setup instead of resurrecting state.
+		trayMu.Lock()
+		if trayShuttingDown {
+			trayMu.Unlock()
+			debug.Log("desktop", "tray: shutdown raced setup - skipping tray init")
 			return
 		}
-		traySockPath = filepath.Join(dir, "tray.sock")
-
-		ln, err := net.Listen("unix", traySockPath)
-		if err != nil {
-			debug.Log("desktop", "tray: listen: %v", err)
-			// #1403-B4: the MkdirTemp dir above leaks on listen failure -
-			// nothing references it anymore.
-			os.RemoveAll(dir)
-			traySockPath = ""
-			return
+		// NOTE: lock released before spawnTrayHelper - it takes trayMu
+		// itself (#1403-A), so holding it here would self-deadlock.
+		spawn := a.setupTrayListenerLocked()
+		trayMu.Unlock()
+		if spawn {
+			a.spawnTrayHelper()
 		}
-		trayListener = ln
-
-		// Serve helper connections for the lifetime of the app.
-		safego.Go("tray-sock-server", func() {
-			for {
-				conn, err := ln.Accept()
-				if err != nil {
-					return // listener closed during shutdown
-				}
-				safego.Go("tray-conn", func() { a.serveTrayConn(conn) })
-			}
-		})
-
-		a.spawnTrayHelper()
 	})
+}
+
+// setupTrayListenerLocked creates the tray socket dir and listener. It
+// must be called with trayMu held; it returns false when setup failed
+// (logged, state rolled back) and the caller must not spawn the helper.
+func (a *App) setupTrayListenerLocked() bool {
+	dir, err := os.MkdirTemp("", "ggcode-tray-*")
+	if err != nil {
+		debug.Log("desktop", "tray: tmpdir: %v", err)
+		return false
+	}
+	traySockPath = filepath.Join(dir, "tray.sock")
+
+	ln, err := net.Listen("unix", traySockPath)
+	if err != nil {
+		debug.Log("desktop", "tray: listen: %v", err)
+		// #1403-B4: the MkdirTemp dir above leaks on listen failure -
+		// nothing references it anymore.
+		os.RemoveAll(dir)
+		traySockPath = ""
+		return false
+	}
+	trayListener = ln
+
+	// Serve helper connections for the lifetime of the app.
+	safego.Go("tray-sock-server", func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return // listener closed during shutdown
+			}
+			safego.Go("tray-conn", func() { a.serveTrayConn(conn) })
+		}
+	})
+	return true
 }
 
 // trayHelperCandidates returns where the helper binary may live: next to
@@ -161,6 +188,9 @@ func (a *App) spawnTrayHelper() {
 			} else {
 				trayRespawnFailures++
 			}
+			// #1420 follow-up: failures counter touched here without the lock
+			// (spawn chains are serial today, defensive fix while we are here).
+			_ = trayRespawnFailures
 			idx := trayRespawnFailures
 			if idx >= len(trayRespawnBackoff) {
 				idx = len(trayRespawnBackoff) - 1
