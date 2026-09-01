@@ -365,6 +365,15 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 	case agentErrMsg:
 		return m.handleAgentErrMsg(msg)
 
+	case restorePendingImagesMsg:
+		// #1393-A: the aborted run's captured attachments come home.
+		if msg.RunID != m.activeAgentRunID {
+			return m, nil // a newer run started; don't interleave its state
+		}
+		m.pendingImages = append(m.pendingImages, msg.Images...)
+		debug.Log("tui", "restored %d pending image(s) from aborted submit (expand failure)", len(msg.Images))
+		return m, nil
+
 	case blindSpotRetryMsg:
 		return m, m.handleBlindSpotRetryMsg(msg)
 

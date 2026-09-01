@@ -196,6 +196,14 @@ type agentErrMsg struct {
 	Err   error
 }
 
+// restorePendingImagesMsg returns attachments captured by a submit that
+// aborted before the agent started (#1393-A: ExpandMentions failure) -
+// without it the placeholder bubbles stayed while the images were gone.
+type restorePendingImagesMsg struct {
+	RunID  int
+	Images []imageAttachedMsg
+}
+
 // blindSpotRetryMsg fires after the auto-retry delay when a run failed
 // with an unrecognized (blind-spot) error. The TUI resubmits the same text
 // up to blindSpotMaxRetries times so transient unknown failures recover

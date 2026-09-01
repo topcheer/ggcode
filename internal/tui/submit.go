@@ -167,6 +167,12 @@ func (m *Model) startAgentWithExpand(text string) tea.Cmd {
 			workDir, _ := os.Getwd()
 			expandedMsg, expandErr := ExpandMentions(text, workDir)
 			if expandErr != nil && m.program != nil {
+				// #1393-A: imgs were captured and cleared from pendingImages
+				// above - the placeholder bubbles are rendered, the agent never
+				// starts, and without this restore the attachments were
+				// silently lost forever. Route through Update (never write m
+				// fields from the Cmd goroutine) alongside the error notice.
+				m.program.Send(restorePendingImagesMsg{RunID: runID, Images: imgs})
 				m.program.Send(agentErrMsg{RunID: runID, Err: expandErr})
 				return
 			}
