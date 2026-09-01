@@ -12,6 +12,17 @@ import (
 // handleMcpServersMsg handles the corresponding message case.
 func (m Model) handleMcpServersMsg(msg mcpServersMsg) (Model, tea.Cmd) {
 	m.mcpServers = toMCPInfos(msg.Servers)
+	// #1396-A: the replace above used to land with NO clamp - uninstall
+	// the last (cursor-on-it) server and every subsequent key handler
+	// indexing m.mcpServers[panel.selected] panicked (stable repro:
+	// 2 servers, cursor on the 2nd, x, then enter). The clamp further
+	// down at :104 compares against the OLD list, i.e. never fires.
+	if m.mcpPanel != nil && m.mcpPanel.selected >= len(m.mcpServers) {
+		m.mcpPanel.selected = len(m.mcpServers) - 1
+		if m.mcpPanel.selected < 0 {
+			m.mcpPanel.selected = 0
+		}
+	}
 	m.refreshCommands()
 	if m.mcpManager != nil {
 		if pending := m.mcpManager.PendingOAuth(); pending != nil {

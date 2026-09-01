@@ -371,6 +371,27 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 	case agentErrMsg:
 		return m.handleAgentErrMsg(msg)
 
+	case imBindResultMsg:
+		// #1396-B: generic IM panel flows (QQ etc.) emit bind/unbind/clear/
+		// create/share-link results via imBindResultMsg - which had NO case
+		// here (and no default), so every result was silently dropped:
+		// share links, QR payloads, and all bind errors. Route to the
+		// generic IM panel bar like the per-platform handlers do.
+		if m.imPanel != nil {
+			switch {
+			case msg.err != nil:
+				m.imPanel.message = msg.err.Error()
+			case msg.shareLink != "":
+				m.imPanel.message = msg.message + "\n" + msg.shareLink
+				if msg.shareQRCode != "" {
+					m.imPanel.message += "\n" + msg.shareQRCode
+				}
+			case msg.message != "":
+				m.imPanel.message = msg.message
+			}
+		}
+		return m, nil
+
 	case restorePendingImagesMsg:
 		// #1393-A: the aborted run's captured attachments come home.
 		if msg.RunID != m.activeAgentRunID {

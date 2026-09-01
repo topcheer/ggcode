@@ -174,6 +174,15 @@ func (m Model) handleAgentDoneMsg(msg agentDoneMsg) (Model, tea.Cmd) {
 // handleErrMsg handles the corresponding message case.
 func (m Model) handleErrMsg(msg errMsg) (Model, tea.Cmd) {
 	if errors.Is(msg.err, context.Canceled) {
+		// #1396-C: same four teardown pieces as the done path (L34/44/57) -
+		// a cancelled run still flushed partial streaming text and must
+		// not leak remoteInboundAdapter suppression into the next run.
+		m.remoteInboundAdapter = ""
+		m.chatFinishAssistant(m.currentAssistantID())
+		if m.streamBuffer != nil {
+			m.renderStreamBuffer(true)
+			m.streamBuffer = nil
+		}
 		// Even on cancellation, persist any messages that were added
 		// during the run (e.g. partial assistant response, tool results).
 		// The agent loop already fills cancelled tool_results via
@@ -195,6 +204,15 @@ func (m Model) handleErrMsg(msg errMsg) (Model, tea.Cmd) {
 		m.pushTunnelCurrentActivity()
 		m.chatListFollowOutput()
 		return m, nil
+	}
+	// #1396-C: failing runs streamed partial text too - without these the
+	// assistant bubble stays "streaming" until the next done and the
+	// partial text never lands.
+	m.remoteInboundAdapter = ""
+	m.chatFinishAssistant(m.currentAssistantID())
+	if m.streamBuffer != nil {
+		m.renderStreamBuffer(true)
+		m.streamBuffer = nil
 	}
 	m.runFailed = true
 	m.setLoading(false)
@@ -238,6 +256,13 @@ func (m Model) handleAgentErrMsg(msg agentErrMsg) (Model, tea.Cmd) {
 		return m, nil
 	}
 	if errors.Is(msg.Err, context.Canceled) {
+		// #1396-C: cancelled agent run - same four teardown pieces.
+		m.remoteInboundAdapter = ""
+		m.chatFinishAssistant(m.currentAssistantID())
+		if m.streamBuffer != nil {
+			m.renderStreamBuffer(true)
+			m.streamBuffer = nil
+		}
 		// Even on cancellation, persist any messages that were added
 		// before the cancel (e.g. partial assistant response, tool results).
 		m.persistFullSessionMessages()
@@ -257,6 +282,14 @@ func (m Model) handleAgentErrMsg(msg agentErrMsg) (Model, tea.Cmd) {
 		m.pushTunnelCurrentActivity()
 		m.chatListFollowOutput()
 		return m, nil
+	}
+	// #1396-C: failing agent run - flush partial stream + finish bubble
+	// (previously only the done path did; see handleErrMsg note).
+	m.remoteInboundAdapter = ""
+	m.chatFinishAssistant(m.currentAssistantID())
+	if m.streamBuffer != nil {
+		m.renderStreamBuffer(true)
+		m.streamBuffer = nil
 	}
 	m.runFailed = true
 	m.setLoading(false)
