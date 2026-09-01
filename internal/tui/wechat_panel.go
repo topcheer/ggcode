@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"path/filepath"
@@ -19,6 +20,8 @@ import (
 	"github.com/topcheer/ggcode/internal/util"
 )
 
+const wechatPollMaxFailures = 8 // #1398-A: consecutive poll errors before giving up
+
 const wechatILinkBaseURL = "https://ilinkai.weixin.qq.com"
 
 // wechatPanelState tracks the WeChat iLink panel UI state.
@@ -30,6 +33,10 @@ type wechatPanelState struct {
 	qrcodeImage string // terminal-rendered QR (Unicode block chars)
 	botToken    string
 	editState   imAdapterEditState
+	// #1398-A: consecutive failed polls; >= wechatPollMaxFailures stops
+	// the retry loop (previously every error branch re-polled forever -
+	// a fast-failing network turned the open panel into a request storm).
+	pollFailures int
 }
 
 type wechatBindingEntry struct {
@@ -240,6 +247,13 @@ func wechatILinkRequest(ctx context.Context, method, url string) ([]byte, error)
 		return nil, err
 	}
 	defer resp.Body.Close()
+	// #1398-A: a 4xx/5xx body used to be handed to json.Unmarshal as if it
+	// were the expected payload - poll errors surfaced as parse failures,
+	// and every branch below re-polled unconditionally anyway.
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := util.ReadAll(resp.Body, 4096)
+		return nil, fmt.Errorf("ilink: HTTP %d: %s", resp.StatusCode, string(body))
+	}
 	return util.ReadAll(resp.Body, util.ReadLimitGeneral)
 }
 
@@ -280,6 +294,11 @@ func (m *Model) requestWechatQRCode() tea.Cmd {
 // pollWechatQRStatus polls the QR code scan status directly (no adapter needed).
 func (m *Model) pollWechatQRStatus(qrcodeToken string) tea.Cmd {
 	return func() tea.Msg {
+		// #1398-A: an empty token produced a guaranteed-failing request on
+		// every poll tick - nothing useful can come of it.
+		if qrcodeToken == "" {
+			return wechatQRPollMsg{err: errors.New("no QR token")}
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
@@ -336,6 +355,13 @@ func (m *Model) handleWechatQRPollMsg(msg wechatQRPollMsg) (Model, tea.Cmd) {
 	// status '' which routed to 'case "wait", ""', making the default's
 	// err branch unreachable dead code (silent infinite re-poll on 5xx).
 	if msg.err != nil {
+		panel.pollFailures++
+		if panel.pollFailures >= wechatPollMaxFailures {
+			// #1398-A: give up instead of hammering iLink forever.
+			panel.message = fmt.Sprintf("Poll failed %d times, stopped: %v", panel.pollFailures, msg.err)
+			panel.authPhase = ""
+			return *m, nil
+		}
 		panel.message = fmt.Sprintf("Poll error: %v", msg.err)
 		return *m, m.pollWechatQRStatus(panel.qrcodeToken)
 	}
@@ -352,6 +378,7 @@ func (m *Model) handleWechatQRPollMsg(msg wechatQRPollMsg) (Model, tea.Cmd) {
 		return *m, m.pollWechatQRStatus(panel.qrcodeToken)
 	case "wait", "":
 		panel.authPhase = "polling"
+		panel.pollFailures = 0 // #1398-A: healthy poll resets the streak
 		return *m, m.pollWechatQRStatus(panel.qrcodeToken)
 	default:
 		if msg.err != nil {
@@ -397,6 +424,10 @@ func (m *Model) saveWechatBotToken(botToken string) tea.Cmd {
 		if m.imManager != nil {
 			if err := im.StartNamedAdapter(context.Background(), m.config.IM, adapterName, m.imManager); err != nil {
 				debug.Log("wechat", "saveWechatBotToken: StartNamedAdapter failed: %v", err)
+				// #1398-C: adapter saved but NOT running - surfacing this as
+				// success made users believe the config was live. The token IS
+				// persisted, so this is a start failure, not an auth failure.
+				return imEditResultMsg{adapterName: adapterName, field: "bot_token", err: fmt.Errorf("saved, but adapter failed to start: %w", err)}
 			} else {
 				debug.Log("wechat", "saveWechatBotToken: adapter %q started", adapterName)
 			}

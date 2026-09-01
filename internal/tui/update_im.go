@@ -295,7 +295,18 @@ func (m Model) handleImEditResultMsg(msg imEditResultMsg) (Model, tea.Cmd) {
 		} else if msg.err != nil {
 			m.wechatPanel.message = fmt.Sprintf("Error: %v", msg.err)
 		} else if msg.adapterName != "" {
-			m.wechatPanel.message = m.t("panel.wechat.auth_success") + " (" + msg.adapterName + ")"
+			// #1398-C: any success used to show auth_success - removing a
+			// bot (field "remove") greeted the user with "authenticated",
+			// and a bind result was mislabeled too. Route by field like
+			// the edit-mode path does.
+			switch msg.field {
+			case "remove":
+				m.wechatPanel.message = m.t("panel.wechat.removed", msg.adapterName)
+			case "bind":
+				m.wechatPanel.message = m.t("panel.wechat.auth_success") + " (" + msg.adapterName + ")"
+			default:
+				m.wechatPanel.message = m.t("panel.wechat.auth_success") + " (" + msg.adapterName + ")"
+			}
 		}
 	} else if m.wecomPanel != nil && m.wecomPanel.editState.mode != imEditNone {
 		m.applyIMEditResult(&m.wecomPanel.editState, msg)

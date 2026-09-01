@@ -53,6 +53,14 @@ func (v *ViewportModel) SetSize(width, height int) {
 	v.height = height
 	v.vp.SetWidth(width)
 	v.vp.SetHeight(height)
+	// #1398-B: SetContent already honors autoFollow, SetSize did not -
+	// after a resize that grows the height the view stuck at its old
+	// YOffset and, with streaming already finished (no further
+	// SetContent), never returned to the bottom. Same one-liner as
+	// SetContent.
+	if v.autoFollow {
+		v.vp.GotoBottom()
+	}
 }
 
 // AutoFollow returns whether auto-follow is enabled.
