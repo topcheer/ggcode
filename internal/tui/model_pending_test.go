@@ -22,3 +22,20 @@ func TestConsumeVisiblePrefixReturnsImages(t *testing.T) {
 		t.Fatalf("second consume should be empty: %q %#v", text, got)
 	}
 }
+
+// TestResetConversationViewClearsTodos pins #1409: todos are session-scoped
+// (TodoFilePath(sessionID)); /clear and /sessions resume must not carry
+// session A's snapshot into session B (spurious "removed" diffs, suppressed
+// sidebar auto-open, stale sidebar until B's first todo_write).
+func TestResetConversationViewClearsTodos(t *testing.T) {
+	m := newTestModel()
+	m.todoSnapshot = map[string]todoStateItem{"a1": {ID: "a1", Status: "in_progress"}}
+	m.todoOrder = []string{"a1"}
+	m.activeTodo = &todoStateItem{ID: "a1"}
+
+	m.resetConversationView()
+
+	if m.todoSnapshot != nil || m.todoOrder != nil || m.activeTodo != nil {
+		t.Fatalf("todo state leaked across sessions: snapshot=%v order=%v active=%v", m.todoSnapshot, m.todoOrder, m.activeTodo)
+	}
+}

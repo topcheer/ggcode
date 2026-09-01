@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/topcheer/ggcode/internal/util"
+	"sort"
 	"strings"
 	"time"
 
@@ -154,6 +155,14 @@ func (m *Model) applyTodoWrite(ts ToolStatusMsg) string {
 				td.StartedAt = now
 			}
 		}
+		// #1409 follow-up: an LLM emitting duplicate todo IDs used to emit
+		// BOTH change entries (added then updated) for the same ID and grow
+		// the sidebar with duplicate cards. Later occurrence still updates
+		// the state (last-write-wins) but emits no extra change entry.
+		if _, dup := current[td.ID]; dup {
+			current[td.ID] = td
+			continue
+		}
 		current[td.ID] = td
 		prev, existed := previous[td.ID]
 		switch {
@@ -171,10 +180,18 @@ func (m *Model) applyTodoWrite(ts ToolStatusMsg) string {
 			changes = append(changes, localizeTodoChange(m.currentLanguage(), "updated", td))
 		}
 	}
-	for id, prev := range previous {
+	// #1409 follow-up: previous-map iteration gave the 'removed' entries a
+	// RANDOM order between renders of the same snapshot pair - sort for
+	// stable summaries.
+	removed := make([]string, 0, len(previous))
+	for id := range previous {
 		if _, exists := current[id]; !exists {
-			changes = append(changes, localizeTodoChange(m.currentLanguage(), "removed", prev))
+			removed = append(removed, id)
 		}
+	}
+	sort.Strings(removed)
+	for _, id := range removed {
+		changes = append(changes, localizeTodoChange(m.currentLanguage(), "removed", previous[id]))
 	}
 
 	m.todoSnapshot = current

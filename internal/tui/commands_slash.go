@@ -238,6 +238,16 @@ func (m *Model) resetConversationView() {
 	m.autoCompleteIndex = 0
 	m.exitConfirmPending = false
 	m.clearPendingSubmissions()
+	// #1409: todos are SESSION-scoped state (toolpkg.TodoFilePath(sessionID))
+	// - /clear and /sessions resume MUST NOT carry session A's snapshot into
+	// session B. The stale snapshot made B's first todo_write emit spurious
+	// "removed" change lines for every A todo ID, suppressed the task-mode
+	// sidebar auto-open (len(previous)==0 check), and kept A's todos
+	// displayed until B wrote its own. Same clearing the /todo clear path
+	// does explicitly.
+	m.todoSnapshot = nil
+	m.todoOrder = nil
+	m.activeTodo = nil
 	m.runCanceled = false
 	m.runFailed = false
 	m.spinner.Stop()
