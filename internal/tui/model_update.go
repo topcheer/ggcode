@@ -251,14 +251,20 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		return m.handleRemoteInbound(msg, spinnerCmd)
 
 	case displaySleepMsg:
-		// stdout is dead (display sleep / terminal closed).
-		// The stdoutDeadFlag is already set by the health monitor.
-		// No action needed here — the renderer checks IsStdoutDead().
+		// stdout is dead (display sleep / terminal closed). The flag is
+		// exported via IsStdoutDead() for callers that probe the UI; the
+		// stock bubbletea renderer lives inside the library, so there is
+		// nothing renderable to do while the fd is dead - writes are
+		// meaningless until recovery (displayWakeMsg does the work).
 		return m, nil
 
 	case displayWakeMsg:
-		// stdout recovered — force a full redraw to refresh stale content.
-		return m, nil
+		// stdout recovered - force a full redraw. While dead, every frame
+		// the stock renderer attempted (and dropped) left the terminal's
+		// visible state arbitrarily stale; ClearScreen discards it and the
+		// next View() repaints from scratch. This is the actual consumer
+		// half of the monitor: without it, recovery shows corrupted output.
+		return m, tea.ClearScreen
 
 	case agentStreamMsg:
 		m.noteTurnActivity()
