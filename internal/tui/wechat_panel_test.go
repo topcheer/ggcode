@@ -1,7 +1,10 @@
 package tui
 
 import (
+	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -403,5 +406,37 @@ func TestWechatBindingEntries_NotBound(t *testing.T) {
 	view := m.View().Content
 	if !strings.Contains(view, "Bound: 0") {
 		t.Fatalf("expected 'Bound: 0' in panel view, got:\n%s", view)
+	}
+}
+
+// TestWechatILinkRequestNon2xx pins #1398-A: 4xx/5xx responses must
+// surface as errors (with the status code), not be handed to the caller
+// as a parseable body.
+func TestWechatILinkRequestNon2xx(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte(`upstream exploded`))
+	}))
+	defer srv.Close()
+
+	_, err := wechatILinkRequest(context.Background(), http.MethodGet, srv.URL)
+	if err == nil {
+		t.Fatal("5xx response returned nil error")
+	}
+	if !strings.Contains(err.Error(), "502") {
+		t.Fatalf("error should mention status code: %v", err)
+	}
+}
+
+// TestWechatRemoveResultRouting pins #1398-C: a successful remove
+// (field "remove") must show the removed message, not auth_success.
+func TestWechatRemoveResultRouting(t *testing.T) {
+	m := newTestModel()
+	m.wechatPanel = &wechatPanelState{}
+
+	m2, _ := m.Update(imEditResultMsg{adapterName: "mybot", field: "remove", value: "ok"})
+	got := m2.(Model).wechatPanel.message
+	if strings.Contains(strings.ToLower(got), "auth") && !strings.Contains(strings.ToLower(got), "移除") && !strings.Contains(strings.ToLower(got), "removed") {
+		t.Fatalf("remove result shows auth_success: %q", got)
 	}
 }
