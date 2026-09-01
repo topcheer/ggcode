@@ -1,8 +1,10 @@
 package util
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,6 +20,17 @@ func SafeSymlink(oldname, newname string) error {
 	err := os.Symlink(oldname, newname)
 	if err == nil {
 		return nil
+	}
+	// #1405-B: EEXIST (target already there - a leftover compat file from
+	// a previous run) must PROPAGATE, not fall into the copy fallback:
+	// os.Create in copyFile truncates the existing file - silent data
+	// loss. Only privilege-related failures (EPERM - symlinks need
+	// SeCreateSymbolicLinkPrivilege) take the junction/copy fallback.
+	// Matches the Unix version, which propagates EEXIST. ENOENT is a real
+	// error too - the source is missing and copying would only report a
+	// misleading failure later.
+	if errors.Is(err, os.ErrExist) || errors.Is(err, fs.ErrNotExist) {
+		return err
 	}
 
 	// Check if source is a directory

@@ -38,9 +38,13 @@ import (
 // a bad proxy policy must not take down all networking.
 
 const (
-	pacScriptTTL    = 5 * time.Minute
-	pacResultCap    = 512
-	pacFetchTimeout = 10 * time.Second
+	pacScriptTTL = 5 * time.Minute
+	// pacFetchErrCooldown suppresses re-fetching a PAC script that just
+	// failed (#1405-A): without it every request paid the 10s fetch
+	// timeout again while holding the lock.
+	pacFetchErrCooldown = 30 * time.Second
+	pacResultCap        = 512
+	pacFetchTimeout     = 10 * time.Second
 )
 
 var (
@@ -64,6 +68,10 @@ type pacState struct {
 	scriptURL string
 	resolver  *pac.ProxyResolver
 	fetchedAt time.Time
+	// lastFetchErrAt records when the last script fetch failed; within
+	// pacFetchErrCooldown the resolver returns immediate DIRECT instead
+	// of re-attempting the dead server (#1405-A negative cache).
+	lastFetchErrAt time.Time
 	// resultCache maps "scheme|host" -> first PAC directive ("" = DIRECT).
 	// FindProxyForURL is deterministic per script, so caching per host is
 	// safe; the cache is dropped when the script is re-fetched.
@@ -177,8 +185,20 @@ func (e *pacState) resolverFor(scriptURL string) (*pac.ProxyResolver, error) {
 	if e.resolver != nil && e.scriptURL == scriptURL && now.Sub(e.fetchedAt) < pacScriptTTL {
 		return e.resolver, nil
 	}
+	// #1405-A: a failed fetch used to write NOTHING - fetchedAt stayed
+	// zero and resolver nil, so the cache-hit condition above could never
+	// hold and EVERY request re-fetched while holding e.mu (10s timeout
+	// each, concurrent requests queued behind the lock ~ N*10s). With a
+	// dead PAC server (GPO AutoConfigURL) this turned the promised
+	// 'broken PAC degrades to DIRECT' into 'stall 10s first, then
+	// DIRECT'. Record the failure and cool down: within the window the
+	// answer is immediate DIRECT.
+	if now.Sub(e.lastFetchErrAt) < pacFetchErrCooldown {
+		return nil, fmt.Errorf("pac script fetch on cooldown since %v", e.lastFetchErrAt)
+	}
 	script, err := fetchPACScript(scriptURL)
 	if err != nil {
+		e.lastFetchErrAt = now
 		return nil, fmt.Errorf("pac script fetch: %w", err)
 	}
 	resolver, err := pac.NewProxyResolver(&pac.ProxyResolverConfig{
