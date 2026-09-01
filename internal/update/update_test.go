@@ -2,8 +2,10 @@ package update
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -104,3 +106,48 @@ func rewriteClient(base string, client *http.Client) *http.Client {
 type roundTripperFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+
+// TestRunHelperRollsBackEarlierTargets pins #1402-A: when a later target
+// cannot be replaced, earlier targets already written in the same run are
+// restored to their previous bytes instead of staying on the new version
+// (half-updated install). The second target is made a DIRECTORY - rename
+// onto it fails deterministically without waiting for the 30s deadline.
+func TestRunHelperRollsBackEarlierTargets(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "staged")
+	newBytes := []byte("NEW-BINARY")
+	oldBytes := []byte("OLD-BINARY")
+	if err := os.WriteFile(source, newBytes, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t1 := filepath.Join(dir, "t1")
+	if err := os.WriteFile(t1, oldBytes, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t2 := filepath.Join(dir, "t2")
+	// A directory at the target path: WriteExecutable's rename fails fast.
+	if err := os.MkdirAll(t2, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := filepath.Join(dir, "manifest.json")
+	payload, _ := json.Marshal(HelperManifest{
+		SourceBinary: source,
+		TargetPaths:  []string{t1, t2},
+	})
+	if err := os.WriteFile(manifest, payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := RunHelper(manifest)
+	if err == nil {
+		t.Fatal("expected RunHelper to fail with a blocked target")
+	}
+	// t1 must be rolled back to its previous bytes, not left on NEW-BINARY.
+	got, readErr := os.ReadFile(t1)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(got) != string(oldBytes) {
+		t.Fatalf("t1 not rolled back: %q (want %q)", got, oldBytes)
+	}
+}

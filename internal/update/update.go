@@ -255,19 +255,56 @@ func RunHelper(manifestPath string) error {
 	if err != nil {
 		return fmt.Errorf("read staged binary: %w", err)
 	}
+	// #1402-A: targets are replaced one by one; a failure halfway (target
+	// locked by antivirus/indexer past the 30s deadline) used to leave the
+	// EARLIER targets on the new version with no rollback - a half-updated
+	// install (npm/python wrappers carry 2 target paths) with no repair
+	// entry point. Back up each target's previous bytes (nil = did not
+	// exist) and restore them best-effort on failure. A restore that also
+	// fails is reported but does not mask the original error; the manifest
+	// is kept so the helper can simply be re-run.
 	deadline := time.Now().Add(30 * time.Second)
 	var lastErr error
+	type backup struct {
+		path    string
+		data    []byte
+		existed bool
+	}
+	var written []backup
 	for _, target := range manifest.TargetPaths {
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 			return fmt.Errorf("create target dir for %s: %w", target, err)
 		}
+		var prev []byte
+		existed := false
+		if old, err := os.ReadFile(target); err == nil {
+			prev, existed = old, true
+		}
 		for {
 			lastErr = install.WriteExecutable(target, sourceData)
 			if lastErr == nil {
+				written = append(written, backup{path: target, data: prev, existed: existed})
 				break
 			}
 			if time.Now().After(deadline) {
-				return fmt.Errorf("replace %s: %w", target, lastErr)
+				// Roll back every target this run already replaced.
+				var restoreErrs []string
+				for i := len(written) - 1; i >= 0; i-- {
+					w := written[i]
+					if !w.existed {
+						if rmErr := os.Remove(w.path); rmErr != nil {
+							restoreErrs = append(restoreErrs, fmt.Sprintf("remove fresh %s: %v", w.path, rmErr))
+						}
+						continue
+					}
+					if rsErr := install.WriteExecutable(w.path, w.data); rsErr != nil {
+						restoreErrs = append(restoreErrs, fmt.Sprintf("restore %s: %v", w.path, rsErr))
+					}
+				}
+				if len(restoreErrs) > 0 {
+					return fmt.Errorf("replace %s: %w (rollback incomplete: %s)", target, lastErr, strings.Join(restoreErrs, "; "))
+				}
+				return fmt.Errorf("replace %s: %w (earlier targets rolled back)", target, lastErr)
 			}
 			time.Sleep(300 * time.Millisecond)
 		}
