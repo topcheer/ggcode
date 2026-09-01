@@ -229,8 +229,14 @@ func (s *Server) handleVendorDetail(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusBadRequest, err.Error())
 				return
 			}
-			// Re-read after SetVendorAPIKey modified it
+			// Re-read after SetVendorAPIKey modified it. #1412-A: the re-read
+			// returned the OLD map copy - dropping the DisplayName change
+			// made above (Go map value semantics) - so changing key+name in
+			// ONE request silently lost the name (200 ok).
 			vc = s.cfg.Vendors[vendor]
+			if req.DisplayName != "" {
+				vc.DisplayName = req.DisplayName
+			}
 		}
 		s.cfg.Vendors[vendor] = vc
 		if err := s.saveConfig(); err != nil {
@@ -1045,7 +1051,7 @@ func (s *Server) handleGeneral(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Language      string   `json:"language"`
 			DefaultMode   string   `json:"default_mode"`
-			MaxIterations int      `json:"max_iterations"`
+			MaxIterations *int     `json:"max_iterations"`
 			AllowedDirs   []string `json:"allowed_dirs"`
 			ExtraPrompt   string   `json:"extra_prompt"`
 		}
@@ -1061,7 +1067,15 @@ func (s *Server) handleGeneral(w http.ResponseWriter, r *http.Request) {
 		if req.DefaultMode != "" {
 			s.cfg.DefaultMode = req.DefaultMode
 		}
-		s.cfg.MaxIterations = req.MaxIterations
+		// #1412-B: unconditional assignment meant a partial update from a
+		// third-party client that omits max_iterations wrote the JSON zero
+		// value 0 - which means UNLIMITED iterations in the agent loop
+		// (maxIter <= 0 || i < maxIter), silently dropping the runaway-loop
+		// / cost guard. Pointer + nil check keeps omission a no-op, exactly
+		// like the other partial-update fields in this handler.
+		if req.MaxIterations != nil {
+			s.cfg.MaxIterations = *req.MaxIterations
+		}
 		if req.AllowedDirs != nil {
 			s.cfg.AllowedDirs = req.AllowedDirs
 		}
