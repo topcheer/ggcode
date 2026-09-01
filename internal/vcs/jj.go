@@ -18,6 +18,18 @@ func (Jujutsu) Name() string        { return "jj" }
 func (Jujutsu) DisplayName() string { return "Jujutsu" }
 
 func (Jujutsu) Status(ctx context.Context, dir string) (string, error) {
+	// #1407-A: 'jj st' returns prose (headers + "Working copy (@)" /
+	// "Parent commit (@-)" state lines - 4 fixed lines of noise even for
+	// an empty change), and vcs.Summary counted those as files: 2 added
+	// files reported as "6 uncommitted file(s)". 'jj diff -r @ --summary'
+	// emits exactly one line per touched file (M/A/D path), the same
+	// shape the git porcelain path guarantees.
+	// Fall back to 'jj st' when the summary flag is unavailable so status
+	// display degrades gracefully instead of erroring.
+	out, err := runVCSCmd(ctx, dir, "jj", "diff", "-r", "@", "--summary")
+	if err == nil {
+		return out, nil
+	}
 	return runVCSCmd(ctx, dir, "jj", "st")
 }
 

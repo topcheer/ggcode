@@ -71,7 +71,22 @@ func (Subversion) IsClean(ctx context.Context, dir string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return strings.TrimSpace(out) == "", nil
+	// #1407-B: 'svn status' lists svn:externals definitions with a
+	// leading 'X' (not a local modification - git has no equivalent) and
+	// in-progress externals with '>'. Without filtering, a working copy
+	// with externals reports dirty forever despite zero local changes.
+	// '?' (unversioned) stays counted - same semantics as git's '??'.
+	for _, line := range strings.Split(out, "\n") {
+		t := strings.TrimRight(line, "\r")
+		if strings.TrimSpace(t) == "" {
+			continue
+		}
+		if c := t[0]; c == 'X' || c == '>' {
+			continue
+		}
+		return false, nil
+	}
+	return true, nil
 }
 
 // Checkout is not supported for Subversion (no branch concept).
