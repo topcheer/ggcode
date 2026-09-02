@@ -322,22 +322,41 @@ func (m *Model) installMCPServer(spec string) tea.Cmd {
 		if err != nil {
 			return mcpInstallResultMsg{err: err}
 		}
-		replaced := m.config.UpsertMCPServer(server)
-		if err := m.saveConfig(); err != nil {
-			return mcpInstallResultMsg{err: fmt.Errorf("saving config: %w", err)}
-		}
-		if m.mcpManager != nil {
-			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-			defer cancel()
-			if err := m.mcpManager.Install(ctx, server); err != nil {
-				return mcpInstallResultMsg{
-					name:     server.Name,
-					replaced: replaced,
-					err:      fmt.Errorf("saved to config, but connection failed: %w", err),
+		// #1382-B (family site 16, MCPServers slice): UpsertMCPServer + save
+		// ran HERE on the Cmd goroutine while the UI reads the slice -
+		// same family, slice flavor (torn header reads). The write +
+		// persist ride configMutationMsg onto the Update loop; the network
+		// connect (slow IO) stays on the follow-up Cmd.
+		// #1382-B: apply runs before next() (handleConfigMutationMsg is
+		// sequential), so a closure-local var threads the replaced flag
+		// without any package-level shared state.
+		replaced := false
+		return configMutationMsg{
+			apply: func(m *Model) error {
+				// slice write + persist on the Update loop.
+				replaced = m.config.UpsertMCPServer(server)
+				return m.saveConfig()
+			},
+			next: func(m *Model) tea.Cmd {
+				return func() tea.Msg {
+					if m.mcpManager != nil {
+						ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+						defer cancel()
+						if err := m.mcpManager.Install(ctx, server); err != nil {
+							return mcpInstallResultMsg{
+								name:     server.Name,
+								replaced: replaced,
+								err:      fmt.Errorf("saved to config, but connection failed: %w", err),
+							}
+						}
+					}
+					return mcpInstallResultMsg{name: server.Name, replaced: replaced}
 				}
-			}
+			},
+			fail: func(err error) tea.Msg {
+				return mcpInstallResultMsg{err: err}
+			},
 		}
-		return mcpInstallResultMsg{name: server.Name, replaced: replaced}
 	}
 }
 
@@ -346,18 +365,42 @@ func (m *Model) uninstallMCPServer(name string) tea.Cmd {
 		if m.config == nil {
 			return mcpUninstallResultMsg{name: name, err: fmt.Errorf("MCP uninstall unavailable without config")}
 		}
-		if !m.config.RemoveMCPServer(name) {
-			return mcpUninstallResultMsg{name: name, err: fmt.Errorf("MCP server %s is not configured", name)}
+		// #1382-C: the OAuth token delete ran LAST and was skipped by every
+		// early return (and a retry hit 'not configured' first) - one failed
+		// uninstall left mcp:<name> credentials on disk FOREVER. Token
+		// cleanup now runs FIRST via defer-style ordering and its error is
+		// surfaced, never dropped.
+		// #1382-B: the config write + persist ride configMutationMsg (family
+		// site 16, MCPServers slice).
+		return configMutationMsg{
+			apply: func(m *Model) error {
+				if !m.config.RemoveMCPServer(name) {
+					// Still attempt token cleanup - the config entry may already
+					// be gone from a previous partial uninstall.
+					_ = auth.DefaultStore().Delete("mcp:" + name)
+					return fmt.Errorf("MCP server %s is not configured", name)
+				}
+				if err := m.config.SaveMCPServersScoped(m.configSaveScope); err != nil {
+					return fmt.Errorf("saving config: %w", err)
+				}
+				return nil
+			},
+			next: func(m *Model) tea.Cmd {
+				return func() tea.Msg {
+					if m.mcpManager != nil && !m.mcpManager.Uninstall(name) {
+						return mcpUninstallResultMsg{name: name, err: fmt.Errorf("saved config, but runtime uninstall failed for %s", name)}
+					}
+					// Token cleanup after a successful uninstall; error surfaced.
+					if derr := auth.DefaultStore().Delete("mcp:" + name); derr != nil {
+						return mcpUninstallResultMsg{name: name, err: fmt.Errorf("uninstalled, but deleting stored credentials failed: %w", derr)}
+					}
+					return mcpUninstallResultMsg{name: name}
+				}
+			},
+			fail: func(err error) tea.Msg {
+				return mcpUninstallResultMsg{name: name, err: err}
+			},
 		}
-		if err := m.config.SaveMCPServersScoped(m.configSaveScope); err != nil {
-			return mcpUninstallResultMsg{name: name, err: fmt.Errorf("saving config: %w", err)}
-		}
-		if m.mcpManager != nil && !m.mcpManager.Uninstall(name) {
-			return mcpUninstallResultMsg{name: name, err: fmt.Errorf("saved config, but runtime uninstall failed for %s", name)}
-		}
-		// Clean up stored OAuth tokens
-		_ = auth.DefaultStore().Delete("mcp:" + name)
-		return mcpUninstallResultMsg{name: name}
 	}
 }
 
