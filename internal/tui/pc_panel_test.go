@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -105,5 +106,46 @@ func TestPCPanelNoSessionShowsMessage(t *testing.T) {
 	}
 	if m.pcPanel.message == "" {
 		t.Fatal("expected error message for no session")
+	}
+}
+
+// TestPCResultMsgRoutesToPanel pins #1386-A: pcResultMsg now HAS an
+// Update case - success fills message/showQR/qrCode/inviteURI, error
+// fills the message and clears the QR.
+func TestPCResultMsgRoutesToPanel(t *testing.T) {
+	m := newTestModel()
+	m.pcPanel = &pcPanelState{}
+
+	m2, _ := m.Update(pcResultMsg{message: "created", showQR: true, qrCode: "QR", inviteURI: "pc://x"})
+	p := m2.(Model).pcPanel
+	if p.message != "created" || !p.showQR || p.qrCode != "QR" || p.inviteURI != "pc://x" {
+		t.Fatalf("success not routed: %#v", p)
+	}
+
+	m3, _ := m.Update(pcResultMsg{err: errors.New("boom")})
+	p3 := m3.(Model).pcPanel
+	if p3.message == "" || p3.showQR {
+		t.Fatalf("error not routed / QR not cleared: %#v", p3)
+	}
+}
+
+// TestPCCreateModeGTypes pins #1386-C: 'g' while typing a label must
+// type, not toggle group mode ('group chat' -> 'roup chat' before).
+func TestPCCreateModeGTypes(t *testing.T) {
+	m := newTestModel()
+	m.pcPanel = &pcPanelState{createMode: true, createInput: "group"}
+
+	m2, _ := m.handlePCPanelKey(tea.KeyPressMsg{Text: "g"})
+	p := m2.pcPanel
+	if p.createInput != "groupg" {
+		t.Fatalf("g not typed: %q (group flag flipped: %v)", p.createInput, p.createGroup)
+	}
+
+	// Empty input still toggles.
+	m3 := newTestModel()
+	m3.pcPanel = &pcPanelState{createMode: true}
+	m4, _ := m3.handlePCPanelKey(tea.KeyPressMsg{Text: "g"})
+	if !m4.pcPanel.createGroup {
+		t.Fatal("toggle on empty input lost")
 	}
 }
