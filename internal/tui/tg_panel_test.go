@@ -210,3 +210,28 @@ func TestTGBindingLabelsMutedActiveAvailable(t *testing.T) {
 		t.Fatalf("expected available, got %s", labels[3])
 	}
 }
+
+// TestTGUnbindNeverEnablesIM pins #1394-A(3): unbinding with IM globally
+// OFF used to silently flip IM.Enabled=true (and persist it) via
+// ensureTGRuntime(true) - the exact scenario users hit most. Now the
+// manager is required up front and the flag is never touched.
+func TestTGUnbindNeverEnablesIM(t *testing.T) {
+	m := NewModel(nil, nil)
+	cfg := config.DefaultConfig()
+	cfg.FilePath = t.TempDir() + "/ggcode.yaml"
+	cfg.IM.Enabled = false
+	m.SetConfig(cfg)
+	// No SetIMManager: manager is nil (IM off, most common case).
+
+	msg := m.unbindTGEntry("tg-x")()
+	res, ok := msg.(tgBindResultMsg)
+	if !ok {
+		t.Fatalf("expected tgBindResultMsg, got %#v", msg)
+	}
+	if res.err == nil {
+		t.Fatal("unbind without a running manager should surface an error")
+	}
+	if m.config.IM.Enabled {
+		t.Fatal("unbind flipped IM.Enabled - regression")
+	}
+}
