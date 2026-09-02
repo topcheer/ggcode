@@ -462,6 +462,11 @@ func (c *Config) AddEndpoint(vendor, endpointName, protocol, baseURL, apiKey str
 		} else {
 			envVarName := preferredEndpointAPIKeyEnvVar(vendor, endpointName)
 			os.Setenv(envVarName, apiKey)
+			// #1435-A: same as AddVendor - persist, or the key lives only
+			// in this process and onboarding loops on fresh terminals.
+			if err := writeKeysEnv(map[string]string{envVarName: apiKey}); err != nil {
+				return fmt.Errorf("persisting API key for %s/%s: %w", vendor, endpointName, err)
+			}
 			ep.APIKey = "${" + envVarName + "}"
 		}
 	}
@@ -513,6 +518,14 @@ func (c *Config) AddVendor(name, displayName, apiKey string) error {
 		} else {
 			envVarName := preferredEndpointAPIKeyEnvVar(name, "default")
 			os.Setenv(envVarName, apiKey)
+			// #1435-A: without persisting to keys.env the value lived ONLY in
+			// this process's env; a fresh terminal (NeedsOnboard LookupEnv
+			// misses) re-entered onboarding forever - the user retyped the
+			// key on every launch. Save()'s migration only moves PLAINTEXT
+			// keys, so the ${VAR} reference path had no persistence owner.
+			if err := writeKeysEnv(map[string]string{envVarName: apiKey}); err != nil {
+				return fmt.Errorf("persisting API key for vendor %q: %w", name, err)
+			}
 			vc.APIKey = "${" + envVarName + "}"
 		}
 	}

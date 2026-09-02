@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 
@@ -121,7 +122,19 @@ func runOnboardAndRestart(cfg *config.Config) error {
 		return fmt.Errorf("finding executable: %w", err)
 	}
 	args := os.Args[1:]
-	return syscall.Exec(executable, append([]string{executable}, args...), os.Environ())
+	// #1435-B: syscall.Exec is a stub returning EWINDOWS on Windows -
+	// a successful onboarding saved its config and then exited with
+	// 'Onboard failed: not supported by windows' and no hint. The env is
+	// already persisted (#1435-A), so a plain re-run works: tell the
+	// user instead of failing.
+	if err := syscall.Exec(executable, append([]string{executable}, args...), os.Environ()); err != nil {
+		if strings.Contains(err.Error(), "not supported") || runtime.GOOS == "windows" {
+			fmt.Fprintln(os.Stderr, "Onboarding complete. Restart ggcode to continue (automatic restart is unavailable on this platform).")
+			return nil
+		}
+		return fmt.Errorf("restarting after onboarding: %w", err)
+	}
+	return nil
 }
 
 // sanitizeVendorID creates a YAML-safe vendor ID from a display name.
