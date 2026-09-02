@@ -21,7 +21,12 @@ func commandToolPresentation(lang Language, rawCommand string) (toolPresentation
 	// Show at most 2 command lines in detail to avoid header bloat
 	maxDetailLines := 2
 	if len(detailParts) > maxDetailLines {
-		hidden := len(detailParts) - maxDetailLines + preview.CommandHiddenLineCount
+		// #1394-B: hidden used len(detailParts)-maxDetailLines PLUS
+		// CommandHiddenLineCount - double-counting: the preview lines are
+		// never truncated (all N present) and CommandHiddenLineCount
+		// describes the LIST view's cutoff (N-5), a different basis.
+		// Hidden-from-detail is simply all lines beyond the 2 shown.
+		hidden := len(detailParts) - maxDetailLines
 		detailParts = detailParts[:maxDetailLines]
 		detailParts = append(detailParts, fmt.Sprintf("+%d more", hidden))
 	} else if preview.CommandHiddenLineCount > 0 {

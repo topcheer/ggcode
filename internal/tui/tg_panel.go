@@ -258,8 +258,10 @@ func (m *Model) bindTGEntry(entry tgBindingEntry) tea.Cmd {
 
 func (m *Model) unbindTGEntry(adapterName string) tea.Cmd {
 	return func() tea.Msg {
-		if err := m.ensureTGRuntime(true); err != nil {
-			return tgBindResultMsg{err: err}
+		// #1394-A(3): autoEnable=false - unbinding must not silently flip
+		// IM.Enabled=true (and persist it) when the user has IM off.
+		if m.imManager == nil {
+			return tgBindResultMsg{err: errors.New(m.t("panel.tg.error.config_unavailable"))}
 		}
 		if err := m.imManager.UnbindAdapter(adapterName); err != nil {
 			return tgBindResultMsg{err: err}
@@ -270,8 +272,9 @@ func (m *Model) unbindTGEntry(adapterName string) tea.Cmd {
 
 func (m *Model) clearTGChannel(adapterName string) tea.Cmd {
 	return func() tea.Msg {
-		if err := m.ensureTGRuntime(true); err != nil {
-			return tgBindResultMsg{err: err}
+		// #1394-A(3): same - clearing never auto-enables IM.
+		if m.imManager == nil {
+			return tgBindResultMsg{err: errors.New(m.t("panel.tg.error.config_unavailable"))}
 		}
 		if err := m.imManager.ClearChannelByAdapter(adapterName); err != nil {
 			return tgBindResultMsg{err: err}
@@ -342,13 +345,10 @@ func (m *Model) startTGAdapterIfNeeded(name string) error {
 		return errors.New(m.t("panel.tg.error.not_configured", name))
 	}
 	if !adapterCfg.Enabled {
-		// Auto-enable when user explicitly tries to bind from panel.
-		if err := m.config.SetIMAdapterEnabled(name, true); err != nil {
-			return fmt.Errorf("enable %s: %w", name, err)
-		}
-		if m.imManager != nil {
-			_ = m.imManager.EnableBinding(name)
-		}
+		// #1394-A (family site 15): auto-enable must not write the config
+		// map on this Cmd-goroutine helper - bindTGEntry routes it through
+		// configMutationMsg; disabled adapters are refused here.
+		return fmt.Errorf("adapter %s is disabled - bind from the panel to enable it", name)
 	}
 	if !strings.EqualFold(adapterCfg.Platform, string(im.PlatformTelegram)) {
 		return errors.New(m.t("panel.tg.error.not_tg_adapter", name))
