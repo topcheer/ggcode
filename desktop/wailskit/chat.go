@@ -2991,8 +2991,13 @@ func (b *ChatBridge) RespondApproval(requestID, decision string) {
 	// the command prefix and adds a pattern like "git diff*" instead of
 	// blanket-allowing ALL future commands. For non-command tools, falls back to
 	// tool-level override.
-	if (decision == "always_allow" || decision == "always") && b.agent != nil {
-		if p, ok := b.agent.PermissionPolicy().(*permission.ConfigPolicy); ok {
+	// #1433-A: check-then-use double-read on b.agent - ResetAgent holds
+	// b.mu while nil-ing the field; read it ONCE under the same lock.
+	b.mu.Lock()
+	agentSnapshot := b.agent
+	b.mu.Unlock()
+	if (decision == "always_allow" || decision == "always") && agentSnapshot != nil {
+		if p, ok := agentSnapshot.PermissionPolicy().(*permission.ConfigPolicy); ok {
 			if cmd := permission.ExtractCommandFromInput(req.Input); cmd != "" {
 				if pattern := permission.CommandPrefixToPattern(cmd); pattern != "" {
 					p.AllowCommandPattern(pattern)
@@ -3053,10 +3058,15 @@ func (b *ChatBridge) HandleMobileApprovalResponse(data tunnel.ApprovalResponseDa
 		return
 	}
 	agentruntime.ResolveTunnelApproval(data.Decision, req.ToolName, func(toolName string) {
-		if b.agent == nil {
+		// #1433-A: single locked read - same double-read race as
+		// RespondApproval (ResetAgent nil-ing under b.mu).
+		b.mu.Lock()
+		agentSnapshot := b.agent
+		b.mu.Unlock()
+		if agentSnapshot == nil {
 			return
 		}
-		p, ok := b.agent.PermissionPolicy().(*permission.ConfigPolicy)
+		p, ok := agentSnapshot.PermissionPolicy().(*permission.ConfigPolicy)
 		if !ok {
 			return
 		}

@@ -7,6 +7,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"net"
 	"os"
 	"os/exec"
@@ -91,7 +92,20 @@ func (a *App) setupTrayListenerLocked() bool {
 		for {
 			conn, err := ln.Accept()
 			if err != nil {
-				return // listener closed during shutdown
+				// #1433-B: shutdown closes the listener, which surfaces as
+				// net.ErrClosed - the ONLY legitimate exit. Any other error
+				// (EMFILE/ENOMEM under fd exhaustion in a long-running
+				// desktop app) used to return too: listener left open,
+				// sockpath kept, trayShuttingDown=false - the helper kept
+				// rendering a tray icon whose clicks nobody accepted, with
+				// no log and no self-healing until restart. Transient
+				// errors now log and retry with a short backoff.
+				if errors.Is(err, net.ErrClosed) {
+					return // listener closed during shutdown
+				}
+				debug.Log("tray", "accept error: %v (retrying)", err)
+				time.Sleep(500 * time.Millisecond)
+				continue
 			}
 			safego.Go("tray-conn", func() { a.serveTrayConn(conn) })
 		}
