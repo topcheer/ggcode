@@ -289,6 +289,12 @@ func (m *Model) createMatAdapterCmd(spec string) tea.Cmd {
 		if len(fields) < 3 {
 			return matrixBindResultMsg{err: errors.New(m.t("panel.matrix.error.config_format"))}
 		}
+		// #1380-C: extra fields (e.g. a 4th user_id token, or a token
+		// containing spaces) were silently dropped - persisting a
+		// guaranteed-to-fail credential. Reject extras.
+		if len(fields) > 3 {
+			return matrixBindResultMsg{err: fmt.Errorf("extra fields (values must not contain spaces): %s", spec)}
+		}
 		name := strings.TrimSpace(fields[0])
 		hsURL := strings.TrimSpace(fields[1])
 		token := strings.TrimSpace(fields[2])
@@ -309,11 +315,29 @@ func (m *Model) createMatAdapterCmd(spec string) tea.Cmd {
 			},
 			next: func(m *Model) tea.Cmd {
 				return func() tea.Msg {
+					rollback := func(origErr error) tea.Msg {
+						// #1380-B: rollback the persisted adapter (the map REMOVE
+						// itself routes through configMutationMsg - #1370 pattern).
+						return configMutationMsg{
+							apply: func(m *Model) error {
+								if rerr := m.config.RemoveIMAdapter(name); rerr != nil {
+									return rerr
+								}
+								return m.saveConfig()
+							},
+							next: func(m *Model) tea.Cmd {
+								return func() tea.Msg { return matrixBindResultMsg{err: origErr} }
+							},
+							fail: func(rerr error) tea.Msg {
+								return matrixBindResultMsg{err: fmt.Errorf("%v (rollback failed: %v)", origErr, rerr)}
+							},
+						}
+					}
 					if err := m.ensureMatRuntime(); err != nil {
-						return matrixBindResultMsg{err: err}
+						return rollback(err)
 					}
 					if err := m.startMatAdapterIfNeeded(name); err != nil {
-						return matrixBindResultMsg{err: err}
+						return rollback(err)
 					}
 					return matrixBindResultMsg{message: m.t("panel.matrix.message.added_bot", name)}
 				}
@@ -344,13 +368,10 @@ func (m *Model) startMatAdapterIfNeeded(name string) error {
 		return fmt.Errorf(m.t("panel.matrix.error.not_configured"), name)
 	}
 	if !adapterCfg.Enabled {
-		// Auto-enable when user explicitly tries to bind from panel.
-		if err := m.config.SetIMAdapterEnabled(name, true); err != nil {
-			return fmt.Errorf("enable %s: %w", name, err)
-		}
-		if m.imManager != nil {
-			_ = m.imManager.EnableBinding(name)
-		}
+		// #1380-A: disabled adapters must go through bindMatEntry's
+		// configMutationMsg auto-enable path (the SetIMAdapterEnabled map
+		// write never runs on this Cmd-goroutine helper).
+		return fmt.Errorf("adapter %s is disabled - bind from the panel to enable it", name)
 	}
 	if !strings.EqualFold(adapterCfg.Platform, string(im.PlatformMatrix)) {
 		return fmt.Errorf(m.t("panel.matrix.error.not_matrix_adapter"), name)
@@ -371,20 +392,43 @@ func (m *Model) bindMatEntry(entry matrixBindingEntry) tea.Cmd {
 		if m.imManager == nil {
 			return matrixBindResultMsg{err: errors.New(m.t("panel.matrix.error.config_unavailable"))}
 		}
-		if err := m.startMatAdapterIfNeeded(entry.Adapter); err != nil {
-			return matrixBindResultMsg{err: err}
+		// #1380-A: a disabled adapter's auto-enable runs on the Update
+		// loop via configMutationMsg; the bind chain continues in next().
+		bindRest := func(m *Model) tea.Msg {
+			if err := m.startMatAdapterIfNeeded(entry.Adapter); err != nil {
+				return matrixBindResultMsg{err: err}
+			}
+			targetID := defaultMatTargetID(ws)
+			_, err := m.imManager.BindChannel(im.ChannelBinding{
+				Workspace: ws,
+				Platform:  im.PlatformMatrix,
+				Adapter:   entry.Adapter,
+				TargetID:  targetID,
+			})
+			if err != nil {
+				return matrixBindResultMsg{err: err}
+			}
+			return matrixBindResultMsg{message: m.t("panel.matrix.message.bound_success")}
 		}
-		targetID := defaultMatTargetID(ws)
-		_, err := m.imManager.BindChannel(im.ChannelBinding{
-			Workspace: ws,
-			Platform:  im.PlatformMatrix,
-			Adapter:   entry.Adapter,
-			TargetID:  targetID,
-		})
-		if err != nil {
-			return matrixBindResultMsg{err: err}
+		if cfg, ok := m.config.IM.Adapters[entry.Adapter]; m.config != nil && ok && !cfg.Enabled {
+			return configMutationMsg{
+				apply: func(m *Model) error {
+					return m.config.SetIMAdapterEnabled(entry.Adapter, true)
+				},
+				next: func(m *Model) tea.Cmd {
+					return func() tea.Msg {
+						if m.imManager != nil {
+							_ = m.imManager.EnableBinding(entry.Adapter)
+						}
+						return bindRest(m)
+					}
+				},
+				fail: func(err error) tea.Msg {
+					return matrixBindResultMsg{err: fmt.Errorf("enable %s: %w", entry.Adapter, err)}
+				},
+			}
 		}
-		return matrixBindResultMsg{message: m.t("panel.matrix.message.bound_success")}
+		return bindRest(m)
 	}
 }
 

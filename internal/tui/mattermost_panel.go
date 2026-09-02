@@ -279,6 +279,11 @@ func (m *Model) createMMAdapterCmd(spec string) tea.Cmd {
 		if len(fields) < 3 {
 			return mattermostBindResultMsg{err: errors.New(m.t("panel.mattermost.error.config_format"))}
 		}
+		// #1380-C: extra fields (token containing spaces) were silently
+		// dropped - persisting a guaranteed-to-fail credential. Reject.
+		if len(fields) > 3 {
+			return mattermostBindResultMsg{err: fmt.Errorf("extra fields (values must not contain spaces): %s", spec)}
+		}
 		name := strings.TrimSpace(fields[0])
 		url := strings.TrimSpace(fields[1])
 		token := strings.TrimSpace(fields[2])
@@ -299,11 +304,29 @@ func (m *Model) createMMAdapterCmd(spec string) tea.Cmd {
 			},
 			next: func(m *Model) tea.Cmd {
 				return func() tea.Msg {
+					rollback := func(origErr error) tea.Msg {
+						// #1380-B: rollback the persisted adapter (map REMOVE
+						// routes through configMutationMsg - #1370 pattern).
+						return configMutationMsg{
+							apply: func(m *Model) error {
+								if rerr := m.config.RemoveIMAdapter(name); rerr != nil {
+									return rerr
+								}
+								return m.saveConfig()
+							},
+							next: func(m *Model) tea.Cmd {
+								return func() tea.Msg { return mattermostBindResultMsg{err: origErr} }
+							},
+							fail: func(rerr error) tea.Msg {
+								return mattermostBindResultMsg{err: fmt.Errorf("%v (rollback failed: %v)", origErr, rerr)}
+							},
+						}
+					}
 					if err := m.ensureMMRuntime(); err != nil {
-						return mattermostBindResultMsg{err: err}
+						return rollback(err)
 					}
 					if err := m.startMMAdapterIfNeeded(name); err != nil {
-						return mattermostBindResultMsg{err: err}
+						return rollback(err)
 					}
 					return mattermostBindResultMsg{message: m.t("panel.mattermost.message.added_bot", name)}
 				}
@@ -334,13 +357,10 @@ func (m *Model) startMMAdapterIfNeeded(name string) error {
 		return fmt.Errorf(m.t("panel.mattermost.error.not_configured"), name)
 	}
 	if !adapterCfg.Enabled {
-		// Auto-enable when user explicitly tries to bind from panel.
-		if err := m.config.SetIMAdapterEnabled(name, true); err != nil {
-			return fmt.Errorf("enable %s: %w", name, err)
-		}
-		if m.imManager != nil {
-			_ = m.imManager.EnableBinding(name)
-		}
+		// #1380-A: disabled adapters must go through bindMMEntry's
+		// configMutationMsg auto-enable path (map write never runs on
+		// this Cmd-goroutine helper).
+		return fmt.Errorf("adapter %s is disabled - bind from the panel to enable it", name)
 	}
 	if !strings.EqualFold(adapterCfg.Platform, string(im.PlatformMattermost)) {
 		return fmt.Errorf(m.t("panel.mattermost.error.not_mm_adapter"), name)
@@ -361,20 +381,43 @@ func (m *Model) bindMMEntry(entry mattermostBindingEntry) tea.Cmd {
 		if m.imManager == nil {
 			return mattermostBindResultMsg{err: errors.New(m.t("panel.mattermost.error.config_unavailable"))}
 		}
-		if err := m.startMMAdapterIfNeeded(entry.Adapter); err != nil {
-			return mattermostBindResultMsg{err: err}
+		// #1380-A: a disabled adapter's auto-enable runs on the Update
+		// loop via configMutationMsg; the bind chain continues in next().
+		bindRest := func(m *Model) tea.Msg {
+			if err := m.startMMAdapterIfNeeded(entry.Adapter); err != nil {
+				return mattermostBindResultMsg{err: err}
+			}
+			targetID := defaultMMTargetID(ws)
+			_, err := m.imManager.BindChannel(im.ChannelBinding{
+				Workspace: ws,
+				Platform:  im.PlatformMattermost,
+				Adapter:   entry.Adapter,
+				TargetID:  targetID,
+			})
+			if err != nil {
+				return mattermostBindResultMsg{err: err}
+			}
+			return mattermostBindResultMsg{message: m.t("panel.mattermost.message.bound_success")}
 		}
-		targetID := defaultMMTargetID(ws)
-		_, err := m.imManager.BindChannel(im.ChannelBinding{
-			Workspace: ws,
-			Platform:  im.PlatformMattermost,
-			Adapter:   entry.Adapter,
-			TargetID:  targetID,
-		})
-		if err != nil {
-			return mattermostBindResultMsg{err: err}
+		if cfg, ok := m.config.IM.Adapters[entry.Adapter]; m.config != nil && ok && !cfg.Enabled {
+			return configMutationMsg{
+				apply: func(m *Model) error {
+					return m.config.SetIMAdapterEnabled(entry.Adapter, true)
+				},
+				next: func(m *Model) tea.Cmd {
+					return func() tea.Msg {
+						if m.imManager != nil {
+							_ = m.imManager.EnableBinding(entry.Adapter)
+						}
+						return bindRest(m)
+					}
+				},
+				fail: func(err error) tea.Msg {
+					return mattermostBindResultMsg{err: fmt.Errorf("enable %s: %w", entry.Adapter, err)}
+				},
+			}
 		}
-		return mattermostBindResultMsg{message: m.t("panel.mattermost.message.bound_success")}
+		return bindRest(m)
 	}
 }
 
