@@ -208,3 +208,40 @@ func TestDingTalkBindingLabelsMutedActiveAvailable(t *testing.T) {
 		t.Fatalf("expected available, got %s", labels[3])
 	}
 }
+
+// TestCreateDingtalkAdapterMutationFlow pins the #1367 batch-1 migration:
+// createDingtalkAdapterCmd no longer touches config on the Cmd goroutine -
+// it returns configMutationMsg; routing it through Update performs the
+// write on the main loop and the follow-up chain still reaches
+// dingtalkBindResultMsg.
+func TestCreateDingtalkAdapterMutationFlow(t *testing.T) {
+	m := newTestModel()
+	if m.config == nil {
+		m.config = config.DefaultConfig()
+	}
+
+	msg := m.createDingtalkAdapterCmd("dt-x key secret")()
+	mut, ok := msg.(configMutationMsg)
+	if !ok {
+		t.Fatalf("expected configMutationMsg, got %#v", msg)
+	}
+	if _, has := m.config.IM.Adapters["dt-x"]; has {
+		t.Fatal("config mutated on Cmd goroutine - race regression")
+	}
+
+	m2, cmd := m.handleConfigMutationMsg(mut)
+	if _, has := m2.config.IM.Adapters["dt-x"]; !has {
+		t.Fatal("adapter not added after mutation routing")
+	}
+	if !m2.config.IM.Enabled {
+		t.Fatal("IM not enabled after mutation routing")
+	}
+	if cmd == nil {
+		t.Fatal("follow-up Cmd missing")
+	}
+	// The follow-up chain must end in the panel's result message.
+	final := cmd()
+	if _, ok := final.(dingtalkBindResultMsg); !ok {
+		t.Fatalf("follow-up chain ended in %#v, want dingtalkBindResultMsg", final)
+	}
+}
