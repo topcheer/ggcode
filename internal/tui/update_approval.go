@@ -24,6 +24,16 @@ func (m Model) handleApprovalMsg(msg ApprovalMsg) (Model, tea.Cmd) {
 	// register the newcomer.
 	if m.pendingApproval != nil && m.pendingApproval.Response != nil {
 		stale := *m.pendingApproval
+		// #1423-B: the displacement branch denied the stale approval but
+		// left m.tunnelPendingApprovalID pointing at it - the autopilot
+		// branch below then allowed the NEW request while the push path
+		// (commands_slash) read the RESIDUAL old ID: mobile saw the old
+		// request 'allowed' (it was denied) and the new result mispaired.
+		// Push an explicit deny for the stale ID, then clear it.
+		if oldID := m.tunnelPendingApprovalID; oldID != "" {
+			m.pushTunnelApprovalResult(oldID, "deny")
+			m.tunnelPendingApprovalID = ""
+		}
 		safego.Go("tui.model.displaceApproval", func() {
 			stale.Response <- permission.Deny
 		})

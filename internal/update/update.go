@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
 	"os/exec"
@@ -271,14 +272,50 @@ func RunHelper(manifestPath string) error {
 		existed bool
 	}
 	var written []backup
+	// #1423-A/U-D2: EVERY abort path must roll back the targets this
+	// run already replaced - the old code only rolled back from the
+	// deadline branch; an unreadable target (this fix) or a MkdirAll
+	// failure (U-D2) returned early and left a half-updated install,
+	// exactly the state #1402 promised to eliminate.
+	rollbackAll := func(curErr error) error {
+		var restoreErrs []string
+		for i := len(written) - 1; i >= 0; i-- {
+			w := written[i]
+			if !w.existed {
+				if rmErr := os.Remove(w.path); rmErr != nil {
+					restoreErrs = append(restoreErrs, fmt.Sprintf("remove fresh %s: %v", w.path, rmErr))
+				}
+				continue
+			}
+			if rsErr := install.WriteExecutable(w.path, w.data); rsErr != nil {
+				restoreErrs = append(restoreErrs, fmt.Sprintf("restore %s: %v", w.path, rsErr))
+			}
+		}
+		if len(restoreErrs) > 0 {
+			return fmt.Errorf("%w (rollback incomplete: %s)", curErr, strings.Join(restoreErrs, "; "))
+		}
+		return fmt.Errorf("%w (earlier targets rolled back)", curErr)
+	}
 	for _, target := range manifest.TargetPaths {
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return fmt.Errorf("create target dir for %s: %w", target, err)
+			// U-D2: used to return WITHOUT rolling back earlier targets.
+			return rollbackAll(fmt.Errorf("create target dir for %s: %w", target, err))
 		}
 		var prev []byte
 		existed := false
 		if old, err := os.ReadFile(target); err == nil {
 			prev, existed = old, true
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			// #1423-A: ANY read error (AV scan lock, ACL deny, mode 0o200
+			// exists-but-unreadable) used to be conflated with 'does not
+			// exist'. The replace itself is tmp+rename and only needs
+			// DIRECTORY write - it succeeds where read failed - and the
+			// rollback then os.Remove'd the never-backed-up original: the
+			// user's binary deleted forever. Unreadable-but-present ABORTS
+			// the run (with rollback of earlier targets); os.Remove
+			// rollback is only correct for targets that truly did not
+			// exist.
+			return rollbackAll(fmt.Errorf("target %s exists but is unreadable (no backup possible, refusing to replace): %w", target, err))
 		}
 		for {
 			lastErr = install.WriteExecutable(target, sourceData)
@@ -287,24 +324,7 @@ func RunHelper(manifestPath string) error {
 				break
 			}
 			if time.Now().After(deadline) {
-				// Roll back every target this run already replaced.
-				var restoreErrs []string
-				for i := len(written) - 1; i >= 0; i-- {
-					w := written[i]
-					if !w.existed {
-						if rmErr := os.Remove(w.path); rmErr != nil {
-							restoreErrs = append(restoreErrs, fmt.Sprintf("remove fresh %s: %v", w.path, rmErr))
-						}
-						continue
-					}
-					if rsErr := install.WriteExecutable(w.path, w.data); rsErr != nil {
-						restoreErrs = append(restoreErrs, fmt.Sprintf("restore %s: %v", w.path, rsErr))
-					}
-				}
-				if len(restoreErrs) > 0 {
-					return fmt.Errorf("replace %s: %w (rollback incomplete: %s)", target, lastErr, strings.Join(restoreErrs, "; "))
-				}
-				return fmt.Errorf("replace %s: %w (earlier targets rolled back)", target, lastErr)
+				return rollbackAll(fmt.Errorf("replace %s: %w", target, lastErr))
 			}
 			time.Sleep(300 * time.Millisecond)
 		}
