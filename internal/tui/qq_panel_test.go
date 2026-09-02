@@ -134,9 +134,27 @@ func TestQQPanelCreateAdapterPersistsCredentials(t *testing.T) {
 		t.Fatal("expected create adapter command")
 	}
 	msg := cmd()
-	result, ok := msg.(qqBindResultMsg)
+	// #1367 batch 2: create routes through configMutationMsg - config
+	// write lands on the Update loop, then next() chains the runtime
+	// start which ends in qqBindResultMsg.
+	mut, ok := msg.(configMutationMsg)
 	if !ok {
-		t.Fatalf("expected qqBindResultMsg, got %#v", msg)
+		t.Fatalf("expected configMutationMsg, got %#v", msg)
+	}
+	if _, has := m.config.IM.Adapters["qq-main"]; has {
+		t.Fatal("config mutated on Cmd goroutine - race regression")
+	}
+	m2, followUp := m.handleConfigMutationMsg(mut)
+	m = m2
+	if _, has := m.config.IM.Adapters["qq-main"]; !has {
+		t.Fatal("adapter not added after mutation routing")
+	}
+	if followUp == nil {
+		t.Fatal("expected follow-up Cmd")
+	}
+	result, ok := followUp().(qqBindResultMsg)
+	if !ok {
+		t.Fatalf("expected qqBindResultMsg from follow-up, got %#v", followUp())
 	}
 	if result.err != nil {
 		t.Fatal(result.err)

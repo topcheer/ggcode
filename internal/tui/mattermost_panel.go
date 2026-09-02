@@ -290,17 +290,28 @@ func (m *Model) createMMAdapterCmd(spec string) tea.Cmd {
 				"token": token,
 			},
 		}
-		m.config.IM.Enabled = true
-		if err := m.config.AddIMAdapter(name, adapter); err != nil {
-			return mattermostBindResultMsg{err: err}
+		// #1367 family batch 2: config write + disk save moved onto
+		// the Update loop via configMutationMsg (see config_mutation.go).
+		return configMutationMsg{
+			apply: func(m *Model) error {
+				m.config.IM.Enabled = true
+				return m.config.AddIMAdapter(name, adapter)
+			},
+			next: func(m *Model) tea.Cmd {
+				return func() tea.Msg {
+					if err := m.ensureMMRuntime(); err != nil {
+						return mattermostBindResultMsg{err: err}
+					}
+					if err := m.startMMAdapterIfNeeded(name); err != nil {
+						return mattermostBindResultMsg{err: err}
+					}
+					return mattermostBindResultMsg{message: m.t("panel.mattermost.message.added_bot", name)}
+				}
+			},
+			fail: func(err error) tea.Msg {
+				return mattermostBindResultMsg{err: err}
+			},
 		}
-		if err := m.ensureMMRuntime(); err != nil {
-			return mattermostBindResultMsg{err: err}
-		}
-		if err := m.startMMAdapterIfNeeded(name); err != nil {
-			return mattermostBindResultMsg{err: err}
-		}
-		return mattermostBindResultMsg{message: m.t("panel.mattermost.message.added_bot", name)}
 	}
 }
 

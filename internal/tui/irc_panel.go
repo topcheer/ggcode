@@ -292,17 +292,28 @@ func (m *Model) createIRCAdapterCmd(spec string) tea.Cmd {
 				"channels": channels,
 			},
 		}
-		m.config.IM.Enabled = true
-		if err := m.config.AddIMAdapter(name, adapter); err != nil {
-			return ircBindResultMsg{err: err}
+		// #1367 family batch 2: config write + disk save moved onto
+		// the Update loop via configMutationMsg (see config_mutation.go).
+		return configMutationMsg{
+			apply: func(m *Model) error {
+				m.config.IM.Enabled = true
+				return m.config.AddIMAdapter(name, adapter)
+			},
+			next: func(m *Model) tea.Cmd {
+				return func() tea.Msg {
+					if err := m.ensureIRCRuntime(); err != nil {
+						return ircBindResultMsg{err: err}
+					}
+					if err := m.startIRCAdapterIfNeeded(name); err != nil {
+						return ircBindResultMsg{err: err}
+					}
+					return ircBindResultMsg{message: m.t("panel.irc.message.added_bot", name)}
+				}
+			},
+			fail: func(err error) tea.Msg {
+				return ircBindResultMsg{err: err}
+			},
 		}
-		if err := m.ensureIRCRuntime(); err != nil {
-			return ircBindResultMsg{err: err}
-		}
-		if err := m.startIRCAdapterIfNeeded(name); err != nil {
-			return ircBindResultMsg{err: err}
-		}
-		return ircBindResultMsg{message: m.t("panel.irc.message.added_bot", name)}
 	}
 }
 

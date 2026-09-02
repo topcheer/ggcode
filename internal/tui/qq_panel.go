@@ -335,17 +335,28 @@ func (m *Model) createQQAdapter(spec string) tea.Cmd {
 				"appsecret": appSecret,
 			},
 		}
-		m.config.IM.Enabled = true
-		if err := m.config.AddIMAdapter(name, adapter); err != nil {
-			return qqBindResultMsg{err: err}
+		// #1367 family batch 2: config write + disk save moved onto
+		// the Update loop via configMutationMsg (see config_mutation.go).
+		return configMutationMsg{
+			apply: func(m *Model) error {
+				m.config.IM.Enabled = true
+				return m.config.AddIMAdapter(name, adapter)
+			},
+			next: func(m *Model) tea.Cmd {
+				return func() tea.Msg {
+					if err := m.ensureQQRuntime(false); err != nil {
+						return qqBindResultMsg{err: err}
+					}
+					if err := m.startQQAdapterIfNeeded(name); err != nil {
+						return qqBindResultMsg{err: err}
+					}
+					return qqBindResultMsg{message: m.t("panel.qq.message.added_bot", name)}
+				}
+			},
+			fail: func(err error) tea.Msg {
+				return qqBindResultMsg{err: err}
+			},
 		}
-		if err := m.ensureQQRuntime(false); err != nil {
-			return qqBindResultMsg{err: err}
-		}
-		if err := m.startQQAdapterIfNeeded(name); err != nil {
-			return qqBindResultMsg{err: err}
-		}
-		return qqBindResultMsg{message: m.t("panel.qq.message.added_bot", name)}
 	}
 }
 

@@ -300,17 +300,28 @@ func (m *Model) createMatAdapterCmd(spec string) tea.Cmd {
 				"access_token": token,
 			},
 		}
-		m.config.IM.Enabled = true
-		if err := m.config.AddIMAdapter(name, adapter); err != nil {
-			return matrixBindResultMsg{err: err}
+		// #1367 family batch 2: config write + disk save moved onto
+		// the Update loop via configMutationMsg (see config_mutation.go).
+		return configMutationMsg{
+			apply: func(m *Model) error {
+				m.config.IM.Enabled = true
+				return m.config.AddIMAdapter(name, adapter)
+			},
+			next: func(m *Model) tea.Cmd {
+				return func() tea.Msg {
+					if err := m.ensureMatRuntime(); err != nil {
+						return matrixBindResultMsg{err: err}
+					}
+					if err := m.startMatAdapterIfNeeded(name); err != nil {
+						return matrixBindResultMsg{err: err}
+					}
+					return matrixBindResultMsg{message: m.t("panel.matrix.message.added_bot", name)}
+				}
+			},
+			fail: func(err error) tea.Msg {
+				return matrixBindResultMsg{err: err}
+			},
 		}
-		if err := m.ensureMatRuntime(); err != nil {
-			return matrixBindResultMsg{err: err}
-		}
-		if err := m.startMatAdapterIfNeeded(name); err != nil {
-			return matrixBindResultMsg{err: err}
-		}
-		return matrixBindResultMsg{message: m.t("panel.matrix.message.added_bot", name)}
 	}
 }
 

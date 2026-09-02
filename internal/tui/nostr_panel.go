@@ -324,36 +324,47 @@ func (m *Model) createNostrAdapterCmd(spec string) tea.Cmd {
 				"relays":      relays,
 			},
 		}
-		m.config.IM.Enabled = true
-		if err := m.config.AddIMAdapter(name, adapter); err != nil {
-			return nostrBindResultMsg{err: err}
-		}
-		if err := m.ensureNostrRuntime(); err != nil {
-			return nostrBindResultMsg{err: err}
-		}
-		if err := m.startNostrAdapterIfNeeded(name); err != nil {
-			return nostrBindResultMsg{err: err}
-		}
+		// #1367 family batch 2: config write + disk save moved onto
+		// the Update loop via configMutationMsg (see config_mutation.go).
+		return configMutationMsg{
+			apply: func(m *Model) error {
+				m.config.IM.Enabled = true
+				return m.config.AddIMAdapter(name, adapter)
+			},
+			next: func(m *Model) tea.Cmd {
+				return func() tea.Msg {
+					if err := m.ensureNostrRuntime(); err != nil {
+						return nostrBindResultMsg{err: err}
+					}
+					if err := m.startNostrAdapterIfNeeded(name); err != nil {
+						return nostrBindResultMsg{err: err}
+					}
 
-		// Derive public key for QR code
-		pubKey, _ := nostr.GetPublicKey(privateKey)
-		npub, _ := nip19.EncodePublicKey(pubKey)
-		var qrText string
-		qrText, _ = renderCompactTerminalQRCode("nostr:" + npub)
+					// Derive public key for QR code
+					pubKey, _ := nostr.GetPublicKey(privateKey)
+					npub, _ := nip19.EncodePublicKey(pubKey)
+					var qrText string
+					qrText, _ = renderCompactTerminalQRCode("nostr:" + npub)
 
-		var msg string
-		if len(fields) == 1 {
-			// Show nsec for auto-generated key so user can back it up
-			nsec, _ := nip19.EncodePrivateKey(privateKey)
-			msg = m.t("panel.nostr.message.added_bot_key", name, nsec)
-		} else {
-			msg = m.t("panel.nostr.message.added_bot", name)
-		}
+					var msg string
+					if len(fields) == 1 {
+						// Show nsec for auto-generated key so user can back it up
+						nsec, _ := nip19.EncodePrivateKey(privateKey)
+						msg = m.t("panel.nostr.message.added_bot_key", name, nsec)
+					} else {
+						msg = m.t("panel.nostr.message.added_bot", name)
+					}
 
-		return nostrBindResultMsg{
-			message: msg,
-			qrCode:  qrText,
-			npub:    npub,
+					return nostrBindResultMsg{
+						message: msg,
+						qrCode:  qrText,
+						npub:    npub,
+					}
+				}
+			},
+			fail: func(err error) tea.Msg {
+				return nostrBindResultMsg{err: err}
+			},
 		}
 	}
 }
