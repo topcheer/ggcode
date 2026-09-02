@@ -110,14 +110,43 @@ class MessageBubble extends StatelessWidget {
                 alignment: WrapAlignment.end,
                 children: message.imageThumbnails.map((dataUrl) {
                   final b64 = dataUrl.contains(',') ? dataUrl.split(',').last : dataUrl;
+                  // #1424-A: base64Decode throws FormatException on the
+                  // synchronous build path - one corrupt thumbnail (cache
+                  // truncation / heterogeneous client / escaped JSON)
+                  // ErrorWidget'd the WHOLE bubble (text unreadable too)
+                  // and re-threw on every scroll. Decode defensively and
+                  // fall back to a placeholder; errorBuilder covers any
+                  // decode-valid-but-broken-payload case.
+                  Uint8List? bytes;
+                  try {
+                    bytes = base64Decode(b64);
+                  } catch (_) {
+                    bytes = null; // placeholder below
+                  }
                   return ClipRRect(
                     borderRadius: BorderRadius.circular(12),
-                    child: Image.memory(
-                      base64Decode(b64),
-                      width: 120,
-                      height: 120,
-                      fit: BoxFit.cover,
-                    ),
+                    child: bytes == null
+                        ? Container(
+                            width: 120,
+                            height: 120,
+                            color: Theme.of(context).disabledColor.withValues(alpha: 0.15),
+                            child: Icon(
+                              Icons.broken_image_outlined,
+                              size: 32,
+                              color: Theme.of(context).disabledColor,
+                            ),
+                          )
+                        : Image.memory(
+                            bytes,
+                            width: 120,
+                            height: 120,
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, __, ___) => Icon(
+                              Icons.broken_image_outlined,
+                              size: 32,
+                              color: Theme.of(context).disabledColor,
+                            ),
+                          ),
                   );
                 }).toList(),
               ),

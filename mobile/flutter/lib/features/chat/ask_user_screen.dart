@@ -120,7 +120,13 @@ class _AskUserScreenState extends ConsumerState<AskUserScreen> {
                           borderRadius: BorderRadius.circular(12),
                         ),
                       ),
-                      onPressed: () => _submit(askUser),
+                    // #1424-B: Submit was ALWAYS enabled and _submit maps
+                    // unanswered questions to empty answers - an
+                    // all-empty submission sent status 'submitted' with
+                    // zero answers, indistinguishable from 'cancelled'
+                    // while the agent waits for a real answer. Require at
+                    // least one answered question (choice or freeform).
+                    onPressed: _hasAnyAnswer(askUser) ? () => _submit(askUser) : null,
                       child: Text(
                         'Submit',
                         style: TextStyle(
@@ -262,6 +268,17 @@ class _AskUserScreenState extends ConsumerState<AskUserScreen> {
         ),
       ),
     );
+  }
+
+
+  /// #1424-B: whether at least one question has a real answer (a picked
+  /// choice or non-empty freeform text) - gates the Submit button.
+  bool _hasAnyAnswer(AskUserInfo askUser) {
+    for (final q in askUser.questions) {
+      if ((_selectedChoices[q.id] ?? const []).isNotEmpty) return true;
+      if ((_freeformControllers[q.id]?.text ?? '').trim().isNotEmpty) return true;
+    }
+    return false;
   }
 
   void _submit(AskUserInfo askUser) {
