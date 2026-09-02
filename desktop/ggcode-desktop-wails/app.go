@@ -559,6 +559,14 @@ func (a *App) shutdown(_ context.Context) {
 		a.removeSystemTray()
 		if a.chat != nil {
 			a.chat.Cancel()
+			// #1430-A: Cancel only aborts in-flight work; Close additionally
+			// deletes the empty 'created-but-never-messaged' session, clears
+			// IM session bindings, releases the session lock, stops A2A/
+			// ACP, and leaves the LAN hub (broadcast) - teardownChatBridge
+			// (workspace switch) already does Cancel+Close; the QUIT path was
+			// the odd one out, leaving empty sessions on disk forever (no
+			// startup sweep exists to clean them up). Close is idempotent.
+			a.chat.Close()
 		}
 	})
 }
