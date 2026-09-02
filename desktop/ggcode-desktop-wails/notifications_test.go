@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 )
 
 func TestNewNotificationManager(t *testing.T) {
@@ -197,5 +198,35 @@ func TestNotifyMacOS_MultilineBodyCompiles(t *testing.T) {
 	if output, err := exec.Command("osacompile", "-o", bad, "-e", raw).CombinedOutput(); err == nil {
 		t.Logf("note: osacompile accepted a raw newline (tolerant version); escaping still valid")
 		_ = output
+	}
+}
+
+// TestNotifyUnixQueuedNotForked pins #1431-A: macOS/Linux notifications
+// go through the bounded unixQueue instead of forking a goroutine per
+// notification - enqueue never blocks or spawns (the worker is the only
+// process forker). A storm of 64 enqueues against the 32-slot queue must
+// not deadlock the callers when no worker drains (non-blocking
+// hand-off means drop-on-full, matching #399's Windows semantics).
+func TestNotifyUnixQueuedNotForked(t *testing.T) {
+	nm := NewNotificationManager()
+	// Drain manually; do NOT start delivery (worker IS started by the
+	// ctor on a real OS path, so stop consuming here by draining fast).
+	go func() {
+		for range nm.unixQueue {
+		}
+	}()
+	// Storm well past capacity: enqueue paths must all return.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 64; i++ {
+			nm.notifyMacOS("t", "b")
+			nm.notifyLinux("t", "b")
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("enqueue storm blocked - queue hand-off not bounded")
 	}
 }
