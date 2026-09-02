@@ -539,3 +539,22 @@ func (a *nostrAdapter) publishState(healthy bool, status, lastErr string) {
 		UpdatedAt: time.Now(),
 	})
 }
+
+// ValidateNostrPrivateKey performs the same key checks newNostrAdapter
+// applies at start time (normalize, length, pubkey derivation) so callers
+// can validate BEFORE persisting a nostr adapter config (#1384: a bad key
+// used to land in the yaml first and error only on every later start).
+func ValidateNostrPrivateKey(key string) error {
+	k := strings.TrimSpace(key)
+	if k == "" {
+		return fmt.Errorf("private_key is empty")
+	}
+	k = normalizeNostrKey(k)
+	if len(k) != 64 {
+		return fmt.Errorf("private_key must be 32 bytes hex (64 chars) or nsec format")
+	}
+	if _, err := nostr.GetPublicKey(k); err != nil {
+		return fmt.Errorf("invalid private_key: %w", err)
+	}
+	return nil
+}

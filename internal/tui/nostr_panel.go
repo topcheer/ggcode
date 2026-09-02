@@ -328,6 +328,18 @@ func (m *Model) createNostrAdapterCmd(spec string) tea.Cmd {
 		// the Update loop via configMutationMsg (see config_mutation.go).
 		return configMutationMsg{
 			apply: func(m *Model) error {
+				// #1384 附案: validate the key BEFORE AddIMAdapter persists
+				// it - a bad key used to land in the yaml and then error on
+				// every later start (dirty config the user had to hand-edit).
+				if userKey := privateKey; userKey != "" {
+					// Only precheck user-supplied keys; generated ones are
+					// valid by construction.
+					if fields1 := strings.Fields(spec); len(fields1) >= 2 {
+						if err := im.ValidateNostrPrivateKey(userKey); err != nil {
+							return fmt.Errorf("panel.nostr: %w", err)
+						}
+					}
+				}
 				m.config.IM.Enabled = true
 				return m.config.AddIMAdapter(name, adapter)
 			},
