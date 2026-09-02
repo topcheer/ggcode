@@ -429,7 +429,9 @@ func koCatalog(key string) string {
 	case "panel.provider.refresh.failed":
 		return "모델 새로고침 실패: %s"
 	case "panel.provider.refresh.none":
-		return "이 제공자에 대해 새로고침 가능한 엔드포인트가 없습니다."
+		return "이 vendor에 새로고침 가능한 endpoint가 없습니다."
+	case "panel.provider.no_vendor_selected":
+		return "vendor 미선택 - 먼저 추가하세요"
 	case "panel.model.models":
 		return "모델"
 	case "panel.model.vendor":

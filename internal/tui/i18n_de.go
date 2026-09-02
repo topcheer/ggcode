@@ -463,7 +463,9 @@ func deCatalog(key string) string {
 	case "panel.provider.refresh.failed":
 		return "Modellaktualisierung fehlgeschlagen: %s"
 	case "panel.provider.refresh.none":
-		return "Keine aktualisierbaren Endpunkte für diesen Anbieter."
+		return "Keine aktualisierbaren Endpoints für diesen Vendor."
+	case "panel.provider.no_vendor_selected":
+		return "Kein Vendor ausgewählt - zuerst hinzufügen"
 
 	// --- Model panel details ---
 	case "panel.model.models":

@@ -425,7 +425,9 @@ func viCatalog(key string) string {
 	case "panel.provider.refresh.failed":
 		return "Làm mới mô hình thất bại: %s"
 	case "panel.provider.refresh.none":
-		return "Không có endpoint nào có thể làm mới cho nhà cung cấp này."
+		return "Không có endpoint nào làm mới được cho vendor này."
+	case "panel.provider.no_vendor_selected":
+		return "Chưa chọn vendor - hãy thêm trước"
 	case "panel.model.models":
 		return "Mô hình"
 	case "panel.model.vendor":

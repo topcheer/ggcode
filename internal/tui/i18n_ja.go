@@ -462,7 +462,9 @@ func jaCatalog(key string) string {
 	case "panel.provider.refresh.failed":
 		return "モデルの更新に失敗しました: %s"
 	case "panel.provider.refresh.none":
-		return "このベンダーには更新可能なエンドポイントがありません。"
+		return "この vendor に更新可能な endpoint がありません。"
+	case "panel.provider.no_vendor_selected":
+		return "vendor 未選択 - 先に追加してください"
 	case "panel.model.models":
 		return "モデル"
 	case "panel.model.vendor":

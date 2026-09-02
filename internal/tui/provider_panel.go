@@ -73,6 +73,11 @@ type providerModelsRefreshResultMsg struct {
 	skipped     int
 	saveErr     error
 	discoverErr error
+	// #1387-A: endpointID+models discovered on the Cmd goroutine; the
+	// SetEndpointModels write + saveConfig execute on the Update loop via
+	// configMutationMsg when the handler consumes this message.
+	endpointID    string
+	pendingModels []string
 }
 
 type providerAuthStartMsg struct {
@@ -902,6 +907,13 @@ func (m *Model) handleProviderPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			panel.startEditing("enterprise url", panel.enterpriseURL)
 			return *m, nil
 		}
+		// #1387-C: with an EMPTY config (no vendors) these edit entries used
+		// Vendors[""] zero-values and the enter-commit persisted a phantom
+		// "" vendor into the yaml.
+		if panel.selectedVendor() == "" {
+			panel.message = m.t("provider.panel.no_vendor_selected")
+			return *m, nil
+		}
 		vc := m.config.Vendors[panel.selectedVendor()]
 		ep := vc.Endpoints[panel.selectedEndpoint()]
 		panel.startEditing("endpoint base url", ep.BaseURL)
@@ -918,6 +930,11 @@ func (m *Model) handleProviderPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		panel.message = ""
 		return *m, nil
 	case "m":
+		// #1387-C: same empty-state guard as "b".
+		if panel.selectedVendor() == "" {
+			panel.message = m.t("provider.panel.no_vendor_selected")
+			return *m, nil
+		}
 		panel.startEditing("custom model", panel.selectedModel())
 		return *m, nil
 	case "l":
@@ -1052,6 +1069,11 @@ func (m *Model) handleNewVendorStep() (Model, tea.Cmd) {
 			return *m, nil
 		}
 		if err := m.config.AddEndpoint(d.vendorName, d.endpointName, d.protocol, d.baseURL, d.apiKey); err != nil {
+			// #1387-D: without the rollback the half-created vendor stayed
+			// and the retry hit 'vendor already exists' forever.
+			if rerr := m.config.RemoveVendor(d.vendorName); rerr != nil {
+				debug.Log("provider", "wizard rollback failed: %v", rerr)
+			}
 			panel.message = err.Error()
 			panel.newVendorStep = 0
 			return *m, nil
@@ -1212,7 +1234,7 @@ func (m *Model) refreshProviderModelsForVendor(vendor string) tea.Cmd {
 	}
 
 	return func() tea.Msg {
-		result := providerModelsRefreshResultMsg{vendor: vendor}
+		result := providerModelsRefreshResultMsg{vendor: vendor, endpointID: endpointID}
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
 
@@ -1238,18 +1260,16 @@ func (m *Model) refreshProviderModelsForVendor(vendor string) tea.Cmd {
 			result.discoverErr = fmt.Errorf("%s: %w", endpointID, err)
 			return result
 		}
-		if err := m.config.SetEndpointModels(vendor, endpointID, models); err != nil {
-			result.discoverErr = err
-			return result
-		}
+		// #1387-A (family site 13, Vendors map): SetEndpointModels writes the
+		// Vendors map and saveConfig hits disk - both ran HERE on the Cmd
+		// goroutine while the render loop reads VendorNames/Models every
+		// frame (20s network window). The write + persist now ride the
+		// result message and land on the Update loop; the mutation goes
+		// through configMutationMsg (family standard) so ordering with
+		// other config writes is preserved.
 		result.updated++
 		result.discovered += len(models)
-
-		if result.updated > 0 {
-			if err := m.saveConfig(); err != nil {
-				result.saveErr = err
-			}
-		}
+		result.pendingModels = models
 		return result
 	}
 }

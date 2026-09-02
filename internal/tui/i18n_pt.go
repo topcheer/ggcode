@@ -1186,7 +1186,9 @@ func ptCatalog(key string) string {
 	case "panel.provider.refresh.failed":
 		return "Atualização de modelos falhou: %s"
 	case "panel.provider.refresh.none":
-		return "Nenhum endpoint atualizável para este fornecedor."
+		return "Sem endpoints atualizáveis para este vendor."
+	case "panel.provider.no_vendor_selected":
+		return "Nenhum vendor selecionado - adicione um"
 	case "panel.provider.refresh.partial":
 		return "Atualizados %d endpoint(s), descobertos %d modelo(s). Alguns endpoints falharam: %v"
 	case "panel.provider.refresh.save_failed":

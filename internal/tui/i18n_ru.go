@@ -463,7 +463,9 @@ func ruCatalog(key string) string {
 	case "panel.provider.refresh.failed":
 		return "Ошибка обновления моделей: %s"
 	case "panel.provider.refresh.none":
-		return "Нет обновляемых эндпоинтов для этого поставщика."
+		return "Нет обновляемых endpoints для этого vendor."
+	case "panel.provider.no_vendor_selected":
+		return "vendor не выбран - сначала добавьте"
 
 	// --- Model panel details ---
 	case "panel.model.models":

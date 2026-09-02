@@ -425,7 +425,9 @@ func frCatalog(key string) string {
 	case "panel.provider.refresh.failed":
 		return "Erreur d'actualisation des modèles: %s"
 	case "panel.provider.refresh.none":
-		return "Aucun endpoint actualisable pour ce fournisseur."
+		return "Aucun endpoint actualisable pour ce vendor."
+	case "panel.provider.no_vendor_selected":
+		return "Aucun vendor sélectionné - ajoutez-en un"
 	case "panel.model.models":
 		return "Modèles"
 	case "panel.model.vendor":

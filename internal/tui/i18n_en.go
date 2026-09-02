@@ -471,6 +471,8 @@ func enCatalog(key string) string {
 		return "Model refresh failed: %s"
 	case "panel.provider.refresh.none":
 		return "No refreshable endpoints for this vendor."
+	case "panel.provider.no_vendor_selected":
+		return "No vendor selected - add a vendor first"
 	case "panel.model.models":
 		return "Models"
 	case "panel.model.vendor":

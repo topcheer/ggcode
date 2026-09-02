@@ -250,21 +250,44 @@ func (m *Model) handleQQPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 
 func (m *Model) bindQQEntry(entry qqBindingEntry) tea.Cmd {
 	return func() tea.Msg {
-		if err := m.ensureQQBotBinding(entry.Adapter); err != nil {
-			return qqBindResultMsg{err: err}
-		}
-		if m.agent != nil {
-			if err := m.waitForAdapterHealthy(m.imManager, entry.Adapter, 10*time.Second); err != nil {
+		bindRest := func(m *Model) tea.Msg {
+			if err := m.ensureQQBotBinding(entry.Adapter); err != nil {
 				return qqBindResultMsg{err: err}
 			}
-			// Sync session history to the newly bound channel only.
-			if binding := m.imManager.Snapshot().BindingByAdapter(entry.Adapter); binding != nil {
-				if err := m.imManager.SyncSessionHistory(context.Background(), *binding, m.agent.Messages()); err != nil && err != im.ErrNoChannelBound {
+			if m.agent != nil {
+				if err := m.waitForAdapterHealthy(m.imManager, entry.Adapter, 10*time.Second); err != nil {
 					return qqBindResultMsg{err: err}
 				}
+				// Sync session history to the newly bound channel only.
+				if binding := m.imManager.Snapshot().BindingByAdapter(entry.Adapter); binding != nil {
+					if err := m.imManager.SyncSessionHistory(context.Background(), *binding, m.agent.Messages()); err != nil && err != im.ErrNoChannelBound {
+						return qqBindResultMsg{err: err}
+					}
+				}
+			}
+			return qqBindResultMsg{message: m.t("panel.qq.message.bound_success")}
+		}
+		// #1387-B: a disabled adapter's auto-enable runs on the Update loop
+		// via configMutationMsg; the bind chain continues in next().
+		if cfg, ok := m.config.IM.Adapters[entry.Adapter]; m.config != nil && ok && !cfg.Enabled {
+			return configMutationMsg{
+				apply: func(m *Model) error {
+					return m.config.SetIMAdapterEnabled(entry.Adapter, true)
+				},
+				next: func(m *Model) tea.Cmd {
+					return func() tea.Msg {
+						if m.imManager != nil {
+							_ = m.imManager.EnableBinding(entry.Adapter)
+						}
+						return bindRest(m)
+					}
+				},
+				fail: func(err error) tea.Msg {
+					return qqBindResultMsg{err: fmt.Errorf("enable %s: %w", entry.Adapter, err)}
+				},
 			}
 		}
-		return qqBindResultMsg{message: m.t("panel.qq.message.bound_success")}
+		return bindRest(m)
 	}
 }
 
@@ -379,13 +402,10 @@ func (m *Model) startQQAdapterIfNeeded(name string) error {
 		return errors.New(m.t("panel.qq.error.not_configured", name))
 	}
 	if !adapterCfg.Enabled {
-		// Auto-enable when user explicitly tries to bind from panel.
-		if err := m.config.SetIMAdapterEnabled(name, true); err != nil {
-			return fmt.Errorf("enable %s: %w", name, err)
-		}
-		if m.imManager != nil {
-			_ = m.imManager.EnableBinding(name)
-		}
+		// #1387-B (family site 14): auto-enable must not write the config
+		// map on this Cmd-goroutine helper - bindQQEntry routes it through
+		// configMutationMsg; disabled adapters are refused here.
+		return fmt.Errorf("adapter %s is disabled - bind from the panel to enable it", name)
 	}
 	if !strings.EqualFold(adapterCfg.Platform, string(im.PlatformQQ)) {
 		return errors.New(m.t("panel.qq.error.not_qq_adapter", name))

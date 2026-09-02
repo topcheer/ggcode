@@ -478,7 +478,9 @@ func zhCatalog(key string) string {
 	case "panel.provider.refresh.failed":
 		return "模型刷新失败：%s"
 	case "panel.provider.refresh.none":
-		return "这个供应商没有可刷新的端点。"
+		return "该 vendor 没有可刷新的 endpoint。"
+	case "panel.provider.no_vendor_selected":
+		return "未选择 vendor - 请先添加"
 	case "panel.model.models":
 		return "模型"
 	case "panel.model.vendor":

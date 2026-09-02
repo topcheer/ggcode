@@ -8,27 +8,55 @@ import (
 
 // handleProviderModelsRefreshResultMsg handles the corresponding message case.
 func (m Model) handleProviderModelsRefreshResultMsg(msg providerModelsRefreshResultMsg) (Model, tea.Cmd) {
-	if m.providerPanel != nil && m.providerPanel.refreshVendor == msg.vendor {
-		m.providerPanel.refreshing = false
-		m.providerPanel.refreshVendor = ""
-		currentEndpoint := m.providerPanel.selectedEndpoint()
-		currentModel := m.providerPanel.selectedModel()
-		m.providerPanel.selectEndpoint(currentEndpoint, currentModel, m.configView())
-		switch {
-		case msg.saveErr != nil:
-			m.providerPanel.message = m.t("panel.provider.refresh.save_failed", msg.saveErr.Error())
-		case msg.updated > 0 && msg.discoverErr != nil:
-			m.providerPanel.message = m.t("panel.provider.refresh.partial", msg.updated, msg.discovered, msg.discoverErr)
-		case msg.updated > 0:
-			m.providerPanel.message = m.t("panel.provider.refresh.success", msg.updated, msg.discovered)
-		case msg.discoverErr != nil:
-			m.providerPanel.message = m.t("panel.provider.refresh.failed", msg.discoverErr.Error())
-		default:
-			m.providerPanel.message = m.t("panel.provider.refresh.none")
+	// #1387-A: the discovered models write the config HERE (Update loop),
+	// never on the Cmd goroutine - family site 13 (Vendors map).
+	if msg.pendingModels != nil && msg.endpointID != "" {
+		vendor, epID, models := msg.vendor, msg.endpointID, msg.pendingModels
+		mut := configMutationMsg{
+			apply: func(m *Model) error {
+				if err := m.config.SetEndpointModels(vendor, epID, models); err != nil {
+					return err
+				}
+				return m.saveConfig()
+			},
+			fail: func(err error) tea.Msg {
+				return providerModelsRefreshResultMsg{vendor: vendor, saveErr: err, updated: 0, discovered: 0}
+			},
 		}
+		// Set the panel state first, then route the write; the fail message
+		// re-enters this handler with saveErr set for the error banner.
+		m.providerPanelRefreshFromResult(msg)
+		return m, func() tea.Msg { return mut }
+	}
+	if m.providerPanel != nil {
+		m.providerPanelRefreshFromResult(msg)
 	}
 	return m, nil
+}
 
+// providerPanelRefreshFromResult updates the refresh banner from a
+// (possibly save-failed) refresh result.
+func (m *Model) providerPanelRefreshFromResult(msg providerModelsRefreshResultMsg) {
+	if m.providerPanel == nil || m.providerPanel.refreshVendor != msg.vendor {
+		return
+	}
+	m.providerPanel.refreshing = false
+	m.providerPanel.refreshVendor = ""
+	currentEndpoint := m.providerPanel.selectedEndpoint()
+	currentModel := m.providerPanel.selectedModel()
+	m.providerPanel.selectEndpoint(currentEndpoint, currentModel, m.configView())
+	switch {
+	case msg.saveErr != nil:
+		m.providerPanel.message = m.t("panel.provider.refresh.save_failed", msg.saveErr.Error())
+	case msg.updated > 0 && msg.discoverErr != nil:
+		m.providerPanel.message = m.t("panel.provider.refresh.partial", msg.updated, msg.discovered, msg.discoverErr)
+	case msg.updated > 0:
+		m.providerPanel.message = m.t("panel.provider.refresh.success", msg.updated, msg.discovered)
+	case msg.discoverErr != nil:
+		m.providerPanel.message = m.t("panel.provider.refresh.failed", msg.discoverErr.Error())
+	default:
+		m.providerPanel.message = m.t("panel.provider.refresh.none")
+	}
 }
 
 // handleProviderAuthStartMsg handles the corresponding message case.
