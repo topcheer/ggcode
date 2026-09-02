@@ -57,7 +57,21 @@ type Context struct {
 	WorkingDir string
 	SessionID  string
 	Extra      map[string]string
+
+	// done is closed when the HOST-side call is cancelled (user Esc /
+	// deadline). #1427-A: gRPC delivers the cancellation as a cancelled
+	// stream context; the SDK used to discard it ('_ context.Context'),
+	// so long plugin work kept running after the host already returned
+	// Canceled - wasted work and non-idempotent side effects landing
+	// after a 'cancelled' call. Exposed via Done() so plugin authors
+	// can abort early; nil only when running outside Execute.
+	done <-chan struct{}
 }
+
+// Done returns a channel closed when the host cancelled this call
+// (user cancellation or deadline). Returns nil when cancellation
+// tracking is unavailable; callers should treat nil as 'never done'.
+func (c Context) Done() <-chan struct{} { return c.done }
 
 // Result is the return value of Execute.
 type Result struct {
@@ -103,11 +117,15 @@ func (s *toolServer) ListTools(_ context.Context, _ *pb.ListToolsRequest) (*pb.L
 	return &pb.ListToolsResponse{Tools: tools}, nil
 }
 
-func (s *toolServer) Execute(_ context.Context, req *pb.ExecuteRequest) (*pb.ExecuteResponse, error) {
+func (s *toolServer) Execute(grpcCtx context.Context, req *pb.ExecuteRequest) (*pb.ExecuteResponse, error) {
 	toolCtx := Context{
 		WorkingDir: req.Context["working_dir"],
 		SessionID:  req.Context["session_id"],
 		Extra:      req.Context,
+		// #1427-A: thread the gRPC stream context's cancellation into
+		// the plugin-facing Context (Done()). host ctx cancel -> RST_STREAM
+		// -> this ctx is cancelled; provider.Execute can now observe it.
+		done: grpcCtx.Done(),
 	}
 	result, err := s.provider.Execute(req.ToolName, json.RawMessage(req.Input), toolCtx)
 	if err != nil {

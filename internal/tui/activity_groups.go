@@ -128,6 +128,29 @@ func (m *Model) applyTodoWrite(ts ToolStatusMsg) string {
 		return formatToolInline(present.DisplayName, present.Detail)
 	}
 
+	// #1427-B: dedupe duplicate todo IDs AT THE ENTRY (last-write-wins).
+	// The #1409 follow-up only guarded the change-entry map; todoOrder
+	// rebuilt from the RAW todos and the chat card passed the raw slice -
+	// both render paths bypassed the protection, so [t1,t2,t1] still
+	// appended the same card twice (exactly what f7f8a7b3 claimed fixed).
+	// Deduping here fixes all three downstream consumers at once.
+	if len(todos) > 1 {
+		last := make(map[string]todoStateItem, len(todos))
+		for _, td := range todos {
+			last[td.ID] = td // later occurrence wins the STATE
+		}
+		uniq := make([]todoStateItem, 0, len(last))
+		seenPos := make(map[string]struct{}, len(last))
+		for _, td := range todos {
+			if _, dup := seenPos[td.ID]; dup {
+				continue // keep FIRST position, skip later dups
+			}
+			seenPos[td.ID] = struct{}{}
+			uniq = append(uniq, last[td.ID]) // ...but the LAST state
+		}
+		todos = uniq
+	}
+
 	previous := m.todoSnapshot
 	if previous == nil {
 		previous = map[string]todoStateItem{}
