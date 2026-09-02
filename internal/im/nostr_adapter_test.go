@@ -350,3 +350,19 @@ func TestNostrFoldChunk(t *testing.T) {
 		t.Error("consecutive total failures must surface an error")
 	}
 }
+
+// TestValidateNostrPrivateKey pins #1384: the exported precheck must
+// accept a valid hex key, reject garbage/short keys and surface the
+// derivation error - callers rely on it BEFORE persisting config.
+func TestValidateNostrPrivateKey(t *testing.T) {
+	// A valid 32-byte hex key (arbitrary but well-formed).
+	good := "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
+	if err := ValidateNostrPrivateKey(good); err != nil {
+		t.Fatalf("valid key rejected: %v", err)
+	}
+	for _, bad := range []string{"", "   ", "nothex", "0102", "zz" + good[2:]} {
+		if err := ValidateNostrPrivateKey(bad); err == nil {
+			t.Fatalf("bad key %q accepted", bad)
+		}
+	}
+}
