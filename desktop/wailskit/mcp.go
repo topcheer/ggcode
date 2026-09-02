@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/topcheer/ggcode/internal/util"
 	"os"
 	"path/filepath"
 	"strings"
@@ -246,7 +247,14 @@ func AddMCPServer(values map[string]string) error {
 	// Parse args from space-separated string with quote awareness.
 	// strings.Fields splits quoted paths containing spaces (e.g. "/Users/John Doe/").
 	// parseShellArgs handles " and ' quoting correctly.
-	if argsStr := values["args"]; argsStr != "" {
+	// #1434-B: args had no clear-channel twin of #979's env_clear/headers_clear
+	// sentinels - an emptied args form produced nil Args, which the patch
+	// layer reads as 'not provided' and the OLD args silently resurrected.
+	// args_clear=1 (or an explicitly-empty args value) writes a non-nil
+	// empty slice: the patch layer's 'cleared' semantic.
+	if isTruthyFormFlag(values["args_clear"]) || values["args"] == "" {
+		serverCfg.Args = []string{}
+	} else if argsStr := values["args"]; argsStr != "" {
 		args, err := parseShellArgs(argsStr)
 		if err != nil {
 			return fmt.Errorf("invalid args: %w", err)
@@ -435,7 +443,14 @@ func removeFromClaudeFile(path, name string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("encode %s: %w", path, err)
 	}
-	if err := os.WriteFile(path, append(out, '\n'), 0o644); err != nil {
+	// #1434-A: this overwrites ~/.claude.json - Claude Code's own config,
+	// which carries project history/consent state and can reach MBs.
+	// os.WriteFile is O_TRUNC: a mid-write crash truncates it, and on a
+	// full disk/quota the open already truncated it even when the write
+	// errors out cleanly - no backup, irreversible corruption. The
+	// project's own standard (mcp_disabled.go, post-#781) is
+	// util.AtomicWriteFile; a third-party file deserves no less.
+	if err := util.AtomicWriteFile(path, append(out, '\n'), 0o644); err != nil {
 		return false, fmt.Errorf("write %s: %w", path, err)
 	}
 	return true, nil
