@@ -208,3 +208,32 @@ func TestSlackBindingLabelsMutedActiveAvailable(t *testing.T) {
 		t.Fatalf("expected available, got %s", labels[3])
 	}
 }
+
+// TestSlackCreateRejectsBadTokenPrefixes pins #1392-B(1): tokens without
+// their xoxb-/xapp- prefixes used to be persisted with zero validation -
+// garbage landed in the yaml and failed on every later start.
+func TestSlackCreateRejectsBadTokenPrefixes(t *testing.T) {
+	m := newTestModel()
+	m.config = config.DefaultConfig()
+
+	// Bot token without xoxb-.
+	msg := m.createSlackAdapterCmd("slk goodapptoken xapp-123")()
+	res, ok := msg.(slackBindResultMsg)
+	if !ok {
+		t.Fatalf("expected slackBindResultMsg, got %#v", msg)
+	}
+	if res.err == nil {
+		t.Fatal("missing xoxb- prefix accepted")
+	}
+
+	// App token without xapp-.
+	msg2 := m.createSlackAdapterCmd("slk xoxb-123 badapptoken")()
+	res2, ok := msg2.(slackBindResultMsg)
+	if !ok || res2.err == nil {
+		t.Fatalf("missing xapp- prefix accepted: %#v", msg2)
+	}
+
+	if _, has := m.config.IM.Adapters["slk"]; has {
+		t.Fatal("invalid credentials persisted")
+	}
+}
