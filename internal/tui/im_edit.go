@@ -278,20 +278,40 @@ func (m *Model) saveIMEditField(adapterName, field, value string) tea.Cmd {
 		// 1. Persist to config struct + YAML + keys.env (via Save's post-migration).
 		// #897: 'env.'-prefixed fields must write adapter.Env, not Extra —
 		// SetIMAdapterExtra would store a literal 'env.FOO' key, never apply
-		// to the running adapter, and bounce back in the edit panel.
-		if strings.HasPrefix(field, "env.") {
-			if err := m.config.SetIMAdapterEnv(adapterName, strings.TrimPrefix(field, "env."), value); err != nil {
+		// #1367 family + #1377-A/B: the Set* writes are nested-map writes and
+		// used to run HERE on the Cmd goroutine (View ranges the same map);
+		// the hot-reload's restart error was silently discarded (`_ =`).
+		// Both the write and the error now flow through configMutationMsg.
+		return configMutationMsg{
+			apply: func(m *Model) error {
+				if strings.HasPrefix(field, "env.") {
+					if err := m.config.SetIMAdapterEnv(adapterName, strings.TrimPrefix(field, "env."), value); err != nil {
+						return err
+					}
+				} else if err := m.config.SetIMAdapterExtra(adapterName, field, value); err != nil {
+					return err
+				}
+				return nil
+			},
+			next: func(m *Model) tea.Cmd {
+				return func() tea.Msg {
+					// 2. Hot-reload: if the adapter is running, stop it and restart
+					// with new config. #1377-B: a failed restart used to be swallowed
+					// (`_ =`) - the field was saved but the IM channel silently went
+					// down while the user saw "saved".
+					if m.imManager != nil && m.isAdapterRunning(adapterName) {
+						m.imManager.StopAdapter(adapterName)
+						if err := im.StartNamedAdapter(context.Background(), m.config.IM, adapterName, m.imManager); err != nil {
+							return imEditResultMsg{adapterName: adapterName, field: field, err: fmt.Errorf("saved, but adapter restart failed: %w", err)}
+						}
+					}
+					return imEditResultMsg{adapterName: adapterName, field: field, value: value}
+				}
+			},
+			fail: func(err error) tea.Msg {
 				return imEditResultMsg{adapterName: adapterName, field: field, err: err}
-			}
-		} else if err := m.config.SetIMAdapterExtra(adapterName, field, value); err != nil {
-			return imEditResultMsg{adapterName: adapterName, field: field, err: err}
+			},
 		}
-		// 2. Hot-reload: if the adapter is running, stop it and restart with new config.
-		if m.imManager != nil && m.isAdapterRunning(adapterName) {
-			m.imManager.StopAdapter(adapterName)
-			_ = im.StartNamedAdapter(context.Background(), m.config.IM, adapterName, m.imManager)
-		}
-		return imEditResultMsg{adapterName: adapterName, field: field, value: value}
 	}
 }
 

@@ -274,9 +274,21 @@ func (m *Model) disableIMChannel(entry imChannelEntry) tea.Cmd {
 		if err := m.imManager.DisableBinding(entry.Adapter); err != nil {
 			return imPanelResultMsg{err: err}
 		}
+		// #1367 family + #1377-A: SetIMAdapterEnabled is a map write - it
+		// runs on the Update loop via configMutationMsg.
 		if m.config != nil {
-			if err := m.config.SetIMAdapterEnabled(entry.Adapter, false); err != nil {
-				return imPanelResultMsg{err: fmt.Errorf("persist disable failed: %w", err)}
+			return configMutationMsg{
+				apply: func(m *Model) error {
+					return m.config.SetIMAdapterEnabled(entry.Adapter, false)
+				},
+				next: func(m *Model) tea.Cmd {
+					return func() tea.Msg {
+						return imPanelResultMsg{message: m.t("panel.im.message.disabled", entry.Adapter)}
+					}
+				},
+				fail: func(err error) tea.Msg {
+					return imPanelResultMsg{err: fmt.Errorf("persist disable failed: %w", err)}
+				},
 			}
 		}
 		return imPanelResultMsg{message: m.t("panel.im.message.disabled", entry.Adapter)}
@@ -291,9 +303,20 @@ func (m *Model) enableIMChannel(entry imChannelEntry) tea.Cmd {
 		if err := m.imManager.EnableBinding(entry.Adapter); err != nil {
 			return imPanelResultMsg{err: err}
 		}
+		// #1367 family + #1377-A: map write -> Update loop.
 		if m.config != nil {
-			if err := m.config.SetIMAdapterEnabled(entry.Adapter, true); err != nil {
-				return imPanelResultMsg{err: fmt.Errorf("persist enable failed: %w", err)}
+			return configMutationMsg{
+				apply: func(m *Model) error {
+					return m.config.SetIMAdapterEnabled(entry.Adapter, true)
+				},
+				next: func(m *Model) tea.Cmd {
+					return func() tea.Msg {
+						return imPanelResultMsg{message: m.t("panel.im.message.enabled", entry.Adapter)}
+					}
+				},
+				fail: func(err error) tea.Msg {
+					return imPanelResultMsg{err: fmt.Errorf("persist enable failed: %w", err)}
+				},
 			}
 		}
 		return imPanelResultMsg{message: m.t("panel.im.message.enabled", entry.Adapter)}
@@ -368,11 +391,28 @@ func (m *Model) disableAllIMChannels() tea.Cmd {
 		if err != nil {
 			return imPanelResultMsg{err: err}
 		}
+		// #1377-A: ranging the Adapters map while WRITING per entry on a
+		// Cmd goroutine is the worst variant of the family (read+write in
+		// the same loop, off the Update loop). The whole loop moves into
+		// configMutationMsg.apply.
 		if m.config != nil {
-			for name := range m.config.IM.Adapters {
-				if err := m.config.SetIMAdapterEnabled(name, false); err != nil {
-					return imPanelResultMsg{err: fmt.Errorf("persist disable %s failed: %w", name, err)}
-				}
+			return configMutationMsg{
+				apply: func(m *Model) error {
+					for name := range m.config.IM.Adapters {
+						if err := m.config.SetIMAdapterEnabled(name, false); err != nil {
+							return fmt.Errorf("persist disable %s failed: %w", name, err)
+						}
+					}
+					return nil
+				},
+				next: func(m *Model) tea.Cmd {
+					return func() tea.Msg {
+						return imPanelResultMsg{message: m.t("panel.im.message.disable_all", count)}
+					}
+				},
+				fail: func(err error) tea.Msg {
+					return imPanelResultMsg{err: err}
+				},
 			}
 		}
 		return imPanelResultMsg{message: m.t("panel.im.message.disable_all", count)}
@@ -388,11 +428,25 @@ func (m *Model) enableAllIMChannels() tea.Cmd {
 		if err != nil {
 			return imPanelResultMsg{err: err}
 		}
+		// #1377-A: same range-while-writing variant - loop moved to apply.
 		if m.config != nil {
-			for name := range m.config.IM.Adapters {
-				if err := m.config.SetIMAdapterEnabled(name, true); err != nil {
-					return imPanelResultMsg{err: fmt.Errorf("persist enable %s failed: %w", name, err)}
-				}
+			return configMutationMsg{
+				apply: func(m *Model) error {
+					for name := range m.config.IM.Adapters {
+						if err := m.config.SetIMAdapterEnabled(name, true); err != nil {
+							return fmt.Errorf("persist enable %s failed: %w", name, err)
+						}
+					}
+					return nil
+				},
+				next: func(m *Model) tea.Cmd {
+					return func() tea.Msg {
+						return imPanelResultMsg{message: m.t("panel.im.message.enable_all", count)}
+					}
+				},
+				fail: func(err error) tea.Msg {
+					return imPanelResultMsg{err: err}
+				},
 			}
 		}
 		return imPanelResultMsg{message: m.t("panel.im.message.enable_all", count)}
