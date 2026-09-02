@@ -146,6 +146,16 @@ func (m Model) renderPCPanel() string {
 		body = append(body, "", lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render("  "+panel.message))
 	}
 
+	// #1386-A: the QR was stored but NEVER rendered - showQR/qrCode had
+	// zero render-side consumers, so pairing QRs were invisible even
+	// before the missing Update case dropped the message entirely.
+	if panel.showQR && panel.qrCode != "" {
+		body = append(body, "", panel.qrCode)
+		if panel.inviteURI != "" {
+			body = append(body, lipgloss.NewStyle().Faint(true).Render("  "+panel.inviteURI))
+		}
+	}
+
 	return m.renderContextBox("/pc", strings.Join(body, "\n"), lipgloss.Color("5"))
 }
 
@@ -182,6 +192,13 @@ func (m *Model) handlePCPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			}
 			return *m, nil
 		case "g", "G":
+			// #1386-C: in create-input mode 'g' must TYPE, not toggle - a
+			// session label could never contain the letter g. Functional
+			// keys only when the input is idle.
+			if strings.TrimSpace(panel.createInput) != "" {
+				panel.createInput += msg.Text
+				return *m, nil
+			}
 			panel.createGroup = !panel.createGroup
 			return *m, nil
 		case "space", " ":

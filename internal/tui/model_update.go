@@ -376,6 +376,26 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		// HERE on the Update loop - see config_mutation.go.
 		return m.handleConfigMutationMsg(msg)
 
+	case pcResultMsg:
+		// #1386-A: pcResultMsg had NO Update case - every PC panel
+		// operation result (create/QR/renew/close/bind) was silently
+		// dropped by bubbletea: QR never shown, success/error feedback
+		// never updated. Routed to the panel fields like signal's results.
+		if m.pcPanel != nil {
+			if msg.err != nil {
+				m.pcPanel.message = fmt.Sprintf("Error: %v", msg.err)
+				m.pcPanel.showQR = false
+			} else {
+				m.pcPanel.message = msg.message
+				m.pcPanel.showQR = msg.showQR
+				m.pcPanel.qrCode = msg.qrCode
+				if msg.inviteURI != "" {
+					m.pcPanel.inviteURI = msg.inviteURI
+				}
+			}
+		}
+		return m, nil
+
 	case restorePendingImagesMsg:
 		// #1393-A: the aborted run's captured attachments come home.
 		if msg.RunID != m.activeAgentRunID {
