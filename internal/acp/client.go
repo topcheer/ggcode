@@ -620,7 +620,11 @@ func (c *Client) sendCancel(sessionID string) {
 }
 
 func (c *Client) closeSession(sessionID string) {
-	if c.transport == nil || sessionID == "" {
+	// Snapshot under the lock like sendRequest (see its comment): Close()
+	// nils c.transport under c.mu, and the EnsureReady cleanup path can call
+	// closeSession concurrently with a user-initiated Close(). A bare read
+	// here raced that write.
+	if sessionID == "" || c.transportSnapshot() == nil {
 		return
 	}
 	_, _ = c.sendRequest(context.Background(), "session/close", CloseSessionRequest{SessionID: sessionID}, defaultCloseSessionTimeout)

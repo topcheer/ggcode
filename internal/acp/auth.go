@@ -164,7 +164,17 @@ func (ah *AuthHandler) pollForToken(ctx context.Context, deviceResp *DeviceCodeR
 		interval = 5
 	}
 
-	expiry := time.After(time.Duration(deviceResp.ExpiresIn) * time.Second)
+	expiresIn := deviceResp.ExpiresIn
+	if expiresIn <= 0 {
+		// RFC 8628 §3.2 requires expires_in, but non-GitHub or proxied
+		// device endpoints sometimes omit it. A zero value would fire
+		// time.After(0) and expire the flow before the first poll ever
+		// runs. Fall back to the RFC-recommended 900s, mirroring the
+		// interval guard below.
+		expiresIn = 900
+	}
+
+	expiry := time.After(time.Duration(expiresIn) * time.Second)
 	ticker := time.NewTicker(time.Duration(interval) * time.Second)
 	defer ticker.Stop()
 
