@@ -289,6 +289,12 @@ func (m *Model) toggleAllNonBuiltinSkills() {
 		s.Enabled = !anyEnabled
 		m.commandMgr.SetEnabled(s.Name, s.Enabled)
 	}
+	// #1392-A: the system prompt is a snapshot cached in the context
+	// (agent.UpdateSystemPrompt swaps the first system message) - the
+	// single-toggle path calls rebuildSystemPrompt but this bulk path
+	// never did, so 'D' left every disabled skill's description in the
+	// prompt until a single toggle or a session restart.
+	m.rebuildSystemPrompt()
 }
 
 func (m *Model) listSkills() []*commands.Command {

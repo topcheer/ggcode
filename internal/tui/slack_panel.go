@@ -288,6 +288,15 @@ func (m *Model) createSlackAdapterCmd(spec string) tea.Cmd {
 		name := strings.TrimSpace(fields[0])
 		botToken := strings.TrimSpace(fields[1])
 		appToken := strings.TrimSpace(fields[2])
+		// #1392-B(1): tokens used to be persisted with ZERO format checks -
+		// any garbage string landed in the yaml and failed on every later
+		// start (the #1384 nostr lesson). Slack tokens are prefixed.
+		if !strings.HasPrefix(botToken, "xoxb-") {
+			return slackBindResultMsg{err: errors.New("bot token must start with xoxb-")}
+		}
+		if !strings.HasPrefix(appToken, "xapp-") {
+			return slackBindResultMsg{err: errors.New("app token must start with xapp-")}
+		}
 		adapter := config.IMAdapterConfig{
 			Enabled:  true,
 			Platform: string(im.PlatformSlack),
@@ -306,11 +315,30 @@ func (m *Model) createSlackAdapterCmd(spec string) tea.Cmd {
 			},
 			next: func(m *Model) tea.Cmd {
 				return func() tea.Msg {
+					rollback := func(origErr error) tea.Msg {
+						// #1392-B(1): rollback the persisted adapter - a failed
+						// start left dirty config in the yaml forever (map
+						// REMOVE rides configMutationMsg, #1370 pattern).
+						return configMutationMsg{
+							apply: func(m *Model) error {
+								if rerr := m.config.RemoveIMAdapter(name); rerr != nil {
+									return rerr
+								}
+								return m.saveConfig()
+							},
+							next: func(m *Model) tea.Cmd {
+								return func() tea.Msg { return slackBindResultMsg{err: origErr} }
+							},
+							fail: func(rerr error) tea.Msg {
+								return slackBindResultMsg{err: fmt.Errorf("%v (rollback failed: %v)", origErr, rerr)}
+							},
+						}
+					}
 					if err := m.ensureSlackRuntime(); err != nil {
-						return slackBindResultMsg{err: err}
+						return rollback(err)
 					}
 					if err := m.startSlackAdapterIfNeeded(name); err != nil {
-						return slackBindResultMsg{err: err}
+						return rollback(err)
 					}
 					return slackBindResultMsg{message: m.t("panel.slack.message.added_bot", name)}
 				}
