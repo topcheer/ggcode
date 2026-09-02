@@ -151,3 +151,54 @@ func TestRunHelperRollsBackEarlierTargets(t *testing.T) {
 		t.Fatalf("t1 not rolled back: %q (want %q)", got, oldBytes)
 	}
 }
+
+// TestRunHelperUnreadableTargetRollsBack pins #1423-A: an existing but
+// UNREADABLE target (mode 0o200) must abort the run AND roll back the
+// earlier target - it used to be conflated with 'absent', replaced via
+// tmp+rename, then os.Remove'd in rollback with NO backup copy.
+func TestRunHelperUnreadableTargetRollsBack(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads through 0o200 - cannot simulate")
+	}
+	dir := t.TempDir()
+	source := filepath.Join(dir, "src")
+	newBytes := []byte("NEW-BINARY")
+	if err := os.WriteFile(source, newBytes, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t1 := filepath.Join(dir, "t1")
+	oldBytes := []byte("OLD-BINARY")
+	if err := os.WriteFile(t1, oldBytes, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	locked := filepath.Join(dir, "locked")
+	if err := os.WriteFile(locked, oldBytes, 0o200); err != nil { // write-only: exists, unreadable
+		t.Fatal(err)
+	}
+	manifest := filepath.Join(dir, "manifest.json")
+	payload, _ := json.Marshal(HelperManifest{SourceBinary: source, TargetPaths: []string{t1, locked}})
+	if err := os.WriteFile(manifest, payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := RunHelper(manifest)
+	if err == nil {
+		t.Fatal("expected failure on unreadable target")
+	}
+	// t1 must be restored, not left on NEW-BINARY.
+	got, rerr := os.ReadFile(t1)
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	if string(got) != string(oldBytes) {
+		t.Fatalf("t1 not rolled back: %q", got)
+	}
+	// The unreadable target must be INTACT (not replaced, not removed).
+	st, serr := os.Stat(locked)
+	if serr != nil {
+		t.Fatalf("unreadable target deleted: %v", serr)
+	}
+	if st.Mode().Perm() != 0o200 {
+		t.Fatalf("unreadable target tampered: %v", st.Mode())
+	}
+}
