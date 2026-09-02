@@ -296,17 +296,29 @@ func (m *Model) createSlackAdapterCmd(spec string) tea.Cmd {
 				"app_token": appToken,
 			},
 		}
-		m.config.IM.Enabled = true
-		if err := m.config.AddIMAdapter(name, adapter); err != nil {
-			return slackBindResultMsg{err: err}
+		// #1367 family: config write + disk save moved off the Cmd
+		// goroutine onto the Update loop via configMutationMsg - see
+		// dingtalk_panel.go for the template comment.
+		return configMutationMsg{
+			apply: func(m *Model) error {
+				m.config.IM.Enabled = true
+				return m.config.AddIMAdapter(name, adapter)
+			},
+			next: func(m *Model) tea.Cmd {
+				return func() tea.Msg {
+					if err := m.ensureSlackRuntime(); err != nil {
+						return slackBindResultMsg{err: err}
+					}
+					if err := m.startSlackAdapterIfNeeded(name); err != nil {
+						return slackBindResultMsg{err: err}
+					}
+					return slackBindResultMsg{message: m.t("panel.slack.message.added_bot", name)}
+				}
+			},
+			fail: func(err error) tea.Msg {
+				return slackBindResultMsg{err: err}
+			},
 		}
-		if err := m.ensureSlackRuntime(); err != nil {
-			return slackBindResultMsg{err: err}
-		}
-		if err := m.startSlackAdapterIfNeeded(name); err != nil {
-			return slackBindResultMsg{err: err}
-		}
-		return slackBindResultMsg{message: m.t("panel.slack.message.added_bot", name)}
 	}
 }
 

@@ -295,17 +295,31 @@ func (m *Model) createDingtalkAdapterCmd(spec string) tea.Cmd {
 				"app_secret": appSecret,
 			},
 		}
-		m.config.IM.Enabled = true
-		if err := m.config.AddIMAdapter(name, adapter); err != nil {
-			return dingtalkBindResultMsg{err: err}
+		// #1367 family: the config write + disk save used to run HERE on
+		// the Cmd goroutine while the render loop ranged over the same
+		// map (concurrent map read/write = fatal). Only side-effect-free
+		// prep stays on this goroutine; the mutation goes through
+		// configMutationMsg and lands on the Update loop.
+		return configMutationMsg{
+			apply: func(m *Model) error {
+				m.config.IM.Enabled = true
+				return m.config.AddIMAdapter(name, adapter)
+			},
+			next: func(m *Model) tea.Cmd {
+				return func() tea.Msg {
+					if err := m.ensureDingtalkRuntime(); err != nil {
+						return dingtalkBindResultMsg{err: err}
+					}
+					if err := m.startDingtalkAdapterIfNeeded(name); err != nil {
+						return dingtalkBindResultMsg{err: err}
+					}
+					return dingtalkBindResultMsg{message: m.t("panel.dingtalk.message.added_bot", name)}
+				}
+			},
+			fail: func(err error) tea.Msg {
+				return dingtalkBindResultMsg{err: err}
+			},
 		}
-		if err := m.ensureDingtalkRuntime(); err != nil {
-			return dingtalkBindResultMsg{err: err}
-		}
-		if err := m.startDingtalkAdapterIfNeeded(name); err != nil {
-			return dingtalkBindResultMsg{err: err}
-		}
-		return dingtalkBindResultMsg{message: m.t("panel.dingtalk.message.added_bot", name)}
 	}
 }
 

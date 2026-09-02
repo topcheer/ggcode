@@ -371,7 +371,13 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 	case agentErrMsg:
 		return m.handleAgentErrMsg(msg)
 
+	case configMutationMsg:
+		// #1367 family root: config writes from Cmd goroutines execute
+		// HERE on the Update loop - see config_mutation.go.
+		return m.handleConfigMutationMsg(msg)
+
 	case imBindResultMsg:
+		// #1367 family: config mutations from Cmd goroutines land here.
 		// #1396-B: generic IM panel flows (QQ etc.) emit bind/unbind/clear/
 		// create/share-link results via imBindResultMsg - which had NO case
 		// here (and no default), so every result was silently dropped:

@@ -294,17 +294,29 @@ func (m *Model) createDiscordAdapterCmd(spec string) tea.Cmd {
 				"token": token,
 			},
 		}
-		m.config.IM.Enabled = true
-		if err := m.config.AddIMAdapter(name, adapter); err != nil {
-			return discordBindResultMsg{err: err}
+		// #1367 family: config write + disk save moved off the Cmd
+		// goroutine onto the Update loop via configMutationMsg - see
+		// dingtalk_panel.go for the template comment.
+		return configMutationMsg{
+			apply: func(m *Model) error {
+				m.config.IM.Enabled = true
+				return m.config.AddIMAdapter(name, adapter)
+			},
+			next: func(m *Model) tea.Cmd {
+				return func() tea.Msg {
+					if err := m.ensureDiscordRuntime(); err != nil {
+						return discordBindResultMsg{err: err}
+					}
+					if err := m.startDiscordAdapterIfNeeded(name); err != nil {
+						return discordBindResultMsg{err: err}
+					}
+					return discordBindResultMsg{message: m.t("panel.discord.message.added_bot", name)}
+				}
+			},
+			fail: func(err error) tea.Msg {
+				return discordBindResultMsg{err: err}
+			},
 		}
-		if err := m.ensureDiscordRuntime(); err != nil {
-			return discordBindResultMsg{err: err}
-		}
-		if err := m.startDiscordAdapterIfNeeded(name); err != nil {
-			return discordBindResultMsg{err: err}
-		}
-		return discordBindResultMsg{message: m.t("panel.discord.message.added_bot", name)}
 	}
 }
 
