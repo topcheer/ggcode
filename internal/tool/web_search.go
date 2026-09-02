@@ -174,6 +174,10 @@ func normalizeDomains(domains []string) []string {
 		d = strings.TrimPrefix(d, "http://")
 		d = strings.TrimPrefix(d, "https://")
 		d = strings.TrimSuffix(strings.Split(d, "/")[0], ".")
+		// #1428-A: strip a leading www so the exempt-map KEY matches the
+		// lookup side (which strips www from result domains) - a
+		// www.npmjs.com allow entry kept its www and never hit.
+		d = strings.TrimPrefix(d, "www.")
 		if d == "" || seen[d] {
 			continue
 		}

@@ -288,6 +288,18 @@ func classifyResultType(rawURL, domain string) string {
 }
 
 // isSpamDomain checks if a domain is a known low-quality/spam source.
+// subdomainOfAny reports whether host equals or is a subdomain of any
+// key in the exempt map - the exemption-side twin of domainMatchesAny's
+// documented exact+subdomain semantics (#1428-B).
+func subdomainOfAny(host string, exempt map[string]bool) bool {
+	for d := range exempt {
+		if strings.HasSuffix(host, "."+d) {
+			return true
+		}
+	}
+	return false
+}
+
 func isSpamDomain(domain string) bool {
 	domain = strings.ToLower(strings.TrimPrefix(domain, "www."))
 	if spamDomains[domain] {
@@ -323,7 +335,16 @@ func deduplicateByDomain(scored []scoredResult, exempt map[string]bool) []scored
 			continue
 		}
 		normalizedDomain := strings.TrimPrefix(sr.domain, "www.")
-		if exempt[normalizedDomain] || domainCount[normalizedDomain] < maxResultsPerDomain {
+		// #1428-A/B: the filter side (domainMatchesAny) admits SUBDOMAINS
+		// (documented: "Matches the exact host and its subdomains") and
+		// matches www-prefixed hosts; the exemption side was an EXACT map
+		// lookup after www-stripping - www.npmjs.com in the allow list
+		// (key kept its www, lookup stripped it) missed, and every
+		// learn.microsoft.com result missed against allowed=["microsoft.com"]
+		// while the filter passed them all: 5 kept, 2 out, prefetch wasted,
+		// #1357 guarantee silently void. Match semantics now mirror the
+		// filter: exact hit OR any exempt domain is a parent suffix.
+		if exempt[normalizedDomain] || subdomainOfAny(normalizedDomain, exempt) || domainCount[normalizedDomain] < maxResultsPerDomain {
 			domainCount[normalizedDomain]++
 			result = append(result, sr)
 		}
