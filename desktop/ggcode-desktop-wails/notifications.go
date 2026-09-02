@@ -41,10 +41,20 @@ type NotificationManager struct {
 	// to spawn its own process sleeping 6s; a 10-notification storm held
 	// 10 powershell processes (tens of MB each) simultaneously.
 	winQueue chan winToast
+
+	// unixQueue serializes macOS/Linux notifications (#1431-A) - the
+	// non-Windows twin of winQueue (#399).
+	unixQueue chan unixToast
 }
 
 // winToast is one queued Windows notification (#399).
 type winToast struct {
+	title string
+	body  string
+}
+
+// unixToast is one queued macOS/Linux notification (#1431-A).
+type unixToast struct {
 	title string
 	body  string
 }
@@ -57,10 +67,13 @@ func NewNotificationManager() *NotificationManager {
 		enabled:   true,
 		lastShown: make(map[string]time.Time),
 		winQueue:  make(chan winToast, 32),
+		unixQueue: make(chan unixToast, 32),
 	}
 	// Single worker drains the Windows toast queue serially (#399): at most
 	// ONE powershell process is alive at a time regardless of storm size.
 	safego.Go("notify-win-worker", nm.drainWinQueue)
+	// #1431-A: same single-worker discipline for osascript/notify-send.
+	safego.Go("notify-unix-worker", nm.drainUnixQueue)
 	return nm
 }
 
@@ -359,18 +372,21 @@ func (nm *NotificationManager) showOSNotification(title, body string) {
 
 func (nm *NotificationManager) notifyMacOS(title, body string) {
 	// Use osascript to display a native notification.
-	// Run asynchronously: osascript cold-start takes 0.3-1.5s and this fires
-	// inline on the approval/complete/error agent paths (#290, mirrors the
-	// #202 Windows fix). Failures are best-effort and only logged.
-	safego.Go("notify-macos", func() {
-		script := "display notification \"" + escapeAppleScriptText(body) +
-			"\" with title \"" + escapeAppleScriptText(title) +
-			"\" sound name \"Glass\""
-		cmd := exec.Command("osascript", "-e", script)
-		if err := cmd.Run(); err != nil {
-			debug.Log("desktop", "macOS notification failed: %v", err)
-		}
-	})
+	// #1431-A: the #399 storm fix (single worker, bounded queue) only
+	// covered Windows; macOS/Linux kept the unbounded one-goroutine-
+	// per-notification path - osascript cold-starts 0.3-1.5s, and N
+	// concurrent sessions completing (#600 makes bodies unique, so
+	// dedup never folds them) meant N concurrent osascript processes.
+	// Same queue+worker pattern as winQueue, shared across platforms.
+	nm.unixQueue <- unixToast{title: title, body: body}
+}
+
+// drainUnixQueue serializes non-Windows notifications (#1431-A):
+// at most ONE osascript/notify-send process is alive at a time.
+func (nm *NotificationManager) drainUnixQueue() {
+	for t := range nm.unixQueue {
+		nm.deliverUnix(t.title, t.body)
+	}
 }
 
 // escapeAppleScriptText makes a string safe to embed in an AppleScript
@@ -394,6 +410,25 @@ func escapeAppleScriptText(s string) string {
 	s = strings.ReplaceAll(s, "\t", " ")
 	s = strings.ReplaceAll(s, "\x00", "")
 	return s
+}
+
+// deliverUnix synchronously delivers one non-Windows notification on the
+// queue worker: osascript on macOS, notify-send elsewhere (#1431-A).
+func (nm *NotificationManager) deliverUnix(title, body string) {
+	if runtime.GOOS == "darwin" {
+		script := "display notification \"" + escapeAppleScriptText(body) +
+			"\" with title \"" + escapeAppleScriptText(title) +
+			"\" sound name \"Glass\""
+		cmd := exec.Command("osascript", "-e", script)
+		if err := cmd.Run(); err != nil {
+			debug.Log("desktop", "macOS notification failed: %v", err)
+		}
+		return
+	}
+	cmd := exec.Command("notify-send", "--app-name=GGCode", "--icon=dialog-information", title, body)
+	if err := cmd.Run(); err != nil {
+		debug.Log("desktop", "Linux notification failed: %v", err)
+	}
 }
 
 func (nm *NotificationManager) notifyLinux(title, body string) {

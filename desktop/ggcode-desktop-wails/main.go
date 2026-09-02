@@ -68,6 +68,14 @@ func redirectStderr() {
 						}
 					}
 					if idx < 0 {
+						// #1431-C: data without a newline (\r progress
+						// bars, cgo diagnostic blobs on fd 2) used to stay
+						// in buf forever - unbounded growth (~17MB/day at
+						// 200B/s). Cap the retained tail; overflow drops
+						// the OLDEST bytes.
+						if len(buf) > 64*1024 {
+							buf = buf[len(buf)-64*1024:]
+						}
 						break
 					}
 					line := string(buf[:idx])
@@ -144,9 +152,20 @@ func main() {
 	}
 
 	err := wails.Run(&options.App{
-		Title:     "GGCode Desktop",
-		Width:     1280,
-		Height:    860,
+		Title:  "GGCode Desktop",
+		Width:  1280,
+		Height: 860,
+		// #1431-B: no single-instance guard - a second launch (Dock
+		// double-open / updater race) left TWO trays, fought over the
+		// session JSONL lock, A2A port, tunnel share and IM adapters
+		// (QQ multi-device kick), with the second instance half-initialized.
+		// The second launch just focuses the first and exits.
+		SingleInstanceLock: &options.SingleInstanceLock{
+			UniqueId: "ggcode-desktop-singleton",
+			OnSecondInstanceLaunch: func(data options.SecondInstanceData) {
+				debug.Log("desktop", "second instance attempted launch (args=%d); focusing existing", len(data.Args))
+			},
+		},
 		MinWidth:  900,
 		MinHeight: 600,
 		// Frameless: fully custom-drawn title bar on ALL platforms.
