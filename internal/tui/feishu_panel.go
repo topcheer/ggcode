@@ -277,6 +277,12 @@ func (m *Model) createFeishuAdapterCmd(spec string) tea.Cmd {
 		if len(fields) < 3 {
 			return feishuBindResultMsg{err: errors.New(m.t("panel.feishu.error.config_format"))}
 		}
+		// #1370-C: Fields splits on whitespace - a secret WITH spaces was
+		// silently truncated to its first token, then persisted as a
+		// guaranteed-to-fail credential. Reject extras instead.
+		if len(fields) > 3 {
+			return feishuBindResultMsg{err: errors.New("extra fields after app_secret (values must not contain spaces): " + spec)}
+		}
 		name := strings.TrimSpace(fields[0])
 		appID := strings.TrimSpace(fields[1])
 		appSecret := strings.TrimSpace(fields[2])
@@ -298,11 +304,34 @@ func (m *Model) createFeishuAdapterCmd(spec string) tea.Cmd {
 			},
 			next: func(m *Model) tea.Cmd {
 				return func() tea.Msg {
+					rollback := func(origErr error) tea.Msg {
+						// #1370-B: the adapter was already persisted with its
+						// plaintext secret - without compensation a wrong secret
+						// stayed on disk forever and blocked the name on retry
+						// ("already exists"), the panel has no delete key.
+						// The rollback REMOVE is itself a map write, so it must
+						// route through configMutationMsg too (#1367) - never
+						// touch config on this Cmd goroutine.
+						return configMutationMsg{
+							apply: func(m *Model) error {
+								if rerr := m.config.RemoveIMAdapter(name); rerr != nil {
+									return rerr
+								}
+								return m.saveConfig()
+							},
+							next: func(m *Model) tea.Cmd {
+								return func() tea.Msg { return feishuBindResultMsg{err: origErr} }
+							},
+							fail: func(rerr error) tea.Msg {
+								return feishuBindResultMsg{err: fmt.Errorf("%v (rollback failed: %v)", origErr, rerr)}
+							},
+						}
+					}
 					if err := m.ensureFeishuRuntime(); err != nil {
-						return feishuBindResultMsg{err: err}
+						return rollback(err)
 					}
 					if err := m.startFeishuAdapterIfNeeded(name); err != nil {
-						return feishuBindResultMsg{err: err}
+						return rollback(err)
 					}
 					return feishuBindResultMsg{message: m.t("panel.feishu.message.added_bot", name)}
 				}

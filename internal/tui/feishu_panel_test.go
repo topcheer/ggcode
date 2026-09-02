@@ -208,3 +208,23 @@ func TestFeishuBindingLabelsMutedActiveAvailable(t *testing.T) {
 		t.Fatalf("expected available, got %s", labels[3])
 	}
 }
+
+// TestFeishuCreateRejectsExtraFields pins #1370-C: a spec with MORE than
+// 3 fields (secret containing spaces) used to be silently truncated to
+// the first token and persisted as a guaranteed-to-fail credential.
+func TestFeishuCreateRejectsExtraFields(t *testing.T) {
+	m := newTestModel()
+	m.config = config.DefaultConfig()
+
+	msg := m.createFeishuAdapterCmd("fs-bot id123 secret with spaces")()
+	res, ok := msg.(feishuBindResultMsg)
+	if !ok {
+		t.Fatalf("expected feishuBindResultMsg, got %#v", msg)
+	}
+	if res.err == nil {
+		t.Fatal("extra fields accepted - secret would be truncated")
+	}
+	if _, has := m.config.IM.Adapters["fs-bot"]; has {
+		t.Fatal("truncated credential persisted")
+	}
+}
