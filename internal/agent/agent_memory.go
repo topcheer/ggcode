@@ -107,6 +107,12 @@ func toolCanTriggerProjectMemory(toolName string) bool {
 	switch toolName {
 	case "read_file", "write_file", "edit_file", "list_directory", "glob", "search_files", "code_search":
 		return true
+	// #1437-C: the multi_* batch tools were missing - multi_file_read on a
+	// new directory silently skipped the GGCODE.md injection that a single
+	// read_file of the SAME directory would trigger (the array parsing at
+	// the call site already handles files[].path).
+	case "multi_file_read", "multi_edit_file", "multi_file_edit", "multi_file_write", "batch_replace", "grep":
+		return true
 	default:
 		return strings.HasPrefix(toolName, "lsp_")
 	}

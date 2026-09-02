@@ -36,10 +36,16 @@ func (a *Agent) maybeFallbackCheckpoint() {
 		return
 	}
 	// Only save if we haven't saved a checkpoint recently (avoid spamming).
+	// #1437-B: lastCheckpointMessageCount is written under a.mu by
+	// maybeSaveCheckpoint from OTHER goroutines (precompact runs in
+	// parallel with this loop); the read-check-write here was unlocked.
+	a.mu.Lock()
 	if a.lastCheckpointMessageCount == len(msgs) {
+		a.mu.Unlock()
 		return
 	}
 	a.lastCheckpointMessageCount = len(msgs)
+	a.mu.Unlock()
 	tokenCount := a.contextManager.TokenCount()
 	debug.Log("agent", "fallback checkpoint: %d messages, %d tokens (compaction may have failed)", len(msgs), tokenCount)
 	// Use the real summary message ID if one exists in context.
@@ -48,8 +54,17 @@ func (a *Agent) maybeFallbackCheckpoint() {
 	// checkpoint summary, loading the wrong context window.
 	fallbackID := a.contextManager.SummaryMsgID()
 	if fallbackID == "" {
-		debug.Log("checkpoint", "fallback checkpoint: no summary message in context, skipping")
-		return
+		// #1437-A: the old skip made the safety net 100% DEAD CODE in its
+		// only target scenario - SummaryMsgID is non-empty ONLY after a
+		// successful summarization compaction, so 'summarization keeps
+		// failing' (this function's charter) always skipped. Fall back to
+		// the LAST message ID as the anchor: loadSession replays only what
+		// comes after the anchor, so anchoring at the tail is conservative
+		// and correct (the journal remains the full history).
+		if n := len(msgs); n > 0 {
+			fallbackID = msgs[n-1].ID
+		}
+		debug.Log("checkpoint", "fallback checkpoint: no summary message; anchoring at latest message")
 	}
 	if fallbackID != "" {
 		fn(fallbackID, "", tokenCount)
