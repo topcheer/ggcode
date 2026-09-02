@@ -661,7 +661,10 @@ func newIMConfigShowCmd(cfgFile *string) *cobra.Command {
 			}
 
 			if jsonOutput {
-				return printJSON(cmd.OutOrStdout(), adapter)
+				// #1432-A: mask secret-bearing Extra keys on the JSON path too.
+				masked := adapter
+				masked.Extra = maskedAdapterExtra(adapter.Extra)
+				return printJSON(cmd.OutOrStdout(), masked)
 			}
 
 			out := cmd.OutOrStdout()
@@ -821,7 +824,8 @@ func adaptersToSlice(cfg *config.Config) []map[string]interface{} {
 			"transport": e.adapter.Transport,
 		}
 		if len(e.adapter.Extra) > 0 {
-			m["extra"] = e.adapter.Extra
+			// #1432-A: JSON is the machine path - mask like the text path.
+			m["extra"] = maskedAdapterExtra(e.adapter.Extra)
 		}
 		if len(e.adapter.AllowFrom) > 0 {
 			m["allow_from"] = e.adapter.AllowFrom
@@ -884,6 +888,27 @@ func printJSON(out io.Writer, v interface{}) error {
 	enc := json.NewEncoder(out)
 	enc.SetIndent("", "  ")
 	return enc.Encode(v)
+}
+
+// maskedAdapterExtra returns a deep copy of an adapter's Extra with
+// secret-bearing keys masked (#1432-A): the TEXT paths (show/list) mask
+// via isSecretKey+maskSecret (#745), but the --json paths serialized
+// Extra verbatim - and --json is the MACHINE path, piped into logs,
+// jq, CI - so plaintext credentials spread farther than any human-read
+// text ever would. Both JSON paths now mask with the same rules.
+func maskedAdapterExtra(extra map[string]interface{}) map[string]interface{} {
+	if extra == nil {
+		return nil
+	}
+	out := make(map[string]interface{}, len(extra))
+	for k, v := range extra {
+		if isSecretKey(k) {
+			out[k] = maskSecret(fmt.Sprintf("%v", v))
+		} else {
+			out[k] = v
+		}
+	}
+	return out
 }
 
 func normalizeWorkspacePath(p string) string {

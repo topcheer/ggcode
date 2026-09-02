@@ -630,3 +630,28 @@ func writeInstanceConfig(t *testing.T, workspace string, content string) {
 		t.Fatalf("write instance config: %v", err)
 	}
 }
+
+// TestMaskedAdapterExtra pins #1432-A: the --json paths must mask the
+// same secret-bearing keys as the text paths - Extra went out plaintext
+// on the machine-consumption path (logs/jq/CI).
+func TestMaskedAdapterExtra(t *testing.T) {
+	in := map[string]interface{}{
+		"bot_token":  "xoxb-verylongsecrettoken",
+		"app_secret": "supersecretvalue123",
+		"relays":     "wss://relay.example",
+	}
+	out := maskedAdapterExtra(in)
+	if got, ok := out["bot_token"].(string); !ok || got == "xoxb-verylongsecrettoken" || !strings.Contains(got, "*") {
+		t.Fatalf("bot_token not masked: %v", out["bot_token"])
+	}
+	if got, _ := out["app_secret"].(string); got == "supersecretvalue123" || !strings.Contains(got, "*") {
+		t.Fatalf("app_secret not masked: %v", out["app_secret"])
+	}
+	if out["relays"] != "wss://relay.example" {
+		t.Fatalf("non-secret value altered: %v", out["relays"])
+	}
+	// Original map untouched (deep copy).
+	if in["bot_token"] != "xoxb-verylongsecrettoken" {
+		t.Fatal("input map mutated")
+	}
+}
