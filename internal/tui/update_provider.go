@@ -138,30 +138,57 @@ func (m Model) handleProviderAuthResultMsg(msg providerAuthResultMsg) (Model, te
 
 // handleModelPanelRefreshResultMsg handles the corresponding message case.
 func (m Model) handleModelPanelRefreshResultMsg(msg modelPanelRefreshResultMsg) (Model, tea.Cmd) {
-	if m.modelPanel != nil {
-		m.modelPanel.refreshing = false
-		m.modelPanel.remote = msg.remote
-		m.modelPanel.models = uniqueStrings(msg.models)
-		if len(m.modelPanel.models) == 0 && m.config != nil && strings.TrimSpace(m.config.Model) != "" {
-			m.modelPanel.models = []string{m.config.Model}
+	// #1383-B: the discovered models write the config HERE (Update loop),
+	// never on the Cmd goroutine - family site 11 (Vendors/Endpoints map).
+	// Applied even when the panel was closed mid-refresh (panel==nil):
+	// the old code persisted unconditionally too - same semantics,
+	// now race-free. A save failure re-enters with saveErr for the banner.
+	if msg.remote && msg.saveErr == nil && m.config != nil {
+		vendor, endpoint, models := m.config.Vendor, m.config.Endpoint, msg.models
+		mut := configMutationMsg{
+			apply: func(m *Model) error {
+				if err := m.config.SetEndpointModels(vendor, endpoint, models); err != nil {
+					return err
+				}
+				return m.saveConfig()
+			},
+			fail: func(err error) tea.Msg {
+				return modelPanelRefreshResultMsg{models: models, remote: true, saveErr: err}
+			},
 		}
-		if current := m.config.Model; strings.TrimSpace(current) != "" {
-			m.modelPanel.selected = indexOf(m.modelPanel.models, current)
-		}
-		if m.modelPanel.selected < 0 {
-			m.modelPanel.selected = 0
-		}
-		switch {
-		case msg.saveErr != nil:
-			m.modelPanel.message = m.t("panel.model.refresh.save_failed", msg.saveErr.Error())
-		case msg.discoverErr != nil:
-			m.modelPanel.message = m.t("panel.model.refresh.builtin_reason", msg.discoverErr.Error())
-		case msg.remote:
-			m.modelPanel.message = m.t("panel.model.refresh.remote_loaded", len(m.modelPanel.models))
-		default:
-			m.modelPanel.message = m.t("panel.model.refresh.builtin_loaded")
-		}
+		m.applyModelRefreshPanelState(msg)
+		return m, func() tea.Msg { return mut }
 	}
+	m.applyModelRefreshPanelState(msg)
 	return m, nil
+}
 
+// applyModelRefreshPanelState updates the model panel from a refresh
+// result (possibly a save-failed re-entry).
+func (m *Model) applyModelRefreshPanelState(msg modelPanelRefreshResultMsg) {
+	if m.modelPanel == nil {
+		return
+	}
+	m.modelPanel.refreshing = false
+	m.modelPanel.remote = msg.remote
+	m.modelPanel.models = uniqueStrings(msg.models)
+	if len(m.modelPanel.models) == 0 && m.config != nil && strings.TrimSpace(m.config.Model) != "" {
+		m.modelPanel.models = []string{m.config.Model}
+	}
+	if current := m.config.Model; strings.TrimSpace(current) != "" {
+		m.modelPanel.selected = indexOf(m.modelPanel.models, current)
+	}
+	if m.modelPanel.selected < 0 {
+		m.modelPanel.selected = 0
+	}
+	switch {
+	case msg.saveErr != nil:
+		m.modelPanel.message = m.t("panel.model.refresh.save_failed", msg.saveErr.Error())
+	case msg.discoverErr != nil:
+		m.modelPanel.message = m.t("panel.model.refresh.builtin_reason", msg.discoverErr.Error())
+	case msg.remote:
+		m.modelPanel.message = m.t("panel.model.refresh.remote_loaded", len(m.modelPanel.models))
+	default:
+		m.modelPanel.message = m.t("panel.model.refresh.builtin_loaded")
+	}
 }

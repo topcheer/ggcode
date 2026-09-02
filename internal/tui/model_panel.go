@@ -224,7 +224,10 @@ func (m *Model) handleModelPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			panel.filter.Blur()
 			return *m, nil
 		}
-		if len(panel.models) == 0 {
+		// #1383-A: a filter with no matches sets selected=-1; the first
+		// Enter only Blurs (selected STAYS -1), the second fell through to
+		// models[-1] - a deterministic two-keystroke panic. Guard both.
+		if len(panel.models) == 0 || panel.selected < 0 {
 			return *m, nil
 		}
 		model := panel.models[panel.selected]
@@ -289,11 +292,10 @@ func (m *Model) refreshActiveModelList() tea.Cmd {
 			models: merged,
 			remote: true,
 		}
-		if err := m.config.SetEndpointModels(m.config.Vendor, m.config.Endpoint, result.models); err == nil {
-			result.saveErr = m.saveConfig()
-		} else {
-			result.saveErr = err
-		}
+		// #1383-B (family site 11, Vendors/Endpoints map): SetEndpointModels
+		// + saveConfig ran HERE on the Cmd goroutine while the UI reads the
+		// maps. The write + persist now ride the result message and execute
+		// on the Update loop (see the handler).
 		return result
 	}
 }
