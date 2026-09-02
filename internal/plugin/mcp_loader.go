@@ -957,12 +957,17 @@ func (m *MCPManager) Install(ctx context.Context, server config.MCPServerConfig)
 		delete(m.pendingOAuth, server.Name)
 		m.mu.Unlock()
 		m.connectOne(ctx, plugin)
+		// A freshly installed server may also be temporarily unreachable
+		// (network not up yet); give it the same cooldown recovery as startup
+		// connections. Install stays fast-fail for immediate UI feedback.
+		m.maybeStartInitialRecovery(ctx, plugin)
 		return nil
 	}
 	m.plugins = append(m.plugins, plugin)
 	m.mu.Unlock()
 
 	m.connectOne(ctx, plugin)
+	m.maybeStartInitialRecovery(ctx, plugin)
 	return nil
 }
 
@@ -1141,6 +1146,86 @@ func (m *MCPManager) connectWithRetry(ctx context.Context, plugin *MCPPlugin) {
 			return
 		}
 	}
+	// Fast initial attempts exhausted (~4s) and the server is still down.
+	// A common case: the user's network is not up yet when ggcode starts
+	// (VPN still connecting, Wi-Fi roaming, system just booted) — everything
+	// recovers minutes later, but the old behavior left the MCP server
+	// Failed for the rest of the session. Hand off to the cooldown recovery
+	// loop, mirroring the crash-reconnect cooldown (mcpReconnectCooldown).
+	m.maybeStartInitialRecovery(ctx, plugin)
+}
+
+// maybeStartInitialRecovery launches the cooldown recovery loop when an
+// initial connection failed and no other recovery path exists. It is a
+// no-op when the plugin connected, is waiting for OAuth (the TUI owns that
+// flow), or is closed (user intent — see #1285).
+func (m *MCPManager) maybeStartInitialRecovery(ctx context.Context, plugin *MCPPlugin) {
+	if plugin.IsConnected() {
+		return
+	}
+	plugin.mu.RLock()
+	waiting := plugin.awaitingOAuth
+	plugin.mu.RUnlock()
+	if waiting {
+		return
+	}
+	m.startInitialRecoveryLoop(ctx, plugin)
+}
+
+// initialRecoveryShouldProbe reports whether the initial-connect recovery
+// loop should keep probing this plugin. false means stop: the plugin came
+// back (connected or via user action), was closed/removed, is awaiting
+// OAuth, was disabled, or was replaced by a newer plugin instance
+// (Install/Reload swap pointers, not fields).
+func (m *MCPManager) initialRecoveryShouldProbe(p *MCPPlugin) bool {
+	if p.IsConnected() {
+		return false
+	}
+	if MCPDisabled(p.Name()) {
+		return false
+	}
+	p.mu.RLock()
+	closed, waiting := p.closed, p.awaitingOAuth
+	p.mu.RUnlock()
+	if closed || waiting {
+		return false
+	}
+	// Reload/Install replace the plugin object for the same server name;
+	// probing the orphaned old instance would resurrect a server config
+	// the user already changed or removed.
+	if m.pluginByName(p.Name()) != p {
+		return false
+	}
+	return true
+}
+
+// startInitialRecoveryLoop probes a server whose initial connection failed
+// every mcpReconnectCooldown until it connects or a stop condition is hit.
+// On success the crash-reconnect watcher (started inside Connect) owns any
+// later failures, so this loop exits permanently once connected. Status
+// flips Failed→Pending on each probe so the UI shows the outage is still
+// being worked on.
+func (m *MCPManager) startInitialRecoveryLoop(ctx context.Context, plugin *MCPPlugin) {
+	safego.Go("plugin.mcp.initialRecovery", func() {
+		debug.Log("mcp-recovery", "server=%s initial connect failed; entering cooldown re-probe every %s", plugin.Name(), mcpReconnectCooldown)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(mcpReconnectCooldown):
+			}
+			if !m.initialRecoveryShouldProbe(plugin) {
+				debug.Log("mcp-recovery", "server=%s recovery loop stopping (connected/closed/oauth/disabled/replaced)", plugin.Name())
+				return
+			}
+			debug.Log("mcp-recovery", "server=%s initial-connect recovery probe", plugin.Name())
+			m.connectOne(ctx, plugin)
+			if !m.initialRecoveryShouldProbe(plugin) {
+				debug.Log("mcp-recovery", "server=%s recovery loop stopping after probe (connected/closed/oauth/disabled/replaced)", plugin.Name())
+				return
+			}
+		}
+	})
 }
 
 func (m *MCPManager) pluginByName(name string) *MCPPlugin {
@@ -1235,6 +1320,7 @@ func (m *MCPManager) Reload(ctx context.Context, servers []config.MCPServerConfi
 		pluginCopy := p
 		safego.Go("plugin.mcp.reloadConnect", func() {
 			m.connectOne(ctx, pluginCopy)
+			m.maybeStartInitialRecovery(ctx, pluginCopy)
 		})
 	}
 
