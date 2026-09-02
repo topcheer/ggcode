@@ -1956,6 +1956,13 @@ func (m *Model) prepareCurrentSessionTunnelLedger() {
 	}
 	// Clear in-memory tunnel events — the projection store is the sole
 	// persistent copy. CutAuthority resets the projection ledger.
+	// #1422-B: the clear ran BEFORE CutAuthority with no rollback - a
+	// failed cut (disk full/permission) left TUI emptied, the mobile
+	// Replay reading the full old ledger, and new events dropped by the
+	// #666 epoch rule, with zero user signal. The old events are now
+	// captured and RESTORED on failure.
+	prevEvents := m.session.TunnelEvents
+	prevComplete := m.session.TunnelEventsComplete
 	m.session.TunnelEvents = nil
 	m.session.TunnelEventsComplete = false
 	ses := m.session
@@ -1973,6 +1980,14 @@ func (m *Model) prepareCurrentSessionTunnelLedger() {
 		// the on-disk authority is still the old one).
 		if cutErr != nil {
 			debug.Log("tui", "cut authority failed for session %s: %v (brokers keep previous epoch)", ses.ID, cutErr)
+			// #1422-B: restore the cleared events so the TUI view matches
+			// the still-old on-disk ledger (no three-way split).
+			m.sessionMutex().Lock()
+			if m.session != nil && m.session.ID == ses.ID {
+				m.session.TunnelEvents = prevEvents
+				m.session.TunnelEventsComplete = prevComplete
+			}
+			m.sessionMutex().Unlock()
 		} else {
 			if m.tunnelEventBroker() != nil {
 				m.tunnelEventBroker().SetAuthorityEpoch(epoch)

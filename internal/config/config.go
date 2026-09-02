@@ -1809,8 +1809,17 @@ func mergeDefaultEndpoints(cfg, defaults *Config) {
 				continue
 			}
 			if _, hasEP := agVC.Endpoints[epName]; !hasEP {
-				for _, ep := range oldVC.Endpoints {
-					agVC.Endpoints[epName] = ep
+				// #1422-B2: iterating a map takes a RANDOM last element -
+				// merged multi-endpoint vendors got a nondeterministic
+				// pick, then Save (compact) persisted it as permanent
+				// config. Deterministic: lowest endpoint name.
+				epNames := make([]string, 0, len(oldVC.Endpoints))
+				for k := range oldVC.Endpoints {
+					epNames = append(epNames, k)
+				}
+				sort.Strings(epNames)
+				if len(epNames) > 0 {
+					agVC.Endpoints[epName] = oldVC.Endpoints[epNames[0]]
 				}
 			}
 			carryGatewayVendorKey(&agVC, epName, oldVC.APIKey)

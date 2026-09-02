@@ -1289,7 +1289,7 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 	}
 
 	handler := a2a.NewTaskHandler(workingDir, ag, reg,
-		a2a.WithMaxTasks(cfg.A2A.MaxTasks),
+		a2a.WithMaxTasks(parseA2AMaxTasks(cfg.A2A.MaxTasks)),
 		a2a.WithTimeout(parseA2ATimeout(cfg.A2A.TaskTimeout)),
 	)
 
@@ -1472,4 +1472,17 @@ func shortCommit(commit string) string {
 		return commit[:12]
 	}
 	return commit
+}
+
+// parseA2AMaxTasks guards the A2A task cap. #1422-A: on a first-run
+// --bypass install Validate's early return (FirstRun + empty vendor)
+// skips the MaxTasks=5 default fill, the zero then OVERRODE the
+// handler's own default and active>=maxTasks rejected the very first
+// task - A2A dead for the whole process. Timeout had a fallback
+// (parseA2ATimeout); MaxTasks now has its counterpart.
+func parseA2AMaxTasks(n int) int {
+	if n <= 0 {
+		return 5
+	}
+	return n
 }
