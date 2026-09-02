@@ -190,23 +190,27 @@ type Model struct {
 	slackPanel           *slackPanelState
 	dingtalkPanel        *dingtalkPanelState
 	wechatPanel          *wechatPanelState
-	wecomPanel           *wecomPanelState
-	mattermostPanel      *mattermostPanelState
-	matrixPanel          *matrixPanelState
-	signalPanel          *signalPanelState
-	ircPanel             *ircPanelState
-	nostrPanel           *nostrPanelState
-	twitchPanel          *twitchPanelState
-	whatsappPanel        *whatsappPanelState
-	imPanel              *imPanelState
-	mcpPanel             *mcpPanelState
-	pendingDeviceCodes   []deviceCodeInfo
-	skillsPanel          *skillsPanelState
-	statsPanel           *statsPanelState
-	hooksPanel           *hooksPanelState
-	inspectorPanel       *inspectorPanelState
-	swarmMgr             *swarm.Manager
-	acpClientMgr         *acpclient.ClientManager
+	// lastWechatAdapterName bridges the adapter name computed in
+	// configMutationMsg.apply (name dedup must READ the adapters map, so
+	// it runs on the Update loop) to next()'s start chain (#1367).
+	lastWechatAdapterName string
+	wecomPanel            *wecomPanelState
+	mattermostPanel       *mattermostPanelState
+	matrixPanel           *matrixPanelState
+	signalPanel           *signalPanelState
+	ircPanel              *ircPanelState
+	nostrPanel            *nostrPanelState
+	twitchPanel           *twitchPanelState
+	whatsappPanel         *whatsappPanelState
+	imPanel               *imPanelState
+	mcpPanel              *mcpPanelState
+	pendingDeviceCodes    []deviceCodeInfo
+	skillsPanel           *skillsPanelState
+	statsPanel            *statsPanelState
+	hooksPanel            *hooksPanelState
+	inspectorPanel        *inspectorPanelState
+	swarmMgr              *swarm.Manager
+	acpClientMgr          *acpclient.ClientManager
 
 	impersonatePanel       *impersonatePanelState
 	lanChatPanel           *lanChatPanelState

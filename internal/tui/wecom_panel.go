@@ -303,27 +303,42 @@ func (m *Model) createWeComAdapterCmd(spec string) tea.Cmd {
 				"secret": secret,
 			},
 		}
-		m.config.IM.Enabled = true
-		if err := m.config.AddIMAdapter(name, adapter); err != nil {
-			return wecomBindResultMsg{err: err}
+		// #1367 family batch 3: config write + explicit persist (#1399)
+		// moved onto the Update loop via configMutationMsg (see
+		// config_mutation.go).
+		return configMutationMsg{
+			apply: func(m *Model) error {
+				m.config.IM.Enabled = true
+				if err := m.config.AddIMAdapter(name, adapter); err != nil {
+					return err
+				}
+				// #1399: AddIMAdapter's patch writes ONLY the adapters subtree -
+				// not im.enabled. The in-memory Enabled=true above also defeats
+				// the ensureWeComRuntime auto-enable saveConfig fallback (it sees
+				// the flag already set and skips persisting), and every startup
+				// gates on cfg.IM.Enabled: after restart the adapter with its
+				// persisted secrets never started - silently. Persist explicitly
+				// like the whatsapp panel does.
+				if err := m.saveConfig(); err != nil {
+					return fmt.Errorf("persist config: %w", err)
+				}
+				return nil
+			},
+			next: func(m *Model) tea.Cmd {
+				return func() tea.Msg {
+					if err := m.ensureWeComRuntime(); err != nil {
+						return wecomBindResultMsg{err: err}
+					}
+					if err := m.startWeComAdapterIfNeeded(name); err != nil {
+						return wecomBindResultMsg{err: err}
+					}
+					return wecomBindResultMsg{message: m.t("panel.wecom.message.added_bot", name)}
+				}
+			},
+			fail: func(err error) tea.Msg {
+				return wecomBindResultMsg{err: err}
+			},
 		}
-		// #1399: AddIMAdapter's patch writes ONLY the adapters subtree - not
-		// im.enabled. The in-memory Enabled=true above also defeats the
-		// ensureWeComRuntime auto-enable saveConfig fallback (it sees the
-		// flag already set and skips persisting), and every startup gates on
-		// cfg.IM.Enabled: after restart the adapter with its persisted
-		// secrets never started - silently. Persist explicitly like the
-		// whatsapp panel does (:394).
-		if err := m.saveConfig(); err != nil {
-			return wecomBindResultMsg{err: fmt.Errorf("persist config: %w", err)}
-		}
-		if err := m.ensureWeComRuntime(); err != nil {
-			return wecomBindResultMsg{err: err}
-		}
-		if err := m.startWeComAdapterIfNeeded(name); err != nil {
-			return wecomBindResultMsg{err: err}
-		}
-		return wecomBindResultMsg{message: m.t("panel.wecom.message.added_bot", name)}
 	}
 }
 

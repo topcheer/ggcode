@@ -292,17 +292,28 @@ func (m *Model) createTwitchAdapterCmd(spec string) tea.Cmd {
 				"channels": channels,
 			},
 		}
-		m.config.IM.Enabled = true
-		if err := m.config.AddIMAdapter(name, adapter); err != nil {
-			return twitchBindResultMsg{err: err}
+		// #1367 family batch 3 final sweep: config write moved onto
+		// the Update loop via configMutationMsg (see config_mutation.go).
+		return configMutationMsg{
+			apply: func(m *Model) error {
+				m.config.IM.Enabled = true
+				return m.config.AddIMAdapter(name, adapter)
+			},
+			next: func(m *Model) tea.Cmd {
+				return func() tea.Msg {
+					if err := m.ensureTwitchRuntime(); err != nil {
+						return twitchBindResultMsg{err: err}
+					}
+					if err := m.startTwitchAdapterIfNeeded(name); err != nil {
+						return twitchBindResultMsg{err: err}
+					}
+					return twitchBindResultMsg{message: m.t("panel.twitch.message.added_bot", name)}
+				}
+			},
+			fail: func(err error) tea.Msg {
+				return twitchBindResultMsg{err: err}
+			},
 		}
-		if err := m.ensureTwitchRuntime(); err != nil {
-			return twitchBindResultMsg{err: err}
-		}
-		if err := m.startTwitchAdapterIfNeeded(name); err != nil {
-			return twitchBindResultMsg{err: err}
-		}
-		return twitchBindResultMsg{message: m.t("panel.twitch.message.added_bot", name)}
 	}
 }
 

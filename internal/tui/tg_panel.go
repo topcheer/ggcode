@@ -298,17 +298,28 @@ func (m *Model) createTGAdapterCmd(spec string) tea.Cmd {
 				"bot_token": botToken,
 			},
 		}
-		m.config.IM.Enabled = true
-		if err := m.config.AddIMAdapter(name, adapter); err != nil {
-			return tgBindResultMsg{err: err}
+		// #1367 family batch 3 final sweep: config write moved onto
+		// the Update loop via configMutationMsg (see config_mutation.go).
+		return configMutationMsg{
+			apply: func(m *Model) error {
+				m.config.IM.Enabled = true
+				return m.config.AddIMAdapter(name, adapter)
+			},
+			next: func(m *Model) tea.Cmd {
+				return func() tea.Msg {
+					if err := m.ensureTGRuntime(false); err != nil {
+						return tgBindResultMsg{err: err}
+					}
+					if err := m.startTGAdapterIfNeeded(name); err != nil {
+						return tgBindResultMsg{err: err}
+					}
+					return tgBindResultMsg{message: m.t("panel.tg.message.added_bot", name)}
+				}
+			},
+			fail: func(err error) tea.Msg {
+				return tgBindResultMsg{err: err}
+			},
 		}
-		if err := m.ensureTGRuntime(false); err != nil {
-			return tgBindResultMsg{err: err}
-		}
-		if err := m.startTGAdapterIfNeeded(name); err != nil {
-			return tgBindResultMsg{err: err}
-		}
-		return tgBindResultMsg{message: m.t("panel.tg.message.added_bot", name)}
 	}
 }
 

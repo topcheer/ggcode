@@ -387,20 +387,31 @@ func (m *Model) createWAAdapterCmd(name string) tea.Cmd {
 			Platform: string(im.PlatformWhatsApp),
 			Extra:    map[string]interface{}{},
 		}
-		m.config.IM.Enabled = true
-		if err := m.config.AddIMAdapter(name, adapter); err != nil {
-			return whatsappBindResultMsg{err: err}
+		// #1367 family batch 3 final sweep: config write moved onto
+		// the Update loop via configMutationMsg (see config_mutation.go).
+		return configMutationMsg{
+			apply: func(m *Model) error {
+				m.config.IM.Enabled = true
+				return m.config.AddIMAdapter(name, adapter)
+			},
+			next: func(m *Model) tea.Cmd {
+				return func() tea.Msg {
+					if err := m.saveConfig(); err != nil {
+						return whatsappBindResultMsg{err: fmt.Errorf("save config: %w", err)}
+					}
+					if err := m.ensureWARuntime(); err != nil {
+						return whatsappBindResultMsg{message: m.t("panel.whatsapp.saved_start_pending", name, err)}
+					}
+					if err := m.startWAAdapterIfNeeded(name); err != nil {
+						return whatsappBindResultMsg{message: m.t("panel.whatsapp.saved_start_failed", name, err)}
+					}
+					return whatsappBindResultMsg{message: m.t("panel.whatsapp.created_scan", name)}
+				}
+			},
+			fail: func(err error) tea.Msg {
+				return whatsappBindResultMsg{err: err}
+			},
 		}
-		if err := m.saveConfig(); err != nil {
-			return whatsappBindResultMsg{err: fmt.Errorf("save config: %w", err)}
-		}
-		if err := m.ensureWARuntime(); err != nil {
-			return whatsappBindResultMsg{message: m.t("panel.whatsapp.saved_start_pending", name, err)}
-		}
-		if err := m.startWAAdapterIfNeeded(name); err != nil {
-			return whatsappBindResultMsg{message: m.t("panel.whatsapp.saved_start_failed", name, err)}
-		}
-		return whatsappBindResultMsg{message: m.t("panel.whatsapp.created_scan", name)}
 	}
 }
 

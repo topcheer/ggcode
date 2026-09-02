@@ -398,44 +398,58 @@ func (m *Model) saveWechatBotToken(botToken string) tea.Cmd {
 		}
 
 		// Auto-generate name: wechat → wechat-2 → wechat-3 ...
-		adapterName := "wechat"
-		n := 2
-		for {
-			if _, exists := m.config.IM.Adapters[adapterName]; !exists {
-				break
-			}
-			adapterName = fmt.Sprintf("wechat-%d", n)
-			n++
-		}
-
-		if err := m.config.AddIMAdapter(adapterName, config.IMAdapterConfig{
-			Enabled:  true,
-			Platform: "wechat",
-			Extra: map[string]interface{}{
-				"bot_token": botToken,
+		// #1367 family batch 3: the existence-check loop READS the adapters
+		// map and AddIMAdapter writes it - both moved onto the Update loop
+		// via configMutationMsg; the name is computed inside apply.
+		return configMutationMsg{
+			apply: func(m *Model) error {
+				adapterName := "wechat"
+				n := 2
+				for {
+					if _, exists := m.config.IM.Adapters[adapterName]; !exists {
+						break
+					}
+					adapterName = fmt.Sprintf("wechat-%d", n)
+					n++
+				}
+				if err := m.config.AddIMAdapter(adapterName, config.IMAdapterConfig{
+					Enabled:  true,
+					Platform: "wechat",
+					Extra: map[string]interface{}{
+						"bot_token": botToken,
+					},
+				}); err != nil {
+					return fmt.Errorf("create adapter config: %w", err)
+				}
+				m.lastWechatAdapterName = adapterName
+				debug.Log("wechat", "saveWechatBotToken: adapter %q created and saved", adapterName)
+				return nil
 			},
-		}); err != nil {
-			debug.Log("wechat", "saveWechatBotToken: AddIMAdapter failed: %v", err)
-			return imEditResultMsg{err: fmt.Errorf("create adapter config: %w", err)}
-		}
-		debug.Log("wechat", "saveWechatBotToken: adapter %q created and saved", adapterName)
+			next: func(m *Model) tea.Cmd {
+				return func() tea.Msg {
+					adapterName := m.lastWechatAdapterName
+					// Start the adapter (binding happens when the first inbound message triggers pairing)
+					if m.imManager != nil {
+						if err := im.StartNamedAdapter(context.Background(), m.config.IM, adapterName, m.imManager); err != nil {
+							debug.Log("wechat", "saveWechatBotToken: StartNamedAdapter failed: %v", err)
+							// #1398-C: adapter saved but NOT running - surfacing this as
+							// success made users believe the config was live. The token IS
+							// persisted, so this is a start failure, not an auth failure.
+							return imEditResultMsg{adapterName: adapterName, field: "bot_token", err: fmt.Errorf("saved, but adapter failed to start: %w", err)}
+						} else {
+							debug.Log("wechat", "saveWechatBotToken: adapter %q started", adapterName)
+						}
+					} else {
+						debug.Log("wechat", "saveWechatBotToken: imManager is nil, adapter not started")
+					}
 
-		// Start the adapter (binding happens when the first inbound message triggers pairing)
-		if m.imManager != nil {
-			if err := im.StartNamedAdapter(context.Background(), m.config.IM, adapterName, m.imManager); err != nil {
-				debug.Log("wechat", "saveWechatBotToken: StartNamedAdapter failed: %v", err)
-				// #1398-C: adapter saved but NOT running - surfacing this as
-				// success made users believe the config was live. The token IS
-				// persisted, so this is a start failure, not an auth failure.
-				return imEditResultMsg{adapterName: adapterName, field: "bot_token", err: fmt.Errorf("saved, but adapter failed to start: %w", err)}
-			} else {
-				debug.Log("wechat", "saveWechatBotToken: adapter %q started", adapterName)
-			}
-		} else {
-			debug.Log("wechat", "saveWechatBotToken: imManager is nil, adapter not started")
+					return imEditResultMsg{adapterName: adapterName, field: "bot_token", value: "***"}
+				}
+			},
+			fail: func(err error) tea.Msg {
+				return imEditResultMsg{err: err}
+			},
 		}
-
-		return imEditResultMsg{adapterName: adapterName, field: "bot_token", value: "***"}
 	}
 }
 
@@ -495,18 +509,31 @@ func (m *Model) bindWechatEntry(entry wechatBindingEntry) tea.Cmd {
 // removeWechatEntry fully removes a bot: unbind, stop adapter, delete config.
 func (m *Model) removeWechatEntry(entry wechatBindingEntry) tea.Cmd {
 	return func() tea.Msg {
-		// 1. Unbind + stop (ignore error if no binding exists)
-		if m.imManager != nil {
-			m.imManager.StopAdapter(entry.Adapter)
-			_ = m.imManager.UnbindAdapter(entry.Adapter)
-		}
-		// 2. Remove from config
-		if m.config != nil {
-			if err := m.config.RemoveIMAdapter(entry.Adapter); err != nil {
+		// #1367 family batch 3 补遗: RemoveIMAdapter is a map DELETE -
+		// same fatal concurrent-map-write class as AddIMAdapter. It now
+		// runs on the Update loop via configMutationMsg; the imManager
+		// stop/unbind (no config access) stays on the Cmd goroutine.
+		return configMutationMsg{
+			apply: func(m *Model) error {
+				if m.config == nil {
+					return nil
+				}
+				return m.config.RemoveIMAdapter(entry.Adapter)
+			},
+			next: func(m *Model) tea.Cmd {
+				return func() tea.Msg {
+					// 1. Unbind + stop (ignore error if no binding exists)
+					if m.imManager != nil {
+						m.imManager.StopAdapter(entry.Adapter)
+						_ = m.imManager.UnbindAdapter(entry.Adapter)
+					}
+					return imEditResultMsg{adapterName: entry.Adapter, field: "remove", value: "ok"}
+				}
+			},
+			fail: func(err error) tea.Msg {
 				return imEditResultMsg{err: fmt.Errorf("remove config: %w", err)}
-			}
+			},
 		}
-		return imEditResultMsg{adapterName: entry.Adapter, field: "remove", value: "ok"}
 	}
 }
 
