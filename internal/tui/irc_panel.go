@@ -335,14 +335,11 @@ func (m *Model) startIRCAdapterIfNeeded(name string) error {
 	if !ok {
 		return fmt.Errorf(m.t("panel.irc.error.not_configured"), name)
 	}
+	// #1378-A: disabled adapters must go through bindIRCEntry's
+	// configMutationMsg auto-enable path - the SetIMAdapterEnabled map
+	// write never runs on this Cmd-goroutine function anymore.
 	if !adapterCfg.Enabled {
-		// Auto-enable when user explicitly tries to bind from panel.
-		if err := m.config.SetIMAdapterEnabled(name, true); err != nil {
-			return fmt.Errorf("enable %s: %w", name, err)
-		}
-		if m.imManager != nil {
-			_ = m.imManager.EnableBinding(name)
-		}
+		return fmt.Errorf("adapter %s is disabled - bind from the panel to enable it", name)
 	}
 	if !strings.EqualFold(adapterCfg.Platform, string(im.PlatformIRC)) {
 		return fmt.Errorf(m.t("panel.irc.error.not_irc_adapter"), name)
@@ -363,21 +360,45 @@ func (m *Model) bindIRCEntry(entry ircBindingEntry) tea.Cmd {
 		if m.imManager == nil {
 			return ircBindResultMsg{err: errors.New(m.t("panel.irc.error.config_unavailable"))}
 		}
-		// Start the adapter if not already running.
-		if err := m.startIRCAdapterIfNeeded(entry.Adapter); err != nil {
-			return ircBindResultMsg{err: err}
+		// Start the adapter if not already running. #1378-A: the old
+		// auto-enable inside startIRCAdapterIfNeeded ran a Cmd-goroutine
+		// map write; a disabled adapter now routes the enable through
+		// configMutationMsg and the full bind chain continues in next().
+		bindRest := func(m *Model) tea.Msg {
+			if err := m.startIRCAdapterIfNeeded(entry.Adapter); err != nil {
+				return ircBindResultMsg{err: err}
+			}
+			targetID := defaultIRCTargetID(ws)
+			_, err := m.imManager.BindChannel(im.ChannelBinding{
+				Workspace: ws,
+				Platform:  im.PlatformIRC,
+				Adapter:   entry.Adapter,
+				TargetID:  targetID,
+			})
+			if err != nil {
+				return ircBindResultMsg{err: err}
+			}
+			return ircBindResultMsg{message: m.t("panel.irc.message.bound_success")}
 		}
-		targetID := defaultIRCTargetID(ws)
-		_, err := m.imManager.BindChannel(im.ChannelBinding{
-			Workspace: ws,
-			Platform:  im.PlatformIRC,
-			Adapter:   entry.Adapter,
-			TargetID:  targetID,
-		})
-		if err != nil {
-			return ircBindResultMsg{err: err}
+		if cfg, ok := m.config.IM.Adapters[entry.Adapter]; m.config != nil && ok && !cfg.Enabled {
+			return configMutationMsg{
+				apply: func(m *Model) error {
+					return m.config.SetIMAdapterEnabled(entry.Adapter, true)
+				},
+				next: func(m *Model) tea.Cmd {
+					return func() tea.Msg {
+						if m.imManager != nil {
+							_ = m.imManager.EnableBinding(entry.Adapter)
+						}
+						return bindRest(m)
+					}
+				},
+				fail: func(err error) tea.Msg {
+					return ircBindResultMsg{err: fmt.Errorf("enable %s: %w", entry.Adapter, err)}
+				},
+			}
 		}
-		return ircBindResultMsg{message: m.t("panel.irc.message.bound_success")}
+		return bindRest(m)
 	}
 }
 

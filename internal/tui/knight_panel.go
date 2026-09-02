@@ -378,6 +378,17 @@ func (m *Model) renderKnightStatus() string {
 		pct := float64(used) / float64(limit) * 100
 		barW := 20
 		filled := int(pct / 100 * float64(barW))
+		// #1378-B: overspend makes pct>100 -> filled>barW -> Repeat with a
+		// NEGATIVE count panics - and overspend is exactly when the user
+		// needs to see this bar (mid-run LLM spend crosses the limit:\t			// CanSpend checks only at task start; or the daily budget was
+		// lowered after today's usage accumulated). Clamp to [0, barW]
+		// and let pct display >100%% as the honest signal.
+		if filled < 0 {
+			filled = 0
+		}
+		if filled > barW {
+			filled = barW
+		}
 		bar := strings.Repeat("█", filled) + strings.Repeat("░", barW-filled)
 		sb.WriteString(fmt.Sprintf("Budget: [%s] %.0f%%\n", bar, pct))
 		sb.WriteString(fmt.Sprintf("  %d used / %d remaining / %d total\n", used, remaining, limit))
