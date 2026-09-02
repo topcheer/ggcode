@@ -440,3 +440,39 @@ func TestWechatRemoveResultRouting(t *testing.T) {
 		t.Fatalf("remove result shows auth_success: %q", got)
 	}
 }
+
+// TestWechatTokenSaveMutationFlow pins the #1367 batch-3 migration:
+// saveWechatBotToken routes through configMutationMsg - the name-dedup
+// loop (which READS the adapters map, so it must not run on a Cmd
+// goroutine) executes inside apply, the chosen name bridges to next()
+// via lastWechatAdapterName, and the final result still carries it.
+func TestWechatTokenSaveMutationFlow(t *testing.T) {
+	m := newTestModel()
+	m.config = config.DefaultConfig()
+	m.config.FilePath = t.TempDir() + "/ggcode.yaml"
+
+	msg := m.saveWechatBotToken("tok-1")()
+	mut, ok := msg.(configMutationMsg)
+	if !ok {
+		t.Fatalf("expected configMutationMsg, got %#v", msg)
+	}
+	m2, followUp := m.handleConfigMutationMsg(mut)
+	m = m2
+	if m.lastWechatAdapterName != "wechat" {
+		t.Fatalf("bridged name = %q, want wechat", m.lastWechatAdapterName)
+	}
+	if _, has := m.config.IM.Adapters["wechat"]; !has {
+		t.Fatal("adapter not added after mutation routing")
+	}
+	// Second save must dedup to wechat-2 - the loop ran inside apply.
+	msg2 := m.saveWechatBotToken("tok-2")()
+	mut2, _ := msg2.(configMutationMsg)
+	m3, _ := m.handleConfigMutationMsg(mut2)
+	m = m3
+	if m.lastWechatAdapterName != "wechat-2" {
+		t.Fatalf("second save name = %q, want wechat-2", m.lastWechatAdapterName)
+	}
+	if followUp == nil {
+		t.Fatal("follow-up Cmd missing")
+	}
+}
