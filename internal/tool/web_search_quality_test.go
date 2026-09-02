@@ -230,3 +230,27 @@ func TestAssessSearchResultsExemptionNormalization(t *testing.T) {
 		}
 	}
 }
+
+// TestAssessSearchResultsExemptionParity pins #1428: the exemption must
+// match the filter's documented semantics - www-prefixed allow entries
+// and SUBDOMAIN results of allowed root domains are exempt (the old
+// exact-map lookup missed both while the filter passed them).
+func TestAssessSearchResultsExemptionParity(t *testing.T) {
+	mk := func(domain string) searchResult {
+		return searchResult{Title: "t", URL: "https://" + domain + "/x"}
+	}
+	// A: www-prefixed allow entry exempts its host.
+	gotA := assessSearchResults("q",
+		[]searchResult{mk("www.npmjs.com"), mk("www.npmjs.com"), mk("www.npmjs.com")},
+		[]string{"https://www.npmjs.com."},
+	)
+	if len(gotA) != 3 {
+		t.Fatalf("www-prefixed allow entry not exempt: %d results", len(gotA))
+	}
+	// B: subdomains of an allowed root are exempt.
+	subs := []searchResult{mk("learn.microsoft.com"), mk("learn.microsoft.com"), mk("learn.microsoft.com"), mk("docs.microsoft.com")}
+	gotB := assessSearchResults("q", subs, []string{"microsoft.com"})
+	if len(gotB) != 4 {
+		t.Fatalf("subdomain results of allowed root not exempt: %d results", len(gotB))
+	}
+}
