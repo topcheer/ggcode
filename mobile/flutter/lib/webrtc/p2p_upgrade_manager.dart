@@ -45,8 +45,18 @@ class P2PUpgradeManager {
         final sdp = data['sdp'] as String?;
         if (sdp == null) return false;
 
-        // Dispose any existing peer before creating a new one.
+        // #1426-A: dispose the old peer with a full disconnect reset.
+        // The old flow kept _p2pActive=true across the swap (unlike
+        // rtc_failed, which resets) AND P2PPeer.dispose's synchronous
+        // _connected=false pre-empts _handleDisconnect - so the ONLY
+        // event that could reset the flag never fired. During the new
+        // peer's handshake window send() silently no-op'd while the
+        // manager reported success - the relay fallback was skipped and
+        // user messages evaporated.
+        final wasActive = _p2pActive;
+        _p2pActive = false;
         await _peer?.dispose();
+        if (wasActive) onP2PDisconnected();
         _peer = P2PPeer(
           onMessage: (bytes) {
             if (_p2pActive) {

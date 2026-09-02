@@ -140,7 +140,15 @@ func bodyHasSafegoRecover(body *ast.BlockStmt) bool {
 			if call, ok := stmt.X.(*ast.CallExpr); ok {
 				if sel, ok2 := call.Fun.(*ast.SelectorExpr); ok2 {
 					if pkg, isIdent := sel.X.(*ast.Ident); isIdent && pkg.Name == safegoPkg {
-						found = true
+						// #1426-C: the header rule says ONLY safego.Run/Go
+						// count (they carry their own recover); the old
+						// check accepted ANY safego.X() - safego.SetLogger
+						// inside a goroutine body passed the CI gate with
+						// no recover at all. Restrict to the two runner
+						// entry points per the documented rule.
+						if sel.Sel != nil && (sel.Sel.Name == "Run" || sel.Sel.Name == "Go") {
+							found = true
+						}
 					}
 				}
 			}

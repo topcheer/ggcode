@@ -113,6 +113,16 @@ class P2PPeer {
     if (_disposed) return;
 
     _pc = await createPeerConnection(_iceConfig.toMap(), {});
+    // #1426-B: check-then-await race - dispose (heartbeat timeout /
+    // _forceReconnect via the manager's unawaited dispose) can land
+    // during createPeerConnection. Without the recheck the fresh
+    // _pc lands on a disposed peer nobody ever closes, and its
+    // onIceCandidate fires into a dead sendSignal path.
+    if (_disposed) {
+      await _pc?.close();
+      _pc = null;
+      return;
+    }
 
     // Listen for the DataChannel created by the host.
     _pc!.onDataChannel = (RTCDataChannel dc) {
@@ -197,7 +207,14 @@ class P2PPeer {
 
   /// Sends data over the DataChannel.
   Future<void> send(List<int> data) async {
-    if (_dc == null || !_connected) return;
+    // #1426-A: this used to `return` SILENTLY when the channel was not
+    // ready (handshake window after a renegotiation swap) - the manager
+    // awaited without error and reported success, so the relay fallback
+    // was skipped and the message evaporated. Throwing lets the
+    // manager's catch route it to relay.
+    if (_disposed || _dc == null || !_connected) {
+      throw StateError('P2P channel not ready');
+    }
     final bytes = data is Uint8List ? data : Uint8List.fromList(data);
     await _dc!.send(RTCDataChannelMessage.fromBinary(bytes));
   }
