@@ -410,3 +410,30 @@ func TestQQBindingLabelsMutedActiveAvailable(t *testing.T) {
 		t.Fatalf("expected available, got %s", labels[3])
 	}
 }
+
+// TestQQBindDisabledAdapterRoutesMutation pins #1387-B: binding a
+// DISABLED adapter no longer writes config on the Cmd goroutine - the
+// auto-enable rides configMutationMsg and the bind chain continues on
+// the Update loop.
+func TestQQBindDisabledAdapterRoutesMutation(t *testing.T) {
+	m := NewModel(nil, nil)
+	cfg := config.DefaultConfig()
+	cfg.FilePath = t.TempDir() + "/ggcode.yaml"
+	cfg.IM.Adapters = map[string]config.IMAdapterConfig{
+		"qq-off": {Enabled: false, Platform: "qq"},
+	}
+	m.SetConfig(cfg)
+
+	msg := m.bindQQEntry(qqBindingEntry{Adapter: "qq-off"})()
+	mut, ok := msg.(configMutationMsg)
+	if !ok {
+		t.Fatalf("expected configMutationMsg, got %#v", msg)
+	}
+	m2, followUp := m.handleConfigMutationMsg(mut)
+	if !m2.config.IM.Adapters["qq-off"].Enabled {
+		t.Fatal("adapter not enabled after mutation routing")
+	}
+	if followUp == nil {
+		t.Fatal("follow-up Cmd missing")
+	}
+}
