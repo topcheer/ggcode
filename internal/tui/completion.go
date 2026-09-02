@@ -26,6 +26,15 @@ type Mention struct {
 // ParseMentions extracts @path references from user input.
 // Returns the cleaned message (with @path removed) and list of mentions.
 func ParseMentions(input string, workDir string) (string, []Mention, error) {
+	// #1425-A: canonicalize workDir for CONTAINMENT CHECKS only - if the
+	// caller-supplied workdir contains symlink components (macOS
+	// /var vs /private/var), EvalSymlinks'd candidate paths sit OUTSIDE
+	// the lexical workDir and every mention would be misclassified as an
+	// escape. Mention.Path keeps the caller's lexical form.
+	realWorkDir := workDir
+	if resolved, err := filepath.EvalSymlinks(workDir); err == nil {
+		realWorkDir = resolved
+	}
 	var mentions []Mention
 	cleaned := input
 
@@ -84,9 +93,21 @@ func ParseMentions(input string, workDir string) (string, []Mention, error) {
 		// #889: rel=='..' or a '../' component escapes; '..hidden.go' does
 		// NOT — the old HasPrefix(rel, "..") over-matched and silently
 		// dropped such legitimate filenames.
-		rel, err := filepath.Rel(workDir, absPath)
+		// #1425-A: resolve symlinks before the containment check -
+		// @keys/id_rsa (workDir/keys -> ~/.ssh) passed the LEXICAL rel
+		// check, Stat followed the link, and the content of the linked
+		// file was read into the conversation.
+		realPath := absPath
+		if resolved, rerr := filepath.EvalSymlinks(absPath); rerr == nil {
+			realPath = resolved
+		} else {
+			debug.Log("completion", "@mention path unresolvable (dangling link?): %s", token)
+			searchFrom = idx + 1 + len(token)
+			continue
+		}
+		rel, err := filepath.Rel(realWorkDir, realPath)
 		if err != nil || rel == ".." || strings.HasPrefix(rel, "../") {
-			debug.Log("completion", "@mention path traversal blocked: %s -> %s", token, absPath)
+			debug.Log("completion", "@mention path traversal blocked (symlink escape): %s -> %s", token, realPath)
 			searchFrom = idx + 1 + len(token)
 			continue
 		}
@@ -172,6 +193,12 @@ func ExpandMentions(input string, workDir string) (string, error) {
 // CompleteMention returns file/directory completions for an @mention prefix.
 // prefix is the text after "@" (e.g., "internal/t" from "@internal/t").
 func CompleteMention(prefix string, workDir string, fuzzyFallback FuzzyFileSearcher) []string {
+	// #1425-A: same canonicalization as ParseMentions - the containment
+	// check below compares EvalSymlinks'd dirs against workDir, so both
+	// must be real paths.
+	if resolved, err := filepath.EvalSymlinks(workDir); err == nil {
+		workDir = resolved
+	}
 	var dir string
 	var partial string
 
@@ -194,7 +221,18 @@ func CompleteMention(prefix string, workDir string, fuzzyFallback FuzzyFileSearc
 	// the candidates it produced (@../foo) were then REJECTED by
 	// ParseMentions (#889 rejects rel=="..") - "completion offers what
 	// parsing eats back". Guard here so both sides agree.
-	if rel, err := filepath.Rel(workDir, dir); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	// #1425-A: the old check was purely LEXICAL (filepath.Rel on the
+	// given dir) - a symlink INSIDE the workspace (workDir/keys ->
+	// ~/.ssh) passed it and open(2) followed the link: outside
+	// filenames listed, then @mention-read. Resolve symlinks FIRST and
+	// validate the REAL path.
+	realDir := dir
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		realDir = resolved
+	} else {
+		return nil // unresolvable (dangling symlink / permission) - refuse
+	}
+	if rel, err := filepath.Rel(workDir, realDir); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return nil
 	}
 

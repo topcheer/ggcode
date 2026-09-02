@@ -334,3 +334,44 @@ func TestCompleteMentionRejectsTraversal(t *testing.T) {
 		}
 	}
 }
+
+// TestParseMentions_SymlinkEscapeBlocked pins #1425-A: a symlink inside
+// the workspace pointing OUTSIDE (workDir/keys -> tempdir) used to pass
+// the purely lexical containment check - the completion LISTED the
+// target's filenames and @mention read its contents into the chat.
+func TestParseMentions_SymlinkEscapeBlocked(t *testing.T) {
+	if os.Geteuid() == 0 {
+		// root reads regardless; the lexical guard still applies though
+	}
+	outside := t.TempDir()
+	secret := filepath.Join(outside, "secret.txt")
+	if err := os.WriteFile(secret, []byte("PRIVATE"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ws := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(ws, "keys")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+
+	// Completion: listing through the symlink must return nothing.
+	if got := CompleteMention("keys/", ws, nil); len(got) != 0 {
+		t.Fatalf("symlink escape listed outside files: %v", got)
+	}
+
+	// Parse: @keys/secret.txt must be blocked, not read.
+	_, mentions, err := ParseMentions("read @keys/secret.txt", ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mentions) != 0 {
+		t.Fatalf("symlink escape mention accepted: %+v", mentions)
+	}
+
+	// Sanity: a LEGITIMATE in-workspace file still mentions fine.
+	good := filepath.Join(ws, "good.txt")
+	os.WriteFile(good, []byte("ok"), 0o644)
+	_, mentions2, err2 := ParseMentions("read @good.txt", ws)
+	if err2 != nil || len(mentions2) != 1 || mentions2[0].Path != good {
+		t.Fatalf("legitimate mention broken: %+v err=%v", mentions2, err2)
+	}
+}
