@@ -90,3 +90,16 @@ func TestUpdateCronJob_CronOnlyPreservesPrompt(t *testing.T) {
 		t.Errorf("prompt overwritten: got %q, want %q", updated.Prompt, "keep me")
 	}
 }
+
+// TestCreateCronJobRejectsEmptyPrompt pins #1433-C: Create never
+// validated empty prompts (while the comment claimed it did and
+// Update-side #617 rejects them) - a blank prompt created a
+// permanently-firing no-op job.
+func TestCreateCronJobRejectsEmptyPrompt(t *testing.T) {
+	b := newTestCronBridge(t)
+	for _, prompt := range []string{"", "   "} {
+		if _, err := b.CreateCronJob("0 3 * * *", prompt, true, true); err == nil {
+			t.Fatalf("empty prompt %q accepted", prompt)
+		}
+	}
+}
