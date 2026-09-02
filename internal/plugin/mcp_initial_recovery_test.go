@@ -82,6 +82,26 @@ func TestInitialRecoveryProbesFailedPlugin(t *testing.T) {
 	}
 }
 
+// A disabled server must not be probed - the user explicitly turned it off.
+func TestInitialRecoveryStopsWhenDisabled(t *testing.T) {
+	m, p := newRecoveryTestManager(t, config.MCPServerConfig{Name: "srv-recovery-disabled", Type: "stdio", Command: "true"})
+	// Inject the disabled flag via the package-level cache (same package),
+	// restoring the prior cache state afterwards so other tests are unaffected.
+	mcpDisabledMu.Lock()
+	prevCache, prevOK := mcpDisabledCache, mcpDisabledCacheOK
+	mcpDisabledCache = map[string]bool{"srv-recovery-disabled": true}
+	mcpDisabledCacheOK = true
+	mcpDisabledMu.Unlock()
+	defer func() {
+		mcpDisabledMu.Lock()
+		mcpDisabledCache, mcpDisabledCacheOK = prevCache, prevOK
+		mcpDisabledMu.Unlock()
+	}()
+	if m.initialRecoveryShouldProbe(p) {
+		t.Fatal("disabled plugin must not be probed")
+	}
+}
+
 // maybeStartInitialRecovery must be a no-op for connected plugins (no
 // goroutine spawn) and for OAuth-waiting ones.
 func TestMaybeStartInitialRecoveryNoOp(t *testing.T) {
