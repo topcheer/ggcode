@@ -52,6 +52,18 @@ func enCatalog(key string) string {
 		return "Unable to reconnect %s."
 	case "panel.mcp.uninstalling":
 		return "Uninstalling %s..."
+	case "panel.mcp.refresh_unavailable":
+		return "Tool refresh unavailable in this session."
+	case "panel.mcp.refresh_not_connected":
+		return "%s is not connected - reconnect first."
+	case "panel.mcp.refresh_throttled":
+		return "Refreshed just now - wait a few seconds."
+	case "panel.mcp.refresh_failed":
+		return "Refreshing tools for %s failed."
+	case "panel.mcp.refresh_unchanged":
+		return "Tools unchanged for %s (%d tools)."
+	case "panel.mcp.refreshed":
+		return "Refreshed %s: %d tools."
 	case "panel.startup":
 		return "Initializing"
 	case "panel.approval_required":

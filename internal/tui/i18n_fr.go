@@ -54,6 +54,18 @@ func frCatalog(key string) string {
 		return "Impossible de reconnectér %s."
 	case "panel.mcp.uninstalling":
 		return "Désinstallation de %s..."
+	case "panel.mcp.refresh_unavailable":
+		return "L'actualisation des outils n'est pas disponible dans cette session."
+	case "panel.mcp.refresh_not_connected":
+		return "%s n'est pas connecté - reconnectez-le d'abord."
+	case "panel.mcp.refresh_throttled":
+		return "Actualisé à l'instant - patientez quelques secondes."
+	case "panel.mcp.refresh_failed":
+		return "Échec de l'actualisation des outils de %s."
+	case "panel.mcp.refresh_unchanged":
+		return "Outils de %s inchangés (%d outils)."
+	case "panel.mcp.refreshed":
+		return "%s actualisé : %d outils."
 	case "panel.startup":
 		return "Initialisation"
 	case "panel.approval_required":

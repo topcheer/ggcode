@@ -59,6 +59,18 @@ func deCatalog(key string) string {
 		return "%s konnte nicht erneut verbunden werden."
 	case "panel.mcp.uninstalling":
 		return "Deinstalliere %s..."
+	case "panel.mcp.refresh_unavailable":
+		return "Tool-Aktualisierung ist in dieser Sitzung nicht verfügbar."
+	case "panel.mcp.refresh_not_connected":
+		return "%s ist nicht verbunden - zuerst neu verbinden."
+	case "panel.mcp.refresh_throttled":
+		return "Soeben aktualisiert - warte ein paar Sekunden."
+	case "panel.mcp.refresh_failed":
+		return "Aktualisierung der Tools für %s fehlgeschlagen."
+	case "panel.mcp.refresh_unchanged":
+		return "Tools für %s unverändert (%d Tools)."
+	case "panel.mcp.refreshed":
+		return "%s aktualisiert: %d Tools."
 	case "panel.startup":
 		return "Initialisierung"
 	case "panel.approval_required":

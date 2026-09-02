@@ -54,6 +54,18 @@ func viCatalog(key string) string {
 		return "Không thể kết nối lại %s."
 	case "panel.mcp.uninstalling":
 		return "Đang gỡ cài đặt %s..."
+	case "panel.mcp.refresh_unavailable":
+		return "Làm mới công cụ không khả dụng trong phiên này."
+	case "panel.mcp.refresh_not_connected":
+		return "%s chưa kết nối - hãy kết nối lại trước."
+	case "panel.mcp.refresh_throttled":
+		return "Vừa làm mới xong - hãy đợi vài giây."
+	case "panel.mcp.refresh_failed":
+		return "Không thể làm mới công cụ cho %s."
+	case "panel.mcp.refresh_unchanged":
+		return "Công cụ của %s không thay đổi (%d công cụ)."
+	case "panel.mcp.refreshed":
+		return "Đã làm mới %s: %d công cụ."
 	case "panel.startup":
 		return "Đang khởi tạo"
 	case "panel.approval_required":

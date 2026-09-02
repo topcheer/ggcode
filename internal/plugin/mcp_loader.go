@@ -3,6 +3,8 @@ package plugin
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -65,6 +67,16 @@ type MCPPlugin struct {
 	lastError string
 	prompts   []string
 	resources []string
+
+	// toolsHash is the content hash of the last-applied tool definitions.
+	// refreshTools compares a fresh ListTools result against it and skips
+	// the unregister/rebuild/re-register cycle when nothing changed - the
+	// LLM-visible tool schemas and adapter object stay untouched.
+	toolsHash string
+
+	// lastRefreshAt throttles manual tool refreshes so a user cannot hammer
+	// the server (each refresh is a ListTools roundtrip + potential rebuild).
+	lastRefreshAt time.Time
 
 	// forceReauthPending signals Connect() to call ForceReauth on the new
 	// OAuthHandler so it skips the canonical (shared) credential fallback.
@@ -269,6 +281,7 @@ func (m *MCPPlugin) Connect(ctx context.Context) (*mcp.Adapter, error) {
 	m.awaitingOAuth = false
 	m.status = MCPStatusConnected
 	m.lastError = ""
+	m.toolsHash = computeToolsHash(tools)
 	m.prompts = prompts
 	m.resources = resources
 	m.setupNotificationHandler(client)
@@ -316,17 +329,30 @@ func (m *MCPPlugin) setupNotificationHandler(client *mcp.Client) {
 
 // refreshTools re-fetches the tool list from the MCP server and updates the
 // adapter and registry. Called when the server signals tools/list_changed.
-func (m *MCPPlugin) refreshTools(client *mcp.Client) {
+func (m *MCPPlugin) refreshTools(client *mcp.Client) (changed bool, count int) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	tools, err := client.ListTools(ctx)
 	if err != nil {
 		debug.Log("mcp-notif", "server=%s tool refresh failed: %v", m.cfg.Name, err)
-		return
+		return false, 0
 	}
 
+	newHash := computeToolsHash(tools)
 	m.mu.Lock()
+	if newHash == m.toolsHash && m.adapter != nil {
+		m.lastRefreshAt = time.Now()
+		m.mu.Unlock()
+		// Content identical to what is already registered: skip the
+		// unregister/rebuild/re-register cycle entirely. Re-registering
+		// unchanged tools would churn the registry and the LLM-visible
+		// schemas for no benefit.
+		debug.Log("mcp-notif", "server=%s tools unchanged (hash match), skipping rebuild", m.cfg.Name)
+		return false, len(tools)
+	}
+	m.toolsHash = newHash
+	m.lastRefreshAt = time.Now()
 	oldAdapter := m.adapter
 	registry := m.registry
 	readOnly := m.cfg.ReadOnly
@@ -359,6 +385,26 @@ func (m *MCPPlugin) refreshTools(client *mcp.Client) {
 	}
 
 	debug.Log("mcp-notif", "server=%s tools refreshed: %d tools", m.cfg.Name, len(tools))
+	return true, len(tools)
+}
+
+// computeToolsHash returns a stable content hash over a tool definition
+// list. Ordering does not matter (definitions are sorted by name before
+// hashing); name, description, and input schema bytes all participate, so
+// a server-side description edit is detected just like an added tool.
+func computeToolsHash(tools []mcp.ToolDefinition) string {
+	sorted := append([]mcp.ToolDefinition(nil), tools...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
+	h := sha256.New()
+	for _, t := range sorted {
+		h.Write([]byte(t.Name))
+		h.Write([]byte{0})
+		h.Write([]byte(t.Description))
+		h.Write([]byte{0})
+		h.Write(t.InputSchema)
+		h.Write([]byte{0})
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // refreshResources re-fetches the resource list from the MCP server.
@@ -932,6 +978,20 @@ func (m *MCPManager) Retry(name string) bool {
 	return false
 }
 
+// Refresh re-fetches the tool list of a connected server without
+// reconnecting. found=false means no plugin by that name; otherwise the
+// outcome plus the tool count (when a ListTools roundtrip happened) is
+// returned synchronously - the call is cheap (one ListTools) so the UI can
+// show an immediate result.
+func (m *MCPManager) Refresh(name string) (found bool, outcome RefreshOutcome, count int) {
+	p := m.pluginByName(name)
+	if p == nil {
+		return false, RefreshNotConnected, 0
+	}
+	outcome, count = p.refreshToolsNow()
+	return true, outcome, count
+}
+
 func (m *MCPManager) Install(ctx context.Context, server config.MCPServerConfig) error {
 	plugin := NewMCPPlugin(server)
 
@@ -1226,6 +1286,54 @@ func (m *MCPManager) startInitialRecoveryLoop(ctx context.Context, plugin *MCPPl
 			}
 		}
 	})
+}
+
+// mcpRefreshMinInterval is the minimum spacing between manual tool
+// refreshes for one server. Manual refresh is a ListTools roundtrip plus a
+// possible registry rebuild; anything tighter than this is spam.
+const mcpRefreshMinInterval = 5 * time.Second
+
+// RefreshOutcome describes what a manual refresh did.
+type RefreshOutcome int
+
+const (
+	// RefreshThrottled: last manual refresh was less than
+	// mcpRefreshMinInterval ago; nothing was sent to the server.
+	RefreshThrottled RefreshOutcome = iota
+	// RefreshNotConnected: the server is not connected (reconnect instead).
+	RefreshNotConnected
+	// RefreshFailed: ListTools errored; nothing changed locally.
+	RefreshFailed
+	// RefreshUnchanged: content hash matched; in-memory tools untouched.
+	RefreshUnchanged
+	// RefreshChanged: tool set changed; adapter rebuilt and re-registered.
+	RefreshChanged
+)
+
+// refreshToolsNow is the manual entry point: rate-limited, connected-only,
+// hash-gated. The notification path (tools/list_changed) goes through
+// refreshTools directly and is NOT rate-limited - the server only sends it
+// when something actually changed.
+func (m *MCPPlugin) refreshToolsNow() (RefreshOutcome, int) {
+	m.mu.Lock()
+	if !m.connected || m.client == nil || m.closed {
+		m.mu.Unlock()
+		return RefreshNotConnected, 0
+	}
+	if time.Since(m.lastRefreshAt) < mcpRefreshMinInterval {
+		m.mu.Unlock()
+		return RefreshThrottled, 0
+	}
+	client := m.client
+	m.mu.Unlock()
+	changed, count := m.refreshTools(client)
+	if count == 0 && !changed {
+		return RefreshFailed, 0
+	}
+	if changed {
+		return RefreshChanged, count
+	}
+	return RefreshUnchanged, count
 }
 
 func (m *MCPManager) pluginByName(name string) *MCPPlugin {

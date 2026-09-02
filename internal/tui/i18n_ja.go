@@ -53,6 +53,18 @@ func jaCatalog(key string) string {
 		return "%s に再接続できません。"
 	case "panel.mcp.uninstalling":
 		return "%s をアンインストール中..."
+	case "panel.mcp.refresh_unavailable":
+		return "このセッションではツール更新は利用できません。"
+	case "panel.mcp.refresh_not_connected":
+		return "%s は未接続です。先に再接続してください。"
+	case "panel.mcp.refresh_throttled":
+		return "更新したばかりです。数秒お待ちください。"
+	case "panel.mcp.refresh_failed":
+		return "%s のツール更新に失敗しました。"
+	case "panel.mcp.refresh_unchanged":
+		return "%s のツールに変更はありません（%d 件）。"
+	case "panel.mcp.refreshed":
+		return "%s を更新しました：%d 件のツール。"
 	case "panel.startup":
 		return "起動中..."
 	case "panel.approval_required":

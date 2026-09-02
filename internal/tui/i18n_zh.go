@@ -48,6 +48,18 @@ func zhCatalog(key string) string {
 		return "无法重新连接 %s。"
 	case "panel.mcp.uninstalling":
 		return "正在卸载 %s..."
+	case "panel.mcp.refresh_unavailable":
+		return "工具刷新在当前会话不可用。"
+	case "panel.mcp.refresh_not_connected":
+		return "%s 未连接，请先重连。"
+	case "panel.mcp.refresh_throttled":
+		return "刚刚已刷新，请稍候几秒。"
+	case "panel.mcp.refresh_failed":
+		return "刷新 %s 的工具失败。"
+	case "panel.mcp.refresh_unchanged":
+		return "%s 的工具无变化（%d 个）。"
+	case "panel.mcp.refreshed":
+		return "已刷新 %s：%d 个工具。"
 	case "panel.startup":
 		return "正在初始化"
 	case "panel.approval_required":

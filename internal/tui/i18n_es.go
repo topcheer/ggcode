@@ -54,6 +54,18 @@ func esCatalog(key string) string {
 		return "No se pudo reconectar %s."
 	case "panel.mcp.uninstalling":
 		return "Desinstalando %s..."
+	case "panel.mcp.refresh_unavailable":
+		return "La actualización de herramientas no está disponible en esta sesión."
+	case "panel.mcp.refresh_not_connected":
+		return "%s no está conectado; reconecta primero."
+	case "panel.mcp.refresh_throttled":
+		return "Actualizado hace un momento; espera unos segundos."
+	case "panel.mcp.refresh_failed":
+		return "Error al actualizar las herramientas de %s."
+	case "panel.mcp.refresh_unchanged":
+		return "Herramientas de %s sin cambios (%d herramientas)."
+	case "panel.mcp.refreshed":
+		return "%s actualizado: %d herramientas."
 	case "panel.startup":
 		return "Inicializando"
 	case "panel.approval_required":

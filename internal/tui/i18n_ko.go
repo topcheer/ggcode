@@ -58,6 +58,18 @@ func koCatalog(key string) string {
 		return "%s 재연결 불가"
 	case "panel.mcp.uninstalling":
 		return "%s 제거 중..."
+	case "panel.mcp.refresh_unavailable":
+		return "이 세션에서는 도구 새로고침을 사용할 수 없습니다."
+	case "panel.mcp.refresh_not_connected":
+		return "%s 가 연결되어 있지 않습니다. 먼저 재연결하세요."
+	case "panel.mcp.refresh_throttled":
+		return "방금 새로고침했습니다. 몇 초 기다려 주세요."
+	case "panel.mcp.refresh_failed":
+		return "%s 의 도구 새로고침에 실패했습니다."
+	case "panel.mcp.refresh_unchanged":
+		return "%s 의 도구에 변화가 없습니다 (%d개)."
+	case "panel.mcp.refreshed":
+		return "%s 새로고침 완료: 도구 %d개."
 	case "panel.startup":
 		return "시작 중..."
 	case "panel.approval_required":

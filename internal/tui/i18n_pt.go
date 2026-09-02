@@ -1325,6 +1325,18 @@ func ptCatalog(key string) string {
 		return "Revisar alteração de arquivo"
 	case "panel.session_usage":
 		return "Uso da sessão"
+	case "panel.mcp.refresh_unavailable":
+		return "A atualização de ferramentas não está disponível nesta sessão."
+	case "panel.mcp.refresh_not_connected":
+		return "%s não está conectado - reconecte primeiro."
+	case "panel.mcp.refresh_throttled":
+		return "Atualizado agora mesmo - aguarde alguns segundos."
+	case "panel.mcp.refresh_failed":
+		return "Falha ao atualizar as ferramentas de %s."
+	case "panel.mcp.refresh_unchanged":
+		return "Ferramentas de %s inalteradas (%d ferramentas)."
+	case "panel.mcp.refreshed":
+		return "%s atualizado: %d ferramentas."
 	case "panel.startup":
 		return "Inicializando"
 	case "panel.update":

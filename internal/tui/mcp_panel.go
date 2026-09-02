@@ -168,7 +168,7 @@ func (m Model) renderMCPPanel() string {
 	} else {
 		body = append(body,
 			" Press i to install a new MCP server.",
-			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" j/k move • Space toggle • Enter/r reconnect • a reset auth • i install • x uninstall • Esc close"),
+			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" j/k move • Space toggle • Enter/r reconnect • f refresh tools • a reset auth • i install • x uninstall • Esc close"),
 		)
 	}
 	if panel.message != "" {
@@ -238,6 +238,30 @@ func (m *Model) handleMCPPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			panel.message = m.t("panel.mcp.reconnecting", name)
 		} else {
 			panel.message = m.t("panel.mcp.reconnect_failed", name)
+		}
+	case "f", "F":
+		if len(m.mcpServers) == 0 {
+			break
+		}
+		if m.mcpManager == nil {
+			panel.message = m.t("panel.mcp.refresh_unavailable")
+			break
+		}
+		name := m.mcpServers[panel.selected].Name
+		found, outcome, count := m.mcpManager.Refresh(name)
+		switch {
+		case !found:
+			panel.message = m.t("panel.mcp.reconnect_failed", name)
+		case outcome == plugin.RefreshNotConnected:
+			panel.message = m.t("panel.mcp.refresh_not_connected", name)
+		case outcome == plugin.RefreshThrottled:
+			panel.message = m.t("panel.mcp.refresh_throttled")
+		case outcome == plugin.RefreshFailed:
+			panel.message = m.t("panel.mcp.refresh_failed", name)
+		case outcome == plugin.RefreshUnchanged:
+			panel.message = m.t("panel.mcp.refresh_unchanged", name, count)
+		default:
+			panel.message = m.t("panel.mcp.refreshed", name, count)
 		}
 	case " ", "space":
 		if len(m.mcpServers) == 0 {

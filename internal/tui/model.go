@@ -426,6 +426,7 @@ type mcpManager interface {
 	Disconnect(name string) bool
 	Reconnect(name string) bool
 	ForceReauth(name string) bool
+	Refresh(name string) (bool, plugin.RefreshOutcome, int)
 	PendingOAuth() *plugin.MCPOAuthRequiredError
 	ClearPendingOAuth(name string)
 }

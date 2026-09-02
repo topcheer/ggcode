@@ -59,6 +59,18 @@ func ruCatalog(key string) string {
 		return "Не удалось переподключить %s."
 	case "panel.mcp.uninstalling":
 		return "Удаление %s..."
+	case "panel.mcp.refresh_unavailable":
+		return "Обновление инструментов недоступно в этой сессии."
+	case "panel.mcp.refresh_not_connected":
+		return "%s не подключён - сначала выполните переподключение."
+	case "panel.mcp.refresh_throttled":
+		return "Только что обновлено - подождите несколько секунд."
+	case "panel.mcp.refresh_failed":
+		return "Не удалось обновить инструменты %s."
+	case "panel.mcp.refresh_unchanged":
+		return "Инструменты %s не изменились (%d шт.)."
+	case "panel.mcp.refreshed":
+		return "%s обновлён: инструментов: %d."
 	case "panel.startup":
 		return "Инициализация"
 	case "panel.approval_required":
