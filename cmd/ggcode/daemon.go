@@ -471,6 +471,20 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		lock, lockErr := session.TryAcquireSessionLock(storeDir, ses.ID)
 		if lockErr == nil && lock != nil && lock.Acquired() {
 			sessionLock = lock
+		} else if lockErr != nil {
+			// #1429-A: the fail-closed path (#430/#709) - open/stat failure
+			// or the unlink-race retry exhaustion whose comment says 'FAIL
+			// CLOSED ... we must not acquire' - returned (nil, err); both
+			// existing branches missed it (lock==nil), the daemon kept
+			// running LOCKLESS with the persist handler attached, and two
+			// daemons could interleave writes into the same JSONL. The TUI
+			// side (root.go) covers all non-success states; the daemon -
+			// long-running and writing directly - now does too.
+			short := ses.ID
+			if len(short) > 8 {
+				short = short[:8]
+			}
+			return fmt.Errorf("acquiring session lock for %s (fail-closed; refusing to run lockless): %w", short, lockErr)
 		} else if lock != nil && !lock.Acquired() {
 			pid := lock.HolderPID()
 			// #882: guard short session IDs — root.go guards the same slice;
