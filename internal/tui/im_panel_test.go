@@ -326,3 +326,41 @@ func TestIMPanelEntries_MutedNotShownWhenDisabled(t *testing.T) {
 		}
 	}
 }
+
+// TestDisableAllIMChannelsMutationFlow pins #1377-A: the range-while-
+// writing loop (family's worst shape - iterate Adapters AND write per
+// entry) moved inside configMutationMsg.apply; the Update loop executes
+// it and the success message still carries the count.
+func TestDisableAllIMChannelsMutationFlow(t *testing.T) {
+	m := newTestModel()
+	m.config = config.DefaultConfig()
+	m.config.IM.Adapters = map[string]config.IMAdapterConfig{}
+	m.config.IM.Adapters["a1"] = config.IMAdapterConfig{Enabled: true, Platform: "dingtalk"}
+	m.config.IM.Adapters["a2"] = config.IMAdapterConfig{Enabled: true, Platform: "feishu"}
+	imMgr := im.NewManager()
+	m.SetIMManager(imMgr)
+
+	msg := m.disableAllIMChannels()()
+	// No manager bindings: DisableAll errors first - assert the early
+	// error still routes as imPanelResultMsg (no config touch).
+	if res, ok := msg.(imPanelResultMsg); ok && res.err != nil {
+		if len(m.config.IM.Adapters) != 2 {
+			t.Fatal("config mutated despite manager error")
+		}
+		return
+	}
+	mut, ok := msg.(configMutationMsg)
+	if !ok {
+		t.Fatalf("expected configMutationMsg, got %#v", msg)
+	}
+	m2, followUp := m.handleConfigMutationMsg(mut)
+	m = m2
+	for name, a := range m.config.IM.Adapters {
+		if a.Enabled {
+			t.Fatalf("adapter %s still enabled after mutation routing", name)
+		}
+	}
+	if followUp == nil {
+		t.Fatal("follow-up Cmd missing")
+	}
+}
