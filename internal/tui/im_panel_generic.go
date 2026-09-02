@@ -538,17 +538,28 @@ func (m *Model) createIMPanelAdapterCmd(cfg imPanelConfig, spec string) tea.Cmd 
 			return imBindResultMsg{err: errors.New(m.t("panel." + cfg.adapterType + ".error.adapter_required"))}
 		}
 		adapter := cfg.createAdapter(&cfg, name, fields)
-		m.config.IM.Enabled = true
-		if err := m.config.AddIMAdapter(name, adapter); err != nil {
-			return imBindResultMsg{err: err}
+		// #1367 family batch 3: config write + disk save moved onto the
+		// Update loop via configMutationMsg (see config_mutation.go).
+		return configMutationMsg{
+			apply: func(m *Model) error {
+				m.config.IM.Enabled = true
+				return m.config.AddIMAdapter(name, adapter)
+			},
+			next: func(m *Model) tea.Cmd {
+				return func() tea.Msg {
+					if err := m.ensureStartedCurrentWorkspaceIMRuntime(m.t("panel."+cfg.adapterType+".error.config_unavailable"), "", true); err != nil {
+						return imBindResultMsg{err: err}
+					}
+					if err := m.startIMAdapterIfNeeded(cfg, name); err != nil {
+						return imBindResultMsg{err: err}
+					}
+					return imBindResultMsg{message: m.t("panel."+cfg.adapterType+".message.added_bot", name)}
+				}
+			},
+			fail: func(err error) tea.Msg {
+				return imBindResultMsg{err: err}
+			},
 		}
-		if err := m.ensureStartedCurrentWorkspaceIMRuntime(m.t("panel."+cfg.adapterType+".error.config_unavailable"), "", true); err != nil {
-			return imBindResultMsg{err: err}
-		}
-		if err := m.startIMAdapterIfNeeded(cfg, name); err != nil {
-			return imBindResultMsg{err: err}
-		}
-		return imBindResultMsg{message: m.t("panel."+cfg.adapterType+".message.added_bot", name)}
 	}
 }
 
