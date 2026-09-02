@@ -106,7 +106,11 @@ func ParseMentions(input string, workDir string) (string, []Mention, error) {
 			continue
 		}
 		rel, err := filepath.Rel(realWorkDir, realPath)
-		if err != nil || rel == ".." || strings.HasPrefix(rel, "../") {
+		// #1425-A: filepath.Rel returns OS-native separators - on Windows an
+		// escape is "..\x", which the forward-slash-only "../" prefix check
+		// missed, letting @mention read outside-workspace files. Match the
+		// separator-aware form used by CompleteMention below.
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 			debug.Log("completion", "@mention path traversal blocked (symlink escape): %s -> %s", token, realPath)
 			searchFrom = idx + 1 + len(token)
 			continue
