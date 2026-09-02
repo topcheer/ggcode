@@ -497,3 +497,18 @@ func TestRootUsageUsesCompactFlagLayout(t *testing.T) {
 		t.Fatalf("expected compact flag layout in usage, got:\n%s", usage)
 	}
 }
+
+// TestParseA2AMaxTasks pins #1422-A: a zero/negative MaxTasks (first-run
+// --bypass install where Validate's early return skips the default fill)
+// falls back to 5 instead of overriding the handler default and rejecting
+// the first task.
+func TestParseA2AMaxTasks(t *testing.T) {
+	for _, in := range []int{0, -1} {
+		if got := parseA2AMaxTasks(in); got != 5 {
+			t.Fatalf("parseA2AMaxTasks(%d) = %d, want 5", in, got)
+		}
+	}
+	if got := parseA2AMaxTasks(7); got != 7 {
+		t.Fatalf("positive value not preserved: %d", got)
+	}
+}

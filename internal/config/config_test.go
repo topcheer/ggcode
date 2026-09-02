@@ -1777,3 +1777,32 @@ func TestBuildReplyLanguageGuidance(t *testing.T) {
 		}
 	}
 }
+
+// TestMergeDefaultEndpointsDeterministic pins #1422-B2: merging a
+// multi-endpoint gateway vendor must pick the same endpoint every run -
+// map iteration order is random, and the pick gets PERSISTED by Save.
+func TestMergeDefaultEndpointsDeterministic(t *testing.T) {
+	build := func() *Config {
+		cfg := DefaultConfig()
+		def := DefaultConfig()
+		cfg.Vendors["openrouter"] = VendorConfig{Endpoints: map[string]EndpointConfig{
+			"beta": {Protocol: "openai"}, "alpha": {Protocol: "openai"}, "zeta": {Protocol: "openai"},
+		}}
+		cfg.Vendors["ai-gateway"] = VendorConfig{Endpoints: map[string]EndpointConfig{}}
+		mergeDefaultEndpoints(cfg, def)
+		return cfg
+	}
+	first := build()
+	ep, ok := first.Vendors["ai-gateway"].Endpoints["openrouter"]
+	if !ok {
+		t.Fatal("openrouter endpoint not merged")
+	}
+	// Re-run many times: the pick must never flip (it is persisted).
+	for i := 0; i < 50; i++ {
+		again := build()
+		got := again.Vendors["ai-gateway"].Endpoints["openrouter"]
+		if got.BaseURL != ep.BaseURL || got.Protocol != ep.Protocol {
+			t.Fatalf("nondeterministic merge: run %d picked %v/%v, want %v/%v", i, got.BaseURL, got.Protocol, ep.BaseURL, ep.Protocol)
+		}
+	}
+}
