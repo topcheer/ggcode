@@ -196,6 +196,16 @@ func (s *actionAnnihilateState) checkAnnihilation(currentTool string, currentArg
 		// Search recent actions for a matching prior call.
 		for i := len(s.actions) - 1; i >= 0; i-- {
 			prior := s.actions[i]
+			// #1436-B: a git_commit between add and reset CONSUMED the
+			// staging - the standard amend flow (add -> commit -> reset
+			// HEAD~1) unstages a commit, it does not cancel an add. Without
+			// this barrier every amend triggered a bogus 'net-zero wasted'
+			// warning on the highest-frequency legitimate workflow. The
+			// barrier applies ONLY to the add->reset pair: commit->revert
+			// remains a genuine annihilation (a revert undoes the commit).
+			if pair.priorTool == "git_add" && prior.tool == "git_commit" {
+				break
+			}
 			if prior.tool != pair.priorTool {
 				continue
 			}

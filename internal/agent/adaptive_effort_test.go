@@ -155,3 +155,24 @@ func TestEffortLevelDisplayName(t *testing.T) {
 		}
 	}
 }
+
+// TestAdaptiveEffortReadOnlyErrorStaysLow pins #1436-A: a read-only
+// exploration error (grep miss / LSP not ready) must NOT raise effort -
+// any-error used to poison the next 6 turns into high (cost/latency).
+// Only edit-family retries (errorRecoverySignals) are recovery signals.
+func TestAdaptiveEffortReadOnlyErrorStaysLow(t *testing.T) {
+	s := newAdaptiveEffortState()
+	s.recordToolResult("grep", true)
+	s.recordToolResult("read_file", false)
+	s.recordToolResult("read_file", false)
+	if got := s.recommendedEffort(); got == "high" {
+		t.Fatal("read-only error raised effort to high - any-error regression")
+	}
+
+	// An EDIT failure IS a recovery signal - still high.
+	s2 := newAdaptiveEffortState()
+	s2.recordToolResult("edit_file", true)
+	if got := s2.recommendedEffort(); got != "high" {
+		t.Fatalf("edit failure should raise effort, got %q", got)
+	}
+}

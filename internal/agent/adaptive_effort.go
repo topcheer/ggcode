@@ -169,7 +169,16 @@ func (s *adaptiveEffortState) recommendedEffort() string {
 
 	for _, e := range s.entries {
 		if e.isError {
-			recentErrors++
+			// #1436-A: any error used to bump effort to high - one read-only
+			// grep/LSP miss during exploration poisoned the next 6 turns into
+			// high-effort (cost/latency), directly contradicting the module's
+			// 'reduce cost and latency' charter. Only errors from tools the
+			// errorRecoverySignals set declares (edit-family retries - the
+			// module comment's 'recent EDIT failures -> high' intent that
+			// was never wired) count as recovery signals.
+			if errorRecoverySignals[e.toolName] {
+				recentErrors++
+			}
 			continue
 		}
 		if editTools[e.toolName] {

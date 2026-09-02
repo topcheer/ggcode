@@ -92,7 +92,11 @@ var actionHedgingPatterns = []hedgingPattern{
 	{"HIGH", regexp.MustCompile(`(?i)\bnot sure if (?:this|that)\b`)},
 	{"HIGH", regexp.MustCompile(`(?i)\bbest guess\b`)},
 	{"HIGH", regexp.MustCompile(`(?i)\beducated guess\b`)},
-	{"HIGH", regexp.MustCompile(`(?i)\bif this doesn't work\b`)},
+	// #1436-C: the literal 'if this doesn't work' pattern was removed -
+	// it is a strict SUBSET of the generalized regex below; both matching
+	// the same sentence double-counted it, and the dedup key
+	// (level+":"+excerpt) differs by match end, so one hedging sentence
+	// hit the threshold (2) alone.
 	{"HIGH", regexp.MustCompile(`(?i)\bif (?:this|that) (?:doesn't|does not|fails?)\b`)},
 	// #359: distance-capped and first-person scoped — describing a code path
 	// ("uses the exponential fallback if all brokers are down") is technical
