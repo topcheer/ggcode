@@ -34,6 +34,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/config"
@@ -219,9 +220,35 @@ func (s *Server) pushRegistrationDisabled() string {
 // http.DefaultClient followed redirects to arbitrary (internal) targets and
 // had no timeout; this client has both a hard timeout and a CheckRedirect
 // that re-validates every hop with the same rules as registration.
+// #1463-A: validation-side LookupIPAddr and dial-side resolution were
+// TWO INDEPENDENT DNS lookups (Transport nil -> DefaultTransport dials and
+// resolves on its own) - a rebinding attacker answers the validation query
+// with a public IP and the dial query with 169.254.169.254/127.0.0.1.
+// The transport's Control hook now validates the IP the kernel is about
+// to connect to - pinning at connection time, the standard rebinding
+// defense.
 func (s *Server) pushHTTPClient() *http.Client {
+	dialer := &net.Dialer{
+		Timeout: 5 * time.Second,
+		// #1463-A: Control fires at connection establishment with the
+		// kernel-resolved address - the rebinding-proof place to check.
+		Control: func(network, address string, _ syscall.RawConn) error {
+			host, _, err := net.SplitHostPort(address)
+			if err != nil {
+				return err
+			}
+			if ip := net.ParseIP(host); ip != nil {
+				if isDisallowedCallbackIP(ip) {
+					return fmt.Errorf("dial to disallowed IP %s blocked (rebinding guard)", host)
+				}
+			}
+			return nil
+		},
+	}
+	transport := &http.Transport{DialContext: dialer.DialContext}
 	return &http.Client{
-		Timeout: 10 * time.Second,
+		Timeout:   10 * time.Second,
+		Transport: transport,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 5 {
 				return fmt.Errorf("stopped after 5 redirects")

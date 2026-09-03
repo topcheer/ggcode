@@ -185,7 +185,10 @@ func serviceInfoToInstance(inst *mdnslib.ServiceInstanceInfo) *InstanceInfo {
 	// This avoids picking a Docker/VPN IP that the receiver can't reach.
 	ip := pickBestIP(inst.IPs)
 
-	endpoint := fmt.Sprintf("http://%s:%d", ip, inst.Port)
+	// #1463-B: net.JoinHostPort brackets IPv6 - the bare format produced
+	// `http://fe80::1:8080`, which url.Parse rejects ("invalid port") and
+	// the whole IPv6-only discovery chain dies at card fetch.
+	endpoint := "http://" + net.JoinHostPort(ip, strconv.Itoa(int(inst.Port)))
 
 	// Parse TXT records into a map.
 	txt := parseTXTFields(inst.Text)
