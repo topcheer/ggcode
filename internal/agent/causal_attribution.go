@@ -212,12 +212,20 @@ func (s *causalAttributionState) attributeFailure(output string) string {
 	// need the explicit verify-command regex.
 	looksVerify := causalVerifyRe.MatchString(output)
 	looksFail := looksLikeFailure(output)
+	// #1442-A: the bare newline-count arm is gone - a 6-line grep result
+	// with a stray "fail" passed it and its path.go:line: lines
+	// (character-for-character causalErrorFileRe's shape) named innocent
+	// files as error files (probe: CRS=84 blaming an edit on a PASSING
+	// test's grep output). Compiler/tester FEATURE WORDS now gate the
+	// multi-line arm; the tool-name filter at the call site is the
+	// second layer.
 	looksLikeCmdOutput := strings.Contains(output, "exit status") ||
 		strings.Contains(output, "exit code") ||
 		strings.Contains(output, "FAIL") ||
-		strings.Contains(output, "--- FAIL") ||
+		strings.Contains(output, "cannot use") ||
+		strings.Contains(output, "undefined:") ||
 		strings.Contains(output, "build failed") ||
-		strings.Count(output, "\n") >= 5
+		strings.Contains(output, "vet:")
 	if !looksVerify && !(looksFail && looksLikeCmdOutput) {
 		return ""
 	}

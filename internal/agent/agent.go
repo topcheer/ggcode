@@ -3731,9 +3731,16 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.causalAttribution.recordEdit(tc.Name, extractFileHint(tc.Name, tc.Arguments), i)
 			a.confidence.recordResult(tc.Name, result.IsError, extractFileHint(tc.Name, tc.Arguments))
 			// Causal attribution: on failures, trace backward to the likely causal edit.
-			if result.IsError || looksLikeFailure(result.Content) {
-				if causalHint := a.causalAttribution.attributeFailure(result.Content); causalHint != "" {
-					a.appendGuidance(&result, causalHint)
+			// #1442-A: gate by TOOL NAME too - the old path ran on EVERY tool's
+			// result, and a multi-line grep/read_file output (path.go:line:content
+			// is character-for-character the error-file regex's shape) with a
+			// stray failure word blamed an INNOCENT edit (probe: CRS=84 on a
+			// passing-test grep). Only command/test channels carry build output.
+			if tc.Name == "run_command" || tc.Name == "bash" || tc.Name == "powershell" || tc.Name == "start_command" || tc.Name == "wait_command" {
+				if result.IsError || looksLikeFailure(result.Content) {
+					if causalHint := a.causalAttribution.attributeFailure(result.Content); causalHint != "" {
+						a.appendGuidance(&result, causalHint)
+					}
 				}
 			}
 			if confidenceGuidance := a.confidence.maybeIntervene(); confidenceGuidance != "" {
