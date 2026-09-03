@@ -177,9 +177,16 @@ func (h *TaskHandler) Handle(ctx context.Context, skill string, input Message, e
 	// Idempotent retry (#565 G): same messageId re-sent (timeout + client
 	// retry) returns the ORIGINAL task instead of spawning a duplicate that
 	// would double-execute side effects for code-edit / full-task skills.
-	// Check in the same critical section as messageIndex insertion (#1094).
+	// Check concurrency limit. The messageIndex dedup check moved INTO
+	// this single critical section (#1461-A): the old two-section shape
+	// (miss-check, unlock, re-lock, create, insert) had a TOCTOU window -
+	// 4-goroutine probing showed 2.75% double-creates with callers holding
+	// DIFFERENT task IDs for one MessageID and the first task orphaned from
+	// the index; the #1094 comment claimed 'same critical section' from
+	// birth but never established it.
+	h.mu.Lock()
+
 	if input.MessageID != "" {
-		h.mu.Lock()
 		if tid, ok := h.messageIndex[input.MessageID]; ok {
 			if t, exists := h.tasks[tid]; exists {
 				snap := t.Snapshot()
@@ -188,11 +195,7 @@ func (h *TaskHandler) Handle(ctx context.Context, skill string, input Message, e
 			}
 			delete(h.messageIndex, input.MessageID)
 		}
-		h.mu.Unlock()
 	}
-
-	// Check concurrency limit.
-	h.mu.Lock()
 
 	// Prune old completed tasks.
 	h.cleanupExpiredTasksLocked()

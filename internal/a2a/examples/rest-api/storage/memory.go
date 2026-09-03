@@ -75,7 +75,12 @@ func (s *ProductStore) GetByID(id string) (*model.Product, error) {
 	if !exists {
 		return nil, errors.NewNotFound("product", id)
 	}
-	return product, nil
+	// #1461-B: return a shallow copy - handing out the stored pointer lets
+	// a caller's json.Marshal race with Update's in-place writes under
+	// -race (the lock only protects the map structure, not the object
+	// graph).
+	cp := *product
+	return &cp, nil
 }
 
 // Update modifies an existing product. Only non-nil fields in the input are applied.
@@ -153,7 +158,8 @@ func (s *ProductStore) List(filter *model.ListProductsFilter) ([]*model.Product,
 		if !matchesFilter(p, filter) {
 			continue
 		}
-		result = append(result, p)
+		cp := *p
+		result = append(result, &cp)
 	}
 
 	total := len(result)
