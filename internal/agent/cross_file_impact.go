@@ -295,7 +295,14 @@ func extractImpactSymbols(src, filename string) []impactRemovedSymbol {
 	for _, decl := range file.Decls {
 		switch d := decl.(type) {
 		case *ast.FuncDecl:
-			if d.Name == nil || !ast.IsExported(d.Name.Name) {
+			// #1450-A: UNexported only - Go's one-dir-one-package means the
+			// referencers of an unexported symbol are exactly the sibling
+			// files this detector scans, so the extraction and scan scopes
+			// finally intersect. (Exported symbols' main referencers live
+			// OUTSIDE the package - extracting them while scanning only the
+			// same directory covered two disjoint quadrants: high-fan-in
+			// package deletions stayed silent while nothing real was found.)
+			if d.Name == nil || ast.IsExported(d.Name.Name) {
 				continue
 			}
 			if d.Recv != nil && len(d.Recv.List) > 0 {
@@ -316,7 +323,7 @@ func extractImpactSymbols(src, filename string) []impactRemovedSymbol {
 			for _, spec := range d.Specs {
 				switch s := spec.(type) {
 				case *ast.TypeSpec:
-					if s.Name != nil && ast.IsExported(s.Name.Name) {
+					if s.Name != nil && !ast.IsExported(s.Name.Name) {
 						syms = append(syms, impactRemovedSymbol{
 							name:     s.Name.Name,
 							category: "type",
@@ -324,7 +331,7 @@ func extractImpactSymbols(src, filename string) []impactRemovedSymbol {
 					}
 				case *ast.ValueSpec:
 					for _, name := range s.Names {
-						if ast.IsExported(name.Name) {
+						if !ast.IsExported(name.Name) {
 							cat := "var"
 							if d.Tok == token.CONST {
 								cat = "const"

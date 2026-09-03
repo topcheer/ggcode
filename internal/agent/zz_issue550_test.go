@@ -149,8 +149,8 @@ func TestIssue550_CrossImpactStillFiresForUneditedSibling(t *testing.T) {
 	dir := initGitRepo(t)
 	aGo := filepath.Join(dir, "a.go")
 	bGo := filepath.Join(dir, "b.go")
-	mustWriteCR(t, aGo, "package p\n\nfunc Shared() {}\n")
-	mustWriteCR(t, bGo, "package p\n\nfunc Use() { Shared() }\n")
+	mustWriteCR(t, aGo, "package p\n\nfunc shared() {}\n")
+	mustWriteCR(t, bGo, "package p\n\nfunc use() { shared() }\n")
 	runGitCR(t, dir, "add", ".")
 	runGitCR(t, dir, "commit", "-m", "init")
 
@@ -172,15 +172,15 @@ func TestIssue550_CrossImpactExcludesCoEditedSibling(t *testing.T) {
 	dir := initGitRepo(t)
 	aGo := filepath.Join(dir, "a.go")
 	bGo := filepath.Join(dir, "b.go")
-	mustWriteCR(t, aGo, "package p\n\nfunc Shared() {}\n")
-	mustWriteCR(t, bGo, "package p\n\nfunc Use() { Shared() }\n")
+	mustWriteCR(t, aGo, "package p\n\nfunc shared() {}\n")
+	mustWriteCR(t, bGo, "package p\n\nfunc use() { shared() }\n")
 	runGitCR(t, dir, "add", ".")
 	runGitCR(t, dir, "commit", "-m", "init")
 
 	// Symbol MOVE: definition leaves a.go and lands in b.go — both files
 	// edited this run, nothing unedited references the removed symbol.
 	mustWriteCR(t, aGo, "package p\n\nfunc Other() {}\n")
-	mustWriteCR(t, bGo, "package p\n\nfunc Shared() {}\n\nfunc Use() { Shared() }\n")
+	mustWriteCR(t, bGo, "package p\n\nfunc shared() {}\n\nfunc use() { shared() }\n")
 
 	ag := &Agent{crossFileImpact: newCrossFileImpactState(), workingDir: dir}
 	msg := ag.checkCrossFileImpact(&RunStats{FilesEdited: []string{"a.go", "b.go"}})

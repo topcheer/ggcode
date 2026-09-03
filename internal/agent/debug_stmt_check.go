@@ -274,3 +274,56 @@ func formatDebugStmtWarning(flagged []string) string {
 			"if the output is intentional.",
 		strings.Join(flagged, ", "))
 }
+
+// isTestFile was migrated from debug_sniffer.go when that dead file was
+// removed (#1450-B; fc5c4aad stripped its only wiring, the file survived
+// the tombstone sweep).
+// isTestFile returns true for common test file naming conventions.
+func isTestFile(path string) bool {
+	base := strings.ToLower(filepath.Base(path))
+	// Go: *_test.go
+	if strings.HasSuffix(base, "_test.go") {
+		return true
+	}
+	// JS/TS: *.test.js, *.spec.ts, *.test.jsx, *.spec.tsx
+	testSuffixes := []string{
+		".test.js", ".test.jsx", ".test.ts", ".test.tsx",
+		".spec.js", ".spec.jsx", ".spec.ts", ".spec.tsx",
+	}
+	for _, s := range testSuffixes {
+		if strings.HasSuffix(base, s) {
+			return true
+		}
+	}
+	// Python: test_*.py, *_test.py
+	if strings.HasPrefix(base, "test_") && strings.HasSuffix(base, ".py") {
+		return true
+	}
+	if strings.HasSuffix(base, "_test.py") {
+		return true
+	}
+	// Ruby: *_spec.rb, test_*.rb
+	if strings.HasSuffix(base, "_spec.rb") || strings.HasPrefix(base, "test_") {
+		return true
+	}
+	// Java/Kotlin: *Test.java, *Tests.java, *Test.kt
+	if strings.HasSuffix(base, "test.java") || strings.HasSuffix(base, "tests.java") ||
+		strings.HasSuffix(base, "test.kt") || strings.HasSuffix(base, "tests.kt") {
+		return true
+	}
+	// PHP: *Test.php
+	if strings.HasSuffix(base, "test.php") {
+		return true
+	}
+	// Rust: tests/*.rs or *_test.rs
+	if strings.HasSuffix(base, "_test.rs") {
+		return true
+	}
+	// Files under test directories
+	lower := strings.ToLower(path)
+	if strings.Contains(lower, "/test/") || strings.Contains(lower, "/tests/") ||
+		strings.Contains(lower, "/__tests__/") || strings.Contains(lower, "/spec/") {
+		return true
+	}
+	return false
+}

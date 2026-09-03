@@ -33,26 +33,27 @@ const privateConst = 1
 		names[s.name] = s.category
 	}
 
+	// #1450-A: extraction is UNexported-only - the same-directory scan's
+	// scope is exactly the set of files that can reference unexported
+	// symbols (one-dir-one-package). Exported symbols' main referencers
+	// live outside the package and were never covered by this detector.
 	checks := map[string]string{
-		"MyFunc":            "func",
-		"MyType":            "type",
-		"MyConst":           "const",
-		"MyVar":             "var",
-		"(*MyType).Method1": "method",
-		"(*MyType).Method2": "method",
+		"privateFunc":  "func",
+		"privateConst": "const",
 	}
 	for name, cat := range checks {
 		got, ok := names[name]
 		if !ok {
-			t.Errorf("expected symbol %q not found", name)
+			t.Errorf("expected unexported symbol %q not found", name)
 		} else if got != cat {
 			t.Errorf("symbol %q: expected category %q, got %q", name, cat, got)
 		}
 	}
 
 	for name := range names {
-		if name == "privateFunc" || name == "privateConst" {
-			t.Errorf("private symbol %q should not be exported", name)
+		switch name {
+		case "MyFunc", "MyType", "MyConst", "MyVar", "(*MyType).Method1", "(*MyType).Method2":
+			t.Errorf("exported symbol %q extracted - scan scope cannot see its referencers", name)
 		}
 	}
 }
@@ -60,9 +61,9 @@ const privateConst = 1
 func TestExtractImpactRemovedSymbols(t *testing.T) {
 	oldSrc := `package foo
 func FuncA() {}
-func FuncB() {}
+func funcB() {}
 func FuncC() {}
-type TypeX struct{}
+type typeX struct{}
 const ConstY = 1
 `
 	newSrc := `package foo
@@ -79,11 +80,11 @@ const ConstY = 1
 	for _, s := range removed {
 		removedSet[s.name] = true
 	}
-	if !removedSet["FuncB"] {
-		t.Error("expected FuncB to be removed")
+	if !removedSet["funcB"] {
+		t.Error("expected funcB to be removed")
 	}
-	if !removedSet["TypeX"] {
-		t.Error("expected TypeX to be removed")
+	if !removedSet["typeX"] {
+		t.Error("expected typeX to be removed")
 	}
 }
 
@@ -150,29 +151,29 @@ func TestReferencesAnyImpactSymbol(t *testing.T) {
 
 func TestImpactReceiverTypeName(t *testing.T) {
 	// Test pointer receiver.
-	src := "package p\nfunc (r *MyType) Foo() {}\n"
+	src := "package p\nfunc (r *myType) foo() {}\n"
 	syms := extractImpactSymbols(src, "test.go")
 	found := false
 	for _, s := range syms {
-		if s.category == "method" && s.name == "(*MyType).Foo" {
+		if s.category == "method" && s.name == "(*myType).foo" {
 			found = true
 		}
 	}
 	if !found {
-		t.Error("expected method (*MyType).Foo")
+		t.Error("expected method (*myType).foo")
 	}
 
 	// Test value receiver.
-	src2 := "package p\nfunc (r MyType) Bar() {}\n"
+	src2 := "package p\nfunc (r myType) bar() {}\n"
 	syms2 := extractImpactSymbols(src2, "test.go")
 	found2 := false
 	for _, s := range syms2 {
-		if s.category == "method" && s.name == "(*MyType).Bar" {
+		if s.category == "method" && s.name == "(*myType).bar" {
 			found2 = true
 		}
 	}
 	if !found2 {
-		t.Error("expected method (*MyType).Bar for value receiver")
+		t.Error("expected method (*myType).bar for value receiver")
 	}
 }
 
