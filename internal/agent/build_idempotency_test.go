@@ -134,7 +134,7 @@ func TestBuildIdempotency_Reset(t *testing.T) {
 func TestBuildIdempotency_MultipleBuildTools(t *testing.T) {
 	s := newBuildIdempotencyState()
 
-	// go test then npm test -- different commands but still 0 edits.
+	// go test then npm test -- different commands with 0 edits.
 	s.recordToolCall("run_command", mustJSONIdempot(t, map[string]interface{}{
 		"command": "go test ./...",
 	}), 1)
@@ -142,9 +142,21 @@ func TestBuildIdempotency_MultipleBuildTools(t *testing.T) {
 	w2 := s.recordToolCall("run_command", mustJSONIdempot(t, map[string]interface{}{
 		"command": "npm test",
 	}), 2)
-	// Different build command but still 0 edits -- should warn.
-	if w2 == "" {
-		t.Fatal("second different build with 0 edits should warn")
+	// #1441-A: a DIFFERENT command with 0 edits must NOT warn - the old
+	// behavior (codified by this very test) fired on the standard
+	// build->test->lint chain, claiming "re-running go test" (never run
+	// this run) and "guaranteed identical" (build passing does not
+	// guarantee test passing). The guarantee holds only for the SAME
+	// command.
+	if w2 != "" {
+		t.Fatalf("different build command with 0 edits must not warn: %q", w2)
+	}
+	// The SAME command with 0 edits still warns (true redundancy).
+	w3 := s.recordToolCall("run_command", mustJSONIdempot(t, map[string]interface{}{
+		"command": "npm test",
+	}), 3)
+	if w3 == "" {
+		t.Fatal("same build command re-run with 0 edits should warn")
 	}
 }
 

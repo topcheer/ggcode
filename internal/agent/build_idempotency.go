@@ -230,7 +230,15 @@ func (s *buildIdempotencyState) recordToolCall(toolName string, args json.RawMes
 	warning := ""
 
 	// Check idempotency: if we had a prior build and no edits since, it's redundant.
-	if s.lastBuildIter > 0 && s.editsSinceLastBuild == 0 {
+	// #1441-A: the check never compared WHICH command ran - the standard
+	// build->test->lint chain has 0 edits between steps, so test and lint
+	// each fired "re-running go test... guaranteed identical... move on if
+	// verification passed" (go test never ran this run; build passing does
+	// NOT guarantee test passing - and the wording nudged skipping tests
+	// after a green build). The guarantee only holds for the SAME command;
+	// lastBuildCmd was written but never read (the third same-command
+	// evidence alongside the docblock's rationale and examples).
+	if s.lastBuildIter > 0 && s.editsSinceLastBuild == 0 && label == s.lastBuildCmd {
 		s.totalRedundant++
 		if s.warnsIssued < s.maxWarns {
 			s.warnsIssued++

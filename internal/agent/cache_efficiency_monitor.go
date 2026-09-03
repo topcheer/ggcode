@@ -106,10 +106,19 @@ func (m *cacheEffMonitor) record(usage provider.TokenUsage) string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	// #1441-B: OpenAI-compat semantics make CacheRead a SUBSET of
+	// InputTokens (openai.go: PromptTokens already includes
+	// CachedTokens). The raw sum double-counted the cached portion:
+	// warm's >=0.5 ratio became mathematically unreachable (C/(P0+2C)
+	// with a real 90% hit computes 0.474), so warmSeen never set and the
+	// storm detector stayed no-op on the mainline providers
+	// (openrouter/deepseek/glm). provider.DisplayInputTokens already
+	// performs exactly this normalization for display - reuse it so the
+	// monitor sees the same numbers the user does.
 	sample := cacheEffSample{
 		input:     usage.InputTokens,
 		cacheRead: usage.CacheRead,
-		total:     usage.InputTokens + usage.CacheRead,
+		total:     usage.DisplayInputTokens() + usage.CacheRead,
 	}
 
 	// Append to rolling window
