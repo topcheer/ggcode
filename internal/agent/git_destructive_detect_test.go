@@ -190,3 +190,23 @@ func TestCheckGitDestructiveCriticalVsWarning(t *testing.T) {
 		t.Errorf("warning pattern should not contain CRITICAL marker: %s", w2)
 	}
 }
+
+// TestGitDestructiveBranchForceMoveWarning pins #1464-B: git branch -f
+// re-points a branch pointer - warning severity (reflog keeps commits
+// reachable ~90 days, unlike reset --hard's unrecoverable losses), not
+// critical.
+func TestGitDestructiveBranchForceMoveWarning(t *testing.T) {
+	patterns := detectDestructiveInShellCommand("git branch -f main HEAD~5")
+	if len(patterns) == 0 {
+		t.Fatal("branch -f uncovered")
+	}
+	for _, p := range patterns {
+		if p.name == "branch_force_move" && p.severity != "warning" {
+			t.Fatalf("branch -f severity = %q, want warning", p.severity)
+		}
+	}
+	// Safe forms stay quiet.
+	if got := detectDestructiveInShellCommand("git branch -d merged-feature"); len(got) != 0 {
+		t.Fatalf("safe lowercase -d flagged: %+v", got)
+	}
+}
