@@ -3876,6 +3876,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			if tc.Name == "run_command" && !result.IsError {
 				if cmd := extractCommandFromArgs(tc.Arguments); cmd != "" && isVerifyCommand(cmd) {
 					a.editPropagation.recordGreenBuild()
+					// #1460-C: a green verification confirms the edit
+					// sequence was legitimate refinement, not churn.
+					a.fileChurn.recordVerifySuccess()
 				}
 			}
 			// Convergence lock: record verification result to detect post-verify

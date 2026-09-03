@@ -64,6 +64,17 @@ func (c *churnState) reset() {
 	c.fired = false
 }
 
+// recordVerifySuccess clears per-file edit counts when a verification
+// command succeeds (#1460-C): iterate-edit-verify loops where EVERY step
+// is confirmed green are legitimate refinement - the old bare count
+// reached the threshold on the third polish pass and ordered the agent
+// to 'STOP editing, your initial assumptions were wrong'.
+func (c *churnState) recordVerifySuccess() {
+	for p := range c.editCounts {
+		delete(c.editCounts, p)
+	}
+}
+
 // recordEdit increments the edit count for the given file paths.
 // Called after each edit-type tool execution.
 func (c *churnState) recordEdit(paths []string) {

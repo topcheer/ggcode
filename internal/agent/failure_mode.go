@@ -192,8 +192,11 @@ func (s *failureModeState) recordResult(toolName string, isError bool, errorCont
 	defer s.mu.Unlock()
 
 	s.totalCalls++
-
 	if !isError {
+		// #1460-B: successes decay the structural streak - a long run with
+		// isolated, FIXED failures must not accumulate into a strategy
+		// verdict ('approach is fundamentally wrong, Do NOT retry').
+		s.structuralCount = 0
 		return ""
 	}
 
@@ -237,8 +240,19 @@ func (s *failureModeState) checkDominantMode() string {
 				"or switching to a lighter approach that makes fewer API calls.")
 	}
 
-	// Structural mode fires after 4+ structural failures — the approach is wrong.
-	if s.structuralCount >= 4 && !s.fired[FailureModeStructural] {
+	// Structural mode fires after 4+ structural failures AND a
+	// meaningful failure density (#1460-B): the old bare count never reset
+	// on success and never looked at volume - four unrelated, FIXED
+	// failures scattered across a 200-call run triggered 'approach is
+	// fundamentally wrong, Do NOT retry' on a smoothly progressing run.
+	// STRUCTURAL is also the fallback default class, so it inflates easily.
+	// totalCalls (previously a write-only field 'for ratio calculation'
+	// that never calculated) finally earns its keep.
+	structuralRatio := 0.0
+	if s.totalCalls > 0 {
+		structuralRatio = float64(s.structuralCount) / float64(s.totalCalls)
+	}
+	if s.structuralCount >= 4 && structuralRatio >= 0.30 && !s.fired[FailureModeStructural] {
 		s.fired[FailureModeStructural] = true
 		return "[Failure Mode: STRUCTURAL] " + fmt.Sprintf("%d", s.structuralCount) +
 			" failures suggest the current approach is fundamentally wrong " +

@@ -114,12 +114,21 @@ func (a *Agent) checkExportGuard(filePath string) string {
 		// succeeds later (after a syntax fix), we want to check again.
 		return ""
 	}
-	// Issue #1043(a): Only burn the once-per-run marker after successful
-	// parsing. If parsing fails, the guard should retry on subsequent edits.
+	// Issue #1043(a): burn the once-per-run marker ONLY when the check
+	// completes AND reports changes. #1460-A: burning on a completed-but-
+	// EMPTY diff let the run's first harmless edit (comment/unexported
+	// tweak) consume the single check - the second edit renaming an
+	// exported symbol then hit the early-return and stayed silent, the
+	// exact #1 scenario the guard exists for. The exported-symbol set
+	// tracks the LATEST file content regardless of which edit produced
+	// it, so an empty diff carries no 'already checked' information.
 	a.exportGuard.checked[abs] = true
 
 	changes := diffExportSymbols(oldSyms, newSyms)
 	if len(changes) == 0 {
+		// Empty diff: no report, no burn - the next edit may introduce the
+		// breaking change this guard exists to catch.
+		delete(a.exportGuard.checked, abs)
 		return ""
 	}
 
