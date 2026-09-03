@@ -113,7 +113,17 @@ func (s *attemptBriefState) maybeBrief(iter int) string {
 	// only NEW failures, and the same batch is never reused for a second fire).
 	failures := make([]toolOutcome, 0, 10)
 	for _, e := range s.entries {
-		if !e.success && e.iter > s.lastFireIter {
+		// #1439-A: two index conventions met on one watermark - recordOutcome
+		// passes i while maybeBrief passes i+1, so a fire at end of iteration
+		// k set lastFireIter=k+1 while entries carry e.iter=k. The strict '>'
+		// then dropped iteration k+1's failures entirely (k+1 > k+1 is false):
+		// the failure-dense stretch right AFTER a fire was systematically
+		// excluded, contradicting the "only NEW failures" comment above, and
+		// combined with the 40-entry ring window + maxAttemptBriefFire=2 the
+		// second (final) brief could never trigger. '>=' restores the intended
+		// semantics: lastFireIter=k+1 means "k and earlier were reported",
+		// so k+1 onward is new.
+		if !e.success && e.iter >= s.lastFireIter {
 			failures = append(failures, e)
 		}
 	}
