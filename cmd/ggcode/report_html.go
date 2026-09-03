@@ -689,8 +689,13 @@ window.__DATA__ = ` + jsonData + `;
     document.getElementById('detailEmpty').style.display = 'none';
     document.getElementById('detailContent').style.display = 'block';
     document.getElementById('detailTitle').textContent = s.title || s.id.slice(0,12);
+    // #1448-A: model/vendor are free-form strings from the repo-level
+    // ggcode.yaml (cloning a malicious repo plants them) - the ca004ecd
+    // sweep escaped the tool-name sinks but missed this one; the same
+    // s.model IS escaped at the table-side sink two views over. esc()
+    // both fields; the timestamp and separators are inert.
     document.getElementById('detailInfo').innerHTML =
-      (s.model||'') + ' \u00b7 ' + (s.vendor||'') + ' \u00b7 ' + new Date(s.createdAt).toLocaleString();
+      esc(String(s.model||'')) + ' \u00b7 ' + esc(String(s.vendor||'')) + ' \u00b7 ' + new Date(s.createdAt).toLocaleString();
 
     currentDetail = { session: s, turns: s.turns, rangeL: 0, rangeR: 0 };
 

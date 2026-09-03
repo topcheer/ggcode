@@ -28,6 +28,7 @@ type turnAgg struct {
 	Input     int
 	Output    int
 	Cache     int
+	LLMCalls  int // #1448-B: actual streaming calls (N per agentic turn)
 	TTFTMs    int64
 	DurMs     int64
 	ThinkMs   int64
@@ -141,9 +142,19 @@ func scanSessionFile(path string) (*scanResult, error) {
 					switch me.Type {
 					case "llm":
 						t := sr.getTurn(me.TurnIndex)
-						t.TTFTMs = me.TTFT.Milliseconds()
-						t.DurMs = me.Duration.Milliseconds()
-						t.ThinkMs = me.ThinkTime.Milliseconds()
+						// #1448-B: an agentic turn makes N streaming calls under
+						// ONE TurnIndex (usageTurnIndex only advances on user
+						// messages), each emitting its own metric - pure '='
+						// overwrote N-1 of them (the usage branch two blocks up
+						// uses '+=' for exactly this reason). TTFT keeps the
+						// FIRST (earliest) call's; duration and think time
+						// accumulate; LLMCalls counts what actually happened.
+						if t.LLMCalls == 0 {
+							t.TTFTMs = me.TTFT.Milliseconds()
+						}
+						t.LLMCalls++
+						t.DurMs += me.Duration.Milliseconds()
+						t.ThinkMs += me.ThinkTime.Milliseconds()
 						// Fallback: fill token data from metric if usage record missing
 						if t.Input == 0 && me.InputTokens > 0 {
 							t.Input = me.InputTokens

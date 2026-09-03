@@ -123,7 +123,13 @@ func buildReport(results []*scanResult) reportData {
 			sj.TotalInput += t.Input
 			sj.TotalOutput += t.Output
 			sj.TotalCache += t.Cache
-			sj.LLMCalls++
+			// #1448-B: count actual streaming calls, not deduped turns - an
+			// agentic turn makes N LLM calls under one TurnIndex.
+			if t.LLMCalls > 0 {
+				sj.LLMCalls += t.LLMCalls
+			} else {
+				sj.LLMCalls++
+			}
 
 			tj := turnJSON{
 				Index:   t.Index,
