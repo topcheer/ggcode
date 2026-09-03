@@ -3258,6 +3258,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					if hint := a.expiredRead.recordEdit(p); hint != "" {
 						a.appendGuidance(&result, hint)
 					}
+					// #1459-B: a rolled-back edit restores the pre-edit
+					// content - the file's read/edit bookkeeping must forget
+					// it so the correct anchor-rebuilding re-read isn't
+					// later misreported as stale.
+					if tc.Name == "undo_edit" && !result.IsError {
+						a.expiredRead.recordUndo(p)
+					}
 					// Export guard: detect breaking changes to exported Go symbols
 					// (removed functions, changed signatures) by comparing against
 					// git HEAD. Fires once per file per run.
@@ -3362,7 +3369,14 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 			// Exploration fragmentation detection: check if the agent is
 			// issuing many scattered exploration calls without converging.
-			if fragWarn := a.exploreFrag.recordToolCall(tc.Name, tc.Arguments, i+1); fragWarn != "" {
+			// #1459-A: failed calls (missing args etc.) don't count - two
+			// errored reads plus four good ones used to trip the detector
+			// with the failures' 60-char fallback blobs as fake targets.
+			fragWarn := ""
+			if !result.IsError {
+				fragWarn = a.exploreFrag.recordToolCall(tc.Name, tc.Arguments, i+1)
+			}
+			if fragWarn != "" {
 				debug.Log("agent", "Iteration %d: exploration fragmentation detected", i+1)
 				a.contextManager.Add(provider.Message{
 					Role:    "user",

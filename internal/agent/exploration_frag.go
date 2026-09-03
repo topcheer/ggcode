@@ -213,6 +213,12 @@ func (s *exploreFragState) recordToolCall(toolName string, args []byte, iteratio
 	}
 
 	target := extractExploreTarget(toolName, args)
+	// #1459-A: normalize paths so the same file reached via absolute and
+	// relative forms counts once (expired_read normalizes all entries
+	// the same way); raw strings artificially inflated uniqueTargets.
+	if p := normalizePath(target); p != "" {
+		target = p
+	}
 	s.entries = append(s.entries, exploreFragEntry{
 		tool:      toolName,
 		target:    target,
@@ -239,6 +245,19 @@ func (s *exploreFragState) recordToolCall(toolName string, args []byte, iteratio
 
 	// Trigger if scattered across many unique targets
 	if len(uniqueTargets) < exploreFragMinUniqueTargets {
+		return ""
+	}
+	// #1459-A: a single PARALLEL BATCH (the runtime's explicitly
+	// recommended shape: 6 read_files on 6 files before the model sees
+	// ANY result) used to satisfy both thresholds with ZERO elapsed
+	// iterations while the message claimed 'in the last 8 iterations'.
+	// The entries must now span at least 2 distinct iterations - one
+	// batch alone, however wide, is not fragmentation.
+	iterSet := make(map[int]bool, len(s.entries))
+	for _, e := range s.entries {
+		iterSet[e.iteration] = true
+	}
+	if len(iterSet) < 2 {
 		return ""
 	}
 

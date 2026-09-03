@@ -110,6 +110,22 @@ func (e *expiredReadState) recordRead(path string) {
 	}
 }
 
+// recordUndo clears per-file state when an edit is ROLLED BACK (#1459-B):
+// after undo_edit the on-disk file matches the pre-edit content, but the
+// editedFiles entry lingered - the agent's correct anchor-rebuilding
+// re-read was dropped by recordRead's guard and later misreported as
+// '[expired-read] stale' by the next edit_file; checkPostEditReread also
+// advised referencing the (now-rolled-back) edit result instead of the
+// re-read. Both maps forget the path.
+func (e *expiredReadState) recordUndo(path string) {
+	if path == "" {
+		return
+	}
+	n := normalizePath(path)
+	delete(e.editedFiles, n)
+	delete(e.readBeforeEdit, n)
+}
+
 // recordEdit is called when the agent edits a file. It returns a hint
 // if the file was previously read, marking that read as expired.
 func (e *expiredReadState) recordEdit(path string) string {
