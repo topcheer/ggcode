@@ -281,7 +281,13 @@ func summarizeToolResult(toolName, output string, isError bool) string {
 	runes := []rune(output)
 
 	// Command tools need head+tail to capture test verdicts at the end.
-	if toolName == "run_command" || toolName == "bash" || toolName == "start_command" || toolName == "powershell" {
+	// #1440-B: read_command_output/wait_command are the DOCUMENTED
+	// collection channels for background commands (start_command's own
+	// description says so) and their snapshots put Recent output - the
+	// PASS/FAIL/make-error verdict lines - at the END; head-only 500
+	// truncation hid exactly the evidence the docblock says must not be
+	// hidden.
+	if toolName == "run_command" || toolName == "bash" || toolName == "start_command" || toolName == "powershell" || toolName == "read_command_output" || toolName == "wait_command" {
 		const headLen = 300
 		const tailLen = 700
 		if len(runes) <= headLen+tailLen {

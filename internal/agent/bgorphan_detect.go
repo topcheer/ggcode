@@ -145,9 +145,14 @@ func (s *bgOrphanState) recordStartCommand(args json.RawMessage, result string, 
 
 // recordOutputCheck is called when the agent reads output from a background
 // command (read_command_output, wait_command). It marks the job as checked.
+// #1440-A: the result snapshot is parsed for a terminal "Status:" line -
+// completed/failed/crashed jobs leave tracking, so a COMPLETED job no
+// longer cycles false 'may have errored, hung' warnings (each re-check
+// cleared + re-fired) until the 3-injection budget burns out, leaving
+// genuinely orphaned jobs silent.
 // Note: write_command_input is NOT an output check — it only writes stdin
 // (#200).
-func (s *bgOrphanState) recordOutputCheck(args json.RawMessage, iteration int) {
+func (s *bgOrphanState) recordOutputCheck(args json.RawMessage, result string, iteration int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -155,11 +160,25 @@ func (s *bgOrphanState) recordOutputCheck(args json.RawMessage, iteration int) {
 	if jobID == "" {
 		return
 	}
-	if info, ok := s.activeJobs[jobID]; ok {
-		info.LastCheckedIter = iteration
-		// Clear any prior warning so we can re-warn if it goes stale again
-		delete(s.warned, jobID)
+	info, ok := s.activeJobs[jobID]
+	if !ok {
+		return
 	}
+	for _, line := range strings.Split(result, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "Status:") {
+			continue
+		}
+		status := strings.TrimSpace(strings.TrimPrefix(line, "Status:"))
+		if status == "SUCCESS" || status == "FAILED" || status == "CRASHED" || status == "REMOVED" {
+			delete(s.activeJobs, jobID)
+			delete(s.warned, jobID)
+			return
+		}
+	}
+	info.LastCheckedIter = iteration
+	// Clear any prior warning so we can re-warn if it goes stale again
+	delete(s.warned, jobID)
 }
 
 // recordStopCommand removes a job from tracking when stop_command is called.
@@ -365,7 +384,8 @@ func (a *Agent) recordBgToolCall(toolName string, args json.RawMessage, result s
 		// write_command_input removed (#200): it writes stdin, it does not
 		// check output — treating it as an output check let a REPL job that
 		// only ever receives input suppress orphan warnings forever.
-		a.bgOrphan.recordOutputCheck(args, iteration)
+		// #1440-A: pass the result so terminal-status jobs exit tracking.
+		a.bgOrphan.recordOutputCheck(args, result, iteration)
 	case "stop_command":
 		a.bgOrphan.recordStopCommand(args)
 	}
