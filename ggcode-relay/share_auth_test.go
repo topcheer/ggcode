@@ -323,3 +323,32 @@ func TestHandleWSPendingIssuedRoomReturnsServerOffline(t *testing.T) {
 		t.Fatal("pending room should remain reserved after client wait notice")
 	}
 }
+
+// TestRefreshShareSessionExpiredTokenRejected pins #1456-A: the HTTP
+// refresh path must enforce Exp symmetrically with the WS handshake - a
+// leaked expired renew token can no longer mint fresh credentials (each
+// refresh used to roll a NEW 30-day token, making the TTL meaningless).
+func TestRefreshShareSessionExpiredTokenRejected(t *testing.T) {
+	cfg := shareAuthConfig{
+		Secret:     "relay-secret",
+		ConnectTTL: time.Minute,
+		RenewTTL:   time.Hour,
+	}
+	// Mint a renew ticket that expired a minute ago.
+	expired, err := mintShareTicket(cfg.Secret, "room-x", "server", shareTicketKindRenew, time.Now().UTC().Add(-time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = refreshShareSession(cfg, refreshShareSessionRequest{RoomID: "room-x", ServerRenewToken: expired}, shareProtocolV3, shareModeV3)
+	if err == nil {
+		t.Fatal("expired renew token accepted - refresh path bypasses expiry")
+	}
+	// A valid (unexpired) token still refreshes.
+	issued, err := issueShareSession(cfg, shareProtocolV3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := refreshShareSession(cfg, refreshShareSessionRequest{RoomID: issued.RoomID, ServerRenewToken: issued.ServerRenewToken}, shareProtocolV3, shareModeV3); err != nil {
+		t.Fatalf("valid token rejected: %v", err)
+	}
+}
