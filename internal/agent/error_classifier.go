@@ -112,6 +112,23 @@ func classifyErrorContent(toolName, content string) ErrorCategory {
 		}
 	}
 
+	// Test-deadlock timeout FIRST (#1457-B): 'panic: test timed out' is a
+	// DETERMINISTIC test failure - the bare 'panic:' prefix below caught it
+	// as nil_pointer and the bare 'timed out' substring as timeout_network
+	// ('transient - retry'). #653 removed the same bare substrings from
+	// error_rush; the classifier syncs.
+	if errorContainsAny(c,
+		"panic: test timed out",
+		"test timed out after",
+	) {
+		return ErrorCategory{
+			Name: "test_failure",
+			Guidance: "A test failed. Read the full test output to understand which " +
+				"assertion failed and why. Compare expected vs actual values carefully. " +
+				"If the test itself is wrong (testing old behavior), update the test.",
+		}
+	}
+
 	// Nil pointer / panic
 	if errorContainsAny(c,
 		"nil pointer",
