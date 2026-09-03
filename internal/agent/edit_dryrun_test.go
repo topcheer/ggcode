@@ -123,3 +123,23 @@ func TestDryRunValidateBatch_AllValid(t *testing.T) {
 		t.Errorf("expected 0 blockers, got %d: %v", len(blockers), blockers)
 	}
 }
+
+// TestDryRunValidate_ConflictResolutionNotBlocked pins #1454-B: resolving
+// PRE-EXISTING conflict markers (git merge awaiting resolution) via a
+// per-hunk edit_file must pass pre-write validation - the old whole-file
+// count blocked the very operation that fixes conflicts with 'remove ALL
+// markers'. Only markers the edit ADDS stay fatal.
+func TestDryRunValidate_ConflictResolutionNotBlocked(t *testing.T) {
+	old := "package p\n\nvar a int\n<<<<<<< HEAD\na = 1\n=======\na = 2\n>>>>>>> other\n\nfunc f() { _ = a }\n"
+	// Resolve ONE hunk: new content drops all markers for this block.
+	newContent := "package p\n\nvar a = 2\n\nfunc f() { _ = a }\n"
+	if msg := dryRunValidate("test.go", old, newContent); msg != "" {
+		t.Fatalf("conflict resolution blocked by pre-write gate: %s", msg)
+	}
+	// INTRODUCING markers stays fatal.
+	clean := "package p\n\na := 1\n"
+	withMarkers := "package p\n<<<<<<< HEAD\na := 1\n>>>>>>> x\n"
+	if msg := dryRunValidate("test.go", clean, withMarkers); msg == "" {
+		t.Fatal("edit introducing conflict markers must stay blocked")
+	}
+}
