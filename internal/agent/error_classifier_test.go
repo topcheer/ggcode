@@ -230,3 +230,19 @@ func TestClassifyErrorContent_OrderingPrecedence(t *testing.T) {
 		t.Errorf("expected import_error, got %s", cat.Name)
 	}
 }
+
+// TestClassifyErrorContent_TestDeadlockTimeoutIsTestFailure pins #1457-B:
+// `panic: test timed out after 10m0s` is a DETERMINISTIC test failure, not
+// a transient network timeout - the bare 'timed out' substring used to
+// route it to timeout_network with 'retry' guidance (#653 synced).
+func TestClassifyErrorContent_TestDeadlockTimeoutIsTestFailure(t *testing.T) {
+	cat := classifyErrorContent("run_command", "panic: test timed out after 10m0s\nrunning tests:\n	TestFoo(10s)")
+	if cat.Name != "test_failure" {
+		t.Fatalf("test-deadlock timeout classified as %q, want test_failure", cat.Name)
+	}
+	// A REAL network timeout still classifies as timeout.
+	netCat := classifyErrorContent("run_command", "fetching url: context deadline exceeded")
+	if netCat.Name == "test_failure" {
+		t.Fatal("network deadline hijacked into test_failure")
+	}
+}
