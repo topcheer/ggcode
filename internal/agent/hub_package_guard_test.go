@@ -299,3 +299,25 @@ func TestHubComputeFanIn(t *testing.T) {
 		t.Errorf("pkg/b fan-in = %d, want 0", fanIn["example.com/test/pkg/b"])
 	}
 }
+
+// TestHubGuardEmptyModulePathRetries pins #1466-B: an empty module lookup
+// (go.work-only workspace, transient failure) must NOT latch initialized -
+// the guard retries on the next call instead of staying disabled for the
+// Agent's whole lifetime.
+func TestHubGuardEmptyModulePathRetries(t *testing.T) {
+	s := newHubPackageState()
+	empty := t.TempDir() // no go.mod
+	s.ensureFanIn(empty)
+	if s.initialized {
+		t.Fatal("empty modulePath latched initialized - lifetime disable")
+	}
+	// Same state on a real module now initializes (retry path works).
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/m\n\ngo 1.21\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s.ensureFanIn(dir)
+	if !s.initialized {
+		t.Fatal("successful module lookup did not initialize")
+	}
+}
