@@ -223,3 +223,33 @@ func TestDriftRecurrence_VerificationOnlyPostWarn(t *testing.T) {
 		t.Fatalf("expected no recurrence with verification, got: %s", msg)
 	}
 }
+
+// TestDriftRecurrence_ConvergedSingleDirSpared pins #1452-A: converging
+// to ONE new directory after the warning (batched edits before a single
+// build pass - the normal edit-then-verify phase) must not fire the
+// 'performative compliance... STOP' hammer; only continued scattering
+// (2+ new dirs, zero verifies) counts as recurrence.
+func TestDriftRecurrence_ConvergedSingleDirSpared(t *testing.T) {
+	d := newDriftRecurrenceState()
+	d.recordIteration(5)
+	d.markWarning(5)
+	// Converged: all post-warning edits in ONE new directory.
+	d.recordEdit("/project/src/feature.go")
+	d.recordEdit("/project/src/feature_util.go")
+	d.recordEdit("/project/src/feature_test.go")
+	d.recordIteration(9)
+	if msg := d.check(); msg != "" {
+		t.Fatalf("converged single-dir workflow accused: %s", msg)
+	}
+	// Still scattering (3 new dirs, zero verifies) must still fire.
+	d2 := newDriftRecurrenceState()
+	d2.recordIteration(5)
+	d2.markWarning(5)
+	d2.recordEdit("/a/x.go")
+	d2.recordEdit("/b/y.go")
+	d2.recordEdit("/c/z.go")
+	d2.recordIteration(9)
+	if msg := d2.check(); msg == "" {
+		t.Fatal("scattered 3-dir zero-verify drift should still fire")
+	}
+}
