@@ -187,3 +187,33 @@ func TestCacheEffMonitor_WindowSummary(t *testing.T) {
 		t.Errorf("window summary should contain second sample: %s", summary)
 	}
 }
+
+// TestCacheEfficiencyMonitorOpenAICompatSubset pins #1441-B: OpenAI-compat
+// providers report CacheRead as a SUBSET of InputTokens (PromptTokens
+// already includes cached); the raw sum double-counted it and made the
+// warm tier mathematically unreachable (a real 90% hit computed 0.474).
+// With normalization the same sample reads 9000/10000 = 0.9.
+func TestCacheEfficiencyMonitorOpenAICompatSubset(t *testing.T) {
+	m := newCacheEffMonitor()
+	// Real-world shape: PromptTokensTotal=10000 includes 9000 cached.
+	// DisplayInputTokens normalizes input to 1000 (uncached share).
+	g := m.record(provider.TokenUsage{
+		InputTokens:       10000,
+		CacheRead:         9000,
+		PromptTokensTotal: 10000,
+	})
+	if g != "" {
+		t.Fatalf("single sample should not warn yet: %q", g)
+	}
+	// The stored sample's warm ratio must be 0.9, not 9000/19000=0.474:
+	// drive to a verdict via the storm path (warm then cold burst) and
+	// confirm warm was RECORDED - with the old double-count, warmSeen
+	// could never set and the storm verdict was unreachable.
+	m2 := newCacheEffMonitor()
+	for i := 0; i < cacheEffMinCalls; i++ {
+		m2.record(provider.TokenUsage{InputTokens: 10000, CacheRead: 9000, PromptTokensTotal: 10000})
+	}
+	if !m2.warmSeen {
+		t.Fatal("90% cache-hit samples never recorded warm - subset double-count regression")
+	}
+}
