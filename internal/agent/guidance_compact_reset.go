@@ -84,5 +84,34 @@ func (a *Agent) resetGuidanceCounters() {
 		a.queryConverge.warned = false
 		a.queryConverge.mu.Unlock()
 	}
+	// #1465-A: per-run injection counters missing from the original list.
+	// The three compaction call sites are MID-RUN overflow retry paths
+	// (same run continues), so detectors whose quota burned before the
+	// compaction stayed silent for the run's remainder - the opposite of
+	// the file's own rationale ("worse than the noise we removed").
+	// error_compound
+	if a.errorCompound != nil {
+		a.errorCompound.reset()
+	}
+	// success_declare
+	if a.successDeclare != nil {
+		a.successDeclare.reset()
+	}
+	// undo_blind
+	if a.undoBlind != nil {
+		a.undoBlind.reset()
+	}
+	// counterfactual_dep (no mutex; agent-loop single-goroutine access)
+	if a.cfDep != nil {
+		a.cfDep.reset()
+	}
+	// verify_coverage_gap (no mutex; agent-loop single-goroutine access)
+	if a.editCoverage != nil {
+		a.editCoverage.reset()
+	}
+	// foresight_calibrate (no mutex; agent-loop single-goroutine access)
+	if a.foresightCalib != nil {
+		a.foresightCalib.reset()
+	}
 	debug.Log("guidance", "post-compaction: guidance injection counters reset (B-class detectors)")
 }

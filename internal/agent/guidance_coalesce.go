@@ -161,7 +161,13 @@ func coalesceGuidance(hints []string) []string {
 		}
 	}
 
-	// If critical alone exceeds cap, keep first N critical.
+	// If critical alone exceeds cap, keep the first N. #1465-B: the
+	// criticalHintTags comment says 'always retained regardless of cap...
+	// must not be suppressed' - this slice says otherwise. Currently
+	// UNREACHABLE (no caller routes critical-tagged hints through this
+	// coalescer; the guidance_budget exemption applies instead), but any
+	// future detector using this path would be silently downgraded: fix
+	// the comment OR add priority ordering when the path goes live.
 	if len(critical) >= coalesceMaxHints {
 		result := critical[:coalesceMaxHints]
 		return appendWithSuppression(result, critical[coalesceMaxHints:], advisory)
