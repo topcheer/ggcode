@@ -248,3 +248,25 @@ func TestConfigSyntaxCheck_IntegrationValidYAML(t *testing.T) {
 		t.Errorf("expected no warning for valid YAML write, got: %s", warn)
 	}
 }
+
+// TestCheckConfigSyntaxCIWorkflowListBlockScalar pins #1446-B: a list item
+// opening a block scalar (`- run: |`, the standard CI step shape) must set
+// the block-scalar state BEFORE the list-item skip - its shell body's
+// same-prefixed lines were read as duplicate mapping keys and a legitimate
+// .gitea/workflows file got a Critical 'syntax error' report.
+func TestCheckConfigSyntaxCIWorkflowListBlockScalar(t *testing.T) {
+	src := "jobs:\n" +
+		"  build:\n" +
+		"    steps:\n" +
+		"      - run: |\n" +
+		"          echo \"::group::install\"\n" +
+		"          make build\n" +
+		"          echo \"::endgroup::\"\n" +
+		"      - run: |\n" +
+		"          echo \"::group::test\"\n" +
+		"          make test\n" +
+		"          echo \"::endgroup::\"\n"
+	if msg := configSyntaxCheck("workflows/ci.yaml", src); msg != "" {
+		t.Fatalf("legit CI workflow falsely flagged: %s", msg)
+	}
+}
