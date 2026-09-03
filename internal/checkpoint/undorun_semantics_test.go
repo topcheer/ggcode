@@ -170,7 +170,7 @@ func TestUndoRunPartialFailureCleansAllRunCheckpoints(t *testing.T) {
 	// A later single-step Undo must not resurrect a mid-run state of a.txt.
 	// The only remaining checkpoint targets the unwritable bad file, so Undo
 	// fails without mutating anything.
-	if _, err := m.Undo(); err == nil {
+	if _, err := m.Undo("user"); err == nil {
 		t.Fatal("Undo should fail while the bad dir is read-only")
 	}
 	data, _ = os.ReadFile(a)

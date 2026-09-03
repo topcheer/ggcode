@@ -136,7 +136,7 @@ func TestIssue678_RevertStillUndoableAfterwards(t *testing.T) {
 		t.Fatalf("Revert failed: %v", err)
 	}
 
-	if _, err := m.Undo(); err != nil {
+	if _, err := m.Undo("user"); err != nil {
 		t.Fatalf("Undo after Revert must still work (remediation preserved), got: %v", err)
 	}
 	b, err := os.ReadFile(f1)

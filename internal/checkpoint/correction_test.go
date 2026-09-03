@@ -21,7 +21,7 @@ func TestUndoRecordsCorrection(t *testing.T) {
 		t.Fatalf("expected nil corrections before undo, got %v", c)
 	}
 
-	cp, err := m.Undo()
+	cp, err := m.Undo("user")
 	if err != nil {
 		t.Fatalf("Undo failed: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestClearCorrections(t *testing.T) {
 	m.Save(fp, "old", "new", "edit_file")
 	os.WriteFile(fp, []byte("new"), 0644)
 
-	if _, err := m.Undo(); err != nil {
+	if _, err := m.Undo("user"); err != nil {
 		t.Fatalf("Undo failed: %v", err)
 	}
 	if len(m.RecentCorrections()) != 1 {
@@ -115,7 +115,7 @@ func TestClearResetsCorrections(t *testing.T) {
 	m.StartRun("run-1")
 	m.Save(fp, "old", "new", "edit_file")
 	os.WriteFile(fp, []byte("new"), 0644)
-	if _, err := m.Undo(); err != nil {
+	if _, err := m.Undo("user"); err != nil {
 		t.Fatalf("Undo failed: %v", err)
 	}
 

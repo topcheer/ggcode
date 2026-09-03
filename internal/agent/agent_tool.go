@@ -1593,7 +1593,7 @@ func (a *Agent) executeUndoEditInner(ctx context.Context, tc provider.ToolCallDe
 
 	switch args.Action {
 	case "undo":
-		cp, err := cpMgr.Undo()
+		cp, err := cpMgr.Undo("agent")
 		if err != nil {
 			return tool.Result{
 				IsError: true,

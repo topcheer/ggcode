@@ -19,7 +19,7 @@ func TestMaybeInjectCorrectionFeedback(t *testing.T) {
 	cpMgr.Save(fp, "old content", "new content", "edit_file")
 
 	// Trigger an undo to create the correction.
-	if _, err := cpMgr.Undo(); err != nil {
+	if _, err := cpMgr.Undo("user"); err != nil {
 		t.Fatalf("Undo failed: %v", err)
 	}
 

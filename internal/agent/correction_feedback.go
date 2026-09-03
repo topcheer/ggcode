@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/topcheer/ggcode/internal/checkpoint"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
 )
@@ -43,6 +44,25 @@ func (a *Agent) maybeInjectCorrectionFeedback() {
 	if len(corrections) == 0 {
 		return
 	}
+
+	// #1449-A: only USER reverts are rejection signals. An agent's own
+	// undo_edit (self-correction after a failed verification) lands in the
+	// same corrections list; narrating it as "The user reverted your
+	// changes... likely wrong or unwanted... consider a fundamentally
+	// different approach" weaponizes the strongest authority signal
+	// against encouraged behavior - and the one-shot clear makes the
+	// injection irreversible for the run. Empty Source is legacy data
+	// (pre-field) - treat as user to preserve old behavior.
+	filtered := make([]checkpoint.Correction, 0, len(corrections))
+	for _, c := range corrections {
+		if c.Source == "" || c.Source == "user" {
+			filtered = append(filtered, c)
+		}
+	}
+	if len(filtered) == 0 {
+		return
+	}
+	corrections = filtered
 
 	// Build a concise summary of what was undone.
 	fileSet := make(map[string]bool)

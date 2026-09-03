@@ -41,7 +41,7 @@ func TestUndo(t *testing.T) {
 	// Simulate the write that happened
 	os.WriteFile(fp, []byte("world"), 0644)
 
-	cp, err := m.Undo()
+	cp, err := m.Undo("user")
 	if err != nil {
 		t.Fatalf("Undo failed: %v", err)
 	}
@@ -63,7 +63,7 @@ func TestUndo(t *testing.T) {
 
 func TestUndoEmpty(t *testing.T) {
 	m := NewManager(50)
-	_, err := m.Undo()
+	_, err := m.Undo("user")
 	if err == nil {
 		t.Fatal("expected error for undo on empty")
 	}
@@ -197,7 +197,7 @@ func TestRedo(t *testing.T) {
 	os.WriteFile(fp, []byte("world"), 0644)
 
 	// Undo
-	_, err := m.Undo()
+	_, err := m.Undo("user")
 	if err != nil {
 		t.Fatalf("Undo failed: %v", err)
 	}
@@ -256,8 +256,8 @@ func TestRedoMultiple(t *testing.T) {
 	os.WriteFile(fp, []byte("c"), 0644)
 
 	// Undo twice
-	m.Undo() // c -> b
-	m.Undo() // b -> a
+	m.Undo("user") // c -> b
+	m.Undo("user") // b -> a
 	data, _ := os.ReadFile(fp)
 	if string(data) != "a" {
 		t.Fatalf("expected a after 2 undos, got %s", string(data))
@@ -292,7 +292,7 @@ func TestSaveClearsRedoStack(t *testing.T) {
 	m.Save(fp, "a", "b", "edit_file")
 	os.WriteFile(fp, []byte("b"), 0644)
 
-	m.Undo() // b -> a, pushes to redo stack
+	m.Undo("user") // b -> a, pushes to redo stack
 
 	if !m.CanRedo() {
 		t.Fatal("expected CanRedo true after undo")

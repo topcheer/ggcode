@@ -155,7 +155,7 @@ func (m *Model) handleUndoCommand() tea.Cmd {
 		if cpMgr == nil {
 			return streamMsg(m.t("checkpoint.disabled"))
 		}
-		cp, err := cpMgr.Undo()
+		cp, err := cpMgr.Undo("user")
 		if err != nil {
 			return streamMsg(m.t("checkpoint.undo_failed", err))
 		}

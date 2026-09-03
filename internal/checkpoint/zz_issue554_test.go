@@ -24,7 +24,7 @@ func TestIssue554B_UndoRemovesCreatedFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := m.Undo(); err != nil {
+	if _, err := m.Undo("user"); err != nil {
 		t.Fatalf("Undo failed: %v", err)
 	}
 
@@ -106,7 +106,7 @@ func TestIssue554C_PreexistingEmptyFileIsNotNew(t *testing.T) {
 		t.Error("pre-existing empty file must not be reported as new (IsNew)")
 	}
 
-	if _, err := m.Undo(); err != nil {
+	if _, err := m.Undo("user"); err != nil {
 		t.Fatalf("Undo failed: %v", err)
 	}
 	if _, err := os.Stat(fp); err != nil {
@@ -134,7 +134,7 @@ func TestIssue554E_RevertClearsRedoStack(t *testing.T) {
 	_ = os.WriteFile(fp, []byte("v2"), 0644)
 
 	// Undo v2 -> v1 (v2 goes to redo stack).
-	if _, err := m.Undo(); err != nil {
+	if _, err := m.Undo("user"); err != nil {
 		t.Fatalf("first Undo failed: %v", err)
 	}
 	// Jump straight back to the pre-edit state v0.

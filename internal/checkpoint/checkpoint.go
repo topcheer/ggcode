@@ -42,6 +42,12 @@ type Correction struct {
 	ToolCall string    // the tool call that made the original change
 	RunID    string    // the run ID whose changes were reverted
 	Time     time.Time // when the correction occurred
+	// Source records WHO performed the undo (#1449-A): the user (/undo,
+	// /undo-run) or the agent itself (undo_edit self-correction). The
+	// correction-feedback detector must only narrate USER reverts as
+	// rejection - an agent's own rollback after a failed verification is
+	// encouraged behavior, not a route rejection.
+	Source string // "user" or "agent"; empty treated as "user" (legacy)
 }
 
 // Manager manages file checkpoints for undo/redo support.
@@ -144,7 +150,7 @@ func (m *Manager) SaveWithExistence(filePath, oldContent, newContent, toolCall s
 
 // Undo rolls back the most recent checkpoint by writing OldContent back to the file.
 // The undone checkpoint is pushed onto the redo stack so it can be re-applied.
-func (m *Manager) Undo() (*Checkpoint, error) {
+func (m *Manager) Undo(source string) (*Checkpoint, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -173,6 +179,7 @@ func (m *Manager) Undo() (*Checkpoint, error) {
 		ToolCall: cp.ToolCall,
 		RunID:    cp.RunID,
 		Time:     time.Now(),
+		Source:   source,
 	})
 
 	return &cp, nil
@@ -288,6 +295,7 @@ func (m *Manager) Revert(id string) (*Checkpoint, error) {
 		ToolCall: cp.ToolCall,
 		RunID:    cp.RunID,
 		Time:     time.Now(),
+		Source:   "user", // /undo-run is a user slash command (#1449-A)
 	})
 
 	return &cp, nil

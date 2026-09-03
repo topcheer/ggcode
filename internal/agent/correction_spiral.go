@@ -114,8 +114,15 @@ func (s *correctionSpiralState) recordVerifyResult(_ string, output string, isEr
 	if !s.pendingEdit || !isError {
 		if !isError {
 			// Successful verification after edit - resets the correction chain.
-			// A green build breaks the spiral.
+			// A green build breaks the spiral. #1449-B: the comment always
+			// promised this but only pendingEdit was reset - a healthy
+			// progression (fix sev1 -> GREEN -> fix sev3 -> GREEN -> fix
+			// sev5) accumulated [1,3,5], satisfied the monotonic-length
+			// pattern, and fired 'STOP incremental fixes' / 'consider
+			// reverting to the last known-good state' on a trajectory where
+			// every problem WAS fixed. The error sequence clears too.
 			s.pendingEdit = false
+			s.errorSequence = s.errorSequence[:0]
 		}
 		return
 	}

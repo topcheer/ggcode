@@ -104,7 +104,7 @@ func TestCheckpointSaverUndo(t *testing.T) {
 	atomicWriteFile(fp, []byte("package main\n\nfunc main() { panic(\"oops\") }\n"), 0644)
 
 	// Undo
-	cp, err := mgr.Undo()
+	cp, err := mgr.Undo("user")
 	if err != nil {
 		t.Fatal(err)
 	}
