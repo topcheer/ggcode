@@ -27,7 +27,13 @@ package agent
 //  1. Function parameters whose type is a sync type (value, not pointer).
 //  2. Function return types that are sync types (value, not pointer).
 //  3. Receiver types that are sync types (value receiver on a struct embedding sync.Mutex).
-//  4. Assignments and function call arguments that copy a sync type.
+//
+// #1447-B: body-level copies (range value copies, deref assignments,
+// call-site value passing) are NOT analyzed - detecting them without
+// go/types requires type inference from variable names, which pure-AST
+// heuristics cannot do soundly (the variable NAME is not its TYPE).
+// go vet's copylocks covers the body forms at CI time; this detector's
+// write-time value is the signature triage above.
 //
 // Only NEW occurrences introduced by this edit are flagged (delta-aware).
 
