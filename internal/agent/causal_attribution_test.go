@@ -208,3 +208,32 @@ func TestCausalAttribution_RecencyBonus(t *testing.T) {
 		t.Errorf("expected most recent edit (new.go) to be identified as cause, got: %s", hint)
 	}
 }
+
+// TestCausalAttribution_MultiLineGrepNotCmdOutput pins #1442-A layer 2:
+// a multi-line grep-shaped output with a stray failure word and NO
+// compiler/tester feature word must not qualify as command output - its
+// path:line: lines are causalErrorFileRe's exact shape and used to blame
+// innocent edits (probe CRS=84 on a passing test's grep).
+func TestCausalAttribution_MultiLineGrepNotCmdOutput(t *testing.T) {
+	s := newCausalAttributionState()
+	s.recordEdit("edit_file", "internal/im/crypto.go", 1)
+
+	// 6 lines of grep output mentioning 'failed' in content - no feature word.
+	grepish := "internal/im/crypto.go:40: msg := fmt.Errorf(\"failed to decrypt\")\n" +
+		"internal/im/crypto.go:41: // if decryption failed we bail\n" +
+		"internal/im/crypto.go:42: return nil, err\n" +
+		"internal/im/keys.go:10: key, _ := pem.Decode(block)\n" +
+		"internal/im/keys.go:11: // decode failed case\n" +
+		"internal/im/keys.go:12: return nil\n"
+	if hint := s.attributeFailure(grepish); hint != "" {
+		t.Fatalf("multi-line grep output misattributed: %s", hint)
+	}
+
+	// The same shape WITH a compiler feature word still attributes.
+	compilery := "./internal/im/crypto.go:10:2: cannot use err (type error)\nFAIL\tgithub.com/x/y\t0.5s\n"
+	s2 := newCausalAttributionState()
+	s2.recordEdit("edit_file", "internal/im/crypto.go", 1)
+	if hint := s2.attributeFailure(compilery); hint == "" {
+		t.Fatal("real compiler failure no longer attributes")
+	}
+}
