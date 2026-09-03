@@ -366,6 +366,15 @@ func refreshShareSession(cfg shareAuthConfig, req refreshShareSessionRequest, pr
 	if err != nil {
 		return refreshedShareSessionResponse{}, err
 	}
+	// #1456-A: the WS handshake path checks "ticket expired" but this HTTP
+	// refresh path never read claims.Exp - a leaked renew token stayed
+	// usable FOREVER (each refresh mints a fresh 30-day token; stateless
+	// HMAC, no jti, no revocation), and the minted ticket even survives
+	// room destruction via the server-role room-recreate path. Symmetric
+	// expiry check with the handshake.
+	if time.Now().After(time.Unix(claims.Exp, 0).UTC()) {
+		return refreshedShareSessionResponse{}, errors.New("renew token expired")
+	}
 	if claims.RoomID != roomID || claims.Role != "server" || claims.Kind != shareTicketKindRenew {
 		return refreshedShareSessionResponse{}, errors.New("ticket scope mismatch")
 	}

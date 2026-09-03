@@ -251,7 +251,7 @@ func (h *hub) logStats() {
 		return
 	}
 	log.Printf(
-		"[relay] stats rooms=%d rooms_with_server=%d clients=%d buffered_events=%d db_rooms=%d db_room_sessions=%d db_global_sessions=%d db_room_events=%d db_global_events=%d server_connects=%d client_connects=%d server_disconnects=%d client_disconnects=%d persisted_events=%d persist_errors=%d client_broadcast_deliveries=%d server_forwards=%d resumes=%d replayed_events=%d resume_incremental=%d resume_full_history=%d resume_snapshot_required=%d active_session_changes=%d active_session_hydrates=%d hydrated_events=%d room_store_hits=%d room_store_misses=%d room_destroys=%d",
+		"[relay] stats rooms=%d rooms_with_server=%d clients=%d buffered_events=%d db_rooms=%d db_room_sessions=%d db_global_sessions=%d db_room_events=%d db_global_events=%d server_connects=%d client_connects=%d server_disconnects=%d client_disconnects=%d persisted_events=%d persist_errors=%d client_broadcast_deliveries=%d server_forwards=%d resumes=%d replayed_events=%d resume_incremental=%d resume_full_history=%d resume_snapshot_required=%d active_session_changes=%d active_session_hydrates=%d hydrated_events=%d room_store_hits=%d room_store_misses=%d room_destroys=%d dropped_sends=%d",
 		snap.ActiveRooms,
 		snap.RoomsWithServer,
 		snap.ConnectedClients,
@@ -280,6 +280,7 @@ func (h *hub) logStats() {
 		snap.RoomStoreHits,
 		snap.RoomStoreMisses,
 		snap.RoomDestroys,
+		snap.DroppedSends,
 	)
 }
 

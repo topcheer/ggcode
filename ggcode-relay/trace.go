@@ -155,9 +155,11 @@ func (h *hub) traceRelayMessage(route, roomToken, clientID string, msg relayMess
 		shortTraceField(keyClientID),
 		msg.Type,
 		shortTraceField(msg.SessionID),
-		shortTraceField(msg.EventID),
-		shortTraceField(msg.StreamID),
-		shortTraceField(msg.MessageID),
+		// #1456-B: EventID/StreamID/MessageID removed - they are unique per
+		// message (ev-%09d monotonic, relay passes through), so every
+		// encrypted event keyed 'first-seen' and logged IMMEDIATELY: the
+		// 1500ms suppression window this same commit added never fired.
+		// Suppression is per-route/client/type/session.
 	}, "|")
 	if isHeartbeatTraceMessage(msg) {
 		h.tracer.LogEveryN(key, summary, 100)
