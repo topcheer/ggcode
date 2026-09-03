@@ -19,7 +19,11 @@ func TestClassifyDegraded(t *testing.T) {
 		{"undefined value", "some_tool", "undefined", degradedNullish},
 		{"empty json object", "some_tool", "{}", degradedNullish},
 		{"empty json array", "some_tool", "[]", degradedNullish},
-		{"tool footer truncation (read_file)", "read_file", "     1\tpackage main\n[File truncated: showing lines 1-1 of 50. Use read_file with offset/limit for more.]", degradedTruncated},
+		// #1457-A: a footer WITH pagination guidance is the tool's designed
+		// paging signal, not degradation - the old expectation codified the
+		// contradiction (2-per-run budget burned on normal paging reads).
+		{"guided pagination footer is NOT degraded", "read_file", "     1\tpackage main\n[File truncated: showing lines 1-1 of 50. Use read_file with offset/limit for more.]", degradedNone},
+		{"guided pagination multi_file_read", "multi_file_read", "[showing lines 1-10 of 200. Use offset/limit]", degradedNone},
 		{"output too large footer", "grep", "[output too large, showing first 10]", degradedTruncated},
 		{"#339 source containing 'output truncated' literal is NOT truncated", "read_file", "\"\"\"\n     3\ttruncated = truncateUTF8Safe(trimmed, maxOutputSize) + \"\\n... [output truncated]\"\"\n\"\"\"", degradedNone},
 		{"#339 inline 'truncated' in code comment is NOT truncated", "grep", "main.go:42: // handle truncated output gracefully", degradedNone},

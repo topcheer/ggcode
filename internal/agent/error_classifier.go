@@ -260,13 +260,20 @@ func classifyErrorContent(toolName, content string) ErrorCategory {
 		}
 	}
 
-	// Test failures
+	// Test failures - checked BEFORE timeout (#1457-B): a `go test`
+	// deadlock prints 'panic: test timed out after 10m0s' - the bare
+	// 'timed out' substring hijacked it into timeout_network ('transient,
+	// retry') when it is a DETERMINISTIC failure. #653 already removed the
+	// same bare substring from error_rush with the identical rationale;
+	// the classifier now syncs. Content patterns catch test output even
+	// when toolName is a bare run_command.
 	if strings.Contains(toolName, "test") || errorContainsAny(c,
 		"test failed",
 		"assertion failed",
 		"expected:",
 		"got:",
 		"--- fail",
+		"panic: test timed out",
 	) {
 		return ErrorCategory{
 			Name: "test_failure",

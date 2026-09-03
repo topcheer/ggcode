@@ -19,7 +19,7 @@ func TestErrRegressionState_Reset(t *testing.T) {
 func TestErrRegressionState_NoPreviousBaseline(t *testing.T) {
 	s := newErrRegressionState()
 	// First verification ever -- no baseline to compare against.
-	got := s.recordVerify("error: foo", true)
+	got := s.recordVerify("go test", "error: foo", true)
 	if got != "" {
 		t.Fatalf("expected no guidance on first verify, got: %s", got)
 	}
@@ -28,9 +28,9 @@ func TestErrRegressionState_NoPreviousBaseline(t *testing.T) {
 func TestErrRegressionState_NoEditsBetweenVerifies(t *testing.T) {
 	s := newErrRegressionState()
 	// First verify sets baseline.
-	s.recordVerify(buildOutput(5), true)
+	s.recordVerify("go test", buildOutput(5), true)
 	// Second verify with more errors but no edits in between.
-	got := s.recordVerify(buildOutput(10), true)
+	got := s.recordVerify("go test", buildOutput(10), true)
 	if got != "" {
 		t.Fatalf("expected no guidance without edits, got: %s", got)
 	}
@@ -38,9 +38,9 @@ func TestErrRegressionState_NoEditsBetweenVerifies(t *testing.T) {
 
 func TestErrRegressionState_RegressionDetected(t *testing.T) {
 	s := newErrRegressionState()
-	s.recordVerify(buildOutput(2), true)
+	s.recordVerify("go test", buildOutput(2), true)
 	s.recordEdit()
-	got := s.recordVerify(buildOutput(8), true) // +6 > threshold of 3
+	got := s.recordVerify("go test", buildOutput(8), true) // +6 > threshold of 3
 	if got == "" {
 		t.Fatal("expected regression guidance, got empty string")
 	}
@@ -54,9 +54,9 @@ func TestErrRegressionState_RegressionDetected(t *testing.T) {
 
 func TestErrRegressionState_SmallIncreaseNoWarning(t *testing.T) {
 	s := newErrRegressionState()
-	s.recordVerify(buildOutput(3), true)
+	s.recordVerify("go test", buildOutput(3), true)
 	s.recordEdit()
-	got := s.recordVerify(buildOutput(5), true) // +2 < threshold of 3
+	got := s.recordVerify("go test", buildOutput(5), true) // +2 < threshold of 3
 	if got != "" {
 		t.Fatalf("expected no guidance for small increase, got: %s", got)
 	}
@@ -64,9 +64,9 @@ func TestErrRegressionState_SmallIncreaseNoWarning(t *testing.T) {
 
 func TestErrRegressionState_ErrorDecreasesNoWarning(t *testing.T) {
 	s := newErrRegressionState()
-	s.recordVerify(buildOutput(10), true)
+	s.recordVerify("go test", buildOutput(10), true)
 	s.recordEdit()
-	got := s.recordVerify(buildOutput(3), true) // -7, improvement
+	got := s.recordVerify("go test", buildOutput(3), true) // -7, improvement
 	if got != "" {
 		t.Fatalf("expected no guidance when errors decrease, got: %s", got)
 	}
@@ -74,9 +74,9 @@ func TestErrRegressionState_ErrorDecreasesNoWarning(t *testing.T) {
 
 func TestErrRegressionState_SuccessNoWarning(t *testing.T) {
 	s := newErrRegressionState()
-	s.recordVerify(buildOutput(5), true)
+	s.recordVerify("go test", buildOutput(5), true)
 	s.recordEdit()
-	got := s.recordVerify("", false) // verification succeeded
+	got := s.recordVerify("go test", "", false) // verification succeeded
 	if got != "" {
 		t.Fatalf("expected no guidance on success, got: %s", got)
 	}
@@ -86,9 +86,9 @@ func TestErrRegressionState_MaxWarnings(t *testing.T) {
 	s := newErrRegressionState()
 	// Fire 3 regressions; only first 2 should produce guidance.
 	for i := 0; i < 3; i++ {
-		s.recordVerify(buildOutput(2), true)
+		s.recordVerify("go test", buildOutput(2), true)
 		s.recordEdit()
-		got := s.recordVerify(buildOutput(10), true)
+		got := s.recordVerify("go test", buildOutput(10), true)
 		if i < maxRegressionWarnings {
 			if got == "" {
 				t.Fatalf("expected guidance on call %d", i)

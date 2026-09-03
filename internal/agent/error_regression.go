@@ -52,7 +52,7 @@ func (a *Agent) errorRegressionCheckCommand(toolName string, args []byte, conten
 	if cmd == "" || !isVerifyCommand(cmd) {
 		return ""
 	}
-	return a.errRegression.recordVerify(content, isError)
+	return a.errRegression.recordVerify(cmd, content, isError)
 }
 
 const (
@@ -92,6 +92,13 @@ type errRegressionState struct {
 	// -1 means no previous verification has been recorded.
 	lastErrorCount int
 
+	// lastCommandKind is the normalized command signature of that run
+	// (#1457-C): build/test/lint/vet outputs have incomparable styles - a
+	// 2-error build fixed into a first-ever-passing test run (20+ 'Error:'
+	// lines) counted as 'INCREASED from 2 to 20, consider revert' on what
+	// was major progress. Only same-command comparisons count now.
+	lastCommandKind string
+
 	// hadEdits tracks whether file edits occurred since the last verification.
 	hadEdits bool
 
@@ -117,13 +124,19 @@ func (e *errRegressionState) recordEdit() {
 // recordVerify processes a verification result and returns guidance if an
 // error count regression is detected (current errors > previous errors by
 // at least regressionWarnThreshold).
-func (e *errRegressionState) recordVerify(content string, failed bool) string {
+func (e *errRegressionState) recordVerify(cmd, content string, failed bool) string {
 	currentErrors := countVerifyErrors(content)
 	prevErrors := e.lastErrorCount
 	hadEdits := e.hadEdits
+	// #1457-C: normalize to the command's leading token (go build / go
+	// test / make test...); a different command resets the baseline
+	// rather than comparing incomparable output styles.
+	kind := verifyCommandKind(cmd)
+	sameCommand := kind != "" && kind == e.lastCommandKind
 
 	// Update state for next call.
 	e.lastErrorCount = currentErrors
+	e.lastCommandKind = kind
 	e.hadEdits = false
 
 	// Only warn if:
@@ -131,7 +144,7 @@ func (e *errRegressionState) recordVerify(content string, failed bool) string {
 	// 2. Edits occurred between the two verifications
 	// 3. Error count increased beyond threshold
 	// 4. We haven't exhausted warnings
-	if prevErrors < 0 || !hadEdits || !failed {
+	if prevErrors < 0 || !sameCommand || !hadEdits || !failed {
 		return ""
 	}
 
@@ -164,4 +177,24 @@ func regressionGuidance(prevErrors, currentErrors, increase int) string {
 		"3. If the new errors were MASKED by previous errors (common in Go compilation), " +
 		"fix them one at a time -- do not treat them as regressions.\n" +
 		"4. Do NOT proceed with more edits until you understand why the error count went up."
+}
+
+// verifyCommandKind normalizes a verify command to its leading identity
+// (go build / go test / make test / npm test ...) for same-command
+// comparison (#1457-C).
+func verifyCommandKind(cmd string) string {
+	fields := strings.Fields(cmd)
+	if len(fields) == 0 {
+		return ""
+	}
+	kind := fields[0]
+	if len(fields) > 1 {
+		switch {
+		case fields[0] == "go" && (fields[1] == "build" || fields[1] == "test" || fields[1] == "vet" || fields[1] == "lint"):
+			kind = fields[0] + " " + fields[1]
+		case fields[0] == "make" || fields[0] == "npm" || fields[0] == "yarn" || fields[0] == "pnpm" || fields[0] == "cargo":
+			kind = fields[0] + " " + fields[1]
+		}
+	}
+	return kind
 }

@@ -211,7 +211,15 @@ func classifyDegraded(toolName, content string) degradedKind {
 
 	// Truncation: only tool-appended footer lines (line-anchored), never
 	// a full-content substring match (see truncationFooterPrefixes).
-	if hasTruncationFooter(trimmed) {
+	// #1457-A: footers that CONTINUE-PAGINATION GUIDANCE (offset/limit,
+	// "Use read_file with offset/limit") are the tool's designed paging
+	// signal - normal large-file reads chained as 'degraded truncated'
+	// and burned the 2-per-run budget on noise (live false positives
+	// observed mid-review; the comment above documents the footer yet
+	// still classified it degraded). Only footers WITHOUT guidance (raw
+	// "[output too large" / "[truncated:") stay degraded - those signal
+	// lost content with no continuation path.
+	if hasTruncationFooter(trimmed) && !hasPaginationGuidance(trimmed) {
 		return degradedTruncated
 	}
 
@@ -338,4 +346,16 @@ func (e *errorPropagateState) formatPropagationGuidance(c *propagationChain) str
 		c.downstream, c.origin.kind.String(),
 		c.origin.kind.String(), c.origin.toolName, c.origin.step,
 	)
+}
+
+// hasPaginationGuidance reports whether the content contains an explicit
+// continuation pointer the tool itself appended (#1457-A) - "use ... with
+// offset/limit", "use read_command_output", pagination hints. Such
+// footers are the tool's DESIGNED paging signal, not degradation.
+func hasPaginationGuidance(content string) bool {
+	lower := strings.ToLower(content)
+	return strings.Contains(lower, "offset/limit") ||
+		strings.Contains(lower, "offset and limit") ||
+		strings.Contains(lower, "use read_command_output") ||
+		strings.Contains(lower, "use wait_command")
 }
