@@ -55,17 +55,24 @@ var strictVerifyCommands = map[string]bool{
 	"golangci-lint": true, "eslint": true, "ruff": true,
 }
 
-// isStrictVerifyCommand reports whether cmd starts with one of the strict
-// verify commands (#469) — prefix semantics mirror isVerifyCommand so
-// argument suffixes ("go test ./... -run X") still match.
+// isStrictVerifyCommand reports whether cmd contains one of the strict
+// verify commands (#469). #1462-C: the #950 hardening (env stripping +
+// compound splitting, ef57cedf) was applied to the loose isVerifyCommand
+// but never synced here - `GOFLAGS="-p=1" go test ./...` (this repo's own
+// documented OOM-avoidance form) and `cd /app && go test` were invisible,
+// starving the cascade counter. Each segment is env-stripped and matched.
 func isStrictVerifyCommand(cmd string) bool {
-	cmdLower := strings.ToLower(strings.TrimSpace(cmd))
-	if cmdLower == "" {
-		return false
-	}
-	for prefix := range strictVerifyCommands {
-		if strings.HasPrefix(cmdLower, prefix+" ") || cmdLower == prefix {
-			return true
+	for _, seg := range strings.Split(cmd, "&&") {
+		for _, semi := range strings.Split(seg, ";") {
+			c := strings.ToLower(strings.TrimSpace(stripEnvAssignments(semi)))
+			if c == "" {
+				continue
+			}
+			for prefix := range strictVerifyCommands {
+				if strings.HasPrefix(c, prefix+" ") || c == prefix {
+					return true
+				}
+			}
 		}
 	}
 	return false

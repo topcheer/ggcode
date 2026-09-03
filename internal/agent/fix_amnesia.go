@@ -139,11 +139,17 @@ func (d *fixAmnesiaState) recordFileEdited(file string) {
 	if file == "" {
 		return
 	}
+	// #1462-A: normalize BOTH sides - the observe side extracts compiler
+	// output paths (repo-relative like internal/agent/foo.go), the edit
+	// side passes absolute arg paths; the exact-string compare never
+	// matched, so the observe->fixed promotion (this detector's MAIN
+	// path) never fired and fixed patterns stayed forgotten.
+	nf := normalizePath(file)
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	for cat, files := range d.observed {
 		for _, f := range files {
-			if f == file {
+			if normalizePath(f) == nf {
 				d.fixedPatterns[cat] = appendIfMissing(d.fixedPatterns[cat], f)
 			}
 		}
@@ -324,13 +330,16 @@ func missingImportInContent(content string) bool {
 
 // hasImportFor reports whether content imports pkg (single-line or block).
 func hasImportFor(content, pkg string) bool {
-	imp := regexp.MustCompile(`(?m)^import\s+"` + regexp.QuoteMeta(pkg) + `"`)
+	// #1462-B: the caller may feed a DIFF (edit/write tool results embed
+	// '+ '/'- ' prefixed compactDiff lines) - anchor-tolerant variants
+	// accept the diff prefix ahead of the line start.
+	imp := regexp.MustCompile(`(?m)^[+\-]?\s*import\s+"` + regexp.QuoteMeta(pkg) + `"`)
 	if imp.MatchString(content) {
 		return true
 	}
 	blk := regexp.MustCompile(`(?s)import\s*\((.*?)\)`)
 	for _, m := range blk.FindAllStringSubmatch(content, -1) {
-		line := regexp.MustCompile(`(?m)^\s*(?:\w+\s+)?"` + regexp.QuoteMeta(pkg) + `"`)
+		line := regexp.MustCompile(`(?m)^[+\-]?\s*(?:\w+\s+)?"` + regexp.QuoteMeta(pkg) + `"`)
 		if line.MatchString(m[1]) {
 			return true
 		}
