@@ -186,6 +186,20 @@ func extractClaims(text string, iteration int) []contradictionClaim {
 	var claims []contradictionClaim
 	seen := make(map[string]bool) // deduplicate by entity within same text
 
+	// #1447-A: an ACKNOWLEDGED revision is not a contradiction - the
+	// "real issue is in X" pattern's own comment says "(explicitly
+	// revising)", yet the claim was still recorded and paired against the
+	// superseded one: "Earlier I thought A, but I was wrong - the root
+	// cause is B" counted as a contradiction against the detector's own
+	// 'without acknowledging' charter. Skip texts that explicitly
+	// acknowledge the revision.
+	lower := strings.ToLower(text)
+	for _, ack := range []string{"i was wrong", "i was mistaken", "i misread", "earlier i thought", "i previously thought", "let me correct", "correction:", "on second thought", "actually, i", "to correct myself"} {
+		if strings.Contains(lower, ack) {
+			return nil
+		}
+	}
+
 	for _, pat := range contradictionClaimPatterns {
 		locs := pat.FindAllStringSubmatchIndex(text, -1)
 		for _, loc := range locs {

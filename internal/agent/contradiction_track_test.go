@@ -210,3 +210,25 @@ func TestMaybeWarnContradictionNil(t *testing.T) {
 		t.Fatal("expected empty string when state is nil")
 	}
 }
+
+// TestContradictionAcknowledgedRevisionNotCounted pins #1447-A: an
+// explicitly acknowledged revision ("I was wrong - the root cause is B")
+// is not a contradiction - the detector's own charter says 'without
+// acknowledging'.
+func TestContradictionAcknowledgedRevisionNotCounted(t *testing.T) {
+	s := newContradictionState()
+	// First claim in pattern-extractable shape: "X is the root cause".
+	s.recordContradictionClaims("the auth module is the root cause of the crash.", 1)
+	// Acknowledged revision: root cause is the retry loop.
+	s.recordContradictionClaims("Earlier I thought auth.go, but I was wrong - the real issue is in the retry loop.", 2)
+	if len(s.contradictions) != 0 {
+		t.Fatalf("acknowledged revision counted as contradiction: %d", len(s.contradictions))
+	}
+	// WITHOUT acknowledgment the same pair still counts (guard stays live).
+	s2 := newContradictionState()
+	s2.recordContradictionClaims("the auth module is the root cause of the crash.", 1)
+	s2.recordContradictionClaims("the retry loop is the root cause of the crash.", 2)
+	if len(s2.contradictions) == 0 {
+		t.Fatal("unacknowledged revision not counted - guard over-broad")
+	}
+}
