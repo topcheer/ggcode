@@ -176,11 +176,24 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 
 	var hasError bool
 	var agentErr error
+	// #1444-B: local write errors (ENOSPC on a full disk, EACCES) were
+	// silently dropped - `ggcode -p ... -o /mnt/full/report.txt` produced
+	// exit 0 with a truncated/empty file and no stderr hint, and CI
+	// scripts consuming the exit code took the broken artifact as good.
+	// Fprint errors now set writeErr and feed the exit code; the output
+	// file is Close-checked too (NFS commit/flush).
+	var writeErr error
+	writeText := func(text string) {
+		if _, err := fmt.Fprint(w, text); err != nil && writeErr == nil {
+			writeErr = err
+			fmt.Fprintf(os.Stderr, "warning: writing output failed: %v\n", err)
+		}
+	}
 	if imageBlocks != nil {
 		agentErr = ag.RunStreamWithContent(ctx, imageBlocks, func(event provider.StreamEvent) {
 			switch event.Type {
 			case provider.StreamEventText:
-				fmt.Fprint(w, event.Text)
+				writeText(event.Text)
 			case provider.StreamEventToolCallDone:
 				if line := formatPipeProgressEvent(event); line != "" {
 					fmt.Fprintln(os.Stderr, line)
@@ -198,7 +211,7 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 		agentErr = ag.RunStream(ctx, fullPrompt, func(event provider.StreamEvent) {
 			switch event.Type {
 			case provider.StreamEventText:
-				fmt.Fprint(w, event.Text)
+				writeText(event.Text)
 			case provider.StreamEventToolCallDone:
 				if line := formatPipeProgressEvent(event); line != "" {
 					fmt.Fprintln(os.Stderr, line)
@@ -219,6 +232,11 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 		return 1
 	}
 	if hasError {
+		return 1
+	}
+	// #1444-B: a failed write means the output artifact is truncated or
+	// empty - never exit 0 for it.
+	if writeErr != nil {
 		return 1
 	}
 	return 0

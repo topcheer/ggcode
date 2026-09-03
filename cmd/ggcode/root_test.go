@@ -124,9 +124,11 @@ vendors:
 	if !proceed {
 		t.Fatal("expected startup to continue after migration")
 	}
-	// The function now prints a migration notice instead of prompting.
-	if !strings.Contains(out.String(), "Migrated") {
-		t.Fatalf("expected migration output, got %q", out.String())
+	// #1444-A: the notice runs BEFORE Load() - migration has NOT happened
+	// yet (and never does under GGCODE_SKIP_AUTOCONFIG). The wording must
+	// say found/will-migrate, never a false 'Migrated' claim.
+	if !strings.Contains(out.String(), "will be migrated") {
+		t.Fatalf("expected found/will-migrate notice, got %q", out.String())
 	}
 }
 

@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/config"
@@ -20,9 +21,19 @@ func confirmPlaintextAPIKeysBeforeTUI(cfgFile string, in io.Reader, out io.Write
 	if len(findings) == 0 {
 		return true, nil
 	}
-	// If findings still exist, they were migrated during Load().
-	// Print an informational notice.
-	fmt.Fprintf(out, "Migrated %d plaintext API key(s) to %s\n", len(findings), config.KeysEnvPath())
+	// #1444-A: this runs BEFORE Load(), so the migration has NOT happened
+	// yet - and with GGCODE_SKIP_AUTOCONFIG=1 it NEVER will (Load skips
+	// plaintext migration). The old unconditional "Migrated %d key(s)"
+	// was a false safety claim in exactly the scenarios where the user
+	// must act manually: migration skipped, or keys.env/YAML write
+	// failing (that error only reaches debug.Log in Load). The notice
+	// now states what was FOUND and where migration WILL put them, and
+	// explicitly tells skip-mode users their keys stay plaintext.
+	if os.Getenv("GGCODE_SKIP_AUTOCONFIG") != "" {
+		fmt.Fprintf(out, "NOTICE: %d plaintext API key(s) found; auto-migration is DISABLED (GGCODE_SKIP_AUTOCONFIG) - keys remain in plaintext at %s\n", len(findings), cfgFile)
+	} else {
+		fmt.Fprintf(out, "NOTICE: %d plaintext API key(s) found; they will be migrated to %s during startup\n", len(findings), config.KeysEnvPath())
+	}
 	for _, finding := range findings {
 		if finding.Section == "vendor" {
 			if strings.TrimSpace(finding.Endpoint) != "" {
