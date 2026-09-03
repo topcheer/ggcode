@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/util"
 )
@@ -38,6 +39,8 @@ type Client struct {
 	refreshToken  string // for token refresh
 	tokenExpiry   time.Time
 	tokenProvider TokenProvider // auto-acquire token when needed
+	apiKeyName    string        // #1458-A: card-declared header name
+	apiKeyIn      string        // #1458-A: card-declared location (header/query)
 }
 
 // ClientOption configures a Client.
@@ -64,9 +67,19 @@ func WithMTLS(tlsConfig *tls.Config) ClientOption {
 		// directions. Override any InsecureSkipVerify that WrapTransport may
 		// have set from the GGCODE_INSECURE env var (issue #19).
 		transport.TLSClientConfig.InsecureSkipVerify = false
+		// #1458-B: Client.Timeout covers the ENTIRE interaction including
+		// response-body reads - the hard 15min cut killed long SSE streams
+		// (batch/deep-research agents are A2A's core scenarios) with no way
+		// for callers to extend it (ctx deadlines don't override a shorter
+		// Client.Timeout). Header-only timeout + ctx governs duration now.
+		transport.ResponseHeaderTimeout = 15 * time.Minute
 		c.httpClient = &http.Client{
-			Timeout:   15 * time.Minute,
 			Transport: transport,
+			// #1458-C: strip the custom X-API-Key header on cross-host
+			// redirects - Go only strips built-in sensitive headers
+			// (Authorization/Cookies), a custom key followed a 302 to any
+			// host verbatim.
+			CheckRedirect: stripKeyOnRedirect,
 		}
 		c.authMethod = "mtls"
 	}
@@ -172,6 +185,25 @@ func (c *Client) NegotiateAuth() error {
 				if hasKey {
 					c.mu.Lock()
 					c.authMethod = "apiKey"
+					// #1458-A: honor the card's declared transport - the old
+					// path accepted any apiKey scheme but setAuth ALWAYS sent
+					// X-API-Key, so a card declaring "name":"X-Goog-Api-Key"
+					// or in:"query" negotiated fine then failed with 401 on
+					// the first RPC (masked in ggcode-to-ggcode by the server's
+					// own hard-coded header).
+					c.apiKeyName = scheme.Name
+					c.apiKeyIn = scheme.Location
+					if c.apiKeyName == "" {
+						c.apiKeyName = "X-API-Key"
+					}
+					if c.apiKeyIn == "" {
+						c.apiKeyIn = "header"
+					}
+					if c.apiKeyIn == "query" {
+						// The client cannot rewrite the endpoint URL per-card
+						// here; report explicitly instead of 401-at-first-call.
+						return fmt.Errorf("a2a: card requires apiKey in query param %q - not supported", scheme.Name)
+					}
 					c.mu.Unlock()
 					return nil
 				}
@@ -250,6 +282,12 @@ func (c *Client) tryBearerToken() bool {
 		defer cancel()
 
 		accessToken, refreshToken, newExpiry, err := provider.GetToken(ctx)
+		if err != nil {
+			// #1458-C: device-code denial / timeout / network errors were
+			// swallowed into a generic 'no matching credential' - at least
+			// surface the cause for diagnostics.
+			debug.Logf("[a2a] token provider failed: %v", err)
+		}
 		if err == nil && accessToken != "" {
 			c.mu.Lock()
 			c.bearerToken = accessToken
@@ -295,7 +333,11 @@ func (c *Client) setAuth(req *http.Request) {
 	defer c.mu.RUnlock()
 	switch c.authMethod {
 	case "apiKey":
-		req.Header.Set("X-API-Key", c.apiKey)
+		name := c.apiKeyName
+		if name == "" {
+			name = "X-API-Key"
+		}
+		req.Header.Set(name, c.apiKey)
 	case "bearer":
 		req.Header.Set("Authorization", "Bearer "+c.bearerToken)
 		// mTLS is handled at TLS level, no headers needed
@@ -731,4 +773,21 @@ func schemeNames(schemes map[string]Security) []string {
 		names = append(names, s.Type)
 	}
 	return names
+}
+
+// stripKeyOnRedirect removes the custom X-API-Key header when a redirect
+// crosses hosts (#1458-C) - the stdlib only strips built-in sensitive
+// headers (Authorization, Cookies), custom keys followed 302s verbatim.
+func stripKeyOnRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) > 0 && via[0].Host != req.Host {
+		req.Header.Del("X-API-Key")
+		// Card-declared names ride the same header path.
+		for _, h := range []string{"X-Goog-Api-Key", "Api-Key", "X-Api-Key"} {
+			req.Header.Del(h)
+		}
+	}
+	if len(via) >= 10 {
+		return fmt.Errorf("stopped after 10 redirects")
+	}
+	return nil
 }
