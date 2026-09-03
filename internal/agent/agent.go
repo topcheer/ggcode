@@ -1252,6 +1252,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.buildIdempot.reset()
 	a.orphanFile.reset()
 	a.cfDep.reset()
+	// #1466-A: the per-run reset block's own #677 note lists the
+	// same-family misses it fixed - heterogeneousModel was missed too:
+	// hmMaxWarns=1 burned in run 1 kept the detector silent for every
+	// later run of the Agent's lifetime.
+	a.heterogeneousModel.reset()
 	a.expiredRead.reset()
 	// Convergence lock must reset per run so post-verification edit drift
 	// counters don't leak across runs (issue #341).

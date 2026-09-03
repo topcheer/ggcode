@@ -90,12 +90,17 @@ func (s *hubPackageState) ensureFanIn(workingDir string) {
 	if s.initialized {
 		return
 	}
-	s.initialized = true
 
+	// #1466-B: initialized is set only AFTER a successful computation - the
+	// old pre-set meant a go.work-only workspace (no root go.mod; the
+	// standard monorepo layout) or any transient lookup failure disabled
+	// the guard for the Agent's ENTIRE lifetime with no retry path (reset
+	// deliberately preserves initialized).
 	s.modulePath = hubReadModulePath(workingDir)
 	if s.modulePath == "" {
-		return
+		return // not initialized - retried on the next call
 	}
+	s.initialized = true
 
 	start := time.Now()
 	s.fanIn = hubComputeFanIn(workingDir, s.modulePath)
