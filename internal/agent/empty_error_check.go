@@ -143,6 +143,13 @@ func findEmptyErrorBodies(content string) []emptyErrorInfo {
 			})
 			return true
 		}
+		// #1455-B: an EXEMPTED comment-only block (zero statements) falls
+		// through to the allEmpty path below, where the range loop over an
+		// empty List runs zero times and leaves allEmpty=true - reporting
+		// through the second channel what the first channel just exempted.
+		if len(ifStmt.Body.List) == 0 {
+			return true
+		}
 
 		// Check if body has only empty statements (e.g., just a semicolon).
 		allEmpty := true

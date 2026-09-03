@@ -261,3 +261,41 @@ func TestIsErrorNilCheck(t *testing.T) {
 		})
 	}
 }
+
+// TestFindEmptyErrorBodiesCommentSuppressionExempt pins #1455-B: the
+// guidance text says 'or explicitly suppress with a comment explaining
+// why' - a comment-only if-body must be exempt, not reported (comments
+// never appear as statements in BlockStmt.List, so the old check flagged
+// the very form it recommended).
+func TestFindEmptyErrorBodiesCommentSuppressionExempt(t *testing.T) {
+	src := `package p
+
+import "os"
+
+func f() error {
+	_, err := os.Open("x")
+	if err != nil {
+		// intentionally ignored: best-effort probe
+	}
+	return nil
+}
+`
+	if got := findEmptyErrorBodies(src); len(got) != 0 {
+		t.Fatalf("documented suppression still reported: %+v", got)
+	}
+	// Undocumented empty body still reported.
+	bare := `package p
+
+import "os"
+
+func g() error {
+	_, err := os.Open("x")
+	if err != nil {
+	}
+	return nil
+}
+`
+	if got := findEmptyErrorBodies(bare); len(got) == 0 {
+		t.Fatal("undocumented empty error body no longer detected")
+	}
+}
