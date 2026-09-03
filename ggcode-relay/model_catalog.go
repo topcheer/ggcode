@@ -24,6 +24,8 @@ const (
 	catwalkBranchAPI             = "https://api.github.com/repos/charmbracelet/catwalk/branches/update-providers"
 	catwalkRawBase               = "https://raw.githubusercontent.com/charmbracelet/catwalk"
 	defaultCatalogSyncInterval   = 24 * time.Hour
+	catalogRetryInterval         = 5 * time.Minute // #1453-B: short backoff after a failed sync
+	catalogMaxRetries            = 3
 	defaultCatalogRequestTimeout = 30 * time.Second
 	catalogUserAgent             = "ggcode-relay-model-catalog/1.0"
 	modelCatalogSourceRef        = catwalkOwner + "/" + catwalkRepo + ":" + catwalkBranch
@@ -119,17 +121,48 @@ func newModelCatalogManager(store *relayStore) (*modelCatalogManager, error) {
 func (m *modelCatalogManager) start(ctx context.Context) {
 	safego.Go("relay.model-catalog-refresh", func() {
 		m.refresh(ctx)
+		// #1453-B: a bare 24h ticker means one slow-network/rate-limit
+		// failure keeps the catalog stale for a full day with no retry.
+		// Short backoff after failures (3 attempts at 5-minute spacing)
+		// before settling back to the daily interval.
+		backoff := time.NewTimer(0)
+		defer backoff.Stop()
+		failures := 0
 		ticker := time.NewTicker(defaultCatalogSyncInterval)
 		defer ticker.Stop()
 		for {
+			var next time.Duration
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				m.refresh(ctx)
+				next = m.refreshReturningInterval(ctx)
+			case <-backoff.C:
+				next = m.refreshReturningInterval(ctx)
+			}
+			if next == catalogRetryInterval {
+				failures++
+				if failures <= catalogMaxRetries {
+					backoff.Reset(catalogRetryInterval)
+				}
+			} else {
+				failures = 0
 			}
 		}
 	})
+}
+
+// refreshReturningInterval runs one refresh and reports whether a short
+// retry is warranted (catalogRetryInterval) vs the normal daily cadence
+// (#1453-B).
+func (m *modelCatalogManager) refreshReturningInterval(parent context.Context) time.Duration {
+	before := m.loadStatus().LastError
+	m.refresh(parent)
+	after := m.loadStatus().LastError
+	if after != "" && after != before {
+		return catalogRetryInterval
+	}
+	return defaultCatalogSyncInterval
 }
 
 func (m *modelCatalogManager) refresh(parent context.Context) {

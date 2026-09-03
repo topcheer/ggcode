@@ -728,6 +728,14 @@ func (p *peer) onActiveSession(msg relayMessage) {
 	}
 
 	// Update room workspace metadata
+	// #1453-A: hydrateLocked (below) writes these same three fields under
+	// room.mu and onResume reads them under mu - writing them here under
+	// only sendMu is a write-write race (restarted server's active_session
+	// retry vs the new server's join-time hydrate) and a read-write race
+	// (client resume vs the server's periodic active_session metadata
+	// resync). sessionID/authorityEpoch/history were already correctly
+	// mu-guarded elsewhere; these three metadata fields were the gap.
+	p.room.mu.Lock()
 	if wsPath != "" {
 		p.room.workspacePath = wsPath
 	}
@@ -737,6 +745,7 @@ func (p *peer) onActiveSession(msg relayMessage) {
 	if mdlName != "" {
 		p.room.modelName = mdlName
 	}
+	p.room.mu.Unlock()
 
 	authorityEpoch, changed, hydrated, loaded := p.bindRoomSession(sessionID, msg.AuthorityEpoch, msg.ResumeMode == activeSessionModeReplace)
 	msg.SessionID = sessionID
