@@ -3203,7 +3203,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Unread-file edit guard: warn when editing a file not read in
 			// this run. Fires before the tool executes so the hint is in the
 			// result alongside any error from the edit attempt.
-			if !result.IsError && (tc.Name == "edit_file" || tc.Name == "multi_edit_file" || tc.Name == "multi_file_edit") {
+			if !result.IsError && fileEditingTools[tc.Name] {
+				// #1454-C: was a hand-rolled 3-tool list; write_file/batch_replace/
+				// lsp_rename/file_ops/notebook_edit successes never reset the
+				// failure counter (recordEditSuccess below), violating
+				// edit_fail_recovery's documented "resets on successful edit".
 				// Counted ONCE per tool call: this used to sit inside the per-file
 				// loop below, so one multi_file_edit touching 2 files doubled the
 				// refactor counter and hit the threshold of 2 instantly (#487).
@@ -3283,7 +3287,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// 2+ times in a row, inject targeted guidance to re-read the file
 			// before retrying. This catches the common "edit fail loop" pattern
 			// faster than the overseer (which runs every 12 iterations).
-			if result.IsError && (tc.Name == "edit_file" || tc.Name == "multi_edit_file" || tc.Name == "multi_file_edit") {
+			if result.IsError && fileEditingTools[tc.Name] {
 				a.convergenceRecordEditError()
 				for _, p := range extractEditFilePaths(tc.Name, tc.Arguments) {
 					if hint := a.editFailRecovery.recordEditFailure(p); hint != "" {
@@ -3778,6 +3782,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			if debtGuidance := a.verifDebt.maybeWarn(); debtGuidance != "" {
 				a.appendGuidance(&result, debtGuidance)
 			}
+			// #1454-A: this record call was accidentally dropped by 31a79906
+			// (its diff replaced editAbandon.recordToolCall with the undoBlind
+			// call) - maybeWarn stayed wired but the state was forever empty:
+			// the detector never fired once since birth. Restored.
+			a.editAbandon.recordToolCall(tc.Name, string(tc.Arguments))
 			if abandonGuidance := a.editAbandon.maybeWarn(); abandonGuidance != "" {
 				a.appendGuidance(&result, abandonGuidance)
 			}

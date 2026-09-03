@@ -41,6 +41,17 @@ import (
 // dryRunValidate checks proposed file content for fatal errors before writing.
 // Returns a non-empty string if a fatal issue is detected (write should be blocked).
 // Returns empty string if the content passes fatal checks (write should proceed).
+// countConflictMarkers counts conflict-block lines (start/end markers;
+// separator counting only matters for the message, not the delta).
+// #1454-B delta semantics.
+func countConflictMarkers(content string) int {
+	n := 0
+	for _, marker := range []string{"<<<<<<<", ">>>>>>>"} {
+		n += countConflictMarkerLines(content, marker)
+	}
+	return n
+}
+
 func dryRunValidate(filePath, oldContent, newContent string) string {
 	var fatalErrors []string
 
@@ -80,8 +91,18 @@ func dryRunValidate(filePath, oldContent, newContent string) string {
 	}
 
 	// 4. Merge conflict markers - guaranteed build failure in most languages.
-	if marker := checkMergeConflictMarkers(filePath, newContent); marker != "" {
-		fatalErrors = append(fatalErrors, marker)
+	// #1454-B: DELTA semantics (same as the post-write advisory layer's
+	// deltaGateNew wrapper): counting the WHOLE file blocked the very
+	// operation that resolves conflicts - a file with pre-existing markers
+	// (git merge awaiting resolution) failed pre-write validation with
+	// 'remove ALL markers', which a single per-hunk edit_file cannot do.
+	// Only markers the edit ADDS are fatal.
+	oldMarkers := countConflictMarkers(oldContent)
+	newMarkers := countConflictMarkers(newContent)
+	if newMarkers > oldMarkers {
+		if marker := checkMergeConflictMarkers(filePath, newContent); marker != "" {
+			fatalErrors = append(fatalErrors, marker)
+		}
 	}
 
 	if len(fatalErrors) == 0 {
