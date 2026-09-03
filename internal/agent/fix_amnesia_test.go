@@ -190,3 +190,37 @@ func TestAppendIfMissing(t *testing.T) {
 		t.Errorf("expected length 3, got %d", len(s))
 	}
 }
+
+// TestFixAmnesiaRelativeVsAbsolutePromotion pins #1462-A: the observe side
+// extracts RELATIVE compiler paths while the edit side passes ABSOLUTE arg
+// paths - without shared normalization the observe->fixed promotion (the
+// detector's main path) never matched once.
+func TestFixAmnesiaRelativeVsAbsolutePromotion(t *testing.T) {
+	d := newFixAmnesiaState()
+	d.recordErrorObserved("missing-import", "internal/agent/foo.go")
+	// Edit arrives as an absolute path pointing at the same file.
+	d.recordFileEdited("/repo/root/internal/agent/foo.go")
+	if len(d.fixedPatterns["missing-import"]) != 1 {
+		t.Fatalf("relative-observed vs absolute-edited promotion failed: %v", d.fixedPatterns["missing-import"])
+	}
+	// Same-form paths still promote (regression guard).
+	d2 := newFixAmnesiaState()
+	d2.recordErrorObserved("missing-import", "a/b.go")
+	d2.recordFileEdited("a/b.go")
+	if len(d2.fixedPatterns["missing-import"]) != 1 {
+		t.Fatal("same-form promotion regressed")
+	}
+}
+
+// TestFixAmnesiaImportInDiffPrefixedHunk pins #1462-B: a '+ ' prefixed diff
+// line carrying the import must satisfy hasImportFor - the old line-anchored
+// regex never matched diff content and every cross-file fmt. usage after one
+// fixed missing-import got a deterministic false warning.
+func TestFixAmnesiaImportInDiffPrefixedHunk(t *testing.T) {
+	if missingImportInContent("+ import \"fmt\"\n+ fmt.Println(\"hi\")\n") {
+		t.Fatal("import present in the same diff hunk still reported missing")
+	}
+	if !missingImportInContent("+ fmt.Println(\"hi\")\n") {
+		t.Fatal("missing import no longer detected")
+	}
+}

@@ -139,17 +139,26 @@ func (d *fixAmnesiaState) recordFileEdited(file string) {
 	if file == "" {
 		return
 	}
-	// #1462-A: normalize BOTH sides - the observe side extracts compiler
-	// output paths (repo-relative like internal/agent/foo.go), the edit
-	// side passes absolute arg paths; the exact-string compare never
+	// #1462-A: reconcile BOTH sides - the observe side extracts compiler
+	// output paths (repo-relative like internal/agent/foo.go) while the
+	// edit side passes absolute arg paths; the exact-string compare never
 	// matched, so the observe->fixed promotion (this detector's MAIN
-	// path) never fired and fixed patterns stayed forgotten.
-	nf := normalizePath(file)
+	// path) never fired and fixed patterns stayed forgotten. Match when
+	// either form is a path-suffix of the other (covers relative-vs-
+	// absolute and stray ./ prefixes).
+	sameFile := func(a, b string) bool {
+		a = strings.TrimPrefix(strings.TrimSpace(a), "./")
+		b = strings.TrimPrefix(strings.TrimSpace(b), "./")
+		if a == b {
+			return true
+		}
+		return strings.HasSuffix(a, "/"+b) || strings.HasSuffix(b, "/"+a)
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	for cat, files := range d.observed {
 		for _, f := range files {
-			if normalizePath(f) == nf {
+			if sameFile(f, file) {
 				d.fixedPatterns[cat] = appendIfMissing(d.fixedPatterns[cat], f)
 			}
 		}
