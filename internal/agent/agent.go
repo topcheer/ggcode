@@ -2646,6 +2646,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				// Zero-LLM-cost heuristic inspired by Kiro/GitHub Spec Kit.
 				if driftMsg := a.planDrift.checkPlanDrift(runStats, textBuf); driftMsg != "" {
 					debug.Log("agent", "Iteration %d: plan drift detected, injecting reminder", i+1)
+					// #1452-C: plan_drift fires must arm the recurrence
+					// detector too - markWarning's doc says 'scope_drift,
+					// plan_drift, or similar' but only scope_drift wired it,
+					// so plan-dimension recurrence never activated.
+					a.driftRecurrenceMarkWarn(runStats.Iterations)
 					a.contextManager.Add(provider.Message{
 						Role: "user",
 						Content: []provider.ContentBlock{{
@@ -3700,7 +3705,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Scope drift: track productive file edits for semantic scope creep.
 			a.scopeDriftRecord(tc.Name, extractFileHint(tc.Name, tc.Arguments))
 			// Drift recurrence: track edits and verifications relative to any drift warning.
-			a.driftRecurrenceRecord(tc.Name, extractFileHint(tc.Name, tc.Arguments))
+			a.driftRecurrenceRecord(tc.Name, extractFileHint(tc.Name, tc.Arguments), string(tc.Arguments), !result.IsError)
 			// Last-known-good checkpoint: track edits for revert targeting.
 			a.lastGoodCheckpointRecordEdit(tc.Name, extractFileHint(tc.Name, tc.Arguments))
 			// Monorepo scoper: track which packages are being edited.

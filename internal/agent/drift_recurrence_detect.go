@@ -204,12 +204,18 @@ func (d *driftRecurrenceState) check() string {
 	// expansion — a compliant agent (0 new dirs after the scope warning,
 	// mid-refactor before the build step) must not be accused of
 	// "performative compliance". newDirs==0 is compliance, not recurrence.
+	// #1452-A: CONVERGED work must not fire either - after the warning the
+	// agent legitimately re-focuses on 1-3 existing dirs and edits in
+	// batches before one verification pass (edit-then-verify is the normal
+	// zero-command phase shape). Under-threshold + zero-verifies only
+	// counts as drift when the agent is STILL SCATTERING (newDirs >= 2);
+	// a single concentrated dir is convergence, not recurrence.
 	if newDirs < driftRecurrenceNewDirThreshold {
-		if newDirs == 0 {
+		if newDirs <= 1 {
 			return ""
 		}
-		// Under threshold but nonzero new dirs: require zero verifies
-		// across the minimum edit count to still call it drift.
+		// Under threshold but scattering (2-3 new dirs): require zero
+		// verifies across the minimum edit count to still call it drift.
 		if !(d.postWarnVerifies == 0) {
 			return ""
 		}
@@ -251,12 +257,26 @@ func (d *driftRecurrenceState) check() string {
 // --- Agent integration ---
 
 // driftRecurrenceRecord tracks an edit for drift recurrence analysis.
-func (a *Agent) driftRecurrenceRecord(toolName string, fileHint string) {
-	if a.driftRecurrence == nil {
+// #1452-B: ok=false (failed tool call) counts NOTHING - the sibling
+// detectors in the same loop gate on result.IsError; without the gate,
+// 3 failed edit retries (old_text mismatch / permission) with ZERO
+// successful edits satisfied the recurrence threshold and fired STOP.
+// #1452-B: run_command verification reuses classifyDebtAction's CONTENT
+// classification (#1224: ls/git status are neutral) - the bare table
+// lookup classified every run_command as verifying, contradicting the
+// debt detector on the same command.
+func (a *Agent) driftRecurrenceRecord(toolName string, fileHint string, args string, ok bool) {
+	if a.driftRecurrence == nil || !ok {
 		return
 	}
 	if productiveEditTools[toolName] {
 		a.driftRecurrence.recordEdit(fileHint)
+	}
+	if toolName == "run_command" {
+		if classifyDebtAction(toolName, args) == debtVerifying {
+			a.driftRecurrence.recordVerification()
+		}
+		return
 	}
 	if verificationDebtTools[toolName] == debtVerifying {
 		a.driftRecurrence.recordVerification()
